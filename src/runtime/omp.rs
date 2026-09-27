@@ -26,7 +26,11 @@ impl OmpAdapter {
             agent.system_prompt.clone(),
         ];
 
-        if let Some(model) = agent.model.as_deref().filter(|value| !value.trim().is_empty()) {
+        if let Some(model) = agent
+            .model
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
             args.push("--model".into());
             args.push(model.into());
         }
