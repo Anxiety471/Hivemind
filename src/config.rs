@@ -36,8 +36,10 @@ pub struct AgentConfig {
     pub workspace: String,
     #[serde(default)]
     pub model: Option<String>,
+    #[serde(default, alias = "thinking")]
+    pub reasoning: Option<String>,
     #[serde(default)]
-    pub thinking: Option<String>,
+    pub fast: Option<bool>,
 }
 
 impl HivemindConfig {
@@ -93,7 +95,8 @@ impl HivemindConfig {
                     .into(),
                     workspace: ".".into(),
                     model: None,
-                    thinking: None,
+                    reasoning: None,
+                    fast: None,
                 },
                 AgentConfig {
                     name: "Albedo".into(),
@@ -106,7 +109,8 @@ impl HivemindConfig {
                     .into(),
                     workspace: ".".into(),
                     model: None,
-                    thinking: None,
+                    reasoning: None,
+                    fast: None,
                 },
             ],
         }
@@ -147,5 +151,20 @@ mod tests {
         assert_eq!(decoded.agents.len(), 2);
         assert_eq!(decoded.agents[0].name, "Maomao");
         assert_eq!(decoded.agents[1].name, "Albedo");
+    }
+
+    #[test]
+    fn legacy_thinking_key_is_accepted_as_reasoning() {
+        let raw = r#"
+            [[agents]]
+            name = "Maomao"
+            thinking = "high"
+            fast = true
+        "#;
+
+        let config: HivemindConfig = toml::from_str(raw).unwrap();
+
+        assert_eq!(config.agents[0].reasoning.as_deref(), Some("high"));
+        assert_eq!(config.agents[0].fast, Some(true));
     }
 }

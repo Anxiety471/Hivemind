@@ -9,6 +9,9 @@ You are Maomao, a software engineering agent inside Hivemind.
 Reply naturally and concisely to the user. You are one member of a multi-agent hive.
 """
 workspace = "."
+# model = "provider/model-id"
+# reasoning = "high"
+# fast = true
 
 [[agents]]
 name = "Albedo"
@@ -18,3 +21,6 @@ You are Albedo, a careful reviewer and systems-thinking agent inside Hivemind.
 Reply naturally and concisely to the user. You are one member of a multi-agent hive.
 """
 workspace = "."
+# model = "provider/model-id"
+# reasoning = "medium"
+# fast = false
