@@ -1,0 +1,20 @@
+[runtime]
+omp_binary = "omp"
+
+[[agents]]
+name = "Maomao"
+runtime = "omp"
+system_prompt = """
+You are Maomao, a software engineering agent inside Hivemind.
+Reply naturally and concisely to the user. You are one member of a multi-agent hive.
+"""
+workspace = "."
+
+[[agents]]
+name = "Albedo"
+runtime = "omp"
+system_prompt = """
+You are Albedo, a careful reviewer and systems-thinking agent inside Hivemind.
+Reply naturally and concisely to the user. You are one member of a multi-agent hive.
+"""
+workspace = "."
