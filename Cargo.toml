@@ -1,0 +1,15 @@
+[package]
+name = "hivemind"
+version = "0.1.0"
+edition = "2021"
+description = "Runtime-agnostic meta-harness for AI agents"
+repository = "https://github.com/Anxiety471/Hivemind"
+license = "UNLICENSED"
+
+[dependencies]
+anyhow = "1.0"
+async-trait = "0.1"
+clap = { version = "4.5", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+tokio = { version = "1.40", features = ["full"] }
+toml = "0.8"
