@@ -2,6 +2,8 @@
 [runtime]
 omp_binary = "omp"
 pi_binary = "pi"
+# Seconds an unused agent-instance runtime stays alive before it is stopped; 0 never idles out.
+idle_timeout_secs = 120
 
 [conversation]
 reply_order = ["Maomao", "Albedo"]
@@ -10,7 +12,7 @@ reply_order = ["Maomao", "Albedo"]
 recent_turns = 6
 summary_max_tokens = 2000
 context_target_tokens = 12000
-# Retained and validated, but no-op while processes restart per persona invocation.
+# Live runtime context size at which that runtime is rotated before its next turn.
 runtime_rotate_tokens = 24000
 summary_refresh_turns = 4
 

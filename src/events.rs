@@ -28,6 +28,7 @@ pub enum DomainEventKind {
     RuntimeStarted { agent_id: String, instance_id: String, runtime: String },
     RuntimeStopped { agent_id: String, instance_id: String, runtime: String },
     RuntimeFailed { agent_id: String, instance_id: String, runtime: String, error_code: String, message: String },
+    RuntimeRotated { agent_id: String, instance_id: String, runtime: String, reason: String },
 }
 
 #[derive(Clone)]

@@ -15,6 +15,7 @@ use crate::{
     },
     events::{DomainEventKind, EventBus},
     memory::MemoryService,
+    runtime::RuntimePool,
 };
 
 /// Process-level owner of configuration, memory, conversations, events, and API state.
@@ -24,6 +25,7 @@ pub struct HivemindCore {
     memory: Arc<MemoryService>,
     conversation: ConversationCoordinator,
     events: EventBus,
+    runtime: Arc<RuntimePool>,
     config_path: PathBuf,
     shutting_down: AtomicBool,
 }
@@ -68,9 +70,15 @@ impl HivemindCore {
         let conversation = ConversationCoordinator::new_with_events(
             context_dir, config.context.clone(), memory.clone(), Some(events.clone()),
         );
+        let runtime = Arc::new(RuntimePool::new(
+            config.runtime.clone(),
+            config.context.runtime_rotate_tokens,
+            memory.clone(),
+            events.clone(),
+        ));
         events.publish(DomainEventKind::CoreStarted);
         Ok(Self {
-            config, agents, memory, conversation, events, config_path,
+            config, agents, memory, conversation, events, runtime, config_path,
             shutting_down: AtomicBool::new(false),
         })
     }
@@ -83,12 +91,10 @@ impl HivemindCore {
     pub fn config_path(&self) -> &Path { &self.config_path }
 
     pub async fn turn(&self, request: CoreTurnRequest<'_>) -> Result<Vec<TurnReply>> {
-        let invoker = Arc::new(RuntimeInvoker::with_events(
-            self.config.runtime.clone(),
-            self.memory.clone(),
+        let invoker = Arc::new(RuntimeInvoker::new(
+            self.runtime.clone(),
             request.room,
             request.group_id,
-            self.events.clone(),
         ));
         self.turn_with_invoker(request, invoker).await
     }
@@ -115,13 +121,13 @@ impl HivemindCore {
             .await
     }
 
-    /// Idempotently stop the core. Runtimes never outlive an invocation, so
-    /// there is no runtime session left to stop here.
+    /// Idempotently stop the core and every live agent-instance runtime.
     pub async fn shutdown(&self) {
         if self.shutting_down.swap(true, Ordering::AcqRel) {
             return;
         }
         self.events.publish(DomainEventKind::CoreShuttingDown);
+        self.runtime.shutdown().await;
     }
 }
 
@@ -158,31 +164,47 @@ mod tests {
         }
     }
 
-    /// Fake pi that logs lifecycle lines and replies "Maomao reply".
-    fn fake_core(directory: &TestDirectory) -> (HivemindCore, PathBuf) {
+    /// Fake pi that logs lifecycle lines to `lifecycle.log`, raw prompt
+    /// requests to `prompts.log`, reports `stats-tokens` (default 0) as its
+    /// context usage, exits on a `crash-now` prompt, and — while `tool-mode`
+    /// exists — answers with a memory tool call until it sees a tool result.
+    fn fake_core(directory: &TestDirectory) -> (HivemindCore, PathBuf, PathBuf) {
         let binary = directory.0.join("fake-pi");
         let lifecycle = directory.0.join("lifecycle.log");
+        let prompts = directory.0.join("prompts.log");
         let script = r#"#!/bin/sh
 case "$*" in
   *"You are Maomao"*) agent=Maomao ;;
   *) agent=Unknown ;;
 esac
-printf '%s started\n' "$agent" >> __LOG__
+printf '%s started\n' "$agent" >> __DIR__/lifecycle.log
 while IFS= read -r request; do
   case "$request" in
     *'"type":"new_session"'*)
       printf '%s\n' '{"type":"response","command":"new_session","success":true}'
       ;;
+    *'"type":"get_session_stats"'*)
+      tokens=$(cat __DIR__/stats-tokens 2>/dev/null || echo 0)
+      printf '{"type":"response","command":"get_session_stats","success":true,"data":{"contextUsage":{"tokens":%s,"contextWindow":1000000,"percent":0}}}\n' "$tokens"
+      ;;
     *'"type":"prompt"'*)
-      printf '%s prompt\n' "$agent" >> __LOG__
-      printf '%s\n' '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"Maomao reply"}]}}'
+      printf '%s prompt\n' "$agent" >> __DIR__/lifecycle.log
+      printf '%s\n' "$request" >> __DIR__/prompts.log
+      case "$request" in
+        *'Current user message:\ncrash-now'*) exit 3 ;;
+      esac
+      if [ -e __DIR__/tool-mode ] && ! printf '%s' "$request" | grep -q 'Memory tool result:'; then
+        printf '%s\n' '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"```hivemind-tool\n{\"name\":\"memory.private.add\",\"args\":{\"content\":\"session note\"}}\n```"}]}}'
+      else
+        printf '%s\n' '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"Maomao reply"}]}}'
+      fi
       printf '%s\n' '{"type":"agent_settled"}'
       ;;
   esac
 done
-printf '%s stopped\n' "$agent" >> __LOG__
+printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
 "#
-        .replace("__LOG__", &format!("'{}'", lifecycle.display()));
+        .replace("__DIR__", &format!("'{}'", directory.0.display()));
         fs::write(&binary, script).unwrap();
         let mut permissions = fs::metadata(&binary).unwrap().permissions();
         permissions.set_mode(0o755);
@@ -193,7 +215,22 @@ printf '%s stopped\n' "$agent" >> __LOG__
         config.runtime.pi_binary = binary.display().to_string();
         config.agents[0].workspace = directory.0.display().to_string();
         let core = HivemindCore::new(config, directory.0.join("hivemind.toml")).unwrap();
-        (core, lifecycle)
+        (core, lifecycle, prompts)
+    }
+
+    /// The `message` of every prompt request the fake runtime received.
+    fn prompt_messages(path: &Path) -> Vec<String> {
+        lines(path)
+            .iter()
+            .map(|line| {
+                let request: serde_json::Value = serde_json::from_str(line).unwrap();
+                request["message"].as_str().unwrap().to_owned()
+            })
+            .collect()
+    }
+
+    fn maomao_caller(room: &str) -> crate::memory::Caller {
+        crate::memory::Caller::agent(room, "", format!("{room}/Maomao"), "Maomao", "Maomao")
     }
 
     async fn solo_turn(core: &HivemindCore, room: &str, input: &str) -> Result<Vec<TurnReply>> {
@@ -214,22 +251,27 @@ printf '%s stopped\n' "$agent" >> __LOG__
     }
 
     #[tokio::test]
-    async fn each_turn_starts_and_stops_a_fresh_runtime_and_shutdown_is_idempotent() {
+    async fn sessions_persist_per_room_instance_and_shutdown_stops_them_idempotently() {
         let directory = TestDirectory::new();
-        let (core, lifecycle) = fake_core(&directory);
+        let (core, lifecycle, _prompts) = fake_core(&directory);
         let mut events = core.events().subscribe();
         assert!(!lifecycle.exists(), "construction must not spawn a runtime");
 
-        for (room, input) in [("room-one", "first turn"), ("room-two", "second turn")] {
+        for (room, input) in [("room-one", "first"), ("room-one", "second"), ("room-two", "third")] {
             let replies = solo_turn(&core, room, input).await.unwrap();
             assert_eq!(replies.len(), 1);
             assert_eq!(replies[0].result.as_ref().unwrap(), "Maomao reply");
         }
-        let per_turn = ["Maomao started", "Maomao prompt", "Maomao stopped"];
-        assert_eq!(lines(&lifecycle), [per_turn, per_turn].concat());
+        assert_eq!(
+            lines(&lifecycle),
+            ["Maomao started", "Maomao prompt", "Maomao prompt", "Maomao started", "Maomao prompt"]
+        );
 
         core.shutdown().await;
         core.shutdown().await;
+        let after = lines(&lifecycle);
+        assert_eq!(after.len(), 7);
+        assert_eq!(after[5..], ["Maomao stopped", "Maomao stopped"]);
 
         let mut started = 0;
         let mut stopped = 0;
@@ -249,17 +291,129 @@ printf '%s stopped\n' "$agent" >> __LOG__
             }
         }
         assert_eq!((started, stopped, shutting_down), (2, 2, 1));
-        assert_eq!(lines(&lifecycle).len(), 6, "shutdown has no runtime left to stop");
 
         let error = solo_turn(&core, "room-three", "late").await.unwrap_err();
         assert!(error.to_string().contains("shutting down"), "{error:#}");
-        assert_eq!(lines(&lifecycle).len(), 6, "no runtime started after shutdown");
+        assert_eq!(lines(&lifecycle).len(), 7, "no runtime started after shutdown");
+    }
+
+    #[tokio::test]
+    async fn later_turns_send_only_the_room_delta() {
+        let directory = TestDirectory::new();
+        let (core, _lifecycle, prompts) = fake_core(&directory);
+        solo_turn(&core, "delta-room", "first").await.unwrap();
+        solo_turn(&core, "delta-room", "second").await.unwrap();
+        core.shutdown().await;
+
+        let messages = prompt_messages(&prompts);
+        assert_eq!(messages.len(), 2);
+        assert!(messages[0].contains("Participants:"), "{}", messages[0]);
+        assert!(messages[1].contains("Current user message:\nsecond"), "{}", messages[1]);
+        assert!(!messages[1].contains("Participants:"), "{}", messages[1]);
+        assert!(!messages[1].contains("first"), "{}", messages[1]);
+    }
+
+    #[tokio::test]
+    async fn rotation_rehydrates_a_fresh_runtime_at_the_turn_boundary() {
+        let directory = TestDirectory::new();
+        let (core, lifecycle, prompts) = fake_core(&directory);
+        let mut events = core.events().subscribe();
+        solo_turn(&core, "rotate-room", "first").await.unwrap();
+        fs::write(directory.0.join("stats-tokens"), "999999").unwrap();
+        solo_turn(&core, "rotate-room", "second").await.unwrap();
+        assert_eq!(
+            lines(&lifecycle),
+            ["Maomao started", "Maomao prompt", "Maomao stopped", "Maomao started", "Maomao prompt"]
+        );
+        let messages = prompt_messages(&prompts);
+        assert!(messages[1].contains("Participants:"), "rotation must rehydrate a full pack");
+        assert!(messages[1].contains("first"), "the full pack carries earlier room history");
+
+        let mut rotated = Vec::new();
+        while let Ok(event) = events.try_recv() {
+            if let DomainEventKind::RuntimeRotated { instance_id, reason, .. } = event.payload {
+                rotated.push((instance_id, reason));
+            }
+        }
+        assert_eq!(rotated, [("rotate-room/Maomao".to_owned(), "context_budget".to_owned())]);
+
+        let epochs = core.memory().runtime_epochs(&maomao_caller("rotate-room"), 10).unwrap();
+        assert_eq!(epochs.len(), 2);
+        assert_eq!(epochs.iter().filter(|epoch| epoch.ended_at.is_none()).count(), 1);
+        core.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn failed_runtime_is_discarded_and_next_turn_rehydrates() {
+        let directory = TestDirectory::new();
+        let (core, lifecycle, prompts) = fake_core(&directory);
+        let mut events = core.events().subscribe();
+        let replies = solo_turn(&core, "crash-room", "crash-now").await.unwrap();
+        assert!(replies[0].result.is_err());
+        let replies = solo_turn(&core, "crash-room", "after the crash").await.unwrap();
+        assert_eq!(replies[0].result.as_deref(), Ok("Maomao reply"));
+        core.shutdown().await;
+
+        assert_eq!(
+            lines(&lifecycle)
+                .iter()
+                .filter(|line| *line == "Maomao started")
+                .count(),
+            2
+        );
+        let messages = prompt_messages(&prompts);
+        assert!(messages[1].contains("Participants:"), "{}", messages[1]);
+        let mut failure_codes = Vec::new();
+        while let Ok(event) = events.try_recv() {
+            if let DomainEventKind::RuntimeFailed { error_code, .. } = event.payload {
+                failure_codes.push(error_code);
+            }
+        }
+        assert_eq!(failure_codes, ["runtime_prompt_failed"]);
+    }
+
+    #[tokio::test]
+    async fn idle_sessions_close_and_the_next_turn_rehydrates() {
+        let directory = TestDirectory::new();
+        let (core, lifecycle, prompts) = fake_core(&directory);
+        solo_turn(&core, "idle-room", "first").await.unwrap();
+        core.runtime.close_idle(std::time::Duration::ZERO).await;
+        assert_eq!(lines(&lifecycle), ["Maomao started", "Maomao prompt", "Maomao stopped"]);
+        let epochs = core.memory().runtime_epochs(&maomao_caller("idle-room"), 10).unwrap();
+        assert!(epochs.iter().all(|epoch| epoch.ended_at.is_some()));
+
+        solo_turn(&core, "idle-room", "second").await.unwrap();
+        assert_eq!(lines(&lifecycle)[3], "Maomao started");
+        assert!(prompt_messages(&prompts)[1].contains("Participants:"));
+        core.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn tool_followups_continue_the_live_session_with_only_the_result() {
+        let directory = TestDirectory::new();
+        let (core, lifecycle, prompts) = fake_core(&directory);
+        fs::write(directory.0.join("tool-mode"), "").unwrap();
+        let replies = solo_turn(&core, "tool-room", "save a note").await.unwrap();
+        assert_eq!(replies[0].result.as_deref(), Ok("Maomao reply"));
+        core.shutdown().await;
+
+        assert_eq!(
+            lines(&lifecycle)
+                .iter()
+                .filter(|line| *line == "Maomao started")
+                .count(),
+            1
+        );
+        let messages = prompt_messages(&prompts);
+        assert_eq!(messages.len(), 2);
+        assert!(messages[1].starts_with("Memory tool result:"), "{}", messages[1]);
+        assert!(!messages[1].contains("Participants:"), "{}", messages[1]);
     }
 
     #[tokio::test]
     async fn turn_events_are_ordered_and_attributed() {
         let directory = TestDirectory::new();
-        let (core, _lifecycle) = fake_core(&directory);
+        let (core, _lifecycle, _prompts) = fake_core(&directory);
         let mut events = core.events().subscribe();
         solo_turn(&core, "room-events", "hello").await.unwrap();
         core.shutdown().await;
@@ -295,31 +449,32 @@ printf '%s stopped\n' "$agent" >> __LOG__
     }
 
     #[tokio::test]
-    async fn each_invocation_records_a_closed_runtime_epoch_for_its_room_instance() {
+    async fn one_open_epoch_per_live_session_closed_at_shutdown() {
         let directory = TestDirectory::new();
-        let (core, _lifecycle) = fake_core(&directory);
+        let (core, _lifecycle, _prompts) = fake_core(&directory);
         solo_turn(&core, "epoch-room", "first").await.unwrap();
         solo_turn(&core, "epoch-room", "second").await.unwrap();
-        core.shutdown().await;
 
-        let caller = crate::memory::Caller::agent("epoch-room", "", "epoch-room/Maomao", "Maomao", "Maomao");
+        let caller = maomao_caller("epoch-room");
         let epochs = core.memory().runtime_epochs(&caller, 10).unwrap();
-        assert_eq!(epochs.len(), 2, "one epoch per invocation");
-        for epoch in &epochs {
-            assert_eq!(epoch.runtime, "pi");
-            assert_eq!(epoch.instance_id, "epoch-room/Maomao");
-            assert_eq!(epoch.room_id, "epoch-room");
-            assert_eq!(epoch.metadata.get("kind").and_then(|v| v.as_str()), Some("invocation"));
-            assert!(epoch.ended_at.is_some_and(|ended| ended >= epoch.started_at));
-        }
-        let other_room = crate::memory::Caller::agent("other-room", "", "other-room/Maomao", "Maomao", "Maomao");
-        assert!(core.memory().runtime_epochs(&other_room, 10).unwrap().is_empty());
+        assert_eq!(epochs.len(), 1, "one epoch per live session");
+        let epoch = &epochs[0];
+        assert_eq!(epoch.runtime, "pi");
+        assert_eq!(epoch.instance_id, "epoch-room/Maomao");
+        assert_eq!(epoch.room_id, "epoch-room");
+        assert_eq!(epoch.metadata.get("kind").and_then(|v| v.as_str()), Some("session"));
+        assert!(epoch.ended_at.is_none());
+
+        core.shutdown().await;
+        let epochs = core.memory().runtime_epochs(&caller, 10).unwrap();
+        assert!(epochs[0].ended_at.is_some_and(|ended| ended >= epochs[0].started_at));
+        assert!(core.memory().runtime_epochs(&maomao_caller("other-room"), 10).unwrap().is_empty());
     }
 
     #[tokio::test]
     async fn broadcast_records_runtime_startup_failure_and_keeps_successful_peer() {
         let directory = TestDirectory::new();
-        let (working, _lifecycle) = fake_core(&directory);
+        let (working, _lifecycle, _prompts) = fake_core(&directory);
         let mut config = working.config().clone();
         working.shutdown().await;
         let mut broken = config.agents[0].clone();
@@ -471,7 +626,7 @@ done
     #[tokio::test]
     async fn shutdown_after_partial_startup_is_safe_repeatable_and_final() {
         let directory = TestDirectory::new();
-        let (working, lifecycle) = fake_core(&directory);
+        let (working, lifecycle, _prompts) = fake_core(&directory);
         let mut config = working.config().clone();
         working.shutdown().await;
         let mut broken = config.agents[0].clone();
@@ -496,6 +651,7 @@ done
         };
         let replies = core.turn(request()).await.unwrap();
         assert!(replies.iter().any(|reply| reply.name == "Broken" && reply.result.is_err()));
+        assert_eq!(lines(&lifecycle), ["Maomao started", "Maomao prompt"]);
 
         core.shutdown().await;
         core.shutdown().await;

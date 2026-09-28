@@ -98,7 +98,7 @@ impl ChildTransport {
     }
 }
 
-/// A no-session Pi RPC process. Each persona invocation begins a fresh Pi session.
+/// A no-session Pi RPC process whose in-process context persists across prompts until Hivemind stops it.
 pub struct PiSession {
     agent_name: String,
     transport: ChildTransport,
@@ -171,7 +171,7 @@ impl PiSession {
         }
     }
 
-    async fn await_command_response(&mut self, command: &str) -> Result<()> {
+    async fn await_command_response(&mut self, command: &str) -> Result<Value> {
         loop {
             let frame = self.recv().await?;
             if frame.get("type").and_then(Value::as_str) != Some("response")
@@ -180,7 +180,7 @@ impl PiSession {
                 continue;
             }
             if frame.get("success").and_then(Value::as_bool) == Some(true) {
-                return Ok(());
+                return Ok(frame);
             }
             let message = frame
                 .get("error")
@@ -204,8 +204,6 @@ impl HarnessSession for PiSession {
             );
         }
 
-        self.send(&json!({"type":"new_session"})).await?;
-        self.await_command_response("new_session").await?;
         self.send(&json!({"type":"prompt", "message":input}))
             .await?;
 
@@ -262,6 +260,17 @@ impl HarnessSession for PiSession {
                 _ => {}
             }
         }
+    }
+
+    async fn context_tokens(&mut self) -> Result<Option<u64>> {
+        if self.failure.is_some() {
+            return Ok(None);
+        }
+        self.send(&json!({"type":"get_session_stats"})).await?;
+        let frame = self.await_command_response("get_session_stats").await?;
+        Ok(frame
+            .pointer("/data/contextUsage/tokens")
+            .and_then(Value::as_u64))
     }
 
     async fn shutdown(&mut self) -> Result<()> {
@@ -351,30 +360,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn subprocess_rpc_resets_each_turn_and_returns_latest_assistant_message() {
+    async fn subprocess_rpc_keeps_context_across_prompts_and_reports_context_tokens() {
         let fixture = FixtureDir::new(
             r#"
-session_count=0
 prompt_count=0
 while IFS= read -r request; do
   case "$request" in
-    *'"type":"new_session"'*)
-      session_count=$((session_count + 1))
-      printf '%s\n' '{"type":"response","command":"new_session","success":true}' ;;
+    *'"type":"new_session"'*) exit 41 ;;
+    *'"type":"get_session_stats"'*)
+      printf '%s\n' '{"type":"response","command":"get_session_stats","success":true,"data":{"contextUsage":{"tokens":1234,"contextWindow":200000,"percent":0.6}}}' ;;
     *'"message":"hello"'*)
       prompt_count=$((prompt_count + 1))
-      [ "$session_count" -eq "$prompt_count" ] || exit 41
       printf '%s\n' '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"intermediate"}]}}'
       printf '%s\n' '{"type":"message_end","message":{"role":"tool","content":[{"type":"text","text":"tool output"}]}}'
       printf '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"%s"},{"type":"text","text":" prompt hello"}]}}\n' "$PWD"
       printf '%s\n' '{"type":"agent_settled"}' ;;
     *'"type":"prompt"'*)
       prompt_count=$((prompt_count + 1))
-      [ "$session_count" -eq "$prompt_count" ] || exit 41
       printf '%s\n' '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"second turn"}]}}' '{"type":"agent_settled"}' ;;
   esac
 done
-[ "$session_count" -eq 2 ] && [ "$prompt_count" -eq 2 ] || exit 42
+[ "$prompt_count" -eq 2 ] || exit 42
 "#,
         );
         let mut cfg = agent();
@@ -385,6 +391,7 @@ done
             format!("{} prompt hello", fixture.workspace())
         );
         assert_eq!(session.prompt("again").await.unwrap(), "second turn");
+        assert_eq!(session.context_tokens().await.unwrap(), Some(1234));
         session.shutdown().await.unwrap();
     }
 

@@ -416,6 +416,20 @@ impl HarnessSession for OmpSession {
         }
     }
 
+    async fn context_tokens(&mut self) -> Result<Option<u64>> {
+        if self.failure.is_some() {
+            return Ok(None);
+        }
+        self.send_frame(&json!({"id":"hivemind_stats","type":"get_session_stats"}))
+            .await?;
+        let frame = self
+            .wait_for_response("hivemind_stats", "get_session_stats")
+            .await?;
+        Ok(frame
+            .pointer("/data/contextUsage/tokens")
+            .and_then(Value::as_u64))
+    }
+
     async fn shutdown(&mut self) -> Result<()> {
         self.transport.shutdown().await
     }
@@ -652,6 +666,44 @@ mod tests {
 
         let unread = script.lock().incoming.len();
         assert_eq!(unread, 0, "the session must consume its scripted frames");
+    }
+
+    #[tokio::test]
+    async fn context_tokens_reads_runtime_usage_and_tolerates_absence() {
+        let agent = agent(None);
+        let (script, transport) = fake_transport();
+        push_ready(&script);
+        push_frame(
+            &script,
+            json!({
+                "type": "response",
+                "id": "hivemind_stats",
+                "command": "get_session_stats",
+                "success": true,
+                "data": { "contextUsage": { "tokens": 77, "contextWindow": 1000, "percent": 7.7 } }
+            }),
+        );
+        push_frame(
+            &script,
+            json!({
+                "type": "response",
+                "id": "hivemind_stats",
+                "command": "get_session_stats",
+                "success": true,
+                "data": {}
+            }),
+        );
+
+        let mut session = OmpSession::start_with_transport(&agent, transport)
+            .await
+            .unwrap();
+
+        assert_eq!(session.context_tokens().await.unwrap(), Some(77));
+        assert_eq!(session.context_tokens().await.unwrap(), None);
+        assert_eq!(
+            sent_frames(&script)[0],
+            json!({"id":"hivemind_stats","type":"get_session_stats"})
+        );
     }
 
     #[tokio::test]

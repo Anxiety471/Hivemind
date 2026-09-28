@@ -1,19 +1,23 @@
-mod manager;
 mod omp;
 mod pi;
+mod pool;
 use anyhow::{bail, Result};
 use async_trait::async_trait;
 
 use crate::config::{AgentConfig, RuntimeConfig};
 
-pub use manager::{AgentManager, PromptAllResult};
+pub use pool::{
+    InvokeReply, InvokeRequest, PromptDelta, PromptPhase, RuntimePool, SessionCursor, TurnView,
+};
 
-/// A runtime-agnostic live session bound to a single agent. Its turn-owned
-/// manager stops it after the reply; Hivemind's room history remains canonical.
+/// A runtime-agnostic live session bound to one agent instance. Hivemind's
+/// room history remains canonical; the session is a disposable cache.
 #[async_trait]
 pub trait HarnessSession: Send {
     /// Send one user turn through the live session and return the reply.
     async fn prompt(&mut self, input: &str) -> Result<String>;
+    /// Runtime-reported context size of the live session, if the runtime knows it.
+    async fn context_tokens(&mut self) -> Result<Option<u64>>;
     /// Release the underlying runtime (close/kill an OMP child, etc.).
     async fn shutdown(&mut self) -> Result<()>;
 }
@@ -103,13 +107,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn manager_dispatches_two_independent_pi_agents_and_one_omp_agent() {
+    async fn create_session_dispatches_two_independent_pi_agents_and_one_omp_agent() {
         let pi = Fixture::new(
             "pi",
             r#"
 while IFS= read -r request; do
   case "$request" in
     *'"type":"new_session"'*) printf '%s\n' '{"type":"response","command":"new_session","success":true}' ;;
+    *'"type":"get_session_stats"'*) printf '%s\n' '{"type":"response","command":"get_session_stats","success":true,"data":{}}' ;;
     *'"type":"prompt"'*)
       printf '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"pi-%s"}]}}\n' "$$"
       printf '%s\n' '{"type":"agent_settled"}' ;;
@@ -125,6 +130,7 @@ while IFS= read -r request; do
   case "$request" in
     *'"type":"prompt"'*) printf '%s\n' '{"type":"response","id":"hivemind_prompt","success":true,"data":{"agentInvoked":true}}' '{"type":"prompt_result","id":"hivemind_prompt","status":"completed","sessionSettled":true}' ;;
     *'"type":"get_last_assistant_text"'*) printf '%s\n' '{"type":"response","id":"hivemind_last_text","success":true,"data":{"text":"omp fixture"}}' ;;
+    *'"type":"get_session_stats"'*) printf '%s\n' '{"type":"response","id":"hivemind_stats","command":"get_session_stats","success":true,"data":{}}' ;;
   esac
 done
 "#,
@@ -132,24 +138,21 @@ done
         let runtime = RuntimeConfig {
             omp_binary: omp.binary("omp"),
             pi_binary: pi.binary("pi"),
+            ..RuntimeConfig::default()
         };
         let configured = [
             agent("Pi A", "pi", &pi.workspace()),
             agent("OMP", "omp", &omp.workspace()),
             agent("Pi B", "pi", &pi.workspace()),
         ];
-        // Explicit effective reply order reverses the Pi speakers around OMP.
-        let agents = [&configured[2], &configured[1], &configured[0]];
-        let manager = AgentManager::start(&runtime, &agents).await.unwrap();
-        let replies = manager.prompt_all("hello").await;
-        assert_eq!(replies.replies[0].0, "Pi B");
-        assert_eq!(replies.replies[1].0, "OMP");
-        assert_eq!(replies.replies[2].0, "Pi A");
-        assert_eq!(replies.replies[1].1.as_ref().unwrap(), "omp fixture");
-        assert_ne!(
-            replies.replies[0].1.as_ref().unwrap(),
-            replies.replies[2].1.as_ref().unwrap()
-        );
-        manager.shutdown().await;
+        let mut replies = Vec::new();
+        for agent in &configured {
+            let mut session = create_session(&runtime, agent).await.unwrap();
+            replies.push(session.prompt("hello").await.unwrap());
+            session.shutdown().await.unwrap();
+        }
+        assert_eq!(replies[1], "omp fixture");
+        assert!(replies[0].starts_with("pi-") && replies[2].starts_with("pi-"));
+        assert_ne!(replies[0], replies[2]);
     }
 }

@@ -77,7 +77,8 @@ pub struct ContextConfig {
     pub summary_max_tokens: usize,
     #[serde(default = "default_context_target_tokens")]
     pub context_target_tokens: usize,
-    /// Retained and validated; runtime-token accounting is not implemented.
+    /// Live runtime context size (runtime-reported or estimated at 4 bytes/token)
+    /// at which an agent-instance runtime is rotated before its next turn.
     #[serde(default = "default_runtime_rotate_tokens")]
     pub runtime_rotate_tokens: usize,
     #[serde(default = "default_summary_refresh_turns")]
@@ -102,6 +103,10 @@ pub struct RuntimeConfig {
     pub omp_binary: String,
     #[serde(default = "default_pi_binary")]
     pub pi_binary: String,
+    /// Seconds an agent-instance runtime may sit unused before it is stopped;
+    /// 0 keeps sessions until shutdown.
+    #[serde(default = "default_idle_timeout_secs")]
+    pub idle_timeout_secs: u64,
 }
 
 impl Default for RuntimeConfig {
@@ -109,6 +114,7 @@ impl Default for RuntimeConfig {
         Self {
             omp_binary: default_omp_binary(),
             pi_binary: default_pi_binary(),
+            idle_timeout_secs: default_idle_timeout_secs(),
         }
     }
 }
@@ -342,6 +348,9 @@ fn default_omp_binary() -> String {
 }
 fn default_pi_binary() -> String {
     "pi".into()
+}
+fn default_idle_timeout_secs() -> u64 {
+    120
 }
 
 fn default_runtime() -> String {

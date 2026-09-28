@@ -135,6 +135,8 @@ Each agent selects a runtime independently. Hivemind supports OMP and Pi in one 
 [runtime]
 omp_binary = "omp"
 pi_binary = "pi"
+# Seconds an unused agent-instance runtime stays alive; 0 never idles out.
+idle_timeout_secs = 120
 
 [[personas]]
 id = "Maomao"
@@ -167,16 +169,22 @@ older Hivemind key `thinking` remains accepted as an alias. OMP `fast` is
 tri-state: omitted leaves its default unchanged; `true` or `false` is applied
 once at session startup. `fast` is OMP-specific.
 
-Every persona invocation — in shell `ask`/`all`, interactive `chat` (main,
-solo, group, `/ask`, `/all`), and any `HivemindCore::turn` caller — starts a
-fresh Pi or OMP runtime process for that persona, sends one Context Pack, and
-stops the process after the reply. No runtime session is shared across
-personas, turns, or rooms; this applies equally to Pi and OMP. Continuity
-comes only from Hivemind's SQLite room history, state, and summary, which are
-rebuilt into each Context Pack. Participants are resolved and validated before
-any runtime starts. Pi uses RPC mode with `--no-session`; Hivemind waits for
-`agent_settled` and returns text blocks from the latest assistant
-`message_end`.
+Every agent instance — `room/persona`, in shell `ask`/`all`, interactive `chat`
+(main, solo, group, `/ask`, `/all`), and any `HivemindCore::turn` caller — has at
+most one live Pi or OMP runtime session, owned by the core. The first prompt of
+a session carries the full Context Pack; later turns in the same room send only
+a room delta, and memory-tool follow-ups send only the tool result. A session
+rotates to a fresh process at a turn boundary once its runtime-reported context
+reaches `context.runtime_rotate_tokens` (emitting `runtime.rotated`) or when a
+delta cannot be built, is discarded after any runtime failure without retrying
+that turn, closes after `runtime.idle_timeout_secs` without use, and stops on
+core shutdown. No runtime session is shared across personas, turns, or rooms;
+this applies equally to Pi and OMP. Hivemind's SQLite room history, state, and
+summary stay canonical, and every new session is rehydrated from them.
+Participants are resolved and validated before any runtime starts. Pi uses RPC
+mode with `--no-session` and keeps its in-process context between prompts;
+Hivemind waits for `agent_settled` and returns text blocks from the latest
+assistant `message_end`.
 
 Canonical history, memory, and runtime epochs live in `.hivemind/memory.sqlite3`
 next to the selected config file: rooms, turns, and messages (L7), scoped
@@ -186,18 +194,20 @@ snapshot are written to SQLite, and the JSON file is removed only after that
 migration succeeds. `.hivemind/context/` now holds only room turn-lock files
 and any not-yet-migrated legacy history. `[context]` configures the recent
 raw-turn window, summary size/refresh cadence, and bounded approximate context
-budget. `runtime_rotate_tokens` is validated but has no operational effect,
-because runtimes are already replaced on every invocation.
+budget. `runtime_rotate_tokens` is the live context size at which that agent
+instance's runtime is rotated before its next turn, and
+`runtime.idle_timeout_secs` is how long an unused runtime stays alive.
 
 ## Application core and event stream
 
 `serve`, `ask`, `all`, and interactive `chat` all construct the library
 `HivemindCore`, which owns the ordered persona registry, one SQLite-backed
-memory service, one durable conversation coordinator, and a bounded
-process-local event bus. Interactive `chat` shares one core for the whole
-session. Each core turn starts a fresh runtime per persona invocation and
-stops it after the reply (emitting `runtime.started`/`runtime.stopped` events),
-so core shutdown has no runtime session left to stop. Shell `ask` and `all`
+memory service, one durable conversation coordinator, a per-instance runtime
+pool, and a bounded process-local event bus. Interactive `chat` shares one core
+for the whole session. Each core turn prompts that room's live runtime per
+persona and keeps it for the next turn (emitting
+`runtime.started`/`runtime.rotated`/`runtime.stopped` events); core shutdown
+stops every live runtime. Shell `ask` and `all`
 construct a core per command. The API currently
 exposes health, info, agent listing, and WebSocket event streaming; it does
 not yet route chat turns. Construction and health/info/agent listing do not
@@ -220,7 +230,8 @@ authoritative API state).
 
 The WebSocket stream forwards these events as `conversation.turn.started`,
 `conversation.turn.completed`, `agent.reply.started`, `agent.reply.completed`,
-`agent.reply.failed`, `runtime.started`, `runtime.stopped`, and
+`agent.reply.failed`, `runtime.started`, `runtime.stopped`,
+`runtime.rotated`, and
 `runtime.failed`. A subscriber that falls behind the bounded buffer receives
 `system.events_lagged` with `missed_count` and `refresh_required: true`
 instead of the dropped events.

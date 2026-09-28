@@ -19,6 +19,9 @@ use tokio::{
 };
 
 use crate::config::{AgentConfig, ContextConfig, ConversationMode};
+use crate::runtime::{
+    InvokeReply, InvokeRequest, PromptDelta, PromptPhase, RuntimePool, SessionCursor, TurnView,
+};
 
 static ROOM_LOCKS: OnceCell<Mutex<HashMap<String, Weak<Mutex<()>>>>> = OnceCell::const_new();
 
@@ -159,99 +162,43 @@ pub struct TurnReply {
 
 #[async_trait]
 pub trait AgentInvoker: Send + Sync {
-    async fn invoke(
-        &self,
-        instance_id: &str,
-        agent: &AgentConfig,
-        context_pack: &str,
-    ) -> Result<String>;
+    /// Live continuable session state for this instance; None means the next prompt hydrates.
+    async fn cursor(&self, instance_id: &str) -> Option<SessionCursor>;
+    async fn invoke(&self, request: InvokeRequest<'_>) -> Result<InvokeReply>;
 }
 
-/// Starts a fresh runtime process for every persona invocation and stops it
-/// after the reply, so no runtime session outlives a single prompt. Room
-/// continuity comes from the Context Pack, never from runtime memory.
+/// Routes a turn's invocations to the core-owned per-instance runtime pool.
 pub struct RuntimeInvoker {
-    runtime: crate::config::RuntimeConfig,
-    memory: Arc<MemoryService>,
+    pool: Arc<RuntimePool>,
     room_id: String,
     group_id: String,
-    events: Option<crate::events::EventBus>,
 }
 
 impl RuntimeInvoker {
-    pub fn new(
-        runtime: crate::config::RuntimeConfig,
-        memory: Arc<MemoryService>,
-        room_id: &str,
-        group_id: &str,
-    ) -> Self {
+    pub fn new(pool: Arc<RuntimePool>, room_id: &str, group_id: &str) -> Self {
         Self {
-            runtime,
-            memory,
+            pool,
             room_id: room_id.to_owned(),
             group_id: group_id.to_owned(),
-            events: None,
-        }
-    }
-
-    pub fn with_events(
-        runtime: crate::config::RuntimeConfig,
-        memory: Arc<MemoryService>,
-        room_id: &str,
-        group_id: &str,
-        events: crate::events::EventBus,
-    ) -> Self {
-        Self {
-            events: Some(events),
-            ..Self::new(runtime, memory, room_id, group_id)
         }
     }
 }
 
 #[async_trait]
 impl AgentInvoker for RuntimeInvoker {
-    async fn invoke(
-        &self,
-        instance_id: &str,
-        agent: &AgentConfig,
-        context_pack: &str,
-    ) -> Result<String> {
+    async fn cursor(&self, instance_id: &str) -> Option<SessionCursor> {
+        self.pool.cursor(instance_id).await
+    }
+
+    async fn invoke(&self, request: InvokeRequest<'_>) -> Result<InvokeReply> {
         let caller = Caller::agent(
             self.room_id.clone(),
             self.group_id.clone(),
-            instance_id,
-            &agent.name,
-            &agent.name,
+            request.instance_id,
+            &request.agent.name,
+            &request.agent.name,
         );
-        let epoch = self
-            .memory
-            .start_runtime_epoch(
-                &caller,
-                agent.runtime.trim(),
-                serde_json::json!({ "kind": "invocation", "agent": agent.name }),
-            )
-            .context("recording runtime epoch start")?;
-        let manager = crate::runtime::AgentManager::start_lazy_with_events(
-            &self.runtime,
-            &[agent],
-            self.events.clone(),
-        );
-        let reply = manager.prompt_agent(&agent.name, context_pack).await;
-        manager.shutdown().await;
-        let ended_at = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64;
-        let closed = self.memory.end_runtime_epoch(&caller, &epoch.id, ended_at);
-        match (reply, closed) {
-            (reply, Ok(_)) => reply,
-            (Ok(_), Err(close_error)) => {
-                Err(anyhow::anyhow!("failed to close runtime epoch: {close_error:#}"))
-            }
-            (Err(reply_error), Err(close_error)) => Err(anyhow::anyhow!(
-                "{reply_error:#} (also failed to close runtime epoch: {close_error:#})"
-            )),
-        }
+        self.pool.invoke(&caller, request).await
     }
 }
 
@@ -773,6 +720,37 @@ struct PackRequest<'a> {
     caller: &'a Caller,
 }
 
+/// Prompts prepared for one member's invocation this turn.
+struct MemberPrompt {
+    /// Self-contained Context Pack used whenever the runtime (re)hydrates.
+    pack: String,
+    /// `(epoch_id, text)` continuation for the live session, when buildable.
+    delta: Option<(String, String)>,
+    /// Room view the session holds after it replies.
+    view: TurnView,
+}
+
+/// Delta sections cannot restate the manifest; they point back at it.
+const SESSION_TOOL_REMINDER: &str =
+    "\nHivemind memory tools remain available exactly as described at the start of this session.\n";
+
+/// Earlier same-turn replies (Discussion mode), rendered identically for
+/// full packs and deltas.
+fn same_turn_replies(prior: &[(String, Result<String, String>)]) -> String {
+    let peers = prior
+        .iter()
+        .map(|(name, result)| match result {
+            Ok(reply) => format!("{name}: {reply}\n"),
+            Err(_) => format!("{name} failed to produce a response for this turn.\n"),
+        })
+        .collect::<String>();
+    if peers.is_empty() {
+        String::new()
+    } else {
+        format!("\nEarlier replies in this turn:\n{peers}")
+    }
+}
+
 impl ConversationCoordinator {
     /// SQLite (L7 archive) is the single source of truth for room history;
     /// `memory` is the one service opened at process startup.
@@ -867,21 +845,25 @@ impl ConversationCoordinator {
                 for member in members {
                     let caller =
                         invocation_caller(room, group_id, &member.agent.name, &turn_id, &user_message_id);
-                    let prompt = self.context_pack(PackRequest {
-                        history: &history,
-                        room_name,
-                        members,
-                        current: member,
-                        input,
-                        prior: &[],
-                        active_turn: &turn_id,
-                        caller: &caller,
-                    });
+                    let instance_id = format!("{room}/{}", member.agent.name);
+                    let cursor = invoker.cursor(&instance_id).await;
+                    let prompt = self.member_prompt(
+                        &PackRequest {
+                            history: &history,
+                            room_name,
+                            members,
+                            current: member,
+                            input,
+                            prior: &[],
+                            active_turn: &turn_id,
+                            caller: &caller,
+                        },
+                        cursor,
+                    );
                     let (name, prompt) = match prompt {
                         Ok(prompt) => (member.agent.name.clone(), prompt),
                         Err(error) => {
                             let name = member.agent.name.clone();
-                            let instance_id = format!("{room}/{name}");
                             if let Some(events) = &self.events {
                                 events.publish(crate::events::DomainEventKind::AgentReplyStarted {
                                     turn_id: turn_id.clone(), room_id: room.to_owned(),
@@ -914,11 +896,14 @@ impl ConversationCoordinator {
                     let authorized_global = authorized_global.clone();
                     let task_name = name.clone();
                     let handle = jobs.spawn(async move {
+                        let MemberPrompt { pack, delta, view } = prompt;
                         let result = invoke_with_memory(
                             &*invoker,
                             &format!("{room}/{}", agent.name),
                             &agent,
-                            &prompt,
+                            &pack,
+                            delta.as_ref().map(|(epoch_id, text)| PromptDelta { epoch_id, text }),
+                            &view,
                             &caller,
                             &memory,
                             authorized_global.as_deref(),
@@ -997,21 +982,28 @@ impl ConversationCoordinator {
                             instance_id: format!("{room}/{name}"),
                         });
                     }
-                    let result = match self.context_pack(PackRequest {
-                        history: &history,
-                        room_name,
-                        members,
-                        current: member,
-                        input,
-                        prior: &prior,
-                        active_turn: &turn_id,
-                        caller: &caller,
-                    }) {
-                        Ok(prompt) => invoke_with_memory(
+                    let instance_id = format!("{room}/{name}");
+                    let cursor = invoker.cursor(&instance_id).await;
+                    let result = match self.member_prompt(
+                        &PackRequest {
+                            history: &history,
+                            room_name,
+                            members,
+                            current: member,
+                            input,
+                            prior: &prior,
+                            active_turn: &turn_id,
+                            caller: &caller,
+                        },
+                        cursor,
+                    ) {
+                        Ok(MemberPrompt { pack, delta, view }) => invoke_with_memory(
                             &*invoker,
-                            &format!("{room}/{}", member.agent.name),
+                            &instance_id,
                             &member.agent,
-                            &prompt,
+                            &pack,
+                            delta.as_ref().map(|(epoch_id, text)| PromptDelta { epoch_id, text }),
+                            &view,
                             &caller,
                             &self.memory,
                             authorized_global.as_deref(),
@@ -1122,8 +1114,87 @@ impl ConversationCoordinator {
         Ok(replies)
     }
 
-    fn context_pack(&self, request: PackRequest<'_>) -> Result<String> {
-        let PackRequest { history, room_name, members, current, input, prior, active_turn, caller } = request;
+    /// Serialized shared state shown to `caller`: canonical group state for
+    /// group callers, the room-scoped conversation snapshot otherwise.
+    fn state_json(&self, history: &RoomHistory, caller: &Caller) -> Result<String> {
+        let state_value = if caller.group_id.is_empty() {
+            serde_json::to_value(&history.state)?
+        } else {
+            match self.memory.group_state(caller) {
+                Ok(Some(record)) => record.state,
+                _ => serde_json::to_value(&history.state)?,
+            }
+        };
+        Ok(serde_json::to_string(&state_value)?)
+    }
+
+    /// Full pack, optional epoch-bound delta, and the room view the member's
+    /// session holds once it replies.
+    fn member_prompt(
+        &self,
+        request: &PackRequest<'_>,
+        cursor: Option<SessionCursor>,
+    ) -> Result<MemberPrompt> {
+        let state_json = self.state_json(request.history, request.caller)?;
+        let pack = self.context_pack(request, &state_json)?;
+        let delta = cursor.and_then(|cursor| {
+            self.turn_delta(request, &cursor.view, &state_json)
+                .map(|text| (cursor.epoch_id, text))
+        });
+        let mut speakers = Vec::with_capacity(request.prior.len() + 2);
+        speakers.push("user".to_owned());
+        speakers.extend(request.prior.iter().map(|(name, _)| name.clone()));
+        speakers.push(request.current.agent.name.clone());
+        Ok(MemberPrompt {
+            pack,
+            delta,
+            view: TurnView {
+                turn_id: request.active_turn.to_owned(),
+                speakers,
+                state_json,
+            },
+        })
+    }
+
+    /// Room delta for a live session whose view is `cursor`, or `None` when
+    /// the session cannot be continued (its view fell out of history, or the
+    /// delta would exceed the context budget) and must rehydrate.
+    fn turn_delta(
+        &self,
+        request: &PackRequest<'_>,
+        cursor: &TurnView,
+        state_json: &str,
+    ) -> Option<String> {
+        let PackRequest { history, input, prior, active_turn, caller, .. } = *request;
+        let start = history
+            .events
+            .iter()
+            .position(|event| event.turn_id == cursor.turn_id)?;
+        let lines = history.events[start..]
+            .iter()
+            .filter(|event| event.turn_id != active_turn)
+            .filter(|event| {
+                event.turn_id != cursor.turn_id || !cursor.speakers.contains(&event.speaker)
+            })
+            .map(|event| format!("{}: {}", event.speaker, event.content))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut delta = String::new();
+        if !lines.is_empty() {
+            delta.push_str(&format!("Room update since your last reply:\n{lines}\n"));
+        }
+        if state_json != cursor.state_json {
+            delta.push_str(&format!("\nShared room state:\n{state_json}\n"));
+        }
+        delta.push_str(&self.memory_retrieval(caller, input, active_turn));
+        delta.push_str(SESSION_TOOL_REMINDER);
+        delta.push_str(&format!("\nCurrent user message:\n{input}\n"));
+        delta.push_str(&same_turn_replies(prior));
+        (delta.len() <= self.limits.context_target_tokens.saturating_mul(4)).then_some(delta)
+    }
+
+    fn context_pack(&self, request: &PackRequest<'_>, state_json: &str) -> Result<String> {
+        let PackRequest { history, room_name, members, current, input, prior, active_turn, caller } = *request;
         let roster = members
             .iter()
             .map(|p| {
@@ -1139,22 +1210,8 @@ impl ConversationCoordinator {
             .collect::<Vec<_>>()
             .join("\n");
         let identity = format!("You are participating in {room_name}.\n\nParticipants:\n{roster}\n\nYou are {}. Your room role is {}.\n", current.agent.name, current.role.as_deref().or(current.agent.role.as_deref()).unwrap_or("participant"));
-        // One Hivemind-generated manifest for every agent; never persona-specific.
-        let manifest = format!("\n{MEMORY_TOOL_MANIFEST}");
-        // Group callers see canonical group state; solo and main rooms stay
-        // room-scoped on the conversation snapshot.
-        let state_value = if caller.group_id.is_empty() {
-            serde_json::to_value(&history.state)?
-        } else {
-            match self.memory.group_state(caller) {
-                Ok(Some(record)) => record.state,
-                _ => serde_json::to_value(&history.state)?,
-            }
-        };
-        let state = format!(
-            "\nShared room state:\n{}\n",
-            serde_json::to_string(&state_value)?
-        );
+        let manifest = format!("\n{}", memory_tool_manifest(caller));
+        let state = format!("\nShared room state:\n{state_json}\n");
         let summary = if history.summary.is_empty() {
             String::new()
         } else {
@@ -1170,18 +1227,7 @@ impl ConversationCoordinator {
         // messages are excluded so the input is never echoed back as a "memory".
         let hits = self.memory_retrieval(caller, input, active_turn);
         let current = format!("\nCurrent user message:\n{input}\n");
-        let peers = prior
-            .iter()
-            .map(|(name, result)| match result {
-                Ok(reply) => format!("{name}: {reply}\n"),
-                Err(_) => format!("{name} failed to produce a response for this turn.\n"),
-            })
-            .collect::<String>();
-        let same_turn = if peers.is_empty() {
-            String::new()
-        } else {
-            format!("\nEarlier replies in this turn:\n{peers}")
-        };
+        let same_turn = same_turn_replies(prior);
         let mandatory_len =
             identity.len() + manifest.len() + state.len() + current.len() + same_turn.len();
         // Established byte budget: four times the configured token target,
@@ -1446,8 +1492,8 @@ fn id_timestamp(id: &str) -> i64 {
     }
 }
 
-/// One Hivemind-generated tool manifest, identical for every agent and room.
-const MEMORY_TOOL_MANIFEST: &str = "\
+/// Tool manifest for callers whose route has a configured group.
+const GROUP_MEMORY_TOOL_MANIFEST: &str = "\
 Hivemind memory tools — at most one call per reply, as exactly one fenced block:\n\
 ```hivemind-tool\n\
 {\"name\":\"memory.search\",\"args\":{\"query\":\"...\",\"scopes\":[\"group\",\"private\",\"persona\",\"global\",\"archive\"],\"limit\":8}}\n\
@@ -1455,6 +1501,27 @@ Hivemind memory tools — at most one call per reply, as exactly one fenced bloc
 \n\
 Available tools: memory.search(query,scopes,limit) · memory.private.add(content) · memory.private.update(id,content) · memory.group.add(content) · memory.group.update(id,content) · memory.persona.propose(content) · memory.global.propose(content) · memory.archive(id)\n\
 Hivemind binds every call to your current room, group, instance, and persona — never send scope or owner ids. private = this instance only; group = your room's group; persona and global memories have far broader visibility across Hivemind, so those writes are proposals subject to stricter deterministic validation. memory.global.propose is accepted only when its content exactly matches the trimmed payload of a `Global:` directive in the current user turn; every other global proposal is rejected. Search before claiming to remember; never invent results.\n";
+
+/// Tool manifest for groupless callers (main and solo rooms): no group tools or scope.
+const ROOM_MEMORY_TOOL_MANIFEST: &str = "\
+Hivemind memory tools — at most one call per reply, as exactly one fenced block:\n\
+```hivemind-tool\n\
+{\"name\":\"memory.search\",\"args\":{\"query\":\"...\",\"scopes\":[\"private\",\"persona\",\"global\",\"archive\"],\"limit\":8}}\n\
+```\n\
+\n\
+Available tools: memory.search(query,scopes,limit) · memory.private.add(content) · memory.private.update(id,content) · memory.persona.propose(content) · memory.global.propose(content) · memory.archive(id)\n\
+Hivemind binds every call to your current room, instance, and persona — never send scope or owner ids. This room has no group, so there is no group memory; never claim to have saved group memory. private = this instance only; persona and global memories have far broader visibility across Hivemind, so those writes are proposals subject to stricter deterministic validation. memory.global.propose is accepted only when its content exactly matches the trimmed payload of a `Global:` directive in the current user turn; every other global proposal is rejected. Search before claiming to remember; never invent results.\n";
+
+/// Hivemind-generated tool manifest; never persona-specific. Group tools
+/// appear only when the route has a configured group, mirroring
+/// `default_search_scopes`.
+fn memory_tool_manifest(caller: &Caller) -> &'static str {
+    if caller.group_id.is_empty() {
+        ROOM_MEMORY_TOOL_MANIFEST
+    } else {
+        GROUP_MEMORY_TOOL_MANIFEST
+    }
+}
 
 /// Memory actions allowed per agent invocation before a plain-text answer is required.
 const MAX_MEMORY_ACTIONS: usize = 4;
@@ -1728,9 +1795,8 @@ fn execute_memory_tool(
     }
 }
 
-/// Context pack plus this turn's tool exchange. Every re-prompt restates the
-/// pack and this turn's exchange in full, so it stays self-contained: each
-/// re-prompt reaches a freshly started runtime with no memory of the last one.
+/// Self-contained re-prompt used when the runtime must (re)hydrate mid-turn:
+/// the context pack plus this turn's full tool exchange.
 fn tool_prompt(pack: &str, exchange: &[(String, String)]) -> String {
     if exchange.is_empty() {
         return pack.to_owned();
@@ -1745,6 +1811,12 @@ fn tool_prompt(pack: &str, exchange: &[(String, String)]) -> String {
         "Respond with either exactly one ```hivemind-tool fenced block or the final answer as plain text.\n",
     );
     prompt
+}
+
+/// Continuation prompt for a live session that already holds the pack and
+/// this turn's earlier exchange: only the latest tool result.
+fn tool_followup(call: &str, result: &str) -> String {
+    format!("Memory tool result:\n- requested: {call}\n- result: {result}\nRespond with either exactly one ```hivemind-tool fenced block or the final answer as plain text.\n")
 }
 
 /// Server-created invocation context for one agent, one turn: identity and
@@ -1879,26 +1951,40 @@ fn execute_with_optional_authorization(
 
 /// Adapter-independent memory tool loop: run the invoker, execute at most
 /// [`MAX_MEMORY_ACTIONS`] Hivemind tool actions, re-prompt with each result,
-/// and return the first plain-text answer. Runtime epochs are recorded per
-/// invocation by [`RuntimeInvoker`], which also starts and stops a fresh
-/// runtime process around each prompt — not by this loop.
+/// and return the first plain-text answer. The first prompt may be a room
+/// delta bound to the live runtime epoch; each follow-up carries only the
+/// latest tool result bound to the epoch that produced the previous reply,
+/// with the self-contained pack-plus-exchange prompt as the fallback whenever
+/// the runtime must rehydrate.
+#[allow(clippy::too_many_arguments)]
 async fn invoke_with_memory(
     invoker: &dyn AgentInvoker,
     instance_id: &str,
     agent: &AgentConfig,
     pack: &str,
+    delta: Option<PromptDelta<'_>>,
+    view: &TurnView,
     caller: &Caller,
     memory: &MemoryService,
     authorized_global: Option<&str>,
 ) -> Result<String> {
     let mut exchange: Vec<(String, String)> = Vec::new();
-    let mut prompt = tool_prompt(pack, &exchange);
+    let mut last = invoker
+        .invoke(InvokeRequest {
+            instance_id,
+            agent,
+            phase: PromptPhase::TurnStart,
+            full: pack,
+            delta,
+            view,
+        })
+        .await?;
     let mut actions = 0usize;
     loop {
-        let reply = invoker.invoke(instance_id, agent, &prompt).await?;
-        let outcome = parse_tool_block(&reply);
+        let reply = &last.text;
+        let outcome = parse_tool_block(reply);
         let call = match outcome {
-            Ok(None) => return Ok(reply),
+            Ok(None) => return Ok(last.text),
             Ok(Some(call)) => Ok(call),
             Err(error) => Err(format!("{error:#}")),
         };
@@ -1918,10 +2004,24 @@ async fn invoke_with_memory(
                     Err(error) => (rendered, format!("error: {error:#}")),
                 }
             }
-            Err(error) => (utf8_suffix(&reply, 400), format!("error: {error}")),
+            Err(error) => (utf8_suffix(reply, 400), format!("error: {error}")),
         };
+        let followup = tool_followup(&rendered, &result);
         exchange.push((rendered, result));
-        prompt = tool_prompt(pack, &exchange);
+        let full = tool_prompt(pack, &exchange);
+        last = invoker
+            .invoke(InvokeRequest {
+                instance_id,
+                agent,
+                phase: PromptPhase::InTurn,
+                full: &full,
+                delta: Some(PromptDelta {
+                    epoch_id: &last.epoch_id,
+                    text: &followup,
+                }),
+                view,
+            })
+            .await?;
     }
 }
 
@@ -1942,17 +2042,17 @@ mod tests {
     }
     #[async_trait]
     impl AgentInvoker for Fake {
-        async fn invoke(
-            &self,
-            instance: &str,
-            agent: &AgentConfig,
-            prompt: &str,
-        ) -> Result<String> {
+        async fn cursor(&self, _instance_id: &str) -> Option<SessionCursor> {
+            None
+        }
+
+        async fn invoke(&self, request: InvokeRequest<'_>) -> Result<InvokeReply> {
+            let agent = request.agent;
             let now = self.running.fetch_add(1, Ordering::SeqCst) + 1;
             self.max_running.fetch_max(now, Ordering::SeqCst);
             self.prompts
                 .lock()
-                .push((instance.to_owned(), prompt.to_owned()));
+                .push((request.instance_id.to_owned(), request.full.to_owned()));
             let synchronized = if let Some(barrier) = &self.barrier {
                 tokio::time::timeout(std::time::Duration::from_secs(2), barrier.wait())
                     .await
@@ -1968,11 +2068,12 @@ mod tests {
             if self.fail.as_deref() == Some(&agent.name) {
                 anyhow::bail!("fixture failure");
             }
-            Ok(self
+            let text = self
                 .reply
                 .lock()
                 .clone()
-                .unwrap_or_else(|| format!("{} answered", agent.name)))
+                .unwrap_or_else(|| format!("{} answered", agent.name));
+            Ok(InvokeReply { text, epoch_id: "fake".into() })
         }
     }
     fn member(name: &str) -> Participant {
@@ -2027,18 +2128,18 @@ mod tests {
 
     #[async_trait]
     impl AgentInvoker for DelayedEventsInvoker {
-        async fn invoke(
-            &self,
-            _instance: &str,
-            agent: &AgentConfig,
-            _prompt: &str,
-        ) -> Result<String> {
+        async fn cursor(&self, _instance_id: &str) -> Option<SessionCursor> {
+            None
+        }
+
+        async fn invoke(&self, request: InvokeRequest<'_>) -> Result<InvokeReply> {
+            let agent = request.agent;
             let delay = if agent.name == "Slow" { 60 } else { 5 };
             tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
             if agent.name == "Fails" {
                 anyhow::bail!("sensitive provider detail");
             }
-            Ok(format!("{} reply", agent.name))
+            Ok(InvokeReply { text: format!("{} reply", agent.name), epoch_id: "fake".into() })
         }
     }
 
@@ -2575,22 +2676,106 @@ mod tests {
             ..RoomHistory::default()
         };
         let caller = invocation_caller("room", "", "A", "current-turn", "message-1");
-        let pack = coordinator
-            .context_pack(PackRequest {
-                history: &history,
-                room_name: "Team",
-                members: std::slice::from_ref(&member),
-                current: &member,
-                input: "retain this current request",
-                prior: &[],
-                active_turn: "current-turn",
-                caller: &caller,
-            })
-            .unwrap();
+        let request = PackRequest {
+            history: &history,
+            room_name: "Team",
+            members: std::slice::from_ref(&member),
+            current: &member,
+            input: "retain this current request",
+            prior: &[],
+            active_turn: "current-turn",
+            caller: &caller,
+        };
+        let state_json = coordinator.state_json(&history, &caller).unwrap();
+        let pack = coordinator.context_pack(&request, &state_json).unwrap();
         assert!(pack.len() <= 600 * 4, "manifest must fit the same budget");
         assert!(pack.contains("retain this current request"));
         assert!(pack.contains("Participants:"));
-        assert!(pack.contains(MEMORY_TOOL_MANIFEST));
+        assert!(pack.contains(ROOM_MEMORY_TOOL_MANIFEST));
+        let _ = fs::remove_dir_all(path);
+    }
+
+    #[test]
+    fn turn_delta_lists_unseen_peers_and_changed_state_and_rejects_gaps() {
+        let path = std::env::temp_dir().join(format!("hivemind-delta-{}", stable_id()));
+        let limits = ContextConfig {
+            context_target_tokens: 600,
+            ..ContextConfig::default()
+        };
+        let coordinator = ConversationCoordinator::with_store(
+            Arc::new(JsonFileStore::new(&path)),
+            limits,
+            in_memory_memory(),
+        );
+        let members = [member("A"), member("B")];
+        let event = |turn_id: &str, speaker: &str, content: &str| MessageEvent {
+            id: stable_id(),
+            turn_id: turn_id.into(),
+            speaker: speaker.into(),
+            agent_instance_id: None,
+            content: content.into(),
+            error: false,
+        };
+        let history = RoomHistory {
+            events: vec![
+                event("t1", "user", "earlier question"),
+                event("t1", "A", "earlier answer"),
+                event("t1", "B", "peer answer"),
+            ],
+            ..RoomHistory::default()
+        };
+        let caller = invocation_caller("room", "", "A", "t2", "message-1");
+        let request = PackRequest {
+            history: &history,
+            room_name: "Team",
+            members: &members,
+            current: &members[0],
+            input: "next question",
+            prior: &[],
+            active_turn: "t2",
+            caller: &caller,
+        };
+        let state_json = coordinator.state_json(&history, &caller).unwrap();
+        let cursor = TurnView {
+            turn_id: "t1".into(),
+            speakers: vec!["user".into(), "A".into()],
+            state_json: "{\"stale\":true}".into(),
+        };
+        let delta = coordinator.turn_delta(&request, &cursor, &state_json).unwrap();
+        assert!(
+            delta.contains("Room update since your last reply:\nB: peer answer\n"),
+            "{delta}"
+        );
+        assert!(!delta.contains("A: earlier answer"), "{delta}");
+        assert!(delta.contains(&format!("\nShared room state:\n{state_json}\n")), "{delta}");
+        assert!(delta.contains("\nCurrent user message:\nnext question\n"), "{delta}");
+        assert!(delta.contains(SESSION_TOOL_REMINDER), "{delta}");
+
+        let unchanged = TurnView {
+            state_json: state_json.clone(),
+            ..cursor.clone()
+        };
+        let delta = coordinator.turn_delta(&request, &unchanged, &state_json).unwrap();
+        assert!(!delta.contains("Shared room state:"), "{delta}");
+
+        let gap = TurnView {
+            turn_id: "missing-turn".into(),
+            ..cursor.clone()
+        };
+        assert!(coordinator.turn_delta(&request, &gap, &state_json).is_none());
+
+        let oversized = RoomHistory {
+            events: vec![
+                event("t1", "user", "earlier question"),
+                event("t1", "B", &"x".repeat(4000)),
+            ],
+            ..RoomHistory::default()
+        };
+        let request = PackRequest {
+            history: &oversized,
+            ..request
+        };
+        assert!(coordinator.turn_delta(&request, &cursor, &state_json).is_none());
         let _ = fs::remove_dir_all(path);
     }
 
@@ -2603,18 +2788,18 @@ mod tests {
     }
     #[async_trait]
     impl AgentInvoker for Scripted {
-        async fn invoke(
-            &self,
-            _instance: &str,
-            _agent: &AgentConfig,
-            prompt: &str,
-        ) -> Result<String> {
-            self.prompts.lock().push(prompt.to_owned());
+        async fn cursor(&self, _instance_id: &str) -> Option<SessionCursor> {
+            None
+        }
+
+        async fn invoke(&self, request: InvokeRequest<'_>) -> Result<InvokeReply> {
+            self.prompts.lock().push(request.full.to_owned());
             tokio::task::yield_now().await;
-            match self.replies.lock().pop_front() {
-                Some(reply) => Ok(reply),
-                None => Ok("plain final answer".into()),
-            }
+            let text = match self.replies.lock().pop_front() {
+                Some(reply) => reply,
+                None => "plain final answer".into(),
+            };
+            Ok(InvokeReply { text, epoch_id: "fake".into() })
         }
     }
     fn scripted(replies: &[&str]) -> Arc<Scripted> {
@@ -2908,12 +3093,15 @@ mod tests {
             assert!(prompts[0].1.contains(
                 "(source: room seed-room, turn seed-turn, message seed-msg, actor S)"
             ));
-            assert!(prompts[0].1.contains(MEMORY_TOOL_MANIFEST));
+            assert!(prompts[0].1.contains(GROUP_MEMORY_TOOL_MANIFEST));
             // Current-turn input is never echoed back as a memory hit.
             assert!(!prompts[1].1.contains("Relevant Hivemind memory:"));
+            // Groupless rooms never advertise group tools.
+            assert!(prompts[1].1.contains(ROOM_MEMORY_TOOL_MANIFEST));
+            assert!(!prompts[1].1.contains("memory.group."));
             // Another group never sees grp's shared memory.
             assert!(!prompts[2].1.contains("Relevant Hivemind memory:"));
-            assert!(prompts[2].1.contains(MEMORY_TOOL_MANIFEST));
+            assert!(prompts[2].1.contains(GROUP_MEMORY_TOOL_MANIFEST));
         }
         let _ = fs::remove_dir_all(path);
     }
@@ -2931,11 +3119,12 @@ mod tests {
             assert!(prompts.iter().any(|(instance, _)| instance == "guidance-room/A"));
             assert!(prompts.iter().any(|(instance, _)| instance == "guidance-room/B"));
             for (_, prompt) in prompts.iter() {
-                assert!(prompt.contains(MEMORY_TOOL_MANIFEST));
+                assert!(prompt.contains(ROOM_MEMORY_TOOL_MANIFEST));
                 assert!(prompt.contains("memory.persona.propose"));
             }
-            // The manifest is one Hivemind-generated constant, not persona prose.
-            assert!(!MEMORY_TOOL_MANIFEST.contains("You are "));
+            // Both manifests are Hivemind-generated constants, not persona prose.
+            assert!(!ROOM_MEMORY_TOOL_MANIFEST.contains("You are "));
+            assert!(!GROUP_MEMORY_TOOL_MANIFEST.contains("You are "));
         }
         let _ = fs::remove_dir_all(path);
     }

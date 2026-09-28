@@ -123,6 +123,15 @@ fn map_event(event: &DomainEvent) -> Option<Outbound> {
             "runtime.failed",
             json!({"agent_instance_id": instance_id, "runtime": runtime}),
         ),
+        DomainEventKind::RuntimeRotated {
+            instance_id,
+            runtime,
+            reason,
+            ..
+        } => (
+            "runtime.rotated",
+            json!({"agent_instance_id": instance_id, "runtime": runtime, "reason": reason}),
+        ),
         DomainEventKind::CoreStarted | DomainEventKind::CoreShuttingDown => return None,
     };
     let occurred_at_ms = event

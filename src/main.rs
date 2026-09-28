@@ -731,6 +731,9 @@ while IFS= read -r request; do
     *'"type":"new_session"'*)
       printf '%s\n' '{"type":"response","command":"new_session","success":true}'
       ;;
+    *'"type":"get_session_stats"'*)
+      printf '%s\n' '{"type":"response","command":"get_session_stats","success":true,"data":{}}'
+      ;;
     *'"type":"prompt"'*)
       printf '%s prompt\n' "$agent" >> __LOG__
       printf '%s\n' "$request" >> __PROMPT_LOG__
@@ -898,11 +901,17 @@ printf '%s stopped\n' "$agent" >> __LOG__
         let (_, failed) = capture_replies(&replies);
         assert!(failed);
         core.shutdown().await;
+        let mut log = fake.log_lines();
+        log.sort();
         assert_eq!(
-            fake.log_lines(),
+            log,
             [
-                "Albedo started", "Albedo prompt", "Albedo stopped",
-                "Albedo started", "Albedo prompt", "Albedo stopped",
+                "Albedo prompt",
+                "Albedo prompt",
+                "Albedo started",
+                "Albedo started",
+                "Albedo stopped",
+                "Albedo stopped",
             ]
         );
         let history = core.conversation().room_history("main").unwrap();
@@ -931,9 +940,12 @@ while IFS= read -r request; do
     *'"type":"new_session"'*)
       printf '%s\n' '{"type":"response","command":"new_session","success":true}'
       ;;
+    *'"type":"get_session_stats"'*)
+      printf '%s\n' '{"type":"response","command":"get_session_stats","success":true,"data":{}}'
+      ;;
     *'"type":"prompt"'*)
       case "$request" in
-        *'Memory tool exchange'*)
+        *'Memory tool result:'*)
           printf '%s\n' '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"done after tool"}]}}'
           ;;
         *)
@@ -1072,7 +1084,7 @@ done
     }
 
     #[tokio::test]
-    async fn cli_starts_and_stops_a_fresh_runtime_per_invocation_and_rehydrates_room_context() {
+    async fn cli_keeps_one_runtime_per_room_instance_and_sends_deltas() {
         let fake = FakePi::new();
         let mut config = fake.config();
         config.groups.push(hivemind::config::GroupConfig {
@@ -1106,10 +1118,10 @@ done
                 .filter(|line| line.as_str() == format!("{agent} {action}"))
                 .count()
         };
-        for (agent, prompts) in [("Albedo", 5), ("Maomao", 1)] {
-            assert_eq!(count(agent, "started"), prompts);
-            assert_eq!(count(agent, "prompt"), prompts);
-            assert_eq!(count(agent, "stopped"), prompts);
+        for (agent, started, prompts) in [("Albedo", 3, 5), ("Maomao", 1, 1)] {
+            assert_eq!(count(agent, "started"), started, "{lifecycle:?}");
+            assert_eq!(count(agent, "prompt"), prompts, "{lifecycle:?}");
+            assert_eq!(count(agent, "stopped"), started, "{lifecycle:?}");
         }
 
         let prompts = fake.prompt_lines();
@@ -1117,9 +1129,14 @@ done
         assert!(prompts[0].contains("Lead Reviewer"));
         assert!(prompts[1].contains("solo route turn"));
         assert!(!prompts[1].contains("group objective"));
-        assert!(prompts[5].contains("group objective"));
-        assert!(prompts[5].contains("first group turn"));
+        // The second group turn continues the live session: a delta that
+        // carries only what that session has not seen.
         assert!(prompts[5].contains("follow-up group turn"));
+        assert!(prompts[5].contains("Shared room state"));
+        assert!(prompts[5].contains("group objective"));
+        assert!(!prompts[5].contains("Participants:"));
+        assert!(!prompts[5].contains("You are participating in"));
+        assert!(!prompts[5].contains("Recent conversation:"));
     }
 
     #[test]
