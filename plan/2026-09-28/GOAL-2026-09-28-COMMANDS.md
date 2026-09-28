@@ -1,27 +1,72 @@
-# GOAL — 2026-09-28 — Commands
+# GOAL — 2026-09-28 — Commands and Conversation Spaces
 
 ## Objective
 
-Give the current Hivemind CLI a small, explicit command system instead of continuing to grow ad-hoc string matches inside the chat loop.
+Give Hivemind a real command system for controlling **who the user is talking to**.
 
-This goal is for **commands that make sense with the system Hivemind already has today**:
+The CLI should support:
 
-- configured agents,
-- Pi and OMP runtimes,
-- one runtime session/worker per agent,
-- broadcast user turns,
-- deterministic reply ordering,
-- local CLI operation.
+- normal hive-wide conversation,
+- one-off prompts to a specific agent,
+- a persistent solo conversation with one agent,
+- named group chats containing selected agents,
+- adding/removing agents from group chats,
+- switching between conversation spaces,
+- inspecting the current hive, reply order, and runtime state.
 
-Do not use this milestone to sneak in spawning, delegation, shared memory, or other future orchestration features.
+The important rule is that **bare text goes to the currently active conversation space**.
 
-## Two command levels
+This keeps the CLI understandable as Hivemind grows instead of making every line mean "summon every agent and hope the terminal sorts out the social consequences."
 
-Hivemind has two different command surfaces and they should remain distinct.
+---
 
-### Process commands
+## Conversation spaces
 
-These are invoked from the shell:
+Hivemind should have three conversation modes.
+
+### Main hive
+
+The default conversation.
+
+```text
+main
+  ├─ Albedo
+  ├─ Maomao
+  └─ Frieren
+```
+
+Bare text is sent to all configured agents.
+
+### Solo chat
+
+A conversation focused on one agent.
+
+```text
+solo:Albedo
+  └─ Albedo
+```
+
+Bare text is sent only to that agent until the user leaves or switches conversations.
+
+### Group chat
+
+A named conversation containing a selected subset of configured agents.
+
+```text
+group:backend
+  ├─ Albedo
+  └─ Maomao
+```
+
+Bare text is sent only to members of that group.
+
+A group is owned by Hivemind, not by Pi or OMP.
+
+---
+
+## Process commands
+
+These remain shell-level commands:
 
 ```text
 hivemind init
@@ -29,37 +74,49 @@ hivemind chat
 hivemind doctor
 ```
 
-`init` and `chat` already exist. `doctor` belongs to the setup milestone and should integrate cleanly when that goal lands.
+`init` and `chat` already exist.
 
-### Chat commands
+`doctor` belongs to the setup goal and should integrate cleanly when implemented.
 
-These are entered after Hivemind is running:
+---
+
+## Chat commands
+
+The interactive command surface should include:
 
 ```text
 /help
 /agents
 /status
 /order
+/where
+
 /ask <agent> <message>
 /all <message>
+
+/solo <agent>
+/main
+
+/group create <name> [agent...]
+/group list
+/group show <name>
+/group use <name>
+/group add <name> <agent>
+/group remove <name> <agent>
+/group delete <name>
+
 /quit
 ```
 
-Bare text should remain equivalent to broadcasting a normal user turn to all configured agents.
+`/exit` remains an alias for `/quit`.
 
-## Command parser
+---
 
-Do not keep expanding this pattern:
+## Typed command parser
 
-```rust
-match input {
-    "/agents" => ...
-    "/help" => ...
-    "/quit" => ...
-}
-```
+Do not continue growing ad-hoc string matching in the chat loop.
 
-Introduce a small command parser with a typed representation.
+Introduce a typed parser.
 
 Conceptually:
 
@@ -69,60 +126,84 @@ enum ChatCommand {
     Agents,
     Status,
     Order,
-    Ask { agent: String, message: String },
-    All { message: String },
+    Where,
+
+    Ask {
+        agent: String,
+        message: String,
+    },
+
+    All {
+        message: String,
+    },
+
+    Solo {
+        agent: String,
+    },
+
+    Main,
+
+    GroupCreate {
+        name: String,
+        agents: Vec<String>,
+    },
+
+    GroupList,
+
+    GroupShow {
+        name: String,
+    },
+
+    GroupUse {
+        name: String,
+    },
+
+    GroupAdd {
+        name: String,
+        agent: String,
+    },
+
+    GroupRemove {
+        name: String,
+        agent: String,
+    },
+
+    GroupDelete {
+        name: String,
+    },
+
     Quit,
 }
 ```
 
-The exact implementation is flexible.
+The exact internal shape may differ.
 
-Parsing commands and executing commands should be separate concerns.
+Parsing and execution should remain separate concerns.
 
-Unknown slash commands should produce a useful error instead of being sent to every agent as a normal prompt.
+Unknown slash commands must not be forwarded to agents.
 
-Example:
+---
 
-```text
-You> /spwan Maomao
+# Core commands
 
-Unknown command: /spwan
-Run /help to list available commands.
-```
+## `/help`
 
-Yes, humans will typo commands. The parser should survive this historic discovery.
+Show the available commands and concise usage.
 
-## Required chat commands
+Keep one source of truth where practical so help output does not drift away from the parser.
 
-### `/help`
+---
 
-Show all currently supported chat commands with short usage text.
+## `/agents`
 
-Example:
-
-```text
-/help
-/agents
-/status
-/order
-/ask <agent> <message>
-/all <message>
-/quit
-```
-
-Keep it compact.
-
-### `/agents`
-
-Show configured agents in effective reply order.
+Show all configured Hivemind agents in effective reply order.
 
 Include:
 
-- order number,
+- order,
 - agent name,
 - runtime,
-- workspace when useful,
-- whether its worker/session is currently available.
+- readiness/session state when available.
 
 Example:
 
@@ -133,36 +214,36 @@ Agents:
   3. Frieren [omp] ready
 ```
 
-Do not expose secrets or provider credentials.
+Do not expose provider credentials or secrets.
 
-### `/status`
+---
 
-Show the health/state of the current Hivemind process.
+## `/status`
+
+Show the current local Hivemind state.
 
 At minimum:
-
-- number of configured agents,
-- number of available agent workers,
-- runtime used by each agent,
-- current effective reply order.
-
-Example:
 
 ```text
 Hivemind status
   agents: 3
   ready: 3/3
+  conversation: group:backend
 
   Albedo   pi    ready
   Maomao   pi    ready
   Frieren  omp   ready
 ```
 
-This is runtime/session status, not token billing or provider account status.
+This is local process/runtime state.
 
-### `/order`
+It is not provider billing/token status.
 
-Show the effective reply/speaker order for the current configuration.
+---
+
+## `/order`
+
+Show the resolved global reply order.
 
 Example:
 
@@ -173,129 +254,442 @@ Reply order:
   3. Frieren
 ```
 
-If no explicit reply order is configured, show the resolved fallback order rather than merely saying "default."
+For a group conversation, group replies should use this order filtered to members of that group unless group-specific ordering is added in a future goal.
 
 This command is read-only for this milestone.
 
-Do not add runtime mutation such as `/order set ...` yet.
+---
 
-### `/ask <agent> <message>`
+## `/where`
 
-Send one prompt to exactly one configured Hivemind agent.
+Show the active conversation space.
+
+Examples:
+
+```text
+conversation: main
+participants: Albedo, Maomao, Frieren
+```
+
+```text
+conversation: solo
+participant: Albedo
+```
+
+```text
+conversation: group:backend
+participants: Albedo, Maomao
+```
+
+---
+
+# One-off targeting
+
+## `/ask <agent> <message>`
+
+Send exactly one prompt to exactly one agent **without changing the active conversation**.
 
 Example:
 
 ```text
-You> /ask Albedo review the current runtime boundary
+You> /ask Albedo inspect the runtime boundary
 
 Albedo> ...
 ```
 
-Other agents must not receive that user turn.
+If the user is currently in `group:backend`, they remain in `group:backend` afterward.
 
-The target is identified by Hivemind agent name, not runtime process identity.
+Agent names should be matched exactly.
 
-Agent matching should be deterministic. Prefer exact names. If names contain spaces, support a clear syntax such as quoted names:
+If names contain spaces, support quoted names:
 
 ```text
 /ask "Code Reviewer" inspect this
 ```
 
-Do not silently choose between ambiguous partial names.
+Do not guess ambiguous partial names.
 
-### `/all <message>`
+---
 
-Explicitly broadcast a prompt to every configured agent.
+## `/all <message>`
+
+Send one prompt to every configured agent **without changing the active conversation**.
 
 Example:
 
 ```text
-/all review the current architecture
+/all summarize your current state
 ```
 
-This should use exactly the same multi-agent turn path as normal bare-text input.
+This is a one-off global broadcast.
 
-Therefore:
+It should obey deterministic reply ordering.
+
+---
+
+# Solo conversation
+
+## `/solo <agent>`
+
+Enter a persistent solo conversation mode with one configured agent.
+
+Example:
 
 ```text
-hello
+You> /solo Albedo
+Switched to solo chat with Albedo.
+
+Albedo> ready
+
+You> review the scheduler
+Albedo> ...
+```
+
+After switching, ordinary text is sent only to Albedo.
+
+The user remains in solo mode until switching to:
+
+- `/main`, or
+- another `/solo`, or
+- `/group use <name>`.
+
+The command changes routing state. It does not terminate other agents.
+
+---
+
+## `/main`
+
+Return to the default main hive conversation.
+
+Example:
+
+```text
+/main
+Switched to main hive.
+```
+
+Afterward, bare text again goes to all configured agents.
+
+---
+
+# Group chats
+
+## `/group create <name> [agent...]`
+
+Create a named group chat.
+
+Examples:
+
+```text
+/group create backend Albedo Maomao
+```
+
+or:
+
+```text
+/group create reviewers
+```
+
+If no agents are provided, create an empty group that can be populated with `/group add`.
+
+Group names must be unique.
+
+Reserved names such as `main` should be rejected.
+
+Creating a group does not automatically switch into it unless the implementation explicitly documents that behavior. Prefer creation without implicit switching.
+
+---
+
+## `/group list`
+
+List all group chats.
+
+Example:
+
+```text
+Groups:
+  backend    Albedo, Maomao
+  reviewers  Frieren, Albedo
+  empty      (no agents)
+```
+
+Mark the active group when applicable.
+
+---
+
+## `/group show <name>`
+
+Show one group's details.
+
+Example:
+
+```text
+Group: backend
+Members:
+  1. Albedo [pi]
+  2. Maomao [pi]
+
+Effective reply order:
+  1. Albedo
+  2. Maomao
+```
+
+---
+
+## `/group use <name>`
+
+Switch the active conversation to a named group.
+
+Example:
+
+```text
+/group use backend
+Switched to group:backend.
+```
+
+Afterward, bare text goes only to members of that group.
+
+Attempting to use an empty group should fail clearly:
+
+```text
+error: group 'backend' has no agents
+```
+
+---
+
+## `/group add <name> <agent>`
+
+Add a configured agent to an existing group.
+
+Example:
+
+```text
+/group add backend Frieren
+```
+
+Reject:
+
+- unknown group,
+- unknown agent,
+- duplicate membership.
+
+Adding an agent should not restart unrelated runtime workers.
+
+---
+
+## `/group remove <name> <agent>`
+
+Remove an agent from a group.
+
+Example:
+
+```text
+/group remove backend Maomao
+```
+
+Reject removing an agent that is not a member.
+
+If the active group becomes empty, keep the group definition but prevent bare prompts until another member is added or the user switches conversations.
+
+---
+
+## `/group delete <name>`
+
+Delete a group chat definition.
+
+Example:
+
+```text
+/group delete backend
+```
+
+Deleting a group must not delete or stop the agents themselves.
+
+If the deleted group is currently active, automatically return to `main` and print that transition.
+
+---
+
+# Bare text routing
+
+Bare text is routed according to the active conversation.
+
+### Main
+
+```text
+active = main
+
+You> review this
+```
+
+Dispatch to all configured agents.
+
+### Solo
+
+```text
+active = solo:Albedo
+
+You> review this
+```
+
+Dispatch only to Albedo.
+
+### Group
+
+```text
+active = group:backend
+
+You> review this
+```
+
+Dispatch only to members of `backend`.
+
+This routing must happen in Hivemind core.
+
+Runtime adapters must not know about groups.
+
+---
+
+# Group ordering
+
+Group replies must remain deterministic.
+
+Given:
+
+```text
+Global order:
+1. Albedo
+2. Maomao
+3. Frieren
 ```
 
 and:
 
 ```text
-/all hello
+group:backend
+- Frieren
+- Albedo
 ```
 
-have equivalent dispatch semantics.
-
-Replies must still obey Hivemind's deterministic reply-order policy.
-
-### `/quit`
-
-Cleanly leave the chat and shut down all agent workers/runtime processes.
-
-Keep `/exit` as an alias for backward compatibility.
-
-Do not terminate the process before normal runtime cleanup completes.
-
-## Bare text
-
-Normal text without a leading command remains the primary interaction:
+the effective group order is:
 
 ```text
-You> review this architecture
+1. Albedo
+2. Frieren
 ```
 
-It means:
+Do not use completion speed as speaker order.
 
-```text
-broadcast this user turn to all configured agents
+Agents may execute concurrently, but Hivemind controls presentation order.
+
+---
+
+# Conversation state
+
+Introduce a small Hivemind-owned conversation state model.
+
+Conceptually:
+
+```rust
+enum ConversationTarget {
+    Main,
+    Solo(String),
+    Group(String),
+}
 ```
 
-This preserves the existing Hivemind behavior.
+and:
 
-A line beginning with `/` is reserved for Hivemind commands.
+```rust
+struct GroupChat {
+    name: String,
+    members: Vec<String>,
+}
+```
 
-## Agent targeting
+The exact types are flexible.
 
-The AgentManager needs a clean way to address one agent as well as all agents.
+Do not put group ownership inside PiAdapter or OmpAdapter.
 
-Conceptually support:
+---
+
+# Group persistence
+
+For this milestone, group definitions may be **process-local** unless persistence is straightforward.
+
+At minimum, groups created with commands must survive for the duration of the running Hivemind process.
+
+Do not silently edit `hivemind.toml` as a side effect of chat commands.
+
+Persisted group configuration can be introduced separately once the runtime behavior is proven.
+
+---
+
+# Runtime/session behavior
+
+All targeting must go through the AgentManager/worker abstraction.
+
+The manager should support operations conceptually equivalent to:
 
 ```text
+prompt_agent(agent, message)
+prompt_agents(agent_names, message)
 prompt_all(message)
-prompt_agent(agent_name, message)
 ```
 
-Do not bypass the worker/session abstraction by talking directly to Pi or OMP from the command handler.
+Do not call Pi or OMP directly from command handlers.
 
-Targeted prompts should still use the selected agent's existing live worker/session.
+A solo/group command changes which workers participate in a turn.
 
-## Concurrency and ordering
+It does not create a second copy of an agent unless a future conversation-isolation milestone explicitly introduces per-chat runtime sessions.
 
-`/all` and bare-text broadcast should retain concurrent execution across independent agents.
+For now, the existing agent runtime/session semantics remain authoritative.
 
-`/ask` targets one agent only.
+---
 
-Command output itself should not race with agent output.
+# Important context limitation
 
-A chat command must complete its terminal output before another prompt is accepted/presented in a way that produces mixed lines.
+A configured agent currently owns its runtime/session according to Hivemind's existing runtime model.
 
-## Error behavior
+Therefore, if the same persistent agent participates in:
 
-Commands should return concise, actionable errors.
+- main,
+- a solo chat,
+- and a group chat,
+
+its underlying runtime may retain context across those routes.
+
+This goal is about **routing and chat membership**, not isolated per-room agent memory.
+
+Do not pretend group conversations have fully isolated model context unless the runtime implementation actually provides it.
+
+A separate goal should address per-conversation session isolation if we decide each room needs independent agent memory.
+
+---
+
+# Error behavior
+
+Commands must fail clearly without panicking.
 
 Examples:
 
 ```text
-/ask
-error: usage: /ask <agent> <message>
+/solo Unknown
+error: no configured agent named 'Unknown'
 ```
 
 ```text
-/ask Unknown hello
+/group use missing
+error: no group named 'missing'
+```
+
+```text
+/group add backend Unknown
 error: no configured agent named 'Unknown'
+```
+
+```text
+/group add backend Albedo
+error: Albedo is already a member of group 'backend'
 ```
 
 ```text
@@ -303,110 +697,132 @@ error: no configured agent named 'Unknown'
 error: unknown command '/wat'; run /help
 ```
 
-Do not panic on malformed command input.
+---
 
-## Help consistency
+# README
 
-There must be one source of truth for command names/usage where practical.
-
-Do not maintain one command list in the parser and another manually drifting list in `/help`.
-
-Tests should catch accidental divergence.
-
-## README
-
-Update the CLI documentation to show the current chat commands.
-
-Keep the README section short:
+Update the CLI documentation with a compact command reference:
 
 ```text
 /help
 /agents
 /status
 /order
+/where
+
 /ask <agent> <message>
 /all <message>
+
+/solo <agent>
+/main
+
+/group create <name> [agent...]
+/group list
+/group show <name>
+/group use <name>
+/group add <name> <agent>
+/group remove <name> <agent>
+/group delete <name>
+
 /quit
 ```
 
-More detailed semantics can live in a dedicated documentation section/file if needed.
+---
 
-## Acceptance criteria
+# Acceptance criteria
 
 The goal is complete when:
 
-1. Chat commands are parsed through a dedicated command parser.
-2. `/help` lists supported commands.
-3. `/agents` shows configured agents in effective reply order.
-4. `/status` shows current local agent/runtime health.
-5. `/order` shows the resolved reply order.
-6. `/ask <agent> <message>` prompts only the selected agent.
-7. `/all <message>` prompts all configured agents.
-8. Bare text remains equivalent to broadcast.
-9. Unknown slash commands are not forwarded to agents.
-10. Malformed commands produce usage errors without crashing.
-11. `/quit` and `/exit` shut all runtime processes down cleanly.
-12. Pi and OMP agents are addressed through the same command system.
-13. Existing deterministic reply ordering remains intact for broadcasts.
-14. README command documentation is updated.
-15. `cargo test` passes.
-16. `cargo clippy --all-targets --all-features -- -D warnings` passes.
+1. Chat commands are handled by a dedicated typed parser.
+2. `/help` documents the supported command surface.
+3. `/agents` shows configured agents.
+4. `/status` shows local runtime/agent state and active conversation.
+5. `/order` shows deterministic global reply order.
+6. `/where` shows the active conversation and participants.
+7. `/ask` prompts one agent without changing conversation mode.
+8. `/all` broadcasts once without changing conversation mode.
+9. `/solo <agent>` switches bare-text routing to one agent.
+10. `/main` returns bare-text routing to the full hive.
+11. Groups can be created.
+12. Groups can be listed and inspected.
+13. Agents can be added to groups.
+14. Agents can be removed from groups.
+15. Groups can be deleted.
+16. The user can switch into a group with `/group use`.
+17. Bare text in a group reaches only group members.
+18. Group replies follow global reply order filtered to group membership.
+19. Mixed Pi and OMP agents can participate in one group.
+20. Unknown agents/groups and malformed commands produce useful errors.
+21. Unknown slash commands are never forwarded to agents.
+22. `/quit` and `/exit` perform clean runtime shutdown.
+23. Existing main-hive behavior remains available.
+24. README command documentation is updated.
+25. `cargo test` passes.
+26. `cargo clippy --all-targets --all-features -- -D warnings` passes.
 
-## Tests to add
+---
 
-Add tests for:
+# Tests to add
 
-- parsing every supported command,
-- unknown commands,
-- missing command arguments,
-- quoted agent names if supported,
-- exact agent lookup,
-- targeted `/ask` dispatch,
-- `/all` dispatch,
-- bare-text broadcast behavior,
-- reply ordering after `/all`,
-- `/quit` and `/exit` aliases,
-- help output staying aligned with supported commands.
+Add deterministic tests for:
 
-Use fake workers/runtimes for dispatch tests where possible.
+- command parsing,
+- malformed commands,
+- quoted agent names,
+- main/solo/group routing,
+- switching conversation targets,
+- `/ask` not changing the current target,
+- `/all` not changing the current target,
+- group creation,
+- duplicate group names,
+- empty groups,
+- adding agents,
+- duplicate membership,
+- removing agents,
+- deleting active groups,
+- unknown agents/groups,
+- group ordering,
+- mixed Pi/OMP membership,
+- help output matching implemented commands.
 
-## Non-goals
+Use fake workers/runtimes where practical.
 
-Do **not** add commands for features Hivemind does not have yet.
+---
 
-Specifically, no:
+# Non-goals
 
+Do not add these yet:
+
+- agents automatically talking to one another,
+- one agent seeing another agent's answer within the same turn,
+- autonomous speaker selection,
+- debate/voting,
 - `/spawn`,
 - `/delegate`,
-- `/message-agent`,
-- `/vote`,
-- `/memory`,
-- `/task`,
-- `/team`,
+- shared memory,
+- task management,
 - dynamic runtime switching,
 - provider billing/token commands,
-- arbitrary shell execution.
+- arbitrary shell execution,
+- persistent group storage,
+- isolated runtime sessions per conversation room.
 
-Those commands belong to future feature milestones after the underlying capabilities exist.
+Those need separate milestones.
+
+---
 
 ## Definition of done
 
-The interactive CLI should move from:
+The CLI should support intentional conversation routing:
 
 ```text
-a few hard-coded slash strings
+                    Hivemind
+                       |
+       +---------------+---------------+
+       |               |               |
+      main            solo           groups
+       |               |               |
+   all agents       one agent      selected agents
 ```
 
-to:
-
-```text
-typed command parser
-        |
-        +-- inspect current hive
-        +-- inspect order/status
-        +-- target one agent
-        +-- broadcast to all agents
-        +-- cleanly exit
-```
-
-The command surface should describe what Hivemind can actually do today, not advertise features that exist only in our collective imagination.
+The user decides **which conversation they are in**, while Hivemind decides which agents receive the turn and in what order their replies are presented.
