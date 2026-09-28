@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::Parser;
-use hivemind::{api, config::HivemindConfig};
+use hivemind::{api, config::HivemindConfig, core::HivemindCore};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -20,5 +20,6 @@ struct Cli {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     let config = HivemindConfig::load(&cli.config)?;
-    api::serve(config, cli.port).await
+    let core = std::sync::Arc::new(HivemindCore::new(config, &cli.config)?);
+    api::serve(core, cli.port).await
 }

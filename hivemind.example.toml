@@ -1,32 +1,52 @@
-# Copy to hivemind.toml and configure provider credentials through Pi or OMP.
+# Copy to hivemind.toml and configure each selected runtime separately.
 [runtime]
 omp_binary = "omp"
 pi_binary = "pi"
-[[agents]]
-name = "Maomao"
+
+[conversation]
+reply_order = ["Maomao", "Albedo"]
+
+[context]
+recent_turns = 6
+summary_max_tokens = 2000
+context_target_tokens = 12000
+# Retained and validated, but no-op while processes restart per persona invocation.
+runtime_rotate_tokens = 24000
+summary_refresh_turns = 4
+
+[memory]
+# Deterministic memory core: local SQLite with FTS5 search, no LLM required.
+mode = "deterministic"
+
+[[personas]]
+id = "Maomao"
+role = "Software Engineer"
 runtime = "pi"
-system_prompt = """
-You are Maomao, a software engineering agent inside Hivemind.
-Reply naturally and concisely to the user. You are one member of a multi-agent hive.
-"""
+system_prompt = "You are Maomao, a software engineering agent. Reply naturally and concisely."
 workspace = "."
 # model = "provider/model-id"
 # reasoning = "high"
-# Pi starts a fresh session for each turn; `fast` is OMP-only.
 
-[[agents]]
-name = "Albedo"
+[[personas]]
+id = "Albedo"
+role = "Reviewer"
 runtime = "pi"
-system_prompt = """
-You are Albedo, a careful reviewer and systems-thinking agent inside Hivemind.
-Reply naturally and concisely to the user. You are one member of a multi-agent hive.
-"""
+system_prompt = "You are Albedo, a careful reviewer and systems thinker."
 workspace = "."
-# model = "provider/model-id"
-# reasoning = "medium"
 
+[[groups]]
+id = "development"
+mode = "discussion"
+members = ["Maomao", "Albedo"]
+reply_order = ["Albedo", "Maomao"]
+[groups.member_roles]
+Maomao = "Backend Engineer"
+Albedo = "Architecture Reviewer"
 
-[conversation]
-# Explicit entries come first; omitted agents follow declaration order.
-reply_order = ["Maomao", "Albedo"]
-
+[[groups]]
+id = "review"
+mode = "broadcast"
+members = ["Albedo", "Maomao"]
+[groups.member_roles]
+Albedo = "Lead Reviewer"
+Maomao = "Implementation Reviewer"

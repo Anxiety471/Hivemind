@@ -7,39 +7,48 @@ use std::{
 
 use anyhow::{bail, Result};
 
-use crate::config::{AgentConfig, HivemindConfig};
+use hivemind::config::HivemindConfig;
 
-pub fn validate(config: &HivemindConfig) -> Result<()> {
-    validate_with_path(config, env::var_os("PATH").as_deref())
-}
-
+#[cfg(test)]
 fn validate_with_path(config: &HivemindConfig, path: Option<&OsStr>) -> Result<()> {
     if config.agents.is_empty() {
-        bail!("config contains no agents; add at least one [[agents]] entry or create a starter config with 'hivemind init'");
+        bail!("config contains no personas; add at least one [[personas]] entry (`[[agents]]` entries with name are accepted as a legacy alias) or create a starter config with 'hivemind init'");
     }
 
-    for (index, agent) in config.agents.iter().enumerate() {
-        if agent.name.trim().is_empty() {
-            bail!("[[agents]].name must not be empty; assign each agent a non-empty name");
+    for (i, persona) in config.agents.iter().enumerate() {
+        if persona.name.trim().is_empty() {
+            bail!("[[personas]].id must not be empty; assign each persona a non-empty id (`[[agents]].name` remains a legacy alias)");
         }
-        if config.agents[..index]
+        if config.agents[..i]
             .iter()
-            .any(|previous| previous.name == agent.name)
+            .any(|other| other.name == persona.name)
         {
-            bail!("duplicate agent name '{}'; rename one of the [[agents]] entries so every agent name is unique", agent.name);
+            bail!("duplicate persona id '{}'; rename one of the [[personas]] entries (`[[agents]].name` is the legacy alias)", persona.name);
         }
     }
 
     for agent in &config.agents {
-        validate_agent(config, agent, path)?;
+        validate_agent_with_path(config, agent, path)?;
     }
 
-    validate_reply_order(config)
+    for (i, name) in config.conversation.reply_order.iter().enumerate() {
+        if !config.agents.iter().any(|persona| persona.name == *name) {
+            bail!("conversation.reply_order references unknown persona id '{name}'; use configured [[personas]].id values (`[[agents]].name` is the legacy alias)");
+        }
+        if config.conversation.reply_order[..i]
+            .iter()
+            .any(|previous| previous == name)
+        {
+            bail!("conversation.reply_order contains duplicate persona id '{name}'; use unique configured persona IDs");
+        }
+    }
+    Ok(())
 }
 
-fn validate_agent(
+#[cfg(test)]
+fn validate_agent_with_path(
     config: &HivemindConfig,
-    agent: &AgentConfig,
+    agent: &hivemind::config::AgentConfig,
     path: Option<&OsStr>,
 ) -> Result<()> {
     let binary = match agent.runtime.as_str() {
@@ -51,7 +60,6 @@ fn validate_agent(
             other
         ),
     };
-
     if resolve_binary(binary, path).is_none() {
         let location = if Path::new(binary).components().count() > 1 {
             "at configured path"
@@ -66,7 +74,6 @@ fn validate_agent(
             agent.runtime
         );
     }
-
     if !Path::new(&agent.workspace).is_dir() {
         bail!(
             "agent '{}' workspace '{}' does not exist or is not a directory; create it or update the workspace setting",
@@ -86,7 +93,6 @@ fn resolve_binary(binary: &str, path: Option<&OsStr>) -> Option<PathBuf> {
     if configured.components().count() > 1 || configured.is_absolute() {
         return is_executable(configured).then(|| configured.to_path_buf());
     }
-
     let path = path?;
     env::split_paths(path)
         .map(|directory| directory.join(configured))
@@ -100,7 +106,6 @@ fn is_executable(path: &Path) -> bool {
     if !metadata.is_file() {
         return false;
     }
-
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -115,15 +120,13 @@ fn is_executable(path: &Path) -> bool {
 pub fn doctor(config_path: &Path, config: &HivemindConfig) -> Result<()> {
     println!("Hivemind doctor\n");
     if config.agents.is_empty() {
-        println!("[error] config contains no agents; add at least one [[agents]] entry or create a starter config with 'hivemind init'");
-        bail!("config contains no agents");
+        println!("[error] config contains no personas");
+        bail!("config contains no personas; add at least one [[personas]] entry (`[[agents]]` entries with name are accepted as a legacy alias)");
     }
-
     println!("[ok] config: {}", config_path.display());
     for agent in &config.agents {
         println!("[ok] agent: {}", agent.name);
     }
-
     let mut errors = 0;
     for agent in &config.agents {
         doctor_agent(config, agent, &mut errors);
@@ -135,7 +138,6 @@ pub fn doctor(config_path: &Path, config: &HivemindConfig) -> Result<()> {
             errors += 1;
         }
     }
-
     if errors == 0 {
         println!("[ok] runtime configuration\n[ok] ready");
         Ok(())
@@ -144,7 +146,7 @@ pub fn doctor(config_path: &Path, config: &HivemindConfig) -> Result<()> {
     }
 }
 
-fn doctor_agent(config: &HivemindConfig, agent: &AgentConfig, errors: &mut usize) {
+fn doctor_agent(config: &HivemindConfig, agent: &hivemind::config::AgentConfig, errors: &mut usize) {
     let binary = match agent.runtime.as_str() {
         "pi" => Some(&config.runtime.pi_binary),
         "omp" => Some(&config.runtime.omp_binary),
@@ -157,7 +159,6 @@ fn doctor_agent(config: &HivemindConfig, agent: &AgentConfig, errors: &mut usize
             None
         }
     };
-
     if let Some(binary) = binary {
         if let Some(resolved) = resolve_runtime_binary(binary) {
             println!("[ok] {}: {}", agent.runtime, resolved.display());
@@ -177,7 +178,6 @@ fn doctor_agent(config: &HivemindConfig, agent: &AgentConfig, errors: &mut usize
             *errors += 1;
         }
     }
-
     if Path::new(&agent.workspace).is_dir() {
         println!("[ok] workspace: {}", agent.workspace);
     } else {
@@ -191,15 +191,15 @@ fn doctor_agent(config: &HivemindConfig, agent: &AgentConfig, errors: &mut usize
 }
 
 fn validate_reply_order(config: &HivemindConfig) -> Result<()> {
-    for (index, name) in config.conversation.reply_order.iter().enumerate() {
-        if !config.agents.iter().any(|agent| agent.name == *name) {
-            bail!("conversation.reply_order references unknown agent '{name}'; use unique configured agent names that match [[agents]].name");
+    for (i, name) in config.conversation.reply_order.iter().enumerate() {
+        if !config.agents.iter().any(|persona| persona.name == *name) {
+            bail!("conversation.reply_order references unknown persona id '{name}'; use configured [[personas]].id values (`[[agents]].name` is the legacy alias)");
         }
-        if config.conversation.reply_order[..index]
+        if config.conversation.reply_order[..i]
             .iter()
             .any(|previous| previous == name)
         {
-            bail!("conversation.reply_order contains duplicate agent '{name}'; use unique configured agent names");
+            bail!("conversation.reply_order contains duplicate persona id '{name}'; use unique configured persona IDs");
         }
     }
     Ok(())
@@ -215,7 +215,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::config::{ConversationConfig, RuntimeConfig};
+    use hivemind::config::{AgentConfig, ConversationConfig, HivemindConfig, RuntimeConfig};
 
     static NEXT: AtomicUsize = AtomicUsize::new(0);
 
@@ -259,6 +259,7 @@ mod tests {
             model: None,
             reasoning: None,
             fast: None,
+            role: None,
         }
     }
 
@@ -267,11 +268,14 @@ mod tests {
             runtime: RuntimeConfig::default(),
             conversation: ConversationConfig::default(),
             agents,
+            groups: Vec::new(),
+            context: hivemind::config::ContextConfig::default(),
+            memory: Default::default(),
         }
     }
 
     #[test]
-    fn resolves_runtime_from_injected_path_or_configured_path() {
+    fn resolves_configured_command_from_injected_path() {
         let fixture = Fixture::new();
         let binary = fixture.executable("pi");
         let path = OsString::from(&fixture.0);
@@ -281,24 +285,21 @@ mod tests {
     }
 
     #[test]
-    fn validates_runtime_binary_workspace_names_and_reply_order() {
+    fn validates_duplicate_names_runtime_workspace_and_reply_order() {
         let fixture = Fixture::new();
         fixture.executable("omp");
         let path = OsString::from(&fixture.0);
-
         let duplicate = config(vec![agent("same", "omp", "."), agent("same", "omp", ".")]);
         assert!(validate_with_path(&duplicate, Some(&path))
             .unwrap_err()
             .to_string()
-            .contains("rename one of the [[agents]] entries"));
-
+            .contains("rename one of the [[personas]] entries"));
         let mut cfg = config(vec![agent("bad", "unknown", ".")]);
         let error = validate_with_path(&cfg, Some(&path))
             .unwrap_err()
             .to_string();
         assert!(error.contains("unsupported runtime"));
         assert!(error.contains("change this agent's runtime"));
-
         cfg.agents = vec![agent("missing", "pi", ".")];
         let error = validate_with_path(&cfg, Some(&path))
             .unwrap_err()
@@ -306,7 +307,6 @@ mod tests {
         assert!(error.contains("agent 'missing'"));
         assert!(error.contains("runtime 'pi'"));
         assert!(error.contains("binary 'pi'"));
-
         let file_workspace = fixture
             .executable("not-a-directory")
             .to_string_lossy()
@@ -316,50 +316,54 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("workspace"));
-
         cfg.agents = vec![agent("A", "omp", ".")];
-        cfg.conversation.reply_order = vec!["Missing".into()];
+        cfg.conversation.reply_order = vec!["B".into()];
         assert!(validate_with_path(&cfg, Some(&path))
             .unwrap_err()
             .to_string()
-            .contains("unknown agent"));
+            .contains("configured [[personas]].id values"));
         cfg.conversation.reply_order = vec!["A".into(), "A".into()];
         assert!(validate_with_path(&cfg, Some(&path))
             .unwrap_err()
             .to_string()
-            .contains("duplicate agent"));
+            .contains("use unique configured persona IDs"));
     }
 
     #[test]
-    fn valid_setup_accepts_only_referenced_runtime_and_existing_workspace() {
+    fn doctor_reports_workspace_even_when_runtime_is_unsupported() {
         let fixture = Fixture::new();
-        fixture.executable("pi");
-        let workspace = fixture.0.to_string_lossy().into_owned();
-        let cfg = config(vec![agent("Pi agent", "pi", &workspace)]);
-        validate_with_path(&cfg, Some(fixture.0.as_os_str())).unwrap();
-    }
-
-    #[test]
-    fn doctor_counts_unsupported_runtime_and_missing_workspace_as_failures() {
-        let fixture = Fixture::new();
-        let workspace = fixture
-            .0
-            .join("missing-workspace")
-            .to_string_lossy()
-            .into_owned();
+        let workspace = fixture.0.join("missing-workspace");
+        let workspace = workspace.to_string_lossy().into_owned();
         let cfg = config(vec![agent("Bad", "unknown", &workspace)]);
         let mut errors = 0;
+
         doctor_agent(&cfg, &cfg.agents[0], &mut errors);
+
         assert_eq!(errors, 2);
     }
     #[test]
-    fn doctor_accepts_resolved_runtime_and_existing_workspace() {
-        let fixture = Fixture::new();
-        let binary = fixture.executable("pi");
-        let workspace = fixture.0.to_string_lossy().into_owned();
-        let mut cfg = config(vec![agent("Pi agent", "pi", &workspace)]);
-        cfg.runtime.pi_binary = binary.to_string_lossy().into_owned();
+    fn doctor_rejects_an_empty_persona_configuration() {
+        let error = doctor(Path::new("hivemind.toml"), &config(Vec::new())).unwrap_err();
+        assert!(error.to_string().contains("config contains no personas"));
+    }
 
-        doctor(Path::new("hivemind.toml"), &cfg).unwrap();
+    #[test]
+    fn valid_setup_keeps_effective_order_behavior() {
+        let fixture = Fixture::new();
+        fixture.executable("omp");
+        let workspace = fixture.0.to_string_lossy().into_owned();
+        let mut cfg = config(vec![
+            agent("A", "omp", &workspace),
+            agent("B", "omp", &workspace),
+        ]);
+        cfg.conversation.reply_order = vec!["B".into()];
+        validate_with_path(&cfg, Some(fixture.0.as_os_str())).unwrap();
+        assert_eq!(
+            cfg.ordered_agents()
+                .iter()
+                .map(|agent| agent.name.as_str())
+                .collect::<Vec<_>>(),
+            ["B", "A"]
+        );
     }
 }

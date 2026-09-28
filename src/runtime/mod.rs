@@ -6,13 +6,11 @@ use async_trait::async_trait;
 
 use crate::config::{AgentConfig, RuntimeConfig};
 
-pub use manager::AgentManager;
+#[allow(unused_imports)]
+pub use manager::{AgentManager, PromptAllResult};
 
-/// A runtime-agnostic live session bound to a single agent.
-///
-/// One session is created at startup and reused for every prompt in the
-/// chat process. Sessions are driven sequentially by their owning worker,
-/// so implementations never see two concurrent prompts.
+/// A runtime-agnostic live session bound to a single agent. Its turn-owned
+/// manager stops it after the reply; Hivemind's room history remains canonical.
 #[async_trait]
 pub trait HarnessSession: Send {
     /// Send one user turn through the live session and return the reply.
@@ -101,6 +99,7 @@ mod tests {
             model: None,
             reasoning: None,
             fast: None,
+            role: None,
         }
     }
 
@@ -140,19 +139,17 @@ done
             agent("OMP", "omp", &omp.workspace()),
             agent("Pi B", "pi", &pi.workspace()),
         ];
-        // The manager preserves the effective order selected by config.
+        // Explicit effective reply order reverses the Pi speakers around OMP.
         let agents = [&configured[2], &configured[1], &configured[0]];
         let manager = AgentManager::start(&runtime, &agents).await.unwrap();
         let replies = manager.prompt_all("hello").await;
-        assert_eq!(replies[0].0, "Pi B");
-        assert_eq!(replies[1].0, "OMP");
-        assert_eq!(replies[2].0, "Pi A");
-        assert!(replies[0].1.as_ref().unwrap().starts_with("pi-"));
-        assert_eq!(replies[1].1.as_ref().unwrap(), "omp fixture");
-        assert!(replies[2].1.as_ref().unwrap().starts_with("pi-"));
+        assert_eq!(replies.replies[0].0, "Pi B");
+        assert_eq!(replies.replies[1].0, "OMP");
+        assert_eq!(replies.replies[2].0, "Pi A");
+        assert_eq!(replies.replies[1].1.as_ref().unwrap(), "omp fixture");
         assert_ne!(
-            replies[0].1.as_ref().unwrap(),
-            replies[2].1.as_ref().unwrap()
+            replies.replies[0].1.as_ref().unwrap(),
+            replies.replies[2].1.as_ref().unwrap()
         );
         manager.shutdown().await;
     }

@@ -1,13 +1,18 @@
 use axum::extract::ws::{close_code, CloseFrame, Message, WebSocket};
 use futures_util::StreamExt;
 use serde_json::json;
-use std::time::Duration;
-use tokio::sync::watch;
+use std::{sync::Arc, time::{Duration, UNIX_EPOCH}};
+use tokio::sync::{broadcast, watch};
 
+use crate::{core::HivemindCore, events::{DomainEvent, DomainEventKind}};
 use super::protocol::{Envelope, Outbound};
 
-pub(super) async fn handle(mut socket: WebSocket, mut shutdown: watch::Receiver<bool>) {
-    println!("WebSocket client connected");
+pub(super) async fn handle(
+    mut socket: WebSocket,
+    core: Arc<HivemindCore>,
+    mut shutdown: watch::Receiver<bool>,
+) {
+    let mut events = core.events().subscribe();
     if send(
         &mut socket,
         Outbound::event(
@@ -22,7 +27,6 @@ pub(super) async fn handle(mut socket: WebSocket, mut shutdown: watch::Receiver<
     .await
     .is_err()
     {
-        println!("WebSocket client disconnected during handshake");
         return;
     }
 
@@ -34,17 +38,33 @@ pub(super) async fn handle(mut socket: WebSocket, mut shutdown: watch::Receiver<
                     break;
                 }
             }
+            event = events.recv() => match event {
+                Ok(event) => {
+                    if let Some(message) = map_event(&event) {
+                        if send(&mut socket, message).await.is_err() { break; }
+                    }
+                }
+                Err(broadcast::error::RecvError::Lagged(missed)) => {
+                    let message = Outbound::event(
+                        "system.events_lagged",
+                        None,
+                        json!({"missed_count": missed, "refresh_required": true}),
+                    );
+                    if send(&mut socket, message).await.is_err() { break; }
+                }
+                Err(broadcast::error::RecvError::Closed) => {
+                    close(&mut socket, None).await;
+                    break;
+                }
+            },
             message = socket.next() => match message {
                 Some(Ok(Message::Text(text))) => {
                     let response = match serde_json::from_str::<Envelope>(text.as_str()) {
                         Ok(envelope) => process(envelope),
-                        Err(_) => {
-                            eprintln!("WebSocket protocol error: malformed JSON envelope");
-                            Outbound::event("system.error", None, json!({
-                                "code": "malformed_message",
-                                "message": "invalid websocket JSON envelope"
-                            }))
-                        }
+                        Err(_) => Outbound::event("system.error", None, json!({
+                            "code": "malformed_message",
+                            "message": "invalid websocket JSON envelope"
+                        }))
                     };
                     if send(&mut socket, response).await.is_err() { break; }
                 }
@@ -57,7 +77,6 @@ pub(super) async fn handle(mut socket: WebSocket, mut shutdown: watch::Receiver<
                 }
                 None | Some(Err(_)) => break,
                 Some(Ok(Message::Binary(_))) => {
-                    eprintln!("WebSocket protocol error: unsupported binary message");
                     let response = Outbound::event("system.error", None, json!({
                         "code": "unsupported_message",
                         "message": "only JSON text messages are supported"
@@ -68,9 +87,56 @@ pub(super) async fn handle(mut socket: WebSocket, mut shutdown: watch::Receiver<
             }
         }
     }
-    println!("WebSocket client disconnected");
 }
 
+fn map_event(event: &DomainEvent) -> Option<Outbound> {
+    let (event_type, payload) = match &event.payload {
+        DomainEventKind::TurnStarted { room_id, turn_id } => (
+            "conversation.turn.started",
+            json!({"room_id": room_id, "turn_id": turn_id}),
+        ),
+        DomainEventKind::TurnCompleted { room_id, turn_id, reply_count, .. } => (
+            "conversation.turn.completed",
+            json!({"room_id": room_id, "turn_id": turn_id, "reply_count": reply_count}),
+        ),
+        DomainEventKind::AgentReplyStarted { room_id, turn_id, instance_id, .. } => (
+            "agent.reply.started",
+            json!({"room_id": room_id, "turn_id": turn_id, "agent_instance_id": instance_id}),
+        ),
+        DomainEventKind::AgentReplyCompleted { room_id, turn_id, instance_id, .. } => (
+            "agent.reply.completed",
+            json!({"room_id": room_id, "turn_id": turn_id, "agent_instance_id": instance_id}),
+        ),
+        DomainEventKind::AgentReplyFailed { room_id, turn_id, instance_id, .. } => (
+            "agent.reply.failed",
+            json!({"room_id": room_id, "turn_id": turn_id, "agent_instance_id": instance_id}),
+        ),
+        DomainEventKind::RuntimeStarted { instance_id, runtime, .. } => (
+            "runtime.started",
+            json!({"agent_instance_id": instance_id, "runtime": runtime}),
+        ),
+        DomainEventKind::RuntimeStopped { instance_id, runtime, .. } => (
+            "runtime.stopped",
+            json!({"agent_instance_id": instance_id, "runtime": runtime}),
+        ),
+        DomainEventKind::RuntimeFailed { instance_id, runtime, .. } => (
+            "runtime.failed",
+            json!({"agent_instance_id": instance_id, "runtime": runtime}),
+        ),
+        DomainEventKind::CoreStarted | DomainEventKind::CoreShuttingDown => return None,
+    };
+    let occurred_at_ms = event
+        .occurred_at
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let mut public_payload = payload;
+    public_payload["event_id"] = json!(event.event_id);
+    public_payload["sequence"] = json!(event.sequence);
+    public_payload["occurred_at_ms"] = json!(occurred_at_ms);
+    public_payload["event_version"] = json!(1);
+    Some(Outbound::event(event_type, None, public_payload))
+}
 fn process(envelope: Envelope) -> Outbound {
     let _payload = envelope.payload;
     match envelope.r#type.as_str() {

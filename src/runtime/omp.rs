@@ -444,6 +444,7 @@ mod tests {
             model: Some("example-model".into()),
             reasoning: Some("high".into()),
             fast,
+            role: None,
         }
     }
 

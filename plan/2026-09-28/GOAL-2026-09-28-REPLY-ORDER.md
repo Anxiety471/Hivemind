@@ -8,7 +8,7 @@ Agents may still perform work concurrently, but their responses must not be prin
 
 Fastest response must not automatically become the first speaker.
 
-## Problem
+## Problem  
 
 Hivemind can run multiple agents asynchronously.
 

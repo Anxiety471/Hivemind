@@ -98,7 +98,7 @@ impl ChildTransport {
     }
 }
 
-/// A no-session Pi RPC process. Each Hivemind turn begins a fresh Pi session.
+/// A no-session Pi RPC process. Each persona invocation begins a fresh Pi session.
 pub struct PiSession {
     agent_name: String,
     transport: ChildTransport,
@@ -290,6 +290,7 @@ mod tests {
             model: Some("provider/model".into()),
             reasoning: Some("high".into()),
             fast: None,
+            role: None,
         }
     }
 

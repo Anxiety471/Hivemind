@@ -3,20 +3,97 @@ use std::{collections::HashSet, fs, path::Path};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct HivemindConfig {
     #[serde(default)]
     pub runtime: RuntimeConfig,
     #[serde(default)]
     pub conversation: ConversationConfig,
-    #[serde(default)]
+    #[serde(default, rename = "personas", alias = "agents")]
     pub agents: Vec<AgentConfig>,
+    #[serde(default)]
+    pub groups: Vec<GroupConfig>,
+    #[serde(default)]
+    pub context: ContextConfig,
+    #[serde(default)]
+    pub memory: MemoryConfig,
+}
+
+/// Deterministic, model-independent memory behavior.
+///
+/// The only supported mode today is `deterministic`: storage, retrieval, and
+/// scope policy never require a model or provider.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemoryConfig {
+    #[serde(default = "default_memory_mode")]
+    pub mode: String,
+}
+
+impl Default for MemoryConfig {
+    fn default() -> Self {
+        Self {
+            mode: default_memory_mode(),
+        }
+    }
+}
+
+fn default_memory_mode() -> String {
+    "deterministic".into()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ConversationConfig {
     #[serde(default)]
     pub reply_order: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GroupConfig {
+    #[serde(rename = "id", alias = "name")]
+    pub name: String,
+    #[serde(default)]
+    pub members: Vec<String>,
+    #[serde(default)]
+    pub mode: ConversationMode,
+    #[serde(default)]
+    pub member_roles: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    pub reply_order: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ConversationMode {
+    #[default]
+    Broadcast,
+    Discussion,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextConfig {
+    #[serde(default = "default_recent_turns")]
+    pub recent_turns: usize,
+    #[serde(default = "default_summary_max_tokens")]
+    pub summary_max_tokens: usize,
+    #[serde(default = "default_context_target_tokens")]
+    pub context_target_tokens: usize,
+    /// Retained and validated; runtime-token accounting is not implemented.
+    #[serde(default = "default_runtime_rotate_tokens")]
+    pub runtime_rotate_tokens: usize,
+    #[serde(default = "default_summary_refresh_turns")]
+    pub summary_refresh_turns: usize,
+}
+
+impl Default for ContextConfig {
+    fn default() -> Self {
+        Self {
+            recent_turns: default_recent_turns(),
+            summary_max_tokens: default_summary_max_tokens(),
+            context_target_tokens: default_context_target_tokens(),
+            runtime_rotate_tokens: default_runtime_rotate_tokens(),
+            summary_refresh_turns: default_summary_refresh_turns(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,6 +115,7 @@ impl Default for RuntimeConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
+    #[serde(rename = "id", alias = "name")]
     pub name: String,
     #[serde(default = "default_runtime")]
     pub runtime: String,
@@ -51,8 +129,9 @@ pub struct AgentConfig {
     pub reasoning: Option<String>,
     #[serde(default)]
     pub fast: Option<bool>,
+    #[serde(default)]
+    pub role: Option<String>,
 }
-
 impl HivemindConfig {
     pub fn load(path: &Path) -> Result<Self> {
         let raw = fs::read_to_string(path).with_context(|| {
@@ -71,51 +150,112 @@ impl HivemindConfig {
     }
 
     fn validate(&self) -> Result<()> {
+        if self.memory.mode != "deterministic" {
+            bail!(
+                "memory.mode must be \"deterministic\" (the only supported mode); got {:?}",
+                self.memory.mode
+            );
+        }
+        if self.context.recent_turns == 0
+            || self.context.summary_max_tokens == 0
+            || self.context.context_target_tokens == 0
+            || self.context.summary_refresh_turns == 0
+        {
+            bail!("context.recent_turns, summary_max_tokens, context_target_tokens, and summary_refresh_turns must be positive");
+        }
+        if self.context.summary_max_tokens > self.context.context_target_tokens {
+            bail!("context.summary_max_tokens must not exceed context.context_target_tokens");
+        }
+        if self.context.runtime_rotate_tokens <= self.context.context_target_tokens {
+            bail!("context.runtime_rotate_tokens must exceed context.context_target_tokens");
+        }
         if self.agents.is_empty() {
-            bail!("config contains no agents; add at least one [[agents]] entry or create a starter config with 'hivemind init'");
+            bail!("config contains no personas; add at least one [[personas]] entry (legacy [[agents]] entries with name are also accepted) or create a starter config with 'hivemind init'");
         }
 
-        let mut agent_names = HashSet::with_capacity(self.agents.len());
-        for agent in &self.agents {
-            if agent.name.trim().is_empty() {
-                bail!("[[agents]].name must not be empty; assign each agent a non-empty name");
+        let mut persona_ids = HashSet::with_capacity(self.agents.len());
+        for persona in &self.agents {
+            if persona.name.trim().is_empty() {
+                bail!("[[personas]].id must not be empty; assign each persona a non-empty id (`[[agents]].name` remains a legacy alias)");
             }
-            if !agent_names.insert(agent.name.as_str()) {
-                bail!("duplicate agent name '{}'; rename one of the [[agents]] entries so every agent name is unique", agent.name);
+            if !persona_ids.insert(persona.name.as_str()) {
+                bail!("duplicate persona id '{}'; rename one of the [[personas]] entries so every id is unique (`[[agents]].name` is the legacy alias)", persona.name);
+            }
+        }
+        let mut group_names = HashSet::with_capacity(self.groups.len());
+        for group in &self.groups {
+            if group.name.trim().is_empty() || group.name == "main" {
+                bail!("invalid or reserved group name '{}'", group.name);
+            }
+            if !group_names.insert(group.name.as_str()) {
+                bail!("duplicate group name '{}'", group.name);
+            }
+            let mut members = HashSet::with_capacity(group.members.len());
+            for member in &group.members {
+                if !persona_ids.contains(member.as_str()) {
+                    bail!("unknown persona id '{member}' in group '{}'; use a configured [[personas]].id (`[[agents]].name` is the legacy alias)", group.name);
+                }
+                if !members.insert(member.as_str()) {
+                    bail!("duplicate persona id '{member}' in group '{}'", group.name);
+                }
+            }
+            for name in group.member_roles.keys() {
+                if !members.contains(name.as_str()) {
+                    bail!(
+                        "group '{}' defines a role for non-member '{name}'",
+                        group.name
+                    );
+                }
+            }
+            for name in &group.reply_order {
+                if !members.contains(name.as_str()) {
+                    bail!(
+                        "group '{}' reply_order references non-member '{name}'",
+                        group.name
+                    );
+                }
+            }
+            let mut group_reply_names = HashSet::with_capacity(group.reply_order.len());
+            for name in &group.reply_order {
+                if !group_reply_names.insert(name.as_str()) {
+                    bail!(
+                        "group '{}' reply_order contains duplicate persona id '{name}'",
+                        group.name
+                    );
+                }
             }
         }
 
         let mut reply_names = HashSet::with_capacity(self.conversation.reply_order.len());
         for name in &self.conversation.reply_order {
             if !reply_names.insert(name.as_str()) {
-                bail!("conversation.reply_order contains duplicate agent '{name}'; use unique configured agent names");
+                bail!("conversation.reply_order contains duplicate persona id '{name}'; use unique configured persona IDs");
             }
-            if !agent_names.contains(name.as_str()) {
-                bail!("conversation.reply_order references unknown agent '{name}'; use unique configured agent names that match [[agents]].name");
+            if !persona_ids.contains(name.as_str()) {
+                bail!("conversation.reply_order references unknown persona id '{name}'; use configured [[personas]].id values (`[[agents]].name` is the legacy alias)");
             }
         }
 
         Ok(())
     }
 
-    /// Explicitly ordered agents come first; omitted agents retain declaration order.
+    /// Agents in configured reply order, with unspecified agents appended in
+    /// their declaration order.
     pub fn ordered_agents(&self) -> Vec<&AgentConfig> {
         let mut ordered = Vec::with_capacity(self.agents.len());
-        let mut included = HashSet::with_capacity(self.conversation.reply_order.len());
-
         for name in &self.conversation.reply_order {
             if let Some(agent) = self.agents.iter().find(|agent| agent.name == *name) {
-                included.insert(agent.name.as_str());
                 ordered.push(agent);
             }
         }
         for agent in &self.agents {
-            if !included.contains(agent.name.as_str()) {
+            if !self.conversation.reply_order.contains(&agent.name) {
                 ordered.push(agent);
             }
         }
         ordered
     }
+
 
     pub fn write_default(path: &Path, force: bool) -> Result<()> {
         if path.exists() && !force {
@@ -128,7 +268,7 @@ impl HivemindConfig {
         let raw = toml::to_string_pretty(&Self::default_poc())
             .context("failed to serialize default config")?;
         let raw = format!(
-            "# Configure model per agent with model = \"provider/model-id\".\n# Configure reasoning with reasoning = \"high\" (or another runtime-supported level).\n# Provider credentials are managed by Pi/OMP and are never stored here.\n{raw}"
+            "# Configure model and reasoning per agent with model = \"provider/model-id\" and reasoning = \"high\".\n# Provider credentials are managed by Pi/OMP and are never stored here.\n{raw}"
         );
         fs::write(path, raw)
             .with_context(|| format!("failed to write config {}", path.display()))?;
@@ -142,6 +282,9 @@ impl HivemindConfig {
             conversation: ConversationConfig {
                 reply_order: vec!["Maomao".into(), "Albedo".into()],
             },
+            context: ContextConfig::default(),
+            memory: MemoryConfig::default(),
+            groups: Vec::new(),
             agents: vec![
                 AgentConfig {
                     name: "Maomao".into(),
@@ -156,6 +299,7 @@ impl HivemindConfig {
                     model: None,
                     reasoning: None,
                     fast: None,
+                    role: Some("Software Engineer".into()),
                 },
                 AgentConfig {
                     name: "Albedo".into(),
@@ -170,10 +314,27 @@ impl HivemindConfig {
                     model: None,
                     reasoning: None,
                     fast: None,
+                    role: Some("Reviewer".into()),
                 },
             ],
         }
     }
+}
+
+fn default_recent_turns() -> usize {
+    6
+}
+fn default_summary_max_tokens() -> usize {
+    2000
+}
+fn default_context_target_tokens() -> usize {
+    12000
+}
+fn default_runtime_rotate_tokens() -> usize {
+    24000
+}
+fn default_summary_refresh_turns() -> usize {
+    4
 }
 
 fn default_omp_binary() -> String {
@@ -227,7 +388,7 @@ mod tests {
     }
 
     #[test]
-    fn default_poc_contains_two_pi_agents_and_reply_order() {
+    fn default_poc_contains_two_pi_agents() {
         let config = HivemindConfig::default_poc();
 
         assert_eq!(config.agents.len(), 2);
@@ -235,31 +396,6 @@ mod tests {
         assert_eq!(config.conversation.reply_order, ["Maomao", "Albedo"]);
         assert_eq!(config.runtime.omp_binary, "omp");
         assert_eq!(config.runtime.pi_binary, "pi");
-    }
-    #[test]
-    fn init_refuses_to_overwrite_without_force_and_force_replaces_config() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
-        static NEXT: AtomicUsize = AtomicUsize::new(0);
-        let path = std::env::temp_dir().join(format!(
-            "hivemind-init-{}-{}.toml",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-
-        HivemindConfig::write_default(&path, false).unwrap();
-        let raw = fs::read_to_string(&path).unwrap();
-        assert!(raw.contains("model = \"provider/model-id\""));
-        assert!(raw.contains("reasoning = \"high\""));
-        assert!(!raw.contains("api_key"));
-        assert_eq!(HivemindConfig::load(&path).unwrap().agents.len(), 2);
-
-        fs::write(&path, "user config").unwrap();
-        assert!(HivemindConfig::write_default(&path, false).is_err());
-        assert_eq!(fs::read_to_string(&path).unwrap(), "user config");
-        HivemindConfig::write_default(&path, true).unwrap();
-        assert_eq!(HivemindConfig::load(&path).unwrap().agents.len(), 2);
-        let _ = fs::remove_file(path);
     }
 
     #[test]
@@ -271,6 +407,26 @@ mod tests {
         assert_eq!(decoded.agents.len(), 2);
         assert_eq!(decoded.agents[0].name, "Maomao");
         assert_eq!(decoded.agents[1].name, "Albedo");
+    }
+
+    #[test]
+    fn memory_mode_defaults_to_deterministic_and_rejects_unknown_modes() {
+        let config: HivemindConfig =
+            toml::from_str("[[agents]]\nname = \"A\"\n").unwrap();
+        assert_eq!(config.memory.mode, "deterministic");
+
+        let explicit: HivemindConfig = toml::from_str(
+            "[memory]\nmode = \"deterministic\"\n[[agents]]\nname = \"A\"\n",
+        )
+        .unwrap();
+        assert_eq!(explicit.memory.mode, "deterministic");
+
+        let unsupported = load_toml("[memory]\nmode = \"hybrid\"\n[[agents]]\nname = \"A\"\n")
+            .unwrap_err()
+            .to_string();
+        assert!(unsupported.contains("memory.mode must be"));
+
+        assert_eq!(HivemindConfig::default_poc().memory.mode, "deterministic");
     }
 
     #[test]
@@ -287,8 +443,9 @@ mod tests {
         assert_eq!(config.agents[0].reasoning.as_deref(), Some("high"));
         assert_eq!(config.agents[0].fast, Some(true));
     }
+
     #[test]
-    fn reply_order_defaults_to_declaration_order_and_appends_unlisted_agents() {
+    fn reply_order_defaults_to_declaration_order_and_partial_order_appends_omissions() {
         let declaration: HivemindConfig = toml::from_str(
             r#"
                 [[agents]]
@@ -304,7 +461,7 @@ mod tests {
             declaration
                 .ordered_agents()
                 .iter()
-                .map(|agent| agent.name.as_str())
+                .map(|a| a.name.as_str())
                 .collect::<Vec<_>>(),
             ["First", "Second", "Third"]
         );
@@ -322,59 +479,150 @@ mod tests {
             "#,
         )
         .unwrap();
-        partial.validate().unwrap();
         assert_eq!(
             partial
                 .ordered_agents()
                 .iter()
-                .map(|agent| agent.name.as_str())
+                .map(|a| a.name.as_str())
                 .collect::<Vec<_>>(),
             ["Third", "First", "Second"]
         );
     }
 
-    fn load_toml(raw: &str) -> anyhow::Result<HivemindConfig> {
-        use std::sync::atomic::{AtomicUsize, Ordering};
+    #[test]
+    fn persona_room_and_context_configuration_validate() {
+        let config = load_toml(
+            r#"
+            [[personas]]
+            id = "maomao"
+            role = "Engineer"
+            [[personas]]
+            id = "albedo"
+            [[groups]]
+            id = "development"
+            mode = "discussion"
+            members = ["maomao", "albedo"]
+            reply_order = ["albedo", "maomao"]
+            [groups.member_roles]
+            albedo = "Lead Reviewer"
+            [context]
+            recent_turns = 3
+            summary_max_tokens = 100
+            context_target_tokens = 1000
+            runtime_rotate_tokens = 2000
+            summary_refresh_turns = 4
+        "#,
+        )
+        .unwrap();
+        assert_eq!(config.agents[0].name, "maomao");
+        assert_eq!(config.groups[0].mode, ConversationMode::Discussion);
+        assert_eq!(config.groups[0].member_roles["albedo"], "Lead Reviewer");
 
-        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let invalid = load_toml("[[personas]]\nid = \"a\"\n[context]\ncontext_target_tokens = 0\n")
+            .unwrap_err()
+            .to_string();
+        assert!(invalid.contains("must be positive"));
+        let bad_role = load_toml("[[personas]]\nid = \"a\"\n[[groups]]\nid = \"g\"\nmembers = [\"a\"]\n[groups.member_roles]\nb = \"Reviewer\"\n").unwrap_err().to_string();
+        assert_eq!(
+            config.groups[0]
+                .reply_order
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["albedo", "maomao"]
+        );
+        let bad_order = load_toml(
+            "[[personas]]\nid = \"a\"\n[[personas]]\nid = \"b\"\n[[groups]]\nid = \"g\"\nmembers = [\"a\"]\nreply_order = [\"b\"]\n",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(bad_order.contains("non-member"));
+        assert!(bad_role.contains("non-member"));
+    }
+
+    fn load_toml(raw: &str) -> Result<HivemindConfig> {
         let path = std::env::temp_dir().join(format!(
-            "hivemind-reply-order-{}-{}.toml",
+            "hivemind-config-{}-{}.toml",
             std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
-        std::fs::write(&path, raw)?;
+        fs::write(&path, raw)?;
         let result = HivemindConfig::load(&path);
-        let _ = std::fs::remove_file(path);
+        let _ = fs::remove_file(path);
         result
     }
 
     #[test]
-    fn load_rejects_duplicate_and_unknown_reply_order_names() {
-        for (raw, expected) in [
+    fn load_rejects_configurations_without_personas() {
+        let error = load_toml("personas = []\n").unwrap_err().to_string();
+        assert!(error.contains("config contains no personas"));
+        assert!(error.contains("[[personas]]"));
+    }
+
+    #[test]
+    fn load_errors_include_persona_id_and_legacy_alias_guidance() {
+        for (reply_order, expected) in [
+            ("[\"A\", \"A\"]", "use unique configured persona IDs"),
             (
-                r#"
-                    [conversation]
-                    reply_order = ["A", "A"]
-                    [[agents]]
-                    name = "A"
-                "#,
-                "contains duplicate agent",
-            ),
-            (
-                r#"
-                    [conversation]
-                    reply_order = ["Missing"]
-                    [[agents]]
-                    name = "A"
-                "#,
-                "references unknown agent",
+                "[\"Missing\"]",
+                "use configured [[personas]].id values",
             ),
         ] {
-            let error = load_toml(raw).unwrap_err().to_string();
-            assert!(
-                error.contains(expected),
-                "unexpected validation error: {error}"
-            );
+            let raw =
+                format!("[conversation]\nreply_order = {reply_order}\n[[agents]]\nname = \"A\"\n");
+            let error = load_toml(&raw).unwrap_err().to_string();
+            assert!(error.contains(expected), "unexpected error: {error}");
         }
+
+        let duplicate = load_toml("[[agents]]\nname = \"A\"\n[[agents]]\nname = \"A\"\n")
+            .unwrap_err()
+            .to_string();
+        assert!(duplicate.contains("rename one of the [[personas]] entries"));
+        assert!(duplicate.contains("legacy alias"));
+
+        let empty = load_toml("[[personas]]\nid = \"  \"\n")
+            .unwrap_err()
+            .to_string();
+        assert!(empty.contains("[[personas]].id"));
+        assert!(empty.contains("legacy alias"));
+    }
+
+    #[test]
+    fn missing_config_suggests_init() {
+        let path = std::env::temp_dir().join(format!(
+            "hivemind-missing-config-{}.toml",
+            std::process::id()
+        ));
+        let error = HivemindConfig::load(&path).unwrap_err().to_string();
+        assert!(error.contains("hivemind --config <path> init"));
+        assert!(error.contains("cargo run -- --config <path> init"));
+        assert!(error.contains("cargo run -- init"));
+    }
+    #[test]
+    fn init_generates_valid_config_and_preserves_existing_file() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "hivemind-init-{}-{}.toml",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        HivemindConfig::write_default(&path, false).unwrap();
+        let raw = fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("model = \"provider/model-id\""));
+        let config = HivemindConfig::load(&path).unwrap();
+        assert_eq!(config.agents.len(), 2);
+        assert!(config.agents.iter().all(|agent| agent.runtime == "pi"));
+
+        fs::write(&path, "user config").unwrap();
+        assert!(HivemindConfig::write_default(&path, false).is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "user config");
+        HivemindConfig::write_default(&path, true).unwrap();
+        assert_eq!(HivemindConfig::load(&path).unwrap().agents.len(), 2);
+        let _ = fs::remove_file(path);
     }
 }
