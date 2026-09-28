@@ -1,8 +1,8 @@
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use anyhow::{anyhow, Result};
 use tokio::{
-    sync::{mpsc, oneshot},
+    sync::{mpsc, oneshot, Mutex, OwnedMutexGuard},
     task::JoinSet,
     time::timeout,
 };
@@ -72,20 +72,35 @@ async fn run_worker(
         eprintln!("warning: failed to shut down session for '{name}': {error:#}");
     }
 }
+/// Owns a prompt turn's presentation slot until its caller finishes printing
+/// the ordered results.
+pub struct PromptAllResult {
+    pub replies: Vec<(String, Result<String>)>,
+    _turn_guard: OwnedMutexGuard<()>,
+}
+
+impl std::ops::Deref for PromptAllResult {
+    type Target = [(String, Result<String>)];
+
+    fn deref(&self) -> &Self::Target {
+        &self.replies
+    }
+}
 
 /// Owns one live session per configured agent for the whole chat process.
 pub struct AgentManager {
     workers: Vec<Worker>,
     tasks: JoinSet<()>,
+    turn_lock: Arc<Mutex<()>>,
 }
 
 impl AgentManager {
     /// Eagerly start one session per configured agent so a startup failure
     /// reports which agent failed and why, before the first prompt.
-    pub async fn start(runtime_config: &RuntimeConfig, agents: &[AgentConfig]) -> Result<Self> {
+    pub async fn start(runtime_config: &RuntimeConfig, agents: &[&AgentConfig]) -> Result<Self> {
         let mut sessions = Vec::with_capacity(agents.len());
 
-        for agent in agents {
+        for &agent in agents {
             match create_session(runtime_config, agent).await {
                 Ok(session) => sessions.push((agent.name.clone(), session)),
                 Err(error) => {
@@ -113,31 +128,35 @@ impl AgentManager {
             workers.push(Worker { name, tx });
         }
 
-        Self { workers, tasks }
+        Self {
+            workers,
+            tasks,
+            turn_lock: Arc::new(Mutex::new(())),
+        }
     }
 
-    /// Fan one user input out to every worker and collect replies in
-    /// configuration order. All prompts are enqueued before any reply is
-    /// awaited, so the workers process them concurrently.
-    pub async fn prompt_all(&self, input: &str) -> Vec<(String, Result<String>)> {
+    /// Fan one user input out to every worker and return replies in manager
+    /// order. Workers prompt concurrently; failures retain their ordered slot.
+    pub async fn prompt_all(&self, input: &str) -> PromptAllResult {
+        let turn_guard = self.turn_lock.clone().lock_owned().await;
         let mut pending = Vec::with_capacity(self.workers.len());
 
         for worker in &self.workers {
-            let receiver = worker.send_prompt(input).await;
-            pending.push((worker.name.clone(), receiver));
+            pending.push((worker.name.clone(), worker.send_prompt(input).await));
         }
 
         let mut replies = Vec::with_capacity(pending.len());
-
         for (name, receiver) in pending {
-            let result = match receiver.await {
-                Ok(result) => result,
-                Err(_) => Err(anyhow!("agent '{name}' stopped before replying")),
-            };
+            let result = receiver
+                .await
+                .unwrap_or_else(|_| Err(anyhow!("agent '{name}' stopped before replying")));
             replies.push((name, result));
         }
 
-        replies
+        PromptAllResult {
+            replies,
+            _turn_guard: turn_guard,
+        }
     }
 
     /// Shut down every session. Workers release their sessions as soon as
@@ -184,8 +203,9 @@ mod tests {
         shutdowns: AtomicUsize,
         failure: Mutex<Option<String>>,
         barrier: Option<Arc<Barrier>>,
+        delay: Option<Duration>,
+        completion: Option<(Arc<Mutex<Vec<String>>>, String)>,
     }
-
     struct FakeSession {
         state: Arc<FakeState>,
     }
@@ -199,6 +219,12 @@ mod tests {
                 tokio::time::timeout(Duration::from_secs(5), barrier.wait())
                     .await
                     .context("agents did not prompt concurrently")?;
+            }
+            if let Some(delay) = self.state.delay {
+                tokio::time::sleep(delay).await;
+            }
+            if let Some((completion, name)) = &self.state.completion {
+                completion.lock().push(name.clone());
             }
 
             if let Some(failure) = &*self.state.failure.lock() {
@@ -286,29 +312,77 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn errors_are_attributed_to_the_failing_agent() {
-        let maomao = Arc::new(FakeState {
+    async fn failed_first_speaker_keeps_its_ordered_slot() {
+        let failure = Arc::new(FakeState {
             failure: Mutex::new(Some("simulated RPC failure".into())),
             ..FakeState::default()
         });
-        let albedo = fake_state();
-        let manager = manager_with(&[("Maomao", maomao.clone()), ("Albedo", albedo.clone())]);
+        let success = fake_state();
+        let manager = manager_with(&[("Failure", failure), ("Success", success)]);
 
         let replies = manager.prompt_all("hello").await;
 
         assert_eq!(replies.len(), 2);
-        assert_eq!(replies[0].0, "Maomao");
-        let error = replies[0].1.as_ref().unwrap_err();
-        assert!(
-            error.to_string().contains("simulated RPC failure"),
-            "unexpected error: {error:#}"
-        );
-
-        assert_eq!(replies[1].0, "Albedo");
+        assert_eq!(replies[0].0, "Failure");
+        assert!(replies[0]
+            .1
+            .as_ref()
+            .unwrap_err()
+            .to_string()
+            .contains("simulated RPC failure"));
+        assert_eq!(replies[1].0, "Success");
         assert_eq!(replies[1].1.as_ref().unwrap(), "echo:hello");
-        assert_eq!(*albedo.prompts.lock(), ["hello"]);
 
         manager.shutdown().await;
+    }
+    #[tokio::test]
+    async fn replies_follow_worker_order_when_completion_order_differs() {
+        let completion = Arc::new(Mutex::new(Vec::new()));
+        let slow = Arc::new(FakeState {
+            delay: Some(Duration::from_millis(30)),
+            completion: Some((completion.clone(), "Slow".into())),
+            ..FakeState::default()
+        });
+        let fast = Arc::new(FakeState {
+            completion: Some((completion.clone(), "Fast".into())),
+            ..FakeState::default()
+        });
+        let manager = manager_with(&[("Slow", slow), ("Fast", fast)]);
+
+        let replies = manager.prompt_all("hello").await;
+
+        assert_eq!(*completion.lock(), ["Fast", "Slow"]);
+        assert_eq!(
+            replies
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>(),
+            ["Slow", "Fast"]
+        );
+        manager.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn next_turn_waits_until_the_previous_replies_are_presented() {
+        let state = fake_state();
+        let manager = Arc::new(manager_with(&[("Agent", state.clone())]));
+        let first = manager.prompt_all("first").await;
+        let next_manager = manager.clone();
+        let next_turn = tokio::spawn(async move { next_manager.prompt_all("second").await });
+
+        tokio::task::yield_now().await;
+        assert_eq!(*state.prompts.lock(), ["first"]);
+
+        drop(first);
+        let second = next_turn.await.unwrap();
+        assert_eq!(*state.prompts.lock(), ["first", "second"]);
+        drop(second);
+
+        Arc::try_unwrap(manager)
+            .ok()
+            .expect("turn task released its manager")
+            .shutdown()
+            .await;
     }
 
     #[tokio::test]
@@ -335,7 +409,8 @@ mod tests {
             fast: None,
         };
 
-        let error = AgentManager::start(&RuntimeConfig::default(), std::slice::from_ref(&agent))
+        let agents = [&agent];
+        let error = AgentManager::start(&RuntimeConfig::default(), &agents)
             .await
             .err()
             .expect("unknown runtime must fail session creation");

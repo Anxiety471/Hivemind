@@ -1,4 +1,4 @@
-use std::{fs, path::Path};
+use std::{collections::HashSet, fs, path::Path};
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -8,7 +8,15 @@ pub struct HivemindConfig {
     #[serde(default)]
     pub runtime: RuntimeConfig,
     #[serde(default)]
+    pub conversation: ConversationConfig,
+    #[serde(default)]
     pub agents: Vec<AgentConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ConversationConfig {
+    #[serde(default)]
+    pub reply_order: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,17 +61,56 @@ impl HivemindConfig {
         let config: Self = toml::from_str(&raw)
             .with_context(|| format!("failed to parse config {}", path.display()))?;
 
-        if config.agents.is_empty() {
+        config.validate()?;
+
+        Ok(config)
+    }
+
+    fn validate(&self) -> Result<()> {
+        if self.agents.is_empty() {
             bail!("config contains no agents");
         }
 
-        for agent in &config.agents {
+        let mut agent_names = HashSet::with_capacity(self.agents.len());
+        for agent in &self.agents {
             if agent.name.trim().is_empty() {
                 bail!("agent names cannot be empty");
             }
+            if !agent_names.insert(agent.name.as_str()) {
+                bail!("duplicate agent name '{}'", agent.name);
+            }
         }
 
-        Ok(config)
+        let mut reply_names = HashSet::with_capacity(self.conversation.reply_order.len());
+        for name in &self.conversation.reply_order {
+            if !reply_names.insert(name.as_str()) {
+                bail!("conversation.reply_order contains duplicate agent '{name}'");
+            }
+            if !agent_names.contains(name.as_str()) {
+                bail!("conversation.reply_order references unknown agent '{name}'");
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Explicitly ordered agents come first; omitted agents retain declaration order.
+    pub fn ordered_agents(&self) -> Vec<&AgentConfig> {
+        let mut ordered = Vec::with_capacity(self.agents.len());
+        let mut included = HashSet::with_capacity(self.conversation.reply_order.len());
+
+        for name in &self.conversation.reply_order {
+            if let Some(agent) = self.agents.iter().find(|agent| agent.name == *name) {
+                included.insert(agent.name.as_str());
+                ordered.push(agent);
+            }
+        }
+        for agent in &self.agents {
+            if !included.contains(agent.name.as_str()) {
+                ordered.push(agent);
+            }
+        }
+        ordered
     }
 
     pub fn write_default(path: &Path, force: bool) -> Result<()> {
@@ -86,6 +133,7 @@ impl HivemindConfig {
     pub fn default_poc() -> Self {
         Self {
             runtime: RuntimeConfig::default(),
+            conversation: ConversationConfig::default(),
             agents: vec![
                 AgentConfig {
                     name: "Maomao".into(),
@@ -204,5 +252,95 @@ mod tests {
 
         assert_eq!(config.agents[0].reasoning.as_deref(), Some("high"));
         assert_eq!(config.agents[0].fast, Some(true));
+    }
+    #[test]
+    fn reply_order_defaults_to_declaration_order_and_appends_unlisted_agents() {
+        let declaration: HivemindConfig = toml::from_str(
+            r#"
+                [[agents]]
+                name = "First"
+                [[agents]]
+                name = "Second"
+                [[agents]]
+                name = "Third"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            declaration
+                .ordered_agents()
+                .iter()
+                .map(|agent| agent.name.as_str())
+                .collect::<Vec<_>>(),
+            ["First", "Second", "Third"]
+        );
+
+        let partial: HivemindConfig = toml::from_str(
+            r#"
+                [conversation]
+                reply_order = ["Third", "First"]
+                [[agents]]
+                name = "First"
+                [[agents]]
+                name = "Second"
+                [[agents]]
+                name = "Third"
+            "#,
+        )
+        .unwrap();
+        partial.validate().unwrap();
+        assert_eq!(
+            partial
+                .ordered_agents()
+                .iter()
+                .map(|agent| agent.name.as_str())
+                .collect::<Vec<_>>(),
+            ["Third", "First", "Second"]
+        );
+    }
+
+    fn load_toml(raw: &str) -> anyhow::Result<HivemindConfig> {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "hivemind-reply-order-{}-{}.toml",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::write(&path, raw)?;
+        let result = HivemindConfig::load(&path);
+        let _ = std::fs::remove_file(path);
+        result
+    }
+
+    #[test]
+    fn load_rejects_duplicate_and_unknown_reply_order_names() {
+        for (raw, expected) in [
+            (
+                r#"
+                    [conversation]
+                    reply_order = ["A", "A"]
+                    [[agents]]
+                    name = "A"
+                "#,
+                "contains duplicate agent",
+            ),
+            (
+                r#"
+                    [conversation]
+                    reply_order = ["Missing"]
+                    [[agents]]
+                    name = "A"
+                "#,
+                "references unknown agent",
+            ),
+        ] {
+            let error = load_toml(raw).unwrap_err().to_string();
+            assert!(
+                error.contains(expected),
+                "unexpected validation error: {error}"
+            );
+        }
     }
 }

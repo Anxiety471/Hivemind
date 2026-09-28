@@ -105,6 +105,17 @@ Each configured agent owns a separate runtime process/session. OMP keeps its liv
 
 Pi uses the configured working directory as its workspace. Its RPC stream is newline-delimited JSON; Hivemind waits for `agent_settled` and returns text blocks from the latest assistant `message_end`, rather than treating the prompt command response as completion.
 
+## Deterministic reply order
+
+The optional `[conversation]` table controls the order in which agents are listed and their replies are presented:
+
+~~~toml
+[conversation]
+reply_order = ["Albedo", "Maomao"]
+~~~
+
+Names listed there appear first in that order; any configured agents omitted from the list follow in their declaration order. If `reply_order` is omitted, declaration order is used. Names must be unique and refer to configured agents. Agents still receive each turn concurrently; only presentation is ordered.
+
 ## HTTP and WebSocket API
 
 Hivemind provides an async HTTP API and WebSocket interface for frontends and orchestration tools.

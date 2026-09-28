@@ -24,3 +24,8 @@ workspace = "."
 # model = "provider/model-id"
 # reasoning = "medium"
 # fast = false
+
+[conversation]
+# Explicit entries come first; omitted agents follow declaration order.
+reply_order = ["Maomao", "Albedo"]
+

@@ -132,16 +132,18 @@ done
             omp_binary: omp.binary("omp"),
             pi_binary: pi.binary("pi"),
         };
-        let agents = [
+        let configured = [
             agent("Pi A", "pi", &pi.workspace()),
             agent("OMP", "omp", &omp.workspace()),
             agent("Pi B", "pi", &pi.workspace()),
         ];
+        // The manager preserves the effective order selected by config.
+        let agents = [&configured[2], &configured[1], &configured[0]];
         let manager = AgentManager::start(&runtime, &agents).await.unwrap();
         let replies = manager.prompt_all("hello").await;
-        assert_eq!(replies[0].0, "Pi A");
+        assert_eq!(replies[0].0, "Pi B");
         assert_eq!(replies[1].0, "OMP");
-        assert_eq!(replies[2].0, "Pi B");
+        assert_eq!(replies[2].0, "Pi A");
         assert!(replies[0].1.as_ref().unwrap().starts_with("pi-"));
         assert_eq!(replies[1].1.as_ref().unwrap(), "omp fixture");
         assert!(replies[2].1.as_ref().unwrap().starts_with("pi-"));

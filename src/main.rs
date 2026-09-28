@@ -62,12 +62,13 @@ async fn chat(config: HivemindConfig) -> Result<()> {
         "{} agent(s) connected through configured harnesses.",
         config.agents.len()
     );
-    print_agents(&config.agents);
+    let agents = config.ordered_agents();
+    print_agents(&agents);
     println!("Type /help for commands.");
 
     // One live session per agent, started before the first prompt so a
     // startup failure reports which agent failed and why.
-    let manager = AgentManager::start(&config.runtime, &config.agents).await?;
+    let manager = AgentManager::start(&config.runtime, &agents).await?;
 
     // Every exit path — quit, EOF, read errors, and Ctrl-C — falls through
     // to the bounded shutdown below so no orphaned OMP processes remain.
@@ -109,7 +110,7 @@ async fn chat_loop(config: &HivemindConfig, manager: &AgentManager) -> Result<()
         match input {
             "/quit" | "/exit" => break,
             "/agents" => {
-                print_agents(&config.agents);
+                print_agents(&config.ordered_agents());
                 continue;
             }
             "/help" => {
@@ -130,7 +131,7 @@ async fn chat_loop(config: &HivemindConfig, manager: &AgentManager) -> Result<()
 async fn run_turn(manager: &AgentManager, input: &str) {
     let replies = manager.prompt_all(input).await;
 
-    for (name, result) in replies {
+    for (name, result) in &replies.replies {
         match result {
             Ok(response) => println!("\n{name}> {response}"),
             Err(error) => eprintln!("\n{name}> [error] {error:#}"),
@@ -138,7 +139,7 @@ async fn run_turn(manager: &AgentManager, input: &str) {
     }
 }
 
-fn print_agents(agents: &[AgentConfig]) {
+fn print_agents(agents: &[&AgentConfig]) {
     for agent in agents {
         println!("  - {} [{}]", agent.name, agent.runtime);
     }
