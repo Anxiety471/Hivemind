@@ -2,7 +2,7 @@
 
 Hivemind is an experimental, runtime-agnostic **meta-harness for persistent AI agents**.
 
-The first proof of concept is intentionally CLI-only: Hivemind owns the agents and conversation surface, while [oh-my-pi (OMP)](https://github.com/can1357/oh-my-pi) is the first supported execution harness.
+The first proof of concept is intentionally CLI-only: Hivemind owns the agents and conversation surface, while [oh-my-pi (OMP)](https://github.com/can1357/oh-my-pi) and [Pi](https://github.com/badlogic/pi-mono) provide agent execution runtimes.
 
 ## POC acceptance target
 
@@ -16,26 +16,33 @@ cargo run
 Then:
 
 ~~~text
-You> hello
+You> hello, remember the word pineapple
 
 Maomao> <reply produced by OMP>
 Albedo> <reply produced by OMP>
+
+You> what word did I ask you to remember?
+
+Maomao> <reply drawn from its own live session>
+Albedo> <reply drawn from its own live session>
 ~~~
 
-Both configured agents receive the same user turn independently through the OMP adapter and reply through Hivemind.
+Both configured agents receive every user turn independently through the OMP adapter and reply through Hivemind. Each agent keeps one live OMP session for the whole chat process, so later turns can draw on earlier context from that agent's own conversation.
 
 ## Requirements
 
-- Rust stable
-- `omp` available on `PATH`
-- OMP already configured with a working provider/model
+- `omp` on `PATH` for agents configured with `runtime = "omp"`
+- `pi` on `PATH` for agents configured with `runtime = "pi"`
+- Configure provider credentials for the selected runtime using that runtime's own setup; Hivemind does not authenticate providers itself.
 
-Verify OMP first:
+Check the installed CLI:
 
 ~~~bash
 omp --version
-omp -p "hello"
+pi --version
 ~~~
+
+Before using an agent, verify its runtime is configured with a working provider/model (`omp -p "hello"` for OMP); set up Pi authentication through Pi's own CLI instructions.
 
 ## Quick start
 
@@ -63,71 +70,76 @@ You can also use another config file:
 cargo run -- --config ./my-hive.toml chat
 ~~~
 
-## Per-agent runtime settings
+## Per-agent runtimes
 
-Each agent can choose its own OMP model, reasoning level, and fast-mode preference:
+Each agent selects a runtime independently. Hivemind supports OMP and Pi in one process:
 
 ~~~toml
+[runtime]
+omp_binary = "omp"
+pi_binary = "pi"
+
 [[agents]]
 name = "Maomao"
-runtime = "omp"
+runtime = "pi"
 workspace = "."
 system_prompt = "You are Maomao."
-
 model = "provider/model-id"
 reasoning = "high"
+
+[[agents]]
+name = "Albedo"
+runtime = "omp"
+workspace = "."
+system_prompt = "You are Albedo."
 fast = true
 ~~~
 
-All three settings are optional:
+`runtime` defaults to `"omp"` for older configurations. Both executable settings default to `omp` and `pi`. Workspace is used as the child process working directory. System prompts, model, and reasoning are agent settings; each adapter passes model/reasoning only through options supported by that runtime. In particular, `fast` is OMP-specific and setting it for a Pi agent is an explicit configuration error.
 
-- `model` maps to OMP's `--model`.
-- `reasoning` maps to OMP's `--thinking`. The older Hivemind key `thinking` is still accepted as an alias.
-- `fast` is tri-state:
-  - omitted: Hivemind leaves OMP's fast-mode state alone and uses normal headless mode.
-  - `true`: Hivemind starts OMP in RPC mode and explicitly enables fast mode before prompting.
-  - `false`: Hivemind starts OMP in RPC mode and explicitly disables fast mode before prompting.
+For OMP, `model` maps to `--model`, `reasoning` maps to `--thinking`, and the older Hivemind key `thinking` remains accepted as an alias. OMP `fast` is tri-state: omitted leaves OMP's default unchanged; `true` or `false` is explicitly applied once at session startup. If OMP reports fast mode is unavailable, startup fails with the agent-specific error.
 
-Fast mode is model/provider dependent. If OMP reports that fast mode is unavailable for the selected model, Hivemind surfaces that error for the affected agent.
+Pi runs in RPC mode with `--no-session`. Before each turn Hivemind requests a new Pi session, so an agent does not retain conversation context between user turns. Pi model and reasoning use its `--model` and `--thinking` options; its system prompt uses `--append-system-prompt`.
 
-Agents remain separate processes. Three configured OMP agents means three independent OMP invocations, each with its own model/reasoning/fast configuration.
+Each configured agent owns a separate runtime process/session. OMP keeps its live session across turns; Pi resets its conversation for every turn.
 
-## POC architecture
+Pi uses the configured working directory as its workspace. Its RPC stream is newline-delimited JSON; Hivemind waits for `agent_settled` and returns text blocks from the latest assistant `message_end`, rather than treating the prompt command response as completion.
+
+## Architecture
 
 ~~~text
                  Hivemind CLI
                       |
-               user input: hello
+             Runtime / Agent Manager
                       |
-              +-------+-------+
-              |               |
-           Maomao           Albedo
-              |               |
-        Runtime Adapter  Runtime Adapter
-              |               |
-             OMP             OMP
-              |               |
-          response         response
-              +-------+-------+
+        +-------------+-------------+
+        |                           |
+   Agent worker                Agent worker
+   owns OMP or Pi session      owns OMP or Pi session
+        |                           |
+   runtime RPC child           runtime RPC child
+        |                           |
+     response                   response
+        +-------------+-------------+
                       |
                    terminal
 ~~~
 
-The important boundary is that an **agent belongs to Hivemind, not to OMP**. OMP is merely a runtime adapter. Future adapters can support Codex, Claude Code, or another harness without changing agent identity or the CLI protocol.
+One worker task per agent owns its session, so prompts to one agent are always processed strictly in order while different agents work concurrently. A user turn fans out to all workers at once, and replies are printed in configuration order.
+
+The important boundary is that an **agent belongs to Hivemind, not to a runtime**. OMP and Pi are runtime adapters behind the same `HarnessSession` (`prompt` / `shutdown`) boundary; runtime selection happens per agent.
 
 ## Current limitations
 
-This is deliberately a narrow POC:
+This remains a deliberately narrow CLI:
 
-- OMP is the only runtime.
-- Each turn still gets a fresh OMP process.
-- Agents without an explicit `fast` setting use OMP's headless text mode.
-- Agents with an explicit `fast` setting use a disposable OMP RPC process so Hivemind can set fast mode deterministically.
-- Hivemind does not yet persist memory or task history.
-- Responses are collected after each harness invocation rather than streamed token-by-token.
-- Agent-to-agent messaging comes after this first user-to-agents acceptance path.
+- Pi starts a fresh RPC session before each turn; cross-turn conversation context is intentionally not retained.
+- If a runtime process fails mid-turn, Hivemind reports an agent-attributed error rather than pretending the failed conversation continued.
+- Hivemind does not persist memory or task history.
+- Responses are collected after each turn rather than streamed token-by-token.
+- Agent-to-agent messaging is not implemented.
 
-The next RPC step is keeping a per-agent OMP process alive across turns so Hivemind can own persistent sessions and normalized runtime events without changing the runtime adapter contract.
+Hivemind eagerly starts one process per configured agent and shuts sessions down on exit, avoiding orphaned runtime processes.
 
 ## License
 

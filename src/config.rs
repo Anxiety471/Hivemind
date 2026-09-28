@@ -15,12 +15,15 @@ pub struct HivemindConfig {
 pub struct RuntimeConfig {
     #[serde(default = "default_omp_binary")]
     pub omp_binary: String,
+    #[serde(default = "default_pi_binary")]
+    pub pi_binary: String,
 }
 
 impl Default for RuntimeConfig {
     fn default() -> Self {
         Self {
             omp_binary: default_omp_binary(),
+            pi_binary: default_pi_binary(),
         }
     }
 }
@@ -120,6 +123,9 @@ impl HivemindConfig {
 fn default_omp_binary() -> String {
     "omp".into()
 }
+fn default_pi_binary() -> String {
+    "pi".into()
+}
 
 fn default_runtime() -> String {
     "omp".into()
@@ -134,12 +140,44 @@ mod tests {
     use super::*;
 
     #[test]
+    fn runtime_binaries_default_for_legacy_and_new_configs() {
+        let legacy: HivemindConfig = toml::from_str(
+            r#"
+                [[agents]]
+                name = "Old"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(legacy.runtime.omp_binary, "omp");
+        assert_eq!(legacy.runtime.pi_binary, "pi");
+        assert_eq!(legacy.agents[0].runtime, "omp");
+
+        let configured: HivemindConfig = toml::from_str(
+            r#"
+                [runtime]
+                pi_binary = "/custom/pi"
+                [[agents]]
+                name = "Pi"
+                runtime = "pi"
+                [[agents]]
+                name = "OMP"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(configured.runtime.pi_binary, "/custom/pi");
+        assert_eq!(configured.runtime.omp_binary, "omp");
+        assert_eq!(configured.agents[0].runtime, "pi");
+        assert_eq!(configured.agents[1].runtime, "omp");
+    }
+
+    #[test]
     fn default_poc_contains_two_omp_agents() {
         let config = HivemindConfig::default_poc();
 
         assert_eq!(config.agents.len(), 2);
         assert!(config.agents.iter().all(|agent| agent.runtime == "omp"));
         assert_eq!(config.runtime.omp_binary, "omp");
+        assert_eq!(config.runtime.pi_binary, "pi");
     }
 
     #[test]
