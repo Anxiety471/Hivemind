@@ -35,7 +35,10 @@ pub async fn create_session(
         "pi" => Ok(Box::new(
             pi::PiSession::start(&runtime_config.pi_binary, agent).await?,
         )),
-        other => bail!("unsupported runtime '{other}' for agent '{}'", agent.name),
+        other => bail!(
+            "unsupported runtime '{other}' for agent '{}'; supported runtimes are pi and omp, so change this agent's runtime",
+            agent.name
+        ),
     }
 }
 

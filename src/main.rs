@@ -1,5 +1,6 @@
 mod config;
 mod runtime;
+mod setup;
 
 use std::path::PathBuf;
 
@@ -35,6 +36,9 @@ enum Commands {
 
     /// Start the interactive CLI.
     Chat,
+
+    /// Check local configuration and runtime executables.
+    Doctor,
 }
 
 #[tokio::main]
@@ -45,10 +49,15 @@ async fn main() -> Result<()> {
         Some(Commands::Init { force }) => {
             HivemindConfig::write_default(&cli.config, force)?;
             println!("Created {}", cli.config.display());
-            println!("Edit it if you want, then run: cargo run");
+            println!("Inspect it, configure a provider in Pi/OMP, then run: cargo run -- doctor");
+        }
+        Some(Commands::Doctor) => {
+            let config = HivemindConfig::load(&cli.config)?;
+            setup::doctor(&cli.config, &config)?;
         }
         Some(Commands::Chat) | None => {
             let config = HivemindConfig::load(&cli.config)?;
+            setup::validate(&config)?;
             chat(config).await?;
         }
     }

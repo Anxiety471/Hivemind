@@ -4,71 +4,49 @@ Hivemind is an experimental, runtime-agnostic **meta-harness for persistent AI a
 
 The first proof of concept is intentionally CLI-only: Hivemind owns the agents and conversation surface, while [oh-my-pi (OMP)](https://github.com/can1357/oh-my-pi) and [Pi](https://github.com/badlogic/pi-mono) provide agent execution runtimes.
 
-## POC acceptance target
-
-With OMP installed and authenticated:
-
-~~~bash
-cargo run -- init
-cargo run
-~~~
-
-Then:
-
-~~~text
-You> hello, remember the word pineapple
-
-Maomao> <reply produced by OMP>
-Albedo> <reply produced by OMP>
-
-You> what word did I ask you to remember?
-
-Maomao> <reply drawn from its own live session>
-Albedo> <reply drawn from its own live session>
-~~~
-
-Both configured agents receive every user turn independently through the OMP adapter and reply through Hivemind. Each agent keeps one live OMP session for the whole chat process, so later turns can draw on earlier context from that agent's own conversation.
-
-## Requirements
-
-- `omp` on `PATH` for agents configured with `runtime = "omp"`
-- `pi` on `PATH` for agents configured with `runtime = "pi"`
-- Configure provider credentials for the selected runtime using that runtime's own setup; Hivemind does not authenticate providers itself.
-
-Check the installed CLI:
-
-~~~bash
-omp --version
-pi --version
-~~~
-
-Before using an agent, verify its runtime is configured with a working provider/model (`omp -p "hello"` for OMP); set up Pi authentication through Pi's own CLI instructions.
-
 ## Quick start
+
+Prerequisites: Rust stable with Cargo, and at least one supported runtime
+(Pi or OMP) installed and authenticated with a provider through that
+runtime's own setup. Hivemind makes no provider API calls during setup.
 
 ~~~bash
 git clone https://github.com/Anxiety471/Hivemind.git
 cd Hivemind
 
+rustc --version
+cargo --version
+pi --version       # or: omp --version
+cargo build
 cargo run -- init
+~~~
+
+Inspect `hivemind.toml`: the starter config uses Pi for both example agents,
+so only Pi is required unless you change an agent's `runtime`. Configure a
+provider/model in the runtime itself, then check readiness and start:
+
+~~~bash
+cargo run -- doctor
 cargo run
 ~~~
 
-The generated `hivemind.toml` contains two example agents.
+`doctor` checks only runtimes referenced by configured agents, resolves
+binaries through `PATH` (or uses an explicitly configured executable path),
+and checks workspaces and conversation reply order. `hivemind.toml` is local
+and ignored by Git. `init` never overwrites it unless passed `--force`.
 
-Useful CLI commands while chatting:
+### Setup troubleshooting
 
-~~~text
-/agents   list configured agents
-/help     show commands
-/quit     exit
-~~~
-
-You can also use another config file:
-
-~~~bash
-cargo run -- --config ./my-hive.toml chat
-~~~
+- If `doctor` reports a missing runtime, install/configure it or set the
+  matching `[runtime]` binary to its executable path. Only runtimes referenced
+  by agents are checked.
+- Workspaces must exist as directories; update `workspace` or create the
+  directory before starting chat.
+- Provider credentials belong to Pi or OMP. Verify authentication with that
+  runtime's own setup; `doctor` checks executable presence without contacting a
+  provider.
+- Reply-order entries must be unique configured agent names. Omitted agents
+  are appended in declaration order.
 
 ## Per-agent runtimes
 

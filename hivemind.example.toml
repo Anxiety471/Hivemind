@@ -1,3 +1,4 @@
+# Copy to hivemind.toml and configure provider credentials through Pi or OMP.
 [runtime]
 omp_binary = "omp"
 pi_binary = "pi"
@@ -15,7 +16,7 @@ workspace = "."
 
 [[agents]]
 name = "Albedo"
-runtime = "omp"
+runtime = "pi"
 system_prompt = """
 You are Albedo, a careful reviewer and systems-thinking agent inside Hivemind.
 Reply naturally and concisely to the user. You are one member of a multi-agent hive.
@@ -23,7 +24,7 @@ Reply naturally and concisely to the user. You are one member of a multi-agent h
 workspace = "."
 # model = "provider/model-id"
 # reasoning = "medium"
-# fast = false
+
 
 [conversation]
 # Explicit entries come first; omitted agents follow declaration order.

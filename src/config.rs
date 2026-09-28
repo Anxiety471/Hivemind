@@ -55,8 +55,12 @@ pub struct AgentConfig {
 
 impl HivemindConfig {
     pub fn load(path: &Path) -> Result<Self> {
-        let raw = fs::read_to_string(path)
-            .with_context(|| format!("failed to read config {}", path.display()))?;
+        let raw = fs::read_to_string(path).with_context(|| {
+            format!(
+                "failed to read config {}; create it at this path with 'hivemind --config <path> init' or 'cargo run -- --config <path> init' (for the default path, use 'hivemind init' or 'cargo run -- init')",
+                path.display()
+            )
+        })?;
 
         let config: Self = toml::from_str(&raw)
             .with_context(|| format!("failed to parse config {}", path.display()))?;
@@ -68,26 +72,26 @@ impl HivemindConfig {
 
     fn validate(&self) -> Result<()> {
         if self.agents.is_empty() {
-            bail!("config contains no agents");
+            bail!("config contains no agents; add at least one [[agents]] entry or create a starter config with 'hivemind init'");
         }
 
         let mut agent_names = HashSet::with_capacity(self.agents.len());
         for agent in &self.agents {
             if agent.name.trim().is_empty() {
-                bail!("agent names cannot be empty");
+                bail!("[[agents]].name must not be empty; assign each agent a non-empty name");
             }
             if !agent_names.insert(agent.name.as_str()) {
-                bail!("duplicate agent name '{}'", agent.name);
+                bail!("duplicate agent name '{}'; rename one of the [[agents]] entries so every agent name is unique", agent.name);
             }
         }
 
         let mut reply_names = HashSet::with_capacity(self.conversation.reply_order.len());
         for name in &self.conversation.reply_order {
             if !reply_names.insert(name.as_str()) {
-                bail!("conversation.reply_order contains duplicate agent '{name}'");
+                bail!("conversation.reply_order contains duplicate agent '{name}'; use unique configured agent names");
             }
             if !agent_names.contains(name.as_str()) {
-                bail!("conversation.reply_order references unknown agent '{name}'");
+                bail!("conversation.reply_order references unknown agent '{name}'; use unique configured agent names that match [[agents]].name");
             }
         }
 
@@ -123,7 +127,9 @@ impl HivemindConfig {
 
         let raw = toml::to_string_pretty(&Self::default_poc())
             .context("failed to serialize default config")?;
-
+        let raw = format!(
+            "# Configure model per agent with model = \"provider/model-id\".\n# Configure reasoning with reasoning = \"high\" (or another runtime-supported level).\n# Provider credentials are managed by Pi/OMP and are never stored here.\n{raw}"
+        );
         fs::write(path, raw)
             .with_context(|| format!("failed to write config {}", path.display()))?;
 
@@ -133,11 +139,13 @@ impl HivemindConfig {
     pub fn default_poc() -> Self {
         Self {
             runtime: RuntimeConfig::default(),
-            conversation: ConversationConfig::default(),
+            conversation: ConversationConfig {
+                reply_order: vec!["Maomao".into(), "Albedo".into()],
+            },
             agents: vec![
                 AgentConfig {
                     name: "Maomao".into(),
-                    runtime: "omp".into(),
+                    runtime: "pi".into(),
                     system_prompt: concat!(
                         "You are Maomao, a software engineering agent inside Hivemind. ",
                         "Reply naturally and concisely to the user. ",
@@ -151,7 +159,7 @@ impl HivemindConfig {
                 },
                 AgentConfig {
                     name: "Albedo".into(),
-                    runtime: "omp".into(),
+                    runtime: "pi".into(),
                     system_prompt: concat!(
                         "You are Albedo, a careful reviewer and systems-thinking agent inside Hivemind. ",
                         "Reply naturally and concisely to the user. ",
@@ -219,13 +227,39 @@ mod tests {
     }
 
     #[test]
-    fn default_poc_contains_two_omp_agents() {
+    fn default_poc_contains_two_pi_agents_and_reply_order() {
         let config = HivemindConfig::default_poc();
 
         assert_eq!(config.agents.len(), 2);
-        assert!(config.agents.iter().all(|agent| agent.runtime == "omp"));
+        assert!(config.agents.iter().all(|agent| agent.runtime == "pi"));
+        assert_eq!(config.conversation.reply_order, ["Maomao", "Albedo"]);
         assert_eq!(config.runtime.omp_binary, "omp");
         assert_eq!(config.runtime.pi_binary, "pi");
+    }
+    #[test]
+    fn init_refuses_to_overwrite_without_force_and_force_replaces_config() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "hivemind-init-{}-{}.toml",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+
+        HivemindConfig::write_default(&path, false).unwrap();
+        let raw = fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("model = \"provider/model-id\""));
+        assert!(raw.contains("reasoning = \"high\""));
+        assert!(!raw.contains("api_key"));
+        assert_eq!(HivemindConfig::load(&path).unwrap().agents.len(), 2);
+
+        fs::write(&path, "user config").unwrap();
+        assert!(HivemindConfig::write_default(&path, false).is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "user config");
+        HivemindConfig::write_default(&path, true).unwrap();
+        assert_eq!(HivemindConfig::load(&path).unwrap().agents.len(), 2);
+        let _ = fs::remove_file(path);
     }
 
     #[test]
