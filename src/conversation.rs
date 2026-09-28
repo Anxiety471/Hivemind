@@ -167,6 +167,94 @@ pub trait AgentInvoker: Send + Sync {
     ) -> Result<String>;
 }
 
+/// Starts a fresh runtime process for every persona invocation and stops it
+/// after the reply, so no runtime session outlives a single prompt. Room
+/// continuity comes from the Context Pack, never from runtime memory.
+pub struct RuntimeInvoker {
+    runtime: crate::config::RuntimeConfig,
+    memory: Arc<MemoryService>,
+    room_id: String,
+    group_id: String,
+    events: Option<crate::events::EventBus>,
+}
+
+impl RuntimeInvoker {
+    pub fn new(
+        runtime: crate::config::RuntimeConfig,
+        memory: Arc<MemoryService>,
+        room_id: &str,
+        group_id: &str,
+    ) -> Self {
+        Self {
+            runtime,
+            memory,
+            room_id: room_id.to_owned(),
+            group_id: group_id.to_owned(),
+            events: None,
+        }
+    }
+
+    pub fn with_events(
+        runtime: crate::config::RuntimeConfig,
+        memory: Arc<MemoryService>,
+        room_id: &str,
+        group_id: &str,
+        events: crate::events::EventBus,
+    ) -> Self {
+        Self {
+            events: Some(events),
+            ..Self::new(runtime, memory, room_id, group_id)
+        }
+    }
+}
+
+#[async_trait]
+impl AgentInvoker for RuntimeInvoker {
+    async fn invoke(
+        &self,
+        instance_id: &str,
+        agent: &AgentConfig,
+        context_pack: &str,
+    ) -> Result<String> {
+        let caller = Caller::agent(
+            self.room_id.clone(),
+            self.group_id.clone(),
+            instance_id,
+            &agent.name,
+            &agent.name,
+        );
+        let epoch = self
+            .memory
+            .start_runtime_epoch(
+                &caller,
+                agent.runtime.trim(),
+                serde_json::json!({ "kind": "invocation", "agent": agent.name }),
+            )
+            .context("recording runtime epoch start")?;
+        let manager = crate::runtime::AgentManager::start_lazy_with_events(
+            &self.runtime,
+            &[agent],
+            self.events.clone(),
+        );
+        let reply = manager.prompt_agent(&agent.name, context_pack).await;
+        manager.shutdown().await;
+        let ended_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        let closed = self.memory.end_runtime_epoch(&caller, &epoch.id, ended_at);
+        match (reply, closed) {
+            (reply, Ok(_)) => reply,
+            (Ok(_), Err(close_error)) => {
+                Err(anyhow::anyhow!("failed to close runtime epoch: {close_error:#}"))
+            }
+            (Err(reply_error), Err(close_error)) => Err(anyhow::anyhow!(
+                "{reply_error:#} (also failed to close runtime epoch: {close_error:#})"
+            )),
+        }
+    }
+}
+
 pub trait ContextStore: Send + Sync {
     fn directory(&self) -> &std::path::Path;
     fn load_room(&self, room: &str) -> Result<RoomHistory>;
@@ -1641,8 +1729,8 @@ fn execute_memory_tool(
 }
 
 /// Context pack plus this turn's tool exchange. Every re-prompt restates the
-/// pack and this turn's exchange in full, so it stays self-contained even
-/// though the runtime session it is sent to is reused across prompts.
+/// pack and this turn's exchange in full, so it stays self-contained: each
+/// re-prompt reaches a freshly started runtime with no memory of the last one.
 fn tool_prompt(pack: &str, exchange: &[(String, String)]) -> String {
     if exchange.is_empty() {
         return pack.to_owned();
@@ -1792,8 +1880,8 @@ fn execute_with_optional_authorization(
 /// Adapter-independent memory tool loop: run the invoker, execute at most
 /// [`MAX_MEMORY_ACTIONS`] Hivemind tool actions, re-prompt with each result,
 /// and return the first plain-text answer. Runtime epochs are recorded per
-/// invocation by the core's `ManagedInvoker` around `prompt_agent` — not by
-/// this loop, and not around a process spawn/shutdown.
+/// invocation by [`RuntimeInvoker`], which also starts and stops a fresh
+/// runtime process around each prompt — not by this loop.
 async fn invoke_with_memory(
     invoker: &dyn AgentInvoker,
     instance_id: &str,

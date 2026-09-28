@@ -6,7 +6,6 @@ use async_trait::async_trait;
 
 use crate::config::{AgentConfig, RuntimeConfig};
 
-#[allow(unused_imports)]
 pub use manager::{AgentManager, PromptAllResult};
 
 /// A runtime-agnostic live session bound to a single agent. Its turn-owned

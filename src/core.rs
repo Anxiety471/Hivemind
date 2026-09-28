@@ -7,14 +7,14 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use async_trait::async_trait;
 
 use crate::{
     config::{AgentConfig, ConversationMode, HivemindConfig},
-    conversation::{AgentInvoker, ConversationCoordinator, Participant, TurnReply, TurnRequest},
+    conversation::{
+        AgentInvoker, ConversationCoordinator, Participant, RuntimeInvoker, TurnReply, TurnRequest,
+    },
     events::{DomainEventKind, EventBus},
-    memory::{Caller, MemoryService},
-    runtime::AgentManager,
+    memory::MemoryService,
 };
 
 /// Process-level owner of configuration, memory, conversations, events, and API state.
@@ -26,60 +26,6 @@ pub struct HivemindCore {
     events: EventBus,
     config_path: PathBuf,
     shutting_down: AtomicBool,
-    /// Started lazily on the first turn; construction never spawns a runtime.
-    runtime: tokio::sync::Mutex<Option<Arc<AgentManager>>>,
-}
-
-/// Routes coordinator invocations to the core-owned persistent sessions and
-/// records one runtime epoch per invocation, scoped to the routed room and
-/// agent instance (never model input).
-struct ManagedInvoker {
-    manager: Arc<AgentManager>,
-    memory: Arc<MemoryService>,
-    room_id: String,
-    group_id: String,
-}
-
-#[async_trait]
-impl AgentInvoker for ManagedInvoker {
-    async fn invoke(
-        &self,
-        instance_id: &str,
-        agent: &AgentConfig,
-        context_pack: &str,
-    ) -> Result<String> {
-        let caller = Caller::agent(
-            self.room_id.clone(),
-            self.group_id.clone(),
-            instance_id,
-            &agent.name,
-            &agent.name,
-        );
-        let epoch = self
-            .memory
-            .start_runtime_epoch(
-                &caller,
-                agent.runtime.trim(),
-                serde_json::json!({ "kind": "session", "agent": agent.name }),
-            )
-            .context("recording runtime epoch start")?;
-        let reply = self.manager.prompt_agent(&agent.name, context_pack).await;
-        let ended_at = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64;
-        let closed = self.memory.end_runtime_epoch(&caller, &epoch.id, ended_at);
-        match (reply, closed) {
-            (Ok(text), Ok(_)) => Ok(text),
-            (Err(reply_error), Ok(_)) => Err(reply_error),
-            (Ok(_), Err(close_error)) => {
-                Err(anyhow::anyhow!("failed to close runtime epoch: {close_error:#}"))
-            }
-            (Err(reply_error), Err(close_error)) => Err(anyhow::anyhow!(
-                "{reply_error:#} (also failed to close runtime epoch: {close_error:#})"
-            )),
-        }
-    }
 }
 
 #[derive(Clone)]
@@ -126,7 +72,6 @@ impl HivemindCore {
         Ok(Self {
             config, agents, memory, conversation, events, config_path,
             shutting_down: AtomicBool::new(false),
-            runtime: tokio::sync::Mutex::new(None),
         })
     }
 
@@ -138,31 +83,14 @@ impl HivemindCore {
     pub fn config_path(&self) -> &Path { &self.config_path }
 
     pub async fn turn(&self, request: CoreTurnRequest<'_>) -> Result<Vec<TurnReply>> {
-        let manager = self.runtime_manager().await?;
-        let invoker = Arc::new(ManagedInvoker {
-            manager,
-            memory: self.memory.clone(),
-            room_id: request.room.to_owned(),
-            group_id: request.group_id.to_owned(),
-        });
+        let invoker = Arc::new(RuntimeInvoker::with_events(
+            self.config.runtime.clone(),
+            self.memory.clone(),
+            request.room,
+            request.group_id,
+            self.events.clone(),
+        ));
         self.turn_with_invoker(request, invoker).await
-    }
-
-    async fn runtime_manager(&self) -> Result<Arc<AgentManager>> {
-        let mut slot = self.runtime.lock().await;
-        anyhow::ensure!(
-            !self.shutting_down.load(Ordering::Acquire),
-            "Hivemind core is shutting down"
-        );
-        Ok(slot
-            .get_or_insert_with(|| {
-                Arc::new(AgentManager::start_lazy_with_events(
-                    &self.config.runtime,
-                    &self.config.ordered_agents(),
-                    Some(self.events.clone()),
-                ))
-            })
-            .clone())
     }
 
     pub async fn turn_with_invoker(
@@ -187,40 +115,13 @@ impl HivemindCore {
             .await
     }
 
-    /// Run a single turn with lazy workers limited to its prepared participants.
-    /// The temporary manager is always shut down before this method returns.
-    pub async fn turn_one_shot(&self, request: CoreTurnRequest<'_>) -> Result<Vec<TurnReply>> {
-        let agents = request
-            .members
-            .iter()
-            .map(|member| &member.agent)
-            .collect::<Vec<_>>();
-        let manager = Arc::new(AgentManager::start_lazy_with_events(
-            &self.config.runtime,
-            &agents,
-            Some(self.events.clone()),
-        ));
-        let invoker = Arc::new(ManagedInvoker {
-            manager: manager.clone(),
-            memory: self.memory.clone(),
-            room_id: request.room.to_owned(),
-            group_id: request.group_id.to_owned(),
-        });
-        let result = self.turn_with_invoker(request, invoker).await;
-        manager.shutdown().await;
-        result
-    }
-
-    /// Idempotently stop the core and every runtime session it started.
+    /// Idempotently stop the core. Runtimes never outlive an invocation, so
+    /// there is no runtime session left to stop here.
     pub async fn shutdown(&self) {
         if self.shutting_down.swap(true, Ordering::AcqRel) {
             return;
         }
         self.events.publish(DomainEventKind::CoreShuttingDown);
-        let manager = self.runtime.lock().await.take();
-        if let Some(manager) = manager {
-            manager.shutdown().await;
-        }
     }
 }
 
@@ -313,7 +214,7 @@ printf '%s stopped\n' "$agent" >> __LOG__
     }
 
     #[tokio::test]
-    async fn turns_reuse_one_runtime_and_shutdown_stops_it_idempotently() {
+    async fn each_turn_starts_and_stops_a_fresh_runtime_and_shutdown_is_idempotent() {
         let directory = TestDirectory::new();
         let (core, lifecycle) = fake_core(&directory);
         let mut events = core.events().subscribe();
@@ -324,7 +225,8 @@ printf '%s stopped\n' "$agent" >> __LOG__
             assert_eq!(replies.len(), 1);
             assert_eq!(replies[0].result.as_ref().unwrap(), "Maomao reply");
         }
-        assert_eq!(lines(&lifecycle), ["Maomao started", "Maomao prompt", "Maomao prompt"]);
+        let per_turn = ["Maomao started", "Maomao prompt", "Maomao stopped"];
+        assert_eq!(lines(&lifecycle), [per_turn, per_turn].concat());
 
         core.shutdown().await;
         core.shutdown().await;
@@ -346,61 +248,12 @@ printf '%s stopped\n' "$agent" >> __LOG__
                 _ => {}
             }
         }
-        assert_eq!((started, stopped, shutting_down), (1, 1, 1));
-        assert_eq!(
-            lines(&lifecycle),
-            ["Maomao started", "Maomao prompt", "Maomao prompt", "Maomao stopped"]
-        );
+        assert_eq!((started, stopped, shutting_down), (2, 2, 1));
+        assert_eq!(lines(&lifecycle).len(), 6, "shutdown has no runtime left to stop");
 
         let error = solo_turn(&core, "room-three", "late").await.unwrap_err();
         assert!(error.to_string().contains("shutting down"), "{error:#}");
-        assert_eq!(lines(&lifecycle).len(), 4, "no runtime restarted after shutdown");
-    }
-
-    #[tokio::test]
-    async fn one_shot_turn_shuts_down_its_manager_before_return() {
-        let directory = TestDirectory::new();
-        let (core, lifecycle) = fake_core(&directory);
-        let mut events = core.events().subscribe();
-        let members = [Participant {
-            agent: core.agents().list()[0].clone(),
-            role: None,
-        }];
-        let replies = core
-            .turn_one_shot(CoreTurnRequest {
-                room: "one-shot",
-                room_name: "one-shot",
-                group_id: "",
-                mode: ConversationMode::Broadcast,
-                members: &members,
-                input: "fresh invocation",
-            })
-            .await
-            .unwrap();
-        assert_eq!(replies.len(), 1);
-        assert_eq!(replies[0].result.as_ref().unwrap(), "Maomao reply");
-        assert_eq!(
-            lines(&lifecycle),
-            ["Maomao started", "Maomao prompt", "Maomao stopped"]
-        );
-
-        let mut started = 0;
-        let mut stopped = 0;
-        while let Ok(event) = events.try_recv() {
-            match event.payload {
-                DomainEventKind::RuntimeStarted { agent_id, .. } => {
-                    assert_eq!(agent_id, "Maomao");
-                    started += 1;
-                }
-                DomainEventKind::RuntimeStopped { agent_id, .. } => {
-                    assert_eq!(agent_id, "Maomao");
-                    stopped += 1;
-                }
-                _ => {}
-            }
-        }
-        assert_eq!((started, stopped), (1, 1));
-        core.shutdown().await;
+        assert_eq!(lines(&lifecycle).len(), 6, "no runtime started after shutdown");
     }
 
     #[tokio::test]
@@ -449,17 +302,17 @@ printf '%s stopped\n' "$agent" >> __LOG__
         solo_turn(&core, "epoch-room", "second").await.unwrap();
         core.shutdown().await;
 
-        let caller = Caller::agent("epoch-room", "", "epoch-room/Maomao", "Maomao", "Maomao");
+        let caller = crate::memory::Caller::agent("epoch-room", "", "epoch-room/Maomao", "Maomao", "Maomao");
         let epochs = core.memory().runtime_epochs(&caller, 10).unwrap();
         assert_eq!(epochs.len(), 2, "one epoch per invocation");
         for epoch in &epochs {
             assert_eq!(epoch.runtime, "pi");
             assert_eq!(epoch.instance_id, "epoch-room/Maomao");
             assert_eq!(epoch.room_id, "epoch-room");
-            assert_eq!(epoch.metadata.get("kind").and_then(|v| v.as_str()), Some("session"));
+            assert_eq!(epoch.metadata.get("kind").and_then(|v| v.as_str()), Some("invocation"));
             assert!(epoch.ended_at.is_some_and(|ended| ended >= epoch.started_at));
         }
-        let other_room = Caller::agent("other-room", "", "other-room/Maomao", "Maomao", "Maomao");
+        let other_room = crate::memory::Caller::agent("other-room", "", "other-room/Maomao", "Maomao", "Maomao");
         assert!(core.memory().runtime_epochs(&other_room, 10).unwrap().is_empty());
     }
 
@@ -521,10 +374,150 @@ printf '%s stopped\n' "$agent" >> __LOG__
             .collect::<Vec<_>>();
         assert_eq!(names, expected);
         assert_eq!(names, ["Albedo", "Maomao"]);
-        assert!(core.runtime.try_lock().unwrap().is_none(), "no runtime at construction");
         assert!(directory.0.join(".hivemind/memory.sqlite3").exists());
         assert!(!directory.0.join("missing-pi").exists());
         assert!(!directory.0.join("missing-omp").exists());
         core.shutdown().await;
+    }
+
+    /// Two-agent fake pi (Albedo ordered first but replies only after the test
+    /// creates `release_marker`, i.e. after Maomao completed).
+    fn slow_first_pair_core(directory: &TestDirectory, release_marker: &Path) -> HivemindCore {
+        let binary = directory.0.join("fake-pi-pair");
+        let script = r#"#!/bin/sh
+MARK='__MARK__'
+case "$*" in
+  *"You are Albedo"*) agent=Albedo; wait_mark=1 ;;
+  *) agent=Maomao; wait_mark=0 ;;
+esac
+while IFS= read -r request; do
+  case "$request" in
+    *'"type":"new_session"'*)
+      printf '%s\n' '{"type":"response","command":"new_session","success":true}'
+      ;;
+    *'"type":"prompt"'*)
+      if [ "$wait_mark" = 1 ]; then
+        i=0; while [ ! -e "$MARK" ] && [ $i -lt 2000 ]; do sleep 0.01; i=$((i+1)); done
+      fi
+      printf '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"%s reply"}]}}\n' "$agent"
+      printf '%s\n' '{"type":"agent_settled"}'
+      ;;
+  esac
+done
+"#;
+        let script = script.replace("__MARK__", &release_marker.display().to_string());
+        fs::write(&binary, script).unwrap();
+        let mut permissions = fs::metadata(&binary).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&binary, permissions).unwrap();
+        let mut config = HivemindConfig::default_poc();
+        config.conversation.reply_order = vec!["Albedo".into(), "Maomao".into()];
+        config.runtime.pi_binary = binary.display().to_string();
+        for agent in &mut config.agents {
+            agent.workspace = directory.0.display().to_string();
+        }
+        HivemindCore::new(config, directory.0.join("hivemind.toml")).unwrap()
+    }
+
+    #[tokio::test]
+    async fn broadcast_presentation_follows_configured_order_despite_completion_order() {
+        let directory = TestDirectory::new();
+        let release_marker = directory.0.join("albedo-release");
+        let core = slow_first_pair_core(&directory, &release_marker);
+        let mut events = core.events().subscribe();
+        let mut watcher = core.events().subscribe();
+        let members = core
+            .agents()
+            .list()
+            .into_iter()
+            .map(|agent| Participant { agent, role: None })
+            .collect::<Vec<_>>();
+        let turn = core.turn(CoreTurnRequest {
+            room: "order-room",
+            room_name: "Order room",
+            group_id: "",
+            mode: ConversationMode::Broadcast,
+            members: &members,
+            input: "both answer",
+        });
+        let release = async {
+            loop {
+                let event = watcher.recv().await.unwrap();
+                if let DomainEventKind::AgentReplyCompleted { agent_id, .. } = &event.payload {
+                    if agent_id == "Maomao" {
+                        fs::write(&release_marker, "").unwrap();
+                        break;
+                    }
+                }
+            }
+        };
+        let (replies, ()) = tokio::join!(turn, release);
+        let replies = replies.unwrap();
+        core.shutdown().await;
+
+        let presented = replies.iter().map(|reply| reply.name.as_str()).collect::<Vec<_>>();
+        assert_eq!(presented, ["Albedo", "Maomao"]);
+        assert_eq!(replies[0].result.as_deref(), Ok("Albedo reply"));
+        assert_eq!(replies[1].result.as_deref(), Ok("Maomao reply"));
+        let mut completed = Vec::new();
+        while let Ok(event) = events.try_recv() {
+            if let DomainEventKind::AgentReplyCompleted { agent_id, .. } = event.payload {
+                completed.push(agent_id);
+            }
+        }
+        assert_eq!(completed, ["Maomao", "Albedo"], "slow first agent completes last");
+    }
+
+    #[tokio::test]
+    async fn shutdown_after_partial_startup_is_safe_repeatable_and_final() {
+        let directory = TestDirectory::new();
+        let (working, lifecycle) = fake_core(&directory);
+        let mut config = working.config().clone();
+        working.shutdown().await;
+        let mut broken = config.agents[0].clone();
+        broken.name = "Broken".into();
+        broken.workspace = directory.0.join("missing-workspace").display().to_string();
+        config.agents.insert(0, broken);
+        let core = HivemindCore::new(config, directory.0.join("hivemind.toml")).unwrap();
+        let mut events = core.events().subscribe();
+        let members = core
+            .agents()
+            .list()
+            .into_iter()
+            .map(|agent| Participant { agent, role: None })
+            .collect::<Vec<_>>();
+        let request = || CoreTurnRequest {
+            room: "partial-room",
+            room_name: "Partial room",
+            group_id: "",
+            mode: ConversationMode::Broadcast,
+            members: &members,
+            input: "partial startup",
+        };
+        let replies = core.turn(request()).await.unwrap();
+        assert!(replies.iter().any(|reply| reply.name == "Broken" && reply.result.is_err()));
+
+        core.shutdown().await;
+        core.shutdown().await;
+        assert_eq!(lines(&lifecycle), ["Maomao started", "Maomao prompt", "Maomao stopped"]);
+
+        let error = core.turn(request()).await.unwrap_err();
+        assert!(error.to_string().contains("shutting down"), "{error:#}");
+        assert_eq!(lines(&lifecycle).len(), 3, "no runtime spawned after shutdown");
+
+        let mut started = Vec::new();
+        let mut stopped = Vec::new();
+        let mut shutting_down = 0;
+        while let Ok(event) = events.try_recv() {
+            match event.payload {
+                DomainEventKind::RuntimeStarted { agent_id, .. } => started.push(agent_id),
+                DomainEventKind::RuntimeStopped { agent_id, .. } => stopped.push(agent_id),
+                DomainEventKind::CoreShuttingDown => shutting_down += 1,
+                _ => {}
+            }
+        }
+        assert_eq!(started, ["Maomao"]);
+        assert_eq!(stopped, ["Maomao"]);
+        assert_eq!(shutting_down, 1);
     }
 }

@@ -167,17 +167,16 @@ older Hivemind key `thinking` remains accepted as an alias. OMP `fast` is
 tri-state: omitted leaves its default unchanged; `true` or `false` is applied
 once at session startup. `fast` is OMP-specific.
 
-Shell `ask`/`all` commands construct a core per command, resolve and validate
-their participants before runtime startup, then use a fresh lazy manager
-restricted to those participants. The manager and core shut down when the
-one-shot command completes. Interactive `chat` instead shares one core for the
-whole session: Hivemind starts one runtime session per agent lazily on that
-agent's first prompt, reuses it across later prompts and main/solo/group
-routes, and shuts it down on chat exit, EOF, Ctrl-C, or error. Hivemind's
-SQLite room history remains canonical, while a live persona session may carry
-runtime context across rooms until it shuts down. Pi uses RPC mode with
-`--no-session`; Hivemind waits for `agent_settled` and returns text blocks from
-the latest assistant `message_end`.
+Every persona invocation — in shell `ask`/`all`, interactive `chat` (main,
+solo, group, `/ask`, `/all`), and any `HivemindCore::turn` caller — starts a
+fresh Pi or OMP runtime process for that persona, sends one Context Pack, and
+stops the process after the reply. No runtime session is shared across
+personas, turns, or rooms; this applies equally to Pi and OMP. Continuity
+comes only from Hivemind's SQLite room history, state, and summary, which are
+rebuilt into each Context Pack. Participants are resolved and validated before
+any runtime starts. Pi uses RPC mode with `--no-session`; Hivemind waits for
+`agent_settled` and returns text blocks from the latest assistant
+`message_end`.
 
 Canonical history, memory, and runtime epochs live in `.hivemind/memory.sqlite3`
 next to the selected config file: rooms, turns, and messages (L7), scoped
@@ -187,19 +186,19 @@ snapshot are written to SQLite, and the JSON file is removed only after that
 migration succeeds. `.hivemind/context/` now holds only room turn-lock files
 and any not-yet-migrated legacy history. `[context]` configures the recent
 raw-turn window, summary size/refresh cadence, and bounded approximate context
-budget. `runtime_rotate_tokens` is retained and validated, but runtime-token
-accounting and rotation are not implemented.
+budget. `runtime_rotate_tokens` is validated but has no operational effect,
+because runtimes are already replaced on every invocation.
+
 ## Application core and event stream
 
 `serve`, `ask`, `all`, and interactive `chat` all construct the library
 `HivemindCore`, which owns the ordered persona registry, one SQLite-backed
 memory service, one durable conversation coordinator, and a bounded
 process-local event bus. Interactive `chat` shares one core for the whole
-session. Core turn requests lazily start persona workers on first use and
-reuse them across later turns and routes until core shutdown; this applies to
-embedding callers as well as any API route that submits turns. Shell `ask` and
-`all` instead create a one-shot manager restricted to the resolved
-participants, then shut it down with the command's core. The API currently
+session. Each core turn starts a fresh runtime per persona invocation and
+stops it after the reply (emitting `runtime.started`/`runtime.stopped` events),
+so core shutdown has no runtime session left to stop. Shell `ask` and `all`
+construct a core per command. The API currently
 exposes health, info, agent listing, and WebSocket event streaming; it does
 not yet route chat turns. Construction and health/info/agent listing do not
 start Pi or OMP. Runtime lifecycle and conversation events are ephemeral
@@ -452,36 +451,30 @@ and observe the matching `system.pong` reply.
 ## Architecture
 
 ~~~text
-                   Hivemind CLI
-                        |
-                  HivemindCore
-                        |
-               Conversation Coordinator
-                        |
-          +-------------+------------------+
-          |                                |
-   Interactive chat                  CLI one-shot
-          |                                |
-   one core per session              one core per command
-          |                                |
-   one runtime session per agent    one runtime session per agent
-   (started lazily, reused          (started lazily, stopped with
-    across prompts)                  the command)
-          |                                |
-   OMP or Pi RPC process            OMP or Pi RPC process
-          |                                |
-          +---------------+----------------+
-                          |
-              response stored in SQLite room history
-                          |
-                next prompt rehydrates context
+        Hivemind CLI (chat / ask / all)      embedding callers
+                        |                          |
+                        +------------+-------------+
+                                     |
+                               HivemindCore
+                     (one per chat session / command)
+                                     |
+                         ConversationCoordinator
+          (SQLite room history, state, summary via MemoryService)
+                                     |
+                     Context Pack per persona invocation
+                                     |
+                              RuntimeInvoker
+          start fresh OMP or Pi process -> prompt -> stop process
+                                     |
+                    reply stored in SQLite room history
+                                     |
+                  next invocation rehydrates from SQLite
 ~~~
 
-A core starts one runtime session per agent lazily on that agent's first prompt
-and reuses it for later prompts; it stops every session it started on shutdown.
-A command's sessions therefore end with the command and chat's sessions end
-with the chat, and runtime state is disposable either way: every prompt is
-rebuilt from Hivemind's durable SQLite transcript, summary, and shared state.
+Every persona invocation starts a fresh Pi or OMP process and stops it after
+the reply; no runtime session outlives an invocation, so runtime state is
+disposable: every prompt is rebuilt from Hivemind's durable SQLite transcript,
+summary, and shared state.
 Broadcast invocations run concurrently; discussion invokes personas in
 effective reply order and includes earlier same-turn replies. Room turns are
 serialized by the room lock.
@@ -493,10 +486,9 @@ The important boundary is that an **agent belongs to Hivemind, not to a runtime*
 
 Hivemind is intentionally focused on core harness and interface foundations:
 
-- A core starts one Pi or OMP RPC session per agent lazily on that agent's
-  first prompt and reuses it for later prompts; Hivemind still reconstructs
-  cross-turn context from the durable room transcript, summary, and shared
-  state, so runtime state stays disposable.
+- Every persona invocation starts and stops its own Pi or OMP process, which
+  adds process startup latency per reply; cross-turn context comes only from
+  the durable room transcript, summary, and shared state.
 - If a runtime process fails mid-turn, Hivemind reports an agent-attributed error rather than pretending the failed conversation continued.
 - Memory search is SQLite FTS5 full-text matching, not semantic/embedding search; no vector database is used.
 - Responses are collected after each turn rather than streamed token-by-token.

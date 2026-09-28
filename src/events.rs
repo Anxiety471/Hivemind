@@ -94,4 +94,19 @@ mod tests {
         }
         assert!(matches!(receiver.try_recv(), Err(TryRecvError::Lagged(skipped)) if skipped > 0));
     }
+
+    #[test]
+    fn dropping_one_subscriber_leaves_others_receiving() {
+        let bus = EventBus::new();
+        let dropped = bus.subscribe();
+        let mut kept = bus.subscribe();
+        bus.publish(DomainEventKind::CoreStarted);
+        drop(dropped);
+        bus.publish(DomainEventKind::CoreShuttingDown);
+        assert_eq!(kept.try_recv().unwrap().sequence, 1);
+        let second = kept.try_recv().unwrap();
+        assert_eq!(second.sequence, 2);
+        assert!(matches!(second.payload, DomainEventKind::CoreShuttingDown));
+        assert!(matches!(kept.try_recv(), Err(TryRecvError::Empty)));
+    }
 }

@@ -326,7 +326,7 @@ async fn ask(
     message: &str,
 ) -> Result<()> {
     let core = HivemindCore::new(config.clone(), config_path)?;
-    let result = route_turn_one_shot(&core, config, &Route::Solo(name.to_owned()), message)
+    let result = route_turn(&core, config, &Route::Solo(name.to_owned()), message)
         .await
         .and_then(print_replies);
     core.shutdown().await;
@@ -367,7 +367,7 @@ async fn all(
     message: &str,
 ) -> Result<()> {
     let core = HivemindCore::new(config.clone(), config_path)?;
-    let result = route_turn_one_shot(&core, config, &Route::Main, message)
+    let result = route_turn(&core, config, &Route::Main, message)
         .await
         .and_then(print_replies);
     core.shutdown().await;
@@ -432,39 +432,17 @@ async fn route_turn(
     route: &Route,
     message: &str,
 ) -> Result<ReplyBatch> {
-    dispatch_route_turn(core, config, route, message, false).await
-}
-
-async fn route_turn_one_shot(
-    core: &HivemindCore,
-    config: &HivemindConfig,
-    route: &Route,
-    message: &str,
-) -> Result<ReplyBatch> {
-    dispatch_route_turn(core, config, route, message, true).await
-}
-
-async fn dispatch_route_turn(
-    core: &HivemindCore,
-    config: &HivemindConfig,
-    route: &Route,
-    message: &str,
-    one_shot: bool,
-) -> Result<ReplyBatch> {
     let (room_id, room_name, group_id, mode, participants) = route_identity(config, route)?;
-    let request = CoreTurnRequest {
-        room: &room_id,
-        room_name: &room_name,
-        group_id: &group_id,
-        mode,
-        members: &participants,
-        input: message,
-    };
-    let replies = if one_shot {
-        core.turn_one_shot(request).await?
-    } else {
-        core.turn(request).await?
-    };
+    let replies = core
+        .turn(CoreTurnRequest {
+            room: &room_id,
+            room_name: &room_name,
+            group_id: &group_id,
+            mode,
+            members: &participants,
+            input: message,
+        })
+        .await?;
     Ok(ReplyBatch {
         replies: replies
             .into_iter()
@@ -922,7 +900,10 @@ printf '%s stopped\n' "$agent" >> __LOG__
         core.shutdown().await;
         assert_eq!(
             fake.log_lines(),
-            ["Albedo started", "Albedo prompt", "Albedo prompt", "Albedo stopped"]
+            [
+                "Albedo started", "Albedo prompt", "Albedo stopped",
+                "Albedo started", "Albedo prompt", "Albedo stopped",
+            ]
         );
         let history = core.conversation().room_history("main").unwrap();
         assert_eq!(history.events.len(), 3);
@@ -1075,7 +1056,23 @@ done
 
 
     #[tokio::test]
-    async fn one_core_reuses_runtimes_across_routes_and_rehydrates_room_context() {
+    async fn cli_and_api_agent_listings_match_the_core_registry() {
+        let directory = std::env::temp_dir().join(format!("hivemind-cli-listing-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let mut config = HivemindConfig::default_poc();
+        config.conversation.reply_order = vec!["Albedo".into(), "Maomao".into()];
+        let core = HivemindCore::new(config, directory.join("hivemind.toml")).unwrap();
+        let registry = core.agents().list().into_iter().map(|agent| agent.name).collect::<Vec<_>>();
+        let cli = effective_agents(core.config()).into_iter().map(|agent| agent.name.clone()).collect::<Vec<_>>();
+        assert_eq!(registry, ["Albedo", "Maomao"]);
+        assert_eq!(cli, registry);
+        assert_eq!(route_names(core.config(), &Route::Main).unwrap(), registry);
+        core.shutdown().await;
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[tokio::test]
+    async fn cli_starts_and_stops_a_fresh_runtime_per_invocation_and_rehydrates_room_context() {
         let fake = FakePi::new();
         let mut config = fake.config();
         config.groups.push(hivemind::config::GroupConfig {
@@ -1110,9 +1107,9 @@ done
                 .count()
         };
         for (agent, prompts) in [("Albedo", 5), ("Maomao", 1)] {
-            assert_eq!(count(agent, "started"), 1);
+            assert_eq!(count(agent, "started"), prompts);
             assert_eq!(count(agent, "prompt"), prompts);
-            assert_eq!(count(agent, "stopped"), 1);
+            assert_eq!(count(agent, "stopped"), prompts);
         }
 
         let prompts = fake.prompt_lines();
@@ -1200,7 +1197,7 @@ done
         assert!(unknown.contains("no configured agent named 'Missing'"));
         assert!(fake.log_lines().is_empty());
         let ask_replies =
-            route_turn_one_shot(&core, &config, &Route::Solo("Albedo".into()), "targeted")
+            route_turn(&core, &config, &Route::Solo("Albedo".into()), "targeted")
             .await
             .unwrap();
         let (ask_output, ask_failed) = capture_replies(&ask_replies);
@@ -1217,7 +1214,7 @@ done
         fs::write(&fake.log, "").unwrap();
         let core = HivemindCore::new(config.clone(), &config_path).unwrap();
         let all_replies =
-            route_turn_one_shot(&core, &config, &Route::Main, "broadcast prompt")
+            route_turn(&core, &config, &Route::Main, "broadcast prompt")
             .await
             .unwrap();
         core.shutdown().await;
