@@ -1,5 +1,6 @@
 [package]
 name = "hivemind"
+default-run = "hivemind"
 version = "0.1.0"
 edition = "2021"
 description = "Runtime-agnostic meta-harness for AI agents"

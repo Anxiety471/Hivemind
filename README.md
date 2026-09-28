@@ -105,6 +105,151 @@ Each configured agent owns a separate runtime process/session. OMP keeps its liv
 
 Pi uses the configured working directory as its workspace. Its RPC stream is newline-delimited JSON; Hivemind waits for `agent_settled` and returns text blocks from the latest assistant `message_end`, rather than treating the prompt command response as completion.
 
+## HTTP and WebSocket API
+
+Hivemind provides an async HTTP API and WebSocket interface for frontends and orchestration tools.
+
+### Starting the server
+
+Run the server with:
+
+~~~bash
+cargo run --bin hivemind-server
+~~~
+
+By default, the server binds strictly to the loopback interface at:
+
+~~~text
+http://127.0.0.1:7474
+~~~
+
+> **Security note:** Remote exposure and authentication are not implemented. The API is unauthenticated and must remain loopback-only; do not expose it to other hosts or networks.
+
+### HTTP endpoints
+
+All HTTP endpoints use the `/api/v1` version prefix.
+
+#### Health check (`GET /api/v1/health`)
+
+A lightweight check to verify the process is alive without contacting AI providers:
+
+~~~bash
+curl http://127.0.0.1:7474/api/v1/health
+~~~
+
+Expected JSON response:
+
+~~~json
+{
+  "status": "ok",
+  "service": "hivemind"
+}
+~~~
+
+#### Server info (`GET /api/v1/info`)
+
+Returns service metadata and protocol endpoints:
+
+~~~bash
+curl http://127.0.0.1:7474/api/v1/info
+~~~
+
+Expected JSON response:
+
+~~~json
+{
+  "name": "hivemind",
+  "version": "0.1.0",
+  "api_version": "v1",
+  "websocket": "/api/v1/ws"
+}
+~~~
+
+#### Configured agents (`GET /api/v1/agents`)
+
+Lists configured agent metadata safe for clients to view (excluding keys, tokens, or credentials):
+
+~~~bash
+curl http://127.0.0.1:7474/api/v1/agents
+~~~
+
+Expected JSON response:
+
+~~~json
+{
+  "agents": [
+    {
+      "name": "Albedo",
+      "runtime": "omp"
+    },
+    {
+      "name": "Maomao",
+      "runtime": "pi"
+    }
+  ]
+}
+~~~
+
+### WebSocket interface
+
+The WebSocket endpoint is available at:
+
+~~~text
+ws://127.0.0.1:7474/api/v1/ws
+~~~
+
+#### Connection lifecycle and protocol
+
+Messages use a standard JSON envelope with `type`, optional correlation `id`, and a `payload` object:
+
+1. **Ready event**: Upon connecting, the server immediately emits a `system.ready` event:
+   ~~~json
+   {
+     "type": "system.ready",
+     "payload": {
+       "service": "hivemind",
+       "protocol_version": 1
+     }
+   }
+   ~~~
+
+2. **Ping / Pong**: Clients can send a `system.ping` message:
+   ~~~json
+   {
+     "type": "system.ping",
+     "id": "123",
+     "payload": {}
+   }
+   ~~~
+   The server replies with `system.pong` preserving the `id`:
+   ~~~json
+   {
+     "type": "system.pong",
+     "id": "123",
+     "payload": {}
+   }
+   ~~~
+
+3. **Errors**: Unsupported or malformed messages return a `system.error` frame with details while keeping the connection open when possible.
+
+#### Interacting via CLI
+
+You can test the WebSocket interface using a CLI WebSocket tool such as `websocat`:
+
+~~~bash
+websocat ws://127.0.0.1:7474/api/v1/ws
+~~~
+
+Once connected, `system.ready` will be received. You can paste a ping frame:
+
+~~~json
+{"type":"system.ping","id":"req-1","payload":{}}
+~~~
+
+and observe the matching `system.pong` reply.
+
+*Alternative tools:* You can also use `wscat`, for example `npx wscat -c ws://127.0.0.1:7474/api/v1/ws`.
+
 ## Architecture
 
 ~~~text
