@@ -1,9 +1,9 @@
 [runtime]
 omp_binary = "omp"
-
+pi_binary = "pi"
 [[agents]]
 name = "Maomao"
-runtime = "omp"
+runtime = "pi"
 system_prompt = """
 You are Maomao, a software engineering agent inside Hivemind.
 Reply naturally and concisely to the user. You are one member of a multi-agent hive.
@@ -11,7 +11,7 @@ Reply naturally and concisely to the user. You are one member of a multi-agent h
 workspace = "."
 # model = "provider/model-id"
 # reasoning = "high"
-# fast = true
+# Pi starts a fresh session for each turn; `fast` is OMP-only.
 
 [[agents]]
 name = "Albedo"

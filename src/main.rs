@@ -5,12 +5,10 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use tokio::{
-    io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader},
-    task::JoinSet,
-};
+use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-use config::{AgentConfig, HivemindConfig, RuntimeConfig};
+use config::{AgentConfig, HivemindConfig};
+use runtime::AgentManager;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -67,6 +65,29 @@ async fn chat(config: HivemindConfig) -> Result<()> {
     print_agents(&config.agents);
     println!("Type /help for commands.");
 
+    // One live session per agent, started before the first prompt so a
+    // startup failure reports which agent failed and why.
+    let manager = AgentManager::start(&config.runtime, &config.agents).await?;
+
+    // Every exit path — quit, EOF, read errors, and Ctrl-C — falls through
+    // to the bounded shutdown below so no orphaned OMP processes remain.
+    let result = tokio::select! {
+        result = chat_loop(&config, &manager) => result,
+        signal = tokio::signal::ctrl_c() => match signal {
+            Ok(()) => {
+                println!();
+                Ok(())
+            }
+            Err(error) => Err(error.into()),
+        },
+    };
+
+    manager.shutdown().await;
+
+    result
+}
+
+async fn chat_loop(config: &HivemindConfig, manager: &AgentManager) -> Result<()> {
     let mut lines = BufReader::new(io::stdin()).lines();
     let mut stdout = io::stdout();
 
@@ -100,38 +121,16 @@ async fn chat(config: HivemindConfig) -> Result<()> {
             _ => {}
         }
 
-        run_turn(&config.runtime, &config.agents, input).await;
+        run_turn(manager, input).await;
     }
 
     Ok(())
 }
 
-async fn run_turn(runtime: &RuntimeConfig, agents: &[AgentConfig], input: &str) {
-    let mut jobs = JoinSet::new();
+async fn run_turn(manager: &AgentManager, input: &str) {
+    let replies = manager.prompt_all(input).await;
 
-    for (index, agent) in agents.iter().cloned().enumerate() {
-        let runtime = runtime.clone();
-        let input = input.to_string();
-
-        jobs.spawn(async move {
-            let name = agent.name.clone();
-            let result = runtime::invoke_agent(&runtime, &agent, &input).await;
-            (index, name, result)
-        });
-    }
-
-    let mut replies = Vec::with_capacity(agents.len());
-
-    while let Some(joined) = jobs.join_next().await {
-        match joined {
-            Ok(reply) => replies.push(reply),
-            Err(error) => eprintln!("Harness task failed: {error}"),
-        }
-    }
-
-    replies.sort_by_key(|(index, _, _)| *index);
-
-    for (_, name, result) in replies {
+    for (name, result) in replies {
         match result {
             Ok(response) => println!("\n{name}> {response}"),
             Err(error) => eprintln!("\n{name}> [error] {error:#}"),
