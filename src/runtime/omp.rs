@@ -728,14 +728,20 @@ mod tests {
 
         let error = session.prompt("hello").await.unwrap_err();
         let message = format!("{error:#}");
-        assert!(message.contains("Engineer"), "unattributed error: {message}");
+        assert!(
+            message.contains("Engineer"),
+            "unattributed error: {message}"
+        );
         assert!(message.contains("exited"), "unclear error: {message}");
 
         let sent_after_death = sent_frames(&script).len();
 
         let error = session.prompt("try again").await.unwrap_err();
         let message = format!("{error:#}");
-        assert!(message.contains("Engineer"), "unattributed error: {message}");
+        assert!(
+            message.contains("Engineer"),
+            "unattributed error: {message}"
+        );
         assert!(
             message.contains("failed earlier"),
             "expected a poisoned-session error: {message}"
@@ -770,7 +776,10 @@ mod tests {
 
         let error = session.prompt("hello").await.unwrap_err();
         let message = format!("{error:#}");
-        assert!(message.contains("Engineer"), "unattributed error: {message}");
+        assert!(
+            message.contains("Engineer"),
+            "unattributed error: {message}"
+        );
         assert!(
             message.contains("rate limited"),
             "missing RPC error detail: {message}"

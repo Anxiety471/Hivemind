@@ -613,7 +613,7 @@ impl ConversationCoordinator {
         // enforced before any optional section is assembled.
         let budget = self.limits.context_target_tokens.saturating_mul(4);
         if mandatory_len > budget {
-            bail!("current turn and participant/state context exceed configured context_target_tokens ({})", self.limits.context_target_tokens);
+            bail!("current turn and participant/state context ({mandatory_len} bytes) exceed configured context_target_tokens ({} tokens = {budget} bytes)", self.limits.context_target_tokens);
         }
         let available = budget - mandatory_len;
         let mut optional = format!("{summary}{recent}{hits}");

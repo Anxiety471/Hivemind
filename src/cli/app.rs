@@ -351,7 +351,9 @@ printf '%s stopped\n' "$agent" >> __LOG__
             &["hivemind", "order"],
             &["hivemind", "ask", "Reviewer", "review this"],
             &["hivemind", "all", "review this"],
-            &["hivemind", "group", "create", "backend", "Reviewer", "Engineer"],
+            &[
+                "hivemind", "group", "create", "backend", "Reviewer", "Engineer",
+            ],
             &["hivemind", "group", "create", "empty"],
             &["hivemind", "group", "list"],
             &["hivemind", "group", "show", "backend"],
