@@ -99,6 +99,7 @@ defect found, listed so the next verification round does not forget them:
   answer and the database confirmed nothing executed — model-side behavior,
   not a host defect. Optional follow-up: tighten the manifest wording so a
   demanded tool call cannot be answered with narration.
+- OpenCode runtime (2026-09-29): `scripts/e2e-opencode.py` passed all seven scenarios against real `opencode/*-free` models (context retention, two-agent order, SQLite-verified memory write, `runtime.rotated`, `prompt_timeout` with fresh next epoch, mixed pi/omp/opencode room, no surviving children after SIGINT). `reasoning` and `fast` for OpenCode are rejected rather than tested live.
 
 ## Tests
 

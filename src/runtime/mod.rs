@@ -1,4 +1,5 @@
 mod omp;
+mod opencode;
 mod pi;
 mod pool;
 use anyhow::{bail, Result};
@@ -36,8 +37,11 @@ pub async fn create_session(
         "pi" => Ok(Box::new(
             pi::PiSession::start(&runtime_config.pi_binary, agent).await?,
         )),
+        "opencode" => Ok(Box::new(
+            opencode::OpencodeSession::start(&runtime_config.opencode_binary, agent).await?,
+        )),
         other => bail!(
-            "unsupported runtime '{other}' for agent '{}'; supported runtimes are pi and omp, so change this agent's runtime",
+            "unsupported runtime '{other}' for agent '{}'; supported runtimes are pi, omp and opencode, so change this agent's runtime",
             agent.name
         ),
     }
@@ -237,5 +241,166 @@ done
             identities.len()
         );
         pool.shutdown().await;
+    }
+
+    /// Fake `opencode acp`; `prompt_body` is the shell run for each `session/prompt`.
+    fn opencode_script(prompt_body: &str, startup: &str) -> String {
+        format!(
+            r#"
+{startup}
+while IFS= read -r request; do
+  id=$(printf '%s' "$request" | sed -n 's/^{{"id":\([0-9]*\),.*/\1/p')
+  case "$request" in
+    *'"method":"initialize"'*) printf '{{"jsonrpc":"2.0","id":%s,"result":{{"protocolVersion":1}}}}\n' "$id" ;;
+    *'"method":"session/new"'*) printf '{{"jsonrpc":"2.0","id":%s,"result":{{"sessionId":"ses_fake"}}}}\n' "$id" ;;
+    *'"method":"session/set_config_option"'*) printf '{{"jsonrpc":"2.0","id":%s,"result":{{}}}}\n' "$id" ;;
+    *'"method":"session/delete"'*) printf '{{"jsonrpc":"2.0","id":%s,"result":{{}}}}\n' "$id" ;;
+    *'"method":"session/prompt"'*)
+{prompt_body}
+      ;;
+  esac
+done
+"#
+        )
+    }
+
+    const OPENCODE_REPLY: &str = r#"      printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_fake","update":{"sessionUpdate":"agent_thought_chunk","messageId":"m1:reasoning","content":{"type":"text","text":"thinking"}}}}'
+      printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_fake","update":{"sessionUpdate":"agent_message_chunk","messageId":"m1","content":{"type":"text","text":"working on it"}}}}'
+      printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_fake","update":{"sessionUpdate":"agent_message_chunk","messageId":"m2","content":{"type":"text","text":"opencode fixture"}}}}'
+      printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_fake","update":{"sessionUpdate":"usage_update","used":4321,"size":200000}}}'
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"stopReason":"end_turn"}}\n' "$id""#;
+
+    fn opencode_runtime(fixture: &Fixture) -> RuntimeConfig {
+        RuntimeConfig {
+            opencode_binary: fixture.binary("opencode"),
+            ..RuntimeConfig::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn opencode_session_returns_assistant_text_and_reported_context() {
+        let fixture = Fixture::new("opencode", &opencode_script(OPENCODE_REPLY, ""));
+        let mut configured = agent("Open", "opencode", &fixture.workspace());
+        configured.model = Some("opencode/big-pickle".into());
+        let mut session = create_session(&opencode_runtime(&fixture), &configured)
+            .await
+            .unwrap();
+        assert_eq!(session.context_tokens().await.unwrap(), None);
+        assert_eq!(session.prompt("hello").await.unwrap(), "opencode fixture");
+        assert_eq!(session.context_tokens().await.unwrap(), Some(4321));
+        assert_eq!(session.prompt("again").await.unwrap(), "opencode fixture");
+        session.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn create_session_dispatches_opencode_next_to_pi_and_omp() {
+        let fixture = Fixture::new("opencode", &opencode_script(OPENCODE_REPLY, ""));
+        let omp = Fixture::new(
+            "omp",
+            r#"
+printf '%s\n' '{"type":"ready"}'
+while IFS= read -r request; do
+  case "$request" in
+    *'"type":"prompt"'*) printf '%s\n' '{"type":"response","id":"hivemind_prompt","success":true,"data":{"agentInvoked":true}}' '{"type":"prompt_result","id":"hivemind_prompt","status":"completed","sessionSettled":true}' ;;
+    *'"type":"get_last_assistant_text"'*) printf '%s\n' '{"type":"response","id":"hivemind_last_text","success":true,"data":{"text":"omp fixture"}}' ;;
+  esac
+done
+"#,
+        );
+        let runtime = RuntimeConfig {
+            omp_binary: omp.binary("omp"),
+            ..opencode_runtime(&fixture)
+        };
+        let mut replies = Vec::new();
+        for configured in [
+            agent("OMP", "omp", &omp.workspace()),
+            agent("Open", "opencode", &fixture.workspace()),
+        ] {
+            let mut session = create_session(&runtime, &configured).await.unwrap();
+            replies.push(session.prompt("hello").await.unwrap());
+            session.shutdown().await.unwrap();
+        }
+        assert_eq!(replies, ["omp fixture", "opencode fixture"]);
+    }
+
+    #[tokio::test]
+    async fn opencode_start_failure_and_bad_settings_name_the_agent() {
+        let fixture = Fixture::new("opencode", &opencode_script(OPENCODE_REPLY, ""));
+        let mut runtime = opencode_runtime(&fixture);
+        runtime.opencode_binary = fixture.binary("missing-opencode");
+        let error = create_session(&runtime, &agent("Open", "opencode", &fixture.workspace()))
+            .await
+            .err()
+            .unwrap();
+        let error = format!("{error:#}");
+        assert!(error.contains("Open") && error.contains("missing-opencode"), "{error}");
+
+        let runtime = opencode_runtime(&fixture);
+        let mut fast = agent("Fast", "opencode", &fixture.workspace());
+        fast.fast = Some(true);
+        let error = create_session(&runtime, &fast).await.err().unwrap();
+        assert!(error.to_string().contains("'fast'") && error.to_string().contains("Fast"));
+        let mut reasoning = agent("Think", "opencode", &fixture.workspace());
+        reasoning.reasoning = Some("high".into());
+        let error = create_session(&runtime, &reasoning).await.err().unwrap();
+        assert!(error.to_string().contains("'reasoning'"));
+        let mut model = agent("Model", "opencode", &fixture.workspace());
+        model.model = Some("no-provider".into());
+        let error = create_session(&runtime, &model).await.err().unwrap();
+        assert!(error.to_string().contains("provider/model-id"));
+    }
+
+    #[tokio::test]
+    async fn opencode_crash_mid_prompt_poisons_the_session() {
+        let fixture = Fixture::new("opencode", &opencode_script("      exit 3", ""));
+        let mut session = create_session(
+            &opencode_runtime(&fixture),
+            &agent("Crash", "opencode", &fixture.workspace()),
+        )
+        .await
+        .unwrap();
+        let error = format!("{:#}", session.prompt("hello").await.unwrap_err());
+        assert!(error.contains("Crash") && error.contains("exited"), "{error}");
+        let again = session.prompt("hello").await.unwrap_err().to_string();
+        assert!(again.contains("failed earlier"), "{again}");
+        session.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn opencode_cancelled_turn_is_an_error_not_a_reply() {
+        let body = r#"      printf '{"jsonrpc":"2.0","id":%s,"result":{"stopReason":"cancelled"}}\n' "$id""#;
+        let fixture = Fixture::new("opencode", &opencode_script(body, ""));
+        let mut session = create_session(
+            &opencode_runtime(&fixture),
+            &agent("Deny", "opencode", &fixture.workspace()),
+        )
+        .await
+        .unwrap();
+        let error = session.prompt("hello").await.unwrap_err().to_string();
+        assert!(error.contains("cancelled") && error.contains("Deny"), "{error}");
+        session.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn opencode_hanging_startup_is_killed_when_the_future_is_dropped() {
+        let fixture = Fixture::new(
+            "opencode",
+            &opencode_script(OPENCODE_REPLY, "echo $$ > pid\nexec sleep 300"),
+        );
+        let runtime = opencode_runtime(&fixture);
+        let configured = agent("Hang", "opencode", &fixture.workspace());
+        let start = create_session(&runtime, &configured);
+        assert!(tokio::time::timeout(std::time::Duration::from_millis(500), start)
+            .await
+            .is_err());
+        let pid = fs::read_to_string(fixture.0.join("pid")).unwrap();
+        let proc = format!("/proc/{}", pid.trim());
+        for _ in 0..50 {
+            if !std::path::Path::new(&proc).exists() {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        panic!("hung opencode child {pid} survived cancellation");
     }
 }

@@ -54,8 +54,9 @@ fn validate_agent_with_path(
     let binary = match agent.runtime.as_str() {
         "pi" => &config.runtime.pi_binary,
         "omp" => &config.runtime.omp_binary,
+        "opencode" => &config.runtime.opencode_binary,
         other => bail!(
-            "agent '{}' uses unsupported runtime '{}' (supported: pi, omp); change this agent's runtime to 'pi' or 'omp'",
+            "agent '{}' uses unsupported runtime '{}' (supported: pi, omp, opencode); change this agent's runtime to 'pi', 'omp' or 'opencode'",
             agent.name,
             other
         ),
@@ -161,9 +162,10 @@ fn doctor_agent(
     let binary = match agent.runtime.as_str() {
         "pi" => Some(&config.runtime.pi_binary),
         "omp" => Some(&config.runtime.omp_binary),
+        "opencode" => Some(&config.runtime.opencode_binary),
         other => {
             println!(
-                "[error] agent '{}' uses unsupported runtime '{other}' (supported: pi, omp); change this agent's runtime to 'pi' or 'omp'",
+                "[error] agent '{}' uses unsupported runtime '{other}' (supported: pi, omp, opencode); change this agent's runtime to 'pi', 'omp' or 'opencode'",
                 agent.name
             );
             *errors += 1;
@@ -293,6 +295,17 @@ mod tests {
         assert_eq!(resolve_binary("pi", Some(&path)), Some(binary.clone()));
         assert_eq!(resolve_binary("missing", Some(&path)), None);
         assert_eq!(resolve_binary(binary.to_str().unwrap(), None), Some(binary));
+    }
+
+    #[test]
+    fn validates_opencode_binary_present_and_missing() {
+        let fixture = Fixture::new();
+        let path = OsString::from(&fixture.0);
+        let cfg = config(vec![agent("Open", "opencode", ".")]);
+        let error = validate_with_path(&cfg, Some(&path)).unwrap_err().to_string();
+        assert!(error.contains("agent 'Open'") && error.contains("binary 'opencode'"), "{error}");
+        fixture.executable("opencode");
+        validate_with_path(&cfg, Some(&path)).unwrap();
     }
 
     #[test]
