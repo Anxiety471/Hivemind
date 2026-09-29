@@ -154,7 +154,9 @@ async fn run(cli: Cli) -> Result<()> {
             let mut config = HivemindConfig::load(&cli.config)?;
             match command {
                 Commands::Doctor => setup::doctor(&cli.config, &config),
-                Commands::Serve { .. } => unreachable!("serve is handled before CLI config loading"),
+                Commands::Serve { .. } => {
+                    unreachable!("serve is handled before CLI config loading")
+                }
                 Commands::Chat { solo, group } => {
                     let route = if let Some(name) = solo {
                         commands::agent(&config, &name)?;
@@ -176,7 +178,9 @@ async fn run(cli: Cli) -> Result<()> {
                     Ok(())
                 }
                 Commands::Status => status(&config),
-                Commands::Ask { agent, message } => ask(&config, &cli.config, &agent, &message).await,
+                Commands::Ask { agent, message } => {
+                    ask(&config, &cli.config, &agent, &message).await
+                }
                 Commands::All { message } => all(&config, &cli.config, &message).await,
                 Commands::Group { command } => group_command(&mut config, &cli.config, command),
                 Commands::Init { .. } => unreachable!(),
@@ -361,11 +365,7 @@ fn print_replies(replies: ReplyBatch) -> Result<()> {
     Ok(())
 }
 
-async fn all(
-    config: &HivemindConfig,
-    config_path: &std::path::Path,
-    message: &str,
-) -> Result<()> {
+async fn all(config: &HivemindConfig, config_path: &std::path::Path, message: &str) -> Result<()> {
     let core = HivemindCore::new(config.clone(), config_path)?;
     let result = route_turn(&core, config, &Route::Main, message)
         .await
@@ -897,7 +897,9 @@ printf '%s stopped\n' "$agent" >> __LOG__
         assert_eq!(output, "\nAlbedo> Albedo reply\n");
         assert!(!failed);
 
-        let replies = route_turn(&core, &config, &Route::Main, "hello").await.unwrap();
+        let replies = route_turn(&core, &config, &Route::Main, "hello")
+            .await
+            .unwrap();
         let (_, failed) = capture_replies(&replies);
         assert!(failed);
         core.shutdown().await;
@@ -970,9 +972,14 @@ done
         let config_path = directory.0.join("hivemind.toml");
         let core = HivemindCore::new(config.clone(), &config_path).unwrap();
 
-        let replies = route_turn(&core, &config, &Route::Solo("Albedo".into()), "store a note")
-            .await
-            .unwrap();
+        let replies = route_turn(
+            &core,
+            &config,
+            &Route::Solo("Albedo".into()),
+            "store a note",
+        )
+        .await
+        .unwrap();
         core.shutdown().await;
         let (output, failed) = capture_replies(&replies);
         assert_eq!(output, "\nAlbedo> done after tool\n");
@@ -1053,29 +1060,46 @@ done
             reply_order: vec!["Albedo".into()],
         });
         let core = HivemindCore::new(config.clone(), &config_path).unwrap();
-        let replies = route_turn(&core, &config, &Route::Group("review".into()), "review this change")
-            .await
-            .unwrap();
+        let replies = route_turn(
+            &core,
+            &config,
+            &Route::Group("review".into()),
+            "review this change",
+        )
+        .await
+        .unwrap();
         core.shutdown().await;
         assert_eq!(replies.replies.len(), 1);
         assert_eq!(replies.replies[0].0, "Albedo");
-        assert!(replies.replies[0].1.as_ref().unwrap().contains("Albedo reply"));
+        assert!(replies.replies[0]
+            .1
+            .as_ref()
+            .unwrap()
+            .contains("Albedo reply"));
 
         let prompts = fake.prompt_lines();
         assert_eq!(prompts.len(), 1);
         assert!(prompts[0].contains("You are Albedo. Your room role is Lead Reviewer."));
     }
 
-
     #[tokio::test]
     async fn cli_and_api_agent_listings_match_the_core_registry() {
-        let directory = std::env::temp_dir().join(format!("hivemind-cli-listing-{}", std::process::id()));
+        let directory =
+            std::env::temp_dir().join(format!("hivemind-cli-listing-{}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();
         let mut config = HivemindConfig::default_poc();
         config.conversation.reply_order = vec!["Albedo".into(), "Maomao".into()];
         let core = HivemindCore::new(config, directory.join("hivemind.toml")).unwrap();
-        let registry = core.agents().list().into_iter().map(|agent| agent.name).collect::<Vec<_>>();
-        let cli = effective_agents(core.config()).into_iter().map(|agent| agent.name.clone()).collect::<Vec<_>>();
+        let registry = core
+            .agents()
+            .list()
+            .into_iter()
+            .map(|agent| agent.name)
+            .collect::<Vec<_>>();
+        let cli = effective_agents(core.config())
+            .into_iter()
+            .map(|agent| agent.name.clone())
+            .collect::<Vec<_>>();
         assert_eq!(registry, ["Albedo", "Maomao"]);
         assert_eq!(cli, registry);
         assert_eq!(route_names(core.config(), &Route::Main).unwrap(), registry);
@@ -1100,7 +1124,10 @@ done
         let core = HivemindCore::new(config.clone(), &config_path).unwrap();
 
         for (route, input) in [
-            (Route::Group("review".into()), "Goal: group objective\nfirst group turn"),
+            (
+                Route::Group("review".into()),
+                "Goal: group objective\nfirst group turn",
+            ),
             (Route::Solo("Albedo".into()), "solo route turn"),
             (Route::Solo("Albedo".into()), "ask turn"),
             (Route::Main, "all turn"),
@@ -1213,8 +1240,7 @@ done
             .to_string();
         assert!(unknown.contains("no configured agent named 'Missing'"));
         assert!(fake.log_lines().is_empty());
-        let ask_replies =
-            route_turn(&core, &config, &Route::Solo("Albedo".into()), "targeted")
+        let ask_replies = route_turn(&core, &config, &Route::Solo("Albedo".into()), "targeted")
             .await
             .unwrap();
         let (ask_output, ask_failed) = capture_replies(&ask_replies);
@@ -1230,8 +1256,7 @@ done
         config.agents[0].workspace = fake.directory.0.display().to_string();
         fs::write(&fake.log, "").unwrap();
         let core = HivemindCore::new(config.clone(), &config_path).unwrap();
-        let all_replies =
-            route_turn(&core, &config, &Route::Main, "broadcast prompt")
+        let all_replies = route_turn(&core, &config, &Route::Main, "broadcast prompt")
             .await
             .unwrap();
         core.shutdown().await;

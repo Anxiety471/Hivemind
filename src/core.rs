@@ -31,11 +31,17 @@ pub struct HivemindCore {
 }
 
 #[derive(Clone)]
-pub struct AgentRegistry { agents: Arc<Vec<AgentConfig>> }
+pub struct AgentRegistry {
+    agents: Arc<Vec<AgentConfig>>,
+}
 
 impl AgentRegistry {
-    pub fn list(&self) -> Vec<AgentConfig> { self.agents.as_ref().clone() }
-    pub fn get(&self, id: &str) -> Option<AgentConfig> { self.agents.iter().find(|agent| agent.name == id).cloned() }
+    pub fn list(&self) -> Vec<AgentConfig> {
+        self.agents.as_ref().clone()
+    }
+    pub fn get(&self, id: &str) -> Option<AgentConfig> {
+        self.agents.iter().find(|agent| agent.name == id).cloned()
+    }
 }
 
 pub struct CoreTurnRequest<'a> {
@@ -47,20 +53,21 @@ pub struct CoreTurnRequest<'a> {
     pub input: &'a str,
 }
 
-
-
 impl HivemindCore {
     pub fn new(config: HivemindConfig, config_path: impl AsRef<Path>) -> Result<Self> {
         let config_path = config_path.as_ref().to_owned();
-        let data_dir = config_path.parent()
+        let data_dir = config_path
+            .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
             .unwrap_or(Path::new("."))
             .join(".hivemind");
         std::fs::create_dir_all(&data_dir)
             .with_context(|| format!("creating Hivemind data directory {}", data_dir.display()))?;
         let memory_path = data_dir.join("memory.sqlite3");
-        let memory = Arc::new(MemoryService::open(&memory_path)
-            .with_context(|| format!("opening memory store at {}", memory_path.display()))?);
+        let memory = Arc::new(
+            MemoryService::open(&memory_path)
+                .with_context(|| format!("opening memory store at {}", memory_path.display()))?,
+        );
         let context_dir = data_dir.join("context");
         let config = Arc::new(config);
         let agents = AgentRegistry {
@@ -68,7 +75,10 @@ impl HivemindCore {
         };
         let events = EventBus::new();
         let conversation = ConversationCoordinator::new_with_events(
-            context_dir, config.context.clone(), memory.clone(), Some(events.clone()),
+            context_dir,
+            config.context.clone(),
+            memory.clone(),
+            Some(events.clone()),
         );
         let runtime = Arc::new(RuntimePool::new(
             config.runtime.clone(),
@@ -78,17 +88,35 @@ impl HivemindCore {
         ));
         events.publish(DomainEventKind::CoreStarted);
         Ok(Self {
-            config, agents, memory, conversation, events, runtime, config_path,
+            config,
+            agents,
+            memory,
+            conversation,
+            events,
+            runtime,
+            config_path,
             shutting_down: AtomicBool::new(false),
         })
     }
 
-    pub fn config(&self) -> &HivemindConfig { &self.config }
-    pub fn agents(&self) -> &AgentRegistry { &self.agents }
-    pub fn events(&self) -> &EventBus { &self.events }
-    pub fn memory(&self) -> &Arc<MemoryService> { &self.memory }
-    pub fn conversation(&self) -> &ConversationCoordinator { &self.conversation }
-    pub fn config_path(&self) -> &Path { &self.config_path }
+    pub fn config(&self) -> &HivemindConfig {
+        &self.config
+    }
+    pub fn agents(&self) -> &AgentRegistry {
+        &self.agents
+    }
+    pub fn events(&self) -> &EventBus {
+        &self.events
+    }
+    pub fn memory(&self) -> &Arc<MemoryService> {
+        &self.memory
+    }
+    pub fn conversation(&self) -> &ConversationCoordinator {
+        &self.conversation
+    }
+    pub fn config_path(&self) -> &Path {
+        &self.config_path
+    }
 
     pub async fn turn(&self, request: CoreTurnRequest<'_>) -> Result<Vec<TurnReply>> {
         let invoker = Arc::new(RuntimeInvoker::new(
@@ -234,7 +262,10 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
     }
 
     async fn solo_turn(core: &HivemindCore, room: &str, input: &str) -> Result<Vec<TurnReply>> {
-        let members = [Participant { agent: core.agents().list()[0].clone(), role: None }];
+        let members = [Participant {
+            agent: core.agents().list()[0].clone(),
+            role: None,
+        }];
         core.turn(CoreTurnRequest {
             room,
             room_name: room,
@@ -247,7 +278,11 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
     }
 
     fn lines(path: &Path) -> Vec<String> {
-        fs::read_to_string(path).unwrap_or_default().lines().map(str::to_owned).collect()
+        fs::read_to_string(path)
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_owned)
+            .collect()
     }
 
     #[tokio::test]
@@ -257,14 +292,24 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
         let mut events = core.events().subscribe();
         assert!(!lifecycle.exists(), "construction must not spawn a runtime");
 
-        for (room, input) in [("room-one", "first"), ("room-one", "second"), ("room-two", "third")] {
+        for (room, input) in [
+            ("room-one", "first"),
+            ("room-one", "second"),
+            ("room-two", "third"),
+        ] {
             let replies = solo_turn(&core, room, input).await.unwrap();
             assert_eq!(replies.len(), 1);
             assert_eq!(replies[0].result.as_ref().unwrap(), "Maomao reply");
         }
         assert_eq!(
             lines(&lifecycle),
-            ["Maomao started", "Maomao prompt", "Maomao prompt", "Maomao started", "Maomao prompt"]
+            [
+                "Maomao started",
+                "Maomao prompt",
+                "Maomao prompt",
+                "Maomao started",
+                "Maomao prompt"
+            ]
         );
 
         core.shutdown().await;
@@ -294,7 +339,11 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
 
         let error = solo_turn(&core, "room-three", "late").await.unwrap_err();
         assert!(error.to_string().contains("shutting down"), "{error:#}");
-        assert_eq!(lines(&lifecycle).len(), 7, "no runtime started after shutdown");
+        assert_eq!(
+            lines(&lifecycle).len(),
+            7,
+            "no runtime started after shutdown"
+        );
     }
 
     #[tokio::test]
@@ -308,7 +357,11 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
         let messages = prompt_messages(&prompts);
         assert_eq!(messages.len(), 2);
         assert!(messages[0].contains("Participants:"), "{}", messages[0]);
-        assert!(messages[1].contains("Current user message:\nsecond"), "{}", messages[1]);
+        assert!(
+            messages[1].contains("Current user message:\nsecond"),
+            "{}",
+            messages[1]
+        );
         assert!(!messages[1].contains("Participants:"), "{}", messages[1]);
         assert!(!messages[1].contains("first"), "{}", messages[1]);
     }
@@ -323,23 +376,52 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
         solo_turn(&core, "rotate-room", "second").await.unwrap();
         assert_eq!(
             lines(&lifecycle),
-            ["Maomao started", "Maomao prompt", "Maomao stopped", "Maomao started", "Maomao prompt"]
+            [
+                "Maomao started",
+                "Maomao prompt",
+                "Maomao stopped",
+                "Maomao started",
+                "Maomao prompt"
+            ]
         );
         let messages = prompt_messages(&prompts);
-        assert!(messages[1].contains("Participants:"), "rotation must rehydrate a full pack");
-        assert!(messages[1].contains("first"), "the full pack carries earlier room history");
+        assert!(
+            messages[1].contains("Participants:"),
+            "rotation must rehydrate a full pack"
+        );
+        assert!(
+            messages[1].contains("first"),
+            "the full pack carries earlier room history"
+        );
 
         let mut rotated = Vec::new();
         while let Ok(event) = events.try_recv() {
-            if let DomainEventKind::RuntimeRotated { instance_id, reason, .. } = event.payload {
+            if let DomainEventKind::RuntimeRotated {
+                instance_id,
+                reason,
+                ..
+            } = event.payload
+            {
                 rotated.push((instance_id, reason));
             }
         }
-        assert_eq!(rotated, [("rotate-room/Maomao".to_owned(), "context_budget".to_owned())]);
+        assert_eq!(
+            rotated,
+            [("rotate-room/Maomao".to_owned(), "context_budget".to_owned())]
+        );
 
-        let epochs = core.memory().runtime_epochs(&maomao_caller("rotate-room"), 10).unwrap();
+        let epochs = core
+            .memory()
+            .runtime_epochs(&maomao_caller("rotate-room"), 10)
+            .unwrap();
         assert_eq!(epochs.len(), 2);
-        assert_eq!(epochs.iter().filter(|epoch| epoch.ended_at.is_none()).count(), 1);
+        assert_eq!(
+            epochs
+                .iter()
+                .filter(|epoch| epoch.ended_at.is_none())
+                .count(),
+            1
+        );
         core.shutdown().await;
     }
 
@@ -350,7 +432,9 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
         let mut events = core.events().subscribe();
         let replies = solo_turn(&core, "crash-room", "crash-now").await.unwrap();
         assert!(replies[0].result.is_err());
-        let replies = solo_turn(&core, "crash-room", "after the crash").await.unwrap();
+        let replies = solo_turn(&core, "crash-room", "after the crash")
+            .await
+            .unwrap();
         assert_eq!(replies[0].result.as_deref(), Ok("Maomao reply"));
         core.shutdown().await;
 
@@ -378,8 +462,14 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
         let (core, lifecycle, prompts) = fake_core(&directory);
         solo_turn(&core, "idle-room", "first").await.unwrap();
         core.runtime.close_idle(std::time::Duration::ZERO).await;
-        assert_eq!(lines(&lifecycle), ["Maomao started", "Maomao prompt", "Maomao stopped"]);
-        let epochs = core.memory().runtime_epochs(&maomao_caller("idle-room"), 10).unwrap();
+        assert_eq!(
+            lines(&lifecycle),
+            ["Maomao started", "Maomao prompt", "Maomao stopped"]
+        );
+        let epochs = core
+            .memory()
+            .runtime_epochs(&maomao_caller("idle-room"), 10)
+            .unwrap();
         assert!(epochs.iter().all(|epoch| epoch.ended_at.is_some()));
 
         solo_turn(&core, "idle-room", "second").await.unwrap();
@@ -406,7 +496,11 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
         );
         let messages = prompt_messages(&prompts);
         assert_eq!(messages.len(), 2);
-        assert!(messages[1].starts_with("Memory tool result:"), "{}", messages[1]);
+        assert!(
+            messages[1].starts_with("Memory tool result:"),
+            "{}",
+            messages[1]
+        );
         assert!(!messages[1].contains("Participants:"), "{}", messages[1]);
     }
 
@@ -425,16 +519,32 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
             assert!(event.sequence > last_sequence, "sequence must increase");
             last_sequence = event.sequence;
             let (kind, room_id, turn_id) = match event.payload {
-                DomainEventKind::TurnStarted { room_id, turn_id } => ("turn_started", room_id, turn_id),
-                DomainEventKind::AgentReplyStarted { room_id, turn_id, agent_id, .. } => {
+                DomainEventKind::TurnStarted { room_id, turn_id } => {
+                    ("turn_started", room_id, turn_id)
+                }
+                DomainEventKind::AgentReplyStarted {
+                    room_id,
+                    turn_id,
+                    agent_id,
+                    ..
+                } => {
                     assert_eq!(agent_id, "Maomao");
                     ("reply_started", room_id, turn_id)
                 }
-                DomainEventKind::AgentReplyCompleted { room_id, turn_id, agent_id, .. } => {
+                DomainEventKind::AgentReplyCompleted {
+                    room_id,
+                    turn_id,
+                    agent_id,
+                    ..
+                } => {
                     assert_eq!(agent_id, "Maomao");
                     ("reply_completed", room_id, turn_id)
                 }
-                DomainEventKind::TurnCompleted { room_id, turn_id, reply_count } => {
+                DomainEventKind::TurnCompleted {
+                    room_id,
+                    turn_id,
+                    reply_count,
+                } => {
                     assert_eq!(reply_count, 1);
                     ("turn_completed", room_id, turn_id)
                 }
@@ -444,8 +554,18 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
             turn_ids.push(turn_id);
             kinds.push(kind);
         }
-        assert_eq!(kinds, ["turn_started", "reply_started", "reply_completed", "turn_completed"]);
-        assert!(turn_ids.iter().all(|id| id == &turn_ids[0] && !id.is_empty()));
+        assert_eq!(
+            kinds,
+            [
+                "turn_started",
+                "reply_started",
+                "reply_completed",
+                "turn_completed"
+            ]
+        );
+        assert!(turn_ids
+            .iter()
+            .all(|id| id == &turn_ids[0] && !id.is_empty()));
     }
 
     #[tokio::test]
@@ -462,13 +582,22 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
         assert_eq!(epoch.runtime, "pi");
         assert_eq!(epoch.instance_id, "epoch-room/Maomao");
         assert_eq!(epoch.room_id, "epoch-room");
-        assert_eq!(epoch.metadata.get("kind").and_then(|v| v.as_str()), Some("session"));
+        assert_eq!(
+            epoch.metadata.get("kind").and_then(|v| v.as_str()),
+            Some("session")
+        );
         assert!(epoch.ended_at.is_none());
 
         core.shutdown().await;
         let epochs = core.memory().runtime_epochs(&caller, 10).unwrap();
-        assert!(epochs[0].ended_at.is_some_and(|ended| ended >= epochs[0].started_at));
-        assert!(core.memory().runtime_epochs(&maomao_caller("other-room"), 10).unwrap().is_empty());
+        assert!(epochs[0]
+            .ended_at
+            .is_some_and(|ended| ended >= epochs[0].started_at));
+        assert!(core
+            .memory()
+            .runtime_epochs(&maomao_caller("other-room"), 10)
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]
@@ -505,9 +634,17 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
         assert!(by_name("Broken").result.is_err());
         assert_eq!(by_name("Maomao").result.as_deref(), Ok("Maomao reply"));
         let history = core.conversation().room_history("startup-room").unwrap();
-        let failed = history.events.iter().find(|event| event.speaker == "Broken").unwrap();
+        let failed = history
+            .events
+            .iter()
+            .find(|event| event.speaker == "Broken")
+            .unwrap();
         assert!(failed.error);
-        let succeeded = history.events.iter().find(|event| event.speaker == "Maomao").unwrap();
+        let succeeded = history
+            .events
+            .iter()
+            .find(|event| event.speaker == "Maomao")
+            .unwrap();
         assert!(!succeeded.error);
         assert_eq!(succeeded.content, "Maomao reply");
     }
@@ -520,7 +657,12 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
         config.runtime.pi_binary = directory.0.join("missing-pi").display().to_string();
         config.runtime.omp_binary = directory.0.join("missing-omp").display().to_string();
         let core = HivemindCore::new(config, directory.0.join("hivemind.toml")).unwrap();
-        let names = core.agents().list().into_iter().map(|agent| agent.name).collect::<Vec<_>>();
+        let names = core
+            .agents()
+            .list()
+            .into_iter()
+            .map(|agent| agent.name)
+            .collect::<Vec<_>>();
         let expected = core
             .config()
             .ordered_agents()
@@ -610,7 +752,10 @@ done
         let replies = replies.unwrap();
         core.shutdown().await;
 
-        let presented = replies.iter().map(|reply| reply.name.as_str()).collect::<Vec<_>>();
+        let presented = replies
+            .iter()
+            .map(|reply| reply.name.as_str())
+            .collect::<Vec<_>>();
         assert_eq!(presented, ["Albedo", "Maomao"]);
         assert_eq!(replies[0].result.as_deref(), Ok("Albedo reply"));
         assert_eq!(replies[1].result.as_deref(), Ok("Maomao reply"));
@@ -620,7 +765,11 @@ done
                 completed.push(agent_id);
             }
         }
-        assert_eq!(completed, ["Maomao", "Albedo"], "slow first agent completes last");
+        assert_eq!(
+            completed,
+            ["Maomao", "Albedo"],
+            "slow first agent completes last"
+        );
     }
 
     #[tokio::test]
@@ -650,16 +799,25 @@ done
             input: "partial startup",
         };
         let replies = core.turn(request()).await.unwrap();
-        assert!(replies.iter().any(|reply| reply.name == "Broken" && reply.result.is_err()));
+        assert!(replies
+            .iter()
+            .any(|reply| reply.name == "Broken" && reply.result.is_err()));
         assert_eq!(lines(&lifecycle), ["Maomao started", "Maomao prompt"]);
 
         core.shutdown().await;
         core.shutdown().await;
-        assert_eq!(lines(&lifecycle), ["Maomao started", "Maomao prompt", "Maomao stopped"]);
+        assert_eq!(
+            lines(&lifecycle),
+            ["Maomao started", "Maomao prompt", "Maomao stopped"]
+        );
 
         let error = core.turn(request()).await.unwrap_err();
         assert!(error.to_string().contains("shutting down"), "{error:#}");
-        assert_eq!(lines(&lifecycle).len(), 3, "no runtime spawned after shutdown");
+        assert_eq!(
+            lines(&lifecycle).len(),
+            3,
+            "no runtime spawned after shutdown"
+        );
 
         let mut started = Vec::new();
         let mut stopped = Vec::new();

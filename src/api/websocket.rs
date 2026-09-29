@@ -1,11 +1,17 @@
 use axum::extract::ws::{close_code, CloseFrame, Message, WebSocket};
 use futures_util::StreamExt;
 use serde_json::json;
-use std::{sync::Arc, time::{Duration, UNIX_EPOCH}};
+use std::{
+    sync::Arc,
+    time::{Duration, UNIX_EPOCH},
+};
 use tokio::sync::{broadcast, watch};
 
-use crate::{core::HivemindCore, events::{DomainEvent, DomainEventKind}};
 use super::protocol::{Envelope, Outbound};
+use crate::{
+    core::HivemindCore,
+    events::{DomainEvent, DomainEventKind},
+};
 
 pub(super) async fn handle(
     mut socket: WebSocket,
@@ -95,31 +101,63 @@ fn map_event(event: &DomainEvent) -> Option<Outbound> {
             "conversation.turn.started",
             json!({"room_id": room_id, "turn_id": turn_id}),
         ),
-        DomainEventKind::TurnCompleted { room_id, turn_id, reply_count, .. } => (
+        DomainEventKind::TurnCompleted {
+            room_id,
+            turn_id,
+            reply_count,
+            ..
+        } => (
             "conversation.turn.completed",
             json!({"room_id": room_id, "turn_id": turn_id, "reply_count": reply_count}),
         ),
-        DomainEventKind::AgentReplyStarted { room_id, turn_id, instance_id, .. } => (
+        DomainEventKind::AgentReplyStarted {
+            room_id,
+            turn_id,
+            instance_id,
+            ..
+        } => (
             "agent.reply.started",
             json!({"room_id": room_id, "turn_id": turn_id, "agent_instance_id": instance_id}),
         ),
-        DomainEventKind::AgentReplyCompleted { room_id, turn_id, instance_id, .. } => (
+        DomainEventKind::AgentReplyCompleted {
+            room_id,
+            turn_id,
+            instance_id,
+            ..
+        } => (
             "agent.reply.completed",
             json!({"room_id": room_id, "turn_id": turn_id, "agent_instance_id": instance_id}),
         ),
-        DomainEventKind::AgentReplyFailed { room_id, turn_id, instance_id, .. } => (
+        DomainEventKind::AgentReplyFailed {
+            room_id,
+            turn_id,
+            instance_id,
+            ..
+        } => (
             "agent.reply.failed",
             json!({"room_id": room_id, "turn_id": turn_id, "agent_instance_id": instance_id}),
         ),
-        DomainEventKind::RuntimeStarted { instance_id, runtime, .. } => (
+        DomainEventKind::RuntimeStarted {
+            instance_id,
+            runtime,
+            ..
+        } => (
             "runtime.started",
             json!({"agent_instance_id": instance_id, "runtime": runtime}),
         ),
-        DomainEventKind::RuntimeStopped { instance_id, runtime, .. } => (
+        DomainEventKind::RuntimeStopped {
+            instance_id,
+            runtime,
+            ..
+        } => (
             "runtime.stopped",
             json!({"agent_instance_id": instance_id, "runtime": runtime}),
         ),
-        DomainEventKind::RuntimeFailed { instance_id, runtime, .. } => (
+        DomainEventKind::RuntimeFailed {
+            instance_id,
+            runtime,
+            ..
+        } => (
             "runtime.failed",
             json!({"agent_instance_id": instance_id, "runtime": runtime}),
         ),

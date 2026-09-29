@@ -83,8 +83,8 @@ struct GroupDocument<'a> {
 }
 
 fn persist_groups(config: &HivemindConfig, path: &Path) -> Result<()> {
-    let raw = fs::read_to_string(path)
-        .with_context(|| format!("reading config {}", path.display()))?;
+    let raw =
+        fs::read_to_string(path).with_context(|| format!("reading config {}", path.display()))?;
     let mut document = raw
         .parse::<toml_edit::DocumentMut>()
         .with_context(|| format!("parsing config {}", path.display()))?;

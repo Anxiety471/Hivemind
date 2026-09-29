@@ -146,7 +146,11 @@ pub fn doctor(config_path: &Path, config: &HivemindConfig) -> Result<()> {
     }
 }
 
-fn doctor_agent(config: &HivemindConfig, agent: &hivemind::config::AgentConfig, errors: &mut usize) {
+fn doctor_agent(
+    config: &HivemindConfig,
+    agent: &hivemind::config::AgentConfig,
+    errors: &mut usize,
+) {
     let binary = match agent.runtime.as_str() {
         "pi" => Some(&config.runtime.pi_binary),
         "omp" => Some(&config.runtime.omp_binary),
