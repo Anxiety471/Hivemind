@@ -3,3 +3,4 @@ hivemind.toml
 *.log
 .hivemind/
 .omp
+scripts/__pycache__
