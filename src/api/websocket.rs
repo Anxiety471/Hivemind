@@ -40,6 +40,7 @@ pub(super) async fn handle(
         tokio::select! {
             changed = shutdown.changed() => {
                 if changed.is_err() || *shutdown.borrow() {
+                    drain_queued(&mut socket, &mut events).await;
                     close(&mut socket, None).await;
                     break;
                 }
@@ -211,6 +212,37 @@ async fn send(socket: &mut WebSocket, message: Outbound) -> Result<(), axum::Err
     socket.send(Message::Text(text.into())).await
 }
 
+/// Frames already queued for this client are flushed before the close so
+/// shutdown lifecycle events are not lost. Bounded by frame count and time;
+/// nothing is replayed or buffered beyond what the receiver already holds.
+async fn drain_queued(socket: &mut WebSocket, events: &mut broadcast::Receiver<DomainEvent>) {
+    const MAX_FRAMES: usize = 64;
+    let flush = async {
+        for _ in 0..MAX_FRAMES {
+            match events.try_recv() {
+                Ok(event) => {
+                    if let Some(message) = map_event(&event) {
+                        if send(socket, message).await.is_err() {
+                            return;
+                        }
+                    }
+                }
+                Err(broadcast::error::TryRecvError::Lagged(missed)) => {
+                    let message = Outbound::event(
+                        "system.events_lagged",
+                        None,
+                        json!({"missed_count": missed, "refresh_required": true}),
+                    );
+                    if send(socket, message).await.is_err() {
+                        return;
+                    }
+                }
+                Err(_) => return,
+            }
+        }
+    };
+    let _ = tokio::time::timeout(Duration::from_secs(1), flush).await;
+}
 async fn close(socket: &mut WebSocket, frame: Option<CloseFrame>) {
     let frame = frame.or_else(|| {
         Some(CloseFrame {

@@ -834,11 +834,10 @@ async fn state_summary_budget_and_utf8_boundaries_are_preserved() {
         })
         .await
         .unwrap();
-    assert!(oversized[0]
-        .result
-        .as_ref()
-        .unwrap_err()
-        .contains("exceed configured"));
+    let overflow = oversized[0].result.as_ref().unwrap_err();
+    assert!(overflow.contains("exceed configured"));
+    assert!(overflow.contains("bytes) exceed"));
+    assert!(overflow.contains("(1000 tokens = 4000 bytes)"));
     assert_eq!(
         bounded.room_history("other").unwrap().events[0].speaker,
         "user"

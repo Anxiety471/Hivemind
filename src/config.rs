@@ -159,6 +159,17 @@ impl HivemindConfig {
         Ok(config)
     }
 
+    /// Rejects a context budget too small to hold the fixed pack overhead.
+    pub fn validate_context_floor(&self) -> Result<()> {
+        if self.context.context_target_tokens < MIN_CONTEXT_TARGET_TOKENS {
+            bail!(
+                "context.context_target_tokens ({}) is below the minimum of {MIN_CONTEXT_TARGET_TOKENS}",
+                self.context.context_target_tokens
+            );
+        }
+        Ok(())
+    }
+
     fn validate(&self) -> Result<()> {
         if self.memory.mode != "deterministic" {
             bail!(
@@ -173,6 +184,7 @@ impl HivemindConfig {
         {
             bail!("context.recent_turns, summary_max_tokens, context_target_tokens, and summary_refresh_turns must be positive");
         }
+        self.validate_context_floor()?;
         if self.context.summary_max_tokens > self.context.context_target_tokens {
             bail!("context.summary_max_tokens must not exceed context.context_target_tokens");
         }
@@ -345,6 +357,10 @@ impl HivemindConfig {
         }
     }
 }
+
+/// Smallest `context_target_tokens` that holds the fixed context-pack overhead
+/// (identity, memory-tool manifest, state, current turn) before any history.
+pub const MIN_CONTEXT_TARGET_TOKENS: usize = 1000;
 
 fn default_recent_turns() -> usize {
     6
@@ -554,6 +570,13 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(invalid.contains("must be positive"));
+        let below_floor = load_toml(&format!(
+            "[[personas]]\nid = \"a\"\n[context]\ncontext_target_tokens = {}\nruntime_rotate_tokens = 5000\nsummary_max_tokens = 10\n",
+            MIN_CONTEXT_TARGET_TOKENS - 1
+        ))
+        .unwrap_err()
+        .to_string();
+        assert!(below_floor.contains("minimum of 1000"));
         let bad_role = load_toml("[[personas]]\nid = \"a\"\n[[groups]]\nid = \"g\"\nmembers = [\"a\"]\n[groups.member_roles]\nb = \"Reviewer\"\n").unwrap_err().to_string();
         assert_eq!(
             config.groups[0]

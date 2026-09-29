@@ -866,4 +866,51 @@ done
         let _ = shutdown.send(true);
         server.abort();
     }
+
+    #[tokio::test]
+    async fn websocket_delivers_queued_events_before_shutdown_close() {
+        let (address, shutdown, server, test_core) = websocket_server().await;
+        let endpoint = format!("ws://{address}/api/v1/ws");
+        let (mut socket, _) = connect_async(&endpoint).await.unwrap();
+        assert_eq!(receive_json(&mut socket).await["type"], "system.ready");
+
+        for _ in 0..5 {
+            test_core
+                .core
+                .events()
+                .publish(crate::events::DomainEventKind::TurnStarted {
+                    room_id: "room".into(),
+                    turn_id: "turn".into(),
+                });
+        }
+        shutdown.send(true).unwrap();
+
+        let mut frames = 0;
+        loop {
+            let message = tokio::time::timeout(Duration::from_secs(3), socket.next())
+                .await
+                .unwrap();
+            match message {
+                Some(Ok(Message::Text(_))) => frames += 1,
+                Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                Some(Ok(_)) => {}
+            }
+        }
+        assert_eq!(frames, 5);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn websocket_shutdown_close_is_bounded_without_queued_events() {
+        let (address, shutdown, server, _test_core) = websocket_server().await;
+        let endpoint = format!("ws://{address}/api/v1/ws");
+        let (mut socket, _) = connect_async(&endpoint).await.unwrap();
+        assert_eq!(receive_json(&mut socket).await["type"], "system.ready");
+        shutdown.send(true).unwrap();
+        let message = tokio::time::timeout(Duration::from_secs(3), socket.next())
+            .await
+            .unwrap();
+        assert!(matches!(message, Some(Ok(Message::Close(_)))));
+        server.abort();
+    }
 }

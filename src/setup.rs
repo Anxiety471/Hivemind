@@ -138,6 +138,13 @@ pub fn doctor(config_path: &Path, config: &HivemindConfig) -> Result<()> {
             errors += 1;
         }
     }
+    match config.validate_context_floor() {
+        Ok(()) => println!("[ok] context budget"),
+        Err(error) => {
+            println!("[error] {error:#}");
+            errors += 1;
+        }
+    }
     if errors == 0 {
         println!("[ok] runtime configuration\n[ok] ready");
         Ok(())
