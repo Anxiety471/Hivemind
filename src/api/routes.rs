@@ -423,20 +423,20 @@ mod tests {
         let mut config = HivemindConfig::default_poc();
         config.groups.push(crate::config::GroupConfig {
             name: "review".into(),
-            members: vec!["Maomao".into(), "Albedo".into()],
+            members: vec!["Engineer".into(), "Reviewer".into()],
             mode: crate::config::ConversationMode::Discussion,
             member_roles: [
-                ("Maomao".into(), "Reviewer".into()),
-                ("Albedo".into(), "Builder".into()),
+                ("Engineer".into(), "Reviewer".into()),
+                ("Reviewer".into(), "Builder".into()),
             ]
             .into_iter()
             .collect(),
-            reply_order: vec!["Albedo".into(), "Maomao".into()],
+            reply_order: vec!["Reviewer".into(), "Engineer".into()],
         });
-        let maomao_system_prompt = config
+        let engineer_system_prompt = config
             .agents
             .iter()
-            .find(|agent| agent.name == "Maomao")
+            .find(|agent| agent.name == "Engineer")
             .unwrap()
             .system_prompt
             .clone();
@@ -494,7 +494,7 @@ done
         .await;
         assert_eq!(status, StatusCode::OK, "{body}");
         assert_eq!(body["room_id"], "main");
-        assert_eq!(body["replies"][0]["persona_id"], "Maomao");
+        assert_eq!(body["replies"][0]["persona_id"], "Engineer");
         assert_eq!(body["replies"][0]["ok"], true);
         assert_eq!(body["replies"][0]["content"], "API reply");
         let room_id = body["room_id"].as_str().unwrap();
@@ -527,8 +527,8 @@ done
         .await;
         assert_eq!(group_status, StatusCode::OK, "{group_body}");
         assert_eq!(group_body["room_id"], "group-review");
-        assert_eq!(group_body["replies"][0]["persona_id"], "Albedo");
-        assert_eq!(group_body["replies"][1]["persona_id"], "Maomao");
+        assert_eq!(group_body["replies"][0]["persona_id"], "Reviewer");
+        assert_eq!(group_body["replies"][1]["persona_id"], "Engineer");
 
         let group_started = receive_json(&mut socket).await;
         assert_eq!(group_started["type"], "conversation.turn.started");
@@ -560,19 +560,19 @@ done
             .filter(|message| message.contains("review the API group"))
             .collect();
         assert_eq!(group_prompts.len(), 2);
-        assert!(group_prompts[0].contains("- Albedo — Builder"));
-        assert!(group_prompts[0].contains("- Maomao — Reviewer"));
-        assert!(group_prompts[1].contains("Albedo: API reply"));
+        assert!(group_prompts[0].contains("- Reviewer — Builder"));
+        assert!(group_prompts[0].contains("- Engineer — Reviewer"));
+        assert!(group_prompts[1].contains("Reviewer: API reply"));
         let (solo_status, solo_body) = post_json_over_tcp(
             address,
             "/api/v1/turns",
-            json!({"target":{"type":"solo","id":"Albedo"},"message":"valid solo API turn"}),
+            json!({"target":{"type":"solo","id":"Reviewer"},"message":"valid solo API turn"}),
         )
         .await;
         assert_eq!(solo_status, StatusCode::OK, "{solo_body}");
-        assert_eq!(solo_body["room_id"], "solo-Albedo");
+        assert_eq!(solo_body["room_id"], "solo-Reviewer");
         assert_eq!(solo_body["replies"].as_array().unwrap().len(), 1);
-        assert_eq!(solo_body["replies"][0]["persona_id"], "Albedo");
+        assert_eq!(solo_body["replies"][0]["persona_id"], "Reviewer");
         assert_eq!(solo_body["replies"][0]["ok"], true);
 
         let solo_started = receive_json(&mut socket).await;
@@ -600,7 +600,7 @@ done
         let (failed_status, failed_body) = post_json_over_tcp(
             address,
             "/api/v1/turns",
-            json!({"target":{"type":"solo","id":"Maomao"},"message":"FAIL API safely"}),
+            json!({"target":{"type":"solo","id":"Engineer"},"message":"FAIL API safely"}),
         )
         .await;
         assert_eq!(failed_status, StatusCode::OK, "{failed_body}");
@@ -609,7 +609,7 @@ done
         assert!(!failed_body.to_string().contains("private provider detail"));
         assert!(!failed_body.to_string().contains("system_prompt"));
         assert!(!failed_body.to_string().contains("secret"));
-        assert!(!failed_body.to_string().contains(&maomao_system_prompt));
+        assert!(!failed_body.to_string().contains(&engineer_system_prompt));
 
         socket.close(None).await.unwrap();
         core.shutdown().await;
@@ -636,8 +636,8 @@ done
         assert_eq!(
             agents["agents"],
             json!([
-                {"name":"Maomao","runtime":"pi"},
-                {"name":"Albedo","runtime":"pi"}
+                {"name":"Engineer","runtime":"pi"},
+                {"name":"Reviewer","runtime":"pi"}
             ])
         );
         let serialized = agents.to_string();

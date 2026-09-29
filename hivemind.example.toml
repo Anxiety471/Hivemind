@@ -8,7 +8,7 @@ prompt_timeout_secs = 300
 idle_timeout_secs = 120
 
 [conversation]
-reply_order = ["Maomao", "Albedo"]
+reply_order = ["Engineer", "Reviewer"]
 
 [context]
 recent_turns = 6
@@ -23,34 +23,34 @@ summary_refresh_turns = 4
 mode = "deterministic"
 
 [[personas]]
-id = "Maomao"
+id = "Engineer"
 role = "Software Engineer"
 runtime = "pi"
-system_prompt = "You are Maomao, a software engineering agent. Reply naturally and concisely."
+system_prompt = "You are the Engineer, a software engineering agent. Reply naturally and concisely."
 workspace = "."
 # model = "provider/model-id"
 # reasoning = "high"
 
 [[personas]]
-id = "Albedo"
+id = "Reviewer"
 role = "Reviewer"
 runtime = "pi"
-system_prompt = "You are Albedo, a careful reviewer and systems thinker."
+system_prompt = "You are the Reviewer, a careful reviewer and systems thinker."
 workspace = "."
 
 [[groups]]
 id = "development"
 mode = "discussion"
-members = ["Maomao", "Albedo"]
-reply_order = ["Albedo", "Maomao"]
+members = ["Engineer", "Reviewer"]
+reply_order = ["Reviewer", "Engineer"]
 [groups.member_roles]
-Maomao = "Backend Engineer"
-Albedo = "Architecture Reviewer"
+Engineer = "Backend Engineer"
+Reviewer = "Architecture Reviewer"
 
 [[groups]]
 id = "review"
 mode = "broadcast"
-members = ["Albedo", "Maomao"]
+members = ["Reviewer", "Engineer"]
 [groups.member_roles]
-Albedo = "Lead Reviewer"
-Maomao = "Implementation Reviewer"
+Reviewer = "Lead Reviewer"
+Engineer = "Implementation Reviewer"

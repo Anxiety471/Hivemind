@@ -1,571 +1,389 @@
-# Hivemind
+<div align="center">
 
-Hivemind is an experimental, runtime-agnostic **meta-harness for persistent AI agents**.
+# 🐝 Hivemind
 
-Hivemind owns conversation context and the CLI, while [oh-my-pi (OMP)](https://github.com/can1357/oh-my-pi) and [Pi](https://github.com/badlogic/pi-mono) provide disposable agent execution runtimes. The library also exposes an async HTTP/WebSocket API for health, agent metadata, and event streaming.
+**A runtime-agnostic meta-harness for persistent AI agents.**
 
-## Quick start
+Hivemind owns the conversation, the memory, and the CLI.<br>
+[Pi](https://github.com/badlogic/pi-mono) and [oh-my-pi (OMP)](https://github.com/can1357/oh-my-pi) just do the thinking.
 
-Prerequisites: Rust stable with Cargo, and at least one supported runtime
-(Pi or OMP) installed and authenticated with a provider through that
-runtime's own setup. Hivemind makes no provider API calls during setup.
+[![CI](https://github.com/Anxiety471/Hivemind/actions/workflows/ci.yml/badge.svg)](https://github.com/Anxiety471/Hivemind/actions/workflows/ci.yml)
+![Rust](https://img.shields.io/badge/rust-stable-orange?logo=rust)
+![Status](https://img.shields.io/badge/status-experimental-yellow)
+![API](https://img.shields.io/badge/API-loopback%20only-blue)
 
-~~~bash
+[Quick start](#-quick-start) •
+[CLI](#-cli) •
+[Configuration](#%EF%B8%8F-configuration) •
+[Memory](#-deterministic-memory) •
+[API](#-http--websocket-api) •
+[Architecture](#%EF%B8%8F-architecture)
+
+</div>
+
+---
+
+## ✨ Highlights
+
+- 🧠 **Agents belong to Hivemind, not to a runtime.** Pi and OMP are interchangeable adapters behind one `HarnessSession` boundary, selected per agent.
+- 💾 **Canonical SQLite history.** Rooms, turns, summaries, state, and memory live in `.hivemind/memory.sqlite3`. Any runtime session can be rebuilt from it.
+- ♻️ **Persistent, disposable sessions.** A session lives across turns for one room + persona. It rotates when its context budget fills and is discarded on failure. Nothing gets lost when it goes away.
+- 👥 **Rooms and groups.** You can talk to one persona (solo), all of them (main), or a persisted group in `broadcast` or `discussion` mode.
+- 🔢 **Deterministic reply order**, set globally or per group.
+- 🗂️ **Seven-layer memory with no LLM needed.** It uses FTS5 search, scope binding, provenance, and supersession.
+- 🔌 **Embeddable core** with a typed event bus, plus a loopback HTTP/WebSocket API.
+
+---
+
+## 🚀 Quick start
+
+**Prerequisites**
+
+- Rust stable with Cargo.
+- At least one supported runtime (**Pi** or **OMP**), installed and signed in to a provider through that runtime's own setup. Hivemind itself never calls a provider during setup.
+
+```bash
 git clone https://github.com/Anxiety471/Hivemind.git
 cd Hivemind
 
-rustc --version
-cargo --version
-pi --version       # or: omp --version
+rustc --version && cargo --version
+pi --version            # or: omp --version
+
 cargo build
-cargo run -- init
-~~~
+cargo run -- init       # writes hivemind.toml (never overwrites without --force)
+```
 
-Inspect `hivemind.toml`: the starter config uses Pi for both example agents,
-so only Pi is required unless you change an agent's `runtime`. Configure a
-provider/model in the runtime itself, then check local readiness and start:
+Take a look at `hivemind.toml`. The starter config uses **Pi for both example agents**, so you only need Pi unless you change an agent's `runtime`. Set up a provider/model inside the runtime, then check that everything is ready and start chatting:
 
-~~~bash
+```bash
 cargo run -- doctor
-cargo run
-~~~
+cargo run               # starts interactive chat
+```
 
-`doctor` checks only runtimes referenced by configured agents, resolves
-binaries through `PATH` (or uses an explicitly configured executable path),
-and checks workspaces and conversation reply order. `hivemind.toml` is local
-and ignored by Git. `init` never overwrites it unless passed `--force`.
+> [!NOTE]
+> `doctor` only checks runtimes that your configured agents use. It finds binaries on `PATH` (or at an explicit executable path) and also checks workspaces and reply order. `hivemind.toml` is local-only and ignored by Git.
 
-### Setup troubleshooting
+<details>
+<summary><b>🩺 Setup troubleshooting</b></summary>
 
-- If `doctor` reports a missing runtime, install/configure it or set the
-  matching `[runtime]` binary to its executable path. Only runtimes referenced
-  by agents are checked.
-- Workspaces must exist as directories; update `workspace` or create the
-  directory before starting chat.
-- Provider credentials belong to Pi or OMP. Verify authentication with that
-  runtime's own setup; `doctor` checks executable presence without contacting a
-  provider.
-- Reply-order entries must be unique configured agent names. Omitted agents
-  are appended in declaration order.
+- **Missing runtime:** install or configure it, or set the matching `[runtime]` binary to its executable path. Only runtimes that agents use are checked.
+- **Workspace errors:** each workspace must be an existing directory. Update `workspace` or create the directory before you start chat.
+- **Provider credentials** belong to Pi or OMP. Check authentication with that runtime's own setup. `doctor` only checks that the executable exists and never contacts a provider.
+- **Reply order:** entries must be unique names of configured agents. Any agents you leave out are added in declaration order.
 
+</details>
 
-## Shell commands
+---
 
-The shell CLI is the primary interface for inspecting Hivemind, running one-shot
-prompts, and managing persisted groups. `--config` also works before nested
-commands (for example `hivemind --config ./my-hive.toml group list`).
+## 💻 CLI
 
-~~~bash
-hivemind init
-hivemind doctor
-hivemind chat
-hivemind chat --solo Albedo
-hivemind chat --group backend
+The shell CLI is the main way to inspect Hivemind, run one-shot prompts, and manage persisted groups. `--config` also works before nested commands, e.g. `hivemind --config ./my-hive.toml group list`. With Cargo, put `cargo run --` in front of any command.
 
-hivemind agents
-hivemind status
-hivemind order
+| Command | Description |
+| --- | --- |
+| `hivemind init [--force]` | Create a starter configuration |
+| `hivemind doctor` | Check local configuration and runtime executables |
+| `hivemind chat` | Start interactive chat in the `main` room |
+| `hivemind chat --solo <persona>` | Chat with one persona |
+| `hivemind chat --group <name>` | Chat in a persisted group |
+| `hivemind agents` | List configured agents |
+| `hivemind status` | Show configuration and runtime readiness |
+| `hivemind order` | Print the effective reply order |
+| `hivemind ask <persona> "<msg>"` | Prompt one persona once (recorded in its solo room) |
+| `hivemind all "<msg>"` | Prompt every persona once (recorded in `main`) |
+| `hivemind group create <name> <members…>` | Create a group |
+| `hivemind group list` / `show <name>` | Inspect groups |
+| `hivemind group add` / `remove <name> <persona>` | Change membership |
+| `hivemind group delete <name>` | Delete a group |
 
-hivemind ask Albedo "hello"
-hivemind all "hello"
+`ask` and `all` go through the same turn coordinator and durable turn store as interactive chat. `all` always writes to the `main` room, whatever the active interactive route is.
 
-hivemind group create backend Albedo Maomao
-hivemind group list
-hivemind group show backend
-hivemind group add backend Frieren
-hivemind group remove backend Maomao
-hivemind group delete backend
-~~~
+### 💬 Interactive slash commands
 
-Cargo users can run the same commands with `cargo run --`, such as
-`cargo run -- ask Albedo "hello"` or `cargo run -- group list`. `init` refuses
-to overwrite an existing configuration unless `--force` is supplied.
+Inside `hivemind chat`, you can check status, switch routes, manage groups, or send a one-off turn without leaving the active conversation:
 
-Group definitions live in `hivemind.toml`. Each group selects `mode = "broadcast"`
-or `mode = "discussion"`, may override persona roles in `[groups.member_roles]`,
-and may set a room-specific `reply_order` containing only its members. A partial
-room order appends the remaining members in global effective order. Broadcast
-invokes every participant concurrently with the same turn context; discussion
-follows the effective room order and includes earlier same-turn replies.
-Shell `ask <persona>` and `all` use the same Hivemind-owned turn coordinator
-and durable turn store as interactive chat: `ask` records turns in that
-persona's solo room, while `all` records turns in the `main` room regardless of
-the active interactive route.
+| Command | Description |
+| --- | --- |
+| `/help` | Show available commands |
+| `/agents` · `/status` · `/order` · `/where` | Inspect agents, readiness, order, and the active route |
+| `/ask <persona> <msg>` | One-off turn in that persona's solo room |
+| `/all <msg>` | One-off turn in the `main` room |
+| `/solo <persona>` · `/main` | Switch the active route |
+| `/group create\|list\|show\|use\|add\|remove\|delete …` | Manage groups; `use` switches to a group |
+| `/quit` · `/exit` | Leave chat |
 
-## Interactive chat commands
+> [!TIP]
+> `/ask` and `/all` **don't change the active route**, so they never quietly add to the active group's history.
 
-Inside `hivemind chat`, use slash commands to inspect status, switch routing,
-manage persisted groups, or send a one-off turn without changing the active
-conversation:
+Group behavior:
 
-~~~text
-/help
-/agents
-/status
-/order
-/where
-/ask Albedo review this
-/all review this
-/solo Albedo
-/main
-/group create backend Albedo Maomao
-/group list
-/group show backend
-/group use backend
-/group add backend Frieren
-/group remove backend Maomao
-/group delete backend
-/quit
-/exit
-~~~
+- Deleting the active group sends you back to `main`.
+- Empty groups can't be used for chat. Bare turns in a group that has become empty are rejected. `list` and `show` still display empty groups.
+- Removing a member also clears that member's role and any explicit room-order entries for it.
 
-`/ask` and `/all` leave the active route unchanged. `/ask` writes to the selected
-persona's solo room; `/all` writes to the `main` room, so neither silently
-continues the active group's history. `/exit` aliases `/quit`.
-Deleting the active group returns the route to `main`; empty groups cannot be
-used for chat, and bare turns in a group that becomes empty are rejected.
-Group list/show still display empty groups. Removing a member also clears that
-member's role and explicit room-order entries.
+On `SIGINT`, chat cancels the active turn through core shutdown, reports the failed turn, and stops taking input.
 
-## Per-agent runtimes
+---
 
-Each agent selects a runtime independently. Hivemind supports OMP and Pi in one process:
+## ⚙️ Configuration
 
-~~~toml
+### Personas and runtimes
+
+Each persona picks its own runtime, so OMP and Pi can run side by side in one process:
+
+```toml
 [runtime]
 omp_binary = "omp"
 pi_binary = "pi"
-# Maximum runtime prompt duration in seconds; 0 disables the prompt timeout.
-prompt_timeout_secs = 300
-# Seconds an unused agent-instance runtime stays alive; 0 never idles out.
-idle_timeout_secs = 120
+prompt_timeout_secs = 300   # max prompt duration; 0 disables
+idle_timeout_secs = 120     # how long an unused session stays alive; 0 = never idle out
 
 [[personas]]
-id = "Maomao"
+id = "Engineer"
 role = "Backend Engineer"
 runtime = "pi"
 workspace = "."
-system_prompt = "You are Maomao."
+system_prompt = "You are the Engineer."
 model = "provider/model-id"
 reasoning = "high"
 
 [[personas]]
-id = "Albedo"
+id = "Reviewer"
 role = "Reviewer"
 runtime = "omp"
 workspace = "."
-system_prompt = "You are Albedo."
+system_prompt = "You are the Reviewer."
 fast = true
-~~~
+```
 
+| Key | Notes |
+| --- | --- |
+| `runtime` | `"pi"` or `"omp"`. Defaults to `"omp"` for older configs. Legacy `[[agents]]` entries are read as personas. |
+| `workspace` | Working directory for the child process |
+| `model` | OMP: maps to `--model` |
+| `reasoning` | OMP: maps to `--thinking`. The legacy key `thinking` is still accepted. |
+| `fast` | OMP only. Tri-state: leave it out to keep the default, or set `true`/`false` to apply once at session start. |
+| `role` | Default persona role. Group `member_roles` override it. |
 
-`runtime` defaults to `"omp"` for older configurations; legacy `[[agents]]`
-entries are accepted as personas. A new `init` config selects Pi for both
-example personas, so installing both runtimes is not required. Both executable
-settings default to `omp` and `pi`; workspace is used as the child process
-working directory. System prompts, model, reasoning, and persona role are
-settings; room member roles override the default persona role.
+### Reply order and groups
 
-For OMP, `model` maps to `--model`, `reasoning` maps to `--thinking`, and the
-older Hivemind key `thinking` remains accepted as an alias. OMP `fast` is
-tri-state: omitted leaves its default unchanged; `true` or `false` is applied
-once at session startup. `fast` is OMP-specific.
+```toml
+[conversation]
+reply_order = ["Reviewer", "Engineer"]
+```
 
-`runtime.prompt_timeout_secs` defaults to 300 seconds; set it to `0` to disable
-the prompt timeout. If a prompt times out, Hivemind cancels that prompt,
-discards the current runtime session, closes its runtime epoch, and does not
-retry that user turn. The next turn starts with a fresh session rehydrated from
-canonical room history.
+- Personas you leave out follow declaration order.
+- **Main/all** turns use broadcast mode. **Solo** turns use the same room/history/context setup with one participant.
+- Each group sets `mode = "broadcast"` or `mode = "discussion"`. It can override roles in `[groups.member_roles]` and set its own `reply_order` with members only. A partial order puts the remaining members after it, in global order.
 
-Each agent instance is identified internally by its structured room and persona
-IDs, not by joining them with a delimiter. At storage and public protocol
-boundaries, Hivemind uses the stable, versioned `ai1` length-prefixed encoding
-of those fields as `agent_instance_id`; it round-trips without guessing where
-one ID ends and the other begins. Shell `ask`/`all`, interactive `chat` (main,
-solo, group, `/ask`, `/all`), and any `HivemindCore::turn` caller use the same
-identity. A session may persist across turns for the same agent instance, but
-is never shared across different rooms or personas. The first prompt of a
-session carries the full Context Pack; later turns in the same room send only a
-room delta, and memory-tool follow-ups send only the tool result. At the next
-turn boundary, a session rotates when its context reaches
-`context.runtime_rotate_tokens` or when its next room delta cannot be built
-(emitting `runtime.rotated`). A runtime failure discards the session without
-retrying that turn; it also closes after `runtime.idle_timeout_secs` without
-use and stops on core shutdown. This applies equally to Pi and OMP. Hivemind's
-SQLite room history, state, and summary stay canonical, and every new session
-is rehydrated from them.
-Participants are resolved and validated before any runtime starts. Pi uses RPC
-mode with `--no-session` and keeps its in-process context between prompts;
-Hivemind waits for `agent_settled` and returns text blocks from the latest
-assistant `message_end`.
+| Mode | Behavior |
+| --- | --- |
+| `broadcast` | All participants run concurrently with the same turn context |
+| `discussion` | Participants run in effective order; each one sees the earlier replies from the same turn |
 
-Canonical history, memory, and runtime epochs live in `.hivemind/memory.sqlite3`
-next to the selected config file: rooms, turns, and messages (L7), scoped
-memory records with FTS5 search, runtime epochs, and group state. Legacy room
-JSON is imported exactly once — on first load every legacy turn and the room
-snapshot are written to SQLite, and the JSON file is removed only after that
-migration succeeds.
+### Context
 
-Legacy private-memory rows keep their original `scope_type = 'agent_instance'`
-and remain opaque to ordinary typed callers; new private-memory rows use
-`agent_instance_v1` with the `ai1` encoding. Existing runtime epochs are kept
-with identity version `0` and are not returned or closed through typed
-identity lookup. New epochs use identity version `1` and the same encoded
-identity. Hivemind never guesses how to split an old slash-delimited value.
+`[context]` sets the recent raw-turn window, summary size and refresh cadence, and an approximate context budget. `runtime_rotate_tokens` is the live context size that triggers a session rotation before that agent instance's next turn.
 
-Legacy JSON history identities have no version marker and remain opaque; import
-reconstructs the typed identity only from the authoritative room and speaker
-fields. New typed history entries carry
-`agent_instance_identity_version = 1`, and only those entries are decoded as
-the versioned identity.
+### Room state directives
 
-`.hivemind/context/` now holds only room turn-lock files and any not-yet-migrated
-legacy history. `[context]` configures the recent raw-turn window, summary size/
-refresh cadence, and bounded approximate context budget. `runtime_rotate_tokens`
-is the live context size at which that agent instance's runtime is rotated
-before its next turn, and `runtime.idle_timeout_secs` is how long an unused
-runtime stays alive.
+Room state only changes from explicit line-based directives in **user** input. Agent prose is never treated as a state update.
 
-## Application core and event stream
-
-`serve`, `ask`, `all`, and interactive `chat` all construct the library
-`HivemindCore`, which owns the ordered persona registry, one SQLite-backed
-memory service, one durable conversation coordinator, a per-instance runtime
-pool, and a bounded process-local event bus. Interactive `chat` shares one core
-for the whole session. Each core turn prompts that room's live runtime per
-persona and keeps it for the next turn (emitting
-`runtime.started`/`runtime.rotated`/`runtime.stopped` events); core shutdown
-stops every live runtime.
-
-On `SIGINT`, interactive chat cancels the active turn through core shutdown,
-reports the failed turn, and stops accepting input. The API also begins core
-shutdown and notifies WebSocket clients before Axum drains in-flight HTTP
-requests; interrupted HTTP turns retain the API's sanitized failed-reply
-response.
-
-Shell `ask` and `all` construct a core per command. Conversation targets
-(main, solo persona, or group) are resolved by the core, including room
-identity, mode, participants, roles, and effective reply order.
-
-The loopback API accepts turns at `POST /api/v1/turns`; WebSocket remains the
-live event stream. For example:
-
-~~~json
-{"target":{"type":"group","id":"development"},"message":"Review the runtime lifecycle."}
-~~~
-
-The response includes `turn_id`, `room_id`, and ordered `replies` with
-`persona_id`, `ok`, and `content`. Match `turn_id` and `room_id` from the
-response to `conversation.turn.started`, `agent.reply.*`, and
-`conversation.turn.completed` WebSocket events. Target-not-found errors return
-404, malformed/empty requests return 400, and shutdown returns 503; responses
-do not include provider diagnostics or prompts. Construction and health/info/
-agent listing do not start Pi or OMP. Runtime lifecycle and conversation events
-are ephemeral notifications, not canonical records; durable room history and
-memory remain in SQLite.
-
-The library's `core`, `events`, `conversation`, `config`, `runtime`, and
-`memory` modules expose this kernel for embedding. Room transcripts, summaries,
-memory records, and runtime epochs stay canonical in
-`.hivemind/memory.sqlite3`, relative to the config file; `.hivemind/context/`
-holds turn-lock files and legacy JSON awaiting one-time migration.
-
-`HivemindCore::events().subscribe()` returns an independent bounded Tokio
-broadcast receiver of typed `DomainEvent`s. The stream includes process-local
-sequence/ID/timestamp metadata and lifecycle, turn, reply, and runtime events.
-It is ephemeral notification only—not canonical state or history—and slow
-consumers must handle `RecvError::Lagged` (for example, refresh from the
-authoritative API state).
-
-The WebSocket stream forwards these events as `conversation.turn.started`,
-`conversation.turn.completed`, `agent.reply.started`, `agent.reply.completed`,
-`agent.reply.failed`, `runtime.started`, `runtime.stopped`,
-`runtime.rotated`, and
-`runtime.failed`. A subscriber that falls behind the bounded buffer receives
-`system.events_lagged` with `missed_count` and `refresh_required: true`
-instead of the dropped events.
-
-Room state changes only from explicit line-oriented directives in user input;
-successful agent prose is never interpreted as a state update. Use:
-
-~~~text
+```text
 Goal: ship the parser safely
 Decision: use typed updates
-Assign: Maomao = implement parser
+Assign: Engineer = implement parser
 Question: should malformed lines be rejected?
 Completed: define the update syntax
 Global: Hivemind architecture: runtimes are disposable
-~~~
+```
 
-`Goal` replaces the current goal; repeated `Decision`, `Question`, and
-`Completed` values are stored once; `Assign` uses `persona = task` and replaces
-that persona's assignment. The structured state is included in each later
-context pack.
+- `Goal` replaces the current goal.
+- Repeated `Decision`, `Question`, and `Completed` values are stored only once.
+- `Assign` takes the form `persona = task` and replaces that persona's assignment.
+- Every later context pack includes the structured state.
 
-A `Global:` line is an explicit user instruction authorizing exactly one
-global memory write for that turn: an agent's `memory.global.propose` is
-accepted only when its content exactly matches the trimmed text after
-`Global:`. Proposals without the directive, with different wording, or with
-merely broad-sounding prompt text are rejected deterministically; the
-authorization is bound by Hivemind to the turn and message of the directive,
-never to model- or tool-supplied arguments.
+> [!IMPORTANT]
+> `Global:` lets through **exactly one** global memory write for that turn. An agent's `memory.global.propose` is accepted only if its content exactly matches the trimmed text after `Global:`. Anything else is rejected deterministically. Hivemind ties the authorization to the directive's turn and message, never to arguments supplied by a model or tool.
 
+---
 
-## Deterministic reply order
+## 🧠 Deterministic memory
 
-The optional `[conversation]` table controls the global deterministic order:
-
-~~~toml
-[conversation]
-reply_order = ["Albedo", "Maomao"]
-~~~
-
-Omitted personas follow declaration order. Groups may override the global
-order with their own member-only `reply_order` and select their own `mode`.
-Main/all turns use broadcast mode; solo turns use the same room/history/context
-architecture with one participant.
-
-## Deterministic memory
-
-Hivemind owns a seven-layer memory system that works without any LLM. The
-default is `[memory] mode = "deterministic"`: storage, retrieval, and policy
-are plain code paths, so memory keeps working when no model, provider, or
-quota is available.
+Hivemind has a seven-layer memory system that **works without any LLM**. The default is `[memory] mode = "deterministic"`: storage, retrieval, and policy are plain code, so memory keeps working when no model, provider, or quota is available.
 
 | Layer | Owner | Behavior |
 | --- | --- | --- |
-| Harness working context | Pi/OMP session | Disposable; rebuilt from the layers below if the runtime restarts. |
-| Recent conversation | room | Bounded raw window set by `[context] recent_turns`; older turns stay in the archive. |
-| Group shared memory | group | Visible only to that group's members. |
-| Private memory | agent instance | Visible only to that structured room/persona identity; identical personas in different rooms have separate memories. |
-| Persona memory | persona | Shared across all instances of the same persona. |
-| Hivemind global | system-wide | Durable project-wide facts, held to the strictest policy. |
-| Canonical archive | Hivemind | Durable source of truth for rooms, turns, messages, and memory records. |
+| Harness working context | Pi/OMP session | Disposable; rebuilt from the layers below if the runtime restarts |
+| Recent conversation | room | Raw window capped by `[context] recent_turns`; older turns stay in the archive |
+| Group shared memory | group | Visible only to that group's members |
+| Private memory | agent instance | Visible only to that room/persona identity; the same persona in different rooms gets separate memories |
+| Persona memory | persona | Shared by every instance of the same persona |
+| Hivemind global | system-wide | Durable project-wide facts, under the strictest policy |
+| Canonical archive | Hivemind | Durable source of truth for rooms, turns, messages, and memory records |
 
-The external `agent_instance_id` representation is versioned and unambiguous;
-it is a serialization of the structured IDs, not the identity itself. Existing
-SQLite scope or runtime-epoch values written as legacy `room/persona` strings
-are preserved as opaque values. Hivemind does not split or reassign them based
-on the delimiter, since IDs may themselves contain `/`; they are not treated as
-the new canonical structured identity unless a mapping is known from
-authoritative structured data.
+- 🔍 **Storage.** A local SQLite archive with FTS5 full-text indexes over memories and archived messages. Search is deterministic and needs no embedding service.
+- 🔒 **Scope binding.** Hivemind attaches the caller's own context to every memory request and works out the group, instance, and persona from it. Requests never name an owner. An agent can't read another group's memory or another instance's private notes, and it can't pose as a different persona.
+- ✍️ **Writes.** Private and group writes are accepted directly within the caller's own scope. Persona and global writes are proposals that Hivemind's policy checks before committing. An agent's bare opinion never becomes global truth.
+- 🧾 **Provenance and supersession.** Every record keeps its origin (room, turn, message, actor). Corrections create revisions. An old record is kept as `superseded` instead of being deleted, so history stays searchable.
+- 🌉 **One tool bridge.** Pi and OMP reach memory through a single tool bridge owned by Hivemind. Runtime adapters only carry the transport. Hivemind also injects guidance that tells each agent which capabilities it has, which scopes it may touch, and that it should search memory rather than pretend to remember.
 
-- **Storage**: a local SQLite archive with FTS5 full-text indexes over
-  memories and archived messages. Search is deterministic and needs no model
-  or embedding service.
-- **Scope binding**: Hivemind attaches the caller's own context to every
-  memory request and resolves the actual group/instance/persona from it —
-  requests never name an owner, so an agent cannot read another group's
-  memory or another instance's private notes, and cannot impersonate a
-  different persona.
-- **Writes**: private and group writes are accepted directly within the
-  caller's own scope. Persona and global writes are stricter proposals that
-  Hivemind's policy validates before committing; an agent's bare opinion
-  never becomes global truth.
-- **Provenance and supersession**: every record keeps where it came from
-  (room, turn, message, actor). Corrections create revisions, and a new
-  memory may supersede an older one — the old record remains as `superseded`
-  rather than deleted, so history stays searchable.
-- **One tool bridge**: agents reach memory through a single Hivemind-owned
-  tool bridge shared by Pi and OMP; runtime adapters only carry the
-  transport. Hivemind also injects the generated guidance telling each agent
-  which capabilities exist, which scopes it may touch, and that searching
-  memory is preferred over pretending to remember.
+---
 
-## HTTP and WebSocket API
+## 🔌 HTTP & WebSocket API
 
-Hivemind provides an async HTTP API and WebSocket interface for frontends and orchestration tools.
+```bash
+cargo run --bin hivemind-server     # binds to http://127.0.0.1:7474
+```
 
-### Starting the server
+> [!CAUTION]
+> Remote access and authentication are **not implemented**. The API has no authentication and must stay loopback-only. Don't expose it to other hosts or networks.
 
-Run the server with:
+Building the server and serving health/info/agent listings never starts Pi or OMP. All endpoints use the `/api/v1` prefix.
 
-~~~bash
-cargo run --bin hivemind-server
-~~~
+| Method | Endpoint | Description |
+| --- | --- | --- |
+| `GET` | `/api/v1/health` | Liveness check; never contacts a provider |
+| `GET` | `/api/v1/info` | Service metadata and protocol endpoints |
+| `GET` | `/api/v1/agents` | Safe agent metadata (name and runtime only; no credentials) |
+| `POST` | `/api/v1/turns` | Submit a conversation turn |
+| `GET` | `/api/v1/ws` | WebSocket live event stream |
 
-By default, the server binds strictly to the loopback interface at:
+<details>
+<summary><b>Example responses</b></summary>
 
-~~~text
-http://127.0.0.1:7474
-~~~
-
-> **Security note:** Remote exposure and authentication are not implemented. The API is unauthenticated and must remain loopback-only; do not expose it to other hosts or networks.
-
-### HTTP endpoints
-
-All HTTP endpoints use the `/api/v1` version prefix.
-
-#### Health check (`GET /api/v1/health`)
-
-A lightweight check to verify the process is alive without contacting AI providers:
-
-~~~bash
+```bash
 curl http://127.0.0.1:7474/api/v1/health
-~~~
+```
+```json
+{ "status": "ok", "service": "hivemind" }
+```
 
-Expected JSON response:
-
-~~~json
-{
-  "status": "ok",
-  "service": "hivemind"
-}
-~~~
-
-#### Server info (`GET /api/v1/info`)
-
-Returns service metadata and protocol endpoints:
-
-~~~bash
+```bash
 curl http://127.0.0.1:7474/api/v1/info
-~~~
+```
+```json
+{ "name": "hivemind", "version": "0.1.0", "api_version": "v1", "websocket": "/api/v1/ws" }
+```
 
-Expected JSON response:
-
-~~~json
-{
-  "name": "hivemind",
-  "version": "0.1.0",
-  "api_version": "v1",
-  "websocket": "/api/v1/ws"
-}
-~~~
-
-#### Configured agents (`GET /api/v1/agents`)
-
-Lists configured agent metadata safe for clients to view (excluding keys, tokens, or credentials):
-
-~~~bash
+```bash
 curl http://127.0.0.1:7474/api/v1/agents
-~~~
+```
+```json
+{ "agents": [ { "name": "Reviewer", "runtime": "omp" }, { "name": "Engineer", "runtime": "pi" } ] }
+```
 
-Expected JSON response:
+</details>
 
-~~~json
-{
-  "agents": [
-    {
-      "name": "Albedo",
-      "runtime": "omp"
-    },
-    {
-      "name": "Maomao",
-      "runtime": "pi"
-    }
-  ]
-}
-~~~
+### Submitting turns
 
-### WebSocket interface
+```json
+{"target":{"type":"group","id":"development"},"message":"Review the runtime lifecycle."}
+```
 
-The WebSocket endpoint is available at:
+The response includes `turn_id`, `room_id`, and an ordered list of `replies`, each with `persona_id`, `ok`, and `content`. Use `turn_id` and `room_id` to link the response to the matching WebSocket events. Responses never include provider diagnostics or prompts.
 
-~~~text
-ws://127.0.0.1:7474/api/v1/ws
-~~~
+| Status | Meaning |
+| --- | --- |
+| `400` | Malformed or empty request |
+| `404` | Target not found |
+| `503` | Shutting down |
 
-#### Connection lifecycle and protocol
+When the server shuts down, core shutdown starts first and WebSocket clients are notified before Axum finishes in-flight HTTP requests. Interrupted HTTP turns still get the API's sanitized failed-reply response.
 
-Messages use a standard JSON envelope with `type`, optional correlation `id`, and a `payload` object:
+### WebSocket protocol
 
-1. **Ready event**: Upon connecting, the server immediately emits a `system.ready` event:
-   ~~~json
-   {
-     "type": "system.ready",
-     "payload": {
-       "service": "hivemind",
-       "protocol_version": 1
-     }
-   }
-   ~~~
+Frames are JSON envelopes with a `type`, an optional correlation `id`, and a `payload`.
 
-2. **Ping / Pong**: Clients can send a `system.ping` message:
-   ~~~json
-   {
-     "type": "system.ping",
-     "id": "123",
-     "payload": {}
-   }
-   ~~~
-   The server replies with `system.pong` preserving the `id`:
-   ~~~json
-   {
-     "type": "system.pong",
-     "id": "123",
-     "payload": {}
-   }
-   ~~~
+```bash
+websocat ws://127.0.0.1:7474/api/v1/ws        # or: npx wscat -c ws://127.0.0.1:7474/api/v1/ws
+```
 
-3. **Errors**: Unsupported or malformed messages return a `system.error` frame with details while keeping the connection open when possible.
-
-#### Interacting via CLI
-
-You can test the WebSocket interface using a CLI WebSocket tool such as `websocat`:
-
-~~~bash
-websocat ws://127.0.0.1:7474/api/v1/ws
-~~~
-
-Once connected, `system.ready` will be received. You can paste a ping frame:
-
-~~~json
+```jsonc
+// ← on connect
+{"type":"system.ready","payload":{"service":"hivemind","protocol_version":1}}
+// → ping
 {"type":"system.ping","id":"req-1","payload":{}}
-~~~
+// ← pong, same id
+{"type":"system.pong","id":"req-1","payload":{}}
+```
 
-and observe the matching `system.pong` reply.
+Unsupported or malformed messages get a `system.error` frame, and the connection stays open when possible.
 
-*Alternative tools:* You can also use `wscat`, for example `npx wscat -c ws://127.0.0.1:7474/api/v1/ws`.
-## Architecture
+**Streamed events**
 
-~~~text
-        Hivemind CLI (chat / ask / all)      embedding callers
-                        |                          |
-                        +------------+-------------+
-                                     |
-                               HivemindCore
-                     (one per chat session / command)
-                                     |
-                         ConversationCoordinator
-          (SQLite room history, state, summary via MemoryService)
-                                     |
-                     Context Pack per persona invocation
-                                     |
-                              RuntimeInvoker
-          start fresh OMP or Pi process -> prompt -> stop process
-                                     |
-                    reply stored in SQLite room history
-                                     |
-                  next invocation rehydrates from SQLite
-~~~
+| Group | Events |
+| --- | --- |
+| Conversation | `conversation.turn.started`, `conversation.turn.completed` |
+| Replies | `agent.reply.started`, `agent.reply.completed`, `agent.reply.failed` |
+| Runtime | `runtime.started`, `runtime.stopped`, `runtime.rotated`, `runtime.failed` |
+| System | `system.events_lagged` with `missed_count` and `refresh_required: true` |
 
-Every persona invocation starts a fresh Pi or OMP process and stops it after
-the reply; no runtime session outlives an invocation, so runtime state is
-disposable: every prompt is rebuilt from Hivemind's durable SQLite transcript,
-summary, and shared state.
-Broadcast invocations run concurrently; discussion invokes personas in
-effective reply order and includes earlier same-turn replies. Room turns are
-serialized by the room lock.
+> [!NOTE]
+> Events are short-lived **notifications**, not canonical records. Durable history and memory stay in SQLite. A subscriber that falls behind the bounded buffer gets `system.events_lagged` in place of the dropped events.
 
-The important boundary is that an **agent belongs to Hivemind, not to a runtime**. OMP and Pi are runtime adapters behind the same `HarnessSession` (`prompt` / `shutdown`) boundary; runtime selection happens per agent.
+---
 
+## 🏗️ Architecture
 
-## Current limitations
+```mermaid
+flowchart TD
+    CLI["CLI<br/>chat · ask · all"] --> Core
+    API["hivemind-server<br/>HTTP · WebSocket"] --> Core
+    Embed["Embedding callers"] --> Core
+    Core["HivemindCore<br/>persona registry · event bus"] --> Coord["ConversationCoordinator<br/>room lock · reply order · state"]
+    Coord <--> DB[("SQLite<br/>.hivemind/memory.sqlite3")]
+    Coord --> Pack["Context Pack / room delta<br/>per persona"]
+    Pack --> Pool["RuntimePool<br/>one session per room × persona"]
+    Pool --> Pi["Pi (RPC)"]
+    Pool --> OMP["OMP"]
+    Pool -. "runtime.* events" .-> Core
+```
 
-Hivemind is intentionally focused on core harness and interface foundations:
+**Where things run**
 
-- Every persona invocation starts and stops its own Pi or OMP process, which
-  adds process startup latency per reply; cross-turn context comes only from
-  the durable room transcript, summary, and shared state.
-- If a runtime process fails mid-turn, Hivemind reports an agent-attributed error rather than pretending the failed conversation continued.
-- Memory search is SQLite FTS5 full-text matching, not semantic/embedding search; no vector database is used.
-- Responses are collected after each turn rather than streamed token-by-token.
+- `hivemind-server`, `ask`, `all`, and `chat` all build a library `HivemindCore`. It holds the ordered persona registry, one SQLite-backed memory service, one durable conversation coordinator, a per-instance runtime pool, and a bounded process-local event bus.
+- `chat` uses one core for the whole session. `ask`/`all` build a new core for each command.
+- The core resolves targets (main, solo, group) into room identity, mode, participants, roles, and reply order. Participants are checked before any runtime starts.
+- Room turns are serialized by a room lock. Broadcast runs concurrently. Discussion runs in order and includes the earlier replies from the same turn.
+
+**Session lifecycle**
+
+- Each agent instance is identified by its structured **(room, persona)** IDs. A session can last across turns for that instance but is never shared between rooms or personas.
+- The first prompt of a session carries the full **Context Pack**. Later turns send only a **room delta**, and memory-tool follow-ups send only the tool result.
+- At a turn boundary, a session rotates (`runtime.rotated`) if its context has reached `context.runtime_rotate_tokens` or its next delta can't be built.
+- If a prompt times out (`runtime.prompt_timeout_secs`), Hivemind cancels it, drops the session, closes its runtime epoch, and **does not retry** the turn. The next turn starts a fresh session rebuilt from room history. Any other runtime failure also drops the session without a retry and is reported as an error attributed to that agent.
+- A session closes after `runtime.idle_timeout_secs` without use and stops on core shutdown. No session is left running after exit.
+- **Pi** runs in RPC mode with `--no-session` and keeps its in-process context between prompts. Hivemind waits for `agent_settled` and returns the text blocks from the latest assistant `message_end`.
+
+**Storage.** `.hivemind/memory.sqlite3` sits next to the config file and holds rooms, turns, messages, scoped memory with FTS5, runtime epochs, and group state. `.hivemind/context/` holds only room turn-lock files and any legacy JSON history that hasn't been migrated yet.
+
+<details>
+<summary><b>🧬 Identity encoding & legacy migration</b></summary>
+
+- At storage and public-protocol boundaries, the (room, persona) identity is written as `agent_instance_id` in the stable, versioned **`ai1` length-prefixed** encoding. It round-trips without guessing where one ID ends and the next begins. It is a serialization of the structured IDs, not the identity itself.
+- **Legacy JSON room history** is imported exactly once: every turn and the room snapshot are written to SQLite, and the JSON file is removed only after that succeeds.
+- **Legacy private-memory rows** keep `scope_type = 'agent_instance'` and stay opaque to typed callers. New rows use `agent_instance_v1` with `ai1`.
+- **Legacy runtime epochs** keep identity version `0` and are never returned or closed through typed lookup. New epochs use version `1`.
+- **Legacy JSON history identities** have no version marker. On import, the typed identity is rebuilt only from the authoritative room and speaker fields. New entries carry `agent_instance_identity_version = 1`.
+- Hivemind **never splits** an old `room/persona` string on the delimiter, since IDs may themselves contain `/`.
+
+</details>
+
+### Embedding
+
+The library's `core`, `events`, `conversation`, `config`, `runtime`, and `memory` modules expose the kernel for embedding. `HivemindCore::events().subscribe()` returns an independent, bounded Tokio broadcast receiver of typed `DomainEvent`s, with process-local sequence, ID, and timestamp metadata. Slow consumers must handle `RecvError::Lagged`, for example by refreshing from authoritative state.
+
+---
+
+## 🚧 Current limitations
+
+- Memory search is SQLite FTS5 full-text matching, not semantic/embedding search. There is no vector database.
+- Responses are collected at the end of each turn, not streamed token by token.
 - Agent-to-agent messaging is not implemented.
+- The API has no authentication and is loopback-only.
+- A runtime failure mid-turn is reported as an agent-attributed error and never retried.
 
-Runtime sessions live for as long as the core that started them: `ask`/`all`
-create a core per command and `chat` keeps one for the session, and each core
-stops every session it started, so no runtime session is orphaned at exit.
+## 📄 License
 
-## License
-
-No license has been selected yet.
+No license has been chosen yet.
