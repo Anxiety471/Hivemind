@@ -660,12 +660,7 @@ impl ConversationCoordinator {
             })
             .take(8)
         {
-            lines.push(format!(
-                "- [{}] {}{}",
-                layer_label(result.record.layer),
-                utf8_suffix(&result.record.content, 300),
-                source_suffix(&result.record.provenance)
-            ));
+            lines.push(memory_result_line(&result.record));
         }
         if lines.is_empty() {
             return String::new();

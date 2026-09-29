@@ -19,35 +19,113 @@ impl MemoryService {
         &self.store
     }
     pub fn add_private(&self, caller: &Caller, write: MemoryWrite) -> Result<MemoryRecord> {
+        Ok(self.add_private_outcome(caller, write)?.0)
+    }
+    /// Like [`Self::add_private`]; the flag is `true` when an identical active
+    /// record already existed and was returned (with `updated_at` bumped).
+    pub fn add_private_outcome(
+        &self,
+        caller: &Caller,
+        write: MemoryWrite,
+    ) -> Result<(MemoryRecord, bool)> {
         self.accept(
             caller,
             Scope::AgentInstance(caller.agent_instance_id.clone()),
             Layer::Private,
             write,
             false,
+            true,
         )
     }
     pub fn add_group(&self, caller: &Caller, write: MemoryWrite) -> Result<MemoryRecord> {
+        Ok(self.add_group_outcome(caller, write)?.0)
+    }
+    pub fn add_group_outcome(
+        &self,
+        caller: &Caller,
+        write: MemoryWrite,
+    ) -> Result<(MemoryRecord, bool)> {
         self.accept(
             caller,
             Scope::Group(caller.group_id.clone()),
             Layer::Group,
             write,
             false,
-        )
-    }
-    pub fn propose_persona(&self, caller: &Caller, write: MemoryWrite) -> Result<MemoryRecord> {
-        self.accept(
-            caller,
-            Scope::Persona(caller.persona_id.clone()),
-            Layer::Persona,
-            write,
             true,
         )
     }
-    pub fn propose_global(&self, caller: &Caller, write: MemoryWrite) -> Result<MemoryRecord> {
-        self.accept(caller, Scope::Hivemind, Layer::Global, write, true)
+    /// Update the active private record carrying `key` in this instance's
+    /// scope, or insert one. The bool is `true` when an existing record was updated.
+    pub fn upsert_private(
+        &self,
+        caller: &Caller,
+        key: &str,
+        write: MemoryWrite,
+    ) -> Result<(MemoryRecord, bool)> {
+        self.upsert(
+            caller,
+            Scope::AgentInstance(caller.agent_instance_id.clone()),
+            Layer::Private,
+            key,
+            write,
+        )
     }
+    pub fn upsert_group(
+        &self,
+        caller: &Caller,
+        key: &str,
+        write: MemoryWrite,
+    ) -> Result<(MemoryRecord, bool)> {
+        if caller.group_id.is_empty() {
+            bail!("group memory requires an authorized group");
+        }
+        self.upsert(
+            caller,
+            Scope::Group(caller.group_id.clone()),
+            Layer::Group,
+            key,
+            write,
+        )
+    }
+    fn upsert(
+        &self,
+        caller: &Caller,
+        scope: Scope,
+        layer: Layer,
+        key: &str,
+        write: MemoryWrite,
+    ) -> Result<(MemoryRecord, bool)> {
+        let key = key.trim().to_lowercase();
+        if key.is_empty() || key.chars().count() > 100 {
+            bail!("memory key must be 1 to 100 characters");
+        }
+        if let Some(id) = self.store.find_active_by_key(&scope, &key)? {
+            return Ok((self.update(caller, &id, write, layer)?, true));
+        }
+        let (record, _) = self.accept(caller, scope, layer, write, false, false)?;
+        self.store.set_topic_key(&record.id, &key)?;
+        Ok((record, false))
+    }
+    pub fn propose_persona(&self, caller: &Caller, write: MemoryWrite) -> Result<MemoryRecord> {
+        Ok(self
+            .accept(
+                caller,
+                Scope::Persona(caller.persona_id.clone()),
+                Layer::Persona,
+                write,
+                true,
+                false,
+            )?
+            .0)
+    }
+    pub fn propose_global(&self, caller: &Caller, write: MemoryWrite) -> Result<MemoryRecord> {
+        Ok(self
+            .accept(caller, Scope::Hivemind, Layer::Global, write, true, false)?
+            .0)
+    }
+    /// Insert a record. With `dedup`, an identical active record in the same
+    /// scope and layer (whitespace/case-normalized) is returned instead, with
+    /// `updated_at` bumped; the bool marks that case.
     fn accept(
         &self,
         caller: &Caller,
@@ -55,7 +133,8 @@ impl MemoryService {
         layer: Layer,
         mut write: MemoryWrite,
         broad: bool,
-    ) -> Result<MemoryRecord> {
+        dedup: bool,
+    ) -> Result<(MemoryRecord, bool)> {
         if !caller.trusted
             && (caller.room_id.is_empty()
                 || caller.agent_instance_id.room_id != caller.room_id
@@ -74,6 +153,16 @@ impl MemoryService {
             validate_broad_proposal(caller, &scope, &write)?;
         }
         let timestamp = now();
+        if dedup && write.id.is_none() && write.supersedes_memory_id.is_none() {
+            if let Some(existing) = self.store.touch_duplicate(
+                &scope,
+                layer,
+                &normalize_content(&write.content),
+                timestamp,
+            )? {
+                return Ok((existing, true));
+            }
+        }
         let record = MemoryRecord {
             id: write.id.unwrap_or_else(new_id),
             layer,
@@ -88,7 +177,7 @@ impl MemoryService {
             supersedes_memory_id: write.supersedes_memory_id,
         };
         self.store.insert(&record)?;
-        Ok(record)
+        Ok((record, false))
     }
     pub fn archive(&self, caller: &Caller, id: &str) -> Result<()> {
         let r = self

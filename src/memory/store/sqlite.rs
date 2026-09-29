@@ -93,6 +93,20 @@ impl MemoryStore {
                 [],
             )?;
         }
+        let has_topic_key = {
+            let mut statement = connection.prepare("PRAGMA table_info(memories)")?;
+            let columns = statement.query_map([], |row| row.get::<_, String>(1))?;
+            columns
+                .collect::<rusqlite::Result<Vec<_>>>()?
+                .iter()
+                .any(|column| column == "topic_key")
+        };
+        if !has_topic_key {
+            connection.execute("ALTER TABLE memories ADD COLUMN topic_key TEXT", [])?;
+        }
+        connection.execute_batch(
+            "CREATE UNIQUE INDEX IF NOT EXISTS memories_active_topic_key ON memories(scope_type,scope_id,topic_key) WHERE status='active' AND topic_key IS NOT NULL",
+        )?;
         connection.execute_batch(
             "CREATE INDEX IF NOT EXISTS runtime_epochs_identity_start ON runtime_epochs(identity_version,instance_id,started_at DESC)",
         )?;
@@ -158,6 +172,57 @@ impl MemoryStore {
         )?;
         tx.commit()?;
         Ok(())
+    }
+    /// Id of the active record carrying `key` in exactly this scope.
+    pub(crate) fn find_active_by_key(&self, scope: &Scope, key: &str) -> Result<Option<String>> {
+        let c = self
+            .connection
+            .lock()
+            .map_err(|_| anyhow!("memory store lock poisoned"))?;
+        let (kind, scope_id) = scope.kind_id();
+        Ok(c.query_row(
+            "SELECT id FROM memories WHERE scope_type=?1 AND scope_id=?2 AND topic_key=?3 AND status='active'",
+            params![kind, scope_id.as_ref(), key],
+            |r| r.get(0),
+        )
+        .optional()?)
+    }
+    pub(crate) fn set_topic_key(&self, id: &str, key: &str) -> Result<()> {
+        let c = self
+            .connection
+            .lock()
+            .map_err(|_| anyhow!("memory store lock poisoned"))?;
+        c.execute("UPDATE memories SET topic_key=?2 WHERE id=?1", params![id, key])?;
+        Ok(())
+    }
+    /// Active record in this scope whose content equals `normalized` after
+    /// whitespace/case normalization; bumps its `updated_at` when found.
+    pub(crate) fn touch_duplicate(
+        &self,
+        scope: &Scope,
+        layer: Layer,
+        normalized: &str,
+        timestamp: i64,
+    ) -> Result<Option<MemoryRecord>> {
+        let c = self
+            .connection
+            .lock()
+            .map_err(|_| anyhow!("memory store lock poisoned"))?;
+        let (kind, scope_id) = scope.kind_id();
+        let mut q = c.prepare("SELECT id,content FROM memories WHERE scope_type=?1 AND scope_id=?2 AND layer=?3 AND status='active'")?;
+        let rows = q
+            .query_map(params![kind, scope_id.as_ref(), layer_str(layer)], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let Some((id, _)) = rows
+            .into_iter()
+            .find(|(_, content)| normalize_content(content) == normalized)
+        else {
+            return Ok(None);
+        };
+        c.execute("UPDATE memories SET updated_at=?2 WHERE id=?1", params![id, timestamp])?;
+        load_record(&c, &id)
     }
     pub(crate) fn set_status(&self, id: &str, status: MemoryStatus, scope: &Scope) -> Result<()> {
         let c = self

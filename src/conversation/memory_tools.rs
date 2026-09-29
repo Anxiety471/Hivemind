@@ -1,4 +1,5 @@
 use super::*;
+use crate::memory::MemoryRecord;
 
 /// Tool manifest for callers whose route has a configured group.
 pub(super) const GROUP_MEMORY_TOOL_MANIFEST: &str = "\
@@ -7,8 +8,9 @@ Hivemind memory tools — at most one call per reply, as exactly one fenced bloc
 {\"name\":\"memory.search\",\"args\":{\"query\":\"...\",\"scopes\":[\"group\",\"private\",\"persona\",\"global\",\"archive\"],\"limit\":8}}\n\
 ```\n\
 \n\
-Available tools: memory.search(query,scopes,limit) · memory.private.add(content) · memory.private.update(id,content) · memory.group.add(content) · memory.group.update(id,content) · memory.persona.propose(content) · memory.global.propose(content) · memory.archive(id)\n\
-Hivemind binds every call to your current room, group, instance, and persona — never send scope or owner ids. private = this instance only; group = your room's group; persona and global memories have far broader visibility across Hivemind, so those writes are proposals subject to stricter deterministic validation. memory.global.propose is accepted only when its content exactly matches the trimmed payload of a `Global:` directive in the current user turn; every other global proposal is rejected. Search before claiming to remember; never invent results.\n";
+Available tools: memory.search(query,scopes,limit) · memory.private.add(content) · memory.private.update(id,content) · memory.private.upsert(key,content) · memory.group.add(content) · memory.group.update(id,content) · memory.group.upsert(key,content) · memory.persona.propose(content) · memory.persona.update(id,content) · memory.global.propose(content) · memory.global.update(id,content) · memory.archive(id)\n\
+Hivemind binds every call to your current room, group, instance, and persona — never send scope or owner ids. private = this instance only; group = your room's group; persona and global memories have far broader visibility across Hivemind, so those writes are proposals subject to stricter deterministic validation. memory.global.propose and memory.global.update are accepted only when their content exactly matches the trimmed payload of a `Global:` directive in the current user turn; every other global write is rejected.\n\
+Rule: search first. If a result matches, revise it with the matching update tool using the `#id` shown in results (drop the leading #), or use upsert with a short stable `key` (e.g. \"timezone\"); add only when nothing matches. Archive results are room messages and have no id to update. Never invent results. A tool call must be your entire reply: emit exactly one fenced block as the last thing you write, with no other tool calls (including todo tools) in that reply; the result arrives in the next message.\n";
 
 /// Tool manifest for groupless callers (main and solo rooms): no group tools or scope.
 pub(super) const ROOM_MEMORY_TOOL_MANIFEST: &str = "\
@@ -17,8 +19,9 @@ Hivemind memory tools — at most one call per reply, as exactly one fenced bloc
 {\"name\":\"memory.search\",\"args\":{\"query\":\"...\",\"scopes\":[\"private\",\"persona\",\"global\",\"archive\"],\"limit\":8}}\n\
 ```\n\
 \n\
-Available tools: memory.search(query,scopes,limit) · memory.private.add(content) · memory.private.update(id,content) · memory.persona.propose(content) · memory.global.propose(content) · memory.archive(id)\n\
-Hivemind binds every call to your current room, instance, and persona — never send scope or owner ids. This room has no group, so there is no group memory; never claim to have saved group memory. private = this instance only; persona and global memories have far broader visibility across Hivemind, so those writes are proposals subject to stricter deterministic validation. memory.global.propose is accepted only when its content exactly matches the trimmed payload of a `Global:` directive in the current user turn; every other global proposal is rejected. Search before claiming to remember; never invent results.\n";
+Available tools: memory.search(query,scopes,limit) · memory.private.add(content) · memory.private.update(id,content) · memory.private.upsert(key,content) · memory.persona.propose(content) · memory.persona.update(id,content) · memory.global.propose(content) · memory.global.update(id,content) · memory.archive(id)\n\
+Hivemind binds every call to your current room, instance, and persona — never send scope or owner ids. This room has no group, so there is no group memory; never claim to have saved group memory. private = this instance only; persona and global memories have far broader visibility across Hivemind, so those writes are proposals subject to stricter deterministic validation. memory.global.propose and memory.global.update are accepted only when their content exactly matches the trimmed payload of a `Global:` directive in the current user turn; every other global write is rejected.\n\
+Rule: search first. If a result matches, revise it with the matching update tool using the `#id` shown in results (drop the leading #), or use upsert with a short stable `key` (e.g. \"timezone\"); add only when nothing matches. Archive results are room messages and have no id to update. Never invent results. A tool call must be your entire reply: emit exactly one fenced block as the last thing you write, with no other tool calls (including todo tools) in that reply; the result arrives in the next message.\n";
 
 /// Hivemind-generated tool manifest; never persona-specific. Group tools
 /// appear only when the route has a configured group, mirroring
@@ -197,6 +200,37 @@ pub(super) fn source_suffix(provenance: &Provenance) -> String {
     }
 }
 
+/// `YYYY-MM-DD` (UTC) for a unix timestamp.
+fn utc_date(secs: i64) -> String {
+    let z = secs.div_euclid(86_400) + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
+/// One retrieval line shared by `memory.search` output and the context-pack
+/// section. Durable memories show their updatable `#id`; archive hits are room
+/// messages, not updatable memory, so they carry none.
+pub(super) fn memory_result_line(record: &MemoryRecord) -> String {
+    let content = utf8_suffix(&record.content, 300);
+    let source = source_suffix(&record.provenance);
+    if record.layer == Layer::Archive {
+        return format!("- [archive] {content}{source}");
+    }
+    format!(
+        "- [{}] #{} (updated {}) {content}{source}",
+        layer_label(record.layer),
+        record.id,
+        utc_date(record.updated_at)
+    )
+}
+
 /// Execute one parsed tool call against the shared MemoryService. The caller
 /// is Hivemind-created; every scope decision happens inside the service.
 pub(super) fn execute_memory_tool(
@@ -246,22 +280,18 @@ pub(super) fn execute_memory_tool(
             }
             let lines = results
                 .iter()
-                .map(|result| {
-                    let record = &result.record;
-                    format!(
-                        "- [{}] {}{}",
-                        layer_label(record.layer),
-                        utf8_suffix(&record.content, 300),
-                        source_suffix(&record.provenance)
-                    )
-                })
+                .map(|result| memory_result_line(&result.record))
                 .collect::<Vec<_>>()
                 .join("\n");
             Ok(format!("{} memory results:\n{lines}", results.len()))
         }
         "memory.private.add" => {
-            let record = memory.add_private(caller, tool_write(&call.args, None)?)?;
-            Ok(format!("stored private memory {}", record.id))
+            let (record, existing) = memory.add_private_outcome(caller, tool_write(&call.args, None)?)?;
+            Ok(if existing {
+                format!("already stored as {}", record.id)
+            } else {
+                format!("stored private memory {}", record.id)
+            })
         }
         "memory.private.update" => {
             let id = required_string(&call.args, "id")?;
@@ -269,15 +299,57 @@ pub(super) fn execute_memory_tool(
                 memory.update_private(caller, &id, tool_write(&call.args, Some(id.clone()))?)?;
             Ok(format!("updated private memory {}", record.id))
         }
+        "memory.private.upsert" => {
+            let key = required_string(&call.args, "key")?;
+            let (record, updated) = memory.upsert_private(caller, &key, tool_write(&call.args, None)?)?;
+            Ok(format!(
+                "{} private memory {} for key '{}'",
+                if updated { "updated" } else { "stored" },
+                record.id,
+                key.to_lowercase()
+            ))
+        }
         "memory.group.add" => {
-            let record = memory.add_group(caller, tool_write(&call.args, None)?)?;
-            Ok(format!("stored group memory {}", record.id))
+            let (record, existing) = memory.add_group_outcome(caller, tool_write(&call.args, None)?)?;
+            Ok(if existing {
+                format!("already stored as {}", record.id)
+            } else {
+                format!("stored group memory {}", record.id)
+            })
         }
         "memory.group.update" => {
             let id = required_string(&call.args, "id")?;
             let record =
                 memory.update_group(caller, &id, tool_write(&call.args, Some(id.clone()))?)?;
             Ok(format!("updated group memory {}", record.id))
+        }
+        "memory.group.upsert" => {
+            let key = required_string(&call.args, "key")?;
+            let (record, updated) = memory.upsert_group(caller, &key, tool_write(&call.args, None)?)?;
+            Ok(format!(
+                "{} group memory {} for key '{}'",
+                if updated { "updated" } else { "stored" },
+                record.id,
+                key.to_lowercase()
+            ))
+        }
+        "memory.persona.update" => {
+            let id = required_string(&call.args, "id")?;
+            let record =
+                memory.update_persona(caller, &id, tool_write(&call.args, Some(id.clone()))?)?;
+            Ok(format!(
+                "updated persona memory {} after deterministic policy checks",
+                record.id
+            ))
+        }
+        "memory.global.update" => {
+            let id = required_string(&call.args, "id")?;
+            let record =
+                memory.update_global(caller, &id, tool_write(&call.args, Some(id.clone()))?)?;
+            Ok(format!(
+                "updated global memory {} after deterministic policy checks",
+                record.id
+            ))
         }
         "memory.persona.propose" => {
             let record = memory.propose_persona(caller, tool_write(&call.args, None)?)?;
@@ -428,7 +500,7 @@ pub(super) fn execute_with_optional_authorization(
     call: &MemoryToolCall,
 ) -> Result<String> {
     let exact = authorized_global.filter(|exact| {
-        call.name == "memory.global.propose"
+        matches!(call.name.as_str(), "memory.global.propose" | "memory.global.update")
             && call
                 .args
                 .get("content")

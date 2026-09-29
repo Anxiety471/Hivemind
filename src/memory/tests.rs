@@ -863,3 +863,25 @@ fn equal_score_records_order_reproducibly_and_active_outranks_superseded() {
         .unwrap();
     assert_eq!(ranked(true), vec![older, newer, superseded]);
 }
+#[test]
+fn topic_key_column_migrates_a_database_created_before_it_existed() {
+    let connection = rusqlite::Connection::open_in_memory().unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE memories (
+               id TEXT PRIMARY KEY, layer TEXT NOT NULL, scope_type TEXT NOT NULL, scope_id TEXT NOT NULL,
+               kind TEXT NOT NULL, content TEXT NOT NULL, source_room_id TEXT, source_turn_id TEXT,
+               source_message_id TEXT, source_actor TEXT, source_kind TEXT, created_at INTEGER NOT NULL,
+               updated_at INTEGER NOT NULL, status TEXT NOT NULL CHECK(status IN ('active','superseded','archived')),
+               importance INTEGER NOT NULL CHECK(importance BETWEEN 0 AND 100), supersedes_memory_id TEXT,
+               FOREIGN KEY(supersedes_memory_id) REFERENCES memories(id));
+             INSERT INTO memories VALUES('old','private','agent_instance','x','note','old note',NULL,NULL,NULL,NULL,NULL,1,1,'active',50,NULL);",
+        )
+        .unwrap();
+    let service = MemoryService::new(MemoryStore::from_connection(connection).unwrap());
+    assert_eq!(service.store().load("old").unwrap().unwrap().content, "old note");
+    let (_, updated) = service.upsert_private(&agent(), "k", write("new")).unwrap();
+    assert!(!updated);
+    let (_, updated) = service.upsert_private(&agent(), "k", write("newer")).unwrap();
+    assert!(updated);
+}
