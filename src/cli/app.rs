@@ -215,8 +215,8 @@ mod tests {
             let prompt_log = directory.0.join("prompts.jsonl");
             let script = r#"#!/bin/sh
 case "$*" in
-  *"You are Maomao"*) agent=Maomao ;;
-  *"You are Albedo"*) agent=Albedo ;;
+  *"You are the Engineer"*) agent=Engineer ;;
+  *"You are the Reviewer"*) agent=Reviewer ;;
   *) agent=Unknown ;;
 esac
 printf '%s started\n' "$agent" >> __LOG__
@@ -324,8 +324,8 @@ printf '%s stopped\n' "$agent" >> __LOG__
     #[test]
     fn interactive_parser_recognizes_routes_and_rejects_unknown() {
         assert_eq!(
-            parse_interactive("/ask Albedo review this"),
-            InteractiveCommand::Ask("Albedo".into(), "review this".into())
+            parse_interactive("/ask Reviewer review this"),
+            InteractiveCommand::Ask("Reviewer".into(), "review this".into())
         );
         assert_eq!(
             parse_interactive("/all hello there"),
@@ -344,19 +344,19 @@ printf '%s stopped\n' "$agent" >> __LOG__
             &["hivemind", "init", "--force"],
             &["hivemind", "doctor"],
             &["hivemind", "chat"],
-            &["hivemind", "chat", "--solo", "Albedo"],
+            &["hivemind", "chat", "--solo", "Reviewer"],
             &["hivemind", "chat", "--group", "backend"],
             &["hivemind", "agents"],
             &["hivemind", "status"],
             &["hivemind", "order"],
-            &["hivemind", "ask", "Albedo", "review this"],
+            &["hivemind", "ask", "Reviewer", "review this"],
             &["hivemind", "all", "review this"],
-            &["hivemind", "group", "create", "backend", "Albedo", "Maomao"],
+            &["hivemind", "group", "create", "backend", "Reviewer", "Engineer"],
             &["hivemind", "group", "create", "empty"],
             &["hivemind", "group", "list"],
             &["hivemind", "group", "show", "backend"],
-            &["hivemind", "group", "add", "backend", "Albedo"],
-            &["hivemind", "group", "remove", "backend", "Albedo"],
+            &["hivemind", "group", "add", "backend", "Reviewer"],
+            &["hivemind", "group", "remove", "backend", "Reviewer"],
             &["hivemind", "group", "delete", "backend"],
             &["hivemind", "serve"],
         ];
@@ -384,11 +384,11 @@ printf '%s stopped\n' "$agent" >> __LOG__
         let config_path = fake.directory.0.join("hivemind.toml");
         let core = HivemindCore::new(config.clone(), &config_path).unwrap();
 
-        let replies = route_turn(&core, &Route::Solo("Albedo".into()), "hello")
+        let replies = route_turn(&core, &Route::Solo("Reviewer".into()), "hello")
             .await
             .unwrap();
         let (output, failed) = capture_replies(&replies);
-        assert_eq!(output, "\nAlbedo> Albedo reply\n");
+        assert_eq!(output, "\nReviewer> Reviewer reply\n");
         assert!(!failed);
 
         let replies = route_turn(&core, &Route::Main, "hello").await.unwrap();
@@ -400,12 +400,12 @@ printf '%s stopped\n' "$agent" >> __LOG__
         assert_eq!(
             log,
             [
-                "Albedo prompt",
-                "Albedo prompt",
-                "Albedo started",
-                "Albedo started",
-                "Albedo stopped",
-                "Albedo stopped",
+                "Reviewer prompt",
+                "Reviewer prompt",
+                "Reviewer started",
+                "Reviewer started",
+                "Reviewer stopped",
+                "Reviewer stopped",
             ]
         );
         let history = core.conversation().room_history("main").unwrap();
@@ -413,16 +413,16 @@ printf '%s stopped\n' "$agent" >> __LOG__
         let failed = history
             .events
             .iter()
-            .find(|event| event.speaker == "Maomao")
+            .find(|event| event.speaker == "Engineer")
             .unwrap();
         assert!(failed.error);
         let successful = history
             .events
             .iter()
-            .find(|event| event.speaker == "Albedo")
+            .find(|event| event.speaker == "Reviewer")
             .unwrap();
         assert!(!successful.error);
-        assert_eq!(successful.content, "Albedo reply");
+        assert_eq!(successful.content, "Reviewer reply");
     }
     #[tokio::test]
     async fn ask_executes_a_memory_tool_block_over_the_runtime_and_reprompts() {
@@ -464,22 +464,22 @@ done
         let config_path = directory.0.join("hivemind.toml");
         let core = HivemindCore::new(config.clone(), &config_path).unwrap();
 
-        let replies = route_turn(&core, &Route::Solo("Albedo".into()), "store a note")
+        let replies = route_turn(&core, &Route::Solo("Reviewer".into()), "store a note")
             .await
             .unwrap();
         core.shutdown().await;
         let (output, failed) = capture_replies(&replies);
-        assert_eq!(output, "\nAlbedo> done after tool\n");
+        assert_eq!(output, "\nReviewer> done after tool\n");
         assert!(!failed);
 
         // The executed write is bound to the solo invocation Hivemind created.
-        let instance = hivemind::identity::AgentInstanceId::new("solo-Albedo", "Albedo");
+        let instance = hivemind::identity::AgentInstanceId::new("solo-Reviewer", "Reviewer");
         let caller = hivemind::memory::Caller::agent(
-            "solo-Albedo",
+            "solo-Reviewer",
             "",
             instance.clone(),
-            "Albedo",
-            "Albedo",
+            "Reviewer",
+            "Reviewer",
         );
         let found = core
             .memory()
@@ -495,10 +495,10 @@ done
         let directory = TestDirectory::new("group-route");
         let path = directory.0.join("config.toml");
         let mut config = HivemindConfig::default_poc();
-        config.conversation.reply_order = vec!["Albedo".into()];
+        config.conversation.reply_order = vec!["Reviewer".into()];
         config.groups.push(config::GroupConfig {
             name: "backend".into(),
-            members: vec!["Maomao".into(), "Albedo".into()],
+            members: vec!["Engineer".into(), "Reviewer".into()],
             mode: config::ConversationMode::Broadcast,
             member_roles: Default::default(),
             reply_order: Default::default(),
@@ -506,13 +506,13 @@ done
         let core = HivemindCore::new(config.clone(), &path).unwrap();
         assert_eq!(
             route_names(&core, &Route::Group("backend".into())).unwrap(),
-            ["Albedo", "Maomao"]
+            ["Reviewer", "Engineer"]
         );
-        config.groups[0].reply_order = vec!["Maomao".into()];
+        config.groups[0].reply_order = vec!["Engineer".into()];
         core.reload_groups(config.groups.clone());
         assert_eq!(
             route_names(&core, &Route::Group("backend".into())).unwrap(),
-            ["Maomao", "Albedo"]
+            ["Engineer", "Reviewer"]
         );
         config.groups[0].members.clear();
         core.reload_groups(config.groups.clone());
@@ -522,18 +522,18 @@ done
     #[test]
     fn group_show_numbers_members_and_effective_order() {
         let mut config = HivemindConfig::default_poc();
-        config.conversation.reply_order = vec!["Albedo".into()];
+        config.conversation.reply_order = vec!["Reviewer".into()];
         config.groups.push(config::GroupConfig {
             name: "backend".into(),
-            members: vec!["Maomao".into(), "Albedo".into()],
+            members: vec!["Engineer".into(), "Reviewer".into()],
             mode: config::ConversationMode::Broadcast,
             member_roles: Default::default(),
             reply_order: Default::default(),
         });
         assert_eq!(
             render_group(&config, "backend").unwrap(),
-            "Group: backend\nMembers:\n  1. Albedo [pi]\n  2. Maomao [pi]\n\n\
-             Effective reply order:\n  1. Albedo\n  2. Maomao\n"
+            "Group: backend\nMembers:\n  1. Reviewer [pi]\n  2. Engineer [pi]\n\n\
+             Effective reply order:\n  1. Reviewer\n  2. Engineer\n"
         );
     }
     #[tokio::test]
@@ -543,12 +543,12 @@ done
         let mut config = fake.config();
         config.groups.push(hivemind::config::GroupConfig {
             name: "review".into(),
-            members: vec!["Albedo".into()],
+            members: vec!["Reviewer".into()],
             mode: ConversationMode::Discussion,
-            member_roles: [("Albedo".into(), "Lead Reviewer".into())]
+            member_roles: [("Reviewer".into(), "Lead Reviewer".into())]
                 .into_iter()
                 .collect(),
-            reply_order: vec!["Albedo".into()],
+            reply_order: vec!["Reviewer".into()],
         });
         let core = HivemindCore::new(config.clone(), &config_path).unwrap();
         let replies = route_turn(&core, &Route::Group("review".into()), "review this change")
@@ -556,16 +556,16 @@ done
             .unwrap();
         core.shutdown().await;
         assert_eq!(replies.replies.len(), 1);
-        assert_eq!(replies.replies[0].0, "Albedo");
+        assert_eq!(replies.replies[0].0, "Reviewer");
         assert!(replies.replies[0]
             .1
             .as_ref()
             .unwrap()
-            .contains("Albedo reply"));
+            .contains("Reviewer reply"));
 
         let prompts = fake.prompt_lines();
         assert_eq!(prompts.len(), 1);
-        assert!(prompts[0].contains("You are Albedo. Your room role is Lead Reviewer."));
+        assert!(prompts[0].contains("You are Reviewer. Your room role is Lead Reviewer."));
     }
 
     #[tokio::test]
@@ -574,7 +574,7 @@ done
             std::env::temp_dir().join(format!("hivemind-cli-listing-{}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();
         let mut config = HivemindConfig::default_poc();
-        config.conversation.reply_order = vec!["Albedo".into(), "Maomao".into()];
+        config.conversation.reply_order = vec!["Reviewer".into(), "Engineer".into()];
         let core = HivemindCore::new(config, directory.join("hivemind.toml")).unwrap();
         let registry = core
             .agents()
@@ -587,7 +587,7 @@ done
             .into_iter()
             .map(|agent| agent.name.clone())
             .collect::<Vec<_>>();
-        assert_eq!(registry, ["Albedo", "Maomao"]);
+        assert_eq!(registry, ["Reviewer", "Engineer"]);
         assert_eq!(cli, registry);
         assert_eq!(route_names(&core, &Route::Main).unwrap(), registry);
         core.shutdown().await;
@@ -600,12 +600,12 @@ done
         let mut config = fake.config();
         config.groups.push(hivemind::config::GroupConfig {
             name: "review".into(),
-            members: vec!["Albedo".into()],
+            members: vec!["Reviewer".into()],
             mode: ConversationMode::Discussion,
-            member_roles: [("Albedo".into(), "Lead Reviewer".into())]
+            member_roles: [("Reviewer".into(), "Lead Reviewer".into())]
                 .into_iter()
                 .collect(),
-            reply_order: vec!["Albedo".into()],
+            reply_order: vec!["Reviewer".into()],
         });
         let config_path = fake.directory.0.join("hivemind.toml");
         let core = HivemindCore::new(config.clone(), &config_path).unwrap();
@@ -615,8 +615,8 @@ done
                 Route::Group("review".into()),
                 "Goal: group objective\nfirst group turn",
             ),
-            (Route::Solo("Albedo".into()), "solo route turn"),
-            (Route::Solo("Albedo".into()), "ask turn"),
+            (Route::Solo("Reviewer".into()), "solo route turn"),
+            (Route::Solo("Reviewer".into()), "ask turn"),
             (Route::Main, "all turn"),
             (Route::Group("review".into()), "follow-up group turn"),
         ] {
@@ -632,7 +632,7 @@ done
                 .filter(|line| line.as_str() == format!("{agent} {action}"))
                 .count()
         };
-        for (agent, started, prompts) in [("Albedo", 3, 5), ("Maomao", 1, 1)] {
+        for (agent, started, prompts) in [("Reviewer", 3, 5), ("Engineer", 1, 1)] {
             assert_eq!(count(agent, "started"), started, "{lifecycle:?}");
             assert_eq!(count(agent, "prompt"), prompts, "{lifecycle:?}");
             assert_eq!(count(agent, "stopped"), started, "{lifecycle:?}");
@@ -690,7 +690,7 @@ done
             Some(&core),
             GroupCommand::Create {
                 name: "backend".into(),
-                agents: vec!["Albedo".into()],
+                agents: vec!["Reviewer".into()],
             },
         )
         .unwrap();
@@ -701,7 +701,7 @@ done
             Some(&core),
             GroupCommand::Remove {
                 name: "backend".into(),
-                agent: "Albedo".into(),
+                agent: "Reviewer".into(),
             },
         )
         .unwrap();
@@ -719,7 +719,7 @@ done
     async fn ask_starts_only_its_agent_and_all_orders_output() {
         let fake = FakePi::new();
         let mut config = fake.config();
-        config.conversation.reply_order = vec!["Albedo".into(), "Maomao".into()];
+        config.conversation.reply_order = vec!["Reviewer".into(), "Engineer".into()];
         config.agents[0].runtime = "unrelated-invalid-runtime".into();
         config.agents[0].workspace = "/missing/unrelated/workspace".into();
         let config_path = fake.directory.0.join("hivemind.toml");
@@ -729,16 +729,16 @@ done
             .await
             .unwrap_err();
         assert!(fake.log_lines().is_empty());
-        let ask_replies = route_turn(&core, &Route::Solo("Albedo".into()), "targeted")
+        let ask_replies = route_turn(&core, &Route::Solo("Reviewer".into()), "targeted")
             .await
             .unwrap();
         let (ask_output, ask_failed) = capture_replies(&ask_replies);
-        assert_eq!(ask_output, "\nAlbedo> Albedo reply\n");
+        assert_eq!(ask_output, "\nReviewer> Reviewer reply\n");
         assert!(!ask_failed);
         core.shutdown().await;
         assert_eq!(
             fake.log_lines(),
-            ["Albedo started", "Albedo prompt", "Albedo stopped"]
+            ["Reviewer started", "Reviewer prompt", "Reviewer stopped"]
         );
 
         config.agents[0].runtime = "pi".into();
@@ -752,17 +752,17 @@ done
         let (all_output, all_failed) = capture_replies(&all_replies);
         assert_eq!(
             all_output,
-            "\nAlbedo> Albedo reply\n\nMaomao> Maomao reply\n"
+            "\nReviewer> Reviewer reply\n\nEngineer> Engineer reply\n"
         );
         assert!(!all_failed);
         let log = fake.log_lines();
         for event in [
-            "Albedo started",
-            "Albedo prompt",
-            "Albedo stopped",
-            "Maomao started",
-            "Maomao prompt",
-            "Maomao stopped",
+            "Reviewer started",
+            "Reviewer prompt",
+            "Reviewer stopped",
+            "Engineer started",
+            "Engineer prompt",
+            "Engineer stopped",
         ] {
             assert!(
                 log.iter().any(|line| line == event),
@@ -775,7 +775,7 @@ done
     async fn all_cli_target_matches_core_main_resolution_and_order() {
         let fake = FakePi::new();
         let mut config = fake.config();
-        config.conversation.reply_order = vec!["Albedo".into(), "Maomao".into()];
+        config.conversation.reply_order = vec!["Reviewer".into(), "Engineer".into()];
         let core = HivemindCore::new(config, fake.directory.0.join("hivemind.toml")).unwrap();
         let resolved = core.resolve_target(&ConversationTarget::Main).unwrap();
         let expected: Vec<String> = resolved
@@ -793,7 +793,7 @@ done
             .map(|(name, _)| name.clone())
             .collect();
         assert_eq!(actual, expected);
-        assert_eq!(actual, ["Albedo", "Maomao"]);
+        assert_eq!(actual, ["Reviewer", "Engineer"]);
         assert!(replies.replies.iter().all(|(_, result)| result.is_ok()));
         core.shutdown().await;
     }

@@ -399,7 +399,7 @@ mod tests {
         let prompts = directory.0.join("prompts.log");
         let script = r#"#!/bin/sh
 case "$*" in
-  *"You are Maomao"*) agent=Maomao ;;
+  *"You are the Engineer"*) agent=Engineer ;;
   *) agent=Unknown ;;
 esac
 printf '%s\n' "$$" > __DIR__/runtime.pid
@@ -423,7 +423,7 @@ while IFS= read -r request; do
       if [ -e __DIR__/tool-mode ] && ! printf '%s' "$request" | grep -q 'Memory tool result:'; then
         printf '%s\n' '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"```hivemind-tool\n{\"name\":\"memory.private.add\",\"args\":{\"content\":\"session note\"}}\n```"}]}}'
       else
-        printf '%s\n' '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"Maomao reply"}]}}'
+        printf '%s\n' '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"Engineer reply"}]}}'
       fi
       printf '%s\n' '{"type":"agent_settled"}'
       ;;
@@ -439,7 +439,7 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
         fs::set_permissions(&binary, permissions).unwrap();
 
         let mut config = HivemindConfig::default_poc();
-        config.agents.retain(|agent| agent.name == "Maomao");
+        config.agents.retain(|agent| agent.name == "Engineer");
         config.runtime.pi_binary = binary.display().to_string();
         config.runtime.prompt_timeout_secs = prompt_timeout_secs;
         config.runtime.idle_timeout_secs = idle_timeout_secs;
@@ -459,13 +459,13 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
             .collect()
     }
 
-    fn maomao_caller(room: &str) -> crate::memory::Caller {
+    fn engineer_caller(room: &str) -> crate::memory::Caller {
         crate::memory::Caller::agent(
             room,
             "",
-            AgentInstanceId::new(room, "Maomao"),
-            "Maomao",
-            "Maomao",
+            AgentInstanceId::new(room, "Engineer"),
+            "Engineer",
+            "Engineer",
         )
     }
 
@@ -507,16 +507,16 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
         ] {
             let replies = solo_turn(&core, room, input).await.unwrap();
             assert_eq!(replies.len(), 1);
-            assert_eq!(replies[0].result.as_ref().unwrap(), "Maomao reply");
+            assert_eq!(replies[0].result.as_ref().unwrap(), "Engineer reply");
         }
         assert_eq!(
             lines(&lifecycle),
             [
-                "Maomao started",
-                "Maomao prompt",
-                "Maomao prompt",
-                "Maomao started",
-                "Maomao prompt"
+                "Engineer started",
+                "Engineer prompt",
+                "Engineer prompt",
+                "Engineer started",
+                "Engineer prompt"
             ]
         );
 
@@ -524,7 +524,7 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
         core.shutdown().await;
         let after = lines(&lifecycle);
         assert_eq!(after.len(), 7);
-        assert_eq!(after[5..], ["Maomao stopped", "Maomao stopped"]);
+        assert_eq!(after[5..], ["Engineer stopped", "Engineer stopped"]);
 
         let mut started = 0;
         let mut stopped = 0;
@@ -532,11 +532,11 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
         while let Ok(event) = events.try_recv() {
             match event.payload {
                 DomainEventKind::RuntimeStarted { agent_id, .. } => {
-                    assert_eq!(agent_id, "Maomao");
+                    assert_eq!(agent_id, "Engineer");
                     started += 1;
                 }
                 DomainEventKind::RuntimeStopped { agent_id, .. } => {
-                    assert_eq!(agent_id, "Maomao");
+                    assert_eq!(agent_id, "Engineer");
                     stopped += 1;
                 }
                 DomainEventKind::CoreShuttingDown => shutting_down += 1,
@@ -585,11 +585,11 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
         assert_eq!(
             lines(&lifecycle),
             [
-                "Maomao started",
-                "Maomao prompt",
-                "Maomao stopped",
-                "Maomao started",
-                "Maomao prompt"
+                "Engineer started",
+                "Engineer prompt",
+                "Engineer stopped",
+                "Engineer started",
+                "Engineer prompt"
             ]
         );
         let messages = prompt_messages(&prompts);
@@ -616,14 +616,14 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
         assert_eq!(
             rotated,
             [(
-                AgentInstanceId::new("rotate-room", "Maomao"),
+                AgentInstanceId::new("rotate-room", "Engineer"),
                 "context_budget".to_owned(),
             )]
         );
 
         let epochs = core
             .memory()
-            .runtime_epochs(&maomao_caller("rotate-room"), 10)
+            .runtime_epochs(&engineer_caller("rotate-room"), 10)
             .unwrap();
         assert_eq!(epochs.len(), 2);
         assert_eq!(
@@ -651,13 +651,13 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
         let replies = solo_turn(&core, "crash-room", "after the crash")
             .await
             .unwrap();
-        assert_eq!(replies[0].result.as_deref(), Ok("Maomao reply"));
+        assert_eq!(replies[0].result.as_deref(), Ok("Engineer reply"));
         core.shutdown().await;
 
         assert_eq!(
             lines(&lifecycle)
                 .iter()
-                .filter(|line| *line == "Maomao started")
+                .filter(|line| *line == "Engineer started")
                 .count(),
             2
         );
@@ -696,11 +696,11 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
         );
         assert_eq!(
             lines(&lifecycle),
-            ["Maomao started", "Maomao prompt", "Maomao stopped"]
+            ["Engineer started", "Engineer prompt", "Engineer stopped"]
         );
         let epochs = core
             .memory()
-            .runtime_epochs(&maomao_caller("timeout-room"), 10)
+            .runtime_epochs(&engineer_caller("timeout-room"), 10)
             .unwrap();
         assert_eq!(epochs.len(), 1);
         assert!(epochs[0].ended_at.is_some());
@@ -720,11 +720,11 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
         let replies = solo_turn(&core, "timeout-room", "after timeout")
             .await
             .unwrap();
-        assert_eq!(replies[0].result.as_deref(), Ok("Maomao reply"));
+        assert_eq!(replies[0].result.as_deref(), Ok("Engineer reply"));
         assert_eq!(
             lines(&lifecycle)
                 .iter()
-                .filter(|line| *line == "Maomao started")
+                .filter(|line| *line == "Engineer started")
                 .count(),
             2,
             "the next turn starts a fresh runtime"
@@ -764,11 +764,11 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
         assert_eq!(prompt_messages(&prompts).len(), 1);
         assert_eq!(
             lines(&lifecycle),
-            ["Maomao started", "Maomao prompt", "Maomao stopped"]
+            ["Engineer started", "Engineer prompt", "Engineer stopped"]
         );
         let epochs = core
             .memory()
-            .runtime_epochs(&maomao_caller("shutdown-room"), 10)
+            .runtime_epochs(&engineer_caller("shutdown-room"), 10)
             .unwrap();
         assert_eq!(epochs.len(), 1);
         assert!(epochs[0].ended_at.is_some());
@@ -801,7 +801,7 @@ while IFS= read -r request; do :; done
         fs::set_permissions(&binary, permissions).unwrap();
 
         let mut config = HivemindConfig::default_poc();
-        config.agents.retain(|agent| agent.name == "Maomao");
+        config.agents.retain(|agent| agent.name == "Engineer");
         config.agents[0].runtime = "omp".into();
         config.agents[0].workspace = directory.0.display().to_string();
         config.runtime.omp_binary = binary.display().to_string();
@@ -828,7 +828,7 @@ while IFS= read -r request; do :; done
         assert!(turn.await.unwrap().unwrap()[0].result.is_err());
         assert!(core
             .memory()
-            .runtime_epochs(&maomao_caller("startup-room"), 10)
+            .runtime_epochs(&engineer_caller("startup-room"), 10)
             .unwrap()
             .is_empty());
         while let Ok(event) = events.try_recv() {
@@ -878,7 +878,7 @@ while IFS= read -r request; do :; done
         assert!(started.elapsed() >= std::time::Duration::from_secs(1));
         let epochs = core
             .memory()
-            .runtime_epochs(&maomao_caller("kill-room"), 10)
+            .runtime_epochs(&engineer_caller("kill-room"), 10)
             .unwrap();
         assert_eq!(epochs.len(), 1);
         assert!(epochs[0].ended_at.is_some());
@@ -896,16 +896,16 @@ while IFS= read -r request; do :; done
         core.runtime.close_idle(std::time::Duration::ZERO).await;
         assert_eq!(
             lines(&lifecycle),
-            ["Maomao started", "Maomao prompt", "Maomao stopped"]
+            ["Engineer started", "Engineer prompt", "Engineer stopped"]
         );
         let epochs = core
             .memory()
-            .runtime_epochs(&maomao_caller("idle-room"), 10)
+            .runtime_epochs(&engineer_caller("idle-room"), 10)
             .unwrap();
         assert!(epochs.iter().all(|epoch| epoch.ended_at.is_some()));
 
         solo_turn(&core, "idle-room", "second").await.unwrap();
-        assert_eq!(lines(&lifecycle)[3], "Maomao started");
+        assert_eq!(lines(&lifecycle)[3], "Engineer started");
         assert!(prompt_messages(&prompts)[1].contains("Participants:"));
         core.shutdown().await;
     }
@@ -916,13 +916,13 @@ while IFS= read -r request; do :; done
         let (core, lifecycle, prompts) = fake_core(&directory);
         fs::write(directory.0.join("tool-mode"), "").unwrap();
         let replies = solo_turn(&core, "tool-room", "save a note").await.unwrap();
-        assert_eq!(replies[0].result.as_deref(), Ok("Maomao reply"));
+        assert_eq!(replies[0].result.as_deref(), Ok("Engineer reply"));
         core.shutdown().await;
 
         assert_eq!(
             lines(&lifecycle)
                 .iter()
-                .filter(|line| *line == "Maomao started")
+                .filter(|line| *line == "Engineer started")
                 .count(),
             1
         );
@@ -960,7 +960,7 @@ while IFS= read -r request; do :; done
                     agent_id,
                     ..
                 } => {
-                    assert_eq!(agent_id, "Maomao");
+                    assert_eq!(agent_id, "Engineer");
                     ("reply_started", room_id, turn_id)
                 }
                 DomainEventKind::AgentReplyCompleted {
@@ -969,7 +969,7 @@ while IFS= read -r request; do :; done
                     agent_id,
                     ..
                 } => {
-                    assert_eq!(agent_id, "Maomao");
+                    assert_eq!(agent_id, "Engineer");
                     ("reply_completed", room_id, turn_id)
                 }
                 DomainEventKind::TurnCompleted {
@@ -1007,14 +1007,14 @@ while IFS= read -r request; do :; done
         solo_turn(&core, "epoch-room", "first").await.unwrap();
         solo_turn(&core, "epoch-room", "second").await.unwrap();
 
-        let caller = maomao_caller("epoch-room");
+        let caller = engineer_caller("epoch-room");
         let epochs = core.memory().runtime_epochs(&caller, 10).unwrap();
         assert_eq!(epochs.len(), 1, "one epoch per live session");
         let epoch = &epochs[0];
         assert_eq!(epoch.runtime, "pi");
         assert_eq!(
             epoch.agent_instance_id,
-            AgentInstanceId::new("epoch-room", "Maomao")
+            AgentInstanceId::new("epoch-room", "Engineer")
         );
         assert_eq!(epoch.room_id, "epoch-room");
         assert_eq!(
@@ -1030,7 +1030,7 @@ while IFS= read -r request; do :; done
             .is_some_and(|ended| ended >= epochs[0].started_at));
         assert!(core
             .memory()
-            .runtime_epochs(&maomao_caller("other-room"), 10)
+            .runtime_epochs(&engineer_caller("other-room"), 10)
             .unwrap()
             .is_empty());
     }
@@ -1073,7 +1073,7 @@ while IFS= read -r request; do :; done
 
         let by_name = |name: &str| replies.iter().find(|reply| reply.name == name).unwrap();
         assert!(by_name("Broken").result.is_err());
-        assert_eq!(by_name("Maomao").result.as_deref(), Ok("Maomao reply"));
+        assert_eq!(by_name("Engineer").result.as_deref(), Ok("Engineer reply"));
         let history = core.conversation().room_history("startup-room").unwrap();
         let failed = history
             .events
@@ -1084,17 +1084,17 @@ while IFS= read -r request; do :; done
         let succeeded = history
             .events
             .iter()
-            .find(|event| event.speaker == "Maomao")
+            .find(|event| event.speaker == "Engineer")
             .unwrap();
         assert!(!succeeded.error);
-        assert_eq!(succeeded.content, "Maomao reply");
+        assert_eq!(succeeded.content, "Engineer reply");
     }
 
     #[tokio::test]
     async fn construction_is_provider_free_and_registry_uses_effective_order() {
         let directory = TestDirectory::new();
         let mut config = HivemindConfig::default_poc();
-        config.conversation.reply_order = vec!["Albedo".into(), "Maomao".into()];
+        config.conversation.reply_order = vec!["Reviewer".into(), "Engineer".into()];
         config.runtime.pi_binary = directory.0.join("missing-pi").display().to_string();
         config.runtime.omp_binary = directory.0.join("missing-omp").display().to_string();
         let core = HivemindCore::new(config, directory.0.join("hivemind.toml")).unwrap();
@@ -1111,22 +1111,22 @@ while IFS= read -r request; do :; done
             .map(|agent| agent.name.clone())
             .collect::<Vec<_>>();
         assert_eq!(names, expected);
-        assert_eq!(names, ["Albedo", "Maomao"]);
+        assert_eq!(names, ["Reviewer", "Engineer"]);
         assert!(directory.0.join(".hivemind/memory.sqlite3").exists());
         assert!(!directory.0.join("missing-pi").exists());
         assert!(!directory.0.join("missing-omp").exists());
         core.shutdown().await;
     }
 
-    /// Two-agent fake pi (Albedo ordered first but replies only after the test
-    /// creates `release_marker`, i.e. after Maomao completed).
+    /// Two-agent fake pi (Reviewer ordered first but replies only after the test
+    /// creates `release_marker`, i.e. after Engineer completed).
     fn slow_first_pair_core(directory: &TestDirectory, release_marker: &Path) -> HivemindCore {
         let binary = directory.0.join("fake-pi-pair");
         let script = r#"#!/bin/sh
 MARK='__MARK__'
 case "$*" in
-  *"You are Albedo"*) agent=Albedo; wait_mark=1 ;;
-  *) agent=Maomao; wait_mark=0 ;;
+  *"You are the Reviewer"*) agent=Reviewer; wait_mark=1 ;;
+  *) agent=Engineer; wait_mark=0 ;;
 esac
 while IFS= read -r request; do
   case "$request" in
@@ -1149,7 +1149,7 @@ done
         permissions.set_mode(0o755);
         fs::set_permissions(&binary, permissions).unwrap();
         let mut config = HivemindConfig::default_poc();
-        config.conversation.reply_order = vec!["Albedo".into(), "Maomao".into()];
+        config.conversation.reply_order = vec!["Reviewer".into(), "Engineer".into()];
         config.runtime.pi_binary = binary.display().to_string();
         for agent in &mut config.agents {
             agent.workspace = directory.0.display().to_string();
@@ -1160,7 +1160,7 @@ done
     #[tokio::test]
     async fn broadcast_presentation_follows_configured_order_despite_completion_order() {
         let directory = TestDirectory::new();
-        let release_marker = directory.0.join("albedo-release");
+        let release_marker = directory.0.join("reviewer-release");
         let core = slow_first_pair_core(&directory, &release_marker);
         let mut events = core.events().subscribe();
         let mut watcher = core.events().subscribe();
@@ -1182,7 +1182,7 @@ done
             loop {
                 let event = watcher.recv().await.unwrap();
                 if let DomainEventKind::AgentReplyCompleted { agent_id, .. } = &event.payload {
-                    if agent_id == "Maomao" {
+                    if agent_id == "Engineer" {
                         fs::write(&release_marker, "").unwrap();
                         break;
                     }
@@ -1197,9 +1197,9 @@ done
             .iter()
             .map(|reply| reply.name.as_str())
             .collect::<Vec<_>>();
-        assert_eq!(presented, ["Albedo", "Maomao"]);
-        assert_eq!(replies[0].result.as_deref(), Ok("Albedo reply"));
-        assert_eq!(replies[1].result.as_deref(), Ok("Maomao reply"));
+        assert_eq!(presented, ["Reviewer", "Engineer"]);
+        assert_eq!(replies[0].result.as_deref(), Ok("Reviewer reply"));
+        assert_eq!(replies[1].result.as_deref(), Ok("Engineer reply"));
         let mut completed = Vec::new();
         while let Ok(event) = events.try_recv() {
             if let DomainEventKind::AgentReplyCompleted { agent_id, .. } = event.payload {
@@ -1208,7 +1208,7 @@ done
         }
         assert_eq!(
             completed,
-            ["Maomao", "Albedo"],
+            ["Engineer", "Reviewer"],
             "slow first agent completes last"
         );
     }
@@ -1243,13 +1243,13 @@ done
         assert!(replies
             .iter()
             .any(|reply| reply.name == "Broken" && reply.result.is_err()));
-        assert_eq!(lines(&lifecycle), ["Maomao started", "Maomao prompt"]);
+        assert_eq!(lines(&lifecycle), ["Engineer started", "Engineer prompt"]);
 
         core.shutdown().await;
         core.shutdown().await;
         assert_eq!(
             lines(&lifecycle),
-            ["Maomao started", "Maomao prompt", "Maomao stopped"]
+            ["Engineer started", "Engineer prompt", "Engineer stopped"]
         );
 
         let error = core.turn(request()).await.unwrap_err();
@@ -1271,8 +1271,8 @@ done
                 _ => {}
             }
         }
-        assert_eq!(started, ["Maomao"]);
-        assert_eq!(stopped, ["Maomao"]);
+        assert_eq!(started, ["Engineer"]);
+        assert_eq!(stopped, ["Engineer"]);
         assert_eq!(shutting_down, 1);
     }
 
@@ -1280,15 +1280,15 @@ done
     fn core_resolves_main_solo_and_group_identity_roles_mode_and_order() {
         let directory = TestDirectory::new();
         let mut config = HivemindConfig::default_poc();
-        config.conversation.reply_order = vec!["Albedo".into()];
+        config.conversation.reply_order = vec!["Reviewer".into()];
         config.groups.push(crate::config::GroupConfig {
             name: "review".into(),
-            members: vec!["Maomao".into(), "Albedo".into()],
+            members: vec!["Engineer".into(), "Reviewer".into()],
             mode: ConversationMode::Discussion,
-            member_roles: [("Albedo".into(), "Lead Reviewer".into())]
+            member_roles: [("Reviewer".into(), "Lead Reviewer".into())]
                 .into_iter()
                 .collect(),
-            reply_order: vec!["Maomao".into()],
+            reply_order: vec!["Engineer".into()],
         });
         let core = HivemindCore::new(config, directory.0.join("hivemind.toml")).unwrap();
 
@@ -1301,15 +1301,15 @@ done
                 .iter()
                 .map(|member| member.agent.name.as_str())
                 .collect::<Vec<_>>(),
-            ["Albedo", "Maomao"]
+            ["Reviewer", "Engineer"]
         );
 
         let solo = core
             .resolve_target(&ConversationTarget::Solo {
-                persona_id: "Maomao".into(),
+                persona_id: "Engineer".into(),
             })
             .unwrap();
-        assert_eq!(solo.room_id, "solo-Maomao");
+        assert_eq!(solo.room_id, "solo-Engineer");
         assert_eq!(solo.mode, ConversationMode::Discussion);
         assert_eq!(solo.participants[0].role, None);
 
@@ -1327,7 +1327,7 @@ done
                 .iter()
                 .map(|member| member.agent.name.as_str())
                 .collect::<Vec<_>>(),
-            ["Maomao", "Albedo"]
+            ["Engineer", "Reviewer"]
         );
         assert_eq!(group.participants[0].role, None);
         assert_eq!(group.participants[1].role.as_deref(), Some("Lead Reviewer"));

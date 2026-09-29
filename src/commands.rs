@@ -232,13 +232,13 @@ mod tests {
             &path,
             GroupCommand::Create {
                 name: "backend".into(),
-                agents: vec!["Albedo".into()],
+                agents: vec!["Reviewer".into()],
             },
         )
         .unwrap();
         assert_eq!(
             HivemindConfig::load(&path).unwrap().groups[0].members,
-            ["Albedo"]
+            ["Reviewer"]
         );
 
         assert!(mutate_group(
@@ -246,7 +246,7 @@ mod tests {
             &path,
             GroupCommand::Add {
                 name: "backend".into(),
-                agent: "Albedo".into(),
+                agent: "Reviewer".into(),
             },
         )
         .unwrap_err()
@@ -258,7 +258,7 @@ mod tests {
             &path,
             GroupCommand::Remove {
                 name: "backend".into(),
-                agent: "Albedo".into(),
+                agent: "Reviewer".into(),
             },
         )
         .unwrap();
@@ -302,7 +302,7 @@ mod tests {
             &path,
             GroupCommand::Create {
                 name: "backend".into(),
-                agents: vec!["Albedo".into()],
+                agents: vec!["Reviewer".into()],
             },
         )
         .unwrap();
@@ -312,7 +312,7 @@ mod tests {
         assert!(persisted.contains("pi_binary  = \"pi\" # keep runtime setting"));
         let reloaded = HivemindConfig::load(&path).unwrap();
         assert_eq!(reloaded.runtime.pi_binary, "pi");
-        assert_eq!(reloaded.groups[0].members, ["Albedo"]);
+        assert_eq!(reloaded.groups[0].members, ["Reviewer"]);
     }
 
     #[test]
@@ -322,14 +322,14 @@ mod tests {
         let mut config = HivemindConfig::default_poc();
         config.groups.push(GroupConfig {
             name: "backend".into(),
-            members: vec!["Albedo".into(), "Maomao".into()],
+            members: vec!["Reviewer".into(), "Engineer".into()],
             mode: Default::default(),
             member_roles: [
-                ("Albedo".into(), "reviewer".into()),
-                ("Maomao".into(), "implementer".into()),
+                ("Reviewer".into(), "reviewer".into()),
+                ("Engineer".into(), "implementer".into()),
             ]
             .into(),
-            reply_order: vec!["Albedo".into(), "Maomao".into()],
+            reply_order: vec!["Reviewer".into(), "Engineer".into()],
         });
         fs::write(&path, toml::to_string_pretty(&config).unwrap()).unwrap();
 
@@ -338,20 +338,20 @@ mod tests {
             &path,
             GroupCommand::Remove {
                 name: "backend".into(),
-                agent: "Albedo".into(),
+                agent: "Reviewer".into(),
             },
         )
         .unwrap();
 
         let reloaded = HivemindConfig::load(&path).unwrap();
         let group = &reloaded.groups[0];
-        assert_eq!(group.members, ["Maomao"]);
-        assert!(!group.member_roles.contains_key("Albedo"));
+        assert_eq!(group.members, ["Engineer"]);
+        assert!(!group.member_roles.contains_key("Reviewer"));
         assert_eq!(
-            group.member_roles.get("Maomao").map(String::as_str),
+            group.member_roles.get("Engineer").map(String::as_str),
             Some("implementer")
         );
-        assert_eq!(group.reply_order, ["Maomao"]);
+        assert_eq!(group.reply_order, ["Engineer"]);
     }
 
     #[test]
@@ -363,7 +363,7 @@ mod tests {
 
         for agents in [
             vec!["Missing".to_string()],
-            vec!["Albedo".to_string(), "Albedo".to_string()],
+            vec!["Reviewer".to_string(), "Reviewer".to_string()],
         ] {
             assert!(mutate_group(
                 &mut config,
@@ -383,7 +383,7 @@ mod tests {
             &invalid_path,
             GroupCommand::Create {
                 name: "backend".into(),
-                agents: vec!["Albedo".into()],
+                agents: vec!["Reviewer".into()],
             },
         )
         .is_err());

@@ -1333,7 +1333,7 @@ fn proposals_are_policy_gated_and_archive_respects_trust() {
         &caller,
         &tool_call(
             "memory.persona.propose",
-            serde_json::json!({"content": "Maomao prefers small service boundaries"}),
+            serde_json::json!({"content": "Engineer prefers small service boundaries"}),
         ),
     )
     .unwrap();

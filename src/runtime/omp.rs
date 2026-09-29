@@ -451,9 +451,9 @@ mod tests {
 
     fn agent(fast: Option<bool>) -> AgentConfig {
         AgentConfig {
-            name: "Maomao".into(),
+            name: "Engineer".into(),
             runtime: "omp".into(),
-            system_prompt: "You are Maomao.".into(),
+            system_prompt: "You are the Engineer.".into(),
             workspace: ".".into(),
             model: Some("example-model".into()),
             reasoning: Some("high".into()),
@@ -474,7 +474,7 @@ mod tests {
                 "--no-ui",
                 "--no-session",
                 "--append-system-prompt",
-                "You are Maomao.",
+                "You are the Engineer.",
                 "--model",
                 "example-model",
                 "--thinking",
@@ -728,14 +728,14 @@ mod tests {
 
         let error = session.prompt("hello").await.unwrap_err();
         let message = format!("{error:#}");
-        assert!(message.contains("Maomao"), "unattributed error: {message}");
+        assert!(message.contains("Engineer"), "unattributed error: {message}");
         assert!(message.contains("exited"), "unclear error: {message}");
 
         let sent_after_death = sent_frames(&script).len();
 
         let error = session.prompt("try again").await.unwrap_err();
         let message = format!("{error:#}");
-        assert!(message.contains("Maomao"), "unattributed error: {message}");
+        assert!(message.contains("Engineer"), "unattributed error: {message}");
         assert!(
             message.contains("failed earlier"),
             "expected a poisoned-session error: {message}"
@@ -770,7 +770,7 @@ mod tests {
 
         let error = session.prompt("hello").await.unwrap_err();
         let message = format!("{error:#}");
-        assert!(message.contains("Maomao"), "unattributed error: {message}");
+        assert!(message.contains("Engineer"), "unattributed error: {message}");
         assert!(
             message.contains("rate limited"),
             "missing RPC error detail: {message}"
@@ -809,7 +809,7 @@ mod tests {
         let message = format!("{error:#}");
 
         assert!(
-            message.contains("workspace") && message.contains("Maomao"),
+            message.contains("workspace") && message.contains("Engineer"),
             "expected the workspace validation error, got: {message}"
         );
         assert!(

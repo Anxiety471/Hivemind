@@ -4,9 +4,9 @@ fn agent() -> Caller {
     Caller::agent(
         "group-a",
         "group-a",
-        AgentInstanceId::new("group-a", "maomao"),
-        "maomao",
-        "maomao",
+        AgentInstanceId::new("group-a", "engineer"),
+        "engineer",
+        "engineer",
     )
 }
 fn write(content: &str) -> MemoryWrite {
@@ -52,9 +52,9 @@ fn persistence_reopen_fts_and_scope_isolation() {
         let other = Caller::agent(
             "group-b",
             "group-b",
-            AgentInstanceId::new("group-b", "maomao"),
-            "maomao",
-            "maomao",
+            AgentInstanceId::new("group-b", "engineer"),
+            "engineer",
+            "engineer",
         );
         assert!(s
             .search(&other, &req("websocket", vec![SearchScope::Group]))
@@ -84,7 +84,7 @@ fn provenance_supersession_and_archive_retention() {
         MemoryStatus::Superseded
     );
     assert_eq!(new.supersedes_memory_id, Some(old.id));
-    assert_eq!(new.provenance.source_actor.as_deref(), Some("maomao"));
+    assert_eq!(new.provenance.source_actor.as_deref(), Some("engineer"));
     assert_eq!(
         s.search(&c, &req("React", vec![SearchScope::Group]))
             .unwrap()
@@ -206,7 +206,7 @@ fn proposals_and_authorization_reject_escalation() {
         "group-a",
         "group-a",
         AgentInstanceId::new("group-a", "other"),
-        "maomao",
+        "engineer",
         "other",
     );
     assert!(s.archive(&other, &rec.id).is_err());
@@ -273,22 +273,22 @@ fn complete_archive_turn_upserts_participants_and_searchable_messages() {
             id: "message-1".into(),
             room_id: "group-a".into(),
             turn_id: "turn-1".into(),
-            speaker: "maomao".into(),
+            speaker: "engineer".into(),
             content: content.into(),
             created_at: 20,
         }],
     };
     service
-        .append_archive_turn(&caller, make_turn("Old archived answer", "maomao"))
+        .append_archive_turn(&caller, make_turn("Old archived answer", "engineer"))
         .unwrap();
     service
-        .append_archive_turn(&caller, make_turn("Revised searchable answer", "marin"))
+        .append_archive_turn(&caller, make_turn("Revised searchable answer", "designer"))
         .unwrap();
     let archived = service
         .archive_turn(&caller, "group-a", "turn-1")
         .unwrap()
         .unwrap();
-    assert_eq!(archived.participants[0].participant_id, "marin");
+    assert_eq!(archived.participants[0].participant_id, "designer");
     assert_eq!(archived.messages.len(), 1);
     assert_eq!(archived.messages[0].content, "Revised searchable answer");
     assert_eq!(
@@ -334,14 +334,14 @@ fn archive_turns_and_participants_survive_reopen() {
                     completed_at: Some(2),
                     metadata: serde_json::json!({"canonical":true}),
                     participants: vec![ArchiveParticipant {
-                        participant_id: "maomao".into(),
+                        participant_id: "engineer".into(),
                         role: Some("owner".into()),
                     }],
                     messages: vec![ArchivedMessage {
                         id: "persisted-message".into(),
                         room_id: "group-a".into(),
                         turn_id: "persisted-turn".into(),
-                        speaker: "maomao".into(),
+                        speaker: "engineer".into(),
                         content: "Durable SQLite transcript".into(),
                         created_at: 2,
                     }],
@@ -355,7 +355,7 @@ fn archive_turns_and_participants_survive_reopen() {
             .archive_turn(&caller, "group-a", "persisted-turn")
             .unwrap()
             .unwrap();
-        assert_eq!(turn.participants[0].participant_id, "maomao");
+        assert_eq!(turn.participants[0].participant_id, "engineer");
         assert_eq!(turn.messages[0].content, "Durable SQLite transcript");
         assert_eq!(
             service
@@ -376,9 +376,9 @@ fn solo_scope_context_and_global_archive_authorization() {
     let solo = Caller::agent(
         "solo-room",
         "",
-        AgentInstanceId::new("solo-room", "maomao"),
-        "maomao",
-        "maomao",
+        AgentInstanceId::new("solo-room", "engineer"),
+        "engineer",
+        "engineer",
     )
     .with_provenance(Provenance {
         source_room_id: Some("solo-room".into()),
@@ -391,12 +391,12 @@ fn solo_scope_context_and_global_archive_authorization() {
         .unwrap();
     assert_eq!(
         private.scope,
-        Scope::AgentInstance(AgentInstanceId::new("solo-room", "maomao"))
+        Scope::AgentInstance(AgentInstanceId::new("solo-room", "engineer"))
     );
     let persona = service
         .propose_persona(&solo, write("Prefers small service boundaries"))
         .unwrap();
-    assert_eq!(persona.scope, Scope::Persona("maomao".into()));
+    assert_eq!(persona.scope, Scope::Persona("engineer".into()));
     assert!(service.add_group(&solo, write("Group only")).is_err());
     assert!(service
         .store()
@@ -432,7 +432,7 @@ fn group_state_and_runtime_epochs_are_durable_and_instance_scoped() {
             "group-a",
             "group-a",
             AgentInstanceId::new("group-a", "other"),
-            "maomao",
+            "engineer",
             "other",
         );
         assert!(service
@@ -518,9 +518,9 @@ fn persona_memory_spans_instances_but_not_personas() {
     let author = Caller::agent(
         "dev-room",
         "dev",
-        AgentInstanceId::new("dev-room", "maomao"),
-        "maomao",
-        "maomao",
+        AgentInstanceId::new("dev-room", "engineer"),
+        "engineer",
+        "engineer",
     )
     .with_provenance(Provenance {
         source_room_id: Some("dev-room".into()),
@@ -531,15 +531,15 @@ fn persona_memory_spans_instances_but_not_personas() {
     let stored = service
         .propose_persona(&author, write("Prefers small service boundaries"))
         .unwrap();
-    assert_eq!(stored.scope, Scope::Persona("maomao".into()));
+    assert_eq!(stored.scope, Scope::Persona("engineer".into()));
 
     // A different instance of the same persona still reads the record.
     let same_persona_other_instance = Caller::agent(
         "security-room",
         "security",
-        AgentInstanceId::new("security-room", "maomao"),
-        "maomao",
-        "maomao",
+        AgentInstanceId::new("security-room", "engineer"),
+        "engineer",
+        "engineer",
     );
     let hits = service
         .search(
@@ -563,9 +563,9 @@ fn persona_memory_spans_instances_but_not_personas() {
     let other_persona = Caller::agent(
         "dev-room",
         "dev",
-        AgentInstanceId::new("dev-room", "marin"),
-        "marin",
-        "marin",
+        AgentInstanceId::new("dev-room", "designer"),
+        "designer",
+        "designer",
     );
     assert!(service
         .search(
@@ -584,9 +584,9 @@ fn authorized_global_memory_is_retrievable_from_another_room_and_agent() {
     let author = Caller::agent(
         "dev-room",
         "dev",
-        AgentInstanceId::new("dev-room", "maomao"),
-        "maomao",
-        "maomao",
+        AgentInstanceId::new("dev-room", "engineer"),
+        "engineer",
+        "engineer",
     )
     .with_provenance(Provenance {
         source_room_id: Some("dev-room".into()),
@@ -612,9 +612,9 @@ fn authorized_global_memory_is_retrievable_from_another_room_and_agent() {
     let reader = Caller::agent(
         "security-room",
         "security",
-        AgentInstanceId::new("security-room", "albedo"),
-        "albedo",
-        "albedo",
+        AgentInstanceId::new("security-room", "reviewer"),
+        "reviewer",
+        "reviewer",
     );
     let hits = service
         .search(

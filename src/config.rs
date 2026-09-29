@@ -305,17 +305,17 @@ impl HivemindConfig {
         Self {
             runtime: RuntimeConfig::default(),
             conversation: ConversationConfig {
-                reply_order: vec!["Maomao".into(), "Albedo".into()],
+                reply_order: vec!["Engineer".into(), "Reviewer".into()],
             },
             context: ContextConfig::default(),
             memory: MemoryConfig::default(),
             groups: Vec::new(),
             agents: vec![
                 AgentConfig {
-                    name: "Maomao".into(),
+                    name: "Engineer".into(),
                     runtime: "pi".into(),
                     system_prompt: concat!(
-                        "You are Maomao, a software engineering agent inside Hivemind. ",
+                        "You are the Engineer, a software engineering agent inside Hivemind. ",
                         "Reply naturally and concisely to the user. ",
                         "You are one member of a multi-agent hive."
                     )
@@ -327,10 +327,10 @@ impl HivemindConfig {
                     role: Some("Software Engineer".into()),
                 },
                 AgentConfig {
-                    name: "Albedo".into(),
+                    name: "Reviewer".into(),
                     runtime: "pi".into(),
                     system_prompt: concat!(
-                        "You are Albedo, a careful reviewer and systems-thinking agent inside Hivemind. ",
+                        "You are the Reviewer, a careful reviewer and systems-thinking agent inside Hivemind. ",
                         "Reply naturally and concisely to the user. ",
                         "You are one member of a multi-agent hive."
                     )
@@ -427,7 +427,7 @@ mod tests {
 
         assert_eq!(config.agents.len(), 2);
         assert!(config.agents.iter().all(|agent| agent.runtime == "pi"));
-        assert_eq!(config.conversation.reply_order, ["Maomao", "Albedo"]);
+        assert_eq!(config.conversation.reply_order, ["Engineer", "Reviewer"]);
         assert_eq!(config.runtime.pi_binary, "pi");
         assert_eq!(config.runtime.prompt_timeout_secs, 300);
     }
@@ -439,8 +439,8 @@ mod tests {
         let decoded: HivemindConfig = toml::from_str(&serialized).unwrap();
 
         assert_eq!(decoded.agents.len(), 2);
-        assert_eq!(decoded.agents[0].name, "Maomao");
-        assert_eq!(decoded.agents[1].name, "Albedo");
+        assert_eq!(decoded.agents[0].name, "Engineer");
+        assert_eq!(decoded.agents[1].name, "Reviewer");
     }
 
     #[test]
@@ -465,7 +465,7 @@ mod tests {
     fn legacy_thinking_key_is_accepted_as_reasoning() {
         let raw = r#"
             [[agents]]
-            name = "Maomao"
+            name = "Engineer"
             thinking = "high"
             fast = true
         "#;
@@ -526,17 +526,17 @@ mod tests {
         let config = load_toml(
             r#"
             [[personas]]
-            id = "maomao"
+            id = "engineer"
             role = "Engineer"
             [[personas]]
-            id = "albedo"
+            id = "reviewer"
             [[groups]]
             id = "development"
             mode = "discussion"
-            members = ["maomao", "albedo"]
-            reply_order = ["albedo", "maomao"]
+            members = ["engineer", "reviewer"]
+            reply_order = ["reviewer", "engineer"]
             [groups.member_roles]
-            albedo = "Lead Reviewer"
+            reviewer = "Lead Reviewer"
             [context]
             recent_turns = 3
             summary_max_tokens = 100
@@ -546,9 +546,9 @@ mod tests {
         "#,
         )
         .unwrap();
-        assert_eq!(config.agents[0].name, "maomao");
+        assert_eq!(config.agents[0].name, "engineer");
         assert_eq!(config.groups[0].mode, ConversationMode::Discussion);
-        assert_eq!(config.groups[0].member_roles["albedo"], "Lead Reviewer");
+        assert_eq!(config.groups[0].member_roles["reviewer"], "Lead Reviewer");
 
         let invalid = load_toml("[[personas]]\nid = \"a\"\n[context]\ncontext_target_tokens = 0\n")
             .unwrap_err()
@@ -561,7 +561,7 @@ mod tests {
                 .iter()
                 .map(String::as_str)
                 .collect::<Vec<_>>(),
-            ["albedo", "maomao"]
+            ["reviewer", "engineer"]
         );
         let bad_order = load_toml(
             "[[personas]]\nid = \"a\"\n[[personas]]\nid = \"b\"\n[[groups]]\nid = \"g\"\nmembers = [\"a\"]\nreply_order = [\"b\"]\n",
