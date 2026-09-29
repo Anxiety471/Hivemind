@@ -103,6 +103,9 @@ pub struct RuntimeConfig {
     pub omp_binary: String,
     #[serde(default = "default_pi_binary")]
     pub pi_binary: String,
+    /// Maximum seconds a runtime prompt may take; 0 disables the timeout.
+    #[serde(default = "default_runtime_prompt_timeout_secs")]
+    pub prompt_timeout_secs: u64,
     /// Seconds an agent-instance runtime may sit unused before it is stopped;
     /// 0 keeps sessions until shutdown.
     #[serde(default = "default_idle_timeout_secs")]
@@ -114,6 +117,7 @@ impl Default for RuntimeConfig {
         Self {
             omp_binary: default_omp_binary(),
             pi_binary: default_pi_binary(),
+            prompt_timeout_secs: default_runtime_prompt_timeout_secs(),
             idle_timeout_secs: default_idle_timeout_secs(),
         }
     }
@@ -261,6 +265,22 @@ impl HivemindConfig {
         }
         ordered
     }
+    /// Resolve a group's effective member order from its overrides and the
+    /// global reply order, retaining only configured group members.
+    pub fn ordered_group_members<'a>(&'a self, group: &GroupConfig) -> Vec<&'a AgentConfig> {
+        let mut ordered = Vec::with_capacity(group.members.len());
+        for name in &group.reply_order {
+            if group.members.contains(name) {
+                if let Some(agent) = self.agents.iter().find(|agent| agent.name == *name) {
+                    ordered.push(agent);
+                }
+            }
+        }
+        ordered.extend(self.ordered_agents().into_iter().filter(|agent| {
+            group.members.contains(&agent.name) && !group.reply_order.contains(&agent.name)
+        }));
+        ordered
+    }
 
     pub fn write_default(path: &Path, force: bool) -> Result<()> {
         if path.exists() && !force {
@@ -348,6 +368,9 @@ fn default_omp_binary() -> String {
 fn default_pi_binary() -> String {
     "pi".into()
 }
+fn default_runtime_prompt_timeout_secs() -> u64 {
+    300
+}
 fn default_idle_timeout_secs() -> u64 {
     120
 }
@@ -375,12 +398,14 @@ mod tests {
         .unwrap();
         assert_eq!(legacy.runtime.omp_binary, "omp");
         assert_eq!(legacy.runtime.pi_binary, "pi");
+        assert_eq!(legacy.runtime.prompt_timeout_secs, 300);
         assert_eq!(legacy.agents[0].runtime, "omp");
 
         let configured: HivemindConfig = toml::from_str(
             r#"
                 [runtime]
                 pi_binary = "/custom/pi"
+                prompt_timeout_secs = 0
                 [[agents]]
                 name = "Pi"
                 runtime = "pi"
@@ -391,6 +416,7 @@ mod tests {
         .unwrap();
         assert_eq!(configured.runtime.pi_binary, "/custom/pi");
         assert_eq!(configured.runtime.omp_binary, "omp");
+        assert_eq!(configured.runtime.prompt_timeout_secs, 0);
         assert_eq!(configured.agents[0].runtime, "pi");
         assert_eq!(configured.agents[1].runtime, "omp");
     }
@@ -402,8 +428,8 @@ mod tests {
         assert_eq!(config.agents.len(), 2);
         assert!(config.agents.iter().all(|agent| agent.runtime == "pi"));
         assert_eq!(config.conversation.reply_order, ["Maomao", "Albedo"]);
-        assert_eq!(config.runtime.omp_binary, "omp");
         assert_eq!(config.runtime.pi_binary, "pi");
+        assert_eq!(config.runtime.prompt_timeout_secs, 300);
     }
 
     #[test]

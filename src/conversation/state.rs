@@ -92,7 +92,8 @@ pub(super) fn append_reply(
         id: stable_id(),
         turn_id: turn_id.to_owned(),
         speaker: speaker.to_owned(),
-        agent_instance_id: Some(format!("{room}/{speaker}")),
+        agent_instance_id: Some(crate::identity::AgentInstanceId::new(room, speaker)),
+        legacy_agent_instance_id: None,
         content: result
             .clone()
             .unwrap_or_else(|error| format!("[agent failure: {error}]")),

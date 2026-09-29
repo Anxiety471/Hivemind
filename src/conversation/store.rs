@@ -138,6 +138,12 @@ impl ContextStore for JsonFileStore {
             bail!("room history identifier mismatch");
         }
         history.room_id = room.to_owned();
+        for event in &mut history.events {
+            if event.speaker != "user" && event.agent_instance_id.is_none() {
+                event.agent_instance_id =
+                    Some(crate::identity::AgentInstanceId::new(room, &event.speaker));
+            }
+        }
         Ok(history)
     }
     fn save_room(&self, room: &str, history: &RoomHistory) -> Result<()> {
@@ -170,6 +176,8 @@ pub(super) struct RoomSnapshot {
     error_message_ids: Vec<String>,
     #[serde(default)]
     maintenance_errors: Vec<String>,
+    #[serde(default)]
+    legacy_agent_instance_ids: HashMap<String, String>,
 }
 
 pub(super) fn room_state_turn_id(room: &str) -> String {
@@ -353,6 +361,15 @@ impl SqliteContextStore {
             .transpose()
             .context("decoding existing snapshot during legacy import")?
             .unwrap_or_default();
+        let legacy_agent_instance_ids: HashMap<String, String> = remapped_events
+            .iter()
+            .filter_map(|event| {
+                event
+                    .legacy_agent_instance_id
+                    .as_ref()
+                    .map(|legacy_id| (event.id.clone(), legacy_id.clone()))
+            })
+            .collect();
         let legacy_completed: Vec<String> = legacy
             .completed_turns
             .iter()
@@ -364,14 +381,19 @@ impl SqliteContextStore {
             .map(|event| event.id.clone())
             .collect();
         let snapshot = if existing == RoomSnapshot::default() {
-            RoomSnapshot {
+            let mut snapshot = RoomSnapshot {
                 state: legacy.state.clone(),
                 summary: legacy.summary.clone(),
                 summarized_turn_count: legacy.summarized_turn_count,
                 completed_turns: legacy_completed,
                 error_message_ids: legacy_errors,
                 maintenance_errors: legacy.maintenance_errors.clone(),
-            }
+                legacy_agent_instance_ids,
+            };
+            snapshot
+                .legacy_agent_instance_ids
+                .extend(existing.legacy_agent_instance_ids);
+            snapshot
         } else {
             let mut completed_turns = legacy_completed;
             for turn in &existing.completed_turns {
@@ -391,6 +413,8 @@ impl SqliteContextStore {
                     maintenance_errors.push(entry.clone());
                 }
             }
+            let mut legacy_agent_instance_ids = legacy_agent_instance_ids;
+            legacy_agent_instance_ids.extend(existing.legacy_agent_instance_ids);
             RoomSnapshot {
                 state: existing.state,
                 summary: existing.summary,
@@ -398,6 +422,7 @@ impl SqliteContextStore {
                 completed_turns,
                 error_message_ids,
                 maintenance_errors,
+                legacy_agent_instance_ids,
             }
         };
         self.write_snapshot(room, &snapshot)
@@ -460,6 +485,16 @@ pub(super) fn snapshot_from_history(history: &RoomHistory) -> Result<RoomSnapsho
             .map(|event| event.id.clone())
             .collect(),
         maintenance_errors: history.maintenance_errors.clone(),
+        legacy_agent_instance_ids: history
+            .events
+            .iter()
+            .filter_map(|event| {
+                event
+                    .legacy_agent_instance_id
+                    .as_ref()
+                    .map(|legacy_id| (event.id.clone(), legacy_id.clone()))
+            })
+            .collect(),
     })
 }
 
@@ -504,8 +539,15 @@ impl ContextStore for SqliteContextStore {
                 agent_instance_id: if message.speaker == "user" {
                     None
                 } else {
-                    Some(format!("{room}/{}", message.speaker))
+                    Some(crate::identity::AgentInstanceId::new(
+                        room,
+                        &message.speaker,
+                    ))
                 },
+                legacy_agent_instance_id: snapshot
+                    .legacy_agent_instance_ids
+                    .get(&message.id)
+                    .cloned(),
                 content: message.content,
                 error: error_ids.contains(message.id.as_str()),
             })

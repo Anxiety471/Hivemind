@@ -339,7 +339,7 @@ pub(super) fn invocation_caller(
     Caller::agent(
         room,
         group_id,
-        format!("{room}/{persona_id}"),
+        AgentInstanceId::new(room, persona_id),
         persona_id,
         persona_id,
     )
@@ -364,11 +364,7 @@ pub(super) fn user_directive_caller(
     turn_id: &str,
     message_id: &str,
 ) -> Caller {
-    let instance_id = if persona.is_empty() {
-        String::new()
-    } else {
-        format!("{room}/{persona}")
-    };
+    let instance_id = AgentInstanceId::new(room, persona);
     Caller::agent(room, group_id, instance_id, persona, "user").with_provenance(Provenance {
         source_room_id: Some(room.to_owned()),
         source_turn_id: Some(turn_id.to_owned()),
@@ -386,7 +382,7 @@ pub(super) fn replace_active_assignment(
     assignee: &Caller,
     note: MemoryWrite,
 ) -> Result<()> {
-    let scope = Scope::AgentInstance(assignee.instance_id.clone());
+    let scope = Scope::AgentInstance(assignee.agent_instance_id.clone());
     let mut active: Vec<_> = memory
         .store()
         .records_in_scope(assignee, &scope)?
@@ -466,7 +462,7 @@ pub(super) fn execute_with_optional_authorization(
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn invoke_with_memory(
     invoker: &dyn AgentInvoker,
-    instance_id: &str,
+    instance_id: &AgentInstanceId,
     agent: &AgentConfig,
     pack: &str,
     delta: Option<PromptDelta<'_>>,
@@ -478,7 +474,7 @@ pub(super) async fn invoke_with_memory(
     let mut exchange: Vec<(String, String)> = Vec::new();
     let mut last = invoker
         .invoke(InvokeRequest {
-            instance_id,
+            agent_instance_id: instance_id,
             agent,
             phase: PromptPhase::TurnStart,
             full: pack,
@@ -519,7 +515,7 @@ pub(super) async fn invoke_with_memory(
         let full = tool_prompt(pack, &exchange);
         last = invoker
             .invoke(InvokeRequest {
-                instance_id,
+                agent_instance_id: instance_id,
                 agent,
                 phase: PromptPhase::InTurn,
                 full: &full,

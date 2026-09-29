@@ -4,7 +4,7 @@ use parking_lot::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 struct Fake {
-    prompts: Mutex<Vec<(String, String)>>,
+    prompts: Mutex<Vec<(AgentInstanceId, String)>>,
     running: AtomicUsize,
     max_running: AtomicUsize,
     fail: Option<String>,
@@ -13,7 +13,7 @@ struct Fake {
 }
 #[async_trait]
 impl AgentInvoker for Fake {
-    async fn cursor(&self, _instance_id: &str) -> Option<SessionCursor> {
+    async fn cursor(&self, _agent_instance_id: &AgentInstanceId) -> Option<SessionCursor> {
         None
     }
 
@@ -23,7 +23,7 @@ impl AgentInvoker for Fake {
         self.max_running.fetch_max(now, Ordering::SeqCst);
         self.prompts
             .lock()
-            .push((request.instance_id.to_owned(), request.full.to_owned()));
+            .push((request.agent_instance_id.clone(), request.full.to_owned()));
         let synchronized = if let Some(barrier) = &self.barrier {
             tokio::time::timeout(std::time::Duration::from_secs(2), barrier.wait())
                 .await
@@ -102,7 +102,7 @@ struct DelayedEventsInvoker;
 
 #[async_trait]
 impl AgentInvoker for DelayedEventsInvoker {
-    async fn cursor(&self, _instance_id: &str) -> Option<SessionCursor> {
+    async fn cursor(&self, _agent_instance_id: &AgentInstanceId) -> Option<SessionCursor> {
         None
     }
 
@@ -115,6 +115,30 @@ impl AgentInvoker for DelayedEventsInvoker {
         }
         Ok(InvokeReply {
             text: format!("{} reply", agent.name),
+            epoch_id: "fake".into(),
+        })
+    }
+}
+struct SameRoomOverlapProbe {
+    active: AtomicUsize,
+    max_active: AtomicUsize,
+    started: tokio::sync::Notify,
+}
+
+#[async_trait]
+impl AgentInvoker for SameRoomOverlapProbe {
+    async fn cursor(&self, _agent_instance_id: &AgentInstanceId) -> Option<SessionCursor> {
+        None
+    }
+
+    async fn invoke(&self, _request: InvokeRequest<'_>) -> Result<InvokeReply> {
+        let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
+        self.max_active.fetch_max(active, Ordering::SeqCst);
+        self.started.notify_one();
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        self.active.fetch_sub(1, Ordering::SeqCst);
+        Ok(InvokeReply {
+            text: "serialized reply".into(),
             epoch_id: "fake".into(),
         })
     }
@@ -173,11 +197,14 @@ async fn broadcast_events_track_completion_order_and_safe_attributed_failures() 
                 turn_id: observed_turn,
                 room_id: observed_room,
                 agent_id,
-                instance_id,
+                agent_instance_id,
             } => {
                 assert_eq!(observed_turn, &turn_id);
                 assert_eq!(observed_room, "event-room");
-                assert_eq!(instance_id, &format!("event-room/{agent_id}"));
+                assert_eq!(
+                    agent_instance_id,
+                    &AgentInstanceId::new("event-room", agent_id)
+                );
                 Some(agent_id.as_str())
             }
             _ => None,
@@ -227,19 +254,31 @@ async fn broadcast_events_track_completion_order_and_safe_attributed_failures() 
                         turn_id,
                         room_id,
                         agent_id,
-                        instance_id,
+                        agent_instance_id,
                         error_code,
                         message,
                     },
                 ..
-            }) => break (turn_id, room_id, agent_id, instance_id, error_code, message),
+            }) => {
+                break (
+                    turn_id,
+                    room_id,
+                    agent_id,
+                    agent_instance_id,
+                    error_code,
+                    message,
+                )
+            }
             Ok(_) => continue,
             Err(error) => panic!("missing reply failure event: {error}"),
         }
     };
     assert_eq!(failed_event.1, "failure-room");
     assert_eq!(failed_event.2, "Fails");
-    assert_eq!(failed_event.3, "failure-room/Fails");
+    assert_eq!(
+        failed_event.3,
+        AgentInstanceId::new("failure-room", "Fails")
+    );
     assert_eq!(failed_event.4, "agent_reply_failed");
     assert_eq!(failed_event.5, "agent failed to produce a reply");
     assert!(!failed_event.5.contains("sensitive"));
@@ -305,7 +344,10 @@ async fn broadcast_concurrent_failure_and_canonical_history_persist() {
         .iter()
         .find(|event| event.speaker == "A")
         .unwrap();
-    assert_eq!(first.agent_instance_id.as_deref(), Some("room/A"));
+    assert_eq!(
+        first.agent_instance_id.as_ref(),
+        Some(&AgentInstanceId::new("room", "A"))
+    );
     let _ = fs::remove_dir_all(path);
 }
 #[cfg(unix)]
@@ -361,14 +403,14 @@ async fn broadcast_context_sections_match_across_personas() {
     let prompt_a = prompts
         .iter()
         .rev()
-        .find(|(instance, _)| instance == "shared-room/A")
+        .find(|(instance, _)| instance == &AgentInstanceId::new("shared-room", "A"))
         .unwrap()
         .1
         .as_str();
     let prompt_b = prompts
         .iter()
         .rev()
-        .find(|(instance, _)| instance == "shared-room/B")
+        .find(|(instance, _)| instance == &AgentInstanceId::new("shared-room", "B"))
         .unwrap()
         .1
         .as_str();
@@ -467,7 +509,7 @@ async fn discussion_failure_is_recorded_and_next_speaker_gets_compact_marker() {
     let prompts = fake.prompts.lock();
     let prompt_c = prompts
         .iter()
-        .find(|(instance, _)| instance == "failure-room/C")
+        .find(|(instance, _)| instance == &AgentInstanceId::new("failure-room", "C"))
         .unwrap()
         .1
         .as_str();
@@ -522,11 +564,11 @@ async fn concurrent_rooms_keep_history_and_runtime_instances_isolated() {
     let prompts = f.prompts.lock();
     let alpha = prompts
         .iter()
-        .find(|(instance, _)| instance == "room/a/A")
+        .find(|(instance, _)| instance == &AgentInstanceId::new("room/a", "A"))
         .unwrap();
     let beta = prompts
         .iter()
-        .find(|(instance, _)| instance == "room_a/A")
+        .find(|(instance, _)| instance == &AgentInstanceId::new("room_a", "A"))
         .unwrap();
     assert!(alpha.1.contains("message alpha") && !alpha.1.contains("message beta"));
     assert!(beta.1.contains("message beta") && !beta.1.contains("message alpha"));
@@ -541,6 +583,64 @@ async fn concurrent_rooms_keep_history_and_runtime_instances_isolated() {
     );
     let _ = fs::remove_dir_all(path);
 }
+#[tokio::test]
+async fn same_room_turns_serialize_invocation_and_persist_in_order() {
+    let (path, coordinator) = fixture();
+    let coordinator = Arc::new(coordinator);
+    let probe = Arc::new(SameRoomOverlapProbe {
+        active: AtomicUsize::new(0),
+        max_active: AtomicUsize::new(0),
+        started: tokio::sync::Notify::new(),
+    });
+    let members = vec![member("A")];
+    let first_coordinator = coordinator.clone();
+    let first_members = members.clone();
+    let first_probe = probe.clone();
+    let first = tokio::spawn(async move {
+        first_coordinator
+            .turn(TurnRequest {
+                room: "same-room",
+                room_name: "Same room",
+                group_id: "",
+                mode: ConversationMode::Discussion,
+                members: &first_members,
+                input: "first turn",
+                invoker: first_probe,
+            })
+            .await
+    });
+    probe.started.notified().await;
+
+    let second_coordinator = coordinator.clone();
+    let second_probe = probe.clone();
+    let second = tokio::spawn(async move {
+        second_coordinator
+            .turn(TurnRequest {
+                room: "same-room",
+                room_name: "Same room",
+                group_id: "",
+                mode: ConversationMode::Discussion,
+                members: &members,
+                input: "second turn",
+                invoker: second_probe,
+            })
+            .await
+    });
+
+    first.await.unwrap().unwrap();
+    second.await.unwrap().unwrap();
+    assert_eq!(probe.max_active.load(Ordering::SeqCst), 1);
+    let history = coordinator.room_history("same-room").unwrap();
+    let user_turns: Vec<_> = history
+        .events
+        .iter()
+        .filter(|event| event.speaker == "user")
+        .map(|event| event.content.as_str())
+        .collect();
+    assert_eq!(user_turns, ["first turn", "second turn"]);
+    let _ = fs::remove_dir_all(path);
+}
+
 #[tokio::test]
 async fn discussion_context_is_ordered_and_rooms_are_isolated() {
     let (path, coord) = fixture();
@@ -596,6 +696,7 @@ async fn interrupted_canonical_turns_are_summarized_before_they_age_out() {
                         turn_id: "interrupted".into(),
                         speaker: "user".into(),
                         agent_instance_id: None,
+                        legacy_agent_instance_id: None,
                         content: "interrupted user input".into(),
                         error: false,
                     },
@@ -603,7 +704,8 @@ async fn interrupted_canonical_turns_are_summarized_before_they_age_out() {
                         id: "orphan-reply".into(),
                         turn_id: "interrupted".into(),
                         speaker: "A".into(),
-                        agent_instance_id: Some("room/A".into()),
+                        agent_instance_id: Some(AgentInstanceId::new("room", "A")),
+                        legacy_agent_instance_id: None,
                         content: "interrupted assistant response".into(),
                         error: false,
                     },
@@ -852,6 +954,7 @@ fn context_budget_trims_old_history_but_keeps_current_input() {
             turn_id: "old-turn".into(),
             speaker: "user".into(),
             agent_instance_id: None,
+            legacy_agent_instance_id: None,
             content: "old-message ".repeat(400),
             error: false,
         }],
@@ -895,6 +998,7 @@ fn turn_delta_lists_unseen_peers_and_changed_state_and_rejects_gaps() {
         turn_id: turn_id.into(),
         speaker: speaker.into(),
         agent_instance_id: None,
+        legacy_agent_instance_id: None,
         content: content.into(),
         error: false,
     };
@@ -984,7 +1088,7 @@ struct Scripted {
 }
 #[async_trait]
 impl AgentInvoker for Scripted {
-    async fn cursor(&self, _instance_id: &str) -> Option<SessionCursor> {
+    async fn cursor(&self, _agent_instance_id: &AgentInstanceId) -> Option<SessionCursor> {
         None
     }
 
@@ -1064,19 +1168,32 @@ async fn tool_loop_executes_actions_reprompts_and_returns_final_text() {
     }
     // Spoofed owner fields in args were ignored: the record is bound to
     // the invocation instance Hivemind created.
-    let caller = Caller::agent("tool-room", "", "tool-room/A", "A", "A");
+    let caller = Caller::agent(
+        "tool-room",
+        "",
+        AgentInstanceId::new("tool-room", "A"),
+        "A",
+        "A",
+    );
+    let instance = AgentInstanceId::new("tool-room", "A");
     let found = coord
         .memory()
         .store()
-        .records_in_scope(&caller, &Scope::AgentInstance("tool-room/A".into()))
+        .records_in_scope(&caller, &Scope::AgentInstance(instance.clone()))
         .unwrap();
     assert_eq!(found.len(), 1);
     assert!(found[0].content.contains("websocket auth uses JWT"));
-    let other = Caller::agent("tool-room", "", "tool-room/B", "B", "B");
+    let other = Caller::agent(
+        "tool-room",
+        "",
+        AgentInstanceId::new("tool-room", "B"),
+        "B",
+        "B",
+    );
     assert!(coord
         .memory()
         .store()
-        .records_in_scope(&other, &Scope::AgentInstance("tool-room/A".into()))
+        .records_in_scope(&other, &Scope::AgentInstance(instance))
         .is_err());
     let _ = fs::remove_dir_all(path);
 }
@@ -1398,10 +1515,10 @@ async fn fresh_agents_all_receive_the_same_hivemind_generated_manifest() {
         let prompts = f.prompts.lock();
         assert!(prompts
             .iter()
-            .any(|(instance, _)| instance == "guidance-room/A"));
+            .any(|(instance, _)| instance == &AgentInstanceId::new("guidance-room", "A")));
         assert!(prompts
             .iter()
-            .any(|(instance, _)| instance == "guidance-room/B"));
+            .any(|(instance, _)| instance == &AgentInstanceId::new("guidance-room", "B")));
         for (_, prompt) in prompts.iter() {
             assert!(prompt.contains(ROOM_MEMORY_TOOL_MANIFEST));
             assert!(prompt.contains("memory.persona.propose"));
@@ -1428,6 +1545,7 @@ async fn legacy_json_history_migrates_once_into_sqlite_and_json_is_removed() {
                         turn_id: "old-turn".into(),
                         speaker: "user".into(),
                         agent_instance_id: None,
+                        legacy_agent_instance_id: None,
                         content: "legacy question".into(),
                         error: false,
                     },
@@ -1435,7 +1553,8 @@ async fn legacy_json_history_migrates_once_into_sqlite_and_json_is_removed() {
                         id: "old-reply".into(),
                         turn_id: "old-turn".into(),
                         speaker: "A".into(),
-                        agent_instance_id: Some("legacy-room/A".into()),
+                        agent_instance_id: Some(AgentInstanceId::new("legacy-room", "A")),
+                        legacy_agent_instance_id: None,
                         content: "legacy answer".into(),
                         error: true,
                     },
@@ -1446,12 +1565,76 @@ async fn legacy_json_history_migrates_once_into_sqlite_and_json_is_removed() {
             },
         )
         .unwrap();
+    let canonical_json: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&json_path).unwrap()).unwrap();
+    assert_eq!(
+        canonical_json["events"][1]["agent_instance_identity_version"],
+        1
+    );
+    let canonical = JsonFileStore::new(&path).load_room("legacy-room").unwrap();
+    assert_eq!(
+        canonical.events[1].agent_instance_id,
+        Some(AgentInstanceId::new("legacy-room", "A"))
+    );
+    fs::write(
+        &json_path,
+        serde_json::json!({
+            "room_id": "legacy-room",
+            "events": [
+                {
+                    "id": "old-user",
+                    "turn_id": "old-turn",
+                    "speaker": "user",
+                    "agent_instance_id": null,
+                    "content": "legacy question",
+                    "error": false
+                },
+                {
+                    "id": "old-reply",
+                    "turn_id": "old-turn",
+                    "speaker": "A",
+                    "agent_instance_id": "ai1:10:other-room1:x",
+                    "content": "legacy answer",
+                    "error": true
+                }
+            ],
+            "summary": "legacy summary",
+            "completed_turns": ["old-turn"]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    assert_eq!(
+        AgentInstanceId::decode("ai1:10:other-room1:x"),
+        Some(AgentInstanceId::new("other-room", "x"))
+    );
+    let loaded = JsonFileStore::new(&path).load_room("legacy-room").unwrap();
+    assert_eq!(
+        loaded.events[1].legacy_agent_instance_id.as_deref(),
+        Some("ai1:10:other-room1:x")
+    );
+    assert_eq!(
+        loaded.events[1].agent_instance_id,
+        Some(AgentInstanceId::new("legacy-room", "A"))
+    );
+    let loaded_json = serde_json::to_value(&loaded).unwrap();
+    assert!(loaded_json["events"][1]
+        .get("agent_instance_identity_version")
+        .is_none());
     assert!(json_path.exists());
 
     let history = coord.room_history("legacy-room").unwrap();
     assert_eq!(history.events.len(), 2);
     assert_eq!(history.events[0].content, "legacy question");
     assert!(history.events[1].error);
+    assert_eq!(
+        history.events[1].agent_instance_id,
+        Some(AgentInstanceId::new("legacy-room", "A"))
+    );
+    assert_eq!(
+        history.events[1].legacy_agent_instance_id.as_deref(),
+        Some("ai1:10:other-room1:x")
+    );
     assert_eq!(
         history.completed_turns,
         [legacy_turn_id("legacy-room", "old-turn")]
@@ -1462,6 +1645,14 @@ async fn legacy_json_history_migrates_once_into_sqlite_and_json_is_removed() {
     // The migrated history survives in SQLite after the JSON is gone.
     let again = coord.room_history("legacy-room").unwrap();
     assert_eq!(again.events.len(), 2);
+    assert_eq!(
+        again.events[1].legacy_agent_instance_id.as_deref(),
+        Some("ai1:10:other-room1:x")
+    );
+    assert_eq!(
+        again.events[1].agent_instance_id,
+        Some(AgentInstanceId::new("legacy-room", "A"))
+    );
     let _ = fs::remove_dir_all(path);
 }
 
@@ -1481,6 +1672,7 @@ async fn partial_legacy_import_resumes_without_loss_or_duplicates() {
                         turn_id: "t1".into(),
                         speaker: "user".into(),
                         agent_instance_id: None,
+                        legacy_agent_instance_id: None,
                         content: "first question".into(),
                         error: false,
                     },
@@ -1488,7 +1680,8 @@ async fn partial_legacy_import_resumes_without_loss_or_duplicates() {
                         id: "e2".into(),
                         turn_id: "t1".into(),
                         speaker: "A".into(),
-                        agent_instance_id: Some(format!("{room}/A")),
+                        agent_instance_id: Some(AgentInstanceId::new(room, "A")),
+                        legacy_agent_instance_id: None,
                         content: "first answer".into(),
                         error: false,
                     },
@@ -1497,6 +1690,7 @@ async fn partial_legacy_import_resumes_without_loss_or_duplicates() {
                         turn_id: "t2".into(),
                         speaker: "user".into(),
                         agent_instance_id: None,
+                        legacy_agent_instance_id: None,
                         content: "second question".into(),
                         error: false,
                     },
@@ -1504,7 +1698,8 @@ async fn partial_legacy_import_resumes_without_loss_or_duplicates() {
                         id: "e4".into(),
                         turn_id: "t2".into(),
                         speaker: "A".into(),
-                        agent_instance_id: Some(format!("{room}/A")),
+                        agent_instance_id: Some(AgentInstanceId::new(room, "A")),
+                        legacy_agent_instance_id: None,
                         content: "second answer".into(),
                         error: true,
                     },
@@ -1603,7 +1798,15 @@ async fn group_state_persists_across_coordinator_and_store_restarts() {
         runtime_rotate_tokens: 24000,
         summary_refresh_turns: 2,
     };
-    let caller = || Caller::agent("gs-room", "gs-group", "gs-room/A", "A", "A");
+    let caller = || {
+        Caller::agent(
+            "gs-room",
+            "gs-group",
+            AgentInstanceId::new("gs-room", "A"),
+            "A",
+            "A",
+        )
+    };
     {
         let memory = Arc::new(MemoryService::open(&database).unwrap());
         let coord = ConversationCoordinator::new(&context, limits.clone(), memory);
@@ -1678,11 +1881,20 @@ async fn assignment_directive_becomes_a_private_note_for_the_assignee_only() {
         .await
         .unwrap();
 
-    let assignee = Caller::agent("assign-room", "assign-group", "assign-room/B", "B", "B");
+    let assignee = Caller::agent(
+        "assign-room",
+        "assign-group",
+        AgentInstanceId::new("assign-room", "B"),
+        "B",
+        "B",
+    );
     let notes = coord
         .memory()
         .store()
-        .records_in_scope(&assignee, &Scope::AgentInstance("assign-room/B".into()))
+        .records_in_scope(
+            &assignee,
+            &Scope::AgentInstance(AgentInstanceId::new("assign-room", "B")),
+        )
         .unwrap();
     assert!(
         notes
@@ -1696,11 +1908,20 @@ async fn assignment_directive_becomes_a_private_note_for_the_assignee_only() {
             .collect::<Vec<_>>()
     );
 
-    let other = Caller::agent("assign-room", "assign-group", "assign-room/A", "A", "A");
+    let other = Caller::agent(
+        "assign-room",
+        "assign-group",
+        AgentInstanceId::new("assign-room", "A"),
+        "A",
+        "A",
+    );
     let others_notes = coord
         .memory()
         .store()
-        .records_in_scope(&other, &Scope::AgentInstance("assign-room/A".into()))
+        .records_in_scope(
+            &other,
+            &Scope::AgentInstance(AgentInstanceId::new("assign-room", "A")),
+        )
         .unwrap();
     assert!(
         others_notes.is_empty(),
@@ -1737,7 +1958,10 @@ async fn assignment_directive_becomes_a_private_note_for_the_assignee_only() {
     let after = coord
         .memory()
         .store()
-        .records_in_scope(&assignee, &Scope::AgentInstance("assign-room/B".into()))
+        .records_in_scope(
+            &assignee,
+            &Scope::AgentInstance(AgentInstanceId::new("assign-room", "B")),
+        )
         .unwrap();
     let active: Vec<_> = after
         .iter()
@@ -1835,7 +2059,13 @@ async fn global_proposal_requires_exact_user_directive_binding() {
             prompts[1]
         );
     }
-    let reader = Caller::agent("glob-room", "g-g", "glob-room/A", "A", "A");
+    let reader = Caller::agent(
+        "glob-room",
+        "g-g",
+        AgentInstanceId::new("glob-room", "A"),
+        "A",
+        "A",
+    );
     let globals = coord
         .memory()
         .store()

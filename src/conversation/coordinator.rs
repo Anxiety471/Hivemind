@@ -110,6 +110,23 @@ impl ConversationCoordinator {
     }
 
     pub async fn turn(&self, request: TurnRequest<'_>) -> Result<Vec<TurnReply>> {
+        self.turn_with_outcome(request)
+            .await
+            .map(|outcome| outcome.replies)
+    }
+
+    pub async fn turn_with_outcome(&self, request: TurnRequest<'_>) -> Result<TurnExecution> {
+        let room_id = request.room.to_owned();
+        self.turn_internal(request)
+            .await
+            .map(|(turn_id, replies)| TurnExecution {
+                turn_id,
+                room_id,
+                replies,
+            })
+    }
+
+    async fn turn_internal(&self, request: TurnRequest<'_>) -> Result<(String, Vec<TurnReply>)> {
         let TurnRequest {
             room,
             room_name,
@@ -139,6 +156,7 @@ impl ConversationCoordinator {
             turn_id: turn_id.clone(),
             speaker: "user".into(),
             agent_instance_id: None,
+            legacy_agent_instance_id: None,
             content: input.into(),
             error: false,
         });
@@ -159,7 +177,7 @@ impl ConversationCoordinator {
                         &turn_id,
                         &user_message_id,
                     );
-                    let instance_id = format!("{room}/{}", member.agent.name);
+                    let instance_id = AgentInstanceId::new(room, &member.agent.name);
                     let cursor = invoker.cursor(&instance_id).await;
                     let prompt = self.member_prompt(
                         &PackRequest {
@@ -183,13 +201,13 @@ impl ConversationCoordinator {
                                     turn_id: turn_id.clone(),
                                     room_id: room.to_owned(),
                                     agent_id: name.clone(),
-                                    instance_id: instance_id.clone(),
+                                    agent_instance_id: instance_id.clone(),
                                 });
                                 events.publish(crate::events::DomainEventKind::AgentReplyFailed {
                                     turn_id: turn_id.clone(),
                                     room_id: room.to_owned(),
                                     agent_id: name.clone(),
-                                    instance_id,
+                                    agent_instance_id: instance_id,
                                     error_code: "context_build_failed".into(),
                                     message: "agent context could not be built".into(),
                                 });
@@ -206,7 +224,7 @@ impl ConversationCoordinator {
                             turn_id: turn_id.clone(),
                             room_id: room.to_owned(),
                             agent_id: name.clone(),
-                            instance_id: format!("{room}/{name}"),
+                            agent_instance_id: AgentInstanceId::new(room, &name),
                         });
                     }
                     let invoker = invoker.clone();
@@ -217,9 +235,10 @@ impl ConversationCoordinator {
                     let task_name = name.clone();
                     let handle = jobs.spawn(async move {
                         let MemberPrompt { pack, delta, view } = prompt;
+                        let instance_id = AgentInstanceId::new(&room, &agent.name);
                         let result = invoke_with_memory(
                             &*invoker,
-                            &format!("{room}/{}", agent.name),
+                            &instance_id,
                             &agent,
                             &pack,
                             delta
@@ -251,19 +270,20 @@ impl ConversationCoordinator {
                         }
                     };
                     if let Some(events) = &self.events {
+                        let instance_id = AgentInstanceId::new(room, &name);
                         let event = if result.is_ok() {
                             crate::events::DomainEventKind::AgentReplyCompleted {
                                 turn_id: turn_id.clone(),
                                 room_id: room.to_owned(),
                                 agent_id: name.clone(),
-                                instance_id: format!("{room}/{name}"),
+                                agent_instance_id: instance_id,
                             }
                         } else {
                             crate::events::DomainEventKind::AgentReplyFailed {
                                 turn_id: turn_id.clone(),
                                 room_id: room.to_owned(),
                                 agent_id: name.clone(),
-                                instance_id: format!("{room}/{name}"),
+                                agent_instance_id: instance_id,
                                 error_code: "agent_reply_failed".into(),
                                 message: "agent failed to produce a reply".into(),
                             }
@@ -307,15 +327,15 @@ impl ConversationCoordinator {
                         &user_message_id,
                     );
                     let name = member.agent.name.clone();
+                    let instance_id = AgentInstanceId::new(room, &name);
                     if let Some(events) = &self.events {
                         events.publish(crate::events::DomainEventKind::AgentReplyStarted {
                             turn_id: turn_id.clone(),
                             room_id: room.to_owned(),
                             agent_id: name.clone(),
-                            instance_id: format!("{room}/{name}"),
+                            agent_instance_id: instance_id.clone(),
                         });
                     }
-                    let instance_id = format!("{room}/{name}");
                     let cursor = invoker.cursor(&instance_id).await;
                     let result = match self.member_prompt(
                         &PackRequest {
@@ -353,14 +373,14 @@ impl ConversationCoordinator {
                                 turn_id: turn_id.clone(),
                                 room_id: room.to_owned(),
                                 agent_id: name.clone(),
-                                instance_id: format!("{room}/{name}"),
+                                agent_instance_id: instance_id.clone(),
                             }
                         } else {
                             crate::events::DomainEventKind::AgentReplyFailed {
                                 turn_id: turn_id.clone(),
                                 room_id: room.to_owned(),
                                 agent_id: name.clone(),
-                                instance_id: format!("{room}/{name}"),
+                                agent_instance_id: instance_id.clone(),
                                 error_code: "agent_reply_failed".into(),
                                 message: "agent failed to produce a reply".into(),
                             }
@@ -450,7 +470,7 @@ impl ConversationCoordinator {
                 reply_count: replies.len(),
             });
         }
-        Ok(replies)
+        Ok((turn_id, replies))
     }
 
     /// Serialized shared state shown to `caller`: canonical group state for

@@ -113,62 +113,64 @@ fn map_event(event: &DomainEvent) -> Option<Outbound> {
         DomainEventKind::AgentReplyStarted {
             room_id,
             turn_id,
-            instance_id,
+            agent_instance_id,
             ..
         } => (
             "agent.reply.started",
-            json!({"room_id": room_id, "turn_id": turn_id, "agent_instance_id": instance_id}),
+            json!({"room_id": room_id, "turn_id": turn_id, "agent_instance_id": agent_instance_id.encode()}),
         ),
         DomainEventKind::AgentReplyCompleted {
             room_id,
             turn_id,
-            instance_id,
+            agent_instance_id,
             ..
         } => (
             "agent.reply.completed",
-            json!({"room_id": room_id, "turn_id": turn_id, "agent_instance_id": instance_id}),
+            json!({"room_id": room_id, "turn_id": turn_id, "agent_instance_id": agent_instance_id.encode()}),
         ),
         DomainEventKind::AgentReplyFailed {
             room_id,
             turn_id,
-            instance_id,
+            agent_instance_id,
             ..
         } => (
             "agent.reply.failed",
-            json!({"room_id": room_id, "turn_id": turn_id, "agent_instance_id": instance_id}),
+            json!({"room_id": room_id, "turn_id": turn_id, "agent_instance_id": agent_instance_id.encode()}),
         ),
         DomainEventKind::RuntimeStarted {
-            instance_id,
+            agent_instance_id,
             runtime,
             ..
         } => (
             "runtime.started",
-            json!({"agent_instance_id": instance_id, "runtime": runtime}),
+            json!({"agent_instance_id": agent_instance_id.encode(), "runtime": runtime}),
         ),
         DomainEventKind::RuntimeStopped {
-            instance_id,
+            agent_instance_id,
             runtime,
+            reason,
             ..
         } => (
             "runtime.stopped",
-            json!({"agent_instance_id": instance_id, "runtime": runtime}),
+            json!({"agent_instance_id": agent_instance_id.encode(), "runtime": runtime, "reason": reason}),
         ),
         DomainEventKind::RuntimeFailed {
-            instance_id,
+            agent_instance_id,
             runtime,
+            error_code,
             ..
         } => (
             "runtime.failed",
-            json!({"agent_instance_id": instance_id, "runtime": runtime}),
+            json!({"agent_instance_id": agent_instance_id.encode(), "runtime": runtime, "error_code": error_code}),
         ),
         DomainEventKind::RuntimeRotated {
-            instance_id,
+            agent_instance_id,
             runtime,
             reason,
             ..
         } => (
             "runtime.rotated",
-            json!({"agent_instance_id": instance_id, "runtime": runtime, "reason": reason}),
+            json!({"agent_instance_id": agent_instance_id.encode(), "runtime": runtime, "reason": reason}),
         ),
         DomainEventKind::CoreStarted | DomainEventKind::CoreShuttingDown => return None,
     };
@@ -218,5 +220,72 @@ async fn close(socket: &mut WebSocket, frame: Option<CloseFrame>) {
     });
     if socket.send(Message::Close(frame)).await.is_ok() {
         let _ = tokio::time::timeout(Duration::from_secs(1), socket.next()).await;
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::identity::AgentInstanceId;
+
+    fn event(payload: DomainEventKind) -> DomainEvent {
+        DomainEvent {
+            event_id: "test-event".into(),
+            sequence: 1,
+            occurred_at: std::time::SystemTime::now(),
+            payload,
+        }
+    }
+
+    #[test]
+    fn runtime_lifecycle_reasons_are_public_but_provider_errors_are_not() {
+        let instance = AgentInstanceId::new("room", "persona");
+        let failed = event(DomainEventKind::RuntimeFailed {
+            agent_id: "persona".into(),
+            agent_instance_id: instance.clone(),
+            runtime: "pi".into(),
+            error_code: "prompt_timeout".into(),
+            message: "sensitive provider diagnostic".into(),
+        });
+        let failed = map_event(&failed).unwrap();
+        assert_eq!(failed.payload["error_code"], "prompt_timeout");
+        assert!(!serde_json::to_string(&failed)
+            .unwrap()
+            .contains("sensitive provider diagnostic"));
+
+        let stopped = event(DomainEventKind::RuntimeStopped {
+            agent_id: "persona".into(),
+            agent_instance_id: instance,
+            runtime: "pi".into(),
+            reason: "core_shutdown".into(),
+        });
+        let stopped = map_event(&stopped).unwrap();
+        assert_eq!(stopped.payload["reason"], "core_shutdown");
+    }
+
+    #[test]
+    fn websocket_encodes_and_round_trips_agent_instance_identity() {
+        let identities = [
+            AgentInstanceId::new("a/b", "c"),
+            AgentInstanceId::new("a", "b/c"),
+            AgentInstanceId::new("雪 / room", "persona:# ☕"),
+        ];
+        let mut encoded = Vec::new();
+
+        for identity in &identities {
+            let mapped = map_event(&event(DomainEventKind::AgentReplyCompleted {
+                room_id: identity.room_id.clone(),
+                turn_id: "turn".into(),
+                agent_id: identity.persona_id.clone(),
+                agent_instance_id: identity.clone(),
+            }))
+            .unwrap();
+            let value = mapped.payload["agent_instance_id"]
+                .as_str()
+                .expect("agent_instance_id is a string");
+            assert_eq!(AgentInstanceId::decode(value), Some(identity.clone()));
+            encoded.push(value.to_owned());
+        }
+
+        assert_ne!(encoded[0], encoded[1]);
     }
 }

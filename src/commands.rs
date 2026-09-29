@@ -33,39 +33,7 @@ pub fn ordered_group_members<'a>(
     name: &str,
 ) -> Result<Vec<&'a AgentConfig>> {
     let group = group(config, name)?;
-    ordered_members(config, group)
-}
-
-pub fn group_agents<'a>(config: &'a HivemindConfig, name: &str) -> Result<Vec<&'a AgentConfig>> {
-    let group = group(config, name)?;
-    if group.members.is_empty() {
-        bail!("group '{name}' has no members");
-    }
-
-    ordered_members(config, group)
-}
-
-fn ordered_members<'a>(
-    config: &'a HivemindConfig,
-    group: &'a GroupConfig,
-) -> Result<Vec<&'a AgentConfig>> {
-    if group.reply_order.is_empty() {
-        return Ok(config
-            .ordered_agents()
-            .into_iter()
-            .filter(|agent| group.members.contains(&agent.name))
-            .collect());
-    }
-
-    let mut ordered = group
-        .reply_order
-        .iter()
-        .map(|name| agent(config, name))
-        .collect::<Result<Vec<_>>>()?;
-    ordered.extend(config.ordered_agents().into_iter().filter(|candidate| {
-        group.members.contains(&candidate.name) && !group.reply_order.contains(&candidate.name)
-    }));
-    Ok(ordered)
+    Ok(config.ordered_group_members(group))
 }
 
 /// Apply one group operation and persist it before exposing the new state.
@@ -294,10 +262,9 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(group_agents(&config, "backend")
-            .unwrap_err()
-            .to_string()
-            .contains("has no members"));
+        assert!(ordered_group_members(&config, "backend")
+            .unwrap()
+            .is_empty());
         assert!(HivemindConfig::load(&path).unwrap().groups[0]
             .members
             .is_empty());
@@ -447,7 +414,7 @@ mod tests {
             agents: vec![],
         };
         mutate_group(&mut config, &path, create_empty.clone()).unwrap();
-        assert!(group_agents(&config, "empty").is_err());
+        assert!(ordered_group_members(&config, "empty").unwrap().is_empty());
         assert!(mutate_group(&mut config, &path, create_empty)
             .unwrap_err()
             .to_string()

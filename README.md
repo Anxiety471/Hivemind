@@ -135,6 +135,8 @@ Each agent selects a runtime independently. Hivemind supports OMP and Pi in one 
 [runtime]
 omp_binary = "omp"
 pi_binary = "pi"
+# Maximum runtime prompt duration in seconds; 0 disables the prompt timeout.
+prompt_timeout_secs = 300
 # Seconds an unused agent-instance runtime stays alive; 0 never idles out.
 idle_timeout_secs = 120
 
@@ -169,18 +171,29 @@ older Hivemind key `thinking` remains accepted as an alias. OMP `fast` is
 tri-state: omitted leaves its default unchanged; `true` or `false` is applied
 once at session startup. `fast` is OMP-specific.
 
-Every agent instance — `room/persona`, in shell `ask`/`all`, interactive `chat`
-(main, solo, group, `/ask`, `/all`), and any `HivemindCore::turn` caller — has at
-most one live Pi or OMP runtime session, owned by the core. The first prompt of
-a session carries the full Context Pack; later turns in the same room send only
-a room delta, and memory-tool follow-ups send only the tool result. A session
-rotates to a fresh process at a turn boundary once its runtime-reported context
-reaches `context.runtime_rotate_tokens` (emitting `runtime.rotated`) or when a
-delta cannot be built, is discarded after any runtime failure without retrying
-that turn, closes after `runtime.idle_timeout_secs` without use, and stops on
-core shutdown. No runtime session is shared across personas, turns, or rooms;
-this applies equally to Pi and OMP. Hivemind's SQLite room history, state, and
-summary stay canonical, and every new session is rehydrated from them.
+`runtime.prompt_timeout_secs` defaults to 300 seconds; set it to `0` to disable
+the prompt timeout. If a prompt times out, Hivemind cancels that prompt,
+discards the current runtime session, closes its runtime epoch, and does not
+retry that user turn. The next turn starts with a fresh session rehydrated from
+canonical room history.
+
+Each agent instance is identified internally by its structured room and persona
+IDs, not by joining them with a delimiter. At storage and public protocol
+boundaries, Hivemind uses the stable, versioned `ai1` length-prefixed encoding
+of those fields as `agent_instance_id`; it round-trips without guessing where
+one ID ends and the other begins. Shell `ask`/`all`, interactive `chat` (main,
+solo, group, `/ask`, `/all`), and any `HivemindCore::turn` caller use the same
+identity. A session may persist across turns for the same agent instance, but
+is never shared across different rooms or personas. The first prompt of a
+session carries the full Context Pack; later turns in the same room send only a
+room delta, and memory-tool follow-ups send only the tool result. At the next
+turn boundary, a session rotates when its context reaches
+`context.runtime_rotate_tokens` or when its next room delta cannot be built
+(emitting `runtime.rotated`). A runtime failure discards the session without
+retrying that turn; it also closes after `runtime.idle_timeout_secs` without
+use and stops on core shutdown. This applies equally to Pi and OMP. Hivemind's
+SQLite room history, state, and summary stay canonical, and every new session
+is rehydrated from them.
 Participants are resolved and validated before any runtime starts. Pi uses RPC
 mode with `--no-session` and keeps its in-process context between prompts;
 Hivemind waits for `agent_settled` and returns text blocks from the latest
@@ -191,12 +204,27 @@ next to the selected config file: rooms, turns, and messages (L7), scoped
 memory records with FTS5 search, runtime epochs, and group state. Legacy room
 JSON is imported exactly once — on first load every legacy turn and the room
 snapshot are written to SQLite, and the JSON file is removed only after that
-migration succeeds. `.hivemind/context/` now holds only room turn-lock files
-and any not-yet-migrated legacy history. `[context]` configures the recent
-raw-turn window, summary size/refresh cadence, and bounded approximate context
-budget. `runtime_rotate_tokens` is the live context size at which that agent
-instance's runtime is rotated before its next turn, and
-`runtime.idle_timeout_secs` is how long an unused runtime stays alive.
+migration succeeds.
+
+Legacy private-memory rows keep their original `scope_type = 'agent_instance'`
+and remain opaque to ordinary typed callers; new private-memory rows use
+`agent_instance_v1` with the `ai1` encoding. Existing runtime epochs are kept
+with identity version `0` and are not returned or closed through typed
+identity lookup. New epochs use identity version `1` and the same encoded
+identity. Hivemind never guesses how to split an old slash-delimited value.
+
+Legacy JSON history identities have no version marker and remain opaque; import
+reconstructs the typed identity only from the authoritative room and speaker
+fields. New typed history entries carry
+`agent_instance_identity_version = 1`, and only those entries are decoded as
+the versioned identity.
+
+`.hivemind/context/` now holds only room turn-lock files and any not-yet-migrated
+legacy history. `[context]` configures the recent raw-turn window, summary size/
+refresh cadence, and bounded approximate context budget. `runtime_rotate_tokens`
+is the live context size at which that agent instance's runtime is rotated
+before its next turn, and `runtime.idle_timeout_secs` is how long an unused
+runtime stays alive.
 
 ## Application core and event stream
 
@@ -207,13 +235,34 @@ pool, and a bounded process-local event bus. Interactive `chat` shares one core
 for the whole session. Each core turn prompts that room's live runtime per
 persona and keeps it for the next turn (emitting
 `runtime.started`/`runtime.rotated`/`runtime.stopped` events); core shutdown
-stops every live runtime. Shell `ask` and `all`
-construct a core per command. The API currently
-exposes health, info, agent listing, and WebSocket event streaming; it does
-not yet route chat turns. Construction and health/info/agent listing do not
-start Pi or OMP. Runtime lifecycle and conversation events are ephemeral
-notifications, not canonical records; durable room history and memory remain
-in SQLite.
+stops every live runtime.
+
+On `SIGINT`, interactive chat cancels the active turn through core shutdown,
+reports the failed turn, and stops accepting input. The API also begins core
+shutdown and notifies WebSocket clients before Axum drains in-flight HTTP
+requests; interrupted HTTP turns retain the API's sanitized failed-reply
+response.
+
+Shell `ask` and `all` construct a core per command. Conversation targets
+(main, solo persona, or group) are resolved by the core, including room
+identity, mode, participants, roles, and effective reply order.
+
+The loopback API accepts turns at `POST /api/v1/turns`; WebSocket remains the
+live event stream. For example:
+
+~~~json
+{"target":{"type":"group","id":"development"},"message":"Review the runtime lifecycle."}
+~~~
+
+The response includes `turn_id`, `room_id`, and ordered `replies` with
+`persona_id`, `ok`, and `content`. Match `turn_id` and `room_id` from the
+response to `conversation.turn.started`, `agent.reply.*`, and
+`conversation.turn.completed` WebSocket events. Target-not-found errors return
+404, malformed/empty requests return 400, and shutdown returns 503; responses
+do not include provider diagnostics or prompts. Construction and health/info/
+agent listing do not start Pi or OMP. Runtime lifecycle and conversation events
+are ephemeral notifications, not canonical records; durable room history and
+memory remain in SQLite.
 
 The library's `core`, `events`, `conversation`, `config`, `runtime`, and
 `memory` modules expose this kernel for embedding. Room transcripts, summaries,
@@ -288,10 +337,18 @@ quota is available.
 | Harness working context | Pi/OMP session | Disposable; rebuilt from the layers below if the runtime restarts. |
 | Recent conversation | room | Bounded raw window set by `[context] recent_turns`; older turns stay in the archive. |
 | Group shared memory | group | Visible only to that group's members. |
-| Private memory | agent instance | Visible only to that instance — `development/Maomao` and `security/Maomao` are separate memories. |
+| Private memory | agent instance | Visible only to that structured room/persona identity; identical personas in different rooms have separate memories. |
 | Persona memory | persona | Shared across all instances of the same persona. |
 | Hivemind global | system-wide | Durable project-wide facts, held to the strictest policy. |
 | Canonical archive | Hivemind | Durable source of truth for rooms, turns, messages, and memory records. |
+
+The external `agent_instance_id` representation is versioned and unambiguous;
+it is a serialization of the structured IDs, not the identity itself. Existing
+SQLite scope or runtime-epoch values written as legacy `room/persona` strings
+are preserved as opaque values. Hivemind does not split or reassign them based
+on the delimiter, since IDs may themselves contain `/`; they are not treated as
+the new canonical structured identity unless a mapping is known from
+authoritative structured data.
 
 - **Storage**: a local SQLite archive with FTS5 full-text indexes over
   memories and archived messages. Search is deterministic and needs no model

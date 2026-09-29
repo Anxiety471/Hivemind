@@ -411,6 +411,7 @@ done
                 message.contains("PiAgent") && message.contains(expected),
                 "{message}"
             );
+            session.shutdown().await.unwrap();
         }
     }
 

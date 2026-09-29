@@ -1,17 +1,21 @@
+mod registry;
+pub use registry::AgentRegistry;
+
 use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc,
+        Arc, RwLock,
     },
 };
 
 use anyhow::{Context, Result};
 
 use crate::{
-    config::{AgentConfig, ConversationMode, HivemindConfig},
+    config::{ConversationMode, HivemindConfig},
     conversation::{
-        AgentInvoker, ConversationCoordinator, Participant, RuntimeInvoker, TurnReply, TurnRequest,
+        AgentInvoker, ConversationCoordinator, Participant, RuntimeInvoker, TurnExecution,
+        TurnReply, TurnRequest,
     },
     events::{DomainEventKind, EventBus},
     memory::MemoryService,
@@ -20,28 +24,15 @@ use crate::{
 
 /// Process-level owner of configuration, memory, conversations, events, and API state.
 pub struct HivemindCore {
-    config: Arc<HivemindConfig>,
-    agents: AgentRegistry,
+    config: RwLock<Arc<HivemindConfig>>,
+    agents: RwLock<AgentRegistry>,
     memory: Arc<MemoryService>,
     conversation: ConversationCoordinator,
     events: EventBus,
     runtime: Arc<RuntimePool>,
     config_path: PathBuf,
     shutting_down: AtomicBool,
-}
-
-#[derive(Clone)]
-pub struct AgentRegistry {
-    agents: Arc<Vec<AgentConfig>>,
-}
-
-impl AgentRegistry {
-    pub fn list(&self) -> Vec<AgentConfig> {
-        self.agents.as_ref().clone()
-    }
-    pub fn get(&self, id: &str) -> Option<AgentConfig> {
-        self.agents.iter().find(|agent| agent.name == id).cloned()
-    }
+    shutdown_lock: tokio::sync::Mutex<()>,
 }
 
 pub struct CoreTurnRequest<'a> {
@@ -52,6 +43,53 @@ pub struct CoreTurnRequest<'a> {
     pub members: &'a [Participant],
     pub input: &'a str,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoreError {
+    ShuttingDown,
+}
+
+impl std::fmt::Display for CoreError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ShuttingDown => f.write_str("Hivemind core is shutting down"),
+        }
+    }
+}
+
+impl std::error::Error for CoreError {}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConversationTarget {
+    Main,
+    Solo { persona_id: String },
+    Group { group_id: String },
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedConversationTarget {
+    pub room_id: String,
+    pub room_name: String,
+    pub group_id: String,
+    pub mode: ConversationMode,
+    pub participants: Vec<Participant>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TargetResolutionError {
+    Invalid(String),
+    NotFound(String),
+}
+
+impl std::fmt::Display for TargetResolutionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Invalid(message) | Self::NotFound(message) => f.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for TargetResolutionError {}
 
 impl HivemindCore {
     pub fn new(config: HivemindConfig, config_path: impl AsRef<Path>) -> Result<Self> {
@@ -88,22 +126,44 @@ impl HivemindCore {
         ));
         events.publish(DomainEventKind::CoreStarted);
         Ok(Self {
-            config,
-            agents,
+            config: RwLock::new(config),
+            agents: RwLock::new(agents),
             memory,
             conversation,
             events,
             runtime,
             config_path,
             shutting_down: AtomicBool::new(false),
+            shutdown_lock: tokio::sync::Mutex::new(()),
         })
     }
 
-    pub fn config(&self) -> &HivemindConfig {
-        &self.config
+    pub fn agents(&self) -> AgentRegistry {
+        self.agents
+            .read()
+            .expect("core agent registry lock poisoned")
+            .clone()
     }
-    pub fn agents(&self) -> &AgentRegistry {
-        &self.agents
+
+    /// Update only persisted group definitions; runtime and context services
+    /// are intentionally not reconstructed by this operation.
+    pub fn reload_groups(&self, groups: Vec<crate::config::GroupConfig>) {
+        let mut config = self
+            .config
+            .read()
+            .expect("core config lock poisoned")
+            .as_ref()
+            .clone();
+        config.groups = groups;
+        *self.config.write().expect("core config lock poisoned") = Arc::new(config);
+    }
+
+    pub fn config(&self) -> HivemindConfig {
+        self.config
+            .read()
+            .expect("core config lock poisoned")
+            .as_ref()
+            .clone()
     }
     pub fn events(&self) -> &EventBus {
         &self.events
@@ -118,6 +178,129 @@ impl HivemindCore {
         &self.config_path
     }
 
+    pub fn resolve_target(
+        &self,
+        target: &ConversationTarget,
+    ) -> std::result::Result<ResolvedConversationTarget, TargetResolutionError> {
+        let config = self.config.read().expect("core config lock poisoned");
+        let config = config.as_ref();
+        Ok(match target {
+            ConversationTarget::Main => ResolvedConversationTarget {
+                room_id: "main".into(),
+                room_name: "Main conversation".into(),
+                group_id: String::new(),
+                mode: ConversationMode::Broadcast,
+                participants: config
+                    .ordered_agents()
+                    .into_iter()
+                    .map(|agent| Participant {
+                        agent: agent.clone(),
+                        role: None,
+                    })
+                    .collect(),
+            },
+            ConversationTarget::Solo { persona_id } => {
+                if persona_id.trim().is_empty() {
+                    return Err(TargetResolutionError::Invalid(
+                        "persona id must not be empty".into(),
+                    ));
+                }
+                let agent = config
+                    .agents
+                    .iter()
+                    .find(|agent| agent.name == *persona_id)
+                    .ok_or_else(|| {
+                        TargetResolutionError::NotFound(format!("unknown persona '{persona_id}'"))
+                    })?;
+                ResolvedConversationTarget {
+                    room_id: format!("solo-{persona_id}"),
+                    room_name: format!("Solo: {persona_id}"),
+                    group_id: String::new(),
+                    mode: ConversationMode::Discussion,
+                    participants: vec![Participant {
+                        agent: agent.clone(),
+                        role: None,
+                    }],
+                }
+            }
+            ConversationTarget::Group { group_id } => {
+                if group_id.trim().is_empty() {
+                    return Err(TargetResolutionError::Invalid(
+                        "group id must not be empty".into(),
+                    ));
+                }
+                let group = config
+                    .groups
+                    .iter()
+                    .find(|group| group.name == *group_id)
+                    .ok_or_else(|| {
+                        TargetResolutionError::NotFound(format!("unknown group '{group_id}'"))
+                    })?;
+                if group.members.is_empty() {
+                    return Err(TargetResolutionError::Invalid(format!(
+                        "group '{group_id}' has no members"
+                    )));
+                }
+                let members = config.ordered_group_members(group);
+                ResolvedConversationTarget {
+                    room_id: format!("group-{group_id}"),
+                    room_name: group.name.clone(),
+                    group_id: group.name.clone(),
+                    mode: group.mode,
+                    participants: members
+                        .into_iter()
+                        .map(|agent| Participant {
+                            role: group.member_roles.get(&agent.name).cloned(),
+                            agent: agent.clone(),
+                        })
+                        .collect(),
+                }
+            }
+        })
+    }
+
+    pub async fn send_turn(
+        &self,
+        target: &ConversationTarget,
+        message: &str,
+    ) -> anyhow::Result<TurnExecution> {
+        if self.shutting_down.load(Ordering::Acquire) {
+            return Err(CoreError::ShuttingDown.into());
+        }
+        if message.trim().is_empty() {
+            anyhow::bail!("empty message");
+        }
+        let resolved = self.resolve_target(target)?;
+        let invoker = Arc::new(RuntimeInvoker::new(
+            self.runtime.clone(),
+            &resolved.room_id,
+            &resolved.group_id,
+        ));
+        self.send_resolved_turn(&resolved, message, invoker).await
+    }
+
+    pub async fn send_resolved_turn(
+        &self,
+        target: &ResolvedConversationTarget,
+        message: &str,
+        invoker: Arc<dyn AgentInvoker>,
+    ) -> anyhow::Result<TurnExecution> {
+        anyhow::ensure!(!message.trim().is_empty(), "empty message");
+        if self.shutting_down.load(Ordering::Acquire) {
+            return Err(CoreError::ShuttingDown.into());
+        }
+        self.conversation
+            .turn_with_outcome(TurnRequest {
+                room: &target.room_id,
+                room_name: &target.room_name,
+                group_id: &target.group_id,
+                mode: target.mode,
+                members: &target.participants,
+                input: message,
+                invoker,
+            })
+            .await
+    }
     pub async fn turn(&self, request: CoreTurnRequest<'_>) -> Result<Vec<TurnReply>> {
         let invoker = Arc::new(RuntimeInvoker::new(
             self.runtime.clone(),
@@ -132,10 +315,9 @@ impl HivemindCore {
         request: CoreTurnRequest<'_>,
         invoker: Arc<dyn AgentInvoker>,
     ) -> Result<Vec<TurnReply>> {
-        anyhow::ensure!(
-            !self.shutting_down.load(Ordering::Acquire),
-            "Hivemind core is shutting down"
-        );
+        if self.shutting_down.load(Ordering::Acquire) {
+            return Err(CoreError::ShuttingDown.into());
+        }
         self.conversation
             .turn(TurnRequest {
                 room: request.room,
@@ -151,6 +333,7 @@ impl HivemindCore {
 
     /// Idempotently stop the core and every live agent-instance runtime.
     pub async fn shutdown(&self) {
+        let _guard = self.shutdown_lock.lock().await;
         if self.shutting_down.swap(true, Ordering::AcqRel) {
             return;
         }
@@ -161,6 +344,7 @@ impl HivemindCore {
 
 #[cfg(test)]
 mod tests {
+    use crate::identity::AgentInstanceId;
     use std::{
         fs,
         os::unix::fs::PermissionsExt,
@@ -197,6 +381,19 @@ mod tests {
     /// context usage, exits on a `crash-now` prompt, and — while `tool-mode`
     /// exists — answers with a memory tool call until it sees a tool result.
     fn fake_core(directory: &TestDirectory) -> (HivemindCore, PathBuf, PathBuf) {
+        fake_core_with_timeouts(directory, 300, 120)
+    }
+    fn fake_core_with_prompt_timeout(
+        directory: &TestDirectory,
+        prompt_timeout_secs: u64,
+    ) -> (HivemindCore, PathBuf, PathBuf) {
+        fake_core_with_timeouts(directory, prompt_timeout_secs, 0)
+    }
+    fn fake_core_with_timeouts(
+        directory: &TestDirectory,
+        prompt_timeout_secs: u64,
+        idle_timeout_secs: u64,
+    ) -> (HivemindCore, PathBuf, PathBuf) {
         let binary = directory.0.join("fake-pi");
         let lifecycle = directory.0.join("lifecycle.log");
         let prompts = directory.0.join("prompts.log");
@@ -205,6 +402,7 @@ case "$*" in
   *"You are Maomao"*) agent=Maomao ;;
   *) agent=Unknown ;;
 esac
+printf '%s\n' "$$" > __DIR__/runtime.pid
 printf '%s started\n' "$agent" >> __DIR__/lifecycle.log
 while IFS= read -r request; do
   case "$request" in
@@ -220,6 +418,7 @@ while IFS= read -r request; do
       printf '%s\n' "$request" >> __DIR__/prompts.log
       case "$request" in
         *'Current user message:\ncrash-now'*) exit 3 ;;
+        *'Current user message:\nhang-now'*) while IFS= read -r ignored; do :; done ;;
       esac
       if [ -e __DIR__/tool-mode ] && ! printf '%s' "$request" | grep -q 'Memory tool result:'; then
         printf '%s\n' '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"```hivemind-tool\n{\"name\":\"memory.private.add\",\"args\":{\"content\":\"session note\"}}\n```"}]}}'
@@ -230,6 +429,7 @@ while IFS= read -r request; do
       ;;
   esac
 done
+if [ -e __DIR__/linger ]; then exec sleep 60; fi
 printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
 "#
         .replace("__DIR__", &format!("'{}'", directory.0.display()));
@@ -241,6 +441,8 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
         let mut config = HivemindConfig::default_poc();
         config.agents.retain(|agent| agent.name == "Maomao");
         config.runtime.pi_binary = binary.display().to_string();
+        config.runtime.prompt_timeout_secs = prompt_timeout_secs;
+        config.runtime.idle_timeout_secs = idle_timeout_secs;
         config.agents[0].workspace = directory.0.display().to_string();
         let core = HivemindCore::new(config, directory.0.join("hivemind.toml")).unwrap();
         (core, lifecycle, prompts)
@@ -258,7 +460,13 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
     }
 
     fn maomao_caller(room: &str) -> crate::memory::Caller {
-        crate::memory::Caller::agent(room, "", format!("{room}/Maomao"), "Maomao", "Maomao")
+        crate::memory::Caller::agent(
+            room,
+            "",
+            AgentInstanceId::new(room, "Maomao"),
+            "Maomao",
+            "Maomao",
+        )
     }
 
     async fn solo_turn(core: &HivemindCore, room: &str, input: &str) -> Result<Vec<TurnReply>> {
@@ -397,17 +605,20 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
         let mut rotated = Vec::new();
         while let Ok(event) = events.try_recv() {
             if let DomainEventKind::RuntimeRotated {
-                instance_id,
+                agent_instance_id,
                 reason,
                 ..
             } = event.payload
             {
-                rotated.push((instance_id, reason));
+                rotated.push((agent_instance_id, reason));
             }
         }
         assert_eq!(
             rotated,
-            [("rotate-room/Maomao".to_owned(), "context_budget".to_owned())]
+            [(
+                AgentInstanceId::new("rotate-room", "Maomao"),
+                "context_budget".to_owned(),
+            )]
         );
 
         let epochs = core
@@ -428,10 +639,15 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
     #[tokio::test]
     async fn failed_runtime_is_discarded_and_next_turn_rehydrates() {
         let directory = TestDirectory::new();
-        let (core, lifecycle, prompts) = fake_core(&directory);
+        let (core, lifecycle, prompts) = fake_core_with_prompt_timeout(&directory, 300);
         let mut events = core.events().subscribe();
         let replies = solo_turn(&core, "crash-room", "crash-now").await.unwrap();
         assert!(replies[0].result.is_err());
+        assert_eq!(
+            core.runtime.slot_count(),
+            0,
+            "runtime failure evicts its empty slot when idle reaping is disabled"
+        );
         let replies = solo_turn(&core, "crash-room", "after the crash")
             .await
             .unwrap();
@@ -453,9 +669,225 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
                 failure_codes.push(error_code);
             }
         }
-        assert_eq!(failure_codes, ["runtime_prompt_failed"]);
+        assert_eq!(failure_codes, ["runtime_failure"]);
     }
 
+    #[tokio::test]
+    async fn prompt_timeout_discards_epoch_without_retry_and_rehydrates_next_turn() {
+        let directory = TestDirectory::new();
+        let (core, lifecycle, prompts) = fake_core_with_prompt_timeout(&directory, 1);
+        let mut events = core.events().subscribe();
+
+        let replies = solo_turn(&core, "timeout-room", "hang-now").await.unwrap();
+        assert!(replies[0]
+            .result
+            .as_ref()
+            .unwrap_err()
+            .contains("timed out"));
+        assert_eq!(
+            prompt_messages(&prompts).len(),
+            1,
+            "the uncertain turn is not retried"
+        );
+        assert_eq!(
+            core.runtime.slot_count(),
+            0,
+            "prompt timeout evicts its empty slot when idle reaping is disabled"
+        );
+        assert_eq!(
+            lines(&lifecycle),
+            ["Maomao started", "Maomao prompt", "Maomao stopped"]
+        );
+        let epochs = core
+            .memory()
+            .runtime_epochs(&maomao_caller("timeout-room"), 10)
+            .unwrap();
+        assert_eq!(epochs.len(), 1);
+        assert!(epochs[0].ended_at.is_some());
+
+        let mut failed = Vec::new();
+        let mut stopped = Vec::new();
+        while let Ok(event) = events.try_recv() {
+            match event.payload {
+                DomainEventKind::RuntimeFailed { error_code, .. } => failed.push(error_code),
+                DomainEventKind::RuntimeStopped { reason, .. } => stopped.push(reason),
+                _ => {}
+            }
+        }
+        assert_eq!(failed, ["prompt_timeout"]);
+        assert_eq!(stopped, ["prompt_timeout"]);
+
+        let replies = solo_turn(&core, "timeout-room", "after timeout")
+            .await
+            .unwrap();
+        assert_eq!(replies[0].result.as_deref(), Ok("Maomao reply"));
+        assert_eq!(
+            lines(&lifecycle)
+                .iter()
+                .filter(|line| *line == "Maomao started")
+                .count(),
+            2,
+            "the next turn starts a fresh runtime"
+        );
+        assert_eq!(prompt_messages(&prompts).len(), 2);
+        core.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn core_shutdown_cancels_a_hanging_prompt_and_waits_for_concurrent_callers() {
+        let directory = TestDirectory::new();
+        let (core, lifecycle, prompts) = fake_core_with_prompt_timeout(&directory, 0);
+        let mut events = core.events().subscribe();
+        let core = std::sync::Arc::new(core);
+        let turning_core = core.clone();
+        let turn =
+            tokio::spawn(
+                async move { solo_turn(&turning_core, "shutdown-room", "hang-now").await },
+            );
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while prompt_messages(&prompts).is_empty() {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("fake runtime received the hanging prompt");
+
+        let first = core.clone();
+        let second = core.clone();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async move {
+            tokio::join!(first.shutdown(), second.shutdown());
+        })
+        .await
+        .expect("shutdown cancels the prompt and completes within its bound");
+        let replies = turn.await.unwrap().unwrap();
+        assert!(replies[0].result.is_err());
+        assert_eq!(prompt_messages(&prompts).len(), 1);
+        assert_eq!(
+            lines(&lifecycle),
+            ["Maomao started", "Maomao prompt", "Maomao stopped"]
+        );
+        let epochs = core
+            .memory()
+            .runtime_epochs(&maomao_caller("shutdown-room"), 10)
+            .unwrap();
+        assert_eq!(epochs.len(), 1);
+        assert!(epochs[0].ended_at.is_some());
+
+        let mut shutdown_reasons = Vec::new();
+        let mut shutdown_events = 0;
+        while let Ok(event) = events.try_recv() {
+            match event.payload {
+                DomainEventKind::RuntimeStopped { reason, .. } => shutdown_reasons.push(reason),
+                DomainEventKind::CoreShuttingDown => shutdown_events += 1,
+                _ => {}
+            }
+        }
+        assert_eq!(shutdown_reasons, ["core_shutdown"]);
+        assert_eq!(shutdown_events, 1);
+    }
+    #[tokio::test]
+    async fn shutdown_cancels_omp_startup_without_opening_an_epoch() {
+        let directory = TestDirectory::new();
+        let binary = directory.0.join("hanging-omp");
+        let script = r#"#!/bin/sh
+printf '%s\n' "$$" > __DIR__/child.pid
+printf started > __DIR__/started
+while IFS= read -r request; do :; done
+"#
+        .replace("__DIR__", &format!("'{}'", directory.0.display()));
+        fs::write(&binary, script).unwrap();
+        let mut permissions = fs::metadata(&binary).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&binary, permissions).unwrap();
+
+        let mut config = HivemindConfig::default_poc();
+        config.agents.retain(|agent| agent.name == "Maomao");
+        config.agents[0].runtime = "omp".into();
+        config.agents[0].workspace = directory.0.display().to_string();
+        config.runtime.omp_binary = binary.display().to_string();
+        config.runtime.prompt_timeout_secs = 0;
+        let core = std::sync::Arc::new(
+            HivemindCore::new(config, directory.0.join("hivemind.toml")).unwrap(),
+        );
+        let mut events = core.events().subscribe();
+        let turning_core = core.clone();
+        let turn =
+            tokio::spawn(async move { solo_turn(&turning_core, "startup-room", "hello").await });
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while !directory.0.join("started").exists() {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("OMP child entered startup without announcing ready");
+
+        let shutting_core = core.clone();
+        tokio::time::timeout(std::time::Duration::from_secs(5), shutting_core.shutdown())
+            .await
+            .expect("shutdown cancels startup and reaps the child");
+        assert!(turn.await.unwrap().unwrap()[0].result.is_err());
+        assert!(core
+            .memory()
+            .runtime_epochs(&maomao_caller("startup-room"), 10)
+            .unwrap()
+            .is_empty());
+        while let Ok(event) = events.try_recv() {
+            assert!(!matches!(
+                event.payload,
+                DomainEventKind::RuntimeStarted { .. }
+            ));
+        }
+
+        let pid = fs::read_to_string(directory.0.join("child.pid"))
+            .unwrap()
+            .trim()
+            .to_owned();
+        let command_line = PathBuf::from(format!("/proc/{pid}/cmdline"));
+        if Path::new("/proc/self").exists() {
+            tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                loop {
+                    let command = fs::read(&command_line).unwrap_or_default();
+                    if !String::from_utf8_lossy(&command)
+                        .contains(binary.to_string_lossy().as_ref())
+                    {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("canceled OMP startup process is no longer running");
+        }
+    }
+    #[tokio::test]
+    async fn core_shutdown_kills_a_child_that_ignores_stdin_close_within_the_bound() {
+        let directory = TestDirectory::new();
+        let (core, _lifecycle, _prompts) = fake_core(&directory);
+        fs::write(directory.0.join("linger"), "").unwrap();
+        solo_turn(&core, "kill-room", "first").await.unwrap();
+        let pid = fs::read_to_string(directory.0.join("runtime.pid"))
+            .unwrap()
+            .trim()
+            .to_owned();
+        let command_line = PathBuf::from(format!("/proc/{pid}/cmdline"));
+
+        let started = std::time::Instant::now();
+        tokio::time::timeout(std::time::Duration::from_secs(4), core.shutdown())
+            .await
+            .expect("child shutdown kill fallback is bounded");
+        assert!(started.elapsed() >= std::time::Duration::from_secs(1));
+        let epochs = core
+            .memory()
+            .runtime_epochs(&maomao_caller("kill-room"), 10)
+            .unwrap();
+        assert_eq!(epochs.len(), 1);
+        assert!(epochs[0].ended_at.is_some());
+
+        if Path::new("/proc/self").exists() {
+            let command = fs::read(&command_line).unwrap_or_default();
+            assert!(!String::from_utf8_lossy(&command).contains("sleep 60"));
+        }
+    }
     #[tokio::test]
     async fn idle_sessions_close_and_the_next_turn_rehydrates() {
         let directory = TestDirectory::new();
@@ -580,7 +1012,10 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
         assert_eq!(epochs.len(), 1, "one epoch per live session");
         let epoch = &epochs[0];
         assert_eq!(epoch.runtime, "pi");
-        assert_eq!(epoch.instance_id, "epoch-room/Maomao");
+        assert_eq!(
+            epoch.agent_instance_id,
+            AgentInstanceId::new("epoch-room", "Maomao")
+        );
         assert_eq!(epoch.room_id, "epoch-room");
         assert_eq!(
             epoch.metadata.get("kind").and_then(|v| v.as_str()),
@@ -605,6 +1040,7 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
         let directory = TestDirectory::new();
         let (working, _lifecycle, _prompts) = fake_core(&directory);
         let mut config = working.config().clone();
+        config.runtime.idle_timeout_secs = 0;
         working.shutdown().await;
         let mut broken = config.agents[0].clone();
         broken.name = "Broken".into();
@@ -628,6 +1064,11 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
             })
             .await
             .unwrap();
+        assert_eq!(
+            core.runtime.slot_count(),
+            1,
+            "startup failure evicts only its vacant slot when idle reaping is disabled"
+        );
         core.shutdown().await;
 
         let by_name = |name: &str| replies.iter().find(|reply| reply.name == name).unwrap();
@@ -833,5 +1274,74 @@ done
         assert_eq!(started, ["Maomao"]);
         assert_eq!(stopped, ["Maomao"]);
         assert_eq!(shutting_down, 1);
+    }
+
+    #[test]
+    fn core_resolves_main_solo_and_group_identity_roles_mode_and_order() {
+        let directory = TestDirectory::new();
+        let mut config = HivemindConfig::default_poc();
+        config.conversation.reply_order = vec!["Albedo".into()];
+        config.groups.push(crate::config::GroupConfig {
+            name: "review".into(),
+            members: vec!["Maomao".into(), "Albedo".into()],
+            mode: ConversationMode::Discussion,
+            member_roles: [("Albedo".into(), "Lead Reviewer".into())]
+                .into_iter()
+                .collect(),
+            reply_order: vec!["Maomao".into()],
+        });
+        let core = HivemindCore::new(config, directory.0.join("hivemind.toml")).unwrap();
+
+        let main = core.resolve_target(&ConversationTarget::Main).unwrap();
+        assert_eq!(main.room_id, "main");
+        assert_eq!(main.room_name, "Main conversation");
+        assert_eq!(main.mode, ConversationMode::Broadcast);
+        assert_eq!(
+            main.participants
+                .iter()
+                .map(|member| member.agent.name.as_str())
+                .collect::<Vec<_>>(),
+            ["Albedo", "Maomao"]
+        );
+
+        let solo = core
+            .resolve_target(&ConversationTarget::Solo {
+                persona_id: "Maomao".into(),
+            })
+            .unwrap();
+        assert_eq!(solo.room_id, "solo-Maomao");
+        assert_eq!(solo.mode, ConversationMode::Discussion);
+        assert_eq!(solo.participants[0].role, None);
+
+        let group = core
+            .resolve_target(&ConversationTarget::Group {
+                group_id: "review".into(),
+            })
+            .unwrap();
+        assert_eq!(group.room_id, "group-review");
+        assert_eq!(group.group_id, "review");
+        assert_eq!(group.mode, ConversationMode::Discussion);
+        assert_eq!(
+            group
+                .participants
+                .iter()
+                .map(|member| member.agent.name.as_str())
+                .collect::<Vec<_>>(),
+            ["Maomao", "Albedo"]
+        );
+        assert_eq!(group.participants[0].role, None);
+        assert_eq!(group.participants[1].role.as_deref(), Some("Lead Reviewer"));
+        assert!(matches!(
+            core.resolve_target(&ConversationTarget::Solo {
+                persona_id: "missing".into()
+            }),
+            Err(TargetResolutionError::NotFound(_))
+        ));
+        assert!(matches!(
+            core.resolve_target(&ConversationTarget::Group {
+                group_id: String::new()
+            }),
+            Err(TargetResolutionError::Invalid(_))
+        ));
     }
 }

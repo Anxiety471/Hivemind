@@ -1,4 +1,5 @@
 //! Ephemeral process-local domain notifications. Events are not canonical state or history.
+use crate::identity::AgentInstanceId;
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
@@ -33,42 +34,43 @@ pub enum DomainEventKind {
         turn_id: String,
         room_id: String,
         agent_id: String,
-        instance_id: String,
+        agent_instance_id: AgentInstanceId,
     },
     AgentReplyCompleted {
         turn_id: String,
         room_id: String,
         agent_id: String,
-        instance_id: String,
+        agent_instance_id: AgentInstanceId,
     },
     AgentReplyFailed {
         turn_id: String,
         room_id: String,
         agent_id: String,
-        instance_id: String,
+        agent_instance_id: AgentInstanceId,
         error_code: String,
         message: String,
     },
     RuntimeStarted {
         agent_id: String,
-        instance_id: String,
+        agent_instance_id: AgentInstanceId,
         runtime: String,
     },
     RuntimeStopped {
         agent_id: String,
-        instance_id: String,
+        agent_instance_id: AgentInstanceId,
         runtime: String,
+        reason: String,
     },
     RuntimeFailed {
         agent_id: String,
-        instance_id: String,
+        agent_instance_id: AgentInstanceId,
         runtime: String,
         error_code: String,
         message: String,
     },
     RuntimeRotated {
         agent_id: String,
-        instance_id: String,
+        agent_instance_id: AgentInstanceId,
         runtime: String,
         reason: String,
     },

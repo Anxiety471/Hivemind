@@ -45,11 +45,19 @@ pub async fn create_session(
 
 #[cfg(test)]
 mod tests {
+    use crate::{
+        events::EventBus,
+        identity::AgentInstanceId,
+        memory::{Caller, MemoryService, MemoryStore},
+    };
     use std::{
         fs,
         os::unix::fs::PermissionsExt,
         path::PathBuf,
-        sync::atomic::{AtomicUsize, Ordering},
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        },
         time::{SystemTime, UNIX_EPOCH},
     };
 
@@ -154,5 +162,80 @@ done
         assert_eq!(replies[1], "omp fixture");
         assert!(replies[0].starts_with("pi-") && replies[2].starts_with("pi-"));
         assert_ne!(replies[0], replies[2]);
+    }
+    #[tokio::test]
+    async fn runtime_pool_keeps_slash_colliding_and_related_instances_separate() {
+        let pi = Fixture::new(
+            "pi",
+            r#"
+while IFS= read -r request; do
+  case "$request" in
+    *'"type":"new_session"'*) printf '%s\n' '{"type":"response","command":"new_session","success":true}' ;;
+    *'"type":"get_session_stats"'*) printf '%s\n' '{"type":"response","command":"get_session_stats","success":true,"data":{}}' ;;
+    *'"type":"prompt"'*)
+      printf '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"pi-%s"}]}}\n' "$$"
+      printf '%s\n' '{"type":"agent_settled"}' ;;
+  esac
+done
+"#,
+        );
+        let runtime = RuntimeConfig {
+            pi_binary: pi.binary("pi"),
+            idle_timeout_secs: 0,
+            ..RuntimeConfig::default()
+        };
+        let memory = Arc::new(MemoryService::new(MemoryStore::in_memory().unwrap()));
+        let pool = RuntimePool::new(runtime, 24_000, memory, EventBus::new());
+        let identities = [
+            AgentInstanceId::new("a/b", "c"),
+            AgentInstanceId::new("a", "b/c"),
+            AgentInstanceId::new("another-room", "c"),
+            AgentInstanceId::new("a/b", "other"),
+        ];
+        let agents = [
+            agent("c", "pi", &pi.workspace()),
+            agent("b/c", "pi", &pi.workspace()),
+            agent("c", "pi", &pi.workspace()),
+            agent("other", "pi", &pi.workspace()),
+        ];
+        let view = TurnView {
+            turn_id: "turn".into(),
+            speakers: Vec::new(),
+            state_json: "{}".into(),
+        };
+        let mut replies = Vec::new();
+        for (agent_instance_id, agent) in identities.iter().zip(&agents) {
+            let caller = Caller::agent(
+                agent_instance_id.room_id.clone(),
+                "",
+                agent_instance_id.clone(),
+                agent_instance_id.persona_id.clone(),
+                agent_instance_id.persona_id.clone(),
+            );
+            replies.push(
+                pool.invoke(
+                    &caller,
+                    InvokeRequest {
+                        agent_instance_id,
+                        agent,
+                        phase: PromptPhase::TurnStart,
+                        full: "hello",
+                        delta: None,
+                        view: &view,
+                    },
+                )
+                .await
+                .unwrap()
+                .text,
+            );
+        }
+        assert_eq!(
+            replies
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            identities.len()
+        );
+        pool.shutdown().await;
     }
 }

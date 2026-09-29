@@ -26,12 +26,14 @@ pub async fn serve(core: Arc<HivemindCore>, port: u16) -> Result<()> {
     let app = router(Arc::clone(&core), shutdown_rx);
 
     println!("API listening on http://{address} (WebSocket: ws://{address}/api/v1/ws)");
+    let shutdown_core = Arc::clone(&core);
     let serve_result = axum::serve(listener, app)
         .with_graceful_shutdown(async move {
             if tokio::signal::ctrl_c().await.is_err() {
                 eprintln!("API shutdown signal error");
             }
             println!("API shutting down");
+            shutdown_core.shutdown().await;
             let _ = shutdown_tx.send(true);
         })
         .await;
