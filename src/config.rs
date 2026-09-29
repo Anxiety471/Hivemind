@@ -103,6 +103,8 @@ pub struct RuntimeConfig {
     pub omp_binary: String,
     #[serde(default = "default_pi_binary")]
     pub pi_binary: String,
+    #[serde(default = "default_opencode_binary")]
+    pub opencode_binary: String,
     /// Maximum seconds a runtime prompt may take; 0 disables the timeout.
     #[serde(default = "default_runtime_prompt_timeout_secs")]
     pub prompt_timeout_secs: u64,
@@ -117,6 +119,7 @@ impl Default for RuntimeConfig {
         Self {
             omp_binary: default_omp_binary(),
             pi_binary: default_pi_binary(),
+            opencode_binary: default_opencode_binary(),
             prompt_timeout_secs: default_runtime_prompt_timeout_secs(),
             idle_timeout_secs: default_idle_timeout_secs(),
         }
@@ -305,7 +308,7 @@ impl HivemindConfig {
         let raw = toml::to_string_pretty(&Self::default_poc())
             .context("failed to serialize default config")?;
         let raw = format!(
-            "# Configure model and reasoning per agent with model = \"provider/model-id\" and reasoning = \"high\".\n# Provider credentials are managed by Pi/OMP and are never stored here.\n{raw}"
+            "# Configure model and reasoning per agent with model = \"provider/model-id\" and reasoning = \"high\" (reasoning is not supported by the opencode runtime).\n# Provider credentials are managed by Pi/OMP/OpenCode and are never stored here.\n{raw}"
         );
         fs::write(path, raw)
             .with_context(|| format!("failed to write config {}", path.display()))?;
@@ -384,6 +387,9 @@ fn default_omp_binary() -> String {
 fn default_pi_binary() -> String {
     "pi".into()
 }
+fn default_opencode_binary() -> String {
+    "opencode".into()
+}
 fn default_runtime_prompt_timeout_secs() -> u64 {
     300
 }
@@ -414,6 +420,7 @@ mod tests {
         .unwrap();
         assert_eq!(legacy.runtime.omp_binary, "omp");
         assert_eq!(legacy.runtime.pi_binary, "pi");
+        assert_eq!(legacy.runtime.opencode_binary, "opencode");
         assert_eq!(legacy.runtime.prompt_timeout_secs, 300);
         assert_eq!(legacy.agents[0].runtime, "omp");
 

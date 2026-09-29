@@ -49,6 +49,7 @@ pub(super) fn status(config: &HivemindConfig) -> Result<()> {
         let bin = match agent.runtime.as_str() {
             "omp" => &config.runtime.omp_binary,
             "pi" => &config.runtime.pi_binary,
+            "opencode" => &config.runtime.opencode_binary,
             _ => continue,
         };
         println!(

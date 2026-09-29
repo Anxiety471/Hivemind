@@ -25,7 +25,7 @@ Hivemind owns the conversation, the memory, and the CLI.<br>
 
 ## ✨ Highlights
 
-- 🧠 **Agents belong to Hivemind, not to a runtime.** Pi and OMP are interchangeable adapters behind one `HarnessSession` boundary, selected per agent.
+- 🧠 **Agents belong to Hivemind, not to a runtime.** Pi, OMP, and OpenCode are interchangeable adapters behind one `HarnessSession` boundary, selected per agent.
 - 💾 **Canonical SQLite history.** Rooms, turns, summaries, state, and memory live in `.hivemind/memory.sqlite3`. Any runtime session can be rebuilt from it.
 - ♻️ **Persistent, disposable sessions.** A session lives across turns for one room + persona. It rotates when its context budget fills and is discarded on failure. Nothing gets lost when it goes away.
 - 👥 **Rooms and groups.** You can talk to one persona (solo), all of them (main), or a persisted group in `broadcast` or `discussion` mode.
@@ -68,7 +68,7 @@ cargo run               # starts interactive chat
 
 - **Missing runtime:** install or configure it, or set the matching `[runtime]` binary to its executable path. Only runtimes that agents use are checked.
 - **Workspace errors:** each workspace must be an existing directory. Update `workspace` or create the directory before you start chat.
-- **Provider credentials** belong to Pi or OMP. Check authentication with that runtime's own setup. `doctor` only checks that the executable exists and never contacts a provider.
+- **Provider credentials** belong to Pi, OMP, or OpenCode. Check authentication with that runtime's own setup. `doctor` only checks that the executable exists and never contacts a provider.
 - **Reply order:** entries must be unique names of configured agents. Any agents you leave out are added in declaration order.
 
 </details>
@@ -129,12 +129,13 @@ On `SIGINT`, chat cancels the active turn through core shutdown, reports the fai
 
 ### Personas and runtimes
 
-Each persona picks its own runtime, so OMP and Pi can run side by side in one process:
+Each persona picks its own runtime, so OMP, Pi, and OpenCode can run side by side in one process:
 
 ```toml
 [runtime]
 omp_binary = "omp"
 pi_binary = "pi"
+opencode_binary = "opencode"
 prompt_timeout_secs = 300   # max prompt duration; 0 disables
 idle_timeout_secs = 120     # how long an unused session stays alive; 0 = never idle out
 
@@ -156,14 +157,29 @@ system_prompt = "You are the Reviewer."
 fast = true
 ```
 
+OpenCode persona (model is `provider/model-id`; the free `opencode/*-free` models need no API key):
+
+```toml
+[[personas]]
+id = "Scout"
+runtime = "opencode"
+workspace = "."
+system_prompt = "You are the Scout."
+model = "opencode/big-pickle"
+```
+
 | Key | Notes |
 | --- | --- |
-| `runtime` | `"pi"` or `"omp"`. Defaults to `"omp"` for older configs. Legacy `[[agents]]` entries are read as personas. |
+| `runtime` | `"pi"`, `"omp"`, or `"opencode"`. Defaults to `"omp"` for older configs. Legacy `[[agents]]` entries are read as personas. |
 | `workspace` | Working directory for the child process |
-| `model` | OMP: maps to `--model` |
-| `reasoning` | OMP: maps to `--thinking`. The legacy key `thinking` is still accepted. |
-| `fast` | OMP only. Tri-state: leave it out to keep the default, or set `true`/`false` to apply once at session start. |
+| `model` | OMP/Pi: maps to `--model`. OpenCode: `provider/model-id`, selected per session over ACP. |
+| `reasoning` | OMP: maps to `--thinking`. The legacy key `thinking` is still accepted. Rejected for OpenCode. |
+| `fast` | OMP only. Tri-state: leave it out to keep the default, or set `true`/`false` to apply once at session start. Rejected for Pi and OpenCode. |
 | `role` | Default persona role. Group `member_roles` override it. |
+
+**OpenCode runtime notes.** Hivemind runs `opencode acp` (Agent Client Protocol over stdio, no port) as one child per room + persona and deletes the OpenCode session on shutdown. The persona's `system_prompt` replaces OpenCode's `build` agent prompt for that child. Hivemind sets `"permission": "allow"` in the child's config, so OpenCode never waits for approval, including for files outside the workspace, exactly like Pi and OMP, which run tools unprompted. Treat the workspace as untrusted-model territory: an OpenCode agent can read and write anything your user can. Reported context size is OpenCode's own `usage_update`, which already includes OpenCode's built-in prompt (several thousand tokens), so set `runtime_rotate_tokens` accordingly.
+
+**Opt-in OpenCode E2E.** `HIVEMIND_E2E_OPENCODE=1 python3 scripts/e2e-opencode.py` drives a real `hivemind-server` against `opencode/*-free` models (probed at run time; endpoints come and go). Each scenario uses its own scratch directory and XDG data/config dirs, and an empty workspace. Free tiers can forward prompts to third-party providers: never point it at a workspace with secrets. It covers context retention, two-agent reply order, a memory-tool round trip checked in SQLite, rotation, prompt timeout, a mixed pi/omp/opencode room (skipped without `pi`/`omp`), and shutdown leaving no children. Two longer scenarios go beyond basic chat: a conversation tree (two solo rooms, a broadcast group, a three-member discussion chain with a `Goal:` directive and a follow-up turn, a return to a solo room, and the main room, checking that rooms do not leak history into each other and that each room+persona gets its own runtime instance) and a six-turn conversation that must still recall its first-turn codeword after repeated rotations. `HIVEMIND_E2E_ONLY=s8,s9` runs selected scenarios. It is never part of `cargo test`, and rate limits or flaky models fail a scenario rather than being retried.
 
 ### Reply order and groups
 
@@ -214,7 +230,7 @@ Hivemind has a seven-layer memory system that **works without any LLM**. The def
 
 | Layer | Owner | Behavior |
 | --- | --- | --- |
-| Harness working context | Pi/OMP session | Disposable; rebuilt from the layers below if the runtime restarts |
+| Harness working context | Pi/OMP/OpenCode session | Disposable; rebuilt from the layers below if the runtime restarts |
 | Recent conversation | room | Raw window capped by `[context] recent_turns`; older turns stay in the archive |
 | Group shared memory | group | Visible only to that group's members |
 | Private memory | agent instance | Visible only to that room/persona identity; the same persona in different rooms gets separate memories |
@@ -226,7 +242,7 @@ Hivemind has a seven-layer memory system that **works without any LLM**. The def
 - 🔒 **Scope binding.** Hivemind attaches the caller's own context to every memory request and works out the group, instance, and persona from it. Requests never name an owner. An agent can't read another group's memory or another instance's private notes, and it can't pose as a different persona.
 - ✍️ **Writes.** Private and group writes are accepted directly within the caller's own scope. Persona and global writes are proposals that Hivemind's policy checks before committing. An agent's bare opinion never becomes global truth.
 - 🧾 **Provenance and supersession.** Every record keeps its origin (room, turn, message, actor). Corrections create revisions. An old record is kept as `superseded` instead of being deleted, so history stays searchable.
-- 🌉 **One tool bridge.** Pi and OMP reach memory through a single tool bridge owned by Hivemind. Runtime adapters only carry the transport. Hivemind also injects guidance that tells each agent which capabilities it has, which scopes it may touch, and that it should search memory rather than pretend to remember.
+- 🌉 **One tool bridge.** Pi, OMP, and OpenCode reach memory through a single tool bridge owned by Hivemind. Runtime adapters only carry the transport. Hivemind also injects guidance that tells each agent which capabilities it has, which scopes it may touch, and that it should search memory rather than pretend to remember.
 
 ---
 
@@ -239,7 +255,7 @@ cargo run --bin hivemind-server     # binds to http://127.0.0.1:7474
 > [!CAUTION]
 > Remote access and authentication are **not implemented**. The API has no authentication and must stay loopback-only. Don't expose it to other hosts or networks.
 
-Building the server and serving health/info/agent listings never starts Pi or OMP. All endpoints use the `/api/v1` prefix.
+Building the server and serving health/info/agent listings never starts Pi, OMP, or OpenCode. All endpoints use the `/api/v1` prefix.
 
 | Method | Endpoint | Description |
 | --- | --- | --- |
