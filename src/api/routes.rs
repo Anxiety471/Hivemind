@@ -107,8 +107,8 @@ async fn method_not_allowed() -> Response {
 
 #[cfg(test)]
 mod tests {
-    use crate::config::HivemindConfig;
     use super::*;
+    use crate::config::HivemindConfig;
     use axum::{
         body::Body,
         http::{header::CONTENT_TYPE, Request},
@@ -144,7 +144,10 @@ mod tests {
             std::fs::create_dir_all(&directory).unwrap();
             let config_path = directory.join("hivemind.toml");
             let core = HivemindCore::new(HivemindConfig::default_poc(), &config_path).unwrap();
-            Self { core: Arc::new(core), directory }
+            Self {
+                core: Arc::new(core),
+                directory,
+            }
         }
     }
 
@@ -266,12 +269,13 @@ mod tests {
 
         let (mut second, _) = connect_async(&endpoint).await.unwrap();
         assert_eq!(receive_json(&mut second).await["type"], "system.ready");
-        test_core.core.events().publish(
-            crate::events::DomainEventKind::TurnStarted {
+        test_core
+            .core
+            .events()
+            .publish(crate::events::DomainEventKind::TurnStarted {
                 room_id: "room-safe".into(),
                 turn_id: "turn-safe".into(),
-            },
-        );
+            });
         for socket in [&mut first, &mut second] {
             let event = receive_json(socket).await;
             assert_eq!(event["type"], "conversation.turn.started");
@@ -280,13 +284,14 @@ mod tests {
             assert_eq!(event["payload"]["turn_id"], "turn-safe");
             assert!(event["payload"].get("agent_id").is_none());
         }
-        test_core.core.events().publish(
-            crate::events::DomainEventKind::TurnCompleted {
+        test_core
+            .core
+            .events()
+            .publish(crate::events::DomainEventKind::TurnCompleted {
                 room_id: "room-safe".into(),
                 turn_id: "turn-safe".into(),
                 reply_count: 1,
-            },
-        );
+            });
         for socket in [&mut first, &mut second] {
             let event = receive_json(socket).await;
             assert_eq!(event["type"], "conversation.turn.completed");
@@ -294,16 +299,17 @@ mod tests {
             assert_eq!(event["payload"]["room_id"], "room-safe");
             assert_eq!(event["payload"]["turn_id"], "turn-safe");
         }
-        test_core.core.events().publish(
-            crate::events::DomainEventKind::AgentReplyFailed {
+        test_core
+            .core
+            .events()
+            .publish(crate::events::DomainEventKind::AgentReplyFailed {
                 room_id: "room-safe".into(),
                 turn_id: "turn-safe".into(),
                 agent_id: "internal-agent".into(),
                 instance_id: "instance-safe".into(),
                 error_code: "provider_failure".into(),
                 message: "private provider detail".into(),
-            },
-        );
+            });
         for socket in [&mut first, &mut second] {
             let event = receive_json(socket).await;
             assert_eq!(event["type"], "agent.reply.failed");
@@ -314,13 +320,14 @@ mod tests {
             assert!(event["payload"].get("agent_id").is_none());
             assert!(event["payload"].get("error_code").is_none());
         }
-        test_core.core.events().publish(
-            crate::events::DomainEventKind::RuntimeStarted {
+        test_core
+            .core
+            .events()
+            .publish(crate::events::DomainEventKind::RuntimeStarted {
                 agent_id: "internal-agent".into(),
                 instance_id: "instance-safe".into(),
                 runtime: "pi".into(),
-            },
-        );
+            });
         for socket in [&mut first, &mut second] {
             let event = receive_json(socket).await;
             assert_eq!(event["type"], "runtime.started");
@@ -392,12 +399,13 @@ mod tests {
         assert_eq!(receive_json(&mut socket).await["type"], "system.ready");
 
         for _ in 0..300 {
-            test_core.core.events().publish(
-                crate::events::DomainEventKind::TurnStarted {
+            test_core
+                .core
+                .events()
+                .publish(crate::events::DomainEventKind::TurnStarted {
                     room_id: "room".into(),
                     turn_id: "turn".into(),
-                },
-            );
+                });
         }
 
         let lagged = receive_json(&mut socket).await;

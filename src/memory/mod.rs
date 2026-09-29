@@ -177,7 +177,10 @@ impl Caller {
         {
             bail!("global authorization requires a structured user instruction with canonical provenance");
         }
-        self.authorized_global_proposal = Some(UserAuthorizedGlobalProposal { exact_content, provenance });
+        self.authorized_global_proposal = Some(UserAuthorizedGlobalProposal {
+            exact_content,
+            provenance,
+        });
         Ok(self)
     }
 }
@@ -710,47 +713,130 @@ impl MemoryService {
         self.store.search(caller, request)
     }
     /// Replace structured state for the caller's current group only.
-    pub fn set_group_state(&self, caller: &Caller, state: serde_json::Value) -> Result<GroupStateRecord> {
-        if caller.group_id.is_empty() { bail!("group state requires a current group"); }
-        let record = GroupStateRecord { group_id: caller.group_id.clone(), state, updated_at: now(), updated_by: caller.actor.clone() };
-        let c = self.store.connection.lock().map_err(|_| anyhow!("memory store lock poisoned"))?;
+    pub fn set_group_state(
+        &self,
+        caller: &Caller,
+        state: serde_json::Value,
+    ) -> Result<GroupStateRecord> {
+        if caller.group_id.is_empty() {
+            bail!("group state requires a current group");
+        }
+        let record = GroupStateRecord {
+            group_id: caller.group_id.clone(),
+            state,
+            updated_at: now(),
+            updated_by: caller.actor.clone(),
+        };
+        let c = self
+            .store
+            .connection
+            .lock()
+            .map_err(|_| anyhow!("memory store lock poisoned"))?;
         c.execute("INSERT INTO group_state(group_id,state_json,updated_at,updated_by) VALUES(?1,?2,?3,?4) ON CONFLICT(group_id) DO UPDATE SET state_json=excluded.state_json,updated_at=excluded.updated_at,updated_by=excluded.updated_by",params![record.group_id,record.state.to_string(),record.updated_at,record.updated_by])?;
         Ok(record)
     }
     /// Read structured state from the caller's current group only.
     pub fn group_state(&self, caller: &Caller) -> Result<Option<GroupStateRecord>> {
-        if caller.group_id.is_empty() { bail!("group state requires a current group"); }
-        let c = self.store.connection.lock().map_err(|_| anyhow!("memory store lock poisoned"))?;
+        if caller.group_id.is_empty() {
+            bail!("group state requires a current group");
+        }
+        let c = self
+            .store
+            .connection
+            .lock()
+            .map_err(|_| anyhow!("memory store lock poisoned"))?;
         let row = c.query_row("SELECT group_id,state_json,updated_at,updated_by FROM group_state WHERE group_id=?1",[&caller.group_id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,i64>(2)?,r.get::<_,String>(3)?))).optional()?;
-        row.map(|(group_id,state,updated_at,updated_by)|Ok(GroupStateRecord{group_id,state:serde_json::from_str(&state).context("decoding group state")?,updated_at,updated_by})).transpose()
+        row.map(|(group_id, state, updated_at, updated_by)| {
+            Ok(GroupStateRecord {
+                group_id,
+                state: serde_json::from_str(&state).context("decoding group state")?,
+                updated_at,
+                updated_by,
+            })
+        })
+        .transpose()
     }
     /// Start a runtime epoch for this invocation's room and agent instance.
-    pub fn start_runtime_epoch(&self, caller: &Caller, runtime: &str, metadata: serde_json::Value) -> Result<RuntimeEpoch> {
-        if caller.room_id.is_empty() || caller.instance_id.is_empty() || runtime.trim().is_empty() { bail!("runtime epoch requires room, instance, and runtime"); }
-        let epoch = RuntimeEpoch { id:new_id(), room_id:caller.room_id.clone(), instance_id:caller.instance_id.clone(), runtime:runtime.into(), started_at:now(), ended_at:None, metadata };
-        let c = self.store.connection.lock().map_err(|_| anyhow!("memory store lock poisoned"))?;
+    pub fn start_runtime_epoch(
+        &self,
+        caller: &Caller,
+        runtime: &str,
+        metadata: serde_json::Value,
+    ) -> Result<RuntimeEpoch> {
+        if caller.room_id.is_empty() || caller.instance_id.is_empty() || runtime.trim().is_empty() {
+            bail!("runtime epoch requires room, instance, and runtime");
+        }
+        let epoch = RuntimeEpoch {
+            id: new_id(),
+            room_id: caller.room_id.clone(),
+            instance_id: caller.instance_id.clone(),
+            runtime: runtime.into(),
+            started_at: now(),
+            ended_at: None,
+            metadata,
+        };
+        let c = self
+            .store
+            .connection
+            .lock()
+            .map_err(|_| anyhow!("memory store lock poisoned"))?;
         c.execute("INSERT INTO rooms(id,name,updated_at) VALUES(?1,'',?2) ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at",params![epoch.room_id,epoch.started_at])?;
         c.execute("INSERT INTO runtime_epochs(id,room_id,instance_id,runtime,started_at,ended_at,metadata_json) VALUES(?1,?2,?3,?4,?5,NULL,?6)",params![epoch.id,epoch.room_id,epoch.instance_id,epoch.runtime,epoch.started_at,epoch.metadata.to_string()])?;
         Ok(epoch)
     }
     /// Close an epoch only when it belongs to the caller's room and instance.
-    pub fn end_runtime_epoch(&self, caller: &Caller, id: &str, ended_at: i64) -> Result<RuntimeEpoch> {
-        let c = self.store.connection.lock().map_err(|_| anyhow!("memory store lock poisoned"))?;
-        let mut epoch = load_runtime_epoch(&c,id)?.ok_or_else(||anyhow!("runtime epoch not found"))?;
-        if epoch.room_id!=caller.room_id || epoch.instance_id!=caller.instance_id { bail!("unauthorized runtime epoch"); }
-        if epoch.ended_at.is_some() || ended_at<epoch.started_at { bail!("runtime epoch is already closed or end time precedes start"); }
-        let changed=c.execute("UPDATE runtime_epochs SET ended_at=?1 WHERE id=?2 AND ended_at IS NULL",params![ended_at,id])?;
-        if changed!=1 { bail!("runtime epoch was concurrently closed"); }
-        epoch.ended_at=Some(ended_at);
+    pub fn end_runtime_epoch(
+        &self,
+        caller: &Caller,
+        id: &str,
+        ended_at: i64,
+    ) -> Result<RuntimeEpoch> {
+        let c = self
+            .store
+            .connection
+            .lock()
+            .map_err(|_| anyhow!("memory store lock poisoned"))?;
+        let mut epoch =
+            load_runtime_epoch(&c, id)?.ok_or_else(|| anyhow!("runtime epoch not found"))?;
+        if epoch.room_id != caller.room_id || epoch.instance_id != caller.instance_id {
+            bail!("unauthorized runtime epoch");
+        }
+        if epoch.ended_at.is_some() || ended_at < epoch.started_at {
+            bail!("runtime epoch is already closed or end time precedes start");
+        }
+        let changed = c.execute(
+            "UPDATE runtime_epochs SET ended_at=?1 WHERE id=?2 AND ended_at IS NULL",
+            params![ended_at, id],
+        )?;
+        if changed != 1 {
+            bail!("runtime epoch was concurrently closed");
+        }
+        epoch.ended_at = Some(ended_at);
         Ok(epoch)
     }
     /// List only the caller's epochs, newest first, with an enforced bound.
     pub fn runtime_epochs(&self, caller: &Caller, limit: usize) -> Result<Vec<RuntimeEpoch>> {
-        if caller.room_id.is_empty() || caller.instance_id.is_empty() { bail!("runtime epoch listing requires room and instance"); }
-        let c=self.store.connection.lock().map_err(|_|anyhow!("memory store lock poisoned"))?;
+        if caller.room_id.is_empty() || caller.instance_id.is_empty() {
+            bail!("runtime epoch listing requires room and instance");
+        }
+        let c = self
+            .store
+            .connection
+            .lock()
+            .map_err(|_| anyhow!("memory store lock poisoned"))?;
         let mut q=c.prepare("SELECT id FROM runtime_epochs WHERE room_id=?1 AND instance_id=?2 ORDER BY started_at DESC,id DESC LIMIT ?3")?;
-        let ids=q.query_map(params![caller.room_id,caller.instance_id,limit.min(100) as i64],|r|r.get::<_,String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
-        ids.iter().map(|id|load_runtime_epoch(&c,id)?.ok_or_else(||anyhow!("runtime epoch disappeared during read"))).collect()
+        let ids = q
+            .query_map(
+                params![caller.room_id, caller.instance_id, limit.min(100) as i64],
+                |r| r.get::<_, String>(0),
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        ids.iter()
+            .map(|id| {
+                load_runtime_epoch(&c, id)?
+                    .ok_or_else(|| anyhow!("runtime epoch disappeared during read"))
+            })
+            .collect()
     }
     /// Append canonical L7 room messages. This does not create/promote a memory record.
     pub fn append_room_message(&self, caller: &Caller, message: ArchivedMessage) -> Result<()> {
@@ -995,10 +1081,14 @@ fn validate_broad_proposal(caller: &Caller, scope: &Scope, w: &MemoryWrite) -> R
         bail!("proposal contains room-specific, transient, or sensitive content");
     }
     let global_user_authorized = matches!(scope, Scope::Hivemind)
-        && caller.authorized_global_proposal.as_ref().is_some_and(|authorization| {
-            authorization.exact_content.trim() == w.content.trim()
-                && authorization.provenance.source_kind.as_deref() == Some("explicit_user_instruction")
-        });
+        && caller
+            .authorized_global_proposal
+            .as_ref()
+            .is_some_and(|authorization| {
+                authorization.exact_content.trim() == w.content.trim()
+                    && authorization.provenance.source_kind.as_deref()
+                        == Some("explicit_user_instruction")
+            });
     let general = match scope {
         Scope::Persona(_) => [
             "prefer",
@@ -1015,32 +1105,57 @@ fn validate_broad_proposal(caller: &Caller, scope: &Scope, w: &MemoryWrite) -> R
         Scope::Hivemind => {
             global_user_authorized
                 || [
-                    "project", "hivemind", "architecture", "system-wide", "global", "core",
-                    "all agents", "runtime", "rust", "decision",
+                    "project",
+                    "hivemind",
+                    "architecture",
+                    "system-wide",
+                    "global",
+                    "core",
+                    "all agents",
+                    "runtime",
+                    "rust",
+                    "decision",
                 ]
                 .iter()
                 .any(|x| text.contains(x))
-        },
+        }
         _ => false,
     };
     if !general {
         bail!("proposal does not meet deterministic scope relevance policy");
     }
     let provenance = if matches!(scope, Scope::Hivemind) && !caller.trusted {
-        global_user_authorized.then(|| &caller.authorized_global_proposal.as_ref().unwrap().provenance)
+        global_user_authorized.then(|| {
+            &caller
+                .authorized_global_proposal
+                .as_ref()
+                .unwrap()
+                .provenance
+        })
     } else {
         Some(&caller.provenance)
     };
-    let provenance_ok = caller.trusted || provenance.is_some_and(|p| {
-        p.source_room_id.is_some() || p.source_turn_id.is_some() || p.source_message_id.is_some()
-    });
-    let trusted_source = caller.trusted || match scope {
-        Scope::Persona(_) => caller.provenance.source_kind.as_deref().is_some_and(|s| {
-            matches!(s, "agent_proposal" | "explicit_user_instruction" | "configuration" | "structured_project_event" | "accepted_decision")
-        }),
-        Scope::Hivemind => global_user_authorized,
-        _ => false,
-    };
+    let provenance_ok = caller.trusted
+        || provenance.is_some_and(|p| {
+            p.source_room_id.is_some()
+                || p.source_turn_id.is_some()
+                || p.source_message_id.is_some()
+        });
+    let trusted_source = caller.trusted
+        || match scope {
+            Scope::Persona(_) => caller.provenance.source_kind.as_deref().is_some_and(|s| {
+                matches!(
+                    s,
+                    "agent_proposal"
+                        | "explicit_user_instruction"
+                        | "configuration"
+                        | "structured_project_event"
+                        | "accepted_decision"
+                )
+            }),
+            Scope::Hivemind => global_user_authorized,
+            _ => false,
+        };
     if !trusted_source {
         bail!("broader-scope proposal lacks an allowed deterministic source");
     }
@@ -1055,10 +1170,16 @@ fn validate_broad_proposal(caller: &Caller, scope: &Scope, w: &MemoryWrite) -> R
     Ok(())
 }
 fn effective_provenance(caller: &Caller, content: &str, supplied: Provenance) -> Provenance {
-    if let Some(authorization) = caller.authorized_global_proposal.as_ref().filter(|authorization| {
-        authorization.exact_content.trim() == content.trim()
-            && authorization.provenance.source_kind.as_deref() == Some("explicit_user_instruction")
-    }) {
+    if let Some(authorization) =
+        caller
+            .authorized_global_proposal
+            .as_ref()
+            .filter(|authorization| {
+                authorization.exact_content.trim() == content.trim()
+                    && authorization.provenance.source_kind.as_deref()
+                        == Some("explicit_user_instruction")
+            })
+    {
         return authorization.provenance.clone();
     }
     operation_provenance(caller, supplied)
@@ -1317,7 +1438,12 @@ mod tests {
             source_kind: Some("accepted_decision".into()),
             ..Provenance::default()
         });
-        assert!(s.propose_global(&unbound, write("Hivemind architecture: all agents use deterministic memory")).is_err());
+        assert!(s
+            .propose_global(
+                &unbound,
+                write("Hivemind architecture: all agents use deterministic memory")
+            )
+            .is_err());
         let caller = agent()
             .with_provenance(Provenance {
                 source_room_id: Some("group-a".into()),
@@ -1339,7 +1465,9 @@ mod tests {
         let p = write("Hivemind architecture: all agents use deterministic memory");
         let accepted = s.propose_global(&caller, p).unwrap();
         assert_eq!(accepted.provenance.source_actor.as_deref(), Some("user"));
-        assert!(s.propose_global(&caller, write("Hivemind global arbitrary assertion")).is_err());
+        assert!(s
+            .propose_global(&caller, write("Hivemind global arbitrary assertion"))
+            .is_err());
         let no_keyword_fact = "Use XYZ stack";
         let user_authorized = agent()
             .with_provenance(Provenance {
@@ -1358,7 +1486,9 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            s.propose_global(&user_authorized, write(no_keyword_fact)).unwrap().content,
+            s.propose_global(&user_authorized, write(no_keyword_fact))
+                .unwrap()
+                .content,
             no_keyword_fact
         );
         let mut private = write("do not share");
@@ -1530,12 +1660,19 @@ mod tests {
                 source_kind: Some("agent_proposal".into()),
                 ..Provenance::default()
             });
-        let private = service.add_private(&solo, write("Revisit local notes")).unwrap();
+        let private = service
+            .add_private(&solo, write("Revisit local notes"))
+            .unwrap();
         assert_eq!(private.scope, Scope::AgentInstance("solo/maomao".into()));
-        let persona = service.propose_persona(&solo, write("Prefers small service boundaries")).unwrap();
+        let persona = service
+            .propose_persona(&solo, write("Prefers small service boundaries"))
+            .unwrap();
         assert_eq!(persona.scope, Scope::Persona("maomao".into()));
         assert!(service.add_group(&solo, write("Group only")).is_err());
-        assert!(service.store().records_in_scope(&solo, &Scope::Group(String::new())).is_err());
+        assert!(service
+            .store()
+            .records_in_scope(&solo, &Scope::Group(String::new()))
+            .is_err());
 
         let trusted = Caller::trusted_user("operator");
         let global = service.propose_global(&trusted, write("Hivemind architecture uses Rust"));
@@ -1546,21 +1683,36 @@ mod tests {
 
     #[test]
     fn group_state_and_runtime_epochs_are_durable_and_instance_scoped() {
-        let path = std::env::temp_dir().join(format!("hivemind-state-{}-{}.sqlite", std::process::id(), now()));
+        let path = std::env::temp_dir().join(format!(
+            "hivemind-state-{}-{}.sqlite",
+            std::process::id(),
+            now()
+        ));
         let caller = agent();
         let epoch_id;
         {
             let service = MemoryService::open(&path).unwrap();
-            service.set_group_state(&caller, serde_json::json!({"goal":"ship API"})).unwrap();
-            let epoch = service.start_runtime_epoch(&caller, "pi", serde_json::json!({"pid":42})).unwrap();
+            service
+                .set_group_state(&caller, serde_json::json!({"goal":"ship API"}))
+                .unwrap();
+            let epoch = service
+                .start_runtime_epoch(&caller, "pi", serde_json::json!({"pid":42}))
+                .unwrap();
             epoch_id = epoch.id.clone();
             let other = Caller::agent("group-a", "group-a", "group-a/other", "maomao", "other");
-            assert!(service.end_runtime_epoch(&other, &epoch.id, epoch.started_at + 1).is_err());
-            service.end_runtime_epoch(&caller, &epoch.id, epoch.started_at + 1).unwrap();
+            assert!(service
+                .end_runtime_epoch(&other, &epoch.id, epoch.started_at + 1)
+                .is_err());
+            service
+                .end_runtime_epoch(&caller, &epoch.id, epoch.started_at + 1)
+                .unwrap();
         }
         {
             let service = MemoryService::open(&path).unwrap();
-            assert_eq!(service.group_state(&caller).unwrap().unwrap().state["goal"], "ship API");
+            assert_eq!(
+                service.group_state(&caller).unwrap().unwrap().state["goal"],
+                "ship API"
+            );
             let epochs = service.runtime_epochs(&caller, 10).unwrap();
             assert_eq!(epochs.len(), 1);
             assert_eq!(epochs[0].id, epoch_id);
@@ -1576,9 +1728,17 @@ mod tests {
         let parts: Vec<&str> = first.split('-').collect();
         assert_eq!(parts.len(), 4, "unexpected id shape: {first}");
         assert_eq!(parts[0], "memory");
-        assert_eq!(parts[1].len(), 20, "time field must be fixed-width: {first}");
+        assert_eq!(
+            parts[1].len(),
+            20,
+            "time field must be fixed-width: {first}"
+        );
         assert!(parts[1].chars().all(|c| c.is_ascii_digit()));
-        assert_eq!(parts[2].len(), 6, "sequence field must be fixed-width: {first}");
+        assert_eq!(
+            parts[2].len(),
+            6,
+            "sequence field must be fixed-width: {first}"
+        );
         assert!(parts[2].chars().all(|c| c.is_ascii_digit()));
         // The pid suffix is what keeps ids minted by concurrent processes distinct.
         assert_eq!(parts[3], std::process::id().to_string());
@@ -1601,7 +1761,10 @@ mod tests {
         let hits = service
             .search(
                 &caller,
-                &req("what websocket authentication do you know?", vec![SearchScope::Group]),
+                &req(
+                    "what websocket authentication do you know?",
+                    vec![SearchScope::Group],
+                ),
             )
             .unwrap();
         assert_eq!(hits.len(), 1);
@@ -1630,8 +1793,13 @@ mod tests {
         assert_eq!(stored.scope, Scope::Persona("maomao".into()));
 
         // A different instance of the same persona still reads the record.
-        let same_persona_other_instance =
-            Caller::agent("security-room", "security", "security/maomao", "maomao", "maomao");
+        let same_persona_other_instance = Caller::agent(
+            "security-room",
+            "security",
+            "security/maomao",
+            "maomao",
+            "maomao",
+        );
         let hits = service
             .search(
                 &same_persona_other_instance,
@@ -1688,10 +1856,18 @@ mod tests {
         assert_eq!(stored.scope, Scope::Hivemind);
 
         // Any authorized agent in any room may read global memory.
-        let reader =
-            Caller::agent("security-room", "security", "security/albedo", "albedo", "albedo");
+        let reader = Caller::agent(
+            "security-room",
+            "security",
+            "security/albedo",
+            "albedo",
+            "albedo",
+        );
         let hits = service
-            .search(&reader, &req("runtimes disposable", vec![SearchScope::Global]))
+            .search(
+                &reader,
+                &req("runtimes disposable", vec![SearchScope::Global]),
+            )
             .unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].record.id, stored.id);

@@ -262,7 +262,6 @@ impl HivemindConfig {
         ordered
     }
 
-
     pub fn write_default(path: &Path, force: bool) -> Result<()> {
         if path.exists() && !force {
             bail!(
@@ -420,14 +419,12 @@ mod tests {
 
     #[test]
     fn memory_mode_defaults_to_deterministic_and_rejects_unknown_modes() {
-        let config: HivemindConfig =
-            toml::from_str("[[agents]]\nname = \"A\"\n").unwrap();
+        let config: HivemindConfig = toml::from_str("[[agents]]\nname = \"A\"\n").unwrap();
         assert_eq!(config.memory.mode, "deterministic");
 
-        let explicit: HivemindConfig = toml::from_str(
-            "[memory]\nmode = \"deterministic\"\n[[agents]]\nname = \"A\"\n",
-        )
-        .unwrap();
+        let explicit: HivemindConfig =
+            toml::from_str("[memory]\nmode = \"deterministic\"\n[[agents]]\nname = \"A\"\n")
+                .unwrap();
         assert_eq!(explicit.memory.mode, "deterministic");
 
         let unsupported = load_toml("[memory]\nmode = \"hybrid\"\n[[agents]]\nname = \"A\"\n")
@@ -575,10 +572,7 @@ mod tests {
     fn load_errors_include_persona_id_and_legacy_alias_guidance() {
         for (reply_order, expected) in [
             ("[\"A\", \"A\"]", "use unique configured persona IDs"),
-            (
-                "[\"Missing\"]",
-                "use configured [[personas]].id values",
-            ),
+            ("[\"Missing\"]", "use configured [[personas]].id values"),
         ] {
             let raw =
                 format!("[conversation]\nreply_order = {reply_order}\n[[agents]]\nname = \"A\"\n");

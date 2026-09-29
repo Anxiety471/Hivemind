@@ -174,7 +174,13 @@ impl RuntimePool {
                     .await;
             } else if request.phase == PromptPhase::TurnStart {
                 let mut live = live;
-                let reported = live.session.context_tokens().await.ok().flatten().unwrap_or(0);
+                let reported = live
+                    .session
+                    .context_tokens()
+                    .await
+                    .ok()
+                    .flatten()
+                    .unwrap_or(0);
                 if live.estimated_tokens.max(reported) >= inner.rotate_tokens {
                     inner
                         .stop(request.instance_id, live, Stop::Rotated("context_budget"))
