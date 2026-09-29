@@ -2,3 +2,4 @@
 hivemind.toml
 *.log
 .hivemind/
+.omp
