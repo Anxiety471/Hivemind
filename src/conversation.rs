@@ -6,12 +6,12 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use anyhow::{bail, Context, Result};
-use async_trait::async_trait;
 use crate::memory::{
     ArchiveParticipant, ArchivedMessage, ArchivedTurn, Caller, Layer, MemoryService, MemoryStatus,
     MemoryWrite, Provenance, Scope, SearchRequest, SearchScope,
 };
+use anyhow::{bail, Context, Result};
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tokio::{
     sync::{Mutex, OnceCell},
@@ -74,7 +74,6 @@ fn legacy_message_id(room: &str, index: usize, old_id: &str) -> String {
     let nanos = LEGACY_BASE_NANOS + room_salt + index as u64 * 1_000_000;
     format!("{nanos:020}-legacy-{:016x}-{old_id}", stable_hash(room))
 }
-
 
 async fn acquire_file_lock(directory: &Path, room: &str) -> Result<TurnFileLock> {
     fs::create_dir_all(directory)
@@ -330,9 +329,7 @@ fn snapshot_fingerprint(snapshot: &RoomSnapshot) -> Result<u64> {
 }
 
 /// Groups events by turn id, preserving first-seen turn order.
-fn events_by_turn(
-    events: &[MessageEvent],
-) -> (Vec<String>, HashMap<String, Vec<&MessageEvent>>) {
+fn events_by_turn(events: &[MessageEvent]) -> (Vec<String>, HashMap<String, Vec<&MessageEvent>>) {
     let mut order = Vec::new();
     let mut grouped: HashMap<String, Vec<&MessageEvent>> = HashMap::new();
     for event in events {
@@ -361,11 +358,7 @@ fn turn_participants(events: &[&MessageEvent]) -> Vec<ArchiveParticipant> {
         .collect()
 }
 
-fn turn_messages(
-    room: &str,
-    turn_id: &str,
-    events: &[&MessageEvent],
-) -> Vec<ArchivedMessage> {
+fn turn_messages(room: &str, turn_id: &str, events: &[&MessageEvent]) -> Vec<ArchivedMessage> {
     events
         .iter()
         .filter(|event| !event.content.trim().is_empty())
@@ -538,28 +531,20 @@ impl SqliteContextStore {
                 messages: Vec::new(),
             },
         )?;
-        Self::lock_cache(&self.snapshot_fingerprints, "snapshot")?.insert(
-            room.to_owned(),
-            fingerprint,
-        );
+        Self::lock_cache(&self.snapshot_fingerprints, "snapshot")?
+            .insert(room.to_owned(), fingerprint);
         Ok(())
     }
 
     fn prime_caches(&self, history: &RoomHistory) -> Result<()> {
-        let completed: HashSet<&str> =
-            history.completed_turns.iter().map(String::as_str).collect();
+        let completed: HashSet<&str> = history.completed_turns.iter().map(String::as_str).collect();
         let (order, grouped) = events_by_turn(&history.events);
         let mut turn_cache = Self::lock_cache(&self.turn_fingerprints, "turn")?;
         for turn_id in &order {
-            let events = grouped
-                .get(turn_id)
-                .context("grouped turn disappeared")?;
+            let events = grouped.get(turn_id).context("grouped turn disappeared")?;
             turn_cache.insert(
                 (history.room_id.clone(), turn_id.clone()),
-                turn_fingerprint(
-                    events.iter().copied(),
-                    completed.contains(turn_id.as_str()),
-                ),
+                turn_fingerprint(events.iter().copied(), completed.contains(turn_id.as_str())),
             );
         }
         drop(turn_cache);
@@ -650,15 +635,12 @@ impl ContextStore for SqliteContextStore {
         if history.room_id != room {
             bail!("cannot save room history under a different room identifier");
         }
-        let completed: HashSet<&str> =
-            history.completed_turns.iter().map(String::as_str).collect();
+        let completed: HashSet<&str> = history.completed_turns.iter().map(String::as_str).collect();
         let (order, grouped) = events_by_turn(&history.events);
         {
             let mut cache = Self::lock_cache(&self.turn_fingerprints, "turn")?;
             for turn_id in &order {
-                let events = grouped
-                    .get(turn_id)
-                    .context("grouped turn disappeared")?;
+                let events = grouped.get(turn_id).context("grouped turn disappeared")?;
                 let is_completed = completed.contains(turn_id.as_str());
                 let fingerprint = turn_fingerprint(events.iter().copied(), is_completed);
                 if cache
@@ -796,7 +778,6 @@ impl ConversationCoordinator {
         self.store.load_room(room)
     }
 
-
     fn save(&self, history: &RoomHistory, room: &str) -> Result<()> {
         self.store.save_room(room, history)
     }
@@ -821,7 +802,8 @@ impl ConversationCoordinator {
         let turn_id = stable_id();
         if let Some(events) = &self.events {
             events.publish(crate::events::DomainEventKind::TurnStarted {
-                turn_id: turn_id.clone(), room_id: room.to_owned(),
+                turn_id: turn_id.clone(),
+                room_id: room.to_owned(),
             });
         }
         let user_message_id = stable_id();
@@ -843,8 +825,13 @@ impl ConversationCoordinator {
                 let mut jobs = JoinSet::new();
                 let mut task_names = HashMap::new();
                 for member in members {
-                    let caller =
-                        invocation_caller(room, group_id, &member.agent.name, &turn_id, &user_message_id);
+                    let caller = invocation_caller(
+                        room,
+                        group_id,
+                        &member.agent.name,
+                        &turn_id,
+                        &user_message_id,
+                    );
                     let instance_id = format!("{room}/{}", member.agent.name);
                     let cursor = invoker.cursor(&instance_id).await;
                     let prompt = self.member_prompt(
@@ -866,12 +853,16 @@ impl ConversationCoordinator {
                             let name = member.agent.name.clone();
                             if let Some(events) = &self.events {
                                 events.publish(crate::events::DomainEventKind::AgentReplyStarted {
-                                    turn_id: turn_id.clone(), room_id: room.to_owned(),
-                                    agent_id: name.clone(), instance_id: instance_id.clone(),
+                                    turn_id: turn_id.clone(),
+                                    room_id: room.to_owned(),
+                                    agent_id: name.clone(),
+                                    instance_id: instance_id.clone(),
                                 });
                                 events.publish(crate::events::DomainEventKind::AgentReplyFailed {
-                                    turn_id: turn_id.clone(), room_id: room.to_owned(),
-                                    agent_id: name.clone(), instance_id,
+                                    turn_id: turn_id.clone(),
+                                    room_id: room.to_owned(),
+                                    agent_id: name.clone(),
+                                    instance_id,
                                     error_code: "context_build_failed".into(),
                                     message: "agent context could not be built".into(),
                                 });
@@ -885,7 +876,9 @@ impl ConversationCoordinator {
                     };
                     if let Some(events) = &self.events {
                         events.publish(crate::events::DomainEventKind::AgentReplyStarted {
-                            turn_id: turn_id.clone(), room_id: room.to_owned(), agent_id: name.clone(),
+                            turn_id: turn_id.clone(),
+                            room_id: room.to_owned(),
+                            agent_id: name.clone(),
                             instance_id: format!("{room}/{name}"),
                         });
                     }
@@ -902,7 +895,9 @@ impl ConversationCoordinator {
                             &format!("{room}/{}", agent.name),
                             &agent,
                             &pack,
-                            delta.as_ref().map(|(epoch_id, text)| PromptDelta { epoch_id, text }),
+                            delta
+                                .as_ref()
+                                .map(|(epoch_id, text)| PromptDelta { epoch_id, text }),
                             &view,
                             &caller,
                             &memory,
@@ -931,12 +926,16 @@ impl ConversationCoordinator {
                     if let Some(events) = &self.events {
                         let event = if result.is_ok() {
                             crate::events::DomainEventKind::AgentReplyCompleted {
-                                turn_id: turn_id.clone(), room_id: room.to_owned(), agent_id: name.clone(),
+                                turn_id: turn_id.clone(),
+                                room_id: room.to_owned(),
+                                agent_id: name.clone(),
                                 instance_id: format!("{room}/{name}"),
                             }
                         } else {
                             crate::events::DomainEventKind::AgentReplyFailed {
-                                turn_id: turn_id.clone(), room_id: room.to_owned(), agent_id: name.clone(),
+                                turn_id: turn_id.clone(),
+                                room_id: room.to_owned(),
+                                agent_id: name.clone(),
                                 instance_id: format!("{room}/{name}"),
                                 error_code: "agent_reply_failed".into(),
                                 message: "agent failed to produce a reply".into(),
@@ -973,12 +972,19 @@ impl ConversationCoordinator {
             ConversationMode::Discussion => {
                 let mut prior = Vec::new();
                 for member in members {
-                    let caller =
-                        invocation_caller(room, group_id, &member.agent.name, &turn_id, &user_message_id);
+                    let caller = invocation_caller(
+                        room,
+                        group_id,
+                        &member.agent.name,
+                        &turn_id,
+                        &user_message_id,
+                    );
                     let name = member.agent.name.clone();
                     if let Some(events) = &self.events {
                         events.publish(crate::events::DomainEventKind::AgentReplyStarted {
-                            turn_id: turn_id.clone(), room_id: room.to_owned(), agent_id: name.clone(),
+                            turn_id: turn_id.clone(),
+                            room_id: room.to_owned(),
+                            agent_id: name.clone(),
                             instance_id: format!("{room}/{name}"),
                         });
                     }
@@ -1002,7 +1008,9 @@ impl ConversationCoordinator {
                             &instance_id,
                             &member.agent,
                             &pack,
-                            delta.as_ref().map(|(epoch_id, text)| PromptDelta { epoch_id, text }),
+                            delta
+                                .as_ref()
+                                .map(|(epoch_id, text)| PromptDelta { epoch_id, text }),
                             &view,
                             &caller,
                             &self.memory,
@@ -1015,12 +1023,16 @@ impl ConversationCoordinator {
                     if let Some(events) = &self.events {
                         let event = if result.is_ok() {
                             crate::events::DomainEventKind::AgentReplyCompleted {
-                                turn_id: turn_id.clone(), room_id: room.to_owned(), agent_id: name.clone(),
+                                turn_id: turn_id.clone(),
+                                room_id: room.to_owned(),
+                                agent_id: name.clone(),
                                 instance_id: format!("{room}/{name}"),
                             }
                         } else {
                             crate::events::DomainEventKind::AgentReplyFailed {
-                                turn_id: turn_id.clone(), room_id: room.to_owned(), agent_id: name.clone(),
+                                turn_id: turn_id.clone(),
+                                room_id: room.to_owned(),
+                                agent_id: name.clone(),
                                 instance_id: format!("{room}/{name}"),
                                 error_code: "agent_reply_failed".into(),
                                 message: "agent failed to produce a reply".into(),
@@ -1065,9 +1077,7 @@ impl ConversationCoordinator {
                 // room-scoped and never write these notes.
                 for (persona, task) in next_state.assignments.iter() {
                     if history.state.assignments.get(persona) == Some(task)
-                        || !members
-                            .iter()
-                            .any(|member| member.agent.name == *persona)
+                        || !members.iter().any(|member| member.agent.name == *persona)
                     {
                         continue;
                     }
@@ -1108,7 +1118,9 @@ impl ConversationCoordinator {
         self.save(&history, room)?;
         if let Some(events) = &self.events {
             events.publish(crate::events::DomainEventKind::TurnCompleted {
-                turn_id: turn_id.clone(), room_id: room.to_owned(), reply_count: replies.len(),
+                turn_id: turn_id.clone(),
+                room_id: room.to_owned(),
+                reply_count: replies.len(),
             });
         }
         Ok(replies)
@@ -1165,7 +1177,14 @@ impl ConversationCoordinator {
         cursor: &TurnView,
         state_json: &str,
     ) -> Option<String> {
-        let PackRequest { history, input, prior, active_turn, caller, .. } = *request;
+        let PackRequest {
+            history,
+            input,
+            prior,
+            active_turn,
+            caller,
+            ..
+        } = *request;
         let start = history
             .events
             .iter()
@@ -1194,7 +1213,16 @@ impl ConversationCoordinator {
     }
 
     fn context_pack(&self, request: &PackRequest<'_>, state_json: &str) -> Result<String> {
-        let PackRequest { history, room_name, members, current, input, prior, active_turn, caller } = *request;
+        let PackRequest {
+            history,
+            room_name,
+            members,
+            current,
+            input,
+            prior,
+            active_turn,
+            caller,
+        } = *request;
         let roster = members
             .iter()
             .map(|p| {
@@ -1247,7 +1275,9 @@ impl ConversationCoordinator {
                 utf8_suffix(&recent, keep_recent)
             );
         }
-        Ok(format!("{identity}{manifest}{state}{optional}{current}{same_turn}"))
+        Ok(format!(
+            "{identity}{manifest}{state}{optional}{current}{same_turn}"
+        ))
     }
 
     /// Deterministic, bounded retrieval of authorized group/private/persona/
@@ -1564,8 +1594,8 @@ fn parse_tool_block(text: &str) -> Result<Option<MemoryToolCall>> {
     match blocks.len() {
         0 => Ok(None),
         1 => {
-            let value: serde_json::Value =
-                serde_json::from_str(&blocks[0]).context("hivemind-tool block is not valid JSON")?;
+            let value: serde_json::Value = serde_json::from_str(&blocks[0])
+                .context("hivemind-tool block is not valid JSON")?;
             let object = value
                 .as_object()
                 .context("hivemind-tool block must be a JSON object")?;
@@ -1749,10 +1779,7 @@ fn execute_memory_tool(
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
-            Ok(format!(
-                "{} memory results:\n{lines}",
-                results.len()
-            ))
+            Ok(format!("{} memory results:\n{lines}", results.len()))
         }
         "memory.private.add" => {
             let record = memory.add_private(caller, tool_write(&call.args, None)?)?;
@@ -1760,7 +1787,8 @@ fn execute_memory_tool(
         }
         "memory.private.update" => {
             let id = required_string(&call.args, "id")?;
-            let record = memory.update_private(caller, &id, tool_write(&call.args, Some(id.clone()))?)?;
+            let record =
+                memory.update_private(caller, &id, tool_write(&call.args, Some(id.clone()))?)?;
             Ok(format!("updated private memory {}", record.id))
         }
         "memory.group.add" => {
@@ -1769,7 +1797,8 @@ fn execute_memory_tool(
         }
         "memory.group.update" => {
             let id = required_string(&call.args, "id")?;
-            let record = memory.update_group(caller, &id, tool_write(&call.args, Some(id.clone()))?)?;
+            let record =
+                memory.update_group(caller, &id, tool_write(&call.args, Some(id.clone()))?)?;
             Ok(format!("updated group memory {}", record.id))
         }
         "memory.persona.propose" => {
@@ -1999,7 +2028,8 @@ async fn invoke_with_memory(
                 let rendered = serde_json::to_string(&call.args)
                     .map(|args| format!("{{\"name\":\"{}\",\"args\":{args}}}", call.name))
                     .unwrap_or_else(|_| call.name.clone());
-                match execute_with_optional_authorization(memory, caller, authorized_global, &call) {
+                match execute_with_optional_authorization(memory, caller, authorized_global, &call)
+                {
                     Ok(text) => (rendered, text),
                     Err(error) => (rendered, format!("error: {error:#}")),
                 }
@@ -2073,7 +2103,10 @@ mod tests {
                 .lock()
                 .clone()
                 .unwrap_or_else(|| format!("{} answered", agent.name));
-            Ok(InvokeReply { text, epoch_id: "fake".into() })
+            Ok(InvokeReply {
+                text,
+                epoch_id: "fake".into(),
+            })
         }
     }
     fn member(name: &str) -> Participant {
@@ -2139,7 +2172,10 @@ mod tests {
             if agent.name == "Fails" {
                 anyhow::bail!("sensitive provider detail");
             }
-            Ok(InvokeReply { text: format!("{} reply", agent.name), epoch_id: "fake".into() })
+            Ok(InvokeReply {
+                text: format!("{} reply", agent.name),
+                epoch_id: "fake".into(),
+            })
         }
     }
 
@@ -2169,34 +2205,43 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            replies.iter().map(|reply| reply.name.as_str()).collect::<Vec<_>>(),
+            replies
+                .iter()
+                .map(|reply| reply.name.as_str())
+                .collect::<Vec<_>>(),
             ["Slow", "Fast"]
         );
         let mut seen = Vec::new();
         while let Ok(event) = receiver.try_recv() {
             seen.push(event.payload);
         }
-        let (turn_id, room_id) = seen.iter().find_map(|event| match event {
-            crate::events::DomainEventKind::TurnStarted { turn_id, room_id } => {
-                Some((turn_id.clone(), room_id.clone()))
-            }
-            _ => None,
-        }).unwrap();
+        let (turn_id, room_id) = seen
+            .iter()
+            .find_map(|event| match event {
+                crate::events::DomainEventKind::TurnStarted { turn_id, room_id } => {
+                    Some((turn_id.clone(), room_id.clone()))
+                }
+                _ => None,
+            })
+            .unwrap();
         assert_eq!(room_id, "event-room");
-        let completed_order = seen.iter().filter_map(|event| match event {
-            crate::events::DomainEventKind::AgentReplyCompleted {
-                turn_id: observed_turn,
-                room_id: observed_room,
-                agent_id,
-                instance_id,
-            } => {
-                assert_eq!(observed_turn, &turn_id);
-                assert_eq!(observed_room, "event-room");
-                assert_eq!(instance_id, &format!("event-room/{agent_id}"));
-                Some(agent_id.as_str())
-            }
-            _ => None,
-        }).collect::<Vec<_>>();
+        let completed_order = seen
+            .iter()
+            .filter_map(|event| match event {
+                crate::events::DomainEventKind::AgentReplyCompleted {
+                    turn_id: observed_turn,
+                    room_id: observed_room,
+                    agent_id,
+                    instance_id,
+                } => {
+                    assert_eq!(observed_turn, &turn_id);
+                    assert_eq!(observed_room, "event-room");
+                    assert_eq!(instance_id, &format!("event-room/{agent_id}"));
+                    Some(agent_id.as_str())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
         assert_eq!(completed_order, ["Fast", "Slow"]);
         let saved = coordinator.room_history("event-room").unwrap();
         assert!(saved.completed_turns.contains(&turn_id));
@@ -2216,21 +2261,37 @@ mod tests {
             Some(failing_events),
         );
         let failed_members = [member("Fails")];
-        let failed = failing.turn(TurnRequest {
-            room: "failure-room",
-            room_name: "Failure room",
-            group_id: "",
-            mode: ConversationMode::Discussion,
-            members: &failed_members,
-            input: "question",
-            invoker: Arc::new(DelayedEventsInvoker),
-        }).await.unwrap();
-        assert!(failed[0].result.as_ref().unwrap_err().contains("sensitive provider detail"));
+        let failed = failing
+            .turn(TurnRequest {
+                room: "failure-room",
+                room_name: "Failure room",
+                group_id: "",
+                mode: ConversationMode::Discussion,
+                members: &failed_members,
+                input: "question",
+                invoker: Arc::new(DelayedEventsInvoker),
+            })
+            .await
+            .unwrap();
+        assert!(failed[0]
+            .result
+            .as_ref()
+            .unwrap_err()
+            .contains("sensitive provider detail"));
         let failed_event = loop {
             match failure_receiver.try_recv() {
-                Ok(crate::events::DomainEvent { payload: crate::events::DomainEventKind::AgentReplyFailed {
-                    turn_id, room_id, agent_id, instance_id, error_code, message
-                }, .. }) => break (turn_id, room_id, agent_id, instance_id, error_code, message),
+                Ok(crate::events::DomainEvent {
+                    payload:
+                        crate::events::DomainEventKind::AgentReplyFailed {
+                            turn_id,
+                            room_id,
+                            agent_id,
+                            instance_id,
+                            error_code,
+                            message,
+                        },
+                    ..
+                }) => break (turn_id, room_id, agent_id, instance_id, error_code, message),
                 Ok(_) => continue,
                 Err(error) => panic!("missing reply failure event: {error}"),
             }
@@ -2273,7 +2334,16 @@ mod tests {
         let (path, coord) = fixture();
         let f = fake(Some("B"));
         let members = vec![member("A"), member("B")];
-        let replies = coord.turn(TurnRequest { room: "room", room_name: "Team", group_id: "", mode: ConversationMode::Broadcast, members: &members, input: "question", invoker: f.clone() })
+        let replies = coord
+            .turn(TurnRequest {
+                room: "room",
+                room_name: "Team",
+                group_id: "",
+                mode: ConversationMode::Broadcast,
+                members: &members,
+                input: "question",
+                invoker: f.clone(),
+            })
             .await
             .unwrap();
         assert!(f.max_running.load(Ordering::SeqCst) > 1);
@@ -2303,10 +2373,28 @@ mod tests {
         let (path, coordinator) = fixture();
         let fake = fake(None);
         let seed_members = [member("A"), member("B")];
-        coordinator.turn(TurnRequest { room: "shared-room", room_name: "Shared room", group_id: "shared-group", mode: ConversationMode::Discussion, members: &seed_members, input: "Goal: shared target\nseed turn one", invoker: fake.clone() })
+        coordinator
+            .turn(TurnRequest {
+                room: "shared-room",
+                room_name: "Shared room",
+                group_id: "shared-group",
+                mode: ConversationMode::Discussion,
+                members: &seed_members,
+                input: "Goal: shared target\nseed turn one",
+                invoker: fake.clone(),
+            })
             .await
             .unwrap();
-        coordinator.turn(TurnRequest { room: "shared-room", room_name: "Shared room", group_id: "shared-group", mode: ConversationMode::Discussion, members: &seed_members, input: "seed turn two", invoker: fake.clone() })
+        coordinator
+            .turn(TurnRequest {
+                room: "shared-room",
+                room_name: "Shared room",
+                group_id: "shared-group",
+                mode: ConversationMode::Discussion,
+                members: &seed_members,
+                input: "seed turn two",
+                invoker: fake.clone(),
+            })
             .await
             .unwrap();
 
@@ -2315,7 +2403,16 @@ mod tests {
         let mut builder = member("B");
         builder.role = Some("Builder".into());
         let broadcast_members = [reviewer, builder];
-        coordinator.turn(TurnRequest { room: "shared-room", room_name: "Shared room", group_id: "shared-group", mode: ConversationMode::Broadcast, members: &broadcast_members, input: "one common question", invoker: fake.clone() })
+        coordinator
+            .turn(TurnRequest {
+                room: "shared-room",
+                room_name: "Shared room",
+                group_id: "shared-group",
+                mode: ConversationMode::Broadcast,
+                members: &broadcast_members,
+                input: "one common question",
+                invoker: fake.clone(),
+            })
             .await
             .unwrap();
 
@@ -2404,7 +2501,16 @@ mod tests {
         let (path, coordinator) = fixture();
         let fake = fake(Some("B"));
         let members = [member("A"), member("B"), member("C")];
-        let replies = coordinator.turn(TurnRequest { room: "failure-room", room_name: "Failure room", group_id: "failure-group", mode: ConversationMode::Discussion, members: &members, input: "discuss the failure", invoker: fake.clone() })
+        let replies = coordinator
+            .turn(TurnRequest {
+                room: "failure-room",
+                room_name: "Failure room",
+                group_id: "failure-group",
+                mode: ConversationMode::Discussion,
+                members: &members,
+                input: "discuss the failure",
+                invoker: fake.clone(),
+            })
             .await
             .unwrap();
         assert!(replies[1].result.is_err());
@@ -2439,13 +2545,31 @@ mod tests {
         let first_members = members.clone();
         let first_invoker = f.clone();
         let one = tokio::spawn(async move {
-            first_coord.turn(TurnRequest { room: "room/a", room_name: "Team A", group_id: "", mode: ConversationMode::Discussion, members: &first_members, input: "message alpha", invoker: first_invoker })
+            first_coord
+                .turn(TurnRequest {
+                    room: "room/a",
+                    room_name: "Team A",
+                    group_id: "",
+                    mode: ConversationMode::Discussion,
+                    members: &first_members,
+                    input: "message alpha",
+                    invoker: first_invoker,
+                })
                 .await
         });
         let second_coord = coord.clone();
         let second_invoker = f.clone();
         let two = tokio::spawn(async move {
-            second_coord.turn(TurnRequest { room: "room_a", room_name: "Team B", group_id: "", mode: ConversationMode::Discussion, members: &members, input: "message beta", invoker: second_invoker })
+            second_coord
+                .turn(TurnRequest {
+                    room: "room_a",
+                    room_name: "Team B",
+                    group_id: "",
+                    mode: ConversationMode::Discussion,
+                    members: &members,
+                    input: "message beta",
+                    invoker: second_invoker,
+                })
                 .await
         });
         one.await.unwrap().unwrap();
@@ -2481,7 +2605,16 @@ mod tests {
         let (path, coord) = fixture();
         let f = fake(None);
         let members = vec![member("A"), member("B")];
-        coord.turn(TurnRequest { room: "room/a", room_name: "Team", group_id: "", mode: ConversationMode::Discussion, members: &members, input: "question", invoker: f.clone() })
+        coord
+            .turn(TurnRequest {
+                room: "room/a",
+                room_name: "Team",
+                group_id: "",
+                mode: ConversationMode::Discussion,
+                members: &members,
+                input: "question",
+                invoker: f.clone(),
+            })
             .await
             .unwrap();
         {
@@ -2490,7 +2623,16 @@ mod tests {
             assert!(!prompts[0].1.contains("A answered"));
             assert!(prompts[1].1.contains("A: A answered"));
         }
-        coord.turn(TurnRequest { room: "room_a", room_name: "Other", group_id: "", mode: ConversationMode::Discussion, members: &[member("A")], input: "second room", invoker: f.clone() })
+        coord
+            .turn(TurnRequest {
+                room: "room_a",
+                room_name: "Other",
+                group_id: "",
+                mode: ConversationMode::Discussion,
+                members: &[member("A")],
+                input: "second room",
+                invoker: f.clone(),
+            })
             .await
             .unwrap();
         let isolated = coord.room_history("room_a").unwrap();
@@ -2531,7 +2673,16 @@ mod tests {
             .unwrap();
         let f = fake(None);
         let member = [member("A")];
-        coord.turn(TurnRequest { room: "room", room_name: "Team", group_id: "", mode: ConversationMode::Discussion, members: &member, input: "first recovered turn", invoker: f.clone() })
+        coord
+            .turn(TurnRequest {
+                room: "room",
+                room_name: "Team",
+                group_id: "",
+                mode: ConversationMode::Discussion,
+                members: &member,
+                input: "first recovered turn",
+                invoker: f.clone(),
+            })
             .await
             .unwrap();
         let history = coord.room_history("room").unwrap();
@@ -2539,7 +2690,16 @@ mod tests {
         assert!(history.summary.contains("interrupted assistant response"));
         assert!(!history.completed_turns.contains(&"interrupted".to_owned()));
 
-        coord.turn(TurnRequest { room: "room", room_name: "Team", group_id: "", mode: ConversationMode::Discussion, members: &member, input: "second recovered turn", invoker: f.clone() })
+        coord
+            .turn(TurnRequest {
+                room: "room",
+                room_name: "Team",
+                group_id: "",
+                mode: ConversationMode::Discussion,
+                members: &member,
+                input: "second recovered turn",
+                invoker: f.clone(),
+            })
             .await
             .unwrap();
         let pack = f.prompts.lock().last().unwrap().1.clone();
@@ -2553,24 +2713,60 @@ mod tests {
         let (path, coord) = fixture();
         let f = fake(None);
         let member = [member("A")];
-        coord.turn(TurnRequest { room: "room", room_name: "Team", group_id: "", mode: ConversationMode::Discussion, members: &member, input: "Goal: Ship safely\nolder one", invoker: f.clone() })
+        coord
+            .turn(TurnRequest {
+                room: "room",
+                room_name: "Team",
+                group_id: "",
+                mode: ConversationMode::Discussion,
+                members: &member,
+                input: "Goal: Ship safely\nolder one",
+                invoker: f.clone(),
+            })
             .await
             .unwrap();
         assert_eq!(
             coord.room_history("room").unwrap().state.goal.as_deref(),
             Some("Ship safely")
         );
-        coord.turn(TurnRequest { room: "room", room_name: "Team", group_id: "", mode: ConversationMode::Discussion, members: &member, input: "older two", invoker: f.clone() })
+        coord
+            .turn(TurnRequest {
+                room: "room",
+                room_name: "Team",
+                group_id: "",
+                mode: ConversationMode::Discussion,
+                members: &member,
+                input: "older two",
+                invoker: f.clone(),
+            })
             .await
             .unwrap();
-        coord.turn(TurnRequest { room: "room", room_name: "Team", group_id: "", mode: ConversationMode::Discussion, members: &member, input: "current three", invoker: f.clone() })
+        coord
+            .turn(TurnRequest {
+                room: "room",
+                room_name: "Team",
+                group_id: "",
+                mode: ConversationMode::Discussion,
+                members: &member,
+                input: "current three",
+                invoker: f.clone(),
+            })
             .await
             .unwrap();
         let last = f.prompts.lock().last().unwrap().1.clone();
         assert!(last.contains("Older conversation summary:") && last.contains("older one"));
         assert!(last.contains("Current user message:\ncurrent three"));
         assert_eq!(utf8_suffix("🌿abcdef", 5), "bcdef");
-        coord.turn(TurnRequest { room: "room", room_name: "Team", group_id: "", mode: ConversationMode::Discussion, members: &member, input: "current four", invoker: f.clone() })
+        coord
+            .turn(TurnRequest {
+                room: "room",
+                room_name: "Team",
+                group_id: "",
+                mode: ConversationMode::Discussion,
+                members: &member,
+                input: "current four",
+                invoker: f.clone(),
+            })
             .await
             .unwrap();
         let fourth = f.prompts.lock().last().unwrap().1.clone();
@@ -2583,7 +2779,16 @@ mod tests {
             ..ContextConfig::default()
         };
         let bounded = ConversationCoordinator::new(&path, limits, coord.memory());
-        let oversized = bounded.turn(TurnRequest { room: "other", room_name: "Team", group_id: "", mode: ConversationMode::Discussion, members: &member, input: &"x".repeat(5000), invoker: f })
+        let oversized = bounded
+            .turn(TurnRequest {
+                room: "other",
+                room_name: "Team",
+                group_id: "",
+                mode: ConversationMode::Discussion,
+                members: &member,
+                input: &"x".repeat(5000),
+                invoker: f,
+            })
             .await
             .unwrap();
         assert!(oversized[0]
@@ -2603,10 +2808,28 @@ mod tests {
         let f = fake(None);
         *f.reply.lock() = Some("Decision: model-generated should be ignored".into());
         let member = [member("A")];
-        coord.turn(TurnRequest { room: "state-room", room_name: "Team", group_id: "", mode: ConversationMode::Discussion, members: &member, input: "Decision: use typed updates\nAssign: A = implement parser", invoker: f.clone() })
+        coord
+            .turn(TurnRequest {
+                room: "state-room",
+                room_name: "Team",
+                group_id: "",
+                mode: ConversationMode::Discussion,
+                members: &member,
+                input: "Decision: use typed updates\nAssign: A = implement parser",
+                invoker: f.clone(),
+            })
             .await
             .unwrap();
-        coord.turn(TurnRequest { room: "state-room", room_name: "Team", group_id: "", mode: ConversationMode::Discussion, members: &member, input: "continue", invoker: f.clone() })
+        coord
+            .turn(TurnRequest {
+                room: "state-room",
+                room_name: "Team",
+                group_id: "",
+                mode: ConversationMode::Discussion,
+                members: &member,
+                input: "continue",
+                invoker: f.clone(),
+            })
             .await
             .unwrap();
 
@@ -2626,14 +2849,32 @@ mod tests {
         let (path, coord) = fixture();
         let goal = "x".repeat(1900);
         let member = [member("A")];
-        let first = coord.turn(TurnRequest { room: "state-room", room_name: "Team", group_id: "", mode: ConversationMode::Discussion, members: &member, input: &format!("Goal: {goal}"), invoker: fake(None) })
+        let first = coord
+            .turn(TurnRequest {
+                room: "state-room",
+                room_name: "Team",
+                group_id: "",
+                mode: ConversationMode::Discussion,
+                members: &member,
+                input: &format!("Goal: {goal}"),
+                invoker: fake(None),
+            })
             .await
             .unwrap();
         assert_eq!(first[0].result.as_deref(), Ok("A answered"));
         let previous_state = coord.room_history("state-room").unwrap().state;
         assert_eq!(previous_state.goal.as_deref(), Some(goal.as_str()));
 
-        let replies = coord.turn(TurnRequest { room: "state-room", room_name: "Team", group_id: "", mode: ConversationMode::Discussion, members: &member, input: "Decision: this would exceed the serialized state budget", invoker: fake(None) })
+        let replies = coord
+            .turn(TurnRequest {
+                room: "state-room",
+                room_name: "Team",
+                group_id: "",
+                mode: ConversationMode::Discussion,
+                members: &member,
+                input: "Decision: this would exceed the serialized state budget",
+                invoker: fake(None),
+            })
             .await
             .unwrap();
         assert_eq!(replies[0].result.as_deref(), Ok("A answered"));
@@ -2741,28 +2982,40 @@ mod tests {
             speakers: vec!["user".into(), "A".into()],
             state_json: "{\"stale\":true}".into(),
         };
-        let delta = coordinator.turn_delta(&request, &cursor, &state_json).unwrap();
+        let delta = coordinator
+            .turn_delta(&request, &cursor, &state_json)
+            .unwrap();
         assert!(
             delta.contains("Room update since your last reply:\nB: peer answer\n"),
             "{delta}"
         );
         assert!(!delta.contains("A: earlier answer"), "{delta}");
-        assert!(delta.contains(&format!("\nShared room state:\n{state_json}\n")), "{delta}");
-        assert!(delta.contains("\nCurrent user message:\nnext question\n"), "{delta}");
+        assert!(
+            delta.contains(&format!("\nShared room state:\n{state_json}\n")),
+            "{delta}"
+        );
+        assert!(
+            delta.contains("\nCurrent user message:\nnext question\n"),
+            "{delta}"
+        );
         assert!(delta.contains(SESSION_TOOL_REMINDER), "{delta}");
 
         let unchanged = TurnView {
             state_json: state_json.clone(),
             ..cursor.clone()
         };
-        let delta = coordinator.turn_delta(&request, &unchanged, &state_json).unwrap();
+        let delta = coordinator
+            .turn_delta(&request, &unchanged, &state_json)
+            .unwrap();
         assert!(!delta.contains("Shared room state:"), "{delta}");
 
         let gap = TurnView {
             turn_id: "missing-turn".into(),
             ..cursor.clone()
         };
-        assert!(coordinator.turn_delta(&request, &gap, &state_json).is_none());
+        assert!(coordinator
+            .turn_delta(&request, &gap, &state_json)
+            .is_none());
 
         let oversized = RoomHistory {
             events: vec![
@@ -2775,7 +3028,9 @@ mod tests {
             history: &oversized,
             ..request
         };
-        assert!(coordinator.turn_delta(&request, &cursor, &state_json).is_none());
+        assert!(coordinator
+            .turn_delta(&request, &cursor, &state_json)
+            .is_none());
         let _ = fs::remove_dir_all(path);
     }
 
@@ -2799,7 +3054,10 @@ mod tests {
                 Some(reply) => reply,
                 None => "plain final answer".into(),
             };
-            Ok(InvokeReply { text, epoch_id: "fake".into() })
+            Ok(InvokeReply {
+                text,
+                epoch_id: "fake".into(),
+            })
         }
     }
     fn scripted(replies: &[&str]) -> Arc<Scripted> {
@@ -2843,7 +3101,16 @@ mod tests {
         );
         let f = scripted(&[&add, &search]);
         let members = [member("A")];
-        let replies = coord.turn(TurnRequest { room: "tool-room", room_name: "Team", group_id: "", mode: ConversationMode::Discussion, members: &members, input: "check memory", invoker: f.clone() })
+        let replies = coord
+            .turn(TurnRequest {
+                room: "tool-room",
+                room_name: "Team",
+                group_id: "",
+                mode: ConversationMode::Discussion,
+                members: &members,
+                input: "check memory",
+                invoker: f.clone(),
+            })
             .await
             .unwrap();
         assert_eq!(replies[0].result.as_deref(), Ok("plain final answer"));
@@ -2885,7 +3152,16 @@ mod tests {
         );
         let f = scripted(&[&block, &block, &block, &block, &block]);
         let members = [member("A")];
-        let replies = coord.turn(TurnRequest { room: "cap-room", room_name: "Team", group_id: "", mode: ConversationMode::Discussion, members: &members, input: "keep calling", invoker: f.clone() })
+        let replies = coord
+            .turn(TurnRequest {
+                room: "cap-room",
+                room_name: "Team",
+                group_id: "",
+                mode: ConversationMode::Discussion,
+                members: &members,
+                input: "keep calling",
+                invoker: f.clone(),
+            })
             .await
             .unwrap();
         let error = replies[0].result.as_ref().unwrap_err();
@@ -2900,7 +3176,16 @@ mod tests {
         let broken = "```hivemind-tool\n{\"name\":\n```";
         let f = scripted(&[broken]);
         let members = [member("A")];
-        let replies = coord.turn(TurnRequest { room: "malformed-room", room_name: "Team", group_id: "", mode: ConversationMode::Discussion, members: &members, input: "go", invoker: f.clone() })
+        let replies = coord
+            .turn(TurnRequest {
+                room: "malformed-room",
+                room_name: "Team",
+                group_id: "",
+                mode: ConversationMode::Discussion,
+                members: &members,
+                input: "go",
+                invoker: f.clone(),
+            })
             .await
             .unwrap();
         // The parse failure is feedback, so the loop re-prompts; the scripted
@@ -2920,7 +3205,10 @@ mod tests {
         execute_memory_tool(
             &memory,
             &alice,
-            &tool_call("memory.private.add", serde_json::json!({"content": "alice private note"})),
+            &tool_call(
+                "memory.private.add",
+                serde_json::json!({"content": "alice private note"}),
+            ),
         )
         .unwrap();
         let denied = execute_memory_tool(
@@ -2937,7 +3225,10 @@ mod tests {
         execute_memory_tool(
             &memory,
             &alice,
-            &tool_call("memory.group.add", serde_json::json!({"content": "grp-1 shared decision"})),
+            &tool_call(
+                "memory.group.add",
+                serde_json::json!({"content": "grp-1 shared decision"}),
+            ),
         )
         .unwrap();
         let cross_group = execute_memory_tool(
@@ -2956,7 +3247,10 @@ mod tests {
         let group_error = execute_memory_tool(
             &memory,
             &solo,
-            &tool_call("memory.group.add", serde_json::json!({"content": "no group here"})),
+            &tool_call(
+                "memory.group.add",
+                serde_json::json!({"content": "no group here"}),
+            ),
         )
         .unwrap_err()
         .to_string();
@@ -2965,7 +3259,10 @@ mod tests {
         execute_memory_tool(
             &memory,
             &solo,
-            &tool_call("memory.private.add", serde_json::json!({"content": "solo private note"})),
+            &tool_call(
+                "memory.private.add",
+                serde_json::json!({"content": "solo private note"}),
+            ),
         )
         .unwrap();
     }
@@ -2996,12 +3293,18 @@ mod tests {
         )
         .unwrap_err()
         .to_string();
-        assert!(global_error.contains("deterministic source"), "{global_error}");
+        assert!(
+            global_error.contains("deterministic source"),
+            "{global_error}"
+        );
 
         let private = execute_memory_tool(
             &memory,
             &caller,
-            &tool_call("memory.private.add", serde_json::json!({"content": "archivable note"})),
+            &tool_call(
+                "memory.private.add",
+                serde_json::json!({"content": "archivable note"}),
+            ),
         )
         .unwrap();
         let private_id = private
@@ -3077,22 +3380,51 @@ mod tests {
         let f = fake(None);
         let members = [member("A")];
 
-        coord.turn(TurnRequest { room: "grp-room", room_name: "Team", group_id: "grp", mode: ConversationMode::Discussion, members: &members, input: "authentication strategy?", invoker: f.clone() })
+        coord
+            .turn(TurnRequest {
+                room: "grp-room",
+                room_name: "Team",
+                group_id: "grp",
+                mode: ConversationMode::Discussion,
+                members: &members,
+                input: "authentication strategy?",
+                invoker: f.clone(),
+            })
             .await
             .unwrap();
-        coord.turn(TurnRequest { room: "fresh-room", room_name: "Team", group_id: "", mode: ConversationMode::Discussion, members: &members, input: "unique xylophone question", invoker: f.clone() })
+        coord
+            .turn(TurnRequest {
+                room: "fresh-room",
+                room_name: "Team",
+                group_id: "",
+                mode: ConversationMode::Discussion,
+                members: &members,
+                input: "unique xylophone question",
+                invoker: f.clone(),
+            })
             .await
             .unwrap();
-        coord.turn(TurnRequest { room: "other-room", room_name: "Team", group_id: "grp-2", mode: ConversationMode::Discussion, members: &members, input: "authentication strategy", invoker: f.clone() })
+        coord
+            .turn(TurnRequest {
+                room: "other-room",
+                room_name: "Team",
+                group_id: "grp-2",
+                mode: ConversationMode::Discussion,
+                members: &members,
+                input: "authentication strategy",
+                invoker: f.clone(),
+            })
             .await
             .unwrap();
         {
             let prompts = f.prompts.lock();
             assert!(prompts[0].1.contains("Relevant Hivemind memory:"));
-            assert!(prompts[0].1.contains("[group] Authentication strategy is undecided"));
-            assert!(prompts[0].1.contains(
-                "(source: room seed-room, turn seed-turn, message seed-msg, actor S)"
-            ));
+            assert!(prompts[0]
+                .1
+                .contains("[group] Authentication strategy is undecided"));
+            assert!(prompts[0]
+                .1
+                .contains("(source: room seed-room, turn seed-turn, message seed-msg, actor S)"));
             assert!(prompts[0].1.contains(GROUP_MEMORY_TOOL_MANIFEST));
             // Current-turn input is never echoed back as a memory hit.
             assert!(!prompts[1].1.contains("Relevant Hivemind memory:"));
@@ -3111,13 +3443,26 @@ mod tests {
         let (path, coord) = fixture();
         let f = fake(None);
         let members = [member("A"), member("B")];
-        coord.turn(TurnRequest { room: "guidance-room", room_name: "Team", group_id: "", mode: ConversationMode::Broadcast, members: &members, input: "hello", invoker: f.clone() })
+        coord
+            .turn(TurnRequest {
+                room: "guidance-room",
+                room_name: "Team",
+                group_id: "",
+                mode: ConversationMode::Broadcast,
+                members: &members,
+                input: "hello",
+                invoker: f.clone(),
+            })
             .await
             .unwrap();
         {
             let prompts = f.prompts.lock();
-            assert!(prompts.iter().any(|(instance, _)| instance == "guidance-room/A"));
-            assert!(prompts.iter().any(|(instance, _)| instance == "guidance-room/B"));
+            assert!(prompts
+                .iter()
+                .any(|(instance, _)| instance == "guidance-room/A"));
+            assert!(prompts
+                .iter()
+                .any(|(instance, _)| instance == "guidance-room/B"));
             for (_, prompt) in prompts.iter() {
                 assert!(prompt.contains(ROOM_MEMORY_TOOL_MANIFEST));
                 assert!(prompt.contains("memory.persona.propose"));
@@ -3252,7 +3597,8 @@ mod tests {
             created_at: 0,
         })
         .collect();
-        coord.memory()
+        coord
+            .memory()
             .append_archive_turn(
                 &Caller::trusted_user("test"),
                 ArchivedTurn {
@@ -3393,13 +3739,7 @@ mod tests {
             .await
             .unwrap();
 
-        let assignee = Caller::agent(
-            "assign-room",
-            "assign-group",
-            "assign-room/B",
-            "B",
-            "B",
-        );
+        let assignee = Caller::agent("assign-room", "assign-group", "assign-room/B", "B", "B");
         let notes = coord
             .memory()
             .store()
@@ -3409,16 +3749,13 @@ mod tests {
             notes.iter().any(|record| record.kind == "assignment"
                 && record.content.contains("Assigned: write docs")),
             "assignee must hold the private L4 assignment note, got {:?}",
-            notes.iter().map(|r| (&r.kind, &r.content)).collect::<Vec<_>>()
+            notes
+                .iter()
+                .map(|r| (&r.kind, &r.content))
+                .collect::<Vec<_>>()
         );
 
-        let other = Caller::agent(
-            "assign-room",
-            "assign-group",
-            "assign-room/A",
-            "A",
-            "A",
-        );
+        let other = Caller::agent("assign-room", "assign-group", "assign-room/A", "A", "A");
         let others_notes = coord
             .memory()
             .store()
@@ -3588,9 +3925,9 @@ mod tests {
             .records_in_scope(&reader, &Scope::Hivemind)
             .unwrap();
         assert_eq!(globals.len(), 1, "mismatch must not create a record");
-        assert!(
-            !globals.iter().any(|record| record.content.contains("architecture is final"))
-        );
+        assert!(!globals
+            .iter()
+            .any(|record| record.content.contains("architecture is final")));
 
         // Unbound: no directive at all can never authorize a global write.
         let f3 = scripted(&[&wrong]);
@@ -3610,7 +3947,11 @@ mod tests {
             .store()
             .records_in_scope(&reader, &Scope::Hivemind)
             .unwrap();
-        assert_eq!(globals.len(), 1, "unbound proposal must not create a record");
+        assert_eq!(
+            globals.len(),
+            1,
+            "unbound proposal must not create a record"
+        );
         let _ = fs::remove_dir_all(path);
     }
 
@@ -3632,7 +3973,16 @@ mod tests {
             let coord = ConversationCoordinator::new(&context, limits.clone(), memory);
             let f = fake(None);
             let members = [member("A")];
-            coord.turn(TurnRequest { room: "persist-room", room_name: "Team", group_id: "", mode: ConversationMode::Discussion, members: &members, input: "remember me", invoker: f })
+            coord
+                .turn(TurnRequest {
+                    room: "persist-room",
+                    room_name: "Team",
+                    group_id: "",
+                    mode: ConversationMode::Discussion,
+                    members: &members,
+                    input: "remember me",
+                    invoker: f,
+                })
                 .await
                 .unwrap();
         }

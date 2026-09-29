@@ -20,15 +20,58 @@ pub struct DomainEvent {
 pub enum DomainEventKind {
     CoreStarted,
     CoreShuttingDown,
-    TurnStarted { turn_id: String, room_id: String },
-    TurnCompleted { turn_id: String, room_id: String, reply_count: usize },
-    AgentReplyStarted { turn_id: String, room_id: String, agent_id: String, instance_id: String },
-    AgentReplyCompleted { turn_id: String, room_id: String, agent_id: String, instance_id: String },
-    AgentReplyFailed { turn_id: String, room_id: String, agent_id: String, instance_id: String, error_code: String, message: String },
-    RuntimeStarted { agent_id: String, instance_id: String, runtime: String },
-    RuntimeStopped { agent_id: String, instance_id: String, runtime: String },
-    RuntimeFailed { agent_id: String, instance_id: String, runtime: String, error_code: String, message: String },
-    RuntimeRotated { agent_id: String, instance_id: String, runtime: String, reason: String },
+    TurnStarted {
+        turn_id: String,
+        room_id: String,
+    },
+    TurnCompleted {
+        turn_id: String,
+        room_id: String,
+        reply_count: usize,
+    },
+    AgentReplyStarted {
+        turn_id: String,
+        room_id: String,
+        agent_id: String,
+        instance_id: String,
+    },
+    AgentReplyCompleted {
+        turn_id: String,
+        room_id: String,
+        agent_id: String,
+        instance_id: String,
+    },
+    AgentReplyFailed {
+        turn_id: String,
+        room_id: String,
+        agent_id: String,
+        instance_id: String,
+        error_code: String,
+        message: String,
+    },
+    RuntimeStarted {
+        agent_id: String,
+        instance_id: String,
+        runtime: String,
+    },
+    RuntimeStopped {
+        agent_id: String,
+        instance_id: String,
+        runtime: String,
+    },
+    RuntimeFailed {
+        agent_id: String,
+        instance_id: String,
+        runtime: String,
+        error_code: String,
+        message: String,
+    },
+    RuntimeRotated {
+        agent_id: String,
+        instance_id: String,
+        runtime: String,
+        reason: String,
+    },
 }
 
 #[derive(Clone)]
@@ -38,21 +81,31 @@ pub struct EventBus {
 }
 
 impl Default for EventBus {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl EventBus {
     pub fn new() -> Self {
         let (sender, _) = broadcast::channel(EVENT_CAPACITY);
-        Self { sender, sequence: Arc::new(Mutex::new(0)) }
+        Self {
+            sender,
+            sequence: Arc::new(Mutex::new(0)),
+        }
     }
 
     /// Each subscriber receives an independent bounded stream. Slow consumers must handle `RecvError::Lagged`.
-    pub fn subscribe(&self) -> broadcast::Receiver<DomainEvent> { self.sender.subscribe() }
+    pub fn subscribe(&self) -> broadcast::Receiver<DomainEvent> {
+        self.sender.subscribe()
+    }
 
     /// Publish without waiting; events may be dropped for lagging subscribers.
     pub fn publish(&self, payload: DomainEventKind) {
-        let mut next = self.sequence.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut next = self
+            .sequence
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         *next += 1;
         let sequence = *next;
         let event = DomainEvent {
