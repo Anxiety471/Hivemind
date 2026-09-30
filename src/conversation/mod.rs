@@ -37,6 +37,30 @@ use memory_tools::*;
 use state::*;
 pub use store::*;
 
+/// Extra host-bound tool surface offered beside the memory tools. Manifests
+/// and executions are keyed by the room and persona Hivemind is running; a
+/// model can never choose either.
+pub trait ToolHost: Send + Sync {
+    /// Manifest section for this room and persona; `None` offers nothing.
+    fn manifest(&self, room: &str, persona: &str) -> Option<String>;
+    /// One-line reminder for later turns of a live session.
+    fn reminder(&self, _room: &str, _persona: &str) -> Option<String> {
+        None
+    }
+    /// Tool actions allowed per invocation before a plain-text answer is required.
+    fn max_actions(&self, _room: &str) -> usize {
+        MAX_MEMORY_ACTIONS
+    }
+    /// Whether turn input in `room` is host/agent-generated rather than typed by
+    /// the user, so it can never authorize `Global:` writes or state directives.
+    fn agent_originated(&self, _room: &str) -> bool {
+        false
+    }
+    /// Whether this host owns the tool name.
+    fn handles(&self, name: &str) -> bool;
+    fn execute(&self, room: &str, persona: &str, name: &str, args: &serde_json::Value) -> Result<String>;
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct RoomState {
     pub goal: Option<String>,

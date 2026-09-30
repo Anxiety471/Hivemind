@@ -384,6 +384,19 @@ impl RuntimePool {
     pub async fn close_idle(&self, idle_for: Duration) {
         self.inner.close_idle(idle_for).await;
     }
+    /// Stop one instance's live session at its next idle moment (waits for an
+    /// in-flight prompt). The next prompt hydrates a fresh epoch from Hivemind
+    /// state, so removed access cannot leak through a stale session.
+    pub async fn rotate_instance(&self, agent_instance_id: &AgentInstanceId, reason: &'static str) {
+        let Some(slot_handle) = self.inner.existing_slot(agent_instance_id) else {
+            return;
+        };
+        let mut slot = slot_handle.lock().await;
+        if let Some(live) = slot.live.take() {
+            self.inner.stop(agent_instance_id, live, Stop::Rotated(reason)).await;
+        }
+        self.inner.remove_vacant_slot(agent_instance_id, &slot_handle, &slot);
+    }
     #[cfg(test)]
     pub(crate) fn slot_count(&self) -> usize {
         self.inner.slots.lock().len()
@@ -759,6 +772,8 @@ mod tests {
             reasoning: None,
             fast: None,
             role: None,
+            capabilities: Vec::new(),
+            permissions: Vec::new(),
         };
         let view = TurnView {
             turn_id: "turn".into(),
@@ -943,6 +958,8 @@ mod tests {
                 reasoning: None,
                 fast: None,
                 role: None,
+            capabilities: Vec::new(),
+            permissions: Vec::new(),
             };
             let view = TurnView {
                 turn_id: "turn".into(),

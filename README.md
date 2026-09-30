@@ -95,6 +95,10 @@ The shell CLI is the main way to inspect Hivemind, run one-shot prompts, and man
 | `hivemind group list` / `show <name>` | Inspect groups |
 | `hivemind group add` / `remove <name> <persona>` | Change membership |
 | `hivemind group delete <name>` | Delete a group |
+| `hivemind task submit "<objective>"` | Store an autonomous task (see [docs/coordination.md](docs/coordination.md)); `serve` or `task run` processes it |
+| `hivemind task list` / `show` / `cancel` / `pause` / `resume <id>` | Inspect and control tasks |
+| `hivemind task watch <id>` | Follow a task's durable events; Ctrl-C stops watching, never the task |
+| `hivemind task run [--until-idle]` | Process stored tasks in the foreground |
 
 `ask` and `all` go through the same turn coordinator and durable turn store as interactive chat. `all` always writes to the `main` room, whatever the active interactive route is.
 
@@ -263,6 +267,11 @@ Building the server and serving health/info/agent listings never starts Pi, OMP,
 | `GET` | `/api/v1/info` | Service metadata and protocol endpoints |
 | `GET` | `/api/v1/agents` | Safe agent metadata (name and runtime only; no credentials) |
 | `POST` | `/api/v1/turns` | Submit a conversation turn |
+| `POST` / `GET` | `/api/v1/tasks`, `/api/v1/tasks/{id}` | Submit (202) and inspect autonomous tasks; see [docs/coordination.md](docs/coordination.md) |
+| `GET` / `POST` | `/api/v1/tasks/{id}/attempts`, `/cancel`, `/pause`, `/resume`, `/input`, `/context-metrics` | Attempts, controls, and bounded context diagnostics |
+| `GET` | `/api/v1/agents/{id}`, `/api/v1/agent-instances` | Capabilities and derived activity (never starts a runtime) |
+| `GET` / `POST` | `/api/v1/messages`, `/api/v1/groups`, `/api/v1/groups/{id}` | Agent/operator messages and dynamic task groups |
+| `GET` | `/api/v1/events?after=N` | Durable, restart-safe event replay with a high-water mark |
 | `GET` | `/api/v1/ws` | WebSocket live event stream |
 
 <details>
@@ -396,7 +405,7 @@ The library's `core`, `events`, `conversation`, `config`, `runtime`, and `memory
 
 - Memory search is SQLite FTS5 full-text matching, not semantic/embedding search. There is no vector database.
 - Responses are collected at the end of each turn, not streamed token by token.
-- Agent-to-agent messaging is not implemented.
+- Autonomous coordination (`[coordination] enabled = true`) is off by default, runs only while `serve` or `task run` is running, and has documented limits: see [docs/coordination.md](docs/coordination.md).
 - The API has no authentication and is loopback-only.
 - A runtime failure mid-turn is reported as an agent-attributed error and never retried.
 

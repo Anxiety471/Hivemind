@@ -1,5 +1,6 @@
 pub mod api;
 pub mod config;
+pub mod coordination;
 pub mod conversation;
 pub mod core;
 pub mod events;

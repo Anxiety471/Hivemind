@@ -300,6 +300,8 @@ mod tests {
             reasoning: Some("high".into()),
             fast: None,
             role: None,
+            capabilities: Vec::new(),
+            permissions: Vec::new(),
         }
     }
 

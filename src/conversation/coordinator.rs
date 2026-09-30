@@ -17,6 +17,7 @@ pub struct ConversationCoordinator {
     limits: ContextConfig,
     events: Option<crate::events::EventBus>,
     lock_dir: std::sync::OnceLock<PathBuf>,
+    tools: std::sync::OnceLock<Arc<dyn ToolHost>>,
 }
 
 pub(super) struct PackRequest<'a> {
@@ -85,6 +86,7 @@ impl ConversationCoordinator {
             limits,
             events,
             lock_dir: std::sync::OnceLock::new(),
+            tools: std::sync::OnceLock::new(),
         }
     }
     #[cfg(test)]
@@ -99,7 +101,12 @@ impl ConversationCoordinator {
             limits,
             events: None,
             lock_dir: std::sync::OnceLock::new(),
+            tools: std::sync::OnceLock::new(),
         }
+    }
+    /// Install the extra tool surface offered beside memory tools. Set once at startup.
+    pub fn set_tools(&self, host: Arc<dyn ToolHost>) {
+        let _ = self.tools.set(host);
     }
     /// The shared memory service this coordinator executes tool calls against.
     #[cfg(test)]
@@ -177,7 +184,9 @@ impl ConversationCoordinator {
         self.save_turn(&history, room, &turn_id, &mut saved, false, false)?;
         // Explicit structured directive from the raw user input only; may
         // authorize exactly one exact-content global proposal this turn.
-        let authorized_global = authorized_global_directive(input);
+        let host = self.tools.get().cloned();
+        let agent_input = host.as_ref().is_some_and(|host| host.agent_originated(room));
+        let authorized_global = if agent_input { None } else { authorized_global_directive(input) };
         // Archive hits depend only on the room and the input, so one search
         // serves every member of this turn.
         let shared_archive = members
@@ -260,6 +269,7 @@ impl ConversationCoordinator {
                     let room = room.to_owned();
                     let memory = self.memory.clone();
                     let authorized_global = authorized_global.clone();
+                    let host = host.clone();
                     let task_name = name.clone();
                     let handle = jobs.spawn(async move {
                         let MemberPrompt { pack, delta, view } = prompt;
@@ -276,6 +286,7 @@ impl ConversationCoordinator {
                             &caller,
                             &memory,
                             authorized_global.as_deref(),
+                            host.as_deref(),
                         )
                         .await
                         .map_err(|e| format!("{e:#}"));
@@ -393,6 +404,7 @@ impl ConversationCoordinator {
                             &caller,
                             &self.memory,
                             authorized_global.as_deref(),
+                            host.as_deref(),
                         )
                         .await
                         .map_err(|e| format!("{e:#}")),
@@ -438,7 +450,7 @@ impl ConversationCoordinator {
         }
         history.completed_turns.push(turn_id.clone());
         let mut next_state = history.state.clone();
-        let state_update = apply_explicit_state_updates(&mut next_state, input).and_then(|()| {
+        let state_update = apply_explicit_state_updates(&mut next_state, if agent_input { "" } else { input }).and_then(|()| {
             validate_state(
                 &next_state,
                 self.limits.context_target_tokens.saturating_mul(2),
@@ -592,6 +604,9 @@ impl ConversationCoordinator {
         }
         delta.push_str(retrieval);
         delta.push_str(SESSION_TOOL_REMINDER);
+        if let Some(reminder) = self.tools.get().and_then(|host| host.reminder(&request.caller.room_id, &request.caller.persona_id)) {
+            delta.push_str(&reminder);
+        }
         delta.push_str(&format!("\nCurrent user message:\n{input}\n"));
         delta.push_str(&same_turn_replies(prior));
         (delta.len() <= self.limits.context_target_tokens.saturating_mul(4)).then_some(delta)
@@ -628,7 +643,8 @@ impl ConversationCoordinator {
             .collect::<Vec<_>>()
             .join("\n");
         let identity = format!("You are participating in {room_name}.\n\nParticipants:\n{roster}\n\nYou are {}. Your room role is {}.\n", current.agent.name, current.role.as_deref().or(current.agent.role.as_deref()).unwrap_or("participant"));
-        let manifest = format!("\n{}", memory_tool_manifest(caller));
+        let extra = self.tools.get().and_then(|host| host.manifest(&caller.room_id, &caller.persona_id)).unwrap_or_default();
+        let manifest = format!("\n{}{extra}", memory_tool_manifest(caller));
         let state = format!("\nShared room state:\n{state_json}\n");
         let summary = if history.summary.is_empty() {
             String::new()

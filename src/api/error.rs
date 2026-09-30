@@ -9,7 +9,7 @@ use serde::Serialize;
 pub(super) struct ApiError {
     status: StatusCode,
     code: &'static str,
-    message: &'static str,
+    message: std::borrow::Cow<'static, str>,
 }
 
 #[derive(Serialize)]
@@ -20,7 +20,7 @@ struct ErrorResponse {
 #[derive(Serialize)]
 struct ErrorBody {
     code: &'static str,
-    message: &'static str,
+    message: std::borrow::Cow<'static, str>,
 }
 
 impl ApiError {
@@ -28,8 +28,12 @@ impl ApiError {
         Self {
             status,
             code,
-            message,
+            message: message.into(),
         }
+    }
+
+    pub(super) fn owned(status: StatusCode, code: &'static str, message: String) -> Self {
+        Self { status, code, message: message.into() }
     }
 }
 

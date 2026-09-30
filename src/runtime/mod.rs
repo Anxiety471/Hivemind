@@ -115,6 +115,8 @@ mod tests {
             reasoning: None,
             fast: None,
             role: None,
+            capabilities: Vec::new(),
+            permissions: Vec::new(),
         }
     }
 

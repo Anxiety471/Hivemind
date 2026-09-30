@@ -14,9 +14,9 @@ use crate::core::{ConversationTarget, CoreError, HivemindCore, TargetResolutionE
 use super::{error::ApiError, websocket};
 
 #[derive(Clone)]
-struct ApiState {
-    core: Arc<HivemindCore>,
-    shutdown: watch::Receiver<bool>,
+pub(super) struct ApiState {
+    pub(super) core: Arc<HivemindCore>,
+    pub(super) shutdown: watch::Receiver<bool>,
 }
 
 pub(super) fn router(core: Arc<HivemindCore>, shutdown: watch::Receiver<bool>) -> Router {
@@ -24,6 +24,7 @@ pub(super) fn router(core: Arc<HivemindCore>, shutdown: watch::Receiver<bool>) -
     Router::new()
         .route("/api/v1/health", get(health))
         .route("/api/v1/info", get(info))
+        .merge(super::tasks::routes())
         .route("/api/v1/agents", get(agents))
         .route("/api/v1/turns", post(submit_turn))
         .route("/api/v1/ws", get(ws))

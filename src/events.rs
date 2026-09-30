@@ -88,6 +88,15 @@ pub enum DomainEventKind {
         runtime: String,
         reason: String,
     },
+    /// A committed coordination event (task, attempt, message, or group); `seq` is the durable sequence.
+    Coordination {
+        seq: i64,
+        root_id: String,
+        task_id: Option<String>,
+        event_type: String,
+        actor: String,
+        payload: serde_json::Value,
+    },
 }
 
 #[derive(Clone)]

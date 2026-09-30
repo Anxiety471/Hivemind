@@ -2,7 +2,7 @@
 
 ## Objective and status
 
-**Status: proposed implementation plan; none of the features below are claimed as implemented.**
+**Status: implemented in `src/coordination/` (see `docs/coordination.md` for the shipped behavior, defaults, and known gaps). The sections below remain the original plan.**
 
 A user submits one task, such as “Fix this frontend and backend.” A Hivemind agent (either Jev(as classifier) or a Real Agent, based on configuration) selects eligible agents, lets a coordinator propose a decomposition, validates the resulting dependency graph, and runs the work without requiring the user to route every message. Agents can send DMs, create task groups by role/capability, exchange concrete handoffs, and report verifiable results. The API exposes durable task state and live activity.
 
