@@ -1,0 +1,330 @@
+{
+  "commit": "d3d4a50",
+  "server": "/home/hitori/Projects/Hivemind/target/release/hivemind",
+  "root": "/tmp",
+  "filesystem": "tmpfs",
+  "nproc": 16,
+  "at": "2026-09-30T19:26:41",
+  "results": {
+    "solo": {
+      "startup_ms": 10.8,
+      "idle_rss_mb": 8.5,
+      "first_turn_ms": 35.16,
+      "windows": [
+        {
+          "history": 50,
+          "turns": 50,
+          "p50_ms": 1.39,
+          "p90_ms": 2.21,
+          "max_ms": 37.11,
+          "cpu_ms_per_turn": 1.2,
+          "wall_ms_per_turn": 2.21,
+          "runtime_prompts_per_turn": 1.0,
+          "rss_mb": 10.0,
+          "db_mb": 4.38
+        },
+        {
+          "history": 100,
+          "turns": 50,
+          "p50_ms": 1.36,
+          "p90_ms": 2.2,
+          "max_ms": 30.61,
+          "cpu_ms_per_turn": 1.2,
+          "wall_ms_per_turn": 2.11,
+          "runtime_prompts_per_turn": 1.0,
+          "rss_mb": 10.4,
+          "db_mb": 4.54
+        },
+        {
+          "history": 300,
+          "turns": 50,
+          "p50_ms": 1.8,
+          "p90_ms": 2.59,
+          "max_ms": 39.26,
+          "cpu_ms_per_turn": 1.6,
+          "wall_ms_per_turn": 3.29,
+          "runtime_prompts_per_turn": 1.0,
+          "rss_mb": 11.3,
+          "db_mb": 4.82
+        },
+        {
+          "history": 500,
+          "turns": 50,
+          "p50_ms": 2.18,
+          "p90_ms": 2.64,
+          "max_ms": 27.19,
+          "cpu_ms_per_turn": 1.8,
+          "wall_ms_per_turn": 2.68,
+          "runtime_prompts_per_turn": 1.0,
+          "rss_mb": 11.8,
+          "db_mb": 5.07
+        },
+        {
+          "history": 1000,
+          "turns": 50,
+          "p50_ms": 2.02,
+          "p90_ms": 2.88,
+          "max_ms": 37.29,
+          "cpu_ms_per_turn": 1.8,
+          "wall_ms_per_turn": 2.87,
+          "runtime_prompts_per_turn": 1.0,
+          "rss_mb": 12.8,
+          "db_mb": 5.8
+        }
+      ]
+    },
+    "group": [
+      {
+        "members": 1,
+        "windows": [
+          {
+            "history": 50,
+            "turns": 50,
+            "p50_ms": 1.94,
+            "p90_ms": 2.29,
+            "max_ms": 38.96,
+            "cpu_ms_per_turn": 1.6,
+            "wall_ms_per_turn": 2.67,
+            "runtime_prompts_per_turn": 1.0,
+            "rss_mb": 10.0,
+            "db_mb": 4.38
+          },
+          {
+            "history": 200,
+            "turns": 50,
+            "p50_ms": 2.3,
+            "p90_ms": 2.81,
+            "max_ms": 39.59,
+            "cpu_ms_per_turn": 2.0,
+            "wall_ms_per_turn": 3.81,
+            "runtime_prompts_per_turn": 1.0,
+            "rss_mb": 10.9,
+            "db_mb": 4.65
+          }
+        ]
+      },
+      {
+        "members": 3,
+        "windows": [
+          {
+            "history": 50,
+            "turns": 50,
+            "p50_ms": 2.55,
+            "p90_ms": 3.03,
+            "max_ms": 40.62,
+            "cpu_ms_per_turn": 2.6,
+            "wall_ms_per_turn": 3.3,
+            "runtime_prompts_per_turn": 3.0,
+            "rss_mb": 11.0,
+            "db_mb": 4.48
+          },
+          {
+            "history": 200,
+            "turns": 50,
+            "p50_ms": 2.31,
+            "p90_ms": 3.15,
+            "max_ms": 39.18,
+            "cpu_ms_per_turn": 2.4,
+            "wall_ms_per_turn": 3.17,
+            "runtime_prompts_per_turn": 3.0,
+            "rss_mb": 12.2,
+            "db_mb": 4.96
+          }
+        ]
+      },
+      {
+        "members": 8,
+        "windows": [
+          {
+            "history": 50,
+            "turns": 50,
+            "p50_ms": 3.63,
+            "p90_ms": 5.07,
+            "max_ms": 50.9,
+            "cpu_ms_per_turn": 4.2,
+            "wall_ms_per_turn": 4.75,
+            "runtime_prompts_per_turn": 8.0,
+            "rss_mb": 11.7,
+            "db_mb": 4.68
+          },
+          {
+            "history": 200,
+            "turns": 50,
+            "p50_ms": 4.71,
+            "p90_ms": 5.92,
+            "max_ms": 59.36,
+            "cpu_ms_per_turn": 4.8,
+            "wall_ms_per_turn": 6.71,
+            "runtime_prompts_per_turn": 8.0,
+            "rss_mb": 13.5,
+            "db_mb": 5.56
+          }
+        ]
+      }
+    ],
+    "concurrency": {
+      "serial": {
+        "rooms": 8,
+        "turns": 200,
+        "turns_per_s": 728.1,
+        "p50_ms": 1.32,
+        "p90_ms": 1.75,
+        "cpu_ms_per_turn": 1.05
+      },
+      "concurrent": {
+        "rooms": 8,
+        "turns": 200,
+        "turns_per_s": 805.3,
+        "p50_ms": 7.96,
+        "p90_ms": 12.56,
+        "cpu_ms_per_turn": 2.95
+      }
+    },
+    "tools": [
+      {
+        "tool_calls_per_turn": 0,
+        "windows": [
+          {
+            "history": 50,
+            "turns": 50,
+            "p50_ms": 1.82,
+            "p90_ms": 2.33,
+            "max_ms": 40.24,
+            "cpu_ms_per_turn": 1.6,
+            "wall_ms_per_turn": 2.63,
+            "runtime_prompts_per_turn": 1.0,
+            "rss_mb": 10.0,
+            "db_mb": 4.37
+          },
+          {
+            "history": 200,
+            "turns": 50,
+            "p50_ms": 2.27,
+            "p90_ms": 2.68,
+            "max_ms": 39.48,
+            "cpu_ms_per_turn": 2.0,
+            "wall_ms_per_turn": 3.75,
+            "runtime_prompts_per_turn": 1.0,
+            "rss_mb": 11.0,
+            "db_mb": 4.64
+          }
+        ]
+      },
+      {
+        "tool_calls_per_turn": 1,
+        "windows": [
+          {
+            "history": 50,
+            "turns": 50,
+            "p50_ms": 2.3,
+            "p90_ms": 2.76,
+            "max_ms": 39.39,
+            "cpu_ms_per_turn": 1.8,
+            "wall_ms_per_turn": 3.79,
+            "runtime_prompts_per_turn": 2.0,
+            "rss_mb": 10.1,
+            "db_mb": 4.37
+          },
+          {
+            "history": 200,
+            "turns": 50,
+            "p50_ms": 3.16,
+            "p90_ms": 3.86,
+            "max_ms": 40.6,
+            "cpu_ms_per_turn": 2.6,
+            "wall_ms_per_turn": 5.39,
+            "runtime_prompts_per_turn": 2.0,
+            "rss_mb": 10.9,
+            "db_mb": 4.63
+          }
+        ]
+      },
+      {
+        "tool_calls_per_turn": 4,
+        "windows": [
+          {
+            "history": 50,
+            "turns": 50,
+            "p50_ms": 3.8,
+            "p90_ms": 34.23,
+            "max_ms": 42.15,
+            "cpu_ms_per_turn": 3.0,
+            "wall_ms_per_turn": 7.38,
+            "runtime_prompts_per_turn": 5.0,
+            "rss_mb": 10.1,
+            "db_mb": 4.38
+          },
+          {
+            "history": 200,
+            "turns": 50,
+            "p50_ms": 5.62,
+            "p90_ms": 39.57,
+            "max_ms": 42.95,
+            "cpu_ms_per_turn": 4.6,
+            "wall_ms_per_turn": 10.41,
+            "runtime_prompts_per_turn": 5.0,
+            "rss_mb": 10.9,
+            "db_mb": 4.65
+          }
+        ]
+      }
+    ],
+    "ws": [
+      {
+        "ws_clients": 0,
+        "turns": 50,
+        "p50_ms": 2.06,
+        "p90_ms": 2.48,
+        "max_ms": 39.11,
+        "cpu_ms_per_turn": 1.8,
+        "wall_ms_per_turn": 2.86,
+        "runtime_prompts_per_turn": 1.0,
+        "frames_per_turn": 0.0
+      },
+      {
+        "ws_clients": 1,
+        "turns": 50,
+        "p50_ms": 2.25,
+        "p90_ms": 2.84,
+        "max_ms": 39.82,
+        "cpu_ms_per_turn": 2.0,
+        "wall_ms_per_turn": 3.07,
+        "runtime_prompts_per_turn": 1.0,
+        "frames_per_turn": 4.06
+      },
+      {
+        "ws_clients": 10,
+        "turns": 50,
+        "p50_ms": 2.49,
+        "p90_ms": 2.97,
+        "max_ms": 41.78,
+        "cpu_ms_per_turn": 2.6,
+        "wall_ms_per_turn": 3.33,
+        "runtime_prompts_per_turn": 1.0,
+        "frames_per_turn": 40.6
+      },
+      {
+        "ws_clients": 50,
+        "turns": 50,
+        "p50_ms": 3.55,
+        "p90_ms": 5.23,
+        "max_ms": 38.64,
+        "cpu_ms_per_turn": 6.6,
+        "wall_ms_per_turn": 4.51,
+        "runtime_prompts_per_turn": 1.0,
+        "frames_per_turn": 203.0
+      },
+      {
+        "ws_clients": 0,
+        "turns": 50,
+        "p50_ms": 2.03,
+        "p90_ms": 2.95,
+        "max_ms": 39.22,
+        "cpu_ms_per_turn": 2.0,
+        "wall_ms_per_turn": 2.95,
+        "runtime_prompts_per_turn": 1.0,
+        "frames_per_turn": 0.0
+      }
+    ]
+  }
+}

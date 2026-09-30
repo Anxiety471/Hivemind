@@ -10,13 +10,13 @@ license = "UNLICENSED"
 [dependencies]
 anyhow = "1.0"
 async-trait = "0.1"
-axum = { version = "0.8", features = ["ws"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "ws"] }
 futures-util = "0.3"
 clap = { version = "4.5", features = ["derive"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-tokio = { version = "1.40", features = ["full"] }
+tokio = { version = "1.40", features = ["io-std", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 toml = "0.8"
 toml_edit = "0.22"
 parking_lot = "0.12"
@@ -25,3 +25,10 @@ parking_lot = "0.12"
 http-body-util = "0.1"
 tokio-tungstenite = "0.28"
 tower = { version = "0.5", features = ["util"] }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true
+panic = "unwind"

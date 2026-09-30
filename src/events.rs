@@ -1,6 +1,6 @@
 //! Ephemeral process-local domain notifications. Events are not canonical state or history.
 use crate::identity::AgentInstanceId;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
@@ -14,6 +14,20 @@ pub struct DomainEvent {
     pub sequence: u64,
     pub occurred_at: SystemTime,
     pub payload: DomainEventKind,
+    /// Wire frame encoded at most once, by whichever subscriber needs it first; `None` = not public.
+    #[serde(skip)]
+    frame: OnceLock<Option<String>>,
+}
+
+impl DomainEvent {
+    pub fn new(event_id: String, sequence: u64, occurred_at: SystemTime, payload: DomainEventKind) -> Self {
+        Self { event_id, sequence, occurred_at, payload, frame: OnceLock::new() }
+    }
+
+    /// Returns the serialized frame shared by all subscribers, running `encode` only on first use.
+    pub fn frame_with(&self, encode: impl FnOnce(&Self) -> Option<String>) -> Option<&str> {
+        self.frame.get_or_init(|| encode(self)).as_deref()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -78,7 +92,7 @@ pub enum DomainEventKind {
 
 #[derive(Clone)]
 pub struct EventBus {
-    sender: broadcast::Sender<DomainEvent>,
+    sender: broadcast::Sender<Arc<DomainEvent>>,
     sequence: Arc<Mutex<u64>>,
 }
 
@@ -98,7 +112,7 @@ impl EventBus {
     }
 
     /// Each subscriber receives an independent bounded stream. Slow consumers must handle `RecvError::Lagged`.
-    pub fn subscribe(&self) -> broadcast::Receiver<DomainEvent> {
+    pub fn subscribe(&self) -> broadcast::Receiver<Arc<DomainEvent>> {
         self.sender.subscribe()
     }
 
@@ -110,12 +124,12 @@ impl EventBus {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         *next += 1;
         let sequence = *next;
-        let event = DomainEvent {
-            event_id: format!("evt-{sequence}"),
+        let event = Arc::new(DomainEvent::new(
+            format!("evt-{sequence}"),
             sequence,
-            occurred_at: SystemTime::now(),
+            SystemTime::now(),
             payload,
-        };
+        ));
         let _ = self.sender.send(event);
     }
 }

@@ -194,8 +194,8 @@ async fn agents(State(state): State<ApiState>) -> Json<Agents> {
         .list()
         .into_iter()
         .map(|agent| AgentMetadata {
-            name: agent.name,
-            runtime: agent.runtime,
+            name: agent.name.clone(),
+            runtime: agent.runtime.clone(),
         })
         .collect();
     Json(Agents { agents })

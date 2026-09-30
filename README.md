@@ -179,7 +179,7 @@ model = "opencode/big-pickle"
 
 **OpenCode runtime notes.** Hivemind runs `opencode acp` (Agent Client Protocol over stdio, no port) as one child per room + persona and deletes the OpenCode session on shutdown. The persona's `system_prompt` replaces OpenCode's `build` agent prompt for that child. Hivemind sets `"permission": "allow"` in the child's config, so OpenCode never waits for approval, including for files outside the workspace, exactly like Pi and OMP, which run tools unprompted. Treat the workspace as untrusted-model territory: an OpenCode agent can read and write anything your user can. Reported context size is OpenCode's own `usage_update`, which already includes OpenCode's built-in prompt (several thousand tokens), so set `runtime_rotate_tokens` accordingly.
 
-**Opt-in OpenCode E2E.** `HIVEMIND_E2E_OPENCODE=1 python3 scripts/e2e-opencode.py` drives a real `hivemind-server` against `opencode/*-free` models (probed at run time; endpoints come and go). Each scenario uses its own scratch directory and XDG data/config dirs, and an empty workspace. Free tiers can forward prompts to third-party providers: never point it at a workspace with secrets. It covers context retention, two-agent reply order, a memory-tool round trip checked in SQLite, rotation, prompt timeout, a mixed pi/omp/opencode room (skipped without `pi`/`omp`), and shutdown leaving no children. Two longer scenarios go beyond basic chat: a conversation tree (two solo rooms, a broadcast group, a three-member discussion chain with a `Goal:` directive and a follow-up turn, a return to a solo room, and the main room, checking that rooms do not leak history into each other and that each room+persona gets its own runtime instance) and a six-turn conversation that must still recall its first-turn codeword after repeated rotations. `HIVEMIND_E2E_ONLY=s8,s9` runs selected scenarios. It is never part of `cargo test`, and rate limits or flaky models fail a scenario rather than being retried.
+**Opt-in OpenCode E2E.** `HIVEMIND_E2E_OPENCODE=1 python3 scripts/e2e-opencode.py` drives a real `hivemind serve` against `opencode/*-free` models (probed at run time; endpoints come and go). Each scenario uses its own scratch directory and XDG data/config dirs, and an empty workspace. Free tiers can forward prompts to third-party providers: never point it at a workspace with secrets. It covers context retention, two-agent reply order, a memory-tool round trip checked in SQLite, rotation, prompt timeout, a mixed pi/omp/opencode room (skipped without `pi`/`omp`), and shutdown leaving no children. Two longer scenarios go beyond basic chat: a conversation tree (two solo rooms, a broadcast group, a three-member discussion chain with a `Goal:` directive and a follow-up turn, a return to a solo room, and the main room, checking that rooms do not leak history into each other and that each room+persona gets its own runtime instance) and a six-turn conversation that must still recall its first-turn codeword after repeated rotations. `HIVEMIND_E2E_ONLY=s8,s9` runs selected scenarios. It is never part of `cargo test`, and rate limits or flaky models fail a scenario rather than being retried.
 
 ### Reply order and groups
 
@@ -249,7 +249,7 @@ Hivemind has a seven-layer memory system that **works without any LLM**. The def
 ## 🔌 HTTP & WebSocket API
 
 ```bash
-cargo run --bin hivemind-server     # binds to http://127.0.0.1:7474
+cargo run -- serve     # binds to http://127.0.0.1:7474
 ```
 
 > [!CAUTION]
@@ -345,7 +345,7 @@ Unsupported or malformed messages get a `system.error` frame, and the connection
 ```mermaid
 flowchart TD
     CLI["CLI<br/>chat · ask · all"] --> Core
-    API["hivemind-server<br/>HTTP · WebSocket"] --> Core
+    API["hivemind serve<br/>HTTP · WebSocket"] --> Core
     Embed["Embedding callers"] --> Core
     Core["HivemindCore<br/>persona registry · event bus"] --> Coord["ConversationCoordinator<br/>room lock · reply order · state"]
     Coord <--> DB[("SQLite<br/>.hivemind/memory.sqlite3")]
@@ -358,7 +358,7 @@ flowchart TD
 
 **Where things run**
 
-- `hivemind-server`, `ask`, `all`, and `chat` all build a library `HivemindCore`. It holds the ordered persona registry, one SQLite-backed memory service, one durable conversation coordinator, a per-instance runtime pool, and a bounded process-local event bus.
+- `serve`, `ask`, `all`, and `chat` all build a library `HivemindCore`. It holds the ordered persona registry, one SQLite-backed memory service, one durable conversation coordinator, a per-instance runtime pool, and a bounded process-local event bus.
 - `chat` uses one core for the whole session. `ask`/`all` build a new core for each command.
 - The core resolves targets (main, solo, group) into room identity, mode, participants, roles, and reply order. Participants are checked before any runtime starts.
 - Room turns are serialized by a room lock. Broadcast runs concurrently. Discussion runs in order and includes the earlier replies from the same turn.
@@ -372,7 +372,7 @@ flowchart TD
 - A session closes after `runtime.idle_timeout_secs` without use and stops on core shutdown. No session is left running after exit.
 - **Pi** runs in RPC mode with `--no-session` and keeps its in-process context between prompts. Hivemind waits for `agent_settled` and returns the text blocks from the latest assistant `message_end`.
 
-**Storage.** `.hivemind/memory.sqlite3` sits next to the config file and holds rooms, turns, messages, scoped memory with FTS5, runtime epochs, and group state. `.hivemind/context/` holds only room turn-lock files and any legacy JSON history that hasn't been migrated yet.
+**Storage.** `.hivemind/memory.sqlite3` sits next to the config file and holds rooms, turns, messages, scoped memory with FTS5, runtime epochs, and group state. It runs in WAL mode with `synchronous=NORMAL`: an application crash loses nothing, but power loss or an OS crash can drop the last few committed turns (the database is never corrupted). A turn writes only its own new messages, and searches are scoped to a room or memory scope inside FTS5. `.hivemind/context/` holds only room turn-lock files and any legacy JSON history that hasn't been migrated yet.
 
 <details>
 <summary><b>🧬 Identity encoding & legacy migration</b></summary>

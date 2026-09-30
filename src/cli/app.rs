@@ -582,7 +582,7 @@ done
             .agents()
             .list()
             .into_iter()
-            .map(|agent| agent.name)
+            .map(|agent| agent.name.clone())
             .collect::<Vec<_>>();
         let core_config = core.config();
         let cli = effective_agents(&core_config)

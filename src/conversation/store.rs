@@ -3,11 +3,16 @@ use super::*;
 pub(super) static ROOM_LOCKS: OnceCell<Mutex<HashMap<String, Weak<Mutex<()>>>>> =
     OnceCell::const_new();
 
-pub(super) async fn room_mutex(directory: &Path, room: &str) -> Result<Arc<Mutex<()>>> {
+/// Create the store directory and resolve it once; room lock keys use the result.
+pub(super) fn canonical_store_dir(directory: &Path) -> Result<PathBuf> {
     fs::create_dir_all(directory)
         .with_context(|| format!("creating context store {}", directory.display()))?;
-    let directory = fs::canonicalize(directory)
-        .with_context(|| format!("resolving context store {}", directory.display()))?;
+    fs::canonicalize(directory)
+        .with_context(|| format!("resolving context store {}", directory.display()))
+}
+
+/// `directory` must already be canonical (see [`canonical_store_dir`]).
+pub(super) async fn room_mutex(directory: &Path, room: &str) -> Result<Arc<Mutex<()>>> {
     let key = format!("{}\0{room}", directory.display());
     let locks = ROOM_LOCKS
         .get_or_init(|| async { Mutex::new(HashMap::new()) })
@@ -54,43 +59,72 @@ pub(super) fn legacy_message_id(room: &str, index: usize, old_id: &str) -> Strin
 }
 
 pub(super) async fn acquire_file_lock(directory: &Path, room: &str) -> Result<TurnFileLock> {
-    fs::create_dir_all(directory)
-        .with_context(|| format!("creating context store {}", directory.display()))?;
     let path = directory.join(format!(".room-{:016x}.lock", stable_hash(room)));
-    let file = fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(&path)
+    let open = || {
+        fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&path)
+    };
+    let file = match open() {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            fs::create_dir_all(directory)
+                .with_context(|| format!("creating context store {}", directory.display()))?;
+            open()
+        }
+        other => other,
+    }
+    .with_context(|| {
+        format!(
+            "opening room lock for '{room}' in context store {}",
+            directory.display()
+        )
+    })?;
+    // Block a pool thread, not an async worker, until the lock is free.
+    tokio::task::spawn_blocking(move || file.lock().map(|()| file))
+        .await
+        .context("room lock task failed")?
+        .map(|file| TurnFileLock { _file: file })
         .with_context(|| {
             format!(
-                "opening room lock for '{room}' in context store {}",
+                "locking room '{room}' in context store {}",
                 directory.display()
             )
-        })?;
-    loop {
-        match file.try_lock() {
-            Ok(()) => return Ok(TurnFileLock { _file: file }),
-            Err(std::fs::TryLockError::WouldBlock) => {
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            }
-            Err(std::fs::TryLockError::Error(error)) => {
-                return Err(error).with_context(|| {
-                    format!(
-                        "locking room '{room}' in context store {}",
-                        directory.display()
-                    )
-                });
-            }
-        }
-    }
+        })
+}
+
+/// What a save must persist beyond a full rewrite. Stores without an
+/// incremental path fall back to [`ContextStore::save_room`].
+pub struct Changes<'a> {
+    /// New events of the active turn and/or its completion.
+    pub turn: Option<TurnChange<'a>>,
+    /// Rewrite the room-level state snapshot (state, summary, maintenance log).
+    pub snapshot: bool,
+}
+
+pub struct TurnChange<'a> {
+    pub turn_id: &'a str,
+    /// Index in `RoomHistory::events` of the first event not yet persisted.
+    pub events_from: usize,
+    pub completed: bool,
 }
 
 pub trait ContextStore: Send + Sync {
     fn directory(&self) -> &std::path::Path;
     fn load_room(&self, room: &str) -> Result<RoomHistory>;
     fn save_room(&self, room: &str, history: &RoomHistory) -> Result<()>;
+    /// Take a room's history for one turn. The caller owns it until
+    /// [`Self::release`]; a store may hand back a cached copy.
+    fn checkout(&self, room: &str) -> Result<RoomHistory> {
+        self.load_room(room)
+    }
+    /// Return a history that was fully persisted through [`Self::save_changes`].
+    fn release(&self, _room: &str, _history: RoomHistory) {}
+    fn save_changes(&self, room: &str, history: &RoomHistory, _changes: &Changes<'_>) -> Result<()> {
+        self.save_room(room, history)
+    }
 }
 
 pub struct JsonFileStore {
@@ -162,6 +196,8 @@ impl ContextStore for JsonFileStore {
 
 /// Room-level working state persisted alongside the L7 archive in one
 /// reserved archive turn per room; there is no second (JSON) history file.
+/// Per-turn facts (completion, failed replies, legacy identities) live on the
+/// turn rows themselves, so this row stays O(1) regardless of history length.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub(super) struct RoomSnapshot {
     #[serde(default)]
@@ -171,13 +207,23 @@ pub(super) struct RoomSnapshot {
     #[serde(default)]
     summarized_turn_count: usize,
     #[serde(default)]
-    completed_turns: Vec<String>,
-    #[serde(default)]
-    error_message_ids: Vec<String>,
-    #[serde(default)]
     maintenance_errors: Vec<String>,
-    #[serde(default)]
+    /// Read-only: lists written by earlier versions, moved onto the turn rows
+    /// the first time such a snapshot is loaded.
+    #[serde(default, skip_serializing)]
+    completed_turns: Vec<String>,
+    #[serde(default, skip_serializing)]
+    error_message_ids: Vec<String>,
+    #[serde(default, skip_serializing)]
     legacy_agent_instance_ids: HashMap<String, String>,
+}
+
+impl RoomSnapshot {
+    fn has_pre_turn_metadata_lists(&self) -> bool {
+        !self.completed_turns.is_empty()
+            || !self.error_message_ids.is_empty()
+            || !self.legacy_agent_instance_ids.is_empty()
+    }
 }
 
 pub(super) fn room_state_turn_id(room: &str) -> String {
@@ -197,29 +243,43 @@ pub(super) fn now_secs() -> i64 {
         .as_secs() as i64
 }
 
-pub(super) fn turn_fingerprint<'a>(
-    events: impl IntoIterator<Item = &'a MessageEvent>,
-    completed: bool,
-) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    for event in events {
-        event.id.hash(&mut hasher);
-        event.turn_id.hash(&mut hasher);
-        event.speaker.hash(&mut hasher);
-        event.agent_instance_id.hash(&mut hasher);
-        event.content.hash(&mut hasher);
-        event.error.hash(&mut hasher);
+/// Failed-reply ids and legacy identities of one turn, as stored in the turn
+/// row's metadata (`null` when there is nothing to record).
+fn encode_turn_flags(errors: &[String], legacy: &BTreeMap<String, String>) -> serde_json::Value {
+    if errors.is_empty() && legacy.is_empty() {
+        return serde_json::Value::Null;
     }
-    completed.hash(&mut hasher);
-    hasher.finish()
+    serde_json::json!({ "errors": errors, "legacy_agent_instance_ids": legacy })
 }
 
-pub(super) fn snapshot_fingerprint(snapshot: &RoomSnapshot) -> Result<u64> {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    serde_json::to_vec(snapshot)?.hash(&mut hasher);
-    Ok(hasher.finish())
+fn decode_turn_flags(metadata: &serde_json::Value) -> (Vec<String>, BTreeMap<String, String>) {
+    let errors = metadata
+        .get("errors")
+        .and_then(|value| serde_json::from_value(value.clone()).ok())
+        .unwrap_or_default();
+    let legacy = metadata
+        .get("legacy_agent_instance_ids")
+        .and_then(|value| serde_json::from_value(value.clone()).ok())
+        .unwrap_or_default();
+    (errors, legacy)
+}
+
+fn turn_flags_from_events(events: &[&MessageEvent]) -> serde_json::Value {
+    let errors: Vec<String> = events
+        .iter()
+        .filter(|event| event.error)
+        .map(|event| event.id.clone())
+        .collect();
+    let legacy: BTreeMap<String, String> = events
+        .iter()
+        .filter_map(|event| {
+            event
+                .legacy_agent_instance_id
+                .as_ref()
+                .map(|legacy_id| (event.id.clone(), legacy_id.clone()))
+        })
+        .collect();
+    encode_turn_flags(&errors, &legacy)
 }
 
 /// Groups events by turn id, preserving first-seen turn order.
@@ -273,14 +333,28 @@ pub(super) fn turn_messages(
         .collect()
 }
 
+/// Rooms whose parsed history is kept between turns.
+const CACHED_ROOMS: usize = 32;
+
+struct CachedRoom {
+    history: RoomHistory,
+    data_version: i64,
+    used: u64,
+}
+
 /// Canonical room history backed by the L7 SQLite archive. Legacy JSON room
 /// files are imported exactly once (id remapping preserves order), then
 /// removed so JSON never remains a second source of truth.
+///
+/// A turn persists only what it changes (the active turn's new messages, its
+/// completion, and the small state snapshot). The parsed history of recently
+/// used rooms is cached between turns and trusted only while SQLite's
+/// `data_version` shows no other connection or process has written since.
 pub struct SqliteContextStore {
     directory: PathBuf,
     memory: Arc<MemoryService>,
-    turn_fingerprints: std::sync::Mutex<HashMap<(String, String), u64>>,
-    snapshot_fingerprints: std::sync::Mutex<HashMap<String, u64>>,
+    cache: parking_lot::Mutex<HashMap<String, CachedRoom>>,
+    clock: std::sync::atomic::AtomicU64,
 }
 
 impl SqliteContextStore {
@@ -288,18 +362,9 @@ impl SqliteContextStore {
         Self {
             directory: directory.into(),
             memory,
-            turn_fingerprints: std::sync::Mutex::new(HashMap::new()),
-            snapshot_fingerprints: std::sync::Mutex::new(HashMap::new()),
+            cache: parking_lot::Mutex::new(HashMap::new()),
+            clock: std::sync::atomic::AtomicU64::new(0),
         }
-    }
-
-    fn lock_cache<'a, T>(
-        cache: &'a std::sync::Mutex<T>,
-        what: &str,
-    ) -> Result<std::sync::MutexGuard<'a, T>> {
-        cache
-            .lock()
-            .map_err(|_| anyhow::anyhow!("{what} cache lock poisoned"))
     }
 
     fn import_legacy(&self, room: &str, legacy: &RoomHistory) -> Result<()> {
@@ -345,7 +410,7 @@ impl SqliteContextStore {
                     } else {
                         None
                     },
-                    metadata: serde_json::Value::Null,
+                    metadata: turn_flags_from_events(events),
                     participants: turn_participants(events),
                     messages,
                 },
@@ -353,7 +418,7 @@ impl SqliteContextStore {
         }
         // Merge with any snapshot a previous partial attempt wrote: legacy
         // fills an empty baseline wholesale; otherwise newer fields win and
-        // the turn/error lists are unioned (legacy history is older).
+        // the maintenance log is unioned (legacy history is older).
         let existing = self
             .memory
             .archive_turn(&caller, room, &room_state_turn_id(room))?
@@ -361,81 +426,33 @@ impl SqliteContextStore {
             .transpose()
             .context("decoding existing snapshot during legacy import")?
             .unwrap_or_default();
-        let legacy_agent_instance_ids: HashMap<String, String> = remapped_events
-            .iter()
-            .filter_map(|event| {
-                event
-                    .legacy_agent_instance_id
-                    .as_ref()
-                    .map(|legacy_id| (event.id.clone(), legacy_id.clone()))
-            })
-            .collect();
-        let legacy_completed: Vec<String> = legacy
-            .completed_turns
-            .iter()
-            .map(|turn| legacy_turn_id(room, turn))
-            .collect();
-        let legacy_errors: Vec<String> = remapped_events
-            .iter()
-            .filter(|event| event.error)
-            .map(|event| event.id.clone())
-            .collect();
         let snapshot = if existing == RoomSnapshot::default() {
-            let mut snapshot = RoomSnapshot {
+            RoomSnapshot {
                 state: legacy.state.clone(),
                 summary: legacy.summary.clone(),
                 summarized_turn_count: legacy.summarized_turn_count,
-                completed_turns: legacy_completed,
-                error_message_ids: legacy_errors,
                 maintenance_errors: legacy.maintenance_errors.clone(),
-                legacy_agent_instance_ids,
-            };
-            snapshot
-                .legacy_agent_instance_ids
-                .extend(existing.legacy_agent_instance_ids);
-            snapshot
+                ..RoomSnapshot::default()
+            }
         } else {
-            let mut completed_turns = legacy_completed;
-            for turn in &existing.completed_turns {
-                if !completed_turns.contains(turn) {
-                    completed_turns.push(turn.clone());
-                }
-            }
-            let mut error_message_ids = legacy_errors;
-            for id in &existing.error_message_ids {
-                if !error_message_ids.contains(id) {
-                    error_message_ids.push(id.clone());
-                }
-            }
             let mut maintenance_errors = legacy.maintenance_errors.clone();
             for entry in &existing.maintenance_errors {
                 if !maintenance_errors.contains(entry) {
                     maintenance_errors.push(entry.clone());
                 }
             }
-            let mut legacy_agent_instance_ids = legacy_agent_instance_ids;
-            legacy_agent_instance_ids.extend(existing.legacy_agent_instance_ids);
             RoomSnapshot {
                 state: existing.state,
                 summary: existing.summary,
                 summarized_turn_count: existing.summarized_turn_count,
-                completed_turns,
-                error_message_ids,
                 maintenance_errors,
-                legacy_agent_instance_ids,
+                ..RoomSnapshot::default()
             }
         };
         self.write_snapshot(room, &snapshot)
     }
 
     fn write_snapshot(&self, room: &str, snapshot: &RoomSnapshot) -> Result<()> {
-        let fingerprint = snapshot_fingerprint(snapshot)?;
-        if Self::lock_cache(&self.snapshot_fingerprints, "snapshot")?
-            .get(room)
-            .is_some_and(|known| *known == fingerprint)
-        {
-            return Ok(());
-        }
         self.memory.append_archive_turn(
             &archive_caller(),
             ArchivedTurn {
@@ -447,63 +464,12 @@ impl SqliteContextStore {
                 participants: Vec::new(),
                 messages: Vec::new(),
             },
-        )?;
-        Self::lock_cache(&self.snapshot_fingerprints, "snapshot")?
-            .insert(room.to_owned(), fingerprint);
-        Ok(())
+        )
     }
 
-    fn prime_caches(&self, history: &RoomHistory) -> Result<()> {
-        let completed: HashSet<&str> = history.completed_turns.iter().map(String::as_str).collect();
-        let (order, grouped) = events_by_turn(&history.events);
-        let mut turn_cache = Self::lock_cache(&self.turn_fingerprints, "turn")?;
-        for turn_id in &order {
-            let events = grouped.get(turn_id).context("grouped turn disappeared")?;
-            turn_cache.insert(
-                (history.room_id.clone(), turn_id.clone()),
-                turn_fingerprint(events.iter().copied(), completed.contains(turn_id.as_str())),
-            );
-        }
-        drop(turn_cache);
-        let snapshot = snapshot_from_history(history)?;
-        Self::lock_cache(&self.snapshot_fingerprints, "snapshot")?
-            .insert(history.room_id.clone(), snapshot_fingerprint(&snapshot)?);
-        Ok(())
-    }
-}
-
-pub(super) fn snapshot_from_history(history: &RoomHistory) -> Result<RoomSnapshot> {
-    Ok(RoomSnapshot {
-        state: history.state.clone(),
-        summary: history.summary.clone(),
-        summarized_turn_count: history.summarized_turn_count,
-        completed_turns: history.completed_turns.clone(),
-        error_message_ids: history
-            .events
-            .iter()
-            .filter(|event| event.error)
-            .map(|event| event.id.clone())
-            .collect(),
-        maintenance_errors: history.maintenance_errors.clone(),
-        legacy_agent_instance_ids: history
-            .events
-            .iter()
-            .filter_map(|event| {
-                event
-                    .legacy_agent_instance_id
-                    .as_ref()
-                    .map(|legacy_id| (event.id.clone(), legacy_id.clone()))
-            })
-            .collect(),
-    })
-}
-
-impl ContextStore for SqliteContextStore {
-    fn directory(&self) -> &std::path::Path {
-        &self.directory
-    }
-
-    fn load_room(&self, room: &str) -> Result<RoomHistory> {
+    /// Read a room's complete history from SQLite, importing a legacy JSON
+    /// file and upgrading a pre-turn-metadata snapshot first when present.
+    fn load_from_database(&self, room: &str) -> Result<RoomHistory> {
         let legacy_store = JsonFileStore::new(&self.directory);
         let legacy_path = legacy_store.room_path(room);
         if legacy_path.exists() {
@@ -516,53 +482,214 @@ impl ContextStore for SqliteContextStore {
                 format!("removing migrated legacy history {}", legacy_path.display())
             })?;
         }
-        let snapshot = self
-            .memory
-            .archive_turn(&archive_caller(), room, &room_state_turn_id(room))?
-            .map(|turn| serde_json::from_value::<RoomSnapshot>(turn.metadata))
+        let caller = archive_caller();
+        let archive = self.memory.room_archive(&caller, room)?;
+        let state_id = room_state_turn_id(room);
+        let snapshot = archive
+            .turns
+            .iter()
+            .find(|turn| turn.id == state_id)
+            .map(|turn| serde_json::from_value::<RoomSnapshot>(turn.metadata.clone()))
             .transpose()
             .context("decoding room snapshot")?
             .unwrap_or_default();
-        let error_ids: HashSet<&str> = snapshot
-            .error_message_ids
-            .iter()
-            .map(String::as_str)
-            .collect();
-        let events = self
-            .memory
-            .recent_messages(&archive_caller(), room, usize::MAX)?
+
+        let mut errors: HashSet<String> = snapshot.error_message_ids.iter().cloned().collect();
+        let mut legacy_ids: HashMap<String, String> = snapshot.legacy_agent_instance_ids.clone();
+        for turn in archive.turns.iter().filter(|turn| turn.id != state_id) {
+            let (turn_errors, turn_legacy) = decode_turn_flags(&turn.metadata);
+            errors.extend(turn_errors);
+            legacy_ids.extend(turn_legacy);
+        }
+        if snapshot.has_pre_turn_metadata_lists() {
+            self.upgrade_snapshot(room, &archive, &snapshot)?;
+        }
+
+        let events = archive
+            .messages
             .into_iter()
             .map(|message| MessageEvent {
-                id: message.id.clone(),
-                turn_id: message.turn_id,
-                speaker: message.speaker.clone(),
                 agent_instance_id: if message.speaker == "user" {
                     None
                 } else {
-                    Some(crate::identity::AgentInstanceId::new(
-                        room,
-                        &message.speaker,
-                    ))
+                    Some(crate::identity::AgentInstanceId::new(room, &message.speaker))
                 },
-                legacy_agent_instance_id: snapshot
-                    .legacy_agent_instance_ids
-                    .get(&message.id)
-                    .cloned(),
+                legacy_agent_instance_id: legacy_ids.get(&message.id).cloned(),
+                error: errors.contains(&message.id),
+                id: message.id,
+                turn_id: message.turn_id,
+                speaker: message.speaker,
                 content: message.content,
-                error: error_ids.contains(message.id.as_str()),
             })
             .collect();
-        let history = RoomHistory {
+        Ok(RoomHistory {
             room_id: room.to_owned(),
             events,
             state: snapshot.state,
             summary: snapshot.summary,
-            completed_turns: snapshot.completed_turns,
+            completed_turns: archive
+                .turns
+                .iter()
+                .filter(|turn| turn.id != state_id && turn.completed_at.is_some())
+                .map(|turn| turn.id.clone())
+                .collect(),
             summarized_turn_count: snapshot.summarized_turn_count,
             maintenance_errors: snapshot.maintenance_errors,
+        })
+    }
+
+    /// Move the per-history lists of an older snapshot onto their turn rows
+    /// and rewrite the snapshot without them, so it is small from now on.
+    fn upgrade_snapshot(
+        &self,
+        room: &str,
+        archive: &RoomArchive,
+        snapshot: &RoomSnapshot,
+    ) -> Result<()> {
+        let turn_of: HashMap<&str, &str> = archive
+            .messages
+            .iter()
+            .map(|message| (message.id.as_str(), message.turn_id.as_str()))
+            .collect();
+        let mut errors: HashMap<&str, Vec<String>> = HashMap::new();
+        for id in &snapshot.error_message_ids {
+            if let Some(turn) = turn_of.get(id.as_str()) {
+                errors.entry(turn).or_default().push(id.clone());
+            }
+        }
+        let mut legacy: HashMap<&str, BTreeMap<String, String>> = HashMap::new();
+        for (id, legacy_id) in &snapshot.legacy_agent_instance_ids {
+            if let Some(turn) = turn_of.get(id.as_str()) {
+                legacy.entry(turn).or_default().insert(id.clone(), legacy_id.clone());
+            }
+        }
+        let mut appends = Vec::new();
+        for turn in errors.keys().chain(legacy.keys()).collect::<HashSet<_>>() {
+            let existing = archive.turns.iter().find(|candidate| candidate.id == **turn);
+            let (mut turn_errors, mut turn_legacy) = existing
+                .map(|existing| decode_turn_flags(&existing.metadata))
+                .unwrap_or_default();
+            for id in errors.get(*turn).into_iter().flatten() {
+                if !turn_errors.contains(id) {
+                    turn_errors.push(id.clone());
+                }
+            }
+            turn_legacy.extend(legacy.get(*turn).cloned().unwrap_or_default());
+            appends.push(TurnAppend {
+                room_id: room.to_owned(),
+                turn_id: (*turn).to_owned(),
+                started_at: now_secs(),
+                completed_at: None,
+                metadata: encode_turn_flags(&turn_errors, &turn_legacy),
+                participants: Vec::new(),
+                messages: Vec::new(),
+                state_turn: None,
+            });
+        }
+        if !appends.is_empty() {
+            self.memory.append_turns(&archive_caller(), appends)?;
+        }
+        self.write_snapshot(room, snapshot)
+    }
+}
+
+impl ContextStore for SqliteContextStore {
+    fn directory(&self) -> &std::path::Path {
+        &self.directory
+    }
+
+    fn load_room(&self, room: &str) -> Result<RoomHistory> {
+        self.load_from_database(room)
+    }
+
+    fn checkout(&self, room: &str) -> Result<RoomHistory> {
+        let version = self.memory.store().data_version()?;
+        if let Some(entry) = self.cache.lock().remove(room) {
+            if entry.data_version == version {
+                return Ok(entry.history);
+            }
+        }
+        self.load_from_database(room)
+    }
+
+    fn release(&self, room: &str, mut history: RoomHistory) {
+        // A reload never contains contentless events (they are not archived);
+        // drop them so a cached history is identical to a fresh one.
+        history.events.retain(|event| !event.content.trim().is_empty());
+        let Ok(data_version) = self.memory.store().data_version() else {
+            return;
         };
-        self.prime_caches(&history)?;
-        Ok(history)
+        let used = self.clock.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let mut cache = self.cache.lock();
+        if cache.len() >= CACHED_ROOMS && !cache.contains_key(room) {
+            if let Some(oldest) = cache
+                .iter()
+                .min_by_key(|(_, entry)| entry.used)
+                .map(|(key, _)| key.clone())
+            {
+                cache.remove(&oldest);
+            }
+        }
+        cache.insert(
+            room.to_owned(),
+            CachedRoom {
+                history,
+                data_version,
+                used,
+            },
+        );
+    }
+
+    fn save_changes(&self, room: &str, history: &RoomHistory, changes: &Changes<'_>) -> Result<()> {
+        if history.room_id != room {
+            bail!("cannot save room history under a different room identifier");
+        }
+        let snapshot = changes
+            .snapshot
+            .then(|| serde_json::to_value(snapshot_from_history(history)))
+            .transpose()?;
+        let Some(change) = &changes.turn else {
+            if let Some(snapshot) = snapshot {
+                self.memory.append_archive_turn(
+                    &archive_caller(),
+                    ArchivedTurn {
+                        id: room_state_turn_id(room),
+                        room_id: room.to_owned(),
+                        started_at: now_secs(),
+                        completed_at: None,
+                        metadata: snapshot,
+                        participants: Vec::new(),
+                        messages: Vec::new(),
+                    },
+                )?;
+            }
+            return Ok(());
+        };
+        let tail_start = history
+            .events
+            .iter()
+            .rposition(|event| event.turn_id != change.turn_id)
+            .map_or(0, |index| index + 1);
+        let turn_events: Vec<&MessageEvent> = history.events[tail_start..].iter().collect();
+        let first_new = change.events_from.max(tail_start) - tail_start;
+        let new_events = &turn_events[first_new.min(turn_events.len())..];
+        let started_at = turn_events
+            .first()
+            .map(|event| id_timestamp(&event.id))
+            .unwrap_or_else(|| id_timestamp(change.turn_id));
+        self.memory.append_turns(
+            &archive_caller(),
+            vec![TurnAppend {
+                room_id: room.to_owned(),
+                turn_id: change.turn_id.to_owned(),
+                started_at,
+                completed_at: change.completed.then(now_secs),
+                metadata: turn_flags_from_events(&turn_events),
+                participants: turn_participants(new_events),
+                messages: turn_messages(room, change.turn_id, new_events),
+                state_turn: snapshot.map(|snapshot| (room_state_turn_id(room), snapshot)),
+            }],
+        )
     }
 
     fn save_room(&self, room: &str, history: &RoomHistory) -> Result<()> {
@@ -571,38 +698,40 @@ impl ContextStore for SqliteContextStore {
         }
         let completed: HashSet<&str> = history.completed_turns.iter().map(String::as_str).collect();
         let (order, grouped) = events_by_turn(&history.events);
-        {
-            let mut cache = Self::lock_cache(&self.turn_fingerprints, "turn")?;
-            for turn_id in &order {
-                let events = grouped.get(turn_id).context("grouped turn disappeared")?;
-                let is_completed = completed.contains(turn_id.as_str());
-                let fingerprint = turn_fingerprint(events.iter().copied(), is_completed);
-                if cache
-                    .get(&(room.to_owned(), turn_id.clone()))
-                    .is_some_and(|known| *known == fingerprint)
-                {
-                    continue;
-                }
-                let messages = turn_messages(room, turn_id, events);
-                let started_at = messages
-                    .first()
-                    .map(|message| message.created_at)
-                    .unwrap_or_else(|| id_timestamp(turn_id));
-                self.memory.append_archive_turn(
-                    &archive_caller(),
-                    ArchivedTurn {
-                        id: turn_id.clone(),
-                        room_id: room.to_owned(),
-                        started_at,
-                        completed_at: if is_completed { Some(now_secs()) } else { None },
-                        metadata: serde_json::Value::Null,
-                        participants: turn_participants(events),
-                        messages,
+        for turn_id in &order {
+            let events = grouped.get(turn_id).context("grouped turn disappeared")?;
+            let messages = turn_messages(room, turn_id, events);
+            let started_at = messages
+                .first()
+                .map(|message| message.created_at)
+                .unwrap_or_else(|| id_timestamp(turn_id));
+            self.memory.append_archive_turn(
+                &archive_caller(),
+                ArchivedTurn {
+                    id: turn_id.clone(),
+                    room_id: room.to_owned(),
+                    started_at,
+                    completed_at: if completed.contains(turn_id.as_str()) {
+                        Some(now_secs())
+                    } else {
+                        None
                     },
-                )?;
-                cache.insert((room.to_owned(), turn_id.clone()), fingerprint);
-            }
+                    metadata: turn_flags_from_events(events),
+                    participants: turn_participants(events),
+                    messages,
+                },
+            )?;
         }
-        self.write_snapshot(room, &snapshot_from_history(history)?)
+        self.write_snapshot(room, &snapshot_from_history(history))
+    }
+}
+
+pub(super) fn snapshot_from_history(history: &RoomHistory) -> RoomSnapshot {
+    RoomSnapshot {
+        state: history.state.clone(),
+        summary: history.summary.clone(),
+        summarized_turn_count: history.summarized_turn_count,
+        maintenance_errors: history.maintenance_errors.clone(),
+        ..RoomSnapshot::default()
     }
 }

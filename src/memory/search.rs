@@ -2,23 +2,73 @@ use super::now;
 use anyhow::{bail, Result};
 
 use super::{Layer, MemoryRecord, MemoryStatus};
-pub(super) fn fts_query(query: &str) -> Result<String> {
+
+/// Most distinct terms sent to FTS5; longer questions keep their first terms.
+const MAX_QUERY_TERMS: usize = 16;
+
+/// Words that match most rows and carry no ranking signal.
+const STOPWORDS: &[&str] = &[
+    "a", "about", "an", "and", "any", "are", "as", "at", "be", "been", "but", "by", "can", "did",
+    "do", "does", "for", "from", "had", "has", "have", "how", "i", "if", "in", "is", "it", "its",
+    "me", "my", "of", "on", "or", "our", "that", "the", "their", "them", "then", "there", "these",
+    "this", "to", "was", "we", "were", "what", "when", "where", "which", "who", "why", "will",
+    "with", "would", "you", "your",
+];
+
+/// Distinct, lowercased, stopword-free query terms (capped), in query order.
+pub(super) fn fts_terms(query: &str) -> Result<Vec<String>> {
     if query.chars().count() > 512 {
         bail!("search query exceeds 512 characters");
     }
-    // OR-join every token so FTS5/bm25 can rank partial matches: a natural
-    // question such as "what websocket authentication do you know?" must still
-    // retrieve a record that only shares some of its terms, instead of
-    // requiring every token to be present.
-    Ok(query
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|x| !x.is_empty())
-        .map(|x| format!("\"{}\"", x.replace('"', "")))
-        .collect::<Vec<_>>()
-        .join(" OR "))
+    let mut all: Vec<String> = Vec::new();
+    for token in query.split(|c: char| !c.is_alphanumeric()).filter(|x| !x.is_empty()) {
+        let token = token.to_lowercase();
+        if !all.contains(&token) {
+            all.push(token);
+        }
+    }
+    // Drop stopwords unless nothing else is left, so a query made only of
+    // common words still behaves as before.
+    let informative: Vec<&String> = all
+        .iter()
+        .filter(|token| !STOPWORDS.contains(&token.as_str()))
+        .collect();
+    let chosen: Vec<&String> = if informative.is_empty() {
+        all.iter().collect()
+    } else {
+        informative
+    };
+    Ok(chosen.into_iter().take(MAX_QUERY_TERMS).cloned().collect())
 }
+
+/// OR-join every term so FTS5/bm25 can rank partial matches: a natural
+/// question such as "what websocket authentication do you know?" must still
+/// retrieve a record that only shares some of its terms, instead of
+/// requiring every token to be present.
+pub(super) fn fts_query(terms: &[String]) -> String {
+    terms
+        .iter()
+        .map(|token| format!("\"{token}\""))
+        .collect::<Vec<_>>()
+        .join(" OR ")
+}
+
+/// How many of `terms` occur as whole words in `text` (a cheap, bounded
+/// stand-in for bm25 over an already-limited candidate set).
+pub(super) fn matched_terms(terms: &[String], text: &str) -> usize {
+    let words: std::collections::HashSet<String> = text
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .map(str::to_lowercase)
+        .collect();
+    terms.iter().filter(|term| words.contains(term.as_str())).count()
+}
+
+/// `bm25` is negative and more negative means a stronger match. Map the
+/// strength monotonically into `[0, 1)` so bm25 ordering is never flattened.
 pub(super) fn rank_score(bm25: f64, r: &MemoryRecord) -> f64 {
-    let relevance = (-bm25 * 1_000_000.0).clamp(0.0, 1.0);
+    let strength = (-bm25).max(0.0);
+    let relevance = strength / (1.0 + strength);
     let age_days = ((now() - r.updated_at).max(0) as f64) / 86400.0;
     let recency = 1.0 / (1.0 + age_days / 30.0);
     let scope = match r.layer {

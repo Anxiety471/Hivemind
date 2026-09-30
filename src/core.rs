@@ -109,7 +109,13 @@ impl HivemindCore {
         let context_dir = data_dir.join("context");
         let config = Arc::new(config);
         let agents = AgentRegistry {
-            agents: Arc::new(config.ordered_agents().into_iter().cloned().collect()),
+            agents: Arc::new(
+                config
+                    .ordered_agents()
+                    .into_iter()
+                    .map(|agent| Arc::new(agent.clone()))
+                    .collect(),
+            ),
         };
         let events = EventBus::new();
         let conversation = ConversationCoordinator::new_with_events(
@@ -182,6 +188,7 @@ impl HivemindCore {
         &self,
         target: &ConversationTarget,
     ) -> std::result::Result<ResolvedConversationTarget, TargetResolutionError> {
+        let registry = self.agents();
         let config = self.config.read().expect("core config lock poisoned");
         let config = config.as_ref();
         Ok(match target {
@@ -190,13 +197,10 @@ impl HivemindCore {
                 room_name: "Main conversation".into(),
                 group_id: String::new(),
                 mode: ConversationMode::Broadcast,
-                participants: config
-                    .ordered_agents()
+                participants: registry
+                    .list()
                     .into_iter()
-                    .map(|agent| Participant {
-                        agent: agent.clone(),
-                        role: None,
-                    })
+                    .map(|agent| Participant { agent, role: None })
                     .collect(),
             },
             ConversationTarget::Solo { persona_id } => {
@@ -205,20 +209,16 @@ impl HivemindCore {
                         "persona id must not be empty".into(),
                     ));
                 }
-                let agent = config
-                    .agents
-                    .iter()
-                    .find(|agent| agent.name == *persona_id)
-                    .ok_or_else(|| {
-                        TargetResolutionError::NotFound(format!("unknown persona '{persona_id}'"))
-                    })?;
+                let agent = registry.get(persona_id).ok_or_else(|| {
+                    TargetResolutionError::NotFound(format!("unknown persona '{persona_id}'"))
+                })?;
                 ResolvedConversationTarget {
                     room_id: format!("solo-{persona_id}"),
                     room_name: format!("Solo: {persona_id}"),
                     group_id: String::new(),
                     mode: ConversationMode::Discussion,
                     participants: vec![Participant {
-                        agent: agent.clone(),
+                        agent,
                         role: None,
                     }],
                 }
@@ -249,9 +249,11 @@ impl HivemindCore {
                     mode: group.mode,
                     participants: members
                         .into_iter()
-                        .map(|agent| Participant {
-                            role: group.member_roles.get(&agent.name).cloned(),
-                            agent: agent.clone(),
+                        .filter_map(|agent| {
+                            Some(Participant {
+                                role: group.member_roles.get(&agent.name).cloned(),
+                                agent: registry.get(&agent.name)?,
+                            })
                         })
                         .collect(),
                 }
@@ -530,7 +532,7 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
         let mut stopped = 0;
         let mut shutting_down = 0;
         while let Ok(event) = events.try_recv() {
-            match event.payload {
+            match event.payload.clone() {
                 DomainEventKind::RuntimeStarted { agent_id, .. } => {
                     assert_eq!(agent_id, "Engineer");
                     started += 1;
@@ -608,7 +610,7 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
                 agent_instance_id,
                 reason,
                 ..
-            } = event.payload
+            } = event.payload.clone()
             {
                 rotated.push((agent_instance_id, reason));
             }
@@ -665,7 +667,7 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
         assert!(messages[1].contains("Participants:"), "{}", messages[1]);
         let mut failure_codes = Vec::new();
         while let Ok(event) = events.try_recv() {
-            if let DomainEventKind::RuntimeFailed { error_code, .. } = event.payload {
+            if let DomainEventKind::RuntimeFailed { error_code, .. } = event.payload.clone() {
                 failure_codes.push(error_code);
             }
         }
@@ -708,7 +710,7 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
         let mut failed = Vec::new();
         let mut stopped = Vec::new();
         while let Ok(event) = events.try_recv() {
-            match event.payload {
+            match event.payload.clone() {
                 DomainEventKind::RuntimeFailed { error_code, .. } => failed.push(error_code),
                 DomainEventKind::RuntimeStopped { reason, .. } => stopped.push(reason),
                 _ => {}
@@ -776,7 +778,7 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
         let mut shutdown_reasons = Vec::new();
         let mut shutdown_events = 0;
         while let Ok(event) = events.try_recv() {
-            match event.payload {
+            match event.payload.clone() {
                 DomainEventKind::RuntimeStopped { reason, .. } => shutdown_reasons.push(reason),
                 DomainEventKind::CoreShuttingDown => shutdown_events += 1,
                 _ => {}
@@ -950,7 +952,7 @@ while IFS= read -r request; do :; done
         while let Ok(event) = events.try_recv() {
             assert!(event.sequence > last_sequence, "sequence must increase");
             last_sequence = event.sequence;
-            let (kind, room_id, turn_id) = match event.payload {
+            let (kind, room_id, turn_id) = match event.payload.clone() {
                 DomainEventKind::TurnStarted { room_id, turn_id } => {
                     ("turn_started", room_id, turn_id)
                 }
@@ -1102,7 +1104,7 @@ while IFS= read -r request; do :; done
             .agents()
             .list()
             .into_iter()
-            .map(|agent| agent.name)
+            .map(|agent| agent.name.clone())
             .collect::<Vec<_>>();
         let expected = core
             .config()
@@ -1202,7 +1204,7 @@ done
         assert_eq!(replies[1].result.as_deref(), Ok("Engineer reply"));
         let mut completed = Vec::new();
         while let Ok(event) = events.try_recv() {
-            if let DomainEventKind::AgentReplyCompleted { agent_id, .. } = event.payload {
+            if let DomainEventKind::AgentReplyCompleted { agent_id, .. } = event.payload.clone() {
                 completed.push(agent_id);
             }
         }
@@ -1264,7 +1266,7 @@ done
         let mut stopped = Vec::new();
         let mut shutting_down = 0;
         while let Ok(event) = events.try_recv() {
-            match event.payload {
+            match event.payload.clone() {
                 DomainEventKind::RuntimeStarted { agent_id, .. } => started.push(agent_id),
                 DomainEventKind::RuntimeStopped { agent_id, .. } => stopped.push(agent_id),
                 DomainEventKind::CoreShuttingDown => shutting_down += 1,

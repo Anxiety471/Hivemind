@@ -146,7 +146,7 @@ pub(super) fn route_names(core: &HivemindCore, route: &Route) -> Result<Vec<Stri
     Ok(resolved
         .participants
         .into_iter()
-        .map(|participant| participant.agent.name)
+        .map(|participant| participant.agent.name.clone())
         .collect())
 }
 

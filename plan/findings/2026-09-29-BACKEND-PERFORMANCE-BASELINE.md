@@ -1,6 +1,6 @@
 # Findings — 2026-09-29 — Backend Performance Baseline
 
-Status: investigation in progress, stopped early on request. This file records measured facts, audit findings, and the remaining work needed to finish the efficiency plan. The final plan should go in `plan/2026-09-29/GOAL-2026-09-29-BACKEND-EFFICIENCY.md`, which does not exist yet.
+Status: investigation complete (2026-09-30). The plan is in `plan/2026-09-30/GOAL-2026-09-30-BACKEND-EFFICIENCY.md`. The 2026-09-30 follow-up measurements below supersede the ranked items and recommendations where they disagree.
 
 ## Method
 
@@ -194,20 +194,128 @@ Concurrency is *slower* than serial on tmpfs. All rooms serialize on one `std::s
    - Decide `panic="abort"` separately; it needs panic-isolation redesign first.
 7. **Cheap latency items.** `TCP_NODELAY`, `Arc<DomainEvent>` with serialize-once, `Arc<AgentConfig>`, and the room-dir/flock fixes.
 
-## Missing before the plan is complete
+## Follow-up measurements (2026-09-30, commit `d3d4a50`)
 
-- [ ] **Write the plan file** `plan/2026-09-29/GOAL-2026-09-29-BACKEND-EFFICIENCY.md` using the existing GOAL format (Objective, phases, Acceptance criteria, Non-goals), built from the order above.
-- [ ] **Turn the benchmark into a repeatable script**, for example `scripts/bench-backend.py` plus the fake Pi. Record the baseline JSON so every phase can be compared against it. The throwaway harness currently lives only in `/tmp/hmbench/fakepi.py` and in the eval session.
-- [ ] **Attribute the remaining ~38% of O(history) CPU** that is hidden by inlining. Re-sample with `-C force-frame-pointers=yes` and `debug=1`, or add temporary `Instant` spans around `load_room`, `refresh_summary`, `context_pack`, `turn_delta`, and `save_room`.
-- [ ] **Run `EXPLAIN QUERY PLAN`** for the `recent_messages`, archive FTS search, and FTS delete statements to confirm the full-scan claims (items 3 and 4 are code-read only).
-- [ ] **Measure memory-tool turns** (a fake runtime that emits a `hivemind-tool` block). Tool follow-ups rebuild the full pack up to 4 times; this is unmeasured.
-- [ ] **Measure group turn cost versus member count** (1, 3, 8) with long history. Save amplification is O(N) per turn, and the rewrite is O(N²).
-- [ ] **Benchmark WebSocket fan-out**: with 0/1/10/50 WS clients connected, measure turn latency and server CPU. Also verify the `TCP_NODELAY` effect.
-- [ ] **Capture real Pi/OMP stdio traces** to confirm usage fields (`message_end.message.usage`) and the `message_update` payload size before choosing the frame-parse and stats-probe fixes.
-- [ ] **Measure real-runtime rotation and stop latency** (the time the child takes to exit after stdin EOF) to size the detached-stop win.
-- [ ] **Measure CLI one-shot startup** (`hivemind ask`, `status`) with `tokio` multi-thread vs `current_thread`.
-- [ ] **Decide policy with the user**:
-  - `panic="abort"` (extra size win versus panic isolation);
-  - `opt-level="s"` (3.0 MB versus speed);
-  - the default `idle_timeout` and `max_live_sessions` values (memory versus cold-start latency, since a cold start costs 0.8–1.7 s).
-- [ ] **Clean up**: `~/.cache/hmbench`, the `/tmp/hmbench-*` dirs, and the build dirs `target/{prof,sz-lto,sz-abort,sz-s,sz-strip,sqlwal}` (several GB). Samply was installed to `~/.cargo/bin` but is unusable without `perf_event_paranoid<=1`.
+The repeatable harness is `scripts/bench-backend.py`, which embeds its own fake Pi and has the scenarios `solo`, `group`, `concurrency`, `tools`, and `ws`. Baseline JSON: `plan/findings/bench/2026-09-30-baseline-tmpfs.json` (solo 1000, group/tools 200) and `plan/findings/bench/2026-09-30-baseline-btrfs.json` (solo 500, group/tools 100).
+
+### O(history) attribution: `Instant` spans, tmpfs
+
+The spans were inclusive and added in a scratch worktree, not committed. Earlier profiling left about 38% of the time unattributed because of inlining; the spans account for it: it is `save_room` plus `load_room`.
+
+| Span (solo) | 50 turns | 500 turns | 1000 turns |
+|---|---|---|---|
+| `turn_internal` | 5.9 ms | 32.1 ms | 64.3 ms |
+| `mem.search` (2 calls) | 2.2 | 21.1 | **41.6** (65%) |
+| `save_room` (3.24 calls) | 1.6 | 6.4 | 11.7 (18%) |
+| `load_room` | 0.25 | 2.9 | 8.2 (13%), of which `recent_messages` is 6.4 |
+| `turn_fingerprint` calls | 107 | 2,015 | 4,135 |
+| `runtime.invoke` (fake) | 1.7 | 0.8 | 1.1 |
+
+Group turns at 200 history:
+
+- 8 members: `turn_internal` takes 327 ms. `mem.search` runs 16 times (275 ms, 84%), and `save_room` runs 10.2 times (43 ms).
+- 3 members: 60.7 ms in total, of which search is 47.9 ms.
+
+Every member searches the archive with the same query, so archive work scales as members × history.
+
+### `EXPLAIN QUERY PLAN` (2002-message DB): items 3 and 4 confirmed
+
+| Statement | Plan | Time |
+|---|---|---|
+| `DELETE FROM archive_fts WHERE id=?` | `SCAN archive_fts VIRTUAL TABLE INDEX 0:` | 0.85 ms (by rowid: 0.039 ms) |
+| `DELETE FROM archive_fts WHERE id IN (… turn_id=?)` | FTS scan plus `SCAN archive_messages` | 1.37 ms |
+| `DELETE FROM memory_fts WHERE id=?` | full FTS scan | — |
+| `archive_messages WHERE turn_id=?` (select and delete) | `SCAN archive_messages` | 0.148 ms (indexed: 0.028 ms) |
+| `recent_messages` | `archive_room_turn` index, plus a temp B-tree for the `id` tiebreak | — |
+| archive search | `SCAN archive_fts … M5`, with `a.room_id` filtered **after** the global match | — |
+
+Because the room filter is applied after a global match, archive search cost grows with every room's history. In the WS scenario, a 0-client control turn drifted from 6.6 to 9.8 ms CPU while other rooms grew.
+
+### Ranking bug: confirmed
+
+On real data, each OR query matched about 1000 of 2002 rows, and bm25 ranged from −11.3 to −2e−6. After `(-bm25*1e6).clamp(0,1)`, **0 hits were unsaturated**, so relevance is always 1.0 and results are ranked by recency and scope only.
+
+### Memory-tool turns (tmpfs, 200 history)
+
+| Tool calls per turn | Runtime prompts | CPU per turn | p90 |
+|---|---|---|---|
+| 0 | 1 | 13.2 ms | 16.4 ms |
+| 1 | 2 | 12.2 ms | 16.5 ms |
+| 4 | 5 | 18.0 ms | 43.0 ms |
+
+A tool follow-up costs about 1.2 ms CPU and does not rebuild the pack. On btrfs, 4 calls take p50 from 132 to 289 ms, because of the extra fsynced saves.
+
+### Group cost versus member count
+
+| Members | tmpfs CPU/turn @50 | tmpfs CPU/turn @200 | btrfs p50 @100 | btrfs CPU/turn @100 |
+|---|---|---|---|---|
+| 1 | 5.2 ms | 13.2 ms | 131 ms | 20.4 ms |
+| 3 | 15.6 ms | 59.8 ms | 236 ms | 55.2 ms |
+| 8 | 64.8 ms | **307.6 ms** | 654 ms | 208.6 ms |
+
+### Concurrency (8 rooms × 25 turns)
+
+| Filesystem | Serial | Concurrent |
+|---|---|---|
+| tmpfs | 182 turns/s, p50 5.5 ms | 101 turns/s, p50 77 ms |
+| btrfs | 5.3 turns/s, p50 165 ms | 5.6 turns/s, p50 **1268 ms** |
+
+### WebSocket fan-out and `TCP_NODELAY`
+
+Each client count ran in a fresh room at the same history, with a trailing 0-client control step.
+
+- **Fan-out cost (tmpfs):** CPU per turn was 6.6 / 8.6 / 14.2 / 25.6 ms for 0 / 1 / 10 / 50 clients, and 9.8 ms for the trailing 0-client control.
+- **Estimated overhead:** correcting for drift (about 0.8 ms per step), 50 clients cost about 16.6 ms CPU per turn, or about 0.08 ms per delivered frame (4.06 frames per client per turn).
+- **`TCP_NODELAY`:** in an A/B test (`ListenerExt::tap_io` + `set_nodelay`, 2–3 alternating runs), the difference was within run-to-run noise. The server binds to loopback only, so this item is dropped.
+
+### Real Pi/OMP stdio (2 prompts each; raw traces not kept)
+
+- **Usage fields:** the assistant `message_end.message.usage` carries `input`, `output`, `cacheRead`, `cacheWrite`, `totalTokens`, and `cost` on both runtimes. Non-assistant `message_end` frames have no usage.
+  - Pi: `get_session_stats.contextUsage.tokens` equals the last `totalTokens` exactly.
+  - OMP: it differs by about 5 tokens (14237 vs 14241).
+- **Round trips:** `get_session_stats` takes 0.14–1.35 ms, and OMP `get_last_assistant_text` takes 0.13–0.41 ms. Neither is worth removing; only the missing timeout matters.
+- **Frame sizes:**
+  - Pi prompt: 3–4 `message_update` frames, each ≤ 253 B.
+  - OMP's first prompt (which included tool calls): 24 `message_update` frames (49 KB, max 2.4 KB), plus a 19 KB `available_commands_update`.
+  - OMP's second prompt: about 5.6 KB of updates.
+
+  Header-first parsing would save only an estimated well under 1 ms per turn [INFERENCE], so it is dropped.
+- **Latency and memory:**
+  - Cold first frame: Pi 3.8 s. OMP `ready` arrives at 1.6 s, and its first frame 0.37 s after the prompt.
+  - Tree RSS after 2 prompts: Pi 173 MB, OMP 402 MB.
+
+### Stop and rotation latency
+
+A child exits after stdin EOF in 31.5 ms (Pi) and 113.7 ms (OMP). The 2 s grace period is only reached by a hung child. Detaching the stop on rotation would save at most about 0.1 s, against a 0.8–1.7 s cold start, so it is dropped.
+
+### CLI one-shot startup (median of 40 runs each)
+
+| Command | Multi-thread | `current_thread` |
+|---|---|---|
+| `--help` | 2.4 ms | 1.5 ms |
+| `status` | 2.5–2.6 ms | 1.5–1.6 ms |
+| `ask` (fake Pi) | 43–46 ms | 37–47 ms |
+
+`ask` is dominated by spawning the runtime. The difference is negligible, so this item is dropped.
+
+### Policy decisions (user, 2026-09-30)
+
+- WAL + `synchronous=NORMAL`.
+- Keep `panic = "unwind"`.
+- `opt-level = 3`.
+- No live-session cap; `idle_timeout_secs` stays at 120.
+
+## Checklist
+
+- [x] Plan file `plan/2026-09-30/GOAL-2026-09-30-BACKEND-EFFICIENCY.md`.
+- [x] Repeatable benchmark `scripts/bench-backend.py`, with baseline JSON in `plan/findings/bench/`.
+- [x] Remaining O(history) CPU attributed (spans).
+- [x] `EXPLAIN QUERY PLAN` for `recent_messages`, archive search, and the FTS deletes.
+- [x] Memory-tool turns measured.
+- [x] Group cost versus member count (1/3/8).
+- [x] WebSocket fan-out (0/1/10/50) and `TCP_NODELAY`.
+- [x] Real Pi/OMP stdio traces.
+- [x] Real-runtime stop latency.
+- [x] CLI startup, multi-thread versus `current_thread`.
+- [x] Policy decisions.
+- [x] Cleanup of benchmark scratch data, scratch build dirs, and the samply install.
