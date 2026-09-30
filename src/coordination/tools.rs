@@ -12,7 +12,7 @@ use super::{
     service::{ArtifactIn, CoordinationService, CreateGroup, Delegate, ResultIn, SendMessage, ToolCtx},
     store::TaskFilter,
 };
-use crate::conversation::ToolHost;
+use crate::{access::Audit, conversation::ToolHost};
 
 /// Coordination actions an agent may take before a plain-text answer is required.
 const MAX_ACTIONS: usize = 24;
@@ -20,13 +20,20 @@ const MAX_OUTPUT: usize = 3500;
 
 pub struct CoordinationTools {
     service: Arc<CoordinationService>,
+    audit: Arc<Audit>,
 }
 
 impl CoordinationTools {
-    pub fn new(service: Arc<CoordinationService>) -> Self {
-        Self { service }
+    pub fn new(service: Arc<CoordinationService>, audit: Arc<Audit>) -> Self {
+        Self { service, audit }
     }
 }
+
+/// Tools whose authorization is recorded in the access audit log.
+const AUDITED: &[&str] = &[
+    "tasks.plan.propose", "tasks.delegate", "tasks.decide", "tasks.result.submit", "tasks.review", "tasks.block",
+    "groups.create", "groups.members.update",
+];
 
 const COMMON: &[&str] = &[
     "agents.list", "messages.send", "messages.inbox", "messages.ack", "tasks.get", "tasks.list", "tasks.progress", "artifacts.get", "context.lookup",
@@ -38,20 +45,27 @@ fn allowed(service: &CoordinationService, ctx: &ToolCtx) -> Vec<&'static str> {
     let persona = service.roster().get(&ctx.persona);
     let can = |permission: &str| persona.is_some_and(|p| p.has_permission(permission));
     let coordinator = service.store().read(|db| Ok(db.task_or_err(&ctx.root_id)?.coordinator == ctx.persona)).unwrap_or(false);
-    let manages = can("coordinate") || can("delegate") || coordinator;
+    // `coordinate` implies `delegate`, `group.manage`, and `task.reassign` (see access::IMPLIES).
+    let delegating = can("delegate") || can("task.reassign") || coordinator;
+    let grouping = can("group.manage") || coordinator;
     match ctx.kind {
         AttemptKind::Plan => names.extend(["tasks.plan.propose", "tasks.block", "tasks.decide"]),
         AttemptKind::Work => names.extend(["tasks.result.submit", "tasks.block"]),
         AttemptKind::Review => names.extend(["tasks.review"]),
         AttemptKind::Inbox => {}
     }
-    if manages && ctx.kind != AttemptKind::Review {
-        names.extend(["tasks.delegate", "groups.create", "groups.get", "groups.members.update"]);
+    if ctx.kind != AttemptKind::Review {
+        if delegating {
+            names.push("tasks.delegate");
+        }
+        if grouping {
+            names.extend(["groups.create", "groups.get", "groups.members.update"]);
+        }
     }
-    if (coordinator || can("review")) && matches!(ctx.kind, AttemptKind::Review | AttemptKind::Inbox) {
+    if (coordinator || can("task.decide")) && matches!(ctx.kind, AttemptKind::Review | AttemptKind::Inbox) {
         names.push("tasks.decide");
     }
-    if manages && ctx.kind == AttemptKind::Review {
+    if grouping && ctx.kind == AttemptKind::Review {
         names.extend(["groups.get"]);
     }
     names.sort_unstable();
@@ -134,10 +148,24 @@ impl ToolHost for CoordinationTools {
             .bind(room, persona)
             .map_err(|e| anyhow::anyhow!("{e}"))?
             .context("coordination tools are only available during a task attempt")?;
+        let audited = AUDITED.contains(&name);
+        let permission = crate::access::coordination_permission(name, args).unwrap_or("");
+        let resource = format!("task:{}", ctx.task_id);
         if !allowed(&self.service, &ctx).contains(&name) {
+            if audited {
+                self.audit.record(persona, permission, name, &resource, false, &format!("tool not available to a {} attempt", ctx.kind.as_str()));
+            }
             bail!("tool '{name}' is not available to you in this attempt");
         }
-        run(&self.service, &ctx, name, args).map_err(|e| anyhow::anyhow!("{e}"))
+        let result = run(&self.service, &ctx, name, args);
+        if audited {
+            match &result {
+                Ok(_) => self.audit.record(persona, permission, name, &resource, true, "authorized"),
+                Err(CoordError::Forbidden(reason)) => self.audit.record(persona, permission, name, &resource, false, reason),
+                Err(error) => self.audit.record(persona, permission, name, &resource, true, &format!("authorized; failed: {error}")),
+            }
+        }
+        result.map_err(|e| anyhow::anyhow!("{e}"))
     }
 }
 

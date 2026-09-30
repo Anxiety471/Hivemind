@@ -35,6 +35,7 @@ pub struct HivemindCore {
     config_path: PathBuf,
     data_dir: PathBuf,
     coordination: Arc<CoordinationService>,
+    access: Arc<crate::access::AccessPolicy>,
     workspaces: Arc<SharedWorkspaces>,
     shutting_down: AtomicBool,
     shutdown_lock: tokio::sync::Mutex<()>,
@@ -145,6 +146,12 @@ impl HivemindCore {
             memory.clone(),
             events.clone(),
         ));
+        let audit = Arc::new(
+            crate::access::Audit::open(data_dir.join("access.sqlite3"))
+                .context("opening access audit log")?,
+        );
+        let access = Arc::new(crate::access::AccessPolicy::from_config(&config, audit.clone()));
+        conversation.set_access(access.clone());
         let coordination_store = if config.coordination.enabled {
             CoordinationStore::open(data_dir.join("coordination.sqlite3"))
         } else {
@@ -160,7 +167,7 @@ impl HivemindCore {
         let workspaces = Arc::new(SharedWorkspaces::new(&config_path, &config));
         let mut hosts: Vec<Arc<dyn crate::conversation::ToolHost>> = vec![Arc::new(WorkspaceTools::new(workspaces.clone()))];
         if config.coordination.enabled {
-            hosts.push(Arc::new(CoordinationTools::new(coordination.clone())));
+            hosts.push(Arc::new(CoordinationTools::new(coordination.clone(), audit.clone())));
         }
         conversation.set_tools(Arc::new(ToolHosts(hosts)));
         events.publish(DomainEventKind::CoreStarted);
@@ -174,6 +181,7 @@ impl HivemindCore {
             config_path,
             data_dir,
             coordination,
+            access,
             workspaces,
             shutting_down: AtomicBool::new(false),
             shutdown_lock: tokio::sync::Mutex::new(()),
@@ -213,6 +221,9 @@ impl HivemindCore {
     }
     pub fn coordination(&self) -> &Arc<CoordinationService> {
         &self.coordination
+    }
+    pub fn access(&self) -> &Arc<crate::access::AccessPolicy> {
+        &self.access
     }
     pub fn data_dir(&self) -> &Path {
         &self.data_dir

@@ -37,6 +37,8 @@ pub(super) fn routes() -> Router<ApiState> {
         .route("/api/v1/groups", post(create_group))
         .route("/api/v1/groups/{id}", get(group))
         .route("/api/v1/events", get(events))
+        .route("/api/v1/access/personas", get(access_personas))
+        .route("/api/v1/access/audit", get(access_audit))
 }
 
 fn coord_error(error: CoordError) -> Response {
@@ -240,6 +242,24 @@ async fn agent(State(state): State<ApiState>, Path(id): Path<String>) -> Respons
     Json(json!({"id": persona.name, "capabilities": persona.capabilities, "permissions": persona.permissions, "activity": activity})).into_response()
 }
 
+async fn access_personas(State(state): State<ApiState>) -> Response {
+    let personas: Vec<_> = state.core.access().all().into_iter().map(|(id, grants)| json!({"id": id, "roles": grants.roles, "permissions": grants.permissions, "restricted": grants.restricted})).collect();
+    Json(json!({"personas": personas})).into_response()
+}
+
+async fn access_audit(State(state): State<ApiState>, RawQuery(raw): RawQuery) -> Response {
+    let params = query(raw);
+    let limit = match number(&params, "limit", 50) {
+        Ok(v) => v.clamp(1, 1000) as usize,
+        Err(response) => return response.into_response(),
+    };
+    let filter = crate::access::AuditFilter { persona: params.get("persona").cloned(), denied_only: params.get("denied").map(String::as_str) == Some("true"), limit };
+    match state.core.access().audit().list(&filter) {
+        Ok(entries) => Json(json!({"entries": entries})).into_response(),
+        Err(error) => ApiError::owned(StatusCode::INTERNAL_SERVER_ERROR, "internal", format!("reading audit log: {error}")).into_response(),
+    }
+}
+
 async fn instances(State(state): State<ApiState>) -> Response {
     let service = state.core.coordination();
     match service.activity() {
@@ -377,6 +397,7 @@ mod tests {
                 role: None,
                 capabilities: caps.iter().map(|c| c.to_string()).collect(),
                 permissions: perms.iter().map(|c| c.to_string()).collect(),
+                roles: Vec::new(),
             };
             config.agents = vec![persona("Lead", &[], &["coordinate", "review"]), persona("Back", &["backend"], &[])];
             config.conversation.reply_order.clear();
@@ -418,6 +439,26 @@ mod tests {
         let (status, body) = fixture.call("GET", "/api/v1/agent-instances", None).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["agents"].as_array().unwrap().len(), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn access_endpoints_expose_effective_grants_and_the_filtered_audit_log() {
+        let fixture = Fixture::new(false);
+        let (status, body) = fixture.call("GET", "/api/v1/access/personas", None).await;
+        assert_eq!(status, StatusCode::OK);
+        let lead = body["personas"].as_array().unwrap().iter().find(|p| p["id"] == "Lead").unwrap().clone();
+        assert!(lead["permissions"].as_array().unwrap().iter().any(|p| p == "task.decide"), "review implies task.decide: {lead}");
+        assert_eq!(lead["restricted"], false);
+
+        fixture.core.access().audit().record("Back", "memory.archive", "memory.archive", "room:r", false, "roles [worker] lack 'memory.archive'");
+        fixture.core.access().audit().record("Lead", "group.manage", "groups.create", "task:t", true, "authorized");
+        let (_, denied) = fixture.call("GET", "/api/v1/access/audit?denied=true", None).await;
+        assert_eq!(denied["entries"].as_array().unwrap().len(), 1);
+        assert_eq!(denied["entries"][0]["persona"], "Back");
+        let (_, lead_only) = fixture.call("GET", "/api/v1/access/audit?persona=Lead&limit=5", None).await;
+        assert_eq!(lead_only["entries"][0]["allowed"], true);
+        let (status, _) = fixture.call("GET", "/api/v1/access/audit?limit=x", None).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test(flavor = "multi_thread")]

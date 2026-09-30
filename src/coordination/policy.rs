@@ -50,7 +50,7 @@ impl Roster {
                 .map(|(order, agent)| Persona {
                     name: agent.name.clone(),
                     capabilities: agent.capabilities.iter().map(|t| normalize_tag(t)).collect(),
-                    permissions: agent.permissions.clone(),
+                    permissions: crate::access::resolve(agent, &config.roles).permissions,
                     workspace: normalize_workspace(&agent.workspace),
                     order,
                 })

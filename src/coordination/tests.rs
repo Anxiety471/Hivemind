@@ -27,6 +27,7 @@ pub(super) fn persona(name: &str, caps: &[&str], perms: &[&str], workspace: &str
         role: None,
         capabilities: caps.iter().map(|c| c.to_string()).collect(),
         permissions: perms.iter().map(|c| c.to_string()).collect(),
+        roles: Vec::new(),
     }
 }
 
@@ -421,7 +422,7 @@ fn coordination_tools_are_bounded_by_role_and_never_take_identity_from_arguments
     use crate::conversation::ToolHost;
     let service = service();
     let (_root, _lead) = team_in_root(&service);
-    let host = CoordinationTools::new(service.clone());
+    let host = CoordinationTools::new(service.clone(), std::sync::Arc::new(crate::access::Audit::in_memory().unwrap()));
     let room = |id: &str| task_room(id);
     let running = service.store().read(|db| db.running_attempts(None)).unwrap();
     let plan_room = room(&running[0].task_id);
@@ -532,7 +533,7 @@ fn task_prompts_stay_bounded_scoped_and_never_clip_mandatory_content() {
     assert!(many <= budget && many < few + 400, "{few} vs {many}");
 
     // The early contract stays recoverable by exact reference, whatever the pack dropped.
-    let host = CoordinationTools::new(service.clone());
+    let host = CoordinationTools::new(service.clone(), std::sync::Arc::new(crate::access::Audit::in_memory().unwrap()));
     let found = host.execute(&task_room(&api), "Back", "context.lookup", &json!({"kind": "message", "id": dropped})).unwrap();
     assert!(found.contains("EARLY-CONTRACT"), "{found}");
     let denied = host.execute(&task_room(&api), "Back", "context.lookup", &json!({"kind": "task", "id": other_root}));
@@ -543,4 +544,70 @@ fn task_prompts_stay_bounded_scoped_and_never_clip_mandatory_content() {
     let plan_dispatch = claim(&service).into_iter().find(|d| d.task.id == big.task.id).unwrap();
     assert!(build_prompt(&service, &plan_dispatch, 4000).unwrap().is_err());
     let _ = root;
+}
+
+#[test]
+fn group_and_reassign_tools_follow_permissions_and_roles_not_prose() {
+    use crate::conversation::ToolHost;
+    let offered = |perms: &[&str], roles: &[&str]| {
+        let mut config = team_config(".");
+        config.agents[2].permissions = perms.iter().map(|p| p.to_string()).collect();
+        config.agents[2].roles = roles.iter().map(|r| r.to_string()).collect();
+        let (service, _) = service_with(&config);
+        planned(&service);
+        let work = claim(&service);
+        assert_eq!(work[0].attempt.persona, "Back");
+        let host = CoordinationTools::new(service.clone(), Arc::new(crate::access::Audit::in_memory().unwrap()));
+        let manifest = host.manifest(&task_room(&work[0].task.id), "Back").unwrap();
+        let groups = manifest.contains("groups.create") && manifest.contains("groups.members.update");
+        let delegate = manifest.contains("tasks.delegate");
+        let created = service.create_group(&ctx(&service, &work[0]), CreateGroup { purpose: "x".into(), roles: vec!["frontend".into()], members: vec![] });
+        (groups, delegate, created.is_ok())
+    };
+    assert_eq!(offered(&[], &[]), (false, false, false), "a plain worker manages nothing");
+    assert_eq!(offered(&["group.manage"], &[]), (true, false, true), "group.manage alone opens groups only");
+    assert_eq!(offered(&["task.reassign"], &[]), (false, true, false), "task.reassign alone offers delegation, not groups");
+    assert_eq!(offered(&["delegate"], &[]), (true, true, true), "delegate implies group.manage and task.reassign");
+    assert_eq!(offered(&[], &["coordinator"]), (true, true, true), "roles grant what direct permissions grant");
+    assert_eq!(offered(&[], &["worker"]), (false, false, false), "a role without coordination permissions grants none");
+}
+
+#[test]
+fn reassigning_cannot_make_the_owner_its_own_reviewer() {
+    let mut config = team_config(".");
+    config.agents[1] = persona("Front", &["frontend", "backend"], &["review"], ".");
+    let (service, _) = service_with(&config);
+    let (_root, lead) = team_in_root(&service);
+    let mut api = task("api", &["backend"], &[]);
+    api.owner = Some("Back".into());
+    api.reviewer = Some("Front".into());
+    let ids = service.propose_plan(&lead, &Plan { tasks: vec![api] }, None).unwrap();
+    let api_id = &ids[0].1;
+
+    let error = service.reassign(&lead, api_id, "Front", None).unwrap_err();
+    assert!(matches!(error, CoordError::Forbidden(_)) && error.to_string().contains("reviewer"), "{error}");
+    assert_eq!(service.detail(api_id).unwrap().task.owner.as_deref(), Some("Back"), "the failed reassignment changed nothing");
+    service.reassign(&lead, api_id, "Integrator", None).unwrap();
+    assert_eq!(service.detail(api_id).unwrap().task.owner.as_deref(), Some("Integrator"));
+}
+
+#[test]
+fn gated_coordination_decisions_are_audited_with_the_bound_identity() {
+    use crate::{access::AuditFilter, conversation::ToolHost};
+    let service = service();
+    let (_root, _lead) = team_in_root(&service);
+    let audit = Arc::new(crate::access::Audit::in_memory().unwrap());
+    let host = CoordinationTools::new(service.clone(), audit.clone());
+    let running = service.store().read(|db| db.running_attempts(None)).unwrap();
+    let plan_room = task_room(&running[0].task_id);
+
+    assert!(host.execute(&plan_room, "Lead", "tasks.review", &json!({"verdict": "approve"})).is_err());
+    host.execute(&plan_room, "Lead", "groups.create", &json!({"purpose": "contract", "roles": ["frontend"]})).unwrap();
+    host.execute(&plan_room, "Lead", "messages.inbox", &json!({})).unwrap();
+
+    let entries = audit.list(&AuditFilter { limit: 10, ..Default::default() }).unwrap();
+    assert_eq!(entries.len(), 2, "the ungated inbox read leaves no record: {entries:?}");
+    assert_eq!((entries[0].action.as_str(), entries[0].permission.as_str(), entries[0].allowed), ("groups.create", "group.manage", true));
+    assert_eq!((entries[1].action.as_str(), entries[1].allowed), ("tasks.review", false));
+    assert!(entries.iter().all(|e| e.persona == "Lead" && e.resource.starts_with("task:")));
 }

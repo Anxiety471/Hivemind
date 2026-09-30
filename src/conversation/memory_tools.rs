@@ -543,6 +543,7 @@ pub(super) async fn invoke_with_memory(
     memory: &MemoryService,
     authorized_global: Option<&str>,
     host: Option<&dyn ToolHost>,
+    access: Option<&crate::access::AccessPolicy>,
 ) -> Result<String> {
     let mut exchange: Vec<(String, String)> = Vec::new();
     let mut last = invoker
@@ -578,7 +579,9 @@ pub(super) async fn invoke_with_memory(
                     .unwrap_or_else(|_| call.name.clone());
                 let executed = match host.filter(|host| host.handles(&call.name)) {
                     Some(host) => host.execute(&caller.room_id, &caller.persona_id, &call.name, &call.args),
-                    None => execute_with_optional_authorization(memory, caller, authorized_global, &call),
+                    None => access
+                        .map_or(Ok(()), |access| access.authorize_memory(&caller.persona_id, &caller.room_id, &call.name))
+                        .and_then(|()| execute_with_optional_authorization(memory, caller, authorized_global, &call)),
                 };
                 match executed
                 {

@@ -1,4 +1,8 @@
-use std::{collections::HashSet, fs, path::Path};
+use std::{
+    collections::{BTreeMap, HashSet},
+    fs,
+    path::Path,
+};
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -19,9 +23,19 @@ pub struct HivemindConfig {
     pub memory: MemoryConfig,
     #[serde(default)]
     pub coordination: CoordinationConfig,
+    /// Custom roles: named bundles of permissions (see `access::PERMISSIONS`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub roles: BTreeMap<String, RoleConfig>,
     /// Limits where agents may point a workspace; a user-written path is never checked.
     #[serde(default, skip_serializing_if = "WorkspacesConfig::is_default")]
     pub workspaces: WorkspacesConfig,
+}
+
+/// A custom role. Built-in role names are reserved.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct RoleConfig {
+    #[serde(default)]
+    pub permissions: Vec<String>,
 }
 
 /// Agent-driven workspace changes (`workspace.set`, `workspace.list`).
@@ -61,10 +75,6 @@ impl CoordinationConfig {
         Ok(())
     }
 }
-
-/// Permissions a persona may be granted for autonomous coordination. A role
-/// string is descriptive only; nothing here is inferred from it.
-pub const COORDINATION_PERMISSIONS: &[&str] = &["coordinate", "delegate", "review", "integrate"];
 
 /// Autonomous task coordination. Off by default: existing configurations
 /// keep their exact behavior until `enabled = true`.
@@ -290,9 +300,12 @@ pub struct AgentConfig {
     /// text elsewhere; only these tags participate in matching.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub capabilities: Vec<String>,
-    /// Coordination permissions (`coordinate`, `delegate`, `review`, `integrate`).
+    /// Direct permission grants (`access::PERMISSIONS`), added to those of `roles`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub permissions: Vec<String>,
+    /// Roles granting permissions. Declaring any makes gated memory tools deny-by-default.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub roles: Vec<String>,
 }
 impl HivemindConfig {
     pub fn load(path: &Path) -> Result<Self> {
@@ -366,15 +379,11 @@ impl HivemindConfig {
             }
         }
         for persona in &self.agents {
-            for permission in &persona.permissions {
-                if !COORDINATION_PERMISSIONS.contains(&permission.as_str()) {
-                    bail!("persona '{}' has unknown permission '{permission}'; allowed: {}", persona.name, COORDINATION_PERMISSIONS.join(", "));
-                }
-            }
             if persona.capabilities.iter().any(|tag| tag.trim().is_empty() || tag.len() > 64) {
                 bail!("persona '{}' has an empty or overlong capability tag", persona.name);
             }
         }
+        crate::access::validate(self)?;
         self.coordination.validate(&self.agents)?;
         let mut group_names = HashSet::with_capacity(self.groups.len());
         for group in &self.groups {
@@ -494,6 +503,7 @@ impl HivemindConfig {
             context: ContextConfig::default(),
             memory: MemoryConfig::default(),
             coordination: CoordinationConfig::default(),
+            roles: BTreeMap::new(),
             workspaces: WorkspacesConfig::default(),
             groups: Vec::new(),
             agents: vec![
@@ -513,6 +523,7 @@ impl HivemindConfig {
                     role: Some("Software Engineer".into()),
                     capabilities: Vec::new(),
                     permissions: Vec::new(),
+                    roles: Vec::new(),
                 },
                 AgentConfig {
                     name: "Reviewer".into(),
@@ -530,6 +541,7 @@ impl HivemindConfig {
                     role: Some("Reviewer".into()),
                     capabilities: Vec::new(),
                     permissions: Vec::new(),
+                    roles: Vec::new(),
                 },
             ],
         }

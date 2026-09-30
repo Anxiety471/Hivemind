@@ -44,7 +44,7 @@ permissions = ["integrate"]
 ```
 
 - `capabilities` are skill tags used only for matching. A `role` string is descriptive; nothing is inferred from it.
-- `permissions` (`coordinate`, `delegate`, `review`, `integrate`) are the only source of authority. A group role override never grants any.
+- `permissions` and `roles` are the only source of authority (see [access-control.md](access-control.md) for the permission list, built-in roles, and audit log). A group role override never grants any.
 - Eligibility also requires the same `workspace` as the task (the project boundary). Personas in another workspace cannot be messaged, grouped, or assigned.
 - There is no separate classifier model. `coordination.planner` names the planning persona; without it the best-ranked persona holding `coordinate` plans. A structured plan (`--plan-file` / `plan` in the API) skips model planning entirely.
 

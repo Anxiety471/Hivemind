@@ -18,6 +18,7 @@ pub struct ConversationCoordinator {
     events: Option<crate::events::EventBus>,
     lock_dir: std::sync::OnceLock<PathBuf>,
     tools: std::sync::OnceLock<Arc<dyn ToolHost>>,
+    access: std::sync::OnceLock<Arc<crate::access::AccessPolicy>>,
 }
 
 pub(super) struct PackRequest<'a> {
@@ -87,6 +88,7 @@ impl ConversationCoordinator {
             events,
             lock_dir: std::sync::OnceLock::new(),
             tools: std::sync::OnceLock::new(),
+            access: std::sync::OnceLock::new(),
         }
     }
     #[cfg(test)]
@@ -102,11 +104,16 @@ impl ConversationCoordinator {
             events: None,
             lock_dir: std::sync::OnceLock::new(),
             tools: std::sync::OnceLock::new(),
+            access: std::sync::OnceLock::new(),
         }
     }
     /// Install the extra tool surface offered beside memory tools. Set once at startup.
     pub fn set_tools(&self, host: Arc<dyn ToolHost>) {
         let _ = self.tools.set(host);
+    }
+    /// Install the persona access policy that gates memory writes. Set once at startup.
+    pub fn set_access(&self, policy: Arc<crate::access::AccessPolicy>) {
+        let _ = self.access.set(policy);
     }
     /// The shared memory service this coordinator executes tool calls against.
     #[cfg(test)]
@@ -185,6 +192,7 @@ impl ConversationCoordinator {
         // Explicit structured directive from the raw user input only; may
         // authorize exactly one exact-content global proposal this turn.
         let host = self.tools.get().cloned();
+        let access = self.access.get().cloned();
         let agent_input = host.as_ref().is_some_and(|host| host.agent_originated(room));
         let authorized_global = if agent_input { None } else { authorized_global_directive(input) };
         // Archive hits depend only on the room and the input, so one search
@@ -270,6 +278,7 @@ impl ConversationCoordinator {
                     let memory = self.memory.clone();
                     let authorized_global = authorized_global.clone();
                     let host = host.clone();
+                    let access = access.clone();
                     let task_name = name.clone();
                     let handle = jobs.spawn(async move {
                         let MemberPrompt { pack, delta, view } = prompt;
@@ -287,6 +296,7 @@ impl ConversationCoordinator {
                             &memory,
                             authorized_global.as_deref(),
                             host.as_deref(),
+                            access.as_deref(),
                         )
                         .await
                         .map_err(|e| format!("{e:#}"));
@@ -405,6 +415,7 @@ impl ConversationCoordinator {
                             &self.memory,
                             authorized_global.as_deref(),
                             host.as_deref(),
+                            access.as_deref(),
                         )
                         .await
                         .map_err(|e| format!("{e:#}")),

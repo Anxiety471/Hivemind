@@ -866,7 +866,7 @@ impl CoordinationService {
         let id = self.store.write(|db| {
             let root = db.task_or_err(&task.root_id)?;
             let persona = self.roster.get(&ctx.persona).ok_or_else(|| CoordError::Forbidden("unknown persona".into()))?;
-            if !(persona.has_permission("delegate") || persona.has_permission("coordinate") || root.coordinator == ctx.persona) {
+            if !(persona.has_permission("delegate") || root.coordinator == ctx.persona) {
                 return forbid(format!("persona '{}' lacks the 'delegate' permission", ctx.persona));
             }
             if root.status.is_terminal() || root.status == TaskStatus::Blocked {
@@ -911,8 +911,8 @@ impl CoordinationService {
             }
             let root = db.task_or_err(&task.root_id)?;
             let persona = self.roster.get(&ctx.persona).ok_or_else(|| CoordError::Forbidden("unknown persona".into()))?;
-            if !(persona.has_permission("delegate") || persona.has_permission("coordinate") || root.coordinator == ctx.persona) {
-                return forbid(format!("persona '{}' lacks the 'delegate' permission", ctx.persona));
+            if !(persona.has_permission("task.reassign") || root.coordinator == ctx.persona) {
+                return forbid(format!("persona '{}' lacks the 'task.reassign' permission", ctx.persona));
             }
             if let Some(expected) = expected_revision {
                 if expected != task.revision {
@@ -931,6 +931,10 @@ impl CoordinationService {
             }
             if task.kind == TaskKind::Integrate && !new_owner.has_permission("integrate") {
                 return forbid(format!("persona '{owner}' lacks the 'integrate' permission"));
+            }
+            let reviewer = task.reviewer.clone().filter(|r| !r.is_empty()).unwrap_or_else(|| root.coordinator.clone());
+            if task.id != task.root_id && self.roster.personas().len() > 1 && reviewer == owner {
+                return forbid(format!("persona '{owner}' is the reviewer of this task and cannot also own it"));
             }
             db.set_owner(target, owner, None)?;
             db.event(&task.root_id, Some(target), &ctx.persona, "task.reassigned", serde_json::json!({"from": task.owner, "to": owner}))?;
@@ -1024,6 +1028,9 @@ impl CoordinationService {
         if ctx.persona != expected {
             return forbid(format!("only '{expected}' may review this task"));
         }
+        if task.id != task.root_id && self.roster.personas().len() > 1 && task.owner.as_deref() == Some(ctx.persona.as_str()) {
+            return forbid("an owner cannot review its own task");
+        }
         if task.status != TaskStatus::Review {
             return conflict(format!("task is {}, not awaiting review", task.status.as_str()));
         }
@@ -1107,7 +1114,7 @@ impl CoordinationService {
             }
             let root = db.task_or_err(&task.root_id)?;
             let persona = self.roster.get(&ctx.persona);
-            if root.coordinator != ctx.persona && !persona.is_some_and(|p| p.has_permission("review") && target.reviewer.as_deref() == Some(ctx.persona.as_str())) {
+            if root.coordinator != ctx.persona && !persona.is_some_and(|p| p.has_permission("task.decide") && target.reviewer.as_deref() == Some(ctx.persona.as_str())) {
                 return forbid("only the coordinator or the task's reviewer may decide");
             }
             if decision.state != "proposed" {
@@ -1406,8 +1413,8 @@ impl CoordinationService {
     fn may_manage_groups(&self, db: &Db<'_>, ctx: &ToolCtx) -> CoordResult<Task> {
         let root = db.task_or_err(&ctx.root_id)?;
         let persona = self.roster.get(&ctx.persona).ok_or_else(|| CoordError::Forbidden("unknown persona".into()))?;
-        if !(persona.has_permission("coordinate") || persona.has_permission("delegate") || root.coordinator == ctx.persona) {
-            return forbid(format!("persona '{}' may not manage groups: it needs the 'coordinate' or 'delegate' permission", ctx.persona));
+        if !(persona.has_permission("group.manage") || root.coordinator == ctx.persona) {
+            return forbid(format!("persona '{}' may not manage groups: it needs the 'group.manage' permission (implied by 'coordinate' and 'delegate')", ctx.persona));
         }
         Ok(root)
     }

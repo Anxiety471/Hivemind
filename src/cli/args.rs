@@ -56,6 +56,11 @@ pub(super) enum Commands {
         #[command(subcommand)]
         command: TaskCommand,
     },
+    /// Inspect persona permissions and the access audit log.
+    Access {
+        #[command(subcommand)]
+        command: AccessCommand,
+    },
 }
 
 
@@ -103,6 +108,23 @@ pub(super) enum TaskCommand {
         /// Exit once nothing is claimable instead of running until Ctrl-C.
         #[arg(long)]
         until_idle: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub(super) enum AccessCommand {
+    /// Show each persona's roles and effective permissions.
+    Show,
+    /// List gated allow/deny decisions, newest first.
+    Audit {
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+        /// Only decisions for this persona.
+        #[arg(long)]
+        persona: Option<String>,
+        /// Only denials.
+        #[arg(long)]
+        denied: bool,
     },
 }
 #[derive(Debug, Subcommand)]

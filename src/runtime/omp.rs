@@ -497,6 +497,7 @@ mod tests {
             role: None,
             capabilities: Vec::new(),
             permissions: Vec::new(),
+            roles: Vec::new(),
         }
     }
 

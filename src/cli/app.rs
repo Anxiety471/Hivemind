@@ -77,6 +77,7 @@ async fn run(cli: Cli) -> Result<()> {
                 }
                 Commands::Init { .. } => unreachable!(),
                 Commands::Task { command } => super::tasks::task_command(config, &cli.config, command).await,
+                Commands::Access { command } => super::access::access_command(config, &cli.config, command).await,
             }
         }
         None => {
@@ -427,9 +428,9 @@ printf '%s stopped\n' "$agent" >> __LOG__
         assert!(!successful.error);
         assert_eq!(successful.content, "Reviewer reply");
     }
-    #[tokio::test]
-    async fn ask_executes_a_memory_tool_block_over_the_runtime_and_reprompts() {
-        let directory = TestDirectory::new("tool-runtime");
+    /// Fake Pi whose first reply is a `memory.private.add` tool block and whose
+    /// reply after any tool result is plain text.
+    fn write_memory_tool_fake_pi(directory: &TestDirectory) -> PathBuf {
         let binary = directory.0.join("fake-pi");
         let script = r#"#!/bin/sh
 while IFS= read -r request; do
@@ -458,6 +459,13 @@ done
         let mut permissions = fs::metadata(&binary).unwrap().permissions();
         permissions.set_mode(0o755);
         fs::set_permissions(&binary, permissions).unwrap();
+        binary
+    }
+
+    #[tokio::test]
+    async fn ask_executes_a_memory_tool_block_over_the_runtime_and_reprompts() {
+        let directory = TestDirectory::new("tool-runtime");
+        let binary = write_memory_tool_fake_pi(&directory);
 
         let mut config = HivemindConfig::default_poc();
         config.runtime.pi_binary = binary.display().to_string();
@@ -491,6 +499,34 @@ done
             .unwrap();
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].content, "end-to-end note");
+    }
+
+    #[tokio::test]
+    async fn observer_role_is_denied_gated_memory_writes_and_the_denial_is_audited() {
+        let directory = TestDirectory::new("tool-observer");
+        let binary = write_memory_tool_fake_pi(&directory);
+        let mut config = HivemindConfig::default_poc();
+        config.runtime.pi_binary = binary.display().to_string();
+        for agent in &mut config.agents {
+            agent.workspace = directory.0.display().to_string();
+        }
+        config.agents.iter_mut().find(|agent| agent.name == "Reviewer").unwrap().roles = vec!["observer".into()];
+        let core = HivemindCore::new(config, directory.0.join("hivemind.toml")).unwrap();
+
+        let replies = route_turn(&core, &Route::Solo("Reviewer".into()), "store a note").await.unwrap();
+        core.shutdown().await;
+        let (output, failed) = capture_replies(&replies);
+        assert_eq!(output, "\nReviewer> done after tool\n");
+        assert!(!failed);
+
+        let instance = hivemind::identity::AgentInstanceId::new("solo-Reviewer", "Reviewer");
+        let caller = hivemind::memory::Caller::agent("solo-Reviewer", "", instance.clone(), "Reviewer", "Reviewer");
+        let found = core.memory().store().records_in_scope(&caller, &hivemind::memory::Scope::AgentInstance(instance)).unwrap();
+        assert!(found.is_empty(), "the denied write must not reach the store");
+
+        let denied = core.access().audit().list(&hivemind::access::AuditFilter { denied_only: true, limit: 10, ..Default::default() }).unwrap();
+        assert_eq!(denied.len(), 1);
+        assert_eq!((denied[0].persona.as_str(), denied[0].action.as_str(), denied[0].permission.as_str()), ("Reviewer", "memory.private.add", "memory.private.write"));
     }
 
     #[tokio::test]

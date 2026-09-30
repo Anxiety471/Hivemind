@@ -275,6 +275,7 @@ mod tests {
             role: None,
             capabilities: Vec::new(),
             permissions: Vec::new(),
+            roles: Vec::new(),
         }
     }
 
@@ -287,6 +288,7 @@ mod tests {
             context: hivemind::config::ContextConfig::default(),
             memory: Default::default(),
             coordination: Default::default(),
+            roles: Default::default(),
             workspaces: Default::default(),
         }
     }

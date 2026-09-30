@@ -63,6 +63,7 @@ fn member(name: &str) -> Participant {
             role: None,
             capabilities: Vec::new(),
             permissions: Vec::new(),
+            roles: Vec::new(),
         }),
         role: Some(format!("{name} role")),
     }
