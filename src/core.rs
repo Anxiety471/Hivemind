@@ -13,6 +13,7 @@ use anyhow::{Context, Result};
 
 use crate::{
     config::{ConversationMode, HivemindConfig},
+    coordination::{policy::Roster, store::CoordinationStore, CoordinationService, CoordinationTools},
     conversation::{
         AgentInvoker, ConversationCoordinator, Participant, RuntimeInvoker, TurnExecution,
         TurnReply, TurnRequest,
@@ -31,6 +32,8 @@ pub struct HivemindCore {
     events: EventBus,
     runtime: Arc<RuntimePool>,
     config_path: PathBuf,
+    data_dir: PathBuf,
+    coordination: Arc<CoordinationService>,
     shutting_down: AtomicBool,
     shutdown_lock: tokio::sync::Mutex<()>,
 }
@@ -130,6 +133,21 @@ impl HivemindCore {
             memory.clone(),
             events.clone(),
         ));
+        let coordination_store = if config.coordination.enabled {
+            CoordinationStore::open(data_dir.join("coordination.sqlite3"))
+        } else {
+            CoordinationStore::in_memory()
+        }
+        .map_err(|error| anyhow::anyhow!("opening coordination store: {error}"))?;
+        let coordination = Arc::new(CoordinationService::new(
+            coordination_store,
+            config.coordination.clone(),
+            Roster::from_config(&config),
+            events.clone(),
+        ));
+        if config.coordination.enabled {
+            conversation.set_tools(Arc::new(CoordinationTools::new(coordination.clone())));
+        }
         events.publish(DomainEventKind::CoreStarted);
         Ok(Self {
             config: RwLock::new(config),
@@ -139,6 +157,8 @@ impl HivemindCore {
             events,
             runtime,
             config_path,
+            data_dir,
+            coordination,
             shutting_down: AtomicBool::new(false),
             shutdown_lock: tokio::sync::Mutex::new(()),
         })
@@ -173,6 +193,23 @@ impl HivemindCore {
     }
     pub fn events(&self) -> &EventBus {
         &self.events
+    }
+    pub fn coordination(&self) -> &Arc<CoordinationService> {
+        &self.coordination
+    }
+    pub fn data_dir(&self) -> &Path {
+        &self.data_dir
+    }
+    pub fn is_shutting_down(&self) -> bool {
+        self.shutting_down.load(Ordering::Acquire)
+    }
+    /// Invoker that routes a room's turns to the core-owned runtime pool.
+    pub fn runtime_invoker(&self, room: &str, group_id: &str) -> Arc<dyn AgentInvoker> {
+        Arc::new(RuntimeInvoker::new(self.runtime.clone(), room, group_id))
+    }
+    /// Stop one instance's live session so its next prompt hydrates fresh.
+    pub async fn rotate_instance(&self, instance: &crate::identity::AgentInstanceId, reason: &'static str) {
+        self.runtime.rotate_instance(instance, reason).await;
     }
     pub fn memory(&self) -> &Arc<MemoryService> {
         &self.memory

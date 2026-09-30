@@ -1,6 +1,7 @@
 mod error;
 mod protocol;
 mod routes;
+mod tasks;
 mod websocket;
 
 use std::{
@@ -26,6 +27,10 @@ pub async fn serve(core: Arc<HivemindCore>, port: u16) -> Result<()> {
     let app = router(Arc::clone(&core), shutdown_rx);
 
     println!("API listening on http://{address} (WebSocket: ws://{address}/api/v1/ws)");
+    let scheduler = core.coordination().enabled().then(|| tokio::spawn(crate::coordination::Scheduler::new(Arc::clone(&core), None).run()));
+    if scheduler.is_some() {
+        println!("Coordination scheduler running");
+    }
     let shutdown_core = Arc::clone(&core);
     let serve_result = axum::serve(listener, app)
         .with_graceful_shutdown(async move {
@@ -38,6 +43,9 @@ pub async fn serve(core: Arc<HivemindCore>, port: u16) -> Result<()> {
         })
         .await;
     core.shutdown().await;
+    if let Some(scheduler) = scheduler {
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(10), scheduler).await;
+    }
     serve_result?;
     println!("API stopped");
     Ok(())

@@ -273,6 +273,8 @@ mod tests {
             reasoning: None,
             fast: None,
             role: None,
+            capabilities: Vec::new(),
+            permissions: Vec::new(),
         }
     }
 
@@ -284,6 +286,7 @@ mod tests {
             groups: Vec::new(),
             context: hivemind::config::ContextConfig::default(),
             memory: Default::default(),
+            coordination: Default::default(),
         }
     }
 

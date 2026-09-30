@@ -76,6 +76,7 @@ async fn run(cli: Cli) -> Result<()> {
                     group_command(&mut config, &cli.config, None, command)
                 }
                 Commands::Init { .. } => unreachable!(),
+                Commands::Task { command } => super::tasks::task_command(config, &cli.config, command).await,
             }
         }
         None => {

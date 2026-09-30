@@ -171,6 +171,10 @@ fn map_event(event: &DomainEvent) -> Option<Outbound> {
             "runtime.rotated",
             json!({"agent_instance_id": agent_instance_id.encode(), "runtime": runtime, "reason": reason}),
         ),
+        DomainEventKind::Coordination { seq, root_id, task_id, event_type, actor, payload } => (
+            crate::coordination::wire_type(event_type),
+            json!({"durable_seq": seq, "root_id": root_id, "task_id": task_id, "actor": actor, "data": payload}),
+        ),
         DomainEventKind::CoreStarted | DomainEventKind::CoreShuttingDown => return None,
     };
     let occurred_at_ms = event
@@ -362,5 +366,24 @@ mod tests {
         }
 
         assert_ne!(encoded[0], encoded[1]);
+    }
+
+    #[test]
+    fn coordination_events_keep_their_type_and_durable_sequence() {
+        let mapped = map_event(&event(DomainEventKind::Coordination {
+            seq: 42,
+            root_id: "tk_root".into(),
+            task_id: Some("tk_child".into()),
+            event_type: "task.status_changed".into(),
+            actor: "hivemind".into(),
+            payload: json!({"to": "running"}),
+        }))
+        .unwrap();
+        assert_eq!(mapped.r#type, "task.status_changed");
+        assert_eq!(mapped.payload["durable_seq"], 42);
+        assert_eq!(mapped.payload["data"]["to"], "running");
+        assert_eq!(mapped.payload["sequence"], 1, "process-local bus sequence stays separate");
+        let unknown = map_event(&event(DomainEventKind::Coordination { seq: 1, root_id: "r".into(), task_id: None, event_type: "future.kind".into(), actor: "a".into(), payload: json!({}) })).unwrap();
+        assert_eq!(unknown.r#type, "coordination.event");
     }
 }

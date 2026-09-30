@@ -17,6 +17,127 @@ pub struct HivemindConfig {
     pub context: ContextConfig,
     #[serde(default)]
     pub memory: MemoryConfig,
+    #[serde(default)]
+    pub coordination: CoordinationConfig,
+}
+
+impl CoordinationConfig {
+    fn validate(&self, agents: &[AgentConfig]) -> Result<()> {
+        if let Some(planner) = &self.planner {
+            if !agents.iter().any(|agent| agent.name == *planner) {
+                bail!("coordination.planner references unknown persona id '{planner}'");
+            }
+        }
+        if self.max_dispatches == 0
+            || self.max_tool_actions == 0
+            || self.max_messages == 0
+            || self.max_plan_tasks == 0
+            || self.max_plan_depth == 0
+            || self.max_elapsed_secs == 0
+            || self.max_attempts_per_task == 0
+            || self.max_concurrent == 0
+            || self.lease_secs == 0
+            || self.max_message_depth == 0
+        {
+            bail!("coordination limits must be positive");
+        }
+        Ok(())
+    }
+}
+
+/// Permissions a persona may be granted for autonomous coordination. A role
+/// string is descriptive only; nothing here is inferred from it.
+pub const COORDINATION_PERMISSIONS: &[&str] = &["coordinate", "delegate", "review", "integrate"];
+
+/// Autonomous task coordination. Off by default: existing configurations
+/// keep their exact behavior until `enabled = true`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CoordinationConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Persona that plans natural-language tasks. When absent, the coordinator
+    /// is the best-ranked persona holding the `coordinate` permission.
+    #[serde(default)]
+    pub planner: Option<String>,
+    /// Dispatches (attempts) charged to one root task and all descendants.
+    #[serde(default = "default_max_dispatches")]
+    pub max_dispatches: u32,
+    /// Coordination tool calls charged to one root task.
+    #[serde(default = "default_max_tool_actions")]
+    pub max_tool_actions: u32,
+    /// Messages charged to one root task.
+    #[serde(default = "default_max_messages")]
+    pub max_messages: u32,
+    #[serde(default = "default_max_plan_tasks")]
+    pub max_plan_tasks: usize,
+    /// Longest parent chain and dependency chain a task graph may have.
+    #[serde(default = "default_max_plan_depth")]
+    pub max_plan_depth: usize,
+    /// Wall-clock seconds a root task may keep working before it is blocked.
+    #[serde(default = "default_max_elapsed_secs")]
+    pub max_elapsed_secs: u64,
+    /// Attempts allowed for one task, including repair attempts after review rejection.
+    #[serde(default = "default_max_attempts_per_task")]
+    pub max_attempts_per_task: u32,
+    /// Attempts running at once across all roots.
+    #[serde(default = "default_max_concurrent")]
+    pub max_concurrent: usize,
+    /// Seconds an attempt lease stays valid without a heartbeat.
+    #[serde(default = "default_lease_secs")]
+    pub lease_secs: u64,
+    /// Longest causation chain whose messages may still wake a recipient.
+    #[serde(default = "default_max_message_depth")]
+    pub max_message_depth: u32,
+}
+
+impl Default for CoordinationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            planner: None,
+            max_dispatches: default_max_dispatches(),
+            max_tool_actions: default_max_tool_actions(),
+            max_messages: default_max_messages(),
+            max_plan_tasks: default_max_plan_tasks(),
+            max_plan_depth: default_max_plan_depth(),
+            max_elapsed_secs: default_max_elapsed_secs(),
+            max_attempts_per_task: default_max_attempts_per_task(),
+            max_concurrent: default_max_concurrent(),
+            lease_secs: default_lease_secs(),
+            max_message_depth: default_max_message_depth(),
+        }
+    }
+}
+
+fn default_max_dispatches() -> u32 {
+    64
+}
+fn default_max_tool_actions() -> u32 {
+    400
+}
+fn default_max_messages() -> u32 {
+    200
+}
+fn default_max_plan_tasks() -> usize {
+    32
+}
+fn default_max_plan_depth() -> usize {
+    6
+}
+fn default_max_elapsed_secs() -> u64 {
+    3600
+}
+fn default_max_attempts_per_task() -> u32 {
+    3
+}
+fn default_max_concurrent() -> usize {
+    4
+}
+fn default_lease_secs() -> u64 {
+    300
+}
+fn default_max_message_depth() -> u32 {
+    8
 }
 
 /// Deterministic, model-independent memory behavior.
@@ -144,6 +265,13 @@ pub struct AgentConfig {
     pub fast: Option<bool>,
     #[serde(default)]
     pub role: Option<String>,
+    /// Skill tags used to select this persona for work. Purely descriptive
+    /// text elsewhere; only these tags participate in matching.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<String>,
+    /// Coordination permissions (`coordinate`, `delegate`, `review`, `integrate`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub permissions: Vec<String>,
 }
 impl HivemindConfig {
     pub fn load(path: &Path) -> Result<Self> {
@@ -154,10 +282,13 @@ impl HivemindConfig {
             )
         })?;
 
-        let config: Self = toml::from_str(&raw)
+        let mut config: Self = toml::from_str(&raw)
             .with_context(|| format!("failed to parse config {}", path.display()))?;
 
         config.validate()?;
+        for agent in &mut config.agents {
+            agent.workspace = absolute_workspace(&agent.workspace);
+        }
 
         Ok(config)
     }
@@ -207,6 +338,17 @@ impl HivemindConfig {
                 bail!("duplicate persona id '{}'; rename one of the [[personas]] entries so every id is unique (`[[agents]].name` is the legacy alias)", persona.name);
             }
         }
+        for persona in &self.agents {
+            for permission in &persona.permissions {
+                if !COORDINATION_PERMISSIONS.contains(&permission.as_str()) {
+                    bail!("persona '{}' has unknown permission '{permission}'; allowed: {}", persona.name, COORDINATION_PERMISSIONS.join(", "));
+                }
+            }
+            if persona.capabilities.iter().any(|tag| tag.trim().is_empty() || tag.len() > 64) {
+                bail!("persona '{}' has an empty or overlong capability tag", persona.name);
+            }
+        }
+        self.coordination.validate(&self.agents)?;
         let mut group_names = HashSet::with_capacity(self.groups.len());
         for group in &self.groups {
             if group.name.trim().is_empty() || group.name == "main" {
@@ -324,6 +466,7 @@ impl HivemindConfig {
             },
             context: ContextConfig::default(),
             memory: MemoryConfig::default(),
+            coordination: CoordinationConfig::default(),
             groups: Vec::new(),
             agents: vec![
                 AgentConfig {
@@ -340,6 +483,8 @@ impl HivemindConfig {
                     reasoning: None,
                     fast: None,
                     role: Some("Software Engineer".into()),
+                    capabilities: Vec::new(),
+                    permissions: Vec::new(),
                 },
                 AgentConfig {
                     name: "Reviewer".into(),
@@ -355,6 +500,8 @@ impl HivemindConfig {
                     reasoning: None,
                     fast: None,
                     role: Some("Reviewer".into()),
+                    capabilities: Vec::new(),
+                    permissions: Vec::new(),
                 },
             ],
         }
@@ -399,6 +546,13 @@ fn default_idle_timeout_secs() -> u64 {
 
 fn default_runtime() -> String {
     "omp".into()
+}
+
+/// Resolves a workspace against the current directory without touching the filesystem, so a
+/// missing directory still fails per agent at session start rather than at load. Runtimes and
+/// git are handed this path in places where a relative one would resolve differently.
+pub fn absolute_workspace(workspace: &str) -> String {
+    std::path::absolute(workspace).map_or_else(|_| workspace.to_owned(), |p| p.display().to_string())
 }
 
 fn default_workspace() -> String {
@@ -615,6 +769,14 @@ mod tests {
         let result = HivemindConfig::load(&path);
         let _ = fs::remove_file(path);
         result
+    }
+
+    #[test]
+    fn load_resolves_relative_workspaces_and_tolerates_missing_ones() {
+        let config = load_toml("[[agents]]\nname = \"A\"\nworkspace = \"sub/dir\"\n[[agents]]\nname = \"B\"\nworkspace = \"/abs/ws\"\n").unwrap();
+        let expected = std::env::current_dir().unwrap().join("sub/dir");
+        assert_eq!(std::path::Path::new(&config.agents[0].workspace), expected);
+        assert_eq!(config.agents[1].workspace, "/abs/ws");
     }
 
     #[test]

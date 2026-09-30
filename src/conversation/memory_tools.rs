@@ -542,6 +542,7 @@ pub(super) async fn invoke_with_memory(
     caller: &Caller,
     memory: &MemoryService,
     authorized_global: Option<&str>,
+    host: Option<&dyn ToolHost>,
 ) -> Result<String> {
     let mut exchange: Vec<(String, String)> = Vec::new();
     let mut last = invoker
@@ -563,9 +564,10 @@ pub(super) async fn invoke_with_memory(
             Ok(Some(call)) => Ok(call),
             Err(error) => Err(format!("{error:#}")),
         };
-        if actions >= MAX_MEMORY_ACTIONS {
+        let limit = host.map_or(MAX_MEMORY_ACTIONS, |host| host.max_actions(&caller.room_id));
+        if actions >= limit {
             bail!(
-                "agent hit the Hivemind memory tool action limit ({MAX_MEMORY_ACTIONS}) without producing a plain-text answer"
+                "agent hit the Hivemind memory tool action limit ({limit}) without producing a plain-text answer"
             );
         }
         actions += 1;
@@ -574,7 +576,11 @@ pub(super) async fn invoke_with_memory(
                 let rendered = serde_json::to_string(&call.args)
                     .map(|args| format!("{{\"name\":\"{}\",\"args\":{args}}}", call.name))
                     .unwrap_or_else(|_| call.name.clone());
-                match execute_with_optional_authorization(memory, caller, authorized_global, &call)
+                let executed = match host.filter(|host| host.handles(&call.name)) {
+                    Some(host) => host.execute(&caller.room_id, &caller.persona_id, &call.name, &call.args),
+                    None => execute_with_optional_authorization(memory, caller, authorized_global, &call),
+                };
+                match executed
                 {
                     Ok(text) => (rendered, text),
                     Err(error) => (rendered, format!("error: {error:#}")),
