@@ -768,7 +768,7 @@ fn legacy_memory_and_runtime_epochs_remain_opaque_after_schema_migration() {
         .is_err());
     assert!(service.runtime_epochs(&caller, 10).unwrap().is_empty());
     {
-        let connection = service.store().connection.lock().unwrap();
+        let connection = service.store().connection.lock();
         let (instance_id, identity_version, ended_at): (String, i64, Option<i64>) = connection
             .query_row(
                 "SELECT instance_id,identity_version,ended_at FROM runtime_epochs WHERE id='legacy-epoch'",
@@ -884,4 +884,182 @@ fn topic_key_column_migrates_a_database_created_before_it_existed() {
     assert!(!updated);
     let (_, updated) = service.upsert_private(&agent(), "k", write("newer")).unwrap();
     assert!(updated);
+}
+
+fn temp_db(label: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("hivemind-{label}-{}.sqlite3", new_id()))
+}
+fn remove_db(path: &std::path::Path) {
+    for suffix in ["", "-wal", "-shm"] {
+        let mut name = path.as_os_str().to_owned();
+        name.push(suffix);
+        let _ = std::fs::remove_file(std::path::PathBuf::from(name));
+    }
+}
+
+#[test]
+fn file_store_opens_in_wal_mode_with_normal_sync() {
+    let path = temp_db("pragmas");
+    let store = MemoryStore::open(&path).unwrap();
+    {
+        let c = store.connection.lock();
+        let mode: String = c.pragma_query_value(None, "journal_mode", |r| r.get(0)).unwrap();
+        let sync: i64 = c.pragma_query_value(None, "synchronous", |r| r.get(0)).unwrap();
+        let version: i64 = c.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
+        assert_eq!(mode, "wal");
+        assert_eq!(sync, 1, "NORMAL");
+        assert_eq!(version, 1);
+    }
+    drop(store);
+    remove_db(&path);
+}
+
+#[test]
+fn full_text_indexes_upgrade_in_place_without_losing_rows() {
+    let path = temp_db("fts-upgrade");
+    let caller = agent();
+    let before_memory;
+    let before_archive;
+    {
+        let c = rusqlite::Connection::open(&path).unwrap();
+        c.execute_batch(
+            "PRAGMA foreign_keys=ON;
+             CREATE TABLE memories (
+               id TEXT PRIMARY KEY, layer TEXT NOT NULL, scope_type TEXT NOT NULL, scope_id TEXT NOT NULL,
+               kind TEXT NOT NULL, content TEXT NOT NULL, source_room_id TEXT, source_turn_id TEXT,
+               source_message_id TEXT, source_actor TEXT, source_kind TEXT, created_at INTEGER NOT NULL,
+               updated_at INTEGER NOT NULL, status TEXT NOT NULL, importance INTEGER NOT NULL,
+               supersedes_memory_id TEXT, topic_key TEXT);
+             CREATE VIRTUAL TABLE memory_fts USING fts5(id UNINDEXED, content, kind, tokenize='unicode61');
+             CREATE TABLE rooms (id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL);
+             CREATE TABLE archive_turns (id TEXT PRIMARY KEY, room_id TEXT NOT NULL REFERENCES rooms(id), started_at INTEGER NOT NULL, completed_at INTEGER, metadata TEXT NOT NULL DEFAULT '{}');
+             CREATE TABLE archive_messages (id TEXT PRIMARY KEY, room_id TEXT NOT NULL REFERENCES rooms(id), turn_id TEXT NOT NULL REFERENCES archive_turns(id), speaker TEXT NOT NULL, content TEXT NOT NULL, created_at INTEGER NOT NULL);
+             CREATE INDEX archive_room_turn ON archive_messages(room_id, created_at);
+             CREATE VIRTUAL TABLE archive_fts USING fts5(id UNINDEXED, room_id UNINDEXED, turn_id UNINDEXED, speaker, content, tokenize='unicode61');
+             INSERT INTO rooms VALUES('group-a','',1),('group-b','',1);
+             INSERT INTO archive_turns VALUES('t1','group-a',1,1,'null'),('t2','group-b',1,1,'null');
+             INSERT INTO archive_messages VALUES
+               ('m1','group-a','t1','user','the deploy uses a blue green rollout',1),
+               ('m2','group-a','t1','engineer','staging rollback plan is documented',2),
+               ('m3','group-b','t2','user','another room also discusses rollout',3);
+             INSERT INTO archive_fts(id,room_id,turn_id,speaker,content) SELECT id,room_id,turn_id,speaker,content FROM archive_messages;
+             INSERT INTO memories VALUES('mem1','group','group','group-a','note','Websocket authentication uses JWT',NULL,NULL,NULL,NULL,NULL,1,1,'active',50,NULL,NULL);
+             INSERT INTO memory_fts(id,content,kind) VALUES('mem1','Websocket authentication uses JWT','note');",
+        )
+        .unwrap();
+        before_memory = c
+            .query_row("SELECT id FROM memory_fts WHERE memory_fts MATCH '\"jwt\"'", [], |r| r.get::<_, String>(0))
+            .unwrap();
+        before_archive = c
+            .prepare("SELECT id FROM archive_fts WHERE archive_fts MATCH '\"rollout\"' AND room_id='group-a'")
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+    }
+    let service = MemoryService::open(&path).unwrap();
+    let hits = |query: &str, scope: SearchScope| {
+        service
+            .search(&caller, &req(query, vec![scope]))
+            .unwrap()
+            .into_iter()
+            .map(|result| result.record.id)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(hits("JWT", SearchScope::Group), [before_memory]);
+    assert_eq!(hits("rollout", SearchScope::Archive), before_archive);
+    assert_eq!(hits("rollback", SearchScope::Archive), ["m2"]);
+    let (memories, messages): (i64, i64) = {
+        let c = service.store().connection.lock();
+        (
+            c.query_row("SELECT COUNT(*) FROM memories", [], |r| r.get(0)).unwrap(),
+            c.query_row("SELECT COUNT(*) FROM archive_messages", [], |r| r.get(0)).unwrap(),
+        )
+    };
+    assert_eq!((memories, messages), (1, 3));
+
+    // The upgraded index keeps working for writes: replacing a turn drops the
+    // old text from search and indexes the new text.
+    service
+        .append_archive_turn(
+            &Caller::trusted_user("test"),
+            ArchivedTurn {
+                id: "t1".into(),
+                room_id: "group-a".into(),
+                started_at: 1,
+                completed_at: Some(1),
+                metadata: serde_json::Value::Null,
+                participants: vec![],
+                messages: vec![ArchivedMessage {
+                    id: "m1".into(),
+                    room_id: "group-a".into(),
+                    turn_id: "t1".into(),
+                    speaker: "user".into(),
+                    content: "canary deployment replaces the old plan".into(),
+                    created_at: 1,
+                }],
+            },
+        )
+        .unwrap();
+    assert!(hits("rollout", SearchScope::Archive).is_empty());
+    assert_eq!(hits("canary", SearchScope::Archive), ["m1"]);
+    drop(service);
+    remove_db(&path);
+}
+
+#[test]
+fn stronger_full_text_match_outranks_a_weaker_one_of_equal_age_and_scope() {
+    let service = MemoryService::new(MemoryStore::in_memory().unwrap());
+    let caller = agent();
+    let weak = service.add_group(&caller, write("release schedule for friday")).unwrap();
+    for filler in ["lunch menu", "office plants", "parking rules", "holiday calendar"] {
+        service.add_group(&caller, write(filler)).unwrap();
+    }
+    let strong = service
+        .add_group(&caller, write("release checklist for staging deploy verification"))
+        .unwrap();
+    let found = service
+        .search(
+            &caller,
+            &req("release checklist staging deploy verification", vec![SearchScope::Group]),
+        )
+        .unwrap();
+    let position = |id: &str| found.iter().position(|result| result.record.id == id).unwrap();
+    assert!(position(&strong.id) < position(&weak.id));
+    let score = |id: &str| found[position(id)].score;
+    assert!(score(&strong.id) > score(&weak.id));
+}
+
+#[test]
+fn archive_search_never_returns_another_rooms_messages() {
+    let service = MemoryService::new(MemoryStore::in_memory().unwrap());
+    let trusted = Caller::trusted_user("test");
+    for (room, turn, id) in [("room-a", "ta", "ma"), ("room-b", "tb", "mb"), ("room-a-1", "tc", "mc")] {
+        service
+            .append_room_message(
+                &trusted,
+                ArchivedMessage {
+                    id: id.into(),
+                    room_id: room.into(),
+                    turn_id: turn.into(),
+                    speaker: "user".into(),
+                    content: "shared keyword zebra".into(),
+                    created_at: 1,
+                },
+            )
+            .unwrap();
+    }
+    let caller_in = |room: &str| {
+        Caller::agent(room, "", AgentInstanceId::new(room, "p"), "p", "p")
+    };
+    for (room, expected) in [("room-a", "ma"), ("room-b", "mb"), ("room-a-1", "mc")] {
+        let found = service
+            .search(&caller_in(room), &req("zebra", vec![SearchScope::Archive]))
+            .unwrap();
+        assert_eq!(
+            found.iter().map(|r| r.record.id.as_str()).collect::<Vec<_>>(),
+            [expected]
+        );
+    }
 }

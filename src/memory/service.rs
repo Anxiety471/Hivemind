@@ -35,6 +35,7 @@ impl MemoryService {
             write,
             false,
             true,
+            None,
         )
     }
     pub fn add_group(&self, caller: &Caller, write: MemoryWrite) -> Result<MemoryRecord> {
@@ -52,6 +53,7 @@ impl MemoryService {
             write,
             false,
             true,
+            None,
         )
     }
     /// Update the active private record carrying `key` in this instance's
@@ -102,9 +104,8 @@ impl MemoryService {
         if let Some(id) = self.store.find_active_by_key(&scope, &key)? {
             return Ok((self.update(caller, &id, write, layer)?, true));
         }
-        let (record, _) = self.accept(caller, scope, layer, write, false, false)?;
-        self.store.set_topic_key(&record.id, &key)?;
-        Ok((record, false))
+        self.accept(caller, scope, layer, write, false, false, Some(&key))
+            .map(|(record, _)| (record, false))
     }
     pub fn propose_persona(&self, caller: &Caller, write: MemoryWrite) -> Result<MemoryRecord> {
         Ok(self
@@ -115,17 +116,19 @@ impl MemoryService {
                 write,
                 true,
                 false,
+                None,
             )?
             .0)
     }
     pub fn propose_global(&self, caller: &Caller, write: MemoryWrite) -> Result<MemoryRecord> {
         Ok(self
-            .accept(caller, Scope::Hivemind, Layer::Global, write, true, false)?
+            .accept(caller, Scope::Hivemind, Layer::Global, write, true, false, None)?
             .0)
     }
     /// Insert a record. With `dedup`, an identical active record in the same
     /// scope and layer (whitespace/case-normalized) is returned instead, with
     /// `updated_at` bumped; the bool marks that case.
+    #[allow(clippy::too_many_arguments)]
     fn accept(
         &self,
         caller: &Caller,
@@ -134,6 +137,7 @@ impl MemoryService {
         mut write: MemoryWrite,
         broad: bool,
         dedup: bool,
+        topic_key: Option<&str>,
     ) -> Result<(MemoryRecord, bool)> {
         if !caller.trusted
             && (caller.room_id.is_empty()
@@ -176,7 +180,7 @@ impl MemoryService {
             importance: write.importance.min(100),
             supersedes_memory_id: write.supersedes_memory_id,
         };
-        self.store.insert(&record)?;
+        self.store.insert_keyed(&record, topic_key)?;
         Ok((record, false))
     }
     pub fn archive(&self, caller: &Caller, id: &str) -> Result<()> {
@@ -282,12 +286,11 @@ impl MemoryService {
             updated_at: now(),
             updated_by: caller.actor.clone(),
         };
-        let c = self
-            .store
-            .connection
-            .lock()
-            .map_err(|_| anyhow!("memory store lock poisoned"))?;
-        c.execute("INSERT INTO group_state(group_id,state_json,updated_at,updated_by) VALUES(?1,?2,?3,?4) ON CONFLICT(group_id) DO UPDATE SET state_json=excluded.state_json,updated_at=excluded.updated_at,updated_by=excluded.updated_by",params![record.group_id,record.state.to_string(),record.updated_at,record.updated_by])?;
+        self.store.write(|c| {
+            c.prepare_cached("INSERT INTO group_state(group_id,state_json,updated_at,updated_by) VALUES(?1,?2,?3,?4) ON CONFLICT(group_id) DO UPDATE SET state_json=excluded.state_json,updated_at=excluded.updated_at,updated_by=excluded.updated_by")?
+                .execute(params![record.group_id,record.state.to_string(),record.updated_at,record.updated_by])?;
+            Ok(())
+        })?;
         Ok(record)
     }
     /// Read structured state from the caller's current group only.
@@ -295,12 +298,11 @@ impl MemoryService {
         if caller.group_id.is_empty() {
             bail!("group state requires a current group");
         }
-        let c = self
-            .store
-            .connection
-            .lock()
-            .map_err(|_| anyhow!("memory store lock poisoned"))?;
-        let row = c.query_row("SELECT group_id,state_json,updated_at,updated_by FROM group_state WHERE group_id=?1",[&caller.group_id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,i64>(2)?,r.get::<_,String>(3)?))).optional()?;
+        let row = self.store.read(|c| {
+            Ok(c.prepare_cached("SELECT group_id,state_json,updated_at,updated_by FROM group_state WHERE group_id=?1")?
+                .query_row([&caller.group_id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,i64>(2)?,r.get::<_,String>(3)?)))
+                .optional()?)
+        })?;
         row.map(|(group_id, state, updated_at, updated_by)| {
             Ok(GroupStateRecord {
                 group_id,
@@ -334,13 +336,12 @@ impl MemoryService {
             ended_at: None,
             metadata,
         };
-        let c = self
-            .store
-            .connection
-            .lock()
-            .map_err(|_| anyhow!("memory store lock poisoned"))?;
-        c.execute("INSERT INTO rooms(id,name,updated_at) VALUES(?1,'',?2) ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at",params![epoch.room_id,epoch.started_at])?;
-        c.execute("INSERT INTO runtime_epochs(id,room_id,instance_id,identity_version,runtime,started_at,ended_at,metadata_json) VALUES(?1,?2,?3,1,?4,?5,NULL,?6)",params![epoch.id,epoch.room_id,epoch.agent_instance_id.encode(),epoch.runtime,epoch.started_at,epoch.metadata.to_string()])?;
+        self.store.tx(|c| {
+            touch_room(c, &epoch.room_id, epoch.started_at)?;
+            c.prepare_cached("INSERT INTO runtime_epochs(id,room_id,instance_id,identity_version,runtime,started_at,ended_at,metadata_json) VALUES(?1,?2,?3,1,?4,?5,NULL,?6)")?
+                .execute(params![epoch.id,epoch.room_id,epoch.agent_instance_id.encode(),epoch.runtime,epoch.started_at,epoch.metadata.to_string()])?;
+            Ok(())
+        })?;
         Ok(epoch)
     }
     /// Close an epoch only when it belongs to the caller's room and instance.
@@ -350,28 +351,24 @@ impl MemoryService {
         id: &str,
         ended_at: i64,
     ) -> Result<RuntimeEpoch> {
-        let c = self
-            .store
-            .connection
-            .lock()
-            .map_err(|_| anyhow!("memory store lock poisoned"))?;
-        let mut epoch =
-            load_runtime_epoch(&c, id)?.ok_or_else(|| anyhow!("runtime epoch not found"))?;
-        if epoch.room_id != caller.room_id || epoch.agent_instance_id != caller.agent_instance_id {
-            bail!("unauthorized runtime epoch");
-        }
-        if epoch.ended_at.is_some() || ended_at < epoch.started_at {
-            bail!("runtime epoch is already closed or end time precedes start");
-        }
-        let changed = c.execute(
-            "UPDATE runtime_epochs SET ended_at=?1 WHERE id=?2 AND identity_version=1 AND ended_at IS NULL",
-            params![ended_at, id],
-        )?;
-        if changed != 1 {
-            bail!("runtime epoch was concurrently closed");
-        }
-        epoch.ended_at = Some(ended_at);
-        Ok(epoch)
+        self.store.tx(|c| {
+            let mut epoch =
+                load_runtime_epoch(c, id)?.ok_or_else(|| anyhow!("runtime epoch not found"))?;
+            if epoch.room_id != caller.room_id || epoch.agent_instance_id != caller.agent_instance_id {
+                bail!("unauthorized runtime epoch");
+            }
+            if epoch.ended_at.is_some() || ended_at < epoch.started_at {
+                bail!("runtime epoch is already closed or end time precedes start");
+            }
+            let changed = c
+                .prepare_cached("UPDATE runtime_epochs SET ended_at=?1 WHERE id=?2 AND identity_version=1 AND ended_at IS NULL")?
+                .execute(params![ended_at, id])?;
+            if changed != 1 {
+                bail!("runtime epoch was concurrently closed");
+            }
+            epoch.ended_at = Some(ended_at);
+            Ok(epoch)
+        })
     }
     /// List only the caller's epochs, newest first, with an enforced bound.
     pub fn runtime_epochs(&self, caller: &Caller, limit: usize) -> Result<Vec<RuntimeEpoch>> {
@@ -381,28 +378,21 @@ impl MemoryService {
         {
             bail!("runtime epoch listing requires room and instance");
         }
-        let c = self
-            .store
-            .connection
-            .lock()
-            .map_err(|_| anyhow!("memory store lock poisoned"))?;
-        let mut q=c.prepare("SELECT id FROM runtime_epochs WHERE room_id=?1 AND identity_version=1 AND instance_id=?2 ORDER BY started_at DESC,id DESC LIMIT ?3")?;
-        let ids = q
-            .query_map(
-                params![
-                    caller.room_id,
-                    caller.agent_instance_id.encode(),
-                    limit.min(100) as i64
-                ],
-                |r| r.get::<_, String>(0),
-            )?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        ids.iter()
-            .map(|id| {
-                load_runtime_epoch(&c, id)?
-                    .ok_or_else(|| anyhow!("runtime epoch disappeared during read"))
-            })
-            .collect()
+        self.store.read(|c| {
+            c.prepare_cached("SELECT id,room_id,instance_id,runtime,started_at,ended_at,metadata_json FROM runtime_epochs WHERE room_id=?1 AND identity_version=1 AND instance_id=?2 ORDER BY started_at DESC,id DESC LIMIT ?3")?
+                .query_map(
+                    params![
+                        caller.room_id,
+                        caller.agent_instance_id.encode(),
+                        limit.min(100) as i64
+                    ],
+                    raw_epoch,
+                )?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+                .into_iter()
+                .map(decode_epoch)
+                .collect()
+        })
     }
     /// Append canonical L7 room messages. This does not create/promote a memory record.
     pub fn append_room_message(&self, caller: &Caller, message: ArchivedMessage) -> Result<()> {
@@ -456,52 +446,40 @@ impl MemoryService {
         if !caller.trusted && room_id != caller.room_id {
             bail!("cannot read another room archive");
         }
-        let c = self
-            .store
-            .connection
-            .lock()
-            .map_err(|_| anyhow!("memory store lock poisoned"))?;
-        let row = c.query_row(
-            "SELECT id,room_id,started_at,completed_at,metadata FROM archive_turns WHERE id=?1 AND room_id=?2",
-            params![turn_id, room_id],
-            |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,i64>(2)?,r.get::<_,Option<i64>>(3)?,r.get::<_,String>(4)?)),
-        ).optional()?;
-        let Some((id, room_id, started_at, completed_at, metadata)) = row else {
-            return Ok(None);
-        };
-        let metadata =
-            serde_json::from_str(&metadata).context("decoding archived turn metadata")?;
-        let mut q=c.prepare("SELECT participant_id,role FROM archive_participants WHERE turn_id=?1 ORDER BY participant_id")?;
-        let participants = q
-            .query_map([turn_id], |r| {
-                Ok(ArchiveParticipant {
-                    participant_id: r.get(0)?,
-                    role: r.get(1)?,
-                })
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        let mut q=c.prepare("SELECT id,room_id,turn_id,speaker,content,created_at FROM archive_messages WHERE turn_id=?1 ORDER BY created_at,id")?;
-        let messages = q
-            .query_map([turn_id], |r| {
-                Ok(ArchivedMessage {
-                    id: r.get(0)?,
-                    room_id: r.get(1)?,
-                    turn_id: r.get(2)?,
-                    speaker: r.get(3)?,
-                    content: r.get(4)?,
-                    created_at: r.get(5)?,
-                })
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok(Some(ArchivedTurn {
-            id,
-            room_id,
-            started_at,
-            completed_at,
-            metadata,
-            participants,
-            messages,
-        }))
+        self.store.read(|c| {
+            let row = c.prepare_cached("SELECT id,room_id,started_at,completed_at,metadata FROM archive_turns WHERE id=?1 AND room_id=?2")?
+                .query_row(
+                    params![turn_id, room_id],
+                    |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,i64>(2)?,r.get::<_,Option<i64>>(3)?,r.get::<_,String>(4)?)),
+                ).optional()?;
+            let Some((id, room_id, started_at, completed_at, metadata)) = row else {
+                return Ok(None);
+            };
+            let metadata =
+                serde_json::from_str(&metadata).context("decoding archived turn metadata")?;
+            let participants = c
+                .prepare_cached("SELECT participant_id,role FROM archive_participants WHERE turn_id=?1 ORDER BY participant_id")?
+                .query_map([turn_id], |r| {
+                    Ok(ArchiveParticipant {
+                        participant_id: r.get(0)?,
+                        role: r.get(1)?,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            let messages = c
+                .prepare_cached("SELECT id,room_id,turn_id,speaker,content,created_at FROM archive_messages WHERE turn_id=?1 ORDER BY created_at,id")?
+                .query_map([turn_id], message_from_row)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(Some(ArchivedTurn {
+                id,
+                room_id,
+                started_at,
+                completed_at,
+                metadata,
+                participants,
+                messages,
+            }))
+        })
     }
     pub fn recent_messages(
         &self,
@@ -512,35 +490,54 @@ impl MemoryService {
         if !caller.trusted && room_id != caller.room_id {
             bail!("cannot read another room archive");
         }
-        let c = self
-            .store
-            .connection
-            .lock()
-            .map_err(|_| anyhow!("memory store lock poisoned"))?;
-        let mut q=c.prepare("SELECT id,room_id,turn_id,speaker,content,created_at FROM archive_messages WHERE room_id=?1 ORDER BY created_at DESC,id DESC")?;
-        let rows = q.query_map([room_id], |r| {
-            Ok(ArchivedMessage {
-                id: r.get(0)?,
-                room_id: r.get(1)?,
-                turn_id: r.get(2)?,
-                speaker: r.get(3)?,
-                content: r.get(4)?,
-                created_at: r.get(5)?,
-            })
-        })?;
-        let all = rows.collect::<rusqlite::Result<Vec<_>>>()?;
-        let mut turns = Vec::new();
-        let mut out = Vec::new();
-        for message in all {
-            if !turns.contains(&message.turn_id) {
-                if turns.len() >= turn_limit {
-                    break;
+        self.store.read(|c| {
+            let mut q = c.prepare_cached("SELECT id,room_id,turn_id,speaker,content,created_at FROM archive_messages WHERE room_id=?1 ORDER BY created_at DESC,id DESC")?;
+            let mut rows = q.query_map([room_id], message_from_row)?;
+            let mut turns: Vec<String> = Vec::new();
+            let mut out = Vec::new();
+            // Stream newest-first and stop once the window is full.
+            for message in rows.by_ref() {
+                let message = message?;
+                if !turns.contains(&message.turn_id) {
+                    if turns.len() >= turn_limit {
+                        break;
+                    }
+                    turns.push(message.turn_id.clone());
                 }
-                turns.push(message.turn_id.clone());
+                out.push(message);
             }
-            out.push(message);
+            out.reverse();
+            Ok(out)
+        })
+    }
+    /// Apply incremental turn writes in one transaction.
+    pub fn append_turns(&self, caller: &Caller, appends: Vec<TurnAppend>) -> Result<()> {
+        for append in &appends {
+            if !caller.trusted && append.room_id != caller.room_id {
+                bail!("cannot append a turn outside the caller's room");
+            }
+            if append.turn_id.is_empty() || append.room_id.is_empty() {
+                bail!("archive turn requires id and room");
+            }
+            if append.participants.iter().any(|p| p.participant_id.trim().is_empty()) {
+                bail!("archive participants require an id");
+            }
+            for message in &append.messages {
+                if message.id.is_empty()
+                    || message.speaker.trim().is_empty()
+                    || message.content.trim().is_empty()
+                {
+                    bail!("archive messages require id, speaker, and content");
+                }
+            }
         }
-        out.reverse();
-        Ok(out)
+        self.store.append_turns(&appends)
+    }
+    /// Every turn and message archived for `room_id`, oldest first.
+    pub fn room_archive(&self, caller: &Caller, room_id: &str) -> Result<RoomArchive> {
+        if !caller.trusted && room_id != caller.room_id {
+            bail!("cannot read another room archive");
+        }
+        self.store.room_archive(room_id)
     }
 }

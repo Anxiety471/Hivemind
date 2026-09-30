@@ -1,5 +1,5 @@
 use axum::extract::ws::{close_code, CloseFrame, Message, WebSocket};
-use futures_util::StreamExt;
+use futures_util::{SinkExt, StreamExt};
 use serde_json::json;
 use std::{
     sync::Arc,
@@ -47,9 +47,7 @@ pub(super) async fn handle(
             }
             event = events.recv() => match event {
                 Ok(event) => {
-                    if let Some(message) = map_event(&event) {
-                        if send(&mut socket, message).await.is_err() { break; }
-                    }
+                    if send_batch(&mut socket, &mut events, &event).await.is_err() { break; }
                 }
                 Err(broadcast::error::RecvError::Lagged(missed)) => {
                     let message = Outbound::event(
@@ -205,26 +203,76 @@ fn process(envelope: Envelope) -> Outbound {
     }
 }
 
-async fn send(socket: &mut WebSocket, message: Outbound) -> Result<(), axum::Error> {
-    let text = serde_json::to_string(&message).unwrap_or_else(|_| {
+fn encode(message: &Outbound) -> String {
+    serde_json::to_string(message).unwrap_or_else(|_| {
         r#"{"type":"system.error","payload":{"code":"serialization_error","message":"failed to encode message"}}"#.to_owned()
-    });
-    socket.send(Message::Text(text.into())).await
+    })
+}
+
+async fn send(socket: &mut WebSocket, message: Outbound) -> Result<(), axum::Error> {
+    socket.send(Message::Text(encode(&message).into())).await
+}
+
+fn lagged(missed: u64) -> Outbound {
+    Outbound::event(
+        "system.events_lagged",
+        None,
+        json!({"missed_count": missed, "refresh_required": true}),
+    )
+}
+
+/// Queue `event` without flushing; events with no public frame queue nothing.
+async fn feed_event(socket: &mut WebSocket, event: &DomainEvent) -> Result<(), axum::Error> {
+    match event.frame_with(|event| map_event(event).map(|message| encode(&message))) {
+        Some(text) => socket.feed(Message::Text(text.into())).await,
+        None => Ok(()),
+    }
+}
+
+/// Send `first` plus every event that arrives within a millisecond with one
+/// flush, so a burst of lifecycle events costs one loopback write instead of
+/// one each. Notifications tolerate the delay; model latency dwarfs it.
+async fn send_batch(
+    socket: &mut WebSocket,
+    events: &mut broadcast::Receiver<Arc<DomainEvent>>,
+    first: &DomainEvent,
+) -> Result<(), axum::Error> {
+    const MAX_BATCH: usize = 32;
+    feed_event(socket, first).await?;
+    tokio::time::sleep(Duration::from_millis(1)).await;
+    for _ in 0..MAX_BATCH {
+        match events.try_recv() {
+            Ok(event) => feed_event(socket, &event).await?,
+            Err(broadcast::error::TryRecvError::Lagged(missed)) => {
+                socket
+                    .feed(Message::Text(encode(&lagged(missed)).into()))
+                    .await?
+            }
+            Err(_) => break,
+        }
+    }
+    socket.flush().await
+}
+
+/// Domain events are encoded once and the same frame text is reused for every client.
+async fn send_event(socket: &mut WebSocket, event: &DomainEvent) -> Result<(), axum::Error> {
+    match event.frame_with(|event| map_event(event).map(|message| encode(&message))) {
+        Some(text) => socket.send(Message::Text(text.into())).await,
+        None => Ok(()),
+    }
 }
 
 /// Frames already queued for this client are flushed before the close so
 /// shutdown lifecycle events are not lost. Bounded by frame count and time;
 /// nothing is replayed or buffered beyond what the receiver already holds.
-async fn drain_queued(socket: &mut WebSocket, events: &mut broadcast::Receiver<DomainEvent>) {
+async fn drain_queued(socket: &mut WebSocket, events: &mut broadcast::Receiver<Arc<DomainEvent>>) {
     const MAX_FRAMES: usize = 64;
     let flush = async {
         for _ in 0..MAX_FRAMES {
             match events.try_recv() {
                 Ok(event) => {
-                    if let Some(message) = map_event(&event) {
-                        if send(socket, message).await.is_err() {
-                            return;
-                        }
+                    if send_event(socket, &event).await.is_err() {
+                        return;
                     }
                 }
                 Err(broadcast::error::TryRecvError::Lagged(missed)) => {
@@ -260,12 +308,7 @@ mod tests {
     use crate::identity::AgentInstanceId;
 
     fn event(payload: DomainEventKind) -> DomainEvent {
-        DomainEvent {
-            event_id: "test-event".into(),
-            sequence: 1,
-            occurred_at: std::time::SystemTime::now(),
-            payload,
-        }
+        DomainEvent::new("test-event".into(), 1, std::time::SystemTime::now(), payload)
     }
 
     #[test]

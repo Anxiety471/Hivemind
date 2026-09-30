@@ -250,3 +250,35 @@ pub struct RuntimeEpoch {
     pub ended_at: Option<i64>,
     pub metadata: serde_json::Value,
 }
+
+/// Incremental write of one archive turn: upserts the turn row (an existing
+/// `completed_at` is kept when `completed_at` is `None`), inserts or updates
+/// only the supplied messages, and optionally rewrites the room-state turn's
+/// metadata, all in one transaction.
+#[derive(Debug, Clone)]
+pub struct TurnAppend {
+    pub room_id: String,
+    pub turn_id: String,
+    pub started_at: i64,
+    pub completed_at: Option<i64>,
+    pub metadata: serde_json::Value,
+    pub participants: Vec<ArchiveParticipant>,
+    pub messages: Vec<ArchivedMessage>,
+    /// `(turn id, metadata)` of a reserved room-level state turn to upsert.
+    pub state_turn: Option<(String, serde_json::Value)>,
+}
+
+/// Turn row without its messages.
+#[derive(Debug, Clone)]
+pub struct ArchivedTurnMeta {
+    pub id: String,
+    pub completed_at: Option<i64>,
+    pub metadata: serde_json::Value,
+}
+
+/// Everything archived for one room, in chronological order.
+#[derive(Debug, Clone, Default)]
+pub struct RoomArchive {
+    pub messages: Vec<ArchivedMessage>,
+    pub turns: Vec<ArchivedTurnMeta>,
+}

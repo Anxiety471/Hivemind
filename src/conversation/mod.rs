@@ -8,8 +8,9 @@ use std::{
 
 use crate::identity::AgentInstanceId;
 use crate::memory::{
-    ArchiveParticipant, ArchivedMessage, ArchivedTurn, Caller, Layer, MemoryService, MemoryStatus,
-    MemoryWrite, Provenance, Scope, SearchRequest, SearchScope,
+    ArchiveParticipant, ArchivedMessage, ArchivedTurn, Caller, Layer, MemoryService,
+    MemoryStatus, MemoryWrite, Provenance, RoomArchive, Scope, SearchRequest, SearchResult,
+    SearchScope, TurnAppend,
 };
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
@@ -194,7 +195,7 @@ impl<'de> Deserialize<'de> for RoomHistory {
 
 #[derive(Debug, Clone)]
 pub struct Participant {
-    pub agent: AgentConfig,
+    pub agent: Arc<AgentConfig>,
     pub role: Option<String>,
 }
 

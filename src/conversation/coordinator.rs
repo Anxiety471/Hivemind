@@ -16,6 +16,7 @@ pub struct ConversationCoordinator {
     memory: Arc<MemoryService>,
     limits: ContextConfig,
     events: Option<crate::events::EventBus>,
+    lock_dir: std::sync::OnceLock<PathBuf>,
 }
 
 pub(super) struct PackRequest<'a> {
@@ -27,6 +28,8 @@ pub(super) struct PackRequest<'a> {
     pub(super) prior: &'a [(String, Result<String, String>)],
     pub(super) active_turn: &'a str,
     pub(super) caller: &'a Caller,
+    /// Pre-rendered "Relevant Hivemind memory" block, retrieved once per member.
+    pub(super) retrieval: &'a str,
 }
 
 /// Prompts prepared for one member's invocation this turn.
@@ -81,6 +84,7 @@ impl ConversationCoordinator {
             memory,
             limits,
             events,
+            lock_dir: std::sync::OnceLock::new(),
         }
     }
     #[cfg(test)]
@@ -94,6 +98,7 @@ impl ConversationCoordinator {
             memory,
             limits,
             events: None,
+            lock_dir: std::sync::OnceLock::new(),
         }
     }
     /// The shared memory service this coordinator executes tool calls against.
@@ -105,8 +110,9 @@ impl ConversationCoordinator {
         self.store.load_room(room)
     }
 
-    fn save(&self, history: &RoomHistory, room: &str) -> Result<()> {
-        self.store.save_room(room, history)
+    /// Load a room for one turn; pair with `store.release` after the last save.
+    fn checkout(&self, room: &str) -> Result<RoomHistory> {
+        self.store.checkout(room)
     }
 
     pub async fn turn(&self, request: TurnRequest<'_>) -> Result<Vec<TurnReply>> {
@@ -136,13 +142,21 @@ impl ConversationCoordinator {
             input,
             invoker,
         } = request;
-        let room_lock = room_mutex(self.store.directory(), room).await?;
+        let room_lock = room_mutex(self.lock_directory()?, room).await?;
         let _in_process = room_lock.lock().await;
         let _file_lock = acquire_file_lock(self.store.directory(), room).await?;
-        let mut history = self.room_history(room)?;
+        let mut history = self.checkout(room)?;
         if self.refresh_summary(&mut history) {
-            self.save(&history, room)?;
+            self.store.save_changes(
+                room,
+                &history,
+                &Changes {
+                    turn: None,
+                    snapshot: true,
+                },
+            )?;
         }
+        let mut saved = history.events.len();
         let turn_id = stable_id();
         if let Some(events) = &self.events {
             events.publish(crate::events::DomainEventKind::TurnStarted {
@@ -160,10 +174,21 @@ impl ConversationCoordinator {
             content: input.into(),
             error: false,
         });
-        self.save(&history, room)?;
+        self.save_turn(&history, room, &turn_id, &mut saved, false, false)?;
         // Explicit structured directive from the raw user input only; may
         // authorize exactly one exact-content global proposal this turn.
         let authorized_global = authorized_global_directive(input);
+        // Archive hits depend only on the room and the input, so one search
+        // serves every member of this turn.
+        let shared_archive = members
+            .first()
+            .map(|member| {
+                self.archive_retrieval(
+                    &invocation_caller(room, group_id, &member.agent.name, &turn_id, &user_message_id),
+                    input,
+                )
+            })
+            .unwrap_or_default();
         let mut replies = Vec::with_capacity(members.len());
         match mode {
             ConversationMode::Broadcast => {
@@ -179,6 +204,8 @@ impl ConversationCoordinator {
                     );
                     let instance_id = AgentInstanceId::new(room, &member.agent.name);
                     let cursor = invoker.cursor(&instance_id).await;
+                    let retrieval =
+                        self.memory_retrieval(&caller, input, &turn_id, &shared_archive);
                     let prompt = self.member_prompt(
                         &PackRequest {
                             history: &history,
@@ -189,6 +216,7 @@ impl ConversationCoordinator {
                             prior: &[],
                             active_turn: &turn_id,
                             caller: &caller,
+                            retrieval: &retrieval,
                         },
                         cursor,
                     );
@@ -291,7 +319,7 @@ impl ConversationCoordinator {
                         events.publish(event);
                     }
                     append_reply(&mut history, room, &turn_id, &name, &result);
-                    self.save(&history, room)?;
+                    self.save_turn(&history, room, &turn_id, &mut saved, false, false)?;
                     by_name.insert(name, result);
                 }
                 for member in members {
@@ -337,6 +365,8 @@ impl ConversationCoordinator {
                         });
                     }
                     let cursor = invoker.cursor(&instance_id).await;
+                    let retrieval =
+                        self.memory_retrieval(&caller, input, &turn_id, &shared_archive);
                     let result = match self.member_prompt(
                         &PackRequest {
                             history: &history,
@@ -347,6 +377,7 @@ impl ConversationCoordinator {
                             prior: &prior,
                             active_turn: &turn_id,
                             caller: &caller,
+                            retrieval: &retrieval,
                         },
                         cursor,
                     ) {
@@ -388,7 +419,7 @@ impl ConversationCoordinator {
                         events.publish(event);
                     }
                     append_reply(&mut history, room, &turn_id, &name, &result);
-                    self.save(&history, room)?;
+                    self.save_turn(&history, room, &turn_id, &mut saved, false, false)?;
                     prior.push((name.clone(), result.clone()));
                     replies.push(TurnReply { name, result });
                 }
@@ -398,7 +429,9 @@ impl ConversationCoordinator {
             if !history
                 .events
                 .iter()
-                .any(|event| event.turn_id == turn_id && event.speaker == reply.name)
+                .rev()
+                .take_while(|event| event.turn_id == turn_id)
+                .any(|event| event.speaker == reply.name)
             {
                 append_reply(&mut history, room, &turn_id, &reply.name, &reply.result);
             }
@@ -462,7 +495,8 @@ impl ConversationCoordinator {
             history.state = next_state;
         }
         self.refresh_summary(&mut history);
-        self.save(&history, room)?;
+        self.save_turn(&history, room, &turn_id, &mut saved, true, true)?;
+        self.store.release(room, history);
         if let Some(events) = &self.events {
             events.publish(crate::events::DomainEventKind::TurnCompleted {
                 turn_id: turn_id.clone(),
@@ -529,13 +563,17 @@ impl ConversationCoordinator {
             input,
             prior,
             active_turn,
-            caller,
+            retrieval,
             ..
         } = *request;
-        let start = history
+        let last = history
             .events
             .iter()
-            .position(|event| event.turn_id == cursor.turn_id)?;
+            .rposition(|event| event.turn_id == cursor.turn_id)?;
+        let start = history.events[..last]
+            .iter()
+            .rposition(|event| event.turn_id != cursor.turn_id)
+            .map_or(0, |index| index + 1);
         let lines = history.events[start..]
             .iter()
             .filter(|event| event.turn_id != active_turn)
@@ -552,7 +590,7 @@ impl ConversationCoordinator {
         if state_json != cursor.state_json {
             delta.push_str(&format!("\nShared room state:\n{state_json}\n"));
         }
-        delta.push_str(&self.memory_retrieval(caller, input, active_turn));
+        delta.push_str(retrieval);
         delta.push_str(SESSION_TOOL_REMINDER);
         delta.push_str(&format!("\nCurrent user message:\n{input}\n"));
         delta.push_str(&same_turn_replies(prior));
@@ -573,6 +611,7 @@ impl ConversationCoordinator {
             prior,
             active_turn,
             caller,
+            retrieval,
         } = *request;
         let roster = members
             .iter()
@@ -604,7 +643,7 @@ impl ConversationCoordinator {
         };
         // Bounded retrieval over the caller's authorized scopes only; current-turn
         // messages are excluded so the input is never echoed back as a "memory".
-        let hits = self.memory_retrieval(caller, input, active_turn);
+        let hits = retrieval;
         let current = format!("\nCurrent user message:\n{input}\n");
         let same_turn = same_turn_replies(prior);
         let mandatory_len =
@@ -631,37 +670,73 @@ impl ConversationCoordinator {
         ))
     }
 
+    /// Archive hits for this turn's input. Identical for every member (same
+    /// room, same query, current turn excluded), so it is searched once per
+    /// turn and shared. One extra row covers the active turn's own message.
+    fn archive_retrieval(&self, caller: &Caller, input: &str) -> Vec<SearchResult> {
+        let query = input.trim();
+        if query.is_empty() {
+            return Vec::new();
+        }
+        self.memory
+            .search(
+                caller,
+                &SearchRequest {
+                    query: query.to_owned(),
+                    scopes: vec![SearchScope::Archive],
+                    limit: 9,
+                    include_historical: false,
+                },
+            )
+            .unwrap_or_default()
+    }
+
     /// Deterministic, bounded retrieval of authorized group/private/persona/
-    /// global/current-room archive results for this agent's own identity.
-    /// Search failure or no results inject nothing (the agent is never told
-    /// memory was found when it was not).
-    fn memory_retrieval(&self, caller: &Caller, input: &str, active_turn: &str) -> String {
+    /// global results for this agent's own identity merged with the turn's
+    /// shared current-room archive hits. Search failure or no results inject
+    /// nothing (the agent is never told memory was found when it was not).
+    fn memory_retrieval(
+        &self,
+        caller: &Caller,
+        input: &str,
+        active_turn: &str,
+        shared_archive: &[SearchResult],
+    ) -> String {
         let query = input.trim().to_owned();
         if query.is_empty() {
             return String::new();
         }
-        let results = match self.memory.search(
-            caller,
-            &SearchRequest {
-                query,
-                scopes: default_search_scopes(caller),
-                limit: 8,
-                include_historical: false,
-            },
-        ) {
-            Ok(results) => results,
-            Err(_) => return String::new(),
-        };
-        let mut lines = Vec::new();
-        for result in results
+        let scopes = default_search_scopes(caller)
+            .into_iter()
+            .filter(|scope| *scope != SearchScope::Archive)
+            .collect();
+        let mut results = self
+            .memory
+            .search(
+                caller,
+                &SearchRequest {
+                    query,
+                    scopes,
+                    limit: 8,
+                    include_historical: false,
+                },
+            )
+            .unwrap_or_default();
+        results.extend(shared_archive.iter().cloned());
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.record.id.cmp(&b.record.id))
+        });
+        let lines: Vec<String> = results
             .iter()
             .filter(|result| {
                 result.record.provenance.source_turn_id.as_deref() != Some(active_turn)
             })
             .take(8)
-        {
-            lines.push(memory_result_line(&result.record));
-        }
+            .map(|result| memory_result_line(&result.record))
+            .collect();
         if lines.is_empty() {
             return String::new();
         }
@@ -669,14 +744,15 @@ impl ConversationCoordinator {
     }
 
     fn refresh_summary(&self, history: &mut RoomHistory) -> bool {
-        let mut turn_ids = Vec::new();
-        let mut seen = HashSet::new();
+        let mut turn_count = 0usize;
+        let mut last: Option<&str> = None;
         for event in &history.events {
-            if seen.insert(event.turn_id.as_str()) {
-                turn_ids.push(event.turn_id.as_str());
+            if last != Some(event.turn_id.as_str()) {
+                turn_count += 1;
+                last = Some(event.turn_id.as_str());
             }
         }
-        let archive_count = turn_ids.len().saturating_sub(self.limits.recent_turns);
+        let archive_count = turn_count.saturating_sub(self.limits.recent_turns);
         if archive_count == 0 {
             return false;
         }
@@ -688,16 +764,75 @@ impl ConversationCoordinator {
         if !cadence_due && !raw_window_would_evict_unrepresented_turn {
             return false;
         }
-        let archived: HashSet<_> = turn_ids[..archive_count].iter().copied().collect();
-        let narrative = history
-            .events
-            .iter()
-            .filter(|event| archived.contains(event.turn_id.as_str()))
-            .map(|event| format!("{}: {}", event.speaker, event.content))
-            .collect::<Vec<_>>()
-            .join("\n");
-        history.summary = utf8_suffix(&narrative, self.limits.summary_max_tokens.saturating_mul(4));
+        // Events of one turn are contiguous, so the archived prefix ends where
+        // turn number `archive_count` begins.
+        let mut cut = history.events.len();
+        let mut seen = 0;
+        let mut last: Option<&str> = None;
+        for (index, event) in history.events.iter().enumerate() {
+            if last != Some(event.turn_id.as_str()) {
+                if seen == archive_count {
+                    cut = index;
+                    break;
+                }
+                seen += 1;
+                last = Some(event.turn_id.as_str());
+            }
+        }
+        // The summary is the last `cap` bytes of the archived narrative, so
+        // walk the archived events newest-first and stop once that much text
+        // is collected instead of formatting the whole history.
+        let cap = self.limits.summary_max_tokens.saturating_mul(4);
+        let mut lines = Vec::new();
+        let mut collected = 0usize;
+        for event in history.events[..cut].iter().rev()
+        {
+            let line = format!("{}: {}", event.speaker, event.content);
+            collected += line.len() + 1;
+            lines.push(line);
+            if collected > cap {
+                break;
+            }
+        }
+        lines.reverse();
+        history.summary = utf8_suffix(&lines.join("\n"), cap);
         history.summarized_turn_count = archive_count;
         true
+    }
+
+    /// Persist what changed in the active turn: events from `*saved` on, its
+    /// completion, and optionally the state snapshot.
+    fn save_turn(
+        &self,
+        history: &RoomHistory,
+        room: &str,
+        turn_id: &str,
+        saved: &mut usize,
+        completed: bool,
+        snapshot: bool,
+    ) -> Result<()> {
+        self.store.save_changes(
+            room,
+            history,
+            &Changes {
+                turn: Some(TurnChange {
+                    turn_id,
+                    events_from: *saved,
+                    completed,
+                }),
+                snapshot,
+            },
+        )?;
+        *saved = history.events.len();
+        Ok(())
+    }
+
+    /// Canonical context directory, created and resolved once per coordinator.
+    fn lock_directory(&self) -> Result<&Path> {
+        if let Some(directory) = self.lock_dir.get() {
+            return Ok(directory);
+        }
+        let directory = canonical_store_dir(self.store.directory())?;
+        Ok(self.lock_dir.get_or_init(|| directory))
     }
 }

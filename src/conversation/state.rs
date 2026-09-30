@@ -101,27 +101,31 @@ pub(super) fn append_reply(
     });
 }
 
+/// Events of the last `turns` turns before `active_turn`. A turn's events are
+/// contiguous, so the window is found by walking back from the end.
 pub(super) fn recent_events(events: &[MessageEvent], turns: usize, active_turn: &str) -> String {
     if turns == 0 {
         return String::new();
     }
-    let mut ids = Vec::new();
-    for event in events
-        .iter()
-        .rev()
-        .filter(|event| event.turn_id != active_turn)
-    {
-        if ids.last() != Some(&event.turn_id) {
-            ids.push(event.turn_id.clone());
+    let mut seen = 0;
+    let mut last: Option<&str> = None;
+    let mut start = events.len();
+    for (index, event) in events.iter().enumerate().rev() {
+        if event.turn_id == active_turn {
+            continue;
         }
-        if ids.len() >= turns {
-            break;
+        if last != Some(event.turn_id.as_str()) {
+            if seen == turns {
+                break;
+            }
+            seen += 1;
+            last = Some(event.turn_id.as_str());
         }
+        start = index;
     }
-    let selected: HashSet<_> = ids.into_iter().collect();
-    events
+    events[start..]
         .iter()
-        .filter(|event| selected.contains(&event.turn_id))
+        .filter(|event| event.turn_id != active_turn)
         .map(|event| format!("{}: {}", event.speaker, event.content))
         .collect::<Vec<_>>()
         .join("\n")

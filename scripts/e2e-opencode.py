@@ -16,7 +16,7 @@ import json, os, shutil, signal, socket, sqlite3, subprocess, sys, tempfile, thr
 import base64, struct, urllib.request, uuid
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SERVER = os.path.join(ROOT, "target", "debug", "hivemind-server")
+SERVER = os.path.join(ROOT, "target", "debug", "hivemind")
 OPENCODE = os.environ.get("OPENCODE_BIN", "opencode")
 results = []
 
@@ -136,7 +136,7 @@ class Hive:
             s.bind(("127.0.0.1", 0))
             self.port = s.getsockname()[1]
         env = dict(os.environ, **self.xdg)
-        self.proc = subprocess.Popen([SERVER, "--config", self.config, "--port", str(self.port)],
+        self.proc = subprocess.Popen([SERVER, "--config", self.config, "serve", "--port", str(self.port)],
                                      cwd=self.dir, env=env, stderr=open(os.path.join(self.dir, "server.log"), "w"))
         for _ in range(100):
             try:
@@ -203,7 +203,7 @@ def main():
     if not models:
         sys.exit("skipped: `opencode models` lists no answering 'opencode/*-free' model")
     print("usable free models:", models)
-    subprocess.run(["cargo", "build", "--bin", "hivemind-server"], cwd=ROOT, check=True)
+    subprocess.run(["cargo", "build", "--bin", "hivemind"], cwd=ROOT, check=True)
     first, second = models[0], models[1 % len(models)]
     solo = {"type": "solo", "id": "Alpha"}
     alpha = {"id": "Alpha", "model": first}

@@ -265,17 +265,34 @@ impl RuntimePool {
                     .await;
             } else if request.phase == PromptPhase::TurnStart {
                 let mut live = live;
-                let reported =
-                    match race_runtime(&mut shutdown, None, live.session.context_tokens()).await {
-                        RuntimeCall::Completed(result) => result.ok().flatten().unwrap_or(0),
-                        RuntimeCall::TimedOut => unreachable!("context query has no timeout"),
-                        RuntimeCall::Shutdown => {
-                            inner
-                                .stop(request.agent_instance_id, live, Stop::CoreShutdown)
-                                .await;
-                            bail!("runtime pool is shutting down");
-                        }
-                    };
+                let reported = match race_runtime(
+                    &mut shutdown,
+                    prompt_timeout,
+                    live.session.context_tokens(),
+                )
+                .await
+                {
+                    RuntimeCall::Completed(result) => result.ok().flatten().unwrap_or(0),
+                    RuntimeCall::TimedOut => {
+                        inner.publish_failure(
+                            request.agent_instance_id,
+                            &live,
+                            "prompt_timeout",
+                            "runtime context query timed out and was discarded",
+                        );
+                        inner
+                            .stop(request.agent_instance_id, live, Stop::PromptTimeout)
+                            .await;
+                        inner.remove_vacant_slot(request.agent_instance_id, &slot_handle, &slot);
+                        bail!("runtime context query timed out");
+                    }
+                    RuntimeCall::Shutdown => {
+                        inner
+                            .stop(request.agent_instance_id, live, Stop::CoreShutdown)
+                            .await;
+                        bail!("runtime pool is shutting down");
+                    }
+                };
                 if live.estimated_tokens.max(reported) >= inner.rotate_tokens {
                     inner
                         .stop(
@@ -683,6 +700,106 @@ mod tests {
         }
     }
 
+    struct HungStatsSession(Arc<AtomicUsize>);
+
+    #[async_trait]
+    impl HarnessSession for HungStatsSession {
+        async fn prompt(&mut self, _input: &str) -> anyhow::Result<String> {
+            Ok("reply".into())
+        }
+
+        async fn context_tokens(&mut self) -> anyhow::Result<Option<u64>> {
+            std::future::pending().await
+        }
+
+        async fn shutdown(&mut self) -> anyhow::Result<()> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn hung_context_query_times_out_and_discards_the_session() {
+        let memory = Arc::new(MemoryService::new(MemoryStore::in_memory().unwrap()));
+        let instance = AgentInstanceId::new("stats-room", "Persona");
+        let caller = Caller::agent("stats-room", "", instance.clone(), "Persona", "Persona");
+        let epoch = memory
+            .start_runtime_epoch(&caller, "fake", serde_json::json!({}))
+            .unwrap();
+        let epoch_id = epoch.id.clone();
+        let runtime = RuntimeConfig {
+            idle_timeout_secs: 0,
+            prompt_timeout_secs: 1,
+            ..RuntimeConfig::default()
+        };
+        let pool = RuntimePool::new(runtime, 10_000, memory, EventBus::new());
+        let shutdowns = Arc::new(AtomicUsize::new(0));
+        pool.inner.slots.lock().insert(
+            instance.clone(),
+            Arc::new(AsyncMutex::new(Slot {
+                live: Some(Live {
+                    session: Box::new(HungStatsSession(shutdowns.clone())),
+                    epoch,
+                    caller: caller.clone(),
+                    agent_id: "Persona".into(),
+                    runtime: "fake".into(),
+                    cursor: None,
+                    estimated_tokens: 0,
+                }),
+                last_used: Instant::now(),
+            })),
+        );
+        let mut events = pool.inner.events.subscribe();
+        let agent = AgentConfig {
+            name: "Persona".into(),
+            runtime: "unsupported".into(),
+            system_prompt: String::new(),
+            workspace: ".".into(),
+            model: None,
+            reasoning: None,
+            fast: None,
+            role: None,
+        };
+        let view = TurnView {
+            turn_id: "turn".into(),
+            speakers: vec![],
+            state_json: "{}".into(),
+        };
+        let error = tokio::time::timeout(
+            Duration::from_secs(10),
+            pool.invoke(
+                &caller,
+                InvokeRequest {
+                    agent_instance_id: &instance,
+                    agent: &agent,
+                    phase: PromptPhase::TurnStart,
+                    full: "full",
+                    delta: Some(PromptDelta {
+                        epoch_id: &epoch_id,
+                        text: "delta",
+                    }),
+                    view: &view,
+                },
+            ),
+        )
+        .await
+        .expect("context query is bounded by the prompt timeout")
+        .unwrap_err();
+        assert!(error.to_string().contains("context query timed out"));
+        assert_eq!(shutdowns.load(Ordering::SeqCst), 1);
+        assert!(pool.inner.existing_slot(&instance).is_none());
+        let epochs = pool.inner.memory.runtime_epochs(&caller, 10).unwrap();
+        assert_eq!(epochs.len(), 1);
+        assert!(epochs[0].ended_at.is_some());
+        let mut reasons = Vec::new();
+        while let Ok(event) = events.try_recv() {
+            if let DomainEventKind::RuntimeStopped { reason, .. } = &event.payload {
+                reasons.push(reason.clone());
+            }
+        }
+        assert_eq!(reasons, ["prompt_timeout"]);
+    }
+
     fn idle_pool_with_live_session() -> (RuntimePool, Caller, AgentInstanceId, Arc<AtomicUsize>) {
         let memory = Arc::new(MemoryService::new(MemoryStore::in_memory().unwrap()));
         let instance = AgentInstanceId::new("idle-room", "Persona");
@@ -764,8 +881,8 @@ mod tests {
         assert!(epochs.iter().all(|epoch| epoch.ended_at.is_some()));
         let mut reasons = Vec::new();
         while let Ok(event) = events.try_recv() {
-            if let DomainEventKind::RuntimeStopped { reason, .. } = event.payload {
-                reasons.push(reason);
+            if let DomainEventKind::RuntimeStopped { reason, .. } = &event.payload {
+                reasons.push(reason.clone());
             }
         }
         assert_eq!(reasons, ["idle_timeout", "idle_timeout"]);
@@ -881,7 +998,7 @@ mod tests {
         assert!(epochs[0].ended_at.is_some());
         let stopped = events.try_recv().unwrap();
         assert!(matches!(
-            stopped.payload,
+            &stopped.payload,
             DomainEventKind::RuntimeStopped {
                 reason,
                 ..
@@ -902,7 +1019,7 @@ mod tests {
         assert!(epochs[0].ended_at.is_some());
         let stopped = events.try_recv().unwrap();
         assert!(matches!(
-            stopped.payload,
+            &stopped.payload,
             DomainEventKind::RuntimeStopped {
                 reason,
                 ..

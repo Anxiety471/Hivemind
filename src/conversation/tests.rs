@@ -52,7 +52,7 @@ impl AgentInvoker for Fake {
 }
 fn member(name: &str) -> Participant {
     Participant {
-        agent: AgentConfig {
+        agent: Arc::new(AgentConfig {
             name: name.into(),
             runtime: "pi".into(),
             system_prompt: String::new(),
@@ -61,7 +61,7 @@ fn member(name: &str) -> Participant {
             reasoning: None,
             fast: None,
             role: None,
-        },
+        }),
         role: Some(format!("{name} role")),
     }
 }
@@ -178,7 +178,7 @@ async fn broadcast_events_track_completion_order_and_safe_attributed_failures() 
     );
     let mut seen = Vec::new();
     while let Ok(event) = receiver.try_recv() {
-        seen.push(event.payload);
+        seen.push(event.payload.clone());
     }
     let (turn_id, room_id) = seen
         .iter()
@@ -248,28 +248,26 @@ async fn broadcast_events_track_completion_order_and_safe_attributed_failures() 
         .contains("sensitive provider detail"));
     let failed_event = loop {
         match failure_receiver.try_recv() {
-            Ok(crate::events::DomainEvent {
-                payload:
-                    crate::events::DomainEventKind::AgentReplyFailed {
-                        turn_id,
-                        room_id,
-                        agent_id,
-                        agent_instance_id,
-                        error_code,
-                        message,
-                    },
-                ..
-            }) => {
-                break (
+            Ok(event) => match event.payload.clone() {
+                crate::events::DomainEventKind::AgentReplyFailed {
                     turn_id,
                     room_id,
                     agent_id,
                     agent_instance_id,
                     error_code,
                     message,
-                )
-            }
-            Ok(_) => continue,
+                } => {
+                    break (
+                        turn_id,
+                        room_id,
+                        agent_id,
+                        agent_instance_id,
+                        error_code,
+                        message,
+                    )
+                }
+                _ => continue,
+            },
             Err(error) => panic!("missing reply failure event: {error}"),
         }
     };
@@ -969,6 +967,7 @@ fn context_budget_trims_old_history_but_keeps_current_input() {
         prior: &[],
         active_turn: "current-turn",
         caller: &caller,
+        retrieval: "",
     };
     let state_json = coordinator.state_json(&history, &caller).unwrap();
     let pack = coordinator.context_pack(&request, &state_json).unwrap();
@@ -1019,6 +1018,7 @@ fn turn_delta_lists_unseen_peers_and_changed_state_and_rejects_gaps() {
         prior: &[],
         active_turn: "t2",
         caller: &caller,
+        retrieval: "",
     };
     let state_json = coordinator.state_json(&history, &caller).unwrap();
     let cursor = TurnView {
@@ -2208,7 +2208,7 @@ fn upsert_is_idempotent_scope_bound_and_duplicate_adds_are_reported() {
     let records = memory.store().records_in_scope(&alice, &scope).unwrap();
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].content, "tz CET");
-    let revisions: i64 = memory.store().connection.lock().unwrap()
+    let revisions: i64 = memory.store().connection.lock()
         .query_row("SELECT COUNT(*) FROM memory_revisions WHERE memory_id=?1", [&records[0].id], |r| r.get(0)).unwrap();
     assert_eq!(revisions, 1);
     let untouched = memory.store().records_in_scope(&other, &Scope::AgentInstance(other.agent_instance_id.clone())).unwrap();
@@ -2241,4 +2241,178 @@ fn persona_and_global_update_follow_proposal_authorization() {
     execute_with_optional_authorization(&memory, &alice, Some(&exact2), &call("memory.global.update", serde_json::json!({"id": gid, "content": revised}))).unwrap();
     assert_eq!(memory.store().get(&alice, &gid).unwrap().unwrap().content, revised);
     assert!(execute_with_optional_authorization(&memory, &alice, Some(&exact2), &call("memory.global.update", serde_json::json!({"id": gid, "content": "something else entirely"}))).is_err());
+}
+
+fn file_memory(label: &str) -> (PathBuf, Arc<MemoryService>) {
+    let path = std::env::temp_dir().join(format!("hivemind-{label}-{}.sqlite3", stable_id()));
+    (path.clone(), Arc::new(MemoryService::open(&path).unwrap()))
+}
+
+type HistoryDigest = (
+    Vec<(String, String, String, String, bool)>,
+    RoomState,
+    String,
+    Vec<String>,
+    usize,
+);
+
+fn digest(history: &RoomHistory) -> HistoryDigest {
+    (
+        history
+            .events
+            .iter()
+            .map(|e| (e.id.clone(), e.turn_id.clone(), e.speaker.clone(), e.content.clone(), e.error))
+            .collect(),
+        history.state.clone(),
+        history.summary.clone(),
+        history.completed_turns.clone(),
+        history.summarized_turn_count,
+    )
+}
+
+#[tokio::test]
+async fn append_only_turns_reload_identically_from_a_cold_store() {
+    let dir = std::env::temp_dir().join(format!("hivemind-append-{}", stable_id()));
+    let (db, memory) = file_memory("append");
+    let limits = ContextConfig {
+        recent_turns: 2,
+        summary_max_tokens: 100,
+        context_target_tokens: 1000,
+        runtime_rotate_tokens: 24000,
+        summary_refresh_turns: 2,
+    };
+    let coord = ConversationCoordinator::new(&dir, limits.clone(), memory);
+    let members = vec![member("A"), member("B")];
+    let invoker = fake(Some("B"));
+    for input in ["goal: ship it", "second message", "third message", "fourth message", "fifth message"] {
+        coord
+            .turn(TurnRequest {
+                room: "append-room",
+                room_name: "Team",
+                group_id: "",
+                mode: ConversationMode::Discussion,
+                members: &members,
+                input,
+                invoker: invoker.clone(),
+            })
+            .await
+            .unwrap();
+    }
+    let warm = coord.room_history("append-room").unwrap();
+    assert_eq!(warm.events.len(), 15);
+    assert!(warm.events.iter().any(|event| event.error), "failed replies keep their flag");
+    assert_eq!(warm.completed_turns.len(), 5);
+    assert!(!warm.summary.is_empty());
+
+    // A fresh process view: new memory service on the same file, no caches.
+    let cold = ConversationCoordinator::new(&dir, limits, Arc::new(MemoryService::open(&db).unwrap()))
+        .room_history("append-room")
+        .unwrap();
+    assert_eq!(digest(&cold), digest(&warm));
+    let _ = fs::remove_dir_all(dir);
+    let _ = fs::remove_file(db);
+}
+
+#[tokio::test]
+async fn snapshot_written_before_turn_metadata_upgrades_on_first_load() {
+    let dir = std::env::temp_dir().join(format!("hivemind-upgrade-{}", stable_id()));
+    let (db, memory) = file_memory("upgrade");
+    let trusted = Caller::trusted_user("test");
+    let message = |id: &str, speaker: &str, content: &str, created_at: i64| ArchivedMessage {
+        id: id.into(),
+        room_id: "old-room".into(),
+        turn_id: "t1".into(),
+        speaker: speaker.into(),
+        content: content.into(),
+        created_at,
+    };
+    memory
+        .append_archive_turn(
+            &trusted,
+            ArchivedTurn {
+                id: "t1".into(),
+                room_id: "old-room".into(),
+                started_at: 1,
+                completed_at: Some(2),
+                metadata: serde_json::Value::Null,
+                participants: vec![],
+                messages: vec![message("m1", "user", "hello", 1), message("m2", "A", "[agent failure: boom]", 2)],
+            },
+        )
+        .unwrap();
+    memory
+        .append_archive_turn(
+            &trusted,
+            ArchivedTurn {
+                id: room_state_turn_id("old-room"),
+                room_id: "old-room".into(),
+                started_at: 2,
+                completed_at: None,
+                metadata: serde_json::json!({
+                    "summary": "older summary",
+                    "summarized_turn_count": 1,
+                    "completed_turns": ["t1"],
+                    "error_message_ids": ["m2"],
+                    "legacy_agent_instance_ids": {"m2": "legacy-A"},
+                }),
+                participants: vec![],
+                messages: vec![],
+            },
+        )
+        .unwrap();
+    let coord = ConversationCoordinator::new(&dir, ContextConfig::default(), memory.clone());
+    for _ in 0..2 {
+        let history = coord.room_history("old-room").unwrap();
+        assert_eq!(history.summary, "older summary");
+        assert_eq!(history.completed_turns, ["t1"]);
+        assert!(!history.events[0].error && history.events[1].error);
+        assert_eq!(history.events[1].legacy_agent_instance_id.as_deref(), Some("legacy-A"));
+    }
+    let snapshot = memory
+        .archive_turn(&trusted, "old-room", &room_state_turn_id("old-room"))
+        .unwrap()
+        .unwrap()
+        .metadata;
+    assert!(snapshot.get("completed_turns").is_none() && snapshot.get("error_message_ids").is_none());
+    assert_eq!(snapshot["summary"], "older summary");
+    let _ = fs::remove_dir_all(dir);
+    let _ = fs::remove_file(db);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn rooms_progress_together_on_a_file_backed_multi_thread_runtime() {
+    let dir = std::env::temp_dir().join(format!("hivemind-mt-{}", stable_id()));
+    let (db, memory) = file_memory("mt");
+    let coord = Arc::new(ConversationCoordinator::new(&dir, ContextConfig::default(), memory));
+    let invoker = fake_with(None, Some(Arc::new(tokio::sync::Barrier::new(2))));
+    let run = |room: &'static str| {
+        let coord = coord.clone();
+        let invoker = invoker.clone();
+        tokio::spawn(async move {
+            let members = vec![member("A")];
+            for round in 0..3 {
+                coord
+                    .turn(TurnRequest {
+                        room,
+                        room_name: room,
+                        group_id: "",
+                        mode: ConversationMode::Discussion,
+                        members: &members,
+                        input: &format!("round {round} in {room}"),
+                        invoker: invoker.clone(),
+                    })
+                    .await?;
+            }
+            anyhow::Ok(())
+        })
+    };
+    let (one, two) = (run("mt-a"), run("mt-b"));
+    one.await.unwrap().unwrap();
+    two.await.unwrap().unwrap();
+    assert!(invoker.max_running.load(Ordering::SeqCst) > 1);
+    for room in ["mt-a", "mt-b"] {
+        assert_eq!(coord.room_history(room).unwrap().completed_turns.len(), 3);
+    }
+    let _ = fs::remove_dir_all(dir);
+    let _ = fs::remove_file(db);
 }
