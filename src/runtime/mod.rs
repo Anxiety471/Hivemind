@@ -118,6 +118,7 @@ mod tests {
             capabilities: Vec::new(),
             permissions: Vec::new(),
             roles: Vec::new(),
+            tool_access: None,
         }
     }
 

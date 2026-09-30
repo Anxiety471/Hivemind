@@ -1,0 +1,62 @@
+# A ready-made team built on the built-in roles (see docs/access-control.md).
+# Copy the parts you want into hivemind.toml. Roles decide what each persona's
+# runtime may do: read-only personas never get edit or shell tools.
+[conversation]
+reply_order = ["Leader", "Researcher", "Implementor", "Tester", "Writer", "Auditor"]
+
+# Custom role: a read-only reviewer that may also archive room memory.
+[roles.security-auditor]
+permissions = ["review", "memory.archive", "memory.private.write"]
+
+[[personas]]
+id = "Leader"
+role = "Team Leader"
+runtime = "pi"
+roles = ["leader"]              # review + decide; read-only
+system_prompt = "You are the Leader. Watch the team's work, raise risks early, and sign off or send work back. You do not edit files. Reply concisely."
+workspace = "."
+
+[[personas]]
+id = "Researcher"
+role = "Researcher"
+runtime = "pi"
+roles = ["researcher"]          # read-only: no edit, no shell
+capabilities = ["research"]
+system_prompt = "You are the Researcher. Investigate the codebase and the question, then report findings with file references. You cannot modify anything."
+workspace = "."
+
+[[personas]]
+id = "Implementor"
+role = "Implementor"
+runtime = "pi"
+roles = ["implementor"]         # edit + shell
+capabilities = ["implementation"]
+system_prompt = "You are the Implementor. Make the change, keep it small, and verify it runs."
+workspace = "."
+
+[[personas]]
+id = "Tester"
+role = "Tester"
+runtime = "pi"
+roles = ["tester"]              # shell, no edit tools
+capabilities = ["testing"]
+system_prompt = "You are the Tester. Run builds and tests, reproduce bugs, and report exact commands and output. You do not edit source files."
+workspace = "."
+
+[[personas]]
+id = "Writer"
+role = "Technical Writer"
+runtime = "pi"
+roles = ["writer"]              # edit tools, no shell
+capabilities = ["docs"]
+system_prompt = "You are the Writer. Keep documentation accurate and concise."
+workspace = "."
+
+[[personas]]
+id = "Auditor"
+role = "Security Auditor"
+runtime = "pi"
+roles = ["security-auditor"]    # custom role above
+capabilities = ["security"]
+system_prompt = "You are the Auditor. Look for security problems and report them with severity and evidence. You are read-only."
+workspace = "."

@@ -16,23 +16,37 @@ use parking_lot::Mutex;
 use rusqlite::{params, Connection};
 use serde::Serialize;
 
-use crate::config::{AgentConfig, HivemindConfig, RoleConfig};
+use crate::config::{AgentConfig, HivemindConfig, RoleConfig, ToolAccess};
 
 pub const PERMISSIONS: &[&str] = &[
     "coordinate", "delegate", "review", "integrate",
     "memory.private.write", "memory.group.write", "memory.persona.write", "memory.global.write", "memory.archive",
     "task.decide", "task.reassign", "group.manage",
+    "workspace.write", "workspace.exec",
 ];
 
 /// Built-in roles. Custom `[roles.<name>]` entries cannot reuse these names.
+/// Only `worker`, `implementor`, `integrator`, and `writer` may edit files; `tester` may run shell
+/// but not use edit tools. `researcher`, `reviewer`, `coordinator`, `orchestrator`, `lead`,
+/// `leader`, `curator`, and `observer` are read-only.
 pub const BUILTIN_ROLES: &[(&str, &[&str])] = &[
     ("observer", &[]),
-    ("worker", &["memory.private.write", "memory.group.write"]),
+    ("worker", &["workspace.write", "workspace.exec", "memory.private.write", "memory.group.write"]),
+    ("implementor", &["workspace.write", "workspace.exec", "memory.private.write", "memory.group.write"]),
+    ("researcher", &["memory.private.write", "memory.group.write"]),
     ("reviewer", &["review", "memory.private.write"]),
     ("coordinator", &["coordinate", "memory.private.write", "memory.group.write"]),
-    ("integrator", &["integrate", "memory.private.write"]),
+    ("integrator", &["integrate", "workspace.write", "workspace.exec", "memory.private.write"]),
     ("curator", &["memory.persona.write", "memory.global.write", "memory.archive", "memory.private.write", "memory.group.write"]),
     ("lead", &["coordinate", "review", "memory.private.write", "memory.group.write"]),
+    // Pure delegator: plans, delegates, decides, and archives, but never touches files.
+    ("orchestrator", &["coordinate", "task.decide", "memory.private.write", "memory.group.write", "memory.archive"]),
+    // Observer with a voice: watches, reviews, and decides tasks; never edits and does not plan.
+    ("leader", &["review", "memory.private.write", "memory.group.write"]),
+    // Runs builds and tests (shell) but has no edit tools; shell can still write, so it is not a hard read-only.
+    ("tester", &["workspace.exec", "memory.private.write", "memory.group.write"]),
+    // Edits files (docs, content) but has no shell.
+    ("writer", &["workspace.write", "memory.private.write", "memory.group.write"]),
 ];
 
 /// Holding the left permission also holds each listed permission. Lists are
@@ -84,6 +98,14 @@ pub fn resolve(agent: &AgentConfig, custom: &BTreeMap<String, RoleConfig>) -> Gr
         }
     }
     Grants { roles: agent.roles.clone(), permissions: set.into_iter().collect(), restricted: !agent.roles.is_empty() }
+}
+
+/// Runtime tool restriction for `agent`. `None` (unrestricted) when the persona
+/// declares no roles, or holds both `workspace.write` and `workspace.exec`.
+pub fn tool_access(agent: &AgentConfig, custom: &BTreeMap<String, RoleConfig>) -> Option<ToolAccess> {
+    let grants = resolve(agent, custom);
+    let access = ToolAccess { write: grants.has("workspace.write"), exec: grants.has("workspace.exec") };
+    (grants.restricted && !(access.write && access.exec)).then_some(access)
 }
 
 pub fn validate(config: &HivemindConfig) -> Result<()> {
@@ -321,6 +343,30 @@ mod tests {
         let b = policy.grants("B").unwrap();
         assert!(b.has("task.decide") && !b.restricted, "no roles keeps legacy memory behavior");
         assert!(!policy.grants("C").unwrap().has("task.decide"), "coordinate does not imply task.decide");
+    }
+
+    #[test]
+    fn default_roles_decide_which_runtime_tools_a_persona_keeps() {
+        let config = config(
+            &[("Impl", &["implementor"], &[]), ("Res", &["researcher"], &[]), ("Legacy", &[], &[]), ("Exec", &["researcher"], &["workspace.exec"]), ("Rev", &["reviewer", "qa"], &[]), ("Orch", &["orchestrator"], &[]), ("Lead", &["leader"], &[])],
+            &[("qa", &["workspace.write"])],
+        );
+        validate(&config).unwrap();
+        let of = |name: &str| tool_access(config.agents.iter().find(|a| a.name == name).unwrap(), &config.roles);
+        assert_eq!(of("Impl"), None, "implementor keeps every tool");
+        assert_eq!(of("Res"), Some(ToolAccess { write: false, exec: false }), "researcher is read-only");
+        assert_eq!(of("Legacy"), None, "no roles stays unrestricted");
+        assert_eq!(of("Exec"), Some(ToolAccess { write: false, exec: true }), "direct grants add to the role");
+        assert_eq!(of("Rev"), Some(ToolAccess { write: true, exec: false }), "custom roles can grant workspace permissions");
+        assert_eq!(of("Orch"), Some(ToolAccess { write: false, exec: false }), "orchestrator delegates, never edits");
+        assert_eq!(of("Lead"), Some(ToolAccess { write: false, exec: false }), "leader observes and decides but never edits");
+        let grants = resolve(config.agents.iter().find(|a| a.name == "Lead").unwrap(), &config.roles);
+        assert!(grants.has("review") && grants.has("task.decide") && !grants.has("coordinate"), "leader signs off, does not plan");
+        let builtin = |role: &str| tool_access(&AgentConfig { roles: vec![role.into()], ..config_agent("X") }, &config.roles);
+        assert_eq!(builtin("tester"), Some(ToolAccess { write: false, exec: true }));
+        assert_eq!(builtin("writer"), Some(ToolAccess { write: true, exec: false }));
+        let grants = resolve(config.agents.iter().find(|a| a.name == "Orch").unwrap(), &config.roles);
+        assert!(grants.has("coordinate") && grants.has("delegate") && grants.has("task.decide") && !grants.has("review"));
     }
 
     #[test]

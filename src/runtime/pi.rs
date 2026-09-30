@@ -145,6 +145,17 @@ impl PiSession {
         if let Some(reasoning) = agent.reasoning.as_deref().filter(|s| !s.trim().is_empty()) {
             args.extend(["--thinking".into(), reasoning.into()]);
         }
+        if let Some(access) = agent.tool_access {
+            // Explicit allowlist: read-only built-ins plus only what the persona's permissions grant.
+            let mut tools = vec!["read", "grep", "find", "ls"];
+            if access.write {
+                tools.extend(["edit", "write"]);
+            }
+            if access.exec {
+                tools.push("bash");
+            }
+            args.extend(["--tools".into(), tools.join(",")]);
+        }
         args
     }
 
@@ -303,6 +314,7 @@ mod tests {
             capabilities: Vec::new(),
             permissions: Vec::new(),
             roles: Vec::new(),
+            tool_access: None,
         }
     }
 
@@ -322,6 +334,18 @@ mod tests {
                 "high",
             ]
         );
+    }
+
+    #[test]
+    fn read_only_persona_gets_a_tool_allowlist_without_edit_or_shell() {
+        let mut agent = agent();
+        agent.tool_access = Some(crate::config::ToolAccess { write: false, exec: false });
+        let args = PiSession::rpc_args(&agent);
+        let tools = &args[args.iter().position(|a| a == "--tools").unwrap() + 1];
+        assert_eq!(tools, "read,grep,find,ls");
+        agent.tool_access = Some(crate::config::ToolAccess { write: true, exec: false });
+        let args = PiSession::rpc_args(&agent);
+        assert_eq!(args[args.iter().position(|a| a == "--tools").unwrap() + 1], "read,grep,find,ls,edit,write");
     }
 
     static NEXT: AtomicUsize = AtomicUsize::new(0);

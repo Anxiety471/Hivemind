@@ -12,6 +12,8 @@ pub struct Persona {
     pub capabilities: Vec<String>,
     pub permissions: Vec<String>,
     pub workspace: String,
+    /// Declares roles, so only its listed permissions apply (see `access::Grants::restricted`).
+    pub restricted: bool,
     /// Configured reply order, the final tie-breaker.
     pub order: usize,
 }
@@ -19,6 +21,18 @@ pub struct Persona {
 impl Persona {
     pub fn has_permission(&self, permission: &str) -> bool {
         self.permissions.iter().any(|p| p == permission)
+    }
+    /// Whether file changes are allowed: always for a persona without roles.
+    pub fn may_write(&self) -> bool {
+        !self.restricted || self.has_permission("workspace.write")
+    }
+    /// Permission check for task ownership: `workspace.write` is implied for a persona without roles.
+    pub fn holds(&self, permission: &str) -> bool {
+        if permission == "workspace.write" {
+            self.may_write()
+        } else {
+            self.has_permission(permission)
+        }
     }
     pub fn covers(&self, required: &[String]) -> usize {
         required.iter().filter(|cap| self.capabilities.contains(cap)).count()
@@ -52,6 +66,7 @@ impl Roster {
                     capabilities: agent.capabilities.iter().map(|t| normalize_tag(t)).collect(),
                     permissions: crate::access::resolve(agent, &config.roles).permissions,
                     workspace: normalize_workspace(&agent.workspace),
+                    restricted: !agent.roles.is_empty(),
                     order,
                 })
                 .collect(),
@@ -86,7 +101,7 @@ impl Roster {
             .iter()
             .filter(|p| !exclude.contains(&p.name.as_str()))
             .filter(|p| Self::eligible_for_workspace(p, workspace))
-            .filter(|p| permission.is_none_or(|perm| p.has_permission(perm)))
+            .filter(|p| permission.is_none_or(|perm| p.holds(perm)))
             .collect();
         candidates.sort_by_key(|p| (load.get(&p.name).copied().unwrap_or(0), p.order));
         if let Some(found) = candidates.iter().find(|p| p.covers(required) == required.len()) {
@@ -248,7 +263,7 @@ pub fn validate_plan(plan: &Plan, ctx: &PlanContext<'_>) -> CoordResult<Vec<Reso
                 return Err(CoordError::Invalid(format!("task '{key}' depends on unknown task '{dep}'")));
             }
         }
-        let permission = (kind == TaskKind::Integrate).then_some("integrate");
+        let permission = Some(if kind == TaskKind::Integrate { "integrate" } else { "workspace.write" });
         let owner = match task.owner.as_deref() {
             Some(name) => {
                 let persona = ctx
@@ -262,7 +277,7 @@ pub fn validate_plan(plan: &Plan, ctx: &PlanContext<'_>) -> CoordResult<Vec<Reso
                     return Err(CoordError::Forbidden(format!("persona '{name}' lacks capabilities required by task '{key}'")));
                 }
                 if let Some(permission) = permission {
-                    if !persona.has_permission(permission) {
+                    if !persona.holds(permission) {
                         return Err(CoordError::Forbidden(format!("persona '{name}' lacks the '{permission}' permission")));
                     }
                 }
@@ -273,6 +288,9 @@ pub fn validate_plan(plan: &Plan, ctx: &PlanContext<'_>) -> CoordResult<Vec<Reso
                 .select(&capabilities, permission, ctx.workspace, ctx.load, &[])
                 .map_err(|reason| CoordError::Invalid(format!("task '{key}' has no eligible owner: {reason}")))?,
         };
+        if !owner.may_write() {
+            return Err(CoordError::Forbidden(format!("persona '{}' cannot change files (no 'workspace.write'), so it cannot own task '{key}'", owner.name)));
+        }
         let reviewer = match task.reviewer.as_deref() {
             Some(name) => {
                 let persona = ctx
@@ -358,6 +376,7 @@ mod tests {
             capabilities: caps.iter().map(|c| c.to_string()).collect(),
             permissions: perms.iter().map(|c| c.to_string()).collect(),
             workspace: normalize_workspace("."),
+            restricted: false,
             order,
         }
     }
@@ -459,5 +478,17 @@ mod tests {
         integ.kind = Some("integrate".into());
         let resolved = validate(&Plan { tasks: vec![integ] }, &HashMap::new()).unwrap();
         assert_eq!(resolved[0].owner, "Integrator");
+    }
+
+    #[test]
+    fn read_only_personas_never_own_work_but_persona_without_roles_may() {
+        let restricted = |name: &str, perms: &[&str], order| Persona { restricted: true, ..persona(name, &["x"], perms, order) };
+        let roster = Roster { personas: vec![restricted("Res", &[], 0), restricted("Impl", &["workspace.write"], 1), persona("Legacy", &["x"], &[], 2)] };
+        let empty = HashMap::new();
+        let caps = vec!["x".to_string()];
+        assert_eq!(roster.select(&caps, Some("workspace.write"), ".", &empty, &[]).unwrap().name, "Impl");
+        assert_eq!(roster.select(&caps, Some("workspace.write"), ".", &empty, &["Impl"]).unwrap().name, "Legacy");
+        assert!(roster.select(&caps, Some("workspace.write"), ".", &empty, &["Impl", "Legacy"]).is_err(), "a researcher is never picked to write");
+        assert!(!roster.get("Res").unwrap().may_write() && roster.get("Legacy").unwrap().may_write());
     }
 }

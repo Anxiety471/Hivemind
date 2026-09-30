@@ -28,6 +28,7 @@ pub(super) fn persona(name: &str, caps: &[&str], perms: &[&str], workspace: &str
         capabilities: caps.iter().map(|c| c.to_string()).collect(),
         permissions: perms.iter().map(|c| c.to_string()).collect(),
         roles: Vec::new(),
+        tool_access: None,
     }
 }
 
@@ -568,7 +569,7 @@ fn group_and_reassign_tools_follow_permissions_and_roles_not_prose() {
     assert_eq!(offered(&["group.manage"], &[]), (true, false, true), "group.manage alone opens groups only");
     assert_eq!(offered(&["task.reassign"], &[]), (false, true, false), "task.reassign alone offers delegation, not groups");
     assert_eq!(offered(&["delegate"], &[]), (true, true, true), "delegate implies group.manage and task.reassign");
-    assert_eq!(offered(&[], &["coordinator"]), (true, true, true), "roles grant what direct permissions grant");
+    assert_eq!(offered(&[], &["coordinator", "implementor"]), (true, true, true), "roles grant what direct permissions grant");
     assert_eq!(offered(&[], &["worker"]), (false, false, false), "a role without coordination permissions grants none");
 }
 

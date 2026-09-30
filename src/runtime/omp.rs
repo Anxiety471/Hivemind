@@ -213,7 +213,19 @@ impl OmpSession {
             args.push("--thinking".into());
             args.push(reasoning.into());
         }
-
+        if let Some(access) = agent.tool_access {
+            // Explicit allowlist: read-only built-ins plus only what the persona's permissions grant.
+            // Sub-agents, browser, and desktop control are excluded because they could bypass it.
+            let mut tools = vec!["read", "grep", "glob", "lsp", "web_search", "todo"];
+            if access.write {
+                tools.extend(["edit", "write", "notebook"]);
+            }
+            if access.exec {
+                tools.extend(["bash", "python"]);
+            }
+            args.push("--tools".into());
+            args.push(tools.join(","));
+        }
         args
     }
 
@@ -498,6 +510,7 @@ mod tests {
             capabilities: Vec::new(),
             permissions: Vec::new(),
             roles: Vec::new(),
+            tool_access: None,
         }
     }
 
@@ -520,6 +533,18 @@ mod tests {
                 "high",
             ]
         );
+    }
+
+    #[test]
+    fn restricted_persona_gets_a_tool_allowlist_without_subagents_or_withheld_tools() {
+        let mut agent = agent(None);
+        agent.tool_access = Some(crate::config::ToolAccess { write: false, exec: false });
+        let args = OmpSession::rpc_args(&agent);
+        let tools = &args[args.iter().position(|a| a == "--tools").unwrap() + 1];
+        assert_eq!(tools, "read,grep,glob,lsp,web_search,todo");
+        agent.tool_access = Some(crate::config::ToolAccess { write: false, exec: true });
+        let args = OmpSession::rpc_args(&agent);
+        assert!(args[args.iter().position(|a| a == "--tools").unwrap() + 1].ends_with("bash,python"));
     }
 
     #[derive(Default)]

@@ -398,6 +398,7 @@ mod tests {
                 capabilities: caps.iter().map(|c| c.to_string()).collect(),
                 permissions: perms.iter().map(|c| c.to_string()).collect(),
                 roles: Vec::new(),
+                tool_access: None,
             };
             config.agents = vec![persona("Lead", &[], &["coordinate", "review"]), persona("Back", &["backend"], &[])];
             config.conversation.reply_order.clear();

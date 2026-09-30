@@ -789,6 +789,7 @@ mod tests {
             capabilities: Vec::new(),
             permissions: Vec::new(),
             roles: Vec::new(),
+            tool_access: None,
         };
         let view = TurnView {
             turn_id: "turn".into(),
@@ -868,6 +869,7 @@ mod tests {
             capabilities: Vec::new(),
             permissions: Vec::new(),
             roles: Vec::new(),
+            tool_access: None,
         };
         let view = TurnView { turn_id: "turn".into(), speakers: vec![], state_json: "{}".into() };
         // The unsupported runtime makes the restart fail, proving a new session was attempted.
@@ -1044,6 +1046,7 @@ mod tests {
             capabilities: Vec::new(),
             permissions: Vec::new(),
             roles: Vec::new(),
+            tool_access: None,
             };
             let view = TurnView {
                 turn_id: "turn".into(),

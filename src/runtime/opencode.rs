@@ -161,6 +161,19 @@ impl OpencodeSession {
         }
     }
 
+    /// OpenCode permission config: everything allowed unless the persona's roles withhold editing or shell.
+    fn permission(agent: &AgentConfig) -> Value {
+        let Some(access) = agent.tool_access else { return json!("allow") };
+        let mut rules = json!({"*": "allow"});
+        if !access.write {
+            rules["edit"] = json!("deny");
+        }
+        if !access.exec {
+            rules["bash"] = json!("deny");
+        }
+        rules
+    }
+
     async fn spawn_and_open(binary: &str, agent: &AgentConfig, model: Option<&str>) -> Result<Self> {
         let mut command = Command::new(binary);
         command
@@ -170,7 +183,7 @@ impl OpencodeSession {
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
             .kill_on_drop(true);
-        let mut config = json!({"permission": "allow"});
+        let mut config = json!({"permission": Self::permission(agent)});
         if !agent.system_prompt.trim().is_empty() {
             config["agent"] = json!({"build": {"prompt": agent.system_prompt}});
         }

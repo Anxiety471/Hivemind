@@ -306,6 +306,19 @@ pub struct AgentConfig {
     /// Roles granting permissions. Declaring any makes gated memory tools deny-by-default.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub roles: Vec<String>,
+    /// Runtime tool restriction resolved from `roles` at startup (`access::tool_access`); never configured directly.
+    #[serde(skip)]
+    pub tool_access: Option<ToolAccess>,
+}
+
+/// Which of a runtime's own workspace tools a restricted persona keeps.
+/// Reading and searching are always available.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ToolAccess {
+    /// File-editing tools (`edit`, `write`, notebooks).
+    pub write: bool,
+    /// Shell and code-execution tools (`bash`, `python`); these can write files too.
+    pub exec: bool,
 }
 impl HivemindConfig {
     pub fn load(path: &Path) -> Result<Self> {
@@ -524,6 +537,7 @@ impl HivemindConfig {
                     capabilities: Vec::new(),
                     permissions: Vec::new(),
                     roles: Vec::new(),
+                    tool_access: None,
                 },
                 AgentConfig {
                     name: "Reviewer".into(),
@@ -542,6 +556,7 @@ impl HivemindConfig {
                     capabilities: Vec::new(),
                     permissions: Vec::new(),
                     roles: Vec::new(),
+                    tool_access: None,
                 },
             ],
         }
@@ -885,5 +900,15 @@ mod tests {
         HivemindConfig::write_default(&path, true).unwrap();
         assert_eq!(HivemindConfig::load(&path).unwrap().agents.len(), 2);
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn example_team_loads_and_roles_restrict_tools_as_documented() {
+        let config = load_toml(include_str!("../examples/team.toml")).unwrap();
+        let access = |name: &str| crate::access::tool_access(config.agents.iter().find(|a| a.name == name).unwrap(), &config.roles);
+        let tools = |write, exec| Some(ToolAccess { write, exec });
+        assert_eq!(config.agents.len(), 6);
+        assert_eq!((access("Leader"), access("Researcher"), access("Auditor")), (tools(false, false), tools(false, false), tools(false, false)));
+        assert_eq!((access("Implementor"), access("Tester"), access("Writer")), (None, tools(false, true), tools(true, false)));
     }
 }

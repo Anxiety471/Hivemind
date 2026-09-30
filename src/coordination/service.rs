@@ -932,6 +932,9 @@ impl CoordinationService {
             if task.kind == TaskKind::Integrate && !new_owner.has_permission("integrate") {
                 return forbid(format!("persona '{owner}' lacks the 'integrate' permission"));
             }
+            if !new_owner.may_write() {
+                return forbid(format!("persona '{owner}' cannot change files (no 'workspace.write') and cannot own this task"));
+            }
             let reviewer = task.reviewer.clone().filter(|r| !r.is_empty()).unwrap_or_else(|| root.coordinator.clone());
             if task.id != task.root_id && self.roster.personas().len() > 1 && reviewer == owner {
                 return forbid(format!("persona '{owner}' is the reviewer of this task and cannot also own it"));

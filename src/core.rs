@@ -129,7 +129,7 @@ impl HivemindCore {
                 config
                     .ordered_agents()
                     .into_iter()
-                    .map(|agent| Arc::new(agent.clone()))
+                    .map(|agent| Arc::new(crate::config::AgentConfig { tool_access: crate::access::tool_access(agent, &config.roles), ..agent.clone() }))
                     .collect(),
             ),
         };
