@@ -122,12 +122,18 @@ impl RpcTransport for ChildTransport {
     }
 }
 
+const TOOL_FENCE: &str = "```hivemind-tool";
+
 /// One persistent OMP RPC process owned by exactly one agent.
 pub struct OmpSession {
     agent_name: String,
     transport: Box<dyn RpcTransport>,
     /// Set once a transport error proves this session can never recover.
     failure: Option<String>,
+    /// Latest assistant message of the current prompt that held a Hivemind tool call.
+    /// OMP can keep going after it (for example after the model calls OMP's own `todo`
+    /// tool), and `get_last_assistant_text` would then return only the trailing message.
+    tool_reply: Option<String>,
 }
 
 impl OmpSession {
@@ -160,6 +166,7 @@ impl OmpSession {
             agent_name: agent.name.clone(),
             transport: Box::new(transport),
             failure: None,
+            tool_reply: None,
         };
 
         session.wait_for_ready().await?;
@@ -245,12 +252,33 @@ impl OmpSession {
         let result = self.transport.recv().await;
 
         match result {
-            Ok(frame) => Ok(frame),
+            Ok(frame) => {
+                self.note_tool_reply(&frame);
+                Ok(frame)
+            }
             Err(error) => {
                 let error = error.context(format!("OMP RPC read failed for '{}'", self.agent_name));
                 self.failure = Some(format!("{error:#}"));
                 Err(error)
             }
+        }
+    }
+
+    fn note_tool_reply(&mut self, frame: &Value) {
+        let message = &frame["message"];
+        if frame["type"] != "message_end" || message["role"] != "assistant" {
+            return;
+        }
+        let text: String = message["content"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|part| part["type"] == "text")
+            .filter_map(|part| part["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        if text.contains(TOOL_FENCE) {
+            self.tool_reply = Some(text.trim().to_owned());
         }
     }
 
@@ -377,6 +405,7 @@ impl HarnessSession for OmpSession {
             );
         }
 
+        self.tool_reply = None;
         self.send_frame(&json!({
             "id": "hivemind_prompt",
             "type": "prompt",
@@ -408,11 +437,18 @@ impl HarnessSession for OmpSession {
             .filter(|text| !text.is_empty());
 
         match text {
+            // The model asked for a Hivemind tool, then OMP carried on: the request is the reply.
+            Some(text) if !text.contains(TOOL_FENCE) && self.tool_reply.is_some() => {
+                Ok(self.tool_reply.take().unwrap_or_default())
+            }
             Some(text) => Ok(text.to_string()),
-            None => bail!(
-                "OMP RPC completed without assistant text for '{}'",
-                self.agent_name
-            ),
+            None => match self.tool_reply.take() {
+                Some(reply) => Ok(reply),
+                None => bail!(
+                    "OMP RPC completed without assistant text for '{}'",
+                    self.agent_name
+                ),
+            },
         }
     }
 
@@ -668,6 +704,30 @@ mod tests {
 
         let unread = script.lock().incoming.len();
         assert_eq!(unread, 0, "the session must consume its scripted frames");
+    }
+
+    #[tokio::test]
+    async fn tool_call_survives_omp_continuing_after_it() {
+        let agent = agent(None);
+        let (script, transport) = fake_transport();
+        push_ready(&script);
+        push_frame(&script, json!({ "type": "response", "id": "hivemind_prompt", "success": true, "data": { "agentInvoked": true } }));
+        push_frame(&script, json!({ "type": "message_end", "message": { "role": "assistant", "content": [
+            { "type": "text", "text": "```hivemind-tool\n{\"name\":\"workspace.get\",\"args\":{}}\n```" }
+        ] } }));
+        // OMP carries on (its own todo reminder), and its last message is only a status line.
+        push_frame(&script, json!({ "type": "message_end", "message": { "role": "assistant", "content": [
+            { "type": "text", "text": "Workspace lookup requested." }
+        ] } }));
+        push_frame(&script, json!({ "type": "prompt_result", "id": "hivemind_prompt", "status": "completed", "sessionSettled": true }));
+        push_frame(&script, json!({ "type": "response", "id": "hivemind_last_text", "success": true, "data": { "text": "Workspace lookup requested." } }));
+        push_prompt_turn(&script, "plain answer", true);
+
+        let mut session = OmpSession::start_with_transport(&agent, transport).await.unwrap();
+        let reply = session.prompt("where?").await.unwrap();
+        assert!(reply.contains("workspace.get") && reply.starts_with("```hivemind-tool"), "{reply}");
+        // The next prompt starts clean: an earlier tool call never leaks into a plain answer.
+        assert_eq!(session.prompt("again").await.unwrap(), "plain answer");
     }
 
     #[tokio::test]

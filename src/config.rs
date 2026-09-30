@@ -19,6 +19,23 @@ pub struct HivemindConfig {
     pub memory: MemoryConfig,
     #[serde(default)]
     pub coordination: CoordinationConfig,
+    /// Limits where agents may point a workspace; a user-written path is never checked.
+    #[serde(default, skip_serializing_if = "WorkspacesConfig::is_default")]
+    pub workspaces: WorkspacesConfig,
+}
+
+/// Agent-driven workspace changes (`workspace.set`, `workspace.list`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct WorkspacesConfig {
+    /// Absolute directories agents may choose from. Empty means any existing directory.
+    #[serde(default)]
+    pub roots: Vec<String>,
+}
+
+impl WorkspacesConfig {
+    fn is_default(&self) -> bool {
+        self.roots.is_empty()
+    }
 }
 
 impl CoordinationConfig {
@@ -180,6 +197,10 @@ pub struct GroupConfig {
     pub member_roles: std::collections::HashMap<String, String>,
     #[serde(default)]
     pub reply_order: Vec<String>,
+    /// Shared working directory for every member when the group works together.
+    /// Absent means the group has no shared workspace; members keep their own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -288,6 +309,12 @@ impl HivemindConfig {
         config.validate()?;
         for agent in &mut config.agents {
             agent.workspace = absolute_workspace(&agent.workspace);
+        }
+        for group in &mut config.groups {
+            group.workspace = group.workspace.take().map(|w| absolute_workspace(&w));
+        }
+        for root in &mut config.workspaces.roots {
+            *root = absolute_workspace(root);
         }
 
         Ok(config)
@@ -467,6 +494,7 @@ impl HivemindConfig {
             context: ContextConfig::default(),
             memory: MemoryConfig::default(),
             coordination: CoordinationConfig::default(),
+            workspaces: WorkspacesConfig::default(),
             groups: Vec::new(),
             agents: vec![
                 AgentConfig {

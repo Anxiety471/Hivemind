@@ -195,6 +195,9 @@ reply_order = ["Reviewer", "Engineer"]
 - Personas you leave out follow declaration order.
 - **Main/all** turns use broadcast mode. **Solo** turns use the same room/history/context setup with one participant.
 - Each group sets `mode = "broadcast"` or `mode = "discussion"`. It can override roles in `[groups.member_roles]` and set its own `reply_order` with members only. A partial order puts the remaining members after it, in global order.
+- **Shared workspace.** A group works in one directory only when it has one: set `workspace = "/abs/path"` on the `[[groups]]` entry, or tell the group in chat where it is and an agent records it with `workspace.set`. Group rooms get `workspace.get`, `workspace.set`, `workspace.clear` (removes it, so members return to their own workspaces) and `workspace.list`. Every member runs there from the next message; live sessions started elsewhere are restarted. Without one, members keep their own persona workspaces and are told not to assume a shared directory.
+- **Solo workspace.** A solo room offers `workspace.get`, `workspace.set` and `workspace.list`. `workspace.set` changes that persona's own `workspace` in the config file, so it applies to the persona everywhere it runs (solo, main, and groups without a shared workspace). A shared group workspace still wins inside that group. There is no clear for solo: a persona always has a workspace.
+- **Limiting agents.** Tools accept only absolute, existing directories. Add `[workspaces]` `roots = ["/abs/dir", ...]` to restrict agent choices to those directories and their subdirectories (symlinks are resolved, so they can't escape); `workspace.list` shows each root and its visible subdirectories. With no roots, any existing directory is accepted and `workspace.list` says there is nothing to list. Paths you write in the config are never checked.
 
 | Mode | Behavior |
 | --- | --- |

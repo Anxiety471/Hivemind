@@ -433,6 +433,7 @@ mod tests {
             .into_iter()
             .collect(),
             reply_order: vec!["Reviewer".into(), "Engineer".into()],
+            workspace: None,
         });
         let engineer_system_prompt = config
             .agents

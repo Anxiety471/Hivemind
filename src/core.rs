@@ -12,6 +12,7 @@ use std::{
 use anyhow::{Context, Result};
 
 use crate::{
+    shared_workspace::{SharedWorkspaces, ToolHosts, WorkspaceTools},
     config::{ConversationMode, HivemindConfig},
     coordination::{policy::Roster, store::CoordinationStore, CoordinationService, CoordinationTools},
     conversation::{
@@ -34,6 +35,7 @@ pub struct HivemindCore {
     config_path: PathBuf,
     data_dir: PathBuf,
     coordination: Arc<CoordinationService>,
+    workspaces: Arc<SharedWorkspaces>,
     shutting_down: AtomicBool,
     shutdown_lock: tokio::sync::Mutex<()>,
 }
@@ -94,6 +96,16 @@ impl std::fmt::Display for TargetResolutionError {
 
 impl std::error::Error for TargetResolutionError {}
 
+/// `agent` moved to `workspace`; the shared handle is reused when it already is there.
+fn with_workspace(agent: Arc<crate::config::AgentConfig>, workspace: &str) -> Arc<crate::config::AgentConfig> {
+    if agent.workspace == workspace {
+        return agent;
+    }
+    let mut moved = (*agent).clone();
+    moved.workspace = workspace.to_owned();
+    Arc::new(moved)
+}
+
 impl HivemindCore {
     pub fn new(config: HivemindConfig, config_path: impl AsRef<Path>) -> Result<Self> {
         let config_path = config_path.as_ref().to_owned();
@@ -145,9 +157,12 @@ impl HivemindCore {
             Roster::from_config(&config),
             events.clone(),
         ));
+        let workspaces = Arc::new(SharedWorkspaces::new(&config_path, &config));
+        let mut hosts: Vec<Arc<dyn crate::conversation::ToolHost>> = vec![Arc::new(WorkspaceTools::new(workspaces.clone()))];
         if config.coordination.enabled {
-            conversation.set_tools(Arc::new(CoordinationTools::new(coordination.clone())));
+            hosts.push(Arc::new(CoordinationTools::new(coordination.clone())));
         }
+        conversation.set_tools(Arc::new(ToolHosts(hosts)));
         events.publish(DomainEventKind::CoreStarted);
         Ok(Self {
             config: RwLock::new(config),
@@ -159,6 +174,7 @@ impl HivemindCore {
             config_path,
             data_dir,
             coordination,
+            workspaces,
             shutting_down: AtomicBool::new(false),
             shutdown_lock: tokio::sync::Mutex::new(()),
         })
@@ -181,6 +197,7 @@ impl HivemindCore {
             .as_ref()
             .clone();
         config.groups = groups;
+        self.workspaces.replace_groups(&config.groups);
         *self.config.write().expect("core config lock poisoned") = Arc::new(config);
     }
 
@@ -217,6 +234,9 @@ impl HivemindCore {
     pub fn conversation(&self) -> &ConversationCoordinator {
         &self.conversation
     }
+    pub fn shared_workspaces(&self) -> &Arc<SharedWorkspaces> {
+        &self.workspaces
+    }
     pub fn config_path(&self) -> &Path {
         &self.config_path
     }
@@ -237,7 +257,7 @@ impl HivemindCore {
                 participants: registry
                     .list()
                     .into_iter()
-                    .map(|agent| Participant { agent, role: None })
+                    .map(|agent| Participant { agent: self.own_workspace(agent), role: None })
                     .collect(),
             },
             ConversationTarget::Solo { persona_id } => {
@@ -249,6 +269,7 @@ impl HivemindCore {
                 let agent = registry.get(persona_id).ok_or_else(|| {
                     TargetResolutionError::NotFound(format!("unknown persona '{persona_id}'"))
                 })?;
+                let agent = self.own_workspace(agent);
                 ResolvedConversationTarget {
                     room_id: format!("solo-{persona_id}"),
                     room_name: format!("Solo: {persona_id}"),
@@ -279,6 +300,7 @@ impl HivemindCore {
                     )));
                 }
                 let members = config.ordered_group_members(group);
+                let shared = self.workspaces.group(&group.name);
                 ResolvedConversationTarget {
                     room_id: format!("group-{group_id}"),
                     room_name: group.name.clone(),
@@ -287,15 +309,26 @@ impl HivemindCore {
                     participants: members
                         .into_iter()
                         .filter_map(|agent| {
-                            Some(Participant {
-                                role: group.member_roles.get(&agent.name).cloned(),
-                                agent: registry.get(&agent.name)?,
-                            })
+                            let agent = registry.get(&agent.name)?;
+                            // A shared workspace wins; otherwise the persona's own (agent-changeable) one.
+                            let agent = match &shared {
+                                Some(workspace) => with_workspace(agent, workspace),
+                                None => self.own_workspace(agent),
+                            };
+                            Some(Participant { role: group.member_roles.get(&agent.name).cloned(), agent })
                         })
                         .collect(),
                 }
             }
         })
+    }
+
+    /// The persona with its current own workspace, which an agent may have changed at runtime.
+    fn own_workspace(&self, agent: Arc<crate::config::AgentConfig>) -> Arc<crate::config::AgentConfig> {
+        match self.workspaces.persona(&agent.name) {
+            Some(workspace) => with_workspace(agent, &workspace),
+            None => agent,
+        }
     }
 
     pub async fn send_turn(
@@ -1328,6 +1361,7 @@ done
                 .into_iter()
                 .collect(),
             reply_order: vec!["Engineer".into()],
+            workspace: None,
         });
         let core = HivemindCore::new(config, directory.0.join("hivemind.toml")).unwrap();
 

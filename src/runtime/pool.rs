@@ -153,6 +153,9 @@ struct Live {
     runtime: String,
     cursor: Option<TurnView>,
     estimated_tokens: u64,
+    /// Working directory the session was spawned in; a changed persona or shared
+    /// workspace must not keep prompting a process still sitting in the old one.
+    workspace: String,
 }
 
 struct Slot {
@@ -254,6 +257,15 @@ impl RuntimePool {
         );
         let prompt_timeout = (inner.runtime.prompt_timeout_secs > 0)
             .then(|| Duration::from_secs(inner.runtime.prompt_timeout_secs));
+        if request.phase == PromptPhase::TurnStart
+            && slot.live.as_ref().is_some_and(|live| live.workspace != request.agent.workspace)
+        {
+            let live = slot.live.take().expect("checked above");
+            inner
+                .stop(request.agent_instance_id, live, Stop::Rotated("workspace_changed"))
+                .await;
+            matching = false;
+        }
         if let Some(live) = slot.live.take() {
             if !matching {
                 inner
@@ -552,6 +564,7 @@ impl PoolInner {
             runtime: agent.runtime.clone(),
             cursor: None,
             estimated_tokens: 0,
+            workspace: agent.workspace.clone(),
         })
     }
 
@@ -758,6 +771,7 @@ mod tests {
                     runtime: "fake".into(),
                     cursor: None,
                     estimated_tokens: 0,
+                    workspace: ".".into(),
                 }),
                 last_used: Instant::now(),
             })),
@@ -815,6 +829,71 @@ mod tests {
         assert_eq!(reasons, ["prompt_timeout"]);
     }
 
+    #[tokio::test]
+    async fn changed_workspace_rotates_the_live_session_before_the_turn() {
+        let memory = Arc::new(MemoryService::new(MemoryStore::in_memory().unwrap()));
+        let instance = AgentInstanceId::new("ws-room", "Persona");
+        let caller = Caller::agent("ws-room", "", instance.clone(), "Persona", "Persona");
+        let epoch = memory.start_runtime_epoch(&caller, "fake", serde_json::json!({})).unwrap();
+        let epoch_id = epoch.id.clone();
+        let pool = RuntimePool::new(RuntimeConfig { idle_timeout_secs: 0, ..RuntimeConfig::default() }, 10_000, memory, EventBus::new());
+        let shutdowns = Arc::new(AtomicUsize::new(0));
+        pool.inner.slots.lock().insert(
+            instance.clone(),
+            Arc::new(AsyncMutex::new(Slot {
+                live: Some(Live {
+                    session: Box::new(FakeSession(shutdowns.clone())),
+                    epoch,
+                    caller: caller.clone(),
+                    agent_id: "Persona".into(),
+                    runtime: "fake".into(),
+                    cursor: None,
+                    estimated_tokens: 0,
+                    workspace: ".".into(),
+                }),
+                last_used: Instant::now(),
+            })),
+        );
+        let mut events = pool.inner.events.subscribe();
+        let agent = AgentConfig {
+            name: "Persona".into(),
+            runtime: "unsupported".into(),
+            system_prompt: String::new(),
+            workspace: "/shared/project".into(),
+            model: None,
+            reasoning: None,
+            fast: None,
+            role: None,
+            capabilities: Vec::new(),
+            permissions: Vec::new(),
+        };
+        let view = TurnView { turn_id: "turn".into(), speakers: vec![], state_json: "{}".into() };
+        // The unsupported runtime makes the restart fail, proving a new session was attempted.
+        let error = pool
+            .invoke(
+                &caller,
+                InvokeRequest {
+                    agent_instance_id: &instance,
+                    agent: &agent,
+                    phase: PromptPhase::TurnStart,
+                    full: "full",
+                    delta: Some(PromptDelta { epoch_id: &epoch_id, text: "delta" }),
+                    view: &view,
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(!error.to_string().contains("shutting down"));
+        assert_eq!(shutdowns.load(Ordering::SeqCst), 1, "the session in the old workspace was stopped");
+        let mut reasons = Vec::new();
+        while let Ok(event) = events.try_recv() {
+            if let DomainEventKind::RuntimeStopped { reason, .. } = &event.payload {
+                reasons.push(reason.clone());
+            }
+        }
+        assert_eq!(reasons, ["workspace_changed"]);
+    }
+
     fn idle_pool_with_live_session() -> (RuntimePool, Caller, AgentInstanceId, Arc<AtomicUsize>) {
         let memory = Arc::new(MemoryService::new(MemoryStore::in_memory().unwrap()));
         let instance = AgentInstanceId::new("idle-room", "Persona");
@@ -837,6 +916,7 @@ mod tests {
                 runtime: "fake".into(),
                 cursor: None,
                 estimated_tokens: 0,
+                workspace: ".".into(),
             }),
             last_used: Instant::now() - Duration::from_secs(120),
         }));
@@ -879,6 +959,7 @@ mod tests {
                 runtime: "fake".into(),
                 cursor: None,
                 estimated_tokens: 0,
+                workspace: ".".into(),
             });
         }
         pool.close_idle(Duration::from_secs(60)).await;
@@ -1084,6 +1165,7 @@ mod tests {
                     runtime: "fake".into(),
                     cursor: None,
                     estimated_tokens: 0,
+                    workspace: ".".into(),
                 }),
                 last_used: Instant::now() - Duration::from_secs(120),
             })),
@@ -1097,6 +1179,7 @@ mod tests {
                 runtime: "fake".into(),
                 cursor: None,
                 estimated_tokens: 0,
+                workspace: ".".into(),
             }),
             last_used: Instant::now() - Duration::from_secs(120),
         }));

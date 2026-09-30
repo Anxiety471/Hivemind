@@ -43,6 +43,7 @@ id = "development"
 mode = "discussion"
 members = ["Engineer", "Reviewer"]
 reply_order = ["Reviewer", "Engineer"]
+# workspace = "/abs/path/to/project"  # optional shared workspace; agents can also set it via chat
 [groups.member_roles]
 Engineer = "Backend Engineer"
 Reviewer = "Architecture Reviewer"
@@ -54,3 +55,7 @@ members = ["Reviewer", "Engineer"]
 [groups.member_roles]
 Reviewer = "Lead Reviewer"
 Engineer = "Implementation Reviewer"
+
+# Optional, top level: restrict where agents may point a workspace with workspace.set.
+# [workspaces]
+# roots = ["/abs/path/to/projects"]

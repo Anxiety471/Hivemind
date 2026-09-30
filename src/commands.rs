@@ -39,9 +39,23 @@ pub fn ordered_group_members<'a>(
 /// Apply one group operation and persist it before exposing the new state.
 pub fn mutate_group(config: &mut HivemindConfig, path: &Path, command: GroupCommand) -> Result<()> {
     let mut staged = config.clone();
+    sync_group_workspaces(&mut staged, path)?;
     apply_group_mutation(&mut staged, command)?;
     persist_groups(&staged, path)?;
     *config = staged;
+    Ok(())
+}
+
+/// Agents can record a group's shared workspace in the file while a shell holds an
+/// older copy; the file is authoritative so a group edit never reverts it.
+fn sync_group_workspaces(config: &mut HivemindConfig, path: &Path) -> Result<()> {
+    let raw = fs::read_to_string(path).with_context(|| format!("reading config {}", path.display()))?;
+    let disk: HivemindConfig = toml::from_str(&raw).with_context(|| format!("parsing config {}", path.display()))?;
+    for group in &mut config.groups {
+        if let Some(on_disk) = disk.groups.iter().find(|g| g.name == group.name) {
+            group.workspace = on_disk.workspace.clone();
+        }
+    }
     Ok(())
 }
 
@@ -125,6 +139,7 @@ fn apply_group_mutation(config: &mut HivemindConfig, command: GroupCommand) -> R
                 mode: Default::default(),
                 member_roles: Default::default(),
                 reply_order: Default::default(),
+                workspace: None,
             });
         }
         GroupCommand::Add {
@@ -330,6 +345,7 @@ mod tests {
             ]
             .into(),
             reply_order: vec!["Reviewer".into(), "Engineer".into()],
+            workspace: None,
         });
         fs::write(&path, toml::to_string_pretty(&config).unwrap()).unwrap();
 

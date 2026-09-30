@@ -505,6 +505,7 @@ done
             mode: config::ConversationMode::Broadcast,
             member_roles: Default::default(),
             reply_order: Default::default(),
+            workspace: None,
         });
         let core = HivemindCore::new(config.clone(), &path).unwrap();
         assert_eq!(
@@ -532,6 +533,7 @@ done
             mode: config::ConversationMode::Broadcast,
             member_roles: Default::default(),
             reply_order: Default::default(),
+            workspace: None,
         });
         assert_eq!(
             render_group(&config, "backend").unwrap(),
@@ -552,6 +554,7 @@ done
                 .into_iter()
                 .collect(),
             reply_order: vec!["Reviewer".into()],
+            workspace: None,
         });
         let core = HivemindCore::new(config.clone(), &config_path).unwrap();
         let replies = route_turn(&core, &Route::Group("review".into()), "review this change")
@@ -609,6 +612,7 @@ done
                 .into_iter()
                 .collect(),
             reply_order: vec!["Reviewer".into()],
+            workspace: None,
         });
         let config_path = fake.directory.0.join("hivemind.toml");
         let core = HivemindCore::new(config.clone(), &config_path).unwrap();
@@ -665,6 +669,7 @@ done
             mode: config::ConversationMode::Broadcast,
             member_roles: Default::default(),
             reply_order: Vec::new(),
+            workspace: None,
         });
 
         assert_eq!(

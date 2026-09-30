@@ -287,6 +287,7 @@ mod tests {
             context: hivemind::config::ContextConfig::default(),
             memory: Default::default(),
             coordination: Default::default(),
+            workspaces: Default::default(),
         }
     }
 
