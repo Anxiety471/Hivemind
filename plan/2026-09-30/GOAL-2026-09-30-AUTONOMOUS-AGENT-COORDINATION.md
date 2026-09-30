@@ -4,7 +4,7 @@
 
 **Status: proposed implementation plan; none of the features below are claimed as implemented.**
 
-A user submits one task, such as “Fix this frontend and backend.” Hivemind selects eligible agents, lets a coordinator propose a decomposition, validates the resulting dependency graph, and runs the work without requiring the user to route every message. Agents can send DMs, create task groups by role/capability, exchange concrete handoffs, and report verifiable results. The API exposes durable task state and live activity.
+A user submits one task, such as “Fix this frontend and backend.” A Hivemind agent (either Jev(as classifier) or a Real Agent, based on configuration) selects eligible agents, lets a coordinator propose a decomposition, validates the resulting dependency graph, and runs the work without requiring the user to route every message. Agents can send DMs, create task groups by role/capability, exchange concrete handoffs, and report verifiable results. The API exposes durable task state and live activity.
 
 Keep Rust as the application core and runtime adapters as execution transports. Keep deterministic storage, authorization, scheduling, and context assembly usable without a model. Models interpret ambiguous requests and perform work; they do not become the source of truth for identity, permissions, scheduling, or completion.
 
