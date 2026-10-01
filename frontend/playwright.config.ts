@@ -1,11 +1,15 @@
 import { defineConfig } from "@playwright/test";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const frontendRoot = fileURLToPath(new URL(".", import.meta.url));
 const repositoryRoot = resolve(frontendRoot, "..");
-const configPath = join(tmpdir(), "hivemind-setup-e2e-" + process.pid, "hivemind.toml");
+const runId = process.env.GITHUB_RUN_ID ?? "local";
+const runDirectory = join(tmpdir(), "hivemind-setup-e2e-" + runId);
+rmSync(runDirectory, { recursive: true, force: true });
+const configPath = join(runDirectory, "hivemind.toml");
 const serverBinary = join(repositoryRoot, "target", "debug", "hivemind");
 
 process.env.HIVEMIND_E2E_CONFIG = configPath;
@@ -13,7 +17,9 @@ process.env.HIVEMIND_E2E_CONFIG = configPath;
 export default defineConfig({
   testDir: "./e2e",
   fullyParallel: false,
-  retries: process.env.CI ? 1 : 0,
+  // Setup is intentionally one-shot, so a retry against the same server cannot
+  // start from the same initial state after a partially successful attempt.
+  retries: 0,
   reporter: "list",
   use: {
     baseURL: "http://127.0.0.1:15173",
