@@ -1,0 +1,21 @@
+{
+  "name": "hivemind-ui",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "demo": "sh dev/demo.sh"
+  },
+  "dependencies": {
+    "preact": "^11.0.0"
+  },
+  "devDependencies": {
+    "@preact/preset-vite": "^2.10.6",
+    "typescript": "^7.0.2",
+    "vite": "^6.4.3"
+  }
+}

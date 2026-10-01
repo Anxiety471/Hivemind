@@ -14,6 +14,7 @@
 
 **Reference**
 - [HTTP and WebSocket API](HTTP-and-WebSocket-API)
+- [Web UI](Web-UI)
 - [Backend Efficiency](Backend-Efficiency)
 - [Limitations](Limitations)
 

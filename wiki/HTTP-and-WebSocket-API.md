@@ -7,7 +7,7 @@ hivemind serve     # binds to http://127.0.0.1:7474
 > [!CAUTION]
 > Loopback is the default. Remote binding requires an operator token, HTTPS/WSS, and an explicit origin allowlist. See [Execution](Execution).
 
-Building the server and serving health, info, and agent listings never starts Pi, OMP, or OpenCode. `serve` also runs the autonomous task scheduler when [Coordination](Coordination) is enabled. All endpoints use the `/api/v1` prefix.
+Building the server and serving health, info, and agent listings never starts Pi, OMP, or OpenCode. `serve` also runs the autonomous task scheduler when [Coordination](Coordination) is enabled. All endpoints use the `/api/v1` prefix. A browser UI built on this API lives in `frontend/`; see [Web UI](Web-UI).
 
 ## Endpoints
 
