@@ -30,6 +30,8 @@ When `hivemind.toml` does not exist, open the UI and follow **First-run setup**.
 
 `npm run build` writes a static bundle to `dist/` (about 75 kB gzipped on first load; each screen other than Rooms is a lazy-loaded chunk of 1 to 3 kB); serve it from any loopback origin (`npm run preview` does this on port 4173).
 
+Run the browser E2E setup test from the repository root after building Hivemind with cargo build --locked. In frontend/, install Chromium once with npx playwright install chromium, then run npm run e2e. The test starts a fresh server and Vite UI, configures a persona in Chromium, and checks that the config was saved and the persona became active.
+
 ### Remote servers
 
 When `server.token_env` is configured, enter the operator token under **Connection**. HTTP calls send it as `Authorization: Bearer …` and the WebSocket sends it as the `hivemind.auth.<token>` subprotocol. The page's origin must be listed in `server.allowed_origins`.
