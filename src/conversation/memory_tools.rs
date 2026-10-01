@@ -538,7 +538,13 @@ pub(super) async fn invoke_with_memory(
                     .unwrap_or_else(|_| call.name.clone());
                 let executed = match host.filter(|host| host.handles(&call.name)) {
                     Some(host) => {
-                        host.execute(&caller.room_id, &caller.persona_id, &call.name, &call.args)
+                        host.execute_async(
+                            &caller.room_id,
+                            &caller.persona_id,
+                            &call.name,
+                            &call.args,
+                        )
+                        .await
                     }
                     None => access
                         .map_or(Ok(()), |access| {

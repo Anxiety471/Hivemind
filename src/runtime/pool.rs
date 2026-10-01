@@ -23,7 +23,7 @@ use tokio::{
     time::timeout,
 };
 
-use super::{create_session, HarnessSession};
+use super::{create_session, HarnessSession, SteerHandle};
 use crate::{
     config::{AgentConfig, RuntimeConfig},
     events::{DomainEventKind, EventBus},
@@ -258,6 +258,9 @@ struct PoolInner {
     memory: Arc<MemoryService>,
     events: EventBus,
     slots: ParkingMutex<HashMap<AgentInstanceId, SlotHandle>>,
+    /// Steering handles for live sessions, reachable without the slot lock
+    /// (which is held for the whole of a prompt).
+    steers: ParkingMutex<HashMap<AgentInstanceId, SteerHandle>>,
     shutting_down: AtomicBool,
     shutdown_signal: watch::Sender<bool>,
     shutdown_lock: AsyncMutex<()>,
@@ -287,6 +290,7 @@ impl RuntimePool {
                 memory,
                 events,
                 slots: ParkingMutex::new(HashMap::new()),
+                steers: ParkingMutex::new(HashMap::new()),
                 shutting_down: AtomicBool::new(false),
                 shutdown_signal,
                 shutdown_lock: AsyncMutex::new(()),
@@ -294,6 +298,14 @@ impl RuntimePool {
                 reaper_task: ParkingMutex::new(None),
             }),
         }
+    }
+
+    /// Queue `text` for the live session of `agent_instance_id`: forwarded as
+    /// a runtime `steer` while a prompt runs, else prepended to its next
+    /// prompt. `false` means there is no live session that supports it.
+    pub fn steer(&self, agent_instance_id: &AgentInstanceId, text: &str) -> bool {
+        let handle = self.inner.steers.lock().get(agent_instance_id).cloned();
+        handle.is_some_and(|handle| handle.try_steer(text))
     }
 
     /// Live continuable state for `agent_instance_id`; `None` means the next prompt hydrates.
@@ -781,6 +793,11 @@ impl PoolInner {
                 return Err(error);
             }
         };
+        if let Some(handle) = session.steer_handle() {
+            self.steers
+                .lock()
+                .insert(request.agent_instance_id.clone(), handle);
+        }
         self.events.publish(DomainEventKind::RuntimeStarted {
             agent_id: agent.name.clone(),
             agent_instance_id: request.agent_instance_id.clone(),
@@ -799,6 +816,7 @@ impl PoolInner {
     }
 
     async fn stop(&self, agent_instance_id: &AgentInstanceId, mut live: Live, reason: Stop) {
+        self.steers.lock().remove(agent_instance_id);
         shutdown_session(&mut *live.session, &agent_instance_id.encode()).await;
         let ended_at = SystemTime::now()
             .duration_since(UNIX_EPOCH)

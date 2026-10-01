@@ -95,6 +95,7 @@ impl CoordinationConfig {
             || self.max_concurrent == 0
             || self.lease_secs == 0
             || self.max_message_depth == 0
+            || self.question_timeout_secs == 0
         {
             bail!("coordination limits must be positive");
         }
@@ -141,6 +142,12 @@ pub struct CoordinationConfig {
     /// Longest causation chain whose messages may still wake a recipient.
     #[serde(default = "default_max_message_depth")]
     pub max_message_depth: u32,
+    /// Seconds a worker waits on a `tasks.ask` question before carrying on without an answer.
+    #[serde(default = "default_question_timeout_secs")]
+    pub question_timeout_secs: u64,
+    /// `tasks.ask` questions allowed per attempt.
+    #[serde(default = "default_max_questions")]
+    pub max_questions: u32,
 }
 
 impl Default for CoordinationConfig {
@@ -158,6 +165,8 @@ impl Default for CoordinationConfig {
             max_concurrent: default_max_concurrent(),
             lease_secs: default_lease_secs(),
             max_message_depth: default_max_message_depth(),
+            question_timeout_secs: default_question_timeout_secs(),
+            max_questions: default_max_questions(),
         }
     }
 }
@@ -191,6 +200,12 @@ fn default_lease_secs() -> u64 {
 }
 fn default_max_message_depth() -> u32 {
     8
+}
+fn default_question_timeout_secs() -> u64 {
+    600
+}
+fn default_max_questions() -> u32 {
+    3
 }
 
 /// Deterministic, model-independent memory behavior.
