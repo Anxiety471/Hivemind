@@ -85,6 +85,40 @@ pub struct InvokeReply {
     pub epoch_id: String,
 }
 
+/// Accounts for a prompt future dropped by cancellation before normal cleanup.
+struct PromptGuard {
+    armed: bool,
+    memory: Arc<MemoryService>,
+    caller: Caller,
+    epoch: String,
+    store: Option<Arc<crate::execution::ExecutionStore>>,
+    project: String,
+    turn: String,
+}
+impl Drop for PromptGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            let ended = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64;
+            let _ =
+                self.memory
+                    .end_runtime_epoch(&self.caller, &self.epoch, ended, "prompt_cancelled");
+            if let Some(store) = &self.store {
+                let _ = store.record_usage(
+                    &self.caller.room_id,
+                    &self.project,
+                    &self.turn,
+                    &self.caller.persona_id,
+                    &self.epoch,
+                    None,
+                );
+            }
+        }
+    }
+}
+
 enum Stop {
     Rotated(&'static str),
     RuntimeFailure,
@@ -95,11 +129,12 @@ enum Stop {
 
 /// Stop reasons that are not rotations; every other recorded epoch end
 /// reason names why a live session was rotated.
-const NON_ROTATION_STOPS: [&str; 4] = [
+const NON_ROTATION_STOPS: [&str; 5] = [
     "runtime_failure",
     "prompt_timeout",
     "idle_timeout",
     "core_shutdown",
+    "prompt_cancelled",
 ];
 
 /// Whether a recorded runtime epoch `end_reason` is a session rotation.
@@ -180,6 +215,7 @@ struct Slot {
 type SlotHandle = Arc<AsyncMutex<Slot>>;
 
 struct PoolInner {
+    execution: std::sync::OnceLock<Arc<crate::execution::ExecutionStore>>,
     runtime: RuntimeConfig,
     rotate_tokens: u64,
     memory: Arc<MemoryService>,
@@ -208,6 +244,7 @@ impl RuntimePool {
         let (shutdown_signal, _) = watch::channel(false);
         Self {
             inner: Arc::new(PoolInner {
+                execution: std::sync::OnceLock::new(),
                 runtime,
                 rotate_tokens: rotate_tokens as u64,
                 memory,
@@ -237,6 +274,10 @@ impl RuntimePool {
         })
     }
 
+    pub fn set_execution(&self, store: Arc<crate::execution::ExecutionStore>) {
+        let _ = self.inner.execution.set(store);
+    }
+
     /// Prompt the instance's live session, starting, rotating, or rehydrating
     /// it as needed. A failed prompt discards the session and is not retried.
     pub async fn invoke(&self, caller: &Caller, request: InvokeRequest<'_>) -> Result<InvokeReply> {
@@ -248,6 +289,13 @@ impl RuntimePool {
             bail!("runtime request identity does not match its caller and persona");
         }
         let inner = &self.inner;
+        let project = std::fs::canonicalize(&request.agent.workspace)
+            .unwrap_or_else(|_| request.agent.workspace.clone().into())
+            .display()
+            .to_string();
+        if let Some(store) = inner.execution.get() {
+            store.check_budget(&request.agent_instance_id.room_id, &project)?;
+        }
         let mut shutdown = inner.shutdown_signal.subscribe();
         if *shutdown.borrow() || inner.shutting_down.load(Ordering::SeqCst) {
             bail!("runtime pool is shutting down");
@@ -360,7 +408,34 @@ impl RuntimePool {
             _ => request.full,
         };
         let mut live = slot.live.take().expect("live session was just ensured");
-        match race_runtime(&mut shutdown, prompt_timeout, live.session.prompt(text)).await {
+        let mut prompt_guard = PromptGuard {
+            armed: true,
+            memory: inner.memory.clone(),
+            caller: live.caller.clone(),
+            epoch: live.epoch.id.clone(),
+            store: inner.execution.get().cloned(),
+            project: project.clone(),
+            turn: request.view.turn_id.clone(),
+        };
+        live.session.set_progress(Some(super::ProgressSink {
+            events: inner.events.clone(),
+            instance: request.agent_instance_id.clone(),
+            turn_id: request.view.turn_id.clone(),
+        }));
+        let response = race_runtime(&mut shutdown, prompt_timeout, live.session.prompt(text)).await;
+        let usage = live.session.take_usage();
+        if let Some(store) = inner.execution.get() {
+            store.record_usage(
+                &request.agent_instance_id.room_id,
+                &project,
+                &request.view.turn_id,
+                &request.agent.name,
+                &live.epoch.id,
+                usage.as_ref(),
+            )?;
+        }
+        prompt_guard.armed = false;
+        match response {
             RuntimeCall::Completed(Ok(reply)) => {
                 live.estimated_tokens += (text.len() + reply.len()).div_ceil(4) as u64;
                 live.cursor = Some(request.view.clone());

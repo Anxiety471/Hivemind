@@ -44,6 +44,14 @@ impl DomainEvent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DomainEventKind {
+    RuntimeProgress {
+        room_id: String,
+        turn_id: String,
+        agent_instance_id: AgentInstanceId,
+        kind: String,
+        message_id: String,
+        text: String,
+    },
     CoreStarted,
     CoreShuttingDown,
     ThreadCreated {

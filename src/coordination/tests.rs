@@ -1243,3 +1243,60 @@ fn gated_coordination_decisions_are_audited_with_the_bound_identity() {
         .iter()
         .all(|e| e.persona == "Lead" && e.resource.starts_with("task:")));
 }
+
+#[test]
+fn agent_evidence_cannot_bypass_host_checks_or_reuse_proof_for_another_commit() {
+    let service = service();
+    let execution = Arc::new(
+        crate::execution::ExecutionStore::open(
+            ":memory:",
+            crate::execution::ExecutionConfig {
+                checks: vec![crate::execution::CheckConfig {
+                    name: "host-test".into(),
+                    command: vec!["true".into()],
+                    timeout_secs: 1,
+                }],
+                ..Default::default()
+            },
+        )
+        .unwrap(),
+    );
+    service.set_execution(execution.clone());
+    let (_, api, _) = planned(&service);
+    let work = claim(&service);
+    let owner = ctx(&service, &work[0]);
+    service
+        .submit_result(&owner, result(Verdict::Passed))
+        .unwrap();
+    service
+        .record_artifact(
+            &api,
+            Some(&work[0].attempt.id),
+            "commit",
+            "branch@sha2",
+            Some("sha2"),
+            "host commit",
+        )
+        .unwrap();
+    service
+        .finish_attempt(&work[0].attempt.id, AttemptEnd::Completed)
+        .unwrap();
+    let review = claim(&service);
+    let reviewer = ctx(&service, &review[0]);
+    assert!(service
+        .review(&reviewer, true, "agent says tests passed")
+        .is_err());
+    execution
+        .record_check(&api, "sha1", "host-test", &json!({"passed":true}), true)
+        .unwrap();
+    assert!(service.review(&reviewer, true, "old proof").is_err());
+    execution
+        .record_check(&api, "sha2", "host-test", &json!({"passed":true}), true)
+        .unwrap();
+    assert_eq!(
+        service
+            .review(&reviewer, true, "host checks passed")
+            .unwrap(),
+        TaskStatus::Completed
+    );
+}

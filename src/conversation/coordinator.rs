@@ -136,8 +136,16 @@ impl ConversationCoordinator {
     }
 
     pub async fn turn_with_outcome(&self, request: TurnRequest<'_>) -> Result<TurnExecution> {
+        self.turn_with_id(request, None).await
+    }
+
+    pub(crate) async fn turn_with_id(
+        &self,
+        request: TurnRequest<'_>,
+        id: Option<&str>,
+    ) -> Result<TurnExecution> {
         let room_id = request.room.to_owned();
-        self.turn_internal(request)
+        self.turn_internal(request, id)
             .await
             .map(|(turn_id, replies)| TurnExecution {
                 turn_id,
@@ -146,7 +154,11 @@ impl ConversationCoordinator {
             })
     }
 
-    async fn turn_internal(&self, request: TurnRequest<'_>) -> Result<(String, Vec<TurnReply>)> {
+    async fn turn_internal(
+        &self,
+        request: TurnRequest<'_>,
+        id: Option<&str>,
+    ) -> Result<(String, Vec<TurnReply>)> {
         let TurnRequest {
             room,
             room_name,
@@ -171,7 +183,7 @@ impl ConversationCoordinator {
             )?;
         }
         let mut saved = history.events.len();
-        let turn_id = stable_id();
+        let turn_id = id.map(str::to_owned).unwrap_or_else(stable_id);
         if let Some(events) = &self.events {
             events.publish(crate::events::DomainEventKind::TurnStarted {
                 turn_id: turn_id.clone(),

@@ -96,11 +96,13 @@ See the tables in the README. Highlights:
 - `GET /api/v1/agent-instances` derives `idle | queued | planning | working | waiting | reviewing | failed | offline` from durable attempts and queues; listing never starts a runtime.
 - `hivemind task submit|list|show|cancel|pause|resume|watch|run`. `watch` disconnecting never cancels.
 
-Errors use one shape: `{"error":{"code","message"}}`; internal failures are sanitized. Attempt records expose a failure class, not provider detail or worktree paths. The API remains loopback-only with no authentication.
+Errors use one shape: `{"error":{"code","message"}}`; internal failures are sanitized. Attempt records expose a failure class, not provider detail or worktree paths. The API defaults to loopback. Opt-in operator authentication enables remote binding; see [execution.md](execution.md).
 
 ## Known limits
 
-- Dispatch token usage is not measured: `tokens` is `null` and context estimates are bytes/4. Budgets count dispatches, tool actions, messages, and time.
+- Coordination context estimates remain bytes/4. Measured Pi/OMP billing usage and persistent admission budgets are available through `/api/v1/usage`; unsupported reporting remains null. Budgets count dispatches, tool actions, messages, and time.
 - Live WebSocket events are published by the process that made the change; changes made by a one-shot CLI process reach WebSocket clients of a running `serve` on its next scheduler pass (≤0.5 s), and always via `/events`.
 - Epochs closed before end reasons were recorded have `end_reason: null` and are not counted as rotations.
-- Non-goals unchanged: no autonomous merge or deploy, no remote API, no unrestricted agent creation.
+- Non-goals unchanged: no autonomous merge or deploy, no multi-user API, no unrestricted agent creation.
+
+Host-run verification and interrupted-work recovery are configured through [execution.md](execution.md).

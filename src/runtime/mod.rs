@@ -1,3 +1,5 @@
+mod telemetry;
+pub use telemetry::ProgressSink;
 mod omp;
 mod opencode;
 mod pi;
@@ -16,6 +18,10 @@ pub use pool::{
 /// room history remains canonical; the session is a disposable cache.
 #[async_trait]
 pub trait HarnessSession: Send {
+    fn set_progress(&mut self, _sink: Option<ProgressSink>) {}
+    fn take_usage(&mut self) -> Option<crate::execution::Usage> {
+        None
+    }
     /// Send one user turn through the live session and return the reply.
     async fn prompt(&mut self, input: &str) -> Result<String>;
     /// Runtime-reported context size of the live session, if the runtime knows it.
@@ -33,13 +39,13 @@ pub async fn create_session(
 ) -> Result<Box<dyn HarnessSession>> {
     match agent.runtime.as_str() {
         "omp" => Ok(Box::new(
-            omp::OmpSession::start(&runtime_config.omp_binary, agent).await?,
+            omp::OmpSession::start_filtered(&runtime_config.omp_binary, agent, &runtime_config.private_env).await?,
         )),
         "pi" => Ok(Box::new(
-            pi::PiSession::start(&runtime_config.pi_binary, agent).await?,
+            pi::PiSession::start_filtered(&runtime_config.pi_binary, agent, &runtime_config.private_env).await?,
         )),
         "opencode" => Ok(Box::new(
-            opencode::OpencodeSession::start(&runtime_config.opencode_binary, agent).await?,
+            opencode::OpencodeSession::start_filtered(&runtime_config.opencode_binary, agent, &runtime_config.private_env).await?,
         )),
         other => bail!(
             "unsupported runtime '{other}' for agent '{}'; supported runtimes are pi, omp and opencode, so change this agent's runtime",

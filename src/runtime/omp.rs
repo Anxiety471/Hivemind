@@ -34,11 +34,23 @@ struct ChildTransport {
     child: Child,
     stdin: Option<ChildStdin>,
     lines: Lines<BufReader<ChildStdout>>,
+    _group: crate::execution::ProcessGroup,
 }
 
 impl ChildTransport {
-    async fn spawn(binary: &str, args: &[String], workspace: &str) -> Result<Self> {
-        let mut child = Command::new(binary)
+    async fn spawn(
+        binary: &str,
+        args: &[String],
+        workspace: &str,
+        private_env: &[String],
+    ) -> Result<Self> {
+        let mut command = Command::new(binary);
+        for name in private_env {
+            command.env_remove(name);
+        }
+        #[cfg(unix)]
+        command.process_group(0);
+        let mut child = command
             .args(args)
             .current_dir(workspace)
             .stdin(Stdio::piped())
@@ -48,6 +60,7 @@ impl ChildTransport {
             .spawn()
             .with_context(|| format!("failed to spawn '{binary}'; is it installed and on PATH?"))?;
 
+        let group = crate::execution::ProcessGroup(child.id());
         let stdin = child
             .stdin
             .take()
@@ -58,6 +71,7 @@ impl ChildTransport {
             .context("OMP RPC did not provide stdout")?;
 
         Ok(Self {
+            _group: group,
             child,
             stdin: Some(stdin),
             lines: BufReader::new(stdout).lines(),
@@ -130,6 +144,9 @@ pub struct OmpSession {
     transport: Box<dyn RpcTransport>,
     /// Set once a transport error proves this session can never recover.
     failure: Option<String>,
+    progress: Option<super::ProgressSink>,
+    usage: Option<crate::execution::Usage>,
+    usage_missing: bool,
     /// Latest assistant message of the current prompt that held a Hivemind tool call.
     /// OMP can keep going after it (for example after the model calls OMP's own `todo`
     /// tool), and `get_last_assistant_text` would then return only the trailing message.
@@ -139,7 +156,15 @@ pub struct OmpSession {
 impl OmpSession {
     /// Validate the agent, spawn the OMP RPC child, and initialize the
     /// session (wait for `ready`, apply `fast` when explicitly configured).
+    #[cfg(test)]
     pub async fn start(binary: &str, agent: &AgentConfig) -> Result<Self> {
+        Self::start_filtered(binary, agent, &[]).await
+    }
+    pub async fn start_filtered(
+        binary: &str,
+        agent: &AgentConfig,
+        private_env: &[String],
+    ) -> Result<Self> {
         let workspace = Path::new(&agent.workspace);
 
         if !workspace.exists() {
@@ -151,7 +176,7 @@ impl OmpSession {
         }
 
         let args = Self::rpc_args(agent);
-        let transport = ChildTransport::spawn(binary, &args, &agent.workspace)
+        let transport = ChildTransport::spawn(binary, &args, &agent.workspace, private_env)
             .await
             .with_context(|| format!("failed to start OMP session for agent '{}'", agent.name))?;
 
@@ -166,6 +191,9 @@ impl OmpSession {
             agent_name: agent.name.clone(),
             transport: Box::new(transport),
             failure: None,
+            progress: None,
+            usage: None,
+            usage_missing: false,
             tool_reply: None,
         };
 
@@ -265,6 +293,15 @@ impl OmpSession {
 
         match result {
             Ok(frame) => {
+                if let Some(sink) = &self.progress {
+                    sink.rpc(&frame);
+                }
+                if let Some(usage) = super::telemetry::rpc_usage(&frame) {
+                    self.usage.get_or_insert_with(Default::default).add(&usage);
+                } else if frame["type"] == "message_end" && frame["message"]["role"] == "assistant"
+                {
+                    self.usage_missing = true;
+                }
                 self.note_tool_reply(&frame);
                 Ok(frame)
             }
@@ -409,6 +446,17 @@ impl OmpSession {
 
 #[async_trait]
 impl HarnessSession for OmpSession {
+    fn set_progress(&mut self, sink: Option<super::ProgressSink>) {
+        self.progress = sink;
+        self.usage = None;
+        self.usage_missing = false;
+    }
+    fn take_usage(&mut self) -> Option<crate::execution::Usage> {
+        if self.usage_missing {
+            self.usage = None;
+        }
+        self.usage.take()
+    }
     async fn prompt(&mut self, input: &str) -> Result<String> {
         if let Some(failure) = &self.failure {
             bail!(

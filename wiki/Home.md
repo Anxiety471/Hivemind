@@ -5,7 +5,7 @@
 Hivemind owns the conversation, the memory, and the CLI. [Pi](https://github.com/badlogic/pi-mono), [oh-my-pi (OMP)](https://github.com/can1357/oh-my-pi), and OpenCode just do the thinking.
 
 > [!WARNING]
-> Hivemind is experimental. The HTTP/WebSocket API has no authentication and must stay loopback-only.
+> Hivemind is experimental. The HTTP/WebSocket API defaults to loopback; remote binding requires an operator token. See [Execution](Execution).
 
 ## What it gives you
 

@@ -321,7 +321,7 @@ async fn context_metrics(State(state): State<ApiState>, Path(id): Path<String>) 
                 "runtime_epochs": runtime_epochs,
                 "rotations_observed": rotations_by_reason.values().sum::<u64>(),
                 "rotations_by_reason": rotations_by_reason,
-                "note": "estimated_tokens is bytes/4; measured_tokens is null because dispatch token usage is not measured",
+                "note": "estimated_tokens is bytes/4; context estimates are not billing usage; inspect /api/v1/usage for measured billing counters and unknown prompts",
             }))
             .into_response()
         }

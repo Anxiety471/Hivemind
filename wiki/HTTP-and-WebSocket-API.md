@@ -5,7 +5,7 @@ hivemind serve     # binds to http://127.0.0.1:7474
 ```
 
 > [!CAUTION]
-> Remote access and authentication are **not implemented**. The API has no authentication and must stay loopback-only. Don't expose it to other hosts or networks.
+> Loopback is the default. Remote binding requires an operator token, HTTPS/WSS, and an explicit origin allowlist. See [Execution](Execution).
 
 Building the server and serving health, info, and agent listings never starts Pi, OMP, or OpenCode. `serve` also runs the autonomous task scheduler when [Coordination](Coordination) is enabled. All endpoints use the `/api/v1` prefix.
 
@@ -97,7 +97,7 @@ By default a connection receives every event. Send `{"type":"events.subscribe","
 
 ### Browser access (CORS)
 
-Pages served from `localhost`, `127.0.0.1` or `[::1]` (any port) may call the API from a browser, including preflight requests. Other origins get no CORS headers, because the API has no authentication.
+Pages served from `localhost`, `127.0.0.1` or `[::1]` (any port) may call the API from a browser, including preflight requests. With authentication enabled, browser origins must match `server.allowed_origins` exactly. HTTP requests and WebSocket upgrades require operator authentication.
 
 ### Streamed events
 
@@ -113,3 +113,5 @@ Pages served from `localhost`, `127.0.0.1` or `[::1]` (any port) may call the AP
 Conversation and runtime events are short-lived **notifications**, not canonical records; durable history and memory stay in SQLite. A subscriber that falls behind the bounded buffer gets `system.events_lagged` in place of the dropped events.
 
 Coordination frames carry `durable_seq` next to the process-local `sequence`. Task snapshots carry `event_high_water`; after a reconnect or restart, replay from `GET /api/v1/events?after=<high-water>` for a gap-free stream.
+
+See [Execution](Execution) for durable turn status/cancel/retry endpoints, `agent.progress` frames, usage budgets, host verification checks, and recovery actions.

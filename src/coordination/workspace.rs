@@ -233,3 +233,75 @@ pub fn discard(dir: &Path) {
     }
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// Capture interrupted work as an explicitly labelled recovery commit. This
+/// never counts as a successful task deliverable. On failure keep the checkout.
+pub fn preserve(dir: &Path) -> Result<Option<(String, String)>> {
+    if !dir.join(".git").is_file() {
+        return Ok(None);
+    }
+    let branch = git(dir, &["symbolic-ref", "--short", "HEAD"]).unwrap_or_default();
+    if !git(dir, &["diff", "--name-only", "--diff-filter=U"])?.is_empty() {
+        bail!("conflicted checkout retained for manual recovery");
+    }
+    if git(dir, &["status", "--porcelain"])?.is_empty() {
+        // The agent (or a previous recovery pass) may already have committed its work.
+        return if branch.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some((git(dir, &["rev-parse", "HEAD"])?, branch)))
+        };
+    }
+    git(dir, &["add", "-A"])?;
+    // A conflicted index cannot be committed: retain the checkout for manual recovery.
+    git(
+        dir,
+        &[
+            "commit",
+            "--no-verify",
+            "-m",
+            "Hivemind interrupted attempt recovery",
+        ],
+    )?;
+    let sha = git(dir, &["rev-parse", "HEAD"])?;
+    let branch = if branch.is_empty() {
+        let retained = format!("hivemind/recovery/{sha}");
+        git(dir, &["branch", &retained, &sha])?;
+        retained
+    } else {
+        branch
+    };
+    Ok(Some((sha, branch)))
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    use super::*;
+    #[test]
+    fn recovery_preserves_tracked_and_untracked_work_without_changing_main() {
+        let root = std::env::temp_dir().join(crate::coordination::model::new_id("recover-test"));
+        std::fs::create_dir_all(&root).unwrap();
+        git(&root, &["init"]).unwrap();
+        std::fs::write(root.join("tracked"), "before").unwrap();
+        git(&root, &["add", "tracked"]).unwrap();
+        git(&root, &["commit", "-m", "base"]).unwrap();
+        let base = git(&root, &["rev-parse", "HEAD"]).unwrap();
+        let checkout = root.join("attempt");
+        let tree = prepare(root.to_str().unwrap(), &checkout, "recovery-test", &[]).unwrap();
+        std::fs::write(checkout.join("tracked"), "after").unwrap();
+        std::fs::write(checkout.join("new-file"), "new").unwrap();
+        let (sha, branch) = preserve(&checkout).unwrap().unwrap();
+        assert_eq!(branch, "recovery-test");
+        tree.remove();
+        assert_eq!(git(&root, &["rev-parse", "HEAD"]).unwrap(), base);
+        assert_eq!(
+            git(&root, &["show", &format!("{sha}:tracked")]).unwrap(),
+            "after"
+        );
+        assert_eq!(
+            git(&root, &["show", &format!("{sha}:new-file")]).unwrap(),
+            "new"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+}

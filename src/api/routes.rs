@@ -17,13 +17,21 @@ use super::{error::ApiError, websocket};
 pub(super) struct ApiState {
     pub(super) core: Arc<HivemindCore>,
     pub(super) shutdown: watch::Receiver<bool>,
+    pub(super) auth: Arc<super::auth::Auth>,
 }
 
 pub(super) fn router(core: Arc<HivemindCore>, shutdown: watch::Receiver<bool>) -> Router {
-    let state = ApiState { core, shutdown };
+    let auth = super::auth::Auth::load(&core.config().server)
+        .expect("server authentication must be validated before constructing the router");
+    let state = ApiState {
+        core,
+        shutdown,
+        auth,
+    };
     Router::new()
         .route("/api/v1/health", get(health))
         .route("/api/v1/info", get(info))
+        .merge(super::jobs::routes())
         .merge(super::tasks::routes())
         .merge(super::rooms::routes())
         .merge(super::chat_groups::routes())
@@ -34,7 +42,14 @@ pub(super) fn router(core: Arc<HivemindCore>, shutdown: watch::Receiver<bool>) -
         .route("/api/v1/ws", get(ws))
         .fallback(not_found)
         .method_not_allowed_fallback(method_not_allowed)
-        .layer(axum::middleware::from_fn(super::cors::layer))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            super::cors::layer,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            super::auth::layer,
+        ))
         .with_state(state)
 }
 
@@ -45,19 +60,32 @@ struct TurnRequestBody {
     /// `false` returns 202 immediately; progress and replies arrive over the WebSocket.
     #[serde(default = "wait_default")]
     wait: bool,
+    #[serde(default)]
+    idempotency_key: Option<String>,
 }
 
 fn wait_default() -> bool {
     true
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-enum TurnTargetBody {
+pub(super) enum TurnTargetBody {
     Main,
     Solo { id: String },
     Group { id: String },
     Thread { id: String },
+}
+
+impl TurnTargetBody {
+    pub(super) fn target(self) -> ConversationTarget {
+        match self {
+            Self::Main => ConversationTarget::Main,
+            Self::Solo { id } => ConversationTarget::Solo { persona_id: id },
+            Self::Group { id } => ConversationTarget::Group { group_id: id },
+            Self::Thread { id } => ConversationTarget::Thread { thread_id: id },
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -89,12 +117,8 @@ async fn submit_turn(
             .into_response()
         }
     };
-    let target = match request.target {
-        TurnTargetBody::Main => ConversationTarget::Main,
-        TurnTargetBody::Solo { id } => ConversationTarget::Solo { persona_id: id },
-        TurnTargetBody::Group { id } => ConversationTarget::Group { group_id: id },
-        TurnTargetBody::Thread { id } => ConversationTarget::Thread { thread_id: id },
-    };
+    let target_json = serde_json::to_value(&request.target).expect("serializable target");
+    let target = request.target.target();
     if request.message.trim().is_empty() {
         return ApiError::new(
             StatusCode::BAD_REQUEST,
@@ -131,18 +155,11 @@ async fn submit_turn(
             )
             .into_response();
         }
-        let room_id = resolved.room_id.clone();
-        let core = state.core.clone();
-        let message = request.message;
-        tokio::spawn(async move {
-            // Outcome is delivered through conversation.* WebSocket events and room history.
-            let _ = core.send_turn(&target, &message).await;
-        });
-        return (
-            StatusCode::ACCEPTED,
-            Json(serde_json::json!({"room_id": room_id, "accepted": true})),
-        )
-            .into_response();
+        return match state.core.execution().submit(&resolved.room_id, &target_json, &request.message, request.idempotency_key.as_deref()) {
+            Ok(job) => (StatusCode::ACCEPTED, Json(serde_json::json!({"turn_id":job.turn_id,"room_id":job.room_id,"status":job.status,"status_url":format!("/api/v1/turns/{}",job.turn_id),"accepted":true}))).into_response(),
+            Err(error) if error.to_string().contains("idempotency") => ApiError::new(StatusCode::CONFLICT,"idempotency_conflict","idempotency key does not match request").into_response(),
+            Err(_) => ApiError::new(StatusCode::BAD_REQUEST,"submission_failed","turn could not be stored").into_response(),
+        };
     }
     let outcome = match state.core.send_turn(&target, &request.message).await {
         Ok(outcome) => outcome,
@@ -259,6 +276,7 @@ async fn agents(State(state): State<ApiState>) -> Json<Agents> {
 
 async fn ws(State(state): State<ApiState>, upgrade: WebSocketUpgrade) -> Response {
     upgrade
+        .protocols(["hivemind.v1"])
         .max_message_size(64 * 1024)
         .on_upgrade(move |socket| websocket::handle(socket, state.core, state.shutdown))
 }

@@ -59,3 +59,20 @@ Engineer = "Implementation Reviewer"
 # Optional, top level: restrict where agents may point a workspace with workspace.set.
 # [workspaces]
 # roots = ["/abs/path/to/projects"]
+
+# Durable execution defaults: limits are disabled until configured.
+# [execution]
+# task_token_limit = 100000
+# project_token_limit = 1000000
+# require_usage = false
+#
+# [[execution.checks]]
+# name = "cargo-test"
+# command = ["cargo", "test", "--locked"]
+# timeout_secs = 300
+#
+# Remote access is opt-in and requires an environment-backed operator token.
+# [server]
+# bind = "0.0.0.0"
+# token_env = "HIVEMIND_OPERATOR_TOKEN"
+# allowed_origins = ["https://hivemind.example.com"]

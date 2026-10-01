@@ -105,7 +105,9 @@ impl Scheduler {
         }
         if let Ok(entries) = std::fs::read_dir(self.core.data_dir().join("worktrees")) {
             for entry in entries.flatten() {
-                workspace::discard(&entry.path());
+                if let Some(attempt) = entry.file_name().to_str() {
+                    preserve_attempt(&self.core, attempt);
+                }
             }
         }
     }
@@ -128,7 +130,9 @@ impl Scheduler {
 
     /// Abort everything in flight and record it as interrupted.
     pub async fn stop(&mut self) {
+        let mut interrupted = Vec::new();
         for (attempt, running) in self.running.drain() {
+            interrupted.push(attempt.clone());
             running.abort.abort();
             let _ = self
                 .service
@@ -136,6 +140,10 @@ impl Scheduler {
         }
         self.jobs.abort_all();
         while self.jobs.join_next().await.is_some() {}
+        for attempt in interrupted {
+            stop_attempt(&self.core, &attempt).await;
+            preserve_attempt(&self.core, &attempt);
+        }
         self.ids.clear();
         self.service.set_scheduler_running(false);
     }
@@ -153,6 +161,8 @@ impl Scheduler {
                 Err(error) => {
                     if let Some(attempt) = self.ids.remove(&error.id()) {
                         self.running.remove(&attempt);
+                        stop_attempt(&self.core, &attempt).await;
+                        preserve_attempt(&self.core, &attempt);
                         if !error.is_cancelled() {
                             self.service.finish_attempt(
                                 &attempt,
@@ -187,13 +197,15 @@ impl Scheduler {
             if let Some(running) = self.running.remove(&attempt) {
                 // Cancelled or otherwise ended in the store while its task is still executing.
                 running.abort.abort();
-                workspace::discard(&worktree_dir(&self.core, &attempt));
+                stop_attempt(&self.core, &attempt).await;
+                preserve_attempt(&self.core, &attempt);
             }
         }
         for attempt in self.service.attempts_to_abort()? {
             if let Some(running) = self.running.remove(&attempt) {
                 running.abort.abort();
-                workspace::discard(&worktree_dir(&self.core, &attempt));
+                stop_attempt(&self.core, &attempt).await;
+                preserve_attempt(&self.core, &attempt);
             }
             self.service
                 .finish_attempt(&attempt, AttemptEnd::Cancelled)?;
@@ -268,6 +280,46 @@ impl Scheduler {
     }
 }
 
+async fn stop_attempt(core: &HivemindCore, attempt: &str) {
+    if let Ok(Some(a)) = core.coordination().store().read(|db| db.attempt(attempt)) {
+        core.rotate_instance(
+            &AgentInstanceId::new(task_room(&a.task_id), &a.persona),
+            "attempt_cancelled",
+        )
+        .await;
+    }
+}
+
+fn preserve_attempt(core: &HivemindCore, attempt: &str) {
+    let dir = worktree_dir(core, attempt);
+    match workspace::preserve(&dir) {
+        Ok(Some((sha, branch))) => {
+            let saved = core
+                .coordination()
+                .store()
+                .read(|db| db.attempt(attempt))
+                .and_then(|a| {
+                    let a = a.ok_or_else(|| CoordError::NotFound("attempt".into()))?;
+                    core.coordination().record_artifact(
+                        &a.task_id,
+                        Some(attempt),
+                        "recovery",
+                        &format!("{branch}@{sha}"),
+                        Some(&sha),
+                        "Interrupted work; explicit restore or discard required",
+                    )
+                });
+            if saved.is_err() {
+                eprintln!("recovery artifact failed; retained checkout for {attempt}");
+                return;
+            }
+            workspace::discard(&dir);
+        }
+        Ok(None) => workspace::discard(&dir),
+        Err(error) => eprintln!("recovery failed; retained checkout for {attempt}: {error}"),
+    }
+}
+
 fn worktree_dir(core: &HivemindCore, attempt: &str) -> PathBuf {
     let dir = core.data_dir().join("worktrees").join(attempt);
     // git runs with `-C <repo>`, so a relative data dir would resolve against the wrong directory
@@ -308,6 +360,21 @@ async fn execute(
 ) -> AttemptEnd {
     let service = core.coordination().clone();
     let (task, attempt) = (&dispatch.task, &dispatch.attempt);
+    let room_id = task_room(&task.id);
+    if core.execution().bind(&room_id, &task.root_id).is_err()
+        || core
+            .execution()
+            .bind_project(
+                &room_id,
+                &std::fs::canonicalize(&task.workspace)
+                    .unwrap_or_else(|_| task.workspace.clone().into())
+                    .display()
+                    .to_string(),
+            )
+            .is_err()
+    {
+        return failed("storage", "could not bind usage scope");
+    }
     let Some(agent) = core.agents().get(&attempt.persona) else {
         return failed(
             "unknown_persona",
@@ -349,41 +416,53 @@ async fn execute(
     {
         let dir = worktree_dir(&core, &attempt.id);
         let branch = format!("hivemind/{}-{}", task.id, attempt.id);
-        let prepared: Option<Result<Worktree>> = match attempt.kind {
-            AttemptKind::Work => {
-                let shas: Vec<String> = service
-                    .store()
-                    .read(|db| {
-                        Ok(db
-                            .prerequisites(&task.id)?
-                            .into_iter()
-                            .filter_map(|(pre, _)| {
-                                db.artifacts(&pre)
-                                    .ok()?
-                                    .into_iter()
-                                    .rev()
-                                    .find(|a| a.kind == "commit")
-                                    .and_then(|a| a.content_hash)
-                            })
-                            .collect())
-                    })
-                    .unwrap_or_default();
-                let (w, d, b) = (workspace.clone(), dir.clone(), branch.clone());
-                blocking(move || workspace::prepare(&w, &d, &b, &shas))
-                    .await
-                    .or_else(|| Some(Err(anyhow::anyhow!("worktree task panicked"))))
-            }
-            AttemptKind::Review if !is_root => match latest_commit(&service, &task.id) {
-                Some(sha) => {
-                    let (w, d) = (workspace.clone(), dir.clone());
-                    blocking(move || workspace::checkout_detached(&w, &d, &sha))
+        let prepared: Option<Result<Worktree>> =
+            match attempt.kind {
+                AttemptKind::Work => {
+                    let mut shas: Vec<String> = service
+                        .store()
+                        .read(|db| {
+                            Ok(db
+                                .prerequisites(&task.id)?
+                                .into_iter()
+                                .filter_map(|(pre, _)| {
+                                    db.artifacts(&pre)
+                                        .ok()?
+                                        .into_iter()
+                                        .rev()
+                                        .find(|a| a.kind == "commit")
+                                        .and_then(|a| a.content_hash)
+                                })
+                                .collect())
+                        })
+                        .unwrap_or_default();
+                    if let Ok(artifacts) = service.store().read(|db| db.artifacts(&task.id)) {
+                        if let Some(selected) = artifacts.iter().rev().find(|a| {
+                            a.kind == "recovery_selected" || a.kind == "recovery_discarded"
+                        }) {
+                            if selected.kind == "recovery_selected" {
+                                if let Some(sha) = &selected.content_hash {
+                                    shas.push(sha.clone());
+                                }
+                            }
+                        }
+                    }
+                    let (w, d, b) = (workspace.clone(), dir.clone(), branch.clone());
+                    blocking(move || workspace::prepare(&w, &d, &b, &shas))
                         .await
                         .or_else(|| Some(Err(anyhow::anyhow!("worktree task panicked"))))
                 }
-                None => None,
-            },
-            _ => None,
-        };
+                AttemptKind::Review if !is_root => match latest_commit(&service, &task.id) {
+                    Some(sha) => {
+                        let (w, d) = (workspace.clone(), dir.clone());
+                        blocking(move || workspace::checkout_detached(&w, &d, &sha))
+                            .await
+                            .or_else(|| Some(Err(anyhow::anyhow!("worktree task panicked"))))
+                    }
+                    None => None,
+                },
+                _ => None,
+            };
         match prepared {
             Some(Ok(tree)) => {
                 config.workspace = tree.cwd.display().to_string();
@@ -406,6 +485,29 @@ async fn execute(
         }
     }
 
+    if attempt.kind == AttemptKind::Review && !is_root && !core.execution().config.checks.is_empty()
+    {
+        let Some(sha) = latest_commit(&service, &task.id) else {
+            return failed("verification", "no committed deliverable");
+        };
+        let Some(tree) = worktree.as_ref() else {
+            return failed("verification", "verification requires a git checkout");
+        };
+        if !crate::execution::verify(core.execution().clone(), &task.id, &sha, &tree.cwd)
+            .await
+            .unwrap_or(false)
+        {
+            if let Some(tree) = worktree.take() {
+                tree.remove();
+            }
+            let _ = service.host_transition(
+                &task.id,
+                TaskStatus::Blocked,
+                "configured host verification failed",
+            );
+            return failed("verification", "configured host verification failed");
+        }
+    }
     let room = task_room(&task.id);
     let role = match attempt.kind {
         AttemptKind::Plan => "coordinator",
@@ -440,11 +542,30 @@ async fn execute(
         },
         Err(error) => failed("turn", format!("{error:#}")),
     };
+    if matches!(
+        &end,
+        AttemptEnd::Failed { .. } | AttemptEnd::Interrupted | AttemptEnd::Cancelled
+    ) {
+        core.rotate_instance(
+            &AgentInstanceId::new(&room, &attempt.persona),
+            "attempt_failed",
+        )
+        .await;
+        preserve_attempt(&core, &attempt.id);
+        return end;
+    }
     if let Some(tree) = worktree {
         let is_work = attempt.kind == AttemptKind::Work;
         let finished = blocking(move || {
             let result = if is_work { Some(tree.finish()) } else { None };
-            tree.remove();
+            if !is_work
+                || matches!(
+                    &result,
+                    Some(Ok(Finished::Committed { .. } | Finished::Unchanged))
+                )
+            {
+                tree.remove();
+            }
             result
         })
         .await
@@ -471,6 +592,9 @@ async fn execute(
                 }
                 Err(error) => end = failed("workspace", format!("{error:#}")),
             }
+        }
+        if matches!(&end, AttemptEnd::Failed { .. }) {
+            preserve_attempt(&core, &attempt.id);
         }
         // A fresh worktree per attempt means the live session's cwd is gone.
         core.rotate_instance(
