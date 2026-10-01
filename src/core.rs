@@ -41,6 +41,7 @@ pub struct HivemindCore {
     workspaces: Arc<SharedWorkspaces>,
     shutting_down: AtomicBool,
     shutdown_lock: tokio::sync::Mutex<()>,
+    group_edit_lock: std::sync::Mutex<()>,
 }
 
 pub struct CoreTurnRequest<'a> {
@@ -221,6 +222,7 @@ impl HivemindCore {
             workspaces,
             shutting_down: AtomicBool::new(false),
             shutdown_lock: tokio::sync::Mutex::new(()),
+            group_edit_lock: std::sync::Mutex::new(()),
         })
     }
 
@@ -243,6 +245,19 @@ impl HivemindCore {
         config.groups = groups;
         self.workspaces.replace_groups(&config.groups);
         *self.config.write().expect("core config lock poisoned") = Arc::new(config);
+    }
+
+    /// Apply a group change: persist it to the config file, then publish it to the live core.
+    /// Serialized so concurrent edits cannot lose each other's writes.
+    pub fn mutate_groups(&self, command: crate::commands::GroupCommand) -> Result<()> {
+        let _guard = self
+            .group_edit_lock
+            .lock()
+            .expect("group edit lock poisoned");
+        let mut config = self.config();
+        crate::commands::mutate_group(&mut config, &self.config_path, command)?;
+        self.reload_groups(config.groups);
+        Ok(())
     }
 
     pub fn config(&self) -> HivemindConfig {

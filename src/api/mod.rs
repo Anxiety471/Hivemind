@@ -1,3 +1,4 @@
+mod chat_groups;
 mod error;
 mod protocol;
 mod rooms;

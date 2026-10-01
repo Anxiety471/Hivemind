@@ -9,7 +9,7 @@ use super::{
     groups::{group_member_summary, mutate_group_and_reload, render_group},
     render::{effective_agents, print_agents, print_order, status},
 };
-use crate::commands::GroupCommand;
+use hivemind::commands::GroupCommand;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum Route {
     Main,

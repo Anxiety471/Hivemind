@@ -172,7 +172,7 @@ pub(super) async fn route_turn(
 mod tests {
     use super::*;
     use crate::cli::groups::mutate_group_and_reload;
-    use crate::commands::{self, GroupCommand};
+    use hivemind::commands::{self, GroupCommand};
     use hivemind::config::{self, ConversationMode};
     use std::{
         fs,

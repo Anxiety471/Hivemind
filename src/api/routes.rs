@@ -26,6 +26,7 @@ pub(super) fn router(core: Arc<HivemindCore>, shutdown: watch::Receiver<bool>) -
         .route("/api/v1/info", get(info))
         .merge(super::tasks::routes())
         .merge(super::rooms::routes())
+        .merge(super::chat_groups::routes())
         .route("/api/v1/agents", get(agents))
         .route("/api/v1/turns", post(submit_turn))
         .route("/api/v1/ws", get(ws))
@@ -635,6 +636,107 @@ mod tests {
             (status, body["error"]["code"].as_str()),
             (StatusCode::NOT_FOUND, Some("target_not_found"))
         );
+    }
+
+    #[tokio::test]
+    async fn chat_groups_can_be_created_edited_and_deleted_over_http() {
+        let test_core = TestCore::new();
+        let path = test_core.directory.join("hivemind.toml");
+        std::fs::write(
+            &path,
+            toml::to_string(&HivemindConfig::default_poc()).unwrap(),
+        )
+        .unwrap();
+        let app = router(test_core.core.clone(), watch::channel(false).1);
+
+        let (status, body) = request_json(
+            app.clone(),
+            "POST",
+            "/api/v1/chat-groups",
+            json!({"id":"dev","members":["Engineer"]}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(body["group"]["room_id"], "group-dev");
+        let (status, body) = request_json(
+            app.clone(),
+            "POST",
+            "/api/v1/chat-groups",
+            json!({"id":"dev"}),
+        )
+        .await;
+        assert_eq!(
+            (status, body["error"]["code"].as_str()),
+            (StatusCode::CONFLICT, Some("invalid_request"))
+        );
+        let (status, _) = request_json(
+            app.clone(),
+            "POST",
+            "/api/v1/chat-groups",
+            json!({"id":"x","members":["Ghost"]}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        let (status, body) = request_json(
+            app.clone(),
+            "PATCH",
+            "/api/v1/chat-groups/dev",
+            json!({"members":["Engineer","Reviewer"],"mode":"discussion","member_roles":{"Reviewer":"critic"},"reply_order":["Reviewer","Engineer"]}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["group"]["mode"], "discussion");
+        assert_eq!(
+            body["group"]["reply_order"],
+            json!(["Reviewer", "Engineer"])
+        );
+        let (status, _) = request_json(
+            app.clone(),
+            "PATCH",
+            "/api/v1/chat-groups/dev",
+            json!({"reply_order":["Nobody"]}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = request_json(
+            app.clone(),
+            "PATCH",
+            "/api/v1/chat-groups/none",
+            json!({"mode":"broadcast"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        // Persisted to the config file and visible as a room.
+        assert!(HivemindConfig::load(&path)
+            .unwrap()
+            .groups
+            .iter()
+            .any(|g| g.name == "dev" && g.members.len() == 2));
+        let (_, _, rooms) = request(app.clone(), "GET", "/api/v1/rooms").await;
+        assert!(rooms["rooms"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["id"] == "group-dev"));
+        let (_, _, one) = request(app.clone(), "GET", "/api/v1/chat-groups/dev").await;
+        assert_eq!(one["group"]["members"], json!(["Engineer", "Reviewer"]));
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/api/v1/chat-groups/dev")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        let (_, _, list) = request(app, "GET", "/api/v1/chat-groups").await;
+        assert!(list["groups"].as_array().unwrap().is_empty());
     }
 
     #[tokio::test]

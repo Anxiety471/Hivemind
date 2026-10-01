@@ -4,7 +4,7 @@ use anyhow::Result;
 use hivemind::{config::HivemindConfig, core::HivemindCore};
 
 use super::args::ShellGroupCommand;
-use crate::commands::{self, mutate_group, GroupCommand};
+use hivemind::commands::{self, mutate_group, GroupCommand};
 
 pub(super) fn mutate_group_and_reload(
     config: &mut HivemindConfig,

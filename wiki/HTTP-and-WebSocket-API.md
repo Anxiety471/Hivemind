@@ -24,6 +24,7 @@ Building the server and serving health, info, and agent listings never starts Pi
 | `GET` / `POST` | `/api/v1/tasks/{id}/attempts`, `/cancel`, `/pause`, `/resume`, `/input`, `/context-metrics` | Attempts, controls, and bounded context diagnostics |
 | `GET` | `/api/v1/agents/{id}`, `/api/v1/agent-instances` | Capabilities and derived activity (never starts a runtime) |
 | `GET` / `POST` | `/api/v1/messages`, `/api/v1/groups`, `/api/v1/groups/{id}` | Agent/operator messages and dynamic task groups |
+| `GET` / `POST` / `PATCH` / `DELETE` | `/api/v1/chat-groups`, `/api/v1/chat-groups/{id}` | Configured chat groups (`group-<id>` rooms): create with `{"id","members"}`, edit `members`, `mode`, `member_roles`, `reply_order`, delete (`204`). Changes are written to the config file and apply immediately. Unrelated to the task groups under `/api/v1/groups` |
 | `GET` | `/api/v1/access/personas` | Effective permissions per persona |
 | `GET` | `/api/v1/access/audit?denied=&persona=&limit=` | Access audit log |
 | `GET` | `/api/v1/events?after=N` | Durable, restart-safe event replay with a high-water mark |

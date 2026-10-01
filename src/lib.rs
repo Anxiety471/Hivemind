@@ -1,5 +1,6 @@
 pub mod access;
 pub mod api;
+pub mod commands;
 pub mod config;
 pub mod conversation;
 pub mod coordination;
