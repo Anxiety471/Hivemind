@@ -6,6 +6,8 @@
 //! are told not to assume a shared directory. A solo agent can read and change
 //! its own persona workspace the same way. `[workspaces] roots` optionally limits
 //! where agents may point; paths the user writes in the config are never checked.
+//! Changes are gated by the access policy (see [`crate::access::workspace_permission`])
+//! and audited; reads are not.
 
 use std::{
     collections::HashMap,
@@ -17,7 +19,7 @@ use std::{
 use anyhow::{bail, Context, Result};
 use serde_json::Value;
 
-use crate::{config::HivemindConfig, conversation::ToolHost};
+use crate::{access::AccessPolicy, config::HivemindConfig, conversation::ToolHost};
 
 const GROUP_ROOM_PREFIX: &str = "group-";
 const SOLO_ROOM_PREFIX: &str = "solo-";
@@ -266,14 +268,22 @@ enum Scope<'a> {
 }
 
 /// Agent tools `workspace.get|set|list` (plus `clear` for groups), offered only in
-/// group rooms and solo rooms.
+/// group rooms and solo rooms. `set`/`clear` are offered only to personas allowed to use them.
 pub struct WorkspaceTools {
     workspaces: Arc<SharedWorkspaces>,
+    access: Arc<AccessPolicy>,
 }
 
 impl WorkspaceTools {
-    pub fn new(workspaces: Arc<SharedWorkspaces>) -> Self {
-        Self { workspaces }
+    pub fn new(workspaces: Arc<SharedWorkspaces>, access: Arc<AccessPolicy>) -> Self {
+        Self { workspaces, access }
+    }
+
+    /// The permission `persona` lacks to change the workspace in `scope`, if any.
+    fn missing_permission(&self, scope: &Scope, persona: &str) -> Option<&'static str> {
+        let group = matches!(scope, Scope::Group(_));
+        crate::access::workspace_permission("workspace.set", group)
+            .filter(|permission| !self.access.allows(persona, permission))
     }
 
     fn scope<'a>(&self, room: &'a str) -> Option<Scope<'a>> {
@@ -300,16 +310,20 @@ impl WorkspaceTools {
 }
 
 impl ToolHost for WorkspaceTools {
-    fn manifest(&self, room: &str, _persona: &str) -> Option<String> {
+    fn manifest(&self, room: &str, persona: &str) -> Option<String> {
         let scope = self.scope(room)?;
-        let (tools, effect) = match scope {
-            Scope::Group(_) => (
-                "workspace.get() · workspace.set(path) · workspace.clear() · workspace.list()",
-                "If the user tells you where the group's shared workspace is, or asks you to change it, call workspace.set; that adds or updates it for the whole group. workspace.clear removes it so members go back to their own workspaces.",
+        let (tools, effect) = match (&scope, self.missing_permission(&scope, persona)) {
+            (_, Some(permission)) => (
+                "workspace.get() · workspace.list()",
+                format!("You cannot change this workspace (your roles lack '{permission}'); if the user asks, tell them to change it in the config or ask a persona that can."),
             ),
-            Scope::Solo(_) => (
+            (Scope::Group(_), None) => (
+                "workspace.get() · workspace.set(path) · workspace.clear() · workspace.list()",
+                "If the user tells you where the group's shared workspace is, or asks you to change it, call workspace.set; that adds or updates it for the whole group. workspace.clear removes it so members go back to their own workspaces.".to_owned(),
+            ),
+            (Scope::Solo(_), None) => (
                 "workspace.get() · workspace.set(path) · workspace.list()",
-                "If the user tells you where you should work or asks you to change it, call workspace.set. That changes your own workspace everywhere you are used, not just this chat.",
+                "If the user tells you where you should work or asks you to change it, call workspace.set. That changes your own workspace everywhere you are used, not just this chat.".to_owned(),
             ),
         };
         Some(format!(
@@ -333,10 +347,12 @@ impl ToolHost for WorkspaceTools {
         )
     }
 
-    fn execute(&self, room: &str, _persona: &str, name: &str, args: &Value) -> Result<String> {
+    fn execute(&self, room: &str, persona: &str, name: &str, args: &Value) -> Result<String> {
         let scope = self
             .scope(room)
             .context("workspace tools are only available in group and solo rooms")?;
+        self.access
+            .authorize_workspace(persona, room, name, matches!(scope, Scope::Group(_)))?;
         let path = || {
             args.get("path")
                 .and_then(Value::as_str)
@@ -444,8 +460,18 @@ mod tests {
     }
 
     fn core_with_roots(dir: &Dir, workspace: Option<&str>, roots: &[String]) -> HivemindCore {
+        core_with(dir, workspace, |config| {
+            config.workspaces.roots = roots.to_vec()
+        })
+    }
+
+    fn core_with(
+        dir: &Dir,
+        workspace: Option<&str>,
+        customize: impl FnOnce(&mut HivemindConfig),
+    ) -> HivemindCore {
         let mut config = HivemindConfig::default_poc();
-        config.workspaces.roots = roots.to_vec();
+        customize(&mut config);
         for agent in &mut config.agents {
             agent.workspace = dir.0.display().to_string();
         }
@@ -482,7 +508,7 @@ mod tests {
         let own = dir.0.display().to_string();
         assert!(workspaces_of(&core).iter().all(|w| *w == own));
 
-        let tools = WorkspaceTools::new(core.shared_workspaces().clone());
+        let tools = WorkspaceTools::new(core.shared_workspaces().clone(), core.access().clone());
         let manifest = tools.manifest("group-team", "Engineer").unwrap();
         assert!(manifest.contains("not configured"), "{manifest}");
         assert!(tools.manifest("main", "Engineer").is_none());
@@ -526,7 +552,7 @@ mod tests {
         let core = core_with_group(&dir, Some(&project));
         assert!(workspaces_of(&core).iter().all(|w| *w == project));
 
-        let tools = WorkspaceTools::new(core.shared_workspaces().clone());
+        let tools = WorkspaceTools::new(core.shared_workspaces().clone(), core.access().clone());
         for bad in [
             json!({"path": "relative/dir"}),
             json!({"path": "/no/such/dir/anywhere"}),
@@ -572,7 +598,7 @@ mod tests {
         let dir = Dir::new("clear");
         let project = dir.0.join("project").display().to_string();
         let core = core_with_group(&dir, Some(&project));
-        let tools = WorkspaceTools::new(core.shared_workspaces().clone());
+        let tools = WorkspaceTools::new(core.shared_workspaces().clone(), core.access().clone());
         tools
             .execute("group-team", "Engineer", "workspace.clear", &json!({}))
             .unwrap();
@@ -601,7 +627,7 @@ mod tests {
         std::os::unix::fs::symlink(dir.0.join("elsewhere"), dir.0.join("allowed/escape")).unwrap();
         let root = dir.0.join("allowed").display().to_string();
         let core = core_with_roots(&dir, None, std::slice::from_ref(&root));
-        let tools = WorkspaceTools::new(core.shared_workspaces().clone());
+        let tools = WorkspaceTools::new(core.shared_workspaces().clone(), core.access().clone());
         let listed = tools
             .execute("group-team", "Engineer", "workspace.list", &json!({}))
             .unwrap();
@@ -630,7 +656,8 @@ mod tests {
         );
         // Without roots there is nothing to list.
         let open = core_with_group(&Dir::new("noroots"), None);
-        let open_tools = WorkspaceTools::new(open.shared_workspaces().clone());
+        let open_tools =
+            WorkspaceTools::new(open.shared_workspaces().clone(), open.access().clone());
         assert!(open_tools
             .execute("group-team", "Engineer", "workspace.list", &json!({}))
             .unwrap()
@@ -641,7 +668,7 @@ mod tests {
     fn solo_agent_changes_its_own_workspace_for_every_room() {
         let dir = Dir::new("solo");
         let core = core_with_group(&dir, None);
-        let tools = WorkspaceTools::new(core.shared_workspaces().clone());
+        let tools = WorkspaceTools::new(core.shared_workspaces().clone(), core.access().clone());
         let manifest = tools.manifest("solo-Engineer", "Engineer").unwrap();
         assert!(
             manifest.contains("workspace.set") && !manifest.contains("workspace.clear"),
@@ -704,6 +731,89 @@ mod tests {
             )
             .unwrap();
         assert!(workspaces_of(&core).iter().all(|w| *w == shared));
+    }
+
+    #[test]
+    fn roles_without_the_permission_cannot_change_workspaces_and_are_audited() {
+        let dir = Dir::new("access");
+        let core = core_with(&dir, None, |config| {
+            for agent in &mut config.agents {
+                agent.roles = vec![match agent.name.as_str() {
+                    "Engineer" => "researcher".into(),
+                    _ => "coordinator".into(),
+                }];
+            }
+        });
+        let tools = WorkspaceTools::new(core.shared_workspaces().clone(), core.access().clone());
+        let project = dir.0.join("project").display().to_string();
+        let set = |room: &str, persona: &str| {
+            tools.execute(room, persona, "workspace.set", &json!({"path": project}))
+        };
+
+        // A researcher may read but not move the group or itself.
+        let manifest = tools.manifest("group-team", "Engineer").unwrap();
+        assert!(
+            !manifest.contains("workspace.set") && manifest.contains("'group.manage'"),
+            "{manifest}"
+        );
+        assert!(tools
+            .execute("group-team", "Engineer", "workspace.get", &json!({}))
+            .is_ok());
+        let denied = set("group-team", "Engineer").unwrap_err().to_string();
+        assert!(denied.contains("lacks 'group.manage'"), "{denied}");
+        assert!(tools
+            .execute("group-team", "Engineer", "workspace.clear", &json!({}))
+            .is_err());
+        assert!(set("solo-Engineer", "Engineer")
+            .unwrap_err()
+            .to_string()
+            .contains("lacks 'workspace.write'"));
+        assert_eq!(core.shared_workspaces().group("team"), None);
+
+        // A coordinator manages the group (coordinate implies group.manage) but cannot
+        // move its own workspace without workspace.write.
+        assert!(tools
+            .manifest("group-team", "Reviewer")
+            .unwrap()
+            .contains("workspace.set"));
+        assert!(set("group-team", "Reviewer").is_ok());
+        assert!(workspaces_of(&core).iter().all(|w| *w == project));
+        assert!(set("solo-Reviewer", "Reviewer").is_err());
+
+        let audit = core
+            .access()
+            .audit()
+            .list(&crate::access::AuditFilter {
+                limit: 50,
+                ..Default::default()
+            })
+            .unwrap();
+        let summary: Vec<_> = audit
+            .iter()
+            .rev()
+            .map(|e| {
+                (
+                    e.persona.as_str(),
+                    e.action.as_str(),
+                    e.permission.as_str(),
+                    e.allowed,
+                )
+            })
+            .collect();
+        assert_eq!(
+            summary,
+            [
+                ("Engineer", "workspace.set", "group.manage", false),
+                ("Engineer", "workspace.clear", "group.manage", false),
+                ("Engineer", "workspace.set", "workspace.write", false),
+                ("Reviewer", "workspace.set", "group.manage", true),
+                ("Reviewer", "workspace.set", "workspace.write", false),
+            ],
+            "every gated change is recorded; reads are not"
+        );
+        assert!(audit
+            .iter()
+            .all(|e| e.resource.starts_with("group-") || e.resource.starts_with("solo-")));
     }
 
     struct Script {

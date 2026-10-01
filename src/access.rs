@@ -270,6 +270,17 @@ pub fn memory_permission(tool: &str) -> Option<&'static str> {
     })
 }
 
+/// Permission a workspace tool needs; `None` for reads (`workspace.get`, `workspace.list`).
+/// Changing a group's shared workspace moves every member, so it needs `group.manage`;
+/// moving a persona's own workspace needs `workspace.write`.
+pub fn workspace_permission(tool: &str, group: bool) -> Option<&'static str> {
+    match tool {
+        "workspace.set" | "workspace.clear" if group => Some("group.manage"),
+        "workspace.set" => Some("workspace.write"),
+        _ => None,
+    }
+}
+
 /// Permission label recorded for a coordination tool call.
 pub fn coordination_permission(tool: &str, args: &serde_json::Value) -> Option<&'static str> {
     Some(match tool {
@@ -319,9 +330,41 @@ impl AccessPolicy {
     /// Authorize a memory tool for `persona`; every gated call is audited.
     /// Ungated tools (search) pass without a record.
     pub fn authorize_memory(&self, persona: &str, resource: &str, tool: &str) -> Result<()> {
-        let Some(permission) = memory_permission(tool) else {
-            return Ok(());
-        };
+        match memory_permission(tool) {
+            Some(permission) => self.authorize(persona, permission, tool, resource),
+            None => Ok(()),
+        }
+    }
+
+    /// Authorize a workspace tool for `persona` in a group (`group`) or solo
+    /// room; every gated call is audited. Reads (`get`, `list`) are ungated.
+    pub fn authorize_workspace(
+        &self,
+        persona: &str,
+        resource: &str,
+        tool: &str,
+        group: bool,
+    ) -> Result<()> {
+        match workspace_permission(tool, group) {
+            Some(permission) => self.authorize(persona, permission, tool, resource),
+            None => Ok(()),
+        }
+    }
+
+    /// Whether `persona` would pass a gate on `permission`, without an audit record.
+    pub fn allows(&self, persona: &str, permission: &str) -> bool {
+        self.grants
+            .get(persona)
+            .is_some_and(|grants| !grants.restricted || grants.has(permission))
+    }
+
+    fn authorize(
+        &self,
+        persona: &str,
+        permission: &str,
+        action: &str,
+        resource: &str,
+    ) -> Result<()> {
         let (allowed, reason) = match self.grants.get(persona) {
             None => (false, "unknown persona".to_owned()),
             Some(grants) if !grants.restricted => {
@@ -337,11 +380,11 @@ impl AccessPolicy {
             ),
         };
         self.audit
-            .record(persona, permission, tool, resource, allowed, &reason);
+            .record(persona, permission, action, resource, allowed, &reason);
         if allowed {
             Ok(())
         } else {
-            bail!("permission denied: persona '{persona}' lacks '{permission}' for {tool}")
+            bail!("permission denied: persona '{persona}' lacks '{permission}' for {action}")
         }
     }
 }

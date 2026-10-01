@@ -178,8 +178,9 @@ impl HivemindCore {
             events.clone(),
         ));
         let workspaces = Arc::new(SharedWorkspaces::new(&config_path, &config));
-        let mut hosts: Vec<Arc<dyn crate::conversation::ToolHost>> =
-            vec![Arc::new(WorkspaceTools::new(workspaces.clone()))];
+        let mut hosts: Vec<Arc<dyn crate::conversation::ToolHost>> = vec![Arc::new(
+            WorkspaceTools::new(workspaces.clone(), access.clone()),
+        )];
         if config.coordination.enabled {
             hosts.push(Arc::new(CoordinationTools::new(
                 coordination.clone(),
