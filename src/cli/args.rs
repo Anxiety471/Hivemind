@@ -90,6 +90,13 @@ pub(super) enum TaskCommand {
     Show {
         id: String,
     },
+    /// List agent messages under a root task, optionally one thread.
+    Messages {
+        root: String,
+        /// Only messages in this thread (a thread id is its first message's id).
+        #[arg(long)]
+        thread: Option<String>,
+    },
     Cancel {
         id: String,
     },

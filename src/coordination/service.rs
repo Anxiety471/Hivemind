@@ -2063,12 +2063,13 @@ impl CoordinationService {
         &self,
         root: &str,
         task: Option<&str>,
+        thread: Option<&str>,
         after: Option<&str>,
         limit: usize,
     ) -> CoordResult<Vec<(Message, Vec<Delivery>)>> {
         self.store.read(|db| {
             db.task_or_err(root)?;
-            db.list_messages(root, task, after, limit)?
+            db.list_messages(root, task, thread, after, limit)?
                 .into_iter()
                 .map(|m| Ok((db.deliveries_of(&m.id)?, m)))
                 .map(|pair: CoordResult<(Vec<Delivery>, Message)>| pair.map(|(d, m)| (m, d)))

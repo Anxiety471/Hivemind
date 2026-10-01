@@ -866,10 +866,21 @@ fn coordination_tools_are_bounded_by_role_and_never_take_identity_from_arguments
     assert!(sent.contains("queued"));
     let message = service
         .store()
-        .read(|db| db.list_messages(&running[0].task_id, None, None, 10))
+        .read(|db| db.list_messages(&running[0].task_id, None, None, None, 10))
         .unwrap()
         .remove(0);
     assert_eq!(message.sender, "Lead");
+    // A thread filter returns only that thread's messages.
+    let by_thread = service
+        .store()
+        .read(|db| db.list_messages(&running[0].task_id, None, Some(&message.thread), None, 10))
+        .unwrap();
+    assert_eq!(by_thread.len(), 1);
+    assert!(service
+        .store()
+        .read(|db| db.list_messages(&running[0].task_id, None, Some("no-such-thread"), None, 10))
+        .unwrap()
+        .is_empty());
     assert!(host
         .execute(
             &plan_room,

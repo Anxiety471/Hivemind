@@ -430,6 +430,7 @@ async fn messages(State(state): State<ApiState>, RawQuery(raw): RawQuery) -> Res
     match state.core.coordination().messages(
         root,
         params.get("task").map(String::as_str),
+        params.get("thread").map(String::as_str),
         params.get("after").map(String::as_str),
         limit,
     ) {
