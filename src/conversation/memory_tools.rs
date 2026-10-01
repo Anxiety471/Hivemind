@@ -45,31 +45,58 @@ pub(super) struct MemoryToolCall {
     pub(super) args: serde_json::Value,
 }
 
-/// Extract exactly one `hivemind-tool` fence from an assistant reply.
-/// `Ok(None)` means a normal text answer; malformed or ambiguous output is an
-/// error the loop feeds back to the agent instead of guessing an action.
+/// Extract exactly one `hivemind-tool` call from an assistant reply: a
+/// ```` ```hivemind-tool ```` fence, or the `<hivemind-tool>…</hivemind-tool>`
+/// tags some models emit instead. `Ok(None)` means a normal text answer;
+/// malformed or ambiguous output is an error the loop feeds back to the agent
+/// instead of guessing an action.
 pub(super) fn parse_tool_block(text: &str) -> Result<Option<MemoryToolCall>> {
+    const OPEN_TAG: &str = "<hivemind-tool>";
+    const CLOSE_TAG: &str = "</hivemind-tool>";
+    #[derive(PartialEq)]
+    enum Open {
+        No,
+        Fence,
+        Tag,
+    }
     let mut blocks = Vec::new();
-    let mut open = false;
+    let mut open = Open::No;
     let mut buffer = String::new();
     for line in text.lines() {
         let trimmed = line.trim();
-        if !open && trimmed == "```hivemind-tool" {
-            open = true;
-            buffer.clear();
-            continue;
-        }
-        if open && trimmed == "```" {
-            open = false;
-            blocks.push(std::mem::take(&mut buffer));
-            continue;
-        }
-        if open {
-            buffer.push_str(line);
-            buffer.push('\n');
+        match open {
+            Open::No if trimmed == "```hivemind-tool" => {
+                open = Open::Fence;
+                buffer.clear();
+            }
+            Open::No => {
+                if let Some(rest) = trimmed.strip_prefix(OPEN_TAG) {
+                    if let Some(body) = rest.strip_suffix(CLOSE_TAG) {
+                        blocks.push(body.to_owned());
+                    } else {
+                        open = Open::Tag;
+                        buffer.clear();
+                        buffer.push_str(rest);
+                        buffer.push('\n');
+                    }
+                }
+            }
+            Open::Fence if trimmed == "```" => {
+                open = Open::No;
+                blocks.push(std::mem::take(&mut buffer));
+            }
+            Open::Tag if trimmed.ends_with(CLOSE_TAG) => {
+                open = Open::No;
+                buffer.push_str(&trimmed[..trimmed.len() - CLOSE_TAG.len()]);
+                blocks.push(std::mem::take(&mut buffer));
+            }
+            Open::Fence | Open::Tag => {
+                buffer.push_str(line);
+                buffer.push('\n');
+            }
         }
     }
-    if open {
+    if open != Open::No {
         bail!("unterminated hivemind-tool block");
     }
     match blocks.len() {

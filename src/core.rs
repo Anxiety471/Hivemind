@@ -184,6 +184,10 @@ impl HivemindCore {
         runtime_config
             .private_env
             .extend(config.server.token_env.iter().cloned());
+        runtime_config.harness_dir = Some(
+            std::path::absolute(data_dir.join("harness"))
+                .context("resolving Hivemind harness directory")?,
+        );
         let runtime = Arc::new(RuntimePool::new(
             runtime_config,
             config.context.runtime_rotate_tokens,

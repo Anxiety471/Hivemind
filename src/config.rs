@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, HashSet},
     fs,
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use anyhow::{bail, Context, Result};
@@ -198,7 +198,8 @@ pub struct ConversationConfig {
     #[serde(default)]
     pub reply_order: Vec<String>,
     /// Follow-up replies a Discussion turn may add beyond each member's first:
-    /// @mentions of members who have already replied. 0 disables.
+    /// @mentions of members who have already replied, and unprompted open-floor
+    /// replies. 0 disables.
     #[serde(default = "default_mention_limit")]
     pub mention_limit: usize,
 }
@@ -276,6 +277,11 @@ impl Default for ContextConfig {
 pub struct RuntimeConfig {
     #[serde(skip)]
     pub private_env: Vec<String>,
+    /// Hivemind-owned directory for harness config that replaces the user's own
+    /// (OpenCode config dir, OMP settings overlay); set by the core to
+    /// `.hivemind/harness`, absolute.
+    #[serde(skip)]
+    pub harness_dir: Option<PathBuf>,
     #[serde(default = "default_omp_binary")]
     pub omp_binary: String,
     #[serde(default = "default_pi_binary")]
@@ -295,6 +301,7 @@ impl Default for RuntimeConfig {
     fn default() -> Self {
         Self {
             private_env: Vec::new(),
+            harness_dir: None,
             omp_binary: default_omp_binary(),
             pi_binary: default_pi_binary(),
             opencode_binary: default_opencode_binary(),

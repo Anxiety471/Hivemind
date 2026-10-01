@@ -136,7 +136,25 @@ impl RpcTransport for ChildTransport {
     }
 }
 
-const TOOL_FENCE: &str = "```hivemind-tool";
+/// Whether a message carries a Hivemind tool call, as a fence or as the tags some models emit.
+fn has_tool_call(text: &str) -> bool {
+    text.contains("```hivemind-tool") || text.contains("<hivemind-tool>")
+}
+
+/// Settings overlay (`--config`, above global and project config) that, with
+/// `--no-extensions --no-skills --no-rules`, keeps the user's own OMP setup out
+/// of a Hivemind agent. Every discovery source is disabled, so no context file
+/// (`AGENTS.md`, `.omp/AGENTS.md`, `CLAUDE.md`, …), MCP server, plugin, command,
+/// hook, or project `.omp/config.yml` loads; OMP memory, auto-learn and the
+/// advisor are off because Hivemind owns memory. Global settings (model roles,
+/// providers) and credentials in `agent.db` still apply. Verified against OMP
+/// 18.4.8 with `get_state`: skills, `learn`/`manage_skill`, and both kinds of
+/// `AGENTS.md` disappear from the system prompt; available models are unchanged.
+const ISOLATION_OVERLAY: &str = "# Written by Hivemind: OMP sessions it starts ignore your own OMP setup.\n\
+disabledProviders: [native, omp-plugins, claude, agent-plugins, codex, agents, claude-plugins, gemini, opencode, cursor, windsurf, cline, github, vscode, agents-md, claude-md, mcp-json, ssh-json]\n\
+memory:\n  backend: \"off\"\n\
+autolearn:\n  enabled: false\n\
+advisor:\n  enabled: false\n";
 
 /// One persistent OMP RPC process owned by exactly one agent.
 pub struct OmpSession {
@@ -158,10 +176,11 @@ impl OmpSession {
     /// session (wait for `ready`, apply `fast` when explicitly configured).
     #[cfg(test)]
     pub async fn start(binary: &str, agent: &AgentConfig) -> Result<Self> {
-        Self::start_filtered(binary, agent, &[]).await
+        Self::start_filtered(binary, &std::env::temp_dir(), agent, &[]).await
     }
     pub async fn start_filtered(
         binary: &str,
+        harness_dir: &Path,
         agent: &AgentConfig,
         private_env: &[String],
     ) -> Result<Self> {
@@ -175,7 +194,10 @@ impl OmpSession {
             );
         }
 
-        let args = Self::rpc_args(agent);
+        let overlay = harness_dir.join("omp.yml");
+        super::write_owned_file(&overlay, ISOLATION_OVERLAY)
+            .context("preparing Hivemind's OMP settings overlay")?;
+        let args = Self::rpc_args(agent, &overlay);
         let transport = ChildTransport::spawn(binary, &args, &agent.workspace, private_env)
             .await
             .with_context(|| format!("failed to start OMP session for agent '{}'", agent.name))?;
@@ -257,7 +279,7 @@ impl OmpSession {
         args
     }
 
-    fn rpc_args(agent: &AgentConfig) -> Vec<String> {
+    fn rpc_args(agent: &AgentConfig, overlay: &Path) -> Vec<String> {
         let mut args = vec![
             "--mode".to_string(),
             "rpc".to_string(),
@@ -267,6 +289,11 @@ impl OmpSession {
             // (checked against OMP source and two prompts on one live RPC
             // process), so the flag stays.
             "--no-session".to_string(),
+            "--no-extensions".to_string(),
+            "--no-skills".to_string(),
+            "--no-rules".to_string(),
+            "--config".to_string(),
+            overlay.display().to_string(),
         ];
         args.extend(Self::agent_args(agent));
         args
@@ -326,7 +353,7 @@ impl OmpSession {
             .filter_map(|part| part["text"].as_str())
             .collect::<Vec<_>>()
             .join("\n");
-        if text.contains(TOOL_FENCE) {
+        if has_tool_call(&text) {
             self.tool_reply = Some(text.trim().to_owned());
         }
     }
@@ -498,7 +525,7 @@ impl HarnessSession for OmpSession {
 
         match text {
             // The model asked for a Hivemind tool, then OMP carried on: the request is the reply.
-            Some(text) if !text.contains(TOOL_FENCE) && self.tool_reply.is_some() => {
+            Some(text) if !has_tool_call(text) && self.tool_reply.is_some() => {
                 Ok(self.tool_reply.take().unwrap_or_default())
             }
             Some(text) => Ok(text.to_string()),
@@ -564,7 +591,7 @@ mod tests {
 
     #[test]
     fn rpc_args_apply_system_prompt_model_and_reasoning() {
-        let args = OmpSession::rpc_args(&agent(None));
+        let args = OmpSession::rpc_args(&agent(None), Path::new("/hive/harness/omp.yml"));
 
         assert_eq!(
             args,
@@ -573,6 +600,11 @@ mod tests {
                 "rpc",
                 "--no-ui",
                 "--no-session",
+                "--no-extensions",
+                "--no-skills",
+                "--no-rules",
+                "--config",
+                "/hive/harness/omp.yml",
                 "--append-system-prompt",
                 "You are the Engineer.",
                 "--model",
@@ -590,14 +622,15 @@ mod tests {
             write: false,
             exec: false,
         });
-        let args = OmpSession::rpc_args(&agent);
+        let overlay = Path::new("/hive/harness/omp.yml");
+        let args = OmpSession::rpc_args(&agent, overlay);
         let tools = &args[args.iter().position(|a| a == "--tools").unwrap() + 1];
         assert_eq!(tools, "read,grep,glob,lsp,web_search,todo");
         agent.tool_access = Some(crate::config::ToolAccess {
             write: false,
             exec: true,
         });
-        let args = OmpSession::rpc_args(&agent);
+        let args = OmpSession::rpc_args(&agent, overlay);
         assert!(
             args[args.iter().position(|a| a == "--tools").unwrap() + 1].ends_with("bash,python")
         );

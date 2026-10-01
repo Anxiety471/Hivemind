@@ -986,6 +986,7 @@ fn context_budget_trims_old_history_but_keeps_current_input() {
         active_turn: "current-turn",
         caller: &caller,
         retrieval: "",
+        optional: false,
     };
     let state_json = coordinator.state_json(&history, &caller).unwrap();
     let pack = coordinator.context_pack(&request, &state_json).unwrap();
@@ -1037,6 +1038,7 @@ fn turn_delta_lists_unseen_peers_and_changed_state_and_rejects_gaps() {
         active_turn: "t2",
         caller: &caller,
         retrieval: "",
+        optional: false,
     };
     let state_json = coordinator.state_json(&history, &caller).unwrap();
     let cursor = TurnView {
@@ -1141,6 +1143,21 @@ fn tool_call(name: &str, args: serde_json::Value) -> MemoryToolCall {
         name: name.to_owned(),
         args,
     }
+}
+
+#[test]
+fn tool_calls_parse_from_fences_and_from_tags() {
+    let call = |text: &str| parse_tool_block(text).unwrap().map(|c| (c.name, c.args));
+    let search = || Some(("memory.search".to_owned(), serde_json::json!({"query": "Rust vs Zig"})));
+    let json = r#"{"name":"memory.search","args":{"query":"Rust vs Zig"}}"#;
+    assert_eq!(call(&format!("```hivemind-tool\n{json}\n```")), search());
+    // Some models wrap the call in tags, multi-line or inline.
+    assert_eq!(call(&format!("<hivemind-tool>\n{json}\n</hivemind-tool>")), search());
+    assert_eq!(call(&format!("Checking.\n<hivemind-tool>{json}</hivemind-tool>")), search());
+    // Prose that only names the syntax is not a call; an open tag never closed is an error.
+    assert_eq!(call("Use the <hivemind-tool> tags to call tools."), None);
+    assert!(parse_tool_block(&format!("<hivemind-tool>\n{json}")).is_err());
+    assert!(parse_tool_block(&format!("<hivemind-tool>{json}</hivemind-tool>\n```hivemind-tool\n{json}\n```")).is_err());
 }
 
 #[tokio::test]
@@ -2598,34 +2615,58 @@ fn mentions_match_member_names_at_word_boundaries() {
     assert_eq!(found("@Rev @Rev @Rev"), [2]);
 }
 
+/// Speakers of one Discussion turn among `names`, scripted in invocation order,
+/// plus every prompt the members received.
+async fn discussion(limit: usize, names: &[&str], replies: &[&str]) -> (Vec<String>, Vec<String>) {
+    let (_path, coord) = fixture();
+    coord.set_mention_limit(limit);
+    let members: Vec<Participant> = names.iter().map(|n| member(n)).collect();
+    let invoker = scripted(replies);
+    let out = coord
+        .turn(TurnRequest {
+            room: "mention-room",
+            room_name: "Mention room",
+            group_id: "mention-group",
+            mode: ConversationMode::Discussion,
+            members: &members,
+            input: "go",
+            invoker: invoker.clone(),
+        })
+        .await
+        .unwrap();
+    let prompts = invoker.prompts.lock().clone();
+    (out.into_iter().map(|r| r.name).collect(), prompts)
+}
+
 #[tokio::test]
 async fn mention_adds_a_follow_up_reply_only_within_the_limit() {
-    async fn speakers(limit: usize, replies: &[&str]) -> Vec<String> {
-        let (_path, coord) = fixture();
-        coord.set_mention_limit(limit);
-        let members = [member("A"), member("B")];
-        let out = coord
-            .turn(TurnRequest {
-                room: "mention-room",
-                room_name: "Mention room",
-                group_id: "mention-group",
-                mode: ConversationMode::Discussion,
-                members: &members,
-                input: "go",
-                invoker: scripted(replies),
-            })
-            .await
-            .unwrap();
-        out.into_iter().map(|r| r.name).collect()
-    }
-    // B pings A, who already spoke: A replies once more.
-    assert_eq!(speakers(4, &["hi @B", "back @A", "ok"]).await, ["A", "B", "A"]);
+    let speakers = |limit, replies: &'static [&'static str]| async move {
+        discussion(limit, &["A", "B"], replies).await.0
+    };
+    // B pings A, who already spoke: A replies once more; B then passes the floor.
+    assert_eq!(speakers(4, &["hi @B", "back @A", "ok", "PASS"]).await, ["A", "B", "A"]);
     // Self-mentions and mentions of members still waiting add nothing.
-    assert_eq!(speakers(4, &["@A and @B", "ok"]).await, ["A", "B"]);
+    assert_eq!(speakers(4, &["@A and @B", "ok", "PASS"]).await, ["A", "B"]);
     // Limit 0 disables follow-ups; a ping-pong stops at the limit.
     assert_eq!(speakers(0, &["hi @B", "back @A"]).await, ["A", "B"]);
-    let pingpong: Vec<&str> = std::iter::repeat_n("ping @A @B", 10).collect();
-    assert_eq!(speakers(2, &pingpong).await.len(), 4);
+    let pingpong: &'static [&'static str] = &["ping @A @B"; 10];
+    assert_eq!(speakers(2, pingpong).await.len(), 4);
+}
+
+#[tokio::test]
+async fn open_floor_continues_a_debate_without_mentions_until_everyone_passes() {
+    // No mentions: after the first round A rebuts B unprompted; B then passes.
+    let (speakers, prompts) = discussion(4, &["A", "B"], &["claim", "counter", "rebut", "pass."]).await;
+    assert_eq!(speakers, ["A", "B", "A"]);
+    assert_eq!(prompts.len(), 4);
+    // Only floor invocations may PASS; first-round replies stay required.
+    let optional: Vec<bool> = prompts.iter().map(|p| p.contains("reply with exactly PASS")).collect();
+    assert_eq!(optional, [false, false, true, true]);
+    // Floor turns rotate after the last speaker and end once all others pass in a row.
+    let replies = ["a", "b", "c", "PASS", "rebut", "PASS", "PASS"];
+    assert_eq!(discussion(4, &["A", "B", "C"], &replies).await.0, ["A", "B", "C", "B"]);
+    // Unprompted follow-ups share the mention budget, so the exchange always ends.
+    assert_eq!(discussion(2, &["A", "B"], &[]).await.0, ["A", "B", "A", "B"]);
 }
 
 /// Invoker answering each agent with a fixed text, independent of order.
