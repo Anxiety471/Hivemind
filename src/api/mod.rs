@@ -1,5 +1,6 @@
 mod error;
 mod protocol;
+mod rooms;
 mod routes;
 mod tasks;
 mod websocket;

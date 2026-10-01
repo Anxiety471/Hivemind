@@ -545,6 +545,47 @@ impl MemoryService {
             Ok(out)
         })
     }
+    /// One page of a room's archived messages, oldest first. `before` is a message id; the page
+    /// holds the `limit` messages immediately older than it (or the newest when `None`).
+    pub fn room_messages_page(
+        &self,
+        caller: &Caller,
+        room_id: &str,
+        before: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<ArchivedMessage>> {
+        if !caller.trusted && room_id != caller.room_id {
+            bail!("cannot read another room archive");
+        }
+        let limit = limit.clamp(1, 200) as i64;
+        self.store.read(|c| {
+            let mut out = match before {
+                Some(id) => c
+                    .prepare_cached("SELECT id,room_id,turn_id,speaker,content,created_at FROM archive_messages WHERE room_id=?1 AND (created_at,id) < (SELECT created_at,id FROM archive_messages WHERE id=?2 AND room_id=?1) ORDER BY created_at DESC,id DESC LIMIT ?3")?
+                    .query_map(rusqlite::params![room_id, id, limit], message_from_row)?
+                    .collect::<rusqlite::Result<Vec<_>>>()?,
+                None => c
+                    .prepare_cached("SELECT id,room_id,turn_id,speaker,content,created_at FROM archive_messages WHERE room_id=?1 ORDER BY created_at DESC,id DESC LIMIT ?2")?
+                    .query_map(rusqlite::params![room_id, limit], message_from_row)?
+                    .collect::<rusqlite::Result<Vec<_>>>()?,
+            };
+            out.reverse();
+            Ok(out)
+        })
+    }
+    /// Every room with archived activity: `(id, name, updated_at, message_count)`, newest first.
+    pub fn room_summaries(&self, caller: &Caller) -> Result<Vec<(String, String, i64, i64)>> {
+        if !caller.trusted {
+            bail!("cannot list rooms");
+        }
+        self.store.read(|c| {
+            let rows = c
+                .prepare_cached("SELECT r.id,r.name,r.updated_at,(SELECT COUNT(*) FROM archive_messages m WHERE m.room_id=r.id) FROM rooms r ORDER BY r.updated_at DESC,r.id")?
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+    }
     /// Apply incremental turn writes in one transaction.
     pub fn append_turns(&self, caller: &Caller, appends: Vec<TurnAppend>) -> Result<()> {
         for append in &appends {

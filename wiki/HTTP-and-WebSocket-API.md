@@ -16,7 +16,9 @@ Building the server and serving health, info, and agent listings never starts Pi
 | `GET` | `/api/v1/health` | Liveness check; never contacts a provider |
 | `GET` | `/api/v1/info` | Service metadata and protocol endpoints |
 | `GET` | `/api/v1/agents` | Safe agent metadata (name and runtime only; no credentials) |
-| `POST` | `/api/v1/turns` | Submit a conversation turn |
+| `POST` | `/api/v1/turns` | Submit a conversation turn (`"wait": false` returns `202` immediately) |
+| `GET` | `/api/v1/rooms`, `/api/v1/rooms/{id}` | Rooms (main, solo, group, archived) with participants, state, summary, and message counts |
+| `GET` | `/api/v1/rooms/{id}/messages?limit=&before=` | Paged room history, oldest first within a page; page back with `next_before` |
 | `POST` / `GET` | `/api/v1/tasks`, `/api/v1/tasks/{id}` | Submit (202) and inspect autonomous tasks |
 | `GET` / `POST` | `/api/v1/tasks/{id}/attempts`, `/cancel`, `/pause`, `/resume`, `/input`, `/context-metrics` | Attempts, controls, and bounded context diagnostics |
 | `GET` | `/api/v1/agents/{id}`, `/api/v1/agent-instances` | Capabilities and derived activity (never starts a runtime) |
@@ -51,6 +53,7 @@ The response includes `turn_id`, `room_id`, and an ordered list of `replies`, ea
 
 | Status | Meaning |
 | --- | --- |
+| `202` | Only with `"wait": false`: the turn runs in the background; follow `conversation.*` and `agent.reply.*` events for `room_id` and read replies from room history |
 | `400` | Malformed or empty request |
 | `404` | Target not found |
 | `503` | Shutting down |
