@@ -5,3 +5,4 @@ pub mod core;
 pub mod events;
 pub mod memory;
 pub mod runtime;
+pub mod tasks;

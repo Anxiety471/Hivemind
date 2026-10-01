@@ -16,6 +16,7 @@ use crate::{
     events::{DomainEventKind, EventBus},
     memory::MemoryService,
     runtime::RuntimePool,
+    tasks::TaskService,
 };
 
 /// Process-level owner of configuration, memory, conversations, events, and API state.
@@ -23,9 +24,10 @@ pub struct HivemindCore {
     config: Arc<HivemindConfig>,
     agents: AgentRegistry,
     memory: Arc<MemoryService>,
-    conversation: ConversationCoordinator,
+    conversation: Arc<ConversationCoordinator>,
     events: EventBus,
     runtime: Arc<RuntimePool>,
+    tasks: TaskService,
     config_path: PathBuf,
     shutting_down: AtomicBool,
 }
@@ -74,18 +76,24 @@ impl HivemindCore {
             agents: Arc::new(config.ordered_agents().into_iter().cloned().collect()),
         };
         let events = EventBus::new();
-        let conversation = ConversationCoordinator::new_with_events(
+        let conversation = Arc::new(ConversationCoordinator::new_with_events(
             context_dir,
             config.context.clone(),
             memory.clone(),
             Some(events.clone()),
-        );
+        ));
         let runtime = Arc::new(RuntimePool::new(
             config.runtime.clone(),
             config.context.runtime_rotate_tokens,
             memory.clone(),
             events.clone(),
         ));
+        let tasks = TaskService::new(
+            config.clone(),
+            conversation.clone(),
+            runtime.clone(),
+            events.clone(),
+        );
         events.publish(DomainEventKind::CoreStarted);
         Ok(Self {
             config,
@@ -94,6 +102,7 @@ impl HivemindCore {
             conversation,
             events,
             runtime,
+            tasks,
             config_path,
             shutting_down: AtomicBool::new(false),
         })
@@ -114,16 +123,19 @@ impl HivemindCore {
     pub fn conversation(&self) -> &ConversationCoordinator {
         &self.conversation
     }
+    /// Task threads handed off by read-only chat agents.
+    pub fn tasks(&self) -> &TaskService {
+        &self.tasks
+    }
     pub fn config_path(&self) -> &Path {
         &self.config_path
     }
 
     pub async fn turn(&self, request: CoreTurnRequest<'_>) -> Result<Vec<TurnReply>> {
-        let invoker = Arc::new(RuntimeInvoker::new(
-            self.runtime.clone(),
-            request.room,
-            request.group_id,
-        ));
+        let invoker = Arc::new(
+            RuntimeInvoker::new(self.runtime.clone(), request.room, request.group_id)
+                .with_delegator(Arc::new(self.tasks.clone())),
+        );
         self.turn_with_invoker(request, invoker).await
     }
 
@@ -155,6 +167,7 @@ impl HivemindCore {
             return;
         }
         self.events.publish(DomainEventKind::CoreShuttingDown);
+        self.tasks.cancel_all();
         self.runtime.shutdown().await;
     }
 }

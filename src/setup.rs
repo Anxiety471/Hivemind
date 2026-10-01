@@ -275,6 +275,7 @@ mod tests {
             groups: Vec::new(),
             context: hivemind::config::ContextConfig::default(),
             memory: Default::default(),
+            tasks: Default::default(),
         }
     }
 

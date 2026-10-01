@@ -9,6 +9,8 @@ use hivemind::{
     config::{AgentConfig, ConversationMode, HivemindConfig},
     conversation::Participant,
     core::{CoreTurnRequest, HivemindCore},
+    events::DomainEventKind,
+    tasks::{TaskRecord, TaskStatus},
 };
 use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader};
 
@@ -104,6 +106,7 @@ enum InteractiveCommand {
     Status,
     Order,
     Where,
+    Tasks,
     Ask(String, String),
     All(String),
     Solo(String),
@@ -333,6 +336,7 @@ async fn ask(
     let result = route_turn(&core, config, &Route::Solo(name.to_owned()), message)
         .await
         .and_then(print_replies);
+    await_handoffs(&core).await;
     core.shutdown().await;
     result
 }
@@ -370,8 +374,84 @@ async fn all(config: &HivemindConfig, config_path: &std::path::Path, message: &s
     let result = route_turn(&core, config, &Route::Main, message)
         .await
         .and_then(print_replies);
+    await_handoffs(&core).await;
     core.shutdown().await;
     result
+}
+
+/// A one-shot command must not cancel work an agent just handed off, so wait
+/// for every task thread (Ctrl-C cancels them) and print what each reported.
+async fn await_handoffs(core: &HivemindCore) {
+    let before = core.tasks().list();
+    if before.is_empty() {
+        return;
+    }
+    eprintln!(
+        "\nwaiting for {} task thread(s) to finish (Ctrl-C cancels them)…",
+        before.len()
+    );
+    tokio::select! {
+        () = core.tasks().wait_idle() => {}
+        _ = tokio::signal::ctrl_c() => {}
+    }
+    for record in core.tasks().list() {
+        println!("\n{}", describe_task(&record));
+    }
+}
+
+fn describe_task(record: &TaskRecord) -> String {
+    let report = record.report.as_deref().unwrap_or("");
+    match record.status {
+        TaskStatus::Running => format!(
+            "[task {}] {} is working in {}: {}",
+            record.id, record.worker, record.thread_room_id, record.brief
+        ),
+        TaskStatus::Completed => format!(
+            "[task {}] completed by {} (requested by {} in {}):\n{report}",
+            record.id, record.worker, record.requested_by, record.room_id
+        ),
+        TaskStatus::Failed => format!(
+            "[task {}] FAILED ({}, requested by {} in {}): {report}",
+            record.id, record.worker, record.requested_by, record.room_id
+        ),
+        TaskStatus::Cancelled => format!(
+            "[task {}] cancelled before {} finished: {}",
+            record.id, record.worker, record.brief
+        ),
+    }
+}
+
+fn print_tasks(core: &HivemindCore) {
+    let records = core.tasks().list();
+    if records.is_empty() {
+        println!("no task threads yet");
+    }
+    for record in records {
+        println!("{}", describe_task(&record));
+    }
+}
+
+/// Print task-thread lifecycle events as they happen during interactive chat.
+fn spawn_task_printer(core: &HivemindCore) -> tokio::task::JoinHandle<()> {
+    let mut events = core.events().subscribe();
+    let tasks = core.tasks().clone();
+    tokio::spawn(async move {
+        loop {
+            let id = match events.recv().await {
+                Ok(event) => match event.payload {
+                    DomainEventKind::TaskStarted { task_id, .. }
+                    | DomainEventKind::TaskCompleted { task_id, .. }
+                    | DomainEventKind::TaskFailed { task_id, .. } => task_id,
+                    _ => continue,
+                },
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+            };
+            if let Some(record) = tasks.get(&id) {
+                println!("\n{}", describe_task(&record));
+            }
+        }
+    })
 }
 
 fn route_identity(
@@ -460,6 +540,7 @@ async fn chat(config: &mut HivemindConfig, path: &std::path::Path, mut route: Ro
     );
     print_agents(&effective_agents(config));
     let core = HivemindCore::new(config.clone(), path)?;
+    let printer = spawn_task_printer(&core);
     let result = tokio::select! {
         result = chat_loop(config, &core, path, &mut route) => result,
         signal = tokio::signal::ctrl_c() => match signal {
@@ -467,6 +548,7 @@ async fn chat(config: &mut HivemindConfig, path: &std::path::Path, mut route: Ro
             Err(error) => Err(error.into()),
         }
     };
+    printer.abort();
     core.shutdown().await;
     result
 }
@@ -574,7 +656,7 @@ async fn handle_interactive(
     match command {
         InteractiveCommand::Help => {
             println!(
-                "/help /agents /status /order /where\n\
+                "/help /agents /status /order /where /tasks\n\
                  /ask <agent> <message> /all <message>\n\
                  /solo <agent> /main\n\
                  /group create|list|show|use|add|remove|delete ...\n\
@@ -585,6 +667,7 @@ async fn handle_interactive(
         InteractiveCommand::Status => status(config)?,
         InteractiveCommand::Order => print_order(&effective_agents(config)),
         InteractiveCommand::Where => println!("{}", route_label(route)),
+        InteractiveCommand::Tasks => print_tasks(core),
         InteractiveCommand::Ask(name, message) => {
             print_replies(route_turn(core, config, &Route::Solo(name), &message).await?)?;
         }
@@ -639,6 +722,7 @@ fn parse_interactive(input: &str) -> InteractiveCommand {
         "/status" if rest.is_empty() => InteractiveCommand::Status,
         "/order" if rest.is_empty() => InteractiveCommand::Order,
         "/where" if rest.is_empty() => InteractiveCommand::Where,
+        "/tasks" if rest.is_empty() => InteractiveCommand::Tasks,
         "/quit" | "/exit" if rest.is_empty() => InteractiveCommand::Quit,
         "/main" if rest.is_empty() => InteractiveCommand::Main,
         "/solo" if args.len() == 1 => InteractiveCommand::Solo(args[0].into()),
@@ -656,7 +740,7 @@ fn parse_interactive(input: &str) -> InteractiveCommand {
         "/help" => InteractiveCommand::Invalid("/help".into()),
         "/solo" => InteractiveCommand::Invalid("/solo <agent>".into()),
         "/all" => InteractiveCommand::Invalid("/all <message>".into()),
-        "/main" | "/agents" | "/status" | "/order" | "/where" | "/quit" | "/exit" => {
+        "/main" | "/agents" | "/status" | "/order" | "/where" | "/tasks" | "/quit" | "/exit" => {
             InteractiveCommand::Invalid(command.to_string())
         }
         _ => InteractiveCommand::Unknown,
@@ -842,6 +926,11 @@ printf '%s stopped\n' "$agent" >> __LOG__
             InteractiveCommand::Group(GroupAction::Use("backend".into()))
         );
         assert_eq!(parse_interactive("/what"), InteractiveCommand::Unknown);
+        assert_eq!(parse_interactive("/tasks"), InteractiveCommand::Tasks);
+        assert_eq!(
+            parse_interactive("/tasks now"),
+            InteractiveCommand::Invalid("/tasks".into())
+        );
     }
     #[test]
     fn clap_parses_every_shell_command_and_global_config_position() {

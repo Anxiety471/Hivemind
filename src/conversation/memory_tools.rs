@@ -31,6 +31,32 @@ pub(super) fn memory_tool_manifest(caller: &Caller) -> &'static str {
     }
 }
 
+/// Added to every chat room's manifest: chat sessions are launched read-only,
+/// so this describes the enforced limit and the only way past it.
+pub(super) const READ_ONLY_DELEGATION_NOTICE: &str = "\
+\n\
+Workspace access — READ ONLY: you can read, search, and list files but cannot edit files or run commands, and must never claim to have. To change anything, hand it to a task thread with one fenced block:\n\
+```hivemind-tool\n\
+{\"name\":\"task.delegate\",\"args\":{\"brief\":\"<self-contained instructions>\",\"persona\":\"<optional worker; defaults to you>\"}}\n\
+```\n\
+The worker has full tools but cannot see this conversation, so the brief must hold every requirement, path, and acceptance check. After delegating, say what you handed off and stop; Hivemind posts the worker's report here when it finishes. Never wait, poll, or invent the outcome.\n";
+
+/// Shown inside a task thread, where the worker has full tools and no delegation.
+pub(super) const TASK_WORKER_NOTICE: &str = "\
+\n\
+Workspace access — FULL. You are a task-thread worker with full workspace tools. You cannot delegate further. Your final plain-text reply is posted back to the room that asked for the work.\n";
+
+/// Full tool manifest for a caller: memory tools plus the workspace-access
+/// rules that apply to its room.
+pub(super) fn tool_manifest(caller: &Caller) -> String {
+    let access = if crate::tasks::is_task_room(&caller.room_id) {
+        TASK_WORKER_NOTICE
+    } else {
+        READ_ONLY_DELEGATION_NOTICE
+    };
+    format!("{}{access}", memory_tool_manifest(caller))
+}
+
 /// Memory actions allowed per agent invocation before a plain-text answer is required.
 pub(super) const MAX_MEMORY_ACTIONS: usize = 4;
 
@@ -302,6 +328,24 @@ pub(super) fn execute_memory_tool(
     }
 }
 
+/// Execute a `task.*` call. Only `task.delegate` exists; the delegating
+/// agent's identity comes from the host-built `caller`, never from `args`.
+pub(super) async fn execute_task_tool(
+    delegator: Option<&dyn TaskDelegator>,
+    caller: &Caller,
+    call: &MemoryToolCall,
+) -> Result<String> {
+    if call.name != "task.delegate" {
+        bail!("unknown task tool '{}'", call.name);
+    }
+    let Some(delegator) = delegator else {
+        bail!("task delegation is not available in this room");
+    };
+    let brief = required_string(&call.args, "brief")?;
+    let persona = optional_string(&call.args, "persona")?;
+    delegator.delegate(caller, persona.as_deref(), &brief).await
+}
+
 /// Self-contained re-prompt used when the runtime must (re)hydrate mid-turn:
 /// the context pack plus this turn's full tool exchange.
 pub(super) fn tool_prompt(pack: &str, exchange: &[(String, String)]) -> String {
@@ -506,8 +550,12 @@ pub(super) async fn invoke_with_memory(
                 let rendered = serde_json::to_string(&call.args)
                     .map(|args| format!("{{\"name\":\"{}\",\"args\":{args}}}", call.name))
                     .unwrap_or_else(|_| call.name.clone());
-                match execute_with_optional_authorization(memory, caller, authorized_global, &call)
-                {
+                let outcome = if call.name.starts_with("task.") {
+                    execute_task_tool(invoker.delegator().as_deref(), caller, &call).await
+                } else {
+                    execute_with_optional_authorization(memory, caller, authorized_global, &call)
+                };
+                match outcome {
                     Ok(text) => (rendered, text),
                     Err(error) => (rendered, format!("error: {error:#}")),
                 }

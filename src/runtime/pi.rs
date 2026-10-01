@@ -11,7 +11,7 @@ use tokio::{
 
 use crate::config::AgentConfig;
 
-use super::HarnessSession;
+use super::{HarnessSession, ToolAccess};
 
 const CHILD_EXIT_GRACE: Duration = Duration::from_secs(2);
 
@@ -106,7 +106,7 @@ pub struct PiSession {
 }
 
 impl PiSession {
-    pub async fn start(binary: &str, agent: &AgentConfig) -> Result<Self> {
+    pub async fn start(binary: &str, agent: &AgentConfig, access: ToolAccess) -> Result<Self> {
         if agent.fast.is_some() {
             bail!(
                 "Pi runtime does not support the OMP-specific 'fast' setting for agent '{}'",
@@ -122,7 +122,7 @@ impl PiSession {
             );
         }
 
-        let args = Self::rpc_args(agent);
+        let args = Self::rpc_args(agent, access);
         let transport = ChildTransport::spawn(binary, &args, &agent.workspace)
             .await
             .with_context(|| {
@@ -135,8 +135,11 @@ impl PiSession {
         })
     }
 
-    fn rpc_args(agent: &AgentConfig) -> Vec<String> {
+    fn rpc_args(agent: &AgentConfig, access: ToolAccess) -> Vec<String> {
         let mut args = vec!["--mode".into(), "rpc".into(), "--no-session".into()];
+        if let Some(tools) = access.pi_tools() {
+            args.extend(["--tools".into(), tools.into()]);
+        }
         args.push("--append-system-prompt".into());
         args.push(agent.system_prompt.clone());
         if let Some(model) = agent.model.as_deref().filter(|s| !s.trim().is_empty()) {
@@ -306,7 +309,7 @@ mod tests {
     #[test]
     fn rpc_args_apply_prompt_model_and_reasoning_without_fast_mapping() {
         assert_eq!(
-            PiSession::rpc_args(&agent()),
+            PiSession::rpc_args(&agent(), ToolAccess::Full),
             [
                 "--mode",
                 "rpc",
@@ -319,6 +322,15 @@ mod tests {
                 "high",
             ]
         );
+    }
+
+    #[test]
+    fn read_only_access_pins_a_non_editing_tool_allowlist() {
+        let args = PiSession::rpc_args(&agent(), ToolAccess::ReadOnly);
+        let at = args.iter().position(|arg| arg == "--tools").unwrap();
+        let tools: Vec<&str> = args[at + 1].split(',').collect();
+        assert_eq!(tools, ["read", "grep", "find", "ls"]);
+        assert!(!PiSession::rpc_args(&agent(), ToolAccess::Full).contains(&"--tools".to_owned()));
     }
 
     static NEXT: AtomicUsize = AtomicUsize::new(0);
@@ -385,7 +397,9 @@ done
         );
         let mut cfg = agent();
         cfg.workspace = fixture.workspace();
-        let mut session = PiSession::start(&fixture.binary(), &cfg).await.unwrap();
+        let mut session = PiSession::start(&fixture.binary(), &cfg, ToolAccess::Full)
+            .await
+            .unwrap();
         assert_eq!(
             session.prompt("hello").await.unwrap(),
             format!("{} prompt hello", fixture.workspace())
@@ -404,7 +418,9 @@ done
             let fixture = FixtureDir::new(script);
             let mut cfg = agent();
             cfg.workspace = fixture.workspace();
-            let mut session = PiSession::start(&fixture.binary(), &cfg).await.unwrap();
+            let mut session = PiSession::start(&fixture.binary(), &cfg, ToolAccess::Full)
+                .await
+                .unwrap();
             let error = session.prompt("hello").await.unwrap_err();
             let message = format!("{error:#}");
             assert!(
@@ -417,14 +433,14 @@ done
     #[tokio::test]
     async fn missing_binary_and_fast_setting_fail_usefully() {
         let cfg = agent();
-        let error = PiSession::start("hivemind-missing-pi-binary", &cfg)
+        let error = PiSession::start("hivemind-missing-pi-binary", &cfg, ToolAccess::Full)
             .await
             .err()
             .expect("missing binary must fail session creation");
         assert!(format!("{error:#}").contains("PiAgent"));
         let mut cfg = agent();
         cfg.fast = Some(false);
-        let error = PiSession::start("unused", &cfg)
+        let error = PiSession::start("unused", &cfg, ToolAccess::Full)
             .await
             .err()
             .expect("unsupported fast setting must fail session creation");

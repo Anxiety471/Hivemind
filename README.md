@@ -115,11 +115,13 @@ conversation:
 /group add backend Frieren
 /group remove backend Maomao
 /group delete backend
+/tasks
 /quit
 /exit
 ~~~
 
-`/ask` and `/all` leave the active route unchanged. `/ask` writes to the selected
+`/tasks` lists the task threads started during this chat session (see
+[Read-only chat and task threads](#read-only-chat-and-task-threads)). `/ask` and `/all` leave the active route unchanged. `/ask` writes to the selected
 persona's solo room; `/all` writes to the `main` room, so neither silently
 continues the active group's history. `/exit` aliases `/quit`.
 Deleting the active group returns the route to `main`; empty groups cannot be
@@ -198,6 +200,44 @@ budget. `runtime_rotate_tokens` is the live context size at which that agent
 instance's runtime is rotated before its next turn, and
 `runtime.idle_timeout_secs` is how long an unused runtime stays alive.
 
+## Read-only chat and task threads
+
+Agents in chat cannot change your workspace directly. Every session started for
+a chat route — main, solo, group, `/ask`, `/all`, shell `ask`/`all`, and any
+`HivemindCore::turn` caller — is launched with a tool allowlist, so the
+restriction is enforced by the runtime process rather than by the prompt:
+
+| Runtime | Chat sessions are launched with |
+| --- | --- |
+| Pi | `--tools read,grep,find,ls` |
+| OMP | `--tools read,grep,glob` |
+
+There is no shell, edit, write, or sub-agent tool in a chat session. To change
+anything, an agent hands the work to a **task thread** with Hivemind's
+`task.delegate` tool (the same fenced `hivemind-tool` block as the memory tools):
+
+~~~text
+{"name":"task.delegate","args":{"brief":"<self-contained instructions>","persona":"Maomao"}}
+~~~
+
+`persona` is optional and defaults to the delegating agent. Hivemind then:
+
+1. returns a task id to the agent immediately, so the chat turn is never held
+   up and the agent's only job is to tell you what it handed off;
+2. runs the work in its own room, `task/<id>`, with a worker session that has
+   full tools and the persona's configured workspace. The worker sees only the
+   brief — not the originating conversation — and cannot delegate further;
+3. when the worker finishes, posts its bounded final report (or the failure)
+   into the room that asked, as its own turn, so every persona sees it in its
+   next context. In `chat` the report is also printed as it arrives, and
+   `/tasks` lists them.
+
+Task state is process-local: the thread's transcript and the posted report are
+durable in the room archive, but a task still running when the core shuts down
+is cancelled and not resumed. Shell `ask`/`all` wait for their handed-off tasks
+before exiting (Ctrl-C cancels them). `[tasks] max_concurrent` (default 4)
+caps how many threads may run at once.
+
 ## Application core and event stream
 
 `serve`, `ask`, `all`, and interactive `chat` all construct the library
@@ -231,8 +271,8 @@ authoritative API state).
 The WebSocket stream forwards these events as `conversation.turn.started`,
 `conversation.turn.completed`, `agent.reply.started`, `agent.reply.completed`,
 `agent.reply.failed`, `runtime.started`, `runtime.stopped`,
-`runtime.rotated`, and
-`runtime.failed`. A subscriber that falls behind the bounded buffer receives
+`runtime.rotated`, `runtime.failed`, `task.started`, `task.completed`,
+`task.failed`, and `task.cancelled`. A subscriber that falls behind the bounded buffer receives
 `system.events_lagged` with `missed_count` and `refresh_required: true`
 instead of the dropped events.
 
@@ -400,6 +440,16 @@ Expected JSON response:
 }
 ~~~
 
+#### Task threads (`GET /api/v1/tasks`)
+
+Lists task threads started by this core with safe metadata only (`id`,
+`room_id`, `thread_room_id`, `requested_by`, `worker`, `status`). Briefs and
+worker reports stay in the rooms.
+
+~~~bash
+curl http://127.0.0.1:7474/api/v1/tasks
+~~~
+
 ### WebSocket interface
 
 The WebSocket endpoint is available at:
@@ -503,7 +553,8 @@ Hivemind is intentionally focused on core harness and interface foundations:
 - If a runtime process fails mid-turn, Hivemind reports an agent-attributed error rather than pretending the failed conversation continued.
 - Memory search is SQLite FTS5 full-text matching, not semantic/embedding search; no vector database is used.
 - Responses are collected after each turn rather than streamed token-by-token.
-- Agent-to-agent messaging is not implemented.
+- Agent-to-agent messaging is not implemented; task handoff is one level deep (workers cannot delegate) and its registry is not persisted across restarts.
+- The read-only tool allowlists for Pi and OMP are taken from their documented `--tools` flags; they have not been exercised against the real binaries in CI.
 
 Runtime sessions live for as long as the core that started them: `ask`/`all`
 create a core per command and `chat` keeps one for the session, and each core

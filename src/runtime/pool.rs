@@ -17,7 +17,7 @@ use std::{
 use anyhow::{bail, Context, Result};
 use tokio::{sync::Mutex, task::JoinSet, time::timeout};
 
-use super::{create_session, HarnessSession};
+use super::{create_session, HarnessSession, ToolAccess};
 use crate::{
     config::{AgentConfig, RuntimeConfig},
     events::{DomainEventKind, EventBus},
@@ -92,6 +92,7 @@ struct Live {
     runtime: String,
     cursor: Option<TurnView>,
     estimated_tokens: u64,
+    access: ToolAccess,
 }
 
 struct Slot {
@@ -150,7 +151,16 @@ impl RuntimePool {
 
     /// Prompt the instance's live session, starting, rotating, or rehydrating
     /// it as needed. A failed prompt discards the session and is not retried.
-    pub async fn invoke(&self, caller: &Caller, request: InvokeRequest<'_>) -> Result<InvokeReply> {
+    ///
+    /// `access` fixes what the runtime process may do to the workspace and is
+    /// applied at launch; a live session started with different access is
+    /// never reused.
+    pub async fn invoke(
+        &self,
+        caller: &Caller,
+        access: ToolAccess,
+        request: InvokeRequest<'_>,
+    ) -> Result<InvokeReply> {
         let inner = &self.inner;
         if inner.shutting_down.load(Ordering::SeqCst) {
             bail!("runtime pool is shutting down");
@@ -165,12 +175,17 @@ impl RuntimePool {
 
         let mut matching = matches!(
             (&request.delta, &slot.live),
-            (Some(delta), Some(live)) if live.epoch.id == delta.epoch_id
+            (Some(delta), Some(live)) if live.epoch.id == delta.epoch_id && live.access == access
         );
         if let Some(live) = slot.live.take() {
             if !matching {
+                let reason = if live.access == access {
+                    "context_gap"
+                } else {
+                    "tool_access"
+                };
                 inner
-                    .stop(request.instance_id, live, Stop::Rotated("context_gap"))
+                    .stop(request.instance_id, live, Stop::Rotated(reason))
                     .await;
             } else if request.phase == PromptPhase::TurnStart {
                 let mut live = live;
@@ -195,7 +210,7 @@ impl RuntimePool {
         }
 
         if slot.live.is_none() {
-            slot.live = Some(inner.start(caller, &request).await?);
+            slot.live = Some(inner.start(caller, access, &request).await?);
         }
         let text = match (matching, request.delta) {
             (true, Some(delta)) => delta.text,
@@ -311,9 +326,14 @@ impl PoolInner {
             .clone()
     }
 
-    async fn start(&self, caller: &Caller, request: &InvokeRequest<'_>) -> Result<Live> {
+    async fn start(
+        &self,
+        caller: &Caller,
+        access: ToolAccess,
+        request: &InvokeRequest<'_>,
+    ) -> Result<Live> {
         let agent = request.agent;
-        let mut session = match create_session(&self.runtime, agent).await {
+        let mut session = match create_session(&self.runtime, agent, access).await {
             Ok(session) => session,
             Err(error) => {
                 self.events.publish(DomainEventKind::RuntimeFailed {
@@ -359,6 +379,7 @@ impl PoolInner {
             runtime: agent.runtime.clone(),
             cursor: None,
             estimated_tokens: 0,
+            access,
         })
     }
 

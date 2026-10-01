@@ -25,6 +25,7 @@ pub(super) fn router(core: Arc<HivemindCore>, shutdown: watch::Receiver<bool>) -
         .route("/api/v1/health", get(health))
         .route("/api/v1/info", get(info))
         .route("/api/v1/agents", get(agents))
+        .route("/api/v1/tasks", get(tasks))
         .route("/api/v1/ws", get(ws))
         .fallback(not_found)
         .method_not_allowed_fallback(method_not_allowed)
@@ -84,6 +85,40 @@ async fn agents(State(state): State<ApiState>) -> Json<Agents> {
         })
         .collect();
     Json(Agents { agents })
+}
+
+#[derive(Serialize)]
+struct TaskMetadata {
+    id: String,
+    room_id: String,
+    thread_room_id: String,
+    requested_by: String,
+    worker: String,
+    status: crate::tasks::TaskStatus,
+}
+
+#[derive(Serialize)]
+struct Tasks {
+    tasks: Vec<TaskMetadata>,
+}
+
+/// Task-thread metadata only; briefs and worker reports stay in the rooms.
+async fn tasks(State(state): State<ApiState>) -> Json<Tasks> {
+    let tasks = state
+        .core
+        .tasks()
+        .list()
+        .into_iter()
+        .map(|task| TaskMetadata {
+            id: task.id,
+            room_id: task.room_id,
+            thread_room_id: task.thread_room_id,
+            requested_by: task.requested_by,
+            worker: task.worker,
+            status: task.status,
+        })
+        .collect();
+    Json(Tasks { tasks })
 }
 
 async fn ws(State(state): State<ApiState>, upgrade: WebSocketUpgrade) -> Response {
@@ -192,6 +227,10 @@ mod tests {
         assert_eq!(info["version"], env!("CARGO_PKG_VERSION"));
         assert_eq!(info["api_version"], "v1");
         assert_eq!(info["websocket"], "/api/v1/ws");
+
+        let (status, _, tasks) = request(app.clone(), "GET", "/api/v1/tasks").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(tasks, json!({"tasks": []}));
 
         let (_, _, agents) = request(app.clone(), "GET", "/api/v1/agents").await;
         assert_eq!(

@@ -20,6 +20,10 @@ summary_refresh_turns = 4
 # Deterministic memory core: local SQLite with FTS5 search, no LLM required.
 mode = "deterministic"
 
+[tasks]
+# Chat agents are read-only; they hand edits to a task thread. Threads that may run at once.
+max_concurrent = 4
+
 [[personas]]
 id = "Maomao"
 role = "Software Engineer"

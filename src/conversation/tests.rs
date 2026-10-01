@@ -1937,3 +1937,43 @@ async fn room_history_round_trips_through_the_sqlite_file_on_disk() {
     assert_eq!(history.completed_turns.len(), 1);
     let _ = fs::remove_dir_all(root);
 }
+
+#[test]
+fn chat_rooms_get_the_read_only_notice_and_task_rooms_the_worker_notice() {
+    let chat = tool_manifest(&Caller::agent("solo-A", "", "solo-A/A", "A", "A"));
+    assert!(
+        chat.contains("READ ONLY") && chat.contains("task.delegate"),
+        "{chat}"
+    );
+    let group = tool_manifest(&Caller::agent("group-g", "g", "group-g/A", "A", "A"));
+    assert!(
+        group.contains("READ ONLY") && group.contains("task.delegate"),
+        "{group}"
+    );
+    let worker = tool_manifest(&Caller::agent("task/t", "", "task/t/A", "A", "A"));
+    assert!(
+        worker.contains("FULL") && !worker.contains("task.delegate"),
+        "{worker}"
+    );
+}
+
+#[tokio::test]
+async fn task_tools_need_a_delegator_and_only_delegate_exists() {
+    let caller = Caller::agent("solo-A", "", "solo-A/A", "A", "A");
+    let call = |name: &str, args: serde_json::Value| MemoryToolCall {
+        name: name.to_owned(),
+        args,
+    };
+    let error = execute_task_tool(
+        None,
+        &caller,
+        &call("task.delegate", serde_json::json!({"brief": "edit it"})),
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("not available"), "{error}");
+    let error = execute_task_tool(None, &caller, &call("task.cancel", serde_json::json!({})))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("unknown task tool"), "{error}");
+}

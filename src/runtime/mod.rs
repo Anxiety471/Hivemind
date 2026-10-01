@@ -10,6 +10,36 @@ pub use pool::{
     InvokeReply, InvokeRequest, PromptDelta, PromptPhase, RuntimePool, SessionCursor, TurnView,
 };
 
+/// What a live session may do to the workspace.
+///
+/// Chat sessions (main, solo, group, `ask`, `all`) are `ReadOnly`: the
+/// runtime process is launched with a tool allowlist that has no editing,
+/// shell, or sub-agent tools, so the restriction holds no matter what the
+/// model is told or asks for. Only task-thread workers get `Full`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolAccess {
+    ReadOnly,
+    Full,
+}
+
+impl ToolAccess {
+    /// Pi `--tools` allowlist; `None` leaves Pi's default tools in place.
+    pub(crate) fn pi_tools(self) -> Option<&'static str> {
+        match self {
+            Self::ReadOnly => Some("read,grep,find,ls"),
+            Self::Full => None,
+        }
+    }
+
+    /// OMP `--tools` allowlist; `None` leaves OMP's default tools in place.
+    pub(crate) fn omp_tools(self) -> Option<&'static str> {
+        match self {
+            Self::ReadOnly => Some("read,grep,glob"),
+            Self::Full => None,
+        }
+    }
+}
+
 /// A runtime-agnostic live session bound to one agent instance. Hivemind's
 /// room history remains canonical; the session is a disposable cache.
 #[async_trait]
@@ -28,13 +58,14 @@ pub trait HarnessSession: Send {
 pub async fn create_session(
     runtime_config: &RuntimeConfig,
     agent: &AgentConfig,
+    access: ToolAccess,
 ) -> Result<Box<dyn HarnessSession>> {
     match agent.runtime.as_str() {
         "omp" => Ok(Box::new(
-            omp::OmpSession::start(&runtime_config.omp_binary, agent).await?,
+            omp::OmpSession::start(&runtime_config.omp_binary, agent, access).await?,
         )),
         "pi" => Ok(Box::new(
-            pi::PiSession::start(&runtime_config.pi_binary, agent).await?,
+            pi::PiSession::start(&runtime_config.pi_binary, agent, access).await?,
         )),
         other => bail!(
             "unsupported runtime '{other}' for agent '{}'; supported runtimes are pi and omp, so change this agent's runtime",
@@ -147,7 +178,9 @@ done
         ];
         let mut replies = Vec::new();
         for agent in &configured {
-            let mut session = create_session(&runtime, agent).await.unwrap();
+            let mut session = create_session(&runtime, agent, ToolAccess::Full)
+                .await
+                .unwrap();
             replies.push(session.prompt("hello").await.unwrap());
             session.shutdown().await.unwrap();
         }

@@ -170,6 +170,44 @@ fn map_event(event: &DomainEvent) -> Option<Outbound> {
             "runtime.rotated",
             json!({"agent_instance_id": instance_id, "runtime": runtime, "reason": reason}),
         ),
+        DomainEventKind::TaskStarted {
+            task_id,
+            room_id,
+            thread_room_id,
+            worker,
+            ..
+        } => (
+            "task.started",
+            json!({"task_id": task_id, "room_id": room_id, "thread_room_id": thread_room_id, "worker": worker}),
+        ),
+        DomainEventKind::TaskCompleted {
+            task_id,
+            room_id,
+            thread_room_id,
+            worker,
+        } => (
+            "task.completed",
+            json!({"task_id": task_id, "room_id": room_id, "thread_room_id": thread_room_id, "worker": worker}),
+        ),
+        DomainEventKind::TaskFailed {
+            task_id,
+            room_id,
+            thread_room_id,
+            worker,
+            ..
+        } => (
+            "task.failed",
+            json!({"task_id": task_id, "room_id": room_id, "thread_room_id": thread_room_id, "worker": worker}),
+        ),
+        DomainEventKind::TaskCancelled {
+            task_id,
+            room_id,
+            thread_room_id,
+            worker,
+        } => (
+            "task.cancelled",
+            json!({"task_id": task_id, "room_id": room_id, "thread_room_id": thread_room_id, "worker": worker}),
+        ),
         DomainEventKind::CoreStarted | DomainEventKind::CoreShuttingDown => return None,
     };
     let occurred_at_ms = event

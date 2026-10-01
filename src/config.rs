@@ -17,6 +17,29 @@ pub struct HivemindConfig {
     pub context: ContextConfig,
     #[serde(default)]
     pub memory: MemoryConfig,
+    #[serde(default)]
+    pub tasks: TasksConfig,
+}
+
+/// Task-thread handoff limits. Chat sessions are read-only; any change to the
+/// workspace runs in a task thread started with the `task.delegate` tool.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TasksConfig {
+    /// Task threads that may run at once across the whole core.
+    #[serde(default = "default_max_concurrent_tasks")]
+    pub max_concurrent: usize,
+}
+
+impl Default for TasksConfig {
+    fn default() -> Self {
+        Self {
+            max_concurrent: default_max_concurrent_tasks(),
+        }
+    }
+}
+
+fn default_max_concurrent_tasks() -> usize {
+    4
 }
 
 /// Deterministic, model-independent memory behavior.
@@ -179,6 +202,9 @@ impl HivemindConfig {
             bail!("config contains no personas; add at least one [[personas]] entry (legacy [[agents]] entries with name are also accepted) or create a starter config with 'hivemind init'");
         }
 
+        if self.tasks.max_concurrent == 0 {
+            bail!("[tasks].max_concurrent must be at least 1");
+        }
         let mut persona_ids = HashSet::with_capacity(self.agents.len());
         for persona in &self.agents {
             if persona.name.trim().is_empty() {
@@ -289,6 +315,7 @@ impl HivemindConfig {
             },
             context: ContextConfig::default(),
             memory: MemoryConfig::default(),
+            tasks: TasksConfig::default(),
             groups: Vec::new(),
             agents: vec![
                 AgentConfig {

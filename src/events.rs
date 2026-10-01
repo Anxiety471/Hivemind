@@ -72,6 +72,32 @@ pub enum DomainEventKind {
         runtime: String,
         reason: String,
     },
+    TaskStarted {
+        task_id: String,
+        room_id: String,
+        thread_room_id: String,
+        requested_by: String,
+        worker: String,
+    },
+    TaskCompleted {
+        task_id: String,
+        room_id: String,
+        thread_room_id: String,
+        worker: String,
+    },
+    TaskFailed {
+        task_id: String,
+        room_id: String,
+        thread_room_id: String,
+        worker: String,
+        message: String,
+    },
+    TaskCancelled {
+        task_id: String,
+        room_id: String,
+        thread_room_id: String,
+        worker: String,
+    },
 }
 
 #[derive(Clone)]

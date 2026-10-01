@@ -41,7 +41,7 @@ pub(super) struct MemberPrompt {
 
 /// Delta sections cannot restate the manifest; they point back at it.
 pub(super) const SESSION_TOOL_REMINDER: &str =
-    "\nHivemind memory tools remain available exactly as described at the start of this session.\n";
+    "\nHivemind memory tools and your workspace access limits remain exactly as described at the start of this session.\n";
 
 /// Earlier same-turn replies (Discussion mode), rendered identically for
 /// full packs and deltas.
@@ -107,6 +107,27 @@ impl ConversationCoordinator {
 
     fn save(&self, history: &RoomHistory, room: &str) -> Result<()> {
         self.store.save_room(room, history)
+    }
+
+    /// Append a task-thread report to `room` as its own completed turn, so
+    /// every persona sees it in its next context pack or room delta. Waits for
+    /// any turn in progress in that room.
+    pub async fn post_report(&self, room: &str, speaker: &str, content: &str) -> Result<()> {
+        let room_lock = room_mutex(self.store.directory(), room).await?;
+        let _in_process = room_lock.lock().await;
+        let _file_lock = acquire_file_lock(self.store.directory(), room).await?;
+        let mut history = self.room_history(room)?;
+        let turn_id = stable_id();
+        history.events.push(MessageEvent {
+            id: stable_id(),
+            turn_id: turn_id.clone(),
+            speaker: speaker.into(),
+            agent_instance_id: None,
+            content: content.into(),
+            error: false,
+        });
+        history.completed_turns.push(turn_id);
+        self.save(&history, room)
     }
 
     pub async fn turn(&self, request: TurnRequest<'_>) -> Result<Vec<TurnReply>> {
@@ -569,7 +590,7 @@ impl ConversationCoordinator {
             .collect::<Vec<_>>()
             .join("\n");
         let identity = format!("You are participating in {room_name}.\n\nParticipants:\n{roster}\n\nYou are {}. Your room role is {}.\n", current.agent.name, current.role.as_deref().or(current.agent.role.as_deref()).unwrap_or("participant"));
-        let manifest = format!("\n{}", memory_tool_manifest(caller));
+        let manifest = format!("\n{}", tool_manifest(caller));
         let state = format!("\nShared room state:\n{state_json}\n");
         let summary = if history.summary.is_empty() {
             String::new()

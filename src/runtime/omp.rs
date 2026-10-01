@@ -11,7 +11,7 @@ use tokio::{
 
 use crate::config::AgentConfig;
 
-use super::HarnessSession;
+use super::{HarnessSession, ToolAccess};
 
 /// How long a child gets to exit after its stdin closes before it is killed.
 const CHILD_EXIT_GRACE: Duration = Duration::from_secs(2);
@@ -133,7 +133,7 @@ pub struct OmpSession {
 impl OmpSession {
     /// Validate the agent, spawn the OMP RPC child, and initialize the
     /// session (wait for `ready`, apply `fast` when explicitly configured).
-    pub async fn start(binary: &str, agent: &AgentConfig) -> Result<Self> {
+    pub async fn start(binary: &str, agent: &AgentConfig, access: ToolAccess) -> Result<Self> {
         let workspace = Path::new(&agent.workspace);
 
         if !workspace.exists() {
@@ -144,7 +144,7 @@ impl OmpSession {
             );
         }
 
-        let args = Self::rpc_args(agent);
+        let args = Self::rpc_args(agent, access);
         let transport = ChildTransport::spawn(binary, &args, &agent.workspace)
             .await
             .with_context(|| format!("failed to start OMP session for agent '{}'", agent.name))?;
@@ -210,7 +210,7 @@ impl OmpSession {
         args
     }
 
-    fn rpc_args(agent: &AgentConfig) -> Vec<String> {
+    fn rpc_args(agent: &AgentConfig, access: ToolAccess) -> Vec<String> {
         let mut args = vec![
             "--mode".to_string(),
             "rpc".to_string(),
@@ -221,6 +221,9 @@ impl OmpSession {
             // process), so the flag stays.
             "--no-session".to_string(),
         ];
+        if let Some(tools) = access.omp_tools() {
+            args.extend(["--tools".to_string(), tools.to_string()]);
+        }
         args.extend(Self::agent_args(agent));
         args
     }
@@ -464,7 +467,7 @@ mod tests {
 
     #[test]
     fn rpc_args_apply_system_prompt_model_and_reasoning() {
-        let args = OmpSession::rpc_args(&agent(None));
+        let args = OmpSession::rpc_args(&agent(None), ToolAccess::Full);
 
         assert_eq!(
             args,
@@ -480,6 +483,17 @@ mod tests {
                 "--thinking",
                 "high",
             ]
+        );
+    }
+
+    #[test]
+    fn read_only_access_pins_a_non_editing_tool_allowlist() {
+        let args = OmpSession::rpc_args(&agent(None), ToolAccess::ReadOnly);
+        let at = args.iter().position(|arg| arg == "--tools").unwrap();
+        let tools: Vec<&str> = args[at + 1].split(',').collect();
+        assert_eq!(tools, ["read", "grep", "glob"]);
+        assert!(
+            !OmpSession::rpc_args(&agent(None), ToolAccess::Full).contains(&"--tools".to_owned())
         );
     }
 
@@ -802,7 +816,7 @@ mod tests {
         let mut agent = agent(None);
         agent.workspace = "/definitely/not/a/real/hivemind-workspace".into();
 
-        let error = OmpSession::start("definitely-not-a-real-omp-binary", &agent)
+        let error = OmpSession::start("definitely-not-a-real-omp-binary", &agent, ToolAccess::Full)
             .await
             .err()
             .expect("missing workspace must fail before spawning");

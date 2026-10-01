@@ -20,8 +20,10 @@ use tokio::{
 
 use crate::config::{AgentConfig, ContextConfig, ConversationMode};
 use crate::runtime::{
-    InvokeReply, InvokeRequest, PromptDelta, PromptPhase, RuntimePool, SessionCursor, TurnView,
+    InvokeReply, InvokeRequest, PromptDelta, PromptPhase, RuntimePool, SessionCursor, ToolAccess,
+    TurnView,
 };
+use crate::tasks::TaskDelegator;
 
 mod coordinator;
 mod memory_tools;
@@ -90,6 +92,10 @@ pub trait AgentInvoker: Send + Sync {
     /// Live continuable session state for this instance; None means the next prompt hydrates.
     async fn cursor(&self, instance_id: &str) -> Option<SessionCursor>;
     async fn invoke(&self, request: InvokeRequest<'_>) -> Result<InvokeReply>;
+    /// Where `task.delegate` calls go; `None` means this invoker cannot hand work off.
+    fn delegator(&self) -> Option<Arc<dyn TaskDelegator>> {
+        None
+    }
 }
 
 /// Routes a turn's invocations to the core-owned per-instance runtime pool.
@@ -97,15 +103,38 @@ pub struct RuntimeInvoker {
     pool: Arc<RuntimePool>,
     room_id: String,
     group_id: String,
+    access: ToolAccess,
+    delegator: Option<Arc<dyn TaskDelegator>>,
 }
 
 impl RuntimeInvoker {
+    /// Chat invoker: sessions are read-only. Pair with
+    /// [`with_delegator`](Self::with_delegator) so agents can hand edits to a task thread.
     pub fn new(pool: Arc<RuntimePool>, room_id: &str, group_id: &str) -> Self {
         Self {
             pool,
             room_id: room_id.to_owned(),
             group_id: group_id.to_owned(),
+            access: ToolAccess::ReadOnly,
+            delegator: None,
         }
+    }
+
+    /// Task-thread worker: the only invoker whose sessions get full tools.
+    /// It has no delegator, so a worker cannot start further threads.
+    pub(crate) fn task_worker(pool: Arc<RuntimePool>, room_id: &str) -> Self {
+        Self {
+            pool,
+            room_id: room_id.to_owned(),
+            group_id: String::new(),
+            access: ToolAccess::Full,
+            delegator: None,
+        }
+    }
+
+    pub fn with_delegator(mut self, delegator: Arc<dyn TaskDelegator>) -> Self {
+        self.delegator = Some(delegator);
+        self
     }
 }
 
@@ -123,6 +152,10 @@ impl AgentInvoker for RuntimeInvoker {
             &request.agent.name,
             &request.agent.name,
         );
-        self.pool.invoke(&caller, request).await
+        self.pool.invoke(&caller, self.access, request).await
+    }
+
+    fn delegator(&self) -> Option<Arc<dyn TaskDelegator>> {
+        self.delegator.clone()
     }
 }
