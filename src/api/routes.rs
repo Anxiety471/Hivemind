@@ -1054,6 +1054,8 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
 
         let mut config = HivemindConfig::default_poc();
+        // This test pins turn/event ids; follow-up replies are covered in conversation tests.
+        config.conversation.mention_limit = 0;
         config.groups.push(crate::config::GroupConfig {
             name: "review".into(),
             members: vec!["Engineer".into(), "Reviewer".into()],

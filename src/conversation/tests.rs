@@ -972,6 +972,7 @@ fn context_budget_trims_old_history_but_keeps_current_input() {
         active_turn: "current-turn",
         caller: &caller,
         retrieval: "",
+        optional: false,
     };
     let state_json = coordinator.state_json(&history, &caller).unwrap();
     let pack = coordinator.context_pack(&request, &state_json).unwrap();
@@ -1023,6 +1024,7 @@ fn turn_delta_lists_unseen_peers_and_changed_state_and_rejects_gaps() {
         active_turn: "t2",
         caller: &caller,
         retrieval: "",
+        optional: false,
     };
     let state_json = coordinator.state_json(&history, &caller).unwrap();
     let cursor = TurnView {
@@ -2572,4 +2574,71 @@ async fn rooms_progress_together_on_a_file_backed_multi_thread_runtime() {
     }
     let _ = fs::remove_dir_all(dir);
     let _ = fs::remove_file(db);
+}
+
+#[test]
+fn mentions_match_member_names_at_word_boundaries() {
+    let members = [member("Eng"), member("Engineer"), member("Rev")];
+    let found = |text: &str| mentioned_members(text, &members);
+    assert_eq!(found("@Engineer, thoughts? cc @rev"), [1, 2]);
+    assert_eq!(found("@Eng please"), [0]);
+    assert!(found("mail me at x@Eng.com or @Engineers").is_empty());
+    assert_eq!(found("@Rev @Rev @Rev"), [2]);
+}
+
+#[tokio::test]
+async fn mention_adds_an_optional_reply_only_within_the_limit() {
+    async fn speakers(limit: usize, replies: &[&str]) -> Vec<String> {
+        let (_path, coord) = fixture();
+        coord.set_mention_limit(limit);
+        let members = [member("A"), member("B")];
+        let out = coord
+            .turn(TurnRequest {
+                room: "mention-room",
+                room_name: "Mention room",
+                group_id: "mention-group",
+                mode: ConversationMode::Discussion,
+                members: &members,
+                input: "go",
+                invoker: scripted(replies),
+            })
+            .await
+            .unwrap();
+        out.into_iter().map(|r| r.name).collect()
+    }
+    // B pings A, who already spoke: A replies once more; then the open floor
+    // goes to B, who passes, and the exchange ends without a recorded pass.
+    assert_eq!(speakers(4, &["hi @B", "back @A", "ok", "PASS"]).await, ["A", "B", "A"]);
+    // Self-mentions and mentions of members still waiting add nothing.
+    assert_eq!(speakers(4, &["@A and @B", "ok", "PASS"]).await, ["A", "B"]);
+    // An unmentioned member may chime in once the floor opens.
+    assert_eq!(speakers(1, &["x", "y", "chime in"]).await, ["A", "B", "A"]);
+    // Limit 0 disables follow-ups; a ping-pong stops at the limit.
+    assert_eq!(speakers(0, &["hi @B", "back @A"]).await, ["A", "B"]);
+    let pingpong: Vec<&str> = std::iter::repeat_n("ping @A @B", 10).collect();
+    assert_eq!(speakers(2, &pingpong).await.len(), 4);
+    // Replies to the user are optional too: a PASS is not recorded, and a
+    // user @mention makes that member's reply required.
+    let asked = |input: &'static str, replies: &'static [&'static str]| async move {
+        let (_path, coord) = fixture();
+        let members = [member("A"), member("B")];
+        let out = coord
+            .turn(TurnRequest {
+                room: "optional-room",
+                room_name: "Optional room",
+                group_id: "optional-group",
+                mode: ConversationMode::Discussion,
+                members: &members,
+                input,
+                invoker: scripted(replies),
+            })
+            .await
+            .unwrap();
+        let names: Vec<String> = out.into_iter().map(|r| r.name).collect();
+        let history = coord.room_history("optional-room").unwrap();
+        (names, history.events.len())
+    };
+    assert_eq!(asked("hello", &["PASS", "only B"]).await, (vec!["B".to_string()], 2));
+    assert_eq!(asked("hello", &["PASS", "PASS"]).await, (Vec::<String>::new(), 1));
+    assert_eq!(asked("@A hello", &["PASS", "PASS"]).await, (vec!["A".to_string()], 2));
 }

@@ -153,10 +153,17 @@ fn visit_replies(
 }
 
 pub(super) fn print_replies(replies: ReplyBatch) -> Result<()> {
+    if replies.replies.is_empty() {
+        println!("\n(nobody replied)");
+    }
     let multi = replies.replies.len() > 1;
     let mut earlier: Vec<String> = Vec::new();
     let failed = visit_replies(&replies.replies, |name, result| {
-        let refs: Vec<&str> = earlier.iter().map(String::as_str).collect();
+        let refs: Vec<&str> = earlier
+            .iter()
+            .map(String::as_str)
+            .filter(|seen| *seen != name)
+            .collect();
         let label = if multi {
             format!(" ({})", reply_label(&refs, replies.discussion))
         } else {
@@ -166,7 +173,9 @@ pub(super) fn print_replies(replies: ReplyBatch) -> Result<()> {
             Ok(text) => println!("\n{name}{label}> {text}"),
             Err(error) => eprintln!("\n{name}{label}> [error] {error:#}"),
         }
-        earlier.push(name.to_owned());
+        if !earlier.iter().any(|seen| seen == name) {
+            earlier.push(name.to_owned());
+        }
     });
     if failed {
         bail!("one or more agents failed");

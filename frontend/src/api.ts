@@ -280,6 +280,8 @@ export const api = {
       "GET",
       `/rooms/${enc(id)}/messages?limit=${limit}${before ? `&before=${enc(before)}` : ""}`,
     ),
+  activeReplies: (id: string) =>
+    request<{ room_id: string; agents: string[] }>("GET", `/rooms/${enc(id)}/active`),
   threads: (id: string) => request<{ threads: Thread[] }>("GET", `/rooms/${enc(id)}/threads`),
   createThread: (id: string, anchor_message_id: string, name?: string) =>
     request<{ thread: Thread; created: boolean }>("POST", `/rooms/${enc(id)}/threads`, {

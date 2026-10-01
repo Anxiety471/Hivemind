@@ -199,6 +199,7 @@ impl HivemindCore {
             audit.clone(),
         ));
         conversation.set_access(access.clone());
+        conversation.set_mention_limit(config.conversation.mention_limit);
         let coordination_store = if config.coordination.enabled {
             CoordinationStore::open(data_dir.join("coordination.sqlite3"))
         } else {

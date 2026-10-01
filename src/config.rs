@@ -193,10 +193,29 @@ fn default_memory_mode() -> String {
     "deterministic".into()
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversationConfig {
     #[serde(default)]
     pub reply_order: Vec<String>,
+    /// Follow-up replies a Discussion turn may add beyond each member's first:
+    /// @mentions of members not already waiting, and open-floor chime-ins. 0 disables.
+    #[serde(default = "default_mention_limit")]
+    pub mention_limit: usize,
+}
+
+impl Default for ConversationConfig {
+    fn default() -> Self {
+        Self {
+            reply_order: Vec::new(),
+            mention_limit: default_mention_limit(),
+        }
+    }
+}
+
+pub const MAX_MENTION_LIMIT: usize = 16;
+
+fn default_mention_limit() -> usize {
+    4
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -456,6 +475,9 @@ impl HivemindConfig {
             }
         }
 
+        if self.conversation.mention_limit > MAX_MENTION_LIMIT {
+            bail!("conversation.mention_limit must be at most {MAX_MENTION_LIMIT}");
+        }
         let mut reply_names = HashSet::with_capacity(self.conversation.reply_order.len());
         for name in &self.conversation.reply_order {
             if !reply_names.insert(name.as_str()) {
@@ -528,6 +550,7 @@ impl HivemindConfig {
             runtime: RuntimeConfig::default(),
             conversation: ConversationConfig {
                 reply_order: vec!["Engineer".into(), "Reviewer".into()],
+                ..ConversationConfig::default()
             },
             context: ContextConfig::default(),
             memory: MemoryConfig::default(),

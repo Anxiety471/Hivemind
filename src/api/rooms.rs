@@ -25,10 +25,18 @@ pub(super) fn routes() -> Router<ApiState> {
         .route("/api/v1/rooms", get(list))
         .route("/api/v1/rooms/{id}", get(show))
         .route("/api/v1/rooms/{id}/messages", get(messages))
+        .route("/api/v1/rooms/{id}/active", get(active))
         .route(
             "/api/v1/rooms/{id}/threads",
             get(threads).post(create_thread),
         )
+}
+
+/// Personas whose reply is running in a room right now, so a client that was
+/// away can show progress again instead of an apparently idle room.
+async fn active(State(state): State<ApiState>, Path(id): Path<String>) -> Response {
+    let agents = state.core.events().active_replies(&id);
+    Json(json!({"room_id": id, "agents": agents})).into_response()
 }
 
 fn internal() -> Response {
@@ -268,9 +276,15 @@ fn reply_targets(
         }
         out.push(Some(ReplyTarget {
             reply_to: json!({"speaker": "user", "id": user_id}),
-            also_saw: if discussion { seen.clone() } else { Vec::new() },
+            also_saw: if discussion {
+                seen.iter().filter(|s| **s != m.speaker).cloned().collect()
+            } else {
+                Vec::new()
+            },
         }));
-        seen.push(m.speaker.clone());
+        if !seen.contains(&m.speaker) {
+            seen.push(m.speaker.clone());
+        }
     }
     out
 }
