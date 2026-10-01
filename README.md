@@ -395,6 +395,8 @@ hivemind serve                               # API on http://127.0.0.1:7474
 cd frontend && npm install && npm run dev    # UI on http://127.0.0.1:5173
 ```
 
+Or run both with one command: `scripts/dev.sh` (extra arguments go to `hivemind serve`; set `HIVEMIND_BIN` to use a prebuilt binary instead of `cargo run`). Ctrl-C stops both.
+
 On a fresh install, start the server without running `hivemind init`; the Web UI handles the initial persona setup and saves it directly on the server.
 
 No model handy? `frontend/dev/demo.sh` runs `serve` with a scripted stand-in runtime, and `node frontend/dev/seed.mjs` fills it with sample data. See [frontend/README.md](frontend/README.md) and the [Web UI](https://github.com/Anxiety471/Hivemind/wiki/Web-UI) wiki page.
