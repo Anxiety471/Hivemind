@@ -715,7 +715,7 @@ while IFS= read -r request; do
       if [ -e __DIR__/tool-mode ] && ! printf '%s' "$request" | grep -q 'Memory tool result:'; then
         printf '%s\n' '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"```hivemind-tool\n{\"name\":\"memory.private.add\",\"args\":{\"content\":\"session note\"}}\n```"}]}}'
       else
-        printf '%s\n' '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"Engineer reply"}]}}'
+        printf '%s\n' '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"```hivemind-tool\n{\"name\":\"reply\",\"args\":{\"text\":\"Engineer reply\"}}\n```"}]}}'
       fi
       printf '%s\n' '{"type":"agent_settled"}'
       ;;
@@ -1437,7 +1437,7 @@ while IFS= read -r request; do
       if [ "$wait_mark" = 1 ]; then
         i=0; while [ ! -e "$MARK" ] && [ $i -lt 2000 ]; do sleep 0.01; i=$((i+1)); done
       fi
-      printf '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"%s reply"}]}}\n' "$agent"
+      printf '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"```hivemind-tool\\n{\\"name\\":\\"reply\\",\\"args\\":{\\"text\\":\\"%s reply\\"}}\\n```"}]}}\n' "$agent"
       printf '%s\n' '{"type":"agent_settled"}'
       ;;
   esac

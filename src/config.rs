@@ -239,8 +239,8 @@ pub struct GroupConfig {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ConversationMode {
-    #[default]
     Broadcast,
+    #[default]
     Discussion,
 }
 

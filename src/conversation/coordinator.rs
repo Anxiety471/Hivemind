@@ -33,7 +33,7 @@ pub(super) struct PackRequest<'a> {
     pub(super) caller: &'a Caller,
     /// Pre-rendered "Relevant Hivemind memory" block, retrieved once per member.
     pub(super) retrieval: &'a str,
-    /// Replying is optional: the member may answer exactly `PASS` instead.
+    /// Replying is optional: the member speaks only by calling the `reply` tool.
     pub(super) optional: bool,
 }
 
@@ -52,7 +52,7 @@ pub(super) const SESSION_TOOL_REMINDER: &str =
     "\nHivemind memory tools remain available exactly as described at the start of this session.\n";
 
 /// Earlier same-turn replies (Discussion mode) plus, when replying is
-/// optional, the permission to PASS. Rendered identically for full packs and
+/// optional, how to speak (the `reply` tool). Rendered identically for full packs and
 /// deltas.
 pub(super) fn same_turn_replies(
     prior: &[(String, Result<String, String>)],
@@ -71,15 +71,14 @@ pub(super) fn same_turn_replies(
         format!("\nEarlier replies in this turn:\n{peers}")
     };
     if optional {
-        out.push_str("\nReplying is optional. Reply only if you have something worth adding or you were @mentioned; otherwise reply with exactly PASS and nothing else.\n");
+        out.push_str("\nReplying is optional. To say something to the room, call the `reply` tool as your entire reply: a ```hivemind-tool block with {\"name\":\"reply\",\"args\":{\"text\":\"...\"}}. Plain text you write is NOT shown to anyone. If you have nothing worth adding and were not @mentioned, do not call it; end with a short plain note.\n");
     }
     out
 }
 
-/// Whether an optional reply declines to speak.
+/// Whether an optional reply stayed silent (the agent never called `reply`).
 fn is_pass(text: &str) -> bool {
-    text.trim_matches(|c: char| !c.is_alphanumeric())
-        .eq_ignore_ascii_case("pass")
+    text.trim().is_empty()
 }
 
 /// Indices of members `@Name`d in `text`, in order of first mention. The name
@@ -283,11 +282,20 @@ impl ConversationCoordinator {
             })
             .unwrap_or_default();
         let mut replies = Vec::with_capacity(members.len());
+        // Replying to the user is optional in every room: members speak only by
+        // calling the `reply` tool, unless @mentioned. Agent-originated
+        // turns (coordination) always require a reply.
+        let required = mentioned_members(input, members);
+        let optional_at = |index: usize| !agent_input && !required.contains(&index);
         match mode {
             ConversationMode::Broadcast => {
                 let mut jobs = JoinSet::new();
                 let mut task_names = HashMap::new();
-                for member in members {
+                let mut passable = std::collections::HashSet::new();
+                for (index, member) in members.iter().enumerate() {
+                    if optional_at(index) {
+                        passable.insert(member.agent.name.clone());
+                    }
                     let caller = invocation_caller(
                         room,
                         group_id,
@@ -310,7 +318,7 @@ impl ConversationCoordinator {
                             active_turn: &turn_id,
                             caller: &caller,
                             retrieval: &retrieval,
-                            optional: false,
+                            optional: optional_at(index),
                         },
                         cursor,
                     );
@@ -357,6 +365,7 @@ impl ConversationCoordinator {
                     let host = host.clone();
                     let access = access.clone();
                     let task_name = name.clone();
+                    let optional = optional_at(index);
                     let handle = jobs.spawn(async move {
                         let MemberPrompt { pack, delta, view } = prompt;
                         let instance_id = AgentInstanceId::new(&room, &agent.name);
@@ -374,6 +383,7 @@ impl ConversationCoordinator {
                             authorized_global.as_deref(),
                             host.as_deref(),
                             access.as_deref(),
+                            optional,
                         )
                         .await
                         .map_err(|e| format!("{e:#}"));
@@ -416,22 +426,26 @@ impl ConversationCoordinator {
                         };
                         events.publish(event);
                     }
-                    append_reply(&mut history, room, &turn_id, &name, &result);
-                    self.save_turn(&history, room, &turn_id, &mut saved, false, false)?;
-                    by_name.insert(name, result);
+                    let passed = passable.contains(&name)
+                        && result.as_ref().is_ok_and(|text| is_pass(text));
+                    if !passed {
+                        append_reply(&mut history, room, &turn_id, &name, &result);
+                        self.save_turn(&history, room, &turn_id, &mut saved, false, false)?;
+                    }
+                    by_name.insert(name, (result, passed));
                 }
                 for member in members {
                     let name = member.agent.name.clone();
-                    let result = by_name
+                    let (result, passed) = by_name
                         .remove(&name)
                         .or_else(|| {
                             replies
                                 .iter()
                                 .find(|reply: &&TurnReply| reply.name == name)
-                                .map(|reply| reply.result.clone())
+                                .map(|reply| (reply.result.clone(), false))
                         })
-                        .unwrap_or_else(|| Err("agent task did not return".into()));
-                    if !replies.iter().any(|reply| reply.name == name) {
+                        .unwrap_or_else(|| (Err("agent task did not return".into()), false));
+                    if !passed && !replies.iter().any(|reply| reply.name == name) {
                         replies.push(TurnReply { name, result });
                     }
                 }
@@ -445,13 +459,12 @@ impl ConversationCoordinator {
             ConversationMode::Discussion => {
                 let mut prior = Vec::new();
                 // Replying is optional: unless the user @mentioned them, members
-                // may answer exactly PASS. An @mention in a reply queues a
+                // stay silent by not calling `reply`. An @mention in a reply queues a
                 // required reply for that member. Once the queue is empty the
                 // floor opens for the others. Mention and floor replies share
                 // one budget so the exchange always ends.
-                let required = mentioned_members(input, members);
                 let mut queue: std::collections::VecDeque<(usize, bool)> = (0..members.len())
-                    .map(|index| (index, members.len() > 1 && !required.contains(&index)))
+                    .map(|index| (index, optional_at(index)))
                     .collect();
                 let mut extra = self.mention_limit.get().copied().unwrap_or(0);
                 let mut last_speaker = None;
@@ -517,6 +530,7 @@ impl ConversationCoordinator {
                             authorized_global.as_deref(),
                             host.as_deref(),
                             access.as_deref(),
+                            optional,
                         )
                         .await
                         .map_err(|e| format!("{e:#}")),

@@ -550,6 +550,7 @@ pub(super) async fn invoke_with_memory(
     authorized_global: Option<&str>,
     host: Option<&dyn ToolHost>,
     access: Option<&crate::access::AccessPolicy>,
+    optional: bool,
 ) -> Result<String> {
     let mut exchange: Vec<(String, String)> = Vec::new();
     let mut last = invoker
@@ -567,7 +568,14 @@ pub(super) async fn invoke_with_memory(
         let reply = &last.text;
         let outcome = parse_tool_block(reply);
         let call = match outcome {
-            Ok(None) => return Ok(last.text),
+            // Replying is optional: only the `reply` tool speaks to the room.
+            Ok(None) => return Ok(if optional { String::new() } else { last.text }),
+            Ok(Some(call)) if optional && call.name == "reply" => {
+                match required_string(&call.args, "text") {
+                    Ok(text) => return Ok(text),
+                    Err(error) => Err(format!("{error:#}")),
+                }
+            }
             Ok(Some(call)) => Ok(call),
             Err(error) => Err(format!("{error:#}")),
         };

@@ -1096,7 +1096,7 @@ while IFS= read -r request; do
       case "$request" in
         *"FAIL API safely"*) printf '%s\n' 'private provider detail; system_prompt=secret' >&2; exit 23 ;;
       esac
-      echo '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"API reply"}]}}'
+      echo '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"```hivemind-tool\n{\"name\":\"reply\",\"args\":{\"text\":\"API reply\"}}\n```"}]}}'
       echo '{"type":"agent_settled"}'
       ;;
   esac

@@ -285,7 +285,7 @@ while IFS= read -r request; do
     *'"type":"prompt"'*)
       printf '%s prompt\n' "$agent" >> __LOG__
       printf '%s\n' "$request" >> __PROMPT_LOG__
-      printf '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"%s reply"}]}}\n' "$agent"
+      printf '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"```hivemind-tool\\n{\\"name\\":\\"reply\\",\\"args\\":{\\"text\\":\\"%s reply\\"}}\\n```"}]}}\n' "$agent"
       printf '%s\n' '{"type":"agent_settled"}'
       ;;
   esac
@@ -498,7 +498,7 @@ while IFS= read -r request; do
     *'"type":"prompt"'*)
       case "$request" in
         *'Memory tool result:'*)
-          printf '%s\n' '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"done after tool"}]}}'
+          printf '%s\n' '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"```hivemind-tool\n{\"name\":\"reply\",\"args\":{\"text\":\"done after tool\"}}\n```"}]}}'
           ;;
         *)
           printf '%s\n' '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"```hivemind-tool\n{\"name\":\"memory.private.add\",\"args\":{\"content\":\"end-to-end note\"}}\n```"}]}}'

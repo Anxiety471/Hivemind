@@ -55,15 +55,21 @@ write_config() {
   if [ "$runtime" = opencode ]; then
     need opencode "install from https://opencode.ai, or set DEV_RUNTIME=pi|omp"
     local free=() pref=(opencode/nemotron-3-ultra-free opencode/mimo-v2.6-flash-free) m
-    mapfile -t free < <(opencode models 2>/dev/null | grep -E '^opencode/.+-free$' || true)
+    # The opencode service may still be starting, so retry before giving up.
+    for _ in 1 2 3 4 5; do
+      mapfile -t free < <(opencode models 2>/dev/null | grep -E '^opencode/.+-free$' || true)
+      [ "${#free[@]}" -gt 0 ] && break
+      sleep 2
+    done
     # Free models come and go upstream; try the ones that have worked first, then the rest.
     for m in "${pref[@]}"; do [[ " ${free[*]} " == *" $m "* ]] && models+=("$m"); done
     for m in "${free[@]}"; do [[ " ${pref[*]} " == *" $m "* ]] || models+=("$m"); done
+    # The sandbox only ever uses free models: never fall back to opencode's (paid) default.
     if [ "${#models[@]}" -eq 0 ]; then
-      echo "warning: no free opencode models found; agents will use opencode's default model" >&2
-    else
-      m1=${models[0]}; m2=${models[1]:-${models[0]}}
+      echo "error: no free opencode/*-free models found; refusing to use opencode's default model. Retry later or set DEV_RUNTIME=pi|omp" >&2
+      exit 1
     fi
+    m1=${models[0]}; m2=${models[1]:-${models[0]}}
   fi
   line() { # persona-index model
     printf 'runtime = "%s"\n' "$runtime"

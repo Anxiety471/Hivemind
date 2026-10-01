@@ -3,6 +3,15 @@ use crate::memory::{MemoryStatus, MemoryStore, Scope};
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+/// A reply wrapped in the `reply` tool block: the only way to speak when a
+/// reply is optional.
+fn reply_block(text: &str) -> String {
+    format!(
+        "```hivemind-tool\n{}\n```",
+        serde_json::json!({"name": "reply", "args": {"text": text}})
+    )
+}
+
 struct Fake {
     prompts: Mutex<Vec<(AgentInstanceId, String)>>,
     running: AtomicUsize,
@@ -43,7 +52,7 @@ impl AgentInvoker for Fake {
             .reply
             .lock()
             .clone()
-            .unwrap_or_else(|| format!("{} answered", agent.name));
+            .unwrap_or_else(|| reply_block(&format!("{} answered", agent.name)));
         Ok(InvokeReply {
             text,
             epoch_id: "fake".into(),
@@ -118,7 +127,7 @@ impl AgentInvoker for DelayedEventsInvoker {
             anyhow::bail!("sensitive provider detail");
         }
         Ok(InvokeReply {
-            text: format!("{} reply", agent.name),
+            text: reply_block(&format!("{} reply", agent.name)),
             epoch_id: "fake".into(),
         })
     }
@@ -890,8 +899,22 @@ async fn explicit_state_updates_are_persisted_and_recalled_in_the_next_pack() {
 }
 #[tokio::test]
 async fn invalid_state_update_keeps_prior_state_and_finalizes_turn() {
-    let (path, coord) = fixture();
-    let goal = "x".repeat(1900);
+    // The context pack's fixed overhead (tool guidance) is ~2 KB, so the
+    // fixture's 1000-token target leaves no room between the 2 KB state
+    // budget and the pack budget; use a larger target (3 KB state budget).
+    let path = std::env::temp_dir().join(format!("hivemind-context-test-{}", stable_id()));
+    let coord = ConversationCoordinator::new(
+        &path,
+        ContextConfig {
+            recent_turns: 1,
+            summary_max_tokens: 100,
+            context_target_tokens: 1500,
+            runtime_rotate_tokens: 24000,
+            summary_refresh_turns: 2,
+        },
+        in_memory_memory(),
+    );
+    let goal = "x".repeat(2900);
     let member = [member("A")];
     let first = coord
         .turn(TurnRequest {
@@ -932,7 +955,7 @@ async fn invalid_state_update_keeps_prior_state_and_finalizes_turn() {
     assert_eq!(history.events[3].content, "A answered");
     assert_eq!(history.maintenance_errors.len(), 1);
     assert!(history.maintenance_errors[0]
-        .contains("serialized room state exceeds context budget limit of 2000 bytes"));
+        .contains("serialized room state exceeds context budget limit of 3000 bytes"));
     let _ = fs::remove_dir_all(path);
 }
 #[test]
@@ -1086,7 +1109,7 @@ fn turn_delta_lists_unseen_peers_and_changed_state_and_rejects_gaps() {
 
 // ---- Hivemind memory tool bridge ----
 
-/// Invoker with a scripted reply sequence; falls back to plain text.
+/// Invoker with a scripted reply sequence; falls back to a reply call.
 struct Scripted {
     prompts: Mutex<Vec<String>>,
     replies: Mutex<std::collections::VecDeque<String>>,
@@ -1102,7 +1125,7 @@ impl AgentInvoker for Scripted {
         tokio::task::yield_now().await;
         let text = match self.replies.lock().pop_front() {
             Some(reply) => reply,
-            None => "plain final answer".into(),
+            None => reply_block("plain final answer"),
         };
         Ok(InvokeReply {
             text,
@@ -1120,6 +1143,19 @@ fn scripted(replies: &[&str]) -> Arc<Scripted> {
                 .collect::<std::collections::VecDeque<_>>(),
         ),
     })
+}
+/// Scripted replies marking a silent answer (plain text, no `reply` call).
+const SILENT: &str = "(silent)";
+/// Scripted invoker where every reply speaks via the `reply` tool, except
+/// [`SILENT`] entries, which are plain text.
+fn spoken(replies: &[&str]) -> Arc<Scripted> {
+    // Once the script runs out the agents stay silent.
+    let blocks: Vec<String> = replies
+        .iter()
+        .chain(std::iter::repeat_n(&SILENT, 20))
+        .map(|r| if *r == SILENT { "I have nothing to add.".to_owned() } else { reply_block(r) })
+        .collect();
+    scripted(&blocks.iter().map(String::as_str).collect::<Vec<_>>())
 }
 fn tool_block(name: &str, args: serde_json::Value) -> String {
     format!("Looking things up.\n```hivemind-tool\n{{\"name\":\"{name}\",\"args\":{args}}}\n```\n")
@@ -1252,7 +1288,7 @@ async fn malformed_tool_blocks_are_fed_back_not_guessed() {
         .await
         .unwrap();
     // The parse failure is feedback, so the loop re-prompts; the scripted
-    // invoker then falls back to plain text.
+    // invoker then falls back to a reply call.
     assert_eq!(replies[0].result.as_deref(), Ok("plain final answer"));
     assert_eq!(f.prompts.lock().len(), 2);
     assert!(f.prompts.lock()[1].contains("error: hivemind-tool block is not valid JSON"));
@@ -2600,24 +2636,24 @@ async fn mention_adds_an_optional_reply_only_within_the_limit() {
                 mode: ConversationMode::Discussion,
                 members: &members,
                 input: "go",
-                invoker: scripted(replies),
+                invoker: spoken(replies),
             })
             .await
             .unwrap();
         out.into_iter().map(|r| r.name).collect()
     }
     // B pings A, who already spoke: A replies once more; then the open floor
-    // goes to B, who passes, and the exchange ends without a recorded pass.
-    assert_eq!(speakers(4, &["hi @B", "back @A", "ok", "PASS"]).await, ["A", "B", "A"]);
+    // goes to B, who stays silent, and the exchange ends without a recorded reply.
+    assert_eq!(speakers(4, &["hi @B", "back @A", "ok", SILENT]).await, ["A", "B", "A"]);
     // Self-mentions and mentions of members still waiting add nothing.
-    assert_eq!(speakers(4, &["@A and @B", "ok", "PASS"]).await, ["A", "B"]);
+    assert_eq!(speakers(4, &["@A and @B", "ok", SILENT]).await, ["A", "B"]);
     // An unmentioned member may chime in once the floor opens.
     assert_eq!(speakers(1, &["x", "y", "chime in"]).await, ["A", "B", "A"]);
     // Limit 0 disables follow-ups; a ping-pong stops at the limit.
     assert_eq!(speakers(0, &["hi @B", "back @A"]).await, ["A", "B"]);
     let pingpong: Vec<&str> = std::iter::repeat_n("ping @A @B", 10).collect();
     assert_eq!(speakers(2, &pingpong).await.len(), 4);
-    // Replies to the user are optional too: a PASS is not recorded, and a
+    // Replies to the user are optional too: a plain-text (silent) answer is not recorded, and a
     // user @mention makes that member's reply required.
     let asked = |input: &'static str, replies: &'static [&'static str]| async move {
         let (_path, coord) = fixture();
@@ -2630,7 +2666,7 @@ async fn mention_adds_an_optional_reply_only_within_the_limit() {
                 mode: ConversationMode::Discussion,
                 members: &members,
                 input,
-                invoker: scripted(replies),
+                invoker: spoken(replies),
             })
             .await
             .unwrap();
@@ -2638,7 +2674,84 @@ async fn mention_adds_an_optional_reply_only_within_the_limit() {
         let history = coord.room_history("optional-room").unwrap();
         (names, history.events.len())
     };
-    assert_eq!(asked("hello", &["PASS", "only B"]).await, (vec!["B".to_string()], 2));
-    assert_eq!(asked("hello", &["PASS", "PASS"]).await, (Vec::<String>::new(), 1));
-    assert_eq!(asked("@A hello", &["PASS", "PASS"]).await, (vec!["A".to_string()], 2));
+    assert_eq!(asked("hello", &[SILENT, "only B"]).await, (vec!["B".to_string()], 2));
+    assert_eq!(asked("hello", &[SILENT, SILENT]).await, (Vec::<String>::new(), 1));
+    assert_eq!(asked("@A hello", &[SILENT, SILENT]).await, (vec!["A".to_string()], 2));
+}
+
+/// Invoker answering each agent with a fixed text, independent of order.
+struct ByName(std::collections::HashMap<String, String>);
+#[async_trait]
+impl AgentInvoker for ByName {
+    async fn cursor(&self, _agent_instance_id: &AgentInstanceId) -> Option<SessionCursor> {
+        None
+    }
+
+    async fn invoke(&self, request: InvokeRequest<'_>) -> Result<InvokeReply> {
+        Ok(InvokeReply {
+            text: self.0[&request.agent.name].clone(),
+            epoch_id: "fake".into(),
+        })
+    }
+}
+
+#[tokio::test]
+async fn optional_replies_need_the_reply_tool_and_mentions_accept_plain_text() {
+    // Each agent answers `(name, speaks_via_reply_tool)`; returns the spoken
+    // replies in presentation order and the number of recorded events.
+    async fn run(
+        mode: ConversationMode,
+        agents: &[(&str, bool)],
+        input: &str,
+    ) -> (Vec<(String, String)>, usize) {
+        let (_path, coord) = fixture();
+        coord.set_mention_limit(0);
+        let members: Vec<Participant> = agents.iter().map(|(n, _)| member(n)).collect();
+        let script = agents
+            .iter()
+            .map(|(n, speaks)| {
+                let text = format!("{n} says hi");
+                (n.to_string(), if *speaks { reply_block(&text) } else { text })
+            })
+            .collect();
+        let out = coord
+            .turn(TurnRequest {
+                room: "optional-room",
+                room_name: "Optional room",
+                group_id: "optional-group",
+                mode,
+                members: &members,
+                input,
+                invoker: Arc::new(ByName(script)),
+            })
+            .await
+            .unwrap();
+        let events = coord.room_history("optional-room").unwrap().events.len();
+        (out.into_iter().map(|r| (r.name, r.result.unwrap())).collect(), events)
+    }
+    let said = |n: &str| (n.to_string(), format!("{n} says hi"));
+    for mode in [ConversationMode::Broadcast, ConversationMode::Discussion] {
+        // Plain text is silent; only the reply call speaks. Silent text is
+        // neither returned nor recorded (user turn + one reply).
+        let (replies, events) = run(mode, &[("A", false), ("B", true)], "hello").await;
+        assert_eq!(replies, [said("B")], "{mode:?}");
+        assert_eq!(events, 2, "{mode:?}");
+        // Everyone silent: no replies, only the user turn is recorded.
+        let (replies, events) = run(mode, &[("A", false), ("B", false)], "hello").await;
+        assert!(replies.is_empty(), "{mode:?}");
+        assert_eq!(events, 1, "{mode:?}");
+        // An @mention makes that member's reply required: plain text speaks.
+        let (replies, events) = run(mode, &[("A", false), ("B", false)], "@A hello").await;
+        assert_eq!(replies, [said("A")], "{mode:?}");
+        assert_eq!(events, 2, "{mode:?}");
+    }
+    // Solo discussion room: replying is optional there as well.
+    let (replies, events) = run(ConversationMode::Discussion, &[("A", false)], "hello").await;
+    assert!(replies.is_empty());
+    assert_eq!(events, 1);
+    let (replies, events) = run(ConversationMode::Discussion, &[("A", true)], "hello").await;
+    assert_eq!(replies, [said("A")]);
+    assert_eq!(events, 2);
+    let (replies, _) = run(ConversationMode::Discussion, &[("A", false)], "@A hello").await;
+    assert_eq!(replies, [said("A")]);
 }
