@@ -18,6 +18,16 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - name: Verify tag matches Cargo version
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)"
+          if [ "v$package_version" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match Cargo.toml version v$package_version" >&2
+            exit 1
+          fi
+
       - name: Build release binary
         run: cargo build --locked --release
 
