@@ -1,6 +1,6 @@
 // Workspaces: allowed roots, each group's shared workspace, and each persona's own workspace.
-import type { ComponentChildren } from "preact";
-import { useState } from "preact/hooks";
+import type { ReactNode } from "react";
+import { useState } from "react";
 import { api, type Workspaces } from "../api";
 import { Avatar, ErrorNote, PageHeader, useAction, useAsync } from "../ui";
 
@@ -11,7 +11,7 @@ export function WorkspacesView() {
   const groupIds = groups.data?.groups.map((g) => g.id) ?? [];
 
   return (
-    <div class="page">
+    <div className="page">
       <PageHeader
         title="Workspaces"
         sub="Paths must be absolute, existing directories inside the allowed roots. A live session in the old directory is replaced before its next turn."
@@ -19,15 +19,15 @@ export function WorkspacesView() {
       <ErrorNote error={ws.error} />
       {data && (
         <>
-          <div class="card">
+          <div className="card">
             <h3>Allowed roots</h3>
             {data.roots.length ? (
-              <ul class="paths">{data.roots.map((r) => <li class="mono">{r}</li>)}</ul>
+              <ul className="paths">{data.roots.map((r) => <li key={r} className="mono">{r}</li>)}</ul>
             ) : (
-              <p class="muted">No roots configured: any existing directory is allowed.</p>
+              <p className="muted">No roots configured: any existing directory is allowed.</p>
             )}
           </div>
-          <div class="card">
+          <div className="card">
             <h3>Group workspaces</h3>
             <table>
               <thead>
@@ -51,7 +51,7 @@ export function WorkspacesView() {
               </tbody>
             </table>
           </div>
-          <div class="card">
+          <div className="card">
             <h3>Persona workspaces</h3>
             <table>
               <thead>
@@ -66,7 +66,7 @@ export function WorkspacesView() {
                   <PathRow
                     key={p.id + p.workspace}
                     label={
-                      <span class="inline">
+                      <span className="inline">
                         <Avatar name={p.id} /> {p.id}
                       </span>
                     }
@@ -85,7 +85,7 @@ export function WorkspacesView() {
 }
 
 function PathRow(props: {
-  label: ComponentChildren;
+  label: ReactNode;
   value: string;
   onSave: (path: string) => Promise<Workspaces>;
   onClear?: () => Promise<Workspaces>;
@@ -97,35 +97,35 @@ function PathRow(props: {
   return (
     <tr>
       <td>{props.label}</td>
-      <td class="grow">
+      <td className="grow">
         {editing ? (
-          <input class="mono" value={path} onInput={(e) => setPath((e.target as HTMLInputElement).value)} />
+          <input className="mono" value={path} onChange={(e) => setPath((e.target as HTMLInputElement).value)} />
         ) : (
-          <span class="mono small">{props.value || <span class="muted">not set</span>}</span>
+          <span className="mono small">{props.value || <span className="muted">not set</span>}</span>
         )}
         <ErrorNote error={action.error} />
       </td>
-      <td class="nowrap right">
+      <td className="nowrap right">
         {editing ? (
           <>
             <button
-              class="primary small"
+              className="primary small"
               disabled={action.busy || !path.trim()}
               onClick={() => action.run(() => props.onSave(path.trim()).then((w) => (setEditing(false), props.onUpdated(w))))}
             >
               Save
             </button>
-            <button class="ghost small" onClick={() => (setEditing(false), setPath(props.value), action.setError(null))}>
+            <button className="ghost small" onClick={() => (setEditing(false), setPath(props.value), action.setError(null))}>
               Cancel
             </button>
           </>
         ) : (
           <>
-            <button class="ghost small" onClick={() => setEditing(true)}>
+            <button className="ghost small" onClick={() => setEditing(true)}>
               {props.value ? "Change" : "Set"}
             </button>
             {props.onClear && props.value && (
-              <button class="ghost small" disabled={action.busy} onClick={() => action.run(() => props.onClear!().then(props.onUpdated))}>
+              <button className="ghost small" disabled={action.busy} onClick={() => action.run(() => props.onClear!().then(props.onUpdated))}>
                 Clear
               </button>
             )}

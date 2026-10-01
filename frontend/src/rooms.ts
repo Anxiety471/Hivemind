@@ -1,5 +1,5 @@
 // Room naming shared by the chat and sessions views.
-import { useMemo } from "preact/hooks";
+import { useMemo } from "react";
 import { api, type Room } from "./api";
 import { useAsync } from "./ui";
 

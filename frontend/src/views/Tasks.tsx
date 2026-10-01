@@ -1,6 +1,6 @@
 // Autonomous tasks: root list, task detail with subtasks, attempts, evidence, budget, and controls.
-import type { ComponentChildren } from "preact";
-import { useState } from "preact/hooks";
+import type { ReactNode } from "react";
+import { useState } from "react";
 import { api, type Task } from "../api";
 import { useRefreshOn } from "../live";
 import { href, navigate } from "../nav";
@@ -16,28 +16,28 @@ export function Tasks({ selected }: { selected?: string }) {
   const active = selected ?? list[0]?.id;
 
   return (
-    <div class="split">
-      <aside class="list-pane">
-        <div class="list-head">
+    <div className="split">
+      <aside className="list-pane">
+        <div className="list-head">
           <h2>Tasks</h2>
-          <button class="primary small" onClick={() => setCreating(true)}>
+          <button className="primary small" onClick={() => setCreating(true)}>
             New task
           </button>
         </div>
         <ErrorNote error={tasks.error} />
         {tasks.data && list.length === 0 && <Empty>No tasks yet.</Empty>}
         {list.map((t) => (
-          <a key={t.id} href={href("tasks", t.id)} class={t.id === active ? "list-item active" : "list-item"}>
-            <div class="list-item-top">
+          <a key={t.id} href={href("tasks", t.id)} className={t.id === active ? "list-item active" : "list-item"}>
+            <div className="list-item-top">
               <Badge value={t.paused ? "paused" : t.status} />
-              <span class="muted small">{ago(t.updated_at)}</span>
+              <span className="muted small">{ago(t.updated_at)}</span>
             </div>
-            <div class="list-item-title">{t.objective}</div>
-            <div class="muted small">coordinated by {t.coordinator}</div>
+            <div className="list-item-title">{t.objective}</div>
+            <div className="muted small">coordinated by {t.coordinator}</div>
           </a>
         ))}
       </aside>
-      <section class="detail-pane">
+      <section className="detail-pane">
         {creating ? (
           <NewTask
             onDone={(id) => {
@@ -67,24 +67,24 @@ function NewTask({ onDone }: { onDone: (id?: string) => void }) {
       .map((x) => x.trim())
       .filter(Boolean);
   return (
-    <div class="card form">
+    <div className="card form">
       <PageHeader title="New task" sub="The coordinator plans it into subtasks, then owners work and reviewers approve." />
       <label>
         Objective
-        <textarea rows={3} value={objective} onInput={(e) => setObjective((e.target as HTMLTextAreaElement).value)} />
+        <textarea rows={3} value={objective} onChange={(e) => setObjective((e.target as HTMLTextAreaElement).value)} />
       </label>
       <label>
-        Acceptance criteria <span class="muted">(one per line)</span>
-        <textarea rows={3} value={acceptance} onInput={(e) => setAcceptance((e.target as HTMLTextAreaElement).value)} />
+        Acceptance criteria <span className="muted">(one per line)</span>
+        <textarea rows={3} value={acceptance} onChange={(e) => setAcceptance((e.target as HTMLTextAreaElement).value)} />
       </label>
       <label>
-        Capabilities <span class="muted">(optional, comma separated)</span>
-        <input value={capabilities} onInput={(e) => setCapabilities((e.target as HTMLInputElement).value)} />
+        Capabilities <span className="muted">(optional, comma separated)</span>
+        <input value={capabilities} onChange={(e) => setCapabilities((e.target as HTMLInputElement).value)} />
       </label>
       <ErrorNote error={action.error} />
-      <div class="row">
+      <div className="row">
         <button
-          class="primary"
+          className="primary"
           disabled={!objective.trim() || action.busy}
           onClick={() =>
             action.run(async () => {
@@ -95,7 +95,7 @@ function NewTask({ onDone }: { onDone: (id?: string) => void }) {
         >
           Submit task
         </button>
-        <button class="ghost" onClick={() => onDone()}>
+        <button className="ghost" onClick={() => onDone()}>
           Cancel
         </button>
       </div>
@@ -125,35 +125,35 @@ function TaskDetailView({ id }: { id: string }) {
     action.run(() => api.taskAction(id, name, body).then(() => detail.reload()));
 
   return (
-    <div class="task-detail">
+    <div className="task-detail">
       {t.parent_id && (
-        <a class="crumb" href={href("tasks", t.root_id)}>
+        <a className="crumb" href={href("tasks", t.root_id)}>
           ← Root task
         </a>
       )}
       <PageHeader title={t.objective} sub={`${t.id} · ${t.kind} · revision ${t.revision}`}>
-        <a class="button ghost" href={href("rooms", `task-${t.id}`)}>
+        <a className="button ghost" href={href("rooms", `task-${t.id}`)}>
           Task room
         </a>
         {!terminal && !t.paused && (
-          <button class="ghost" disabled={action.busy} onClick={() => act("pause")}>
+          <button className="ghost" disabled={action.busy} onClick={() => act("pause")}>
             Pause
           </button>
         )}
         {!terminal && (t.paused || t.status === "blocked") && (
-          <button class="ghost" disabled={action.busy} onClick={() => act("resume", { retry: t.status === "blocked" })}>
+          <button className="ghost" disabled={action.busy} onClick={() => act("resume", { retry: t.status === "blocked" })}>
             Resume
           </button>
         )}
         {!terminal && (
-          <button class="danger" disabled={action.busy} onClick={() => act("cancel")}>
+          <button className="danger" disabled={action.busy} onClick={() => act("cancel")}>
             Cancel
           </button>
         )}
       </PageHeader>
       <ErrorNote error={action.error} />
 
-      <div class="facts">
+      <div className="facts">
         <Fact label="Status">
           <Badge value={t.status} /> {t.paused && <Badge value="paused" />}
         </Fact>
@@ -163,19 +163,19 @@ function TaskDetailView({ id }: { id: string }) {
         <Fact label="Created">{time(t.created_at)}</Fact>
         <Fact label="Updated">{ago(t.updated_at)}</Fact>
       </div>
-      {t.status_reason && <div class="callout">{t.status_reason}</div>}
+      {t.status_reason && <div className="callout">{t.status_reason}</div>}
 
       {t.status === "needs_input" && (
-        <div class="card">
+        <div className="card">
           <h3>Input needed</h3>
-          <div class="row">
+          <div className="row">
             <input
               value={answer}
               placeholder="Answer the coordinator's question"
-              onInput={(e) => setAnswer((e.target as HTMLInputElement).value)}
+              onChange={(e) => setAnswer((e.target as HTMLInputElement).value)}
             />
             <button
-              class="primary"
+              className="primary"
               disabled={!answer.trim() || action.busy}
               onClick={() => action.run(() => api.taskInput(id, answer.trim()).then(() => (setAnswer(""), detail.reload())))}
             >
@@ -185,67 +185,67 @@ function TaskDetailView({ id }: { id: string }) {
         </div>
       )}
 
-      <div class="grid-2">
-        <div class="card">
+      <div className="grid-2">
+        <div className="card">
           <h3>Acceptance criteria</h3>
           {t.acceptance.length ? (
-            <ul class="checks">
+            <ul className="checks">
               {t.acceptance.map((a) => (
-                <li data-done={t.status === "completed"}>{a}</li>
+                <li key={a} data-done={t.status === "completed"}>{a}</li>
               ))}
             </ul>
           ) : (
-            <p class="muted">None given</p>
+            <p className="muted">None given</p>
           )}
           {t.feedback.length > 0 && (
             <>
               <h4>Review feedback</h4>
-              <ul>{t.feedback.map((f) => <li>{f}</li>)}</ul>
+              <ul>{t.feedback.map((f) => <li key={f}>{f}</li>)}</ul>
             </>
           )}
         </div>
         {d.usage ? (
-          <div class="card">
+          <div className="card">
             <h3>Budget</h3>
             <Meter label="Dispatches" value={d.usage.dispatches} max={d.usage.dispatch_limit} />
             <Meter label="Tool actions" value={d.usage.tool_actions} max={d.usage.tool_action_limit} />
             <Meter label="Messages" value={d.usage.messages} max={d.usage.message_limit} />
-            <div class="muted small">
+            <div className="muted small">
               Running for {duration(d.usage.started_at, terminal ? t.updated_at : null)} · deadline {time(d.usage.deadline)}
               {d.usage.tokens != null && ` · ${d.usage.tokens} measured tokens`}
             </div>
           </div>
         ) : (
-          <div class="card">
+          <div className="card">
             <h3>Evidence</h3>
             {d.evidence.length ? (
-              <ul class="evidence">
-                {d.evidence.map((e) => (
-                  <li>
+              <ul className="evidence">
+                {d.evidence.map((e, i) => (
+                  <li key={i}>
                     <Badge value={e.outcome} tone={e.outcome === "passed" ? "ok" : "bad"} /> <strong>{e.check}</strong>{" "}
-                    <span class="muted">{e.detail}</span>
+                    <span className="muted">{e.detail}</span>
                   </li>
                 ))}
               </ul>
             ) : (
-              <p class="muted">No verification submitted yet</p>
+              <p className="muted">No verification submitted yet</p>
             )}
           </div>
         )}
       </div>
 
       {d.children.length > 0 && (
-        <div class="card">
+        <div className="card">
           <h3>
-            Subtasks <span class="muted small">{progressLine(d.children)}</span>
+            Subtasks <span className="muted small">{progressLine(d.children)}</span>
           </h3>
-          <div class="subtasks">
+          <div className="subtasks">
             {d.children.map((c, i) => (
-              <a class="subtask" href={href("tasks", c.id)} key={c.id}>
-                <span class="step">{i + 1}</span>
-                <div class="grow">
+              <a className="subtask" href={href("tasks", c.id)} key={c.id}>
+                <span className="step">{i + 1}</span>
+                <div className="grow">
                   <div>{c.objective}</div>
-                  <div class="muted small">
+                  <div className="muted small">
                     owner {c.owner ?? "—"} · reviewer {c.reviewer ?? "—"}
                     {c.prerequisites.length > 0 &&
                       ` · after ${c.prerequisites.map((p) => d.children.findIndex((x) => x.id === p) + 1).join(", ")}`}
@@ -258,7 +258,7 @@ function TaskDetailView({ id }: { id: string }) {
         </div>
       )}
 
-      <div class="card">
+      <div className="card">
         <h3>Attempts</h3>
         {attempts.data?.attempts.length ? (
           <table>
@@ -281,43 +281,43 @@ function TaskDetailView({ id }: { id: string }) {
                   <td>{a.persona}</td>
                   <td>
                     <Badge value={a.state} />
-                    {a.failure_class && <span class="muted small"> {a.failure_class}</span>}
+                    {a.failure_class && <span className="muted small"> {a.failure_class}</span>}
                   </td>
                   <td>{time(a.started_at)}</td>
                   <td>{duration(a.started_at, a.ended_at)}</td>
-                  <td class="mono small">{a.branch ?? "—"}</td>
+                  <td className="mono small">{a.branch ?? "—"}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         ) : (
-          <p class="muted">No attempts yet{d.children.length ? "; open a subtask to see its attempts" : ""}.</p>
+          <p className="muted">No attempts yet{d.children.length ? "; open a subtask to see its attempts" : ""}.</p>
         )}
       </div>
 
       {(d.artifacts.length > 0 || (d.usage && d.evidence.length > 0)) && (
-        <div class="grid-2">
+        <div className="grid-2">
           {d.artifacts.length > 0 && (
-            <div class="card">
+            <div className="card">
               <h3>Artifacts</h3>
-              <ul class="artifacts">
+              <ul className="artifacts">
                 {d.artifacts.map((a) => (
                   <li key={a.id}>
-                    <Badge value={a.kind} tone="muted" /> <span class="mono small">{a.reference}</span>
-                    <div class="muted small">{a.description}</div>
+                    <Badge value={a.kind} tone="muted" /> <span className="mono small">{a.reference}</span>
+                    <div className="muted small">{a.description}</div>
                   </li>
                 ))}
               </ul>
             </div>
           )}
           {d.usage && d.evidence.length > 0 && (
-            <div class="card">
+            <div className="card">
               <h3>Evidence</h3>
-              <ul class="evidence">
-                {d.evidence.map((e) => (
-                  <li>
+              <ul className="evidence">
+                {d.evidence.map((e, i) => (
+                  <li key={i}>
                     <Badge value={e.outcome} tone={e.outcome === "passed" ? "ok" : "bad"} /> {e.check}{" "}
-                    <span class="muted">{e.detail}</span>
+                    <span className="muted">{e.detail}</span>
                   </li>
                 ))}
               </ul>
@@ -337,11 +337,11 @@ function progressLine(children: { status: string }[]) {
     .join(" · ");
 }
 
-function Fact({ label, children }: { label: string; children: ComponentChildren }) {
+function Fact({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div class="fact">
-      <div class="fact-label">{label}</div>
-      <div class="fact-value">{children}</div>
+    <div className="fact">
+      <div className="fact-label">{label}</div>
+      <div className="fact-value">{children}</div>
     </div>
   );
 }

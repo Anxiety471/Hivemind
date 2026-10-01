@@ -1,15 +1,15 @@
-import { render } from "preact";
-import { useEffect, useState } from "preact/hooks";
+import { createRoot } from "react-dom/client";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { api } from "./api";
 import { connect, useLiveStatus } from "./live";
 import { Chat } from "./views/Chat";
-import { Tasks } from "./views/Tasks";
-import { Agents } from "./views/Agents";
-import { Groups } from "./views/Groups";
-import { WorkspacesView } from "./views/Workspaces";
-import { Sessions } from "./views/Sessions";
-import { Activity } from "./views/Activity";
-import { SettingsView } from "./views/Settings";
+const Tasks = lazy(() => import("./views/Tasks").then((m) => ({ default: m.Tasks })));
+const Agents = lazy(() => import("./views/Agents").then((m) => ({ default: m.Agents })));
+const Groups = lazy(() => import("./views/Groups").then((m) => ({ default: m.Groups })));
+const WorkspacesView = lazy(() => import("./views/Workspaces").then((m) => ({ default: m.WorkspacesView })));
+const Sessions = lazy(() => import("./views/Sessions").then((m) => ({ default: m.Sessions })));
+const Activity = lazy(() => import("./views/Activity").then((m) => ({ default: m.Activity })));
+const SettingsView = lazy(() => import("./views/Settings").then((m) => ({ default: m.SettingsView })));
 import "./styles.css";
 
 type Route = { page: string; arg?: string };
@@ -74,33 +74,35 @@ function App() {
   }
 
   return (
-    <div class="shell">
-      <nav class="sidebar">
-        <div class="brand">
-          <span class="logo">🐝</span>
+    <div className="shell">
+      <nav className="sidebar">
+        <div className="brand">
+          <span className="logo">🐝</span>
           <span>Hivemind</span>
         </div>
         {NAV.map((item) => (
-          <a key={item.page} href={`#/${item.page}`} class={route.page === item.page ? "nav active" : "nav"}>
-            <span class="nav-icon">{item.icon}</span>
+          <a key={item.page} href={`#/${item.page}`} className={route.page === item.page ? "nav active" : "nav"}>
+            <span className="nav-icon">{item.icon}</span>
             {item.label}
           </a>
         ))}
-        <div class="spacer" />
-        <a href="#/settings" class={route.page === "settings" ? "nav active" : "nav"}>
-          <span class="nav-icon">⚙️</span>
+        <div className="spacer" />
+        <a href="#/settings" className={route.page === "settings" ? "nav active" : "nav"}>
+          <span className="nav-icon">⚙️</span>
           Connection
         </a>
-        <div class="conn" data-status={live}>
-          <span class="dot" />
+        <div className="conn" data-status={live}>
+          <span className="dot" />
           {live === "open" ? "Live" : live === "connecting" ? "Connecting…" : "Offline"}
-          {version && <span class="ver">v{version}</span>}
+          {version && <span className="ver">v{version}</span>}
         </div>
       </nav>
-      <main class="main">{view}</main>
+      <main className="main">
+        <Suspense fallback={null}>{view}</Suspense>
+      </main>
     </div>
   );
 }
 
 connect();
-render(<App />, document.getElementById("app")!);
+createRoot(document.getElementById("app")!).render(<App />);

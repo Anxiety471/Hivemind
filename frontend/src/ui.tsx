@@ -1,6 +1,6 @@
 // Small shared UI pieces: data loading, badges, time formatting.
-import type { ComponentChildren } from "preact";
-import { useCallback, useEffect, useState } from "preact/hooks";
+import type { ReactNode } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 export function useAsync<T>(load: () => Promise<T>, deps: unknown[] = []) {
   const [data, setData] = useState<T | null>(null);
@@ -74,7 +74,7 @@ const TONES: Record<string, string> = {
 };
 
 export function Badge({ value, tone }: { value: string; tone?: string }) {
-  return <span class={`badge tone-${tone ?? TONES[value] ?? "muted"}`}>{value.replace(/_/g, " ")}</span>;
+  return <span className={`badge tone-${tone ?? TONES[value] ?? "muted"}`}>{value.replace(/_/g, " ")}</span>;
 }
 
 export function Avatar({ name }: { name: string }) {
@@ -82,28 +82,28 @@ export function Avatar({ name }: { name: string }) {
   let hue = 0;
   for (const ch of name) hue = (hue * 31 + ch.charCodeAt(0)) % 360;
   return (
-    <span class="avatar" style={user ? undefined : { background: `hsl(${hue} 55% 42%)` }} data-user={user}>
+    <span className="avatar" style={user ? undefined : { background: `hsl(${hue} 55% 42%)` }} data-user={user}>
       {user ? "You" : name.slice(0, 2)}
     </span>
   );
 }
 
 export function ErrorNote({ error }: { error: string | null }) {
-  return error ? <div class="error-note">{error}</div> : null;
+  return error ? <div className="error-note">{error}</div> : null;
 }
 
-export function Empty({ children }: { children: ComponentChildren }) {
-  return <div class="empty">{children}</div>;
+export function Empty({ children }: { children: ReactNode }) {
+  return <div className="empty">{children}</div>;
 }
 
-export function PageHeader({ title, sub, children }: { title: string; sub?: string; children?: ComponentChildren }) {
+export function PageHeader({ title, sub, children }: { title: string; sub?: string; children?: ReactNode }) {
   return (
-    <header class="page-header">
+    <header className="page-header">
       <div>
         <h1>{title}</h1>
-        {sub && <p class="sub">{sub}</p>}
+        {sub && <p className="sub">{sub}</p>}
       </div>
-      <div class="actions">{children}</div>
+      <div className="actions">{children}</div>
     </header>
   );
 }
@@ -111,15 +111,15 @@ export function PageHeader({ title, sub, children }: { title: string; sub?: stri
 export function Meter({ label, value, max }: { label: string; value: number; max: number }) {
   const pct = max > 0 ? Math.min(100, (value / max) * 100) : 0;
   return (
-    <div class="meter">
-      <div class="meter-label">
+    <div className="meter">
+      <div className="meter-label">
         <span>{label}</span>
-        <span class="mono">
+        <span className="mono">
           {value} / {max}
         </span>
       </div>
-      <div class="meter-track">
-        <div class="meter-fill" style={{ width: `${pct}%` }} data-high={pct > 80} />
+      <div className="meter-track">
+        <div className="meter-fill" style={{ width: `${pct}%` }} data-high={pct > 80} />
       </div>
     </div>
   );

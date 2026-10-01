@@ -1,6 +1,6 @@
 # Hivemind web UI
 
-A small browser UI for `hivemind serve`, built with Vite, TypeScript, and Preact. It talks only to the public `/api/v1` HTTP and WebSocket API, so it needs nothing beyond a running server.
+A small browser UI for `hivemind serve`, built with Vite, TypeScript, and React. It talks only to the public `/api/v1` HTTP and WebSocket API, so it needs nothing beyond a running server.
 
 | Screen | What it covers |
 | --- | --- |
@@ -26,7 +26,7 @@ npm run dev                        # http://127.0.0.1:5173
 
 The UI connects to `http://127.0.0.1:7474` by default. Change it under **Connection** in the sidebar (saved in the browser), or set `VITE_HIVEMIND_URL` at build time. The server allows browser calls from any loopback origin, so no proxy is needed.
 
-`npm run build` writes a static bundle to `dist/`; serve it from any loopback origin (`npm run preview` does this on port 4173).
+`npm run build` writes a static bundle to `dist/` (about 75 kB gzipped on first load; each screen other than Rooms is a lazy-loaded chunk of 1 to 3 kB); serve it from any loopback origin (`npm run preview` does this on port 4173).
 
 ### Remote servers
 

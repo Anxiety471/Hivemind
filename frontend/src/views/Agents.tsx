@@ -46,7 +46,7 @@ export function Agents() {
   const data = useAsync(load, []);
   useRefreshOn((e) => e.type === "agent.activity.changed" || e.type.startsWith("runtime."), data.reload, [data.reload]);
   return (
-    <div class="page">
+    <div className="page">
       <PageHeader
         title="Agents"
         sub={
@@ -57,34 +57,34 @@ export function Agents() {
       />
       <ErrorNote error={data.error} />
       {data.data?.rows.length === 0 && <Empty>No personas configured.</Empty>}
-      <div class="cards">
+      <div className="cards">
         {data.data?.rows.map((a) => (
-          <div class="card agent-card" key={a.name}>
-            <div class="agent-head">
+          <div className="card agent-card" key={a.name}>
+            <div className="agent-head">
               <Avatar name={a.name} />
-              <div class="grow">
+              <div className="grow">
                 <h3>{a.name}</h3>
-                <div class="muted small">runtime {a.runtime}</div>
+                <div className="muted small">runtime {a.runtime}</div>
               </div>
               <Badge value={a.state} />
             </div>
             <dl>
               <dt>Workspace</dt>
-              <dd class="mono small">{a.workspace ?? "—"}</dd>
+              <dd className="mono small">{a.workspace ?? "—"}</dd>
               <dt>Capabilities</dt>
-              <dd>{a.capabilities.length ? a.capabilities.map((c) => <span class="tag">{c}</span>) : <span class="muted">none</span>}</dd>
+              <dd>{a.capabilities.length ? a.capabilities.map((c) => <span key={c} className="tag">{c}</span>) : <span className="muted">none</span>}</dd>
               <dt>Permissions</dt>
               <dd>
                 {a.permissions.length ? (
-                  a.permissions.map((p) => <span class="tag perm">{p}</span>)
+                  a.permissions.map((p) => <span key={p} className="tag perm">{p}</span>)
                 ) : (
-                  <span class="muted">none</span>
+                  <span className="muted">none</span>
                 )}
               </dd>
               {a.roles.length > 0 && (
                 <>
                   <dt>Roles</dt>
-                  <dd>{a.roles.map((r) => <span class="tag">{r}</span>)}</dd>
+                  <dd>{a.roles.map((r) => <span key={r} className="tag">{r}</span>)}</dd>
                 </>
               )}
               <dt>Work</dt>
@@ -92,7 +92,7 @@ export function Agents() {
                 {a.running} running · {a.queued} queued wakes
               </dd>
             </dl>
-            <a class="button ghost" href={href("rooms", `solo-${a.name}`)}>
+            <a className="button ghost" href={href("rooms", `solo-${a.name}`)}>
               Message {a.name}
             </a>
           </div>

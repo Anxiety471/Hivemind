@@ -1,5 +1,5 @@
 // Live activity: the raw WebSocket event stream, newest first.
-import { useState } from "preact/hooks";
+import { useState } from "react";
 import { decodeInstance } from "../api";
 import { recentEvents, useLive, type LiveEvent } from "../live";
 import { Empty, PageHeader } from "../ui";
@@ -25,18 +25,18 @@ export function Activity() {
   );
   const shown = events.filter((e) => filter === "all" || e.type.startsWith(filter + "."));
   return (
-    <div class="page">
+    <div className="page">
       <PageHeader title="Live activity" sub="Events streamed from /api/v1/ws. Notifications only; durable history lives in rooms and tasks.">
-        <button class="ghost" onClick={() => setPaused((p) => !p)}>
+        <button className="ghost" onClick={() => setPaused((p) => !p)}>
           {paused ? "Resume" : "Pause"}
         </button>
-        <button class="ghost" onClick={() => setEvents([])}>
+        <button className="ghost" onClick={() => setEvents([])}>
           Clear
         </button>
       </PageHeader>
-      <div class="segmented">
+      <div className="segmented">
         {GROUPS.map((g) => (
-          <button class={filter === g ? "on" : ""} onClick={() => setFilter(g)}>
+          <button key={g} className={filter === g ? "on" : ""} onClick={() => setFilter(g)}>
             {g}
           </button>
         ))}
@@ -44,12 +44,12 @@ export function Activity() {
       {shown.length === 0 ? (
         <Empty>Waiting for events. Send a message or submit a task.</Empty>
       ) : (
-        <div class="card events">
+        <div className="card events">
           {shown.map((e, i) => (
-            <div class="event" key={i}>
-              <span class="mono muted small">{new Date(e.at).toLocaleTimeString()}</span>
-              <span class={`event-type t-${e.type.split(".")[0]}`}>{e.type}</span>
-              <span class="small">{summary(e)}</span>
+            <div className="event" key={i}>
+              <span className="mono muted small">{new Date(e.at).toLocaleTimeString()}</span>
+              <span className={`event-type t-${e.type.split(".")[0]}`}>{e.type}</span>
+              <span className="small">{summary(e)}</span>
             </div>
           ))}
         </div>

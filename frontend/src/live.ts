@@ -1,5 +1,5 @@
 // One shared WebSocket to `/api/v1/ws` with reconnect and a tiny pub/sub.
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useState } from "react";
 import { currentSettings } from "./api";
 
 export type LiveEvent = { type: string; id?: string; payload: Record<string, any>; at: number };

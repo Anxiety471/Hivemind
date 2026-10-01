@@ -1,5 +1,5 @@
 // Rooms: room list, paged history, threads, and live replies over the WebSocket.
-import { useEffect, useMemo, useRef, useState } from "preact/hooks";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, decodeInstance, targetFor, type Message, type Room, type Thread } from "../api";
 import { useLive, useRefreshOn, type LiveEvent } from "../live";
 import { href, navigate } from "../nav";
@@ -30,18 +30,18 @@ export function Chat({ roomId }: { roomId?: string }) {
   }, [list]);
 
   return (
-    <div class="chat">
-      <aside class="room-list">
-        <div class="room-list-head">Rooms</div>
+    <div className="chat">
+      <aside className="room-list">
+        <div className="room-list-head">Rooms</div>
         <ErrorNote error={rooms.error} />
         {grouped.map(([kind, items]) => (
-          <div key={kind} class="room-group">
-            <div class="room-group-label">{KIND_LABEL[kind] ?? kind}</div>
+          <div key={kind} className="room-group">
+            <div className="room-group-label">{KIND_LABEL[kind] ?? kind}</div>
             {items.map((room) => (
-              <a key={room.id} href={href("rooms", room.id)} class={room.id === active ? "room active" : "room"}>
-                <span class="room-icon">{room.kind === "main" ? "#" : room.kind === "solo" ? "@" : kind === "task" ? "▸" : "◆"}</span>
-                <span class="room-name">{roomLabel(room, taskNames)}</span>
-                {room.message_count > 0 && <span class="count">{room.message_count}</span>}
+              <a key={room.id} href={href("rooms", room.id)} className={room.id === active ? "room active" : "room"}>
+                <span className="room-icon">{room.kind === "main" ? "#" : room.kind === "solo" ? "@" : kind === "task" ? "▸" : "◆"}</span>
+                <span className="room-name">{roomLabel(room, taskNames)}</span>
+                {room.message_count > 0 && <span className="count">{room.message_count}</span>}
               </a>
             ))}
           </div>
@@ -154,18 +154,18 @@ function RoomView({ roomId, taskNames }: { roomId: string; taskNames: Map<string
   };
 
   return (
-    <section class="room-view">
-      <div class="conversation">
-        <header class="room-header">
+    <section className="room-view">
+      <div className="conversation">
+        <header className="room-header">
           <div>
             <h2>
               {info ? (info.kind === "solo" ? "@" : "") + roomLabel(info, taskNames) : roomId}
               {info?.mode && <Badge value={info.mode} tone="muted" />}
               {info?.kind === "archived" && <Badge value={roomId.startsWith("task-") ? "task room" : "archived"} />}
             </h2>
-            <div class="participants">
+            <div className="participants">
               {info?.participants.map((p) => (
-                <span class="chip" key={p.persona_id}>
+                <span className="chip" key={p.persona_id}>
                   <Avatar name={p.persona_id} />
                   {p.persona_id}
                   {p.role && <em>{p.role}</em>}
@@ -173,16 +173,16 @@ function RoomView({ roomId, taskNames }: { roomId: string; taskNames: Map<string
               ))}
             </div>
           </div>
-          <div class="actions">
-            <button class="ghost" onClick={() => setShowDetails((v) => !v)}>
+          <div className="actions">
+            <button className="ghost" onClick={() => setShowDetails((v) => !v)}>
               {showDetails ? "Hide details" : "Room details"}
             </button>
             {roomId.startsWith("task-") && (
-              <a class="button ghost" href={href("tasks", roomId.slice(5))}>
+              <a className="button ghost" href={href("tasks", roomId.slice(5))}>
                 Open task
               </a>
             )}
-            <button class="ghost" onClick={() => navigate("sessions", roomId)}>
+            <button className="ghost" onClick={() => navigate("sessions", roomId)}>
               Runtime sessions
             </button>
           </div>
@@ -205,7 +205,7 @@ function RoomView({ roomId, taskNames }: { roomId: string; taskNames: Map<string
           />
         ) : (
           info && (
-            <div class="composer-disabled">
+            <div className="composer-disabled">
               {roomId.startsWith("task-")
                 ? "Agents talk here while they work on a task. It is read-only; steer the task from the Tasks page."
                 : "This room is archived and read-only."}
@@ -228,28 +228,28 @@ function RoomView({ roomId, taskNames }: { roomId: string; taskNames: Map<string
 function RoomDetails({ room }: { room: Room }) {
   const s = room.state;
   return (
-    <div class="room-details">
+    <div className="room-details">
       <div>
         <h4>Goal</h4>
-        <p>{s?.goal ?? <span class="muted">No goal set</span>}</p>
+        <p>{s?.goal ?? <span className="muted">No goal set</span>}</p>
       </div>
       <div>
         <h4>Decisions</h4>
-        {s?.decisions.length ? <ul>{s.decisions.map((d) => <li>{d}</li>)}</ul> : <p class="muted">None yet</p>}
+        {s?.decisions.length ? <ul>{s.decisions.map((d) => <li key={d}>{d}</li>)}</ul> : <p className="muted">None yet</p>}
       </div>
       <div>
         <h4>Open questions</h4>
         {s?.open_questions.length ? (
-          <ul>{s.open_questions.map((d) => <li>{d}</li>)}</ul>
+          <ul>{s.open_questions.map((d) => <li key={d}>{d}</li>)}</ul>
         ) : (
-          <p class="muted">None</p>
+          <p className="muted">None</p>
         )}
       </div>
       <div>
         <h4>Summary</h4>
-        <p>{room.summary || <span class="muted">No summary yet</span>}</p>
+        <p>{room.summary || <span className="muted">No summary yet</span>}</p>
       </div>
-      <div class="muted small">
+      <div className="muted small">
         {room.message_count} messages · updated {ago(room.updated_at)}
       </div>
     </div>
@@ -273,10 +273,10 @@ function MessageList(props: {
   }, [props.messages.length, typingCount]);
 
   return (
-    <div class="messages">
+    <div className="messages">
       <ErrorNote error={props.error} />
       {props.hasEarlier && (
-        <button class="ghost load-earlier" onClick={props.onEarlier}>
+        <button className="ghost load-earlier" onClick={props.onEarlier}>
           Load earlier messages
         </button>
       )}
@@ -288,24 +288,24 @@ function MessageList(props: {
         const grouped = prev && prev.speaker === m.speaker && m.created_at - prev.created_at < 120;
         const thread = props.threads?.get(m.id);
         return (
-          <div key={m.id} class={grouped ? "msg grouped" : "msg"} data-user={m.speaker === "user"}>
-            {!grouped ? <Avatar name={m.speaker} /> : <span class="avatar-gap" />}
-            <div class="msg-body">
+          <div key={m.id} className={grouped ? "msg grouped" : "msg"} data-user={m.speaker === "user"}>
+            {!grouped ? <Avatar name={m.speaker} /> : <span className="avatar-gap" />}
+            <div className="msg-body">
               {!grouped && (
-                <div class="msg-meta">
+                <div className="msg-meta">
                   <strong>{m.speaker === "user" ? "You" : m.speaker}</strong>
-                  <span class="muted">{time(m.created_at)}</span>
+                  <span className="muted">{time(m.created_at)}</span>
                 </div>
               )}
-              <div class="msg-text">{m.content}</div>
+              <div className="msg-text">{m.content}</div>
               {thread && (
-                <button class="thread-link" onClick={() => props.onThread?.(m)}>
+                <button className="thread-link" onClick={() => props.onThread?.(m)}>
                   💬 {thread.message_count} {thread.message_count === 1 ? "reply" : "replies"} · {thread.name}
                 </button>
               )}
             </div>
             {props.onThread && !thread && (
-              <button class="msg-action" title="Reply in thread" onClick={() => props.onThread?.(m)}>
+              <button className="msg-action" title="Reply in thread" onClick={() => props.onThread?.(m)}>
                 Reply in thread
               </button>
             )}
@@ -313,16 +313,16 @@ function MessageList(props: {
         );
       })}
       {Object.values(props.typing).map((t) => (
-        <div key={t.persona} class="msg typing">
+        <div key={t.persona} className="msg typing">
           <Avatar name={t.persona} />
-          <div class="msg-body">
-            <div class="msg-meta">
+          <div className="msg-body">
+            <div className="msg-meta">
               <strong>{t.persona}</strong>
-              <span class="muted">replying</span>
+              <span className="muted">replying</span>
             </div>
-            <div class="msg-text">
+            <div className="msg-text">
               {t.text || (
-                <span class="dots">
+                <span className="dots">
                   <i />
                   <i />
                   <i />
@@ -356,14 +356,14 @@ function Composer({ onSend, placeholder }: { onSend: (text: string) => Promise<u
     }
   };
   return (
-    <div class="composer">
+    <div className="composer">
       <ErrorNote error={error} />
-      <div class="composer-row">
+      <div className="composer-row">
         <textarea
           rows={1}
           value={text}
           placeholder={placeholder}
-          onInput={(e) => setText((e.target as HTMLTextAreaElement).value)}
+          onChange={(e) => setText((e.target as HTMLTextAreaElement).value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
@@ -371,11 +371,11 @@ function Composer({ onSend, placeholder }: { onSend: (text: string) => Promise<u
             }
           }}
         />
-        <button class="primary" disabled={busy || !text.trim()} onClick={send}>
+        <button className="primary" disabled={busy || !text.trim()} onClick={send}>
           Send
         </button>
       </div>
-      <div class="hint">Enter to send · Shift+Enter for a new line · replies run in the background</div>
+      <div className="hint">Enter to send · Shift+Enter for a new line · replies run in the background</div>
     </div>
   );
 }
@@ -384,23 +384,23 @@ function ThreadPanel({ thread, anchor, onClose }: { thread: Thread; anchor?: Mes
   const history = useHistory(thread.id);
   const typing = useTyping(thread.id);
   return (
-    <aside class="thread-panel">
+    <aside className="thread-panel">
       <header>
         <div>
-          <div class="eyebrow">Thread</div>
+          <div className="eyebrow">Thread</div>
           <h3>{thread.name}</h3>
         </div>
-        <button class="ghost icon" onClick={onClose} aria-label="Close thread">
+        <button className="ghost icon" onClick={onClose} aria-label="Close thread">
           ✕
         </button>
       </header>
       {anchor && (
-        <div class="anchor">
-          <div class="msg-meta">
+        <div className="anchor">
+          <div className="msg-meta">
             <strong>{anchor.speaker === "user" ? "You" : anchor.speaker}</strong>
-            <span class="muted">{time(anchor.created_at)}</span>
+            <span className="muted">{time(anchor.created_at)}</span>
           </div>
-          <div class="msg-text">{anchor.content}</div>
+          <div className="msg-text">{anchor.content}</div>
         </div>
       )}
       <MessageList

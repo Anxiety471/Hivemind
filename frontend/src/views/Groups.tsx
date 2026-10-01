@@ -1,5 +1,5 @@
 // Chat groups (`group-<id>` rooms): create, edit members/mode/roles/reply order, delete.
-import { useState } from "preact/hooks";
+import { useState } from "react";
 import { api, type ChatGroup } from "../api";
 import { href } from "../nav";
 import { Avatar, Badge, Empty, ErrorNote, PageHeader, useAction, useAsync } from "../ui";
@@ -11,9 +11,9 @@ export function Groups() {
   const names = agents.data?.agents.map((a) => a.name) ?? [];
 
   return (
-    <div class="page">
+    <div className="page">
       <PageHeader title="Groups" sub="Persisted conversation groups. Changes are written to hivemind.toml and apply immediately.">
-        <button class="primary" onClick={() => setCreating(true)}>
+        <button className="primary" onClick={() => setCreating(true)}>
           New group
         </button>
       </PageHeader>
@@ -28,7 +28,7 @@ export function Groups() {
         />
       )}
       {groups.data?.groups.length === 0 && !creating && <Empty>No groups yet.</Empty>}
-      <div class="cards wide">
+      <div className="cards wide">
         {groups.data?.groups.map((g) => (
           <GroupCard key={g.id + JSON.stringify(g)} group={g} personas={names} onChange={groups.reload} />
         ))}
@@ -39,14 +39,14 @@ export function Groups() {
 
 function MemberPicker({ personas, value, onChange }: { personas: string[]; value: string[]; onChange: (v: string[]) => void }) {
   return (
-    <div class="picker">
+    <div className="picker">
       {personas.map((p) => {
         const on = value.includes(p);
         return (
           <button
             type="button"
             key={p}
-            class={on ? "pick on" : "pick"}
+            className={on ? "pick on" : "pick"}
             onClick={() => onChange(on ? value.filter((x) => x !== p) : [...value, p])}
           >
             <Avatar name={p} />
@@ -63,24 +63,24 @@ function CreateGroup({ personas, onDone }: { personas: string[]; onDone: () => v
   const [members, setMembers] = useState<string[]>([]);
   const action = useAction();
   return (
-    <div class="card form">
+    <div className="card form">
       <h3>New group</h3>
       <label>
         Name
-        <input value={id} placeholder="e.g. frontend" onInput={(e) => setId((e.target as HTMLInputElement).value)} />
+        <input value={id} placeholder="e.g. frontend" onChange={(e) => setId((e.target as HTMLInputElement).value)} />
       </label>
       <label>Members</label>
       <MemberPicker personas={personas} value={members} onChange={setMembers} />
       <ErrorNote error={action.error} />
-      <div class="row">
+      <div className="row">
         <button
-          class="primary"
+          className="primary"
           disabled={!id.trim() || !members.length || action.busy}
           onClick={() => action.run(() => api.createChatGroup(id.trim(), members).then(onDone))}
         >
           Create group
         </button>
-        <button class="ghost" onClick={onDone}>
+        <button className="ghost" onClick={onDone}>
           Cancel
         </button>
       </div>
@@ -115,34 +115,34 @@ function GroupCard({ group, personas, onChange }: { group: ChatGroup; personas: 
 
   if (!editing)
     return (
-      <div class="card group-card">
-        <div class="agent-head">
-          <div class="group-icon">◆</div>
-          <div class="grow">
+      <div className="card group-card">
+        <div className="agent-head">
+          <div className="group-icon">◆</div>
+          <div className="grow">
             <h3>{group.id}</h3>
-            <div class="muted small mono">{group.workspace ?? "no shared workspace"}</div>
+            <div className="muted small mono">{group.workspace ?? "no shared workspace"}</div>
           </div>
           <Badge value={group.mode} tone="info" />
         </div>
-        <div class="order">
+        <div className="order">
           {(group.reply_order.length ? group.reply_order : group.members).map((m, i) => (
-            <div class="order-row" key={m}>
-              <span class="step">{i + 1}</span>
+            <div className="order-row" key={m}>
+              <span className="step">{i + 1}</span>
               <Avatar name={m} />
               <span>{m}</span>
-              {group.member_roles?.[m] && <em class="muted">{group.member_roles[m]}</em>}
+              {group.member_roles?.[m] && <em className="muted">{group.member_roles[m]}</em>}
             </div>
           ))}
         </div>
-        <div class="row">
-          <a class="button ghost" href={href("rooms", group.room_id)}>
+        <div className="row">
+          <a className="button ghost" href={href("rooms", group.room_id)}>
             Open room
           </a>
-          <button class="ghost" onClick={() => setEditing(true)}>
+          <button className="ghost" onClick={() => setEditing(true)}>
             Edit
           </button>
           <button
-            class="danger ghost"
+            className="danger ghost"
             disabled={action.busy}
             onClick={() => confirm(`Delete group "${group.id}"? Its history stays as an archived room.`) && action.run(() => api.deleteChatGroup(group.id).then(onChange))}
           >
@@ -154,49 +154,49 @@ function GroupCard({ group, personas, onChange }: { group: ChatGroup; personas: 
     );
 
   return (
-    <div class="card group-card form">
+    <div className="card group-card form">
       <h3>Edit {group.id}</h3>
       <label>Mode</label>
-      <div class="segmented">
+      <div className="segmented">
         {(["discussion", "broadcast"] as const).map((m) => (
-          <button type="button" class={mode === m ? "on" : ""} onClick={() => setMode(m)}>
+          <button type="button" key={m} className={mode === m ? "on" : ""} onClick={() => setMode(m)}>
             {m}
           </button>
         ))}
       </div>
-      <p class="muted small">
+      <p className="muted small">
         {mode === "discussion" ? "Each member sees earlier replies in this turn." : "Every member answers the message independently."}
       </p>
       <label>Members</label>
       <MemberPicker personas={personas} value={members} onChange={setMembers} />
       <label>Reply order and roles</label>
-      <div class="order">
+      <div className="order">
         {effectiveOrder.map((m, i) => (
-          <div class="order-row" key={m}>
-            <span class="step">{i + 1}</span>
+          <div className="order-row" key={m}>
+            <span className="step">{i + 1}</span>
             <Avatar name={m} />
-            <span class="grow">{m}</span>
+            <span className="grow">{m}</span>
             <input
-              class="small-input"
+              className="small-input"
               placeholder="Role in this group"
               value={roles[m] ?? ""}
-              onInput={(e) => setRoles({ ...roles, [m]: (e.target as HTMLInputElement).value })}
+              onChange={(e) => setRoles({ ...roles, [m]: (e.target as HTMLInputElement).value })}
             />
-            <button class="ghost icon" disabled={i === 0} onClick={() => move(i, -1)}>
+            <button className="ghost icon" disabled={i === 0} onClick={() => move(i, -1)}>
               ↑
             </button>
-            <button class="ghost icon" disabled={i === effectiveOrder.length - 1} onClick={() => move(i, 1)}>
+            <button className="ghost icon" disabled={i === effectiveOrder.length - 1} onClick={() => move(i, 1)}>
               ↓
             </button>
           </div>
         ))}
       </div>
       <ErrorNote error={action.error} />
-      <div class="row">
-        <button class="primary" disabled={action.busy || !members.length} onClick={save}>
+      <div className="row">
+        <button className="primary" disabled={action.busy || !members.length} onClick={save}>
           Save
         </button>
-        <button class="ghost" onClick={() => setEditing(false)}>
+        <button className="ghost" onClick={() => setEditing(false)}>
           Cancel
         </button>
       </div>
