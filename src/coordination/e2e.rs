@@ -433,7 +433,7 @@ async fn one_submission_reaches_a_reviewed_integrated_result_without_manual_rout
     let messages = fixture
         .core
         .coordination()
-        .messages(&root, None, None, 50)
+        .messages(&root, None, None, None, 50)
         .unwrap();
     let handoff = messages
         .iter()

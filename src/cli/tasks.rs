@@ -134,6 +134,23 @@ pub(super) async fn task_command(
             print_detail(&service.detail(&id).map_err(|e| anyhow::anyhow!("{e}"))?);
             Ok(())
         }
+        TaskCommand::Messages { root, thread } => {
+            for (m, _) in service
+                .messages(&root, None, thread.as_deref(), None, 200)
+                .map_err(|e| anyhow::anyhow!("{e}"))?
+            {
+                println!(
+                    "{} [{}] thread={} {} -> {}: {}",
+                    m.id,
+                    m.kind.as_str(),
+                    m.thread,
+                    m.sender,
+                    m.recipients.join(","),
+                    m.body.lines().next().unwrap_or("")
+                );
+            }
+            Ok(())
+        }
         TaskCommand::Cancel { id } => {
             print_detail(
                 &service

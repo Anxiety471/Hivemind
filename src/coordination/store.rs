@@ -929,14 +929,15 @@ impl Db<'_> {
         &self,
         root: &str,
         task: Option<&str>,
+        thread: Option<&str>,
         after: Option<&str>,
         limit: usize,
     ) -> CoordResult<Vec<Message>> {
-        let sql = format!("SELECT {MESSAGE_COLS} FROM agent_messages WHERE root_id=?1 AND (?2 IS NULL OR task_id=?2) AND (?3 IS NULL OR id>?3) ORDER BY id LIMIT {}", limit.clamp(1, 200));
+        let sql = format!("SELECT {MESSAGE_COLS} FROM agent_messages WHERE root_id=?1 AND (?2 IS NULL OR task_id=?2) AND (?3 IS NULL OR thread=?3) AND (?4 IS NULL OR id>?4) ORDER BY id LIMIT {}", limit.clamp(1, 200));
         Ok(self
             .c
             .prepare_cached(&sql)?
-            .query_map(params![root, task, after], message_row)?
+            .query_map(params![root, task, thread, after], message_row)?
             .collect::<rusqlite::Result<_>>()?)
     }
 
