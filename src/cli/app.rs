@@ -31,7 +31,9 @@ async fn run(cli: Cli) -> Result<()> {
             println!("Created {}", cli.config.display());
             Ok(())
         }
+        Some(Commands::Update { check }) => super::update::update(check),
         Some(Commands::Serve { port }) => {
+            super::update::spawn_update_notice();
             let config = HivemindConfig::load(&cli.config)?;
             let core = Arc::new(HivemindCore::new(config, &cli.config)?);
             let result = api::serve(core.clone(), port).await;
@@ -50,6 +52,7 @@ async fn run(cli: Cli) -> Result<()> {
                     unreachable!("serve is handled before CLI config loading")
                 }
                 Commands::Chat { solo, group } => {
+                    super::update::spawn_update_notice();
                     let route = if let Some(name) = solo {
                         Route::Solo(name)
                     } else if let Some(name) = group {
@@ -75,7 +78,7 @@ async fn run(cli: Cli) -> Result<()> {
                 Commands::Group { command } => {
                     group_command(&mut config, &cli.config, None, command)
                 }
-                Commands::Init { .. } => unreachable!(),
+                Commands::Init { .. } | Commands::Update { .. } => unreachable!(),
                 Commands::Task { command } => {
                     super::tasks::task_command(config, &cli.config, command).await
                 }
@@ -85,6 +88,7 @@ async fn run(cli: Cli) -> Result<()> {
             }
         }
         None => {
+            super::update::spawn_update_notice();
             let mut config = HivemindConfig::load(&cli.config)?;
             chat(&mut config, &cli.config, Route::Main).await
         }
@@ -322,7 +326,7 @@ printf '%s stopped\n' "$agent" >> __LOG__
         cmd.write_long_help(&mut b).unwrap();
         let s = String::from_utf8(b).unwrap();
         for word in [
-            "init", "doctor", "chat", "agents", "status", "order", "ask", "all", "group",
+            "init", "doctor", "update", "chat", "agents", "status", "order", "ask", "all", "group",
         ] {
             assert!(s.contains(word));
         }
@@ -349,6 +353,8 @@ printf '%s stopped\n' "$agent" >> __LOG__
             &["hivemind", "init"],
             &["hivemind", "init", "--force"],
             &["hivemind", "doctor"],
+            &["hivemind", "update"],
+            &["hivemind", "update", "--check"],
             &["hivemind", "chat"],
             &["hivemind", "chat", "--solo", "Reviewer"],
             &["hivemind", "chat", "--group", "backend"],
