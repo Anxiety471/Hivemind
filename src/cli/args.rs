@@ -24,6 +24,12 @@ pub(super) enum Commands {
     },
     /// Check local configuration and runtime executables.
     Doctor,
+    /// Check for and install the latest GitHub release.
+    Update {
+        /// Only report whether a newer release exists.
+        #[arg(long)]
+        check: bool,
+    },
     /// Start an interactive conversation.
     Chat {
         #[arg(long, conflicts_with = "group")]

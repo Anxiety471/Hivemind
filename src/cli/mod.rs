@@ -5,6 +5,7 @@ mod groups;
 mod render;
 mod shell;
 mod tasks;
+mod update;
 
 pub(super) async fn entry() {
     app::entry().await;

@@ -60,6 +60,14 @@ hivemind                 # starts interactive chat
 
 The installer downloads the prebuilt binary from the latest GitHub Release, verifies its SHA-256 checksum, and installs it to `~/.local/bin/hivemind` by default. Override that location with `HIVEMIND_INSTALL_DIR`.
 
+Update an installed binary with:
+
+```bash
+hivemind update
+```
+
+Use `hivemind update --check` to check without installing. Interactive chat and `serve` also perform a best-effort background release check and print a notice when a newer version exists. Set `HIVEMIND_NO_UPDATE_CHECK=1` to disable that notice. Updates are never installed automatically.
+
 Take a look at `hivemind.toml`. The starter config uses **Pi for both example agents**, so you only need Pi unless you change an agent's `runtime`. Set up a provider/model inside the runtime before starting chat.
 
 ### Build from source
@@ -100,6 +108,7 @@ The shell CLI is the main way to inspect Hivemind, run one-shot prompts, and man
 | --- | --- |
 | `hivemind init [--force]` | Create a starter configuration |
 | `hivemind doctor` | Check local configuration and runtime executables |
+| `hivemind update [--check]` | Check for or install the latest GitHub release |
 | `hivemind chat` | Start interactive chat in the `main` room |
 | `hivemind chat --solo <persona>` | Chat with one persona |
 | `hivemind chat --group <name>` | Chat in a persisted group |
