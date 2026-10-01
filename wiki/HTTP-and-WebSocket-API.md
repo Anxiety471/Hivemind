@@ -25,6 +25,8 @@ Building the server and serving health, info, and agent listings never starts Pi
 | `GET` | `/api/v1/agents/{id}`, `/api/v1/agent-instances` | Capabilities and derived activity (never starts a runtime) |
 | `GET` / `POST` | `/api/v1/messages`, `/api/v1/groups`, `/api/v1/groups/{id}` | Agent/operator messages and dynamic task groups |
 | `GET` / `POST` / `PATCH` / `DELETE` | `/api/v1/chat-groups`, `/api/v1/chat-groups/{id}` | Configured chat groups (`group-<id>` rooms): create with `{"id","members"}`, edit `members`, `mode`, `member_roles`, `reply_order`, delete (`204`). Changes are written to the config file and apply immediately. Unrelated to the task groups under `/api/v1/groups` |
+| `GET` | `/api/v1/rooms/{id}/runtime-sessions?limit=` | Runtime sessions (epochs) per agent in a room: runtime, start/end, end reason, and whether the end was a rotation. `ended_at: null` means still open |
+| `POST` | `/api/v1/runtime/rotate` | `{"agent_instance_id"}`: stop that agent's live session so its next prompt starts fresh (`202`; watch `runtime.rotated`) |
 | `GET` | `/api/v1/workspaces` | Allowed roots, each group's shared workspace, and each persona's own workspace |
 | `PUT` / `DELETE` | `/api/v1/workspaces/groups/{id}` | Set (`{"path"}`) or clear a group's shared workspace; returns the new snapshot |
 | `PUT` | `/api/v1/workspaces/personas/{id}` | Change a persona's own workspace |
@@ -88,6 +90,14 @@ websocat ws://127.0.0.1:7474/api/v1/ws        # or: npx wscat -c ws://127.0.0.1:
 ```
 
 Unsupported or malformed messages get a `system.error` frame, and the connection stays open when possible.
+
+### Subscribing to rooms
+
+By default a connection receives every event. Send `{"type":"events.subscribe","id":"s1","payload":{"room_ids":["main","group-dev"]}}` to limit room-scoped events (conversation, replies, `thread.created` for the parent room) to those rooms; the server answers `events.subscribed`. A thread is its own room, so list its id too. An empty list restores the full stream. Runtime and coordination events are not room-scoped and always arrive.
+
+### Browser access (CORS)
+
+Pages served from `localhost`, `127.0.0.1` or `[::1]` (any port) may call the API from a browser, including preflight requests. Other origins get no CORS headers, because the API has no authentication.
 
 ### Streamed events
 

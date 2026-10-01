@@ -28,11 +28,13 @@ pub(super) fn router(core: Arc<HivemindCore>, shutdown: watch::Receiver<bool>) -
         .merge(super::rooms::routes())
         .merge(super::chat_groups::routes())
         .merge(super::workspaces::routes())
+        .merge(super::runtime::routes())
         .route("/api/v1/agents", get(agents))
         .route("/api/v1/turns", post(submit_turn))
         .route("/api/v1/ws", get(ws))
         .fallback(not_found)
         .method_not_allowed_fallback(method_not_allowed)
+        .layer(axum::middleware::from_fn(super::cors::layer))
         .with_state(state)
 }
 
@@ -1326,6 +1328,131 @@ done
 
         let _ = shutdown.send(true);
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn websocket_room_subscription_filters_room_scoped_events() {
+        let (address, shutdown, server, test_core) = websocket_server().await;
+        let (mut socket, _) = connect_async(&format!("ws://{address}/api/v1/ws"))
+            .await
+            .unwrap();
+        assert_eq!(receive_json(&mut socket).await["type"], "system.ready");
+        socket
+            .send(Message::Text(
+                json!({"type":"events.subscribe","id":"s1","payload":{"room_ids":["a"]}})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+        let ack = receive_json(&mut socket).await;
+        assert_eq!(
+            (ack["type"].as_str(), ack["id"].as_str()),
+            (Some("events.subscribed"), Some("s1"))
+        );
+        for room in ["b", "a"] {
+            test_core
+                .core
+                .events()
+                .publish(crate::events::DomainEventKind::TurnStarted {
+                    room_id: room.into(),
+                    turn_id: format!("turn-{room}"),
+                });
+        }
+        let event = receive_json(&mut socket).await;
+        assert_eq!(event["type"], "conversation.turn.started");
+        assert_eq!(event["payload"]["room_id"], "a");
+        socket
+            .send(Message::Text(
+                json!({"type":"events.subscribe","payload":{"room_ids":"bad"}})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            receive_json(&mut socket).await["payload"]["code"],
+            "invalid_subscription"
+        );
+        let _ = shutdown.send(true);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn cors_allows_only_loopback_origins_and_answers_preflight() {
+        let test_core = TestCore::new();
+        let app = router(test_core.core.clone(), watch::channel(false).1);
+        let call = |method: &'static str, origin: &'static str| {
+            let app = app.clone();
+            async move {
+                app.oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri("/api/v1/rooms")
+                        .header("origin", origin)
+                        .header("access-control-request-method", "POST")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+            }
+        };
+        let preflight = call("OPTIONS", "http://localhost:5173").await;
+        assert_eq!(preflight.status(), StatusCode::NO_CONTENT);
+        assert_eq!(
+            preflight.headers()["access-control-allow-origin"],
+            "http://localhost:5173"
+        );
+        assert!(preflight.headers()["access-control-allow-methods"]
+            .to_str()
+            .unwrap()
+            .contains("PATCH"));
+        let normal = call("GET", "http://127.0.0.1:3000").await;
+        assert_eq!(
+            normal.headers()["access-control-allow-origin"],
+            "http://127.0.0.1:3000"
+        );
+        let foreign = call("GET", "https://evil.example").await;
+        assert!(foreign
+            .headers()
+            .get("access-control-allow-origin")
+            .is_none());
+        let tricky = call("GET", "http://localhost.evil.example").await;
+        assert!(tricky
+            .headers()
+            .get("access-control-allow-origin")
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn runtime_sessions_list_and_rotate_validate_input() {
+        let test_core = TestCore::new();
+        let app = router(test_core.core.clone(), watch::channel(false).1);
+        let (status, _, body) =
+            request(app.clone(), "GET", "/api/v1/rooms/main/runtime-sessions").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["sessions"].as_array().unwrap().is_empty());
+        let id = AgentInstanceId::new("main", "Engineer").encode();
+        let (status, body) = request_json(
+            app.clone(),
+            "POST",
+            "/api/v1/runtime/rotate",
+            json!({"agent_instance_id": id}),
+        )
+        .await;
+        assert_eq!(
+            (status, body["accepted"].as_bool()),
+            (StatusCode::ACCEPTED, Some(true))
+        );
+        let (status, _) = request_json(
+            app,
+            "POST",
+            "/api/v1/runtime/rotate",
+            json!({"agent_instance_id":"junk"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]

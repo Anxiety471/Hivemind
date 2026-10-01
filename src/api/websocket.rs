@@ -2,6 +2,7 @@ use axum::extract::ws::{close_code, CloseFrame, Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::json;
 use std::{
+    collections::HashSet,
     sync::Arc,
     time::{Duration, UNIX_EPOCH},
 };
@@ -19,6 +20,8 @@ pub(super) async fn handle(
     mut shutdown: watch::Receiver<bool>,
 ) {
     let mut events = core.events().subscribe();
+    // `None` delivers every event; `Some` limits room-scoped events to those rooms.
+    let mut rooms: Option<HashSet<String>> = None;
     if send(
         &mut socket,
         Outbound::event(
@@ -40,14 +43,14 @@ pub(super) async fn handle(
         tokio::select! {
             changed = shutdown.changed() => {
                 if changed.is_err() || *shutdown.borrow() {
-                    drain_queued(&mut socket, &mut events).await;
+                    drain_queued(&mut socket, &mut events, &rooms).await;
                     close(&mut socket, None).await;
                     break;
                 }
             }
             event = events.recv() => match event {
                 Ok(event) => {
-                    if send_batch(&mut socket, &mut events, &event).await.is_err() { break; }
+                    if send_batch(&mut socket, &mut events, &event, &rooms).await.is_err() { break; }
                 }
                 Err(broadcast::error::RecvError::Lagged(missed)) => {
                     let message = Outbound::event(
@@ -65,6 +68,7 @@ pub(super) async fn handle(
             message = socket.next() => match message {
                 Some(Ok(Message::Text(text))) => {
                     let response = match serde_json::from_str::<Envelope>(text.as_str()) {
+                        Ok(envelope) if envelope.r#type == "events.subscribe" => subscribe(envelope, &mut rooms),
                         Ok(envelope) => process(envelope),
                         Err(_) => Outbound::event("system.error", None, json!({
                             "code": "malformed_message",
@@ -204,6 +208,48 @@ fn map_event(event: &DomainEvent) -> Option<Outbound> {
     public_payload["event_version"] = json!(1);
     Some(Outbound::event(event_type, None, public_payload))
 }
+/// `{"room_ids": [...]}` limits room-scoped events (conversation, replies, threads) to those
+/// rooms; an empty or missing list restores the full stream. Runtime and coordination events
+/// are not room-scoped and always arrive.
+fn subscribe(envelope: Envelope, rooms: &mut Option<HashSet<String>>) -> Outbound {
+    let ids: Option<Vec<String>> = match envelope.payload.get("room_ids") {
+        None | Some(serde_json::Value::Null) => Some(Vec::new()),
+        Some(value) => serde_json::from_value(value.clone()).ok(),
+    };
+    let Some(ids) = ids.filter(|ids| ids.len() <= 256) else {
+        return Outbound::event(
+            "system.error",
+            envelope.id,
+            json!({"code": "invalid_subscription", "message": "room_ids must be a list of at most 256 strings"}),
+        );
+    };
+    *rooms = (!ids.is_empty()).then(|| ids.iter().cloned().collect());
+    Outbound::event("events.subscribed", envelope.id, json!({"room_ids": ids}))
+}
+
+/// The room a conversation-level event belongs to; `None` for events that are not room-scoped.
+fn event_room(event: &DomainEvent) -> Option<&str> {
+    match &event.payload {
+        DomainEventKind::ThreadCreated { parent_room_id, .. } => Some(parent_room_id),
+        DomainEventKind::TurnStarted { room_id, .. }
+        | DomainEventKind::TurnCompleted { room_id, .. }
+        | DomainEventKind::AgentReplyStarted { room_id, .. }
+        | DomainEventKind::AgentReplyCompleted { room_id, .. }
+        | DomainEventKind::AgentReplyFailed { room_id, .. } => Some(room_id),
+        _ => None,
+    }
+}
+
+fn wanted(event: &DomainEvent, rooms: &Option<HashSet<String>>) -> bool {
+    match (rooms, event_room(event)) {
+        (Some(rooms), Some(room)) => {
+            rooms.contains(room)
+                || matches!(&event.payload, DomainEventKind::ThreadCreated { thread_id, .. } if rooms.contains(thread_id))
+        }
+        _ => true,
+    }
+}
+
 fn process(envelope: Envelope) -> Outbound {
     let _payload = envelope.payload;
     match envelope.r#type.as_str() {
@@ -241,7 +287,14 @@ fn lagged(missed: u64) -> Outbound {
 }
 
 /// Queue `event` without flushing; events with no public frame queue nothing.
-async fn feed_event(socket: &mut WebSocket, event: &DomainEvent) -> Result<(), axum::Error> {
+async fn feed_event(
+    socket: &mut WebSocket,
+    event: &DomainEvent,
+    rooms: &Option<HashSet<String>>,
+) -> Result<(), axum::Error> {
+    if !wanted(event, rooms) {
+        return Ok(());
+    }
     match event.frame_with(|event| map_event(event).map(|message| encode(&message))) {
         Some(text) => socket.feed(Message::Text(text.into())).await,
         None => Ok(()),
@@ -255,13 +308,14 @@ async fn send_batch(
     socket: &mut WebSocket,
     events: &mut broadcast::Receiver<Arc<DomainEvent>>,
     first: &DomainEvent,
+    rooms: &Option<HashSet<String>>,
 ) -> Result<(), axum::Error> {
     const MAX_BATCH: usize = 32;
-    feed_event(socket, first).await?;
+    feed_event(socket, first, rooms).await?;
     tokio::time::sleep(Duration::from_millis(1)).await;
     for _ in 0..MAX_BATCH {
         match events.try_recv() {
-            Ok(event) => feed_event(socket, &event).await?,
+            Ok(event) => feed_event(socket, &event, rooms).await?,
             Err(broadcast::error::TryRecvError::Lagged(missed)) => {
                 socket
                     .feed(Message::Text(encode(&lagged(missed)).into()))
@@ -274,7 +328,14 @@ async fn send_batch(
 }
 
 /// Domain events are encoded once and the same frame text is reused for every client.
-async fn send_event(socket: &mut WebSocket, event: &DomainEvent) -> Result<(), axum::Error> {
+async fn send_event(
+    socket: &mut WebSocket,
+    event: &DomainEvent,
+    rooms: &Option<HashSet<String>>,
+) -> Result<(), axum::Error> {
+    if !wanted(event, rooms) {
+        return Ok(());
+    }
     match event.frame_with(|event| map_event(event).map(|message| encode(&message))) {
         Some(text) => socket.send(Message::Text(text.into())).await,
         None => Ok(()),
@@ -284,13 +345,17 @@ async fn send_event(socket: &mut WebSocket, event: &DomainEvent) -> Result<(), a
 /// Frames already queued for this client are flushed before the close so
 /// shutdown lifecycle events are not lost. Bounded by frame count and time;
 /// nothing is replayed or buffered beyond what the receiver already holds.
-async fn drain_queued(socket: &mut WebSocket, events: &mut broadcast::Receiver<Arc<DomainEvent>>) {
+async fn drain_queued(
+    socket: &mut WebSocket,
+    events: &mut broadcast::Receiver<Arc<DomainEvent>>,
+    rooms: &Option<HashSet<String>>,
+) {
     const MAX_FRAMES: usize = 64;
     let flush = async {
         for _ in 0..MAX_FRAMES {
             match events.try_recv() {
                 Ok(event) => {
-                    if send_event(socket, &event).await.is_err() {
+                    if send_event(socket, &event, rooms).await.is_err() {
                         return;
                     }
                 }
