@@ -248,6 +248,10 @@ pub struct RuntimeEpoch {
     pub runtime: String,
     pub started_at: i64,
     pub ended_at: Option<i64>,
+    /// Why the session ended: a runtime stop reason such as `context_budget`
+    /// or `idle_timeout`. `None` while open or for epochs closed before
+    /// reasons were recorded.
+    pub end_reason: Option<String>,
     pub metadata: serde_json::Value,
 }
 

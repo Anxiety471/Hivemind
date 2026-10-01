@@ -93,6 +93,20 @@ enum Stop {
     CoreShutdown,
 }
 
+/// Stop reasons that are not rotations; every other recorded epoch end
+/// reason names why a live session was rotated.
+const NON_ROTATION_STOPS: [&str; 4] = [
+    "runtime_failure",
+    "prompt_timeout",
+    "idle_timeout",
+    "core_shutdown",
+];
+
+/// Whether a recorded runtime epoch `end_reason` is a session rotation.
+pub fn is_rotation(end_reason: &str) -> bool {
+    !NON_ROTATION_STOPS.contains(&end_reason)
+}
+
 impl Stop {
     fn reason_code(&self) -> &'static str {
         match self {
@@ -584,10 +598,12 @@ impl PoolInner {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs() as i64;
-        if let Err(error) = self
-            .memory
-            .end_runtime_epoch(&live.caller, &live.epoch.id, ended_at)
-        {
+        if let Err(error) = self.memory.end_runtime_epoch(
+            &live.caller,
+            &live.epoch.id,
+            ended_at,
+            reason.reason_code(),
+        ) {
             eprintln!(
                 "warning: failed to close runtime epoch for '{}': {error:#}",
                 agent_instance_id.encode()
@@ -669,10 +685,12 @@ impl Drop for PoolInner {
             let Some(live) = slot.live.take() else {
                 continue;
             };
-            if let Err(error) =
-                self.memory
-                    .end_runtime_epoch(&live.caller, &live.epoch.id, ended_at)
-            {
+            if let Err(error) = self.memory.end_runtime_epoch(
+                &live.caller,
+                &live.epoch.id,
+                ended_at,
+                "core_shutdown",
+            ) {
                 eprintln!(
                     "warning: failed to close runtime epoch for '{}': {error:#}",
                     agent_instance_id.encode()

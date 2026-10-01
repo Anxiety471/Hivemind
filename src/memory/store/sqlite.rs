@@ -238,7 +238,8 @@ impl MemoryStore {
               group_id TEXT PRIMARY KEY, state_json TEXT NOT NULL, updated_at INTEGER NOT NULL, updated_by TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS runtime_epochs (
               id TEXT PRIMARY KEY, room_id TEXT NOT NULL REFERENCES rooms(id), instance_id TEXT NOT NULL,
-              identity_version INTEGER NOT NULL DEFAULT 0, runtime TEXT NOT NULL, started_at INTEGER NOT NULL, ended_at INTEGER, metadata_json TEXT NOT NULL);
+              identity_version INTEGER NOT NULL DEFAULT 0, runtime TEXT NOT NULL, started_at INTEGER NOT NULL, ended_at INTEGER, metadata_json TEXT NOT NULL,
+              end_reason TEXT);
             CREATE TABLE IF NOT EXISTS memory_revisions (
               revision_id TEXT PRIMARY KEY, memory_id TEXT NOT NULL REFERENCES memories(id), content TEXT NOT NULL,
               provenance_json TEXT NOT NULL, created_at INTEGER NOT NULL, actor TEXT);
@@ -257,6 +258,9 @@ impl MemoryStore {
                 "ALTER TABLE runtime_epochs ADD COLUMN identity_version INTEGER NOT NULL DEFAULT 0",
                 [],
             )?;
+        }
+        if !has_column("runtime_epochs", "end_reason")? {
+            connection.execute("ALTER TABLE runtime_epochs ADD COLUMN end_reason TEXT", [])?;
         }
         if !has_column("memories", "topic_key")? {
             connection.execute("ALTER TABLE memories ADD COLUMN topic_key TEXT", [])?;

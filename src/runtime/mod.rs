@@ -8,7 +8,8 @@ use async_trait::async_trait;
 use crate::config::{AgentConfig, RuntimeConfig};
 
 pub use pool::{
-    InvokeReply, InvokeRequest, PromptDelta, PromptPhase, RuntimePool, SessionCursor, TurnView,
+    is_rotation, InvokeReply, InvokeRequest, PromptDelta, PromptPhase, RuntimePool, SessionCursor,
+    TurnView,
 };
 
 /// A runtime-agnostic live session bound to one agent instance. Hivemind's

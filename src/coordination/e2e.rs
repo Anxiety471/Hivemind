@@ -492,6 +492,15 @@ async fn one_submission_reaches_a_reviewed_integrated_result_without_manual_rout
         .is_some_and(
             |m| m["total_bytes"].as_u64().unwrap() <= m["budget_bytes"].as_u64().unwrap()
         )));
+    // Every attempt that got a reply records the runtime epoch that served it.
+    let succeeded: Vec<_> = attempts
+        .iter()
+        .filter(|a| a.state == AttemptState::Succeeded)
+        .collect();
+    assert!(!succeeded.is_empty());
+    assert!(succeeded
+        .iter()
+        .all(|a| a.runtime_epoch.as_deref() == Some("fake")));
 }
 
 #[tokio::test(flavor = "multi_thread")]

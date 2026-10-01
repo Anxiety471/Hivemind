@@ -744,6 +744,13 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
                 .count(),
             1
         );
+        let rotated_epoch = epochs.iter().find(|epoch| epoch.ended_at.is_some());
+        assert_eq!(
+            rotated_epoch.and_then(|epoch| epoch.end_reason.as_deref()),
+            Some("context_budget")
+        );
+        assert!(crate::runtime::is_rotation("context_budget"));
+        assert!(!crate::runtime::is_rotation("idle_timeout"));
         core.shutdown().await;
     }
 
@@ -815,6 +822,7 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
             .unwrap();
         assert_eq!(epochs.len(), 1);
         assert!(epochs[0].ended_at.is_some());
+        assert_eq!(epochs[0].end_reason.as_deref(), Some("prompt_timeout"));
 
         let mut failed = Vec::new();
         let mut stopped = Vec::new();

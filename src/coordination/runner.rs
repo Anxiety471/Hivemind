@@ -9,6 +9,7 @@ use std::{
 };
 
 use anyhow::Result;
+use async_trait::async_trait;
 use parking_lot::Mutex;
 use tokio::task::{AbortHandle, Id, JoinSet};
 
@@ -23,7 +24,33 @@ use crate::{
     conversation::{AgentInvoker, Participant},
     core::{HivemindCore, ResolvedConversationTarget},
     identity::AgentInstanceId,
+    runtime::{InvokeReply, InvokeRequest, SessionCursor},
 };
+
+/// Delegating invoker that records the runtime epoch of each reply on its
+/// attempt as it arrives. Recording per reply, not after the turn, keeps the
+/// epoch for attempts the scheduler cancels mid-turn (a review that approves
+/// completes its task and ends the attempt before the turn returns).
+struct EpochRecorder {
+    inner: Arc<dyn AgentInvoker>,
+    service: Arc<CoordinationService>,
+    attempt_id: String,
+}
+
+#[async_trait]
+impl AgentInvoker for EpochRecorder {
+    async fn cursor(&self, agent_instance_id: &AgentInstanceId) -> Option<SessionCursor> {
+        self.inner.cursor(agent_instance_id).await
+    }
+
+    async fn invoke(&self, request: InvokeRequest<'_>) -> Result<InvokeReply> {
+        let reply = self.inner.invoke(request).await?;
+        let _ = self
+            .service
+            .record_attempt_epoch(&self.attempt_id, &reply.epoch_id);
+        Ok(reply)
+    }
+}
 
 struct Running {
     abort: AbortHandle,
@@ -396,9 +423,13 @@ async fn execute(
             role: Some(role.into()),
         }],
     };
-    let invoker = invoker.unwrap_or_else(|| core.runtime_invoker(&room, ""));
+    let recorder = Arc::new(EpochRecorder {
+        inner: invoker.unwrap_or_else(|| core.runtime_invoker(&room, "")),
+        service: service.clone(),
+        attempt_id: attempt.id.clone(),
+    });
     let message = format!("{}{notes}", prompt.text);
-    let outcome = core.send_resolved_turn(&target, &message, invoker).await;
+    let outcome = core.send_resolved_turn(&target, &message, recorder).await;
     let mut end = match outcome {
         Ok(execution) => match execution.replies.into_iter().next() {
             Some(reply) => match reply.result {
