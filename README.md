@@ -116,11 +116,12 @@ conversation:
 /group remove backend Maomao
 /group delete backend
 /tasks
+/task task-6abe3a71-1
 /quit
 /exit
 ~~~
 
-`/tasks` lists the task threads started during this chat session (see
+`/tasks` lists task threads and `/task <id>` replies inside one (see
 [Read-only chat and task threads](#read-only-chat-and-task-threads)). `/ask` and `/all` leave the active route unchanged. `/ask` writes to the selected
 persona's solo room; `/all` writes to the `main` room, so neither silently
 continues the active group's history. `/exit` aliases `/quit`.
@@ -225,18 +226,41 @@ anything, an agent hands the work to a **task thread** with Hivemind's
 1. returns a task id to the agent immediately, so the chat turn is never held
    up and the agent's only job is to tell you what it handed off;
 2. runs the work in its own room, `task/<id>`, with a worker session that has
-   full tools and the persona's configured workspace. The worker sees only the
-   brief — not the originating conversation — and cannot delegate further;
+   full tools. **The worker always runs in the delegating persona's
+   workspace**, even when it is a different persona. It sees only the brief —
+   not the originating conversation — and cannot delegate further;
 3. when the worker finishes, posts its bounded final report (or the failure)
    into the room that asked, as its own turn, so every persona sees it in its
-   next context. In `chat` the report is also printed as it arrives, and
-   `/tasks` lists them.
+   next context. In `chat` the report is also printed as it arrives.
 
-Task state is process-local: the thread's transcript and the posted report are
-durable in the room archive, but a task still running when the core shuts down
-is cancelled and not resumed. Shell `ask`/`all` wait for their handed-off tasks
-before exiting (Ctrl-C cancels them). `[tasks] max_concurrent` (default 4)
-caps how many threads may run at once.
+**Retries belong to the persona.** When a task fails, Hivemind wakes the
+persona that asked with a notice in the room it asked from (recorded as speaker
+`hivemind`, with the worker's text quoted line by line so it can never act as a
+`Goal:`/`Global:` directive). The persona then decides: retry with a new
+`task.delegate` that sets `"retry_of":"<task id>"` and a better brief, or
+explain the failure to you. Hivemind never retries on its own. Only the
+requesting persona, in the same room, may retry a failed or cancelled task, once
+per task, and `[tasks] max_attempts` (default 3) bounds the whole chain; a
+failure on the last attempt goes to you without waking the persona.
+
+**Threads are yours to use.** Every task thread is a normal room you can enter
+and reply in; the worker answers with full tools in the same workspace:
+
+~~~bash
+hivemind tasks                  # list threads, newest last
+hivemind chat --task <id>       # talk to that worker directly
+~~~
+
+Inside `chat`, `/tasks` lists threads and `/task <id>` switches into one
+(`/main`, `/solo`, or `/group use` leaves it). If the worker is still busy your
+message waits its turn.
+
+Task records are durable JSON files in `.hivemind/tasks`, and thread
+transcripts live in the room archive, so threads survive restarts. A task
+still running when its process exits is cancelled and shown as *interrupted*;
+it is not resumed. Shell `ask`/`all` wait for the tasks (and persona
+follow-ups) they started before exiting (Ctrl-C cancels them).
+`[tasks] max_concurrent` (default 4) caps how many threads may run at once.
 
 ## Application core and event stream
 
@@ -272,7 +296,7 @@ The WebSocket stream forwards these events as `conversation.turn.started`,
 `conversation.turn.completed`, `agent.reply.started`, `agent.reply.completed`,
 `agent.reply.failed`, `runtime.started`, `runtime.stopped`,
 `runtime.rotated`, `runtime.failed`, `task.started`, `task.completed`,
-`task.failed`, and `task.cancelled`. A subscriber that falls behind the bounded buffer receives
+`task.failed`, `task.followup`, and `task.cancelled`. A subscriber that falls behind the bounded buffer receives
 `system.events_lagged` with `missed_count` and `refresh_required: true`
 instead of the dropped events.
 
@@ -440,15 +464,23 @@ Expected JSON response:
 }
 ~~~
 
-#### Task threads (`GET /api/v1/tasks`)
+#### Task threads (`GET /api/v1/tasks`, `GET /api/v1/tasks/{id}`)
 
-Lists task threads started by this core with safe metadata only (`id`,
-`room_id`, `thread_room_id`, `requested_by`, `worker`, `status`). Briefs and
-worker reports stay in the rooms.
+The list returns every recorded task thread, oldest first, with its full
+`brief`, the worker's `report` (or failure reason), `status`
+(`running`, `completed`, `failed`, `cancelled`), `attempt`, `retry_of`, the
+requesting persona's `followup` reply after a failure, `room_id`,
+`thread_room_id`, `requested_by`, `worker`, and `created_at_ms`. The single-task
+endpoint adds `messages`, the thread's transcript. Workspace paths and process
+ids are never included. An unknown or malformed id returns `404`.
 
 ~~~bash
 curl http://127.0.0.1:7474/api/v1/tasks
+curl http://127.0.0.1:7474/api/v1/tasks/task-6abe3a71-1
 ~~~
+
+Replying in a thread is done from the CLI for now; the API does not route chat
+turns yet.
 
 ### WebSocket interface
 
@@ -553,7 +585,8 @@ Hivemind is intentionally focused on core harness and interface foundations:
 - If a runtime process fails mid-turn, Hivemind reports an agent-attributed error rather than pretending the failed conversation continued.
 - Memory search is SQLite FTS5 full-text matching, not semantic/embedding search; no vector database is used.
 - Responses are collected after each turn rather than streamed token-by-token.
-- Agent-to-agent messaging is not implemented; task handoff is one level deep (workers cannot delegate) and its registry is not persisted across restarts.
+- Agent-to-agent messaging is not implemented; task handoff is one level deep (workers cannot delegate), and an interrupted task is reported, not resumed. A persona woken by a failure sees a roster of only itself, not the whole group.
+- Replying in a task thread is CLI-only; the HTTP API reads threads but does not send turns.
 - The read-only tool allowlists for Pi and OMP are taken from their documented `--tools` flags; they have not been exercised against the real binaries in CI.
 
 Runtime sessions live for as long as the core that started them: `ask`/`all`

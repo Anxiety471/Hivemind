@@ -23,6 +23,8 @@ mode = "deterministic"
 [tasks]
 # Chat agents are read-only; they hand edits to a task thread. Threads that may run at once.
 max_concurrent = 4
+# Attempts per piece of work: the first handoff plus persona-initiated retries.
+max_attempts = 3
 
 [[personas]]
 id = "Maomao"

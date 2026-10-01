@@ -16,7 +16,7 @@ use crate::{
     events::{DomainEventKind, EventBus},
     memory::MemoryService,
     runtime::RuntimePool,
-    tasks::TaskService,
+    tasks::{TaskOrigin, TaskService},
 };
 
 /// Process-level owner of configuration, memory, conversations, events, and API state.
@@ -93,6 +93,7 @@ impl HivemindCore {
             conversation.clone(),
             runtime.clone(),
             events.clone(),
+            data_dir.join("tasks"),
         );
         events.publish(DomainEventKind::CoreStarted);
         Ok(Self {
@@ -134,7 +135,11 @@ impl HivemindCore {
     pub async fn turn(&self, request: CoreTurnRequest<'_>) -> Result<Vec<TurnReply>> {
         let invoker = Arc::new(
             RuntimeInvoker::new(self.runtime.clone(), request.room, request.group_id)
-                .with_delegator(Arc::new(self.tasks.clone())),
+                .with_delegator(self.tasks.bind(TaskOrigin {
+                    room_name: request.room_name.to_owned(),
+                    group_id: request.group_id.to_owned(),
+                    members: request.members.to_vec(),
+                })),
         );
         self.turn_with_invoker(request, invoker).await
     }

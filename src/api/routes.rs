@@ -1,5 +1,5 @@
 use axum::{
-    extract::{ws::WebSocketUpgrade, State},
+    extract::{ws::WebSocketUpgrade, Path, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::get,
@@ -26,6 +26,7 @@ pub(super) fn router(core: Arc<HivemindCore>, shutdown: watch::Receiver<bool>) -
         .route("/api/v1/info", get(info))
         .route("/api/v1/agents", get(agents))
         .route("/api/v1/tasks", get(tasks))
+        .route("/api/v1/tasks/{id}", get(task_detail))
         .route("/api/v1/ws", get(ws))
         .fallback(not_found)
         .method_not_allowed_fallback(method_not_allowed)
@@ -87,38 +88,100 @@ async fn agents(State(state): State<ApiState>) -> Json<Agents> {
     Json(Agents { agents })
 }
 
+/// A task thread as clients see it. The brief and the worker's report are
+/// included; workspace paths and process ids are not.
 #[derive(Serialize)]
-struct TaskMetadata {
+struct TaskView {
     id: String,
     room_id: String,
     thread_room_id: String,
     requested_by: String,
     worker: String,
     status: crate::tasks::TaskStatus,
+    attempt: u32,
+    retry_of: Option<String>,
+    brief: String,
+    report: Option<String>,
+    followup: Option<String>,
+    created_at_ms: u64,
 }
 
-#[derive(Serialize)]
-struct Tasks {
-    tasks: Vec<TaskMetadata>,
-}
-
-/// Task-thread metadata only; briefs and worker reports stay in the rooms.
-async fn tasks(State(state): State<ApiState>) -> Json<Tasks> {
-    let tasks = state
-        .core
-        .tasks()
-        .list()
-        .into_iter()
-        .map(|task| TaskMetadata {
+impl From<crate::tasks::TaskRecord> for TaskView {
+    fn from(task: crate::tasks::TaskRecord) -> Self {
+        Self {
             id: task.id,
             room_id: task.room_id,
             thread_room_id: task.thread_room_id,
             requested_by: task.requested_by,
             worker: task.worker,
             status: task.status,
+            attempt: task.attempt,
+            retry_of: task.retry_of,
+            brief: task.brief,
+            report: task.report,
+            followup: task.followup,
+            created_at_ms: task.created_at_ms,
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct Tasks {
+    tasks: Vec<TaskView>,
+}
+
+async fn tasks(State(state): State<ApiState>) -> Json<Tasks> {
+    Json(Tasks {
+        tasks: state
+            .core
+            .tasks()
+            .list()
+            .into_iter()
+            .map(TaskView::from)
+            .collect(),
+    })
+}
+
+#[derive(Serialize)]
+struct ThreadMessage {
+    speaker: String,
+    content: String,
+}
+
+#[derive(Serialize)]
+struct TaskDetail {
+    #[serde(flatten)]
+    task: TaskView,
+    /// The task thread's transcript, oldest first.
+    messages: Vec<ThreadMessage>,
+}
+
+async fn task_detail(
+    State(state): State<ApiState>,
+    Path(id): Path<String>,
+) -> Result<Json<TaskDetail>, Response> {
+    let not_found =
+        || ApiError::new(StatusCode::NOT_FOUND, "not_found", "task not found").into_response();
+    let task = state.core.tasks().get(&id).ok_or_else(not_found)?;
+    let messages = state
+        .core
+        .conversation()
+        .room_history(&task.thread_room_id)
+        .map(|history| {
+            history
+                .events
+                .into_iter()
+                .map(|event| ThreadMessage {
+                    speaker: event.speaker,
+                    content: event.content,
+                })
+                .collect()
         })
-        .collect();
-    Json(Tasks { tasks })
+        .unwrap_or_default();
+    Ok(Json(TaskDetail {
+        task: task.into(),
+        messages,
+    }))
 }
 
 async fn ws(State(state): State<ApiState>, upgrade: WebSocketUpgrade) -> Response {
@@ -211,6 +274,71 @@ mod tests {
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let value = serde_json::from_slice(&body).unwrap();
         (status, content_type, value)
+    }
+
+    #[tokio::test]
+    async fn tasks_expose_brief_and_report_but_not_paths_and_threads_have_transcripts() {
+        let test_core = TestCore::new();
+        let tasks_dir = test_core.directory.join(".hivemind/tasks");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        let record = crate::tasks::TaskRecord {
+            id: "task-1-1".into(),
+            room_id: "solo-Maomao".into(),
+            requested_by: "Maomao".into(),
+            worker: "Albedo".into(),
+            thread_room_id: "task/task-1-1".into(),
+            workspace: "/secret/workspace".into(),
+            brief: "edit the README".into(),
+            status: crate::tasks::TaskStatus::Completed,
+            report: Some("README edited".into()),
+            attempt: 2,
+            retry_of: Some("task-0-1".into()),
+            followup: None,
+            owner_pid: std::process::id(),
+            created_at_ms: 5,
+        };
+        std::fs::write(
+            tasks_dir.join("task-1-1.json"),
+            serde_json::to_vec(&record).unwrap(),
+        )
+        .unwrap();
+        test_core
+            .core
+            .conversation()
+            .post_report("task/task-1-1", "user", "hello worker")
+            .await
+            .unwrap();
+        let app = router(test_core.core.clone(), watch::channel(false).1);
+
+        let (status, _, list) = request(app.clone(), "GET", "/api/v1/tasks").await;
+        assert_eq!(status, StatusCode::OK);
+        let task = &list["tasks"][0];
+        assert_eq!(task["brief"], "edit the README");
+        assert_eq!(task["report"], "README edited");
+        assert_eq!(task["status"], "completed");
+        assert_eq!(task["attempt"], 2);
+        assert_eq!(task["retry_of"], "task-0-1");
+        assert_eq!(task["thread_room_id"], "task/task-1-1");
+
+        let (status, _, detail) = request(app.clone(), "GET", "/api/v1/tasks/task-1-1").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(detail["brief"], "edit the README");
+        assert_eq!(
+            detail["messages"],
+            json!([{"speaker": "user", "content": "hello worker"}])
+        );
+        for body in [list.to_string(), detail.to_string()] {
+            assert!(
+                !body.contains("workspace") && !body.contains("owner_pid"),
+                "{body}"
+            );
+        }
+
+        for missing in ["/api/v1/tasks/task-9-9", "/api/v1/tasks/..%2Fsecret"] {
+            let (status, _, error) = request(app.clone(), "GET", missing).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{missing}");
+            assert_eq!(error["error"]["code"], "not_found");
+        }
     }
 
     #[tokio::test]

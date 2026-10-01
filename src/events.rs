@@ -92,6 +92,11 @@ pub enum DomainEventKind {
         worker: String,
         message: String,
     },
+    TaskFollowup {
+        task_id: String,
+        room_id: String,
+        persona: String,
+    },
     TaskCancelled {
         task_id: String,
         room_id: String,

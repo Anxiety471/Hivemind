@@ -28,18 +28,27 @@ pub struct TasksConfig {
     /// Task threads that may run at once across the whole core.
     #[serde(default = "default_max_concurrent_tasks")]
     pub max_concurrent: usize,
+    /// Attempts a persona may spend on one piece of work: the first handoff
+    /// plus its retries. A failure on the last attempt goes to the user.
+    #[serde(default = "default_max_task_attempts")]
+    pub max_attempts: u32,
 }
 
 impl Default for TasksConfig {
     fn default() -> Self {
         Self {
             max_concurrent: default_max_concurrent_tasks(),
+            max_attempts: default_max_task_attempts(),
         }
     }
 }
 
 fn default_max_concurrent_tasks() -> usize {
     4
+}
+
+fn default_max_task_attempts() -> u32 {
+    3
 }
 
 /// Deterministic, model-independent memory behavior.
@@ -204,6 +213,9 @@ impl HivemindConfig {
 
         if self.tasks.max_concurrent == 0 {
             bail!("[tasks].max_concurrent must be at least 1");
+        }
+        if self.tasks.max_attempts == 0 {
+            bail!("[tasks].max_attempts must be at least 1");
         }
         let mut persona_ids = HashSet::with_capacity(self.agents.len());
         for persona in &self.agents {

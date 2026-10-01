@@ -41,11 +41,16 @@ enum Commands {
     Doctor,
     /// Start an interactive conversation.
     Chat {
-        #[arg(long, conflicts_with = "group")]
+        #[arg(long, conflicts_with_all = ["group", "task"])]
         solo: Option<String>,
-        #[arg(long)]
+        #[arg(long, conflicts_with = "task")]
         group: Option<String>,
+        /// Reply inside a task thread (see `hivemind tasks`).
+        #[arg(long)]
+        task: Option<String>,
     },
+    /// List task threads handed off by agents.
+    Tasks,
     /// List configured agents.
     Agents,
     /// Show local configuration and runtime readiness.
@@ -97,6 +102,8 @@ enum Route {
     Main,
     Solo(String),
     Group(String),
+    /// A task thread: the user talks to the worker, with full tools.
+    Task(String),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -107,6 +114,7 @@ enum InteractiveCommand {
     Order,
     Where,
     Tasks,
+    Task(String),
     Ask(String, String),
     All(String),
     Solo(String),
@@ -160,8 +168,11 @@ async fn run(cli: Cli) -> Result<()> {
                 Commands::Serve { .. } => {
                     unreachable!("serve is handled before CLI config loading")
                 }
-                Commands::Chat { solo, group } => {
-                    let route = if let Some(name) = solo {
+                Commands::Tasks => print_task_list(&HivemindCore::new(config, &cli.config)?),
+                Commands::Chat { solo, group, task } => {
+                    let route = if let Some(id) = task {
+                        Route::Task(id)
+                    } else if let Some(name) = solo {
                         commands::agent(&config, &name)?;
                         Route::Solo(name)
                     } else if let Some(name) = group {
@@ -333,10 +344,11 @@ async fn ask(
     message: &str,
 ) -> Result<()> {
     let core = HivemindCore::new(config.clone(), config_path)?;
+    let since = now_ms();
     let result = route_turn(&core, config, &Route::Solo(name.to_owned()), message)
         .await
         .and_then(print_replies);
-    await_handoffs(&core).await;
+    await_handoffs(&core, since).await;
     core.shutdown().await;
     result
 }
@@ -371,57 +383,85 @@ fn print_replies(replies: ReplyBatch) -> Result<()> {
 
 async fn all(config: &HivemindConfig, config_path: &std::path::Path, message: &str) -> Result<()> {
     let core = HivemindCore::new(config.clone(), config_path)?;
+    let since = now_ms();
     let result = route_turn(&core, config, &Route::Main, message)
         .await
         .and_then(print_replies);
-    await_handoffs(&core).await;
+    await_handoffs(&core, since).await;
     core.shutdown().await;
     result
 }
 
 /// A one-shot command must not cancel work an agent just handed off, so wait
 /// for every task thread (Ctrl-C cancels them) and print what each reported.
-async fn await_handoffs(core: &HivemindCore) {
-    let before = core.tasks().list();
-    if before.is_empty() {
+async fn await_handoffs(core: &HivemindCore, since_ms: u64) {
+    let mine = |core: &HivemindCore| {
+        core.tasks()
+            .list()
+            .into_iter()
+            .filter(|record| record.created_at_ms >= since_ms)
+            .collect::<Vec<_>>()
+    };
+    let started = mine(core);
+    if started.is_empty() {
         return;
     }
     eprintln!(
         "\nwaiting for {} task thread(s) to finish (Ctrl-C cancels them)…",
-        before.len()
+        started.len()
     );
     tokio::select! {
         () = core.tasks().wait_idle() => {}
         _ = tokio::signal::ctrl_c() => {}
     }
-    for record in core.tasks().list() {
+    for record in mine(core) {
         println!("\n{}", describe_task(&record));
     }
 }
 
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
 fn describe_task(record: &TaskRecord) -> String {
     let report = record.report.as_deref().unwrap_or("");
-    match record.status {
+    let attempt = if record.attempt > 1 {
+        format!(" attempt {}", record.attempt)
+    } else {
+        String::new()
+    };
+    let mut text = match record.status {
         TaskStatus::Running => format!(
-            "[task {}] {} is working in {}: {}",
-            record.id, record.worker, record.thread_room_id, record.brief
+            "[task {}{attempt}] {} is working in {}: {}",
+            record.id,
+            record.worker,
+            record.thread_room_id,
+            record.brief_preview()
         ),
         TaskStatus::Completed => format!(
-            "[task {}] completed by {} (requested by {} in {}):\n{report}",
+            "[task {}{attempt}] completed by {} (requested by {} in {}):\n{report}",
             record.id, record.worker, record.requested_by, record.room_id
         ),
         TaskStatus::Failed => format!(
-            "[task {}] FAILED ({}, requested by {} in {}): {report}",
+            "[task {}{attempt}] FAILED ({}, requested by {} in {}): {report}",
             record.id, record.worker, record.requested_by, record.room_id
         ),
         TaskStatus::Cancelled => format!(
-            "[task {}] cancelled before {} finished: {}",
-            record.id, record.worker, record.brief
+            "[task {}{attempt}] cancelled before {} finished: {report}",
+            record.id, record.worker
         ),
+    };
+    if let Some(followup) = &record.followup {
+        text.push_str(&format!("\n{}> {followup}", record.requested_by));
     }
+    text.push_str(&format!("\n(reply to the worker: /task {})", record.id));
+    text
 }
 
-fn print_tasks(core: &HivemindCore) {
+fn print_task_list(core: &HivemindCore) -> Result<()> {
     let records = core.tasks().list();
     if records.is_empty() {
         println!("no task threads yet");
@@ -429,6 +469,7 @@ fn print_tasks(core: &HivemindCore) {
     for record in records {
         println!("{}", describe_task(&record));
     }
+    Ok(())
 }
 
 /// Print task-thread lifecycle events as they happen during interactive chat.
@@ -441,7 +482,8 @@ fn spawn_task_printer(core: &HivemindCore) -> tokio::task::JoinHandle<()> {
                 Ok(event) => match event.payload {
                     DomainEventKind::TaskStarted { task_id, .. }
                     | DomainEventKind::TaskCompleted { task_id, .. }
-                    | DomainEventKind::TaskFailed { task_id, .. } => task_id,
+                    | DomainEventKind::TaskFailed { task_id, .. }
+                    | DomainEventKind::TaskFollowup { task_id, .. } => task_id,
                     _ => continue,
                 },
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
@@ -486,6 +528,7 @@ fn route_identity(
                 }],
             )
         }
+        Route::Task(id) => bail!("task thread '{id}' is not a conversation route"),
         Route::Group(name) => {
             let group = commands::group(config, name)?;
             let participants = commands::group_agents(config, name)?
@@ -512,6 +555,15 @@ async fn route_turn(
     route: &Route,
     message: &str,
 ) -> Result<ReplyBatch> {
+    if let Route::Task(id) = route {
+        let replies = core.tasks().reply_in_thread(id, message).await?;
+        return Ok(ReplyBatch {
+            replies: replies
+                .into_iter()
+                .map(|reply| (reply.name, reply.result.map_err(anyhow::Error::msg)))
+                .collect(),
+        });
+    }
     let (room_id, room_name, group_id, mode, participants) = route_identity(config, route)?;
     let replies = core
         .turn(CoreTurnRequest {
@@ -540,6 +592,16 @@ async fn chat(config: &mut HivemindConfig, path: &std::path::Path, mut route: Ro
     );
     print_agents(&effective_agents(config));
     let core = HivemindCore::new(config.clone(), path)?;
+    if let Route::Task(id) = &route {
+        let task = core
+            .tasks()
+            .get(id)
+            .ok_or_else(|| anyhow::anyhow!("no task named '{id}'; run `hivemind tasks`"))?;
+        println!(
+            "Thread {} — you are talking to {}, who has full tools in the task workspace.",
+            task.thread_room_id, task.worker
+        );
+    }
     let printer = spawn_task_printer(&core);
     let result = tokio::select! {
         result = chat_loop(config, &core, path, &mut route) => result,
@@ -557,6 +619,7 @@ fn route_label(route: &Route) -> String {
         Route::Main => "main".into(),
         Route::Solo(n) => format!("solo:{n}"),
         Route::Group(n) => format!("group:{n}"),
+        Route::Task(id) => format!("task:{id}"),
     }
 }
 
@@ -624,6 +687,8 @@ fn route_names(config: &HivemindConfig, route: &Route) -> Result<Vec<String>> {
             .into_iter()
             .map(|a| a.name.clone())
             .collect()),
+        // The worker is resolved from the task record once the core exists.
+        Route::Task(_) => Ok(Vec::new()),
     }
 }
 
@@ -657,6 +722,7 @@ async fn handle_interactive(
         InteractiveCommand::Help => {
             println!(
                 "/help /agents /status /order /where /tasks\n\
+                 /task <id> (reply inside a task thread; /main or /solo to leave)\n\
                  /ask <agent> <message> /all <message>\n\
                  /solo <agent> /main\n\
                  /group create|list|show|use|add|remove|delete ...\n\
@@ -667,7 +733,18 @@ async fn handle_interactive(
         InteractiveCommand::Status => status(config)?,
         InteractiveCommand::Order => print_order(&effective_agents(config)),
         InteractiveCommand::Where => println!("{}", route_label(route)),
-        InteractiveCommand::Tasks => print_tasks(core),
+        InteractiveCommand::Tasks => print_task_list(core)?,
+        InteractiveCommand::Task(id) => {
+            let task = core
+                .tasks()
+                .get(&id)
+                .ok_or_else(|| anyhow::anyhow!("no task named '{id}'; try /tasks"))?;
+            println!(
+                "Replying in {} to {}, who has full tools in the task workspace.",
+                task.thread_room_id, task.worker
+            );
+            *route = Route::Task(id);
+        }
         InteractiveCommand::Ask(name, message) => {
             print_replies(route_turn(core, config, &Route::Solo(name), &message).await?)?;
         }
@@ -723,6 +800,8 @@ fn parse_interactive(input: &str) -> InteractiveCommand {
         "/order" if rest.is_empty() => InteractiveCommand::Order,
         "/where" if rest.is_empty() => InteractiveCommand::Where,
         "/tasks" if rest.is_empty() => InteractiveCommand::Tasks,
+        "/task" if args.len() == 1 => InteractiveCommand::Task(args[0].into()),
+        "/task" => InteractiveCommand::Invalid("/task <id>".into()),
         "/quit" | "/exit" if rest.is_empty() => InteractiveCommand::Quit,
         "/main" if rest.is_empty() => InteractiveCommand::Main,
         "/solo" if args.len() == 1 => InteractiveCommand::Solo(args[0].into()),

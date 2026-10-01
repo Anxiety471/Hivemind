@@ -199,6 +199,14 @@ fn map_event(event: &DomainEvent) -> Option<Outbound> {
             "task.failed",
             json!({"task_id": task_id, "room_id": room_id, "thread_room_id": thread_room_id, "worker": worker}),
         ),
+        DomainEventKind::TaskFollowup {
+            task_id,
+            room_id,
+            persona,
+        } => (
+            "task.followup",
+            json!({"task_id": task_id, "room_id": room_id, "persona": persona}),
+        ),
         DomainEventKind::TaskCancelled {
             task_id,
             room_id,

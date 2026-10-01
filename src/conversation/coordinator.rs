@@ -10,6 +10,23 @@ pub struct TurnRequest<'a> {
     pub invoker: Arc<dyn AgentInvoker>,
 }
 
+/// Who opened a turn; decides the recorded speaker and whether the input may
+/// carry directives.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TurnSource {
+    User,
+    Hivemind,
+}
+
+impl TurnSource {
+    fn speaker(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Hivemind => "hivemind",
+        }
+    }
+}
+
 /// Owns durable room history and all turn/context orchestration; runtime sessions are disposable.
 pub struct ConversationCoordinator {
     store: Arc<dyn ContextStore>,
@@ -131,6 +148,22 @@ impl ConversationCoordinator {
     }
 
     pub async fn turn(&self, request: TurnRequest<'_>) -> Result<Vec<TurnReply>> {
+        self.run_turn(request, TurnSource::User).await
+    }
+
+    /// A turn started by Hivemind itself (for example, telling a persona that
+    /// a task it handed off failed). The input is recorded as speaker
+    /// `hivemind` and is never read for `Goal:`/`Global:` style directives, so
+    /// text quoted from a worker cannot authorize state or memory changes.
+    pub async fn notice_turn(&self, request: TurnRequest<'_>) -> Result<Vec<TurnReply>> {
+        self.run_turn(request, TurnSource::Hivemind).await
+    }
+
+    async fn run_turn(
+        &self,
+        request: TurnRequest<'_>,
+        source: TurnSource,
+    ) -> Result<Vec<TurnReply>> {
         let TurnRequest {
             room,
             room_name,
@@ -158,7 +191,7 @@ impl ConversationCoordinator {
         history.events.push(MessageEvent {
             id: user_message_id.clone(),
             turn_id: turn_id.clone(),
-            speaker: "user".into(),
+            speaker: source.speaker().into(),
             agent_instance_id: None,
             content: input.into(),
             error: false,
@@ -166,7 +199,10 @@ impl ConversationCoordinator {
         self.save(&history, room)?;
         // Explicit structured directive from the raw user input only; may
         // authorize exactly one exact-content global proposal this turn.
-        let authorized_global = authorized_global_directive(input);
+        let authorized_global = match source {
+            TurnSource::User => authorized_global_directive(input),
+            TurnSource::Hivemind => None,
+        };
         let mut replies = Vec::with_capacity(members.len());
         match mode {
             ConversationMode::Broadcast => {
@@ -406,7 +442,11 @@ impl ConversationCoordinator {
         }
         history.completed_turns.push(turn_id.clone());
         let mut next_state = history.state.clone();
-        let state_update = apply_explicit_state_updates(&mut next_state, input).and_then(|()| {
+        let state_update = match source {
+            TurnSource::User => apply_explicit_state_updates(&mut next_state, input),
+            TurnSource::Hivemind => Ok(()),
+        }
+        .and_then(|()| {
             validate_state(
                 &next_state,
                 self.limits.context_target_tokens.saturating_mul(2),
@@ -502,7 +542,15 @@ impl ConversationCoordinator {
                 .map(|text| (cursor.epoch_id, text))
         });
         let mut speakers = Vec::with_capacity(request.prior.len() + 2);
-        speakers.push("user".to_owned());
+        // Whoever opened this turn (the user, or Hivemind for a notice turn).
+        speakers.push(
+            request
+                .history
+                .events
+                .iter()
+                .find(|event| event.turn_id == request.active_turn)
+                .map_or_else(|| "user".to_owned(), |event| event.speaker.clone()),
+        );
         speakers.extend(request.prior.iter().map(|(name, _)| name.clone()));
         speakers.push(request.current.agent.name.clone());
         Ok(MemberPrompt {

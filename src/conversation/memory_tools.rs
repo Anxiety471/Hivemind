@@ -1,4 +1,5 @@
 use super::*;
+use crate::tasks::DelegateRequest;
 
 /// Tool manifest for callers whose route has a configured group.
 pub(super) const GROUP_MEMORY_TOOL_MANIFEST: &str = "\
@@ -35,11 +36,11 @@ pub(super) fn memory_tool_manifest(caller: &Caller) -> &'static str {
 /// so this describes the enforced limit and the only way past it.
 pub(super) const READ_ONLY_DELEGATION_NOTICE: &str = "\
 \n\
-Workspace access — READ ONLY: you can read, search, and list files but cannot edit files or run commands, and must never claim to have. To change anything, hand it to a task thread with one fenced block:\n\
+Workspace access — READ ONLY: you can read, search, and list files but cannot edit files or run commands, and must never claim to. To change anything, hand it to a task thread with one fenced block:\n\
 ```hivemind-tool\n\
 {\"name\":\"task.delegate\",\"args\":{\"brief\":\"<self-contained instructions>\",\"persona\":\"<optional worker; defaults to you>\"}}\n\
 ```\n\
-The worker has full tools but cannot see this conversation, so the brief must hold every requirement, path, and acceptance check. After delegating, say what you handed off and stop; Hivemind posts the worker's report here when it finishes. Never wait, poll, or invent the outcome.\n";
+The worker has full tools in your workspace but cannot see this chat, so the brief must hold every requirement, path, and acceptance check. After delegating, say what you handed off and stop; Hivemind posts the report here. Never wait, poll, or guess the outcome. If a task fails you decide: retry with \"retry_of\":\"<task id>\" and a better brief, or tell the user.\n";
 
 /// Shown inside a task thread, where the worker has full tools and no delegation.
 pub(super) const TASK_WORKER_NOTICE: &str = "\
@@ -343,7 +344,17 @@ pub(super) async fn execute_task_tool(
     };
     let brief = required_string(&call.args, "brief")?;
     let persona = optional_string(&call.args, "persona")?;
-    delegator.delegate(caller, persona.as_deref(), &brief).await
+    let retry_of = optional_string(&call.args, "retry_of")?;
+    delegator
+        .delegate(
+            caller,
+            DelegateRequest {
+                worker: persona.as_deref(),
+                brief: &brief,
+                retry_of: retry_of.as_deref(),
+            },
+        )
+        .await
 }
 
 /// Self-contained re-prompt used when the runtime must (re)hydrate mid-turn:
