@@ -447,7 +447,10 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::CONFLICT);
-        assert_eq!(HivemindConfig::load(&config_path).unwrap().agents[0].name, "Web Engineer");
+        assert_eq!(
+            HivemindConfig::load(&config_path).unwrap().agents[0].name,
+            "Web Engineer"
+        );
     }
     async fn post_json_over_tcp(
         address: SocketAddr,

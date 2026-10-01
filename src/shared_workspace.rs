@@ -77,7 +77,10 @@ impl SharedWorkspaces {
             .iter()
             .map(|persona| (persona.name.clone(), persona.workspace.clone()))
             .collect();
-        self.state.write().expect("workspace lock poisoned").personas = next;
+        self.state
+            .write()
+            .expect("workspace lock poisoned")
+            .personas = next;
     }
 
     /// Directories agents and the API may choose from; empty means any existing directory.

@@ -375,7 +375,10 @@ impl HivemindCore {
         };
         self.workspaces.replace_personas(&config.agents);
         self.access.replace_from_config(&config);
-        *self.agents.write().expect("core agent registry lock poisoned") = registry;
+        *self
+            .agents
+            .write()
+            .expect("core agent registry lock poisoned") = registry;
         *self.config.write().expect("core config lock poisoned") = Arc::new(config);
         self.setup_required.store(false, Ordering::Release);
         Ok(())

@@ -14,8 +14,7 @@ use super::{error::ApiError, routes::ApiState};
 use crate::config::{AgentConfig, HivemindConfig};
 
 pub(super) fn routes() -> Router<ApiState> {
-    Router::new()
-        .route("/api/v1/setup", get(status).post(complete))
+    Router::new().route("/api/v1/setup", get(status).post(complete))
 }
 
 async fn status(State(state): State<ApiState>) -> Response {
@@ -65,23 +64,39 @@ fn build_config(body: SetupBody) -> Result<HivemindConfig, String> {
         }
         let role = setup.role.trim();
         if role.len() > 120 {
-            return Err(format!("Role for persona '{id}' must be 120 characters or fewer."));
+            return Err(format!(
+                "Role for persona '{id}' must be 120 characters or fewer."
+            ));
         }
         let system_prompt = setup.system_prompt.trim();
         if system_prompt.len() > 32 * 1024 {
-            return Err(format!("System prompt for persona '{id}' must be 32 KiB or fewer."));
+            return Err(format!(
+                "System prompt for persona '{id}' must be 32 KiB or fewer."
+            ));
         }
-        if setup.model.as_deref().is_some_and(|model| model.len() > 256) {
-            return Err(format!("Model for persona '{id}' must be 256 characters or fewer."));
+        if setup
+            .model
+            .as_deref()
+            .is_some_and(|model| model.len() > 256)
+        {
+            return Err(format!(
+                "Model for persona '{id}' must be 256 characters or fewer."
+            ));
         }
-        if setup.reasoning.as_deref().is_some_and(|reasoning| reasoning.len() > 64) {
+        if setup
+            .reasoning
+            .as_deref()
+            .is_some_and(|reasoning| reasoning.len() > 64)
+        {
             return Err(format!(
                 "Reasoning setting for persona '{id}' must be 64 characters or fewer."
             ));
         }
         let workspace = setup.workspace.trim();
         if workspace.is_empty() || workspace.len() > 1024 {
-            return Err(format!("Persona '{id}' needs a workspace path of 1 to 1024 characters."));
+            return Err(format!(
+                "Persona '{id}' needs a workspace path of 1 to 1024 characters."
+            ));
         }
         let workspace = crate::config::absolute_workspace(workspace);
         if !Path::new(&workspace).is_dir() {
@@ -90,7 +105,9 @@ fn build_config(body: SetupBody) -> Result<HivemindConfig, String> {
             ));
         }
         if setup.fast.is_some() && setup.runtime != "omp" {
-            return Err(format!("Fast mode is only supported by OMP (persona '{id}')."));
+            return Err(format!(
+                "Fast mode is only supported by OMP (persona '{id}')."
+            ));
         }
         if (setup.reasoning.is_some() || setup.fast.is_some()) && setup.runtime == "opencode" {
             return Err(format!(
@@ -98,7 +115,11 @@ fn build_config(body: SetupBody) -> Result<HivemindConfig, String> {
             ));
         }
         if setup.runtime == "opencode" {
-            if let Some(model) = setup.model.as_deref().filter(|model| !model.trim().is_empty()) {
+            if let Some(model) = setup
+                .model
+                .as_deref()
+                .filter(|model| !model.trim().is_empty())
+            {
                 let Some((provider, model_id)) = model.trim().split_once('/') else {
                     return Err(format!(
                         "OpenCode model for '{id}' must use provider/model-id format."
