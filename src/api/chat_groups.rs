@@ -28,7 +28,7 @@ pub(super) fn routes() -> Router<ApiState> {
         )
 }
 
-fn view(group: &GroupConfig) -> Value {
+fn view(state: &ApiState, group: &GroupConfig) -> Value {
     json!({
         "id": group.name,
         "room_id": format!("group-{}", group.name),
@@ -36,7 +36,7 @@ fn view(group: &GroupConfig) -> Value {
         "mode": group.mode,
         "member_roles": group.member_roles,
         "reply_order": group.reply_order,
-        "workspace": group.workspace,
+        "workspace": state.core.shared_workspaces().group(&group.name),
     })
 }
 
@@ -86,13 +86,19 @@ fn failure(error: anyhow::Error) -> Response {
 }
 
 async fn list(State(state): State<ApiState>) -> Response {
-    let groups: Vec<Value> = state.core.config().groups.iter().map(view).collect();
+    let groups: Vec<Value> = state
+        .core
+        .config()
+        .groups
+        .iter()
+        .map(|g| view(&state, g))
+        .collect();
     Json(json!({"groups": groups})).into_response()
 }
 
 async fn show(State(state): State<ApiState>, Path(id): Path<String>) -> Response {
     match state.core.config().groups.iter().find(|g| g.name == id) {
-        Some(group) => Json(json!({"group": view(group)})).into_response(),
+        Some(group) => Json(json!({"group": view(&state, group)})).into_response(),
         None => not_found(),
     }
 }
@@ -120,7 +126,11 @@ async fn create(
         return failure(error);
     }
     match state.core.config().groups.iter().find(|g| g.name == id) {
-        Some(group) => (StatusCode::CREATED, Json(json!({"group": view(group)}))).into_response(),
+        Some(group) => (
+            StatusCode::CREATED,
+            Json(json!({"group": view(&state, group)})),
+        )
+            .into_response(),
         None => not_found(),
     }
 }
@@ -155,7 +165,7 @@ async fn update(
         return failure(error);
     }
     match state.core.config().groups.iter().find(|g| g.name == id) {
-        Some(group) => Json(json!({"group": view(group)})).into_response(),
+        Some(group) => Json(json!({"group": view(&state, group)})).into_response(),
         None => not_found(),
     }
 }

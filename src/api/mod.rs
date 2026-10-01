@@ -5,6 +5,7 @@ mod rooms;
 mod routes;
 mod tasks;
 mod websocket;
+mod workspaces;
 
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},

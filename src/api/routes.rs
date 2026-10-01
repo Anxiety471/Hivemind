@@ -27,6 +27,7 @@ pub(super) fn router(core: Arc<HivemindCore>, shutdown: watch::Receiver<bool>) -
         .merge(super::tasks::routes())
         .merge(super::rooms::routes())
         .merge(super::chat_groups::routes())
+        .merge(super::workspaces::routes())
         .route("/api/v1/agents", get(agents))
         .route("/api/v1/turns", post(submit_turn))
         .route("/api/v1/ws", get(ws))
@@ -737,6 +738,101 @@ mod tests {
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
         let (_, _, list) = request(app, "GET", "/api/v1/chat-groups").await;
         assert!(list["groups"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn workspaces_and_roles_are_readable_and_workspaces_changeable() {
+        let test_core = TestCore::new();
+        let path = test_core.directory.join("hivemind.toml");
+        std::fs::write(
+            &path,
+            toml::to_string(&HivemindConfig::default_poc()).unwrap(),
+        )
+        .unwrap();
+        let app = router(test_core.core.clone(), watch::channel(false).1);
+        let dir = test_core.directory.join("project");
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir_text = dir.canonicalize().unwrap().to_string_lossy().into_owned();
+
+        let (_, _, body) = request(app.clone(), "GET", "/api/v1/workspaces").await;
+        assert_eq!(body["personas"].as_array().unwrap().len(), 2);
+        assert!(body["roots"].as_array().unwrap().is_empty());
+        let (_, _, roles) = request(app.clone(), "GET", "/api/v1/access/roles").await;
+        assert!(roles["builtin"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["name"] == "worker"));
+
+        let (status, _) = request_json(
+            app.clone(),
+            "POST",
+            "/api/v1/chat-groups",
+            json!({"id":"dev","members":["Engineer"]}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        let (status, body) = request_json(
+            app.clone(),
+            "PUT",
+            "/api/v1/workspaces/groups/dev",
+            json!({"path": dir_text}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["groups"][0]["workspace"], dir_text.as_str());
+        let (_, _, group) = request(app.clone(), "GET", "/api/v1/chat-groups/dev").await;
+        assert_eq!(group["group"]["workspace"], dir_text.as_str());
+        let (status, _) = request_json(
+            app.clone(),
+            "PUT",
+            "/api/v1/workspaces/personas/Engineer",
+            json!({"path": dir_text}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, body) = request_json(
+            app.clone(),
+            "PUT",
+            "/api/v1/workspaces/personas/Engineer",
+            json!({"path": "relative"}),
+        )
+        .await;
+        assert_eq!(
+            (status, body["error"]["code"].as_str()),
+            (StatusCode::BAD_REQUEST, Some("invalid_request"))
+        );
+        let (status, _) = request_json(
+            app.clone(),
+            "PUT",
+            "/api/v1/workspaces/personas/Ghost",
+            json!({"path": dir_text}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let (status, _) = request_json(
+            app.clone(),
+            "PUT",
+            "/api/v1/workspaces/groups/dev",
+            json!({"nope": 1}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/api/v1/workspaces/groups/dev")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let (_, _, group) = request(app, "GET", "/api/v1/chat-groups/dev").await;
+        assert!(group["group"]["workspace"].is_null());
     }
 
     #[tokio::test]
