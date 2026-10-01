@@ -879,10 +879,15 @@ fn topic_key_column_migrates_a_database_created_before_it_existed() {
         )
         .unwrap();
     let service = MemoryService::new(MemoryStore::from_connection(connection).unwrap());
-    assert_eq!(service.store().load("old").unwrap().unwrap().content, "old note");
+    assert_eq!(
+        service.store().load("old").unwrap().unwrap().content,
+        "old note"
+    );
     let (_, updated) = service.upsert_private(&agent(), "k", write("new")).unwrap();
     assert!(!updated);
-    let (_, updated) = service.upsert_private(&agent(), "k", write("newer")).unwrap();
+    let (_, updated) = service
+        .upsert_private(&agent(), "k", write("newer"))
+        .unwrap();
     assert!(updated);
 }
 
@@ -903,9 +908,15 @@ fn file_store_opens_in_wal_mode_with_normal_sync() {
     let store = MemoryStore::open(&path).unwrap();
     {
         let c = store.connection.lock();
-        let mode: String = c.pragma_query_value(None, "journal_mode", |r| r.get(0)).unwrap();
-        let sync: i64 = c.pragma_query_value(None, "synchronous", |r| r.get(0)).unwrap();
-        let version: i64 = c.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
+        let mode: String = c
+            .pragma_query_value(None, "journal_mode", |r| r.get(0))
+            .unwrap();
+        let sync: i64 = c
+            .pragma_query_value(None, "synchronous", |r| r.get(0))
+            .unwrap();
+        let version: i64 = c
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
         assert_eq!(mode, "wal");
         assert_eq!(sync, 1, "NORMAL");
         assert_eq!(version, 1);
@@ -948,7 +959,11 @@ fn full_text_indexes_upgrade_in_place_without_losing_rows() {
         )
         .unwrap();
         before_memory = c
-            .query_row("SELECT id FROM memory_fts WHERE memory_fts MATCH '\"jwt\"'", [], |r| r.get::<_, String>(0))
+            .query_row(
+                "SELECT id FROM memory_fts WHERE memory_fts MATCH '\"jwt\"'",
+                [],
+                |r| r.get::<_, String>(0),
+            )
             .unwrap();
         before_archive = c
             .prepare("SELECT id FROM archive_fts WHERE archive_fts MATCH '\"rollout\"' AND room_id='group-a'")
@@ -973,8 +988,10 @@ fn full_text_indexes_upgrade_in_place_without_losing_rows() {
     let (memories, messages): (i64, i64) = {
         let c = service.store().connection.lock();
         (
-            c.query_row("SELECT COUNT(*) FROM memories", [], |r| r.get(0)).unwrap(),
-            c.query_row("SELECT COUNT(*) FROM archive_messages", [], |r| r.get(0)).unwrap(),
+            c.query_row("SELECT COUNT(*) FROM memories", [], |r| r.get(0))
+                .unwrap(),
+            c.query_row("SELECT COUNT(*) FROM archive_messages", [], |r| r.get(0))
+                .unwrap(),
         )
     };
     assert_eq!((memories, messages), (1, 3));
@@ -1012,20 +1029,38 @@ fn full_text_indexes_upgrade_in_place_without_losing_rows() {
 fn stronger_full_text_match_outranks_a_weaker_one_of_equal_age_and_scope() {
     let service = MemoryService::new(MemoryStore::in_memory().unwrap());
     let caller = agent();
-    let weak = service.add_group(&caller, write("release schedule for friday")).unwrap();
-    for filler in ["lunch menu", "office plants", "parking rules", "holiday calendar"] {
+    let weak = service
+        .add_group(&caller, write("release schedule for friday"))
+        .unwrap();
+    for filler in [
+        "lunch menu",
+        "office plants",
+        "parking rules",
+        "holiday calendar",
+    ] {
         service.add_group(&caller, write(filler)).unwrap();
     }
     let strong = service
-        .add_group(&caller, write("release checklist for staging deploy verification"))
+        .add_group(
+            &caller,
+            write("release checklist for staging deploy verification"),
+        )
         .unwrap();
     let found = service
         .search(
             &caller,
-            &req("release checklist staging deploy verification", vec![SearchScope::Group]),
+            &req(
+                "release checklist staging deploy verification",
+                vec![SearchScope::Group],
+            ),
         )
         .unwrap();
-    let position = |id: &str| found.iter().position(|result| result.record.id == id).unwrap();
+    let position = |id: &str| {
+        found
+            .iter()
+            .position(|result| result.record.id == id)
+            .unwrap()
+    };
     assert!(position(&strong.id) < position(&weak.id));
     let score = |id: &str| found[position(id)].score;
     assert!(score(&strong.id) > score(&weak.id));
@@ -1035,7 +1070,11 @@ fn stronger_full_text_match_outranks_a_weaker_one_of_equal_age_and_scope() {
 fn archive_search_never_returns_another_rooms_messages() {
     let service = MemoryService::new(MemoryStore::in_memory().unwrap());
     let trusted = Caller::trusted_user("test");
-    for (room, turn, id) in [("room-a", "ta", "ma"), ("room-b", "tb", "mb"), ("room-a-1", "tc", "mc")] {
+    for (room, turn, id) in [
+        ("room-a", "ta", "ma"),
+        ("room-b", "tb", "mb"),
+        ("room-a-1", "tc", "mc"),
+    ] {
         service
             .append_room_message(
                 &trusted,
@@ -1050,15 +1089,16 @@ fn archive_search_never_returns_another_rooms_messages() {
             )
             .unwrap();
     }
-    let caller_in = |room: &str| {
-        Caller::agent(room, "", AgentInstanceId::new(room, "p"), "p", "p")
-    };
+    let caller_in = |room: &str| Caller::agent(room, "", AgentInstanceId::new(room, "p"), "p", "p");
     for (room, expected) in [("room-a", "ma"), ("room-b", "mb"), ("room-a-1", "mc")] {
         let found = service
             .search(&caller_in(room), &req("zebra", vec![SearchScope::Archive]))
             .unwrap();
         assert_eq!(
-            found.iter().map(|r| r.record.id.as_str()).collect::<Vec<_>>(),
+            found
+                .iter()
+                .map(|r| r.record.id.as_str())
+                .collect::<Vec<_>>(),
             [expected]
         );
     }

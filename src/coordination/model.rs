@@ -304,8 +304,15 @@ pub enum CoordError {
 impl std::fmt::Display for CoordError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NotFound(m) | Self::Invalid(m) | Self::Forbidden(m) | Self::Conflict(m) | Self::Budget(m) | Self::Internal(m) => f.write_str(m),
-            Self::Disabled => f.write_str("coordination is disabled; set coordination.enabled = true"),
+            Self::NotFound(m)
+            | Self::Invalid(m)
+            | Self::Forbidden(m)
+            | Self::Conflict(m)
+            | Self::Budget(m)
+            | Self::Internal(m) => f.write_str(m),
+            Self::Disabled => {
+                f.write_str("coordination is disabled; set coordination.enabled = true")
+            }
         }
     }
 }
@@ -323,8 +330,13 @@ pub fn check_text(field: &str, value: &str, max: usize) -> CoordResult<String> {
     if value.len() > max {
         return Err(CoordError::Invalid(format!("{field} exceeds {max} bytes")));
     }
-    if value.chars().any(|c| c.is_control() && c != '\n' && c != '\t') {
-        return Err(CoordError::Invalid(format!("{field} contains control characters")));
+    if value
+        .chars()
+        .any(|c| c.is_control() && c != '\n' && c != '\t')
+    {
+        return Err(CoordError::Invalid(format!(
+            "{field} contains control characters"
+        )));
     }
     Ok(value.to_owned())
 }
@@ -348,7 +360,10 @@ pub fn new_id(prefix: &str) -> String {
         .unwrap_or_default()
         .as_nanos() as u64;
     let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    format!("{prefix}_{nanos:016x}{:04x}{sequence:04x}", std::process::id() & 0xffff)
+    format!(
+        "{prefix}_{nanos:016x}{:04x}{sequence:04x}",
+        std::process::id() & 0xffff
+    )
 }
 
 /// Room that holds all task-scoped conversation for `task_id`.
@@ -357,7 +372,8 @@ pub fn task_room(task_id: &str) -> String {
 }
 
 pub fn task_of_room(room: &str) -> Option<&str> {
-    room.strip_prefix("task-").filter(|id| id.starts_with("tk_"))
+    room.strip_prefix("task-")
+        .filter(|id| id.starts_with("tk_"))
 }
 
 #[cfg(test)]
@@ -366,8 +382,17 @@ mod tests {
 
     #[test]
     fn terminal_states_never_transition_and_lifecycle_is_forward() {
-        for terminal in [TaskStatus::Completed, TaskStatus::Failed, TaskStatus::Cancelled] {
-            for next in [TaskStatus::Ready, TaskStatus::Running, TaskStatus::Review, TaskStatus::Cancelled] {
+        for terminal in [
+            TaskStatus::Completed,
+            TaskStatus::Failed,
+            TaskStatus::Cancelled,
+        ] {
+            for next in [
+                TaskStatus::Ready,
+                TaskStatus::Running,
+                TaskStatus::Review,
+                TaskStatus::Cancelled,
+            ] {
                 assert!(!terminal.can_transition_to(next));
             }
         }
@@ -379,7 +404,11 @@ mod tests {
 
     #[test]
     fn only_requests_and_handoffs_wake_recipients() {
-        for kind in [MessageKind::Status, MessageKind::Ack, MessageKind::DecisionProposal] {
+        for kind in [
+            MessageKind::Status,
+            MessageKind::Ack,
+            MessageKind::DecisionProposal,
+        ] {
             assert!(!kind.wakes_recipient());
         }
         assert!(MessageKind::Request.wakes_recipient() && MessageKind::Handoff.wakes_recipient());

@@ -26,8 +26,8 @@ permissions = ["integrate"]        # optional direct grants
 | `integrate` | Own integration tasks |
 | `task.decide` | `tasks.decide` |
 | `task.reassign` | `tasks.delegate` with a `task` argument |
-| `group.manage` | `groups.create`, `groups.members.update` |
-| `workspace.write` | The runtime's file-editing tools (`edit`, `write`, notebooks); owning work tasks |
+| `group.manage` | `groups.create`, `groups.members.update`; `workspace.set`/`workspace.clear` in a group room |
+| `workspace.write` | The runtime's file-editing tools (`edit`, `write`, notebooks); owning work tasks; `workspace.set` in a solo room |
 | `workspace.exec` | The runtime's shell and code execution (`bash`, `python`); shell can also write files, so treat it as write-capable |
 | `memory.private.write` | `memory.private.add/update/upsert` |
 | `memory.group.write` | `memory.group.add/update/upsert` |
@@ -35,7 +35,7 @@ permissions = ["integrate"]        # optional direct grants
 | `memory.global.write` | `memory.global.propose/update` (the exact `Global:` user directive is still required) |
 | `memory.archive` | `memory.archive` |
 
-`memory.search`, messaging, and read tools are never gated. The coordinator of a root task may still delegate and manage groups on it without holding the permission.
+`memory.search`, `workspace.get`, `workspace.list`, messaging, and read tools are never gated. The coordinator of a root task may still delegate and manage groups on it without holding the permission.
 
 ## Built-in roles
 
@@ -72,6 +72,7 @@ A persona with both permissions, or with no roles, is unrestricted. Coordination
 - A persona with **no `roles`** keeps today's behavior: gated memory tools are unrestricted, runtime tools are unrestricted, and coordination follows its direct `permissions`.
 - Declaring **any role** makes gated memory tools deny-by-default: only permissions the roles and direct grants provide apply. It also restricts runtime workspace tools as above, so roles such as `reviewer`, `lead`, and `coordinator` are now read-only; add `implementor` or a direct `workspace.write` to let them edit.
 - Coordination tools are always permission-based.
+- Workspace tools (see [workspaces](workspaces.md)) follow the same rule as memory: unrestricted without roles, permission-based with them. A persona that cannot change its workspace is offered only `workspace.get` and `workspace.list`.
 - The memory tool manifest is shared by all personas, so a restricted persona is still told the tools exist; a denied call returns `permission denied` and is audited.
 
 ## Separation of duties
@@ -82,7 +83,7 @@ A persona with both permissions, or with no roles, is unrestricted. Coordination
 
 ## Audit log
 
-Every gated decision (memory writes; `tasks.plan.propose`, `tasks.delegate`, `tasks.decide`, `tasks.result.submit`, `tasks.review`, `tasks.block`, `groups.create`, `groups.members.update`) is recorded, allowed or denied, in `.hivemind/access.sqlite3` with persona, permission, action, resource, decision, and reason. The newest 10 000 rows are kept. A failed audit write is reported on stderr and never changes the decision.
+Every gated decision (memory writes; `workspace.set`, `workspace.clear`; `tasks.plan.propose`, `tasks.delegate`, `tasks.decide`, `tasks.result.submit`, `tasks.review`, `tasks.block`, `groups.create`, `groups.members.update`) is recorded, allowed or denied, in `.hivemind/access.sqlite3` with persona, permission, action, resource, decision, and reason. The newest 10 000 rows are kept. A failed audit write is reported on stderr and never changes the decision.
 
 ```
 hivemind access audit --denied --persona Reviewer --limit 20

@@ -171,7 +171,14 @@ fn map_event(event: &DomainEvent) -> Option<Outbound> {
             "runtime.rotated",
             json!({"agent_instance_id": agent_instance_id.encode(), "runtime": runtime, "reason": reason}),
         ),
-        DomainEventKind::Coordination { seq, root_id, task_id, event_type, actor, payload } => (
+        DomainEventKind::Coordination {
+            seq,
+            root_id,
+            task_id,
+            event_type,
+            actor,
+            payload,
+        } => (
             crate::coordination::wire_type(event_type),
             json!({"durable_seq": seq, "root_id": root_id, "task_id": task_id, "actor": actor, "data": payload}),
         ),
@@ -312,7 +319,12 @@ mod tests {
     use crate::identity::AgentInstanceId;
 
     fn event(payload: DomainEventKind) -> DomainEvent {
-        DomainEvent::new("test-event".into(), 1, std::time::SystemTime::now(), payload)
+        DomainEvent::new(
+            "test-event".into(),
+            1,
+            std::time::SystemTime::now(),
+            payload,
+        )
     }
 
     #[test]
@@ -382,8 +394,19 @@ mod tests {
         assert_eq!(mapped.r#type, "task.status_changed");
         assert_eq!(mapped.payload["durable_seq"], 42);
         assert_eq!(mapped.payload["data"]["to"], "running");
-        assert_eq!(mapped.payload["sequence"], 1, "process-local bus sequence stays separate");
-        let unknown = map_event(&event(DomainEventKind::Coordination { seq: 1, root_id: "r".into(), task_id: None, event_type: "future.kind".into(), actor: "a".into(), payload: json!({}) })).unwrap();
+        assert_eq!(
+            mapped.payload["sequence"], 1,
+            "process-local bus sequence stays separate"
+        );
+        let unknown = map_event(&event(DomainEventKind::Coordination {
+            seq: 1,
+            root_id: "r".into(),
+            task_id: None,
+            event_type: "future.kind".into(),
+            actor: "a".into(),
+            payload: json!({}),
+        }))
+        .unwrap();
         assert_eq!(unknown.r#type, "coordination.event");
     }
 }

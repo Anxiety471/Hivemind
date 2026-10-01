@@ -122,7 +122,15 @@ impl MemoryService {
     }
     pub fn propose_global(&self, caller: &Caller, write: MemoryWrite) -> Result<MemoryRecord> {
         Ok(self
-            .accept(caller, Scope::Hivemind, Layer::Global, write, true, false, None)?
+            .accept(
+                caller,
+                Scope::Hivemind,
+                Layer::Global,
+                write,
+                true,
+                false,
+                None,
+            )?
             .0)
     }
     /// Insert a record. With `dedup`, an identical active record in the same
@@ -519,7 +527,11 @@ impl MemoryService {
             if append.turn_id.is_empty() || append.room_id.is_empty() {
                 bail!("archive turn requires id and room");
             }
-            if append.participants.iter().any(|p| p.participant_id.trim().is_empty()) {
+            if append
+                .participants
+                .iter()
+                .any(|p| p.participant_id.trim().is_empty())
+            {
                 bail!("archive participants require an id");
             }
             for message in &append.messages {

@@ -76,8 +76,12 @@ async fn run(cli: Cli) -> Result<()> {
                     group_command(&mut config, &cli.config, None, command)
                 }
                 Commands::Init { .. } => unreachable!(),
-                Commands::Task { command } => super::tasks::task_command(config, &cli.config, command).await,
-                Commands::Access { command } => super::access::access_command(config, &cli.config, command).await,
+                Commands::Task { command } => {
+                    super::tasks::task_command(config, &cli.config, command).await
+                }
+                Commands::Access { command } => {
+                    super::access::access_command(config, &cli.config, command).await
+                }
             }
         }
         None => {
@@ -510,23 +514,58 @@ done
         for agent in &mut config.agents {
             agent.workspace = directory.0.display().to_string();
         }
-        config.agents.iter_mut().find(|agent| agent.name == "Reviewer").unwrap().roles = vec!["observer".into()];
+        config
+            .agents
+            .iter_mut()
+            .find(|agent| agent.name == "Reviewer")
+            .unwrap()
+            .roles = vec!["observer".into()];
         let core = HivemindCore::new(config, directory.0.join("hivemind.toml")).unwrap();
 
-        let replies = route_turn(&core, &Route::Solo("Reviewer".into()), "store a note").await.unwrap();
+        let replies = route_turn(&core, &Route::Solo("Reviewer".into()), "store a note")
+            .await
+            .unwrap();
         core.shutdown().await;
         let (output, failed) = capture_replies(&replies);
         assert_eq!(output, "\nReviewer> done after tool\n");
         assert!(!failed);
 
         let instance = hivemind::identity::AgentInstanceId::new("solo-Reviewer", "Reviewer");
-        let caller = hivemind::memory::Caller::agent("solo-Reviewer", "", instance.clone(), "Reviewer", "Reviewer");
-        let found = core.memory().store().records_in_scope(&caller, &hivemind::memory::Scope::AgentInstance(instance)).unwrap();
-        assert!(found.is_empty(), "the denied write must not reach the store");
+        let caller = hivemind::memory::Caller::agent(
+            "solo-Reviewer",
+            "",
+            instance.clone(),
+            "Reviewer",
+            "Reviewer",
+        );
+        let found = core
+            .memory()
+            .store()
+            .records_in_scope(&caller, &hivemind::memory::Scope::AgentInstance(instance))
+            .unwrap();
+        assert!(
+            found.is_empty(),
+            "the denied write must not reach the store"
+        );
 
-        let denied = core.access().audit().list(&hivemind::access::AuditFilter { denied_only: true, limit: 10, ..Default::default() }).unwrap();
+        let denied = core
+            .access()
+            .audit()
+            .list(&hivemind::access::AuditFilter {
+                denied_only: true,
+                limit: 10,
+                ..Default::default()
+            })
+            .unwrap();
         assert_eq!(denied.len(), 1);
-        assert_eq!((denied[0].persona.as_str(), denied[0].action.as_str(), denied[0].permission.as_str()), ("Reviewer", "memory.private.add", "memory.private.write"));
+        assert_eq!(
+            (
+                denied[0].persona.as_str(),
+                denied[0].action.as_str(),
+                denied[0].permission.as_str()
+            ),
+            ("Reviewer", "memory.private.add", "memory.private.write")
+        );
     }
 
     #[tokio::test]

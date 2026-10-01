@@ -5,9 +5,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use parking_lot::Mutex;
-use rusqlite::{
-    params, Connection, OpenFlags, OptionalExtension, Row, TransactionBehavior,
-};
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension, Row, TransactionBehavior};
 
 use super::super::*;
 
@@ -130,11 +128,15 @@ fn decode_record(x: RawRecord) -> Result<MemoryRecord> {
 }
 
 fn load_record(c: &Connection, id: &str) -> Result<Option<MemoryRecord>> {
-    c.prepare_cached(concat!("SELECT ", record_cols!(), " FROM memories m WHERE m.id=?1"))?
-        .query_row([id], raw_record)
-        .optional()?
-        .map(decode_record)
-        .transpose()
+    c.prepare_cached(concat!(
+        "SELECT ",
+        record_cols!(),
+        " FROM memories m WHERE m.id=?1"
+    ))?
+    .query_row([id], raw_record)
+    .optional()?
+    .map(decode_record)
+    .transpose()
 }
 
 fn scope_key(scope: &Scope) -> String {
@@ -302,7 +304,10 @@ impl MemoryStore {
         })
     }
     /// Run `f` on the writer connection.
-    pub(in crate::memory) fn write<T>(&self, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
+    pub(in crate::memory) fn write<T>(
+        &self,
+        f: impl FnOnce(&Connection) -> Result<T>,
+    ) -> Result<T> {
         blocking(|| f(&self.connection.lock()))
     }
     /// Run `f` inside one immediate write transaction.
@@ -352,7 +357,11 @@ impl MemoryStore {
     }
     /// Insert `record` (superseding its predecessor) and its FTS row, and
     /// optionally bind an upsert `topic_key`, in one transaction.
-    pub(crate) fn insert_keyed(&self, record: &MemoryRecord, topic_key: Option<&str>) -> Result<()> {
+    pub(crate) fn insert_keyed(
+        &self,
+        record: &MemoryRecord,
+        topic_key: Option<&str>,
+    ) -> Result<()> {
         let (scope_type, scope_id) = record.scope.kind_id();
         self.tx(|tx| {
             if let Some(old) = &record.supersedes_memory_id {

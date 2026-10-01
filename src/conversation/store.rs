@@ -122,7 +122,12 @@ pub trait ContextStore: Send + Sync {
     }
     /// Return a history that was fully persisted through [`Self::save_changes`].
     fn release(&self, _room: &str, _history: RoomHistory) {}
-    fn save_changes(&self, room: &str, history: &RoomHistory, _changes: &Changes<'_>) -> Result<()> {
+    fn save_changes(
+        &self,
+        room: &str,
+        history: &RoomHistory,
+        _changes: &Changes<'_>,
+    ) -> Result<()> {
         self.save_room(room, history)
     }
 }
@@ -512,7 +517,10 @@ impl SqliteContextStore {
                 agent_instance_id: if message.speaker == "user" {
                     None
                 } else {
-                    Some(crate::identity::AgentInstanceId::new(room, &message.speaker))
+                    Some(crate::identity::AgentInstanceId::new(
+                        room,
+                        &message.speaker,
+                    ))
                 },
                 legacy_agent_instance_id: legacy_ids.get(&message.id).cloned(),
                 error: errors.contains(&message.id),
@@ -560,12 +568,18 @@ impl SqliteContextStore {
         let mut legacy: HashMap<&str, BTreeMap<String, String>> = HashMap::new();
         for (id, legacy_id) in &snapshot.legacy_agent_instance_ids {
             if let Some(turn) = turn_of.get(id.as_str()) {
-                legacy.entry(turn).or_default().insert(id.clone(), legacy_id.clone());
+                legacy
+                    .entry(turn)
+                    .or_default()
+                    .insert(id.clone(), legacy_id.clone());
             }
         }
         let mut appends = Vec::new();
         for turn in errors.keys().chain(legacy.keys()).collect::<HashSet<_>>() {
-            let existing = archive.turns.iter().find(|candidate| candidate.id == **turn);
+            let existing = archive
+                .turns
+                .iter()
+                .find(|candidate| candidate.id == **turn);
             let (mut turn_errors, mut turn_legacy) = existing
                 .map(|existing| decode_turn_flags(&existing.metadata))
                 .unwrap_or_default();
@@ -615,11 +629,15 @@ impl ContextStore for SqliteContextStore {
     fn release(&self, room: &str, mut history: RoomHistory) {
         // A reload never contains contentless events (they are not archived);
         // drop them so a cached history is identical to a fresh one.
-        history.events.retain(|event| !event.content.trim().is_empty());
+        history
+            .events
+            .retain(|event| !event.content.trim().is_empty());
         let Ok(data_version) = self.memory.store().data_version() else {
             return;
         };
-        let used = self.clock.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let used = self
+            .clock
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut cache = self.cache.lock();
         if cache.len() >= CACHED_ROOMS && !cache.contains_key(room) {
             if let Some(oldest) = cache

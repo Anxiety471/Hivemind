@@ -12,16 +12,18 @@ use std::{
 use anyhow::{Context, Result};
 
 use crate::{
-    shared_workspace::{SharedWorkspaces, ToolHosts, WorkspaceTools},
     config::{ConversationMode, HivemindConfig},
-    coordination::{policy::Roster, store::CoordinationStore, CoordinationService, CoordinationTools},
     conversation::{
         AgentInvoker, ConversationCoordinator, Participant, RuntimeInvoker, TurnExecution,
         TurnReply, TurnRequest,
     },
+    coordination::{
+        policy::Roster, store::CoordinationStore, CoordinationService, CoordinationTools,
+    },
     events::{DomainEventKind, EventBus},
     memory::MemoryService,
     runtime::RuntimePool,
+    shared_workspace::{SharedWorkspaces, ToolHosts, WorkspaceTools},
 };
 
 /// Process-level owner of configuration, memory, conversations, events, and API state.
@@ -98,7 +100,10 @@ impl std::fmt::Display for TargetResolutionError {
 impl std::error::Error for TargetResolutionError {}
 
 /// `agent` moved to `workspace`; the shared handle is reused when it already is there.
-fn with_workspace(agent: Arc<crate::config::AgentConfig>, workspace: &str) -> Arc<crate::config::AgentConfig> {
+fn with_workspace(
+    agent: Arc<crate::config::AgentConfig>,
+    workspace: &str,
+) -> Arc<crate::config::AgentConfig> {
     if agent.workspace == workspace {
         return agent;
     }
@@ -129,7 +134,12 @@ impl HivemindCore {
                 config
                     .ordered_agents()
                     .into_iter()
-                    .map(|agent| Arc::new(crate::config::AgentConfig { tool_access: crate::access::tool_access(agent, &config.roles), ..agent.clone() }))
+                    .map(|agent| {
+                        Arc::new(crate::config::AgentConfig {
+                            tool_access: crate::access::tool_access(agent, &config.roles),
+                            ..agent.clone()
+                        })
+                    })
                     .collect(),
             ),
         };
@@ -150,7 +160,10 @@ impl HivemindCore {
             crate::access::Audit::open(data_dir.join("access.sqlite3"))
                 .context("opening access audit log")?,
         );
-        let access = Arc::new(crate::access::AccessPolicy::from_config(&config, audit.clone()));
+        let access = Arc::new(crate::access::AccessPolicy::from_config(
+            &config,
+            audit.clone(),
+        ));
         conversation.set_access(access.clone());
         let coordination_store = if config.coordination.enabled {
             CoordinationStore::open(data_dir.join("coordination.sqlite3"))
@@ -165,9 +178,14 @@ impl HivemindCore {
             events.clone(),
         ));
         let workspaces = Arc::new(SharedWorkspaces::new(&config_path, &config));
-        let mut hosts: Vec<Arc<dyn crate::conversation::ToolHost>> = vec![Arc::new(WorkspaceTools::new(workspaces.clone()))];
+        let mut hosts: Vec<Arc<dyn crate::conversation::ToolHost>> = vec![Arc::new(
+            WorkspaceTools::new(workspaces.clone(), access.clone()),
+        )];
         if config.coordination.enabled {
-            hosts.push(Arc::new(CoordinationTools::new(coordination.clone(), audit.clone())));
+            hosts.push(Arc::new(CoordinationTools::new(
+                coordination.clone(),
+                audit.clone(),
+            )));
         }
         conversation.set_tools(Arc::new(ToolHosts(hosts)));
         events.publish(DomainEventKind::CoreStarted);
@@ -236,7 +254,11 @@ impl HivemindCore {
         Arc::new(RuntimeInvoker::new(self.runtime.clone(), room, group_id))
     }
     /// Stop one instance's live session so its next prompt hydrates fresh.
-    pub async fn rotate_instance(&self, instance: &crate::identity::AgentInstanceId, reason: &'static str) {
+    pub async fn rotate_instance(
+        &self,
+        instance: &crate::identity::AgentInstanceId,
+        reason: &'static str,
+    ) {
         self.runtime.rotate_instance(instance, reason).await;
     }
     pub fn memory(&self) -> &Arc<MemoryService> {
@@ -268,7 +290,10 @@ impl HivemindCore {
                 participants: registry
                     .list()
                     .into_iter()
-                    .map(|agent| Participant { agent: self.own_workspace(agent), role: None })
+                    .map(|agent| Participant {
+                        agent: self.own_workspace(agent),
+                        role: None,
+                    })
                     .collect(),
             },
             ConversationTarget::Solo { persona_id } => {
@@ -286,10 +311,7 @@ impl HivemindCore {
                     room_name: format!("Solo: {persona_id}"),
                     group_id: String::new(),
                     mode: ConversationMode::Discussion,
-                    participants: vec![Participant {
-                        agent,
-                        role: None,
-                    }],
+                    participants: vec![Participant { agent, role: None }],
                 }
             }
             ConversationTarget::Group { group_id } => {
@@ -326,7 +348,10 @@ impl HivemindCore {
                                 Some(workspace) => with_workspace(agent, workspace),
                                 None => self.own_workspace(agent),
                             };
-                            Some(Participant { role: group.member_roles.get(&agent.name).cloned(), agent })
+                            Some(Participant {
+                                role: group.member_roles.get(&agent.name).cloned(),
+                                agent,
+                            })
                         })
                         .collect(),
                 }
@@ -335,7 +360,10 @@ impl HivemindCore {
     }
 
     /// The persona with its current own workspace, which an agent may have changed at runtime.
-    fn own_workspace(&self, agent: Arc<crate::config::AgentConfig>) -> Arc<crate::config::AgentConfig> {
+    fn own_workspace(
+        &self,
+        agent: Arc<crate::config::AgentConfig>,
+    ) -> Arc<crate::config::AgentConfig> {
         match self.workspaces.persona(&agent.name) {
             Some(workspace) => with_workspace(agent, &workspace),
             None => agent,

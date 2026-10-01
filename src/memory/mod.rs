@@ -20,7 +20,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Whitespace- and case-normalized form used for exact-duplicate detection.
 fn normalize_content(content: &str) -> String {
-    content.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+    content
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
 }
 
 fn now() -> i64 {

@@ -339,13 +339,22 @@ mod tests {
     #[test]
     fn read_only_persona_gets_a_tool_allowlist_without_edit_or_shell() {
         let mut agent = agent();
-        agent.tool_access = Some(crate::config::ToolAccess { write: false, exec: false });
+        agent.tool_access = Some(crate::config::ToolAccess {
+            write: false,
+            exec: false,
+        });
         let args = PiSession::rpc_args(&agent);
         let tools = &args[args.iter().position(|a| a == "--tools").unwrap() + 1];
         assert_eq!(tools, "read,grep,find,ls");
-        agent.tool_access = Some(crate::config::ToolAccess { write: true, exec: false });
+        agent.tool_access = Some(crate::config::ToolAccess {
+            write: true,
+            exec: false,
+        });
         let args = PiSession::rpc_args(&agent);
-        assert_eq!(args[args.iter().position(|a| a == "--tools").unwrap() + 1], "read,grep,find,ls,edit,write");
+        assert_eq!(
+            args[args.iter().position(|a| a == "--tools").unwrap() + 1],
+            "read,grep,find,ls,edit,write"
+        );
     }
 
     static NEXT: AtomicUsize = AtomicUsize::new(0);

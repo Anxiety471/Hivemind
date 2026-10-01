@@ -52,8 +52,15 @@ pub(super) fn upsert_archive_message(c: &Connection, message: &ArchivedMessage) 
     };
     c.prepare_cached("DELETE FROM archive_fts WHERE rowid=?1")?
         .execute([rowid])?;
-    c.prepare_cached("INSERT INTO archive_fts(rowid,room_key,speaker,content) VALUES(?1,?2,?3,?4)")?
-        .execute(params![rowid, hex_key('r', &message.room_id), message.speaker, message.content])?;
+    c.prepare_cached(
+        "INSERT INTO archive_fts(rowid,room_key,speaker,content) VALUES(?1,?2,?3,?4)",
+    )?
+    .execute(params![
+        rowid,
+        hex_key('r', &message.room_id),
+        message.speaker,
+        message.content
+    ])?;
     Ok(())
 }
 
@@ -73,7 +80,15 @@ pub(super) fn decode_agent_instance_id(room_id: &str, stored: &str) -> Result<Ag
 type RawEpoch = (String, String, String, String, i64, Option<i64>, String);
 
 pub(super) fn raw_epoch(r: &Row<'_>) -> rusqlite::Result<RawEpoch> {
-    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?))
+    Ok((
+        r.get(0)?,
+        r.get(1)?,
+        r.get(2)?,
+        r.get(3)?,
+        r.get(4)?,
+        r.get(5)?,
+        r.get(6)?,
+    ))
 }
 
 pub(super) fn decode_epoch(raw: RawEpoch) -> Result<RuntimeEpoch> {

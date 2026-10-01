@@ -286,7 +286,8 @@ pub(super) fn execute_memory_tool(
             Ok(format!("{} memory results:\n{lines}", results.len()))
         }
         "memory.private.add" => {
-            let (record, existing) = memory.add_private_outcome(caller, tool_write(&call.args, None)?)?;
+            let (record, existing) =
+                memory.add_private_outcome(caller, tool_write(&call.args, None)?)?;
             Ok(if existing {
                 format!("already stored as {}", record.id)
             } else {
@@ -301,7 +302,8 @@ pub(super) fn execute_memory_tool(
         }
         "memory.private.upsert" => {
             let key = required_string(&call.args, "key")?;
-            let (record, updated) = memory.upsert_private(caller, &key, tool_write(&call.args, None)?)?;
+            let (record, updated) =
+                memory.upsert_private(caller, &key, tool_write(&call.args, None)?)?;
             Ok(format!(
                 "{} private memory {} for key '{}'",
                 if updated { "updated" } else { "stored" },
@@ -310,7 +312,8 @@ pub(super) fn execute_memory_tool(
             ))
         }
         "memory.group.add" => {
-            let (record, existing) = memory.add_group_outcome(caller, tool_write(&call.args, None)?)?;
+            let (record, existing) =
+                memory.add_group_outcome(caller, tool_write(&call.args, None)?)?;
             Ok(if existing {
                 format!("already stored as {}", record.id)
             } else {
@@ -325,7 +328,8 @@ pub(super) fn execute_memory_tool(
         }
         "memory.group.upsert" => {
             let key = required_string(&call.args, "key")?;
-            let (record, updated) = memory.upsert_group(caller, &key, tool_write(&call.args, None)?)?;
+            let (record, updated) =
+                memory.upsert_group(caller, &key, tool_write(&call.args, None)?)?;
             Ok(format!(
                 "{} group memory {} for key '{}'",
                 if updated { "updated" } else { "stored" },
@@ -500,13 +504,15 @@ pub(super) fn execute_with_optional_authorization(
     call: &MemoryToolCall,
 ) -> Result<String> {
     let exact = authorized_global.filter(|exact| {
-        matches!(call.name.as_str(), "memory.global.propose" | "memory.global.update")
-            && call
-                .args
-                .get("content")
-                .and_then(serde_json::Value::as_str)
-                .map(str::trim)
-                == Some(exact.trim())
+        matches!(
+            call.name.as_str(),
+            "memory.global.propose" | "memory.global.update"
+        ) && call
+            .args
+            .get("content")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            == Some(exact.trim())
     });
     if let Some(exact) = exact {
         let authorized = caller.clone().authorize_global_proposal_from_user_event(
@@ -578,13 +584,23 @@ pub(super) async fn invoke_with_memory(
                     .map(|args| format!("{{\"name\":\"{}\",\"args\":{args}}}", call.name))
                     .unwrap_or_else(|_| call.name.clone());
                 let executed = match host.filter(|host| host.handles(&call.name)) {
-                    Some(host) => host.execute(&caller.room_id, &caller.persona_id, &call.name, &call.args),
+                    Some(host) => {
+                        host.execute(&caller.room_id, &caller.persona_id, &call.name, &call.args)
+                    }
                     None => access
-                        .map_or(Ok(()), |access| access.authorize_memory(&caller.persona_id, &caller.room_id, &call.name))
-                        .and_then(|()| execute_with_optional_authorization(memory, caller, authorized_global, &call)),
+                        .map_or(Ok(()), |access| {
+                            access.authorize_memory(&caller.persona_id, &caller.room_id, &call.name)
+                        })
+                        .and_then(|()| {
+                            execute_with_optional_authorization(
+                                memory,
+                                caller,
+                                authorized_global,
+                                &call,
+                            )
+                        }),
                 };
-                match executed
-                {
+                match executed {
                     Ok(text) => (rendered, text),
                     Err(error) => (rendered, format!("error: {error:#}")),
                 }

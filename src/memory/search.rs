@@ -21,7 +21,10 @@ pub(super) fn fts_terms(query: &str) -> Result<Vec<String>> {
         bail!("search query exceeds 512 characters");
     }
     let mut all: Vec<String> = Vec::new();
-    for token in query.split(|c: char| !c.is_alphanumeric()).filter(|x| !x.is_empty()) {
+    for token in query
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|x| !x.is_empty())
+    {
         let token = token.to_lowercase();
         if !all.contains(&token) {
             all.push(token);
@@ -61,7 +64,10 @@ pub(super) fn matched_terms(terms: &[String], text: &str) -> usize {
         .filter(|word| !word.is_empty())
         .map(str::to_lowercase)
         .collect();
-    terms.iter().filter(|term| words.contains(term.as_str())).count()
+    terms
+        .iter()
+        .filter(|term| words.contains(term.as_str()))
+        .count()
 }
 
 /// `bm25` is negative and more negative means a stronger match. Map the

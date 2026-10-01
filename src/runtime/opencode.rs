@@ -163,7 +163,9 @@ impl OpencodeSession {
 
     /// OpenCode permission config: everything allowed unless the persona's roles withhold editing or shell.
     fn permission(agent: &AgentConfig) -> Value {
-        let Some(access) = agent.tool_access else { return json!("allow") };
+        let Some(access) = agent.tool_access else {
+            return json!("allow");
+        };
         let mut rules = json!({"*": "allow"});
         if !access.write {
             rules["edit"] = json!("deny");
@@ -174,7 +176,11 @@ impl OpencodeSession {
         rules
     }
 
-    async fn spawn_and_open(binary: &str, agent: &AgentConfig, model: Option<&str>) -> Result<Self> {
+    async fn spawn_and_open(
+        binary: &str,
+        agent: &AgentConfig,
+        model: Option<&str>,
+    ) -> Result<Self> {
         let mut command = Command::new(binary);
         command
             .arg("acp")
@@ -194,8 +200,14 @@ impl OpencodeSession {
                 agent.name
             )
         })?;
-        let stdin = child.stdin.take().context("OpenCode ACP did not provide stdin")?;
-        let stdout = child.stdout.take().context("OpenCode ACP did not provide stdout")?;
+        let stdin = child
+            .stdin
+            .take()
+            .context("OpenCode ACP did not provide stdin")?;
+        let stdout = child
+            .stdout
+            .take()
+            .context("OpenCode ACP did not provide stdout")?;
         let mut session = Self {
             agent_name: agent.name.clone(),
             child,
@@ -247,7 +259,10 @@ impl OpencodeSession {
     async fn write(&mut self, frame: &Value) -> Result<()> {
         let mut bytes = serde_json::to_vec(frame).context("failed to encode OpenCode ACP frame")?;
         bytes.push(b'\n');
-        let stdin = self.stdin.as_mut().context("OpenCode ACP stdin is closed")?;
+        let stdin = self
+            .stdin
+            .as_mut()
+            .context("OpenCode ACP stdin is closed")?;
         stdin
             .write_all(&bytes)
             .await
@@ -272,7 +287,12 @@ impl OpencodeSession {
     /// Send one JSON-RPC request and read until its response. Notifications
     /// feed `turn`; agent-to-client requests get a fixed answer. Transport
     /// errors poison the session; RPC errors do not.
-    async fn request(&mut self, method: &str, params: Value, turn: Option<&mut Turn>) -> Result<Value> {
+    async fn request(
+        &mut self,
+        method: &str,
+        params: Value,
+        turn: Option<&mut Turn>,
+    ) -> Result<Value> {
         let id = self.next_request_id;
         self.next_request_id += 1;
         match self.exchange(id, method, params, turn).await {
@@ -353,9 +373,9 @@ fn approve_permission(frame: &Value) -> Value {
         .pointer("/params/options")
         .and_then(Value::as_array)
         .and_then(|options| {
-            options.iter().find(|option| {
-                option.get("kind").and_then(Value::as_str) == Some("allow_once")
-            })
+            options
+                .iter()
+                .find(|option| option.get("kind").and_then(Value::as_str) == Some("allow_once"))
         })
         .and_then(|option| option.get("optionId").and_then(Value::as_str));
     match option {
@@ -378,7 +398,9 @@ impl HarnessSession for OpencodeSession {
             "sessionId": self.session_id,
             "prompt": [{"type": "text", "text": input}]
         });
-        let result = self.request("session/prompt", params, Some(&mut turn)).await?;
+        let result = self
+            .request("session/prompt", params, Some(&mut turn))
+            .await?;
         if turn.used.is_some() {
             self.context_tokens = turn.used;
         }
@@ -470,7 +492,8 @@ mod tests {
             approve_permission(&frame),
             json!({"outcome":{"outcome":"selected","optionId":"once"}})
         );
-        let only_reject = json!({"params":{"options":[{"optionId":"reject","kind":"reject_once"}]}});
+        let only_reject =
+            json!({"params":{"options":[{"optionId":"reject","kind":"reject_once"}]}});
         assert_eq!(
             approve_permission(&only_reject),
             json!({"outcome":{"outcome":"cancelled"}})
