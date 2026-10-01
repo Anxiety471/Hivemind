@@ -177,7 +177,25 @@ async fn messages(
                 .then(|| page.first().map(|m| m.id.clone()))
                 .flatten();
             let discussion = room_is_discussion(&state, &id);
-            let targets = reply_targets(&page, discussion);
+            // A page can start mid-turn; read the turn's earlier messages so the
+            // first replies still resolve their user message and earlier speakers.
+            let lead: Vec<_> = page
+                .first()
+                .filter(|m| m.speaker != "user")
+                .and_then(|first| {
+                    let turn = state.core.memory().archive_turn(&caller(), &id, &first.turn_id).ok()??;
+                    let at = turn.messages.iter().position(|m| m.id == first.id)?;
+                    Some(turn.messages[..at].to_vec())
+                })
+                .unwrap_or_default();
+            let skip = lead.len();
+            let targets = if skip == 0 {
+                reply_targets(&page, discussion)
+            } else {
+                let mut all = lead;
+                all.extend(page.iter().cloned());
+                reply_targets(&all, discussion).split_off(skip)
+            };
             let items: Vec<Value> = page
                 .into_iter()
                 .zip(targets)

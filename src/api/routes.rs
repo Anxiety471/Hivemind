@@ -650,6 +650,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_page_starting_mid_turn_still_resolves_reply_targets() {
+        use crate::memory::{ArchiveParticipant, ArchivedMessage, ArchivedTurn, Caller};
+        let test_core = TestCore::new();
+        let app = router(test_core.core.clone(), watch::channel(false).1);
+        let (_, _, _) = request(app.clone(), "GET", "/api/v1/rooms/main").await;
+        let messages = [("u1", "user"), ("a1", "Reviewer"), ("a2", "Engineer")]
+            .iter()
+            .enumerate()
+            .map(|(i, (id, speaker))| ArchivedMessage {
+                id: (*id).into(),
+                room_id: "main".into(),
+                turn_id: "t1".into(),
+                speaker: (*speaker).into(),
+                content: "x".into(),
+                created_at: 100 + i as i64,
+            })
+            .collect();
+        test_core
+            .core
+            .memory()
+            .append_archive_turn(
+                &Caller::trusted_user("test"),
+                ArchivedTurn {
+                    id: "t1".into(),
+                    room_id: "main".into(),
+                    started_at: 100,
+                    completed_at: Some(103),
+                    metadata: json!({}),
+                    participants: vec![ArchiveParticipant { participant_id: "user".into(), role: None }],
+                    messages,
+                },
+            )
+            .unwrap();
+        let (_, _, page) = request(app, "GET", "/api/v1/rooms/main/messages?limit=2").await;
+        let first = &page["messages"][0];
+        assert_eq!(first["id"], "a1");
+        assert_eq!(first["reply_to"]["id"], "u1");
+        assert_eq!(page["messages"][1]["reply_to"]["id"], "u1");
+    }
+
+    #[tokio::test]
     async fn threads_anchor_to_a_message_and_accept_turns_in_their_own_room() {
         use crate::memory::{ArchiveParticipant, ArchivedMessage, ArchivedTurn, Caller};
         let test_core = TestCore::new();
