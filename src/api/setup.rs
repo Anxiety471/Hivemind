@@ -1,4 +1,6 @@
 //! One-time browser setup for a server started without `hivemind.toml`.
+use super::{error::ApiError, routes::ApiState};
+use crate::config::{AgentConfig, HivemindConfig};
 use axum::{
     extract::{rejection::JsonRejection, State},
     http::StatusCode,
@@ -8,8 +10,6 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::json;
-use super::{error::ApiError, routes::ApiState};
-use crate::config::{AgentConfig, HivemindConfig};
 
 const MAX_SETUP_PERSONAS: usize = 32;
 
