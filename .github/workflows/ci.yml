@@ -101,3 +101,12 @@ jobs:
         working-directory: frontend
         env:
           CI: true
+
+      - name: Upload browser E2E evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: first-run-browser-e2e
+          path: frontend/test-results/
+          if-no-files-found: ignore
+          retention-days: 7
