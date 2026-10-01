@@ -452,6 +452,51 @@ mod tests {
             "Web Engineer"
         );
     }
+
+    #[tokio::test]
+    async fn browser_setup_bounds_personas_and_defers_workspace_validation() {
+        let test_core = TestCore::unconfigured();
+        let app = router(test_core.core.clone(), watch::channel(false).1);
+        let too_many_personas: Vec<Value> = (0..33)
+            .map(|index| {
+                json!({
+                    "id": format!("Persona {index}"),
+                    "runtime": "pi",
+                    "workspace": "."
+                })
+            })
+            .collect();
+        let (status, _) = request_json(
+            app.clone(),
+            "POST",
+            "/api/v1/setup",
+            json!({"personas": too_many_personas}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(test_core.core.setup_required());
+
+        let workspace = test_core.directory.join("not-created");
+        assert!(!workspace.exists());
+        let (status, saved) = request_json(
+            app,
+            "POST",
+            "/api/v1/setup",
+            json!({"personas":[{
+                "id":"Web Engineer",
+                "runtime":"pi",
+                "workspace":workspace.display().to_string()
+            }]}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(saved["saved"], true);
+        assert_eq!(
+            test_core.core.agents().list()[0].workspace,
+            crate::config::absolute_workspace(&workspace.display().to_string())
+        );
+        assert!(!workspace.exists());
+    }
     async fn post_json_over_tcp(
         address: SocketAddr,
         path: &str,

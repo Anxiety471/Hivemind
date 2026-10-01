@@ -8,10 +8,10 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::json;
-use std::path::Path;
-
 use super::{error::ApiError, routes::ApiState};
 use crate::config::{AgentConfig, HivemindConfig};
+
+const MAX_SETUP_PERSONAS: usize = 32;
 
 pub(super) fn routes() -> Router<ApiState> {
     Router::new().route("/api/v1/setup", get(status).post(complete))
@@ -47,13 +47,13 @@ fn bad_request(message: impl Into<String>) -> Response {
 }
 
 fn build_config(body: SetupBody) -> Result<HivemindConfig, String> {
-    if body.personas.is_empty() || body.personas.len() > 32 {
+    if body.personas.is_empty() || body.personas.len() > MAX_SETUP_PERSONAS {
         return Err("Add between 1 and 32 personas.".into());
     }
 
     let mut config = HivemindConfig::default();
-    let mut reply_order = Vec::with_capacity(body.personas.len());
-    let mut personas = Vec::with_capacity(body.personas.len());
+    let mut reply_order = Vec::with_capacity(MAX_SETUP_PERSONAS);
+    let mut personas = Vec::with_capacity(MAX_SETUP_PERSONAS);
     for setup in body.personas {
         let id = setup.id.trim();
         if id.is_empty() || id.len() > 64 {
@@ -99,11 +99,6 @@ fn build_config(body: SetupBody) -> Result<HivemindConfig, String> {
             ));
         }
         let workspace = crate::config::absolute_workspace(workspace);
-        if !Path::new(&workspace).is_dir() {
-            return Err(format!(
-                "Workspace for persona '{id}' does not exist on the Hivemind server."
-            ));
-        }
         if setup.fast.is_some() && setup.runtime != "omp" {
             return Err(format!(
                 "Fast mode is only supported by OMP (persona '{id}')."
