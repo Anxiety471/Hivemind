@@ -36,7 +36,7 @@ pub(super) fn spawn_update_notice() {
         return;
     }
 
-    thread::spawn(|| {
+    let _ = thread::spawn(|| {
         let current = env!("CARGO_PKG_VERSION");
         let Ok(latest) = latest_release_tag() else {
             return;
