@@ -454,6 +454,12 @@ fn describe_task(record: &TaskRecord) -> String {
             record.id, record.worker
         ),
     };
+    if let Some(question) = &record.waiting_for {
+        text.push_str(&format!(
+            "\n  {} is BLOCKED waiting for an answer: {question}\n  (answer it: /task {})",
+            record.worker, record.id
+        ));
+    }
     if let Some(followup) = &record.followup {
         text.push_str(&format!("\n{}> {followup}", record.requested_by));
     }
@@ -480,6 +486,19 @@ fn spawn_task_printer(core: &HivemindCore) -> tokio::task::JoinHandle<()> {
         loop {
             let id = match events.recv().await {
                 Ok(event) => match event.payload {
+                    DomainEventKind::TaskMessaged { task_id, .. } => {
+                        // A message prints as itself, not as the whole task again.
+                        if let Some(entry) = tasks
+                            .get(&task_id)
+                            .and_then(|record| record.channel.last().cloned())
+                        {
+                            println!(
+                                "\n[task {task_id}] {} — {} ({}): {}",
+                                entry.from, entry.kind, entry.how, entry.text
+                            );
+                        }
+                        continue;
+                    }
                     DomainEventKind::TaskStarted { task_id, .. }
                     | DomainEventKind::TaskCompleted { task_id, .. }
                     | DomainEventKind::TaskFailed { task_id, .. }

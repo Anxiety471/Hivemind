@@ -11,7 +11,7 @@ use tokio::{
 
 use crate::config::AgentConfig;
 
-use super::{HarnessSession, ToolAccess};
+use super::{HarnessSession, SteerHandle, SteerShared, ToolAccess};
 
 /// How long a child gets to exit after its stdin closes before it is killed.
 const CHILD_EXIT_GRACE: Duration = Duration::from_secs(2);
@@ -128,6 +128,11 @@ pub struct OmpSession {
     transport: Box<dyn RpcTransport>,
     /// Set once a transport error proves this session can never recover.
     failure: Option<String>,
+    steer: std::sync::Arc<SteerShared>,
+    /// `steer` requests awaiting acknowledgement, by request id.
+    sent_steers: std::collections::HashMap<String, String>,
+    next_steer: u64,
+    unsteered: Vec<String>,
 }
 
 impl OmpSession {
@@ -160,6 +165,10 @@ impl OmpSession {
             agent_name: agent.name.clone(),
             transport: Box::new(transport),
             failure: None,
+            steer: SteerShared::new(),
+            sent_steers: std::collections::HashMap::new(),
+            next_steer: 0,
+            unsteered: Vec::new(),
         };
 
         session.wait_for_ready().await?;
@@ -243,17 +252,51 @@ impl OmpSession {
         }
     }
 
-    /// Read one frame; a transport failure poisons the whole session.
-    async fn recv_frame(&mut self) -> Result<Value> {
-        let result = self.transport.recv().await;
+    /// Send steering messages accepted since the last frame, in order.
+    async fn flush_steers(&mut self) -> Result<()> {
+        for text in self.steer.drain() {
+            self.next_steer += 1;
+            let id = format!("hivemind_steer_{}", self.next_steer);
+            self.send_frame(&json!({"id": id, "type": "steer", "message": text}))
+                .await?;
+            self.sent_steers.insert(id, text);
+        }
+        Ok(())
+    }
 
-        match result {
-            Ok(frame) => Ok(frame),
-            Err(error) => {
-                let error = error.context(format!("OMP RPC read failed for '{}'", self.agent_name));
-                self.failure = Some(format!("{error:#}"));
-                Err(error)
+    /// Read one frame; a transport failure poisons the whole session. While a
+    /// prompt is in flight this also forwards steering messages as they arrive
+    /// and swallows their acknowledgements (a rejected steer is handed back
+    /// through `take_unsteered`).
+    async fn recv_frame(&mut self) -> Result<Value> {
+        loop {
+            self.flush_steers().await?;
+            let result = tokio::select! {
+                result = self.transport.recv() => result,
+                () = self.steer.wait() => continue,
+            };
+            let frame = match result {
+                Ok(frame) => frame,
+                Err(error) => {
+                    let error =
+                        error.context(format!("OMP RPC read failed for '{}'", self.agent_name));
+                    self.failure = Some(format!("{error:#}"));
+                    return Err(error);
+                }
+            };
+            if frame.get("type").and_then(Value::as_str) == Some("response") {
+                if let Some(text) = frame
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .and_then(|id| self.sent_steers.remove(id))
+                {
+                    if frame.get("success").and_then(Value::as_bool) != Some(true) {
+                        self.unsteered.push(text);
+                    }
+                    continue;
+                }
             }
+            return Ok(frame);
         }
     }
 
@@ -370,9 +413,8 @@ impl OmpSession {
     }
 }
 
-#[async_trait]
-impl HarnessSession for OmpSession {
-    async fn prompt(&mut self, input: &str) -> Result<String> {
+impl OmpSession {
+    async fn run_prompt(&mut self, input: &str) -> Result<String> {
         if let Some(failure) = &self.failure {
             bail!(
                 "OMP session for '{}' failed earlier and cannot continue: {failure}",
@@ -417,6 +459,25 @@ impl HarnessSession for OmpSession {
                 self.agent_name
             ),
         }
+    }
+}
+
+#[async_trait]
+impl HarnessSession for OmpSession {
+    async fn prompt(&mut self, input: &str) -> Result<String> {
+        self.steer.begin();
+        let result = self.run_prompt(input).await;
+        let never_sent = self.steer.end();
+        self.unsteered.extend(never_sent);
+        result
+    }
+
+    fn steer_handle(&self) -> Option<SteerHandle> {
+        Some(SteerHandle::new(&self.steer))
+    }
+
+    fn take_unsteered(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.unsteered)
     }
 
     async fn context_tokens(&mut self) -> Result<Option<u64>> {
@@ -645,6 +706,106 @@ mod tests {
 
         let sent = sent_frames(&script);
         assert!(sent.iter().all(|frame| frame["type"] != "set_fast_mode"));
+    }
+
+    /// Answers like OMP: the prompt is acknowledged immediately, then runs
+    /// until a `steer` arrives; the steer's text is what the run ends up saying.
+    struct ReactiveTransport {
+        frames: tokio::sync::mpsc::UnboundedSender<Value>,
+        inbox: tokio::sync::mpsc::UnboundedReceiver<Value>,
+        steered: Option<String>,
+        reject_steers: bool,
+    }
+
+    #[async_trait]
+    impl RpcTransport for ReactiveTransport {
+        async fn send(&mut self, frame: &Value) -> Result<()> {
+            let id = frame["id"].clone();
+            let reply = |value: Value| self.frames.send(value).unwrap();
+            match frame["type"].as_str() {
+                Some("prompt") => reply(
+                    json!({"type":"response","id":id,"success":true,"data":{"agentInvoked":true}}),
+                ),
+                Some("steer") if self.reject_steers => reply(
+                    json!({"type":"response","id":id,"success":false,"error":"nothing running"}),
+                ),
+                Some("steer") => {
+                    self.steered = frame["message"].as_str().map(str::to_owned);
+                    reply(json!({"type":"response","id":id,"success":true}));
+                }
+                Some("get_last_assistant_text") => {
+                    let text = self.steered.clone().unwrap_or_else(|| "unsteered".into());
+                    reply(
+                        json!({"type":"response","id":id,"success":true,"data":{"text":format!("steered: {text}")}}),
+                    );
+                }
+                _ => {}
+            }
+            // The run finishes once it has been steered, or once a steer was refused.
+            if matches!(frame["type"].as_str(), Some("steer")) {
+                self.frames
+                    .send(json!({"type":"prompt_result","id":"hivemind_prompt","status":"completed","sessionSettled":true}))
+                    .unwrap();
+            }
+            Ok(())
+        }
+
+        async fn recv(&mut self) -> Result<Value> {
+            self.inbox
+                .recv()
+                .await
+                .ok_or_else(|| anyhow::anyhow!("reactive transport closed"))
+        }
+
+        async fn shutdown(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    fn reactive(reject_steers: bool) -> ReactiveTransport {
+        let (frames, inbox) = tokio::sync::mpsc::unbounded_channel();
+        frames.send(json!({"type":"ready"})).unwrap();
+        ReactiveTransport {
+            frames,
+            inbox,
+            steered: None,
+            reject_steers,
+        }
+    }
+
+    #[tokio::test]
+    async fn steer_is_forwarded_to_a_running_prompt_and_acknowledgements_are_swallowed() {
+        let mut session = OmpSession::start_with_transport(&agent(None), reactive(false))
+            .await
+            .unwrap();
+        let handle = session.steer_handle().unwrap();
+        assert!(!handle.try_steer("too early"));
+        let steering = async {
+            while !handle.try_steer("decision changed: use sqlite") {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        };
+        let (reply, ()) = tokio::join!(session.prompt("work"), steering);
+        assert_eq!(reply.unwrap(), "steered: decision changed: use sqlite");
+        assert!(session.take_unsteered().is_empty());
+        assert!(!handle.try_steer("too late"));
+    }
+
+    #[tokio::test]
+    async fn an_omp_steer_the_runtime_rejects_is_returned_to_the_caller() {
+        let mut session = OmpSession::start_with_transport(&agent(None), reactive(true))
+            .await
+            .unwrap();
+        let handle = session.steer_handle().unwrap();
+        let steering = async {
+            while !handle.try_steer("new decision") {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        };
+        // The refused steer still ends the scripted run, then the text is fetched.
+        let (reply, ()) = tokio::join!(session.prompt("work"), steering);
+        assert!(reply.unwrap().starts_with("steered:"));
+        assert_eq!(session.take_unsteered(), ["new decision"]);
     }
 
     #[tokio::test]

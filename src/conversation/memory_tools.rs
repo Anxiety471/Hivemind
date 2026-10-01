@@ -1,5 +1,5 @@
 use super::*;
-use crate::tasks::DelegateRequest;
+use crate::tasks::{DelegateRequest, TaskToolCall, TaskTools, UpdateKind};
 
 /// Tool manifest for callers whose route has a configured group.
 pub(super) const GROUP_MEMORY_TOOL_MANIFEST: &str = "\
@@ -36,16 +36,16 @@ pub(super) fn memory_tool_manifest(caller: &Caller) -> &'static str {
 /// so this describes the enforced limit and the only way past it.
 pub(super) const READ_ONLY_DELEGATION_NOTICE: &str = "\
 \n\
-Workspace access — READ ONLY: you can read, search, and list files but cannot edit files or run commands, and must never claim to. To change anything, hand it to a task thread with one fenced block:\n\
+Workspace access — READ ONLY: you can read, search, and list files but cannot edit files or run commands, and must never claim to. Change things through task threads, one fenced block per reply: task.delegate {brief, persona?, retry_of?} starts a worker (full tools, your workspace; it cannot see this chat, so the brief must be self-contained); task.message {task_id, text} steers a running worker mid-run (for example a decision changed) or answers one that is blocked; task.cancel {task_id}. Example:\n\
 ```hivemind-tool\n\
-{\"name\":\"task.delegate\",\"args\":{\"brief\":\"<self-contained instructions>\",\"persona\":\"<optional worker; defaults to you>\"}}\n\
+{\"name\":\"task.delegate\",\"args\":{\"brief\":\"<self-contained instructions>\"}}\n\
 ```\n\
-The worker has full tools in your workspace but cannot see this chat, so the brief must hold every requirement, path, and acceptance check. After delegating, say what you handed off and stop; Hivemind posts the report here. Never wait, poll, or guess the outcome. If a task fails you decide: retry with \"retry_of\":\"<task id>\" and a better brief, or tell the user.\n";
+After delegating, say what you handed off and stop: Hivemind posts the report here and wakes you if a task fails or is blocked on a question. Never wait, poll, or guess outcomes.\n";
 
 /// Shown inside a task thread, where the worker has full tools and no delegation.
 pub(super) const TASK_WORKER_NOTICE: &str = "\
 \n\
-Workspace access — FULL. You are a task-thread worker with full workspace tools. You cannot delegate further. Your final plain-text reply is posted back to the room that asked for the work.\n";
+Workspace access — FULL: you are a task-thread worker and cannot delegate. Your final plain-text reply is posted to the room that asked. Talk to the people who sent you with one fenced block: task.update {kind, text} where kind is progress (no wait), question or blocked (waits for the answer, up to a limit; prefer stating an assumption when you can), or message with to_task <sibling task id> to coordinate with a sibling worker. Messages from your requester or the user arrive mid-run marked [Update from …]; they are newer than your brief, so follow them.\n";
 
 /// Full tool manifest for a caller: memory tools plus the workspace-access
 /// rules that apply to its room.
@@ -329,32 +329,71 @@ pub(super) fn execute_memory_tool(
     }
 }
 
-/// Execute a `task.*` call. Only `task.delegate` exists; the delegating
-/// agent's identity comes from the host-built `caller`, never from `args`.
+/// Execute a `task.*` call. The calling agent's identity comes from the
+/// host-built `caller`, never from `args`; which calls are allowed (chat
+/// personas delegate, message, and cancel; task workers send updates) is
+/// decided by the tools bound to this invoker.
 pub(super) async fn execute_task_tool(
-    delegator: Option<&dyn TaskDelegator>,
+    tools: Option<&dyn TaskTools>,
     caller: &Caller,
     call: &MemoryToolCall,
 ) -> Result<String> {
-    if call.name != "task.delegate" {
-        bail!("unknown task tool '{}'", call.name);
-    }
-    let Some(delegator) = delegator else {
-        bail!("task delegation is not available in this room");
+    let Some(tools) = tools else {
+        bail!("task tools are not available in this room");
     };
-    let brief = required_string(&call.args, "brief")?;
-    let persona = optional_string(&call.args, "persona")?;
-    let retry_of = optional_string(&call.args, "retry_of")?;
-    delegator
-        .delegate(
-            caller,
-            DelegateRequest {
-                worker: persona.as_deref(),
-                brief: &brief,
-                retry_of: retry_of.as_deref(),
-            },
-        )
-        .await
+    let args = &call.args;
+    match call.name.as_str() {
+        "task.delegate" => {
+            let brief = required_string(args, "brief")?;
+            let persona = optional_string(args, "persona")?;
+            let retry_of = optional_string(args, "retry_of")?;
+            tools
+                .call(
+                    caller,
+                    TaskToolCall::Delegate(DelegateRequest {
+                        worker: persona.as_deref(),
+                        brief: &brief,
+                        retry_of: retry_of.as_deref(),
+                    }),
+                )
+                .await
+        }
+        "task.message" => {
+            let task_id = required_string(args, "task_id")?;
+            let text = required_string(args, "text")?;
+            tools
+                .call(
+                    caller,
+                    TaskToolCall::Message {
+                        task_id: &task_id,
+                        text: &text,
+                    },
+                )
+                .await
+        }
+        "task.cancel" => {
+            let task_id = required_string(args, "task_id")?;
+            tools
+                .call(caller, TaskToolCall::Cancel { task_id: &task_id })
+                .await
+        }
+        "task.update" => {
+            let kind = UpdateKind::parse(&required_string(args, "kind")?)?;
+            let text = required_string(args, "text")?;
+            let to_task = optional_string(args, "to_task")?;
+            tools
+                .call(
+                    caller,
+                    TaskToolCall::Update {
+                        kind,
+                        text: &text,
+                        to_task: to_task.as_deref(),
+                    },
+                )
+                .await
+        }
+        other => bail!("unknown task tool '{other}'"),
+    }
 }
 
 /// Self-contained re-prompt used when the runtime must (re)hydrate mid-turn:
@@ -373,6 +412,18 @@ pub(super) fn tool_prompt(pack: &str, exchange: &[(String, String)]) -> String {
         "Respond with either exactly one ```hivemind-tool fenced block or the final answer as plain text.\n",
     );
     prompt
+}
+
+/// Messages that reached an agent mid-turn, appended to its next prompt.
+pub(super) fn format_notes(notes: &[String]) -> String {
+    let lines = notes
+        .iter()
+        .map(|note| format!("- {note}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "\n\nNew messages arrived while you were working. They are newer than your instructions; act on them now:\n{lines}"
+    )
 }
 
 /// Continuation prompt for a live session that already holds the pack and
@@ -542,27 +593,39 @@ pub(super) async fn invoke_with_memory(
         })
         .await?;
     let mut actions = 0usize;
+    let tools = invoker.task_tools();
     loop {
-        let reply = &last.text;
-        let outcome = parse_tool_block(reply);
-        let call = match outcome {
-            Ok(None) => return Ok(last.text),
-            Ok(Some(call)) => Ok(call),
-            Err(error) => Err(format!("{error:#}")),
+        let outcome = parse_tool_block(&last.text);
+        let finishing = matches!(outcome, Ok(None));
+        // Messages that reached this agent while it was working: anything the
+        // runtime could not take mid-run, plus what was queued for it. When it
+        // is about to finish, the check also closes the turn to new ones.
+        let notes = match &tools {
+            Some(tools) => {
+                tools.poll_interjections(caller, std::mem::take(&mut last.unsteered), finishing)
+            }
+            None => Vec::new(),
         };
-        if actions >= MAX_MEMORY_ACTIONS {
-            bail!(
-                "agent hit the Hivemind memory tool action limit ({MAX_MEMORY_ACTIONS}) without producing a plain-text answer"
-            );
-        }
-        actions += 1;
-        let (rendered, result) = match call {
-            Ok(call) => {
+        let (rendered, mut result) = match outcome {
+            Ok(None) if notes.is_empty() => return Ok(last.text),
+            // New instructions arrived as it was about to answer: it must
+            // read them first, so the draft answer is withheld.
+            Ok(None) => (
+                format!("(your draft answer) {}", utf8_suffix(&last.text, 300)),
+                "withheld: new instructions arrived before you finished".to_owned(),
+            ),
+            Ok(Some(call)) => {
+                if actions >= MAX_MEMORY_ACTIONS {
+                    bail!(
+                        "agent hit the Hivemind memory tool action limit ({MAX_MEMORY_ACTIONS}) without producing a plain-text answer"
+                    );
+                }
+                actions += 1;
                 let rendered = serde_json::to_string(&call.args)
                     .map(|args| format!("{{\"name\":\"{}\",\"args\":{args}}}", call.name))
                     .unwrap_or_else(|_| call.name.clone());
                 let outcome = if call.name.starts_with("task.") {
-                    execute_task_tool(invoker.delegator().as_deref(), caller, &call).await
+                    execute_task_tool(tools.as_deref(), caller, &call).await
                 } else {
                     execute_with_optional_authorization(memory, caller, authorized_global, &call)
                 };
@@ -571,8 +634,19 @@ pub(super) async fn invoke_with_memory(
                     Err(error) => (rendered, format!("error: {error:#}")),
                 }
             }
-            Err(error) => (utf8_suffix(reply, 400), format!("error: {error}")),
+            Err(error) => {
+                if actions >= MAX_MEMORY_ACTIONS {
+                    bail!(
+                        "agent hit the Hivemind memory tool action limit ({MAX_MEMORY_ACTIONS}) without producing a plain-text answer"
+                    );
+                }
+                actions += 1;
+                (utf8_suffix(&last.text, 400), format!("error: {error:#}"))
+            }
         };
+        if !notes.is_empty() {
+            result.push_str(&format_notes(&notes));
+        }
         let followup = tool_followup(&rendered, &result);
         exchange.push((rendered, result));
         let full = tool_prompt(pack, &exchange);

@@ -17,7 +17,7 @@ use std::{
 use anyhow::{bail, Context, Result};
 use tokio::{sync::Mutex, task::JoinSet, time::timeout};
 
-use super::{create_session, HarnessSession, ToolAccess};
+use super::{create_session, HarnessSession, SteerHandle, ToolAccess};
 use crate::{
     config::{AgentConfig, RuntimeConfig},
     events::{DomainEventKind, EventBus},
@@ -71,10 +71,13 @@ pub struct InvokeRequest<'a> {
     pub view: &'a TurnView,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct InvokeReply {
     pub text: String,
     pub epoch_id: String,
+    /// Messages steered at this run that the runtime never received; the
+    /// caller must deliver them another way.
+    pub unsteered: Vec<String>,
 }
 
 enum Stop {
@@ -108,6 +111,9 @@ struct PoolInner {
     memory: Arc<MemoryService>,
     events: EventBus,
     slots: std::sync::Mutex<HashMap<String, SlotHandle>>,
+    /// Steering handles for live sessions, reachable without taking a slot's
+    /// lock (which is held for the whole of a prompt).
+    steers: std::sync::Mutex<HashMap<String, SteerHandle>>,
     shutting_down: AtomicBool,
     reaper_started: AtomicBool,
 }
@@ -132,10 +138,26 @@ impl RuntimePool {
                 memory,
                 events,
                 slots: std::sync::Mutex::new(HashMap::new()),
+                steers: std::sync::Mutex::new(HashMap::new()),
                 shutting_down: AtomicBool::new(false),
                 reaper_started: AtomicBool::new(false),
             }),
         }
+    }
+
+    /// Inject `text` into the run currently in flight for `instance_id`
+    /// (Pi/OMP `steer`: delivered after the current tool calls, before the
+    /// next model call). `false` means nothing is running there, or the
+    /// runtime cannot take it, and the caller must deliver it another way.
+    pub fn steer(&self, instance_id: &str, text: &str) -> bool {
+        let handle = self
+            .inner
+            .steers
+            .lock()
+            .expect("runtime pool steers lock poisoned")
+            .get(instance_id)
+            .cloned();
+        handle.is_some_and(|handle| handle.try_steer(text))
     }
 
     /// Live continuable state for `instance_id`; `None` means the next prompt hydrates.
@@ -219,6 +241,7 @@ impl RuntimePool {
         let mut live = slot.live.take().expect("live session was just ensured");
         match live.session.prompt(text).await {
             Ok(reply) => {
+                let unsteered = live.session.take_unsteered();
                 live.estimated_tokens += (text.len() + reply.len()).div_ceil(4) as u64;
                 live.cursor = Some(request.view.clone());
                 slot.last_used = Instant::now();
@@ -231,6 +254,7 @@ impl RuntimePool {
                 Ok(InvokeReply {
                     text: reply,
                     epoch_id,
+                    unsteered,
                 })
             }
             Err(error) => {
@@ -366,6 +390,12 @@ impl PoolInner {
                 return Err(error);
             }
         };
+        if let Some(handle) = session.steer_handle() {
+            self.steers
+                .lock()
+                .expect("runtime pool steers lock poisoned")
+                .insert(request.instance_id.to_owned(), handle);
+        }
         self.events.publish(DomainEventKind::RuntimeStarted {
             agent_id: agent.name.clone(),
             instance_id: request.instance_id.to_owned(),
@@ -384,6 +414,10 @@ impl PoolInner {
     }
 
     async fn stop(&self, instance_id: &str, mut live: Live, reason: Stop) {
+        self.steers
+            .lock()
+            .expect("runtime pool steers lock poisoned")
+            .remove(instance_id);
         if let Err(error) = live.session.shutdown().await {
             eprintln!("warning: failed to stop runtime for '{instance_id}': {error:#}");
         }

@@ -243,6 +243,26 @@ requesting persona, in the same room, may retry a failed or cancelled task, once
 per task, and `[tasks] max_attempts` (default 3) bounds the whole chain; a
 failure on the last attempt goes to you without waking the persona.
 
+**Talking to a running worker (both directions).** Hivemind carries every
+message; runtimes never talk to each other directly. Each message is
+size-capped, attributed by Hivemind rather than by the model, and logged on the
+task (`GET /api/v1/tasks/{id}` → `channel`).
+
+| From → to | How | What happens |
+| --- | --- | --- |
+| persona → worker | `task.message {task_id, text}` | **Steers the worker mid-run** through the runtime's own `steer` (Pi and OMP both support it): delivered after the current tool calls, before the next model call. If the worker is blocked on a question, the message is the answer. If the thread is idle, it reopens it (costs an attempt). |
+| persona → worker | `task.cancel {task_id}` | Stops a running task. |
+| user → worker | `/task <id>` then type, or `chat --task <id>` | Same as above: answers, steers, or starts a normal turn if the worker is idle. No waiting for the worker's turn. |
+| room → worker | automatic | When a turn records a new `Decision:` or changes the `Goal:`, every worker already running for that room is steered with it, so nothing keeps working from a stale decision. |
+| worker → persona | `task.update {kind: "progress", text}` | Posted into the requesting room. Nobody waits. |
+| worker → persona | `task.update {kind: "question" \| "blocked", text}` | **The worker blocks** until it is answered. The question is posted to the room and the persona is woken with a notice (worker text quoted). The persona answers with `task.message`, or asks you and relays your answer; you can also answer in the thread. `[tasks] question_timeout_secs` (default 600) bounds the wait, after which the worker is told to proceed on a stated assumption; `max_questions` (default 3) bounds the asks per run. |
+| worker → sibling | `task.update {kind: "message", to_task, text}` | Only between running tasks started by the same persona in the same room, at most 10 per run; a copy goes to the requesting room so the persona sees everything. |
+
+A message that cannot be steered into the run (it is between steps, or the
+runtime refused it) is queued for the worker's next step instead, and one that
+lands just as the worker finishes holds back its final answer or reopens the
+turn — a message is never silently dropped.
+
 **Threads are yours to use.** Every task thread is a normal room you can enter
 and reply in; the worker answers with full tools in the same workspace:
 
@@ -252,8 +272,8 @@ hivemind chat --task <id>       # talk to that worker directly
 ~~~
 
 Inside `chat`, `/tasks` lists threads and `/task <id>` switches into one
-(`/main`, `/solo`, or `/group use` leaves it). If the worker is still busy your
-message waits its turn.
+(`/main`, `/solo`, or `/group use` leaves it). A blocked worker shows up there
+as `BLOCKED waiting for an answer`.
 
 Task records are durable JSON files in `.hivemind/tasks`, and thread
 transcripts live in the room archive, so threads survive restarts. A task
@@ -296,7 +316,7 @@ The WebSocket stream forwards these events as `conversation.turn.started`,
 `conversation.turn.completed`, `agent.reply.started`, `agent.reply.completed`,
 `agent.reply.failed`, `runtime.started`, `runtime.stopped`,
 `runtime.rotated`, `runtime.failed`, `task.started`, `task.completed`,
-`task.failed`, `task.followup`, and `task.cancelled`. A subscriber that falls behind the bounded buffer receives
+`task.failed`, `task.followup`, `task.message`, and `task.cancelled`. A subscriber that falls behind the bounded buffer receives
 `system.events_lagged` with `missed_count` and `refresh_required: true`
 instead of the dropped events.
 
@@ -470,8 +490,10 @@ The list returns every recorded task thread, oldest first, with its full
 `brief`, the worker's `report` (or failure reason), `status`
 (`running`, `completed`, `failed`, `cancelled`), `attempt`, `retry_of`, the
 requesting persona's `followup` reply after a failure, `room_id`,
-`thread_room_id`, `requested_by`, `worker`, and `created_at_ms`. The single-task
-endpoint adds `messages`, the thread's transcript. Workspace paths and process
+`thread_room_id`, `requested_by`, `worker`, `waiting_for` (the question a
+blocked worker is waiting on), and `created_at_ms`. The single-task endpoint
+adds `messages` (the thread's transcript) and `channel` (every steer, answer,
+question, and progress note exchanged with the worker). Workspace paths and process
 ids are never included. An unknown or malformed id returns `404`.
 
 ~~~bash
@@ -587,6 +609,7 @@ Hivemind is intentionally focused on core harness and interface foundations:
 - Responses are collected after each turn rather than streamed token-by-token.
 - Agent-to-agent messaging is not implemented; task handoff is one level deep (workers cannot delegate), and an interrupted task is reported, not resumed. A persona woken by a failure sees a roster of only itself, not the whole group.
 - Replying in a task thread is CLI-only; the HTTP API reads threads but does not send turns.
+- Mid-run steering is queued by the runtime and delivered after the current tool calls, not instantly. Steering needs the real Pi/OMP `steer` command; it is tested against fakes that follow their documented protocol, not the real binaries. A steer or task message to a task owned by another Hivemind process is refused.
 - The read-only tool allowlists for Pi and OMP are taken from their documented `--tools` flags; they have not been exercised against the real binaries in CI.
 
 Runtime sessions live for as long as the core that started them: `ask`/`all`

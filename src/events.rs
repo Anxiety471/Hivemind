@@ -92,6 +92,14 @@ pub enum DomainEventKind {
         worker: String,
         message: String,
     },
+    /// A message went through a task's channel (steer, answer, question,
+    /// progress, ...). The text stays on the task record, not on the event.
+    TaskMessaged {
+        task_id: String,
+        from: String,
+        kind: String,
+        how: String,
+    },
     TaskFollowup {
         task_id: String,
         room_id: String,

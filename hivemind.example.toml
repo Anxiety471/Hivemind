@@ -25,6 +25,9 @@ mode = "deterministic"
 max_concurrent = 4
 # Attempts per piece of work: the first handoff plus persona-initiated retries.
 max_attempts = 3
+# A worker that asks a question waits this long for an answer, and may ask this many per run.
+question_timeout_secs = 600
+max_questions = 3
 
 [[personas]]
 id = "Maomao"

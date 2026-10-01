@@ -11,7 +11,7 @@ use tokio::{
 
 use crate::config::AgentConfig;
 
-use super::{HarnessSession, ToolAccess};
+use super::{HarnessSession, SteerHandle, SteerShared, ToolAccess};
 
 const CHILD_EXIT_GRACE: Duration = Duration::from_secs(2);
 
@@ -103,6 +103,10 @@ pub struct PiSession {
     agent_name: String,
     transport: ChildTransport,
     failure: Option<String>,
+    steer: std::sync::Arc<SteerShared>,
+    /// Texts sent as `steer` whose acknowledgement has not arrived yet.
+    sent_steers: std::collections::VecDeque<String>,
+    unsteered: Vec<String>,
 }
 
 impl PiSession {
@@ -132,6 +136,9 @@ impl PiSession {
             agent_name: agent.name.clone(),
             transport,
             failure: None,
+            steer: SteerShared::new(),
+            sent_steers: std::collections::VecDeque::new(),
+            unsteered: Vec::new(),
         })
     }
 
@@ -163,14 +170,44 @@ impl PiSession {
         Ok(())
     }
 
+    /// Send steering messages accepted since the last frame, in order.
+    async fn flush_steers(&mut self) -> Result<()> {
+        for text in self.steer.drain() {
+            self.send(&json!({"type":"steer", "message": text})).await?;
+            self.sent_steers.push_back(text);
+        }
+        Ok(())
+    }
+
+    /// Next frame from Pi. While a prompt is in flight this also forwards
+    /// steering messages as they arrive, and swallows their acknowledgements
+    /// (a rejected steer is handed back through `take_unsteered`).
     async fn recv(&mut self) -> Result<Value> {
-        match self.transport.recv().await {
-            Ok(frame) => Ok(frame),
-            Err(error) => {
-                let error = error.context(format!("Pi RPC failed for agent '{}'", self.agent_name));
-                self.failure = Some(format!("{error:#}"));
-                Err(error)
+        loop {
+            self.flush_steers().await?;
+            let received = tokio::select! {
+                received = self.transport.recv() => received,
+                () = self.steer.wait() => continue,
+            };
+            let frame = match received {
+                Ok(frame) => frame,
+                Err(error) => {
+                    let error =
+                        error.context(format!("Pi RPC failed for agent '{}'", self.agent_name));
+                    self.failure = Some(format!("{error:#}"));
+                    return Err(error);
+                }
+            };
+            if frame.get("type").and_then(Value::as_str) == Some("response")
+                && frame.get("command").and_then(Value::as_str) == Some("steer")
+            {
+                let text = self.sent_steers.pop_front();
+                if frame.get("success").and_then(Value::as_bool) != Some(true) {
+                    self.unsteered.extend(text);
+                }
+                continue;
             }
+            return Ok(frame);
         }
     }
 
@@ -197,9 +234,8 @@ impl PiSession {
     }
 }
 
-#[async_trait]
-impl HarnessSession for PiSession {
-    async fn prompt(&mut self, input: &str) -> Result<String> {
+impl PiSession {
+    async fn run_prompt(&mut self, input: &str) -> Result<String> {
         if let Some(failure) = &self.failure {
             bail!(
                 "Pi session for agent '{}' failed earlier and cannot continue: {failure}",
@@ -263,6 +299,25 @@ impl HarnessSession for PiSession {
                 _ => {}
             }
         }
+    }
+}
+
+#[async_trait]
+impl HarnessSession for PiSession {
+    async fn prompt(&mut self, input: &str) -> Result<String> {
+        self.steer.begin();
+        let result = self.run_prompt(input).await;
+        let never_sent = self.steer.end();
+        self.unsteered.extend(never_sent);
+        result
+    }
+
+    fn steer_handle(&self) -> Option<SteerHandle> {
+        Some(SteerHandle::new(&self.steer))
+    }
+
+    fn take_unsteered(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.unsteered)
     }
 
     async fn context_tokens(&mut self) -> Result<Option<u64>> {
@@ -406,6 +461,81 @@ done
         );
         assert_eq!(session.prompt("again").await.unwrap(), "second turn");
         assert_eq!(session.context_tokens().await.unwrap(), Some(1234));
+        session.shutdown().await.unwrap();
+    }
+
+    /// A steer accepted mid-prompt reaches the running process, and the run
+    /// finishes with it; a steer sent when nothing is running is refused.
+    #[tokio::test]
+    async fn steer_reaches_a_running_prompt_and_is_refused_when_idle() {
+        let fixture = FixtureDir::new(
+            r#"
+while IFS= read -r request; do
+  case "$request" in
+    *'"type":"prompt"'*)
+      IFS= read -r steer_request
+      msg=${steer_request#*\"message\":\"}
+      msg=${msg%%\"*}
+      printf '%s\n' '{"type":"response","command":"steer","success":true,"data":{"disposition":"queued"}}'
+      printf '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"steered: %s"}]}}\n' "$msg"
+      printf '%s\n' '{"type":"agent_settled"}' ;;
+  esac
+done
+"#,
+        );
+        let mut cfg = agent();
+        cfg.workspace = fixture.workspace();
+        let mut session = PiSession::start(&fixture.binary(), &cfg, ToolAccess::Full)
+            .await
+            .unwrap();
+        let handle = session.steer_handle().unwrap();
+        assert!(
+            !handle.try_steer("too early"),
+            "idle sessions refuse steers"
+        );
+
+        let steering = async {
+            while !handle.try_steer("use sqlite") {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        };
+        let (reply, ()) = tokio::join!(session.prompt("work"), steering);
+        assert_eq!(reply.unwrap(), "steered: use sqlite");
+        assert!(session.take_unsteered().is_empty());
+        assert!(!handle.try_steer("too late"), "finished runs refuse steers");
+        session.shutdown().await.unwrap();
+    }
+
+    /// A steer the runtime rejects is handed back, never silently dropped.
+    #[tokio::test]
+    async fn a_rejected_steer_is_returned_to_the_caller() {
+        let fixture = FixtureDir::new(
+            r#"
+while IFS= read -r request; do
+  case "$request" in
+    *'"type":"prompt"'*)
+      IFS= read -r steer_request
+      printf '%s\n' '{"type":"response","command":"steer","success":false,"error":"not running"}'
+      printf '%s\n' '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}'
+      printf '%s\n' '{"type":"agent_settled"}' ;;
+  esac
+done
+"#,
+        );
+        let mut cfg = agent();
+        cfg.workspace = fixture.workspace();
+        let mut session = PiSession::start(&fixture.binary(), &cfg, ToolAccess::Full)
+            .await
+            .unwrap();
+        let handle = session.steer_handle().unwrap();
+        let steering = async {
+            while !handle.try_steer("decision changed") {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        };
+        let (reply, ()) = tokio::join!(session.prompt("work"), steering);
+        assert_eq!(reply.unwrap(), "done");
+        assert_eq!(session.take_unsteered(), ["decision changed"]);
         session.shutdown().await.unwrap();
     }
 

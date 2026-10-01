@@ -134,12 +134,13 @@ impl HivemindCore {
 
     pub async fn turn(&self, request: CoreTurnRequest<'_>) -> Result<Vec<TurnReply>> {
         let invoker = Arc::new(
-            RuntimeInvoker::new(self.runtime.clone(), request.room, request.group_id)
-                .with_delegator(self.tasks.bind(TaskOrigin {
+            RuntimeInvoker::new(self.runtime.clone(), request.room, request.group_id).with_tools(
+                self.tasks.bind(TaskOrigin {
                     room_name: request.room_name.to_owned(),
                     group_id: request.group_id.to_owned(),
                     members: request.members.to_vec(),
-                })),
+                }),
+            ),
         );
         self.turn_with_invoker(request, invoker).await
     }
@@ -153,7 +154,21 @@ impl HivemindCore {
             !self.shutting_down.load(Ordering::Acquire),
             "Hivemind core is shutting down"
         );
-        self.conversation
+        // Workers already running for this room must hear about a decision
+        // or goal this turn changes, not keep working from stale instructions.
+        let watched = self
+            .tasks
+            .has_running_in(request.room)
+            .then(|| self.conversation.room_history(request.room).ok())
+            .flatten()
+            .map(|history| history.state);
+        let started_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let room = request.room;
+        let replies = self
+            .conversation
             .turn(TurnRequest {
                 room: request.room,
                 room_name: request.room_name,
@@ -163,7 +178,13 @@ impl HivemindCore {
                 input: request.input,
                 invoker,
             })
-            .await
+            .await?;
+        if let (Some(before), Ok(after)) = (watched, self.conversation.room_history(room)) {
+            for change in state_changes(&before, &after.state) {
+                self.tasks.announce_to_room(room, started_ms, &change).await;
+            }
+        }
+        Ok(replies)
     }
 
     /// Idempotently stop the core and every live agent-instance runtime.
@@ -175,6 +196,26 @@ impl HivemindCore {
         self.tasks.cancel_all();
         self.runtime.shutdown().await;
     }
+}
+
+/// Decisions and goal changes between two snapshots of a room's state,
+/// worded for a worker that is already mid-task.
+fn state_changes(
+    before: &crate::conversation::RoomState,
+    after: &crate::conversation::RoomState,
+) -> Vec<String> {
+    let mut changes: Vec<String> = after
+        .decisions
+        .iter()
+        .filter(|decision| !before.decisions.contains(decision))
+        .map(|decision| format!("The room recorded a new decision: {decision}"))
+        .collect();
+    if after.goal != before.goal {
+        if let Some(goal) = &after.goal {
+            changes.push(format!("The room's goal changed to: {goal}"));
+        }
+    }
+    changes
 }
 
 #[cfg(test)]

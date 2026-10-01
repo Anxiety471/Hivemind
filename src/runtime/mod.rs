@@ -10,6 +10,84 @@ pub use pool::{
     InvokeReply, InvokeRequest, PromptDelta, PromptPhase, RuntimePool, SessionCursor, TurnView,
 };
 
+/// Delivers messages into a live session's in-flight run (`steer`), shared
+/// between the session (which sends them to the runtime) and the pool (which
+/// accepts them from callers).
+///
+/// A message is accepted only while a prompt is in flight. Anything accepted
+/// but not yet sent when the run ends is handed back through
+/// [`HarnessSession::take_unsteered`], so a message is never silently lost.
+pub(crate) struct SteerShared {
+    state: std::sync::Mutex<SteerState>,
+    wake: tokio::sync::Notify,
+}
+
+#[derive(Default)]
+struct SteerState {
+    busy: bool,
+    pending: Vec<String>,
+}
+
+impl SteerShared {
+    pub(crate) fn new() -> std::sync::Arc<Self> {
+        std::sync::Arc::new(Self {
+            state: std::sync::Mutex::new(SteerState::default()),
+            wake: tokio::sync::Notify::new(),
+        })
+    }
+
+    /// Session side: a prompt starts.
+    pub(crate) fn begin(&self) {
+        let mut state = self.state.lock().expect("steer state");
+        state.busy = true;
+        state.pending.clear();
+    }
+
+    /// Session side: take messages waiting to be sent to the runtime.
+    pub(crate) fn drain(&self) -> Vec<String> {
+        std::mem::take(&mut self.state.lock().expect("steer state").pending)
+    }
+
+    /// Session side: the prompt ended; returns what never reached the runtime.
+    pub(crate) fn end(&self) -> Vec<String> {
+        let mut state = self.state.lock().expect("steer state");
+        state.busy = false;
+        std::mem::take(&mut state.pending)
+    }
+
+    pub(crate) async fn wait(&self) {
+        self.wake.notified().await;
+    }
+}
+
+/// Caller side of [`SteerShared`]. Holds the session weakly, so a session that
+/// was dropped (for example, cancelled mid-run) stops accepting messages.
+#[derive(Clone)]
+pub struct SteerHandle(std::sync::Weak<SteerShared>);
+
+impl SteerHandle {
+    pub(crate) fn new(shared: &std::sync::Arc<SteerShared>) -> Self {
+        Self(std::sync::Arc::downgrade(shared))
+    }
+
+    /// Queue `text` for the in-flight run. `false` means no run is in flight
+    /// (or the session is gone) and the caller must deliver it another way.
+    pub fn try_steer(&self, text: &str) -> bool {
+        let Some(shared) = self.0.upgrade() else {
+            return false;
+        };
+        {
+            let mut state = shared.state.lock().expect("steer state");
+            if !state.busy {
+                return false;
+            }
+            state.pending.push(text.to_owned());
+        }
+        shared.wake.notify_one();
+        true
+    }
+}
+
 /// What a live session may do to the workspace.
 ///
 /// Chat sessions (main, solo, group, `ask`, `all`) are `ReadOnly`: the
@@ -50,6 +128,15 @@ pub trait HarnessSession: Send {
     async fn context_tokens(&mut self) -> Result<Option<u64>>;
     /// Release the underlying runtime (close/kill an OMP child, etc.).
     async fn shutdown(&mut self) -> Result<()>;
+    /// Handle for steering the in-flight run, if the runtime supports it.
+    fn steer_handle(&self) -> Option<SteerHandle> {
+        None
+    }
+    /// Steer messages accepted during the last prompt that the runtime never
+    /// received (or rejected); the caller must deliver them another way.
+    fn take_unsteered(&mut self) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 /// Create the live session for `agent`, dispatching on `agent.runtime`.

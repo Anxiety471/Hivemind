@@ -1,22 +1,31 @@
-//! Task-thread handoff.
+//! Task-thread handoff and the conversations around it.
 //!
 //! Chat sessions (main, solo, group, `ask`, `all`) are launched read-only, so
 //! an agent that wants to change the workspace calls `task.delegate`. Hivemind
 //! then runs the work in its own room (`task/<id>`) with a worker session that
-//! has full tools and the **delegating persona's workspace**, and posts the
-//! worker's final report back into the room that asked. The worker never sees
-//! the originating conversation and cannot delegate further; the asking agent
-//! never waits on it.
+//! has full tools and the **delegating persona's workspace**. The worker sees
+//! only its brief; the asking persona never waits on it.
 //!
-//! Failures are the persona's to handle: Hivemind wakes the persona that asked
-//! with a notice, and the persona decides whether to retry (a fresh
-//! `task.delegate` with `retry_of`, bounded by `[tasks] max_attempts`) or to
-//! tell the user. Hivemind never retries on its own.
+//! Talk goes both ways, and Hivemind carries every message (runtimes never
+//! talk to each other directly):
 //!
-//! The user can open any thread and talk to its worker directly. Task records
-//! are durable JSON files under `.hivemind/tasks`; thread transcripts live in
-//! the room archive. A task still running when its process exits is cancelled
-//! and reported as interrupted; it is not resumed.
+//! * persona → worker: `task.message` steers a running worker **mid-run**
+//!   (the runtime's `steer`), answers one that is blocked, or reopens an idle
+//!   thread; `task.cancel` stops it. The user can do the same from the thread.
+//! * worker → persona: `task.update` reports progress, or asks a `question`
+//!   / reports it is `blocked`. Those two **block the worker** until the
+//!   persona (or the user) answers, up to a timeout; they also wake the
+//!   persona with a notice. A worker can message a sibling worker the same way.
+//! * a changed room decision or goal is steered into the room's running tasks
+//!   automatically.
+//!
+//! Failures are the persona's to handle: it is woken with a notice and decides
+//! whether to retry (`task.delegate` with `retry_of`, bounded by `[tasks]
+//! max_attempts`) or to tell the user. Hivemind never retries on its own.
+//!
+//! Task records are durable JSON files under `.hivemind/tasks`; thread
+//! transcripts live in the room archive. A task still running when its process
+//! exits is cancelled and reported as interrupted; it is not resumed.
 use std::{
     collections::HashMap,
     fs,
@@ -25,13 +34,16 @@ use std::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
     },
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{anyhow, bail, Context, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use tokio::{sync::Notify, task::AbortHandle};
+use tokio::{
+    sync::{oneshot, Notify},
+    task::AbortHandle,
+};
 
 use crate::{
     config::{AgentConfig, ConversationMode, HivemindConfig},
@@ -47,6 +59,12 @@ pub const TASK_ROOM_PREFIX: &str = "task/";
 pub const MAX_BRIEF_BYTES: usize = 8_000;
 /// Largest worker report stored and posted back into the originating room.
 pub const MAX_REPORT_BYTES: usize = 4_000;
+/// Largest single message between a persona, the user, and a worker.
+pub const MAX_MESSAGE_BYTES: usize = 4_000;
+/// Messages one worker may send to siblings per run.
+const MAX_WORKER_MESSAGES: u32 = 10;
+/// Entries kept in a task's channel log.
+const MAX_CHANNEL_LOG: usize = 200;
 const BRIEF_PREVIEW_BYTES: usize = 200;
 const FAILED_BRIEF_QUOTE_BYTES: usize = 600;
 
@@ -74,11 +92,76 @@ pub struct DelegateRequest<'a> {
     pub retry_of: Option<&'a str>,
 }
 
-/// Starts task threads on behalf of an agent. `caller` is the host-built
-/// identity of the delegating agent, never anything the model supplied.
+/// What a worker is saying with `task.update`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpdateKind {
+    /// Status for the requester; nobody waits.
+    Progress,
+    /// A question the worker needs answered; it waits.
+    Question,
+    /// The worker cannot continue without a decision; it waits.
+    Blocked,
+    /// A message to a sibling worker.
+    Message,
+}
+
+impl UpdateKind {
+    pub fn parse(kind: &str) -> Result<Self> {
+        match kind.trim() {
+            "progress" => Ok(Self::Progress),
+            "question" => Ok(Self::Question),
+            "blocked" => Ok(Self::Blocked),
+            "message" => Ok(Self::Message),
+            other => {
+                bail!("unknown update kind '{other}'; use progress, question, blocked, or message")
+            }
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Progress => "progress",
+            Self::Question => "question",
+            Self::Blocked => "blocked",
+            Self::Message => "message",
+        }
+    }
+}
+
+/// One `task.*` call, already parsed.
+#[derive(Debug, Clone, Copy)]
+pub enum TaskToolCall<'a> {
+    Delegate(DelegateRequest<'a>),
+    Message {
+        task_id: &'a str,
+        text: &'a str,
+    },
+    Cancel {
+        task_id: &'a str,
+    },
+    Update {
+        kind: UpdateKind,
+        text: &'a str,
+        to_task: Option<&'a str>,
+    },
+}
+
+/// The task tools an agent can call, bound to who it is: chat personas
+/// delegate, message, and cancel; task workers send updates. `caller` is the
+/// host-built identity of the calling agent, never anything the model supplied.
 #[async_trait]
-pub trait TaskDelegator: Send + Sync {
-    async fn delegate(&self, caller: &Caller, request: DelegateRequest<'_>) -> Result<String>;
+pub trait TaskTools: Send + Sync {
+    async fn call(&self, caller: &Caller, call: TaskToolCall<'_>) -> Result<String>;
+
+    /// Messages for this agent that arrived mid-turn and could not be steered
+    /// into the live run (`unsteered`), plus anything queued for it. With
+    /// `finishing`, an empty result also closes the turn to new messages.
+    fn poll_interjections(
+        &self,
+        caller: &Caller,
+        unsteered: Vec<String>,
+        finishing: bool,
+    ) -> Vec<String>;
 }
 
 /// The conversation a task was handed off from; everything needed to wake the
@@ -99,6 +182,19 @@ pub enum TaskStatus {
     Cancelled,
 }
 
+/// One message through a task's channel, kept on its record.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChannelMessage {
+    pub at_ms: u64,
+    /// `persona Maomao`, `the user`, `worker`, `worker of task-…`, or `Hivemind`.
+    pub from: String,
+    pub kind: String,
+    pub text: String,
+    /// How it reached the other side: `steered`, `queued`, `answered`,
+    /// `reopened`, `posted`, or `unanswered`.
+    pub how: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaskRecord {
     pub id: String,
@@ -113,14 +209,20 @@ pub struct TaskRecord {
     pub status: TaskStatus,
     /// Worker report on success, or the failure reason.
     pub report: Option<String>,
-    /// 1 for a first attempt, +1 for each persona-initiated retry.
+    /// 1 for a first attempt, +1 for each persona-initiated retry or reopening.
     #[serde(default = "first_attempt")]
     pub attempt: u32,
     #[serde(default)]
     pub retry_of: Option<String>,
-    /// What the requesting persona said after being told the task failed.
+    /// What the requesting persona last said after Hivemind woke it.
     #[serde(default)]
     pub followup: Option<String>,
+    /// Set while the worker is blocked on a question.
+    #[serde(default)]
+    pub waiting_for: Option<String>,
+    /// Messages exchanged with the worker, oldest first.
+    #[serde(default)]
+    pub channel: Vec<ChannelMessage>,
     #[serde(default)]
     pub owner_pid: u32,
     #[serde(default)]
@@ -137,6 +239,75 @@ impl TaskRecord {
     }
 }
 
+/// Who is talking to a worker.
+#[derive(Debug, Clone)]
+enum Sender {
+    Persona(String),
+    User,
+    /// A sibling worker, by task id.
+    Worker(String),
+    /// Hivemind itself, for example when a room decision changed.
+    Room,
+}
+
+impl Sender {
+    fn label(&self) -> String {
+        match self {
+            Self::Persona(name) => format!("persona {name}"),
+            Self::User => "the user".into(),
+            Self::Worker(id) => format!("worker of {id}"),
+            Self::Room => "Hivemind (room decision)".into(),
+        }
+    }
+
+    /// Speaker name for the thread room's transcript.
+    fn speaker(&self) -> String {
+        match self {
+            Self::Persona(name) => name.clone(),
+            Self::User => "user".into(),
+            Self::Worker(id) => format!("task:{id}"),
+            Self::Room => "hivemind".into(),
+        }
+    }
+}
+
+/// How a message to a running worker got there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Delivery {
+    Answered,
+    Steered,
+    Queued,
+}
+
+impl Delivery {
+    fn how(self) -> &'static str {
+        match self {
+            Self::Answered => "answered",
+            Self::Steered => "steered",
+            Self::Queued => "queued",
+        }
+    }
+}
+
+/// Per-run state of a task this process is running.
+struct Live {
+    room_id: String,
+    instance_id: String,
+    origin: TaskOrigin,
+    /// Messages for the worker's next step, picked up by `poll_interjections`.
+    queue: Vec<String>,
+    /// The worker has answered and is about to end its turn; late messages go
+    /// to `after` instead of being lost.
+    closing: bool,
+    /// Messages that arrived while closing; they start another run.
+    after: Vec<String>,
+    question: Option<oneshot::Sender<String>>,
+    questions: u32,
+    sent: u32,
+    /// Messages to write into the thread's transcript once the turn ends.
+    unposted: Vec<(String, String)>,
+}
+
 #[derive(Default)]
 struct Counts {
     running: usize,
@@ -151,6 +322,7 @@ struct Inner {
     dir: PathBuf,
     io: Mutex<()>,
     aborts: Mutex<HashMap<String, AbortHandle>>,
+    live: Mutex<HashMap<String, Live>>,
     counts: Mutex<Counts>,
     idle: Notify,
     closed: AtomicBool,
@@ -187,6 +359,13 @@ impl Drop for Guard {
     }
 }
 
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
 impl TaskService {
     pub fn new(
         config: Arc<HivemindConfig>,
@@ -204,6 +383,7 @@ impl TaskService {
                 dir: dir.into(),
                 io: Mutex::new(()),
                 aborts: Mutex::new(HashMap::new()),
+                live: Mutex::new(HashMap::new()),
                 counts: Mutex::new(Counts::default()),
                 idle: Notify::new(),
                 closed: AtomicBool::new(false),
@@ -222,9 +402,10 @@ impl TaskService {
         self.inner.load(id)
     }
 
-    /// A delegator bound to the conversation it will be called from.
-    pub fn bind(&self, origin: TaskOrigin) -> Arc<dyn TaskDelegator> {
-        Arc::new(BoundDelegator {
+    /// The task tools for a chat persona, bound to the conversation they are
+    /// called from.
+    pub fn bind(&self, origin: TaskOrigin) -> Arc<dyn TaskTools> {
+        Arc::new(ChatTools {
             service: self.clone(),
             origin,
         })
@@ -250,9 +431,12 @@ impl TaskService {
         Ok(agent)
     }
 
-    /// Let the user talk to a task's worker directly. The reply comes from the
-    /// same persona and workspace, with full tools, in the task's own room. If
-    /// the worker is still busy the message waits its turn.
+    /// Let the user talk to a task's worker directly.
+    ///
+    /// While the worker is running, the message goes into the run: it answers
+    /// a question the worker is blocked on, or steers it mid-run. Otherwise it
+    /// starts a normal turn in the thread, answered with full tools in the same
+    /// workspace.
     pub async fn reply_in_thread(&self, id: &str, input: &str) -> Result<Vec<TurnReply>> {
         let inner = &self.inner;
         if inner.closed.load(Ordering::Acquire) {
@@ -261,6 +445,36 @@ impl TaskService {
         let record = inner
             .load(id)
             .ok_or_else(|| anyhow!("no task named '{id}'"))?;
+        let text = bounded_message(input)?;
+        if record.status == TaskStatus::Running {
+            let delivery = inner
+                .deliver(&record, &Sender::User, "message", &text)
+                .await;
+            return match delivery {
+                Some(delivery) => Ok(vec![TurnReply {
+                    name: "hivemind".into(),
+                    result: Ok(match delivery {
+                        Delivery::Answered => format!(
+                            "{} was blocked on a question; your message answered it.",
+                            record.worker
+                        ),
+                        Delivery::Steered => format!(
+                            "{} is working; your message was steered into the run.",
+                            record.worker
+                        ),
+                        Delivery::Queued => format!(
+                            "{} is working; your message will reach it at its next step.",
+                            record.worker
+                        ),
+                    }),
+                }]),
+                None if record.owner_pid != std::process::id() => bail!(
+                    "task {id} is running in another Hivemind process (pid {}); talk to it from there",
+                    record.owner_pid
+                ),
+                None => bail!("{} is finishing; send your message again in a moment", record.worker),
+            };
+        }
         let members = [Participant {
             agent: self.worker_agent(&record)?,
             role: Some("Task worker".into()),
@@ -281,6 +495,41 @@ impl TaskService {
                 invoker,
             })
             .await
+    }
+
+    /// Tell the running tasks of `room_id` that a decision changed, so they do
+    /// not keep working from stale instructions. Only tasks that already
+    /// existed at `since_ms` are told; ones started since were briefed with
+    /// the decision.
+    pub async fn announce_to_room(&self, room_id: &str, since_ms: u64, text: &str) {
+        let inner = &self.inner;
+        let ids: Vec<String> = inner
+            .live
+            .lock()
+            .expect("task live")
+            .iter()
+            .filter(|(_, live)| live.room_id == room_id)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in ids {
+            if let Some(record) = inner.load(&id) {
+                if record.created_at_ms < since_ms {
+                    inner
+                        .deliver(&record, &Sender::Room, "decision", text)
+                        .await;
+                }
+            }
+        }
+    }
+
+    /// Whether this process is running a task for `room_id` right now.
+    pub fn has_running_in(&self, room_id: &str) -> bool {
+        self.inner
+            .live
+            .lock()
+            .expect("task live")
+            .values()
+            .any(|live| live.room_id == room_id)
     }
 
     /// Resolve once no task or persona follow-up started by this process is
@@ -313,24 +562,9 @@ impl TaskService {
                 })
                 .collect()
         };
+        inner.live.lock().expect("task live").clear();
         for id in ids {
-            let updated = inner.update(&id, |record| {
-                if record.status == TaskStatus::Running {
-                    record.status = TaskStatus::Cancelled;
-                    record.report = Some("cancelled: Hivemind shut down before it finished".into());
-                    true
-                } else {
-                    false
-                }
-            });
-            if let Some(record) = updated {
-                inner.events.publish(DomainEventKind::TaskCancelled {
-                    task_id: record.id,
-                    room_id: record.room_id,
-                    thread_room_id: record.thread_room_id,
-                    worker: record.worker,
-                });
-            }
+            inner.mark_cancelled(&id, "cancelled: Hivemind shut down before it finished");
         }
         inner.idle.notify_waiters();
     }
@@ -424,28 +658,11 @@ impl TaskService {
             }
         };
 
-        let running = {
-            let mut counts = inner.counts.lock().expect("task counts");
-            let limit = inner.config.tasks.max_concurrent;
-            if counts.running >= limit {
-                bail!(
-                    "{} task threads are already running (limit {limit}); tell the user, or retry after one completes",
-                    counts.running
-                );
-            }
-            counts.running += 1;
-            Guard {
-                inner: inner.clone(),
-                slot: Slot::Running,
-            }
-        };
-
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default();
+        let running = inner.running_guard()?;
+        let now = now_ms();
         let id = format!(
             "task-{:x}-{}",
-            now.as_secs(),
+            now / 1000,
             inner.sequence.fetch_add(1, Ordering::Relaxed) + 1
         );
         let record = TaskRecord {
@@ -461,8 +678,10 @@ impl TaskService {
             attempt,
             retry_of,
             followup: None,
+            waiting_for: None,
+            channel: Vec::new(),
             owner_pid: std::process::id(),
-            created_at_ms: now.as_millis() as u64,
+            created_at_ms: now,
         };
         inner.save(&record)?;
         inner.events.publish(DomainEventKind::TaskStarted {
@@ -473,34 +692,361 @@ impl TaskService {
             worker: record.worker.clone(),
         });
         let message = format!(
-            "task {id} started (attempt {attempt}): {} is working on it in thread {} with full tools in your workspace. Tell the user what you handed off and stop; Hivemind posts the worker's final report into this room when it finishes. Do not wait for it, poll, or guess its outcome.",
+            "task {id} started (attempt {attempt}): {} is working on it in thread {} with full tools in your workspace. Tell the user what you handed off and stop; Hivemind posts the worker's final report into this room when it finishes, and wakes you if the task fails or the worker needs an answer. To change course while it runs, use task.message with this task id. Do not wait for it, poll, or guess its outcome.",
             record.worker, record.thread_room_id
         );
-        let handle = tokio::spawn(run_task(
-            inner.clone(),
-            record,
-            agent,
-            origin.clone(),
-            running,
-        ));
-        inner
-            .aborts
-            .lock()
-            .expect("task aborts")
-            .insert(id, handle.abort_handle());
+        let input = worker_input(&record);
+        inner.spawn_run(record, agent, origin.clone(), running, input);
         Ok(message)
+    }
+
+    /// Persona → worker: steer, answer, or reopen.
+    async fn message_task(
+        &self,
+        origin: &TaskOrigin,
+        caller: &Caller,
+        task_id: &str,
+        text: &str,
+    ) -> Result<String> {
+        let inner = &self.inner;
+        let record = inner.owned_by(caller, task_id)?;
+        let text = bounded_message(text)?;
+        let sender = Sender::Persona(caller.persona_id.clone());
+        if record.status == TaskStatus::Running {
+            return match inner.deliver(&record, &sender, "message", &text).await {
+                Some(Delivery::Answered) => Ok(format!(
+                    "delivered: {} was blocked on a question and now has your answer.",
+                    record.worker
+                )),
+                Some(Delivery::Steered) => Ok(format!(
+                    "delivered mid-run: {} will see it before its next step.",
+                    record.worker
+                )),
+                Some(Delivery::Queued) => Ok(format!(
+                    "queued: {} will see it at its next step.",
+                    record.worker
+                )),
+                None if record.owner_pid != std::process::id() => bail!(
+                    "task {task_id} is running in another Hivemind process; message it from there"
+                ),
+                None => bail!(
+                    "{} is finishing; send your message again in a moment",
+                    record.worker
+                ),
+            };
+        }
+        // Idle thread: reopen it with this message, which costs an attempt.
+        let limit = inner.config.tasks.max_attempts;
+        if record.attempt >= limit {
+            bail!(
+                "attempt limit reached ({limit}); explain the outcome to the user instead of reopening task {task_id}"
+            );
+        }
+        if inner.closed.load(Ordering::Acquire) {
+            bail!("Hivemind is shutting down");
+        }
+        let running = inner.running_guard()?;
+        let record = inner
+            .update(task_id, |record| {
+                record.status = TaskStatus::Running;
+                record.attempt += 1;
+                record.waiting_for = None;
+                record.owner_pid = std::process::id();
+                true
+            })
+            .ok_or_else(|| anyhow!("unknown task '{task_id}'"))?;
+        inner
+            .log(&record, &sender, "message", &text, "reopened")
+            .await;
+        let agent = self.worker_agent(&record)?;
+        let input = continuation_input(&sender.label(), &text);
+        inner.spawn_run(record.clone(), agent, origin.clone(), running, input);
+        Ok(format!(
+            "reopened: {} is working on task {task_id} again in its thread (attempt {}).",
+            record.worker, record.attempt
+        ))
+    }
+
+    /// Persona → worker: stop it.
+    fn cancel_task(&self, caller: &Caller, task_id: &str) -> Result<String> {
+        let inner = &self.inner;
+        let record = inner.owned_by(caller, task_id)?;
+        if record.status != TaskStatus::Running {
+            bail!(
+                "task {task_id} is {}, so there is nothing to cancel",
+                status_label(record.status)
+            );
+        }
+        if record.owner_pid != std::process::id() {
+            bail!("task {task_id} is running in another Hivemind process; cancel it from there");
+        }
+        let abort = inner.aborts.lock().expect("task aborts").remove(task_id);
+        if let Some(abort) = abort {
+            abort.abort();
+        }
+        inner.live.lock().expect("task live").remove(task_id);
+        inner.mark_cancelled(
+            task_id,
+            &format!("cancelled by persona {}", caller.persona_id),
+        );
+        inner.idle.notify_waiters();
+        Ok(format!("task {task_id} cancelled."))
+    }
+
+    /// Worker → persona or sibling. Questions and blockers wait for an answer.
+    async fn worker_update(
+        &self,
+        task_id: &str,
+        kind: UpdateKind,
+        text: &str,
+        to_task: Option<&str>,
+    ) -> Result<String> {
+        let inner = &self.inner;
+        let record = inner
+            .load(task_id)
+            .ok_or_else(|| anyhow!("unknown task '{task_id}'"))?;
+        let text = bounded_message(text)?;
+        let from = format!("worker of {task_id}");
+        match kind {
+            UpdateKind::Progress => {
+                inner
+                    .log_as(&record, &from, "progress", &text, "posted")
+                    .await;
+                inner.post_to_room_detached(
+                    &record,
+                    format!("Progress from task {task_id} ({}): {text}", record.worker),
+                );
+                Ok("progress posted to the requesting room; carry on".into())
+            }
+            UpdateKind::Message => {
+                let sibling_id = to_task
+                    .map(str::trim)
+                    .filter(|id| !id.is_empty())
+                    .ok_or_else(|| anyhow!("a message needs to_task: the sibling task's id"))?;
+                if sibling_id == task_id {
+                    bail!("a worker cannot message itself");
+                }
+                let sibling = inner
+                    .load(sibling_id)
+                    .ok_or_else(|| anyhow!("unknown task '{sibling_id}'"))?;
+                if sibling.room_id != record.room_id || sibling.requested_by != record.requested_by
+                {
+                    bail!(
+                        "you can only message workers started by the same persona in the same room"
+                    );
+                }
+                if sibling.status != TaskStatus::Running {
+                    bail!(
+                        "task {sibling_id} is {}; ask the requesting persona to relay this instead",
+                        status_label(sibling.status)
+                    );
+                }
+                {
+                    let mut live = inner.live.lock().expect("task live");
+                    let Some(entry) = live.get_mut(task_id) else {
+                        bail!("task {task_id} is not running here");
+                    };
+                    if entry.sent >= MAX_WORKER_MESSAGES {
+                        bail!(
+                            "message limit reached ({MAX_WORKER_MESSAGES} per run); ask the requesting persona to relay"
+                        );
+                    }
+                    entry.sent += 1;
+                }
+                let sender = Sender::Worker(task_id.to_owned());
+                match inner.deliver(&sibling, &sender, "message", &text).await {
+                    Some(delivery) => {
+                        inner.post_to_room_detached(
+                            &record,
+                            format!("task {task_id} → task {sibling_id}: {text}"),
+                        );
+                        Ok(format!(
+                            "delivered to {sibling_id} ({}); do not wait for a reply — any answer arrives as a message",
+                            delivery.how()
+                        ))
+                    }
+                    None => bail!("task {sibling_id} is not running in this process"),
+                }
+            }
+            UpdateKind::Question | UpdateKind::Blocked => {
+                self.ask_requester(&record, kind, &text).await
+            }
+        }
+    }
+
+    /// Post the question to the requesting room, wake the persona, and block
+    /// the worker until it is answered or the wait runs out.
+    async fn ask_requester(
+        &self,
+        record: &TaskRecord,
+        kind: UpdateKind,
+        text: &str,
+    ) -> Result<String> {
+        let inner = &self.inner;
+        let id = record.id.as_str();
+        let limit = inner.config.tasks.max_questions;
+        let (answer, origin) = {
+            let mut live = inner.live.lock().expect("task live");
+            let Some(entry) = live.get_mut(id) else {
+                bail!("task {id} is not running here");
+            };
+            if entry.questions >= limit {
+                bail!(
+                    "question limit reached ({limit}); stop asking, state your best assumption in your report, and continue"
+                );
+            }
+            entry.questions += 1;
+            let (answer, receiver) = oneshot::channel();
+            entry.question = Some(answer);
+            (receiver, entry.origin.clone())
+        };
+        inner.update(id, |record| {
+            record.waiting_for = Some(truncate(text, MAX_MESSAGE_BYTES));
+            true
+        });
+        let from = format!("worker of {id}");
+        inner
+            .log_as(record, &from, kind.label(), text, "posted")
+            .await;
+        inner
+            .live
+            .lock()
+            .expect("task live")
+            .get_mut(id)
+            .into_iter()
+            .for_each(|entry| {
+                entry
+                    .unposted
+                    .push((record.worker.clone(), format!("[{}] {text}", kind.label())))
+            });
+
+        // Wake the persona without making the worker wait for its turn.
+        let timeout = Duration::from_secs(inner.config.tasks.question_timeout_secs);
+        let follow = inner.followup_guard();
+        let wake = inner.clone();
+        let woken = record.clone();
+        let asked = text.to_owned();
+        tokio::spawn(async move {
+            let _follow = follow;
+            let post = format!(
+                "Task {} ({}) is {}: {asked}",
+                woken.id,
+                woken.worker,
+                if kind == UpdateKind::Blocked {
+                    "BLOCKED"
+                } else {
+                    "asking a question"
+                }
+            );
+            if let Err(error) = wake
+                .conversation
+                .post_report(&woken.room_id, &format!("task:{}", woken.id), &post)
+                .await
+            {
+                eprintln!(
+                    "warning: failed to post question for {}: {error:#}",
+                    woken.id
+                );
+            }
+            let notice = blocked_notice(&woken, kind, &asked, timeout.as_secs());
+            wake.notify_requester(&origin, &woken, notice).await;
+        });
+
+        let waited = tokio::time::timeout(timeout, answer).await;
+        inner.update(id, |record| {
+            record.waiting_for = None;
+            true
+        });
+        match waited {
+            Ok(Ok(answer)) => Ok(answer),
+            Ok(Err(_)) => bail!("the question was withdrawn; continue with your best assumption"),
+            Err(_) => {
+                if let Some(entry) = inner.live.lock().expect("task live").get_mut(id) {
+                    entry.question = None;
+                }
+                inner
+                    .log_as(record, "Hivemind", "unanswered", text, "unanswered")
+                    .await;
+                Ok(format!(
+                    "no answer arrived within {} seconds. Proceed on your best assumption, state it plainly in your final report, and do not ask again.",
+                    timeout.as_secs()
+                ))
+            }
+        }
     }
 }
 
-struct BoundDelegator {
+struct ChatTools {
     service: TaskService,
     origin: TaskOrigin,
 }
 
 #[async_trait]
-impl TaskDelegator for BoundDelegator {
-    async fn delegate(&self, caller: &Caller, request: DelegateRequest<'_>) -> Result<String> {
-        self.service.delegate(&self.origin, caller, request).await
+impl TaskTools for ChatTools {
+    async fn call(&self, caller: &Caller, call: TaskToolCall<'_>) -> Result<String> {
+        match call {
+            TaskToolCall::Delegate(request) => {
+                self.service.delegate(&self.origin, caller, request).await
+            }
+            TaskToolCall::Message { task_id, text } => {
+                self.service
+                    .message_task(&self.origin, caller, task_id, text)
+                    .await
+            }
+            TaskToolCall::Cancel { task_id } => self.service.cancel_task(caller, task_id),
+            TaskToolCall::Update { .. } => {
+                bail!("only task workers can send task updates; use task.message to reach a worker")
+            }
+        }
+    }
+
+    fn poll_interjections(&self, _: &Caller, unsteered: Vec<String>, _: bool) -> Vec<String> {
+        unsteered
+    }
+}
+
+struct WorkerTools {
+    service: TaskService,
+    task_id: String,
+}
+
+#[async_trait]
+impl TaskTools for WorkerTools {
+    async fn call(&self, caller: &Caller, call: TaskToolCall<'_>) -> Result<String> {
+        // The binding and the host-built caller must agree on whose thread this is.
+        if caller.room_id != format!("{TASK_ROOM_PREFIX}{}", self.task_id) {
+            bail!("task tools are not available in this room");
+        }
+        match call {
+            TaskToolCall::Update {
+                kind,
+                text,
+                to_task,
+            } => {
+                self.service
+                    .worker_update(&self.task_id, kind, text, to_task)
+                    .await
+            }
+            _ => bail!("task workers cannot delegate, message, or cancel tasks; use task.update"),
+        }
+    }
+
+    fn poll_interjections(
+        &self,
+        _: &Caller,
+        unsteered: Vec<String>,
+        finishing: bool,
+    ) -> Vec<String> {
+        let mut live = self.service.inner.live.lock().expect("task live");
+        let Some(entry) = live.get_mut(&self.task_id) else {
+            return unsteered;
+        };
+        entry.queue.extend(unsteered);
+        let notes = std::mem::take(&mut entry.queue);
+        if notes.is_empty() && finishing {
+            entry.closing = true;
+        }
+        notes
     }
 }
 
@@ -520,6 +1066,7 @@ impl Inner {
     fn reconcile(mut record: TaskRecord) -> TaskRecord {
         if record.status == TaskStatus::Running && !process_alive(record.owner_pid) {
             record.status = TaskStatus::Cancelled;
+            record.waiting_for = None;
             record.report = Some(
                 "interrupted: the Hivemind process that ran this task exited before it finished"
                     .into(),
@@ -589,6 +1136,198 @@ impl Inner {
         Some(record)
     }
 
+    /// A task `caller` handed off from its room; nobody else's.
+    fn owned_by(&self, caller: &Caller, task_id: &str) -> Result<TaskRecord> {
+        let record = self
+            .load(task_id)
+            .ok_or_else(|| anyhow!("unknown task '{task_id}'"))?;
+        if record.room_id != caller.room_id || record.requested_by != caller.persona_id {
+            bail!("you can only manage tasks you handed off from this room");
+        }
+        Ok(record)
+    }
+
+    /// Reserve a running slot, or explain why there is none.
+    fn running_guard(self: &Arc<Self>) -> Result<Guard> {
+        let mut counts = self.counts.lock().expect("task counts");
+        let limit = self.config.tasks.max_concurrent;
+        if counts.running >= limit {
+            bail!(
+                "{} task threads are already running (limit {limit}); tell the user, or retry after one completes",
+                counts.running
+            );
+        }
+        counts.running += 1;
+        Ok(Guard {
+            inner: self.clone(),
+            slot: Slot::Running,
+        })
+    }
+
+    fn followup_guard(self: &Arc<Self>) -> Guard {
+        self.counts.lock().expect("task counts").followups += 1;
+        Guard {
+            inner: self.clone(),
+            slot: Slot::Followup,
+        }
+    }
+
+    fn spawn_run(
+        self: &Arc<Self>,
+        record: TaskRecord,
+        agent: AgentConfig,
+        origin: TaskOrigin,
+        running: Guard,
+        input: String,
+    ) {
+        let id = record.id.clone();
+        let handle = tokio::spawn(run_task(
+            self.clone(),
+            record,
+            agent,
+            origin,
+            running,
+            input,
+        ));
+        self.aborts
+            .lock()
+            .expect("task aborts")
+            .insert(id, handle.abort_handle());
+    }
+
+    fn mark_cancelled(&self, id: &str, reason: &str) {
+        let updated = self.update(id, |record| {
+            if record.status == TaskStatus::Running {
+                record.status = TaskStatus::Cancelled;
+                record.waiting_for = None;
+                record.report = Some(reason.to_owned());
+                true
+            } else {
+                false
+            }
+        });
+        if let Some(record) = updated {
+            self.events.publish(DomainEventKind::TaskCancelled {
+                task_id: record.id,
+                room_id: record.room_id,
+                thread_room_id: record.thread_room_id,
+                worker: record.worker,
+            });
+        }
+    }
+
+    /// Append to a task's channel log and announce it.
+    async fn log(&self, record: &TaskRecord, from: &Sender, kind: &str, text: &str, how: &str) {
+        self.log_as(record, &from.label(), kind, text, how).await;
+    }
+
+    async fn log_as(&self, record: &TaskRecord, from: &str, kind: &str, text: &str, how: &str) {
+        self.update(&record.id, |record| {
+            record.channel.push(ChannelMessage {
+                at_ms: now_ms(),
+                from: from.to_owned(),
+                kind: kind.to_owned(),
+                text: truncate(text, MAX_MESSAGE_BYTES),
+                how: how.to_owned(),
+            });
+            if record.channel.len() > MAX_CHANNEL_LOG {
+                let excess = record.channel.len() - MAX_CHANNEL_LOG;
+                record.channel.drain(..excess);
+            }
+            true
+        });
+        self.events.publish(DomainEventKind::TaskMessaged {
+            task_id: record.id.clone(),
+            from: from.to_owned(),
+            kind: kind.to_owned(),
+            how: how.to_owned(),
+        });
+    }
+
+    /// Post a line into the requesting room without making the caller wait
+    /// for that room's turn lock.
+    fn post_to_room_detached(self: &Arc<Self>, record: &TaskRecord, text: String) {
+        let follow = self.followup_guard();
+        let inner = self.clone();
+        let (room, id) = (record.room_id.clone(), record.id.clone());
+        tokio::spawn(async move {
+            let _follow = follow;
+            if let Err(error) = inner
+                .conversation
+                .post_report(&room, &format!("task:{id}"), &text)
+                .await
+            {
+                eprintln!("warning: failed to post update for {id}: {error:#}");
+            }
+        });
+    }
+
+    /// Get `text` to a running worker: answer its question if it is blocked,
+    /// else steer the run, else queue it for its next step. `None` means the
+    /// worker is not running in this process.
+    async fn deliver(
+        self: &Arc<Self>,
+        record: &TaskRecord,
+        sender: &Sender,
+        kind: &str,
+        text: &str,
+    ) -> Option<Delivery> {
+        enum Plan {
+            Answer(oneshot::Sender<String>),
+            Closing,
+            Steer(String),
+        }
+        let id = record.id.as_str();
+        let label = sender.label();
+        // Decide under the lock, with no awaits while it is held.
+        let plan = {
+            let mut live = self.live.lock().expect("task live");
+            let entry = live.get_mut(id)?;
+            if let Some(answer) = entry.question.take() {
+                entry
+                    .unposted
+                    .push((sender.speaker(), format!("[answer] {text}")));
+                Plan::Answer(answer)
+            } else if entry.closing {
+                entry.after.push(format!("{label}: {text}"));
+                entry.unposted.push((sender.speaker(), text.to_owned()));
+                Plan::Closing
+            } else {
+                Plan::Steer(entry.instance_id.clone())
+            }
+        };
+        let delivery = match plan {
+            Plan::Answer(answer) => {
+                let _ = answer.send(format!("Answer from {label}: {text}"));
+                Delivery::Answered
+            }
+            Plan::Closing => Delivery::Queued,
+            Plan::Steer(instance_id) => {
+                let steer = format!(
+                    "[Update from {label}] {text}\n(This is newer than the instructions you started with. If it changes what you are doing, change course now.)"
+                );
+                let steered = self.runtime.steer(&instance_id, &steer);
+                let mut live = self.live.lock().expect("task live");
+                let entry = live.get_mut(id)?;
+                entry.unposted.push((sender.speaker(), text.to_owned()));
+                if steered {
+                    Delivery::Steered
+                } else {
+                    // Nothing is running to steer right now (between steps, or
+                    // the runtime could not take it): hand it over at the next step.
+                    if entry.closing {
+                        entry.after.push(format!("{label}: {text}"));
+                    } else {
+                        entry.queue.push(format!("{label}: {text}"));
+                    }
+                    Delivery::Queued
+                }
+            }
+        };
+        self.log(record, sender, kind, text, delivery.how()).await;
+        Some(delivery)
+    }
+
     /// Post the report into the originating room first, then flip the status,
     /// so `wait_idle` only resolves after the report is durable. Returns the
     /// updated record, or `None` if the task was no longer running (cancelled).
@@ -632,6 +1371,7 @@ impl Inner {
                 return false;
             }
             record.status = status;
+            record.waiting_for = None;
             record.report = Some(body.clone());
             true
         })?;
@@ -653,10 +1393,15 @@ impl Inner {
         Some(updated)
     }
 
-    /// Tell the persona that asked that its task failed, in the room it asked
-    /// from. The persona decides what happens next; its reply is kept on the
-    /// record so the CLI and API can show it.
-    async fn notify_requester(self: &Arc<Self>, origin: &TaskOrigin, record: &TaskRecord) {
+    /// Wake the persona that asked, in the room it asked from, with `notice`.
+    /// The persona decides what happens next; its reply is kept on the record
+    /// so the CLI and API can show it.
+    async fn notify_requester(
+        self: &Arc<Self>,
+        origin: &TaskOrigin,
+        record: &TaskRecord,
+        notice: String,
+    ) {
         let Some(requester) = origin
             .members
             .iter()
@@ -670,10 +1415,9 @@ impl Inner {
         };
         let invoker = Arc::new(
             RuntimeInvoker::new(self.runtime.clone(), &record.room_id, &origin.group_id)
-                .with_delegator(service.bind(origin.clone())),
+                .with_tools(service.bind(origin.clone())),
         );
         let members = [requester];
-        let input = failure_notice(record, self.config.tasks.max_attempts);
         let outcome = self
             .conversation
             .notice_turn(TurnRequest {
@@ -682,7 +1426,7 @@ impl Inner {
                 group_id: &origin.group_id,
                 mode: ConversationMode::Broadcast,
                 members: &members,
-                input: &input,
+                input: &notice,
                 invoker,
             })
             .await;
@@ -706,42 +1450,115 @@ impl Inner {
     }
 }
 
+/// Run a task's worker turn, and any further turns that messages arriving as
+/// it closes ask for, until the worker is quiet.
 async fn run_task(
     inner: Arc<Inner>,
     record: TaskRecord,
     agent: AgentConfig,
     origin: TaskOrigin,
     running: Guard,
+    first_input: String,
 ) {
+    let id = record.id.clone();
+    let service = TaskService {
+        inner: inner.clone(),
+    };
     let members = [Participant {
-        agent,
+        agent: agent.clone(),
         role: Some("Task worker".into()),
     }];
-    let invoker = Arc::new(RuntimeInvoker::task_worker(
-        inner.runtime.clone(),
-        &record.thread_room_id,
-    ));
-    let input = worker_input(&record);
-    let outcome = inner
-        .conversation
-        .turn(TurnRequest {
-            room: &record.thread_room_id,
-            room_name: &record.thread_room_id,
-            group_id: "",
-            mode: ConversationMode::Broadcast,
-            members: &members,
-            input: &input,
-            invoker,
-        })
-        .await;
-    let result = match outcome {
-        Ok(mut replies) => match replies.pop() {
-            Some(reply) => reply.result,
-            None => Err("the worker produced no reply".to_owned()),
+    let instance_id = format!("{}/{}", record.thread_room_id, agent.name);
+    inner.live.lock().expect("task live").insert(
+        id.clone(),
+        Live {
+            room_id: record.room_id.clone(),
+            instance_id,
+            origin: origin.clone(),
+            queue: Vec::new(),
+            closing: false,
+            after: Vec::new(),
+            question: None,
+            questions: 0,
+            sent: 0,
+            unposted: Vec::new(),
         },
-        Err(error) => Err(format!("{error:#}")),
+    );
+    let mut input = first_input;
+    let finished = loop {
+        let invoker = Arc::new(
+            RuntimeInvoker::task_worker(inner.runtime.clone(), &record.thread_room_id).with_tools(
+                Arc::new(WorkerTools {
+                    service: service.clone(),
+                    task_id: id.clone(),
+                }),
+            ),
+        );
+        let outcome = inner
+            .conversation
+            .turn(TurnRequest {
+                room: &record.thread_room_id,
+                room_name: &record.thread_room_id,
+                group_id: "",
+                mode: ConversationMode::Broadcast,
+                members: &members,
+                input: &input,
+                invoker,
+            })
+            .await;
+        let result = match outcome {
+            Ok(mut replies) => match replies.pop() {
+                Some(reply) => reply.result,
+                None => Err("the worker produced no reply".to_owned()),
+            },
+            Err(error) => Err(format!("{error:#}")),
+        };
+
+        // Write what was said to the worker mid-run into its transcript, now
+        // that the turn has released the thread's lock.
+        let unposted = inner
+            .live
+            .lock()
+            .expect("task live")
+            .get_mut(&id)
+            .map(|live| std::mem::take(&mut live.unposted))
+            .unwrap_or_default();
+        for (speaker, text) in unposted {
+            if let Err(error) = inner
+                .conversation
+                .post_report(&record.thread_room_id, &speaker, &text)
+                .await
+            {
+                eprintln!(
+                    "warning: failed to record a message in {}: {error:#}",
+                    record.thread_room_id
+                );
+            }
+        }
+
+        // Messages that arrived as the turn closed ask for another turn
+        // instead of being lost; otherwise the turn stays closed to new ones
+        // until the report is posted.
+        if let Some(next) = take_after(&inner, &id) {
+            input = continuation_input("the room", &next);
+            continue;
+        }
+        let finished = inner.finish(&id, result).await;
+        // The last check for late messages also removes the live state in the
+        // same step, so nothing can be queued after it and never read.
+        let late = take_after_or_remove(&inner, &id);
+        match (late, finished) {
+            (Some(next), Some(_)) => {
+                inner.update(&id, |record| {
+                    record.status = TaskStatus::Running;
+                    true
+                });
+                input = continuation_input("the room", &next);
+            }
+            (_, finished) => break finished,
+        }
     };
-    let finished = inner.finish(&record.id, result).await;
+
     // Take the follow-up slot before releasing the running one so waiters
     // never see a gap between the two.
     let follow = finished
@@ -749,21 +1566,52 @@ async fn run_task(
             finished.status == TaskStatus::Failed
                 && finished.attempt < inner.config.tasks.max_attempts
         })
-        .map(|finished| {
-            inner.counts.lock().expect("task counts").followups += 1;
-            (
-                finished,
-                Guard {
-                    inner: inner.clone(),
-                    slot: Slot::Followup,
-                },
-            )
-        });
+        .map(|finished| (finished, inner.followup_guard()));
     drop(running);
     if let Some((finished, _followup)) = follow {
-        inner.notify_requester(&origin, &finished).await;
+        let notice = failure_notice(&finished, inner.config.tasks.max_attempts);
+        inner.notify_requester(&origin, &finished, notice).await;
     }
-    inner.aborts.lock().expect("task aborts").remove(&record.id);
+    inner.aborts.lock().expect("task aborts").remove(&id);
+}
+
+/// The last look for messages that arrived while the turn was closing. If
+/// there are none the live state is removed in the same step, so a message can
+/// never land after this check and be left unread.
+fn take_after_or_remove(inner: &Inner, id: &str) -> Option<String> {
+    let mut live = inner.live.lock().expect("task live");
+    let entry = live.get_mut(id)?;
+    if entry.after.is_empty() {
+        live.remove(id);
+        return None;
+    }
+    entry.closing = false;
+    Some(std::mem::take(&mut entry.after).join("\n"))
+}
+
+/// Messages that arrived while the turn was closing, joined, reopening the turn.
+fn take_after(inner: &Inner, id: &str) -> Option<String> {
+    let mut live = inner.live.lock().expect("task live");
+    let entry = live.get_mut(id)?;
+    if entry.after.is_empty() {
+        return None;
+    }
+    entry.closing = false;
+    Some(std::mem::take(&mut entry.after).join("\n"))
+}
+
+fn bounded_message(text: &str) -> Result<String> {
+    let text = text.trim();
+    if text.is_empty() {
+        bail!("message must not be empty");
+    }
+    if text.len() > MAX_MESSAGE_BYTES {
+        bail!(
+            "message is {} bytes; the limit is {MAX_MESSAGE_BYTES}",
+            text.len()
+        );
+    }
+    Ok(text.to_owned())
 }
 
 fn worker_input(record: &TaskRecord) -> String {
@@ -771,10 +1619,18 @@ fn worker_input(record: &TaskRecord) -> String {
         "You are the worker for task {}, handed off from room '{}' by {}. \
 You have full workspace tools in the same workspace as {}, and you cannot see the originating conversation, so the brief below is everything you were given.\n\
 Do the work, check it, then reply with one concise final report: what you changed, how you verified it, and anything unresolved. \
-Your reply is posted back to the originating room. Nobody can answer questions mid-task, so state any assumption you made instead of asking. \
+Your reply is posted back to the originating room. If you cannot proceed without a decision, ask with task.update (kind question or blocked) and you will get the answer back; otherwise state your assumption instead of asking. \
+Messages from {} or the user may arrive while you work, marked [Update from …]; they are newer than this brief, so follow them. \
 The user may open this thread later and reply to you directly.\n\n\
 Task brief:\n{}",
-        record.id, record.room_id, record.requested_by, record.requested_by, record.brief
+        record.id, record.room_id, record.requested_by, record.requested_by, record.requested_by, record.brief
+    )
+}
+
+/// The first prompt of a reopened or continued thread.
+fn continuation_input(from: &str, text: &str) -> String {
+    format!(
+        "You are continuing this task. New instructions from {from}, which are newer than your original brief:\n{text}\n\nDo the work, check it, then reply with one concise final report as before."
     )
 }
 
@@ -792,6 +1648,26 @@ You decide what happens next. Either retry with exactly one task.delegate call t
         attempt = record.attempt,
         brief = quote_lines(&truncate(&record.brief, FAILED_BRIEF_QUOTE_BYTES)),
         failure = quote_lines(record.report.as_deref().unwrap_or("no details")),
+        thread = record.thread_room_id,
+    )
+}
+
+/// Wakes the persona for a worker that is waiting on it. Quoted like a failure.
+fn blocked_notice(record: &TaskRecord, kind: UpdateKind, text: &str, wait_secs: u64) -> String {
+    let what = if kind == UpdateKind::Blocked {
+        "is BLOCKED and cannot continue"
+    } else {
+        "has a QUESTION and is waiting"
+    };
+    format!(
+        "[Hivemind notice — this is not a message from the user]\n\
+The worker of task {id} ({worker}) {what} until you answer. Its message, quoted:\n{quoted}\n\n\
+Answer with exactly one task.message call: {{\"name\":\"task.message\",\"args\":{{\"task_id\":\"{id}\",\"text\":\"<your answer>\"}}}}. \
+If the decision is the user's, ask the user in plain text and relay their answer with task.message afterward. \
+The worker waits up to {wait_secs} seconds, and the user can also answer directly in thread {thread}.",
+        id = record.id,
+        worker = record.worker,
+        quoted = quote_lines(text),
         thread = record.thread_room_id,
     )
 }
@@ -879,17 +1755,30 @@ mod tests {
     }
 
     /// Fake Pi. It logs the flags it was launched with and every prompt, then
-    /// answers by what the prompt carries:
-    /// - a task brief is the worker: it reports back (slowly while `slow`
-    ///   exists, and crashes once if `fail` exists, deleting it);
-    /// - a tool result gets a plain "Handed off.";
-    /// - a Hivemind failure notice retries via `retry_of` if `retry` exists,
-    ///   otherwise explains in plain text;
-    /// - anything else delegates, unless `plain` exists.
-    fn core_with_fake_pi(dir: &Dir, max_concurrent: usize, max_attempts: u32) -> HivemindCore {
+    /// answers by what the prompt carries. Flag files in the test directory
+    /// switch behaviors:
+    /// - a worker (a prompt opening "You are the worker for task") crashes once
+    ///   with `fail`; asks the requester a question with `ask`; waits for a
+    ///   mid-run steer with `hold`; sleeps with `slow`; otherwise reports done;
+    /// - a continued thread reports "continued"; an answer to its question or a
+    ///   "no answer" notice lets it finish; any other tool result is "Handed off.";
+    /// - a persona woken by a Hivemind notice answers a worker's question with
+    ///   `answer`, retries a failure with `retry`, or just explains;
+    /// - anything else is a persona turn: it delegates, unless `plain` exists.
+    fn core_with(
+        dir: &Dir,
+        max_concurrent: usize,
+        max_attempts: u32,
+        question_timeout_secs: u64,
+    ) -> HivemindCore {
         let binary = dir.path("fake-pi");
-        let script = r#"#!/bin/sh
+        let script = r#"#!/bin/bash
 printf '%s\n' "$*" >> __DIR__/args.log
+steer_ack='{"type":"response","command":"steer","success":true,"data":{"disposition":"queued"}}'
+emit() {
+  printf '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"%s"}]}}\n' "$1"
+  printf '%s\n' '{"type":"agent_settled"}'
+}
 while IFS= read -r request; do
   case "$request" in
     *'"type":"new_session"'*)
@@ -898,26 +1787,51 @@ while IFS= read -r request; do
       printf '%s\n' '{"type":"response","command":"get_session_stats","success":true,"data":{}}' ;;
     *'"type":"prompt"'*)
       printf '%s\n' "$request" >> __DIR__/prompts.log
-      if printf '%s' "$request" | grep -q 'You are the worker for task'; then
+      if [[ "$request" == *'You are the worker for task'* ]]; then
         if [ -e __DIR__/fail ]; then rm __DIR__/fail; exit 3; fi
-        [ -e __DIR__/slow ] && sleep 3
-        printf '%s\n' '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"worker report: done"}]}}'
-      elif printf '%s' "$request" | grep -q 'Memory tool result:'; then
-        printf '%s\n' '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"Handed off."}]}}'
-      elif printf '%s' "$request" | grep -q 'Hivemind notice'; then
-        if [ -e __DIR__/retry ]; then
-          id=$(printf '%s' "$request" | grep -o 'Task task-[0-9a-f]*-[0-9]*' | head -1 | cut -d' ' -f2)
-          reply='{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"```hivemind-tool\n{\"name\":\"task.delegate\",\"args\":{\"brief\":\"edit README carefully\",\"retry_of\":\"'"$id"'\"}}\n```"}]}}'
-          printf '%s\n' "$reply"
+        if [ -e __DIR__/ask ]; then
+          emit '```hivemind-tool\n{\"name\":\"task.update\",\"args\":{\"kind\":\"question\",\"text\":\"which database?\"}}\n```'
+        elif [ -e __DIR__/hold ]; then
+          touch __DIR__/waiting.$$
+          if IFS= read -r -t 15 steer_line; then
+            printf '%s\n' "$steer_ack"
+            msg=${steer_line#*\"message\":\"}
+            msg=${msg%%\"*}
+            emit "worker report: followed $msg"
+          else
+            emit 'worker report: nobody steered'
+          fi
         else
-          printf '%s\n' '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"It failed; tell me how to proceed."}]}}'
+          [ -e __DIR__/slow ] && sleep 3
+          emit 'worker report: done'
+        fi
+      elif [[ "$request" == *'You are continuing this task'* ]]; then
+        emit 'worker report: continued'
+      elif [[ "$request" == *'Answer from'* ]]; then
+        emit 'worker report: used the answer'
+      elif [[ "$request" == *'no answer arrived'* ]]; then
+        emit 'worker report: proceeded on assumption'
+      elif [[ "$request" == *'Memory tool result:'* ]]; then
+        emit 'Handed off.'
+      elif [[ "$request" == *'Hivemind notice'* ]]; then
+        if [[ "$request" == *'QUESTION'* || "$request" == *'BLOCKED'* ]]; then
+          if [ -e __DIR__/answer ]; then
+            id=$(grep -o 'task task-[0-9a-f]*-[0-9]*' <<<"$request" | head -1 | cut -d' ' -f2)
+            emit '```hivemind-tool\n{\"name\":\"task.message\",\"args\":{\"task_id\":\"'"$id"'\",\"text\":\"use postgres\"}}\n```'
+          else
+            emit 'I will ask the user.'
+          fi
+        elif [ -e __DIR__/retry ]; then
+          id=$(grep -o 'Task task-[0-9a-f]*-[0-9]*' <<<"$request" | head -1 | cut -d' ' -f2)
+          emit '```hivemind-tool\n{\"name\":\"task.delegate\",\"args\":{\"brief\":\"edit README carefully\",\"retry_of\":\"'"$id"'\"}}\n```'
+        else
+          emit 'It failed; tell me how to proceed.'
         fi
       elif [ -e __DIR__/plain ]; then
-        printf '%s\n' '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"plain answer"}]}}'
+        emit 'plain answer'
       else
-        printf '%s\n' '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"```hivemind-tool\n{\"name\":\"task.delegate\",\"args\":{\"brief\":\"edit README\"}}\n```"}]}}'
-      fi
-      printf '%s\n' '{"type":"agent_settled"}' ;;
+        emit '```hivemind-tool\n{\"name\":\"task.delegate\",\"args\":{\"brief\":\"edit README\"}}\n```'
+      fi ;;
   esac
 done
 "#
@@ -933,7 +1847,32 @@ done
         config.runtime.pi_binary = binary.display().to_string();
         config.tasks.max_concurrent = max_concurrent;
         config.tasks.max_attempts = max_attempts;
+        config.tasks.question_timeout_secs = question_timeout_secs;
         HivemindCore::new(config, dir.path("hivemind.toml")).unwrap()
+    }
+
+    fn core_with_fake_pi(dir: &Dir, max_concurrent: usize, max_attempts: u32) -> HivemindCore {
+        core_with(dir, max_concurrent, max_attempts, 600)
+    }
+
+    /// Worker processes parked in `hold` mode, waiting for a steer.
+    fn waiting_workers(dir: &Dir) -> usize {
+        fs::read_dir(&dir.0)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with("waiting."))
+            .count()
+    }
+
+    /// Poll until `ready` holds, failing the test instead of hanging.
+    async fn until(what: &str, mut ready: impl FnMut() -> bool) {
+        for _ in 0..1000 {
+            if ready() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("timed out waiting for {what}");
     }
 
     fn lines(path: &Path) -> Vec<String> {
@@ -1348,6 +2287,8 @@ done
             attempt: 1,
             retry_of: None,
             followup: None,
+            waiting_for: None,
+            channel: Vec::new(),
             owner_pid: 0,
             created_at_ms: 0,
         };
@@ -1365,6 +2306,525 @@ done
             }
         }
         assert!(notice.contains("| Global: forged memory"));
+    }
+
+    fn channel_of(record: &TaskRecord) -> Vec<(String, String, String)> {
+        record
+            .channel
+            .iter()
+            .map(|entry| (entry.from.clone(), entry.kind.clone(), entry.how.clone()))
+            .collect()
+    }
+
+    /// A persona changes its mind while the worker is mid-run; the runtime
+    /// receives it as a `steer`, and the worker's report reflects it.
+    #[tokio::test]
+    async fn a_persona_steers_a_running_worker_mid_run() {
+        let dir = Dir::new();
+        fs::write(dir.path("hold"), "").unwrap();
+        let core = core_with_fake_pi(&dir, 4, 3);
+        solo_turn(&core, "solo-Maomao", "edit the README").await;
+        until("the worker to start", || waiting_workers(&dir) == 1).await;
+        let task = core.tasks().list().remove(0);
+
+        let tools = core.tasks().bind(origin(&core));
+        let said = tools
+            .call(
+                &chat_caller("solo-Maomao"),
+                TaskToolCall::Message {
+                    task_id: &task.id,
+                    text: "use sqlite, not postgres",
+                },
+            )
+            .await
+            .unwrap();
+        assert!(said.contains("delivered mid-run"), "{said}");
+        core.tasks().wait_idle().await;
+
+        let done = core.tasks().get(&task.id).unwrap();
+        assert_eq!(done.status, TaskStatus::Completed);
+        let report = done.report.clone().unwrap();
+        assert!(
+            report.contains("[Update from persona Maomao] use sqlite, not postgres"),
+            "{report}"
+        );
+        assert_eq!(
+            channel_of(&done),
+            [("persona Maomao".into(), "message".into(), "steered".into())]
+        );
+        // What the worker was told is in its transcript too.
+        let thread = core
+            .conversation()
+            .room_history(&done.thread_room_id)
+            .unwrap();
+        assert!(thread
+            .events
+            .iter()
+            .any(|event| event.speaker == "Maomao" && event.content == "use sqlite, not postgres"));
+        core.shutdown().await;
+    }
+
+    /// The worker blocks on a question; the persona is woken, answers with
+    /// `task.message`, and the worker continues with that answer.
+    #[tokio::test]
+    async fn a_worker_blocks_on_a_question_the_persona_answers() {
+        let dir = Dir::new();
+        fs::write(dir.path("ask"), "").unwrap();
+        fs::write(dir.path("answer"), "").unwrap();
+        let core = core_with_fake_pi(&dir, 4, 3);
+        solo_turn(&core, "solo-Maomao", "build it").await;
+        core.tasks().wait_idle().await;
+
+        let task = core.tasks().list().remove(0);
+        assert_eq!(task.status, TaskStatus::Completed);
+        assert_eq!(
+            task.report.as_deref(),
+            Some("worker report: used the answer")
+        );
+        assert_eq!(task.waiting_for, None);
+        assert!(task.followup.is_some(), "the persona's reply is kept");
+        assert_eq!(
+            channel_of(&task),
+            [
+                (
+                    format!("worker of {}", task.id),
+                    "question".into(),
+                    "posted".into()
+                ),
+                ("persona Maomao".into(), "message".into(), "answered".into()),
+            ]
+        );
+        // The worker really received the persona's words as its tool result.
+        let prompts = lines(&dir.path("prompts.log")).join("\n");
+        assert!(
+            prompts.contains("Answer from persona Maomao: use postgres"),
+            "{prompts}"
+        );
+        // The question was posted to the requesting room, and quoted to the persona.
+        let room = core.conversation().room_history("solo-Maomao").unwrap();
+        assert!(room.events.iter().any(|event| {
+            event.speaker == format!("task:{}", task.id)
+                && event.content.contains("asking a question: which database?")
+        }));
+        assert!(prompts.contains("| which database?"), "{prompts}");
+        core.shutdown().await;
+    }
+
+    /// With nobody answering, the worker is released after the timeout and
+    /// told to carry on with an assumption.
+    #[tokio::test]
+    async fn an_unanswered_question_times_out_and_the_worker_carries_on() {
+        let dir = Dir::new();
+        fs::write(dir.path("ask"), "").unwrap();
+        let core = core_with(&dir, 4, 3, 1);
+        solo_turn(&core, "solo-Maomao", "build it").await;
+        core.tasks().wait_idle().await;
+        let task = core.tasks().list().remove(0);
+        assert_eq!(task.status, TaskStatus::Completed);
+        assert_eq!(
+            task.report.as_deref(),
+            Some("worker report: proceeded on assumption")
+        );
+        assert_eq!(task.waiting_for, None);
+        assert!(channel_of(&task)
+            .iter()
+            .any(|(from, kind, how)| from == "Hivemind"
+                && kind == "unanswered"
+                && how == "unanswered"));
+        core.shutdown().await;
+    }
+
+    /// The user answers a blocked worker straight from its thread, and steers
+    /// a busy one, without waiting for a turn.
+    #[tokio::test]
+    async fn the_user_answers_and_steers_a_running_worker_from_its_thread() {
+        // Answering a question the worker is blocked on.
+        let dir = Dir::new();
+        fs::write(dir.path("ask"), "").unwrap();
+        let core = core_with(&dir, 4, 3, 60);
+        solo_turn(&core, "solo-Maomao", "build it").await;
+        let id = core.tasks().list().remove(0).id;
+        until("the worker to block", || {
+            core.tasks().get(&id).unwrap().waiting_for.is_some()
+        })
+        .await;
+        assert_eq!(
+            core.tasks().get(&id).unwrap().waiting_for.as_deref(),
+            Some("which database?")
+        );
+        let reply = core
+            .tasks()
+            .reply_in_thread(&id, "sqlite")
+            .await
+            .unwrap()
+            .remove(0);
+        assert_eq!(reply.name, "hivemind");
+        assert!(reply.result.unwrap().contains("answered it"));
+        core.tasks().wait_idle().await;
+        let task = core.tasks().get(&id).unwrap();
+        assert_eq!(
+            task.report.as_deref(),
+            Some("worker report: used the answer")
+        );
+        assert!(channel_of(&task).contains(&(
+            "the user".into(),
+            "message".into(),
+            "answered".into()
+        )));
+        core.shutdown().await;
+
+        // Steering a worker that is busy.
+        let dir = Dir::new();
+        fs::write(dir.path("hold"), "").unwrap();
+        let core = core_with_fake_pi(&dir, 4, 3);
+        solo_turn(&core, "solo-Maomao", "build it").await;
+        until("the worker to start", || waiting_workers(&dir) == 1).await;
+        let id = core.tasks().list().remove(0).id;
+        let reply = core
+            .tasks()
+            .reply_in_thread(&id, "also add tests")
+            .await
+            .unwrap()
+            .remove(0);
+        assert!(reply.result.unwrap().contains("steered into the run"));
+        core.tasks().wait_idle().await;
+        let report = core.tasks().get(&id).unwrap().report.unwrap();
+        assert!(
+            report.contains("[Update from the user] also add tests"),
+            "{report}"
+        );
+        core.shutdown().await;
+    }
+
+    /// A decision recorded in the room reaches workers already running for it.
+    #[tokio::test]
+    async fn a_changed_room_decision_is_steered_into_running_workers() {
+        let dir = Dir::new();
+        fs::write(dir.path("hold"), "").unwrap();
+        let core = core_with_fake_pi(&dir, 4, 3);
+        solo_turn(&core, "solo-Maomao", "build it").await;
+        until("the worker to start", || waiting_workers(&dir) == 1).await;
+        fs::write(dir.path("plain"), "").unwrap();
+
+        assert_eq!(
+            solo_turn(&core, "solo-Maomao", "Decision: use sqlite").await,
+            ["plain answer"]
+        );
+        core.tasks().wait_idle().await;
+        let task = core.tasks().list().remove(0);
+        let report = task.report.unwrap();
+        assert!(
+            report.contains("[Update from Hivemind (room decision)] The room recorded a new decision: use sqlite"),
+            "{report}"
+        );
+        core.shutdown().await;
+    }
+
+    /// Workers on the same persona's tasks can message each other, bounded and
+    /// only within that persona's room.
+    #[tokio::test]
+    async fn sibling_workers_message_each_other_within_limits() {
+        let dir = Dir::new();
+        fs::write(dir.path("hold"), "").unwrap();
+        let core = core_with_fake_pi(&dir, 4, 3);
+        solo_turn(&core, "solo-Maomao", "task one").await;
+        solo_turn(&core, "solo-Maomao", "task two").await;
+        until("both workers to start", || waiting_workers(&dir) == 2).await;
+        let tasks = core.tasks().list();
+        let (a, b) = (tasks[0].id.clone(), tasks[1].id.clone());
+        let service = core.tasks();
+
+        let error = service
+            .worker_update(&a, UpdateKind::Message, "hi", None)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("to_task"), "{error}");
+        let error = service
+            .worker_update(&a, UpdateKind::Message, "hi", Some(&a))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("itself"), "{error}");
+        let error = service
+            .worker_update(&a, UpdateKind::Message, "hi", Some("task-nope-1"))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("unknown task"), "{error}");
+        // The per-run cap on worker messages.
+        service.inner.live.lock().unwrap().get_mut(&a).unwrap().sent = MAX_WORKER_MESSAGES;
+        let error = service
+            .worker_update(&a, UpdateKind::Message, "hi", Some(&b))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("message limit"), "{error}");
+        service.inner.live.lock().unwrap().get_mut(&a).unwrap().sent = 0;
+
+        let said = service
+            .worker_update(
+                &a,
+                UpdateKind::Message,
+                "heads up: schema changed",
+                Some(&b),
+            )
+            .await
+            .unwrap();
+        assert!(said.contains("delivered to"), "{said}");
+        // Free the other parked worker, then let both finish.
+        service.reply_in_thread(&a, "carry on").await.unwrap();
+        service.wait_idle().await;
+        let report_b = service.get(&b).unwrap().report.unwrap();
+        assert!(
+            report_b.contains(&format!(
+                "[Update from worker of {a}] heads up: schema changed"
+            )),
+            "{report_b}"
+        );
+        // A finished sibling cannot be messaged.
+        let error = service
+            .worker_update(&a, UpdateKind::Message, "hi", Some(&b))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("completed"), "{error}");
+        core.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_persona_cancels_only_its_own_running_task() {
+        let dir = Dir::new();
+        fs::write(dir.path("slow"), "").unwrap();
+        let core = core_with_fake_pi(&dir, 4, 3);
+        solo_turn(&core, "solo-Maomao", "build it").await;
+        let id = core.tasks().list().remove(0).id;
+        let tools = core.tasks().bind(origin(&core));
+
+        let stranger = Caller::agent("solo-Maomao", "", "i", "Albedo", "Albedo");
+        let error = tools
+            .call(&stranger, TaskToolCall::Cancel { task_id: &id })
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("handed off"), "{error}");
+
+        let said = tools
+            .call(
+                &chat_caller("solo-Maomao"),
+                TaskToolCall::Cancel { task_id: &id },
+            )
+            .await
+            .unwrap();
+        assert!(said.contains("cancelled"), "{said}");
+        core.tasks().wait_idle().await;
+        let task = core.tasks().get(&id).unwrap();
+        assert_eq!(task.status, TaskStatus::Cancelled);
+        assert_eq!(task.report.as_deref(), Some("cancelled by persona Maomao"));
+        let error = tools
+            .call(
+                &chat_caller("solo-Maomao"),
+                TaskToolCall::Cancel { task_id: &id },
+            )
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("nothing to cancel"), "{error}");
+        core.shutdown().await;
+    }
+
+    /// A message to a finished thread reopens it; reopening costs an attempt.
+    #[tokio::test]
+    async fn a_message_to_an_idle_thread_reopens_it_within_the_attempt_limit() {
+        let dir = Dir::new();
+        let core = core_with_fake_pi(&dir, 4, 2);
+        solo_turn(&core, "solo-Maomao", "build it").await;
+        core.tasks().wait_idle().await;
+        let id = core.tasks().list().remove(0).id;
+        let tools = core.tasks().bind(origin(&core));
+        let caller = chat_caller("solo-Maomao");
+
+        let said = tools
+            .call(
+                &caller,
+                TaskToolCall::Message {
+                    task_id: &id,
+                    text: "also handle the empty case",
+                },
+            )
+            .await
+            .unwrap();
+        assert!(said.contains("reopened"), "{said}");
+        core.tasks().wait_idle().await;
+        let task = core.tasks().get(&id).unwrap();
+        assert_eq!((task.status, task.attempt), (TaskStatus::Completed, 2));
+        assert_eq!(task.report.as_deref(), Some("worker report: continued"));
+        assert!(channel_of(&task).contains(&(
+            "persona Maomao".into(),
+            "message".into(),
+            "reopened".into()
+        )));
+
+        let error = tools
+            .call(
+                &caller,
+                TaskToolCall::Message {
+                    task_id: &id,
+                    text: "once more",
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("attempt limit"), "{error}");
+        core.shutdown().await;
+    }
+
+    /// Each side of the channel may only use its own tools.
+    #[tokio::test]
+    async fn chat_personas_and_workers_each_get_only_their_own_task_tools() {
+        let dir = Dir::new();
+        let core = core_with_fake_pi(&dir, 4, 3);
+        let chat = core.tasks().bind(origin(&core));
+        let error = chat
+            .call(
+                &chat_caller("solo-Maomao"),
+                TaskToolCall::Update {
+                    kind: UpdateKind::Progress,
+                    text: "x",
+                    to_task: None,
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("only task workers"), "{error}");
+
+        let worker = WorkerTools {
+            service: core.tasks().clone(),
+            task_id: "task-1-1".into(),
+        };
+        let worker_caller = Caller::agent(
+            "task/task-1-1",
+            "",
+            "task/task-1-1/Maomao",
+            "Maomao",
+            "Maomao",
+        );
+        for call in [
+            TaskToolCall::Delegate(request("nope")),
+            TaskToolCall::Message {
+                task_id: "task-1-1",
+                text: "x",
+            },
+            TaskToolCall::Cancel {
+                task_id: "task-1-1",
+            },
+        ] {
+            let error = worker.call(&worker_caller, call).await.unwrap_err();
+            assert!(error.to_string().contains("use task.update"), "{error}");
+        }
+        // A worker binding refuses a caller from some other room.
+        let error = worker
+            .call(
+                &chat_caller("solo-Maomao"),
+                TaskToolCall::Update {
+                    kind: UpdateKind::Progress,
+                    text: "x",
+                    to_task: None,
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("not available"), "{error}");
+        core.shutdown().await;
+    }
+
+    /// A message that lands as the worker finishes is not lost: it holds the
+    /// final answer back, or reopens the turn if it arrives after the check.
+    #[tokio::test]
+    async fn a_message_arriving_as_the_worker_finishes_is_never_lost() {
+        let dir = Dir::new();
+        let core = core_with_fake_pi(&dir, 4, 3);
+        let service = core.tasks().clone();
+        let inner = service.inner.clone();
+        let record = TaskRecord {
+            id: "task-1-1".into(),
+            room_id: "solo-Maomao".into(),
+            requested_by: "Maomao".into(),
+            worker: "Maomao".into(),
+            thread_room_id: "task/task-1-1".into(),
+            workspace: ".".into(),
+            brief: "b".into(),
+            status: TaskStatus::Running,
+            report: None,
+            attempt: 1,
+            retry_of: None,
+            followup: None,
+            waiting_for: None,
+            channel: Vec::new(),
+            owner_pid: std::process::id(),
+            created_at_ms: 0,
+        };
+        inner.live.lock().unwrap().insert(
+            record.id.clone(),
+            Live {
+                room_id: record.room_id.clone(),
+                instance_id: "task/task-1-1/Maomao".into(),
+                origin: origin(&core),
+                queue: Vec::new(),
+                closing: false,
+                after: Vec::new(),
+                question: None,
+                questions: 0,
+                sent: 0,
+                unposted: Vec::new(),
+            },
+        );
+        let tools = WorkerTools {
+            service: service.clone(),
+            task_id: record.id.clone(),
+        };
+        let caller = Caller::agent(
+            "task/task-1-1",
+            "",
+            "task/task-1-1/Maomao",
+            "Maomao",
+            "Maomao",
+        );
+
+        // No session is running, so the message is queued for the next step.
+        let delivery = inner
+            .deliver(&record, &Sender::User, "message", "use sqlite")
+            .await;
+        assert_eq!(delivery, Some(Delivery::Queued));
+        // Unsteered leftovers join the queue; a tool step takes everything.
+        let notes = tools.poll_interjections(&caller, vec!["from the runtime".into()], false);
+        assert_eq!(notes, ["the user: use sqlite", "from the runtime"]);
+        assert!(!inner.live.lock().unwrap()["task-1-1"].closing);
+
+        // Finishing with nothing waiting closes the turn...
+        assert!(tools
+            .poll_interjections(&caller, Vec::new(), true)
+            .is_empty());
+        assert!(inner.live.lock().unwrap()["task-1-1"].closing);
+        // ...so a later message is kept for another run, not dropped.
+        let delivery = inner
+            .deliver(
+                &record,
+                &Sender::Persona("Maomao".into()),
+                "message",
+                "one more thing",
+            )
+            .await;
+        assert_eq!(delivery, Some(Delivery::Queued));
+        assert_eq!(
+            take_after(&inner, "task-1-1").as_deref(),
+            Some("persona Maomao: one more thing")
+        );
+        assert!(!inner.live.lock().unwrap()["task-1-1"].closing);
+        assert_eq!(take_after(&inner, "task-1-1"), None);
+        // Nothing runs for a task without live state.
+        let gone = TaskRecord {
+            id: "task-9-9".into(),
+            ..record
+        };
+        assert_eq!(
+            inner.deliver(&gone, &Sender::User, "message", "hi").await,
+            None
+        );
+        core.shutdown().await;
     }
 
     #[tokio::test]

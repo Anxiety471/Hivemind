@@ -23,7 +23,7 @@ use crate::runtime::{
     InvokeReply, InvokeRequest, PromptDelta, PromptPhase, RuntimePool, SessionCursor, ToolAccess,
     TurnView,
 };
-use crate::tasks::TaskDelegator;
+use crate::tasks::TaskTools;
 
 mod coordinator;
 mod memory_tools;
@@ -92,8 +92,8 @@ pub trait AgentInvoker: Send + Sync {
     /// Live continuable session state for this instance; None means the next prompt hydrates.
     async fn cursor(&self, instance_id: &str) -> Option<SessionCursor>;
     async fn invoke(&self, request: InvokeRequest<'_>) -> Result<InvokeReply>;
-    /// Where `task.delegate` calls go; `None` means this invoker cannot hand work off.
-    fn delegator(&self) -> Option<Arc<dyn TaskDelegator>> {
+    /// Where `task.*` calls go; `None` means this invoker has no task tools.
+    fn task_tools(&self) -> Option<Arc<dyn TaskTools>> {
         None
     }
 }
@@ -104,7 +104,7 @@ pub struct RuntimeInvoker {
     room_id: String,
     group_id: String,
     access: ToolAccess,
-    delegator: Option<Arc<dyn TaskDelegator>>,
+    tools: Option<Arc<dyn TaskTools>>,
 }
 
 impl RuntimeInvoker {
@@ -116,24 +116,24 @@ impl RuntimeInvoker {
             room_id: room_id.to_owned(),
             group_id: group_id.to_owned(),
             access: ToolAccess::ReadOnly,
-            delegator: None,
+            tools: None,
         }
     }
 
     /// Task-thread worker: the only invoker whose sessions get full tools.
-    /// It has no delegator, so a worker cannot start further threads.
+    /// Its tools are the worker's own, so it cannot start further threads.
     pub(crate) fn task_worker(pool: Arc<RuntimePool>, room_id: &str) -> Self {
         Self {
             pool,
             room_id: room_id.to_owned(),
             group_id: String::new(),
             access: ToolAccess::Full,
-            delegator: None,
+            tools: None,
         }
     }
 
-    pub fn with_delegator(mut self, delegator: Arc<dyn TaskDelegator>) -> Self {
-        self.delegator = Some(delegator);
+    pub fn with_tools(mut self, tools: Arc<dyn TaskTools>) -> Self {
+        self.tools = Some(tools);
         self
     }
 }
@@ -155,7 +155,7 @@ impl AgentInvoker for RuntimeInvoker {
         self.pool.invoke(&caller, self.access, request).await
     }
 
-    fn delegator(&self) -> Option<Arc<dyn TaskDelegator>> {
-        self.delegator.clone()
+    fn task_tools(&self) -> Option<Arc<dyn TaskTools>> {
+        self.tools.clone()
     }
 }

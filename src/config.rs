@@ -32,6 +32,13 @@ pub struct TasksConfig {
     /// plus its retries. A failure on the last attempt goes to the user.
     #[serde(default = "default_max_task_attempts")]
     pub max_attempts: u32,
+    /// Seconds a worker that asked a question waits for an answer before it
+    /// is told to continue on its own assumption.
+    #[serde(default = "default_question_timeout_secs")]
+    pub question_timeout_secs: u64,
+    /// Questions a worker may ask per run.
+    #[serde(default = "default_max_questions")]
+    pub max_questions: u32,
 }
 
 impl Default for TasksConfig {
@@ -39,6 +46,8 @@ impl Default for TasksConfig {
         Self {
             max_concurrent: default_max_concurrent_tasks(),
             max_attempts: default_max_task_attempts(),
+            question_timeout_secs: default_question_timeout_secs(),
+            max_questions: default_max_questions(),
         }
     }
 }
@@ -48,6 +57,14 @@ fn default_max_concurrent_tasks() -> usize {
 }
 
 fn default_max_task_attempts() -> u32 {
+    3
+}
+
+fn default_question_timeout_secs() -> u64 {
+    600
+}
+
+fn default_max_questions() -> u32 {
     3
 }
 
@@ -216,6 +233,9 @@ impl HivemindConfig {
         }
         if self.tasks.max_attempts == 0 {
             bail!("[tasks].max_attempts must be at least 1");
+        }
+        if self.tasks.question_timeout_secs == 0 {
+            bail!("[tasks].question_timeout_secs must be at least 1");
         }
         let mut persona_ids = HashSet::with_capacity(self.agents.len());
         for persona in &self.agents {

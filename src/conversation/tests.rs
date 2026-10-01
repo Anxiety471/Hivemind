@@ -1,5 +1,6 @@
 use super::*;
 use crate::memory::{MemoryStatus, MemoryStore, Scope};
+use crate::tasks::TaskToolCall;
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -47,6 +48,7 @@ impl AgentInvoker for Fake {
         Ok(InvokeReply {
             text,
             epoch_id: "fake".into(),
+            unsteered: Vec::new(),
         })
     }
 }
@@ -114,6 +116,7 @@ impl AgentInvoker for DelayedEventsInvoker {
             anyhow::bail!("sensitive provider detail");
         }
         Ok(InvokeReply {
+            unsteered: Vec::new(),
             text: format!("{} reply", agent.name),
             epoch_id: "fake".into(),
         })
@@ -787,8 +790,21 @@ async fn explicit_state_updates_are_persisted_and_recalled_in_the_next_pack() {
 }
 #[tokio::test]
 async fn invalid_state_update_keeps_prior_state_and_finalizes_turn() {
-    let (path, coord) = fixture();
-    let goal = "x".repeat(1900);
+    // A larger budget than the shared fixture: the tool manifest now carries
+    // the task tools, and this test is about the state budget, not the manifest.
+    let path = std::env::temp_dir().join(format!("hivemind-context-test-{}", stable_id()));
+    let coord = ConversationCoordinator::new(
+        &path,
+        ContextConfig {
+            recent_turns: 1,
+            summary_max_tokens: 100,
+            context_target_tokens: 1500,
+            runtime_rotate_tokens: 24000,
+            summary_refresh_turns: 2,
+        },
+        in_memory_memory(),
+    );
+    let goal = "x".repeat(2900);
     let member = [member("A")];
     let first = coord
         .turn(TurnRequest {
@@ -829,7 +845,7 @@ async fn invalid_state_update_keeps_prior_state_and_finalizes_turn() {
     assert_eq!(history.events[3].content, "A answered");
     assert_eq!(history.maintenance_errors.len(), 1);
     assert!(history.maintenance_errors[0]
-        .contains("serialized room state exceeds context budget limit of 2000 bytes"));
+        .contains("serialized room state exceeds context budget limit of 3000 bytes"));
     let _ = fs::remove_dir_all(path);
 }
 #[test]
@@ -998,6 +1014,7 @@ impl AgentInvoker for Scripted {
         Ok(InvokeReply {
             text,
             epoch_id: "fake".into(),
+            unsteered: Vec::new(),
         })
     }
 }
@@ -1957,8 +1974,22 @@ fn chat_rooms_get_the_read_only_notice_and_task_rooms_the_worker_notice() {
     );
 }
 
+/// Records the task tool calls it is given.
+struct StubTools(parking_lot::Mutex<Vec<String>>);
+
+#[async_trait]
+impl TaskTools for StubTools {
+    async fn call(&self, _: &Caller, call: TaskToolCall<'_>) -> Result<String> {
+        self.0.lock().push(format!("{call:?}"));
+        Ok("stubbed".into())
+    }
+    fn poll_interjections(&self, _: &Caller, unsteered: Vec<String>, _: bool) -> Vec<String> {
+        unsteered
+    }
+}
+
 #[tokio::test]
-async fn task_tools_need_a_delegator_and_only_delegate_exists() {
+async fn task_tools_need_tools_bound_and_arguments_are_parsed_strictly() {
     let caller = Caller::agent("solo-A", "", "solo-A/A", "A", "A");
     let call = |name: &str, args: serde_json::Value| MemoryToolCall {
         name: name.to_owned(),
@@ -1972,10 +2003,141 @@ async fn task_tools_need_a_delegator_and_only_delegate_exists() {
     .await
     .unwrap_err();
     assert!(error.to_string().contains("not available"), "{error}");
-    let error = execute_task_tool(None, &caller, &call("task.cancel", serde_json::json!({})))
-        .await
-        .unwrap_err();
-    assert!(error.to_string().contains("unknown task tool"), "{error}");
+
+    let stub = StubTools(Default::default());
+    for (name, args) in [
+        (
+            "task.delegate",
+            serde_json::json!({"brief": "edit it", "persona": "B", "retry_of": "task-1-1"}),
+        ),
+        (
+            "task.message",
+            serde_json::json!({"task_id": "task-1-1", "text": "use sqlite"}),
+        ),
+        ("task.cancel", serde_json::json!({"task_id": "task-1-1"})),
+        (
+            "task.update",
+            serde_json::json!({"kind": "question", "text": "which db?"}),
+        ),
+        (
+            "task.update",
+            serde_json::json!({"kind": "message", "text": "hi", "to_task": "task-2-1"}),
+        ),
+    ] {
+        assert_eq!(
+            execute_task_tool(Some(&stub), &caller, &call(name, args))
+                .await
+                .unwrap(),
+            "stubbed"
+        );
+    }
+    let seen = stub.0.lock().clone();
+    assert!(
+        seen[0].contains("retry_of: Some(\"task-1-1\")"),
+        "{}",
+        seen[0]
+    );
+    assert!(seen[1].contains("Message") && seen[1].contains("use sqlite"));
+    assert!(seen[2].contains("Cancel"));
+    assert!(seen[3].contains("Question") && seen[4].contains("to_task: Some(\"task-2-1\")"));
+
+    for (name, args, expected) in [
+        ("task.other", serde_json::json!({}), "unknown task tool"),
+        ("task.message", serde_json::json!({"task_id": "x"}), "text"),
+        ("task.cancel", serde_json::json!({}), "task_id"),
+        (
+            "task.update",
+            serde_json::json!({"kind": "shout", "text": "x"}),
+            "unknown update kind",
+        ),
+    ] {
+        let error = execute_task_tool(Some(&stub), &caller, &call(name, args))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains(expected), "{name}: {error}");
+    }
+    assert_eq!(
+        stub.0.lock().len(),
+        5,
+        "invalid calls must not reach the tools"
+    );
+}
+
+/// Messages queued for an agent mid-turn are fed into its next prompt, and a
+/// final answer is withheld while new instructions are waiting.
+#[tokio::test]
+async fn queued_messages_reach_the_agent_and_hold_back_a_final_answer() {
+    struct Notes(parking_lot::Mutex<Vec<Vec<String>>>);
+    #[async_trait]
+    impl TaskTools for Notes {
+        async fn call(&self, _: &Caller, _: TaskToolCall<'_>) -> Result<String> {
+            bail!("unused")
+        }
+        fn poll_interjections(&self, _: &Caller, unsteered: Vec<String>, _: bool) -> Vec<String> {
+            // One message waits for the agent's first reply, none after.
+            let mut batches = self.0.lock();
+            let mut notes = if batches.is_empty() {
+                Vec::new()
+            } else {
+                batches.remove(0)
+            };
+            notes.extend(unsteered);
+            notes
+        }
+    }
+    struct Invoker {
+        tools: Arc<Notes>,
+        prompts: parking_lot::Mutex<Vec<String>>,
+    }
+    #[async_trait]
+    impl AgentInvoker for Invoker {
+        async fn cursor(&self, _: &str) -> Option<SessionCursor> {
+            None
+        }
+        async fn invoke(&self, request: InvokeRequest<'_>) -> Result<InvokeReply> {
+            let seen = request.delta.map_or(request.full, |delta| delta.text);
+            self.prompts.lock().push(seen.to_owned());
+            let text = match self.prompts.lock().len() {
+                1 => "first answer".to_owned(),
+                _ => "revised answer".to_owned(),
+            };
+            Ok(InvokeReply {
+                text,
+                epoch_id: "e".into(),
+                unsteered: Vec::new(),
+            })
+        }
+        fn task_tools(&self) -> Option<Arc<dyn TaskTools>> {
+            Some(self.tools.clone())
+        }
+    }
+    let invoker = Invoker {
+        tools: Arc::new(Notes(parking_lot::Mutex::new(vec![vec![
+            "persona Maomao: use sqlite".to_owned(),
+        ]]))),
+        prompts: Default::default(),
+    };
+    let agent = member("A").agent;
+    let view = TurnView {
+        turn_id: "t".into(),
+        speakers: vec![],
+        state_json: String::new(),
+    };
+    let caller = Caller::agent("task/t", "", "task/t/A", "A", "A");
+    let memory = in_memory_memory();
+    let answer = invoke_with_memory(
+        &invoker, "task/t/A", &agent, "pack", None, &view, &caller, &memory, None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(answer, "revised answer");
+    let prompts = invoker.prompts.lock().clone();
+    assert_eq!(prompts.len(), 2, "{prompts:?}");
+    assert!(
+        prompts[1].contains("persona Maomao: use sqlite") && prompts[1].contains("newer"),
+        "{}",
+        prompts[1]
+    );
 }
 
 #[tokio::test]

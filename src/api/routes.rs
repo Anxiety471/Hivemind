@@ -103,6 +103,8 @@ struct TaskView {
     brief: String,
     report: Option<String>,
     followup: Option<String>,
+    /// The question a blocked worker is waiting on, if any.
+    waiting_for: Option<String>,
     created_at_ms: u64,
 }
 
@@ -120,6 +122,7 @@ impl From<crate::tasks::TaskRecord> for TaskView {
             brief: task.brief,
             report: task.report,
             followup: task.followup,
+            waiting_for: task.waiting_for,
             created_at_ms: task.created_at_ms,
         }
     }
@@ -149,11 +152,22 @@ struct ThreadMessage {
 }
 
 #[derive(Serialize)]
+struct ChannelEntry {
+    at_ms: u64,
+    from: String,
+    kind: String,
+    text: String,
+    how: String,
+}
+
+#[derive(Serialize)]
 struct TaskDetail {
     #[serde(flatten)]
     task: TaskView,
     /// The task thread's transcript, oldest first.
     messages: Vec<ThreadMessage>,
+    /// Steers, answers, questions, and progress exchanged with the worker.
+    channel: Vec<ChannelEntry>,
 }
 
 async fn task_detail(
@@ -178,9 +192,21 @@ async fn task_detail(
                 .collect()
         })
         .unwrap_or_default();
+    let channel = task
+        .channel
+        .iter()
+        .map(|entry| ChannelEntry {
+            at_ms: entry.at_ms,
+            from: entry.from.clone(),
+            kind: entry.kind.clone(),
+            text: entry.text.clone(),
+            how: entry.how.clone(),
+        })
+        .collect();
     Ok(Json(TaskDetail {
         task: task.into(),
         messages,
+        channel,
     }))
 }
 
@@ -294,6 +320,14 @@ mod tests {
             attempt: 2,
             retry_of: Some("task-0-1".into()),
             followup: None,
+            waiting_for: Some("which database?".into()),
+            channel: vec![crate::tasks::ChannelMessage {
+                at_ms: 7,
+                from: "persona Maomao".into(),
+                kind: "message".into(),
+                text: "use sqlite".into(),
+                how: "steered".into(),
+            }],
             owner_pid: std::process::id(),
             created_at_ms: 5,
         };
@@ -319,6 +353,7 @@ mod tests {
         assert_eq!(task["attempt"], 2);
         assert_eq!(task["retry_of"], "task-0-1");
         assert_eq!(task["thread_room_id"], "task/task-1-1");
+        assert_eq!(task["waiting_for"], "which database?");
 
         let (status, _, detail) = request(app.clone(), "GET", "/api/v1/tasks/task-1-1").await;
         assert_eq!(status, StatusCode::OK);
@@ -326,6 +361,11 @@ mod tests {
         assert_eq!(
             detail["messages"],
             json!([{"speaker": "user", "content": "hello worker"}])
+        );
+        assert_eq!(
+            detail["channel"],
+            json!([{"at_ms": 7, "from": "persona Maomao", "kind": "message",
+                    "text": "use sqlite", "how": "steered"}])
         );
         for body in [list.to_string(), detail.to_string()] {
             assert!(
