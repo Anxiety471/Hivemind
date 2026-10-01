@@ -4,7 +4,7 @@ A small browser UI for `hivemind serve`, built with Vite, TypeScript, and React.
 
 | Screen | What it covers |
 | --- | --- |
-| **Rooms** | Main, group, direct, and task rooms; paged history; live "replying" indicators; threads (start one on any message, reply in a side panel); room state and summary |
+| **Rooms** | Main, group, direct, and task rooms; paged history; live "replying to You" indicators and a "replying to X" line on every agent reply; threads (start one on any message, reply in a side panel); room state and summary |
 | **Tasks** | Root tasks, subtasks with dependencies, attempts, artifacts, evidence, budget meters; submit, pause, resume, cancel, and answer `needs_input` |
 | **Agents** | Each persona's runtime, live activity state, workspace, capabilities, and effective permissions |
 | **Groups** | Create, edit (members, mode, per-group roles, reply order), and delete chat groups |

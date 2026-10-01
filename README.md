@@ -225,6 +225,7 @@ reply_order = ["Reviewer", "Engineer"]
 - Personas you leave out follow declaration order.
 - **Main/all** turns use broadcast mode. **Solo** turns use the same room/history/context setup with one participant.
 - Each group sets `mode = "broadcast"` or `mode = "discussion"`. It can override roles in `[groups.member_roles]` and set its own `reply_order` with members only. A partial order puts the remaining members after it, in global order.
+- **Who replies to whom.** Every agent reply answers your message for that turn; agents do not start rounds themselves. In `discussion` mode each member also reads the earlier replies of the turn. The CLI prints `Name (replying to You, Reviewer)>` when several agents answer, and `GET /api/v1/rooms/{id}/messages` returns `reply_to` and `also_saw` on agent replies, shown in the web UI as "↳ replying to …".
 - **Shared workspace.** A group works in one directory only when it has one: set `workspace = "/abs/path"` on the `[[groups]]` entry, or tell the group in chat where it is and an agent records it with `workspace.set`. Group rooms get `workspace.get`, `workspace.set`, `workspace.clear` (removes it, so members return to their own workspaces) and `workspace.list`. Every member runs there from the next message; live sessions started elsewhere are restarted. Without one, members keep their own persona workspaces and are told not to assume a shared directory.
 - **Solo workspace.** A solo room offers `workspace.get`, `workspace.set` and `workspace.list`. `workspace.set` changes that persona's own `workspace` in the config file, so it applies to the persona everywhere it runs (solo, main, and groups without a shared workspace). A shared group workspace still wins inside that group. There is no clear for solo: a persona always has a workspace.
 - **Limiting agents.** Tools accept only absolute, existing directories. Add `[workspaces]` `roots = ["/abs/dir", ...]` to restrict agent choices to those directories and their subdirectories (symlinks are resolved, so they can't escape); `workspace.list` shows each root and its visible subdirectories. With no roots, any existing directory is accepted and `workspace.list` says there is nothing to list. Paths you write in the config are never checked. Personas with roles need `group.manage` (group) or `workspace.write` (solo) to change a workspace. Full rules: [docs/workspaces.md](docs/workspaces.md).
@@ -393,6 +394,8 @@ Unsupported or malformed messages get a `system.error` frame, and the connection
 hivemind serve                               # API on http://127.0.0.1:7474
 cd frontend && npm install && npm run dev    # UI on http://127.0.0.1:5173
 ```
+
+Or run both with one command: `scripts/dev.sh` (extra arguments go to `hivemind serve`; set `HIVEMIND_BIN` to use a prebuilt binary instead of `cargo run`). Ctrl-C stops both.
 
 On a fresh install, start the server without running `hivemind init`; the Web UI handles the initial persona setup and saves it directly on the server.
 
