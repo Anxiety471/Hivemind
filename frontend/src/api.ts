@@ -31,6 +31,10 @@ export type Message = {
   speaker: string;
   content: string;
   created_at: number;
+  /** Agent replies only: the user message this turn answers (`id` is null if it is on an earlier page). */
+  reply_to?: { speaker: string; id: string | null };
+  /** Agent replies only: earlier same-turn speakers this agent also read (discussion rooms). */
+  also_saw?: string[];
 };
 
 export type Thread = {
