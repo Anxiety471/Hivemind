@@ -169,6 +169,7 @@ pub struct ActivityRef {
 }
 
 pub struct CoordinationService {
+    execution: std::sync::OnceLock<Arc<crate::execution::ExecutionStore>>,
     store: CoordinationStore,
     config: CoordinationConfig,
     roster: Roster,
@@ -190,6 +191,9 @@ fn conflict<T>(message: impl Into<String>) -> CoordResult<T> {
 }
 
 impl CoordinationService {
+    pub fn set_execution(&self, store: Arc<crate::execution::ExecutionStore>) {
+        let _ = self.execution.set(store);
+    }
     pub fn new(
         store: CoordinationStore,
         config: CoordinationConfig,
@@ -197,6 +201,7 @@ impl CoordinationService {
         events: EventBus,
     ) -> Self {
         Self {
+            execution: std::sync::OnceLock::new(),
             store,
             config,
             roster,
@@ -659,6 +664,16 @@ impl CoordinationService {
                     || root.status == TaskStatus::Blocked && root.id != task.id
                 {
                     continue;
+                }
+                if let Some(execution) = self.execution.get() {
+                    let project = std::fs::canonicalize(&task.workspace)
+                        .unwrap_or_else(|_| task.workspace.clone().into())
+                        .display()
+                        .to_string();
+                    if let Err(error) = execution.check_budget(&task.root_id, &project) {
+                        self.block_root(db, &task.root_id, &format!("usage budget: {error}"))?;
+                        continue;
+                    }
                 }
                 if task.paused || (task.id == root.id && root.paused) {
                     continue;
@@ -1300,6 +1315,29 @@ impl CoordinationService {
                 task.status.as_str()
             ));
         }
+        if approve && task.id != task.root_id {
+            if let Some(execution) = self.execution.get().filter(|e| !e.config.checks.is_empty()) {
+                let artifacts = self.store.read(|db| db.artifacts(&task.id))?;
+                let sha = artifacts
+                    .iter()
+                    .rev()
+                    .find(|a| a.kind == "commit")
+                    .and_then(|a| a.content_hash.as_deref())
+                    .ok_or_else(|| {
+                        CoordError::Conflict(
+                            "host verification needs a committed deliverable".into(),
+                        )
+                    })?;
+                if !execution
+                    .verified(&task.id, sha)
+                    .map_err(|e| CoordError::Internal(e.to_string()))?
+                {
+                    return conflict(
+                        "configured host verification has not passed for the submitted commit",
+                    );
+                }
+            }
+        }
         let notes = notes.trim();
         let status = self.store.write(|db| {
             let is_root = task.id == task.root_id;
@@ -1331,7 +1369,12 @@ impl CoordinationService {
                             failed.check
                         ));
                     }
-                    if !db.artifacts(&task.id)?.iter().any(|a| a.kind != "summary") {
+                    if !db.artifacts(&task.id)?.iter().any(|a| {
+                        !matches!(
+                            a.kind.as_str(),
+                            "summary" | "recovery" | "recovery_selected" | "recovery_discarded"
+                        )
+                    }) {
                         return conflict("cannot approve: no deliverable artifact is recorded");
                     }
                 }

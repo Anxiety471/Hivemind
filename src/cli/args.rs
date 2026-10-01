@@ -52,7 +52,7 @@ pub(super) enum Commands {
         #[command(subcommand)]
         command: ShellGroupCommand,
     },
-    /// Start the local HTTP and WebSocket API.
+    /// Start the HTTP and WebSocket API (loopback by default).
     Serve {
         #[arg(long, default_value_t = 7474)]
         port: u16,

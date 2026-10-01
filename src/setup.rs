@@ -282,6 +282,8 @@ mod tests {
 
     fn config(agents: Vec<AgentConfig>) -> HivemindConfig {
         HivemindConfig {
+            execution: Default::default(),
+            server: Default::default(),
             runtime: RuntimeConfig::default(),
             conversation: ConversationConfig::default(),
             agents,

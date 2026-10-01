@@ -58,6 +58,7 @@ const DELETE_TIMEOUT: Duration = Duration::from_secs(2);
 pub struct OpencodeSession {
     agent_name: String,
     child: Child,
+    _group: crate::execution::ProcessGroup,
     stdin: Option<ChildStdin>,
     lines: Lines<BufReader<ChildStdout>>,
     session_id: String,
@@ -65,6 +66,7 @@ pub struct OpencodeSession {
     context_tokens: Option<u64>,
     /// Set once a transport error proves this session can never recover.
     failure: Option<String>,
+    progress: Option<super::ProgressSink>,
 }
 
 /// Assistant output collected while one prompt request is in flight.
@@ -110,7 +112,11 @@ impl Turn {
 }
 
 impl OpencodeSession {
-    pub async fn start(binary: &str, agent: &AgentConfig) -> Result<Self> {
+    pub async fn start_filtered(
+        binary: &str,
+        agent: &AgentConfig,
+        private_env: &[String],
+    ) -> Result<Self> {
         if agent.fast.is_some() {
             bail!(
                 "OpenCode runtime does not support the OMP-specific 'fast' setting for agent '{}'",
@@ -151,7 +157,12 @@ impl OpencodeSession {
             );
         }
 
-        match timeout(STARTUP_TIMEOUT, Self::spawn_and_open(binary, agent, model)).await {
+        match timeout(
+            STARTUP_TIMEOUT,
+            Self::spawn_and_open(binary, agent, model, private_env),
+        )
+        .await
+        {
             Ok(result) => result,
             Err(_) => bail!(
                 "OpenCode session for agent '{}' did not become ready within {}s",
@@ -180,8 +191,14 @@ impl OpencodeSession {
         binary: &str,
         agent: &AgentConfig,
         model: Option<&str>,
+        private_env: &[String],
     ) -> Result<Self> {
         let mut command = Command::new(binary);
+        for name in private_env {
+            command.env_remove(name);
+        }
+        #[cfg(unix)]
+        command.process_group(0);
         command
             .arg("acp")
             .current_dir(&agent.workspace)
@@ -200,6 +217,7 @@ impl OpencodeSession {
                 agent.name
             )
         })?;
+        let group = crate::execution::ProcessGroup(child.id());
         let stdin = child
             .stdin
             .take()
@@ -210,6 +228,7 @@ impl OpencodeSession {
             .context("OpenCode ACP did not provide stdout")?;
         let mut session = Self {
             agent_name: agent.name.clone(),
+            _group: group,
             child,
             stdin: Some(stdin),
             lines: BufReader::new(stdout).lines(),
@@ -217,6 +236,7 @@ impl OpencodeSession {
             next_request_id: 1,
             context_tokens: None,
             failure: None,
+            progress: None,
         };
 
         session
@@ -348,6 +368,9 @@ impl OpencodeSession {
                     if let (true, Some(turn), Some(update)) =
                         (ours, turn.as_deref_mut(), frame.pointer("/params/update"))
                     {
+                        if let Some(sink) = &self.progress {
+                            sink.acp(update);
+                        }
                         turn.absorb(update);
                     }
                 }
@@ -386,6 +409,9 @@ fn approve_permission(frame: &Value) -> Value {
 
 #[async_trait]
 impl HarnessSession for OpencodeSession {
+    fn set_progress(&mut self, sink: Option<super::ProgressSink>) {
+        self.progress = sink;
+    }
     async fn prompt(&mut self, input: &str) -> Result<String> {
         if let Some(failure) = &self.failure {
             bail!(

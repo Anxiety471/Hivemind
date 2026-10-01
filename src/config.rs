@@ -10,6 +10,10 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct HivemindConfig {
     #[serde(default)]
+    pub execution: crate::execution::ExecutionConfig,
+    #[serde(default)]
+    pub server: crate::api::ServerConfig,
+    #[serde(default)]
     pub runtime: RuntimeConfig,
     #[serde(default)]
     pub conversation: ConversationConfig,
@@ -251,6 +255,8 @@ impl Default for ContextConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeConfig {
+    #[serde(skip)]
+    pub private_env: Vec<String>,
     #[serde(default = "default_omp_binary")]
     pub omp_binary: String,
     #[serde(default = "default_pi_binary")]
@@ -269,6 +275,7 @@ pub struct RuntimeConfig {
 impl Default for RuntimeConfig {
     fn default() -> Self {
         Self {
+            private_env: Vec::new(),
             omp_binary: default_omp_binary(),
             pi_binary: default_pi_binary(),
             opencode_binary: default_opencode_binary(),
@@ -516,6 +523,8 @@ impl HivemindConfig {
 
     pub fn default_poc() -> Self {
         Self {
+            execution: Default::default(),
+            server: Default::default(),
             runtime: RuntimeConfig::default(),
             conversation: ConversationConfig {
                 reply_order: vec!["Engineer".into(), "Reviewer".into()],

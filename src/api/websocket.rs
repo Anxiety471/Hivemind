@@ -100,6 +100,17 @@ pub(super) async fn handle(
 
 fn map_event(event: &DomainEvent) -> Option<Outbound> {
     let (event_type, payload) = match &event.payload {
+        DomainEventKind::RuntimeProgress {
+            room_id,
+            turn_id,
+            agent_instance_id,
+            kind,
+            message_id,
+            text,
+        } => (
+            "agent.progress",
+            json!({"room_id":room_id,"turn_id":turn_id,"agent_instance_id":agent_instance_id.encode(),"kind":kind,"message_id":message_id,"text":text}),
+        ),
         DomainEventKind::ThreadCreated {
             thread_id,
             parent_room_id,
@@ -231,7 +242,8 @@ fn subscribe(envelope: Envelope, rooms: &mut Option<HashSet<String>>) -> Outboun
 fn event_room(event: &DomainEvent) -> Option<&str> {
     match &event.payload {
         DomainEventKind::ThreadCreated { parent_room_id, .. } => Some(parent_room_id),
-        DomainEventKind::TurnStarted { room_id, .. }
+        DomainEventKind::RuntimeProgress { room_id, .. }
+        | DomainEventKind::TurnStarted { room_id, .. }
         | DomainEventKind::TurnCompleted { room_id, .. }
         | DomainEventKind::AgentReplyStarted { room_id, .. }
         | DomainEventKind::AgentReplyCompleted { room_id, .. }

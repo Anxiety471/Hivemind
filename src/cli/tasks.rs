@@ -177,6 +177,7 @@ pub(super) async fn task_command(
         }
         TaskCommand::Watch { id, poll_ms } => watch(&core, &id, poll_ms).await,
         TaskCommand::Run { until_idle } => {
+            let _worker_lock = hivemind::execution::worker_lock(core.data_dir())?;
             if !service.enabled() {
                 bail!("coordination is disabled; set coordination.enabled = true in the config");
             }

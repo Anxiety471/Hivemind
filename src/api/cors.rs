@@ -2,7 +2,7 @@
 //! loopback interface may call it; any other origin gets no CORS headers and is blocked
 //! by the browser.
 use axum::{
-    extract::Request,
+    extract::{Request, State},
     http::{header, HeaderValue, Method, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response},
@@ -22,12 +22,22 @@ fn loopback(origin: &str) -> bool {
     matches!(host, "localhost" | "127.0.0.1" | "::1")
 }
 
-pub(super) async fn layer(request: Request, next: Next) -> Response {
+pub(super) async fn layer(
+    State(state): State<super::routes::ApiState>,
+    request: Request,
+    next: Next,
+) -> Response {
     let origin = request
         .headers()
         .get(header::ORIGIN)
         .and_then(|v| v.to_str().ok())
-        .filter(|origin| loopback(origin))
+        .filter(|origin| {
+            if state.auth.enabled() {
+                state.auth.origin_allowed(origin)
+            } else {
+                loopback(origin)
+            }
+        })
         .and_then(|origin| HeaderValue::from_str(origin).ok());
     let preflight = request.method() == Method::OPTIONS
         && request
@@ -49,7 +59,7 @@ pub(super) async fn layer(request: Request, next: Next) -> Response {
             );
             headers.insert(
                 header::ACCESS_CONTROL_ALLOW_HEADERS,
-                HeaderValue::from_static("content-type"),
+                HeaderValue::from_static("content-type, authorization"),
             );
             headers.insert(
                 header::ACCESS_CONTROL_MAX_AGE,

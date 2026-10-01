@@ -1,3 +1,6 @@
+mod auth;
+mod jobs;
+pub use auth::ServerConfig;
 mod chat_groups;
 mod cors;
 mod error;
@@ -9,10 +12,7 @@ mod tasks;
 mod websocket;
 mod workspaces;
 
-use std::{
-    net::{IpAddr, Ipv4Addr, SocketAddr},
-    sync::Arc,
-};
+use std::{net::SocketAddr, sync::Arc};
 
 use anyhow::Result;
 use axum::Router;
@@ -24,8 +24,18 @@ pub fn router(core: Arc<HivemindCore>, shutdown: watch::Receiver<bool>) -> Route
     routes::router(core, shutdown)
 }
 
+/// Run durable asynchronous chat jobs for an embedded router. The core owns
+/// shutdown; this worker holds the same exclusive data-directory lock as serve.
+pub async fn run_jobs(core: Arc<HivemindCore>) -> Result<()> {
+    let _worker_lock = crate::execution::worker_lock(core.data_dir())?;
+    jobs::run(core).await;
+    Ok(())
+}
+
 pub async fn serve(core: Arc<HivemindCore>, port: u16) -> Result<()> {
-    let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
+    let _worker_lock = crate::execution::worker_lock(core.data_dir())?;
+    let address = SocketAddr::new(core.config().server.bind, port);
+    let _auth = auth::Auth::load(&core.config().server)?;
     let listener = TcpListener::bind(address).await?;
     let address = listener.local_addr()?;
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -39,6 +49,7 @@ pub async fn serve(core: Arc<HivemindCore>, port: u16) -> Result<()> {
     if scheduler.is_some() {
         println!("Coordination scheduler running");
     }
+    let jobs = tokio::spawn(jobs::run(core.clone()));
     let shutdown_core = Arc::clone(&core);
     let serve_result = axum::serve(listener, app)
         .with_graceful_shutdown(async move {
@@ -54,7 +65,11 @@ pub async fn serve(core: Arc<HivemindCore>, port: u16) -> Result<()> {
     if let Some(scheduler) = scheduler {
         let _ = tokio::time::timeout(std::time::Duration::from_secs(10), scheduler).await;
     }
+    let _ = jobs.await;
     serve_result?;
     println!("API stopped");
     Ok(())
 }
+
+#[cfg(test)]
+mod execution_tests;

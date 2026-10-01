@@ -19,11 +19,23 @@ struct ChildTransport {
     child: Child,
     stdin: Option<ChildStdin>,
     lines: Lines<BufReader<ChildStdout>>,
+    _group: crate::execution::ProcessGroup,
 }
 
 impl ChildTransport {
-    async fn spawn(binary: &str, args: &[String], workspace: &str) -> Result<Self> {
-        let mut child = Command::new(binary)
+    async fn spawn(
+        binary: &str,
+        args: &[String],
+        workspace: &str,
+        private_env: &[String],
+    ) -> Result<Self> {
+        let mut command = Command::new(binary);
+        for name in private_env {
+            command.env_remove(name);
+        }
+        #[cfg(unix)]
+        command.process_group(0);
+        let mut child = command
             .args(args)
             .current_dir(workspace)
             .stdin(Stdio::piped())
@@ -34,12 +46,14 @@ impl ChildTransport {
             .with_context(|| {
                 format!("failed to spawn Pi binary '{binary}'; is it installed and on PATH?")
             })?;
+        let group = crate::execution::ProcessGroup(child.id());
         let stdin = child.stdin.take().context("Pi RPC did not provide stdin")?;
         let stdout = child
             .stdout
             .take()
             .context("Pi RPC did not provide stdout")?;
         Ok(Self {
+            _group: group,
             child,
             stdin: Some(stdin),
             lines: BufReader::new(stdout).lines(),
@@ -103,10 +117,21 @@ pub struct PiSession {
     agent_name: String,
     transport: ChildTransport,
     failure: Option<String>,
+    progress: Option<super::ProgressSink>,
+    usage: Option<crate::execution::Usage>,
+    usage_missing: bool,
 }
 
 impl PiSession {
+    #[cfg(test)]
     pub async fn start(binary: &str, agent: &AgentConfig) -> Result<Self> {
+        Self::start_filtered(binary, agent, &[]).await
+    }
+    pub async fn start_filtered(
+        binary: &str,
+        agent: &AgentConfig,
+        private_env: &[String],
+    ) -> Result<Self> {
         if agent.fast.is_some() {
             bail!(
                 "Pi runtime does not support the OMP-specific 'fast' setting for agent '{}'",
@@ -123,7 +148,7 @@ impl PiSession {
         }
 
         let args = Self::rpc_args(agent);
-        let transport = ChildTransport::spawn(binary, &args, &agent.workspace)
+        let transport = ChildTransport::spawn(binary, &args, &agent.workspace, private_env)
             .await
             .with_context(|| {
                 format!("failed to start Pi RPC process for agent '{}'", agent.name)
@@ -132,6 +157,9 @@ impl PiSession {
             agent_name: agent.name.clone(),
             transport,
             failure: None,
+            progress: None,
+            usage: None,
+            usage_missing: false,
         })
     }
 
@@ -173,7 +201,18 @@ impl PiSession {
 
     async fn recv(&mut self) -> Result<Value> {
         match self.transport.recv().await {
-            Ok(frame) => Ok(frame),
+            Ok(frame) => {
+                if let Some(sink) = &self.progress {
+                    sink.rpc(&frame);
+                }
+                if let Some(usage) = super::telemetry::rpc_usage(&frame) {
+                    self.usage.get_or_insert_with(Default::default).add(&usage);
+                } else if frame["type"] == "message_end" && frame["message"]["role"] == "assistant"
+                {
+                    self.usage_missing = true;
+                }
+                Ok(frame)
+            }
             Err(error) => {
                 let error = error.context(format!("Pi RPC failed for agent '{}'", self.agent_name));
                 self.failure = Some(format!("{error:#}"));
@@ -207,6 +246,17 @@ impl PiSession {
 
 #[async_trait]
 impl HarnessSession for PiSession {
+    fn set_progress(&mut self, sink: Option<super::ProgressSink>) {
+        self.progress = sink;
+        self.usage = None;
+        self.usage_missing = false;
+    }
+    fn take_usage(&mut self) -> Option<crate::execution::Usage> {
+        if self.usage_missing {
+            self.usage = None;
+        }
+        self.usage.take()
+    }
     async fn prompt(&mut self, input: &str) -> Result<String> {
         if let Some(failure) = &self.failure {
             bail!(

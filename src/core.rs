@@ -28,6 +28,7 @@ use crate::{
 
 /// Process-level owner of configuration, memory, conversations, events, and API state.
 pub struct HivemindCore {
+    execution: Arc<crate::execution::ExecutionStore>,
     config: RwLock<Arc<HivemindConfig>>,
     agents: RwLock<AgentRegistry>,
     memory: Arc<MemoryService>,
@@ -169,8 +170,17 @@ impl HivemindCore {
             memory.clone(),
             Some(events.clone()),
         );
+        let execution = Arc::new(crate::execution::ExecutionStore::open(
+            data_dir.join("execution.sqlite3"),
+            config.execution.clone(),
+        )?);
+        execution.protect_env(config.server.token_env.as_deref());
+        let mut runtime_config = config.runtime.clone();
+        runtime_config
+            .private_env
+            .extend(config.server.token_env.iter().cloned());
         let runtime = Arc::new(RuntimePool::new(
-            config.runtime.clone(),
+            runtime_config,
             config.context.runtime_rotate_tokens,
             memory.clone(),
             events.clone(),
@@ -196,6 +206,8 @@ impl HivemindCore {
             Roster::from_config(&config),
             events.clone(),
         ));
+        runtime.set_execution(execution.clone());
+        coordination.set_execution(execution.clone());
         let workspaces = Arc::new(SharedWorkspaces::new(&config_path, &config));
         let mut hosts: Vec<Arc<dyn crate::conversation::ToolHost>> = vec![Arc::new(
             WorkspaceTools::new(workspaces.clone(), access.clone()),
@@ -209,6 +221,7 @@ impl HivemindCore {
         conversation.set_tools(Arc::new(ToolHosts(hosts)));
         events.publish(DomainEventKind::CoreStarted);
         Ok(Self {
+            execution,
             config: RwLock::new(config),
             agents: RwLock::new(agents),
             memory,
@@ -224,6 +237,39 @@ impl HivemindCore {
             shutdown_lock: tokio::sync::Mutex::new(()),
             group_edit_lock: std::sync::Mutex::new(()),
         })
+    }
+
+    pub fn execution(&self) -> &Arc<crate::execution::ExecutionStore> {
+        &self.execution
+    }
+
+    pub async fn send_job_turn(
+        &self,
+        target: &ConversationTarget,
+        message: &str,
+        turn_id: &str,
+    ) -> Result<TurnExecution> {
+        anyhow::ensure!(!self.is_shutting_down(), "core is shutting down");
+        let resolved = self.resolve_target(target)?;
+        let invoker = Arc::new(RuntimeInvoker::new(
+            self.runtime.clone(),
+            &resolved.room_id,
+            &resolved.group_id,
+        ));
+        self.conversation
+            .turn_with_id(
+                TurnRequest {
+                    room: &resolved.room_id,
+                    room_name: &resolved.room_name,
+                    group_id: &resolved.group_id,
+                    mode: resolved.mode,
+                    members: &resolved.participants,
+                    input: message,
+                    invoker,
+                },
+                Some(turn_id),
+            )
+            .await
     }
 
     pub fn agents(&self) -> AgentRegistry {

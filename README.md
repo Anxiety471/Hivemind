@@ -286,7 +286,7 @@ cargo run -- serve     # binds to http://127.0.0.1:7474
 ```
 
 > [!CAUTION]
-> Remote access and authentication are **not implemented**. The API has no authentication and must stay loopback-only. Don't expose it to other hosts or networks.
+> Loopback is the default. Remote binding requires an operator token; use HTTPS/WSS and an explicit origin allowlist. See [execution and remote access](docs/execution.md).
 
 Building the server and serving health/info/agent listings never starts Pi, OMP, or OpenCode. All endpoints use the `/api/v1` prefix.
 
@@ -328,6 +328,8 @@ curl http://127.0.0.1:7474/api/v1/agents
 ```
 
 </details>
+
+See [durable async jobs, measured usage budgets, host verification, and recovery](docs/execution.md) for the execution endpoints and configuration.
 
 ### Submitting turns
 
@@ -433,9 +435,9 @@ The library's `core`, `events`, `conversation`, `config`, `runtime`, and `memory
 ## 🚧 Current limitations
 
 - Memory search is SQLite FTS5 full-text matching, not semantic/embedding search. There is no vector database.
-- Responses are collected at the end of each turn, not streamed token by token.
+- Final responses are collected at the end of each turn. WebSocket `agent.progress` delivers assistant text and sanitized tool activity as supported by each runtime.
 - Autonomous coordination (`[coordination] enabled = true`) is off by default, runs only while `serve` or `task run` is running, and has documented limits: see [docs/coordination.md](docs/coordination.md).
-- The API has no authentication and is loopback-only.
+- Remote access uses opt-in single-operator bearer authentication; multi-user tenancy is not implemented.
 - A runtime failure mid-turn is reported as an agent-attributed error and never retried.
 
 ## 📄 License
