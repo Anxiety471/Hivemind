@@ -53,6 +53,7 @@ enum TurnTargetBody {
     Main,
     Solo { id: String },
     Group { id: String },
+    Thread { id: String },
 }
 
 #[derive(Serialize)]
@@ -88,6 +89,7 @@ async fn submit_turn(
         TurnTargetBody::Main => ConversationTarget::Main,
         TurnTargetBody::Solo { id } => ConversationTarget::Solo { persona_id: id },
         TurnTargetBody::Group { id } => ConversationTarget::Group { group_id: id },
+        TurnTargetBody::Thread { id } => ConversationTarget::Thread { thread_id: id },
     };
     if request.message.trim().is_empty() {
         return ApiError::new(
@@ -514,6 +516,125 @@ mod tests {
             .map(|m| m["id"].clone())
             .collect();
         assert_eq!(ids, vec![json!("m1"), json!("m2")]);
+    }
+
+    #[tokio::test]
+    async fn threads_anchor_to_a_message_and_accept_turns_in_their_own_room() {
+        use crate::memory::{ArchiveParticipant, ArchivedMessage, ArchivedTurn, Caller};
+        let test_core = TestCore::new();
+        let app = router(test_core.core.clone(), watch::channel(false).1);
+        let mut events = test_core.core.events().subscribe();
+        test_core
+            .core
+            .memory()
+            .append_archive_turn(
+                &Caller::trusted_user("test"),
+                ArchivedTurn {
+                    id: "t1".into(),
+                    room_id: "main".into(),
+                    started_at: 1,
+                    completed_at: Some(2),
+                    metadata: json!({}),
+                    participants: vec![ArchiveParticipant {
+                        participant_id: "user".into(),
+                        role: None,
+                    }],
+                    messages: vec![ArchivedMessage {
+                        id: "m1".into(),
+                        room_id: "main".into(),
+                        turn_id: "t1".into(),
+                        speaker: "user".into(),
+                        content: "anchor".into(),
+                        created_at: 1,
+                    }],
+                },
+            )
+            .unwrap();
+        let (status, created) = request_json(
+            app.clone(),
+            "POST",
+            "/api/v1/rooms/main/threads",
+            json!({"anchor_message_id":"m1","name":"Side"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        let thread_id = created["thread"]["id"].as_str().unwrap().to_owned();
+        assert_eq!(created["thread"]["parent_room_id"], "main");
+        let event = events.recv().await.unwrap();
+        assert!(
+            matches!(&event.payload, crate::events::DomainEventKind::ThreadCreated { thread_id: id, .. } if *id == thread_id)
+        );
+
+        let (status, again) = request_json(
+            app.clone(),
+            "POST",
+            "/api/v1/rooms/main/threads",
+            json!({"anchor_message_id":"m1"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(again["thread"]["id"], thread_id.as_str());
+        let (status, body) = request_json(
+            app.clone(),
+            "POST",
+            "/api/v1/rooms/main/threads",
+            json!({"anchor_message_id":"nope"}),
+        )
+        .await;
+        assert_eq!(
+            (status, body["error"]["code"].as_str()),
+            (StatusCode::NOT_FOUND, Some("anchor_not_found"))
+        );
+        let (status, _) = request_json(
+            app.clone(),
+            "POST",
+            "/api/v1/rooms/ghost/threads",
+            json!({"anchor_message_id":"m1"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let (status, _) = request_json(
+            app.clone(),
+            "POST",
+            &format!("/api/v1/rooms/{thread_id}/threads"),
+            json!({"anchor_message_id":"m1"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        let (_, _, list) = request(app.clone(), "GET", "/api/v1/rooms/main/threads").await;
+        assert_eq!(list["threads"][0]["anchor_message_id"], "m1");
+        let (_, _, rooms) = request(app.clone(), "GET", "/api/v1/rooms").await;
+        assert!(!rooms["rooms"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["id"] == thread_id.as_str()));
+        let (_, _, room) = request(app.clone(), "GET", &format!("/api/v1/rooms/{thread_id}")).await;
+        assert_eq!(room["room"]["kind"], "thread");
+        assert_eq!(room["room"]["parent_room_id"], "main");
+        assert!(!room["room"]["participants"].as_array().unwrap().is_empty());
+
+        let (status, body) = request_json(
+            app.clone(),
+            "POST",
+            "/api/v1/turns",
+            json!({"target":{"type":"thread","id":thread_id},"message":"hi","wait":false}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        assert_eq!(body["room_id"], thread_id.as_str());
+        let (status, body) = request_json(
+            app,
+            "POST",
+            "/api/v1/turns",
+            json!({"target":{"type":"thread","id":"missing"},"message":"hi"}),
+        )
+        .await;
+        assert_eq!(
+            (status, body["error"]["code"].as_str()),
+            (StatusCode::NOT_FOUND, Some("target_not_found"))
+        );
     }
 
     #[tokio::test]

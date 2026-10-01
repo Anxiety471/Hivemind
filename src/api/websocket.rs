@@ -96,6 +96,14 @@ pub(super) async fn handle(
 
 fn map_event(event: &DomainEvent) -> Option<Outbound> {
     let (event_type, payload) = match &event.payload {
+        DomainEventKind::ThreadCreated {
+            thread_id,
+            parent_room_id,
+            anchor_message_id,
+        } => (
+            "thread.created",
+            json!({"thread_id": thread_id, "parent_room_id": parent_room_id, "anchor_message_id": anchor_message_id}),
+        ),
         DomainEventKind::TurnStarted { room_id, turn_id } => (
             "conversation.turn.started",
             json!({"room_id": room_id, "turn_id": turn_id}),

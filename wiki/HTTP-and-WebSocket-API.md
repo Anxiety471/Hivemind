@@ -18,6 +18,7 @@ Building the server and serving health, info, and agent listings never starts Pi
 | `GET` | `/api/v1/agents` | Safe agent metadata (name and runtime only; no credentials) |
 | `POST` | `/api/v1/turns` | Submit a conversation turn (`"wait": false` returns `202` immediately) |
 | `GET` | `/api/v1/rooms`, `/api/v1/rooms/{id}` | Rooms (main, solo, group, archived) with participants, state, summary, and message counts |
+| `GET` / `POST` | `/api/v1/rooms/{id}/threads` | List a room's user threads, or start one with `{"anchor_message_id","name"}` (`201`; `200` with the existing thread if that message already has one) |
 | `GET` | `/api/v1/rooms/{id}/messages?limit=&before=` | Paged room history, oldest first within a page; page back with `next_before` |
 | `POST` / `GET` | `/api/v1/tasks`, `/api/v1/tasks/{id}` | Submit (202) and inspect autonomous tasks |
 | `GET` / `POST` | `/api/v1/tasks/{id}/attempts`, `/cancel`, `/pause`, `/resume`, `/input`, `/context-metrics` | Attempts, controls, and bounded context diagnostics |
@@ -48,6 +49,8 @@ curl http://127.0.0.1:7474/api/v1/agents
 ```json
 {"target":{"type":"group","id":"development"},"message":"Review the runtime lifecycle."}
 ```
+
+Targets are `main`, `solo`, `group`, or `thread`. A thread is a child room anchored to one message of its parent room: it has its own history (`GET /rooms/{thread_id}/messages`) and runs with the parent's participants, mode and group. Threads cannot be nested and do not appear in `GET /rooms`; `GET /rooms/{thread_id}` returns `parent_room_id` and `anchor_message_id`.
 
 The response includes `turn_id`, `room_id`, and an ordered list of `replies`, each with `persona_id`, `ok`, and `content`. Use `turn_id` and `room_id` to match the response to WebSocket events. Responses never include provider diagnostics or prompts.
 
@@ -84,6 +87,7 @@ Unsupported or malformed messages get a `system.error` frame, and the connection
 | Group | Events |
 | --- | --- |
 | Conversation | `conversation.turn.started`, `conversation.turn.completed` |
+| Threads | `thread.created` with `thread_id`, `parent_room_id`, `anchor_message_id` |
 | Replies | `agent.reply.started`, `agent.reply.completed`, `agent.reply.failed` |
 | Runtime | `runtime.started`, `runtime.stopped`, `runtime.rotated`, `runtime.failed` |
 | Coordination | `task.*`, `attempt.*`, `message.*`, `group.*`, `agent.activity.changed` |

@@ -262,11 +262,16 @@ impl MemoryStore {
         if !has_column("runtime_epochs", "end_reason")? {
             connection.execute("ALTER TABLE runtime_epochs ADD COLUMN end_reason TEXT", [])?;
         }
+        if !has_column("rooms", "parent_room_id")? {
+            connection.execute("ALTER TABLE rooms ADD COLUMN parent_room_id TEXT", [])?;
+            connection.execute("ALTER TABLE rooms ADD COLUMN anchor_message_id TEXT", [])?;
+        }
         if !has_column("memories", "topic_key")? {
             connection.execute("ALTER TABLE memories ADD COLUMN topic_key TEXT", [])?;
         }
         connection.execute_batch(
-            "CREATE UNIQUE INDEX IF NOT EXISTS memories_active_topic_key ON memories(scope_type,scope_id,topic_key) WHERE status='active' AND topic_key IS NOT NULL;
+            "CREATE UNIQUE INDEX IF NOT EXISTS rooms_thread_anchor ON rooms(parent_room_id,anchor_message_id) WHERE parent_room_id IS NOT NULL;
+             CREATE UNIQUE INDEX IF NOT EXISTS memories_active_topic_key ON memories(scope_type,scope_id,topic_key) WHERE status='active' AND topic_key IS NOT NULL;
              CREATE INDEX IF NOT EXISTS runtime_epochs_identity_start ON runtime_epochs(identity_version,instance_id,started_at DESC)",
         )?;
         let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;

@@ -1,4 +1,5 @@
 //! Read-only room endpoints: which rooms exist, their state, and paged message history.
+use axum::extract::rejection::JsonRejection;
 use axum::{
     extract::{Path, RawQuery, State},
     http::StatusCode,
@@ -6,6 +7,7 @@ use axum::{
     routing::get,
     Json, Router,
 };
+use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::{
@@ -23,6 +25,10 @@ pub(super) fn routes() -> Router<ApiState> {
         .route("/api/v1/rooms", get(list))
         .route("/api/v1/rooms/{id}", get(show))
         .route("/api/v1/rooms/{id}/messages", get(messages))
+        .route(
+            "/api/v1/rooms/{id}/threads",
+            get(threads).post(create_thread),
+        )
 }
 
 fn internal() -> Response {
@@ -68,6 +74,7 @@ fn configured(state: &ApiState) -> Vec<(&'static str, ResolvedConversationTarget
                 ConversationTarget::Main => "main",
                 ConversationTarget::Solo { .. } => "solo",
                 ConversationTarget::Group { .. } => "group",
+                ConversationTarget::Thread { .. } => "thread",
             };
             state.core.resolve_target(target).ok().map(|r| (kind, r))
         })
@@ -107,6 +114,23 @@ async fn list(State(state): State<ApiState>) -> Response {
 }
 
 async fn show(State(state): State<ApiState>, Path(id): Path<String>) -> Response {
+    if let Ok(Some(thread)) = state.core.memory().thread(&caller(), &id) {
+        let mut value = match state.core.resolve_target(&ConversationTarget::Thread {
+            thread_id: id.clone(),
+        }) {
+            Ok(room) => describe("thread", &room),
+            Err(_) => json!({"id": id, "name": thread.name, "kind": "thread", "participants": []}),
+        };
+        value["parent_room_id"] = json!(thread.parent_room_id);
+        value["anchor_message_id"] = json!(thread.anchor_message_id);
+        value["updated_at"] = json!(thread.updated_at);
+        value["message_count"] = json!(thread.message_count);
+        if let Ok(history) = state.core.conversation().room_history(&id) {
+            value["state"] = json!(history.state);
+            value["summary"] = json!(history.summary);
+        }
+        return Json(json!({"room": value})).into_response();
+    }
     let configured = configured(&state);
     let known = configured.iter().find(|(_, r)| r.room_id == id);
     let summary = match state.core.memory().room_summaries(&caller()) {
@@ -161,4 +185,118 @@ async fn messages(
         }
         Err(_) => internal(),
     }
+}
+
+async fn threads(State(state): State<ApiState>, Path(id): Path<String>) -> Response {
+    match state.core.memory().threads(&caller(), &id) {
+        Ok(threads) => Json(json!({"room_id": id, "threads": threads})).into_response(),
+        Err(_) => internal(),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ThreadBody {
+    anchor_message_id: String,
+    #[serde(default)]
+    name: Option<String>,
+}
+
+/// Start a thread on one message of a room, or return the existing one for that message.
+async fn create_thread(
+    State(state): State<ApiState>,
+    Path(id): Path<String>,
+    payload: Result<Json<ThreadBody>, JsonRejection>,
+) -> Response {
+    let Ok(Json(body)) = payload else {
+        return ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_json",
+            "invalid request body",
+        )
+        .into_response();
+    };
+    if body.anchor_message_id.trim().is_empty() {
+        return ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "anchor_message_id must not be empty",
+        )
+        .into_response();
+    }
+    // Only rooms that can be resumed with a turn may carry threads.
+    if super::rooms::parent_exists(&state, &id).is_none() {
+        return ApiError::new(StatusCode::NOT_FOUND, "not_found", "room was not found")
+            .into_response();
+    }
+    let name = body
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .unwrap_or("Thread");
+    match state
+        .core
+        .memory()
+        .create_thread(&caller(), &id, &body.anchor_message_id, name)
+    {
+        Ok((thread, created)) => {
+            if created {
+                state
+                    .core
+                    .events()
+                    .publish(crate::events::DomainEventKind::ThreadCreated {
+                        thread_id: thread.id.clone(),
+                        parent_room_id: thread.parent_room_id.clone(),
+                        anchor_message_id: thread.anchor_message_id.clone(),
+                    });
+            }
+            (
+                if created {
+                    StatusCode::CREATED
+                } else {
+                    StatusCode::OK
+                },
+                Json(json!({"thread": thread, "created": created})),
+            )
+                .into_response()
+        }
+        Err(error) => {
+            let message = error.to_string();
+            if message.contains("anchor message not found") {
+                ApiError::new(
+                    StatusCode::NOT_FOUND,
+                    "anchor_not_found",
+                    "anchor message was not found in this room",
+                )
+                .into_response()
+            } else if message.contains("nested") {
+                ApiError::new(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_request",
+                    "threads cannot be nested",
+                )
+                .into_response()
+            } else {
+                internal()
+            }
+        }
+    }
+}
+
+fn parent_exists(state: &ApiState, room_id: &str) -> Option<()> {
+    crate::core::parent_target(room_id)
+        .and_then(|target| state.core.resolve_target(&target).ok())
+        .map(|_| ())
+        .or_else(|| {
+            // An archived room whose configured target is gone still has history to thread.
+            state
+                .core
+                .memory()
+                .room_summaries(&caller())
+                .ok()?
+                .iter()
+                .any(|(id, ..)| id == room_id)
+                .then_some(())
+        })
 }

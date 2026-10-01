@@ -72,6 +72,24 @@ pub enum ConversationTarget {
     Main,
     Solo { persona_id: String },
     Group { group_id: String },
+    Thread { thread_id: String },
+}
+
+/// The conversation target that owns a parent room id (`main`, `solo-<id>`, `group-<id>`).
+pub fn parent_target(room_id: &str) -> Option<ConversationTarget> {
+    if room_id == "main" {
+        Some(ConversationTarget::Main)
+    } else if let Some(id) = room_id.strip_prefix("solo-") {
+        Some(ConversationTarget::Solo {
+            persona_id: id.into(),
+        })
+    } else {
+        room_id
+            .strip_prefix("group-")
+            .map(|id| ConversationTarget::Group {
+                group_id: id.into(),
+            })
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -278,6 +296,9 @@ impl HivemindCore {
         &self,
         target: &ConversationTarget,
     ) -> std::result::Result<ResolvedConversationTarget, TargetResolutionError> {
+        if let ConversationTarget::Thread { thread_id } = target {
+            return self.resolve_thread(thread_id);
+        }
         let registry = self.agents();
         let config = self.config.read().expect("core config lock poisoned");
         let config = config.as_ref();
@@ -314,6 +335,7 @@ impl HivemindCore {
                     participants: vec![Participant { agent, role: None }],
                 }
             }
+            ConversationTarget::Thread { .. } => unreachable!("handled above"),
             ConversationTarget::Group { group_id } => {
                 if group_id.trim().is_empty() {
                     return Err(TargetResolutionError::Invalid(
@@ -357,6 +379,33 @@ impl HivemindCore {
                 }
             }
         })
+    }
+
+    /// A thread runs with its parent room's participants, mode and group, in its own room.
+    fn resolve_thread(
+        &self,
+        thread_id: &str,
+    ) -> std::result::Result<ResolvedConversationTarget, TargetResolutionError> {
+        if thread_id.trim().is_empty() {
+            return Err(TargetResolutionError::Invalid(
+                "thread id must not be empty".into(),
+            ));
+        }
+        let caller = crate::memory::Caller::trusted_user("core");
+        let thread = self
+            .memory()
+            .thread(&caller, thread_id)
+            .map_err(|_| TargetResolutionError::NotFound(format!("unknown thread '{thread_id}'")))?
+            .ok_or_else(|| {
+                TargetResolutionError::NotFound(format!("unknown thread '{thread_id}'"))
+            })?;
+        let parent = parent_target(&thread.parent_room_id).ok_or_else(|| {
+            TargetResolutionError::NotFound(format!("parent room of '{thread_id}' is gone"))
+        })?;
+        let mut resolved = self.resolve_target(&parent)?;
+        resolved.room_id = thread.id;
+        resolved.room_name = thread.name;
+        Ok(resolved)
     }
 
     /// The persona with its current own workspace, which an agent may have changed at runtime.
