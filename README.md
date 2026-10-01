@@ -39,25 +39,42 @@ Hivemind owns the conversation, the memory, and the CLI.<br>
 
 **Prerequisites**
 
-- Rust stable with Cargo.
+- Linux x86_64 for the current prebuilt release.
 - At least one supported runtime (**Pi** or **OMP**), installed and signed in to a provider through that runtime's own setup. Hivemind itself never calls a provider during setup.
+
+Install the latest GitHub release:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Anxiety471/Hivemind/main/scripts/install.sh | sh
+```
+
+Then initialize and verify the local setup:
+
+```bash
+hivemind --version
+hivemind init            # writes hivemind.toml (never overwrites without --force)
+pi --version             # or: omp --version
+hivemind doctor
+hivemind                 # starts interactive chat
+```
+
+The installer downloads the prebuilt binary from the latest GitHub Release, verifies its SHA-256 checksum, and installs it to `~/.local/bin/hivemind` by default. Override that location with `HIVEMIND_INSTALL_DIR`.
+
+Take a look at `hivemind.toml`. The starter config uses **Pi for both example agents**, so you only need Pi unless you change an agent's `runtime`. Set up a provider/model inside the runtime before starting chat.
+
+### Build from source
+
+For development, install Rust stable with Cargo and build directly from the repository:
 
 ```bash
 git clone https://github.com/Anxiety471/Hivemind.git
 cd Hivemind
 
 rustc --version && cargo --version
-pi --version            # or: omp --version
-
 cargo build
-cargo run -- init       # writes hivemind.toml (never overwrites without --force)
-```
-
-Take a look at `hivemind.toml`. The starter config uses **Pi for both example agents**, so you only need Pi unless you change an agent's `runtime`. Set up a provider/model inside the runtime, then check that everything is ready and start chatting:
-
-```bash
+cargo run -- init
 cargo run -- doctor
-cargo run               # starts interactive chat
+cargo run
 ```
 
 > [!NOTE]
