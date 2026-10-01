@@ -8,6 +8,7 @@ mod protocol;
 mod rooms;
 mod routes;
 mod runtime;
+mod setup;
 mod tasks;
 mod websocket;
 mod workspaces;

@@ -2,6 +2,8 @@ mod registry;
 pub use registry::AgentRegistry;
 
 use std::{
+    fs::{self, OpenOptions},
+    io::Write,
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -40,6 +42,8 @@ pub struct HivemindCore {
     coordination: Arc<CoordinationService>,
     access: Arc<crate::access::AccessPolicy>,
     workspaces: Arc<SharedWorkspaces>,
+    setup_required: AtomicBool,
+    setup_lock: std::sync::Mutex<()>,
     shutting_down: AtomicBool,
     shutdown_lock: tokio::sync::Mutex<()>,
     group_edit_lock: std::sync::Mutex<()>,
@@ -135,6 +139,7 @@ fn with_workspace(
 impl HivemindCore {
     pub fn new(config: HivemindConfig, config_path: impl AsRef<Path>) -> Result<Self> {
         let config_path = config_path.as_ref().to_owned();
+        let setup_required = config.agents.is_empty() && !config_path.exists();
         let data_dir = config_path
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
@@ -233,6 +238,8 @@ impl HivemindCore {
             coordination,
             access,
             workspaces,
+            setup_required: AtomicBool::new(setup_required),
+            setup_lock: std::sync::Mutex::new(()),
             shutting_down: AtomicBool::new(false),
             shutdown_lock: tokio::sync::Mutex::new(()),
             group_edit_lock: std::sync::Mutex::new(()),
@@ -312,6 +319,66 @@ impl HivemindCore {
             .expect("core config lock poisoned")
             .as_ref()
             .clone()
+    }
+
+    /// Whether this server still needs its initial persona configuration.
+    pub fn setup_required(&self) -> bool {
+        self.setup_required.load(Ordering::Acquire)
+    }
+
+    /// Persist and activate the initial configuration submitted by the Web UI.
+    /// This is deliberately one-shot: normal configuration changes remain explicit file edits.
+    pub fn complete_initial_setup(&self, mut config: HivemindConfig) -> Result<()> {
+        let _guard = self.setup_lock.lock().expect("setup lock poisoned");
+        anyhow::ensure!(self.setup_required(), "Hivemind is already configured");
+        config.validate()?;
+        for persona in &mut config.agents {
+            persona.workspace = crate::config::absolute_workspace(&persona.workspace);
+        }
+
+        let serialized = toml::to_string_pretty(&config).context("serializing initial config")?;
+        let parent = self
+            .config_path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        fs::create_dir_all(parent)
+            .with_context(|| format!("creating config directory {}", parent.display()))?;
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&self.config_path)
+            .with_context(|| format!("creating config {}", self.config_path.display()))?;
+        if let Err(error) = file
+            .write_all(serialized.as_bytes())
+            .and_then(|()| file.sync_all())
+        {
+            drop(file);
+            let _ = fs::remove_file(&self.config_path);
+            return Err(error)
+                .with_context(|| format!("writing config {}", self.config_path.display()));
+        }
+
+        let registry = AgentRegistry {
+            agents: Arc::new(
+                config
+                    .ordered_agents()
+                    .into_iter()
+                    .map(|agent| {
+                        Arc::new(crate::config::AgentConfig {
+                            tool_access: crate::access::tool_access(agent, &config.roles),
+                            ..agent.clone()
+                        })
+                    })
+                    .collect(),
+            ),
+        };
+        self.workspaces.replace_personas(&config.agents);
+        self.access.replace_from_config(&config);
+        *self.agents.write().expect("core agent registry lock poisoned") = registry;
+        *self.config.write().expect("core config lock poisoned") = Arc::new(config);
+        self.setup_required.store(false, Ordering::Release);
+        Ok(())
     }
     pub fn events(&self) -> &EventBus {
         &self.events

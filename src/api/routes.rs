@@ -37,6 +37,7 @@ pub(super) fn router(core: Arc<HivemindCore>, shutdown: watch::Receiver<bool>) -
         .merge(super::chat_groups::routes())
         .merge(super::workspaces::routes())
         .merge(super::runtime::routes())
+        .merge(super::setup::routes())
         .route("/api/v1/agents", get(agents))
         .route("/api/v1/turns", post(submit_turn))
         .route("/api/v1/ws", get(ws))
@@ -324,7 +325,7 @@ mod tests {
     }
 
     impl TestCore {
-        fn new() -> Self {
+        fn with_config(config: HivemindConfig) -> Self {
             let directory = std::env::temp_dir().join(format!(
                 "hivemind-api-test-{}-{}",
                 std::process::id(),
@@ -332,11 +333,19 @@ mod tests {
             ));
             std::fs::create_dir_all(&directory).unwrap();
             let config_path = directory.join("hivemind.toml");
-            let core = HivemindCore::new(HivemindConfig::default_poc(), &config_path).unwrap();
+            let core = HivemindCore::new(config, &config_path).unwrap();
             Self {
                 core: Arc::new(core),
                 directory,
             }
+        }
+
+        fn new() -> Self {
+            Self::with_config(HivemindConfig::default_poc())
+        }
+
+        fn unconfigured() -> Self {
+            Self::with_config(HivemindConfig::default())
         }
     }
 
@@ -387,6 +396,58 @@ mod tests {
         let status = response.status();
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
         (status, serde_json::from_slice(&bytes).unwrap())
+    }
+
+    #[tokio::test]
+    async fn browser_setup_persists_and_activates_the_first_personas_once() {
+        let test_core = TestCore::unconfigured();
+        let app = router(test_core.core.clone(), watch::channel(false).1);
+        let (status, _, state) = request(app.clone(), "GET", "/api/v1/setup").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(state["setup_required"], true);
+
+        let workspace = std::env::current_dir().unwrap().display().to_string();
+        let (status, saved) = request_json(
+            app.clone(),
+            "POST",
+            "/api/v1/setup",
+            json!({"personas":[{
+                "id":"Web Engineer",
+                "role":"Software Engineer",
+                "runtime":"pi",
+                "workspace":workspace,
+                "system_prompt":"You build software carefully.",
+                "model":"provider/model-id"
+            }]}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(saved["saved"], true);
+        assert_eq!(saved["persona_count"], 1);
+        assert_eq!(test_core.core.agents().list()[0].name, "Web Engineer");
+
+        let (status, _, state) = request(app.clone(), "GET", "/api/v1/setup").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(state["setup_required"], false);
+        let config_path = test_core.directory.join("hivemind.toml");
+        let stored = HivemindConfig::load(&config_path).unwrap();
+        assert_eq!(stored.agents[0].runtime, "pi");
+        assert_eq!(stored.agents[0].model.as_deref(), Some("provider/model-id"));
+
+        let (status, _) = request_json(
+            app,
+            "POST",
+            "/api/v1/setup",
+            json!({"personas":[{
+                "id":"Second attempt",
+                "runtime":"pi",
+                "workspace":workspace,
+                "system_prompt":""
+            }]}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(HivemindConfig::load(&config_path).unwrap().agents[0].name, "Web Engineer");
     }
     async fn post_json_over_tcp(
         address: SocketAddr,

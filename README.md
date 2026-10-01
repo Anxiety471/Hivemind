@@ -90,6 +90,8 @@ cargo run
 > [!NOTE]
 > `doctor` only checks runtimes that your configured agents use. It finds binaries on `PATH` (or at an explicit executable path) and also checks workspaces and reply order. `hivemind.toml` is local-only and ignored by Git.
 
+For browser-first setup, you can skip `hivemind init` and start `hivemind serve`. With no config file, the server opens in setup mode; the Web UI saves the initial personas directly to `hivemind.toml` and activates them without a restart.
+
 <details>
 <summary><b>🩺 Setup troubleshooting</b></summary>
 
@@ -297,6 +299,7 @@ Building the server and serving health/info/agent listings never starts Pi, OMP,
 | `GET` | `/api/v1/health` | Liveness check; never contacts a provider |
 | `GET` | `/api/v1/info` | Service metadata and protocol endpoints |
 | `GET` | `/api/v1/agents` | Safe agent metadata (name and runtime only; no credentials) |
+| `GET` / `POST` | `/api/v1/setup` | Check setup state and save the first persona configuration; POST is one-shot |
 | `POST` | `/api/v1/turns` | Submit a conversation turn |
 | `POST` / `GET` | `/api/v1/tasks`, `/api/v1/tasks/{id}` | Submit (202) and inspect autonomous tasks; see [docs/coordination.md](docs/coordination.md) |
 | `GET` / `POST` | `/api/v1/tasks/{id}/attempts`, `/cancel`, `/pause`, `/resume`, `/input`, `/context-metrics` | Attempts, controls, and bounded context diagnostics |
@@ -384,12 +387,14 @@ Unsupported or malformed messages get a `system.error` frame, and the connection
 
 ## 🖥️ Web UI
 
-`frontend/` is a browser UI built only on the public API: rooms with live replies and threads, autonomous tasks with attempts and controls, agents, chat groups, workspaces, runtime sessions, and a live event feed.
+`frontend/` is a browser UI built on the public API: first-run persona setup, rooms with live replies and threads, autonomous tasks with attempts and controls, agents, chat groups, workspaces, runtime sessions, and a live event feed.
 
 ```bash
 hivemind serve                               # API on http://127.0.0.1:7474
 cd frontend && npm install && npm run dev    # UI on http://127.0.0.1:5173
 ```
+
+On a fresh install, start the server without running `hivemind init`; the Web UI handles the initial persona setup and saves it directly on the server.
 
 No model handy? `frontend/dev/demo.sh` runs `serve` with a scripted stand-in runtime, and `node frontend/dev/seed.mjs` fills it with sample data. See [frontend/README.md](frontend/README.md) and the [Web UI](https://github.com/Anxiety471/Hivemind/wiki/Web-UI) wiki page.
 

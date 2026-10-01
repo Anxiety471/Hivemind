@@ -12,7 +12,7 @@ use std::{
 };
 
 use anyhow::{bail, Result};
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use rusqlite::{params, Connection};
 use serde::Serialize;
 
@@ -294,7 +294,7 @@ pub fn coordination_permission(tool: &str, args: &serde_json::Value) -> Option<&
 
 /// Every persona's grants plus the audit log.
 pub struct AccessPolicy {
-    grants: HashMap<String, Grants>,
+    grants: RwLock<HashMap<String, Grants>>,
     audit: std::sync::Arc<Audit>,
 }
 
@@ -305,21 +305,34 @@ impl AccessPolicy {
             .iter()
             .map(|agent| (agent.name.clone(), resolve(agent, &config.roles)))
             .collect();
-        Self { grants, audit }
+        Self {
+            grants: RwLock::new(grants),
+            audit,
+        }
     }
 
-    pub fn grants(&self, persona: &str) -> Option<&Grants> {
-        self.grants.get(persona)
+    pub fn replace_from_config(&self, config: &HivemindConfig) {
+        let grants = config
+            .agents
+            .iter()
+            .map(|agent| (agent.name.clone(), resolve(agent, &config.roles)))
+            .collect();
+        *self.grants.write() = grants;
+    }
+
+    pub fn grants(&self, persona: &str) -> Option<Grants> {
+        self.grants.read().get(persona).cloned()
     }
 
     /// All personas' grants, sorted by name.
-    pub fn all(&self) -> Vec<(&str, &Grants)> {
+    pub fn all(&self) -> Vec<(String, Grants)> {
         let mut all: Vec<_> = self
             .grants
+            .read()
             .iter()
-            .map(|(name, grants)| (name.as_str(), grants))
+            .map(|(name, grants)| (name.clone(), grants.clone()))
             .collect();
-        all.sort_by_key(|(name, _)| *name);
+        all.sort_by(|(a, _), (b, _)| a.cmp(b));
         all
     }
 
@@ -354,6 +367,7 @@ impl AccessPolicy {
     /// Whether `persona` would pass a gate on `permission`, without an audit record.
     pub fn allows(&self, persona: &str, permission: &str) -> bool {
         self.grants
+            .read()
             .get(persona)
             .is_some_and(|grants| !grants.restricted || grants.has(permission))
     }
@@ -365,7 +379,8 @@ impl AccessPolicy {
         action: &str,
         resource: &str,
     ) -> Result<()> {
-        let (allowed, reason) = match self.grants.get(persona) {
+        let grant = self.grants.read().get(persona).cloned();
+        let (allowed, reason) = match grant.as_ref() {
             None => (false, "unknown persona".to_owned()),
             Some(grants) if !grants.restricted => {
                 (true, "no roles declared; unrestricted".to_owned())
