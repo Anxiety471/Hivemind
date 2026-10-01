@@ -27,11 +27,14 @@ use crate::{
     runtime::{InvokeReply, InvokeRequest, SessionCursor},
 };
 
-/// Delegating invoker that remembers the runtime epoch of the last reply, so
-/// an attempt can record which live session served it.
+/// Delegating invoker that records the runtime epoch of each reply on its
+/// attempt as it arrives. Recording per reply, not after the turn, keeps the
+/// epoch for attempts the scheduler cancels mid-turn (a review that approves
+/// completes its task and ends the attempt before the turn returns).
 struct EpochRecorder {
     inner: Arc<dyn AgentInvoker>,
-    epoch: Mutex<Option<String>>,
+    service: Arc<CoordinationService>,
+    attempt_id: String,
 }
 
 #[async_trait]
@@ -42,7 +45,9 @@ impl AgentInvoker for EpochRecorder {
 
     async fn invoke(&self, request: InvokeRequest<'_>) -> Result<InvokeReply> {
         let reply = self.inner.invoke(request).await?;
-        *self.epoch.lock() = Some(reply.epoch_id.clone());
+        let _ = self
+            .service
+            .record_attempt_epoch(&self.attempt_id, &reply.epoch_id);
         Ok(reply)
     }
 }
@@ -420,15 +425,11 @@ async fn execute(
     };
     let recorder = Arc::new(EpochRecorder {
         inner: invoker.unwrap_or_else(|| core.runtime_invoker(&room, "")),
-        epoch: Mutex::new(None),
+        service: service.clone(),
+        attempt_id: attempt.id.clone(),
     });
     let message = format!("{}{notes}", prompt.text);
-    let outcome = core
-        .send_resolved_turn(&target, &message, recorder.clone())
-        .await;
-    if let Some(epoch) = recorder.epoch.lock().take() {
-        let _ = service.record_attempt_epoch(&attempt.id, &epoch);
-    }
+    let outcome = core.send_resolved_turn(&target, &message, recorder).await;
     let mut end = match outcome {
         Ok(execution) => match execution.replies.into_iter().next() {
             Some(reply) => match reply.result {
