@@ -85,7 +85,7 @@ Actor, room, task, attempt, lease, and budget are bound by Hivemind; identity in
 
 ## Context
 
-Each dispatch prompt is built from structured state: mandatory goal and acceptance criteria (never clipped — an oversized goal makes the task `needs_input`), a capsule (status, blockers, accepted decisions, dependency contracts and handoff summaries, reviewer feedback, artifact references; newest kept within its byte budget), and at most five waiting messages. Older or larger records are reachable by exact reference with `context.lookup` / `artifacts.get`. Per-attempt section sizes are stored and served by `GET /tasks/{id}/context-metrics`.
+Each dispatch prompt is built from structured state: mandatory goal and acceptance criteria (never clipped — an oversized goal makes the task `needs_input`), a capsule (status, blockers, accepted decisions, dependency contracts and handoff summaries, reviewer feedback, artifact references; newest kept within its byte budget), and at most five waiting messages. Older or larger records are reachable by exact reference with `context.lookup` / `artifacts.get`. Per-attempt section sizes are stored and served by `GET /tasks/{id}/context-metrics`, together with each attempt's `runtime_epoch` (the live session that answered it), every runtime epoch in the task room with its `end_reason`, and `rotations_observed` / `rotations_by_reason` counted from epochs that ended in a rotation (`context_budget`, `context_gap`, `workspace_changed`, `attempt_finished`, ...; stops for `idle_timeout`, `prompt_timeout`, `runtime_failure`, and `core_shutdown` are not rotations).
 
 ## API and CLI
 
@@ -102,5 +102,5 @@ Errors use one shape: `{"error":{"code","message"}}`; internal failures are sani
 
 - Dispatch token usage is not measured: `tokens` is `null` and context estimates are bytes/4. Budgets count dispatches, tool actions, messages, and time.
 - Live WebSocket events are published by the process that made the change; changes made by a one-shot CLI process reach WebSocket clients of a running `serve` on its next scheduler pass (≤0.5 s), and always via `/events`.
-- Runtime epoch and rotation reason are not recorded per attempt (`rotations_observed` is `null`).
+- Epochs closed before end reasons were recorded have `end_reason: null` and are not counted as rotations.
 - Non-goals unchanged: no autonomous merge or deploy, no remote API, no unrestricted agent creation.

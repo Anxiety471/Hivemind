@@ -436,10 +436,10 @@ fn group_state_and_runtime_epochs_are_durable_and_instance_scoped() {
             "other",
         );
         assert!(service
-            .end_runtime_epoch(&other, &epoch.id, epoch.started_at + 1)
+            .end_runtime_epoch(&other, &epoch.id, epoch.started_at + 1, "idle_timeout")
             .is_err());
         service
-            .end_runtime_epoch(&caller, &epoch.id, epoch.started_at + 1)
+            .end_runtime_epoch(&caller, &epoch.id, epoch.started_at + 1, "context_budget")
             .unwrap();
     }
     {
@@ -452,6 +452,12 @@ fn group_state_and_runtime_epochs_are_durable_and_instance_scoped() {
         assert_eq!(epochs.len(), 1);
         assert_eq!(epochs[0].id, epoch_id);
         assert!(epochs[0].ended_at.is_some());
+        assert_eq!(epochs[0].end_reason.as_deref(), Some("context_budget"));
+        assert!(service.room_runtime_epochs(&caller, "group-a", 10).is_err());
+        let room = service
+            .room_runtime_epochs(&Caller::trusted_user("host"), "group-a", 10)
+            .unwrap();
+        assert_eq!(room, epochs);
     }
     let _ = std::fs::remove_file(path);
 }
@@ -764,7 +770,7 @@ fn legacy_memory_and_runtime_epochs_remain_opaque_after_schema_migration() {
     );
     let service = MemoryService::new(store);
     assert!(service
-        .end_runtime_epoch(&caller, "legacy-epoch", 2)
+        .end_runtime_epoch(&caller, "legacy-epoch", 2, "idle_timeout")
         .is_err());
     assert!(service.runtime_epochs(&caller, 10).unwrap().is_empty());
     {

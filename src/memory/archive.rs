@@ -77,7 +77,16 @@ pub(super) fn decode_agent_instance_id(room_id: &str, stored: &str) -> Result<Ag
     ))
 }
 
-type RawEpoch = (String, String, String, String, i64, Option<i64>, String);
+type RawEpoch = (
+    String,
+    String,
+    String,
+    String,
+    i64,
+    Option<i64>,
+    Option<String>,
+    String,
+);
 
 pub(super) fn raw_epoch(r: &Row<'_>) -> rusqlite::Result<RawEpoch> {
     Ok((
@@ -88,11 +97,12 @@ pub(super) fn raw_epoch(r: &Row<'_>) -> rusqlite::Result<RawEpoch> {
         r.get(4)?,
         r.get(5)?,
         r.get(6)?,
+        r.get(7)?,
     ))
 }
 
 pub(super) fn decode_epoch(raw: RawEpoch) -> Result<RuntimeEpoch> {
-    let (id, room_id, instance_id, runtime, started_at, ended_at, metadata) = raw;
+    let (id, room_id, instance_id, runtime, started_at, ended_at, end_reason, metadata) = raw;
     Ok(RuntimeEpoch {
         id,
         agent_instance_id: decode_agent_instance_id(&room_id, &instance_id)?,
@@ -100,13 +110,14 @@ pub(super) fn decode_epoch(raw: RawEpoch) -> Result<RuntimeEpoch> {
         runtime,
         started_at,
         ended_at,
+        end_reason,
         metadata: serde_json::from_str(&metadata).context("decoding runtime epoch metadata")?,
     })
 }
 
 pub(super) fn load_runtime_epoch(c: &Connection, id: &str) -> Result<Option<RuntimeEpoch>> {
     c.prepare_cached(
-        "SELECT id,room_id,instance_id,runtime,started_at,ended_at,metadata_json FROM runtime_epochs WHERE id=?1 AND identity_version=1",
+        "SELECT id,room_id,instance_id,runtime,started_at,ended_at,end_reason,metadata_json FROM runtime_epochs WHERE id=?1 AND identity_version=1",
     )?
     .query_row([id], raw_epoch)
     .optional()?

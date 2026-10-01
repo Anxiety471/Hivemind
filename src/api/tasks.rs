@@ -1,7 +1,7 @@
 //! Task, message, group, agent-activity, and event-replay endpoints. Handlers
 //! stay thin: validation and state live in `CoordinationService`, and no
 //! endpoint here ever starts a runtime.
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use axum::{
     extract::{rejection::JsonRejection, Path, RawQuery, State},
@@ -15,11 +15,12 @@ use serde_json::{json, Value};
 
 use super::{error::ApiError, routes::ApiState};
 use crate::coordination::{
-    model::{CoordError, MessageKind, TaskStatus},
+    model::{task_room, CoordError, MessageKind, TaskStatus},
     policy::Plan,
     service::SubmitTask,
     store::TaskFilter,
 };
+use crate::{memory::Caller, runtime::is_rotation};
 
 pub(super) fn routes() -> Router<ApiState> {
     Router::new()
@@ -286,12 +287,36 @@ async fn context_metrics(State(state): State<ApiState>, Path(id): Path<String>) 
     });
     match result {
         Ok((detail, attempts)) => {
-            let per_attempt: Vec<Value> = attempts.iter().map(|a| json!({"attempt_id": a.id, "kind": a.kind, "state": a.state, "context": a.context_metrics})).collect();
+            let epochs = match state.core.memory().room_runtime_epochs(
+                &Caller::trusted_user("api"),
+                &task_room(&id),
+                500,
+            ) {
+                Ok(epochs) => epochs,
+                Err(_) => {
+                    return ApiError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "internal",
+                        "runtime epochs could not be read",
+                    )
+                    .into_response()
+                }
+            };
+            let mut rotations_by_reason: BTreeMap<&str, u64> = BTreeMap::new();
+            for reason in epochs.iter().filter_map(|e| e.end_reason.as_deref()) {
+                if is_rotation(reason) {
+                    *rotations_by_reason.entry(reason).or_default() += 1;
+                }
+            }
+            let per_attempt: Vec<Value> = attempts.iter().map(|a| json!({"attempt_id": a.id, "kind": a.kind, "state": a.state, "runtime_epoch": a.runtime_epoch, "context": a.context_metrics})).collect();
+            let runtime_epochs: Vec<Value> = epochs.iter().map(|e| json!({"id": e.id, "persona": e.agent_instance_id.persona_id, "runtime": e.runtime, "started_at": e.started_at, "ended_at": e.ended_at, "end_reason": e.end_reason})).collect();
             Json(json!({
                 "task_id": id,
                 "budget": detail.usage,
                 "attempts": per_attempt,
-                "rotations_observed": null,
+                "runtime_epochs": runtime_epochs,
+                "rotations_observed": rotations_by_reason.values().sum::<u64>(),
+                "rotations_by_reason": rotations_by_reason,
                 "note": "estimated_tokens is bytes/4; measured_tokens is null because dispatch token usage is not measured",
             }))
             .into_response()
@@ -799,6 +824,8 @@ mod tests {
             .call("GET", &format!("/api/v1/tasks/{id}/context-metrics"), None)
             .await;
         assert_eq!(metrics["budget"]["dispatch_limit"], 64);
+        assert_eq!(metrics["rotations_observed"], 0);
+        assert_eq!(metrics["runtime_epochs"], json!([]));
 
         let (status, cancelled) = fixture
             .call("POST", &format!("/api/v1/tasks/{id}/cancel"), None)

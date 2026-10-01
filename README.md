@@ -384,7 +384,7 @@ flowchart TD
 - A session closes after `runtime.idle_timeout_secs` without use and stops on core shutdown. No session is left running after exit.
 - **Pi** runs in RPC mode with `--no-session` and keeps its in-process context between prompts. Hivemind waits for `agent_settled` and returns the text blocks from the latest assistant `message_end`.
 
-**Storage.** `.hivemind/memory.sqlite3` sits next to the config file and holds rooms, turns, messages, scoped memory with FTS5, runtime epochs, and group state. It runs in WAL mode with `synchronous=NORMAL`: an application crash loses nothing, but power loss or an OS crash can drop the last few committed turns (the database is never corrupted). A turn writes only its own new messages, and searches are scoped to a room or memory scope inside FTS5. `.hivemind/context/` holds only room turn-lock files and any legacy JSON history that hasn't been migrated yet.
+**Storage.** `.hivemind/memory.sqlite3` sits next to the config file and holds rooms, turns, messages, scoped memory with FTS5, runtime epochs (with the reason each session ended), and group state. It runs in WAL mode with `synchronous=NORMAL`: an application crash loses nothing, but power loss or an OS crash can drop the last few committed turns (the database is never corrupted). A turn writes only its own new messages, and searches are scoped to a room or memory scope inside FTS5. `.hivemind/context/` holds only room turn-lock files and any legacy JSON history that hasn't been migrated yet.
 
 <details>
 <summary><b>🧬 Identity encoding & legacy migration</b></summary>

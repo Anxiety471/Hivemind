@@ -342,6 +342,7 @@ impl MemoryService {
             runtime: runtime.into(),
             started_at: now(),
             ended_at: None,
+            end_reason: None,
             metadata,
         };
         self.store.tx(|c| {
@@ -352,13 +353,18 @@ impl MemoryService {
         })?;
         Ok(epoch)
     }
-    /// Close an epoch only when it belongs to the caller's room and instance.
+    /// Close an epoch only when it belongs to the caller's room and instance,
+    /// recording why its session ended.
     pub fn end_runtime_epoch(
         &self,
         caller: &Caller,
         id: &str,
         ended_at: i64,
+        reason: &str,
     ) -> Result<RuntimeEpoch> {
+        if reason.trim().is_empty() {
+            bail!("runtime epoch end requires a reason");
+        }
         self.store.tx(|c| {
             let mut epoch =
                 load_runtime_epoch(c, id)?.ok_or_else(|| anyhow!("runtime epoch not found"))?;
@@ -369,12 +375,13 @@ impl MemoryService {
                 bail!("runtime epoch is already closed or end time precedes start");
             }
             let changed = c
-                .prepare_cached("UPDATE runtime_epochs SET ended_at=?1 WHERE id=?2 AND identity_version=1 AND ended_at IS NULL")?
-                .execute(params![ended_at, id])?;
+                .prepare_cached("UPDATE runtime_epochs SET ended_at=?1,end_reason=?3 WHERE id=?2 AND identity_version=1 AND ended_at IS NULL")?
+                .execute(params![ended_at, id, reason])?;
             if changed != 1 {
                 bail!("runtime epoch was concurrently closed");
             }
             epoch.ended_at = Some(ended_at);
+            epoch.end_reason = Some(reason.to_owned());
             Ok(epoch)
         })
     }
@@ -387,7 +394,7 @@ impl MemoryService {
             bail!("runtime epoch listing requires room and instance");
         }
         self.store.read(|c| {
-            c.prepare_cached("SELECT id,room_id,instance_id,runtime,started_at,ended_at,metadata_json FROM runtime_epochs WHERE room_id=?1 AND identity_version=1 AND instance_id=?2 ORDER BY started_at DESC,id DESC LIMIT ?3")?
+            c.prepare_cached("SELECT id,room_id,instance_id,runtime,started_at,ended_at,end_reason,metadata_json FROM runtime_epochs WHERE room_id=?1 AND identity_version=1 AND instance_id=?2 ORDER BY started_at DESC,id DESC LIMIT ?3")?
                 .query_map(
                     params![
                         caller.room_id,
@@ -396,6 +403,26 @@ impl MemoryService {
                     ],
                     raw_epoch,
                 )?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+                .into_iter()
+                .map(decode_epoch)
+                .collect()
+        })
+    }
+    /// List every instance's epochs in `room_id`, oldest first, for trusted
+    /// host callers (task observability); agents use [`Self::runtime_epochs`].
+    pub fn room_runtime_epochs(
+        &self,
+        caller: &Caller,
+        room_id: &str,
+        limit: usize,
+    ) -> Result<Vec<RuntimeEpoch>> {
+        if !caller.trusted {
+            bail!("listing a room's runtime epochs requires a trusted caller");
+        }
+        self.store.read(|c| {
+            c.prepare_cached("SELECT id,room_id,instance_id,runtime,started_at,ended_at,end_reason,metadata_json FROM runtime_epochs WHERE room_id=?1 AND identity_version=1 ORDER BY started_at,id LIMIT ?2")?
+                .query_map(params![room_id, limit.min(500) as i64], raw_epoch)?
                 .collect::<rusqlite::Result<Vec<_>>>()?
                 .into_iter()
                 .map(decode_epoch)

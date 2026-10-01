@@ -9,6 +9,7 @@ use std::{
 };
 
 use anyhow::Result;
+use async_trait::async_trait;
 use parking_lot::Mutex;
 use tokio::task::{AbortHandle, Id, JoinSet};
 
@@ -23,7 +24,28 @@ use crate::{
     conversation::{AgentInvoker, Participant},
     core::{HivemindCore, ResolvedConversationTarget},
     identity::AgentInstanceId,
+    runtime::{InvokeReply, InvokeRequest, SessionCursor},
 };
+
+/// Delegating invoker that remembers the runtime epoch of the last reply, so
+/// an attempt can record which live session served it.
+struct EpochRecorder {
+    inner: Arc<dyn AgentInvoker>,
+    epoch: Mutex<Option<String>>,
+}
+
+#[async_trait]
+impl AgentInvoker for EpochRecorder {
+    async fn cursor(&self, agent_instance_id: &AgentInstanceId) -> Option<SessionCursor> {
+        self.inner.cursor(agent_instance_id).await
+    }
+
+    async fn invoke(&self, request: InvokeRequest<'_>) -> Result<InvokeReply> {
+        let reply = self.inner.invoke(request).await?;
+        *self.epoch.lock() = Some(reply.epoch_id.clone());
+        Ok(reply)
+    }
+}
 
 struct Running {
     abort: AbortHandle,
@@ -396,9 +418,17 @@ async fn execute(
             role: Some(role.into()),
         }],
     };
-    let invoker = invoker.unwrap_or_else(|| core.runtime_invoker(&room, ""));
+    let recorder = Arc::new(EpochRecorder {
+        inner: invoker.unwrap_or_else(|| core.runtime_invoker(&room, "")),
+        epoch: Mutex::new(None),
+    });
     let message = format!("{}{notes}", prompt.text);
-    let outcome = core.send_resolved_turn(&target, &message, invoker).await;
+    let outcome = core
+        .send_resolved_turn(&target, &message, recorder.clone())
+        .await;
+    if let Some(epoch) = recorder.epoch.lock().take() {
+        let _ = service.record_attempt_epoch(&attempt.id, &epoch);
+    }
     let mut end = match outcome {
         Ok(execution) => match execution.replies.into_iter().next() {
             Some(reply) => match reply.result {
