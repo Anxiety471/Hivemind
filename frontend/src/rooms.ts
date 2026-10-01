@@ -7,6 +7,7 @@ import { useAsync } from "./ui";
 export const listKind = (room: Room) => (room.id.startsWith("task-") ? "task" : room.kind);
 
 export function roomLabel(room: Room, tasks: Map<string, string>) {
+  if (room.settings?.nickname) return room.settings.nickname;
   if (room.kind === "solo") return room.participants[0]?.persona_id ?? room.id;
   if (room.id.startsWith("task-")) return tasks.get(room.id.slice(5)) ?? room.id;
   return room.name || room.id;

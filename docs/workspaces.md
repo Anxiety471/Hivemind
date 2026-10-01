@@ -29,6 +29,8 @@ workspace = "/home/me/projects/api"   # optional shared workspace
 roots = ["/home/me/projects"]
 ```
 
+`[workspaces] known` lists directories added in the web UI (or by hand). It is only a pick-list and never restricts anything.
+
 `[workspaces] roots` limits agents only: paths you write in the config are never checked against it. A persona's `workspace` must be an existing directory when chat starts, and `hivemind doctor` reports one that is missing.
 
 ## Agent tools

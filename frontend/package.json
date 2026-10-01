@@ -9,6 +9,7 @@
     "e2e": "playwright test",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test test/*.test.ts",
     "demo": "sh dev/demo.sh"
   },
   "devDependencies": {

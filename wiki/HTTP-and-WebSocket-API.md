@@ -27,7 +27,10 @@ Building the server and serving health, info, and agent listings never starts Pi
 | `GET` / `POST` / `PATCH` / `DELETE` | `/api/v1/chat-groups`, `/api/v1/chat-groups/{id}` | Configured chat groups (`group-<id>` rooms): create with `{"id","members"}`, edit `members`, `mode`, `member_roles`, `reply_order`, delete (`204`). Changes are written to the config file and apply immediately. Unrelated to the task groups under `/api/v1/groups` |
 | `GET` | `/api/v1/rooms/{id}/runtime-sessions?limit=` | Runtime sessions (epochs) per agent in a room: runtime, start/end, end reason, and whether the end was a rotation. `ended_at: null` means still open |
 | `POST` | `/api/v1/runtime/rotate` | `{"agent_instance_id"}`: stop that agent's live session so its next prompt starts fresh (`202`; watch `runtime.rotated`) |
-| `GET` | `/api/v1/workspaces` | Allowed roots, each group's shared workspace, and each persona's own workspace |
+| `GET` / `POST` / `DELETE` | `/api/v1/workspaces` | Allowed roots, workspaces you added (`known`), each group's shared workspace, and each persona's own. `POST {"path"}` adds a workspace (`201`; duplicates are `409`); `DELETE {"path"}` removes one no persona or group uses (`409` otherwise). Adding never restricts anything |
+| `POST` | `/api/v1/agents` | Create an agent: `{"id", "runtime", "system_prompt", "workspace", "model", "reasoning", "fast", "role", "capabilities", "permissions", "roles"}` (`201`). The whole configuration is validated, written to the config file, then applied live |
+| `PUT` / `DELETE` | `/api/v1/agents/{id}` | Replace an agent's definition (omitted fields are cleared; the id cannot change) or delete it (`204`). Deleting is refused (`409`) while a group or the coordination planner uses it, and for the last agent. Live sessions of a changed or deleted agent are rotated. `GET` includes the editable `config` |
+| `GET` / `PATCH` | `/api/v1/rooms/{id}/settings` | Settings of the main conversation, a direct message (`solo-<id>`), or a group (`group-<id>`): `nickname`, `pinned`, `muted` for all; `mode`, `reply_order`, `workspace` where they apply. `unavailable` explains each control that does not apply; sending one is `400 not_applicable`. Rooms also carry `settings` in `/api/v1/rooms` |
 | `PUT` / `DELETE` | `/api/v1/workspaces/groups/{id}` | Set (`{"path"}`) or clear a group's shared workspace; returns the new snapshot |
 | `PUT` | `/api/v1/workspaces/personas/{id}` | Change a persona's own workspace |
 | `GET` | `/api/v1/access/roles` | Built-in and custom role definitions with their permissions |
@@ -36,7 +39,7 @@ Building the server and serving health, info, and agent listings never starts Pi
 | `GET` | `/api/v1/events?after=N` | Durable, restart-safe event replay with a high-water mark |
 | `GET` | `/api/v1/ws` | WebSocket live event stream |
 
-Workspace changes use the same checks as the agent `workspace.*` tools: an absolute, existing directory, inside `[workspaces] roots` when roots are configured. They are written to the config file, and a runtime session in the old directory is replaced before the next turn. Roles and persona definitions are read-only over HTTP; edit them in the config.
+Workspace changes use the same checks as the agent `workspace.*` tools: an absolute, existing directory, inside `[workspaces] roots` when roots are configured. They are written to the config file, and a runtime session in the old directory is replaced before the next turn. Persona definitions are managed through `/api/v1/agents`; roles stay read-only, so edit those in the config. A `config.changed` event (`scope` `agents` or `rooms`) is published after these changes.
 
 Errors use one shape, `{"error":{"code","message"}}`, and internal failures are sanitized.
 

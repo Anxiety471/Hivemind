@@ -32,7 +32,12 @@ pub(super) fn routes() -> Router<ApiState> {
         .route("/api/v1/tasks/{id}/resume", post(resume))
         .route("/api/v1/tasks/{id}/input", post(input))
         .route("/api/v1/tasks/{id}/context-metrics", get(context_metrics))
-        .route("/api/v1/agents/{id}", get(agent))
+        .route(
+            "/api/v1/agents/{id}",
+            get(agent)
+                .put(super::agents::update)
+                .delete(super::agents::remove),
+        )
         .route("/api/v1/agent-instances", get(instances))
         .route("/api/v1/messages", post(send_message).get(messages))
         .route("/api/v1/groups", post(create_group))
@@ -349,6 +354,7 @@ async fn agent(State(state): State<ApiState>, Path(id): Path<String>) -> Respons
         "id": persona.name,
         "capabilities": persona.capabilities,
         "permissions": permissions,
+        "config": super::agents::config_view(&persona),
         "activity": activity
     }))
     .into_response()

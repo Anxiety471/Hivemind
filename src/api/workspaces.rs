@@ -18,10 +18,13 @@ use crate::access::BUILTIN_ROLES;
 
 pub(super) fn routes() -> Router<ApiState> {
     Router::new()
-        .route("/api/v1/workspaces", get(list))
         .route(
             "/api/v1/workspaces/groups/{id}",
             put(set_group).delete(clear_group),
+        )
+        .route(
+            "/api/v1/workspaces",
+            get(list).post(add_known).delete(remove_known),
         )
         .route("/api/v1/workspaces/personas/{id}", put(set_persona))
         .route("/api/v1/access/roles", get(roles))
@@ -32,6 +35,7 @@ fn snapshot(state: &ApiState) -> Value {
     let (groups, personas) = workspaces.snapshot();
     json!({
         "roots": workspaces.roots(),
+        "known": workspaces.known(),
         "groups": groups.into_iter().map(|(id, workspace)| json!({"id": id, "workspace": workspace})).collect::<Vec<_>>(),
         "personas": personas.into_iter().map(|(id, workspace)| json!({"id": id, "workspace": workspace})).collect::<Vec<_>>(),
     })
@@ -58,6 +62,9 @@ fn failure(error: anyhow::Error) -> Response {
         )
         .into_response();
     }
+    if message.contains("already exists") || message.contains("still in use") {
+        return ApiError::owned(StatusCode::CONFLICT, "conflict", message).into_response();
+    }
     if message.starts_with("unknown ") {
         return ApiError::owned(StatusCode::NOT_FOUND, "not_found", message).into_response();
     }
@@ -71,6 +78,37 @@ fn bad_json() -> Response {
         "invalid request body",
     )
     .into_response()
+}
+
+/// Add another workspace; every existing one stays as it is.
+async fn add_known(
+    State(state): State<ApiState>,
+    payload: Result<Json<PathBody>, JsonRejection>,
+) -> Response {
+    let Ok(Json(body)) = payload else {
+        return bad_json();
+    };
+    match state.core.shared_workspaces().add_known(&body.path) {
+        Ok(_) => (StatusCode::CREATED, Json(snapshot(&state))).into_response(),
+        Err(error) => failure(error),
+    }
+}
+
+async fn remove_known(
+    State(state): State<ApiState>,
+    payload: Result<Json<PathBody>, JsonRejection>,
+) -> Response {
+    let Ok(Json(body)) = payload else {
+        return bad_json();
+    };
+    match state
+        .core
+        .shared_workspaces()
+        .remove_known(body.path.trim())
+    {
+        Ok(()) => Json(snapshot(&state)).into_response(),
+        Err(error) => failure(error),
+    }
 }
 
 async fn set_group(

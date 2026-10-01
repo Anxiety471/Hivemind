@@ -107,6 +107,10 @@ struct PromptGuard {
     store: Option<Arc<crate::execution::ExecutionStore>>,
     project: String,
     turn: String,
+    events: EventBus,
+    agent_id: String,
+    agent_instance_id: AgentInstanceId,
+    runtime: String,
 }
 impl Drop for PromptGuard {
     fn drop(&mut self) {
@@ -128,6 +132,12 @@ impl Drop for PromptGuard {
                     None,
                 );
             }
+            self.events.publish(DomainEventKind::RuntimeStopped {
+                agent_id: self.agent_id.clone(),
+                agent_instance_id: self.agent_instance_id.clone(),
+                runtime: self.runtime.clone(),
+                reason: "prompt_cancelled".into(),
+            });
         }
     }
 }
@@ -486,6 +496,10 @@ impl RuntimePool {
             store: inner.execution.get().cloned(),
             project: project.clone(),
             turn: request.view.turn_id.clone(),
+            events: inner.events.clone(),
+            agent_id: live.agent_id.clone(),
+            agent_instance_id: request.agent_instance_id.clone(),
+            runtime: live.runtime.clone(),
         };
         live.session.set_progress(Some(super::ProgressSink {
             events: inner.events.clone(),
@@ -507,6 +521,7 @@ impl RuntimePool {
         prompt_guard.armed = false;
         match response {
             RuntimeCall::Completed(Ok(reply)) => {
+                let reply = super::normalize_reply(&reply);
                 live.estimated_tokens += (text.len() + reply.len()).div_ceil(4) as u64;
                 live.cursor = Some(request.view.clone());
                 slot.last_used = Instant::now();
@@ -577,6 +592,21 @@ impl RuntimePool {
         }
         self.inner
             .remove_vacant_slot(agent_instance_id, &slot_handle, &slot);
+    }
+    /// Rotate every room's live session of one persona; used when its definition changed
+    /// or it was removed, so no session keeps running the old prompt, model, or runtime.
+    pub async fn rotate_persona(&self, persona_id: &str, reason: &'static str) {
+        let instances: Vec<AgentInstanceId> = self
+            .inner
+            .slots
+            .lock()
+            .keys()
+            .filter(|id| id.persona_id == persona_id)
+            .cloned()
+            .collect();
+        for instance in instances {
+            self.rotate_instance(&instance, reason).await;
+        }
     }
     #[cfg(test)]
     pub(crate) fn slot_count(&self) -> usize {
@@ -897,6 +927,127 @@ mod tests {
             self.shutdown_release.notified().await;
             Ok(())
         }
+    }
+
+    struct HungPromptSession {
+        started: Arc<tokio::sync::Notify>,
+    }
+
+    #[async_trait]
+    impl HarnessSession for HungPromptSession {
+        async fn prompt(&mut self, _input: &str) -> anyhow::Result<String> {
+            self.started.notify_one();
+            std::future::pending().await
+        }
+
+        async fn context_tokens(&mut self) -> anyhow::Result<Option<u64>> {
+            Ok(None)
+        }
+
+        async fn shutdown(&mut self) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn dropping_an_in_flight_invoke_closes_the_epoch_and_publishes_stop() {
+        let memory = Arc::new(MemoryService::new(MemoryStore::in_memory().unwrap()));
+        let instance = AgentInstanceId::new("cancel-room", "Persona");
+        let caller = Caller::agent("cancel-room", "", instance.clone(), "Persona", "Persona");
+        let epoch = memory
+            .start_runtime_epoch(&caller, "fake", serde_json::json!({}))
+            .unwrap();
+        let pool = Arc::new(RuntimePool::new(
+            RuntimeConfig {
+                idle_timeout_secs: 0,
+                prompt_timeout_secs: 0,
+                ..RuntimeConfig::default()
+            },
+            10_000,
+            memory,
+            EventBus::new(),
+        ));
+        let started = Arc::new(tokio::sync::Notify::new());
+        pool.inner.slots.lock().insert(
+            instance.clone(),
+            Arc::new(AsyncMutex::new(Slot {
+                live: Some(Live {
+                    session: Box::new(HungPromptSession {
+                        started: started.clone(),
+                    }),
+                    epoch,
+                    caller: caller.clone(),
+                    agent_id: "Persona".into(),
+                    runtime: "fake".into(),
+                    cursor: None,
+                    estimated_tokens: 0,
+                    workspace: ".".into(),
+                }),
+                last_used: Instant::now(),
+            })),
+        );
+        let mut events = pool.inner.events.subscribe();
+        let agent = AgentConfig {
+            name: "Persona".into(),
+            runtime: "fake".into(),
+            system_prompt: String::new(),
+            workspace: ".".into(),
+            model: None,
+            reasoning: None,
+            fast: None,
+            role: None,
+            capabilities: Vec::new(),
+            permissions: Vec::new(),
+            roles: Vec::new(),
+            tool_access: None,
+        };
+        let view = TurnView {
+            turn_id: "turn".into(),
+            speakers: vec![],
+            state_json: "{}".into(),
+        };
+        let epoch_id = pool.inner.memory.runtime_epochs(&caller, 10).unwrap()[0]
+            .id
+            .clone();
+        let task = {
+            let pool = pool.clone();
+            let caller = caller.clone();
+            let instance = instance.clone();
+            tokio::spawn(async move {
+                let _ = pool
+                    .invoke(
+                        &caller,
+                        InvokeRequest {
+                            agent_instance_id: &instance,
+                            agent: &agent,
+                            phase: PromptPhase::InTurn,
+                            full: "full",
+                            delta: Some(PromptDelta {
+                                epoch_id: &epoch_id,
+                                text: "delta",
+                            }),
+                            view: &view,
+                        },
+                    )
+                    .await;
+            })
+        };
+        tokio::time::timeout(Duration::from_secs(5), started.notified())
+            .await
+            .expect("prompt started");
+        task.abort();
+        let _ = task.await;
+        let epochs = pool.inner.memory.runtime_epochs(&caller, 10).unwrap();
+        assert_eq!(epochs.len(), 1);
+        assert!(epochs[0].ended_at.is_some());
+        assert_eq!(epochs[0].end_reason.as_deref(), Some("prompt_cancelled"));
+        let mut reasons = Vec::new();
+        while let Ok(event) = events.try_recv() {
+            if let DomainEventKind::RuntimeStopped { reason, .. } = &event.payload {
+                reasons.push(reason.clone());
+            }
+        }
+        assert_eq!(reasons, ["prompt_cancelled"]);
     }
 
     struct HungStatsSession(Arc<AtomicUsize>);

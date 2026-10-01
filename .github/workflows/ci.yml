@@ -60,6 +60,9 @@ jobs:
       - name: Typecheck and build
         run: npm run build
 
+      - name: Unit tests
+        run: npm test
+
   browser-e2e:
     runs-on: ubuntu-latest
 

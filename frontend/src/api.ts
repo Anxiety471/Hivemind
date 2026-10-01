@@ -11,10 +11,35 @@ export type Room = {
   participants: Participant[];
   updated_at: number | null;
   message_count: number;
+  /** Per-conversation preferences; absent on archived rooms. */
+  settings?: RoomPrefs;
   state?: RoomState;
   summary?: string;
   parent_room_id?: string;
   anchor_message_id?: string;
+};
+
+export type RoomPrefs = { nickname: string | null; pinned: boolean; muted: boolean };
+
+/** Everything configurable about one conversation, plus why a control may not apply to it. */
+export type RoomSettings = {
+  room_id: string;
+  kind: "main" | "solo" | "group";
+  settings: RoomPrefs & {
+    mode: "broadcast" | "discussion" | null;
+    reply_order: string[];
+    workspace: string | null;
+  };
+  members: string[];
+  unavailable: { mode: string | null; reply_order: string | null; workspace: string | null };
+};
+
+export type RoomSettingsPatch = Partial<Pick<RoomPrefs, "pinned" | "muted">> & {
+  nickname?: string;
+  mode?: "broadcast" | "discussion";
+  reply_order?: string[];
+  /** `null` clears a group's shared workspace. */
+  workspace?: string | null;
 };
 
 export type RoomState = {
@@ -154,8 +179,31 @@ export type ChatGroup = {
 
 export type Workspaces = {
   roots: string[];
+  /** Workspaces added by the user; they never restrict where agents may work. */
+  known: string[];
   groups: { id: string; workspace: string }[];
   personas: { id: string; workspace: string }[];
+};
+
+/** The editable definition of an agent. Its id is fixed once created. */
+export type AgentConfig = {
+  runtime: "pi" | "omp" | "opencode";
+  system_prompt: string;
+  workspace: string;
+  model: string | null;
+  reasoning: string | null;
+  fast: boolean | null;
+  role: string | null;
+  capabilities: string[];
+  permissions: string[];
+  roles: string[];
+};
+
+export type AgentDetail = {
+  id: string;
+  capabilities: string[];
+  permissions: string[];
+  config: AgentConfig;
 };
 
 export type RuntimeSession = {
@@ -264,7 +312,12 @@ export const api = {
   completeSetup: (personas: SetupPersona[]) =>
     request<{ saved: boolean; setup_required: boolean; persona_count: number }>("POST", "/setup", { personas }),
   agents: () => request<{ agents: { name: string; runtime: string }[] }>("GET", "/agents"),
-  agent: (id: string) => request<Record<string, unknown>>("GET", `/agents/${enc(id)}`),
+  agent: (id: string) => request<AgentDetail>("GET", `/agents/${enc(id)}`),
+  createAgent: (id: string, config: Partial<AgentConfig>) =>
+    request<{ id: string; config: AgentConfig }>("POST", "/agents", { id, ...config }),
+  updateAgent: (id: string, config: Partial<AgentConfig>) =>
+    request<{ id: string; config: AgentConfig }>("PUT", `/agents/${enc(id)}`, config),
+  deleteAgent: (id: string) => request<void>("DELETE", `/agents/${enc(id)}`),
   instances: () =>
     request<{ agents: AgentInstance[]; scheduler_enabled: boolean }>("GET", "/agent-instances"),
   accessPersonas: () => request<{ personas: AccessPersona[] }>("GET", "/access/personas"),
@@ -278,6 +331,9 @@ export const api = {
     ),
   activeReplies: (id: string) =>
     request<{ room_id: string; agents: string[] }>("GET", `/rooms/${enc(id)}/active`),
+  roomSettings: (id: string) => request<RoomSettings>("GET", `/rooms/${enc(id)}/settings`),
+  updateRoomSettings: (id: string, patch: RoomSettingsPatch) =>
+    request<RoomSettings>("PATCH", `/rooms/${enc(id)}/settings`, patch),
   threads: (id: string) => request<{ threads: Thread[] }>("GET", `/rooms/${enc(id)}/threads`),
   createThread: (id: string, anchor_message_id: string, name?: string) =>
     request<{ thread: Thread; created: boolean }>("POST", `/rooms/${enc(id)}/threads`, {
@@ -311,6 +367,8 @@ export const api = {
   deleteChatGroup: (id: string) => request<void>("DELETE", `/chat-groups/${enc(id)}`),
 
   workspaces: () => request<Workspaces>("GET", "/workspaces"),
+  addWorkspace: (path: string) => request<Workspaces>("POST", "/workspaces", { path }),
+  removeWorkspace: (path: string) => request<Workspaces>("DELETE", "/workspaces", { path }),
   setGroupWorkspace: (id: string, path: string) =>
     request<Workspaces>("PUT", `/workspaces/groups/${enc(id)}`, { path }),
   clearGroupWorkspace: (id: string) => request<Workspaces>("DELETE", `/workspaces/groups/${enc(id)}`),

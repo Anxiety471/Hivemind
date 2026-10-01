@@ -138,6 +138,63 @@ async fn async_submission_streams_with_the_same_durable_id_and_measures_usage() 
     worker.await.unwrap();
 }
 #[tokio::test]
+async fn a_busy_room_does_not_block_other_rooms_but_keeps_its_own_order() {
+    let fixture = Fixture::new(false);
+    let app = fixture.app();
+    let submit = |target: Value, message: &'static str| {
+        let app = app.clone();
+        async move {
+            let (status, job) = call(
+                app,
+                "POST",
+                "/api/v1/turns",
+                json!({"target": target, "message": message, "wait": false}),
+            )
+            .await;
+            assert_eq!(status, StatusCode::ACCEPTED);
+            job["turn_id"].as_str().unwrap().to_owned()
+        }
+    };
+    let status_of = |id: String| {
+        let core = fixture.core.clone();
+        async move { core.execution().get(&id).unwrap().unwrap().status }
+    };
+    let slow = submit(json!({"type":"main"}), "HANG").await;
+    let queued_behind = submit(json!({"type":"main"}), "same room, later").await;
+    let other = submit(json!({"type":"solo","id":"Engineer"}), "other room").await;
+    let worker = tokio::spawn(jobs::run(fixture.core.clone()));
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !fixture.dir.join("active.pid").exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the slow room started");
+    // The other room finishes while the first is still stuck in its turn.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while status_of(other.clone()).await != "completed" {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("an independent room is not queued behind the busy one");
+    assert_eq!(status_of(slow.clone()).await, "running");
+    // Within the busy room, the later message keeps waiting its turn.
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert_eq!(status_of(queued_behind.clone()).await, "queued");
+    for id in [&slow, &queued_behind] {
+        call(
+            app.clone(),
+            "POST",
+            &format!("/api/v1/turns/{id}/cancel"),
+            json!(null),
+        )
+        .await;
+    }
+    fixture.core.shutdown().await;
+    worker.await.unwrap();
+}
+#[tokio::test]
 async fn active_cancel_closes_the_epoch_and_does_not_complete_the_job() {
     let fixture = Fixture::new(false);
     let app = fixture.app();

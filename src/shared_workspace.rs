@@ -39,6 +39,8 @@ struct State {
 pub struct SharedWorkspaces {
     config_path: PathBuf,
     roots: Vec<String>,
+    /// User-added workspaces, in the order they were added.
+    known: RwLock<Vec<String>>,
     state: RwLock<State>,
 }
 
@@ -47,6 +49,7 @@ impl SharedWorkspaces {
         let store = Self {
             config_path: config_path.to_owned(),
             roots: config.workspaces.roots.clone(),
+            known: RwLock::new(config.workspaces.known.clone()),
             state: RwLock::new(State::default()),
         };
         store.replace_groups(&config.groups);
@@ -86,6 +89,58 @@ impl SharedWorkspaces {
     /// Directories agents and the API may choose from; empty means any existing directory.
     pub fn roots(&self) -> &[String] {
         &self.roots
+    }
+
+    /// Workspaces the user added, in the order added.
+    pub fn known(&self) -> Vec<String> {
+        self.known.read().expect("workspace lock poisoned").clone()
+    }
+
+    /// Validate and remember another workspace without touching any existing one.
+    /// Returns the stored path; adding one that is already known is a conflict.
+    pub fn add_known(&self, path: &str) -> Result<String> {
+        let workspace = self.validate(path)?;
+        let mut known = self.known.write().expect("workspace lock poisoned");
+        if known.contains(&workspace) {
+            bail!("workspace '{workspace}' already exists");
+        }
+        let mut next = known.clone();
+        next.push(workspace.clone());
+        persist_known(&self.config_path, &next)?;
+        *known = next;
+        Ok(workspace)
+    }
+
+    /// Forget a workspace added earlier. One a persona or group still uses is refused
+    /// so removing it from the list can never pull the directory out from under them.
+    pub fn remove_known(&self, path: &str) -> Result<()> {
+        let mut known = self.known.write().expect("workspace lock poisoned");
+        if !known.iter().any(|k| k == path) {
+            bail!("unknown workspace '{path}'");
+        }
+        let state = self.state.read().expect("workspace lock poisoned");
+        let mut users: Vec<String> = state
+            .personas
+            .iter()
+            .filter(|(_, w)| *w == path)
+            .map(|(id, _)| id.clone())
+            .chain(
+                state
+                    .groups
+                    .iter()
+                    .filter(|(_, w)| w.as_deref() == Some(path))
+                    .map(|(id, _)| format!("group {id}")),
+            )
+            .collect();
+        drop(state);
+        if !users.is_empty() {
+            users.sort();
+            bail!("workspace '{path}' is still in use by {}", users.join(", "));
+        }
+        let next: Vec<String> = known.iter().filter(|k| *k != path).cloned().collect();
+        persist_known(&self.config_path, &next)?;
+        *known = next;
+        Ok(())
     }
 
     /// Every group (id, shared workspace) and persona (id, own workspace), sorted by id.
@@ -187,10 +242,11 @@ impl SharedWorkspaces {
 
     /// Directories agents may choose: each configured root and its visible subdirectories.
     pub fn list(&self) -> Result<String> {
-        if self.roots.is_empty() {
+        let known = self.known();
+        if self.roots.is_empty() && known.is_empty() {
             return Ok("No workspace roots are configured, so there is no list to choose from. Any existing absolute directory the user names is accepted.".into());
         }
-        let mut found = Vec::new();
+        let mut found = known;
         for root in &self.roots {
             found.push(root.clone());
             let Ok(entries) = fs::read_dir(root) else {
@@ -220,6 +276,11 @@ impl SharedWorkspaces {
         Ok(out)
     }
 
+    /// Validate `path` as a workspace without recording it anywhere.
+    pub fn check(&self, path: &str) -> Result<String> {
+        self.validate(path)
+    }
+
     fn validate(&self, path: &str) -> Result<String> {
         let trimmed = path.trim();
         if trimmed.is_empty() || trimmed.len() > MAX_PATH_BYTES {
@@ -247,46 +308,81 @@ impl SharedWorkspaces {
 /// Set (or with `None`, remove) `workspace` on the table whose `id`/`name` is `id`
 /// under the first present section, touching nothing else in the file.
 fn persist(config: &Path, sections: &[&str], id: &str, workspace: Option<&str>) -> Result<()> {
+    edit_config(config, |document| {
+        let matches = |t: &toml_edit::Table| {
+            ["id", "name"]
+                .iter()
+                .any(|key| t.get(key).and_then(toml_edit::Item::as_str) == Some(id))
+        };
+        let section = sections
+            .iter()
+            .find(|section| {
+                document
+                    .get(section)
+                    .and_then(toml_edit::Item::as_array_of_tables)
+                    .is_some_and(|tables| tables.iter().any(matches))
+            })
+            .with_context(|| format!("'{id}' is not in {}", config.display()))?;
+        let table = document[section]
+            .as_array_of_tables_mut()
+            .and_then(|tables| tables.iter_mut().find(|t| matches(t)))
+            .context("table vanished")?;
+        match workspace {
+            Some(workspace) => table["workspace"] = toml_edit::value(workspace),
+            None => {
+                table.remove("workspace");
+            }
+        }
+        Ok(())
+    })
+}
+
+/// Replace `[workspaces] known` with `known`, touching nothing else in the file.
+fn persist_known(config: &Path, known: &[String]) -> Result<()> {
+    edit_config(config, |document| {
+        let table = document
+            .entry("workspaces")
+            .or_insert_with(toml_edit::table)
+            .as_table_mut()
+            .context("[workspaces] is not a table")?;
+        if known.is_empty() {
+            table.remove("known");
+        } else {
+            table["known"] = toml_edit::value(known.iter().collect::<toml_edit::Array>());
+        }
+        Ok(())
+    })
+}
+
+static CONFIG_EDIT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static NEXT_TEMP: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Read-modify-write the config file under one process-wide lock so edits from
+/// different parts of the server (workspaces, agents) cannot overwrite each other.
+/// The file is replaced atomically; `edit` failing leaves it untouched.
+pub(crate) fn edit_config(
+    config: &Path,
+    edit: impl FnOnce(&mut toml_edit::DocumentMut) -> Result<()>,
+) -> Result<()> {
+    let _guard = CONFIG_EDIT.lock().unwrap_or_else(|e| e.into_inner());
     let raw = fs::read_to_string(config)
         .with_context(|| format!("reading config {}", config.display()))?;
     let mut document = raw
         .parse::<toml_edit::DocumentMut>()
         .with_context(|| format!("parsing config {}", config.display()))?;
-    let matches = |t: &toml_edit::Table| {
-        ["id", "name"]
-            .iter()
-            .any(|key| t.get(key).and_then(toml_edit::Item::as_str) == Some(id))
-    };
-    let section = sections
-        .iter()
-        .find(|section| {
-            document
-                .get(section)
-                .and_then(toml_edit::Item::as_array_of_tables)
-                .is_some_and(|tables| tables.iter().any(matches))
-        })
-        .with_context(|| format!("'{id}' is not in {}", config.display()))?;
-    let table = document[section]
-        .as_array_of_tables_mut()
-        .and_then(|tables| tables.iter_mut().find(|t| matches(t)))
-        .context("table vanished")?;
-    match workspace {
-        Some(workspace) => table["workspace"] = toml_edit::value(workspace),
-        None => {
-            table.remove("workspace");
-        }
-    }
+    edit(&mut document)?;
     let parent = config
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
     let temp = parent.join(format!(
-        ".{}.workspace.{}.tmp",
+        ".{}.edit.{}.{}.tmp",
         config
             .file_name()
             .context("config path has no filename")?
             .to_string_lossy(),
-        std::process::id()
+        std::process::id(),
+        NEXT_TEMP.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
     let permissions = fs::metadata(config)?.permissions();
     let write = fs::write(&temp, document.to_string())

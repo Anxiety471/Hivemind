@@ -1,3 +1,4 @@
+mod agents;
 mod auth;
 mod jobs;
 pub use auth::ServerConfig;
@@ -5,6 +6,7 @@ mod chat_groups;
 mod cors;
 mod error;
 mod protocol;
+mod room_settings;
 mod rooms;
 mod routes;
 mod runtime;

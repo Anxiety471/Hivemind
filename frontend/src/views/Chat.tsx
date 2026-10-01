@@ -4,7 +4,9 @@ import { api, decodeInstance, targetFor, type Message, type Room, type Thread } 
 import { useLive, useLiveStatus, useRefreshOn, type LiveEvent } from "../live";
 import { href, navigate } from "../nav";
 import { listKind, roomLabel, useTaskNames } from "../rooms";
-import { Avatar, Badge, Empty, ErrorNote, ago, time, useAsync } from "../ui";
+import { RoomPanel, type PanelTab } from "./RoomPanel";
+import { Markdown } from "../markdown";
+import { Avatar, Badge, Empty, ErrorNote, time, useAsync } from "../ui";
 
 const KIND_ORDER: Record<string, number> = { main: 0, group: 1, solo: 2, task: 3, archived: 4 };
 const KIND_LABEL: Record<string, string> = { main: "Main", group: "Groups", solo: "Direct", task: "Task rooms", archived: "Archived" };
@@ -12,14 +14,20 @@ const KIND_LABEL: Record<string, string> = { main: "Main", group: "Groups", solo
 export function Chat({ roomId }: { roomId?: string }) {
   const rooms = useAsync(() => api.rooms(), []);
   const taskNames = useTaskNames();
-  useRefreshOn((e) => e.type === "conversation.turn.completed" || e.type === "thread.created", rooms.reload, [
+  useRefreshOn(
+    (e) => e.type === "conversation.turn.completed" || e.type === "thread.created" || e.type === "config.changed",
     rooms.reload,
-  ]);
+    [rooms.reload],
+  );
   const list = rooms.data?.rooms ?? [];
   const active = roomId ?? list[0]?.id;
 
   const grouped = useMemo(() => {
-    const sorted = [...list].sort((a, b) => (KIND_ORDER[listKind(a)] ?? 9) - (KIND_ORDER[listKind(b)] ?? 9));
+    const sorted = [...list].sort(
+      (a, b) =>
+        (KIND_ORDER[listKind(a)] ?? 9) - (KIND_ORDER[listKind(b)] ?? 9) ||
+        Number(b.settings?.pinned ?? false) - Number(a.settings?.pinned ?? false),
+    );
     const out: [string, Room[]][] = [];
     for (const room of sorted) {
       const last = out[out.length - 1];
@@ -41,14 +49,16 @@ export function Chat({ roomId }: { roomId?: string }) {
               <a key={room.id} href={href("rooms", room.id)} className={room.id === active ? "room active" : "room"}>
                 <span className="room-icon">{room.kind === "main" ? "#" : room.kind === "solo" ? "@" : kind === "task" ? "▸" : "◆"}</span>
                 <span className="room-name">{roomLabel(room, taskNames)}</span>
-                {room.message_count > 0 && <span className="count">{room.message_count}</span>}
+                {room.settings?.pinned && <span className="room-flag" title="Pinned" aria-label="Pinned">📌</span>}
+                {room.settings?.muted && <span className="room-flag" title="Muted" aria-label="Muted">🔕</span>}
+                {room.message_count > 0 && !room.settings?.muted && <span className="count">{room.message_count}</span>}
               </a>
             ))}
           </div>
         ))}
       </aside>
       {active ? (
-        <RoomView key={active} roomId={active} taskNames={taskNames} />
+        <RoomView key={active} roomId={active} taskNames={taskNames} onRoomsChanged={rooms.reload} />
       ) : (
         !rooms.loading && !rooms.error && <Empty>No rooms yet. Configure personas in hivemind.toml.</Empty>
       )}
@@ -154,13 +164,21 @@ function useHistory(roomId: string) {
   return { messages, before, error, loaded, loadEarlier, loadLatest };
 }
 
-function RoomView({ roomId, taskNames }: { roomId: string; taskNames: Map<string, string> }) {
+function RoomView({
+  roomId,
+  taskNames,
+  onRoomsChanged,
+}: {
+  roomId: string;
+  taskNames: Map<string, string>;
+  onRoomsChanged: () => void;
+}) {
   const room = useAsync(() => api.room(roomId), [roomId]);
   const threads = useAsync(() => api.threads(roomId), [roomId]);
   const history = useHistory(roomId);
   const typing = useTyping(roomId);
   const [openThread, setOpenThread] = useState<Thread | null>(null);
-  const [showDetails, setShowDetails] = useState(false);
+  const [panelTab, setPanelTab] = useState<PanelTab | null>(null);
   useRefreshOn(
     (e) =>
       (e.type === "thread.created" && e.payload?.parent_room_id === roomId) ||
@@ -168,9 +186,11 @@ function RoomView({ roomId, taskNames }: { roomId: string; taskNames: Map<string
     threads.reload,
     [roomId],
   );
-  useRefreshOn((e) => e.type === "conversation.turn.completed" && e.payload?.room_id === roomId, room.reload, [
-    roomId,
-  ]);
+  useRefreshOn(
+    (e) => (e.type === "conversation.turn.completed" && e.payload?.room_id === roomId) || e.type === "config.changed",
+    room.reload,
+    [roomId],
+  );
 
   const info = room.data?.room;
   const byAnchor = useMemo(() => {
@@ -210,8 +230,8 @@ function RoomView({ roomId, taskNames }: { roomId: string; taskNames: Map<string
             </div>
           </div>
           <div className="actions">
-            <button className="ghost" onClick={() => setShowDetails((v) => !v)}>
-              {showDetails ? "Hide details" : "Room details"}
+            <button className="ghost" aria-expanded={panelTab !== null} onClick={() => setPanelTab(panelTab ? null : "details")}>
+              {panelTab ? "Hide panel" : "Room panel"}
             </button>
             {roomId.startsWith("task-") && (
               <a className="button ghost" href={href("tasks", roomId.slice(5))}>
@@ -223,7 +243,6 @@ function RoomView({ roomId, taskNames }: { roomId: string; taskNames: Map<string
             </button>
           </div>
         </header>
-        {showDetails && info && <RoomDetails room={info} />}
         <MessageList
           messages={history.messages}
           loaded={history.loaded}
@@ -249,6 +268,18 @@ function RoomView({ roomId, taskNames }: { roomId: string; taskNames: Map<string
           )
         )}
       </div>
+      {panelTab && info && !openThread && (
+        <RoomPanel
+          room={info}
+          tab={panelTab}
+          onTab={setPanelTab}
+          onClose={() => setPanelTab(null)}
+          onChanged={() => {
+            room.reload();
+            onRoomsChanged();
+          }}
+        />
+      )}
       {openThread && (
         <ThreadPanel
           key={openThread.id}
@@ -258,37 +289,6 @@ function RoomView({ roomId, taskNames }: { roomId: string; taskNames: Map<string
         />
       )}
     </section>
-  );
-}
-
-function RoomDetails({ room }: { room: Room }) {
-  const s = room.state;
-  return (
-    <div className="room-details">
-      <div>
-        <h4>Goal</h4>
-        <p>{s?.goal ?? <span className="muted">No goal set</span>}</p>
-      </div>
-      <div>
-        <h4>Decisions</h4>
-        {s?.decisions.length ? <ul>{s.decisions.map((d) => <li key={d}>{d}</li>)}</ul> : <p className="muted">None yet</p>}
-      </div>
-      <div>
-        <h4>Open questions</h4>
-        {s?.open_questions.length ? (
-          <ul>{s.open_questions.map((d) => <li key={d}>{d}</li>)}</ul>
-        ) : (
-          <p className="muted">None</p>
-        )}
-      </div>
-      <div>
-        <h4>Summary</h4>
-        <p>{room.summary || <span className="muted">No summary yet</span>}</p>
-      </div>
-      <div className="muted small">
-        {room.message_count} messages · updated {ago(room.updated_at)}
-      </div>
-    </div>
   );
 }
 
@@ -333,7 +333,12 @@ function MessageList(props: {
                   <span className="muted">{time(m.created_at)}</span>
                 </div>
               )}
-              <div className="msg-text">{m.content}</div>
+              {m.reply_to && (
+                <div className="msg-reply-to muted">
+                  ↳ replying to {[m.reply_to.speaker, ...(m.also_saw ?? [])].map((n) => (n === "user" ? "You" : n)).join(", ")}
+                </div>
+              )}
+              <div className="msg-text">{m.speaker === "user" ? m.content : <Markdown text={m.content} />}</div>
               {thread && (
                 <button className="thread-link" onClick={() => props.onThread?.(m)}>
                   💬 {thread.message_count} {thread.message_count === 1 ? "reply" : "replies"} · {thread.name}
@@ -356,7 +361,7 @@ function MessageList(props: {
               <strong>{t.persona}</strong>
             </div>
             <div className="msg-text">
-              {t.text || (
+              {t.text ? <Markdown text={t.text} /> : (
                 <span className="dots">
                   <i />
                   <i />
@@ -435,7 +440,7 @@ function ThreadPanel({ thread, anchor, onClose }: { thread: Thread; anchor?: Mes
             <strong>{anchor.speaker === "user" ? "You" : anchor.speaker}</strong>
             <span className="muted">{time(anchor.created_at)}</span>
           </div>
-          <div className="msg-text">{anchor.content}</div>
+          <div className="msg-text">{anchor.speaker === "user" ? anchor.content : <Markdown text={anchor.content} />}</div>
         </div>
       )}
       <MessageList

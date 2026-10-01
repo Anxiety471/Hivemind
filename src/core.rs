@@ -326,6 +326,228 @@ impl HivemindCore {
             .clone()
     }
 
+    /// Add an agent: validate the resulting configuration, persist it, then expose it.
+    pub fn create_agent(&self, agent: crate::config::AgentConfig) -> Result<()> {
+        self.edit_agents(|config| {
+            anyhow::ensure!(
+                !config.agents.iter().any(|a| a.name == agent.name),
+                "agent '{}' already exists",
+                agent.name
+            );
+            config.agents.push(agent.clone());
+            Ok(())
+        })?;
+        self.events.publish(DomainEventKind::ConfigChanged {
+            scope: "agents".into(),
+        });
+        Ok(())
+    }
+
+    /// Replace one agent's definition (its id never changes: rooms and memory are keyed by it).
+    pub fn update_agent(&self, agent: crate::config::AgentConfig) -> Result<()> {
+        self.edit_agents(|config| {
+            let slot = config
+                .agents
+                .iter_mut()
+                .find(|a| a.name == agent.name)
+                .with_context(|| format!("unknown agent '{}'", agent.name))?;
+            *slot = agent.clone();
+            Ok(())
+        })?;
+        self.events.publish(DomainEventKind::ConfigChanged {
+            scope: "agents".into(),
+        });
+        Ok(())
+    }
+
+    /// Remove an agent. Refused while a group or the task planner still depends on it,
+    /// and for the last remaining agent.
+    pub fn delete_agent(&self, name: &str) -> Result<()> {
+        self.edit_agents(|config| {
+            anyhow::ensure!(
+                config.agents.iter().any(|a| a.name == name),
+                "unknown agent '{name}'"
+            );
+            anyhow::ensure!(
+                config.agents.len() > 1,
+                "agent '{name}' is the last agent and cannot be deleted"
+            );
+            let groups: Vec<&str> = config
+                .groups
+                .iter()
+                .filter(|g| g.members.iter().any(|m| m == name))
+                .map(|g| g.name.as_str())
+                .collect();
+            anyhow::ensure!(
+                groups.is_empty(),
+                "agent '{name}' is still a member of group {}; remove it from the group first",
+                groups.join(", ")
+            );
+            anyhow::ensure!(
+                config.coordination.planner.as_deref() != Some(name),
+                "agent '{name}' is the coordination planner; choose another planner first"
+            );
+            config.agents.retain(|a| a.name != name);
+            config.conversation.reply_order.retain(|a| a != name);
+            Ok(())
+        })?;
+        self.events.publish(DomainEventKind::ConfigChanged {
+            scope: "agents".into(),
+        });
+        Ok(())
+    }
+
+    /// Set the order agents answer in the main conversation (`[conversation] reply_order`).
+    pub fn set_main_reply_order(&self, order: Vec<String>) -> Result<()> {
+        let _guard = self
+            .group_edit_lock
+            .lock()
+            .expect("config edit lock poisoned");
+        let mut staged = self.config();
+        let mut seen = std::collections::HashSet::new();
+        for name in &order {
+            anyhow::ensure!(
+                staged.agents.iter().any(|a| a.name == *name),
+                "unknown agent '{name}' in reply order"
+            );
+            anyhow::ensure!(seen.insert(name), "duplicate agent '{name}' in reply order");
+        }
+        staged.conversation.reply_order = order.clone();
+        staged.validate()?;
+        crate::shared_workspace::edit_config(&self.config_path, |document| {
+            let table = document
+                .entry("conversation")
+                .or_insert_with(toml_edit::table)
+                .as_table_mut()
+                .context("[conversation] is not a table")?;
+            table["reply_order"] = toml_edit::value(order.iter().collect::<toml_edit::Array>());
+            Ok(())
+        })?;
+        self.activate_agents(staged);
+        self.events.publish(DomainEventKind::ConfigChanged {
+            scope: "rooms".into(),
+        });
+        Ok(())
+    }
+
+    /// Stop every live session of `persona` so the next prompt starts from its current definition.
+    pub async fn rotate_persona(&self, persona: &str, reason: &'static str) {
+        self.runtime.rotate_persona(persona, reason).await;
+    }
+
+    /// Check a workspace path the way the workspace settings do.
+    pub fn validate_workspace(&self, path: &str) -> Result<String> {
+        self.workspaces.check(path)
+    }
+
+    /// Stage `change` on a copy of the configuration, validate it, persist the persona
+    /// list, and only then publish it to every live service. A failure at any step leaves
+    /// both the file and the running server untouched.
+    fn edit_agents(&self, change: impl FnOnce(&mut HivemindConfig) -> Result<()>) -> Result<()> {
+        let _guard = self
+            .group_edit_lock
+            .lock()
+            .expect("config edit lock poisoned");
+        anyhow::ensure!(
+            !self.setup_required(),
+            "finish the first-run setup before managing agents"
+        );
+        let mut staged = self.config();
+        let reply_order_before = staged.conversation.reply_order.clone();
+        change(&mut staged)?;
+        for agent in &mut staged.agents {
+            agent.name = agent.name.trim().to_owned();
+            anyhow::ensure!(
+                !agent.name.is_empty()
+                    && agent.name.len() <= 64
+                    && agent
+                        .name
+                        .chars()
+                        .all(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | ' ')),
+                "agent id must be 1-64 letters, digits, spaces, '-', '_' or '.'"
+            );
+            anyhow::ensure!(
+                !agent.name.eq_ignore_ascii_case("main"),
+                "agent id 'main' is reserved"
+            );
+            anyhow::ensure!(
+                matches!(agent.runtime.as_str(), "pi" | "omp" | "opencode"),
+                "runtime must be one of pi, omp, opencode"
+            );
+        }
+        staged.validate()?;
+        crate::shared_workspace::edit_config(&self.config_path, |document| {
+            let key = if document
+                .get("personas")
+                .is_some_and(toml_edit::Item::is_array_of_tables)
+                || !document
+                    .get("agents")
+                    .is_some_and(toml_edit::Item::is_array_of_tables)
+            {
+                "personas"
+            } else {
+                "agents"
+            };
+            #[derive(serde::Serialize)]
+            struct Doc<'a> {
+                personas: &'a [crate::config::AgentConfig],
+            }
+            let rendered = toml::to_string(&Doc {
+                personas: &staged.agents,
+            })?
+            .parse::<toml_edit::DocumentMut>()?;
+            let other = if key == "personas" {
+                "agents"
+            } else {
+                "personas"
+            };
+            document.remove(other);
+            document[key] = rendered["personas"].clone();
+            if staged.conversation.reply_order != reply_order_before {
+                let table = document
+                    .entry("conversation")
+                    .or_insert_with(toml_edit::table)
+                    .as_table_mut()
+                    .context("[conversation] is not a table")?;
+                table["reply_order"] = toml_edit::value(
+                    staged
+                        .conversation
+                        .reply_order
+                        .iter()
+                        .collect::<toml_edit::Array>(),
+                );
+            }
+            Ok(())
+        })?;
+        self.activate_agents(staged);
+        Ok(())
+    }
+
+    fn activate_agents(&self, config: HivemindConfig) {
+        let registry = AgentRegistry {
+            agents: Arc::new(
+                config
+                    .ordered_agents()
+                    .into_iter()
+                    .map(|agent| {
+                        Arc::new(crate::config::AgentConfig {
+                            tool_access: crate::access::tool_access(agent, &config.roles),
+                            ..agent.clone()
+                        })
+                    })
+                    .collect(),
+            ),
+        };
+        self.workspaces.replace_personas(&config.agents);
+        self.access.replace_from_config(&config);
+        self.coordination.set_roster(Roster::from_config(&config));
+        *self
+            .agents
+            .write()
+            .expect("core agent registry lock poisoned") = registry;
+        *self.config.write().expect("core config lock poisoned") = Arc::new(config);
+    }
+
     /// Whether this server still needs its initial persona configuration.
     pub fn setup_required(&self) -> bool {
         self.setup_required.load(Ordering::Acquire)

@@ -54,6 +54,94 @@ fn harness_dir<'a>(
             agent.name
         )
     })
+/// Make a runtime's reply read the same whichever runtime produced it: Unix line
+/// endings, no terminal escapes or trailing spaces, no runs of blank lines, and no
+/// wrapper fence around a reply that is entirely Markdown. Fenced code is kept
+/// byte-for-byte apart from its line endings.
+pub fn normalize_reply(raw: &str) -> String {
+    let text = strip_ansi(raw).replace("\r\n", "\n").replace('\r', "\n");
+    let mut out: Vec<&str> = Vec::new();
+    let mut fence: Option<(char, usize)> = None;
+    let mut blanks = 0;
+    for line in text.split('\n') {
+        let trimmed = line.trim_start();
+        match fence {
+            Some((ch, len)) => {
+                out.push(line);
+                if closes_fence(trimmed, ch, len) {
+                    fence = None;
+                }
+            }
+            None => {
+                let line = line.trim_end();
+                if line.is_empty() {
+                    blanks += 1;
+                    if blanks > 1 {
+                        continue;
+                    }
+                } else {
+                    blanks = 0;
+                    fence = opens_fence(trimmed);
+                }
+                out.push(line);
+            }
+        }
+    }
+    let joined = out.join("\n");
+    let trimmed = joined.trim_matches('\n');
+    unwrap_markdown_fence(trimmed).to_owned()
+}
+
+fn opens_fence(line: &str) -> Option<(char, usize)> {
+    let ch = line.chars().next().filter(|c| matches!(c, '`' | '~'))?;
+    let len = line.chars().take_while(|c| *c == ch).count();
+    (len >= 3).then_some((ch, len))
+}
+
+fn closes_fence(line: &str, ch: char, len: usize) -> bool {
+    let run = line.chars().take_while(|c| *c == ch).count();
+    run >= len && line[run * ch.len_utf8()..].trim().is_empty()
+}
+
+/// A reply that is one ```markdown block is the Markdown itself, not a code sample.
+fn unwrap_markdown_fence(text: &str) -> &str {
+    let Some(rest) = text
+        .strip_prefix("```markdown\n")
+        .or_else(|| text.strip_prefix("```md\n"))
+    else {
+        return text;
+    };
+    let Some(body) = rest.strip_suffix("\n```") else {
+        return text;
+    };
+    // An inner fence means the outer one is not a plain wrapper.
+    if body
+        .lines()
+        .any(|line| line.trim_start().starts_with("```"))
+    {
+        return text;
+    }
+    body.trim_matches('\n')
+}
+
+fn strip_ansi(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\u{1b}' {
+            out.push(c);
+            continue;
+        }
+        if chars.peek() == Some(&'[') {
+            chars.next();
+            for next in chars.by_ref() {
+                if ('@'..='~').contains(&next) {
+                    break;
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Create the live session for `agent`, dispatching on `agent.runtime`.
@@ -79,6 +167,42 @@ pub async fn create_session(
             "unsupported runtime '{other}' for agent '{}'; supported runtimes are pi, omp and opencode, so change this agent's runtime",
             agent.name
         ),
+    }
+}
+
+#[cfg(test)]
+mod normalize_tests {
+    use super::normalize_reply;
+
+    #[test]
+    fn plain_text_is_left_alone() {
+        assert_eq!(normalize_reply("just a sentence."), "just a sentence.");
+    }
+
+    #[test]
+    fn line_endings_escapes_and_blank_runs_are_normalized() {
+        let raw = "\u{1b}[1mTitle\u{1b}[0m  \r\n\r\n\r\n\r\nbody\r\n";
+        assert_eq!(normalize_reply(raw), "Title\n\nbody");
+    }
+
+    #[test]
+    fn code_fences_keep_their_contents() {
+        let raw = "# Hi\n\n```rust\nfn main() {  \n\n\n    ok();\n}\n```\n\n\n- a\n- b";
+        assert_eq!(
+            normalize_reply(raw),
+            "# Hi\n\n```rust\nfn main() {  \n\n\n    ok();\n}\n```\n\n- a\n- b"
+        );
+    }
+
+    #[test]
+    fn a_markdown_wrapper_fence_is_removed_but_real_samples_stay() {
+        assert_eq!(
+            normalize_reply("```markdown\n# Title\n\n- one\n```"),
+            "# Title\n\n- one"
+        );
+        let nested = "```markdown\n# T\n```rust\nx\n```\n```";
+        assert_eq!(normalize_reply(nested), nested);
+        assert_eq!(normalize_reply("```md\nnot closed"), "```md\nnot closed");
     }
 }
 

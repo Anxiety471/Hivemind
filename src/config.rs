@@ -48,11 +48,15 @@ pub struct WorkspacesConfig {
     /// Absolute directories agents may choose from. Empty means any existing directory.
     #[serde(default)]
     pub roots: Vec<String>,
+    /// Workspaces the user added in the UI. Unlike `roots` they never restrict
+    /// anything; they are the directories offered when picking a workspace.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub known: Vec<String>,
 }
 
 impl WorkspacesConfig {
     fn is_default(&self) -> bool {
-        self.roots.is_empty()
+        self.roots.is_empty() && self.known.is_empty()
     }
 }
 
@@ -383,6 +387,9 @@ impl HivemindConfig {
         }
         for root in &mut config.workspaces.roots {
             *root = absolute_workspace(root);
+        }
+        for known in &mut config.workspaces.known {
+            *known = absolute_workspace(known);
         }
 
         Ok(config)

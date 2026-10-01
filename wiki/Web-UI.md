@@ -17,6 +17,13 @@ cd frontend && npm install && npm run dev   # UI on http://127.0.0.1:5173
 - **Runtime sessions**: epochs per room with end reasons and rotation, plus **Rotate** for a live session (`POST /runtime/rotate`).
 - **Live activity**: the raw WebSocket event stream with filters.
 
+## Managing agents, workspaces and rooms
+
+- **Agents** can be created, edited and deleted. A card shows the agent's own workspace separately from any group workspace that replaces it inside a group. Typed input survives a failed save, and an edit made elsewhere is flagged without discarding yours.
+- **Workspaces** lets you add several workspaces next to the existing ones and pick them for agents and groups. Adding one never restricts where agents may work (that is what `[workspaces] roots` is for).
+- The **room panel** on the right of every conversation has Details, Settings, and Sessions tabs. Settings cover nickname, pinning, muting, mode, reply order, and workspace; controls that do not apply to a room kind say why.
+- Agent replies render as Markdown. The server also normalizes line endings, escape codes and blank-line runs, so every runtime reads the same.
+
 ## Connection
 
 The default server is `http://127.0.0.1:7474`; change it under **Connection** (stored in the browser) or set `VITE_HIVEMIND_URL` at build time. Loopback pages need no proxy because the server allows CORS from loopback origins. With an operator token, the UI sends `Authorization: Bearer <token>` over HTTP and the `hivemind.auth.<token>` subprotocol on the WebSocket; the page origin must be in `server.allowed_origins`.

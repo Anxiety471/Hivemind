@@ -172,7 +172,7 @@ pub struct CoordinationService {
     execution: std::sync::OnceLock<Arc<crate::execution::ExecutionStore>>,
     store: CoordinationStore,
     config: CoordinationConfig,
-    roster: Roster,
+    roster_lock: std::sync::RwLock<Arc<Roster>>,
     events: EventBus,
     wake: Arc<Notify>,
     rotations: Mutex<Vec<(AgentInstanceId, &'static str)>>,
@@ -204,7 +204,7 @@ impl CoordinationService {
             execution: std::sync::OnceLock::new(),
             store,
             config,
-            roster,
+            roster_lock: std::sync::RwLock::new(Arc::new(roster)),
             events,
             wake: Arc::new(Notify::new()),
             rotations: Mutex::new(Vec::new()),
@@ -219,8 +219,16 @@ impl CoordinationService {
     pub fn config(&self) -> &CoordinationConfig {
         &self.config
     }
-    pub fn roster(&self) -> &Roster {
-        &self.roster
+    /// Snapshot of the personas tasks can be assigned to.
+    pub fn roster(&self) -> Arc<Roster> {
+        self.roster_lock
+            .read()
+            .expect("roster lock poisoned")
+            .clone()
+    }
+    /// Replace the roster after personas were created, changed, or deleted.
+    pub fn set_roster(&self, roster: Roster) {
+        *self.roster_lock.write().expect("roster lock poisoned") = Arc::new(roster);
     }
     pub fn enabled(&self) -> bool {
         self.config.enabled
@@ -374,12 +382,13 @@ impl CoordinationService {
     }
 
     fn default_workspace(&self) -> String {
-        let personas = self.roster.personas();
+        let roster = self.roster();
+        let personas = roster.personas();
         let pick = self
             .config
             .planner
             .as_deref()
-            .and_then(|p| self.roster.get(p))
+            .and_then(|p| roster.get(p))
             .or_else(|| personas.iter().find(|p| p.has_permission("coordinate")))
             .or_else(|| personas.first());
         pick.map(|p| p.workspace.clone())
@@ -388,11 +397,13 @@ impl CoordinationService {
 
     fn select_coordinator(&self, workspace: &str, load: &HashMap<String, u32>) -> Option<String> {
         if let Some(planner) = self.config.planner.as_deref() {
-            let persona = self.roster.get(planner)?;
+            let roster = self.roster();
+            let persona = roster.get(planner)?;
             return Roster::eligible_for_workspace(persona, workspace)
                 .then(|| persona.name.clone());
         }
-        self.roster
+        let roster = self.roster();
+        roster
             .select(&[], Some("coordinate"), workspace, load, &[])
             .ok()
             .map(|p| p.name.clone())
@@ -402,7 +413,7 @@ impl CoordinationService {
         let missing: Vec<String> = required
             .iter()
             .filter(|cap| {
-                !self.roster.personas().iter().any(|p| {
+                !self.roster().personas().iter().any(|p| {
                     Roster::eligible_for_workspace(p, workspace) && p.capabilities.contains(cap)
                 })
             })
@@ -434,7 +445,7 @@ impl CoordinationService {
         validate_plan(
             plan,
             &PlanContext {
-                roster: &self.roster,
+                roster: &self.roster(),
                 workspace: &root.workspace,
                 coordinator,
                 load: &load,
@@ -681,7 +692,7 @@ impl CoordinationService {
                 if !db.running_attempts(Some(&task.id))?.is_empty() {
                     continue;
                 }
-                if self.roster.get(&persona).is_none() {
+                if self.roster().get(&persona).is_none() {
                     db.set_status(
                         &task.id,
                         TaskStatus::Blocked,
@@ -763,7 +774,7 @@ impl CoordinationService {
                     {
                         continue;
                     }
-                    if self.roster.get(&persona).is_none() {
+                    if self.roster().get(&persona).is_none() {
                         for (d, _) in &items {
                             db.set_delivery(&d.message_id, &d.recipient, DeliveryState::Failed)?;
                         }
@@ -1078,8 +1089,8 @@ impl CoordinationService {
         let task = self.live(ctx)?;
         let id = self.store.write(|db| {
             let root = db.task_or_err(&task.root_id)?;
-            let persona = self
-                .roster
+            let roster = self.roster();
+            let persona = roster
                 .get(&ctx.persona)
                 .ok_or_else(|| CoordError::Forbidden("unknown persona".into()))?;
             if !(persona.has_permission("delegate") || root.coordinator == ctx.persona) {
@@ -1138,7 +1149,8 @@ impl CoordinationService {
                 return forbid("task belongs to a different root task");
             }
             let root = db.task_or_err(&task.root_id)?;
-            let persona = self.roster.get(&ctx.persona).ok_or_else(|| CoordError::Forbidden("unknown persona".into()))?;
+            let roster = self.roster();
+            let persona = roster.get(&ctx.persona).ok_or_else(|| CoordError::Forbidden("unknown persona".into()))?;
             if !(persona.has_permission("task.reassign") || root.coordinator == ctx.persona) {
                 return forbid(format!("persona '{}' lacks the 'task.reassign' permission", ctx.persona));
             }
@@ -1150,7 +1162,8 @@ impl CoordinationService {
             if !matches!(task.status, TaskStatus::Submitted | TaskStatus::Ready | TaskStatus::Blocked | TaskStatus::NeedsInput) || !db.running_attempts(Some(target))?.is_empty() {
                 return conflict("only pending work with no running attempt can be reassigned; cancel or wait for running attempts");
             }
-            let new_owner = self.roster.get(owner).ok_or_else(|| CoordError::Invalid(format!("'{owner}' is not a configured persona")))?;
+            let roster = self.roster();
+            let new_owner = roster.get(owner).ok_or_else(|| CoordError::Invalid(format!("'{owner}' is not a configured persona")))?;
             if !Roster::eligible_for_workspace(new_owner, &task.workspace) {
                 return forbid(format!("persona '{owner}' is not eligible for workspace '{}'", task.workspace));
             }
@@ -1164,7 +1177,7 @@ impl CoordinationService {
                 return forbid(format!("persona '{owner}' cannot change files (no 'workspace.write') and cannot own this task"));
             }
             let reviewer = task.reviewer.clone().filter(|r| !r.is_empty()).unwrap_or_else(|| root.coordinator.clone());
-            if task.id != task.root_id && self.roster.personas().len() > 1 && reviewer == owner {
+            if task.id != task.root_id && self.roster().personas().len() > 1 && reviewer == owner {
                 return forbid(format!("persona '{owner}' is the reviewer of this task and cannot also own it"));
             }
             db.set_owner(target, owner, None)?;
@@ -1304,7 +1317,7 @@ impl CoordinationService {
             return forbid(format!("only '{expected}' may review this task"));
         }
         if task.id != task.root_id
-            && self.roster.personas().len() > 1
+            && self.roster().personas().len() > 1
             && task.owner.as_deref() == Some(ctx.persona.as_str())
         {
             return forbid("an owner cannot review its own task");
@@ -1440,7 +1453,7 @@ impl CoordinationService {
     fn retire_task(&self, task_id: &str) {
         let room = task_room(task_id);
         let personas: Vec<String> = self
-            .roster
+            .roster()
             .personas()
             .iter()
             .map(|p| p.name.clone())
@@ -1462,7 +1475,8 @@ impl CoordinationService {
                 return forbid("decision belongs to a different root task");
             }
             let root = db.task_or_err(&task.root_id)?;
-            let persona = self.roster.get(&ctx.persona);
+            let roster = self.roster();
+            let persona = roster.get(&ctx.persona);
             if root.coordinator != ctx.persona
                 && !persona.is_some_and(|p| {
                     p.has_permission("task.decide")
@@ -1757,7 +1771,8 @@ impl CoordinationService {
                 if name == ctx.persona {
                     return invalid("cannot send a message to yourself");
                 }
-                let persona = self.roster.get(&name).ok_or_else(|| CoordError::Invalid(format!("unknown recipient '{name}'")))?;
+                let roster = self.roster();
+                let persona = roster.get(&name).ok_or_else(|| CoordError::Invalid(format!("unknown recipient '{name}'")))?;
                 if !Roster::eligible_for_workspace(persona, &root.workspace) {
                     return forbid(format!("'{name}' is not part of this task's workspace"));
                 }
@@ -1887,8 +1902,8 @@ impl CoordinationService {
 
     fn may_manage_groups(&self, db: &Db<'_>, ctx: &ToolCtx) -> CoordResult<Task> {
         let root = db.task_or_err(&ctx.root_id)?;
-        let persona = self
-            .roster
+        let roster = self.roster();
+        let persona = roster
             .get(&ctx.persona)
             .ok_or_else(|| CoordError::Forbidden("unknown persona".into()))?;
         if !(persona.has_permission("group.manage") || root.coordinator == ctx.persona) {
@@ -1907,7 +1922,8 @@ impl CoordinationService {
             }
             let mut members: Vec<(String, String)> = vec![(ctx.persona.clone(), "creator".into())];
             for name in &req.members {
-                let persona = self.roster.get(name.trim()).ok_or_else(|| CoordError::Invalid(format!("'{name}' is not a configured persona")))?;
+                let roster = self.roster();
+                let persona = roster.get(name.trim()).ok_or_else(|| CoordError::Invalid(format!("'{name}' is not a configured persona")))?;
                 if !Roster::eligible_for_workspace(persona, &root.workspace) {
                     return forbid(format!("'{}' is not part of this task's workspace", persona.name));
                 }
@@ -1920,10 +1936,11 @@ impl CoordinationService {
                 let tag = normalize_tag(role);
                 let exclude: Vec<&str> = members.iter().map(|(m, _)| m.as_str()).collect();
                 // A role already covered by an existing member needs no extra persona.
-                if members.iter().any(|(m, _)| self.roster.get(m).is_some_and(|p| p.capabilities.contains(&tag))) {
+                if members.iter().any(|(m, _)| self.roster().get(m).is_some_and(|p| p.capabilities.contains(&tag))) {
                     continue;
                 }
-                let picked = self.roster.select(std::slice::from_ref(&tag), None, &root.workspace, &load, &exclude).map_err(|why| CoordError::Invalid(format!("role '{tag}' cannot be filled: {why}")))?;
+                let roster = self.roster();
+                let picked = roster.select(std::slice::from_ref(&tag), None, &root.workspace, &load, &exclude).map_err(|why| CoordError::Invalid(format!("role '{tag}' cannot be filled: {why}")))?;
                 let name = picked.name.clone();
                 members.push((name, tag));
             }
@@ -1997,7 +2014,8 @@ impl CoordinationService {
                 }
             }
             for name in add {
-                let persona = self.roster.get(name.trim()).ok_or_else(|| CoordError::Invalid(format!("'{name}' is not a configured persona")))?;
+                let roster = self.roster();
+                let persona = roster.get(name.trim()).ok_or_else(|| CoordError::Invalid(format!("'{name}' is not a configured persona")))?;
                 if !Roster::eligible_for_workspace(persona, &root.workspace) {
                     return forbid(format!("'{}' is not part of this task's workspace", persona.name));
                 }
@@ -2147,7 +2165,8 @@ impl CoordinationService {
             }
             let mut to: Vec<String> = Vec::new();
             for name in recipients {
-                let persona = self.roster.get(name.trim()).ok_or_else(|| CoordError::Invalid(format!("unknown recipient '{name}'")))?;
+                let roster = self.roster();
+                let persona = roster.get(name.trim()).ok_or_else(|| CoordError::Invalid(format!("unknown recipient '{name}'")))?;
                 if !Roster::eligible_for_workspace(persona, &root.workspace) {
                     return forbid(format!("'{name}' is not part of this task's workspace"));
                 }
@@ -2202,7 +2221,8 @@ impl CoordinationService {
             }
             let mut names: Vec<String> = Vec::new();
             for name in members {
-                let persona = self.roster.get(name.trim()).ok_or_else(|| {
+                let roster = self.roster();
+                let persona = roster.get(name.trim()).ok_or_else(|| {
                     CoordError::Invalid(format!("'{name}' is not a configured persona"))
                 })?;
                 if !Roster::eligible_for_workspace(persona, &root.workspace) {
@@ -2274,7 +2294,7 @@ impl CoordinationService {
         self.store.read(|db| {
             let running = db.running_attempts(None)?;
             let mut out = Vec::new();
-            for persona in self.roster.personas() {
+            for persona in self.roster().personas() {
                 let mine: Vec<ActivityRef> = running
                     .iter()
                     .filter(|a| a.persona == persona.name)

@@ -68,6 +68,23 @@ pub struct Job {
     pub result: Option<Value>,
 }
 
+/// Per-conversation preferences that apply to every kind of room.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct RoomSettings {
+    pub nickname: Option<String>,
+    pub pinned: bool,
+    pub muted: bool,
+}
+
+/// A partial change to [`RoomSettings`]; `None` leaves a field alone and an empty
+/// nickname clears it.
+#[derive(Debug, Clone, Default)]
+pub struct RoomSettingsPatch {
+    pub nickname: Option<String>,
+    pub pinned: Option<bool>,
+    pub muted: Option<bool>,
+}
+
 pub struct ExecutionStore {
     db: Mutex<Connection>,
     pub config: ExecutionConfig,
@@ -104,6 +121,7 @@ impl ExecutionStore {
             CREATE TABLE IF NOT EXISTS usage(id INTEGER PRIMARY KEY, scope TEXT NOT NULL, project TEXT NOT NULL, turn_id TEXT NOT NULL, persona TEXT NOT NULL, epoch TEXT NOT NULL, usage TEXT, tokens INTEGER, created_at INTEGER NOT NULL);
             CREATE INDEX IF NOT EXISTS usage_scope ON usage(scope);
             CREATE INDEX IF NOT EXISTS usage_project ON usage(project);
+            CREATE TABLE IF NOT EXISTS room_settings(room TEXT PRIMARY KEY, nickname TEXT, pinned INTEGER NOT NULL DEFAULT 0, muted INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS checks(id INTEGER PRIMARY KEY, task TEXT NOT NULL, commit_sha TEXT NOT NULL, name TEXT NOT NULL, result TEXT NOT NULL, passed INTEGER NOT NULL, created_at INTEGER NOT NULL);")?;
         for check in &config.checks {
             anyhow::ensure!(
@@ -124,6 +142,67 @@ impl ExecutionStore {
             config,
             private_env: Mutex::new(Vec::new()),
         })
+    }
+    pub fn room_settings(&self, room: &str) -> Result<RoomSettings> {
+        Ok(self
+            .db
+            .lock()
+            .query_row(
+                "SELECT nickname,pinned,muted FROM room_settings WHERE room=?",
+                [room],
+                |row| {
+                    Ok(RoomSettings {
+                        nickname: row.get(0)?,
+                        pinned: row.get::<_, i64>(1)? != 0,
+                        muted: row.get::<_, i64>(2)? != 0,
+                    })
+                },
+            )
+            .optional()?
+            .unwrap_or_default())
+    }
+    pub fn all_room_settings(&self) -> Result<Vec<(String, RoomSettings)>> {
+        let db = self.db.lock();
+        let mut statement = db.prepare("SELECT room,nickname,pinned,muted FROM room_settings")?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    RoomSettings {
+                        nickname: row.get(1)?,
+                        pinned: row.get::<_, i64>(2)? != 0,
+                        muted: row.get::<_, i64>(3)? != 0,
+                    },
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+    pub fn update_room_settings(
+        &self,
+        room: &str,
+        patch: &RoomSettingsPatch,
+    ) -> Result<RoomSettings> {
+        let mut next = self.room_settings(room)?;
+        if let Some(nickname) = &patch.nickname {
+            let nickname = nickname.trim();
+            anyhow::ensure!(
+                nickname.chars().count() <= 60 && !nickname.chars().any(char::is_control),
+                "nickname must be at most 60 characters with no control characters"
+            );
+            next.nickname = (!nickname.is_empty()).then(|| nickname.to_owned());
+        }
+        if let Some(pinned) = patch.pinned {
+            next.pinned = pinned;
+        }
+        if let Some(muted) = patch.muted {
+            next.muted = muted;
+        }
+        self.db.lock().execute(
+            "INSERT INTO room_settings(room,nickname,pinned,muted,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(room) DO UPDATE SET nickname=excluded.nickname,pinned=excluded.pinned,muted=excluded.muted,updated_at=excluded.updated_at",
+            params![room, next.nickname, next.pinned as i64, next.muted as i64, now()],
+        )?;
+        Ok(next)
     }
     pub fn protect_env(&self, name: Option<&str>) {
         if let Some(name) = name {
@@ -200,7 +279,9 @@ impl ExecutionStore {
     pub fn claim(&self) -> Result<Option<Job>> {
         let mut db = self.db.lock();
         let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let next = tx.query_row(&format!("SELECT {JOB_COLUMNS} FROM jobs WHERE status='queued' ORDER BY created_at,rowid LIMIT 1"), [], job).optional()?;
+        // Jobs in one room run strictly in submission order, one at a time; other
+        // rooms are independent, so a busy room never holds back an idle one.
+        let next = tx.query_row(&format!("SELECT {JOB_COLUMNS} FROM jobs j WHERE j.status='queued' AND NOT EXISTS (SELECT 1 FROM jobs r WHERE r.room_id=j.room_id AND r.turn_id<>j.turn_id AND (r.status='running' OR (r.status='queued' AND (r.created_at,r.rowid)<(j.created_at,j.rowid)))) ORDER BY j.created_at,j.rowid LIMIT 1"), [], job).optional()?;
         if let Some(mut next) = next {
             tx.execute(
                 "UPDATE jobs SET status='running' WHERE turn_id=? AND status='queued'",
@@ -471,6 +552,74 @@ mod tests {
         assert_eq!(db.get(&a.turn_id).unwrap().unwrap().status, "interrupted");
         assert_eq!(db.claim().unwrap().unwrap().turn_id, queued.turn_id);
         assert!(db.claim().unwrap().is_none());
+    }
+    #[test]
+    fn rooms_claim_independently_but_stay_ordered_within_a_room() {
+        let db = ExecutionStore::open(":memory:", Default::default()).unwrap();
+        let target = json!({"type":"main"});
+        let a1 = db.submit("a", &target, "a1", None).unwrap();
+        let a2 = db.submit("a", &target, "a2", None).unwrap();
+        let b1 = db.submit("b", &target, "b1", None).unwrap();
+        assert_eq!(db.claim().unwrap().unwrap().turn_id, a1.turn_id);
+        // Room a is busy, so a2 waits while room b starts immediately.
+        assert_eq!(db.claim().unwrap().unwrap().turn_id, b1.turn_id);
+        assert!(db.claim().unwrap().is_none());
+        db.finish(&a1.turn_id, "completed", json!({})).unwrap();
+        assert_eq!(db.claim().unwrap().unwrap().turn_id, a2.turn_id);
+    }
+    #[test]
+    fn room_settings_default_off_persist_and_validate() {
+        let db = ExecutionStore::open(":memory:", Default::default()).unwrap();
+        assert_eq!(db.room_settings("main").unwrap(), RoomSettings::default());
+        let saved = db
+            .update_room_settings(
+                "main",
+                &RoomSettingsPatch {
+                    nickname: Some("  Town hall ".into()),
+                    pinned: Some(true),
+                    muted: None,
+                },
+            )
+            .unwrap();
+        assert_eq!(saved.nickname.as_deref(), Some("Town hall"));
+        assert!(saved.pinned && !saved.muted);
+        // A partial patch keeps everything it does not mention.
+        let saved = db
+            .update_room_settings(
+                "main",
+                &RoomSettingsPatch {
+                    muted: Some(true),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(saved.nickname.as_deref(), Some("Town hall"));
+        assert!(saved.pinned && saved.muted);
+        // An empty nickname clears it; rooms are independent.
+        let cleared = db
+            .update_room_settings(
+                "main",
+                &RoomSettingsPatch {
+                    nickname: Some(String::new()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(cleared.nickname, None);
+        assert_eq!(
+            db.room_settings("group-a").unwrap(),
+            RoomSettings::default()
+        );
+        assert!(db
+            .update_room_settings(
+                "main",
+                &RoomSettingsPatch {
+                    nickname: Some("x".repeat(61)),
+                    ..Default::default()
+                },
+            )
+            .is_err());
+        assert_eq!(db.all_room_settings().unwrap().len(), 1);
     }
     #[test]
     fn cancellation_wins_over_late_completion() {
