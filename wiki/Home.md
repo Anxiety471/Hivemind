@@ -16,7 +16,7 @@ Hivemind owns the conversation, the memory, and the CLI. [Pi](https://github.com
 - **Seven-layer memory that needs no LLM**, using FTS5 search, scope binding, provenance, and supersession.
 - **Roles and permissions** decided in Rust, with an audit log.
 - **Autonomous coordination** (opt-in): submit one task and Hivemind plans, delegates, isolates work in git worktrees, routes reviews, and reports a result.
-- **Embeddable core** with a typed event bus, plus a loopback HTTP/WebSocket API.
+- **Embeddable core** with a typed event bus, plus a loopback HTTP/WebSocket API and a browser UI built on it.
 
 ## Pages
 
@@ -31,6 +31,7 @@ Hivemind owns the conversation, the memory, and the CLI. [Pi](https://github.com
 | [Access Control](Access-Control) | Permissions, built-in roles, tool restriction, audit log |
 | [Coordination](Coordination) | Autonomous tasks: lifecycle, isolation, messaging, agent tools |
 | [HTTP and WebSocket API](HTTP-and-WebSocket-API) | Endpoints, turn submission, WebSocket protocol and events |
+| [Web UI](Web-UI) | The browser UI in `frontend/`: rooms, threads, tasks, groups, workspaces, sessions |
 | [Backend Efficiency](Backend-Efficiency) | Durability, threading, retrieval, benchmarks |
 | [Limitations](Limitations) | What Hivemind does not do yet |
 

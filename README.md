@@ -17,6 +17,7 @@ Hivemind owns the conversation, the memory, and the CLI.<br>
 [Configuration](#%EF%B8%8F-configuration) •
 [Memory](#-deterministic-memory) •
 [API](#-http--websocket-api) •
+[Web UI](#%EF%B8%8F-web-ui) •
 [Architecture](#%EF%B8%8F-architecture)
 
 </div>
@@ -32,6 +33,7 @@ Hivemind owns the conversation, the memory, and the CLI.<br>
 - 🔢 **Deterministic reply order**, set globally or per group.
 - 🗂️ **Seven-layer memory with no LLM needed.** It uses FTS5 search, scope binding, provenance, and supersession.
 - 🔌 **Embeddable core** with a typed event bus, plus a loopback HTTP/WebSocket API.
+- 🖥️ **Web UI** for rooms, threads, tasks, groups, workspaces, and runtime sessions.
 
 ---
 
@@ -377,6 +379,19 @@ Unsupported or malformed messages get a `system.error` frame, and the connection
 
 > [!NOTE]
 > Events are short-lived **notifications**, not canonical records. Durable history and memory stay in SQLite. A subscriber that falls behind the bounded buffer gets `system.events_lagged` in place of the dropped events.
+
+---
+
+## 🖥️ Web UI
+
+`frontend/` is a browser UI built only on the public API: rooms with live replies and threads, autonomous tasks with attempts and controls, agents, chat groups, workspaces, runtime sessions, and a live event feed.
+
+```bash
+hivemind serve                               # API on http://127.0.0.1:7474
+cd frontend && npm install && npm run dev    # UI on http://127.0.0.1:5173
+```
+
+No model handy? `frontend/dev/demo.sh` runs `serve` with a scripted stand-in runtime, and `node frontend/dev/seed.mjs` fills it with sample data. See [frontend/README.md](frontend/README.md) and the [Web UI](https://github.com/Anxiety471/Hivemind/wiki/Web-UI) wiki page.
 
 ---
 
