@@ -8,9 +8,9 @@ use std::{
 
 use crate::identity::AgentInstanceId;
 use crate::memory::{
-    ArchiveParticipant, ArchivedMessage, ArchivedTurn, Caller, Layer, MemoryService,
-    MemoryStatus, MemoryWrite, Provenance, RoomArchive, Scope, SearchRequest, SearchResult,
-    SearchScope, TurnAppend,
+    ArchiveParticipant, ArchivedMessage, ArchivedTurn, Caller, Layer, MemoryService, MemoryStatus,
+    MemoryWrite, Provenance, RoomArchive, Scope, SearchRequest, SearchResult, SearchScope,
+    TurnAppend,
 };
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
@@ -58,7 +58,13 @@ pub trait ToolHost: Send + Sync {
     }
     /// Whether this host owns the tool name.
     fn handles(&self, name: &str) -> bool;
-    fn execute(&self, room: &str, persona: &str, name: &str, args: &serde_json::Value) -> Result<String>;
+    fn execute(
+        &self,
+        room: &str,
+        persona: &str,
+        name: &str,
+        args: &serde_json::Value,
+    ) -> Result<String>;
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]

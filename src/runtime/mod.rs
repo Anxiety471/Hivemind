@@ -337,7 +337,10 @@ done
             .err()
             .unwrap();
         let error = format!("{error:#}");
-        assert!(error.contains("Open") && error.contains("missing-opencode"), "{error}");
+        assert!(
+            error.contains("Open") && error.contains("missing-opencode"),
+            "{error}"
+        );
 
         let runtime = opencode_runtime(&fixture);
         let mut fast = agent("Fast", "opencode", &fixture.workspace());
@@ -364,7 +367,10 @@ done
         .await
         .unwrap();
         let error = format!("{:#}", session.prompt("hello").await.unwrap_err());
-        assert!(error.contains("Crash") && error.contains("exited"), "{error}");
+        assert!(
+            error.contains("Crash") && error.contains("exited"),
+            "{error}"
+        );
         let again = session.prompt("hello").await.unwrap_err().to_string();
         assert!(again.contains("failed earlier"), "{again}");
         session.shutdown().await.unwrap();
@@ -381,7 +387,10 @@ done
         .await
         .unwrap();
         let error = session.prompt("hello").await.unwrap_err().to_string();
-        assert!(error.contains("cancelled") && error.contains("Deny"), "{error}");
+        assert!(
+            error.contains("cancelled") && error.contains("Deny"),
+            "{error}"
+        );
         session.shutdown().await.unwrap();
     }
 
@@ -394,9 +403,11 @@ done
         let runtime = opencode_runtime(&fixture);
         let configured = agent("Hang", "opencode", &fixture.workspace());
         let start = create_session(&runtime, &configured);
-        assert!(tokio::time::timeout(std::time::Duration::from_millis(500), start)
-            .await
-            .is_err());
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(500), start)
+                .await
+                .is_err()
+        );
         let pid = fs::read_to_string(fixture.0.join("pid")).unwrap();
         let proc = format!("/proc/{}", pid.trim());
         for _ in 0..50 {

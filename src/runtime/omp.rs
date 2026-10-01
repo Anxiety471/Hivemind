@@ -538,13 +538,21 @@ mod tests {
     #[test]
     fn restricted_persona_gets_a_tool_allowlist_without_subagents_or_withheld_tools() {
         let mut agent = agent(None);
-        agent.tool_access = Some(crate::config::ToolAccess { write: false, exec: false });
+        agent.tool_access = Some(crate::config::ToolAccess {
+            write: false,
+            exec: false,
+        });
         let args = OmpSession::rpc_args(&agent);
         let tools = &args[args.iter().position(|a| a == "--tools").unwrap() + 1];
         assert_eq!(tools, "read,grep,glob,lsp,web_search,todo");
-        agent.tool_access = Some(crate::config::ToolAccess { write: false, exec: true });
+        agent.tool_access = Some(crate::config::ToolAccess {
+            write: false,
+            exec: true,
+        });
         let args = OmpSession::rpc_args(&agent);
-        assert!(args[args.iter().position(|a| a == "--tools").unwrap() + 1].ends_with("bash,python"));
+        assert!(
+            args[args.iter().position(|a| a == "--tools").unwrap() + 1].ends_with("bash,python")
+        );
     }
 
     #[derive(Default)]
@@ -737,21 +745,41 @@ mod tests {
         let agent = agent(None);
         let (script, transport) = fake_transport();
         push_ready(&script);
-        push_frame(&script, json!({ "type": "response", "id": "hivemind_prompt", "success": true, "data": { "agentInvoked": true } }));
-        push_frame(&script, json!({ "type": "message_end", "message": { "role": "assistant", "content": [
+        push_frame(
+            &script,
+            json!({ "type": "response", "id": "hivemind_prompt", "success": true, "data": { "agentInvoked": true } }),
+        );
+        push_frame(
+            &script,
+            json!({ "type": "message_end", "message": { "role": "assistant", "content": [
             { "type": "text", "text": "```hivemind-tool\n{\"name\":\"workspace.get\",\"args\":{}}\n```" }
-        ] } }));
+        ] } }),
+        );
         // OMP carries on (its own todo reminder), and its last message is only a status line.
-        push_frame(&script, json!({ "type": "message_end", "message": { "role": "assistant", "content": [
+        push_frame(
+            &script,
+            json!({ "type": "message_end", "message": { "role": "assistant", "content": [
             { "type": "text", "text": "Workspace lookup requested." }
-        ] } }));
-        push_frame(&script, json!({ "type": "prompt_result", "id": "hivemind_prompt", "status": "completed", "sessionSettled": true }));
-        push_frame(&script, json!({ "type": "response", "id": "hivemind_last_text", "success": true, "data": { "text": "Workspace lookup requested." } }));
+        ] } }),
+        );
+        push_frame(
+            &script,
+            json!({ "type": "prompt_result", "id": "hivemind_prompt", "status": "completed", "sessionSettled": true }),
+        );
+        push_frame(
+            &script,
+            json!({ "type": "response", "id": "hivemind_last_text", "success": true, "data": { "text": "Workspace lookup requested." } }),
+        );
         push_prompt_turn(&script, "plain answer", true);
 
-        let mut session = OmpSession::start_with_transport(&agent, transport).await.unwrap();
+        let mut session = OmpSession::start_with_transport(&agent, transport)
+            .await
+            .unwrap();
         let reply = session.prompt("where?").await.unwrap();
-        assert!(reply.contains("workspace.get") && reply.starts_with("```hivemind-tool"), "{reply}");
+        assert!(
+            reply.contains("workspace.get") && reply.starts_with("```hivemind-tool"),
+            "{reply}"
+        );
         // The next prompt starts clean: an earlier tool call never leaks into a plain answer.
         assert_eq!(session.prompt("again").await.unwrap(), "plain answer");
     }

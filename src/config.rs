@@ -392,8 +392,15 @@ impl HivemindConfig {
             }
         }
         for persona in &self.agents {
-            if persona.capabilities.iter().any(|tag| tag.trim().is_empty() || tag.len() > 64) {
-                bail!("persona '{}' has an empty or overlong capability tag", persona.name);
+            if persona
+                .capabilities
+                .iter()
+                .any(|tag| tag.trim().is_empty() || tag.len() > 64)
+            {
+                bail!(
+                    "persona '{}' has an empty or overlong capability tag",
+                    persona.name
+                );
             }
         }
         crate::access::validate(self)?;
@@ -607,7 +614,8 @@ fn default_runtime() -> String {
 /// missing directory still fails per agent at session start rather than at load. Runtimes and
 /// git are handed this path in places where a relative one would resolve differently.
 pub fn absolute_workspace(workspace: &str) -> String {
-    std::path::absolute(workspace).map_or_else(|_| workspace.to_owned(), |p| p.display().to_string())
+    std::path::absolute(workspace)
+        .map_or_else(|_| workspace.to_owned(), |p| p.display().to_string())
 }
 
 fn default_workspace() -> String {
@@ -905,10 +913,25 @@ mod tests {
     #[test]
     fn example_team_loads_and_roles_restrict_tools_as_documented() {
         let config = load_toml(include_str!("../examples/team.toml")).unwrap();
-        let access = |name: &str| crate::access::tool_access(config.agents.iter().find(|a| a.name == name).unwrap(), &config.roles);
+        let access = |name: &str| {
+            crate::access::tool_access(
+                config.agents.iter().find(|a| a.name == name).unwrap(),
+                &config.roles,
+            )
+        };
         let tools = |write, exec| Some(ToolAccess { write, exec });
         assert_eq!(config.agents.len(), 6);
-        assert_eq!((access("Leader"), access("Researcher"), access("Auditor")), (tools(false, false), tools(false, false), tools(false, false)));
-        assert_eq!((access("Implementor"), access("Tester"), access("Writer")), (None, tools(false, true), tools(true, false)));
+        assert_eq!(
+            (access("Leader"), access("Researcher"), access("Auditor")),
+            (
+                tools(false, false),
+                tools(false, false),
+                tools(false, false)
+            )
+        );
+        assert_eq!(
+            (access("Implementor"), access("Tester"), access("Writer")),
+            (None, tools(false, true), tools(true, false))
+        );
     }
 }

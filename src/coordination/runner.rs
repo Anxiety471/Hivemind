@@ -46,11 +46,24 @@ impl Scheduler {
     /// `invoker` replaces the runtime pool (used with fake agents in tests).
     pub fn new(core: Arc<HivemindCore>, invoker: Option<Arc<dyn AgentInvoker>>) -> Self {
         let service = core.coordination().clone();
-        Self { core, service, invoker, running: HashMap::new(), ids: HashMap::new(), jobs: JoinSet::new(), last_heartbeat: Instant::now(), git_cache: Mutex::new(HashMap::new()) }
+        Self {
+            core,
+            service,
+            invoker,
+            running: HashMap::new(),
+            ids: HashMap::new(),
+            jobs: JoinSet::new(),
+            last_heartbeat: Instant::now(),
+            git_cache: Mutex::new(HashMap::new()),
+        }
     }
 
     fn is_git(&self, workspace: &str) -> bool {
-        *self.git_cache.lock().entry(workspace.to_owned()).or_insert_with(|| workspace::is_git(workspace))
+        *self
+            .git_cache
+            .lock()
+            .entry(workspace.to_owned())
+            .or_insert_with(|| workspace::is_git(workspace))
     }
 
     /// Nothing can be running after a restart: interrupt leftovers so their
@@ -58,7 +71,9 @@ impl Scheduler {
     pub fn recover_startup(&self) {
         match self.service.interrupt_orphans(&HashSet::new(), true) {
             Ok(0) => {}
-            Ok(count) => eprintln!("coordination: interrupted {count} attempt(s) left running by a previous process"),
+            Ok(count) => eprintln!(
+                "coordination: interrupted {count} attempt(s) left running by a previous process"
+            ),
             Err(error) => eprintln!("coordination: startup recovery failed: {error}"),
         }
         if let Ok(entries) = std::fs::read_dir(self.core.data_dir().join("worktrees")) {
@@ -88,7 +103,9 @@ impl Scheduler {
     pub async fn stop(&mut self) {
         for (attempt, running) in self.running.drain() {
             running.abort.abort();
-            let _ = self.service.finish_attempt(&attempt, AttemptEnd::Interrupted);
+            let _ = self
+                .service
+                .finish_attempt(&attempt, AttemptEnd::Interrupted);
         }
         self.jobs.abort_all();
         while self.jobs.join_next().await.is_some() {}
@@ -110,7 +127,13 @@ impl Scheduler {
                     if let Some(attempt) = self.ids.remove(&error.id()) {
                         self.running.remove(&attempt);
                         if !error.is_cancelled() {
-                            self.service.finish_attempt(&attempt, AttemptEnd::Failed { class: "panic".into(), detail: "attempt task panicked".into() })?;
+                            self.service.finish_attempt(
+                                &attempt,
+                                AttemptEnd::Failed {
+                                    class: "panic".into(),
+                                    detail: "attempt task panicked".into(),
+                                },
+                            )?;
                         }
                     }
                 }
@@ -120,8 +143,19 @@ impl Scheduler {
             let core = self.core.clone();
             tokio::spawn(async move { core.rotate_instance(&instance, reason).await });
         }
-        let db_running: HashSet<String> = self.service.store().read(|db| db.running_attempts(None))?.into_iter().map(|a| a.id).collect();
-        let orphaned: Vec<String> = self.running.keys().filter(|id| !db_running.contains(*id)).cloned().collect();
+        let db_running: HashSet<String> = self
+            .service
+            .store()
+            .read(|db| db.running_attempts(None))?
+            .into_iter()
+            .map(|a| a.id)
+            .collect();
+        let orphaned: Vec<String> = self
+            .running
+            .keys()
+            .filter(|id| !db_running.contains(*id))
+            .cloned()
+            .collect();
         for attempt in orphaned {
             if let Some(running) = self.running.remove(&attempt) {
                 // Cancelled or otherwise ended in the store while its task is still executing.
@@ -134,7 +168,8 @@ impl Scheduler {
                 running.abort.abort();
                 workspace::discard(&worktree_dir(&self.core, &attempt));
             }
-            self.service.finish_attempt(&attempt, AttemptEnd::Cancelled)?;
+            self.service
+                .finish_attempt(&attempt, AttemptEnd::Cancelled)?;
         }
         let lease = self.service.config().lease_secs;
         if self.last_heartbeat.elapsed() >= Duration::from_secs((lease / 3).max(1)) {
@@ -146,8 +181,17 @@ impl Scheduler {
         let live: HashSet<String> = self.running.keys().cloned().collect();
         self.service.interrupt_orphans(&live, false)?;
 
-        let capacity = self.service.config().max_concurrent.saturating_sub(self.running.len());
-        let busy: HashSet<String> = self.running.values().filter(|r| r.serialized).map(|r| r.workspace.clone()).collect();
+        let capacity = self
+            .service
+            .config()
+            .max_concurrent
+            .saturating_sub(self.running.len());
+        let busy: HashSet<String> = self
+            .running
+            .values()
+            .filter(|r| r.serialized)
+            .map(|r| r.workspace.clone())
+            .collect();
         let serialized = |workspace: &str| !self.is_git(workspace);
         let claimed = self.service.claim(capacity, &serialized, &busy)?;
         let count = claimed.len();
@@ -162,7 +206,14 @@ impl Scheduler {
                 (dispatch.attempt.id.clone(), end)
             });
             self.ids.insert(handle.id(), attempt.clone());
-            self.running.insert(attempt, Running { abort: handle, workspace, serialized });
+            self.running.insert(
+                attempt,
+                Running {
+                    abort: handle,
+                    workspace,
+                    serialized,
+                },
+            );
         }
         Ok(count)
     }
@@ -181,7 +232,10 @@ impl Scheduler {
             } else {
                 idle = 0;
             }
-            anyhow::ensure!(started.elapsed() < limit, "scheduler did not go idle within {limit:?}");
+            anyhow::ensure!(
+                started.elapsed() < limit,
+                "scheduler did not go idle within {limit:?}"
+            );
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
     }
@@ -195,7 +249,18 @@ fn worktree_dir(core: &HivemindCore, attempt: &str) -> PathBuf {
 
 /// Latest commit hash recorded on `task`, if any.
 fn latest_commit(service: &CoordinationService, task: &str) -> Option<String> {
-    service.store().read(|db| Ok(db.artifacts(task)?.into_iter().rev().find(|a| a.kind == "commit").and_then(|a| a.content_hash))).ok().flatten()
+    service
+        .store()
+        .read(|db| {
+            Ok(db
+                .artifacts(task)?
+                .into_iter()
+                .rev()
+                .find(|a| a.kind == "commit")
+                .and_then(|a| a.content_hash))
+        })
+        .ok()
+        .flatten()
 }
 
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Option<T> {
@@ -203,20 +268,36 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> 
 }
 
 fn failed(class: &str, detail: impl Into<String>) -> AttemptEnd {
-    AttemptEnd::Failed { class: class.into(), detail: detail.into() }
+    AttemptEnd::Failed {
+        class: class.into(),
+        detail: detail.into(),
+    }
 }
 
-async fn execute(core: Arc<HivemindCore>, dispatch: &Dispatch, invoker: Option<Arc<dyn AgentInvoker>>) -> AttemptEnd {
+async fn execute(
+    core: Arc<HivemindCore>,
+    dispatch: &Dispatch,
+    invoker: Option<Arc<dyn AgentInvoker>>,
+) -> AttemptEnd {
     let service = core.coordination().clone();
     let (task, attempt) = (&dispatch.task, &dispatch.attempt);
     let Some(agent) = core.agents().get(&attempt.persona) else {
-        return failed("unknown_persona", format!("persona '{}' is not configured", attempt.persona));
+        return failed(
+            "unknown_persona",
+            format!("persona '{}' is not configured", attempt.persona),
+        );
     };
-    let budget = core.config().context.context_target_tokens.saturating_mul(4) / 2;
+    let budget = core
+        .config()
+        .context
+        .context_target_tokens
+        .saturating_mul(4)
+        / 2;
     let prompt = match build_prompt(&service, dispatch, budget) {
         Ok(Ok(prompt)) => prompt,
         Ok(Err(overflow)) => {
-            let _ = service.host_transition(&task.id, TaskStatus::NeedsInput, &overflow.to_string());
+            let _ =
+                service.host_transition(&task.id, TaskStatus::NeedsInput, &overflow.to_string());
             return failed("context_overflow", overflow.to_string());
         }
         Err(error) => return failed("prompt", error.to_string()),
@@ -226,7 +307,10 @@ async fn execute(core: Arc<HivemindCore>, dispatch: &Dispatch, invoker: Option<A
     let mut config = (*agent).clone();
     let mut notes = String::new();
     let mut worktree: Option<Worktree> = None;
-    let root_task = service.store().read(|db| db.task_or_err(&task.root_id)).ok();
+    let root_task = service
+        .store()
+        .read(|db| db.task_or_err(&task.root_id))
+        .ok();
     let is_root = root_task.as_ref().is_some_and(|r| r.id == task.id);
     let workspace = task.workspace.clone();
     if blocking({
@@ -242,15 +326,32 @@ async fn execute(core: Arc<HivemindCore>, dispatch: &Dispatch, invoker: Option<A
             AttemptKind::Work => {
                 let shas: Vec<String> = service
                     .store()
-                    .read(|db| Ok(db.prerequisites(&task.id)?.into_iter().filter_map(|(pre, _)| db.artifacts(&pre).ok()?.into_iter().rev().find(|a| a.kind == "commit").and_then(|a| a.content_hash)).collect()))
+                    .read(|db| {
+                        Ok(db
+                            .prerequisites(&task.id)?
+                            .into_iter()
+                            .filter_map(|(pre, _)| {
+                                db.artifacts(&pre)
+                                    .ok()?
+                                    .into_iter()
+                                    .rev()
+                                    .find(|a| a.kind == "commit")
+                                    .and_then(|a| a.content_hash)
+                            })
+                            .collect())
+                    })
                     .unwrap_or_default();
                 let (w, d, b) = (workspace.clone(), dir.clone(), branch.clone());
-                blocking(move || workspace::prepare(&w, &d, &b, &shas)).await.or_else(|| Some(Err(anyhow::anyhow!("worktree task panicked"))))
+                blocking(move || workspace::prepare(&w, &d, &b, &shas))
+                    .await
+                    .or_else(|| Some(Err(anyhow::anyhow!("worktree task panicked"))))
             }
             AttemptKind::Review if !is_root => match latest_commit(&service, &task.id) {
                 Some(sha) => {
                     let (w, d) = (workspace.clone(), dir.clone());
-                    blocking(move || workspace::checkout_detached(&w, &d, &sha)).await.or_else(|| Some(Err(anyhow::anyhow!("worktree task panicked"))))
+                    blocking(move || workspace::checkout_detached(&w, &d, &sha))
+                        .await
+                        .or_else(|| Some(Err(anyhow::anyhow!("worktree task panicked"))))
                 }
                 None => None,
             },
@@ -259,7 +360,11 @@ async fn execute(core: Arc<HivemindCore>, dispatch: &Dispatch, invoker: Option<A
         match prepared {
             Some(Ok(tree)) => {
                 config.workspace = tree.cwd.display().to_string();
-                let _ = service.record_attempt_workspace(&attempt.id, Some(&tree.root.display().to_string()), tree.branch.as_deref());
+                let _ = service.record_attempt_workspace(
+                    &attempt.id,
+                    Some(&tree.root.display().to_string()),
+                    tree.branch.as_deref(),
+                );
                 notes.push_str(&match attempt.kind {
                     AttemptKind::Work => format!("\nWorkspace: your working directory is an isolated git worktree on branch {}. Hivemind commits your changes when you finish; do not switch branches.\n", tree.branch.as_deref().unwrap_or("")),
                     _ => "\nWorkspace: your working directory is a read-only checkout of the submitted commit; do not modify it.\n".to_owned(),
@@ -286,7 +391,10 @@ async fn execute(core: Arc<HivemindCore>, dispatch: &Dispatch, invoker: Option<A
         room_name: format!("Task {}", task.id),
         group_id: String::new(),
         mode: ConversationMode::Broadcast,
-        participants: vec![Participant { agent: Arc::new(config), role: Some(role.into()) }],
+        participants: vec![Participant {
+            agent: Arc::new(config),
+            role: Some(role.into()),
+        }],
     };
     let invoker = invoker.unwrap_or_else(|| core.runtime_invoker(&room, ""));
     let message = format!("{}{notes}", prompt.text);
@@ -314,17 +422,31 @@ async fn execute(core: Arc<HivemindCore>, dispatch: &Dispatch, invoker: Option<A
             let branch = format!("hivemind/{}-{}", task.id, attempt.id);
             match finished {
                 Ok(Finished::Committed { sha, stat }) => {
-                    let _ = service.record_artifact(&task.id, Some(&attempt.id), "commit", &format!("{branch}@{sha}"), Some(&sha), &stat);
+                    let _ = service.record_artifact(
+                        &task.id,
+                        Some(&attempt.id),
+                        "commit",
+                        &format!("{branch}@{sha}"),
+                        Some(&sha),
+                        &stat,
+                    );
                 }
                 Ok(Finished::Unchanged) => {}
                 Ok(Finished::Unresolved(files)) => {
-                    end = failed("unresolved_conflict", format!("conflict markers remain in: {}", files.join(", ")));
+                    end = failed(
+                        "unresolved_conflict",
+                        format!("conflict markers remain in: {}", files.join(", ")),
+                    );
                 }
                 Err(error) => end = failed("workspace", format!("{error:#}")),
             }
         }
         // A fresh worktree per attempt means the live session's cwd is gone.
-        core.rotate_instance(&AgentInstanceId::new(&room, &attempt.persona), "attempt_finished").await;
+        core.rotate_instance(
+            &AgentInstanceId::new(&room, &attempt.persona),
+            "attempt_finished",
+        )
+        .await;
     }
     end
 }

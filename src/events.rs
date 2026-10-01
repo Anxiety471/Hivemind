@@ -20,8 +20,19 @@ pub struct DomainEvent {
 }
 
 impl DomainEvent {
-    pub fn new(event_id: String, sequence: u64, occurred_at: SystemTime, payload: DomainEventKind) -> Self {
-        Self { event_id, sequence, occurred_at, payload, frame: OnceLock::new() }
+    pub fn new(
+        event_id: String,
+        sequence: u64,
+        occurred_at: SystemTime,
+        payload: DomainEventKind,
+    ) -> Self {
+        Self {
+            event_id,
+            sequence,
+            occurred_at,
+            payload,
+            frame: OnceLock::new(),
+        }
     }
 
     /// Returns the serialized frame shared by all subscribers, running `encode` only on first use.

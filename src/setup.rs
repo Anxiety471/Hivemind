@@ -309,8 +309,13 @@ mod tests {
         let fixture = Fixture::new();
         let path = OsString::from(&fixture.0);
         let cfg = config(vec![agent("Open", "opencode", ".")]);
-        let error = validate_with_path(&cfg, Some(&path)).unwrap_err().to_string();
-        assert!(error.contains("agent 'Open'") && error.contains("binary 'opencode'"), "{error}");
+        let error = validate_with_path(&cfg, Some(&path))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("agent 'Open'") && error.contains("binary 'opencode'"),
+            "{error}"
+        );
         fixture.executable("opencode");
         validate_with_path(&cfg, Some(&path)).unwrap();
     }

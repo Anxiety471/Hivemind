@@ -57,7 +57,12 @@ struct Capsule {
     dependencies: usize,
 }
 
-fn build_capsule(db: &Db<'_>, task: &Task, kind: AttemptKind, budget: usize) -> CoordResult<Capsule> {
+fn build_capsule(
+    db: &Db<'_>,
+    task: &Task,
+    kind: AttemptKind,
+    budget: usize,
+) -> CoordResult<Capsule> {
     let mut lines: Vec<String> = Vec::new();
     let mut artifact_ids = HashSet::new();
     let root = db.task_or_err(&task.root_id)?;
@@ -69,31 +74,63 @@ fn build_capsule(db: &Db<'_>, task: &Task, kind: AttemptKind, budget: usize) -> 
         task.owner.as_deref().unwrap_or("-"),
         task.reviewer.as_deref().unwrap_or("-")
     ));
-    if let Some(reason) = task.status_reason.as_deref().filter(|_| matches!(task.status, TaskStatus::Blocked | TaskStatus::NeedsInput)) {
+    if let Some(reason) = task
+        .status_reason
+        .as_deref()
+        .filter(|_| matches!(task.status, TaskStatus::Blocked | TaskStatus::NeedsInput))
+    {
         lines.push(format!("Blocker: {reason}"));
     }
     let mut optional: Vec<String> = Vec::new();
     if task.id != root.id {
-        optional.push(format!("Root task {}: {}", root.id, excerpt(&root.objective, 400)));
+        optional.push(format!(
+            "Root task {}: {}",
+            root.id,
+            excerpt(&root.objective, 400)
+        ));
     }
     let decisions = db.decisions(&task.id, Some("accepted"))?;
-    let root_decisions = if task.id != root.id { db.decisions(&root.id, Some("accepted"))? } else { Vec::new() };
+    let root_decisions = if task.id != root.id {
+        db.decisions(&root.id, Some("accepted"))?
+    } else {
+        Vec::new()
+    };
     for d in root_decisions.iter().chain(decisions.iter()) {
-        optional.push(format!("Accepted decision {} (by {}): {}", d.id, d.proposer, excerpt(&d.text, 500)));
+        optional.push(format!(
+            "Accepted decision {} (by {}): {}",
+            d.id,
+            d.proposer,
+            excerpt(&d.text, 500)
+        ));
     }
     let prerequisites = db.prerequisites(&task.id)?;
     for (pre_id, contract) in &prerequisites {
         let pre = db.task_or_err(pre_id)?;
-        let mut line = format!("Dependency {} [{}] {} — owner {}.", pre.id, pre.status.as_str(), excerpt(&pre.objective, 200), pre.owner.as_deref().unwrap_or("-"));
+        let mut line = format!(
+            "Dependency {} [{}] {} — owner {}.",
+            pre.id,
+            pre.status.as_str(),
+            excerpt(&pre.objective, 200),
+            pre.owner.as_deref().unwrap_or("-")
+        );
         if let Some(contract) = contract {
             line.push_str(&format!("\n  Contract: {}", excerpt(contract, 900)));
         }
         for artifact in db.artifacts(&pre.id)? {
             artifact_ids.insert(artifact.id.clone());
             if artifact.kind == "summary" {
-                line.push_str(&format!("\n  Handoff summary ({}): {}", artifact.id, excerpt(&artifact.description, 700)));
+                line.push_str(&format!(
+                    "\n  Handoff summary ({}): {}",
+                    artifact.id,
+                    excerpt(&artifact.description, 700)
+                ));
             } else {
-                line.push_str(&format!("\n  Artifact {} [{}] {}", artifact.id, artifact.kind, excerpt(&artifact.reference, 160)));
+                line.push_str(&format!(
+                    "\n  Artifact {} [{}] {}",
+                    artifact.id,
+                    artifact.kind,
+                    excerpt(&artifact.reference, 160)
+                ));
             }
         }
         optional.push(line);
@@ -102,18 +139,51 @@ fn build_capsule(db: &Db<'_>, task: &Task, kind: AttemptKind, budget: usize) -> 
         for artifact in db.artifacts(&task.id)? {
             artifact_ids.insert(artifact.id.clone());
             if artifact.kind == "summary" {
-                optional.push(format!("Submitted summary ({}): {}", artifact.id, excerpt(&artifact.description, 900)));
+                optional.push(format!(
+                    "Submitted summary ({}): {}",
+                    artifact.id,
+                    excerpt(&artifact.description, 900)
+                ));
             } else {
-                optional.push(format!("Submitted artifact {} [{}] {}", artifact.id, artifact.kind, excerpt(&artifact.reference, 160)));
+                optional.push(format!(
+                    "Submitted artifact {} [{}] {}",
+                    artifact.id,
+                    artifact.kind,
+                    excerpt(&artifact.reference, 160)
+                ));
             }
         }
         for e in db.latest_evidence(&task.id)? {
-            optional.push(format!("Evidence: {} — {} {}", e.check, e.outcome.as_str(), excerpt(&e.detail, 240)));
+            optional.push(format!(
+                "Evidence: {} — {} {}",
+                e.check,
+                e.outcome.as_str(),
+                excerpt(&e.detail, 240)
+            ));
         }
     }
     if task.id == root.id && matches!(kind, AttemptKind::Plan | AttemptKind::Review) {
-        for child in db.list_tasks(&super::store::TaskFilter { root: Some(&root.id), limit: 100, ..Default::default() })?.iter().filter(|t| t.id != root.id) {
-            optional.push(format!("Child {} [{}] owner={} — {}{}", child.id, child.status.as_str(), child.owner.as_deref().unwrap_or("-"), excerpt(&child.objective, 140), child.status_reason.as_deref().map(|r| format!(" ({r})")).unwrap_or_default()));
+        for child in db
+            .list_tasks(&super::store::TaskFilter {
+                root: Some(&root.id),
+                limit: 100,
+                ..Default::default()
+            })?
+            .iter()
+            .filter(|t| t.id != root.id)
+        {
+            optional.push(format!(
+                "Child {} [{}] owner={} — {}{}",
+                child.id,
+                child.status.as_str(),
+                child.owner.as_deref().unwrap_or("-"),
+                excerpt(&child.objective, 140),
+                child
+                    .status_reason
+                    .as_deref()
+                    .map(|r| format!(" ({r})"))
+                    .unwrap_or_default()
+            ));
         }
     }
     let feedback: Vec<&String> = task.feedback.iter().rev().take(MAX_FEEDBACK).collect();
@@ -145,11 +215,20 @@ fn build_capsule(db: &Db<'_>, task: &Task, kind: AttemptKind, budget: usize) -> 
     if dropped > 0 {
         lines.push(format!("({dropped} older capsule items omitted; use context.lookup or tasks.get for exact records)"));
     }
-    Ok(Capsule { text: lines.join("\n"), dropped, artifact_ids, dependencies: prerequisites.len() })
+    Ok(Capsule {
+        text: lines.join("\n"),
+        dropped,
+        artifact_ids,
+        dependencies: prerequisites.len(),
+    })
 }
 
 /// Assemble the prompt for one claimed dispatch within `budget` bytes.
-pub fn build_prompt(service: &CoordinationService, dispatch: &Dispatch, budget: usize) -> CoordResult<Result<Prompt, MandatoryOverflow>> {
+pub fn build_prompt(
+    service: &CoordinationService,
+    dispatch: &Dispatch,
+    budget: usize,
+) -> CoordResult<Result<Prompt, MandatoryOverflow>> {
     let task = &dispatch.task;
     let kind = dispatch.attempt.kind;
     service.store().read(|db| {

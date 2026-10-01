@@ -63,7 +63,6 @@ pub(super) enum Commands {
     },
 }
 
-
 #[derive(Debug, Subcommand)]
 pub(super) enum TaskCommand {
     /// Store a task; `serve` or `task run` processes it.
@@ -88,9 +87,15 @@ pub(super) enum TaskCommand {
         #[arg(long)]
         status: Option<String>,
     },
-    Show { id: String },
-    Cancel { id: String },
-    Pause { id: String },
+    Show {
+        id: String,
+    },
+    Cancel {
+        id: String,
+    },
+    Pause {
+        id: String,
+    },
     Resume {
         id: String,
         /// Authorize replaying attempts that were interrupted or ended without a result.

@@ -27,7 +27,10 @@ pub async fn serve(core: Arc<HivemindCore>, port: u16) -> Result<()> {
     let app = router(Arc::clone(&core), shutdown_rx);
 
     println!("API listening on http://{address} (WebSocket: ws://{address}/api/v1/ws)");
-    let scheduler = core.coordination().enabled().then(|| tokio::spawn(crate::coordination::Scheduler::new(Arc::clone(&core), None).run()));
+    let scheduler = core
+        .coordination()
+        .enabled()
+        .then(|| tokio::spawn(crate::coordination::Scheduler::new(Arc::clone(&core), None).run()));
     if scheduler.is_some() {
         println!("Coordination scheduler running");
     }

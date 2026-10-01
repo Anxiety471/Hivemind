@@ -1167,7 +1167,9 @@ async fn tool_loop_executes_actions_reprompts_and_returns_final_text() {
         assert!(prompts[1].contains("Memory tool exchange this turn"));
         assert!(prompts[1].contains("stored private memory"));
         assert!(prompts[2].contains("1 memory results:"));
-        assert!(prompts[2].contains("websocket auth uses JWT") && prompts[2].contains("[private] #"));
+        assert!(
+            prompts[2].contains("websocket auth uses JWT") && prompts[2].contains("[private] #")
+        );
     }
     // Spoofed owner fields in args were ignored: the record is bound to
     // the invocation instance Hivemind created.
@@ -1478,9 +1480,12 @@ async fn context_pack_injects_authorized_hits_and_never_echoes_current_input() {
     {
         let prompts = f.prompts.lock();
         assert!(prompts[0].1.contains("Relevant Hivemind memory:"));
-        assert!(prompts[0]
-            .1
-            .contains("Authentication strategy is undecided") && prompts[0].1.contains("[group] #"));
+        assert!(
+            prompts[0]
+                .1
+                .contains("Authentication strategy is undecided")
+                && prompts[0].1.contains("[group] #")
+        );
         assert!(prompts[0]
             .1
             .contains("(source: room seed-room, turn seed-turn, message seed-msg, actor S)"));
@@ -2171,27 +2176,56 @@ async fn room_history_round_trips_through_the_sqlite_file_on_disk() {
     let _ = fs::remove_dir_all(root);
 }
 
-fn run_tool(memory: &MemoryService, caller: &Caller, name: &str, args: serde_json::Value) -> String {
+fn run_tool(
+    memory: &MemoryService,
+    caller: &Caller,
+    name: &str,
+    args: serde_json::Value,
+) -> String {
     execute_memory_tool(memory, caller, &tool_call(name, args)).unwrap()
 }
 
 /// The `#id` token of the first non-archive search hit.
 fn first_hit_id(output: &str) -> String {
     let start = output.find('#').expect("search output lacks an id") + 1;
-    output[start..].split_whitespace().next().unwrap().to_owned()
+    output[start..]
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_owned()
 }
 
 #[test]
 fn search_ids_allow_in_place_update_without_a_second_record() {
     let memory = MemoryService::new(MemoryStore::in_memory().unwrap());
     let alice = invocation_caller("room-1", "grp-1", "room-1/Alice", "turn-1", "msg-1");
-    run_tool(&memory, &alice, "memory.private.add", serde_json::json!({"content": "user timezone is UTC"}));
-    let found = run_tool(&memory, &alice, "memory.search", serde_json::json!({"query": "timezone", "scopes": ["private"]}));
+    run_tool(
+        &memory,
+        &alice,
+        "memory.private.add",
+        serde_json::json!({"content": "user timezone is UTC"}),
+    );
+    let found = run_tool(
+        &memory,
+        &alice,
+        "memory.search",
+        serde_json::json!({"query": "timezone", "scopes": ["private"]}),
+    );
     let id = first_hit_id(&found);
     let stored = memory.store().get(&alice, &id).unwrap().unwrap();
     assert_eq!(stored.content, "user timezone is UTC");
-    run_tool(&memory, &alice, "memory.private.update", serde_json::json!({"id": id, "content": "user timezone is CET"}));
-    let after = run_tool(&memory, &alice, "memory.search", serde_json::json!({"query": "timezone", "scopes": ["private"]}));
+    run_tool(
+        &memory,
+        &alice,
+        "memory.private.update",
+        serde_json::json!({"id": id, "content": "user timezone is CET"}),
+    );
+    let after = run_tool(
+        &memory,
+        &alice,
+        "memory.search",
+        serde_json::json!({"query": "timezone", "scopes": ["private"]}),
+    );
     assert!(after.starts_with("1 memory results"), "{after}");
     assert!(after.contains("CET") && !after.contains("UTC"), "{after}");
     assert_eq!(first_hit_id(&after), id);
@@ -2202,7 +2236,14 @@ fn upsert_is_idempotent_scope_bound_and_duplicate_adds_are_reported() {
     let memory = MemoryService::new(MemoryStore::in_memory().unwrap());
     let alice = invocation_caller("room-1", "grp-1", "room-1/Alice", "turn-1", "msg-1");
     let other = invocation_caller("room-2", "grp-2", "room-2/Alice", "turn-1", "msg-1");
-    let up = |c: &Caller, name: &str, text: &str| run_tool(&memory, c, name, serde_json::json!({"key": " Timezone ", "content": text}));
+    let up = |c: &Caller, name: &str, text: &str| {
+        run_tool(
+            &memory,
+            c,
+            name,
+            serde_json::json!({"key": " Timezone ", "content": text}),
+        )
+    };
     assert!(up(&alice, "memory.private.upsert", "tz UTC").starts_with("stored private memory"));
     assert!(up(&alice, "memory.private.upsert", "tz CET").starts_with("updated private memory"));
     assert!(up(&other, "memory.private.upsert", "tz PST").starts_with("stored private memory"));
@@ -2212,17 +2253,48 @@ fn upsert_is_idempotent_scope_bound_and_duplicate_adds_are_reported() {
     let records = memory.store().records_in_scope(&alice, &scope).unwrap();
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].content, "tz CET");
-    let revisions: i64 = memory.store().connection.lock()
-        .query_row("SELECT COUNT(*) FROM memory_revisions WHERE memory_id=?1", [&records[0].id], |r| r.get(0)).unwrap();
+    let revisions: i64 = memory
+        .store()
+        .connection
+        .lock()
+        .query_row(
+            "SELECT COUNT(*) FROM memory_revisions WHERE memory_id=?1",
+            [&records[0].id],
+            |r| r.get(0),
+        )
+        .unwrap();
     assert_eq!(revisions, 1);
-    let untouched = memory.store().records_in_scope(&other, &Scope::AgentInstance(other.agent_instance_id.clone())).unwrap();
+    let untouched = memory
+        .store()
+        .records_in_scope(
+            &other,
+            &Scope::AgentInstance(other.agent_instance_id.clone()),
+        )
+        .unwrap();
     assert_eq!(untouched[0].content, "tz PST");
 
-    let first = run_tool(&memory, &alice, "memory.private.add", serde_json::json!({"content": "Likes   Rust"}));
-    let second = run_tool(&memory, &alice, "memory.private.add", serde_json::json!({"content": "likes rust"}));
+    let first = run_tool(
+        &memory,
+        &alice,
+        "memory.private.add",
+        serde_json::json!({"content": "Likes   Rust"}),
+    );
+    let second = run_tool(
+        &memory,
+        &alice,
+        "memory.private.add",
+        serde_json::json!({"content": "likes rust"}),
+    );
     let id = first.rsplit(' ').next().unwrap();
     assert_eq!(second, format!("already stored as {id}"));
-    assert_eq!(memory.store().records_in_scope(&alice, &scope).unwrap().len(), 2);
+    assert_eq!(
+        memory
+            .store()
+            .records_in_scope(&alice, &scope)
+            .unwrap()
+            .len(),
+        2
+    );
 }
 
 #[test]
@@ -2230,21 +2302,72 @@ fn persona_and_global_update_follow_proposal_authorization() {
     let memory = MemoryService::new(MemoryStore::in_memory().unwrap());
     let alice = invocation_caller("room-1", "grp-1", "room-1/Alice", "turn-1", "msg-1");
     let call = |name: &str, args: serde_json::Value| tool_call(name, args);
-    let persona = run_tool(&memory, &alice, "memory.persona.propose", serde_json::json!({"content": "Alice persona convention: prefer short answers"}));
+    let persona = run_tool(
+        &memory,
+        &alice,
+        "memory.persona.propose",
+        serde_json::json!({"content": "Alice persona convention: prefer short answers"}),
+    );
     let pid = persona.split_whitespace().nth(3).unwrap().to_owned();
-    let updated = run_tool(&memory, &alice, "memory.persona.update", serde_json::json!({"id": pid, "content": "Alice persona convention: prefer tiny answers"}));
-    assert!(updated.starts_with(&format!("updated persona memory {pid}")), "{updated}");
+    let updated = run_tool(
+        &memory,
+        &alice,
+        "memory.persona.update",
+        serde_json::json!({"id": pid, "content": "Alice persona convention: prefer tiny answers"}),
+    );
+    assert!(
+        updated.starts_with(&format!("updated persona memory {pid}")),
+        "{updated}"
+    );
 
     let directive = "Global: Hivemind architecture: runtimes are disposable";
     let exact = authorized_global_directive(directive).unwrap();
-    let proposed = execute_with_optional_authorization(&memory, &alice, Some(&exact), &call("memory.global.propose", serde_json::json!({"content": exact}))).unwrap();
+    let proposed = execute_with_optional_authorization(
+        &memory,
+        &alice,
+        Some(&exact),
+        &call(
+            "memory.global.propose",
+            serde_json::json!({"content": exact}),
+        ),
+    )
+    .unwrap();
     let gid = proposed.split_whitespace().nth(3).unwrap().to_owned();
     let revised = "Hivemind architecture: runtimes are disposable and replaceable";
-    assert!(execute_memory_tool(&memory, &alice, &call("memory.global.update", serde_json::json!({"id": gid, "content": revised}))).is_err());
+    assert!(execute_memory_tool(
+        &memory,
+        &alice,
+        &call(
+            "memory.global.update",
+            serde_json::json!({"id": gid, "content": revised})
+        )
+    )
+    .is_err());
     let exact2 = authorized_global_directive(&format!("Global: {revised}")).unwrap();
-    execute_with_optional_authorization(&memory, &alice, Some(&exact2), &call("memory.global.update", serde_json::json!({"id": gid, "content": revised}))).unwrap();
-    assert_eq!(memory.store().get(&alice, &gid).unwrap().unwrap().content, revised);
-    assert!(execute_with_optional_authorization(&memory, &alice, Some(&exact2), &call("memory.global.update", serde_json::json!({"id": gid, "content": "something else entirely"}))).is_err());
+    execute_with_optional_authorization(
+        &memory,
+        &alice,
+        Some(&exact2),
+        &call(
+            "memory.global.update",
+            serde_json::json!({"id": gid, "content": revised}),
+        ),
+    )
+    .unwrap();
+    assert_eq!(
+        memory.store().get(&alice, &gid).unwrap().unwrap().content,
+        revised
+    );
+    assert!(execute_with_optional_authorization(
+        &memory,
+        &alice,
+        Some(&exact2),
+        &call(
+            "memory.global.update",
+            serde_json::json!({"id": gid, "content": "something else entirely"})
+        )
+    )
+    .is_err());
 }
 
 fn file_memory(label: &str) -> (PathBuf, Arc<MemoryService>) {
@@ -2265,7 +2388,15 @@ fn digest(history: &RoomHistory) -> HistoryDigest {
         history
             .events
             .iter()
-            .map(|e| (e.id.clone(), e.turn_id.clone(), e.speaker.clone(), e.content.clone(), e.error))
+            .map(|e| {
+                (
+                    e.id.clone(),
+                    e.turn_id.clone(),
+                    e.speaker.clone(),
+                    e.content.clone(),
+                    e.error,
+                )
+            })
             .collect(),
         history.state.clone(),
         history.summary.clone(),
@@ -2288,7 +2419,13 @@ async fn append_only_turns_reload_identically_from_a_cold_store() {
     let coord = ConversationCoordinator::new(&dir, limits.clone(), memory);
     let members = vec![member("A"), member("B")];
     let invoker = fake(Some("B"));
-    for input in ["goal: ship it", "second message", "third message", "fourth message", "fifth message"] {
+    for input in [
+        "goal: ship it",
+        "second message",
+        "third message",
+        "fourth message",
+        "fifth message",
+    ] {
         coord
             .turn(TurnRequest {
                 room: "append-room",
@@ -2304,14 +2441,18 @@ async fn append_only_turns_reload_identically_from_a_cold_store() {
     }
     let warm = coord.room_history("append-room").unwrap();
     assert_eq!(warm.events.len(), 15);
-    assert!(warm.events.iter().any(|event| event.error), "failed replies keep their flag");
+    assert!(
+        warm.events.iter().any(|event| event.error),
+        "failed replies keep their flag"
+    );
     assert_eq!(warm.completed_turns.len(), 5);
     assert!(!warm.summary.is_empty());
 
     // A fresh process view: new memory service on the same file, no caches.
-    let cold = ConversationCoordinator::new(&dir, limits, Arc::new(MemoryService::open(&db).unwrap()))
-        .room_history("append-room")
-        .unwrap();
+    let cold =
+        ConversationCoordinator::new(&dir, limits, Arc::new(MemoryService::open(&db).unwrap()))
+            .room_history("append-room")
+            .unwrap();
     assert_eq!(digest(&cold), digest(&warm));
     let _ = fs::remove_dir_all(dir);
     let _ = fs::remove_file(db);
@@ -2340,7 +2481,10 @@ async fn snapshot_written_before_turn_metadata_upgrades_on_first_load() {
                 completed_at: Some(2),
                 metadata: serde_json::Value::Null,
                 participants: vec![],
-                messages: vec![message("m1", "user", "hello", 1), message("m2", "A", "[agent failure: boom]", 2)],
+                messages: vec![
+                    message("m1", "user", "hello", 1),
+                    message("m2", "A", "[agent failure: boom]", 2),
+                ],
             },
         )
         .unwrap();
@@ -2370,14 +2514,19 @@ async fn snapshot_written_before_turn_metadata_upgrades_on_first_load() {
         assert_eq!(history.summary, "older summary");
         assert_eq!(history.completed_turns, ["t1"]);
         assert!(!history.events[0].error && history.events[1].error);
-        assert_eq!(history.events[1].legacy_agent_instance_id.as_deref(), Some("legacy-A"));
+        assert_eq!(
+            history.events[1].legacy_agent_instance_id.as_deref(),
+            Some("legacy-A")
+        );
     }
     let snapshot = memory
         .archive_turn(&trusted, "old-room", &room_state_turn_id("old-room"))
         .unwrap()
         .unwrap()
         .metadata;
-    assert!(snapshot.get("completed_turns").is_none() && snapshot.get("error_message_ids").is_none());
+    assert!(
+        snapshot.get("completed_turns").is_none() && snapshot.get("error_message_ids").is_none()
+    );
     assert_eq!(snapshot["summary"], "older summary");
     let _ = fs::remove_dir_all(dir);
     let _ = fs::remove_file(db);
@@ -2387,7 +2536,11 @@ async fn snapshot_written_before_turn_metadata_upgrades_on_first_load() {
 async fn rooms_progress_together_on_a_file_backed_multi_thread_runtime() {
     let dir = std::env::temp_dir().join(format!("hivemind-mt-{}", stable_id()));
     let (db, memory) = file_memory("mt");
-    let coord = Arc::new(ConversationCoordinator::new(&dir, ContextConfig::default(), memory));
+    let coord = Arc::new(ConversationCoordinator::new(
+        &dir,
+        ContextConfig::default(),
+        memory,
+    ));
     let invoker = fake_with(None, Some(Arc::new(tokio::sync::Barrier::new(2))));
     let run = |room: &'static str| {
         let coord = coord.clone();

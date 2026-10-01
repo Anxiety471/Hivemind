@@ -33,7 +33,11 @@ impl ApiError {
     }
 
     pub(super) fn owned(status: StatusCode, code: &'static str, message: String) -> Self {
-        Self { status, code, message: message.into() }
+        Self {
+            status,
+            code,
+            message: message.into(),
+        }
     }
 }
 

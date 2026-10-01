@@ -193,15 +193,27 @@ impl ConversationCoordinator {
         // authorize exactly one exact-content global proposal this turn.
         let host = self.tools.get().cloned();
         let access = self.access.get().cloned();
-        let agent_input = host.as_ref().is_some_and(|host| host.agent_originated(room));
-        let authorized_global = if agent_input { None } else { authorized_global_directive(input) };
+        let agent_input = host
+            .as_ref()
+            .is_some_and(|host| host.agent_originated(room));
+        let authorized_global = if agent_input {
+            None
+        } else {
+            authorized_global_directive(input)
+        };
         // Archive hits depend only on the room and the input, so one search
         // serves every member of this turn.
         let shared_archive = members
             .first()
             .map(|member| {
                 self.archive_retrieval(
-                    &invocation_caller(room, group_id, &member.agent.name, &turn_id, &user_message_id),
+                    &invocation_caller(
+                        room,
+                        group_id,
+                        &member.agent.name,
+                        &turn_id,
+                        &user_message_id,
+                    ),
                     input,
                 )
             })
@@ -461,12 +473,14 @@ impl ConversationCoordinator {
         }
         history.completed_turns.push(turn_id.clone());
         let mut next_state = history.state.clone();
-        let state_update = apply_explicit_state_updates(&mut next_state, if agent_input { "" } else { input }).and_then(|()| {
-            validate_state(
-                &next_state,
-                self.limits.context_target_tokens.saturating_mul(2),
-            )
-        });
+        let state_update =
+            apply_explicit_state_updates(&mut next_state, if agent_input { "" } else { input })
+                .and_then(|()| {
+                    validate_state(
+                        &next_state,
+                        self.limits.context_target_tokens.saturating_mul(2),
+                    )
+                });
         if let Err(error) = state_update {
             record_maintenance_error(
                 &mut history,
@@ -615,7 +629,11 @@ impl ConversationCoordinator {
         }
         delta.push_str(retrieval);
         delta.push_str(SESSION_TOOL_REMINDER);
-        if let Some(reminder) = self.tools.get().and_then(|host| host.reminder(&request.caller.room_id, &request.caller.persona_id)) {
+        if let Some(reminder) = self
+            .tools
+            .get()
+            .and_then(|host| host.reminder(&request.caller.room_id, &request.caller.persona_id))
+        {
             delta.push_str(&reminder);
         }
         delta.push_str(&format!("\nCurrent user message:\n{input}\n"));
@@ -654,7 +672,11 @@ impl ConversationCoordinator {
             .collect::<Vec<_>>()
             .join("\n");
         let identity = format!("You are participating in {room_name}.\n\nParticipants:\n{roster}\n\nYou are {}. Your room role is {}.\n", current.agent.name, current.role.as_deref().or(current.agent.role.as_deref()).unwrap_or("participant"));
-        let extra = self.tools.get().and_then(|host| host.manifest(&caller.room_id, &caller.persona_id)).unwrap_or_default();
+        let extra = self
+            .tools
+            .get()
+            .and_then(|host| host.manifest(&caller.room_id, &caller.persona_id))
+            .unwrap_or_default();
         let manifest = format!("\n{}{extra}", memory_tool_manifest(caller));
         let state = format!("\nShared room state:\n{state_json}\n");
         let summary = if history.summary.is_empty() {
@@ -812,8 +834,7 @@ impl ConversationCoordinator {
         let cap = self.limits.summary_max_tokens.saturating_mul(4);
         let mut lines = Vec::new();
         let mut collected = 0usize;
-        for event in history.events[..cut].iter().rev()
-        {
+        for event in history.events[..cut].iter().rev() {
             let line = format!("{}: {}", event.speaker, event.content);
             collected += line.len() + 1;
             lines.push(line);

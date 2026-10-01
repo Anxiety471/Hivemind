@@ -258,11 +258,18 @@ impl RuntimePool {
         let prompt_timeout = (inner.runtime.prompt_timeout_secs > 0)
             .then(|| Duration::from_secs(inner.runtime.prompt_timeout_secs));
         if request.phase == PromptPhase::TurnStart
-            && slot.live.as_ref().is_some_and(|live| live.workspace != request.agent.workspace)
+            && slot
+                .live
+                .as_ref()
+                .is_some_and(|live| live.workspace != request.agent.workspace)
         {
             let live = slot.live.take().expect("checked above");
             inner
-                .stop(request.agent_instance_id, live, Stop::Rotated("workspace_changed"))
+                .stop(
+                    request.agent_instance_id,
+                    live,
+                    Stop::Rotated("workspace_changed"),
+                )
                 .await;
             matching = false;
         }
@@ -405,9 +412,12 @@ impl RuntimePool {
         };
         let mut slot = slot_handle.lock().await;
         if let Some(live) = slot.live.take() {
-            self.inner.stop(agent_instance_id, live, Stop::Rotated(reason)).await;
+            self.inner
+                .stop(agent_instance_id, live, Stop::Rotated(reason))
+                .await;
         }
-        self.inner.remove_vacant_slot(agent_instance_id, &slot_handle, &slot);
+        self.inner
+            .remove_vacant_slot(agent_instance_id, &slot_handle, &slot);
     }
     #[cfg(test)]
     pub(crate) fn slot_count(&self) -> usize {
@@ -836,9 +846,19 @@ mod tests {
         let memory = Arc::new(MemoryService::new(MemoryStore::in_memory().unwrap()));
         let instance = AgentInstanceId::new("ws-room", "Persona");
         let caller = Caller::agent("ws-room", "", instance.clone(), "Persona", "Persona");
-        let epoch = memory.start_runtime_epoch(&caller, "fake", serde_json::json!({})).unwrap();
+        let epoch = memory
+            .start_runtime_epoch(&caller, "fake", serde_json::json!({}))
+            .unwrap();
         let epoch_id = epoch.id.clone();
-        let pool = RuntimePool::new(RuntimeConfig { idle_timeout_secs: 0, ..RuntimeConfig::default() }, 10_000, memory, EventBus::new());
+        let pool = RuntimePool::new(
+            RuntimeConfig {
+                idle_timeout_secs: 0,
+                ..RuntimeConfig::default()
+            },
+            10_000,
+            memory,
+            EventBus::new(),
+        );
         let shutdowns = Arc::new(AtomicUsize::new(0));
         pool.inner.slots.lock().insert(
             instance.clone(),
@@ -871,7 +891,11 @@ mod tests {
             roles: Vec::new(),
             tool_access: None,
         };
-        let view = TurnView { turn_id: "turn".into(), speakers: vec![], state_json: "{}".into() };
+        let view = TurnView {
+            turn_id: "turn".into(),
+            speakers: vec![],
+            state_json: "{}".into(),
+        };
         // The unsupported runtime makes the restart fail, proving a new session was attempted.
         let error = pool
             .invoke(
@@ -881,14 +905,21 @@ mod tests {
                     agent: &agent,
                     phase: PromptPhase::TurnStart,
                     full: "full",
-                    delta: Some(PromptDelta { epoch_id: &epoch_id, text: "delta" }),
+                    delta: Some(PromptDelta {
+                        epoch_id: &epoch_id,
+                        text: "delta",
+                    }),
                     view: &view,
                 },
             )
             .await
             .unwrap_err();
         assert!(!error.to_string().contains("shutting down"));
-        assert_eq!(shutdowns.load(Ordering::SeqCst), 1, "the session in the old workspace was stopped");
+        assert_eq!(
+            shutdowns.load(Ordering::SeqCst),
+            1,
+            "the session in the old workspace was stopped"
+        );
         let mut reasons = Vec::new();
         while let Ok(event) = events.try_recv() {
             if let DomainEventKind::RuntimeStopped { reason, .. } = &event.payload {
@@ -1043,10 +1074,10 @@ mod tests {
                 reasoning: None,
                 fast: None,
                 role: None,
-            capabilities: Vec::new(),
-            permissions: Vec::new(),
-            roles: Vec::new(),
-            tool_access: None,
+                capabilities: Vec::new(),
+                permissions: Vec::new(),
+                roles: Vec::new(),
+                tool_access: None,
             };
             let view = TurnView {
                 turn_id: "turn".into(),
