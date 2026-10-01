@@ -1,8 +1,9 @@
 import { createRoot } from "react-dom/client";
 import { lazy, Suspense, useEffect, useState } from "react";
-import { api } from "./api";
+import { api, hasSavedSettings } from "./api";
 import { connect, useLiveStatus } from "./live";
 import { Chat } from "./views/Chat";
+import { FirstRunSetup } from "./views/FirstRunSetup";
 const Tasks = lazy(() => import("./views/Tasks").then((m) => ({ default: m.Tasks })));
 const Agents = lazy(() => import("./views/Agents").then((m) => ({ default: m.Agents })));
 const Groups = lazy(() => import("./views/Groups").then((m) => ({ default: m.Groups })));
@@ -27,12 +28,35 @@ const NAV = [
   { page: "workspaces", label: "Workspaces", icon: "📁" },
   { page: "sessions", label: "Runtime sessions", icon: "♻️" },
   { page: "activity", label: "Live activity", icon: "📡" },
+  { page: "setup", label: "Setup guide", icon: "✨" },
 ];
+
+const FIRST_RUN_KEY = "hivemind.first_run_complete";
+
+function shouldShowFirstRun() {
+  try {
+    return localStorage.getItem(FIRST_RUN_KEY) !== "true" && !hasSavedSettings();
+  } catch {
+    return true;
+  }
+}
 
 function App() {
   const [route, setRoute] = useState(parse);
   const live = useLiveStatus();
   const [version, setVersion] = useState<string | null>(null);
+  const [firstRun, setFirstRun] = useState(shouldShowFirstRun);
+
+  const leaveSetup = () => {
+    try {
+      localStorage.setItem(FIRST_RUN_KEY, "true");
+    } catch {
+      // Setup still works when browser storage is unavailable.
+    }
+    setFirstRun(false);
+    if (location.hash !== "#/rooms") location.hash = "#/rooms";
+    else setRoute({ page: "rooms" });
+  };
 
   useEffect(() => {
     const onHash = () => setRoute(parse());
@@ -45,6 +69,8 @@ function App() {
       .then((i) => setVersion(i.version))
       .catch(() => setVersion(null));
   }, [live]);
+
+  if (firstRun) return <FirstRunSetup onComplete={leaveSetup} onSkip={leaveSetup} />;
 
   let view;
   switch (route.page) {
@@ -68,6 +94,9 @@ function App() {
       break;
     case "settings":
       view = <SettingsView />;
+      break;
+    case "setup":
+      view = <FirstRunSetup onComplete={leaveSetup} onSkip={leaveSetup} />;
       break;
     default:
       view = <Chat roomId={route.arg} />;

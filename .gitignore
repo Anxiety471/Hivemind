@@ -4,3 +4,5 @@ hivemind.toml
 .hivemind/
 .omp
 scripts/__pycache__
+frontend/playwright-report/
+frontend/test-results/

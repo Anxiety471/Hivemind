@@ -331,7 +331,7 @@ async fn context_metrics(State(state): State<ApiState>, Path(id): Path<String>) 
 
 async fn agent(State(state): State<ApiState>, Path(id): Path<String>) -> Response {
     let service = state.core.coordination();
-    let Some(persona) = service.roster().get(&id) else {
+    let Some(persona) = state.core.agents().get(&id) else {
         return ApiError::new(StatusCode::NOT_FOUND, "not_found", "persona was not found")
             .into_response();
     };
@@ -339,7 +339,19 @@ async fn agent(State(state): State<ApiState>, Path(id): Path<String>) -> Respons
         .activity()
         .ok()
         .and_then(|all| all.into_iter().find(|a| a.persona == id));
-    Json(json!({"id": persona.name, "capabilities": persona.capabilities, "permissions": persona.permissions, "activity": activity})).into_response()
+    let permissions = state
+        .core
+        .access()
+        .grants(&id)
+        .map(|grants| grants.permissions)
+        .unwrap_or_default();
+    Json(json!({
+        "id": persona.name,
+        "capabilities": persona.capabilities,
+        "permissions": permissions,
+        "activity": activity
+    }))
+    .into_response()
 }
 
 async fn access_personas(State(state): State<ApiState>) -> Response {

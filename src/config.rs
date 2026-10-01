@@ -364,7 +364,7 @@ impl HivemindConfig {
         Ok(())
     }
 
-    fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         if self.memory.mode != "deterministic" {
             bail!(
                 "memory.mode must be \"deterministic\" (the only supported mode); got {:?}",

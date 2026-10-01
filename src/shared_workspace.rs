@@ -71,6 +71,18 @@ impl SharedWorkspaces {
         self.state.write().expect("workspace lock poisoned").groups = next;
     }
 
+    /// Replace the persona workspace map after the first-run setup is saved.
+    pub fn replace_personas(&self, personas: &[crate::config::AgentConfig]) {
+        let next = personas
+            .iter()
+            .map(|persona| (persona.name.clone(), persona.workspace.clone()))
+            .collect();
+        self.state
+            .write()
+            .expect("workspace lock poisoned")
+            .personas = next;
+    }
+
     /// Directories agents and the API may choose from; empty means any existing directory.
     pub fn roots(&self) -> &[String] {
         &self.roots

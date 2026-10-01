@@ -172,6 +172,16 @@ export type RuntimeSession = {
 export type AccessPersona = { id: string; permissions: string[]; roles: string[]; restricted: boolean };
 
 export type Settings = { baseUrl: string; token: string };
+export type SetupPersona = {
+  id: string;
+  role: string;
+  runtime: "pi" | "omp" | "opencode";
+  workspace: string;
+  model?: string;
+  reasoning?: string;
+  fast?: boolean;
+  system_prompt: string;
+};
 
 const SETTINGS_KEY = "hivemind.settings";
 
@@ -188,6 +198,14 @@ export function loadSettings(): Settings {
     // Storage can be unavailable; fall back to defaults.
   }
   return { baseUrl: defaultBase(), token: "" };
+}
+
+export function hasSavedSettings(): boolean {
+  try {
+    return localStorage.getItem(SETTINGS_KEY) !== null;
+  } catch {
+    return false;
+  }
 }
 
 export function saveSettings(settings: Settings) {
@@ -210,9 +228,9 @@ export function currentSettings() {
   return settings;
 }
 
-export function applySettings(next: Settings) {
+export function applySettings(next: Settings, persist = true) {
   settings = { ...next, baseUrl: next.baseUrl.replace(/\/+$/, "") };
-  saveSettings(settings);
+  if (persist) saveSettings(settings);
 }
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -242,6 +260,9 @@ const enc = encodeURIComponent;
 
 export const api = {
   info: () => request<{ name: string; version: string; api_version: string }>("GET", "/info"),
+  setupStatus: () => request<{ setup_required: boolean }>("GET", "/setup"),
+  completeSetup: (personas: SetupPersona[]) =>
+    request<{ saved: boolean; setup_required: boolean; persona_count: number }>("POST", "/setup", { personas }),
   agents: () => request<{ agents: { name: string; runtime: string }[] }>("GET", "/agents"),
   agent: (id: string) => request<Record<string, unknown>>("GET", `/agents/${enc(id)}`),
   instances: () =>

@@ -34,7 +34,13 @@ async fn run(cli: Cli) -> Result<()> {
         Some(Commands::Update { check }) => super::update::update(check),
         Some(Commands::Serve { port }) => {
             super::update::spawn_update_notice();
-            let config = HivemindConfig::load(&cli.config)?;
+            // Let the browser create the initial config on first launch. Other commands
+            // still require an existing config, and serve never overwrites one.
+            let config = if cli.config.exists() {
+                HivemindConfig::load(&cli.config)?
+            } else {
+                HivemindConfig::default()
+            };
             let core = Arc::new(HivemindCore::new(config, &cli.config)?);
             let result = api::serve(core.clone(), port).await;
             core.shutdown().await;
