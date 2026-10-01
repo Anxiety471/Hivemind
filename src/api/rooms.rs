@@ -183,7 +183,11 @@ async fn messages(
                 .first()
                 .filter(|m| m.speaker != "user")
                 .and_then(|first| {
-                    let turn = state.core.memory().archive_turn(&caller(), &id, &first.turn_id).ok()??;
+                    let turn = state
+                        .core
+                        .memory()
+                        .archive_turn(&caller(), &id, &first.turn_id)
+                        .ok()??;
                     let at = turn.messages.iter().position(|m| m.id == first.id)?;
                     Some(turn.messages[..at].to_vec())
                 })

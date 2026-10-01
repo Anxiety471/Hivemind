@@ -678,7 +678,10 @@ mod tests {
                     started_at: 100,
                     completed_at: Some(103),
                     metadata: json!({}),
-                    participants: vec![ArchiveParticipant { participant_id: "user".into(), role: None }],
+                    participants: vec![ArchiveParticipant {
+                        participant_id: "user".into(),
+                        role: None,
+                    }],
                     messages,
                 },
             )
