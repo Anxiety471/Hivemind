@@ -158,7 +158,8 @@ fn verify_checksum(archive: &Path, checksum: &Path) -> Result<()> {
         bail!("failed to calculate the release checksum");
     }
 
-    let actual_text = String::from_utf8(output.stdout).context("sha256sum returned invalid output")?;
+    let actual_text =
+        String::from_utf8(output.stdout).context("sha256sum returned invalid output")?;
     let actual = actual_text
         .split_whitespace()
         .next()
