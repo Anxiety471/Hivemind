@@ -72,7 +72,7 @@ fn bad_json() -> Response {
     .into_response()
 }
 
-fn query(raw: Option<String>) -> HashMap<String, String> {
+pub(super) fn query(raw: Option<String>) -> HashMap<String, String> {
     fn decode(text: &str) -> String {
         let bytes = text.as_bytes();
         let mut out = Vec::with_capacity(bytes.len());
@@ -100,7 +100,11 @@ fn query(raw: Option<String>) -> HashMap<String, String> {
         .collect()
 }
 
-fn number(params: &HashMap<String, String>, key: &str, default: i64) -> Result<i64, ApiError> {
+pub(super) fn number(
+    params: &HashMap<String, String>,
+    key: &str,
+    default: i64,
+) -> Result<i64, ApiError> {
     match params.get(key) {
         None => Ok(default),
         Some(v) => v.parse().map_err(|_| {

@@ -25,11 +25,16 @@ pub(super) fn router(core: Arc<HivemindCore>, shutdown: watch::Receiver<bool>) -
         .route("/api/v1/health", get(health))
         .route("/api/v1/info", get(info))
         .merge(super::tasks::routes())
+        .merge(super::rooms::routes())
+        .merge(super::chat_groups::routes())
+        .merge(super::workspaces::routes())
+        .merge(super::runtime::routes())
         .route("/api/v1/agents", get(agents))
         .route("/api/v1/turns", post(submit_turn))
         .route("/api/v1/ws", get(ws))
         .fallback(not_found)
         .method_not_allowed_fallback(method_not_allowed)
+        .layer(axum::middleware::from_fn(super::cors::layer))
         .with_state(state)
 }
 
@@ -37,6 +42,13 @@ pub(super) fn router(core: Arc<HivemindCore>, shutdown: watch::Receiver<bool>) -
 struct TurnRequestBody {
     target: TurnTargetBody,
     message: String,
+    /// `false` returns 202 immediately; progress and replies arrive over the WebSocket.
+    #[serde(default = "wait_default")]
+    wait: bool,
+}
+
+fn wait_default() -> bool {
+    true
 }
 
 #[derive(Deserialize)]
@@ -45,6 +57,7 @@ enum TurnTargetBody {
     Main,
     Solo { id: String },
     Group { id: String },
+    Thread { id: String },
 }
 
 #[derive(Serialize)]
@@ -80,6 +93,7 @@ async fn submit_turn(
         TurnTargetBody::Main => ConversationTarget::Main,
         TurnTargetBody::Solo { id } => ConversationTarget::Solo { persona_id: id },
         TurnTargetBody::Group { id } => ConversationTarget::Group { group_id: id },
+        TurnTargetBody::Thread { id } => ConversationTarget::Thread { thread_id: id },
     };
     if request.message.trim().is_empty() {
         return ApiError::new(
@@ -88,6 +102,47 @@ async fn submit_turn(
             "message must not be empty",
         )
         .into_response();
+    }
+    if !request.wait {
+        let resolved = match state.core.resolve_target(&target) {
+            Ok(resolved) => resolved,
+            Err(TargetResolutionError::Invalid(_)) => {
+                return ApiError::new(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_target",
+                    "target is invalid",
+                )
+                .into_response()
+            }
+            Err(TargetResolutionError::NotFound(_)) => {
+                return ApiError::new(
+                    StatusCode::NOT_FOUND,
+                    "target_not_found",
+                    "target was not found",
+                )
+                .into_response()
+            }
+        };
+        if state.core.is_shutting_down() {
+            return ApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "core_shutting_down",
+                "core is shutting down",
+            )
+            .into_response();
+        }
+        let room_id = resolved.room_id.clone();
+        let core = state.core.clone();
+        let message = request.message;
+        tokio::spawn(async move {
+            // Outcome is delivered through conversation.* WebSocket events and room history.
+            let _ = core.send_turn(&target, &message).await;
+        });
+        return (
+            StatusCode::ACCEPTED,
+            Json(serde_json::json!({"room_id": room_id, "accepted": true})),
+        )
+            .into_response();
     }
     let outcome = match state.core.send_turn(&target, &request.message).await {
         Ok(outcome) => outcome,
@@ -398,6 +453,412 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(body["error"]["code"], "empty_message");
+    }
+
+    #[tokio::test]
+    async fn rooms_expose_listing_detail_and_paged_history() {
+        use crate::memory::{ArchiveParticipant, ArchivedMessage, ArchivedTurn, Caller};
+        let test_core = TestCore::new();
+        let app = router(test_core.core.clone(), watch::channel(false).1);
+        let (status, _, body) = request(app.clone(), "GET", "/api/v1/rooms").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["rooms"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["id"] == "main" && r["kind"] == "main"));
+        let (status, _, body) = request(app.clone(), "GET", "/api/v1/rooms/nope").await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body["error"]["code"], "not_found");
+
+        let messages = (0..5)
+            .map(|i| ArchivedMessage {
+                id: format!("m{i}"),
+                room_id: "main".into(),
+                turn_id: "t1".into(),
+                speaker: "user".into(),
+                content: format!("hello {i}"),
+                created_at: 100 + i,
+            })
+            .collect();
+        test_core
+            .core
+            .memory()
+            .append_archive_turn(
+                &Caller::trusted_user("test"),
+                ArchivedTurn {
+                    id: "t1".into(),
+                    room_id: "main".into(),
+                    started_at: 100,
+                    completed_at: Some(105),
+                    metadata: json!({}),
+                    participants: vec![ArchiveParticipant {
+                        participant_id: "user".into(),
+                        role: None,
+                    }],
+                    messages,
+                },
+            )
+            .unwrap();
+        let (_, _, body) = request(app.clone(), "GET", "/api/v1/rooms/main").await;
+        assert_eq!(body["room"]["message_count"], 5);
+        let (_, _, page) = request(app.clone(), "GET", "/api/v1/rooms/main/messages?limit=2").await;
+        let ids: Vec<_> = page["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["id"].clone())
+            .collect();
+        assert_eq!(ids, vec![json!("m3"), json!("m4")]);
+        assert_eq!(page["next_before"], "m3");
+        let (_, _, older) =
+            request(app, "GET", "/api/v1/rooms/main/messages?limit=2&before=m3").await;
+        let ids: Vec<_> = older["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["id"].clone())
+            .collect();
+        assert_eq!(ids, vec![json!("m1"), json!("m2")]);
+    }
+
+    #[tokio::test]
+    async fn threads_anchor_to_a_message_and_accept_turns_in_their_own_room() {
+        use crate::memory::{ArchiveParticipant, ArchivedMessage, ArchivedTurn, Caller};
+        let test_core = TestCore::new();
+        let app = router(test_core.core.clone(), watch::channel(false).1);
+        let mut events = test_core.core.events().subscribe();
+        test_core
+            .core
+            .memory()
+            .append_archive_turn(
+                &Caller::trusted_user("test"),
+                ArchivedTurn {
+                    id: "t1".into(),
+                    room_id: "main".into(),
+                    started_at: 1,
+                    completed_at: Some(2),
+                    metadata: json!({}),
+                    participants: vec![ArchiveParticipant {
+                        participant_id: "user".into(),
+                        role: None,
+                    }],
+                    messages: vec![ArchivedMessage {
+                        id: "m1".into(),
+                        room_id: "main".into(),
+                        turn_id: "t1".into(),
+                        speaker: "user".into(),
+                        content: "anchor".into(),
+                        created_at: 1,
+                    }],
+                },
+            )
+            .unwrap();
+        let (status, created) = request_json(
+            app.clone(),
+            "POST",
+            "/api/v1/rooms/main/threads",
+            json!({"anchor_message_id":"m1","name":"Side"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        let thread_id = created["thread"]["id"].as_str().unwrap().to_owned();
+        assert_eq!(created["thread"]["parent_room_id"], "main");
+        let event = events.recv().await.unwrap();
+        assert!(
+            matches!(&event.payload, crate::events::DomainEventKind::ThreadCreated { thread_id: id, .. } if *id == thread_id)
+        );
+
+        let (status, again) = request_json(
+            app.clone(),
+            "POST",
+            "/api/v1/rooms/main/threads",
+            json!({"anchor_message_id":"m1"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(again["thread"]["id"], thread_id.as_str());
+        let (status, body) = request_json(
+            app.clone(),
+            "POST",
+            "/api/v1/rooms/main/threads",
+            json!({"anchor_message_id":"nope"}),
+        )
+        .await;
+        assert_eq!(
+            (status, body["error"]["code"].as_str()),
+            (StatusCode::NOT_FOUND, Some("anchor_not_found"))
+        );
+        let (status, _) = request_json(
+            app.clone(),
+            "POST",
+            "/api/v1/rooms/ghost/threads",
+            json!({"anchor_message_id":"m1"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let (status, _) = request_json(
+            app.clone(),
+            "POST",
+            &format!("/api/v1/rooms/{thread_id}/threads"),
+            json!({"anchor_message_id":"m1"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        let (_, _, list) = request(app.clone(), "GET", "/api/v1/rooms/main/threads").await;
+        assert_eq!(list["threads"][0]["anchor_message_id"], "m1");
+        let (_, _, rooms) = request(app.clone(), "GET", "/api/v1/rooms").await;
+        assert!(!rooms["rooms"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["id"] == thread_id.as_str()));
+        let (_, _, room) = request(app.clone(), "GET", &format!("/api/v1/rooms/{thread_id}")).await;
+        assert_eq!(room["room"]["kind"], "thread");
+        assert_eq!(room["room"]["parent_room_id"], "main");
+        assert!(!room["room"]["participants"].as_array().unwrap().is_empty());
+
+        let (status, body) = request_json(
+            app.clone(),
+            "POST",
+            "/api/v1/turns",
+            json!({"target":{"type":"thread","id":thread_id},"message":"hi","wait":false}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        assert_eq!(body["room_id"], thread_id.as_str());
+        let (status, body) = request_json(
+            app,
+            "POST",
+            "/api/v1/turns",
+            json!({"target":{"type":"thread","id":"missing"},"message":"hi"}),
+        )
+        .await;
+        assert_eq!(
+            (status, body["error"]["code"].as_str()),
+            (StatusCode::NOT_FOUND, Some("target_not_found"))
+        );
+    }
+
+    #[tokio::test]
+    async fn chat_groups_can_be_created_edited_and_deleted_over_http() {
+        let test_core = TestCore::new();
+        let path = test_core.directory.join("hivemind.toml");
+        std::fs::write(
+            &path,
+            toml::to_string(&HivemindConfig::default_poc()).unwrap(),
+        )
+        .unwrap();
+        let app = router(test_core.core.clone(), watch::channel(false).1);
+
+        let (status, body) = request_json(
+            app.clone(),
+            "POST",
+            "/api/v1/chat-groups",
+            json!({"id":"dev","members":["Engineer"]}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(body["group"]["room_id"], "group-dev");
+        let (status, body) = request_json(
+            app.clone(),
+            "POST",
+            "/api/v1/chat-groups",
+            json!({"id":"dev"}),
+        )
+        .await;
+        assert_eq!(
+            (status, body["error"]["code"].as_str()),
+            (StatusCode::CONFLICT, Some("invalid_request"))
+        );
+        let (status, _) = request_json(
+            app.clone(),
+            "POST",
+            "/api/v1/chat-groups",
+            json!({"id":"x","members":["Ghost"]}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        let (status, body) = request_json(
+            app.clone(),
+            "PATCH",
+            "/api/v1/chat-groups/dev",
+            json!({"members":["Engineer","Reviewer"],"mode":"discussion","member_roles":{"Reviewer":"critic"},"reply_order":["Reviewer","Engineer"]}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["group"]["mode"], "discussion");
+        assert_eq!(
+            body["group"]["reply_order"],
+            json!(["Reviewer", "Engineer"])
+        );
+        let (status, _) = request_json(
+            app.clone(),
+            "PATCH",
+            "/api/v1/chat-groups/dev",
+            json!({"reply_order":["Nobody"]}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = request_json(
+            app.clone(),
+            "PATCH",
+            "/api/v1/chat-groups/none",
+            json!({"mode":"broadcast"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        // Persisted to the config file and visible as a room.
+        assert!(HivemindConfig::load(&path)
+            .unwrap()
+            .groups
+            .iter()
+            .any(|g| g.name == "dev" && g.members.len() == 2));
+        let (_, _, rooms) = request(app.clone(), "GET", "/api/v1/rooms").await;
+        assert!(rooms["rooms"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["id"] == "group-dev"));
+        let (_, _, one) = request(app.clone(), "GET", "/api/v1/chat-groups/dev").await;
+        assert_eq!(one["group"]["members"], json!(["Engineer", "Reviewer"]));
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/api/v1/chat-groups/dev")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        let (_, _, list) = request(app, "GET", "/api/v1/chat-groups").await;
+        assert!(list["groups"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn workspaces_and_roles_are_readable_and_workspaces_changeable() {
+        let test_core = TestCore::new();
+        let path = test_core.directory.join("hivemind.toml");
+        std::fs::write(
+            &path,
+            toml::to_string(&HivemindConfig::default_poc()).unwrap(),
+        )
+        .unwrap();
+        let app = router(test_core.core.clone(), watch::channel(false).1);
+        let dir = test_core.directory.join("project");
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir_text = dir.canonicalize().unwrap().to_string_lossy().into_owned();
+
+        let (_, _, body) = request(app.clone(), "GET", "/api/v1/workspaces").await;
+        assert_eq!(body["personas"].as_array().unwrap().len(), 2);
+        assert!(body["roots"].as_array().unwrap().is_empty());
+        let (_, _, roles) = request(app.clone(), "GET", "/api/v1/access/roles").await;
+        assert!(roles["builtin"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["name"] == "worker"));
+
+        let (status, _) = request_json(
+            app.clone(),
+            "POST",
+            "/api/v1/chat-groups",
+            json!({"id":"dev","members":["Engineer"]}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        let (status, body) = request_json(
+            app.clone(),
+            "PUT",
+            "/api/v1/workspaces/groups/dev",
+            json!({"path": dir_text}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["groups"][0]["workspace"], dir_text.as_str());
+        let (_, _, group) = request(app.clone(), "GET", "/api/v1/chat-groups/dev").await;
+        assert_eq!(group["group"]["workspace"], dir_text.as_str());
+        let (status, _) = request_json(
+            app.clone(),
+            "PUT",
+            "/api/v1/workspaces/personas/Engineer",
+            json!({"path": dir_text}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, body) = request_json(
+            app.clone(),
+            "PUT",
+            "/api/v1/workspaces/personas/Engineer",
+            json!({"path": "relative"}),
+        )
+        .await;
+        assert_eq!(
+            (status, body["error"]["code"].as_str()),
+            (StatusCode::BAD_REQUEST, Some("invalid_request"))
+        );
+        let (status, _) = request_json(
+            app.clone(),
+            "PUT",
+            "/api/v1/workspaces/personas/Ghost",
+            json!({"path": dir_text}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let (status, _) = request_json(
+            app.clone(),
+            "PUT",
+            "/api/v1/workspaces/groups/dev",
+            json!({"nope": 1}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/api/v1/workspaces/groups/dev")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let (_, _, group) = request(app, "GET", "/api/v1/chat-groups/dev").await;
+        assert!(group["group"]["workspace"].is_null());
+    }
+
+    #[tokio::test]
+    async fn non_blocking_turn_returns_accepted_and_still_validates_target() {
+        let test_core = TestCore::new();
+        let app = router(test_core.core.clone(), watch::channel(false).1);
+        let (status, body) = request_json(
+            app.clone(),
+            "POST",
+            "/api/v1/turns",
+            json!({"target":{"type":"group","id":"missing"},"message":"hi","wait":false}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body["error"]["code"], "target_not_found");
+        let (status, body) = request_json(
+            app,
+            "POST",
+            "/api/v1/turns",
+            json!({"target":{"type":"main"},"message":"hi","wait":false}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        assert_eq!(body["room_id"], "main");
     }
 
     #[tokio::test]
@@ -867,6 +1328,131 @@ done
 
         let _ = shutdown.send(true);
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn websocket_room_subscription_filters_room_scoped_events() {
+        let (address, shutdown, server, test_core) = websocket_server().await;
+        let (mut socket, _) = connect_async(&format!("ws://{address}/api/v1/ws"))
+            .await
+            .unwrap();
+        assert_eq!(receive_json(&mut socket).await["type"], "system.ready");
+        socket
+            .send(Message::Text(
+                json!({"type":"events.subscribe","id":"s1","payload":{"room_ids":["a"]}})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+        let ack = receive_json(&mut socket).await;
+        assert_eq!(
+            (ack["type"].as_str(), ack["id"].as_str()),
+            (Some("events.subscribed"), Some("s1"))
+        );
+        for room in ["b", "a"] {
+            test_core
+                .core
+                .events()
+                .publish(crate::events::DomainEventKind::TurnStarted {
+                    room_id: room.into(),
+                    turn_id: format!("turn-{room}"),
+                });
+        }
+        let event = receive_json(&mut socket).await;
+        assert_eq!(event["type"], "conversation.turn.started");
+        assert_eq!(event["payload"]["room_id"], "a");
+        socket
+            .send(Message::Text(
+                json!({"type":"events.subscribe","payload":{"room_ids":"bad"}})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            receive_json(&mut socket).await["payload"]["code"],
+            "invalid_subscription"
+        );
+        let _ = shutdown.send(true);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn cors_allows_only_loopback_origins_and_answers_preflight() {
+        let test_core = TestCore::new();
+        let app = router(test_core.core.clone(), watch::channel(false).1);
+        let call = |method: &'static str, origin: &'static str| {
+            let app = app.clone();
+            async move {
+                app.oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri("/api/v1/rooms")
+                        .header("origin", origin)
+                        .header("access-control-request-method", "POST")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+            }
+        };
+        let preflight = call("OPTIONS", "http://localhost:5173").await;
+        assert_eq!(preflight.status(), StatusCode::NO_CONTENT);
+        assert_eq!(
+            preflight.headers()["access-control-allow-origin"],
+            "http://localhost:5173"
+        );
+        assert!(preflight.headers()["access-control-allow-methods"]
+            .to_str()
+            .unwrap()
+            .contains("PATCH"));
+        let normal = call("GET", "http://127.0.0.1:3000").await;
+        assert_eq!(
+            normal.headers()["access-control-allow-origin"],
+            "http://127.0.0.1:3000"
+        );
+        let foreign = call("GET", "https://evil.example").await;
+        assert!(foreign
+            .headers()
+            .get("access-control-allow-origin")
+            .is_none());
+        let tricky = call("GET", "http://localhost.evil.example").await;
+        assert!(tricky
+            .headers()
+            .get("access-control-allow-origin")
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn runtime_sessions_list_and_rotate_validate_input() {
+        let test_core = TestCore::new();
+        let app = router(test_core.core.clone(), watch::channel(false).1);
+        let (status, _, body) =
+            request(app.clone(), "GET", "/api/v1/rooms/main/runtime-sessions").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["sessions"].as_array().unwrap().is_empty());
+        let id = AgentInstanceId::new("main", "Engineer").encode();
+        let (status, body) = request_json(
+            app.clone(),
+            "POST",
+            "/api/v1/runtime/rotate",
+            json!({"agent_instance_id": id}),
+        )
+        .await;
+        assert_eq!(
+            (status, body["accepted"].as_bool()),
+            (StatusCode::ACCEPTED, Some(true))
+        );
+        let (status, _) = request_json(
+            app,
+            "POST",
+            "/api/v1/runtime/rotate",
+            json!({"agent_instance_id":"junk"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]

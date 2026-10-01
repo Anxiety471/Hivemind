@@ -46,6 +46,11 @@ impl DomainEvent {
 pub enum DomainEventKind {
     CoreStarted,
     CoreShuttingDown,
+    ThreadCreated {
+        thread_id: String,
+        parent_room_id: String,
+        anchor_message_id: String,
+    },
     TurnStarted {
         turn_id: String,
         room_id: String,

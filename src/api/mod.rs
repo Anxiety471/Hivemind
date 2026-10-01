@@ -1,8 +1,13 @@
+mod chat_groups;
+mod cors;
 mod error;
 mod protocol;
+mod rooms;
 mod routes;
+mod runtime;
 mod tasks;
 mod websocket;
+mod workspaces;
 
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},

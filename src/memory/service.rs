@@ -545,6 +545,110 @@ impl MemoryService {
             Ok(out)
         })
     }
+    /// One page of a room's archived messages, oldest first. `before` is a message id; the page
+    /// holds the `limit` messages immediately older than it (or the newest when `None`).
+    pub fn room_messages_page(
+        &self,
+        caller: &Caller,
+        room_id: &str,
+        before: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<ArchivedMessage>> {
+        if !caller.trusted && room_id != caller.room_id {
+            bail!("cannot read another room archive");
+        }
+        let limit = limit.clamp(1, 200) as i64;
+        self.store.read(|c| {
+            let mut out = match before {
+                Some(id) => c
+                    .prepare_cached("SELECT id,room_id,turn_id,speaker,content,created_at FROM archive_messages WHERE room_id=?1 AND (created_at,id) < (SELECT created_at,id FROM archive_messages WHERE id=?2 AND room_id=?1) ORDER BY created_at DESC,id DESC LIMIT ?3")?
+                    .query_map(rusqlite::params![room_id, id, limit], message_from_row)?
+                    .collect::<rusqlite::Result<Vec<_>>>()?,
+                None => c
+                    .prepare_cached("SELECT id,room_id,turn_id,speaker,content,created_at FROM archive_messages WHERE room_id=?1 ORDER BY created_at DESC,id DESC LIMIT ?2")?
+                    .query_map(rusqlite::params![room_id, limit], message_from_row)?
+                    .collect::<rusqlite::Result<Vec<_>>>()?,
+            };
+            out.reverse();
+            Ok(out)
+        })
+    }
+    /// Every room with archived activity: `(id, name, updated_at, message_count)`, newest first.
+    pub fn room_summaries(&self, caller: &Caller) -> Result<Vec<(String, String, i64, i64)>> {
+        if !caller.trusted {
+            bail!("cannot list rooms");
+        }
+        self.store.read(|c| {
+            let rows = c
+                .prepare_cached("SELECT r.id,r.name,r.updated_at,(SELECT COUNT(*) FROM archive_messages m WHERE m.room_id=r.id) FROM rooms r WHERE r.parent_room_id IS NULL ORDER BY r.updated_at DESC,r.id")?
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+    }
+    /// Create a thread under `parent_room_id` anchored at `anchor_message_id`, or return the
+    /// existing one for that anchor. Threads cannot be nested. Returns `(thread, created)`.
+    pub fn create_thread(
+        &self,
+        caller: &Caller,
+        parent_room_id: &str,
+        anchor_message_id: &str,
+        name: &str,
+    ) -> Result<(ThreadRecord, bool)> {
+        if !caller.trusted {
+            bail!("cannot create threads");
+        }
+        self.store.tx(|c| {
+            if let Some(existing) = thread_where(c, "r.parent_room_id=?1 AND r.anchor_message_id=?2", &[parent_room_id, anchor_message_id])? {
+                return Ok((existing, false));
+            }
+            if thread_where(c, "r.id=?1 AND r.parent_room_id IS NOT NULL", &[parent_room_id])?.is_some() {
+                bail!("threads cannot be nested");
+            }
+            let anchored: Option<i64> = c
+                .query_row(
+                    "SELECT 1 FROM archive_messages WHERE id=?1 AND room_id=?2",
+                    params![anchor_message_id, parent_room_id],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            if anchored.is_none() {
+                bail!("anchor message not found in room");
+            }
+            let id = new_id().replacen("memory-", "thread-", 1);
+            let updated_at = now();
+            c.execute(
+                "INSERT INTO rooms(id,name,updated_at,parent_room_id,anchor_message_id) VALUES(?1,?2,?3,?4,?5)",
+                params![id, name, updated_at, parent_room_id, anchor_message_id],
+            )?;
+            Ok((
+                ThreadRecord {
+                    id,
+                    parent_room_id: parent_room_id.into(),
+                    anchor_message_id: anchor_message_id.into(),
+                    name: name.into(),
+                    updated_at,
+                    message_count: 0,
+                },
+                true,
+            ))
+        })
+    }
+    pub fn thread(&self, caller: &Caller, room_id: &str) -> Result<Option<ThreadRecord>> {
+        if !caller.trusted {
+            bail!("cannot read threads");
+        }
+        self.store
+            .read(|c| thread_where(c, "r.id=?1 AND r.parent_room_id IS NOT NULL", &[room_id]))
+    }
+    /// Threads of one room, newest activity first.
+    pub fn threads(&self, caller: &Caller, parent_room_id: &str) -> Result<Vec<ThreadRecord>> {
+        if !caller.trusted {
+            bail!("cannot read threads");
+        }
+        self.store
+            .read(|c| threads_where(c, "r.parent_room_id=?1", &[parent_room_id]))
+    }
     /// Apply incremental turn writes in one transaction.
     pub fn append_turns(&self, caller: &Caller, appends: Vec<TurnAppend>) -> Result<()> {
         for append in &appends {
@@ -579,4 +683,36 @@ impl MemoryService {
         }
         self.store.room_archive(room_id)
     }
+}
+
+const THREAD_COLUMNS: &str = "SELECT r.id,r.parent_room_id,r.anchor_message_id,r.name,r.updated_at,(SELECT COUNT(*) FROM archive_messages m WHERE m.room_id=r.id) FROM rooms r WHERE ";
+
+fn threads_where(
+    c: &rusqlite::Connection,
+    filter: &str,
+    args: &[&str],
+) -> Result<Vec<ThreadRecord>> {
+    let sql = format!("{THREAD_COLUMNS}{} ORDER BY r.updated_at DESC,r.id", filter);
+    let rows = c
+        .prepare_cached(&sql)?
+        .query_map(rusqlite::params_from_iter(args), |r| {
+            Ok(ThreadRecord {
+                id: r.get(0)?,
+                parent_room_id: r.get(1)?,
+                anchor_message_id: r.get(2)?,
+                name: r.get(3)?,
+                updated_at: r.get(4)?,
+                message_count: r.get(5)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+fn thread_where(
+    c: &rusqlite::Connection,
+    filter: &str,
+    args: &[&str],
+) -> Result<Option<ThreadRecord>> {
+    Ok(threads_where(c, filter, args)?.into_iter().next())
 }

@@ -16,15 +16,27 @@ Building the server and serving health, info, and agent listings never starts Pi
 | `GET` | `/api/v1/health` | Liveness check; never contacts a provider |
 | `GET` | `/api/v1/info` | Service metadata and protocol endpoints |
 | `GET` | `/api/v1/agents` | Safe agent metadata (name and runtime only; no credentials) |
-| `POST` | `/api/v1/turns` | Submit a conversation turn |
+| `POST` | `/api/v1/turns` | Submit a conversation turn (`"wait": false` returns `202` immediately) |
+| `GET` | `/api/v1/rooms`, `/api/v1/rooms/{id}` | Rooms (main, solo, group, archived) with participants, state, summary, and message counts |
+| `GET` / `POST` | `/api/v1/rooms/{id}/threads` | List a room's user threads, or start one with `{"anchor_message_id","name"}` (`201`; `200` with the existing thread if that message already has one) |
+| `GET` | `/api/v1/rooms/{id}/messages?limit=&before=` | Paged room history, oldest first within a page; page back with `next_before` |
 | `POST` / `GET` | `/api/v1/tasks`, `/api/v1/tasks/{id}` | Submit (202) and inspect autonomous tasks |
 | `GET` / `POST` | `/api/v1/tasks/{id}/attempts`, `/cancel`, `/pause`, `/resume`, `/input`, `/context-metrics` | Attempts, controls, and bounded context diagnostics |
 | `GET` | `/api/v1/agents/{id}`, `/api/v1/agent-instances` | Capabilities and derived activity (never starts a runtime) |
 | `GET` / `POST` | `/api/v1/messages`, `/api/v1/groups`, `/api/v1/groups/{id}` | Agent/operator messages and dynamic task groups |
+| `GET` / `POST` / `PATCH` / `DELETE` | `/api/v1/chat-groups`, `/api/v1/chat-groups/{id}` | Configured chat groups (`group-<id>` rooms): create with `{"id","members"}`, edit `members`, `mode`, `member_roles`, `reply_order`, delete (`204`). Changes are written to the config file and apply immediately. Unrelated to the task groups under `/api/v1/groups` |
+| `GET` | `/api/v1/rooms/{id}/runtime-sessions?limit=` | Runtime sessions (epochs) per agent in a room: runtime, start/end, end reason, and whether the end was a rotation. `ended_at: null` means still open |
+| `POST` | `/api/v1/runtime/rotate` | `{"agent_instance_id"}`: stop that agent's live session so its next prompt starts fresh (`202`; watch `runtime.rotated`) |
+| `GET` | `/api/v1/workspaces` | Allowed roots, each group's shared workspace, and each persona's own workspace |
+| `PUT` / `DELETE` | `/api/v1/workspaces/groups/{id}` | Set (`{"path"}`) or clear a group's shared workspace; returns the new snapshot |
+| `PUT` | `/api/v1/workspaces/personas/{id}` | Change a persona's own workspace |
+| `GET` | `/api/v1/access/roles` | Built-in and custom role definitions with their permissions |
 | `GET` | `/api/v1/access/personas` | Effective permissions per persona |
 | `GET` | `/api/v1/access/audit?denied=&persona=&limit=` | Access audit log |
 | `GET` | `/api/v1/events?after=N` | Durable, restart-safe event replay with a high-water mark |
 | `GET` | `/api/v1/ws` | WebSocket live event stream |
+
+Workspace changes use the same checks as the agent `workspace.*` tools: an absolute, existing directory, inside `[workspaces] roots` when roots are configured. They are written to the config file, and a runtime session in the old directory is replaced before the next turn. Roles and persona definitions are read-only over HTTP; edit them in the config.
 
 Errors use one shape, `{"error":{"code","message"}}`, and internal failures are sanitized.
 
@@ -47,10 +59,13 @@ curl http://127.0.0.1:7474/api/v1/agents
 {"target":{"type":"group","id":"development"},"message":"Review the runtime lifecycle."}
 ```
 
+Targets are `main`, `solo`, `group`, or `thread`. A thread is a child room anchored to one message of its parent room: it has its own history (`GET /rooms/{thread_id}/messages`) and runs with the parent's participants, mode and group. Threads cannot be nested and do not appear in `GET /rooms`; `GET /rooms/{thread_id}` returns `parent_room_id` and `anchor_message_id`.
+
 The response includes `turn_id`, `room_id`, and an ordered list of `replies`, each with `persona_id`, `ok`, and `content`. Use `turn_id` and `room_id` to match the response to WebSocket events. Responses never include provider diagnostics or prompts.
 
 | Status | Meaning |
 | --- | --- |
+| `202` | Only with `"wait": false`: the turn runs in the background; follow `conversation.*` and `agent.reply.*` events for `room_id` and read replies from room history |
 | `400` | Malformed or empty request |
 | `404` | Target not found |
 | `503` | Shutting down |
@@ -76,11 +91,20 @@ websocat ws://127.0.0.1:7474/api/v1/ws        # or: npx wscat -c ws://127.0.0.1:
 
 Unsupported or malformed messages get a `system.error` frame, and the connection stays open when possible.
 
+### Subscribing to rooms
+
+By default a connection receives every event. Send `{"type":"events.subscribe","id":"s1","payload":{"room_ids":["main","group-dev"]}}` to limit room-scoped events (conversation, replies, `thread.created` for the parent room) to those rooms; the server answers `events.subscribed`. A thread is its own room, so list its id too. An empty list restores the full stream. Runtime and coordination events are not room-scoped and always arrive.
+
+### Browser access (CORS)
+
+Pages served from `localhost`, `127.0.0.1` or `[::1]` (any port) may call the API from a browser, including preflight requests. Other origins get no CORS headers, because the API has no authentication.
+
 ### Streamed events
 
 | Group | Events |
 | --- | --- |
 | Conversation | `conversation.turn.started`, `conversation.turn.completed` |
+| Threads | `thread.created` with `thread_id`, `parent_room_id`, `anchor_message_id` |
 | Replies | `agent.reply.started`, `agent.reply.completed`, `agent.reply.failed` |
 | Runtime | `runtime.started`, `runtime.stopped`, `runtime.rotated`, `runtime.failed` |
 | Coordination | `task.*`, `attempt.*`, `message.*`, `group.*`, `agent.activity.changed` |

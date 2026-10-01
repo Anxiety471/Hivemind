@@ -8,7 +8,7 @@ use std::{
 
 use anyhow::{anyhow, bail, Context, Result};
 
-use hivemind::config::{AgentConfig, GroupConfig, HivemindConfig};
+use crate::config::{AgentConfig, GroupConfig, HivemindConfig};
 
 static NEXT_CONFIG_TEMP: AtomicUsize = AtomicUsize::new(0);
 
@@ -144,6 +144,44 @@ fn apply_group_mutation(config: &mut HivemindConfig, command: GroupCommand) -> R
                 workspace: None,
             });
         }
+        GroupCommand::Update {
+            name,
+            members,
+            mode,
+            member_roles,
+            reply_order,
+        } => {
+            if let Some(members) = &members {
+                let mut seen = HashSet::with_capacity(members.len());
+                for member in members {
+                    agent(config, member)?;
+                    if !seen.insert(member) {
+                        bail!("group '{name}' contains duplicate members");
+                    }
+                }
+            }
+            let group = find_group_mut(config, &name)?;
+            if let Some(members) = members {
+                group.members = members;
+            }
+            if let Some(mode) = mode {
+                group.mode = mode;
+            }
+            if let Some(roles) = member_roles {
+                group.member_roles = roles;
+            }
+            if let Some(order) = reply_order {
+                group.reply_order = order;
+            }
+            // Keep metadata consistent with the member list.
+            let members = group.members.clone();
+            group
+                .member_roles
+                .retain(|member, _| members.contains(member));
+            if let Some(unknown) = group.reply_order.iter().find(|m| !members.contains(m)) {
+                bail!("reply order names '{unknown}', who is not in group '{name}'");
+            }
+        }
         GroupCommand::Add {
             name,
             agent: member,
@@ -195,10 +233,29 @@ fn valid_name(name: &str) -> Result<()> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GroupCommand {
-    Create { name: String, agents: Vec<String> },
-    Add { name: String, agent: String },
-    Remove { name: String, agent: String },
-    Delete { name: String },
+    Create {
+        name: String,
+        agents: Vec<String>,
+    },
+    /// Replace any of a group's members, mode, member roles, or reply order; `None` keeps it.
+    Update {
+        name: String,
+        members: Option<Vec<String>>,
+        mode: Option<crate::config::ConversationMode>,
+        member_roles: Option<std::collections::HashMap<String, String>>,
+        reply_order: Option<Vec<String>>,
+    },
+    Add {
+        name: String,
+        agent: String,
+    },
+    Remove {
+        name: String,
+        agent: String,
+    },
+    Delete {
+        name: String,
+    },
 }
 
 #[cfg(test)]
@@ -209,7 +266,7 @@ mod tests {
     };
 
     use super::*;
-    use hivemind::config::HivemindConfig;
+    use crate::config::HivemindConfig;
 
     static NEXT_FIXTURE: AtomicUsize = AtomicUsize::new(0);
 

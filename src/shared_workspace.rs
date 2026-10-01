@@ -71,6 +71,30 @@ impl SharedWorkspaces {
         self.state.write().expect("workspace lock poisoned").groups = next;
     }
 
+    /// Directories agents and the API may choose from; empty means any existing directory.
+    pub fn roots(&self) -> &[String] {
+        &self.roots
+    }
+
+    /// Every group (id, shared workspace) and persona (id, own workspace), sorted by id.
+    #[allow(clippy::type_complexity)]
+    pub fn snapshot(&self) -> (Vec<(String, Option<String>)>, Vec<(String, String)>) {
+        let state = self.state.read().expect("workspace lock poisoned");
+        let mut groups: Vec<_> = state
+            .groups
+            .iter()
+            .map(|(id, path)| (id.clone(), path.clone()))
+            .collect();
+        let mut personas: Vec<_> = state
+            .personas
+            .iter()
+            .map(|(id, path)| (id.clone(), path.clone()))
+            .collect();
+        groups.sort();
+        personas.sort();
+        (groups, personas)
+    }
+
     /// The group's shared workspace; `None` when it has none configured.
     pub fn group(&self, group: &str) -> Option<String> {
         self.state

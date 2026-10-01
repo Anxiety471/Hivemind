@@ -280,6 +280,17 @@ pub struct ArchivedTurnMeta {
     pub metadata: serde_json::Value,
 }
 
+/// A user thread: a child room anchored to one message of its parent room.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ThreadRecord {
+    pub id: String,
+    pub parent_room_id: String,
+    pub anchor_message_id: String,
+    pub name: String,
+    pub updated_at: i64,
+    pub message_count: i64,
+}
+
 /// Everything archived for one room, in chronological order.
 #[derive(Debug, Clone, Default)]
 pub struct RoomArchive {
