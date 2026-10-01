@@ -3,15 +3,6 @@ use crate::memory::{MemoryStatus, MemoryStore, Scope};
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-/// A reply wrapped in the `reply` tool block: the only way to speak when a
-/// reply is optional.
-fn reply_block(text: &str) -> String {
-    format!(
-        "```hivemind-tool\n{}\n```",
-        serde_json::json!({"name": "reply", "args": {"text": text}})
-    )
-}
-
 struct Fake {
     prompts: Mutex<Vec<(AgentInstanceId, String)>>,
     running: AtomicUsize,
@@ -52,7 +43,7 @@ impl AgentInvoker for Fake {
             .reply
             .lock()
             .clone()
-            .unwrap_or_else(|| reply_block(&format!("{} answered", agent.name)));
+            .unwrap_or_else(|| format!("{} answered", agent.name));
         Ok(InvokeReply {
             text,
             epoch_id: "fake".into(),
@@ -127,7 +118,7 @@ impl AgentInvoker for DelayedEventsInvoker {
             anyhow::bail!("sensitive provider detail");
         }
         Ok(InvokeReply {
-            text: reply_block(&format!("{} reply", agent.name)),
+            text: format!("{} reply", agent.name),
             epoch_id: "fake".into(),
         })
     }
@@ -995,7 +986,6 @@ fn context_budget_trims_old_history_but_keeps_current_input() {
         active_turn: "current-turn",
         caller: &caller,
         retrieval: "",
-        optional: false,
     };
     let state_json = coordinator.state_json(&history, &caller).unwrap();
     let pack = coordinator.context_pack(&request, &state_json).unwrap();
@@ -1047,7 +1037,6 @@ fn turn_delta_lists_unseen_peers_and_changed_state_and_rejects_gaps() {
         active_turn: "t2",
         caller: &caller,
         retrieval: "",
-        optional: false,
     };
     let state_json = coordinator.state_json(&history, &caller).unwrap();
     let cursor = TurnView {
@@ -1125,7 +1114,7 @@ impl AgentInvoker for Scripted {
         tokio::task::yield_now().await;
         let text = match self.replies.lock().pop_front() {
             Some(reply) => reply,
-            None => reply_block("plain final answer"),
+            None => "plain final answer".to_owned(),
         };
         Ok(InvokeReply {
             text,
@@ -1143,19 +1132,6 @@ fn scripted(replies: &[&str]) -> Arc<Scripted> {
                 .collect::<std::collections::VecDeque<_>>(),
         ),
     })
-}
-/// Scripted replies marking a silent answer (plain text, no `reply` call).
-const SILENT: &str = "(silent)";
-/// Scripted invoker where every reply speaks via the `reply` tool, except
-/// [`SILENT`] entries, which are plain text.
-fn spoken(replies: &[&str]) -> Arc<Scripted> {
-    // Once the script runs out the agents stay silent.
-    let blocks: Vec<String> = replies
-        .iter()
-        .chain(std::iter::repeat_n(&SILENT, 20))
-        .map(|r| if *r == SILENT { "I have nothing to add.".to_owned() } else { reply_block(r) })
-        .collect();
-    scripted(&blocks.iter().map(String::as_str).collect::<Vec<_>>())
 }
 fn tool_block(name: &str, args: serde_json::Value) -> String {
     format!("Looking things up.\n```hivemind-tool\n{{\"name\":\"{name}\",\"args\":{args}}}\n```\n")
@@ -2623,7 +2599,7 @@ fn mentions_match_member_names_at_word_boundaries() {
 }
 
 #[tokio::test]
-async fn mention_adds_an_optional_reply_only_within_the_limit() {
+async fn mention_adds_a_follow_up_reply_only_within_the_limit() {
     async fn speakers(limit: usize, replies: &[&str]) -> Vec<String> {
         let (_path, coord) = fixture();
         coord.set_mention_limit(limit);
@@ -2636,47 +2612,20 @@ async fn mention_adds_an_optional_reply_only_within_the_limit() {
                 mode: ConversationMode::Discussion,
                 members: &members,
                 input: "go",
-                invoker: spoken(replies),
+                invoker: scripted(replies),
             })
             .await
             .unwrap();
         out.into_iter().map(|r| r.name).collect()
     }
-    // B pings A, who already spoke: A replies once more; then the open floor
-    // goes to B, who stays silent, and the exchange ends without a recorded reply.
-    assert_eq!(speakers(4, &["hi @B", "back @A", "ok", SILENT]).await, ["A", "B", "A"]);
+    // B pings A, who already spoke: A replies once more.
+    assert_eq!(speakers(4, &["hi @B", "back @A", "ok"]).await, ["A", "B", "A"]);
     // Self-mentions and mentions of members still waiting add nothing.
-    assert_eq!(speakers(4, &["@A and @B", "ok", SILENT]).await, ["A", "B"]);
-    // An unmentioned member may chime in once the floor opens.
-    assert_eq!(speakers(1, &["x", "y", "chime in"]).await, ["A", "B", "A"]);
+    assert_eq!(speakers(4, &["@A and @B", "ok"]).await, ["A", "B"]);
     // Limit 0 disables follow-ups; a ping-pong stops at the limit.
     assert_eq!(speakers(0, &["hi @B", "back @A"]).await, ["A", "B"]);
     let pingpong: Vec<&str> = std::iter::repeat_n("ping @A @B", 10).collect();
     assert_eq!(speakers(2, &pingpong).await.len(), 4);
-    // Replies to the user are optional too: a plain-text (silent) answer is not recorded, and a
-    // user @mention makes that member's reply required.
-    let asked = |input: &'static str, replies: &'static [&'static str]| async move {
-        let (_path, coord) = fixture();
-        let members = [member("A"), member("B")];
-        let out = coord
-            .turn(TurnRequest {
-                room: "optional-room",
-                room_name: "Optional room",
-                group_id: "optional-group",
-                mode: ConversationMode::Discussion,
-                members: &members,
-                input,
-                invoker: spoken(replies),
-            })
-            .await
-            .unwrap();
-        let names: Vec<String> = out.into_iter().map(|r| r.name).collect();
-        let history = coord.room_history("optional-room").unwrap();
-        (names, history.events.len())
-    };
-    assert_eq!(asked("hello", &[SILENT, "only B"]).await, (vec!["B".to_string()], 2));
-    assert_eq!(asked("hello", &[SILENT, SILENT]).await, (Vec::<String>::new(), 1));
-    assert_eq!(asked("@A hello", &[SILENT, SILENT]).await, (vec!["A".to_string()], 2));
 }
 
 /// Invoker answering each agent with a fixed text, independent of order.
@@ -2696,29 +2645,19 @@ impl AgentInvoker for ByName {
 }
 
 #[tokio::test]
-async fn optional_replies_need_the_reply_tool_and_mentions_accept_plain_text() {
-    // Each agent answers `(name, speaks_via_reply_tool)`; returns the spoken
-    // replies in presentation order and the number of recorded events.
-    async fn run(
-        mode: ConversationMode,
-        agents: &[(&str, bool)],
-        input: &str,
-    ) -> (Vec<(String, String)>, usize) {
+async fn every_member_replies_to_each_user_message_with_or_without_a_mention() {
+    // Each agent answers `"<name> says hi"`; returns the replies in presentation
+    // order and the number of recorded events (user turn + replies).
+    async fn run(mode: ConversationMode, names: &[&str], input: &str) -> (Vec<(String, String)>, usize) {
         let (_path, coord) = fixture();
         coord.set_mention_limit(0);
-        let members: Vec<Participant> = agents.iter().map(|(n, _)| member(n)).collect();
-        let script = agents
-            .iter()
-            .map(|(n, speaks)| {
-                let text = format!("{n} says hi");
-                (n.to_string(), if *speaks { reply_block(&text) } else { text })
-            })
-            .collect();
+        let members: Vec<Participant> = names.iter().map(|n| member(n)).collect();
+        let script = names.iter().map(|n| (n.to_string(), format!("{n} says hi"))).collect();
         let out = coord
             .turn(TurnRequest {
-                room: "optional-room",
-                room_name: "Optional room",
-                group_id: "optional-group",
+                room: "reply-room",
+                room_name: "Reply room",
+                group_id: "reply-group",
                 mode,
                 members: &members,
                 input,
@@ -2726,32 +2665,18 @@ async fn optional_replies_need_the_reply_tool_and_mentions_accept_plain_text() {
             })
             .await
             .unwrap();
-        let events = coord.room_history("optional-room").unwrap().events.len();
+        let events = coord.room_history("reply-room").unwrap().events.len();
         (out.into_iter().map(|r| (r.name, r.result.unwrap())).collect(), events)
     }
     let said = |n: &str| (n.to_string(), format!("{n} says hi"));
     for mode in [ConversationMode::Broadcast, ConversationMode::Discussion] {
-        // Plain text is silent; only the reply call speaks. Silent text is
-        // neither returned nor recorded (user turn + one reply).
-        let (replies, events) = run(mode, &[("A", false), ("B", true)], "hello").await;
-        assert_eq!(replies, [said("B")], "{mode:?}");
-        assert_eq!(events, 2, "{mode:?}");
-        // Everyone silent: no replies, only the user turn is recorded.
-        let (replies, events) = run(mode, &[("A", false), ("B", false)], "hello").await;
-        assert!(replies.is_empty(), "{mode:?}");
-        assert_eq!(events, 1, "{mode:?}");
-        // An @mention makes that member's reply required: plain text speaks.
-        let (replies, events) = run(mode, &[("A", false), ("B", false)], "@A hello").await;
+        for input in ["hello", "@B hello"] {
+            let (replies, events) = run(mode, &["A", "B"], input).await;
+            assert_eq!(replies, [said("A"), said("B")], "{mode:?} {input}");
+            assert_eq!(events, 3, "{mode:?} {input}");
+        }
+        let (replies, events) = run(mode, &["A"], "hello").await;
         assert_eq!(replies, [said("A")], "{mode:?}");
         assert_eq!(events, 2, "{mode:?}");
     }
-    // Solo discussion room: replying is optional there as well.
-    let (replies, events) = run(ConversationMode::Discussion, &[("A", false)], "hello").await;
-    assert!(replies.is_empty());
-    assert_eq!(events, 1);
-    let (replies, events) = run(ConversationMode::Discussion, &[("A", true)], "hello").await;
-    assert_eq!(replies, [said("A")]);
-    assert_eq!(events, 2);
-    let (replies, _) = run(ConversationMode::Discussion, &[("A", false)], "@A hello").await;
-    assert_eq!(replies, [said("A")]);
 }

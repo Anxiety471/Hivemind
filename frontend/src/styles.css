@@ -600,10 +600,6 @@ textarea:focus {
 .msg-meta .muted {
   font-size: 11px;
 }
-.msg-reply-to {
-  font-size: 11px;
-  margin-bottom: 2px;
-}
 .msg-text {
   white-space: pre-wrap;
   word-wrap: break-word;

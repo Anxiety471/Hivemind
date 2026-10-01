@@ -33,8 +33,6 @@ pub(super) struct PackRequest<'a> {
     pub(super) caller: &'a Caller,
     /// Pre-rendered "Relevant Hivemind memory" block, retrieved once per member.
     pub(super) retrieval: &'a str,
-    /// Replying is optional: the member speaks only by calling the `reply` tool.
-    pub(super) optional: bool,
 }
 
 /// Prompts prepared for one member's invocation this turn.
@@ -51,13 +49,9 @@ pub(super) struct MemberPrompt {
 pub(super) const SESSION_TOOL_REMINDER: &str =
     "\nHivemind memory tools remain available exactly as described at the start of this session.\n";
 
-/// Earlier same-turn replies (Discussion mode) plus, when replying is
-/// optional, how to speak (the `reply` tool). Rendered identically for full packs and
-/// deltas.
-pub(super) fn same_turn_replies(
-    prior: &[(String, Result<String, String>)],
-    optional: bool,
-) -> String {
+/// Earlier same-turn replies (Discussion mode). Rendered identically for full
+/// packs and deltas.
+pub(super) fn same_turn_replies(prior: &[(String, Result<String, String>)]) -> String {
     let peers = prior
         .iter()
         .map(|(name, result)| match result {
@@ -65,41 +59,36 @@ pub(super) fn same_turn_replies(
             Err(_) => format!("{name} failed to produce a response for this turn.\n"),
         })
         .collect::<String>();
-    let mut out = if peers.is_empty() {
+    if peers.is_empty() {
         String::new()
     } else {
         format!("\nEarlier replies in this turn:\n{peers}")
-    };
-    if optional {
-        out.push_str("\nReplying is optional. To say something to the room, call the `reply` tool as your entire reply: a ```hivemind-tool block with {\"name\":\"reply\",\"args\":{\"text\":\"...\"}}. Plain text you write is NOT shown to anyone. If you have nothing worth adding and were not @mentioned, do not call it; end with a short plain note.\n");
     }
-    out
 }
 
-/// Whether an optional reply stayed silent (the agent never called `reply`).
-fn is_pass(text: &str) -> bool {
-    text.trim().is_empty()
+fn is_word(c: char) -> bool {
+    c.is_alphanumeric() || c == '_' || c == '-'
 }
 
-/// Indices of members `@Name`d in `text`, in order of first mention. The name
-/// must start at a word boundary (so emails don't match) and end at one.
+/// Whether `rest` (the text after an `@`) starts with `name`, ending at a word boundary.
+fn name_follows(rest: &str, name: &str) -> bool {
+    rest.get(..name.len())
+        .is_some_and(|head| head.eq_ignore_ascii_case(name))
+        && !rest[name.len()..].chars().next().is_some_and(is_word)
+}
+
+/// Indices of members `@Name`d in `text`, in order of first mention.
 pub(super) fn mentioned_members(text: &str, members: &[Participant]) -> Vec<usize> {
-    let word = |c: char| c.is_alphanumeric() || c == '_' || c == '-';
     let mut found = Vec::new();
     for (at, _) in text.match_indices('@') {
-        if text[..at].chars().next_back().is_some_and(word) {
+        if text[..at].chars().next_back().is_some_and(is_word) {
             continue;
         }
         let rest = &text[at + 1..];
         let best = members
             .iter()
             .enumerate()
-            .filter(|(_, m)| {
-                let name = &m.agent.name;
-                rest.get(..name.len())
-                    .is_some_and(|head| head.eq_ignore_ascii_case(name))
-                    && !rest[name.len()..].chars().next().is_some_and(word)
-            })
+            .filter(|(_, m)| name_follows(rest, &m.agent.name))
             .max_by_key(|(_, m)| m.agent.name.len());
         if let Some((index, _)) = best {
             if !found.contains(&index) {
@@ -282,20 +271,11 @@ impl ConversationCoordinator {
             })
             .unwrap_or_default();
         let mut replies = Vec::with_capacity(members.len());
-        // Replying to the user is optional in every room: members speak only by
-        // calling the `reply` tool, unless @mentioned. Agent-originated
-        // turns (coordination) always require a reply.
-        let required = mentioned_members(input, members);
-        let optional_at = |index: usize| !agent_input && !required.contains(&index);
         match mode {
             ConversationMode::Broadcast => {
                 let mut jobs = JoinSet::new();
                 let mut task_names = HashMap::new();
-                let mut passable = std::collections::HashSet::new();
-                for (index, member) in members.iter().enumerate() {
-                    if optional_at(index) {
-                        passable.insert(member.agent.name.clone());
-                    }
+                for member in members {
                     let caller = invocation_caller(
                         room,
                         group_id,
@@ -318,7 +298,6 @@ impl ConversationCoordinator {
                             active_turn: &turn_id,
                             caller: &caller,
                             retrieval: &retrieval,
-                            optional: optional_at(index),
                         },
                         cursor,
                     );
@@ -365,7 +344,6 @@ impl ConversationCoordinator {
                     let host = host.clone();
                     let access = access.clone();
                     let task_name = name.clone();
-                    let optional = optional_at(index);
                     let handle = jobs.spawn(async move {
                         let MemberPrompt { pack, delta, view } = prompt;
                         let instance_id = AgentInstanceId::new(&room, &agent.name);
@@ -383,7 +361,6 @@ impl ConversationCoordinator {
                             authorized_global.as_deref(),
                             host.as_deref(),
                             access.as_deref(),
-                            optional,
                         )
                         .await
                         .map_err(|e| format!("{e:#}"));
@@ -426,60 +403,26 @@ impl ConversationCoordinator {
                         };
                         events.publish(event);
                     }
-                    let passed = passable.contains(&name)
-                        && result.as_ref().is_ok_and(|text| is_pass(text));
-                    if !passed {
-                        append_reply(&mut history, room, &turn_id, &name, &result);
-                        self.save_turn(&history, room, &turn_id, &mut saved, false, false)?;
-                    }
-                    by_name.insert(name, (result, passed));
+                    append_reply(&mut history, room, &turn_id, &name, &result);
+                    self.save_turn(&history, room, &turn_id, &mut saved, false, false)?;
+                    by_name.insert(name, result);
                 }
                 for member in members {
                     let name = member.agent.name.clone();
-                    let (result, passed) = by_name
+                    let result = by_name
                         .remove(&name)
-                        .or_else(|| {
-                            replies
-                                .iter()
-                                .find(|reply: &&TurnReply| reply.name == name)
-                                .map(|reply| (reply.result.clone(), false))
-                        })
-                        .unwrap_or_else(|| (Err("agent task did not return".into()), false));
-                    if !passed && !replies.iter().any(|reply| reply.name == name) {
-                        replies.push(TurnReply { name, result });
-                    }
+                        .unwrap_or_else(|| Err("agent task did not return".into()));
+                    replies.push(TurnReply { name, result });
                 }
-                replies.sort_by_key(|reply| {
-                    members
-                        .iter()
-                        .position(|member| member.agent.name == reply.name)
-                        .unwrap_or(usize::MAX)
-                });
             }
             ConversationMode::Discussion => {
                 let mut prior = Vec::new();
-                // Replying is optional: unless the user @mentioned them, members
-                // stay silent by not calling `reply`. An @mention in a reply queues a
-                // required reply for that member. Once the queue is empty the
-                // floor opens for the others. Mention and floor replies share
-                // one budget so the exchange always ends.
-                let mut queue: std::collections::VecDeque<(usize, bool)> = (0..members.len())
-                    .map(|index| (index, optional_at(index)))
-                    .collect();
+                // Every member replies once, in order. An @mention in a reply gives that
+                // member a further reply unless one is already pending; those follow-ups
+                // share one budget so the exchange always ends.
+                let mut queue: std::collections::VecDeque<usize> = (0..members.len()).collect();
                 let mut extra = self.mention_limit.get().copied().unwrap_or(0);
-                let mut last_speaker = None;
-                let mut passes = 0;
-                loop {
-                    let (index, optional, floor) = if let Some((index, optional)) = queue.pop_front() {
-                        (index, optional, false)
-                    } else if let (Some(last), true) = (
-                        last_speaker,
-                        extra > 0 && passes + 1 < members.len(),
-                    ) {
-                        ((last + 1 + passes) % members.len(), true, true)
-                    } else {
-                        break;
-                    };
+                while let Some(index) = queue.pop_front() {
                     let member = &members[index];
                     let caller = invocation_caller(
                         room,
@@ -512,7 +455,6 @@ impl ConversationCoordinator {
                             active_turn: &turn_id,
                             caller: &caller,
                             retrieval: &retrieval,
-                            optional,
                         },
                         cursor,
                     ) {
@@ -530,7 +472,6 @@ impl ConversationCoordinator {
                             authorized_global.as_deref(),
                             host.as_deref(),
                             access.as_deref(),
-                            optional,
                         )
                         .await
                         .map_err(|e| format!("{e:#}")),
@@ -556,22 +497,6 @@ impl ConversationCoordinator {
                         };
                         events.publish(event);
                     }
-                    let pass = optional
-                        && match &result {
-                            Ok(text) => is_pass(text),
-                            Err(_) => floor,
-                        };
-                    if pass {
-                        if floor {
-                            passes += 1;
-                        }
-                        continue;
-                    }
-                    if floor {
-                        extra -= 1;
-                    }
-                    passes = 0;
-                    last_speaker = Some(index);
                     append_reply(&mut history, room, &turn_id, &name, &result);
                     self.save_turn(&history, room, &turn_id, &mut saved, false, false)?;
                     prior.push((name.clone(), result.clone()));
@@ -579,9 +504,9 @@ impl ConversationCoordinator {
                         for target in mentioned_members(text, members) {
                             if target != index
                                 && extra > 0
-                                && !queue.iter().any(|(queued, _)| *queued == target)
+                                && !queue.contains(&target)
                             {
-                                queue.push_back((target, false));
+                                queue.push_back(target);
                                 extra -= 1;
                             }
                         }
@@ -731,7 +656,6 @@ impl ConversationCoordinator {
             prior,
             active_turn,
             retrieval,
-            optional,
             ..
         } = *request;
         let last = history
@@ -782,7 +706,7 @@ impl ConversationCoordinator {
             delta.push_str(&reminder);
         }
         delta.push_str(&format!("\nCurrent user message:\n{input}\n"));
-        delta.push_str(&same_turn_replies(prior, optional));
+        delta.push_str(&same_turn_replies(prior));
         (delta.len() <= self.limits.context_target_tokens.saturating_mul(4)).then_some(delta)
     }
 
@@ -801,7 +725,6 @@ impl ConversationCoordinator {
             active_turn,
             caller,
             retrieval,
-            optional,
         } = *request;
         let roster = members
             .iter()
@@ -818,7 +741,7 @@ impl ConversationCoordinator {
             .collect::<Vec<_>>()
             .join("\n");
         let mention_hint = if members.len() > 1 {
-            "To bring another participant into the conversation, write @Name. Mentioning is optional; do it only when you want a specific reply from them.\n"
+            "This is a group conversation with the other participants listed above, and every participant replies to each user message. Speak as yourself and from your role: build on, question, or correct what teammates said. To ask a specific teammate for a further reply, write @Name; mentioning is optional.\n"
         } else {
             ""
         };
@@ -845,7 +768,7 @@ impl ConversationCoordinator {
         // messages are excluded so the input is never echoed back as a "memory".
         let hits = retrieval;
         let current = format!("\nCurrent user message:\n{input}\n");
-        let same_turn = same_turn_replies(prior, optional);
+        let same_turn = same_turn_replies(prior);
         let mandatory_len =
             identity.len() + manifest.len() + state.len() + current.len() + same_turn.len();
         // Established byte budget: four times the configured token target,

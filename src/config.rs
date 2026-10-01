@@ -198,7 +198,7 @@ pub struct ConversationConfig {
     #[serde(default)]
     pub reply_order: Vec<String>,
     /// Follow-up replies a Discussion turn may add beyond each member's first:
-    /// @mentions of members not already waiting, and open-floor chime-ins. 0 disables.
+    /// @mentions of members who have already replied. 0 disables.
     #[serde(default = "default_mention_limit")]
     pub mention_limit: usize,
 }
