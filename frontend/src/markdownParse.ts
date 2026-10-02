@@ -21,7 +21,7 @@ export type ListItem = {
 export type Block =
   | { t: "heading"; level: number; v: Inline[] }
   | { t: "paragraph"; v: Inline[] }
-  | { t: "code"; lang: string; v: string }
+  | { t: "code"; lang: string; v: string; open?: true }
   | { t: "math"; v: string }
   | { t: "list"; ordered: boolean; start: number; items: ListItem[] }
   | { t: "quote"; v: Block[] }
@@ -147,10 +147,12 @@ function parseBlocks(lines: string[]): Block[] {
       const marker = m[1];
       const body: string[] = [];
       i++;
-      // An unclosed fence runs to the end, as it does while a reply is still streaming.
+      // An unclosed fence runs to the end, as it does while a reply is still streaming; `open`
+      // tells renderers the content is still incomplete.
       while (i < lines.length && !new RegExp(`^ {0,3}${marker[0]}{${marker.length},}\\s*$`).test(lines[i])) body.push(lines[i++]);
+      const v = body.join("\n");
+      blocks.push(i >= lines.length ? { t: "code", lang: m[2], v, open: true } : { t: "code", lang: m[2], v });
       i++;
-      blocks.push({ t: "code", lang: m[2], v: body.join("\n") });
     } else if (line.startsWith("$$")) {
       const rest = line.slice(2).trim();
       if (rest.endsWith("$$") && rest.length > 2) {

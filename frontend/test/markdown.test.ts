@@ -41,9 +41,9 @@ test("code fences keep their content verbatim, including markdown and blank line
   assert.deepEqual(block, { t: "code", lang: "md", v: "# not a heading\n\n- not a list" });
 });
 
-test("an unclosed fence runs to the end", () => {
+test("an unclosed fence runs to the end and is marked open", () => {
   const [block] = parseMarkdown("```\nstill typing");
-  assert.deepEqual(block, { t: "code", lang: "", v: "still typing" });
+  assert.deepEqual(block, { t: "code", lang: "", v: "still typing", open: true });
 });
 
 test("a longer fence is not closed by a shorter one", () => {

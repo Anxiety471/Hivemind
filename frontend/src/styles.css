@@ -1914,14 +1914,17 @@ li.task-item p {
   }
 }
 
-/* ASCII diagrams: box-drawing and arrow glyphs must share one monospace advance and join vertically */
+/* ASCII diagrams: one bundled monospace font with box, arrow and geometric glyphs. The font and
+   line-height go on <pre> because its strut, not the inline <code>, sets the row height. DejaVu's
+   box-drawing glyphs span 1.19em, so a 1.18 line-height overlaps rows slightly and vertical
+   strokes join without gaps. */
+.markdown-code-block.ascii-diagram pre,
 .markdown-code-block.ascii-diagram pre code {
-  font-family: "DejaVu Sans Mono", "Cascadia Mono", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
-  font-size: 0.85em;
-  line-height: 1.2;
+  font-family: "DejaVu Mono", monospace;
+  font-size: 13px;
+  line-height: 1.18;
   font-variant-ligatures: none;
   letter-spacing: 0;
-  white-space: pre;
 }
 
 .slash-output {

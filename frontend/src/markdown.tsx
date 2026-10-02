@@ -10,12 +10,18 @@ import { parseMarkdown } from "./markdownParse";
 import { plantumlToMermaid } from "./diagrams/plantuml";
 import { drawioToScene, looksLikeDrawio } from "./diagrams/drawio";
 import { DrawioSvg } from "./diagrams/DrawioSvg";
+// ASCII diagrams use a bundled DejaVu Sans Mono: it has box-drawing, arrow and geometric
+// glyphs at the monospace advance, so alignment no longer depends on installed fonts.
+import "@fontsource/dejavu-mono/400.css";
 import type { AlertKind, Block, Inline } from "./markdownParse";
 
 mermaid.initialize({
   startOnLoad: false,
   theme: "dark",
   securityLevel: "loose",
+  // Otherwise a failed render leaves Mermaid's "Syntax error" bomb SVG appended to <body>;
+  // DiagramBlock already shows the source and error message inline.
+  suppressErrorRendering: true,
 });
 
 const ALERT_META: Record<AlertKind, { icon: string; title: string }> = {
@@ -26,11 +32,11 @@ const ALERT_META: Record<AlertKind, { icon: string; title: string }> = {
   caution: { icon: "🛑", title: "Caution" },
 };
 
-function CodeBlock({ lang, code, className }: { lang: string; code: string; className?: string }) {
+function CodeBlock({ lang, code, ascii }: { lang: string; code: string; ascii?: boolean }) {
   const [copied, setCopied] = useState(false);
 
   return (
-    <div className={className ? `markdown-code-block ${className}` : "markdown-code-block"}>
+    <div className={ascii ? "markdown-code-block ascii-diagram" : "markdown-code-block"}>
       <div className="markdown-code-header">
         <span className="code-lang-tag">{(lang || "code").toUpperCase()}</span>
         <button
@@ -196,7 +202,9 @@ function renderBlocks(blocks: Block[]): ReactNode[] {
         }
       }
       case "code": {
-        switch (diagramKind(b.lang, b.v)) {
+        const kind = diagramKind(b.lang, b.v);
+        // A fence still streaming is incomplete diagram source: show it as code until it closes.
+        switch (b.open && kind !== "ascii" ? null : kind) {
           case "mermaid":
             return <DiagramBlock key={i} badge="MERMAID" code={b.v} render={renderMermaid} />;
           case "plantuml":
@@ -204,7 +212,7 @@ function renderBlocks(blocks: Block[]): ReactNode[] {
           case "drawio":
             return <DiagramBlock key={i} badge="DRAW.IO" code={b.v} render={renderDrawio} />;
           case "ascii":
-            return <CodeBlock key={i} lang="ascii" code={b.v} className="ascii-diagram" />;
+            return <CodeBlock key={i} lang="ascii" code={b.v} ascii />;
           default:
             return <CodeBlock key={i} lang={b.lang} code={b.v} />;
         }
