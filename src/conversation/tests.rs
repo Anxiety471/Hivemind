@@ -2846,7 +2846,11 @@ async fn tagged_member_always_answers_or_says_it_cannot() {
         .unwrap();
     let last = out.last().unwrap();
     assert_eq!(last.name, "A");
-    assert!(last.result.as_ref().unwrap_err().contains("could not reply"));
+    assert!(last
+        .result
+        .as_ref()
+        .unwrap_err()
+        .contains("could not reply"));
     let history = coord.room_history("tag-room").unwrap();
     let event = history.events.last().unwrap();
     assert_eq!(event.speaker, "A");
