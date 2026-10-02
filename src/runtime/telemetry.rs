@@ -1,12 +1,12 @@
 //! Adapter-neutral progress. Only assistant text and tool identity/status are
 //! public; reasoning, tool arguments, outputs, and provider errors are excluded.
-use std::sync::Arc;
 use crate::{
     events::{DomainEventKind, EventBus},
     execution::Usage,
     identity::AgentInstanceId,
 };
 use serde_json::Value;
+use std::sync::Arc;
 #[derive(Clone)]
 pub struct ProgressSink {
     pub events: EventBus,

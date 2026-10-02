@@ -1039,7 +1039,6 @@ mod tests {
         }
     }
 
-
     #[tokio::test]
     async fn dropping_an_in_flight_invoke_closes_the_epoch_and_publishes_stop() {
         let memory = Arc::new(MemoryService::new(MemoryStore::in_memory().unwrap()));
@@ -1751,7 +1750,9 @@ mod tests {
                 },
             )
             .await
-            .expect("active prompt should not time out despite taking longer than prompt_timeout_secs");
+            .expect(
+                "active prompt should not time out despite taking longer than prompt_timeout_secs",
+            );
         assert_eq!(reply.text, "active long reply");
         assert_eq!(shutdowns.load(Ordering::SeqCst), 0);
     }
