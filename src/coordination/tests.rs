@@ -31,6 +31,8 @@ pub(super) fn persona(name: &str, caps: &[&str], perms: &[&str], workspace: &str
         roles: Vec::new(),
         tool_access: None,
         web: true,
+        authorized_work: Vec::new(),
+        unauthorized_work: Vec::new(),
     }
 }
 

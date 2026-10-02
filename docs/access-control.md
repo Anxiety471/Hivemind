@@ -79,6 +79,22 @@ Every persona keeps its runtime's web tools by default. Set `web = false` on a p
 
 This only gates the runtime's own web tools. A persona with `workspace.exec` can still reach the network through the shell (`curl`), and OMP's `read` may still accept URLs; withhold `workspace.exec` for strict isolation.
 
+## Role boundaries
+
+Permissions gate tools; `authorized_work` and `unauthorized_work` on a persona (`[[personas]]`, or the same keys in the agents API) gate *scope*. They are plain lists of concrete responsibilities, shown in the agent's prompt every turn as its source of truth:
+
+```toml
+[[personas]]
+id = "Backend"
+authorized_work = ["backend API implementation", "database migrations"]
+unauthorized_work = ["frontend implementation", "tasks.delegate"]
+```
+
+- An agent asked for anything outside its authorized work must not do it: it starts its reply with `OUT_OF_SCOPE:`, states the boundary, quotes the request and names who should take it. Hivemind copies that notice into the room's open questions so the request keeps its context and can be routed.
+- An `unauthorized_work` entry that is a tool name (`tasks.delegate`) or namespace (`memory.global.`) is enforced by the tool linter: the call is refused with an `authorization/not-allowed` diagnostic telling the agent to flag the request instead.
+- An explicit `Assign: Backend = <task>` directive is an authorization too: the assigned task appears under the agent's authorized work from the next turn.
+- Both lists empty (the default) leaves a persona unscoped, exactly as before. Inspect them with `GET /api/v1/agents`.
+
 ## Compatibility
 
 - A persona with **no `roles`** keeps today's behavior: gated memory tools are unrestricted, runtime tools are unrestricted, and coordination follows its direct `permissions`.

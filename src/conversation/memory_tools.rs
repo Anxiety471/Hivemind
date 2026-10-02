@@ -536,23 +536,32 @@ pub(super) async fn invoke_with_memory(
                 let rendered = serde_json::to_string(&call.args)
                     .map(|args| format!("{{\"name\":\"{}\",\"args\":{args}}}", call.name))
                     .unwrap_or_else(|_| call.name.clone());
-                let executed = match host.filter(|host| host.handles(&call.name)) {
-                    Some(host) => {
-                        host.execute(&caller.room_id, &caller.persona_id, &call.name, &call.args)
-                    }
-                    None => access
-                        .map_or(Ok(()), |access| {
-                            access.authorize_memory(&caller.persona_id, &caller.room_id, &call.name)
-                        })
-                        .and_then(|()| {
-                            execute_with_optional_authorization(
-                                memory,
-                                caller,
-                                authorized_global,
-                                &call,
-                            )
-                        }),
-                };
+                let executed =
+                    super::linter::lint_authorization(&agent.unauthorized_work, &call.name)
+                        .and_then(|()| match host.filter(|host| host.handles(&call.name)) {
+                            Some(host) => host.execute(
+                                &caller.room_id,
+                                &caller.persona_id,
+                                &call.name,
+                                &call.args,
+                            ),
+                            None => access
+                                .map_or(Ok(()), |access| {
+                                    access.authorize_memory(
+                                        &caller.persona_id,
+                                        &caller.room_id,
+                                        &call.name,
+                                    )
+                                })
+                                .and_then(|()| {
+                                    execute_with_optional_authorization(
+                                        memory,
+                                        caller,
+                                        authorized_global,
+                                        &call,
+                                    )
+                                }),
+                        });
                 match executed {
                     Ok(text) => (rendered, text),
                     Err(error) => (rendered, format!("error: {error:#}")),

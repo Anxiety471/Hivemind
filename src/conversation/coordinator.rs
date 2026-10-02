@@ -76,6 +76,35 @@ pub(super) fn same_turn_replies(
     out
 }
 
+/// The role-boundary block of an agent's prompt: what it is authorized to do,
+/// what it is not, and what to do instead. Empty for an unscoped agent. An
+/// explicit assignment is an authorization too, so reassignment takes effect on
+/// the next turn.
+pub(super) fn scope_section(
+    authorized: &[String],
+    unauthorized: &[String],
+    assignment: Option<&String>,
+) -> String {
+    if authorized.is_empty() && unauthorized.is_empty() {
+        return String::new();
+    }
+    let list = |items: &[String]| items.iter().map(|i| format!("- {i}\n")).collect::<String>();
+    let mut out = String::from("\nRole boundaries (authoritative):\n");
+    if !authorized.is_empty() || assignment.is_some() {
+        out.push_str("Authorized work:\n");
+        out.push_str(&list(authorized));
+        if let Some(task) = assignment {
+            out.push_str(&format!("- explicitly assigned to you: {task}\n"));
+        }
+    }
+    if !unauthorized.is_empty() {
+        out.push_str("Not authorized (never do this work):\n");
+        out.push_str(&list(unauthorized));
+    }
+    out.push_str(&format!("Do only authorized work. If asked for anything else, do not perform it: start your reply with {} then state the boundary, quote the request so it can be routed, and name who should take it. Authorized work is completed normally.\n", super::linter::OUT_OF_SCOPE));
+    out
+}
+
 /// What an open-floor member answers to stay silent; never recorded.
 const PASS: &str = "PASS";
 
@@ -571,6 +600,27 @@ impl ConversationCoordinator {
         }
         history.completed_turns.push(turn_id.clone());
         let mut next_state = history.state.clone();
+        // A declined out-of-scope request is surfaced in shared state, with the
+        // request context the agent quoted, so it can be routed to another role.
+        for reply in &replies {
+            if let Some(notice) = reply
+                .result
+                .as_deref()
+                .ok()
+                .and_then(super::linter::out_of_scope_notice)
+            {
+                if next_state.open_questions.len() < 100 {
+                    let entry = format!(
+                        "{} declined out-of-scope work: {}",
+                        reply.name,
+                        notice.chars().take(400).collect::<String>()
+                    );
+                    if !next_state.open_questions.contains(&entry) {
+                        next_state.open_questions.push(entry);
+                    }
+                }
+            }
+        }
         let state_update =
             apply_explicit_state_updates(&mut next_state, if agent_input { "" } else { input })
                 .and_then(|()| {
@@ -790,7 +840,12 @@ impl ConversationCoordinator {
         } else {
             ""
         };
-        let identity = format!("You are participating in {room_name}.\n\nParticipants:\n{roster}\n\nYou are {}. Your room role is {}.\n{mention_hint}", current.agent.name, current.role.as_deref().or(current.agent.role.as_deref()).unwrap_or("participant"));
+        let scope = scope_section(
+            current.agent.authorized_work.as_slice(),
+            current.agent.unauthorized_work.as_slice(),
+            history.state.assignments.get(&current.agent.name),
+        );
+        let identity = format!("You are participating in {room_name}.\n\nParticipants:\n{roster}\n\nYou are {}. Your room role is {}.\n{mention_hint}{scope}", current.agent.name, current.role.as_deref().or(current.agent.role.as_deref()).unwrap_or("participant"));
         let extra = self
             .tools
             .get()

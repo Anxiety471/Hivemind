@@ -35,6 +35,10 @@ pub(super) struct AgentBody {
     #[serde(default)]
     roles: Vec<String>,
     web: Option<bool>,
+    #[serde(default)]
+    authorized_work: Vec<String>,
+    #[serde(default)]
+    unauthorized_work: Vec<String>,
 }
 
 /// The editable definition of an agent as the UI shows and re-submits it.
@@ -52,7 +56,17 @@ pub(super) fn config_view(agent: &AgentConfig) -> Value {
         "permissions": agent.permissions,
         "roles": agent.roles,
         "web": agent.web,
+        "authorized_work": agent.authorized_work,
+        "unauthorized_work": agent.unauthorized_work,
     })
+}
+
+fn clean_list(items: Vec<String>) -> Vec<String> {
+    items
+        .into_iter()
+        .map(|item| item.trim().to_owned())
+        .filter(|item| !item.is_empty())
+        .collect()
 }
 
 fn blank_to_none(value: Option<String>) -> Option<String> {
@@ -122,6 +136,8 @@ fn build(state: &ApiState, id: String, body: AgentBody) -> Result<AgentConfig, R
         roles: body.roles,
         tool_access: None,
         web: body.web.unwrap_or(true),
+        authorized_work: clean_list(body.authorized_work),
+        unauthorized_work: clean_list(body.unauthorized_work),
     })
 }
 
