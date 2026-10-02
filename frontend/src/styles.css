@@ -1841,6 +1841,11 @@ li.task-item p {
   gap: 8px;
   font-weight: 400;
 }
+.room-settings label.check input[type="checkbox"] {
+  width: auto;
+  padding: 0;
+  flex: none;
+}
 .room-settings .disabled,
 .room-settings .disabled select {
   opacity: 0.7;
@@ -1942,4 +1947,494 @@ li.task-item p {
   position: absolute;
   top: 6px;
   right: 6px;
+}
+
+/* Agent editor */
+.agent-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 0;
+  overflow: visible;
+}
+.agent-form .form-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 18px 22px;
+  border-bottom: 1px solid var(--border);
+}
+.agent-form .form-head h3 {
+  margin: 0;
+  font-size: 17px;
+}
+.agent-form .form-head p {
+  margin: 2px 0 0;
+}
+.agent-form .warn-note {
+  margin: 14px 22px 0;
+}
+.agent-form .form-section {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 14px 32px;
+  padding: 22px;
+  border-bottom: 1px solid var(--border);
+  align-items: start;
+}
+.agent-form .form-section > :not(.section-title) {
+  grid-column: 2;
+  min-width: 0;
+}
+.agent-form .section-title {
+  grid-column: 1;
+  grid-row: 1 / span 20;
+}
+.agent-form .section-title h4 {
+  margin: 0 0 4px;
+  font-size: 14px;
+}
+.agent-form .section-title p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.agent-form .form-grid.two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+.agent-form .field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+  font-weight: 500;
+  font-size: 13px;
+  position: relative;
+}
+.agent-form legend,
+.agent-form .field > label {
+  padding: 0;
+  font-weight: 500;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.agent-form .field label {
+  margin-bottom: 0;
+}
+.agent-form .field-note {
+  margin: 2px 0 0;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.agent-form .field-note[data-tone="bad"] {
+  color: var(--bad);
+}
+.agent-form .link {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--info);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  text-decoration: none;
+}
+.agent-form .link:hover:not(:disabled) {
+  text-decoration: underline;
+  border: 0;
+}
+.agent-form textarea {
+  resize: vertical;
+  line-height: 1.5;
+}
+
+/* Radio cards */
+.agent-form .choice-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.agent-form .choice-item {
+  position: relative;
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 14px;
+  min-width: 64px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--panel-2);
+  cursor: pointer;
+  font-weight: 500;
+  transition: border-color 0.12s, background 0.12s, box-shadow 0.12s;
+}
+.agent-form .choice-item:hover:not([data-disabled="true"]) {
+  border-color: var(--muted);
+}
+.agent-form .choice-item[data-on="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 1px var(--accent) inset;
+}
+.agent-form .choice-item[data-disabled="true"] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.agent-form .choice-item:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.agent-form .choice-item input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: inherit;
+}
+.agent-form .choice-hint {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--muted);
+}
+.agent-form .runtimes .choice-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.agent-form .compact .choice-row {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  gap: 0;
+  align-self: flex-start;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  overflow: hidden;
+}
+.agent-form .compact .choice-item {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 8px 16px;
+  border-right: 1px solid var(--border);
+}
+.agent-form .compact .choice-item:last-child {
+  border-right: 0;
+}
+.agent-form .compact .choice-item[data-on="true"] {
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 1px var(--accent) inset;
+}
+.agent-form .levels .choice-item {
+  padding: 6px 13px;
+  min-width: 0;
+  border-radius: 999px;
+}
+
+/* Check lists */
+.agent-form .checklist legend {
+  width: 100%;
+}
+.agent-form .checklist .count {
+  font-weight: 400;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--text);
+}
+.agent-form .checklist .count[data-empty="true"] {
+  background: var(--panel-2);
+  color: var(--muted);
+  border: 1px solid var(--border);
+}
+.agent-form .check-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 8px;
+}
+.agent-form .check-grid[data-columns="narrow"] {
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+}
+.agent-form .check-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--panel-2);
+  cursor: pointer;
+  font-weight: 400;
+  transition: border-color 0.12s, background 0.12s;
+}
+.agent-form .check-item:hover {
+  border-color: var(--muted);
+}
+.agent-form .check-item[data-on="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.agent-form .check-item input {
+  width: 16px;
+  height: 16px;
+  margin: 2px 0 0;
+  padding: 0;
+  flex: none;
+  accent-color: var(--accent);
+}
+.agent-form .check-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.agent-form .check-name {
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.agent-form .check-hint {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+.agent-form .check-add {
+  display: flex;
+  gap: 8px;
+  max-width: 340px;
+}
+
+/* Model picker */
+.agent-form .combo-input {
+  position: relative;
+}
+.agent-form .combo-input input {
+  padding-right: 32px;
+}
+.agent-form .combo-input .clear {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  border: 0;
+  background: none;
+  padding: 2px 8px;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--muted);
+}
+.agent-form .combo-list {
+  position: absolute;
+  z-index: 20;
+  top: 66px;
+  left: 0;
+  right: 0;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+}
+.agent-form .combo-group {
+  position: sticky;
+  top: -4px;
+  padding: 6px 8px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  background: var(--panel);
+}
+.agent-form .combo-option {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 7px;
+  cursor: pointer;
+  font-weight: 400;
+}
+.agent-form .combo-option[data-active="true"] {
+  background: var(--accent-soft);
+}
+.agent-form .combo-name {
+  font-weight: 500;
+  white-space: nowrap;
+}
+.agent-form .combo-id {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--muted);
+}
+.agent-form .combo-tag {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--info-soft);
+  color: var(--info);
+}
+.agent-form .combo-check {
+  color: var(--ok);
+}
+.agent-form .combo-empty {
+  padding: 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* Workspace */
+.agent-form .path-input {
+  display: flex;
+  gap: 8px;
+}
+.agent-form .path-input button {
+  flex: none;
+}
+.agent-form .known-paths {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.agent-form .known-paths .chip {
+  max-width: 100%;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--panel-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-block;
+}
+.agent-form .known-paths .chip[data-on="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.folder-picker {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-2);
+  overflow: hidden;
+}
+.folder-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.folder-bar .crumbs {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 12px;
+  font-family: ui-monospace, "DejaVu Sans Mono", monospace;
+}
+.folder-bar .crumbs .sep {
+  margin: 0 3px;
+  color: var(--muted);
+}
+.folder-bar .inline-check {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 400;
+  margin: 0;
+}
+.folder-bar .inline-check input {
+  width: auto;
+  margin: 0;
+  accent-color: var(--accent);
+}
+.folder-list {
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  max-height: 240px;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 2px;
+}
+.folder-list[data-loading="true"] {
+  opacity: 0.6;
+}
+.folder-list li button {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  padding: 6px 8px;
+  border-radius: 7px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  justify-content: flex-start;
+}
+.folder-list li button:hover {
+  background: var(--accent-soft);
+}
+.folder-list .empty-row {
+  grid-column: 1 / -1;
+  padding: 8px;
+  font-size: 12px;
+}
+.folder-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+}
+.ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Footer */
+.agent-form .form-foot {
+  position: sticky;
+  bottom: 0;
+  z-index: 10;
+  display: flex;
+  gap: 10px;
+  padding: 14px 22px;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+  border-radius: 0 0 var(--radius) var(--radius);
+}
+.agent-form > .error-note {
+  margin: 14px 22px 0;
+}
+@media (max-width: 860px) {
+  .agent-form .form-section {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .agent-form .form-section > :not(.section-title),
+  .agent-form .section-title {
+    grid-column: 1;
+    grid-row: auto;
+  }
+  .agent-form .form-grid.two {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
