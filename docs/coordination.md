@@ -116,3 +116,9 @@ Errors use one shape: `{"error":{"code","message"}}`; internal failures are sani
 - Non-goals unchanged: no autonomous merge or deploy, no multi-user API, no unrestricted agent creation.
 
 Host-run verification and interrupted-work recovery are configured through [execution.md](execution.md).
+
+### Durable operator questions
+
+Work and plan attempts may call `tasks.wait {"question":"..."}` to save an operator question in SQLite and end the turn. Hivemind commits a Git checkpoint, records the attempt as `waiting`, releases its scheduler capacity, and shows the task as `needs_input`. The question survives restart. Answer through the task page, operator inbox, or `POST /tasks/{id}/input`. Once checkpoint finalization has finished, the answer wakes a new attempt with recorded feedback and the checkpoint merged into its worktree. This is a continuation, not a replay of the previous tool calls. A checkpoint never counts as a deliverable. Failed checkpointing blocks work for explicit recovery.
+
+Durable questions are operator-only, remain open until answered or cancelled, and are limited to `max_questions` per task. Dispatch and tool budgets still apply. Existing `tasks.ask` remains a short, process-local wait with a timeout and optional persona recipient; it continues to hold its slot.

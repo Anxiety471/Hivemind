@@ -104,6 +104,7 @@ string_enum!(AttemptState {
     Failed => "failed",
     Cancelled => "cancelled",
     Interrupted => "interrupted",
+    Waiting => "waiting",
 });
 
 string_enum!(MessageKind {

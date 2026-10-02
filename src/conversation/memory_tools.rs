@@ -560,6 +560,7 @@ pub(super) async fn invoke_with_memory(
                         }),
                 };
                 match executed {
+                    Ok(text) if host.is_some_and(|h| h.ends_turn(&call.name)) => return Ok(text),
                     Ok(text) => (rendered, text),
                     Err(error) => (rendered, format!("error: {error:#}")),
                 }

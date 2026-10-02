@@ -133,6 +133,7 @@ struct Scenario {
     global_probe: bool,
     /// Backend asks the user a blocking question before finishing.
     ask_user: bool,
+    defer_user: bool,
 }
 
 struct Fake {
@@ -237,6 +238,20 @@ impl AgentInvoker for Fake {
                         {"key": "merge", "objective": "integrate and verify", "acceptance": ["both changes present"], "kind": "integrate", "depends_on": ["api", "ui"]},
                     ]}),
                 )
+            }
+            ("Back", "work", 0) if s.defer_user => {
+                if full.contains("Answer from user to question") {
+                    assert_eq!(
+                        std::fs::read_to_string(cwd.join("checkpoint.txt")).unwrap(),
+                        "saved before waiting"
+                    );
+                    assert!(full.contains("sqlite"));
+                    std::fs::write(cwd.join("api.txt"), "api on sqlite").unwrap();
+                    submit_result("continued from checkpoint")
+                } else {
+                    std::fs::write(cwd.join("checkpoint.txt"), "saved before waiting").unwrap();
+                    tool("tasks.wait", json!({"question": "sqlite or postgres?"}))
+                }
             }
             ("Back", "work", 0) if s.ask_user => {
                 tool("tasks.ask", json!({"question": "sqlite or postgres?"}))
@@ -767,4 +782,52 @@ async fn a_worker_waits_on_its_question_and_resumes_with_the_answer_in_the_same_
         kinds.iter().any(|k| k == "task.question") && kinds.iter().any(|k| k == "task.answered"),
         "{kinds:?}"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn durable_wait_checkpoints_work_releases_capacity_and_continues_after_restart() {
+    let mut fixture = Fixture::new(|_| {});
+    let fake = Fake::new(Scenario {
+        defer_user: true,
+        ui_after_api: true,
+        ..Default::default()
+    });
+    let root = fixture.submit("orders").task.id;
+    let mut scheduler = Scheduler::new(
+        fixture.core.clone(),
+        Some(fake.clone() as Arc<dyn AgentInvoker>),
+    );
+    scheduler.drain(Duration::from_secs(30)).await.unwrap();
+    let child = fixture.child(&root, "implement api");
+    assert_eq!(child.task.status, TaskStatus::NeedsInput);
+    assert_eq!(child.questions[0].question, "sqlite or postgres?");
+    assert!(child.artifacts.iter().any(|a| a.kind == "checkpoint"));
+    assert_eq!(
+        fixture
+            .core
+            .coordination()
+            .attempts(&child.task.id)
+            .unwrap()[0]
+            .state,
+        AttemptState::Waiting
+    );
+    scheduler.stop().await;
+    drop(scheduler);
+    let config = fixture.core.config().clone();
+    fixture.core = Arc::new(HivemindCore::new(config, fixture.root.join("hivemind.toml")).unwrap());
+    assert_eq!(fixture.detail(&child.task.id).questions.len(), 1);
+    fixture
+        .core
+        .coordination()
+        .provide_input(&child.task.id, "sqlite", "user")
+        .unwrap();
+    let mut scheduler = Scheduler::new(
+        fixture.core.clone(),
+        Some(fake.clone() as Arc<dyn AgentInvoker>),
+    );
+    scheduler.recover_startup();
+    scheduler.drain(Duration::from_secs(30)).await.unwrap();
+    scheduler.stop().await;
+    assert_eq!(fixture.detail(&root).task.status, TaskStatus::Completed);
+    assert!(fixture.detail(&child.task.id).questions.is_empty());
 }

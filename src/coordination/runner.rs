@@ -436,6 +436,9 @@ async fn execute(
                                 .collect())
                         })
                         .unwrap_or_default();
+                    if let Ok(Some(sha)) = service.store().read(|db| db.checkpoint(&task.id)) {
+                        shas.push(sha);
+                    }
                     if let Ok(artifacts) = service.store().read(|db| db.artifacts(&task.id)) {
                         if let Some(selected) = artifacts.iter().rev().find(|a| {
                             a.kind == "recovery_selected" || a.kind == "recovery_discarded"
@@ -542,6 +545,14 @@ async fn execute(
         },
         Err(error) => failed("turn", format!("{error:#}")),
     };
+    if service
+        .store()
+        .read(|db| db.deferred_for_attempt(&attempt.id))
+        .unwrap_or(false)
+        && matches!(end, AttemptEnd::Completed)
+    {
+        end = AttemptEnd::Deferred;
+    }
     if matches!(
         &end,
         AttemptEnd::Failed { .. } | AttemptEnd::Interrupted | AttemptEnd::Cancelled
@@ -556,14 +567,15 @@ async fn execute(
     }
     if let Some(tree) = worktree {
         let is_work = attempt.kind == AttemptKind::Work;
+        let artifact_kind = if matches!(end, AttemptEnd::Deferred) {
+            "checkpoint"
+        } else {
+            "commit"
+        };
+        let cleanup_dir = tree.root.clone();
         let finished = blocking(move || {
             let result = if is_work { Some(tree.finish()) } else { None };
-            if !is_work
-                || matches!(
-                    &result,
-                    Some(Ok(Finished::Committed { .. } | Finished::Unchanged))
-                )
-            {
+            if !is_work {
                 tree.remove();
             }
             result
@@ -574,14 +586,22 @@ async fn execute(
             let branch = format!("hivemind/{}-{}", task.id, attempt.id);
             match finished {
                 Ok(Finished::Committed { sha, stat }) => {
-                    let _ = service.record_artifact(
-                        &task.id,
-                        Some(&attempt.id),
-                        "commit",
-                        &format!("{branch}@{sha}"),
-                        Some(&sha),
-                        &stat,
-                    );
+                    if service
+                        .record_artifact(
+                            &task.id,
+                            Some(&attempt.id),
+                            artifact_kind,
+                            &format!("{branch}@{sha}"),
+                            Some(&sha),
+                            &stat,
+                        )
+                        .is_err()
+                    {
+                        end = failed(
+                            "workspace",
+                            "committed work could not be recorded; checkout retained for recovery",
+                        );
+                    }
                 }
                 Ok(Finished::Unchanged) => {}
                 Ok(Finished::Unresolved(files)) => {
@@ -593,7 +613,17 @@ async fn execute(
                 Err(error) => end = failed("workspace", format!("{error:#}")),
             }
         }
+        if is_work && !matches!(&end, AttemptEnd::Failed { .. }) {
+            blocking(move || workspace::discard(&cleanup_dir)).await;
+        }
         if matches!(&end, AttemptEnd::Failed { .. }) {
+            if artifact_kind == "checkpoint" {
+                let _ = service.host_transition(
+                    &task.id,
+                    TaskStatus::Blocked,
+                    "checkpoint could not be committed; inspect recovery before continuing",
+                );
+            }
             preserve_attempt(&core, &attempt.id);
         }
         // A fresh worktree per attempt means the live session's cwd is gone.

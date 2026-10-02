@@ -151,6 +151,7 @@ pub struct Dispatch {
 
 #[derive(Debug, Clone)]
 pub enum AttemptEnd {
+    Deferred,
     Completed,
     Failed { class: String, detail: String },
     Cancelled,
@@ -903,6 +904,7 @@ impl CoordinationService {
             let Some(attempt) = db.attempt(attempt_id)? else { return Ok(()) };
             let (state, class, detail) = match &end {
                 AttemptEnd::Completed => (AttemptState::Succeeded, None, None),
+                AttemptEnd::Deferred => (AttemptState::Waiting, None, None),
                 AttemptEnd::Failed { class, detail } => (AttemptState::Failed, Some(class.as_str()), Some(clip(detail, 500))),
                 AttemptEnd::Cancelled => (AttemptState::Cancelled, None, None),
                 AttemptEnd::Interrupted => (AttemptState::Interrupted, Some("interrupted"), Some("attempt lease expired or the process stopped before it finished")),
@@ -919,6 +921,7 @@ impl CoordinationService {
                 }
                 Ok(())
             };
+            if matches!(end, AttemptEnd::Deferred) { db.activate_answer(&task.id)?; }
             match (attempt.kind, &end) {
                 (_, AttemptEnd::Cancelled) => {}
                 (AttemptKind::Work, AttemptEnd::Completed) if task.status == TaskStatus::Running => block("attempt ended without submitting a result or reporting a blocker")?,
@@ -1270,7 +1273,7 @@ impl CoordinationService {
         let mut artifacts = Vec::new();
         for artifact in &result.artifacts {
             let kind = check_text("artifact kind", &artifact.kind, 32)?;
-            if kind == "commit" || kind == "summary" {
+            if matches!(kind.as_str(), "commit" | "summary" | "checkpoint") {
                 return forbid(
                     "commit and summary artifacts are recorded by Hivemind, not by agents",
                 );
@@ -1720,6 +1723,9 @@ impl CoordinationService {
     ) -> CoordResult<TaskDetail> {
         self.require_enabled()?;
         let answer = check_text("answer", answer, 4000)?;
+        if self.answer_deferred(task_id, &answer, actor)? {
+            return self.detail(task_id);
+        }
         // A running attempt waiting on `tasks.ask` takes the answer live.
         if self.answer_question(task_id, &answer, actor) {
             return self.detail(task_id);
