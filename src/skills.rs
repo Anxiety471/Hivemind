@@ -335,7 +335,8 @@ mod tests {
     struct Dir(PathBuf);
     impl Dir {
         fn new(tag: &str) -> Self {
-            let path = std::env::temp_dir().join(format!("hivemind-skills-{tag}-{}", std::process::id()));
+            let path =
+                std::env::temp_dir().join(format!("hivemind-skills-{tag}-{}", std::process::id()));
             let _ = fs::remove_dir_all(&path);
             fs::create_dir_all(&path).unwrap();
             Self(path)
@@ -354,7 +355,12 @@ mod tests {
     }
 
     fn catalog(dirs: &[&Dir]) -> SkillCatalog {
-        SkillCatalog::new(&dirs.iter().map(|d| d.0.display().to_string()).collect::<Vec<_>>())
+        SkillCatalog::new(
+            &dirs
+                .iter()
+                .map(|d| d.0.display().to_string())
+                .collect::<Vec<_>>(),
+        )
     }
 
     #[test]
@@ -390,20 +396,37 @@ mod tests {
         let doc = catalog.read("tidy", None).unwrap();
         assert!(doc.content.contains("scripts/run.sh"));
         assert!(doc.files.contains(&"scripts/run.sh".to_owned()));
-        assert_eq!(catalog.read("tidy", Some("scripts/run.sh")).unwrap().content, "echo hi\n");
+        assert_eq!(
+            catalog
+                .read("tidy", Some("scripts/run.sh"))
+                .unwrap()
+                .content,
+            "echo hi\n"
+        );
 
-        for bad in ["../secret.txt", "/etc/passwd", "scripts/../../secret.txt", "missing.md"] {
+        for bad in [
+            "../secret.txt",
+            "/etc/passwd",
+            "scripts/../../secret.txt",
+            "missing.md",
+        ] {
             assert!(catalog.read("tidy", Some(bad)).is_err(), "{bad}");
         }
         #[cfg(unix)]
-        assert!(catalog.read("tidy", Some("link.txt")).is_err(), "symlink escape");
+        assert!(
+            catalog.read("tidy", Some("link.txt")).is_err(),
+            "symlink escape"
+        );
         assert!(catalog.read("../tidy", None).is_err());
     }
 
     #[test]
     fn large_files_are_cut_on_a_character_boundary() {
         let dir = Dir::new("big");
-        dir.skill("big", &format!("---\ndescription: d\n---\n{}", "é".repeat(MAX_READ_BYTES)));
+        dir.skill(
+            "big",
+            &format!("---\ndescription: d\n---\n{}", "é".repeat(MAX_READ_BYTES)),
+        );
         let doc = catalog(&[&dir]).read("big", None).unwrap();
         assert!(doc.truncated);
         assert!(doc.content.len() <= MAX_READ_BYTES);
@@ -419,7 +442,12 @@ mod tests {
         let manifest = tools.manifest("main", "Engineer").unwrap();
         assert!(manifest.contains("- brand: Brand voice"));
         let out = tools
-            .execute("main", "Engineer", "skills.read", &serde_json::json!({"name": "brand"}))
+            .execute(
+                "main",
+                "Engineer",
+                "skills.read",
+                &serde_json::json!({"name": "brand"}),
+            )
             .unwrap();
         assert!(out.contains("Body"));
         assert!(tools
