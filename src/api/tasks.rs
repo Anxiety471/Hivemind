@@ -28,6 +28,7 @@ pub(super) fn routes() -> Router<ApiState> {
         .route("/api/v1/operator-inbox", get(operator_inbox))
         .route("/api/v1/tasks/{id}", get(show))
         .route("/api/v1/tasks/{id}/attempts", get(attempts))
+        .route("/api/v1/tasks/{id}/evidence", get(evidence))
         .route("/api/v1/tasks/{id}/cancel", post(cancel))
         .route("/api/v1/tasks/{id}/pause", post(pause))
         .route("/api/v1/tasks/{id}/resume", post(resume))
@@ -240,6 +241,26 @@ async fn show(State(state): State<ApiState>, Path(id): Path<String>) -> Response
             Json(json!({"task": detail, "event_high_water": service.high_water().unwrap_or(0)}))
                 .into_response()
         }
+        Err(error) => coord_error(error),
+    }
+}
+
+async fn evidence(State(state): State<ApiState>, Path(id): Path<String>) -> Response {
+    let service = state.core.coordination();
+    let result = service.store().read(|db| {
+        let task = db.task_or_err(&id)?;
+        let mut decisions = db.decisions(&task.root_id, None)?;
+        if task.id != task.root_id {
+            decisions.extend(db.decisions(&id, None)?);
+        }
+        Ok((decisions, db.task_events(&id)?))
+    });
+    match result {
+        Ok((decisions, events)) => match state.core.execution().checks(&id) {
+            Ok(checks) => Json(json!({"decisions": decisions, "events": events, "checks": checks}))
+                .into_response(),
+            Err(_) => coord_error(CoordError::Internal("could not read host checks".into())),
+        },
         Err(error) => coord_error(error),
     }
 }
@@ -1009,6 +1030,16 @@ mod tests {
             .call("GET", &format!("/api/v1/tasks/{api}"), None)
             .await;
         assert_eq!(shown["task"]["questions"][0]["question"], "which port?");
+        let (status, evidence) = fixture
+            .call("GET", &format!("/api/v1/tasks/{api}/evidence"), None)
+            .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(evidence["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["event_type"] == "task.steered"));
+        assert!(evidence["checks"].is_array());
         let (status, inbox) = fixture.call("GET", "/api/v1/operator-inbox", None).await;
         assert_eq!(status, StatusCode::OK);
         assert!(inbox["items"]

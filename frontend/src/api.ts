@@ -150,6 +150,12 @@ export type TaskDetail = {
   usage: Usage | null;
 };
 
+export type TaskEvidence = {
+  decisions: { id: string; text: string; proposer: string; state: string }[];
+  events: { seq: number; actor: string; event_type: string; payload: unknown; created_at: number }[];
+  checks: { name: string; passed: boolean; command: string[]; commit_sha: string; exit_code?: number; timed_out?: boolean; stdout?: string; stderr?: string; error?: string }[];
+};
+
 export type Attempt = {
   id: string;
   task_id: string;
@@ -409,6 +415,8 @@ export const api = {
     request<{ id: string }>("POST", "/tasks", { objective, acceptance, capabilities }),
   taskAction: (id: string, action: "cancel" | "pause" | "resume", body?: unknown) =>
     request<{ task: TaskDetail }>("POST", `/tasks/${enc(id)}/${action}`, body ?? {}),
+  taskEvidence: (id: string) => request<TaskEvidence>("GET", `/tasks/${enc(id)}/evidence`),
+  taskRecovery: (id: string, artifact_id: string, action: "resume" | "restore" | "discard") => request<{ workspace?: string }>("POST", `/tasks/${enc(id)}/recovery`, { artifact_id, action }),
   taskInput: (id: string, answer: string) =>
     request<{ task: TaskDetail }>("POST", `/tasks/${enc(id)}/input`, { answer }),
 

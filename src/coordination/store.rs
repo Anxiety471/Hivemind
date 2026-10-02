@@ -776,6 +776,10 @@ impl Db<'_> {
     }
 
     /// Events with `seq > after`, optionally for one root, bounded by `limit`.
+    pub fn task_events(&self, task: &str) -> CoordResult<Vec<CoordinationEvent>> {
+        Ok(self.c.prepare_cached("SELECT seq,root_id,task_id,actor,event_type,payload,created_at FROM coordination_events WHERE task_id=?1 ORDER BY seq DESC LIMIT 200")?.query_map([task], Self::event_row)?.collect::<rusqlite::Result<_>>()?)
+    }
+
     pub fn events_after(
         &self,
         after: i64,
