@@ -326,7 +326,10 @@ impl OmpSession {
         if !agent.web {
             args.extend([
                 "--config".to_string(),
-                overlay.with_file_name(NO_WEB_OVERLAY_FILE).display().to_string(),
+                overlay
+                    .with_file_name(NO_WEB_OVERLAY_FILE)
+                    .display()
+                    .to_string(),
             ]);
         }
         args.extend(Self::agent_args(agent));
@@ -679,14 +682,19 @@ mod tests {
         let mut agent = agent(None);
         agent.web = false;
         let args = OmpSession::rpc_args(&agent, overlay);
-        assert!(args.windows(2).any(|w| w == ["--config", "/hive/harness/omp-noweb.yml"]));
+        assert!(args
+            .windows(2)
+            .any(|w| w == ["--config", "/hive/harness/omp-noweb.yml"]));
         assert!(!args.contains(&"--tools".to_string()));
         agent.tool_access = Some(crate::config::ToolAccess {
             write: false,
             exec: false,
         });
         let args = OmpSession::rpc_args(&agent, overlay);
-        assert_eq!(args[args.iter().position(|a| a == "--tools").unwrap() + 1], "read,grep,glob,lsp,todo");
+        assert_eq!(
+            args[args.iter().position(|a| a == "--tools").unwrap() + 1],
+            "read,grep,glob,lsp,todo"
+        );
     }
 
     #[derive(Default)]
