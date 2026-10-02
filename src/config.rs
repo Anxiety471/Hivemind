@@ -375,6 +375,9 @@ pub struct AgentConfig {
     /// Runtime tool restriction resolved from `roles` at startup (`access::tool_access`); never configured directly.
     #[serde(skip)]
     pub tool_access: Option<ToolAccess>,
+    /// Whether the runtime's own web tools (search, fetch) stay available. On by default.
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub web: bool,
 }
 
 /// Which of a runtime's own workspace tools a restricted persona keeps.
@@ -632,6 +635,7 @@ impl HivemindConfig {
                     permissions: Vec::new(),
                     roles: Vec::new(),
                     tool_access: None,
+                    web: true,
                 },
                 AgentConfig {
                     name: "Reviewer".into(),
@@ -652,6 +656,7 @@ impl HivemindConfig {
                     permissions: Vec::new(),
                     roles: Vec::new(),
                     tool_access: None,
+                    web: true,
                 },
             ],
         }
@@ -699,6 +704,14 @@ fn default_prompt_retries() -> u32 {
 
 fn default_runtime() -> String {
     "omp".into()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn is_true(value: &bool) -> bool {
+    *value
 }
 
 /// Resolves a workspace against the current directory without touching the filesystem, so a

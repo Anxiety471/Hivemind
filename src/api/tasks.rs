@@ -584,6 +584,7 @@ mod tests {
                 permissions: perms.iter().map(|c| c.to_string()).collect(),
                 roles: Vec::new(),
                 tool_access: None,
+                web: true,
             };
             config.agents = vec![
                 persona("Lead", &[], &["coordinate", "review"]),

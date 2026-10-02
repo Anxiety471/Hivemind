@@ -34,6 +34,7 @@ pub(super) struct AgentBody {
     permissions: Vec<String>,
     #[serde(default)]
     roles: Vec<String>,
+    web: Option<bool>,
 }
 
 /// The editable definition of an agent as the UI shows and re-submits it.
@@ -50,6 +51,7 @@ pub(super) fn config_view(agent: &AgentConfig) -> Value {
         "capabilities": agent.capabilities,
         "permissions": agent.permissions,
         "roles": agent.roles,
+        "web": agent.web,
     })
 }
 
@@ -119,6 +121,7 @@ fn build(state: &ApiState, id: String, body: AgentBody) -> Result<AgentConfig, R
         permissions: body.permissions,
         roles: body.roles,
         tool_access: None,
+        web: body.web.unwrap_or(true),
     })
 }
 

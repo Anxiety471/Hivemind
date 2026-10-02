@@ -30,6 +30,7 @@ pub(super) fn persona(name: &str, caps: &[&str], perms: &[&str], workspace: &str
         permissions: perms.iter().map(|c| c.to_string()).collect(),
         roles: Vec::new(),
         tool_access: None,
+        web: true,
     }
 }
 

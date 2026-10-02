@@ -188,15 +188,21 @@ impl OpencodeSession {
 
     /// OpenCode permission config: everything allowed unless the persona's roles withhold editing or shell.
     fn permission(agent: &AgentConfig) -> Value {
-        let Some(access) = agent.tool_access else {
+        if agent.tool_access.is_none() && agent.web {
             return json!("allow");
-        };
-        let mut rules = json!({"*": "allow"});
-        if !access.write {
-            rules["edit"] = json!("deny");
         }
-        if !access.exec {
-            rules["bash"] = json!("deny");
+        let mut rules = json!({"*": "allow"});
+        if let Some(access) = agent.tool_access {
+            if !access.write {
+                rules["edit"] = json!("deny");
+            }
+            if !access.exec {
+                rules["bash"] = json!("deny");
+            }
+        }
+        if !agent.web {
+            rules["webfetch"] = json!("deny");
+            rules["websearch"] = json!("deny");
         }
         rules
     }
@@ -548,6 +554,17 @@ mod tests {
         assert_eq!(
             approve_permission(&only_reject),
             json!({"outcome":{"outcome":"cancelled"}})
+        );
+    }
+
+    #[test]
+    fn web_off_denies_web_tools_even_for_an_unrestricted_persona() {
+        let mut agent = crate::config::HivemindConfig::default_poc().agents[0].clone();
+        assert_eq!(OpencodeSession::permission(&agent), json!("allow"));
+        agent.web = false;
+        assert_eq!(
+            OpencodeSession::permission(&agent),
+            json!({"*": "allow", "webfetch": "deny", "websearch": "deny"})
         );
     }
 }

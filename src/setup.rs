@@ -278,6 +278,7 @@ mod tests {
             permissions: Vec::new(),
             roles: Vec::new(),
             tool_access: None,
+            web: true,
         }
     }
 
