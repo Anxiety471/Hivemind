@@ -75,11 +75,13 @@ Worktree directories are removed after each attempt; branches stay. The live ses
 
 Dynamic groups live in SQLite (configuration groups are untouched). `groups.create` resolves configured personas only, one distinct persona per requested capability; the same purpose and membership reuses the group. Membership changes are revision-checked and audited, and removed members' task sessions are rotated.
 
+`wakeup.schedule {delay_seconds, context, key?}` lets an agent wake itself later: it stores a durable self-addressed `wakeup` message whose delivery carries a `due_at`. The scheduler and inbox ignore it until due, then it runs as a normal single inbox attempt carrying `context`, and is never replayed (an interrupted attempt marks it failed, like any delivery). The delay must be 1s to 7 days and before the root deadline, at most 5 wakeups may be pending per agent per root task, and invalid requests create nothing.
+
 ## Agent tools
 
 Offered through the same ```` ```hivemind-tool ```` fence as memory tools, only inside task rooms and only when the persona's role and permissions allow them. The manifest is injected with the first prompt of each runtime epoch; later turns carry a one-line reminder.
 
-`agents.list`, `messages.send|inbox|ack`, `groups.create|get|members.update`, `tasks.get|list|plan.propose|delegate|progress|block|result.submit|review|decide`, `artifacts.get`, `context.lookup`. Memory tools are unchanged and keep their own limits.
+`agents.list`, `messages.send|inbox|ack`, `wakeup.schedule`, `groups.create|get|members.update`, `tasks.get|list|plan.propose|delegate|progress|block|result.submit|review|decide`, `artifacts.get`, `context.lookup`. Memory tools are unchanged and keep their own limits.
 
 Actor, room, task, attempt, lease, and budget are bound by Hivemind; identity in arguments is ignored. Task text and agent messages are never user input: `Global:` directives and room-state directives are ignored in task rooms, so an agent cannot authorize a global memory write.
 

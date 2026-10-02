@@ -48,6 +48,7 @@ const COMMON: &[&str] = &[
     "messages.send",
     "messages.inbox",
     "messages.ack",
+    "wakeup.schedule",
     "tasks.get",
     "tasks.list",
     "tasks.progress",
@@ -112,6 +113,10 @@ const EXAMPLES: &[(&str, &str)] = &[
     ),
     ("messages.inbox", r#"{"limit":5}"#),
     ("messages.ack", r#"{"id":"mg_..."}"#),
+    (
+        "wakeup.schedule",
+        r#"{"delay_seconds":600,"context":"re-check whether the API contract was answered"}"#,
+    ),
     (
         "groups.create",
         r#"{"purpose":"orders form contract","roles":["frontend","backend"]}"#,
@@ -461,6 +466,25 @@ fn run(
                     })
                     .collect::<Vec<_>>()
                     .join("\n"),
+            ))
+        }
+        "wakeup.schedule" => {
+            let delay = opt_int(args, "delay_seconds")?
+                .ok_or_else(|| CoordError::Invalid("missing argument 'delay_seconds'".into()))?;
+            let (message, duplicate) = service.schedule_wakeup(
+                ctx,
+                delay,
+                &str_arg(args, "context")?,
+                opt_str(args, "key")?.as_deref(),
+            )?;
+            Ok(format!(
+                "{} wakeup {}: Hivemind will wake you with your context in {delay}s (once)",
+                if duplicate {
+                    "already scheduled"
+                } else {
+                    "scheduled"
+                },
+                message.id
             ))
         }
         "messages.ack" => {

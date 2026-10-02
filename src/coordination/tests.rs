@@ -1302,3 +1302,111 @@ fn agent_evidence_cannot_bypass_host_checks_or_reuse_proof_for_another_commit() 
         TaskStatus::Completed
     );
 }
+
+fn wakeup_ctx_after_finish(service: &CoordinationService, root: &str) {
+    service
+        .finish_attempt(
+            &service.attempts(root).unwrap()[0].id,
+            AttemptEnd::Completed,
+        )
+        .unwrap();
+}
+
+#[test]
+fn agent_schedules_a_wakeup_that_is_delivered_once_when_due() {
+    let service = service();
+    let (root, lead) = team_in_root(&service);
+    let (message, duplicate) = service
+        .schedule_wakeup(&lead, 60, "re-check the API contract", None)
+        .unwrap();
+    assert!(!duplicate);
+    assert_eq!(message.kind, MessageKind::Wakeup);
+    assert_eq!(message.recipients, ["Lead"]);
+
+    // Not due yet: neither the scheduler nor the inbox sees it.
+    assert!(service.inbox(&lead, 8).unwrap().is_empty());
+    wakeup_ctx_after_finish(&service, &root);
+    assert!(claim(&service).is_empty());
+
+    service.store().pin_clock(service.store().now() + 61);
+    let dispatches = claim(&service);
+    assert_eq!(dispatches.len(), 1);
+    assert_eq!(dispatches[0].attempt.kind, AttemptKind::Inbox);
+    assert_eq!(dispatches[0].attempt.persona, "Lead");
+    assert_eq!(
+        dispatches[0].deliveries[0].1.body,
+        "re-check the API contract"
+    );
+
+    // Single use: the delivery is claimed, so it never wakes the agent again.
+    assert!(claim(&service).is_empty());
+}
+
+#[test]
+fn invalid_wakeups_fail_without_scheduling_anything() {
+    let service = service();
+    let (_root, lead) = team_in_root(&service);
+    for delay in [0, -5, MAX_WAKEUP_DELAY_SECS + 1] {
+        assert!(service.schedule_wakeup(&lead, delay, "ctx", None).is_err());
+    }
+    assert!(service.schedule_wakeup(&lead, 30, "  ", None).is_err());
+    let as_message = SendMessage {
+        recipients: vec!["Back".into()],
+        group: None,
+        kind: MessageKind::Wakeup,
+        body: "x".into(),
+        artifacts: vec![],
+        causation: None,
+        idempotency_key: None,
+    };
+    assert!(service.send_message(&lead, as_message).is_err());
+    assert_eq!(
+        service
+            .store()
+            .read(|db| db.pending_wakeups("Lead", &lead.root_id))
+            .unwrap(),
+        0
+    );
+
+    for _ in 0..MAX_PENDING_WAKEUPS {
+        service.schedule_wakeup(&lead, 30, "ctx", None).unwrap();
+    }
+    assert!(matches!(
+        service.schedule_wakeup(&lead, 30, "ctx", None),
+        Err(CoordError::Conflict(_))
+    ));
+    // The same idempotency key never schedules twice.
+    let first = service.schedule_wakeup(&lead, 30, "k", Some("k1"));
+    assert!(first.is_err(), "cap already reached");
+}
+
+#[test]
+fn scheduled_wakeups_survive_a_restart() {
+    let path = std::env::temp_dir().join(format!("hivemind-wakeup-{}.db", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let config = team_config(".");
+    let build = || {
+        CoordinationService::new(
+            CoordinationStore::open(&path).unwrap(),
+            config.coordination.clone(),
+            Roster::from_config(&config),
+            EventBus::new(),
+        )
+    };
+    let first = build();
+    let (root, lead) = team_in_root(&first);
+    first
+        .schedule_wakeup(&lead, 60, "after restart", None)
+        .unwrap();
+    wakeup_ctx_after_finish(&first, &root);
+    drop(first);
+
+    let second = build();
+    assert!(claim(&second).is_empty(), "still in the future");
+    second.store().pin_clock(second.store().now() + 61);
+    let dispatches = claim(&second);
+    assert_eq!(dispatches.len(), 1);
+    assert_eq!(dispatches[0].deliveries[0].1.body, "after restart");
+    assert!(claim(&second).is_empty());
+    let _ = std::fs::remove_file(&path);
+}

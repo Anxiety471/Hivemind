@@ -108,6 +108,12 @@ pub struct ResultIn {
     pub verification: Vec<Evidence>,
 }
 
+/// Bounds on a self-scheduled wakeup: no sooner than a second, no later than a
+/// week, and a handful outstanding per agent per root task.
+pub(super) const MIN_WAKEUP_DELAY_SECS: i64 = 1;
+pub(super) const MAX_WAKEUP_DELAY_SECS: i64 = 7 * 24 * 3600;
+pub(super) const MAX_PENDING_WAKEUPS: i64 = 5;
+
 pub struct SendMessage {
     pub recipients: Vec<String>,
     pub group: Option<String>,
@@ -1734,6 +1740,9 @@ impl CoordinationService {
         if req.artifacts.len() > 8 {
             return invalid("at most 8 artifact references per message");
         }
+        if req.kind == MessageKind::Wakeup {
+            return invalid("use wakeup.schedule to schedule a wakeup for yourself");
+        }
         if req.kind == MessageKind::Ack && req.causation.is_none() {
             return invalid("an ack must reference the message it acknowledges (causation)");
         }
@@ -1826,12 +1835,99 @@ impl CoordinationService {
                 thread,
                 idempotency_key: key.as_deref(),
                 wake,
+                due_at: None,
             })?;
             if req.kind == MessageKind::DecisionProposal {
                 db.insert_decision(&task.id, &body, &ctx.persona, Some(&id))?;
             }
             db.event(&task.root_id, Some(&task.id), &ctx.persona, "message.sent", serde_json::json!({"message_id": id, "kind": req.kind.as_str(), "recipients": recipients, "group_id": group_id, "wake": wake}))?;
             let message = db.message(&id)?.ok_or_else(|| CoordError::Internal("message vanished".into()))?;
+            Ok((message, false))
+        })?;
+        self.changed();
+        Ok(out)
+    }
+
+    /// Schedules the calling agent's own future wakeup on its current task.
+    /// The wakeup is a durable self-addressed delivery that the scheduler
+    /// claims once due, exactly like a queued request, so it survives restarts
+    /// and runs at most once. Invalid requests create nothing.
+    pub fn schedule_wakeup(
+        &self,
+        ctx: &ToolCtx,
+        delay_secs: i64,
+        context: &str,
+        idempotency_key: Option<&str>,
+    ) -> CoordResult<(Message, bool)> {
+        if !(MIN_WAKEUP_DELAY_SECS..=MAX_WAKEUP_DELAY_SECS).contains(&delay_secs) {
+            return invalid(format!(
+                "delay_seconds must be between {MIN_WAKEUP_DELAY_SECS} and {MAX_WAKEUP_DELAY_SECS}"
+            ));
+        }
+        let body = check_text("wakeup context", context, 6000)?;
+        let key = idempotency_key
+            .map(|k| check_text("idempotency key", k, 128))
+            .transpose()?;
+        let task = self.live(ctx)?;
+        self.charge(&ctx.root_id, Charge::Message)?;
+        let out = self.store.write(|db| {
+            if let Some(key) = &key {
+                if let Some(existing) = db.message_by_key(&ctx.persona, key)? {
+                    return Ok((existing, true));
+                }
+            }
+            let root = db.task_or_err(&task.root_id)?;
+            if root.status.is_terminal() || root.paused {
+                return conflict(format!(
+                    "root task is {}",
+                    if root.paused {
+                        "paused"
+                    } else {
+                        root.status.as_str()
+                    }
+                ));
+            }
+            let due_at = db.now + delay_secs;
+            if let Some(usage) = db.usage(&task.root_id)? {
+                if due_at > usage.deadline {
+                    return invalid("wakeup would be due after this root task's deadline");
+                }
+            }
+            if db.pending_wakeups(&ctx.persona, &task.root_id)? >= MAX_PENDING_WAKEUPS {
+                return conflict(format!(
+                    "at most {MAX_PENDING_WAKEUPS} pending wakeups per root task"
+                ));
+            }
+            let id = new_id("mg");
+            db.insert_message(&NewMessage {
+                id: id.clone(),
+                root_id: &task.root_id,
+                task_id: &task.id,
+                sender: &ctx.persona,
+                sender_instance: &AgentInstanceId::new(&ctx.room, &ctx.persona).encode(),
+                kind: MessageKind::Wakeup,
+                recipients: std::slice::from_ref(&ctx.persona),
+                group_id: None,
+                body: &body,
+                artifacts: &[],
+                causation_id: None,
+                depth: 0,
+                correlation_id: task.root_id.clone(),
+                thread: id.clone(),
+                idempotency_key: key.as_deref(),
+                wake: true,
+                due_at: Some(due_at),
+            })?;
+            db.event(
+                &task.root_id,
+                Some(&task.id),
+                &ctx.persona,
+                "wakeup.scheduled",
+                serde_json::json!({"message_id": id, "due_at": due_at}),
+            )?;
+            let message = db
+                .message(&id)?
+                .ok_or_else(|| CoordError::Internal("message vanished".into()))?;
             Ok((message, false))
         })?;
         self.changed();
@@ -2196,6 +2292,7 @@ impl CoordinationService {
                 thread: id.clone(),
                 idempotency_key: None,
                 wake: kind.wakes_recipient(),
+                due_at: None,
             })?;
             db.event(&root.id, Some(task_id), "user", "message.sent", serde_json::json!({"message_id": id, "kind": kind.as_str(), "recipients": to, "wake": kind.wakes_recipient()}))?;
             db.message(&id)?.ok_or_else(|| CoordError::Internal("message vanished".into()))
