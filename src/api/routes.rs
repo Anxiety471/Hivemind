@@ -38,6 +38,7 @@ pub(super) fn router(core: Arc<HivemindCore>, shutdown: watch::Receiver<bool>) -
         .merge(super::chat_groups::routes())
         .merge(super::workspaces::routes())
         .merge(super::runtime::routes())
+        .merge(super::skills::routes())
         .merge(super::setup::routes())
         .route("/api/v1/agents", get(agents).post(super::agents::create))
         .route("/api/v1/turns", post(submit_turn))

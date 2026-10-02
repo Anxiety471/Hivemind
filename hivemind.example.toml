@@ -60,6 +60,10 @@ Engineer = "Implementation Reviewer"
 # [workspaces]
 # roots = ["/abs/path/to/projects"]
 
+# Optional: skills Hivemind offers agents (skills.list / skills.read). Runtimes' own skills never load.
+# [skills]
+# dirs = ["~/.agents/skills"]
+
 # Durable execution defaults: limits are disabled until configured.
 # [execution]
 # task_token_limit = 100000

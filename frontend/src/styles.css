@@ -1923,3 +1923,20 @@ li.task-item p {
   letter-spacing: 0;
   white-space: pre;
 }
+
+.slash-output {
+  position: relative;
+  max-height: 260px;
+  overflow-y: auto;
+  margin-bottom: 8px;
+  padding: 10px 36px 10px 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13px;
+}
+.slash-output > button {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+}

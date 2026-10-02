@@ -11,6 +11,7 @@ mod rooms;
 mod routes;
 mod runtime;
 mod setup;
+mod skills;
 mod tasks;
 mod websocket;
 mod workspaces;
