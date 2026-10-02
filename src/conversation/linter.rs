@@ -87,7 +87,11 @@ fn levenshtein_distance(a: &str, b: &str) -> usize {
 
     for i in 1..=m {
         for j in 1..=n {
-            let cost = if a_chars[i - 1] == b_chars[j - 1] { 0 } else { 1 };
+            let cost = if a_chars[i - 1] == b_chars[j - 1] {
+                0
+            } else {
+                1
+            };
             dp[i][j] = (dp[i - 1][j] + 1)
                 .min(dp[i][j - 1] + 1)
                 .min(dp[i - 1][j - 1] + cost);
@@ -196,7 +200,10 @@ pub fn lint_tool_args(name: &str, args: &Value) -> Result<()> {
                 }
             }
         }
-        "memory.private.add" | "memory.group.add" | "memory.persona.propose" | "memory.global.propose" => {
+        "memory.private.add"
+        | "memory.group.add"
+        | "memory.persona.propose"
+        | "memory.global.propose" => {
             let content = args.get("content").and_then(Value::as_str).map(str::trim);
             if content.is_none() || content.unwrap().is_empty() {
                 bail!(ToolLintDiagnostic {
@@ -206,7 +213,10 @@ pub fn lint_tool_args(name: &str, args: &Value) -> Result<()> {
                 });
             }
         }
-        "memory.private.update" | "memory.group.update" | "memory.persona.update" | "memory.global.update" => {
+        "memory.private.update"
+        | "memory.group.update"
+        | "memory.persona.update"
+        | "memory.global.update" => {
             let id = args.get("id").and_then(Value::as_str).map(str::trim);
             let content = args.get("content").and_then(Value::as_str).map(str::trim);
             if id.is_none() || id.unwrap().is_empty() {
@@ -269,8 +279,8 @@ pub fn lint_tool_args(name: &str, args: &Value) -> Result<()> {
 
 /// Parse and lint a JSON string into a validated `MemoryToolCall`.
 pub(super) fn lint_tool_json(json_str: &str) -> Result<MemoryToolCall> {
-    let value: Value = serde_json::from_str(json_str)
-        .context("hivemind-tool block is not valid JSON")?;
+    let value: Value =
+        serde_json::from_str(json_str).context("hivemind-tool block is not valid JSON")?;
     let object = value
         .as_object()
         .context("hivemind-tool block must be a JSON object")?;
@@ -378,8 +388,14 @@ pub(super) fn lint_tool_reply(text: &str) -> Result<Option<MemoryToolCall>> {
     #[derive(PartialEq)]
     enum Open<'a> {
         No,
-        Fence { marker: char, len: usize, is_explicit: bool },
-        Tag { close_tag: &'a str },
+        Fence {
+            marker: char,
+            len: usize,
+            is_explicit: bool,
+        },
+        Tag {
+            close_tag: &'a str,
+        },
     }
 
     let tag_pairs: &[(&str, &str)] = &[
@@ -398,7 +414,11 @@ pub(super) fn lint_tool_reply(text: &str) -> Result<Option<MemoryToolCall>> {
         let trimmed = line.trim();
 
         match &open {
-            Open::Fence { marker, len, is_explicit } => {
+            Open::Fence {
+                marker,
+                len,
+                is_explicit,
+            } => {
                 let m = *marker;
                 let l = *len;
                 let explicit = *is_explicit;
@@ -468,7 +488,11 @@ pub(super) fn lint_tool_reply(text: &str) -> Result<Option<MemoryToolCall>> {
                 || rest_lower.starts_with("hivemind_tool:");
             let is_generic = !is_explicit && (rest.is_empty() || rest.eq_ignore_ascii_case("json"));
             if is_explicit || is_generic {
-                open = Open::Fence { marker: ch, len, is_explicit };
+                open = Open::Fence {
+                    marker: ch,
+                    len,
+                    is_explicit,
+                };
                 buffer.clear();
                 line_idx += 1;
                 continue;
@@ -517,12 +541,16 @@ pub(super) fn lint_tool_reply(text: &str) -> Result<Option<MemoryToolCall>> {
                     line_idx += consumed.max(1);
                     continue;
                 } else {
-                    explicit_blocks.push(Err(anyhow::anyhow!("hivemind-tool block is not valid JSON")));
+                    explicit_blocks.push(Err(anyhow::anyhow!(
+                        "hivemind-tool block is not valid JSON"
+                    )));
                     line_idx += 1;
                     continue;
                 }
             } else if explicit_blocks.is_empty() {
-                explicit_blocks.push(Err(anyhow::anyhow!("hivemind-tool block is not valid JSON")));
+                explicit_blocks.push(Err(anyhow::anyhow!(
+                    "hivemind-tool block is not valid JSON"
+                )));
                 line_idx += 1;
                 continue;
             }
