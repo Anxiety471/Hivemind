@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { deflateRawSync } from "node:zlib";
-import { drawioToScene, looksLikeDrawio } from "../src/diagrams/drawio.ts";
+import { drawioToScene, labelLines, looksLikeDrawio } from "../src/diagrams/drawio.ts";
 import { plantumlToMermaid } from "../src/diagrams/plantuml.ts";
 
 const ACTIVITY = `@startuml
@@ -180,4 +180,14 @@ test("draw.io rejects non-diagram XML", async () => {
   await assert.rejects(drawioToScene("<svg></svg>"), /Not a draw.io document/);
   await assert.rejects(drawioToScene("<mxfile><diagram>"), /not closed|Malformed/);
   assert.equal(looksLikeDrawio("<svg/>"), false);
+});
+
+test("label tag stripping leaves no tag behind when tags are nested", () => {
+  for (const input of ["<scr<b>ipt>alert(1)</scr</b>ipt>", "<<b>script>x", "<scr<!-->ipt>x", "<<<b>b>b>script>x"]) {
+    const out = labelLines(input, true).join("\n");
+    assert.ok(!/<[a-z/!]/i.test(out), `${input} -> ${out}`);
+  }
+  assert.deepEqual(labelLines("a<b>b</b><br/>c", true), ["ab", "c"]);
+  // Entities decode to plain text only after stripping, so they never become tags to strip.
+  assert.deepEqual(labelLines("&lt;b&gt;x", true), ["<b>x"]);
 });

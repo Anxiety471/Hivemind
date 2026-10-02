@@ -261,8 +261,12 @@ export function labelLines(value: string, html: boolean): string[] {
     s = s
       .replace(/<\s*br\s*\/?>/gi, "\n")
       .replace(/<\/(div|p|li|h\d|tr)>/gi, "\n")
-      .replace(/<(div|p|li|h\d|tr)[^>]*>/gi, "\n")
-      .replace(/<[^>]*>/g, "");
+      .replace(/<(div|p|li|h\d|tr)[^>]*>/gi, "\n");
+    // One pass can leave a tag behind (`<scr<b>ipt>` -> `<script>`), so strip until nothing changes.
+    for (let prev = ""; prev !== s; ) {
+      prev = s;
+      s = s.replace(/<[^>]*>/g, "");
+    }
     s = decodeEntities(s);
   }
   return s.replace(/^\n+|\n+$/g, "").split("\n");
