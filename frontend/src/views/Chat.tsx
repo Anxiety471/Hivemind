@@ -1,6 +1,6 @@
 // Rooms: room list, paged history, threads, and live replies over the WebSocket.
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, decodeInstance, targetFor, type Message, type Participant, type Room, type Thread } from "../api";
+import { api, decodeInstance, targetFor, type Message, type Participant, type Room, type Skill, type Thread } from "../api";
 import { useLive, useLiveStatus, useRefreshOn, type LiveEvent } from "../live";
 import { href, navigate } from "../nav";
 import { listKind, roomLabel, useTaskNames } from "../rooms";
@@ -8,6 +8,7 @@ import { RoomPanel, type PanelTab } from "./RoomPanel";
 import { Markdown } from "../markdown";
 import { Avatar, Badge, Empty, ErrorNote, time, useAsync } from "../ui";
 import { applyMention, filterParticipants, getMentionMatch, type MentionMatch } from "../mentions";
+import { SKILL_PREFIX, completions, helpText, parseSlash, skillPrompt, skillsText, toolsText } from "../slash";
 
 const KIND_ORDER: Record<string, number> = { main: 0, group: 1, solo: 2, task: 3, archived: 4 };
 const KIND_LABEL: Record<string, string> = { main: "Main", group: "Groups", solo: "Direct", task: "Task rooms", archived: "Archived" };
@@ -394,8 +395,17 @@ function Composer({
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const slashListRef = useRef<HTMLDivElement>(null);
   const blurTimeoutRef = useRef<number | null>(null);
   const prevQueryRef = useRef<string | null>(null);
+  const [output, setOutput] = useState<string | null>(null);
+  const [skillCatalog, setSkillCatalog] = useState<{ dirs: string[]; skills: Skill[] } | null>(null);
+  const [slashIndex, setSlashIndex] = useState(0);
+  const [slashDismissed, setSlashDismissed] = useState(false);
+  const slashItems = useMemo(
+    () => (slashDismissed ? [] : completions(text, skillCatalog?.skills ?? [])),
+    [text, skillCatalog, slashDismissed],
+  );
 
   const filtered = useMemo(() => {
     if (!mentionMatch || dismissed) return [];
@@ -424,6 +434,11 @@ function Composer({
   }, [selectedIndex, filtered.length]);
 
   useEffect(() => {
+    const row = slashListRef.current?.children[slashIndex] as HTMLElement | undefined;
+    row?.scrollIntoView({ block: "nearest" });
+  }, [slashIndex, slashItems.length]);
+
+  useEffect(() => {
     return () => {
       clearTimeout(blurTimeoutRef.current ?? undefined);
     };
@@ -449,6 +464,18 @@ function Composer({
     setText(val);
     setCursorPos(pos);
     setMentionMatch(getMentionMatch(val, pos));
+    setSlashIndex(0);
+    setSlashDismissed(false);
+    // `/skill:<name>` rows come from the catalogue, so fetch it the first time a command is typed.
+    if (!skillCatalog && val.startsWith("/")) api.skills().then(setSkillCatalog, () => {});
+  };
+
+  const acceptSlash = (insert: string) => {
+    handleTextChange(insert, insert.length);
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+      textareaRef.current?.setSelectionRange(insert.length, insert.length);
+    });
   };
 
   const handleCursorMove = (pos: number) => {
@@ -456,12 +483,59 @@ function Composer({
     setMentionMatch(getMentionMatch(text, pos));
   };
 
+  const runCommand = async (name: string, args: string): Promise<{ show?: string; send?: string }> => {
+    const loadSkills = async (refresh: boolean) => {
+      if (refresh || !skillCatalog) {
+        const fresh = await api.skills();
+        setSkillCatalog(fresh);
+        return fresh;
+      }
+      return skillCatalog;
+    };
+    if (name.toLowerCase().startsWith(SKILL_PREFIX)) {
+      const skill = name.slice(SKILL_PREFIX.length);
+      const catalog = await loadSkills(false);
+      if (!skill || !catalog.skills.some((s) => s.name === skill)) {
+        throw new Error(
+          catalog.skills.length === 0
+            ? "No skills are configured. Type /skills for how to add them."
+            : `Unknown skill "${skill}". Type /skills to list them.`,
+        );
+      }
+      return { send: skillPrompt(skill, args) };
+    }
+    switch (name.toLowerCase()) {
+      case "":
+      case "help":
+        return { show: helpText() };
+      case "skills": {
+        const catalog = await loadSkills(true);
+        return { show: skillsText(catalog.skills, catalog.dirs) };
+      }
+      case "tools":
+        return { show: toolsText((await api.toolCatalog()).namespaces) };
+      default:
+        throw new Error(`Unknown command /${name}. Type /help for the list.`);
+    }
+  };
+
   const send = async () => {
     const value = text.trim();
     if (!value || busy) return;
     setBusy(true);
     try {
-      await onSend(value);
+      const parsed = parseSlash(value);
+      if (parsed.kind === "command") {
+        const result = await runCommand(parsed.name, parsed.args);
+        if (result.show !== undefined) setOutput(result.show);
+        if (result.send !== undefined) {
+          await onSend(result.send);
+          setOutput(null);
+        }
+      } else {
+        await onSend(parsed.text);
+        setOutput(null);
+      }
       setText("");
       setMentionMatch(null);
       setError(null);
@@ -501,6 +575,39 @@ function Composer({
           </div>
         </div>
       )}
+      {slashItems.length > 0 && (
+        <div className="mention-menu" role="listbox" aria-label="Slash commands">
+          <div className="mention-menu-header">Commands · Tab completes · Esc closes</div>
+          <div className="mention-menu-list" ref={slashListRef}>
+            {slashItems.map((item, i) => (
+              <div
+                key={item.insert}
+                role="option"
+                aria-selected={i === slashIndex}
+                className={i === slashIndex ? "mention-item active" : "mention-item"}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  acceptSlash(item.insert);
+                }}
+                onMouseEnter={() => setSlashIndex(i)}
+              >
+                <div className="mention-item-info">
+                  <span className="mention-item-name">{item.label}</span>
+                  <span className="mention-item-role">{item.detail.length > 90 ? `${item.detail.slice(0, 90)}…` : item.detail}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {output !== null && (
+        <div className="slash-output" role="status">
+          <button className="ghost icon" onClick={() => setOutput(null)} aria-label="Dismiss command output">
+            ✕
+          </button>
+          <Markdown text={output} />
+        </div>
+      )}
       <div className="composer-row">
         <textarea
           ref={textareaRef}
@@ -522,6 +629,30 @@ function Composer({
             blurTimeoutRef.current = window.setTimeout(() => setMentionMatch(null), 150);
           }}
           onKeyDown={(e) => {
+            if (slashItems.length > 0) {
+              if (e.key === "ArrowDown") {
+                e.preventDefault();
+                setSlashIndex((prev) => (prev + 1) % slashItems.length);
+                return;
+              }
+              if (e.key === "ArrowUp") {
+                e.preventDefault();
+                setSlashIndex((prev) => (prev - 1 + slashItems.length) % slashItems.length);
+                return;
+              }
+              const chosen = slashItems[slashIndex];
+              // Enter completes a partial command but runs one that is already complete.
+              if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey && chosen && chosen.insert.trim() !== text.trim())) {
+                e.preventDefault();
+                if (chosen) acceptSlash(chosen.insert);
+                return;
+              }
+              if (e.key === "Escape") {
+                e.preventDefault();
+                setSlashDismissed(true);
+                return;
+              }
+            }
             if (filtered.length > 0) {
               if (e.key === "ArrowDown") {
                 e.preventDefault();

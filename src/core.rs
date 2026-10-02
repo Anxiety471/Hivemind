@@ -42,6 +42,7 @@ pub struct HivemindCore {
     coordination: Arc<CoordinationService>,
     access: Arc<crate::access::AccessPolicy>,
     workspaces: Arc<SharedWorkspaces>,
+    skills: Arc<crate::skills::SkillCatalog>,
     setup_required: AtomicBool,
     setup_lock: std::sync::Mutex<()>,
     shutting_down: AtomicBool,
@@ -223,6 +224,8 @@ impl HivemindCore {
         let mut hosts: Vec<Arc<dyn crate::conversation::ToolHost>> = vec![Arc::new(
             WorkspaceTools::new(workspaces.clone(), access.clone()),
         )];
+        let skills = Arc::new(crate::skills::SkillCatalog::new(&config.skills.dirs));
+        hosts.push(Arc::new(crate::skills::SkillTools::new(skills.clone())));
         if config.coordination.enabled {
             hosts.push(Arc::new(CoordinationTools::new(
                 coordination.clone(),
@@ -244,6 +247,7 @@ impl HivemindCore {
             coordination,
             access,
             workspaces,
+            skills,
             setup_required: AtomicBool::new(setup_required),
             setup_lock: std::sync::Mutex::new(()),
             shutting_down: AtomicBool::new(false),
@@ -643,6 +647,9 @@ impl HivemindCore {
     }
     pub fn access(&self) -> &Arc<crate::access::AccessPolicy> {
         &self.access
+    }
+    pub fn skills(&self) -> &Arc<crate::skills::SkillCatalog> {
+        &self.skills
     }
     pub fn data_dir(&self) -> &Path {
         &self.data_dir

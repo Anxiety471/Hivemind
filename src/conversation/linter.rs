@@ -46,6 +46,8 @@ pub const KNOWN_TOOLS: &[&str] = &[
     "tasks.decide",
     "artifacts.get",
     "context.lookup",
+    "skills.list",
+    "skills.read",
 ];
 
 /// Known tool name prefixes / namespaces.
@@ -57,6 +59,7 @@ pub const TOOL_NAMESPACES: &[&str] = &[
     "agents.",
     "groups.",
     "artifacts.",
+    "skills.",
     "context.",
 ];
 
@@ -269,6 +272,16 @@ pub fn lint_tool_args(name: &str, args: &Value) -> Result<()> {
                     rule: "schema/missing-argument",
                     message: "Tool 'workspace.set' requires a non-empty string argument 'path'".into(),
                     fix: Some("Example:\n```hivemind-tool\n{\"name\":\"workspace.set\",\"args\":{\"path\":\"/absolute/path/to/project\"}}\n```".into()),
+                });
+            }
+        }
+        "skills.read" => {
+            let skill = args.get("name").and_then(Value::as_str).map(str::trim);
+            if skill.is_none() || skill.unwrap().is_empty() {
+                bail!(ToolLintDiagnostic {
+                    rule: "schema/missing-argument",
+                    message: "Tool 'skills.read' requires a non-empty string argument 'name'".into(),
+                    fix: Some("Example:\n```hivemind-tool\n{\"name\":\"skills.read\",\"args\":{\"name\":\"skill-name\"}}\n```".into()),
                 });
             }
         }

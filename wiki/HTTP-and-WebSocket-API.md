@@ -34,6 +34,9 @@ Building the server and serving health, info, and agent listings never starts Pi
 | `PUT` / `DELETE` | `/api/v1/workspaces/groups/{id}` | Set (`{"path"}`) or clear a group's shared workspace; returns the new snapshot |
 | `PUT` | `/api/v1/workspaces/personas/{id}` | Change a persona's own workspace |
 | `GET` | `/api/v1/access/roles` | Built-in and custom role definitions with their permissions |
+| `GET` | `/api/v1/skills` | Skills from `[skills] dirs` (`name`, `description`, `argument_hint`, `source`) and the directories scanned |
+| `GET` | `/api/v1/skills/{name}?path=` | A skill's `SKILL.md`, or another file inside its folder via `path`, plus the other files it ships. `404` for an unknown skill or a path outside the folder |
+| `GET` | `/api/v1/tools` | Tool names agents can call through the `hivemind-tool` fence, grouped by namespace |
 | `GET` | `/api/v1/access/personas` | Effective permissions per persona |
 | `GET` | `/api/v1/access/audit?denied=&persona=&limit=` | Access audit log |
 | `GET` | `/api/v1/events?after=N` | Durable, restart-safe event replay with a high-water mark |

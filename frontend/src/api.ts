@@ -306,6 +306,8 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 
 const enc = encodeURIComponent;
 
+export type Skill = { name: string; description: string; argument_hint: string; source: string };
+
 export const api = {
   info: () => request<{ name: string; version: string; api_version: string }>("GET", "/info"),
   setupStatus: () => request<{ setup_required: boolean }>("GET", "/setup"),
@@ -378,6 +380,8 @@ export const api = {
   runtimeSessions: (roomId: string) =>
     request<{ sessions: RuntimeSession[] }>("GET", `/rooms/${enc(roomId)}/runtime-sessions?limit=200`),
   rotate: (agent_instance_id: string) => request("POST", "/runtime/rotate", { agent_instance_id }),
+  skills: () => request<{ dirs: string[]; skills: Skill[] }>("GET", "/skills"),
+  toolCatalog: () => request<{ tools: string[]; namespaces: Record<string, string[]> }>("GET", "/tools"),
 };
 
 export function targetFor(room: Room): Target | null {

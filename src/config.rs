@@ -33,6 +33,10 @@ pub struct HivemindConfig {
     /// Limits where agents may point a workspace; a user-written path is never checked.
     #[serde(default, skip_serializing_if = "WorkspacesConfig::is_default")]
     pub workspaces: WorkspacesConfig,
+    /// Skill directories Hivemind offers its agents (`skills.list` / `skills.read`). Opt-in:
+    /// none of a runtime's own skills ever load.
+    #[serde(default, skip_serializing_if = "SkillsConfig::is_default")]
+    pub skills: SkillsConfig,
 }
 
 /// A custom role. Built-in role names are reserved.
@@ -57,6 +61,20 @@ pub struct WorkspacesConfig {
 impl WorkspacesConfig {
     fn is_default(&self) -> bool {
         self.roots.is_empty() && self.known.is_empty()
+    }
+}
+
+/// Where Hivemind looks for skills: each directory holds `<name>/SKILL.md` folders.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct SkillsConfig {
+    /// Absolute paths or `~/...`. Earlier directories win on duplicate skill names.
+    #[serde(default)]
+    pub dirs: Vec<String>,
+}
+
+impl SkillsConfig {
+    fn is_default(&self) -> bool {
+        self.dirs.is_empty()
     }
 }
 
@@ -592,6 +610,7 @@ impl HivemindConfig {
             coordination: CoordinationConfig::default(),
             roles: BTreeMap::new(),
             workspaces: WorkspacesConfig::default(),
+            skills: SkillsConfig::default(),
             groups: Vec::new(),
             agents: vec![
                 AgentConfig {

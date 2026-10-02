@@ -294,6 +294,7 @@ mod tests {
             coordination: Default::default(),
             roles: Default::default(),
             workspaces: Default::default(),
+            skills: Default::default(),
         }
     }
 

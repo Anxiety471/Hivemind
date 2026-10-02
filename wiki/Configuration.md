@@ -116,6 +116,15 @@ roots = ["/abs/path/to/projects"]   # optional: limits where agents may point a 
 
 See [Workspaces](Workspaces).
 
+## Skills
+
+```toml
+[skills]
+dirs = ["~/.agents/skills"]   # each directory holds <name>/SKILL.md folders; earlier directories win duplicate names
+```
+
+Runtimes start with their own skill discovery switched off, so agents only know the skills listed here. They are offered in every room as `skills.list()` and `skills.read(name, path?)` calls through the `hivemind-tool` fence: the prompt names each skill with a one-line description, and the agent reads the instructions (or another file in the skill folder) when a request matches. Reads cannot leave the skill folder and are cut at 64 KiB. Directories are rescanned on every call, so new skills need no restart; changing `dirs` does. Nothing is offered when `dirs` is empty.
+
 ## Coordination
 
 `[coordination] enabled = true` turns on autonomous tasks. All keys and budgets are on the [Coordination](Coordination) page.
