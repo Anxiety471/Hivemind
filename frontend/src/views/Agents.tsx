@@ -1,10 +1,11 @@
 // Agents: create, edit and delete the personas Hivemind runs, with their runtime, workspace,
 // capabilities and permissions, next to their live activity.
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { api, type AgentConfig, type ChatGroup } from "../api";
 import { useRefreshOn } from "../live";
 import { href } from "../nav";
 import { Avatar, Badge, Empty, ErrorNote, PageHeader, useAction, useAsync } from "../ui";
+import { AgentForm } from "./AgentForm";
 
 type AgentRow = {
   name: string;
@@ -16,7 +17,7 @@ type AgentRow = {
   resolvedRoles: string[];
 };
 
-type Loaded = { rows: AgentRow[]; scheduler: boolean; library: string[]; groups: ChatGroup[] };
+type Loaded = { rows: AgentRow[]; scheduler: boolean; library: string[]; capabilities: string[]; groups: ChatGroup[] };
 
 async function load(): Promise<Loaded> {
   const [agents, instances, access, workspaces, groups] = await Promise.all([
@@ -43,14 +44,9 @@ async function load(): Promise<Loaded> {
   const library = [
     ...new Set([...workspaces.known, ...workspaces.personas.map((p) => p.workspace)]),
   ].sort();
-  return { rows, scheduler: instances.scheduler_enabled, library, groups: groups.groups };
+  const capabilities = [...new Set(rows.flatMap((r) => r.config.capabilities))].sort();
+  return { rows, scheduler: instances.scheduler_enabled, library, capabilities, groups: groups.groups };
 }
-
-const split = (text: string) =>
-  text
-    .split(/[,\n]/)
-    .map((t) => t.trim())
-    .filter(Boolean);
 
 const BLANK: AgentConfig = {
   runtime: "omp",
@@ -68,11 +64,13 @@ const BLANK: AgentConfig = {
 export function Agents() {
   const data = useAsync(load, []);
   const [creating, setCreating] = useState(false);
+  const [editing, setEditing] = useState<string | null>(null);
   useRefreshOn(
     (e) => e.type === "agent.activity.changed" || e.type.startsWith("runtime.") || e.type === "config.changed",
     data.reload,
     [data.reload],
   );
+  const editingRow = data.data?.rows.some((r) => r.name === editing) ? editing : null;
   return (
     <div className="page">
       <PageHeader
@@ -93,6 +91,7 @@ export function Agents() {
           mode="create"
           initial={BLANK}
           library={data.data.library}
+          knownCapabilities={data.data.capabilities}
           existing={data.data.rows.map((r) => r.name)}
           onCancel={() => setCreating(false)}
           onSaved={() => {
@@ -103,16 +102,19 @@ export function Agents() {
       )}
       {data.data?.rows.length === 0 && !creating && <Empty>No agents configured.</Empty>}
       <div className="cards">
-        {data.data?.rows.map((row) => (
-          <AgentCard key={row.name} row={row} loaded={data.data!} onChanged={data.reload} />
-        ))}
+        {data.data?.rows
+          // While one agent is being edited, the others are out of the way.
+          .filter((row) => !editingRow || row.name === editingRow)
+          .map((row) => (
+            <AgentCard key={row.name} row={row} loaded={data.data!} editing={row.name === editingRow} onEdit={setEditing} onChanged={data.reload} />
+          ))}
       </div>
     </div>
   );
 }
 
-function AgentCard({ row, loaded, onChanged }: { row: AgentRow; loaded: Loaded; onChanged: () => void }) {
-  const [editing, setEditing] = useState(false);
+function AgentCard(props: { row: AgentRow; loaded: Loaded; editing: boolean; onEdit: (name: string | null) => void; onChanged: () => void }) {
+  const { row, loaded, editing, onEdit, onChanged } = props;
   const [confirming, setConfirming] = useState(false);
   const del = useAction();
   const c = row.config;
@@ -126,10 +128,11 @@ function AgentCard({ row, loaded, onChanged }: { row: AgentRow; loaded: Loaded; 
         id={row.name}
         initial={c}
         library={loaded.library}
+        knownCapabilities={loaded.capabilities}
         existing={[]}
-        onCancel={() => setEditing(false)}
+        onCancel={() => onEdit(null)}
         onSaved={() => {
-          setEditing(false);
+          onEdit(null);
           onChanged();
         }}
       />
@@ -218,7 +221,7 @@ function AgentCard({ row, loaded, onChanged }: { row: AgentRow; loaded: Loaded; 
           <a className="button ghost" href={href("rooms", `solo-${row.name}`)}>
             Message {row.name}
           </a>
-          <button className="ghost" onClick={() => setEditing(true)}>
+          <button className="ghost" onClick={() => onEdit(row.name)}>
             Edit
           </button>
           <button className="ghost" onClick={() => setConfirming(true)}>
@@ -230,165 +233,3 @@ function AgentCard({ row, loaded, onChanged }: { row: AgentRow; loaded: Loaded; 
   );
 }
 
-const CUSTOM = "__custom__";
-
-/** Create or edit one agent. Everything typed stays put when a save fails or the list refreshes. */
-function AgentForm(props: {
-  mode: "create" | "edit";
-  id?: string;
-  initial: AgentConfig;
-  library: string[];
-  existing: string[];
-  onCancel: () => void;
-  onSaved: () => void;
-}) {
-  const { initial } = props;
-  const [id, setId] = useState(props.id ?? "");
-  const [runtime, setRuntime] = useState(initial.runtime);
-  const [model, setModel] = useState(initial.model ?? "");
-  const [reasoning, setReasoning] = useState(initial.reasoning ?? "");
-  const [fast, setFast] = useState(initial.fast === true);
-  const [role, setRole] = useState(initial.role ?? "");
-  const [workspace, setWorkspace] = useState(initial.workspace);
-  const [prompt, setPrompt] = useState(initial.system_prompt);
-  const [capabilities, setCapabilities] = useState(initial.capabilities.join(", "));
-  const [roles, setRoles] = useState(initial.roles.join(", "));
-  const [permissions, setPermissions] = useState(initial.permissions.join(", "));
-  const action = useAction();
-
-  // The server's copy moved on while this form is open (another tab, the CLI): keep the
-  // user's edits and say so, instead of silently replacing them.
-  const baseline = useMemo(() => JSON.stringify(initial), [initial]);
-  const [firstBaseline] = useState(baseline);
-  const changedElsewhere = props.mode === "edit" && baseline !== firstBaseline;
-
-  const [custom, setCustom] = useState(!!workspace && !props.library.includes(workspace));
-
-  const idTaken = props.mode === "create" && props.existing.some((n) => n.toLowerCase() === id.trim().toLowerCase());
-  const body = (): Partial<AgentConfig> => ({
-    runtime,
-    system_prompt: prompt,
-    workspace: workspace.trim() || undefined,
-    model: model.trim() || null,
-    reasoning: reasoning.trim() || null,
-    fast: fast ? true : null,
-    role: role.trim() || null,
-    capabilities: split(capabilities),
-    permissions: split(permissions),
-    roles: split(roles),
-  });
-  const save = () =>
-    action.run(async () => {
-      if (props.mode === "create") await api.createAgent(id.trim(), body());
-      else await api.updateAgent(props.id!, body());
-      props.onSaved();
-    });
-
-  return (
-    <div className="card form agent-form" data-form={props.mode}>
-      <h3>{props.mode === "create" ? "New agent" : `Edit ${props.id}`}</h3>
-      {changedElsewhere && (
-        <div className="warn-note">This agent was changed elsewhere while you were editing. Your edits are kept; saving overwrites it.</div>
-      )}
-      {props.mode === "create" && (
-        <label>
-          Agent id
-          <input value={id} placeholder="e.g. Designer" onChange={(e) => setId((e.target as HTMLInputElement).value)} />
-          {idTaken && <span className="field-error">An agent with this id already exists.</span>}
-        </label>
-      )}
-      <div className="form-grid">
-        <label>
-          Runtime
-          <select value={runtime} onChange={(e) => setRuntime((e.target as HTMLSelectElement).value as AgentConfig["runtime"])}>
-            <option value="omp">omp</option>
-            <option value="pi">pi</option>
-            <option value="opencode">opencode</option>
-          </select>
-        </label>
-        <label>
-          Model
-          <input value={model} placeholder="provider/model-id (optional)" onChange={(e) => setModel((e.target as HTMLInputElement).value)} />
-        </label>
-        <label>
-          Reasoning
-          <input
-            value={reasoning}
-            placeholder="e.g. high (optional)"
-            onChange={(e) => setReasoning((e.target as HTMLInputElement).value)}
-          />
-        </label>
-        <label>
-          Role
-          <input value={role} placeholder="short title (optional)" onChange={(e) => setRole((e.target as HTMLInputElement).value)} />
-        </label>
-      </div>
-      <label className="check">
-        <input type="checkbox" checked={fast} onChange={(e) => setFast((e.target as HTMLInputElement).checked)} />
-        Fast mode
-      </label>
-      <label>
-        Agent workspace
-        <select
-          value={custom ? CUSTOM : workspace}
-          onChange={(e) => {
-            const value = (e.target as HTMLSelectElement).value;
-            if (value === CUSTOM) setCustom(true);
-            else (setCustom(false), setWorkspace(value));
-          }}
-        >
-          <option value="">Server default</option>
-          {props.library.map((w) => (
-            <option key={w} value={w}>
-              {w}
-            </option>
-          ))}
-          <option value={CUSTOM}>Other path…</option>
-        </select>
-        {custom && (
-          <input
-            className="mono"
-            value={workspace}
-            placeholder="/absolute/path/to/directory"
-            onChange={(e) => setWorkspace((e.target as HTMLInputElement).value)}
-          />
-        )}
-        <span className="hint">
-          The agent's own directory, used in direct messages and the main conversation. A group's shared workspace, set in that
-          group's room settings, replaces it inside that group only.
-        </span>
-      </label>
-      <label>
-        System prompt
-        <textarea rows={4} value={prompt} onChange={(e) => setPrompt((e.target as HTMLTextAreaElement).value)} />
-      </label>
-      <div className="form-grid">
-        <label>
-          Capabilities
-          <input value={capabilities} placeholder="comma separated" onChange={(e) => setCapabilities((e.target as HTMLInputElement).value)} />
-        </label>
-        <label>
-          Roles
-          <input value={roles} placeholder="comma separated" onChange={(e) => setRoles((e.target as HTMLInputElement).value)} />
-        </label>
-        <label>
-          Extra permissions
-          <input
-            value={permissions}
-            placeholder="comma separated"
-            onChange={(e) => setPermissions((e.target as HTMLInputElement).value)}
-          />
-        </label>
-      </div>
-      <ErrorNote error={action.error} />
-      <div className="row">
-        <button className="primary" disabled={action.busy || idTaken || (props.mode === "create" && !id.trim())} onClick={save}>
-          {props.mode === "create" ? "Create agent" : "Save changes"}
-        </button>
-        <button className="ghost" onClick={props.onCancel}>
-          Cancel
-        </button>
-      </div>
-    </div>
-  );
-}

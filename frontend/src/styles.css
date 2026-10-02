@@ -1846,6 +1846,37 @@ li.task-item p {
   padding: 0;
   flex: none;
 }
+.room-settings .path-input {
+  display: flex;
+  gap: 8px;
+}
+.room-settings .path-input button {
+  flex: none;
+}
+.room-settings .field,
+.room-settings .path-input input {
+  min-width: 0;
+}
+.room-settings .folder-picker {
+  max-width: 100%;
+}
+.room-settings .folder-bar,
+.room-settings .folder-foot {
+  flex-wrap: wrap;
+}
+.room-settings .folder-bar .crumbs {
+  order: 3;
+  flex: 1 0 100%;
+}
+.room-settings .folder-bar .inline-check {
+  margin-left: auto;
+}
+.room-settings .folder-foot {
+  justify-content: flex-end;
+}
+.room-settings .folder-foot .grow {
+  flex: 1 0 100%;
+}
 .room-settings .disabled,
 .room-settings .disabled select {
   opacity: 0.7;
@@ -1977,7 +2008,8 @@ li.task-item p {
 .agent-form .form-section {
   display: grid;
   grid-template-columns: 220px minmax(0, 1fr);
-  gap: 14px 32px;
+  column-gap: 32px;
+  row-gap: 0;
   padding: 22px;
   border-bottom: 1px solid var(--border);
   align-items: start;
@@ -1985,6 +2017,10 @@ li.task-item p {
 .agent-form .form-section > :not(.section-title) {
   grid-column: 2;
   min-width: 0;
+  margin-top: 18px;
+}
+.agent-form .form-section > .section-title + * {
+  margin-top: 0;
 }
 .agent-form .section-title {
   grid-column: 1;
@@ -2433,6 +2469,9 @@ li.task-item p {
   .agent-form .section-title {
     grid-column: 1;
     grid-row: auto;
+  }
+  .agent-form .form-section > .section-title + * {
+    margin-top: 14px;
   }
   .agent-form .form-grid.two {
     grid-template-columns: minmax(0, 1fr);

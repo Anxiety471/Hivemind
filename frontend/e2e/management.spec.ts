@@ -140,25 +140,31 @@ test("agents are created, edited and deleted from the web UI", async ({ page, re
   await expect(form.getByText("already exists")).toBeVisible();
   await expect(form.getByRole("button", { name: "Create agent" })).toBeDisabled();
   await form.getByLabel("Agent id").fill("Designer");
-  await form.getByLabel("Runtime").selectOption("pi");
-  await form.getByLabel("Agent workspace").selectOption("__custom__");
-  await form.getByPlaceholder("/absolute/path/to/directory").fill("/definitely/not/here");
+  await form.getByRole("radio", { name: /^Pi/ }).check();
+  await form.getByLabel("Agent workspace").fill("/definitely/not/here");
   await form.getByLabel("System prompt").fill("You are the Designer. Keep it clear.");
-  await form.getByLabel("Capabilities").fill("design, ux");
+  await form.getByRole("group", { name: "Capabilities" }).getByText("design", { exact: true }).click();
+  await form.getByLabel("Add capability").fill("ux");
+  await form.getByRole("button", { name: "Add", exact: true }).click();
+  await form.getByRole("combobox", { name: "Model" }).click();
+  await form.getByRole("option", { name: /E2E Model/ }).click();
+  await form.getByRole("radio", { name: "High" }).check();
   await form.getByRole("button", { name: "Create agent" }).click();
 
   // The failure is shown and nothing typed is lost.
   await expect(form.locator(".error-note")).toContainText("does not exist");
   await expect(form.getByLabel("System prompt")).toHaveValue("You are the Designer. Keep it clear.");
-  await expect(form.getByPlaceholder("/absolute/path/to/directory")).toHaveValue("/definitely/not/here");
+  await expect(form.getByLabel("Agent workspace")).toHaveValue("/definitely/not/here");
 
-  await form.getByPlaceholder("/absolute/path/to/directory").fill(dir("ws-two"));
+  await form.getByLabel("Agent workspace").fill(dir("ws-two"));
   await form.getByRole("button", { name: "Create agent" }).click();
   const card = page.locator('[data-agent="Designer"]');
   await expect(card).toBeVisible();
   await expect(card.getByText(dir("ws-two"))).toBeVisible();
   await expect(card.getByText("design", { exact: true })).toBeVisible();
   // Agent creation must not undo the workspace selected in the preceding flow.
+  const designer = await (await request.get(`${api}/agents/Designer`)).json();
+  expect([designer.config.model, designer.config.reasoning, designer.config.capabilities]).toEqual(["acme/e2e-model", "high", ["design", "ux"]]);
   const reviewer = await (await request.get(`${api}/agents/Reviewer`)).json();
   expect(reviewer.config.workspace).toBe(dir("ws-two"));
   const workspaces = await (await request.get(`${api}/workspaces`)).json();
@@ -169,15 +175,17 @@ test("agents are created, edited and deleted from the web UI", async ({ page, re
   // Edit: the saved values are there when the agent is revisited.
   await card.getByRole("button", { name: "Edit" }).click();
   const edit = page.locator('[data-form="edit"]');
+  await expect(page.locator('[data-agent="Reviewer"]')).toHaveCount(0);
   await expect(edit.getByLabel("System prompt")).toHaveValue("You are the Designer. Keep it clear.");
   await edit.getByLabel("System prompt").fill("You are the Designer. Be brief.");
-  await edit.getByLabel("Model").fill("acme/model-1");
+  await edit.getByRole("combobox", { name: "Model" }).fill("acme/model-1");
   await edit.getByRole("button", { name: "Save changes" }).click();
   await expect(page.locator('[data-form="edit"]')).toHaveCount(0);
+  await expect(page.locator('[data-agent="Reviewer"]')).toBeVisible();
   await page.reload();
   await page.locator('[data-agent="Designer"]').getByRole("button", { name: "Edit" }).click();
   await expect(page.locator('[data-form="edit"]').getByLabel("System prompt")).toHaveValue("You are the Designer. Be brief.");
-  await expect(page.locator('[data-form="edit"]').getByLabel("Model")).toHaveValue("acme/model-1");
+  await expect(page.locator('[data-form="edit"]').getByRole("combobox", { name: "Model" })).toHaveValue("acme/model-1");
   await page.locator('[data-form="edit"]').getByRole("button", { name: "Cancel" }).click();
 
   // An edit made elsewhere while the form is open is flagged and the typed text survives.

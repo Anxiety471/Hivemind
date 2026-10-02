@@ -185,6 +185,40 @@ export type Workspaces = {
   personas: { id: string; workspace: string }[];
 };
 
+export type ModelOption = {
+  /** What is stored on the agent: `provider/model-id`. */
+  id: string;
+  name: string;
+  provider: string;
+  /** Reasoning levels this model accepts; empty when it does not reason. */
+  reasoning: string[];
+  context_window: number | null;
+};
+
+export type RuntimeModels = {
+  runtime: string;
+  models: ModelOption[];
+  supports_reasoning: boolean;
+  supports_fast: boolean;
+};
+
+export type DirListing = {
+  path: string;
+  parent: string | null;
+  home: string | null;
+  roots: string[];
+  truncated: boolean;
+  /** The server's desktop can open its own folder dialog. */
+  native_picker: boolean;
+  entries: { name: string; path: string }[];
+};
+
+export type RoleCatalog = {
+  builtin: { name: string; permissions: string[] }[];
+  custom: { name: string; permissions: string[] }[];
+  permissions: string[];
+};
+
 /** The editable definition of an agent. Its id is fixed once created. */
 export type AgentConfig = {
   runtime: "pi" | "omp" | "opencode";
@@ -369,6 +403,13 @@ export const api = {
   deleteChatGroup: (id: string) => request<void>("DELETE", `/chat-groups/${enc(id)}`),
 
   workspaces: () => request<Workspaces>("GET", "/workspaces"),
+  runtimeModels: (runtime: string, refresh = false) =>
+    request<RuntimeModels>("GET", `/runtimes/${enc(runtime)}/models${refresh ? "?refresh=true" : ""}`),
+  dirs: (path: string, hidden: boolean) =>
+    request<DirListing>("GET", `/fs/dirs?${new URLSearchParams({ ...(path ? { path } : {}), hidden: String(hidden) })}`),
+  pickFolder: (path: string) =>
+    request<{ path: string | null }>("POST", `/fs/pick${path ? `?${new URLSearchParams({ path })}` : ""}`, {}),
+  accessRoles: () => request<RoleCatalog>("GET", "/access/roles"),
   addWorkspace: (path: string) => request<Workspaces>("POST", "/workspaces", { path }),
   removeWorkspace: (path: string) => request<Workspaces>("DELETE", "/workspaces", { path }),
   setGroupWorkspace: (id: string, path: string) =>

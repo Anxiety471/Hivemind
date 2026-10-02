@@ -1,3 +1,4 @@
+pub mod catalog;
 mod telemetry;
 pub use telemetry::ProgressSink;
 mod omp;

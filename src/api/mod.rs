@@ -1,5 +1,6 @@
 mod agents;
 mod auth;
+mod catalog;
 mod jobs;
 pub use auth::ServerConfig;
 mod chat_groups;

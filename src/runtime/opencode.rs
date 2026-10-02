@@ -122,7 +122,7 @@ impl Turn {
 }
 
 /// No-op plugin kept in Hivemind's OpenCode config dir; see the module docs.
-const KEEP_PROVIDERS_PLUGIN: &str = "// Written by Hivemind. OpenCode drops its built-in `opencode` provider when no plugin loads; this no-op keeps it.\nexport const Hivemind = async () => ({});\n";
+pub(super) const KEEP_PROVIDERS_PLUGIN: &str = "// Written by Hivemind. OpenCode drops its built-in `opencode` provider when no plugin loads; this no-op keeps it.\nexport const Hivemind = async () => ({});\n";
 
 impl OpencodeSession {
     pub async fn start_filtered(

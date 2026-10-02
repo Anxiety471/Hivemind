@@ -37,6 +37,7 @@ pub(super) fn router(core: Arc<HivemindCore>, shutdown: watch::Receiver<bool>) -
         .merge(super::room_settings::routes())
         .merge(super::chat_groups::routes())
         .merge(super::workspaces::routes())
+        .merge(super::catalog::routes())
         .merge(super::runtime::routes())
         .merge(super::skills::routes())
         .merge(super::setup::routes())
@@ -1539,6 +1540,12 @@ mod tests {
             .unwrap()
             .iter()
             .any(|r| r["name"] == "worker"));
+        assert!(roles["permissions"].as_array().unwrap().iter().any(|p| p == "workspace.exec"));
+        let (status, _, unknown) = request(app.clone(), "GET", "/api/v1/runtimes/nope/models").await;
+        assert_eq!((status, unknown["error"]["code"].as_str()), (StatusCode::NOT_FOUND, Some("not_found")));
+        let (status, _, dirs) = request(app.clone(), "GET", "/api/v1/fs/dirs?path=/").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(dirs["path"], "/");
 
         let (status, _) = request_json(
             app.clone(),

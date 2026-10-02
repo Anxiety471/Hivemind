@@ -36,5 +36,8 @@ for line in sys.stdin:
         send({"type": "agent_settled"})
     elif kind == "get_session_stats":
         send({"type": "response", "command": "get_session_stats", "success": True, "data": {"contextUsage": {"tokens": 1}}})
+    elif kind == "get_available_models":
+        send({"id": frame.get("id"), "type": "response", "command": kind, "success": True,
+              "data": {"models": [{"id": "e2e-model", "name": "E2E Model", "provider": "acme", "reasoning": True, "contextWindow": 100000}]}})
     else:
         send({"type": "response", "command": kind, "success": True})
