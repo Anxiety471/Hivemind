@@ -90,6 +90,18 @@ pub struct ExecutionStore {
     pub config: ExecutionConfig,
     private_env: Mutex<Vec<String>>,
 }
+fn budget_state(tokens: i64, limit: u64) -> &'static str {
+    if limit == 0 {
+        "disabled"
+    } else if tokens as u64 >= limit {
+        "exhausted"
+    } else if (tokens.max(0) as u128) * 100 >= (limit as u128) * 80 {
+        "warning"
+    } else {
+        "available"
+    }
+}
+
 fn now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -365,14 +377,26 @@ impl ExecutionStore {
         Ok(())
     }
     pub fn usage(&self, scope: Option<&str>) -> Result<Value> {
+        self.usage_report(scope, None)
+    }
+    pub fn usage_report(&self, scope: Option<&str>, project: Option<&str>) -> Result<Value> {
         let db = self.db.lock();
-        let mut statement = db.prepare("SELECT scope,project,turn_id,persona,epoch,usage FROM usage WHERE (?1 IS NULL OR scope=?1) ORDER BY id DESC LIMIT 200")?;
-        let rows = statement.query_map([scope], |r| {
+        let mut statement = db.prepare("SELECT scope,project,turn_id,persona,epoch,usage,created_at FROM usage WHERE (?1 IS NULL OR scope=?1) AND (?2 IS NULL OR project=?2) ORDER BY id DESC LIMIT 200")?;
+        let rows = statement.query_map(params![scope,project], |r| {
             let usage: Option<String> = r.get(5)?;
-            Ok(json!({"scope":r.get::<_,String>(0)?,"project":r.get::<_,String>(1)?,"turn_id":r.get::<_,String>(2)?,"persona":r.get::<_,String>(3)?,"epoch":r.get::<_,String>(4)?,"usage":usage.and_then(|s|serde_json::from_str::<Value>(&s).ok())}))
+            Ok(json!({"scope":r.get::<_,String>(0)?,"project":r.get::<_,String>(1)?,"turn_id":r.get::<_,String>(2)?,"persona":r.get::<_,String>(3)?,"epoch":r.get::<_,String>(4)?,"usage":usage.and_then(|s|serde_json::from_str::<Value>(&s).ok()),"created_at":r.get::<_,i64>(6)?}))
         })?.collect::<rusqlite::Result<Vec<_>>>()?;
-        let (tokens,unknown): (i64,i64) = db.query_row("SELECT COALESCE(SUM(tokens),0),COALESCE(SUM(tokens IS NULL),0) FROM usage WHERE (?1 IS NULL OR scope=?1)", [scope], |r| Ok((r.get(0)?,r.get(1)?)))?;
-        Ok(json!({"measured_tokens":tokens,"unknown_prompts":unknown,"records":rows}))
+        let (tokens,unknown): (i64,i64) = db.query_row("SELECT COALESCE(SUM(tokens),0),COALESCE(SUM(tokens IS NULL),0) FROM usage WHERE (?1 IS NULL OR scope=?1) AND (?2 IS NULL OR project=?2)", params![scope,project], |r| Ok((r.get(0)?,r.get(1)?)))?;
+        let scope_totals: Option<(i64,i64)> = scope.map(|scope| db.query_row("SELECT COALESCE(SUM(tokens),0),COALESCE(SUM(tokens IS NULL),0) FROM usage WHERE scope=?", [scope], |r| Ok((r.get(0)?,r.get(1)?)))).transpose()?;
+        let personas = db.prepare("SELECT persona,COALESCE(SUM(tokens),0),SUM(tokens IS NULL) FROM usage WHERE (?1 IS NULL OR scope=?1) AND (?2 IS NULL OR project=?2) GROUP BY persona ORDER BY SUM(tokens) DESC,persona")?.query_map(params![scope,project], |r| Ok(json!({"persona":r.get::<_,String>(0)?,"measured_tokens":r.get::<_,i64>(1)?,"unknown_prompts":r.get::<_,i64>(2)?})))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        // Project admission budgets span all tasks, even when this report filters a root.
+        let projects = db.prepare("SELECT project,COALESCE(SUM(tokens),0),SUM(tokens IS NULL) FROM usage WHERE (?2 IS NULL OR project=?2) AND (?1 IS NULL OR project IN (SELECT project FROM usage WHERE scope=?1)) GROUP BY project ORDER BY project")?.query_map(params![scope,project], |r| {
+            let measured: i64 = r.get(1)?; let unknown: i64 = r.get(2)?;
+            Ok(json!({"project":r.get::<_,String>(0)?,"measured_tokens":measured,"unknown_prompts":unknown,"limit":self.config.project_token_limit,"budget_state":budget_state(measured,self.config.project_token_limit),"usage_blocked":self.config.require_usage&&unknown>0}))
+        })?.collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(
+            json!({"measured_tokens":tokens,"unknown_prompts":unknown,"records":rows,"by_persona":personas,"by_project":projects,"scope":scope,"project":project,"task_token_limit":self.config.task_token_limit,"project_token_limit":self.config.project_token_limit,"require_usage":self.config.require_usage,"scope_budget_tokens":scope_totals.map(|(tokens,_)|tokens),"scope_budget_state":scope_totals.map(|(tokens,_)|budget_state(tokens,self.config.task_token_limit)),"usage_blocked":self.config.require_usage&&scope_totals.map_or(unknown,|(_,unknown)|unknown)>0,"records_limit":200}),
+        )
     }
     pub fn record_check(
         &self,
@@ -707,6 +731,99 @@ mod tests {
         assert!(report["records"][0]["usage"].is_null());
         assert!(db.check_budget("r", "p").is_err());
     }
+    #[test]
+    fn usage_reports_all_history_and_project_admission_totals_when_scope_filtered() {
+        let db = ExecutionStore::open(
+            ":memory:",
+            ExecutionConfig {
+                task_token_limit: 250,
+                project_token_limit: 300,
+                require_usage: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        for i in 0..205 {
+            db.record_usage(
+                "root",
+                "/repo",
+                &format!("t{i}"),
+                "Engineer",
+                "epoch",
+                Some(&Usage {
+                    input_tokens: 1,
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        }
+        db.record_usage(
+            "another-root",
+            "/repo",
+            "other",
+            "Reviewer",
+            "epoch",
+            Some(&Usage {
+                input_tokens: 40,
+                ..Default::default()
+            }),
+        )
+        .unwrap();
+        db.record_usage(
+            "another-root",
+            "/repo",
+            "unknown",
+            "Reviewer",
+            "epoch",
+            None,
+        )
+        .unwrap();
+        db.record_usage(
+            "unrelated",
+            "/other",
+            "other",
+            "Other",
+            "epoch",
+            Some(&Usage {
+                input_tokens: 99,
+                ..Default::default()
+            }),
+        )
+        .unwrap();
+        let report = db.usage_report(Some("root"), Some("/repo")).unwrap();
+        assert_eq!(report["records"].as_array().unwrap().len(), 200);
+        assert_eq!(report["measured_tokens"], 205);
+        assert_eq!(report["unknown_prompts"], 0);
+        assert_eq!(report["scope_budget_state"], "warning");
+        assert_eq!(report["by_persona"][0]["measured_tokens"], 205);
+        assert_eq!(report["by_project"][0]["measured_tokens"], 245);
+        assert_eq!(report["by_project"][0]["unknown_prompts"], 1);
+        assert_eq!(report["by_project"][0]["budget_state"], "warning");
+        assert_eq!(report["by_project"][0]["usage_blocked"], true);
+        assert_eq!(
+            db.usage_report(None, Some("/other")).unwrap()["measured_tokens"],
+            99
+        );
+        db.record_usage(
+            "root",
+            "/another-project",
+            "more",
+            "Engineer",
+            "epoch",
+            Some(&Usage {
+                input_tokens: 100,
+                ..Default::default()
+            }),
+        )
+        .unwrap();
+        let filtered = db.usage_report(Some("root"), Some("/repo")).unwrap();
+        assert_eq!(filtered["measured_tokens"], 205);
+        assert_eq!(filtered["scope_budget_tokens"], 305);
+        assert_eq!(filtered["scope_budget_state"], "exhausted");
+        assert_eq!(budget_state(100, 100), "exhausted");
+        assert_eq!(budget_state(100, 0), "disabled");
+    }
+
     #[tokio::test]
     async fn host_checks_bind_to_exact_commit_and_record_failures_and_bounded_logs() {
         let directory = Directory::new();

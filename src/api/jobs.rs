@@ -71,11 +71,10 @@ async fn usage(
     axum::extract::RawQuery(raw): axum::extract::RawQuery,
 ) -> Response {
     let params = super::tasks::query(raw);
-    match state
-        .core
-        .execution()
-        .usage(params.get("scope").map(String::as_str))
-    {
+    match state.core.execution().usage_report(
+        params.get("scope").map(String::as_str),
+        params.get("project").map(String::as_str),
+    ) {
         Ok(value) => Json(value).into_response(),
         Err(_) => internal(),
     }

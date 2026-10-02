@@ -94,3 +94,9 @@ Set the named environment variable to a random token containing at least 32 alph
 Browser WebSockets use protocols `["hivemind.v1", "hivemind.auth.<token>"]`; the server selects only `hivemind.v1`, so the token is not echoed in the handshake response. Non-browser clients may use the Authorization header. Query-string tokens are rejected.
 
 Place the service behind HTTPS/WSS for remote use. Avoid logging Authorization or Sec-WebSocket-Protocol headers in your reverse proxy. The token grants full operator access, including task submissions and configured verification commands; this is single-operator authentication, not multi-user tenancy or agent sandboxing.
+
+### Usage visibility
+
+The Usage and limits page filters measured billing counters by task/room scope and project workspace, groups all stored records by persona, and displays project admission totals across all tasks. Task pages include a report for their root. The latest 200 prompt records are evidence, not the source of aggregated totals. Unknown usage stays null and is counted separately.
+
+`GET /api/v1/usage?scope=<root-or-room>&project=<workspace>` adds `by_persona`, `by_project`, configured limits, and `available | warning | exhausted | disabled` budget states. Warnings begin at 80%; exhaustion reflects existing admission behavior. Project totals use all tasks in that workspace even when the selected root has used fewer tokens. Required-but-unknown reporting is shown as a dispatch blocker. This reports tokens, not inferred monetary spend, and does not change enforcement or automatically increase limits.
