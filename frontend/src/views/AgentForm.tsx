@@ -133,9 +133,19 @@ export function AgentForm(props: {
     value: r.name,
     hint: r.permissions.length === 0 ? "Read-only" : r.permissions.map((p) => PERMISSION_HINT[p] ?? p).slice(0, 2).join(" · ") + (r.permissions.length > 2 ? ` · +${r.permissions.length - 2} more` : ""),
   }));
+  // What the selection grants: role permissions plus direct ones, widened by implications.
+  const effective = useMemo(() => {
+    const granted = new Set(permissions);
+    const byRole: Record<string, string[]> = {};
+    for (const r of [...(roleCatalog?.builtin ?? []), ...(roleCatalog?.custom ?? [])]) byRole[r.name] = r.permissions;
+    for (const r of roles) for (const p of byRole[r] ?? []) granted.add(p);
+    for (const p of [...granted]) for (const implied of roleCatalog?.implies[p] ?? []) granted.add(implied);
+    return [...granted].sort();
+  }, [permissions, roles, roleCatalog]);
   const permissionOptions: CheckOption[] = (roleCatalog?.permissions ?? FALLBACK_PERMISSIONS).map((value) => ({
     value,
     hint: PERMISSION_HINT[value],
+    badge: effective.includes(value) && !permissions.includes(value) ? "from roles" : undefined,
   }));
 
   const body = (): Partial<AgentConfig> => ({
@@ -304,6 +314,29 @@ export function AgentForm(props: {
         <div className="section-title">
           <h4>Access</h4>
           <p>Capabilities route tasks to the agent. Roles and permissions are the only things that grant authority.</p>
+        </div>
+        <div className="access-summary" aria-label="Current access">
+          <div className="summary-row">
+            <span className="summary-key">Job title</span>
+            <span>{role.trim() || <span className="muted">none</span>}</span>
+          </div>
+          <div className="summary-row">
+            <span className="summary-key">Capabilities</span>
+            <span>{capabilities.length ? capabilities.map((t) => <span key={t} className="tag">{t}</span>) : <span className="muted">none</span>}</span>
+          </div>
+          <div className="summary-row">
+            <span className="summary-key">Roles</span>
+            <span>{roles.length ? roles.map((r) => <span key={r} className="tag">{r}</span>) : <span className="muted">none</span>}</span>
+          </div>
+          <div className="summary-row">
+            <span className="summary-key">Effective permissions</span>
+            <span>{effective.length ? effective.map((p) => <span key={p} className="tag perm">{p}</span>) : <span className="muted">none</span>}</span>
+          </div>
+          <p className="field-note">
+            {roles.length === 0
+              ? "No roles are selected, so the agent keeps unrestricted file, shell and memory access. Choose a role to restrict it to that role's permissions."
+              : `With these roles the agent ${effective.includes("workspace.write") ? "can" : "cannot"} edit files and ${effective.includes("workspace.exec") ? "can" : "cannot"} run shell commands.`}
+          </p>
         </div>
         <CheckList
           legend="Capabilities"

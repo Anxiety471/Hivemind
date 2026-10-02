@@ -43,7 +43,7 @@ export function Choice<T extends string>(props: {
 
 /* ---------- Check list ---------- */
 
-export type CheckOption = { value: string; label?: string; hint?: string };
+export type CheckOption = { value: string; label?: string; hint?: string; badge?: string };
 
 /** Pick any number of options; `addLabel` also lets the user add values that are not listed yet. */
 export function CheckList(props: {
@@ -88,7 +88,10 @@ export function CheckList(props: {
             <label key={o.value} className="check-item" data-on={on} title={o.hint}>
               <input type="checkbox" checked={on} onChange={() => toggle(o.value)} />
               <span className="check-text">
-                <span className="check-name">{o.label || o.value}</span>
+                <span className="check-name">
+                  {o.label || o.value}
+                  {o.badge && <span className="check-badge">{o.badge}</span>}
+                </span>
                 {o.hint && <span className="check-hint">{o.hint}</span>}
               </span>
             </label>

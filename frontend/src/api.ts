@@ -217,6 +217,8 @@ export type RoleCatalog = {
   builtin: { name: string; permissions: string[] }[];
   custom: { name: string; permissions: string[] }[];
   permissions: string[];
+  /** Permissions that come with holding another one. */
+  implies: Record<string, string[]>;
 };
 
 /** The editable definition of an agent. Its id is fixed once created. */

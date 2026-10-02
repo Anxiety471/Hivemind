@@ -160,6 +160,13 @@ async fn roles(State(state): State<ApiState>) -> Response {
         .iter()
         .map(|(name, role)| json!({"name": name, "permissions": role.permissions}))
         .collect();
-    Json(json!({"builtin": builtin, "custom": custom, "permissions": crate::access::PERMISSIONS}))
-        .into_response()
+    let implies: std::collections::BTreeMap<&str, &[&str]> =
+        crate::access::IMPLIES.iter().copied().collect();
+    Json(json!({
+        "builtin": builtin,
+        "custom": custom,
+        "permissions": crate::access::PERMISSIONS,
+        "implies": implies,
+    }))
+    .into_response()
 }
