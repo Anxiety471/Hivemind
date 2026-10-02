@@ -1279,6 +1279,18 @@ dd {
 }
 
 @media (max-width: 700px) {
+  .room-header {
+    flex-wrap: wrap;
+    padding: 14px 16px;
+  }
+  .room-header > div {
+    min-width: 0;
+    max-width: 100%;
+  }
+  .room-header h2,
+  .room-header .actions {
+    flex-wrap: wrap;
+  }
   .setup-page {
     padding: 16px 12px;
   }

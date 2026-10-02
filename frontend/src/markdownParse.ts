@@ -22,6 +22,7 @@ const HEADING = /^ {0,3}(#{1,6})\s+(.*?)\s*#*\s*$/;
 const HR = /^ {0,3}([-*_])(?:\s*\1){2,}\s*$/;
 const BULLET = /^(\s*)([-*+])\s+(.*)$/;
 const ORDERED = /^(\s*)(\d{1,9})[.)]\s+(.*)$/;
+const INDENTED_CODE = /^(?: {4}|\t)/;
 const QUOTE = /^ {0,3}>\s?(.*)$/;
 
 const safeHref = (href: string) => (/^(https?:|mailto:)/i.test(href) ? href : null);
@@ -112,7 +113,15 @@ function parseBlocks(lines: string[]): Block[] {
       continue;
     }
     let m: RegExpExecArray | null;
-    if ((m = FENCE.exec(line))) {
+    if (INDENTED_CODE.test(line)) {
+      const body: string[] = [];
+      while (i < lines.length && (!lines[i].trim() || INDENTED_CODE.test(lines[i]))) {
+        body.push(lines[i].replace(INDENTED_CODE, ""));
+        i++;
+      }
+      while (body.length && !body.at(-1)!.trim()) body.pop();
+      blocks.push({ t: "code", lang: "", v: body.join("\n") });
+    } else if ((m = FENCE.exec(line))) {
       const marker = m[1];
       const body: string[] = [];
       i++;
@@ -146,7 +155,7 @@ function parseBlocks(lines: string[]): Block[] {
         !(para.length && (BULLET.test(lines[i]) || ORDERED.test(lines[i])))
       )
         para.push(lines[i++]);
-      blocks.push({ t: "paragraph", v: parseInline(para.map((l) => l.trim()).join("\n")) });
+      blocks.push({ t: "paragraph", v: parseInline(para.map((l) => l.trimStart()).join("\n")) });
     }
   }
   return blocks;

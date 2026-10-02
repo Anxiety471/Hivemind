@@ -38,6 +38,7 @@ struct State {
 /// path an agent records survives restarts.
 pub struct SharedWorkspaces {
     config_path: PathBuf,
+    pub(crate) edit_lock: Arc<std::sync::Mutex<()>>,
     roots: Vec<String>,
     /// User-added workspaces, in the order they were added.
     known: RwLock<Vec<String>>,
@@ -48,6 +49,7 @@ impl SharedWorkspaces {
     pub fn new(config_path: &Path, config: &HivemindConfig) -> Self {
         let store = Self {
             config_path: config_path.to_owned(),
+            edit_lock: Arc::new(std::sync::Mutex::new(())),
             roots: config.workspaces.roots.clone(),
             known: RwLock::new(config.workspaces.known.clone()),
             state: RwLock::new(State::default()),
@@ -99,6 +101,7 @@ impl SharedWorkspaces {
     /// Validate and remember another workspace without touching any existing one.
     /// Returns the stored path; adding one that is already known is a conflict.
     pub fn add_known(&self, path: &str) -> Result<String> {
+        let _guard = self.edit_lock.lock().expect("config edit lock poisoned");
         let workspace = self.validate(path)?;
         let mut known = self.known.write().expect("workspace lock poisoned");
         if known.contains(&workspace) {
@@ -114,6 +117,7 @@ impl SharedWorkspaces {
     /// Forget a workspace added earlier. One a persona or group still uses is refused
     /// so removing it from the list can never pull the directory out from under them.
     pub fn remove_known(&self, path: &str) -> Result<()> {
+        let _guard = self.edit_lock.lock().expect("config edit lock poisoned");
         let mut known = self.known.write().expect("workspace lock poisoned");
         if !known.iter().any(|k| k == path) {
             bail!("unknown workspace '{path}'");
@@ -201,6 +205,7 @@ impl SharedWorkspaces {
 
     /// Validate, persist to the config file, then expose the new workspace.
     pub fn set_group(&self, group: &str, path: &str) -> Result<String> {
+        let _guard = self.edit_lock.lock().expect("config edit lock poisoned");
         let workspace = self.validate(path)?;
         let mut state = self.state.write().expect("workspace lock poisoned");
         if !state.groups.contains_key(group) {
@@ -215,6 +220,7 @@ impl SharedWorkspaces {
 
     /// Remove a group's shared workspace so members go back to their own.
     pub fn clear_group(&self, group: &str) -> Result<()> {
+        let _guard = self.edit_lock.lock().expect("config edit lock poisoned");
         let mut state = self.state.write().expect("workspace lock poisoned");
         if !state.groups.contains_key(group) {
             bail!("unknown group '{group}'");
@@ -225,6 +231,7 @@ impl SharedWorkspaces {
     }
 
     pub fn set_persona(&self, persona: &str, path: &str) -> Result<String> {
+        let _guard = self.edit_lock.lock().expect("config edit lock poisoned");
         let workspace = self.validate(path)?;
         let mut state = self.state.write().expect("workspace lock poisoned");
         if !state.personas.contains_key(persona) {

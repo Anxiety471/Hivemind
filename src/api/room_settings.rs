@@ -70,10 +70,10 @@ fn describe(state: &ApiState, id: &str, kind: Kind) -> Result<Value, Response> {
     })?;
     let config = state.core.config();
     let group = (kind == Kind::Group)
-        .then(|| id.trim_start_matches("group-"))
+        .then(|| id.strip_prefix("group-").expect("group room prefix"))
         .and_then(|name| config.groups.iter().find(|g| g.name == name));
     let persona = (kind == Kind::Solo)
-        .then(|| id.trim_start_matches("solo-"))
+        .then(|| id.strip_prefix("solo-").expect("solo room prefix"))
         .and_then(|name| state.core.agents().get(name));
     match kind {
         Kind::Group if group.is_none() => {
@@ -253,7 +253,10 @@ async fn update(
     }
     let applied = match kind {
         Kind::Group => {
-            let name = id.trim_start_matches("group-").to_owned();
+            let name = id
+                .strip_prefix("group-")
+                .expect("group room prefix")
+                .to_owned();
             let group_change = if body.mode.is_some() || body.reply_order.is_some() {
                 state.core.mutate_groups(GroupCommand::Update {
                     name: name.clone(),
@@ -279,7 +282,7 @@ async fn update(
             Some(Some(path)) => state
                 .core
                 .shared_workspaces()
-                .set_persona(id.trim_start_matches("solo-"), path)
+                .set_persona(id.strip_prefix("solo-").expect("solo room prefix"), path)
                 .map(|_| ()),
             _ => Ok(()),
         },

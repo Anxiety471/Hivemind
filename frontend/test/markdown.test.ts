@@ -5,6 +5,25 @@ import { parseInline, parseMarkdown } from "../src/markdownParse.ts";
 
 const types = (src: string) => parseMarkdown(src).map((b) => b.t);
 
+test("indented code preserves indentation, blank lines and literal markdown", () => {
+  assert.deepEqual(parseMarkdown("    if ready:\n        run()  \n\n\n    # literal\n\nafter"), [
+    { t: "code", lang: "", v: "if ready:\n    run()  \n\n\n# literal" },
+    { t: "paragraph", v: [{ t: "text", v: "after" }] },
+  ]);
+  assert.deepEqual(parseMarkdown("\tprint(1)\n\t\tprint(2)"), [
+    { t: "code", lang: "", v: "print(1)\n\tprint(2)" },
+  ]);
+  assert.equal(parseMarkdown("paragraph\n    continuation")[0].t, "paragraph");
+});
+
+test("paragraphs retain both Markdown hard-break forms", () => {
+  for (const src of ["first line  \nsecond line", "first line\\\nsecond line"]) {
+    assert.deepEqual(parseMarkdown(src), [
+      { t: "paragraph", v: [{ t: "text", v: "first line" }, { t: "br" }, { t: "text", v: "second line" }] },
+    ]);
+  }
+});
+
 test("plain text stays one readable paragraph per blank-line group", () => {
   assert.deepEqual(parseMarkdown("just words\nmore words\n\nsecond"), [
     { t: "paragraph", v: [{ t: "text", v: "just words\nmore words" }] },

@@ -17,7 +17,7 @@ def send(frame):
     sys.stdout.flush()
 
 
-MARKDOWN = "# Plan  \r\n\r\n\r\n\r\n- first **bold** step\r\n- second `code` step\r\n\r\n```python\r\nprint('hi')  \r\n```\r\n"
+MARKDOWN = "# Plan  \r\n\r\n\r\n\r\n- first **bold** step\r\n- second `code` step\r\n\r\n```python\r\nprint('hi')  \r\n```\r\n\r\n    if ready:\r\n        run()\r\n\r\nfirst line  \r\nsecond line\r\n"
 
 for line in sys.stdin:
     try:

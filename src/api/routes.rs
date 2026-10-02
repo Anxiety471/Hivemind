@@ -1178,6 +1178,156 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn workspace_changes_survive_agent_and_conversation_edits() {
+        let test_core = TestCore::new();
+        let path = write_config(&test_core);
+        let app = router(test_core.core.clone(), watch::channel(false).1);
+        let workspace = test_core.directory.join("selected");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let workspace = workspace.canonicalize().unwrap().display().to_string();
+        let (status, body) = request_json(
+            app.clone(),
+            "PATCH",
+            "/api/v1/rooms/solo-Engineer/settings",
+            json!({"workspace":workspace}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let (_, _, agent) = request(app.clone(), "GET", "/api/v1/agents/Engineer").await;
+        assert_eq!(agent["config"]["workspace"], workspace);
+        let (status, body) = request_json(
+            app.clone(),
+            "PATCH",
+            "/api/v1/rooms/main/settings",
+            json!({"reply_order":["Reviewer","Engineer"]}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let (_, _, room) =
+            request(app.clone(), "GET", "/api/v1/rooms/solo-Engineer/settings").await;
+        assert_eq!(room["settings"]["workspace"], workspace);
+        for (method, endpoint, body, expected) in [
+            (
+                "POST",
+                "/api/v1/agents",
+                json!({"id":"Designer","runtime":"pi","workspace":workspace}),
+                StatusCode::CREATED,
+            ),
+            (
+                "PUT",
+                "/api/v1/agents/Reviewer",
+                json!({"runtime":"pi","workspace":workspace,"system_prompt":"Updated"}),
+                StatusCode::OK,
+            ),
+        ] {
+            let (status, body) = request_json(app.clone(), method, endpoint, body).await;
+            assert_eq!(status, expected, "{body}");
+            let reloaded = HivemindConfig::load(&path).unwrap();
+            assert_eq!(
+                reloaded
+                    .agents
+                    .iter()
+                    .find(|a| a.name == "Engineer")
+                    .unwrap()
+                    .workspace,
+                workspace
+            );
+        }
+        // The older workspace API and workspace tools use this same store.
+        let (status, body) = request_json(
+            app.clone(),
+            "PUT",
+            "/api/v1/workspaces/personas/Engineer",
+            json!({"path":test_core.directory.display().to_string()}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/api/v1/agents/Designer")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        let reloaded = HivemindConfig::load(&path).unwrap();
+        let restarted = HivemindCore::new(reloaded, &path).unwrap();
+        assert_eq!(
+            restarted.agents().get("Engineer").unwrap().workspace,
+            test_core
+                .directory
+                .canonicalize()
+                .unwrap()
+                .display()
+                .to_string()
+        );
+    }
+
+    #[tokio::test]
+    async fn room_settings_strip_exactly_one_prefix() {
+        let test_core = TestCore::new();
+        write_config(&test_core);
+        let app = router(test_core.core.clone(), watch::channel(false).1);
+        for id in ["crew", "group-crew"] {
+            let (status, body) = request_json(
+                app.clone(),
+                "POST",
+                "/api/v1/chat-groups",
+                json!({"id":id,"members":["Engineer"]}),
+            )
+            .await;
+            assert_eq!(status, StatusCode::CREATED, "{body}");
+        }
+        let (status, body) = request_json(
+            app.clone(),
+            "PATCH",
+            "/api/v1/rooms/group-group-crew/settings",
+            json!({"mode":"discussion"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["settings"]["mode"], "discussion");
+        let (_, _, other) = request(app.clone(), "GET", "/api/v1/rooms/group-crew/settings").await;
+        assert_eq!(other["settings"]["mode"], "broadcast");
+        let workspace = test_core
+            .directory
+            .canonicalize()
+            .unwrap()
+            .display()
+            .to_string();
+        let (status, body) = request_json(
+            app.clone(),
+            "POST",
+            "/api/v1/agents",
+            json!({"id":"solo-Reviewer","runtime":"pi","workspace":workspace}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        let (status, body) = request_json(
+            app.clone(),
+            "PATCH",
+            "/api/v1/rooms/solo-solo-Reviewer/settings",
+            json!({"workspace":workspace,"nickname":"Prefixed"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let (_, _, saved) = request(
+            app.clone(),
+            "GET",
+            "/api/v1/rooms/solo-solo-Reviewer/settings",
+        )
+        .await;
+        assert_eq!(saved["settings"]["nickname"], "Prefixed");
+        assert_eq!(saved["settings"]["workspace"], workspace);
+        let (_, _, other) = request(app, "GET", "/api/v1/rooms/solo-Reviewer/settings").await;
+        assert!(other["settings"]["nickname"].is_null());
+    }
+
+    #[tokio::test]
     async fn room_settings_apply_per_conversation_kind() {
         let test_core = TestCore::new();
         let path = write_config(&test_core);

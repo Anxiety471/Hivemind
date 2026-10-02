@@ -46,7 +46,7 @@ pub struct HivemindCore {
     setup_lock: std::sync::Mutex<()>,
     shutting_down: AtomicBool,
     shutdown_lock: tokio::sync::Mutex<()>,
-    group_edit_lock: std::sync::Mutex<()>,
+    group_edit_lock: Arc<std::sync::Mutex<()>>,
 }
 
 pub struct CoreTurnRequest<'a> {
@@ -219,6 +219,7 @@ impl HivemindCore {
         runtime.set_execution(execution.clone());
         coordination.set_execution(execution.clone());
         let workspaces = Arc::new(SharedWorkspaces::new(&config_path, &config));
+        let group_edit_lock = workspaces.edit_lock.clone();
         let mut hosts: Vec<Arc<dyn crate::conversation::ToolHost>> = vec![Arc::new(
             WorkspaceTools::new(workspaces.clone(), access.clone()),
         )];
@@ -247,7 +248,7 @@ impl HivemindCore {
             setup_lock: std::sync::Mutex::new(()),
             shutting_down: AtomicBool::new(false),
             shutdown_lock: tokio::sync::Mutex::new(()),
-            group_edit_lock: std::sync::Mutex::new(()),
+            group_edit_lock,
         })
     }
 
@@ -285,21 +286,29 @@ impl HivemindCore {
     }
 
     pub fn agents(&self) -> AgentRegistry {
-        self.agents
+        let registry = self
+            .agents
             .read()
             .expect("core agent registry lock poisoned")
-            .clone()
+            .clone();
+        AgentRegistry {
+            agents: Arc::new(
+                registry
+                    .list()
+                    .into_iter()
+                    .map(|agent| match self.workspaces.persona(&agent.name) {
+                        Some(workspace) => with_workspace(agent, &workspace),
+                        None => agent,
+                    })
+                    .collect(),
+            ),
+        }
     }
 
     /// Update only persisted group definitions; runtime and context services
     /// are intentionally not reconstructed by this operation.
     pub fn reload_groups(&self, groups: Vec<crate::config::GroupConfig>) {
-        let mut config = self
-            .config
-            .read()
-            .expect("core config lock poisoned")
-            .as_ref()
-            .clone();
+        let mut config = self.config();
         config.groups = groups;
         self.workspaces.replace_groups(&config.groups);
         *self.config.write().expect("core config lock poisoned") = Arc::new(config);
@@ -319,11 +328,27 @@ impl HivemindCore {
     }
 
     pub fn config(&self) -> HivemindConfig {
-        self.config
+        let mut config = self
+            .config
             .read()
             .expect("core config lock poisoned")
             .as_ref()
-            .clone()
+            .clone();
+        // Workspace tools and settings share the authoritative workspace store.
+        // Merge its current values before exposing or persisting a config snapshot.
+        let (groups, personas) = self.workspaces.snapshot();
+        for agent in &mut config.agents {
+            if let Some((_, workspace)) = personas.iter().find(|(id, _)| id == &agent.name) {
+                agent.workspace = workspace.clone();
+            }
+        }
+        for group in &mut config.groups {
+            if let Some((_, workspace)) = groups.iter().find(|(id, _)| id == &group.name) {
+                group.workspace = workspace.clone();
+            }
+        }
+        config.workspaces.known = self.workspaces.known();
+        config
     }
 
     /// Add an agent: validate the resulting configuration, persist it, then expose it.

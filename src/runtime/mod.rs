@@ -55,14 +55,16 @@ fn harness_dir<'a>(
         )
     })
 /// Make a runtime's reply read the same whichever runtime produced it: Unix line
-/// endings, no terminal escapes or trailing spaces, no runs of blank lines, and no
+/// endings, no terminal escapes or redundant blank lines, and no
 /// wrapper fence around a reply that is entirely Markdown. Fenced code is kept
-/// byte-for-byte apart from its line endings.
+/// byte-for-byte apart from its line endings. Markdown hard breaks and indented
+/// code whitespace are preserved.
 pub fn normalize_reply(raw: &str) -> String {
     let text = strip_ansi(raw).replace("\r\n", "\n").replace('\r', "\n");
     let mut out: Vec<&str> = Vec::new();
     let mut fence: Option<(char, usize)> = None;
     let mut blanks = 0;
+    let mut indented_code = false;
     for line in text.split('\n') {
         let trimmed = line.trim_start();
         match fence {
@@ -73,10 +75,18 @@ pub fn normalize_reply(raw: &str) -> String {
                 }
             }
             None => {
-                let line = line.trim_end();
-                if line.is_empty() {
+                let is_indented = line.starts_with("    ") || line.starts_with('\t');
+                if !line.trim().is_empty() {
+                    indented_code = is_indented;
+                }
+                let line = if indented_code || line.ends_with("  ") {
+                    line
+                } else {
+                    line.trim_end()
+                };
+                if line.trim().is_empty() {
                     blanks += 1;
-                    if blanks > 1 {
+                    if blanks > 1 && !indented_code {
                         continue;
                     }
                 } else {
@@ -175,6 +185,15 @@ mod normalize_tests {
     use super::normalize_reply;
 
     #[test]
+    fn markdown_hard_breaks_and_indented_code_survive_normalization() {
+        let raw = "first  \r\nsecond\\\r\nthird\r\n\r\n    if ready:  \r\n        run()\r\n\r\n\r\n    # literal\r\n";
+        assert_eq!(
+            normalize_reply(raw),
+            raw.replace("\r\n", "\n").trim_end_matches('\n')
+        );
+    }
+
+    #[test]
     fn plain_text_is_left_alone() {
         assert_eq!(normalize_reply("just a sentence."), "just a sentence.");
     }
@@ -182,7 +201,7 @@ mod normalize_tests {
     #[test]
     fn line_endings_escapes_and_blank_runs_are_normalized() {
         let raw = "\u{1b}[1mTitle\u{1b}[0m  \r\n\r\n\r\n\r\nbody\r\n";
-        assert_eq!(normalize_reply(raw), "Title\n\nbody");
+        assert_eq!(normalize_reply(raw), "Title  \n\nbody");
     }
 
     #[test]

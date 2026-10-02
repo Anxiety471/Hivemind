@@ -21,6 +21,7 @@ const openRoom = async (page: Page, id: string) => {
 
 test("agent replies render as markdown whatever the runtime emitted", async ({ page }) => {
   await openRoom(page, "solo-Engineer");
+  await expect(page.locator(".conn")).toHaveAttribute("data-status", "open");
   await page.getByPlaceholder("Message @Engineer").fill("MARKDOWN please");
   await page.getByRole("button", { name: "Send" }).click();
   const reply = page.locator(".msg:not([data-user=true]) .markdown").last();
@@ -28,7 +29,10 @@ test("agent replies render as markdown whatever the runtime emitted", async ({ p
   await expect(reply.locator("li")).toHaveCount(2);
   await expect(reply.locator("li strong")).toHaveText("bold");
   await expect(reply.locator("li code")).toHaveText("code");
-  await expect(reply.locator("pre code")).toHaveText("print('hi')");
+  await expect(reply.locator("pre code")).toHaveCount(2);
+  await expect(reply.locator("pre code").first()).toHaveText("print('hi')");
+  expect(await reply.locator("pre code").nth(1).textContent()).toBe("if ready:\n    run()");
+  await expect(reply.locator("p", { hasText: "first line" }).locator("br")).toHaveCount(1);
   // The CRLF endings and blank-line runs the runtime sent never reach the history.
   const history = await (await page.request.get(`${api}/rooms/solo-Engineer/messages`)).json();
   const stored = history.messages.filter((m: { speaker: string }) => m.speaker === "Engineer").at(-1).content;
@@ -152,6 +156,11 @@ test("agents are created, edited and deleted from the web UI", async ({ page, re
   await expect(card).toBeVisible();
   await expect(card.getByText(dir("ws-two"))).toBeVisible();
   await expect(card.getByText("design", { exact: true })).toBeVisible();
+  // Agent creation must not undo the workspace selected in the preceding flow.
+  const reviewer = await (await request.get(`${api}/agents/Reviewer`)).json();
+  expect(reviewer.config.workspace).toBe(dir("ws-two"));
+  const workspaces = await (await request.get(`${api}/workspaces`)).json();
+  expect(workspaces.personas.find((p: { id: string }) => p.id === "Reviewer").workspace).toBe(dir("ws-two"));
   // The new agent is immediately a conversation target.
   await expect(page.locator('a[href="#/rooms/solo-Designer"]')).toBeVisible();
 
