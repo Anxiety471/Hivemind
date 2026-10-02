@@ -49,7 +49,8 @@ async fn models(
     RawQuery(raw): RawQuery,
 ) -> Response {
     if !catalog::is_runtime(&runtime) {
-        return ApiError::new(StatusCode::NOT_FOUND, "not_found", "unknown runtime").into_response();
+        return ApiError::new(StatusCode::NOT_FOUND, "not_found", "unknown runtime")
+            .into_response();
     }
     let refresh = query(raw).get("refresh").map(String::as_str) == Some("true");
     let slot = slot(&runtime);
@@ -61,20 +62,29 @@ async fn models(
         }
     }
     let config = state.core.config();
-    let harness = config.runtime.harness_dir.clone().unwrap_or_else(|| std::env::temp_dir().join("hivemind-harness"));
+    let harness = config
+        .runtime
+        .harness_dir
+        .clone()
+        .unwrap_or_else(|| std::env::temp_dir().join("hivemind-harness"));
     match catalog::list(&config.runtime, &runtime, &harness).await {
         Ok(catalog) => {
             *cached = Some((Instant::now(), catalog.clone()));
             Json(catalog).into_response()
         }
-        Err(error) => {
-            ApiError::owned(StatusCode::BAD_GATEWAY, "runtime_unavailable", format!("{error:#}")).into_response()
-        }
+        Err(error) => ApiError::owned(
+            StatusCode::BAD_GATEWAY,
+            "runtime_unavailable",
+            format!("{error:#}"),
+        )
+        .into_response(),
     }
 }
 
 fn home() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from).filter(|p| p.is_absolute())
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
 }
 
 /// Subfolders of `path` for the workspace picker. When `[workspaces] roots` is set the
@@ -82,7 +92,10 @@ fn home() -> Option<PathBuf> {
 async fn dirs(State(state): State<ApiState>, RawQuery(raw): RawQuery) -> Response {
     let params = query(raw);
     let hidden = params.get("hidden").map(String::as_str) == Some("true");
-    let requested = params.get("path").map(|p| p.trim().to_owned()).filter(|p| !p.is_empty());
+    let requested = params
+        .get("path")
+        .map(|p| p.trim().to_owned())
+        .filter(|p| !p.is_empty());
     let roots: Vec<PathBuf> = state
         .core
         .shared_workspaces()
@@ -97,31 +110,49 @@ async fn dirs(State(state): State<ApiState>, RawQuery(raw): RawQuery) -> Respons
             Json(listing).into_response()
         }
         Ok(Err((status, code, message))) => ApiError::owned(status, code, message).into_response(),
-        Err(_) => ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", "request could not be completed")
-            .into_response(),
+        Err(_) => ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            "request could not be completed",
+        )
+        .into_response(),
     }
 }
 
 /// A folder dialog the host desktop offers: program and arguments, starting at `start`.
 fn native_dialog(start: &Path) -> Option<(&'static str, Vec<String>)> {
-    let on_path = |name: &str| std::env::var_os("PATH").is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(name).is_file()));
+    let on_path = |name: &str| {
+        std::env::var_os("PATH")
+            .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(name).is_file()))
+    };
     let start = start.display().to_string();
     if cfg!(target_os = "macos") {
-        let script = "POSIX path of (choose folder with prompt \"Choose the agent workspace\")".to_owned();
+        let script =
+            "POSIX path of (choose folder with prompt \"Choose the agent workspace\")".to_owned();
         return on_path("osascript").then(|| ("osascript", vec!["-e".to_owned(), script]));
     }
-    let has_display = std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some();
+    let has_display =
+        std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some();
     if !cfg!(target_os = "linux") || !has_display {
         return None;
     }
     let kde = std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|d| d.to_uppercase().contains("KDE"));
-    let order = if kde { ["kdialog", "zenity"] } else { ["zenity", "kdialog"] };
+    let order = if kde {
+        ["kdialog", "zenity"]
+    } else {
+        ["zenity", "kdialog"]
+    };
     let program = order.into_iter().find(|name| on_path(name))?;
     Some(match program {
         "kdialog" => ("kdialog", vec!["--getexistingdirectory".to_owned(), start]),
         _ => (
             "zenity",
-            vec!["--file-selection".to_owned(), "--directory".to_owned(), "--title=Choose the agent workspace".to_owned(), format!("--filename={start}/")],
+            vec![
+                "--file-selection".to_owned(),
+                "--directory".to_owned(),
+                "--title=Choose the agent workspace".to_owned(),
+                format!("--filename={start}/"),
+            ],
         ),
     })
 }
@@ -135,7 +166,12 @@ fn native_picker_available(state: &ApiState) -> bool {
 /// Open the desktop's own folder dialog and return the chosen path (`null` when cancelled).
 async fn pick(State(state): State<ApiState>, RawQuery(raw): RawQuery) -> Response {
     if !native_picker_available(&state) {
-        return ApiError::new(StatusCode::NOT_IMPLEMENTED, "not_available", "this server cannot open a folder dialog").into_response();
+        return ApiError::new(
+            StatusCode::NOT_IMPLEMENTED,
+            "not_available",
+            "this server cannot open a folder dialog",
+        )
+        .into_response();
     }
     let start = query(raw)
         .get("path")
@@ -144,7 +180,12 @@ async fn pick(State(state): State<ApiState>, RawQuery(raw): RawQuery) -> Respons
         .or_else(home)
         .unwrap_or_else(|| PathBuf::from("/"));
     let Some((program, args)) = native_dialog(&start) else {
-        return ApiError::new(StatusCode::NOT_IMPLEMENTED, "not_available", "this server cannot open a folder dialog").into_response();
+        return ApiError::new(
+            StatusCode::NOT_IMPLEMENTED,
+            "not_available",
+            "this server cannot open a folder dialog",
+        )
+        .into_response();
     };
     let run = tokio::process::Command::new(program)
         .args(args)
@@ -154,9 +195,21 @@ async fn pick(State(state): State<ApiState>, RawQuery(raw): RawQuery) -> Respons
     let output = match tokio::time::timeout(Duration::from_secs(900), run).await {
         Ok(Ok(output)) => output,
         Ok(Err(error)) => {
-            return ApiError::owned(StatusCode::BAD_GATEWAY, "dialog_failed", format!("could not open {program}: {error}")).into_response()
+            return ApiError::owned(
+                StatusCode::BAD_GATEWAY,
+                "dialog_failed",
+                format!("could not open {program}: {error}"),
+            )
+            .into_response()
         }
-        Err(_) => return ApiError::new(StatusCode::GATEWAY_TIMEOUT, "dialog_timeout", "the folder dialog was left open too long").into_response(),
+        Err(_) => {
+            return ApiError::new(
+                StatusCode::GATEWAY_TIMEOUT,
+                "dialog_timeout",
+                "the folder dialog was left open too long",
+            )
+            .into_response()
+        }
     };
     // Every dialog exits 1 when the user cancels.
     if output.status.code() == Some(1) {
@@ -164,36 +217,71 @@ async fn pick(State(state): State<ApiState>, RawQuery(raw): RawQuery) -> Respons
     }
     if !output.status.success() {
         let detail = String::from_utf8_lossy(&output.stderr);
-        return ApiError::owned(StatusCode::BAD_GATEWAY, "dialog_failed", format!("{program} failed: {}", detail.trim())).into_response();
+        return ApiError::owned(
+            StatusCode::BAD_GATEWAY,
+            "dialog_failed",
+            format!("{program} failed: {}", detail.trim()),
+        )
+        .into_response();
     }
     let text = String::from_utf8_lossy(&output.stdout);
     let chosen = text.trim().trim_end_matches('/');
     let chosen = if chosen.is_empty() { "/" } else { chosen };
     match state.core.validate_workspace(chosen) {
         Ok(path) => Json(json!({"path": path})).into_response(),
-        Err(error) => ApiError::owned(StatusCode::BAD_REQUEST, "invalid_request", error.to_string()).into_response(),
+        Err(error) => ApiError::owned(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            error.to_string(),
+        )
+        .into_response(),
     }
 }
 
 type Failure = (StatusCode, &'static str, String);
 
-fn browse(requested: Option<String>, hidden: bool, roots: &[PathBuf]) -> Result<serde_json::Value, Failure> {
+fn browse(
+    requested: Option<String>,
+    hidden: bool,
+    roots: &[PathBuf],
+) -> Result<serde_json::Value, Failure> {
     let start = match requested {
         Some(path) => PathBuf::from(path),
-        None => roots.first().cloned().or_else(home).unwrap_or_else(|| PathBuf::from("/")),
+        None => roots
+            .first()
+            .cloned()
+            .or_else(home)
+            .unwrap_or_else(|| PathBuf::from("/")),
     };
     if !start.is_absolute() {
-        return Err((StatusCode::BAD_REQUEST, "invalid_request", "the folder path must be absolute".into()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "the folder path must be absolute".into(),
+        ));
     }
     let real = std::fs::canonicalize(&start).map_err(|_| {
-        (StatusCode::NOT_FOUND, "not_found", format!("'{}' does not exist or is not a folder", start.display()))
+        (
+            StatusCode::NOT_FOUND,
+            "not_found",
+            format!("'{}' does not exist or is not a folder", start.display()),
+        )
     })?;
     let inside = |path: &Path| roots.is_empty() || roots.iter().any(|root| path.starts_with(root));
     if !inside(&real) {
-        return Err((StatusCode::FORBIDDEN, "forbidden", "that folder is outside the allowed workspace roots".into()));
+        return Err((
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            "that folder is outside the allowed workspace roots".into(),
+        ));
     }
-    let read = std::fs::read_dir(&real)
-        .map_err(|_| (StatusCode::FORBIDDEN, "forbidden", format!("'{}' cannot be read", real.display())))?;
+    let read = std::fs::read_dir(&real).map_err(|_| {
+        (
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            format!("'{}' cannot be read", real.display()),
+        )
+    })?;
     let mut entries: Vec<(String, String)> = read
         .filter_map(Result::ok)
         .filter_map(|entry| {
@@ -207,7 +295,10 @@ fn browse(requested: Option<String>, hidden: bool, roots: &[PathBuf]) -> Result<
     entries.sort_by_cached_key(|(name, _)| name.to_lowercase());
     let truncated = entries.len() > MAX_ENTRIES;
     entries.truncate(MAX_ENTRIES);
-    let parent = real.parent().filter(|parent| inside(parent)).map(|p| p.to_string_lossy().into_owned());
+    let parent = real
+        .parent()
+        .filter(|parent| inside(parent))
+        .map(|p| p.to_string_lossy().into_owned());
     Ok(json!({
         "path": real,
         "parent": parent,
@@ -223,7 +314,8 @@ mod tests {
     use super::*;
 
     fn tree(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("hivemind-browse-{name}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("hivemind-browse-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         for sub in ["alpha", "Beta", ".hidden", "alpha/inner"] {
             std::fs::create_dir_all(dir.join(sub)).unwrap();
@@ -233,7 +325,12 @@ mod tests {
     }
 
     fn names(listing: &serde_json::Value) -> Vec<&str> {
-        listing["entries"].as_array().unwrap().iter().map(|e| e["name"].as_str().unwrap()).collect()
+        listing["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["name"].as_str().unwrap())
+            .collect()
     }
 
     #[test]

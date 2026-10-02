@@ -59,9 +59,12 @@ pub async fn list(config: &RuntimeConfig, runtime: &str, harness_dir: &Path) -> 
             other => bail!("unsupported runtime '{other}'"),
         }
     };
-    let mut models = timeout(LIST_TIMEOUT, work)
-        .await
-        .map_err(|_| anyhow!("{runtime} did not list its models within {}s", LIST_TIMEOUT.as_secs()))??;
+    let mut models = timeout(LIST_TIMEOUT, work).await.map_err(|_| {
+        anyhow!(
+            "{runtime} did not list its models within {}s",
+            LIST_TIMEOUT.as_secs()
+        )
+    })??;
     models.sort_by(|a, b| (&a.provider, &a.name).cmp(&(&b.provider, &b.name)));
     models.dedup_by(|a, b| a.id == b.id);
     Ok(Catalog {
@@ -100,7 +103,8 @@ async fn omp_models(binary: &str, private_env: &[String]) -> Result<Vec<ModelEnt
     if !output.status.success() {
         bail!("'{binary} models' exited with {}", output.status);
     }
-    let parsed: Value = serde_json::from_slice(&output.stdout).context("OMP returned invalid model JSON")?;
+    let parsed: Value =
+        serde_json::from_slice(&output.stdout).context("OMP returned invalid model JSON")?;
     Ok(parsed["models"]
         .as_array()
         .map(Vec::as_slice)
@@ -111,10 +115,17 @@ async fn omp_models(binary: &str, private_env: &[String]) -> Result<Vec<ModelEnt
             let id = model["id"].as_str()?;
             let levels: Vec<String> = model["thinking"]
                 .as_array()
-                .map(|levels| levels.iter().filter_map(|l| l.as_str().map(str::to_owned)).collect())
+                .map(|levels| {
+                    levels
+                        .iter()
+                        .filter_map(|l| l.as_str().map(str::to_owned))
+                        .collect()
+                })
                 .unwrap_or_default();
             Some(ModelEntry {
-                id: model["selector"].as_str().map_or_else(|| format!("{provider}/{id}"), str::to_owned),
+                id: model["selector"]
+                    .as_str()
+                    .map_or_else(|| format!("{provider}/{id}"), str::to_owned),
                 name: model["name"].as_str().unwrap_or(id).to_owned(),
                 provider: provider.to_owned(),
                 reasoning: with_off(levels, model["reasoning"].as_bool().unwrap_or(false)),
@@ -170,12 +181,16 @@ async fn pi_models(binary: &str, private_env: &[String]) -> Result<Vec<ModelEntr
         ]),
         binary,
     )?;
-    rpc.send(&json!({"type": "get_available_models", "id": "models"})).await?;
+    rpc.send(&json!({"type": "get_available_models", "id": "models"}))
+        .await?;
     let response = rpc
         .wait(|frame| frame["type"] == "response" && frame["id"] == "models")
         .await?;
     if response["success"] != true {
-        bail!("Pi refused to list models: {}", response["error"].as_str().unwrap_or("unknown error"));
+        bail!(
+            "Pi refused to list models: {}",
+            response["error"].as_str().unwrap_or("unknown error")
+        );
     }
     Ok(response["data"]["models"]
         .as_array()
@@ -196,7 +211,11 @@ async fn pi_models(binary: &str, private_env: &[String]) -> Result<Vec<ModelEntr
         .collect())
 }
 
-async fn opencode_models(binary: &str, config_dir: &Path, private_env: &[String]) -> Result<Vec<ModelEntry>> {
+async fn opencode_models(
+    binary: &str,
+    config_dir: &Path,
+    private_env: &[String],
+) -> Result<Vec<ModelEntry>> {
     super::write_owned_file(
         &config_dir.join("plugins").join("hivemind.js"),
         super::opencode::KEEP_PROVIDERS_PLUGIN,
@@ -213,11 +232,20 @@ async fn opencode_models(binary: &str, config_dir: &Path, private_env: &[String]
             .env_remove("OPENCODE_CONFIG_CONTENT"),
         binary,
     )?;
-    rpc.request(1, "initialize", json!({"protocolVersion": 1, "clientCapabilities": {}})).await?;
-    let created = rpc.request(2, "session/new", json!({"cwd": cwd, "mcpServers": []})).await?;
+    rpc.request(
+        1,
+        "initialize",
+        json!({"protocolVersion": 1, "clientCapabilities": {}}),
+    )
+    .await?;
+    let created = rpc
+        .request(2, "session/new", json!({"cwd": cwd, "mcpServers": []}))
+        .await?;
     // The probe session is not wanted in OpenCode's history.
     if let Some(session) = created["sessionId"].as_str() {
-        let _ = rpc.request(3, "session/delete", json!({"sessionId": session})).await;
+        let _ = rpc
+            .request(3, "session/delete", json!({"sessionId": session}))
+            .await;
     }
     let options = created["configOptions"]
         .as_array()
@@ -233,7 +261,10 @@ async fn opencode_models(binary: &str, config_dir: &Path, private_env: &[String]
             Some(ModelEntry {
                 id: id.to_owned(),
                 // OpenCode names read "provider/Display Name"; the provider already has its own column.
-                name: name.strip_prefix(&format!("{provider}/")).unwrap_or(name).to_owned(),
+                name: name
+                    .strip_prefix(&format!("{provider}/"))
+                    .unwrap_or(name)
+                    .to_owned(),
                 provider: provider.to_owned(),
                 reasoning: Vec::new(),
                 context_window: None,
@@ -254,7 +285,11 @@ impl Rpc {
         let mut child = command.spawn().with_context(|| spawn_error(binary))?;
         let stdin = child.stdin.take().context("child has no stdin")?;
         let stdout = child.stdout.take().context("child has no stdout")?;
-        Ok(Self { _child: child, stdin, lines: BufReader::new(stdout).lines() })
+        Ok(Self {
+            _child: child,
+            stdin,
+            lines: BufReader::new(stdout).lines(),
+        })
     }
 
     async fn send(&mut self, frame: &Value) -> Result<()> {
@@ -278,10 +313,16 @@ impl Rpc {
 
     /// One JSON-RPC call; returns its `result`.
     async fn request(&mut self, id: u64, method: &str, params: Value) -> Result<Value> {
-        self.send(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params})).await?;
-        let mut frame = self.wait(|frame| frame["id"] == id && frame.get("method").is_none()).await?;
+        self.send(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}))
+            .await?;
+        let mut frame = self
+            .wait(|frame| frame["id"] == id && frame.get("method").is_none())
+            .await?;
         if let Some(error) = frame.get("error") {
-            bail!("{method} failed: {}", error["message"].as_str().unwrap_or("unknown error"));
+            bail!(
+                "{method} failed: {}",
+                error["message"].as_str().unwrap_or("unknown error")
+            );
         }
         Ok(frame["result"].take())
     }
@@ -294,17 +335,31 @@ mod tests {
     #[test]
     fn pi_levels_follow_the_model_map() {
         let plain = json!({"reasoning": true, "thinkingLevelMap": {"minimal": "low"}});
-        assert_eq!(pi_levels(&plain), ["off", "minimal", "low", "medium", "high"]);
-        let extended = json!({"reasoning": true, "thinkingLevelMap": {"xhigh": "xhigh", "max": "max"}});
-        assert_eq!(pi_levels(&extended), ["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
-        let no_off = json!({"reasoning": true, "thinkingLevelMap": {"off": null, "xhigh": "xhigh"}});
-        assert_eq!(pi_levels(&no_off), ["minimal", "low", "medium", "high", "xhigh"]);
+        assert_eq!(
+            pi_levels(&plain),
+            ["off", "minimal", "low", "medium", "high"]
+        );
+        let extended =
+            json!({"reasoning": true, "thinkingLevelMap": {"xhigh": "xhigh", "max": "max"}});
+        assert_eq!(
+            pi_levels(&extended),
+            ["off", "minimal", "low", "medium", "high", "xhigh", "max"]
+        );
+        let no_off =
+            json!({"reasoning": true, "thinkingLevelMap": {"off": null, "xhigh": "xhigh"}});
+        assert_eq!(
+            pi_levels(&no_off),
+            ["minimal", "low", "medium", "high", "xhigh"]
+        );
         assert!(pi_levels(&json!({"reasoning": false})).is_empty());
     }
 
     #[test]
     fn off_is_offered_only_for_reasoning_models() {
         assert!(with_off(Vec::new(), false).is_empty());
-        assert_eq!(with_off(vec!["low".into(), "high".into()], true), ["off", "low", "high"]);
+        assert_eq!(
+            with_off(vec!["low".into(), "high".into()], true),
+            ["off", "low", "high"]
+        );
     }
 }

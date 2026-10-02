@@ -1540,9 +1540,17 @@ mod tests {
             .unwrap()
             .iter()
             .any(|r| r["name"] == "worker"));
-        assert!(roles["permissions"].as_array().unwrap().iter().any(|p| p == "workspace.exec"));
-        let (status, _, unknown) = request(app.clone(), "GET", "/api/v1/runtimes/nope/models").await;
-        assert_eq!((status, unknown["error"]["code"].as_str()), (StatusCode::NOT_FOUND, Some("not_found")));
+        assert!(roles["permissions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p == "workspace.exec"));
+        let (status, _, unknown) =
+            request(app.clone(), "GET", "/api/v1/runtimes/nope/models").await;
+        assert_eq!(
+            (status, unknown["error"]["code"].as_str()),
+            (StatusCode::NOT_FOUND, Some("not_found"))
+        );
         let (status, _, dirs) = request(app.clone(), "GET", "/api/v1/fs/dirs?path=/").await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(dirs["path"], "/");
