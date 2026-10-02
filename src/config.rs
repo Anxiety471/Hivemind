@@ -236,7 +236,8 @@ pub struct ConversationConfig {
     pub reply_order: Vec<String>,
     /// Follow-up replies a Discussion turn may add beyond each member's first:
     /// @mentions of members who have already replied, and unprompted open-floor
-    /// replies. 0 disables.
+    /// replies. 0 disables; a member tagged once the budget is spent answers with a
+    /// visible "could not reply" notice rather than being ignored.
     #[serde(default = "default_mention_limit")]
     pub mention_limit: usize,
 }

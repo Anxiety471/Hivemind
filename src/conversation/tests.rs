@@ -2820,10 +2820,37 @@ async fn mention_adds_a_follow_up_reply_only_within_the_limit() {
     );
     // Self-mentions and mentions of members still waiting add nothing.
     assert_eq!(speakers(4, &["@A and @B", "ok", "PASS"]).await, ["A", "B"]);
-    // Limit 0 disables follow-ups; a ping-pong stops at the limit.
-    assert_eq!(speakers(0, &["hi @B", "back @A"]).await, ["A", "B"]);
+    // Limit 0 disables follow-ups, but the tagged member is told so in the thread
+    // instead of being silently ignored; a ping-pong stops at the limit the same way.
+    assert_eq!(speakers(0, &["hi @B", "back @A"]).await, ["A", "B", "A"]);
     let pingpong: &'static [&'static str] = &["ping @A @B"; 10];
-    assert_eq!(speakers(2, pingpong).await.len(), 4);
+    assert_eq!(speakers(2, pingpong).await.len(), 5);
+}
+
+#[tokio::test]
+async fn tagged_member_always_answers_or_says_it_cannot() {
+    let (_path, coord) = fixture();
+    coord.set_mention_limit(0);
+    let members: Vec<Participant> = ["A", "B"].iter().map(|n| member(n)).collect();
+    let out = coord
+        .turn(TurnRequest {
+            room: "tag-room",
+            room_name: "Tag room",
+            group_id: "tag-group",
+            mode: ConversationMode::Discussion,
+            members: &members,
+            input: "go",
+            invoker: scripted(&["hi", "@A are you there?"]),
+        })
+        .await
+        .unwrap();
+    let last = out.last().unwrap();
+    assert_eq!(last.name, "A");
+    assert!(last.result.as_ref().unwrap_err().contains("could not reply"));
+    let history = coord.room_history("tag-room").unwrap();
+    let event = history.events.last().unwrap();
+    assert_eq!(event.speaker, "A");
+    assert!(event.error);
 }
 
 #[tokio::test]

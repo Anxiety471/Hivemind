@@ -547,12 +547,33 @@ impl ConversationCoordinator {
                     self.save_turn(&history, room, &turn_id, &mut saved, false, false)?;
                     prior.push((name.clone(), result.clone()));
                     if let Ok(text) = &result {
+                        replies.push(TurnReply {
+                            name: name.clone(),
+                            result: result.clone(),
+                        });
                         for target in mentioned_members(text, members) {
-                            if target != index && extra > 0 && !queue.contains(&target) {
+                            if target == index || queue.contains(&target) {
+                                continue;
+                            }
+                            if extra > 0 {
                                 queue.push_back(target);
                                 extra -= 1;
+                            } else {
+                                // A tagged member must never be silently ignored:
+                                // say in the thread that it could not reply.
+                                let tagged = members[target].agent.name.clone();
+                                let notice = Err(format!(
+                                    "tagged by {name} but could not reply: the follow-up limit for this turn was reached"
+                                ));
+                                append_reply(&mut history, room, &turn_id, &tagged, &notice);
+                                self.save_turn(&history, room, &turn_id, &mut saved, false, false)?;
+                                replies.push(TurnReply {
+                                    name: tagged,
+                                    result: notice,
+                                });
                             }
                         }
+                        continue;
                     }
                     replies.push(TurnReply { name, result });
                 }
