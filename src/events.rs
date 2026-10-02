@@ -264,8 +264,18 @@ mod active_tests {
         let id = AgentInstanceId::new(room, agent);
         let (turn_id, room_id, agent_id) = ("t".to_owned(), room.to_owned(), agent.to_owned());
         match kind {
-            "start" => DomainEventKind::AgentReplyStarted { turn_id, room_id, agent_id, agent_instance_id: id },
-            _ => DomainEventKind::AgentReplyCompleted { turn_id, room_id, agent_id, agent_instance_id: id },
+            "start" => DomainEventKind::AgentReplyStarted {
+                turn_id,
+                room_id,
+                agent_id,
+                agent_instance_id: id,
+            },
+            _ => DomainEventKind::AgentReplyCompleted {
+                turn_id,
+                room_id,
+                agent_id,
+                agent_instance_id: id,
+            },
         }
     }
 
@@ -280,7 +290,10 @@ mod active_tests {
         assert_eq!(bus.active_replies("r"), ["B"]);
         assert_eq!(bus.active_replies("other"), ["C"]);
         // A turn that died without reporting leaves nothing behind once the room moves on.
-        bus.publish(DomainEventKind::TurnStarted { turn_id: "t2".into(), room_id: "r".into() });
+        bus.publish(DomainEventKind::TurnStarted {
+            turn_id: "t2".into(),
+            room_id: "r".into(),
+        });
         assert!(bus.active_replies("r").is_empty());
         assert_eq!(bus.active_replies("other"), ["C"]);
     }

@@ -208,8 +208,11 @@ impl OpencodeSession {
         model: Option<&str>,
         private_env: &[String],
     ) -> Result<Self> {
-        super::write_owned_file(&config_dir.join("plugins").join("hivemind.js"), KEEP_PROVIDERS_PLUGIN)
-            .context("preparing Hivemind's OpenCode config directory")?;
+        super::write_owned_file(
+            &config_dir.join("plugins").join("hivemind.js"),
+            KEEP_PROVIDERS_PLUGIN,
+        )
+        .context("preparing Hivemind's OpenCode config directory")?;
         let mut command = Command::new(binary);
         for name in private_env {
             command.env_remove(name);

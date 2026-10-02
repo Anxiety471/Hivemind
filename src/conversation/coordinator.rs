@@ -54,7 +54,10 @@ pub(super) const SESSION_TOOL_REMINDER: &str =
 /// Earlier same-turn replies (Discussion mode) plus, for an open-floor
 /// follow-up, the permission to PASS. Rendered identically for full packs and
 /// deltas.
-pub(super) fn same_turn_replies(prior: &[(String, Result<String, String>)], optional: bool) -> String {
+pub(super) fn same_turn_replies(
+    prior: &[(String, Result<String, String>)],
+    optional: bool,
+) -> String {
     let peers = prior
         .iter()
         .map(|(name, result)| match result {
@@ -78,7 +81,9 @@ const PASS: &str = "PASS";
 
 /// Whether an open-floor reply declined to speak.
 fn is_pass(text: &str) -> bool {
-    let text = text.trim().trim_matches(|c: char| c == '*' || c == '`' || c == '.');
+    let text = text
+        .trim()
+        .trim_matches(|c: char| c == '*' || c == '`' || c == '.');
     text.is_empty() || text.eq_ignore_ascii_case(PASS)
 }
 
@@ -543,10 +548,7 @@ impl ConversationCoordinator {
                     prior.push((name.clone(), result.clone()));
                     if let Ok(text) = &result {
                         for target in mentioned_members(text, members) {
-                            if target != index
-                                && extra > 0
-                                && !queue.contains(&target)
-                            {
+                            if target != index && extra > 0 && !queue.contains(&target) {
                                 queue.push_back(target);
                                 extra -= 1;
                             }

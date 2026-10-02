@@ -44,7 +44,10 @@ fn write_owned_file(path: &std::path::Path, content: &str) -> Result<()> {
 
 /// Hivemind's harness directory; sessions refuse to start without it rather
 /// than fall back to the user's own harness setup.
-fn harness_dir<'a>(runtime_config: &'a RuntimeConfig, agent: &AgentConfig) -> Result<&'a std::path::Path> {
+fn harness_dir<'a>(
+    runtime_config: &'a RuntimeConfig,
+    agent: &AgentConfig,
+) -> Result<&'a std::path::Path> {
     runtime_config.harness_dir.as_deref().ok_or_else(|| {
         anyhow::anyhow!(
             "agent '{}' needs a Hivemind-owned harness directory (runtime.harness_dir)",
@@ -338,7 +341,10 @@ done
             format!("{}|1|unset\n", config_dir.display())
         );
         // Without any plugin OpenCode drops its built-in provider, so Hivemind keeps one.
-        let plugins: Vec<_> = fs::read_dir(config_dir.join("plugins")).unwrap().map(|e| e.unwrap().file_name()).collect();
+        let plugins: Vec<_> = fs::read_dir(config_dir.join("plugins"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
         assert_eq!(plugins, ["hivemind.js"]);
     }
 

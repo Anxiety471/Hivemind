@@ -1149,16 +1149,30 @@ fn tool_call(name: &str, args: serde_json::Value) -> MemoryToolCall {
 #[test]
 fn tool_calls_parse_from_fences_and_from_tags() {
     let call = |text: &str| parse_tool_block(text).unwrap().map(|c| (c.name, c.args));
-    let search = || Some(("memory.search".to_owned(), serde_json::json!({"query": "Rust vs Zig"})));
+    let search = || {
+        Some((
+            "memory.search".to_owned(),
+            serde_json::json!({"query": "Rust vs Zig"}),
+        ))
+    };
     let json = r#"{"name":"memory.search","args":{"query":"Rust vs Zig"}}"#;
     assert_eq!(call(&format!("```hivemind-tool\n{json}\n```")), search());
     // Some models wrap the call in tags, multi-line or inline.
-    assert_eq!(call(&format!("<hivemind-tool>\n{json}\n</hivemind-tool>")), search());
-    assert_eq!(call(&format!("Checking.\n<hivemind-tool>{json}</hivemind-tool>")), search());
+    assert_eq!(
+        call(&format!("<hivemind-tool>\n{json}\n</hivemind-tool>")),
+        search()
+    );
+    assert_eq!(
+        call(&format!("Checking.\n<hivemind-tool>{json}</hivemind-tool>")),
+        search()
+    );
     // Prose that only names the syntax is not a call; an open tag never closed is an error.
     assert_eq!(call("Use the <hivemind-tool> tags to call tools."), None);
     assert!(parse_tool_block(&format!("<hivemind-tool>\n{json}")).is_err());
-    assert!(parse_tool_block(&format!("<hivemind-tool>{json}</hivemind-tool>\n```hivemind-tool\n{json}\n```")).is_err());
+    assert!(parse_tool_block(&format!(
+        "<hivemind-tool>{json}</hivemind-tool>\n```hivemind-tool\n{json}\n```"
+    ))
+    .is_err());
 }
 
 #[tokio::test]
@@ -2645,7 +2659,10 @@ async fn mention_adds_a_follow_up_reply_only_within_the_limit() {
         discussion(limit, &["A", "B"], replies).await.0
     };
     // B pings A, who already spoke: A replies once more; B then passes the floor.
-    assert_eq!(speakers(4, &["hi @B", "back @A", "ok", "PASS"]).await, ["A", "B", "A"]);
+    assert_eq!(
+        speakers(4, &["hi @B", "back @A", "ok", "PASS"]).await,
+        ["A", "B", "A"]
+    );
     // Self-mentions and mentions of members still waiting add nothing.
     assert_eq!(speakers(4, &["@A and @B", "ok", "PASS"]).await, ["A", "B"]);
     // Limit 0 disables follow-ups; a ping-pong stops at the limit.
@@ -2657,17 +2674,27 @@ async fn mention_adds_a_follow_up_reply_only_within_the_limit() {
 #[tokio::test]
 async fn open_floor_continues_a_debate_without_mentions_until_everyone_passes() {
     // No mentions: after the first round A rebuts B unprompted; B then passes.
-    let (speakers, prompts) = discussion(4, &["A", "B"], &["claim", "counter", "rebut", "pass."]).await;
+    let (speakers, prompts) =
+        discussion(4, &["A", "B"], &["claim", "counter", "rebut", "pass."]).await;
     assert_eq!(speakers, ["A", "B", "A"]);
     assert_eq!(prompts.len(), 4);
     // Only floor invocations may PASS; first-round replies stay required.
-    let optional: Vec<bool> = prompts.iter().map(|p| p.contains("reply with exactly PASS")).collect();
+    let optional: Vec<bool> = prompts
+        .iter()
+        .map(|p| p.contains("reply with exactly PASS"))
+        .collect();
     assert_eq!(optional, [false, false, true, true]);
     // Floor turns rotate after the last speaker and end once all others pass in a row.
     let replies = ["a", "b", "c", "PASS", "rebut", "PASS", "PASS"];
-    assert_eq!(discussion(4, &["A", "B", "C"], &replies).await.0, ["A", "B", "C", "B"]);
+    assert_eq!(
+        discussion(4, &["A", "B", "C"], &replies).await.0,
+        ["A", "B", "C", "B"]
+    );
     // Unprompted follow-ups share the mention budget, so the exchange always ends.
-    assert_eq!(discussion(2, &["A", "B"], &[]).await.0, ["A", "B", "A", "B"]);
+    assert_eq!(
+        discussion(2, &["A", "B"], &[]).await.0,
+        ["A", "B", "A", "B"]
+    );
 }
 
 /// Invoker answering each agent with a fixed text, independent of order.
@@ -2690,11 +2717,18 @@ impl AgentInvoker for ByName {
 async fn every_member_replies_to_each_user_message_with_or_without_a_mention() {
     // Each agent answers `"<name> says hi"`; returns the replies in presentation
     // order and the number of recorded events (user turn + replies).
-    async fn run(mode: ConversationMode, names: &[&str], input: &str) -> (Vec<(String, String)>, usize) {
+    async fn run(
+        mode: ConversationMode,
+        names: &[&str],
+        input: &str,
+    ) -> (Vec<(String, String)>, usize) {
         let (_path, coord) = fixture();
         coord.set_mention_limit(0);
         let members: Vec<Participant> = names.iter().map(|n| member(n)).collect();
-        let script = names.iter().map(|n| (n.to_string(), format!("{n} says hi"))).collect();
+        let script = names
+            .iter()
+            .map(|n| (n.to_string(), format!("{n} says hi")))
+            .collect();
         let out = coord
             .turn(TurnRequest {
                 room: "reply-room",
@@ -2708,7 +2742,12 @@ async fn every_member_replies_to_each_user_message_with_or_without_a_mention() {
             .await
             .unwrap();
         let events = coord.room_history("reply-room").unwrap().events.len();
-        (out.into_iter().map(|r| (r.name, r.result.unwrap())).collect(), events)
+        (
+            out.into_iter()
+                .map(|r| (r.name, r.result.unwrap()))
+                .collect(),
+            events,
+        )
     }
     let said = |n: &str| (n.to_string(), format!("{n} says hi"));
     for mode in [ConversationMode::Broadcast, ConversationMode::Discussion] {

@@ -170,8 +170,15 @@ impl PiSession {
         // templates, themes, AGENTS.md/CLAUDE.md, or project-local `.pi` files.
         // Credentials and settings (`auth.json`, default model) still apply.
         args.extend(
-            ["--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files", "--no-approve"]
-                .map(String::from),
+            [
+                "--no-extensions",
+                "--no-skills",
+                "--no-prompt-templates",
+                "--no-themes",
+                "--no-context-files",
+                "--no-approve",
+            ]
+            .map(String::from),
         );
         args.push("--append-system-prompt".into());
         args.push(agent.system_prompt.clone());
