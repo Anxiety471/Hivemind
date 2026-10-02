@@ -214,11 +214,14 @@ test("agents are created, edited and deleted from the web UI", async ({ page, re
   expect(agents.agents.map((a: { name: string }) => a.name)).toEqual(["Engineer", "Reviewer"]);
 });
 
-test("the room panel keeps details and sessions and adds per-conversation settings", async ({ page }) => {
+test("the settings panel keeps details and sessions and adds per-conversation settings", async ({ page }) => {
   await openRoom(page, "group-alpha");
-  await page.getByRole("button", { name: "Room panel" }).click();
+  // The header offers settings only; runtime sessions live in the panel's Sessions tab.
+  await expect(page.getByRole("button", { name: "Runtime sessions" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
   const panel = page.getByLabel("Conversation panel");
-  await expect(panel.getByRole("tab", { name: "Details" })).toHaveAttribute("aria-selected", "true");
+  await expect(panel.getByRole("tab", { name: "Settings" })).toHaveAttribute("aria-selected", "true");
+  await panel.getByRole("tab", { name: "Details" }).click();
   await expect(panel.getByRole("heading", { name: "Goal" })).toBeVisible();
   await panel.getByRole("tab", { name: "Sessions" }).click();
   await expect(panel.getByRole("link", { name: "Open full session view" })).toBeVisible();
@@ -241,8 +244,7 @@ test("the room panel keeps details and sessions and adds per-conversation settin
 
   // They persist across a reload and match the server.
   await page.reload();
-  await page.getByRole("button", { name: "Room panel" }).click();
-  await page.getByLabel("Conversation panel").getByRole("tab", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
   await expect(page.getByLabel("Nickname")).toHaveValue("Alpha squad");
   await expect(page.getByLabel("Mode")).toHaveValue("discussion");
   const settings = await (await page.request.get(`${api}/rooms/group-alpha/settings`)).json();
@@ -254,8 +256,7 @@ test("the room panel keeps details and sessions and adds per-conversation settin
 
   // The main conversation and direct messages hide nothing silently: unavailable controls say why.
   await openRoom(page, "main");
-  await page.getByRole("button", { name: "Room panel" }).click();
-  await page.getByLabel("Conversation panel").getByRole("tab", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
   await expect(page.getByLabel("Mode")).toBeDisabled();
   await expect(page.getByText("always broadcasts to every agent")).toBeVisible();
   await expect(page.getByText("no single workspace")).toBeVisible();
@@ -267,8 +268,7 @@ test("the room panel keeps details and sessions and adds per-conversation settin
   expect(main.settings.reply_order).toEqual(["Reviewer", "Engineer"]);
 
   await openRoom(page, "solo-Engineer");
-  await page.getByRole("button", { name: "Room panel" }).click();
-  await page.getByLabel("Conversation panel").getByRole("tab", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
   await expect(page.getByText("single agent, so there is no reply order")).toBeVisible();
   await expect(page.getByLabel("Mode")).toBeDisabled();
 

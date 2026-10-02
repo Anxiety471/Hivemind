@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, decodeInstance, targetFor, type Message, type Participant, type Room, type Skill, type Thread } from "../api";
 import { useLive, useLiveStatus, useRefreshOn, type LiveEvent } from "../live";
-import { href, navigate } from "../nav";
+import { href } from "../nav";
 import { listKind, roomLabel, useTaskNames } from "../rooms";
 import { RoomPanel, type PanelTab } from "./RoomPanel";
 import { Markdown } from "../markdown";
@@ -232,17 +232,18 @@ function RoomView({
             </div>
           </div>
           <div className="actions">
-            <button className="ghost" aria-expanded={panelTab !== null} onClick={() => setPanelTab(panelTab ? null : "details")}>
-              {panelTab ? "Hide panel" : "Room panel"}
+            <button
+              className="ghost"
+              aria-expanded={panelTab !== null}
+              onClick={() => setPanelTab(panelTab ? null : info && ["main", "solo", "group"].includes(info.kind) ? "settings" : "details")}
+            >
+              {panelTab ? "Hide settings" : "Settings"}
             </button>
             {roomId.startsWith("task-") && (
               <a className="button ghost" href={href("tasks", roomId.slice(5))}>
                 Open task
               </a>
             )}
-            <button className="ghost" onClick={() => navigate("sessions", roomId)}>
-              Runtime sessions
-            </button>
           </div>
         </header>
         <MessageList
