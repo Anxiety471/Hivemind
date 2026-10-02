@@ -537,6 +537,15 @@ impl ToolHost for WorkspaceTools {
 pub struct ToolHosts(pub Vec<Arc<dyn ToolHost>>);
 
 impl ToolHost for ToolHosts {
+    fn collect_artifacts(&self, room: &str, persona: &str) -> Result<Option<String>> {
+        let mut results = Vec::new();
+        for host in &self.0 {
+            if let Some(result) = host.collect_artifacts(room, persona)? {
+                results.push(result);
+            }
+        }
+        Ok((!results.is_empty()).then(|| results.join("\n")))
+    }
     fn manifest(&self, room: &str, persona: &str) -> Option<String> {
         let parts: Vec<String> = self
             .0

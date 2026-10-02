@@ -14,6 +14,8 @@ use std::sync::Arc;
 #[serde(default)]
 pub struct ServerConfig {
     pub bind: std::net::IpAddr,
+    /// Externally reachable HTTP(S) base URL for published artifact links.
+    pub public_base_url: Option<String>,
     pub token_env: Option<String>,
     pub allowed_origins: Vec<String>,
 }
@@ -21,6 +23,7 @@ impl Default for ServerConfig {
     fn default() -> Self {
         Self {
             bind: "127.0.0.1".parse().unwrap(),
+            public_base_url: None,
             token_env: None,
             allowed_origins: Vec::new(),
         }
@@ -71,6 +74,9 @@ impl Auth {
 }
 
 pub(super) async fn layer(State(state): State<ApiState>, request: Request, next: Next) -> Response {
+    if super::artifacts::is_shared_read(request.method(), request.uri().path()) {
+        return next.run(request).await;
+    }
     let origin = request
         .headers()
         .get("origin")

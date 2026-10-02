@@ -1,6 +1,7 @@
+import { LinkedText } from "../LinkedText";
 // Rooms: room list, paged history, threads, and live replies over the WebSocket.
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, decodeInstance, targetFor, type Message, type Participant, type Room, type Skill, type Thread } from "../api";
+import { api, decodeInstance, targetFor, type Message, type Participant, type Room, type Skill, type Thread, type LibraryArtifact } from "../api";
 import { useLive, useLiveStatus, useRefreshOn, type LiveEvent } from "../live";
 import { href } from "../nav";
 import { listKind, roomLabel, useTaskNames } from "../rooms";
@@ -273,6 +274,7 @@ function RoomView({
         />
         {target ? (
           <Composer
+            roomId={roomId}
             placeholder={`Message ${info?.kind === "solo" ? "@" + info.participants[0]?.persona_id : info?.name ?? roomId}`}
             participants={info?.participants}
             isReplying={Object.keys(typing).length > 0}
@@ -401,7 +403,7 @@ function MessageList(props: {
                   <span className="muted">{time(m.created_at)}</span>
                 </div>
               )}
-              <div className="msg-text">{m.speaker === "user" ? m.content : <Markdown text={m.content} />}</div>
+              <div className="msg-text">{m.speaker === "user" ? <LinkedText text={m.content} /> : <Markdown text={m.content} />}</div>
               {thread && (
                 <button className="thread-link" onClick={() => props.onThread?.(m)}>
                   💬 {thread.message_count} {thread.message_count === 1 ? "reply" : "replies"} · {thread.name}
@@ -466,16 +468,37 @@ function MessageList(props: {
 }
 
 function Composer({
+  roomId,
   onSend,
   placeholder,
   participants = [],
   isReplying = false,
 }: {
+  roomId?: string;
   onSend: (text: string, mode?: "queue" | "steer") => Promise<unknown>;
   placeholder: string;
   participants?: Participant[];
   isReplying?: boolean;
 }) {
+  const [attachments, setAttachments] = useState<LibraryArtifact[]>([]);
+  const attach = async (files: FileList | null) => {
+    if (!files || busy || !roomId) return;
+    setBusy(true);
+    setError(null);
+    try {
+      for (const file of Array.from(files)) {
+        if (file.size > 8 * 1024 * 1024) throw new Error(`${file.name} exceeds the 8 MiB limit.`);
+        const content_base64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result).split(",")[1]);
+          reader.onerror = () => reject(new Error(`Could not read ${file.name}.`));
+          reader.readAsDataURL(file);
+        });
+        const result = await api.createLibraryArtifact({ title: file.name, filename: file.name, description: "Chat attachment", room_id: roomId, content_base64 });
+        setAttachments(current => [...current, result.artifact]);
+      }
+    } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
+  };
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -618,20 +641,24 @@ function Composer({
 
   const send = async () => {
     const value = text.trim();
-    if (!value || busy) return;
+    if ((!value && !attachments.length) || busy) return;
     setBusy(true);
     try {
+      const references = attachments.map(a => `Attached artifact: ${a.filename} (library ID: ${a.id}; use library.get to read it)`).join("\n");
+      const withAttachments = (msg: string) => [msg, references].filter(Boolean).join("\n\n");
       const parsed = parseSlash(value);
       if (parsed.kind === "command") {
         const result = await runCommand(parsed.name, parsed.args);
         if (result.show !== undefined) setOutput(result.show);
         if (result.send !== undefined) {
-          await onSend(result.send, result.mode ?? (isReplying ? "steer" : undefined));
+          await onSend(withAttachments(result.send), result.mode ?? (isReplying ? "steer" : undefined));
           setOutput(null);
+          setAttachments([]);
         }
       } else {
-        await onSend(parsed.text, isReplying ? "steer" : undefined);
+        await onSend(withAttachments(parsed.text), isReplying ? "steer" : undefined);
         setOutput(null);
+        setAttachments([]);
       }
       setText("");
       setMentionMatch(null);
@@ -705,6 +732,8 @@ function Composer({
           <Markdown text={output} />
         </div>
       )}
+      {attachments.length > 0 && <div className="row composer-attachments">{attachments.map(a => <span key={a.id}><a href={href("library")}>{a.filename}</a><button disabled={busy} aria-label={`Remove ${a.filename} from message`} onClick={() => setAttachments(current => current.filter(item => item.id !== a.id))}>×</button></span>)}</div>}
+      <label className="attachment-input">Attach files (saved automatically to Library)<input aria-label="Attach files" type="file" multiple disabled={busy} onChange={e => { attach(e.target.files); e.target.value = ""; }} /></label>
       <div className="composer-row">
         <textarea
           ref={textareaRef}
@@ -779,7 +808,7 @@ function Composer({
             }
           }}
         />
-        <button className="primary" disabled={busy || !text.trim()} onClick={send}>
+        <button className="primary" disabled={busy || (!text.trim() && !attachments.length)} onClick={send}>
           {text.trim().toLowerCase().startsWith("/queue")
             ? "Queue"
             : isReplying
@@ -832,7 +861,7 @@ function ThreadPanel({
             <strong>{anchor.speaker === "user" ? "You" : anchor.speaker}</strong>
             <span className="muted">{time(anchor.created_at)}</span>
           </div>
-          <div className="msg-text">{anchor.speaker === "user" ? anchor.content : <Markdown text={anchor.content} />}</div>
+          <div className="msg-text">{anchor.speaker === "user" ? <LinkedText text={anchor.content} /> : <Markdown text={anchor.content} />}</div>
         </div>
       )}
       <MessageList
@@ -845,6 +874,7 @@ function ThreadPanel({
         pending={pending}
       />
       <Composer
+        roomId={thread.id}
         placeholder="Reply in thread"
         participants={participants}
         isReplying={Object.keys(typing).length > 0}

@@ -2508,3 +2508,16 @@ li.task-item p {
   background: var(--info-soft);
   color: var(--info);
 }
+/* Hivemind artifact library */
+.library-search, .library-pagination { margin: 18px 0; flex-wrap: wrap; }
+.library-artifact { min-width: 0; }
+.library-artifact h2 { overflow-wrap: anywhere; }
+.library-create { margin-bottom: 20px; max-width: 760px; }
+.library-create input[type=file] { padding: 8px; }
+.library-link { display: grid; gap: 8px; margin: 12px 0; }
+.library-link input { min-width: 0; width: 100%; font-size: 11px; }
+.library-controls { flex-wrap: wrap; }
+.library-preview { margin-top: 12px; max-height: 400px; overflow: auto; }
+.library-preview pre { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--panel-2); padding: 12px; }
+.library-preview img { max-width: 100%; height: auto; }
+.msg-text a { color: var(--accent); text-decoration: underline; overflow-wrap: anywhere; }

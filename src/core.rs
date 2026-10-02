@@ -30,6 +30,7 @@ use crate::{
 
 /// Process-level owner of configuration, memory, conversations, events, and API state.
 pub struct HivemindCore {
+    artifacts: Arc<crate::artifacts::ArtifactLibrary>,
     execution: Arc<crate::execution::ExecutionStore>,
     config: RwLock<Arc<HivemindConfig>>,
     agents: RwLock<AgentRegistry>,
@@ -153,6 +154,10 @@ impl HivemindCore {
             MemoryService::open(&memory_path)
                 .with_context(|| format!("opening memory store at {}", memory_path.display()))?,
         );
+        let artifacts = Arc::new(crate::artifacts::ArtifactLibrary::open(
+            data_dir.join("artifacts.sqlite3"),
+            config.server.public_base_url.as_deref(),
+        )?);
         let context_dir = data_dir.join("context");
         let config = Arc::new(config);
         let agents = AgentRegistry {
@@ -245,6 +250,14 @@ impl HivemindCore {
         )];
         let skills = Arc::new(crate::skills::SkillCatalog::new(&config.skills.dirs));
         hosts.push(Arc::new(crate::skills::SkillTools::new(skills.clone())));
+        hosts.push(Arc::new(
+            crate::artifacts::ArtifactTools::new(
+                artifacts.clone(),
+                workspaces.clone(),
+                access.clone(),
+            )
+            .with_coordination(coordination.clone()),
+        ));
         if config.coordination.enabled {
             hosts.push(Arc::new(CoordinationTools::new(
                 coordination.clone(),
@@ -254,6 +267,7 @@ impl HivemindCore {
         conversation.set_tools(Arc::new(ToolHosts(hosts)));
         events.publish(DomainEventKind::CoreStarted);
         Ok(Self {
+            artifacts,
             execution,
             config: RwLock::new(config),
             agents: RwLock::new(agents),
@@ -273,6 +287,10 @@ impl HivemindCore {
             shutdown_lock: tokio::sync::Mutex::new(()),
             group_edit_lock,
         })
+    }
+
+    pub fn artifacts(&self) -> &Arc<crate::artifacts::ArtifactLibrary> {
+        &self.artifacts
     }
 
     pub fn execution(&self) -> &Arc<crate::execution::ExecutionStore> {

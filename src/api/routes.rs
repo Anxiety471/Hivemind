@@ -31,6 +31,7 @@ pub(super) fn router(core: Arc<HivemindCore>, shutdown: watch::Receiver<bool>) -
     Router::new()
         .route("/api/v1/health", get(health))
         .route("/api/v1/info", get(info))
+        .merge(super::artifacts::routes())
         .merge(super::jobs::routes())
         .merge(super::tasks::routes())
         .merge(super::rooms::routes())
@@ -399,6 +400,87 @@ mod tests {
         let status = response.status();
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
         (status, serde_json::from_slice(&bytes).unwrap())
+    }
+
+    #[tokio::test]
+    async fn library_uploads_are_private_and_shares_are_revocable_read_only_capabilities() {
+        const TOKEN: &str = "library_test_operator_token_1234567890";
+        std::env::set_var("HIVEMIND_LIBRARY_TEST_TOKEN", TOKEN);
+        let mut config = HivemindConfig::default_poc();
+        config.server.token_env = Some("HIVEMIND_LIBRARY_TEST_TOKEN".into());
+        config.server.public_base_url = Some("https://hive.example".into());
+        let fixture = TestCore::with_config(config);
+        let app = router(fixture.core.clone(), watch::channel(false).1);
+        std::env::remove_var("HIVEMIND_LIBRARY_TEST_TOKEN");
+        let unauthenticated = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/library")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+        let response = app.clone().oneshot(Request::builder().method("POST").uri("/api/v1/library")
+            .header(CONTENT_TYPE, "application/json").header("authorization", format!("Bearer {TOKEN}"))
+            .body(Body::from(json!({"title":"User report", "filename":"report.html", "content_base64":"PGgxPkhlbGxvPC9oMT4=", "room_id":"solo-Engineer"}).to_string())).unwrap()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let result: Value = serde_json::from_slice(&bytes).unwrap();
+        let id = result["artifact"]["id"].as_str().unwrap();
+        assert_eq!(result["artifact"]["published"], false);
+        assert_eq!(result["artifact"]["persona_id"], "operator");
+        assert_eq!(result["artifact"]["room_id"], "solo-Engineer");
+        let published = fixture.core.artifacts().publish(id).unwrap().unwrap();
+        let url = published.url.unwrap();
+        let path = url.strip_prefix("https://hive.example").unwrap();
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[CONTENT_TYPE], "text/html");
+        assert!(response.headers()["content-security-policy"]
+            .to_str()
+            .unwrap()
+            .starts_with("sandbox;"));
+        assert_eq!(response.headers()["cache-control"], "no-store");
+        assert_eq!(
+            response.into_body().collect().await.unwrap().to_bytes(),
+            "<h1>Hello</h1>"
+        );
+        let mutation = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(path)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(mutation.status(), StatusCode::UNAUTHORIZED);
+        let private = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/library/{id}/content"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(private.status(), StatusCode::UNAUTHORIZED);
+        fixture.core.artifacts().unpublish(id).unwrap();
+        let revoked = app
+            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(revoked.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

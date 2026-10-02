@@ -1,5 +1,7 @@
 // Typed client for the Hivemind HTTP API (`/api/v1`). Shapes mirror src/api/*.rs.
 
+export type LibraryArtifact = { id: string; title: string; filename: string; description: string; media_type: string; size: number; room_id: string; persona_id: string; created_at: number; published: boolean; url: string | null };
+
 export type Participant = { persona_id: string; role: string | null };
 export type RoomKind = "main" | "solo" | "group" | "thread" | "archived";
 
@@ -355,6 +357,18 @@ const enc = encodeURIComponent;
 export type Skill = { name: string; description: string; argument_hint: string; source: string };
 
 export const api = {
+  library: (query = "", offset = 0) => request<{ artifacts: LibraryArtifact[] }>("GET", `/library?query=${encodeURIComponent(query)}&offset=${offset}&limit=50`),
+  createLibraryArtifact: (body: { title: string; filename: string; description: string; content?: string; content_base64?: string; room_id?: string }) => request<{ artifact: LibraryArtifact }>("POST", "/library", body),
+  publishLibraryArtifact: (id: string) => request<{ artifact: LibraryArtifact }>("POST", `/library/${enc(id)}/publish`),
+  unpublishLibraryArtifact: (id: string) => request<void>("DELETE", `/library/${enc(id)}/publish`),
+  deleteLibraryArtifact: (id: string) => request<void>("DELETE", `/library/${enc(id)}`),
+  libraryContent: async (id: string) => {
+    const headers: Record<string, string> = {};
+    if (settings.token) headers.authorization = `Bearer ${settings.token}`;
+    const response = await fetch(`${settings.baseUrl}/api/v1/library/${enc(id)}/content`, { headers });
+    if (!response.ok) throw new Error("Could not load artifact content");
+    return response.blob();
+  },
   info: () => request<{ name: string; version: string; api_version: string }>("GET", "/info"),
   setupStatus: () => request<{ setup_required: boolean }>("GET", "/setup"),
   completeSetup: (personas: SetupPersona[]) =>
