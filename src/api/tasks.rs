@@ -25,6 +25,7 @@ use crate::{memory::Caller, runtime::is_rotation};
 pub(super) fn routes() -> Router<ApiState> {
     Router::new()
         .route("/api/v1/tasks", post(submit).get(list))
+        .route("/api/v1/operator-inbox", get(operator_inbox))
         .route("/api/v1/tasks/{id}", get(show))
         .route("/api/v1/tasks/{id}/attempts", get(attempts))
         .route("/api/v1/tasks/{id}/cancel", post(cancel))
@@ -193,6 +194,41 @@ async fn list(State(state): State<ApiState>, RawQuery(raw): RawQuery) -> Respons
                 .flatten();
             Json(json!({"tasks": tasks, "next_after": next_after, "event_high_water": service.high_water().unwrap_or(0)})).into_response()
         }
+        Err(error) => coord_error(error),
+    }
+}
+
+async fn operator_inbox(State(state): State<ApiState>, RawQuery(raw): RawQuery) -> Response {
+    let params = query(raw);
+    let service = state.core.coordination();
+    let result = service
+        .list_tasks(&TaskFilter {
+            roots_only: false,
+            after: params.get("after").map(String::as_str),
+            limit: 200,
+            ..Default::default()
+        })
+        .map(|tasks| {
+            let next_after = (tasks.len() == 200).then(|| tasks.last().unwrap().id.clone());
+            let mut items = Vec::new();
+            for task in tasks {
+                let questions = service.open_questions(&task.id);
+                if !questions.is_empty()
+                    || matches!(
+                        task.status,
+                        TaskStatus::NeedsInput
+                            | TaskStatus::Blocked
+                            | TaskStatus::Failed
+                            | TaskStatus::Review
+                    )
+                {
+                    items.push(json!({"task": task, "questions": questions}));
+                }
+            }
+            json!({"items": items, "next_after": next_after})
+        });
+    match result {
+        Ok(value) => Json(value).into_response(),
         Err(error) => coord_error(error),
     }
 }
@@ -973,6 +1009,13 @@ mod tests {
             .call("GET", &format!("/api/v1/tasks/{api}"), None)
             .await;
         assert_eq!(shown["task"]["questions"][0]["question"], "which port?");
+        let (status, inbox) = fixture.call("GET", "/api/v1/operator-inbox", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(inbox["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|i| i["task"]["id"] == api && i["questions"][0]["question"] == "which port?"));
         let (status, body) = fixture
             .call(
                 "POST",

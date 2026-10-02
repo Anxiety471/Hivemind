@@ -1,5 +1,5 @@
 // One shared WebSocket to `/api/v1/ws` with reconnect and a tiny pub/sub.
-import { useEffect, useState } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 import { currentSettings } from "./api";
 
 export type LiveEvent = { type: string; id?: string; payload: Record<string, any>; at: number };
@@ -67,17 +67,15 @@ export function useLive(fn: Listener, deps: unknown[] = []) {
   }, deps);
 }
 
+function subscribeStatus(listener: () => void) {
+  statusListeners.add(listener);
+  return () => { statusListeners.delete(listener); };
+}
+
 export function useLiveStatus() {
-  const [value, setValue] = useState(status);
-  useEffect(() => {
-    statusListeners.add(setValue);
-    // The socket may connect before React commits this subscription.
-    setValue(status);
-    return () => {
-      statusListeners.delete(setValue);
-    };
-  }, []);
-  return value;
+  // Synchronize snapshots during subscription so a fast socket opening between
+  // render and effect registration cannot leave the UI stuck on Connecting.
+  return useSyncExternalStore(subscribeStatus, () => status, () => "closed" as LiveStatus);
 }
 
 /** Re-run `load` when any event matching `match` arrives, coalesced to one call per 250 ms. */
