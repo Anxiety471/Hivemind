@@ -169,6 +169,13 @@ async fn update(
     Path(id): Path<String>,
     payload: Result<Json<SettingsBody>, JsonRejection>,
 ) -> Response {
+    if id.contains("..") || id.contains('/') || id.contains('\\') {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "invalid room id".into(),
+        );
+    }
     let Ok(Json(body)) = payload else {
         return error(
             StatusCode::BAD_REQUEST,
@@ -176,6 +183,27 @@ async fn update(
             "invalid request body".into(),
         );
     };
+    if let Some(Some(ws)) = &body.workspace {
+        if ws.contains("..") {
+            return error(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "workspace path must not contain '..'".into(),
+            );
+        }
+    }
+    if let Some(order) = &body.reply_order {
+        if order
+            .iter()
+            .any(|name| name.contains("..") || name.contains('/') || name.contains('\\'))
+        {
+            return error(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "invalid agent in reply order".into(),
+            );
+        }
+    }
     let Some(kind) = kind_of(&id) else {
         return not_configurable(&id);
     };

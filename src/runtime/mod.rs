@@ -54,6 +54,8 @@ fn harness_dir<'a>(
             agent.name
         )
     })
+}
+
 /// Make a runtime's reply read the same whichever runtime produced it: Unix line
 /// endings, no terminal escapes or redundant blank lines, and no
 /// wrapper fence around a reply that is entirely Markdown. Fenced code is kept

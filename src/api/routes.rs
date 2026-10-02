@@ -1286,13 +1286,13 @@ mod tests {
             app.clone(),
             "PATCH",
             "/api/v1/rooms/group-group-crew/settings",
-            json!({"mode":"discussion"}),
+            json!({"mode":"broadcast"}),
         )
         .await;
         assert_eq!(status, StatusCode::OK, "{body}");
-        assert_eq!(body["settings"]["mode"], "discussion");
+        assert_eq!(body["settings"]["mode"], "broadcast");
         let (_, _, other) = request(app.clone(), "GET", "/api/v1/rooms/group-crew/settings").await;
-        assert_eq!(other["settings"]["mode"], "broadcast");
+        assert_eq!(other["settings"]["mode"], "discussion");
         let workspace = test_core
             .directory
             .canonicalize()

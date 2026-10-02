@@ -333,11 +333,6 @@ function MessageList(props: {
                   <span className="muted">{time(m.created_at)}</span>
                 </div>
               )}
-              {m.reply_to && (
-                <div className="msg-reply-to muted">
-                  ↳ replying to {[m.reply_to.speaker, ...(m.also_saw ?? [])].map((n) => (n === "user" ? "You" : n)).join(", ")}
-                </div>
-              )}
               <div className="msg-text">{m.speaker === "user" ? m.content : <Markdown text={m.content} />}</div>
               {thread && (
                 <button className="thread-link" onClick={() => props.onThread?.(m)}>

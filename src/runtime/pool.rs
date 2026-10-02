@@ -993,6 +993,7 @@ mod tests {
             system_prompt: String::new(),
             workspace: ".".into(),
             model: None,
+            fallback_models: Vec::new(),
             reasoning: None,
             fast: None,
             role: None,

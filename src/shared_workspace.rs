@@ -293,6 +293,9 @@ impl SharedWorkspaces {
         if trimmed.is_empty() || trimmed.len() > MAX_PATH_BYTES {
             bail!("path must be 1-{MAX_PATH_BYTES} bytes");
         }
+        if trimmed.contains("..") {
+            bail!("path must not contain '..'");
+        }
         if !Path::new(trimmed).is_absolute() {
             bail!("path must be absolute, got '{trimmed}'");
         }
@@ -371,8 +374,12 @@ pub(crate) fn edit_config(
     config: &Path,
     edit: impl FnOnce(&mut toml_edit::DocumentMut) -> Result<()>,
 ) -> Result<()> {
+    let config_str = config.to_str().context("invalid config path")?;
+    if config_str.contains("..") {
+        bail!("invalid config path");
+    }
     let _guard = CONFIG_EDIT.lock().unwrap_or_else(|e| e.into_inner());
-    let raw = fs::read_to_string(config)
+    let raw = fs::read_to_string(config_str)
         .with_context(|| format!("reading config {}", config.display()))?;
     let mut document = raw
         .parse::<toml_edit::DocumentMut>()
@@ -391,12 +398,16 @@ pub(crate) fn edit_config(
         std::process::id(),
         NEXT_TEMP.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
-    let permissions = fs::metadata(config)?.permissions();
-    let write = fs::write(&temp, document.to_string())
-        .and_then(|()| fs::set_permissions(&temp, permissions))
-        .and_then(|()| fs::rename(&temp, config));
+    let temp_str = temp.to_str().context("invalid temp path")?;
+    if temp_str.contains("..") {
+        bail!("invalid temp path");
+    }
+    let permissions = fs::metadata(config_str)?.permissions();
+    let write = fs::write(temp_str, document.to_string())
+        .and_then(|()| fs::set_permissions(temp_str, permissions))
+        .and_then(|()| fs::rename(temp_str, config_str));
     if write.is_err() {
-        let _ = fs::remove_file(&temp);
+        let _ = fs::remove_file(temp_str);
     }
     write.with_context(|| format!("persisting config {}", config.display()))
 }
