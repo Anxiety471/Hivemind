@@ -30,22 +30,50 @@ pub trait HarnessSession: Send {
     async fn shutdown(&mut self) -> Result<()>;
 }
 
+/// Write `content` to `path` (creating parents) unless it already holds exactly that.
+fn write_owned_file(path: &std::path::Path, content: &str) -> Result<()> {
+    use anyhow::Context;
+    if std::fs::read_to_string(path).is_ok_and(|text| text == content) {
+        return Ok(());
+    }
+    path.parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|()| std::fs::write(path, content))
+        .with_context(|| format!("writing {}", path.display()))
+}
+
+/// Hivemind's harness directory; sessions refuse to start without it rather
+/// than fall back to the user's own harness setup.
+fn harness_dir<'a>(
+    runtime_config: &'a RuntimeConfig,
+    agent: &AgentConfig,
+) -> Result<&'a std::path::Path> {
+    runtime_config.harness_dir.as_deref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "agent '{}' needs a Hivemind-owned harness directory (runtime.harness_dir)",
+            agent.name
+        )
+    })
+}
+
 /// Create the live session for `agent`, dispatching on `agent.runtime`.
 ///
-/// Every error names the agent that failed to start.
+/// Every error names the agent that failed to start. No session sees the
+/// user's own harness setup (extensions, skills, MCP servers, context files,
+/// memory); see each adapter for how that runtime is isolated.
 pub async fn create_session(
     runtime_config: &RuntimeConfig,
     agent: &AgentConfig,
 ) -> Result<Box<dyn HarnessSession>> {
     match agent.runtime.as_str() {
         "omp" => Ok(Box::new(
-            omp::OmpSession::start_filtered(&runtime_config.omp_binary, agent, &runtime_config.private_env).await?,
+            omp::OmpSession::start_filtered(&runtime_config.omp_binary, harness_dir(runtime_config, agent)?, agent, &runtime_config.private_env).await?,
         )),
         "pi" => Ok(Box::new(
             pi::PiSession::start_filtered(&runtime_config.pi_binary, agent, &runtime_config.private_env).await?,
         )),
         "opencode" => Ok(Box::new(
-            opencode::OpencodeSession::start_filtered(&runtime_config.opencode_binary, agent, &runtime_config.private_env).await?,
+            opencode::OpencodeSession::start_filtered(&runtime_config.opencode_binary, &harness_dir(runtime_config, agent)?.join("opencode"), agent, &runtime_config.private_env).await?,
         )),
         other => bail!(
             "unsupported runtime '{other}' for agent '{}'; supported runtimes are pi, omp and opencode, so change this agent's runtime",
@@ -121,6 +149,7 @@ mod tests {
             model: None,
             reasoning: None,
             fast: None,
+            fallback_models: Vec::new(),
             role: None,
             capabilities: Vec::new(),
             permissions: Vec::new(),
@@ -161,6 +190,7 @@ done
         let runtime = RuntimeConfig {
             omp_binary: omp.binary("omp"),
             pi_binary: pi.binary("pi"),
+            harness_dir: Some(omp.0.join("harness")),
             ..RuntimeConfig::default()
         };
         let configured = [
@@ -284,13 +314,16 @@ done
     fn opencode_runtime(fixture: &Fixture) -> RuntimeConfig {
         RuntimeConfig {
             opencode_binary: fixture.binary("opencode"),
+            harness_dir: Some(fixture.0.join("harness")),
             ..RuntimeConfig::default()
         }
     }
 
     #[tokio::test]
     async fn opencode_session_returns_assistant_text_and_reported_context() {
-        let fixture = Fixture::new("opencode", &opencode_script(OPENCODE_REPLY, ""));
+        // Startup records the isolation env the child was given (cwd = workspace).
+        let startup = r#"printf '%s|%s|%s\n' "$OPENCODE_CONFIG_DIR" "$OPENCODE_DISABLE_PROJECT_CONFIG" "${OPENCODE_CONFIG-unset}" > env"#;
+        let fixture = Fixture::new("opencode", &opencode_script(OPENCODE_REPLY, startup));
         let mut configured = agent("Open", "opencode", &fixture.workspace());
         configured.model = Some("opencode/big-pickle".into());
         let mut session = create_session(&opencode_runtime(&fixture), &configured)
@@ -301,6 +334,18 @@ done
         assert_eq!(session.context_tokens().await.unwrap(), Some(4321));
         assert_eq!(session.prompt("again").await.unwrap(), "opencode fixture");
         session.shutdown().await.unwrap();
+        // The user's global and project OpenCode config never reach a Hivemind agent.
+        let config_dir = fixture.0.join("harness").join("opencode");
+        assert_eq!(
+            fs::read_to_string(fixture.0.join("env")).unwrap(),
+            format!("{}|1|unset\n", config_dir.display())
+        );
+        // Without any plugin OpenCode drops its built-in provider, so Hivemind keeps one.
+        let plugins: Vec<_> = fs::read_dir(config_dir.join("plugins"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(plugins, ["hivemind.js"]);
     }
 
     #[tokio::test]

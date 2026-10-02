@@ -465,6 +465,7 @@ textarea:focus {
 .chat {
   display: grid;
   grid-template-columns: 240px 1fr;
+  grid-template-rows: minmax(0, 1fr);
   height: 100%;
 }
 .room-list {
@@ -518,6 +519,7 @@ textarea:focus {
 .room-view {
   display: flex;
   min-width: 0;
+  min-height: 0;
   height: 100%;
 }
 .conversation {
@@ -525,6 +527,7 @@ textarea:focus {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
   background: var(--panel);
 }
 .room-header {
@@ -559,6 +562,7 @@ textarea:focus {
 }
 .messages {
   flex: 1;
+  min-height: 0;
   overflow: auto;
   padding: 16px 20px;
   display: flex;
@@ -595,10 +599,6 @@ textarea:focus {
 }
 .msg-meta .muted {
   font-size: 11px;
-}
-.msg-reply-to {
-  font-size: 11px;
-  margin-bottom: 2px;
 }
 .msg-text {
   white-space: pre-wrap;
@@ -719,6 +719,7 @@ textarea:focus {
 .split {
   display: grid;
   grid-template-columns: 320px 1fr;
+  grid-template-rows: minmax(0, 1fr);
   height: 100%;
 }
 .list-pane {
@@ -1221,13 +1222,49 @@ dd {
   .conn {
     display: none;
   }
+  /* Stack list over detail: a fixed-height row keeps the composer in view. */
   .chat,
   .split {
     grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
   }
   .room-list,
   .list-pane {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+    max-height: 34vh;
+  }
+  .room-list {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    overflow-x: auto;
+    padding: 6px 8px;
+  }
+  .room-list-head,
+  .room-group-label {
     display: none;
+  }
+  .room-group {
+    display: flex;
+    gap: 4px;
+  }
+  .room-list .room {
+    white-space: nowrap;
+  }
+  .room-header {
+    flex-wrap: wrap;
+  }
+  .actions {
+    flex-wrap: wrap;
+  }
+  table {
+    display: block;
+    overflow-x: auto;
+  }
+  .segmented {
+    max-width: 100%;
+    overflow-x: auto;
   }
   .grid-2,
   .room-details {

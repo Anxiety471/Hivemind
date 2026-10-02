@@ -19,6 +19,7 @@ pub struct ConversationCoordinator {
     lock_dir: std::sync::OnceLock<PathBuf>,
     tools: std::sync::OnceLock<Arc<dyn ToolHost>>,
     access: std::sync::OnceLock<Arc<crate::access::AccessPolicy>>,
+    mention_limit: std::sync::OnceLock<usize>,
 }
 
 pub(super) struct PackRequest<'a> {
@@ -32,6 +33,8 @@ pub(super) struct PackRequest<'a> {
     pub(super) caller: &'a Caller,
     /// Pre-rendered "Relevant Hivemind memory" block, retrieved once per member.
     pub(super) retrieval: &'a str,
+    /// Open-floor follow-up: the member may answer exactly `PASS` to stay silent.
+    pub(super) optional: bool,
 }
 
 /// Prompts prepared for one member's invocation this turn.
@@ -48,9 +51,13 @@ pub(super) struct MemberPrompt {
 pub(super) const SESSION_TOOL_REMINDER: &str =
     "\nHivemind memory tools remain available exactly as described at the start of this session.\n";
 
-/// Earlier same-turn replies (Discussion mode), rendered identically for
-/// full packs and deltas.
-pub(super) fn same_turn_replies(prior: &[(String, Result<String, String>)]) -> String {
+/// Earlier same-turn replies (Discussion mode) plus, for an open-floor
+/// follow-up, the permission to PASS. Rendered identically for full packs and
+/// deltas.
+pub(super) fn same_turn_replies(
+    prior: &[(String, Result<String, String>)],
+    optional: bool,
+) -> String {
     let peers = prior
         .iter()
         .map(|(name, result)| match result {
@@ -58,11 +65,59 @@ pub(super) fn same_turn_replies(prior: &[(String, Result<String, String>)]) -> S
             Err(_) => format!("{name} failed to produce a response for this turn.\n"),
         })
         .collect::<String>();
-    if peers.is_empty() {
+    let mut out = if peers.is_empty() {
         String::new()
     } else {
         format!("\nEarlier replies in this turn:\n{peers}")
+    };
+    if optional {
+        out.push_str(&format!("\nYou already replied in this turn; the floor is open for a follow-up. Reply again only if you have something worth adding — a rebuttal, correction, or answer to a point raised since your last reply. Otherwise reply with exactly {PASS} and nothing else.\n"));
     }
+    out
+}
+
+/// What an open-floor member answers to stay silent; never recorded.
+const PASS: &str = "PASS";
+
+/// Whether an open-floor reply declined to speak.
+fn is_pass(text: &str) -> bool {
+    let text = text
+        .trim()
+        .trim_matches(|c: char| c == '*' || c == '`' || c == '.');
+    text.is_empty() || text.eq_ignore_ascii_case(PASS)
+}
+
+fn is_word(c: char) -> bool {
+    c.is_alphanumeric() || c == '_' || c == '-'
+}
+
+/// Whether `rest` (the text after an `@`) starts with `name`, ending at a word boundary.
+fn name_follows(rest: &str, name: &str) -> bool {
+    rest.get(..name.len())
+        .is_some_and(|head| head.eq_ignore_ascii_case(name))
+        && !rest[name.len()..].chars().next().is_some_and(is_word)
+}
+
+/// Indices of members `@Name`d in `text`, in order of first mention.
+pub(super) fn mentioned_members(text: &str, members: &[Participant]) -> Vec<usize> {
+    let mut found = Vec::new();
+    for (at, _) in text.match_indices('@') {
+        if text[..at].chars().next_back().is_some_and(is_word) {
+            continue;
+        }
+        let rest = &text[at + 1..];
+        let best = members
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| name_follows(rest, &m.agent.name))
+            .max_by_key(|(_, m)| m.agent.name.len());
+        if let Some((index, _)) = best {
+            if !found.contains(&index) {
+                found.push(index);
+            }
+        }
+    }
+    found
 }
 
 impl ConversationCoordinator {
@@ -89,6 +144,7 @@ impl ConversationCoordinator {
             lock_dir: std::sync::OnceLock::new(),
             tools: std::sync::OnceLock::new(),
             access: std::sync::OnceLock::new(),
+            mention_limit: std::sync::OnceLock::new(),
         }
     }
     #[cfg(test)]
@@ -105,6 +161,7 @@ impl ConversationCoordinator {
             lock_dir: std::sync::OnceLock::new(),
             tools: std::sync::OnceLock::new(),
             access: std::sync::OnceLock::new(),
+            mention_limit: std::sync::OnceLock::new(),
         }
     }
     /// Install the extra tool surface offered beside memory tools. Set once at startup.
@@ -114,6 +171,10 @@ impl ConversationCoordinator {
     /// Install the persona access policy that gates memory writes. Set once at startup.
     pub fn set_access(&self, policy: Arc<crate::access::AccessPolicy>) {
         let _ = self.access.set(policy);
+    }
+    /// Extra mention-triggered replies a Discussion turn may add. Set once at startup.
+    pub fn set_mention_limit(&self, limit: usize) {
+        let _ = self.mention_limit.set(limit);
     }
     /// The shared memory service this coordinator executes tool calls against.
     #[cfg(test)]
@@ -258,6 +319,7 @@ impl ConversationCoordinator {
                             active_turn: &turn_id,
                             caller: &caller,
                             retrieval: &retrieval,
+                            optional: false,
                         },
                         cursor,
                     );
@@ -371,27 +433,32 @@ impl ConversationCoordinator {
                     let name = member.agent.name.clone();
                     let result = by_name
                         .remove(&name)
-                        .or_else(|| {
-                            replies
-                                .iter()
-                                .find(|reply: &&TurnReply| reply.name == name)
-                                .map(|reply| reply.result.clone())
-                        })
                         .unwrap_or_else(|| Err("agent task did not return".into()));
-                    if !replies.iter().any(|reply| reply.name == name) {
-                        replies.push(TurnReply { name, result });
-                    }
+                    replies.push(TurnReply { name, result });
                 }
-                replies.sort_by_key(|reply| {
-                    members
-                        .iter()
-                        .position(|member| member.agent.name == reply.name)
-                        .unwrap_or(usize::MAX)
-                });
             }
             ConversationMode::Discussion => {
                 let mut prior = Vec::new();
-                for member in members {
+                // Every member replies once, in order. An @mention in a reply gives that
+                // member a further reply unless one is already pending. Once the queue is
+                // empty the floor opens: the others, in order after the last speaker, may
+                // follow up or answer PASS, until all of them pass in a row. Mention and
+                // floor replies share one budget so the exchange always ends.
+                let mut queue: std::collections::VecDeque<usize> = (0..members.len()).collect();
+                let mut extra = self.mention_limit.get().copied().unwrap_or(0);
+                let mut last_speaker = None;
+                let mut passes = 0;
+                loop {
+                    let (index, floor) = if let Some(index) = queue.pop_front() {
+                        (index, false)
+                    } else if let (Some(last), true) =
+                        (last_speaker, extra > 0 && passes + 1 < members.len())
+                    {
+                        ((last + 1 + passes) % members.len(), true)
+                    } else {
+                        break;
+                    };
+                    let member = &members[index];
                     let caller = invocation_caller(
                         room,
                         group_id,
@@ -423,6 +490,7 @@ impl ConversationCoordinator {
                             active_turn: &turn_id,
                             caller: &caller,
                             retrieval: &retrieval,
+                            optional: floor,
                         },
                         cursor,
                     ) {
@@ -465,9 +533,27 @@ impl ConversationCoordinator {
                         };
                         events.publish(event);
                     }
+                    // A declined (or failed) floor reply is dropped: nobody asked for it.
+                    if floor && result.as_ref().map_or(true, |text| is_pass(text)) {
+                        passes += 1;
+                        continue;
+                    }
+                    if floor {
+                        extra -= 1;
+                    }
+                    passes = 0;
+                    last_speaker = Some(index);
                     append_reply(&mut history, room, &turn_id, &name, &result);
                     self.save_turn(&history, room, &turn_id, &mut saved, false, false)?;
                     prior.push((name.clone(), result.clone()));
+                    if let Ok(text) = &result {
+                        for target in mentioned_members(text, members) {
+                            if target != index && extra > 0 && !queue.contains(&target) {
+                                queue.push_back(target);
+                                extra -= 1;
+                            }
+                        }
+                    }
                     replies.push(TurnReply { name, result });
                 }
             }
@@ -613,6 +699,7 @@ impl ConversationCoordinator {
             prior,
             active_turn,
             retrieval,
+            optional,
             ..
         } = *request;
         let last = history
@@ -626,8 +713,22 @@ impl ConversationCoordinator {
         let lines = history.events[start..]
             .iter()
             .filter(|event| event.turn_id != active_turn)
-            .filter(|event| {
-                event.turn_id != cursor.turn_id || !cursor.speakers.contains(&event.speaker)
+            .filter({
+                // Each earlier occurrence in the view hides one event, so a
+                // speaker who replied in several rounds is not over-matched.
+                let mut seen = cursor.speakers.clone();
+                move |event| {
+                    if event.turn_id != cursor.turn_id {
+                        return true;
+                    }
+                    match seen.iter().position(|s| *s == event.speaker) {
+                        Some(index) => {
+                            seen.swap_remove(index);
+                            false
+                        }
+                        None => true,
+                    }
+                }
             })
             .map(|event| format!("{}: {}", event.speaker, event.content))
             .collect::<Vec<_>>()
@@ -649,7 +750,7 @@ impl ConversationCoordinator {
             delta.push_str(&reminder);
         }
         delta.push_str(&format!("\nCurrent user message:\n{input}\n"));
-        delta.push_str(&same_turn_replies(prior));
+        delta.push_str(&same_turn_replies(prior, optional));
         (delta.len() <= self.limits.context_target_tokens.saturating_mul(4)).then_some(delta)
     }
 
@@ -668,6 +769,7 @@ impl ConversationCoordinator {
             active_turn,
             caller,
             retrieval,
+            optional,
         } = *request;
         let roster = members
             .iter()
@@ -683,7 +785,12 @@ impl ConversationCoordinator {
             })
             .collect::<Vec<_>>()
             .join("\n");
-        let identity = format!("You are participating in {room_name}.\n\nParticipants:\n{roster}\n\nYou are {}. Your room role is {}.\n", current.agent.name, current.role.as_deref().or(current.agent.role.as_deref()).unwrap_or("participant"));
+        let mention_hint = if members.len() > 1 {
+            "This is a group conversation with the other participants listed above, and every participant replies to each user message. Speak as yourself and from your role: build on, question, or correct what teammates said. When you challenge a teammate or ask them something, write @Name so they get to answer; after everyone has replied, others may also follow up on their own.\n"
+        } else {
+            ""
+        };
+        let identity = format!("You are participating in {room_name}.\n\nParticipants:\n{roster}\n\nYou are {}. Your room role is {}.\n{mention_hint}", current.agent.name, current.role.as_deref().or(current.agent.role.as_deref()).unwrap_or("participant"));
         let extra = self
             .tools
             .get()
@@ -706,7 +813,7 @@ impl ConversationCoordinator {
         // messages are excluded so the input is never echoed back as a "memory".
         let hits = retrieval;
         let current = format!("\nCurrent user message:\n{input}\n");
-        let same_turn = same_turn_replies(prior);
+        let same_turn = same_turn_replies(prior, optional);
         let mandatory_len =
             identity.len() + manifest.len() + state.len() + current.len() + same_turn.len();
         // Established byte budget: four times the configured token target,

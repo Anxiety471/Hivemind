@@ -172,6 +172,7 @@ pi_binary = "pi"
 opencode_binary = "opencode"
 prompt_timeout_secs = 300   # max prompt duration; 0 disables
 idle_timeout_secs = 120     # how long an unused session stays alive; 0 = never idle out
+prompt_retries = 1           # extra attempts on the same model after a failed prompt (not after a timeout)
 
 [[personas]]
 id = "Engineer"
@@ -180,6 +181,7 @@ runtime = "pi"
 workspace = "."
 system_prompt = "You are the Engineer."
 model = "provider/model-id"
+fallback_models = ["provider/other-model-id"]   # tried in order if model fails
 reasoning = "high"
 
 [[personas]]
@@ -213,6 +215,14 @@ model = "opencode/big-pickle"
 
 **OpenCode runtime notes.** Hivemind runs `opencode acp` (Agent Client Protocol over stdio, no port) as one child per room + persona and deletes the OpenCode session on shutdown. The persona's `system_prompt` replaces OpenCode's `build` agent prompt for that child. Hivemind sets `"permission": "allow"` in the child's config, so OpenCode never waits for approval, including for files outside the workspace, exactly like Pi and OMP, which run tools unprompted. Treat the workspace as untrusted-model territory: an OpenCode agent can read and write anything your user can. Reported context size is OpenCode's own `usage_update`, which already includes OpenCode's built-in prompt (several thousand tokens), so set `runtime_rotate_tokens` accordingly.
 
+**Harness isolation.** Your own Pi, OMP, and OpenCode setups stay untouched, but none of them reaches a Hivemind agent: no extensions or plugins, skills, MCP servers, context files (`AGENTS.md`, `CLAUDE.md`, …), rules, commands, or harness memory. That includes project-level files in or above the workspace. Persona settings plus the instructions and tools Hivemind injects are the agent's only setup. Logins and credentials stay shared, so authenticated providers keep working. Hivemind writes its harness files under `.hivemind/harness/`.
+
+| Runtime | How |
+| --- | --- |
+| Pi | `--no-extensions --no-skills --no-prompt-templates --no-themes --no-context-files --no-approve`. `~/.pi/agent` settings and `auth.json` still apply. |
+| OMP | `--no-extensions --no-skills --no-rules` plus `--config .hivemind/harness/omp.yml`, an overlay that disables every discovery source (`disabledProviders`) and turns off OMP memory, auto-learn, and the advisor. Global `~/.omp/agent/config.yml` (model roles, providers) and `agent.db` credentials still apply. Because the overlay's `disabledProviders` replaces yours, model providers you disabled globally are enabled again for Hivemind agents. |
+| OpenCode | `OPENCODE_CONFIG_DIR=.hivemind/harness/opencode` replaces `~/.config/opencode`, and `OPENCODE_DISABLE_PROJECT_CONFIG=1` stops discovery from the workspace upward. The only config is what Hivemind passes in `OPENCODE_CONFIG_CONTENT`. Providers or models defined only in your global OpenCode config are unavailable. `plugins/hivemind.js` is a no-op Hivemind writes because OpenCode 2.0.18 hides its built-in `opencode` provider (the free models) when no plugin loads. Skills under `~/.claude/skills` and `~/.agents/skills` still load: OpenCode has no switch for them. |
+
 **Opt-in OpenCode E2E.** `HIVEMIND_E2E_OPENCODE=1 python3 scripts/e2e-opencode.py` drives a real `hivemind serve` against `opencode/*-free` models (probed at run time; endpoints come and go). Each scenario uses its own scratch directory and XDG data/config dirs, and an empty workspace. Free tiers can forward prompts to third-party providers: never point it at a workspace with secrets. It covers context retention, two-agent reply order, a memory-tool round trip checked in SQLite, rotation, prompt timeout, a mixed pi/omp/opencode room (skipped without `pi`/`omp`), and shutdown leaving no children. Two longer scenarios go beyond basic chat: a conversation tree (two solo rooms, a broadcast group, a three-member discussion chain with a `Goal:` directive and a follow-up turn, a return to a solo room, and the main room, checking that rooms do not leak history into each other and that each room+persona gets its own runtime instance) and a six-turn conversation that must still recall its first-turn codeword after repeated rotations. `HIVEMIND_E2E_ONLY=s8,s9` runs selected scenarios. It is never part of `cargo test`, and rate limits or flaky models fail a scenario rather than being retried.
 
 ### Reply order and groups
@@ -224,8 +234,8 @@ reply_order = ["Reviewer", "Engineer"]
 
 - Personas you leave out follow declaration order.
 - **Main/all** turns use broadcast mode. **Solo** turns use the same room/history/context setup with one participant.
-- Each group sets `mode = "broadcast"` or `mode = "discussion"`. It can override roles in `[groups.member_roles]` and set its own `reply_order` with members only. A partial order puts the remaining members after it, in global order.
-- **Who replies to whom.** Every agent reply answers your message for that turn; agents do not start rounds themselves. In `discussion` mode each member also reads the earlier replies of the turn. The CLI prints `Name (replying to You, Reviewer)>` when several agents answer, and `GET /api/v1/rooms/{id}/messages` returns `reply_to` and `also_saw` on agent replies, shown in the web UI as "↳ replying to …".
+- Each group sets `mode = "discussion"` (default) or `mode = "broadcast"`. It can override roles in `[groups.member_roles]` and set its own `reply_order` with members only. A partial order puts the remaining members after it, in global order.
+- **Who replies to whom.** Every persona in a room replies to every message you send, in plain text, in reply order (main, solo and groups; both modes). `@Name` is optional: put it in a persona's reply and that member (persona id, case-insensitive) gets a follow-up reply with the mention in view, unless a reply from them is already pending. In `discussion` mode members also see the earlier replies of the turn; in `broadcast` mode they answer independently and in parallel. Once every pending `discussion` reply is in, the floor opens: the other members, in order after the last speaker, may follow up unprompted or answer exactly `PASS` (not recorded), until all of them pass in a row, so a debate continues without anyone having to `@` the other side. `conversation.mention_limit` caps mention and floor follow-ups together per turn (default 4, max 16, `0` turns follow-ups off), so a lively exchange always ends. Agents never start turns on their own.
 - **Shared workspace.** A group works in one directory only when it has one: set `workspace = "/abs/path"` on the `[[groups]]` entry, or tell the group in chat where it is and an agent records it with `workspace.set`. Group rooms get `workspace.get`, `workspace.set`, `workspace.clear` (removes it, so members return to their own workspaces) and `workspace.list`. Every member runs there from the next message; live sessions started elsewhere are restarted. Without one, members keep their own persona workspaces and are told not to assume a shared directory.
 - **Solo workspace.** A solo room offers `workspace.get`, `workspace.set` and `workspace.list`. `workspace.set` changes that persona's own `workspace` in the config file, so it applies to the persona everywhere it runs (solo, main, and groups without a shared workspace). A shared group workspace still wins inside that group. There is no clear for solo: a persona always has a workspace.
 - **Limiting agents.** Tools accept only absolute, existing directories. Add `[workspaces]` `roots = ["/abs/dir", ...]` to restrict agent choices to those directories and their subdirectories (symlinks are resolved, so they can't escape); `workspace.list` shows each root and its visible subdirectories. With no roots, any existing directory is accepted and `workspace.list` says there is nothing to list. Paths you write in the config are never checked. Personas with roles need `group.manage` (group) or `workspace.write` (solo) to change a workspace. Full rules: [docs/workspaces.md](docs/workspaces.md).
@@ -237,7 +247,7 @@ reply_order = ["Reviewer", "Engineer"]
 
 ### Context
 
-`[context]` sets the recent raw-turn window, summary size and refresh cadence, and an approximate context budget. `runtime_rotate_tokens` is the live context size that triggers a session rotation before that agent instance's next turn.
+`[context]` sets the recent raw-turn window, summary size and refresh cadence, and an approximate context budget. `runtime_rotate_tokens` (default 150000) is the live context size that triggers a session rotation before that agent instance's next turn; it must exceed `context_target_tokens`, which caps each full context pack (default 12000).
 
 ### Room state directives
 
@@ -431,7 +441,7 @@ flowchart TD
 - Each agent instance is identified by its structured **(room, persona)** IDs. A session can last across turns for that instance but is never shared between rooms or personas.
 - The first prompt of a session carries the full **Context Pack**. Later turns send only a **room delta**, and memory-tool follow-ups send only the tool result.
 - At a turn boundary, a session rotates (`runtime.rotated`) if its context has reached `context.runtime_rotate_tokens` or its next delta can't be built.
-- If a prompt times out (`runtime.prompt_timeout_secs`), Hivemind cancels it, drops the session, closes its runtime epoch, and **does not retry** the turn. The next turn starts a fresh session rebuilt from room history. Any other runtime failure also drops the session without a retry and is reported as an error attributed to that agent.
+- If a prompt fails, Hivemind drops the session, closes its runtime epoch, and retries the turn on a fresh session rebuilt from room history: `runtime.prompt_retries` extra attempts (default 1) on the persona's `model`, then one attempt on each entry of its `fallback_models` in order. A prompt timeout (`runtime.prompt_timeout_secs`) skips the same-model retry and goes straight to the fallbacks. If every attempt fails, the last error is reported as an error attributed to that agent. A fallback model that answers stays the live session's model until the session rotates or idles out.
 - A session closes after `runtime.idle_timeout_secs` without use and stops on core shutdown. No session is left running after exit.
 - **Pi** runs in RPC mode with `--no-session` and keeps its in-process context between prompts. Hivemind waits for `agent_settled` and returns the text blocks from the latest assistant `message_end`.
 

@@ -126,18 +126,6 @@ async fn all(config: &HivemindConfig, config_path: &std::path::Path, message: &s
 #[derive(Debug)]
 pub(super) struct ReplyBatch {
     replies: Vec<(String, Result<String>)>,
-    /// Discussion rooms: each member also reads the earlier replies of the turn.
-    discussion: bool,
-}
-
-/// Who a reply answers: always the user's message, plus the earlier speakers
-/// of the same turn when the room is a discussion.
-fn reply_label(earlier: &[&str], discussion: bool) -> String {
-    let mut who = vec!["You"];
-    if discussion {
-        who.extend(earlier.iter().copied());
-    }
-    format!("replying to {}", who.join(", "))
 }
 
 fn visit_replies(
@@ -153,20 +141,12 @@ fn visit_replies(
 }
 
 pub(super) fn print_replies(replies: ReplyBatch) -> Result<()> {
-    let multi = replies.replies.len() > 1;
-    let mut earlier: Vec<String> = Vec::new();
-    let failed = visit_replies(&replies.replies, |name, result| {
-        let refs: Vec<&str> = earlier.iter().map(String::as_str).collect();
-        let label = if multi {
-            format!(" ({})", reply_label(&refs, replies.discussion))
-        } else {
-            String::new()
-        };
-        match result {
-            Ok(text) => println!("\n{name}{label}> {text}"),
-            Err(error) => eprintln!("\n{name}{label}> [error] {error:#}"),
-        }
-        earlier.push(name.to_owned());
+    if replies.replies.is_empty() {
+        println!("\n(nobody replied)");
+    }
+    let failed = visit_replies(&replies.replies, |name, result| match result {
+        Ok(text) => println!("\n{name}> {text}"),
+        Err(error) => eprintln!("\n{name}> [error] {error:#}"),
     });
     if failed {
         bail!("one or more agents failed");
@@ -192,13 +172,8 @@ pub(super) async fn route_turn(
     message: &str,
 ) -> Result<ReplyBatch> {
     let target = conversation_target(route);
-    let discussion = core
-        .resolve_target(&target)
-        .map(|room| room.mode == hivemind::config::ConversationMode::Discussion)
-        .unwrap_or(false);
     let outcome = core.send_turn(&target, message).await?;
     Ok(ReplyBatch {
-        discussion,
         replies: outcome
             .replies
             .into_iter()

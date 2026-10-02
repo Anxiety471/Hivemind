@@ -25,10 +25,18 @@ pub(super) fn routes() -> Router<ApiState> {
         .route("/api/v1/rooms", get(list))
         .route("/api/v1/rooms/{id}", get(show))
         .route("/api/v1/rooms/{id}/messages", get(messages))
+        .route("/api/v1/rooms/{id}/active", get(active))
         .route(
             "/api/v1/rooms/{id}/threads",
             get(threads).post(create_thread),
         )
+}
+
+/// Personas whose reply is running in a room right now, so a client that was
+/// away can show progress again instead of an apparently idle room.
+async fn active(State(state): State<ApiState>, Path(id): Path<String>) -> Response {
+    let agents = state.core.events().active_replies(&id);
+    Json(json!({"room_id": id, "agents": agents})).into_response()
 }
 
 fn internal() -> Response {
@@ -176,103 +184,15 @@ async fn messages(
             let next_before = (page.len() == limit)
                 .then(|| page.first().map(|m| m.id.clone()))
                 .flatten();
-            let discussion = room_is_discussion(&state, &id);
-            // A page can start mid-turn; read the turn's earlier messages so the
-            // first replies still resolve their user message and earlier speakers.
-            let lead: Vec<_> = page
-                .first()
-                .filter(|m| m.speaker != "user")
-                .and_then(|first| {
-                    let turn = state
-                        .core
-                        .memory()
-                        .archive_turn(&caller(), &id, &first.turn_id)
-                        .ok()??;
-                    let at = turn.messages.iter().position(|m| m.id == first.id)?;
-                    Some(turn.messages[..at].to_vec())
-                })
-                .unwrap_or_default();
-            let skip = lead.len();
-            let targets = if skip == 0 {
-                reply_targets(&page, discussion)
-            } else {
-                let mut all = lead;
-                all.extend(page.iter().cloned());
-                reply_targets(&all, discussion).split_off(skip)
-            };
             let items: Vec<Value> = page
                 .into_iter()
-                .zip(targets)
-                .map(|(m, t)| {
-                    let mut item = json!({"id": m.id, "turn_id": m.turn_id, "speaker": m.speaker, "content": m.content, "created_at": m.created_at});
-                    if let Some(t) = t {
-                        item["reply_to"] = t.reply_to;
-                        item["also_saw"] = json!(t.also_saw);
-                    }
-                    item
-                })
+                .map(|m| json!({"id": m.id, "turn_id": m.turn_id, "speaker": m.speaker, "content": m.content, "created_at": m.created_at}))
                 .collect();
             Json(json!({"room_id": id, "messages": items, "next_before": next_before}))
                 .into_response()
         }
         Err(_) => internal(),
     }
-}
-
-/// Whether replies in this room see earlier same-turn replies (Discussion mode).
-fn room_is_discussion(state: &ApiState, room_id: &str) -> bool {
-    let target = if room_id.starts_with("thread-") {
-        ConversationTarget::Thread {
-            thread_id: room_id.into(),
-        }
-    } else if let Some(target) = crate::core::parent_target(room_id) {
-        target
-    } else {
-        return false;
-    };
-    state
-        .core
-        .resolve_target(&target)
-        .map(|room| room.mode == crate::config::ConversationMode::Discussion)
-        .unwrap_or(false)
-}
-
-struct ReplyTarget {
-    /// The user message this turn answers: `{"speaker": "user", "id": ...}`.
-    reply_to: Value,
-    /// Earlier same-turn speakers whose replies this agent also read.
-    also_saw: Vec<String>,
-}
-
-/// Every agent reply answers the user message that opened its turn; in a
-/// Discussion room it also reads the earlier replies of that turn. Derived
-/// from turn structure, so it needs no stored field.
-fn reply_targets(
-    page: &[crate::memory::ArchivedMessage],
-    discussion: bool,
-) -> Vec<Option<ReplyTarget>> {
-    let mut out = Vec::with_capacity(page.len());
-    let mut turn: Option<&str> = None;
-    let mut user_id: Option<&str> = None;
-    let mut seen: Vec<String> = Vec::new();
-    for m in page {
-        if turn != Some(m.turn_id.as_str()) {
-            turn = Some(m.turn_id.as_str());
-            user_id = None;
-            seen.clear();
-        }
-        if m.speaker == "user" {
-            user_id = Some(m.id.as_str());
-            out.push(None);
-            continue;
-        }
-        out.push(Some(ReplyTarget {
-            reply_to: json!({"speaker": "user", "id": user_id}),
-            also_saw: if discussion { seen.clone() } else { Vec::new() },
-        }));
-        seen.push(m.speaker.clone());
-    }
-    out
 }
 
 async fn threads(State(state): State<ApiState>, Path(id): Path<String>) -> Response {
@@ -387,41 +307,4 @@ fn parent_exists(state: &ApiState, room_id: &str) -> Option<()> {
                 .any(|(id, ..)| id == room_id)
                 .then_some(())
         })
-}
-
-#[cfg(test)]
-mod reply_target_tests {
-    use super::*;
-    use crate::memory::ArchivedMessage;
-
-    fn msg(id: &str, turn: &str, speaker: &str) -> ArchivedMessage {
-        ArchivedMessage {
-            id: id.into(),
-            room_id: "group-g".into(),
-            turn_id: turn.into(),
-            speaker: speaker.into(),
-            content: String::new(),
-            created_at: 0,
-        }
-    }
-
-    #[test]
-    fn replies_target_the_turn_user_message_and_discussion_adds_earlier_speakers() {
-        let page = vec![
-            msg("u1", "t1", "user"),
-            msg("a1", "t1", "Reviewer"),
-            msg("a2", "t1", "Engineer"),
-            msg("u2", "t2", "user"),
-            msg("a3", "t2", "Engineer"),
-        ];
-        let discussion = reply_targets(&page, true);
-        assert!(discussion[0].is_none());
-        assert_eq!(discussion[1].as_ref().unwrap().reply_to["id"], "u1");
-        assert!(discussion[1].as_ref().unwrap().also_saw.is_empty());
-        assert_eq!(discussion[2].as_ref().unwrap().also_saw, vec!["Reviewer"]);
-        assert_eq!(discussion[4].as_ref().unwrap().reply_to["id"], "u2");
-        assert!(discussion[4].as_ref().unwrap().also_saw.is_empty());
-        let broadcast = reply_targets(&page, false);
-        assert!(broadcast[2].as_ref().unwrap().also_saw.is_empty());
-    }
 }

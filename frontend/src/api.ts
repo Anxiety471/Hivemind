@@ -31,10 +31,6 @@ export type Message = {
   speaker: string;
   content: string;
   created_at: number;
-  /** Agent replies only: the user message this turn answers (`id` is null if it is on an earlier page). */
-  reply_to?: { speaker: string; id: string | null };
-  /** Agent replies only: earlier same-turn speakers this agent also read (discussion rooms). */
-  also_saw?: string[];
 };
 
 export type Thread = {
@@ -280,6 +276,8 @@ export const api = {
       "GET",
       `/rooms/${enc(id)}/messages?limit=${limit}${before ? `&before=${enc(before)}` : ""}`,
     ),
+  activeReplies: (id: string) =>
+    request<{ room_id: string; agents: string[] }>("GET", `/rooms/${enc(id)}/active`),
   threads: (id: string) => request<{ threads: Thread[] }>("GET", `/rooms/${enc(id)}/threads`),
   createThread: (id: string, anchor_message_id: string, name?: string) =>
     request<{ thread: Thread; created: boolean }>("POST", `/rooms/${enc(id)}/threads`, {

@@ -1,6 +1,7 @@
 // Small shared UI pieces: data loading, badges, time formatting.
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useState } from "react";
+import { useLiveStatus } from "./live";
 
 export function useAsync<T>(load: () => Promise<T>, deps: unknown[] = []) {
   const [data, setData] = useState<T | null>(null);
@@ -20,6 +21,12 @@ export function useAsync<T>(load: () => Promise<T>, deps: unknown[] = []) {
   useEffect(() => {
     reload();
   }, [reload]);
+  // The socket coming back means the server is reachable again: retry a failed load.
+  const live = useLiveStatus();
+  useEffect(() => {
+    if (live === "open" && error !== null) reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [live]);
   return { data, error, loading, reload, setData };
 }
 

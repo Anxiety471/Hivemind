@@ -88,7 +88,7 @@ Where the data lives:
 
 ## Runtime robustness
 
-`get_session_stats` (`context_tokens()`) on the turn path is bounded by `prompt_timeout_secs`. On timeout the pool publishes a `prompt_timeout` failure, stops the session, closes its epoch, evicts the slot and returns an error. There is no retry.
+`get_session_stats` (`context_tokens()`) on the turn path is bounded by `prompt_timeout_secs`. On timeout the pool publishes a `prompt_timeout` failure, stops the session, closes its epoch, evicts the slot and returns an error; the same-model retry is skipped, and the turn moves on to the persona's `fallback_models`.
 
 ## Build
 

@@ -165,6 +165,21 @@ impl PiSession {
 
     fn rpc_args(agent: &AgentConfig) -> Vec<String> {
         let mut args = vec!["--mode".into(), "rpc".into(), "--no-session".into()];
+        // Isolation: none of the user's own Pi setup reaches a Hivemind agent —
+        // no extensions (or the MCP servers they bring), skills, prompt
+        // templates, themes, AGENTS.md/CLAUDE.md, or project-local `.pi` files.
+        // Credentials and settings (`auth.json`, default model) still apply.
+        args.extend(
+            [
+                "--no-extensions",
+                "--no-skills",
+                "--no-prompt-templates",
+                "--no-themes",
+                "--no-context-files",
+                "--no-approve",
+            ]
+            .map(String::from),
+        );
         args.push("--append-system-prompt".into());
         args.push(agent.system_prompt.clone());
         if let Some(model) = agent.model.as_deref().filter(|s| !s.trim().is_empty()) {
@@ -360,6 +375,7 @@ mod tests {
             model: Some("provider/model".into()),
             reasoning: Some("high".into()),
             fast: None,
+            fallback_models: Vec::new(),
             role: None,
             capabilities: Vec::new(),
             permissions: Vec::new(),
@@ -376,6 +392,12 @@ mod tests {
                 "--mode",
                 "rpc",
                 "--no-session",
+                "--no-extensions",
+                "--no-skills",
+                "--no-prompt-templates",
+                "--no-themes",
+                "--no-context-files",
+                "--no-approve",
                 "--append-system-prompt",
                 "Be useful.",
                 "--model",

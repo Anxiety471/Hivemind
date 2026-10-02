@@ -19,6 +19,16 @@
 //! - ACP has no system-prompt field, so the agent's system prompt replaces the
 //!   `build` agent prompt through the `OPENCODE_CONFIG_CONTENT` environment
 //!   variable of the child.
+//! - Isolation: the user's own OpenCode setup (global `opencode.json(c)`, MCP
+//!   servers, plugins, `AGENTS.md`, agents, commands) must not leak into a
+//!   Hivemind agent. `OPENCODE_CONFIG_DIR` replaces the global config dir
+//!   (verified in v2.0.18: `config: OPENCODE_CONFIG_DIR ?? $XDG_CONFIG_HOME/opencode`)
+//!   with a Hivemind-owned one, and `OPENCODE_DISABLE_PROJECT_CONFIG=1` stops
+//!   discovery of `opencode.json`, `.opencode/` and `AGENTS.md` walking up from
+//!   the workspace. Credentials and sessions live in the data dir, which stays
+//!   shared, so logged-in providers keep working. Verified quirk: with no
+//!   plugin at all, v2.0.18 drops its built-in `opencode` provider (Zen, free
+//!   models), so the dir holds one no-op plugin ([`KEEP_PROVIDERS_PLUGIN`]).
 //! - Permissions: Hivemind has no human in the loop, so the child config sets
 //!   `"permission": "allow"` (verified: reads outside the workspace then raise
 //!   no request). This matches Pi/OMP, which run tools without approval. As a
@@ -111,9 +121,13 @@ impl Turn {
     }
 }
 
+/// No-op plugin kept in Hivemind's OpenCode config dir; see the module docs.
+const KEEP_PROVIDERS_PLUGIN: &str = "// Written by Hivemind. OpenCode drops its built-in `opencode` provider when no plugin loads; this no-op keeps it.\nexport const Hivemind = async () => ({});\n";
+
 impl OpencodeSession {
     pub async fn start_filtered(
         binary: &str,
+        config_dir: &Path,
         agent: &AgentConfig,
         private_env: &[String],
     ) -> Result<Self> {
@@ -159,7 +173,7 @@ impl OpencodeSession {
 
         match timeout(
             STARTUP_TIMEOUT,
-            Self::spawn_and_open(binary, agent, model, private_env),
+            Self::spawn_and_open(binary, config_dir, agent, model, private_env),
         )
         .await
         {
@@ -189,10 +203,16 @@ impl OpencodeSession {
 
     async fn spawn_and_open(
         binary: &str,
+        config_dir: &Path,
         agent: &AgentConfig,
         model: Option<&str>,
         private_env: &[String],
     ) -> Result<Self> {
+        super::write_owned_file(
+            &config_dir.join("plugins").join("hivemind.js"),
+            KEEP_PROVIDERS_PLUGIN,
+        )
+        .context("preparing Hivemind's OpenCode config directory")?;
         let mut command = Command::new(binary);
         for name in private_env {
             command.env_remove(name);
@@ -210,7 +230,11 @@ impl OpencodeSession {
         if !agent.system_prompt.trim().is_empty() {
             config["agent"] = json!({"build": {"prompt": agent.system_prompt}});
         }
-        command.env("OPENCODE_CONFIG_CONTENT", config.to_string());
+        command
+            .env("OPENCODE_CONFIG_CONTENT", config.to_string())
+            .env("OPENCODE_CONFIG_DIR", config_dir)
+            .env("OPENCODE_DISABLE_PROJECT_CONFIG", "1")
+            .env_remove("OPENCODE_CONFIG");
         let mut child = command.spawn().with_context(|| {
             format!(
                 "failed to start OpenCode session for agent '{}': failed to spawn '{binary}'; is it installed and on PATH?",

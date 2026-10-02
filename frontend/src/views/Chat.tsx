@@ -1,7 +1,7 @@
 // Rooms: room list, paged history, threads, and live replies over the WebSocket.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, decodeInstance, targetFor, type Message, type Room, type Thread } from "../api";
-import { useLive, useRefreshOn, type LiveEvent } from "../live";
+import { useLive, useLiveStatus, useRefreshOn, type LiveEvent } from "../live";
 import { href, navigate } from "../nav";
 import { listKind, roomLabel, useTaskNames } from "../rooms";
 import { Avatar, Badge, Empty, ErrorNote, ago, time, useAsync } from "../ui";
@@ -47,7 +47,11 @@ export function Chat({ roomId }: { roomId?: string }) {
           </div>
         ))}
       </aside>
-      {active ? <RoomView key={active} roomId={active} taskNames={taskNames} /> : <Empty>No rooms yet. Configure personas in hivemind.toml.</Empty>}
+      {active ? (
+        <RoomView key={active} roomId={active} taskNames={taskNames} />
+      ) : (
+        !rooms.loading && !rooms.error && <Empty>No rooms yet. Configure personas in hivemind.toml.</Empty>
+      )}
     </div>
   );
 }
@@ -74,6 +78,27 @@ function useTyping(roomId: string) {
     },
     [roomId],
   );
+  // A dropped socket loses the completion frames, and leaving the room loses the
+  // start frames. Ask the server what is running now instead of guessing: the
+  // turn itself never depends on this view.
+  const live = useLiveStatus();
+  useEffect(() => {
+    if (live !== "open") {
+      setTyping({});
+      return;
+    }
+    let current = true;
+    api
+      .activeReplies(roomId)
+      .then(({ agents }) => {
+        if (!current) return;
+        setTyping(Object.fromEntries(agents.map((persona) => [persona, { persona, text: "" }])));
+      })
+      .catch(() => current && setTyping({}));
+    return () => {
+      current = false;
+    };
+  }, [live, roomId]);
   return typing;
 }
 
@@ -110,6 +135,17 @@ function useHistory(roomId: string) {
     loadLatest();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roomId]);
+  // Catch up on anything missed while the socket was down.
+  const live = useLiveStatus();
+  const wasDown = useRef(false);
+  useEffect(() => {
+    if (live === "closed") wasDown.current = true;
+    else if (live === "open" && wasDown.current) {
+      wasDown.current = false;
+      loadLatest();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [live]);
   useRefreshOn(
     (e) => e.payload?.room_id === roomId && /^(conversation\.turn|agent\.reply)\./.test(e.type),
     loadLatest,
@@ -297,11 +333,6 @@ function MessageList(props: {
                   <span className="muted">{time(m.created_at)}</span>
                 </div>
               )}
-              {m.reply_to && (
-                <div className="msg-reply-to muted">
-                  ↳ replying to {[m.reply_to.speaker, ...(m.also_saw ?? [])].map((n) => (n === "user" ? "You" : n)).join(", ")}
-                </div>
-              )}
               <div className="msg-text">{m.content}</div>
               {thread && (
                 <button className="thread-link" onClick={() => props.onThread?.(m)}>
@@ -323,7 +354,6 @@ function MessageList(props: {
           <div className="msg-body">
             <div className="msg-meta">
               <strong>{t.persona}</strong>
-              <span className="muted">replying to You</span>
             </div>
             <div className="msg-text">
               {t.text || (

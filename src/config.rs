@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, HashSet},
     fs,
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use anyhow::{bail, Context, Result};
@@ -193,10 +193,30 @@ fn default_memory_mode() -> String {
     "deterministic".into()
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversationConfig {
     #[serde(default)]
     pub reply_order: Vec<String>,
+    /// Follow-up replies a Discussion turn may add beyond each member's first:
+    /// @mentions of members who have already replied, and unprompted open-floor
+    /// replies. 0 disables.
+    #[serde(default = "default_mention_limit")]
+    pub mention_limit: usize,
+}
+
+impl Default for ConversationConfig {
+    fn default() -> Self {
+        Self {
+            reply_order: Vec::new(),
+            mention_limit: default_mention_limit(),
+        }
+    }
+}
+
+pub const MAX_MENTION_LIMIT: usize = 16;
+
+fn default_mention_limit() -> usize {
+    4
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -220,8 +240,8 @@ pub struct GroupConfig {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ConversationMode {
-    #[default]
     Broadcast,
+    #[default]
     Discussion,
 }
 
@@ -257,6 +277,11 @@ impl Default for ContextConfig {
 pub struct RuntimeConfig {
     #[serde(skip)]
     pub private_env: Vec<String>,
+    /// Hivemind-owned directory for harness config that replaces the user's own
+    /// (OpenCode config dir, OMP settings overlay); set by the core to
+    /// `.hivemind/harness`, absolute.
+    #[serde(skip)]
+    pub harness_dir: Option<PathBuf>,
     #[serde(default = "default_omp_binary")]
     pub omp_binary: String,
     #[serde(default = "default_pi_binary")]
@@ -270,17 +295,23 @@ pub struct RuntimeConfig {
     /// 0 keeps sessions until shutdown.
     #[serde(default = "default_idle_timeout_secs")]
     pub idle_timeout_secs: u64,
+    /// Extra attempts on the same model after a failed prompt (not after a
+    /// timeout) before moving to the persona's `fallback_models`.
+    #[serde(default = "default_prompt_retries")]
+    pub prompt_retries: u32,
 }
 
 impl Default for RuntimeConfig {
     fn default() -> Self {
         Self {
             private_env: Vec::new(),
+            harness_dir: None,
             omp_binary: default_omp_binary(),
             pi_binary: default_pi_binary(),
             opencode_binary: default_opencode_binary(),
             prompt_timeout_secs: default_runtime_prompt_timeout_secs(),
             idle_timeout_secs: default_idle_timeout_secs(),
+            prompt_retries: default_prompt_retries(),
         }
     }
 }
@@ -297,6 +328,10 @@ pub struct AgentConfig {
     pub workspace: String,
     #[serde(default)]
     pub model: Option<String>,
+    /// Models tried in order, one attempt each, once `model` has failed.
+    /// A fallback that answers stays the live session's model until it rotates.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fallback_models: Vec<String>,
     #[serde(default, alias = "thinking")]
     pub reasoning: Option<String>,
     #[serde(default)]
@@ -409,6 +444,16 @@ impl HivemindConfig {
                     persona.name
                 );
             }
+            if persona
+                .fallback_models
+                .iter()
+                .any(|model| model.trim().is_empty() || model.len() > 256)
+            {
+                bail!(
+                    "persona '{}' has an empty or overlong fallback model",
+                    persona.name
+                );
+            }
         }
         crate::access::validate(self)?;
         self.coordination.validate(&self.agents)?;
@@ -456,6 +501,9 @@ impl HivemindConfig {
             }
         }
 
+        if self.conversation.mention_limit > MAX_MENTION_LIMIT {
+            bail!("conversation.mention_limit must be at most {MAX_MENTION_LIMIT}");
+        }
         let mut reply_names = HashSet::with_capacity(self.conversation.reply_order.len());
         for name in &self.conversation.reply_order {
             if !reply_names.insert(name.as_str()) {
@@ -528,6 +576,7 @@ impl HivemindConfig {
             runtime: RuntimeConfig::default(),
             conversation: ConversationConfig {
                 reply_order: vec!["Engineer".into(), "Reviewer".into()],
+                ..ConversationConfig::default()
             },
             context: ContextConfig::default(),
             memory: MemoryConfig::default(),
@@ -549,6 +598,7 @@ impl HivemindConfig {
                     model: None,
                     reasoning: None,
                     fast: None,
+                    fallback_models: Vec::new(),
                     role: Some("Software Engineer".into()),
                     capabilities: Vec::new(),
                     permissions: Vec::new(),
@@ -568,6 +618,7 @@ impl HivemindConfig {
                     model: None,
                     reasoning: None,
                     fast: None,
+                    fallback_models: Vec::new(),
                     role: Some("Reviewer".into()),
                     capabilities: Vec::new(),
                     permissions: Vec::new(),
@@ -593,7 +644,7 @@ fn default_context_target_tokens() -> usize {
     12000
 }
 fn default_runtime_rotate_tokens() -> usize {
-    24000
+    150_000
 }
 fn default_summary_refresh_turns() -> usize {
     4
@@ -613,6 +664,9 @@ fn default_runtime_prompt_timeout_secs() -> u64 {
 }
 fn default_idle_timeout_secs() -> u64 {
     120
+}
+fn default_prompt_retries() -> u32 {
+    1
 }
 
 fn default_runtime() -> String {
