@@ -172,6 +172,7 @@ pi_binary = "pi"
 opencode_binary = "opencode"
 prompt_timeout_secs = 300   # max prompt duration; 0 disables
 idle_timeout_secs = 120     # how long an unused session stays alive; 0 = never idle out
+prompt_retries = 1           # extra attempts on the same model after a failed prompt (not after a timeout)
 
 [[personas]]
 id = "Engineer"
@@ -180,6 +181,7 @@ runtime = "pi"
 workspace = "."
 system_prompt = "You are the Engineer."
 model = "provider/model-id"
+fallback_models = ["provider/other-model-id"]   # tried in order if model fails
 reasoning = "high"
 
 [[personas]]
@@ -245,7 +247,7 @@ reply_order = ["Reviewer", "Engineer"]
 
 ### Context
 
-`[context]` sets the recent raw-turn window, summary size and refresh cadence, and an approximate context budget. `runtime_rotate_tokens` is the live context size that triggers a session rotation before that agent instance's next turn.
+`[context]` sets the recent raw-turn window, summary size and refresh cadence, and an approximate context budget. `runtime_rotate_tokens` (default 150000) is the live context size that triggers a session rotation before that agent instance's next turn; it must exceed `context_target_tokens`, which caps each full context pack (default 12000).
 
 ### Room state directives
 
@@ -439,7 +441,7 @@ flowchart TD
 - Each agent instance is identified by its structured **(room, persona)** IDs. A session can last across turns for that instance but is never shared between rooms or personas.
 - The first prompt of a session carries the full **Context Pack**. Later turns send only a **room delta**, and memory-tool follow-ups send only the tool result.
 - At a turn boundary, a session rotates (`runtime.rotated`) if its context has reached `context.runtime_rotate_tokens` or its next delta can't be built.
-- If a prompt times out (`runtime.prompt_timeout_secs`), Hivemind cancels it, drops the session, closes its runtime epoch, and **does not retry** the turn. The next turn starts a fresh session rebuilt from room history. Any other runtime failure also drops the session without a retry and is reported as an error attributed to that agent.
+- If a prompt fails, Hivemind drops the session, closes its runtime epoch, and retries the turn on a fresh session rebuilt from room history: `runtime.prompt_retries` extra attempts (default 1) on the persona's `model`, then one attempt on each entry of its `fallback_models` in order. A prompt timeout (`runtime.prompt_timeout_secs`) skips the same-model retry and goes straight to the fallbacks. If every attempt fails, the last error is reported as an error attributed to that agent. A fallback model that answers stays the live session's model until the session rotates or idles out.
 - A session closes after `runtime.idle_timeout_secs` without use and stops on core shutdown. No session is left running after exit.
 - **Pi** runs in RPC mode with `--no-session` and keeps its in-process context between prompts. Hivemind waits for `agent_settled` and returns the text blocks from the latest assistant `message_end`.
 

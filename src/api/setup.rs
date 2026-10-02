@@ -143,6 +143,7 @@ fn build_config(body: SetupBody) -> Result<HivemindConfig, String> {
                 .map(|value| value.trim().to_owned())
                 .filter(|value| !value.is_empty()),
             fast: setup.fast,
+            fallback_models: Vec::new(),
             role: Some(role.to_owned()).filter(|value| !value.is_empty()),
             capabilities: Vec::new(),
             permissions: Vec::new(),

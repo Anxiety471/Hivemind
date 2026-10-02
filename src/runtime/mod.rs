@@ -146,6 +146,7 @@ mod tests {
             model: None,
             reasoning: None,
             fast: None,
+            fallback_models: Vec::new(),
             role: None,
             capabilities: Vec::new(),
             permissions: Vec::new(),

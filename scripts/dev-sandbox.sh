@@ -91,7 +91,7 @@ reply_order = ["Engineer", "Reviewer"]
 recent_turns = 6
 summary_max_tokens = 2000
 context_target_tokens = 12000
-runtime_rotate_tokens = 24000
+runtime_rotate_tokens = 150000
 summary_refresh_turns = 4
 
 [memory]

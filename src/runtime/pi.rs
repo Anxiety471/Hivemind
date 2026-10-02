@@ -368,6 +368,7 @@ mod tests {
             model: Some("provider/model".into()),
             reasoning: Some("high".into()),
             fast: None,
+            fallback_models: Vec::new(),
             role: None,
             capabilities: Vec::new(),
             permissions: Vec::new(),

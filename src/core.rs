@@ -690,6 +690,14 @@ mod tests {
         prompt_timeout_secs: u64,
         idle_timeout_secs: u64,
     ) -> (HivemindCore, PathBuf, PathBuf) {
+        fake_core_configured(directory, prompt_timeout_secs, idle_timeout_secs, |_| {})
+    }
+    fn fake_core_configured(
+        directory: &TestDirectory,
+        prompt_timeout_secs: u64,
+        idle_timeout_secs: u64,
+        configure: impl FnOnce(&mut HivemindConfig),
+    ) -> (HivemindCore, PathBuf, PathBuf) {
         let binary = directory.0.join("fake-pi");
         let lifecycle = directory.0.join("lifecycle.log");
         let prompts = directory.0.join("prompts.log");
@@ -698,6 +706,7 @@ case "$*" in
   *"You are the Engineer"*) agent=Engineer ;;
   *) agent=Unknown ;;
 esac
+case "$*" in *bad/model*) bad=1 ;; esac
 printf '%s\n' "$$" > __DIR__/runtime.pid
 printf '%s started\n' "$agent" >> __DIR__/lifecycle.log
 while IFS= read -r request; do
@@ -712,8 +721,10 @@ while IFS= read -r request; do
     *'"type":"prompt"'*)
       printf '%s prompt\n' "$agent" >> __DIR__/lifecycle.log
       printf '%s\n' "$request" >> __DIR__/prompts.log
+      if [ -n "$bad" ]; then exit 3; fi
       case "$request" in
         *'Current user message:\ncrash-now'*) exit 3 ;;
+        *'Current user message:\ncrash-once'*) if [ ! -e __DIR__/crashed ]; then : > __DIR__/crashed; exit 3; fi ;;
         *'Current user message:\nhang-now'*) while IFS= read -r ignored; do :; done ;;
       esac
       if [ -e __DIR__/tool-mode ] && ! printf '%s' "$request" | grep -q 'Memory tool result:'; then
@@ -740,6 +751,7 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
         config.runtime.prompt_timeout_secs = prompt_timeout_secs;
         config.runtime.idle_timeout_secs = idle_timeout_secs;
         config.agents[0].workspace = directory.0.display().to_string();
+        configure(&mut config);
         let core = HivemindCore::new(config, directory.0.join("hivemind.toml")).unwrap();
         (core, lifecycle, prompts)
     }
@@ -962,17 +974,71 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
                 .iter()
                 .filter(|line| *line == "Engineer started")
                 .count(),
-            2
+            3
         );
         let messages = prompt_messages(&prompts);
-        assert!(messages[1].contains("Participants:"), "{}", messages[1]);
+        assert_eq!(messages.len(), 3);
+        assert!(messages[2].contains("Participants:"), "{}", messages[2]);
         let mut failure_codes = Vec::new();
         while let Ok(event) = events.try_recv() {
             if let DomainEventKind::RuntimeFailed { error_code, .. } = event.payload.clone() {
                 failure_codes.push(error_code);
             }
         }
-        assert_eq!(failure_codes, ["runtime_failure"]);
+        assert_eq!(
+            failure_codes,
+            ["runtime_failure", "runtime_failure"],
+            "the crashing turn is retried once on a fresh session"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_single_crash_is_retried_on_a_fresh_session() {
+        let directory = TestDirectory::new();
+        let (core, lifecycle, prompts) = fake_core_with_prompt_timeout(&directory, 300);
+        let replies = solo_turn(&core, "retry-room", "crash-once").await.unwrap();
+        assert_eq!(replies[0].result.as_deref(), Ok("Engineer reply"));
+        core.shutdown().await;
+        assert_eq!(prompt_messages(&prompts).len(), 2);
+        assert_eq!(
+            lines(&lifecycle)
+                .iter()
+                .filter(|line| *line == "Engineer started")
+                .count(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failing_model_falls_back_to_the_next_configured_model() {
+        let directory = TestDirectory::new();
+        let (core, _lifecycle, prompts) = fake_core_configured(&directory, 300, 0, |config| {
+            config.runtime.prompt_retries = 0;
+            config.agents[0].model = Some("bad/model".into());
+            config.agents[0].fallback_models = vec!["bad/model".into(), "good/model".into()];
+        });
+        let replies = solo_turn(&core, "fallback-room", "hello").await.unwrap();
+        assert_eq!(replies[0].result.as_deref(), Ok("Engineer reply"));
+        core.shutdown().await;
+        assert_eq!(
+            prompt_messages(&prompts).len(),
+            3,
+            "primary and first fallback fail, second fallback answers"
+        );
+    }
+
+    #[tokio::test]
+    async fn exhausted_models_report_the_last_failure() {
+        let directory = TestDirectory::new();
+        let (core, _lifecycle, prompts) = fake_core_configured(&directory, 300, 0, |config| {
+            config.runtime.prompt_retries = 1;
+            config.agents[0].model = Some("bad/model".into());
+            config.agents[0].fallback_models = vec!["bad/model".into()];
+        });
+        let replies = solo_turn(&core, "exhausted-room", "hello").await.unwrap();
+        assert!(replies[0].result.is_err());
+        core.shutdown().await;
+        assert_eq!(prompt_messages(&prompts).len(), 3);
     }
 
     #[tokio::test]

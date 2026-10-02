@@ -295,6 +295,10 @@ pub struct RuntimeConfig {
     /// 0 keeps sessions until shutdown.
     #[serde(default = "default_idle_timeout_secs")]
     pub idle_timeout_secs: u64,
+    /// Extra attempts on the same model after a failed prompt (not after a
+    /// timeout) before moving to the persona's `fallback_models`.
+    #[serde(default = "default_prompt_retries")]
+    pub prompt_retries: u32,
 }
 
 impl Default for RuntimeConfig {
@@ -307,6 +311,7 @@ impl Default for RuntimeConfig {
             opencode_binary: default_opencode_binary(),
             prompt_timeout_secs: default_runtime_prompt_timeout_secs(),
             idle_timeout_secs: default_idle_timeout_secs(),
+            prompt_retries: default_prompt_retries(),
         }
     }
 }
@@ -323,6 +328,10 @@ pub struct AgentConfig {
     pub workspace: String,
     #[serde(default)]
     pub model: Option<String>,
+    /// Models tried in order, one attempt each, once `model` has failed.
+    /// A fallback that answers stays the live session's model until it rotates.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fallback_models: Vec<String>,
     #[serde(default, alias = "thinking")]
     pub reasoning: Option<String>,
     #[serde(default)]
@@ -432,6 +441,16 @@ impl HivemindConfig {
             {
                 bail!(
                     "persona '{}' has an empty or overlong capability tag",
+                    persona.name
+                );
+            }
+            if persona
+                .fallback_models
+                .iter()
+                .any(|model| model.trim().is_empty() || model.len() > 256)
+            {
+                bail!(
+                    "persona '{}' has an empty or overlong fallback model",
                     persona.name
                 );
             }
@@ -579,6 +598,7 @@ impl HivemindConfig {
                     model: None,
                     reasoning: None,
                     fast: None,
+                    fallback_models: Vec::new(),
                     role: Some("Software Engineer".into()),
                     capabilities: Vec::new(),
                     permissions: Vec::new(),
@@ -598,6 +618,7 @@ impl HivemindConfig {
                     model: None,
                     reasoning: None,
                     fast: None,
+                    fallback_models: Vec::new(),
                     role: Some("Reviewer".into()),
                     capabilities: Vec::new(),
                     permissions: Vec::new(),
@@ -623,7 +644,7 @@ fn default_context_target_tokens() -> usize {
     12000
 }
 fn default_runtime_rotate_tokens() -> usize {
-    24000
+    150_000
 }
 fn default_summary_refresh_turns() -> usize {
     4
@@ -643,6 +664,9 @@ fn default_runtime_prompt_timeout_secs() -> u64 {
 }
 fn default_idle_timeout_secs() -> u64 {
     120
+}
+fn default_prompt_retries() -> u32 {
+    1
 }
 
 fn default_runtime() -> String {

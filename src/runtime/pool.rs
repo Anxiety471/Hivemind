@@ -85,6 +85,19 @@ pub struct InvokeReply {
     pub epoch_id: String,
 }
 
+/// A prompt or context query that exceeded `runtime.prompt_timeout_secs`;
+/// retrying the same model would only burn another full timeout.
+#[derive(Debug)]
+struct RuntimeTimeout(&'static str);
+
+impl std::fmt::Display for RuntimeTimeout {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
+}
+
+impl std::error::Error for RuntimeTimeout {}
+
 /// Accounts for a prompt future dropped by cancellation before normal cleanup.
 struct PromptGuard {
     armed: bool,
@@ -279,8 +292,65 @@ impl RuntimePool {
     }
 
     /// Prompt the instance's live session, starting, rotating, or rehydrating
-    /// it as needed. A failed prompt discards the session and is not retried.
+    /// it as needed. A failed prompt discards the session; the turn is then
+    /// retried on a fresh session (`runtime.prompt_retries` extra attempts on
+    /// the configured model, skipped after a timeout), then once on each of the
+    /// persona's `fallback_models`. The last error is returned if all fail.
     pub async fn invoke(&self, caller: &Caller, request: InvokeRequest<'_>) -> Result<InvokeReply> {
+        let retries = self.inner.runtime.prompt_retries;
+        let mut attempts: Vec<(Option<&str>, u32)> = vec![(None, retries)];
+        attempts.extend(
+            request
+                .agent
+                .fallback_models
+                .iter()
+                .map(|model| (Some(model.as_str()), 0)),
+        );
+        let mut last = None;
+        for (model, retries) in attempts {
+            let agent = model.map(|model| AgentConfig {
+                model: Some(model.to_owned()),
+                ..request.agent.clone()
+            });
+            for attempt in 0..=retries {
+                let attempt_request = InvokeRequest {
+                    agent_instance_id: request.agent_instance_id,
+                    agent: agent.as_ref().unwrap_or(request.agent),
+                    phase: request.phase,
+                    full: request.full,
+                    delta: request.delta,
+                    view: request.view,
+                };
+                let error = match self.invoke_once(caller, attempt_request).await {
+                    Ok(reply) => return Ok(reply),
+                    Err(error) => error,
+                };
+                if self.inner.shutting_down.load(Ordering::SeqCst) {
+                    return Err(error);
+                }
+                let timed_out = error.downcast_ref::<RuntimeTimeout>().is_some();
+                eprintln!(
+                    "warning: runtime turn for '{}' failed on {} (attempt {}): {error:#}",
+                    request.agent_instance_id.encode(),
+                    model
+                        .or(request.agent.model.as_deref())
+                        .unwrap_or("the default model"),
+                    attempt + 1,
+                );
+                last = Some(error);
+                if timed_out {
+                    break;
+                }
+            }
+        }
+        Err(last.expect("at least one attempt runs"))
+    }
+
+    async fn invoke_once(
+        &self,
+        caller: &Caller,
+        request: InvokeRequest<'_>,
+    ) -> Result<InvokeReply> {
         if caller.agent_instance_id != *request.agent_instance_id
             || caller.room_id != request.agent_instance_id.room_id
             || caller.persona_id != request.agent_instance_id.persona_id
@@ -365,7 +435,7 @@ impl RuntimePool {
                             .stop(request.agent_instance_id, live, Stop::PromptTimeout)
                             .await;
                         inner.remove_vacant_slot(request.agent_instance_id, &slot_handle, &slot);
-                        bail!("runtime context query timed out");
+                        return Err(RuntimeTimeout("runtime context query timed out").into());
                     }
                     RuntimeCall::Shutdown => {
                         inner
@@ -477,7 +547,7 @@ impl RuntimePool {
                     .stop(request.agent_instance_id, live, Stop::PromptTimeout)
                     .await;
                 inner.remove_vacant_slot(request.agent_instance_id, &slot_handle, &slot);
-                bail!("runtime prompt timed out");
+                Err(RuntimeTimeout("runtime prompt timed out").into())
             }
             RuntimeCall::Shutdown => {
                 inner
@@ -888,6 +958,7 @@ mod tests {
             model: None,
             reasoning: None,
             fast: None,
+            fallback_models: Vec::new(),
             role: None,
             capabilities: Vec::new(),
             permissions: Vec::new(),
@@ -978,6 +1049,7 @@ mod tests {
             model: None,
             reasoning: None,
             fast: None,
+            fallback_models: Vec::new(),
             role: None,
             capabilities: Vec::new(),
             permissions: Vec::new(),
@@ -1166,6 +1238,7 @@ mod tests {
                 model: None,
                 reasoning: None,
                 fast: None,
+                fallback_models: Vec::new(),
                 role: None,
                 capabilities: Vec::new(),
                 permissions: Vec::new(),

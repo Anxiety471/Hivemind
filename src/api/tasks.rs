@@ -572,6 +572,7 @@ mod tests {
                 model: None,
                 reasoning: None,
                 fast: None,
+                fallback_models: Vec::new(),
                 role: None,
                 capabilities: caps.iter().map(|c| c.to_string()).collect(),
                 permissions: perms.iter().map(|c| c.to_string()).collect(),
