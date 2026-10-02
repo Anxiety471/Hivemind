@@ -9,7 +9,7 @@ cd frontend && npm install && npm run dev   # UI on http://127.0.0.1:5173
 
 ## Screens
 
-- **Rooms**: main, group, direct, and task rooms with paged history (`/rooms/{id}/messages`). Messages are sent with `"wait": false`; replies appear live from `agent.reply.*` and `conversation.turn.*` events, and `agent.progress` text is shown while an agent replies. Any message can start a thread (`POST /rooms/{id}/threads`), which opens in a side panel with its own history and composer. Room details show the room state and summary. Task rooms are read-only.
+- **Rooms**: main, group, direct, and task rooms with paged history (`/rooms/{id}/messages`). Messages are sent with `"wait": false`; replies appear live from `agent.reply.*` and `conversation.turn.*` events, and `agent.progress` text is shown while an agent replies. Typing `@` in a composer (rooms and threads) lists the room's participants; filter by typing, move with Up/Down, pick with Enter, Tab, or a click, dismiss with Esc. The inserted `@Name` is what the server's mention detection matches. Any message can start a thread (`POST /rooms/{id}/threads`), which opens in a side panel with its own history and composer. Room details show the room state and summary. Task rooms are read-only.
 - **Tasks**: root tasks, subtasks with dependencies, attempts, artifacts, evidence, and budget meters. Submit, pause, resume, cancel, and answer `needs_input`. Refreshes on `task.*` and `attempt.*` events.
 - **Agents**: runtime, activity state (`/agent-instances`), workspace, capabilities, and effective permissions per persona.
 - **Groups**: create, edit (members, mode, per-group roles, reply order), and delete chat groups via `/chat-groups`.

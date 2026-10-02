@@ -1,12 +1,13 @@
 // Rooms: room list, paged history, threads, and live replies over the WebSocket.
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, decodeInstance, targetFor, type Message, type Room, type Thread } from "../api";
+import { api, decodeInstance, targetFor, type Message, type Participant, type Room, type Thread } from "../api";
 import { useLive, useLiveStatus, useRefreshOn, type LiveEvent } from "../live";
 import { href, navigate } from "../nav";
 import { listKind, roomLabel, useTaskNames } from "../rooms";
 import { RoomPanel, type PanelTab } from "./RoomPanel";
 import { Markdown } from "../markdown";
 import { Avatar, Badge, Empty, ErrorNote, time, useAsync } from "../ui";
+import { applyMention, filterParticipants, getMentionMatch, type MentionMatch } from "../mentions";
 
 const KIND_ORDER: Record<string, number> = { main: 0, group: 1, solo: 2, task: 3, archived: 4 };
 const KIND_LABEL: Record<string, string> = { main: "Main", group: "Groups", solo: "Direct", task: "Task rooms", archived: "Archived" };
@@ -256,6 +257,7 @@ function RoomView({
         {target ? (
           <Composer
             placeholder={`Message ${info?.kind === "solo" ? "@" + info.participants[0]?.persona_id : info?.name ?? roomId}`}
+            participants={info?.participants}
             onSend={(text) => api.sendTurn(target, text).then(() => history.loadLatest())}
           />
         ) : (
@@ -285,6 +287,7 @@ function RoomView({
           key={openThread.id}
           thread={openThread}
           anchor={history.messages.find((m) => m.id === openThread.anchor_message_id)}
+          participants={info?.participants}
           onClose={() => setOpenThread(null)}
         />
       )}
@@ -372,10 +375,87 @@ function MessageList(props: {
   );
 }
 
-function Composer({ onSend, placeholder }: { onSend: (text: string) => Promise<unknown>; placeholder: string }) {
+function Composer({
+  onSend,
+  placeholder,
+  participants = [],
+}: {
+  onSend: (text: string) => Promise<unknown>;
+  placeholder: string;
+  participants?: Participant[];
+}) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [cursorPos, setCursorPos] = useState(0);
+  const [mentionMatch, setMentionMatch] = useState<MentionMatch | null>(null);
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [dismissed, setDismissed] = useState(false);
+
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const blurTimeoutRef = useRef<number | null>(null);
+  const prevQueryRef = useRef<string | null>(null);
+
+  const filtered = useMemo(() => {
+    if (!mentionMatch || dismissed) return [];
+    return filterParticipants(participants, mentionMatch.query);
+  }, [participants, mentionMatch, dismissed]);
+
+  useEffect(() => {
+    if (mentionMatch?.query !== prevQueryRef.current) {
+      setDismissed(false);
+      prevQueryRef.current = mentionMatch?.query ?? null;
+      setSelectedIndex(0);
+    }
+  }, [mentionMatch?.query]);
+
+  useEffect(() => {
+    if (selectedIndex >= filtered.length && filtered.length > 0) {
+      setSelectedIndex(filtered.length - 1);
+    }
+  }, [filtered.length, selectedIndex]);
+
+  useEffect(() => {
+    if (listRef.current && filtered.length > 0) {
+      const activeEl = listRef.current.children[selectedIndex] as HTMLElement | undefined;
+      activeEl?.scrollIntoView({ block: "nearest" });
+    }
+  }, [selectedIndex, filtered.length]);
+
+  useEffect(() => {
+    return () => {
+      clearTimeout(blurTimeoutRef.current ?? undefined);
+    };
+  }, []);
+
+  const insertMention = (participant: Participant) => {
+    if (!mentionMatch) return;
+    const applied = applyMention(text, cursorPos, mentionMatch, participant.persona_id);
+    setText(applied.text);
+    setCursorPos(applied.cursor);
+    setMentionMatch(null);
+    setDismissed(false);
+
+    requestAnimationFrame(() => {
+      if (textareaRef.current) {
+        textareaRef.current.focus();
+        textareaRef.current.setSelectionRange(applied.cursor, applied.cursor);
+      }
+    });
+  };
+
+  const handleTextChange = (val: string, pos: number) => {
+    setText(val);
+    setCursorPos(pos);
+    setMentionMatch(getMentionMatch(val, pos));
+  };
+
+  const handleCursorMove = (pos: number) => {
+    setCursorPos(pos);
+    setMentionMatch(getMentionMatch(text, pos));
+  };
+
   const send = async () => {
     const value = text.trim();
     if (!value || busy) return;
@@ -383,6 +463,7 @@ function Composer({ onSend, placeholder }: { onSend: (text: string) => Promise<u
     try {
       await onSend(value);
       setText("");
+      setMentionMatch(null);
       setError(null);
     } catch (e) {
       setError((e as Error).message);
@@ -390,16 +471,80 @@ function Composer({ onSend, placeholder }: { onSend: (text: string) => Promise<u
       setBusy(false);
     }
   };
+
   return (
     <div className="composer">
       <ErrorNote error={error} />
+      {filtered.length > 0 && (
+        <div className="mention-menu" role="listbox" aria-label="Mention agent">
+          <div className="mention-menu-header">Mention an agent</div>
+          <div className="mention-menu-list" ref={listRef}>
+            {filtered.map((p, i) => (
+              <div
+                key={p.persona_id}
+                role="option"
+                aria-selected={i === selectedIndex}
+                className={i === selectedIndex ? "mention-item active" : "mention-item"}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  insertMention(p);
+                }}
+                onMouseEnter={() => setSelectedIndex(i)}
+              >
+                <Avatar name={p.persona_id} />
+                <div className="mention-item-info">
+                  <span className="mention-item-name">{p.persona_id}</span>
+                  {p.role && <span className="mention-item-role">{p.role}</span>}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="composer-row">
         <textarea
+          ref={textareaRef}
           rows={1}
           value={text}
           placeholder={placeholder}
-          onChange={(e) => setText((e.target as HTMLTextAreaElement).value)}
+          onChange={(e) => {
+            const el = e.target;
+            handleTextChange(el.value, el.selectionStart);
+          }}
+          onSelect={(e) => handleCursorMove((e.target as HTMLTextAreaElement).selectionStart)}
+          onClick={(e) => handleCursorMove((e.target as HTMLTextAreaElement).selectionStart)}
+          onKeyUp={(e) => handleCursorMove((e.target as HTMLTextAreaElement).selectionStart)}
+          onFocus={(e) => {
+            clearTimeout(blurTimeoutRef.current ?? undefined);
+            handleCursorMove(e.target.selectionStart);
+          }}
+          onBlur={() => {
+            blurTimeoutRef.current = window.setTimeout(() => setMentionMatch(null), 150);
+          }}
           onKeyDown={(e) => {
+            if (filtered.length > 0) {
+              if (e.key === "ArrowDown") {
+                e.preventDefault();
+                setSelectedIndex((prev) => (prev + 1) % filtered.length);
+                return;
+               }
+              if (e.key === "ArrowUp") {
+                e.preventDefault();
+                setSelectedIndex((prev) => (prev - 1 + filtered.length) % filtered.length);
+                return;
+               }
+              if (e.key === "Enter" || e.key === "Tab") {
+                e.preventDefault();
+                const chosen = filtered[selectedIndex];
+                if (chosen) insertMention(chosen);
+                return;
+               }
+              if (e.key === "Escape") {
+                e.preventDefault();
+                setDismissed(true);
+                return;
+               }
+            }
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
               send();
@@ -415,7 +560,17 @@ function Composer({ onSend, placeholder }: { onSend: (text: string) => Promise<u
   );
 }
 
-function ThreadPanel({ thread, anchor, onClose }: { thread: Thread; anchor?: Message; onClose: () => void }) {
+function ThreadPanel({
+  thread,
+  anchor,
+  participants,
+  onClose,
+}: {
+  thread: Thread;
+  anchor?: Message;
+  participants?: Participant[];
+  onClose: () => void;
+}) {
   const history = useHistory(thread.id);
   const typing = useTyping(thread.id);
   return (
@@ -448,6 +603,7 @@ function ThreadPanel({ thread, anchor, onClose }: { thread: Thread; anchor?: Mes
       />
       <Composer
         placeholder="Reply in thread"
+        participants={participants}
         onSend={(text) => api.sendTurn({ type: "thread", id: thread.id }, text).then(() => history.loadLatest())}
       />
     </aside>

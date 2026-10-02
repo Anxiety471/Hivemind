@@ -335,6 +335,7 @@ impl OmpSession {
         match result {
             Ok(frame) => {
                 if let Some(sink) = &self.progress {
+                    sink.touch();
                     sink.rpc(&frame);
                 }
                 if let Some(usage) = super::telemetry::rpc_usage(&frame) {

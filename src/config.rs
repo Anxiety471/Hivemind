@@ -292,7 +292,9 @@ pub struct RuntimeConfig {
     pub pi_binary: String,
     #[serde(default = "default_opencode_binary")]
     pub opencode_binary: String,
-    /// Maximum seconds a runtime prompt may take; 0 disables the timeout.
+    /// Maximum seconds a runtime prompt may stay inactive without progress; 0
+    /// disables the timeout. Progress (streaming tokens, tool events, reasoning)
+    /// resets this inactivity window.
     #[serde(default = "default_runtime_prompt_timeout_secs")]
     pub prompt_timeout_secs: u64,
     /// Seconds an agent-instance runtime may sit unused before it is stopped;

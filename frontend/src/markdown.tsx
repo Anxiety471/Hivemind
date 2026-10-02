@@ -7,6 +7,9 @@ import katex from "katex";
 import "katex/dist/katex.min.css";
 import mermaid from "mermaid";
 import { parseMarkdown } from "./markdownParse";
+import { plantumlToMermaid } from "./diagrams/plantuml";
+import { drawioToScene, looksLikeDrawio } from "./diagrams/drawio";
+import { DrawioSvg } from "./diagrams/DrawioSvg";
 import type { AlertKind, Block, Inline } from "./markdownParse";
 
 mermaid.initialize({
@@ -23,11 +26,11 @@ const ALERT_META: Record<AlertKind, { icon: string; title: string }> = {
   caution: { icon: "🛑", title: "Caution" },
 };
 
-function CodeBlock({ lang, code }: { lang: string; code: string }) {
+function CodeBlock({ lang, code, className }: { lang: string; code: string; className?: string }) {
   const [copied, setCopied] = useState(false);
 
   return (
-    <div className="markdown-code-block">
+    <div className={className ? `markdown-code-block ${className}` : "markdown-code-block"}>
       <div className="markdown-code-header">
         <span className="code-lang-tag">{(lang || "code").toUpperCase()}</span>
         <button
@@ -51,46 +54,50 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
   );
 }
 
-function MermaidBlock({ code }: { code: string }) {
-  const [svg, setSvg] = useState<string | null>(null);
+type Rendered = { svg: string } | { node: ReactNode };
+
+// Shared frame for every diagram language: renders `code` asynchronously, falls back to the
+// raw source with the error when the diagram cannot be drawn, and lets the reader flip to source.
+function DiagramBlock({ badge, code, render }: { badge: string; code: string; render: (code: string, id: string) => Promise<Rendered> }) {
+  const [rendered, setRendered] = useState<Rendered | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showCode, setShowCode] = useState(false);
   const rawId = useId().replace(/[:]/g, "_");
-  const diagramId = `mermaid_${rawId}`;
+  const diagramId = `diagram_${rawId}`;
 
   useEffect(() => {
     let active = true;
     (async () => {
       try {
-        const { svg: renderedSvg } = await mermaid.render(diagramId, code);
+        const result = await render(code, diagramId);
         if (active) {
-          setSvg(renderedSvg);
+          setRendered(result);
           setError(null);
         }
       } catch (err: unknown) {
         if (active) {
-          const message = err instanceof Error ? err.message : "Failed to render diagram";
-          setError(message);
+          setRendered(null);
+          setError(err instanceof Error ? err.message : "Failed to render diagram");
         }
       }
     })();
     return () => {
       active = false;
     };
-  }, [code, diagramId]);
+  }, [code, diagramId, render]);
 
   if (error || showCode) {
     return (
       <div className="mermaid-wrap">
         <div className="mermaid-toolbar">
-          <span className="mermaid-badge">MERMAID</span>
-          {svg && (
+          <span className="mermaid-badge">{badge}</span>
+          {rendered && (
             <button type="button" className="code-copy-btn" onClick={() => setShowCode(!showCode)}>
               {showCode ? "View Diagram" : "View Source"}
             </button>
           )}
         </div>
-        <pre data-lang="mermaid">
+        <pre data-lang={badge.toLowerCase()}>
           <code>{code}</code>
         </pre>
         {error && <div className="mermaid-error">{error}</div>}
@@ -101,19 +108,39 @@ function MermaidBlock({ code }: { code: string }) {
   return (
     <div className="mermaid-wrap">
       <div className="mermaid-toolbar">
-        <span className="mermaid-badge">DIAGRAM</span>
-        <button type="button" className="code-copy-btn" onClick={() => setShowCode(true)} title="View raw Mermaid source">
+        <span className="mermaid-badge">{badge}</span>
+        <button type="button" className="code-copy-btn" onClick={() => setShowCode(true)} title={`View raw ${badge} source`}>
           Source
         </button>
       </div>
-      {svg ? (
-        <div className="mermaid-svg-container" dangerouslySetInnerHTML={{ __html: svg }} />
-      ) : (
+      {!rendered ? (
         <div className="mermaid-loading">Rendering diagram...</div>
+      ) : "svg" in rendered ? (
+        <div className="mermaid-svg-container" dangerouslySetInnerHTML={{ __html: rendered.svg }} />
+      ) : (
+        <div className="mermaid-svg-container">{rendered.node}</div>
       )}
     </div>
   );
 }
+
+const renderMermaid = async (code: string, id: string): Promise<Rendered> => ({ svg: (await mermaid.render(id, code)).svg });
+const renderPlantuml = async (code: string, id: string): Promise<Rendered> => renderMermaid(plantumlToMermaid(code), id);
+const renderDrawio = async (code: string): Promise<Rendered> => ({ node: <DrawioSvg scene={await drawioToScene(code)} /> });
+
+const BOX_DRAWING = /[\u2500-\u257f]/;
+const ASCII_LANGS = new Set(["ascii", "asciiart", "ascii-art", "diagram", "text", "txt", "plain", "plaintext", ""]);
+
+/** Which diagram renderer (if any) handles a fenced block. */
+function diagramKind(lang: string, code: string): "mermaid" | "plantuml" | "drawio" | "ascii" | null {
+  const l = lang.toLowerCase();
+  if (l === "mermaid") return "mermaid";
+  if (l === "plantuml" || l === "puml" || l === "uml" || (ASCII_LANGS.has(l) && /^\s*@startuml\b/i.test(code))) return "plantuml";
+  if (l === "drawio" || l === "draw.io" || l === "mxgraph" || l === "mxfile" || ((l === "xml" || ASCII_LANGS.has(l)) && looksLikeDrawio(code))) return "drawio";
+  if (l === "ascii" || l === "asciiart" || l === "ascii-art" || (ASCII_LANGS.has(l) && BOX_DRAWING.test(code))) return "ascii";
+  return null;
+}
+
 function renderInline(nodes: Inline[]): ReactNode[] {
   return nodes.map((n, i) => {
     switch (n.t) {
@@ -168,12 +195,20 @@ function renderBlocks(blocks: Block[]): ReactNode[] {
           );
         }
       }
-      case "code":
-        return b.lang.toLowerCase() === "mermaid" ? (
-          <MermaidBlock key={i} code={b.v} />
-        ) : (
-          <CodeBlock key={i} lang={b.lang} code={b.v} />
-        );
+      case "code": {
+        switch (diagramKind(b.lang, b.v)) {
+          case "mermaid":
+            return <DiagramBlock key={i} badge="MERMAID" code={b.v} render={renderMermaid} />;
+          case "plantuml":
+            return <DiagramBlock key={i} badge="PLANTUML" code={b.v} render={renderPlantuml} />;
+          case "drawio":
+            return <DiagramBlock key={i} badge="DRAW.IO" code={b.v} render={renderDrawio} />;
+          case "ascii":
+            return <CodeBlock key={i} lang="ascii" code={b.v} className="ascii-diagram" />;
+          default:
+            return <CodeBlock key={i} lang={b.lang} code={b.v} />;
+        }
+      }
       case "list": {
         const Tag = b.ordered ? "ol" : "ul";
         const isTask = b.items.some((it) => it.checked !== null);

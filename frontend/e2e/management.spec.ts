@@ -1,6 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
+const repositoryRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..", "..");
 const api = "http://127.0.0.1:17475/api/v1";
 const dir = (name: string) => join(process.env.HIVEMIND_MANAGED_DIR!, name);
 
@@ -275,4 +277,42 @@ test("the room panel keeps details and sessions and adds per-conversation settin
   await page.getByRole("button", { name: "Save settings" }).click();
   await expect(page.locator(".room-settings .error-note")).toContainText("absolute");
   await expect(page.getByLabel("Workspace path")).toHaveValue("relative/nope");
+});
+
+test("typing @ in a group chat autocompletes agent mentions", async ({ page }) => {
+  await openRoom(page, "main");
+  const textarea = page.getByPlaceholder("Message Main");
+  await textarea.fill("@");
+  const menu = page.locator(".mention-menu");
+  await expect(menu).toBeVisible();
+  const items = menu.locator(".mention-item");
+  await expect(items).toHaveCount(2);
+  await page.screenshot({ path: join(repositoryRoot, "docs", "pr33-verification", "05-mention-autocomplete.png") });
+
+  // Keyboard navigation
+  await textarea.press("ArrowDown");
+  await expect(items.nth(1)).toHaveClass(/active/);
+  // Filter by query
+  await textarea.fill("@Rev");
+  await expect(items).toHaveCount(1);
+  await expect(items.first().locator(".mention-item-name")).toHaveText("Reviewer");
+
+  // Press Enter to complete mention
+  await textarea.press("Enter");
+  await expect(textarea).toHaveValue("@Reviewer ");
+  await expect(menu).not.toBeVisible();
+
+  // Mouse click selection
+  await textarea.fill("Ask ");
+  await textarea.pressSequentially("@");
+  await expect(menu).toBeVisible();
+  await items.filter({ hasText: "Engineer" }).click();
+  await expect(textarea).toHaveValue("Ask @Engineer ");
+  await expect(menu).not.toBeVisible();
+
+  // Pressing Escape closes menu
+  await textarea.fill("@");
+  await expect(menu).toBeVisible();
+  await textarea.press("Escape");
+  await expect(menu).not.toBeVisible();
 });

@@ -393,6 +393,7 @@ impl OpencodeSession {
                         (ours, turn.as_deref_mut(), frame.pointer("/params/update"))
                     {
                         if let Some(sink) = &self.progress {
+                            sink.touch();
                             sink.acp(update);
                         }
                         turn.absorb(update);

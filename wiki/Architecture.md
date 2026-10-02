@@ -27,7 +27,7 @@ flowchart TD
 - Each agent instance is identified by its structured **(room, persona)** IDs. A session can last across turns for that instance but is never shared between rooms or personas.
 - The first prompt of a session carries the full **Context Pack**. Later turns send only a **room delta**, and memory-tool follow-ups send only the tool result.
 - At a turn boundary, a session rotates (`runtime.rotated`) if its context reached `context.runtime_rotate_tokens` or its next delta can't be built.
-- If a prompt times out (`runtime.prompt_timeout_secs`), Hivemind cancels it, drops the session, closes its runtime epoch, and **does not retry**. The next turn starts a fresh session rebuilt from room history. Any other runtime failure also drops the session without a retry and is reported as an error attributed to that agent.
+- If a prompt goes silent for `runtime.prompt_timeout_secs` (any streamed text, tool, or status event resets the window, so a long-running active agent is not cut off), Hivemind cancels it, drops the session, closes its runtime epoch, and **does not retry**. The next turn starts a fresh session rebuilt from room history. Any other runtime failure also drops the session without a retry and is reported as an error attributed to that agent.
 - A session closes after `runtime.idle_timeout_secs` without use and stops on core shutdown. No session is left running after exit.
 - **Pi** runs in RPC mode with `--no-session` and keeps its in-process context between prompts. Hivemind waits for `agent_settled` and returns the text blocks from the latest assistant `message_end`.
 - **OpenCode** runs `opencode acp` over stdio, one child per room + persona.

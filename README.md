@@ -170,7 +170,7 @@ Each persona picks its own runtime, so OMP, Pi, and OpenCode can run side by sid
 omp_binary = "omp"
 pi_binary = "pi"
 opencode_binary = "opencode"
-prompt_timeout_secs = 300   # max prompt duration; 0 disables
+prompt_timeout_secs = 300   # max seconds of runtime inactivity (no text, tool, or status event) before a prompt times out; 0 disables
 idle_timeout_secs = 120     # how long an unused session stays alive; 0 = never idle out
 prompt_retries = 1           # extra attempts on the same model after a failed prompt (not after a timeout)
 

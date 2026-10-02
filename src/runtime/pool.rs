@@ -18,7 +18,7 @@ use std::{
 use anyhow::{bail, Context, Result};
 use parking_lot::Mutex as ParkingMutex;
 use tokio::{
-    sync::{watch, Mutex as AsyncMutex},
+    sync::{watch, Mutex as AsyncMutex, Notify},
     task::{JoinHandle, JoinSet},
     time::timeout,
 };
@@ -88,11 +88,11 @@ pub struct InvokeReply {
 /// A prompt or context query that exceeded `runtime.prompt_timeout_secs`;
 /// retrying the same model would only burn another full timeout.
 #[derive(Debug)]
-struct RuntimeTimeout(&'static str);
+struct RuntimeTimeout(String);
 
 impl std::fmt::Display for RuntimeTimeout {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.0)
+        f.write_str(&self.0)
     }
 }
 
@@ -186,25 +186,39 @@ enum RuntimeCall<T> {
 async fn race_runtime<T>(
     shutdown: &mut watch::Receiver<bool>,
     limit: Option<Duration>,
+    activity: Option<Arc<Notify>>,
     future: impl Future<Output = Result<T>>,
 ) -> RuntimeCall<T> {
     if *shutdown.borrow() {
         return RuntimeCall::Shutdown;
     }
-    match limit {
-        Some(limit) => tokio::select! {
-            biased;
-            _ = shutdown.changed() => RuntimeCall::Shutdown,
-            result = timeout(limit, future) => match result {
-                Ok(result) => RuntimeCall::Completed(result),
-                Err(_) => RuntimeCall::TimedOut,
-            },
-        },
-        None => tokio::select! {
+    let Some(limit) = limit else {
+        return tokio::select! {
             biased;
             _ = shutdown.changed() => RuntimeCall::Shutdown,
             result = future => RuntimeCall::Completed(result),
-        },
+        };
+    };
+
+    tokio::pin!(future);
+    let sleep = tokio::time::sleep(limit);
+    tokio::pin!(sleep);
+
+    loop {
+        tokio::select! {
+            biased;
+            _ = shutdown.changed() => return RuntimeCall::Shutdown,
+            result = &mut future => return RuntimeCall::Completed(result),
+            () = async {
+                match &activity {
+                    Some(notify) => notify.notified().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                sleep.as_mut().reset(tokio::time::Instant::now() + limit);
+            }
+            () = &mut sleep => return RuntimeCall::TimedOut,
+        }
     }
 }
 async fn shutdown_session(session: &mut dyn HarnessSession, identity: &str) {
@@ -429,6 +443,7 @@ impl RuntimePool {
                 let reported = match race_runtime(
                     &mut shutdown,
                     prompt_timeout,
+                    None,
                     live.session.context_tokens(),
                 )
                 .await
@@ -445,7 +460,7 @@ impl RuntimePool {
                             .stop(request.agent_instance_id, live, Stop::PromptTimeout)
                             .await;
                         inner.remove_vacant_slot(request.agent_instance_id, &slot_handle, &slot);
-                        return Err(RuntimeTimeout("runtime context query timed out").into());
+                        return Err(RuntimeTimeout("runtime context query timed out".into()).into());
                     }
                     RuntimeCall::Shutdown => {
                         inner
@@ -473,7 +488,7 @@ impl RuntimePool {
 
         if slot.live.is_none() {
             let starting = inner.start(caller, &request);
-            match race_runtime(&mut shutdown, None, starting).await {
+            match race_runtime(&mut shutdown, None, None, starting).await {
                 RuntimeCall::Completed(Ok(live)) => slot.live = Some(live),
                 RuntimeCall::Completed(Err(error)) => {
                     inner.remove_vacant_slot(request.agent_instance_id, &slot_handle, &slot);
@@ -501,12 +516,20 @@ impl RuntimePool {
             agent_instance_id: request.agent_instance_id.clone(),
             runtime: live.runtime.clone(),
         };
+        let activity = Arc::new(Notify::new());
         live.session.set_progress(Some(super::ProgressSink {
             events: inner.events.clone(),
             instance: request.agent_instance_id.clone(),
             turn_id: request.view.turn_id.clone(),
+            activity: Some(activity.clone()),
         }));
-        let response = race_runtime(&mut shutdown, prompt_timeout, live.session.prompt(text)).await;
+        let response = race_runtime(
+            &mut shutdown,
+            prompt_timeout,
+            Some(activity),
+            live.session.prompt(text),
+        )
+        .await;
         let usage = live.session.take_usage();
         if let Some(store) = inner.execution.get() {
             store.record_usage(
@@ -562,7 +585,15 @@ impl RuntimePool {
                     .stop(request.agent_instance_id, live, Stop::PromptTimeout)
                     .await;
                 inner.remove_vacant_slot(request.agent_instance_id, &slot_handle, &slot);
-                Err(RuntimeTimeout("runtime prompt timed out").into())
+                let message = if inner.runtime.prompt_timeout_secs > 0 {
+                    format!(
+                        "runtime prompt timed out after {}s of inactivity",
+                        inner.runtime.prompt_timeout_secs
+                    )
+                } else {
+                    "runtime prompt timed out".to_string()
+                };
+                Err(RuntimeTimeout(message).into())
             }
             RuntimeCall::Shutdown => {
                 inner
@@ -888,8 +919,7 @@ mod tests {
     use async_trait::async_trait;
 
     use super::*;
-    use crate::memory::MemoryStore;
-
+    use crate::{memory::MemoryStore, runtime::ProgressSink};
     struct FakeSession(Arc<AtomicUsize>);
 
     #[async_trait]
@@ -948,6 +978,67 @@ mod tests {
             Ok(())
         }
     }
+    struct ActiveProgressSession {
+        progress: Option<ProgressSink>,
+        shutdowns: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl HarnessSession for ActiveProgressSession {
+        fn set_progress(&mut self, sink: Option<ProgressSink>) {
+            self.progress = sink;
+        }
+
+        async fn prompt(&mut self, _input: &str) -> anyhow::Result<String> {
+            for _ in 0..4 {
+                tokio::time::sleep(Duration::from_millis(350)).await;
+                if let Some(sink) = &self.progress {
+                    sink.touch();
+                }
+            }
+            Ok("active long reply".into())
+        }
+
+        async fn context_tokens(&mut self) -> anyhow::Result<Option<u64>> {
+            Ok(None)
+        }
+
+        async fn shutdown(&mut self) -> anyhow::Result<()> {
+            self.shutdowns.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    struct StallingProgressSession {
+        progress: Option<ProgressSink>,
+        shutdowns: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl HarnessSession for StallingProgressSession {
+        fn set_progress(&mut self, sink: Option<ProgressSink>) {
+            self.progress = sink;
+        }
+
+        async fn prompt(&mut self, _input: &str) -> anyhow::Result<String> {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            if let Some(sink) = &self.progress {
+                sink.touch();
+            }
+            tokio::time::sleep(Duration::from_millis(1500)).await;
+            Ok("too late".into())
+        }
+
+        async fn context_tokens(&mut self) -> anyhow::Result<Option<u64>> {
+            Ok(None)
+        }
+
+        async fn shutdown(&mut self) -> anyhow::Result<()> {
+            self.shutdowns.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
 
     #[tokio::test]
     async fn dropping_an_in_flight_invoke_closes_the_epoch_and_publishes_stop() {
@@ -1587,5 +1678,157 @@ mod tests {
             .await
             .expect("pool drop signals the reaper to stop")
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn active_prompt_progress_resets_timeout_window() {
+        let memory = Arc::new(MemoryService::new(MemoryStore::in_memory().unwrap()));
+        let instance = AgentInstanceId::new("active-room", "Persona");
+        let caller = Caller::agent("active-room", "", instance.clone(), "Persona", "Persona");
+        let epoch = memory
+            .start_runtime_epoch(&caller, "fake", serde_json::json!({}))
+            .unwrap();
+        let epoch_id = epoch.id.clone();
+        let runtime = RuntimeConfig {
+            idle_timeout_secs: 0,
+            prompt_timeout_secs: 1,
+            ..RuntimeConfig::default()
+        };
+        let pool = RuntimePool::new(runtime, 10_000, memory, EventBus::new());
+        let shutdowns = Arc::new(AtomicUsize::new(0));
+        pool.inner.slots.lock().insert(
+            instance.clone(),
+            Arc::new(AsyncMutex::new(Slot {
+                live: Some(Live {
+                    session: Box::new(ActiveProgressSession {
+                        progress: None,
+                        shutdowns: shutdowns.clone(),
+                    }),
+                    epoch,
+                    caller: caller.clone(),
+                    agent_id: "Persona".into(),
+                    runtime: "fake".into(),
+                    cursor: None,
+                    estimated_tokens: 0,
+                    workspace: ".".into(),
+                }),
+                last_used: Instant::now(),
+            })),
+        );
+        let agent = AgentConfig {
+            name: "Persona".into(),
+            runtime: "fake".into(),
+            system_prompt: String::new(),
+            workspace: ".".into(),
+            model: None,
+            reasoning: None,
+            fast: None,
+            fallback_models: Vec::new(),
+            role: None,
+            capabilities: Vec::new(),
+            permissions: Vec::new(),
+            roles: Vec::new(),
+            tool_access: None,
+        };
+        let view = TurnView {
+            turn_id: "turn".into(),
+            speakers: vec![],
+            state_json: "{}".into(),
+        };
+        let reply = pool
+            .invoke(
+                &caller,
+                InvokeRequest {
+                    agent_instance_id: &instance,
+                    agent: &agent,
+                    phase: PromptPhase::TurnStart,
+                    full: "full",
+                    delta: Some(PromptDelta {
+                        epoch_id: &epoch_id,
+                        text: "delta",
+                    }),
+                    view: &view,
+                },
+            )
+            .await
+            .expect("active prompt should not time out despite taking longer than prompt_timeout_secs");
+        assert_eq!(reply.text, "active long reply");
+        assert_eq!(shutdowns.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn inactive_prompt_times_out_after_inactivity_window() {
+        let memory = Arc::new(MemoryService::new(MemoryStore::in_memory().unwrap()));
+        let instance = AgentInstanceId::new("stall-room", "Persona");
+        let caller = Caller::agent("stall-room", "", instance.clone(), "Persona", "Persona");
+        let epoch = memory
+            .start_runtime_epoch(&caller, "fake", serde_json::json!({}))
+            .unwrap();
+        let epoch_id = epoch.id.clone();
+        let runtime = RuntimeConfig {
+            idle_timeout_secs: 0,
+            prompt_timeout_secs: 1,
+            ..RuntimeConfig::default()
+        };
+        let pool = RuntimePool::new(runtime, 10_000, memory, EventBus::new());
+        let shutdowns = Arc::new(AtomicUsize::new(0));
+        pool.inner.slots.lock().insert(
+            instance.clone(),
+            Arc::new(AsyncMutex::new(Slot {
+                live: Some(Live {
+                    session: Box::new(StallingProgressSession {
+                        progress: None,
+                        shutdowns: shutdowns.clone(),
+                    }),
+                    epoch,
+                    caller: caller.clone(),
+                    agent_id: "Persona".into(),
+                    runtime: "fake".into(),
+                    cursor: None,
+                    estimated_tokens: 0,
+                    workspace: ".".into(),
+                }),
+                last_used: Instant::now(),
+            })),
+        );
+        let agent = AgentConfig {
+            name: "Persona".into(),
+            runtime: "fake".into(),
+            system_prompt: String::new(),
+            workspace: ".".into(),
+            model: None,
+            reasoning: None,
+            fast: None,
+            fallback_models: Vec::new(),
+            role: None,
+            capabilities: Vec::new(),
+            permissions: Vec::new(),
+            roles: Vec::new(),
+            tool_access: None,
+        };
+        let view = TurnView {
+            turn_id: "turn".into(),
+            speakers: vec![],
+            state_json: "{}".into(),
+        };
+        let err = pool
+            .invoke(
+                &caller,
+                InvokeRequest {
+                    agent_instance_id: &instance,
+                    agent: &agent,
+                    phase: PromptPhase::TurnStart,
+                    full: "full",
+                    delta: Some(PromptDelta {
+                        epoch_id: &epoch_id,
+                        text: "delta",
+                    }),
+                    view: &view,
+                },
+            )
+            .await
+            .expect_err("stalling prompt must time out");
+        assert!(err.to_string().contains("timed out after 1s of inactivity"));
+        assert_eq!(shutdowns.load(Ordering::SeqCst), 1);
     }
 }
