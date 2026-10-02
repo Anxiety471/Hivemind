@@ -136,9 +136,23 @@ impl RpcTransport for ChildTransport {
     }
 }
 
-/// Whether a message carries a Hivemind tool call, as a fence or as the tags some models emit.
+/// Whether a message carries a Hivemind tool call, as a fence, tags, or header line.
 fn has_tool_call(text: &str) -> bool {
-    text.contains("```hivemind-tool") || text.contains("<hivemind-tool>")
+    text.contains("hivemind-tool")
+        || text.contains("hivemind_tool")
+        || text.contains("<hivemind-tool>")
+        || text.contains("<hivemind_tool>")
+        || text.contains("[hivemind-tool]")
+        || text.contains("[hivemind_tool]")
+        || (text.contains("\"name\"")
+            && (text.contains("\"memory.")
+                || text.contains("\"workspace.")
+                || text.contains("\"tasks.")
+                || text.contains("\"messages.")
+                || text.contains("\"agents.")
+                || text.contains("\"groups.")
+                || text.contains("\"artifacts.")
+                || text.contains("\"context.")))
 }
 
 /// Settings overlay (`--config`, above global and project config) that, with
@@ -864,6 +878,45 @@ mod tests {
         );
         // The next prompt starts clean: an earlier tool call never leaks into a plain answer.
         assert_eq!(session.prompt("again").await.unwrap(), "plain answer");
+    }
+    #[tokio::test]
+    async fn unfenced_tool_call_survives_omp_continuing_after_it() {
+        let agent = agent(None);
+        let (script, transport) = fake_transport();
+        push_ready(&script);
+        push_frame(
+            &script,
+            json!({ "type": "response", "id": "hivemind_prompt", "success": true, "data": { "agentInvoked": true } }),
+        );
+        push_frame(
+            &script,
+            json!({ "type": "message_end", "message": { "role": "assistant", "content": [
+            { "type": "text", "text": "hivemind-tool\n{\"name\":\"memory.search\",\"args\":{\"query\":\"test\"}}" }
+        ] } }),
+        );
+        push_frame(
+            &script,
+            json!({ "type": "message_end", "message": { "role": "assistant", "content": [
+            { "type": "text", "text": "Searching memory now." }
+        ] } }),
+        );
+        push_frame(
+            &script,
+            json!({ "type": "prompt_result", "id": "hivemind_prompt", "status": "completed", "sessionSettled": true }),
+        );
+        push_frame(
+            &script,
+            json!({ "type": "response", "id": "hivemind_last_text", "success": true, "data": { "text": "Searching memory now." } }),
+        );
+
+        let mut session = OmpSession::start_with_transport(&agent, transport)
+            .await
+            .unwrap();
+        let reply = session.prompt("search").await.unwrap();
+        assert!(
+            reply.contains("memory.search") && reply.starts_with("hivemind-tool"),
+            "{reply}"
+        );
     }
 
     #[tokio::test]

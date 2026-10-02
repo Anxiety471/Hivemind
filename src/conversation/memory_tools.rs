@@ -45,85 +45,12 @@ pub(super) struct MemoryToolCall {
     pub(super) args: serde_json::Value,
 }
 
-/// Extract exactly one `hivemind-tool` call from an assistant reply: a
-/// ```` ```hivemind-tool ```` fence, or the `<hivemind-tool>…</hivemind-tool>`
-/// tags some models emit instead. `Ok(None)` means a normal text answer;
-/// malformed or ambiguous output is an error the loop feeds back to the agent
-/// instead of guessing an action.
+/// Extract and lint exactly one `hivemind-tool` call from an assistant reply: a
+/// ```` ```hivemind-tool ```` fence or `<hivemind-tool>…</hivemind-tool>` tags.
+/// `Ok(None)` means a normal text answer; malformed or ambiguous output is an
+/// error the loop feeds back to the agent instead of guessing an action.
 pub(super) fn parse_tool_block(text: &str) -> Result<Option<MemoryToolCall>> {
-    const OPEN_TAG: &str = "<hivemind-tool>";
-    const CLOSE_TAG: &str = "</hivemind-tool>";
-    #[derive(PartialEq)]
-    enum Open {
-        No,
-        Fence,
-        Tag,
-    }
-    let mut blocks = Vec::new();
-    let mut open = Open::No;
-    let mut buffer = String::new();
-    for line in text.lines() {
-        let trimmed = line.trim();
-        match open {
-            Open::No if trimmed == "```hivemind-tool" => {
-                open = Open::Fence;
-                buffer.clear();
-            }
-            Open::No => {
-                if let Some(rest) = trimmed.strip_prefix(OPEN_TAG) {
-                    if let Some(body) = rest.strip_suffix(CLOSE_TAG) {
-                        blocks.push(body.to_owned());
-                    } else {
-                        open = Open::Tag;
-                        buffer.clear();
-                        buffer.push_str(rest);
-                        buffer.push('\n');
-                    }
-                }
-            }
-            Open::Fence if trimmed == "```" => {
-                open = Open::No;
-                blocks.push(std::mem::take(&mut buffer));
-            }
-            Open::Tag if trimmed.ends_with(CLOSE_TAG) => {
-                open = Open::No;
-                buffer.push_str(&trimmed[..trimmed.len() - CLOSE_TAG.len()]);
-                blocks.push(std::mem::take(&mut buffer));
-            }
-            Open::Fence | Open::Tag => {
-                buffer.push_str(line);
-                buffer.push('\n');
-            }
-        }
-    }
-    if open != Open::No {
-        bail!("unterminated hivemind-tool block");
-    }
-    match blocks.len() {
-        0 => Ok(None),
-        1 => {
-            let value: serde_json::Value = serde_json::from_str(&blocks[0])
-                .context("hivemind-tool block is not valid JSON")?;
-            let object = value
-                .as_object()
-                .context("hivemind-tool block must be a JSON object")?;
-            let name = object
-                .get("name")
-                .and_then(serde_json::Value::as_str)
-                .filter(|name| !name.is_empty())
-                .context("hivemind-tool block requires a non-empty string name")?;
-            let args = match object.get("args") {
-                None | Some(serde_json::Value::Null) => serde_json::json!({}),
-                Some(args) if args.is_object() => args.clone(),
-                Some(_) => bail!("hivemind-tool args must be a JSON object"),
-            };
-            Ok(Some(MemoryToolCall {
-                name: name.to_owned(),
-                args,
-            }))
-        }
-        count => bail!("expected exactly one hivemind-tool block, found {count}"),
-    }
+    super::linter::lint_tool_reply(text)
 }
 
 pub(super) fn required_string(args: &serde_json::Value, key: &str) -> Result<String> {
