@@ -1598,3 +1598,95 @@ async fn tasks_ask_times_out_and_the_attempt_carries_on() {
         .provide_input(&back.task_id, "too late", "user")
         .is_err());
 }
+
+#[test]
+fn routines_skip_missed_intervals_coalesce_active_work_and_fence_edits() {
+    let service = service();
+    service.store().pin_clock(100);
+    let routine = service
+        .create_routine(super::routines::RoutineInput {
+            name: "Check CI".into(),
+            objective: "Investigate failed CI".into(),
+            interval_secs: 60,
+            acceptance: vec!["Report cause".into()],
+            capabilities: vec![],
+            workspace: None,
+        })
+        .unwrap();
+    let id = routine["id"].as_str().unwrap();
+    assert_eq!(routine["next_at"], 160);
+    service.store().pin_clock(10_000);
+    service.tick_routines().unwrap();
+    service.tick_routines().unwrap();
+    let shown = service.routine(id).unwrap();
+    assert_eq!(shown["runs"].as_array().unwrap().len(), 1);
+    assert_eq!(shown["next_at"], 10_060);
+    let first_task = shown["runs"][0]["task_id"].clone();
+    let run = service.run_routine(id, Some("delivery-1")).unwrap();
+    assert_eq!(run["status"], "coalesced");
+    assert_eq!(run["task_id"], first_task);
+    assert_eq!(
+        service.run_routine(id, Some("delivery-1")).unwrap()["id"],
+        run["id"]
+    );
+    assert_eq!(
+        service
+            .list_tasks(&TaskFilter {
+                limit: 200,
+                ..Default::default()
+            })
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(matches!(
+        service.set_routine_enabled(id, false, 99),
+        Err(CoordError::Conflict(_))
+    ));
+    service.set_routine_enabled(id, false, 1).unwrap();
+    assert!(matches!(
+        service.run_routine(id, None),
+        Err(CoordError::Conflict(_))
+    ));
+}
+
+#[test]
+fn pending_routine_submission_reuses_the_reserved_run_task() {
+    let service = service();
+    let routine = service
+        .create_routine(super::routines::RoutineInput {
+            name: "Review".into(),
+            objective: "Review project".into(),
+            interval_secs: 60,
+            acceptance: vec![],
+            capabilities: vec![],
+            workspace: None,
+        })
+        .unwrap();
+    let run = service
+        .run_routine(routine["id"].as_str().unwrap(), Some("once"))
+        .unwrap();
+    service
+        .store()
+        .write(|db| {
+            db.c.execute(
+                "UPDATE routine_runs SET status='pending',task_id=NULL WHERE id=?",
+                [run["id"].as_str().unwrap()],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    service.tick_routines().unwrap();
+    let restored = service.routine(routine["id"].as_str().unwrap()).unwrap();
+    assert_eq!(restored["runs"][0]["task_id"], run["task_id"]);
+    assert_eq!(
+        service
+            .list_tasks(&TaskFilter {
+                limit: 200,
+                ..Default::default()
+            })
+            .unwrap()
+            .len(),
+        1
+    );
+}

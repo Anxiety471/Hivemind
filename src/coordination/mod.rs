@@ -6,6 +6,7 @@ mod deferred;
 pub mod live;
 pub mod model;
 pub mod policy;
+pub mod routines;
 pub mod runner;
 pub mod service;
 pub mod store;

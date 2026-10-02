@@ -4,6 +4,7 @@ import { api, hasSavedSettings } from "./api";
 import { connect, useLiveStatus } from "./live";
 import { Chat } from "./views/Chat";
 import { FirstRunSetup } from "./views/FirstRunSetup";
+const Routines = lazy(() => import("./views/Routines").then((m) => ({ default: m.Routines })));
 const Inbox = lazy(() => import("./views/Inbox").then((m) => ({ default: m.Inbox })));
 const Tasks = lazy(() => import("./views/Tasks").then((m) => ({ default: m.Tasks })));
 const Agents = lazy(() => import("./views/Agents").then((m) => ({ default: m.Agents })));
@@ -22,6 +23,7 @@ function parse(): Route {
 }
 
 const NAV = [
+  { page: "routines", label: "Routines", icon: "🕒" },
   { page: "inbox", label: "Operator inbox", icon: "📥" },
   { page: "rooms", label: "Rooms", icon: "💬" },
   { page: "tasks", label: "Tasks", icon: "🗂️" },
@@ -76,6 +78,7 @@ function App() {
 
   let view;
   switch (route.page) {
+    case "routines": view = <Routines />; break;
     case "inbox":
       view = <Inbox />;
       break;

@@ -150,6 +150,7 @@ impl Scheduler {
 
     /// One scheduling pass. Returns how many attempts it started.
     pub async fn step(&mut self) -> Result<usize> {
+        self.service.tick_routines()?;
         self.service.flush();
         while let Some(joined) = self.jobs.try_join_next_with_id() {
             match joined {

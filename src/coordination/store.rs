@@ -132,6 +132,13 @@ impl CoordinationStore {
           persona TEXT NOT NULL, question TEXT NOT NULL, asked_at INTEGER NOT NULL, status TEXT NOT NULL,
           answer TEXT, answered_by TEXT);
           CREATE UNIQUE INDEX IF NOT EXISTS one_deferred_question ON deferred_questions(task_id) WHERE status='open';")?;
+        connection.execute_batch("CREATE TABLE IF NOT EXISTS routines (
+          id TEXT PRIMARY KEY, spec TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1,
+          next_at INTEGER NOT NULL, revision INTEGER NOT NULL DEFAULT 1);
+          CREATE TABLE IF NOT EXISTS routine_runs (
+          id TEXT PRIMARY KEY, routine_id TEXT NOT NULL REFERENCES routines(id), trigger_key TEXT NOT NULL,
+          status TEXT NOT NULL, task_id TEXT, spec TEXT NOT NULL, created_at INTEGER NOT NULL, error TEXT,
+          UNIQUE(routine_id,trigger_key));")?;
         Ok(Self {
             connection: Mutex::new(connection),
             clock: AtomicI64::new(0),
