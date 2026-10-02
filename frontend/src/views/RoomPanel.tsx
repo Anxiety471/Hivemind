@@ -4,6 +4,7 @@ import { api, type Room, type RoomSettings, type RoomSettingsPatch } from "../ap
 import { useRefreshOn } from "../live";
 import { href } from "../nav";
 import { Badge, ErrorNote, ago, useAction, useAsync } from "../ui";
+import { FolderPicker } from "./agentControls";
 
 export type PanelTab = "details" | "settings" | "sessions";
 
@@ -148,6 +149,7 @@ function Settings({ roomId, onChanged }: { roomId: string; onChanged: () => void
   const [draft, setDraft] = useState<Draft | null>(null);
   const [saved, setSaved] = useState(false);
   const [stale, setStale] = useState(false);
+  const [browsing, setBrowsing] = useState(false);
   const action = useAction();
   const server = loaded.data;
 
@@ -289,13 +291,28 @@ function Settings({ roomId, onChanged }: { roomId: string; onChanged: () => void
                   </option>
                 ))}
               </select>
-              <input
-                className="mono"
-                aria-label="Workspace path"
-                value={draft.workspace}
-                placeholder="/absolute/path"
-                onChange={(e) => set({ workspace: (e.target as HTMLInputElement).value })}
-              />
+              <div className="path-input">
+                <input
+                  className="mono"
+                  aria-label="Workspace path"
+                  value={draft.workspace}
+                  placeholder="/absolute/path"
+                  onChange={(e) => set({ workspace: (e.target as HTMLInputElement).value })}
+                />
+                <button type="button" onClick={() => setBrowsing((b) => !b)} aria-expanded={browsing}>
+                  {browsing ? "Close browser" : "Browse…"}
+                </button>
+              </div>
+              {browsing && (
+                <FolderPicker
+                  start={draft.workspace}
+                  onPick={(path) => {
+                    set({ workspace: path });
+                    setBrowsing(false);
+                  }}
+                  onClose={() => setBrowsing(false)}
+                />
+              )}
               <span className="hint">
                 {server.kind === "group"
                   ? "Replaces each member's own workspace inside this group only."
