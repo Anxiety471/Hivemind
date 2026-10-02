@@ -3,6 +3,7 @@
 //! authorization, scheduling, and context assembly never require a model.
 pub mod capsule;
 mod deferred;
+pub mod goals;
 pub mod live;
 pub mod model;
 pub mod policy;

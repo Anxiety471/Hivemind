@@ -59,6 +59,8 @@ export function Tasks({ selected }: { selected?: string }) {
 }
 
 function NewTask({ onDone }: { onDone: (id?: string) => void }) {
+  const goals = useAsync(api.goals, []);
+  const [goalId, setGoalId] = useState("");
   const [objective, setObjective] = useState("");
   const [acceptance, setAcceptance] = useState("");
   const [capabilities, setCapabilities] = useState("");
@@ -71,6 +73,8 @@ function NewTask({ onDone }: { onDone: (id?: string) => void }) {
   return (
     <div className="card form">
       <PageHeader title="New task" sub="The coordinator plans it into subtasks, then owners work and reviewers approve." />
+      <ErrorNote error={goals.error} />
+      <label>Project goal<select value={goalId} onChange={e=>setGoalId(e.target.value)}><option value="">No linked goal</option>{goals.data?.goals.filter(g=>g.status === "active").map(g=><option key={g.id} value={g.id}>{g.title}</option>)}</select></label>
       <label>
         Objective
         <textarea rows={3} value={objective} onChange={(e) => setObjective((e.target as HTMLTextAreaElement).value)} />
@@ -90,7 +94,7 @@ function NewTask({ onDone }: { onDone: (id?: string) => void }) {
           disabled={!objective.trim() || action.busy}
           onClick={() =>
             action.run(async () => {
-              const res = await api.submitTask(objective.trim(), lines(acceptance), lines(capabilities));
+              const res = await api.submitTask(objective.trim(), lines(acceptance), lines(capabilities), goals.data?.goals.find(g=>g.id===goalId));
               onDone(res.id);
             })
           }
@@ -166,6 +170,7 @@ function TaskDetailView({ id }: { id: string }) {
       </div>
       {t.status_reason && <div className="callout">{t.status_reason}</div>}
 
+      {d.goal && <section className="card"><h3>Project goal: {d.goal.title}</h3><p>{d.goal.description}</p><p className="muted small">{d.goal.status} · revision {d.goal.revision}</p><h4>Constraints</h4><ul>{d.goal.constraints.map(c=><li key={c}>{c}</li>)}</ul><h4>Success criteria</h4><ul>{d.goal.success_criteria.map(c=><li key={c}>{c}</li>)}</ul></section>}
       <TaskInput task={t} questions={d.questions} onDone={detail.reload} />
 
       <div className="grid-2">

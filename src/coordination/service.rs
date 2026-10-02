@@ -80,6 +80,7 @@ pub struct SubmitTask {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct TaskDetail {
+    pub goal: Option<super::goals::Goal>,
     pub task: Task,
     pub children: Vec<TaskSummary>,
     pub progress: HashMap<String, u32>,
@@ -312,6 +313,14 @@ impl CoordinationService {
     // ------------------------------------------------------------------
 
     pub fn submit(&self, req: SubmitTask) -> CoordResult<TaskDetail> {
+        self.submit_for_goal(req, None)
+    }
+
+    pub fn submit_for_goal(
+        &self,
+        req: SubmitTask,
+        goal_id: Option<&str>,
+    ) -> CoordResult<TaskDetail> {
         self.require_enabled()?;
         let objective = check_text("objective", &req.objective, 8000)?;
         if req.acceptance.len() > 12 {
@@ -339,6 +348,7 @@ impl CoordinationService {
         let id = self.store.write(|db| {
             if let Some(key) = &key {
                 if let Some(existing) = db.task_by_key(key)? {
+                    if db.task_goal(&existing.root_id)?.as_ref().map(|g| g.id.as_str()) != goal_id { return conflict("idempotency key belongs to a different goal"); }
                     return Ok(existing.id);
                 }
             }
@@ -366,6 +376,7 @@ impl CoordinationService {
                 reason: None,
                 idempotency_key: key.clone(),
             })?;
+            if let Some(goal_id) = goal_id { db.link_goal(&id, goal_id, &workspace)?; }
             db.init_usage(&id, self.config.max_dispatches, self.config.max_tool_actions, self.config.max_messages, self.config.max_elapsed_secs)?;
             db.event(&id, Some(&id), "user", "task.created", serde_json::json!({"objective": clip(&objective, 200), "coordinator": coordinator}))?;
             let root = db.task_or_err(&id)?;
@@ -2128,6 +2139,7 @@ impl CoordinationService {
                 })
                 .collect();
             Ok(TaskDetail {
+                goal: db.task_goal(&task.root_id)?,
                 artifacts: db.artifacts(id)?,
                 evidence: db.latest_evidence(id)?,
                 groups: if task.id == task.root_id {

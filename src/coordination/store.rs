@@ -139,6 +139,11 @@ impl CoordinationStore {
           id TEXT PRIMARY KEY, routine_id TEXT NOT NULL REFERENCES routines(id), trigger_key TEXT NOT NULL,
           status TEXT NOT NULL, task_id TEXT, spec TEXT NOT NULL, created_at INTEGER NOT NULL, error TEXT,
           UNIQUE(routine_id,trigger_key));")?;
+        connection.execute_batch("CREATE TABLE IF NOT EXISTS project_goals (
+          id TEXT PRIMARY KEY, definition TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active',
+          revision INTEGER NOT NULL DEFAULT 1);
+          CREATE TABLE IF NOT EXISTS task_goals (
+          root_id TEXT PRIMARY KEY REFERENCES tasks(id), goal_id TEXT NOT NULL REFERENCES project_goals(id));")?;
         Ok(Self {
             connection: Mutex::new(connection),
             clock: AtomicI64::new(0),

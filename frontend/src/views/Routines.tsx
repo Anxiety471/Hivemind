@@ -4,6 +4,8 @@ import { href } from "../nav";
 import { Badge, ErrorNote, PageHeader, time, useAction, useAsync } from "../ui";
 export function Routines() {
   const data = useAsync(api.routines, []);
+  const goals = useAsync(api.goals, []);
+  const [goalId, setGoalId] = useState("");
   const action = useAction();
   const [name, setName] = useState("");
   const [objective, setObjective] = useState("");
@@ -37,6 +39,7 @@ export function Routines() {
                 .filter(Boolean),
               capabilities: [],
               ...(workspace.trim() ? { workspace: workspace.trim() } : {}),
+              ...(goalId ? { goal_id: goalId } : {}),
             });
             setName("");
             setObjective("");
@@ -45,6 +48,20 @@ export function Routines() {
         }}
       >
         <h3>New routine</h3>
+        <ErrorNote error={goals.error} />
+        <label>
+          Project goal
+          <select value={goalId} onChange={(e) => setGoalId(e.target.value)}>
+            <option value="">No linked goal</option>
+            {goals.data?.goals
+              .filter((g) => g.status === "active")
+              .map((g) => (
+                <option key={g.id} value={g.id}>
+                  {g.title}
+                </option>
+              ))}
+          </select>
+        </label>
         <label>
           Name
           <input value={name} onChange={(e) => setName(e.target.value)} required maxLength={200} />
