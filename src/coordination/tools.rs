@@ -58,7 +58,8 @@ const COMMON: &[&str] = &[
 /// Tool names this attempt may call, derived from its kind and the persona's permissions.
 fn allowed(service: &CoordinationService, ctx: &ToolCtx) -> Vec<&'static str> {
     let mut names: Vec<&'static str> = COMMON.to_vec();
-    let persona = service.roster().get(&ctx.persona);
+    let roster = service.roster();
+    let persona = roster.get(&ctx.persona);
     let can = |permission: &str| persona.is_some_and(|p| p.has_permission(permission));
     let coordinator = service
         .store()

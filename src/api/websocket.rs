@@ -205,6 +205,7 @@ fn map_event(event: &DomainEvent) -> Option<Outbound> {
             crate::coordination::wire_type(event_type),
             json!({"durable_seq": seq, "root_id": root_id, "task_id": task_id, "actor": actor, "data": payload}),
         ),
+        DomainEventKind::ConfigChanged { scope } => ("config.changed", json!({"scope": scope})),
         DomainEventKind::CoreStarted | DomainEventKind::CoreShuttingDown => return None,
     };
     let occurred_at_ms = event

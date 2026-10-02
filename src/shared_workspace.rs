@@ -38,7 +38,10 @@ struct State {
 /// path an agent records survives restarts.
 pub struct SharedWorkspaces {
     config_path: PathBuf,
+    pub(crate) edit_lock: Arc<std::sync::Mutex<()>>,
     roots: Vec<String>,
+    /// User-added workspaces, in the order they were added.
+    known: RwLock<Vec<String>>,
     state: RwLock<State>,
 }
 
@@ -46,7 +49,9 @@ impl SharedWorkspaces {
     pub fn new(config_path: &Path, config: &HivemindConfig) -> Self {
         let store = Self {
             config_path: config_path.to_owned(),
+            edit_lock: Arc::new(std::sync::Mutex::new(())),
             roots: config.workspaces.roots.clone(),
+            known: RwLock::new(config.workspaces.known.clone()),
             state: RwLock::new(State::default()),
         };
         store.replace_groups(&config.groups);
@@ -86,6 +91,60 @@ impl SharedWorkspaces {
     /// Directories agents and the API may choose from; empty means any existing directory.
     pub fn roots(&self) -> &[String] {
         &self.roots
+    }
+
+    /// Workspaces the user added, in the order added.
+    pub fn known(&self) -> Vec<String> {
+        self.known.read().expect("workspace lock poisoned").clone()
+    }
+
+    /// Validate and remember another workspace without touching any existing one.
+    /// Returns the stored path; adding one that is already known is a conflict.
+    pub fn add_known(&self, path: &str) -> Result<String> {
+        let _guard = self.edit_lock.lock().expect("config edit lock poisoned");
+        let workspace = self.validate(path)?;
+        let mut known = self.known.write().expect("workspace lock poisoned");
+        if known.contains(&workspace) {
+            bail!("workspace '{workspace}' already exists");
+        }
+        let mut next = known.clone();
+        next.push(workspace.clone());
+        persist_known(&self.config_path, &next)?;
+        *known = next;
+        Ok(workspace)
+    }
+
+    /// Forget a workspace added earlier. One a persona or group still uses is refused
+    /// so removing it from the list can never pull the directory out from under them.
+    pub fn remove_known(&self, path: &str) -> Result<()> {
+        let _guard = self.edit_lock.lock().expect("config edit lock poisoned");
+        let mut known = self.known.write().expect("workspace lock poisoned");
+        if !known.iter().any(|k| k == path) {
+            bail!("unknown workspace '{path}'");
+        }
+        let state = self.state.read().expect("workspace lock poisoned");
+        let mut users: Vec<String> = state
+            .personas
+            .iter()
+            .filter(|(_, w)| *w == path)
+            .map(|(id, _)| id.clone())
+            .chain(
+                state
+                    .groups
+                    .iter()
+                    .filter(|(_, w)| w.as_deref() == Some(path))
+                    .map(|(id, _)| format!("group {id}")),
+            )
+            .collect();
+        drop(state);
+        if !users.is_empty() {
+            users.sort();
+            bail!("workspace '{path}' is still in use by {}", users.join(", "));
+        }
+        let next: Vec<String> = known.iter().filter(|k| *k != path).cloned().collect();
+        persist_known(&self.config_path, &next)?;
+        *known = next;
+        Ok(())
     }
 
     /// Every group (id, shared workspace) and persona (id, own workspace), sorted by id.
@@ -146,6 +205,7 @@ impl SharedWorkspaces {
 
     /// Validate, persist to the config file, then expose the new workspace.
     pub fn set_group(&self, group: &str, path: &str) -> Result<String> {
+        let _guard = self.edit_lock.lock().expect("config edit lock poisoned");
         let workspace = self.validate(path)?;
         let mut state = self.state.write().expect("workspace lock poisoned");
         if !state.groups.contains_key(group) {
@@ -160,6 +220,7 @@ impl SharedWorkspaces {
 
     /// Remove a group's shared workspace so members go back to their own.
     pub fn clear_group(&self, group: &str) -> Result<()> {
+        let _guard = self.edit_lock.lock().expect("config edit lock poisoned");
         let mut state = self.state.write().expect("workspace lock poisoned");
         if !state.groups.contains_key(group) {
             bail!("unknown group '{group}'");
@@ -170,6 +231,7 @@ impl SharedWorkspaces {
     }
 
     pub fn set_persona(&self, persona: &str, path: &str) -> Result<String> {
+        let _guard = self.edit_lock.lock().expect("config edit lock poisoned");
         let workspace = self.validate(path)?;
         let mut state = self.state.write().expect("workspace lock poisoned");
         if !state.personas.contains_key(persona) {
@@ -187,10 +249,11 @@ impl SharedWorkspaces {
 
     /// Directories agents may choose: each configured root and its visible subdirectories.
     pub fn list(&self) -> Result<String> {
-        if self.roots.is_empty() {
+        let known = self.known();
+        if self.roots.is_empty() && known.is_empty() {
             return Ok("No workspace roots are configured, so there is no list to choose from. Any existing absolute directory the user names is accepted.".into());
         }
-        let mut found = Vec::new();
+        let mut found = known;
         for root in &self.roots {
             found.push(root.clone());
             let Ok(entries) = fs::read_dir(root) else {
@@ -220,10 +283,18 @@ impl SharedWorkspaces {
         Ok(out)
     }
 
+    /// Validate `path` as a workspace without recording it anywhere.
+    pub fn check(&self, path: &str) -> Result<String> {
+        self.validate(path)
+    }
+
     fn validate(&self, path: &str) -> Result<String> {
         let trimmed = path.trim();
         if trimmed.is_empty() || trimmed.len() > MAX_PATH_BYTES {
             bail!("path must be 1-{MAX_PATH_BYTES} bytes");
+        }
+        if trimmed.contains("..") {
+            bail!("path must not contain '..'");
         }
         if !Path::new(trimmed).is_absolute() {
             bail!("path must be absolute, got '{trimmed}'");
@@ -247,53 +318,96 @@ impl SharedWorkspaces {
 /// Set (or with `None`, remove) `workspace` on the table whose `id`/`name` is `id`
 /// under the first present section, touching nothing else in the file.
 fn persist(config: &Path, sections: &[&str], id: &str, workspace: Option<&str>) -> Result<()> {
-    let raw = fs::read_to_string(config)
+    edit_config(config, |document| {
+        let matches = |t: &toml_edit::Table| {
+            ["id", "name"]
+                .iter()
+                .any(|key| t.get(key).and_then(toml_edit::Item::as_str) == Some(id))
+        };
+        let section = sections
+            .iter()
+            .find(|section| {
+                document
+                    .get(section)
+                    .and_then(toml_edit::Item::as_array_of_tables)
+                    .is_some_and(|tables| tables.iter().any(matches))
+            })
+            .with_context(|| format!("'{id}' is not in {}", config.display()))?;
+        let table = document[section]
+            .as_array_of_tables_mut()
+            .and_then(|tables| tables.iter_mut().find(|t| matches(t)))
+            .context("table vanished")?;
+        match workspace {
+            Some(workspace) => table["workspace"] = toml_edit::value(workspace),
+            None => {
+                table.remove("workspace");
+            }
+        }
+        Ok(())
+    })
+}
+
+/// Replace `[workspaces] known` with `known`, touching nothing else in the file.
+fn persist_known(config: &Path, known: &[String]) -> Result<()> {
+    edit_config(config, |document| {
+        let table = document
+            .entry("workspaces")
+            .or_insert_with(toml_edit::table)
+            .as_table_mut()
+            .context("[workspaces] is not a table")?;
+        if known.is_empty() {
+            table.remove("known");
+        } else {
+            table["known"] = toml_edit::value(known.iter().collect::<toml_edit::Array>());
+        }
+        Ok(())
+    })
+}
+
+static CONFIG_EDIT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static NEXT_TEMP: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Read-modify-write the config file under one process-wide lock so edits from
+/// different parts of the server (workspaces, agents) cannot overwrite each other.
+/// The file is replaced atomically; `edit` failing leaves it untouched.
+pub(crate) fn edit_config(
+    config: &Path,
+    edit: impl FnOnce(&mut toml_edit::DocumentMut) -> Result<()>,
+) -> Result<()> {
+    let config_str = config.to_str().context("invalid config path")?;
+    if config_str.contains("..") {
+        bail!("invalid config path");
+    }
+    let _guard = CONFIG_EDIT.lock().unwrap_or_else(|e| e.into_inner());
+    let raw = fs::read_to_string(config_str)
         .with_context(|| format!("reading config {}", config.display()))?;
     let mut document = raw
         .parse::<toml_edit::DocumentMut>()
         .with_context(|| format!("parsing config {}", config.display()))?;
-    let matches = |t: &toml_edit::Table| {
-        ["id", "name"]
-            .iter()
-            .any(|key| t.get(key).and_then(toml_edit::Item::as_str) == Some(id))
-    };
-    let section = sections
-        .iter()
-        .find(|section| {
-            document
-                .get(section)
-                .and_then(toml_edit::Item::as_array_of_tables)
-                .is_some_and(|tables| tables.iter().any(matches))
-        })
-        .with_context(|| format!("'{id}' is not in {}", config.display()))?;
-    let table = document[section]
-        .as_array_of_tables_mut()
-        .and_then(|tables| tables.iter_mut().find(|t| matches(t)))
-        .context("table vanished")?;
-    match workspace {
-        Some(workspace) => table["workspace"] = toml_edit::value(workspace),
-        None => {
-            table.remove("workspace");
-        }
-    }
+    edit(&mut document)?;
     let parent = config
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
     let temp = parent.join(format!(
-        ".{}.workspace.{}.tmp",
+        ".{}.edit.{}.{}.tmp",
         config
             .file_name()
             .context("config path has no filename")?
             .to_string_lossy(),
-        std::process::id()
+        std::process::id(),
+        NEXT_TEMP.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
-    let permissions = fs::metadata(config)?.permissions();
-    let write = fs::write(&temp, document.to_string())
-        .and_then(|()| fs::set_permissions(&temp, permissions))
-        .and_then(|()| fs::rename(&temp, config));
+    let temp_str = temp.to_str().context("invalid temp path")?;
+    if temp_str.contains("..") {
+        bail!("invalid temp path");
+    }
+    let permissions = fs::metadata(config_str)?.permissions();
+    let write = fs::write(temp_str, document.to_string())
+        .and_then(|()| fs::set_permissions(temp_str, permissions))
+        .and_then(|()| fs::rename(temp_str, config_str));
     if write.is_err() {
-        let _ = fs::remove_file(&temp);
+        let _ = fs::remove_file(temp_str);
     }
     write.with_context(|| format!("persisting config {}", config.display()))
 }

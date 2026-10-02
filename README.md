@@ -170,7 +170,7 @@ Each persona picks its own runtime, so OMP, Pi, and OpenCode can run side by sid
 omp_binary = "omp"
 pi_binary = "pi"
 opencode_binary = "opencode"
-prompt_timeout_secs = 300   # max prompt duration; 0 disables
+prompt_timeout_secs = 300   # max seconds of runtime inactivity (no text, tool, or status event) before a prompt times out; 0 disables
 idle_timeout_secs = 120     # how long an unused session stays alive; 0 = never idle out
 prompt_retries = 1           # extra attempts on the same model after a failed prompt (not after a timeout)
 
@@ -212,6 +212,8 @@ model = "opencode/big-pickle"
 | `reasoning` | OMP: maps to `--thinking`. The legacy key `thinking` is still accepted. Rejected for OpenCode. |
 | `fast` | OMP only. Tri-state: leave it out to keep the default, or set `true`/`false` to apply once at session start. Rejected for Pi and OpenCode. |
 | `role` | Default persona role. Group `member_roles` override it. |
+
+**Web agent editor.** The UI offers the models and reasoning levels each runtime really lists (`GET /api/v1/runtimes/{runtime}/models`, cached for five minutes; `?refresh=true` re-reads it) instead of free text; any model id can still be typed. Fast mode appears only for OMP and reasoning only for OMP and Pi. Workspaces can be typed or picked with a folder browser (`GET /api/v1/fs/dirs`, confined to `[workspaces] roots` when set). Roles and permissions are check lists fed by `GET /api/v1/access/roles`.
 
 **OpenCode runtime notes.** Hivemind runs `opencode acp` (Agent Client Protocol over stdio, no port) as one child per room + persona and deletes the OpenCode session on shutdown. The persona's `system_prompt` replaces OpenCode's `build` agent prompt for that child. Hivemind sets `"permission": "allow"` in the child's config, so OpenCode never waits for approval, including for files outside the workspace, exactly like Pi and OMP, which run tools unprompted. Treat the workspace as untrusted-model territory: an OpenCode agent can read and write anything your user can. Reported context size is OpenCode's own `usage_update`, which already includes OpenCode's built-in prompt (several thousand tokens), so set `runtime_rotate_tokens` accordingly.
 

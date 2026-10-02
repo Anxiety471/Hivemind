@@ -135,7 +135,7 @@ pub const BUILTIN_ROLES: &[(&str, &[&str])] = &[
 /// Holding the left permission also holds each listed permission. Lists are
 /// already transitive, so expansion is a single pass. `coordinate` does not
 /// imply `task.decide`: that would widen who is offered `tasks.decide`.
-const IMPLIES: &[(&str, &[&str])] = &[
+pub const IMPLIES: &[(&str, &[&str])] = &[
     ("coordinate", &["delegate", "group.manage", "task.reassign"]),
     ("delegate", &["group.manage", "task.reassign"]),
     ("review", &["task.decide"]),

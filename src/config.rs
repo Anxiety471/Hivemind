@@ -33,6 +33,10 @@ pub struct HivemindConfig {
     /// Limits where agents may point a workspace; a user-written path is never checked.
     #[serde(default, skip_serializing_if = "WorkspacesConfig::is_default")]
     pub workspaces: WorkspacesConfig,
+    /// Skill directories Hivemind offers its agents (`skills.list` / `skills.read`). Opt-in:
+    /// none of a runtime's own skills ever load.
+    #[serde(default, skip_serializing_if = "SkillsConfig::is_default")]
+    pub skills: SkillsConfig,
 }
 
 /// A custom role. Built-in role names are reserved.
@@ -48,11 +52,29 @@ pub struct WorkspacesConfig {
     /// Absolute directories agents may choose from. Empty means any existing directory.
     #[serde(default)]
     pub roots: Vec<String>,
+    /// Workspaces the user added in the UI. Unlike `roots` they never restrict
+    /// anything; they are the directories offered when picking a workspace.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub known: Vec<String>,
 }
 
 impl WorkspacesConfig {
     fn is_default(&self) -> bool {
-        self.roots.is_empty()
+        self.roots.is_empty() && self.known.is_empty()
+    }
+}
+
+/// Where Hivemind looks for skills: each directory holds `<name>/SKILL.md` folders.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct SkillsConfig {
+    /// Absolute paths or `~/...`. Earlier directories win on duplicate skill names.
+    #[serde(default)]
+    pub dirs: Vec<String>,
+}
+
+impl SkillsConfig {
+    fn is_default(&self) -> bool {
+        self.dirs.is_empty()
     }
 }
 
@@ -288,7 +310,9 @@ pub struct RuntimeConfig {
     pub pi_binary: String,
     #[serde(default = "default_opencode_binary")]
     pub opencode_binary: String,
-    /// Maximum seconds a runtime prompt may take; 0 disables the timeout.
+    /// Maximum seconds a runtime prompt may stay inactive without progress; 0
+    /// disables the timeout. Progress (streaming tokens, tool events, reasoning)
+    /// resets this inactivity window.
     #[serde(default = "default_runtime_prompt_timeout_secs")]
     pub prompt_timeout_secs: u64,
     /// Seconds an agent-instance runtime may sit unused before it is stopped;
@@ -351,6 +375,9 @@ pub struct AgentConfig {
     /// Runtime tool restriction resolved from `roles` at startup (`access::tool_access`); never configured directly.
     #[serde(skip)]
     pub tool_access: Option<ToolAccess>,
+    /// Whether the runtime's own web tools (search, fetch) stay available. On by default.
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub web: bool,
 }
 
 /// Which of a runtime's own workspace tools a restricted persona keeps.
@@ -383,6 +410,9 @@ impl HivemindConfig {
         }
         for root in &mut config.workspaces.roots {
             *root = absolute_workspace(root);
+        }
+        for known in &mut config.workspaces.known {
+            *known = absolute_workspace(known);
         }
 
         Ok(config)
@@ -583,6 +613,7 @@ impl HivemindConfig {
             coordination: CoordinationConfig::default(),
             roles: BTreeMap::new(),
             workspaces: WorkspacesConfig::default(),
+            skills: SkillsConfig::default(),
             groups: Vec::new(),
             agents: vec![
                 AgentConfig {
@@ -604,6 +635,7 @@ impl HivemindConfig {
                     permissions: Vec::new(),
                     roles: Vec::new(),
                     tool_access: None,
+                    web: true,
                 },
                 AgentConfig {
                     name: "Reviewer".into(),
@@ -624,6 +656,7 @@ impl HivemindConfig {
                     permissions: Vec::new(),
                     roles: Vec::new(),
                     tool_access: None,
+                    web: true,
                 },
             ],
         }
@@ -671,6 +704,14 @@ fn default_prompt_retries() -> u32 {
 
 fn default_runtime() -> String {
     "omp".into()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn is_true(value: &bool) -> bool {
+    *value
 }
 
 /// Resolves a workspace against the current directory without touching the filesystem, so a

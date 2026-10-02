@@ -136,9 +136,23 @@ impl RpcTransport for ChildTransport {
     }
 }
 
-/// Whether a message carries a Hivemind tool call, as a fence or as the tags some models emit.
+/// Whether a message carries a Hivemind tool call, as a fence, tags, or header line.
 fn has_tool_call(text: &str) -> bool {
-    text.contains("```hivemind-tool") || text.contains("<hivemind-tool>")
+    text.contains("hivemind-tool")
+        || text.contains("hivemind_tool")
+        || text.contains("<hivemind-tool>")
+        || text.contains("<hivemind_tool>")
+        || text.contains("[hivemind-tool]")
+        || text.contains("[hivemind_tool]")
+        || (text.contains("\"name\"")
+            && (text.contains("\"memory.")
+                || text.contains("\"workspace.")
+                || text.contains("\"tasks.")
+                || text.contains("\"messages.")
+                || text.contains("\"agents.")
+                || text.contains("\"groups.")
+                || text.contains("\"artifacts.")
+                || text.contains("\"context.")))
 }
 
 /// Settings overlay (`--config`, above global and project config) that, with
@@ -155,6 +169,12 @@ disabledProviders: [native, omp-plugins, claude, agent-plugins, codex, agents, c
 memory:\n  backend: \"off\"\n\
 autolearn:\n  enabled: false\n\
 advisor:\n  enabled: false\n";
+
+/// Extra overlay for personas without web access: switches off OMP's web search and URL fetch tools.
+const NO_WEB_OVERLAY: &str = "# Written by Hivemind: web tools are off for this persona.\n\
+web_search:\n  enabled: false\n\
+fetch:\n  enabled: false\n";
+const NO_WEB_OVERLAY_FILE: &str = "omp-noweb.yml";
 
 /// One persistent OMP RPC process owned by exactly one agent.
 pub struct OmpSession {
@@ -197,6 +217,10 @@ impl OmpSession {
         let overlay = harness_dir.join("omp.yml");
         super::write_owned_file(&overlay, ISOLATION_OVERLAY)
             .context("preparing Hivemind's OMP settings overlay")?;
+        if !agent.web {
+            super::write_owned_file(&overlay.with_file_name(NO_WEB_OVERLAY_FILE), NO_WEB_OVERLAY)
+                .context("preparing Hivemind's OMP no-web overlay")?;
+        }
         let args = Self::rpc_args(agent, &overlay);
         let transport = ChildTransport::spawn(binary, &args, &agent.workspace, private_env)
             .await
@@ -266,7 +290,11 @@ impl OmpSession {
         if let Some(access) = agent.tool_access {
             // Explicit allowlist: read-only built-ins plus only what the persona's permissions grant.
             // Sub-agents, browser, and desktop control are excluded because they could bypass it.
-            let mut tools = vec!["read", "grep", "glob", "lsp", "web_search", "todo"];
+            let mut tools = vec!["read", "grep", "glob", "lsp"];
+            if agent.web {
+                tools.push("web_search");
+            }
+            tools.push("todo");
             if access.write {
                 tools.extend(["edit", "write", "notebook"]);
             }
@@ -295,6 +323,15 @@ impl OmpSession {
             "--config".to_string(),
             overlay.display().to_string(),
         ];
+        if !agent.web {
+            args.extend([
+                "--config".to_string(),
+                overlay
+                    .with_file_name(NO_WEB_OVERLAY_FILE)
+                    .display()
+                    .to_string(),
+            ]);
+        }
         args.extend(Self::agent_args(agent));
         args
     }
@@ -321,6 +358,7 @@ impl OmpSession {
         match result {
             Ok(frame) => {
                 if let Some(sink) = &self.progress {
+                    sink.touch();
                     sink.rpc(&frame);
                 }
                 if let Some(usage) = super::telemetry::rpc_usage(&frame) {
@@ -587,6 +625,7 @@ mod tests {
             permissions: Vec::new(),
             roles: Vec::new(),
             tool_access: None,
+            web: true,
         }
     }
 
@@ -634,6 +673,27 @@ mod tests {
         let args = OmpSession::rpc_args(&agent, overlay);
         assert!(
             args[args.iter().position(|a| a == "--tools").unwrap() + 1].ends_with("bash,python")
+        );
+    }
+
+    #[test]
+    fn web_off_drops_the_search_tool_and_adds_the_no_web_overlay() {
+        let overlay = Path::new("/hive/harness/omp.yml");
+        let mut agent = agent(None);
+        agent.web = false;
+        let args = OmpSession::rpc_args(&agent, overlay);
+        assert!(args
+            .windows(2)
+            .any(|w| w == ["--config", "/hive/harness/omp-noweb.yml"]));
+        assert!(!args.contains(&"--tools".to_string()));
+        agent.tool_access = Some(crate::config::ToolAccess {
+            write: false,
+            exec: false,
+        });
+        let args = OmpSession::rpc_args(&agent, overlay);
+        assert_eq!(
+            args[args.iter().position(|a| a == "--tools").unwrap() + 1],
+            "read,grep,glob,lsp,todo"
         );
     }
 
@@ -864,6 +924,45 @@ mod tests {
         );
         // The next prompt starts clean: an earlier tool call never leaks into a plain answer.
         assert_eq!(session.prompt("again").await.unwrap(), "plain answer");
+    }
+    #[tokio::test]
+    async fn unfenced_tool_call_survives_omp_continuing_after_it() {
+        let agent = agent(None);
+        let (script, transport) = fake_transport();
+        push_ready(&script);
+        push_frame(
+            &script,
+            json!({ "type": "response", "id": "hivemind_prompt", "success": true, "data": { "agentInvoked": true } }),
+        );
+        push_frame(
+            &script,
+            json!({ "type": "message_end", "message": { "role": "assistant", "content": [
+            { "type": "text", "text": "hivemind-tool\n{\"name\":\"memory.search\",\"args\":{\"query\":\"test\"}}" }
+        ] } }),
+        );
+        push_frame(
+            &script,
+            json!({ "type": "message_end", "message": { "role": "assistant", "content": [
+            { "type": "text", "text": "Searching memory now." }
+        ] } }),
+        );
+        push_frame(
+            &script,
+            json!({ "type": "prompt_result", "id": "hivemind_prompt", "status": "completed", "sessionSettled": true }),
+        );
+        push_frame(
+            &script,
+            json!({ "type": "response", "id": "hivemind_last_text", "success": true, "data": { "text": "Searching memory now." } }),
+        );
+
+        let mut session = OmpSession::start_with_transport(&agent, transport)
+            .await
+            .unwrap();
+        let reply = session.prompt("search").await.unwrap();
+        assert!(
+            reply.contains("memory.search") && reply.starts_with("hivemind-tool"),
+            "{reply}"
+        );
     }
 
     #[tokio::test]

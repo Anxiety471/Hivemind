@@ -26,6 +26,7 @@ use crate::runtime::{
 };
 
 mod coordinator;
+pub(crate) mod linter;
 mod memory_tools;
 mod state;
 mod store;

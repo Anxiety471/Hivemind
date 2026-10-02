@@ -1,10 +1,14 @@
 // Rooms: room list, paged history, threads, and live replies over the WebSocket.
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, decodeInstance, targetFor, type Message, type Room, type Thread } from "../api";
+import { api, decodeInstance, targetFor, type Message, type Participant, type Room, type Skill, type Thread } from "../api";
 import { useLive, useLiveStatus, useRefreshOn, type LiveEvent } from "../live";
-import { href, navigate } from "../nav";
+import { href } from "../nav";
 import { listKind, roomLabel, useTaskNames } from "../rooms";
-import { Avatar, Badge, Empty, ErrorNote, ago, time, useAsync } from "../ui";
+import { RoomPanel, type PanelTab } from "./RoomPanel";
+import { Markdown } from "../markdown";
+import { Avatar, Badge, Empty, ErrorNote, time, useAsync } from "../ui";
+import { applyMention, filterParticipants, getMentionMatch, type MentionMatch } from "../mentions";
+import { SKILL_PREFIX, completions, helpText, parseSlash, skillPrompt, skillsText, toolsText } from "../slash";
 
 const KIND_ORDER: Record<string, number> = { main: 0, group: 1, solo: 2, task: 3, archived: 4 };
 const KIND_LABEL: Record<string, string> = { main: "Main", group: "Groups", solo: "Direct", task: "Task rooms", archived: "Archived" };
@@ -12,14 +16,20 @@ const KIND_LABEL: Record<string, string> = { main: "Main", group: "Groups", solo
 export function Chat({ roomId }: { roomId?: string }) {
   const rooms = useAsync(() => api.rooms(), []);
   const taskNames = useTaskNames();
-  useRefreshOn((e) => e.type === "conversation.turn.completed" || e.type === "thread.created", rooms.reload, [
+  useRefreshOn(
+    (e) => e.type === "conversation.turn.completed" || e.type === "thread.created" || e.type === "config.changed",
     rooms.reload,
-  ]);
+    [rooms.reload],
+  );
   const list = rooms.data?.rooms ?? [];
   const active = roomId ?? list[0]?.id;
 
   const grouped = useMemo(() => {
-    const sorted = [...list].sort((a, b) => (KIND_ORDER[listKind(a)] ?? 9) - (KIND_ORDER[listKind(b)] ?? 9));
+    const sorted = [...list].sort(
+      (a, b) =>
+        (KIND_ORDER[listKind(a)] ?? 9) - (KIND_ORDER[listKind(b)] ?? 9) ||
+        Number(b.settings?.pinned ?? false) - Number(a.settings?.pinned ?? false),
+    );
     const out: [string, Room[]][] = [];
     for (const room of sorted) {
       const last = out[out.length - 1];
@@ -41,14 +51,16 @@ export function Chat({ roomId }: { roomId?: string }) {
               <a key={room.id} href={href("rooms", room.id)} className={room.id === active ? "room active" : "room"}>
                 <span className="room-icon">{room.kind === "main" ? "#" : room.kind === "solo" ? "@" : kind === "task" ? "▸" : "◆"}</span>
                 <span className="room-name">{roomLabel(room, taskNames)}</span>
-                {room.message_count > 0 && <span className="count">{room.message_count}</span>}
+                {room.settings?.pinned && <span className="room-flag" title="Pinned" aria-label="Pinned">📌</span>}
+                {room.settings?.muted && <span className="room-flag" title="Muted" aria-label="Muted">🔕</span>}
+                {room.message_count > 0 && !room.settings?.muted && <span className="count">{room.message_count}</span>}
               </a>
             ))}
           </div>
         ))}
       </aside>
       {active ? (
-        <RoomView key={active} roomId={active} taskNames={taskNames} />
+        <RoomView key={active} roomId={active} taskNames={taskNames} onRoomsChanged={rooms.reload} />
       ) : (
         !rooms.loading && !rooms.error && <Empty>No rooms yet. Configure personas in hivemind.toml.</Empty>
       )}
@@ -154,13 +166,21 @@ function useHistory(roomId: string) {
   return { messages, before, error, loaded, loadEarlier, loadLatest };
 }
 
-function RoomView({ roomId, taskNames }: { roomId: string; taskNames: Map<string, string> }) {
+function RoomView({
+  roomId,
+  taskNames,
+  onRoomsChanged,
+}: {
+  roomId: string;
+  taskNames: Map<string, string>;
+  onRoomsChanged: () => void;
+}) {
   const room = useAsync(() => api.room(roomId), [roomId]);
   const threads = useAsync(() => api.threads(roomId), [roomId]);
   const history = useHistory(roomId);
   const typing = useTyping(roomId);
   const [openThread, setOpenThread] = useState<Thread | null>(null);
-  const [showDetails, setShowDetails] = useState(false);
+  const [panelTab, setPanelTab] = useState<PanelTab | null>(null);
   useRefreshOn(
     (e) =>
       (e.type === "thread.created" && e.payload?.parent_room_id === roomId) ||
@@ -168,9 +188,11 @@ function RoomView({ roomId, taskNames }: { roomId: string; taskNames: Map<string
     threads.reload,
     [roomId],
   );
-  useRefreshOn((e) => e.type === "conversation.turn.completed" && e.payload?.room_id === roomId, room.reload, [
-    roomId,
-  ]);
+  useRefreshOn(
+    (e) => (e.type === "conversation.turn.completed" && e.payload?.room_id === roomId) || e.type === "config.changed",
+    room.reload,
+    [roomId],
+  );
 
   const info = room.data?.room;
   const byAnchor = useMemo(() => {
@@ -210,20 +232,20 @@ function RoomView({ roomId, taskNames }: { roomId: string; taskNames: Map<string
             </div>
           </div>
           <div className="actions">
-            <button className="ghost" onClick={() => setShowDetails((v) => !v)}>
-              {showDetails ? "Hide details" : "Room details"}
+            <button
+              className="ghost"
+              aria-expanded={panelTab !== null}
+              onClick={() => setPanelTab(panelTab ? null : info && ["main", "solo", "group"].includes(info.kind) ? "settings" : "details")}
+            >
+              {panelTab ? "Hide settings" : "Settings"}
             </button>
             {roomId.startsWith("task-") && (
               <a className="button ghost" href={href("tasks", roomId.slice(5))}>
                 Open task
               </a>
             )}
-            <button className="ghost" onClick={() => navigate("sessions", roomId)}>
-              Runtime sessions
-            </button>
           </div>
         </header>
-        {showDetails && info && <RoomDetails room={info} />}
         <MessageList
           messages={history.messages}
           loaded={history.loaded}
@@ -237,6 +259,7 @@ function RoomView({ roomId, taskNames }: { roomId: string; taskNames: Map<string
         {target ? (
           <Composer
             placeholder={`Message ${info?.kind === "solo" ? "@" + info.participants[0]?.persona_id : info?.name ?? roomId}`}
+            participants={info?.participants}
             onSend={(text) => api.sendTurn(target, text).then(() => history.loadLatest())}
           />
         ) : (
@@ -249,46 +272,28 @@ function RoomView({ roomId, taskNames }: { roomId: string; taskNames: Map<string
           )
         )}
       </div>
+      {panelTab && info && !openThread && (
+        <RoomPanel
+          room={info}
+          tab={panelTab}
+          onTab={setPanelTab}
+          onClose={() => setPanelTab(null)}
+          onChanged={() => {
+            room.reload();
+            onRoomsChanged();
+          }}
+        />
+      )}
       {openThread && (
         <ThreadPanel
           key={openThread.id}
           thread={openThread}
           anchor={history.messages.find((m) => m.id === openThread.anchor_message_id)}
+          participants={info?.participants}
           onClose={() => setOpenThread(null)}
         />
       )}
     </section>
-  );
-}
-
-function RoomDetails({ room }: { room: Room }) {
-  const s = room.state;
-  return (
-    <div className="room-details">
-      <div>
-        <h4>Goal</h4>
-        <p>{s?.goal ?? <span className="muted">No goal set</span>}</p>
-      </div>
-      <div>
-        <h4>Decisions</h4>
-        {s?.decisions.length ? <ul>{s.decisions.map((d) => <li key={d}>{d}</li>)}</ul> : <p className="muted">None yet</p>}
-      </div>
-      <div>
-        <h4>Open questions</h4>
-        {s?.open_questions.length ? (
-          <ul>{s.open_questions.map((d) => <li key={d}>{d}</li>)}</ul>
-        ) : (
-          <p className="muted">None</p>
-        )}
-      </div>
-      <div>
-        <h4>Summary</h4>
-        <p>{room.summary || <span className="muted">No summary yet</span>}</p>
-      </div>
-      <div className="muted small">
-        {room.message_count} messages · updated {ago(room.updated_at)}
-      </div>
-    </div>
   );
 }
 
@@ -333,7 +338,7 @@ function MessageList(props: {
                   <span className="muted">{time(m.created_at)}</span>
                 </div>
               )}
-              <div className="msg-text">{m.content}</div>
+              <div className="msg-text">{m.speaker === "user" ? m.content : <Markdown text={m.content} />}</div>
               {thread && (
                 <button className="thread-link" onClick={() => props.onThread?.(m)}>
                   💬 {thread.message_count} {thread.message_count === 1 ? "reply" : "replies"} · {thread.name}
@@ -356,7 +361,7 @@ function MessageList(props: {
               <strong>{t.persona}</strong>
             </div>
             <div className="msg-text">
-              {t.text || (
+              {t.text ? <Markdown text={t.text} /> : (
                 <span className="dots">
                   <i />
                   <i />
@@ -372,17 +377,168 @@ function MessageList(props: {
   );
 }
 
-function Composer({ onSend, placeholder }: { onSend: (text: string) => Promise<unknown>; placeholder: string }) {
+function Composer({
+  onSend,
+  placeholder,
+  participants = [],
+}: {
+  onSend: (text: string) => Promise<unknown>;
+  placeholder: string;
+  participants?: Participant[];
+}) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [cursorPos, setCursorPos] = useState(0);
+  const [mentionMatch, setMentionMatch] = useState<MentionMatch | null>(null);
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [dismissed, setDismissed] = useState(false);
+
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const slashListRef = useRef<HTMLDivElement>(null);
+  const blurTimeoutRef = useRef<number | null>(null);
+  const prevQueryRef = useRef<string | null>(null);
+  const [output, setOutput] = useState<string | null>(null);
+  const [skillCatalog, setSkillCatalog] = useState<{ dirs: string[]; skills: Skill[] } | null>(null);
+  const [slashIndex, setSlashIndex] = useState(0);
+  const [slashDismissed, setSlashDismissed] = useState(false);
+  const slashItems = useMemo(
+    () => (slashDismissed ? [] : completions(text, skillCatalog?.skills ?? [])),
+    [text, skillCatalog, slashDismissed],
+  );
+
+  const filtered = useMemo(() => {
+    if (!mentionMatch || dismissed) return [];
+    return filterParticipants(participants, mentionMatch.query);
+  }, [participants, mentionMatch, dismissed]);
+
+  useEffect(() => {
+    if (mentionMatch?.query !== prevQueryRef.current) {
+      setDismissed(false);
+      prevQueryRef.current = mentionMatch?.query ?? null;
+      setSelectedIndex(0);
+    }
+  }, [mentionMatch?.query]);
+
+  useEffect(() => {
+    if (selectedIndex >= filtered.length && filtered.length > 0) {
+      setSelectedIndex(filtered.length - 1);
+    }
+  }, [filtered.length, selectedIndex]);
+
+  useEffect(() => {
+    if (listRef.current && filtered.length > 0) {
+      const activeEl = listRef.current.children[selectedIndex] as HTMLElement | undefined;
+      activeEl?.scrollIntoView({ block: "nearest" });
+    }
+  }, [selectedIndex, filtered.length]);
+
+  useEffect(() => {
+    const row = slashListRef.current?.children[slashIndex] as HTMLElement | undefined;
+    row?.scrollIntoView({ block: "nearest" });
+  }, [slashIndex, slashItems.length]);
+
+  useEffect(() => {
+    return () => {
+      clearTimeout(blurTimeoutRef.current ?? undefined);
+    };
+  }, []);
+
+  const insertMention = (participant: Participant) => {
+    if (!mentionMatch) return;
+    const applied = applyMention(text, cursorPos, mentionMatch, participant.persona_id);
+    setText(applied.text);
+    setCursorPos(applied.cursor);
+    setMentionMatch(null);
+    setDismissed(false);
+
+    requestAnimationFrame(() => {
+      if (textareaRef.current) {
+        textareaRef.current.focus();
+        textareaRef.current.setSelectionRange(applied.cursor, applied.cursor);
+      }
+    });
+  };
+
+  const handleTextChange = (val: string, pos: number) => {
+    setText(val);
+    setCursorPos(pos);
+    setMentionMatch(getMentionMatch(val, pos));
+    setSlashIndex(0);
+    setSlashDismissed(false);
+    // `/skill:<name>` rows come from the catalogue, so fetch it the first time a command is typed.
+    if (!skillCatalog && val.startsWith("/")) api.skills().then(setSkillCatalog, () => {});
+  };
+
+  const acceptSlash = (insert: string) => {
+    handleTextChange(insert, insert.length);
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+      textareaRef.current?.setSelectionRange(insert.length, insert.length);
+    });
+  };
+
+  const handleCursorMove = (pos: number) => {
+    setCursorPos(pos);
+    setMentionMatch(getMentionMatch(text, pos));
+  };
+
+  const runCommand = async (name: string, args: string): Promise<{ show?: string; send?: string }> => {
+    const loadSkills = async (refresh: boolean) => {
+      if (refresh || !skillCatalog) {
+        const fresh = await api.skills();
+        setSkillCatalog(fresh);
+        return fresh;
+      }
+      return skillCatalog;
+    };
+    if (name.toLowerCase().startsWith(SKILL_PREFIX)) {
+      const skill = name.slice(SKILL_PREFIX.length);
+      const catalog = await loadSkills(false);
+      if (!skill || !catalog.skills.some((s) => s.name === skill)) {
+        throw new Error(
+          catalog.skills.length === 0
+            ? "No skills are configured. Type /skills for how to add them."
+            : `Unknown skill "${skill}". Type /skills to list them.`,
+        );
+      }
+      return { send: skillPrompt(skill, args) };
+    }
+    switch (name.toLowerCase()) {
+      case "":
+      case "help":
+        return { show: helpText() };
+      case "skills": {
+        const catalog = await loadSkills(true);
+        return { show: skillsText(catalog.skills, catalog.dirs) };
+      }
+      case "tools":
+        return { show: toolsText((await api.toolCatalog()).namespaces) };
+      default:
+        throw new Error(`Unknown command /${name}. Type /help for the list.`);
+    }
+  };
+
   const send = async () => {
     const value = text.trim();
     if (!value || busy) return;
     setBusy(true);
     try {
-      await onSend(value);
+      const parsed = parseSlash(value);
+      if (parsed.kind === "command") {
+        const result = await runCommand(parsed.name, parsed.args);
+        if (result.show !== undefined) setOutput(result.show);
+        if (result.send !== undefined) {
+          await onSend(result.send);
+          setOutput(null);
+        }
+      } else {
+        await onSend(parsed.text);
+        setOutput(null);
+      }
       setText("");
+      setMentionMatch(null);
       setError(null);
     } catch (e) {
       setError((e as Error).message);
@@ -390,16 +546,137 @@ function Composer({ onSend, placeholder }: { onSend: (text: string) => Promise<u
       setBusy(false);
     }
   };
+
   return (
     <div className="composer">
       <ErrorNote error={error} />
+      {filtered.length > 0 && (
+        <div className="mention-menu" role="listbox" aria-label="Mention agent">
+          <div className="mention-menu-header">Mention an agent</div>
+          <div className="mention-menu-list" ref={listRef}>
+            {filtered.map((p, i) => (
+              <div
+                key={p.persona_id}
+                role="option"
+                aria-selected={i === selectedIndex}
+                className={i === selectedIndex ? "mention-item active" : "mention-item"}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  insertMention(p);
+                }}
+                onMouseEnter={() => setSelectedIndex(i)}
+              >
+                <Avatar name={p.persona_id} />
+                <div className="mention-item-info">
+                  <span className="mention-item-name">{p.persona_id}</span>
+                  {p.role && <span className="mention-item-role">{p.role}</span>}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {slashItems.length > 0 && (
+        <div className="mention-menu" role="listbox" aria-label="Slash commands">
+          <div className="mention-menu-header">Commands · Tab completes · Esc closes</div>
+          <div className="mention-menu-list" ref={slashListRef}>
+            {slashItems.map((item, i) => (
+              <div
+                key={item.insert}
+                role="option"
+                aria-selected={i === slashIndex}
+                className={i === slashIndex ? "mention-item active" : "mention-item"}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  acceptSlash(item.insert);
+                }}
+                onMouseEnter={() => setSlashIndex(i)}
+              >
+                <div className="mention-item-info">
+                  <span className="mention-item-name">{item.label}</span>
+                  <span className="mention-item-role">{item.detail.length > 90 ? `${item.detail.slice(0, 90)}…` : item.detail}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {output !== null && (
+        <div className="slash-output" role="status">
+          <button className="ghost icon" onClick={() => setOutput(null)} aria-label="Dismiss command output">
+            ✕
+          </button>
+          <Markdown text={output} />
+        </div>
+      )}
       <div className="composer-row">
         <textarea
+          ref={textareaRef}
           rows={1}
           value={text}
           placeholder={placeholder}
-          onChange={(e) => setText((e.target as HTMLTextAreaElement).value)}
+          onChange={(e) => {
+            const el = e.target;
+            handleTextChange(el.value, el.selectionStart);
+          }}
+          onSelect={(e) => handleCursorMove((e.target as HTMLTextAreaElement).selectionStart)}
+          onClick={(e) => handleCursorMove((e.target as HTMLTextAreaElement).selectionStart)}
+          onKeyUp={(e) => handleCursorMove((e.target as HTMLTextAreaElement).selectionStart)}
+          onFocus={(e) => {
+            clearTimeout(blurTimeoutRef.current ?? undefined);
+            handleCursorMove(e.target.selectionStart);
+          }}
+          onBlur={() => {
+            blurTimeoutRef.current = window.setTimeout(() => setMentionMatch(null), 150);
+          }}
           onKeyDown={(e) => {
+            if (slashItems.length > 0) {
+              if (e.key === "ArrowDown") {
+                e.preventDefault();
+                setSlashIndex((prev) => (prev + 1) % slashItems.length);
+                return;
+              }
+              if (e.key === "ArrowUp") {
+                e.preventDefault();
+                setSlashIndex((prev) => (prev - 1 + slashItems.length) % slashItems.length);
+                return;
+              }
+              const chosen = slashItems[slashIndex];
+              // Enter completes a partial command but runs one that is already complete.
+              if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey && chosen && chosen.insert.trim() !== text.trim())) {
+                e.preventDefault();
+                if (chosen) acceptSlash(chosen.insert);
+                return;
+              }
+              if (e.key === "Escape") {
+                e.preventDefault();
+                setSlashDismissed(true);
+                return;
+              }
+            }
+            if (filtered.length > 0) {
+              if (e.key === "ArrowDown") {
+                e.preventDefault();
+                setSelectedIndex((prev) => (prev + 1) % filtered.length);
+                return;
+               }
+              if (e.key === "ArrowUp") {
+                e.preventDefault();
+                setSelectedIndex((prev) => (prev - 1 + filtered.length) % filtered.length);
+                return;
+               }
+              if (e.key === "Enter" || e.key === "Tab") {
+                e.preventDefault();
+                const chosen = filtered[selectedIndex];
+                if (chosen) insertMention(chosen);
+                return;
+               }
+              if (e.key === "Escape") {
+                e.preventDefault();
+                setDismissed(true);
+                return;
+               }
+            }
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
               send();
@@ -415,7 +692,17 @@ function Composer({ onSend, placeholder }: { onSend: (text: string) => Promise<u
   );
 }
 
-function ThreadPanel({ thread, anchor, onClose }: { thread: Thread; anchor?: Message; onClose: () => void }) {
+function ThreadPanel({
+  thread,
+  anchor,
+  participants,
+  onClose,
+}: {
+  thread: Thread;
+  anchor?: Message;
+  participants?: Participant[];
+  onClose: () => void;
+}) {
   const history = useHistory(thread.id);
   const typing = useTyping(thread.id);
   return (
@@ -435,7 +722,7 @@ function ThreadPanel({ thread, anchor, onClose }: { thread: Thread; anchor?: Mes
             <strong>{anchor.speaker === "user" ? "You" : anchor.speaker}</strong>
             <span className="muted">{time(anchor.created_at)}</span>
           </div>
-          <div className="msg-text">{anchor.content}</div>
+          <div className="msg-text">{anchor.speaker === "user" ? anchor.content : <Markdown text={anchor.content} />}</div>
         </div>
       )}
       <MessageList
@@ -448,6 +735,7 @@ function ThreadPanel({ thread, anchor, onClose }: { thread: Thread; anchor?: Mes
       />
       <Composer
         placeholder="Reply in thread"
+        participants={participants}
         onSend={(text) => api.sendTurn({ type: "thread", id: thread.id }, text).then(() => history.loadLatest())}
       />
     </aside>

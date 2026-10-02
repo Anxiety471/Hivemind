@@ -49,8 +49,12 @@ pub fn mutate_group(config: &mut HivemindConfig, path: &Path, command: GroupComm
 /// Agents can record a group's shared workspace in the file while a shell holds an
 /// older copy; the file is authoritative so a group edit never reverts it.
 fn sync_group_workspaces(config: &mut HivemindConfig, path: &Path) -> Result<()> {
-    let raw =
-        fs::read_to_string(path).with_context(|| format!("reading config {}", path.display()))?;
+    let path_str = path.to_str().context("invalid config path")?;
+    if path_str.contains("..") {
+        bail!("invalid config path");
+    }
+    let raw = fs::read_to_string(path_str)
+        .with_context(|| format!("reading config {}", path.display()))?;
     let disk: HivemindConfig =
         toml::from_str(&raw).with_context(|| format!("parsing config {}", path.display()))?;
     for group in &mut config.groups {
@@ -67,8 +71,12 @@ struct GroupDocument<'a> {
 }
 
 fn persist_groups(config: &HivemindConfig, path: &Path) -> Result<()> {
-    let raw =
-        fs::read_to_string(path).with_context(|| format!("reading config {}", path.display()))?;
+    let path_str = path.to_str().context("invalid config path")?;
+    if path_str.contains("..") {
+        bail!("invalid config path");
+    }
+    let raw = fs::read_to_string(path_str)
+        .with_context(|| format!("reading config {}", path.display()))?;
     let mut document = raw
         .parse::<toml_edit::DocumentMut>()
         .with_context(|| format!("parsing config {}", path.display()))?;
@@ -84,7 +92,7 @@ fn persist_groups(config: &HivemindConfig, path: &Path) -> Result<()> {
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
     let file_name = path.file_name().context("config path has no filename")?;
-    let permissions = fs::metadata(path)
+    let permissions = fs::metadata(path_str)
         .with_context(|| format!("reading config metadata {}", path.display()))?
         .permissions();
     let (temp, mut file) = loop {
@@ -94,7 +102,15 @@ fn persist_groups(config: &HivemindConfig, path: &Path) -> Result<()> {
             std::process::id(),
             NEXT_CONFIG_TEMP.fetch_add(1, Ordering::Relaxed)
         ));
-        match OpenOptions::new().write(true).create_new(true).open(&temp) {
+        let temp_str = temp.to_str().context("invalid temp path")?;
+        if temp_str.contains("..") {
+            bail!("invalid temp path");
+        }
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(temp_str)
+        {
             Ok(file) => break (temp, file),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(error) => {
@@ -109,9 +125,13 @@ fn persist_groups(config: &HivemindConfig, path: &Path) -> Result<()> {
         file.sync_all()
     })();
     drop(file);
-    let result = write_result.and_then(|()| fs::rename(&temp, path));
+    let temp_str = temp.to_str().context("invalid temp path")?;
+    if temp_str.contains("..") {
+        bail!("invalid temp path");
+    }
+    let result = write_result.and_then(|()| fs::rename(temp_str, path_str));
     if result.is_err() {
-        let _ = fs::remove_file(&temp);
+        let _ = fs::remove_file(temp_str);
     }
     result.with_context(|| format!("persisting config {}", path.display()))
 }
@@ -225,8 +245,8 @@ fn find_group_mut<'a>(config: &'a mut HivemindConfig, name: &str) -> Result<&'a 
 }
 
 fn valid_name(name: &str) -> Result<()> {
-    if name.trim().is_empty() {
-        bail!("group name cannot be empty");
+    if name.trim().is_empty() || name.contains("..") || name.contains('/') || name.contains('\\') {
+        bail!("group name cannot be empty or contain '..', '/', or '\\'");
     }
     Ok(())
 }

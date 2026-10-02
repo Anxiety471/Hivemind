@@ -71,6 +71,8 @@ export function useLiveStatus() {
   const [value, setValue] = useState(status);
   useEffect(() => {
     statusListeners.add(setValue);
+    // The socket may connect before React commits this subscription.
+    setValue(status);
     return () => {
       statusListeners.delete(setValue);
     };

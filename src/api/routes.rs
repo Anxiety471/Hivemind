@@ -34,11 +34,14 @@ pub(super) fn router(core: Arc<HivemindCore>, shutdown: watch::Receiver<bool>) -
         .merge(super::jobs::routes())
         .merge(super::tasks::routes())
         .merge(super::rooms::routes())
+        .merge(super::room_settings::routes())
         .merge(super::chat_groups::routes())
         .merge(super::workspaces::routes())
+        .merge(super::catalog::routes())
         .merge(super::runtime::routes())
+        .merge(super::skills::routes())
         .merge(super::setup::routes())
-        .route("/api/v1/agents", get(agents))
+        .route("/api/v1/agents", get(agents).post(super::agents::create))
         .route("/api/v1/turns", post(submit_turn))
         .route("/api/v1/ws", get(ws))
         .fallback(not_found)
@@ -869,6 +872,651 @@ mod tests {
         assert!(list["groups"].as_array().unwrap().is_empty());
     }
 
+    fn write_config(test_core: &TestCore) -> PathBuf {
+        let path = test_core.directory.join("hivemind.toml");
+        std::fs::write(
+            &path,
+            toml::to_string(&HivemindConfig::default_poc()).unwrap(),
+        )
+        .unwrap();
+        path
+    }
+
+    #[tokio::test]
+    async fn agents_can_be_created_updated_and_deleted_and_survive_a_restart() {
+        let test_core = TestCore::new();
+        let path = write_config(&test_core);
+        let app = router(test_core.core.clone(), watch::channel(false).1);
+        let dir = test_core.directory.join("ws");
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir_text = dir.canonicalize().unwrap().to_string_lossy().into_owned();
+
+        let (status, body) = request_json(
+            app.clone(),
+            "POST",
+            "/api/v1/agents",
+            json!({"id":"Designer","runtime":"pi","workspace":dir_text,"system_prompt":"Be kind","capabilities":["design"],"model":"x/y"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        assert_eq!(body["config"]["workspace"], dir_text.as_str());
+        let (_, _, list) = request(app.clone(), "GET", "/api/v1/agents").await;
+        assert!(list["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["name"] == "Designer"));
+        // The new agent is a live conversation target right away.
+        let (_, _, rooms) = request(app.clone(), "GET", "/api/v1/rooms").await;
+        assert!(rooms["rooms"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["id"] == "solo-Designer"));
+        // And it is in the file, so a restart keeps it.
+        let reloaded = HivemindConfig::load(&path).unwrap();
+        let saved = reloaded
+            .agents
+            .iter()
+            .find(|a| a.name == "Designer")
+            .unwrap();
+        assert_eq!(saved.system_prompt, "Be kind");
+        assert_eq!(saved.capabilities, ["design"]);
+        assert_eq!(saved.model.as_deref(), Some("x/y"));
+
+        for (body, status) in [
+            (json!({"id":"Designer"}), StatusCode::CONFLICT),
+            (
+                json!({"id":"Bad","runtime":"nope"}),
+                StatusCode::BAD_REQUEST,
+            ),
+            (json!({"id":"main"}), StatusCode::BAD_REQUEST),
+            (json!({"id":"  "}), StatusCode::BAD_REQUEST),
+            (json!({"runtime":"pi"}), StatusCode::BAD_REQUEST),
+            (
+                json!({"id":"Rel","workspace":"relative/dir"}),
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                json!({"id":"Gone","workspace":"/definitely/not/here"}),
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                json!({"id":"Roles","roles":["no-such-role"]}),
+                StatusCode::BAD_REQUEST,
+            ),
+            (json!({"id":"Extra","bogus":1}), StatusCode::BAD_REQUEST),
+        ] {
+            let (got, response) =
+                request_json(app.clone(), "POST", "/api/v1/agents", body.clone()).await;
+            assert_eq!(got, status, "{body} -> {response}");
+        }
+        let (_, response) = request_json(
+            app.clone(),
+            "POST",
+            "/api/v1/agents",
+            json!({"id":"Gone","workspace":"/definitely/not/here"}),
+        )
+        .await;
+        assert!(
+            response["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("does not exist"),
+            "{response}"
+        );
+        assert_eq!(
+            HivemindConfig::load(&path).unwrap().agents.len(),
+            3,
+            "rejected requests never reach the file"
+        );
+
+        let (status, body) = request_json(
+            app.clone(),
+            "PUT",
+            "/api/v1/agents/Designer",
+            json!({"runtime":"omp","system_prompt":"Be terse","workspace":dir_text,"fast":true}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["config"]["system_prompt"], "Be terse");
+        let (_, _, detail) = request(app.clone(), "GET", "/api/v1/agents/Designer").await;
+        assert_eq!(detail["config"]["runtime"], "omp");
+        assert_eq!(detail["config"]["fast"], true);
+        assert!(
+            detail["config"]["model"].is_null(),
+            "omitted fields are cleared"
+        );
+        let reloaded = HivemindConfig::load(&path).unwrap();
+        assert_eq!(
+            reloaded
+                .agents
+                .iter()
+                .find(|a| a.name == "Designer")
+                .unwrap()
+                .system_prompt,
+            "Be terse"
+        );
+        let (status, _) = request_json(
+            app.clone(),
+            "PUT",
+            "/api/v1/agents/Designer",
+            json!({"id":"Other"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = request_json(app.clone(), "PUT", "/api/v1/agents/Ghost", json!({})).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        // An agent a group still uses cannot be deleted from under it.
+        let (status, _) = request_json(
+            app.clone(),
+            "POST",
+            "/api/v1/chat-groups",
+            json!({"id":"crew","members":["Designer"]}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        let delete = |app: Router, id: &'static str| async move {
+            app.oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/v1/agents/{id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status()
+        };
+        assert_eq!(delete(app.clone(), "Designer").await, StatusCode::CONFLICT);
+        let (status, _) = request_json(
+            app.clone(),
+            "PATCH",
+            "/api/v1/chat-groups/crew",
+            json!({"members":["Engineer"]}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            delete(app.clone(), "Designer").await,
+            StatusCode::NO_CONTENT
+        );
+        assert_eq!(delete(app.clone(), "Designer").await, StatusCode::NOT_FOUND);
+        let (_, _, list) = request(app.clone(), "GET", "/api/v1/agents").await;
+        assert!(!list["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["name"] == "Designer"));
+        assert!(!HivemindConfig::load(&path)
+            .unwrap()
+            .agents
+            .iter()
+            .any(|a| a.name == "Designer"));
+        // The last agent stays.
+        assert_eq!(delete(app.clone(), "Engineer").await, StatusCode::CONFLICT);
+        let status = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/api/v1/chat-groups/crew")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status();
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        assert_eq!(
+            delete(app.clone(), "Engineer").await,
+            StatusCode::NO_CONTENT
+        );
+        assert_eq!(delete(app, "Reviewer").await, StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn workspaces_can_be_added_alongside_existing_ones() {
+        let test_core = TestCore::new();
+        let path = write_config(&test_core);
+        let app = router(test_core.core.clone(), watch::channel(false).1);
+        let canon = |name: &str| {
+            let dir = test_core.directory.join(name);
+            std::fs::create_dir_all(&dir).unwrap();
+            dir.canonicalize().unwrap().to_string_lossy().into_owned()
+        };
+        let (first, second) = (canon("one"), canon("two"));
+
+        let (status, body) = request_json(
+            app.clone(),
+            "POST",
+            "/api/v1/workspaces",
+            json!({"path": first}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        let (status, body) = request_json(
+            app.clone(),
+            "POST",
+            "/api/v1/workspaces",
+            json!({"path": second}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(body["known"], json!([first, second]));
+        assert_eq!(
+            body["personas"].as_array().unwrap().len(),
+            2,
+            "existing data stays"
+        );
+        assert!(
+            body["roots"].as_array().unwrap().is_empty(),
+            "adding never restricts"
+        );
+        assert_eq!(
+            HivemindConfig::load(&path).unwrap().workspaces.known,
+            [first.clone(), second.clone()]
+        );
+
+        for (body, status) in [
+            (json!({"path": first}), StatusCode::CONFLICT),
+            (json!({"path": "relative"}), StatusCode::BAD_REQUEST),
+            (json!({"path": "/does/not/exist"}), StatusCode::BAD_REQUEST),
+            (json!({"nope": 1}), StatusCode::BAD_REQUEST),
+        ] {
+            let (got, _) = request_json(app.clone(), "POST", "/api/v1/workspaces", body).await;
+            assert_eq!(got, status);
+        }
+
+        // Each workspace is independently selectable by a persona.
+        let (status, _) = request_json(
+            app.clone(),
+            "PUT",
+            "/api/v1/workspaces/personas/Engineer",
+            json!({"path": second}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (_, _, body) = request(app.clone(), "GET", "/api/v1/workspaces").await;
+        let workspace_of = |name: &str| {
+            body["personas"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|p| p["id"] == name)
+                .unwrap()["workspace"]
+                .clone()
+        };
+        assert_eq!(workspace_of("Engineer"), second.as_str());
+        assert_ne!(workspace_of("Reviewer"), second.as_str());
+
+        // One in use cannot be removed; an unused one can.
+        let (status, body) = request_json(
+            app.clone(),
+            "DELETE",
+            "/api/v1/workspaces",
+            json!({"path": second}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+        let (status, body) = request_json(
+            app.clone(),
+            "DELETE",
+            "/api/v1/workspaces",
+            json!({"path": first}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["known"], json!([second]));
+        let (status, _) = request_json(
+            app,
+            "DELETE",
+            "/api/v1/workspaces",
+            json!({"path": "/never/added"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn workspace_changes_survive_agent_and_conversation_edits() {
+        let test_core = TestCore::new();
+        let path = write_config(&test_core);
+        let app = router(test_core.core.clone(), watch::channel(false).1);
+        let workspace = test_core.directory.join("selected");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let workspace = workspace.canonicalize().unwrap().display().to_string();
+        let (status, body) = request_json(
+            app.clone(),
+            "PATCH",
+            "/api/v1/rooms/solo-Engineer/settings",
+            json!({"workspace":workspace}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let (_, _, agent) = request(app.clone(), "GET", "/api/v1/agents/Engineer").await;
+        assert_eq!(agent["config"]["workspace"], workspace);
+        let (status, body) = request_json(
+            app.clone(),
+            "PATCH",
+            "/api/v1/rooms/main/settings",
+            json!({"reply_order":["Reviewer","Engineer"]}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let (_, _, room) =
+            request(app.clone(), "GET", "/api/v1/rooms/solo-Engineer/settings").await;
+        assert_eq!(room["settings"]["workspace"], workspace);
+        for (method, endpoint, body, expected) in [
+            (
+                "POST",
+                "/api/v1/agents",
+                json!({"id":"Designer","runtime":"pi","workspace":workspace}),
+                StatusCode::CREATED,
+            ),
+            (
+                "PUT",
+                "/api/v1/agents/Reviewer",
+                json!({"runtime":"pi","workspace":workspace,"system_prompt":"Updated"}),
+                StatusCode::OK,
+            ),
+        ] {
+            let (status, body) = request_json(app.clone(), method, endpoint, body).await;
+            assert_eq!(status, expected, "{body}");
+            let reloaded = HivemindConfig::load(&path).unwrap();
+            assert_eq!(
+                reloaded
+                    .agents
+                    .iter()
+                    .find(|a| a.name == "Engineer")
+                    .unwrap()
+                    .workspace,
+                workspace
+            );
+        }
+        // The older workspace API and workspace tools use this same store.
+        let (status, body) = request_json(
+            app.clone(),
+            "PUT",
+            "/api/v1/workspaces/personas/Engineer",
+            json!({"path":test_core.directory.display().to_string()}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/api/v1/agents/Designer")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        let reloaded = HivemindConfig::load(&path).unwrap();
+        let restarted = HivemindCore::new(reloaded, &path).unwrap();
+        assert_eq!(
+            restarted.agents().get("Engineer").unwrap().workspace,
+            test_core
+                .directory
+                .canonicalize()
+                .unwrap()
+                .display()
+                .to_string()
+        );
+    }
+
+    #[tokio::test]
+    async fn room_settings_strip_exactly_one_prefix() {
+        let test_core = TestCore::new();
+        write_config(&test_core);
+        let app = router(test_core.core.clone(), watch::channel(false).1);
+        for id in ["crew", "group-crew"] {
+            let (status, body) = request_json(
+                app.clone(),
+                "POST",
+                "/api/v1/chat-groups",
+                json!({"id":id,"members":["Engineer"]}),
+            )
+            .await;
+            assert_eq!(status, StatusCode::CREATED, "{body}");
+        }
+        let (status, body) = request_json(
+            app.clone(),
+            "PATCH",
+            "/api/v1/rooms/group-group-crew/settings",
+            json!({"mode":"broadcast"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["settings"]["mode"], "broadcast");
+        let (_, _, other) = request(app.clone(), "GET", "/api/v1/rooms/group-crew/settings").await;
+        assert_eq!(other["settings"]["mode"], "discussion");
+        let workspace = test_core
+            .directory
+            .canonicalize()
+            .unwrap()
+            .display()
+            .to_string();
+        let (status, body) = request_json(
+            app.clone(),
+            "POST",
+            "/api/v1/agents",
+            json!({"id":"solo-Reviewer","runtime":"pi","workspace":workspace}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        let (status, body) = request_json(
+            app.clone(),
+            "PATCH",
+            "/api/v1/rooms/solo-solo-Reviewer/settings",
+            json!({"workspace":workspace,"nickname":"Prefixed"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let (_, _, saved) = request(
+            app.clone(),
+            "GET",
+            "/api/v1/rooms/solo-solo-Reviewer/settings",
+        )
+        .await;
+        assert_eq!(saved["settings"]["nickname"], "Prefixed");
+        assert_eq!(saved["settings"]["workspace"], workspace);
+        let (_, _, other) = request(app, "GET", "/api/v1/rooms/solo-Reviewer/settings").await;
+        assert!(other["settings"]["nickname"].is_null());
+    }
+
+    #[tokio::test]
+    async fn room_settings_apply_per_conversation_kind() {
+        let test_core = TestCore::new();
+        let path = write_config(&test_core);
+        let app = router(test_core.core.clone(), watch::channel(false).1);
+        let dir = test_core.directory.join("shared");
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir_text = dir.canonicalize().unwrap().to_string_lossy().into_owned();
+        let (status, _) = request_json(
+            app.clone(),
+            "POST",
+            "/api/v1/chat-groups",
+            json!({"id":"crew","members":["Engineer","Reviewer"]}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+
+        // Unavailable controls explain themselves instead of silently vanishing.
+        let (_, _, main) = request(app.clone(), "GET", "/api/v1/rooms/main/settings").await;
+        assert_eq!(main["kind"], "main");
+        assert!(main["unavailable"]["mode"]
+            .as_str()
+            .unwrap()
+            .contains("broadcasts"));
+        assert!(main["unavailable"]["reply_order"].is_null());
+        let (_, _, solo) =
+            request(app.clone(), "GET", "/api/v1/rooms/solo-Engineer/settings").await;
+        assert!(solo["unavailable"]["reply_order"].is_string());
+        assert!(solo["unavailable"]["mode"].is_string());
+        assert!(solo["unavailable"]["workspace"].is_null());
+        let (_, _, group) = request(app.clone(), "GET", "/api/v1/rooms/group-crew/settings").await;
+        assert!(group["unavailable"]["mode"].is_null());
+        assert_eq!(group["members"], json!(["Engineer", "Reviewer"]));
+
+        // Common settings round-trip and show up on the room itself.
+        let (status, body) = request_json(
+            app.clone(),
+            "PATCH",
+            "/api/v1/rooms/main/settings",
+            json!({"nickname":"Town hall","pinned":true,"reply_order":["Reviewer","Engineer"]}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["settings"]["nickname"], "Town hall");
+        assert_eq!(
+            body["settings"]["reply_order"],
+            json!(["Reviewer", "Engineer"])
+        );
+        let (_, _, room) = request(app.clone(), "GET", "/api/v1/rooms/main").await;
+        assert_eq!(room["room"]["settings"]["pinned"], true);
+        let (_, _, rooms) = request(app.clone(), "GET", "/api/v1/rooms").await;
+        let main_row = rooms["rooms"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == "main")
+            .unwrap();
+        assert_eq!(main_row["settings"]["nickname"], "Town hall");
+        assert_eq!(
+            HivemindConfig::load(&path)
+                .unwrap()
+                .conversation
+                .reply_order,
+            ["Reviewer", "Engineer"]
+        );
+        let names: Vec<_> = test_core
+            .core
+            .agents()
+            .list()
+            .iter()
+            .map(|a| a.name.clone())
+            .collect();
+        assert_eq!(
+            names,
+            ["Reviewer", "Engineer"],
+            "the live order changed too"
+        );
+
+        // Group-only settings.
+        let (status, body) = request_json(
+            app.clone(),
+            "PATCH",
+            "/api/v1/rooms/group-crew/settings",
+            json!({"mode":"discussion","workspace":dir_text,"muted":true}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["settings"]["mode"], "discussion");
+        assert_eq!(body["settings"]["workspace"], dir_text.as_str());
+        let (_, _, chat_group) = request(app.clone(), "GET", "/api/v1/chat-groups/crew").await;
+        assert_eq!(chat_group["group"]["mode"], "discussion");
+        let (status, body) = request_json(
+            app.clone(),
+            "PATCH",
+            "/api/v1/rooms/group-crew/settings",
+            json!({"workspace":null}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["settings"]["workspace"].is_null());
+        assert_eq!(
+            body["settings"]["mode"], "discussion",
+            "other settings untouched"
+        );
+
+        // A direct message can move its agent's workspace but has no mode or order.
+        let (status, body) = request_json(
+            app.clone(),
+            "PATCH",
+            "/api/v1/rooms/solo-Engineer/settings",
+            json!({"workspace":dir_text}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["settings"]["workspace"], dir_text.as_str());
+
+        for (room, body, code) in [
+            (
+                "solo-Engineer",
+                json!({"mode":"discussion"}),
+                "not_applicable",
+            ),
+            (
+                "solo-Engineer",
+                json!({"reply_order":["Engineer"]}),
+                "not_applicable",
+            ),
+            (
+                "solo-Engineer",
+                json!({"workspace":null}),
+                "invalid_request",
+            ),
+            ("main", json!({"mode":"discussion"}), "not_applicable"),
+            ("main", json!({"workspace":dir_text}), "not_applicable"),
+            ("main", json!({"reply_order":["Ghost"]}), "invalid_request"),
+            (
+                "main",
+                json!({"reply_order":["Engineer","Engineer"]}),
+                "invalid_request",
+            ),
+            (
+                "group-crew",
+                json!({"reply_order":["Nobody"]}),
+                "invalid_request",
+            ),
+            (
+                "main",
+                json!({"nickname":"x".repeat(61)}),
+                "invalid_request",
+            ),
+            ("main", json!({"colour":"red"}), "invalid_json"),
+        ] {
+            let (status, response) = request_json(
+                app.clone(),
+                "PATCH",
+                &format!("/api/v1/rooms/{room}/settings"),
+                body.clone(),
+            )
+            .await;
+            assert_eq!(
+                status,
+                StatusCode::BAD_REQUEST,
+                "{room} {body} -> {response}"
+            );
+            assert_eq!(response["error"]["code"], code, "{room} {body}");
+        }
+        for room in [
+            "task-1",
+            "thread-1",
+            "solo-Ghost",
+            "group-ghost",
+            "nonsense",
+        ] {
+            let (status, _, _) = request(
+                app.clone(),
+                "GET",
+                &format!("/api/v1/rooms/{room}/settings"),
+            )
+            .await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{room}");
+        }
+        let (_, _, main) = request(app, "GET", "/api/v1/rooms/main/settings").await;
+        assert_eq!(
+            main["settings"]["nickname"], "Town hall",
+            "rejected patches change nothing"
+        );
+    }
+
     #[tokio::test]
     async fn workspaces_and_roles_are_readable_and_workspaces_changeable() {
         let test_core = TestCore::new();
@@ -892,6 +1540,20 @@ mod tests {
             .unwrap()
             .iter()
             .any(|r| r["name"] == "worker"));
+        assert!(roles["permissions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p == "workspace.exec"));
+        let (status, _, unknown) =
+            request(app.clone(), "GET", "/api/v1/runtimes/nope/models").await;
+        assert_eq!(
+            (status, unknown["error"]["code"].as_str()),
+            (StatusCode::NOT_FOUND, Some("not_found"))
+        );
+        let (status, _, dirs) = request(app.clone(), "GET", "/api/v1/fs/dirs?path=/").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(dirs["path"], "/");
 
         let (status, _) = request_json(
             app.clone(),

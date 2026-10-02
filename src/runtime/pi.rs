@@ -218,6 +218,7 @@ impl PiSession {
         match self.transport.recv().await {
             Ok(frame) => {
                 if let Some(sink) = &self.progress {
+                    sink.touch();
                     sink.rpc(&frame);
                 }
                 if let Some(usage) = super::telemetry::rpc_usage(&frame) {
@@ -381,6 +382,7 @@ mod tests {
             permissions: Vec::new(),
             roles: Vec::new(),
             tool_access: None,
+            web: true,
         }
     }
 

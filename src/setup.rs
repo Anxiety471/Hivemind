@@ -278,6 +278,7 @@ mod tests {
             permissions: Vec::new(),
             roles: Vec::new(),
             tool_access: None,
+            web: true,
         }
     }
 
@@ -294,6 +295,7 @@ mod tests {
             coordination: Default::default(),
             roles: Default::default(),
             workspaces: Default::default(),
+            skills: Default::default(),
         }
     }
 

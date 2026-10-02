@@ -149,6 +149,7 @@ fn build_config(body: SetupBody) -> Result<HivemindConfig, String> {
             permissions: Vec::new(),
             roles: Vec::new(),
             tool_access: None,
+            web: true,
         });
     }
 

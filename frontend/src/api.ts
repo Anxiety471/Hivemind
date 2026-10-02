@@ -11,10 +11,35 @@ export type Room = {
   participants: Participant[];
   updated_at: number | null;
   message_count: number;
+  /** Per-conversation preferences; absent on archived rooms. */
+  settings?: RoomPrefs;
   state?: RoomState;
   summary?: string;
   parent_room_id?: string;
   anchor_message_id?: string;
+};
+
+export type RoomPrefs = { nickname: string | null; pinned: boolean; muted: boolean };
+
+/** Everything configurable about one conversation, plus why a control may not apply to it. */
+export type RoomSettings = {
+  room_id: string;
+  kind: "main" | "solo" | "group";
+  settings: RoomPrefs & {
+    mode: "broadcast" | "discussion" | null;
+    reply_order: string[];
+    workspace: string | null;
+  };
+  members: string[];
+  unavailable: { mode: string | null; reply_order: string | null; workspace: string | null };
+};
+
+export type RoomSettingsPatch = Partial<Pick<RoomPrefs, "pinned" | "muted">> & {
+  nickname?: string;
+  mode?: "broadcast" | "discussion";
+  reply_order?: string[];
+  /** `null` clears a group's shared workspace. */
+  workspace?: string | null;
 };
 
 export type RoomState = {
@@ -154,8 +179,67 @@ export type ChatGroup = {
 
 export type Workspaces = {
   roots: string[];
+  /** Workspaces added by the user; they never restrict where agents may work. */
+  known: string[];
   groups: { id: string; workspace: string }[];
   personas: { id: string; workspace: string }[];
+};
+
+export type ModelOption = {
+  /** What is stored on the agent: `provider/model-id`. */
+  id: string;
+  name: string;
+  provider: string;
+  /** Reasoning levels this model accepts; empty when it does not reason. */
+  reasoning: string[];
+  context_window: number | null;
+};
+
+export type RuntimeModels = {
+  runtime: string;
+  models: ModelOption[];
+  supports_reasoning: boolean;
+  supports_fast: boolean;
+};
+
+export type DirListing = {
+  path: string;
+  parent: string | null;
+  home: string | null;
+  roots: string[];
+  truncated: boolean;
+  /** The server's desktop can open its own folder dialog. */
+  native_picker: boolean;
+  entries: { name: string; path: string }[];
+};
+
+export type RoleCatalog = {
+  builtin: { name: string; permissions: string[] }[];
+  custom: { name: string; permissions: string[] }[];
+  permissions: string[];
+  /** Permissions that come with holding another one. */
+  implies: Record<string, string[]>;
+};
+
+/** The editable definition of an agent. Its id is fixed once created. */
+export type AgentConfig = {
+  runtime: "pi" | "omp" | "opencode";
+  system_prompt: string;
+  workspace: string;
+  model: string | null;
+  reasoning: string | null;
+  fast: boolean | null;
+  role: string | null;
+  capabilities: string[];
+  permissions: string[];
+  roles: string[];
+};
+
+export type AgentDetail = {
+  id: string;
+  capabilities: string[];
+  permissions: string[];
+  config: AgentConfig;
 };
 
 export type RuntimeSession = {
@@ -258,13 +342,20 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 
 const enc = encodeURIComponent;
 
+export type Skill = { name: string; description: string; argument_hint: string; source: string };
+
 export const api = {
   info: () => request<{ name: string; version: string; api_version: string }>("GET", "/info"),
   setupStatus: () => request<{ setup_required: boolean }>("GET", "/setup"),
   completeSetup: (personas: SetupPersona[]) =>
     request<{ saved: boolean; setup_required: boolean; persona_count: number }>("POST", "/setup", { personas }),
   agents: () => request<{ agents: { name: string; runtime: string }[] }>("GET", "/agents"),
-  agent: (id: string) => request<Record<string, unknown>>("GET", `/agents/${enc(id)}`),
+  agent: (id: string) => request<AgentDetail>("GET", `/agents/${enc(id)}`),
+  createAgent: (id: string, config: Partial<AgentConfig>) =>
+    request<{ id: string; config: AgentConfig }>("POST", "/agents", { id, ...config }),
+  updateAgent: (id: string, config: Partial<AgentConfig>) =>
+    request<{ id: string; config: AgentConfig }>("PUT", `/agents/${enc(id)}`, config),
+  deleteAgent: (id: string) => request<void>("DELETE", `/agents/${enc(id)}`),
   instances: () =>
     request<{ agents: AgentInstance[]; scheduler_enabled: boolean }>("GET", "/agent-instances"),
   accessPersonas: () => request<{ personas: AccessPersona[] }>("GET", "/access/personas"),
@@ -278,6 +369,9 @@ export const api = {
     ),
   activeReplies: (id: string) =>
     request<{ room_id: string; agents: string[] }>("GET", `/rooms/${enc(id)}/active`),
+  roomSettings: (id: string) => request<RoomSettings>("GET", `/rooms/${enc(id)}/settings`),
+  updateRoomSettings: (id: string, patch: RoomSettingsPatch) =>
+    request<RoomSettings>("PATCH", `/rooms/${enc(id)}/settings`, patch),
   threads: (id: string) => request<{ threads: Thread[] }>("GET", `/rooms/${enc(id)}/threads`),
   createThread: (id: string, anchor_message_id: string, name?: string) =>
     request<{ thread: Thread; created: boolean }>("POST", `/rooms/${enc(id)}/threads`, {
@@ -311,6 +405,15 @@ export const api = {
   deleteChatGroup: (id: string) => request<void>("DELETE", `/chat-groups/${enc(id)}`),
 
   workspaces: () => request<Workspaces>("GET", "/workspaces"),
+  runtimeModels: (runtime: string, refresh = false) =>
+    request<RuntimeModels>("GET", `/runtimes/${enc(runtime)}/models${refresh ? "?refresh=true" : ""}`),
+  dirs: (path: string, hidden: boolean) =>
+    request<DirListing>("GET", `/fs/dirs?${new URLSearchParams({ ...(path ? { path } : {}), hidden: String(hidden) })}`),
+  pickFolder: (path: string) =>
+    request<{ path: string | null }>("POST", `/fs/pick${path ? `?${new URLSearchParams({ path })}` : ""}`, {}),
+  accessRoles: () => request<RoleCatalog>("GET", "/access/roles"),
+  addWorkspace: (path: string) => request<Workspaces>("POST", "/workspaces", { path }),
+  removeWorkspace: (path: string) => request<Workspaces>("DELETE", "/workspaces", { path }),
   setGroupWorkspace: (id: string, path: string) =>
     request<Workspaces>("PUT", `/workspaces/groups/${enc(id)}`, { path }),
   clearGroupWorkspace: (id: string) => request<Workspaces>("DELETE", `/workspaces/groups/${enc(id)}`),
@@ -320,6 +423,8 @@ export const api = {
   runtimeSessions: (roomId: string) =>
     request<{ sessions: RuntimeSession[] }>("GET", `/rooms/${enc(roomId)}/runtime-sessions?limit=200`),
   rotate: (agent_instance_id: string) => request("POST", "/runtime/rotate", { agent_instance_id }),
+  skills: () => request<{ dirs: string[]; skills: Skill[] }>("GET", "/skills"),
+  toolCatalog: () => request<{ tools: string[]; namespaces: Record<string, string[]> }>("GET", "/tools"),
 };
 
 export function targetFor(room: Room): Target | null {

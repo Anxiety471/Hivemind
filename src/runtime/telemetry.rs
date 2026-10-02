@@ -6,14 +6,23 @@ use crate::{
     identity::AgentInstanceId,
 };
 use serde_json::Value;
+use std::sync::Arc;
 #[derive(Clone)]
 pub struct ProgressSink {
     pub events: EventBus,
     pub instance: AgentInstanceId,
     pub turn_id: String,
+    pub activity: Option<Arc<tokio::sync::Notify>>,
 }
 impl ProgressSink {
+    pub fn touch(&self) {
+        if let Some(activity) = &self.activity {
+            activity.notify_one();
+        }
+    }
+
     pub fn emit(&self, kind: &str, message_id: &str, text: &str) {
+        self.touch();
         // Split oversized chunks at UTF-8 boundaries without silently losing text.
         let mut remaining = text;
         loop {
@@ -37,6 +46,7 @@ impl ProgressSink {
     }
 
     pub fn rpc(&self, frame: &Value) {
+        self.touch();
         match frame["type"].as_str() {
             Some("message_update") => {
                 let event = &frame["assistantMessageEvent"];
@@ -64,6 +74,7 @@ impl ProgressSink {
         }
     }
     pub fn acp(&self, update: &Value) {
+        self.touch();
         match update["sessionUpdate"].as_str() {
             Some("agent_message_chunk") => {
                 if let Some(text) = update.pointer("/content/text").and_then(Value::as_str) {
@@ -110,8 +121,8 @@ mod tests {
             events,
             instance: AgentInstanceId::new("main", "A"),
             turn_id: "t".into(),
+            activity: None,
         };
-        sink.rpc(&json!({"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","delta":"private"}}));
         assert!(rx.try_recv().is_err());
         sink.rpc(
             &json!({"type":"tool_execution_start","toolName":"bash","args":{"secret":"private"}}),

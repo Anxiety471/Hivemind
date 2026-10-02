@@ -67,6 +67,18 @@ A persona that declares roles and lacks `workspace.write` or `workspace.exec` st
 
 A persona with both permissions, or with no roles, is unrestricted. Coordination also refuses to make a persona without `workspace.write` the owner of a work task (plan, explicit owner, or reassignment); a persona without roles still may own work. The restriction covers the runtime's own tools only; a custom role needs `workspace.write`/`workspace.exec` added explicitly.
 
+## Web access
+
+Every persona keeps its runtime's web tools by default. Set `web = false` on a persona (`[[personas]]`, or `"web": false` in the agents API) to turn them off:
+
+| Runtime | Effect of `web = false` |
+| --- | --- |
+| `omp` | Drops `web_search` from the `--tools` allowlist and loads an extra overlay (`harness/omp-noweb.yml`) with `web_search.enabled: false` and `fetch.enabled: false`; verified `web_search` leaves the tool list |
+| `opencode` | `permission` config denies `webfetch` and `websearch` |
+| `pi` | None: Pi has no web tool |
+
+This only gates the runtime's own web tools. A persona with `workspace.exec` can still reach the network through the shell (`curl`), and OMP's `read` may still accept URLs; withhold `workspace.exec` for strict isolation.
+
 ## Compatibility
 
 - A persona with **no `roles`** keeps today's behavior: gated memory tools are unrestricted, runtime tools are unrestricted, and coordination follows its direct `permissions`.

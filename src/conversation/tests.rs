@@ -66,6 +66,7 @@ fn member(name: &str) -> Participant {
             permissions: Vec::new(),
             roles: Vec::new(),
             tool_access: None,
+            web: true,
         }),
         role: Some(format!("{name} role")),
     }
@@ -1166,6 +1167,43 @@ fn tool_calls_parse_from_fences_and_from_tags() {
         call(&format!("Checking.\n<hivemind-tool>{json}</hivemind-tool>")),
         search()
     );
+    // Fences with extra spaces, info string, or alternate markers succeed.
+    assert_eq!(call(&format!("``` hivemind-tool\n{json}\n```")), search());
+    assert_eq!(
+        call(&format!("```hivemind-tool json\n{json}\n```")),
+        search()
+    );
+    assert_eq!(call(&format!("```hivemind_tool\n{json}\n```")), search());
+    assert_eq!(call(&format!("~~~hivemind-tool\n{json}\n~~~")), search());
+    // Unfenced tool calls are caught and produce an actionable error for the agent.
+    let unfenced = parse_tool_block(&format!("hivemind-tool\n{json}")).unwrap_err();
+    assert!(unfenced
+        .to_string()
+        .contains("hivemind-tool call must be enclosed in a ```hivemind-tool fenced code block"));
+    assert!(parse_tool_block(&format!("hivemind-tool:\n{json}")).is_err());
+    assert!(parse_tool_block(&format!("hivemind-tool: {json}")).is_err());
+    assert!(parse_tool_block(&format!("hivemind-tool {json}")).is_err());
+    assert!(parse_tool_block(&format!("hivemind_tool\n{json}")).is_err());
+    assert!(parse_tool_block(&format!("hivemind_tool: {json}")).is_err());
+    assert!(parse_tool_block(&format!("hivemind-tool\n{json}\nhivemind-tool")).is_err());
+    assert!(parse_tool_block(&format!(
+        "Looking into memory:\nhivemind-tool\n{json}\nI will summarize."
+    ))
+    .is_err());
+    assert!(parse_tool_block(&format!("[hivemind-tool]\n{json}\n[/hivemind-tool]")).is_err());
+    assert!(parse_tool_block(&format!("[hivemind-tool]\n{json}")).is_err());
+    let multiline_json = "hivemind-tool\n{\n  \"name\": \"memory.search\",\n  \"args\": {\n    \"query\": \"Rust vs Zig\"\n  }\n}";
+    assert!(parse_tool_block(multiline_json).is_err());
+    // Tool calls inside wrong fence or raw JSON are caught and produce an error.
+    assert!(parse_tool_block(&format!("```json\n{json}\n```")).is_err());
+    assert!(parse_tool_block(&format!("```\n{json}\n```")).is_err());
+    assert!(parse_tool_block(json).is_err());
+    // Normal JSON that does not match a tool name is not a tool call.
+    assert_eq!(call(r#"{"name":"my-package","version":"1.0.0"}"#), None);
+    assert_eq!(
+        call("```json\n{\"name\":\"my-package\",\"version\":\"1.0.0\"}\n```"),
+        None
+    );
     // Prose that only names the syntax is not a call; an open tag never closed is an error.
     assert_eq!(call("Use the <hivemind-tool> tags to call tools."), None);
     assert!(parse_tool_block(&format!("<hivemind-tool>\n{json}")).is_err());
@@ -1173,6 +1211,83 @@ fn tool_calls_parse_from_fences_and_from_tags() {
         "<hivemind-tool>{json}</hivemind-tool>\n```hivemind-tool\n{json}\n```"
     ))
     .is_err());
+    assert!(parse_tool_block("hivemind-tool\n{\"name\":").is_err());
+    assert!(parse_tool_block("hivemind-tool\n").is_err());
+    assert!(parse_tool_block(&format!("hivemind-tool\n{json}\nhivemind-tool\n{json}")).is_err());
+}
+#[test]
+fn tool_call_linter_diagnostics_and_suggestions() {
+    // Typo in tool name suggests the correct tool.
+    let typo = parse_tool_block(
+        "```hivemind-tool\n{\"name\":\"memory.searhc\",\"args\":{\"query\":\"test\"}}\n```",
+    )
+    .unwrap_err();
+    assert!(typo.to_string().contains("Did you mean 'memory.search'?"));
+
+    let alias =
+        parse_tool_block("```hivemind-tool\n{\"name\":\"workspace.status\",\"args\":{}}\n```")
+            .unwrap_err();
+    assert!(alias.to_string().contains("Did you mean 'workspace.get'?"));
+
+    let add_alias = parse_tool_block(
+        "```hivemind-tool\n{\"name\":\"memory.add\",\"args\":{\"content\":\"test\"}}\n```",
+    )
+    .unwrap_err();
+    assert!(add_alias
+        .to_string()
+        .contains("Did you mean 'memory.private.add'?"));
+
+    // Missing required arguments.
+    let missing_query =
+        parse_tool_block("```hivemind-tool\n{\"name\":\"memory.search\",\"args\":{}}\n```")
+            .unwrap_err();
+    assert!(missing_query
+        .to_string()
+        .contains("requires a non-empty string argument 'query'"));
+
+    let empty_content = parse_tool_block(
+        "```hivemind-tool\n{\"name\":\"memory.private.add\",\"args\":{\"content\":\"  \"}}\n```",
+    )
+    .unwrap_err();
+    assert!(empty_content
+        .to_string()
+        .contains("requires a non-empty string argument 'content'"));
+
+    let missing_path =
+        parse_tool_block("```hivemind-tool\n{\"name\":\"workspace.set\",\"args\":{}}\n```")
+            .unwrap_err();
+    assert!(missing_path
+        .to_string()
+        .contains("requires a non-empty string argument 'path'"));
+
+    let missing_id =
+        parse_tool_block("```hivemind-tool\n{\"name\":\"memory.archive\",\"args\":{}}\n```")
+            .unwrap_err();
+    assert!(missing_id
+        .to_string()
+        .contains("requires a non-empty string argument 'id'"));
+
+    // Invalid argument ranges and types.
+    let bad_limit = parse_tool_block("```hivemind-tool\n{\"name\":\"memory.search\",\"args\":{\"query\":\"test\",\"limit\":99}}\n```").unwrap_err();
+    assert!(bad_limit
+        .to_string()
+        .contains("must be an integer between 1 and 32"));
+
+    let bad_scopes = parse_tool_block("```hivemind-tool\n{\"name\":\"memory.search\",\"args\":{\"query\":\"test\",\"scopes\":\"private\"}}\n```").unwrap_err();
+    assert!(bad_scopes
+        .to_string()
+        .contains("must be a non-empty array of strings"));
+
+    // Structure errors.
+    let not_obj = parse_tool_block("```hivemind-tool\n[\"memory.search\"]\n```").unwrap_err();
+    assert!(not_obj.to_string().contains("must be a JSON object"));
+
+    let args_not_obj =
+        parse_tool_block("```hivemind-tool\n{\"name\":\"memory.search\",\"args\":\"test\"}\n```")
+            .unwrap_err();
+    assert!(args_not_obj
+        .to_string()
+        .contains("args must be a JSON object"));
 }
 
 #[tokio::test]
@@ -1246,6 +1361,46 @@ async fn tool_loop_executes_actions_reprompts_and_returns_final_text() {
         .store()
         .records_in_scope(&other, &Scope::AgentInstance(instance))
         .is_err());
+    let _ = fs::remove_dir_all(path);
+}
+#[tokio::test]
+async fn tool_loop_catches_unfenced_tool_calls_reprompts_and_executes_correction() {
+    let (path, coord) = fixture();
+    let unfenced = "hivemind-tool\n{\"name\":\"memory.search\",\"args\":{\"query\":\"project brief goal architecture design decision\",\"scopes\":[\"group\",\"private\"],\"limit\":8}}";
+    let fenced = tool_block(
+        "memory.search",
+        serde_json::json!({
+            "query": "project brief goal architecture design decision",
+            "scopes": ["group", "private"],
+            "limit": 8
+        }),
+    );
+    let f = scripted(&[unfenced, &fenced]);
+    let members = [member("Reviewer")];
+    let replies = coord
+        .turn(TurnRequest {
+            room: "tool-room",
+            room_name: "Team",
+            group_id: "team",
+            mode: ConversationMode::Discussion,
+            members: &members,
+            input: "check memory",
+            invoker: f.clone(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(replies[0].result.as_deref(), Ok("plain final answer"));
+    assert_eq!(
+        f.prompts.lock().len(),
+        3,
+        "unfenced error, tool executed, then final text"
+    );
+    let prompts = f.prompts.lock();
+    assert!(prompts[1].contains(
+        "error: hivemind-tool call must be enclosed in a ```hivemind-tool fenced code block"
+    ));
+    assert!(prompts[2].contains("Memory tool exchange this turn"));
+    assert!(prompts[2].contains("memory.search"));
     let _ = fs::remove_dir_all(path);
 }
 

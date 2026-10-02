@@ -2,7 +2,7 @@
 [runtime]
 omp_binary = "omp"
 pi_binary = "pi"
-# Maximum seconds a runtime prompt may take; 300 by default, 0 disables the timeout.
+# Maximum seconds a runtime prompt may stay silent (no streamed text, tool, or status event) before it times out; 300 by default, 0 disables the timeout. A long-running but active agent is not interrupted.
 prompt_timeout_secs = 300
 # Seconds an unused agent-instance runtime stays alive before it is stopped; 0 never idles out.
 idle_timeout_secs = 120
@@ -59,6 +59,10 @@ Engineer = "Implementation Reviewer"
 # Optional, top level: restrict where agents may point a workspace with workspace.set.
 # [workspaces]
 # roots = ["/abs/path/to/projects"]
+
+# Optional: skills Hivemind offers agents (skills.list / skills.read). Runtimes' own skills never load.
+# [skills]
+# dirs = ["~/.agents/skills"]
 
 # Durable execution defaults: limits are disabled until configured.
 # [execution]

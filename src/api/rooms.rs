@@ -104,9 +104,19 @@ async fn list(State(state): State<ApiState>) -> Response {
         Ok(rows) => rows,
         Err(_) => return internal(),
     };
+    let stored = state
+        .core
+        .execution()
+        .all_room_settings()
+        .unwrap_or_default();
     let mut rooms: Vec<Value> = Vec::new();
     for (kind, room) in configured(&state) {
         let mut value = describe(kind, &room);
+        value["settings"] = json!(stored
+            .iter()
+            .find(|(id, _)| *id == room.room_id)
+            .map(|(_, s)| s.clone())
+            .unwrap_or_default());
         let found = summaries.iter().find(|(id, ..)| *id == room.room_id);
         value["updated_at"] = json!(found.map(|s| s.2));
         value["message_count"] = json!(found.map_or(0, |s| s.3));
@@ -157,6 +167,11 @@ async fn show(State(state): State<ApiState>, Path(id): Path<String>) -> Response
         Ok(history) => history,
         Err(_) => return internal(),
     };
+    value["settings"] = json!(state
+        .core
+        .execution()
+        .room_settings(&id)
+        .unwrap_or_default());
     value["updated_at"] = json!(summary.as_ref().map(|s| s.2));
     value["message_count"] = json!(summary.as_ref().map_or(0, |s| s.3));
     value["state"] = json!(history.state);

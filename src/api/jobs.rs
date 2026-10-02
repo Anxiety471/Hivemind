@@ -212,77 +212,88 @@ fn internal() -> Response {
     .into_response()
 }
 
+/// Most turns running at once across all rooms; a room never runs two.
+const MAX_CONCURRENT_TURNS: usize = 8;
+
 pub(super) async fn run(core: Arc<HivemindCore>) {
     if let Err(error) = core.execution().recover_jobs() {
         eprintln!("execution recovery failed: {error}");
         return;
     }
+    let mut running = tokio::task::JoinSet::new();
     while !core.is_shutting_down() {
-        let job = match core.execution().claim() {
-            Ok(Some(job)) => job,
-            Ok(None) => {
-                tokio::time::sleep(Duration::from_millis(100)).await;
-                continue;
+        while running.try_join_next().is_some() {}
+        if running.len() >= MAX_CONCURRENT_TURNS {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            continue;
+        }
+        match core.execution().claim() {
+            Ok(Some(job)) => {
+                running.spawn(process(core.clone(), job));
             }
+            Ok(None) => tokio::time::sleep(Duration::from_millis(100)).await,
             Err(error) => {
                 eprintln!("execution claim failed: {error}");
                 tokio::time::sleep(Duration::from_millis(500)).await;
-                continue;
-            }
-        };
-        let target = serde_json::from_value::<TurnTargetBody>(job.target.clone())
-            .map(TurnTargetBody::target);
-        let Ok(target) = target else {
-            let _ =
-                core.execution()
-                    .finish(&job.turn_id, "failed", json!({"error":"invalid target"}));
-            continue;
-        };
-        {
-            let outcome = core.send_job_turn(&target, &job.message, &job.turn_id);
-            tokio::pin!(outcome);
-            loop {
-                tokio::select! {
-                    result = &mut outcome => {
-                        let (status,body) = match result {
-                            Ok(turn) => {
-                                let failed = turn.replies.iter().any(|r| r.result.is_err());
-                                let replies: Vec<_> = turn.replies.into_iter().map(|r|json!({"persona_id":r.name,"ok":r.result.is_ok(),"content":r.result.unwrap_or_else(|_|"agent reply failed".into())})).collect();
-                                (if failed {"failed"} else {"completed"},json!({"turn_id":turn.turn_id,"room_id":turn.room_id,"replies":replies}))
-                            }
-                            Err(_) => ("failed",json!({"error":"turn could not be completed"})),
-                        };
-                        let status = if core.is_shutting_down() { "interrupted" } else { status };
-                        if let Err(error) = core.execution().finish(&job.turn_id,status,body) { eprintln!("execution finish failed: {error}"); }
-                        break;
-                    }
-                    _ = tokio::time::sleep(Duration::from_millis(100)) => {
-                        if core.is_shutting_down() || core.execution().get(&job.turn_id).ok().flatten().is_some_and(|j|j.status == "cancelled") {
-                            // Drop the prompt future before rotating; its session may still be busy.
-                            break;
-                        }
-                    }
-                }
             }
         }
-        if let Ok(resolved) = core.resolve_target(&target) {
-            if core.is_shutting_down()
-                || core
-                    .execution()
-                    .get(&job.turn_id)
-                    .ok()
-                    .flatten()
-                    .is_some_and(|j| j.status == "cancelled")
-            {
-                for member in resolved.participants {
-                    core.rotate_instance(
-                        &crate::identity::AgentInstanceId::new(&job.room_id, &member.agent.name),
-                        "job_cancelled",
-                    )
-                    .await;
+    }
+    while running.join_next().await.is_some() {}
+    let _ = core.execution().recover_jobs();
+}
+
+async fn process(core: Arc<HivemindCore>, job: crate::execution::Job) {
+    let target =
+        serde_json::from_value::<TurnTargetBody>(job.target.clone()).map(TurnTargetBody::target);
+    let Ok(target) = target else {
+        let _ = core
+            .execution()
+            .finish(&job.turn_id, "failed", json!({"error":"invalid target"}));
+        return;
+    };
+    {
+        let outcome = core.send_job_turn(&target, &job.message, &job.turn_id);
+        tokio::pin!(outcome);
+        loop {
+            tokio::select! {
+                result = &mut outcome => {
+                    let (status,body) = match result {
+                        Ok(turn) => {
+                            let failed = turn.replies.iter().any(|r| r.result.is_err());
+                            let replies: Vec<_> = turn.replies.into_iter().map(|r|json!({"persona_id":r.name,"ok":r.result.is_ok(),"content":r.result.unwrap_or_else(|_|"agent reply failed".into())})).collect();
+                            (if failed {"failed"} else {"completed"},json!({"turn_id":turn.turn_id,"room_id":turn.room_id,"replies":replies}))
+                        }
+                        Err(_) => ("failed",json!({"error":"turn could not be completed"})),
+                    };
+                    let status = if core.is_shutting_down() { "interrupted" } else { status };
+                    if let Err(error) = core.execution().finish(&job.turn_id,status,body) { eprintln!("execution finish failed: {error}"); }
+                    break;
+                }
+                _ = tokio::time::sleep(Duration::from_millis(100)) => {
+                    if core.is_shutting_down() || core.execution().get(&job.turn_id).ok().flatten().is_some_and(|j|j.status == "cancelled") {
+                        // Drop the prompt future before rotating; its session may still be busy.
+                        break;
+                    }
                 }
             }
         }
     }
-    let _ = core.execution().recover_jobs();
+    if let Ok(resolved) = core.resolve_target(&target) {
+        if core.is_shutting_down()
+            || core
+                .execution()
+                .get(&job.turn_id)
+                .ok()
+                .flatten()
+                .is_some_and(|j| j.status == "cancelled")
+        {
+            for member in resolved.participants {
+                core.rotate_instance(
+                    &crate::identity::AgentInstanceId::new(&job.room_id, &member.agent.name),
+                    "job_cancelled",
+                )
+                .await;
+            }
+        }
+    }
 }
