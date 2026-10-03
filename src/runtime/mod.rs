@@ -592,6 +592,23 @@ done
     }
 
     #[tokio::test]
+    async fn opencode_child_receives_permission_with_question_denied() {
+        let startup = r#"printf '%s\n' "$OPENCODE_CONFIG_CONTENT" > config_env"#;
+        let fixture = Fixture::new("opencode", &opencode_script(OPENCODE_REPLY, startup));
+        let configured = agent("Open", "opencode", &fixture.workspace());
+        let mut session = create_session(&opencode_runtime(&fixture), &configured)
+            .await
+            .unwrap();
+        session.shutdown().await.unwrap();
+        let recorded = fs::read_to_string(fixture.0.join("config_env")).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&recorded).unwrap();
+        assert_eq!(
+            parsed["permission"],
+            serde_json::json!({"*": "allow", "question": "deny"})
+        );
+    }
+
+    #[tokio::test]
     async fn create_session_dispatches_opencode_next_to_pi_and_omp() {
         let fixture = Fixture::new("opencode", &opencode_script(OPENCODE_REPLY, ""));
         let omp = Fixture::new(
@@ -686,6 +703,39 @@ done
             error.contains("cancelled") && error.contains("Deny"),
             "{error}"
         );
+        session.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn opencode_cancelled_turn_with_question_returns_formatted_question() {
+        let body = r#"      printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_fake","update":{"sessionUpdate":"tool_call_update","title":"question","status":"failed","rawInput":{"questions":[{"question":"What type of issue?","options":[{"label":"Bug","description":"Report a bug"}]}]},"content":[{"type":"content","content":{"type":"text","text":"The user dismissed this question"}}]}}}'
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"stopReason":"cancelled"}}\n' "$id""#;
+        let fixture = Fixture::new("opencode", &opencode_script(body, ""));
+        let mut session = create_session(
+            &opencode_runtime(&fixture),
+            &agent("Engineer", "opencode", &fixture.workspace()),
+        )
+        .await
+        .unwrap();
+        let reply = session.prompt("create an issue").await.unwrap();
+        assert!(reply.contains("What type of issue?"));
+        assert!(reply.contains("**Bug**: Report a bug"));
+        session.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn opencode_max_tokens_returns_assistant_text() {
+        let body = r#"      printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_fake","update":{"sessionUpdate":"agent_message_chunk","messageId":"m1","content":{"type":"text","text":"partial long output"}}}}'
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"stopReason":"max_tokens"}}\n' "$id""#;
+        let fixture = Fixture::new("opencode", &opencode_script(body, ""));
+        let mut session = create_session(
+            &opencode_runtime(&fixture),
+            &agent("Engineer", "opencode", &fixture.workspace()),
+        )
+        .await
+        .unwrap();
+        let reply = session.prompt("long prompt").await.unwrap();
+        assert_eq!(reply, "partial long output");
         session.shutdown().await.unwrap();
     }
 
