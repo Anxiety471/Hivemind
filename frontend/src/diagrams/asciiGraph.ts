@@ -12,7 +12,6 @@ const HORIZONTAL = new Set("-─━═=<>→←↔");
 const VERTICAL = new Set("|│┃║^v↑↓↕");
 const JUNCTIONS = new Set("+┬┴├┤┼┌┐└┘┏┓┗┛╔╗╚╝╠╣╦╩╬");
 const HEADS: Record<string, number> = { ">": 0, "→": 0, "<": 1, "←": 1, v: 2, "↓": 2, "^": 3, "↑": 3 };
-const ARROW = /(?:<[-=─═]+>?|[-=─═]+>|[→←↔])/g;
 const isHead = (char: string) => HEADS[char] !== undefined || char === "↔" || char === "↕";
 const pointsTo = (char: string, direction: number) => HEADS[char] === direction || (char === "↔" && direction < 2) || (char === "↕" && direction >= 2);
 const CORNERS: Record<string, number[]> = {
@@ -29,6 +28,40 @@ function simplify(points: Point[]): Point[] {
     const a = points[i - 1], b = points[i + 1];
     return !a || !b || !((a.x === p.x && p.x === b.x) || (a.y === p.y && p.y === b.y));
   });
+}
+
+type ArrowToken = { index: number; text: string };
+const SHAFT = new Set("-=─═");
+const HORIZONTAL_HEADS = new Set("→←↔");
+
+// Scan diagram punctuation, not HTML. Offsets use UTF-16 for string slicing;
+// the graph parser converts these offsets to codepoint grid coordinates.
+export function horizontalAsciiArrows(text: string): ArrowToken[] {
+  const arrows: ArrowToken[] = [];
+  for (let index = 0; index < text.length;) {
+    const start = index;
+    const left = text[index] === "<";
+    if (HORIZONTAL_HEADS.has(text[index])) {
+      arrows.push({ index, text: text[index++] });
+      continue;
+    }
+    if (left) index++;
+    const shaftStart = index;
+    while (SHAFT.has(text[index])) index++;
+    const hasShaft = index > shaftStart;
+    const right = text[index] === ">";
+    if (hasShaft && (left || right)) {
+      if (right) index++;
+      arrows.push({ index: start, text: text.slice(start, index) });
+    } else {
+      index = Math.max(index, start + 1);
+    }
+  }
+  return arrows;
+}
+
+export function hasAsciiArrow(text: string): boolean {
+  return horizontalAsciiArrows(text).length > 0 || [...text].some((char) => "↑↓↕".includes(char));
 }
 
 export function asciiToGraph(source: string): AsciiGraph | null {
@@ -83,20 +116,20 @@ export function asciiToGraph(source: string): AsciiGraph | null {
       if (at(end, y) === "]") addNode(x, y, end - x + 1, 1, lines[y].slice(x + 1, end).join(""));
     }
     const text = lines[y].map((c, x) => occupied.has(key(x, y)) ? " " : c).join("");
-    const arrows = [...text.matchAll(ARROW)];
+    const arrows = horizontalAsciiArrows(text);
     if (!arrows.length) continue;
     let start = 0;
-    for (const arrow of [...arrows, { index: text.length, 0: "" }]) {
-      const end = arrow.index!;
+    for (const arrow of [...arrows, { index: text.length, text: "" }]) {
+      const end = arrow.index;
       const segment = text.slice(start, end);
       const label = segment.trim();
       if (label && !/[+|│─<>^\[\]┌┐└┘]/.test(label)) {
-        // Regex offsets are UTF-16; convert them to the grid's codepoint offsets.
+        // Token offsets are UTF-16; convert them to the grid's codepoint offsets.
         const leading = segment.length - segment.trimStart().length;
         const col = Array.from(text.slice(0, start + leading)).length;
         addNode(col, y, Array.from(label).length, 1, label);
       }
-      start = end + arrow[0].length;
+      start = end + arrow.text.length;
     }
   }
   if (!nodes.length) return null;
