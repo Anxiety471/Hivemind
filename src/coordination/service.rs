@@ -1530,10 +1530,10 @@ impl CoordinationService {
     /// Cancel a task and everything beneath it; a root also drops queued
     /// wakeups and archives its groups. Idempotent.
     pub fn cancel(&self, task_id: &str, actor: &str) -> CoordResult<TaskDetail> {
-        self.store.write(|db| {
+        let ended = self.store.write(|db| {
             let task = db.task_or_err(task_id)?;
             if task.status.is_terminal() {
-                return Ok(());
+                return Ok(Vec::new());
             }
             let all = db.list_tasks(&TaskFilter {
                 root: Some(&task.root_id),
@@ -1552,6 +1552,7 @@ impl CoordinationService {
                     break;
                 }
             }
+            let mut ended: Vec<String> = Vec::new();
             for t in all
                 .iter()
                 .filter(|t| doomed.contains(&t.id) && !t.status.is_terminal())
@@ -1564,12 +1565,14 @@ impl CoordinationService {
                     None,
                 )?;
                 for attempt in db.running_attempts(Some(&t.id))? {
-                    db.finish_attempt(
+                    if db.finish_attempt(
                         &attempt.id,
                         AttemptState::Cancelled,
                         Some("cancelled"),
                         None,
-                    )?;
+                    )? {
+                        ended.push(attempt.id);
+                    }
                 }
             }
             if task.id == task.root_id {
@@ -1580,8 +1583,11 @@ impl CoordinationService {
                 }
             }
             self.refresh_graph(db)?;
-            Ok(())
+            Ok(ended)
         })?;
+        for attempt_id in &ended {
+            self.forget_attempt(attempt_id);
+        }
         self.changed();
         self.detail(task_id)
     }

@@ -251,6 +251,9 @@ struct Slot {
 
 type SlotHandle = Arc<AsyncMutex<Slot>>;
 
+/// Check whether a live session must not be reaped (for example, while waiting on a question).
+pub type HoldCheck = Arc<dyn Fn(&AgentInstanceId) -> bool + Send + Sync>;
+
 struct PoolInner {
     execution: std::sync::OnceLock<Arc<crate::execution::ExecutionStore>>,
     runtime: RuntimeConfig,
@@ -266,6 +269,7 @@ struct PoolInner {
     shutdown_lock: AsyncMutex<()>,
     reaper_started: AtomicBool,
     reaper_task: ParkingMutex<Option<JoinHandle<()>>>,
+    hold: ParkingMutex<Option<HoldCheck>>,
 }
 
 /// Owns every live agent-instance runtime for one core.
@@ -296,6 +300,7 @@ impl RuntimePool {
                 shutdown_lock: AsyncMutex::new(()),
                 reaper_started: AtomicBool::new(false),
                 reaper_task: ParkingMutex::new(None),
+                hold: ParkingMutex::new(None),
             }),
         }
     }
@@ -306,6 +311,11 @@ impl RuntimePool {
     pub fn steer(&self, agent_instance_id: &AgentInstanceId, text: &str) -> bool {
         let handle = self.inner.steers.lock().get(agent_instance_id).cloned();
         handle.is_some_and(|handle| handle.try_steer(text))
+    }
+
+    /// Register a check that keeps a session alive against idle reaping.
+    pub fn set_hold_check(&self, hold: HoldCheck) {
+        *self.inner.hold.lock() = Some(hold);
     }
 
     /// Live continuable state for `agent_instance_id`; `None` means the next prompt hydrates.
@@ -868,6 +878,14 @@ impl PoolInner {
                 continue;
             }
             if slot.last_used.elapsed() < idle_for {
+                continue;
+            }
+            if self
+                .hold
+                .lock()
+                .as_ref()
+                .is_some_and(|held| held(&agent_instance_id))
+            {
                 continue;
             }
             let live = slot.live.take().expect("checked live session");
@@ -1699,6 +1717,49 @@ mod tests {
             .await
             .expect("pool drop signals the reaper to stop")
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn idle_scan_skips_slots_held_by_hold_check() {
+        let memory = Arc::new(MemoryService::new(MemoryStore::in_memory().unwrap()));
+        let pool = RuntimePool::new(
+            RuntimeConfig {
+                idle_timeout_secs: 0,
+                ..RuntimeConfig::default()
+            },
+            10_000,
+            memory.clone(),
+            EventBus::new(),
+        );
+        let shutdowns = Arc::new(AtomicUsize::new(0));
+        let id = AgentInstanceId::new("room", "Persona");
+        let caller = Caller::agent("room", "", id.clone(), "Persona", "Persona");
+        let epoch = memory
+            .start_runtime_epoch(&caller, "fake", serde_json::json!({}))
+            .unwrap();
+        pool.inner.slots.lock().insert(
+            id.clone(),
+            Arc::new(AsyncMutex::new(Slot {
+                live: Some(Live {
+                    session: Box::new(FakeSession(shutdowns.clone())),
+                    epoch,
+                    caller,
+                    agent_id: "Persona".into(),
+                    runtime: "fake".into(),
+                    cursor: None,
+                    estimated_tokens: 0,
+                    workspace: ".".into(),
+                }),
+                last_used: Instant::now() - Duration::from_secs(120),
+            })),
+        );
+        pool.set_hold_check(Arc::new(|_| true));
+        pool.close_idle(Duration::ZERO).await;
+        assert_eq!(shutdowns.load(Ordering::SeqCst), 0);
+
+        pool.set_hold_check(Arc::new(|_| false));
+        pool.close_idle(Duration::ZERO).await;
+        assert_eq!(shutdowns.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

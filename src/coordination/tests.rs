@@ -1598,3 +1598,20 @@ async fn tasks_ask_times_out_and_the_attempt_carries_on() {
         .provide_input(&back.task_id, "too late", "user")
         .is_err());
 }
+
+#[tokio::test]
+async fn cancelling_a_task_drops_its_open_questions() {
+    let service = service();
+    let (_root, back, _front) = parallel(&service);
+    let (answer, _) = service.ask(&back, "which database?", None).unwrap();
+    assert_eq!(service.detail(&back.task_id).unwrap().questions.len(), 1);
+    service.cancel(&back.task_id, "user").unwrap();
+    assert!(
+        service.detail(&back.task_id).unwrap().questions.is_empty(),
+        "cancelled task must not have open questions"
+    );
+    assert!(
+        answer.await.is_err(),
+        "the waiting question receiver must be dropped"
+    );
+}

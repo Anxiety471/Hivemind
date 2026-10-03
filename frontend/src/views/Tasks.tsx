@@ -108,6 +108,8 @@ function TaskDetailView({ id }: { id: string }) {
   const attempts = useAsync(() => api.attempts(id), [id]);
   const action = useAction();
   const [answer, setAnswer] = useState("");
+  const [steerMessage, setSteerMessage] = useState("");
+  const [steerStatus, setSteerStatus] = useState<string | null>(null);
   useRefreshOn(
     (e) => isCoordination(e.type),
     () => {
@@ -182,6 +184,99 @@ function TaskDetailView({ id }: { id: string }) {
               Send answer
             </button>
           </div>
+        </div>
+      )}
+
+      {d.questions && d.questions.length > 0 && (
+        <div className="card">
+          <h3>Waiting on {d.questions.length > 1 ? "questions" : "question"}</h3>
+          {d.questions.map((q) => (
+            <div key={q.attempt_id} style={{ marginBottom: "1rem" }}>
+              <div style={{ marginBottom: "0.5rem" }}>
+                <strong>{q.persona}</strong> asks: <em>"{q.question}"</em>
+                {q.to && <span className="muted"> (directed to {q.to})</span>}
+                <span className="muted small" style={{ marginLeft: "0.5rem" }}>{ago(q.asked_at)}</span>
+              </div>
+              <div className="row">
+                <input
+                  value={answer}
+                  placeholder={`Reply to ${q.persona}...`}
+                  onChange={(e) => setAnswer((e.target as HTMLInputElement).value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && answer.trim() && !action.busy) {
+                      action.run(() =>
+                        api.taskInput(id, answer.trim()).then(() => (setAnswer(""), detail.reload()))
+                      );
+                    }
+                  }}
+                />
+                <button
+                  className="primary"
+                  disabled={!answer.trim() || action.busy}
+                  onClick={() =>
+                    action.run(() =>
+                      api.taskInput(id, answer.trim()).then(() => (setAnswer(""), detail.reload()))
+                    )
+                  }
+                >
+                  Send answer
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {!terminal && (
+        <div className="card">
+          <h3>Steer running attempt</h3>
+          <p className="muted small">
+            Inject guidance into the active worker's session mid-flight (Pi/OMP steer) and record durable task feedback.
+          </p>
+          <div className="row">
+            <input
+              value={steerMessage}
+              placeholder="Guidance for the active worker..."
+              onChange={(e) => setSteerMessage((e.target as HTMLInputElement).value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && steerMessage.trim() && !action.busy) {
+                  action.run(() =>
+                    api.steerTask(id, steerMessage.trim()).then((res) => {
+                      setSteerMessage("");
+                      const targets = res.steer.delivered_to;
+                      setSteerStatus(
+                        targets.length
+                          ? `Steer delivered live to: ${targets.join(", ")}`
+                          : "Queued as task feedback (no live session active)"
+                      );
+                      detail.reload();
+                    })
+                  );
+                }
+              }}
+            />
+            <button
+              className="primary"
+              disabled={!steerMessage.trim() || action.busy}
+              onClick={() =>
+                action.run(() =>
+                  api.steerTask(id, steerMessage.trim()).then((res) => {
+                    setSteerMessage("");
+                    const targets = res.steer.delivered_to;
+                    setSteerStatus(
+                      targets.length
+                        ? `Steer delivered live to: ${targets.join(", ")}`
+                        : "Queued as task feedback (no live session active)"
+                    );
+                    detail.reload();
+                  })
+                )
+              }
+            >
+              Steer
+            </button>
+          </div>
+          {steerStatus && <div className="muted small" style={{ marginTop: "0.5rem" }}>{steerStatus}</div>}
         </div>
       )}
 

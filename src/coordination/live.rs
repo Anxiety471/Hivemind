@@ -380,6 +380,15 @@ impl CoordinationService {
             .collect()
     }
 
+    /// Whether an agent instance is currently waiting on an open question.
+    pub fn has_open_question(&self, instance: &AgentInstanceId) -> bool {
+        self.channel()
+            .questions
+            .lock()
+            .values()
+            .any(|p| task_room(&p.task_id) == instance.room_id && p.persona == instance.persona_id)
+    }
+
     /// Drop live state for an attempt that ended.
     pub(super) fn forget_attempt(&self, attempt_id: &str) {
         self.channel().questions.lock().remove(attempt_id);

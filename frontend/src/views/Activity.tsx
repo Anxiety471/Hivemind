@@ -9,7 +9,18 @@ const GROUPS = ["all", "conversation", "agent", "runtime", "task", "attempt", "t
 function summary(e: LiveEvent) {
   const p = e.payload ?? {};
   const who = p.agent_id ?? (p.agent_instance_id ? decodeInstance(p.agent_instance_id)?.persona : undefined) ?? p.actor;
-  const parts = [who, p.room_id, p.runtime, p.reason, p.task_id, p.to ? `→ ${p.to}` : p.payload?.to ? `→ ${p.payload.to}` : null, p.text];
+  const parts = [
+    who,
+    p.room_id,
+    p.runtime,
+    p.reason,
+    p.task_id,
+    p.to ? `→ ${p.to}` : p.payload?.to ? `→ ${p.payload.to}` : null,
+    p.text,
+    p.message ? `steer: "${p.message}"` : null,
+    p.question ? `question: "${p.question}"` : null,
+    p.answer ? `answer: "${p.answer}"` : null,
+  ];
   return parts.filter(Boolean).join(" · ");
 }
 

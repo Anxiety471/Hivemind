@@ -20,6 +20,7 @@ Building the server and serving health, info, and agent listings never starts Pi
 | `GET` | `/api/v1/rooms`, `/api/v1/rooms/{id}` | Rooms (main, solo, group, archived) with participants, state, summary, and message counts |
 | `GET` / `POST` | `/api/v1/rooms/{id}/threads` | List a room's user threads, or start one with `{"anchor_message_id","name"}` (`201`; `200` with the existing thread if that message already has one) |
 | `GET` | `/api/v1/rooms/{id}/messages?limit=&before=` | Paged room history, oldest first within a page; page back with `next_before` |
+| `POST` | `/api/v1/rooms/{id}/steer` | Steer text into actively replying agents in a room mid-flight (`{"message"}`); returns `{"room_id","delivered_to"}` |
 | `POST` / `GET` | `/api/v1/tasks`, `/api/v1/tasks/{id}` | Submit (202) and inspect autonomous tasks |
 | `GET` / `POST` | `/api/v1/tasks/{id}/attempts`, `/cancel`, `/pause`, `/resume`, `/input`, `/steer`, `/context-metrics` | Attempts, controls (`/input` also answers a running `tasks.ask`; `/steer` messages a running attempt), and bounded context diagnostics |
 | `GET` | `/api/v1/agents/{id}`, `/api/v1/agent-instances` | Capabilities and derived activity (never starts a runtime) |
