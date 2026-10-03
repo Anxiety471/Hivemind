@@ -1,4 +1,5 @@
 // Autonomous tasks: root list, task detail with subtasks, attempts, evidence, budget, and controls.
+import { TaskInput } from "./TaskInput";
 import type { ReactNode } from "react";
 import { useState } from "react";
 import { api, type Task } from "../api";
@@ -107,7 +108,6 @@ function TaskDetailView({ id }: { id: string }) {
   const detail = useAsync(() => api.task(id), [id]);
   const attempts = useAsync(() => api.attempts(id), [id]);
   const action = useAction();
-  const [answer, setAnswer] = useState("");
   useRefreshOn(
     (e) => isCoordination(e.type),
     () => {
@@ -122,7 +122,7 @@ function TaskDetailView({ id }: { id: string }) {
   const t: Task = d.task;
   const terminal = ["completed", "failed", "cancelled"].includes(t.status);
   const act = (name: "cancel" | "pause" | "resume", body?: unknown) =>
-    action.run(() => api.taskAction(id, name, body).then(() => detail.reload()));
+    action.run(() => api.taskAction(name === "cancel" ? id : t.root_id, name, body).then(() => detail.reload()));
 
   return (
     <div className="task-detail">
@@ -165,25 +165,7 @@ function TaskDetailView({ id }: { id: string }) {
       </div>
       {t.status_reason && <div className="callout">{t.status_reason}</div>}
 
-      {t.status === "needs_input" && (
-        <div className="card">
-          <h3>Input needed</h3>
-          <div className="row">
-            <input
-              value={answer}
-              placeholder="Answer the coordinator's question"
-              onChange={(e) => setAnswer((e.target as HTMLInputElement).value)}
-            />
-            <button
-              className="primary"
-              disabled={!answer.trim() || action.busy}
-              onClick={() => action.run(() => api.taskInput(id, answer.trim()).then(() => (setAnswer(""), detail.reload())))}
-            >
-              Send answer
-            </button>
-          </div>
-        </div>
-      )}
+      <TaskInput task={t} questions={d.questions} onDone={detail.reload} />
 
       <div className="grid-2">
         <div className="card">

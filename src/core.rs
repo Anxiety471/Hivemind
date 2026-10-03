@@ -219,6 +219,15 @@ impl HivemindCore {
         ));
         runtime.set_execution(execution.clone());
         coordination.set_execution(execution.clone());
+        {
+            let pool = Arc::downgrade(&runtime);
+            coordination.set_steerer(Arc::new(
+                move |instance: &crate::identity::AgentInstanceId, text: &str| {
+                    pool.upgrade()
+                        .is_some_and(|pool| pool.steer(instance, text))
+                },
+            ));
+        }
         let workspaces = Arc::new(SharedWorkspaces::new(&config_path, &config));
         let group_edit_lock = workspaces.edit_lock.clone();
         let mut hosts: Vec<Arc<dyn crate::conversation::ToolHost>> = vec![Arc::new(

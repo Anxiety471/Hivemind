@@ -2508,3 +2508,7 @@ li.task-item p {
   background: var(--info-soft);
   color: var(--info);
 }
+/* Standalone task-management pages scroll inside the app shell. */
+.task-detail .page-header { flex-wrap: wrap; }
+.task-detail .page-header > div:first-child { min-width: 0; overflow-wrap: anywhere; }
+.task-detail .actions { flex-wrap: wrap; max-width: 100%; }

@@ -136,7 +136,11 @@ export type Usage = {
   tokens: number | null;
 };
 
+export type OpenQuestion = { attempt_id: string; persona: string; question: string; to: string | null; message_id: string | null; asked_at: number };
+export type InboxItem = { task: Task; questions: OpenQuestion[] };
+
 export type TaskDetail = {
+  questions?: OpenQuestion[];
   task: Task;
   children: TaskSummary[];
   progress: Record<string, number>;
@@ -345,6 +349,17 @@ const enc = encodeURIComponent;
 export type Skill = { name: string; description: string; argument_hint: string; source: string };
 
 export const api = {
+  operatorInbox: async () => {
+    const items: InboxItem[] = [];
+    let after: string | null = null;
+    do {
+      const page: { items: InboxItem[]; next_after: string | null } = await request("GET", `/operator-inbox${after ? `?after=${enc(after)}` : ""}`);
+      items.push(...page.items);
+      after = page.next_after;
+    } while (after);
+    return items;
+  },
+  taskSteer: (id: string, message: string) => request<{ steer: { delivered_to: string[] } }>("POST", `/tasks/${enc(id)}/steer`, { message }),
   info: () => request<{ name: string; version: string; api_version: string }>("GET", "/info"),
   setupStatus: () => request<{ setup_required: boolean }>("GET", "/setup"),
   completeSetup: (personas: SetupPersona[]) =>
