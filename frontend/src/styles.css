@@ -1126,7 +1126,7 @@ dd {
 }
 .setup-steps {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 10px;
   padding: 0;
   margin: 0 0 14px;
@@ -2507,4 +2507,31 @@ li.task-item p {
   font-weight: 600;
   background: var(--info-soft);
   color: var(--info);
+}
+
+/* Guided onboarding */
+.setup-starters, .setup-review-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-bottom: 20px; }
+.setup-starter { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; padding: 24px; text-align: left; white-space: normal; }
+.setup-starter > span:first-child { font-size: 26px; color: var(--accent); }
+.setup-starter > span:last-child { color: var(--muted); font-weight: normal; }
+.setup-starter.selected { border-color: var(--accent); background: var(--accent-soft); }
+.setup-connected { color: var(--ok); overflow-wrap: anywhere; margin-bottom: 16px; }
+.setup-advanced { border-top: 1px solid var(--border); padding-top: 12px; }
+.setup-advanced summary, .setup-review-persona summary { cursor: pointer; color: var(--muted); }
+.setup-advanced[open] > div { margin-top: 16px; }
+.setup-review-persona { padding: 20px; min-width: 0; overflow-wrap: anywhere; }
+.setup-review-persona h3 { margin: 0 0 6px; }
+.setup-review-persona > p { color: var(--muted); margin-bottom: 16px; }
+.setup-review-persona dl { display: grid; grid-template-columns: 90px minmax(0, 1fr); gap: 10px; margin: 16px 0; }
+.setup-review-persona dt { color: var(--muted); }
+.setup-review-persona dd { margin: 0; }
+.setup-prompt { white-space: pre-wrap; margin-top: 12px; }
+.setup-ready { max-width: 540px; margin: 10px auto; text-align: center; }
+.setup-ready-icon { display: grid; place-items: center; width: 56px; height: 56px; margin: 0 auto 20px; border-radius: 50%; background: var(--accent-soft); color: var(--ok); font-size: 28px; }
+.setup-ready p { margin: 14px 0; }
+.setup-ready button { margin-top: 14px; }
+@media (max-width: 640px) {
+  .setup-steps { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+  .setup-steps li { padding: 8px 6px; gap: 5px; font-size: 11px; }
+  .setup-starters, .setup-review-list { grid-template-columns: minmax(0, 1fr); }
 }

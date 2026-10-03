@@ -45,7 +45,7 @@ function App() {
   const [route, setRoute] = useState(parse);
   const live = useLiveStatus();
   const [version, setVersion] = useState<string | null>(null);
-  const [firstRun, setFirstRun] = useState(shouldShowFirstRun);
+  const [firstRun, setFirstRun] = useState<boolean | null>(null);
 
   const leaveSetup = () => {
     try {
@@ -59,6 +59,17 @@ function App() {
   };
 
   useEffect(() => {
+    let active = true;
+    // Setup belongs to the server, not this browser. Old completion flags must
+    // never hide a freshly installed server; a new browser must not configure
+    // an existing server again.
+    api.setupStatus()
+      .then((status) => { if (active) setFirstRun(status.setup_required); })
+      .catch(() => { if (active) setFirstRun(shouldShowFirstRun()); });
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
     const onHash = () => setRoute(parse());
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
@@ -70,6 +81,9 @@ function App() {
       .catch(() => setVersion(null));
   }, [live]);
 
+  if (firstRun === null) {
+    return <div className="setup-page" role="status">Checking your hive…</div>;
+  }
   if (firstRun) return <FirstRunSetup onComplete={leaveSetup} onSkip={leaveSetup} />;
 
   let view;
