@@ -476,35 +476,41 @@ impl MemoryStore {
                 }
             }
             if request.scopes.contains(&SearchScope::Archive) {
-                let room = &caller.room_id;
-                let messages = archive_search_rows(session, dialect, room, &query_terms, &terms, limit.max(ARCHIVE_CANDIDATES))?;
-                for message in messages {
-                    if dialect == Dialect::Mysql
-                        && matched_terms(&query_terms, &format!("{} {}", message.speaker, message.content)) == 0
-                    {
-                        continue;
+                // A thread caller also searches its parent room's archive. Walk
+                // every covered room with the existing per-room query plan and
+                // merge into one ranked result list; `archive_rooms`
+                // de-duplicates, so no message is pushed twice.
+                let pool = limit.max(ARCHIVE_CANDIDATES);
+                for room in archive_rooms(caller) {
+                    let messages = archive_search_rows(session, dialect, &room, &query_terms, &terms, pool)?;
+                    for message in messages {
+                        if dialect == Dialect::Mysql
+                            && matched_terms(&query_terms, &format!("{} {}", message.speaker, message.content)) == 0
+                        {
+                            continue;
+                        }
+                        let relevance = -(matched_terms(&query_terms, &message.content) as f64);
+                        let record = MemoryRecord {
+                            id: message.id.clone(),
+                            layer: Layer::Archive,
+                            scope: Scope::Archive(message.room_id.clone()),
+                            kind: message.speaker.clone(),
+                            content: message.content,
+                            provenance: Provenance {
+                                source_room_id: Some(message.room_id),
+                                source_turn_id: Some(message.turn_id),
+                                source_message_id: Some(message.id.clone()),
+                                source_actor: Some(message.speaker),
+                                source_kind: Some("room_message".into()),
+                            },
+                            created_at: message.created_at,
+                            updated_at: message.created_at,
+                            status: MemoryStatus::Active,
+                            importance: 20,
+                            supersedes_memory_id: None,
+                        };
+                        found.push(SearchResult { score: rank_score(relevance, &record), record });
                     }
-                    let relevance = -(matched_terms(&query_terms, &message.content) as f64);
-                    let record = MemoryRecord {
-                        id: message.id.clone(),
-                        layer: Layer::Archive,
-                        scope: Scope::Archive(message.room_id.clone()),
-                        kind: message.speaker.clone(),
-                        content: message.content,
-                        provenance: Provenance {
-                            source_room_id: Some(message.room_id),
-                            source_turn_id: Some(message.turn_id),
-                            source_message_id: Some(message.id.clone()),
-                            source_actor: Some(message.speaker),
-                            source_kind: Some("room_message".into()),
-                        },
-                        created_at: message.created_at,
-                        updated_at: message.created_at,
-                        status: MemoryStatus::Active,
-                        importance: 20,
-                        supersedes_memory_id: None,
-                    };
-                    found.push(SearchResult { score: rank_score(relevance, &record), record });
                 }
             }
             Ok(found)

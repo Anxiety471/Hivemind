@@ -63,6 +63,11 @@ pub enum DomainEventKind {
         parent_room_id: String,
         anchor_message_id: String,
     },
+    WakeupDispatched {
+        room_id: String,
+        wakeup_id: String,
+        intent: Option<String>,
+    },
     TurnStarted {
         turn_id: String,
         room_id: String,

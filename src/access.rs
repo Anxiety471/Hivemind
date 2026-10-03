@@ -23,6 +23,7 @@ pub const PERMISSIONS: &[&str] = &[
     "artifacts.publish",
     "coordinate",
     "delegate",
+    "decompose",
     "review",
     "integrate",
     "memory.private.write",
@@ -65,7 +66,7 @@ pub const BUILTIN_ROLES: &[(&str, &[&str])] = &[
     ),
     (
         "researcher",
-        &["memory.private.write", "memory.group.write"],
+        &["decompose", "memory.private.write", "memory.group.write"],
     ),
     ("reviewer", &["review", "memory.private.write"]),
     (
@@ -143,7 +144,10 @@ pub const BUILTIN_ROLES: &[(&str, &[&str])] = &[
 /// already transitive, so expansion is a single pass. `coordinate` does not
 /// imply `task.decide`: that would widen who is offered `tasks.decide`.
 pub const IMPLIES: &[(&str, &[&str])] = &[
-    ("coordinate", &["delegate", "group.manage", "task.reassign"]),
+    (
+        "coordinate",
+        &["decompose", "delegate", "group.manage", "task.reassign"],
+    ),
     ("delegate", &["group.manage", "task.reassign"]),
     ("review", &["task.decide"]),
 ];

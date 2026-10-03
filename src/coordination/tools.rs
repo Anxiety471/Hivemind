@@ -66,8 +66,10 @@ fn allowed(service: &CoordinationService, ctx: &ToolCtx) -> Vec<&'static str> {
         .store()
         .read(|db| Ok(db.task_or_err(&ctx.root_id)?.coordinator == ctx.persona))
         .unwrap_or(false);
-    // `coordinate` implies `delegate`, `group.manage`, and `task.reassign` (see access::IMPLIES).
-    let delegating = can("delegate") || can("task.reassign") || coordinator;
+    // Spawning a sub-issue is for decomposers. `task.reassign` still uses the
+    // same tool name to hand an existing ticket to someone else.
+    let spawning = persona.is_some_and(|p| p.may_decompose()) || coordinator;
+    let delegating = spawning || can("delegate") || can("task.reassign") || coordinator;
     let grouping = can("group.manage") || coordinator;
     match ctx.kind {
         AttemptKind::Plan => names.extend([
@@ -103,8 +105,8 @@ fn allowed(service: &CoordinationService, ctx: &ToolCtx) -> Vec<&'static str> {
 
 fn role_line(kind: AttemptKind) -> &'static str {
     match kind {
-        AttemptKind::Plan => "You are the COORDINATOR planning this root task: propose a task graph with tasks.plan.propose (it commits immediately but does not run the work).",
-        AttemptKind::Work => "You are the OWNER of this task: do the work, then call tasks.result.submit with artifacts and verification evidence. Submitting does not complete the task; a reviewer decides.",
+        AttemptKind::Plan => "You are planning this issue: propose its sub-issues with tasks.plan.propose (it creates those issues immediately and does not run the work).",
+        AttemptKind::Work => "You are the OWNER of this task: do the work, then call tasks.result.submit with what changed, artifacts, and verification evidence. Submitting does not complete the task; a reviewer decides.",
         AttemptKind::Review => "You are the REVIEWER of this task: check the submitted result against the acceptance criteria and call tasks.review with approve or reject.",
         AttemptKind::Inbox => "You were woken by messages addressed to you. Handle them, reply with messages.send if needed, and acknowledge with messages.ack.",
     }
@@ -135,7 +137,7 @@ const EXAMPLES: &[(&str, &str)] = &[
     ("tasks.list", r#"{"status":"ready","limit":10}"#),
     (
         "tasks.plan.propose",
-        r#"{"tasks":[{"key":"api","objective":"...","acceptance":["..."],"capabilities":["backend"],"contract":"POST /orders -> 201 {id}"},{"key":"ui","objective":"...","acceptance":["..."],"capabilities":["frontend"],"depends_on":["api"]}]}"#,
+        r#"{"tasks":[{"key":"api","objective":"...","acceptance":["..."],"capabilities":["backend"],"contract":"POST /orders -> 201 {id}"},{"key":"ui","objective":"...","acceptance":["..."],"capabilities":["frontend"],"depends_on":["api"],"breakdown":true},{"key":"form","parent":"ui","objective":"...","acceptance":["..."],"capabilities":["frontend"]}]}"#,
     ),
     (
         "tasks.delegate",

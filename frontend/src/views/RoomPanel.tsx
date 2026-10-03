@@ -1,15 +1,32 @@
 // Right-hand panel of a conversation: details, settings, and runtime sessions.
 import { useEffect, useState } from "react";
-import { api, type Room, type RoomSchedule, type RoomSettings, type RoomSettingsPatch } from "../api";
+import {
+  api,
+  type AgentExposure,
+  type HostToolExposure,
+  type Room,
+  type RoomSettings,
+  type RoomSettingsPatch,
+  type Skill,
+} from "../api";
+import { RoomSchedules, hasSchedules } from "../Schedules";
 import { useRefreshOn } from "../live";
 import { href } from "../nav";
-import { Badge, ErrorNote, ago, useAction, useAsync } from "../ui";
+import { Avatar, Badge, ErrorNote, ago, useAction, useAsync } from "../ui";
+import { Icon } from "../icons";
 import { FolderPicker } from "./agentControls";
-
-export type PanelTab = "details" | "settings" | "sessions";
+import {
+  authStatusBadge,
+  formatSkillCommand,
+  groupHostTools,
+  sandboxStatus,
+  workspaceBadge,
+} from "../exposure";
+export type PanelTab = "details" | "tools" | "settings" | "sessions";
 
 const TABS: { id: PanelTab; label: string }[] = [
   { id: "details", label: "Details" },
+  { id: "tools", label: "Tools & Skills" },
   { id: "settings", label: "Settings" },
   { id: "sessions", label: "Sessions" },
 ];
@@ -45,6 +62,7 @@ export function RoomPanel(props: {
       </header>
       <div className="room-panel-body">
         {tab === "details" && <Details room={room} />}
+        {tab === "tools" && <ToolsAndSkills room={room} />}
         {tab === "settings" && configurable && <Settings key={room.id} roomId={room.id} onChanged={props.onChanged} />}
         {tab === "sessions" && <Sessions roomId={room.id} />}
       </div>
@@ -78,7 +96,7 @@ function Details({ room }: { room: Room }) {
       </div>
       <div>
         <h4>Scheduled wakeups</h4>
-        <RoomSchedules roomId={room.id} />
+        {hasSchedules(room) ? <RoomSchedules roomId={room.id} /> : <p className="muted small">Wakeups here ride the task queue, not the room.</p>}
       </div>
       <div className="muted small">
         {room.message_count} messages · updated {ago(room.updated_at)}
@@ -87,73 +105,295 @@ function Details({ room }: { room: Room }) {
   );
 }
 
-/** Short duration for a repeat interval: `45s`, `1m 30s`, `1h`, `7d`. */
-export function humanDuration(seconds: number) {
-  if (seconds < 60) return `${seconds}s`;
-  if (seconds < 3600) {
-    const extra = seconds % 60;
-    return `${Math.floor(seconds / 60)}m${extra ? ` ${extra}s` : ""}`;
-  }
-  if (seconds < 86400) {
-    const extra = seconds % 3600;
-    return `${Math.floor(seconds / 3600)}h${extra ? ` ${Math.floor(extra / 60)}m` : ""}`;
-  }
-  const extra = seconds % 86400;
-  return `${Math.floor(seconds / 86400)}d${extra ? ` ${Math.floor(extra / 3600)}h` : ""}`;
-}
+function ToolsAndSkills({ room }: { room: Room }) {
+  const exposure = useAsync(() => api.roomExposure(room.id), [room.id]);
+  useRefreshOn((e) => e.type === "config.changed" || e.type.startsWith("runtime."), exposure.reload, [exposure.reload]);
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
 
-const TERMINAL_SCHEDULE_STATES: RoomSchedule["state"][] = ["completed", "cancelled", "failed"];
+  const agents = exposure.data?.agents ?? [];
+  const currentAgent = agents.find((a) => a.persona_id === selectedAgentId) ?? agents[0] ?? null;
 
-const recurrence = (s: RoomSchedule) => {
-  if (s.repeat_seconds == null) return "Fires once";
-  const repeat = s.repeat_count != null ? `, ${s.repeat_count} times` : ", until cancelled";
-  return `Every ${humanDuration(s.repeat_seconds)}${repeat}${s.fires > 0 ? `, fired ${s.fires}` : ""}`;
-};
-
-function ScheduleItem({ roomId, schedule, reload }: { roomId: string; schedule: RoomSchedule; reload: () => void }) {
-  const action = useAction();
-  const terminal = TERMINAL_SCHEDULE_STATES.includes(schedule.state);
   return (
-    <li className="schedule-item">
-      <div className="schedule-head">
-        <strong>{schedule.label || "Wakeup"}</strong>
-        {terminal ? (
-          <Badge value={schedule.state} tone={schedule.state === "completed" ? "ok" : "muted"} />
-        ) : (
-          <span className="muted small">Next {new Date(schedule.due_at * 1000).toLocaleString()}</span>
-        )}
+    <div className="room-exposure">
+      <div className="room-exposure-header">
+        <h4>Exposed Tools & Skills</h4>
       </div>
-      <p className="schedule-message">{schedule.message}</p>
-      <div className="muted small">{recurrence(schedule)}</div>
-      <ErrorNote error={action.error} />
-      <button
-        className="button ghost"
-        disabled={terminal || action.busy}
-        onClick={() => action.run(() => api.cancelRoomSchedule(roomId, schedule.id).then(reload))}
-      >
-        Cancel
-      </button>
-    </li>
+      <ErrorNote error={exposure.error} />
+      {exposure.loading && !exposure.data && <p className="muted small">Loading exposure details…</p>}
+
+      {exposure.data && (
+        <>
+          {agents.length > 1 && (
+            <div className="exposure-agents" role="tablist" aria-label="Select agent">
+              {agents.map((ag) => (
+                <button
+                  key={ag.persona_id}
+                  type="button"
+                  role="tab"
+                  aria-selected={ag.persona_id === currentAgent?.persona_id}
+                  className={`exposure-agent-btn ${ag.persona_id === currentAgent?.persona_id ? "on" : ""}`}
+                  onClick={() => setSelectedAgentId(ag.persona_id)}
+                >
+                  <Avatar name={ag.persona_id} />
+                  <span className="agent-btn-name">{ag.persona_id}</span>
+                  {ag.role && <span className="chip small">{ag.role}</span>}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {currentAgent ? (
+            <AgentExposureView agent={currentAgent} />
+          ) : (
+            <p className="muted small">No agents exposed to this room.</p>
+          )}
+
+          <SkillsExposureView skills={exposure.data.skills} />
+        </>
+      )}
+    </div>
   );
 }
 
-function RoomSchedules({ roomId }: { roomId: string }) {
-  const schedules = useAsync(() => api.roomSchedules(roomId), [roomId]);
-  useRefreshOn(
-    (e) => e.type.startsWith("wakeup") || e.type.startsWith("conversation."),
-    schedules.reload,
-    [schedules.reload],
-  );
-  const list = schedules.data?.schedules ?? [];
+function AgentExposureView({ agent }: { agent: AgentExposure }) {
+  const [toolTab, setToolTab] = useState<"runtime" | "host">("runtime");
+
   return (
-    <div className="schedule-list">
-      <ErrorNote error={schedules.error} />
-      {schedules.data && list.length === 0 && <p className="muted">None scheduled.</p>}
-      <ul>
-        {list.map((s) => (
-          <ScheduleItem key={s.id} roomId={roomId} schedule={s} reload={schedules.reload} />
-        ))}
-      </ul>
+    <div className="agent-exposure-view">
+      <div className="agent-card">
+        <div className="agent-card-header">
+          <Avatar name={agent.persona_id} />
+          <div className="agent-card-title">
+            <div className="agent-name-row">
+              <strong className="agent-persona-id">{agent.persona_id}</strong>
+              <span className="chip runtime-chip">{agent.runtime}</span>
+              {agent.model && <span className="chip model-chip">{agent.model}</span>}
+              {agent.reasoning && <span className="chip reasoning-chip">{agent.reasoning}</span>}
+              {agent.fast && <span className="chip fast-chip">fast</span>}
+            </div>
+            {agent.role && (
+              <div className="agent-role-row muted small">
+                Role: <span>{agent.role}</span>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="exposure-section">
+          <div className="section-label">Workspace</div>
+          <div className="workspace-info">
+            <code className="workspace-path" title={agent.workspace.effective}>
+              {agent.workspace.effective}
+            </code>
+            {(() => {
+              const wb = workspaceBadge(agent.workspace.is_shared);
+              return <span className={`badge tone-${wb.tone}`}>{wb.label}</span>;
+            })()}
+          </div>
+        </div>
+
+        <div className="exposure-section">
+          <div className="section-label">
+            <Icon name="shield" size={14} /> Authorization & Security
+          </div>
+          <div className="auth-status-row">
+            <span className="muted small">Status:</span>{" "}
+            {(() => {
+              const ab = authStatusBadge(agent.authorization.restricted);
+              return <span className={`badge tone-${ab.tone}`}>{ab.label}</span>;
+            })()}
+          </div>
+          <div className="auth-field">
+            <span className="muted small">Assigned Roles:</span>
+            <div className="chips-row">
+              {agent.authorization.roles.length > 0 ? (
+                agent.authorization.roles.map((r) => (
+                  <span key={r} className="chip role-chip">{r}</span>
+                ))
+              ) : (
+                <span className="muted small">None (unrestricted)</span>
+              )}
+            </div>
+          </div>
+          <div className="auth-field">
+            <span className="muted small">Effective Permissions:</span>
+            <div className="chips-row">
+              {agent.authorization.permissions.length > 0 ? (
+                agent.authorization.permissions.map((p) => (
+                  <span key={p} className="chip perm-chip">{p}</span>
+                ))
+              ) : (
+                <span className="muted small">None</span>
+              )}
+            </div>
+          </div>
+          {agent.authorization.capabilities.length > 0 && (
+            <div className="auth-field">
+              <span className="muted small">Capabilities:</span>
+              <div className="chips-row">
+                {agent.authorization.capabilities.map((c) => (
+                  <span key={c} className="chip cap-chip">{c}</span>
+                ))}
+              </div>
+            </div>
+          )}
+          <div className="sandbox-indicators">
+            <div className="sandbox-indicator">
+              <span className="muted small">File editing:</span>
+              {(() => {
+                const sb = sandboxStatus("file_editing", agent.authorization.sandbox.file_editing);
+                return <span className={`badge tone-${sb.tone}`}>{sb.label}</span>;
+              })()}
+            </div>
+            <div className="sandbox-indicator">
+              <span className="muted small">Shell execution:</span>
+              {(() => {
+                const sb = sandboxStatus("shell_execution", agent.authorization.sandbox.shell_execution);
+                return <span className={`badge tone-${sb.tone}`}>{sb.label}</span>;
+              })()}
+            </div>
+            <div className="sandbox-indicator">
+              <span className="muted small">Web access:</span>
+              {(() => {
+                const sb = sandboxStatus("web_access", agent.authorization.sandbox.web_access);
+                return <span className={`badge tone-${sb.tone}`}>{sb.label}</span>;
+              })()}
+            </div>
+          </div>
+        </div>
+
+        <div className="exposure-section">
+          <div className="section-label">Tools</div>
+          <div className="tool-subtabs" role="tablist" aria-label="Tool categories">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={toolTab === "runtime"}
+              className={`tab ${toolTab === "runtime" ? "on" : ""}`}
+              onClick={() => setToolTab("runtime")}
+            >
+              Runtime tools ({agent.tools.runtime.length})
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={toolTab === "host"}
+              className={`tab ${toolTab === "host" ? "on" : ""}`}
+              onClick={() => setToolTab("host")}
+            >
+              Host tools (hivemind-tool) ({agent.tools.host.length})
+            </button>
+          </div>
+
+          {toolTab === "runtime" ? (
+            <div className="tool-grid">
+              {agent.tools.runtime.map((t) => (
+                <div key={t.name} className={`tool-item ${t.allowed ? "allowed" : "denied"}`}>
+                  <div className="tool-item-head">
+                    <span className="tool-name"><code>{t.name}</code></span>
+                    <span className="tool-category muted small">{t.category}</span>
+                    <span className={`badge ${t.allowed ? "tone-ok" : "tone-muted"}`}>
+                      {t.allowed ? "Allowed" : "Denied"}
+                    </span>
+                  </div>
+                  <p className="tool-description">{t.description}</p>
+                  {t.reason && <p className="tool-reason muted small">Reason: {t.reason}</p>}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <HostToolsView hostTools={agent.tools.host} />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function HostToolsView({ hostTools }: { hostTools: HostToolExposure[] }) {
+  const groups = groupHostTools(hostTools);
+  return (
+    <div className="host-tools-grouped">
+      {groups.map((g) => (
+        <div key={g.category} className="host-category-group">
+          <h5 className="category-title">{g.title}</h5>
+          <div className="tool-grid">
+            {g.tools.map((t) => (
+              <div key={t.name} className={`tool-item ${t.allowed && t.available ? "allowed" : "denied"}`}>
+                <div className="tool-item-head">
+                  <span className="tool-name"><code>{t.name}</code></span>
+                  <span className={`badge ${t.available ? "tone-info" : "tone-muted"}`}>
+                    {t.available ? "Offered in room" : "Not offered"}
+                  </span>
+                  <span className={`badge ${t.allowed ? "tone-ok" : "tone-muted"}`}>
+                    {t.allowed ? "Allowed" : "Denied"}
+                  </span>
+                </div>
+                <div className="tool-perm-row muted small">
+                  <span>Required permission:</span>{" "}
+                  {t.permission ? <code>{t.permission}</code> : <span>None</span>}
+                </div>
+                <p className="tool-description">{t.description}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function SkillsExposureView({ skills }: { skills: Skill[] }) {
+  const [copiedSkill, setCopiedSkill] = useState<string | null>(null);
+
+  const copyOrRun = (skill: Skill) => {
+    const cmd = formatSkillCommand(skill);
+    const textarea = document.querySelector<HTMLTextAreaElement>(".composer textarea");
+    if (textarea) {
+      const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")?.set;
+      if (nativeSetter) {
+        nativeSetter.call(textarea, cmd + " ");
+      } else {
+        textarea.value = cmd + " ";
+      }
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+      textarea.focus();
+    }
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(cmd).catch(() => {});
+    }
+    setCopiedSkill(skill.name);
+    setTimeout(() => setCopiedSkill((curr) => (curr === skill.name ? null : curr)), 1500);
+  };
+
+  return (
+    <div className="exposure-section skills-exposure">
+      <div className="section-label">Configured Skills ({skills.length})</div>
+      {skills.length === 0 ? (
+        <p className="muted small">No configured skills available in this room.</p>
+      ) : (
+        <div className="skill-list">
+          {skills.map((s) => (
+            <div key={s.name} className="skill-card">
+              <div className="skill-card-head">
+                <div className="skill-cmd-group">
+                  <code className="skill-name">/skill:{s.name}</code>
+                  {s.argument_hint && <span className="skill-hint muted small">{s.argument_hint}</span>}
+                </div>
+                <button
+                  type="button"
+                  className="ghost small"
+                  onClick={() => copyOrRun(s)}
+                  title={`Copy or insert command for ${s.name}`}
+                >
+                  {copiedSkill === s.name ? "Copied!" : "Copy / Run"}
+                </button>
+              </div>
+              {s.description && <p className="skill-desc">{s.description}</p>}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

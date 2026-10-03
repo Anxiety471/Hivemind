@@ -47,7 +47,7 @@ Other connection settings: `busy_timeout` 5 s, `temp_store=MEMORY`, 512 KiB page
 
 Each member does exactly one retrieval per turn. The result feeds both the full context pack and the delta prompt.
 
-- **Archive hits** depend only on the room and the input, so they are searched once per turn and shared by all members. One extra row covers the active turn's own message, which is filtered out.
+- **Archive hits** depend only on the caller's archive rooms — its own room, plus a thread caller's parent room — and the input, so they are searched once per turn and shared by all members. One extra row covers the active turn's own message, which is filtered out.
 - **Memory scopes** (group, instance, persona, global) are searched per member with `ORDER BY bm25 LIMIT k`, selecting every column in the same query. Relevance is `s/(1+s)` of the bm25 strength `s`, which is monotone, so bm25 order survives into the final score. The final score also mixes importance, recency, scope and status.
 - **Archive ranking is not bm25.** bm25 has to scan every posting list of the query terms, so its cost grows with room size. The archive query walks matches newest first (`ORDER BY rowid DESC LIMIT 64`, which FTS5 stops early on), then ranks that candidate pool by how many distinct query terms each message contains, with recency as the tie-break. An old but highly relevant message outside the newest 64 matches is not found.
 - **Query terms:** lowercased, deduplicated, stopwords removed (kept only if nothing else is left), capped at 16, OR-joined.

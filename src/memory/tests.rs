@@ -1109,3 +1109,47 @@ fn archive_search_never_returns_another_rooms_messages() {
         );
     }
 }
+
+#[test]
+fn thread_archive_search_covers_the_parent_room() {
+    let service = MemoryService::new(MemoryStore::in_memory().unwrap());
+    let trusted = Caller::trusted_user("test");
+    for (room, turn, id, content) in [
+        ("room-a", "ta", "ma", "parent rollout plan"),
+        ("thread-1", "tt", "mt", "thread local note"),
+        ("room-b", "tb", "mb", "unrelated rollback"),
+    ] {
+        service
+            .append_room_message(
+                &trusted,
+                ArchivedMessage {
+                    id: id.into(),
+                    room_id: room.into(),
+                    turn_id: turn.into(),
+                    speaker: "user".into(),
+                    content: content.into(),
+                    created_at: 1,
+                },
+            )
+            .unwrap();
+    }
+    let caller_in = |room: &str| Caller::agent(room, "", AgentInstanceId::new(room, "p"), "p", "p");
+    let ids = |caller: &Caller, query: &str| {
+        service
+            .search(caller, &req(query, vec![SearchScope::Archive]))
+            .unwrap()
+            .into_iter()
+            .map(|r| r.record.id)
+            .collect::<Vec<_>>()
+    };
+    let thread = caller_in("thread-1").with_parent_room("room-a");
+    assert_eq!(ids(&thread, "rollout"), ["ma"]);
+    assert_eq!(ids(&thread, "note"), ["mt"]);
+    // Other rooms stay invisible: neither the parent's siblings nor the
+    // parent's own view of the thread.
+    assert!(ids(&caller_in("room-b"), "note").is_empty());
+    assert!(ids(&caller_in("room-a"), "note").is_empty());
+    // A caller whose parent equals its own room must not merge it twice.
+    let self_parent = caller_in("room-a").with_parent_room("room-a");
+    assert_eq!(ids(&self_parent, "rollout").len(), 1);
+}

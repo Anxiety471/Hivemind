@@ -367,6 +367,7 @@ impl ToolHost for ArtifactTools {
             }
         }
         let mut saved = Vec::new();
+        let mut skipped = Vec::new();
         let mut examined = 0;
         let mut bytes = 0;
         while let Some(path) = paths.pop() {
@@ -413,31 +414,53 @@ impl ToolHost for ArtifactTools {
             if imported {
                 continue;
             }
-            let filename = path
-                .file_name()
-                .and_then(|s| s.to_str())
-                .context("invalid filename")?;
             self.access
                 .authorize(persona, "artifacts.write", "library.collect", room)?;
-            let artifact = self.library.create(NewArtifact {
-                title: filename,
-                filename,
-                description: "Automatically collected agent output",
-                media_type: media_type(filename),
-                content: &content,
-                room,
-                persona,
-            })?;
+            // One unsavable file (a non-UTF-8 or rejected name) is reported and
+            // skipped; it must not hide the files saved around it.
+            let created = path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .context("invalid filename")
+                .and_then(|filename| {
+                    self.library.create(NewArtifact {
+                        title: filename,
+                        filename,
+                        description: "Automatically collected agent output",
+                        media_type: media_type(filename),
+                        content: &content,
+                        room,
+                        persona,
+                    })
+                });
+            let artifact = match created {
+                Ok(artifact) => artifact,
+                Err(error) => {
+                    let name = path.strip_prefix(&root).unwrap_or(&path);
+                    skipped.push(format!("{} ({error})", name.to_string_lossy()));
+                    continue;
+                }
+            };
             self.library.db.lock().execute(
                 "INSERT INTO automatic_imports(source,artifact_id) VALUES(?1,?2)",
                 params![source, artifact.id],
             )?;
             saved.push(artifact);
         }
+        let skipped = if skipped.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " Not saved (rename or use library.create): {}.",
+                skipped.join("; ")
+            )
+        };
         if saved.is_empty() {
-            return Ok(None);
+            return Ok(
+                (!skipped.is_empty()).then(|| format!("No generated files were saved.{skipped}"))
+            );
         }
-        Ok(Some(format!("Generated files automatically saved to Hivemind Library: {}. Use library.publish(id) to give the user an accessible URL when requested; finalize your answer with these artifacts. Do not recreate unchanged files.", serde_json::to_string(&saved)?)))
+        Ok(Some(format!("Generated files automatically saved to Hivemind Library: {}. Use library.publish(id) to give the user an accessible URL when requested; finalize your answer with these artifacts. Do not recreate unchanged files.{skipped}", serde_json::to_string(&saved)?)))
     }
 
     fn manifest(&self, _room: &str, persona: &str) -> Option<String> {
@@ -641,6 +664,48 @@ mod tests {
             .unwrap()
             .is_none());
         drop(library);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn one_unsavable_output_does_not_hide_the_others() {
+        let directory =
+            std::env::temp_dir().join(format!("hivemind-output-skip-{}", std::process::id()));
+        std::fs::create_dir_all(directory.join("artifacts")).unwrap();
+        let mut config = HivemindConfig::default_poc();
+        let persona = config.agents[0].name.clone();
+        for agent in &mut config.agents {
+            agent.workspace = directory.display().to_string();
+        }
+        let core = HivemindCore::new(config, directory.join("hivemind.toml")).unwrap();
+        let tools = ArtifactTools::new(
+            core.artifacts().clone(),
+            Arc::new(SharedWorkspaces::new(
+                &directory.join("hivemind.toml"),
+                &core.config(),
+            )),
+            Arc::new(AccessPolicy::from_config(
+                &core.config(),
+                Arc::new(crate::access::Audit::in_memory().unwrap()),
+            )),
+        );
+        // Collected in name order: the over-long name sits between two good files.
+        let long = format!("b{}.txt", "x".repeat(190));
+        std::fs::write(directory.join("artifacts/a.txt"), "a").unwrap();
+        std::fs::write(directory.join("artifacts").join(&long), "too long").unwrap();
+        std::fs::write(directory.join("artifacts/c.txt"), "c").unwrap();
+        let report = tools.collect_artifacts("solo", &persona).unwrap().unwrap();
+        assert!(
+            report.contains("a.txt") && report.contains("c.txt"),
+            "{report}"
+        );
+        assert!(
+            report.contains("Not saved") && report.contains(&long),
+            "{report}"
+        );
+        assert_eq!(core.artifacts().list("", 20, 0).unwrap().len(), 2);
+        drop(tools);
+        drop(core);
         std::fs::remove_dir_all(directory).unwrap();
     }
 

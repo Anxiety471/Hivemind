@@ -88,6 +88,8 @@ fn task(key: &str, caps: &[&str], deps: &[&str]) -> PlanTask {
         depends_on: deps.iter().map(|d| d.to_string()).collect(),
         contract: Some(format!("{key} contract")),
         kind: None,
+        parent: None,
+        breakdown: None,
     }
 }
 
@@ -1247,6 +1249,8 @@ fn gated_coordination_decisions_are_audited_with_the_bound_identity() {
         .all(|e| e.persona == "Lead" && e.resource.starts_with("task:")));
 }
 
+// The host check below runs the POSIX `true` binary, so this fixture is unix-only.
+#[cfg(unix)]
 #[test]
 fn agent_evidence_cannot_bypass_host_checks_or_reuse_proof_for_another_commit() {
     let service = service();
@@ -1966,4 +1970,351 @@ fn wakeups_that_can_never_fire_leave_a_record_and_tell_a_live_agent() {
         .as_str()
         .unwrap()
         .contains("root task ended"));
+}
+
+#[test]
+fn operators_spawn_nested_child_tasks() {
+    let service = service();
+    let child = |objective: &str| Delegate {
+        objective: objective.into(),
+        acceptance: vec![],
+        capabilities: vec!["backend".into()],
+        owner: None,
+        reviewer: None,
+        depends_on: vec![],
+    };
+    let unplanned = submit(&service, "still planning", None);
+    assert!(matches!(
+        service.add_child(&unplanned.task.id, child("too early"), "user"),
+        Err(CoordError::Conflict(_))
+    ));
+
+    let (root, api, ui) = planned(&service);
+    // `ui` waits on `api`: a sub-issue would start it early, skipping that.
+    assert_eq!(
+        service.detail(&ui).unwrap().task.status,
+        TaskStatus::Submitted
+    );
+    assert!(matches!(
+        service.add_child(&ui, child("too soon"), "user"),
+        Err(CoordError::Conflict(_))
+    ));
+    assert_eq!(
+        service.detail(&ui).unwrap().task.status,
+        TaskStatus::Submitted
+    );
+    let sub = service
+        .add_child(&api, child("api schema"), "user")
+        .unwrap();
+    let subsub = service
+        .add_child(&sub, child("schema migration"), "user")
+        .unwrap();
+    let sub_task = service.detail(&sub).unwrap().task;
+    assert_eq!(sub_task.parent_id.as_deref(), Some(api.as_str()));
+    assert_eq!(sub_task.root_id, root);
+    let leaf = service.detail(&subsub).unwrap().task;
+    assert_eq!(leaf.parent_id.as_deref(), Some(sub.as_str()));
+    assert_eq!(leaf.depth, 3);
+    assert_eq!(service.detail(&api).unwrap().children[0].id, sub);
+    let summary = service.detail(&root).unwrap();
+    let nested = summary.children.iter().find(|c| c.id == subsub).unwrap();
+    assert_eq!(nested.parent_id.as_deref(), Some(sub.as_str()));
+
+    service.cancel(&root, "user").unwrap();
+    assert!(service.add_child(&root, child("late"), "user").is_err());
+}
+
+fn take(dispatches: &mut Vec<Dispatch>, id: &str) -> Dispatch {
+    let index = dispatches
+        .iter()
+        .position(|dispatch| dispatch.task.id == id)
+        .unwrap_or_else(|| panic!("no dispatch for {id}"));
+    dispatches.remove(index)
+}
+
+fn approve(service: &CoordinationService, work: &Dispatch) {
+    let owner = ctx(service, work);
+    service
+        .submit_result(&owner, result(Verdict::Passed))
+        .unwrap();
+    service
+        .finish_attempt(&work.attempt.id, AttemptEnd::Completed)
+        .unwrap();
+    let review = claim(service)
+        .into_iter()
+        .find(|dispatch| dispatch.task.id == work.task.id)
+        .expect("review of the task that just finished");
+    assert_eq!(review.attempt.kind, AttemptKind::Review);
+    let reviewer = ctx(service, &review);
+    service.review(&reviewer, true, "ok").unwrap();
+    service
+        .finish_attempt(&review.attempt.id, AttemptEnd::Completed)
+        .unwrap();
+}
+
+#[test]
+fn planning_creates_nested_subissues_automatically() {
+    let service = service();
+    let root = submit(&service, "fix frontend and backend", None);
+    let root_id = root.task.id.clone();
+    let planned = claim(&service).remove(0);
+    let lead = ctx(&service, &planned);
+
+    let mut cyclic_a = task("a", &["backend"], &[]);
+    cyclic_a.parent = Some("b".into());
+    let mut cyclic_b = task("b", &["frontend"], &[]);
+    cyclic_b.parent = Some("a".into());
+    let err = service
+        .propose_plan(
+            &lead,
+            &Plan {
+                tasks: vec![cyclic_a, cyclic_b],
+            },
+            None,
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("parent cycle"), "{err}");
+
+    let mut child = task("child", &["backend"], &["api"]);
+    child.parent = Some("api".into());
+    let err = service
+        .propose_plan(
+            &lead,
+            &Plan {
+                tasks: vec![task("api", &["backend"], &[]), child],
+            },
+            None,
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("cannot depend on ancestor"), "{err}");
+
+    let mut field = task("field", &["backend"], &[]);
+    field.parent = Some("api".into());
+    let ids = service
+        .propose_plan(
+            &lead,
+            &Plan {
+                tasks: vec![
+                    task("api", &["backend"], &[]),
+                    field,
+                    task("ui", &["frontend"], &["api"]),
+                ],
+            },
+            None,
+        )
+        .unwrap();
+    let id_of = |key: &str| ids.iter().find(|(k, _)| k == key).unwrap().1.clone();
+    let (api, field_id, ui) = (id_of("api"), id_of("field"), id_of("ui"));
+    let api_task = service.detail(&api).unwrap().task;
+    assert_eq!(api_task.parent_id.as_deref(), Some(root_id.as_str()));
+    assert_eq!(
+        (api_task.depth, api_task.status),
+        (1, TaskStatus::Running),
+        "a parent issue waits for its sub-issues instead of being worked"
+    );
+    let field_task = service.detail(&field_id).unwrap().task;
+    assert_eq!(field_task.parent_id.as_deref(), Some(api.as_str()));
+    assert_eq!(
+        (field_task.depth, field_task.status),
+        (2, TaskStatus::Ready)
+    );
+    assert_eq!(field_task.owner.as_deref(), Some("Back"));
+    assert_eq!(status(&service, &ui), TaskStatus::Submitted);
+    service
+        .finish_attempt(&planned.attempt.id, AttemptEnd::Completed)
+        .unwrap();
+
+    let mut open = claim(&service);
+    let field_work = take(&mut open, &field_id);
+    assert_eq!(field_work.attempt.kind, AttemptKind::Work);
+    assert_eq!(field_work.attempt.persona, "Back");
+    assert!(open.is_empty(), "only the unblocked specialist ticket runs");
+
+    approve(&service, &field_work);
+    assert_eq!(
+        status(&service, &api),
+        TaskStatus::Completed,
+        "a parent issue completes when its sub-issues do"
+    );
+    assert_eq!(status(&service, &ui), TaskStatus::Ready);
+}
+
+#[test]
+fn a_specialist_does_the_ticket_and_cannot_spawn_subissues() {
+    let service = service();
+    let planned = claim_plan(&service);
+    let mut only = task("only", &["backend"], &[]);
+    only.breakdown = Some(true);
+    service
+        .propose_plan(&ctx(&service, &planned), &Plan { tasks: vec![only] }, None)
+        .unwrap();
+    service
+        .finish_attempt(&planned.attempt.id, AttemptEnd::Completed)
+        .unwrap();
+    let work = claim(&service).remove(0);
+    assert_eq!(
+        (work.attempt.kind, work.attempt.persona.as_str()),
+        (AttemptKind::Work, "Back"),
+        "asking a specialist to break the ticket down is ignored"
+    );
+    let error = service
+        .delegate(
+            &ctx(&service, &work),
+            Delegate {
+                objective: "another ticket".into(),
+                acceptance: vec!["done".into()],
+                capabilities: vec!["backend".into()],
+                owner: None,
+                reviewer: None,
+                depends_on: vec![],
+            },
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("cannot spawn"), "{error}");
+}
+
+fn claim_plan(service: &CoordinationService) -> Dispatch {
+    let _root = submit(service, "fix a typo", None);
+    claim(service).remove(0)
+}
+
+#[test]
+fn a_researcher_spawns_specialists_then_synthesizes() {
+    use super::capsule::build_prompt;
+    let mut config = team_config(".");
+    config
+        .agents
+        .push(persona("Researcher", &["research"], &["decompose"], "."));
+    config
+        .agents
+        .push(persona("Explorer", &["explore"], &[], "."));
+    config.agents.push(persona("Web", &["web"], &[], "."));
+    let (service, _) = service_with(&config);
+    let planned = claim_plan(&service);
+    let lead = ctx(&service, &planned);
+    let research = task("research", &["research"], &[]);
+    let backend = task("api", &["backend"], &[]);
+    let ids = service
+        .propose_plan(
+            &lead,
+            &Plan {
+                tasks: vec![research, backend],
+            },
+            None,
+        )
+        .unwrap();
+    let id_of = |key: &str| ids.iter().find(|(k, _)| k == key).unwrap().1.clone();
+    let (research_id, api_id) = (id_of("research"), id_of("api"));
+    let research_task = service.detail(&research_id).unwrap().task;
+    assert_eq!(research_task.owner.as_deref(), Some("Researcher"));
+    assert_eq!(
+        research_task.status,
+        TaskStatus::Planning,
+        "a researcher plans helpers instead of doing their specialty"
+    );
+    assert_eq!(
+        service.detail(&api_id).unwrap().task.owner.as_deref(),
+        Some("Back")
+    );
+    assert_eq!(status(&service, &api_id), TaskStatus::Ready);
+    service
+        .finish_attempt(&planned.attempt.id, AttemptEnd::Completed)
+        .unwrap();
+
+    let mut open = claim(&service);
+    let follow = take(&mut open, &research_id);
+    assert_eq!(
+        (follow.attempt.kind, follow.attempt.persona.as_str()),
+        (AttemptKind::Plan, "Researcher")
+    );
+    let explore = task("scan", &["explore"], &[]);
+    let search = task("search", &["web"], &[]);
+    service
+        .propose_plan(
+            &ctx(&service, &follow),
+            &Plan {
+                tasks: vec![explore, search],
+            },
+            None,
+        )
+        .unwrap();
+    service
+        .finish_attempt(&follow.attempt.id, AttemptEnd::Completed)
+        .unwrap();
+    let children = service.detail(&research_id).unwrap().children;
+    assert_eq!(children.len(), 2);
+    assert!(children
+        .iter()
+        .all(|child| child.status == TaskStatus::Ready));
+    assert!(children.iter().all(|child| {
+        let owner = service.detail(&child.id).unwrap().task.owner;
+        matches!(owner.as_deref(), Some("Explorer") | Some("Web"))
+    }));
+    assert_eq!(status(&service, &research_id), TaskStatus::Running);
+
+    let mut leaves: HashSet<String> = children.into_iter().map(|child| child.id).collect();
+    // Sibling specialist tickets stay ready alongside the helpers. Drain them
+    // until the research ticket itself is claimed for synthesis.
+    let synthesis = loop {
+        let work = service
+            .claim(1, &|_| false, &HashSet::new())
+            .unwrap()
+            .remove(0);
+        if work.task.id == research_id {
+            break work;
+        }
+        assert_eq!(work.attempt.kind, AttemptKind::Work);
+        if leaves.contains(&work.task.id) {
+            let spawned = service.delegate(
+                &ctx(&service, &work),
+                Delegate {
+                    objective: "deeper".into(),
+                    acceptance: vec!["done".into()],
+                    capabilities: vec![],
+                    owner: None,
+                    reviewer: None,
+                    depends_on: vec![],
+                },
+            );
+            assert!(
+                spawned.unwrap_err().to_string().contains("cannot spawn"),
+                "a spawned specialist cannot create a child"
+            );
+            leaves.remove(&work.task.id);
+        }
+        approve_one(&service, &work);
+    };
+    assert!(
+        leaves.is_empty(),
+        "helpers finish before the researcher synthesizes"
+    );
+    assert_eq!(
+        (synthesis.attempt.kind, synthesis.attempt.persona.as_str()),
+        (AttemptKind::Work, "Researcher")
+    );
+    let prompt = build_prompt(&service, &synthesis, 8000).unwrap().unwrap();
+    assert!(prompt.text.contains("Synthesize"), "{}", prompt.text);
+}
+
+fn approve_one(service: &CoordinationService, work: &Dispatch) {
+    let owner = ctx(service, work);
+    service
+        .submit_result(&owner, result(Verdict::Passed))
+        .unwrap();
+    service
+        .finish_attempt(&work.attempt.id, AttemptEnd::Completed)
+        .unwrap();
+    let review = service
+        .claim(1, &|_| false, &HashSet::new())
+        .unwrap()
+        .remove(0);
+    assert_eq!(review.task.id, work.task.id);
+    assert_eq!(review.attempt.kind, AttemptKind::Review);
+    let reviewer = ctx(service, &review);
+    service.review(&reviewer, true, "ok").unwrap();
+    service
+        .finish_attempt(&review.attempt.id, AttemptEnd::Completed)
+        .unwrap();
 }

@@ -83,5 +83,5 @@ pub async fn serve(core: Arc<HivemindCore>, port: u16) -> Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod execution_tests;

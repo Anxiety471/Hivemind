@@ -395,11 +395,14 @@ impl PiSession {
     }
 }
 
+// Every test that builds a fixture below needs a POSIX shell script with an
+// exec bit, so those are individually gated with `#[cfg(unix)]`; the `rpc_args`
+// tests are portable and run everywhere.
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use std::{
         fs,
-        os::unix::fs::PermissionsExt,
         path::PathBuf,
         sync::atomic::{AtomicUsize, Ordering},
         time::{SystemTime, UNIX_EPOCH},
@@ -471,8 +474,14 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
+    #[cfg(unix)]
     static NEXT: AtomicUsize = AtomicUsize::new(0);
+    #[cfg(unix)]
     struct FixtureDir(PathBuf);
+    #[cfg(unix)]
     impl FixtureDir {
         fn new(script: &str) -> Self {
             let path = std::env::temp_dir().join(format!(
@@ -485,6 +494,8 @@ mod tests {
                 NEXT.fetch_add(1, Ordering::Relaxed)
             ));
             fs::create_dir_all(&path).unwrap();
+            // The child's `$PWD` is the physical path (macOS: `/var` -> `/private/var`).
+            let path = fs::canonicalize(&path).unwrap();
             let binary = path.join("pi-fixture");
             fs::write(
                 &binary,
@@ -503,12 +514,14 @@ mod tests {
             self.0.to_string_lossy().into_owned()
         }
     }
+    #[cfg(unix)]
     impl Drop for FixtureDir {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn subprocess_rpc_keeps_context_across_prompts_and_reports_context_tokens() {
         let fixture = FixtureDir::new(
@@ -547,6 +560,7 @@ done
 
     /// A message steered mid-prompt reaches the running process as `steer`
     /// and its acknowledgement is not mistaken for a prompt frame.
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_steer_reaches_the_running_prompt() {
         let fixture = FixtureDir::new(
@@ -581,6 +595,7 @@ done
 
     /// A steer the runtime refuses, or one sent between prompts, is prepended
     /// to the next prompt instead of being dropped.
+    #[cfg(unix)]
     #[tokio::test]
     async fn refused_and_idle_steers_lead_the_next_prompt() {
         let fixture = FixtureDir::new(
@@ -610,6 +625,7 @@ done
         session.shutdown().await.unwrap();
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn malformed_and_exited_processes_report_agent_context() {
         for (script, expected) in [

@@ -358,15 +358,18 @@ pub(super) fn tool_followup(call: &str, result: &str) -> String {
 
 /// Server-created invocation context for one agent, one turn: identity and
 /// provenance come from the room/turn Hivemind is executing — never from
-/// model-supplied tool arguments.
+/// model-supplied tool arguments. `parent_room_id` is the thread's parent room
+/// when the turn room is itself a thread (empty otherwise), so archive search
+/// covers the parent alongside the thread's own history.
 pub(super) fn invocation_caller(
     room: &str,
     group_id: &str,
     persona_id: &str,
     turn_id: &str,
     message_id: &str,
+    parent_room_id: &str,
 ) -> Caller {
-    Caller::agent(
+    let caller = Caller::agent(
         room,
         group_id,
         AgentInstanceId::new(room, persona_id),
@@ -379,7 +382,12 @@ pub(super) fn invocation_caller(
         source_message_id: Some(message_id.to_owned()),
         source_actor: Some(persona_id.to_owned()),
         source_kind: Some("agent_proposal".into()),
-    })
+    });
+    if parent_room_id.is_empty() {
+        caller
+    } else {
+        caller.with_parent_room(parent_room_id)
+    }
 }
 
 /// Host-created caller for user-directed turn side effects (explicit

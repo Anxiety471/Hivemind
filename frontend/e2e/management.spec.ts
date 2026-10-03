@@ -228,13 +228,23 @@ test("agents are created, edited and deleted from the web UI", async ({ page, re
 
 test("the settings panel keeps details and sessions and adds per-conversation settings", async ({ page }) => {
   await openRoom(page, "group-alpha");
-  // The header offers settings only; runtime sessions live in the panel's Sessions tab.
+  // The header offers Details and Settings only; runtime sessions live in the panel's
+  // Sessions tab and the tool/skill exposure lives in the panel's Tools & Skills tab.
   await expect(page.getByRole("button", { name: "Runtime sessions" })).toHaveCount(0);
+  await expect(page.locator(".room-header").getByRole("button", { name: "Tools & Skills" })).toHaveCount(0);
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   const panel = page.getByLabel("Conversation panel");
   await expect(panel.getByRole("tab", { name: "Settings" })).toHaveAttribute("aria-selected", "true");
   await panel.getByRole("tab", { name: "Details" }).click();
   await expect(panel.getByRole("heading", { name: "Goal" })).toBeVisible();
+  // Four tabs fit without a horizontal scrollbar in the 360px panel.
+  const tabsOverflow = await panel
+    .locator(".tabs")
+    .evaluate((el) => el.scrollWidth - el.clientWidth);
+  expect(tabsOverflow).toBeLessThanOrEqual(0);
+  await panel.getByRole("tab", { name: "Tools & Skills" }).click();
+  await expect(panel.getByRole("tab", { name: /Runtime tools/ })).toBeVisible();
+  await expect(panel.locator(".skills-exposure")).toContainText("Configured Skills");
   await panel.getByRole("tab", { name: "Sessions" }).click();
   await expect(panel.getByRole("link", { name: "Open full session view" })).toBeVisible();
 
@@ -327,4 +337,74 @@ test("typing @ in a group chat autocompletes agent mentions", async ({ page }) =
   await expect(menu).toBeVisible();
   await textarea.press("Escape");
   await expect(menu).not.toBeVisible();
+});
+
+test("the command menu, G shortcuts and C reach every part of the app", async ({ page }) => {
+  await openRoom(page, "main");
+  // ⌘K / Ctrl+K opens the command menu; searching and Enter run the match.
+  await page.keyboard.press("Control+k");
+  const menu = page.getByRole("dialog", { name: "Command menu" });
+  await expect(menu).toBeVisible();
+  await menu.getByLabel("Search commands").fill("go to agents");
+  await page.keyboard.press("Enter");
+  await expect(menu).toHaveCount(0);
+  await expect(page).toHaveURL(/#\/agents$/);
+  await expect(page.locator('[data-agent="Engineer"]')).toBeVisible();
+
+  // Agents show up as message targets.
+  await page.getByRole("button", { name: "Search and commands" }).click();
+  await menu.getByLabel("Search commands").fill("message reviewer");
+  await menu.getByRole("option", { name: /Message Reviewer/ }).click();
+  await expect(page).toHaveURL(/#\/rooms\/solo-Reviewer$/);
+
+  // G then a key navigates; C opens the new-issue composer from anywhere.
+  await page.locator("body").click();
+  await page.keyboard.press("g");
+  await page.keyboard.press("w");
+  await expect(page).toHaveURL(/#\/workspaces$/);
+  // Agents' self-scheduled wakeups have their own page (none are pending in this hive).
+  await page.keyboard.press("g");
+  await page.keyboard.press("t");
+  await expect(page).toHaveURL(/#\/schedules$/);
+  await expect(page.getByText("No pending wakeups.")).toBeVisible();
+  await page.keyboard.press("c");
+  await expect(page.getByRole("dialog", { name: "New issue" })).toBeVisible();
+  await expect(page).toHaveURL(/#\/issues$/);
+  await page.keyboard.press("Escape");
+
+  // The theme can be forced from settings and survives a reload.
+  await page.goto("/#/settings");
+  await page.getByRole("radio", { name: "Light" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await page.getByRole("radio", { name: "System" }).click();
+  await expect(page.locator("html")).not.toHaveAttribute("data-theme", /.+/);
+});
+
+test("scheduled wakeups inject to the agent without appearing in the chat box", async ({ page, request }) => {
+  await openRoom(page, "solo-Reviewer");
+  const res = await request.post(`${api}/turns`, {
+    data: {
+      target: { type: "solo", id: "Reviewer" },
+      message:
+        "[Hivemind wakeup wk_test: you scheduled this; it is not a user message]\nIntent: say hello\nReminder: every 5 minutes\nNote: test greeting",
+      wait: true,
+    },
+  });
+  expect(res.status()).toBe(200);
+
+  // The agent received the wakeup injection and replied into the room
+  await expect(page.locator(".msg:not([data-user=true]) .markdown p", { hasText: /^Reviewer here\.$/ })).toBeVisible();
+
+  // The internal wakeup message must NOT appear in the chat box (neither as a user message nor a chip)
+  await expect(page.getByText("you scheduled this; it is not a user message")).toHaveCount(0);
+  await expect(page.locator('[data-system-event="wakeup"]')).toHaveCount(0);
+  await expect(page.locator(".msg[data-user=true]")).toHaveCount(0);
+
+  // It is preserved in the room message history and logs as a system event
+  const history = await (await request.get(`${api}/rooms/solo-Reviewer/messages`)).json();
+  const wakeupMsg = history.messages.find((m: { content: string }) => m.content.includes("wk_test"));
+  expect(wakeupMsg).toBeDefined();
+  expect(wakeupMsg.speaker).toBe("system");
 });

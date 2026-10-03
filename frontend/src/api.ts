@@ -130,8 +130,24 @@ export type Task = {
 
 export type TaskSummary = Pick<
   Task,
-  "id" | "objective" | "owner" | "reviewer" | "status" | "status_reason" | "prerequisites"
+  "id" | "parent_id" | "depth" | "objective" | "owner" | "reviewer" | "status" | "status_reason" | "prerequisites"
 >;
+
+/** A sub-issue proposed together with a new root issue. */
+export type PlanTask = {
+  key: string;
+  objective: string;
+  acceptance: string[];
+  capabilities?: string[];
+  owner?: string;
+  depends_on?: string[];
+  /** Key of another task in the same plan: this one is created as its sub-issue. */
+  parent?: string;
+  /** `false` keeps the ticket a leaf; omitted uses the owner's default. */
+  breakdown?: boolean;
+};
+
+export type ChildIssue = { objective: string; acceptance?: string[]; capabilities?: string[]; owner?: string; reviewer?: string; depends_on?: string[] };
 
 export type Artifact = {
   id: string;
@@ -373,6 +389,67 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 const enc = encodeURIComponent;
 
 export type Skill = { name: string; description: string; argument_hint: string; source: string };
+export type RuntimeToolExposure = {
+  name: string;
+  category: "fs_read" | "fs_write" | "execution" | "web";
+  allowed: boolean;
+  description: string;
+  reason: string | null;
+};
+
+export type HostToolExposure = {
+  name: string;
+  category: "memory" | "workspace" | "skills" | "wakeup" | "artifacts" | "coordination";
+  available: boolean;
+  allowed: boolean;
+  permission: string | null;
+  description: string;
+};
+
+export type AgentSandboxExposure = {
+  file_editing: boolean;
+  shell_execution: boolean;
+  web_access: boolean;
+};
+
+export type AgentAuthorizationExposure = {
+  restricted: boolean;
+  roles: string[];
+  permissions: string[];
+  capabilities: string[];
+  sandbox: AgentSandboxExposure;
+};
+
+export type AgentWorkspaceExposure = {
+  effective: string;
+  is_shared: boolean;
+  source: "group" | "persona";
+};
+
+export type AgentExposure = {
+  persona_id: string;
+  runtime: string;
+  model: string | null;
+  reasoning: string | null;
+  fast: boolean | null;
+  role: string | null;
+  workspace: AgentWorkspaceExposure;
+  authorization: AgentAuthorizationExposure;
+  tools: {
+    runtime: RuntimeToolExposure[];
+    host: HostToolExposure[];
+  };
+};
+
+export type SkillExposure = Skill;
+
+export type RoomExposure = {
+  room_id: string;
+  room_kind: "main" | "solo" | "group" | "thread" | "task" | "archived";
+  room_name: string;
+  agents: AgentExposure[];
+  skills: Skill[];
+};
 
 export const api = {
   library: (query = "", offset = 0) => request<{ artifacts: LibraryArtifact[] }>("GET", `/library?query=${encodeURIComponent(query)}&offset=${offset}&limit=50`),
@@ -414,6 +491,7 @@ export const api = {
   steerRoom: (id: string, message: string) =>
     request<{ room_id: string; delivered_to: string[] }>("POST", `/rooms/${enc(id)}/steer`, { message }),
   roomSettings: (id: string) => request<RoomSettings>("GET", `/rooms/${enc(id)}/settings`),
+  roomExposure: (id: string) => request<RoomExposure>("GET", `/rooms/${enc(id)}/exposure`),
   roomSchedules: (id: string) =>
     request<{ room_id: string; schedules: RoomSchedule[] }>("GET", `/rooms/${enc(id)}/schedules`),
   cancelRoomSchedule: (id: string, scheduleId: string) =>
@@ -438,8 +516,29 @@ export const api = {
     request<{ tasks: Task[]; next_after: string | null }>("GET", `/tasks?limit=200${all ? "&all=true" : ""}`),
   task: (id: string) => request<{ task: TaskDetail }>("GET", `/tasks/${enc(id)}`),
   attempts: (id: string) => request<{ attempts: Attempt[] }>("GET", `/tasks/${enc(id)}/attempts`),
-  submitTask: (objective: string, acceptance: string[], capabilities: string[]) =>
-    request<{ id: string }>("POST", "/tasks", { objective, acceptance, capabilities }),
+  /** Every task at every depth, following pages up to `max`. */
+  allTasks: async (max = 1000) => {
+    const tasks: Task[] = [];
+    let after: string | null = null;
+    do {
+      const page: { tasks: Task[]; next_after: string | null } = await request(
+        "GET",
+        `/tasks?limit=200&all=true${after ? `&after=${enc(after)}` : ""}`,
+      );
+      tasks.push(...page.tasks);
+      after = page.next_after;
+    } while (after && tasks.length < max);
+    return tasks;
+  },
+  submitTask: (objective: string, acceptance: string[], capabilities: string[], plan?: PlanTask[]) =>
+    request<{ id: string }>("POST", "/tasks", {
+      objective,
+      acceptance,
+      capabilities,
+      ...(plan && plan.length ? { plan: { tasks: plan } } : {}),
+    }),
+  addChild: (parentId: string, child: ChildIssue) =>
+    request<{ id: string; task: TaskDetail }>("POST", `/tasks/${enc(parentId)}/children`, child),
   taskAction: (id: string, action: "cancel" | "pause" | "resume", body?: unknown) =>
     request<{ task: TaskDetail }>("POST", `/tasks/${enc(id)}/${action}`, body ?? {}),
   taskInput: (id: string, answer: string) =>

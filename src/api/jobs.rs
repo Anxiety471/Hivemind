@@ -284,6 +284,22 @@ fn dispatch_due_wakeups(core: &HivemindCore) -> anyhow::Result<usize> {
             eprintln!("chat wakeup {} could not be queued: {error}", wakeup.id);
             continue;
         }
+        let intent = crate::wakeup::extract_intent(&wakeup.message);
+        core.events()
+            .publish(crate::events::DomainEventKind::WakeupDispatched {
+                room_id: wakeup.room_id.clone(),
+                wakeup_id: wakeup.id.clone(),
+                intent: intent.clone(),
+            });
+        eprintln!(
+            "chat wakeup {} dispatched in room {}{}",
+            wakeup.id,
+            wakeup.room_id,
+            intent
+                .as_deref()
+                .map(|i| format!(" (intent: \"{i}\")"))
+                .unwrap_or_default()
+        );
         // Out of the due queue while the outcome is recorded; a crash here
         // leaves the row `dispatched`, which recovery requeues so the fire is
         // retried under the same per-fire key (already deduped if the turn

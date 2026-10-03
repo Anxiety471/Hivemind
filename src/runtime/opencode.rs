@@ -30,10 +30,12 @@
 //!   plugin at all, v2.0.18 drops its built-in `opencode` provider (Zen, free
 //!   models), so the dir holds one no-op plugin ([`KEEP_PROVIDERS_PLUGIN`]).
 //! - Permissions: Hivemind has no human in the loop, so the child config sets
-//!   `"permission": "allow"` (verified: reads outside the workspace then raise
-//!   no request). This matches Pi/OMP, which run tools without approval. As a
-//!   fallback, any `session/request_permission` that still arrives is
-//!   answered with the `allow_once` option.
+//!   `{"*": "allow", "question": "deny"}` (verified: reads outside the
+//!   workspace then raise no request, while `question` is denied so unattended
+//!   turns do not trigger interactive form elicitation and abort). This matches
+//!   Pi/OMP, which run tools without approval. As a fallback, any
+//!   `session/request_permission` that still arrives is answered with the
+//!   `allow_once` or `allow_always` option.
 //! - `session/delete` removes the on-disk session; closing stdin makes `acp`
 //!   and its private `serve --stdio` child exit. SIGKILL of the `acp` child
 //!   left no `opencode` or tool grandchild behind. The process name in `ps` is
@@ -85,6 +87,10 @@ struct Turn {
     /// Text chunks grouped by assistant message id, in arrival order.
     messages: Vec<(String, String)>,
     used: Option<u64>,
+    /// Interactive questions formatted as markdown text, if asked via the question tool.
+    question: Option<String>,
+    /// Last tool failure reported via tool_call_update, if any.
+    last_tool_failure: Option<(String, String)>,
 }
 
 impl Turn {
@@ -108,6 +114,28 @@ impl Turn {
                     self.used = Some(used);
                 }
             }
+            Some("tool_call" | "tool_call_update") => {
+                let title = update
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .or_else(|| update.get("toolName").and_then(Value::as_str))
+                    .unwrap_or_default();
+                if title == "question" {
+                    if let Some(raw_input) = update.get("rawInput") {
+                        if let Some(formatted) = format_questions(raw_input) {
+                            self.question = Some(formatted);
+                        }
+                    }
+                }
+                if update.get("status").and_then(Value::as_str) == Some("failed") {
+                    let text = update
+                        .pointer("/content/0/content/text")
+                        .and_then(Value::as_str)
+                        .or_else(|| update.pointer("/content/0/text").and_then(Value::as_str))
+                        .unwrap_or("tool call failed");
+                    self.last_tool_failure = Some((title.to_string(), text.to_string()));
+                }
+            }
             _ => {}
         }
     }
@@ -118,6 +146,49 @@ impl Turn {
             .rev()
             .map(|(_, text)| text.trim())
             .find(|text| !text.is_empty())
+    }
+}
+
+fn format_questions(raw_input: &Value) -> Option<String> {
+    let questions = raw_input.get("questions").and_then(Value::as_array)?;
+    if questions.is_empty() {
+        return None;
+    }
+    let mut parts = Vec::new();
+    for q in questions {
+        let question = q
+            .get("question")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())?;
+        let mut text = question.to_string();
+        if let Some(options) = q.get("options").and_then(Value::as_array) {
+            for opt in options {
+                let Some(label) = opt
+                    .get("label")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                else {
+                    continue;
+                };
+                let desc = opt
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty());
+                match desc {
+                    Some(d) => text.push_str(&format!("\n- **{label}**: {d}")),
+                    None => text.push_str(&format!("\n- **{label}**")),
+                }
+            }
+        }
+        parts.push(text);
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("\n\n"))
     }
 }
 
@@ -187,11 +258,10 @@ impl OpencodeSession {
     }
 
     /// OpenCode permission config: everything allowed unless the persona's roles withhold editing or shell.
+    /// Interactive questions are denied because Hivemind runs unattended (no human in the loop),
+    /// which prevents OpenCode from attempting form elicitation and cancelling the turn.
     fn permission(agent: &AgentConfig) -> Value {
-        if agent.tool_access.is_none() && agent.web {
-            return json!("allow");
-        }
-        let mut rules = json!({"*": "allow"});
+        let mut rules = json!({"*": "allow", "question": "deny"});
         if let Some(access) = agent.tool_access {
             if !access.write {
                 rules["edit"] = json!("deny");
@@ -423,13 +493,19 @@ impl OpencodeSession {
 
 /// Pick the allow option of a permission request (Hivemind runs unattended).
 fn approve_permission(frame: &Value) -> Value {
-    let option = frame
-        .pointer("/params/options")
-        .and_then(Value::as_array)
-        .and_then(|options| {
-            options
-                .iter()
+    let options = frame.pointer("/params/options").and_then(Value::as_array);
+    let option = options
+        .and_then(|opts| {
+            opts.iter()
                 .find(|option| option.get("kind").and_then(Value::as_str) == Some("allow_once"))
+                .or_else(|| {
+                    opts.iter().find(|option| {
+                        matches!(
+                            option.get("kind").and_then(Value::as_str),
+                            Some("allow_always" | "allow")
+                        )
+                    })
+                })
         })
         .and_then(|option| option.get("optionId").and_then(Value::as_str));
     match option {
@@ -461,10 +537,32 @@ impl HarnessSession for OpencodeSession {
         if turn.used.is_some() {
             self.context_tokens = turn.used;
         }
-        match result.get("stopReason").and_then(Value::as_str) {
-            Some("end_turn") => {}
-            Some("cancelled") => bail!(
-                "OpenCode turn for '{}' was cancelled before it completed",
+        if let Some(text) = turn.reply() {
+            return Ok(text.to_string());
+        }
+        if let Some(question_text) = turn.question {
+            return Ok(question_text);
+        }
+
+        let stop_reason = result.get("stopReason").and_then(Value::as_str);
+        match stop_reason {
+            Some("end_turn" | "max_tokens") => bail!(
+                "OpenCode completed without assistant text for '{}'",
+                self.agent_name
+            ),
+            Some("cancelled") => {
+                let detail = turn
+                    .last_tool_failure
+                    .as_ref()
+                    .map(|(tool, err)| format!(": tool '{tool}' failed: {err}"))
+                    .unwrap_or_default();
+                bail!(
+                    "OpenCode turn for '{}' was cancelled before it completed{detail}",
+                    self.agent_name
+                );
+            }
+            Some("refusal") => bail!(
+                "OpenCode turn for '{}' was refused by the model",
                 self.agent_name
             ),
             Some(reason) => bail!(
@@ -473,13 +571,6 @@ impl HarnessSession for OpencodeSession {
             ),
             None => bail!(
                 "OpenCode prompt result for '{}' had no stopReason",
-                self.agent_name
-            ),
-        }
-        match turn.reply() {
-            Some(text) => Ok(text.to_string()),
-            None => bail!(
-                "OpenCode completed without assistant text for '{}'",
                 self.agent_name
             ),
         }
@@ -549,6 +640,12 @@ mod tests {
             approve_permission(&frame),
             json!({"outcome":{"outcome":"selected","optionId":"once"}})
         );
+        let only_always =
+            json!({"params":{"options":[{"optionId":"always","kind":"allow_always"}]}});
+        assert_eq!(
+            approve_permission(&only_always),
+            json!({"outcome":{"outcome":"selected","optionId":"always"}})
+        );
         let only_reject =
             json!({"params":{"options":[{"optionId":"reject","kind":"reject_once"}]}});
         assert_eq!(
@@ -558,13 +655,58 @@ mod tests {
     }
 
     #[test]
-    fn web_off_denies_web_tools_even_for_an_unrestricted_persona() {
+    fn permissions_deny_interactive_question_and_respect_web_access() {
         let mut agent = crate::config::HivemindConfig::default_poc().agents[0].clone();
-        assert_eq!(OpencodeSession::permission(&agent), json!("allow"));
+        assert_eq!(
+            OpencodeSession::permission(&agent),
+            json!({"*": "allow", "question": "deny"})
+        );
         agent.web = false;
         assert_eq!(
             OpencodeSession::permission(&agent),
-            json!({"*": "allow", "webfetch": "deny", "websearch": "deny"})
+            json!({"*": "allow", "question": "deny", "webfetch": "deny", "websearch": "deny"})
+        );
+    }
+
+    #[test]
+    fn turn_absorbs_question_tool_call_and_formats_markdown() {
+        let mut turn = Turn::default();
+        turn.absorb(&json!({
+            "sessionUpdate": "tool_call_update",
+            "title": "question",
+            "status": "in_progress",
+            "rawInput": {
+                "questions": [
+                    {
+                        "question": "What kind of issue would you like to create?",
+                        "header": "Issue Type",
+                        "options": [
+                            {"label": "GitHub Issue", "description": "Create an issue in a GitHub repository"},
+                            {"label": "OpenCode Bug Report", "description": "Report a bug with OpenCode itself"},
+                            {"label": "Work with Existing Issue"}
+                        ]
+                    }
+                ]
+            }
+        }));
+        assert_eq!(
+            turn.question.as_deref(),
+            Some("What kind of issue would you like to create?\n- **GitHub Issue**: Create an issue in a GitHub repository\n- **OpenCode Bug Report**: Report a bug with OpenCode itself\n- **Work with Existing Issue**")
+        );
+    }
+
+    #[test]
+    fn turn_captures_tool_failure() {
+        let mut turn = Turn::default();
+        turn.absorb(&json!({
+            "sessionUpdate": "tool_call_update",
+            "title": "question",
+            "status": "failed",
+            "content": [{"type": "content", "content": {"type": "text", "text": "The user dismissed this question"}}]
+        }));
+        assert_eq!(
+            turn.last_tool_failure,
+            Some(("question".into(), "The user dismissed this question".into()))
         );
     }
 }

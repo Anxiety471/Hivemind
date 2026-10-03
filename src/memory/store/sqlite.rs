@@ -617,19 +617,12 @@ impl MemoryStore {
                 }
             }
             if request.scopes.contains(&SearchScope::Archive) {
-                let room = &caller.room_id;
-                let pattern = format!("room_key:\"{}\" AND ({terms})", hex_key('r', room));
-                // bm25 needs document frequencies that cost a scan of every
-                // posting list, so it grows with room history. Walk matches
-                // newest-first (FTS5 stops early on `ORDER BY rowid DESC LIMIT`)
-                // and rank that bounded candidate pool by how many query terms
-                // each message contains.
                 let pool = limit.max(ARCHIVE_CANDIDATES);
-                let mut q = c.prepare_cached("SELECT a.id,a.room_id,a.turn_id,a.speaker,a.content,a.created_at FROM archive_fts JOIN archive_messages a ON a.rowid=archive_fts.rowid WHERE archive_fts MATCH ?1 AND a.room_id=?2 ORDER BY archive_fts.rowid DESC LIMIT ?3")?;
-                let rows = q
-                    .query_map(params![pattern, room, pool], message_from_row)?
-                    .collect::<rusqlite::Result<Vec<_>>>()?;
-                for msg in rows {
+                // A thread caller also searches its parent room's archive, so
+                // walk each covered room with the same per-room query plan and
+                // merge into one ranked result list. Rooms are de-duplicated by
+                // `archive_rooms`, so no message can be pushed twice.
+                let result_for = |msg: ArchivedMessage| -> SearchResult {
                     // rank_score expects bm25's sign: stronger match = more negative.
                     let relevance = -(matched_terms(&query_terms, &msg.content) as f64);
                     let record = MemoryRecord {
@@ -651,10 +644,25 @@ impl MemoryStore {
                         importance: 20,
                         supersedes_memory_id: None,
                     };
-                    found.push(SearchResult {
+                    SearchResult {
                         score: rank_score(relevance, &record),
                         record,
-                    });
+                    }
+                };
+                for room in archive_rooms(caller) {
+                    let pattern = format!("room_key:\"{}\" AND ({terms})", hex_key('r', &room));
+                    // bm25 needs document frequencies that cost a scan of every
+                    // posting list, so it grows with room history. Walk matches
+                    // newest-first (FTS5 stops early on `ORDER BY rowid DESC LIMIT`)
+                    // and rank that bounded candidate pool by how many query terms
+                    // each message contains.
+                    let mut q = c.prepare_cached("SELECT a.id,a.room_id,a.turn_id,a.speaker,a.content,a.created_at FROM archive_fts JOIN archive_messages a ON a.rowid=archive_fts.rowid WHERE archive_fts MATCH ?1 AND a.room_id=?2 ORDER BY archive_fts.rowid DESC LIMIT ?3")?;
+                    let rows = q
+                        .query_map(params![pattern, room, pool], message_from_row)?
+                        .collect::<rusqlite::Result<Vec<_>>>()?;
+                    for msg in rows {
+                        found.push(result_for(msg));
+                    }
                 }
             }
             Ok(found)

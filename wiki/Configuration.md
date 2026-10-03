@@ -59,7 +59,7 @@ model = "opencode/big-pickle"   # free opencode/*-free models need no API key
 
 ### OpenCode notes
 
-Hivemind runs `opencode acp` (Agent Client Protocol over stdio, no port), one child per room + persona, and deletes the OpenCode session on shutdown. The persona's `system_prompt` replaces OpenCode's `build` agent prompt. Hivemind sets `"permission": "allow"` in the child's config, so OpenCode never waits for approval, just like Pi and OMP. **Treat the workspace as untrusted-model territory:** an agent can read and write anything your user can, unless [roles](Access-Control) restrict it. OpenCode's reported context already includes its built-in prompt (several thousand tokens), so set `runtime_rotate_tokens` accordingly.
+Hivemind runs `opencode acp` (Agent Client Protocol over stdio, no port), one child per room + persona, and deletes the OpenCode session on shutdown. The persona's `system_prompt` replaces OpenCode's `build` agent prompt. Hivemind sets `{"*": "allow", "question": "deny"}` in the child's config, so OpenCode never waits for approval, just like Pi and OMP. `question` is denied because Hivemind has no human in the loop: that tool blocks on interactive form input, and an unattended turn would otherwise be dismissed and end as `stopReason: "cancelled"`. **Treat the workspace as untrusted-model territory:** an agent can read and write anything your user can, unless [roles](Access-Control) restrict it. OpenCode's reported context already includes its built-in prompt (several thousand tokens), so set `runtime_rotate_tokens` accordingly.
 
 ## Reply order and groups
 

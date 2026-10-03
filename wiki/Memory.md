@@ -29,7 +29,7 @@ When a persona declares `roles`, memory writes are gated by `memory.private.writ
 
 ## Retrieval details
 
-Each member does exactly one retrieval per turn. Memory scopes are ranked with bm25 mixed with importance, recency, scope, and status; the archive is ranked by distinct query-term matches over the newest 64 hits. See [Backend Efficiency](Backend-Efficiency#retrieval).
+Each member does exactly one retrieval per turn. Memory scopes are ranked with bm25 mixed with importance, recency, scope, and status; the archive is ranked by distinct query-term matches over the newest 64 hits. A thread's archive search also covers its parent room, so messages the thread replies to stay reachable. See [Backend Efficiency](Backend-Efficiency#retrieval).
 
 ## Limits
 

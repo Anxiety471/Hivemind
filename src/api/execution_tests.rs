@@ -1,4 +1,9 @@
 //! Operator-facing execution integration tests with a real fixture RPC child.
+//!
+//! Every test here drives a `#!/bin/sh` fixture binary marked executable, so the
+//! whole module is POSIX-only and is declared `#[cfg(all(test, unix))]` in
+//! `src/api/mod.rs`.
+
 use super::*;
 use axum::{
     body::Body,
@@ -621,6 +626,25 @@ async fn a_recurring_chat_wakeup_fires_once_per_period_under_a_per_fire_key() {
     })
     .await
     .expect("both delivered wakeup bodies were archived into room history");
+    let messages = fixture
+        .core
+        .memory()
+        .room_messages_page(&caller, "main", None, 50)
+        .unwrap();
+    let wakeups: Vec<_> = messages
+        .iter()
+        .filter(|m| {
+            m.content
+                .starts_with("[Hivemind wakeup wk_rep: you scheduled this")
+        })
+        .collect();
+    assert_eq!(wakeups.len(), 2);
+    for w in wakeups {
+        assert_eq!(
+            w.speaker, "system",
+            "wakeup message must have system speaker, not user"
+        );
+    }
     assert_eq!(execution.pending_chat_wakeups("main", None).unwrap(), 0);
     fixture.core.shutdown().await;
     worker.await.unwrap();

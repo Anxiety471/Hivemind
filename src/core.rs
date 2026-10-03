@@ -338,11 +338,10 @@ impl HivemindCore {
     ) -> Result<TurnExecution> {
         anyhow::ensure!(!self.is_shutting_down(), "core is shutting down");
         let resolved = self.resolve_target(target)?;
-        let invoker = Arc::new(RuntimeInvoker::new(
-            self.runtime.clone(),
-            &resolved.room_id,
-            &resolved.group_id,
-        ));
+        let invoker = Arc::new(
+            RuntimeInvoker::new(self.runtime.clone(), &resolved.room_id, &resolved.group_id)
+                .with_parent_room(&self.thread_parent(&resolved.room_id)),
+        );
         self.conversation
             .turn_with_id(
                 TurnRequest {
@@ -730,7 +729,10 @@ impl HivemindCore {
     }
     /// Invoker that routes a room's turns to the core-owned runtime pool.
     pub fn runtime_invoker(&self, room: &str, group_id: &str) -> Arc<dyn AgentInvoker> {
-        Arc::new(RuntimeInvoker::new(self.runtime.clone(), room, group_id))
+        Arc::new(
+            RuntimeInvoker::new(self.runtime.clone(), room, group_id)
+                .with_parent_room(&self.thread_parent(room)),
+        )
     }
     /// Stop one instance's live session so its next prompt hydrates fresh.
     pub async fn rotate_instance(
@@ -754,6 +756,16 @@ impl HivemindCore {
     }
     pub fn memory(&self) -> &Arc<MemoryService> {
         &self.memory
+    }
+    /// Parent room id when `room` is a thread, empty otherwise. Carried onto a
+    /// runtime caller so its archive search also covers the parent room.
+    fn thread_parent(&self, room: &str) -> String {
+        self.memory
+            .thread(&crate::memory::Caller::trusted_user("core"), room)
+            .ok()
+            .flatten()
+            .map(|thread| thread.parent_room_id)
+            .unwrap_or_default()
     }
     pub fn conversation(&self) -> &ConversationCoordinator {
         &self.conversation
@@ -904,11 +916,10 @@ impl HivemindCore {
             anyhow::bail!("empty message");
         }
         let resolved = self.resolve_target(target)?;
-        let invoker = Arc::new(RuntimeInvoker::new(
-            self.runtime.clone(),
-            &resolved.room_id,
-            &resolved.group_id,
-        ));
+        let invoker = Arc::new(
+            RuntimeInvoker::new(self.runtime.clone(), &resolved.room_id, &resolved.group_id)
+                .with_parent_room(&self.thread_parent(&resolved.room_id)),
+        );
         self.send_resolved_turn(&resolved, message, invoker).await
     }
 
@@ -935,11 +946,10 @@ impl HivemindCore {
             .await
     }
     pub async fn turn(&self, request: CoreTurnRequest<'_>) -> Result<Vec<TurnReply>> {
-        let invoker = Arc::new(RuntimeInvoker::new(
-            self.runtime.clone(),
-            request.room,
-            request.group_id,
-        ));
+        let invoker = Arc::new(
+            RuntimeInvoker::new(self.runtime.clone(), request.room, request.group_id)
+                .with_parent_room(&self.thread_parent(request.room)),
+        );
         self.turn_with_invoker(request, invoker).await
     }
 
@@ -977,15 +987,20 @@ impl HivemindCore {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use crate::identity::AgentInstanceId;
     use std::{
         fs,
-        os::unix::fs::PermissionsExt,
         path::PathBuf,
         sync::atomic::{AtomicUsize, Ordering},
     };
 
     use super::*;
+
+    /// POSIX-only tests spawn `#!/bin/sh` fixture binaries; the portable tests in
+    /// this module stay ungated so they also run on Windows.
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
 
     static NEXT_FIXTURE: AtomicUsize = AtomicUsize::new(0);
 
@@ -1013,15 +1028,18 @@ mod tests {
     /// requests to `prompts.log`, reports `stats-tokens` (default 0) as its
     /// context usage, exits on a `crash-now` prompt, and — while `tool-mode`
     /// exists — answers with a memory tool call until it sees a tool result.
+    #[cfg(unix)]
     fn fake_core(directory: &TestDirectory) -> (HivemindCore, PathBuf, PathBuf) {
         fake_core_with_timeouts(directory, 300, 120)
     }
+    #[cfg(unix)]
     fn fake_core_with_prompt_timeout(
         directory: &TestDirectory,
         prompt_timeout_secs: u64,
     ) -> (HivemindCore, PathBuf, PathBuf) {
         fake_core_with_timeouts(directory, prompt_timeout_secs, 0)
     }
+    #[cfg(unix)]
     fn fake_core_with_timeouts(
         directory: &TestDirectory,
         prompt_timeout_secs: u64,
@@ -1029,6 +1047,7 @@ mod tests {
     ) -> (HivemindCore, PathBuf, PathBuf) {
         fake_core_configured(directory, prompt_timeout_secs, idle_timeout_secs, |_| {})
     }
+    #[cfg(unix)]
     fn fake_core_configured(
         directory: &TestDirectory,
         prompt_timeout_secs: u64,
@@ -1094,6 +1113,7 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
     }
 
     /// The `message` of every prompt request the fake runtime received.
+    #[cfg(unix)]
     fn prompt_messages(path: &Path) -> Vec<String> {
         lines(path)
             .iter()
@@ -1104,6 +1124,7 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
             .collect()
     }
 
+    #[cfg(unix)]
     fn engineer_caller(room: &str) -> crate::memory::Caller {
         crate::memory::Caller::agent(
             room,
@@ -1114,6 +1135,7 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
         )
     }
 
+    #[cfg(unix)]
     async fn solo_turn(core: &HivemindCore, room: &str, input: &str) -> Result<Vec<TurnReply>> {
         let members = [Participant {
             agent: core.agents().list()[0].clone(),
@@ -1130,6 +1152,7 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
         .await
     }
 
+    #[cfg(unix)]
     fn lines(path: &Path) -> Vec<String> {
         fs::read_to_string(path)
             .unwrap_or_default()
@@ -1138,6 +1161,7 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
             .collect()
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn sessions_persist_per_room_instance_and_shutdown_stops_them_idempotently() {
         let directory = TestDirectory::new();
@@ -1199,6 +1223,7 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn later_turns_send_only_the_room_delta() {
         let directory = TestDirectory::new();
@@ -1219,6 +1244,7 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
         assert!(!messages[1].contains("first"), "{}", messages[1]);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn rotation_rehydrates_a_fresh_runtime_at_the_turn_boundary() {
         let directory = TestDirectory::new();
@@ -1288,6 +1314,7 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
         core.shutdown().await;
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn failed_runtime_is_discarded_and_next_turn_rehydrates() {
         let directory = TestDirectory::new();
@@ -1329,6 +1356,7 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_single_crash_is_retried_on_a_fresh_session() {
         let directory = TestDirectory::new();
@@ -1346,6 +1374,7 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_failing_model_falls_back_to_the_next_configured_model() {
         let directory = TestDirectory::new();
@@ -1364,6 +1393,7 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn exhausted_models_report_the_last_failure() {
         let directory = TestDirectory::new();
@@ -1378,6 +1408,7 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
         assert_eq!(prompt_messages(&prompts).len(), 3);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn prompt_timeout_discards_epoch_without_retry_and_rehydrates_next_turn() {
         let directory = TestDirectory::new();
@@ -1440,6 +1471,7 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
         core.shutdown().await;
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn core_shutdown_cancels_a_hanging_prompt_and_waits_for_concurrent_callers() {
         let directory = TestDirectory::new();
@@ -1492,6 +1524,7 @@ printf '%s stopped\n' "$agent" >> __DIR__/lifecycle.log
         assert_eq!(shutdown_reasons, ["core_shutdown"]);
         assert_eq!(shutdown_events, 1);
     }
+    #[cfg(unix)]
     #[tokio::test]
     async fn shutdown_cancels_omp_startup_without_opening_an_epoch() {
         let directory = TestDirectory::new();
@@ -1566,6 +1599,7 @@ while IFS= read -r request; do :; done
             .expect("canceled OMP startup process is no longer running");
         }
     }
+    #[cfg(unix)]
     #[tokio::test]
     async fn core_shutdown_kills_a_child_that_ignores_stdin_close_within_the_bound() {
         let directory = TestDirectory::new();
@@ -1595,6 +1629,7 @@ while IFS= read -r request; do :; done
             assert!(!String::from_utf8_lossy(&command).contains("sleep 60"));
         }
     }
+    #[cfg(unix)]
     #[tokio::test]
     async fn idle_sessions_close_and_the_next_turn_rehydrates() {
         let directory = TestDirectory::new();
@@ -1617,6 +1652,7 @@ while IFS= read -r request; do :; done
         core.shutdown().await;
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn tool_followups_continue_the_live_session_with_only_the_result() {
         let directory = TestDirectory::new();
@@ -1643,6 +1679,7 @@ while IFS= read -r request; do :; done
         assert!(!messages[1].contains("Participants:"), "{}", messages[1]);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn turn_events_are_ordered_and_attributed() {
         let directory = TestDirectory::new();
@@ -1707,6 +1744,7 @@ while IFS= read -r request; do :; done
             .all(|id| id == &turn_ids[0] && !id.is_empty()));
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn one_open_epoch_per_live_session_closed_at_shutdown() {
         let directory = TestDirectory::new();
@@ -1742,6 +1780,7 @@ while IFS= read -r request; do :; done
             .is_empty());
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn broadcast_records_runtime_startup_failure_and_keeps_successful_peer() {
         let directory = TestDirectory::new();
@@ -1827,6 +1866,7 @@ while IFS= read -r request; do :; done
 
     /// Two-agent fake pi (Reviewer ordered first but replies only after the test
     /// creates `release_marker`, i.e. after Engineer completed).
+    #[cfg(unix)]
     fn slow_first_pair_core(directory: &TestDirectory, release_marker: &Path) -> HivemindCore {
         let binary = directory.0.join("fake-pi-pair");
         let script = r#"#!/bin/sh
@@ -1864,6 +1904,7 @@ done
         HivemindCore::new(config, directory.0.join("hivemind.toml")).unwrap()
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn broadcast_presentation_follows_configured_order_despite_completion_order() {
         let directory = TestDirectory::new();
@@ -1920,6 +1961,7 @@ done
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn shutdown_after_partial_startup_is_safe_repeatable_and_final() {
         let directory = TestDirectory::new();

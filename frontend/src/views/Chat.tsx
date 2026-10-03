@@ -1,18 +1,20 @@
 import { LinkedText } from "../LinkedText";
 // Rooms: room list, paged history, threads, and live replies over the WebSocket.
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, decodeInstance, targetFor, type Message, type Participant, type Room, type Skill, type Thread, type LibraryArtifact } from "../api";
+import { api, decodeInstance, targetFor, type Message, type Participant, type Skill, type Thread, type LibraryArtifact } from "../api";
 import { useLive, useLiveStatus, useRefreshOn, type LiveEvent } from "../live";
 import { href } from "../nav";
-import { listKind, roomLabel, useTaskNames } from "../rooms";
+import { roomLabel, useTaskNames } from "../rooms";
+import { RoomList, roomIcon } from "../RoomList";
+import { Icon } from "../icons";
+import { hasSchedules, useRoomSchedules } from "../Schedules";
+import { isPending, parseWakeupMessage } from "../scheduleFormat";
 import { RoomPanel, type PanelTab } from "./RoomPanel";
 import { Markdown } from "../markdown";
 import { Avatar, Badge, Empty, ErrorNote, time, useAsync } from "../ui";
 import { applyMention, filterParticipants, getMentionMatch, type MentionMatch } from "../mentions";
 import { SKILL_PREFIX, completions, helpText, parseSlash, skillPrompt, skillsText, toolsText } from "../slash";
 
-const KIND_ORDER: Record<string, number> = { main: 0, group: 1, solo: 2, task: 3, archived: 4 };
-const KIND_LABEL: Record<string, string> = { main: "Main", group: "Groups", solo: "Direct", task: "Task rooms", archived: "Archived" };
 
 export function Chat({ roomId }: { roomId?: string }) {
   const rooms = useAsync(() => api.rooms(), []);
@@ -25,41 +27,9 @@ export function Chat({ roomId }: { roomId?: string }) {
   const list = rooms.data?.rooms ?? [];
   const active = roomId ?? list[0]?.id;
 
-  const grouped = useMemo(() => {
-    const sorted = [...list].sort(
-      (a, b) =>
-        (KIND_ORDER[listKind(a)] ?? 9) - (KIND_ORDER[listKind(b)] ?? 9) ||
-        Number(b.settings?.pinned ?? false) - Number(a.settings?.pinned ?? false),
-    );
-    const out: [string, Room[]][] = [];
-    for (const room of sorted) {
-      const last = out[out.length - 1];
-      if (last && last[0] === listKind(room)) last[1].push(room);
-      else out.push([listKind(room), [room]]);
-    }
-    return out;
-  }, [list]);
-
   return (
     <div className="chat">
-      <aside className="room-list">
-        <div className="room-list-head">Rooms</div>
-        <ErrorNote error={rooms.error} />
-        {grouped.map(([kind, items]) => (
-          <div key={kind} className="room-group">
-            <div className="room-group-label">{KIND_LABEL[kind] ?? kind}</div>
-            {items.map((room) => (
-              <a key={room.id} href={href("rooms", room.id)} className={room.id === active ? "room active" : "room"}>
-                <span className="room-icon">{room.kind === "main" ? "#" : room.kind === "solo" ? "@" : kind === "task" ? "▸" : "◆"}</span>
-                <span className="room-name">{roomLabel(room, taskNames)}</span>
-                {room.settings?.pinned && <span className="room-flag" title="Pinned" aria-label="Pinned">📌</span>}
-                {room.settings?.muted && <span className="room-flag" title="Muted" aria-label="Muted">🔕</span>}
-                {room.message_count > 0 && !room.settings?.muted && <span className="count">{room.message_count}</span>}
-              </a>
-            ))}
-          </div>
-        ))}
-      </aside>
+      <RoomList rooms={list} active={active} page="rooms" names={taskNames} error={rooms.error} />
       {active ? (
         <RoomView key={active} roomId={active} taskNames={taskNames} onRoomsChanged={rooms.reload} />
       ) : (
@@ -210,6 +180,8 @@ function RoomView({
   );
 
   const info = room.data?.room;
+  const schedules = useRoomSchedules(roomId, !!info && hasSchedules(info));
+  const pendingWakeups = (schedules.data?.schedules ?? []).filter(isPending);
   const byAnchor = useMemo(() => {
     const map = new Map<string, Thread>();
     for (const t of threads.data?.threads ?? []) map.set(t.anchor_message_id, t);
@@ -230,15 +202,16 @@ function RoomView({
     <section className="room-view">
       <div className="conversation">
         <header className="room-header">
-          <div>
+          <div className="room-title">
             <h2>
-              {info ? (info.kind === "solo" ? "@" : "") + roomLabel(info, taskNames) : roomId}
+              {info && <Icon name={roomIcon(info)} />}
+              <span className="room-title-text">{info ? roomLabel(info, taskNames) : roomId}</span>
               {info?.mode && <Badge value={info.mode} tone="muted" />}
               {info?.kind === "archived" && <Badge value={roomId.startsWith("task-") ? "task room" : "archived"} />}
             </h2>
-            <div className="participants">
+            <div className="participants" aria-label="Participants">
               {info?.participants.map((p) => (
-                <span className="chip" key={p.persona_id}>
+                <span className="chip" key={p.persona_id} title={p.role ? `${p.persona_id} · ${p.role}` : p.persona_id}>
                   <Avatar name={p.persona_id} />
                   {p.persona_id}
                   {p.role && <em>{p.role}</em>}
@@ -247,17 +220,35 @@ function RoomView({
             </div>
           </div>
           <div className="actions">
-            <button
-              className="ghost"
-              aria-expanded={panelTab !== null}
-              onClick={() => setPanelTab(panelTab ? null : info && ["main", "solo", "group"].includes(info.kind) ? "settings" : "details")}
-            >
-              {panelTab ? "Hide settings" : "Settings"}
-            </button>
+            {pendingWakeups.length > 0 && (
+              <button
+                className="chip wakeup-chip"
+                title={`Next: ${pendingWakeups.map((w) => w.label || "wakeup").join(", ")}`}
+                onClick={() => setPanelTab("details")}
+              >
+                <Icon name="clock" size={12} /> {pendingWakeups.length} scheduled
+              </button>
+            )}
             {roomId.startsWith("task-") && (
-              <a className="button ghost" href={href("tasks", roomId.slice(5))}>
-                Open task
+              <a className="button ghost small" href={href("issues", roomId.slice(5))}>
+                <Icon name="issues" size={14} /> Open issue
               </a>
+            )}
+            <button
+              className={panelTab === "details" ? "ghost small on" : "ghost small"}
+              aria-expanded={panelTab === "details"}
+              onClick={() => setPanelTab(panelTab === "details" ? null : "details")}
+            >
+              <Icon name="info" size={14} /> Details
+            </button>
+            {info && ["main", "solo", "group"].includes(info.kind) && (
+              <button
+                className={panelTab === "settings" ? "ghost small on" : "ghost small"}
+                aria-expanded={panelTab === "settings"}
+                onClick={() => setPanelTab(panelTab === "settings" ? null : "settings")}
+              >
+                <Icon name="settings" size={14} /> Settings
+              </button>
             )}
           </div>
         </header>
@@ -376,6 +367,7 @@ function MessageList(props: {
 }) {
   const end = useRef<HTMLDivElement>(null);
   const typingCount = Object.keys(props.typing).length;
+  const visible = props.messages.filter((m) => m.speaker !== "system" && !parseWakeupMessage(m.content));
   useEffect(() => {
     end.current?.scrollIntoView({ block: "end" });
   }, [props.messages.length, typingCount, props.pending?.length]);
@@ -388,11 +380,11 @@ function MessageList(props: {
           Load earlier messages
         </button>
       )}
-      {props.loaded && props.messages.length === 0 && typingCount === 0 && (
+      {props.loaded && visible.length === 0 && typingCount === 0 && (
         <Empty>No messages yet. Say something to start the conversation.</Empty>
       )}
-      {props.messages.map((m, i) => {
-        const prev = props.messages[i - 1];
+      {visible.map((m, i) => {
+        const prev = visible[i - 1];
         const grouped = prev && prev.speaker === m.speaker && m.created_at - prev.created_at < 120;
         const thread = props.threads?.get(m.id);
         return (
@@ -408,7 +400,7 @@ function MessageList(props: {
               <div className="msg-text">{m.speaker === "user" ? <LinkedText text={m.content} /> : <Markdown text={m.content} roomId={props.roomId} />}</div>
               {thread && (
                 <button className="thread-link" onClick={() => props.onThread?.(m)}>
-                  💬 {thread.message_count} {thread.message_count === 1 ? "reply" : "replies"} · {thread.name}
+                  <Icon name="rooms" size={13} /> {thread.message_count} {thread.message_count === 1 ? "reply" : "replies"} · {thread.name}
                 </button>
               )}
             </div>
@@ -768,7 +760,7 @@ function Composer({
           <div className="composer-attachments-bar">
             {attachments.map((a) => (
               <div key={a.id} className="composer-attachment-chip">
-                <span className="chip-icon">📎</span>
+                <span className="chip-icon"><Icon name="file" size={12} /></span>
                 <span className="chip-name" title={a.filename}>
                   {a.filename}
                 </span>
@@ -888,7 +880,7 @@ function Composer({
                     fileInputRef.current?.click();
                   }}
                 >
-                  <span className="menu-icon">📎</span>
+                  <span className="menu-icon"><Icon name="file" size={14} /></span>
                   <span className="menu-label">Add files or photos</span>
                   <span className="menu-shortcut">Ctrl+U</span>
                 </button>
@@ -897,7 +889,7 @@ function Composer({
                   className="composer-menu-item"
                   onClick={() => setMenuOpen(false)}
                 >
-                  <span className="menu-icon">📚</span>
+                  <span className="menu-icon"><Icon name="library" size={14} /></span>
                   <span className="menu-label">Artifact library</span>
                 </a>
                 <button
@@ -908,7 +900,7 @@ function Composer({
                     acceptSlash("/skills");
                   }}
                 >
-                  <span className="menu-icon">⚡</span>
+                  <span className="menu-icon"><Icon name="setup" size={14} /></span>
                   <span className="menu-label">Skills & tools</span>
                   <span className="menu-shortcut">/skills</span>
                 </button>

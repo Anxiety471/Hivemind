@@ -119,6 +119,14 @@ fn map_event(event: &DomainEvent) -> Option<Outbound> {
             "thread.created",
             json!({"thread_id": thread_id, "parent_room_id": parent_room_id, "anchor_message_id": anchor_message_id}),
         ),
+        DomainEventKind::WakeupDispatched {
+            room_id,
+            wakeup_id,
+            intent,
+        } => (
+            "conversation.wakeup.dispatched",
+            json!({"room_id": room_id, "wakeup_id": wakeup_id, "intent": intent}),
+        ),
         DomainEventKind::TurnStarted { room_id, turn_id } => (
             "conversation.turn.started",
             json!({"room_id": room_id, "turn_id": turn_id}),
@@ -248,7 +256,8 @@ fn event_room(event: &DomainEvent) -> Option<&str> {
         | DomainEventKind::TurnCompleted { room_id, .. }
         | DomainEventKind::AgentReplyStarted { room_id, .. }
         | DomainEventKind::AgentReplyCompleted { room_id, .. }
-        | DomainEventKind::AgentReplyFailed { room_id, .. } => Some(room_id),
+        | DomainEventKind::AgentReplyFailed { room_id, .. }
+        | DomainEventKind::WakeupDispatched { room_id, .. } => Some(room_id),
         _ => None,
     }
 }

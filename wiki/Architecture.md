@@ -26,6 +26,7 @@ flowchart TD
 
 - Each agent instance is identified by its structured **(room, persona)** IDs. A session can last across turns for that instance but is never shared between rooms or personas.
 - The first prompt of a session carries the full **Context Pack**. Later turns send only a **room delta**, and memory-tool follow-ups send only the tool result.
+- A thread's context adds its anchor message, the parent room's current state, and a bounded digest of the parent's recent turns; a parent room's context adds a bounded digest of its threads' recent messages. Both share the `context_target_tokens` budget and are truncated when large.
 - At a turn boundary, a session rotates (`runtime.rotated`) if its context reached `context.runtime_rotate_tokens` or its next delta can't be built.
 - If a prompt goes silent for `runtime.prompt_timeout_secs` (any streamed text, tool, or status event resets the window, so a long-running active agent is not cut off), Hivemind cancels it, drops the session, closes its runtime epoch, and **does not retry**. The next turn starts a fresh session rebuilt from room history. Any other runtime failure also drops the session without a retry and is reported as an error attributed to that agent.
 - A session closes after `runtime.idle_timeout_secs` without use and stops on core shutdown. No session is left running after exit.
@@ -34,7 +35,7 @@ flowchart TD
 
 ## Storage
 
-`.hivemind/memory.sqlite3` sits next to the config file and holds rooms, turns, messages, scoped memory with FTS5, runtime epochs, and group state. It runs in WAL mode with `synchronous=NORMAL`: an application crash loses nothing, while power loss or an OS crash can drop the last few committed turns (the database is never corrupted). A turn writes only its own new messages, and searches are scoped to one room or memory scope inside FTS5. `.hivemind/context/` holds only room turn-lock files and any legacy JSON history not yet migrated.
+`.hivemind/memory.sqlite3` sits next to the config file and holds rooms, turns, messages, scoped memory with FTS5, runtime epochs, and group state. It runs in WAL mode with `synchronous=NORMAL`: an application crash loses nothing, while power loss or an OS crash can drop the last few committed turns (the database is never corrupted). A turn writes only its own new messages, and searches are scoped inside FTS5 to a room or memory scope — a caller's own archive room, which for a thread also covers its parent room. `.hivemind/context/` holds only room turn-lock files and any legacy JSON history not yet migrated.
 
 Access decisions are audited separately in `.hivemind/access.sqlite3` (see [Access Control](Access-Control)). Details of the storage engine are on [Backend Efficiency](Backend-Efficiency).
 

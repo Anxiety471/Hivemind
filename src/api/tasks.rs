@@ -17,7 +17,7 @@ use super::{error::ApiError, routes::ApiState};
 use crate::coordination::{
     model::{task_room, CoordError, MessageKind, TaskStatus},
     policy::Plan,
-    service::SubmitTask,
+    service::{Delegate, SubmitTask},
     store::TaskFilter,
 };
 use crate::{memory::Caller, runtime::is_rotation};
@@ -32,6 +32,7 @@ pub(super) fn routes() -> Router<ApiState> {
         .route("/api/v1/tasks/{id}/resume", post(resume))
         .route("/api/v1/tasks/{id}/input", post(input))
         .route("/api/v1/tasks/{id}/steer", post(steer))
+        .route("/api/v1/tasks/{id}/children", post(add_child))
         .route("/api/v1/tasks/{id}/context-metrics", get(context_metrics))
         .route(
             "/api/v1/agents/{id}",
@@ -157,6 +158,53 @@ async fn submit(
         Ok(detail) => {
             let id = detail.task.id.clone();
             (StatusCode::ACCEPTED, Json(json!({"id": id, "status_url": format!("/api/v1/tasks/{id}"), "event_high_water": state.core.coordination().high_water().unwrap_or(0), "task": detail}))).into_response()
+        }
+        Err(error) => coord_error(error),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ChildBody {
+    objective: String,
+    #[serde(default)]
+    acceptance: Vec<String>,
+    #[serde(default)]
+    capabilities: Vec<String>,
+    #[serde(default)]
+    owner: Option<String>,
+    #[serde(default)]
+    reviewer: Option<String>,
+    #[serde(default)]
+    depends_on: Vec<String>,
+}
+
+/// Spawn a child task (sub-issue) under `id`; children can have children of their own.
+async fn add_child(
+    State(state): State<ApiState>,
+    Path(id): Path<String>,
+    payload: Result<Json<ChildBody>, JsonRejection>,
+) -> Response {
+    let Ok(Json(body)) = payload else {
+        return bad_json();
+    };
+    let service = state.core.coordination();
+    let created = service.add_child(
+        &id,
+        Delegate {
+            objective: body.objective,
+            acceptance: body.acceptance,
+            capabilities: body.capabilities,
+            owner: body.owner,
+            reviewer: body.reviewer,
+            depends_on: body.depends_on,
+        },
+        "user",
+    );
+    match created.and_then(|child| service.detail(&child)) {
+        Ok(detail) => {
+            let id = detail.task.id.clone();
+            (StatusCode::CREATED, Json(json!({"id": id, "task": detail}))).into_response()
         }
         Err(error) => coord_error(error),
     }
