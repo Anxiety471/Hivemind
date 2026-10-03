@@ -21,6 +21,8 @@ function summary(e: LiveEvent) {
     p.message ? `steer: "${p.message}"` : null,
     p.question ? `question: "${p.question}"` : null,
     p.answer ? `answer: "${p.answer}"` : null,
+    p.wakeup_id ? `wakeup: ${p.wakeup_id}` : null,
+    p.intent ? `intent: "${p.intent}"` : null,
   ];
   return parts.filter(Boolean).join(" · ");
 }

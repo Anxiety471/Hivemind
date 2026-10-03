@@ -47,3 +47,26 @@ export function sortSchedules<T extends Pick<RoomSchedule, "state" | "due_at" | 
     return pa ? a.due_at - b.due_at : b.due_at - a.due_at || b.created_at - a.created_at;
   });
 }
+
+export type ParsedWakeup = {
+  id: string;
+  intent?: string;
+  reminder?: string;
+  note?: string;
+};
+
+/** Parse an internal wakeup message body into its structured components, or null if not a wakeup. */
+export function parseWakeupMessage(content: string): ParsedWakeup | null {
+  if (!content.startsWith("[Hivemind wakeup ")) return null;
+  const match = content.match(/^\[Hivemind wakeup ([^:]+):/);
+  const id = match ? match[1] : "";
+  const intentMatch = content.match(/^Intent:\s*(.+)$/m);
+  const reminderMatch = content.match(/^Reminder:\s*(.+)$/m);
+  const noteMatch = content.match(/^Note:\s*(.+)$/m);
+  return {
+    id,
+    intent: intentMatch?.[1]?.trim(),
+    reminder: reminderMatch?.[1]?.trim(),
+    note: noteMatch?.[1]?.trim(),
+  };
+}

@@ -178,7 +178,10 @@ impl ContextStore for JsonFileStore {
         }
         history.room_id = room.to_owned();
         for event in &mut history.events {
-            if event.speaker != "user" && event.agent_instance_id.is_none() {
+            if event.speaker != "user"
+                && event.speaker != "system"
+                && event.agent_instance_id.is_none()
+            {
                 event.agent_instance_id =
                     Some(crate::identity::AgentInstanceId::new(room, &event.speaker));
             }
@@ -310,7 +313,7 @@ pub(super) fn turn_participants(events: &[&MessageEvent]) -> Vec<ArchiveParticip
     let mut seen = HashSet::new();
     events
         .iter()
-        .filter(|event| event.speaker != "user")
+        .filter(|event| event.speaker != "user" && event.speaker != "system")
         .filter(|event| seen.insert(event.speaker.as_str()))
         .map(|event| ArchiveParticipant {
             participant_id: event.speaker.clone(),
@@ -514,7 +517,7 @@ impl SqliteContextStore {
             .messages
             .into_iter()
             .map(|message| MessageEvent {
-                agent_instance_id: if message.speaker == "user" {
+                agent_instance_id: if message.speaker == "user" || message.speaker == "system" {
                     None
                 } else {
                     Some(crate::identity::AgentInstanceId::new(

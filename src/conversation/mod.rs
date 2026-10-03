@@ -221,7 +221,10 @@ impl<'de> Deserialize<'de> for RoomHistory {
         let mut data = RoomHistoryData::deserialize(deserializer)?;
         if !data.room_id.is_empty() {
             for event in &mut data.events {
-                if event.speaker != "user" && event.agent_instance_id.is_none() {
+                if event.speaker != "user"
+                    && event.speaker != "system"
+                    && event.agent_instance_id.is_none()
+                {
                     event.agent_instance_id =
                         Some(AgentInstanceId::new(&data.room_id, &event.speaker));
                 }
@@ -269,6 +272,9 @@ pub struct RuntimeInvoker {
     pool: Arc<RuntimePool>,
     room_id: String,
     group_id: String,
+    /// Parent room when `room_id` is a thread; empty otherwise. Carried on the
+    /// runtime caller so its archive search covers the parent room.
+    parent_room_id: String,
 }
 
 impl RuntimeInvoker {
@@ -277,7 +283,13 @@ impl RuntimeInvoker {
             pool,
             room_id: room_id.to_owned(),
             group_id: group_id.to_owned(),
+            parent_room_id: String::new(),
         }
+    }
+    /// Attach the thread's parent room, when this invoker serves a thread.
+    pub fn with_parent_room(mut self, parent_room_id: &str) -> Self {
+        self.parent_room_id = parent_room_id.to_owned();
+        self
     }
 }
 
@@ -295,6 +307,11 @@ impl AgentInvoker for RuntimeInvoker {
             &request.agent.name,
             &request.agent.name,
         );
+        let caller = if self.parent_room_id.is_empty() {
+            caller
+        } else {
+            caller.with_parent_room(self.parent_room_id.clone())
+        };
         self.pool.invoke(&caller, request).await
     }
 }

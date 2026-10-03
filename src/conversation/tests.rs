@@ -977,7 +977,7 @@ fn context_budget_trims_old_history_but_keeps_current_input() {
         }],
         ..RoomHistory::default()
     };
-    let caller = invocation_caller("room", "", "A", "current-turn", "message-1");
+    let caller = invocation_caller("room", "", "A", "current-turn", "message-1", "");
     let request = PackRequest {
         history: &history,
         room_name: "Team",
@@ -990,6 +990,9 @@ fn context_budget_trims_old_history_but_keeps_current_input() {
         retrieval: "",
         optional: false,
         remaining_budget: None,
+        parent_history: None,
+        thread_root: "",
+        thread_digest: "",
     };
     let state_json = coordinator.state_json(&history, &caller).unwrap();
     let pack = coordinator.context_pack(&request, &state_json).unwrap();
@@ -1030,7 +1033,7 @@ fn turn_delta_lists_unseen_peers_and_changed_state_and_rejects_gaps() {
         ],
         ..RoomHistory::default()
     };
-    let caller = invocation_caller("room", "", "A", "t2", "message-1");
+    let caller = invocation_caller("room", "", "A", "t2", "message-1", "");
     let request = PackRequest {
         history: &history,
         room_name: "Team",
@@ -1043,6 +1046,9 @@ fn turn_delta_lists_unseen_peers_and_changed_state_and_rejects_gaps() {
         retrieval: "",
         optional: false,
         remaining_budget: None,
+        parent_history: None,
+        thread_root: "",
+        thread_digest: "",
     };
     let state_json = coordinator.state_json(&history, &caller).unwrap();
     let cursor = TurnView {
@@ -1463,8 +1469,8 @@ async fn malformed_tool_blocks_are_fed_back_not_guessed() {
 #[test]
 fn tool_execution_denies_cross_scope_reads_and_unauthorized_group_writes() {
     let memory = MemoryService::new(MemoryStore::in_memory().unwrap());
-    let alice = invocation_caller("room-1", "grp-1", "room-1/Alice", "turn-1", "msg-1");
-    let bob = invocation_caller("room-2", "grp-2", "room-2/Bob", "turn-1", "msg-1");
+    let alice = invocation_caller("room-1", "grp-1", "room-1/Alice", "turn-1", "msg-1", "");
+    let bob = invocation_caller("room-2", "grp-2", "room-2/Bob", "turn-1", "msg-1", "");
 
     execute_memory_tool(
         &memory,
@@ -1507,7 +1513,7 @@ fn tool_execution_denies_cross_scope_reads_and_unauthorized_group_writes() {
     assert_eq!(cross_group, "no memory results matched");
 
     // A route with no configured group has no group scope at all.
-    let solo = invocation_caller("solo-room", "", "solo-room/S", "turn-1", "msg-1");
+    let solo = invocation_caller("solo-room", "", "solo-room/S", "turn-1", "msg-1", "");
     let group_error = execute_memory_tool(
         &memory,
         &solo,
@@ -1534,7 +1540,7 @@ fn tool_execution_denies_cross_scope_reads_and_unauthorized_group_writes() {
 #[test]
 fn proposals_are_policy_gated_and_archive_respects_trust() {
     let memory = MemoryService::new(MemoryStore::in_memory().unwrap());
-    let caller = invocation_caller("room-1", "grp-1", "room-1/A", "turn-1", "msg-1");
+    let caller = invocation_caller("room-1", "grp-1", "room-1/A", "turn-1", "msg-1", "");
 
     let persona = execute_memory_tool(
         &memory,
@@ -1601,7 +1607,7 @@ fn proposals_are_policy_gated_and_archive_respects_trust() {
 #[test]
 fn unknown_tool_and_unknown_scope_are_rejected() {
     let memory = MemoryService::new(MemoryStore::in_memory().unwrap());
-    let caller = invocation_caller("room-1", "grp-1", "room-1/A", "turn-1", "msg-1");
+    let caller = invocation_caller("room-1", "grp-1", "room-1/A", "turn-1", "msg-1", "");
     let unknown = execute_memory_tool(
         &memory,
         &caller,
@@ -1626,7 +1632,7 @@ fn unknown_tool_and_unknown_scope_are_rejected() {
 #[tokio::test]
 async fn context_pack_injects_authorized_hits_and_never_echoes_current_input() {
     let (path, coord) = fixture();
-    let seeder = invocation_caller("seed-room", "grp", "S", "seed-turn", "seed-msg");
+    let seeder = invocation_caller("seed-room", "grp", "S", "seed-turn", "seed-msg", "");
     coord
         .memory()
         .add_group(
@@ -2401,7 +2407,7 @@ fn first_hit_id(output: &str) -> String {
 #[test]
 fn search_ids_allow_in_place_update_without_a_second_record() {
     let memory = MemoryService::new(MemoryStore::in_memory().unwrap());
-    let alice = invocation_caller("room-1", "grp-1", "room-1/Alice", "turn-1", "msg-1");
+    let alice = invocation_caller("room-1", "grp-1", "room-1/Alice", "turn-1", "msg-1", "");
     run_tool(
         &memory,
         &alice,
@@ -2437,8 +2443,8 @@ fn search_ids_allow_in_place_update_without_a_second_record() {
 #[test]
 fn upsert_is_idempotent_scope_bound_and_duplicate_adds_are_reported() {
     let memory = MemoryService::new(MemoryStore::in_memory().unwrap());
-    let alice = invocation_caller("room-1", "grp-1", "room-1/Alice", "turn-1", "msg-1");
-    let other = invocation_caller("room-2", "grp-2", "room-2/Alice", "turn-1", "msg-1");
+    let alice = invocation_caller("room-1", "grp-1", "room-1/Alice", "turn-1", "msg-1", "");
+    let other = invocation_caller("room-2", "grp-2", "room-2/Alice", "turn-1", "msg-1", "");
     let up = |c: &Caller, name: &str, text: &str| {
         run_tool(
             &memory,
@@ -2503,7 +2509,7 @@ fn upsert_is_idempotent_scope_bound_and_duplicate_adds_are_reported() {
 #[test]
 fn persona_and_global_update_follow_proposal_authorization() {
     let memory = MemoryService::new(MemoryStore::in_memory().unwrap());
-    let alice = invocation_caller("room-1", "grp-1", "room-1/Alice", "turn-1", "msg-1");
+    let alice = invocation_caller("room-1", "grp-1", "room-1/Alice", "turn-1", "msg-1", "");
     let call = |name: &str, args: serde_json::Value| tool_call(name, args);
     let persona = run_tool(
         &memory,
@@ -2987,4 +2993,180 @@ async fn every_member_replies_to_each_user_message_with_or_without_a_mention() {
         assert_eq!(replies, [said("A")], "{mode:?}");
         assert_eq!(events, 2, "{mode:?}");
     }
+}
+
+// ---- User-thread conversation context ----
+
+/// Run one Discussion turn and return the single member's prompt.
+async fn prompt_for(coord: &ConversationCoordinator, room: &str, input: &str) -> String {
+    let f = fake(None);
+    let members = [member("A")];
+    coord
+        .turn(TurnRequest {
+            room,
+            room_name: "Room",
+            group_id: "",
+            mode: ConversationMode::Discussion,
+            members: &members,
+            input,
+            invoker: f.clone(),
+        })
+        .await
+        .unwrap();
+    let prompts = f.prompts.lock();
+    prompts[0].1.clone()
+}
+
+#[tokio::test]
+async fn thread_pack_carries_root_parent_state_and_parent_recent_turns() {
+    let (path, coord) = fixture();
+    // A parent turn whose Goal directive lands in the parent's state at turn end.
+    prompt_for(
+        &coord,
+        "parent-room",
+        "Goal: ship the thread context\nWhat about the parent goal?",
+    )
+    .await;
+    assert_eq!(
+        coord
+            .room_history("parent-room")
+            .unwrap()
+            .state
+            .goal
+            .as_deref(),
+        Some("ship the thread context")
+    );
+
+    let anchor = coord
+        .room_history("parent-room")
+        .unwrap()
+        .events
+        .into_iter()
+        .find(|event| event.speaker == "user")
+        .unwrap();
+    let (thread, _) = coord
+        .memory()
+        .create_thread(
+            &archive_caller(),
+            "parent-room",
+            &anchor.id,
+            "Thread on the goal",
+        )
+        .unwrap();
+
+    let thread_prompt = prompt_for(&coord, &thread.id, "How do we ship it?").await;
+    // (1) the anchored message, labelled
+    assert!(
+        thread_prompt.contains("\nThread root (the message this thread replies to):\nuser: Goal: ship the thread context"),
+        "{thread_prompt}"
+    );
+    // (2) the parent's state, not the thread's empty one
+    assert!(thread_prompt.contains("\"goal\":\"ship the thread context\""));
+    // (3) a labelled digest of the parent's recent turns
+    assert!(
+        thread_prompt.contains("\nParent room recent conversation:\n"),
+        "{thread_prompt}"
+    );
+    // The reply is written to the thread, never the parent.
+    let parent = coord.room_history("parent-room").unwrap();
+    assert!(parent
+        .events
+        .iter()
+        .all(|event| !event.content.contains("How do we ship it?")));
+    assert!(coord
+        .room_history(&thread.id)
+        .unwrap()
+        .events
+        .iter()
+        .any(|event| event.content.contains("How do we ship it?")));
+    let _ = fs::remove_dir_all(path);
+}
+
+#[tokio::test]
+async fn thread_pack_omits_parent_sections_when_not_a_thread() {
+    let (path, coord) = fixture();
+    // A plain room with no threads gets none of the cross-room sections.
+    let prompt = prompt_for(&coord, "plain-room", "just a normal question").await;
+    assert!(!prompt.contains("Thread root"));
+    assert!(!prompt.contains("Parent room recent conversation"));
+    assert!(!prompt.contains("Threads in this room"));
+    let _ = fs::remove_dir_all(path);
+}
+
+#[tokio::test]
+async fn parent_room_pack_carries_a_bounded_digest_of_its_threads() {
+    let (path, coord) = fixture();
+    prompt_for(&coord, "parent-room", "Goal: parent goal").await;
+    let anchor = coord
+        .room_history("parent-room")
+        .unwrap()
+        .events
+        .into_iter()
+        .find(|event| event.speaker == "user")
+        .unwrap();
+    let (thread, _) = coord
+        .memory()
+        .create_thread(&archive_caller(), "parent-room", &anchor.id, "Root thread")
+        .unwrap();
+    // The thread holds a reply, archived through its own turn.
+    prompt_for(&coord, &thread.id, "thread-only-message").await;
+
+    let parent_prompt = prompt_for(&coord, "parent-room", "any updates?").await;
+    assert!(
+        parent_prompt.contains("\nThreads in this room:\n"),
+        "{parent_prompt}"
+    );
+    assert!(
+        parent_prompt.contains("Thread \"Root thread\":"),
+        "{parent_prompt}"
+    );
+    assert!(
+        parent_prompt.contains("thread-only-message"),
+        "{parent_prompt}"
+    );
+    let _ = fs::remove_dir_all(path);
+}
+
+#[test]
+fn thread_digest_is_truncated_never_bailing_the_mandatory_budget() {
+    let (path, coordinator) = fixture();
+    let member = member("A");
+    let caller = invocation_caller(
+        "thread-x",
+        "",
+        "A",
+        "current-turn",
+        "message-1",
+        "parent-room",
+    );
+    // A digest far larger than the optional budget: a sliceable body.
+    let body = format!(
+        "\nThreads in this room:\n\nThread \"Huge\":\n{}",
+        "user: chatter\n".repeat(900)
+    );
+    let history = RoomHistory::default();
+    let request = PackRequest {
+        history: &history,
+        room_name: "Thread",
+        members: std::slice::from_ref(&member),
+        current: &member,
+        input: "retain this current request",
+        prior: &[],
+        active_turn: "current-turn",
+        caller: &caller,
+        retrieval: "",
+        optional: false,
+        remaining_budget: None,
+        parent_history: None,
+        thread_root: "",
+        thread_digest: &body,
+    };
+    let state_json = coordinator.state_json(&history, &caller).unwrap();
+    let pack = coordinator.context_pack(&request, &state_json).unwrap();
+    // Truncated, not bailed: the pack still fits and keeps the current input.
+    assert!(pack.len() <= 1000 * 4, "{}", pack.len());
+    assert!(pack.contains("retain this current request"));
+    // The label survives even when the body is squeezed.
+    assert!(pack.contains("Threads in this room:"), "{pack}");
+    let _ = fs::remove_dir_all(path);
 }

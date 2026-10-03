@@ -70,7 +70,9 @@ curl http://127.0.0.1:7474/api/v1/agents
 {"target":{"type":"group","id":"development"},"message":"Review the runtime lifecycle."}
 ```
 
-Targets are `main`, `solo`, `group`, or `thread`. A thread is a child room anchored to one message of its parent room: it has its own history (`GET /rooms/{thread_id}/messages`) and runs with the parent's participants, mode and group. Threads cannot be nested and do not appear in `GET /rooms`; `GET /rooms/{thread_id}` returns `parent_room_id` and `anchor_message_id`.
+Targets are `main`, `solo`, `group`, or `thread`. A thread is a child room anchored to one message of its parent room: it has its own history (`GET /rooms/{thread_id}/messages`) and runs with the parent's participants, mode and group. A reply in a thread is stored in the thread room and does not appear in the parent's history. Threads cannot be nested and do not appear in `GET /rooms`; `GET /rooms/{thread_id}` returns `parent_room_id` and `anchor_message_id`.
+
+A thread is not isolated from the conversation it hangs off. Its prompt also carries the anchored message it replies to, the parent room's current state, and a bounded digest of the parent room's recent turns, and its archive search covers the parent room alongside the thread's own history. A parent room's prompt carries a bounded digest of its threads' recent messages. All of this shares the prompt's existing budget (`context_target_tokens` in [Configuration](Configuration#context)) and may be truncated when large.
 
 The response includes `turn_id`, `room_id`, and an ordered list of `replies`, each with `persona_id`, `ok`, and `content`. Use `turn_id` and `room_id` to match the response to WebSocket events. Responses never include provider diagnostics or prompts.
 

@@ -1,7 +1,21 @@
 use super::now;
 use anyhow::{bail, Result};
 
-use super::{Layer, MemoryRecord, MemoryStatus};
+use super::{Caller, Layer, MemoryRecord, MemoryStatus};
+
+/// Rooms an Archive search must cover for `caller`: the caller's own room
+/// first, then the parent room of a thread caller when it is non-empty and
+/// different. De-duplicated so one room is never queried twice, which also
+/// guarantees a room's messages are not merged twice when a (host-set) parent
+/// happens to equal the own room.
+pub(super) fn archive_rooms(caller: &Caller) -> Vec<String> {
+    let mut rooms = Vec::with_capacity(2);
+    rooms.push(caller.room_id.clone());
+    if !caller.parent_room_id.is_empty() && !rooms.contains(&caller.parent_room_id) {
+        rooms.push(caller.parent_room_id.clone());
+    }
+    rooms
+}
 
 /// Most distinct terms sent to FTS5; longer questions keep their first terms.
 const MAX_QUERY_TERMS: usize = 16;

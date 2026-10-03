@@ -338,11 +338,10 @@ impl HivemindCore {
     ) -> Result<TurnExecution> {
         anyhow::ensure!(!self.is_shutting_down(), "core is shutting down");
         let resolved = self.resolve_target(target)?;
-        let invoker = Arc::new(RuntimeInvoker::new(
-            self.runtime.clone(),
-            &resolved.room_id,
-            &resolved.group_id,
-        ));
+        let invoker = Arc::new(
+            RuntimeInvoker::new(self.runtime.clone(), &resolved.room_id, &resolved.group_id)
+                .with_parent_room(&self.thread_parent(&resolved.room_id)),
+        );
         self.conversation
             .turn_with_id(
                 TurnRequest {
@@ -730,7 +729,10 @@ impl HivemindCore {
     }
     /// Invoker that routes a room's turns to the core-owned runtime pool.
     pub fn runtime_invoker(&self, room: &str, group_id: &str) -> Arc<dyn AgentInvoker> {
-        Arc::new(RuntimeInvoker::new(self.runtime.clone(), room, group_id))
+        Arc::new(
+            RuntimeInvoker::new(self.runtime.clone(), room, group_id)
+                .with_parent_room(&self.thread_parent(room)),
+        )
     }
     /// Stop one instance's live session so its next prompt hydrates fresh.
     pub async fn rotate_instance(
@@ -754,6 +756,16 @@ impl HivemindCore {
     }
     pub fn memory(&self) -> &Arc<MemoryService> {
         &self.memory
+    }
+    /// Parent room id when `room` is a thread, empty otherwise. Carried onto a
+    /// runtime caller so its archive search also covers the parent room.
+    fn thread_parent(&self, room: &str) -> String {
+        self.memory
+            .thread(&crate::memory::Caller::trusted_user("core"), room)
+            .ok()
+            .flatten()
+            .map(|thread| thread.parent_room_id)
+            .unwrap_or_default()
     }
     pub fn conversation(&self) -> &ConversationCoordinator {
         &self.conversation
@@ -904,11 +916,10 @@ impl HivemindCore {
             anyhow::bail!("empty message");
         }
         let resolved = self.resolve_target(target)?;
-        let invoker = Arc::new(RuntimeInvoker::new(
-            self.runtime.clone(),
-            &resolved.room_id,
-            &resolved.group_id,
-        ));
+        let invoker = Arc::new(
+            RuntimeInvoker::new(self.runtime.clone(), &resolved.room_id, &resolved.group_id)
+                .with_parent_room(&self.thread_parent(&resolved.room_id)),
+        );
         self.send_resolved_turn(&resolved, message, invoker).await
     }
 
@@ -935,11 +946,10 @@ impl HivemindCore {
             .await
     }
     pub async fn turn(&self, request: CoreTurnRequest<'_>) -> Result<Vec<TurnReply>> {
-        let invoker = Arc::new(RuntimeInvoker::new(
-            self.runtime.clone(),
-            request.room,
-            request.group_id,
-        ));
+        let invoker = Arc::new(
+            RuntimeInvoker::new(self.runtime.clone(), request.room, request.group_id)
+                .with_parent_room(&self.thread_parent(request.room)),
+        );
         self.turn_with_invoker(request, invoker).await
     }
 

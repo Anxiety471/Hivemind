@@ -381,3 +381,30 @@ test("the command menu, G shortcuts and C reach every part of the app", async ({
   await page.getByRole("radio", { name: "System" }).click();
   await expect(page.locator("html")).not.toHaveAttribute("data-theme", /.+/);
 });
+
+test("scheduled wakeups inject to the agent without appearing in the chat box", async ({ page, request }) => {
+  await openRoom(page, "solo-Reviewer");
+  const res = await request.post(`${api}/turns`, {
+    data: {
+      target: { type: "solo", id: "Reviewer" },
+      message:
+        "[Hivemind wakeup wk_test: you scheduled this; it is not a user message]\nIntent: say hello\nReminder: every 5 minutes\nNote: test greeting",
+      wait: true,
+    },
+  });
+  expect(res.status()).toBe(200);
+
+  // The agent received the wakeup injection and replied into the room
+  await expect(page.locator(".msg:not([data-user=true]) .markdown p", { hasText: /^Reviewer here\.$/ })).toBeVisible();
+
+  // The internal wakeup message must NOT appear in the chat box (neither as a user message nor a chip)
+  await expect(page.getByText("you scheduled this; it is not a user message")).toHaveCount(0);
+  await expect(page.locator('[data-system-event="wakeup"]')).toHaveCount(0);
+  await expect(page.locator(".msg[data-user=true]")).toHaveCount(0);
+
+  // It is preserved in the room message history and logs as a system event
+  const history = await (await request.get(`${api}/rooms/solo-Reviewer/messages`)).json();
+  const wakeupMsg = history.messages.find((m: { content: string }) => m.content.includes("wk_test"));
+  expect(wakeupMsg).toBeDefined();
+  expect(wakeupMsg.speaker).toBe("system");
+});

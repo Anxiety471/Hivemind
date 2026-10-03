@@ -1,7 +1,7 @@
 // Run with: bun test test/schedules.test.ts   (or: node --experimental-strip-types --test test/schedules.test.ts)
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { humanDuration, isPending, recurrence, relativeDue, sortSchedules } from "../src/scheduleFormat.ts";
+import { humanDuration, isPending, parseWakeupMessage, recurrence, relativeDue, sortSchedules } from "../src/scheduleFormat.ts";
 
 test("durations read in the largest units", () => {
   assert.equal(humanDuration(45), "45s");
@@ -33,4 +33,17 @@ test("pending wakeups sort first by due time, finished ones newest first", () =>
   assert.deepEqual(sorted.map((x) => x.id), ["soon", "late", "new", "old"]);
   assert.ok(isPending({ state: "queued" }));
   assert.ok(!isPending({ state: "failed" }));
+});
+
+test("wakeup messages parse into structured intent, reminder, and note", () => {
+  const raw =
+    "[Hivemind wakeup wk_18db082722cd8244f6de0001: you scheduled this; it is not a user message]\nIntent: say hello to the user\nReminder: message hello every 5 minutes\nNote: recurring greeting";
+  const parsed = parseWakeupMessage(raw);
+  assert.ok(parsed);
+  assert.equal(parsed.id, "wk_18db082722cd8244f6de0001");
+  assert.equal(parsed.intent, "say hello to the user");
+  assert.equal(parsed.reminder, "message hello every 5 minutes");
+  assert.equal(parsed.note, "recurring greeting");
+
+  assert.equal(parseWakeupMessage("regular user message"), null);
 });

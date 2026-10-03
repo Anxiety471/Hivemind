@@ -1,5 +1,5 @@
 use super::*;
-use crate::execution::ORIGIN_USER;
+use crate::execution::{ORIGIN_HOST, ORIGIN_USER};
 
 pub struct TurnRequest<'a> {
     pub room: &'a str,
@@ -63,6 +63,80 @@ pub(super) struct PackRequest<'a> {
     pub(super) optional: bool,
     /// Remaining follow-up replies allowed for this turn.
     pub(super) remaining_budget: Option<usize>,
+    /// `Some` when the turn room is a thread: its parent's loaded history,
+    /// read-only. A thread renders the parent's state instead of its own
+    /// (empty) state.
+    pub(super) parent_history: Option<&'a RoomHistory>,
+    /// The thread root block: the anchored message this thread replies to.
+    /// Empty for every room that is not a thread.
+    pub(super) thread_root: &'a str,
+    /// Bounded labelled digest the room does not hold itself: the parent
+    /// room's recent turns for a thread, or this room's threads' recent
+    /// messages for a parent room. Empty when there is neither.
+    pub(super) thread_digest: &'a str,
+}
+
+/// Safety ceilings for the cross-room digests, so one very large parent or
+/// thread cannot crowd out the room's own context.
+const THREAD_DIGEST_THREADS: usize = 5;
+const THREAD_DIGEST_MESSAGES: usize = 4;
+
+/// The room's relationship to a parent or child room, resolved once per turn.
+/// Every field is empty/`None` when the room is neither a thread nor a parent,
+/// so a plain room renders exactly the pack it did before.
+#[derive(Default)]
+struct ThreadContext {
+    /// Parent room id when the turn room is a thread; empty otherwise. Carried
+    /// onto member callers so archive search covers the parent.
+    parent_room_id: String,
+    /// The parent room's history, loaded read-only. A thread renders the
+    /// parent's state instead of its own (empty) state.
+    parent_history: Option<RoomHistory>,
+    /// The anchored message this thread replies to.
+    thread_root: String,
+    /// Bounded labelled digest the room does not hold itself.
+    thread_digest: String,
+}
+
+/// Render the thread's anchored message from the parent history, or an empty
+/// string when the parent no longer holds it.
+fn thread_root_block(parent: &RoomHistory, anchor_message_id: &str) -> String {
+    parent
+        .events
+        .iter()
+        .find(|event| event.id == anchor_message_id)
+        .map(|event| {
+            format!(
+                "\nThread root (the message this thread replies to):\n{}: {}\n",
+                event.speaker, event.content
+            )
+        })
+        .unwrap_or_default()
+}
+
+/// Truncate a labelled block to `max_bytes`, always keeping its label line and
+/// shortening the body from the front (`utf8_suffix`), so a squeezed section
+/// still tells the reader what it is. Blocks begin with a blank line, so the
+/// label is the first non-empty line.
+fn truncate_labelled(block: &str, max_bytes: usize) -> String {
+    if block.len() <= max_bytes {
+        return block.to_owned();
+    }
+    let body_start = block.find(|c: char| c != '\n').unwrap_or(block.len());
+    let Some(head_end) = block[body_start..]
+        .find('\n')
+        .map(|index| body_start + index)
+    else {
+        return utf8_suffix(block, max_bytes);
+    };
+    let label = &block[..head_end];
+    if label.len() + 1 >= max_bytes {
+        return utf8_suffix(block, max_bytes);
+    }
+    format!(
+        "{label}\n{}",
+        utf8_suffix(&block[head_end + 1..], max_bytes - label.len() - 1)
+    )
 }
 
 /// Prompts prepared for one member's invocation this turn.
@@ -311,10 +385,12 @@ impl ConversationCoordinator {
             });
         }
         let user_message_id = stable_id();
+        let is_host_wakeup = origin == ORIGIN_HOST || crate::wakeup::is_wakeup_message(input);
+        let speaker = if is_host_wakeup { "system" } else { "user" };
         history.events.push(MessageEvent {
             id: user_message_id.clone(),
             turn_id: turn_id.clone(),
-            speaker: "user".into(),
+            speaker: speaker.into(),
             agent_instance_id: None,
             legacy_agent_instance_id: None,
             content: input.into(),
@@ -334,6 +410,11 @@ impl ConversationCoordinator {
         } else {
             authorized_global_directive(input)
         };
+        // Parent/child relationship resolved once per turn, never per member.
+        // A thread carries its anchored root, the parent's state and recent
+        // turns; a parent room carries a digest of its threads. Parents are
+        // read read-only, so this never takes their lock or mutates them.
+        let thread = self.thread_context(room, &turn_id);
         // Archive hits depend only on the room and the input, so one search
         // serves every member of this turn.
         let shared_archive = members
@@ -346,6 +427,7 @@ impl ConversationCoordinator {
                         &member.agent.name,
                         &turn_id,
                         &user_message_id,
+                        &thread.parent_room_id,
                     ),
                     input,
                 )
@@ -363,6 +445,7 @@ impl ConversationCoordinator {
                         &member.agent.name,
                         &turn_id,
                         &user_message_id,
+                        &thread.parent_room_id,
                     );
                     let instance_id = AgentInstanceId::new(room, &member.agent.name);
                     let cursor = invoker.cursor(&instance_id).await;
@@ -381,6 +464,9 @@ impl ConversationCoordinator {
                             retrieval: &retrieval,
                             optional: false,
                             remaining_budget: None,
+                            parent_history: thread.parent_history.as_ref(),
+                            thread_root: &thread.thread_root,
+                            thread_digest: &thread.thread_digest,
                         },
                         cursor,
                     );
@@ -530,6 +616,7 @@ impl ConversationCoordinator {
                         &member.agent.name,
                         &turn_id,
                         &user_message_id,
+                        &thread.parent_room_id,
                     );
                     let name = member.agent.name.clone();
                     let instance_id = AgentInstanceId::new(room, &name);
@@ -557,6 +644,9 @@ impl ConversationCoordinator {
                             retrieval: &retrieval,
                             optional: floor,
                             remaining_budget,
+                            parent_history: thread.parent_history.as_ref(),
+                            thread_root: &thread.thread_root,
+                            thread_digest: &thread.thread_digest,
                         },
                         cursor,
                     ) {
@@ -730,6 +820,66 @@ impl ConversationCoordinator {
         Ok(serde_json::to_string(&state_value)?)
     }
 
+    /// Resolve the room's parent/child relationship once per turn.
+    ///
+    /// The other room is always read read-only (`store.load_room` /
+    /// `memory.room_messages_page`): taking a parent's `checkout` would remove
+    /// its cached history and force a release, interleaving its cache with this
+    /// room's own lock hold. Nothing here mutates another room.
+    fn thread_context(&self, room: &str, active_turn: &str) -> ThreadContext {
+        let caller = archive_caller();
+        if let Ok(Some(thread)) = self.memory.thread(&caller, room) {
+            // The turn room is a thread: its context carries the anchored
+            // message it replies to and the parent's state and recent turns.
+            let mut context = ThreadContext {
+                parent_room_id: thread.parent_room_id.clone(),
+                ..ThreadContext::default()
+            };
+            if let Ok(parent) = self.store.load_room(&thread.parent_room_id) {
+                context.thread_root = thread_root_block(&parent, &thread.anchor_message_id);
+                let recent = recent_events(&parent.events, self.limits.recent_turns, active_turn);
+                if !recent.is_empty() {
+                    context.thread_digest =
+                        format!("\nParent room recent conversation:\n{recent}\n");
+                }
+                context.parent_history = Some(parent);
+            }
+            return context;
+        }
+        // A room that is not a thread may be a parent: its members see a
+        // bounded digest of each resident thread.
+        let threads = self.memory.threads(&caller, room).unwrap_or_default();
+        if threads.is_empty() {
+            return ThreadContext::default();
+        }
+        let shown = threads.len().min(THREAD_DIGEST_THREADS);
+        let mut digest = String::from("\nThreads in this room:\n");
+        for thread in threads.iter().take(shown) {
+            digest.push_str(&format!("\nThread \"{}\":\n", thread.name));
+            let messages = self
+                .memory
+                .room_messages_page(&caller, &thread.id, None, THREAD_DIGEST_MESSAGES)
+                .unwrap_or_default();
+            if messages.is_empty() {
+                digest.push_str("(no messages yet)\n");
+                continue;
+            }
+            for message in messages {
+                digest.push_str(&format!("{}: {}\n", message.speaker, message.content));
+            }
+        }
+        if threads.len() > shown {
+            digest.push_str(&format!(
+                "… {} more thread(s) not shown\n",
+                threads.len() - shown
+            ));
+        }
+        ThreadContext {
+            thread_digest: digest,
+            ..ThreadContext::default()
+        }
+    }
+
     /// Full pack, optional epoch-bound delta, and the room view the member's
     /// session holds once it replies.
     fn member_prompt(
@@ -737,14 +887,22 @@ impl ConversationCoordinator {
         request: &PackRequest<'_>,
         cursor: Option<SessionCursor>,
     ) -> Result<MemberPrompt> {
-        let state_json = self.state_json(request.history, request.caller)?;
+        // A thread's own state is empty; it renders the parent's state, which
+        // is where the goal, decisions, and assignments actually live.
+        let state_history = request.parent_history.unwrap_or(request.history);
+        let state_json = self.state_json(state_history, request.caller)?;
         let pack = self.context_pack(request, &state_json)?;
         let delta = cursor.and_then(|cursor| {
             self.turn_delta(request, &cursor.view, &state_json)
                 .map(|text| (cursor.epoch_id, text))
         });
+        let is_wakeup = crate::wakeup::is_wakeup_message(request.input);
         let mut speakers = Vec::with_capacity(request.prior.len() + 2);
-        speakers.push("user".to_owned());
+        speakers.push(if is_wakeup {
+            "system".to_owned()
+        } else {
+            "user".to_owned()
+        });
         speakers.extend(request.prior.iter().map(|(name, _)| name.clone()));
         speakers.push(request.current.agent.name.clone());
         Ok(MemberPrompt {
@@ -775,6 +933,8 @@ impl ConversationCoordinator {
             retrieval,
             optional,
             remaining_budget,
+            thread_root,
+            thread_digest,
             ..
         } = *request;
         let last = history
@@ -816,6 +976,11 @@ impl ConversationCoordinator {
             delta.push_str(&format!("\nShared room state:\n{state_json}\n"));
         }
         delta.push_str(retrieval);
+        // Cross-room context the full pack carries, so a live session keeps
+        // seeing the thread root and digest. The delta budget check below falls
+        // back to rehydration when it would not fit, so this never overflows.
+        delta.push_str(thread_root);
+        delta.push_str(thread_digest);
         delta.push_str(SESSION_TOOL_REMINDER);
         if let Some(reminder) = self
             .tools
@@ -846,6 +1011,9 @@ impl ConversationCoordinator {
             retrieval,
             optional,
             remaining_budget,
+            parent_history,
+            thread_root,
+            thread_digest,
         } = *request;
         let roster = members
             .iter()
@@ -873,7 +1041,12 @@ impl ConversationCoordinator {
             .and_then(|host| host.manifest(&caller.room_id, &caller.persona_id))
             .unwrap_or_default();
         let manifest = format!("\n{}{extra}", memory_tool_manifest(caller));
-        let state = format!("\nShared room state:\n{state_json}\n");
+        let state_label = if parent_history.is_some() {
+            "Shared room state (parent room)"
+        } else {
+            "Shared room state"
+        };
+        let state = format!("\n{state_label}:\n{state_json}\n");
         let summary = if history.summary.is_empty() {
             String::new()
         } else {
@@ -888,7 +1061,11 @@ impl ConversationCoordinator {
         // Bounded retrieval over the caller's authorized scopes only; current-turn
         // messages are excluded so the input is never echoed back as a "memory".
         let hits = retrieval;
-        let current = format!("\nCurrent user message:\n{input}\n");
+        let current = if crate::wakeup::is_wakeup_message(input) {
+            format!("\nScheduled wakeup:\n{input}\n")
+        } else {
+            format!("\nCurrent user message:\n{input}\n")
+        };
         let same_turn = same_turn_replies(prior, optional, remaining_budget);
         let mandatory_len =
             identity.len() + manifest.len() + state.len() + current.len() + same_turn.len();
@@ -899,15 +1076,55 @@ impl ConversationCoordinator {
             bail!("current turn and participant/state context ({mandatory_len} bytes) exceed configured context_target_tokens ({} tokens = {budget} bytes)", self.limits.context_target_tokens);
         }
         let available = budget - mandatory_len;
-        let mut optional = format!("{summary}{recent}{hits}");
+        // Optional sections in render order: the cross-room context a thread or
+        // parent room carries, then the room's own narrative and retrieval.
+        let parts: [&str; 5] = [thread_root, &summary, &recent, thread_digest, hits];
+        let mut optional = parts.concat();
         if optional.len() > available {
-            let keep_recent = recent.len().min(available);
-            let keep_summary = available.saturating_sub(keep_recent);
-            optional = format!(
-                "{}{}",
-                utf8_suffix(&summary, keep_summary),
-                utf8_suffix(&recent, keep_recent)
-            );
+            if thread_root.is_empty() && thread_digest.is_empty() {
+                // Plain room: unchanged truncation — the newest narrative is
+                // kept whole, the summary takes what remains, retrieval drops.
+                let keep_recent = recent.len().min(available);
+                let keep_summary = available.saturating_sub(keep_recent);
+                optional = format!(
+                    "{}{}",
+                    utf8_suffix(&summary, keep_summary),
+                    utf8_suffix(&recent, keep_recent)
+                );
+            } else {
+                // Cross-room context is kept whole where it fits, most
+                // important first (the anchored root, then the digest), and the
+                // room's own narrative takes the remainder. The digest itself
+                // is capped at half the optional budget, so a large parent or
+                // thread never crowds out the room's own conversation.
+                // Everything is truncated from its tail, so no pack bails.
+                let keep = |block: &str, take: usize| -> String {
+                    if take == block.len() {
+                        block.to_owned()
+                    } else if block.starts_with('\n') {
+                        truncate_labelled(block, take)
+                    } else {
+                        utf8_suffix(block, take)
+                    }
+                };
+                let digest_cap = available / 2;
+                let order = [0usize, 3, 2, 1, 4];
+                let mut kept = [
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                ];
+                let mut remaining = available;
+                for index in order {
+                    let cap = if index == 3 { digest_cap } else { remaining };
+                    let take = parts[index].len().min(remaining).min(cap);
+                    kept[index] = keep(parts[index], take);
+                    remaining -= kept[index].len();
+                }
+                optional = kept.concat();
+            }
         }
         Ok(format!(
             "{identity}{manifest}{state}{optional}{current}{same_turn}"

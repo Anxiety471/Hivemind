@@ -111,6 +111,9 @@ pub struct MemoryWrite {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Caller {
     pub room_id: String,
+    /// Host-set parent room of a thread caller; the empty string for every
+    /// non-thread caller. Never parsed from model or tool arguments.
+    pub parent_room_id: String,
     pub group_id: String,
     pub agent_instance_id: AgentInstanceId,
     pub persona_id: String,
@@ -136,6 +139,7 @@ impl Caller {
     ) -> Self {
         Self {
             room_id: room_id.into(),
+            parent_room_id: String::new(),
             group_id: group_id.into(),
             agent_instance_id,
             persona_id: persona_id.into(),
@@ -148,6 +152,7 @@ impl Caller {
     pub fn trusted_user(actor: impl Into<String>) -> Self {
         Self {
             room_id: String::new(),
+            parent_room_id: String::new(),
             group_id: String::new(),
             agent_instance_id: AgentInstanceId::new("", ""),
             persona_id: String::new(),
@@ -159,6 +164,13 @@ impl Caller {
     }
     pub fn with_provenance(mut self, provenance: Provenance) -> Self {
         self.provenance = provenance;
+        self
+    }
+    /// Bind the parent room of a thread caller. Host-only: call this with the
+    /// thread's stored parent room, never with model or tool arguments. The
+    /// empty string means "not a thread".
+    pub fn with_parent_room(mut self, parent: impl Into<String>) -> Self {
+        self.parent_room_id = parent.into();
         self
     }
     /// Bind one exact global-memory proposal to a parsed, structured user instruction.

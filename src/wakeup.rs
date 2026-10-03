@@ -150,6 +150,19 @@ pub fn is_wakeup_message(text: &str) -> bool {
     text.starts_with(MARKER_PREFIX)
 }
 
+/// Extracts the optional `Intent: ...` line from a wakeup body.
+pub fn extract_intent(body: &str) -> Option<String> {
+    for line in body.lines() {
+        if let Some(rest) = line.strip_prefix("Intent:") {
+            let trimmed = rest.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_owned());
+            }
+        }
+    }
+    None
+}
+
 fn opt_str(args: &Value, key: &str) -> Result<Option<String>> {
     match args.get(key) {
         None | Some(Value::Null) => Ok(None),

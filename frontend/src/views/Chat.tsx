@@ -8,7 +8,7 @@ import { roomLabel, useTaskNames } from "../rooms";
 import { RoomList, roomIcon } from "../RoomList";
 import { Icon } from "../icons";
 import { hasSchedules, useRoomSchedules } from "../Schedules";
-import { isPending } from "../scheduleFormat";
+import { isPending, parseWakeupMessage } from "../scheduleFormat";
 import { RoomPanel, type PanelTab } from "./RoomPanel";
 import { Markdown } from "../markdown";
 import { Avatar, Badge, Empty, ErrorNote, time, useAsync } from "../ui";
@@ -367,6 +367,7 @@ function MessageList(props: {
 }) {
   const end = useRef<HTMLDivElement>(null);
   const typingCount = Object.keys(props.typing).length;
+  const visible = props.messages.filter((m) => m.speaker !== "system" && !parseWakeupMessage(m.content));
   useEffect(() => {
     end.current?.scrollIntoView({ block: "end" });
   }, [props.messages.length, typingCount, props.pending?.length]);
@@ -379,11 +380,11 @@ function MessageList(props: {
           Load earlier messages
         </button>
       )}
-      {props.loaded && props.messages.length === 0 && typingCount === 0 && (
+      {props.loaded && visible.length === 0 && typingCount === 0 && (
         <Empty>No messages yet. Say something to start the conversation.</Empty>
       )}
-      {props.messages.map((m, i) => {
-        const prev = props.messages[i - 1];
+      {visible.map((m, i) => {
+        const prev = visible[i - 1];
         const grouped = prev && prev.speaker === m.speaker && m.created_at - prev.created_at < 120;
         const thread = props.threads?.get(m.id);
         return (
