@@ -127,7 +127,7 @@ Runtimes start with their own skill discovery switched off, so agents only know 
 
 ## Coordination
 
-`[coordination] enabled = true` turns on autonomous tasks. All keys and budgets are on the [Coordination](Coordination) page.
+`[coordination] enabled = true` turns on autonomous tasks; it also enables agent self-wakeups, so `wakeup.schedule` is offered in every room (main, direct messages, and groups), not only task rooms. All keys and budgets are on the [Coordination](Coordination) page.
 
 ## Room state directives
 

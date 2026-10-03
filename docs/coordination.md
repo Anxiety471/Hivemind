@@ -77,11 +77,32 @@ Worktree directories are removed after each attempt; branches stay. The live ses
 
 Dynamic groups live in SQLite (configuration groups are untouched). `groups.create` resolves configured personas only, one distinct persona per requested capability; the same purpose and membership reuses the group. Membership changes are revision-checked and audited, and removed members' task sessions are rotated.
 
+`wakeup.schedule {delay_seconds, intent?, reminder?, note?, label?, repeat_seconds?, repeat_count?, key?}` lets an agent wake itself later. In a task room it stores a durable self-addressed `wakeup` message whose delivery carries a `due_at`. At least one of the three purposes is required — `intent` (what to do when woken), `reminder` (the condition or time to act on), `note` (state to carry) — and each is delivered as a labeled line so the future self reads why it was woken. The scheduler and inbox ignore it until due, then it runs as a normal single inbox attempt carrying the body, and a completed or failed attempt never replays it. If the attempt is interrupted (crash, restart, lease loss) the wakeup is requeued, up to 3 claims in total, because losing a self-continuation is worse than repeating it; after the third interruption it fails. A wakeup that can never fire is never silent: Hivemind records a `wakeup.dropped` event with the reason (task cancelled or finished, root ended, persona removed, interrupted 3 times) and, when the root is still alive, sends the agent a non-waking `status` message with the wakeup's context that it sees the next time it works there. The delay must be 1s to 7 days and before the root deadline, at most 5 wakeups may be pending per agent per root task, and invalid requests create nothing. The scheduler does not poll for them: with nothing running it sleeps exactly until the next wakeup is due (plus a 50ms margin, capped at 30s as a safety net, and woken early by any new work); while attempts run it keeps its 500ms tick for completions and heartbeats.
+
+In a chat room (`main`, `solo-<persona>`, `group-<id>`) there is no task, so a wakeup is stored in the `chat_wakeups` table and delivered through the durable turn queue instead: when it comes due the jobs worker submits the composed body as a turn in the same room, where it reads as a user-style message marked `[Hivemind wakeup <id>: you scheduled this; it is not a user message]`. The idempotency key is per fire — `<id>:<fires>` — so a recurring schedule's second fire is a new turn rather than a replay of the first; a row left `dispatched` by a crash is requeued for up to 3 attempts, then dropped. A chat wakeup may be recurring: `repeat_seconds` (1s to 7 days, the same bounds as `delay_seconds`) fires it again every interval after the first delay, and `repeat_count` (1..=1000) bounds how many times it fires in total; omitting `repeat_count` repeats until cancelled. Recurring wakeups are chat-room only — a task-room wakeup fires once. `label` is an optional short name (≤80 bytes) for the schedule. At most 5 chat wakeups may be outstanding per room, the at-least-one-purpose rule is identical, and the tool is offered wherever a chat room can be entered — threads have no wakeup target. Task rooms keep the message-queue path described above.
+
+A user can see and stop a room's schedules with `GET /api/v1/rooms/{id}/schedules` (every schedule, newest first, in any state: `id`, `label`, `message`, `due_at`, `repeat_seconds`, `repeat_count`, `fires`, `state`, `created_at`) and `DELETE /api/v1/rooms/{id}/schedules/{sid}` (404 for an unknown or foreign schedule, 409 once it is `completed`/`cancelled`/`failed`, otherwise the cancelled schedule). Both answer 404 for rooms that are not chat rooms. There is still no `wakeup.list` or `wakeup.cancel` tool: an agent cannot enumerate or retract its own wakeups, only the user can.
+
+### Wake types
+
+Every wake is one of a small set of durable triggers; only the last is agent-authored.
+
+| Wake type | Trigger | Example |
+|---|---|---|
+| `USER_WAKE` | A user turn, steer, or submitted root task arrives | “Fix login” |
+| `AGENT_WAKE` | Another persona sends a `request` or `handoff` message | Marin asks Kurisu |
+| `TASK_WAKE` | A dependency completes and the task is promoted to `ready` | a work attempt is dispatched |
+| `SCHEDULE_WAKE` | A `wakeup.schedule` delivery comes due | a self-check later |
+| `RECOVERY_WAKE` | An interrupted attempt or wakeup is requeued after a restart | Hivemind restarts mid-attempt |
+| `EVENT_WAKE` | *(not implemented)* an external system event | CI fails |
+
+`USER_WAKE`, `AGENT_WAKE`, `TASK_WAKE`, and `RECOVERY_WAKE` are host-driven: the model never names or triggers them. `SCHEDULE_WAKE` is the only agent-authored wake and the only wake tool exposed — there is no `wakeup.list` or `wakeup.cancel`, so an agent cannot enumerate or retract its pending wakeups. `EVENT_WAKE` is conceptual only: Hivemind has no event-to-wake subscription, so nothing observes CI or any other external event and wakes an agent; adding one would be a new host event source.
+
 ## Agent tools
 
-Offered through the same ```` ```hivemind-tool ```` fence as memory tools, only inside task rooms and only when the persona's role and permissions allow them. The manifest is injected with the first prompt of each runtime epoch; later turns carry a one-line reminder.
+Offered through the same ```` ```hivemind-tool ```` fence as memory tools, in task rooms and — for `wakeup.schedule` — in chat rooms too, and only when the persona's role and permissions allow them. The manifest is injected with the first prompt of each runtime epoch; later turns carry a one-line reminder.
 
-`agents.list`, `messages.send|inbox|ack`, `groups.create|get|members.update`, `tasks.get|list|plan.propose|delegate|progress|ask|block|result.submit|review|decide`, `artifacts.get`, `context.lookup`. Memory tools are unchanged and keep their own limits.
+`agents.list`, `messages.send|inbox|ack`, `wakeup.schedule`, `groups.create|get|members.update`, `tasks.get|list|plan.propose|delegate|progress|ask|block|result.submit|review|decide`, `artifacts.get`, `context.lookup`. Memory tools are unchanged and keep their own limits. Unlike the rest, `wakeup.schedule` is offered in `main`, `solo-<persona>`, and `group-<id>` rooms as well as task rooms; in a chat room it schedules the turn-queue wakeup described above, and in a task room it delegates to the coordination wakeup.
 
 Actor, room, task, attempt, lease, and budget are bound by Hivemind; identity in arguments is ignored. Task text and agent messages are never user input: `Global:` directives and room-state directives are ignored in task rooms, so an agent cannot authorize a global memory write.
 
@@ -123,6 +144,7 @@ Errors use one shape: `{"error":{"code","message"}}`; internal failures are sani
 - Coordination context estimates remain bytes/4. Measured Pi/OMP billing usage and persistent admission budgets are available through `/api/v1/usage`; unsupported reporting remains null. Budgets count dispatches, tool actions, messages, and time.
 - Live WebSocket events are published by the process that made the change; changes made by a one-shot CLI process reach WebSocket clients of a running `serve` on its next scheduler pass (≤0.5 s), and always via `/events`.
 - Epochs closed before end reasons were recorded have `end_reason: null` and are not counted as rotations.
+- Wakeups are time-based or host-dispatched only. `TASK_WAKE` runs a task's own owner attempt when its dependencies complete, and an agent can schedule a time/repeat wakeup; there is no wake whose trigger is a task or issue reaching a state ("wake me when task X is ready"), and `EVENT_WAKE` has no event source, so nothing observes CI or an issue tracker.
 - Non-goals unchanged: no autonomous merge or deploy, no multi-user API, no unrestricted agent creation.
 
 Host-run verification and interrupted-work recovery are configured through [execution.md](execution.md).

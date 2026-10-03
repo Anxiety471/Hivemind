@@ -22,6 +22,7 @@ use crate::{
     config::CoordinationConfig,
     events::{DomainEventKind, EventBus},
     identity::AgentInstanceId,
+    wakeup::{MAX_WAKEUP_DELAY_SECS, MIN_WAKEUP_DELAY_SECS},
 };
 
 /// Public event types, in the order the wire protocol reserves them.
@@ -114,6 +115,13 @@ pub struct ResultIn {
     pub artifacts: Vec<ArtifactIn>,
     pub verification: Vec<Evidence>,
 }
+
+/// Max outstanding self-wakeups per agent, per root task or per chat room.
+pub(super) const MAX_PENDING_WAKEUPS: i64 = crate::wakeup::MAX_PENDING_CHAT_WAKEUPS;
+/// A wakeup interrupted mid-attempt (crash, restart, lease loss) is retried until
+/// it has been claimed this many times; wakeups are self-continuations, so a
+/// replay is safer than losing them.
+pub(super) const MAX_WAKEUP_ATTEMPTS: u32 = 3;
 
 pub struct SendMessage {
     pub recipients: Vec<String>,
@@ -242,6 +250,25 @@ impl CoordinationService {
     pub fn enabled(&self) -> bool {
         self.config.enabled
     }
+    /// How long an idle scheduler (nothing running) may sleep: until the next
+    /// scheduled wakeup comes due, retrying soon if one is already due but not
+    /// claimable yet, and never past a safety cap. New work interrupts the sleep
+    /// through [`Self::wake_signal`].
+    pub fn idle_sleep(&self) -> std::time::Duration {
+        use std::time::Duration;
+        const RETRY: Duration = Duration::from_millis(500);
+        const CAP: Duration = Duration::from_secs(30);
+        // Due times are whole seconds; the margin lands the wake after the boundary.
+        const MARGIN: Duration = Duration::from_millis(50);
+        match self.store.read(|db| Ok((db.now, db.wake_timing()?))) {
+            Ok((_, (true, _))) | Err(_) => RETRY,
+            Ok((now, (false, Some(due)))) => {
+                (Duration::from_secs((due - now).max(0) as u64) + MARGIN).min(CAP)
+            }
+            Ok((_, (false, None))) => CAP,
+        }
+    }
+
     pub fn wake_signal(&self) -> Arc<Notify> {
         self.wake.clone()
     }
@@ -779,6 +806,12 @@ impl CoordinationService {
                         for (d, _) in &items {
                             db.set_delivery(&d.message_id, &d.recipient, DeliveryState::Cancelled)?;
                         }
+                        self.report_dropped_wakeups(
+                            db,
+                            &items,
+                            &format!("its task is {}", task.status.as_str()),
+                            !root.status.is_terminal(),
+                        )?;
                         continue;
                     }
                     if root.paused
@@ -791,6 +824,12 @@ impl CoordinationService {
                         for (d, _) in &items {
                             db.set_delivery(&d.message_id, &d.recipient, DeliveryState::Failed)?;
                         }
+                        self.report_dropped_wakeups(
+                            db,
+                            &items,
+                            &format!("persona '{persona}' is no longer configured"),
+                            false,
+                        )?;
                         continue;
                     }
                     if let Charged::Exhausted(reason) =
@@ -941,9 +980,17 @@ impl CoordinationService {
             }
             if attempt.kind == AttemptKind::Inbox {
                 let acked = matches!(end, AttemptEnd::Completed);
-                for (delivery, _) in db.inbox(&attempt.persona, &task.root_id, &[DeliveryState::Processing], 100)? {
+                for (delivery, message) in db.inbox(&attempt.persona, &task.root_id, &[DeliveryState::Processing], 100)? {
                     let next = if acked { DeliveryState::Acknowledged } else if matches!(end, AttemptEnd::Interrupted) { DeliveryState::Queued } else { DeliveryState::Failed };
-                    if next == DeliveryState::Queued {
+                    if next == DeliveryState::Queued && message.kind == MessageKind::Wakeup {
+                        // A wakeup is a self-continuation: replay it after an interruption, a bounded number of times.
+                        if delivery.attempts < MAX_WAKEUP_ATTEMPTS {
+                            db.set_delivery(&delivery.message_id, &delivery.recipient, DeliveryState::Queued)?;
+                        } else {
+                            db.set_delivery(&delivery.message_id, &delivery.recipient, DeliveryState::Failed)?;
+                            self.report_dropped_wakeups(db, &[(delivery, message)], &format!("it was interrupted {MAX_WAKEUP_ATTEMPTS} times"), true)?;
+                        }
+                    } else if next == DeliveryState::Queued {
                         // Interrupted mid-processing: keep it visible but never auto-replay.
                         db.set_delivery(&delivery.message_id, &delivery.recipient, DeliveryState::Failed)?;
                     } else {
@@ -1472,7 +1519,9 @@ impl CoordinationService {
     /// Root reached a terminal state: archive groups, cancel pending wakeups.
     fn finish_root(&self, db: &Db<'_>, root: &str) -> CoordResult<()> {
         db.archive_groups(root)?;
+        let pending = db.queued_wakeups_on(root)?;
         db.cancel_deliveries(root)?;
+        self.report_dropped_wakeups(db, &pending, "the root task ended first", false)?;
         for id in db.task_ids(root)? {
             self.retire_task(&id);
         }
@@ -1800,6 +1849,9 @@ impl CoordinationService {
         if req.artifacts.len() > 8 {
             return invalid("at most 8 artifact references per message");
         }
+        if req.kind == MessageKind::Wakeup {
+            return invalid("use wakeup.schedule to schedule a wakeup for yourself");
+        }
         if req.kind == MessageKind::Ack && req.causation.is_none() {
             return invalid("an ack must reference the message it acknowledges (causation)");
         }
@@ -1892,6 +1944,7 @@ impl CoordinationService {
                 thread,
                 idempotency_key: key.as_deref(),
                 wake,
+                due_at: None,
             })?;
             if req.kind == MessageKind::DecisionProposal {
                 db.insert_decision(&task.id, &body, &ctx.persona, Some(&id))?;
@@ -1902,6 +1955,166 @@ impl CoordinationService {
         })?;
         self.changed();
         Ok(out)
+    }
+
+    /// A wakeup that will never fire is never silent: record why, and when its
+    /// root is still alive leave a non-waking status message the agent sees the
+    /// next time it works there.
+    fn report_dropped_wakeups(
+        &self,
+        db: &Db<'_>,
+        items: &[(Delivery, Message)],
+        reason: &str,
+        tell_agent: bool,
+    ) -> CoordResult<()> {
+        for (delivery, message) in items {
+            if message.kind != MessageKind::Wakeup {
+                continue;
+            }
+            db.event(
+                &message.root_id,
+                Some(&message.task_id),
+                "hivemind",
+                "wakeup.dropped",
+                serde_json::json!({"message_id": message.id, "persona": delivery.recipient, "reason": reason}),
+            )?;
+            if tell_agent {
+                let id = new_id("mg");
+                db.insert_message(&NewMessage {
+                    id: id.clone(),
+                    root_id: &message.root_id,
+                    task_id: &message.task_id,
+                    sender: "hivemind",
+                    sender_instance: "hivemind",
+                    kind: MessageKind::Status,
+                    recipients: std::slice::from_ref(&delivery.recipient),
+                    group_id: None,
+                    body: &format!(
+                        "Your scheduled wakeup {} did not fire: {reason}. It carried: {}",
+                        message.id,
+                        clip(&message.body, 500)
+                    ),
+                    artifacts: &[],
+                    causation_id: Some(&message.id),
+                    depth: message.depth + 1,
+                    correlation_id: message.correlation_id.clone(),
+                    thread: message.thread.clone(),
+                    idempotency_key: None,
+                    wake: false,
+                    due_at: None,
+                })?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Schedules the calling agent's own future wakeup on its current task.
+    /// The wakeup is a durable self-addressed delivery that the scheduler
+    /// claims once due, exactly like a queued request, so it survives restarts
+    /// and runs at most once. Invalid requests create nothing.
+    pub fn schedule_wakeup(
+        &self,
+        ctx: &ToolCtx,
+        delay_secs: i64,
+        intent: Option<&str>,
+        reminder: Option<&str>,
+        note: Option<&str>,
+        idempotency_key: Option<&str>,
+    ) -> CoordResult<(Message, bool)> {
+        if !(MIN_WAKEUP_DELAY_SECS..=MAX_WAKEUP_DELAY_SECS).contains(&delay_secs) {
+            return invalid(format!(
+                "delay_seconds must be between {MIN_WAKEUP_DELAY_SECS} and {MAX_WAKEUP_DELAY_SECS}"
+            ));
+        }
+        // The delivered message labels each stated purpose so the future self reads why it was woken.
+        let body = crate::wakeup::validate_and_compose(delay_secs, intent, reminder, note)?;
+        let key = idempotency_key
+            .map(|k| check_text("idempotency key", k, 128))
+            .transpose()?;
+        let task = self.live(ctx)?;
+        self.charge(&ctx.root_id, Charge::Message)?;
+        let out = self.store.write(|db| {
+            if let Some(key) = &key {
+                if let Some(existing) = db.message_by_key(&ctx.persona, key)? {
+                    return Ok((existing, true));
+                }
+            }
+            let root = db.task_or_err(&task.root_id)?;
+            if root.status.is_terminal() || root.paused {
+                return conflict(format!(
+                    "root task is {}",
+                    if root.paused {
+                        "paused"
+                    } else {
+                        root.status.as_str()
+                    }
+                ));
+            }
+            let due_at = db.now + delay_secs;
+            if let Some(usage) = db.usage(&task.root_id)? {
+                if due_at > usage.deadline {
+                    return invalid("wakeup would be due after this root task's deadline");
+                }
+            }
+            if db.pending_wakeups(&ctx.persona, &task.root_id)? >= MAX_PENDING_WAKEUPS {
+                return conflict(format!(
+                    "at most {MAX_PENDING_WAKEUPS} pending wakeups per root task"
+                ));
+            }
+            let id = new_id("mg");
+            db.insert_message(&NewMessage {
+                id: id.clone(),
+                root_id: &task.root_id,
+                task_id: &task.id,
+                sender: &ctx.persona,
+                sender_instance: &AgentInstanceId::new(&ctx.room, &ctx.persona).encode(),
+                kind: MessageKind::Wakeup,
+                recipients: std::slice::from_ref(&ctx.persona),
+                group_id: None,
+                body: &body,
+                artifacts: &[],
+                causation_id: None,
+                depth: 0,
+                correlation_id: task.root_id.clone(),
+                thread: id.clone(),
+                idempotency_key: key.as_deref(),
+                wake: true,
+                due_at: Some(due_at),
+            })?;
+            db.event(
+                &task.root_id,
+                Some(&task.id),
+                &ctx.persona,
+                "wakeup.scheduled",
+                serde_json::json!({"message_id": id, "due_at": due_at}),
+            )?;
+            let message = db
+                .message(&id)?
+                .ok_or_else(|| CoordError::Internal("message vanished".into()))?;
+            Ok((message, false))
+        })?;
+        self.changed();
+        Ok(out)
+    }
+
+    /// Schedules a wakeup on whatever task `persona` is running in `room`.
+    /// The room-level entry point used by the chat-wakeup host so it does not
+    /// need the private binding and store APIs.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn schedule_wakeup_from_room(
+        &self,
+        room: &str,
+        persona: &str,
+        delay_secs: i64,
+        intent: Option<&str>,
+        reminder: Option<&str>,
+        note: Option<&str>,
+        idempotency_key: Option<&str>,
+    ) -> CoordResult<(Message, bool)> {
+        let ctx = self
+            .bind(room, persona)?
+            .ok_or_else(|| CoordError::Conflict("no live task attempt in this room".into()))?;
+        self.schedule_wakeup(&ctx, delay_secs, intent, reminder, note, idempotency_key)
     }
 
     /// Bounded mailbox read. Non-waking queued items become `delivered`;
@@ -2264,6 +2477,7 @@ impl CoordinationService {
                 thread: id.clone(),
                 idempotency_key: None,
                 wake: kind.wakes_recipient(),
+                due_at: None,
             })?;
             db.event(&root.id, Some(task_id), "user", "message.sent", serde_json::json!({"message_id": id, "kind": kind.as_str(), "recipients": to, "wake": kind.wakes_recipient()}))?;
             db.message(&id)?.ok_or_else(|| CoordError::Internal("message vanished".into()))

@@ -120,9 +120,16 @@ impl Scheduler {
             if let Err(error) = self.step().await {
                 eprintln!("coordination: scheduler step failed: {error}");
             }
+            // Running attempts need the short tick (completion, heartbeats). With nothing
+            // running, sleep exactly until the next scheduled wakeup; new work notifies.
+            let pause = if self.running.is_empty() {
+                self.service.idle_sleep()
+            } else {
+                Duration::from_millis(500)
+            };
             tokio::select! {
                 _ = wake.notified() => {}
-                _ = tokio::time::sleep(Duration::from_millis(500)) => {}
+                _ = tokio::time::sleep(pause) => {}
             }
         }
         self.stop().await;

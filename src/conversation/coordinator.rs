@@ -1,4 +1,5 @@
 use super::*;
+use crate::execution::ORIGIN_USER;
 
 pub struct TurnRequest<'a> {
     pub room: &'a str,
@@ -287,16 +288,17 @@ impl ConversationCoordinator {
     }
 
     pub async fn turn_with_outcome(&self, request: TurnRequest<'_>) -> Result<TurnExecution> {
-        self.turn_with_id(request, None).await
+        self.turn_with_id(request, None, ORIGIN_USER).await
     }
 
     pub(crate) async fn turn_with_id(
         &self,
         request: TurnRequest<'_>,
         id: Option<&str>,
+        origin: &str,
     ) -> Result<TurnExecution> {
         let room_id = request.room.to_owned();
-        self.turn_internal(request, id)
+        self.turn_internal(request, id, origin)
             .await
             .map(|(turn_id, replies)| TurnExecution {
                 turn_id,
@@ -309,6 +311,7 @@ impl ConversationCoordinator {
         &self,
         request: TurnRequest<'_>,
         id: Option<&str>,
+        origin: &str,
     ) -> Result<(String, Vec<TurnReply>)> {
         let TurnRequest {
             room,
@@ -356,9 +359,10 @@ impl ConversationCoordinator {
         // authorize exactly one exact-content global proposal this turn.
         let host = self.tools.get().cloned();
         let access = self.access.get().cloned();
-        let agent_input = host
-            .as_ref()
-            .is_some_and(|host| host.agent_originated(room));
+        let agent_input = origin != ORIGIN_USER
+            || host
+                .as_ref()
+                .is_some_and(|host| host.agent_originated(room));
         let authorized_global = if agent_input {
             None
         } else {

@@ -285,6 +285,12 @@ impl HivemindCore {
             .with_coordination(coordination.clone()),
         ));
         if config.coordination.enabled {
+            // Registered before `CoordinationTools` so it wins the shared
+            // `wakeup.schedule` name and the coordination host handles the rest.
+            hosts.push(Arc::new(crate::wakeup::ChatWakeupTools::new(
+                coordination.clone(),
+                execution.clone(),
+            )));
             hosts.push(Arc::new(CoordinationTools::new(
                 coordination.clone(),
                 audit.clone(),
@@ -328,6 +334,7 @@ impl HivemindCore {
         target: &ConversationTarget,
         message: &str,
         turn_id: &str,
+        origin: &str,
     ) -> Result<TurnExecution> {
         anyhow::ensure!(!self.is_shutting_down(), "core is shutting down");
         let resolved = self.resolve_target(target)?;
@@ -348,6 +355,7 @@ impl HivemindCore {
                     invoker,
                 },
                 Some(turn_id),
+                origin,
             )
             .await
     }

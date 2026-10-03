@@ -57,10 +57,11 @@ async fn retry(State(state): State<ApiState>, Path(id): Path<String>) -> Respons
         )
         .into_response();
     }
+    let origin = job.origin.clone();
     match state
         .core
         .execution()
-        .submit(&job.room_id, &job.target, &job.message, None)
+        .submit(&job.room_id, &job.target, &job.message, None, &origin)
     {
         Ok(job) => (StatusCode::ACCEPTED, Json(job)).into_response(),
         Err(_) => internal(),
@@ -220,6 +221,13 @@ pub(super) async fn run(core: Arc<HivemindCore>) {
         eprintln!("execution recovery failed: {error}");
         return;
     }
+    if let Err(error) = core
+        .execution()
+        .recover_chat_wakeups(crate::wakeup::MAX_CHAT_WAKEUP_ATTEMPTS)
+    {
+        eprintln!("chat wakeup recovery failed: {error}");
+        return;
+    }
     let mut running = tokio::task::JoinSet::new();
     while !core.is_shutting_down() {
         while running.try_join_next().is_some() {}
@@ -231,7 +239,19 @@ pub(super) async fn run(core: Arc<HivemindCore>) {
             Ok(Some(job)) => {
                 running.spawn(process(core.clone(), job));
             }
-            Ok(None) => tokio::time::sleep(Duration::from_millis(100)).await,
+            Ok(None) => {
+                // No turn is waiting: hand any due chat wakeup to the same
+                // durable queue under a per-fire idempotency key, so a
+                // resubmission can never duplicate one fire's turn.
+                match dispatch_due_wakeups(&core) {
+                    Ok(0) => tokio::time::sleep(Duration::from_millis(100)).await,
+                    Ok(_) => {}
+                    Err(error) => {
+                        eprintln!("chat wakeup dispatch failed: {error}");
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                    }
+                }
+            }
             Err(error) => {
                 eprintln!("execution claim failed: {error}");
                 tokio::time::sleep(Duration::from_millis(500)).await;
@@ -240,6 +260,64 @@ pub(super) async fn run(core: Arc<HivemindCore>) {
     }
     while running.join_next().await.is_some() {}
     let _ = core.execution().recover_jobs();
+}
+
+/// Submits every due chat wakeup as a durable turn in its own room. Returns
+/// how many fires were fully recorded. One failing row never holds back the
+/// others, and a row whose handover could not be recorded stays queued for the
+/// next pass. The idempotency key is per fire (`{id}:{fires}`) so a recurring
+/// schedule's second fire is a new turn instead of a replay of the first.
+fn dispatch_due_wakeups(core: &HivemindCore) -> anyhow::Result<usize> {
+    let due = core.execution().due_chat_wakeups(MAX_CONCURRENT_TURNS)?;
+    let mut dispatched = 0;
+    for wakeup in due {
+        // The stored row holds the clean body; the marker is part of delivery.
+        let body = crate::wakeup::delivered_message(&wakeup.id, &wakeup.message);
+        let key = format!("{}:{}", wakeup.id, wakeup.fires);
+        if let Err(error) = core.execution().submit(
+            &wakeup.room_id,
+            &wakeup.target,
+            &body,
+            Some(&key),
+            crate::execution::ORIGIN_HOST,
+        ) {
+            eprintln!("chat wakeup {} could not be queued: {error}", wakeup.id);
+            continue;
+        }
+        // Out of the due queue while the outcome is recorded; a crash here
+        // leaves the row `dispatched`, which recovery requeues so the fire is
+        // retried under the same per-fire key (already deduped if the turn
+        // really landed).
+        if let Err(error) = core.execution().mark_chat_wakeup(&wakeup.id, "dispatched") {
+            eprintln!("chat wakeup {} could not be marked: {error}", wakeup.id);
+            continue;
+        }
+        let fires = wakeup.fires + 1;
+        // A recurring schedule moves to its next fire; everything else — a
+        // one-shot, or a bounded schedule's last fire — is complete. The turn
+        // is already queued, so a failure here is reported and the row stays
+        // `dispatched`: recovery requeues it and the same per-fire key keeps
+        // the turn from being duplicated.
+        let scheduled = wakeup.repeat_seconds.filter(|_| {
+            crate::wakeup::repeats_after(wakeup.repeat_seconds, wakeup.repeat_count, wakeup.fires)
+        });
+        let recorded = match scheduled {
+            Some(seconds) => core.execution().reschedule_chat_wakeup(
+                &wakeup.id,
+                crate::execution::now() + seconds,
+                fires,
+            ),
+            None => core.execution().complete_chat_wakeup(&wakeup.id, fires),
+        };
+        match recorded {
+            Ok(()) => dispatched += 1,
+            Err(error) => eprintln!(
+                "chat wakeup {} could not be rescheduled: {error}",
+                wakeup.id
+            ),
+        }
+    }
+    Ok(dispatched)
 }
 
 async fn process(core: Arc<HivemindCore>, job: crate::execution::Job) {
@@ -252,7 +330,7 @@ async fn process(core: Arc<HivemindCore>, job: crate::execution::Job) {
         return;
     };
     {
-        let outcome = core.send_job_turn(&target, &job.message, &job.turn_id);
+        let outcome = core.send_job_turn(&target, &job.message, &job.turn_id, &job.origin);
         tokio::pin!(outcome);
         loop {
             tokio::select! {

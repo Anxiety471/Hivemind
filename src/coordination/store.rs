@@ -100,6 +100,12 @@ CREATE TABLE task_decisions (
 CREATE INDEX decisions_task ON task_decisions(task_id, state);
 PRAGMA user_version=1;";
 
+/// Scheduled self-wakeups: a delivery with `due_at` set is invisible to the
+/// scheduler and the inbox until that time.
+const SCHEMA_V2: &str = "
+ALTER TABLE message_deliveries ADD COLUMN due_at INTEGER;
+PRAGMA user_version=2;";
+
 pub struct CoordinationStore {
     connection: Mutex<Connection>,
     clock: AtomicI64,
@@ -126,6 +132,9 @@ impl CoordinationStore {
         let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
         if version < 1 {
             connection.execute_batch(&format!("BEGIN IMMEDIATE;{SCHEMA_V1}COMMIT;"))?;
+        }
+        if version < 2 {
+            connection.execute_batch(&format!("BEGIN IMMEDIATE;{SCHEMA_V2}COMMIT;"))?;
         }
         Ok(Self {
             connection: Mutex::new(connection),
@@ -344,6 +353,8 @@ pub struct NewMessage<'a> {
     pub thread: String,
     pub idempotency_key: Option<&'a str>,
     pub wake: bool,
+    /// Earliest time (unix seconds) the wake may be claimed; `None` is immediate.
+    pub due_at: Option<i64>,
 }
 
 impl Db<'_> {
@@ -865,8 +876,8 @@ impl Db<'_> {
             .execute(params![m.id, m.root_id, m.task_id, m.thread, m.sender, m.sender_instance, m.kind.as_str(), dump(&m.recipients), m.group_id, m.body, dump(&m.artifacts), m.correlation_id, m.causation_id, m.depth, m.idempotency_key, self.now])?;
         for recipient in m.recipients {
             self.c
-                .prepare_cached("INSERT INTO message_deliveries(message_id,recipient,root_id,task_id,state,wake,updated_at) VALUES(?1,?2,?3,?4,'queued',?5,?6)")?
-                .execute(params![m.id, recipient, m.root_id, m.task_id, m.wake as i64, self.now])?;
+                .prepare_cached("INSERT INTO message_deliveries(message_id,recipient,root_id,task_id,state,wake,updated_at,due_at) VALUES(?1,?2,?3,?4,'queued',?5,?6,?7)")?
+                .execute(params![m.id, recipient, m.root_id, m.task_id, m.wake as i64, self.now, m.due_at])?;
         }
         Ok(())
     }
@@ -963,13 +974,13 @@ impl Db<'_> {
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!(
-            "SELECT d.message_id,d.recipient,d.state,d.wake,d.attempts,d.updated_at FROM message_deliveries d WHERE d.recipient=?1 AND d.root_id=?2 AND d.state IN ({list}) ORDER BY d.message_id LIMIT {}",
+            "SELECT d.message_id,d.recipient,d.state,d.wake,d.attempts,d.updated_at FROM message_deliveries d WHERE d.recipient=?1 AND d.root_id=?2 AND d.state IN ({list}) AND (d.due_at IS NULL OR d.due_at<=?3) ORDER BY d.message_id LIMIT {}",
             limit.clamp(1, 100)
         );
         let deliveries: Vec<Delivery> = self
             .c
             .prepare_cached(&sql)?
-            .query_map(params![recipient, root], delivery_row)?
+            .query_map(params![recipient, root, self.now], delivery_row)?
             .collect::<rusqlite::Result<_>>()?;
         let mut out = Vec::with_capacity(deliveries.len());
         for delivery in deliveries {
@@ -994,8 +1005,24 @@ impl Db<'_> {
     pub fn wake_queue(&self, limit: usize) -> CoordResult<Vec<(Delivery, Message)>> {
         let deliveries: Vec<Delivery> = self
             .c
-            .prepare_cached("SELECT message_id,recipient,state,wake,attempts,updated_at FROM message_deliveries WHERE state='queued' AND wake=1 ORDER BY message_id LIMIT ?1")?
-            .query_map([limit as i64], delivery_row)?
+            .prepare_cached("SELECT message_id,recipient,state,wake,attempts,updated_at FROM message_deliveries WHERE state='queued' AND wake=1 AND (due_at IS NULL OR due_at<=?2) ORDER BY message_id LIMIT ?1")?
+            .query_map(params![limit as i64, self.now], delivery_row)?
+            .collect::<rusqlite::Result<_>>()?;
+        let mut out = Vec::with_capacity(deliveries.len());
+        for delivery in deliveries {
+            if let Some(message) = self.message(&delivery.message_id)? {
+                out.push((delivery, message));
+            }
+        }
+        Ok(out)
+    }
+
+    /// Queued wakeups on `root` (any due time), for reporting before they are cancelled.
+    pub fn queued_wakeups_on(&self, root: &str) -> CoordResult<Vec<(Delivery, Message)>> {
+        let deliveries: Vec<Delivery> = self
+            .c
+            .prepare_cached("SELECT message_id,recipient,state,wake,attempts,updated_at FROM message_deliveries WHERE root_id=?1 AND state='queued' AND wake=1 AND due_at IS NOT NULL")?
+            .query_map([root], delivery_row)?
             .collect::<rusqlite::Result<_>>()?;
         let mut out = Vec::with_capacity(deliveries.len());
         for delivery in deliveries {
@@ -1011,7 +1038,20 @@ impl Db<'_> {
     }
 
     pub fn queued_wakes_for(&self, recipient: &str) -> CoordResult<i64> {
-        Ok(self.c.prepare_cached("SELECT COUNT(*) FROM message_deliveries WHERE recipient=?1 AND wake=1 AND state='queued'")?.query_row([recipient], |r| r.get(0))?)
+        Ok(self.c.prepare_cached("SELECT COUNT(*) FROM message_deliveries WHERE recipient=?1 AND wake=1 AND state='queued' AND (due_at IS NULL OR due_at<=?2)")?.query_row(params![recipient, self.now], |r| r.get(0))?)
+    }
+
+    /// Timing the scheduler needs to sleep exactly until the next scheduled wakeup:
+    /// whether a wake is already due and unclaimed, and the earliest future due time.
+    pub fn wake_timing(&self) -> CoordResult<(bool, Option<i64>)> {
+        let due_now: i64 = self.c.prepare_cached("SELECT COUNT(*) FROM message_deliveries WHERE state='queued' AND wake=1 AND (due_at IS NULL OR due_at<=?1)")?.query_row([self.now], |r| r.get(0))?;
+        let next: Option<i64> = self.c.prepare_cached("SELECT MIN(due_at) FROM message_deliveries WHERE state='queued' AND wake=1 AND due_at>?1")?.query_row([self.now], |r| r.get(0))?;
+        Ok((due_now > 0, next))
+    }
+
+    /// Scheduled wakeups of `recipient` on `root` that have not come due yet.
+    pub fn pending_wakeups(&self, recipient: &str, root: &str) -> CoordResult<i64> {
+        Ok(self.c.prepare_cached("SELECT COUNT(*) FROM message_deliveries WHERE recipient=?1 AND root_id=?2 AND state='queued' AND due_at IS NOT NULL AND due_at>?3")?.query_row(params![recipient, root, self.now], |r| r.get(0))?)
     }
 
     // ---- groups ----

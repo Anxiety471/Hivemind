@@ -23,7 +23,7 @@ cd frontend && bun install && bun run dev   # UI on http://127.0.0.1:5173
 
 - **Agents** can be created, edited and deleted. A card shows the agent's own workspace separately from any group workspace that replaces it inside a group. Typed input survives a failed save, and an edit made elsewhere is flagged without discarding yours.
 - **Workspaces** lets you add several workspaces next to the existing ones and pick them for agents and groups. Adding one never restricts where agents may work (that is what `[workspaces] roots` is for).
-- The **room panel** on the right of every conversation has Details, Settings, and Sessions tabs. Settings cover nickname, pinning, muting, mode, reply order, and workspace; controls that do not apply to a room kind say why.
+- The **room panel** on the right of every conversation has Details, Settings, and Sessions tabs. Settings cover nickname, pinning, muting, mode, reply order, and workspace; controls that do not apply to a room kind say why. **Details** also lists the room's self-scheduled wakeups (label, the intent/reminder/note body, recurrence, next fire time, state) with a **Cancel** button, backed by `GET`/`DELETE /rooms/{id}/schedules`.
 - Agent replies render as Markdown. The server also normalizes line endings, escape codes and blank-line runs, so every runtime reads the same.
 
 ## Connection

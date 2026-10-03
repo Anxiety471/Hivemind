@@ -445,3 +445,183 @@ async fn a_published_image_opens_framed_with_its_bytes_behind_raw() {
     assert_eq!(raw.as_ref(), CONTENT);
     fixture.core.shutdown().await;
 }
+#[tokio::test]
+async fn room_schedules_list_and_cancel_a_chat_wakeup_only() {
+    let fixture = Fixture::new(false);
+    let app = fixture.app();
+    let execution = fixture.core.execution();
+    let target = json!({"type":"main"});
+    let now = crate::execution::now();
+    execution
+        .insert_chat_wakeup(
+            "wk_live",
+            "main",
+            &target,
+            "Intent: poll",
+            now + 60,
+            crate::wakeup::MAX_PENDING_CHAT_WAKEUPS,
+            None,
+            Some("poller"),
+            Some(120),
+            None,
+        )
+        .unwrap();
+    execution
+        .insert_chat_wakeup(
+            "wk_done",
+            "main",
+            &target,
+            "Intent: once",
+            now + 60,
+            crate::wakeup::MAX_PENDING_CHAT_WAKEUPS,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+    execution.complete_chat_wakeup("wk_done", 1).unwrap();
+    let (status, listed) = call(
+        app.clone(),
+        "GET",
+        "/api/v1/rooms/main/schedules",
+        json!(null),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(listed["room_id"], "main");
+    let schedules = listed["schedules"].as_array().unwrap();
+    assert_eq!(schedules.len(), 2);
+    // Newest first: the completed one-shot was stored second.
+    assert_eq!(schedules[0]["id"], "wk_done");
+    assert_eq!(schedules[0]["state"], "completed");
+    assert_eq!(schedules[0]["repeat_seconds"], json!(null));
+    assert_eq!(schedules[1]["id"], "wk_live");
+    assert_eq!(schedules[1]["label"], "poller");
+    assert_eq!(schedules[1]["message"], "Intent: poll");
+    assert_eq!(schedules[1]["repeat_seconds"], 120);
+    assert_eq!(schedules[1]["fires"], 0);
+    // A live schedule can be stopped, and the reply reports the new state.
+    let (status, stopped) = call(
+        app.clone(),
+        "DELETE",
+        "/api/v1/rooms/main/schedules/wk_live",
+        json!(null),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(stopped["schedule"]["id"], "wk_live");
+    assert_eq!(stopped["schedule"]["state"], "cancelled");
+    // Stopping again, or stopping a completed row, is a conflict.
+    for id in ["wk_live", "wk_done"] {
+        let (status, _) = call(
+            app.clone(),
+            "DELETE",
+            &format!("/api/v1/rooms/main/schedules/{id}"),
+            json!(null),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{id}");
+    }
+    // Unknown ids and rooms without schedules are 404, never a silent success.
+    let (status, _) = call(
+        app.clone(),
+        "DELETE",
+        "/api/v1/rooms/main/schedules/wk_missing",
+        json!(null),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = call(
+        app.clone(),
+        "DELETE",
+        "/api/v1/rooms/solo-Engineer/schedules/wk_live",
+        json!(null),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = call(app, "GET", "/api/v1/rooms/task-tk_1/schedules", json!(null)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    fixture.core.shutdown().await;
+}
+#[tokio::test]
+async fn a_recurring_chat_wakeup_fires_once_per_period_under_a_per_fire_key() {
+    let fixture = Fixture::new(false);
+    let execution = fixture.core.execution();
+    let now = crate::execution::now();
+    execution
+        .insert_chat_wakeup(
+            "wk_rep",
+            "main",
+            &json!({"type":"main"}),
+            "Intent: poll",
+            now - 1,
+            crate::wakeup::MAX_PENDING_CHAT_WAKEUPS,
+            None,
+            Some("poller"),
+            Some(1),
+            Some(2),
+        )
+        .unwrap();
+    let worker = tokio::spawn(jobs::run(fixture.core.clone()));
+    // Both fires land as two distinct turns, each carrying the marker and the
+    // same clean body, and the second one only after the first was recorded.
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let listed = execution.chat_wakeups_for("main").unwrap();
+            if listed[0].state == "completed" && listed[0].fires == 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the bounded recurring schedule completed its two fires");
+    for key in ["wk_rep:0", "wk_rep:1"] {
+        let job = execution
+            .job_by_idem(key)
+            .unwrap()
+            .unwrap_or_else(|| panic!("{key} was submitted"));
+        assert_eq!(job.room_id, "main");
+        assert_eq!(job.origin, crate::execution::ORIGIN_HOST);
+        assert!(
+            job.message
+                .starts_with("[Hivemind wakeup wk_rep: you scheduled this"),
+            "{}",
+            job.message
+        );
+        assert!(job.message.ends_with("Intent: poll"), "{}", job.message);
+    }
+    // The bounded schedule never fires a third time.
+    assert!(execution.job_by_idem("wk_rep:2").unwrap().is_none());
+    // The turn reaches room history with the delivery marker and the clean
+    // body, so the future self sees exactly what it scheduled.
+    let caller = crate::memory::Caller::trusted_user("test");
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let messages = fixture
+                .core
+                .memory()
+                .room_messages_page(&caller, "main", None, 50)
+                .unwrap();
+            if messages
+                .iter()
+                .filter(|m| {
+                    m.content
+                        .starts_with("[Hivemind wakeup wk_rep: you scheduled this")
+                        && m.content.ends_with("Intent: poll")
+                })
+                .count()
+                == 2
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("both delivered wakeup bodies were archived into room history");
+    assert_eq!(execution.pending_chat_wakeups("main", None).unwrap(), 0);
+    fixture.core.shutdown().await;
+    worker.await.unwrap();
+}

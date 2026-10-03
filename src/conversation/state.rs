@@ -8,6 +8,11 @@ pub(super) fn append_unique(values: &mut Vec<String>, value: &str) {
 
 /// Apply only documented user-input directives, never successful agent prose.
 pub(super) fn apply_explicit_state_updates(state: &mut RoomState, text: &str) -> Result<()> {
+    // A host-authored wakeup re-enters the room with the agent's own words.
+    // They are not user directives, so the wakeup is skipped entirely.
+    if crate::wakeup::is_wakeup_message(text) {
+        return Ok(());
+    }
     for line in text.lines().map(str::trim) {
         let Some((field, value)) = [
             ("Goal:", "goal"),
