@@ -1963,6 +1963,11 @@ li.task-item p {
   letter-spacing: 0;
 }
 
+.ascii-toolbar { flex-wrap: wrap; gap: 8px; }
+.ascii-controls { display: flex; flex-wrap: wrap; gap: 8px; }
+.ascii-controls button:disabled { opacity: .5; cursor: default; }
+.ascii-status { padding: 4px 12px 8px; color: var(--muted); font-size: 11px; }
+
 .slash-output {
   position: relative;
   max-height: 260px;
