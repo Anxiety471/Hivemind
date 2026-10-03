@@ -112,6 +112,7 @@ string_enum!(MessageKind {
     Status => "status",
     DecisionProposal => "decision_proposal",
     Ack => "ack",
+    Wakeup => "wakeup",
 });
 
 impl MessageKind {

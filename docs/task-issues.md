@@ -1,12 +1,30 @@
 # Automated task issues
 
-The **Tasks** page is an issue tracker connected to Hivemind's existing execution scheduler. Create an issue with a title/objective, description, acceptance criteria, labels, capabilities, and priority. Leave **Start automation immediately** enabled to run it, or disable it to save a paused backlog issue. **Start automation** authorizes the first execution. Coordination must be enabled and the workspace needs an eligible coordinator and workers.
+The **Tasks** page is an issue tracker connected to Hivemind's existing execution scheduler. Create an issue with a title/objective, description, acceptance criteria, labels, capabilities, and priority. New issues default to a paused backlog. Enable **Start automation immediately** when creating an issue to run it directly. **Start automation** authorizes the first execution. Coordination must be enabled and the workspace needs an eligible coordinator and workers.
 
 The coordinator decomposes the issue, assigns owners and reviewers by capability and permission, and respects dependencies. Workers submit artifacts and verification; reviewers approve or return work with feedback. The root completes through the existing review gates. Attempts, failures, budgets, worktree isolation, input requests, cancellation, pause/resume, and live steering remain part of the task workflow.
 
+## Ticket workspace
+
+The Tasks interface follows the provided Linear reference: a dark, compact list with status groups, inline priorities, stable `HM-` identifiers, labels, update dates, and agent assignees. Selecting a row opens a focused drawer with its description, discussion, properties, and a collapsible automation section. There is no automatically selected issue consuming the list area.
+
+Use **Active**, **Backlog**, **All issues**, and **Closed** in the Tasks navigation (tabs on mobile). The Filter menu searches titles, descriptions, or numbers, and filters by priority, label, or agent assignee. Group headers collapse their rows and select the group. Selected tickets support starting or pausing automation; eligible tickets retain the scheduler's existing permissions and review gates. New tickets enter Backlog unless immediate automation is selected. The group add buttons open the same creation form.
+
+| Display group | Execution state |
+| --- | --- |
+| In Review | `review` |
+| In Progress | `planning`, `running` |
+| Todo | `submitted`, `ready` |
+| Blocked | `blocked`, `needs_input` |
+| Backlog | Paused nonterminal work |
+| Done | `completed` |
+| Failed / Cancelled | Corresponding terminal state |
+
+Display groups reflect actual execution; they do not override dependencies or review. Within each group, priority precedes the most recent update. Root owners are shown as assignees, with the coordinator as the fallback. On narrow screens the title, number, state, priority, and assignee remain visible; remaining metadata is available in the issue drawer. Escape closes dialogs, keyboard focus stays inside them, and focus returns to the invoking control.
+
 ## Issue behavior
 
-- Every existing task and new subtask gets a stable, instance-wide issue number. Migration orders legacy tasks by creation time and ID. Internal task IDs and API links remain valid.
+- Every existing task and new subtask gets a stable, instance-wide issue number. Schema version 3 adds issues after the scheduled-wakeup migration. It preserves existing delayed deliveries and orders legacy tasks by creation time and ID. Internal task IDs and API links remain valid.
 - Search matches objective/title, description, or an exact issue number (`#12`). Labels match exactly; state filters group completed, failed, and cancelled tasks as closed. Open includes backlog and blocked work.
 - Root priority (`urgent`, `high`, `normal`, `low`) orders eligible tasks within the scheduler's review, planning, and ready-work phases. Children inherit their root's scheduling priority. Priority does not preempt active attempts or bypass dependencies, workspace locks, permissions, or budgets.
 - Discussion and agent activity appear in one timeline. Comments persist with server-owned authorship and timestamps. Agent tool progress, review decisions, assignments, and attempts appear as activity events.

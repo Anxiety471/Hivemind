@@ -123,6 +123,8 @@ fn describe(state: &ApiState, id: &str, kind: Kind) -> Result<Value, Response> {
             "mode": group.map(|g| g.mode),
             "reply_order": reply_order,
             "workspace": workspace,
+            "follow_up_limit": stored.follow_up_limit.map(|n| if n < 0 { json!("unlimited") } else { json!(n) }),
+            "default_follow_up_limit": config.conversation.mention_limit,
         },
         "members": members,
         "unavailable": {
@@ -132,6 +134,7 @@ fn describe(state: &ApiState, id: &str, kind: Kind) -> Result<Value, Response> {
                 "A direct message has a single agent, so there is no conversation mode."
             }),
             "reply_order": reason(kind != Kind::Solo, "A direct message has a single agent, so there is no reply order."),
+            "follow_up_limit": reason(kind == Kind::Group, "Only group chats have a shared follow-up budget; a direct message has one agent and the main conversation broadcasts."),
             "workspace": reason(kind != Kind::Main, "The main conversation has no single workspace; each agent uses its own."),
         },
     }))
@@ -158,6 +161,33 @@ struct SettingsBody {
     reply_order: Option<Vec<String>>,
     #[serde(default, deserialize_with = "present")]
     workspace: Option<Option<String>>,
+    /// `null` returns to the global default; a number caps follow-ups; `"unlimited"` removes the cap.
+    #[serde(default, deserialize_with = "present_value")]
+    follow_up_limit: Option<Option<Value>>,
+}
+
+fn present_value<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Option<Option<Value>>, D::Error> {
+    Option::<Value>::deserialize(d).map(Some)
+}
+
+/// `Some(None)` is the default, `Some(Some(-1))` unlimited.
+fn parse_follow_up(value: &Option<Value>) -> Result<Option<i64>, String> {
+    let max = crate::execution::MAX_FOLLOW_UP_LIMIT;
+    match value {
+        None => Ok(None),
+        Some(Value::String(s)) if s.eq_ignore_ascii_case("unlimited") => Ok(Some(-1)),
+        Some(Value::Number(n)) => match n.as_i64() {
+            Some(n) if (0..=max).contains(&n) => Ok(Some(n)),
+            _ => Err(format!(
+                "follow_up_limit must be between 0 and {max}, or \"unlimited\""
+            )),
+        },
+        Some(_) => Err(format!(
+            "follow_up_limit must be a number from 0 to {max}, \"unlimited\", or null"
+        )),
+    }
 }
 
 fn present<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Option<String>>, D::Error> {
@@ -216,6 +246,7 @@ async fn update(
         ("mode", body.mode.is_some()),
         ("reply_order", body.reply_order.is_some()),
         ("workspace", body.workspace.is_some()),
+        ("follow_up_limit", body.follow_up_limit.is_some()),
     ] {
         if present {
             if let Some(why) = current["unavailable"][key].as_str() {
@@ -264,10 +295,18 @@ async fn update(
             );
         }
     }
+    let follow_up_limit = match &body.follow_up_limit {
+        Some(value) => match parse_follow_up(value) {
+            Ok(limit) => Some(limit),
+            Err(message) => return error(StatusCode::BAD_REQUEST, "invalid_request", message),
+        },
+        None => None,
+    };
     let patch = RoomSettingsPatch {
         nickname: body.nickname,
         pinned: body.pinned,
         muted: body.muted,
+        follow_up_limit,
     };
     // The nickname is the only stored value that can still fail; check it before applying anything.
     if let Some(nickname) = &patch.nickname {

@@ -36,6 +36,7 @@ pub(super) fn router(core: Arc<HivemindCore>, shutdown: watch::Receiver<bool>) -
         .merge(super::tasks::routes())
         .merge(super::rooms::routes())
         .merge(super::room_settings::routes())
+        .merge(super::schedules::routes())
         .merge(super::chat_groups::routes())
         .merge(super::workspaces::routes())
         .merge(super::catalog::routes())
@@ -160,7 +161,7 @@ async fn submit_turn(
             )
             .into_response();
         }
-        return match state.core.execution().submit(&resolved.room_id, &target_json, &request.message, request.idempotency_key.as_deref()) {
+        return match state.core.execution().submit(&resolved.room_id, &target_json, &request.message, request.idempotency_key.as_deref(), crate::execution::ORIGIN_USER) {
             Ok(job) => (StatusCode::ACCEPTED, Json(serde_json::json!({"turn_id":job.turn_id,"room_id":job.room_id,"status":job.status,"status_url":format!("/api/v1/turns/{}",job.turn_id),"accepted":true}))).into_response(),
             Err(error) if error.to_string().contains("idempotency") => ApiError::new(StatusCode::CONFLICT,"idempotency_conflict","idempotency key does not match request").into_response(),
             Err(_) => ApiError::new(StatusCode::BAD_REQUEST,"submission_failed","turn could not be stored").into_response(),
@@ -1369,6 +1370,99 @@ mod tests {
                 .display()
                 .to_string()
         );
+    }
+
+    #[tokio::test]
+    async fn group_follow_up_budget_is_adjustable_including_unlimited() {
+        let test_core = TestCore::new();
+        write_config(&test_core);
+        let app = router(test_core.core.clone(), watch::channel(false).1);
+        let (status, body) = request_json(
+            app.clone(),
+            "POST",
+            "/api/v1/chat-groups",
+            json!({"id":"crew","members":["Engineer"]}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        let url = "/api/v1/rooms/group-crew/settings";
+        let (_, _, shown) = request(app.clone(), "GET", url).await;
+        assert!(shown["settings"]["follow_up_limit"].is_null());
+        assert!(shown["settings"]["default_follow_up_limit"].is_number());
+        use crate::memory::{ArchiveParticipant, ArchivedMessage, ArchivedTurn, Caller};
+        test_core
+            .core
+            .memory()
+            .append_archive_turn(
+                &Caller::trusted_user("test"),
+                ArchivedTurn {
+                    id: "t-crew".into(),
+                    room_id: "group-crew".into(),
+                    started_at: 1,
+                    completed_at: Some(2),
+                    metadata: json!({}),
+                    participants: vec![ArchiveParticipant {
+                        participant_id: "Engineer".into(),
+                        role: None,
+                    }],
+                    messages: vec![ArchivedMessage {
+                        id: "m-crew".into(),
+                        room_id: "group-crew".into(),
+                        turn_id: "t-crew".into(),
+                        speaker: "Engineer".into(),
+                        content: "hello".into(),
+                        created_at: 1,
+                    }],
+                },
+            )
+            .unwrap();
+        let (status, created) = request_json(
+            app.clone(),
+            "POST",
+            "/api/v1/rooms/group-crew/threads",
+            json!({"anchor_message_id":"m-crew","name":"Discussion"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        let thread_id = created["thread"]["id"].as_str().unwrap();
+        let default_limit = test_core.core.config().conversation.mention_limit;
+
+        for (value, expected, expected_budget) in [
+            (json!(7), json!(7), 7),
+            (
+                json!("unlimited"),
+                json!("unlimited"),
+                crate::conversation::UNLIMITED_FOLLOW_UP_CEILING,
+            ),
+            (json!(null), json!(null), default_limit),
+        ] {
+            let (status, body) =
+                request_json(app.clone(), "PATCH", url, json!({"follow_up_limit": value})).await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            assert_eq!(body["settings"]["follow_up_limit"], expected);
+            assert_eq!(
+                test_core.core.conversation().follow_up_budget("group-crew"),
+                expected_budget
+            );
+            assert_eq!(
+                test_core.core.conversation().follow_up_budget(thread_id),
+                expected_budget
+            );
+        }
+        for bad in [json!(-1), json!(65), json!("lots"), json!(1.5)] {
+            let (status, _) =
+                request_json(app.clone(), "PATCH", url, json!({"follow_up_limit": bad})).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+        }
+        // Only groups have the control.
+        let (status, _) = request_json(
+            app.clone(),
+            "PATCH",
+            "/api/v1/rooms/main/settings",
+            json!({"follow_up_limit": 3}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]

@@ -31,9 +31,12 @@ export type RoomSettings = {
     mode: "broadcast" | "discussion" | null;
     reply_order: string[];
     workspace: string | null;
+    /** Group follow-up budget: `null` follows the default, `"unlimited"` removes the cap. */
+    follow_up_limit: number | "unlimited" | null;
+    default_follow_up_limit: number;
   };
   members: string[];
-  unavailable: { mode: string | null; reply_order: string | null; workspace: string | null };
+  unavailable: { mode: string | null; reply_order: string | null; workspace: string | null; follow_up_limit: string | null };
 };
 
 export type RoomSettingsPatch = Partial<Pick<RoomPrefs, "pinned" | "muted">> & {
@@ -42,6 +45,8 @@ export type RoomSettingsPatch = Partial<Pick<RoomPrefs, "pinned" | "muted">> & {
   reply_order?: string[];
   /** `null` clears a group's shared workspace. */
   workspace?: string | null;
+  /** `null` returns to the default budget. */
+  follow_up_limit?: number | "unlimited" | null;
 };
 
 export type RoomState = {
@@ -67,6 +72,19 @@ export type Thread = {
   anchor_message_id: string;
   message_count: number;
   updated_at: number;
+};
+
+/** One scheduled wakeup. `message` is the composed body, never a delivery marker. */
+export type RoomSchedule = {
+  id: string;
+  label: string | null;
+  message: string;
+  due_at: number;
+  repeat_seconds: number | null;
+  repeat_count: number | null;
+  fires: number;
+  state: "queued" | "dispatched" | "completed" | "cancelled" | "failed";
+  created_at: number;
 };
 
 export type Target =
@@ -401,6 +419,10 @@ export const api = {
   steerRoom: (id: string, message: string) =>
     request<{ room_id: string; delivered_to: string[] }>("POST", `/rooms/${enc(id)}/steer`, { message }),
   roomSettings: (id: string) => request<RoomSettings>("GET", `/rooms/${enc(id)}/settings`),
+  roomSchedules: (id: string) =>
+    request<{ room_id: string; schedules: RoomSchedule[] }>("GET", `/rooms/${enc(id)}/schedules`),
+  cancelRoomSchedule: (id: string, scheduleId: string) =>
+    request<{ schedule: RoomSchedule }>("DELETE", `/rooms/${enc(id)}/schedules/${enc(scheduleId)}`),
   updateRoomSettings: (id: string, patch: RoomSettingsPatch) =>
     request<RoomSettings>("PATCH", `/rooms/${enc(id)}/settings`, patch),
   threads: (id: string) => request<{ threads: Thread[] }>("GET", `/rooms/${enc(id)}/threads`),

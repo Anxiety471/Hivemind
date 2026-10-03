@@ -77,6 +77,21 @@ Worktree directories are removed after each attempt; branches stay. The live ses
 
 Dynamic groups live in SQLite (configuration groups are untouched). `groups.create` resolves configured personas only, one distinct persona per requested capability; the same purpose and membership reuses the group. Membership changes are revision-checked and audited, and removed members' task sessions are rotated.
 
+### Wake types
+
+Every wake is one of a small set of durable triggers; only the last is agent-authored.
+
+| Wake type | Trigger | Example |
+|---|---|---|
+| `USER_WAKE` | A user turn, steer, or submitted root task arrives | “Fix login” |
+| `AGENT_WAKE` | Another persona sends a `request` or `handoff` message | Marin asks Kurisu |
+| `TASK_WAKE` | A dependency completes and the task is promoted to `ready` | a work attempt is dispatched |
+| `SCHEDULE_WAKE` | A `wakeup.schedule` delivery comes due | a self-check later |
+| `RECOVERY_WAKE` | An interrupted attempt or wakeup is requeued after a restart | Hivemind restarts mid-attempt |
+| `EVENT_WAKE` | *(not implemented)* an external system event | CI fails |
+
+`USER_WAKE`, `AGENT_WAKE`, `TASK_WAKE`, and `RECOVERY_WAKE` are host-driven: the model never names or triggers them. `SCHEDULE_WAKE` is the only agent-authored wake and the only wake tool exposed — there is no agent-facing `wakeup.list` or `wakeup.cancel`, so an agent cannot enumerate or retract its own pending wakeups. A chat-room schedule may repeat (`repeat_seconds`, optionally bounded by `repeat_count`), and the user lists and cancels a room's schedules through `GET`/`DELETE /api/v1/rooms/{id}/schedules`. `EVENT_WAKE` is conceptual only: Hivemind has no event-to-wake subscription, so nothing observes CI or any other external event and wakes an agent; adding one would be a new host event source.
+
 ## Agent tools
 
 Offered through the same ```` ```hivemind-tool ```` fence as memory tools, only inside task rooms and only when the persona's role and permissions allow them. The manifest is injected with the first prompt of each runtime epoch; later turns carry a one-line reminder.
@@ -123,6 +138,7 @@ Errors use one shape: `{"error":{"code","message"}}`; internal failures are sani
 - Coordination context estimates remain bytes/4. Measured Pi/OMP billing usage and persistent admission budgets are available through `/api/v1/usage`; unsupported reporting remains null. Budgets count dispatches, tool actions, messages, and time.
 - Live WebSocket events are published by the process that made the change; changes made by a one-shot CLI process reach WebSocket clients of a running `serve` on its next scheduler pass (≤0.5 s), and always via `/events`.
 - Runtime epoch and rotation reason are not recorded per attempt (`rotations_observed` is `null`).
+- Wakeups are time-based or host-dispatched only. `TASK_WAKE` runs a task's own owner attempt when its dependencies complete, and an agent can schedule a time/repeat wakeup; there is no wake whose trigger is a task or issue reaching a state ("wake me when task X is ready"), and `EVENT_WAKE` has no event source, so nothing observes CI or an issue tracker.
 - Non-goals unchanged: no autonomous merge or deploy, no multi-user API, no unrestricted agent creation.
 
 Host-run verification and interrupted-work recovery are configured through [Execution](Execution).

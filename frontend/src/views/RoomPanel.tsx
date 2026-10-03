@@ -1,6 +1,6 @@
 // Right-hand panel of a conversation: details, settings, and runtime sessions.
 import { useEffect, useState } from "react";
-import { api, type Room, type RoomSettings, type RoomSettingsPatch } from "../api";
+import { api, type Room, type RoomSchedule, type RoomSettings, type RoomSettingsPatch } from "../api";
 import { useRefreshOn } from "../live";
 import { href } from "../nav";
 import { Badge, ErrorNote, ago, useAction, useAsync } from "../ui";
@@ -76,9 +76,84 @@ function Details({ room }: { room: Room }) {
         <h4>Summary</h4>
         <p>{room.summary || <span className="muted">No summary yet</span>}</p>
       </div>
+      <div>
+        <h4>Scheduled wakeups</h4>
+        <RoomSchedules roomId={room.id} />
+      </div>
       <div className="muted small">
         {room.message_count} messages · updated {ago(room.updated_at)}
       </div>
+    </div>
+  );
+}
+
+/** Short duration for a repeat interval: `45s`, `1m 30s`, `1h`, `7d`. */
+export function humanDuration(seconds: number) {
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) {
+    const extra = seconds % 60;
+    return `${Math.floor(seconds / 60)}m${extra ? ` ${extra}s` : ""}`;
+  }
+  if (seconds < 86400) {
+    const extra = seconds % 3600;
+    return `${Math.floor(seconds / 3600)}h${extra ? ` ${Math.floor(extra / 60)}m` : ""}`;
+  }
+  const extra = seconds % 86400;
+  return `${Math.floor(seconds / 86400)}d${extra ? ` ${Math.floor(extra / 3600)}h` : ""}`;
+}
+
+const TERMINAL_SCHEDULE_STATES: RoomSchedule["state"][] = ["completed", "cancelled", "failed"];
+
+const recurrence = (s: RoomSchedule) => {
+  if (s.repeat_seconds == null) return "Fires once";
+  const repeat = s.repeat_count != null ? `, ${s.repeat_count} times` : ", until cancelled";
+  return `Every ${humanDuration(s.repeat_seconds)}${repeat}${s.fires > 0 ? `, fired ${s.fires}` : ""}`;
+};
+
+function ScheduleItem({ roomId, schedule, reload }: { roomId: string; schedule: RoomSchedule; reload: () => void }) {
+  const action = useAction();
+  const terminal = TERMINAL_SCHEDULE_STATES.includes(schedule.state);
+  return (
+    <li className="schedule-item">
+      <div className="schedule-head">
+        <strong>{schedule.label || "Wakeup"}</strong>
+        {terminal ? (
+          <Badge value={schedule.state} tone={schedule.state === "completed" ? "ok" : "muted"} />
+        ) : (
+          <span className="muted small">Next {new Date(schedule.due_at * 1000).toLocaleString()}</span>
+        )}
+      </div>
+      <p className="schedule-message">{schedule.message}</p>
+      <div className="muted small">{recurrence(schedule)}</div>
+      <ErrorNote error={action.error} />
+      <button
+        className="button ghost"
+        disabled={terminal || action.busy}
+        onClick={() => action.run(() => api.cancelRoomSchedule(roomId, schedule.id).then(reload))}
+      >
+        Cancel
+      </button>
+    </li>
+  );
+}
+
+function RoomSchedules({ roomId }: { roomId: string }) {
+  const schedules = useAsync(() => api.roomSchedules(roomId), [roomId]);
+  useRefreshOn(
+    (e) => e.type.startsWith("wakeup") || e.type.startsWith("conversation."),
+    schedules.reload,
+    [schedules.reload],
+  );
+  const list = schedules.data?.schedules ?? [];
+  return (
+    <div className="schedule-list">
+      <ErrorNote error={schedules.error} />
+      {schedules.data && list.length === 0 && <p className="muted">None scheduled.</p>}
+      <ul>
+        {list.map((s) => (
+          <ScheduleItem key={s.id} roomId={roomId} schedule={s} reload={schedules.reload} />
+        ))}
+      </ul>
     </div>
   );
 }
@@ -114,7 +189,16 @@ type Draft = {
   mode: "broadcast" | "discussion";
   order: string[];
   workspace: string;
+  /** "default", "unlimited", or a whole number as text. */
+  followUps: string;
 };
+
+const MAX_FOLLOW_UPS = 64;
+const followUpsFromServer = (v: number | "unlimited" | null) => (v === null ? "default" : String(v));
+const followUpsPatch = (text: string): number | "unlimited" | null =>
+  text === "default" ? null : text === "unlimited" ? "unlimited" : Number(text);
+const followUpsValid = (text: string) =>
+  text === "default" || text === "unlimited" || (/^\d+$/.test(text) && Number(text) <= MAX_FOLLOW_UPS);
 
 const fromServer = (s: RoomSettings): Draft => {
   const members = s.members;
@@ -126,6 +210,7 @@ const fromServer = (s: RoomSettings): Draft => {
     mode: s.settings.mode ?? "broadcast",
     order: [...saved, ...members.filter((m) => !saved.includes(m))],
     workspace: s.settings.workspace ?? "",
+    followUps: followUpsFromServer(s.settings.follow_up_limit),
   };
 };
 
@@ -140,6 +225,8 @@ function diff(server: RoomSettings, draft: Draft): RoomSettingsPatch {
   if (!u.mode && draft.mode !== base.mode) patch.mode = draft.mode;
   if (!u.reply_order && draft.order.join("\n") !== base.order.join("\n")) patch.reply_order = draft.order;
   if (!u.workspace && draft.workspace.trim() !== base.workspace) patch.workspace = draft.workspace.trim() || null;
+  if (!u.follow_up_limit && draft.followUps !== base.followUps && followUpsValid(draft.followUps))
+    patch.follow_up_limit = followUpsPatch(draft.followUps);
   return patch;
 }
 
@@ -273,6 +360,42 @@ function Settings({ roomId, onChanged }: { roomId: string; onChanged: () => void
             </ol>
           )}
         </div>
+        <div className={u.follow_up_limit ? "field disabled" : "field"}>
+          <span className="label">Follow-up budget</span>
+          {u.follow_up_limit ? (
+            <span className="hint">{u.follow_up_limit}</span>
+          ) : (
+            <>
+              <select
+                aria-label="Follow-up budget"
+                value={draft.followUps === "default" || draft.followUps === "unlimited" ? draft.followUps : "number"}
+                onChange={(e) => {
+                  const v = (e.target as HTMLSelectElement).value;
+                  set({ followUps: v === "number" ? String(server.settings.default_follow_up_limit) : v });
+                }}
+              >
+                <option value="default">Default ({server.settings.default_follow_up_limit})</option>
+                <option value="number">Set a number…</option>
+                <option value="unlimited">Unlimited</option>
+              </select>
+              {draft.followUps !== "default" && draft.followUps !== "unlimited" && (
+                <input
+                  type="number"
+                  min={0}
+                  max={MAX_FOLLOW_UPS}
+                  aria-label="Follow-up replies"
+                  value={draft.followUps}
+                  onChange={(e) => set({ followUps: (e.target as HTMLInputElement).value })}
+                />
+              )}
+              {!followUpsValid(draft.followUps) && <span className="hint">Enter a whole number from 0 to {MAX_FOLLOW_UPS}.</span>}
+              <span className="hint">
+                Extra replies agents may add in a turn: @mentions and open-floor follow-ups share it. Unlimited keeps going until
+                everyone passes (stops at 200 as a safety net).
+              </span>
+            </>
+          )}
+        </div>
         <div className={u.workspace ? "field disabled" : "field"}>
           <span className="label">{server.kind === "group" ? "Shared workspace" : "Agent workspace"}</span>
           {u.workspace ? (
@@ -326,7 +449,7 @@ function Settings({ roomId, onChanged }: { roomId: string; onChanged: () => void
       <ErrorNote error={action.error} />
       {saved && !dirty && <div className="ok-note" role="status">Settings saved.</div>}
       <div className="row">
-        <button className="primary" type="submit" disabled={!dirty || action.busy}>
+        <button className="primary" type="submit" disabled={!dirty || action.busy || !followUpsValid(draft.followUps)}>
           Save settings
         </button>
         <button type="button" className="ghost" disabled={!dirty || action.busy} onClick={() => (setDraft(fromServer(server)), action.setError(null))}>

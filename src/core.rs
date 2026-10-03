@@ -222,6 +222,32 @@ impl HivemindCore {
             Roster::from_config(&config),
             events.clone(),
         ));
+        {
+            let execution = execution.clone();
+            let memory = memory.clone();
+            conversation.set_follow_up_resolver(Arc::new(move |room| {
+                let limit = execution
+                    .room_settings(room)
+                    .ok()
+                    .and_then(|s| s.follow_up_limit)
+                    .or_else(|| {
+                        if room.starts_with("thread-") {
+                            let caller = crate::memory::Caller::trusted_user("core");
+                            let thread = memory.thread(&caller, room).ok()??;
+                            execution
+                                .room_settings(&thread.parent_room_id)
+                                .ok()
+                                .and_then(|s| s.follow_up_limit)
+                        } else {
+                            None
+                        }
+                    })?;
+                match limit {
+                    n if n < 0 => Some(crate::conversation::FollowUpLimit::Unlimited),
+                    n => Some(crate::conversation::FollowUpLimit::Limited(n as usize)),
+                }
+            }));
+        }
         runtime.set_execution(execution.clone());
         coordination.set_execution(execution.clone());
         {
@@ -259,6 +285,12 @@ impl HivemindCore {
             .with_coordination(coordination.clone()),
         ));
         if config.coordination.enabled {
+            // Registered before `CoordinationTools` so it wins the shared
+            // `wakeup.schedule` name and the coordination host handles the rest.
+            hosts.push(Arc::new(crate::wakeup::ChatWakeupTools::new(
+                coordination.clone(),
+                execution.clone(),
+            )));
             hosts.push(Arc::new(CoordinationTools::new(
                 coordination.clone(),
                 audit.clone(),
@@ -302,6 +334,7 @@ impl HivemindCore {
         target: &ConversationTarget,
         message: &str,
         turn_id: &str,
+        origin: &str,
     ) -> Result<TurnExecution> {
         anyhow::ensure!(!self.is_shutting_down(), "core is shutting down");
         let resolved = self.resolve_target(target)?;
@@ -322,6 +355,7 @@ impl HivemindCore {
                     invoker,
                 },
                 Some(turn_id),
+                origin,
             )
             .await
     }
