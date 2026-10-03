@@ -641,6 +641,26 @@ mod tests {
             .collect();
         assert_eq!(ids, vec![json!("m3"), json!("m4")]);
         assert_eq!(page["next_before"], "m3");
+
+        let (status, res) = request_json(
+            app.clone(),
+            "POST",
+            "/api/v1/rooms/main/steer",
+            json!({"message": "live instruction"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(res["room_id"], "main");
+        assert_eq!(res["delivered_to"], json!([]));
+
+        let (status, _res) = request_json(
+            app.clone(),
+            "POST",
+            "/api/v1/rooms/main/steer",
+            json!({"message": "  "}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
         let (_, _, older) =
             request(app, "GET", "/api/v1/rooms/main/messages?limit=2&before=m3").await;
         let ids: Vec<_> = older["messages"]

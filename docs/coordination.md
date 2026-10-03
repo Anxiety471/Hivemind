@@ -20,6 +20,8 @@ enabled = true
 # max_concurrent = 4      # attempts running at once
 # lease_secs = 300
 # max_message_depth = 8   # causation chains deeper than this stop waking recipients
+# question_timeout_secs = 600  # how long tasks.ask waits for an answer
+# max_questions = 3       # tasks.ask questions per attempt
 
 [[personas]]
 id = "Lead"
@@ -79,10 +81,28 @@ Dynamic groups live in SQLite (configuration groups are untouched). `groups.crea
 
 Offered through the same ```` ```hivemind-tool ```` fence as memory tools, only inside task rooms and only when the persona's role and permissions allow them. The manifest is injected with the first prompt of each runtime epoch; later turns carry a one-line reminder.
 
-`agents.list`, `messages.send|inbox|ack`, `groups.create|get|members.update`, `tasks.get|list|plan.propose|delegate|progress|block|result.submit|review|decide`, `artifacts.get`, `context.lookup`. Memory tools are unchanged and keep their own limits.
+`agents.list`, `messages.send|inbox|ack`, `groups.create|get|members.update`, `tasks.get|list|plan.propose|delegate|progress|ask|block|result.submit|review|decide`, `artifacts.get`, `context.lookup`. Memory tools are unchanged and keep their own limits.
 
 Actor, room, task, attempt, lease, and budget are bound by Hivemind; identity in arguments is ignored. Task text and agent messages are never user input: `Global:` directives and room-state directives are ignored in task rooms, so an agent cannot authorize a global memory write.
 
+## Live steering and questions
+
+A running session or task attempt can be reached while it works. Hivemind carries every message; runtimes never talk to each other.
+
+- **Steer vs. Queue.** In Hivemind, *steer* and *queue* represent two distinct execution paths:
+  - **Steer (immediate):** Injected directly into an active, in-flight session (Pi/OMP `steer` RPC) between tool calls and before the next model call. It adjusts the current generation in-place without creating a new turn job.
+  - **Queue (sequential):** Dispatched as a fresh turn job stored in SQLite (`jobs`), waiting for the room's current turn to finish before running.
+- **Chat Room Steering in Multi-Agent Rooms.** In rooms with multiple personas (e.g. `group-<id>` or `main`):
+  - When a message is steered via `POST /api/v1/rooms/{id}/steer`, Hivemind queries actively replying agents in the room (`active_replies(room_id)`).
+  - Every agent currently generating in that room receives the steered text mid-prompt into its live session. Members of the room that are not actively replying do not receive an in-flight prompt interruption.
+  - The response `{"room_id": ..., "delivered_to": [...]}` reports exactly which personas took the text live (displayed in the UI badge, e.g. `Steer (Reviewer)`).
+  - If no agent is actively replying when the steer arrives, `delivered_to` is empty, and the UI automatically falls back to queueing a standard sequential turn (`POST /turns`). Prefixing with `/queue <message>` explicitly queues a turn for the next reply sequence without attempting to steer.
+- **Task Steering in Multi-Agent Task Trees.** In autonomous coordination tasks (`#/tasks`), three things steer running attempts:
+  - `POST /api/v1/tasks/{id}/steer {"message"}`: pushed into every attempt running on that task now, and permanently recorded as task feedback so any subsequent reviewer or follow-up attempt inherits it (`409` when nothing runs).
+  - `messages.send`: if a recipient persona is mid-attempt on the same root, the message is steered live into their session while also queueing in their inbox.
+  - `tasks.decide`: when a decision proposal is accepted, it is broadcast live into the running session of every other persona working under that root task.
+- **Questions.** `tasks.ask {"question", "to"?}` (work and plan attempts) keeps the attempt running and waits. The user answers with `POST /tasks/{id}/input` (or via the open questions card in the web UI); with `to`, the question is also sent to that persona as a request, and its reply with `causation` set to the question answers it (only that persona's reply counts, and it is consumed rather than re-delivered). Open questions show in `GET /tasks/{id}` under `questions`. After `question_timeout_secs` the tool returns "no answer" and the agent carries on or calls `tasks.block`. One open question at a time, at most `max_questions` per attempt. Events: `task.steered`, `task.question`, `task.answered`, `task.question_expired`.
+- Only Pi and OMP support steering; OpenCode attempts still get messages through the inbox. Steering and open questions live in the serving process: a one-shot CLI process cannot reach them, and a restart drops open questions (the attempt is interrupted anyway). An attempt waiting on a question holds its concurrency slot and its live session against idle reaping.
 ## Context
 
 Each dispatch prompt is built from structured state: mandatory goal and acceptance criteria (never clipped — an oversized goal makes the task `needs_input`), a capsule (status, blockers, accepted decisions, dependency contracts and handoff summaries, reviewer feedback, artifact references; newest kept within its byte budget), and at most five waiting messages. Older or larger records are reachable by exact reference with `context.lookup` / `artifacts.get`. Per-attempt section sizes are stored and served by `GET /tasks/{id}/context-metrics`, together with each attempt's `runtime_epoch` (the live session that answered it), every runtime epoch in the task room with its `end_reason`, and `rotations_observed` / `rotations_by_reason` counted from epochs that ended in a rotation (`context_budget`, `context_gap`, `workspace_changed`, `attempt_finished`, ...; stops for `idle_timeout`, `prompt_timeout`, `runtime_failure`, and `core_shutdown` are not rotations).
@@ -91,7 +111,7 @@ Each dispatch prompt is built from structured state: mandatory goal and acceptan
 
 See the tables in the README. Highlights:
 
-- `POST /api/v1/tasks` returns `202` immediately with the id and status URL; `GET /api/v1/tasks[/{id}]`, `/attempts`, `/context-metrics`, `POST /cancel|pause|resume|input`.
+- `POST /api/v1/tasks` returns `202` immediately with the id and status URL; `GET /api/v1/tasks[/{id}]`, `/attempts`, `/context-metrics`, `POST /cancel|pause|resume|input|steer`.
 - `GET /api/v1/events?after=N&root=` replays durable events. Snapshots (`tasks`, `tasks/{id}`) carry `event_high_water`; resume from `after=<high-water>` for gap-free replay after a reconnect or restart. WebSocket frames (`task.*`, `attempt.*`, `message.*`, `group.*`, `agent.activity.changed`) carry `durable_seq` next to the process-local `sequence`; on lag, refresh and replay.
 - `GET /api/v1/agent-instances` derives `idle | queued | planning | working | waiting | reviewing | failed | offline` from durable attempts and queues; listing never starts a runtime.
 - `hivemind task submit|list|show|cancel|pause|resume|watch|run`. `watch` disconnecting never cancels.

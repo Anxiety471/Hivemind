@@ -136,6 +136,15 @@ export type Usage = {
   tokens: number | null;
 };
 
+
+export type OpenQuestion = {
+  attempt_id: string;
+  persona: string;
+  question: string;
+  to: string | null;
+  message_id: string | null;
+  asked_at: number;
+};
 export type TaskDetail = {
   task: Task;
   children: TaskSummary[];
@@ -144,6 +153,7 @@ export type TaskDetail = {
   evidence: { check: string; outcome: string; detail: string }[];
   groups: { id: string; purpose?: string; members?: string[] }[];
   usage: Usage | null;
+  questions?: OpenQuestion[];
 };
 
 export type Attempt = {
@@ -369,6 +379,8 @@ export const api = {
     ),
   activeReplies: (id: string) =>
     request<{ room_id: string; agents: string[] }>("GET", `/rooms/${enc(id)}/active`),
+  steerRoom: (id: string, message: string) =>
+    request<{ room_id: string; delivered_to: string[] }>("POST", `/rooms/${enc(id)}/steer`, { message }),
   roomSettings: (id: string) => request<RoomSettings>("GET", `/rooms/${enc(id)}/settings`),
   updateRoomSettings: (id: string, patch: RoomSettingsPatch) =>
     request<RoomSettings>("PATCH", `/rooms/${enc(id)}/settings`, patch),
@@ -396,6 +408,8 @@ export const api = {
     request<{ task: TaskDetail }>("POST", `/tasks/${enc(id)}/${action}`, body ?? {}),
   taskInput: (id: string, answer: string) =>
     request<{ task: TaskDetail }>("POST", `/tasks/${enc(id)}/input`, { answer }),
+  steerTask: (id: string, message: string) =>
+    request<{ steer: { delivered_to: string[] } }>("POST", `/tasks/${enc(id)}/steer`, { message }),
 
   chatGroups: () => request<{ groups: ChatGroup[] }>("GET", "/chat-groups"),
   createChatGroup: (id: string, members: string[]) =>

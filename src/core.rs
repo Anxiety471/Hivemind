@@ -219,6 +219,25 @@ impl HivemindCore {
         ));
         runtime.set_execution(execution.clone());
         coordination.set_execution(execution.clone());
+        {
+            let pool = Arc::downgrade(&runtime);
+            coordination.set_steerer(Arc::new(
+                move |instance: &crate::identity::AgentInstanceId, text: &str| {
+                    pool.upgrade()
+                        .is_some_and(|pool| pool.steer(instance, text))
+                },
+            ));
+        }
+        {
+            let coord = Arc::downgrade(&coordination);
+            runtime.set_hold_check(Arc::new(
+                move |instance: &crate::identity::AgentInstanceId| {
+                    coord
+                        .upgrade()
+                        .is_some_and(|c| c.has_open_question(instance))
+                },
+            ));
+        }
         let workspaces = Arc::new(SharedWorkspaces::new(&config_path, &config));
         let group_edit_lock = workspaces.edit_lock.clone();
         let mut hosts: Vec<Arc<dyn crate::conversation::ToolHost>> = vec![Arc::new(
@@ -668,6 +687,18 @@ impl HivemindCore {
         reason: &'static str,
     ) {
         self.runtime.rotate_instance(instance, reason).await;
+    }
+    /// Steer a message into any actively replying agents in a room.
+    pub fn steer_room(&self, room_id: &str, text: &str) -> Vec<String> {
+        let active = self.events.active_replies(room_id);
+        let mut delivered = Vec::new();
+        for persona in active {
+            let instance = crate::identity::AgentInstanceId::new(room_id, &persona);
+            if self.runtime.steer(&instance, text) {
+                delivered.push(persona);
+            }
+        }
+        delivered
     }
     pub fn memory(&self) -> &Arc<MemoryService> {
         &self.memory

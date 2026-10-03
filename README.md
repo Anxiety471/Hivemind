@@ -313,9 +313,9 @@ Building the server and serving health/info/agent listings never starts Pi, OMP,
 | `GET` | `/api/v1/info` | Service metadata and protocol endpoints |
 | `GET` | `/api/v1/agents` | Safe agent metadata (name and runtime only; no credentials) |
 | `GET` / `POST` | `/api/v1/setup` | Check setup state and save the first persona configuration; POST is one-shot |
-| `POST` | `/api/v1/turns` | Submit a conversation turn |
+| `POST` | `/api/v1/turns`, `/api/v1/rooms/{id}/steer` | Submit a conversation turn (`/turns`), or steer text into active replies mid-flight (`/rooms/{id}/steer`) |
 | `POST` / `GET` | `/api/v1/tasks`, `/api/v1/tasks/{id}` | Submit (202) and inspect autonomous tasks; see [docs/coordination.md](docs/coordination.md) |
-| `GET` / `POST` | `/api/v1/tasks/{id}/attempts`, `/cancel`, `/pause`, `/resume`, `/input`, `/context-metrics` | Attempts, controls, and bounded context diagnostics |
+| `GET` / `POST` | `/api/v1/tasks/{id}/attempts`, `/cancel`, `/pause`, `/resume`, `/input`, `/steer`, `/context-metrics` | Attempts, controls (`/input` also answers a running `tasks.ask`; `/steer` messages a running attempt), and bounded context diagnostics |
 | `GET` | `/api/v1/agents/{id}`, `/api/v1/agent-instances` | Capabilities and derived activity (never starts a runtime) |
 | `GET` / `POST` | `/api/v1/messages`, `/api/v1/groups`, `/api/v1/groups/{id}` | Agent/operator messages and dynamic task groups |
 | `GET` | `/api/v1/events?after=N` | Durable, restart-safe event replay with a high-water mark |

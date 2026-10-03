@@ -23,6 +23,7 @@ test("completion lists commands, then /skill:<name> rows, as the name is typed",
     "/help",
     "/skills",
     "/tools",
+    "/queue",
     "/skill:banner-design ",
     "/skill:brand ",
   ]);

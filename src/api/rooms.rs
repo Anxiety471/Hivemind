@@ -4,7 +4,7 @@ use axum::{
     extract::{Path, RawQuery, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
 use serde::Deserialize;
@@ -26,6 +26,7 @@ pub(super) fn routes() -> Router<ApiState> {
         .route("/api/v1/rooms/{id}", get(show))
         .route("/api/v1/rooms/{id}/messages", get(messages))
         .route("/api/v1/rooms/{id}/active", get(active))
+        .route("/api/v1/rooms/{id}/steer", post(steer))
         .route(
             "/api/v1/rooms/{id}/threads",
             get(threads).post(create_thread),
@@ -37,6 +38,42 @@ pub(super) fn routes() -> Router<ApiState> {
 async fn active(State(state): State<ApiState>, Path(id): Path<String>) -> Response {
     let agents = state.core.events().active_replies(&id);
     Json(json!({"room_id": id, "agents": agents})).into_response()
+}
+
+#[derive(Deserialize)]
+struct SteerRoomBody {
+    message: String,
+}
+
+/// Steer a message into any actively replying agents in a room now.
+async fn steer(
+    State(state): State<ApiState>,
+    Path(id): Path<String>,
+    payload: Result<Json<SteerRoomBody>, JsonRejection>,
+) -> Response {
+    let Ok(Json(body)) = payload else {
+        return bad_json();
+    };
+    let message = body.message.trim();
+    if message.is_empty() {
+        return ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_message",
+            "message must not be empty",
+        )
+        .into_response();
+    }
+    let delivered_to = state.core.steer_room(&id, message);
+    Json(json!({"room_id": id, "delivered_to": delivered_to})).into_response()
+}
+
+fn bad_json() -> Response {
+    ApiError::new(
+        StatusCode::BAD_REQUEST,
+        "invalid_json",
+        "request body must be valid JSON",
+    )
+    .into_response()
 }
 
 fn internal() -> Response {

@@ -578,6 +578,21 @@ impl ToolHost for ToolHosts {
             .with_context(|| format!("no tool host handles '{name}'"))?
             .execute(room, persona, name, args)
     }
+
+    fn execute_async<'a>(
+        &'a self,
+        room: &'a str,
+        persona: &'a str,
+        name: &'a str,
+        args: &'a Value,
+    ) -> futures_util::future::BoxFuture<'a, Result<String>> {
+        match self.0.iter().find(|h| h.handles(name)) {
+            Some(host) => host.execute_async(room, persona, name, args),
+            None => Box::pin(std::future::ready(Err(anyhow::anyhow!(
+                "no tool host handles '{name}'"
+            )))),
+        }
+    }
 }
 
 #[cfg(test)]
