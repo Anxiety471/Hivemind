@@ -1,5 +1,7 @@
 mod registry;
+mod wakeups;
 pub use registry::AgentRegistry;
+pub use wakeups::parse_job_target;
 
 use std::{
     fs::{self, OpenOptions},
@@ -32,8 +34,11 @@ use crate::{
 pub struct HivemindCore {
     artifacts: Arc<crate::artifacts::ArtifactLibrary>,
     execution: Arc<crate::execution::ExecutionStore>,
-    config: RwLock<Arc<HivemindConfig>>,
-    agents: RwLock<AgentRegistry>,
+    config: Arc<RwLock<Arc<HivemindConfig>>>,
+    agents: Arc<RwLock<AgentRegistry>>,
+    /// Held so tests can queue a wakeup directly. The tool host owns the copy agents call.
+    #[cfg_attr(not(test), allow(dead_code))]
+    wakeups: Arc<wakeups::ChatWakeups>,
     memory: Arc<MemoryService>,
     conversation: ConversationCoordinator,
     events: EventBus,
@@ -100,6 +105,121 @@ pub fn parent_target(room_id: &str) -> Option<ConversationTarget> {
     }
 }
 
+/// Who a durable job should prompt. Absent fields mean the whole room and a user-typed turn.
+pub struct JobDelivery<'a> {
+    pub audience: Option<&'a str>,
+    pub from: Option<&'a str>,
+    pub wake: Option<&'a str>,
+}
+
+/// Resolve a conversation target from the live registry. Shared by the core and chat wakeups.
+pub(super) fn resolve_loaded(
+    target: &ConversationTarget,
+    registry: &AgentRegistry,
+    config: &HivemindConfig,
+    memory: &crate::memory::MemoryService,
+    workspaces: &crate::shared_workspace::SharedWorkspaces,
+) -> std::result::Result<ResolvedConversationTarget, TargetResolutionError> {
+    if let ConversationTarget::Thread { thread_id } = target {
+        if thread_id.trim().is_empty() {
+            return Err(TargetResolutionError::Invalid(
+                "thread id must not be empty".into(),
+            ));
+        }
+        let caller = crate::memory::Caller::trusted_user("core");
+        let thread = memory
+            .thread(&caller, thread_id)
+            .map_err(|_| TargetResolutionError::NotFound(format!("unknown thread '{thread_id}'")))?
+            .ok_or_else(|| {
+                TargetResolutionError::NotFound(format!("unknown thread '{thread_id}'"))
+            })?;
+        let parent = parent_target(&thread.parent_room_id).ok_or_else(|| {
+            TargetResolutionError::NotFound(format!("parent room of '{thread_id}' is gone"))
+        })?;
+        let mut resolved = resolve_loaded(&parent, registry, config, memory, workspaces)?;
+        resolved.room_id = thread.id;
+        resolved.room_name = thread.name;
+        return Ok(resolved);
+    }
+    Ok(match target {
+        ConversationTarget::Main => ResolvedConversationTarget {
+            room_id: "main".into(),
+            room_name: "Main conversation".into(),
+            group_id: String::new(),
+            mode: ConversationMode::Broadcast,
+            participants: registry
+                .list()
+                .into_iter()
+                .map(|agent| Participant {
+                    agent: with_persona_workspace(workspaces, agent),
+                    role: None,
+                })
+                .collect(),
+        },
+        ConversationTarget::Solo { persona_id } => {
+            if persona_id.trim().is_empty() {
+                return Err(TargetResolutionError::Invalid(
+                    "persona id must not be empty".into(),
+                ));
+            }
+            let agent = registry.get(persona_id).ok_or_else(|| {
+                TargetResolutionError::NotFound(format!("unknown persona '{persona_id}'"))
+            })?;
+            let agent = with_persona_workspace(workspaces, agent);
+            ResolvedConversationTarget {
+                room_id: format!("solo-{persona_id}"),
+                room_name: format!("Solo: {persona_id}"),
+                group_id: String::new(),
+                mode: ConversationMode::Discussion,
+                participants: vec![Participant { agent, role: None }],
+            }
+        }
+        ConversationTarget::Thread { .. } => unreachable!("handled above"),
+        ConversationTarget::Group { group_id } => {
+            if group_id.trim().is_empty() {
+                return Err(TargetResolutionError::Invalid(
+                    "group id must not be empty".into(),
+                ));
+            }
+            let group = config
+                .groups
+                .iter()
+                .find(|group| group.name == *group_id)
+                .ok_or_else(|| {
+                    TargetResolutionError::NotFound(format!("unknown group '{group_id}'"))
+                })?;
+            if group.members.is_empty() {
+                return Err(TargetResolutionError::Invalid(format!(
+                    "group '{group_id}' has no members"
+                )));
+            }
+            let members = config.ordered_group_members(group);
+            let shared = workspaces.group(&group.name);
+            ResolvedConversationTarget {
+                room_id: format!("group-{group_id}"),
+                room_name: group.name.clone(),
+                group_id: group.name.clone(),
+                mode: group.mode,
+                participants: members
+                    .into_iter()
+                    .filter_map(|agent| {
+                        let agent = registry.get(&agent.name)?;
+                        // A shared workspace wins; otherwise the persona's own (agent-changeable) one.
+                        let agent = match &shared {
+                            Some(workspace) => with_workspace(agent, workspace),
+                            None => with_persona_workspace(workspaces, agent),
+                        };
+                        Some(Participant {
+                            role: group.member_roles.get(&agent.name).cloned(),
+                            agent,
+                        })
+                    })
+                    .collect(),
+            }
+        }
+    })
+}
+
 #[derive(Debug, Clone)]
 pub struct ResolvedConversationTarget {
     pub room_id: String,
@@ -126,6 +246,16 @@ impl std::fmt::Display for TargetResolutionError {
 impl std::error::Error for TargetResolutionError {}
 
 /// `agent` moved to `workspace`; the shared handle is reused when it already is there.
+fn with_persona_workspace(
+    workspaces: &crate::shared_workspace::SharedWorkspaces,
+    agent: Arc<crate::config::AgentConfig>,
+) -> Arc<crate::config::AgentConfig> {
+    match workspaces.persona(&agent.name) {
+        Some(workspace) => with_workspace(agent, &workspace),
+        None => agent,
+    }
+}
+
 fn with_workspace(
     agent: Arc<crate::config::AgentConfig>,
     workspace: &str,
@@ -290,13 +420,24 @@ impl HivemindCore {
                 audit.clone(),
             )));
         }
+        let config = Arc::new(RwLock::new(config));
+        let agents = Arc::new(RwLock::new(agents));
+        let wakeups = Arc::new(wakeups::ChatWakeups::new(
+            execution.clone(),
+            memory.clone(),
+            config.clone(),
+            agents.clone(),
+            workspaces.clone(),
+        ));
+        hosts.push(Arc::new(wakeups::ChatWakeupTools::new(wakeups.clone())));
         conversation.set_tools(Arc::new(ToolHosts(hosts)));
         events.publish(DomainEventKind::CoreStarted);
         Ok(Self {
             artifacts,
             execution,
-            config: RwLock::new(config),
-            agents: RwLock::new(agents),
+            config,
+            agents,
+            wakeups,
             memory,
             conversation,
             events,
@@ -328,9 +469,31 @@ impl HivemindCore {
         target: &ConversationTarget,
         message: &str,
         turn_id: &str,
+        delivery: JobDelivery<'_>,
     ) -> Result<TurnExecution> {
         anyhow::ensure!(!self.is_shutting_down(), "core is shutting down");
         let resolved = self.resolve_target(target)?;
+        let participants = if let Some(persona) = delivery.audience {
+            let participants: Vec<_> = resolved
+                .participants
+                .into_iter()
+                .filter(|participant| participant.agent.name == persona)
+                .collect();
+            anyhow::ensure!(
+                !participants.is_empty(),
+                "wakeup audience is not in the room"
+            );
+            participants
+        } else {
+            resolved.participants
+        };
+        let wrapped;
+        let input = if let Some(from) = delivery.from {
+            wrapped = wakeups::wakeup_prompt(from, delivery.wake, message);
+            wrapped.as_str()
+        } else {
+            message
+        };
         let invoker = Arc::new(RuntimeInvoker::new(
             self.runtime.clone(),
             &resolved.room_id,
@@ -343,11 +506,12 @@ impl HivemindCore {
                     room_name: &resolved.room_name,
                     group_id: &resolved.group_id,
                     mode: resolved.mode,
-                    members: &resolved.participants,
-                    input: message,
+                    members: &participants,
+                    input,
                     invoker,
                 },
                 Some(turn_id),
+                delivery.from.is_some(),
             )
             .await
     }
@@ -761,127 +925,19 @@ impl HivemindCore {
         &self,
         target: &ConversationTarget,
     ) -> std::result::Result<ResolvedConversationTarget, TargetResolutionError> {
-        if let ConversationTarget::Thread { thread_id } = target {
-            return self.resolve_thread(thread_id);
-        }
-        let registry = self.agents();
+        let registry = self
+            .agents
+            .read()
+            .expect("core agent registry lock poisoned")
+            .clone();
         let config = self.config.read().expect("core config lock poisoned");
-        let config = config.as_ref();
-        Ok(match target {
-            ConversationTarget::Main => ResolvedConversationTarget {
-                room_id: "main".into(),
-                room_name: "Main conversation".into(),
-                group_id: String::new(),
-                mode: ConversationMode::Broadcast,
-                participants: registry
-                    .list()
-                    .into_iter()
-                    .map(|agent| Participant {
-                        agent: self.own_workspace(agent),
-                        role: None,
-                    })
-                    .collect(),
-            },
-            ConversationTarget::Solo { persona_id } => {
-                if persona_id.trim().is_empty() {
-                    return Err(TargetResolutionError::Invalid(
-                        "persona id must not be empty".into(),
-                    ));
-                }
-                let agent = registry.get(persona_id).ok_or_else(|| {
-                    TargetResolutionError::NotFound(format!("unknown persona '{persona_id}'"))
-                })?;
-                let agent = self.own_workspace(agent);
-                ResolvedConversationTarget {
-                    room_id: format!("solo-{persona_id}"),
-                    room_name: format!("Solo: {persona_id}"),
-                    group_id: String::new(),
-                    mode: ConversationMode::Discussion,
-                    participants: vec![Participant { agent, role: None }],
-                }
-            }
-            ConversationTarget::Thread { .. } => unreachable!("handled above"),
-            ConversationTarget::Group { group_id } => {
-                if group_id.trim().is_empty() {
-                    return Err(TargetResolutionError::Invalid(
-                        "group id must not be empty".into(),
-                    ));
-                }
-                let group = config
-                    .groups
-                    .iter()
-                    .find(|group| group.name == *group_id)
-                    .ok_or_else(|| {
-                        TargetResolutionError::NotFound(format!("unknown group '{group_id}'"))
-                    })?;
-                if group.members.is_empty() {
-                    return Err(TargetResolutionError::Invalid(format!(
-                        "group '{group_id}' has no members"
-                    )));
-                }
-                let members = config.ordered_group_members(group);
-                let shared = self.workspaces.group(&group.name);
-                ResolvedConversationTarget {
-                    room_id: format!("group-{group_id}"),
-                    room_name: group.name.clone(),
-                    group_id: group.name.clone(),
-                    mode: group.mode,
-                    participants: members
-                        .into_iter()
-                        .filter_map(|agent| {
-                            let agent = registry.get(&agent.name)?;
-                            // A shared workspace wins; otherwise the persona's own (agent-changeable) one.
-                            let agent = match &shared {
-                                Some(workspace) => with_workspace(agent, workspace),
-                                None => self.own_workspace(agent),
-                            };
-                            Some(Participant {
-                                role: group.member_roles.get(&agent.name).cloned(),
-                                agent,
-                            })
-                        })
-                        .collect(),
-                }
-            }
-        })
-    }
-
-    /// A thread runs with its parent room's participants, mode and group, in its own room.
-    fn resolve_thread(
-        &self,
-        thread_id: &str,
-    ) -> std::result::Result<ResolvedConversationTarget, TargetResolutionError> {
-        if thread_id.trim().is_empty() {
-            return Err(TargetResolutionError::Invalid(
-                "thread id must not be empty".into(),
-            ));
-        }
-        let caller = crate::memory::Caller::trusted_user("core");
-        let thread = self
-            .memory()
-            .thread(&caller, thread_id)
-            .map_err(|_| TargetResolutionError::NotFound(format!("unknown thread '{thread_id}'")))?
-            .ok_or_else(|| {
-                TargetResolutionError::NotFound(format!("unknown thread '{thread_id}'"))
-            })?;
-        let parent = parent_target(&thread.parent_room_id).ok_or_else(|| {
-            TargetResolutionError::NotFound(format!("parent room of '{thread_id}' is gone"))
-        })?;
-        let mut resolved = self.resolve_target(&parent)?;
-        resolved.room_id = thread.id;
-        resolved.room_name = thread.name;
-        Ok(resolved)
-    }
-
-    /// The persona with its current own workspace, which an agent may have changed at runtime.
-    fn own_workspace(
-        &self,
-        agent: Arc<crate::config::AgentConfig>,
-    ) -> Arc<crate::config::AgentConfig> {
-        match self.workspaces.persona(&agent.name) {
-            Some(workspace) => with_workspace(agent, &workspace),
-            None => agent,
-        }
+        resolve_loaded(
+            target,
+            &registry,
+            config.as_ref(),
+            &self.memory,
+            &self.workspaces,
+        )
     }
 
     pub async fn send_turn(
@@ -2043,5 +2099,56 @@ done
             }),
             Err(TargetResolutionError::Invalid(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn a_group_wakeup_prompts_only_the_named_agent() {
+        let directory = TestDirectory::new();
+        let (core, lifecycle, prompts) = fake_core_configured(&directory, 30, 5, |config| {
+            let mut reviewer = config.agents[0].clone();
+            reviewer.name = "Reviewer".into();
+            reviewer.system_prompt = "You are the Reviewer.".into();
+            config.agents.push(reviewer);
+            config.groups.push(crate::config::GroupConfig {
+                name: "dev".into(),
+                members: vec!["Engineer".into(), "Reviewer".into()],
+                mode: ConversationMode::Discussion,
+                member_roles: Default::default(),
+                reply_order: Vec::new(),
+                workspace: None,
+            });
+        });
+        core.wakeups
+            .inject(
+                "group-dev",
+                "Engineer",
+                &serde_json::json!({"to": "Reviewer", "body": "Please confirm the schema."}),
+            )
+            .unwrap();
+        let job = core.execution().claim().unwrap().unwrap();
+        let parsed = parse_job_target(&job.target).unwrap();
+        assert!(matches!(parsed.target, ConversationTarget::Group { .. }));
+        let turn = core
+            .send_job_turn(
+                &parsed.target,
+                &job.message,
+                &job.turn_id,
+                JobDelivery {
+                    audience: parsed.persona.as_deref(),
+                    from: parsed.from.as_deref(),
+                    wake: parsed.wake.as_deref(),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(turn.replies.len(), 1);
+        assert_eq!(turn.replies[0].name, "Reviewer");
+        let life = fs::read_to_string(lifecycle).unwrap();
+        assert_eq!(life.matches(" prompt").count(), 1);
+        assert!(life.contains("Unknown prompt"));
+        let logged = fs::read_to_string(prompts).unwrap();
+        assert!(logged.contains("Please confirm the schema."));
+        assert!(logged.contains("injected this prompt"));
+        assert!(logged.contains("not typed by the user"));
     }
 }

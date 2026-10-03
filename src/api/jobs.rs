@@ -1,9 +1,6 @@
 //! Persist before acknowledging. A single server worker claims jobs atomically;
 //! crashes interrupt running jobs and never implicitly replay side effects.
-use super::{
-    error::ApiError,
-    routes::{ApiState, TurnTargetBody},
-};
+use super::{error::ApiError, routes::ApiState};
 use crate::core::HivemindCore;
 use axum::{
     extract::{Path, State},
@@ -243,16 +240,24 @@ pub(super) async fn run(core: Arc<HivemindCore>) {
 }
 
 async fn process(core: Arc<HivemindCore>, job: crate::execution::Job) {
-    let target =
-        serde_json::from_value::<TurnTargetBody>(job.target.clone()).map(TurnTargetBody::target);
-    let Ok(target) = target else {
+    let Some(parsed) = crate::core::parse_job_target(&job.target) else {
         let _ = core
             .execution()
             .finish(&job.turn_id, "failed", json!({"error":"invalid target"}));
         return;
     };
+    let target = parsed.target;
     {
-        let outcome = core.send_job_turn(&target, &job.message, &job.turn_id);
+        let outcome = core.send_job_turn(
+            &target,
+            &job.message,
+            &job.turn_id,
+            crate::core::JobDelivery {
+                audience: parsed.persona.as_deref(),
+                from: parsed.from.as_deref(),
+                wake: parsed.wake.as_deref(),
+            },
+        );
         tokio::pin!(outcome);
         loop {
             tokio::select! {

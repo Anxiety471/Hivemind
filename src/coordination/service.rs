@@ -117,6 +117,8 @@ pub struct ResultIn {
 
 pub struct SendMessage {
     pub recipients: Vec<String>,
+    /// Descendant task that should receive the message. Its agent is spawned if it is not running.
+    pub task: Option<String>,
     pub group: Option<String>,
     pub kind: MessageKind,
     pub body: String,
@@ -186,6 +188,25 @@ pub struct CoordinationService {
     scheduler_running: AtomicBool,
     publish: AtomicBool,
     channel: super::live::LiveChannel,
+}
+
+/// `id` is a strict descendant of `ancestor` (a child, or a child of a child).
+fn is_descendant(db: &Db<'_>, ancestor: &str, id: &str) -> CoordResult<bool> {
+    let mut current = id.to_owned();
+    for _ in 0..64 {
+        if current == ancestor {
+            return Ok(false);
+        }
+        let task = db.task_or_err(&current)?;
+        let Some(parent) = task.parent_id else {
+            return Ok(false);
+        };
+        if parent == ancestor {
+            return Ok(true);
+        }
+        current = parent;
+    }
+    Ok(false)
 }
 
 fn invalid<T>(message: impl Into<String>) -> CoordResult<T> {
@@ -1116,8 +1137,11 @@ impl CoordinationService {
             if root.status.is_terminal() || root.status == TaskStatus::Blocked {
                 return conflict(format!("root task is {}", root.status.as_str()));
             }
-            if !matches!(ctx.kind, AttemptKind::Work | AttemptKind::Plan) {
-                return forbid("only work and planning attempts may delegate");
+            if !matches!(
+                ctx.kind,
+                AttemptKind::Work | AttemptKind::Plan | AttemptKind::Inbox
+            ) {
+                return forbid("delegate is available on work, planning, and inbox attempts");
             }
             let plan = Plan {
                 tasks: vec![super::policy::PlanTask {
@@ -1804,6 +1828,18 @@ impl CoordinationService {
             if root.status.is_terminal() || root.paused {
                 return conflict(format!("root task is {}", if root.paused { "paused" } else { root.status.as_str() }));
             }
+            let attached = if let Some(child_id) = &req.task {
+                let child = db.task_or_err(child_id)?;
+                if child.root_id != task.root_id {
+                    return forbid("that task is outside this root");
+                }
+                if !is_descendant(db, &task.id, &child.id)? {
+                    return forbid("you can message a descendant task only");
+                }
+                child
+            } else {
+                task.clone()
+            };
             let mut recipients: Vec<String> = Vec::new();
             let mut group_id: Option<String> = None;
             if let Some(gid) = &req.group {
@@ -1817,7 +1853,13 @@ impl CoordinationService {
                 recipients = group.members.iter().map(|m| m.persona.clone()).filter(|p| *p != ctx.persona).collect();
                 group_id = Some(gid.clone());
             }
-            for name in &req.recipients {
+            let mut named = req.recipients.clone();
+            if named.is_empty() {
+                if let Some(owner) = attached.owner.clone().filter(|_| req.task.is_some()) {
+                    named.push(owner);
+                }
+            }
+            for name in &named {
                 let name = name.trim().to_owned();
                 if name == ctx.persona {
                     return invalid("cannot send a message to yourself");
@@ -1832,7 +1874,11 @@ impl CoordinationService {
                 }
             }
             if recipients.is_empty() {
-                return invalid("no recipients: name at least one persona or a group");
+                return invalid(if req.task.is_some() {
+                    "that task has no owner yet; name a recipient with to"
+                } else {
+                    "no recipients: name at least one persona or a group"
+                });
             }
             recipients.sort();
             if recipients.len() > 8 {
@@ -1854,7 +1900,7 @@ impl CoordinationService {
                 }
                 None => (0, None, String::new()),
             };
-            if let Some(existing) = db.equivalent_message(&task.root_id, &task.id, &ctx.persona, req.kind, &recipients, group_id.as_deref(), &body)? {
+            if let Some(existing) = db.equivalent_message(&task.root_id, &attached.id, &ctx.persona, req.kind, &recipients, group_id.as_deref(), &body)? {
                 return Ok((existing, true));
             }
             let wake = req.kind.wakes_recipient() && depth <= self.config.max_message_depth && !matches!(cause_kind, Some(MessageKind::Ack | MessageKind::Status));
@@ -1863,7 +1909,7 @@ impl CoordinationService {
             db.insert_message(&NewMessage {
                 id: id.clone(),
                 root_id: &task.root_id,
-                task_id: &task.id,
+                task_id: &attached.id,
                 sender: &ctx.persona,
                 sender_instance: &AgentInstanceId::new(&ctx.room, &ctx.persona).encode(),
                 kind: req.kind,
@@ -1879,9 +1925,9 @@ impl CoordinationService {
                 wake,
             })?;
             if req.kind == MessageKind::DecisionProposal {
-                db.insert_decision(&task.id, &body, &ctx.persona, Some(&id))?;
+                db.insert_decision(&attached.id, &body, &ctx.persona, Some(&id))?;
             }
-            db.event(&task.root_id, Some(&task.id), &ctx.persona, "message.sent", serde_json::json!({"message_id": id, "kind": req.kind.as_str(), "recipients": recipients, "group_id": group_id, "wake": wake}))?;
+            db.event(&task.root_id, Some(&attached.id), &ctx.persona, "message.sent", serde_json::json!({"message_id": id, "kind": req.kind.as_str(), "recipients": recipients, "group_id": group_id, "wake": wake, "task_id": attached.id}))?;
             let message = db.message(&id)?.ok_or_else(|| CoordError::Internal("message vanished".into()))?;
             Ok((message, false))
         })?;

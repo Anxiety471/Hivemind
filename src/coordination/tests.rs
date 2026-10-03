@@ -515,6 +515,7 @@ fn messages_queue_deduplicate_and_never_loop_on_acks() {
     let (root, lead) = team_in_root(&service);
     let request = |body: &str, to: &[&str]| SendMessage {
         recipients: to.iter().map(|s| s.to_string()).collect(),
+        task: None,
         group: None,
         kind: MessageKind::Request,
         body: body.into(),
@@ -636,6 +637,7 @@ fn deep_causation_chains_stop_waking_recipients() {
             &lead,
             SendMessage {
                 recipients: vec!["Back".into()],
+                task: None,
                 group: None,
                 kind: MessageKind::Request,
                 body: body.into(),
@@ -708,6 +710,7 @@ fn groups_are_reused_scoped_and_lose_removed_members() {
             &lead,
             SendMessage {
                 recipients: vec![],
+                task: None,
                 group: Some(group.id.clone()),
                 kind: MessageKind::Status,
                 body: "hello".into(),
@@ -1394,6 +1397,7 @@ fn messages_to_a_working_persona_are_steered_live_and_still_queued() {
     let (_root, back, front) = parallel(&service);
     let request = SendMessage {
         recipients: vec!["Front".into()],
+        task: None,
         group: None,
         kind: MessageKind::Request,
         body: "the api returns 422 {errors}".into(),
@@ -1418,6 +1422,7 @@ fn messages_to_a_working_persona_are_steered_live_and_still_queued() {
     // A persona with no running attempt gets nothing live.
     let to_lead = SendMessage {
         recipients: vec!["Lead".into()],
+        task: None,
         group: None,
         kind: MessageKind::Request,
         body: "ping".into(),
@@ -1438,6 +1443,7 @@ fn an_accepted_decision_is_steered_into_everyone_else_working_on_the_root() {
     let (_root, back, front) = parallel(&service);
     let proposal = |kind: MessageKind| SendMessage {
         recipients: vec!["Lead".into()],
+        task: None,
         group: None,
         kind,
         body: "store orders in sqlite".into(),
@@ -1523,6 +1529,7 @@ async fn a_question_waits_for_the_user_or_the_persona_it_was_sent_to() {
     let question = message.unwrap();
     let reply = |body: &str| SendMessage {
         recipients: vec!["Back".into()],
+        task: None,
         group: None,
         kind: MessageKind::Status,
         body: body.into(),
@@ -1677,4 +1684,147 @@ fn task_file_deliverables_are_automatically_saved_from_the_attempt_worktree() {
         .unwrap()
         .is_none());
     std::fs::remove_dir_all(directory).unwrap();
+}
+
+fn with_delegate(names: &[&str]) -> Arc<CoordinationService> {
+    let mut config = team_config(".");
+    for name in names {
+        config
+            .agents
+            .iter_mut()
+            .find(|agent| agent.name == *name)
+            .unwrap()
+            .permissions
+            .push("delegate".into());
+    }
+    service_with(&config).0
+}
+
+fn delegate_to(
+    service: &CoordinationService,
+    ctx: &ToolCtx,
+    objective: &str,
+    capability: &str,
+    owner: &str,
+    depends_on: &[&str],
+) -> String {
+    service
+        .delegate(
+            ctx,
+            Delegate {
+                objective: objective.into(),
+                acceptance: vec!["done".into()],
+                capabilities: vec![capability.into()],
+                owner: Some(owner.into()),
+                reviewer: None,
+                depends_on: depends_on.iter().map(|id| (*id).to_owned()).collect(),
+            },
+        )
+        .unwrap()
+}
+
+fn message_task(service: &CoordinationService, ctx: &ToolCtx, task: &str, body: &str) -> Message {
+    service
+        .send_message(
+            ctx,
+            SendMessage {
+                recipients: vec![],
+                task: Some(task.into()),
+                group: None,
+                kind: MessageKind::Request,
+                body: body.into(),
+                artifacts: vec![],
+                causation: None,
+                idempotency_key: None,
+            },
+        )
+        .unwrap()
+        .0
+}
+
+#[test]
+fn a_parent_task_wakes_its_child_and_that_agent_spawns_and_messages_another() {
+    let service = with_delegate(&["Back", "Front"]);
+    let (root, lead) = team_in_root(&service);
+    let child = delegate_to(&service, &lead, "write the handler", "backend", "Back", &[]);
+    let message = message_task(&service, &lead, &child, "use the 422 error shape");
+    assert_eq!(message.task_id, child);
+    assert_eq!(message.recipients, vec!["Back".to_string()]);
+    assert!(service
+        .send_message(
+            &lead,
+            SendMessage {
+                recipients: vec!["Front".into()],
+                task: Some(root),
+                group: None,
+                kind: MessageKind::Request,
+                body: "the root is not a descendant".into(),
+                artifacts: vec![],
+                causation: None,
+                idempotency_key: None,
+            },
+        )
+        .is_err());
+
+    let spawned = claim(&service)
+        .into_iter()
+        .find(|dispatch| dispatch.task.id == child && dispatch.attempt.persona == "Back")
+        .expect("child agent spawned");
+    assert_eq!(spawned.attempt.kind, AttemptKind::Work);
+    let back = ctx(&service, &spawned);
+    let grandchild = delegate_to(
+        &service,
+        &back,
+        "document the error shape",
+        "frontend",
+        "Front",
+        &[],
+    );
+    let further = message_task(&service, &back, &grandchild, "document 422");
+    assert_eq!(further.task_id, grandchild);
+    assert_eq!(further.recipients, vec!["Front".to_string()]);
+    let next = claim(&service)
+        .into_iter()
+        .find(|dispatch| dispatch.task.id == grandchild)
+        .expect("grandchild agent spawned");
+    assert_eq!(next.attempt.persona, "Front");
+    assert_eq!(next.attempt.kind, AttemptKind::Work);
+}
+
+#[test]
+fn a_message_to_a_blocked_child_spawns_an_inbox_agent_that_can_delegate() {
+    let service = with_delegate(&["Front"]);
+    let (_root, lead) = team_in_root(&service);
+    let api = delegate_to(&service, &lead, "implement api", "backend", "Back", &[]);
+    let ui = delegate_to(
+        &service,
+        &lead,
+        "implement ui",
+        "frontend",
+        "Front",
+        &[&api],
+    );
+    let message = message_task(&service, &lead, &ui, "start from the 422 shape");
+    assert_eq!(message.task_id, ui);
+    let inbox = claim(&service)
+        .into_iter()
+        .find(|dispatch| dispatch.task.id == ui)
+        .expect("blocked child is woken");
+    assert_eq!(inbox.attempt.kind, AttemptKind::Inbox);
+    assert_eq!(inbox.attempt.persona, "Front");
+    assert_eq!(inbox.deliveries.len(), 1);
+    assert!(inbox.deliveries[0].1.body.contains("422"));
+    let front = ctx(&service, &inbox);
+    let nested = delegate_to(
+        &service,
+        &front,
+        "draft the empty state",
+        "frontend",
+        "Front",
+        &[],
+    );
+    assert_eq!(
+        service.detail(&nested).unwrap().task.parent_id.as_deref(),
+        Some(ui.as_str())
+    );
 }

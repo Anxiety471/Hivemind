@@ -229,6 +229,7 @@ impl CoordinationService {
                     ctx,
                     SendMessage {
                         recipients: vec![persona.clone()],
+                        task: None,
                         group: None,
                         kind: MessageKind::Request,
                         body,

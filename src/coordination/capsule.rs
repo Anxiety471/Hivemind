@@ -37,7 +37,7 @@ fn instruction(kind: AttemptKind) -> &'static str {
         AttemptKind::Plan => "Decompose the objective into a task graph and submit it with tasks.plan.propose. Give every task an owner capability, acceptance criteria, and explicit dependencies; state interface contracts on the tasks others depend on. Include integration work when several tasks change one codebase.",
         AttemptKind::Work => "Do the work described below in your working directory, then call tasks.result.submit with what changed, artifacts, and honest verification evidence (passed, failed, or unavailable). If you cannot proceed, call tasks.block.",
         AttemptKind::Review => "Review the submitted result against the acceptance criteria. Inspect the actual artifacts (artifacts.get) rather than trusting the summary. Call tasks.review with approve or reject; a rejection must say exactly what to change.",
-        AttemptKind::Inbox => "Handle the messages addressed to you below. Reply with messages.send when a reply is needed and mark each handled message with messages.ack. Do not send acknowledgments for status or ack messages.",
+        AttemptKind::Inbox => "Handle the messages addressed to you below. Reply with messages.send when a reply is needed and mark each handled message with messages.ack. Do not send acknowledgments for status or ack messages. messages.send with a descendant task id wakes that task's agent. When delegation is available, create a child task and message it.",
     }
 }
 

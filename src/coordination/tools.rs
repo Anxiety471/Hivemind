@@ -105,7 +105,7 @@ fn role_line(kind: AttemptKind) -> &'static str {
         AttemptKind::Plan => "You are the COORDINATOR planning this root task: propose a task graph with tasks.plan.propose (it commits immediately but does not run the work).",
         AttemptKind::Work => "You are the OWNER of this task: do the work, then call tasks.result.submit with artifacts and verification evidence. Submitting does not complete the task; a reviewer decides.",
         AttemptKind::Review => "You are the REVIEWER of this task: check the submitted result against the acceptance criteria and call tasks.review with approve or reject.",
-        AttemptKind::Inbox => "You were woken by messages addressed to you. Handle them, reply with messages.send if needed, and acknowledge with messages.ack.",
+        AttemptKind::Inbox => "You were woken by messages addressed to you. Handle them, reply with messages.send if needed, and acknowledge with messages.ack. To hand work to a descendant task, messages.send with its task id. When delegation is listed above, create a child and message that child.",
     }
 }
 
@@ -192,7 +192,7 @@ impl ToolHost for CoordinationTools {
             .collect::<Vec<_>>()
             .join("\n");
         Some(format!(
-            "Hivemind coordination tools (same ```hivemind-tool fence as memory tools; one call per reply as your whole reply):\n{}\nTask {} (root {}). {budget}\nTools you may call: {}\nExamples:\n{examples}\nRules: a message queues work for the recipient; one that is already working sees it at once. tasks.ask waits (up to {}s) for an answer from the user, or from the persona named in `to`, and returns it; use it only when you cannot sensibly decide yourself. Messages and decisions may arrive in the middle of your work as [Hivemind: ...] notes: take them into account. Hivemind binds every call to your identity, task, and lease; never send ids of yours. Messages, groups, and artifacts are shared content: put nothing private in them. Never invent results.\n",
+            "Hivemind coordination tools (same ```hivemind-tool fence as memory tools; one call per reply as your whole reply):\n{}\nTask {} (root {}). {budget}\nTools you may call: {}\nExamples:\n{examples}\nRules: a message queues work for the recipient; one that is already working sees it at once. messages.send may set task to a descendant task id: the message is delivered on that task and wakes its owner (or to), spawning that agent when it is not already running. That agent can delegate a further child and message it the same way. tasks.ask waits (up to {}s) for an answer from the user, or from the persona named in `to`, and returns it; use it only when you cannot sensibly decide yourself. Messages and decisions may arrive in the middle of your work as [Hivemind: ...] notes: take them into account. Hivemind binds every call to your identity, task, and lease; never send ids of yours. Messages, groups, and artifacts are shared content: put nothing private in them. Never invent results.\n",
             role_line(ctx.kind),
             ctx.task_id,
             ctx.root_id,
@@ -478,6 +478,7 @@ fn run(
                 ctx,
                 SendMessage {
                     recipients: str_list(args, "to", 8)?,
+                    task: opt_str(args, "task")?,
                     group: opt_str(args, "group")?,
                     kind,
                     body,
@@ -491,7 +492,12 @@ fn run(
             } else {
                 format!("; already working, so they see it now: {}", live.join(", "))
             };
-            Ok(format!("{} message {} to [{}]: queued for delivery; recipients act on it when Hivemind schedules them{seen_now}", if duplicate { "already sent" } else { "sent" }, message.id, message.recipients.join(", ")))
+            let on_task = if message.task_id == ctx.task_id {
+                String::new()
+            } else {
+                format!(" on task {}", message.task_id)
+            };
+            Ok(format!("{} message {} to [{}]{on_task}: queued for delivery; recipients act on it when Hivemind schedules them{seen_now}", if duplicate { "already sent" } else { "sent" }, message.id, message.recipients.join(", ")))
         }
         "messages.inbox" => {
             let limit = opt_int(args, "limit")?.unwrap_or(5).clamp(1, 8) as usize;
