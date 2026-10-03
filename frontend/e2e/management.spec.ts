@@ -328,3 +328,41 @@ test("typing @ in a group chat autocompletes agent mentions", async ({ page }) =
   await textarea.press("Escape");
   await expect(menu).not.toBeVisible();
 });
+
+test("the command menu, G shortcuts and C reach every part of the app", async ({ page }) => {
+  await openRoom(page, "main");
+  // ⌘K / Ctrl+K opens the command menu; searching and Enter run the match.
+  await page.keyboard.press("Control+k");
+  const menu = page.getByRole("dialog", { name: "Command menu" });
+  await expect(menu).toBeVisible();
+  await menu.getByLabel("Search commands").fill("go to agents");
+  await page.keyboard.press("Enter");
+  await expect(menu).toHaveCount(0);
+  await expect(page).toHaveURL(/#\/agents$/);
+  await expect(page.locator('[data-agent="Engineer"]')).toBeVisible();
+
+  // Agents show up as message targets.
+  await page.getByRole("button", { name: "Search and commands" }).click();
+  await menu.getByLabel("Search commands").fill("message reviewer");
+  await menu.getByRole("option", { name: /Message Reviewer/ }).click();
+  await expect(page).toHaveURL(/#\/rooms\/solo-Reviewer$/);
+
+  // G then a key navigates; C opens the new-issue composer from anywhere.
+  await page.locator("body").click();
+  await page.keyboard.press("g");
+  await page.keyboard.press("w");
+  await expect(page).toHaveURL(/#\/workspaces$/);
+  await page.keyboard.press("c");
+  await expect(page.getByRole("dialog", { name: "New issue" })).toBeVisible();
+  await expect(page).toHaveURL(/#\/issues$/);
+  await page.keyboard.press("Escape");
+
+  // The theme can be forced from settings and survives a reload.
+  await page.goto("/#/settings");
+  await page.getByRole("radio", { name: "Light" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await page.getByRole("radio", { name: "System" }).click();
+  await expect(page.locator("html")).not.toHaveAttribute("data-theme", /.+/);
+});

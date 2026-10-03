@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, type LibraryArtifact } from "../api";
+import { Icon } from "../icons";
 import { Markdown } from "../markdown";
 import { href, navigate } from "../nav";
 import { Badge, Empty, ErrorNote, ago, useAction, useAsync } from "../ui";
@@ -27,7 +28,7 @@ export function Library({ selected }: { selected?: string }) {
   return <div className="split library-split">
     <aside className="list-pane">
       <div className="list-head">
-        <h2>Artifact library</h2>
+        <h2><Icon name="library" /> Artifact library</h2>
         <button className="primary small" disabled={creating} onClick={() => setCreating(true)}>New artifact</button>
       </div>
       <input className="library-search-input" type="search" aria-label="Search library" placeholder="Search titles, filenames, descriptions" value={search} onChange={e => setSearch(e.target.value)} />
@@ -40,7 +41,7 @@ export function Library({ selected }: { selected?: string }) {
         <span className="library-icon small" aria-hidden="true">{artifactIcon(a)}</span>
         <span className="library-item-body">
           <span className="list-item-title">{a.title}</span>
-          <span className="muted small">{(extOf(a.filename) || "file").toUpperCase()} · {sizeLabel(a.size)} · {ago(a.created_at)}{a.published ? " · 🔗 published" : ""}</span>
+          <span className="muted small">{(extOf(a.filename) || "file").toUpperCase()} · {sizeLabel(a.size)} · {ago(a.created_at)}{a.published ? " · published" : ""}</span>
         </span>
       </a>)}
       {(offset > 0 || all.length >= 50) && <div className="row library-pagination"><button disabled={offset === 0 || data.loading} onClick={() => setOffset(Math.max(0, offset - 50))}>Previous</button>
@@ -200,15 +201,18 @@ function kindOf(artifact: { media_type: string; filename: string }): Kind {
   return "other";
 }
 
+const FILE_HUE: Record<string, number> = { images: 290, diagrams: 160, docs: 220, data: 40, code: 10, other: 230 };
+
+/** A small colored file-type tile with the extension, like Linear's attachment chips. */
 function artifactIcon(artifact: { media_type: string; filename: string }) {
   const kind = kindOf(artifact);
   const ext = extOf(artifact.filename);
-  if (kind === "images") return "🖼️";
-  if (kind === "diagrams") return "📊";
-  if (kind === "docs") return ext === "pdf" ? "📕" : "📝";
-  if (["json", "yaml", "yml", "toml", "xml", "csv"].includes(ext)) return "🗂️";
-  if (["py", "js", "ts", "rs", "sh", "css", "sql"].includes(ext)) return "💻";
-  return "📄";
+  const family = kind !== "other" ? kind : ["json", "yaml", "yml", "toml", "xml", "csv"].includes(ext) ? "data" : ["py", "js", "ts", "rs", "sh", "css", "sql"].includes(ext) ? "code" : "other";
+  return (
+    <span className="file-tile" style={{ ["--hue" as string]: FILE_HUE[family] }}>
+      {(ext || "file").slice(0, 4)}
+    </span>
+  );
 }
 
 function Preview({ artifact }: { artifact: LibraryArtifact }) {

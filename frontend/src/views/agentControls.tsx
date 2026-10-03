@@ -1,5 +1,6 @@
 // Form controls for the agent editor: a searchable model picker, single-choice chips, check lists
 // and a server-side folder browser.
+import { Icon } from "../icons";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { api, type DirListing, type ModelOption } from "../api";
 
@@ -335,7 +336,7 @@ export function FolderPicker(props: { start: string; onPick: (path: string) => v
         {listing?.entries.map((e) => (
           <li key={e.path}>
             <button type="button" onClick={() => setTarget(e.path)}>
-              <span aria-hidden>📁</span> {e.name}
+              <Icon name="workspaces" size={14} /> {e.name}
             </button>
           </li>
         ))}

@@ -1,6 +1,7 @@
 // Small shared UI pieces: data loading, badges, time formatting.
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useState } from "react";
+import { Icon, type IconName } from "./icons";
 import { useLiveStatus } from "./live";
 
 export function useAsync<T>(load: () => Promise<T>, deps: unknown[] = []) {
@@ -148,4 +149,73 @@ export function useAction() {
     }
   };
   return { busy, error, run, setError };
+}
+
+/** Linear-style 44px page bar: icon and title on the left, then tabs, then actions on the right. */
+export function TopBar({
+  icon,
+  title,
+  count,
+  children,
+  actions,
+}: {
+  icon?: IconName;
+  title: ReactNode;
+  count?: number;
+  children?: ReactNode;
+  actions?: ReactNode;
+}) {
+  return (
+    <header className="topbar">
+      <div className="topbar-left">
+        <h1 className="topbar-title">
+          {icon && <Icon name={icon} />}
+          {title}
+          {count != null && <span className="topbar-count">{count}</span>}
+        </h1>
+        {children}
+      </div>
+      {actions && <div className="topbar-actions">{actions}</div>}
+    </header>
+  );
+}
+
+/** Tabs as used in top bars and panels. */
+export function Tabs<T extends string>({
+  value,
+  options,
+  onChange,
+  label,
+}: {
+  value: T;
+  options: { value: T; label: string }[];
+  onChange: (value: T) => void;
+  label?: string;
+}) {
+  return (
+    <div className="tabs" role="group" aria-label={label}>
+      {options.map((o) => (
+        <button key={o.value} type="button" className={value === o.value ? "tab on" : "tab"} aria-pressed={value === o.value} onClick={() => onChange(o.value)}>
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** A settings-style section: heading and description above a bordered list. */
+export function Section({ title, description, children, ...rest }: { title: string; description?: ReactNode; children: ReactNode; [data: `data-${string}`]: string }) {
+  return (
+    <section className="section" {...rest}>
+      <div className="section-intro">
+        <h2>{title}</h2>
+        {description && <p className="muted">{description}</p>}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+export function Kbd({ children }: { children: ReactNode }) {
+  return <kbd>{children}</kbd>;
 }

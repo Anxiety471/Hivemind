@@ -2,36 +2,48 @@
 import { useState } from "react";
 import { api, type ChatGroup } from "../api";
 import { href } from "../nav";
-import { Avatar, Badge, Empty, ErrorNote, PageHeader, useAction, useAsync } from "../ui";
+import { Icon } from "../icons";
+import { Avatar, Empty, ErrorNote, TopBar, useAction, useAsync } from "../ui";
 
-export function Groups() {
+export function Groups({ create = false }: { create?: boolean }) {
   const groups = useAsync(() => api.chatGroups(), []);
   const agents = useAsync(() => api.agents(), []);
-  const [creating, setCreating] = useState(false);
+  const [creating, setCreating] = useState(create);
   const names = agents.data?.agents.map((a) => a.name) ?? [];
+  const list = groups.data?.groups ?? [];
 
   return (
-    <div className="page">
-      <PageHeader title="Groups" sub="Persisted conversation groups. Changes are written to hivemind.toml and apply immediately.">
-        <button className="primary" onClick={() => setCreating(true)}>
-          New group
-        </button>
-      </PageHeader>
-      <ErrorNote error={groups.error} />
-      {creating && (
-        <CreateGroup
-          personas={names}
-          onDone={() => {
-            setCreating(false);
-            groups.reload();
-          }}
-        />
-      )}
-      {groups.data?.groups.length === 0 && !creating && <Empty>No groups yet.</Empty>}
-      <div className="cards wide">
-        {groups.data?.groups.map((g) => (
-          <GroupCard key={g.id + JSON.stringify(g)} group={g} personas={names} onChange={groups.reload} />
-        ))}
+    <div className="view">
+      <TopBar
+        icon="groups"
+        title="Groups"
+        count={groups.data ? list.length : undefined}
+        actions={
+          <button className="primary small" onClick={() => setCreating(true)} disabled={creating}>
+            <Icon name="plus" size={14} /> New group
+          </button>
+        }
+      />
+      <div className="view-body">
+        <p className="view-intro muted">Persisted conversation groups. Changes are written to hivemind.toml and apply immediately.</p>
+        <ErrorNote error={groups.error} />
+        {creating && (
+          <CreateGroup
+            personas={names}
+            onDone={() => {
+              setCreating(false);
+              groups.reload();
+            }}
+          />
+        )}
+        {groups.data && list.length === 0 && !creating && <Empty>No groups yet.</Empty>}
+        {list.length > 0 && (
+          <div className="rows">
+            {list.map((g) => (
+              <GroupCard key={g.id + JSON.stringify(g)} group={g} personas={names} onChange={groups.reload} />
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -63,7 +75,7 @@ function CreateGroup({ personas, onDone }: { personas: string[]; onDone: () => v
   const [members, setMembers] = useState<string[]>([]);
   const action = useAction();
   return (
-    <div className="card form">
+    <div className="panel form">
       <h3>New group</h3>
       <label>
         Name
@@ -113,48 +125,58 @@ function GroupCard({ group, personas, onChange }: { group: ChatGroup; personas: 
       onChange();
     });
 
-  if (!editing)
+  if (!editing) {
+    const order = group.reply_order.length ? group.reply_order : group.members;
     return (
-      <div className="card group-card">
-        <div className="agent-head">
-          <div className="group-icon">◆</div>
-          <div className="grow">
-            <h3>{group.id}</h3>
-            <div className="muted small mono">{group.workspace ?? "no shared workspace"}</div>
-          </div>
-          <Badge value={group.mode} tone="info" />
-        </div>
-        <div className="order">
-          {(group.reply_order.length ? group.reply_order : group.members).map((m, i) => (
-            <div className="order-row" key={m}>
-              <span className="step">{i + 1}</span>
-              <Avatar name={m} />
-              <span>{m}</span>
-              {group.member_roles?.[m] && <em className="muted">{group.member_roles[m]}</em>}
-            </div>
-          ))}
-        </div>
-        <div className="row">
-          <a className="button ghost" href={href("rooms", group.room_id)}>
-            Open room
-          </a>
-          <button className="ghost" onClick={() => setEditing(true)}>
-            Edit
-          </button>
-          <button
-            className="danger ghost"
-            disabled={action.busy}
-            onClick={() => confirm(`Delete group "${group.id}"? Its history stays as an archived room.`) && action.run(() => api.deleteChatGroup(group.id).then(onChange))}
-          >
-            Delete
-          </button>
+      <article className="group-row" data-group={group.id}>
+        <div className="row-item group-grid">
+          <span className="agent-name">
+            <span className="group-icon">
+              <Icon name="group" size={14} />
+            </span>
+            <span className="agent-name-text">
+              <strong>{group.id}</strong>
+              <span className="mono small muted ellipsis" title={group.workspace ?? undefined}>
+                {group.workspace ?? "no shared workspace"}
+              </span>
+            </span>
+          </span>
+          <span>
+            <span className="chip">{group.mode}</span>
+          </span>
+          <span className="order-inline" aria-label="Reply order">
+            {order.map((m, i) => (
+              <span className="order-step" key={m} title={group.member_roles?.[m] ? `${m} · ${group.member_roles[m]}` : m}>
+                {i > 0 && <Icon name="chevron" size={10} />}
+                <Avatar name={m} />
+                <span>{m}</span>
+                {group.member_roles?.[m] && <em className="muted small">{group.member_roles[m]}</em>}
+              </span>
+            ))}
+          </span>
+          <span className="row-actions">
+            <a className="button ghost small" href={href("rooms", group.room_id)}>
+              Open room
+            </a>
+            <button className="ghost small" onClick={() => setEditing(true)}>
+              Edit
+            </button>
+            <button
+              className="danger ghost small"
+              disabled={action.busy}
+              onClick={() => confirm(`Delete group "${group.id}"? Its history stays as an archived room.`) && action.run(() => api.deleteChatGroup(group.id).then(onChange))}
+            >
+              Delete
+            </button>
+          </span>
         </div>
         <ErrorNote error={action.error} />
-      </div>
+      </article>
     );
+  }
 
   return (
-    <div className="card group-card form">
+    <div className="panel group-card form">
       <h3>Edit {group.id}</h3>
       <label>Mode</label>
       <div className="segmented">
@@ -182,11 +204,11 @@ function GroupCard({ group, personas, onChange }: { group: ChatGroup; personas: 
               value={roles[m] ?? ""}
               onChange={(e) => setRoles({ ...roles, [m]: (e.target as HTMLInputElement).value })}
             />
-            <button className="ghost icon" disabled={i === 0} onClick={() => move(i, -1)}>
-              ↑
+            <button className="icon-btn" aria-label={`Move ${m} up`} disabled={i === 0} onClick={() => move(i, -1)}>
+              <Icon name="up" size={14} />
             </button>
-            <button className="ghost icon" disabled={i === effectiveOrder.length - 1} onClick={() => move(i, 1)}>
-              ↓
+            <button className="icon-btn" aria-label={`Move ${m} down`} disabled={i === effectiveOrder.length - 1} onClick={() => move(i, 1)}>
+              <Icon name="down" size={14} />
             </button>
           </div>
         ))}

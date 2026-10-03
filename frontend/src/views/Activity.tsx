@@ -2,7 +2,8 @@
 import { useState } from "react";
 import { decodeInstance } from "../api";
 import { recentEvents, useLive, type LiveEvent } from "../live";
-import { Empty, PageHeader } from "../ui";
+import { Icon } from "../icons";
+import { Empty, Tabs, TopBar } from "../ui";
 
 const GROUPS = ["all", "conversation", "agent", "runtime", "task", "attempt", "thread", "system"];
 
@@ -36,31 +37,37 @@ export function Activity() {
   );
   const shown = events.filter((e) => filter === "all" || e.type.startsWith(filter + "."));
   return (
-    <div className="page">
-      <PageHeader title="Live activity" sub="Events streamed from /api/v1/ws. Notifications only; durable history lives in rooms and tasks.">
-        <button className="ghost" onClick={() => setPaused((p) => !p)}>
-          {paused ? "Resume" : "Pause"}
-        </button>
-        <button className="ghost" onClick={() => setEvents([])}>
-          Clear
-        </button>
-      </PageHeader>
-      <div className="segmented">
-        {GROUPS.map((g) => (
-          <button key={g} className={filter === g ? "on" : ""} onClick={() => setFilter(g)}>
-            {g}
-          </button>
-        ))}
-      </div>
+    <div className="view">
+      <TopBar
+        icon="activity"
+        title="Live activity"
+        actions={
+          <>
+            <span className="chip">
+              <span className={paused ? "dot-off" : "dot-live"} /> {paused ? "Paused" : "Streaming"}
+            </span>
+            <button className="ghost small" onClick={() => setPaused((p) => !p)}>
+              <Icon name={paused ? "play" : "pause"} size={13} /> {paused ? "Resume" : "Pause"}
+            </button>
+            <button className="ghost small" onClick={() => setEvents([])}>
+              Clear
+            </button>
+          </>
+        }
+      >
+        <Tabs label="Event type" value={filter} onChange={setFilter} options={GROUPS.map((g) => ({ value: g, label: g === "all" ? "All" : g[0].toUpperCase() + g.slice(1) }))} />
+      </TopBar>
       {shown.length === 0 ? (
-        <Empty>Waiting for events. Send a message or submit a task.</Empty>
+        <div className="view-body">
+          <Empty>Waiting for events. Send a message or submit an issue.</Empty>
+        </div>
       ) : (
-        <div className="card events">
+        <div className="events">
           {shown.map((e, i) => (
             <div className="event" key={i}>
               <span className="mono muted small">{new Date(e.at).toLocaleTimeString()}</span>
               <span className={`event-type t-${e.type.split(".")[0]}`}>{e.type}</span>
-              <span className="small">{summary(e)}</span>
+              <span className="small ellipsis">{summary(e)}</span>
             </div>
           ))}
         </div>

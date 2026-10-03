@@ -2,7 +2,8 @@
 import type { ReactNode } from "react";
 import { useState } from "react";
 import { api, type Workspaces } from "../api";
-import { Avatar, ErrorNote, PageHeader, useAction, useAsync } from "../ui";
+import { Icon } from "../icons";
+import { Avatar, ErrorNote, Section, TopBar, useAction, useAsync } from "../ui";
 
 export function WorkspacesView() {
   const ws = useAsync(() => api.workspaces(), []);
@@ -12,25 +13,24 @@ export function WorkspacesView() {
   const choices = data ? workspaceChoices(data) : [];
 
   return (
-    <div className="page">
-      <PageHeader
-        title="Workspaces"
-        sub="Paths must be absolute, existing directories inside the allowed roots. A live session in the old directory is replaced before its next turn."
-      />
+    <div className="view">
+      <TopBar icon="workspaces" title="Workspaces" />
+      <div className="view-body settings-body">
+      <p className="view-intro muted">
+        Paths must be absolute, existing directories inside the allowed roots. A live session in the old directory is replaced before its next turn.
+      </p>
       <ErrorNote error={ws.error} />
       {data && (
         <>
-          <div className="card">
-            <h3>Allowed roots</h3>
+          <Section title="Allowed roots" description="Set by [workspaces] roots in hivemind.toml.">
             {data.roots.length ? (
               <ul className="paths">{data.roots.map((r) => <li key={r} className="mono">{r}</li>)}</ul>
             ) : (
               <p className="muted">No roots configured: any existing directory is allowed.</p>
             )}
-          </div>
+          </Section>
           <KnownWorkspaces data={data} onUpdated={(next) => ws.setData(next)} />
-          <div className="card">
-            <h3>Group workspaces</h3>
+          <Section title="Group workspaces" description="Inside a group, its shared workspace replaces each member's own.">
             <table>
               <thead>
                 <tr>
@@ -43,7 +43,7 @@ export function WorkspacesView() {
                 {groupIds.map((id) => (
                   <PathRow
                     key={id + (data.groups.find((g) => g.id === id)?.workspace ?? "")}
-                    label={<strong>◆ {id}</strong>}
+                    label={<span className="inline"><Icon name="group" size={14} /> <strong>{id}</strong></span>}
                     value={data.groups.find((g) => g.id === id)?.workspace ?? ""}
                     options={choices}
                     onSave={(path) => api.setGroupWorkspace(id, path)}
@@ -53,9 +53,8 @@ export function WorkspacesView() {
                 ))}
               </tbody>
             </table>
-          </div>
-          <div className="card" data-section="persona-workspaces">
-            <h3>Persona workspaces</h3>
+          </Section>
+          <Section title="Persona workspaces" description="Where each agent works outside groups." data-section="persona-workspaces">
             <table>
               <thead>
                 <tr>
@@ -81,9 +80,10 @@ export function WorkspacesView() {
                 ))}
               </tbody>
             </table>
-          </div>
+          </Section>
         </>
       )}
+      </div>
     </div>
   );
 }
@@ -104,11 +104,11 @@ function KnownWorkspaces({ data, onUpdated }: { data: Workspaces; onUpdated: (w:
     ...data.groups.filter((g) => g.workspace === dir).map((g) => `group ${g.id}`),
   ];
   return (
-    <div className="card" data-section="workspaces">
-      <h3>Workspaces</h3>
-      <p className="muted small">
-        Directories you can pick for agents and groups. Adding one never changes the others or restricts where agents may work.
-      </p>
+    <Section
+      title="Workspaces"
+      description="Directories you can pick for agents and groups. Adding one never changes the others or restricts where agents may work."
+      data-section="workspaces"
+    >
       {data.known.length === 0 ? (
         <p className="muted">No workspaces added yet.</p>
       ) : (
@@ -162,7 +162,7 @@ function KnownWorkspaces({ data, onUpdated }: { data: Workspaces; onUpdated: (w:
         </button>
       </form>
       <ErrorNote error={add.error} />
-    </div>
+    </Section>
   );
 }
 

@@ -89,6 +89,52 @@ const PATHS: Record<string, ReactNode> = {
   room: <path d="M2.5 4.5a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v4.5a2 2 0 0 1-2 2H7l-3 2.5V11h0a2 2 0 0 1-1.5-2z" />,
   pause: <path d="M5.5 3.5v9M10.5 3.5v9" />,
   play: <path d="m5 3 8 5-8 5z" />,
+  theme: <path d="M8 2a6 6 0 1 0 6 6A4.5 4.5 0 0 1 8 2z" />,
+  hash: <path d="M6 2.5 5 13.5M11 2.5l-1 11M3 6h10.5M2.5 10H13" />,
+  at: (
+    <>
+      <circle cx="8" cy="8" r="2.5" />
+      <path d="M10.5 8v1a2 2 0 0 0 3.5 0V8a6 6 0 1 0-2.5 4.9" />
+    </>
+  ),
+  group: <path d="M8 1.8 13.5 5v6L8 14.2 2.5 11V5z" />,
+  task: (
+    <>
+      <circle cx="8" cy="8" r="5.5" />
+      <path d="m5.6 8.2 1.6 1.6 3.2-3.4" />
+    </>
+  ),
+  archive: (
+    <>
+      <rect x="2" y="3" width="12" height="3" rx="1" />
+      <path d="M3 6v6.5a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V6M6.5 9h3" />
+    </>
+  ),
+  pin: <path d="M9.5 2 14 6.5l-2 .5-2.5 2.5.5 3-1 1L6.5 11 3 14.5M6.5 11 2 9.5l1-1 3 .5L8.5 6.5 9 4.5z" />,
+  mute: (
+    <>
+      <path d="M2.5 6h2.5L8.5 3v10L5 10H2.5z" />
+      <path d="m11 6 3.5 4M14.5 6 11 10" />
+    </>
+  ),
+  more: (
+    <>
+      <circle cx="3.5" cy="8" r=".9" fill="currentColor" />
+      <circle cx="8" cy="8" r=".9" fill="currentColor" />
+      <circle cx="12.5" cy="8" r=".9" fill="currentColor" />
+    </>
+  ),
+  edit: <path d="M10.5 2.5 13.5 5.5 6 13H3v-3z" />,
+  trash: <path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.7 9h5.6l.7-9" />,
+  link: <path d="M7 9a2.5 2.5 0 0 0 3.5 0l2-2a2.5 2.5 0 0 0-3.5-3.5l-.6.6M9 7a2.5 2.5 0 0 0-3.5 0l-2 2A2.5 2.5 0 0 0 7 12.5l.6-.6" />,
+  file: (
+    <>
+      <path d="M4 1.5h5L12.5 5v9.5h-8.5z" />
+      <path d="M9 1.5V5h3.5" />
+    </>
+  ),
+  up: <path d="m4 10 4-4 4 4" />,
+  down: <path d="m4 6 4 4 4-4" />,
   cancel: (
     <>
       <circle cx="8" cy="8" r="5.5" />

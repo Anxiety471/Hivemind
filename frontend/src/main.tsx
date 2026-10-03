@@ -5,6 +5,10 @@ import { connect, useLiveStatus } from "./live";
 import { Chat } from "./views/Chat";
 import { FirstRunSetup } from "./views/FirstRunSetup";
 import { Icon, Logo, type IconName } from "./icons";
+import { CommandLayer } from "./CommandPalette";
+import { requestNewIssue } from "./nav";
+import { applyTheme, storedTheme } from "./theme";
+import { Kbd } from "./ui";
 const Library = lazy(() => import("./views/Library").then((m) => ({ default: m.Library })));
 const Issues = lazy(() => import("./views/Issues").then((m) => ({ default: m.Issues })));
 const Agents = lazy(() => import("./views/Agents").then((m) => ({ default: m.Agents })));
@@ -66,6 +70,7 @@ function App() {
   const live = useLiveStatus();
   const [version, setVersion] = useState<string | null>(null);
   const [firstRun, setFirstRun] = useState(shouldShowFirstRun);
+  const [palette, setPalette] = useState(false);
 
   const leaveSetup = () => {
     try {
@@ -102,10 +107,10 @@ function App() {
       view = <Issues selected={route.arg} />;
       break;
     case "agents":
-      view = <Agents />;
+      view = <Agents key={route.arg ?? ""} create={route.arg === "new"} />;
       break;
     case "groups":
-      view = <Groups />;
+      view = <Groups key={route.arg ?? ""} create={route.arg === "new"} />;
       break;
     case "workspaces":
       view = <WorkspacesView />;
@@ -134,10 +139,19 @@ function App() {
             <Logo />
           </span>
           <span className="brand-name">Hivemind</span>
-          <a className="brand-new" href="#/issues" title="Issues — press C to create" aria-label="Go to issues">
-            <Icon name="plus" size={14} />
-          </a>
+          <button className="brand-new" onClick={requestNewIssue} title="New issue (C)" aria-label="New issue">
+            <Icon name="edit" size={14} />
+          </button>
         </div>
+        <button className="nav search-nav" onClick={() => setPalette(true)} aria-label="Search and commands">
+          <span className="nav-icon">
+            <Icon name="search" />
+          </span>
+          <span className="nav-label">Search</span>
+          <span className="nav-kbd">
+            <Kbd>⌘K</Kbd>
+          </span>
+        </button>
         {NAV.map((group, i) => (
           <div className="nav-group" key={group.section ?? i}>
             {group.section && <div className="nav-section">{group.section}</div>}
@@ -159,7 +173,7 @@ function App() {
           <span className="nav-icon">
             <Icon name="settings" />
           </span>
-          <span className="nav-label">Connection</span>
+          <span className="nav-label">Settings</span>
         </a>
         <div className="conn" data-status={live}>
           <span className="dot" />
@@ -170,9 +184,11 @@ function App() {
       <main className="main">
         <Suspense fallback={null}>{view}</Suspense>
       </main>
+      <CommandLayer paletteOpen={palette} setPaletteOpen={setPalette} />
     </div>
   );
 }
 
+applyTheme(storedTheme(), false);
 connect();
 createRoot(document.getElementById("app")!).render(<App />);

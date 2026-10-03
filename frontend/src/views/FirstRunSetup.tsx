@@ -1,3 +1,4 @@
+import { Logo } from "../icons";
 import { useState } from "react";
 import { api, applySettings, currentSettings, type SetupPersona } from "../api";
 import { connect } from "../live";
@@ -126,7 +127,9 @@ export function FirstRunSetup({ onComplete, onSkip }: { onComplete: () => void; 
       <div className="setup-frame">
         <header className="setup-brand-row">
           <div className="setup-brand">
-            <span className="setup-logo" aria-hidden="true">🐝</span>
+            <span className="setup-logo" aria-hidden="true">
+              <Logo />
+            </span>
             <span>Hivemind</span>
           </div>
           <button className="ghost" onClick={onSkip}>Open dashboard</button>

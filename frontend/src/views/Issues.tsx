@@ -17,7 +17,7 @@ import {
 } from "../issues";
 import { useRefreshOn } from "../live";
 import { Markdown } from "../markdown";
-import { href, navigate } from "../nav";
+import { consumeNewIssue, href, navigate, onNewIssue } from "../nav";
 import { Avatar, Badge, ErrorNote, Meter, ago, duration, time, useAction, useAsync } from "../ui";
 
 const isCoordination = (type: string) => /^(task|attempt|message|group)\./.test(type);
@@ -67,19 +67,15 @@ export function Issues({ selected }: { selected?: string }) {
   useRefreshOn((e) => isCoordination(e.type), tasks.reload, [tasks.reload]);
   const [composer, setComposer] = useState<Composer>(null);
 
-  // `c` opens the composer, as in Linear.
+  // `C`, the sidebar and the command menu all ask for the composer through nav.
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement | null;
-      if (target && (target.closest("input, textarea, select, [contenteditable=true]") || e.metaKey || e.ctrlKey || e.altKey)) return;
-      if (e.key === "c" && !composer) {
-        e.preventDefault();
-        setComposer({});
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [composer]);
+    const sub = onNewIssue(() => {
+      consumeNewIssue();
+      setComposer({});
+    });
+    if (sub.pending) setComposer({});
+    return sub.off;
+  }, []);
 
   const all = tasks.data ?? [];
   const byId = useMemo(() => new Map(all.map((t) => [t.id, t])), [all]);
