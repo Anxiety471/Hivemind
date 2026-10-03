@@ -134,7 +134,18 @@ export type TaskSummary = Pick<
 >;
 
 /** A sub-issue proposed together with a new root issue. */
-export type PlanTask = { key: string; objective: string; acceptance: string[]; capabilities?: string[]; owner?: string; depends_on?: string[] };
+export type PlanTask = {
+  key: string;
+  objective: string;
+  acceptance: string[];
+  capabilities?: string[];
+  owner?: string;
+  depends_on?: string[];
+  /** Key of another task in the same plan: this one is created as its sub-issue. */
+  parent?: string;
+  /** `false` keeps the ticket a leaf; omitted uses the owner's default. */
+  breakdown?: boolean;
+};
 
 export type ChildIssue = { objective: string; acceptance?: string[]; capabilities?: string[]; owner?: string; reviewer?: string; depends_on?: string[] };
 

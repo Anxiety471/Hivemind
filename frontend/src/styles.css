@@ -4009,3 +4009,18 @@ button.chip.wakeup-chip {
   font: inherit;
   font-size: 11.5px;
 }
+
+/* Nested sub-issue drafts in the new-issue modal */
+.sub-draft {
+  padding-left: calc(var(--depth, 0) * 22px);
+  position: relative;
+}
+.sub-draft[style*="--depth: 1"],
+.sub-draft[style*="--depth: 2"],
+.sub-draft[style*="--depth: 3"],
+.sub-draft[style*="--depth: 4"] {
+  background-image: linear-gradient(var(--border), var(--border));
+  background-repeat: no-repeat;
+  background-size: 1px 100%;
+  background-position: calc(var(--depth, 0) * 22px - 14px) 0;
+}

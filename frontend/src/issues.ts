@@ -1,6 +1,6 @@
 // Pure helpers behind the Issues view: Linear-style status groups, short
 // identifiers, and the parent → child tree that tasks form.
-import type { TaskStatus } from "./api";
+import type { PlanTask, TaskStatus } from "./api";
 
 export type StatusGroup = {
   key: string;
@@ -108,4 +108,45 @@ export function matches(
   return [task.objective, issueKey(task.id), task.id, task.owner ?? "", task.reviewer ?? "", task.coordinator ?? ""].some(
     (field) => field.toLowerCase().includes(q),
   );
+}
+
+/** One drafted sub-issue in the new-issue modal: a title and how far it is indented. */
+export type DraftRow = { title: string; depth: number };
+
+/** Deepest indent the modal offers (the root is 0, its sub-issues are depth 0 rows). */
+export const MAX_DRAFT_DEPTH = 4;
+
+/** Indent or outdent row `index`: never deeper than one below the row above it. */
+export function indentRow(rows: DraftRow[], index: number, delta: 1 | -1): DraftRow[] {
+  const above = index > 0 ? rows[index - 1].depth : -1;
+  const depth = Math.max(0, Math.min(rows[index].depth + delta, above + 1, MAX_DRAFT_DEPTH));
+  const shift = depth - rows[index].depth;
+  if (!shift) return rows;
+  // Children move with their parent.
+  const out = rows.map((r) => ({ ...r }));
+  out[index].depth = depth;
+  for (let i = index + 1; i < out.length && rows[i].depth > rows[index].depth; i++) {
+    out[i].depth = Math.max(0, Math.min(out[i].depth + shift, MAX_DRAFT_DEPTH));
+  }
+  return out;
+}
+
+/**
+ * Turn drafted rows into a plan whose `parent` keys nest each row under the
+ * nearest shallower row above it. Blank rows are dropped and their children
+ * move up rather than losing their place.
+ */
+export function draftPlan(rows: DraftRow[]): PlanTask[] {
+  const plan: PlanTask[] = [];
+  const stack: { depth: number; key: string }[] = [];
+  for (const row of rows) {
+    const title = row.title.trim();
+    if (!title) continue;
+    while (stack.length && stack[stack.length - 1].depth >= row.depth) stack.pop();
+    const key = `sub-${plan.length + 1}`;
+    const parent = stack[stack.length - 1]?.key;
+    plan.push({ key, objective: title, acceptance: [title], ...(parent ? { parent } : {}) });
+    stack.push({ depth: row.depth, key });
+  }
+  return plan;
 }
