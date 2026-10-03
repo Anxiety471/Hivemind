@@ -32,9 +32,60 @@ impl std::fmt::Display for MandatoryOverflow {
 }
 impl std::error::Error for MandatoryOverflow {}
 
+/// What this persona does with a ticket, given who they are.
+fn assignment_default(
+    service: &CoordinationService,
+    db: &Db<'_>,
+    task: &Task,
+    kind: AttemptKind,
+) -> CoordResult<String> {
+    let roster = service.roster();
+    let persona = roster.get(dispatch_persona(task, kind).as_str());
+    let coordinates = persona.is_some_and(|p| p.has_permission("coordinate"));
+    let children = if task.id == task.root_id {
+        0
+    } else {
+        db.children(&task.id)?.len()
+    };
+    let text = match kind {
+        AttemptKind::Plan if coordinates || task.id == task.root_id => {
+            " Default: route each specialty to its own sub-issue. A frontend capability becomes a frontend ticket owned by the frontend agent, and a backend capability becomes a backend ticket. Do not do that specialty work yourself. Specialists cannot spawn further sub-issues. Give research to a researcher; they spawn their own helpers and then synthesize."
+        }
+        AttemptKind::Plan => {
+            " Default: spawn one sub-issue per specialist who should gather information (for example an explorer and a web searcher), using their capabilities. Do not collect that information yourself. After they finish you synthesize their results."
+        }
+        AttemptKind::Work if children > 0 => {
+            " Your sub-issues are complete. Synthesize their results into one report artifact and submit it. Do not spawn further sub-issues."
+        }
+        AttemptKind::Work
+            if persona.is_some_and(|p| !p.may_decompose()) =>
+        {
+            " You were assigned this ticket for your specialty. Do the work yourself. You cannot spawn sub-issues."
+        }
+        _ => "",
+    };
+    Ok(text.to_owned())
+}
+
+fn dispatch_persona(task: &Task, kind: AttemptKind) -> String {
+    match kind {
+        AttemptKind::Plan => task
+            .owner
+            .clone()
+            .filter(|owner| !owner.is_empty())
+            .unwrap_or_else(|| task.coordinator.clone()),
+        AttemptKind::Review => task
+            .reviewer
+            .clone()
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| task.coordinator.clone()),
+        _ => task.owner.clone().unwrap_or_default(),
+    }
+}
+
 fn instruction(kind: AttemptKind) -> &'static str {
     match kind {
-        AttemptKind::Plan => "Decompose the objective into a task graph and submit it with tasks.plan.propose. Give every task an owner capability, acceptance criteria, and explicit dependencies; state interface contracts on the tasks others depend on. Include integration work when several tasks change one codebase.",
+        AttemptKind::Plan => "Decompose the objective into sub-issues and submit them with tasks.plan.propose. Give every task an owner capability, acceptance criteria, and explicit dependencies. Nest with parent when you already know the tree. Set breakdown false on a specialist ticket so that person does the work and cannot spawn further sub-issues.",
         AttemptKind::Work => "Do the work described below in your working directory, then call tasks.result.submit with what changed, artifacts, and honest verification evidence (passed, failed, or unavailable). If you cannot proceed, call tasks.block.",
         AttemptKind::Review => "Review the submitted result against the acceptance criteria. Inspect the actual artifacts (artifacts.get) rather than trusting the summary. Call tasks.review with approve or reject; a rejection must say exactly what to change.",
         AttemptKind::Inbox => "Handle the messages addressed to you below. Reply with messages.send when a reply is needed and mark each handled message with messages.ack. Do not send acknowledgments for status or ack messages.",
@@ -186,6 +237,26 @@ fn build_capsule(
             ));
         }
     }
+    if task.id != root.id && matches!(kind, AttemptKind::Work | AttemptKind::Plan) {
+        for child in db.children(&task.id)? {
+            optional.push(format!(
+                "Sub-issue {} [{}] owner={} — {}",
+                child.id,
+                child.status.as_str(),
+                child.owner.as_deref().unwrap_or("-"),
+                excerpt(&child.objective, 160)
+            ));
+            for artifact in db.artifacts(&child.id)? {
+                if artifact.kind == "summary" {
+                    optional.push(format!(
+                        "  Result ({}): {}",
+                        artifact.id,
+                        excerpt(&artifact.description, 500)
+                    ));
+                }
+            }
+        }
+    }
     let feedback: Vec<&String> = task.feedback.iter().rev().take(MAX_FEEDBACK).collect();
     for note in feedback.into_iter().rev() {
         optional.push(format!("Feedback: {}", excerpt(note, 800)));
@@ -232,7 +303,13 @@ pub fn build_prompt(
     let task = &dispatch.task;
     let kind = dispatch.attempt.kind;
     service.store().read(|db| {
-        let header = format!("[Hivemind task dispatch — generated by Hivemind for task {}; this is not a message typed by the user]\nYour role: {}. {}\n", task.id, kind.as_str(), instruction(kind));
+        let header = format!(
+            "[Hivemind task dispatch — generated by Hivemind for task {}; this is not a message typed by the user]\nYour role: {}. {}{}\n",
+            task.id,
+            kind.as_str(),
+            instruction(kind),
+            assignment_default(service, db, task, kind)?
+        );
         let mut goal = format!("Objective:\n{}\n", task.objective);
         if !task.acceptance.is_empty() {
             goal.push_str("Acceptance criteria:\n");

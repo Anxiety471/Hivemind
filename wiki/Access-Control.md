@@ -20,8 +20,9 @@ permissions = ["integrate"]        # optional direct grants
 
 | Permission | Gates |
 | --- | --- |
-| `coordinate` | Plan root tasks; implies `delegate`, `group.manage`, `task.reassign` |
+| `coordinate` | Plan root tasks; implies `decompose`, `delegate`, `group.manage`, `task.reassign` |
 | `delegate` | `tasks.delegate` creating subtasks; implies `group.manage`, `task.reassign` |
+| `decompose` | Own a ticket that splits into sub-issues, then synthesize their results. Does not grant file edits. `coordinate` implies it |
 | `review` | Be selected as reviewer; implies `task.decide` |
 | `integrate` | Own integration tasks |
 | `task.decide` | `tasks.decide` |
@@ -42,7 +43,7 @@ permissions = ["integrate"]        # optional direct grants
 | Role | Permissions |
 | --- | --- |
 | `observer` | none (read-only) |
-| `researcher` | `memory.private.write`, `memory.group.write` (read-only workspace: cannot edit, write, or run shell) |
+| `researcher` | `decompose`, `memory.private.write`, `memory.group.write` (read-only workspace: plans helper sub-issues, then synthesizes; cannot edit, write, or run shell) |
 | `implementor` | `workspace.write`, `workspace.exec`, `memory.private.write`, `memory.group.write` |
 | `worker` | same as `implementor` |
 | `reviewer` | `review`, `memory.private.write` (read-only) |
@@ -65,7 +66,7 @@ A persona that declares roles and lacks `workspace.write` or `workspace.exec` st
 | `omp` | `--tools` allowlist (`read,grep,glob,lsp,web_search,todo` plus `edit,write,notebook` and/or `bash,python`); sub-agents, browser, and desktop tools are off |
 | `opencode` | `permission` config: `edit` and/or `bash` set to `deny` |
 
-A persona with both permissions, or with no roles, is unrestricted. Coordination also refuses to make a persona without `workspace.write` the owner of a work task (plan, explicit owner, or reassignment); a persona without roles still may own work. The restriction covers the runtime's own tools only; a custom role needs `workspace.write`/`workspace.exec` added explicitly.
+A persona with both permissions, or with no roles, is unrestricted. Coordination refuses to make a persona without `workspace.write` the owner of a specialist ticket (plan, explicit owner, or reassignment). A persona holding `decompose` or `coordinate` may own a ticket they will split; if they do not coordinate, they synthesize after the sub-issues finish. A persona without roles still may own work. The restriction covers the runtime's own tools only; a custom role needs `workspace.write`/`workspace.exec` added explicitly.
 
 ## Compatibility
 
