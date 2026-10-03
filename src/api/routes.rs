@@ -36,6 +36,7 @@ pub(super) fn router(core: Arc<HivemindCore>, shutdown: watch::Receiver<bool>) -
         .merge(super::tasks::routes())
         .merge(super::rooms::routes())
         .merge(super::room_settings::routes())
+        .merge(super::schedules::routes())
         .merge(super::chat_groups::routes())
         .merge(super::workspaces::routes())
         .merge(super::catalog::routes())
@@ -160,7 +161,7 @@ async fn submit_turn(
             )
             .into_response();
         }
-        return match state.core.execution().submit(&resolved.room_id, &target_json, &request.message, request.idempotency_key.as_deref()) {
+        return match state.core.execution().submit(&resolved.room_id, &target_json, &request.message, request.idempotency_key.as_deref(), crate::execution::ORIGIN_USER) {
             Ok(job) => (StatusCode::ACCEPTED, Json(serde_json::json!({"turn_id":job.turn_id,"room_id":job.room_id,"status":job.status,"status_url":format!("/api/v1/turns/{}",job.turn_id),"accepted":true}))).into_response(),
             Err(error) if error.to_string().contains("idempotency") => ApiError::new(StatusCode::CONFLICT,"idempotency_conflict","idempotency key does not match request").into_response(),
             Err(_) => ApiError::new(StatusCode::BAD_REQUEST,"submission_failed","turn could not be stored").into_response(),

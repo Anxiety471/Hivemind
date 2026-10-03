@@ -48,6 +48,7 @@ const COMMON: &[&str] = &[
     "messages.send",
     "messages.inbox",
     "messages.ack",
+    "wakeup.schedule",
     "tasks.get",
     "tasks.list",
     "tasks.progress",
@@ -117,6 +118,10 @@ const EXAMPLES: &[(&str, &str)] = &[
     ),
     ("messages.inbox", r#"{"limit":5}"#),
     ("messages.ack", r#"{"id":"mg_..."}"#),
+    (
+        "wakeup.schedule",
+        r#"{"delay_seconds":600,"intent":"re-check whether the API contract was answered","reminder":"only if Beta has not replied","note":"contract thread is mg_..."}"#,
+    ),
     (
         "groups.create",
         r#"{"purpose":"orders form contract","roles":["frontend","backend"]}"#,
@@ -219,7 +224,9 @@ impl ToolHost for CoordinationTools {
     }
 
     fn handles(&self, name: &str) -> bool {
-        EXAMPLES.iter().any(|(known, _)| *known == name)
+        // `wakeup.schedule` is handled by `ChatWakeupTools`, which owns the
+        // name in every room so chat wakeups can share the tool surface.
+        name != "wakeup.schedule" && EXAMPLES.iter().any(|(known, _)| *known == name)
     }
 
     fn execute(&self, room: &str, persona: &str, name: &str, args: &Value) -> Result<String> {
@@ -515,6 +522,30 @@ fn run(
                     })
                     .collect::<Vec<_>>()
                     .join("\n"),
+            ))
+        }
+        "wakeup.schedule" => {
+            let delay = opt_int(args, "delay_seconds")?
+                .ok_or_else(|| CoordError::Invalid("missing argument 'delay_seconds'".into()))?;
+            let intent = opt_str(args, "intent")?;
+            let reminder = opt_str(args, "reminder")?;
+            let note = opt_str(args, "note")?;
+            let (message, duplicate) = service.schedule_wakeup(
+                ctx,
+                delay,
+                intent.as_deref(),
+                reminder.as_deref(),
+                note.as_deref(),
+                opt_str(args, "key")?.as_deref(),
+            )?;
+            Ok(format!(
+                "{} wakeup {}: Hivemind will wake you once, in {delay}s, with this intent/reminder/note",
+                if duplicate {
+                    "already scheduled"
+                } else {
+                    "scheduled"
+                },
+                message.id
             ))
         }
         "messages.ack" => {
