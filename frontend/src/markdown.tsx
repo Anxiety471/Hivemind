@@ -292,6 +292,16 @@ function diagramKind(lang: string, code: string): "mermaid" | "plantuml" | "draw
   return null;
 }
 
+/** Only http(s)/mailto links are rendered, and always as the parsed, canonical URL. */
+function safeLinkHref(href: string): string | undefined {
+  try {
+    const url = new URL(href);
+    return url.protocol === "http:" || url.protocol === "https:" || url.protocol === "mailto:" ? url.href : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function renderInline(nodes: Inline[]): ReactNode[] {
   return nodes.map((n, i) => {
     switch (n.t) {
@@ -307,7 +317,7 @@ function renderInline(nodes: Inline[]): ReactNode[] {
         return <del key={i}>{renderInline(n.v)}</del>;
       case "link":
         return (
-          <a key={i} href={n.href.startsWith("https://") || n.href.startsWith("http://") || n.href.startsWith("mailto:") ? n.href : undefined} target="_blank" rel="noopener noreferrer">
+          <a key={i} href={safeLinkHref(n.href)} target="_blank" rel="noopener noreferrer">
             {renderInline(n.v)}
           </a>
         );
