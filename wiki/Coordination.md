@@ -138,6 +138,7 @@ Errors use one shape: `{"error":{"code","message"}}`; internal failures are sani
 - Coordination context estimates remain bytes/4. Measured Pi/OMP billing usage and persistent admission budgets are available through `/api/v1/usage`; unsupported reporting remains null. Budgets count dispatches, tool actions, messages, and time.
 - Live WebSocket events are published by the process that made the change; changes made by a one-shot CLI process reach WebSocket clients of a running `serve` on its next scheduler pass (≤0.5 s), and always via `/events`.
 - Runtime epoch and rotation reason are not recorded per attempt (`rotations_observed` is `null`).
+- Wakeups are time-based or host-dispatched only. `TASK_WAKE` runs a task's own owner attempt when its dependencies complete, and an agent can schedule a time/repeat wakeup; there is no wake whose trigger is a task or issue reaching a state ("wake me when task X is ready"), and `EVENT_WAKE` has no event source, so nothing observes CI or an issue tracker.
 - Non-goals unchanged: no autonomous merge or deploy, no multi-user API, no unrestricted agent creation.
 
 Host-run verification and interrupted-work recovery are configured through [Execution](Execution).
