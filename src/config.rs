@@ -27,6 +27,10 @@ pub struct HivemindConfig {
     pub memory: MemoryConfig,
     #[serde(default)]
     pub coordination: CoordinationConfig,
+    /// Backlog discussions. Off until `enabled = true`. Agents file issues;
+    /// nothing in the backlog is implemented on its own.
+    #[serde(default)]
+    pub issues: IssuesConfig,
     /// Custom roles: named bundles of permissions (see `access::PERMISSIONS`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub roles: BTreeMap<String, RoleConfig>,
@@ -206,6 +210,135 @@ fn default_question_timeout_secs() -> u64 {
 }
 fn default_max_questions() -> u32 {
     3
+}
+
+/// When an enabled issue council starts a discussion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum IssuesMode {
+    /// After the hive has been quiet for `idle_secs`, and at least `interval_secs`
+    /// have passed since the previous council.
+    #[default]
+    Automatic,
+    /// Every `interval_secs` while `serve` is running, whether or not anyone is chatting.
+    Scheduled,
+}
+
+impl IssuesMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Automatic => "automatic",
+            Self::Scheduled => "scheduled",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "automatic" => Some(Self::Automatic),
+            "scheduled" => Some(Self::Scheduled),
+            _ => None,
+        }
+    }
+}
+
+/// Agents discuss the next features, improvements, and bug fixes, then file
+/// them as issues. Issues wait for a later implementation; this council never
+/// starts the work. Off by default.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IssuesConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub mode: IssuesMode,
+    /// Personas in the discussion, in this order. Empty means every persona,
+    /// unless `group` is set.
+    #[serde(default)]
+    pub members: Vec<String>,
+    /// Configured group whose members hold the discussion. Overrides `members`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
+    /// Seconds between councils. Also the minimum gap in automatic mode.
+    #[serde(default = "default_issues_interval_secs")]
+    pub interval_secs: u64,
+    /// Automatic mode: how long chat and tasks must stay quiet before a council.
+    #[serde(default = "default_issues_idle_secs")]
+    pub idle_secs: u64,
+    #[serde(default = "default_max_issues_per_round")]
+    pub max_issues_per_round: u32,
+    /// Directory the council is asked to consider. Members keep their own workspaces.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
+    /// Goal the members discuss. Empty uses the built-in prompt. Filing rules
+    /// and the open backlog are still appended.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+}
+
+impl Default for IssuesConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            mode: IssuesMode::Automatic,
+            members: Vec::new(),
+            group: None,
+            interval_secs: default_issues_interval_secs(),
+            idle_secs: default_issues_idle_secs(),
+            max_issues_per_round: default_max_issues_per_round(),
+            workspace: None,
+            prompt: None,
+        }
+    }
+}
+
+fn default_issues_interval_secs() -> u64 {
+    86_400
+}
+fn default_issues_idle_secs() -> u64 {
+    1_800
+}
+fn default_max_issues_per_round() -> u32 {
+    5
+}
+
+impl IssuesConfig {
+    pub fn validate(&self, agents: &[AgentConfig], groups: &[GroupConfig]) -> Result<()> {
+        if !(60..=2_592_000).contains(&self.interval_secs) {
+            bail!("issues.interval_secs must be between 60 and 2592000");
+        }
+        if !(60..=86_400).contains(&self.idle_secs) {
+            bail!("issues.idle_secs must be between 60 and 86400");
+        }
+        if !(1..=20).contains(&self.max_issues_per_round) {
+            bail!("issues.max_issues_per_round must be from 1 to 20");
+        }
+        let personas: HashSet<&str> = agents.iter().map(|agent| agent.name.as_str()).collect();
+        for member in &self.members {
+            if !personas.contains(member.as_str()) {
+                bail!("issues.members references unknown persona id '{member}'");
+            }
+        }
+        if let Some(name) = &self.group {
+            match groups.iter().find(|group| group.name == *name) {
+                None => bail!("issues.group references unknown group '{name}'"),
+                Some(group) if group.members.is_empty() => {
+                    bail!("issues.group '{name}' has no members")
+                }
+                Some(_) => {}
+            }
+        }
+        if let Some(workspace) = &self.workspace {
+            if workspace.trim().is_empty() || workspace.len() > 4096 {
+                bail!("issues.workspace must be a non-empty path");
+            }
+        }
+        if let Some(prompt) = &self.prompt {
+            let chars = prompt.chars().count();
+            if prompt.trim().is_empty() || chars > 8_000 {
+                bail!("issues.prompt must be 1-8000 characters; omit it to use the default");
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Deterministic, model-independent memory behavior.
@@ -503,6 +636,7 @@ impl HivemindConfig {
         }
         crate::access::validate(self)?;
         self.coordination.validate(&self.agents)?;
+        self.issues.validate(&self.agents, &self.groups)?;
         let mut group_names = HashSet::with_capacity(self.groups.len());
         for group in &self.groups {
             if group.name.trim().is_empty() || group.name == "main" {
@@ -627,6 +761,7 @@ impl HivemindConfig {
             context: ContextConfig::default(),
             memory: MemoryConfig::default(),
             coordination: CoordinationConfig::default(),
+            issues: IssuesConfig::default(),
             roles: BTreeMap::new(),
             workspaces: WorkspacesConfig::default(),
             skills: SkillsConfig::default(),

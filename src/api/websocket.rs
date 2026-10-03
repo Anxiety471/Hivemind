@@ -206,6 +206,23 @@ fn map_event(event: &DomainEvent) -> Option<Outbound> {
             json!({"durable_seq": seq, "root_id": root_id, "task_id": task_id, "actor": actor, "data": payload}),
         ),
         DomainEventKind::ConfigChanged { scope } => ("config.changed", json!({"scope": scope})),
+        DomainEventKind::Issue {
+            event_type,
+            issue_id,
+            round_id,
+        } => {
+            let mut public_payload = json!({"issue_id": issue_id, "round_id": round_id});
+            let occurred_at_ms = event
+                .occurred_at
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis();
+            public_payload["event_id"] = json!(event.event_id);
+            public_payload["sequence"] = json!(event.sequence);
+            public_payload["occurred_at_ms"] = json!(occurred_at_ms);
+            public_payload["event_version"] = json!(1);
+            return Some(Outbound::event(event_type.clone(), None, public_payload));
+        }
         DomainEventKind::CoreStarted | DomainEventKind::CoreShuttingDown => return None,
     };
     let occurred_at_ms = event

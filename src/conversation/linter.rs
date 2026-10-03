@@ -49,6 +49,8 @@ pub const KNOWN_TOOLS: &[&str] = &[
     "context.lookup",
     "skills.list",
     "skills.read",
+    "issues.list",
+    "issues.propose",
 ];
 
 /// Known tool name prefixes / namespaces.
@@ -62,6 +64,7 @@ pub const TOOL_NAMESPACES: &[&str] = &[
     "artifacts.",
     "skills.",
     "context.",
+    "issues.",
 ];
 
 /// Whether a string matches a recognized Hivemind tool namespace.
@@ -117,6 +120,10 @@ pub fn suggest_tool(name: &str) -> Option<&'static str> {
         "workspace.update" | "workspace.change" => return Some("workspace.set"),
         "workspace.roots" | "workspace.list_roots" => return Some("workspace.list"),
         "workspace.reset" => return Some("workspace.clear"),
+        "issues.create" | "issues.add" | "issues.file" | "issues.new" => {
+            return Some("issues.propose")
+        }
+        "issues.search" | "issues.get" => return Some("issues.list"),
         "tasks.plan" => return Some("tasks.plan.propose"),
         "tasks.submit" => return Some("tasks.result.submit"),
         _ => {}
@@ -273,6 +280,32 @@ pub fn lint_tool_args(name: &str, args: &Value) -> Result<()> {
                     rule: "schema/missing-argument",
                     message: "Tool 'workspace.set' requires a non-empty string argument 'path'".into(),
                     fix: Some("Example:\n```hivemind-tool\n{\"name\":\"workspace.set\",\"args\":{\"path\":\"/absolute/path/to/project\"}}\n```".into()),
+                });
+            }
+        }
+        "issues.propose" => {
+            let kind = args.get("kind").and_then(Value::as_str).map(str::trim);
+            if !matches!(kind, Some("feature" | "improvement" | "bug")) {
+                bail!(ToolLintDiagnostic {
+                    rule: "schema/invalid-argument",
+                    message: "Tool 'issues.propose' requires kind \"feature\", \"improvement\", or \"bug\"".into(),
+                    fix: Some("Example:\n```hivemind-tool\n{\"name\":\"issues.propose\",\"args\":{\"kind\":\"bug\",\"title\":\"Retry webhook delivery\",\"body\":\"Failed deliveries should retry with backoff.\"}}\n```".into()),
+                });
+            }
+            let title = args.get("title").and_then(Value::as_str).map(str::trim);
+            if title.is_none() || title.unwrap().is_empty() {
+                bail!(ToolLintDiagnostic {
+                    rule: "schema/missing-argument",
+                    message: "Tool 'issues.propose' requires a non-empty string argument 'title'".into(),
+                    fix: None,
+                });
+            }
+            let body = args.get("body").and_then(Value::as_str).map(str::trim);
+            if body.is_none() || body.unwrap().is_empty() {
+                bail!(ToolLintDiagnostic {
+                    rule: "schema/missing-argument",
+                    message: "Tool 'issues.propose' requires a non-empty string argument 'body'".into(),
+                    fix: None,
                 });
             }
         }

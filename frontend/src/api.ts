@@ -93,6 +93,61 @@ export type Target =
   | { type: "group"; id: string }
   | { type: "thread"; id: string };
 
+export type BacklogIssue = {
+  id: string;
+  kind: "feature" | "improvement" | "bug";
+  title: string;
+  body: string;
+  status: "open" | "dismissed";
+  priority: "low" | "medium" | "high";
+  proposed_by: string;
+  round_id: string;
+  dismiss_reason?: string;
+  created_at: number;
+  updated_at: number;
+};
+
+export type IssueRound = {
+  id: string;
+  trigger: "automatic" | "scheduled" | "manual";
+  status: "running" | "completed" | "failed";
+  members: string[];
+  started_at: number;
+  finished_at: number | null;
+  error?: string;
+  issue_count: number;
+};
+
+export type IssueSettings = {
+  enabled: boolean;
+  mode: "automatic" | "scheduled";
+  interval_secs: number;
+  idle_secs: number;
+  max_issues_per_round: number;
+  members: string[];
+  group: string | null;
+  workspace: string | null;
+  prompt: string | null;
+  default_prompt: string;
+  personas: string[];
+  groups: string[];
+  running: boolean;
+  anchor: number | null;
+  next_eligible_at: number | null;
+};
+
+export type IssueSettingsPatch = {
+  enabled: boolean;
+  mode: "automatic" | "scheduled";
+  interval_secs: number;
+  idle_secs: number;
+  max_issues_per_round: number;
+  members: string[];
+  group: string | null;
+  workspace: string | null;
+  prompt: string | null;
+};
+
 export type TaskStatus =
   | "submitted"
   | "planning"
@@ -433,6 +488,19 @@ export const api = {
       wait: false,
     }),
   cancelTurn: (id: string) => request("POST", `/turns/${enc(id)}/cancel`),
+
+  issues: (status = "open", kind = "") =>
+    request<{ issues: BacklogIssue[] }>(
+      "GET",
+      `/issues?status=${encodeURIComponent(status)}${kind ? `&kind=${encodeURIComponent(kind)}` : ""}`,
+    ),
+  issue: (id: string) => request<{ issue: BacklogIssue }>("GET", `/issues/${enc(id)}`),
+  dismissIssue: (id: string, reason?: string) =>
+    request<{ issue: BacklogIssue }>("POST", `/issues/${enc(id)}/dismiss`, { reason: reason ?? null }),
+  issueSettings: () => request<IssueSettings>("GET", "/issues/settings"),
+  updateIssueSettings: (body: IssueSettingsPatch) => request<IssueSettings>("PATCH", "/issues/settings", body),
+  issueRounds: () => request<{ rounds: IssueRound[] }>("GET", "/issues/rounds"),
+  startIssueRound: () => request<{ round: IssueRound }>("POST", "/issues/rounds", {}),
 
   tasks: (all = false) =>
     request<{ tasks: Task[]; next_after: string | null }>("GET", `/tasks?limit=200${all ? "&all=true" : ""}`),

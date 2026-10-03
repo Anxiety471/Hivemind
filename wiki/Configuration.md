@@ -129,6 +129,10 @@ Runtimes start with their own skill discovery switched off, so agents only know 
 
 `[coordination] enabled = true` turns on autonomous tasks; it also enables agent self-wakeups, so `wakeup.schedule` is offered in every room (main, direct messages, and groups), not only task rooms. All keys and budgets are on the [Coordination](Coordination) page.
 
+## Issues
+
+`[issues] enabled = true` lets the configured personas discuss what to build or fix next and file those proposals. Nothing they file is implemented. `mode` is `automatic` (after the hive has been quiet) or `scheduled` (on `interval_secs`). `prompt` replaces the discussion goal; omit it for the built-in one. `members` or `group` chooses who attends. Details are on the [Issues](Issues) page.
+
 ## Room state directives
 
 Room state changes only from explicit, line-based directives in **user** input. Agent prose is never treated as a state update.

@@ -33,7 +33,8 @@ Hivemind owns the conversation, the memory, and the CLI.<br>
 - 🔢 **Deterministic reply order**, set globally or per group.
 - 🗂️ **Seven-layer memory with no LLM needed.** It uses FTS5 search, scope binding, provenance, and supersession.
 - 🔌 **Embeddable core** with a typed event bus, plus a loopback HTTP/WebSocket API.
-- 🖥️ **Web UI** for rooms, threads, tasks, groups, workspaces, and runtime sessions.
+- 📝 **Issue council** (opt-in). Agents discuss the next feature, improvement, or bug fix and file it. You set the prompt, how often they meet, and who attends. The backlog is not implemented.
+- 🖥️ **Web UI** for rooms, threads, tasks, issues, groups, workspaces, and runtime sessions.
 
 ---
 
@@ -129,6 +130,8 @@ The shell CLI is the main way to inspect Hivemind, run one-shot prompts, and man
 | `hivemind task list` / `show` / `cancel` / `pause` / `resume <id>` | Inspect and control tasks |
 | `hivemind task watch <id>` | Follow a task's durable events; Ctrl-C stops watching, never the task |
 | `hivemind task run [--until-idle]` | Process stored tasks in the foreground |
+| `hivemind issue list` / `show` / `dismiss <id>` | Inspect the backlog (not implemented from here) |
+| `hivemind issue run` | Run one issue council now. `serve` also runs it from `[issues]` |
 
 `ask` and `all` go through the same turn coordinator and durable turn store as interactive chat. `all` always writes to the `main` room, whatever the active interactive route is.
 

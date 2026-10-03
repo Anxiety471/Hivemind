@@ -6,6 +6,7 @@ import { Chat } from "./views/Chat";
 import { FirstRunSetup } from "./views/FirstRunSetup";
 const Library = lazy(() => import("./views/Library").then((m) => ({ default: m.Library })));
 const Tasks = lazy(() => import("./views/Tasks").then((m) => ({ default: m.Tasks })));
+const Issues = lazy(() => import("./views/Issues").then((m) => ({ default: m.Issues })));
 const Agents = lazy(() => import("./views/Agents").then((m) => ({ default: m.Agents })));
 const Groups = lazy(() => import("./views/Groups").then((m) => ({ default: m.Groups })));
 const WorkspacesView = lazy(() => import("./views/Workspaces").then((m) => ({ default: m.WorkspacesView })));
@@ -26,6 +27,7 @@ const NAV = [
   { page: "rooms", label: "Rooms", icon: "💬" },
   { page: "library", label: "Library", icon: "📚" },
   { page: "tasks", label: "Tasks", icon: "🗂️" },
+  { page: "issues", label: "Issues", icon: "📝" },
   { page: "agents", label: "Agents", icon: "🤖" },
   { page: "groups", label: "Groups", icon: "👥" },
   { page: "workspaces", label: "Workspaces", icon: "📁" },
@@ -82,6 +84,9 @@ function App() {
       break;
     case "tasks":
       view = <Tasks selected={route.arg} />;
+      break;
+    case "issues":
+      view = <Issues selected={route.arg} />;
       break;
     case "agents":
       view = <Agents />;

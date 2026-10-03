@@ -22,6 +22,7 @@ use crate::{
     coordination::{
         policy::Roster, store::CoordinationStore, CoordinationService, CoordinationTools,
     },
+    issues::{IssueStore, IssueTools, IssuesService},
     events::{DomainEventKind, EventBus},
     memory::MemoryService,
     runtime::RuntimePool,
@@ -41,6 +42,7 @@ pub struct HivemindCore {
     config_path: PathBuf,
     data_dir: PathBuf,
     coordination: Arc<CoordinationService>,
+    issues: Arc<IssuesService>,
     access: Arc<crate::access::AccessPolicy>,
     workspaces: Arc<SharedWorkspaces>,
     skills: Arc<crate::skills::SkillCatalog>,
@@ -296,6 +298,13 @@ impl HivemindCore {
                 audit.clone(),
             )));
         }
+        let issues = Arc::new(IssuesService::new(
+            IssueStore::open(data_dir.join("issues.sqlite3"))
+                .map_err(|error| anyhow::anyhow!("opening issue backlog: {error}"))?,
+            config.issues.clone(),
+            events.clone(),
+        ));
+        hosts.push(Arc::new(IssueTools::new(issues.clone())));
         conversation.set_tools(Arc::new(ToolHosts(hosts)));
         events.publish(DomainEventKind::CoreStarted);
         Ok(Self {
@@ -310,6 +319,7 @@ impl HivemindCore {
             config_path,
             data_dir,
             coordination,
+            issues,
             access,
             workspaces,
             skills,
@@ -715,6 +725,34 @@ impl HivemindCore {
     }
     pub fn coordination(&self) -> &Arc<CoordinationService> {
         &self.coordination
+    }
+    pub fn issues(&self) -> &Arc<IssuesService> {
+        &self.issues
+    }
+
+    /// Validate `next`, write `[issues]` into the config file, and apply it
+    /// without a restart. The scheduler reads this on its next pass.
+    pub fn update_issue_settings(
+        &self,
+        next: crate::config::IssuesConfig,
+    ) -> Result<crate::config::IssuesConfig> {
+        let _guard = self
+            .group_edit_lock
+            .lock()
+            .expect("config edit lock poisoned");
+        let mut staged = self.config();
+        staged.issues = next;
+        staged.validate()?;
+        crate::shared_workspace::edit_config(&self.config_path, |document| {
+            crate::issues::write_config_section(document, &staged.issues)
+        })?;
+        let saved = staged.issues.clone();
+        self.issues.set_config(saved.clone());
+        *self.config.write().expect("core config lock poisoned") = Arc::new(staged);
+        self.events.publish(DomainEventKind::ConfigChanged {
+            scope: "issues".into(),
+        });
+        Ok(saved)
     }
     pub fn access(&self) -> &Arc<crate::access::AccessPolicy> {
         &self.access

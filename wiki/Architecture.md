@@ -36,7 +36,7 @@ flowchart TD
 
 `.hivemind/memory.sqlite3` sits next to the config file and holds rooms, turns, messages, scoped memory with FTS5, runtime epochs, and group state. It runs in WAL mode with `synchronous=NORMAL`: an application crash loses nothing, while power loss or an OS crash can drop the last few committed turns (the database is never corrupted). A turn writes only its own new messages, and searches are scoped to one room or memory scope inside FTS5. `.hivemind/context/` holds only room turn-lock files and any legacy JSON history not yet migrated.
 
-Access decisions are audited separately in `.hivemind/access.sqlite3` (see [Access Control](Access-Control)). Details of the storage engine are on [Backend Efficiency](Backend-Efficiency).
+Access decisions are audited separately in `.hivemind/access.sqlite3` (see [Access Control](Access-Control)). The issue backlog, when the council has run, is `.hivemind/issues.sqlite3` (see [Issues](Issues)). Details of the storage engine are on [Backend Efficiency](Backend-Efficiency).
 
 ## Identity encoding and legacy migration
 

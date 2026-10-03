@@ -22,6 +22,9 @@ Building the server and serving health, info, and agent listings never starts Pi
 | `GET` | `/api/v1/rooms/{id}/messages?limit=&before=` | Paged room history, oldest first within a page; page back with `next_before` |
 | `POST` | `/api/v1/rooms/{id}/steer` | Steer text into actively replying agents in a room mid-flight (`{"message"}`); returns `{"room_id","delivered_to"}` |
 | `POST` / `GET` | `/api/v1/tasks`, `/api/v1/tasks/{id}` | Submit (202) and inspect autonomous tasks |
+| `GET` / `POST` | `/api/v1/issues`, `/api/v1/issues/{id}`, `/api/v1/issues/{id}/dismiss` | Backlog filed by the issue council. `status` is `open` (default), `dismissed`, or `all`. Dismiss does not implement the issue |
+| `GET` / `PATCH` | `/api/v1/issues/settings` | Council settings: `enabled`, `mode` (`automatic` or `scheduled`), `interval_secs`, `idle_secs`, `prompt` (null uses the default), members or group. Saved to the config file and applied live |
+| `GET` / `POST` | `/api/v1/issues/rounds` | Past councils, or start one now (`202`). The discussion files issues; it does not implement them |
 | `GET` / `POST` | `/api/v1/tasks/{id}/attempts`, `/cancel`, `/pause`, `/resume`, `/input`, `/steer`, `/context-metrics` | Attempts, controls (`/input` also answers a running `tasks.ask`; `/steer` messages a running attempt), and bounded context diagnostics |
 | `GET` | `/api/v1/agents/{id}`, `/api/v1/agent-instances` | Capabilities and derived activity (never starts a runtime) |
 | `GET` / `POST` | `/api/v1/messages`, `/api/v1/groups`, `/api/v1/groups/{id}` | Agent/operator messages and dynamic task groups |

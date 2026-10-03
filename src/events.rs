@@ -125,6 +125,12 @@ pub enum DomainEventKind {
         actor: String,
         payload: serde_json::Value,
     },
+    /// Issue council: a proposal was filed or dismissed, or a discussion round changed state.
+    Issue {
+        event_type: String,
+        issue_id: Option<String>,
+        round_id: Option<String>,
+    },
 }
 
 #[derive(Clone)]
@@ -153,6 +159,12 @@ impl EventBus {
     /// Each subscriber receives an independent bounded stream. Slow consumers must handle `RecvError::Lagged`.
     pub fn subscribe(&self) -> broadcast::Receiver<Arc<DomainEvent>> {
         self.sender.subscribe()
+    }
+
+    /// Whether any room currently has a reply in flight.
+    pub fn any_active_replies(&self) -> bool {
+        let active = self.active.lock().unwrap_or_else(|p| p.into_inner());
+        active.values().any(|agents| !agents.is_empty())
     }
 
     /// Personas whose reply is running in `room`, in start order. Rebuilt from the

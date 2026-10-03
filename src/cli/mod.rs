@@ -2,6 +2,7 @@ mod access;
 mod app;
 mod args;
 mod groups;
+mod issues;
 mod render;
 mod shell;
 mod tasks;
