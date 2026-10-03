@@ -556,7 +556,28 @@ async fn execute(
     }
     if let Some(tree) = worktree {
         let is_work = attempt.kind == AttemptKind::Work;
+        let bars_frontend = service
+            .roster()
+            .get(&attempt.persona)
+            .is_some_and(|persona| persona.bars_frontend);
         let finished = blocking(move || {
+            // A backend agent's frontend files are refused before anything is committed.
+            if is_work && bars_frontend {
+                if let Ok(files) = tree.changed_files() {
+                    let found = files
+                        .iter()
+                        .flat_map(|(path, content, project)| {
+                            crate::work_scope::violations(
+                                &[(path.clone(), content.clone())],
+                                *project,
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    if !found.is_empty() {
+                        return Some(Ok(Finished::OutOfScope(crate::work_scope::message(&found))));
+                    }
+                }
+            }
             let result = if is_work { Some(tree.finish()) } else { None };
             if !is_work
                 || matches!(
@@ -584,6 +605,9 @@ async fn execute(
                     );
                 }
                 Ok(Finished::Unchanged) => {}
+                Ok(Finished::OutOfScope(message)) => {
+                    end = failed("scope_violation", message);
+                }
                 Ok(Finished::Unresolved(files)) => {
                     end = failed(
                         "unresolved_conflict",

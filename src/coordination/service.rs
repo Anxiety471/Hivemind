@@ -908,7 +908,7 @@ impl CoordinationService {
             match (attempt.kind, &end) {
                 (_, AttemptEnd::Cancelled) => {}
                 (AttemptKind::Work, AttemptEnd::Completed) if task.status == TaskStatus::Running => block("attempt ended without submitting a result or reporting a blocker")?,
-                (AttemptKind::Work, AttemptEnd::Failed { class, .. }) if task.status == TaskStatus::Running || (task.status == TaskStatus::Review && matches!(class.as_str(), "unresolved_conflict" | "workspace")) => {
+                (AttemptKind::Work, AttemptEnd::Failed { class, .. }) if task.status == TaskStatus::Running || (task.status == TaskStatus::Review && matches!(class.as_str(), "unresolved_conflict" | "workspace" | "scope_violation")) => {
                     // A submitted result whose deliverable could not be committed must not reach review.
                     db.set_status(&task.id, TaskStatus::Failed, Some(&format!("attempt failed: {class}")), "hivemind", None)?;
                 }
@@ -1266,6 +1266,21 @@ impl CoordinationService {
                 check_text("artifact reference", &artifact.reference, 512)?,
                 clip(artifact.description.trim(), 500).to_owned(),
             ));
+        }
+        if self
+            .roster()
+            .get(&ctx.persona)
+            .is_some_and(|persona| persona.bars_frontend)
+        {
+            let files: Vec<(String, Option<String>)> = artifacts
+                .iter()
+                .filter(|(kind, _, _)| kind == "file")
+                .map(|(_, reference, _)| (reference.clone(), None))
+                .collect();
+            let found = crate::work_scope::violations(&files, crate::work_scope::Project::Unknown);
+            if !found.is_empty() {
+                return forbid(crate::work_scope::message(&found));
+            }
         }
         self.store.write(|db| {
             db.add_artifact(

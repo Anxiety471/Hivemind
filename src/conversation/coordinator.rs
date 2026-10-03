@@ -84,8 +84,9 @@ pub(super) fn scope_section(
     authorized: &[String],
     unauthorized: &[String],
     assignment: Option<&String>,
+    bars_frontend: bool,
 ) -> String {
-    if authorized.is_empty() && unauthorized.is_empty() {
+    if authorized.is_empty() && unauthorized.is_empty() && !bars_frontend {
         return String::new();
     }
     let list = |items: &[String]| items.iter().map(|i| format!("- {i}\n")).collect::<String>();
@@ -97,9 +98,12 @@ pub(super) fn scope_section(
             out.push_str(&format!("- explicitly assigned to you: {task}\n"));
         }
     }
-    if !unauthorized.is_empty() {
+    if !unauthorized.is_empty() || bars_frontend {
         out.push_str("Not authorized (never do this work):\n");
         out.push_str(&list(unauthorized));
+        if bars_frontend {
+            out.push_str("- frontend work: UI components, styles, markup, static assets (you do backend logic and scripts, including Node.js servers and tooling)\n");
+        }
     }
     out.push_str(&format!("Do only authorized work. If asked for anything else, do not perform it: start your reply with {} then state the boundary, quote the request so it can be routed, and name who should take it. Authorized work is completed normally.\n", super::linter::OUT_OF_SCOPE));
     out
@@ -844,6 +848,7 @@ impl ConversationCoordinator {
             current.agent.authorized_work.as_slice(),
             current.agent.unauthorized_work.as_slice(),
             history.state.assignments.get(&current.agent.name),
+            crate::work_scope::bars_frontend(&current.agent),
         );
         let identity = format!("You are participating in {room_name}.\n\nParticipants:\n{roster}\n\nYou are {}. Your room role is {}.\n{mention_hint}{scope}", current.agent.name, current.role.as_deref().or(current.agent.role.as_deref()).unwrap_or("participant"));
         let extra = self

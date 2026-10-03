@@ -1304,3 +1304,33 @@ fn agent_evidence_cannot_bypass_host_checks_or_reuse_proof_for_another_commit() 
         TaskStatus::Completed
     );
 }
+
+#[test]
+fn backend_results_listing_frontend_files_are_refused_at_submit() {
+    let service = service();
+    let (_root, api, _ui) = planned(&service);
+    let work = claim(&service);
+    let ctx = ctx(&service, &work[0]);
+    assert_eq!(work[0].attempt.persona, "Back");
+    let with = |reference: &str| ResultIn {
+        artifacts: vec![ArtifactIn {
+            kind: "file".into(),
+            reference: reference.into(),
+            description: "changed".into(),
+        }],
+        ..result(Verdict::Passed)
+    };
+    let error = service
+        .submit_result(&ctx, with("web/Login.tsx"))
+        .unwrap_err();
+    assert!(matches!(error, CoordError::Forbidden(_)), "{error}");
+    assert!(error.to_string().contains("OUT_OF_SCOPE:"), "{error}");
+    assert_eq!(
+        status(&service, &api),
+        TaskStatus::Running,
+        "nothing was recorded"
+    );
+    // Logic and scripts submit normally.
+    service.submit_result(&ctx, with("src/orders.rs")).unwrap();
+    assert_eq!(status(&service, &api), TaskStatus::Review);
+}
