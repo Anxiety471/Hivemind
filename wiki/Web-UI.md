@@ -13,7 +13,7 @@ cd frontend && bun install && bun run dev   # UI on http://127.0.0.1:5173
 The UI follows Linear's layout: a sidebar (Issues, Rooms, Library; *Hive*: Agents, Groups, Workspaces; *System*: Runtime sessions, Live activity, Setup guide; Settings), and on every page a 44px top bar with the title, tabs, and actions above dense list rows.
 
 - **Command menu**: <kbd>⌘K</kbd> / <kbd>Ctrl+K</kbd> or *Search* in the sidebar. Search issues (by title or `HM-` key), rooms, and agents, jump to any page, create an issue, agent, or group, or switch the theme.
-- **Shortcuts**: <kbd>C</kbd> creates an issue from anywhere; <kbd>G</kbd> then <kbd>I</kbd> Issues, <kbd>R</kbd> Rooms, <kbd>L</kbd> Library, <kbd>A</kbd> Agents, <kbd>G</kbd> Groups, <kbd>W</kbd> Workspaces, <kbd>S</kbd> Sessions, <kbd>V</kbd> Live activity, <kbd>,</kbd> Settings; <kbd>?</kbd> lists them all.
+- **Shortcuts**: <kbd>C</kbd> creates an issue from anywhere; <kbd>G</kbd> then <kbd>I</kbd> Issues, <kbd>R</kbd> Rooms, <kbd>L</kbd> Library, <kbd>A</kbd> Agents, <kbd>G</kbd> Groups, <kbd>W</kbd> Workspaces, <kbd>T</kbd> Schedules, <kbd>S</kbd> Sessions, <kbd>V</kbd> Live activity, <kbd>,</kbd> Settings; <kbd>?</kbd> lists them all.
 - **Theme**: System, Light, or Dark under **Settings → Appearance** (stored in the browser).
 
 ## Screens
@@ -25,13 +25,14 @@ The UI follows Linear's layout: a sidebar (Issues, Rooms, Library; *Hive*: Agent
 - **Groups**: create, edit (members, mode, per-group roles, reply order), and delete chat groups via `/chat-groups`.
 - **Workspaces**: allowed roots, group shared workspaces, and persona workspaces, editable in place.
 - **Runtime sessions**: epochs per room with end reasons and rotation, plus **Rotate** for a live session (`POST /runtime/rotate`).
+- **Schedules** (`#/schedules`): every wakeup agents scheduled for themselves with `wakeup.schedule`, across the main conversation, direct messages and group chats. Upcoming, Recurring and Past tabs; each row shows the label, its room, recurrence (`Once`, `Every 1d · fired 3`, `Every 30m · 4 of 10`), a live countdown, and Cancel. Click a message to expand it; the room list on the left narrows the view to one room. A room with pending wakeups shows an *N scheduled* chip in its header that opens the Details panel.
 - **Live activity**: the raw WebSocket event stream with filters.
 
 ## Managing agents, workspaces and rooms
 
 - **Agents** can be created, edited and deleted. A card shows the agent's own workspace separately from any group workspace that replaces it inside a group. Typed input survives a failed save, and an edit made elsewhere is flagged without discarding yours.
 - **Workspaces** lets you add several workspaces next to the existing ones and pick them for agents and groups. Adding one never restricts where agents may work (that is what `[workspaces] roots` is for).
-- The **room panel** on the right of every conversation has Details, Settings, and Sessions tabs. Settings cover nickname, pinning, muting, mode, reply order, and workspace; controls that do not apply to a room kind say why. **Details** also lists the room's self-scheduled wakeups (label, the intent/reminder/note body, recurrence, next fire time, state) with a **Cancel** button, backed by `GET`/`DELETE /rooms/{id}/schedules`.
+- The **room panel** on the right of every conversation has Details, Settings, and Sessions tabs. Settings cover nickname, pinning, muting, mode, reply order, and workspace; controls that do not apply to a room kind say why. **Details** also lists the room's pending self-scheduled wakeups (label, the intent/reminder/note body, recurrence, countdown to the next fire) with a **Cancel** button, and folds finished ones under *Show N past*, backed by `GET`/`DELETE /rooms/{id}/schedules`.
 - Agent replies render as Markdown. The server also normalizes line endings, escape codes and blank-line runs, so every runtime reads the same.
 
 ## Connection

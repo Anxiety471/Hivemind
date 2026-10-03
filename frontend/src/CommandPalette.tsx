@@ -19,6 +19,7 @@ export const GO_KEYS: PageLink[] = [
   { page: "agents", label: "Agents", icon: "agents", key: "a" },
   { page: "groups", label: "Groups", icon: "groups", key: "g" },
   { page: "workspaces", label: "Workspaces", icon: "workspaces", key: "w" },
+  { page: "schedules", label: "Schedules", icon: "clock", key: "t" },
   { page: "sessions", label: "Runtime sessions", icon: "sessions", key: "s" },
   { page: "activity", label: "Live activity", icon: "activity", key: "v" },
   { page: "settings", label: "Settings", icon: "settings", key: "," },

@@ -14,6 +14,7 @@ const Issues = lazy(() => import("./views/Issues").then((m) => ({ default: m.Iss
 const Agents = lazy(() => import("./views/Agents").then((m) => ({ default: m.Agents })));
 const Groups = lazy(() => import("./views/Groups").then((m) => ({ default: m.Groups })));
 const WorkspacesView = lazy(() => import("./views/Workspaces").then((m) => ({ default: m.WorkspacesView })));
+const SchedulesView = lazy(() => import("./views/Schedules").then((m) => ({ default: m.SchedulesView })));
 const Sessions = lazy(() => import("./views/Sessions").then((m) => ({ default: m.Sessions })));
 const Activity = lazy(() => import("./views/Activity").then((m) => ({ default: m.Activity })));
 const SettingsView = lazy(() => import("./views/Settings").then((m) => ({ default: m.SettingsView })));
@@ -43,6 +44,7 @@ const NAV: { section?: string; items: NavItem[] }[] = [
       { page: "agents", label: "Agents", icon: "agents" },
       { page: "groups", label: "Groups", icon: "groups" },
       { page: "workspaces", label: "Workspaces", icon: "workspaces" },
+      { page: "schedules", label: "Schedules", icon: "clock" },
     ],
   },
   {
@@ -114,6 +116,9 @@ function App() {
       break;
     case "workspaces":
       view = <WorkspacesView />;
+      break;
+    case "schedules":
+      view = <SchedulesView roomId={route.arg} />;
       break;
     case "sessions":
       view = <Sessions roomId={route.arg} />;

@@ -89,6 +89,19 @@ const PATHS: Record<string, ReactNode> = {
   room: <path d="M2.5 4.5a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v4.5a2 2 0 0 1-2 2H7l-3 2.5V11h0a2 2 0 0 1-1.5-2z" />,
   pause: <path d="M5.5 3.5v9M10.5 3.5v9" />,
   play: <path d="m5 3 8 5-8 5z" />,
+  clock: (
+    <>
+      <circle cx="8" cy="8" r="5.8" />
+      <path d="M8 4.8V8l2.2 1.4" />
+    </>
+  ),
+  repeat: (
+    <>
+      <path d="M3 7a4 4 0 0 1 6.8-2.8L11.5 6" />
+      <path d="M11.5 3v3h-3M13 9a4 4 0 0 1-6.8 2.8L4.5 10" />
+      <path d="M4.5 13v-3h3" />
+    </>
+  ),
   theme: <path d="M8 2a6 6 0 1 0 6 6A4.5 4.5 0 0 1 8 2z" />,
   hash: <path d="M6 2.5 5 13.5M11 2.5l-1 11M3 6h10.5M2.5 10H13" />,
   at: (

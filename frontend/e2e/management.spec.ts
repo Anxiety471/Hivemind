@@ -352,6 +352,11 @@ test("the command menu, G shortcuts and C reach every part of the app", async ({
   await page.keyboard.press("g");
   await page.keyboard.press("w");
   await expect(page).toHaveURL(/#\/workspaces$/);
+  // Agents' self-scheduled wakeups have their own page (none are pending in this hive).
+  await page.keyboard.press("g");
+  await page.keyboard.press("t");
+  await expect(page).toHaveURL(/#\/schedules$/);
+  await expect(page.getByText("No pending wakeups.")).toBeVisible();
   await page.keyboard.press("c");
   await expect(page.getByRole("dialog", { name: "New issue" })).toBeVisible();
   await expect(page).toHaveURL(/#\/issues$/);

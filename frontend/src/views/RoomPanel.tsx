@@ -1,6 +1,7 @@
 // Right-hand panel of a conversation: details, settings, and runtime sessions.
 import { useEffect, useState } from "react";
-import { api, type Room, type RoomSchedule, type RoomSettings, type RoomSettingsPatch } from "../api";
+import { api, type Room, type RoomSettings, type RoomSettingsPatch } from "../api";
+import { RoomSchedules, hasSchedules } from "../Schedules";
 import { useRefreshOn } from "../live";
 import { href } from "../nav";
 import { Badge, ErrorNote, ago, useAction, useAsync } from "../ui";
@@ -78,82 +79,11 @@ function Details({ room }: { room: Room }) {
       </div>
       <div>
         <h4>Scheduled wakeups</h4>
-        <RoomSchedules roomId={room.id} />
+        {hasSchedules(room) ? <RoomSchedules roomId={room.id} /> : <p className="muted small">Wakeups here ride the task queue, not the room.</p>}
       </div>
       <div className="muted small">
         {room.message_count} messages · updated {ago(room.updated_at)}
       </div>
-    </div>
-  );
-}
-
-/** Short duration for a repeat interval: `45s`, `1m 30s`, `1h`, `7d`. */
-export function humanDuration(seconds: number) {
-  if (seconds < 60) return `${seconds}s`;
-  if (seconds < 3600) {
-    const extra = seconds % 60;
-    return `${Math.floor(seconds / 60)}m${extra ? ` ${extra}s` : ""}`;
-  }
-  if (seconds < 86400) {
-    const extra = seconds % 3600;
-    return `${Math.floor(seconds / 3600)}h${extra ? ` ${Math.floor(extra / 60)}m` : ""}`;
-  }
-  const extra = seconds % 86400;
-  return `${Math.floor(seconds / 86400)}d${extra ? ` ${Math.floor(extra / 3600)}h` : ""}`;
-}
-
-const TERMINAL_SCHEDULE_STATES: RoomSchedule["state"][] = ["completed", "cancelled", "failed"];
-
-const recurrence = (s: RoomSchedule) => {
-  if (s.repeat_seconds == null) return "Fires once";
-  const repeat = s.repeat_count != null ? `, ${s.repeat_count} times` : ", until cancelled";
-  return `Every ${humanDuration(s.repeat_seconds)}${repeat}${s.fires > 0 ? `, fired ${s.fires}` : ""}`;
-};
-
-function ScheduleItem({ roomId, schedule, reload }: { roomId: string; schedule: RoomSchedule; reload: () => void }) {
-  const action = useAction();
-  const terminal = TERMINAL_SCHEDULE_STATES.includes(schedule.state);
-  return (
-    <li className="schedule-item">
-      <div className="schedule-head">
-        <strong>{schedule.label || "Wakeup"}</strong>
-        {terminal ? (
-          <Badge value={schedule.state} tone={schedule.state === "completed" ? "ok" : "muted"} />
-        ) : (
-          <span className="muted small">Next {new Date(schedule.due_at * 1000).toLocaleString()}</span>
-        )}
-      </div>
-      <p className="schedule-message">{schedule.message}</p>
-      <div className="muted small">{recurrence(schedule)}</div>
-      <ErrorNote error={action.error} />
-      <button
-        className="button ghost"
-        disabled={terminal || action.busy}
-        onClick={() => action.run(() => api.cancelRoomSchedule(roomId, schedule.id).then(reload))}
-      >
-        Cancel
-      </button>
-    </li>
-  );
-}
-
-function RoomSchedules({ roomId }: { roomId: string }) {
-  const schedules = useAsync(() => api.roomSchedules(roomId), [roomId]);
-  useRefreshOn(
-    (e) => e.type.startsWith("wakeup") || e.type.startsWith("conversation."),
-    schedules.reload,
-    [schedules.reload],
-  );
-  const list = schedules.data?.schedules ?? [];
-  return (
-    <div className="schedule-list">
-      <ErrorNote error={schedules.error} />
-      {schedules.data && list.length === 0 && <p className="muted">None scheduled.</p>}
-      <ul>
-        {list.map((s) => (
-          <ScheduleItem key={s.id} roomId={roomId} schedule={s} reload={schedules.reload} />
-        ))}
-      </ul>
     </div>
   );
 }

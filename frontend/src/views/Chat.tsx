@@ -7,6 +7,8 @@ import { href } from "../nav";
 import { roomLabel, useTaskNames } from "../rooms";
 import { RoomList, roomIcon } from "../RoomList";
 import { Icon } from "../icons";
+import { hasSchedules, useRoomSchedules } from "../Schedules";
+import { isPending } from "../scheduleFormat";
 import { RoomPanel, type PanelTab } from "./RoomPanel";
 import { Markdown } from "../markdown";
 import { Avatar, Badge, Empty, ErrorNote, time, useAsync } from "../ui";
@@ -178,6 +180,8 @@ function RoomView({
   );
 
   const info = room.data?.room;
+  const schedules = useRoomSchedules(roomId, !!info && hasSchedules(info));
+  const pendingWakeups = (schedules.data?.schedules ?? []).filter(isPending);
   const byAnchor = useMemo(() => {
     const map = new Map<string, Thread>();
     for (const t of threads.data?.threads ?? []) map.set(t.anchor_message_id, t);
@@ -216,6 +220,15 @@ function RoomView({
             </div>
           </div>
           <div className="actions">
+            {pendingWakeups.length > 0 && (
+              <button
+                className="chip wakeup-chip"
+                title={`Next: ${pendingWakeups.map((w) => w.label || "wakeup").join(", ")}`}
+                onClick={() => setPanelTab("details")}
+              >
+                <Icon name="clock" size={12} /> {pendingWakeups.length} scheduled
+              </button>
+            )}
             {roomId.startsWith("task-") && (
               <a className="button ghost small" href={href("issues", roomId.slice(5))}>
                 <Icon name="issues" size={14} /> Open issue
