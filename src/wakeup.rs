@@ -29,6 +29,10 @@ pub const MIN_WAKEUP_DELAY_SECS: i64 = 1;
 pub const MAX_WAKEUP_DELAY_SECS: i64 = 7 * 24 * 3600;
 /// Per-field byte bound on a wakeup's `intent`, `reminder`, or `note`.
 pub const MAX_WAKEUP_TEXT: usize = 2000;
+/// Byte bound on a schedule's `label`, the short name shown to the user.
+pub const MAX_WAKEUP_LABEL: usize = 80;
+/// How many times a bounded recurring wakeup may fire.
+pub const MAX_REPEAT_COUNT: i64 = 1000;
 /// How many chat wakeups may be outstanding in one room.
 pub const MAX_PENDING_CHAT_WAKEUPS: i64 = 5;
 /// How often a chat wakeup left `dispatched` by a crash may be redelivered
@@ -85,6 +89,39 @@ pub fn validate_and_compose(
     ))
 }
 
+/// Validates a schedule's recurrence: `repeat_seconds` must be within
+/// [`MIN_WAKEUP_DELAY_SECS`]..=[`MAX_WAKEUP_DELAY_SECS`] and `repeat_count`
+/// within `1..=`[`MAX_REPEAT_COUNT`], and a count without an interval is
+/// rejected because there is no period to repeat on.
+pub fn validate_repeat(repeat_seconds: Option<i64>, repeat_count: Option<i64>) -> CoordResult<()> {
+    if let Some(seconds) = repeat_seconds {
+        if !(MIN_WAKEUP_DELAY_SECS..=MAX_WAKEUP_DELAY_SECS).contains(&seconds) {
+            return Err(CoordError::Invalid(format!(
+                "repeat_seconds must be between {MIN_WAKEUP_DELAY_SECS} and {MAX_WAKEUP_DELAY_SECS}"
+            )));
+        }
+    }
+    if let Some(count) = repeat_count {
+        if repeat_seconds.is_none() {
+            return Err(CoordError::Invalid(
+                "repeat_count needs 'repeat_seconds': there is no period to repeat on".into(),
+            ));
+        }
+        if !(1..=MAX_REPEAT_COUNT).contains(&count) {
+            return Err(CoordError::Invalid(format!(
+                "repeat_count must be between 1 and {MAX_REPEAT_COUNT}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Whether a recurring schedule fires again after `fires` deliveries: it must
+/// have an interval, and either be unbounded or still short of its count.
+pub fn repeats_after(repeat_seconds: Option<i64>, repeat_count: Option<i64>, fires: i64) -> bool {
+    repeat_seconds.is_some() && repeat_count.is_none_or(|count| fires + 1 < count)
+}
+
 /// The turn-job target that re-enters `room`, in the shape the jobs worker
 /// accepts. `None` for a thread or any room that is not a chat room.
 pub fn chat_target(room: &str) -> Option<Value> {
@@ -121,6 +158,18 @@ fn opt_str(args: &Value, key: &str) -> Result<Option<String>> {
     }
 }
 
+/// Reads an optional integer argument, refusing a non-integer one outright so
+/// a typo never silently becomes "absent".
+fn opt_int(args: &Value, key: &str) -> Result<Option<i64>> {
+    match args.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => value
+            .as_i64()
+            .map(Some)
+            .ok_or_else(|| anyhow::anyhow!("argument '{key}' must be an integer")),
+    }
+}
+
 /// Host-bound `wakeup.schedule` for chat rooms, with task rooms delegated to
 /// coordination. Must be registered before `CoordinationTools` in the host
 /// list so it wins the shared tool name.
@@ -143,13 +192,23 @@ impl ChatWakeupTools {
 
 fn manifest() -> String {
     format!(
-        "Hivemind wakeup tool (same ```hivemind-tool fence as memory tools; one call per reply as your whole reply):\nExample:\n{{\"name\":\"wakeup.schedule\",\"args\":{{\"delay_seconds\":600,\"intent\":\"re-check the answer\",\"reminder\":\"only if it is still open\",\"note\":\"thread is mg_...\"}}}}\nRules: a wakeup re-enters this room later as a user message carrying your intent/reminder/note, so you can continue on your own schedule; give at least one of intent, reminder, or note, and delay_seconds between {MIN_WAKEUP_DELAY_SECS} and {MAX_WAKEUP_DELAY_SECS}. It is the only wake you can author: you cannot list or cancel one, and at most {MAX_PENDING_CHAT_WAKEUPS} may be pending per room.\n"
+        "Hivemind wakeup tool (same ```hivemind-tool fence as memory tools; one call per reply as your whole reply):\nExample:\n{{\"name\":\"wakeup.schedule\",\"args\":{{\"delay_seconds\":600,\"intent\":\"re-check the answer\",\"reminder\":\"only if it is still open\",\"note\":\"thread is mg_...\"}}}}\nRules: a wakeup re-enters this room later as a user message carrying your intent/reminder/note, so you can continue on your own schedule; give at least one of intent, reminder, or note, and delay_seconds between {MIN_WAKEUP_DELAY_SECS} and {MAX_WAKEUP_DELAY_SECS}. Add repeat_seconds (also up to {MAX_WAKEUP_DELAY_SECS}) to fire again every interval, optionally bounded by repeat_count (1..={MAX_REPEAT_COUNT}); without repeat_count it repeats until cancelled. label is a short name for the schedule, which the user can list and cancel for this room. It is the only wake you can author, and at most {MAX_PENDING_CHAT_WAKEUPS} may be pending per room.\n"
     )
 }
 
 impl ToolHost for ChatWakeupTools {
     fn manifest(&self, room: &str, _persona: &str) -> Option<String> {
         Self::is_chat_room(room).then(manifest)
+    }
+
+    /// Keeps the tool visible on later turns too: a chat agent that forgets
+    /// `wakeup.schedule` exists cannot continue on its own schedule.
+    fn reminder(&self, room: &str, _persona: &str) -> Option<String> {
+        Self::is_chat_room(room).then(|| {
+            format!(
+                "Hivemind wakeup tool remains available: call wakeup.schedule (```hivemind-tool fence) to re-enter this room later, with delay_seconds (1-{MAX_WAKEUP_DELAY_SECS}), an optional repeat_seconds/repeat_count, a label, and at least one of intent/reminder/note.\n"
+            )
+        })
     }
 
     fn handles(&self, name: &str) -> bool {
@@ -168,9 +227,23 @@ impl ToolHost for ChatWakeupTools {
         let reminder = opt_str(args, "reminder")?;
         let note = opt_str(args, "note")?;
         let key = opt_str(args, "key")?;
+        let repeats = opt_int(args, "repeat_seconds")?;
+        let count = opt_int(args, "repeat_count")?;
+        let label = opt_str(args, "label")?
+            .map(|label| check_text("wakeup label", &label, MAX_WAKEUP_LABEL))
+            .transpose()
+            .map_err(|error| anyhow::anyhow!("{error}"))?;
         // Task rooms keep today's behavior exactly: the wakeup rides the
-        // coordination message queue and is bound to the live attempt.
+        // coordination message queue and is bound to the live attempt. A
+        // recurring wakeup has no place there, but a label still names it.
         if task_of_room(room).is_some() {
+            if repeats.is_some() || count.is_some() {
+                let error = CoordError::Invalid(
+                    "recurring wakeups are supported in chat rooms; a task-room wakeup fires once"
+                        .into(),
+                );
+                bail!("{error}");
+            }
             let (message, duplicate) = self
                 .service
                 .schedule_wakeup_from_room(
@@ -184,8 +257,12 @@ impl ToolHost for ChatWakeupTools {
                 )
                 .map_err(|error| anyhow::anyhow!("{error}"))?;
             return Ok(format!(
-                "{} wakeup {}: Hivemind will wake you once, in {delay}s, with this intent/reminder/note",
+                "{}{} wakeup {}: Hivemind will wake you once, in {delay}s, with this intent/reminder/note",
                 if duplicate { "already scheduled" } else { "scheduled" },
+                label
+                    .as_deref()
+                    .map(|label| format!(" '{label}'"))
+                    .unwrap_or_default(),
                 message.id
             ));
         }
@@ -198,20 +275,42 @@ impl ToolHost for ChatWakeupTools {
             note.as_deref(),
         )
         .map_err(|error| anyhow::anyhow!("{error}"))?;
+        validate_repeat(repeats, count).map_err(|error| anyhow::anyhow!("{error}"))?;
         let id = new_id("wk");
-        let message = delivered_message(&id, &body);
+        // The clean body is stored; the delivery marker is added when the
+        // wakeup fires, so the list endpoint shows what the agent wrote.
         let stored = self.execution.insert_chat_wakeup(
             &id,
             room,
             &target,
-            &message,
+            &body,
             crate::execution::now() + delay,
             MAX_PENDING_CHAT_WAKEUPS,
             key.as_deref(),
+            label.as_deref(),
+            repeats,
+            count,
         )?;
+        let schedule = match (repeats, count) {
+            (Some(seconds), Some(count)) => {
+                format!("{count} times, first in {delay}s then every {seconds}s")
+            }
+            (Some(seconds), None) => {
+                format!("first in {delay}s then every {seconds}s until cancelled")
+            }
+            _ => format!("once, in {delay}s"),
+        };
         Ok(format!(
-            "{} wakeup {}: Hivemind will re-enter this room once, in {delay}s, with this intent/reminder/note",
-            if stored.deduped { "already scheduled" } else { "scheduled" },
+            "{}{} wakeup {}: Hivemind will re-enter this room {schedule}, with this intent/reminder/note",
+            if stored.deduped {
+                "already scheduled"
+            } else {
+                "scheduled"
+            },
+            label
+                .as_deref()
+                .map(|label| format!(" '{label}'"))
+                .unwrap_or_default(),
             stored.id
         ))
     }
@@ -364,6 +463,143 @@ mod tests {
                 "Lead",
                 "wakeup.schedule",
                 &json!({"delay_seconds": 60, "intent": "check"}),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("no live task attempt"), "{error}");
+    }
+
+    #[test]
+    fn recurrence_bounds_are_enforced_without_repeat_seconds() {
+        assert!(validate_repeat(Some(600), None).is_ok());
+        assert!(validate_repeat(Some(60), Some(3)).is_ok());
+        // The interval shares the delay bounds, at both ends.
+        assert!(validate_repeat(Some(MIN_WAKEUP_DELAY_SECS), None).is_ok());
+        assert!(validate_repeat(Some(MAX_WAKEUP_DELAY_SECS), None).is_ok());
+        for bad in [0, -1, MAX_WAKEUP_DELAY_SECS + 1] {
+            let error = validate_repeat(Some(bad), None).unwrap_err().to_string();
+            assert!(error.contains("repeat_seconds must be between"), "{error}");
+        }
+        // A count without an interval has no period to repeat on.
+        let error = validate_repeat(None, Some(2)).unwrap_err().to_string();
+        assert!(
+            error.contains("repeat_count needs 'repeat_seconds'"),
+            "{error}"
+        );
+        // The count itself is bounded, and zero is not a repeat.
+        for bad in [0, -3, MAX_REPEAT_COUNT + 1] {
+            let error = validate_repeat(Some(60), Some(bad))
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("repeat_count must be between"), "{error}");
+        }
+        assert!(validate_repeat(None, None).is_ok());
+    }
+
+    #[test]
+    fn repeats_after_stops_at_the_bound_and_for_one_shots() {
+        assert!(!repeats_after(None, None, 0));
+        assert!(!repeats_after(None, Some(5), 0));
+        // Unbounded repeats stay alive forever.
+        assert!(repeats_after(Some(60), None, 0));
+        assert!(repeats_after(Some(60), None, 9999));
+        // A bounded schedule stops after its last fire: fires counts deliveries.
+        assert!(repeats_after(Some(60), Some(3), 0));
+        assert!(repeats_after(Some(60), Some(3), 1));
+        assert!(!repeats_after(Some(60), Some(3), 2));
+        assert!(!repeats_after(Some(60), Some(1), 0));
+    }
+
+    #[test]
+    fn chat_host_stores_a_recurring_schedule_with_a_label() {
+        let (hosts, execution) = hosts();
+        let reply = hosts
+            .execute(
+                "group-orders",
+                "Lead",
+                "wakeup.schedule",
+                &json!({
+                    "delay_seconds": 60,
+                    "intent": "poll the queue",
+                    "label": "  order poller  ",
+                    "repeat_seconds": 300,
+                    "repeat_count": 4
+                }),
+            )
+            .unwrap();
+        assert!(reply.contains("'order poller'"), "{reply}");
+        assert!(
+            reply.contains("4 times, first in 60s then every 300s"),
+            "{reply}"
+        );
+        let listed = execution.chat_wakeups_for("group-orders").unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].label.as_deref(), Some("order poller"));
+        assert_eq!(listed[0].repeat_seconds, Some(300));
+        assert_eq!(listed[0].repeat_count, Some(4));
+        assert_eq!(listed[0].fires, 0);
+        assert_eq!(listed[0].state, "queued");
+        // The stored body is clean: the marker is added only on delivery.
+        assert_eq!(listed[0].message, "Intent: poll the queue");
+        // Unbounded recurrence and rejection of a count on its own.
+        assert!(hosts
+            .execute(
+                "group-orders",
+                "Lead",
+                "wakeup.schedule",
+                &json!({"delay_seconds": 60, "intent": "again", "repeat_seconds": 120})
+            )
+            .unwrap()
+            .contains("until cancelled"));
+        assert!(hosts
+            .execute(
+                "group-orders",
+                "Lead",
+                "wakeup.schedule",
+                &json!({"delay_seconds": 60, "intent": "bad", "repeat_count": 2})
+            )
+            .is_err());
+        assert_eq!(execution.chat_wakeups_for("group-orders").unwrap().len(), 2);
+        // A label is bounded and may not be blank or oversized.
+        let long = "x".repeat(MAX_WAKEUP_LABEL + 1);
+        for bad in ["   ", long.as_str()] {
+            assert!(
+                hosts
+                    .execute(
+                        "group-orders",
+                        "Lead",
+                        "wakeup.schedule",
+                        &json!({"delay_seconds": 60, "intent": "x", "label": bad})
+                    )
+                    .is_err(),
+                "{bad:?} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn task_rooms_refuse_recurrence_before_delegating() {
+        let (hosts, _execution) = hosts();
+        for args in [
+            json!({"delay_seconds": 60, "intent": "check", "repeat_seconds": 60}),
+            json!({"delay_seconds": 60, "intent": "check", "repeat_count": 2}),
+        ] {
+            let error = hosts
+                .execute("task-tk_1", "Lead", "wakeup.schedule", &args)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains("recurring wakeups are supported in chat rooms"),
+                "{error}"
+            );
+        }
+        // A label alone still delegates, so the task-room error is unchanged.
+        let error = hosts
+            .execute(
+                "task-tk_1",
+                "Lead",
+                "wakeup.schedule",
+                &json!({"delay_seconds": 60, "intent": "check", "label": "nightly"}),
             )
             .unwrap_err()
             .to_string();

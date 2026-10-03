@@ -74,6 +74,19 @@ export type Thread = {
   updated_at: number;
 };
 
+/** One scheduled wakeup. `message` is the composed body, never a delivery marker. */
+export type RoomSchedule = {
+  id: string;
+  label: string | null;
+  message: string;
+  due_at: number;
+  repeat_seconds: number | null;
+  repeat_count: number | null;
+  fires: number;
+  state: "queued" | "dispatched" | "completed" | "cancelled" | "failed";
+  created_at: number;
+};
+
 export type Target =
   | { type: "main" }
   | { type: "solo"; id: string }
@@ -401,6 +414,10 @@ export const api = {
   steerRoom: (id: string, message: string) =>
     request<{ room_id: string; delivered_to: string[] }>("POST", `/rooms/${enc(id)}/steer`, { message }),
   roomSettings: (id: string) => request<RoomSettings>("GET", `/rooms/${enc(id)}/settings`),
+  roomSchedules: (id: string) =>
+    request<{ room_id: string; schedules: RoomSchedule[] }>("GET", `/rooms/${enc(id)}/schedules`),
+  cancelRoomSchedule: (id: string, scheduleId: string) =>
+    request<{ schedule: RoomSchedule }>("DELETE", `/rooms/${enc(id)}/schedules/${enc(scheduleId)}`),
   updateRoomSettings: (id: string, patch: RoomSettingsPatch) =>
     request<RoomSettings>("PATCH", `/rooms/${enc(id)}/settings`, patch),
   threads: (id: string) => request<{ threads: Thread[] }>("GET", `/rooms/${enc(id)}/threads`),

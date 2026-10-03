@@ -90,7 +90,7 @@ Every wake is one of a small set of durable triggers; only the last is agent-aut
 | `RECOVERY_WAKE` | An interrupted attempt or wakeup is requeued after a restart | Hivemind restarts mid-attempt |
 | `EVENT_WAKE` | *(not implemented)* an external system event | CI fails |
 
-`USER_WAKE`, `AGENT_WAKE`, `TASK_WAKE`, and `RECOVERY_WAKE` are host-driven: the model never names or triggers them. `SCHEDULE_WAKE` is the only agent-authored wake and the only wake tool exposed — there is no `wakeup.list` or `wakeup.cancel`, so an agent cannot enumerate or retract its pending wakeups. `EVENT_WAKE` is conceptual only: Hivemind has no event-to-wake subscription, so nothing observes CI or any other external event and wakes an agent; adding one would be a new host event source.
+`USER_WAKE`, `AGENT_WAKE`, `TASK_WAKE`, and `RECOVERY_WAKE` are host-driven: the model never names or triggers them. `SCHEDULE_WAKE` is the only agent-authored wake and the only wake tool exposed — there is no agent-facing `wakeup.list` or `wakeup.cancel`, so an agent cannot enumerate or retract its own pending wakeups. A chat-room schedule may repeat (`repeat_seconds`, optionally bounded by `repeat_count`), and the user lists and cancels a room's schedules through `GET`/`DELETE /api/v1/rooms/{id}/schedules`. `EVENT_WAKE` is conceptual only: Hivemind has no event-to-wake subscription, so nothing observes CI or any other external event and wakes an agent; adding one would be a new host event source.
 
 ## Agent tools
 

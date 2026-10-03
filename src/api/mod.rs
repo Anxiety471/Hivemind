@@ -13,6 +13,7 @@ mod room_settings;
 mod rooms;
 mod routes;
 mod runtime;
+mod schedules;
 mod setup;
 mod skills;
 mod tasks;
