@@ -113,6 +113,10 @@ pub struct ResultIn {
 pub(super) const MIN_WAKEUP_DELAY_SECS: i64 = 1;
 pub(super) const MAX_WAKEUP_DELAY_SECS: i64 = 7 * 24 * 3600;
 pub(super) const MAX_PENDING_WAKEUPS: i64 = 5;
+/// A wakeup interrupted mid-attempt (crash, restart, lease loss) is retried until
+/// it has been claimed this many times; wakeups are self-continuations, so a
+/// replay is safer than losing them.
+pub(super) const MAX_WAKEUP_ATTEMPTS: u32 = 3;
 
 pub struct SendMessage {
     pub recipients: Vec<String>,
@@ -791,6 +795,12 @@ impl CoordinationService {
                         for (d, _) in &items {
                             db.set_delivery(&d.message_id, &d.recipient, DeliveryState::Cancelled)?;
                         }
+                        self.report_dropped_wakeups(
+                            db,
+                            &items,
+                            &format!("its task is {}", task.status.as_str()),
+                            !root.status.is_terminal(),
+                        )?;
                         continue;
                     }
                     if root.paused
@@ -803,6 +813,12 @@ impl CoordinationService {
                         for (d, _) in &items {
                             db.set_delivery(&d.message_id, &d.recipient, DeliveryState::Failed)?;
                         }
+                        self.report_dropped_wakeups(
+                            db,
+                            &items,
+                            &format!("persona '{persona}' is no longer configured"),
+                            false,
+                        )?;
                         continue;
                     }
                     if let Charged::Exhausted(reason) =
@@ -952,9 +968,17 @@ impl CoordinationService {
             }
             if attempt.kind == AttemptKind::Inbox {
                 let acked = matches!(end, AttemptEnd::Completed);
-                for (delivery, _) in db.inbox(&attempt.persona, &task.root_id, &[DeliveryState::Processing], 100)? {
+                for (delivery, message) in db.inbox(&attempt.persona, &task.root_id, &[DeliveryState::Processing], 100)? {
                     let next = if acked { DeliveryState::Acknowledged } else if matches!(end, AttemptEnd::Interrupted) { DeliveryState::Queued } else { DeliveryState::Failed };
-                    if next == DeliveryState::Queued {
+                    if next == DeliveryState::Queued && message.kind == MessageKind::Wakeup {
+                        // A wakeup is a self-continuation: replay it after an interruption, a bounded number of times.
+                        if delivery.attempts < MAX_WAKEUP_ATTEMPTS {
+                            db.set_delivery(&delivery.message_id, &delivery.recipient, DeliveryState::Queued)?;
+                        } else {
+                            db.set_delivery(&delivery.message_id, &delivery.recipient, DeliveryState::Failed)?;
+                            self.report_dropped_wakeups(db, &[(delivery, message)], &format!("it was interrupted {MAX_WAKEUP_ATTEMPTS} times"), true)?;
+                        }
+                    } else if next == DeliveryState::Queued {
                         // Interrupted mid-processing: keep it visible but never auto-replay.
                         db.set_delivery(&delivery.message_id, &delivery.recipient, DeliveryState::Failed)?;
                     } else {
@@ -1468,7 +1492,9 @@ impl CoordinationService {
     /// Root reached a terminal state: archive groups, cancel pending wakeups.
     fn finish_root(&self, db: &Db<'_>, root: &str) -> CoordResult<()> {
         db.archive_groups(root)?;
+        let pending = db.queued_wakeups_on(root)?;
         db.cancel_deliveries(root)?;
+        self.report_dropped_wakeups(db, &pending, "the root task ended first", false)?;
         for id in db.task_ids(root)? {
             self.retire_task(&id);
         }
@@ -1865,6 +1891,57 @@ impl CoordinationService {
         })?;
         self.changed();
         Ok(out)
+    }
+
+    /// A wakeup that will never fire is never silent: record why, and when its
+    /// root is still alive leave a non-waking status message the agent sees the
+    /// next time it works there.
+    fn report_dropped_wakeups(
+        &self,
+        db: &Db<'_>,
+        items: &[(Delivery, Message)],
+        reason: &str,
+        tell_agent: bool,
+    ) -> CoordResult<()> {
+        for (delivery, message) in items {
+            if message.kind != MessageKind::Wakeup {
+                continue;
+            }
+            db.event(
+                &message.root_id,
+                Some(&message.task_id),
+                "hivemind",
+                "wakeup.dropped",
+                serde_json::json!({"message_id": message.id, "persona": delivery.recipient, "reason": reason}),
+            )?;
+            if tell_agent {
+                let id = new_id("mg");
+                db.insert_message(&NewMessage {
+                    id: id.clone(),
+                    root_id: &message.root_id,
+                    task_id: &message.task_id,
+                    sender: "hivemind",
+                    sender_instance: "hivemind",
+                    kind: MessageKind::Status,
+                    recipients: std::slice::from_ref(&delivery.recipient),
+                    group_id: None,
+                    body: &format!(
+                        "Your scheduled wakeup {} did not fire: {reason}. Its context was: {}",
+                        message.id,
+                        clip(&message.body, 500)
+                    ),
+                    artifacts: &[],
+                    causation_id: Some(&message.id),
+                    depth: message.depth + 1,
+                    correlation_id: message.correlation_id.clone(),
+                    thread: message.thread.clone(),
+                    idempotency_key: None,
+                    wake: false,
+                    due_at: None,
+                })?;
+            }
+        }
+        Ok(())
     }
 
     /// Schedules the calling agent's own future wakeup on its current task.

@@ -1017,6 +1017,22 @@ impl Db<'_> {
         Ok(out)
     }
 
+    /// Queued wakeups on `root` (any due time), for reporting before they are cancelled.
+    pub fn queued_wakeups_on(&self, root: &str) -> CoordResult<Vec<(Delivery, Message)>> {
+        let deliveries: Vec<Delivery> = self
+            .c
+            .prepare_cached("SELECT message_id,recipient,state,wake,attempts,updated_at FROM message_deliveries WHERE root_id=?1 AND state='queued' AND wake=1 AND due_at IS NOT NULL")?
+            .query_map([root], delivery_row)?
+            .collect::<rusqlite::Result<_>>()?;
+        let mut out = Vec::with_capacity(deliveries.len());
+        for delivery in deliveries {
+            if let Some(message) = self.message(&delivery.message_id)? {
+                out.push((delivery, message));
+            }
+        }
+        Ok(out)
+    }
+
     pub fn cancel_deliveries(&self, root: &str) -> CoordResult<usize> {
         Ok(self.c.prepare_cached("UPDATE message_deliveries SET state='cancelled',updated_at=?2 WHERE root_id=?1 AND state IN ('queued','delivered','processing')")?.execute(params![root, self.now])?)
     }
