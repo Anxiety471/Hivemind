@@ -2,6 +2,10 @@
 [runtime]
 omp_binary = "omp"
 pi_binary = "pi"
+# codex_acp_binary = "codex-acp"
+# codex_binary = "codex"
+# claude_code_acp_binary = "claude-code-acp"
+# cursor_binary = "agent"
 # Maximum seconds a runtime prompt may stay silent (no streamed text, tool, or status event) before it times out; 300 by default, 0 disables the timeout. A long-running but active agent is not interrupted.
 prompt_timeout_secs = 300
 # Seconds an unused agent-instance runtime stays alive before it is stopped; 0 never idles out.

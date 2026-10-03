@@ -55,8 +55,11 @@ fn validate_agent_with_path(
         "pi" => &config.runtime.pi_binary,
         "omp" => &config.runtime.omp_binary,
         "opencode" => &config.runtime.opencode_binary,
+        "codex" => &config.runtime.codex_acp_binary,
+        "claude_code" => &config.runtime.claude_code_acp_binary,
+        "cursor" => &config.runtime.cursor_binary,
         other => bail!(
-            "agent '{}' uses unsupported runtime '{}' (supported: pi, omp, opencode); change this agent's runtime to 'pi', 'omp' or 'opencode'",
+            "agent '{}' uses unsupported runtime '{}' (supported: pi, omp, opencode, codex, claude_code, cursor); change this agent's runtime",
             agent.name,
             other
         ),
@@ -163,9 +166,12 @@ fn doctor_agent(
         "pi" => Some(&config.runtime.pi_binary),
         "omp" => Some(&config.runtime.omp_binary),
         "opencode" => Some(&config.runtime.opencode_binary),
+        "codex" => Some(&config.runtime.codex_acp_binary),
+        "claude_code" => Some(&config.runtime.claude_code_acp_binary),
+        "cursor" => Some(&config.runtime.cursor_binary),
         other => {
             println!(
-                "[error] agent '{}' uses unsupported runtime '{other}' (supported: pi, omp, opencode); change this agent's runtime to 'pi', 'omp' or 'opencode'",
+                "[error] agent '{}' uses unsupported runtime '{other}' (supported: pi, omp, opencode, codex, claude_code, cursor); change this agent's runtime",
                 agent.name
             );
             *errors += 1;

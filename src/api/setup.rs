@@ -59,7 +59,10 @@ fn build_config(body: SetupBody) -> Result<HivemindConfig, String> {
         if id.is_empty() || id.len() > 64 {
             return Err("Persona IDs must contain 1 to 64 characters.".into());
         }
-        if !matches!(setup.runtime.as_str(), "pi" | "omp" | "opencode") {
+        if !matches!(
+            setup.runtime.as_str(),
+            "pi" | "omp" | "opencode" | "codex" | "claude_code" | "cursor"
+        ) {
             return Err(format!("Persona '{id}' uses an unsupported runtime."));
         }
         let role = setup.role.trim();
@@ -99,14 +102,24 @@ fn build_config(body: SetupBody) -> Result<HivemindConfig, String> {
             ));
         }
         let workspace = crate::config::absolute_workspace(workspace);
-        if setup.fast.is_some() && setup.runtime != "omp" {
+        if setup.fast.is_some() && !matches!(setup.runtime.as_str(), "omp" | "codex") {
             return Err(format!(
-                "Fast mode is only supported by OMP (persona '{id}')."
+                "Fast mode is only supported by OMP and Codex (persona '{id}')."
             ));
         }
         if (setup.reasoning.is_some() || setup.fast.is_some()) && setup.runtime == "opencode" {
             return Err(format!(
                 "Reasoning and fast mode are not supported by OpenCode (persona '{id}')."
+            ));
+        }
+        if setup.fast.is_some() && matches!(setup.runtime.as_str(), "claude_code" | "cursor") {
+            return Err(format!(
+                "Fast mode is not supported by {} (persona '{id}').",
+                if setup.runtime == "cursor" {
+                    "Cursor"
+                } else {
+                    "Claude Code"
+                }
             ));
         }
         if setup.runtime == "opencode" {

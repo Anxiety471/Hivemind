@@ -9,6 +9,9 @@ const RUNTIMES: { value: AgentConfig["runtime"]; label: string; hint: string }[]
   { value: "omp", label: "OMP", hint: "Reasoning and fast mode" },
   { value: "pi", label: "Pi", hint: "Reasoning levels" },
   { value: "opencode", label: "OpenCode", hint: "No reasoning setting" },
+  { value: "codex", label: "Codex", hint: "ACP adapter, reasoning and fast mode" },
+  { value: "claude_code", label: "Claude Code", hint: "ACP adapter, reasoning levels" },
+  { value: "cursor", label: "Cursor", hint: "Cursor CLI (`agent acp`)" },
 ];
 
 const LEVEL_ORDER = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
@@ -101,7 +104,7 @@ export function AgentForm(props: {
   const changedElsewhere = props.mode === "edit" && baseline !== firstBaseline;
 
   const idTaken = props.mode === "create" && props.existing.some((n) => n.toLowerCase() === id.trim().toLowerCase());
-  const supportsFast = runtime === "omp";
+  const supportsFast = runtime === "omp" || runtime === "codex";
   const supportsReasoning = runtime !== "opencode";
 
   const selectedModel: ModelOption | undefined = catalog.data?.models.find((m) => m.id === model);
@@ -123,7 +126,7 @@ export function AgentForm(props: {
     // Model ids and settings belong to one runtime; carrying them over would be wrong.
     setModel("");
     setReasoning("");
-    if (next !== "omp") setFast(null);
+    if (next !== "omp" && next !== "codex") setFast(null);
   };
 
   const capabilityOptions: CheckOption[] = [

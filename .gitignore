@@ -6,3 +6,4 @@ hivemind.toml
 scripts/__pycache__
 frontend/playwright-report/
 frontend/test-results/
+.npm-global/

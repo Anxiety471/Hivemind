@@ -1,6 +1,10 @@
 pub mod catalog;
 mod telemetry;
 pub use telemetry::ProgressSink;
+mod acp;
+mod claude_code;
+mod codex;
+mod cursor;
 mod omp;
 mod opencode;
 mod pi;
@@ -174,10 +178,36 @@ pub async fn create_session(
             pi::PiSession::start_filtered(&runtime_config.pi_binary, agent, &runtime_config.private_env).await?,
         )),
         "opencode" => Ok(Box::new(
-            opencode::OpencodeSession::start_filtered(&runtime_config.opencode_binary, &harness_dir(runtime_config, agent)?.join("opencode"), agent, &runtime_config.private_env).await?,
+            opencode::start_filtered(&runtime_config.opencode_binary, &harness_dir(runtime_config, agent)?.join("opencode"), agent, &runtime_config.private_env).await?,
+        )),
+        "codex" => Ok(Box::new(
+            codex::start_filtered(
+                &runtime_config.codex_acp_binary,
+                (!runtime_config.codex_binary.is_empty())
+                    .then_some(runtime_config.codex_binary.as_str()),
+                agent,
+                &runtime_config.private_env,
+            )
+            .await?,
+        )),
+        "claude_code" => Ok(Box::new(
+            claude_code::start_filtered(
+                &runtime_config.claude_code_acp_binary,
+                agent,
+                &runtime_config.private_env,
+            )
+            .await?,
+        )),
+        "cursor" => Ok(Box::new(
+            cursor::start_filtered(
+                &runtime_config.cursor_binary,
+                agent,
+                &runtime_config.private_env,
+            )
+            .await?,
         )),
         other => bail!(
-            "unsupported runtime '{other}' for agent '{}'; supported runtimes are pi, omp and opencode, so change this agent's runtime",
+            "unsupported runtime '{other}' for agent '{}'; supported runtimes are pi, omp, opencode, codex, claude_code and cursor, so change this agent's runtime",
             agent.name
         ),
     }
@@ -442,6 +472,7 @@ while IFS= read -r request; do
     *'"method":"initialize"'*) printf '{{"jsonrpc":"2.0","id":%s,"result":{{"protocolVersion":1}}}}\n' "$id" ;;
     *'"method":"session/new"'*) printf '{{"jsonrpc":"2.0","id":%s,"result":{{"sessionId":"ses_fake"}}}}\n' "$id" ;;
     *'"method":"session/set_config_option"'*) printf '{{"jsonrpc":"2.0","id":%s,"result":{{}}}}\n' "$id" ;;
+    *'"method":"session/set_mode"'*) printf '{{"jsonrpc":"2.0","id":%s,"result":{{}}}}\n' "$id" ;;
     *'"method":"session/delete"'*) printf '{{"jsonrpc":"2.0","id":%s,"result":{{}}}}\n' "$id" ;;
     *'"method":"session/prompt"'*)
 {prompt_body}
@@ -590,6 +621,37 @@ done
             error.contains("cancelled") && error.contains("Deny"),
             "{error}"
         );
+        session.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn cursor_cli_session_uses_the_same_protocol_as_opencode() {
+        let fixture = Fixture::new("agent", &opencode_script(OPENCODE_REPLY, ""));
+        let runtime = RuntimeConfig {
+            cursor_binary: fixture.binary("agent"),
+            harness_dir: Some(fixture.0.join("harness")),
+            ..RuntimeConfig::default()
+        };
+        let mut session =
+            create_session(&runtime, &agent("Cursor", "cursor", &fixture.workspace()))
+                .await
+                .unwrap();
+        assert_eq!(session.prompt("hello").await.unwrap(), "opencode fixture");
+        session.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn codex_acp_session_uses_the_same_protocol_as_opencode() {
+        let fixture = Fixture::new("codex-acp", &opencode_script(OPENCODE_REPLY, ""));
+        let runtime = RuntimeConfig {
+            codex_acp_binary: fixture.binary("codex-acp"),
+            harness_dir: Some(fixture.0.join("harness")),
+            ..RuntimeConfig::default()
+        };
+        let mut session = create_session(&runtime, &agent("Codex", "codex", &fixture.workspace()))
+            .await
+            .unwrap();
+        assert_eq!(session.prompt("hello").await.unwrap(), "opencode fixture");
         session.shutdown().await.unwrap();
     }
 
