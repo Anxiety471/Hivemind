@@ -57,6 +57,10 @@ pub trait ToolHost: Send + Sync {
     fn agent_originated(&self, _room: &str) -> bool {
         false
     }
+    /// Save generated artifact files after an agent invocation.
+    fn collect_artifacts(&self, _room: &str, _persona: &str) -> Result<Option<String>> {
+        Ok(None)
+    }
     /// Whether this host owns the tool name.
     fn handles(&self, name: &str) -> bool;
     fn execute(

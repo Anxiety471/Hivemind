@@ -1,6 +1,7 @@
+import { LinkedText } from "../LinkedText";
 // Rooms: room list, paged history, threads, and live replies over the WebSocket.
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, decodeInstance, targetFor, type Message, type Participant, type Room, type Skill, type Thread } from "../api";
+import { api, decodeInstance, targetFor, type Message, type Participant, type Room, type Skill, type Thread, type LibraryArtifact } from "../api";
 import { useLive, useLiveStatus, useRefreshOn, type LiveEvent } from "../live";
 import { href } from "../nav";
 import { listKind, roomLabel, useTaskNames } from "../rooms";
@@ -270,9 +271,11 @@ function RoomView({
           onThread={startThread}
           error={history.error}
           pending={pending}
+          roomId={roomId}
         />
         {target ? (
           <Composer
+            roomId={roomId}
             placeholder={`Message ${info?.kind === "solo" ? "@" + info.participants[0]?.persona_id : info?.name ?? roomId}`}
             participants={info?.participants}
             isReplying={Object.keys(typing).length > 0}
@@ -369,6 +372,7 @@ function MessageList(props: {
   onThread?: (m: Message) => void;
   error: string | null;
   pending?: PendingMessage[];
+  roomId?: string;
 }) {
   const end = useRef<HTMLDivElement>(null);
   const typingCount = Object.keys(props.typing).length;
@@ -401,7 +405,7 @@ function MessageList(props: {
                   <span className="muted">{time(m.created_at)}</span>
                 </div>
               )}
-              <div className="msg-text">{m.speaker === "user" ? m.content : <Markdown text={m.content} />}</div>
+              <div className="msg-text">{m.speaker === "user" ? <LinkedText text={m.content} /> : <Markdown text={m.content} roomId={props.roomId} />}</div>
               {thread && (
                 <button className="thread-link" onClick={() => props.onThread?.(m)}>
                   💬 {thread.message_count} {thread.message_count === 1 ? "reply" : "replies"} · {thread.name}
@@ -449,7 +453,7 @@ function MessageList(props: {
               <strong>{t.persona}</strong>
             </div>
             <div className="msg-text">
-              {t.text ? <Markdown text={t.text} /> : (
+              {t.text ? <Markdown text={t.text} roomId={props.roomId} /> : (
                 <span className="dots">
                   <i />
                   <i />
@@ -464,18 +468,41 @@ function MessageList(props: {
     </div>
   );
 }
+const sizeLabel = (bytes: number) =>
+  bytes < 1024 ? `${bytes} B` : bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 
 function Composer({
+  roomId,
   onSend,
   placeholder,
   participants = [],
   isReplying = false,
 }: {
+  roomId?: string;
   onSend: (text: string, mode?: "queue" | "steer") => Promise<unknown>;
   placeholder: string;
   participants?: Participant[];
   isReplying?: boolean;
 }) {
+  const [attachments, setAttachments] = useState<LibraryArtifact[]>([]);
+  const attach = async (files: FileList | null) => {
+    if (!files || busy || !roomId) return;
+    setBusy(true);
+    setError(null);
+    try {
+      for (const file of Array.from(files)) {
+        if (file.size > 8 * 1024 * 1024) throw new Error(`${file.name} exceeds the 8 MiB limit.`);
+        const content_base64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result).split(",")[1]);
+          reader.onerror = () => reject(new Error(`Could not read ${file.name}.`));
+          reader.readAsDataURL(file);
+        });
+        const result = await api.createLibraryArtifact({ title: file.name, filename: file.name, description: "Chat attachment", room_id: roomId, content_base64 });
+        setAttachments(current => [...current, result.artifact]);
+      }
+    } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
+  };
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -483,6 +510,21 @@ function Composer({
   const [mentionMatch, setMentionMatch] = useState<MentionMatch | null>(null);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [dismissed, setDismissed] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [menuOpen]);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -618,20 +660,24 @@ function Composer({
 
   const send = async () => {
     const value = text.trim();
-    if (!value || busy) return;
+    if ((!value && !attachments.length) || busy) return;
     setBusy(true);
     try {
+      const references = attachments.map(a => `Attached artifact: ${a.filename} (library ID: ${a.id}; use library.get to read it)`).join("\n");
+      const withAttachments = (msg: string) => [msg, references].filter(Boolean).join("\n\n");
       const parsed = parseSlash(value);
       if (parsed.kind === "command") {
         const result = await runCommand(parsed.name, parsed.args);
         if (result.show !== undefined) setOutput(result.show);
         if (result.send !== undefined) {
-          await onSend(result.send, result.mode ?? (isReplying ? "steer" : undefined));
+          await onSend(withAttachments(result.send), result.mode ?? (isReplying ? "steer" : undefined));
           setOutput(null);
+          setAttachments([]);
         }
       } else {
-        await onSend(parsed.text, isReplying ? "steer" : undefined);
+        await onSend(withAttachments(parsed.text), isReplying ? "steer" : undefined);
         setOutput(null);
+        setAttachments([]);
       }
       setText("");
       setMentionMatch(null);
@@ -705,10 +751,46 @@ function Composer({
           <Markdown text={output} />
         </div>
       )}
-      <div className="composer-row">
+      <div
+        className={`composer-box ${dragging ? "drag-over" : ""}`}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragging(true);
+        }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragging(false);
+          attach(e.dataTransfer.files);
+        }}
+      >
+        {attachments.length > 0 && (
+          <div className="composer-attachments-bar">
+            {attachments.map((a) => (
+              <div key={a.id} className="composer-attachment-chip">
+                <span className="chip-icon">📎</span>
+                <span className="chip-name" title={a.filename}>
+                  {a.filename}
+                </span>
+                <span className="chip-size">{sizeLabel(a.size)}</span>
+                <button
+                  type="button"
+                  className="chip-remove"
+                  disabled={busy}
+                  aria-label={`Remove ${a.filename} from message`}
+                  onClick={() =>
+                    setAttachments((current) => current.filter((item) => item.id !== a.id))
+                  }
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         <textarea
           ref={textareaRef}
-          rows={1}
+          rows={2}
           value={text}
           placeholder={placeholder}
           onChange={(e) => {
@@ -726,6 +808,11 @@ function Composer({
             blurTimeoutRef.current = window.setTimeout(() => setMentionMatch(null), 150);
           }}
           onKeyDown={(e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "u") {
+              e.preventDefault();
+              fileInputRef.current?.click();
+              return;
+            }
             if (slashItems.length > 0) {
               if (e.key === "ArrowDown") {
                 e.preventDefault();
@@ -755,23 +842,23 @@ function Composer({
                 e.preventDefault();
                 setSelectedIndex((prev) => (prev + 1) % filtered.length);
                 return;
-               }
+              }
               if (e.key === "ArrowUp") {
                 e.preventDefault();
                 setSelectedIndex((prev) => (prev - 1 + filtered.length) % filtered.length);
                 return;
-               }
+              }
               if (e.key === "Enter" || e.key === "Tab") {
                 e.preventDefault();
                 const chosen = filtered[selectedIndex];
                 if (chosen) insertMention(chosen);
                 return;
-               }
+              }
               if (e.key === "Escape") {
                 e.preventDefault();
                 setDismissed(true);
                 return;
-               }
+              }
             }
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
@@ -779,13 +866,79 @@ function Composer({
             }
           }}
         />
-        <button className="primary" disabled={busy || !text.trim()} onClick={send}>
-          {text.trim().toLowerCase().startsWith("/queue")
-            ? "Queue"
-            : isReplying
-            ? "Steer"
-            : "Send"}
-        </button>
+        <div className="composer-bottom">
+          <div className="composer-actions-left" ref={menuRef}>
+            <button
+              type="button"
+              className="composer-add-btn"
+              data-open={menuOpen}
+              aria-label="Add content or tools"
+              title="Add content or tools"
+              onClick={() => setMenuOpen(!menuOpen)}
+            >
+              +
+            </button>
+            {menuOpen && (
+              <div className="composer-menu" role="menu">
+                <button
+                  type="button"
+                  className="composer-menu-item"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    fileInputRef.current?.click();
+                  }}
+                >
+                  <span className="menu-icon">📎</span>
+                  <span className="menu-label">Add files or photos</span>
+                  <span className="menu-shortcut">Ctrl+U</span>
+                </button>
+                <a
+                  href="#/library"
+                  className="composer-menu-item"
+                  onClick={() => setMenuOpen(false)}
+                >
+                  <span className="menu-icon">📚</span>
+                  <span className="menu-label">Artifact library</span>
+                </a>
+                <button
+                  type="button"
+                  className="composer-menu-item"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    acceptSlash("/skills");
+                  }}
+                >
+                  <span className="menu-icon">⚡</span>
+                  <span className="menu-label">Skills & tools</span>
+                  <span className="menu-shortcut">/skills</span>
+                </button>
+              </div>
+            )}
+            <input
+              ref={fileInputRef}
+              aria-label="Attach files"
+              type="file"
+              multiple
+              disabled={busy}
+              style={{ display: "none" }}
+              onChange={(e) => {
+                attach(e.target.files);
+                e.target.value = "";
+              }}
+            />
+          </div>
+          <button
+            className="primary"
+            disabled={busy || (!text.trim() && !attachments.length)}
+            onClick={send}
+          >
+            {text.trim().toLowerCase().startsWith("/queue")
+              ? "Queue"
+              : isReplying
+              ? "Steer"
+              : "Send"}
+          </button>
+        </div>
       </div>
       <div className="hint">
         {isReplying
@@ -832,7 +985,7 @@ function ThreadPanel({
             <strong>{anchor.speaker === "user" ? "You" : anchor.speaker}</strong>
             <span className="muted">{time(anchor.created_at)}</span>
           </div>
-          <div className="msg-text">{anchor.speaker === "user" ? anchor.content : <Markdown text={anchor.content} />}</div>
+          <div className="msg-text">{anchor.speaker === "user" ? <LinkedText text={anchor.content} /> : <Markdown text={anchor.content} roomId={thread.id} />}</div>
         </div>
       )}
       <MessageList
@@ -843,8 +996,10 @@ function ThreadPanel({
         typing={typing}
         error={history.error}
         pending={pending}
+        roomId={thread.id}
       />
       <Composer
+        roomId={thread.id}
         placeholder="Reply in thread"
         participants={participants}
         isReplying={Object.keys(typing).length > 0}

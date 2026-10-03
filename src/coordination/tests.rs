@@ -1615,3 +1615,66 @@ async fn cancelling_a_task_drops_its_open_questions() {
         "the waiting question receiver must be dropped"
     );
 }
+
+#[test]
+fn task_file_deliverables_are_automatically_saved_from_the_attempt_worktree() {
+    use crate::{
+        access::{AccessPolicy, Audit},
+        artifacts::{ArtifactLibrary, ArtifactTools},
+        conversation::ToolHost,
+        shared_workspace::SharedWorkspaces,
+    };
+    let directory = std::env::temp_dir().join(format!(
+        "hivemind-task-library-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let worktree = directory.join("isolated");
+    std::fs::create_dir_all(&worktree).unwrap();
+    std::fs::write(directory.join("a.txt"), "original source").unwrap();
+    std::fs::write(worktree.join("a.txt"), "task deliverable").unwrap();
+    let config = team_config(directory.to_str().unwrap());
+    let service = service_with(&config).0;
+    planned(&service);
+    let work = claim(&service);
+    service
+        .store()
+        .write(|db| {
+            db.set_attempt_workspace(&work[0].attempt.id, Some(worktree.to_str().unwrap()), None)
+        })
+        .unwrap();
+    let owner = ctx(&service, &work[0]);
+    service
+        .submit_result(&owner, result(Verdict::Passed))
+        .unwrap();
+    let library = Arc::new(ArtifactLibrary::open(":memory:", None).unwrap());
+    let tools = ArtifactTools::new(
+        library.clone(),
+        Arc::new(SharedWorkspaces::new(
+            &directory.join("hivemind.toml"),
+            &config,
+        )),
+        Arc::new(AccessPolicy::from_config(
+            &config,
+            Arc::new(Audit::in_memory().unwrap()),
+        )),
+    )
+    .with_coordination(service);
+    assert!(tools
+        .collect_artifacts(&owner.room, &owner.persona)
+        .unwrap()
+        .is_some());
+    let artifacts = library.list("", 20, 0).unwrap();
+    assert_eq!(artifacts.len(), 1);
+    assert_eq!(
+        library.content(&artifacts[0].id).unwrap().unwrap(),
+        b"task deliverable"
+    );
+    assert!(tools
+        .collect_artifacts(&owner.room, &owner.persona)
+        .unwrap()
+        .is_none());
+    std::fs::remove_dir_all(directory).unwrap();
+}

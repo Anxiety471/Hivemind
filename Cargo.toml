@@ -9,8 +9,9 @@ license = "UNLICENSED"
 
 [dependencies]
 anyhow = "1.0"
+base64 = "0.22"
 async-trait = "0.1"
-axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "ws"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio", "ws"] }
 futures-util = "0.3"
 clap = { version = "4.5", features = ["derive"] }
 rusqlite = { version = "0.32", features = ["bundled"] }

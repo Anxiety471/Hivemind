@@ -479,3 +479,7 @@ The library's `core`, `events`, `conversation`, `config`, `runtime`, and `memory
 ## 📄 License
 
 No license has been chosen yet.
+
+### Artifact Library
+
+Hivemind stores chat attachments and generated deliverables in its own searchable Library. Agents can reference saved IDs and publish revocable URLs that users open directly. See [Artifact Library](docs/artifact-library.md) for automatic collection, agent tools, permissions and deployment configuration.
