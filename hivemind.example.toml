@@ -62,7 +62,8 @@ Engineer = "Implementation Reviewer"
 
 # Optional: skills Hivemind offers agents (skills.list / skills.read). Runtimes' own skills never load.
 # [skills]
-# dirs = ["~/.agents/skills"]
+# Include this checkout's skills directory for the bundled ascii-flow skill.
+# dirs = ["/abs/path/to/Hivemind/skills", "~/.agents/skills"]
 
 # Durable execution defaults: limits are disabled until configured.
 # [execution]

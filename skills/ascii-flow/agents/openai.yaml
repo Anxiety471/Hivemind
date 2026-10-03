@@ -1,0 +1,4 @@
+interface:
+  display_name: "ASCII Flow"
+  short_description: "Turn ASCII into interactive diagrams"
+  default_prompt: "Use $ascii-flow to turn this ASCII diagram into clickable nodes, arrows, and animated flow."

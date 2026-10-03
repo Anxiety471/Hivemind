@@ -10,6 +10,8 @@ import { parseMarkdown } from "./markdownParse";
 import { plantumlToMermaid } from "./diagrams/plantuml";
 import { drawioToScene, looksLikeDrawio } from "./diagrams/drawio";
 import { DrawioSvg } from "./diagrams/DrawioSvg";
+import { AsciiBlock } from "./diagrams/AsciiBlock";
+import { hasAsciiArrow } from "./diagrams/asciiGraph";
 // ASCII diagrams use a bundled DejaVu Sans Mono: it has box-drawing, arrow and geometric
 // glyphs at the monospace advance, so alignment no longer depends on installed fonts.
 import "@fontsource/dejavu-mono/400.css";
@@ -32,11 +34,11 @@ const ALERT_META: Record<AlertKind, { icon: string; title: string }> = {
   caution: { icon: "🛑", title: "Caution" },
 };
 
-function CodeBlock({ lang, code, ascii }: { lang: string; code: string; ascii?: boolean }) {
+function CodeBlock({ lang, code }: { lang: string; code: string }) {
   const [copied, setCopied] = useState(false);
 
   return (
-    <div className={ascii ? "markdown-code-block ascii-diagram" : "markdown-code-block"}>
+    <div className="markdown-code-block">
       <div className="markdown-code-header">
         <span className="code-lang-tag">{(lang || "code").toUpperCase()}</span>
         <button
@@ -138,12 +140,13 @@ const BOX_DRAWING = /[\u2500-\u257f]/;
 const ASCII_LANGS = new Set(["ascii", "asciiart", "ascii-art", "diagram", "text", "txt", "plain", "plaintext", ""]);
 
 /** Which diagram renderer (if any) handles a fenced block. */
-function diagramKind(lang: string, code: string): "mermaid" | "plantuml" | "drawio" | "ascii" | null {
+function diagramKind(lang: string, code: string): "mermaid" | "plantuml" | "drawio" | "ascii" | "ascii-animation" | null {
   const l = lang.toLowerCase();
+  if (l === "ascii-animation") return "ascii-animation";
   if (l === "mermaid") return "mermaid";
   if (l === "plantuml" || l === "puml" || l === "uml" || (ASCII_LANGS.has(l) && /^\s*@startuml\b/i.test(code))) return "plantuml";
   if (l === "drawio" || l === "draw.io" || l === "mxgraph" || l === "mxfile" || ((l === "xml" || ASCII_LANGS.has(l)) && looksLikeDrawio(code))) return "drawio";
-  if (l === "ascii" || l === "asciiart" || l === "ascii-art" || (ASCII_LANGS.has(l) && BOX_DRAWING.test(code))) return "ascii";
+  if (l === "ascii" || l === "asciiart" || l === "ascii-art" || l === "ascii-diagram" || (ASCII_LANGS.has(l) && (BOX_DRAWING.test(code) || hasAsciiArrow(code)))) return "ascii";
   return null;
 }
 
@@ -204,7 +207,7 @@ function renderBlocks(blocks: Block[]): ReactNode[] {
       case "code": {
         const kind = diagramKind(b.lang, b.v);
         // A fence still streaming is incomplete diagram source: show it as code until it closes.
-        switch (b.open && kind !== "ascii" ? null : kind) {
+        switch (b.open && kind !== "ascii" && kind !== "ascii-animation" ? null : kind) {
           case "mermaid":
             return <DiagramBlock key={i} badge="MERMAID" code={b.v} render={renderMermaid} />;
           case "plantuml":
@@ -212,7 +215,9 @@ function renderBlocks(blocks: Block[]): ReactNode[] {
           case "drawio":
             return <DiagramBlock key={i} badge="DRAW.IO" code={b.v} render={renderDrawio} />;
           case "ascii":
-            return <CodeBlock key={i} lang="ascii" code={b.v} ascii />;
+            return <AsciiBlock key={i} code={b.v} streaming={b.open} />;
+          case "ascii-animation":
+            return <AsciiBlock key={i} code={b.v} animated streaming={b.open} />;
           default:
             return <CodeBlock key={i} lang={b.lang} code={b.v} />;
         }
