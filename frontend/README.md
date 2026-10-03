@@ -50,6 +50,14 @@ bun run dev                        # terminal 3: the UI (or: npm run dev)
 `FAKE_PI_DELAY=4 sh dev/demo.sh` slows replies down so the live indicators are easy to see. Delete `dev/.demo/` to start over.
 ## Interactive ASCII and animation in agent replies
 
+The bundled `ascii-flow` skill teaches agents the diagram notation below. Enable
+it in `hivemind.toml` with `[skills] dirs = ["/abs/path/to/Hivemind/skills"]`
+(use the path to your checkout, and retain any existing skill directories).
+Agents discover it through `skills.list` / `skills.read`; in chat, invoke
+`/skill:ascii-flow` followed by the diagram request. The catalog scans configured
+directories on each call, so new skill files are discoverable without a restart;
+changing the configured directories requires loading the updated configuration.
+
 ASCII fences (`ascii`, `asciiart`, `ascii-art`, `ascii-diagram`) and text fences
 containing box-drawing characters or arrows go through the same chat renderer.
 Recognized diagrams become interactive SVG: `[Node]` and complete ASCII/Unicode
