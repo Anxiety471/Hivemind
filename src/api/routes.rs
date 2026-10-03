@@ -583,6 +583,8 @@ mod tests {
         );
         assert!(!workspace.exists());
     }
+    // Used by the unix-gated `post_turn_ids_reach_the_connected_websocket_stream` test.
+    #[cfg(unix)]
     async fn post_json_over_tcp(
         address: SocketAddr,
         path: &str,

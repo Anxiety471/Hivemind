@@ -815,6 +815,8 @@ pub fn worker_lock(data_dir: &Path) -> Result<std::fs::File> {
 }
 
 /// Kills the process group when an invocation is dropped, including test children.
+/// The pid is only read on unix; on other platforms the handle is inert.
+#[cfg_attr(not(unix), allow(dead_code))]
 pub(crate) struct ProcessGroup(pub Option<u32>);
 impl Drop for ProcessGroup {
     fn drop(&mut self) {
@@ -1045,6 +1047,9 @@ mod tests {
         assert!(report["records"][0]["usage"].is_null());
         assert!(db.check_budget("r", "p").is_err());
     }
+    // The check commands below are POSIX shell (`sh -c`); on Windows a host check
+    // is configured with a Windows command instead, so this fixture is unix-only.
+    #[cfg(unix)]
     #[tokio::test]
     async fn host_checks_bind_to_exact_commit_and_record_failures_and_bounded_logs() {
         let directory = Directory::new();
@@ -1075,6 +1080,8 @@ mod tests {
         assert_eq!(report[0]["stdout"], "checked");
         assert_eq!(report[1]["exit_code"], 1);
     }
+    // `sleep` is a POSIX command; a Windows check would use a Windows binary.
+    #[cfg(unix)]
     #[tokio::test]
     async fn timed_out_check_cannot_pass() {
         let directory = Directory::new();

@@ -324,7 +324,9 @@ mod normalize_tests {
     }
 }
 
-#[cfg(test)]
+// Every test here drives a POSIX shell fixture with an exec bit, so the whole
+// module is unix-only.
+#[cfg(all(test, unix))]
 mod tests {
     use crate::{
         events::EventBus,

@@ -1249,6 +1249,8 @@ fn gated_coordination_decisions_are_audited_with_the_bound_identity() {
         .all(|e| e.persona == "Lead" && e.resource.starts_with("task:")));
 }
 
+// The host check below runs the POSIX `true` binary, so this fixture is unix-only.
+#[cfg(unix)]
 #[test]
 fn agent_evidence_cannot_bypass_host_checks_or_reuse_proof_for_another_commit() {
     let service = service();

@@ -1,4 +1,9 @@
 //! Operator-facing execution integration tests with a real fixture RPC child.
+//!
+//! Every test here drives a `#!/bin/sh` fixture binary marked executable, so the
+//! whole module is POSIX-only and is declared `#[cfg(all(test, unix))]` in
+//! `src/api/mod.rs`.
+
 use super::*;
 use axum::{
     body::Body,

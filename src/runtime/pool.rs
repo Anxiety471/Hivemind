@@ -661,7 +661,8 @@ impl RuntimePool {
             self.rotate_instance(&instance, reason).await;
         }
     }
-    #[cfg(test)]
+    // Used by unix-gated core tests only (see src/core.rs fixtures).
+    #[cfg(all(test, unix))]
     pub(crate) fn slot_count(&self) -> usize {
         self.inner.slots.lock().len()
     }

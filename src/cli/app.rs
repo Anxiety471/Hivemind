@@ -12,9 +12,11 @@ use super::groups::group_command;
 #[cfg(test)]
 use super::groups::{group_member_summary, render_group};
 use super::render::{effective_agents, print_agents, print_order, status};
+#[cfg(all(test, unix))]
+use super::shell::delete_group;
 use super::shell::{chat, Route};
 #[cfg(test)]
-use super::shell::{delete_group, parse_interactive, route_names, GroupAction, InteractiveCommand};
+use super::shell::{parse_interactive, route_names, GroupAction, InteractiveCommand};
 use crate::setup;
 
 pub async fn entry() {
@@ -185,12 +187,16 @@ pub(super) async fn route_turn(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use crate::cli::groups::mutate_group_and_reload;
-    use hivemind::commands::{self, GroupCommand};
-    use hivemind::config::{self, ConversationMode};
+    use hivemind::commands;
+    #[cfg(unix)]
+    use hivemind::commands::GroupCommand;
+    use hivemind::config;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
     use std::{
         fs,
-        os::unix::fs::PermissionsExt,
         path::PathBuf,
         process,
         sync::atomic::{AtomicUsize, Ordering},
@@ -220,6 +226,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     struct FakePi {
         directory: TestDirectory,
         binary: PathBuf,
@@ -227,6 +234,7 @@ mod tests {
         prompt_log: PathBuf,
     }
 
+    #[cfg(unix)]
     impl FakePi {
         fn new() -> Self {
             let directory = TestDirectory::new("cli-runtime");
@@ -297,6 +305,7 @@ printf '%s stopped\n' "$agent" >> __LOG__
         }
     }
 
+    #[cfg(unix)]
     fn capture_replies(replies: &ReplyBatch) -> (String, bool) {
         let mut output = String::new();
         let failed = visit_replies(&replies.replies, |name, result| match result {
@@ -399,6 +408,7 @@ printf '%s stopped\n' "$agent" >> __LOG__
             assert_eq!(cli.config, PathBuf::from("custom.toml"));
         }
     }
+    #[cfg(unix)]
     #[tokio::test]
     async fn core_turns_persist_runtime_startup_failures_and_keep_peers() {
         let fake = FakePi::new();
@@ -450,6 +460,7 @@ printf '%s stopped\n' "$agent" >> __LOG__
     }
     /// Fake Pi whose first reply is a `memory.private.add` tool block and whose
     /// reply after any tool result is plain text.
+    #[cfg(unix)]
     fn write_memory_tool_fake_pi(directory: &TestDirectory) -> PathBuf {
         let binary = directory.0.join("fake-pi");
         let script = r#"#!/bin/sh
@@ -482,6 +493,7 @@ done
         binary
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn ask_executes_a_memory_tool_block_over_the_runtime_and_reprompts() {
         let directory = TestDirectory::new("tool-runtime");
@@ -521,6 +533,7 @@ done
         assert_eq!(found[0].content, "end-to-end note");
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn observer_role_is_denied_gated_memory_writes_and_the_denial_is_audited() {
         let directory = TestDirectory::new("tool-observer");
@@ -632,6 +645,7 @@ done
              Effective reply order:\n  1. Reviewer\n  2. Engineer\n"
         );
     }
+    #[cfg(unix)]
     #[tokio::test]
     async fn cli_group_role_override_reaches_context_pack() {
         let fake = FakePi::new();
@@ -640,7 +654,7 @@ done
         config.groups.push(hivemind::config::GroupConfig {
             name: "review".into(),
             members: vec!["Reviewer".into()],
-            mode: ConversationMode::Discussion,
+            mode: config::ConversationMode::Discussion,
             member_roles: [("Reviewer".into(), "Lead Reviewer".into())]
                 .into_iter()
                 .collect(),
@@ -691,6 +705,7 @@ done
         let _ = std::fs::remove_dir_all(directory);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn cli_keeps_one_runtime_per_room_instance_and_sends_deltas() {
         let fake = FakePi::new();
@@ -698,7 +713,7 @@ done
         config.groups.push(hivemind::config::GroupConfig {
             name: "review".into(),
             members: vec!["Reviewer".into()],
-            mode: ConversationMode::Discussion,
+            mode: config::ConversationMode::Discussion,
             member_roles: [("Reviewer".into(), "Lead Reviewer".into())]
                 .into_iter()
                 .collect(),
@@ -776,6 +791,7 @@ done
             .is_empty());
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn active_group_empty_turns_reject_and_delete_routes_to_main() {
         let directory = TestDirectory::new("active-group");
@@ -814,6 +830,7 @@ done
         core.shutdown().await;
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn ask_starts_only_its_agent_and_all_orders_output() {
         let fake = FakePi::new();
@@ -870,6 +887,7 @@ done
         }
         assert_eq!(log.len(), 6);
     }
+    #[cfg(unix)]
     #[tokio::test]
     async fn all_cli_target_matches_core_main_resolution_and_order() {
         let fake = FakePi::new();

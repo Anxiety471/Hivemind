@@ -10,7 +10,12 @@ permissions:
 
 jobs:
   rust:
-    runs-on: ubuntu-latest
+    name: rust (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
 
     steps:
       - uses: actions/checkout@v4
@@ -31,6 +36,7 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Check formatting
+        if: matrix.os == 'ubuntu-latest'
         run: cargo fmt --all --check
 
       - name: Clippy
@@ -40,7 +46,12 @@ jobs:
         run: cargo test --locked --all-targets
 
   frontend:
-    runs-on: ubuntu-latest
+    name: frontend (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
     defaults:
       run:
         working-directory: frontend
