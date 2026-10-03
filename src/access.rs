@@ -204,11 +204,16 @@ pub fn tool_access(
     custom: &BTreeMap<String, RoleConfig>,
 ) -> Option<ToolAccess> {
     let grants = resolve(agent, custom);
-    let access = ToolAccess {
-        write: grants.has("workspace.write"),
-        exec: grants.has("workspace.exec"),
+    let mut access = ToolAccess {
+        write: !grants.restricted || grants.has("workspace.write"),
+        exec: !grants.restricted || grants.has("workspace.exec"),
     };
-    (grants.restricted && !(access.write && access.exec)).then_some(access)
+    // A backend agent never gets the runtime's own edit tools: its writes go
+    // through `files.write`, which refuses frontend files before touching disk.
+    if crate::work_scope::bars_frontend(agent) {
+        access.write = false;
+    }
+    (!(access.write && access.exec)).then_some(access)
 }
 
 pub fn validate(config: &HivemindConfig) -> Result<()> {
@@ -276,7 +281,7 @@ pub fn memory_permission(tool: &str) -> Option<&'static str> {
 pub fn workspace_permission(tool: &str, group: bool) -> Option<&'static str> {
     match tool {
         "workspace.set" | "workspace.clear" if group => Some("group.manage"),
-        "workspace.set" => Some("workspace.write"),
+        "workspace.set" | "files.write" => Some("workspace.write"),
         _ => None,
     }
 }
@@ -554,6 +559,25 @@ mod tests {
 
     fn policy(config: &HivemindConfig) -> AccessPolicy {
         AccessPolicy::from_config(config, Arc::new(Audit::in_memory().unwrap()))
+    }
+
+    #[test]
+    fn backend_agents_lose_the_runtime_write_tools_but_keep_the_shell() {
+        let mut backend = config_agent("Back");
+        backend.capabilities = vec!["backend".into()];
+        // No roles: unrestricted before, now only the runtime's edit tools are withheld.
+        let access = tool_access(&backend, &BTreeMap::new()).unwrap();
+        assert!(!access.write && access.exec);
+        // A frontend or full-stack agent stays unrestricted.
+        let mut full = backend.clone();
+        full.capabilities.push("frontend".into());
+        assert!(tool_access(&full, &BTreeMap::new()).is_none());
+        assert!(tool_access(&config_agent("Plain"), &BTreeMap::new()).is_none());
+        // A role-restricted backend agent keeps exactly its granted exec.
+        let mut worker = backend.clone();
+        worker.roles = vec!["worker".into()];
+        let access = tool_access(&worker, &BTreeMap::new()).unwrap();
+        assert!(!access.write && access.exec);
     }
 
     #[test]

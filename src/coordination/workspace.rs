@@ -234,20 +234,7 @@ impl Worktree {
 
     /// The nearest `package.json` at or above `path`, inside the checkout.
     fn project_of(&self, path: &str) -> crate::work_scope::Project {
-        let mut dir = Path::new(path).parent();
-        loop {
-            let candidate = self
-                .root
-                .join(dir.unwrap_or_else(|| Path::new("")))
-                .join("package.json");
-            if let Ok(text) = std::fs::read_to_string(&candidate) {
-                return crate::work_scope::project_from_package_json(&text);
-            }
-            match dir {
-                Some(d) if !d.as_os_str().is_empty() => dir = d.parent(),
-                _ => return crate::work_scope::Project::Unknown,
-            }
-        }
+        crate::work_scope::project_near(&self.root, path)
     }
 
     /// Remove the checkout; the branch and its commits stay for dependants.

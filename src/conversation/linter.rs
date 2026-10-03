@@ -28,6 +28,7 @@ pub const KNOWN_TOOLS: &[&str] = &[
     "workspace.set",
     "workspace.clear",
     "workspace.list",
+    "files.write",
     "agents.list",
     "messages.send",
     "messages.inbox",
@@ -54,6 +55,7 @@ pub const KNOWN_TOOLS: &[&str] = &[
 pub const TOOL_NAMESPACES: &[&str] = &[
     "memory.",
     "workspace.",
+    "files.",
     "tasks.",
     "messages.",
     "agents.",
@@ -309,6 +311,23 @@ pub fn lint_tool_args(name: &str, args: &Value) -> Result<()> {
                     rule: "schema/missing-argument",
                     message: "Tool 'workspace.set' requires a non-empty string argument 'path'".into(),
                     fix: Some("Example:\n```hivemind-tool\n{\"name\":\"workspace.set\",\"args\":{\"path\":\"/absolute/path/to/project\"}}\n```".into()),
+                });
+            }
+        }
+        "files.write" => {
+            let path = args.get("path").and_then(Value::as_str).map(str::trim);
+            if path.is_none() || path.unwrap().is_empty() {
+                bail!(ToolLintDiagnostic {
+                    rule: "schema/missing-argument",
+                    message: "Tool 'files.write' requires a non-empty string argument 'path' (relative to your workspace)".into(),
+                    fix: Some("Example:\n```hivemind-tool\n{\"name\":\"files.write\",\"args\":{\"path\":\"src/orders.rs\",\"content\":\"full file contents\"}}\n```".into()),
+                });
+            }
+            if !args.get("content").is_some_and(Value::is_string) {
+                bail!(ToolLintDiagnostic {
+                    rule: "schema/missing-argument",
+                    message: "Tool 'files.write' requires a string argument 'content' (the whole new file)".into(),
+                    fix: Some("Example: {\"path\": \"src/orders.rs\", \"content\": \"...\"}".into()),
                 });
             }
         }

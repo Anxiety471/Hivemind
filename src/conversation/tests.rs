@@ -3072,3 +3072,111 @@ async fn unauthorized_tool_calls_are_refused_with_a_routing_hint() {
     let prompts = invoker.prompts.lock().clone();
     assert!(prompts[1].contains("authorization/not-allowed"));
 }
+
+fn writer(name: &str, capabilities: &[&str], dir: &std::path::Path) -> Participant {
+    let mut participant = member(name);
+    let mut agent = (*participant.agent).clone();
+    agent.capabilities = capabilities.iter().map(|c| c.to_string()).collect();
+    agent.workspace = dir.display().to_string();
+    participant.agent = Arc::new(agent);
+    participant
+}
+
+/// Runs one Discussion turn where `member` replies with each `files.write` call in
+/// order and then a final text; returns the follow-up prompts (tool results).
+async fn write_turn(member: Participant, calls: &[serde_json::Value]) -> Vec<String> {
+    let (_path, coord) = fixture();
+    let mut replies: Vec<String> = calls
+        .iter()
+        .map(|a| tool_block("files.write", a.clone()))
+        .collect();
+    replies.push("done".into());
+    let refs: Vec<&str> = replies.iter().map(String::as_str).collect();
+    let invoker = scripted(&refs);
+    let members = vec![member];
+    coord
+        .turn(TurnRequest {
+            room: "write-room",
+            room_name: "Write room",
+            group_id: "write-group",
+            mode: ConversationMode::Discussion,
+            members: &members,
+            input: "write the files",
+            invoker: invoker.clone(),
+        })
+        .await
+        .unwrap();
+    let prompts = invoker.prompts.lock().clone();
+    prompts
+}
+
+#[tokio::test]
+async fn backend_writes_go_through_files_write_which_refuses_frontend_before_touching_disk() {
+    let dir = std::env::temp_dir().join(format!("hivemind-write-{}", stable_id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let call = |path: &str, content: &str| serde_json::json!({"path": path, "content": content});
+    // A turn may run at most four tool actions, so the calls come in two turns.
+    let first = write_turn(
+        writer("Back", &["backend"], &dir),
+        &[
+            call("src/orders.rs", "fn main() {}"),
+            call("web/Login.tsx", "export const L = () => <div/>;"),
+            call("static/app.css", "a{}"),
+            call(
+                "lib/ui.js",
+                "document.querySelector('#x').innerHTML = 'hi';",
+            ),
+        ],
+    )
+    .await;
+    let second = write_turn(
+        writer("Back", &["backend"], &dir),
+        &[
+            call(
+                "tools/server.js",
+                "const http = require('http');\nhttp.createServer(() => {});",
+            ),
+            call("../escape.rs", "x"),
+            call(".git/hooks/pre-commit", "x"),
+        ],
+    )
+    .await;
+    // Logic, scripts and Node servers are written; frontend files and escapes are refused.
+    assert_eq!(
+        std::fs::read_to_string(dir.join("src/orders.rs")).unwrap(),
+        "fn main() {}"
+    );
+    assert!(dir.join("tools/server.js").exists());
+    for refused in ["web/Login.tsx", "static/app.css", "lib/ui.js"] {
+        assert!(!dir.join(refused).exists(), "{refused} must not be written");
+    }
+    assert!(!dir.parent().unwrap().join("escape.rs").exists());
+    assert!(!dir.join(".git").exists());
+    let last = first.last().unwrap();
+    assert!(last.contains("authorization/frontend-work"), "{last}");
+    assert!(first
+        .iter()
+        .any(|p| p.contains("wrote 12 bytes to src/orders.rs")));
+    let last = second.last().unwrap();
+    assert!(last.contains("without '..' or '.git'"), "{last}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn agents_that_may_do_frontend_work_can_write_it() {
+    let dir = std::env::temp_dir().join(format!("hivemind-write-{}", stable_id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let call = serde_json::json!({"path": "web/Login.tsx", "content": "export const L = 1;"});
+    write_turn(
+        writer("Front", &["frontend"], &dir),
+        std::slice::from_ref(&call),
+    )
+    .await;
+    assert!(dir.join("web/Login.tsx").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+    // A full-stack agent (backend plus frontend) is free too.
+    std::fs::create_dir_all(&dir).unwrap();
+    write_turn(writer("Full", &["backend", "frontend"], &dir), &[call]).await;
+    assert!(dir.join("web/Login.tsx").exists());
+    let _ = std::fs::remove_dir_all(dir);
+}

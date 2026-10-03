@@ -484,6 +484,67 @@ pub(super) fn execute_with_optional_authorization(
     execute_memory_tool(memory, caller, call)
 }
 
+/// Largest file `files.write` will write in one call.
+const MAX_WRITE_BYTES: usize = 256 * 1024;
+
+/// Hivemind's own file write: the only way an agent barred from frontend work
+/// can write, since its runtime's edit tools are withheld. It checks scope
+/// before touching disk, so a refused write never happens.
+fn write_file(
+    agent: &AgentConfig,
+    caller: &Caller,
+    access: Option<&crate::access::AccessPolicy>,
+    args: &serde_json::Value,
+) -> Result<String> {
+    use std::path::{Component, Path};
+    if let Some(access) = access {
+        access.authorize_workspace(&caller.persona_id, &caller.room_id, "files.write", false)?;
+    }
+    let path = required_string(args, "path")?;
+    let content = args
+        .get("content")
+        .and_then(serde_json::Value::as_str)
+        .context("files.write requires a string 'content'")?;
+    if content.len() > MAX_WRITE_BYTES {
+        bail!("files.write content is over {MAX_WRITE_BYTES} bytes; write it in smaller files");
+    }
+    let relative = Path::new(&path);
+    let escapes = relative.is_absolute()
+        || relative
+            .components()
+            .any(|c| !matches!(c, Component::Normal(_) | Component::CurDir))
+        || relative
+            .components()
+            .next()
+            .is_some_and(|first| first.as_os_str() == ".git");
+    if escapes {
+        bail!("files.write path must be relative to your workspace, without '..' or '.git'");
+    }
+    let root = std::fs::canonicalize(&agent.workspace).context("workspace is not available")?;
+    if crate::work_scope::bars_frontend(agent) {
+        let project = crate::work_scope::project_near(&root, &path);
+        let found =
+            crate::work_scope::violations(&[(path.clone(), Some(content.to_owned()))], project);
+        if !found.is_empty() {
+            bail!("{}", crate::work_scope::message(&found));
+        }
+    }
+    let target = root.join(relative);
+    let parent = target
+        .parent()
+        .context("files.write path has no directory")?;
+    std::fs::create_dir_all(parent).context("creating directories")?;
+    // A symlinked directory must not lead outside the workspace.
+    if !std::fs::canonicalize(parent)?.starts_with(&root) {
+        bail!("files.write path leaves your workspace");
+    }
+    if target.is_symlink() {
+        bail!("files.write will not write through a symlink");
+    }
+    std::fs::write(&target, content).context("writing file")?;
+    Ok(format!("wrote {} bytes to {path}", content.len()))
+}
+
 /// Adapter-independent memory tool loop: run the invoker, execute at most
 /// [`MAX_MEMORY_ACTIONS`] Hivemind tool actions, re-prompt with each result,
 /// and return the first plain-text answer. The first prompt may be a room
@@ -539,6 +600,9 @@ pub(super) async fn invoke_with_memory(
                 let executed =
                     super::linter::lint_authorization(&agent.unauthorized_work, &call.name)
                         .and_then(|()| match host.filter(|host| host.handles(&call.name)) {
+                            _ if call.name == "files.write" => {
+                                write_file(agent, caller, access, &call.args)
+                            }
                             Some(host) => host.execute(
                                 &caller.room_id,
                                 &caller.persona_id,

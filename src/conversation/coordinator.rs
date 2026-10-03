@@ -103,6 +103,7 @@ pub(super) fn scope_section(
         out.push_str(&list(unauthorized));
         if bars_frontend {
             out.push_str("- frontend work: UI components, styles, markup, static assets (you do backend logic and scripts, including Node.js servers and tooling)\n");
+            out.push_str("Your runtime's own edit/write tools are disabled. Create or replace files with hivemind-tool files.write {\"path\":\"relative/path\",\"content\":\"whole file\"}; it refuses frontend files, and the write does not happen.\n");
         }
     }
     out.push_str(&format!("Do only authorized work. If asked for anything else, do not perform it: start your reply with {} then state the boundary, quote the request so it can be routed, and name who should take it. Authorized work is completed normally.\n", super::linter::OUT_OF_SCOPE));

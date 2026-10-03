@@ -117,6 +117,23 @@ pub fn project_from_package_json(text: &str) -> Project {
     }
 }
 
+/// The nearest `package.json` at or above `rel` (a path inside `root`).
+pub fn project_near(root: &std::path::Path, rel: &str) -> Project {
+    let mut dir = std::path::Path::new(rel).parent();
+    loop {
+        let candidate = root
+            .join(dir.unwrap_or_else(|| std::path::Path::new("")))
+            .join("package.json");
+        if let Ok(text) = std::fs::read_to_string(&candidate) {
+            return project_from_package_json(&text);
+        }
+        match dir {
+            Some(d) if !d.as_os_str().is_empty() => dir = d.parent(),
+            _ => return Project::Unknown,
+        }
+    }
+}
+
 fn has_any(text: &str, needles: &[&str]) -> bool {
     needles.iter().any(|needle| text.contains(needle))
 }
