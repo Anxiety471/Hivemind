@@ -39,10 +39,35 @@ export type StorageLike = {
   setItem(key: string, value: string): void;
 };
 
+/** The look that has been saved, without an unsaved draft. */
+export type CommittedRice = {
+  selectedId: string;
+  custom: Rice[];
+};
+
+export type ServerRice = {
+  selected_id: string;
+  custom: ServerCustomRice[];
+};
+
+export type ServerCustomRice = {
+  id: string;
+  name: string;
+  blurb: string;
+  appearance: Appearance;
+  font: FontChoice;
+  radius: number;
+  density: Density;
+  light: Palette;
+  dark: Palette;
+};
+
 export type RiceEnv = {
   scheme(): Scheme;
   watchScheme(onChange: () => void): () => void;
   apply(rice: Rice | null, scheme: Scheme): void;
+  /** Called when the saved selection changes. Draft edits do not call this. */
+  onCommit?(state: CommittedRice): void;
 };
 
 export type Snapshot = {
@@ -771,6 +796,53 @@ function nextId(): string {
   return `custom-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+export function toServerRice(state: CommittedRice): ServerRice {
+  return {
+    selected_id: state.selectedId,
+    custom: state.custom.map((rice) => ({
+      id: rice.id,
+      name: rice.name,
+      blurb: rice.blurb,
+      appearance: rice.appearance,
+      font: rice.font,
+      radius: rice.radius,
+      density: rice.density,
+      light: { ...rice.light },
+      dark: { ...rice.dark },
+    })),
+  };
+}
+
+export function fromServerRice(saved: ServerRice): CommittedRice | null {
+  if (!saved || typeof saved.selected_id !== "string") return null;
+  const custom = (saved.custom ?? []).flatMap((item) => {
+    const rice = parseRiceRecord(item, item.id, false);
+    return rice ? [{ ...rice, id: item.id, builtin: false }] : [];
+  });
+  if (custom.length !== (saved.custom ?? []).length) return null;
+  return { selectedId: saved.selected_id, custom };
+}
+
+export type RicePullDecision =
+  | { kind: "apply"; saved: CommittedRice | null }
+  | { kind: "migrate" }
+  | { kind: "skip" };
+
+/** Server document wins. A browser uploads its local rice only before the first successful sync, and only when the server has none. */
+export function decideRicePull(input: {
+  saved: ServerRice | null;
+  local: CommittedRice;
+  synced: boolean;
+}): RicePullDecision {
+  if (input.saved) {
+    const parsed = fromServerRice(input.saved);
+    return parsed ? { kind: "apply", saved: parsed } : { kind: "skip" };
+  }
+  const localIsDefault = input.local.selectedId === "hive" && input.local.custom.length === 0;
+  if (!input.synced && !localIsDefault) return { kind: "migrate" };
+  return { kind: "apply", saved: null };
+}
+
 export function exportRice(rice: Rice): string {
   return JSON.stringify(
     {
@@ -806,6 +878,9 @@ export type RiceStore = {
   reset(): void;
   exportJson(): string;
   importJson(text: string): string | null;
+  committed(): CommittedRice;
+  /** Replace the saved look from the server. Keeps an unsaved draft when the save itself did not change. */
+  applyCommitted(saved: CommittedRice | null): void;
 };
 
 export function createRiceStore(storage: StorageLike, env: RiceEnv): RiceStore {
@@ -836,7 +911,7 @@ export function createRiceStore(storage: StorageLike, env: RiceEnv): RiceStore {
     if (appearance === "system") {
       if (!watching) {
         watching = true;
-        unwatch = env.watchScheme(() => publish());
+        unwatch = env.watchScheme(() => publish(false));
       }
     } else if (watching) {
       unwatch?.();
@@ -845,12 +920,27 @@ export function createRiceStore(storage: StorageLike, env: RiceEnv): RiceStore {
     }
   };
 
-  const publish = () => {
+  const committed = (): CommittedRice => ({
+    selectedId,
+    custom: custom.map(cloneRice),
+  });
+
+  const sameCommitted = (saved: CommittedRice | null) => {
+    if (!saved) return selectedId === "hive" && custom.length === 0;
+    if (saved.selectedId !== selectedId || saved.custom.length !== custom.length) return false;
+    return saved.custom.every(
+      (rice, index) =>
+        rice.id === custom[index]?.id && rice.name === custom[index].name && rice.blurb === custom[index].blurb && sameLook(rice, custom[index]),
+    );
+  };
+
+  const publish = (notify: boolean) => {
     const rice = active();
     const scheme = resolveScheme(rice.appearance, env.scheme);
     storage.setItem(STORAGE_KEY, JSON.stringify({ version: 1, selectedId, draft, custom }));
     env.apply(isStockHive(rice) ? null : rice, scheme);
     ensureWatch(rice.appearance);
+    if (notify) env.onCommit?.(committed());
     for (const listener of [...listeners]) listener();
   };
 
@@ -858,7 +948,7 @@ export function createRiceStore(storage: StorageLike, env: RiceEnv): RiceStore {
     const next = cloneRice(draft ?? base());
     mutator(next);
     draft = sameLook(next, base()) ? null : next;
-    publish();
+    publish(false);
   };
 
   const api: RiceStore = {
@@ -871,7 +961,7 @@ export function createRiceStore(storage: StorageLike, env: RiceEnv): RiceStore {
       if (!find(id)) return;
       selectedId = id;
       draft = null;
-      publish();
+      publish(true);
     },
     setAppearance(appearance) {
       edit((rice) => {
@@ -934,7 +1024,7 @@ export function createRiceStore(storage: StorageLike, env: RiceEnv): RiceStore {
       custom = [saved, ...custom];
       selectedId = saved.id;
       draft = null;
-      publish();
+      publish(true);
       return null;
     },
     updateSaved(name) {
@@ -949,7 +1039,7 @@ export function createRiceStore(storage: StorageLike, env: RiceEnv): RiceStore {
       next.blurb = current.blurb;
       custom = custom.map((c) => (c.id === current.id ? next : c));
       draft = null;
-      publish();
+      publish(true);
       return null;
     },
     remove(id) {
@@ -959,16 +1049,16 @@ export function createRiceStore(storage: StorageLike, env: RiceEnv): RiceStore {
         selectedId = "hive";
         draft = null;
       }
-      publish();
+      publish(true);
     },
     revert() {
       draft = null;
-      publish();
+      publish(false);
     },
     reset() {
       selectedId = "hive";
       draft = null;
-      publish();
+      publish(true);
     },
     exportJson() {
       return exportRice(active());
@@ -987,12 +1077,25 @@ export function createRiceStore(storage: StorageLike, env: RiceEnv): RiceStore {
       custom = [parsed, ...custom];
       selectedId = parsed.id;
       draft = null;
-      publish();
+      publish(true);
       return null;
+    },
+    committed,
+    applyCommitted(saved) {
+      if (sameCommitted(saved)) return;
+      if (!saved) {
+        selectedId = "hive";
+        custom = [];
+      } else {
+        custom = saved.custom.map((rice) => ({ ...cloneRice(rice), builtin: false }));
+        selectedId = find(saved.selectedId) ? saved.selectedId : "hive";
+      }
+      draft = null;
+      publish(false);
     },
   };
 
-  publish();
+  publish(false);
   return api;
 }
 
@@ -1055,7 +1158,16 @@ function browserEnv(): RiceEnv {
       };
     },
     apply: applyRiceToDocument,
+    onCommit(state) {
+      commitHook?.(state);
+    },
   };
+}
+
+let commitHook: ((state: CommittedRice) => void) | null = null;
+
+export function setRiceCommitHook(hook: (state: CommittedRice) => void) {
+  commitHook = hook;
 }
 
 let singleton: RiceStore | null = null;

@@ -184,7 +184,7 @@ export function RiceView() {
     <div className="page">
       <PageHeader
         title="Rice"
-        sub="Make this UI yours. Pick a preset or tune colors, type, corners, and density. Saved in this browser only."
+        sub="Make this UI yours. Pick a preset or tune colors, type, corners, and density. Saved rices are stored on this Hivemind server. Unsaved tweaks stay in this browser until you save."
       >
         {snap.dirty && <span className="badge tone-warn">Unsaved</span>}
       </PageHeader>

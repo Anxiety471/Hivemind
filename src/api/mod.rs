@@ -15,6 +15,7 @@ mod runtime;
 mod setup;
 mod skills;
 mod tasks;
+mod ui_rice;
 mod websocket;
 mod workspaces;
 

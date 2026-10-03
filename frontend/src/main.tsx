@@ -3,6 +3,7 @@ import { lazy, Suspense, useEffect, useState } from "react";
 import { api, hasSavedSettings } from "./api";
 import { connect, useLiveStatus } from "./live";
 import { bootRice } from "./rice";
+import { startRiceSync } from "./riceSync";
 import { Chat } from "./views/Chat";
 import { FirstRunSetup } from "./views/FirstRunSetup";
 const Library = lazy(() => import("./views/Library").then((m) => ({ default: m.Library })));
@@ -148,5 +149,6 @@ function App() {
 }
 
 bootRice();
+startRiceSync();
 connect();
 createRoot(document.getElementById("app")!).render(<App />);

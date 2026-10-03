@@ -44,6 +44,7 @@ pub struct HivemindCore {
     access: Arc<crate::access::AccessPolicy>,
     workspaces: Arc<SharedWorkspaces>,
     skills: Arc<crate::skills::SkillCatalog>,
+    ui_rice: crate::ui_rice::UiRiceStore,
     setup_required: AtomicBool,
     setup_lock: std::sync::Mutex<()>,
     shutting_down: AtomicBool,
@@ -266,6 +267,7 @@ impl HivemindCore {
         }
         conversation.set_tools(Arc::new(ToolHosts(hosts)));
         events.publish(DomainEventKind::CoreStarted);
+        let ui_rice = crate::ui_rice::UiRiceStore::new(&data_dir);
         Ok(Self {
             artifacts,
             execution,
@@ -281,6 +283,7 @@ impl HivemindCore {
             access,
             workspaces,
             skills,
+            ui_rice,
             setup_required: AtomicBool::new(setup_required),
             setup_lock: std::sync::Mutex::new(()),
             shutting_down: AtomicBool::new(false),
@@ -687,6 +690,9 @@ impl HivemindCore {
     }
     pub fn skills(&self) -> &Arc<crate::skills::SkillCatalog> {
         &self.skills
+    }
+    pub fn ui_rice(&self) -> &crate::ui_rice::UiRiceStore {
+        &self.ui_rice
     }
     pub fn data_dir(&self) -> &Path {
         &self.data_dir

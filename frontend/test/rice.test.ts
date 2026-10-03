@@ -6,10 +6,13 @@ import {
   accentInk,
   createRiceStore,
   exportRice,
+  decideRicePull,
+  fromServerRice,
   isDark,
   luminance,
   parseHex,
   shufflePalette,
+  type CommittedRice,
   type Rice,
   type RiceEnv,
   type Scheme,
@@ -137,6 +140,65 @@ test("saved rices persist, update, import, and fall back when deleted", () => {
   reloaded.remove(id);
   assert.equal(reloaded.snapshot().active.id, "hive");
   assert.equal(reloaded.snapshot().custom.length, 0);
+});
+
+test("only a saved change is committed, and a matching server copy keeps the draft", () => {
+  const commits: CommittedRice[] = [];
+  const h = harness();
+  h.env.onCommit = (state) => commits.push(state);
+  const store = createRiceStore(h.storage, h.env);
+  assert.equal(commits.length, 0);
+  store.select("nord");
+  assert.deepEqual(commits.map((commit) => commit.selectedId), ["nord"]);
+  assert.equal(store.setColor("light", "accent", "#cc241d"), true);
+  assert.equal(commits.length, 1);
+  store.applyCommitted({ selectedId: "nord", custom: [] });
+  assert.equal(store.snapshot().dirty, true);
+  assert.equal(store.snapshot().active.light.accent, "#cc241d");
+  store.applyCommitted({ selectedId: "matrix", custom: [] });
+  assert.equal(store.snapshot().baseId, "matrix");
+  assert.equal(store.snapshot().dirty, false);
+  assert.equal(commits.length, 1);
+  store.reset();
+  assert.equal(commits.at(-1)?.selectedId, "hive");
+
+  const hive = PRESETS[0];
+  const parsed = fromServerRice({
+    selected_id: "custom-amber",
+    custom: [
+      {
+        id: "custom-amber",
+        name: "Amber",
+        blurb: "Imported rice.",
+        appearance: "light",
+        font: "serif",
+        radius: 16,
+        density: "roomy",
+        light: hive.light,
+        dark: hive.dark,
+      },
+    ],
+  });
+  assert.equal(parsed?.custom[0]?.font, "serif");
+  assert.equal(fromServerRice({ selected_id: "nord", custom: [] })?.selectedId, "nord");
+});
+
+test("an empty server uploads a local rice once, then a clear stays cleared", () => {
+  const local: CommittedRice = { selectedId: "nord", custom: [] };
+  assert.equal(decideRicePull({ saved: null, local, synced: false }).kind, "migrate");
+  assert.deepEqual(decideRicePull({ saved: null, local, synced: true }), { kind: "apply", saved: null });
+  assert.equal(decideRicePull({ saved: null, local: { selectedId: "hive", custom: [] }, synced: false }).kind, "apply");
+
+  const applied = decideRicePull({ saved: { selected_id: "matrix", custom: [] }, local, synced: false });
+  assert.equal(applied.kind, "apply");
+  if (applied.kind === "apply") assert.equal(applied.saved?.selectedId, "matrix");
+
+  const skipped = decideRicePull({
+    saved: { selected_id: "custom-x", custom: [{ id: "custom-x", name: "X" } as never] },
+    local,
+    synced: true,
+  });
+  assert.equal(skipped.kind, "skip");
 });
 
 test("shuffle stays readable and harmonize repaints secondary colors", () => {

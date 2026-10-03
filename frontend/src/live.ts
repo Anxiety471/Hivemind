@@ -57,6 +57,17 @@ export function recentEvents() {
 }
 
 /** Run `fn` for every live event while the component is mounted. */
+export function subscribeLive(fn: Listener) {
+  listeners.add(fn);
+  return () => listeners.delete(fn);
+}
+
+export function subscribeStatus(fn: (status: LiveStatus) => void) {
+  statusListeners.add(fn);
+  fn(status);
+  return () => statusListeners.delete(fn);
+}
+
 export function useLive(fn: Listener, deps: unknown[] = []) {
   useEffect(() => {
     listeners.add(fn);

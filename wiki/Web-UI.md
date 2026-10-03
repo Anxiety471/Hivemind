@@ -18,7 +18,7 @@ cd frontend && bun install && bun run dev   # UI on http://127.0.0.1:5173
 - **Workspaces**: allowed roots, group shared workspaces, and persona workspaces, editable in place.
 - **Runtime sessions**: epochs per room with end reasons and rotation, plus **Rotate** for a live session (`POST /runtime/rotate`).
 - **Live activity**: the raw WebSocket event stream with filters.
-- **Rice**: the look of this UI. Presets, or your own colors, type, corners, and density. Saved in the browser, and shareable as JSON. Choosing **Hive** restores the default, including the operating system's light or dark scheme.
+- **Rice**: the look of this UI. Presets, or your own colors, type, corners, and density. The saved look is stored by the server (`GET`/`PUT`/`DELETE /api/v1/ui/rice`) and shared by every browser pointed at this hive. A browser that already has a rice uploads it the first time it reaches a hive with none. After that, the server copy wins, including a clear. Unsaved tweaks stay in the browser until you save. Choosing **Hive** with nothing else saved clears it, including the operating system's light or dark scheme. JSON import and export still work.
 
 ## Managing agents, workspaces and rooms
 

@@ -12,5 +12,6 @@ pub mod memory;
 pub mod runtime;
 pub mod shared_workspace;
 pub mod skills;
+pub mod ui_rice;
 
 pub mod execution;

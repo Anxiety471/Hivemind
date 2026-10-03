@@ -1,4 +1,5 @@
 // Typed client for the Hivemind HTTP API (`/api/v1`). Shapes mirror src/api/*.rs.
+import type { ServerRice } from "./rice";
 
 export type LibraryArtifact = { id: string; title: string; filename: string; description: string; media_type: string; size: number; room_id: string; persona_id: string; created_at: number; published: boolean; url: string | null };
 
@@ -453,6 +454,9 @@ export const api = {
   rotate: (agent_instance_id: string) => request("POST", "/runtime/rotate", { agent_instance_id }),
   skills: () => request<{ dirs: string[]; skills: Skill[] }>("GET", "/skills"),
   toolCatalog: () => request<{ tools: string[]; namespaces: Record<string, string[]> }>("GET", "/tools"),
+  uiRice: () => request<{ saved: ServerRice | null }>("GET", "/ui/rice"),
+  saveUiRice: (body: ServerRice) => request<{ saved: ServerRice }>("PUT", "/ui/rice", body),
+  clearUiRice: () => request<void>("DELETE", "/ui/rice"),
 };
 
 export function targetFor(room: Room): Target | null {

@@ -40,10 +40,11 @@ Building the server and serving health, info, and agent listings never starts Pi
 | `GET` | `/api/v1/tools` | Tool names agents can call through the `hivemind-tool` fence, grouped by namespace |
 | `GET` | `/api/v1/access/personas` | Effective permissions per persona |
 | `GET` | `/api/v1/access/audit?denied=&persona=&limit=` | Access audit log |
+| `GET` / `PUT` / `DELETE` | `/api/v1/ui/rice` | The hive's saved web UI rice. `GET` returns `{ "saved": null }` until one is stored. `PUT` replaces it (`selected_id` is a preset id or one of `custom`). `DELETE` clears it (`204`). A `config.changed` event with `scope` `ui` follows a save or clear. Unsaved browser tweaks are not stored |
 | `GET` | `/api/v1/events?after=N` | Durable, restart-safe event replay with a high-water mark |
 | `GET` | `/api/v1/ws` | WebSocket live event stream |
 
-Workspace changes use the same checks as the agent `workspace.*` tools: an absolute, existing directory, inside `[workspaces] roots` when roots are configured. They are written to the config file, and a runtime session in the old directory is replaced before the next turn. Persona definitions are managed through `/api/v1/agents`; roles stay read-only, so edit those in the config. A `config.changed` event (`scope` `agents` or `rooms`) is published after these changes.
+Workspace changes use the same checks as the agent `workspace.*` tools: an absolute, existing directory, inside `[workspaces] roots` when roots are configured. They are written to the config file, and a runtime session in the old directory is replaced before the next turn. Persona definitions are managed through `/api/v1/agents`; roles stay read-only, so edit those in the config. A `config.changed` event (`scope` `agents`, `rooms`, or `ui`) is published after these changes.
 
 Errors use one shape, `{"error":{"code","message"}}`, and internal failures are sanitized.
 
