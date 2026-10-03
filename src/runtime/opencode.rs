@@ -77,7 +77,10 @@ pub async fn start_filtered(
             config_options,
             extra_env: vec![
                 ("OPENCODE_CONFIG_CONTENT".into(), config.to_string()),
-                ("OPENCODE_CONFIG_DIR".into(), config_dir.display().to_string()),
+                (
+                    "OPENCODE_CONFIG_DIR".into(),
+                    config_dir.display().to_string(),
+                ),
                 ("OPENCODE_DISABLE_PROJECT_CONFIG".into(), "1".into()),
             ],
             env_remove: &["OPENCODE_CONFIG"],

@@ -163,7 +163,12 @@ impl AcpSession {
             );
         }
         let label = spec.label;
-        match timeout(STARTUP_TIMEOUT, Self::spawn_and_open(agent, spec, private_env)).await {
+        match timeout(
+            STARTUP_TIMEOUT,
+            Self::spawn_and_open(agent, spec, private_env),
+        )
+        .await
+        {
             Ok(result) => result,
             Err(_) => bail!(
                 "{} session for agent '{}' did not become ready within {}s",
@@ -247,8 +252,7 @@ impl AcpSession {
             .with_context(|| {
                 format!(
                     "{} session/new for '{}' returned no sessionId",
-                    spec.label,
-                    session.agent_name
+                    spec.label, session.agent_name
                 )
             })?;
         for option in spec.config_options {
@@ -302,10 +306,11 @@ impl AcpSession {
             .next_line()
             .await
             .with_context(|| format!("failed reading {} ACP output", self.runtime))?
-            .with_context(|| format!("{} ACP exited before completing the request", self.runtime))?;
-        serde_json::from_str(&line).with_context(|| {
-            format!("{} ACP returned invalid JSON: {line}", self.runtime)
-        })
+            .with_context(|| {
+                format!("{} ACP exited before completing the request", self.runtime)
+            })?;
+        serde_json::from_str(&line)
+            .with_context(|| format!("{} ACP returned invalid JSON: {line}", self.runtime))
     }
 
     async fn request(
@@ -326,8 +331,7 @@ impl AcpSession {
             Err(error) => {
                 let error = error.context(format!(
                     "{} ACP {method} failed for '{}'",
-                    self.runtime,
-                    self.agent_name
+                    self.runtime, self.agent_name
                 ));
                 self.failure = Some(format!("{error:#}"));
                 Err(error)
@@ -355,7 +359,8 @@ impl AcpSession {
                         .await?;
                 }
                 (Some(other), Some(request_id)) => {
-                    if let Some(reply) = self.extension_reply.map(|handler| handler(other, &frame)) {
+                    if let Some(reply) = self.extension_reply.map(|handler| handler(other, &frame))
+                    {
                         self.write(&json!({"jsonrpc": "2.0", "id": request_id, "result": reply}))
                             .await?;
                     } else {

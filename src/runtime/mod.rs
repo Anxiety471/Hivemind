@@ -184,7 +184,7 @@ pub async fn create_session(
             codex::start_filtered(
                 &runtime_config.codex_acp_binary,
                 (!runtime_config.codex_binary.is_empty())
-                    .then(|| runtime_config.codex_binary.as_str()),
+                    .then_some(runtime_config.codex_binary.as_str()),
                 agent,
                 &runtime_config.private_env,
             )
@@ -632,9 +632,10 @@ done
             harness_dir: Some(fixture.0.join("harness")),
             ..RuntimeConfig::default()
         };
-        let mut session = create_session(&runtime, &agent("Cursor", "cursor", &fixture.workspace()))
-            .await
-            .unwrap();
+        let mut session =
+            create_session(&runtime, &agent("Cursor", "cursor", &fixture.workspace()))
+                .await
+                .unwrap();
         assert_eq!(session.prompt("hello").await.unwrap(), "opencode fixture");
         session.shutdown().await.unwrap();
     }

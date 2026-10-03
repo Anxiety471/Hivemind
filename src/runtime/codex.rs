@@ -44,7 +44,10 @@ pub async fn start_filtered(
     }
     let mut extra_env = vec![
         ("NO_BROWSER".into(), "1".into()),
-        ("INITIAL_AGENT_MODE".into(), initial_agent_mode(agent).into()),
+        (
+            "INITIAL_AGENT_MODE".into(),
+            initial_agent_mode(agent).into(),
+        ),
     ];
     if let Some(path) = codex_binary.filter(|value| !value.is_empty()) {
         extra_env.push(("CODEX_PATH".into(), path.to_owned()));

@@ -28,6 +28,9 @@ const RUNTIME_NAMES: Record<Runtime, string> = {
   pi: "Pi",
   omp: "oh-my-pi (OMP)",
   opencode: "OpenCode",
+  codex: "Codex",
+  claude_code: "Claude Code",
+  cursor: "Cursor",
 };
 
 function makePersona(index: number): PersonaDraft {

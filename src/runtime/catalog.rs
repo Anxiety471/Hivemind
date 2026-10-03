@@ -38,7 +38,10 @@ pub struct Catalog {
 }
 
 pub fn is_runtime(runtime: &str) -> bool {
-    matches!(runtime, "pi" | "omp" | "opencode" | "codex" | "claude_code" | "cursor")
+    matches!(
+        runtime,
+        "pi" | "omp" | "opencode" | "codex" | "claude_code" | "cursor"
+    )
 }
 
 /// List `runtime`'s models. `harness_dir` is Hivemind's runtime directory (needed so
@@ -299,7 +302,11 @@ async fn acp_models(
         next_id += 1;
     }
     let created = rpc
-        .request(next_id, "session/new", json!({"cwd": cwd, "mcpServers": []}))
+        .request(
+            next_id,
+            "session/new",
+            json!({"cwd": cwd, "mcpServers": []}),
+        )
         .await?;
     next_id += 1;
     if let Some(session) = created["sessionId"].as_str() {
