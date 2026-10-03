@@ -39,6 +39,7 @@ const AUDITED: &[&str] = &[
     "tasks.result.submit",
     "tasks.review",
     "tasks.block",
+    "tasks.wait",
     "groups.create",
     "groups.members.update",
 ];
@@ -74,8 +75,14 @@ fn allowed(service: &CoordinationService, ctx: &ToolCtx) -> Vec<&'static str> {
             "tasks.block",
             "tasks.decide",
             "tasks.ask",
+            "tasks.wait",
         ]),
-        AttemptKind::Work => names.extend(["tasks.result.submit", "tasks.block", "tasks.ask"]),
+        AttemptKind::Work => names.extend([
+            "tasks.result.submit",
+            "tasks.block",
+            "tasks.ask",
+            "tasks.wait",
+        ]),
         AttemptKind::Review => names.extend(["tasks.review"]),
         AttemptKind::Inbox => {}
     }
@@ -145,6 +152,10 @@ const EXAMPLES: &[(&str, &str)] = &[
         r#"{"question":"Should the migration keep the old column?","to":"Lead"}"#,
     ),
     (
+        "tasks.wait",
+        r#"{"question":"Should the migration keep the old column?"}"#,
+    ),
+    (
         "tasks.block",
         r#"{"reason":"need the staging URL","needs_input":true}"#,
     ),
@@ -192,7 +203,7 @@ impl ToolHost for CoordinationTools {
             .collect::<Vec<_>>()
             .join("\n");
         Some(format!(
-            "Hivemind coordination tools (same ```hivemind-tool fence as memory tools; one call per reply as your whole reply):\n{}\nTask {} (root {}). {budget}\nTools you may call: {}\nExamples:\n{examples}\nRules: a message queues work for the recipient; one that is already working sees it at once. tasks.ask waits (up to {}s) for an answer from the user, or from the persona named in `to`, and returns it; use it only when you cannot sensibly decide yourself. Messages and decisions may arrive in the middle of your work as [Hivemind: ...] notes: take them into account. Hivemind binds every call to your identity, task, and lease; never send ids of yours. Messages, groups, and artifacts are shared content: put nothing private in them. Never invent results.\n",
+            "Hivemind coordination tools (same ```hivemind-tool fence as memory tools; one call per reply as your whole reply):\n{}\nTask {} (root {}). {budget}\nTools you may call: {}\nExamples:\n{examples}\nRules: tasks.wait records a durable question for the operator, checkpoints and ends this attempt, and frees capacity; prefer it to tasks.ask for long waits. After the answer, a new attempt continues from the checkpoint and recorded feedback. a message queues work for the recipient; one that is already working sees it at once. tasks.ask waits (up to {}s) for an answer from the user, or from the persona named in `to`, and returns it; use it only when you cannot sensibly decide yourself. Messages and decisions may arrive in the middle of your work as [Hivemind: ...] notes: take them into account. Hivemind binds every call to your identity, task, and lease; never send ids of yours. Messages, groups, and artifacts are shared content: put nothing private in them. Never invent results.\n",
             role_line(ctx.kind),
             ctx.task_id,
             ctx.root_id,
@@ -248,6 +259,10 @@ impl ToolHost for CoordinationTools {
             }
         }
         result.map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    fn ends_turn(&self, name: &str) -> bool {
+        name == "tasks.wait"
     }
 
     fn execute_async<'a>(
@@ -674,6 +689,10 @@ fn run(
         "tasks.progress" => {
             service.progress(ctx, &str_arg(args, "note")?)?;
             Ok("progress recorded".into())
+        }
+        "tasks.wait" => {
+            let id = service.defer_question(ctx, &str_arg(args, "question")?)?;
+            Ok(format!("Question {id} saved. This attempt is checkpointed and ends now; Hivemind will continue the task after the operator answers."))
         }
         "tasks.block" => {
             service.block(

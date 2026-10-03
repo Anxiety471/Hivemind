@@ -42,6 +42,7 @@ pub const KNOWN_TOOLS: &[&str] = &[
     "tasks.progress",
     "tasks.block",
     "tasks.ask",
+    "tasks.wait",
     "tasks.result.submit",
     "tasks.review",
     "tasks.decide",

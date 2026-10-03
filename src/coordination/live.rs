@@ -364,7 +364,8 @@ impl CoordinationService {
 
     /// Questions running attempts on `task_id` are waiting on.
     pub fn open_questions(&self, task_id: &str) -> Vec<OpenQuestion> {
-        self.channel()
+        let mut questions: Vec<OpenQuestion> = self
+            .channel()
             .questions
             .lock()
             .iter()
@@ -377,7 +378,9 @@ impl CoordinationService {
                 message_id: p.message_id.clone(),
                 asked_at: p.asked_at,
             })
-            .collect()
+            .collect();
+        questions.extend(self.deferred_questions(task_id).unwrap_or_default());
+        questions
     }
 
     /// Drop live state for an attempt that ended.

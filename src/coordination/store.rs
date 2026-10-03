@@ -127,6 +127,11 @@ impl CoordinationStore {
         if version < 1 {
             connection.execute_batch(&format!("BEGIN IMMEDIATE;{SCHEMA_V1}COMMIT;"))?;
         }
+        connection.execute_batch("CREATE TABLE IF NOT EXISTS deferred_questions (
+          id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id), attempt_id TEXT NOT NULL,
+          persona TEXT NOT NULL, question TEXT NOT NULL, asked_at INTEGER NOT NULL, status TEXT NOT NULL,
+          answer TEXT, answered_by TEXT);
+          CREATE UNIQUE INDEX IF NOT EXISTS one_deferred_question ON deferred_questions(task_id) WHERE status='open';")?;
         Ok(Self {
             connection: Mutex::new(connection),
             clock: AtomicI64::new(0),
@@ -176,7 +181,7 @@ impl CoordinationStore {
 
 /// Statement helpers over one connection or transaction.
 pub struct Db<'a> {
-    c: &'a Connection,
+    pub(super) c: &'a Connection,
     pub now: i64,
 }
 
@@ -575,7 +580,7 @@ impl Db<'_> {
         Ok(self
             .c
             .prepare_cached(
-                "SELECT COUNT(*) FROM task_attempts WHERE task_id=?1 AND kind IN ('work','plan')",
+                "SELECT COUNT(*) FROM task_attempts WHERE task_id=?1 AND kind IN ('work','plan') AND state!='waiting'",
             )?
             .query_row([task], |r| r.get(0))?)
     }

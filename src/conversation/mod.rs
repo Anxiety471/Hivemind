@@ -66,6 +66,10 @@ pub trait ToolHost: Send + Sync {
         name: &str,
         args: &serde_json::Value,
     ) -> Result<String>;
+    /// End the turn after a successful host tool that checkpoints work.
+    fn ends_turn(&self, _name: &str) -> bool {
+        false
+    }
     /// Execute a call that may wait (for example, for an answer to a
     /// question). Defaults to [`ToolHost::execute`].
     fn execute_async<'a>(

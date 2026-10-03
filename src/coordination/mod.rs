@@ -2,6 +2,7 @@
 //! groups, host-bound tools, and a leased scheduler. Deterministic storage,
 //! authorization, scheduling, and context assembly never require a model.
 pub mod capsule;
+mod deferred;
 pub mod live;
 pub mod model;
 pub mod policy;
