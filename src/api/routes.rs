@@ -1372,6 +1372,99 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn group_follow_up_budget_is_adjustable_including_unlimited() {
+        let test_core = TestCore::new();
+        write_config(&test_core);
+        let app = router(test_core.core.clone(), watch::channel(false).1);
+        let (status, body) = request_json(
+            app.clone(),
+            "POST",
+            "/api/v1/chat-groups",
+            json!({"id":"crew","members":["Engineer"]}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        let url = "/api/v1/rooms/group-crew/settings";
+        let (_, _, shown) = request(app.clone(), "GET", url).await;
+        assert!(shown["settings"]["follow_up_limit"].is_null());
+        assert!(shown["settings"]["default_follow_up_limit"].is_number());
+        use crate::memory::{ArchiveParticipant, ArchivedMessage, ArchivedTurn, Caller};
+        test_core
+            .core
+            .memory()
+            .append_archive_turn(
+                &Caller::trusted_user("test"),
+                ArchivedTurn {
+                    id: "t-crew".into(),
+                    room_id: "group-crew".into(),
+                    started_at: 1,
+                    completed_at: Some(2),
+                    metadata: json!({}),
+                    participants: vec![ArchiveParticipant {
+                        participant_id: "Engineer".into(),
+                        role: None,
+                    }],
+                    messages: vec![ArchivedMessage {
+                        id: "m-crew".into(),
+                        room_id: "group-crew".into(),
+                        turn_id: "t-crew".into(),
+                        speaker: "Engineer".into(),
+                        content: "hello".into(),
+                        created_at: 1,
+                    }],
+                },
+            )
+            .unwrap();
+        let (status, created) = request_json(
+            app.clone(),
+            "POST",
+            "/api/v1/rooms/group-crew/threads",
+            json!({"anchor_message_id":"m-crew","name":"Discussion"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        let thread_id = created["thread"]["id"].as_str().unwrap();
+        let default_limit = test_core.core.config().conversation.mention_limit;
+
+        for (value, expected, expected_budget) in [
+            (json!(7), json!(7), 7),
+            (
+                json!("unlimited"),
+                json!("unlimited"),
+                crate::conversation::UNLIMITED_FOLLOW_UP_CEILING,
+            ),
+            (json!(null), json!(null), default_limit),
+        ] {
+            let (status, body) =
+                request_json(app.clone(), "PATCH", url, json!({"follow_up_limit": value})).await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            assert_eq!(body["settings"]["follow_up_limit"], expected);
+            assert_eq!(
+                test_core.core.conversation().follow_up_budget("group-crew"),
+                expected_budget
+            );
+            assert_eq!(
+                test_core.core.conversation().follow_up_budget(thread_id),
+                expected_budget
+            );
+        }
+        for bad in [json!(-1), json!(65), json!("lots"), json!(1.5)] {
+            let (status, _) =
+                request_json(app.clone(), "PATCH", url, json!({"follow_up_limit": bad})).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+        }
+        // Only groups have the control.
+        let (status, _) = request_json(
+            app.clone(),
+            "PATCH",
+            "/api/v1/rooms/main/settings",
+            json!({"follow_up_limit": 3}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
     async fn room_settings_strip_exactly_one_prefix() {
         let test_core = TestCore::new();
         write_config(&test_core);

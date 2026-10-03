@@ -189,14 +189,72 @@ async fn remove(State(state): State<ApiState>, Path(id): Path<String>) -> Respon
         Err(e) => failure(e),
     }
 }
-async fn shared(State(state): State<ApiState>, Path(token): Path<String>) -> Response {
+#[derive(Deserialize)]
+pub(super) struct SharedParams {
+    /// `?raw=1` returns the stored bytes instead of a rendered document.
+    #[serde(default)]
+    raw: Option<String>,
+}
+async fn shared(
+    State(state): State<ApiState>,
+    Path(token): Path<String>,
+    Query(params): Query<SharedParams>,
+) -> Response {
     match state.core.artifacts().shared_content(&token) {
-        Ok(Some((artifact, bytes))) => bytes_response(artifact, bytes),
+        Ok(Some((artifact, bytes))) => shared_response(artifact, bytes, params.raw.is_some()),
         Ok(None) => missing(),
         Err(e) => failure(e),
     }
 }
 fn bytes_response(artifact: LibraryArtifact, bytes: Vec<u8>) -> Response {
+    respond(artifact, bytes, None, ARTIFACT_CSP)
+}
+
+/// Published Markdown and images open as documents styled like the Library
+/// preview; `?raw=1` and every other type stream the stored bytes.
+fn shared_response(artifact: LibraryArtifact, bytes: Vec<u8>, raw: bool) -> Response {
+    if raw {
+        return respond(artifact, bytes, None, ARTIFACT_CSP);
+    }
+    match artifact.media_type.as_str() {
+        "text/markdown" => match std::str::from_utf8(&bytes) {
+            Ok(markdown) => {
+                let page = super::document::markdown_document(&artifact.title, markdown);
+                respond(
+                    artifact,
+                    page.into_bytes(),
+                    Some("text/html; charset=utf-8"),
+                    ARTIFACT_CSP,
+                )
+            }
+            Err(_) => respond(artifact, bytes, None, ARTIFACT_CSP),
+        },
+        "image/png" | "image/jpeg" | "image/gif" | "image/webp" | "image/svg+xml" => {
+            let page = super::document::image_document(&artifact.title);
+            respond(
+                artifact,
+                page.into_bytes(),
+                Some("text/html; charset=utf-8"),
+                IMAGE_PAGE_CSP,
+            )
+        }
+        _ => respond(artifact, bytes, None, ARTIFACT_CSP),
+    }
+}
+
+/// Applies to every response derived from artifact content: an opaque origin with
+/// no scripts, forms or network access.
+const ARTIFACT_CSP: &str = "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+/// The image page carries no artifact markup, so it is not sandboxed and can load
+/// the same-origin raw image it wraps.
+const IMAGE_PAGE_CSP: &str = "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+
+fn respond(
+    artifact: LibraryArtifact,
+    bytes: Vec<u8>,
+    content_type: Option<&str>,
+    csp: &'static str,
+) -> Response {
     let mut response = bytes.into_response();
     let headers = response.headers_mut();
     let inline = matches!(
@@ -215,7 +273,8 @@ fn bytes_response(artifact: LibraryArtifact, bytes: Vec<u8>) -> Response {
     );
     headers.insert(
         header::CONTENT_TYPE,
-        HeaderValue::from_str(&artifact.media_type).expect("validated media type"),
+        HeaderValue::from_str(content_type.unwrap_or(&artifact.media_type))
+            .expect("validated media type"),
     );
     let filename: String = artifact
         .filename
@@ -234,9 +293,9 @@ fn bytes_response(artifact: LibraryArtifact, bytes: Vec<u8>) -> Response {
         "x-content-type-options",
         HeaderValue::from_static("nosniff"),
     );
-    // HTML may render its content/styles, but gets an opaque origin and cannot run
-    // scripts, submit forms, navigate the parent, or read the operator's API.
-    headers.insert("content-security-policy", HeaderValue::from_static("sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"));
+    // Content derived from artifacts gets an opaque origin and cannot run scripts,
+    // submit forms, navigate the parent, or read the operator's API.
+    headers.insert("content-security-policy", HeaderValue::from_static(csp));
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     headers.insert("referrer-policy", HeaderValue::from_static("no-referrer"));
     response

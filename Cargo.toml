@@ -21,6 +21,8 @@ tokio = { version = "1.40", features = ["io-std", "io-util", "macros", "net", "p
 toml = "0.8"
 toml_edit = "0.22"
 parking_lot = "0.12"
+pulldown-cmark = { version = "0.13.4", default-features = false, features = ["html", "pulldown-cmark-escape"] }
+pulldown-cmark-escape = "0.11"
 
 [dev-dependencies]
 http-body-util = "0.1"
