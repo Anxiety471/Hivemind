@@ -317,6 +317,8 @@ pub struct RuntimeConfig {
     pub codex_binary: String,
     #[serde(default = "default_claude_code_acp_binary")]
     pub claude_code_acp_binary: String,
+    #[serde(default = "default_cursor_binary")]
+    pub cursor_binary: String,
     /// Maximum seconds a runtime prompt may stay inactive without progress; 0
     /// disables the timeout. Progress (streaming tokens, tool events, reasoning)
     /// resets this inactivity window.
@@ -343,6 +345,7 @@ impl Default for RuntimeConfig {
             codex_acp_binary: default_codex_acp_binary(),
             codex_binary: String::new(),
             claude_code_acp_binary: default_claude_code_acp_binary(),
+            cursor_binary: default_cursor_binary(),
             prompt_timeout_secs: default_runtime_prompt_timeout_secs(),
             idle_timeout_secs: default_idle_timeout_secs(),
             prompt_retries: default_prompt_retries(),
@@ -707,6 +710,9 @@ fn default_codex_acp_binary() -> String {
 }
 fn default_claude_code_acp_binary() -> String {
     "claude-code-acp".into()
+}
+fn default_cursor_binary() -> String {
+    "agent".into()
 }
 fn default_runtime_prompt_timeout_secs() -> u64 {
     300

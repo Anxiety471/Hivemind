@@ -223,7 +223,7 @@ export type RoleCatalog = {
 
 /** The editable definition of an agent. Its id is fixed once created. */
 export type AgentConfig = {
-  runtime: "pi" | "omp" | "opencode" | "codex" | "claude_code";
+  runtime: "pi" | "omp" | "opencode" | "codex" | "claude_code" | "cursor";
   system_prompt: string;
   workspace: string;
   model: string | null;
@@ -259,7 +259,7 @@ export type Settings = { baseUrl: string; token: string };
 export type SetupPersona = {
   id: string;
   role: string;
-  runtime: "pi" | "omp" | "opencode" | "codex" | "claude_code";
+  runtime: "pi" | "omp" | "opencode" | "codex" | "claude_code" | "cursor";
   workspace: string;
   model?: string;
   reasoning?: string;

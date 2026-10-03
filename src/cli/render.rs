@@ -52,6 +52,7 @@ pub(super) fn status(config: &HivemindConfig) -> Result<()> {
             "opencode" => &config.runtime.opencode_binary,
             "codex" => &config.runtime.codex_acp_binary,
             "claude_code" => &config.runtime.claude_code_acp_binary,
+            "cursor" => &config.runtime.cursor_binary,
             _ => continue,
         };
         println!(

@@ -1,7 +1,7 @@
 //! Shared Agent Client Protocol (ACP) session over a line-delimited JSON-RPC child.
 //!
-//! OpenCode (`opencode acp`), Codex (`codex-acp`), and Claude Code (`claude-code-acp`)
-//! all speak the same prompt/update protocol Hivemind already uses for OpenCode.
+//! OpenCode (`opencode acp`), Codex (`codex-acp`), Claude Code (`claude-code-acp`),
+//! and Cursor (`agent acp`) all speak the same prompt/update protocol.
 
 use std::{path::Path, process::Stdio, time::Duration};
 
@@ -29,6 +29,50 @@ pub struct ConfigOption {
     pub value: String,
 }
 
+/// Auto-answer blocking Cursor ACP extension methods (Hivemind has no human in the loop).
+pub fn cursor_extension_reply(method: &str, _frame: &Value) -> Value {
+    match method {
+        "cursor/ask_question" => json!({"outcome": {"outcome": "skipped"}}),
+        "cursor/create_plan" => json!({"outcome": {"outcome": "accepted"}}),
+        "cursor/update_todos" => json!({"outcome": {"outcome": "accepted", "todos": []}}),
+        "cursor/task" => json!({"outcome": {"outcome": "completed"}}),
+        "cursor/generate_image" => json!({
+            "outcome": {"outcome": "rejected", "reason": "image generation is not available in Hivemind"}
+        }),
+        _ => json!({"outcome": {"outcome": "cancelled"}}),
+    }
+}
+
+pub fn default_initialize_params() -> Value {
+    json!({"protocolVersion": 1, "clientCapabilities": {}})
+}
+
+#[derive(Clone, Copy)]
+pub enum PermissionPolicy {
+    Adapter,
+    CursorCli,
+}
+
+impl PermissionPolicy {
+    fn kinds(self) -> &'static [&'static str] {
+        match self {
+            Self::Adapter => &["allow_once"],
+            Self::CursorCli => &["allow-once", "allow_once"],
+        }
+    }
+}
+
+pub fn cursor_initialize_params() -> Value {
+    json!({
+        "protocolVersion": 1,
+        "clientCapabilities": {
+            "fs": {"readTextFile": false, "writeTextFile": false},
+            "terminal": false
+        },
+        "clientInfo": {"name": "hivemind", "version": "0.1.0"}
+    })
+}
+
 /// How to spawn an ACP child for one runtime.
 pub struct ChildSpec<'a> {
     pub label: &'static str,
@@ -38,6 +82,12 @@ pub struct ChildSpec<'a> {
     pub config_options: Vec<ConfigOption>,
     pub extra_env: Vec<(String, String)>,
     pub env_remove: &'a [&'a str],
+    pub initialize_params: Value,
+    pub post_initialize: Vec<(&'static str, Value)>,
+    /// When set, calls `session/set_mode` after `session/new`.
+    pub session_mode: Option<&'static str>,
+    pub permission_policy: PermissionPolicy,
+    pub extension_reply: Option<fn(&str, &Value) -> Value>,
 }
 
 /// One persistent ACP process owned by exactly one agent.
@@ -53,6 +103,8 @@ pub struct AcpSession {
     context_tokens: Option<u64>,
     failure: Option<String>,
     progress: Option<super::ProgressSink>,
+    permission_policy: PermissionPolicy,
+    extension_reply: Option<fn(&str, &Value) -> Value>,
 }
 
 #[derive(Default)]
@@ -175,15 +227,16 @@ impl AcpSession {
             context_tokens: None,
             failure: None,
             progress: None,
+            permission_policy: spec.permission_policy,
+            extension_reply: spec.extension_reply,
         };
 
         session
-            .request(
-                "initialize",
-                json!({"protocolVersion": 1, "clientCapabilities": {}}),
-                None,
-            )
+            .request("initialize", spec.initialize_params, None)
             .await?;
+        for (method, params) in spec.post_initialize {
+            session.request(method, params, None).await?;
+        }
         let created = session
             .request("session/new", spec.session_new, None)
             .await?;
@@ -211,6 +264,16 @@ impl AcpSession {
                     None,
                 )
                 .await?;
+        }
+        if let Some(mode) = spec.session_mode {
+            let sid = session.session_id.clone();
+            let _ = session
+                .request(
+                    "session/set_mode",
+                    json!({"sessionId": sid, "modeId": mode}),
+                    None,
+                )
+                .await;
         }
         Ok(session)
     }
@@ -287,17 +350,22 @@ impl AcpSession {
             let frame_id = frame.get("id");
             match (frame_method, frame_id) {
                 (Some("session/request_permission"), Some(request_id)) => {
-                    let reply = approve_permission(&frame);
+                    let reply = approve_permission(&frame, self.permission_policy.kinds());
                     self.write(&json!({"jsonrpc": "2.0", "id": request_id, "result": reply}))
                         .await?;
                 }
                 (Some(other), Some(request_id)) => {
-                    self.write(&json!({
-                        "jsonrpc": "2.0",
-                        "id": request_id,
-                        "error": {"code": -32601, "message": format!("Hivemind does not implement {other}")}
-                    }))
-                    .await?;
+                    if let Some(reply) = self.extension_reply.map(|handler| handler(other, &frame)) {
+                        self.write(&json!({"jsonrpc": "2.0", "id": request_id, "result": reply}))
+                            .await?;
+                    } else {
+                        self.write(&json!({
+                            "jsonrpc": "2.0",
+                            "id": request_id,
+                            "error": {"code": -32601, "message": format!("Hivemind does not implement {other}")}
+                        }))
+                        .await?;
+                    }
                 }
                 (Some("session/update"), None) => {
                     let ours = frame
@@ -330,20 +398,20 @@ impl AcpSession {
     }
 }
 
-pub(super) fn approve_permission(frame: &Value) -> Value {
-    let option = frame
-        .pointer("/params/options")
-        .and_then(Value::as_array)
-        .and_then(|options| {
+pub(super) fn approve_permission(frame: &Value, kinds: &[&str]) -> Value {
+    let options = frame.pointer("/params/options").and_then(Value::as_array);
+    for kind in kinds {
+        let option_id = options.and_then(|options| {
             options
                 .iter()
-                .find(|option| option.get("kind").and_then(Value::as_str) == Some("allow_once"))
-        })
-        .and_then(|option| option.get("optionId").and_then(Value::as_str));
-    match option {
-        Some(option_id) => json!({"outcome": {"outcome": "selected", "optionId": option_id}}),
-        None => json!({"outcome": {"outcome": "cancelled"}}),
+                .find(|option| option.get("kind").and_then(Value::as_str) == Some(*kind))
+                .and_then(|option| option.get("optionId").and_then(Value::as_str))
+        });
+        if let Some(option_id) = option_id {
+            return json!({"outcome": {"outcome": "selected", "optionId": option_id}});
+        }
     }
+    json!({"outcome": {"outcome": "cancelled"}})
 }
 
 #[async_trait]
@@ -459,8 +527,15 @@ mod tests {
             {"optionId":"once","kind":"allow_once"},
             {"optionId":"reject","kind":"reject_once"}]}});
         assert_eq!(
-            approve_permission(&frame),
+            approve_permission(&frame, &["allow_once"]),
             json!({"outcome":{"outcome":"selected","optionId":"once"}})
+        );
+        let cursor_frame = json!({"params":{"options":[
+            {"optionId":"allow-once","kind":"allow-once"},
+            {"optionId":"reject-once","kind":"reject-once"}]}});
+        assert_eq!(
+            approve_permission(&cursor_frame, &["allow_once", "allow-once"]),
+            json!({"outcome":{"outcome":"selected","optionId":"allow-once"}})
         );
     }
 }

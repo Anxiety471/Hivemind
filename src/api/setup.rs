@@ -61,7 +61,7 @@ fn build_config(body: SetupBody) -> Result<HivemindConfig, String> {
         }
         if !matches!(
             setup.runtime.as_str(),
-            "pi" | "omp" | "opencode" | "codex" | "claude_code"
+            "pi" | "omp" | "opencode" | "codex" | "claude_code" | "cursor"
         ) {
             return Err(format!("Persona '{id}' uses an unsupported runtime."));
         }
@@ -112,9 +112,14 @@ fn build_config(body: SetupBody) -> Result<HivemindConfig, String> {
                 "Reasoning and fast mode are not supported by OpenCode (persona '{id}')."
             ));
         }
-        if setup.fast.is_some() && setup.runtime == "claude_code" {
+        if setup.fast.is_some() && matches!(setup.runtime.as_str(), "claude_code" | "cursor") {
             return Err(format!(
-                "Fast mode is not supported by Claude Code (persona '{id}')."
+                "Fast mode is not supported by {} (persona '{id}').",
+                if setup.runtime == "cursor" {
+                    "Cursor"
+                } else {
+                    "Claude Code"
+                }
             ));
         }
         if setup.runtime == "opencode" {

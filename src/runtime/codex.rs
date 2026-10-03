@@ -63,6 +63,11 @@ pub async fn start_filtered(
             config_options,
             extra_env,
             env_remove: &[],
+            initialize_params: super::acp::default_initialize_params(),
+            post_initialize: vec![],
+            session_mode: None,
+            permission_policy: super::acp::PermissionPolicy::Adapter,
+            extension_reply: None,
         },
         private_env,
     )

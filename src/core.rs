@@ -502,9 +502,9 @@ impl HivemindCore {
             anyhow::ensure!(
                 matches!(
                     agent.runtime.as_str(),
-                    "pi" | "omp" | "opencode" | "codex" | "claude_code"
+                    "pi" | "omp" | "opencode" | "codex" | "claude_code" | "cursor"
                 ),
-                "runtime must be one of pi, omp, opencode, codex, claude_code"
+                "runtime must be one of pi, omp, opencode, codex, claude_code, cursor"
             );
         }
         staged.validate()?;

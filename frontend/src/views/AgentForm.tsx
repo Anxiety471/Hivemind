@@ -11,6 +11,7 @@ const RUNTIMES: { value: AgentConfig["runtime"]; label: string; hint: string }[]
   { value: "opencode", label: "OpenCode", hint: "No reasoning setting" },
   { value: "codex", label: "Codex", hint: "ACP adapter, reasoning and fast mode" },
   { value: "claude_code", label: "Claude Code", hint: "ACP adapter, reasoning levels" },
+  { value: "cursor", label: "Cursor", hint: "Cursor CLI (`agent acp`)" },
 ];
 
 const LEVEL_ORDER = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];

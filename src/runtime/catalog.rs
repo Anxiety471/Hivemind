@@ -38,7 +38,7 @@ pub struct Catalog {
 }
 
 pub fn is_runtime(runtime: &str) -> bool {
-    matches!(runtime, "pi" | "omp" | "opencode" | "codex" | "claude_code")
+    matches!(runtime, "pi" | "omp" | "opencode" | "codex" | "claude_code" | "cursor")
 }
 
 /// List `runtime`'s models. `harness_dir` is Hivemind's runtime directory (needed so
@@ -62,6 +62,8 @@ pub async fn list(config: &RuntimeConfig, runtime: &str, harness_dir: &Path) -> 
                     &[],
                     &[("NO_BROWSER", "1")],
                     &[],
+                    super::acp::default_initialize_params(),
+                    &[],
                     &config.private_env,
                 )
                 .await
@@ -71,6 +73,20 @@ pub async fn list(config: &RuntimeConfig, runtime: &str, harness_dir: &Path) -> 
                     &config.claude_code_acp_binary,
                     &[],
                     &[("NO_BROWSER", "1")],
+                    &[],
+                    super::acp::default_initialize_params(),
+                    &[],
+                    &config.private_env,
+                )
+                .await
+            }
+            "cursor" => {
+                acp_models(
+                    &config.cursor_binary,
+                    &["acp"],
+                    &[],
+                    &[],
+                    super::acp::cursor_initialize_params(),
                     &[],
                     &config.private_env,
                 )
@@ -250,6 +266,8 @@ async fn opencode_models(
             ("OPENCODE_DISABLE_PROJECT_CONFIG", "1"),
         ],
         &["OPENCODE_CONFIG", "OPENCODE_CONFIG_CONTENT"],
+        super::acp::default_initialize_params(),
+        &[],
         private_env,
     )
     .await
@@ -260,6 +278,8 @@ async fn acp_models(
     args: &[&str],
     extra_env: &[(&str, &str)],
     env_remove: &[&str],
+    initialize: Value,
+    post_initialize: &[(&str, Value)],
     private_env: &[String],
 ) -> Result<Vec<ModelEntry>> {
     let cwd = std::env::temp_dir();
@@ -272,18 +292,19 @@ async fn acp_models(
         rpc_command.env_remove(name);
     }
     let mut rpc = Rpc::spawn(&mut rpc_command, binary)?;
-    rpc.request(
-        1,
-        "initialize",
-        json!({"protocolVersion": 1, "clientCapabilities": {}}),
-    )
-    .await?;
+    rpc.request(1, "initialize", initialize).await?;
+    let mut next_id = 2u64;
+    for (method, params) in post_initialize {
+        rpc.request(next_id, method, params.clone()).await?;
+        next_id += 1;
+    }
     let created = rpc
-        .request(2, "session/new", json!({"cwd": cwd, "mcpServers": []}))
+        .request(next_id, "session/new", json!({"cwd": cwd, "mcpServers": []}))
         .await?;
+    next_id += 1;
     if let Some(session) = created["sessionId"].as_str() {
         let _ = rpc
-            .request(3, "session/delete", json!({"sessionId": session}))
+            .request(next_id, "session/delete", json!({"sessionId": session}))
             .await;
     }
     let options = created["configOptions"]
