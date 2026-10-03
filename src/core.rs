@@ -224,8 +224,25 @@ impl HivemindCore {
         ));
         {
             let execution = execution.clone();
+            let memory = memory.clone();
             conversation.set_follow_up_resolver(Arc::new(move |room| {
-                match execution.room_settings(room).ok()?.follow_up_limit? {
+                let limit = execution
+                    .room_settings(room)
+                    .ok()
+                    .and_then(|s| s.follow_up_limit)
+                    .or_else(|| {
+                        if room.starts_with("thread-") {
+                            let caller = crate::memory::Caller::trusted_user("core");
+                            let thread = memory.thread(&caller, room).ok()??;
+                            execution
+                                .room_settings(&thread.parent_room_id)
+                                .ok()
+                                .and_then(|s| s.follow_up_limit)
+                        } else {
+                            None
+                        }
+                    })?;
+                match limit {
                     n if n < 0 => Some(crate::conversation::FollowUpLimit::Unlimited),
                     n => Some(crate::conversation::FollowUpLimit::Limited(n as usize)),
                 }

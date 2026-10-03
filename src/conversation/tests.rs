@@ -2908,6 +2908,40 @@ async fn tagged_member_always_answers_or_says_it_cannot() {
     assert_eq!(event.speaker, "A");
     assert!(event.error);
 }
+#[tokio::test]
+async fn multiple_tagged_members_each_say_they_cannot_reply_when_limit_is_zero() {
+    let (_path, coord) = fixture();
+    coord.set_mention_limit(0);
+    let members: Vec<Participant> = ["A", "B", "C"].iter().map(|n| member(n)).collect();
+    let out = coord
+        .turn(TurnRequest {
+            room: "multi-tag-room",
+            room_name: "Multi tag room",
+            group_id: "tag-group",
+            mode: ConversationMode::Discussion,
+            members: &members,
+            input: "go",
+            invoker: scripted(&["hi", "hello", "asking @A and @B for help"]),
+        })
+        .await
+        .unwrap();
+    assert_eq!(out.len(), 5);
+    assert_eq!(out[0].name, "A");
+    assert_eq!(out[1].name, "B");
+    assert_eq!(out[2].name, "C");
+    assert_eq!(out[3].name, "A");
+    assert!(out[3].result.as_ref().unwrap_err().contains("tagged by C but could not reply"));
+    assert_eq!(out[4].name, "B");
+    assert!(out[4].result.as_ref().unwrap_err().contains("tagged by C but could not reply"));
+    let history = coord.room_history("multi-tag-room").unwrap();
+    // 1 user input message + 5 replies/notices
+    assert_eq!(history.events.len(), 6);
+    assert_eq!(history.events[0].speaker, "user");
+    assert_eq!(history.events[4].speaker, "A");
+    assert!(history.events[4].error);
+    assert_eq!(history.events[5].speaker, "B");
+    assert!(history.events[5].error);
+}
 
 #[tokio::test]
 async fn open_floor_continues_a_debate_without_mentions_until_everyone_passes() {

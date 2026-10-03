@@ -374,7 +374,7 @@ function Settings({ roomId, onChanged }: { roomId: string; onChanged: () => void
       <ErrorNote error={action.error} />
       {saved && !dirty && <div className="ok-note" role="status">Settings saved.</div>}
       <div className="row">
-        <button className="primary" type="submit" disabled={!dirty || action.busy}>
+        <button className="primary" type="submit" disabled={!dirty || action.busy || !followUpsValid(draft.followUps)}>
           Save settings
         </button>
         <button type="button" className="ghost" disabled={!dirty || action.busy} onClick={() => (setDraft(fromServer(server)), action.setError(null))}>

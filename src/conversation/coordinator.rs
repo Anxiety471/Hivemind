@@ -199,14 +199,23 @@ impl ConversationCoordinator {
     pub fn set_access(&self, policy: Arc<crate::access::AccessPolicy>) {
         let _ = self.access.set(policy);
     }
-    /// Extra mention-triggered replies a Discussion turn may add. Set once at startup.
     /// Per-room overrides of the follow-up budget. Set once at startup.
     pub fn set_follow_up_resolver(&self, resolver: FollowUpResolver) {
         let _ = self.follow_up_override.set(resolver);
     }
 
+    /// Extra mention-triggered replies a Discussion turn may add. Set once at startup.
     pub fn set_mention_limit(&self, limit: usize) {
         let _ = self.mention_limit.set(limit);
+    }
+
+    /// Effective follow-up budget for a room: per-room override if set, else global mention limit.
+    pub fn follow_up_budget(&self, room: &str) -> usize {
+        self.follow_up_override
+            .get()
+            .and_then(|resolve| resolve(room))
+            .map(FollowUpLimit::budget)
+            .unwrap_or_else(|| self.mention_limit.get().copied().unwrap_or(0))
     }
     /// The shared memory service this coordinator executes tool calls against.
     #[cfg(test)]
@@ -477,12 +486,7 @@ impl ConversationCoordinator {
                 // follow up or answer PASS, until all of them pass in a row. Mention and
                 // floor replies share one budget so the exchange always ends.
                 let mut queue: std::collections::VecDeque<usize> = (0..members.len()).collect();
-                let mut extra = self
-                    .follow_up_override
-                    .get()
-                    .and_then(|resolve| resolve(room))
-                    .map(FollowUpLimit::budget)
-                    .unwrap_or_else(|| self.mention_limit.get().copied().unwrap_or(0));
+                let mut extra = self.follow_up_budget(room);
                 let mut last_speaker = None;
                 let mut passes = 0;
                 loop {
