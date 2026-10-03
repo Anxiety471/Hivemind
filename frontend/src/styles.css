@@ -3227,8 +3227,15 @@ a.parent-link:hover {
 
 @media (max-width: 1000px) {
   .issue-layout {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     overflow: auto;
+  }
+  .issue-main,
+  .issue-main-inner {
+    min-width: 0;
+  }
+  .issue-heading {
+    overflow-wrap: anywhere;
   }
   .issue-main {
     overflow: visible;
@@ -3251,8 +3258,17 @@ a.parent-link:hover {
     padding: 20px 16px 60px;
   }
   .issue-date,
-  .row-meta .label {
+  .row-meta .label,
+  .row-meta .assignee {
     display: none;
+  }
+  .issue-row {
+    padding-left: calc(6px + var(--depth, 0) * 14px);
+    padding-right: 10px;
+    gap: 6px;
+  }
+  .issue-key {
+    width: auto;
   }
   .search input {
     width: 110px;
