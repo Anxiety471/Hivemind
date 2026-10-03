@@ -1,4 +1,4 @@
-// Markdown parsing for agent replies: pure functions, no DOM, so they can be tested with node.
+// Markdown parsing for agent replies: pure functions, no DOM, so they can be tested with bun or node.
 
 export type Inline =
   | { t: "text"; v: string }

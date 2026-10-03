@@ -1,5 +1,5 @@
 // draw.io / diagrams.net (mxGraph XML) → renderable scene. Pure and DOM-free: a small XML
-// reader, the mxCell model, shape/edge geometry and arrowheads all live here so node can test
+// reader, the mxCell model, shape/edge geometry and arrowheads all live here so bun or node can test
 // them; DrawioSvg.tsx only maps the resulting scene to SVG elements.
 //
 // Supported: <mxfile> (plain or deflate+base64 compressed diagrams) and bare <mxGraphModel>;

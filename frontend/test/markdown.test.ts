@@ -1,4 +1,4 @@
-// Run with: node --experimental-strip-types --test test/markdown.test.ts
+// Run with: bun test test/markdown.test.ts   (or: node --experimental-strip-types --test test/markdown.test.ts)
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { parseInline, parseMarkdown } from "../src/markdownParse.ts";

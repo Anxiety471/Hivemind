@@ -20,8 +20,9 @@ Building the server and serving health, info, and agent listings never starts Pi
 | `GET` | `/api/v1/rooms`, `/api/v1/rooms/{id}` | Rooms (main, solo, group, archived) with participants, state, summary, and message counts |
 | `GET` / `POST` | `/api/v1/rooms/{id}/threads` | List a room's user threads, or start one with `{"anchor_message_id","name"}` (`201`; `200` with the existing thread if that message already has one) |
 | `GET` | `/api/v1/rooms/{id}/messages?limit=&before=` | Paged room history, oldest first within a page; page back with `next_before` |
+| `POST` | `/api/v1/rooms/{id}/steer` | Steer text into actively replying agents in a room mid-flight (`{"message"}`); returns `{"room_id","delivered_to"}` |
 | `POST` / `GET` | `/api/v1/tasks`, `/api/v1/tasks/{id}` | Submit (202) and inspect autonomous tasks |
-| `GET` / `POST` | `/api/v1/tasks/{id}/attempts`, `/cancel`, `/pause`, `/resume`, `/input`, `/context-metrics` | Attempts, controls, and bounded context diagnostics |
+| `GET` / `POST` | `/api/v1/tasks/{id}/attempts`, `/cancel`, `/pause`, `/resume`, `/input`, `/steer`, `/context-metrics` | Attempts, controls (`/input` also answers a running `tasks.ask`; `/steer` messages a running attempt), and bounded context diagnostics |
 | `GET` | `/api/v1/agents/{id}`, `/api/v1/agent-instances` | Capabilities and derived activity (never starts a runtime) |
 | `GET` / `POST` | `/api/v1/messages`, `/api/v1/groups`, `/api/v1/groups/{id}` | Agent/operator messages and dynamic task groups |
 | `GET` / `POST` / `PATCH` / `DELETE` | `/api/v1/chat-groups`, `/api/v1/chat-groups/{id}` | Configured chat groups (`group-<id>` rooms): create with `{"id","members"}`, edit `members`, `mode`, `member_roles`, `reply_order`, delete (`204`). Changes are written to the config file and apply immediately. Unrelated to the task groups under `/api/v1/groups` |
@@ -30,7 +31,7 @@ Building the server and serving health, info, and agent listings never starts Pi
 | `GET` / `POST` / `DELETE` | `/api/v1/workspaces` | Allowed roots, workspaces you added (`known`), each group's shared workspace, and each persona's own. `POST {"path"}` adds a workspace (`201`; duplicates are `409`); `DELETE {"path"}` removes one no persona or group uses (`409` otherwise). Adding never restricts anything |
 | `POST` | `/api/v1/agents` | Create an agent: `{"id", "runtime", "system_prompt", "workspace", "model", "reasoning", "fast", "role", "capabilities", "permissions", "roles"}` (`201`). The whole configuration is validated, written to the config file, then applied live |
 | `PUT` / `DELETE` | `/api/v1/agents/{id}` | Replace an agent's definition (omitted fields are cleared; the id cannot change) or delete it (`204`). Deleting is refused (`409`) while a group or the coordination planner uses it, and for the last agent. Live sessions of a changed or deleted agent are rotated. `GET` includes the editable `config` |
-| `GET` / `PATCH` | `/api/v1/rooms/{id}/settings` | Settings of the main conversation, a direct message (`solo-<id>`), or a group (`group-<id>`): `nickname`, `pinned`, `muted` for all; `mode`, `reply_order`, `workspace` where they apply. `unavailable` explains each control that does not apply; sending one is `400 not_applicable`. Rooms also carry `settings` in `/api/v1/rooms` |
+| `GET` / `PATCH` | `/api/v1/rooms/{id}/settings` | Settings of the main conversation, a direct message (`solo-<id>`), or a group (`group-<id>`): `nickname`, `pinned`, `muted` for all; `mode`, `reply_order`, `workspace`, `follow_up_limit` (a number 0-64, `"unlimited"`, or `null` for the default; groups only) where they apply. `unavailable` explains each control that does not apply; sending one is `400 not_applicable`. Rooms also carry `settings` in `/api/v1/rooms` |
 | `PUT` / `DELETE` | `/api/v1/workspaces/groups/{id}` | Set (`{"path"}`) or clear a group's shared workspace; returns the new snapshot |
 | `PUT` | `/api/v1/workspaces/personas/{id}` | Change a persona's own workspace |
 | `GET` | `/api/v1/access/roles` | Built-in and custom role definitions with their permissions |
@@ -83,7 +84,7 @@ On shutdown, core shutdown starts first and WebSocket clients are notified befor
 Frames are JSON envelopes with a `type`, an optional correlation `id`, and a `payload`.
 
 ```bash
-websocat ws://127.0.0.1:7474/api/v1/ws        # or: npx wscat -c ws://127.0.0.1:7474/api/v1/ws
+websocat ws://127.0.0.1:7474/api/v1/ws        # or: bunx wscat -c ws://127.0.0.1:7474/api/v1/ws · or: npx wscat -c ws://127.0.0.1:7474/api/v1/ws
 ```
 
 ```jsonc

@@ -1,4 +1,4 @@
-// Run with: node --experimental-strip-types --test test/slash.test.ts
+// Run with: bun test test/slash.test.ts   (or: node --experimental-strip-types --test test/slash.test.ts)
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { completions, parseSlash, skillPrompt } from "../src/slash.ts";
@@ -23,6 +23,7 @@ test("completion lists commands, then /skill:<name> rows, as the name is typed",
     "/help",
     "/skills",
     "/tools",
+    "/queue",
     "/skill:banner-design ",
     "/skill:brand ",
   ]);

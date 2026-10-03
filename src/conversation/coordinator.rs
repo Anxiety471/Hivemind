@@ -10,6 +10,30 @@ pub struct TurnRequest<'a> {
     pub invoker: Arc<dyn AgentInvoker>,
 }
 
+/// A room's own cap on follow-up replies in a Discussion turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FollowUpLimit {
+    Limited(usize),
+    /// No budget: follow-ups continue until everyone passes, up to a safety ceiling.
+    Unlimited,
+}
+
+/// Safety ceiling for [`FollowUpLimit::Unlimited`], so two agents tagging each
+/// other can never hold a room forever.
+pub const UNLIMITED_FOLLOW_UP_CEILING: usize = 200;
+
+impl FollowUpLimit {
+    fn budget(self) -> usize {
+        match self {
+            Self::Limited(n) => n,
+            Self::Unlimited => UNLIMITED_FOLLOW_UP_CEILING,
+        }
+    }
+}
+
+/// Looks up the room's own follow-up limit, if one was set.
+pub type FollowUpResolver = Arc<dyn Fn(&str) -> Option<FollowUpLimit> + Send + Sync>;
+
 /// Owns durable room history and all turn/context orchestration; runtime sessions are disposable.
 pub struct ConversationCoordinator {
     store: Arc<dyn ContextStore>,
@@ -20,6 +44,7 @@ pub struct ConversationCoordinator {
     tools: std::sync::OnceLock<Arc<dyn ToolHost>>,
     access: std::sync::OnceLock<Arc<crate::access::AccessPolicy>>,
     mention_limit: std::sync::OnceLock<usize>,
+    follow_up_override: std::sync::OnceLock<FollowUpResolver>,
 }
 
 pub(super) struct PackRequest<'a> {
@@ -35,6 +60,8 @@ pub(super) struct PackRequest<'a> {
     pub(super) retrieval: &'a str,
     /// Open-floor follow-up: the member may answer exactly `PASS` to stay silent.
     pub(super) optional: bool,
+    /// Remaining follow-up replies allowed for this turn.
+    pub(super) remaining_budget: Option<usize>,
 }
 
 /// Prompts prepared for one member's invocation this turn.
@@ -57,6 +84,7 @@ pub(super) const SESSION_TOOL_REMINDER: &str =
 pub(super) fn same_turn_replies(
     prior: &[(String, Result<String, String>)],
     optional: bool,
+    remaining_budget: Option<usize>,
 ) -> String {
     let peers = prior
         .iter()
@@ -72,6 +100,18 @@ pub(super) fn same_turn_replies(
     };
     if optional {
         out.push_str(&format!("\nYou already replied in this turn; the floor is open for a follow-up. Reply again only if you have something worth adding — a rebuttal, correction, or answer to a point raised since your last reply. Otherwise reply with exactly {PASS} and nothing else.\n"));
+    }
+    if let Some(remaining) = remaining_budget {
+        if remaining == 0 {
+            out.push_str("\nNote: No follow-up replies remain for this turn. Please finish what you are doing and conclude without expecting further replies from other members.\n");
+        } else if remaining <= 2 {
+            let s = if remaining == 1 {
+                "reply remains"
+            } else {
+                "replies remain"
+            };
+            out.push_str(&format!("\nNote: Only {remaining} follow-up {s} for this turn. Please finish what you are doing and conclude the discussion.\n"));
+        }
     }
     out
 }
@@ -145,6 +185,7 @@ impl ConversationCoordinator {
             tools: std::sync::OnceLock::new(),
             access: std::sync::OnceLock::new(),
             mention_limit: std::sync::OnceLock::new(),
+            follow_up_override: std::sync::OnceLock::new(),
         }
     }
     #[cfg(test)]
@@ -162,6 +203,7 @@ impl ConversationCoordinator {
             tools: std::sync::OnceLock::new(),
             access: std::sync::OnceLock::new(),
             mention_limit: std::sync::OnceLock::new(),
+            follow_up_override: std::sync::OnceLock::new(),
         }
     }
     /// Install the extra tool surface offered beside memory tools. Set once at startup.
@@ -172,9 +214,23 @@ impl ConversationCoordinator {
     pub fn set_access(&self, policy: Arc<crate::access::AccessPolicy>) {
         let _ = self.access.set(policy);
     }
+    /// Per-room overrides of the follow-up budget. Set once at startup.
+    pub fn set_follow_up_resolver(&self, resolver: FollowUpResolver) {
+        let _ = self.follow_up_override.set(resolver);
+    }
+
     /// Extra mention-triggered replies a Discussion turn may add. Set once at startup.
     pub fn set_mention_limit(&self, limit: usize) {
         let _ = self.mention_limit.set(limit);
+    }
+
+    /// Effective follow-up budget for a room: per-room override if set, else global mention limit.
+    pub fn follow_up_budget(&self, room: &str) -> usize {
+        self.follow_up_override
+            .get()
+            .and_then(|resolve| resolve(room))
+            .map(FollowUpLimit::budget)
+            .unwrap_or_else(|| self.mention_limit.get().copied().unwrap_or(0))
     }
     /// The shared memory service this coordinator executes tool calls against.
     #[cfg(test)]
@@ -320,6 +376,7 @@ impl ConversationCoordinator {
                             caller: &caller,
                             retrieval: &retrieval,
                             optional: false,
+                            remaining_budget: None,
                         },
                         cursor,
                     );
@@ -445,7 +502,8 @@ impl ConversationCoordinator {
                 // follow up or answer PASS, until all of them pass in a row. Mention and
                 // floor replies share one budget so the exchange always ends.
                 let mut queue: std::collections::VecDeque<usize> = (0..members.len()).collect();
-                let mut extra = self.mention_limit.get().copied().unwrap_or(0);
+                let mut extra = self.follow_up_budget(room);
+                let mut initial_pending = members.len();
                 let mut last_speaker = None;
                 let mut passes = 0;
                 loop {
@@ -458,6 +516,9 @@ impl ConversationCoordinator {
                     } else {
                         break;
                     };
+                    initial_pending = initial_pending.saturating_sub(1);
+                    let remaining_budget =
+                        Some(extra + queue.len().saturating_sub(initial_pending));
                     let member = &members[index];
                     let caller = invocation_caller(
                         room,
@@ -491,6 +552,7 @@ impl ConversationCoordinator {
                             caller: &caller,
                             retrieval: &retrieval,
                             optional: floor,
+                            remaining_budget,
                         },
                         cursor,
                     ) {
@@ -547,12 +609,20 @@ impl ConversationCoordinator {
                     self.save_turn(&history, room, &turn_id, &mut saved, false, false)?;
                     prior.push((name.clone(), result.clone()));
                     if let Ok(text) = &result {
+                        replies.push(TurnReply {
+                            name: name.clone(),
+                            result: result.clone(),
+                        });
                         for target in mentioned_members(text, members) {
-                            if target != index && extra > 0 && !queue.contains(&target) {
+                            if target == index || queue.contains(&target) {
+                                continue;
+                            }
+                            if extra > 0 {
                                 queue.push_back(target);
                                 extra -= 1;
                             }
                         }
+                        continue;
                     }
                     replies.push(TurnReply { name, result });
                 }
@@ -700,6 +770,7 @@ impl ConversationCoordinator {
             active_turn,
             retrieval,
             optional,
+            remaining_budget,
             ..
         } = *request;
         let last = history
@@ -750,7 +821,7 @@ impl ConversationCoordinator {
             delta.push_str(&reminder);
         }
         delta.push_str(&format!("\nCurrent user message:\n{input}\n"));
-        delta.push_str(&same_turn_replies(prior, optional));
+        delta.push_str(&same_turn_replies(prior, optional, remaining_budget));
         (delta.len() <= self.limits.context_target_tokens.saturating_mul(4)).then_some(delta)
     }
 
@@ -770,6 +841,7 @@ impl ConversationCoordinator {
             caller,
             retrieval,
             optional,
+            remaining_budget,
         } = *request;
         let roster = members
             .iter()
@@ -813,7 +885,7 @@ impl ConversationCoordinator {
         // messages are excluded so the input is never echoed back as a "memory".
         let hits = retrieval;
         let current = format!("\nCurrent user message:\n{input}\n");
-        let same_turn = same_turn_replies(prior, optional);
+        let same_turn = same_turn_replies(prior, optional, remaining_budget);
         let mandatory_len =
             identity.len() + manifest.len() + state.len() + current.len() + same_turn.len();
         // Established byte budget: four times the configured token target,

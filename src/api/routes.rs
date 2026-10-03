@@ -31,6 +31,7 @@ pub(super) fn router(core: Arc<HivemindCore>, shutdown: watch::Receiver<bool>) -
     Router::new()
         .route("/api/v1/health", get(health))
         .route("/api/v1/info", get(info))
+        .merge(super::artifacts::routes())
         .merge(super::jobs::routes())
         .merge(super::tasks::routes())
         .merge(super::rooms::routes())
@@ -402,6 +403,87 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn library_uploads_are_private_and_shares_are_revocable_read_only_capabilities() {
+        const TOKEN: &str = "library_test_operator_token_1234567890";
+        std::env::set_var("HIVEMIND_LIBRARY_TEST_TOKEN", TOKEN);
+        let mut config = HivemindConfig::default_poc();
+        config.server.token_env = Some("HIVEMIND_LIBRARY_TEST_TOKEN".into());
+        config.server.public_base_url = Some("https://hive.example".into());
+        let fixture = TestCore::with_config(config);
+        let app = router(fixture.core.clone(), watch::channel(false).1);
+        std::env::remove_var("HIVEMIND_LIBRARY_TEST_TOKEN");
+        let unauthenticated = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/library")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+        let response = app.clone().oneshot(Request::builder().method("POST").uri("/api/v1/library")
+            .header(CONTENT_TYPE, "application/json").header("authorization", format!("Bearer {TOKEN}"))
+            .body(Body::from(json!({"title":"User report", "filename":"report.html", "content_base64":"PGgxPkhlbGxvPC9oMT4=", "room_id":"solo-Engineer"}).to_string())).unwrap()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let result: Value = serde_json::from_slice(&bytes).unwrap();
+        let id = result["artifact"]["id"].as_str().unwrap();
+        assert_eq!(result["artifact"]["published"], false);
+        assert_eq!(result["artifact"]["persona_id"], "operator");
+        assert_eq!(result["artifact"]["room_id"], "solo-Engineer");
+        let published = fixture.core.artifacts().publish(id).unwrap().unwrap();
+        let url = published.url.unwrap();
+        let path = url.strip_prefix("https://hive.example").unwrap();
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[CONTENT_TYPE], "text/html");
+        assert!(response.headers()["content-security-policy"]
+            .to_str()
+            .unwrap()
+            .starts_with("sandbox;"));
+        assert_eq!(response.headers()["cache-control"], "no-store");
+        assert_eq!(
+            response.into_body().collect().await.unwrap().to_bytes(),
+            "<h1>Hello</h1>"
+        );
+        let mutation = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(path)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(mutation.status(), StatusCode::UNAUTHORIZED);
+        let private = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/library/{id}/content"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(private.status(), StatusCode::UNAUTHORIZED);
+        fixture.core.artifacts().unpublish(id).unwrap();
+        let revoked = app
+            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(revoked.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
     async fn browser_setup_persists_and_activates_the_first_personas_once() {
         let test_core = TestCore::unconfigured();
         let app = router(test_core.core.clone(), watch::channel(false).1);
@@ -641,6 +723,26 @@ mod tests {
             .collect();
         assert_eq!(ids, vec![json!("m3"), json!("m4")]);
         assert_eq!(page["next_before"], "m3");
+
+        let (status, res) = request_json(
+            app.clone(),
+            "POST",
+            "/api/v1/rooms/main/steer",
+            json!({"message": "live instruction"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(res["room_id"], "main");
+        assert_eq!(res["delivered_to"], json!([]));
+
+        let (status, _res) = request_json(
+            app.clone(),
+            "POST",
+            "/api/v1/rooms/main/steer",
+            json!({"message": "  "}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
         let (_, _, older) =
             request(app, "GET", "/api/v1/rooms/main/messages?limit=2&before=m3").await;
         let ids: Vec<_> = older["messages"]
@@ -1267,6 +1369,99 @@ mod tests {
                 .display()
                 .to_string()
         );
+    }
+
+    #[tokio::test]
+    async fn group_follow_up_budget_is_adjustable_including_unlimited() {
+        let test_core = TestCore::new();
+        write_config(&test_core);
+        let app = router(test_core.core.clone(), watch::channel(false).1);
+        let (status, body) = request_json(
+            app.clone(),
+            "POST",
+            "/api/v1/chat-groups",
+            json!({"id":"crew","members":["Engineer"]}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        let url = "/api/v1/rooms/group-crew/settings";
+        let (_, _, shown) = request(app.clone(), "GET", url).await;
+        assert!(shown["settings"]["follow_up_limit"].is_null());
+        assert!(shown["settings"]["default_follow_up_limit"].is_number());
+        use crate::memory::{ArchiveParticipant, ArchivedMessage, ArchivedTurn, Caller};
+        test_core
+            .core
+            .memory()
+            .append_archive_turn(
+                &Caller::trusted_user("test"),
+                ArchivedTurn {
+                    id: "t-crew".into(),
+                    room_id: "group-crew".into(),
+                    started_at: 1,
+                    completed_at: Some(2),
+                    metadata: json!({}),
+                    participants: vec![ArchiveParticipant {
+                        participant_id: "Engineer".into(),
+                        role: None,
+                    }],
+                    messages: vec![ArchivedMessage {
+                        id: "m-crew".into(),
+                        room_id: "group-crew".into(),
+                        turn_id: "t-crew".into(),
+                        speaker: "Engineer".into(),
+                        content: "hello".into(),
+                        created_at: 1,
+                    }],
+                },
+            )
+            .unwrap();
+        let (status, created) = request_json(
+            app.clone(),
+            "POST",
+            "/api/v1/rooms/group-crew/threads",
+            json!({"anchor_message_id":"m-crew","name":"Discussion"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        let thread_id = created["thread"]["id"].as_str().unwrap();
+        let default_limit = test_core.core.config().conversation.mention_limit;
+
+        for (value, expected, expected_budget) in [
+            (json!(7), json!(7), 7),
+            (
+                json!("unlimited"),
+                json!("unlimited"),
+                crate::conversation::UNLIMITED_FOLLOW_UP_CEILING,
+            ),
+            (json!(null), json!(null), default_limit),
+        ] {
+            let (status, body) =
+                request_json(app.clone(), "PATCH", url, json!({"follow_up_limit": value})).await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            assert_eq!(body["settings"]["follow_up_limit"], expected);
+            assert_eq!(
+                test_core.core.conversation().follow_up_budget("group-crew"),
+                expected_budget
+            );
+            assert_eq!(
+                test_core.core.conversation().follow_up_budget(thread_id),
+                expected_budget
+            );
+        }
+        for bad in [json!(-1), json!(65), json!("lots"), json!(1.5)] {
+            let (status, _) =
+                request_json(app.clone(), "PATCH", url, json!({"follow_up_limit": bad})).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+        }
+        // Only groups have the control.
+        let (status, _) = request_json(
+            app.clone(),
+            "PATCH",
+            "/api/v1/rooms/main/settings",
+            json!({"follow_up_limit": 3}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]

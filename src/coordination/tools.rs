@@ -70,8 +70,13 @@ fn allowed(service: &CoordinationService, ctx: &ToolCtx) -> Vec<&'static str> {
     let delegating = can("delegate") || can("task.reassign") || coordinator;
     let grouping = can("group.manage") || coordinator;
     match ctx.kind {
-        AttemptKind::Plan => names.extend(["tasks.plan.propose", "tasks.block", "tasks.decide"]),
-        AttemptKind::Work => names.extend(["tasks.result.submit", "tasks.block"]),
+        AttemptKind::Plan => names.extend([
+            "tasks.plan.propose",
+            "tasks.block",
+            "tasks.decide",
+            "tasks.ask",
+        ]),
+        AttemptKind::Work => names.extend(["tasks.result.submit", "tasks.block", "tasks.ask"]),
         AttemptKind::Review => names.extend(["tasks.review"]),
         AttemptKind::Inbox => {}
     }
@@ -141,6 +146,10 @@ const EXAMPLES: &[(&str, &str)] = &[
         r#"{"note":"schema migrated, wiring handler"}"#,
     ),
     (
+        "tasks.ask",
+        r#"{"question":"Should the migration keep the old column?","to":"Lead"}"#,
+    ),
+    (
         "tasks.block",
         r#"{"reason":"need the staging URL","needs_input":true}"#,
     ),
@@ -188,11 +197,12 @@ impl ToolHost for CoordinationTools {
             .collect::<Vec<_>>()
             .join("\n");
         Some(format!(
-            "Hivemind coordination tools (same ```hivemind-tool fence as memory tools; one call per reply as your whole reply):\n{}\nTask {} (root {}). {budget}\nTools you may call: {}\nExamples:\n{examples}\nRules: a message only queues work for the recipient — it does not run them now. Hivemind binds every call to your identity, task, and lease; never send ids of yours. Messages, groups, and artifacts are shared content: put nothing private in them. Never invent results.\n",
+            "Hivemind coordination tools (same ```hivemind-tool fence as memory tools; one call per reply as your whole reply):\n{}\nTask {} (root {}). {budget}\nTools you may call: {}\nExamples:\n{examples}\nRules: a message queues work for the recipient; one that is already working sees it at once. tasks.ask waits (up to {}s) for an answer from the user, or from the persona named in `to`, and returns it; use it only when you cannot sensibly decide yourself. Messages and decisions may arrive in the middle of your work as [Hivemind: ...] notes: take them into account. Hivemind binds every call to your identity, task, and lease; never send ids of yours. Messages, groups, and artifacts are shared content: put nothing private in them. Never invent results.\n",
             role_line(ctx.kind),
             ctx.task_id,
             ctx.root_id,
             names.join(", "),
+            self.service.config().question_timeout_secs,
         ))
     }
 
@@ -218,27 +228,10 @@ impl ToolHost for CoordinationTools {
     }
 
     fn execute(&self, room: &str, persona: &str, name: &str, args: &Value) -> Result<String> {
-        let ctx = self
-            .service
-            .bind(room, persona)
-            .map_err(|e| anyhow::anyhow!("{e}"))?
-            .context("coordination tools are only available during a task attempt")?;
+        let ctx = self.bound(room, persona, name, args)?;
         let audited = AUDITED.contains(&name);
         let permission = crate::access::coordination_permission(name, args).unwrap_or("");
         let resource = format!("task:{}", ctx.task_id);
-        if !allowed(&self.service, &ctx).contains(&name) {
-            if audited {
-                self.audit.record(
-                    persona,
-                    permission,
-                    name,
-                    &resource,
-                    false,
-                    &format!("tool not available to a {} attempt", ctx.kind.as_str()),
-                );
-            }
-            bail!("tool '{name}' is not available to you in this attempt");
-        }
         let result = run(&self.service, &ctx, name, args);
         if audited {
             match &result {
@@ -260,6 +253,62 @@ impl ToolHost for CoordinationTools {
             }
         }
         result.map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    fn execute_async<'a>(
+        &'a self,
+        room: &'a str,
+        persona: &'a str,
+        name: &'a str,
+        args: &'a Value,
+    ) -> futures_util::future::BoxFuture<'a, Result<String>> {
+        if name != "tasks.ask" {
+            return Box::pin(std::future::ready(self.execute(room, persona, name, args)));
+        }
+        Box::pin(async move {
+            let ctx = self.bound(room, persona, name, args)?;
+            let question = str_arg(args, "question").map_err(|e| anyhow::anyhow!("{e}"))?;
+            let to = opt_str(args, "to").map_err(|e| anyhow::anyhow!("{e}"))?;
+            let (answer, _) = self
+                .service
+                .ask(&ctx, &question, to.clone())
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            let wait = std::time::Duration::from_secs(self.service.config().question_timeout_secs);
+            match tokio::time::timeout(wait, answer).await {
+                Ok(Ok(answer)) => Ok(format!("answer from {}: {}", answer.from, answer.text)),
+                Ok(Err(_)) => bail!("the question was withdrawn because this attempt ended"),
+                Err(_) => {
+                    self.service.withdraw_question(&ctx.attempt_id);
+                    Ok(format!("no answer within {}s; decide yourself and say what you assumed, or call tasks.block", wait.as_secs()))
+                }
+            }
+        })
+    }
+}
+
+impl CoordinationTools {
+    /// Bind the call to the live attempt and check the tool is offered to it.
+    fn bound(&self, room: &str, persona: &str, name: &str, args: &Value) -> Result<ToolCtx> {
+        let ctx = self
+            .service
+            .bind(room, persona)
+            .map_err(|e| anyhow::anyhow!("{e}"))?
+            .context("coordination tools are only available during a task attempt")?;
+        if !allowed(&self.service, &ctx).contains(&name) {
+            if AUDITED.contains(&name) {
+                let permission = crate::access::coordination_permission(name, args).unwrap_or("");
+                self.audit.record(
+                    persona,
+                    permission,
+                    name,
+                    &format!("task:{}", ctx.task_id),
+                    false,
+                    &format!("tool not available to a {} attempt", ctx.kind.as_str()),
+                );
+            }
+            bail!("tool '{name}' is not available to you in this attempt");
+        }
+        Ok(ctx)
     }
 }
 
@@ -430,7 +479,7 @@ fn run(
                     artifacts.push(id);
                 }
             }
-            let (message, duplicate) = service.send_message(
+            let (message, duplicate, live) = service.send_message_live(
                 ctx,
                 SendMessage {
                     recipients: str_list(args, "to", 8)?,
@@ -442,7 +491,12 @@ fn run(
                     idempotency_key: opt_str(args, "key")?,
                 },
             )?;
-            Ok(format!("{} message {} to [{}]: queued for delivery; recipients act on it when Hivemind schedules them, not now", if duplicate { "already sent" } else { "sent" }, message.id, message.recipients.join(", ")))
+            let seen_now = if live.is_empty() {
+                String::new()
+            } else {
+                format!("; already working, so they see it now: {}", live.join(", "))
+            };
+            Ok(format!("{} message {} to [{}]: queued for delivery; recipients act on it when Hivemind schedules them{seen_now}", if duplicate { "already sent" } else { "sent" }, message.id, message.recipients.join(", ")))
         }
         "messages.inbox" => {
             let limit = opt_int(args, "limit")?.unwrap_or(5).clamp(1, 8) as usize;

@@ -16,6 +16,7 @@
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
+. "$root/scripts/js-pm.sh"
 
 port=${DEV_PORT:-7575}
 ui_port=${DEV_UI_PORT:-5174}
@@ -38,7 +39,7 @@ done
 
 need() { command -v "$1" >/dev/null 2>&1 || { echo "missing required tool: $1 ($2)" >&2; exit 1; }; }
 [ -n "${HIVEMIND_BIN:-}" ] || need cargo "install Rust from https://rustup.rs"
-if [ "$ui" = 1 ]; then need npm "install Node.js, or use --api-only"; fi
+if [ "$ui" = 1 ]; then select_js_pm; fi
 
 mkdir -p "$workspace"
 if git -C "$workspace" rev-parse --git-dir >/dev/null 2>&1; then
@@ -140,7 +141,7 @@ else
 fi
 
 pids=()
-# cargo/npm do not forward signals to their children, so kill whole descendant trees.
+# cargo/bun/npm do not forward signals to their children, so kill whole descendant trees.
 killtree() {
   local child
   for child in $(pgrep -P "$1" 2>/dev/null || true); do killtree "$child"; done
@@ -163,8 +164,8 @@ fi
 pids+=($!)
 
 if [ "$ui" = 1 ]; then
-  [ -d frontend/node_modules ] || (cd frontend && npm install)
-  (cd frontend && VITE_HIVEMIND_URL="http://127.0.0.1:$port" exec npm run dev -- --port "$ui_port" --strictPort) &
+  [ -d frontend/node_modules ] || (cd frontend && "$JS_PM" install)
+  (cd frontend && VITE_HIVEMIND_URL="http://127.0.0.1:$port" exec "$JS_PM" run dev -- --port "$ui_port" --strictPort) &
   pids+=($!)
 fi
 

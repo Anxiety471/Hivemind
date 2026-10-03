@@ -1,0 +1,4 @@
+# Bun-only config (npm ignores this file; Node.js/npm users run `npm run test:node`).
+# Unit tests live in test/; keep `bun test` from picking up the Playwright e2e/*.spec.ts files.
+[test]
+root = "test"

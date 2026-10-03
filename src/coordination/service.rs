@@ -42,6 +42,10 @@ pub const EVENT_TYPES: &[&str] = &[
     "group.created",
     "group.members_changed",
     "agent.activity.changed",
+    "task.steered",
+    "task.question",
+    "task.answered",
+    "task.question_expired",
 ];
 
 pub fn wire_type(event_type: &str) -> &'static str {
@@ -83,6 +87,9 @@ pub struct TaskDetail {
     pub evidence: Vec<Evidence>,
     pub groups: Vec<Group>,
     pub usage: Option<Usage>,
+    /// Questions running attempts on this task are waiting on (`tasks.ask`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub questions: Vec<super::live::OpenQuestion>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -188,6 +195,7 @@ pub struct CoordinationService {
     rotations: Mutex<Vec<(AgentInstanceId, &'static str)>>,
     scheduler_running: AtomicBool,
     publish: AtomicBool,
+    channel: super::live::LiveChannel,
 }
 
 fn invalid<T>(message: impl Into<String>) -> CoordResult<T> {
@@ -220,6 +228,7 @@ impl CoordinationService {
             rotations: Mutex::new(Vec::new()),
             scheduler_running: AtomicBool::new(false),
             publish: AtomicBool::new(true),
+            channel: Default::default(),
         }
     }
 
@@ -316,7 +325,11 @@ impl CoordinationService {
         }
     }
 
-    fn changed(&self) {
+    pub(super) fn channel(&self) -> &super::live::LiveChannel {
+        &self.channel
+    }
+
+    pub(super) fn changed(&self) {
         self.flush();
         self.wake.notify_waiters();
         self.wake.notify_one();
@@ -926,6 +939,7 @@ impl CoordinationService {
     /// Record how an attempt ended and move its task accordingly. Never
     /// reports success for an attempt that produced no accepted result.
     pub fn finish_attempt(&self, attempt_id: &str, end: AttemptEnd) -> CoordResult<()> {
+        self.forget_attempt(attempt_id);
         self.store.write(|db| {
             let Some(attempt) = db.attempt(attempt_id)? else { return Ok(()) };
             let (state, class, detail) = match &end {
@@ -1517,7 +1531,7 @@ impl CoordinationService {
 
     pub fn decide(&self, ctx: &ToolCtx, decision_id: &str, accept: bool) -> CoordResult<()> {
         let task = self.live(ctx)?;
-        self.store.write(|db| {
+        let decided = self.store.write(|db| {
             let decision = db.decision(decision_id)?.ok_or_else(|| {
                 CoordError::NotFound(format!("decision '{decision_id}' was not found"))
             })?;
@@ -1551,9 +1565,12 @@ impl CoordinationService {
                 "task.decision",
                 serde_json::json!({"decision": decision_id, "accepted": accept}),
             )?;
-            Ok(())
+            Ok(decision)
         })?;
         self.changed();
+        if accept {
+            self.steer_decision(&task.root_id, &ctx.persona, &decided);
+        }
         Ok(())
     }
 
@@ -1564,10 +1581,10 @@ impl CoordinationService {
     /// Cancel a task and everything beneath it; a root also drops queued
     /// wakeups and archives its groups. Idempotent.
     pub fn cancel(&self, task_id: &str, actor: &str) -> CoordResult<TaskDetail> {
-        self.store.write(|db| {
+        let ended = self.store.write(|db| {
             let task = db.task_or_err(task_id)?;
             if task.status.is_terminal() {
-                return Ok(());
+                return Ok(Vec::new());
             }
             let all = db.list_tasks(&TaskFilter {
                 root: Some(&task.root_id),
@@ -1586,6 +1603,7 @@ impl CoordinationService {
                     break;
                 }
             }
+            let mut ended: Vec<String> = Vec::new();
             for t in all
                 .iter()
                 .filter(|t| doomed.contains(&t.id) && !t.status.is_terminal())
@@ -1598,12 +1616,14 @@ impl CoordinationService {
                     None,
                 )?;
                 for attempt in db.running_attempts(Some(&t.id))? {
-                    db.finish_attempt(
+                    if db.finish_attempt(
                         &attempt.id,
                         AttemptState::Cancelled,
                         Some("cancelled"),
                         None,
-                    )?;
+                    )? {
+                        ended.push(attempt.id);
+                    }
                 }
             }
             if task.id == task.root_id {
@@ -1614,8 +1634,11 @@ impl CoordinationService {
                 }
             }
             self.refresh_graph(db)?;
-            Ok(())
+            Ok(ended)
         })?;
+        for attempt_id in &ended {
+            self.forget_attempt(attempt_id);
+        }
         self.changed();
         self.detail(task_id)
     }
@@ -1754,6 +1777,10 @@ impl CoordinationService {
     ) -> CoordResult<TaskDetail> {
         self.require_enabled()?;
         let answer = check_text("answer", answer, 4000)?;
+        // A running attempt waiting on `tasks.ask` takes the answer live.
+        if self.answer_question(task_id, &answer, actor) {
+            return self.detail(task_id);
+        }
         self.store.write(|db| {
             let task = db.task_or_err(task_id)?;
             if task.status != TaskStatus::NeedsInput {
@@ -1780,6 +1807,30 @@ impl CoordinationService {
     // ------------------------------------------------------------------
 
     pub fn send_message(&self, ctx: &ToolCtx, req: SendMessage) -> CoordResult<(Message, bool)> {
+        self.send_message_live(ctx, req)
+            .map(|(message, duplicate, _)| (message, duplicate))
+    }
+
+    /// Send a message, then take the live fast paths: a reply to an open
+    /// `tasks.ask` question answers it, and recipients that are mid-attempt
+    /// get it steered into their session. Also returns who got it live.
+    pub fn send_message_live(
+        &self,
+        ctx: &ToolCtx,
+        req: SendMessage,
+    ) -> CoordResult<(Message, bool, Vec<String>)> {
+        let (message, duplicate) = self.store_message(ctx, req)?;
+        if duplicate {
+            return Ok((message, true, Vec::new()));
+        }
+        if self.answer_from_message(&message) {
+            return Ok((message, false, Vec::new()));
+        }
+        let live = self.steer_message(&message);
+        Ok((message, false, live))
+    }
+
+    fn store_message(&self, ctx: &ToolCtx, req: SendMessage) -> CoordResult<(Message, bool)> {
         let task = self.live(ctx)?;
         let body = check_text("message body", &req.body, 6000)?;
         if req.artifacts.len() > 8 {
@@ -2240,6 +2291,7 @@ impl CoordinationService {
     // ------------------------------------------------------------------
 
     pub fn detail(&self, id: &str) -> CoordResult<TaskDetail> {
+        let questions = self.open_questions(id);
         self.store.read(|db| {
             let task = db.task_or_err(id)?;
             let all = db.list_tasks(&TaskFilter {
@@ -2285,6 +2337,7 @@ impl CoordinationService {
                 } else {
                     HashMap::new()
                 },
+                questions,
                 children,
                 task,
             })

@@ -1303,6 +1303,382 @@ fn agent_evidence_cannot_bypass_host_checks_or_reuse_proof_for_another_commit() 
     );
 }
 
+type Steered = Arc<parking_lot::Mutex<Vec<(String, String)>>>;
+
+/// Records every steer as (instance, text); every instance takes it.
+fn recording_steerer(service: &CoordinationService) -> Steered {
+    let steered: Steered = Arc::default();
+    let sink = steered.clone();
+    service.set_steerer(Arc::new(
+        move |instance: &crate::identity::AgentInstanceId, text: &str| {
+            sink.lock().push((instance.encode(), text.to_owned()));
+            true
+        },
+    ));
+    steered
+}
+
+/// Root whose api (Back) and ui (Front) run at the same time.
+fn parallel(service: &CoordinationService) -> (String, ToolCtx, ToolCtx) {
+    let plan = Plan {
+        tasks: vec![
+            task("api", &["backend"], &[]),
+            task("ui", &["frontend"], &[]),
+        ],
+    };
+    let root = submit(service, "orders form", Some(plan)).task.id;
+    let dispatches = claim(service);
+    let by = |persona: &str| {
+        ctx(
+            service,
+            dispatches
+                .iter()
+                .find(|d| d.attempt.persona == persona)
+                .unwrap(),
+        )
+    };
+    (root, by("Back"), by("Front"))
+}
+
+fn instance_of(ctx: &ToolCtx) -> String {
+    crate::identity::AgentInstanceId::new(task_room(&ctx.task_id), &ctx.persona).encode()
+}
+
+#[test]
+fn user_steer_reaches_the_running_attempt_and_is_kept_as_feedback() {
+    let service = service();
+    let steered = recording_steerer(&service);
+    let (root, back, front) = parallel(&service);
+    let outcome = service
+        .steer_task(&back.task_id, "use sqlite, not postgres", "user")
+        .unwrap();
+    assert_eq!(outcome.delivered_to, ["Back"]);
+    let (instance, text) = steered.lock()[0].clone();
+    assert_eq!(instance, instance_of(&back));
+    assert!(text.contains("use sqlite, not postgres"));
+    assert!(
+        service
+            .detail(&back.task_id)
+            .unwrap()
+            .task
+            .feedback
+            .iter()
+            .any(|f| f == "user steer: use sqlite, not postgres"),
+        "a later attempt sees it too"
+    );
+    assert!(service
+        .events_after(0, Some(&root), 500)
+        .unwrap()
+        .0
+        .iter()
+        .any(|e| e.event_type == "task.steered"));
+
+    // Nothing running: refused instead of pretending it landed.
+    service
+        .finish_attempt(&front.attempt_id, AttemptEnd::Cancelled)
+        .unwrap();
+    assert!(matches!(
+        service.steer_task(&front.task_id, "hello", "user"),
+        Err(CoordError::Conflict(_))
+    ));
+    assert!(matches!(
+        service.steer_task(&back.task_id, "", "user"),
+        Err(CoordError::Invalid(_))
+    ));
+}
+
+#[test]
+fn messages_to_a_working_persona_are_steered_live_and_still_queued() {
+    let service = service();
+    let steered = recording_steerer(&service);
+    let (_root, back, front) = parallel(&service);
+    let request = SendMessage {
+        recipients: vec!["Front".into()],
+        group: None,
+        kind: MessageKind::Request,
+        body: "the api returns 422 {errors}".into(),
+        artifacts: vec![],
+        causation: None,
+        idempotency_key: None,
+    };
+    let (message, _, live) = service.send_message_live(&back, request).unwrap();
+    assert_eq!(live, ["Front"]);
+    let steers = steered.lock().clone();
+    assert_eq!(steers.len(), 1);
+    assert_eq!(steers[0].0, instance_of(&front));
+    assert!(steers[0].1.contains(&message.id) && steers[0].1.contains("422 {errors}"));
+    // The durable path is untouched: it is still in Front's inbox.
+    let delivery = service
+        .store()
+        .read(|db| db.delivery(&message.id, "Front"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(delivery.state, DeliveryState::Queued);
+
+    // A persona with no running attempt gets nothing live.
+    let to_lead = SendMessage {
+        recipients: vec!["Lead".into()],
+        group: None,
+        kind: MessageKind::Request,
+        body: "ping".into(),
+        artifacts: vec![],
+        causation: None,
+        idempotency_key: None,
+    };
+    assert!(service
+        .send_message_live(&back, to_lead)
+        .unwrap()
+        .2
+        .is_empty());
+}
+
+#[test]
+fn an_accepted_decision_is_steered_into_everyone_else_working_on_the_root() {
+    let service = service();
+    let (_root, back, front) = parallel(&service);
+    let proposal = |kind: MessageKind| SendMessage {
+        recipients: vec!["Lead".into()],
+        group: None,
+        kind,
+        body: "store orders in sqlite".into(),
+        artifacts: vec![],
+        causation: None,
+        idempotency_key: None,
+    };
+    service
+        .send_message(&back, proposal(MessageKind::DecisionProposal))
+        .unwrap();
+    service
+        .send_message(
+            &back,
+            SendMessage {
+                body: "please decide".into(),
+                ..proposal(MessageKind::Request)
+            },
+        )
+        .unwrap();
+    let inbox = claim(&service)
+        .into_iter()
+        .find(|d| d.attempt.persona == "Lead")
+        .expect("Lead woken");
+    let lead = ctx(&service, &inbox);
+    let steered = recording_steerer(&service);
+    let decision = service
+        .store()
+        .read(|db| db.decisions(&back.task_id, None))
+        .unwrap()
+        .remove(0);
+    service.decide(&lead, &decision.id, true).unwrap();
+    let mut reached: Vec<String> = steered
+        .lock()
+        .iter()
+        .map(|(instance, text)| {
+            assert!(text.contains("store orders in sqlite") && text.contains("accepted by Lead"));
+            instance.clone()
+        })
+        .collect();
+    reached.sort();
+    let mut expected = vec![instance_of(&back), instance_of(&front)];
+    expected.sort();
+    assert_eq!(reached, expected, "the decider is not steered");
+}
+
+#[tokio::test]
+async fn a_question_waits_for_the_user_or_the_persona_it_was_sent_to() {
+    let mut config = team_config(".");
+    config.coordination.max_questions = 2;
+    let (service, _) = service_with(&config);
+    let (root, back, front) = parallel(&service);
+
+    // The user answers through task input while the attempt keeps running.
+    let (answer, message) = service.ask(&back, "which database?", None).unwrap();
+    assert!(message.is_none());
+    let open = service.detail(&back.task_id).unwrap().questions;
+    assert_eq!(open.len(), 1);
+    assert_eq!(open[0].question, "which database?");
+    assert!(
+        matches!(
+            service.ask(&back, "another?", None),
+            Err(CoordError::Conflict(_))
+        ),
+        "one open question at a time"
+    );
+    service
+        .provide_input(&back.task_id, "sqlite", "user")
+        .unwrap();
+    assert_eq!(
+        answer.await.unwrap(),
+        super::live::Answer {
+            from: "user".into(),
+            text: "sqlite".into()
+        }
+    );
+    assert!(service.detail(&back.task_id).unwrap().questions.is_empty());
+    assert_eq!(status(&service, &back.task_id), TaskStatus::Running);
+
+    // Asked of a persona: only that persona's reply to the question answers it.
+    let (answer, message) = service
+        .ask(&back, "error shape?", Some("Front".into()))
+        .unwrap();
+    let question = message.unwrap();
+    let reply = |body: &str| SendMessage {
+        recipients: vec!["Back".into()],
+        group: None,
+        kind: MessageKind::Status,
+        body: body.into(),
+        artifacts: vec![],
+        causation: Some(question.clone()),
+        idempotency_key: None,
+    };
+    let unrelated = SendMessage {
+        causation: None,
+        ..reply("unrelated")
+    };
+    service.send_message(&front, unrelated).unwrap();
+    let (reply_message, _) = service.send_message(&front, reply("422 {errors}")).unwrap();
+    assert_eq!(answer.await.unwrap().text, "422 {errors}");
+    let delivery = service
+        .store()
+        .read(|db| db.delivery(&reply_message.id, "Back"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        delivery.state,
+        DeliveryState::Acknowledged,
+        "the answer is consumed, not re-delivered"
+    );
+
+    assert!(
+        matches!(
+            service.ask(&back, "third?", None),
+            Err(CoordError::Invalid(_))
+        ),
+        "max_questions per attempt"
+    );
+    let kinds: Vec<String> = service
+        .events_after(0, Some(&root), 500)
+        .unwrap()
+        .0
+        .into_iter()
+        .map(|e| e.event_type)
+        .collect();
+    assert_eq!(kinds.iter().filter(|k| *k == "task.question").count(), 2);
+    assert_eq!(kinds.iter().filter(|k| *k == "task.answered").count(), 2);
+}
+
+#[tokio::test]
+async fn tasks_ask_times_out_and_the_attempt_carries_on() {
+    use crate::conversation::ToolHost;
+    let mut config = team_config(".");
+    config.coordination.question_timeout_secs = 1;
+    let (service, _) = service_with(&config);
+    let (_root, back, _front) = parallel(&service);
+    let host = CoordinationTools::new(
+        service.clone(),
+        Arc::new(crate::access::Audit::in_memory().unwrap()),
+    );
+    let room = task_room(&back.task_id);
+    assert!(host.manifest(&room, "Back").unwrap().contains("tasks.ask"));
+    let out = host
+        .execute_async(
+            &room,
+            "Back",
+            "tasks.ask",
+            &json!({"question": "which database?"}),
+        )
+        .await
+        .unwrap();
+    assert!(out.starts_with("no answer within 1s"), "{out}");
+    assert!(
+        service.detail(&back.task_id).unwrap().questions.is_empty(),
+        "a timed-out question is withdrawn"
+    );
+    // Late input no longer finds a question; the task is running, not needs_input.
+    assert!(service
+        .provide_input(&back.task_id, "too late", "user")
+        .is_err());
+}
+
+#[tokio::test]
+async fn cancelling_a_task_drops_its_open_questions() {
+    let service = service();
+    let (_root, back, _front) = parallel(&service);
+    let (answer, _) = service.ask(&back, "which database?", None).unwrap();
+    assert_eq!(service.detail(&back.task_id).unwrap().questions.len(), 1);
+    service.cancel(&back.task_id, "user").unwrap();
+    assert!(
+        service.detail(&back.task_id).unwrap().questions.is_empty(),
+        "cancelled task must not have open questions"
+    );
+    assert!(
+        answer.await.is_err(),
+        "the waiting question receiver must be dropped"
+    );
+}
+
+#[test]
+fn task_file_deliverables_are_automatically_saved_from_the_attempt_worktree() {
+    use crate::{
+        access::{AccessPolicy, Audit},
+        artifacts::{ArtifactLibrary, ArtifactTools},
+        conversation::ToolHost,
+        shared_workspace::SharedWorkspaces,
+    };
+    let directory = std::env::temp_dir().join(format!(
+        "hivemind-task-library-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let worktree = directory.join("isolated");
+    std::fs::create_dir_all(&worktree).unwrap();
+    std::fs::write(directory.join("a.txt"), "original source").unwrap();
+    std::fs::write(worktree.join("a.txt"), "task deliverable").unwrap();
+    let config = team_config(directory.to_str().unwrap());
+    let service = service_with(&config).0;
+    planned(&service);
+    let work = claim(&service);
+    service
+        .store()
+        .write(|db| {
+            db.set_attempt_workspace(&work[0].attempt.id, Some(worktree.to_str().unwrap()), None)
+        })
+        .unwrap();
+    let owner = ctx(&service, &work[0]);
+    service
+        .submit_result(&owner, result(Verdict::Passed))
+        .unwrap();
+    let library = Arc::new(ArtifactLibrary::open(":memory:", None).unwrap());
+    let tools = ArtifactTools::new(
+        library.clone(),
+        Arc::new(SharedWorkspaces::new(
+            &directory.join("hivemind.toml"),
+            &config,
+        )),
+        Arc::new(AccessPolicy::from_config(
+            &config,
+            Arc::new(Audit::in_memory().unwrap()),
+        )),
+    )
+    .with_coordination(service);
+    assert!(tools
+        .collect_artifacts(&owner.room, &owner.persona)
+        .unwrap()
+        .is_some());
+    let artifacts = library.list("", 20, 0).unwrap();
+    assert_eq!(artifacts.len(), 1);
+    assert_eq!(
+        library.content(&artifacts[0].id).unwrap().unwrap(),
+        b"task deliverable"
+    );
+    assert!(tools
+        .collect_artifacts(&owner.room, &owner.persona)
+        .unwrap()
+        .is_none());
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
 fn wakeup_ctx_after_finish(service: &CoordinationService, root: &str) {
     service
         .finish_attempt(

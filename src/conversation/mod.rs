@@ -57,6 +57,10 @@ pub trait ToolHost: Send + Sync {
     fn agent_originated(&self, _room: &str) -> bool {
         false
     }
+    /// Save generated artifact files after an agent invocation.
+    fn collect_artifacts(&self, _room: &str, _persona: &str) -> Result<Option<String>> {
+        Ok(None)
+    }
     /// Whether this host owns the tool name.
     fn handles(&self, name: &str) -> bool;
     fn execute(
@@ -66,6 +70,17 @@ pub trait ToolHost: Send + Sync {
         name: &str,
         args: &serde_json::Value,
     ) -> Result<String>;
+    /// Execute a call that may wait (for example, for an answer to a
+    /// question). Defaults to [`ToolHost::execute`].
+    fn execute_async<'a>(
+        &'a self,
+        room: &'a str,
+        persona: &'a str,
+        name: &'a str,
+        args: &'a serde_json::Value,
+    ) -> futures_util::future::BoxFuture<'a, Result<String>> {
+        Box::pin(std::future::ready(self.execute(room, persona, name, args)))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]

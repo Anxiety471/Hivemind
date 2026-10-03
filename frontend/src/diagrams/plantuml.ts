@@ -1,7 +1,7 @@
 // PlantUML → Mermaid translation for the two diagram kinds agents emit most: activity
 // diagrams (the "new" `start / :action; / if (..) then (..)` syntax) and sequence diagrams.
 // No PlantUML server is involved, so diagram source never leaves the browser. Pure and
-// DOM-free so node can test it. Anything outside the supported subset throws, and the
+// DOM-free so bun or node can test it. Anything outside the supported subset throws, and the
 // caller falls back to showing the source.
 
 export class UnsupportedPlantUml extends Error {}

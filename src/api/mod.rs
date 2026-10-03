@@ -1,10 +1,12 @@
 mod agents;
+mod artifacts;
 mod auth;
 mod catalog;
 mod jobs;
 pub use auth::ServerConfig;
 mod chat_groups;
 mod cors;
+mod document;
 mod error;
 mod protocol;
 mod room_settings;
@@ -43,6 +45,10 @@ pub async fn serve(core: Arc<HivemindCore>, port: u16) -> Result<()> {
     let _auth = auth::Auth::load(&core.config().server)?;
     let listener = TcpListener::bind(address).await?;
     let address = listener.local_addr()?;
+    if core.config().server.public_base_url.is_none() && address.ip().is_loopback() {
+        core.artifacts()
+            .set_base_url(&format!("http://{address}"))?;
+    }
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let app = router(Arc::clone(&core), shutdown_rx);
 

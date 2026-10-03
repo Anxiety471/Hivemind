@@ -1,4 +1,4 @@
-// Run with: node --experimental-strip-types --test test/diagrams.test.ts
+// Run with: bun test test/diagrams.test.ts   (or: node --experimental-strip-types --test test/diagrams.test.ts)
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { deflateRawSync } from "node:zlib";

@@ -1,5 +1,7 @@
 // Typed client for the Hivemind HTTP API (`/api/v1`). Shapes mirror src/api/*.rs.
 
+export type LibraryArtifact = { id: string; title: string; filename: string; description: string; media_type: string; size: number; room_id: string; persona_id: string; created_at: number; published: boolean; url: string | null };
+
 export type Participant = { persona_id: string; role: string | null };
 export type RoomKind = "main" | "solo" | "group" | "thread" | "archived";
 
@@ -29,9 +31,12 @@ export type RoomSettings = {
     mode: "broadcast" | "discussion" | null;
     reply_order: string[];
     workspace: string | null;
+    /** Group follow-up budget: `null` follows the default, `"unlimited"` removes the cap. */
+    follow_up_limit: number | "unlimited" | null;
+    default_follow_up_limit: number;
   };
   members: string[];
-  unavailable: { mode: string | null; reply_order: string | null; workspace: string | null };
+  unavailable: { mode: string | null; reply_order: string | null; workspace: string | null; follow_up_limit: string | null };
 };
 
 export type RoomSettingsPatch = Partial<Pick<RoomPrefs, "pinned" | "muted">> & {
@@ -40,6 +45,8 @@ export type RoomSettingsPatch = Partial<Pick<RoomPrefs, "pinned" | "muted">> & {
   reply_order?: string[];
   /** `null` clears a group's shared workspace. */
   workspace?: string | null;
+  /** `null` returns to the default budget. */
+  follow_up_limit?: number | "unlimited" | null;
 };
 
 export type RoomState = {
@@ -136,6 +143,15 @@ export type Usage = {
   tokens: number | null;
 };
 
+
+export type OpenQuestion = {
+  attempt_id: string;
+  persona: string;
+  question: string;
+  to: string | null;
+  message_id: string | null;
+  asked_at: number;
+};
 export type TaskDetail = {
   task: Task;
   children: TaskSummary[];
@@ -144,6 +160,7 @@ export type TaskDetail = {
   evidence: { check: string; outcome: string; detail: string }[];
   groups: { id: string; purpose?: string; members?: string[] }[];
   usage: Usage | null;
+  questions?: OpenQuestion[];
 };
 
 export type Attempt = {
@@ -345,6 +362,18 @@ const enc = encodeURIComponent;
 export type Skill = { name: string; description: string; argument_hint: string; source: string };
 
 export const api = {
+  library: (query = "", offset = 0) => request<{ artifacts: LibraryArtifact[] }>("GET", `/library?query=${encodeURIComponent(query)}&offset=${offset}&limit=50`),
+  createLibraryArtifact: (body: { title: string; filename: string; description: string; content?: string; content_base64?: string; room_id?: string }) => request<{ artifact: LibraryArtifact }>("POST", "/library", body),
+  publishLibraryArtifact: (id: string) => request<{ artifact: LibraryArtifact }>("POST", `/library/${enc(id)}/publish`),
+  unpublishLibraryArtifact: (id: string) => request<void>("DELETE", `/library/${enc(id)}/publish`),
+  deleteLibraryArtifact: (id: string) => request<void>("DELETE", `/library/${enc(id)}`),
+  libraryContent: async (id: string) => {
+    const headers: Record<string, string> = {};
+    if (settings.token) headers.authorization = `Bearer ${settings.token}`;
+    const response = await fetch(`${settings.baseUrl}/api/v1/library/${enc(id)}/content`, { headers });
+    if (!response.ok) throw new Error("Could not load artifact content");
+    return response.blob();
+  },
   info: () => request<{ name: string; version: string; api_version: string }>("GET", "/info"),
   setupStatus: () => request<{ setup_required: boolean }>("GET", "/setup"),
   completeSetup: (personas: SetupPersona[]) =>
@@ -369,6 +398,8 @@ export const api = {
     ),
   activeReplies: (id: string) =>
     request<{ room_id: string; agents: string[] }>("GET", `/rooms/${enc(id)}/active`),
+  steerRoom: (id: string, message: string) =>
+    request<{ room_id: string; delivered_to: string[] }>("POST", `/rooms/${enc(id)}/steer`, { message }),
   roomSettings: (id: string) => request<RoomSettings>("GET", `/rooms/${enc(id)}/settings`),
   updateRoomSettings: (id: string, patch: RoomSettingsPatch) =>
     request<RoomSettings>("PATCH", `/rooms/${enc(id)}/settings`, patch),
@@ -396,6 +427,8 @@ export const api = {
     request<{ task: TaskDetail }>("POST", `/tasks/${enc(id)}/${action}`, body ?? {}),
   taskInput: (id: string, answer: string) =>
     request<{ task: TaskDetail }>("POST", `/tasks/${enc(id)}/input`, { answer }),
+  steerTask: (id: string, message: string) =>
+    request<{ steer: { delivered_to: string[] } }>("POST", `/tasks/${enc(id)}/steer`, { message }),
 
   chatGroups: () => request<{ groups: ChatGroup[] }>("GET", "/chat-groups"),
   createChatGroup: (id: string, members: string[]) =>

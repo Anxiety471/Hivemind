@@ -34,6 +34,10 @@ test("agent replies render as markdown whatever the runtime emitted", async ({ p
   await expect(reply.locator("pre code")).toHaveCount(2);
   await expect(reply.locator("pre code").first()).toHaveText("print('hi')");
   expect(await reply.locator("pre code").nth(1).textContent()).toBe("if ready:\n    run()");
+  const codeBlock = reply.locator(".markdown-code-block").first();
+  await expect(codeBlock.getByRole("button", { name: "Artifact" })).toBeVisible();
+  await codeBlock.getByRole("button", { name: "Artifact" }).click();
+  await expect(codeBlock.locator(".artifact-saved")).toHaveText("Artifacted ↗");
   await expect(reply.locator("p", { hasText: "first line" }).locator("br")).toHaveCount(1);
   // The CRLF endings and blank-line runs the runtime sent never reach the history.
   const history = await (await page.request.get(`${api}/rooms/solo-Engineer/messages`)).json();

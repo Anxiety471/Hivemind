@@ -537,6 +537,15 @@ impl ToolHost for WorkspaceTools {
 pub struct ToolHosts(pub Vec<Arc<dyn ToolHost>>);
 
 impl ToolHost for ToolHosts {
+    fn collect_artifacts(&self, room: &str, persona: &str) -> Result<Option<String>> {
+        let mut results = Vec::new();
+        for host in &self.0 {
+            if let Some(result) = host.collect_artifacts(room, persona)? {
+                results.push(result);
+            }
+        }
+        Ok((!results.is_empty()).then(|| results.join("\n")))
+    }
     fn manifest(&self, room: &str, persona: &str) -> Option<String> {
         let parts: Vec<String> = self
             .0
@@ -577,6 +586,21 @@ impl ToolHost for ToolHosts {
             .find(|h| h.handles(name))
             .with_context(|| format!("no tool host handles '{name}'"))?
             .execute(room, persona, name, args)
+    }
+
+    fn execute_async<'a>(
+        &'a self,
+        room: &'a str,
+        persona: &'a str,
+        name: &'a str,
+        args: &'a Value,
+    ) -> futures_util::future::BoxFuture<'a, Result<String>> {
+        match self.0.iter().find(|h| h.handles(name)) {
+            Some(host) => host.execute_async(room, persona, name, args),
+            None => Box::pin(std::future::ready(Err(anyhow::anyhow!(
+                "no tool host handles '{name}'"
+            )))),
+        }
     }
 }
 
