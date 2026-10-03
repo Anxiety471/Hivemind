@@ -2882,12 +2882,8 @@ async fn room_follow_up_limit_overrides_the_global_budget() {
 
 #[tokio::test]
 async fn agents_are_reminded_to_conclude_when_follow_up_budget_is_low() {
-    let (_speakers, prompts) = discussion(
-        2,
-        &["A", "B"],
-        &["hi @B", "back @A", "another @B", "final"],
-    )
-    .await;
+    let (_speakers, prompts) =
+        discussion(2, &["A", "B"], &["hi @B", "back @A", "another @B", "final"]).await;
     assert!(prompts[0].contains("Only 2 follow-up replies remain for this turn. Please finish what you are doing and conclude the discussion."));
     assert!(prompts[1].contains("Only 2 follow-up replies remain for this turn. Please finish what you are doing and conclude the discussion."));
     assert!(prompts[2].contains("Only 1 follow-up reply remains for this turn. Please finish what you are doing and conclude the discussion."));

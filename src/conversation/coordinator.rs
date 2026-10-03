@@ -105,7 +105,11 @@ pub(super) fn same_turn_replies(
         if remaining == 0 {
             out.push_str("\nNote: No follow-up replies remain for this turn. Please finish what you are doing and conclude without expecting further replies from other members.\n");
         } else if remaining <= 2 {
-            let s = if remaining == 1 { "reply remains" } else { "replies remain" };
+            let s = if remaining == 1 {
+                "reply remains"
+            } else {
+                "replies remain"
+            };
             out.push_str(&format!("\nNote: Only {remaining} follow-up {s} for this turn. Please finish what you are doing and conclude the discussion.\n"));
         }
     }
@@ -512,10 +516,9 @@ impl ConversationCoordinator {
                     } else {
                         break;
                     };
-                    if initial_pending > 0 {
-                        initial_pending -= 1;
-                    }
-                    let remaining_budget = Some(extra + queue.len().saturating_sub(initial_pending));
+                    initial_pending = initial_pending.saturating_sub(1);
+                    let remaining_budget =
+                        Some(extra + queue.len().saturating_sub(initial_pending));
                     let member = &members[index];
                     let caller = invocation_caller(
                         room,

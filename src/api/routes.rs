@@ -1428,15 +1428,25 @@ mod tests {
 
         for (value, expected, expected_budget) in [
             (json!(7), json!(7), 7),
-            (json!("unlimited"), json!("unlimited"), crate::conversation::UNLIMITED_FOLLOW_UP_CEILING),
+            (
+                json!("unlimited"),
+                json!("unlimited"),
+                crate::conversation::UNLIMITED_FOLLOW_UP_CEILING,
+            ),
             (json!(null), json!(null), default_limit),
         ] {
             let (status, body) =
                 request_json(app.clone(), "PATCH", url, json!({"follow_up_limit": value})).await;
             assert_eq!(status, StatusCode::OK, "{body}");
             assert_eq!(body["settings"]["follow_up_limit"], expected);
-            assert_eq!(test_core.core.conversation().follow_up_budget("group-crew"), expected_budget);
-            assert_eq!(test_core.core.conversation().follow_up_budget(thread_id), expected_budget);
+            assert_eq!(
+                test_core.core.conversation().follow_up_budget("group-crew"),
+                expected_budget
+            );
+            assert_eq!(
+                test_core.core.conversation().follow_up_budget(thread_id),
+                expected_budget
+            );
         }
         for bad in [json!(-1), json!(65), json!("lots"), json!(1.5)] {
             let (status, _) =
