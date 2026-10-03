@@ -1410,3 +1410,29 @@ fn scheduled_wakeups_survive_a_restart() {
     assert!(claim(&second).is_empty());
     let _ = std::fs::remove_file(&path);
 }
+
+#[test]
+fn idle_scheduler_sleeps_exactly_until_the_next_wakeup() {
+    use std::time::Duration;
+    let service = service();
+    let (root, lead) = team_in_root(&service);
+    // Nothing scheduled: sleep to the safety cap, not a 500ms poll.
+    assert_eq!(service.idle_sleep(), Duration::from_secs(30));
+
+    service.schedule_wakeup(&lead, 12, "later", None).unwrap();
+    // The exact remaining time plus a margin that lands after the second boundary.
+    assert_eq!(service.idle_sleep(), Duration::from_millis(12_050));
+    service.store().pin_clock(service.store().now() + 5);
+    assert_eq!(service.idle_sleep(), Duration::from_millis(7_050));
+
+    // Due but not yet claimed (here: still queued): retry soon instead of sleeping long.
+    service.store().pin_clock(service.store().now() + 8);
+    assert_eq!(service.idle_sleep(), Duration::from_millis(500));
+    wakeup_ctx_after_finish(&service, &root);
+    assert_eq!(
+        claim(&service).len(),
+        1,
+        "it fires when the computed sleep ends"
+    );
+    assert_eq!(service.idle_sleep(), Duration::from_secs(30));
+}

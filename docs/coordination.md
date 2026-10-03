@@ -75,7 +75,7 @@ Worktree directories are removed after each attempt; branches stay. The live ses
 
 Dynamic groups live in SQLite (configuration groups are untouched). `groups.create` resolves configured personas only, one distinct persona per requested capability; the same purpose and membership reuses the group. Membership changes are revision-checked and audited, and removed members' task sessions are rotated.
 
-`wakeup.schedule {delay_seconds, context, key?}` lets an agent wake itself later: it stores a durable self-addressed `wakeup` message whose delivery carries a `due_at`. The scheduler and inbox ignore it until due, then it runs as a normal single inbox attempt carrying `context`, and is never replayed (an interrupted attempt marks it failed, like any delivery). The delay must be 1s to 7 days and before the root deadline, at most 5 wakeups may be pending per agent per root task, and invalid requests create nothing.
+`wakeup.schedule {delay_seconds, context, key?}` lets an agent wake itself later: it stores a durable self-addressed `wakeup` message whose delivery carries a `due_at`. The scheduler and inbox ignore it until due, then it runs as a normal single inbox attempt carrying `context`, and is never replayed (an interrupted attempt marks it failed, like any delivery). The delay must be 1s to 7 days and before the root deadline, at most 5 wakeups may be pending per agent per root task, and invalid requests create nothing. The scheduler does not poll for them: with nothing running it sleeps exactly until the next wakeup is due (plus a 50ms margin, capped at 30s as a safety net, and woken early by any new work); while attempts run it keeps its 500ms tick for completions and heartbeats.
 
 ## Agent tools
 

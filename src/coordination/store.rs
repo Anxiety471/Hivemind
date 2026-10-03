@@ -1025,6 +1025,14 @@ impl Db<'_> {
         Ok(self.c.prepare_cached("SELECT COUNT(*) FROM message_deliveries WHERE recipient=?1 AND wake=1 AND state='queued' AND (due_at IS NULL OR due_at<=?2)")?.query_row(params![recipient, self.now], |r| r.get(0))?)
     }
 
+    /// Timing the scheduler needs to sleep exactly until the next scheduled wakeup:
+    /// whether a wake is already due and unclaimed, and the earliest future due time.
+    pub fn wake_timing(&self) -> CoordResult<(bool, Option<i64>)> {
+        let due_now: i64 = self.c.prepare_cached("SELECT COUNT(*) FROM message_deliveries WHERE state='queued' AND wake=1 AND (due_at IS NULL OR due_at<=?1)")?.query_row([self.now], |r| r.get(0))?;
+        let next: Option<i64> = self.c.prepare_cached("SELECT MIN(due_at) FROM message_deliveries WHERE state='queued' AND wake=1 AND due_at>?1")?.query_row([self.now], |r| r.get(0))?;
+        Ok((due_now > 0, next))
+    }
+
     /// Scheduled wakeups of `recipient` on `root` that have not come due yet.
     pub fn pending_wakeups(&self, recipient: &str, root: &str) -> CoordResult<i64> {
         Ok(self.c.prepare_cached("SELECT COUNT(*) FROM message_deliveries WHERE recipient=?1 AND root_id=?2 AND state='queued' AND due_at IS NOT NULL AND due_at>?3")?.query_row(params![recipient, root, self.now], |r| r.get(0))?)

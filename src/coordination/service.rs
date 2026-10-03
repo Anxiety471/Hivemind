@@ -239,6 +239,25 @@ impl CoordinationService {
     pub fn enabled(&self) -> bool {
         self.config.enabled
     }
+    /// How long an idle scheduler (nothing running) may sleep: until the next
+    /// scheduled wakeup comes due, retrying soon if one is already due but not
+    /// claimable yet, and never past a safety cap. New work interrupts the sleep
+    /// through [`Self::wake_signal`].
+    pub fn idle_sleep(&self) -> std::time::Duration {
+        use std::time::Duration;
+        const RETRY: Duration = Duration::from_millis(500);
+        const CAP: Duration = Duration::from_secs(30);
+        // Due times are whole seconds; the margin lands the wake after the boundary.
+        const MARGIN: Duration = Duration::from_millis(50);
+        match self.store.read(|db| Ok((db.now, db.wake_timing()?))) {
+            Ok((_, (true, _))) | Err(_) => RETRY,
+            Ok((now, (false, Some(due)))) => {
+                (Duration::from_secs((due - now).max(0) as u64) + MARGIN).min(CAP)
+            }
+            Ok((_, (false, None))) => CAP,
+        }
+    }
+
     pub fn wake_signal(&self) -> Arc<Notify> {
         self.wake.clone()
     }
