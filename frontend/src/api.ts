@@ -154,6 +154,14 @@ export type TaskDetail = {
   usage: Usage | null;
 };
 
+export type MeasuredUsage = {
+  measured_tokens: number; unknown_prompts: number; task_token_limit: number; project_token_limit: number;
+  require_usage: boolean; usage_blocked: boolean; scope_budget_state: string | null; scope_budget_tokens?: number | null;
+  by_persona: { persona: string; measured_tokens: number; unknown_prompts: number }[];
+  by_project: { project: string; measured_tokens: number; unknown_prompts: number; limit: number; budget_state: string; usage_blocked: boolean }[];
+  records: { scope: string; project: string; persona: string; turn_id: string; epoch: string; created_at: number; usage: { input_tokens: number; output_tokens: number; cache_read_tokens: number; cache_write_tokens: number } | null }[];
+};
+
 export type RoutineInput = { name: string; objective: string; interval_secs: number; acceptance: string[]; capabilities: string[]; workspace?: string; goal_id?: string };
 export type Routine = RoutineInput & { id: string; enabled: boolean; next_at: number; revision: number; runs: { id: string; status: string; task_id: string | null; created_at: number; error: string | null }[] };
 
@@ -362,6 +370,7 @@ const enc = encodeURIComponent;
 export type Skill = { name: string; description: string; argument_hint: string; source: string };
 
 export const api = {
+  measuredUsage: (scope?: string, project?: string) => request<MeasuredUsage>("GET", `/usage?${new URLSearchParams({...(scope?{scope}:{}),...(project?{project}:{})})}`),
   goals: () => request<{ goals: Goal[] }>("GET", "/goals"),
   createGoal: (body: GoalInput) => request("POST", "/goals", body),
   setGoalStatus: (id: string, status: string, revision: number) => request("POST", `/goals/${enc(id)}/status`, { status, revision }),

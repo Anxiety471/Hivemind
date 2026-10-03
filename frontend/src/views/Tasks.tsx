@@ -1,4 +1,5 @@
 // Autonomous tasks: root list, task detail with subtasks, attempts, evidence, budget, and controls.
+import { UsagePanel } from "./Usage";
 import { TaskEvidence } from "./TaskEvidence";
 import { TaskInput } from "./TaskInput";
 import type { ReactNode } from "react";
@@ -287,6 +288,7 @@ function TaskDetailView({ id }: { id: string }) {
         {d.evidence.length ? <ul>{d.evidence.map((e, i) => <li key={i}><Badge value={e.outcome} /> {e.check} · {e.detail}</li>)}</ul> : <p className="muted">No agent evidence submitted.</p>}
       </section>
       <TaskEvidence detail={d} onDone={detail.reload} />
+      <UsagePanel scope={t.root_id} />
     </div>
   );
 }

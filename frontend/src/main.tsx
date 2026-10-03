@@ -4,6 +4,7 @@ import { api, hasSavedSettings } from "./api";
 import { connect, useLiveStatus } from "./live";
 import { Chat } from "./views/Chat";
 import { FirstRunSetup } from "./views/FirstRunSetup";
+const UsageView = lazy(() => import("./views/Usage").then((m) => ({ default: m.UsageView })));
 const Goals = lazy(() => import("./views/Goals").then((m) => ({ default: m.Goals })));
 const Routines = lazy(() => import("./views/Routines").then((m) => ({ default: m.Routines })));
 const Inbox = lazy(() => import("./views/Inbox").then((m) => ({ default: m.Inbox })));
@@ -24,6 +25,7 @@ function parse(): Route {
 }
 
 const NAV = [
+  { page: "usage", label: "Usage and limits", icon: "📊" },
   { page: "goals", label: "Project goals", icon: "🎯" },
   { page: "routines", label: "Routines", icon: "🕒" },
   { page: "inbox", label: "Operator inbox", icon: "📥" },
@@ -80,6 +82,7 @@ function App() {
 
   let view;
   switch (route.page) {
+    case "usage": view = <UsageView />; break;
     case "goals": view = <Goals />; break;
     case "routines": view = <Routines />; break;
     case "inbox":
