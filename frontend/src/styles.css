@@ -118,6 +118,11 @@ ul {
   flex-wrap: wrap;
 }
 
+.task-detail pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 28rem; overflow: auto; }
+.task-detail .mono { overflow-wrap: anywhere; }
+.task-detail details { margin: .75rem 0; }
+.task-detail summary { cursor: pointer; }
+
 /* Shell */
 .shell {
   display: grid;

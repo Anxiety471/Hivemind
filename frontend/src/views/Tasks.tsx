@@ -1,4 +1,5 @@
 // Autonomous tasks: root list, task detail with subtasks, attempts, evidence, budget, and controls.
+import { TaskEvidence } from "./TaskEvidence";
 import { TaskInput } from "./TaskInput";
 import type { ReactNode } from "react";
 import { useState } from "react";
@@ -277,36 +278,10 @@ function TaskDetailView({ id }: { id: string }) {
         )}
       </div>
 
-      {(d.artifacts.length > 0 || (d.usage && d.evidence.length > 0)) && (
-        <div className="grid-2">
-          {d.artifacts.length > 0 && (
-            <div className="card">
-              <h3>Artifacts</h3>
-              <ul className="artifacts">
-                {d.artifacts.map((a) => (
-                  <li key={a.id}>
-                    <Badge value={a.kind} tone="muted" /> <span className="mono small">{a.reference}</span>
-                    <div className="muted small">{a.description}</div>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-          {d.usage && d.evidence.length > 0 && (
-            <div className="card">
-              <h3>Evidence</h3>
-              <ul className="evidence">
-                {d.evidence.map((e, i) => (
-                  <li key={i}>
-                    <Badge value={e.outcome} tone={e.outcome === "passed" ? "ok" : "bad"} /> {e.check}{" "}
-                    <span className="muted">{e.detail}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </div>
-      )}
+      <section className="card"><h3>Agent-reported evidence</h3>
+        {d.evidence.length ? <ul>{d.evidence.map((e, i) => <li key={i}><Badge value={e.outcome} /> {e.check} · {e.detail}</li>)}</ul> : <p className="muted">No agent evidence submitted.</p>}
+      </section>
+      <TaskEvidence detail={d} onDone={detail.reload} />
     </div>
   );
 }
