@@ -7,9 +7,11 @@
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
+. "$root/scripts/js-pm.sh"
 
+select_js_pm
 if [ ! -d frontend/node_modules ]; then
-  (cd frontend && npm install)
+  (cd frontend && "$JS_PM" install)
 fi
 
 pids=()
@@ -27,7 +29,7 @@ else
 fi
 pids+=($!)
 
-(cd frontend && exec npm run dev) &
+(cd frontend && exec "$JS_PM" run dev) &
 pids+=($!)
 
 # Exit as soon as either process dies, propagating its status.

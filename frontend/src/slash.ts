@@ -1,4 +1,4 @@
-// Slash commands typed into a composer. Pure functions so they run under `node --test`.
+// Slash commands typed into a composer. Pure functions so they run under `bun test` or `node --test`.
 // Skills are listed as `/skill:<name>`, the same way OMP offers them.
 
 export type SlashCommand = { name: string; usage: string; summary: string };

@@ -1,4 +1,4 @@
-// Run with: node --experimental-strip-types --test test/mentions.test.ts
+// Run with: bun test test/mentions.test.ts   (or: node --experimental-strip-types --test test/mentions.test.ts)
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { applyMention, filterParticipants, getMentionMatch } from "../src/mentions.ts";

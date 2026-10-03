@@ -370,7 +370,7 @@ When the server shuts down, core shutdown starts first and WebSocket clients are
 Frames are JSON envelopes with a `type`, an optional correlation `id`, and a `payload`.
 
 ```bash
-websocat ws://127.0.0.1:7474/api/v1/ws        # or: npx wscat -c ws://127.0.0.1:7474/api/v1/ws
+websocat ws://127.0.0.1:7474/api/v1/ws        # or: bunx wscat -c ws://127.0.0.1:7474/api/v1/ws · or: npx wscat -c ws://127.0.0.1:7474/api/v1/ws
 ```
 
 ```jsonc
@@ -400,18 +400,19 @@ Unsupported or malformed messages get a `system.error` frame, and the connection
 
 ## 🖥️ Web UI
 
-`frontend/` is a browser UI built on the public API: first-run persona setup, rooms with live replies and threads, autonomous tasks with attempts and controls, agents, chat groups, workspaces, runtime sessions, and a live event feed.
+`frontend/` is a browser UI built on the public API: first-run persona setup, rooms with live replies and threads, autonomous tasks with attempts and controls, agents, chat groups, workspaces, runtime sessions, and a live event feed. The web UI runs on Bun (preferred) or Node.js/npm.
 
 ```bash
 hivemind serve                               # API on http://127.0.0.1:7474
-cd frontend && npm install && npm run dev    # UI on http://127.0.0.1:5173
+cd frontend && bun install && bun run dev    # UI on http://127.0.0.1:5173
+# or: cd frontend && npm install && npm run dev
 ```
 
 Or run both with one command: `scripts/dev.sh` (extra arguments go to `hivemind serve`; set `HIVEMIND_BIN` to use a prebuilt binary instead of `cargo run`). Ctrl-C stops both.
 
 On a fresh install, start the server without running `hivemind init`; the Web UI handles the initial persona setup and saves it directly on the server.
 
-No model handy? `frontend/dev/demo.sh` runs `serve` with a scripted stand-in runtime, and `node frontend/dev/seed.mjs` fills it with sample data. See [frontend/README.md](frontend/README.md) and the [Web UI](https://github.com/Anxiety471/Hivemind/wiki/Web-UI) wiki page.
+No model handy? `frontend/dev/demo.sh` runs `serve` with a scripted stand-in runtime, and `bun frontend/dev/seed.mjs  (or: node frontend/dev/seed.mjs)` fills it with sample data. See [frontend/README.md](frontend/README.md) and the [Web UI](https://github.com/Anxiety471/Hivemind/wiki/Web-UI) wiki page.
 
 ---
 

@@ -20,17 +20,17 @@ hivemind serve                     # http://127.0.0.1:7474
 
 # 2. Start the UI
 cd frontend
-npm install
-npm run dev                        # http://127.0.0.1:5173
+bun install && bun run dev          # bun (preferred)
+# or: npm install && npm run dev    # Node.js/npm
 ```
 
 The UI connects to `http://127.0.0.1:7474` by default. Change it under **Connection** in the sidebar (saved in the browser), or set `VITE_HIVEMIND_URL` at build time. The server allows browser calls from any loopback origin, so no proxy is needed.
 
 When `hivemind.toml` does not exist, open the UI and follow **First-run setup**. Add personas, select Pi/OMP/OpenCode, set models and workspaces, and save. Hivemind writes the config on the server and applies it immediately. There is no CLI config-generation step. Configure runtime provider sign-in in Pi, OMP, or OpenCode as usual; Hivemind never stores those provider credentials.
 
-`npm run build` writes a static bundle to `dist/` (about 75 kB gzipped on first load; each screen other than Rooms is a lazy-loaded chunk of 1 to 3 kB); serve it from any loopback origin (`npm run preview` does this on port 4173).
+`bun run build` (or `npm run build`) writes a static bundle to `dist/` (about 75 kB gzipped on first load; each screen other than Rooms is a lazy-loaded chunk of 1 to 3 kB); serve it from any loopback origin (`bun run preview`, or `npm run preview`, does this on port 4173).
 
-Run the browser E2E setup test from the repository root after building Hivemind with cargo build --locked. In frontend/, install Chromium once with npx playwright install chromium, then run npm run e2e. The test starts a fresh server and Vite UI, configures a persona in Chromium, and checks that the config was saved and the persona became active.
+Run the browser E2E setup test from the repository root after building Hivemind with cargo build --locked. In frontend/, install Chromium once with bunx playwright install chromium (bun) or npx playwright install chromium (npm), then run bun run e2e (or npm run e2e). The test starts a fresh server and Vite UI, configures a persona in Chromium, and checks that the config was saved and the persona became active.
 
 ### Remote servers
 
@@ -42,8 +42,9 @@ When `server.token_env` is configured, enter the operator token under **Connecti
 
 ```bash
 sh dev/demo.sh                     # terminal 1: server on :7474
-node dev/seed.mjs                  # terminal 2: conversations, a thread, two tasks, one rotation
-npm run dev                        # terminal 3: the UI
+bun dev/seed.mjs                   # terminal 2: conversations, a thread, two tasks, one rotation
+# or: node dev/seed.mjs
+bun run dev                        # terminal 3: the UI (or: npm run dev)
 ```
 
 `FAKE_PI_DELAY=4 sh dev/demo.sh` slows replies down so the live indicators are easy to see. Delete `dev/.demo/` to start over.

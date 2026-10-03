@@ -4,7 +4,8 @@
 
 ```bash
 hivemind serve                      # API on http://127.0.0.1:7474
-cd frontend && npm install && npm run dev   # UI on http://127.0.0.1:5173
+cd frontend && bun install && bun run dev   # UI on http://127.0.0.1:5173
+# or: cd frontend && npm install && npm run dev
 ```
 
 ## Screens
@@ -31,4 +32,4 @@ The default server is `http://127.0.0.1:7474`; change it under **Connection** (s
 
 ## Demo without a model
 
-`frontend/dev/demo.sh` runs `serve` against a throwaway hive whose personas use `frontend/dev/fake-pi.py`, a scripted stand-in for the Pi RPC runtime that never contacts a provider. `node frontend/dev/seed.mjs` fills it with conversations, a thread, two tasks, and a rotated session. See `frontend/README.md`.
+`frontend/dev/demo.sh` runs `serve` against a throwaway hive whose personas use `frontend/dev/fake-pi.py`, a scripted stand-in for the Pi RPC runtime that never contacts a provider. `bun frontend/dev/seed.mjs (or: node frontend/dev/seed.mjs)` fills it with conversations, a thread, two tasks, and a rotated session. See `frontend/README.md`.

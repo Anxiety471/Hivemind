@@ -83,7 +83,7 @@ On shutdown, core shutdown starts first and WebSocket clients are notified befor
 Frames are JSON envelopes with a `type`, an optional correlation `id`, and a `payload`.
 
 ```bash
-websocat ws://127.0.0.1:7474/api/v1/ws        # or: npx wscat -c ws://127.0.0.1:7474/api/v1/ws
+websocat ws://127.0.0.1:7474/api/v1/ws        # or: bunx wscat -c ws://127.0.0.1:7474/api/v1/ws · or: npx wscat -c ws://127.0.0.1:7474/api/v1/ws
 ```
 
 ```jsonc

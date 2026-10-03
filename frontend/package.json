@@ -9,7 +9,9 @@
     "e2e": "playwright test",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-strip-types --test test/*.test.ts",
+    "test": "sh -c 'if command -v bun >/dev/null 2>&1; then bun test; else node --experimental-strip-types --test test/*.test.ts; fi'",
+    "test:bun": "bun test",
+    "test:node": "node --experimental-strip-types --test test/*.test.ts",
     "demo": "sh dev/demo.sh"
   },
   "devDependencies": {
