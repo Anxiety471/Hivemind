@@ -26,6 +26,9 @@ pub(super) fn routes() -> Router<ApiState> {
     Router::new()
         .route("/api/v1/tasks", post(submit).get(list))
         .route("/api/v1/operator-inbox", get(operator_inbox))
+        .route("/api/v1/routines", get(routines).post(create_routine))
+        .route("/api/v1/routines/{id}/run", post(run_routine))
+        .route("/api/v1/routines/{id}/enabled", post(routine_enabled))
         .route("/api/v1/tasks/{id}", get(show))
         .route("/api/v1/tasks/{id}/attempts", get(attempts))
         .route("/api/v1/tasks/{id}/evidence", get(evidence))
@@ -195,6 +198,71 @@ async fn list(State(state): State<ApiState>, RawQuery(raw): RawQuery) -> Respons
                 .flatten();
             Json(json!({"tasks": tasks, "next_after": next_after, "event_high_water": service.high_water().unwrap_or(0)})).into_response()
         }
+        Err(error) => coord_error(error),
+    }
+}
+
+async fn routines(State(state): State<ApiState>) -> Response {
+    match state.core.coordination().routines() {
+        Ok(routines) => Json(json!({"routines":routines})).into_response(),
+        Err(error) => coord_error(error),
+    }
+}
+async fn create_routine(
+    State(state): State<ApiState>,
+    payload: Result<Json<crate::coordination::routines::RoutineInput>, JsonRejection>,
+) -> Response {
+    let Ok(Json(body)) = payload else {
+        return bad_json();
+    };
+    match state.core.coordination().create_routine(body) {
+        Ok(routine) => (StatusCode::CREATED, Json(json!({"routine":routine}))).into_response(),
+        Err(error) => coord_error(error),
+    }
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RoutineRunBody {
+    #[serde(default)]
+    idempotency_key: Option<String>,
+}
+async fn run_routine(
+    State(state): State<ApiState>,
+    Path(id): Path<String>,
+    payload: Result<Json<RoutineRunBody>, JsonRejection>,
+) -> Response {
+    let Ok(Json(body)) = payload else {
+        return bad_json();
+    };
+    match state
+        .core
+        .coordination()
+        .run_routine(&id, body.idempotency_key.as_deref())
+    {
+        Ok(run) => Json(json!({"run":run})).into_response(),
+        Err(error) => coord_error(error),
+    }
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RoutineEnabledBody {
+    enabled: bool,
+    revision: i64,
+}
+async fn routine_enabled(
+    State(state): State<ApiState>,
+    Path(id): Path<String>,
+    payload: Result<Json<RoutineEnabledBody>, JsonRejection>,
+) -> Response {
+    let Ok(Json(body)) = payload else {
+        return bad_json();
+    };
+    match state
+        .core
+        .coordination()
+        .set_routine_enabled(&id, body.enabled, body.revision)
+    {
+        Ok(routine) => Json(json!({"routine":routine})).into_response(),
         Err(error) => coord_error(error),
     }
 }

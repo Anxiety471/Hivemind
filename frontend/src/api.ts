@@ -150,6 +150,9 @@ export type TaskDetail = {
   usage: Usage | null;
 };
 
+export type RoutineInput = { name: string; objective: string; interval_secs: number; acceptance: string[]; capabilities: string[]; workspace?: string };
+export type Routine = RoutineInput & { id: string; enabled: boolean; next_at: number; revision: number; runs: { id: string; status: string; task_id: string | null; created_at: number; error: string | null }[] };
+
 export type TaskEvidence = {
   decisions: { id: string; text: string; proposer: string; state: string }[];
   events: { seq: number; actor: string; event_type: string; payload: unknown; created_at: number }[];
@@ -355,6 +358,10 @@ const enc = encodeURIComponent;
 export type Skill = { name: string; description: string; argument_hint: string; source: string };
 
 export const api = {
+  routines: () => request<{ routines: Routine[] }>("GET", "/routines"),
+  createRoutine: (body: RoutineInput) => request("POST", "/routines", body),
+  runRoutine: (id: string) => request("POST", `/routines/${enc(id)}/run`, { idempotency_key: crypto.randomUUID() }),
+  setRoutineEnabled: (id: string, enabled: boolean, revision: number) => request("POST", `/routines/${enc(id)}/enabled`, { enabled, revision }),
   operatorInbox: async () => {
     const items: InboxItem[] = [];
     let after: string | null = null;
