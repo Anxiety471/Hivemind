@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use hivemind::{
     config::HivemindConfig,
     core::HivemindCore,
-    issues::{start_council, IssueKind, IssueStatus, Trigger},
+    issues::{resolve_members, start_council, IssueKind, IssueStatus, Trigger},
 };
 
 use super::args::IssueCommand;
@@ -25,8 +25,12 @@ async fn dispatch(core: &HivemindCore, command: IssueCommand) -> Result<()> {
     let settings = core.issues().config();
     match command {
         IssueCommand::List { status, kind } => {
+            let who = match resolve_members(&core.config()) {
+                Ok(names) => names.join(", "),
+                Err(error) => error.to_string(),
+            };
             println!(
-                "Issue council: {}{}",
+                "Issue council: {}{}  attendees: {}  prompt: {}",
                 if settings.enabled {
                     settings.mode.as_str()
                 } else {
@@ -44,6 +48,12 @@ async fn dispatch(core: &HivemindCore, command: IssueCommand) -> Result<()> {
                     )
                 } else {
                     String::new()
+                },
+                who,
+                if settings.prompt.is_some() {
+                    "custom"
+                } else {
+                    "default"
                 }
             );
             let status = match status.as_deref() {

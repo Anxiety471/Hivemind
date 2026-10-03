@@ -16,6 +16,9 @@ max_issues_per_round = 5
 # members = ["Engineer", "Reviewer"]   # empty = every persona
 # group = "development"                # if set, that group's members discuss
 # workspace = "/path/to/project"       # mentioned in the prompt; workspaces are not moved
+# prompt = """
+# Decide the next bug the hive should file. Prefer something a user would notice.
+# """
 ```
 
 `serve` applies this. Change it in `hivemind.toml` or from the web UI (**Issues**); a saved change is written back to the config and used on the next pass, without a restart.
@@ -29,9 +32,13 @@ The first council waits one full interval after you enable it (or after the prev
 
 `interval_secs` is 60–2592000. `idle_secs` is 60–86400. A round files at most `max_issues_per_round` issues (1–20).
 
+Who attends is `group` when that is set, otherwise `members`, otherwise every persona. The web UI calls this **Who discusses**.
+
 ## What the agents do
 
-The discussion runs in the `issues` room, in discussion order, with the personas from `group`, or `members`, or every persona. Hivemind gives them the open backlog and two tools:
+`prompt` is the goal for the discussion. Omit it and Hivemind uses: discuss the next feature, improvement, or bug fix, and file the ones worth doing later. A custom prompt replaces that goal only. Each round still appends the filing rules, the open backlog, and an instruction not to implement, edit, or start a task. `prompt` is at most 8000 characters.
+
+The discussion runs in the `issues` room, in discussion order. Hivemind gives the attendees two tools:
 
 - `issues.list` — open issues, so they do not file the same idea twice
 - `issues.propose` — `{kind, title, body, priority?}`. `kind` is `feature`, `improvement`, or `bug`
@@ -52,7 +59,7 @@ hivemind issue run                   # one council in the foreground
 
 HTTP: `GET /api/v1/issues`, `GET /api/v1/issues/{id}`, `POST /api/v1/issues/{id}/dismiss`, `GET`/`PATCH /api/v1/issues/settings`, `GET`/`POST /api/v1/issues/rounds` (`POST` returns 202 and starts a discussion). Live events are `issue.proposed`, `issue.dismissed`, `issue.round.started`, `issue.round.completed`, and `issue.round.failed`.
 
-The web UI lists the backlog, shows the cadence, and can dismiss an issue or start a round.
+The web UI lists the backlog and edits the prompt, the frequency, and who attends. It can also dismiss an issue or start a round.
 
 ## What this does not do
 

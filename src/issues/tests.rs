@@ -5,13 +5,16 @@ use serde_json::json;
 
 use super::{
     model::*,
-    service::{resolve_members, IssuesService, RawProposal},
+    service::{
+        render_prompt, resolve_members, write_config_section, IssuesService, RawProposal,
+        DEFAULT_GOAL,
+    },
     store::IssueStore,
     tools::IssueTools,
     *,
 };
 use crate::{
-    config::{HivemindConfig, IssuesMode},
+    config::{HivemindConfig, IssuesConfig, IssuesMode},
     conversation::{AgentInvoker, ToolHost},
     events::EventBus,
     runtime::{InvokeReply, InvokeRequest, SessionCursor},
@@ -218,6 +221,36 @@ fn members_follow_the_group_then_the_explicit_list_then_everyone() {
     config.issues.group = None;
     // resolve_members trusts the list; config validation is what rejects it.
     assert!(config.validate().is_err());
+}
+
+#[test]
+fn a_custom_prompt_replaces_the_goal_and_still_forbids_implementation() {
+    let config = IssuesConfig::default();
+    let built_in = render_prompt(&config, &[], 0);
+    assert!(built_in.contains(DEFAULT_GOAL));
+    assert!(built_in.contains("Do not implement"));
+
+    let mut custom = IssuesConfig::default();
+    custom.prompt = Some("Decide only the next bug the hive should file.".into());
+    let rendered = render_prompt(&custom, &[], 0);
+    assert!(rendered.contains("Decide only the next bug the hive should file."));
+    assert!(!rendered.contains("features, improvements, and bug fixes"));
+    assert!(rendered.contains("Do not implement"));
+    assert!(rendered.contains("issues.propose"));
+
+    let mut hive = HivemindConfig::default_poc();
+    hive.issues.prompt = Some("x".repeat(8_001));
+    assert!(hive.validate().is_err());
+    hive.issues.prompt = Some("Look at the release notes and file one bug.".into());
+    assert!(hive.validate().is_ok());
+
+    let mut document = toml_edit::DocumentMut::new();
+    write_config_section(&mut document, &hive.issues).unwrap();
+    let parsed: HivemindConfig = toml::from_str(&document.to_string()).unwrap();
+    assert_eq!(
+        parsed.issues.prompt.as_deref(),
+        Some("Look at the release notes and file one bug.")
+    );
 }
 
 struct Scripted {

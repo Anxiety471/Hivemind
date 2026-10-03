@@ -200,6 +200,9 @@ pub fn resolve_members(config: &HivemindConfig) -> IssueResult<Vec<String>> {
     Ok(names)
 }
 
+/// Goal used when `[issues] prompt` is omitted.
+pub const DEFAULT_GOAL: &str = "Discuss what the hive should add next: features, improvements, and bug fixes. File the ones worth doing later with issues.propose.";
+
 pub fn render_prompt(config: &IssuesConfig, open: &[Issue], open_total: usize) -> String {
     let mut backlog = String::new();
     if open.is_empty() {
@@ -224,9 +227,15 @@ pub fn render_prompt(config: &IssuesConfig, open: &[Issue], open_total: usize) -
         Some(path) => format!("When you decide, consider this workspace: {path}"),
         None => "Use what you already know about your workspace.".to_owned(),
     };
+    let goal = config
+        .prompt
+        .as_deref()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .unwrap_or(DEFAULT_GOAL);
     format!(
-        "This is the issue council. Discuss what the hive should add next: features, improvements, and bug fixes. \
-File the ones worth doing later with issues.propose. Do not implement them, do not edit the project, and do not start a task. \
+        "This is the issue council.\n{goal}\n\n\
+File each decision with issues.propose. Do not implement anything, do not edit the project, and do not start a task. \
 Issues stay in the backlog until someone implements them later.\n\n\
 kind is \"feature\", \"improvement\", or \"bug\". title is a short imperative ({TITLE_MIN}-{TITLE_MAX} characters). \
 body says why it matters and what done looks like. priority is optional: \"low\", \"medium\", or \"high\".\n\n\

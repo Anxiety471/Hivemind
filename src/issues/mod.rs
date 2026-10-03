@@ -13,6 +13,6 @@ pub use model::{
     pace_due, Issue, IssueError, IssueKind, IssueStatus, Pace, Round, Trigger, COUNCIL_ROOM,
 };
 pub use runner::{run_discussion, start_council, Scheduler};
-pub use service::{resolve_members, write_config_section, IssuesService};
+pub use service::{resolve_members, write_config_section, IssuesService, DEFAULT_GOAL};
 pub use store::IssueStore;
 pub use tools::IssueTools;

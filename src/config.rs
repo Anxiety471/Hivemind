@@ -268,6 +268,10 @@ pub struct IssuesConfig {
     /// Directory the council is asked to consider. Members keep their own workspaces.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<String>,
+    /// Goal the members discuss. Empty uses the built-in prompt. Filing rules
+    /// and the open backlog are still appended.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
 }
 
 impl Default for IssuesConfig {
@@ -281,6 +285,7 @@ impl Default for IssuesConfig {
             idle_secs: default_issues_idle_secs(),
             max_issues_per_round: default_max_issues_per_round(),
             workspace: None,
+            prompt: None,
         }
     }
 }
@@ -324,6 +329,12 @@ impl IssuesConfig {
         if let Some(workspace) = &self.workspace {
             if workspace.trim().is_empty() || workspace.len() > 4096 {
                 bail!("issues.workspace must be a non-empty path");
+            }
+        }
+        if let Some(prompt) = &self.prompt {
+            let chars = prompt.chars().count();
+            if prompt.trim().is_empty() || chars > 8_000 {
+                bail!("issues.prompt must be 1-8000 characters; omit it to use the default");
             }
         }
         Ok(())

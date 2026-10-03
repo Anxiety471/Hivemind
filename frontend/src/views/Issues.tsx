@@ -125,7 +125,7 @@ function Council({
         </p>
       )}
       <SettingsForm
-        key={`${settings.enabled}:${settings.mode}:${settings.interval_secs}:${settings.idle_secs}:${settings.group}:${settings.members.join(",")}`}
+        key={`${settings.enabled}:${settings.mode}:${settings.interval_secs}:${settings.idle_secs}:${settings.group}:${settings.members.join(",")}:${settings.prompt ?? ""}`}
         settings={settings}
         onSaved={onSaved}
       />
@@ -143,10 +143,12 @@ function SettingsForm({ settings, onSaved }: { settings: IssueSettings; onSaved:
   const [group, setGroup] = useState(settings.group ?? settings.groups[0] ?? "");
   const [members, setMembers] = useState(settings.members);
   const [workspace, setWorkspace] = useState(settings.workspace ?? "");
+  const [prompt, setPrompt] = useState(settings.prompt ?? settings.default_prompt);
   const action = useAction();
 
   const save = () =>
     action.run(async () => {
+      const goal = prompt.trim();
       await api.updateIssueSettings({
         enabled,
         mode,
@@ -156,16 +158,33 @@ function SettingsForm({ settings, onSaved }: { settings: IssueSettings; onSaved:
         members: who === "members" ? members : [],
         group: who === "group" ? group : null,
         workspace: workspace.trim() ? workspace.trim() : null,
+        prompt: !goal || goal === settings.default_prompt.trim() ? null : goal,
       });
       onSaved();
     });
 
   return (
     <div className="form">
+      <p className="muted small">
+        Set what they discuss, how often they meet, and who attends. Saving applies on the next council.
+      </p>
       <label className="inline">
         <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
         Enable the council
       </label>
+      <label>
+        What they discuss
+        <textarea
+          rows={5}
+          value={prompt}
+          onChange={(e) => setPrompt(e.target.value)}
+        />
+      </label>
+      <div className="row">
+        <button type="button" className="small ghost" onClick={() => setPrompt(settings.default_prompt)}>
+          Use the default prompt
+        </button>
+      </div>
       <label>
         When to discuss
         <select value={mode} onChange={(e) => setMode(e.target.value as IssueSettings["mode"])}>

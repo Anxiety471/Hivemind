@@ -114,6 +114,8 @@ export type IssueSettings = {
   members: string[];
   group: string | null;
   workspace: string | null;
+  prompt: string | null;
+  default_prompt: string;
   personas: string[];
   groups: string[];
   running: boolean;
@@ -130,6 +132,7 @@ export type IssueSettingsPatch = {
   members: string[];
   group: string | null;
   workspace: string | null;
+  prompt: string | null;
 };
 
 export type TaskStatus =

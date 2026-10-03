@@ -131,7 +131,7 @@ Runtimes start with their own skill discovery switched off, so agents only know 
 
 ## Issues
 
-`[issues] enabled = true` lets the configured personas discuss what to build or fix next and file those proposals. Nothing they file is implemented. `mode` is `automatic` (after the hive has been quiet) or `scheduled` (on `interval_secs`). Details are on the [Issues](Issues) page.
+`[issues] enabled = true` lets the configured personas discuss what to build or fix next and file those proposals. Nothing they file is implemented. `mode` is `automatic` (after the hive has been quiet) or `scheduled` (on `interval_secs`). `prompt` replaces the discussion goal; omit it for the built-in one. `members` or `group` chooses who attends. Details are on the [Issues](Issues) page.
 
 ## Room state directives
 

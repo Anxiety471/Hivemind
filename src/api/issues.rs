@@ -69,6 +69,8 @@ fn settings_body(state: &ApiState) -> Result<serde_json::Value, IssueError> {
         "members": issues.members,
         "group": issues.group,
         "workspace": issues.workspace,
+        "prompt": issues.prompt,
+        "default_prompt": crate::issues::DEFAULT_GOAL,
         "personas": config.agents.iter().map(|agent| &agent.name).collect::<Vec<_>>(),
         "groups": config.groups.iter().map(|group| &group.name).collect::<Vec<_>>(),
         "running": running,
@@ -176,6 +178,8 @@ struct SettingsBody {
     group: Option<String>,
     #[serde(default)]
     workspace: Option<String>,
+    #[serde(default)]
+    prompt: Option<String>,
 }
 
 fn blank(value: Option<String>) -> Option<String> {
@@ -217,6 +221,7 @@ async fn update_settings(
         idle_secs: body.idle_secs,
         max_issues_per_round: body.max_issues_per_round,
         workspace: blank(body.workspace),
+        prompt: blank(body.prompt),
     };
     if let Err(error) = state.core.update_issue_settings(next) {
         return ApiError::owned(StatusCode::BAD_REQUEST, "invalid_request", error.to_string())

@@ -33,7 +33,7 @@ Hivemind owns the conversation, the memory, and the CLI.<br>
 - 🔢 **Deterministic reply order**, set globally or per group.
 - 🗂️ **Seven-layer memory with no LLM needed.** It uses FTS5 search, scope binding, provenance, and supersession.
 - 🔌 **Embeddable core** with a typed event bus, plus a loopback HTTP/WebSocket API.
-- 📝 **Issue council** (opt-in). Agents discuss the next feature, improvement, or bug fix and file it. Automatic when the hive is quiet, or on a schedule. The backlog is not implemented.
+- 📝 **Issue council** (opt-in). Agents discuss the next feature, improvement, or bug fix and file it. You set the prompt, how often they meet, and who attends. The backlog is not implemented.
 - 🖥️ **Web UI** for rooms, threads, tasks, issues, groups, workspaces, and runtime sessions.
 
 ---

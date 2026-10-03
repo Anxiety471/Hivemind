@@ -76,6 +76,7 @@ Engineer = "Implementation Reviewer"
 # members = ["Engineer", "Reviewer"]
 # group = "development"       # optional; overrides members
 # workspace = "."             # optional path the council is asked to consider
+# prompt = "Decide the next bug the hive should file."  # omit to use the built-in goal
 
 # Durable execution defaults: limits are disabled until configured.
 # [execution]
