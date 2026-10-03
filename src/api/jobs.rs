@@ -57,10 +57,11 @@ async fn retry(State(state): State<ApiState>, Path(id): Path<String>) -> Respons
         )
         .into_response();
     }
+    let origin = job.origin.clone();
     match state
         .core
         .execution()
-        .submit(&job.room_id, &job.target, &job.message, None)
+        .submit(&job.room_id, &job.target, &job.message, None, &origin)
     {
         Ok(job) => (StatusCode::ACCEPTED, Json(job)).into_response(),
         Err(_) => internal(),
@@ -220,6 +221,13 @@ pub(super) async fn run(core: Arc<HivemindCore>) {
         eprintln!("execution recovery failed: {error}");
         return;
     }
+    if let Err(error) = core
+        .execution()
+        .recover_chat_wakeups(crate::wakeup::MAX_CHAT_WAKEUP_ATTEMPTS)
+    {
+        eprintln!("chat wakeup recovery failed: {error}");
+        return;
+    }
     let mut running = tokio::task::JoinSet::new();
     while !core.is_shutting_down() {
         while running.try_join_next().is_some() {}
@@ -231,7 +239,19 @@ pub(super) async fn run(core: Arc<HivemindCore>) {
             Ok(Some(job)) => {
                 running.spawn(process(core.clone(), job));
             }
-            Ok(None) => tokio::time::sleep(Duration::from_millis(100)).await,
+            Ok(None) => {
+                // No turn is waiting: hand any due chat wakeup to the same
+                // durable queue, keeping its wakeup id as the idempotency key
+                // so a resubmission can never duplicate the turn.
+                match dispatch_due_wakeups(&core) {
+                    Ok(0) => tokio::time::sleep(Duration::from_millis(100)).await,
+                    Ok(_) => {}
+                    Err(error) => {
+                        eprintln!("chat wakeup dispatch failed: {error}");
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                    }
+                }
+            }
             Err(error) => {
                 eprintln!("execution claim failed: {error}");
                 tokio::time::sleep(Duration::from_millis(500)).await;
@@ -240,6 +260,30 @@ pub(super) async fn run(core: Arc<HivemindCore>) {
     }
     while running.join_next().await.is_some() {}
     let _ = core.execution().recover_jobs();
+}
+
+/// Submits every due chat wakeup as a durable turn in its own room. Returns
+/// how many were handed over. One failing row never holds back the others, and
+/// a row whose handover could not be recorded stays queued for the next pass.
+fn dispatch_due_wakeups(core: &HivemindCore) -> anyhow::Result<usize> {
+    let due = core.execution().due_chat_wakeups(MAX_CONCURRENT_TURNS)?;
+    let mut dispatched = 0;
+    for wakeup in due {
+        if let Err(error) = core.execution().submit(
+            &wakeup.room_id,
+            &wakeup.target,
+            &wakeup.message,
+            Some(&wakeup.idem),
+            crate::execution::ORIGIN_HOST,
+        ) {
+            eprintln!("chat wakeup {} could not be queued: {error}", wakeup.id);
+            continue;
+        }
+        core.execution()
+            .mark_chat_wakeup(&wakeup.id, "dispatched")?;
+        dispatched += 1;
+    }
+    Ok(dispatched)
 }
 
 async fn process(core: Arc<HivemindCore>, job: crate::execution::Job) {
@@ -252,7 +296,7 @@ async fn process(core: Arc<HivemindCore>, job: crate::execution::Job) {
         return;
     };
     {
-        let outcome = core.send_job_turn(&target, &job.message, &job.turn_id);
+        let outcome = core.send_job_turn(&target, &job.message, &job.turn_id, &job.origin);
         tokio::pin!(outcome);
         loop {
             tokio::select! {

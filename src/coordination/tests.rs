@@ -13,6 +13,7 @@ use super::{
 use crate::{
     config::{AgentConfig, CoordinationConfig, HivemindConfig},
     events::{DomainEventKind, EventBus},
+    wakeup::{MAX_PENDING_CHAT_WAKEUPS, MAX_WAKEUP_DELAY_SECS},
 };
 
 pub(super) fn persona(name: &str, caps: &[&str], perms: &[&str], workspace: &str) -> AgentConfig {
@@ -1785,7 +1786,7 @@ fn invalid_wakeups_fail_without_scheduling_anything() {
         0
     );
 
-    for _ in 0..MAX_PENDING_WAKEUPS {
+    for _ in 0..MAX_PENDING_CHAT_WAKEUPS {
         service
             .schedule_wakeup(&lead, 30, Some("ctx"), None, None, None)
             .unwrap();

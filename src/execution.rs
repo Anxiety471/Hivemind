@@ -66,6 +66,29 @@ pub struct Job {
     pub target: Value,
     pub message: String,
     pub result: Option<Value>,
+    /// `user` for anything a client submitted, `host` for text Hivemind itself
+    /// authored (a self-scheduled chat wakeup). Host-authored turns still reach
+    /// the room as a user-style message, but they never authorize the
+    /// directives reserved for genuine user input.
+    pub origin: String,
+}
+
+/// A stored chat wakeup ready to be handed to the turn queue.
+#[derive(Debug, Clone)]
+pub struct ChatWakeupRow {
+    pub id: String,
+    pub room_id: String,
+    pub target: Value,
+    pub message: String,
+    /// Idempotency key for the submitted turn: always present, unique per row.
+    pub idem: String,
+}
+
+/// Result of storing a chat wakeup; `deduped` marks a repeated idempotency key.
+#[derive(Debug, Clone)]
+pub struct StoredChatWakeup {
+    pub id: String,
+    pub deduped: bool,
 }
 
 /// Per-conversation preferences that apply to every kind of room.
@@ -97,7 +120,8 @@ pub struct ExecutionStore {
     pub config: ExecutionConfig,
     private_env: Mutex<Vec<String>>,
 }
-fn now() -> i64 {
+/// Current wall-clock time in whole seconds since the Unix epoch.
+pub(crate) fn now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -113,9 +137,14 @@ fn job(row: &rusqlite::Row<'_>) -> rusqlite::Result<Job> {
         target: serde_json::from_str(&target).unwrap_or(Value::Null),
         message: row.get(4)?,
         result: result.and_then(|s| serde_json::from_str(&s).ok()),
+        origin: row.get(6)?,
     })
 }
-const JOB_COLUMNS: &str = "turn_id,room_id,status,target,message,result";
+const JOB_COLUMNS: &str = "turn_id,room_id,status,target,message,result,origin";
+/// Turn origin for text the user (or an API client) submitted.
+pub const ORIGIN_USER: &str = "user";
+/// Turn origin for text Hivemind authored on the agent's behalf.
+pub const ORIGIN_HOST: &str = "host";
 impl ExecutionStore {
     pub fn open(path: impl AsRef<Path>, config: ExecutionConfig) -> Result<Self> {
         let db = Connection::open(path)?;
@@ -129,7 +158,18 @@ impl ExecutionStore {
             CREATE INDEX IF NOT EXISTS usage_scope ON usage(scope);
             CREATE INDEX IF NOT EXISTS usage_project ON usage(project);
             CREATE TABLE IF NOT EXISTS room_settings(room TEXT PRIMARY KEY, nickname TEXT, pinned INTEGER NOT NULL DEFAULT 0, muted INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL);
-            CREATE TABLE IF NOT EXISTS checks(id INTEGER PRIMARY KEY, task TEXT NOT NULL, commit_sha TEXT NOT NULL, name TEXT NOT NULL, result TEXT NOT NULL, passed INTEGER NOT NULL, created_at INTEGER NOT NULL);")?;
+            CREATE TABLE IF NOT EXISTS checks(id INTEGER PRIMARY KEY, task TEXT NOT NULL, commit_sha TEXT NOT NULL, name TEXT NOT NULL, result TEXT NOT NULL, passed INTEGER NOT NULL, created_at INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS chat_wakeups(id TEXT PRIMARY KEY, room_id TEXT NOT NULL, target TEXT NOT NULL, message TEXT NOT NULL, due_at INTEGER NOT NULL, state TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, idem TEXT UNIQUE, created_at INTEGER NOT NULL);
+            CREATE INDEX IF NOT EXISTS chat_wakeups_due ON chat_wakeups(state,due_at);
+            CREATE INDEX IF NOT EXISTS chat_wakeups_room ON chat_wakeups(room_id,state);")?;
+        if !db
+            .prepare("SELECT 1 FROM pragma_table_info('jobs') WHERE name='origin'")?
+            .exists([])?
+        {
+            db.execute_batch(&format!(
+                "ALTER TABLE jobs ADD COLUMN origin TEXT NOT NULL DEFAULT '{ORIGIN_USER}';"
+            ))?;
+        }
         if !db
             .prepare(
                 "SELECT 1 FROM pragma_table_info('room_settings') WHERE name='follow_up_limit'",
@@ -240,10 +280,15 @@ impl ExecutionStore {
         target: &Value,
         message: &str,
         key: Option<&str>,
+        origin: &str,
     ) -> Result<Job> {
         anyhow::ensure!(
             !message.trim().is_empty() && message.len() <= 1024 * 1024,
             "message must contain 1..1048576 bytes"
+        );
+        anyhow::ensure!(
+            origin == ORIGIN_USER || origin == ORIGIN_HOST,
+            "invalid turn origin"
         );
         if let Some(key) = key {
             anyhow::ensure!(
@@ -272,7 +317,7 @@ impl ExecutionStore {
             }
         }
         let id = crate::coordination::model::new_id("turn");
-        tx.execute("INSERT INTO jobs(turn_id,room_id,status,target,message,idem,created_at) VALUES(?,?,'queued',?,?,?,?)", params![id,room,target.to_string(),message,key,now()])?;
+        tx.execute("INSERT INTO jobs(turn_id,room_id,status,target,message,idem,origin,created_at) VALUES(?,?,'queued',?,?,?,?,?)", params![id,room,target.to_string(),message,key,origin,now()])?;
         tx.commit()?;
         Ok(Job {
             turn_id: id,
@@ -281,6 +326,7 @@ impl ExecutionStore {
             target: target.clone(),
             message: message.into(),
             result: None,
+            origin: origin.into(),
         })
     }
     pub fn get(&self, id: &str) -> Result<Option<Job>> {
@@ -297,6 +343,124 @@ impl ExecutionStore {
     pub fn recover_jobs(&self) -> Result<()> {
         self.db.lock().execute(
             "UPDATE jobs SET status='interrupted' WHERE status='running'",
+            [],
+        )?;
+        Ok(())
+    }
+    /// Stores one self-scheduled chat wakeup, deduped by `key`. At most
+    /// `cap` wakeups may be outstanding per room; an over-cap result is the
+    /// existing row when `key` repeats, otherwise an error.
+    #[allow(clippy::too_many_arguments)]
+    pub fn insert_chat_wakeup(
+        &self,
+        id: &str,
+        room: &str,
+        target: &Value,
+        message: &str,
+        due_at: i64,
+        cap: i64,
+        key: Option<&str>,
+    ) -> Result<StoredChatWakeup> {
+        anyhow::ensure!(
+            !message.trim().is_empty() && message.len() <= 1024 * 1024,
+            "wakeup message must contain 1..1048576 bytes"
+        );
+        anyhow::ensure!(
+            key.is_none_or(|k| !k.trim().is_empty() && k.len() <= 200),
+            "invalid idempotency key"
+        );
+        let mut db = self.db.lock();
+        let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let Some(key) = key {
+            if let Some(id) = tx
+                .query_row("SELECT id FROM chat_wakeups WHERE idem=?", [key], |r| {
+                    r.get::<_, String>(0)
+                })
+                .optional()?
+            {
+                return Ok(StoredChatWakeup { id, deduped: true });
+            }
+        }
+        // The cap bounds outstanding *pending* (not-yet-due) wakeups. An
+        // already-due row is not pending, so it is never blocked by the cap.
+        if due_at > now() {
+            let pending: i64 = tx.query_row(
+                "SELECT COUNT(*) FROM chat_wakeups WHERE room_id=? AND state='queued' AND due_at>?",
+                params![room, now()],
+                |r| r.get(0),
+            )?;
+            anyhow::ensure!(pending < cap, "at most {cap} pending chat wakeups per room");
+        }
+        tx.execute("INSERT INTO chat_wakeups(id,room_id,target,message,due_at,state,idem,created_at) VALUES(?,?,?,?,?,'queued',?,?)", params![id, room, target.to_string(), message, due_at, key, now()])?;
+        tx.commit()?;
+        Ok(StoredChatWakeup {
+            id: id.into(),
+            deduped: false,
+        })
+    }
+    /// Outstanding chat wakeups for `room` that are still queued and not yet
+    /// due. `persona` further limits the count to wakeups addressed to it, so
+    /// one person cannot exhaust a shared room's schedule budget.
+    pub fn pending_chat_wakeups(&self, room: &str, persona: Option<&str>) -> Result<i64> {
+        let db = self.db.lock();
+        let mut statement = db.prepare(
+            "SELECT target FROM chat_wakeups WHERE room_id=? AND state='queued' AND due_at>?",
+        )?;
+        let targets = statement
+            .query_map(params![room, now()], |r| r.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(match persona {
+            None => targets.len() as i64,
+            Some(persona) => targets
+                .iter()
+                .filter(|target| {
+                    serde_json::from_str::<Value>(target)
+                        .ok()
+                        .is_some_and(|v| v.get("id").and_then(Value::as_str) == Some(persona))
+                })
+                .count() as i64,
+        })
+    }
+    /// Chat wakeups that have come due, oldest first.
+    pub fn due_chat_wakeups(&self, limit: usize) -> Result<Vec<ChatWakeupRow>> {
+        let db = self.db.lock();
+        let mut statement = db.prepare(
+            "SELECT id,room_id,target,message,COALESCE(idem,id) FROM chat_wakeups WHERE state='queued' AND due_at<=? ORDER BY due_at,rowid LIMIT ?",
+        )?;
+        let rows = statement
+            .query_map(params![now(), limit as i64], |r| {
+                let target: String = r.get(2)?;
+                Ok(ChatWakeupRow {
+                    id: r.get(0)?,
+                    room_id: r.get(1)?,
+                    target: serde_json::from_str(&target).unwrap_or(Value::Null),
+                    message: r.get(3)?,
+                    idem: r.get(4)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+    /// Moves a chat wakeup to `state` if it is still queued or dispatched,
+    /// counting one delivery attempt when it is handed to the turn queue.
+    pub fn mark_chat_wakeup(&self, id: &str, state: &str) -> Result<()> {
+        self.db.lock().execute(
+            "UPDATE chat_wakeups SET state=?, attempts=attempts+(?='dispatched') WHERE id=? AND state IN ('queued','dispatched')",
+            params![state, state, id],
+        )?;
+        Ok(())
+    }
+    /// Requeues chat wakeups left `dispatched` by a crash before their turn
+    /// completed. Each handover counts as an attempt; once `max_attempts` is
+    /// reached the wakeup is dropped rather than replayed forever.
+    pub fn recover_chat_wakeups(&self, max_attempts: i64) -> Result<()> {
+        let db = self.db.lock();
+        db.execute(
+            "UPDATE chat_wakeups SET state='queued' WHERE state='dispatched' AND attempts<?",
+            [max_attempts],
+        )?;
+        db.execute(
+            "UPDATE chat_wakeups SET state='failed' WHERE state='dispatched'",
             [],
         )?;
         Ok(())
@@ -563,13 +727,19 @@ mod tests {
         let path = directory.0.join("execution.sqlite3");
         let db = ExecutionStore::open(&path, Default::default()).unwrap();
         let target = json!({"type":"main"});
-        let a = db.submit("main", &target, "hello", Some("key")).unwrap();
-        let b = db.submit("main", &target, "hello", Some("key")).unwrap();
+        let a = db
+            .submit("main", &target, "hello", Some("key"), ORIGIN_USER)
+            .unwrap();
+        let b = db
+            .submit("main", &target, "hello", Some("key"), ORIGIN_USER)
+            .unwrap();
         assert_eq!(a.turn_id, b.turn_id);
         assert!(db
-            .submit("main", &target, "different", Some("key"))
+            .submit("main", &target, "different", Some("key"), ORIGIN_USER)
             .is_err());
-        let queued = db.submit("main", &target, "later", None).unwrap();
+        let queued = db
+            .submit("main", &target, "later", None, ORIGIN_USER)
+            .unwrap();
         assert_eq!(db.claim().unwrap().unwrap().turn_id, a.turn_id);
         drop(db);
         let db = ExecutionStore::open(&path, Default::default()).unwrap();
@@ -582,9 +752,9 @@ mod tests {
     fn rooms_claim_independently_but_stay_ordered_within_a_room() {
         let db = ExecutionStore::open(":memory:", Default::default()).unwrap();
         let target = json!({"type":"main"});
-        let a1 = db.submit("a", &target, "a1", None).unwrap();
-        let a2 = db.submit("a", &target, "a2", None).unwrap();
-        let b1 = db.submit("b", &target, "b1", None).unwrap();
+        let a1 = db.submit("a", &target, "a1", None, ORIGIN_USER).unwrap();
+        let a2 = db.submit("a", &target, "a2", None, ORIGIN_USER).unwrap();
+        let b1 = db.submit("b", &target, "b1", None, ORIGIN_USER).unwrap();
         assert_eq!(db.claim().unwrap().unwrap().turn_id, a1.turn_id);
         // Room a is busy, so a2 waits while room b starts immediately.
         assert_eq!(db.claim().unwrap().unwrap().turn_id, b1.turn_id);
@@ -670,7 +840,7 @@ mod tests {
     fn cancellation_wins_over_late_completion() {
         let db = ExecutionStore::open(":memory:", Default::default()).unwrap();
         let j = db
-            .submit("main", &json!({"type":"main"}), "hi", None)
+            .submit("main", &json!({"type":"main"}), "hi", None, ORIGIN_USER)
             .unwrap();
         db.claim().unwrap();
         assert!(db.cancel(&j.turn_id).unwrap());
@@ -684,7 +854,7 @@ mod tests {
         let directory = Directory::new();
         let path = directory.0.join("store");
         let db = ExecutionStore::open(&path, Default::default()).unwrap();
-        db.submit("main", &json!({"type":"main"}), "hi", None)
+        db.submit("main", &json!({"type":"main"}), "hi", None, ORIGIN_USER)
             .unwrap();
         let other = ExecutionStore::open(&path, Default::default()).unwrap();
         let first = std::thread::spawn(move || db.claim().unwrap().is_some());
@@ -806,5 +976,162 @@ mod tests {
         assert!(worker_lock(&directory.0).is_err());
         drop(lock);
         assert!(worker_lock(&directory.0).is_ok());
+    }
+    fn wakeup(
+        db: &ExecutionStore,
+        id: &str,
+        room: &str,
+        target: &Value,
+        message: &str,
+        due_at: i64,
+        key: Option<&str>,
+    ) -> Result<StoredChatWakeup> {
+        db.insert_chat_wakeup(
+            id,
+            room,
+            target,
+            message,
+            due_at,
+            crate::wakeup::MAX_PENDING_CHAT_WAKEUPS,
+            key,
+        )
+    }
+    #[test]
+    fn chat_wakeups_dedupe_bound_and_fire_only_when_due() {
+        let db = ExecutionStore::open(":memory:", Default::default()).unwrap();
+        let soon = json!({"type":"solo","id":"Lead"});
+        let later = json!({"type":"solo","id":"Lead"});
+        let now = now();
+        // Dedupe: a repeated idempotency key returns the original row untouched.
+        let stored = wakeup(
+            &db,
+            "wk_1",
+            "solo-Lead",
+            &soon,
+            "Intent: a",
+            now + 60,
+            Some("k1"),
+        )
+        .unwrap();
+        assert!(!stored.deduped);
+        let again = wakeup(
+            &db,
+            "wk_other",
+            "solo-Lead",
+            &soon,
+            "Intent: a",
+            now + 60,
+            Some("k1"),
+        )
+        .unwrap();
+        assert!(again.deduped);
+        assert_eq!(again.id, "wk_1");
+        // Due-only selection: a future wakeup is neither due nor blocking re-claim.
+        assert!(db.due_chat_wakeups(10).unwrap().is_empty());
+        assert_eq!(db.pending_chat_wakeups("solo-Lead", None).unwrap(), 1);
+        // The pending cap counts only queued, not-yet-due rows for this room.
+        for n in 2..=crate::wakeup::MAX_PENDING_CHAT_WAKEUPS {
+            wakeup(
+                &db,
+                &format!("wk_{n}"),
+                "solo-Lead",
+                &soon,
+                "Intent: a",
+                now + 60,
+                None,
+            )
+            .unwrap();
+        }
+        assert!(wakeup(
+            &db,
+            "wk_cap",
+            "solo-Lead",
+            &soon,
+            "Intent: a",
+            now + 60,
+            None
+        )
+        .is_err());
+        assert_eq!(
+            db.pending_chat_wakeups("solo-Lead", None).unwrap(),
+            crate::wakeup::MAX_PENDING_CHAT_WAKEUPS
+        );
+        // A different room has its own budget; an already-due row is not "pending".
+        wakeup(
+            &db,
+            "wk_due",
+            "solo-Lead",
+            &later,
+            "Intent: b",
+            now - 1,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            db.pending_chat_wakeups("solo-Lead", Some("Lead")).unwrap(),
+            crate::wakeup::MAX_PENDING_CHAT_WAKEUPS
+        );
+        assert_eq!(
+            db.pending_chat_wakeups("solo-Lead", Some("Other")).unwrap(),
+            0
+        );
+        let due = db.due_chat_wakeups(10).unwrap();
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].id, "wk_due");
+        assert_eq!(due[0].idem, "wk_due");
+        assert_eq!(due[0].target, later);
+        assert!(wakeup(
+            &db,
+            "wk_other",
+            "solo-Other",
+            &soon,
+            "Intent: a",
+            now + 60,
+            None
+        )
+        .is_ok());
+    }
+    #[test]
+    fn dispatched_chat_wakeups_are_redelivered_after_a_restart_within_a_bound() {
+        let directory = Directory::new();
+        let path = directory.0.join("wakeups.sqlite3");
+        let db = ExecutionStore::open(&path, Default::default()).unwrap();
+        let target = json!({"type":"main"});
+        let now = now();
+        wakeup(
+            &db,
+            "wk_1",
+            "main",
+            &target,
+            "Intent: a",
+            now - 1,
+            Some("k1"),
+        )
+        .unwrap();
+        assert_eq!(db.due_chat_wakeups(10).unwrap().len(), 1);
+        db.mark_chat_wakeup("wk_1", "dispatched").unwrap();
+        assert!(
+            db.due_chat_wakeups(10).unwrap().is_empty(),
+            "dispatched once"
+        );
+        drop(db);
+        let db = ExecutionStore::open(&path, Default::default()).unwrap();
+        // A restart requeues it, so the unsubmitted wakeup is not lost.
+        db.recover_chat_wakeups(crate::wakeup::MAX_CHAT_WAKEUP_ATTEMPTS)
+            .unwrap();
+        assert_eq!(db.due_chat_wakeups(10).unwrap().len(), 1);
+        for attempt in 2..crate::wakeup::MAX_CHAT_WAKEUP_ATTEMPTS {
+            db.mark_chat_wakeup("wk_1", "dispatched").unwrap();
+            db.recover_chat_wakeups(crate::wakeup::MAX_CHAT_WAKEUP_ATTEMPTS)
+                .unwrap();
+            let requeued = db.due_chat_wakeups(10).unwrap().len();
+            assert_eq!(requeued, 1, "attempt {attempt} is still within the bound");
+        }
+        // Past the attempt bound it is dropped, never replayed forever.
+        db.mark_chat_wakeup("wk_1", "dispatched").unwrap();
+        db.recover_chat_wakeups(crate::wakeup::MAX_CHAT_WAKEUP_ATTEMPTS)
+            .unwrap();
+        assert!(db.due_chat_wakeups(10).unwrap().is_empty());
+        assert_eq!(db.pending_chat_wakeups("main", None).unwrap(), 0);
     }
 }

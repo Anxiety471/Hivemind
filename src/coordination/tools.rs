@@ -224,7 +224,9 @@ impl ToolHost for CoordinationTools {
     }
 
     fn handles(&self, name: &str) -> bool {
-        EXAMPLES.iter().any(|(known, _)| *known == name)
+        // `wakeup.schedule` is handled by `ChatWakeupTools`, which owns the
+        // name in every room so chat wakeups can share the tool surface.
+        name != "wakeup.schedule" && EXAMPLES.iter().any(|(known, _)| *known == name)
     }
 
     fn execute(&self, room: &str, persona: &str, name: &str, args: &Value) -> Result<String> {

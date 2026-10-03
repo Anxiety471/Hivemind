@@ -8,7 +8,7 @@
 {"target":{"type":"main"},"message":"Review the parser","wait":false,"idempotency_key":"parser-review-1"}
 ```
 
-Reusing a key with the same target/message returns the original job. Reusing it for a different request returns `409`. Queued jobs survive a restart. A running job becomes `interrupted` after a restart; it never replays implicitly because tools may already have changed files.
+Reusing a key with the same target/message returns the original job. Reusing it for a different request returns `409`. Queued jobs survive a restart. A running job becomes `interrupted` after a restart; it never replays implicitly because tools may already have changed files. Each job records its `origin`: `user` for a request a client submitted, `host` for text Hivemind authored on an agent's behalf (a self-scheduled chat wakeup). A host-originated turn still reaches the room as a user-style message, but its text never authorizes the directives reserved for genuine user input.
 
 | Endpoint | Behavior |
 | --- | --- |

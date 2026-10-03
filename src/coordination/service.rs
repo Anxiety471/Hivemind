@@ -22,6 +22,7 @@ use crate::{
     config::CoordinationConfig,
     events::{DomainEventKind, EventBus},
     identity::AgentInstanceId,
+    wakeup::{MAX_WAKEUP_DELAY_SECS, MIN_WAKEUP_DELAY_SECS},
 };
 
 /// Public event types, in the order the wire protocol reserves them.
@@ -115,13 +116,8 @@ pub struct ResultIn {
     pub verification: Vec<Evidence>,
 }
 
-/// Bounds on a self-scheduled wakeup: no sooner than a second, no later than a
-/// week, and a handful outstanding per agent per root task.
-pub(super) const MIN_WAKEUP_DELAY_SECS: i64 = 1;
-pub(super) const MAX_WAKEUP_DELAY_SECS: i64 = 7 * 24 * 3600;
-pub(super) const MAX_PENDING_WAKEUPS: i64 = 5;
-/// Per-field byte bound on a wakeup's `intent`, `reminder`, or `note`.
-pub(super) const MAX_WAKEUP_TEXT: usize = 2000;
+/// Max outstanding self-wakeups per agent, per root task or per chat room.
+pub(super) const MAX_PENDING_WAKEUPS: i64 = crate::wakeup::MAX_PENDING_CHAT_WAKEUPS;
 /// A wakeup interrupted mid-attempt (crash, restart, lease loss) is retried until
 /// it has been claimed this many times; wakeups are self-continuations, so a
 /// replay is safer than losing them.
@@ -2015,31 +2011,8 @@ impl CoordinationService {
                 "delay_seconds must be between {MIN_WAKEUP_DELAY_SECS} and {MAX_WAKEUP_DELAY_SECS}"
             ));
         }
-        // At least one purpose is required; each field is bounded on its own.
-        let intent = intent
-            .map(|v| check_text("wakeup intent", v, MAX_WAKEUP_TEXT))
-            .transpose()?;
-        let reminder = reminder
-            .map(|v| check_text("wakeup reminder", v, MAX_WAKEUP_TEXT))
-            .transpose()?;
-        let note = note
-            .map(|v| check_text("wakeup note", v, MAX_WAKEUP_TEXT))
-            .transpose()?;
-        if intent.is_none() && reminder.is_none() && note.is_none() {
-            return invalid(
-                "a wakeup needs at least one of 'intent' (what to do), 'reminder' (what to act on), or 'note' (state to carry)",
-            );
-        }
         // The delivered message labels each stated purpose so the future self reads why it was woken.
-        let body = [
-            intent.as_deref().map(|v| format!("Intent: {v}")),
-            reminder.as_deref().map(|v| format!("Reminder: {v}")),
-            note.as_deref().map(|v| format!("Note: {v}")),
-        ]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>()
-        .join("\n");
+        let body = crate::wakeup::validate_and_compose(delay_secs, intent, reminder, note)?;
         let key = idempotency_key
             .map(|k| check_text("idempotency key", k, 128))
             .transpose()?;
@@ -2107,6 +2080,26 @@ impl CoordinationService {
         })?;
         self.changed();
         Ok(out)
+    }
+
+    /// Schedules a wakeup on whatever task `persona` is running in `room`.
+    /// The room-level entry point used by the chat-wakeup host so it does not
+    /// need the private binding and store APIs.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn schedule_wakeup_from_room(
+        &self,
+        room: &str,
+        persona: &str,
+        delay_secs: i64,
+        intent: Option<&str>,
+        reminder: Option<&str>,
+        note: Option<&str>,
+        idempotency_key: Option<&str>,
+    ) -> CoordResult<(Message, bool)> {
+        let ctx = self
+            .bind(room, persona)?
+            .ok_or_else(|| CoordError::Conflict("no live task attempt in this room".into()))?;
+        self.schedule_wakeup(&ctx, delay_secs, intent, reminder, note, idempotency_key)
     }
 
     /// Bounded mailbox read. Non-waking queued items become `delivered`;
