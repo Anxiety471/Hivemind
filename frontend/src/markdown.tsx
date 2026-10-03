@@ -7,6 +7,7 @@ import { api } from "./api";
 import katex from "katex";
 import "katex/dist/katex.min.css";
 import mermaid from "mermaid";
+import DOMPurify from "dompurify";
 import { parseMarkdown } from "./markdownParse";
 import { plantumlToMermaid } from "./diagrams/plantuml";
 import { drawioToScene, looksLikeDrawio } from "./diagrams/drawio";
@@ -19,11 +20,20 @@ import type { AlertKind, Block, Inline } from "./markdownParse";
 mermaid.initialize({
   startOnLoad: false,
   theme: "dark",
-  securityLevel: "loose",
+  securityLevel: "strict",
   // Otherwise a failed render leaves Mermaid's "Syntax error" bomb SVG appended to <body>;
   // DiagramBlock already shows the source and error message inline.
   suppressErrorRendering: true,
 });
+
+// Diagram SVG comes from untrusted agent/artifact text; sanitize it before it reaches innerHTML.
+// foreignObject is allowed because Mermaid renders HTML labels inside it.
+const sanitizeSvg = (svg: string) =>
+  DOMPurify.sanitize(svg, {
+    ADD_TAGS: ["foreignobject"],
+    ADD_ATTR: ["dominant-baseline"],
+    HTML_INTEGRATION_POINTS: { foreignobject: true },
+  });
 
 const ALERT_META: Record<AlertKind, { icon: string; title: string }> = {
   note: { icon: "ℹ️", title: "Note" },
@@ -258,7 +268,7 @@ function DiagramBlock({ badge, code, render }: { badge: string; code: string; re
       {!rendered ? (
         <div className="mermaid-loading">Rendering diagram...</div>
       ) : "svg" in rendered ? (
-        <div className="mermaid-svg-container" dangerouslySetInnerHTML={{ __html: rendered.svg }} />
+        <div className="mermaid-svg-container" dangerouslySetInnerHTML={{ __html: sanitizeSvg(rendered.svg) }} />
       ) : (
         <div className="mermaid-svg-container">{rendered.node}</div>
       )}
@@ -297,7 +307,7 @@ function renderInline(nodes: Inline[]): ReactNode[] {
         return <del key={i}>{renderInline(n.v)}</del>;
       case "link":
         return (
-          <a key={i} href={n.href} target="_blank" rel="noopener noreferrer">
+          <a key={i} href={/^(https?:|mailto:)/i.test(n.href) ? n.href : undefined} target="_blank" rel="noopener noreferrer">
             {renderInline(n.v)}
           </a>
         );

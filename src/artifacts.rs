@@ -741,8 +741,7 @@ mod tests {
         assert_eq!(media_type("doc.markdown"), "text/markdown");
         assert_eq!(media_type("vector.svg"), "image/svg+xml");
 
-        let directory =
-            std::env::temp_dir().join(format!("hivemind-diag-{}", std::process::id()));
+        let directory = std::env::temp_dir().join(format!("hivemind-diag-{}", std::process::id()));
         std::fs::create_dir_all(directory.join("artifacts")).unwrap();
         let mut config = HivemindConfig::default_poc();
         let persona = config.agents[0].name.clone();
@@ -762,7 +761,11 @@ mod tests {
             )),
         );
         std::fs::write(directory.join("artifacts/chart.mermaid"), "graph TD\nA-->B").unwrap();
-        std::fs::write(directory.join("artifacts/boxes.ascii"), "+---+\n| A |\n+---+").unwrap();
+        std::fs::write(
+            directory.join("artifacts/boxes.ascii"),
+            "+---+\n| A |\n+---+",
+        )
+        .unwrap();
         std::fs::write(directory.join("artifacts/arch.drawio"), "<mxfile></mxfile>").unwrap();
         assert!(tools.collect_artifacts("solo", &persona).unwrap().is_some());
         let artifacts = core.artifacts().list("", 20, 0).unwrap();
