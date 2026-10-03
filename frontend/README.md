@@ -11,6 +11,7 @@ A small browser UI for `hivemind serve`, built with Vite, TypeScript, and React.
 | **Workspaces** | Allowed roots, group shared workspaces, persona workspaces |
 | **Runtime sessions** | Session epochs per room, rotation reasons, and a Rotate button for live sessions |
 | **Live activity** | The raw WebSocket event stream with filters |
+| **Rice** | Preset looks, or your own colors, type, corners, and density. Saved in this browser and shareable as JSON |
 
 ## Run it
 

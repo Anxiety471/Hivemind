@@ -2,6 +2,7 @@ import { createRoot } from "react-dom/client";
 import { lazy, Suspense, useEffect, useState } from "react";
 import { api, hasSavedSettings } from "./api";
 import { connect, useLiveStatus } from "./live";
+import { bootRice } from "./rice";
 import { Chat } from "./views/Chat";
 import { FirstRunSetup } from "./views/FirstRunSetup";
 const Library = lazy(() => import("./views/Library").then((m) => ({ default: m.Library })));
@@ -12,6 +13,7 @@ const WorkspacesView = lazy(() => import("./views/Workspaces").then((m) => ({ de
 const Sessions = lazy(() => import("./views/Sessions").then((m) => ({ default: m.Sessions })));
 const Activity = lazy(() => import("./views/Activity").then((m) => ({ default: m.Activity })));
 const SettingsView = lazy(() => import("./views/Settings").then((m) => ({ default: m.SettingsView })));
+const RiceView = lazy(() => import("./views/Rice").then((m) => ({ default: m.RiceView })));
 import "./styles.css";
 
 type Route = { page: string; arg?: string };
@@ -100,6 +102,9 @@ function App() {
     case "settings":
       view = <SettingsView />;
       break;
+    case "rice":
+      view = <RiceView />;
+      break;
     case "setup":
       view = <FirstRunSetup onComplete={leaveSetup} onSkip={leaveSetup} />;
       break;
@@ -121,6 +126,10 @@ function App() {
           </a>
         ))}
         <div className="spacer" />
+        <a href="#/rice" className={route.page === "rice" ? "nav active" : "nav"}>
+          <span className="nav-icon">🎨</span>
+          Rice
+        </a>
         <a href="#/settings" className={route.page === "settings" ? "nav active" : "nav"}>
           <span className="nav-icon">⚙️</span>
           Connection
@@ -138,5 +147,6 @@ function App() {
   );
 }
 
+bootRice();
 connect();
 createRoot(document.getElementById("app")!).render(<App />);

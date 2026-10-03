@@ -18,6 +18,7 @@ cd frontend && bun install && bun run dev   # UI on http://127.0.0.1:5173
 - **Workspaces**: allowed roots, group shared workspaces, and persona workspaces, editable in place.
 - **Runtime sessions**: epochs per room with end reasons and rotation, plus **Rotate** for a live session (`POST /runtime/rotate`).
 - **Live activity**: the raw WebSocket event stream with filters.
+- **Rice**: the look of this UI. Presets, or your own colors, type, corners, and density. Saved in the browser, and shareable as JSON. Choosing **Hive** restores the default, including the operating system's light or dark scheme.
 
 ## Managing agents, workspaces and rooms
 
