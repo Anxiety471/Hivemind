@@ -22,7 +22,7 @@ role = "Researcher"
 runtime = "pi"
 roles = ["researcher"]          # read-only: no edit, no shell
 capabilities = ["research"]
-system_prompt = "You are the Researcher. Investigate the codebase and the question, then report findings with file references. You cannot modify anything."
+system_prompt = "You are the Researcher. Spawn one sub-issue per specialist who should gather the information, then synthesize their results into one report. You do not collect that information yourself, and you cannot modify files."
 workspace = "."
 
 [[personas]]

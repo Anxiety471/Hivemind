@@ -9,6 +9,9 @@ import {
   STATUS_GROUPS,
   STATUS_LABEL,
   ancestry,
+  draftPlan,
+  indentRow,
+  type DraftRow,
   childrenIndex,
   isClosed,
   issueKey,
@@ -18,7 +21,7 @@ import {
 import { useRefreshOn } from "../live";
 import { Markdown } from "../markdown";
 import { consumeNewIssue, href, navigate, onNewIssue } from "../nav";
-import { Avatar, Badge, ErrorNote, Meter, ago, duration, time, useAction, useAsync } from "../ui";
+import { Avatar, Badge, ErrorNote, Kbd, Meter, ago, duration, time, useAction, useAsync } from "../ui";
 
 const isCoordination = (type: string) => /^(task|attempt|message|group)\./.test(type);
 
@@ -839,7 +842,8 @@ function NewIssue({ parent, onClose, onCreated }: { parent?: Task; onClose: () =
   const [acceptance, setAcceptance] = useState("");
   const [labels, setLabels] = useState("");
   const [owner, setOwner] = useState("");
-  const [subs, setSubs] = useState<string[]>([]);
+  const [subs, setSubs] = useState<DraftRow[]>([]);
+  const [focusRow, setFocusRow] = useState<number | null>(null);
   const agents = useAsync(() => api.agents(), []);
   const action = useAction();
   const titleRef = useRef<HTMLInputElement>(null);
@@ -866,10 +870,7 @@ function NewIssue({ parent, onClose, onCreated }: { parent?: Task; onClose: () =
         onCreated(res.id, parent);
         return;
       }
-      const plan = subs
-        .map((s) => s.trim())
-        .filter(Boolean)
-        .map((s, i) => ({ key: `sub-${i + 1}`, objective: s, acceptance: [s] }));
+      const plan = draftPlan(subs);
       const res = await api.submitTask(objective, criteria, lines(labels), plan);
       onCreated(res.id);
     });
@@ -942,18 +943,36 @@ function NewIssue({ parent, onClose, onCreated }: { parent?: Task; onClose: () =
             <div className="field">
               <span>Sub-issues</span>
               {subs.map((s, i) => (
-                <div className="sub-draft" key={i}>
+                <div className="sub-draft" key={i} style={{ ["--depth" as string]: s.depth }}>
                   <StatusIcon status="submitted" size={12} />
                   <input
-                    value={s}
-                    placeholder="Sub-issue title"
-                    aria-label={`Sub-issue ${i + 1}`}
-                    autoFocus={i === subs.length - 1 && s === ""}
-                    onChange={(e) => setSubs(subs.map((x, j) => (j === i ? (e.target as HTMLInputElement).value : x)))}
+                    value={s.title}
+                    placeholder={s.depth ? "Nested sub-issue title" : "Sub-issue title"}
+                    aria-label={`Sub-issue ${i + 1}${s.depth ? `, level ${s.depth + 1}` : ""}`}
+                    ref={(el) => {
+                      if (el && focusRow === i) {
+                        el.focus();
+                        setFocusRow(null);
+                      }
+                    }}
+                    onChange={(e) => setSubs(subs.map((x, j) => (j === i ? { ...x, title: (e.target as HTMLInputElement).value } : x)))}
                     onKeyDown={(e) => {
                       if (e.key === "Enter" && !e.metaKey && !e.ctrlKey) {
                         e.preventDefault();
-                        setSubs([...subs, ""]);
+                        // A new row lands right below this one, at the same level.
+                        setSubs([...subs.slice(0, i + 1), { title: "", depth: s.depth }, ...subs.slice(i + 1)]);
+                        setFocusRow(i + 1);
+                      } else if (e.key === "Tab") {
+                        const next = indentRow(subs, i, e.shiftKey ? -1 : 1);
+                        // Tab past the edges falls through to normal focus movement.
+                        if (next !== subs) {
+                          e.preventDefault();
+                          setSubs(next);
+                        }
+                      } else if (e.key === "Backspace" && s.title === "" && subs.length > 0) {
+                        e.preventDefault();
+                        setSubs(subs.filter((_, j) => j !== i));
+                        setFocusRow(Math.max(0, i - 1));
                       }
                     }}
                   />
@@ -962,10 +981,21 @@ function NewIssue({ parent, onClose, onCreated }: { parent?: Task; onClose: () =
                   </button>
                 </div>
               ))}
-              <button className="ghost small add-sub" onClick={() => setSubs([...subs, ""])}>
+              <button
+                className="ghost small add-sub"
+                onClick={() => {
+                  setSubs([...subs, { title: "", depth: 0 }]);
+                  setFocusRow(subs.length);
+                }}
+              >
                 <Icon name="subissue" size={14} /> Add sub-issue
               </button>
-              {subs.every((s) => !s.trim()) && <span className="muted small">Leave empty to let the coordinator plan the sub-issues.</span>}
+              {subs.length > 0 && (
+                <span className="muted small">
+                  <Kbd>Enter</Kbd> adds a row · <Kbd>Tab</Kbd> nests it under the one above · <Kbd>Shift</Kbd>+<Kbd>Tab</Kbd> moves it back out
+                </span>
+              )}
+              {subs.every((s) => !s.title.trim()) && <span className="muted small">Leave empty to let the coordinator plan the sub-issues.</span>}
             </div>
           )}
         </div>

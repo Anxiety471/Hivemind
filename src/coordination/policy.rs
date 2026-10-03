@@ -22,6 +22,18 @@ impl Persona {
     pub fn has_permission(&self, permission: &str) -> bool {
         self.permissions.iter().any(|p| p == permission)
     }
+    /// May spawn sub-issues. Coordinators, researchers, and explicit delegators.
+    /// A specialist assigned to do one ticket does not.
+    pub fn may_decompose(&self) -> bool {
+        self.has_permission("coordinate")
+            || self.has_permission("decompose")
+            || self.has_permission("delegate")
+    }
+    /// Splits its own ticket by default, then (unless it coordinates) synthesizes.
+    /// The root coordinator is not included: they route once, from the root plan.
+    pub fn plans_children_by_default(&self) -> bool {
+        self.has_permission("coordinate") || self.has_permission("decompose")
+    }
     /// Whether file changes are allowed: always for a persona without roles.
     pub fn may_write(&self) -> bool {
         !self.restricted || self.has_permission("workspace.write")
@@ -173,6 +185,16 @@ pub struct PlanTask {
     pub contract: Option<String>,
     #[serde(default)]
     pub kind: Option<String>,
+    /// Key of another task in this plan. The task is created as its sub-issue.
+    /// Absent means a direct child of the task being planned.
+    #[serde(default)]
+    pub parent: Option<String>,
+    /// `Some(false)` keeps the ticket a leaf. `Some(true)` and omitted both use
+    /// the owner's default: a decomposer who is not the root coordinator plans
+    /// sub-issues, and a specialist does the ticket. `Some(true)` on a
+    /// specialist is ignored.
+    #[serde(default)]
+    pub breakdown: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -193,6 +215,9 @@ pub struct ResolvedTask {
     pub contract: Option<String>,
     pub plan_deps: Vec<String>,
     pub existing_deps: Vec<String>,
+    /// Key of the parent task in this plan, if this task is nested under one.
+    pub parent_key: Option<String>,
+    pub breakdown: Option<bool>,
 }
 
 pub struct PlanContext<'a> {
@@ -332,11 +357,17 @@ pub fn validate_plan(plan: &Plan, ctx: &PlanContext<'_>) -> CoordResult<Vec<Reso
                 )));
             }
         }
-        let permission = Some(if kind == TaskKind::Integrate {
-            "integrate"
-        } else {
-            "workspace.write"
-        });
+        let integrate = kind == TaskKind::Integrate;
+        let can_own = |persona: &Persona| {
+            if integrate {
+                persona.holds("integrate")
+            } else {
+                // Specialists must be able to change the workspace. A decomposer
+                // such as a researcher may own the ticket and spawn the people
+                // who do the specialty work, then synthesize.
+                persona.may_write() || persona.may_decompose()
+            }
+        };
         let owner = match task.owner.as_deref() {
             Some(name) => {
                 let persona = ctx.roster.get(name).ok_or_else(|| {
@@ -355,24 +386,54 @@ pub fn validate_plan(plan: &Plan, ctx: &PlanContext<'_>) -> CoordResult<Vec<Reso
                         "persona '{name}' lacks capabilities required by task '{key}'"
                     )));
                 }
-                if let Some(permission) = permission {
-                    if !persona.holds(permission) {
-                        return Err(CoordError::Forbidden(format!(
-                            "persona '{name}' lacks the '{permission}' permission"
-                        )));
-                    }
+                if !can_own(persona) {
+                    return Err(CoordError::Forbidden(format!(
+                        "persona '{name}' cannot own task '{key}'"
+                    )));
                 }
                 persona
             }
-            None => ctx
-                .roster
-                .select(&capabilities, permission, ctx.workspace, ctx.load, &[])
-                .map_err(|reason| {
-                    CoordError::Invalid(format!("task '{key}' has no eligible owner: {reason}"))
-                })?,
+            None => {
+                let permission = if integrate {
+                    "integrate"
+                } else {
+                    "workspace.write"
+                };
+                match ctx.roster.select(
+                    &capabilities,
+                    Some(permission),
+                    ctx.workspace,
+                    ctx.load,
+                    &[],
+                ) {
+                    Ok(persona) => persona,
+                    Err(reason) if !integrate => ctx
+                        .roster
+                        .select(
+                            &capabilities,
+                            Some("decompose"),
+                            ctx.workspace,
+                            ctx.load,
+                            &[],
+                        )
+                        .map_err(|_| {
+                            CoordError::Invalid(format!(
+                                "task '{key}' has no eligible owner: {reason}"
+                            ))
+                        })?,
+                    Err(reason) => {
+                        return Err(CoordError::Invalid(format!(
+                            "task '{key}' has no eligible owner: {reason}"
+                        )))
+                    }
+                }
+            }
         };
-        if !owner.may_write() {
-            return Err(CoordError::Forbidden(format!("persona '{}' cannot change files (no 'workspace.write'), so it cannot own task '{key}'", owner.name)));
+        if !can_own(owner) {
+            return Err(CoordError::Forbidden(format!(
+                "persona '{}' cannot own task '{key}'",
+                owner.name
+            )));
         }
         let reviewer = match task.reviewer.as_deref() {
             Some(name) => {
@@ -411,6 +472,12 @@ pub fn validate_plan(plan: &Plan, ctx: &PlanContext<'_>) -> CoordResult<Vec<Reso
                 .map(|p| p.name.clone())
                 .unwrap_or_else(|_| ctx.coordinator.to_owned()),
         };
+        let parent_key = task
+            .parent
+            .as_deref()
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .map(str::to_owned);
         resolved.push(ResolvedTask {
             key,
             objective,
@@ -422,9 +489,80 @@ pub fn validate_plan(plan: &Plan, ctx: &PlanContext<'_>) -> CoordResult<Vec<Reso
             contract,
             plan_deps,
             existing_deps,
+            parent_key,
+            breakdown: task.breakdown,
         });
     }
+    check_parent_tree(&resolved, ctx.parent_depth, ctx.max_depth)?;
     order_and_check_depth(resolved, ctx.max_depth)
+}
+
+/// Parent links nest sub-issues. Rejects cycles, unknown parents, a dependency
+/// between a task and its ancestor, and a chain past `max_depth`.
+fn check_parent_tree(
+    tasks: &[ResolvedTask],
+    parent_depth: usize,
+    max_depth: usize,
+) -> CoordResult<()> {
+    let by_key: HashMap<&str, &ResolvedTask> = tasks.iter().map(|t| (t.key.as_str(), t)).collect();
+    for task in tasks {
+        let ancestors = ancestor_keys(&task.key, &by_key)?;
+        let depth = ancestors.len() + 1;
+        if parent_depth + depth > max_depth {
+            return Err(CoordError::Invalid(format!(
+                "task '{}' would reach depth {}, past the maximum {max_depth}",
+                task.key,
+                parent_depth + depth
+            )));
+        }
+        for dep in &task.plan_deps {
+            if ancestors.iter().any(|a| a == dep) {
+                return Err(CoordError::Invalid(format!(
+                    "task '{}' cannot depend on ancestor '{dep}'",
+                    task.key
+                )));
+            }
+            let dep_ancestors = ancestor_keys(dep, &by_key)?;
+            if dep_ancestors.iter().any(|a| a == &task.key) {
+                return Err(CoordError::Invalid(format!(
+                    "task '{}' cannot depend on descendant '{dep}'",
+                    task.key
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Parents from nearest to furthest. Errors on an unknown parent or a cycle.
+fn ancestor_keys(key: &str, by_key: &HashMap<&str, &ResolvedTask>) -> CoordResult<Vec<String>> {
+    let mut out = Vec::new();
+    let mut cursor = key.to_owned();
+    for _ in 0..by_key.len() {
+        let Some(task) = by_key.get(cursor.as_str()) else {
+            return Err(CoordError::Invalid(format!(
+                "task '{cursor}' is not in this plan"
+            )));
+        };
+        let Some(parent) = task.parent_key.clone() else {
+            return Ok(out);
+        };
+        if parent == key || out.iter().any(|a| a == &parent) {
+            return Err(CoordError::Invalid(format!(
+                "plan has a parent cycle involving '{key}'"
+            )));
+        }
+        if !by_key.contains_key(parent.as_str()) {
+            return Err(CoordError::Invalid(format!(
+                "task '{cursor}' parent '{parent}' is not a task in this plan"
+            )));
+        }
+        cursor = parent.clone();
+        out.push(parent);
+    }
+    Err(CoordError::Invalid(format!(
+        "plan has a parent cycle involving '{key}'"
+    )))
 }
 
 /// Kahn's algorithm: rejects cycles, returns dependency order, bounds chain length.
@@ -516,6 +654,8 @@ mod tests {
             depends_on: deps.iter().map(|c| c.to_string()).collect(),
             contract: None,
             kind: None,
+            parent: None,
+            breakdown: None,
         }
     }
 
@@ -690,5 +830,56 @@ mod tests {
         assert!(
             !roster.get("Res").unwrap().may_write() && roster.get("Legacy").unwrap().may_write()
         );
+    }
+
+    #[test]
+    fn a_writer_beats_a_researcher_who_covers_the_same_capability() {
+        let restricted = |name: &str, caps: &[&str], perms: &[&str], order| Persona {
+            name: name.into(),
+            capabilities: caps.iter().map(|c| c.to_string()).collect(),
+            permissions: perms.iter().map(|c| c.to_string()).collect(),
+            workspace: normalize_workspace("."),
+            restricted: true,
+            order,
+        };
+        let with_writer = Roster {
+            personas: vec![
+                persona("Lead", &[], &["coordinate", "review"], 0),
+                restricted("Writer", &["research"], &["workspace.write"], 1),
+                restricted("Researcher", &["research"], &["decompose"], 2),
+            ],
+        };
+        let research_only = Roster {
+            personas: vec![
+                persona("Lead", &[], &["coordinate", "review"], 0),
+                restricted("Researcher", &["research"], &["decompose"], 1),
+            ],
+        };
+        let existing = HashSet::new();
+        let load = HashMap::new();
+        let plan = Plan {
+            tasks: vec![task("findings", &["research"], &[])],
+        };
+        let owner_of = |roster: &Roster| {
+            validate_plan(
+                &plan,
+                &PlanContext {
+                    roster,
+                    workspace: ".",
+                    coordinator: "Lead",
+                    load: &load,
+                    existing: &existing,
+                    existing_count: 0,
+                    max_tasks: 8,
+                    max_depth: 3,
+                    parent_depth: 0,
+                },
+            )
+            .unwrap()[0]
+                .owner
+                .clone()
+        };
+        assert_eq!(owner_of(&with_writer), "Writer");
+        assert_eq!(owner_of(&research_only), "Researcher");
     }
 }

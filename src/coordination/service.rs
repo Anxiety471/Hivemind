@@ -208,6 +208,25 @@ fn conflict<T>(message: impl Into<String>) -> CoordResult<T> {
     Err(CoordError::Conflict(message.into()))
 }
 
+/// How many parent links sit between `key` and the task the plan hangs from.
+/// Direct children are 1. The plan was already checked for cycles.
+fn plan_nest(key: &str, resolved: &[ResolvedTask]) -> u32 {
+    let mut depth = 1u32;
+    let mut cursor = key.to_owned();
+    for _ in 0..resolved.len() {
+        let Some(parent) = resolved
+            .iter()
+            .find(|task| task.key == cursor)
+            .and_then(|task| task.parent_key.clone())
+        else {
+            break;
+        };
+        depth += 1;
+        cursor = parent;
+    }
+    depth
+}
+
 impl CoordinationService {
     pub fn set_execution(&self, store: Arc<crate::execution::ExecutionStore>) {
         let _ = self.execution.set(store);
@@ -516,13 +535,45 @@ impl CoordinationService {
             .iter()
             .map(|t| (t.key.clone(), new_id("tk")))
             .collect();
+        let containers: HashSet<&str> = resolved
+            .iter()
+            .filter_map(|t| t.parent_key.as_deref())
+            .collect();
+        let roster = self.roster();
         for task in &resolved {
             let id = &ids[&task.key];
+            let nest = plan_nest(&task.key, &resolved);
+            let parent_id = task
+                .parent_key
+                .as_ref()
+                .map(|key| ids[key].clone())
+                .unwrap_or_else(|| parent.id.clone());
+            let is_container = containers.contains(task.key.as_str());
+            let room_for_children =
+                (parent.depth as usize + nest as usize) < self.config.max_plan_depth;
+            let owner = roster.get(&task.owner);
+            // A specialist does the ticket. A researcher (or other decomposer who
+            // is not already the root coordinator) plans sub-issues by default.
+            let plans_by_default = owner.is_some_and(|persona| {
+                persona.plans_children_by_default() && persona.name != root.coordinator
+            });
+            let spawn_children = match task.breakdown {
+                Some(true) => plans_by_default,
+                Some(false) => false,
+                None => plans_by_default,
+            };
+            let status = if is_container {
+                TaskStatus::Running
+            } else if spawn_children && room_for_children {
+                TaskStatus::Planning
+            } else {
+                TaskStatus::Submitted
+            };
             db.insert_task(&NewTask {
                 id: id.clone(),
                 root_id: root.id.clone(),
-                parent_id: Some(parent.id.clone()),
-                depth: parent.depth + 1,
+                parent_id: Some(parent_id.clone()),
+                depth: parent.depth + nest,
                 kind: task.kind,
                 objective: task.objective.clone(),
                 acceptance: task.acceptance.clone(),
@@ -531,7 +582,7 @@ impl CoordinationService {
                 coordinator: root.coordinator.clone(),
                 owner: Some(task.owner.clone()),
                 reviewer: Some(task.reviewer.clone()),
-                status: TaskStatus::Submitted,
+                status,
                 reason: None,
                 idempotency_key: None,
             })?;
@@ -541,7 +592,7 @@ impl CoordinationService {
             for dep in &task.existing_deps {
                 db.add_dependency(id, dep, None)?;
             }
-            db.event(&root.id, Some(id), actor, "task.created", serde_json::json!({"key": task.key, "owner": task.owner, "reviewer": task.reviewer, "depends_on": task.plan_deps.iter().map(|d| ids[d].clone()).chain(task.existing_deps.iter().cloned()).collect::<Vec<_>>()}))?;
+            db.event(&root.id, Some(id), actor, "task.created", serde_json::json!({"key": task.key, "parent_id": parent_id, "owner": task.owner, "reviewer": task.reviewer, "depends_on": task.plan_deps.iter().map(|d| ids[d].clone()).chain(task.existing_deps.iter().cloned()).collect::<Vec<_>>()}))?;
         }
         db.event(
             &root.id,
@@ -550,12 +601,9 @@ impl CoordinationService {
             "task.plan_committed",
             serde_json::json!({"count": resolved.len()}),
         )?;
-        let current_root = db.task_or_err(&root.id)?;
-        if matches!(
-            current_root.status,
-            TaskStatus::Planning | TaskStatus::Submitted
-        ) {
-            db.set_status(&root.id, TaskStatus::Running, None, actor, None)?;
+        let planned = db.task_or_err(&parent.id)?;
+        if matches!(planned.status, TaskStatus::Planning | TaskStatus::Submitted) {
+            db.set_status(&parent.id, TaskStatus::Running, None, actor, None)?;
         }
         self.refresh_graph(db)?;
         Ok(resolved
@@ -568,38 +616,66 @@ impl CoordinationService {
     // Graph maintenance
     // ------------------------------------------------------------------
 
-    /// Promote waiting tasks, stop dependants of failed work, and move a root
-    /// whose children are all complete to review. Idempotent.
+    /// Promote waiting tasks, stop dependants of failed work, complete parent
+    /// issues whose sub-issues are done, and move a root whose children are
+    /// all complete to review. Idempotent.
     fn refresh_graph(&self, db: &Db<'_>) -> CoordResult<()> {
-        for task in db.tasks_with_status(TaskStatus::Submitted, 500)? {
-            if task.id == task.root_id {
+        self.promote_submitted(db)?;
+        // Deepest first, so a parent sees its nested sub-issues already completed.
+        let mut containers = db.tasks_with_status(TaskStatus::Running, 500)?;
+        containers.retain(|task| task.id != task.root_id);
+        containers.sort_by_key(|task| std::cmp::Reverse(task.depth));
+        for task in containers {
+            let children = db.children(&task.id)?;
+            if children.is_empty() || !db.running_attempts(Some(&task.id))?.is_empty() {
                 continue;
             }
-            let mut all_done = true;
-            let mut broken = None;
-            for (pre, _) in db.prerequisites(&task.id)? {
-                let pre = db.task_or_err(&pre)?;
-                match pre.status {
-                    TaskStatus::Completed => {}
-                    TaskStatus::Failed | TaskStatus::Cancelled => {
-                        broken = Some(format!("dependency {} is {}", pre.id, pre.status.as_str()));
-                        break;
-                    }
-                    _ => all_done = false,
-                }
-            }
-            if let Some(reason) = broken {
+            if let Some(bad) = children
+                .iter()
+                .find(|child| child.status == TaskStatus::Failed)
+            {
                 db.set_status(
                     &task.id,
                     TaskStatus::Blocked,
-                    Some(&reason),
+                    Some(&format!(
+                        "task {} failed: {}",
+                        bad.id,
+                        bad.status_reason.as_deref().unwrap_or("no reason recorded")
+                    )),
                     "hivemind",
                     None,
                 )?;
-            } else if all_done {
-                db.set_status(&task.id, TaskStatus::Ready, None, "hivemind", None)?;
+            } else if children
+                .iter()
+                .all(|child| child.status == TaskStatus::Completed)
+            {
+                let roster = self.roster();
+                let owner = task.owner.as_deref().and_then(|name| roster.get(name));
+                let synthesizes = owner.is_some_and(|persona| {
+                    persona.has_permission("decompose") && !persona.has_permission("coordinate")
+                });
+                if synthesizes {
+                    db.set_status(
+                        &task.id,
+                        TaskStatus::Ready,
+                        Some("sub-issues completed; synthesize the results"),
+                        "hivemind",
+                        None,
+                    )?;
+                } else {
+                    db.set_status(&task.id, TaskStatus::Review, None, "hivemind", None)?;
+                    db.set_status(
+                        &task.id,
+                        TaskStatus::Completed,
+                        Some("sub-issues completed"),
+                        "hivemind",
+                        None,
+                    )?;
+                }
             }
         }
+        // Completing a parent can unblock issues that depend on it.
+        self.promote_submitted(db)?;
         for root in db.tasks_with_status(TaskStatus::Running, 500)? {
             if root.id != root.root_id {
                 continue;
@@ -627,6 +703,39 @@ impl CoordinationService {
                 )?;
             } else if others.iter().all(|t| t.status == TaskStatus::Completed) {
                 db.set_status(&root.id, TaskStatus::Review, None, "hivemind", None)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn promote_submitted(&self, db: &Db<'_>) -> CoordResult<()> {
+        for task in db.tasks_with_status(TaskStatus::Submitted, 500)? {
+            if task.id == task.root_id {
+                continue;
+            }
+            let mut all_done = true;
+            let mut broken = None;
+            for (pre, _) in db.prerequisites(&task.id)? {
+                let pre = db.task_or_err(&pre)?;
+                match pre.status {
+                    TaskStatus::Completed => {}
+                    TaskStatus::Failed | TaskStatus::Cancelled => {
+                        broken = Some(format!("dependency {} is {}", pre.id, pre.status.as_str()));
+                        break;
+                    }
+                    _ => all_done = false,
+                }
+            }
+            if let Some(reason) = broken {
+                db.set_status(
+                    &task.id,
+                    TaskStatus::Blocked,
+                    Some(&reason),
+                    "hivemind",
+                    None,
+                )?;
+            } else if all_done {
+                db.set_status(&task.id, TaskStatus::Ready, None, "hivemind", None)?;
             }
         }
         Ok(())
@@ -697,9 +806,19 @@ impl CoordinationService {
                 candidates.push((task, AttemptKind::Review, reviewer));
             }
             for task in db.tasks_with_status(TaskStatus::Planning, 200)? {
-                if task.id == task.root_id {
-                    let coordinator = task.coordinator.clone();
-                    candidates.push((task, AttemptKind::Plan, coordinator));
+                let roster = self.roster();
+                let planner = task
+                    .owner
+                    .as_deref()
+                    .filter(|name| {
+                        roster
+                            .get(name)
+                            .is_some_and(|persona| persona.may_decompose())
+                    })
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| task.coordinator.clone());
+                if !planner.is_empty() {
+                    candidates.push((task, AttemptKind::Plan, planner));
                 }
             }
             for task in db.tasks_with_status(TaskStatus::Ready, 200)? {
@@ -969,7 +1088,12 @@ impl CoordinationService {
                 }
                 (AttemptKind::Work, AttemptEnd::Interrupted) if task.status == TaskStatus::Running => block("attempt interrupted; explicit retry required (side effects may have occurred)")?,
                 (AttemptKind::Plan, AttemptEnd::Completed) if task.status == TaskStatus::Planning => {
-                    db.set_status(&task.id, TaskStatus::NeedsInput, Some("coordinator finished without proposing a plan"), "hivemind", None)?;
+                    if task.id == task.root_id {
+                        db.set_status(&task.id, TaskStatus::NeedsInput, Some("coordinator finished without proposing a plan"), "hivemind", None)?;
+                    } else {
+                        // A follow-up that adds no sub-issues means this issue is ready to do.
+                        db.set_status(&task.id, TaskStatus::Ready, Some("no further sub-issues"), "hivemind", None)?;
+                    }
                 }
                 (AttemptKind::Plan, AttemptEnd::Failed { class, .. }) if task.status == TaskStatus::Planning => {
                     db.set_status(&task.id, TaskStatus::Failed, Some(&format!("planning failed: {class}")), "hivemind", None)?;
@@ -1133,16 +1257,31 @@ impl CoordinationService {
         let task = self.live(ctx)?;
         let ids = self.store.write(|db| {
             let root = db.task_or_err(&task.root_id)?;
-            if ctx.kind != AttemptKind::Plan || ctx.persona != root.coordinator || root.status != TaskStatus::Planning || task.id != root.id {
-                return forbid("plans are accepted only from the coordinator's planning attempt on a root task in planning");
+            let roster = self.roster();
+            let planner = roster.get(&ctx.persona);
+            if ctx.kind != AttemptKind::Plan || task.status != TaskStatus::Planning {
+                return forbid(
+                    "plans are accepted only from the planning attempt on a task that is being planned",
+                );
+            }
+            if ctx.persona != root.coordinator
+                && !planner.is_some_and(|persona| persona.may_decompose())
+            {
+                return forbid(format!(
+                    "persona '{}' does this specialty and cannot spawn sub-issues",
+                    ctx.persona
+                ));
             }
             if let Some(expected) = expected_revision {
-                if expected != root.revision {
-                    return conflict(format!("task '{}' is at revision {}, not {expected}", root.id, root.revision));
+                if expected != task.revision {
+                    return conflict(format!(
+                        "task '{}' is at revision {}, not {expected}",
+                        task.id, task.revision
+                    ));
                 }
             }
-            let resolved = self.resolve_plan(db, plan, &root, &root, &root.coordinator)?;
-            self.commit_plan(db, &root, &root, resolved, &ctx.persona)
+            let resolved = self.resolve_plan(db, plan, &root, &task, &root.coordinator)?;
+            self.commit_plan(db, &root, &task, resolved, &ctx.persona)
         })?;
         self.changed();
         Ok(ids)
@@ -1156,9 +1295,9 @@ impl CoordinationService {
             let persona = roster
                 .get(&ctx.persona)
                 .ok_or_else(|| CoordError::Forbidden("unknown persona".into()))?;
-            if !(persona.has_permission("delegate") || root.coordinator == ctx.persona) {
+            if root.coordinator != ctx.persona && !persona.may_decompose() {
                 return forbid(format!(
-                    "persona '{}' lacks the 'delegate' permission",
+                    "persona '{}' does this specialty and cannot spawn sub-issues",
                     ctx.persona
                 ));
             }
@@ -1179,6 +1318,8 @@ impl CoordinationService {
                     depends_on: req.depends_on.clone(),
                     contract: None,
                     kind: None,
+                    parent: None,
+                    breakdown: Some(false),
                 }],
             };
             let resolved = self.resolve_plan(db, &plan, &root, &task, &root.coordinator)?;
@@ -1233,6 +1374,8 @@ impl CoordinationService {
                     depends_on: req.depends_on.clone(),
                     contract: None,
                     kind: None,
+                    parent: None,
+                    breakdown: Some(false),
                 }],
             };
             let resolved = self.resolve_plan(db, &plan, &root, &parent, &root.coordinator)?;

@@ -1,7 +1,7 @@
 // Run with: bun test test/issues.test.ts   (or: node --experimental-strip-types --test test/issues.test.ts)
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ancestry, childrenIndex, descendants, groupOf, issueKey, matches, subProgress } from "../src/issues.ts";
+import { ancestry, childrenIndex, descendants, draftPlan, groupOf, indentRow, issueKey, matches, subProgress } from "../src/issues.ts";
 
 type T = { id: string; parent_id: string | null; status: any; objective: string; owner: string | null; reviewer: string | null };
 const t = (id: string, parent_id: string | null, status = "running"): T => ({
@@ -57,4 +57,41 @@ test("search matches title, key and people", () => {
   assert.ok(matches(task, issueKey("tk_1").toLowerCase()));
   assert.ok(matches(task, "front"));
   assert.ok(!matches(task, "backend"));
+});
+
+test("drafted rows become a nested plan with parent keys", () => {
+  const plan = draftPlan([
+    { title: "API", depth: 0 },
+    { title: "Schema", depth: 1 },
+    { title: "Migration", depth: 2 },
+    { title: "  ", depth: 1 },
+    { title: "Handler", depth: 1 },
+    { title: "UI", depth: 0 },
+  ]);
+  assert.deepEqual(
+    plan.map((t) => [t.key, t.objective, t.parent ?? null]),
+    [
+      ["sub-1", "API", null],
+      ["sub-2", "Schema", "sub-1"],
+      ["sub-3", "Migration", "sub-2"],
+      ["sub-4", "Handler", "sub-1"],
+      ["sub-5", "UI", null],
+    ],
+  );
+  assert.deepEqual(plan[0].acceptance, ["API"]);
+  // A blank parent does not orphan its children: they attach to the nearest real row above.
+  assert.deepEqual(draftPlan([{ title: "", depth: 0 }, { title: "Child", depth: 1 }]).map((t) => t.parent ?? null), [null]);
+});
+
+test("indenting stays one level below the row above and carries children", () => {
+  const rows = [
+    { title: "a", depth: 0 },
+    { title: "b", depth: 0 },
+    { title: "c", depth: 1 },
+  ];
+  assert.deepEqual(indentRow(rows, 0, 1), rows, "the first row cannot indent");
+  const once = indentRow(rows, 1, 1);
+  assert.deepEqual(once.map((r) => r.depth), [0, 1, 2]);
+  assert.deepEqual(indentRow(once, 1, 1).map((r) => r.depth), [0, 1, 2], "no deeper than one below the row above");
+  assert.deepEqual(indentRow(once, 1, -1).map((r) => r.depth), [0, 0, 1]);
 });
