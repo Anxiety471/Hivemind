@@ -32,6 +32,8 @@ pub(super) fn persona(name: &str, caps: &[&str], perms: &[&str], workspace: &str
         roles: Vec::new(),
         tool_access: None,
         web: true,
+        authorized_work: Vec::new(),
+        unauthorized_work: Vec::new(),
     }
 }
 
@@ -1966,4 +1968,34 @@ fn wakeups_that_can_never_fire_leave_a_record_and_tell_a_live_agent() {
         .as_str()
         .unwrap()
         .contains("root task ended"));
+}
+
+#[test]
+fn backend_results_listing_frontend_files_are_refused_at_submit() {
+    let service = service();
+    let (_root, api, _ui) = planned(&service);
+    let work = claim(&service);
+    let ctx = ctx(&service, &work[0]);
+    assert_eq!(work[0].attempt.persona, "Back");
+    let with = |reference: &str| ResultIn {
+        artifacts: vec![ArtifactIn {
+            kind: "file".into(),
+            reference: reference.into(),
+            description: "changed".into(),
+        }],
+        ..result(Verdict::Passed)
+    };
+    let error = service
+        .submit_result(&ctx, with("web/Login.tsx"))
+        .unwrap_err();
+    assert!(matches!(error, CoordError::Forbidden(_)), "{error}");
+    assert!(error.to_string().contains("OUT_OF_SCOPE:"), "{error}");
+    assert_eq!(
+        status(&service, &api),
+        TaskStatus::Running,
+        "nothing was recorded"
+    );
+    // Logic and scripts submit normally.
+    service.submit_result(&ctx, with("src/orders.rs")).unwrap();
+    assert_eq!(status(&service, &api), TaskStatus::Review);
 }

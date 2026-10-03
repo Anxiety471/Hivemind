@@ -150,6 +150,8 @@ fn build_config(body: SetupBody) -> Result<HivemindConfig, String> {
             roles: Vec::new(),
             tool_access: None,
             web: true,
+            authorized_work: Vec::new(),
+            unauthorized_work: Vec::new(),
         });
     }
 

@@ -28,6 +28,7 @@ pub const KNOWN_TOOLS: &[&str] = &[
     "workspace.set",
     "workspace.clear",
     "workspace.list",
+    "files.write",
     "agents.list",
     "messages.send",
     "messages.inbox",
@@ -55,6 +56,7 @@ pub const KNOWN_TOOLS: &[&str] = &[
 pub const TOOL_NAMESPACES: &[&str] = &[
     "memory.",
     "workspace.",
+    "files.",
     "tasks.",
     "messages.",
     "agents.",
@@ -156,6 +158,43 @@ impl std::fmt::Display for ToolLintDiagnostic {
 }
 
 impl std::error::Error for ToolLintDiagnostic {}
+
+/// Reply marker an agent starts with when asked for work outside its role.
+pub const OUT_OF_SCOPE: &str = "OUT_OF_SCOPE:";
+
+/// Whether `entry` of an agent's `unauthorized_work` forbids `tool`: the exact
+/// tool name, or a namespace prefix ending in `.` (`memory.global.`).
+fn forbids_tool(entry: &str, tool: &str) -> bool {
+    let entry = entry.trim();
+    entry == tool || (entry.ends_with('.') && tool.starts_with(entry))
+}
+
+/// Reject a tool call the agent's `unauthorized_work` rules out, with a
+/// diagnostic telling it to flag the request instead of performing it.
+pub fn lint_authorization(unauthorized: &[String], name: &str) -> Result<()> {
+    if unauthorized.iter().any(|entry| forbids_tool(entry, name)) {
+        bail!(ToolLintDiagnostic {
+            rule: "authorization/not-allowed",
+            message: format!("you are not authorized to use '{name}': it is listed under your unauthorized work"),
+            fix: Some(format!("Do not retry. Reply with a message starting with {OUT_OF_SCOPE} that states the boundary, quotes the request, and names who should take it.")),
+        });
+    }
+    Ok(())
+}
+
+/// The reason an agent gave for declining out-of-scope work, if its reply is one.
+pub fn out_of_scope_notice(reply: &str) -> Option<&str> {
+    let reply = reply.trim().trim_start_matches(['*', '`']).trim_start();
+    reply
+        .get(..OUT_OF_SCOPE.len())
+        .filter(|head| head.eq_ignore_ascii_case(OUT_OF_SCOPE))
+        .map(|_| {
+            reply[OUT_OF_SCOPE.len()..]
+                .trim_start_matches(['*', '`'])
+                .trim()
+        })
+        .filter(|rest| !rest.is_empty())
+}
 
 /// Lint and validate arguments for a known tool.
 pub fn lint_tool_args(name: &str, args: &Value) -> Result<()> {
@@ -273,6 +312,23 @@ pub fn lint_tool_args(name: &str, args: &Value) -> Result<()> {
                     rule: "schema/missing-argument",
                     message: "Tool 'workspace.set' requires a non-empty string argument 'path'".into(),
                     fix: Some("Example:\n```hivemind-tool\n{\"name\":\"workspace.set\",\"args\":{\"path\":\"/absolute/path/to/project\"}}\n```".into()),
+                });
+            }
+        }
+        "files.write" => {
+            let path = args.get("path").and_then(Value::as_str).map(str::trim);
+            if path.is_none() || path.unwrap().is_empty() {
+                bail!(ToolLintDiagnostic {
+                    rule: "schema/missing-argument",
+                    message: "Tool 'files.write' requires a non-empty string argument 'path' (relative to your workspace)".into(),
+                    fix: Some("Example:\n```hivemind-tool\n{\"name\":\"files.write\",\"args\":{\"path\":\"src/orders.rs\",\"content\":\"full file contents\"}}\n```".into()),
+                });
+            }
+            if !args.get("content").is_some_and(Value::is_string) {
+                bail!(ToolLintDiagnostic {
+                    rule: "schema/missing-argument",
+                    message: "Tool 'files.write' requires a string argument 'content' (the whole new file)".into(),
+                    fix: Some("Example: {\"path\": \"src/orders.rs\", \"content\": \"...\"}".into()),
                 });
             }
         }

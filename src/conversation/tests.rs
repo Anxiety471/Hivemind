@@ -67,6 +67,8 @@ fn member(name: &str) -> Participant {
             roles: Vec::new(),
             tool_access: None,
             web: true,
+            authorized_work: Vec::new(),
+            unauthorized_work: Vec::new(),
         }),
         role: Some(format!("{name} role")),
     }
@@ -2987,4 +2989,266 @@ async fn every_member_replies_to_each_user_message_with_or_without_a_mention() {
         assert_eq!(replies, [said("A")], "{mode:?}");
         assert_eq!(events, 2, "{mode:?}");
     }
+}
+
+fn scoped_member(name: &str, authorized: &[&str], unauthorized: &[&str]) -> Participant {
+    let mut participant = member(name);
+    let mut agent = (*participant.agent).clone();
+    agent.authorized_work = authorized.iter().map(|s| s.to_string()).collect();
+    agent.unauthorized_work = unauthorized.iter().map(|s| s.to_string()).collect();
+    participant.agent = Arc::new(agent);
+    participant
+}
+
+#[tokio::test]
+async fn role_boundaries_reach_the_prompt_and_out_of_scope_requests_are_surfaced() {
+    let (_path, coord) = fixture();
+    let members = vec![
+        scoped_member(
+            "Backend",
+            &["backend API implementation"],
+            &["frontend implementation"],
+        ),
+        member("Free"),
+    ];
+    let invoker = scripted(&[
+        "OUT_OF_SCOPE: frontend implementation is not mine. Request: \"build the login page\". Route to Frontend.",
+        "no boundaries here",
+    ]);
+    let out = coord
+        .turn(TurnRequest {
+            room: "scope-room",
+            room_name: "Scope room",
+            group_id: "scope-group",
+            mode: ConversationMode::Discussion,
+            members: &members,
+            input: "build the login page",
+            invoker: invoker.clone(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(out.len(), 2);
+    let prompts = invoker.prompts.lock().clone();
+    let scoped = prompts
+        .iter()
+        .find(|p| p.contains("You are Backend"))
+        .unwrap();
+    assert!(scoped.contains("Authorized work:\n- backend API implementation"));
+    assert!(scoped.contains("Not authorized (never do this work):\n- frontend implementation"));
+    assert!(scoped.contains("OUT_OF_SCOPE:"));
+    let free = prompts.iter().find(|p| p.contains("You are Free")).unwrap();
+    assert!(
+        !free.contains("Role boundaries"),
+        "unscoped agents are unchanged"
+    );
+
+    // The declined request is kept in shared state for routing.
+    let state = coord.room_history("scope-room").unwrap().state;
+    assert_eq!(state.open_questions.len(), 1);
+    assert!(state.open_questions[0].starts_with("Backend declined out-of-scope work:"));
+    assert!(state.open_questions[0].contains("build the login page"));
+}
+
+#[tokio::test]
+async fn in_role_work_is_unaffected_and_assignment_extends_authorization() {
+    let (_path, coord) = fixture();
+    let members = vec![scoped_member(
+        "Backend",
+        &["backend API implementation"],
+        &["frontend implementation"],
+    )];
+    let invoker = scripted(&["API done", "UI done"]);
+    let run = |input: &'static str| {
+        let coord = &coord;
+        let members = &members;
+        let invoker = invoker.clone();
+        async move {
+            coord
+                .turn(TurnRequest {
+                    room: "reassign-room",
+                    room_name: "Reassign room",
+                    group_id: "reassign-group",
+                    mode: ConversationMode::Broadcast,
+                    members,
+                    input,
+                    invoker,
+                })
+                .await
+                .unwrap()
+        }
+    };
+    let first = run("add the orders endpoint").await;
+    assert_eq!(first[0].result.as_ref().unwrap(), "API done");
+    assert!(coord
+        .room_history("reassign-room")
+        .unwrap()
+        .state
+        .open_questions
+        .is_empty());
+
+    // An explicit reassignment shows up as active authorization on the next turn.
+    run("Assign: Backend = wire the orders form").await;
+    run("status?").await;
+    let prompts = invoker.prompts.lock().clone();
+    assert!(prompts
+        .last()
+        .unwrap()
+        .contains("- explicitly assigned to you: wire the orders form"));
+}
+
+#[test]
+fn linter_blocks_unauthorized_tools_by_name_and_namespace() {
+    use super::linter::{lint_authorization, out_of_scope_notice};
+    let rules = vec!["tasks.delegate".to_owned(), "memory.global.".to_owned()];
+    let err = lint_authorization(&rules, "tasks.delegate")
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("authorization/not-allowed") && err.contains("OUT_OF_SCOPE:"));
+    assert!(lint_authorization(&rules, "memory.global.propose").is_err());
+    assert!(lint_authorization(&rules, "memory.search").is_ok());
+    assert!(lint_authorization(&rules, "tasks.get").is_ok());
+    assert!(lint_authorization(&[], "tasks.delegate").is_ok());
+    // Free-text boundaries (not tool names) never block tools by accident.
+    assert!(lint_authorization(&["frontend implementation".into()], "tasks.get").is_ok());
+
+    assert_eq!(
+        out_of_scope_notice("**OUT_OF_SCOPE:** not mine"),
+        Some("not mine")
+    );
+    assert_eq!(out_of_scope_notice("out_of_scope: nope"), Some("nope"));
+    assert_eq!(out_of_scope_notice("OUT_OF_SCOPE:"), None);
+    assert_eq!(out_of_scope_notice("all good"), None);
+}
+
+#[tokio::test]
+async fn unauthorized_tool_calls_are_refused_with_a_routing_hint() {
+    let (_path, coord) = fixture();
+    let members = vec![scoped_member("Backend", &[], &["memory.search"])];
+    let invoker = scripted(&[
+        &tool_block("memory.search", serde_json::json!({"query": "orders"})),
+        "OUT_OF_SCOPE: searching is not mine",
+    ]);
+    let out = coord
+        .turn(TurnRequest {
+            room: "deny-room",
+            room_name: "Deny room",
+            group_id: "deny-group",
+            mode: ConversationMode::Discussion,
+            members: &members,
+            input: "look up orders",
+            invoker: invoker.clone(),
+        })
+        .await
+        .unwrap();
+    assert!(out[0].result.as_ref().unwrap().starts_with("OUT_OF_SCOPE:"));
+    let prompts = invoker.prompts.lock().clone();
+    assert!(prompts[1].contains("authorization/not-allowed"));
+}
+
+fn writer(name: &str, capabilities: &[&str], dir: &std::path::Path) -> Participant {
+    let mut participant = member(name);
+    let mut agent = (*participant.agent).clone();
+    agent.capabilities = capabilities.iter().map(|c| c.to_string()).collect();
+    agent.workspace = dir.display().to_string();
+    participant.agent = Arc::new(agent);
+    participant
+}
+
+/// Runs one Discussion turn where `member` replies with each `files.write` call in
+/// order and then a final text; returns the follow-up prompts (tool results).
+async fn write_turn(member: Participant, calls: &[serde_json::Value]) -> Vec<String> {
+    let (_path, coord) = fixture();
+    let mut replies: Vec<String> = calls
+        .iter()
+        .map(|a| tool_block("files.write", a.clone()))
+        .collect();
+    replies.push("done".into());
+    let refs: Vec<&str> = replies.iter().map(String::as_str).collect();
+    let invoker = scripted(&refs);
+    let members = vec![member];
+    coord
+        .turn(TurnRequest {
+            room: "write-room",
+            room_name: "Write room",
+            group_id: "write-group",
+            mode: ConversationMode::Discussion,
+            members: &members,
+            input: "write the files",
+            invoker: invoker.clone(),
+        })
+        .await
+        .unwrap();
+    let prompts = invoker.prompts.lock().clone();
+    prompts
+}
+
+#[tokio::test]
+async fn backend_writes_go_through_files_write_which_refuses_frontend_before_touching_disk() {
+    let dir = std::env::temp_dir().join(format!("hivemind-write-{}", stable_id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let call = |path: &str, content: &str| serde_json::json!({"path": path, "content": content});
+    // A turn may run at most four tool actions, so the calls come in two turns.
+    let first = write_turn(
+        writer("Back", &["backend"], &dir),
+        &[
+            call("src/orders.rs", "fn main() {}"),
+            call("web/Login.tsx", "export const L = () => <div/>;"),
+            call("static/app.css", "a{}"),
+            call(
+                "lib/ui.js",
+                "document.querySelector('#x').innerHTML = 'hi';",
+            ),
+        ],
+    )
+    .await;
+    let second = write_turn(
+        writer("Back", &["backend"], &dir),
+        &[
+            call(
+                "tools/server.js",
+                "const http = require('http');\nhttp.createServer(() => {});",
+            ),
+            call("../escape.rs", "x"),
+            call(".git/hooks/pre-commit", "x"),
+        ],
+    )
+    .await;
+    // Logic, scripts and Node servers are written; frontend files and escapes are refused.
+    assert_eq!(
+        std::fs::read_to_string(dir.join("src/orders.rs")).unwrap(),
+        "fn main() {}"
+    );
+    assert!(dir.join("tools/server.js").exists());
+    for refused in ["web/Login.tsx", "static/app.css", "lib/ui.js"] {
+        assert!(!dir.join(refused).exists(), "{refused} must not be written");
+    }
+    assert!(!dir.parent().unwrap().join("escape.rs").exists());
+    assert!(!dir.join(".git").exists());
+    let last = first.last().unwrap();
+    assert!(last.contains("authorization/frontend-work"), "{last}");
+    assert!(first
+        .iter()
+        .any(|p| p.contains("wrote 12 bytes to src/orders.rs")));
+    let last = second.last().unwrap();
+    assert!(last.contains("without '..' or '.git'"), "{last}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn agents_that_may_do_frontend_work_can_write_it() {
+    let dir = std::env::temp_dir().join(format!("hivemind-write-{}", stable_id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let call = serde_json::json!({"path": "web/Login.tsx", "content": "export const L = 1;"});
+    write_turn(
+        writer("Front", &["frontend"], &dir),
+        std::slice::from_ref(&call),
+    )
+    .await;
+    assert!(dir.join("web/Login.tsx").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+    // A full-stack agent (backend plus frontend) is free too.
+    std::fs::create_dir_all(&dir).unwrap();
+    write_turn(writer("Full", &["backend", "frontend"], &dir), &[call]).await;
+    assert!(dir.join("web/Login.tsx").exists());
+    let _ = std::fs::remove_dir_all(dir);
 }

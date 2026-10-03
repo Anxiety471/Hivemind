@@ -394,6 +394,16 @@ pub struct AgentConfig {
     /// Whether the runtime's own web tools (search, fetch) stay available. On by default.
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub web: bool,
+    /// Work this agent is authorized to do, as concrete responsibilities
+    /// ("backend API implementation"). Shown to the model every turn; an
+    /// explicit assignment adds to it. Empty leaves the agent unscoped.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub authorized_work: Vec<String>,
+    /// Work this agent must not perform ("frontend implementation"). An entry
+    /// that names a tool (`tasks.delegate`) or a tool namespace
+    /// (`memory.global.`) is also enforced by the tool linter.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unauthorized_work: Vec<String>,
 }
 
 /// Which of a runtime's own workspace tools a restricted persona keeps.
@@ -652,6 +662,8 @@ impl HivemindConfig {
                     roles: Vec::new(),
                     tool_access: None,
                     web: true,
+                    authorized_work: Vec::new(),
+                    unauthorized_work: Vec::new(),
                 },
                 AgentConfig {
                     name: "Reviewer".into(),
@@ -673,6 +685,8 @@ impl HivemindConfig {
                     roles: Vec::new(),
                     tool_access: None,
                     web: true,
+                    authorized_work: Vec::new(),
+                    unauthorized_work: Vec::new(),
                 },
             ],
         }

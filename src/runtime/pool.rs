@@ -1128,6 +1128,8 @@ mod tests {
             roles: Vec::new(),
             tool_access: None,
             web: true,
+            authorized_work: Vec::new(),
+            unauthorized_work: Vec::new(),
         };
         let view = TurnView {
             turn_id: "turn".into(),
@@ -1244,6 +1246,8 @@ mod tests {
             roles: Vec::new(),
             tool_access: None,
             web: true,
+            authorized_work: Vec::new(),
+            unauthorized_work: Vec::new(),
         };
         let view = TurnView {
             turn_id: "turn".into(),
@@ -1336,6 +1340,8 @@ mod tests {
             roles: Vec::new(),
             tool_access: None,
             web: true,
+            authorized_work: Vec::new(),
+            unauthorized_work: Vec::new(),
         };
         let view = TurnView {
             turn_id: "turn".into(),
@@ -1526,6 +1532,8 @@ mod tests {
                 roles: Vec::new(),
                 tool_access: None,
                 web: true,
+                authorized_work: Vec::new(),
+                unauthorized_work: Vec::new(),
             };
             let view = TurnView {
                 turn_id: "turn".into(),
@@ -1812,6 +1820,8 @@ mod tests {
             roles: Vec::new(),
             tool_access: None,
             web: true,
+            authorized_work: Vec::new(),
+            unauthorized_work: Vec::new(),
         };
         let view = TurnView {
             turn_id: "turn".into(),
@@ -1891,6 +1901,8 @@ mod tests {
             roles: Vec::new(),
             tool_access: None,
             web: true,
+            authorized_work: Vec::new(),
+            unauthorized_work: Vec::new(),
         };
         let view = TurnView {
             turn_id: "turn".into(),

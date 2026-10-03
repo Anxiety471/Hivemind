@@ -79,6 +79,23 @@ Every persona keeps its runtime's web tools by default. Set `web = false` on a p
 
 This only gates the runtime's own web tools. A persona with `workspace.exec` can still reach the network through the shell (`curl`), and OMP's `read` may still accept URLs; withhold `workspace.exec` for strict isolation.
 
+## Role boundaries
+
+Permissions gate tools; `authorized_work` and `unauthorized_work` on a persona (`[[personas]]`, or the same keys in the agents API) gate *scope*. They are plain lists of concrete responsibilities, shown in the agent's prompt every turn as its source of truth:
+
+```toml
+[[personas]]
+id = "Backend"
+authorized_work = ["backend API implementation", "database migrations"]
+unauthorized_work = ["frontend implementation", "tasks.delegate"]
+```
+
+- An agent asked for anything outside its authorized work must not do it: it starts its reply with `OUT_OF_SCOPE:`, states the boundary, quotes the request and names who should take it. Hivemind copies that notice into the room's open questions so the request keeps its context and can be routed.
+- An `unauthorized_work` entry that is a tool name (`tasks.delegate`) or namespace (`memory.global.`) is enforced by the tool linter: the call is refused with an `authorization/not-allowed` diagnostic telling the agent to flag the request instead.
+- An explicit `Assign: Backend = <task>` directive is an authorization too: the assigned task appears under the agent's authorized work from the next turn.
+- **Frontend/backend separation.** A *backend* agent (capability `backend`, a role containing "backend", or backend `authorized_work`) does logic and scripts only; listing `frontend` under `unauthorized_work` bars any agent the same way. Agents with a `frontend`/full-stack capability or role, or frontend in `authorized_work`, are free. Barred agents may not produce frontend work: UI code (`.tsx .jsx .vue .svelte`), styles, markup, static assets and files in `frontend/ client/ ui/ web/ public/ static/ assets/ components/ styles/ pages/`, or browser build configs. **Node.js counts as backend** when it is identifiable as such: `.mjs/.cjs/.mts/.cts`, a node shebang, `node:`/`fs`/`http`/`express` imports, `process.argv/env`, or a `package.json` with a server dependency, `bin` or `engines.node` and no UI framework; React/Vue/DOM code (JSX, `document.`, `window.`) is frontend even in `.js`/`.ts`. Plain logic JS/TS follows its nearest `package.json`. The check runs at `tasks.result.submit` (file artifacts, by path) and when a work attempt finishes in a git worktree (every changed file, with content): a violation fails the attempt as `scope_violation` before anything is committed, with a message telling the agent to reply `OUT_OF_SCOPE:`. **Writes are blocked, not just detected:** a barred agent's runtime edit tools (`edit`, `write`, notebooks) are withheld the same way as for a role without `workspace.write` (`pi`/`omp` `--tools` allowlist, `opencode` `edit` denied), and it writes files with the Hivemind tool `files.write {path, content}` instead. `files.write` classifies the path and content first and refuses a frontend file with an error, so the file is never written; it also rejects absolute paths, `..`, `.git`, and symlink escapes, and needs `workspace.write`. The submit and finish checks stay as a backstop. **Limits:** a barred agent that keeps the shell (`workspace.exec`) can still write files with `bash`, which Hivemind cannot see; withhold `workspace.exec` for strict enforcement. Each `files.write` counts as one tool action (4 per chat turn, more in task attempts), and attempts outside a git worktree get only the `files.write` and submit checks.
+- Both lists empty (the default) leaves a persona unscoped, exactly as before. Inspect them with `GET /api/v1/agents`.
+
 ## Compatibility
 
 - A persona with **no `roles`** keeps today's behavior: gated memory tools are unrestricted, runtime tools are unrestricted, and coordination follows its direct `permissions`.

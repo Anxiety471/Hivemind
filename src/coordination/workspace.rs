@@ -158,6 +158,8 @@ pub enum Finished {
     Unchanged,
     /// Conflict markers remain in these files; nothing was committed.
     Unresolved(Vec<String>),
+    /// The attempt produced work its role does not allow; nothing was committed.
+    OutOfScope(String),
 }
 
 impl Worktree {
@@ -194,6 +196,45 @@ impl Worktree {
         }
         let stat = git(&self.root, &["show", "--stat", "--format=", "HEAD"]).unwrap_or_default();
         Ok(Finished::Committed { sha, stat })
+    }
+
+    /// Files this attempt changed or added so far (uncommitted), repo-relative,
+    /// each with its content when it is small UTF-8 text, plus what the nearest
+    /// `package.json` says about the project.
+    pub fn changed_files(
+        &self,
+    ) -> Result<Vec<(String, Option<String>, crate::work_scope::Project)>> {
+        let listed = git(
+            &self.root,
+            &[
+                "-c",
+                "core.quotepath=off",
+                "ls-files",
+                "-m",
+                "-o",
+                "--exclude-standard",
+            ],
+        )?;
+        let mut files: Vec<String> = listed.lines().map(str::to_owned).collect();
+        files.sort();
+        files.dedup();
+        Ok(files
+            .into_iter()
+            .take(2000)
+            .map(|path| {
+                let content = std::fs::read(self.root.join(&path))
+                    .ok()
+                    .filter(|bytes| bytes.len() <= 64 * 1024)
+                    .and_then(|bytes| String::from_utf8(bytes).ok());
+                let project = self.project_of(&path);
+                (path, content, project)
+            })
+            .collect())
+    }
+
+    /// The nearest `package.json` at or above `path`, inside the checkout.
+    fn project_of(&self, path: &str) -> crate::work_scope::Project {
+        crate::work_scope::project_near(&self.root, path)
     }
 
     /// Remove the checkout; the branch and its commits stay for dependants.
@@ -302,6 +343,63 @@ mod recovery_tests {
             git(&root, &["show", &format!("{sha}:new-file")]).unwrap(),
             "new"
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn changed_files_feed_the_frontend_check_and_tell_node_from_browser_code() {
+        use crate::work_scope::{violations, Project};
+        let root = std::env::temp_dir().join(crate::coordination::model::new_id("scope-test"));
+        std::fs::create_dir_all(&root).unwrap();
+        git(&root, &["init"]).unwrap();
+        std::fs::write(root.join("README.md"), "base").unwrap();
+        git(&root, &["add", "README.md"]).unwrap();
+        git(&root, &["commit", "-m", "base"]).unwrap();
+        let checkout = root.join("attempt");
+        let tree = prepare(root.to_str().unwrap(), &checkout, "scope-test", &[]).unwrap();
+        // A Node service (own package.json) and a script, plus UI work mixed in.
+        std::fs::create_dir_all(checkout.join("svc/lib")).unwrap();
+        std::fs::write(
+            checkout.join("svc/package.json"),
+            r#"{"dependencies":{"express":"^4"}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            checkout.join("svc/lib/math.js"),
+            "export const add = (a, b) => a + b;",
+        )
+        .unwrap();
+        std::fs::write(
+            checkout.join("svc/lib/server.js"),
+            "const http = require('http');\nhttp.createServer(() => {}).listen(3000);",
+        )
+        .unwrap();
+        std::fs::write(checkout.join("deploy.sh"), "#!/bin/sh\necho hi").unwrap();
+        std::fs::create_dir_all(checkout.join("web")).unwrap();
+        std::fs::write(
+            checkout.join("web/Login.tsx"),
+            "export const L = () => <div/>;",
+        )
+        .unwrap();
+        std::fs::write(checkout.join("styles.css"), "a{}").unwrap();
+        let files = tree.changed_files().unwrap();
+        let project_of = |path: &str| files.iter().find(|f| f.0 == path).unwrap().2;
+        assert_eq!(
+            project_of("svc/lib/math.js"),
+            Project::Node,
+            "nearest package.json wins"
+        );
+        let found: Vec<String> = files
+            .iter()
+            .flat_map(|(p, c, project)| violations(&[(p.clone(), c.clone())], *project))
+            .map(|v| v.path)
+            .collect();
+        assert_eq!(
+            found,
+            ["styles.css", "web/Login.tsx"],
+            "Node code and scripts pass"
+        );
+        tree.remove();
         let _ = std::fs::remove_dir_all(root);
     }
 }

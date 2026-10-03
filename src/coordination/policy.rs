@@ -14,6 +14,8 @@ pub struct Persona {
     pub workspace: String,
     /// Declares roles, so only its listed permissions apply (see `access::Grants::restricted`).
     pub restricted: bool,
+    /// Backend scope: frontend files in its work are refused (see `work_scope`).
+    pub bars_frontend: bool,
     /// Configured reply order, the final tie-breaker.
     pub order: usize,
 }
@@ -78,6 +80,7 @@ impl Roster {
                     permissions: crate::access::resolve(agent, &config.roles).permissions,
                     workspace: normalize_workspace(&agent.workspace),
                     restricted: !agent.roles.is_empty(),
+                    bars_frontend: crate::work_scope::bars_frontend(agent),
                     order,
                 })
                 .collect(),
@@ -489,6 +492,7 @@ mod tests {
             permissions: perms.iter().map(|c| c.to_string()).collect(),
             workspace: normalize_workspace("."),
             restricted: false,
+            bars_frontend: false,
             order,
         }
     }
