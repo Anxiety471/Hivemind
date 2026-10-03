@@ -235,12 +235,21 @@ function RoomView({
               </a>
             )}
             <button
-              className={panelTab ? "ghost small on" : "ghost small"}
-              aria-expanded={panelTab !== null}
-              onClick={() => setPanelTab(panelTab ? null : info && ["main", "solo", "group"].includes(info.kind) ? "settings" : "details")}
+              className={panelTab === "details" ? "ghost small on" : "ghost small"}
+              aria-expanded={panelTab === "details"}
+              onClick={() => setPanelTab(panelTab === "details" ? null : "details")}
             >
-              <Icon name="settings" size={14} /> {panelTab ? "Hide settings" : "Settings"}
+              <Icon name="info" size={14} /> Details
             </button>
+            {info && ["main", "solo", "group"].includes(info.kind) && (
+              <button
+                className={panelTab === "settings" ? "ghost small on" : "ghost small"}
+                aria-expanded={panelTab === "settings"}
+                onClick={() => setPanelTab(panelTab === "settings" ? null : "settings")}
+              >
+                <Icon name="settings" size={14} /> Settings
+              </button>
+            )}
           </div>
         </header>
         <MessageList

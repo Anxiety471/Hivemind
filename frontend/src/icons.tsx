@@ -63,6 +63,13 @@ const PATHS: Record<string, ReactNode> = {
       <path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4" />
     </>
   ),
+  info: (
+    <>
+      <circle cx="8" cy="8" r="5.5" />
+      <path d="M8 7v4M8 5h.01" />
+    </>
+  ),
+  shield: <path d="M8 2.5 3.5 4.5v4c0 3 2.5 5 4.5 5.5 2-.5 4.5-2.5 4.5-5.5v-4z" />,
   plus: <path d="M8 3v10M3 8h10" />,
   search: (
     <>

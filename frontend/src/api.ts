@@ -389,6 +389,67 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 const enc = encodeURIComponent;
 
 export type Skill = { name: string; description: string; argument_hint: string; source: string };
+export type RuntimeToolExposure = {
+  name: string;
+  category: "fs_read" | "fs_write" | "execution" | "web";
+  allowed: boolean;
+  description: string;
+  reason: string | null;
+};
+
+export type HostToolExposure = {
+  name: string;
+  category: "memory" | "workspace" | "skills" | "wakeup" | "artifacts" | "coordination";
+  available: boolean;
+  allowed: boolean;
+  permission: string | null;
+  description: string;
+};
+
+export type AgentSandboxExposure = {
+  file_editing: boolean;
+  shell_execution: boolean;
+  web_access: boolean;
+};
+
+export type AgentAuthorizationExposure = {
+  restricted: boolean;
+  roles: string[];
+  permissions: string[];
+  capabilities: string[];
+  sandbox: AgentSandboxExposure;
+};
+
+export type AgentWorkspaceExposure = {
+  effective: string;
+  is_shared: boolean;
+  source: "group" | "persona";
+};
+
+export type AgentExposure = {
+  persona_id: string;
+  runtime: string;
+  model: string | null;
+  reasoning: string | null;
+  fast: boolean | null;
+  role: string | null;
+  workspace: AgentWorkspaceExposure;
+  authorization: AgentAuthorizationExposure;
+  tools: {
+    runtime: RuntimeToolExposure[];
+    host: HostToolExposure[];
+  };
+};
+
+export type SkillExposure = Skill;
+
+export type RoomExposure = {
+  room_id: string;
+  room_kind: "main" | "solo" | "group" | "thread" | "task" | "archived";
+  room_name: string;
+  agents: AgentExposure[];
+  skills: Skill[];
+};
 
 export const api = {
   library: (query = "", offset = 0) => request<{ artifacts: LibraryArtifact[] }>("GET", `/library?query=${encodeURIComponent(query)}&offset=${offset}&limit=50`),
@@ -430,6 +491,7 @@ export const api = {
   steerRoom: (id: string, message: string) =>
     request<{ room_id: string; delivered_to: string[] }>("POST", `/rooms/${enc(id)}/steer`, { message }),
   roomSettings: (id: string) => request<RoomSettings>("GET", `/rooms/${enc(id)}/settings`),
+  roomExposure: (id: string) => request<RoomExposure>("GET", `/rooms/${enc(id)}/exposure`),
   roomSchedules: (id: string) =>
     request<{ room_id: string; schedules: RoomSchedule[] }>("GET", `/rooms/${enc(id)}/schedules`),
   cancelRoomSchedule: (id: string, scheduleId: string) =>

@@ -228,13 +228,23 @@ test("agents are created, edited and deleted from the web UI", async ({ page, re
 
 test("the settings panel keeps details and sessions and adds per-conversation settings", async ({ page }) => {
   await openRoom(page, "group-alpha");
-  // The header offers settings only; runtime sessions live in the panel's Sessions tab.
+  // The header offers Details and Settings only; runtime sessions live in the panel's
+  // Sessions tab and the tool/skill exposure lives in the panel's Tools & Skills tab.
   await expect(page.getByRole("button", { name: "Runtime sessions" })).toHaveCount(0);
+  await expect(page.locator(".room-header").getByRole("button", { name: "Tools & Skills" })).toHaveCount(0);
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   const panel = page.getByLabel("Conversation panel");
   await expect(panel.getByRole("tab", { name: "Settings" })).toHaveAttribute("aria-selected", "true");
   await panel.getByRole("tab", { name: "Details" }).click();
   await expect(panel.getByRole("heading", { name: "Goal" })).toBeVisible();
+  // Four tabs fit without a horizontal scrollbar in the 360px panel.
+  const tabsOverflow = await panel
+    .locator(".tabs")
+    .evaluate((el) => el.scrollWidth - el.clientWidth);
+  expect(tabsOverflow).toBeLessThanOrEqual(0);
+  await panel.getByRole("tab", { name: "Tools & Skills" }).click();
+  await expect(panel.getByRole("tab", { name: /Runtime tools/ })).toBeVisible();
+  await expect(panel.locator(".skills-exposure")).toContainText("Configured Skills");
   await panel.getByRole("tab", { name: "Sessions" }).click();
   await expect(panel.getByRole("link", { name: "Open full session view" })).toBeVisible();
 

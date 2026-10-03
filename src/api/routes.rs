@@ -2488,4 +2488,325 @@ done
         assert!(matches!(message, Some(Ok(Message::Close(_)))));
         server.abort();
     }
+
+    #[tokio::test]
+    async fn room_exposure_endpoint_returns_schema_and_permissions() {
+        let mut config = HivemindConfig::default_poc();
+        config.groups = vec![crate::config::GroupConfig {
+            name: "team".into(),
+            mode: crate::config::ConversationMode::Discussion,
+            reply_order: vec!["Engineer".into(), "Reviewer".into()],
+            members: vec!["Engineer".into(), "Reviewer".into()],
+            member_roles: std::collections::HashMap::from([
+                ("Engineer".into(), "Lead".into()),
+                ("Reviewer".into(), "QA".into()),
+            ]),
+            workspace: None,
+        }];
+
+        let test_core = TestCore::with_config(config);
+        let app = router(test_core.core.clone(), watch::channel(false).1);
+
+        let validate_exposure = |body: &Value, expected_id: &str, expected_kind: &str| {
+            assert_eq!(body["room_id"], expected_id);
+            assert_eq!(body["room_kind"], expected_kind);
+            assert!(body["room_name"].is_string(), "room_name must be string");
+            assert!(body["skills"].is_array(), "skills must be array");
+            assert!(body["agents"].is_array(), "agents must be array");
+
+            for agent in body["agents"].as_array().unwrap() {
+                assert!(agent["persona_id"].is_string());
+                assert!(agent["runtime"].is_string());
+                assert!(agent["workspace"]["effective"].is_string());
+                assert!(agent["workspace"]["is_shared"].is_boolean());
+                let source = agent["workspace"]["source"].as_str().unwrap();
+                assert!(source == "group" || source == "persona");
+
+                assert!(agent["authorization"]["restricted"].is_boolean());
+                assert!(agent["authorization"]["roles"].is_array());
+                assert!(agent["authorization"]["permissions"].is_array());
+                assert!(agent["authorization"]["capabilities"].is_array());
+                assert!(agent["authorization"]["sandbox"]["file_editing"].is_boolean());
+                assert!(agent["authorization"]["sandbox"]["shell_execution"].is_boolean());
+                assert!(agent["authorization"]["sandbox"]["web_access"].is_boolean());
+
+                let runtime_tools = agent["tools"]["runtime"].as_array().unwrap();
+                assert_eq!(runtime_tools.len(), 8);
+                let tool_names: Vec<&str> = runtime_tools
+                    .iter()
+                    .map(|t| t["name"].as_str().unwrap())
+                    .collect();
+                assert_eq!(
+                    tool_names,
+                    vec![
+                        "read",
+                        "grep",
+                        "glob",
+                        "edit",
+                        "write",
+                        "bash",
+                        "python",
+                        "web_search"
+                    ]
+                );
+                for tool in runtime_tools {
+                    assert!(tool["name"].is_string());
+                    assert!(tool["category"].is_string());
+                    assert!(tool["allowed"].is_boolean());
+                    assert!(tool["description"].is_string());
+                }
+
+                let host_tools = agent["tools"]["host"].as_array().unwrap();
+                assert_eq!(host_tools.len(), 15);
+                for tool in host_tools {
+                    assert!(tool["name"].is_string());
+                    assert!(tool["category"].is_string());
+                    assert!(tool["available"].is_boolean());
+                    assert!(tool["allowed"].is_boolean());
+                    assert!(tool["description"].is_string());
+                }
+            }
+        };
+
+        // 1. solo-Engineer
+        let (status, _, solo) =
+            request(app.clone(), "GET", "/api/v1/rooms/solo-Engineer/exposure").await;
+        assert_eq!(status, StatusCode::OK);
+        validate_exposure(&solo, "solo-Engineer", "solo");
+        assert_eq!(solo["agents"].as_array().unwrap().len(), 1);
+        let eng = &solo["agents"][0];
+        assert_eq!(eng["persona_id"], "Engineer");
+        assert_eq!(eng["workspace"]["source"], "persona");
+        assert_eq!(eng["workspace"]["is_shared"], false);
+        let host_tools = eng["tools"]["host"].as_array().unwrap();
+        let ws_get = host_tools
+            .iter()
+            .find(|t| t["name"] == "workspace.get / list")
+            .unwrap();
+        assert_eq!(ws_get["available"], true);
+        assert_eq!(ws_get["allowed"], true);
+        let ws_set = host_tools
+            .iter()
+            .find(|t| t["name"] == "workspace.set")
+            .unwrap();
+        assert_eq!(ws_set["available"], true);
+        assert_eq!(ws_set["description"], "Change own workspace");
+        let ws_clear = host_tools
+            .iter()
+            .find(|t| t["name"] == "workspace.clear")
+            .unwrap();
+        assert_eq!(ws_clear["available"], false);
+
+        // 2. main room
+        let (status, _, main) = request(app.clone(), "GET", "/api/v1/rooms/main/exposure").await;
+        assert_eq!(status, StatusCode::OK);
+        validate_exposure(&main, "main", "main");
+        assert_eq!(main["agents"].as_array().unwrap().len(), 2);
+        let main_eng = &main["agents"][0];
+        let main_host = main_eng["tools"]["host"].as_array().unwrap();
+        let main_ws_set = main_host
+            .iter()
+            .find(|t| t["name"] == "workspace.set")
+            .unwrap();
+        assert_eq!(main_ws_set["available"], false);
+        assert_eq!(main_ws_set["description"], "Not offered in this room type");
+
+        // 3. group room
+        let (status, _, group) =
+            request(app.clone(), "GET", "/api/v1/rooms/group-team/exposure").await;
+        assert_eq!(status, StatusCode::OK);
+        validate_exposure(&group, "group-team", "group");
+        assert_eq!(group["room_name"], "team");
+        assert_eq!(group["agents"].as_array().unwrap().len(), 2);
+        let grp_eng = &group["agents"][0];
+        assert_eq!(grp_eng["role"], "Lead");
+        let grp_host = grp_eng["tools"]["host"].as_array().unwrap();
+        let grp_ws_set = grp_host
+            .iter()
+            .find(|t| t["name"] == "workspace.set")
+            .unwrap();
+        assert_eq!(grp_ws_set["available"], true);
+        assert_eq!(grp_ws_set["description"], "Change group shared workspace");
+        let grp_ws_clear = grp_host
+            .iter()
+            .find(|t| t["name"] == "workspace.clear")
+            .unwrap();
+        assert_eq!(grp_ws_clear["available"], true);
+        assert_eq!(grp_ws_clear["description"], "Clear group shared workspace");
+        let grp_mem = grp_host
+            .iter()
+            .find(|t| t["name"] == "memory.group.*")
+            .unwrap();
+        assert_eq!(grp_mem["available"], true);
+
+        // 4. Nonexistent room returns 404
+        let (status, _, not_found) = request(
+            app.clone(),
+            "GET",
+            "/api/v1/rooms/nonexistent-room/exposure",
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(not_found["error"]["code"], "not_found");
+        assert_eq!(not_found["error"]["message"], "room was not found");
+    }
+
+    #[tokio::test]
+    async fn room_exposure_restricted_agent_permissions_and_reasons() {
+        let mut config = HivemindConfig::default_poc();
+        config.agents.push(crate::config::AgentConfig {
+            name: "Observer".into(),
+            runtime: "pi".into(),
+            system_prompt: "".into(),
+            workspace: ".".into(),
+            model: None,
+            reasoning: None,
+            fast: None,
+            fallback_models: Vec::new(),
+            role: Some("Auditor".into()),
+            capabilities: vec!["audit".into()],
+            permissions: Vec::new(),
+            roles: vec!["observer".into()],
+            tool_access: None,
+            web: false,
+        });
+
+        let test_core = TestCore::with_config(config);
+        let app = router(test_core.core.clone(), watch::channel(false).1);
+
+        let (status, _, body) =
+            request(app.clone(), "GET", "/api/v1/rooms/solo-Observer/exposure").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["room_kind"], "solo");
+        assert_eq!(body["agents"].as_array().unwrap().len(), 1);
+
+        let observer = &body["agents"][0];
+        assert_eq!(observer["persona_id"], "Observer");
+        assert_eq!(observer["role"], "Auditor");
+        assert_eq!(observer["authorization"]["restricted"], true);
+        assert_eq!(observer["authorization"]["sandbox"]["file_editing"], false);
+        assert_eq!(
+            observer["authorization"]["sandbox"]["shell_execution"],
+            false
+        );
+        assert_eq!(observer["authorization"]["sandbox"]["web_access"], false);
+
+        let runtime = observer["tools"]["runtime"].as_array().unwrap();
+        let edit_tool = runtime.iter().find(|t| t["name"] == "edit").unwrap();
+        assert_eq!(edit_tool["allowed"], false);
+        assert_eq!(edit_tool["reason"], "Lacks 'workspace.write' permission");
+
+        let write_tool = runtime.iter().find(|t| t["name"] == "write").unwrap();
+        assert_eq!(write_tool["allowed"], false);
+        assert_eq!(write_tool["reason"], "Lacks 'workspace.write' permission");
+
+        let bash_tool = runtime.iter().find(|t| t["name"] == "bash").unwrap();
+        assert_eq!(bash_tool["allowed"], false);
+        assert_eq!(bash_tool["reason"], "Lacks 'workspace.exec' permission");
+
+        let py_tool = runtime.iter().find(|t| t["name"] == "python").unwrap();
+        assert_eq!(py_tool["allowed"], false);
+        assert_eq!(py_tool["reason"], "Lacks 'workspace.exec' permission");
+
+        let web_tool = runtime.iter().find(|t| t["name"] == "web_search").unwrap();
+        assert_eq!(web_tool["allowed"], false);
+        assert_eq!(web_tool["reason"], "Web access disabled");
+
+        let host = observer["tools"]["host"].as_array().unwrap();
+        let mem_private = host
+            .iter()
+            .find(|t| t["name"] == "memory.private.*")
+            .unwrap();
+        assert_eq!(mem_private["allowed"], false);
+
+        let lib_create = host
+            .iter()
+            .find(|t| t["name"] == "library.create / add_file")
+            .unwrap();
+        assert_eq!(lib_create["allowed"], false);
+    }
+
+    #[tokio::test]
+    async fn room_exposure_thread_and_archived_rooms() {
+        use crate::memory::{ArchivedMessage, ArchivedTurn, Caller};
+        let test_core = TestCore::new();
+        let app = router(test_core.core.clone(), watch::channel(false).1);
+
+        test_core
+            .core
+            .memory()
+            .append_archive_turn(
+                &Caller::trusted_user("test"),
+                ArchivedTurn {
+                    id: "t1".into(),
+                    room_id: "main".into(),
+                    started_at: 1,
+                    completed_at: Some(2),
+                    metadata: json!({}),
+                    messages: vec![ArchivedMessage {
+                        id: "m_anchor".into(),
+                        room_id: "main".into(),
+                        turn_id: "t1".into(),
+                        speaker: "user".into(),
+                        content: "Start of thread".into(),
+                        created_at: 10,
+                    }],
+                    participants: vec![],
+                },
+            )
+            .unwrap();
+
+        let (status, body) = request_json(
+            app.clone(),
+            "POST",
+            "/api/v1/rooms/main/threads",
+            json!({"anchor_message_id": "m_anchor", "name": "Feature Thread"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        let thread_id = body["thread"]["id"].as_str().unwrap();
+
+        let (status, _, thread_exp) = request(
+            app.clone(),
+            "GET",
+            &format!("/api/v1/rooms/{thread_id}/exposure"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(thread_exp["room_id"], thread_id);
+        assert_eq!(thread_exp["room_kind"], "thread");
+        assert_eq!(thread_exp["room_name"], "Feature Thread");
+        assert_eq!(thread_exp["agents"].as_array().unwrap().len(), 2);
+
+        test_core
+            .core
+            .memory()
+            .append_archive_turn(
+                &Caller::trusted_user("test"),
+                ArchivedTurn {
+                    id: "t_old".into(),
+                    room_id: "group-deleted".into(),
+                    started_at: 100,
+                    completed_at: Some(101),
+                    metadata: json!({}),
+                    messages: vec![ArchivedMessage {
+                        id: "m_old".into(),
+                        room_id: "group-deleted".into(),
+                        turn_id: "t_old".into(),
+                        speaker: "user".into(),
+                        content: "Historical message".into(),
+                        created_at: 100,
+                    }],
+                    participants: vec![],
+                },
+            )
+            .unwrap();
+
+        let (status, _, arch_exp) =
+            request(app.clone(), "GET", "/api/v1/rooms/group-deleted/exposure").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(arch_exp["room_id"], "group-deleted");
+        assert_eq!(arch_exp["room_kind"], "archived");
+        assert_eq!(arch_exp["agents"].as_array().unwrap().len(), 0);
+    }
 }
