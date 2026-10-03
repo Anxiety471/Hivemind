@@ -222,6 +222,15 @@ impl HivemindCore {
             Roster::from_config(&config),
             events.clone(),
         ));
+        {
+            let execution = execution.clone();
+            conversation.set_follow_up_resolver(Arc::new(move |room| {
+                match execution.room_settings(room).ok()?.follow_up_limit? {
+                    n if n < 0 => Some(crate::conversation::FollowUpLimit::Unlimited),
+                    n => Some(crate::conversation::FollowUpLimit::Limited(n as usize)),
+                }
+            }));
+        }
         runtime.set_execution(execution.clone());
         coordination.set_execution(execution.clone());
         {

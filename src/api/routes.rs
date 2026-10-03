@@ -1372,6 +1372,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn group_follow_up_budget_is_adjustable_including_unlimited() {
+        let test_core = TestCore::new();
+        write_config(&test_core);
+        let app = router(test_core.core.clone(), watch::channel(false).1);
+        let (status, body) = request_json(
+            app.clone(),
+            "POST",
+            "/api/v1/chat-groups",
+            json!({"id":"crew","members":["Engineer"]}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        let url = "/api/v1/rooms/group-crew/settings";
+        let (_, _, shown) = request(app.clone(), "GET", url).await;
+        assert!(shown["settings"]["follow_up_limit"].is_null());
+        assert!(shown["settings"]["default_follow_up_limit"].is_number());
+        for (value, expected) in [
+            (json!(7), json!(7)),
+            (json!("unlimited"), json!("unlimited")),
+            (json!(null), json!(null)),
+        ] {
+            let (status, body) =
+                request_json(app.clone(), "PATCH", url, json!({"follow_up_limit": value})).await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            assert_eq!(body["settings"]["follow_up_limit"], expected);
+        }
+        for bad in [json!(-1), json!(65), json!("lots"), json!(1.5)] {
+            let (status, _) =
+                request_json(app.clone(), "PATCH", url, json!({"follow_up_limit": bad})).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+        }
+        // Only groups have the control.
+        let (status, _) = request_json(
+            app.clone(),
+            "PATCH",
+            "/api/v1/rooms/main/settings",
+            json!({"follow_up_limit": 3}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
     async fn room_settings_strip_exactly_one_prefix() {
         let test_core = TestCore::new();
         write_config(&test_core);

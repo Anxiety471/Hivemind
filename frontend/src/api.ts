@@ -31,9 +31,12 @@ export type RoomSettings = {
     mode: "broadcast" | "discussion" | null;
     reply_order: string[];
     workspace: string | null;
+    /** Group follow-up budget: `null` follows the default, `"unlimited"` removes the cap. */
+    follow_up_limit: number | "unlimited" | null;
+    default_follow_up_limit: number;
   };
   members: string[];
-  unavailable: { mode: string | null; reply_order: string | null; workspace: string | null };
+  unavailable: { mode: string | null; reply_order: string | null; workspace: string | null; follow_up_limit: string | null };
 };
 
 export type RoomSettingsPatch = Partial<Pick<RoomPrefs, "pinned" | "muted">> & {
@@ -42,6 +45,8 @@ export type RoomSettingsPatch = Partial<Pick<RoomPrefs, "pinned" | "muted">> & {
   reply_order?: string[];
   /** `null` clears a group's shared workspace. */
   workspace?: string | null;
+  /** `null` returns to the default budget. */
+  follow_up_limit?: number | "unlimited" | null;
 };
 
 export type RoomState = {

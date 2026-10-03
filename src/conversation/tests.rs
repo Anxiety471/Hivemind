@@ -2828,6 +2828,58 @@ async fn mention_adds_a_follow_up_reply_only_within_the_limit() {
 }
 
 #[tokio::test]
+async fn room_follow_up_limit_overrides_the_global_budget() {
+    let run = |global: usize, room: Option<FollowUpLimit>, replies: &'static [&'static str]| async move {
+        let (_path, coord) = fixture();
+        coord.set_mention_limit(global);
+        coord.set_follow_up_resolver(Arc::new(move |_| room));
+        let members: Vec<Participant> = ["A", "B"].iter().map(|n| member(n)).collect();
+        let out = coord
+            .turn(TurnRequest {
+                room: "budget-room",
+                room_name: "Budget room",
+                group_id: "budget-group",
+                mode: ConversationMode::Discussion,
+                members: &members,
+                input: "go",
+                invoker: scripted(replies),
+            })
+            .await
+            .unwrap();
+        out.into_iter().map(|r| r.name).collect::<Vec<_>>()
+    };
+    let pingpong: &'static [&'static str] = &["ping @A @B"; 12];
+    // The room's number replaces the global one in both directions.
+    assert_eq!(
+        run(0, Some(FollowUpLimit::Limited(2)), pingpong)
+            .await
+            .len(),
+        5
+    );
+    assert_eq!(
+        run(8, Some(FollowUpLimit::Limited(0)), &["hi @B", "back @A"]).await,
+        ["A", "B", "A"]
+    );
+    // No override keeps the global budget.
+    assert_eq!(run(2, None, pingpong).await.len(), 5);
+    // Unlimited ignores a global 0: the tag is honored with a real reply, not a notice.
+    let speakers = run(
+        0,
+        Some(FollowUpLimit::Unlimited),
+        &["hi @B", "back @A", "ok", "PASS"],
+    )
+    .await;
+    assert_eq!(speakers, ["A", "B", "A"]);
+    // Unlimited still has a safety ceiling.
+    let endless = run(0, Some(FollowUpLimit::Unlimited), &["ping @A @B"; 1000]).await;
+    assert!(
+        endless.len() <= 2 + UNLIMITED_FOLLOW_UP_CEILING + 2,
+        "{}",
+        endless.len()
+    );
+}
+
+#[tokio::test]
 async fn tagged_member_always_answers_or_says_it_cannot() {
     let (_path, coord) = fixture();
     coord.set_mention_limit(0);

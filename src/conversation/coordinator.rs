@@ -10,6 +10,30 @@ pub struct TurnRequest<'a> {
     pub invoker: Arc<dyn AgentInvoker>,
 }
 
+/// A room's own cap on follow-up replies in a Discussion turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FollowUpLimit {
+    Limited(usize),
+    /// No budget: follow-ups continue until everyone passes, up to a safety ceiling.
+    Unlimited,
+}
+
+/// Safety ceiling for [`FollowUpLimit::Unlimited`], so two agents tagging each
+/// other can never hold a room forever.
+pub const UNLIMITED_FOLLOW_UP_CEILING: usize = 200;
+
+impl FollowUpLimit {
+    fn budget(self) -> usize {
+        match self {
+            Self::Limited(n) => n,
+            Self::Unlimited => UNLIMITED_FOLLOW_UP_CEILING,
+        }
+    }
+}
+
+/// Looks up the room's own follow-up limit, if one was set.
+pub type FollowUpResolver = Arc<dyn Fn(&str) -> Option<FollowUpLimit> + Send + Sync>;
+
 /// Owns durable room history and all turn/context orchestration; runtime sessions are disposable.
 pub struct ConversationCoordinator {
     store: Arc<dyn ContextStore>,
@@ -20,6 +44,7 @@ pub struct ConversationCoordinator {
     tools: std::sync::OnceLock<Arc<dyn ToolHost>>,
     access: std::sync::OnceLock<Arc<crate::access::AccessPolicy>>,
     mention_limit: std::sync::OnceLock<usize>,
+    follow_up_override: std::sync::OnceLock<FollowUpResolver>,
 }
 
 pub(super) struct PackRequest<'a> {
@@ -145,6 +170,7 @@ impl ConversationCoordinator {
             tools: std::sync::OnceLock::new(),
             access: std::sync::OnceLock::new(),
             mention_limit: std::sync::OnceLock::new(),
+            follow_up_override: std::sync::OnceLock::new(),
         }
     }
     #[cfg(test)]
@@ -162,6 +188,7 @@ impl ConversationCoordinator {
             tools: std::sync::OnceLock::new(),
             access: std::sync::OnceLock::new(),
             mention_limit: std::sync::OnceLock::new(),
+            follow_up_override: std::sync::OnceLock::new(),
         }
     }
     /// Install the extra tool surface offered beside memory tools. Set once at startup.
@@ -173,6 +200,11 @@ impl ConversationCoordinator {
         let _ = self.access.set(policy);
     }
     /// Extra mention-triggered replies a Discussion turn may add. Set once at startup.
+    /// Per-room overrides of the follow-up budget. Set once at startup.
+    pub fn set_follow_up_resolver(&self, resolver: FollowUpResolver) {
+        let _ = self.follow_up_override.set(resolver);
+    }
+
     pub fn set_mention_limit(&self, limit: usize) {
         let _ = self.mention_limit.set(limit);
     }
@@ -445,7 +477,12 @@ impl ConversationCoordinator {
                 // follow up or answer PASS, until all of them pass in a row. Mention and
                 // floor replies share one budget so the exchange always ends.
                 let mut queue: std::collections::VecDeque<usize> = (0..members.len()).collect();
-                let mut extra = self.mention_limit.get().copied().unwrap_or(0);
+                let mut extra = self
+                    .follow_up_override
+                    .get()
+                    .and_then(|resolve| resolve(room))
+                    .map(FollowUpLimit::budget)
+                    .unwrap_or_else(|| self.mention_limit.get().copied().unwrap_or(0));
                 let mut last_speaker = None;
                 let mut passes = 0;
                 loop {

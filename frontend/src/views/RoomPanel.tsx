@@ -114,7 +114,16 @@ type Draft = {
   mode: "broadcast" | "discussion";
   order: string[];
   workspace: string;
+  /** "default", "unlimited", or a whole number as text. */
+  followUps: string;
 };
+
+const MAX_FOLLOW_UPS = 64;
+const followUpsFromServer = (v: number | "unlimited" | null) => (v === null ? "default" : String(v));
+const followUpsPatch = (text: string): number | "unlimited" | null =>
+  text === "default" ? null : text === "unlimited" ? "unlimited" : Number(text);
+const followUpsValid = (text: string) =>
+  text === "default" || text === "unlimited" || (/^\d+$/.test(text) && Number(text) <= MAX_FOLLOW_UPS);
 
 const fromServer = (s: RoomSettings): Draft => {
   const members = s.members;
@@ -126,6 +135,7 @@ const fromServer = (s: RoomSettings): Draft => {
     mode: s.settings.mode ?? "broadcast",
     order: [...saved, ...members.filter((m) => !saved.includes(m))],
     workspace: s.settings.workspace ?? "",
+    followUps: followUpsFromServer(s.settings.follow_up_limit),
   };
 };
 
@@ -140,6 +150,8 @@ function diff(server: RoomSettings, draft: Draft): RoomSettingsPatch {
   if (!u.mode && draft.mode !== base.mode) patch.mode = draft.mode;
   if (!u.reply_order && draft.order.join("\n") !== base.order.join("\n")) patch.reply_order = draft.order;
   if (!u.workspace && draft.workspace.trim() !== base.workspace) patch.workspace = draft.workspace.trim() || null;
+  if (!u.follow_up_limit && draft.followUps !== base.followUps && followUpsValid(draft.followUps))
+    patch.follow_up_limit = followUpsPatch(draft.followUps);
   return patch;
 }
 
@@ -271,6 +283,42 @@ function Settings({ roomId, onChanged }: { roomId: string; onChanged: () => void
                 </li>
               ))}
             </ol>
+          )}
+        </div>
+        <div className={u.follow_up_limit ? "field disabled" : "field"}>
+          <span className="label">Follow-up budget</span>
+          {u.follow_up_limit ? (
+            <span className="hint">{u.follow_up_limit}</span>
+          ) : (
+            <>
+              <select
+                aria-label="Follow-up budget"
+                value={draft.followUps === "default" || draft.followUps === "unlimited" ? draft.followUps : "number"}
+                onChange={(e) => {
+                  const v = (e.target as HTMLSelectElement).value;
+                  set({ followUps: v === "number" ? String(server.settings.default_follow_up_limit) : v });
+                }}
+              >
+                <option value="default">Default ({server.settings.default_follow_up_limit})</option>
+                <option value="number">Set a number…</option>
+                <option value="unlimited">Unlimited</option>
+              </select>
+              {draft.followUps !== "default" && draft.followUps !== "unlimited" && (
+                <input
+                  type="number"
+                  min={0}
+                  max={MAX_FOLLOW_UPS}
+                  aria-label="Follow-up replies"
+                  value={draft.followUps}
+                  onChange={(e) => set({ followUps: (e.target as HTMLInputElement).value })}
+                />
+              )}
+              {!followUpsValid(draft.followUps) && <span className="hint">Enter a whole number from 0 to {MAX_FOLLOW_UPS}.</span>}
+              <span className="hint">
+                Extra replies agents may add in a turn: @mentions and open-floor follow-ups share it. Unlimited keeps going until
+                everyone passes (stops at 200 as a safety net).
+              </span>
+            </>
           )}
         </div>
         <div className={u.workspace ? "field disabled" : "field"}>
