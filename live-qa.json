@@ -1,0 +1,75 @@
+{
+  "root": "tk_18dae0f9d1d217f8d53f000f",
+  "child": "tk_18dae0f9d1d8fcc5d53f0010",
+  "goal": "goal_18dac3d54a302e79939c0000",
+  "rootStatus": "completed",
+  "checkpoint": [
+    {
+      "attempt_id": "at_18dae0f9d1f33a69d53f0011",
+      "content_hash": "fdd5d38aa07eb43490e9aa97562d3cc1ea3c371a",
+      "created_at": 1790991167,
+      "description": "checkpoint.txt | 1 +\n 1 file changed, 1 insertion(+)",
+      "id": "ar_18dae0fa668ae833d53f0014",
+      "kind": "checkpoint",
+      "reference": "hivemind/tk_18dae0f9d1d8fcc5d53f0010-at_18dae0f9d1f33a69d53f0011@fdd5d38aa07eb43490e9aa97562d3cc1ea3c371a",
+      "task_id": "tk_18dae0f9d1d8fcc5d53f0010",
+      "version": 1
+    }
+  ],
+  "usage": 6776,
+  "checks": [
+    {
+      "command": [
+        "python3",
+        "-c",
+        "import pathlib; assert pathlib.Path('api.txt').exists()"
+      ],
+      "commit_sha": "2ad9f69c094baacd1b5eeb1ad5f5f3d93d29e592",
+      "elapsed_ms": 19,
+      "exit_code": 0,
+      "name": "fixture deliverable exists",
+      "passed": true,
+      "stderr": "",
+      "stdout": "",
+      "timed_out": false
+    }
+  ],
+  "errors": [],
+  "overflow": [
+    {
+      "name": "project-goals",
+      "pixels": 0
+    },
+    {
+      "name": "routines",
+      "pixels": 0
+    },
+    {
+      "name": "operator-inbox",
+      "pixels": 0
+    },
+    {
+      "name": "task-evidence",
+      "pixels": 0
+    },
+    {
+      "name": "usage",
+      "pixels": 0
+    }
+  ],
+  "screens": [
+    "project-goals-desktop.png",
+    "project-goals-mobile.png",
+    "routines-desktop.png",
+    "routines-mobile.png",
+    "operator-inbox-desktop.png",
+    "operator-inbox-mobile.png",
+    "task-evidence-desktop.png",
+    "task-evidence-mobile.png",
+    "usage-desktop.png",
+    "usage-mobile.png"
+  ],
+  "url": "http://127.0.0.1:35173/#/usage",
+  "title": "Hivemind",
+  "overlay": 0
+}
