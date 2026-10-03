@@ -989,6 +989,7 @@ fn context_budget_trims_old_history_but_keeps_current_input() {
         caller: &caller,
         retrieval: "",
         optional: false,
+        remaining_budget: None,
     };
     let state_json = coordinator.state_json(&history, &caller).unwrap();
     let pack = coordinator.context_pack(&request, &state_json).unwrap();
@@ -1041,6 +1042,7 @@ fn turn_delta_lists_unseen_peers_and_changed_state_and_rejects_gaps() {
         caller: &caller,
         retrieval: "",
         optional: false,
+        remaining_budget: None,
     };
     let state_json = coordinator.state_json(&history, &caller).unwrap();
     let cursor = TurnView {
@@ -2820,11 +2822,10 @@ async fn mention_adds_a_follow_up_reply_only_within_the_limit() {
     );
     // Self-mentions and mentions of members still waiting add nothing.
     assert_eq!(speakers(4, &["@A and @B", "ok", "PASS"]).await, ["A", "B"]);
-    // Limit 0 disables follow-ups, but the tagged member is told so in the thread
-    // instead of being silently ignored; a ping-pong stops at the limit the same way.
-    assert_eq!(speakers(0, &["hi @B", "back @A"]).await, ["A", "B", "A"]);
+    // Limit 0 disables follow-ups; the agents are told so in their prompt and a ping-pong stops.
+    assert_eq!(speakers(0, &["hi @B", "back @A"]).await, ["A", "B"]);
     let pingpong: &'static [&'static str] = &["ping @A @B"; 10];
-    assert_eq!(speakers(2, pingpong).await.len(), 5);
+    assert_eq!(speakers(2, pingpong).await.len(), 4);
 }
 
 #[tokio::test]
@@ -2854,14 +2855,14 @@ async fn room_follow_up_limit_overrides_the_global_budget() {
         run(0, Some(FollowUpLimit::Limited(2)), pingpong)
             .await
             .len(),
-        5
+        4
     );
     assert_eq!(
         run(8, Some(FollowUpLimit::Limited(0)), &["hi @B", "back @A"]).await,
-        ["A", "B", "A"]
+        ["A", "B"]
     );
     // No override keeps the global budget.
-    assert_eq!(run(2, None, pingpong).await.len(), 5);
+    assert_eq!(run(2, None, pingpong).await.len(), 4);
     // Unlimited ignores a global 0: the tag is honored with a real reply, not a notice.
     let speakers = run(
         0,
@@ -2880,67 +2881,25 @@ async fn room_follow_up_limit_overrides_the_global_budget() {
 }
 
 #[tokio::test]
-async fn tagged_member_always_answers_or_says_it_cannot() {
-    let (_path, coord) = fixture();
-    coord.set_mention_limit(0);
-    let members: Vec<Participant> = ["A", "B"].iter().map(|n| member(n)).collect();
-    let out = coord
-        .turn(TurnRequest {
-            room: "tag-room",
-            room_name: "Tag room",
-            group_id: "tag-group",
-            mode: ConversationMode::Discussion,
-            members: &members,
-            input: "go",
-            invoker: scripted(&["hi", "@A are you there?"]),
-        })
-        .await
-        .unwrap();
-    let last = out.last().unwrap();
-    assert_eq!(last.name, "A");
-    assert!(last
-        .result
-        .as_ref()
-        .unwrap_err()
-        .contains("could not reply"));
-    let history = coord.room_history("tag-room").unwrap();
-    let event = history.events.last().unwrap();
-    assert_eq!(event.speaker, "A");
-    assert!(event.error);
+async fn agents_are_reminded_to_conclude_when_follow_up_budget_is_low() {
+    let (_speakers, prompts) = discussion(
+        2,
+        &["A", "B"],
+        &["hi @B", "back @A", "another @B", "final"],
+    )
+    .await;
+    assert!(prompts[0].contains("Only 2 follow-up replies remain for this turn. Please finish what you are doing and conclude the discussion."));
+    assert!(prompts[1].contains("Only 2 follow-up replies remain for this turn. Please finish what you are doing and conclude the discussion."));
+    assert!(prompts[2].contains("Only 1 follow-up reply remains for this turn. Please finish what you are doing and conclude the discussion."));
+    assert!(prompts[3].contains("No follow-up replies remain for this turn. Please finish what you are doing and conclude without expecting further replies from other members."));
 }
+
 #[tokio::test]
-async fn multiple_tagged_members_each_say_they_cannot_reply_when_limit_is_zero() {
-    let (_path, coord) = fixture();
-    coord.set_mention_limit(0);
-    let members: Vec<Participant> = ["A", "B", "C"].iter().map(|n| member(n)).collect();
-    let out = coord
-        .turn(TurnRequest {
-            room: "multi-tag-room",
-            room_name: "Multi tag room",
-            group_id: "tag-group",
-            mode: ConversationMode::Discussion,
-            members: &members,
-            input: "go",
-            invoker: scripted(&["hi", "hello", "asking @A and @B for help"]),
-        })
-        .await
-        .unwrap();
-    assert_eq!(out.len(), 5);
-    assert_eq!(out[0].name, "A");
-    assert_eq!(out[1].name, "B");
-    assert_eq!(out[2].name, "C");
-    assert_eq!(out[3].name, "A");
-    assert!(out[3].result.as_ref().unwrap_err().contains("tagged by C but could not reply"));
-    assert_eq!(out[4].name, "B");
-    assert!(out[4].result.as_ref().unwrap_err().contains("tagged by C but could not reply"));
-    let history = coord.room_history("multi-tag-room").unwrap();
-    // 1 user input message + 5 replies/notices
-    assert_eq!(history.events.len(), 6);
-    assert_eq!(history.events[0].speaker, "user");
-    assert_eq!(history.events[4].speaker, "A");
-    assert!(history.events[4].error);
-    assert_eq!(history.events[5].speaker, "B");
-    assert!(history.events[5].error);
+async fn limit_zero_reminds_agents_no_follow_ups_remain() {
+    let (speakers, prompts) = discussion(0, &["A", "B"], &["hi @B", "back @A"]).await;
+    assert_eq!(speakers, ["A", "B"]);
+    assert!(prompts[0].contains("No follow-up replies remain for this turn. Please finish what you are doing and conclude without expecting further replies from other members."));
+    assert!(prompts[1].contains("No follow-up replies remain for this turn. Please finish what you are doing and conclude without expecting further replies from other members."));
 }
 
 #[tokio::test]

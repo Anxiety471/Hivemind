@@ -60,6 +60,8 @@ pub(super) struct PackRequest<'a> {
     pub(super) retrieval: &'a str,
     /// Open-floor follow-up: the member may answer exactly `PASS` to stay silent.
     pub(super) optional: bool,
+    /// Remaining follow-up replies allowed for this turn.
+    pub(super) remaining_budget: Option<usize>,
 }
 
 /// Prompts prepared for one member's invocation this turn.
@@ -82,6 +84,7 @@ pub(super) const SESSION_TOOL_REMINDER: &str =
 pub(super) fn same_turn_replies(
     prior: &[(String, Result<String, String>)],
     optional: bool,
+    remaining_budget: Option<usize>,
 ) -> String {
     let peers = prior
         .iter()
@@ -97,6 +100,14 @@ pub(super) fn same_turn_replies(
     };
     if optional {
         out.push_str(&format!("\nYou already replied in this turn; the floor is open for a follow-up. Reply again only if you have something worth adding — a rebuttal, correction, or answer to a point raised since your last reply. Otherwise reply with exactly {PASS} and nothing else.\n"));
+    }
+    if let Some(remaining) = remaining_budget {
+        if remaining == 0 {
+            out.push_str("\nNote: No follow-up replies remain for this turn. Please finish what you are doing and conclude without expecting further replies from other members.\n");
+        } else if remaining <= 2 {
+            let s = if remaining == 1 { "reply remains" } else { "replies remain" };
+            out.push_str(&format!("\nNote: Only {remaining} follow-up {s} for this turn. Please finish what you are doing and conclude the discussion.\n"));
+        }
     }
     out
 }
@@ -361,6 +372,7 @@ impl ConversationCoordinator {
                             caller: &caller,
                             retrieval: &retrieval,
                             optional: false,
+                            remaining_budget: None,
                         },
                         cursor,
                     );
@@ -487,6 +499,7 @@ impl ConversationCoordinator {
                 // floor replies share one budget so the exchange always ends.
                 let mut queue: std::collections::VecDeque<usize> = (0..members.len()).collect();
                 let mut extra = self.follow_up_budget(room);
+                let mut initial_pending = members.len();
                 let mut last_speaker = None;
                 let mut passes = 0;
                 loop {
@@ -499,6 +512,10 @@ impl ConversationCoordinator {
                     } else {
                         break;
                     };
+                    if initial_pending > 0 {
+                        initial_pending -= 1;
+                    }
+                    let remaining_budget = Some(extra + queue.len().saturating_sub(initial_pending));
                     let member = &members[index];
                     let caller = invocation_caller(
                         room,
@@ -532,6 +549,7 @@ impl ConversationCoordinator {
                             caller: &caller,
                             retrieval: &retrieval,
                             optional: floor,
+                            remaining_budget,
                         },
                         cursor,
                     ) {
@@ -599,19 +617,6 @@ impl ConversationCoordinator {
                             if extra > 0 {
                                 queue.push_back(target);
                                 extra -= 1;
-                            } else {
-                                // A tagged member must never be silently ignored:
-                                // say in the thread that it could not reply.
-                                let tagged = members[target].agent.name.clone();
-                                let notice = Err(format!(
-                                    "tagged by {name} but could not reply: the follow-up limit for this turn was reached"
-                                ));
-                                append_reply(&mut history, room, &turn_id, &tagged, &notice);
-                                self.save_turn(&history, room, &turn_id, &mut saved, false, false)?;
-                                replies.push(TurnReply {
-                                    name: tagged,
-                                    result: notice,
-                                });
                             }
                         }
                         continue;
@@ -762,6 +767,7 @@ impl ConversationCoordinator {
             active_turn,
             retrieval,
             optional,
+            remaining_budget,
             ..
         } = *request;
         let last = history
@@ -812,7 +818,7 @@ impl ConversationCoordinator {
             delta.push_str(&reminder);
         }
         delta.push_str(&format!("\nCurrent user message:\n{input}\n"));
-        delta.push_str(&same_turn_replies(prior, optional));
+        delta.push_str(&same_turn_replies(prior, optional, remaining_budget));
         (delta.len() <= self.limits.context_target_tokens.saturating_mul(4)).then_some(delta)
     }
 
@@ -832,6 +838,7 @@ impl ConversationCoordinator {
             caller,
             retrieval,
             optional,
+            remaining_budget,
         } = *request;
         let roster = members
             .iter()
@@ -875,7 +882,7 @@ impl ConversationCoordinator {
         // messages are excluded so the input is never echoed back as a "memory".
         let hits = retrieval;
         let current = format!("\nCurrent user message:\n{input}\n");
-        let same_turn = same_turn_replies(prior, optional);
+        let same_turn = same_turn_replies(prior, optional, remaining_budget);
         let mandatory_len =
             identity.len() + manifest.len() + state.len() + current.len() + same_turn.len();
         // Established byte budget: four times the configured token target,
