@@ -77,7 +77,7 @@ function App() {
   let view;
   switch (route.page) {
     case "library":
-      view = <Library />;
+      view = <Library selected={route.arg} />;
       break;
     case "tasks":
       view = <Tasks selected={route.arg} />;

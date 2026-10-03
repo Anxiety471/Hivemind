@@ -1,29 +1,58 @@
 import { useEffect, useState } from "react";
 import { api, type LibraryArtifact } from "../api";
 import { Markdown } from "../markdown";
-import { Badge, Empty, ErrorNote, PageHeader, ago, useAction, useAsync } from "../ui";
+import { href, navigate } from "../nav";
+import { Badge, Empty, ErrorNote, ago, useAction, useAsync } from "../ui";
 const sizeLabel = (bytes: number) => bytes < 1024 ? `${bytes} B` : bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KiB` : `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
 
-export function Library() {
+const FILTERS: { key: "all" | Kind; label: string }[] = [
+  { key: "all", label: "All" }, { key: "docs", label: "Documents" }, { key: "diagrams", label: "Diagrams" }, { key: "images", label: "Images" }, { key: "other", label: "Other" },
+];
+
+export function Library({ selected }: { selected?: string }) {
   const [search, setSearch] = useState("");
   const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState<"all" | Kind>("all");
   const [offset, setOffset] = useState(0);
   const data = useAsync(() => api.library(query, offset), [query, offset]);
   const [creating, setCreating] = useState(false);
-  return <div className="page">
-    <PageHeader title="Artifact library" sub="Files and documents saved in Hivemind, ready to reference across conversations.">
-      <button className="primary" disabled={creating} onClick={() => setCreating(true)}>New artifact</button>
-    </PageHeader>
-    {creating && <CreateArtifact onCancel={() => setCreating(false)} onSaved={() => { setCreating(false); setOffset(0); data.reload(); }} />}
-    <form className="row library-search" onSubmit={e => { e.preventDefault(); setOffset(0); if (query === search) data.reload(); else setQuery(search); }}>
-      <input aria-label="Search library" placeholder="Search titles, filenames and descriptions" value={search} onChange={e => setSearch(e.target.value)} />
-      <button type="submit">Search</button><button type="button" onClick={data.reload}>Refresh</button>
-    </form>
-    <ErrorNote error={data.error} />
-    {data.data?.artifacts.length === 0 && <Empty>{query ? "No artifacts match this search." : "Your library is empty. Add a document or upload a file to get started."}</Empty>}
-    <div className="cards">{data.data?.artifacts.map(artifact => <ArtifactCard key={artifact.id} artifact={artifact} onChanged={data.reload} />)}</div>
-    <div className="row library-pagination"><button disabled={offset === 0 || data.loading} onClick={() => setOffset(Math.max(0, offset - 50))}>Previous</button>
-      <span className="muted">Page {Math.floor(offset / 50) + 1}</span><button disabled={data.loading || (data.data?.artifacts.length ?? 0) < 50} onClick={() => setOffset(offset + 50)}>Next</button></div>
+  useEffect(() => {
+    if (search === query) return;
+    const timer = setTimeout(() => { setOffset(0); setQuery(search); }, 250);
+    return () => clearTimeout(timer);
+  }, [search, query]);
+  const all = data.data?.artifacts ?? [];
+  const list = filter === "all" ? all : all.filter(a => kindOf(a) === filter);
+  const active = list.find(a => a.id === selected) ?? list[0];
+  return <div className="split library-split">
+    <aside className="list-pane">
+      <div className="list-head">
+        <h2>Artifact library</h2>
+        <button className="primary small" disabled={creating} onClick={() => setCreating(true)}>New artifact</button>
+      </div>
+      <input className="library-search-input" type="search" aria-label="Search library" placeholder="Search titles, filenames, descriptions" value={search} onChange={e => setSearch(e.target.value)} />
+      <div className="library-filters" role="group" aria-label="Filter by type">
+        {FILTERS.map(f => <button key={f.key} type="button" className={filter === f.key ? "active" : ""} onClick={() => setFilter(f.key)}>{f.label}</button>)}
+      </div>
+      <ErrorNote error={data.error} />
+      {data.data && list.length === 0 && <Empty>{query || filter !== "all" ? "No artifacts match." : "Your library is empty. Add a document or upload a file to get started."}</Empty>}
+      {list.map(a => <a key={a.id} href={href("library", a.id)} className={a.id === active?.id && !creating ? "list-item library-item active" : "list-item library-item"} onClick={() => setCreating(false)}>
+        <span className="library-icon small" aria-hidden="true">{artifactIcon(a)}</span>
+        <span className="library-item-body">
+          <span className="list-item-title">{a.title}</span>
+          <span className="muted small">{(extOf(a.filename) || "file").toUpperCase()} · {sizeLabel(a.size)} · {ago(a.created_at)}{a.published ? " · 🔗 published" : ""}</span>
+        </span>
+      </a>)}
+      {(offset > 0 || all.length >= 50) && <div className="row library-pagination"><button disabled={offset === 0 || data.loading} onClick={() => setOffset(Math.max(0, offset - 50))}>Previous</button>
+        <span className="muted small">Page {Math.floor(offset / 50) + 1}</span><button disabled={data.loading || all.length < 50} onClick={() => setOffset(offset + 50)}>Next</button></div>}
+    </aside>
+    <section className="detail-pane">
+      {creating
+        ? <CreateArtifact onCancel={() => setCreating(false)} onSaved={a => { setCreating(false); setOffset(0); setQuery(""); setSearch(""); setFilter("all"); data.reload(); navigate("library", a.id); }} />
+        : active
+          ? <ArtifactDetail key={active.id} artifact={active} onChanged={data.reload} onDeleted={() => { data.reload(); navigate("library"); }} />
+          : !data.loading && <div className="library-placeholder"><Empty>Select an artifact to read it here.</Empty></div>}
+    </section>
   </div>;
 }
 
@@ -63,7 +92,7 @@ function renderArtifactContent(artifact: { filename: string; media_type: string 
   return <pre>{text}</pre>;
 }
 
-function CreateArtifact({ onCancel, onSaved }: { onCancel: () => void; onSaved: () => void }) {
+function CreateArtifact({ onCancel, onSaved }: { onCancel: () => void; onSaved: (artifact: LibraryArtifact) => void }) {
   const [title, setTitle] = useState("");
   const [filename, setFilename] = useState("notes.md");
   const [description, setDescription] = useState("");
@@ -81,8 +110,8 @@ function CreateArtifact({ onCancel, onSaved }: { onCancel: () => void; onSaved: 
         reader.readAsDataURL(file);
       });
     }
-    await api.createLibraryArtifact({ title, filename, description, ...(file ? { content_base64 } : { content }) });
-    onSaved();
+    const res = await api.createLibraryArtifact({ title, filename, description, ...(file ? { content_base64 } : { content }) });
+    onSaved(res.artifact);
   });
   return <form className="card form library-create" onSubmit={e => { e.preventDefault(); if (!action.busy) save(); }}>
     <h2>New artifact</h2>
@@ -122,10 +151,9 @@ function CreateArtifact({ onCancel, onSaved }: { onCancel: () => void; onSaved: 
   </form>;
 }
 
-function ArtifactCard({ artifact, onChanged }: { artifact: LibraryArtifact; onChanged: () => void }) {
+function ArtifactDetail({ artifact, onChanged, onDeleted }: { artifact: LibraryArtifact; onChanged: () => void; onDeleted: () => void }) {
   const action = useAction();
   const [confirming, setConfirming] = useState(false);
-  const [preview, setPreview] = useState(false);
   const [copied, setCopied] = useState(false);
   const download = () => action.run(async () => {
     const blob = await api.libraryContent(artifact.id);
@@ -133,20 +161,54 @@ function ArtifactCard({ artifact, onChanged }: { artifact: LibraryArtifact; onCh
     const anchor = document.createElement("a"); anchor.href = url; anchor.download = artifact.filename; anchor.click();
     setTimeout(() => URL.revokeObjectURL(url), 30_000);
   });
-  return <article className="card library-artifact" data-artifact={artifact.id}>
-    <div className="row"><h2 className="grow">{artifact.title}</h2><Badge value={artifact.published ? "published" : "private"} tone={artifact.published ? "ok" : "muted"} /></div>
-    <p className="mono small">{artifact.filename} · {sizeLabel(artifact.size)}</p>
-    {artifact.description && <p>{artifact.description}</p>}
-    <p className="muted small">Saved by {artifact.persona_id || "operator"} · {ago(artifact.created_at)}{artifact.room_id ? ` · ${artifact.room_id}` : ""}</p>
-    {artifact.url && <div className="library-link"><a href={artifact.url} target="_blank" rel="noopener noreferrer">Open published artifact ↗</a><input aria-label={`Published URL for ${artifact.title}`} readOnly value={artifact.url} /><button onClick={() => action.run(async () => { await navigator.clipboard.writeText(artifact.url!); setCopied(true); })}>{copied ? "Copied" : "Copy URL"}</button></div>}
-    <div className="row library-controls"><button onClick={() => setPreview(!preview)}>{preview ? "Close preview" : "Preview"}</button><button disabled={action.busy} onClick={download}>Download</button>
-      {artifact.published ? <button disabled={action.busy} onClick={() => action.run(async () => { await api.unpublishLibraryArtifact(artifact.id); setCopied(false); onChanged(); })}>Revoke link</button> : <button disabled={action.busy} onClick={() => action.run(async () => { await api.publishLibraryArtifact(artifact.id); onChanged(); })}>Publish link</button>}
-      <button disabled={action.busy} onClick={() => setConfirming(true)}>Delete</button></div>
-    <p className="hint">{artifact.published ? "Anyone holding the published URL can read this artifact. Revoke the link to stop access." : "Private: only Hivemind's operator and agents can reference this artifact."}</p>
-    {preview && <Preview artifact={artifact} />}
-    {confirming && <div role="alertdialog" aria-label={`Delete ${artifact.title}`}><p>Delete this artifact permanently? Its published link will stop working.</p><button className="danger" disabled={action.busy} onClick={() => action.run(async () => { await api.deleteLibraryArtifact(artifact.id); onChanged(); })}>Confirm delete</button><button onClick={() => setConfirming(false)}>Cancel</button></div>}
-    <ErrorNote error={action.error} />
+  const ext = extOf(artifact.filename);
+  const showFilename = artifact.filename !== artifact.title;
+  const where = [`Saved by ${artifact.persona_id || "operator"}`, ago(artifact.created_at), artifact.room_id].filter(Boolean).join(" · ");
+  return <article className="library-doc" data-artifact={artifact.id}>
+    <header className="library-doc-head">
+      <div className="library-head">
+        <span className="library-icon" aria-hidden="true">{artifactIcon(artifact)}</span>
+        <div className="library-titles">
+          <h2 title={artifact.title}>{artifact.title}</h2>
+          <p className="muted small">{ext ? ext.toUpperCase() : "FILE"} · {sizeLabel(artifact.size)}{showFilename ? <> · <span className="mono">{artifact.filename}</span></> : null} · {where}</p>
+        </div>
+        <Badge value={artifact.published ? "published" : "private"} tone={artifact.published ? "ok" : "muted"} />
+      </div>
+      {artifact.description && <p className="library-desc">{artifact.description}</p>}
+      <div className="row library-controls">
+        <button disabled={action.busy} onClick={download}>Download</button>
+        {artifact.published ? <button disabled={action.busy} title="Anyone holding the published URL can read this artifact." onClick={() => action.run(async () => { await api.unpublishLibraryArtifact(artifact.id); setCopied(false); onChanged(); })}>Revoke link</button> : <button disabled={action.busy} title="Private: only Hivemind's operator and agents can reference this artifact." onClick={() => action.run(async () => { await api.publishLibraryArtifact(artifact.id); onChanged(); })}>Publish link</button>}
+        <button className="danger library-delete" disabled={action.busy} onClick={() => setConfirming(true)}>Delete</button>
+      </div>
+      {artifact.url && <div className="library-link"><a href={artifact.url} target="_blank" rel="noopener noreferrer">Open published artifact ↗</a><input aria-label={`Published URL for ${artifact.title}`} readOnly value={artifact.url} /><button onClick={() => action.run(async () => { await navigator.clipboard.writeText(artifact.url!); setCopied(true); })}>{copied ? "Copied" : "Copy URL"}</button></div>}
+      {confirming && <div role="alertdialog" aria-label={`Delete ${artifact.title}`} className="row library-confirm"><span>Delete this artifact permanently? Its published link will stop working.</span><button className="danger" disabled={action.busy} onClick={() => action.run(async () => { await api.deleteLibraryArtifact(artifact.id); onDeleted(); })}>Confirm delete</button><button onClick={() => setConfirming(false)}>Cancel</button></div>}
+      <ErrorNote error={action.error} />
+    </header>
+    <Preview artifact={artifact} />
   </article>;
+}
+
+const extOf = (filename: string) => filename.includes(".") ? filename.split(".").pop()!.toLowerCase() : "";
+const DIAGRAM_EXT = ["mermaid", "mmd", "drawio", "puml", "plantuml", "uml", "ascii"];
+
+type Kind = "docs" | "diagrams" | "images" | "other";
+function kindOf(artifact: { media_type: string; filename: string }): Kind {
+  const ext = extOf(artifact.filename);
+  if (artifact.media_type.startsWith("image/")) return "images";
+  if (DIAGRAM_EXT.includes(ext)) return "diagrams";
+  if (artifact.media_type === "text/markdown" || ["md", "markdown", "txt", "html", "pdf"].includes(ext)) return "docs";
+  return "other";
+}
+
+function artifactIcon(artifact: { media_type: string; filename: string }) {
+  const kind = kindOf(artifact);
+  const ext = extOf(artifact.filename);
+  if (kind === "images") return "🖼️";
+  if (kind === "diagrams") return "📊";
+  if (kind === "docs") return ext === "pdf" ? "📕" : "📝";
+  if (["json", "yaml", "yml", "toml", "xml", "csv"].includes(ext)) return "🗂️";
+  if (["py", "js", "ts", "rs", "sh", "css", "sql"].includes(ext)) return "💻";
+  return "📄";
 }
 
 function Preview({ artifact }: { artifact: LibraryArtifact }) {

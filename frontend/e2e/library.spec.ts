@@ -7,9 +7,9 @@ test("uploads are saved privately, previewed, published and revoked", async ({ p
   await page.getByRole("button", { name: "New artifact", exact: true }).click();
   await page.getByLabel("Upload file (up to 8 MiB)").setInputFiles({ name: "library-browser-test.txt", mimeType: "text/plain", buffer: Buffer.from("A saved artifact survives its source file.") });
   await page.getByRole("button", { name: "Save artifact", exact: true }).click();
-  const card = page.locator("article.library-artifact").filter({ hasText: "library-browser-test.txt" }).first();
+  const card = page.locator("article.library-doc");
+  await expect(card.getByText("library-browser-test.txt").first()).toBeVisible();
   await expect(card.getByText("private", { exact: true })).toBeVisible();
-  await card.getByRole("button", { name: "Preview", exact: true }).click();
   await expect(card.locator("pre")).toHaveText("A saved artifact survives its source file.");
   await card.getByRole("button", { name: "Publish link", exact: true }).click();
   const link = card.getByRole("link", { name: "Open published artifact" });
@@ -23,7 +23,7 @@ test("uploads are saved privately, previewed, published and revoked", async ({ p
   expect((await request.get(url)).status()).toBe(404);
   await card.getByRole("button", { name: "Delete", exact: true }).click();
   await card.getByRole("button", { name: "Confirm delete", exact: true }).click();
-  await expect(card).toHaveCount(0);
+  await expect(page.locator("a.library-item").filter({ hasText: "library-browser-test.txt" })).toHaveCount(0);
 });
 
 test("mermaid and ascii diagrams can be created and previewed rendered", async ({ page }) => {
@@ -36,9 +36,8 @@ test("mermaid and ascii diagrams can be created and previewed rendered", async (
   await page.getByRole("button", { name: "Mermaid", exact: true }).click();
   await page.getByRole("button", { name: "Save artifact", exact: true }).click();
 
-  const mermaidCard = page.locator("article.library-artifact").filter({ hasText: "diagram.mermaid" }).first();
+  const mermaidCard = page.locator("article.library-doc").filter({ hasText: "diagram.mermaid" });
   await expect(mermaidCard).toBeVisible();
-  await mermaidCard.getByRole("button", { name: "Preview", exact: true }).click();
   await expect(mermaidCard.locator(".mermaid-wrap")).toBeVisible();
 
   // Toggle to Source
@@ -50,9 +49,8 @@ test("mermaid and ascii diagrams can be created and previewed rendered", async (
   await page.getByRole("button", { name: "ASCII", exact: true }).click();
   await page.getByRole("button", { name: "Save artifact", exact: true }).click();
 
-  const asciiCard = page.locator("article.library-artifact").filter({ hasText: "diagram.ascii" }).first();
+  const asciiCard = page.locator("article.library-doc").filter({ hasText: "diagram.ascii" });
   await expect(asciiCard).toBeVisible();
-  await asciiCard.getByRole("button", { name: "Preview", exact: true }).click();
   await expect(asciiCard.locator(".ascii-diagram")).toBeVisible();
 });
 
