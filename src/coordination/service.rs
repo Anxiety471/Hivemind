@@ -1349,6 +1349,14 @@ impl CoordinationService {
             if parent.status.is_terminal() {
                 return conflict(format!("task '{}' is {}", parent.id, parent.status.as_str()));
             }
+            // Committing a plan starts its parent, which would skip the
+            // prerequisites a submitted task is still waiting on.
+            if parent.id != root.id && parent.status == TaskStatus::Submitted {
+                return conflict(format!(
+                    "task '{}' is waiting on its dependencies; add sub-issues once it starts",
+                    parent.id
+                ));
+            }
             match root.status {
                 TaskStatus::Running => {}
                 // Waiting on an answer mid-run is fine; before any plan it is still planning.

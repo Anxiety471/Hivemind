@@ -421,7 +421,7 @@ impl ExecutionStore {
             "wakeup message must contain 1..1048576 bytes"
         );
         anyhow::ensure!(
-            key.is_none_or(|k| !k.trim().is_empty() && k.len() <= 200),
+            key.is_none_or(|k| !k.trim().is_empty() && k.len() <= 1024),
             "invalid idempotency key"
         );
         anyhow::ensure!(
@@ -514,18 +514,19 @@ impl ExecutionStore {
     /// records how many times it has fired, returns it to `queued`, and resets
     /// the delivery attempt count. The attempt bound applies to one fire, so a
     /// schedule that has fired many times stays requeue-able after a crash.
+    /// A schedule cancelled meanwhile stays cancelled.
     pub fn reschedule_chat_wakeup(&self, id: &str, next_due: i64, fires: i64) -> Result<()> {
         self.db.lock().execute(
-            "UPDATE chat_wakeups SET due_at=?, fires=?, state='queued', attempts=0 WHERE id=?",
+            "UPDATE chat_wakeups SET due_at=?, fires=?, state='queued', attempts=0 WHERE id=? AND state IN ('queued','dispatched')",
             params![next_due, fires, id],
         )?;
         Ok(())
     }
     /// Ends a chat schedule that has fired for the last time. `fires` counts
-    /// that last fire.
+    /// that last fire. A schedule cancelled meanwhile stays cancelled.
     pub fn complete_chat_wakeup(&self, id: &str, fires: i64) -> Result<()> {
         self.db.lock().execute(
-            "UPDATE chat_wakeups SET fires=?, state='completed' WHERE id=?",
+            "UPDATE chat_wakeups SET fires=?, state='completed' WHERE id=? AND state IN ('queued','dispatched')",
             params![fires, id],
         )?;
         Ok(())
@@ -1325,6 +1326,35 @@ mod tests {
         // A terminal schedule cannot be cancelled, and the state is unchanged.
         assert!(!db.cancel_chat_wakeup("wk_rep").unwrap());
         assert_eq!(db.chat_wakeups_for("main").unwrap()[0].state, "completed");
+    }
+    #[test]
+    fn a_cancelled_schedule_stays_cancelled_when_its_fire_finishes() {
+        let db = ExecutionStore::open(":memory:", Default::default()).unwrap();
+        let target = json!({"type":"main"});
+        for (id, repeats) in [("wk_rep", Some(60)), ("wk_once", None)] {
+            db.insert_chat_wakeup(
+                id,
+                "main",
+                &target,
+                "Intent: poll",
+                now() - 1,
+                crate::wakeup::MAX_PENDING_CHAT_WAKEUPS,
+                None,
+                None,
+                repeats,
+                None,
+            )
+            .unwrap();
+            db.mark_chat_wakeup(id, "dispatched").unwrap();
+            // The user cancels while the fire is being recorded.
+            assert!(db.cancel_chat_wakeup(id).unwrap());
+        }
+        db.reschedule_chat_wakeup("wk_rep", now() + 60, 1).unwrap();
+        db.complete_chat_wakeup("wk_once", 1).unwrap();
+        for row in db.chat_wakeups_for("main").unwrap() {
+            assert_eq!(row.state, "cancelled", "{} was revived", row.id);
+        }
+        assert!(db.due_chat_wakeups(10).unwrap().is_empty());
     }
     #[test]
     fn cancelling_a_chat_wakeup_stops_only_a_live_schedule() {

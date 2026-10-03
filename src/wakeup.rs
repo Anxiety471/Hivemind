@@ -289,6 +289,15 @@ impl ToolHost for ChatWakeupTools {
         )
         .map_err(|error| anyhow::anyhow!("{error}"))?;
         validate_repeat(repeats, count).map_err(|error| anyhow::anyhow!("{error}"))?;
+        // Keys are the agent's own names, so they are scoped to this room and
+        // persona: the same key in another room is a different schedule.
+        let key = key
+            .map(|key| {
+                check_text("idempotency key", &key, 200)
+                    .map(|key| format!("{room}\u{1f}{persona}\u{1f}{key}"))
+            })
+            .transpose()
+            .map_err(|error| anyhow::anyhow!("{error}"))?;
         let id = new_id("wk");
         // The clean body is stored; the delivery marker is added when the
         // wakeup fires, so the list endpoint shows what the agent wrote.
@@ -458,6 +467,28 @@ mod tests {
         );
         // Still in the future, so nothing is handed to the turn queue yet.
         assert!(execution.due_chat_wakeups(10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_wakeup_key_is_scoped_to_its_room_and_persona() {
+        let (hosts, execution) = hosts();
+        let schedule = |room: &str, persona: &str| {
+            hosts
+                .execute(
+                    room,
+                    persona,
+                    "wakeup.schedule",
+                    &json!({"delay_seconds": 60, "intent": "check in", "key": "daily"}),
+                )
+                .unwrap()
+        };
+        assert!(schedule("main", "Lead").starts_with("scheduled"));
+        assert!(schedule("main", "Lead").starts_with("already scheduled"));
+        // The same key elsewhere is someone else's schedule, not a duplicate.
+        assert!(schedule("solo-Lead", "Lead").starts_with("scheduled"));
+        assert!(schedule("main", "Other").starts_with("scheduled"));
+        assert_eq!(execution.chat_wakeups_for("main").unwrap().len(), 2);
+        assert_eq!(execution.chat_wakeups_for("solo-Lead").unwrap().len(), 1);
     }
 
     #[test]

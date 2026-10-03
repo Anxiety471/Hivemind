@@ -1989,7 +1989,20 @@ fn operators_spawn_nested_child_tasks() {
         Err(CoordError::Conflict(_))
     ));
 
-    let (root, api, _) = planned(&service);
+    let (root, api, ui) = planned(&service);
+    // `ui` waits on `api`: a sub-issue would start it early, skipping that.
+    assert_eq!(
+        service.detail(&ui).unwrap().task.status,
+        TaskStatus::Submitted
+    );
+    assert!(matches!(
+        service.add_child(&ui, child("too soon"), "user"),
+        Err(CoordError::Conflict(_))
+    ));
+    assert_eq!(
+        service.detail(&ui).unwrap().task.status,
+        TaskStatus::Submitted
+    );
     let sub = service
         .add_child(&api, child("api schema"), "user")
         .unwrap();
