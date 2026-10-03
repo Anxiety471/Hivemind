@@ -25,6 +25,8 @@ The shell CLI is the main way to inspect Hivemind, run one-shot prompts, and man
 | `hivemind task list` / `show` / `cancel` / `pause` / `resume <id>` | Inspect and control tasks |
 | `hivemind task watch <id>` | Follow a task's durable events; Ctrl-C stops watching, never the task |
 | `hivemind task run [--until-idle]` | Process stored tasks in the foreground |
+| `hivemind issue list` / `show` / `dismiss <id>` | Inspect the backlog. Issues are not implemented |
+| `hivemind issue run` | Run one council now. Do not run this while `serve` is already in a council |
 | `hivemind access show` | Print each persona's effective permissions |
 | `hivemind access audit [--denied] [--persona <p>] [--limit N]` | Read the access audit log |
 

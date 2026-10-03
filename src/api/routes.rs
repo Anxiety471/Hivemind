@@ -34,6 +34,7 @@ pub(super) fn router(core: Arc<HivemindCore>, shutdown: watch::Receiver<bool>) -
         .merge(super::artifacts::routes())
         .merge(super::jobs::routes())
         .merge(super::tasks::routes())
+        .merge(super::issues::routes())
         .merge(super::rooms::routes())
         .merge(super::room_settings::routes())
         .merge(super::chat_groups::routes())

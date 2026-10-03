@@ -8,6 +8,7 @@ pub mod coordination;
 pub mod core;
 pub mod events;
 pub mod identity;
+pub mod issues;
 pub mod memory;
 pub mod runtime;
 pub mod shared_workspace;

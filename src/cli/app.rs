@@ -88,6 +88,9 @@ async fn run(cli: Cli) -> Result<()> {
                 Commands::Task { command } => {
                     super::tasks::task_command(config, &cli.config, command).await
                 }
+                Commands::Issue { command } => {
+                    super::issues::issue_command(config, &cli.config, command).await
+                }
                 Commands::Access { command } => {
                     super::access::access_command(config, &cli.config, command).await
                 }

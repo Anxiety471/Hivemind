@@ -158,6 +158,15 @@ impl ExecutionStore {
             private_env: Mutex::new(Vec::new()),
         })
     }
+    pub fn has_active_jobs(&self) -> Result<bool> {
+        let count: i64 = self.db.lock().query_row(
+            "SELECT COUNT(*) FROM jobs WHERE status IN ('queued','running')",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
     pub fn room_settings(&self, room: &str) -> Result<RoomSettings> {
         Ok(self
             .db

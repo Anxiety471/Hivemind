@@ -62,6 +62,11 @@ pub(super) enum Commands {
         #[command(subcommand)]
         command: TaskCommand,
     },
+    /// Discuss and file the next features, improvements, and bug fixes.
+    Issue {
+        #[command(subcommand)]
+        command: IssueCommand,
+    },
     /// Inspect persona permissions and the access audit log.
     Access {
         #[command(subcommand)]
@@ -127,6 +132,30 @@ pub(super) enum TaskCommand {
         #[arg(long)]
         until_idle: bool,
     },
+}
+
+#[derive(Debug, Subcommand)]
+pub(super) enum IssueCommand {
+    /// List backlog issues. They are not implemented from here.
+    List {
+        /// `open` (default), `dismissed`, or `all`.
+        #[arg(long)]
+        status: Option<String>,
+        /// `feature`, `improvement`, or `bug`.
+        #[arg(long)]
+        kind: Option<String>,
+    },
+    Show {
+        id: String,
+    },
+    /// Close an issue without implementing it.
+    Dismiss {
+        id: String,
+        #[arg(long)]
+        reason: Option<String>,
+    },
+    /// Run one council now. `serve` also runs councils on the configured cadence.
+    Run,
 }
 
 #[derive(Debug, Subcommand)]

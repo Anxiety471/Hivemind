@@ -7,6 +7,7 @@ pub use auth::ServerConfig;
 mod chat_groups;
 mod cors;
 mod document;
+mod issues;
 mod error;
 mod protocol;
 mod room_settings;
@@ -60,6 +61,20 @@ pub async fn serve(core: Arc<HivemindCore>, port: u16) -> Result<()> {
     if scheduler.is_some() {
         println!("Coordination scheduler running");
     }
+    let issues_settings = core.issues().config();
+    if issues_settings.enabled {
+        println!(
+            "Issue council {} (every {}s{})",
+            issues_settings.mode.as_str(),
+            issues_settings.interval_secs,
+            if issues_settings.mode.as_str() == "automatic" {
+                format!(", after {}s quiet", issues_settings.idle_secs)
+            } else {
+                String::new()
+            }
+        );
+    }
+    let issues = tokio::spawn(crate::issues::Scheduler::new(Arc::clone(&core)).run());
     let jobs = tokio::spawn(jobs::run(core.clone()));
     let shutdown_core = Arc::clone(&core);
     let serve_result = axum::serve(listener, app)
@@ -76,6 +91,8 @@ pub async fn serve(core: Arc<HivemindCore>, port: u16) -> Result<()> {
     if let Some(scheduler) = scheduler {
         let _ = tokio::time::timeout(std::time::Duration::from_secs(10), scheduler).await;
     }
+    let _ = core.issues().interrupt_running();
+    issues.abort();
     let _ = jobs.await;
     serve_result?;
     println!("API stopped");

@@ -32,6 +32,18 @@ pub(super) fn status(config: &HivemindConfig) -> Result<()> {
             .collect::<Vec<_>>()
             .join(", ")
     );
+    println!(
+        "Issue council: {}",
+        if config.issues.enabled {
+            format!(
+                "{} every {}s",
+                config.issues.mode.as_str(),
+                config.issues.interval_secs
+            )
+        } else {
+            "off".to_owned()
+        }
+    );
     println!("Groups:");
     for group in &config.groups {
         println!(

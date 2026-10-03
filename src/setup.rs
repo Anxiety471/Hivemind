@@ -293,6 +293,7 @@ mod tests {
             context: hivemind::config::ContextConfig::default(),
             memory: Default::default(),
             coordination: Default::default(),
+            issues: Default::default(),
             roles: Default::default(),
             workspaces: Default::default(),
             skills: Default::default(),

@@ -64,6 +64,19 @@ Engineer = "Implementation Reviewer"
 # [skills]
 # dirs = ["~/.agents/skills"]
 
+# Issue council: agents discuss the next feature, improvement, or bug fix and
+# file it. Issues are not implemented. Off until enabled. `automatic` waits
+# until the hive has been quiet; `scheduled` runs on the interval either way.
+# [issues]
+# enabled = false
+# mode = "automatic"          # or "scheduled"
+# interval_secs = 86400       # minimum gap between councils; the schedule in scheduled mode
+# idle_secs = 1800            # automatic mode: how long chat and tasks must stay quiet
+# max_issues_per_round = 5
+# members = ["Engineer", "Reviewer"]
+# group = "development"       # optional; overrides members
+# workspace = "."             # optional path the council is asked to consider
+
 # Durable execution defaults: limits are disabled until configured.
 # [execution]
 # task_token_limit = 100000

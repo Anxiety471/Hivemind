@@ -11,6 +11,7 @@
 - [Workspaces](Workspaces)
 - [Access Control](Access-Control)
 - [Coordination](Coordination)
+- [Issues](Issues)
 
 **Reference**
 - [HTTP and WebSocket API](HTTP-and-WebSocket-API)
