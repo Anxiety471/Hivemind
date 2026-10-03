@@ -64,29 +64,29 @@ function mockStyle(palette: Palette): CSSProperties {
   } as CSSProperties;
 }
 
-function shownPalette(rice: Rice, scheme: Scheme): Palette {
+function shownPalette(rice: Rice, systemScheme: Scheme): Palette {
   if (rice.appearance === "light") return rice.light;
   if (rice.appearance === "dark") return rice.dark;
-  return scheme === "dark" ? rice.dark : rice.light;
+  return systemScheme === "dark" ? rice.dark : rice.light;
 }
 
 function RiceCard({
   rice,
   selected,
-  scheme,
+  systemScheme,
   onSelect,
   onDelete,
 }: {
   rice: Rice;
   selected: boolean;
-  scheme: Scheme;
+  systemScheme: Scheme;
   onSelect: () => void;
   onDelete?: () => void;
 }) {
   return (
     <div className={selected ? "rice-card on" : "rice-card"}>
       <button type="button" className="rice-card-hit" onClick={onSelect} aria-pressed={selected}>
-        <span className="rice-mock" style={mockStyle(shownPalette(rice, scheme))}>
+        <span className="rice-mock" style={mockStyle(shownPalette(rice, systemScheme))}>
           <span className="rice-mock-side" />
           <span className="rice-mock-main">
             <span className="rice-mock-chip" />
@@ -165,6 +165,7 @@ function ColorField({ label, value, onChange }: { label: string; value: string; 
 export function RiceView() {
   const { store, snap } = useRice();
   const [paletteMode, setPaletteMode] = useState<Scheme>(snap.scheme);
+  useEffect(() => setPaletteMode(snap.scheme), [snap.scheme]);
   const [name, setName] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -196,7 +197,7 @@ export function RiceView() {
             <RiceCard
               key={rice.id}
               rice={snap.baseId === rice.id ? snap.active : rice}
-              scheme={snap.scheme}
+              systemScheme={snap.systemScheme}
               selected={snap.baseId === rice.id}
               onSelect={() => {
                 store.select(rice.id);
@@ -218,7 +219,7 @@ export function RiceView() {
               <RiceCard
                 key={rice.id}
                 rice={snap.baseId === rice.id ? snap.active : rice}
-                scheme={snap.scheme}
+                systemScheme={snap.systemScheme}
                 selected={snap.baseId === rice.id}
                 onSelect={() => {
                   store.select(rice.id);
@@ -264,8 +265,8 @@ export function RiceView() {
           label="Palette"
           value={paletteMode}
           options={[
-            { id: "light", label: "Light colors" },
-            { id: "dark", label: "Dark colors" },
+            { id: "light", label: "Light" },
+            { id: "dark", label: "Dark" },
           ]}
           onChange={setPaletteMode}
         />

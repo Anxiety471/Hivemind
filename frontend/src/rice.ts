@@ -51,7 +51,10 @@ export type Snapshot = {
   active: Rice;
   baseId: string;
   dirty: boolean;
+  /** Palette currently painted, after appearance is resolved. */
   scheme: Scheme;
+  /** Operating system scheme, ignoring the rice's own appearance. */
+  systemScheme: Scheme;
 };
 
 const STORAGE_KEY = "hivemind.rice";
@@ -825,6 +828,7 @@ export function createRiceStore(storage: StorageLike, env: RiceEnv): RiceStore {
       baseId: base().id,
       dirty: draft !== null && !sameLook(draft, base()),
       scheme: resolveScheme(rice.appearance, env.scheme),
+      systemScheme: env.scheme(),
     };
   };
 
