@@ -41,6 +41,7 @@ No actionable P0/P1/P2 differences remain within the requested Linear-inspired d
 - Integrated main `b70dba09546ad96c15b030bd65e37cc9df1d4791` (agent wakeups). Issue schema V3 preserves the existing V2 delayed deliveries; a regression test verifies their due times survive.
 - 335 Rust tests passed (311 library and 24 binary); formatting and Clippy across all targets/features with warnings denied passed.
 - Typecheck and production build passed; existing large-chunk build warning remains.
+- Bun 1.4.2 frozen install, production build, and all 51 Bun unit tests passed after synchronizing the icon dependency in `bun.lock`.
 - 51 frontend unit tests passed, including lifecycle grouping and view membership.
 - 14 browser tests passed with four workers on the final main integration, after fixing destructive repeated fixture setup in worker imports. The resumed environment used registry-sourced Chromium 153 with a temporary executable-path override; no extra browser dependency or runtime configuration is committed.
 - Real issue flow verified at 1440 × 1000 and 390 × 844; populated grouping/filter/navigation verified at 1240 × 660 and 390 × 844.
