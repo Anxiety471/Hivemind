@@ -307,7 +307,7 @@ function renderInline(nodes: Inline[]): ReactNode[] {
         return <del key={i}>{renderInline(n.v)}</del>;
       case "link":
         return (
-          <a key={i} href={/^(https?:|mailto:)/i.test(n.href) ? n.href : undefined} target="_blank" rel="noopener noreferrer">
+          <a key={i} href={n.href.startsWith("https://") || n.href.startsWith("http://") || n.href.startsWith("mailto:") ? n.href : undefined} target="_blank" rel="noopener noreferrer">
             {renderInline(n.v)}
           </a>
         );
