@@ -38,7 +38,7 @@ pub struct Catalog {
 }
 
 pub fn is_runtime(runtime: &str) -> bool {
-    matches!(runtime, "pi" | "omp" | "opencode")
+    matches!(runtime, "pi" | "omp" | "opencode" | "codex" | "claude_code")
 }
 
 /// List `runtime`'s models. `harness_dir` is Hivemind's runtime directory (needed so
@@ -52,6 +52,26 @@ pub async fn list(config: &RuntimeConfig, runtime: &str, harness_dir: &Path) -> 
                 opencode_models(
                     &config.opencode_binary,
                     &harness_dir.join("opencode"),
+                    &config.private_env,
+                )
+                .await
+            }
+            "codex" => {
+                acp_models(
+                    &config.codex_acp_binary,
+                    &[],
+                    &[("NO_BROWSER", "1")],
+                    &[],
+                    &config.private_env,
+                )
+                .await
+            }
+            "claude_code" => {
+                acp_models(
+                    &config.claude_code_acp_binary,
+                    &[],
+                    &[("NO_BROWSER", "1")],
+                    &[],
                     &config.private_env,
                 )
                 .await
@@ -70,8 +90,8 @@ pub async fn list(config: &RuntimeConfig, runtime: &str, harness_dir: &Path) -> 
     Ok(Catalog {
         runtime: runtime.to_owned(),
         models,
-        supports_reasoning: runtime != "opencode",
-        supports_fast: runtime == "omp",
+        supports_reasoning: !matches!(runtime, "opencode"),
+        supports_fast: matches!(runtime, "omp" | "codex"),
     })
 }
 
@@ -221,17 +241,37 @@ async fn opencode_models(
         super::opencode::KEEP_PROVIDERS_PLUGIN,
     )
     .context("preparing Hivemind's OpenCode config directory")?;
-    let cwd = std::env::temp_dir();
-    let mut rpc = Rpc::spawn(
-        command(binary, private_env)
-            .arg("acp")
-            .current_dir(&cwd)
-            .env("OPENCODE_CONFIG_DIR", config_dir)
-            .env("OPENCODE_DISABLE_PROJECT_CONFIG", "1")
-            .env_remove("OPENCODE_CONFIG")
-            .env_remove("OPENCODE_CONFIG_CONTENT"),
+    let config_dir_text = config_dir.display().to_string();
+    acp_models(
         binary,
-    )?;
+        &["acp"],
+        &[
+            ("OPENCODE_CONFIG_DIR", config_dir_text.as_str()),
+            ("OPENCODE_DISABLE_PROJECT_CONFIG", "1"),
+        ],
+        &["OPENCODE_CONFIG", "OPENCODE_CONFIG_CONTENT"],
+        private_env,
+    )
+    .await
+}
+
+async fn acp_models(
+    binary: &str,
+    args: &[&str],
+    extra_env: &[(&str, &str)],
+    env_remove: &[&str],
+    private_env: &[String],
+) -> Result<Vec<ModelEntry>> {
+    let cwd = std::env::temp_dir();
+    let mut rpc_command = command(binary, private_env);
+    rpc_command.args(args).current_dir(&cwd);
+    for (name, value) in extra_env {
+        rpc_command.env(name, value);
+    }
+    for name in env_remove {
+        rpc_command.env_remove(name);
+    }
+    let mut rpc = Rpc::spawn(&mut rpc_command, binary)?;
     rpc.request(
         1,
         "initialize",
@@ -241,7 +281,6 @@ async fn opencode_models(
     let created = rpc
         .request(2, "session/new", json!({"cwd": cwd, "mcpServers": []}))
         .await?;
-    // The probe session is not wanted in OpenCode's history.
     if let Some(session) = created["sessionId"].as_str() {
         let _ = rpc
             .request(3, "session/delete", json!({"sessionId": session}))
@@ -251,23 +290,43 @@ async fn opencode_models(
         .as_array()
         .and_then(|all| all.iter().find(|option| option["id"] == "model"))
         .and_then(|option| option["options"].as_array())
-        .context("OpenCode did not list any models")?;
+        .or_else(|| {
+            created
+                .pointer("/models/availableModels")
+                .and_then(Value::as_array)
+        })
+        .context("the ACP adapter did not list any models")?;
     Ok(options
         .iter()
         .filter_map(|option| {
-            let id = option["value"].as_str()?;
-            let (provider, _) = id.split_once('/')?;
-            let name = option["name"].as_str().unwrap_or(id);
+            let id = option["value"]
+                .as_str()
+                .or_else(|| option["modelId"].as_str())?;
+            let provider = id
+                .split_once('/')
+                .map(|(provider, _)| provider)
+                .unwrap_or("default");
+            let name = option["name"]
+                .as_str()
+                .or_else(|| option["displayName"].as_str())
+                .unwrap_or(id);
             Some(ModelEntry {
                 id: id.to_owned(),
-                // OpenCode names read "provider/Display Name"; the provider already has its own column.
                 name: name
                     .strip_prefix(&format!("{provider}/"))
                     .unwrap_or(name)
                     .to_owned(),
                 provider: provider.to_owned(),
-                reasoning: Vec::new(),
-                context_window: None,
+                reasoning: option["reasoning"]
+                    .as_array()
+                    .map(|levels| {
+                        levels
+                            .iter()
+                            .filter_map(|l| l.as_str().map(str::to_owned))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                context_window: option["contextWindow"].as_u64(),
             })
         })
         .collect())

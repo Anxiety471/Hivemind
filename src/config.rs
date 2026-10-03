@@ -310,6 +310,13 @@ pub struct RuntimeConfig {
     pub pi_binary: String,
     #[serde(default = "default_opencode_binary")]
     pub opencode_binary: String,
+    #[serde(default = "default_codex_acp_binary")]
+    pub codex_acp_binary: String,
+    /// Optional Codex CLI passed to `codex-acp` as `CODEX_PATH`; empty uses the adapter default.
+    #[serde(default)]
+    pub codex_binary: String,
+    #[serde(default = "default_claude_code_acp_binary")]
+    pub claude_code_acp_binary: String,
     /// Maximum seconds a runtime prompt may stay inactive without progress; 0
     /// disables the timeout. Progress (streaming tokens, tool events, reasoning)
     /// resets this inactivity window.
@@ -333,6 +340,9 @@ impl Default for RuntimeConfig {
             omp_binary: default_omp_binary(),
             pi_binary: default_pi_binary(),
             opencode_binary: default_opencode_binary(),
+            codex_acp_binary: default_codex_acp_binary(),
+            codex_binary: String::new(),
+            claude_code_acp_binary: default_claude_code_acp_binary(),
             prompt_timeout_secs: default_runtime_prompt_timeout_secs(),
             idle_timeout_secs: default_idle_timeout_secs(),
             prompt_retries: default_prompt_retries(),
@@ -691,6 +701,12 @@ fn default_pi_binary() -> String {
 }
 fn default_opencode_binary() -> String {
     "opencode".into()
+}
+fn default_codex_acp_binary() -> String {
+    "codex-acp".into()
+}
+fn default_claude_code_acp_binary() -> String {
+    "claude-code-acp".into()
 }
 fn default_runtime_prompt_timeout_secs() -> u64 {
     300

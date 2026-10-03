@@ -108,7 +108,10 @@ export function FirstRunSetup({ onComplete, onSkip }: { onComplete: () => void; 
       ...persona,
       model: persona.model?.trim() || undefined,
       reasoning: persona.runtime === "opencode" ? undefined : persona.reasoning?.trim() || undefined,
-      fast: persona.runtime === "omp" ? persona.fast : undefined,
+      fast:
+        persona.runtime === "omp" || persona.runtime === "codex"
+          ? persona.fast
+          : undefined,
     }));
     try {
       const result = await api.completeSetup(configuredPersonas);
@@ -223,7 +226,7 @@ export function FirstRunSetup({ onComplete, onSkip }: { onComplete: () => void; 
                           <input value={persona.reasoning ?? ""} maxLength={64} onChange={(event) => updatePersona(index, { reasoning: event.currentTarget.value })} placeholder="high" />
                         </label>
                       )}
-                      {persona.runtime === "omp" && (
+                      {(persona.runtime === "omp" || persona.runtime === "codex") && (
                         <label className="setup-checkbox">
                           <input type="checkbox" checked={persona.fast ?? false} onChange={(event) => updatePersona(index, { fast: event.currentTarget.checked })} />
                           Start OMP in fast mode

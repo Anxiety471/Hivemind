@@ -50,6 +50,8 @@ pub(super) fn status(config: &HivemindConfig) -> Result<()> {
             "omp" => &config.runtime.omp_binary,
             "pi" => &config.runtime.pi_binary,
             "opencode" => &config.runtime.opencode_binary,
+            "codex" => &config.runtime.codex_acp_binary,
+            "claude_code" => &config.runtime.claude_code_acp_binary,
             _ => continue,
         };
         println!(

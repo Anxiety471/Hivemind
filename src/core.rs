@@ -500,8 +500,11 @@ impl HivemindCore {
                 "agent id 'main' is reserved"
             );
             anyhow::ensure!(
-                matches!(agent.runtime.as_str(), "pi" | "omp" | "opencode"),
-                "runtime must be one of pi, omp, opencode"
+                matches!(
+                    agent.runtime.as_str(),
+                    "pi" | "omp" | "opencode" | "codex" | "claude_code"
+                ),
+                "runtime must be one of pi, omp, opencode, codex, claude_code"
             );
         }
         staged.validate()?;
