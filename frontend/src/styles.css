@@ -2711,3 +2711,20 @@ li.task-item p {
 .preview-toolbar { display: flex; gap: 4px; margin-bottom: 8px; }
 .preview-toolbar button { padding: 3px 10px; font-size: 11px; border-radius: 6px; }
 .preview-toolbar button.active { background: var(--accent-soft); color: var(--text); border-color: var(--accent); }
+
+
+/* Issue workflow reuses task execution controls and the existing split layout. */
+.issue-filters { padding: 0 1rem 1rem; display: grid; gap: .6rem; border-bottom: 1px solid var(--border); }
+.issue-filters label { display: grid; gap: .25rem; min-width: 0; font-size: .8rem; }
+.issue-filters .row > label { flex: 1; }
+.issue-labels { flex-wrap: wrap; gap: .3rem; margin: .4rem 0; }
+.issue-description, .issue-timeline p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.automation-flow { margin: .7rem 0 1rem; }
+.issue-timeline { list-style: none; padding: 0; margin: 1rem 0; }
+.issue-timeline li { margin: 0 0 .75rem; padding: .75rem; border-left: 2px solid var(--border); }
+.issue-timeline .row, .issue-metadata > .row { flex-wrap: wrap; }
+.issue-timeline p { margin: .5rem 0 0; }
+.issue-event { font-size: .85rem; }
+.issue-comment { background: var(--panel-2); border-radius: .4rem; }
+.issue-discussion label { display: grid; gap: .5rem; }
+@media (max-width: 700px) { .issue-filters .row { flex-wrap: wrap; } .issue-metadata .grow { flex-basis: 100%; } }

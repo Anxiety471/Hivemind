@@ -27,6 +27,8 @@ use crate::{
 /// Public event types, in the order the wire protocol reserves them.
 pub const EVENT_TYPES: &[&str] = &[
     "task.created",
+    "task.issue_updated",
+    "task.commented",
     "task.status_changed",
     "task.plan_committed",
     "task.progress",
@@ -70,6 +72,8 @@ pub struct ToolCtx {
 }
 
 pub struct SubmitTask {
+    pub issue: IssueFields,
+    pub auto_start: bool,
     pub objective: String,
     pub acceptance: Vec<String>,
     pub capabilities: Vec<String>,
@@ -198,6 +202,24 @@ fn conflict<T>(message: impl Into<String>) -> CoordResult<T> {
     Err(CoordError::Conflict(message.into()))
 }
 
+fn validate_issue(mut fields: IssueFields) -> CoordResult<IssueFields> {
+    fields.description = fields.description.trim().to_owned();
+    if !fields.description.is_empty() {
+        fields.description = check_text("description", &fields.description, 2400)?;
+    }
+    if fields.labels.len() > 12 {
+        return invalid("at most 12 labels");
+    }
+    fields.labels = fields
+        .labels
+        .iter()
+        .map(|label| check_text("label", label, 40).map(|s| s.to_lowercase()))
+        .collect::<CoordResult<Vec<_>>>()?;
+    fields.labels.sort();
+    fields.labels.dedup();
+    Ok(fields)
+}
+
 impl CoordinationService {
     pub fn set_execution(&self, store: Arc<crate::execution::ExecutionStore>) {
         let _ = self.execution.set(store);
@@ -312,6 +334,7 @@ impl CoordinationService {
 
     pub fn submit(&self, req: SubmitTask) -> CoordResult<TaskDetail> {
         self.require_enabled()?;
+        let issue = validate_issue(req.issue)?;
         let objective = check_text("objective", &req.objective, 8000)?;
         if req.acceptance.len() > 12 {
             return invalid("at most 12 acceptance criteria");
@@ -365,6 +388,8 @@ impl CoordinationService {
                 reason: None,
                 idempotency_key: key.clone(),
             })?;
+            db.set_issue(&id, &issue)?;
+            if !req.auto_start { db.set_paused(&id, true)?; }
             db.init_usage(&id, self.config.max_dispatches, self.config.max_tool_actions, self.config.max_messages, self.config.max_elapsed_secs)?;
             db.event(&id, Some(&id), "user", "task.created", serde_json::json!({"objective": clip(&objective, 200), "coordinator": coordinator}))?;
             let root = db.task_or_err(&id)?;
@@ -392,6 +417,57 @@ impl CoordinationService {
         })?;
         self.changed();
         self.detail(&id)
+    }
+
+    /// Operator edits are revision guarded. Execution context cannot change under a live attempt.
+    pub fn update_issue(
+        &self,
+        id: &str,
+        fields: IssueFields,
+        expected_revision: i64,
+    ) -> CoordResult<TaskDetail> {
+        self.require_enabled()?;
+        let fields = validate_issue(fields)?;
+        self.store.write(|db| {
+            let task = db.task_or_err(id)?;
+            if task.revision != expected_revision { return conflict("task changed; reload before editing"); }
+            if task.issue.fields.description != fields.description && !task.status.is_terminal() {
+                let root = db.task_or_err(&task.root_id)?;
+                if !root.paused || db.has_running_in_root(&root.id)? {
+                    return conflict("pause automation and wait for active attempts before changing the description");
+                }
+            }
+            db.set_issue(id, &fields)?;
+            db.event(&task.root_id,Some(id),"user","task.issue_updated",serde_json::json!({"labels":fields.labels,"priority":fields.priority}))?;
+            Ok(())
+        })?;
+        self.changed();
+        self.detail(id)
+    }
+
+    /// Discussion alone never retries a task or wakes an agent. Recent notes enter the next capsule.
+    pub fn comment(&self, id: &str, body: &str) -> CoordResult<TaskComment> {
+        let body = check_text("comment", body, 4000)?;
+        let comment = self.store.write(|db| {
+            let task = db.task_or_err(id)?;
+            db.add_comment(&task, "user", &body)
+        })?;
+        self.changed();
+        Ok(comment)
+    }
+
+    pub fn timeline(&self, id: &str, before: Option<i64>) -> CoordResult<Vec<CoordinationEvent>> {
+        self.store.read(|db| {
+            let task = db.task_or_err(id)?;
+            db.task_timeline(&task, before)
+        })
+    }
+
+    pub fn comments(&self, id: &str, after: i64, limit: usize) -> CoordResult<Vec<TaskComment>> {
+        self.store.read(|db| {
+            db.task_or_err(id)?;
+            db.comments(id, after, limit)
+        })
     }
 
     fn default_workspace(&self) -> String {
@@ -1651,6 +1727,8 @@ impl CoordinationService {
                 db.extend_usage(root_id, extra_dispatches, extra_secs)?;
             }
             if root.paused {
+                // A saved backlog issue starts its elapsed budget on the first dispatch authorization.
+                db.start_unused_budget(root_id)?;
                 db.set_paused(root_id, false)?;
                 db.event(
                     root_id,

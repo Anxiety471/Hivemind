@@ -100,6 +100,17 @@ CREATE TABLE task_decisions (
 CREATE INDEX decisions_task ON task_decisions(task_id, state);
 PRAGMA user_version=1;";
 
+const SCHEMA_V2: &str = "
+CREATE TABLE task_issues (
+  number INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL UNIQUE REFERENCES tasks(id),
+  description TEXT NOT NULL DEFAULT '', labels TEXT NOT NULL DEFAULT '[]', priority TEXT NOT NULL DEFAULT 'normal');
+INSERT INTO task_issues(task_id) SELECT id FROM tasks ORDER BY created_at,id;
+CREATE TABLE task_comments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL REFERENCES tasks(id),
+  author TEXT NOT NULL, body TEXT NOT NULL, created_at INTEGER NOT NULL);
+CREATE INDEX comments_task ON task_comments(task_id,id);
+PRAGMA user_version=2;";
+
 pub struct CoordinationStore {
     connection: Mutex<Connection>,
     clock: AtomicI64,
@@ -126,6 +137,9 @@ impl CoordinationStore {
         let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
         if version < 1 {
             connection.execute_batch(&format!("BEGIN IMMEDIATE;{SCHEMA_V1}COMMIT;"))?;
+        }
+        if version < 2 {
+            connection.execute_batch(&format!("BEGIN IMMEDIATE;{SCHEMA_V2}COMMIT;"))?;
         }
         Ok(Self {
             connection: Mutex::new(connection),
@@ -205,6 +219,7 @@ const TASK_COLS: &str = "id,root_id,parent_id,depth,kind,objective,acceptance,ca
 fn task_row(r: &Row<'_>) -> rusqlite::Result<Task> {
     Ok(Task {
         id: r.get(0)?,
+        issue: TaskIssue::default(),
         root_id: r.get(1)?,
         parent_id: r.get(2)?,
         depth: r.get(3)?,
@@ -309,6 +324,10 @@ pub struct TaskFilter<'a> {
     pub status: Option<TaskStatus>,
     pub owner: Option<&'a str>,
     pub roots_only: bool,
+    pub query: Option<&'a str>,
+    pub label: Option<&'a str>,
+    pub state: Option<&'a str>,
+    pub priority: Option<&'a str>,
     /// Keyset cursor: return tasks created strictly after this task id.
     pub after: Option<&'a str>,
     pub limit: usize,
@@ -352,7 +371,106 @@ impl Db<'_> {
         self.c
             .prepare_cached("INSERT INTO tasks(id,root_id,parent_id,depth,kind,objective,acceptance,capabilities,workspace,coordinator,owner,reviewer,status,status_reason,revision,paused,feedback,idempotency_key,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,1,0,'[]',?15,?16,?16)")?
             .execute(params![t.id, t.root_id, t.parent_id, t.depth, t.kind.as_str(), t.objective, dump(&t.acceptance), dump(&t.capabilities), t.workspace, t.coordinator, t.owner, t.reviewer, t.status.as_str(), t.reason, t.idempotency_key, self.now])?;
+        self.c
+            .execute("INSERT INTO task_issues(task_id) VALUES(?1)", [&t.id])?;
         Ok(())
+    }
+
+    pub fn issue(&self, id: &str) -> CoordResult<TaskIssue> {
+        Ok(self
+            .c
+            .prepare_cached(
+                "SELECT number,description,labels,priority FROM task_issues WHERE task_id=?1",
+            )?
+            .query_row([id], |r| {
+                Ok(TaskIssue {
+                    number: r.get(0)?,
+                    fields: IssueFields {
+                        description: r.get(1)?,
+                        labels: json(r.get(2)?)?,
+                        priority: parse(r.get(3)?, IssuePriority::parse)?,
+                    },
+                })
+            })?)
+    }
+
+    pub fn set_issue(&self, id: &str, fields: &IssueFields) -> CoordResult<()> {
+        self.c.execute(
+            "UPDATE task_issues SET description=?2,labels=?3,priority=?4 WHERE task_id=?1",
+            params![
+                id,
+                fields.description,
+                dump(&fields.labels),
+                fields.priority.as_str()
+            ],
+        )?;
+        self.c.execute(
+            "UPDATE tasks SET revision=revision+1,updated_at=?2 WHERE id=?1",
+            params![id, self.now],
+        )?;
+        Ok(())
+    }
+
+    pub fn has_running_in_root(&self, root: &str) -> CoordResult<bool> {
+        Ok(self.c.query_row("SELECT EXISTS(SELECT 1 FROM task_attempts a JOIN tasks t ON t.id=a.task_id WHERE t.root_id=?1 AND a.state='running')",[root],|r|r.get(0))?)
+    }
+
+    pub fn start_unused_budget(&self, root: &str) -> CoordResult<()> {
+        self.c.execute("UPDATE root_usage SET deadline=?2+(deadline-started_at),started_at=?2 WHERE root_id=?1 AND dispatches=0",params![root,self.now])?;
+        Ok(())
+    }
+
+    pub fn task_timeline(
+        &self,
+        task: &Task,
+        before: Option<i64>,
+    ) -> CoordResult<Vec<CoordinationEvent>> {
+        let mut events = self.c.prepare_cached("SELECT seq,root_id,task_id,actor,event_type,payload,created_at FROM coordination_events WHERE root_id=?1 AND (?2 IS NULL OR task_id=?2) AND (?3 IS NULL OR seq<?3) ORDER BY seq DESC LIMIT 100")?
+            .query_map(params![task.root_id, if task.id==task.root_id { None } else { Some(&task.id) },before], Self::event_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
+        events.reverse();
+        Ok(events)
+    }
+
+    pub fn comments(&self, id: &str, after: i64, limit: usize) -> CoordResult<Vec<TaskComment>> {
+        Ok(self.c.prepare_cached("SELECT id,task_id,author,body,created_at FROM task_comments WHERE task_id=?1 AND id>?2 ORDER BY id LIMIT ?3")?
+            .query_map(params![id,after,limit.clamp(1,200) as i64], |r| Ok(TaskComment {
+                id:r.get(0)?,task_id:r.get(1)?,author:r.get(2)?,body:r.get(3)?,created_at:r.get(4)?
+            }))?.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn recent_comments(&self, id: &str, limit: usize) -> CoordResult<Vec<TaskComment>> {
+        let mut comments = self.c.prepare_cached("SELECT id,task_id,author,body,created_at FROM task_comments WHERE task_id=?1 ORDER BY id DESC LIMIT ?2")?
+            .query_map(params![id,limit.clamp(1,8) as i64], |r| Ok(TaskComment {
+                id:r.get(0)?,task_id:r.get(1)?,author:r.get(2)?,body:r.get(3)?,created_at:r.get(4)?
+            }))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        comments.reverse();
+        Ok(comments)
+    }
+
+    pub fn add_comment(&self, task: &Task, author: &str, body: &str) -> CoordResult<TaskComment> {
+        self.c.execute(
+            "INSERT INTO task_comments(task_id,author,body,created_at) VALUES(?1,?2,?3,?4)",
+            params![task.id, author, body, self.now],
+        )?;
+        let id = self.c.last_insert_rowid();
+        self.c.execute(
+            "UPDATE tasks SET updated_at=?2 WHERE id=?1",
+            params![task.id, self.now],
+        )?;
+        self.event(
+            &task.root_id,
+            Some(&task.id),
+            author,
+            "task.commented",
+            serde_json::json!({"comment_id":id}),
+        )?;
+        Ok(TaskComment {
+            id,
+            task_id: task.id.clone(),
+            author: author.into(),
+            body: body.into(),
+            created_at: self.now,
+        })
     }
 
     pub fn task(&self, id: &str) -> CoordResult<Option<Task>> {
@@ -363,6 +481,7 @@ impl Db<'_> {
             .optional()?;
         if let Some(task) = &mut task {
             task.prerequisites = self.prerequisite_ids(&task.id)?;
+            task.issue = self.issue(&task.id)?;
         }
         Ok(task)
     }
@@ -398,6 +517,25 @@ impl Db<'_> {
                 args.push(value);
             }
         }
+        for (clause, value) in [
+            (" AND EXISTS(SELECT 1 FROM task_issues i,json_each(i.labels) l WHERE i.task_id=tasks.id AND l.value=?)", filter.label),
+            (" AND EXISTS(SELECT 1 FROM task_issues i WHERE i.task_id=tasks.id AND i.priority=?)", filter.priority),
+        ] {
+            if let Some(value) = value { sql.push_str(clause); args.push(value.to_owned()); }
+        }
+        if let Some(q) = filter.query {
+            sql.push_str(" AND (instr(lower(objective),lower(?))>0 OR EXISTS(SELECT 1 FROM task_issues i WHERE i.task_id=tasks.id AND (instr(lower(i.description),lower(?))>0 OR CAST(i.number AS TEXT)=?)))");
+            args.extend([
+                q.to_owned(),
+                q.to_owned(),
+                q.trim_start_matches('#').to_owned(),
+            ]);
+        }
+        match filter.state {
+            Some("open") => sql.push_str(" AND status NOT IN ('completed','failed','cancelled')"),
+            Some("closed") => sql.push_str(" AND status IN ('completed','failed','cancelled')"),
+            _ => {}
+        }
         if filter.roots_only {
             sql.push_str(" AND id=root_id");
         }
@@ -412,16 +550,27 @@ impl Db<'_> {
             .collect::<rusqlite::Result<Vec<_>>>()?;
         for task in &mut tasks {
             task.prerequisites = self.prerequisite_ids(&task.id)?;
+            task.issue = self.issue(&task.id)?;
         }
         Ok(tasks)
     }
 
     pub fn tasks_with_status(&self, status: TaskStatus, limit: usize) -> CoordResult<Vec<Task>> {
-        self.list_tasks(&TaskFilter {
-            status: Some(status),
-            limit,
-            ..Default::default()
-        })
+        // Priority applies to the whole issue graph; dependencies and review ordering remain authoritative.
+        let sql = format!("SELECT {TASK_COLS} FROM tasks WHERE status=?1 ORDER BY (SELECT CASE priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END FROM task_issues WHERE task_id=tasks.root_id),id LIMIT ?2");
+        let mut tasks = self
+            .c
+            .prepare_cached(&sql)?
+            .query_map(
+                params![status.as_str(), limit.clamp(1, 500) as i64],
+                task_row,
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for task in &mut tasks {
+            task.prerequisites = self.prerequisite_ids(&task.id)?;
+            task.issue = self.issue(&task.id)?;
+        }
+        Ok(tasks)
     }
 
     pub fn count_tasks(&self, root: &str) -> CoordResult<usize> {
@@ -1163,5 +1312,48 @@ impl Db<'_> {
             .prepare_cached("UPDATE task_decisions SET state=?2,decided_by=?3 WHERE id=?1")?
             .execute(params![id, state, by])?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod issue_migration_tests {
+    use super::*;
+
+    #[test]
+    fn version_one_tasks_gain_stable_numbers_and_comments_survive_reopen() {
+        let path =
+            std::env::temp_dir().join(format!("hivemind-issue-migration-{}.db", new_id("test")));
+        let connection = Connection::open(&path).unwrap();
+        connection.execute_batch(SCHEMA_V1).unwrap();
+        for (id, created) in [("tk_new", 20), ("tk_old", 10)] {
+            connection.execute("INSERT INTO tasks(id,root_id,objective,acceptance,capabilities,workspace,coordinator,status,created_at,updated_at) VALUES(?1,?1,'legacy','[]','[]','.','Lead','planning',?2,?2)",params![id,created]).unwrap();
+        }
+        drop(connection);
+        let store = CoordinationStore::open(&path).unwrap();
+        store
+            .write(|db| {
+                let old = db.task_or_err("tk_old")?;
+                let new = db.task_or_err("tk_new")?;
+                assert_eq!(old.issue.number, 1);
+                assert_eq!(new.issue.number, 2);
+                assert!(old.issue.fields.description.is_empty());
+                db.add_comment(&old, "user", "preserved discussion")?;
+                Ok(())
+            })
+            .unwrap();
+        drop(store);
+        let reopened = CoordinationStore::open(&path).unwrap();
+        reopened
+            .read(|db| {
+                assert_eq!(db.task_or_err("tk_old")?.issue.number, 1);
+                assert_eq!(
+                    db.comments("tk_old", 0, 10)?[0].body,
+                    "preserved discussion"
+                );
+                Ok(())
+            })
+            .unwrap();
+        drop(reopened);
+        let _ = std::fs::remove_file(&path);
     }
 }

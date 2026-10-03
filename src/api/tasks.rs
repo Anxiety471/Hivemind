@@ -15,7 +15,7 @@ use serde_json::{json, Value};
 
 use super::{error::ApiError, routes::ApiState};
 use crate::coordination::{
-    model::{task_room, CoordError, MessageKind, TaskStatus},
+    model::{task_room, CoordError, IssueFields, IssuePriority, MessageKind, TaskStatus},
     policy::Plan,
     service::SubmitTask,
     store::TaskFilter,
@@ -25,7 +25,9 @@ use crate::{memory::Caller, runtime::is_rotation};
 pub(super) fn routes() -> Router<ApiState> {
     Router::new()
         .route("/api/v1/tasks", post(submit).get(list))
-        .route("/api/v1/tasks/{id}", get(show))
+        .route("/api/v1/tasks/{id}", get(show).patch(update_issue))
+        .route("/api/v1/tasks/{id}/timeline", get(timeline))
+        .route("/api/v1/tasks/{id}/comments", get(comments).post(comment))
         .route("/api/v1/tasks/{id}/attempts", get(attempts))
         .route("/api/v1/tasks/{id}/cancel", post(cancel))
         .route("/api/v1/tasks/{id}/pause", post(pause))
@@ -123,9 +125,17 @@ pub(super) fn number(
     }
 }
 
+fn auto_start_default() -> bool {
+    true
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SubmitBody {
+    #[serde(default)]
+    issue: IssueFields,
+    #[serde(default = "auto_start_default")]
+    auto_start: bool,
     objective: String,
     #[serde(default)]
     acceptance: Vec<String>,
@@ -147,6 +157,8 @@ async fn submit(
         return bad_json();
     };
     match state.core.coordination().submit(SubmitTask {
+        issue: body.issue,
+        auto_start: body.auto_start,
         objective: body.objective,
         acceptance: body.acceptance,
         capabilities: body.capabilities,
@@ -176,7 +188,25 @@ async fn list(State(state): State<ApiState>, RawQuery(raw): RawQuery) -> Respons
         Some(Some(status)) => Some(status),
         None => None,
     };
+    if params
+        .get("state")
+        .is_some_and(|v| !["open", "closed", "all"].contains(&v.as_str()))
+        || params
+            .get("priority")
+            .is_some_and(|v| IssuePriority::parse(v).is_none())
+    {
+        return ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "unknown issue state or priority",
+        )
+        .into_response();
+    }
     let filter = TaskFilter {
+        query: params.get("q").map(String::as_str),
+        label: params.get("label").map(String::as_str),
+        state: params.get("state").map(String::as_str),
+        priority: params.get("priority").map(String::as_str),
         root: params.get("root").map(String::as_str),
         status,
         owner: params.get("owner").map(String::as_str),
@@ -203,6 +233,99 @@ async fn show(State(state): State<ApiState>, Path(id): Path<String>) -> Response
         Ok(detail) => {
             Json(json!({"task": detail, "event_high_water": service.high_water().unwrap_or(0)}))
                 .into_response()
+        }
+        Err(error) => coord_error(error),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct IssueBody {
+    expected_revision: i64,
+    issue: IssueFields,
+}
+
+async fn update_issue(
+    State(state): State<ApiState>,
+    Path(id): Path<String>,
+    payload: Result<Json<IssueBody>, JsonRejection>,
+) -> Response {
+    let Ok(Json(body)) = payload else {
+        return bad_json();
+    };
+    match state
+        .core
+        .coordination()
+        .update_issue(&id, body.issue, body.expected_revision)
+    {
+        Ok(task) => Json(json!({"task":task})).into_response(),
+        Err(error) => coord_error(error),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CommentBody {
+    body: String,
+}
+
+async fn comment(
+    State(state): State<ApiState>,
+    Path(id): Path<String>,
+    payload: Result<Json<CommentBody>, JsonRejection>,
+) -> Response {
+    let Ok(Json(body)) = payload else {
+        return bad_json();
+    };
+    match state.core.coordination().comment(&id, &body.body) {
+        Ok(comment) => (StatusCode::CREATED, Json(json!({"comment":comment}))).into_response(),
+        Err(error) => coord_error(error),
+    }
+}
+
+async fn timeline(
+    State(state): State<ApiState>,
+    Path(id): Path<String>,
+    RawQuery(raw): RawQuery,
+) -> Response {
+    let params = query(raw);
+    let before = if params.contains_key("before") {
+        match number(&params, "before", 0) {
+            Ok(v) => Some(v),
+            Err(e) => return e.into_response(),
+        }
+    } else {
+        None
+    };
+    match state.core.coordination().timeline(&id, before) {
+        Ok(events) => {
+            let next_before = events.first().map(|e| e.seq);
+            let has_more = events.len() == 100;
+            Json(json!({"events":events,"next_before":next_before,"has_more":has_more}))
+                .into_response()
+        }
+        Err(error) => coord_error(error),
+    }
+}
+
+async fn comments(
+    State(state): State<ApiState>,
+    Path(id): Path<String>,
+    RawQuery(raw): RawQuery,
+) -> Response {
+    let params = query(raw);
+    let after = match number(&params, "after", 0) {
+        Ok(v) => v.max(0),
+        Err(e) => return e.into_response(),
+    };
+    let limit = match number(&params, "limit", 100) {
+        Ok(v) => v.clamp(1, 200) as usize,
+        Err(e) => return e.into_response(),
+    };
+    match state.core.coordination().comments(&id, after, limit) {
+        Ok(comments) => {
+            let next_after = comments.last().map(|c| c.id).unwrap_or(after);
+            Json(json!({"comments":comments,"next_after":next_after})).into_response()
         }
         Err(error) => coord_error(error),
     }
@@ -985,6 +1108,87 @@ mod tests {
         assert!(
             body["task"].get("questions").is_none(),
             "answered questions are gone"
+        );
+    }
+    #[tokio::test]
+    async fn issue_http_workflow_and_validation() {
+        let f = Fixture::new(true);
+        let (status,created)=f.call("POST","/api/v1/tasks",Some(json!({"objective":"Fix login","auto_start":false,"issue":{"description":"Session expiry","labels":["Bug"],"priority":"high"}}))).await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        assert_eq!(created["task"]["task"]["issue"]["number"], 1);
+        assert_eq!(created["task"]["task"]["paused"], true);
+        let id = created["id"].as_str().unwrap();
+        let revision = created["task"]["task"]["revision"].as_i64().unwrap();
+        let patch = json!({"expected_revision":revision,"issue":{"description":"Session expiry and CSRF","labels":["security"],"priority":"urgent"}});
+        assert_eq!(
+            f.call("PATCH", &format!("/api/v1/tasks/{id}"), Some(patch.clone()))
+                .await
+                .0,
+            StatusCode::OK
+        );
+        assert_eq!(
+            f.call("PATCH", &format!("/api/v1/tasks/{id}"), Some(patch))
+                .await
+                .0,
+            StatusCode::CONFLICT
+        );
+        let (status, comment) = f
+            .call(
+                "POST",
+                &format!("/api/v1/tasks/{id}/comments"),
+                Some(json!({"body":"Keep compatibility"})),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(comment["comment"]["author"], "user");
+        assert_eq!(
+            f.call(
+                "POST",
+                &format!("/api/v1/tasks/{id}/comments"),
+                Some(json!({"body":"","author":"Lead"}))
+            )
+            .await
+            .0,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            f.call("GET", &format!("/api/v1/tasks/{id}/comments"), None)
+                .await
+                .1["comments"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        let (_, found) = f
+            .call(
+                "GET",
+                "/api/v1/tasks?q=expiry&label=security&state=open&priority=urgent",
+                None,
+            )
+            .await;
+        assert_eq!(found["tasks"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            f.call("GET", "/api/v1/tasks?priority=invalid", None)
+                .await
+                .0,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            f.call("GET", "/api/v1/tasks?state=invalid", None).await.0,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            f.call("GET", &format!("/api/v1/tasks/{id}/timeline"), None)
+                .await
+                .0,
+            StatusCode::OK
+        );
+        assert_eq!(
+            f.call("GET", "/api/v1/tasks/tk_missing/comments", None)
+                .await
+                .0,
+            StatusCode::NOT_FOUND
         );
     }
 }

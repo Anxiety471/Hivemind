@@ -1,15 +1,22 @@
 // Autonomous tasks: root list, task detail with subtasks, attempts, evidence, budget, and controls.
 import type { ReactNode } from "react";
 import { useState } from "react";
-import { api, type Task } from "../api";
+import { api, type IssueFields, type Task } from "../api";
 import { useRefreshOn } from "../live";
 import { href, navigate } from "../nav";
 import { Badge, Empty, ErrorNote, Meter, PageHeader, ago, duration, time, useAction, useAsync } from "../ui";
 
+import { IssueDiscussion } from "./IssueDiscussion";
+
 const isCoordination = (type: string) => /^(task|attempt|message|group)\./.test(type);
 
 export function Tasks({ selected }: { selected?: string }) {
-  const tasks = useAsync(() => api.tasks(), []);
+  const [search, setSearch] = useState("");
+  const [query, setQuery] = useState("");
+  const [state, setState] = useState("open");
+  const [label, setLabel] = useState("");
+  const [priority, setPriority] = useState("");
+  const tasks = useAsync(() => api.issueTasks({ q: query, state, label, priority }), [query, state, label, priority]);
   const [creating, setCreating] = useState(false);
   useRefreshOn((e) => isCoordination(e.type), tasks.reload, [tasks.reload]);
   const list = tasks.data?.tasks ?? [];
@@ -21,18 +28,28 @@ export function Tasks({ selected }: { selected?: string }) {
         <div className="list-head">
           <h2>Tasks</h2>
           <button className="primary small" onClick={() => setCreating(true)}>
-            New task
+            New issue
           </button>
         </div>
+        <form className="issue-filters" onSubmit={(e) => { e.preventDefault(); setQuery(search.trim()); }}>
+          <label>Search issues<input placeholder="Title, description, or #number" value={search} onChange={(e) => setSearch(e.target.value)} /></label>
+          <button className="ghost small" type="submit">Search</button>
+          <div className="row">
+            <label>State<select value={state} onChange={(e) => setState(e.target.value)}><option value="open">Open</option><option value="closed">Closed</option><option value="all">All</option></select></label>
+            <label>Priority<select value={priority} onChange={(e) => setPriority(e.target.value)}><option value="">Any priority</option>{["urgent","high","normal","low"].map((p) => <option key={p}>{p}</option>)}</select></label>
+          </div>
+          <label>Label<input value={label} placeholder="Filter by label" onChange={(e) => setLabel(e.target.value.toLowerCase())} /></label>
+        </form>
         <ErrorNote error={tasks.error} />
-        {tasks.data && list.length === 0 && <Empty>No tasks yet.</Empty>}
+        {tasks.data && list.length === 0 && <Empty>No matching issues.</Empty>}
         {list.map((t) => (
           <a key={t.id} href={href("tasks", t.id)} className={t.id === active ? "list-item active" : "list-item"}>
             <div className="list-item-top">
               <Badge value={t.paused ? "paused" : t.status} />
               <span className="muted small">{ago(t.updated_at)}</span>
             </div>
-            <div className="list-item-title">{t.objective}</div>
+            <div className="list-item-title"><span className="muted">#{t.issue.number}</span> {t.objective}</div>
+            <div className="row issue-labels"><Badge value={t.issue.priority} />{t.issue.labels.map((label) => <Badge key={label} value={label} tone="info" />)}</div>
             <div className="muted small">coordinated by {t.coordinator}</div>
           </a>
         ))}
@@ -58,6 +75,10 @@ export function Tasks({ selected }: { selected?: string }) {
 
 function NewTask({ onDone }: { onDone: (id?: string) => void }) {
   const [objective, setObjective] = useState("");
+  const [description, setDescription] = useState("");
+  const [labels, setLabels] = useState("");
+  const [priority, setPriority] = useState<IssueFields["priority"]>("normal");
+  const [autoStart, setAutoStart] = useState(true);
   const [acceptance, setAcceptance] = useState("");
   const [capabilities, setCapabilities] = useState("");
   const action = useAction();
@@ -68,11 +89,17 @@ function NewTask({ onDone }: { onDone: (id?: string) => void }) {
       .filter(Boolean);
   return (
     <div className="card form">
-      <PageHeader title="New task" sub="The coordinator plans it into subtasks, then owners work and reviewers approve." />
+      <PageHeader title="New issue" sub="Save a backlog issue or let the coordinator plan, assign, execute, and review it automatically." />
       <label>
-        Objective
+        Title / objective
         <textarea rows={3} value={objective} onChange={(e) => setObjective((e.target as HTMLTextAreaElement).value)} />
       </label>
+      <label>Description<textarea rows={4} maxLength={2400} value={description} onChange={(e) => setDescription(e.target.value)} /></label>
+      <div className="grid-2">
+        <label>Labels (comma separated)<input value={labels} onChange={(e) => setLabels(e.target.value)} /></label>
+        <label>Priority<select value={priority} onChange={(e) => setPriority(e.target.value as IssueFields["priority"])}>{["low","normal","high","urgent"].map((p) => <option key={p}>{p}</option>)}</select></label>
+      </div>
+      <label className="row"><input type="checkbox" checked={autoStart} onChange={(e) => setAutoStart(e.target.checked)} />Start automation immediately</label>
       <label>
         Acceptance criteria <span className="muted">(one per line)</span>
         <textarea rows={3} value={acceptance} onChange={(e) => setAcceptance((e.target as HTMLTextAreaElement).value)} />
@@ -88,12 +115,12 @@ function NewTask({ onDone }: { onDone: (id?: string) => void }) {
           disabled={!objective.trim() || action.busy}
           onClick={() =>
             action.run(async () => {
-              const res = await api.submitTask(objective.trim(), lines(acceptance), lines(capabilities));
+              const res = await api.submitTask(objective.trim(), lines(acceptance), lines(capabilities), { description, labels: lines(labels), priority }, autoStart);
               onDone(res.id);
             })
           }
         >
-          Submit task
+          {autoStart ? "Create & automate" : "Save to backlog"}
         </button>
         <button className="ghost" onClick={() => onDone()}>
           Cancel
@@ -133,18 +160,18 @@ function TaskDetailView({ id }: { id: string }) {
           ← Root task
         </a>
       )}
-      <PageHeader title={t.objective} sub={`${t.id} · ${t.kind} · revision ${t.revision}`}>
+      <PageHeader title={t.objective} sub={`Issue #${t.issue.number} · ${t.kind} · revision ${t.revision}`}>
         <a className="button ghost" href={href("rooms", `task-${t.id}`)}>
           Task room
         </a>
-        {!terminal && !t.paused && (
+        {!t.parent_id && !terminal && !t.paused && (
           <button className="ghost" disabled={action.busy} onClick={() => act("pause")}>
             Pause
           </button>
         )}
-        {!terminal && (t.paused || t.status === "blocked") && (
+        {!t.parent_id && !terminal && (t.paused || t.status === "blocked") && (
           <button className="ghost" disabled={action.busy} onClick={() => act("resume", { retry: t.status === "blocked" })}>
-            Resume
+            {t.paused && !attempts.data?.attempts.length ? "Start automation" : "Resume"}
           </button>
         )}
         {!terminal && (
@@ -165,6 +192,8 @@ function TaskDetailView({ id }: { id: string }) {
         <Fact label="Created">{time(t.created_at)}</Fact>
         <Fact label="Updated">{ago(t.updated_at)}</Fact>
       </div>
+      <IssueMetadata key={`${t.id}-${t.revision}`} task={t} onSaved={detail.reload} />
+      <div className="automation-flow muted small">{terminal ? `Automation ${t.status}` : t.paused ? "Backlog / paused" : "Automation active"} · Plan → Assign by capability → Execute → Review → Complete</div>
       {t.status_reason && <div className="callout">{t.status_reason}</div>}
 
       {t.status === "needs_input" && (
@@ -353,6 +382,8 @@ function TaskDetailView({ id }: { id: string }) {
         </div>
       )}
 
+      <IssueDiscussion task={t} />
+
       <div className="card">
         <h3>Attempts</h3>
         {attempts.data?.attempts.length ? (
@@ -439,4 +470,28 @@ function Fact({ label, children }: { label: string; children: ReactNode }) {
       <div className="fact-value">{children}</div>
     </div>
   );
+}
+
+function IssueMetadata({ task, onSaved }: { task: Task; onSaved: () => unknown }) {
+  const [editing, setEditing] = useState(false);
+  const [labels, setLabels] = useState(task.issue.labels.join(", "));
+  const [priority, setPriority] = useState(task.issue.priority);
+  const [description, setDescription] = useState(task.issue.description);
+  const action = useAction();
+  return <div className="card issue-metadata">
+    <div className="row"><h3 className="grow">Issue details</h3><Badge value={task.issue.priority} />
+      {task.issue.labels.map((label) => <Badge key={label} value={label} tone="info" />)}
+      <button className="ghost small" onClick={() => setEditing(!editing)}>{editing ? "Dismiss edit" : "Edit issue"}</button></div>
+    {editing ? <div className="form">
+      <label>Description<textarea rows={4} maxLength={2400} value={description} onChange={(e) => setDescription(e.target.value)} /></label>
+      <p className="muted small">Pause automation and wait for active attempts before changing the description.</p>
+      <label>Labels (comma separated)<input value={labels} onChange={(e) => setLabels(e.target.value)} /></label>
+      <label>Priority<select value={priority} onChange={(e) => setPriority(e.target.value as IssueFields["priority"])}>{["low","normal","high","urgent"].map((p) => <option key={p}>{p}</option>)}</select></label>
+      <ErrorNote error={action.error} />
+      <button className="primary" disabled={action.busy} onClick={() => action.run(async () => {
+        await api.updateIssue(task.id, { description, labels: labels.split(",").map((l) => l.trim()).filter(Boolean), priority }, task.revision);
+        setEditing(false); onSaved();
+      })}>Save issue</button>
+    </div> : <p className="issue-description">{task.issue.description || "No description provided."}</p>}
+  </div>;
 }

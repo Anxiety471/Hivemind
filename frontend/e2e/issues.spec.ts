@@ -1,0 +1,67 @@
+import { expect, test } from "@playwright/test";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+test.use({ baseURL: "http://127.0.0.1:15175" });
+
+for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844 }]) {
+  test(`issue backlog, discussion, filters, and automated review at ${viewport.width}px`, async ({ page, request }) => {
+    await page.setViewportSize(viewport);
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
+    await page.addInitScript(() => localStorage.setItem("hivemind.first_run_complete", "true"));
+    await page.goto("/#/tasks");
+    await expect(page).toHaveTitle(/Hivemind/);
+    await page.getByRole("button", { name: "New issue" }).click();
+    const title = `Automated issue fixture ${viewport.width}`;
+    await page.getByLabel("Title / objective").fill(title);
+    await page.getByLabel("Description", { exact: true }).fill("Preserve session handling.");
+    await page.getByLabel("Acceptance criteria").fill("The fixture file exists");
+    await page.getByLabel("Labels (comma separated)").fill("bug, automation");
+    await page.locator(".detail-pane").getByRole("combobox", { name: "Priority", exact: true }).selectOption("high");
+    await page.getByLabel("Start automation immediately").uncheck();
+    await page.getByRole("button", { name: "Save to backlog" }).click();
+    await expect(page.getByRole("heading", { name: title })).toBeVisible();
+    await expect(page.getByText("Backlog / paused", { exact: false })).toBeVisible();
+    const id = decodeURIComponent(new URL(page.url()).hash.split("/").at(-1)!);
+    const endpoint = `http://127.0.0.1:17476/api/v1/tasks/${id}`;
+    expect((await (await request.get(`${endpoint}/attempts`)).json()).attempts).toHaveLength(0);
+    await page.getByLabel("Add a comment").fill("Do not change existing endpoints.");
+    await page.getByRole("button", { name: "Comment", exact: true }).click();
+    await expect(page.locator(".issue-comment")).toContainText("Do not change existing endpoints.");
+    await page.getByRole("button", { name: "Edit issue", exact: true }).click();
+    await page.locator(".issue-metadata").getByRole("combobox", { name: "Priority", exact: true }).selectOption("urgent");
+    await page.getByRole("button", { name: "Save issue", exact: true }).click();
+    await expect(page.locator(".issue-metadata")).toContainText("urgent");
+    await page.getByLabel("Search issues").fill(title);
+    await page.getByRole("button", { name: "Search", exact: true }).click();
+    await page.locator(".issue-filters").getByRole("combobox", { name: "Priority", exact: true }).selectOption("urgent");
+    await page.getByLabel("Label", { exact: true }).fill("bug");
+    await expect(page.locator(".list-item")).toHaveCount(1);
+    await page.screenshot({ path: join(tmpdir(), `hivemind-issue-${viewport.width}-backlog.png`), fullPage: true });
+    await page.getByRole("button", { name: "Start automation", exact: true }).click();
+    await expect.poll(async () => (await (await request.get(endpoint)).json()).task.task.status, { timeout: 30_000 }).toBe("completed");
+    await expect(page.locator(".fact").filter({ hasText: "Status" })).toContainText("completed");
+    await expect(page.locator(".issue-timeline")).toContainText("attempt finished");
+    await page.getByRole("combobox", { name: "State", exact: true }).selectOption("closed");
+    await expect(page.locator(".list-item")).toHaveCount(1);
+    await page.reload();
+    await expect(page.locator(".issue-comment")).toContainText("Do not change existing endpoints.");
+    await page.getByRole("combobox", { name: "State", exact: true }).selectOption("closed");
+    await page.getByLabel("Search issues").fill(title);
+    await page.getByRole("button", { name: "Search", exact: true }).click();
+    await expect(page.locator(".list-item")).toHaveCount(1);
+    await expect(page.getByText("Automation completed", { exact: false })).toBeVisible();
+    const detail = (await (await request.get(endpoint)).json()).task;
+    expect(detail.children).toHaveLength(1);
+    expect(detail.children[0].owner).toBe("Engineer");
+    expect(detail.children[0].reviewer).toBe("Reviewer");
+    expect(detail.children[0].status).toBe("completed");
+    const childAttempts = (await (await request.get(`http://127.0.0.1:17476/api/v1/tasks/${detail.children[0].id}/attempts`)).json()).attempts;
+    expect(childAttempts.map((a: { kind: string }) => a.kind)).toEqual(["work", "review"]);
+    await page.screenshot({ path: join(tmpdir(), `hivemind-issue-${viewport.width}-completed.png`), fullPage: true });
+    expect(await page.locator("body").evaluate((body) => body.scrollWidth <= innerWidth)).toBe(true);
+    expect(errors).toEqual([]);
+  });
+}

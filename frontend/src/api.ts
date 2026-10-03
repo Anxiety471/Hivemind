@@ -87,7 +87,12 @@ export type TaskStatus =
   | "failed"
   | "cancelled";
 
+export type IssueFields = { description: string; labels: string[]; priority: "low" | "normal" | "high" | "urgent" };
+export type TaskComment = { id: number; task_id: string; author: string; body: string; created_at: number };
+export type TaskEvent = { seq: number; actor: string; event_type: string; payload: Record<string, unknown>; created_at: number };
+
 export type Task = {
+  issue: IssueFields & { number: number };
   id: string;
   root_id: string;
   parent_id: string | null;
@@ -416,8 +421,28 @@ export const api = {
     request<{ tasks: Task[]; next_after: string | null }>("GET", `/tasks?limit=200${all ? "&all=true" : ""}`),
   task: (id: string) => request<{ task: TaskDetail }>("GET", `/tasks/${enc(id)}`),
   attempts: (id: string) => request<{ attempts: Attempt[] }>("GET", `/tasks/${enc(id)}/attempts`),
-  submitTask: (objective: string, acceptance: string[], capabilities: string[]) =>
-    request<{ id: string }>("POST", "/tasks", { objective, acceptance, capabilities }),
+  submitTask: (objective: string, acceptance: string[], capabilities: string[], issue?: IssueFields, auto_start = true) =>
+    request<{ id: string }>("POST", "/tasks", { objective, acceptance, capabilities, issue, auto_start }),
+  issueTasks: async (filters: { q: string; state: string; label: string; priority: string }) => {
+    const tasks: Task[] = [];
+    let after = "";
+    for (;;) {
+      const params = new URLSearchParams({ limit: "200", state: filters.state });
+      if (filters.q) params.set("q",filters.q);
+      if (filters.label) params.set("label",filters.label);
+      if (filters.priority) params.set("priority",filters.priority);
+      if (after) params.set("after",after);
+      const page = await request<{ tasks: Task[]; next_after: string | null }>("GET", `/tasks?${params}`);
+      tasks.push(...page.tasks);
+      if (!page.next_after) return { tasks };
+      after = page.next_after;
+    }
+  },
+  updateIssue: (id: string, issue: IssueFields, expected_revision: number) =>
+    request<{ task: TaskDetail }>("PATCH", `/tasks/${enc(id)}`, { issue, expected_revision }),
+  taskComments: (id: string, after = 0) => request<{ comments: TaskComment[]; next_after: number }>("GET", `/tasks/${enc(id)}/comments?limit=200&after=${after}`),
+  commentTask: (id: string, body: string) => request<{ comment: TaskComment }>("POST", `/tasks/${enc(id)}/comments`, { body }),
+  taskTimeline: (id: string, before?: number) => request<{ events: TaskEvent[]; next_before: number | null; has_more: boolean }>("GET", `/tasks/${enc(id)}/timeline${before === undefined ? "" : `?before=${before}`}`),
   taskAction: (id: string, action: "cancel" | "pause" | "resume", body?: unknown) =>
     request<{ task: TaskDetail }>("POST", `/tasks/${enc(id)}/${action}`, body ?? {}),
   taskInput: (id: string, answer: string) =>

@@ -96,6 +96,8 @@ pub(super) async fn task_command(
             };
             let detail = service
                 .submit(SubmitTask {
+                    issue: Default::default(),
+                    auto_start: true,
                     objective,
                     acceptance: accept,
                     capabilities: cap,
