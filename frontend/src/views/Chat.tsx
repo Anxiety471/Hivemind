@@ -271,6 +271,7 @@ function RoomView({
           onThread={startThread}
           error={history.error}
           pending={pending}
+          roomId={roomId}
         />
         {target ? (
           <Composer
@@ -371,6 +372,7 @@ function MessageList(props: {
   onThread?: (m: Message) => void;
   error: string | null;
   pending?: PendingMessage[];
+  roomId?: string;
 }) {
   const end = useRef<HTMLDivElement>(null);
   const typingCount = Object.keys(props.typing).length;
@@ -403,7 +405,7 @@ function MessageList(props: {
                   <span className="muted">{time(m.created_at)}</span>
                 </div>
               )}
-              <div className="msg-text">{m.speaker === "user" ? <LinkedText text={m.content} /> : <Markdown text={m.content} />}</div>
+              <div className="msg-text">{m.speaker === "user" ? <LinkedText text={m.content} /> : <Markdown text={m.content} roomId={props.roomId} />}</div>
               {thread && (
                 <button className="thread-link" onClick={() => props.onThread?.(m)}>
                   💬 {thread.message_count} {thread.message_count === 1 ? "reply" : "replies"} · {thread.name}
@@ -451,7 +453,7 @@ function MessageList(props: {
               <strong>{t.persona}</strong>
             </div>
             <div className="msg-text">
-              {t.text ? <Markdown text={t.text} /> : (
+              {t.text ? <Markdown text={t.text} roomId={props.roomId} /> : (
                 <span className="dots">
                   <i />
                   <i />
@@ -861,7 +863,7 @@ function ThreadPanel({
             <strong>{anchor.speaker === "user" ? "You" : anchor.speaker}</strong>
             <span className="muted">{time(anchor.created_at)}</span>
           </div>
-          <div className="msg-text">{anchor.speaker === "user" ? <LinkedText text={anchor.content} /> : <Markdown text={anchor.content} />}</div>
+          <div className="msg-text">{anchor.speaker === "user" ? <LinkedText text={anchor.content} /> : <Markdown text={anchor.content} roomId={thread.id} />}</div>
         </div>
       )}
       <MessageList
@@ -872,6 +874,7 @@ function ThreadPanel({
         typing={typing}
         error={history.error}
         pending={pending}
+        roomId={thread.id}
       />
       <Composer
         roomId={thread.id}

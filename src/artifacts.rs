@@ -257,15 +257,21 @@ pub fn media_type(filename: &str) -> &'static str {
         .to_ascii_lowercase()
         .as_str()
     {
-        "md" => "text/markdown",
-        "txt" | "csv" | "log" => "text/plain",
+        "md" | "markdown" => "text/markdown",
+        "txt" | "csv" | "log" | "ascii" => "text/plain",
         "html" | "htm" => "text/html",
         "json" => "application/json",
+        "svg" => "image/svg+xml",
         "png" => "image/png",
         "jpg" | "jpeg" => "image/jpeg",
         "gif" => "image/gif",
         "webp" => "image/webp",
         "pdf" => "application/pdf",
+        "mermaid" | "mmd" => "text/plain",
+        "plantuml" | "puml" | "uml" => "text/plain",
+        "drawio" | "xml" => "application/xml",
+        "yaml" | "yml" => "text/plain",
+        "toml" => "text/plain",
         _ => "application/octet-stream",
     }
 }
@@ -720,6 +726,51 @@ mod tests {
             .is_none());
         drop(observer);
 
+        drop(tools);
+        drop(core);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn diagram_and_markdown_media_types_and_deliverables() {
+        assert_eq!(media_type("flowchart.mermaid"), "text/plain");
+        assert_eq!(media_type("diagram.mmd"), "text/plain");
+        assert_eq!(media_type("diagram.ascii"), "text/plain");
+        assert_eq!(media_type("architecture.drawio"), "application/xml");
+        assert_eq!(media_type("sequence.puml"), "text/plain");
+        assert_eq!(media_type("doc.markdown"), "text/markdown");
+        assert_eq!(media_type("vector.svg"), "image/svg+xml");
+
+        let directory =
+            std::env::temp_dir().join(format!("hivemind-diag-{}", std::process::id()));
+        std::fs::create_dir_all(directory.join("artifacts")).unwrap();
+        let mut config = HivemindConfig::default_poc();
+        let persona = config.agents[0].name.clone();
+        for agent in &mut config.agents {
+            agent.workspace = directory.display().to_string();
+        }
+        let core = HivemindCore::new(config, directory.join("hivemind.toml")).unwrap();
+        let tools = ArtifactTools::new(
+            core.artifacts().clone(),
+            Arc::new(SharedWorkspaces::new(
+                &directory.join("hivemind.toml"),
+                &core.config(),
+            )),
+            Arc::new(AccessPolicy::from_config(
+                &core.config(),
+                Arc::new(crate::access::Audit::in_memory().unwrap()),
+            )),
+        );
+        std::fs::write(directory.join("artifacts/chart.mermaid"), "graph TD\nA-->B").unwrap();
+        std::fs::write(directory.join("artifacts/boxes.ascii"), "+---+\n| A |\n+---+").unwrap();
+        std::fs::write(directory.join("artifacts/arch.drawio"), "<mxfile></mxfile>").unwrap();
+        assert!(tools.collect_artifacts("solo", &persona).unwrap().is_some());
+        let artifacts = core.artifacts().list("", 20, 0).unwrap();
+        assert_eq!(artifacts.len(), 3);
+        let filenames: Vec<&str> = artifacts.iter().map(|a| a.filename.as_str()).collect();
+        assert!(filenames.contains(&"chart.mermaid"));
+        assert!(filenames.contains(&"boxes.ascii"));
+        assert!(filenames.contains(&"arch.drawio"));
         drop(tools);
         drop(core);
         std::fs::remove_dir_all(directory).unwrap();

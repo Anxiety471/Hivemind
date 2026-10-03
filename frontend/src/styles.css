@@ -2521,3 +2521,7 @@ li.task-item p {
 .library-preview pre { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--panel-2); padding: 12px; }
 .library-preview img { max-width: 100%; height: auto; }
 .msg-text a { color: var(--accent); text-decoration: underline; overflow-wrap: anywhere; }
+.code-copy-btn.artifact-saved { color: var(--ok); border-color: var(--ok); }
+.preview-toolbar { display: flex; gap: 4px; margin-bottom: 8px; }
+.preview-toolbar button { padding: 3px 10px; font-size: 11px; border-radius: 6px; }
+.preview-toolbar button.active { background: var(--accent-soft); color: var(--text); border-color: var(--accent); }
