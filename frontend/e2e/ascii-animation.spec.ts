@@ -1,8 +1,9 @@
 import { expect, test } from "@playwright/test";
 
-const art = "  +-----+\n  | API | --> [DB]\n  +-----+";
+const art = "  +-----+\n  | API |\n  +-----+";
 const frames = "o --> [API]\n---frame---\n  o -> [API]\n---frame---\n    o >[API]";
-const reply = `Here is the flow:\n\n\`\`\`ascii\n${art}\n\`\`\`\n\n\`\`\`ascii-animation\n${frames}\n\`\`\`\n\n\`\`\`javascript\nalert('ordinary code');\n\`\`\``;
+const diagram = "[Browser] -> [API] --> [DB]";
+const reply = `Here is the flow:\n\n\`\`\`ascii\n${art}\n\`\`\`\n\n\`\`\`ascii-animation\n${frames}\n\`\`\`\n\n\`\`\`text\n${diagram}\n\`\`\`\n\n\`\`\`javascript\nalert('ordinary code');\n\`\`\``;
 
 // Exercise the actual chat/agent-history renderer, with deterministic API output.
 test.beforeEach(async ({ page }) => {
@@ -26,7 +27,7 @@ test.beforeEach(async ({ page }) => {
 test("agent ASCII output animates, pauses, replays and keeps source", async ({ page }) => {
   await page.goto("/#/rooms/solo-Engineer");
   const blocks = page.locator(".msg:not([data-user=true]) .ascii-diagram");
-  await expect(blocks).toHaveCount(2);
+  await expect(blocks).toHaveCount(3);
   const staticArt = blocks.nth(0);
   const animated = blocks.nth(1);
   expect(await staticArt.locator("code").textContent()).toBe(art);
@@ -56,11 +57,40 @@ test("reduced motion disables agent ASCII playback on mobile", async ({ page }) 
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("/#/rooms/solo-Engineer");
   const blocks = page.locator(".ascii-diagram");
-  await expect(blocks).toHaveCount(2);
+  await expect(blocks).toHaveCount(3);
   for (const block of await blocks.all()) {
     await expect(block.getByRole("button", { name: "Animate", exact: true })).toBeDisabled();
     await expect(block.locator(".ascii-status")).toHaveText("Reduced motion enabled");
   }
+});
+
+test("ASCII symbols become selectable nodes and real arrows in agent chat", async ({ page }) => {
+  await page.goto("/#/rooms/solo-Engineer");
+  const block = page.locator(".ascii-diagram").nth(2);
+  await expect(block.locator("svg.ascii-graph-svg")).toBeVisible();
+  await expect(block.locator(".ascii-graph-node")).toHaveCount(3);
+  await expect(block.locator(".ascii-graph-edge path[marker-end]")).toHaveCount(2);
+  const api = block.getByRole("button", { name: "Select node API", exact: true });
+  await api.click();
+  await expect(api).toHaveAttribute("aria-pressed", "true");
+  await expect(block.locator(".ascii-node-details")).toContainText("Browser → API");
+  await expect(block.locator(".ascii-node-details")).toContainText("API → DB");
+  await expect(block.locator(".ascii-graph-edge[data-highlighted=true]")).toHaveCount(2);
+  await block.getByRole("button", { name: "Animate", exact: true }).click();
+  await expect(block.locator("animateMotion")).toHaveCount(2);
+  await block.getByRole("button", { name: "Pause", exact: true }).click();
+  await expect(block.locator("animateMotion")).toHaveCount(0);
+  await block.getByRole("button", { name: "Zoom in", exact: true }).click();
+  await expect(block.locator(".ascii-zoom")).toHaveText("125%");
+  await block.getByRole("button", { name: "Fit", exact: true }).click();
+  await expect(block.locator(".ascii-zoom")).toHaveText("100%");
+  const browser = block.getByRole("button", { name: "Select node Browser", exact: true });
+  await browser.focus(); await page.keyboard.press("Enter");
+  await expect(browser).toHaveAttribute("aria-pressed", "true");
+  await block.getByRole("button", { name: "Source", exact: true }).click();
+  expect(await block.locator("code").textContent()).toBe(diagram);
+  await block.getByRole("button", { name: "View Diagram", exact: true }).click();
+  await expect(block.locator(".ascii-graph-svg")).toBeVisible();
 });
 
 test("incomplete agent animation stays as source while streaming", async ({ page }) => {

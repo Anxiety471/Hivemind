@@ -48,12 +48,32 @@ bun run dev                        # terminal 3: the UI (or: npm run dev)
 ```
 
 `FAKE_PI_DELAY=4 sh dev/demo.sh` slows replies down so the live indicators are easy to see. Delete `dev/.demo/` to start over.
-# ASCII animation in agent replies
+## Interactive ASCII and animation in agent replies
 
-ASCII fences (`ascii`, `asciiart`, `ascii-art`) and text fences containing box-drawing
-characters render the agent's exact art with **Animate**, **Pause**, **Replay**,
-**Source**, and **Copy** controls. Single-frame art gets a line-by-line reveal;
-the renderer does not infer movement or invent diagram connections.
+ASCII fences (`ascii`, `asciiart`, `ascii-art`, `ascii-diagram`) and text fences
+containing box-drawing characters or arrows go through the same chat renderer.
+Recognized diagrams become interactive SVG: `[Node]` and complete ASCII/Unicode
+boxes become nodes; `->`, `-->`, `=>`, `<--`, `<->`, `→`, `←`, `↔`, vertical
+`|`/`│` plus `v`/`^`/`↓`/`↑`/`↕`, and explicit branch junctions become drawn
+connections. Bare labels such as `Browser -> API -> DB` also work.
+
+````markdown
+```ascii
+[Browser] -> [API] --> [DB]
+```
+````
+
+Click a node (or focus it and press Enter/Space) to highlight its connections and
+read incoming/outgoing labels. Zoom and Fit control the diagram view. **Animate**
+shows flow along the actual directed paths; **Pause** stops it; **Replay** starts
+the flow again. **Source** and **Copy** retain the original agent output.
+
+Conversion preserves the source layout. It only converts drawings whose nodes
+and routes can be accounted for: incomplete boxes, unsupported marks, ambiguous
+crossings, unexplained text and drawings over 20,000 characters stay as ASCII
+with a line-by-line reveal. It never guesses missing connections. Unclosed
+streaming fences stay as source until complete. Ordinary programming fences
+continue to render as code.
 
 For actual frame playback, ask the agent to return a fenced `ascii-animation`
 block, with frames separated by a line containing exactly `---frame---`:
@@ -72,6 +92,7 @@ Playback starts on demand at 4 fps and loops. Streaming fences stay as source
 until closed. Source/Copy keep the complete agent output, including frame
 separators. Reduced-motion preferences disable playback, and hidden tabs suspend
 it. More than 120 frames or 100,000 characters fall back to a single source
-block. Agent output is rendered as text; no embedded JavaScript or HTML runs.
-Uses the browser's Web Animations API for reveal and a cleaned-up timer for frames;
-no extra runtime dependency is required.
+block. Labels are rendered as text; no embedded JavaScript or HTML runs. Reduced
+motion leaves node selection and zoom available, while disabling animation.
+Uses native SVG, the Web Animations API for reveal, and a cleaned-up timer for
+frames; no extra runtime dependency is required.

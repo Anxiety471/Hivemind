@@ -145,7 +145,7 @@ function diagramKind(lang: string, code: string): "mermaid" | "plantuml" | "draw
   if (l === "mermaid") return "mermaid";
   if (l === "plantuml" || l === "puml" || l === "uml" || (ASCII_LANGS.has(l) && /^\s*@startuml\b/i.test(code))) return "plantuml";
   if (l === "drawio" || l === "draw.io" || l === "mxgraph" || l === "mxfile" || ((l === "xml" || ASCII_LANGS.has(l)) && looksLikeDrawio(code))) return "drawio";
-  if (l === "ascii" || l === "asciiart" || l === "ascii-art" || (ASCII_LANGS.has(l) && BOX_DRAWING.test(code))) return "ascii";
+  if (l === "ascii" || l === "asciiart" || l === "ascii-art" || l === "ascii-diagram" || (ASCII_LANGS.has(l) && (BOX_DRAWING.test(code) || /(?:[-=]+>|<[-=]+|[→←↑↓↔↕])/.test(code)))) return "ascii";
   return null;
 }
 

@@ -1967,6 +1967,20 @@ li.task-item p {
 .ascii-controls { display: flex; flex-wrap: wrap; gap: 8px; }
 .ascii-controls button:disabled { opacity: .5; cursor: default; }
 .ascii-status { padding: 4px 12px 8px; color: var(--muted); font-size: 11px; }
+.ascii-graph-tools { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; padding: 10px 12px; color: var(--muted); font-size: 12px; }
+.ascii-graph-tools > div { display: flex; align-items: center; gap: 8px; }
+.ascii-zoom { min-width: 38px; text-align: center; }
+.ascii-graph-viewport { overflow: auto; max-height: 360px; padding: 4px 0; }
+.ascii-graph-svg { display: block; }
+.ascii-graph-edge { color: var(--muted); }
+.ascii-graph-edge[data-highlighted=true] { color: var(--accent); }
+.ascii-flow-dot { fill: var(--accent); }
+.ascii-graph-node { cursor: pointer; outline: none; }
+.ascii-graph-node rect { fill: var(--panel); stroke: var(--border); stroke-width: 1.5; }
+.ascii-graph-node text { fill: var(--text); font-family: inherit; pointer-events: none; }
+.ascii-graph-node:hover rect, .ascii-graph-node:focus-visible rect, .ascii-graph-node[data-selected=true] rect { stroke: var(--accent); stroke-width: 2.5; }
+.ascii-node-details { padding: 8px 12px; border-top: 1px solid var(--border); font-size: 12px; }
+.ascii-node-details ul { margin: 4px 0 8px; }
 
 .slash-output {
   position: relative;
