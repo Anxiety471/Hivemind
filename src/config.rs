@@ -79,7 +79,7 @@ impl SkillsConfig {
 }
 
 impl CoordinationConfig {
-    fn validate(&self, agents: &[AgentConfig]) -> Result<()> {
+    pub(crate) fn validate(&self, agents: &[AgentConfig]) -> Result<()> {
         if let Some(planner) = &self.planner {
             if !agents.iter().any(|agent| agent.name == *planner) {
                 bail!("coordination.planner references unknown persona id '{planner}'");

@@ -8,7 +8,8 @@ A small browser UI for `hivemind serve`, built with Vite, TypeScript, and React.
 | **Tasks** | Root tasks, subtasks with dependencies, attempts, artifacts, evidence, budget meters; submit, pause, resume, cancel, and answer `needs_input` |
 | **Agents** | Each persona's runtime, live activity state, workspace, capabilities, and effective permissions |
 | **Groups** | Create, edit (members, mode, per-group roles, reply order), and delete chat groups |
-| **Workspaces** | Allowed roots, group shared workspaces, persona workspaces |
+| **Workspaces** | Allowed roots, group shared workspaces, persona workspaces. Browse to add a project folder |
+| **Configure** | Budgets, runtime timeouts, skill folders, project-folder roots, and verification checks from `hivemind.toml` |
 | **Runtime sessions** | Session epochs per room, rotation reasons, and a Rotate button for live sessions |
 | **Live activity** | The raw WebSocket event stream with filters |
 

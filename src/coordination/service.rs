@@ -178,7 +178,7 @@ pub struct ActivityRef {
 pub struct CoordinationService {
     execution: std::sync::OnceLock<Arc<crate::execution::ExecutionStore>>,
     store: CoordinationStore,
-    config: CoordinationConfig,
+    limits: parking_lot::RwLock<CoordinationConfig>,
     roster_lock: std::sync::RwLock<Arc<Roster>>,
     events: EventBus,
     wake: Arc<Notify>,
@@ -211,7 +211,7 @@ impl CoordinationService {
         Self {
             execution: std::sync::OnceLock::new(),
             store,
-            config,
+            limits: parking_lot::RwLock::new(config),
             roster_lock: std::sync::RwLock::new(Arc::new(roster)),
             events,
             wake: Arc::new(Notify::new()),
@@ -225,8 +225,11 @@ impl CoordinationService {
     pub fn store(&self) -> &CoordinationStore {
         &self.store
     }
-    pub fn config(&self) -> &CoordinationConfig {
-        &self.config
+    pub fn config(&self) -> CoordinationConfig {
+        self.limits.read().clone()
+    }
+    pub fn set_config(&self, config: CoordinationConfig) {
+        *self.limits.write() = config;
     }
     /// Snapshot of the personas tasks can be assigned to.
     pub fn roster(&self) -> Arc<Roster> {
@@ -240,7 +243,7 @@ impl CoordinationService {
         *self.roster_lock.write().expect("roster lock poisoned") = Arc::new(roster);
     }
     pub fn enabled(&self) -> bool {
-        self.config.enabled
+        self.config().enabled
     }
     pub fn wake_signal(&self) -> Arc<Notify> {
         self.wake.clone()
@@ -252,7 +255,7 @@ impl CoordinationService {
         std::mem::take(&mut *self.rotations.lock())
     }
     fn require_enabled(&self) -> CoordResult<()> {
-        if self.config.enabled {
+        if self.config().enabled {
             Ok(())
         } else {
             Err(CoordError::Disabled)
@@ -365,7 +368,7 @@ impl CoordinationService {
                 reason: None,
                 idempotency_key: key.clone(),
             })?;
-            db.init_usage(&id, self.config.max_dispatches, self.config.max_tool_actions, self.config.max_messages, self.config.max_elapsed_secs)?;
+            db.init_usage(&id, self.config().max_dispatches, self.config().max_tool_actions, self.config().max_messages, self.config().max_elapsed_secs)?;
             db.event(&id, Some(&id), "user", "task.created", serde_json::json!({"objective": clip(&objective, 200), "coordinator": coordinator}))?;
             let root = db.task_or_err(&id)?;
             let Some(coordinator) = coordinator else {
@@ -397,9 +400,8 @@ impl CoordinationService {
     fn default_workspace(&self) -> String {
         let roster = self.roster();
         let personas = roster.personas();
-        let pick = self
-            .config
-            .planner
+        let planner = self.config().planner;
+        let pick = planner
             .as_deref()
             .and_then(|p| roster.get(p))
             .or_else(|| personas.iter().find(|p| p.has_permission("coordinate")))
@@ -409,7 +411,7 @@ impl CoordinationService {
     }
 
     fn select_coordinator(&self, workspace: &str, load: &HashMap<String, u32>) -> Option<String> {
-        if let Some(planner) = self.config.planner.as_deref() {
+        if let Some(planner) = self.config().planner.as_deref() {
             let roster = self.roster();
             let persona = roster.get(planner)?;
             return Roster::eligible_for_workspace(persona, workspace)
@@ -464,8 +466,8 @@ impl CoordinationService {
                 load: &load,
                 existing: &existing,
                 existing_count,
-                max_tasks: self.config.max_plan_tasks,
-                max_depth: self.config.max_plan_depth,
+                max_tasks: self.config().max_plan_tasks,
+                max_depth: self.config().max_plan_depth,
                 parent_depth: parent.depth as usize,
             },
         )
@@ -650,7 +652,7 @@ impl CoordinationService {
         serialized: &dyn Fn(&str) -> bool,
         busy: &HashSet<String>,
     ) -> CoordResult<Vec<Dispatch>> {
-        if !self.config.enabled || capacity == 0 {
+        if !self.config().enabled || capacity == 0 {
             return Ok(Vec::new());
         }
         let mut busy = busy.clone();
@@ -720,7 +722,7 @@ impl CoordinationService {
                     continue;
                 }
                 if matches!(kind, AttemptKind::Work | AttemptKind::Plan)
-                    && db.attempt_count(&task.id)? >= self.config.max_attempts_per_task
+                    && db.attempt_count(&task.id)? >= self.config().max_attempts_per_task
                 {
                     db.set_status(
                         &task.id,
@@ -836,7 +838,7 @@ impl CoordinationService {
             runtime_epoch: None,
             dispatch_id: new_id("dp"),
             fencing: db.next_fencing(&task.id)?,
-            lease_expires_at: now + self.config.lease_secs as i64,
+            lease_expires_at: now + self.config().lease_secs as i64,
             heartbeat_at: now,
             state: AttemptState::Running,
             failure_class: None,
@@ -854,7 +856,7 @@ impl CoordinationService {
     }
 
     pub fn heartbeat(&self, attempt_id: &str) -> CoordResult<bool> {
-        let lease = self.config.lease_secs as i64;
+        let lease = self.config().lease_secs as i64;
         self.store.write(|db| db.heartbeat(attempt_id, lease))
     }
 
@@ -1021,7 +1023,7 @@ impl CoordinationService {
 
     /// Bind a room and persona to their live attempt, if any.
     pub fn bind(&self, room: &str, persona: &str) -> CoordResult<Option<ToolCtx>> {
-        if !self.config.enabled {
+        if !self.config().enabled {
             return Ok(None);
         }
         let Some(task_id) = task_of_room(room) else {
@@ -1048,7 +1050,7 @@ impl CoordinationService {
     /// Charge one tool action and verify the attempt still holds its lease.
     pub fn live(&self, ctx: &ToolCtx) -> CoordResult<Task> {
         self.charge(&ctx.root_id, Charge::ToolAction)?;
-        let lease = self.config.lease_secs as i64;
+        let lease = self.config().lease_secs as i64;
         self.store.write(|db| {
             let attempt = db
                 .attempt(&ctx.attempt_id)?
@@ -1343,7 +1345,7 @@ impl CoordinationService {
             ));
         }
         if approve && task.id != task.root_id {
-            if let Some(execution) = self.execution.get().filter(|e| !e.config.checks.is_empty()) {
+            if let Some(execution) = self.execution.get().filter(|e| e.has_checks()) {
                 let artifacts = self.store.read(|db| db.artifacts(&task.id))?;
                 let sha = artifacts
                     .iter()
@@ -1422,7 +1424,7 @@ impl CoordinationService {
                     &format!("rejected by {}: {}", ctx.persona, clip(notes, 800)),
                 )?;
                 let used = db.attempt_count(&task.id)?;
-                if used >= self.config.max_attempts_per_task {
+                if used >= self.config().max_attempts_per_task {
                     db.set_status(
                         &task.id,
                         TaskStatus::Failed,
@@ -1857,7 +1859,7 @@ impl CoordinationService {
             if let Some(existing) = db.equivalent_message(&task.root_id, &task.id, &ctx.persona, req.kind, &recipients, group_id.as_deref(), &body)? {
                 return Ok((existing, true));
             }
-            let wake = req.kind.wakes_recipient() && depth <= self.config.max_message_depth && !matches!(cause_kind, Some(MessageKind::Ack | MessageKind::Status));
+            let wake = req.kind.wakes_recipient() && depth <= self.config().max_message_depth && !matches!(cause_kind, Some(MessageKind::Ack | MessageKind::Status));
             let id = new_id("mg");
             let thread = if thread.is_empty() { id.clone() } else { thread };
             db.insert_message(&NewMessage {
@@ -2359,12 +2361,12 @@ impl CoordinationService {
                         kind: a.kind,
                     })
                     .collect();
-                let queued_wakes = if self.config.enabled {
+                let queued_wakes = if self.config().enabled {
                     db.queued_wakes_for(&persona.name)?
                 } else {
                     0
                 };
-                let owned = if self.config.enabled {
+                let owned = if self.config().enabled {
                     db.list_tasks(&TaskFilter {
                         owner: Some(&persona.name),
                         limit: 200,

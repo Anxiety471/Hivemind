@@ -272,6 +272,52 @@ export type RuntimeSession = {
 
 export type AccessPersona = { id: string; permissions: string[]; roles: string[]; restricted: boolean };
 
+export type OperatorCheck = { name: string; command: string[]; timeout_secs: number };
+
+/** The operator settings stored in hivemind.toml and edited from Configure. */
+export type OperatorConfig = {
+  context: {
+    recent_turns: number;
+    summary_max_tokens: number;
+    context_target_tokens: number;
+    runtime_rotate_tokens: number;
+    summary_refresh_turns: number;
+  };
+  execution: {
+    task_token_limit: number;
+    project_token_limit: number;
+    require_usage: boolean;
+    checks: OperatorCheck[];
+  };
+  coordination: {
+    enabled: boolean;
+    planner: string | null;
+    max_dispatches: number;
+    max_tool_actions: number;
+    max_messages: number;
+    max_plan_tasks: number;
+    max_plan_depth: number;
+    max_elapsed_secs: number;
+    max_attempts_per_task: number;
+    max_concurrent: number;
+    lease_secs: number;
+    max_message_depth: number;
+    question_timeout_secs: number;
+    max_questions: number;
+  };
+  runtime: {
+    omp_binary: string;
+    pi_binary: string;
+    opencode_binary: string;
+    prompt_timeout_secs: number;
+    idle_timeout_secs: number;
+    prompt_retries: number;
+  };
+  skills: string[];
+  workspace_roots: string[];
+  restart: string[];
+};
+
 export type Settings = { baseUrl: string; token: string };
 export type SetupPersona = {
   id: string;
@@ -436,6 +482,10 @@ export const api = {
   updateChatGroup: (id: string, patch: Partial<Omit<ChatGroup, "id" | "room_id" | "workspace">>) =>
     request<{ group: ChatGroup }>("PATCH", `/chat-groups/${enc(id)}`, patch),
   deleteChatGroup: (id: string) => request<void>("DELETE", `/chat-groups/${enc(id)}`),
+
+  operatorConfig: () => request<OperatorConfig>("GET", "/config"),
+  saveOperatorConfig: (body: Omit<OperatorConfig, "restart">) =>
+    request<OperatorConfig>("PUT", "/config", body),
 
   workspaces: () => request<Workspaces>("GET", "/workspaces"),
   runtimeModels: (runtime: string, refresh = false) =>

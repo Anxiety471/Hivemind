@@ -485,8 +485,7 @@ async fn execute(
         }
     }
 
-    if attempt.kind == AttemptKind::Review && !is_root && !core.execution().config.checks.is_empty()
-    {
+    if attempt.kind == AttemptKind::Review && !is_root && core.execution().has_checks() {
         let Some(sha) = latest_commit(&service, &task.id) else {
             return failed("verification", "no committed deliverable");
         };

@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { useState } from "react";
 import { api, type Workspaces } from "../api";
 import { Avatar, ErrorNote, PageHeader, useAction, useAsync } from "../ui";
+import { FolderPicker } from "./agentControls";
 
 export function WorkspacesView() {
   const ws = useAsync(() => api.workspaces(), []);
@@ -97,6 +98,7 @@ export function workspaceChoices(w: Workspaces): string[] {
 
 function KnownWorkspaces({ data, onUpdated }: { data: Workspaces; onUpdated: (w: Workspaces) => void }) {
   const [path, setPath] = useState("");
+  const [browsing, setBrowsing] = useState(false);
   const add = useAction();
   const remove = useAction();
   const usedBy = (dir: string) => [
@@ -157,10 +159,23 @@ function KnownWorkspaces({ data, onUpdated }: { data: Workspaces; onUpdated: (w:
           placeholder="/absolute/path/to/another/workspace"
           onChange={(e) => setPath((e.target as HTMLInputElement).value)}
         />
+        <button type="button" className="ghost" onClick={() => setBrowsing((open) => !open)}>
+          {browsing ? "Close browser" : "Browse…"}
+        </button>
         <button className="primary" type="submit" disabled={add.busy || !path.trim()}>
           Add workspace
         </button>
       </form>
+      {browsing && (
+        <FolderPicker
+          start={path}
+          onPick={(picked) => {
+            setPath(picked);
+            setBrowsing(false);
+          }}
+          onClose={() => setBrowsing(false)}
+        />
+      )}
       <ErrorNote error={add.error} />
     </div>
   );

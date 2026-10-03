@@ -35,6 +35,7 @@ Building the server and serving health, info, and agent listings never starts Pi
 | `PUT` / `DELETE` | `/api/v1/workspaces/groups/{id}` | Set (`{"path"}`) or clear a group's shared workspace; returns the new snapshot |
 | `PUT` | `/api/v1/workspaces/personas/{id}` | Change a persona's own workspace |
 | `GET` | `/api/v1/access/roles` | Built-in and custom role definitions with their permissions |
+| `GET` / `PUT` | `/api/v1/config` | Budgets, runtime programs and timeouts, skill folders, project-folder roots, and verification checks. `PUT` sends the whole operator document (`context`, `execution`, `coordination`, `runtime`, `skills`, `workspace_roots`); personas, groups, and known workspaces stay as they are. The file is validated and written without dropping comments, then applied to this process. The response adds `restart`: it lists `coordination` when coordination is on in the file and this process started with it off, which needs a new `hivemind serve`. A `config.changed` event (`scope` `operator`) follows a successful save |
 | `GET` | `/api/v1/skills` | Skills from `[skills] dirs` (`name`, `description`, `argument_hint`, `source`) and the directories scanned |
 | `GET` | `/api/v1/skills/{name}?path=` | A skill's `SKILL.md`, or another file inside its folder via `path`, plus the other files it ships. `404` for an unknown skill or a path outside the folder |
 | `GET` | `/api/v1/tools` | Tool names agents can call through the `hivemind-tool` fence, grouped by namespace |
@@ -43,7 +44,7 @@ Building the server and serving health, info, and agent listings never starts Pi
 | `GET` | `/api/v1/events?after=N` | Durable, restart-safe event replay with a high-water mark |
 | `GET` | `/api/v1/ws` | WebSocket live event stream |
 
-Workspace changes use the same checks as the agent `workspace.*` tools: an absolute, existing directory, inside `[workspaces] roots` when roots are configured. They are written to the config file, and a runtime session in the old directory is replaced before the next turn. Persona definitions are managed through `/api/v1/agents`; roles stay read-only, so edit those in the config. A `config.changed` event (`scope` `agents` or `rooms`) is published after these changes.
+Workspace changes use the same checks as the agent `workspace.*` tools: an absolute, existing directory, inside `[workspaces] roots` when roots are configured. They are written to the config file, and a runtime session in the old directory is replaced before the next turn. Persona definitions are managed through `/api/v1/agents`; roles stay read-only, so edit those in the config. A `config.changed` event (`scope` `agents` or `rooms`) is published after these changes. Saving through `/api/v1/config` publishes `scope` `operator`.
 
 Errors use one shape, `{"error":{"code","message"}}`, and internal failures are sanitized.
 

@@ -256,8 +256,7 @@ pub type HoldCheck = Arc<dyn Fn(&AgentInstanceId) -> bool + Send + Sync>;
 
 struct PoolInner {
     execution: std::sync::OnceLock<Arc<crate::execution::ExecutionStore>>,
-    runtime: RuntimeConfig,
-    rotate_tokens: u64,
+    tuning: parking_lot::RwLock<RuntimeTuning>,
     memory: Arc<MemoryService>,
     events: EventBus,
     slots: ParkingMutex<HashMap<AgentInstanceId, SlotHandle>>,
@@ -270,6 +269,12 @@ struct PoolInner {
     reaper_started: AtomicBool,
     reaper_task: ParkingMutex<Option<JoinHandle<()>>>,
     hold: ParkingMutex<Option<HoldCheck>>,
+}
+
+#[derive(Clone)]
+struct RuntimeTuning {
+    runtime: RuntimeConfig,
+    rotate_tokens: u64,
 }
 
 /// Owns every live agent-instance runtime for one core.
@@ -289,8 +294,10 @@ impl RuntimePool {
         Self {
             inner: Arc::new(PoolInner {
                 execution: std::sync::OnceLock::new(),
-                runtime,
-                rotate_tokens: rotate_tokens as u64,
+                tuning: parking_lot::RwLock::new(RuntimeTuning {
+                    runtime,
+                    rotate_tokens: rotate_tokens as u64,
+                }),
                 memory,
                 events,
                 slots: ParkingMutex::new(HashMap::new()),
@@ -337,13 +344,26 @@ impl RuntimePool {
         let _ = self.inner.execution.set(store);
     }
 
+    /// Timeouts, binaries, and the context size that rotates a session. The pool keeps
+    /// its harness directory and private environment.
+    pub fn set_tuning(&self, mut runtime: RuntimeConfig, rotate_tokens: usize) {
+        let current = self.inner.tuning();
+        runtime.private_env = current.runtime.private_env;
+        runtime.harness_dir = current.runtime.harness_dir;
+        *self.inner.tuning.write() = RuntimeTuning {
+            runtime,
+            rotate_tokens: rotate_tokens as u64,
+        };
+        self.ensure_reaper();
+    }
+
     /// Prompt the instance's live session, starting, rotating, or rehydrating
     /// it as needed. A failed prompt discards the session; the turn is then
     /// retried on a fresh session (`runtime.prompt_retries` extra attempts on
     /// the configured model, skipped after a timeout), then once on each of the
     /// persona's `fallback_models`. The last error is returned if all fail.
     pub async fn invoke(&self, caller: &Caller, request: InvokeRequest<'_>) -> Result<InvokeReply> {
-        let retries = self.inner.runtime.prompt_retries;
+        let retries = self.inner.tuning().runtime.prompt_retries;
         let mut attempts: Vec<(Option<&str>, u32)> = vec![(None, retries)];
         attempts.extend(
             request
@@ -405,6 +425,9 @@ impl RuntimePool {
             bail!("runtime request identity does not match its caller and persona");
         }
         let inner = &self.inner;
+        let tuning = inner.tuning();
+        let prompt_timeout_secs = tuning.runtime.prompt_timeout_secs;
+        let rotate_tokens = tuning.rotate_tokens;
         let project = std::fs::canonicalize(&request.agent.workspace)
             .unwrap_or_else(|_| request.agent.workspace.clone().into())
             .display()
@@ -433,8 +456,8 @@ impl RuntimePool {
             (&request.delta, &slot.live),
             (Some(delta), Some(live)) if live.epoch.id == delta.epoch_id
         );
-        let prompt_timeout = (inner.runtime.prompt_timeout_secs > 0)
-            .then(|| Duration::from_secs(inner.runtime.prompt_timeout_secs));
+        let prompt_timeout =
+            (prompt_timeout_secs > 0).then(|| Duration::from_secs(prompt_timeout_secs));
         if request.phase == PromptPhase::TurnStart
             && slot
                 .live
@@ -491,7 +514,7 @@ impl RuntimePool {
                         bail!("runtime pool is shutting down");
                     }
                 };
-                if live.estimated_tokens.max(reported) >= inner.rotate_tokens {
+                if live.estimated_tokens.max(reported) >= rotate_tokens {
                     inner
                         .stop(
                             request.agent_instance_id,
@@ -607,11 +630,8 @@ impl RuntimePool {
                     .stop(request.agent_instance_id, live, Stop::PromptTimeout)
                     .await;
                 inner.remove_vacant_slot(request.agent_instance_id, &slot_handle, &slot);
-                let message = if inner.runtime.prompt_timeout_secs > 0 {
-                    format!(
-                        "runtime prompt timed out after {}s of inactivity",
-                        inner.runtime.prompt_timeout_secs
-                    )
+                let message = if prompt_timeout_secs > 0 {
+                    format!("runtime prompt timed out after {prompt_timeout_secs}s of inactivity")
                 } else {
                     "runtime prompt timed out".to_string()
                 };
@@ -704,13 +724,14 @@ impl RuntimePool {
         }
     }
     fn ensure_reaper(&self) {
-        let idle = self.inner.runtime.idle_timeout_secs;
-        if idle == 0 || self.inner.reaper_started.swap(true, Ordering::SeqCst) {
+        if self.inner.tuning().runtime.idle_timeout_secs == 0
+            || self.inner.reaper_started.swap(true, Ordering::SeqCst)
+        {
             return;
         }
         let weak: Weak<PoolInner> = Arc::downgrade(&self.inner);
         let mut shutdown = self.inner.shutdown_signal.subscribe();
-        let tick = Duration::from_secs((idle / 4).clamp(1, 30));
+        let tick = Duration::from_secs(15);
         let reaper = tokio::spawn(async move {
             loop {
                 if *shutdown.borrow() {
@@ -728,6 +749,10 @@ impl RuntimePool {
                 if inner.shutting_down.load(Ordering::SeqCst) {
                     break;
                 }
+                let idle = inner.tuning().runtime.idle_timeout_secs;
+                if idle == 0 {
+                    continue;
+                }
                 inner.close_idle(Duration::from_secs(idle)).await;
             }
         });
@@ -736,6 +761,9 @@ impl RuntimePool {
 }
 
 impl PoolInner {
+    fn tuning(&self) -> RuntimeTuning {
+        self.tuning.read().clone()
+    }
     fn existing_slot(&self, agent_instance_id: &AgentInstanceId) -> Option<SlotHandle> {
         self.slots.lock().get(agent_instance_id).cloned()
     }
@@ -775,7 +803,8 @@ impl PoolInner {
 
     async fn start(&self, caller: &Caller, request: &InvokeRequest<'_>) -> Result<Live> {
         let agent = request.agent;
-        let mut session = match create_session(&self.runtime, agent).await {
+        let runtime = self.tuning().runtime;
+        let mut session = match create_session(&runtime, agent).await {
             Ok(session) => session,
             Err(error) => {
                 self.events.publish(DomainEventKind::RuntimeFailed {

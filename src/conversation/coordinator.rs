@@ -38,7 +38,7 @@ pub type FollowUpResolver = Arc<dyn Fn(&str) -> Option<FollowUpLimit> + Send + S
 pub struct ConversationCoordinator {
     store: Arc<dyn ContextStore>,
     memory: Arc<MemoryService>,
-    limits: ContextConfig,
+    limits: std::sync::RwLock<ContextConfig>,
     events: Option<crate::events::EventBus>,
     lock_dir: std::sync::OnceLock<PathBuf>,
     tools: std::sync::OnceLock<Arc<dyn ToolHost>>,
@@ -179,7 +179,7 @@ impl ConversationCoordinator {
         Self {
             store: Arc::new(SqliteContextStore::new(directory, memory.clone())),
             memory,
-            limits,
+            limits: std::sync::RwLock::new(limits),
             events,
             lock_dir: std::sync::OnceLock::new(),
             tools: std::sync::OnceLock::new(),
@@ -197,7 +197,7 @@ impl ConversationCoordinator {
         Self {
             store,
             memory,
-            limits,
+            limits: std::sync::RwLock::new(limits),
             events: None,
             lock_dir: std::sync::OnceLock::new(),
             tools: std::sync::OnceLock::new(),
@@ -219,6 +219,10 @@ impl ConversationCoordinator {
         let _ = self.follow_up_override.set(resolver);
     }
 
+    /// Context budgets for the next turn. A turn already being built keeps the limits it started with.
+    pub fn set_limits(&self, limits: ContextConfig) {
+        *self.limits.write().expect("context limits lock poisoned") = limits;
+    }
     /// Extra mention-triggered replies a Discussion turn may add. Set once at startup.
     pub fn set_mention_limit(&self, limit: usize) {
         let _ = self.mention_limit.set(limit);
@@ -646,7 +650,11 @@ impl ConversationCoordinator {
                 .and_then(|()| {
                     validate_state(
                         &next_state,
-                        self.limits.context_target_tokens.saturating_mul(2),
+                        self.limits
+                            .read()
+                            .expect("context limits lock poisoned")
+                            .context_target_tokens
+                            .saturating_mul(2),
                     )
                 });
         if let Err(error) = state_update {
@@ -822,7 +830,14 @@ impl ConversationCoordinator {
         }
         delta.push_str(&format!("\nCurrent user message:\n{input}\n"));
         delta.push_str(&same_turn_replies(prior, optional, remaining_budget));
-        (delta.len() <= self.limits.context_target_tokens.saturating_mul(4)).then_some(delta)
+        (delta.len()
+            <= self
+                .limits
+                .read()
+                .expect("context limits lock poisoned")
+                .context_target_tokens
+                .saturating_mul(4))
+        .then_some(delta)
     }
 
     pub(super) fn context_pack(
@@ -875,7 +890,14 @@ impl ConversationCoordinator {
         } else {
             format!("\nOlder conversation summary:\n{}\n", history.summary)
         };
-        let recent = recent_events(&history.events, self.limits.recent_turns, active_turn);
+        let recent = recent_events(
+            &history.events,
+            self.limits
+                .read()
+                .expect("context limits lock poisoned")
+                .recent_turns,
+            active_turn,
+        );
         let recent = if recent.is_empty() {
             String::new()
         } else {
@@ -890,9 +912,14 @@ impl ConversationCoordinator {
             identity.len() + manifest.len() + state.len() + current.len() + same_turn.len();
         // Established byte budget: four times the configured token target,
         // enforced before any optional section is assembled.
-        let budget = self.limits.context_target_tokens.saturating_mul(4);
+        let budget = self
+            .limits
+            .read()
+            .expect("context limits lock poisoned")
+            .context_target_tokens
+            .saturating_mul(4);
         if mandatory_len > budget {
-            bail!("current turn and participant/state context ({mandatory_len} bytes) exceed configured context_target_tokens ({} tokens = {budget} bytes)", self.limits.context_target_tokens);
+            bail!("current turn and participant/state context ({mandatory_len} bytes) exceed configured context_target_tokens ({} tokens = {budget} bytes)", self.limits.read().expect("context limits lock poisoned").context_target_tokens);
         }
         let available = budget - mandatory_len;
         let mut optional = format!("{summary}{recent}{hits}");
@@ -992,13 +1019,23 @@ impl ConversationCoordinator {
                 last = Some(event.turn_id.as_str());
             }
         }
-        let archive_count = turn_count.saturating_sub(self.limits.recent_turns);
+        let archive_count = turn_count.saturating_sub(
+            self.limits
+                .read()
+                .expect("context limits lock poisoned")
+                .recent_turns,
+        );
         if archive_count == 0 {
             return false;
         }
         let completed = history.completed_turns.len();
-        let cadence_due =
-            completed > 0 && completed.is_multiple_of(self.limits.summary_refresh_turns);
+        let cadence_due = completed > 0
+            && completed.is_multiple_of(
+                self.limits
+                    .read()
+                    .expect("context limits lock poisoned")
+                    .summary_refresh_turns,
+            );
         let raw_window_would_evict_unrepresented_turn =
             archive_count > history.summarized_turn_count;
         if !cadence_due && !raw_window_would_evict_unrepresented_turn {
@@ -1022,7 +1059,12 @@ impl ConversationCoordinator {
         // The summary is the last `cap` bytes of the archived narrative, so
         // walk the archived events newest-first and stop once that much text
         // is collected instead of formatting the whole history.
-        let cap = self.limits.summary_max_tokens.saturating_mul(4);
+        let cap = self
+            .limits
+            .read()
+            .expect("context limits lock poisoned")
+            .summary_max_tokens
+            .saturating_mul(4);
         let mut lines = Vec::new();
         let mut collected = 0usize;
         for event in history.events[..cut].iter().rev() {

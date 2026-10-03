@@ -3,6 +3,7 @@ mod artifacts;
 mod auth;
 mod catalog;
 mod jobs;
+mod operator;
 pub use auth::ServerConfig;
 mod chat_groups;
 mod cors;

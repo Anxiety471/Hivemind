@@ -12,6 +12,7 @@ const WorkspacesView = lazy(() => import("./views/Workspaces").then((m) => ({ de
 const Sessions = lazy(() => import("./views/Sessions").then((m) => ({ default: m.Sessions })));
 const Activity = lazy(() => import("./views/Activity").then((m) => ({ default: m.Activity })));
 const SettingsView = lazy(() => import("./views/Settings").then((m) => ({ default: m.SettingsView })));
+const ConfigureView = lazy(() => import("./views/Configure").then((m) => ({ default: m.ConfigureView })));
 import "./content.css";
 import "./styles.css";
 
@@ -101,6 +102,9 @@ function App() {
     case "settings":
       view = <SettingsView />;
       break;
+    case "configure":
+      view = <ConfigureView />;
+      break;
     case "setup":
       view = <FirstRunSetup onComplete={leaveSetup} onSkip={leaveSetup} />;
       break;
@@ -122,6 +126,10 @@ function App() {
           </a>
         ))}
         <div className="spacer" />
+        <a href="#/configure" className={route.page === "configure" ? "nav active" : "nav"}>
+          <span className="nav-icon">🧰</span>
+          Configure
+        </a>
         <a href="#/settings" className={route.page === "settings" ? "nav active" : "nav"}>
           <span className="nav-icon">⚙️</span>
           Connection

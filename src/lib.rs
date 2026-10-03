@@ -9,6 +9,7 @@ pub mod core;
 pub mod events;
 pub mod identity;
 pub mod memory;
+pub mod operator;
 pub mod runtime;
 pub mod shared_workspace;
 pub mod skills;

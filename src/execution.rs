@@ -94,8 +94,26 @@ pub const MAX_FOLLOW_UP_LIMIT: i64 = 64;
 
 pub struct ExecutionStore {
     db: Mutex<Connection>,
-    pub config: ExecutionConfig,
+    config: Mutex<ExecutionConfig>,
     private_env: Mutex<Vec<String>>,
+}
+
+pub fn validate_checks(config: &ExecutionConfig) -> Result<()> {
+    for check in &config.checks {
+        anyhow::ensure!(
+            !check.name.trim().is_empty()
+                && !check.command.is_empty()
+                && check.command.iter().all(|arg| !arg.trim().is_empty())
+                && check.timeout_secs > 0,
+            "verification checks need a name, executable, and positive timeout"
+        );
+    }
+    let names: std::collections::HashSet<_> = config.checks.iter().map(|c| &c.name).collect();
+    anyhow::ensure!(
+        names.len() == config.checks.len(),
+        "duplicate verification check name"
+    );
+    Ok(())
 }
 fn now() -> i64 {
     SystemTime::now()
@@ -138,25 +156,22 @@ impl ExecutionStore {
         {
             db.execute_batch("ALTER TABLE room_settings ADD COLUMN follow_up_limit INTEGER;")?;
         }
-        for check in &config.checks {
-            anyhow::ensure!(
-                !check.name.trim().is_empty()
-                    && !check.command.is_empty()
-                    && !check.command[0].trim().is_empty()
-                    && check.timeout_secs > 0,
-                "verification checks need a name, executable, and positive timeout"
-            );
-        }
-        let names: std::collections::HashSet<_> = config.checks.iter().map(|c| &c.name).collect();
-        anyhow::ensure!(
-            names.len() == config.checks.len(),
-            "duplicate verification check name"
-        );
+        validate_checks(&config)?;
         Ok(Self {
             db: Mutex::new(db),
-            config,
+            config: Mutex::new(config),
             private_env: Mutex::new(Vec::new()),
         })
+    }
+
+    pub fn set_config(&self, config: ExecutionConfig) -> Result<()> {
+        validate_checks(&config)?;
+        *self.config.lock() = config;
+        Ok(())
+    }
+
+    pub fn has_checks(&self) -> bool {
+        !self.config.lock().checks.is_empty()
     }
     pub fn room_settings(&self, room: &str) -> Result<RoomSettings> {
         Ok(self
@@ -357,15 +372,16 @@ impl ExecutionStore {
             .unwrap_or_else(|| room.into()))
     }
     pub fn check_budget(&self, room: &str, project: &str) -> Result<()> {
+        let limits = self.config.lock().clone();
         let db = self.db.lock();
         let scope = Self::scope(&db, room)?;
         let project = Self::project(&db, room, project)?;
         for (column, value, limit) in [
-            ("scope", scope.as_str(), self.config.task_token_limit),
-            ("project", project.as_str(), self.config.project_token_limit),
+            ("scope", scope.as_str(), limits.task_token_limit),
+            ("project", project.as_str(), limits.project_token_limit),
         ] {
             let (tokens, unknown): (i64,i64) = db.query_row(&format!("SELECT COALESCE(SUM(tokens),0),COALESCE(SUM(tokens IS NULL),0) FROM usage WHERE {column}=?"), [value], |r| Ok((r.get(0)?,r.get(1)?)))?;
-            if self.config.require_usage && unknown > 0 {
+            if limits.require_usage && unknown > 0 {
                 bail!("usage unavailable; operator action required");
             }
             if limit > 0 && tokens as u64 >= limit {
@@ -426,8 +442,9 @@ impl ExecutionStore {
             .collect())
     }
     pub fn verified(&self, task: &str, sha: &str) -> Result<bool> {
+        let checks = self.config.lock().checks.clone();
         let db = self.db.lock();
-        for check in &self.config.checks {
+        for check in &checks {
             if db.query_row("SELECT passed FROM checks WHERE task=? AND commit_sha=? AND name=? ORDER BY id DESC LIMIT 1", params![task,sha,check.name], |r| r.get::<_,bool>(0)).optional()? != Some(true) { return Ok(false); }
         }
         Ok(true)
@@ -438,7 +455,8 @@ impl ExecutionStore {
 pub async fn verify(store: Arc<ExecutionStore>, task: &str, sha: &str, cwd: &Path) -> Result<bool> {
     use tokio::{io::AsyncReadExt, process::Command};
     let mut all = true;
-    for check in &store.config.checks {
+    let checks = store.config.lock().checks.clone();
+    for check in &checks {
         let mut command = Command::new(&check.command[0]);
         command
             .args(&check.command[1..])

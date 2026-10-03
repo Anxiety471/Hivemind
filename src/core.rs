@@ -44,6 +44,8 @@ pub struct HivemindCore {
     access: Arc<crate::access::AccessPolicy>,
     workspaces: Arc<SharedWorkspaces>,
     skills: Arc<crate::skills::SkillCatalog>,
+    /// Whether coordination was enabled when this process started. Turning it on later is saved, and needs a restart to start the scheduler.
+    coordination_booted: bool,
     setup_required: AtomicBool,
     setup_lock: std::sync::Mutex<()>,
     shutting_down: AtomicBool,
@@ -292,6 +294,7 @@ impl HivemindCore {
         }
         conversation.set_tools(Arc::new(ToolHosts(hosts)));
         events.publish(DomainEventKind::CoreStarted);
+        let coordination_booted = config.coordination.enabled;
         Ok(Self {
             artifacts,
             execution,
@@ -307,6 +310,7 @@ impl HivemindCore {
             access,
             workspaces,
             skills,
+            coordination_booted,
             setup_required: AtomicBool::new(setup_required),
             setup_lock: std::sync::Mutex::new(()),
             shutting_down: AtomicBool::new(false),
@@ -415,7 +419,42 @@ impl HivemindCore {
             }
         }
         config.workspaces.known = self.workspaces.known();
+        config.workspaces.roots = self.workspaces.roots();
         config
+    }
+
+    pub fn coordination_booted(&self) -> bool {
+        self.coordination_booted
+    }
+
+    /// Save budgets, runtime knobs, skill directories, and project folders, then apply them.
+    pub fn apply_operator(
+        &self,
+        body: crate::operator::OperatorBody,
+    ) -> Result<crate::operator::OperatorView> {
+        let _guard = self
+            .group_edit_lock
+            .lock()
+            .expect("config edit lock poisoned");
+        let mut staged = self.config();
+        crate::operator::apply_to_config(&mut staged, &body)?;
+        let for_file = staged.clone();
+        crate::shared_workspace::edit_config(&self.config_path, |document| {
+            crate::operator::write_document(document, &for_file)
+        })?;
+        self.execution.set_config(staged.execution.clone())?;
+        self.conversation.set_limits(staged.context.clone());
+        self.runtime
+            .set_tuning(staged.runtime.clone(), staged.context.runtime_rotate_tokens);
+        self.coordination.set_config(staged.coordination.clone());
+        self.skills.set_dirs(&staged.skills.dirs);
+        self.workspaces.set_roots(staged.workspaces.roots.clone());
+        let view = crate::operator::OperatorView::from_config(&staged, self.coordination_booted);
+        *self.config.write().expect("core config lock poisoned") = Arc::new(staged);
+        self.events.publish(DomainEventKind::ConfigChanged {
+            scope: "operator".into(),
+        });
+        Ok(view)
     }
 
     /// Add an agent: validate the resulting configuration, persist it, then expose it.

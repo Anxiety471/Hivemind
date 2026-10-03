@@ -1,6 +1,6 @@
 # Configuration
 
-Hivemind reads `hivemind.toml` (create it with `hivemind init`, or pass another file with `--config`). The database lives in `.hivemind/` next to the config file. A commented starting point is in [`hivemind.example.toml`](https://github.com/Anxiety471/Hivemind/blob/main/hivemind.example.toml); a full role-based team is in [`examples/team.toml`](https://github.com/Anxiety471/Hivemind/blob/main/examples/team.toml).
+Hivemind reads `hivemind.toml` (create it with `hivemind init`, or pass another file with `--config`). The database lives in `.hivemind/` next to the config file. **Configure** in the web UI edits the budgets, runtime timeouts, skill folders, and project-folder roots on this page and writes them back to the file. Those changes apply to the running hive. Turning coordination on when this process started with it off takes effect after `hivemind serve` is started again. A commented starting point is in [`hivemind.example.toml`](https://github.com/Anxiety471/Hivemind/blob/main/hivemind.example.toml); a full role-based team is in [`examples/team.toml`](https://github.com/Anxiety471/Hivemind/blob/main/examples/team.toml).
 
 ## Runtimes
 

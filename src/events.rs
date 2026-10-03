@@ -54,7 +54,7 @@ pub enum DomainEventKind {
     },
     CoreStarted,
     CoreShuttingDown,
-    /// Operator-managed configuration (`agents`, `workspaces`, `rooms`) changed.
+    /// Operator-managed configuration (`agents`, `workspaces`, `rooms`, `operator`) changed.
     ConfigChanged {
         scope: String,
     },

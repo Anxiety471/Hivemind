@@ -39,7 +39,7 @@ struct State {
 pub struct SharedWorkspaces {
     config_path: PathBuf,
     pub(crate) edit_lock: Arc<std::sync::Mutex<()>>,
-    roots: Vec<String>,
+    roots: RwLock<Vec<String>>,
     /// User-added workspaces, in the order they were added.
     known: RwLock<Vec<String>>,
     state: RwLock<State>,
@@ -50,7 +50,7 @@ impl SharedWorkspaces {
         let store = Self {
             config_path: config_path.to_owned(),
             edit_lock: Arc::new(std::sync::Mutex::new(())),
-            roots: config.workspaces.roots.clone(),
+            roots: RwLock::new(config.workspaces.roots.clone()),
             known: RwLock::new(config.workspaces.known.clone()),
             state: RwLock::new(State::default()),
         };
@@ -89,8 +89,12 @@ impl SharedWorkspaces {
     }
 
     /// Directories agents and the API may choose from; empty means any existing directory.
-    pub fn roots(&self) -> &[String] {
-        &self.roots
+    pub fn roots(&self) -> Vec<String> {
+        self.roots.read().expect("workspace lock poisoned").clone()
+    }
+
+    pub fn set_roots(&self, roots: Vec<String>) {
+        *self.roots.write().expect("workspace lock poisoned") = roots;
     }
 
     /// Workspaces the user added, in the order added.
@@ -250,11 +254,12 @@ impl SharedWorkspaces {
     /// Directories agents may choose: each configured root and its visible subdirectories.
     pub fn list(&self) -> Result<String> {
         let known = self.known();
-        if self.roots.is_empty() && known.is_empty() {
+        let roots = self.roots();
+        if roots.is_empty() && known.is_empty() {
             return Ok("No workspace roots are configured, so there is no list to choose from. Any existing absolute directory the user names is accepted.".into());
         }
         let mut found = known;
-        for root in &self.roots {
+        for root in &roots {
             found.push(root.clone());
             let Ok(entries) = fs::read_dir(root) else {
                 continue;
@@ -303,13 +308,13 @@ impl SharedWorkspaces {
             .ok()
             .filter(|p| p.is_dir())
             .with_context(|| format!("'{trimmed}' does not exist or is not a directory"))?;
-        if !self.roots.is_empty()
-            && !self
-                .roots
+        let roots = self.roots();
+        if !roots.is_empty()
+            && !roots
                 .iter()
                 .any(|root| fs::canonicalize(root).is_ok_and(|root| real.starts_with(root)))
         {
-            bail!("'{trimmed}' is outside the allowed workspace roots [{}]; use workspace.list to see the choices", self.roots.join(", "));
+            bail!("'{trimmed}' is outside the allowed workspace roots [{}]; use workspace.list to see the choices", roots.join(", "));
         }
         Ok(crate::coordination::policy::normalize_workspace(trimmed))
     }

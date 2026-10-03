@@ -37,7 +37,7 @@ Limits default to zero (disabled). Before every runtime prompt and autonomous di
 
 Pi/OMP billing usage comes from assistant `message_end.usage` counters: input, output, cache reads, and cache writes. A prompt with incomplete reporting remains unknown. OpenCode ACP context occupancy (`usage_update.used`) is used for rotation only and remains unknown for billing. An unknown record is `usage: null`, never zero.
 
-`GET /api/v1/usage?scope=<root-task-id>` returns measured totals, unknown prompt count, and the latest 200 records. Without a scope it returns totals across the execution store. Task worktrees charge the original project workspace, not each temporary checkout. To change limits, update the operator configuration and restart; known usage is retained.
+`GET /api/v1/usage?scope=<root-task-id>` returns measured totals, unknown prompt count, and the latest 200 records. Without a scope it returns totals across the execution store. Task worktrees charge the original project workspace, not each temporary checkout. Change the limits from **Configure** in the web UI, or in `[execution]` in the config file. The next prompt uses the new limits; known usage is retained.
 
 ## Host verification
 

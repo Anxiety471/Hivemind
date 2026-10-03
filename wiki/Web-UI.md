@@ -15,7 +15,8 @@ cd frontend && bun install && bun run dev   # UI on http://127.0.0.1:5173
 - **Tasks**: root tasks, subtasks with dependencies, attempts, artifacts, evidence, and budget meters. Submit, pause, resume, cancel, and answer `needs_input`. Refreshes on `task.*` and `attempt.*` events.
 - **Agents**: runtime, activity state (`/agent-instances`), workspace, capabilities, and effective permissions per persona.
 - **Groups**: create, edit (members, mode, per-group roles, reply order), and delete chat groups via `/chat-groups`.
-- **Workspaces**: allowed roots, group shared workspaces, and persona workspaces, editable in place.
+- **Workspaces**: allowed roots, group shared workspaces, and persona workspaces, editable in place. Adding a workspace can use the folder browser.
+- **Configure**: budgets, runtime programs and timeouts, skill folders, project-folder roots, and verification checks from `hivemind.toml` (`GET`/`PUT /api/v1/config`). Saving writes the file and applies it to this running hive. Turning coordination on needs a restart when this process started with it off.
 - **Runtime sessions**: epochs per room with end reasons and rotation, plus **Rotate** for a live session (`POST /runtime/rotate`).
 - **Live activity**: the raw WebSocket event stream with filters.
 

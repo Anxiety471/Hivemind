@@ -46,7 +46,7 @@ pub struct SkillDocument {
 }
 
 pub struct SkillCatalog {
-    dirs: Vec<PathBuf>,
+    dirs: std::sync::RwLock<Vec<PathBuf>>,
 }
 
 fn expand(dir: &str) -> PathBuf {
@@ -124,23 +124,38 @@ fn truncate(text: &str, max: usize) -> String {
 impl SkillCatalog {
     pub fn new(dirs: &[String]) -> Self {
         Self {
-            dirs: dirs.iter().map(|dir| expand(dir)).collect(),
+            dirs: std::sync::RwLock::new(dirs.iter().map(|dir| expand(dir)).collect()),
         }
     }
 
+    pub fn set_dirs(&self, dirs: &[String]) {
+        *self.dirs.write().expect("skill directory lock poisoned") =
+            dirs.iter().map(|dir| expand(dir)).collect();
+    }
+
+    fn directories(&self) -> Vec<PathBuf> {
+        self.dirs
+            .read()
+            .expect("skill directory lock poisoned")
+            .clone()
+    }
+
     pub fn is_configured(&self) -> bool {
-        !self.dirs.is_empty()
+        !self.directories().is_empty()
     }
 
     pub fn dirs(&self) -> Vec<String> {
-        self.dirs.iter().map(|d| d.display().to_string()).collect()
+        self.directories()
+            .iter()
+            .map(|d| d.display().to_string())
+            .collect()
     }
 
     /// Every skill found, sorted by name; the first directory wins a duplicate name.
     pub fn list(&self) -> Vec<Skill> {
         let mut skills: Vec<Skill> = Vec::new();
-        for base in &self.dirs {
-            let Ok(entries) = fs::read_dir(base) else {
+        for base in self.directories() {
+            let Ok(entries) = fs::read_dir(&base) else {
                 continue;
             };
             for entry in entries.flatten() {
