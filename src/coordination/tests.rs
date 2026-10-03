@@ -94,6 +94,8 @@ fn task(key: &str, caps: &[&str], deps: &[&str]) -> PlanTask {
 fn submit(service: &CoordinationService, objective: &str, plan: Option<Plan>) -> TaskDetail {
     service
         .submit(SubmitTask {
+            issue: Default::default(),
+            auto_start: true,
             objective: objective.into(),
             acceptance: vec![],
             capabilities: vec![],
@@ -169,6 +171,8 @@ fn submission_is_idempotent_and_refused_when_disabled() {
     let submit_once = || {
         service
             .submit(SubmitTask {
+                issue: Default::default(),
+                auto_start: true,
                 objective: "same".into(),
                 acceptance: vec![],
                 capabilities: vec![],
@@ -199,6 +203,8 @@ fn submission_is_idempotent_and_refused_when_disabled() {
     let (disabled, _) = service_with(&config);
     let error = disabled
         .submit(SubmitTask {
+            issue: Default::default(),
+            auto_start: true,
             objective: "x".into(),
             acceptance: vec![],
             capabilities: vec![],
@@ -219,6 +225,8 @@ fn missing_skill_or_coordinator_needs_input_instead_of_guessing() {
     let service = service();
     let detail = service
         .submit(SubmitTask {
+            issue: Default::default(),
+            auto_start: true,
             objective: "train a model".into(),
             acceptance: vec![],
             capabilities: vec!["ml".into()],
@@ -1078,6 +1086,8 @@ fn task_prompts_stay_bounded_scoped_and_never_clip_mandatory_content() {
     // An oversized goal fails the dispatch instead of being clipped.
     let big = service
         .submit(SubmitTask {
+            issue: Default::default(),
+            auto_start: true,
             objective: "z".repeat(7000),
             acceptance: vec![],
             capabilities: vec![],
@@ -1966,4 +1976,170 @@ fn wakeups_that_can_never_fire_leave_a_record_and_tell_a_live_agent() {
         .as_str()
         .unwrap()
         .contains("root task ended"));
+}
+
+#[test]
+fn issues_backlog_priority_comments_and_revision_guards() {
+    let service = service();
+    service.store().pin_clock(1000);
+    let backlog = service
+        .submit(SubmitTask {
+            objective: "Fix login".into(),
+            acceptance: vec!["Login succeeds".into()],
+            capabilities: vec![],
+            workspace: None,
+            plan: None,
+            idempotency_key: Some("issue-login".into()),
+            auto_start: false,
+            issue: IssueFields {
+                description: "Handle expired sessions".into(),
+                labels: vec!["Bug".into(), "bug".into()],
+                priority: IssuePriority::High,
+            },
+        })
+        .unwrap();
+    assert_eq!(backlog.task.issue.number, 1);
+    assert_eq!(backlog.task.issue.fields.labels, vec!["bug"]);
+    assert!(backlog.task.paused);
+    service
+        .comment(&backlog.task.id, "Keep the existing cookie policy")
+        .unwrap();
+    assert!(
+        claim(&service).is_empty(),
+        "discussion cannot start a backlog task"
+    );
+    let comments = service.comments(&backlog.task.id, 0, 1).unwrap();
+    assert_eq!(comments[0].author, "user");
+    assert!(service
+        .comments(&backlog.task.id, comments[0].id, 10)
+        .unwrap()
+        .is_empty());
+    assert!(service
+        .timeline(&backlog.task.id, None)
+        .unwrap()
+        .iter()
+        .any(|e| e.event_type == "task.commented"));
+    let mut fields = backlog.task.issue.fields.clone();
+    fields.description = "Handle expired sessions and CSRF".into();
+    let updated = service
+        .update_issue(&backlog.task.id, fields.clone(), backlog.task.revision)
+        .unwrap();
+    assert!(matches!(
+        service.update_issue(&backlog.task.id, fields, backlog.task.revision),
+        Err(CoordError::Conflict(_))
+    ));
+    service.store().pin_clock(100_000);
+    service
+        .resume(&backlog.task.id, false, 0, 0, "user")
+        .unwrap();
+    let usage = service.detail(&backlog.task.id).unwrap().usage.unwrap();
+    assert_eq!(usage.started_at, 100_000);
+    assert!(
+        usage.deadline > 100_000,
+        "time in backlog must not consume the execution budget"
+    );
+    let dispatch = claim(&service).remove(0);
+    let prompt = super::capsule::build_prompt(&service, &dispatch, 12_000)
+        .unwrap()
+        .unwrap();
+    assert!(prompt.text.contains("Handle expired sessions and CSRF"));
+    assert!(prompt.text.contains("Keep the existing cookie policy"));
+    let mut fields = updated.task.issue.fields.clone();
+    fields.description = "Changed during work".into();
+    let revision = service.detail(&backlog.task.id).unwrap().task.revision;
+    assert!(matches!(
+        service.update_issue(&backlog.task.id, fields, revision),
+        Err(CoordError::Conflict(_))
+    ));
+}
+
+#[test]
+fn urgent_issue_dispatches_before_older_low_issue_and_filters_are_exact() {
+    let service = service();
+    let low = submit(&service, "low priority", None);
+    let mut fields = low.task.issue.fields.clone();
+    fields.priority = IssuePriority::Low;
+    service
+        .update_issue(&low.task.id, fields, low.task.revision)
+        .unwrap();
+    let urgent = submit(&service, "Urgent login bug", None);
+    let mut fields = urgent.task.issue.fields.clone();
+    fields.priority = IssuePriority::Urgent;
+    fields.labels = vec!["bug".into()];
+    service
+        .update_issue(&urgent.task.id, fields, urgent.task.revision)
+        .unwrap();
+    let claimed = service.claim(1, &|_| false, &HashSet::new()).unwrap();
+    assert_eq!(claimed[0].task.id, urgent.task.id);
+    let filtered = service
+        .list_tasks(&TaskFilter {
+            label: Some("bug"),
+            query: Some("login"),
+            priority: Some("urgent"),
+            state: Some("open"),
+            limit: 50,
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(filtered.len(), 1);
+    assert_eq!(filtered[0].id, urgent.task.id);
+    assert!(service
+        .list_tasks(&TaskFilter {
+            label: Some("bu"),
+            limit: 50,
+            ..Default::default()
+        })
+        .unwrap()
+        .is_empty());
+    service.cancel(&low.task.id, "user").unwrap();
+    let closed = service
+        .list_tasks(&TaskFilter {
+            state: Some("closed"),
+            limit: 50,
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(closed[0].id, low.task.id);
+    assert_eq!(
+        service
+            .list_tasks(&TaskFilter {
+                query: Some(&format!("#{}", urgent.task.issue.number)),
+                limit: 50,
+                ..Default::default()
+            })
+            .unwrap()[0]
+            .id,
+        urgent.task.id
+    );
+}
+
+#[test]
+fn issue_validation_rolls_back_and_comment_pagination_keeps_history() {
+    let service = service();
+    let root = submit(&service, "Discuss", None);
+    assert!(service.comment(&root.task.id, "   ").is_err());
+    assert!(service.comment(&root.task.id, &"x".repeat(4001)).is_err());
+    let invalid = IssueFields {
+        labels: vec!["x".repeat(41)],
+        ..Default::default()
+    };
+    assert!(service
+        .update_issue(&root.task.id, invalid, root.task.revision)
+        .is_err());
+    for i in 0..205 {
+        service
+            .comment(&root.task.id, &format!("note {i}"))
+            .unwrap();
+    }
+    let first = service.comments(&root.task.id, 0, 200).unwrap();
+    let second = service
+        .comments(&root.task.id, first.last().unwrap().id, 200)
+        .unwrap();
+    assert_eq!(first.len(), 200);
+    assert_eq!(second.len(), 5);
+    let last = service.timeline(&root.task.id, None).unwrap();
+    let previous = service.timeline(&root.task.id, Some(last[0].seq)).unwrap();
+    assert_eq!(last.len(), 100);
+    assert_eq!(previous.len(), 100);
+    assert!(previous.last().unwrap().seq < last[0].seq);
 }

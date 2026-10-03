@@ -483,3 +483,7 @@ No license has been chosen yet.
 ### Artifact Library
 
 Hivemind stores chat attachments and generated deliverables in its own searchable Library. Agents can reference saved IDs and publish revocable URLs that users open directly. See [Artifact Library](docs/artifact-library.md) for automatic collection, agent tools, permissions and deployment configuration.
+
+### Automated task issues
+
+The web **Tasks** page supports numbered issues, descriptions, labels, priorities, discussion, and a Linear-inspired grouped ticket list. Filter Active, Backlog, All, or Closed issues and open a ticket for its discussion and automation details. Save an issue to the backlog or start automatic planning, capability-based assignment, execution, and review. See [task issue workflow and API](docs/task-issues.md).

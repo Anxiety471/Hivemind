@@ -11,7 +11,9 @@ const hasBun = (() => { try { execFileSync("bun", ["--version"], { stdio: "ignor
 const pm = hasBun ? "bun" : "npm";
 const runId = process.env.GITHUB_RUN_ID ?? "local";
 const runDirectory = join(tmpdir(), "hivemind-setup-e2e-" + runId);
-rmSync(runDirectory, { recursive: true, force: true });
+// Playwright imports this config in each worker; only the runner may recreate server fixtures.
+const prepareFixtures = process.env.TEST_WORKER_INDEX === undefined;
+if (prepareFixtures) rmSync(runDirectory, { recursive: true, force: true });
 const configPath = join(runDirectory, "hivemind.toml");
 const serverBinary = join(repositoryRoot, "target", "debug", "hivemind");
 
@@ -20,10 +22,13 @@ process.env.HIVEMIND_E2E_CONFIG = configPath;
 // A second, already configured server (scripted Pi runtime, two groups, two workspaces) for the
 // management specs. The first-run spec above needs its own untouched server.
 const managedDirectory = join(tmpdir(), "hivemind-managed-e2e-" + runId);
-rmSync(managedDirectory, { recursive: true, force: true });
-for (const name of ["ws-one", "ws-two", "ws-three"]) mkdirSync(join(managedDirectory, name), { recursive: true });
+if (prepareFixtures) {
+  rmSync(managedDirectory, { recursive: true, force: true });
+  for (const name of ["ws-one", "ws-two", "ws-three"]) mkdirSync(join(managedDirectory, name), { recursive: true });
+}
 const managedConfig = join(managedDirectory, "hivemind.toml");
 const fixtureRuntime = join(frontendRoot, "e2e", "fixtures", "pi-fixture.py");
+if (prepareFixtures) {
 chmodSync(fixtureRuntime, 0o755);
 writeFileSync(
   managedConfig,
@@ -56,8 +61,47 @@ id = "beta"
 members = ["Reviewer"]
 `,
 );
+}
 process.env.HIVEMIND_MANAGED_DIR = managedDirectory;
 process.env.HIVEMIND_MANAGED_CONFIG = managedConfig;
+
+// Isolated coordination server for issue automation. Work runs in a disposable git repository.
+const issueDirectory = join(tmpdir(), "hivemind-issue-e2e-" + runId);
+const issueWorkspace = join(issueDirectory, "repo");
+const issueRuntime = join(frontendRoot, "e2e", "fixtures", "issue-pi-fixture.py");
+const issueConfig = join(issueDirectory, "hivemind.toml");
+if (prepareFixtures) {
+rmSync(issueDirectory, { recursive: true, force: true });
+mkdirSync(issueWorkspace, { recursive: true });
+execFileSync("git", ["init", "-q", "-b", "main", issueWorkspace]);
+writeFileSync(join(issueWorkspace, "README.md"), "Issue fixture\n");
+execFileSync("git", ["-C", issueWorkspace, "add", "."]);
+execFileSync("git", ["-C", issueWorkspace, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-qm", "fixture"]);
+chmodSync(issueRuntime,0o755);
+writeFileSync(issueConfig, `[runtime]
+pi_binary = "${issueRuntime}"
+
+[coordination]
+enabled = true
+planner = "Engineer"
+
+[[personas]]
+id = "Engineer"
+runtime = "pi"
+system_prompt = "You are the Engineer."
+workspace = "${issueWorkspace}"
+capabilities = ["backend"]
+permissions = ["coordinate", "delegate", "review"]
+
+[[personas]]
+id = "Reviewer"
+runtime = "pi"
+system_prompt = "You are the Reviewer."
+workspace = "${issueWorkspace}"
+permissions = ["review"]
+`);
+
+}
 
 export default defineConfig({
   testDir: "./e2e",
@@ -75,6 +119,22 @@ export default defineConfig({
     trace: "retain-on-failure",
   },
   webServer: [
+    {
+      command: '"' + serverBinary + '" --config "' + issueConfig + '" serve --port 17476',
+      cwd: repositoryRoot,
+      url: "http://127.0.0.1:17476/api/v1/health",
+      timeout: 120_000,
+      reuseExistingServer: false,
+      env: { HIVEMIND_NO_UPDATE_CHECK: "1" },
+    },
+    {
+      command: `${pm} run dev -- --host 127.0.0.1 --port 15175 --strictPort`,
+      cwd: frontendRoot,
+      url: "http://127.0.0.1:15175",
+      timeout: 60_000,
+      reuseExistingServer: false,
+      env: { VITE_HIVEMIND_URL: "http://127.0.0.1:17476" },
+    },
     {
       command: '"' + serverBinary + '" --config "' + managedConfig + '" serve --port 17475',
       cwd: repositoryRoot,

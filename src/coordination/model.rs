@@ -4,11 +4,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use serde::{Deserialize, Serialize};
 
 macro_rules! string_enum {
-    ($(#[$meta:meta])* $name:ident { $($variant:ident => $text:literal),+ $(,)? }) => {
+    ($(#[$meta:meta])* $name:ident { $($(#[$variant_meta:meta])* $variant:ident => $text:literal),+ $(,)? }) => {
         $(#[$meta])*
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
         #[serde(rename_all = "snake_case")]
-        pub enum $name { $($variant),+ }
+        pub enum $name { $($(#[$variant_meta])* $variant),+ }
         impl $name {
             pub fn as_str(self) -> &'static str {
                 match self { $(Self::$variant => $text),+ }
@@ -134,9 +134,37 @@ string_enum!(DeliveryState {
 
 string_enum!(Verdict { Passed => "passed", Failed => "failed", Unavailable => "unavailable" });
 
+string_enum!(#[derive(Default)] IssuePriority { Low => "low", #[default] Normal => "normal", High => "high", Urgent => "urgent" });
+
+/// Issue fields supplement the executable objective and acceptance criteria.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct IssueFields {
+    pub description: String,
+    pub labels: Vec<String>,
+    pub priority: IssuePriority,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct TaskIssue {
+    pub number: i64,
+    #[serde(flatten)]
+    pub fields: IssueFields,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TaskComment {
+    pub id: i64,
+    pub task_id: String,
+    pub author: String,
+    pub body: String,
+    pub created_at: i64,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Task {
     pub id: String,
+    pub issue: TaskIssue,
     pub root_id: String,
     pub parent_id: Option<String>,
     pub depth: u32,

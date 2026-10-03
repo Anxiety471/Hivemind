@@ -67,6 +67,8 @@ impl Fixture {
         self.core
             .coordination()
             .submit(SubmitTask {
+                issue: Default::default(),
+                auto_start: true,
                 objective: objective.into(),
                 acceptance: vec![],
                 capabilities: vec![],

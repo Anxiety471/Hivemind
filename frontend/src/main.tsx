@@ -1,3 +1,14 @@
+import { Chats } from "@phosphor-icons/react/dist/csr/Chats";
+import { Books } from "@phosphor-icons/react/dist/csr/Books";
+import { Stack } from "@phosphor-icons/react/dist/csr/Stack";
+import { Robot } from "@phosphor-icons/react/dist/csr/Robot";
+import { Users } from "@phosphor-icons/react/dist/csr/Users";
+import { Folder } from "@phosphor-icons/react/dist/csr/Folder";
+import { ArrowsClockwise } from "@phosphor-icons/react/dist/csr/ArrowsClockwise";
+import { Broadcast } from "@phosphor-icons/react/dist/csr/Broadcast";
+import { MagicWand } from "@phosphor-icons/react/dist/csr/MagicWand";
+import { GearSix } from "@phosphor-icons/react/dist/csr/GearSix";
+import { Hexagon } from "@phosphor-icons/react/dist/csr/Hexagon";
 import { createRoot } from "react-dom/client";
 import { lazy, Suspense, useEffect, useState } from "react";
 import { api, hasSavedSettings } from "./api";
@@ -33,6 +44,8 @@ const NAV = [
   { page: "activity", label: "Live activity", icon: "📡" },
   { page: "setup", label: "Setup guide", icon: "✨" },
 ];
+
+const TICKET_NAV_ICONS = [Chats, Books, Stack, Robot, Users, Folder, ArrowsClockwise, Broadcast, MagicWand];
 
 const FIRST_RUN_KEY = "hivemind.first_run_complete";
 
@@ -109,21 +122,23 @@ function App() {
   }
 
   return (
-    <div className="shell">
+    <div className={route.page === "tasks" ? "shell ticket-shell" : "shell"}>
       <nav className="sidebar">
         <div className="brand">
-          <span className="logo">🐝</span>
+          <span className="logo">{route.page === "tasks" ? <Hexagon size={20} weight="duotone" /> : "🐝"}</span>
           <span>Hivemind</span>
         </div>
-        {NAV.map((item) => (
-          <a key={item.page} href={`#/${item.page}`} className={route.page === item.page ? "nav active" : "nav"}>
-            <span className="nav-icon">{item.icon}</span>
+        {NAV.map((item, index) => { const Icon = TICKET_NAV_ICONS[index]; return (
+          <div key={item.page}><a href={`#/${item.page}`} className={route.page === item.page ? "nav active" : "nav"}>
+            <span className="nav-icon">{route.page === "tasks" ? <Icon size={15} /> : item.icon}</span>
             {item.label}
           </a>
-        ))}
+          {item.page === "tasks" && route.page === "tasks" && <div className="ticket-subnav" aria-label="Task views">{[{ id: "active", label: "Active" }, { id: "backlog", label: "Backlog" }, { id: "all", label: "All issues" }, { id: "closed", label: "Closed" }].map((v) => <a key={v.id} href={`#/tasks/${v.id}`} aria-current={(route.arg ?? "active") === v.id ? "page" : undefined}>{v.label}</a>)}</div>}
+          </div>
+        ); })}
         <div className="spacer" />
         <a href="#/settings" className={route.page === "settings" ? "nav active" : "nav"}>
-          <span className="nav-icon">⚙️</span>
+          <span className="nav-icon">{route.page === "tasks" ? <GearSix size={15} /> : "⚙️"}</span>
           Connection
         </a>
         <div className="conn" data-status={live}>
