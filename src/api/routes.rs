@@ -1043,7 +1043,7 @@ mod tests {
                 StatusCode::BAD_REQUEST,
             ),
             (
-                json!({"id":"Gone","workspace":"/definitely/not/here"}),
+                json!({"id":"Gone","workspace":test_core.directory.join("definitely-not-here").display().to_string()}),
                 StatusCode::BAD_REQUEST,
             ),
             (
@@ -1060,7 +1060,7 @@ mod tests {
             app.clone(),
             "POST",
             "/api/v1/agents",
-            json!({"id":"Gone","workspace":"/definitely/not/here"}),
+            json!({"id":"Gone","workspace":test_core.directory.join("definitely-not-here").display().to_string()}),
         )
         .await;
         assert!(
@@ -1340,12 +1340,20 @@ mod tests {
                 workspace
             );
         }
-        // The older workspace API and workspace tools use this same store.
+        // The older workspace API and workspace tools use this same store. The
+        // path is sent canonical, as stored paths keep the spelling they were given
+        // and temp dirs are symlinked (macOS `/private/var`) or shortened (Windows).
+        let home = test_core
+            .directory
+            .canonicalize()
+            .unwrap()
+            .display()
+            .to_string();
         let (status, body) = request_json(
             app.clone(),
             "PUT",
             "/api/v1/workspaces/personas/Engineer",
-            json!({"path":test_core.directory.display().to_string()}),
+            json!({"path":home}),
         )
         .await;
         assert_eq!(status, StatusCode::OK, "{body}");
@@ -1363,15 +1371,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
         let reloaded = HivemindConfig::load(&path).unwrap();
         let restarted = HivemindCore::new(reloaded, &path).unwrap();
-        assert_eq!(
-            restarted.agents().get("Engineer").unwrap().workspace,
-            test_core
-                .directory
-                .canonicalize()
-                .unwrap()
-                .display()
-                .to_string()
-        );
+        assert_eq!(restarted.agents().get("Engineer").unwrap().workspace, home);
     }
 
     #[tokio::test]
@@ -1749,9 +1749,19 @@ mod tests {
             (status, unknown["error"]["code"].as_str()),
             (StatusCode::NOT_FOUND, Some("not_found"))
         );
-        let (status, _, dirs) = request(app.clone(), "GET", "/api/v1/fs/dirs?path=/").await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(dirs["path"], "/");
+        // The filesystem root: `/`, or the system drive on Windows where `/` is not absolute.
+        let root = if cfg!(windows) { "C:\\" } else { "/" };
+        let (status, _, dirs) = request(
+            app.clone(),
+            "GET",
+            &format!(
+                "/api/v1/fs/dirs?path={}",
+                root.replace('\\', "%5C").replace(':', "%3A")
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{dirs}");
+        assert_eq!(dirs["path"], json!(std::fs::canonicalize(root).unwrap()));
 
         let (status, _) = request_json(
             app.clone(),

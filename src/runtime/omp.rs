@@ -726,9 +726,14 @@ mod tests {
         let mut agent = agent(None);
         agent.web = false;
         let args = OmpSession::rpc_args(&agent, overlay);
+        // The no-web overlay sits next to the main one, joined with the OS separator.
+        let no_web = overlay
+            .with_file_name(NO_WEB_OVERLAY_FILE)
+            .display()
+            .to_string();
         assert!(args
             .windows(2)
-            .any(|w| w == ["--config", "/hive/harness/omp-noweb.yml"]));
+            .any(|w| w == ["--config".to_string(), no_web.clone()]));
         assert!(!args.contains(&"--tools".to_string()));
         agent.tool_access = Some(crate::config::ToolAccess {
             write: false,

@@ -805,8 +805,10 @@ mod tests {
         let listed = tools
             .execute("group-team", "Engineer", "workspace.list", &json!({}))
             .unwrap();
+        // Listed paths are real directories, joined with the OS separator.
+        let alpha = Path::new(&root).join("alpha").display().to_string();
         assert!(
-            listed.contains(&format!("{root}/alpha")) && !listed.contains(".hidden"),
+            listed.contains(&alpha) && !listed.contains(".hidden"),
             "{listed}"
         );
         let set = |path: &str| {
@@ -817,7 +819,7 @@ mod tests {
                 &json!({"path": path}),
             )
         };
-        assert!(set(&format!("{root}/alpha")).is_ok());
+        assert!(set(&alpha).is_ok());
         assert!(set(&root).is_ok(), "the root itself is allowed");
         assert!(set(&dir.0.join("elsewhere").display().to_string())
             .unwrap_err()
@@ -1026,7 +1028,11 @@ mod tests {
         let dir = Dir::new("chat");
         let core = core_with_group(&dir, None);
         let project = dir.0.join("project").display().to_string();
-        let call = format!("```hivemind-tool\n{{\"name\":\"workspace.set\",\"args\":{{\"path\":\"{project}\"}}}}\n```\n");
+        // Serialized, not pasted: a Windows path's backslashes must be escaped in JSON.
+        let call = format!(
+            "```hivemind-tool\n{}\n```\n",
+            json!({"name": "workspace.set", "args": {"path": project}})
+        );
         let script = Arc::new(Script {
             replies: parking_lot::Mutex::new([call].into()),
             seen: Default::default(),

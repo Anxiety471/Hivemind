@@ -494,6 +494,8 @@ mod tests {
                 NEXT.fetch_add(1, Ordering::Relaxed)
             ));
             fs::create_dir_all(&path).unwrap();
+            // The child's `$PWD` is the physical path (macOS: `/var` -> `/private/var`).
+            let path = fs::canonicalize(&path).unwrap();
             let binary = path.join("pi-fixture");
             fs::write(
                 &binary,

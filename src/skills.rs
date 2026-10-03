@@ -226,7 +226,12 @@ fn skill_files(root: &Path) -> Vec<String> {
             } else if kind.is_file() {
                 if let Ok(relative) = path.strip_prefix(root) {
                     if relative != Path::new("SKILL.md") {
-                        out.push(relative.display().to_string());
+                        // Agents see `/` on every OS, matching how SKILL.md refers to files.
+                        let parts: Vec<_> = relative
+                            .components()
+                            .map(|c| c.as_os_str().to_string_lossy())
+                            .collect();
+                        out.push(parts.join("/"));
                     }
                 }
             }

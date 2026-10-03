@@ -956,10 +956,16 @@ mod tests {
 
     #[test]
     fn load_resolves_relative_workspaces_and_tolerates_missing_ones() {
-        let config = load_toml("[[agents]]\nname = \"A\"\nworkspace = \"sub/dir\"\n[[agents]]\nname = \"B\"\nworkspace = \"/abs/ws\"\n").unwrap();
+        // `/abs/ws` is only absolute on Unix; Windows needs a drive.
+        let absolute = if cfg!(windows) {
+            r"C:\abs\ws"
+        } else {
+            "/abs/ws"
+        };
+        let config = load_toml(&format!("[[agents]]\nname = \"A\"\nworkspace = \"sub/dir\"\n[[agents]]\nname = \"B\"\nworkspace = '{absolute}'\n")).unwrap();
         let expected = std::env::current_dir().unwrap().join("sub/dir");
         assert_eq!(std::path::Path::new(&config.agents[0].workspace), expected);
-        assert_eq!(config.agents[1].workspace, "/abs/ws");
+        assert_eq!(config.agents[1].workspace, absolute);
     }
 
     #[test]
