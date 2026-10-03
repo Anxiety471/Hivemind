@@ -16,7 +16,9 @@ Reusing a key with the same target/message returns the original job. Reusing it 
 | `POST /api/v1/turns/{id}/cancel` | Cancel queued/running work; a running runtime is discarded |
 | `POST /api/v1/turns/{id}/retry` | Explicitly replay an interrupted/failed request with a new turn ID |
 
-`serve` processes async chat jobs serially. Autonomous tasks retain their separately configured concurrency. `serve` and `task run` acquire an OS worker lock per data directory; two workers cannot interrupt each other's jobs. `task run` processes autonomous tasks only. Embedders calling `api::router` must run `api::run_jobs(core)` or use synchronous turns; merely constructing a router does not start a provider or background task.
+An agent injects a prompt into another agent with `chat.wakeup` (same `hivemind-tool` fence). That queues a job in this same table: `to` names who replies in the current room, `thread` names a child thread (or `"parent"`), and `wake: "ack"` delivers one acknowledgement that cannot cause another wakeup. The stored `target` is the turn JSON (`{"type":"main"}`, `solo`, `group`, `thread`) plus `from`, `persona`, and `wake`. A chain stops after four injections. On a task, `messages.send` with a descendant `task` id is the equivalent: it wakes that task's agent, which can delegate and message further.
+
+`serve` processes async chat jobs with several rooms at once and one job at a time per room. Autonomous tasks retain their separately configured concurrency. `serve` and `task run` acquire an OS worker lock per data directory; two workers cannot interrupt each other's jobs. `task run` processes autonomous tasks only. Embedders calling `api::router` must run `api::run_jobs(core)` or use synchronous turns; merely constructing a router does not start a provider or background task.
 
 ## Live progress
 

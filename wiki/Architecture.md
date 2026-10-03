@@ -21,6 +21,7 @@ flowchart TD
 - `chat` uses one core for the whole session; `ask` and `all` build a new core for each command.
 - The core resolves a target (main, solo, group) into room identity, mode, participants, roles, and reply order. Participants are checked before any runtime starts.
 - Room turns are serialized by a room lock. Broadcast runs participants concurrently; discussion runs them in order and includes the earlier replies from the same turn.
+- `chat.wakeup` lets an agent queue a prompt for one teammate, a child thread, or the parent room. The job worker delivers it as a normal turn. An acknowledgement does not start another wakeup, and a chain stops after four injections.
 
 ## Session lifecycle
 

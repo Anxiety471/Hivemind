@@ -283,6 +283,32 @@ impl ExecutionStore {
             result: None,
         })
     }
+    pub fn latest_for_room(&self, room: &str) -> Result<Option<Job>> {
+        Ok(self
+            .db
+            .lock()
+            .query_row(
+                &format!(
+                    "SELECT {JOB_COLUMNS} FROM jobs WHERE room_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1"
+                ),
+                [room],
+                job,
+            )
+            .optional()?)
+    }
+    pub fn running_for_room(&self, room: &str) -> Result<Option<Job>> {
+        Ok(self
+            .db
+            .lock()
+            .query_row(
+                &format!(
+                    "SELECT {JOB_COLUMNS} FROM jobs WHERE room_id=? AND status='running' ORDER BY created_at, rowid LIMIT 1"
+                ),
+                [room],
+                job,
+            )
+            .optional()?)
+    }
     pub fn get(&self, id: &str) -> Result<Option<Job>> {
         Ok(self
             .db
