@@ -131,6 +131,8 @@ struct Scenario {
     fail_backend: bool,
     /// Plan proposes a global memory write from the task text.
     global_probe: bool,
+    /// Backend asks the user a blocking question before finishing.
+    ask_user: bool,
 }
 
 struct Fake {
@@ -235,6 +237,15 @@ impl AgentInvoker for Fake {
                         {"key": "merge", "objective": "integrate and verify", "acceptance": ["both changes present"], "kind": "integrate", "depends_on": ["api", "ui"]},
                     ]}),
                 )
+            }
+            ("Back", "work", 0) if s.ask_user => {
+                tool("tasks.ask", json!({"question": "sqlite or postgres?"}))
+            }
+            ("Back", "work", 1) if s.ask_user => {
+                let answer = request.delta.map(|d| d.text.to_owned()).unwrap_or_default();
+                assert!(answer.contains("answer from user: sqlite"), "{answer}");
+                std::fs::write(cwd.join("api.txt"), "api on sqlite\n").unwrap();
+                submit_result("api done on sqlite")
             }
             ("Back", "work", 0) => {
                 if s.hang_backend {
@@ -697,4 +708,63 @@ async fn task_text_never_authorizes_global_memory_writes() {
     assert!(followups
         .iter()
         .all(|f| !f.contains("accepted global memory")));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_worker_waits_on_its_question_and_resumes_with_the_answer_in_the_same_attempt() {
+    let fixture = Fixture::new(|_| {});
+    let fake = Fake::new(Scenario {
+        ask_user: true,
+        ..Default::default()
+    });
+    let root = fixture.submit("orders on a database").task.id;
+    let mut scheduler = Scheduler::new(
+        fixture.core.clone(),
+        Some(fake.clone() as Arc<dyn AgentInvoker>),
+    );
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let api = loop {
+        scheduler.step().await.unwrap();
+        let waiting = fixture
+            .detail(&root)
+            .children
+            .iter()
+            .find(|c| c.objective == "implement api")
+            .map(|c| fixture.detail(&c.id))
+            .filter(|d| !d.questions.is_empty());
+        if let Some(api) = waiting {
+            break api;
+        }
+        assert!(std::time::Instant::now() < deadline, "backend never asked");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    };
+    assert_eq!(api.questions[0].question, "sqlite or postgres?");
+    assert_eq!(
+        api.task.status,
+        TaskStatus::Running,
+        "asking keeps the attempt running"
+    );
+    fixture
+        .core
+        .coordination()
+        .provide_input(&api.task.id, "sqlite", "user")
+        .unwrap();
+    scheduler.drain(Duration::from_secs(60)).await.unwrap();
+    scheduler.stop().await;
+
+    assert_eq!(fixture.detail(&root).task.status, TaskStatus::Completed);
+    let attempts: Vec<_> = fixture
+        .core
+        .coordination()
+        .attempts(&api.task.id)
+        .unwrap()
+        .into_iter()
+        .filter(|a| a.kind == AttemptKind::Work)
+        .collect();
+    assert_eq!(attempts.len(), 1, "the answer resumed the same attempt");
+    let kinds = types(&fixture, &root);
+    assert!(
+        kinds.iter().any(|k| k == "task.question") && kinds.iter().any(|k| k == "task.answered"),
+        "{kinds:?}"
+    );
 }

@@ -29,6 +29,102 @@ pub trait HarnessSession: Send {
     async fn context_tokens(&mut self) -> Result<Option<u64>>;
     /// Release the underlying runtime (close/kill an OMP child, etc.).
     async fn shutdown(&mut self) -> Result<()>;
+    /// Handle for steering this session, if the runtime supports it.
+    fn steer_handle(&self) -> Option<SteerHandle> {
+        None
+    }
+}
+
+/// Messages steered into a live session, shared between the session (which
+/// forwards them) and the pool (which accepts them from callers).
+///
+/// While a prompt is in flight a message goes to the runtime as a `steer`
+/// (Pi/OMP deliver it after the current tool calls, before the next model
+/// call). Between prompts it waits and is prepended to the next prompt, so a
+/// message accepted by a live session always reaches that session.
+pub(crate) struct SteerShared {
+    state: parking_lot::Mutex<SteerState>,
+    wake: tokio::sync::Notify,
+}
+
+#[derive(Default)]
+struct SteerState {
+    busy: bool,
+    pending: Vec<String>,
+    /// Refused by the runtime during this prompt; they lead the next one.
+    refused: Vec<String>,
+}
+
+impl SteerShared {
+    pub(crate) fn new() -> std::sync::Arc<Self> {
+        std::sync::Arc::new(Self {
+            state: parking_lot::Mutex::new(SteerState::default()),
+            wake: tokio::sync::Notify::new(),
+        })
+    }
+
+    /// Session side: a prompt starts. Returns `input` with any messages that
+    /// arrived since the last prompt prepended.
+    pub(crate) fn begin(&self, input: &str) -> String {
+        let mut state = self.state.lock();
+        state.busy = true;
+        let waiting = std::mem::take(&mut state.pending);
+        if waiting.is_empty() {
+            input.to_owned()
+        } else {
+            format!("{}\n\n{input}", waiting.join("\n\n"))
+        }
+    }
+
+    /// Session side: messages to forward to the runtime now (empty unless a prompt is in flight).
+    pub(crate) fn drain(&self) -> Vec<String> {
+        let mut state = self.state.lock();
+        if state.busy {
+            std::mem::take(&mut state.pending)
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Session side: the runtime refused a forwarded message; keep it for the next prompt.
+    pub(crate) fn requeue(&self, text: String) {
+        self.state.lock().refused.push(text);
+    }
+
+    /// Session side: the prompt ended.
+    pub(crate) fn end(&self) {
+        let mut state = self.state.lock();
+        state.busy = false;
+        let mut waiting = std::mem::take(&mut state.refused);
+        waiting.append(&mut state.pending);
+        state.pending = waiting;
+    }
+
+    pub(crate) async fn wait(&self) {
+        self.wake.notified().await;
+    }
+}
+
+/// Caller side of [`SteerShared`]. Holds the session weakly, so a stopped
+/// session stops accepting messages.
+#[derive(Clone)]
+pub struct SteerHandle(std::sync::Weak<SteerShared>);
+
+impl SteerHandle {
+    pub(crate) fn new(shared: &std::sync::Arc<SteerShared>) -> Self {
+        Self(std::sync::Arc::downgrade(shared))
+    }
+
+    /// Queue `text` for the live session. `false` means the session is gone
+    /// and the caller must rely on another delivery path.
+    pub fn try_steer(&self, text: &str) -> bool {
+        let Some(shared) = self.0.upgrade() else {
+            return false;
+        };
+        shared.state.lock().pending.push(text.to_owned());
+        shared.wake.notify_one();
+        true
+    }
 }
 
 /// Write `content` to `path` (creating parents) unless it already holds exactly that.

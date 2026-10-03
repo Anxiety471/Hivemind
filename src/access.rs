@@ -19,6 +19,8 @@ use serde::Serialize;
 use crate::config::{AgentConfig, HivemindConfig, RoleConfig, ToolAccess};
 
 pub const PERMISSIONS: &[&str] = &[
+    "artifacts.write",
+    "artifacts.publish",
     "coordinate",
     "delegate",
     "review",
@@ -44,6 +46,7 @@ pub const BUILTIN_ROLES: &[(&str, &[&str])] = &[
     (
         "worker",
         &[
+            "artifacts.write",
             "workspace.write",
             "workspace.exec",
             "memory.private.write",
@@ -53,6 +56,7 @@ pub const BUILTIN_ROLES: &[(&str, &[&str])] = &[
     (
         "implementor",
         &[
+            "artifacts.write",
             "workspace.write",
             "workspace.exec",
             "memory.private.write",
@@ -72,6 +76,7 @@ pub const BUILTIN_ROLES: &[(&str, &[&str])] = &[
         "integrator",
         &[
             "integrate",
+            "artifacts.write",
             "workspace.write",
             "workspace.exec",
             "memory.private.write",
@@ -116,6 +121,7 @@ pub const BUILTIN_ROLES: &[(&str, &[&str])] = &[
     (
         "tester",
         &[
+            "artifacts.write",
             "workspace.exec",
             "memory.private.write",
             "memory.group.write",
@@ -125,6 +131,7 @@ pub const BUILTIN_ROLES: &[(&str, &[&str])] = &[
     (
         "writer",
         &[
+            "artifacts.write",
             "workspace.write",
             "memory.private.write",
             "memory.group.write",
@@ -377,7 +384,7 @@ impl AccessPolicy {
             .is_some_and(|grants| !grants.restricted || grants.has(permission))
     }
 
-    fn authorize(
+    pub(crate) fn authorize(
         &self,
         persona: &str,
         permission: &str,

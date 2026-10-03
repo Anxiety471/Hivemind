@@ -31,6 +31,7 @@ pub(super) fn routes() -> Router<ApiState> {
         .route("/api/v1/tasks/{id}/pause", post(pause))
         .route("/api/v1/tasks/{id}/resume", post(resume))
         .route("/api/v1/tasks/{id}/input", post(input))
+        .route("/api/v1/tasks/{id}/steer", post(steer))
         .route("/api/v1/tasks/{id}/context-metrics", get(context_metrics))
         .route(
             "/api/v1/agents/{id}",
@@ -284,6 +285,30 @@ async fn input(
         .provide_input(&id, &body.answer, "user")
     {
         Ok(detail) => Json(json!({"task": detail})).into_response(),
+        Err(error) => coord_error(error),
+    }
+}
+
+#[derive(Deserialize)]
+struct SteerBody {
+    message: String,
+}
+
+/// Push a message into the task's running attempt now (it is also kept as task feedback).
+async fn steer(
+    State(state): State<ApiState>,
+    Path(id): Path<String>,
+    payload: Result<Json<SteerBody>, JsonRejection>,
+) -> Response {
+    let Ok(Json(body)) = payload else {
+        return bad_json();
+    };
+    match state
+        .core
+        .coordination()
+        .steer_task(&id, &body.message, "user")
+    {
+        Ok(outcome) => Json(json!({"steer": outcome})).into_response(),
         Err(error) => coord_error(error),
     }
 }
@@ -881,5 +906,87 @@ mod tests {
             .read(|db| db.running_attempts(None))
             .unwrap()
             .is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn steer_reaches_a_running_attempt_and_input_answers_its_open_question() {
+        let fixture = Fixture::new(true);
+        let plan = json!({"tasks": [{"key": "api", "objective": "build api", "acceptance": ["works"], "capabilities": ["backend"]}]});
+        let (_, body) = fixture
+            .call(
+                "POST",
+                "/api/v1/tasks",
+                Some(json!({"objective": "ship it", "plan": plan})),
+            )
+            .await;
+        let root = body["id"].as_str().unwrap().to_owned();
+        let service = fixture.core.coordination();
+        let steered: Arc<parking_lot::Mutex<Vec<String>>> = Arc::default();
+        let sink = steered.clone();
+        service.set_steerer(Arc::new(
+            move |_: &crate::identity::AgentInstanceId, text: &str| {
+                sink.lock().push(text.to_owned());
+                true
+            },
+        ));
+        let dispatch = service
+            .claim(4, &|_| false, &std::collections::HashSet::new())
+            .unwrap()
+            .remove(0);
+        let api = dispatch.task.id.clone();
+
+        let (status, body) = fixture
+            .call(
+                "POST",
+                &format!("/api/v1/tasks/{api}/steer"),
+                Some(json!({"message": "use sqlite"})),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["steer"]["delivered_to"], json!(["Back"]));
+        assert!(steered.lock()[0].contains("use sqlite"));
+        let (status, body) = fixture
+            .call(
+                "POST",
+                &format!("/api/v1/tasks/{root}/steer"),
+                Some(json!({"message": "x"})),
+            )
+            .await;
+        assert_eq!(
+            (status, body["error"]["code"].as_str()),
+            (StatusCode::CONFLICT, Some("conflict")),
+            "nothing runs on the root"
+        );
+        let (status, _) = fixture
+            .call(
+                "POST",
+                &format!("/api/v1/tasks/{api}/steer"),
+                Some(json!({"nope": 1})),
+            )
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        let ctx = service
+            .bind(&crate::coordination::model::task_room(&api), "Back")
+            .unwrap()
+            .unwrap();
+        let (answer, _) = service.ask(&ctx, "which port?", None).unwrap();
+        let (_, shown) = fixture
+            .call("GET", &format!("/api/v1/tasks/{api}"), None)
+            .await;
+        assert_eq!(shown["task"]["questions"][0]["question"], "which port?");
+        let (status, body) = fixture
+            .call(
+                "POST",
+                &format!("/api/v1/tasks/{api}/input"),
+                Some(json!({"answer": "8080"})),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(answer.await.unwrap().text, "8080");
+        assert!(
+            body["task"].get("questions").is_none(),
+            "answered questions are gone"
+        );
     }
 }

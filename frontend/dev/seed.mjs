@@ -1,5 +1,5 @@
 // Seed a running demo server (dev/demo.sh) with conversations, a thread, and tasks.
-//   node dev/seed.mjs [http://127.0.0.1:7474]
+//   bun dev/seed.mjs [http://127.0.0.1:7474]   (or: node dev/seed.mjs [http://127.0.0.1:7474])
 const base = (process.argv[2] ?? "http://127.0.0.1:7474") + "/api/v1";
 
 async function call(method, path, body) {

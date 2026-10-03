@@ -991,6 +991,7 @@ fn context_budget_trims_old_history_but_keeps_current_input() {
         caller: &caller,
         retrieval: "",
         optional: false,
+        remaining_budget: None,
     };
     let state_json = coordinator.state_json(&history, &caller).unwrap();
     let pack = coordinator.context_pack(&request, &state_json).unwrap();
@@ -1043,6 +1044,7 @@ fn turn_delta_lists_unseen_peers_and_changed_state_and_rejects_gaps() {
         caller: &caller,
         retrieval: "",
         optional: false,
+        remaining_budget: None,
     };
     let state_json = coordinator.state_json(&history, &caller).unwrap();
     let cursor = TurnView {
@@ -2822,10 +2824,80 @@ async fn mention_adds_a_follow_up_reply_only_within_the_limit() {
     );
     // Self-mentions and mentions of members still waiting add nothing.
     assert_eq!(speakers(4, &["@A and @B", "ok", "PASS"]).await, ["A", "B"]);
-    // Limit 0 disables follow-ups; a ping-pong stops at the limit.
+    // Limit 0 disables follow-ups; the agents are told so in their prompt and a ping-pong stops.
     assert_eq!(speakers(0, &["hi @B", "back @A"]).await, ["A", "B"]);
     let pingpong: &'static [&'static str] = &["ping @A @B"; 10];
     assert_eq!(speakers(2, pingpong).await.len(), 4);
+}
+
+#[tokio::test]
+async fn room_follow_up_limit_overrides_the_global_budget() {
+    let run = |global: usize, room: Option<FollowUpLimit>, replies: &'static [&'static str]| async move {
+        let (_path, coord) = fixture();
+        coord.set_mention_limit(global);
+        coord.set_follow_up_resolver(Arc::new(move |_| room));
+        let members: Vec<Participant> = ["A", "B"].iter().map(|n| member(n)).collect();
+        let out = coord
+            .turn(TurnRequest {
+                room: "budget-room",
+                room_name: "Budget room",
+                group_id: "budget-group",
+                mode: ConversationMode::Discussion,
+                members: &members,
+                input: "go",
+                invoker: scripted(replies),
+            })
+            .await
+            .unwrap();
+        out.into_iter().map(|r| r.name).collect::<Vec<_>>()
+    };
+    let pingpong: &'static [&'static str] = &["ping @A @B"; 12];
+    // The room's number replaces the global one in both directions.
+    assert_eq!(
+        run(0, Some(FollowUpLimit::Limited(2)), pingpong)
+            .await
+            .len(),
+        4
+    );
+    assert_eq!(
+        run(8, Some(FollowUpLimit::Limited(0)), &["hi @B", "back @A"]).await,
+        ["A", "B"]
+    );
+    // No override keeps the global budget.
+    assert_eq!(run(2, None, pingpong).await.len(), 4);
+    // Unlimited ignores a global 0: the tag is honored with a real reply, not a notice.
+    let speakers = run(
+        0,
+        Some(FollowUpLimit::Unlimited),
+        &["hi @B", "back @A", "ok", "PASS"],
+    )
+    .await;
+    assert_eq!(speakers, ["A", "B", "A"]);
+    // Unlimited still has a safety ceiling.
+    let endless = run(0, Some(FollowUpLimit::Unlimited), &["ping @A @B"; 1000]).await;
+    assert!(
+        endless.len() <= 2 + UNLIMITED_FOLLOW_UP_CEILING + 2,
+        "{}",
+        endless.len()
+    );
+}
+
+#[tokio::test]
+async fn agents_are_reminded_to_conclude_when_follow_up_budget_is_low() {
+    let (_speakers, prompts) =
+        discussion(2, &["A", "B"], &["hi @B", "back @A", "another @B", "final"]).await;
+    assert!(prompts[0].contains("Only 2 follow-up replies remain for this turn. Please finish what you are doing and conclude the discussion."));
+    assert!(prompts[1].contains("Only 2 follow-up replies remain for this turn. Please finish what you are doing and conclude the discussion."));
+    assert!(prompts[2].contains("Only 1 follow-up reply remains for this turn. Please finish what you are doing and conclude the discussion."));
+    assert!(prompts[3].contains("No follow-up replies remain for this turn. Please finish what you are doing and conclude without expecting further replies from other members."));
+}
+
+#[tokio::test]
+async fn limit_zero_reminds_agents_no_follow_ups_remain() {
+    let (speakers, prompts) = discussion(0, &["A", "B"], &["hi @B", "back @A"]).await;
+    assert_eq!(speakers, ["A", "B"]);
+    assert!(prompts[0].contains("No follow-up replies remain for this turn. Please finish what you are doing and conclude without expecting further replies from other members."));
+    assert!(prompts[1].contains("No follow-up replies remain for this turn. Please finish what you are doing and conclude without expecting further replies from other members."));
 }
 
 #[tokio::test]

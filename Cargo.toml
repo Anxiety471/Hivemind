@@ -9,8 +9,9 @@ license = "UNLICENSED"
 
 [dependencies]
 anyhow = "1.0"
+base64 = "0.22"
 async-trait = "0.1"
-axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "ws"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio", "ws"] }
 futures-util = "0.3"
 clap = { version = "4.5", features = ["derive"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
@@ -20,6 +21,8 @@ tokio = { version = "1.40", features = ["io-std", "io-util", "macros", "net", "p
 toml = "0.8"
 toml_edit = "0.22"
 parking_lot = "0.12"
+pulldown-cmark = { version = "0.13.4", default-features = false, features = ["html", "pulldown-cmark-escape"] }
+pulldown-cmark-escape = "0.11"
 
 [dev-dependencies]
 http-body-util = "0.1"

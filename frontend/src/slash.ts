@@ -1,4 +1,4 @@
-// Slash commands typed into a composer. Pure functions so they run under `node --test`.
+// Slash commands typed into a composer. Pure functions so they run under `bun test` or `node --test`.
 // Skills are listed as `/skill:<name>`, the same way OMP offers them.
 
 export type SlashCommand = { name: string; usage: string; summary: string };
@@ -7,6 +7,7 @@ export const COMMANDS: SlashCommand[] = [
   { name: "help", usage: "/help", summary: "List the slash commands" },
   { name: "skills", usage: "/skills", summary: "List the skills agents can use" },
   { name: "tools", usage: "/tools", summary: "List the tools agents can call" },
+  { name: "queue", usage: "/queue <message>", summary: "Queue a turn instead of steering the active reply" },
 ];
 
 export const SKILL_PREFIX = "skill:";

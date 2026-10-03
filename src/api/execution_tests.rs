@@ -328,3 +328,120 @@ async fn authentication_covers_http_origins_and_websocket_handshakes() {
     server.abort();
     fixture.core.shutdown().await;
 }
+
+#[tokio::test]
+async fn a_published_markdown_artifact_opens_as_a_formatted_page() {
+    let fixture = Fixture::new(false);
+    let library = fixture.core.artifacts();
+    library.set_base_url("http://127.0.0.1:7474").unwrap();
+    let artifact = library
+        .create(crate::artifacts::NewArtifact {
+            title: "Release notes",
+            filename: "notes.md",
+            description: "",
+            media_type: crate::artifacts::media_type("notes.md"),
+            content: b"# Hello\n\n- one\n",
+            room: "",
+            persona: "operator",
+        })
+        .unwrap();
+    let url = library.publish(&artifact.id).unwrap().unwrap().url.unwrap();
+    let token = url.rsplit('/').next().unwrap().to_owned();
+    let response = fixture
+        .app()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/artifacts/{token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers()["content-type"],
+        "text/html; charset=utf-8"
+    );
+    assert_eq!(response.headers()["x-content-type-options"], "nosniff");
+    let page = response.into_body().collect().await.unwrap().to_bytes();
+    let page = String::from_utf8(page.to_vec()).unwrap();
+    assert!(page.contains("<title>Release notes</title>"));
+    assert!(page.contains("<div class=\"library-preview\">"));
+    assert!(page.contains("<div class=\"markdown\">"));
+    assert!(page.contains("<h3>Hello</h3>"));
+    assert!(page.contains("<li>one</li>"));
+    let raw = fixture
+        .app()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/artifacts/{token}?raw=1"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(raw.headers()["content-type"], "text/markdown");
+    let raw = raw.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(raw.as_ref(), b"# Hello\n\n- one\n");
+    fixture.core.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_published_image_opens_framed_with_its_bytes_behind_raw() {
+    const CONTENT: &[u8] = b"\x89PNG\r\n\x1a\n\x00raw image bytes";
+    let fixture = Fixture::new(false);
+    let library = fixture.core.artifacts();
+    library.set_base_url("http://127.0.0.1:7474").unwrap();
+    let artifact = library
+        .create(crate::artifacts::NewArtifact {
+            title: "Chart",
+            filename: "chart.png",
+            description: "",
+            media_type: crate::artifacts::media_type("chart.png"),
+            content: CONTENT,
+            room: "",
+            persona: "operator",
+        })
+        .unwrap();
+    let url = library.publish(&artifact.id).unwrap().unwrap().url.unwrap();
+    let token = url.rsplit('/').next().unwrap().to_owned();
+    let response = fixture
+        .app()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/artifacts/{token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers()["content-type"],
+        "text/html; charset=utf-8"
+    );
+    assert!(response.headers()["content-security-policy"]
+        .to_str()
+        .unwrap()
+        .contains("img-src 'self'"));
+    let page = response.into_body().collect().await.unwrap().to_bytes();
+    let page = String::from_utf8(page.to_vec()).unwrap();
+    assert!(page.contains("<title>Chart</title>"));
+    assert!(
+        page.contains("<div class=\"library-preview\"><img src=\"?raw=1\" alt=\"Chart\"></div>")
+    );
+    let raw = fixture
+        .app()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/artifacts/{token}?raw=1"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(raw.headers()["content-type"], "image/png");
+    let raw = raw.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(raw.as_ref(), CONTENT);
+    fixture.core.shutdown().await;
+}

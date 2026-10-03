@@ -74,6 +74,8 @@ pub struct RoomSettings {
     pub nickname: Option<String>,
     pub pinned: bool,
     pub muted: bool,
+    /// Group follow-up budget: `None` follows the global default, `-1` is unlimited.
+    pub follow_up_limit: Option<i64>,
 }
 
 /// A partial change to [`RoomSettings`]; `None` leaves a field alone and an empty
@@ -83,7 +85,12 @@ pub struct RoomSettingsPatch {
     pub nickname: Option<String>,
     pub pinned: Option<bool>,
     pub muted: Option<bool>,
+    /// `Some(None)` returns the room to the global default.
+    pub follow_up_limit: Option<Option<i64>>,
 }
+
+/// Largest finite follow-up budget a room may set (`-1` stores unlimited).
+pub const MAX_FOLLOW_UP_LIMIT: i64 = 64;
 
 pub struct ExecutionStore {
     db: Mutex<Connection>,
@@ -123,6 +130,14 @@ impl ExecutionStore {
             CREATE INDEX IF NOT EXISTS usage_project ON usage(project);
             CREATE TABLE IF NOT EXISTS room_settings(room TEXT PRIMARY KEY, nickname TEXT, pinned INTEGER NOT NULL DEFAULT 0, muted INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS checks(id INTEGER PRIMARY KEY, task TEXT NOT NULL, commit_sha TEXT NOT NULL, name TEXT NOT NULL, result TEXT NOT NULL, passed INTEGER NOT NULL, created_at INTEGER NOT NULL);")?;
+        if !db
+            .prepare(
+                "SELECT 1 FROM pragma_table_info('room_settings') WHERE name='follow_up_limit'",
+            )?
+            .exists([])?
+        {
+            db.execute_batch("ALTER TABLE room_settings ADD COLUMN follow_up_limit INTEGER;")?;
+        }
         for check in &config.checks {
             anyhow::ensure!(
                 !check.name.trim().is_empty()
@@ -148,13 +163,14 @@ impl ExecutionStore {
             .db
             .lock()
             .query_row(
-                "SELECT nickname,pinned,muted FROM room_settings WHERE room=?",
+                "SELECT nickname,pinned,muted,follow_up_limit FROM room_settings WHERE room=?",
                 [room],
                 |row| {
                     Ok(RoomSettings {
                         nickname: row.get(0)?,
                         pinned: row.get::<_, i64>(1)? != 0,
                         muted: row.get::<_, i64>(2)? != 0,
+                        follow_up_limit: row.get(3)?,
                     })
                 },
             )
@@ -163,7 +179,8 @@ impl ExecutionStore {
     }
     pub fn all_room_settings(&self) -> Result<Vec<(String, RoomSettings)>> {
         let db = self.db.lock();
-        let mut statement = db.prepare("SELECT room,nickname,pinned,muted FROM room_settings")?;
+        let mut statement =
+            db.prepare("SELECT room,nickname,pinned,muted,follow_up_limit FROM room_settings")?;
         let rows = statement
             .query_map([], |row| {
                 Ok((
@@ -172,6 +189,7 @@ impl ExecutionStore {
                         nickname: row.get(1)?,
                         pinned: row.get::<_, i64>(2)? != 0,
                         muted: row.get::<_, i64>(3)? != 0,
+                        follow_up_limit: row.get(4)?,
                     },
                 ))
             })?
@@ -198,9 +216,16 @@ impl ExecutionStore {
         if let Some(muted) = patch.muted {
             next.muted = muted;
         }
+        if let Some(limit) = patch.follow_up_limit {
+            anyhow::ensure!(
+                limit.is_none_or(|n| (-1..=MAX_FOLLOW_UP_LIMIT).contains(&n)),
+                "follow-up limit must be between 0 and {MAX_FOLLOW_UP_LIMIT}, or unlimited"
+            );
+            next.follow_up_limit = limit;
+        }
         self.db.lock().execute(
-            "INSERT INTO room_settings(room,nickname,pinned,muted,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(room) DO UPDATE SET nickname=excluded.nickname,pinned=excluded.pinned,muted=excluded.muted,updated_at=excluded.updated_at",
-            params![room, next.nickname, next.pinned as i64, next.muted as i64, now()],
+            "INSERT INTO room_settings(room,nickname,pinned,muted,follow_up_limit,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(room) DO UPDATE SET nickname=excluded.nickname,pinned=excluded.pinned,muted=excluded.muted,follow_up_limit=excluded.follow_up_limit,updated_at=excluded.updated_at",
+            params![room, next.nickname, next.pinned as i64, next.muted as i64, next.follow_up_limit, now()],
         )?;
         Ok(next)
     }
@@ -578,6 +603,7 @@ mod tests {
                     nickname: Some("  Town hall ".into()),
                     pinned: Some(true),
                     muted: None,
+                    follow_up_limit: None,
                 },
             )
             .unwrap();
@@ -620,6 +646,25 @@ mod tests {
             )
             .is_err());
         assert_eq!(db.all_room_settings().unwrap().len(), 1);
+        // The follow-up budget: default, finite, unlimited (-1), reset, and bounds.
+        let set = |limit| {
+            db.update_room_settings(
+                "group-a",
+                &RoomSettingsPatch {
+                    follow_up_limit: Some(limit),
+                    ..Default::default()
+                },
+            )
+        };
+        assert_eq!(set(Some(5)).unwrap().follow_up_limit, Some(5));
+        assert_eq!(set(Some(-1)).unwrap().follow_up_limit, Some(-1));
+        assert_eq!(
+            db.room_settings("group-a").unwrap().follow_up_limit,
+            Some(-1)
+        );
+        assert_eq!(set(None).unwrap().follow_up_limit, None);
+        assert!(set(Some(MAX_FOLLOW_UP_LIMIT + 1)).is_err());
+        assert!(set(Some(-2)).is_err());
     }
     #[test]
     fn cancellation_wins_over_late_completion() {

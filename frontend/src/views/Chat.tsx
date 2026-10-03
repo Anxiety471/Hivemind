@@ -1,6 +1,7 @@
+import { LinkedText } from "../LinkedText";
 // Rooms: room list, paged history, threads, and live replies over the WebSocket.
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, decodeInstance, targetFor, type Message, type Participant, type Room, type Skill, type Thread } from "../api";
+import { api, decodeInstance, targetFor, type Message, type Participant, type Room, type Skill, type Thread, type LibraryArtifact } from "../api";
 import { useLive, useLiveStatus, useRefreshOn, type LiveEvent } from "../live";
 import { href } from "../nav";
 import { listKind, roomLabel, useTaskNames } from "../rooms";
@@ -166,6 +167,14 @@ function useHistory(roomId: string) {
   return { messages, before, error, loaded, loadEarlier, loadLatest };
 }
 
+type PendingMessage = {
+  id: string;
+  text: string;
+  sentAt: number;
+  status: "steer" | "queue";
+  targetName?: string;
+};
+
 function RoomView({
   roomId,
   taskNames,
@@ -181,6 +190,12 @@ function RoomView({
   const typing = useTyping(roomId);
   const [openThread, setOpenThread] = useState<Thread | null>(null);
   const [panelTab, setPanelTab] = useState<PanelTab | null>(null);
+  const [pending, setPending] = useState<PendingMessage[]>([]);
+  useEffect(() => {
+    if (pending.length === 0) return;
+    const historyTexts = new Set(history.messages.filter((m) => m.speaker === "user").map((m) => m.content));
+    setPending((old) => old.filter((p) => !historyTexts.has(p.text)));
+  }, [history.messages, pending.length]);
   useRefreshOn(
     (e) =>
       (e.type === "thread.created" && e.payload?.parent_room_id === roomId) ||
@@ -255,12 +270,62 @@ function RoomView({
           threads={byAnchor}
           onThread={startThread}
           error={history.error}
+          pending={pending}
+          roomId={roomId}
         />
         {target ? (
           <Composer
+            roomId={roomId}
             placeholder={`Message ${info?.kind === "solo" ? "@" + info.participants[0]?.persona_id : info?.name ?? roomId}`}
             participants={info?.participants}
-            onSend={(text) => api.sendTurn(target, text).then(() => history.loadLatest())}
+            isReplying={Object.keys(typing).length > 0}
+            onSend={async (text, mode) => {
+              const tempId = `temp-${Date.now()}`;
+              const isSteer = mode === "steer" || (!mode && Object.keys(typing).length > 0);
+              const activePersonas = Object.keys(typing);
+              if (isSteer) {
+                setPending((old) => [
+                  ...old,
+                  {
+                    id: tempId,
+                    text,
+                    sentAt: Math.floor(Date.now() / 1000),
+                    status: "steer",
+                    targetName: activePersonas.join(", ") || undefined,
+                  },
+                ]);
+                try {
+                  const res = await api.steerRoom(roomId, text);
+                  if (res.delivered_to.length > 0) {
+                    setPending((old) =>
+                      old.map((p) =>
+                        p.id === tempId
+                          ? { ...p, status: "steer", targetName: res.delivered_to.join(", ") }
+                          : p
+                      )
+                    );
+                    setTimeout(() => {
+                      setPending((old) => old.filter((p) => p.id !== tempId));
+                    }, 8000);
+                    return;
+                  }
+                } catch {
+                  // Backend or network fallback
+                }
+              } else {
+                setPending((old) => [
+                  ...old,
+                  { id: tempId, text, sentAt: Math.floor(Date.now() / 1000), status: "queue" },
+                ]);
+              }
+              return api
+                .sendTurn(target, text)
+                .then(() => history.loadLatest())
+                .catch((err) => {
+                  setPending((old) => old.filter((p) => p.id !== tempId));
+                  throw err;
+                });
+            }}
           />
         ) : (
           info && (
@@ -306,12 +371,14 @@ function MessageList(props: {
   threads?: Map<string, Thread>;
   onThread?: (m: Message) => void;
   error: string | null;
+  pending?: PendingMessage[];
+  roomId?: string;
 }) {
   const end = useRef<HTMLDivElement>(null);
   const typingCount = Object.keys(props.typing).length;
   useEffect(() => {
     end.current?.scrollIntoView({ block: "end" });
-  }, [props.messages.length, typingCount]);
+  }, [props.messages.length, typingCount, props.pending?.length]);
 
   return (
     <div className="messages">
@@ -338,7 +405,7 @@ function MessageList(props: {
                   <span className="muted">{time(m.created_at)}</span>
                 </div>
               )}
-              <div className="msg-text">{m.speaker === "user" ? m.content : <Markdown text={m.content} />}</div>
+              <div className="msg-text">{m.speaker === "user" ? <LinkedText text={m.content} /> : <Markdown text={m.content} roomId={props.roomId} />}</div>
               {thread && (
                 <button className="thread-link" onClick={() => props.onThread?.(m)}>
                   💬 {thread.message_count} {thread.message_count === 1 ? "reply" : "replies"} · {thread.name}
@@ -353,6 +420,31 @@ function MessageList(props: {
           </div>
         );
       })}
+      {props.pending?.map((p) => (
+        <div key={p.id} className="msg" data-user="true" style={{ opacity: 0.88 }}>
+          <Avatar name="user" />
+          <div className="msg-body">
+            <div className="msg-meta">
+              <strong>You</strong>
+              <span className="muted">{time(p.sentAt)}</span>
+              <span
+                className="badge"
+                style={{
+                  marginLeft: "0.5rem",
+                  fontSize: "0.75rem",
+                  background: p.status === "steer" ? "var(--accent)" : "var(--accent-subtle)",
+                  color: p.status === "steer" ? "var(--bg)" : "var(--accent)",
+                }}
+              >
+                {p.status === "steer"
+                  ? `Steer${p.targetName ? ` (${p.targetName})` : ""}`
+                  : "Queue"}
+              </span>
+            </div>
+            <div className="msg-text">{p.text}</div>
+          </div>
+        </div>
+      ))}
       {Object.values(props.typing).map((t) => (
         <div key={t.persona} className="msg typing">
           <Avatar name={t.persona} />
@@ -361,7 +453,7 @@ function MessageList(props: {
               <strong>{t.persona}</strong>
             </div>
             <div className="msg-text">
-              {t.text ? <Markdown text={t.text} /> : (
+              {t.text ? <Markdown text={t.text} roomId={props.roomId} /> : (
                 <span className="dots">
                   <i />
                   <i />
@@ -376,16 +468,41 @@ function MessageList(props: {
     </div>
   );
 }
+const sizeLabel = (bytes: number) =>
+  bytes < 1024 ? `${bytes} B` : bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 
 function Composer({
+  roomId,
   onSend,
   placeholder,
   participants = [],
+  isReplying = false,
 }: {
-  onSend: (text: string) => Promise<unknown>;
+  roomId?: string;
+  onSend: (text: string, mode?: "queue" | "steer") => Promise<unknown>;
   placeholder: string;
   participants?: Participant[];
+  isReplying?: boolean;
 }) {
+  const [attachments, setAttachments] = useState<LibraryArtifact[]>([]);
+  const attach = async (files: FileList | null) => {
+    if (!files || busy || !roomId) return;
+    setBusy(true);
+    setError(null);
+    try {
+      for (const file of Array.from(files)) {
+        if (file.size > 8 * 1024 * 1024) throw new Error(`${file.name} exceeds the 8 MiB limit.`);
+        const content_base64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result).split(",")[1]);
+          reader.onerror = () => reject(new Error(`Could not read ${file.name}.`));
+          reader.readAsDataURL(file);
+        });
+        const result = await api.createLibraryArtifact({ title: file.name, filename: file.name, description: "Chat attachment", room_id: roomId, content_base64 });
+        setAttachments(current => [...current, result.artifact]);
+      }
+    } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
+  };
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -393,6 +510,21 @@ function Composer({
   const [mentionMatch, setMentionMatch] = useState<MentionMatch | null>(null);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [dismissed, setDismissed] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [menuOpen]);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -484,7 +616,7 @@ function Composer({
     setMentionMatch(getMentionMatch(text, pos));
   };
 
-  const runCommand = async (name: string, args: string): Promise<{ show?: string; send?: string }> => {
+  const runCommand = async (name: string, args: string): Promise<{ show?: string; send?: string; mode?: "queue" | "steer" }> => {
     const loadSkills = async (refresh: boolean) => {
       if (refresh || !skillCatalog) {
         const fresh = await api.skills();
@@ -515,6 +647,12 @@ function Composer({
       }
       case "tools":
         return { show: toolsText((await api.toolCatalog()).namespaces) };
+      case "queue": {
+        if (!args.trim()) {
+          throw new Error("Usage: /queue <message>");
+        }
+        return { send: args.trim(), mode: "queue" as const };
+      }
       default:
         throw new Error(`Unknown command /${name}. Type /help for the list.`);
     }
@@ -522,20 +660,24 @@ function Composer({
 
   const send = async () => {
     const value = text.trim();
-    if (!value || busy) return;
+    if ((!value && !attachments.length) || busy) return;
     setBusy(true);
     try {
+      const references = attachments.map(a => `Attached artifact: ${a.filename} (library ID: ${a.id}; use library.get to read it)`).join("\n");
+      const withAttachments = (msg: string) => [msg, references].filter(Boolean).join("\n\n");
       const parsed = parseSlash(value);
       if (parsed.kind === "command") {
         const result = await runCommand(parsed.name, parsed.args);
         if (result.show !== undefined) setOutput(result.show);
         if (result.send !== undefined) {
-          await onSend(result.send);
+          await onSend(withAttachments(result.send), result.mode ?? (isReplying ? "steer" : undefined));
           setOutput(null);
+          setAttachments([]);
         }
       } else {
-        await onSend(parsed.text);
+        await onSend(withAttachments(parsed.text), isReplying ? "steer" : undefined);
         setOutput(null);
+        setAttachments([]);
       }
       setText("");
       setMentionMatch(null);
@@ -609,10 +751,46 @@ function Composer({
           <Markdown text={output} />
         </div>
       )}
-      <div className="composer-row">
+      <div
+        className={`composer-box ${dragging ? "drag-over" : ""}`}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragging(true);
+        }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragging(false);
+          attach(e.dataTransfer.files);
+        }}
+      >
+        {attachments.length > 0 && (
+          <div className="composer-attachments-bar">
+            {attachments.map((a) => (
+              <div key={a.id} className="composer-attachment-chip">
+                <span className="chip-icon">📎</span>
+                <span className="chip-name" title={a.filename}>
+                  {a.filename}
+                </span>
+                <span className="chip-size">{sizeLabel(a.size)}</span>
+                <button
+                  type="button"
+                  className="chip-remove"
+                  disabled={busy}
+                  aria-label={`Remove ${a.filename} from message`}
+                  onClick={() =>
+                    setAttachments((current) => current.filter((item) => item.id !== a.id))
+                  }
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         <textarea
           ref={textareaRef}
-          rows={1}
+          rows={2}
           value={text}
           placeholder={placeholder}
           onChange={(e) => {
@@ -630,6 +808,11 @@ function Composer({
             blurTimeoutRef.current = window.setTimeout(() => setMentionMatch(null), 150);
           }}
           onKeyDown={(e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "u") {
+              e.preventDefault();
+              fileInputRef.current?.click();
+              return;
+            }
             if (slashItems.length > 0) {
               if (e.key === "ArrowDown") {
                 e.preventDefault();
@@ -659,23 +842,23 @@ function Composer({
                 e.preventDefault();
                 setSelectedIndex((prev) => (prev + 1) % filtered.length);
                 return;
-               }
+              }
               if (e.key === "ArrowUp") {
                 e.preventDefault();
                 setSelectedIndex((prev) => (prev - 1 + filtered.length) % filtered.length);
                 return;
-               }
+              }
               if (e.key === "Enter" || e.key === "Tab") {
                 e.preventDefault();
                 const chosen = filtered[selectedIndex];
                 if (chosen) insertMention(chosen);
                 return;
-               }
+              }
               if (e.key === "Escape") {
                 e.preventDefault();
                 setDismissed(true);
                 return;
-               }
+              }
             }
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
@@ -683,11 +866,85 @@ function Composer({
             }
           }}
         />
-        <button className="primary" disabled={busy || !text.trim()} onClick={send}>
-          Send
-        </button>
+        <div className="composer-bottom">
+          <div className="composer-actions-left" ref={menuRef}>
+            <button
+              type="button"
+              className="composer-add-btn"
+              data-open={menuOpen}
+              aria-label="Add content or tools"
+              title="Add content or tools"
+              onClick={() => setMenuOpen(!menuOpen)}
+            >
+              +
+            </button>
+            {menuOpen && (
+              <div className="composer-menu" role="menu">
+                <button
+                  type="button"
+                  className="composer-menu-item"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    fileInputRef.current?.click();
+                  }}
+                >
+                  <span className="menu-icon">📎</span>
+                  <span className="menu-label">Add files or photos</span>
+                  <span className="menu-shortcut">Ctrl+U</span>
+                </button>
+                <a
+                  href="#/library"
+                  className="composer-menu-item"
+                  onClick={() => setMenuOpen(false)}
+                >
+                  <span className="menu-icon">📚</span>
+                  <span className="menu-label">Artifact library</span>
+                </a>
+                <button
+                  type="button"
+                  className="composer-menu-item"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    acceptSlash("/skills");
+                  }}
+                >
+                  <span className="menu-icon">⚡</span>
+                  <span className="menu-label">Skills & tools</span>
+                  <span className="menu-shortcut">/skills</span>
+                </button>
+              </div>
+            )}
+            <input
+              ref={fileInputRef}
+              aria-label="Attach files"
+              type="file"
+              multiple
+              disabled={busy}
+              style={{ display: "none" }}
+              onChange={(e) => {
+                attach(e.target.files);
+                e.target.value = "";
+              }}
+            />
+          </div>
+          <button
+            className="primary"
+            disabled={busy || (!text.trim() && !attachments.length)}
+            onClick={send}
+          >
+            {text.trim().toLowerCase().startsWith("/queue")
+              ? "Queue"
+              : isReplying
+              ? "Steer"
+              : "Send"}
+          </button>
+        </div>
       </div>
-      <div className="hint">Enter to send · Shift+Enter for a new line · replies run in the background</div>
+      <div className="hint">
+        {isReplying
+          ? "Active reply in progress: Enter steers active reply · /queue <message> queues for next turn"
+          : "Enter to send · Shift+Enter for a new line · replies run in the background"}
+      </div>
     </div>
   );
 }
@@ -705,6 +962,12 @@ function ThreadPanel({
 }) {
   const history = useHistory(thread.id);
   const typing = useTyping(thread.id);
+  const [pending, setPending] = useState<PendingMessage[]>([]);
+  useEffect(() => {
+    if (pending.length === 0) return;
+    const historyTexts = new Set(history.messages.filter((m) => m.speaker === "user").map((m) => m.content));
+    setPending((old) => old.filter((p) => !historyTexts.has(p.text)));
+  }, [history.messages, pending.length]);
   return (
     <aside className="thread-panel">
       <header>
@@ -722,7 +985,7 @@ function ThreadPanel({
             <strong>{anchor.speaker === "user" ? "You" : anchor.speaker}</strong>
             <span className="muted">{time(anchor.created_at)}</span>
           </div>
-          <div className="msg-text">{anchor.speaker === "user" ? anchor.content : <Markdown text={anchor.content} />}</div>
+          <div className="msg-text">{anchor.speaker === "user" ? <LinkedText text={anchor.content} /> : <Markdown text={anchor.content} roomId={thread.id} />}</div>
         </div>
       )}
       <MessageList
@@ -732,11 +995,61 @@ function ThreadPanel({
         onEarlier={history.loadEarlier}
         typing={typing}
         error={history.error}
+        pending={pending}
+        roomId={thread.id}
       />
       <Composer
+        roomId={thread.id}
         placeholder="Reply in thread"
         participants={participants}
-        onSend={(text) => api.sendTurn({ type: "thread", id: thread.id }, text).then(() => history.loadLatest())}
+        isReplying={Object.keys(typing).length > 0}
+        onSend={async (text, mode) => {
+          const tempId = `temp-${Date.now()}`;
+          const isSteer = mode === "steer" || (!mode && Object.keys(typing).length > 0);
+          const activePersonas = Object.keys(typing);
+          if (isSteer) {
+            setPending((old) => [
+              ...old,
+              {
+                id: tempId,
+                text,
+                sentAt: Math.floor(Date.now() / 1000),
+                status: "steer",
+                targetName: activePersonas.join(", ") || undefined,
+              },
+            ]);
+            try {
+              const res = await api.steerRoom(thread.id, text);
+              if (res.delivered_to.length > 0) {
+                setPending((old) =>
+                  old.map((p) =>
+                    p.id === tempId
+                      ? { ...p, status: "steer", targetName: res.delivered_to.join(", ") }
+                      : p
+                  )
+                );
+                setTimeout(() => {
+                  setPending((old) => old.filter((p) => p.id !== tempId));
+                }, 8000);
+                return;
+              }
+            } catch {
+              // Backend fallback
+            }
+          } else {
+            setPending((old) => [
+              ...old,
+              { id: tempId, text, sentAt: Math.floor(Date.now() / 1000), status: "queue" },
+            ]);
+          }
+          return api
+            .sendTurn({ type: "thread", id: thread.id }, text)
+            .then(() => history.loadLatest())
+            .catch((err) => {
+              setPending((old) => old.filter((p) => p.id !== tempId));
+              throw err;
+            });
+        }}
       />
     </aside>
   );

@@ -237,7 +237,7 @@ reply_order = ["Reviewer", "Engineer"]
 - Personas you leave out follow declaration order.
 - **Main/all** turns use broadcast mode. **Solo** turns use the same room/history/context setup with one participant.
 - Each group sets `mode = "discussion"` (default) or `mode = "broadcast"`. It can override roles in `[groups.member_roles]` and set its own `reply_order` with members only. A partial order puts the remaining members after it, in global order.
-- **Who replies to whom.** Every persona in a room replies to every message you send, in plain text, in reply order (main, solo and groups; both modes). `@Name` is optional: put it in a persona's reply and that member (persona id, case-insensitive) gets a follow-up reply with the mention in view, unless a reply from them is already pending. In `discussion` mode members also see the earlier replies of the turn; in `broadcast` mode they answer independently and in parallel. Once every pending `discussion` reply is in, the floor opens: the other members, in order after the last speaker, may follow up unprompted or answer exactly `PASS` (not recorded), until all of them pass in a row, so a debate continues without anyone having to `@` the other side. `conversation.mention_limit` caps mention and floor follow-ups together per turn (default 4, max 16, `0` turns follow-ups off), so a lively exchange always ends. Agents never start turns on their own.
+- **Who replies to whom.** Every persona in a room replies to every message you send, in plain text, in reply order (main, solo and groups; both modes). `@Name` is optional: put it in a persona's reply and that member (persona id, case-insensitive) gets a follow-up reply with the mention in view, unless a reply from them is already pending. In `discussion` mode members also see the earlier replies of the turn; in `broadcast` mode they answer independently and in parallel. Once every pending `discussion` reply is in, the floor opens: the other members, in order after the last speaker, may follow up unprompted or answer exactly `PASS` (not recorded), until all of them pass in a row, so a debate continues without anyone having to `@` the other side. `conversation.mention_limit` caps mention and floor follow-ups together per turn (default 4, max 16, `0` turns follow-ups off), so a lively exchange always ends. When 2 or fewer follow-up replies remain in the budget, agents are reminded in their prompt to finish what they are doing and conclude the exchange. Each group chat can override the budget in its settings (`follow_up_limit`: a number 0-64, `"unlimited"`, or `null` for the default); unlimited keeps going until everyone passes, with a safety ceiling of 200 follow-ups per turn. Agents never start turns on their own.
 - **Shared workspace.** A group works in one directory only when it has one: set `workspace = "/abs/path"` on the `[[groups]]` entry, or tell the group in chat where it is and an agent records it with `workspace.set`. Group rooms get `workspace.get`, `workspace.set`, `workspace.clear` (removes it, so members return to their own workspaces) and `workspace.list`. Every member runs there from the next message; live sessions started elsewhere are restarted. Without one, members keep their own persona workspaces and are told not to assume a shared directory.
 - **Solo workspace.** A solo room offers `workspace.get`, `workspace.set` and `workspace.list`. `workspace.set` changes that persona's own `workspace` in the config file, so it applies to the persona everywhere it runs (solo, main, and groups without a shared workspace). A shared group workspace still wins inside that group. There is no clear for solo: a persona always has a workspace.
 - **Limiting agents.** Tools accept only absolute, existing directories. Add `[workspaces]` `roots = ["/abs/dir", ...]` to restrict agent choices to those directories and their subdirectories (symlinks are resolved, so they can't escape); `workspace.list` shows each root and its visible subdirectories. With no roots, any existing directory is accepted and `workspace.list` says there is nothing to list. Paths you write in the config are never checked. Personas with roles need `group.manage` (group) or `workspace.write` (solo) to change a workspace. Full rules: [docs/workspaces.md](docs/workspaces.md).
@@ -313,9 +313,9 @@ Building the server and serving health/info/agent listings never starts Pi, OMP,
 | `GET` | `/api/v1/info` | Service metadata and protocol endpoints |
 | `GET` | `/api/v1/agents` | Safe agent metadata (name and runtime only; no credentials) |
 | `GET` / `POST` | `/api/v1/setup` | Check setup state and save the first persona configuration; POST is one-shot |
-| `POST` | `/api/v1/turns` | Submit a conversation turn |
+| `POST` | `/api/v1/turns`, `/api/v1/rooms/{id}/steer` | Submit a conversation turn (`/turns`), or steer text into active replies mid-flight (`/rooms/{id}/steer`) |
 | `POST` / `GET` | `/api/v1/tasks`, `/api/v1/tasks/{id}` | Submit (202) and inspect autonomous tasks; see [docs/coordination.md](docs/coordination.md) |
-| `GET` / `POST` | `/api/v1/tasks/{id}/attempts`, `/cancel`, `/pause`, `/resume`, `/input`, `/context-metrics` | Attempts, controls, and bounded context diagnostics |
+| `GET` / `POST` | `/api/v1/tasks/{id}/attempts`, `/cancel`, `/pause`, `/resume`, `/input`, `/steer`, `/context-metrics` | Attempts, controls (`/input` also answers a running `tasks.ask`; `/steer` messages a running attempt), and bounded context diagnostics |
 | `GET` | `/api/v1/agents/{id}`, `/api/v1/agent-instances` | Capabilities and derived activity (never starts a runtime) |
 | `GET` / `POST` | `/api/v1/messages`, `/api/v1/groups`, `/api/v1/groups/{id}` | Agent/operator messages and dynamic task groups |
 | `GET` | `/api/v1/events?after=N` | Durable, restart-safe event replay with a high-water mark |
@@ -370,7 +370,7 @@ When the server shuts down, core shutdown starts first and WebSocket clients are
 Frames are JSON envelopes with a `type`, an optional correlation `id`, and a `payload`.
 
 ```bash
-websocat ws://127.0.0.1:7474/api/v1/ws        # or: npx wscat -c ws://127.0.0.1:7474/api/v1/ws
+websocat ws://127.0.0.1:7474/api/v1/ws        # or: bunx wscat -c ws://127.0.0.1:7474/api/v1/ws · or: npx wscat -c ws://127.0.0.1:7474/api/v1/ws
 ```
 
 ```jsonc
@@ -400,18 +400,19 @@ Unsupported or malformed messages get a `system.error` frame, and the connection
 
 ## 🖥️ Web UI
 
-`frontend/` is a browser UI built on the public API: first-run persona setup, rooms with live replies and threads, autonomous tasks with attempts and controls, agents, chat groups, workspaces, runtime sessions, and a live event feed.
+`frontend/` is a browser UI built on the public API: first-run persona setup, rooms with live replies and threads, autonomous tasks with attempts and controls, agents, chat groups, workspaces, runtime sessions, and a live event feed. The web UI runs on Bun (preferred) or Node.js/npm.
 
 ```bash
 hivemind serve                               # API on http://127.0.0.1:7474
-cd frontend && npm install && npm run dev    # UI on http://127.0.0.1:5173
+cd frontend && bun install && bun run dev    # UI on http://127.0.0.1:5173
+# or: cd frontend && npm install && npm run dev
 ```
 
 Or run both with one command: `scripts/dev.sh` (extra arguments go to `hivemind serve`; set `HIVEMIND_BIN` to use a prebuilt binary instead of `cargo run`). Ctrl-C stops both.
 
 On a fresh install, start the server without running `hivemind init`; the Web UI handles the initial persona setup and saves it directly on the server.
 
-No model handy? `frontend/dev/demo.sh` runs `serve` with a scripted stand-in runtime, and `node frontend/dev/seed.mjs` fills it with sample data. See [frontend/README.md](frontend/README.md) and the [Web UI](https://github.com/Anxiety471/Hivemind/wiki/Web-UI) wiki page.
+No model handy? `frontend/dev/demo.sh` runs `serve` with a scripted stand-in runtime, and `bun frontend/dev/seed.mjs  (or: node frontend/dev/seed.mjs)` fills it with sample data. See [frontend/README.md](frontend/README.md) and the [Web UI](https://github.com/Anxiety471/Hivemind/wiki/Web-UI) wiki page.
 
 ---
 
@@ -478,3 +479,7 @@ The library's `core`, `events`, `conversation`, `config`, `runtime`, and `memory
 ## 📄 License
 
 No license has been chosen yet.
+
+### Artifact Library
+
+Hivemind stores chat attachments and generated deliverables in its own searchable Library. Agents can reference saved IDs and publish revocable URLs that users open directly. See [Artifact Library](docs/artifact-library.md) for automatic collection, agent tools, permissions and deployment configuration.

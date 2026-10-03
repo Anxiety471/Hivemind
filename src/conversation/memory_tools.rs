@@ -581,7 +581,49 @@ pub(super) async fn invoke_with_memory(
     loop {
         let reply = &last.text;
         let call = match parse_tool_block(reply) {
-            Ok(None) => return Ok(last.text),
+            Ok(None) => {
+                let captured = host.and_then(|host| {
+                    match host.collect_artifacts(&caller.room_id, &caller.persona_id) {
+                        Ok(value) => value,
+                        Err(error) => {
+                            eprintln!("artifact collection failed: {error:#}");
+                            None
+                        }
+                    }
+                });
+                if let Some(captured) = captured {
+                    let limit =
+                        host.map_or(MAX_MEMORY_ACTIONS, |host| host.max_actions(&caller.room_id));
+                    if actions >= limit {
+                        return Ok(format!("{}\n\n{captured}", last.text));
+                    }
+                    actions += 1;
+                    let followup = tool_followup("Automatic artifact collection", &captured);
+                    exchange.push((
+                        format!(
+                            "Automatic artifact collection after your draft answer: {}",
+                            last.text
+                        ),
+                        captured,
+                    ));
+                    let full = tool_prompt(pack, &exchange);
+                    last = invoker
+                        .invoke(InvokeRequest {
+                            agent_instance_id: instance_id,
+                            agent,
+                            phase: PromptPhase::InTurn,
+                            full: &full,
+                            delta: Some(PromptDelta {
+                                epoch_id: &last.epoch_id,
+                                text: &followup,
+                            }),
+                            view,
+                        })
+                        .await?;
+                    continue;
+                }
+                return Ok(last.text);
+            }
             Ok(Some(call)) => Ok(call),
             Err(error) => Err(format!("{error:#}")),
         };
@@ -598,17 +640,21 @@ pub(super) async fn invoke_with_memory(
                     .map(|args| format!("{{\"name\":\"{}\",\"args\":{args}}}", call.name))
                     .unwrap_or_else(|_| call.name.clone());
                 let executed =
-                    super::linter::lint_authorization(&agent.unauthorized_work, &call.name)
-                        .and_then(|()| match host.filter(|host| host.handles(&call.name)) {
+                    match super::linter::lint_authorization(&agent.unauthorized_work, &call.name) {
+                        Err(error) => Err(error),
+                        Ok(()) => match host.filter(|host| host.handles(&call.name)) {
                             _ if call.name == "files.write" => {
                                 write_file(agent, caller, access, &call.args)
                             }
-                            Some(host) => host.execute(
-                                &caller.room_id,
-                                &caller.persona_id,
-                                &call.name,
-                                &call.args,
-                            ),
+                            Some(host) => {
+                                host.execute_async(
+                                    &caller.room_id,
+                                    &caller.persona_id,
+                                    &call.name,
+                                    &call.args,
+                                )
+                                .await
+                            }
                             None => access
                                 .map_or(Ok(()), |access| {
                                     access.authorize_memory(
@@ -625,7 +671,8 @@ pub(super) async fn invoke_with_memory(
                                         &call,
                                     )
                                 }),
-                        });
+                        },
+                    };
                 match executed {
                     Ok(text) => (rendered, text),
                     Err(error) => (rendered, format!("error: {error:#}")),

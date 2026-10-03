@@ -48,6 +48,37 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
+      - name: Cache bun install
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('frontend/bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck and build
+        run: bun run build
+
+      - name: Unit tests
+        run: bun run test:bun
+
+  frontend-npm:
+    name: frontend (npm)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -61,7 +92,7 @@ jobs:
         run: npm run build
 
       - name: Unit tests
-        run: npm test
+        run: npm run test:node
 
   browser-e2e:
     runs-on: ubuntu-latest
@@ -71,11 +102,9 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - uses: actions/setup-node@v4
+      - uses: oven-sh/setup-bun@v2
         with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          bun-version: 1.4.2
 
       - name: Cache Cargo artifacts
         uses: actions/cache@v4
@@ -92,15 +121,15 @@ jobs:
         run: cargo build --locked
 
       - name: Install frontend dependencies
-        run: npm ci
+        run: bun install --frozen-lockfile
         working-directory: frontend
 
       - name: Install Chromium
-        run: npx playwright install --with-deps chromium
+        run: bunx playwright install --with-deps chromium
         working-directory: frontend
 
       - name: Run browser E2E
-        run: npm run e2e
+        run: bun run e2e
         working-directory: frontend
         env:
           CI: true

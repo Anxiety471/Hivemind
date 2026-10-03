@@ -11,7 +11,7 @@ use tokio::{
 
 use crate::config::AgentConfig;
 
-use super::HarnessSession;
+use super::{HarnessSession, SteerHandle, SteerShared};
 
 const CHILD_EXIT_GRACE: Duration = Duration::from_secs(2);
 
@@ -120,6 +120,9 @@ pub struct PiSession {
     progress: Option<super::ProgressSink>,
     usage: Option<crate::execution::Usage>,
     usage_missing: bool,
+    steer: std::sync::Arc<SteerShared>,
+    /// Texts forwarded as `steer` whose acknowledgement has not arrived yet.
+    sent_steers: std::collections::VecDeque<String>,
 }
 
 impl PiSession {
@@ -160,6 +163,8 @@ impl PiSession {
             progress: None,
             usage: None,
             usage_missing: false,
+            steer: SteerShared::new(),
+            sent_steers: std::collections::VecDeque::new(),
         })
     }
 
@@ -214,26 +219,48 @@ impl PiSession {
         Ok(())
     }
 
+    /// Next frame from Pi. While a prompt is in flight this also forwards
+    /// steered messages as they arrive and swallows their acknowledgements;
+    /// a refused steer waits for the next prompt.
     async fn recv(&mut self) -> Result<Value> {
-        match self.transport.recv().await {
-            Ok(frame) => {
-                if let Some(sink) = &self.progress {
-                    sink.touch();
-                    sink.rpc(&frame);
-                }
-                if let Some(usage) = super::telemetry::rpc_usage(&frame) {
-                    self.usage.get_or_insert_with(Default::default).add(&usage);
-                } else if frame["type"] == "message_end" && frame["message"]["role"] == "assistant"
-                {
-                    self.usage_missing = true;
-                }
-                Ok(frame)
+        loop {
+            for text in self.steer.drain() {
+                self.send(&json!({"type":"steer", "message": text})).await?;
+                self.sent_steers.push_back(text);
             }
-            Err(error) => {
-                let error = error.context(format!("Pi RPC failed for agent '{}'", self.agent_name));
-                self.failure = Some(format!("{error:#}"));
-                Err(error)
+            let received = tokio::select! {
+                received = self.transport.recv() => received,
+                () = self.steer.wait() => continue,
+            };
+            let frame = match received {
+                Ok(frame) => frame,
+                Err(error) => {
+                    let error =
+                        error.context(format!("Pi RPC failed for agent '{}'", self.agent_name));
+                    self.failure = Some(format!("{error:#}"));
+                    return Err(error);
+                }
+            };
+            if frame.get("type").and_then(Value::as_str) == Some("response")
+                && frame.get("command").and_then(Value::as_str) == Some("steer")
+            {
+                if let Some(text) = self.sent_steers.pop_front() {
+                    if frame.get("success").and_then(Value::as_bool) != Some(true) {
+                        self.steer.requeue(text);
+                    }
+                }
+                continue;
             }
+            if let Some(sink) = &self.progress {
+                sink.touch();
+                sink.rpc(&frame);
+            }
+            if let Some(usage) = super::telemetry::rpc_usage(&frame) {
+                self.usage.get_or_insert_with(Default::default).add(&usage);
+            } else if frame["type"] == "message_end" && frame["message"]["role"] == "assistant" {
+                self.usage_missing = true;
+            }
+            return Ok(frame);
         }
     }
 
@@ -274,6 +301,34 @@ impl HarnessSession for PiSession {
         self.usage.take()
     }
     async fn prompt(&mut self, input: &str) -> Result<String> {
+        let input = self.steer.begin(input);
+        let result = self.run_prompt(&input).await;
+        self.steer.end();
+        result
+    }
+
+    fn steer_handle(&self) -> Option<SteerHandle> {
+        Some(SteerHandle::new(&self.steer))
+    }
+
+    async fn context_tokens(&mut self) -> Result<Option<u64>> {
+        if self.failure.is_some() {
+            return Ok(None);
+        }
+        self.send(&json!({"type":"get_session_stats"})).await?;
+        let frame = self.await_command_response("get_session_stats").await?;
+        Ok(frame
+            .pointer("/data/contextUsage/tokens")
+            .and_then(Value::as_u64))
+    }
+
+    async fn shutdown(&mut self) -> Result<()> {
+        self.transport.shutdown().await
+    }
+}
+
+impl PiSession {
+    async fn run_prompt(&mut self, input: &str) -> Result<String> {
         if let Some(failure) = &self.failure {
             bail!(
                 "Pi session for agent '{}' failed earlier and cannot continue: {failure}",
@@ -337,21 +392,6 @@ impl HarnessSession for PiSession {
                 _ => {}
             }
         }
-    }
-
-    async fn context_tokens(&mut self) -> Result<Option<u64>> {
-        if self.failure.is_some() {
-            return Ok(None);
-        }
-        self.send(&json!({"type":"get_session_stats"})).await?;
-        let frame = self.await_command_response("get_session_stats").await?;
-        Ok(frame
-            .pointer("/data/contextUsage/tokens")
-            .and_then(Value::as_u64))
-    }
-
-    async fn shutdown(&mut self) -> Result<()> {
-        self.transport.shutdown().await
     }
 }
 
@@ -504,6 +544,71 @@ done
         );
         assert_eq!(session.prompt("again").await.unwrap(), "second turn");
         assert_eq!(session.context_tokens().await.unwrap(), Some(1234));
+        session.shutdown().await.unwrap();
+    }
+
+    /// A message steered mid-prompt reaches the running process as `steer`
+    /// and its acknowledgement is not mistaken for a prompt frame.
+    #[tokio::test]
+    async fn a_steer_reaches_the_running_prompt() {
+        let fixture = FixtureDir::new(
+            r#"
+while IFS= read -r request; do
+  case "$request" in
+    *'"type":"prompt"'*)
+      IFS= read -r steer_request
+      msg=${steer_request#*\"message\":\"}
+      msg=${msg%%\"*}
+      printf '%s\n' '{"type":"response","command":"steer","success":true}'
+      printf '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"steered: %s"}]}}\n' "$msg"
+      printf '%s\n' '{"type":"agent_settled"}' ;;
+  esac
+done
+"#,
+        );
+        let mut cfg = agent();
+        cfg.workspace = fixture.workspace();
+        let mut session = PiSession::start(&fixture.binary(), &cfg).await.unwrap();
+        let handle = session.steer_handle().unwrap();
+        // `join!` polls the prompt first, so the steer lands while it is in flight.
+        let (reply, steered) = tokio::join!(session.prompt("work"), async {
+            handle.try_steer("use sqlite")
+        });
+        assert!(steered);
+        assert_eq!(reply.unwrap(), "steered: use sqlite");
+        session.shutdown().await.unwrap();
+        drop(session);
+        assert!(!handle.try_steer("gone"), "a dropped session takes nothing");
+    }
+
+    /// A steer the runtime refuses, or one sent between prompts, is prepended
+    /// to the next prompt instead of being dropped.
+    #[tokio::test]
+    async fn refused_and_idle_steers_lead_the_next_prompt() {
+        let fixture = FixtureDir::new(
+            r#"
+while IFS= read -r request; do
+  case "$request" in
+    *'decision changed'*'idle note'*'next'*)
+      printf '%s\n' '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"saw both"}]}}' '{"type":"agent_settled"}' ;;
+    *'"type":"prompt"'*)
+      IFS= read -r steer_request
+      printf '%s\n' '{"type":"response","command":"steer","success":false,"error":"not running"}'
+      printf '%s\n' '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}' '{"type":"agent_settled"}' ;;
+  esac
+done
+"#,
+        );
+        let mut cfg = agent();
+        cfg.workspace = fixture.workspace();
+        let mut session = PiSession::start(&fixture.binary(), &cfg).await.unwrap();
+        let handle = session.steer_handle().unwrap();
+        let (reply, _) = tokio::join!(session.prompt("work"), async {
+            handle.try_steer("decision changed")
+        });
+        assert_eq!(reply.unwrap(), "done");
+        assert!(handle.try_steer("idle note"));
+        assert_eq!(session.prompt("next").await.unwrap(), "saw both");
         session.shutdown().await.unwrap();
     }
 

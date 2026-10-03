@@ -30,6 +30,7 @@ use crate::{
 
 /// Process-level owner of configuration, memory, conversations, events, and API state.
 pub struct HivemindCore {
+    artifacts: Arc<crate::artifacts::ArtifactLibrary>,
     execution: Arc<crate::execution::ExecutionStore>,
     config: RwLock<Arc<HivemindConfig>>,
     agents: RwLock<AgentRegistry>,
@@ -153,6 +154,10 @@ impl HivemindCore {
             MemoryService::open(&memory_path)
                 .with_context(|| format!("opening memory store at {}", memory_path.display()))?,
         );
+        let artifacts = Arc::new(crate::artifacts::ArtifactLibrary::open(
+            data_dir.join("artifacts.sqlite3"),
+            config.server.public_base_url.as_deref(),
+        )?);
         let context_dir = data_dir.join("context");
         let config = Arc::new(config);
         let agents = AgentRegistry {
@@ -217,8 +222,53 @@ impl HivemindCore {
             Roster::from_config(&config),
             events.clone(),
         ));
+        {
+            let execution = execution.clone();
+            let memory = memory.clone();
+            conversation.set_follow_up_resolver(Arc::new(move |room| {
+                let limit = execution
+                    .room_settings(room)
+                    .ok()
+                    .and_then(|s| s.follow_up_limit)
+                    .or_else(|| {
+                        if room.starts_with("thread-") {
+                            let caller = crate::memory::Caller::trusted_user("core");
+                            let thread = memory.thread(&caller, room).ok()??;
+                            execution
+                                .room_settings(&thread.parent_room_id)
+                                .ok()
+                                .and_then(|s| s.follow_up_limit)
+                        } else {
+                            None
+                        }
+                    })?;
+                match limit {
+                    n if n < 0 => Some(crate::conversation::FollowUpLimit::Unlimited),
+                    n => Some(crate::conversation::FollowUpLimit::Limited(n as usize)),
+                }
+            }));
+        }
         runtime.set_execution(execution.clone());
         coordination.set_execution(execution.clone());
+        {
+            let pool = Arc::downgrade(&runtime);
+            coordination.set_steerer(Arc::new(
+                move |instance: &crate::identity::AgentInstanceId, text: &str| {
+                    pool.upgrade()
+                        .is_some_and(|pool| pool.steer(instance, text))
+                },
+            ));
+        }
+        {
+            let coord = Arc::downgrade(&coordination);
+            runtime.set_hold_check(Arc::new(
+                move |instance: &crate::identity::AgentInstanceId| {
+                    coord
+                        .upgrade()
+                        .is_some_and(|c| c.has_open_question(instance))
+                },
+            ));
+        }
         let workspaces = Arc::new(SharedWorkspaces::new(&config_path, &config));
         let group_edit_lock = workspaces.edit_lock.clone();
         let mut hosts: Vec<Arc<dyn crate::conversation::ToolHost>> = vec![Arc::new(
@@ -226,6 +276,14 @@ impl HivemindCore {
         )];
         let skills = Arc::new(crate::skills::SkillCatalog::new(&config.skills.dirs));
         hosts.push(Arc::new(crate::skills::SkillTools::new(skills.clone())));
+        hosts.push(Arc::new(
+            crate::artifacts::ArtifactTools::new(
+                artifacts.clone(),
+                workspaces.clone(),
+                access.clone(),
+            )
+            .with_coordination(coordination.clone()),
+        ));
         if config.coordination.enabled {
             hosts.push(Arc::new(CoordinationTools::new(
                 coordination.clone(),
@@ -235,6 +293,7 @@ impl HivemindCore {
         conversation.set_tools(Arc::new(ToolHosts(hosts)));
         events.publish(DomainEventKind::CoreStarted);
         Ok(Self {
+            artifacts,
             execution,
             config: RwLock::new(config),
             agents: RwLock::new(agents),
@@ -254,6 +313,10 @@ impl HivemindCore {
             shutdown_lock: tokio::sync::Mutex::new(()),
             group_edit_lock,
         })
+    }
+
+    pub fn artifacts(&self) -> &Arc<crate::artifacts::ArtifactLibrary> {
+        &self.artifacts
     }
 
     pub fn execution(&self) -> &Arc<crate::execution::ExecutionStore> {
@@ -668,6 +731,18 @@ impl HivemindCore {
         reason: &'static str,
     ) {
         self.runtime.rotate_instance(instance, reason).await;
+    }
+    /// Steer a message into any actively replying agents in a room.
+    pub fn steer_room(&self, room_id: &str, text: &str) -> Vec<String> {
+        let active = self.events.active_replies(room_id);
+        let mut delivered = Vec::new();
+        for persona in active {
+            let instance = crate::identity::AgentInstanceId::new(room_id, &persona);
+            if self.runtime.steer(&instance, text) {
+                delivered.push(persona);
+            }
+        }
+        delivered
     }
     pub fn memory(&self) -> &Arc<MemoryService> {
         &self.memory
