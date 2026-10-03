@@ -659,18 +659,183 @@ textarea:focus {
   padding: 12px 20px 14px;
   border-top: 1px solid var(--border);
 }
-.composer-row {
+.composer-box {
   display: flex;
-  gap: 8px;
-  align-items: flex-end;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 10px 14px 10px 14px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  position: relative;
 }
-.composer textarea {
+.composer-box:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.composer-box.drag-over {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.composer-box textarea {
+  border: none;
+  background: transparent;
+  padding: 4px 0 8px;
+  box-shadow: none;
+  min-height: 48px;
+  max-height: 180px;
   resize: none;
-  min-height: 40px;
-  max-height: 160px;
+  outline: none;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--text);
 }
-.composer-row button {
-  height: 40px;
+.composer-box textarea:focus {
+  border: none;
+  box-shadow: none;
+  outline: none;
+}
+.composer-bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 4px;
+  padding-top: 4px;
+}
+.composer-actions-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  position: relative;
+}
+.composer-add-btn {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 18px;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.composer-add-btn:hover {
+  background: var(--border);
+  border-color: var(--muted);
+}
+.composer-add-btn[data-open="true"] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.composer-menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 50;
+  width: 230px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.composer-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+  text-decoration: none;
+  width: 100%;
+  box-sizing: border-box;
+  transition: background 0.12s;
+}
+.composer-menu-item:hover {
+  background: var(--panel-2);
+  color: var(--text);
+}
+.composer-menu-item .menu-icon {
+  font-size: 15px;
+  width: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.composer-menu-item .menu-label {
+  flex: 1;
+}
+.composer-menu-item .menu-shortcut {
+  font-size: 11px;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.composer-attachments-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+.composer-attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: 7px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  font-size: 12px;
+  max-width: 240px;
+}
+.composer-attachment-chip .chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.composer-attachment-chip .chip-size {
+  color: var(--muted);
+  font-size: 11px;
+}
+.composer-attachment-chip .chip-remove {
+  border: none;
+  background: transparent;
+  padding: 0 2px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.composer-attachment-chip .chip-remove:hover {
+  color: var(--bad);
+  background: var(--bad-soft);
+}
+.composer-bottom button.primary {
+  height: 34px;
+  padding: 0 16px;
+  border-radius: 8px;
 }
 .hint {
   font-size: 11px;

@@ -55,3 +55,40 @@ test("mermaid and ascii diagrams can be created and previewed rendered", async (
   await asciiCard.getByRole("button", { name: "Preview", exact: true }).click();
   await expect(asciiCard.locator(".ascii-diagram")).toBeVisible();
 });
+
+test("claude-style composer has plus menu and attachment chips", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("hivemind.first_run_complete", "true"));
+  await page.goto("/#/rooms");
+  await expect(page.locator(".composer")).toBeVisible();
+
+  // Plus button is present and toggles menu
+  const plusBtn = page.getByRole("button", { name: "Add content or tools" });
+  await expect(plusBtn).toBeVisible();
+  await plusBtn.click();
+
+  const menu = page.locator(".composer-menu");
+  await expect(menu).toBeVisible();
+  await expect(menu.getByText("Add files or photos")).toBeVisible();
+  await expect(menu.getByText("Artifact library")).toBeVisible();
+  await expect(menu.getByText("Skills & tools")).toBeVisible();
+
+  // Close menu by clicking plus again
+  await plusBtn.click();
+  await expect(menu).toHaveCount(0);
+
+  // Attach a file via the hidden input
+  await page.getByLabel("Attach files").setInputFiles({
+    name: "attached-notes.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.from("Attached file content"),
+  });
+
+  // Verify attachment chip is rendered
+  const chip = page.locator(".composer-attachment-chip");
+  await expect(chip).toBeVisible();
+  await expect(chip.locator(".chip-name")).toHaveText("attached-notes.txt");
+
+  // Remove the attachment
+  await chip.locator(".chip-remove").click();
+  await expect(page.locator(".composer-attachment-chip")).toHaveCount(0);
+});

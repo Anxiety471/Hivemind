@@ -468,6 +468,8 @@ function MessageList(props: {
     </div>
   );
 }
+const sizeLabel = (bytes: number) =>
+  bytes < 1024 ? `${bytes} B` : bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 
 function Composer({
   roomId,
@@ -508,6 +510,21 @@ function Composer({
   const [mentionMatch, setMentionMatch] = useState<MentionMatch | null>(null);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [dismissed, setDismissed] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [menuOpen]);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -734,12 +751,46 @@ function Composer({
           <Markdown text={output} />
         </div>
       )}
-      {attachments.length > 0 && <div className="row composer-attachments">{attachments.map(a => <span key={a.id}><a href={href("library")}>{a.filename}</a><button disabled={busy} aria-label={`Remove ${a.filename} from message`} onClick={() => setAttachments(current => current.filter(item => item.id !== a.id))}>×</button></span>)}</div>}
-      <label className="attachment-input">Attach files (saved automatically to Library)<input aria-label="Attach files" type="file" multiple disabled={busy} onChange={e => { attach(e.target.files); e.target.value = ""; }} /></label>
-      <div className="composer-row">
+      <div
+        className={`composer-box ${dragging ? "drag-over" : ""}`}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragging(true);
+        }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragging(false);
+          attach(e.dataTransfer.files);
+        }}
+      >
+        {attachments.length > 0 && (
+          <div className="composer-attachments-bar">
+            {attachments.map((a) => (
+              <div key={a.id} className="composer-attachment-chip">
+                <span className="chip-icon">📎</span>
+                <span className="chip-name" title={a.filename}>
+                  {a.filename}
+                </span>
+                <span className="chip-size">{sizeLabel(a.size)}</span>
+                <button
+                  type="button"
+                  className="chip-remove"
+                  disabled={busy}
+                  aria-label={`Remove ${a.filename} from message`}
+                  onClick={() =>
+                    setAttachments((current) => current.filter((item) => item.id !== a.id))
+                  }
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         <textarea
           ref={textareaRef}
-          rows={1}
+          rows={2}
           value={text}
           placeholder={placeholder}
           onChange={(e) => {
@@ -757,6 +808,11 @@ function Composer({
             blurTimeoutRef.current = window.setTimeout(() => setMentionMatch(null), 150);
           }}
           onKeyDown={(e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "u") {
+              e.preventDefault();
+              fileInputRef.current?.click();
+              return;
+            }
             if (slashItems.length > 0) {
               if (e.key === "ArrowDown") {
                 e.preventDefault();
@@ -786,23 +842,23 @@ function Composer({
                 e.preventDefault();
                 setSelectedIndex((prev) => (prev + 1) % filtered.length);
                 return;
-               }
+              }
               if (e.key === "ArrowUp") {
                 e.preventDefault();
                 setSelectedIndex((prev) => (prev - 1 + filtered.length) % filtered.length);
                 return;
-               }
+              }
               if (e.key === "Enter" || e.key === "Tab") {
                 e.preventDefault();
                 const chosen = filtered[selectedIndex];
                 if (chosen) insertMention(chosen);
                 return;
-               }
+              }
               if (e.key === "Escape") {
                 e.preventDefault();
                 setDismissed(true);
                 return;
-               }
+              }
             }
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
@@ -810,13 +866,79 @@ function Composer({
             }
           }}
         />
-        <button className="primary" disabled={busy || (!text.trim() && !attachments.length)} onClick={send}>
-          {text.trim().toLowerCase().startsWith("/queue")
-            ? "Queue"
-            : isReplying
-            ? "Steer"
-            : "Send"}
-        </button>
+        <div className="composer-bottom">
+          <div className="composer-actions-left" ref={menuRef}>
+            <button
+              type="button"
+              className="composer-add-btn"
+              data-open={menuOpen}
+              aria-label="Add content or tools"
+              title="Add content or tools"
+              onClick={() => setMenuOpen(!menuOpen)}
+            >
+              +
+            </button>
+            {menuOpen && (
+              <div className="composer-menu" role="menu">
+                <button
+                  type="button"
+                  className="composer-menu-item"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    fileInputRef.current?.click();
+                  }}
+                >
+                  <span className="menu-icon">📎</span>
+                  <span className="menu-label">Add files or photos</span>
+                  <span className="menu-shortcut">Ctrl+U</span>
+                </button>
+                <a
+                  href="#/library"
+                  className="composer-menu-item"
+                  onClick={() => setMenuOpen(false)}
+                >
+                  <span className="menu-icon">📚</span>
+                  <span className="menu-label">Artifact library</span>
+                </a>
+                <button
+                  type="button"
+                  className="composer-menu-item"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    acceptSlash("/skills");
+                  }}
+                >
+                  <span className="menu-icon">⚡</span>
+                  <span className="menu-label">Skills & tools</span>
+                  <span className="menu-shortcut">/skills</span>
+                </button>
+              </div>
+            )}
+            <input
+              ref={fileInputRef}
+              aria-label="Attach files"
+              type="file"
+              multiple
+              disabled={busy}
+              style={{ display: "none" }}
+              onChange={(e) => {
+                attach(e.target.files);
+                e.target.value = "";
+              }}
+            />
+          </div>
+          <button
+            className="primary"
+            disabled={busy || (!text.trim() && !attachments.length)}
+            onClick={send}
+          >
+            {text.trim().toLowerCase().startsWith("/queue")
+              ? "Queue"
+              : isReplying
+              ? "Steer"
+              : "Send"}
+          </button>
+        </div>
       </div>
       <div className="hint">
         {isReplying
