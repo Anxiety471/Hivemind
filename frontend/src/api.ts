@@ -139,7 +139,11 @@ export type Usage = {
 export type OpenQuestion = { attempt_id: string; persona: string; question: string; to: string | null; message_id: string | null; asked_at: number };
 export type InboxItem = { task: Task; questions: OpenQuestion[] };
 
+export type GoalInput = { title: string; description: string; workspace: string; constraints: string[]; success_criteria: string[] };
+export type Goal = GoalInput & { id: string; status: "active" | "achieved" | "archived"; revision: number };
+
 export type TaskDetail = {
+  goal?: Goal | null;
   questions?: OpenQuestion[];
   task: Task;
   children: TaskSummary[];
@@ -150,7 +154,7 @@ export type TaskDetail = {
   usage: Usage | null;
 };
 
-export type RoutineInput = { name: string; objective: string; interval_secs: number; acceptance: string[]; capabilities: string[]; workspace?: string };
+export type RoutineInput = { name: string; objective: string; interval_secs: number; acceptance: string[]; capabilities: string[]; workspace?: string; goal_id?: string };
 export type Routine = RoutineInput & { id: string; enabled: boolean; next_at: number; revision: number; runs: { id: string; status: string; task_id: string | null; created_at: number; error: string | null }[] };
 
 export type TaskEvidence = {
@@ -358,6 +362,9 @@ const enc = encodeURIComponent;
 export type Skill = { name: string; description: string; argument_hint: string; source: string };
 
 export const api = {
+  goals: () => request<{ goals: Goal[] }>("GET", "/goals"),
+  createGoal: (body: GoalInput) => request("POST", "/goals", body),
+  setGoalStatus: (id: string, status: string, revision: number) => request("POST", `/goals/${enc(id)}/status`, { status, revision }),
   routines: () => request<{ routines: Routine[] }>("GET", "/routines"),
   createRoutine: (body: RoutineInput) => request("POST", "/routines", body),
   runRoutine: (id: string) => request("POST", `/routines/${enc(id)}/run`, { idempotency_key: crypto.randomUUID() }),
@@ -418,8 +425,8 @@ export const api = {
     request<{ tasks: Task[]; next_after: string | null }>("GET", `/tasks?limit=200${all ? "&all=true" : ""}`),
   task: (id: string) => request<{ task: TaskDetail }>("GET", `/tasks/${enc(id)}`),
   attempts: (id: string) => request<{ attempts: Attempt[] }>("GET", `/tasks/${enc(id)}/attempts`),
-  submitTask: (objective: string, acceptance: string[], capabilities: string[]) =>
-    request<{ id: string }>("POST", "/tasks", { objective, acceptance, capabilities }),
+  submitTask: (objective: string, acceptance: string[], capabilities: string[], goal?: Goal) =>
+    request<{ id: string }>("POST", "/tasks", { objective, acceptance, capabilities, ...(goal ? {goal_id:goal.id,workspace:goal.workspace}: {}) }),
   taskAction: (id: string, action: "cancel" | "pause" | "resume", body?: unknown) =>
     request<{ task: TaskDetail }>("POST", `/tasks/${enc(id)}/${action}`, body ?? {}),
   taskEvidence: (id: string) => request<TaskEvidence>("GET", `/tasks/${enc(id)}/evidence`),

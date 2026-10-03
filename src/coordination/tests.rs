@@ -1611,6 +1611,7 @@ fn routines_skip_missed_intervals_coalesce_active_work_and_fence_edits() {
             acceptance: vec!["Report cause".into()],
             capabilities: vec![],
             workspace: None,
+            goal_id: None,
         })
         .unwrap();
     let id = routine["id"].as_str().unwrap();
@@ -1661,6 +1662,7 @@ fn pending_routine_submission_reuses_the_reserved_run_task() {
             acceptance: vec![],
             capabilities: vec![],
             workspace: None,
+            goal_id: None,
         })
         .unwrap();
     let run = service
@@ -1689,4 +1691,83 @@ fn pending_routine_submission_reuses_the_reserved_run_task() {
             .len(),
         1
     );
+}
+
+#[test]
+fn linked_goals_reach_children_and_mandatory_prompts_without_clipping() {
+    let service = service();
+    let goal = service
+        .create_goal(super::goals::GoalInput {
+            title: "Reliable orders".into(),
+            description: "Deliver a dependable ordering API".into(),
+            workspace: ".".into(),
+            constraints: vec!["Preserve existing data".into()],
+            success_criteria: vec!["Orders survive restart".into()],
+        })
+        .unwrap();
+    let root = service
+        .submit_for_goal(
+            SubmitTask {
+                objective: "Implement orders".into(),
+                acceptance: vec![],
+                capabilities: vec![],
+                workspace: None,
+                plan: Some(Plan {
+                    tasks: vec![task("api", &["backend"], &[])],
+                }),
+                idempotency_key: None,
+            },
+            Some(&goal.id),
+        )
+        .unwrap();
+    let dispatch = claim(&service).remove(0);
+    assert_eq!(
+        service.detail(&dispatch.task.id).unwrap().goal.unwrap().id,
+        goal.id
+    );
+    let prompt = super::capsule::build_prompt(&service, &dispatch, 32_000)
+        .unwrap()
+        .unwrap();
+    assert!(prompt.text.contains("Preserve existing data"));
+    assert!(prompt.text.contains("Orders survive restart"));
+    assert!(super::capsule::build_prompt(&service, &dispatch, 100)
+        .unwrap()
+        .is_err());
+    let before = service
+        .list_tasks(&TaskFilter {
+            limit: 200,
+            ..Default::default()
+        })
+        .unwrap()
+        .len();
+    let invalid = service.submit_for_goal(
+        SubmitTask {
+            objective: "Wrong project".into(),
+            acceptance: vec![],
+            capabilities: vec![],
+            workspace: Some("/elsewhere".into()),
+            plan: None,
+            idempotency_key: None,
+        },
+        Some(&goal.id),
+    );
+    assert!(matches!(invalid, Err(CoordError::Invalid(_))));
+    assert_eq!(
+        service
+            .list_tasks(&TaskFilter {
+                limit: 200,
+                ..Default::default()
+            })
+            .unwrap()
+            .len(),
+        before
+    );
+    assert_eq!(root.goal.unwrap().id, goal.id);
+    service
+        .set_goal_status(&goal.id, "achieved", goal.revision)
+        .unwrap();
+    assert!(matches!(
+        service.set_goal_status(&goal.id, "active", goal.revision),
+        Err(CoordError::Conflict(_))
+    ));
 }

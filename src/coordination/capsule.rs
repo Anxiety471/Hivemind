@@ -240,6 +240,11 @@ pub fn build_prompt(
                 goal.push_str(&format!("{}. {c}\n", i + 1));
             }
         }
+        if let Some(project) = db.task_goal(&task.root_id)? {
+            goal.push_str(&format!("Project goal {} (revision {}, {}): {}\n{}\n", project.id, project.revision, project.status, project.definition.title, project.definition.description));
+            for constraint in &project.definition.constraints { goal.push_str(&format!("Project constraint: {constraint}\n")); }
+            for criterion in &project.definition.success_criteria { goal.push_str(&format!("Project success criterion: {criterion}\n")); }
+        }
         let mandatory = header.len() + goal.len();
         if mandatory > budget / 2 {
             return Ok(Err(MandatoryOverflow(format!(

@@ -21,6 +21,8 @@ pub struct RoutineInput {
     pub capabilities: Vec<String>,
     #[serde(default)]
     pub workspace: Option<String>,
+    #[serde(default)]
+    pub goal_id: Option<String>,
 }
 
 impl Db<'_> {
@@ -72,6 +74,22 @@ impl CoordinationService {
         }
         if let Some(workspace) = &spec.workspace {
             check_text("workspace", workspace, 1024)?;
+        }
+        if let Some(goal_id) = &spec.goal_id {
+            let goal = self.store().read(|db| db.goal(goal_id))?;
+            if goal.status != "active" {
+                return Err(CoordError::Conflict(
+                    "routine requires an active goal".into(),
+                ));
+            }
+            if spec.workspace.as_ref().is_some_and(|ws| {
+                super::policy::normalize_workspace(ws) != goal.definition.workspace
+            }) {
+                return Err(CoordError::Invalid(
+                    "routine and goal workspace must match".into(),
+                ));
+            }
+            spec.workspace = Some(goal.definition.workspace);
         }
         let id = new_id("rt");
         self.store().write(|db| {
@@ -173,14 +191,17 @@ impl CoordinationService {
         let Some(spec) = spec else { return Ok(()) };
         let spec: RoutineInput = serde_json::from_str(&spec)
             .map_err(|_| CoordError::Internal("invalid run snapshot".into()))?;
-        let result = self.submit(SubmitTask {
-            objective: spec.objective,
-            acceptance: spec.acceptance,
-            capabilities: spec.capabilities,
-            workspace: spec.workspace,
-            plan: None,
-            idempotency_key: Some(format!("routine-run:{id}")),
-        });
+        let result = self.submit_for_goal(
+            SubmitTask {
+                objective: spec.objective,
+                acceptance: spec.acceptance,
+                capabilities: spec.capabilities,
+                workspace: spec.workspace,
+                plan: None,
+                idempotency_key: Some(format!("routine-run:{id}")),
+            },
+            spec.goal_id.as_deref(),
+        );
         self.store().write(|db| {
             match result {
                 Ok(detail) => { db.c.execute("UPDATE routine_runs SET status='submitted',task_id=? WHERE id=? AND status='pending'", params![detail.task.id,id])?; }

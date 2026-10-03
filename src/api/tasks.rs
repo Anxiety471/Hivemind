@@ -26,6 +26,8 @@ pub(super) fn routes() -> Router<ApiState> {
     Router::new()
         .route("/api/v1/tasks", post(submit).get(list))
         .route("/api/v1/operator-inbox", get(operator_inbox))
+        .route("/api/v1/goals", get(goals).post(create_goal))
+        .route("/api/v1/goals/{id}/status", post(goal_status))
         .route("/api/v1/routines", get(routines).post(create_routine))
         .route("/api/v1/routines/{id}/run", post(run_routine))
         .route("/api/v1/routines/{id}/enabled", post(routine_enabled))
@@ -131,6 +133,8 @@ pub(super) fn number(
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SubmitBody {
+    #[serde(default)]
+    goal_id: Option<String>,
     objective: String,
     #[serde(default)]
     acceptance: Vec<String>,
@@ -151,14 +155,17 @@ async fn submit(
     let Ok(Json(body)) = payload else {
         return bad_json();
     };
-    match state.core.coordination().submit(SubmitTask {
-        objective: body.objective,
-        acceptance: body.acceptance,
-        capabilities: body.capabilities,
-        workspace: body.workspace,
-        plan: body.plan,
-        idempotency_key: body.idempotency_key,
-    }) {
+    match state.core.coordination().submit_for_goal(
+        SubmitTask {
+            objective: body.objective,
+            acceptance: body.acceptance,
+            capabilities: body.capabilities,
+            workspace: body.workspace,
+            plan: body.plan,
+            idempotency_key: body.idempotency_key,
+        },
+        body.goal_id.as_deref(),
+    ) {
         Ok(detail) => {
             let id = detail.task.id.clone();
             (StatusCode::ACCEPTED, Json(json!({"id": id, "status_url": format!("/api/v1/tasks/{id}"), "event_high_water": state.core.coordination().high_water().unwrap_or(0), "task": detail}))).into_response()
@@ -198,6 +205,48 @@ async fn list(State(state): State<ApiState>, RawQuery(raw): RawQuery) -> Respons
                 .flatten();
             Json(json!({"tasks": tasks, "next_after": next_after, "event_high_water": service.high_water().unwrap_or(0)})).into_response()
         }
+        Err(error) => coord_error(error),
+    }
+}
+
+async fn goals(State(state): State<ApiState>) -> Response {
+    match state.core.coordination().goals() {
+        Ok(goals) => Json(json!({"goals":goals})).into_response(),
+        Err(error) => coord_error(error),
+    }
+}
+async fn create_goal(
+    State(state): State<ApiState>,
+    payload: Result<Json<crate::coordination::goals::GoalInput>, JsonRejection>,
+) -> Response {
+    let Ok(Json(body)) = payload else {
+        return bad_json();
+    };
+    match state.core.coordination().create_goal(body) {
+        Ok(goal) => (StatusCode::CREATED, Json(json!({"goal":goal}))).into_response(),
+        Err(error) => coord_error(error),
+    }
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GoalStatusBody {
+    status: String,
+    revision: i64,
+}
+async fn goal_status(
+    State(state): State<ApiState>,
+    Path(id): Path<String>,
+    payload: Result<Json<GoalStatusBody>, JsonRejection>,
+) -> Response {
+    let Ok(Json(body)) = payload else {
+        return bad_json();
+    };
+    match state
+        .core
+        .coordination()
+        .set_goal_status(&id, &body.status, body.revision)
+    {
+        Ok(goal) => Json(json!({"goal":goal})).into_response(),
         Err(error) => coord_error(error),
     }
 }
