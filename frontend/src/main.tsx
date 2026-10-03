@@ -4,8 +4,9 @@ import { api, hasSavedSettings } from "./api";
 import { connect, useLiveStatus } from "./live";
 import { Chat } from "./views/Chat";
 import { FirstRunSetup } from "./views/FirstRunSetup";
+import { Icon, Logo, type IconName } from "./icons";
 const Library = lazy(() => import("./views/Library").then((m) => ({ default: m.Library })));
-const Tasks = lazy(() => import("./views/Tasks").then((m) => ({ default: m.Tasks })));
+const Issues = lazy(() => import("./views/Issues").then((m) => ({ default: m.Issues })));
 const Agents = lazy(() => import("./views/Agents").then((m) => ({ default: m.Agents })));
 const Groups = lazy(() => import("./views/Groups").then((m) => ({ default: m.Groups })));
 const WorkspacesView = lazy(() => import("./views/Workspaces").then((m) => ({ default: m.WorkspacesView })));
@@ -22,16 +23,32 @@ function parse(): Route {
   return { page: page || "rooms", arg: rest.length ? decodeURIComponent(rest.join("/")) : undefined };
 }
 
-const NAV = [
-  { page: "rooms", label: "Rooms", icon: "💬" },
-  { page: "library", label: "Library", icon: "📚" },
-  { page: "tasks", label: "Tasks", icon: "🗂️" },
-  { page: "agents", label: "Agents", icon: "🤖" },
-  { page: "groups", label: "Groups", icon: "👥" },
-  { page: "workspaces", label: "Workspaces", icon: "📁" },
-  { page: "sessions", label: "Runtime sessions", icon: "♻️" },
-  { page: "activity", label: "Live activity", icon: "📡" },
-  { page: "setup", label: "Setup guide", icon: "✨" },
+type NavItem = { page: string; label: string; icon: IconName; also?: string[] };
+
+const NAV: { section?: string; items: NavItem[] }[] = [
+  {
+    items: [
+      { page: "issues", label: "Issues", icon: "issues", also: ["tasks"] },
+      { page: "rooms", label: "Rooms", icon: "rooms" },
+      { page: "library", label: "Library", icon: "library" },
+    ],
+  },
+  {
+    section: "Hive",
+    items: [
+      { page: "agents", label: "Agents", icon: "agents" },
+      { page: "groups", label: "Groups", icon: "groups" },
+      { page: "workspaces", label: "Workspaces", icon: "workspaces" },
+    ],
+  },
+  {
+    section: "System",
+    items: [
+      { page: "sessions", label: "Runtime sessions", icon: "sessions" },
+      { page: "activity", label: "Live activity", icon: "activity" },
+      { page: "setup", label: "Setup guide", icon: "setup" },
+    ],
+  },
 ];
 
 const FIRST_RUN_KEY = "hivemind.first_run_complete";
@@ -80,8 +97,9 @@ function App() {
     case "library":
       view = <Library selected={route.arg} />;
       break;
+    case "issues":
     case "tasks":
-      view = <Tasks selected={route.arg} />;
+      view = <Issues selected={route.arg} />;
       break;
     case "agents":
       view = <Agents />;
@@ -112,19 +130,36 @@ function App() {
     <div className="shell">
       <nav className="sidebar">
         <div className="brand">
-          <span className="logo">🐝</span>
-          <span>Hivemind</span>
-        </div>
-        {NAV.map((item) => (
-          <a key={item.page} href={`#/${item.page}`} className={route.page === item.page ? "nav active" : "nav"}>
-            <span className="nav-icon">{item.icon}</span>
-            {item.label}
+          <span className="logo">
+            <Logo />
+          </span>
+          <span className="brand-name">Hivemind</span>
+          <a className="brand-new" href="#/issues" title="Issues — press C to create" aria-label="Go to issues">
+            <Icon name="plus" size={14} />
           </a>
+        </div>
+        {NAV.map((group, i) => (
+          <div className="nav-group" key={group.section ?? i}>
+            {group.section && <div className="nav-section">{group.section}</div>}
+            {group.items.map((item) => {
+              const active = route.page === item.page || item.also?.includes(route.page);
+              return (
+                <a key={item.page} href={`#/${item.page}`} className={active ? "nav active" : "nav"}>
+                  <span className="nav-icon">
+                    <Icon name={item.icon} />
+                  </span>
+                  <span className="nav-label">{item.label}</span>
+                </a>
+              );
+            })}
+          </div>
         ))}
         <div className="spacer" />
         <a href="#/settings" className={route.page === "settings" ? "nav active" : "nav"}>
-          <span className="nav-icon">⚙️</span>
-          Connection
+          <span className="nav-icon">
+            <Icon name="settings" />
+          </span>
+          <span className="nav-label">Connection</span>
         </a>
         <div className="conn" data-status={live}>
           <span className="dot" />

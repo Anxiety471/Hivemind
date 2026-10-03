@@ -96,6 +96,8 @@ pub struct TaskDetail {
 #[derive(Debug, Clone, Serialize)]
 pub struct TaskSummary {
     pub id: String,
+    pub parent_id: Option<String>,
+    pub depth: u32,
     pub objective: String,
     pub owner: Option<String>,
     pub reviewer: Option<String>,
@@ -1190,6 +1192,51 @@ impl CoordinationService {
                 }
             }
             let ids = self.commit_plan(db, &root, &task, resolved, &ctx.persona)?;
+            Ok(ids[0].1.clone())
+        })?;
+        self.changed();
+        Ok(id)
+    }
+
+    /// Operator-created child task ("sub-issue") under any live task of a
+    /// root that is still accepting work. Nests to `max_plan_depth`.
+    pub fn add_child(&self, parent_id: &str, req: Delegate, actor: &str) -> CoordResult<String> {
+        self.require_enabled()?;
+        let id = self.store.write(|db| {
+            let parent = db.task_or_err(parent_id)?;
+            let root = db.task_or_err(&parent.root_id)?;
+            if parent.status.is_terminal() {
+                return conflict(format!("task '{}' is {}", parent.id, parent.status.as_str()));
+            }
+            match root.status {
+                TaskStatus::Running => {}
+                // Waiting on an answer mid-run is fine; before any plan it is still planning.
+                TaskStatus::NeedsInput if db.count_tasks(&root.id)? > 1 => {}
+                TaskStatus::Planning | TaskStatus::Submitted | TaskStatus::NeedsInput => {
+                    return conflict("the coordinator is still planning this task; add sub-issues once it is running")
+                }
+                other => return conflict(format!("root task is {}", other.as_str())),
+            }
+            let plan = Plan {
+                tasks: vec![super::policy::PlanTask {
+                    key: "child".into(),
+                    objective: req.objective.clone(),
+                    // A quick sub-issue is just a title: its acceptance is getting it done.
+                    acceptance: if req.acceptance.is_empty() {
+                        vec![clip(req.objective.trim(), 600).to_owned()]
+                    } else {
+                        req.acceptance.clone()
+                    },
+                    capabilities: req.capabilities.clone(),
+                    owner: req.owner.clone(),
+                    reviewer: req.reviewer.clone(),
+                    depends_on: req.depends_on.clone(),
+                    contract: None,
+                    kind: None,
+                }],
+            };
+            let resolved = self.resolve_plan(db, &plan, &root, &parent, &root.coordinator)?;
+            let ids = self.commit_plan(db, &root, &parent, resolved, actor)?;
             Ok(ids[0].1.clone())
         })?;
         self.changed();
@@ -2332,6 +2379,8 @@ impl CoordinationService {
                 })
                 .map(|t| TaskSummary {
                     id: t.id.clone(),
+                    parent_id: t.parent_id.clone(),
+                    depth: t.depth,
                     objective: clip(&t.objective, 200).to_owned(),
                     owner: t.owner.clone(),
                     reviewer: t.reviewer.clone(),

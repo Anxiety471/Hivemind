@@ -1967,3 +1967,42 @@ fn wakeups_that_can_never_fire_leave_a_record_and_tell_a_live_agent() {
         .unwrap()
         .contains("root task ended"));
 }
+
+#[test]
+fn operators_spawn_nested_child_tasks() {
+    let service = service();
+    let child = |objective: &str| Delegate {
+        objective: objective.into(),
+        acceptance: vec![],
+        capabilities: vec!["backend".into()],
+        owner: None,
+        reviewer: None,
+        depends_on: vec![],
+    };
+    let unplanned = submit(&service, "still planning", None);
+    assert!(matches!(
+        service.add_child(&unplanned.task.id, child("too early"), "user"),
+        Err(CoordError::Conflict(_))
+    ));
+
+    let (root, api, _) = planned(&service);
+    let sub = service
+        .add_child(&api, child("api schema"), "user")
+        .unwrap();
+    let subsub = service
+        .add_child(&sub, child("schema migration"), "user")
+        .unwrap();
+    let sub_task = service.detail(&sub).unwrap().task;
+    assert_eq!(sub_task.parent_id.as_deref(), Some(api.as_str()));
+    assert_eq!(sub_task.root_id, root);
+    let leaf = service.detail(&subsub).unwrap().task;
+    assert_eq!(leaf.parent_id.as_deref(), Some(sub.as_str()));
+    assert_eq!(leaf.depth, 3);
+    assert_eq!(service.detail(&api).unwrap().children[0].id, sub);
+    let summary = service.detail(&root).unwrap();
+    let nested = summary.children.iter().find(|c| c.id == subsub).unwrap();
+    assert_eq!(nested.parent_id.as_deref(), Some(sub.as_str()));
+
+    service.cancel(&root, "user").unwrap();
+    assert!(service.add_child(&root, child("late"), "user").is_err());
+}

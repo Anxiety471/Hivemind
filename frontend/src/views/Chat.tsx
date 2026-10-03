@@ -255,8 +255,8 @@ function RoomView({
               {panelTab ? "Hide settings" : "Settings"}
             </button>
             {roomId.startsWith("task-") && (
-              <a className="button ghost" href={href("tasks", roomId.slice(5))}>
-                Open task
+              <a className="button ghost" href={href("issues", roomId.slice(5))}>
+                Open issue
               </a>
             )}
           </div>
