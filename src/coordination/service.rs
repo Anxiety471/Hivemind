@@ -539,6 +539,7 @@ impl CoordinationService {
             .iter()
             .filter_map(|t| t.parent_key.as_deref())
             .collect();
+        let roster = self.roster();
         for task in &resolved {
             let id = &ids[&task.key];
             let nest = plan_nest(&task.key, &resolved);
@@ -550,7 +551,7 @@ impl CoordinationService {
             let is_container = containers.contains(task.key.as_str());
             let room_for_children =
                 (parent.depth as usize + nest as usize) < self.config.max_plan_depth;
-            let owner = self.roster().get(&task.owner);
+            let owner = roster.get(&task.owner);
             // A specialist does the ticket. A researcher (or other decomposer who
             // is not already the root coordinator) plans sub-issues by default.
             let plans_by_default = owner.is_some_and(|persona| {
@@ -648,10 +649,8 @@ impl CoordinationService {
                 .iter()
                 .all(|child| child.status == TaskStatus::Completed)
             {
-                let owner = task
-                    .owner
-                    .as_deref()
-                    .and_then(|name| self.roster().get(name));
+                let roster = self.roster();
+                let owner = task.owner.as_deref().and_then(|name| roster.get(name));
                 let synthesizes = owner.is_some_and(|persona| {
                     persona.has_permission("decompose") && !persona.has_permission("coordinate")
                 });
@@ -816,9 +815,10 @@ impl CoordinationService {
                             .get(name)
                             .is_some_and(|persona| persona.may_decompose())
                     })
-                    .unwrap_or(task.coordinator.as_str());
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| task.coordinator.clone());
                 if !planner.is_empty() {
-                    candidates.push((task, AttemptKind::Plan, planner.to_owned()));
+                    candidates.push((task, AttemptKind::Plan, planner));
                 }
             }
             for task in db.tasks_with_status(TaskStatus::Ready, 200)? {
@@ -1257,7 +1257,8 @@ impl CoordinationService {
         let task = self.live(ctx)?;
         let ids = self.store.write(|db| {
             let root = db.task_or_err(&task.root_id)?;
-            let planner = self.roster().get(&ctx.persona);
+            let roster = self.roster();
+            let planner = roster.get(&ctx.persona);
             if ctx.kind != AttemptKind::Plan || task.status != TaskStatus::Planning {
                 return forbid(
                     "plans are accepted only from the planning attempt on a task that is being planned",
