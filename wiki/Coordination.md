@@ -77,6 +77,21 @@ Worktree directories are removed after each attempt; branches stay. The live ses
 
 Dynamic groups live in SQLite (configuration groups are untouched). `groups.create` resolves configured personas only, one distinct persona per requested capability; the same purpose and membership reuses the group. Membership changes are revision-checked and audited, and removed members' task sessions are rotated.
 
+### Wake types
+
+Every wake is one of a small set of durable triggers; only the last is agent-authored.
+
+| Wake type | Trigger | Example |
+|---|---|---|
+| `USER_WAKE` | A user turn, steer, or submitted root task arrives | “Fix login” |
+| `AGENT_WAKE` | Another persona sends a `request` or `handoff` message | Marin asks Kurisu |
+| `TASK_WAKE` | A dependency completes and the task is promoted to `ready` | a work attempt is dispatched |
+| `SCHEDULE_WAKE` | A `wakeup.schedule` delivery comes due | a self-check later |
+| `RECOVERY_WAKE` | An interrupted attempt or wakeup is requeued after a restart | Hivemind restarts mid-attempt |
+| `EVENT_WAKE` | *(not implemented)* an external system event | CI fails |
+
+`USER_WAKE`, `AGENT_WAKE`, `TASK_WAKE`, and `RECOVERY_WAKE` are host-driven: the model never names or triggers them. `SCHEDULE_WAKE` is the only agent-authored wake and the only wake tool exposed — there is no `wakeup.list` or `wakeup.cancel`, so an agent cannot enumerate or retract its pending wakeups. `EVENT_WAKE` is conceptual only: Hivemind has no event-to-wake subscription, so nothing observes CI or any other external event and wakes an agent; adding one would be a new host event source.
+
 ## Agent tools
 
 Offered through the same ```` ```hivemind-tool ```` fence as memory tools, only inside task rooms and only when the persona's role and permissions allow them. The manifest is injected with the first prompt of each runtime epoch; later turns carry a one-line reminder.

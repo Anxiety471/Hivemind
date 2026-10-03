@@ -120,7 +120,7 @@ const EXAMPLES: &[(&str, &str)] = &[
     ("messages.ack", r#"{"id":"mg_..."}"#),
     (
         "wakeup.schedule",
-        r#"{"delay_seconds":600,"context":"re-check whether the API contract was answered"}"#,
+        r#"{"delay_seconds":600,"intent":"re-check whether the API contract was answered","reminder":"only if Beta has not replied","note":"contract thread is mg_..."}"#,
     ),
     (
         "groups.create",
@@ -525,14 +525,19 @@ fn run(
         "wakeup.schedule" => {
             let delay = opt_int(args, "delay_seconds")?
                 .ok_or_else(|| CoordError::Invalid("missing argument 'delay_seconds'".into()))?;
+            let intent = opt_str(args, "intent")?;
+            let reminder = opt_str(args, "reminder")?;
+            let note = opt_str(args, "note")?;
             let (message, duplicate) = service.schedule_wakeup(
                 ctx,
                 delay,
-                &str_arg(args, "context")?,
+                intent.as_deref(),
+                reminder.as_deref(),
+                note.as_deref(),
                 opt_str(args, "key")?.as_deref(),
             )?;
             Ok(format!(
-                "{} wakeup {}: Hivemind will wake you with your context in {delay}s (once)",
+                "{} wakeup {}: Hivemind will wake you once, in {delay}s, with this intent/reminder/note",
                 if duplicate {
                     "already scheduled"
                 } else {

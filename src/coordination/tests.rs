@@ -1693,7 +1693,14 @@ fn agent_schedules_a_wakeup_that_is_delivered_once_when_due() {
     let service = service();
     let (root, lead) = team_in_root(&service);
     let (message, duplicate) = service
-        .schedule_wakeup(&lead, 60, "re-check the API contract", None)
+        .schedule_wakeup(
+            &lead,
+            60,
+            Some("re-check the API contract"),
+            None,
+            None,
+            None,
+        )
         .unwrap();
     assert!(!duplicate);
     assert_eq!(message.kind, MessageKind::Wakeup);
@@ -1711,7 +1718,7 @@ fn agent_schedules_a_wakeup_that_is_delivered_once_when_due() {
     assert_eq!(dispatches[0].attempt.persona, "Lead");
     assert_eq!(
         dispatches[0].deliveries[0].1.body,
-        "re-check the API contract"
+        "Intent: re-check the API contract"
     );
 
     // Single use: the delivery is claimed, so it never wakes the agent again.
@@ -1719,13 +1726,47 @@ fn agent_schedules_a_wakeup_that_is_delivered_once_when_due() {
 }
 
 #[test]
+fn wakeup_purposes_are_labeled_and_a_lone_note_is_enough() {
+    let service = service();
+    let (root, lead) = team_in_root(&service);
+    service
+        .schedule_wakeup(
+            &lead,
+            30,
+            Some("resume the API work"),
+            Some("only if Beta has not replied"),
+            Some("contract thread is mg_1, branch api/fix"),
+            None,
+        )
+        .unwrap();
+    // No purpose at all is rejected before anything is stored.
+    assert!(service
+        .schedule_wakeup(&lead, 30, None, None, None, None)
+        .is_err());
+    assert!(service
+        .schedule_wakeup(&lead, 30, None, Some("  "), None, None)
+        .is_err());
+    wakeup_ctx_after_finish(&service, &root);
+    service.store().pin_clock(service.store().now() + 31);
+    let dispatch = claim(&service).remove(0);
+    assert_eq!(
+        dispatch.deliveries[0].1.body,
+        "Intent: resume the API work\nReminder: only if Beta has not replied\nNote: contract thread is mg_1, branch api/fix"
+    );
+}
+
+#[test]
 fn invalid_wakeups_fail_without_scheduling_anything() {
     let service = service();
     let (_root, lead) = team_in_root(&service);
     for delay in [0, -5, MAX_WAKEUP_DELAY_SECS + 1] {
-        assert!(service.schedule_wakeup(&lead, delay, "ctx", None).is_err());
+        assert!(service
+            .schedule_wakeup(&lead, delay, Some("ctx"), None, None, None)
+            .is_err());
     }
-    assert!(service.schedule_wakeup(&lead, 30, "  ", None).is_err());
+    assert!(service
+        .schedule_wakeup(&lead, 30, Some("  "), None, None, None)
+        .is_err());
     let as_message = SendMessage {
         recipients: vec!["Back".into()],
         group: None,
@@ -1745,14 +1786,16 @@ fn invalid_wakeups_fail_without_scheduling_anything() {
     );
 
     for _ in 0..MAX_PENDING_WAKEUPS {
-        service.schedule_wakeup(&lead, 30, "ctx", None).unwrap();
+        service
+            .schedule_wakeup(&lead, 30, Some("ctx"), None, None, None)
+            .unwrap();
     }
     assert!(matches!(
-        service.schedule_wakeup(&lead, 30, "ctx", None),
+        service.schedule_wakeup(&lead, 30, Some("ctx"), None, None, None),
         Err(CoordError::Conflict(_))
     ));
     // The same idempotency key never schedules twice.
-    let first = service.schedule_wakeup(&lead, 30, "k", Some("k1"));
+    let first = service.schedule_wakeup(&lead, 30, Some("k"), None, None, Some("k1"));
     assert!(first.is_err(), "cap already reached");
 }
 
@@ -1772,7 +1815,7 @@ fn scheduled_wakeups_survive_a_restart() {
     let first = build();
     let (root, lead) = team_in_root(&first);
     first
-        .schedule_wakeup(&lead, 60, "after restart", None)
+        .schedule_wakeup(&lead, 60, Some("after restart"), None, None, None)
         .unwrap();
     wakeup_ctx_after_finish(&first, &root);
     drop(first);
@@ -1782,7 +1825,7 @@ fn scheduled_wakeups_survive_a_restart() {
     second.store().pin_clock(second.store().now() + 61);
     let dispatches = claim(&second);
     assert_eq!(dispatches.len(), 1);
-    assert_eq!(dispatches[0].deliveries[0].1.body, "after restart");
+    assert_eq!(dispatches[0].deliveries[0].1.body, "Intent: after restart");
     assert!(claim(&second).is_empty());
     let _ = std::fs::remove_file(&path);
 }
@@ -1795,7 +1838,9 @@ fn idle_scheduler_sleeps_exactly_until_the_next_wakeup() {
     // Nothing scheduled: sleep to the safety cap, not a 500ms poll.
     assert_eq!(service.idle_sleep(), Duration::from_secs(30));
 
-    service.schedule_wakeup(&lead, 12, "later", None).unwrap();
+    service
+        .schedule_wakeup(&lead, 12, Some("later"), None, None, None)
+        .unwrap();
     // The exact remaining time plus a margin that lands after the second boundary.
     assert_eq!(service.idle_sleep(), Duration::from_millis(12_050));
     service.store().pin_clock(service.store().now() + 5);
@@ -1829,7 +1874,7 @@ fn an_interrupted_wakeup_is_replayed_a_bounded_number_of_times_then_reported() {
     let service = service();
     let (root, lead) = team_in_root(&service);
     service
-        .schedule_wakeup(&lead, 1, "check the contract", None)
+        .schedule_wakeup(&lead, 1, Some("check the contract"), None, None, None)
         .unwrap();
     wakeup_ctx_after_finish(&service, &root);
     service.store().pin_clock(service.store().now() + 2);
@@ -1838,7 +1883,10 @@ fn an_interrupted_wakeup_is_replayed_a_bounded_number_of_times_then_reported() {
     for round in 1..=MAX_WAKEUP_ATTEMPTS {
         let dispatches = claim(&service);
         assert_eq!(dispatches.len(), 1, "claim {round}");
-        assert_eq!(dispatches[0].deliveries[0].1.body, "check the contract");
+        assert_eq!(
+            dispatches[0].deliveries[0].1.body,
+            "Intent: check the contract"
+        );
         service
             .finish_attempt(&dispatches[0].attempt.id, AttemptEnd::Interrupted)
             .unwrap();
@@ -1866,7 +1914,9 @@ fn an_interrupted_wakeup_is_replayed_a_bounded_number_of_times_then_reported() {
 fn a_completed_wakeup_is_acknowledged_and_never_replayed() {
     let service = service();
     let (root, lead) = team_in_root(&service);
-    service.schedule_wakeup(&lead, 1, "once", None).unwrap();
+    service
+        .schedule_wakeup(&lead, 1, None, None, Some("once"), None)
+        .unwrap();
     wakeup_ctx_after_finish(&service, &root);
     service.store().pin_clock(service.store().now() + 2);
     let dispatch = claim(&service).remove(0);
@@ -1886,7 +1936,7 @@ fn wakeups_that_can_never_fire_leave_a_record_and_tell_a_live_agent() {
     let back = ctx(&service, &work[0]);
     assert_eq!(work[0].attempt.persona, "Back");
     service
-        .schedule_wakeup(&back, 30, "finish the api", None)
+        .schedule_wakeup(&back, 30, Some("finish the api"), None, None, None)
         .unwrap();
     service.cancel(&api, "user").unwrap();
     service.store().pin_clock(service.store().now() + 31);
@@ -1905,7 +1955,9 @@ fn wakeups_that_can_never_fire_leave_a_record_and_tell_a_live_agent() {
     // Root ended first: nobody can act on a notice, so it is recorded only.
     let service = service_with(&team_config(".")).0;
     let (root, lead) = team_in_root(&service);
-    service.schedule_wakeup(&lead, 600, "never", None).unwrap();
+    service
+        .schedule_wakeup(&lead, 600, Some("never"), None, None, None)
+        .unwrap();
     service.cancel(&root, "user").unwrap();
     let events = dropped_events(&service, &root);
     assert_eq!(events.len(), 1);

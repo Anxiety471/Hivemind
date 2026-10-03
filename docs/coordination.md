@@ -77,7 +77,22 @@ Worktree directories are removed after each attempt; branches stay. The live ses
 
 Dynamic groups live in SQLite (configuration groups are untouched). `groups.create` resolves configured personas only, one distinct persona per requested capability; the same purpose and membership reuses the group. Membership changes are revision-checked and audited, and removed members' task sessions are rotated.
 
-`wakeup.schedule {delay_seconds, context, key?}` lets an agent wake itself later: it stores a durable self-addressed `wakeup` message whose delivery carries a `due_at`. The scheduler and inbox ignore it until due, then it runs as a normal single inbox attempt carrying `context`, and a completed or failed attempt never replays it. If the attempt is interrupted (crash, restart, lease loss) the wakeup is requeued, up to 3 claims in total, because losing a self-continuation is worse than repeating it; after the third interruption it fails. A wakeup that can never fire is never silent: Hivemind records a `wakeup.dropped` event with the reason (task cancelled or finished, root ended, persona removed, interrupted 3 times) and, when the root is still alive, sends the agent a non-waking `status` message with the wakeup's context that it sees the next time it works there. The delay must be 1s to 7 days and before the root deadline, at most 5 wakeups may be pending per agent per root task, and invalid requests create nothing. The scheduler does not poll for them: with nothing running it sleeps exactly until the next wakeup is due (plus a 50ms margin, capped at 30s as a safety net, and woken early by any new work); while attempts run it keeps its 500ms tick for completions and heartbeats.
+`wakeup.schedule {delay_seconds, intent?, reminder?, note?, key?}` lets an agent wake itself later: it stores a durable self-addressed `wakeup` message whose delivery carries a `due_at`. At least one of the three purposes is required — `intent` (what to do when woken), `reminder` (the condition or time to act on), `note` (state to carry) — and each is delivered as a labeled line so the future self reads why it was woken. The scheduler and inbox ignore it until due, then it runs as a normal single inbox attempt carrying the body, and a completed or failed attempt never replays it. If the attempt is interrupted (crash, restart, lease loss) the wakeup is requeued, up to 3 claims in total, because losing a self-continuation is worse than repeating it; after the third interruption it fails. A wakeup that can never fire is never silent: Hivemind records a `wakeup.dropped` event with the reason (task cancelled or finished, root ended, persona removed, interrupted 3 times) and, when the root is still alive, sends the agent a non-waking `status` message with the wakeup's context that it sees the next time it works there. The delay must be 1s to 7 days and before the root deadline, at most 5 wakeups may be pending per agent per root task, and invalid requests create nothing. The scheduler does not poll for them: with nothing running it sleeps exactly until the next wakeup is due (plus a 50ms margin, capped at 30s as a safety net, and woken early by any new work); while attempts run it keeps its 500ms tick for completions and heartbeats.
+
+### Wake types
+
+Every wake is one of a small set of durable triggers; only the last is agent-authored.
+
+| Wake type | Trigger | Example |
+|---|---|---|
+| `USER_WAKE` | A user turn, steer, or submitted root task arrives | “Fix login” |
+| `AGENT_WAKE` | Another persona sends a `request` or `handoff` message | Marin asks Kurisu |
+| `TASK_WAKE` | A dependency completes and the task is promoted to `ready` | a work attempt is dispatched |
+| `SCHEDULE_WAKE` | A `wakeup.schedule` delivery comes due | a self-check later |
+| `RECOVERY_WAKE` | An interrupted attempt or wakeup is requeued after a restart | Hivemind restarts mid-attempt |
+| `EVENT_WAKE` | *(not implemented)* an external system event | CI fails |
+
+`USER_WAKE`, `AGENT_WAKE`, `TASK_WAKE`, and `RECOVERY_WAKE` are host-driven: the model never names or triggers them. `SCHEDULE_WAKE` is the only agent-authored wake and the only wake tool exposed — there is no `wakeup.list` or `wakeup.cancel`, so an agent cannot enumerate or retract its pending wakeups. `EVENT_WAKE` is conceptual only: Hivemind has no event-to-wake subscription, so nothing observes CI or any other external event and wakes an agent; adding one would be a new host event source.
 
 ## Agent tools
 

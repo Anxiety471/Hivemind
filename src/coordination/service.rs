@@ -120,6 +120,8 @@ pub struct ResultIn {
 pub(super) const MIN_WAKEUP_DELAY_SECS: i64 = 1;
 pub(super) const MAX_WAKEUP_DELAY_SECS: i64 = 7 * 24 * 3600;
 pub(super) const MAX_PENDING_WAKEUPS: i64 = 5;
+/// Per-field byte bound on a wakeup's `intent`, `reminder`, or `note`.
+pub(super) const MAX_WAKEUP_TEXT: usize = 2000;
 /// A wakeup interrupted mid-attempt (crash, restart, lease loss) is retried until
 /// it has been claimed this many times; wakeups are self-continuations, so a
 /// replay is safer than losing them.
@@ -1977,7 +1979,7 @@ impl CoordinationService {
                     recipients: std::slice::from_ref(&delivery.recipient),
                     group_id: None,
                     body: &format!(
-                        "Your scheduled wakeup {} did not fire: {reason}. Its context was: {}",
+                        "Your scheduled wakeup {} did not fire: {reason}. It carried: {}",
                         message.id,
                         clip(&message.body, 500)
                     ),
@@ -2003,7 +2005,9 @@ impl CoordinationService {
         &self,
         ctx: &ToolCtx,
         delay_secs: i64,
-        context: &str,
+        intent: Option<&str>,
+        reminder: Option<&str>,
+        note: Option<&str>,
         idempotency_key: Option<&str>,
     ) -> CoordResult<(Message, bool)> {
         if !(MIN_WAKEUP_DELAY_SECS..=MAX_WAKEUP_DELAY_SECS).contains(&delay_secs) {
@@ -2011,7 +2015,31 @@ impl CoordinationService {
                 "delay_seconds must be between {MIN_WAKEUP_DELAY_SECS} and {MAX_WAKEUP_DELAY_SECS}"
             ));
         }
-        let body = check_text("wakeup context", context, 6000)?;
+        // At least one purpose is required; each field is bounded on its own.
+        let intent = intent
+            .map(|v| check_text("wakeup intent", v, MAX_WAKEUP_TEXT))
+            .transpose()?;
+        let reminder = reminder
+            .map(|v| check_text("wakeup reminder", v, MAX_WAKEUP_TEXT))
+            .transpose()?;
+        let note = note
+            .map(|v| check_text("wakeup note", v, MAX_WAKEUP_TEXT))
+            .transpose()?;
+        if intent.is_none() && reminder.is_none() && note.is_none() {
+            return invalid(
+                "a wakeup needs at least one of 'intent' (what to do), 'reminder' (what to act on), or 'note' (state to carry)",
+            );
+        }
+        // The delivered message labels each stated purpose so the future self reads why it was woken.
+        let body = [
+            intent.as_deref().map(|v| format!("Intent: {v}")),
+            reminder.as_deref().map(|v| format!("Reminder: {v}")),
+            note.as_deref().map(|v| format!("Note: {v}")),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join("\n");
         let key = idempotency_key
             .map(|k| check_text("idempotency key", k, 128))
             .transpose()?;
