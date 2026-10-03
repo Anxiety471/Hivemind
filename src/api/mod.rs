@@ -6,6 +6,7 @@ mod jobs;
 pub use auth::ServerConfig;
 mod chat_groups;
 mod cors;
+mod document;
 mod error;
 mod protocol;
 mod room_settings;
