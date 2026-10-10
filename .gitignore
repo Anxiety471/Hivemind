@@ -2,3 +2,7 @@ node_modules/
 dist/
 .env
 .hivemind/
+/artifact.json
+/introduction.md
+/note.txt
+*.tsbuildinfo
