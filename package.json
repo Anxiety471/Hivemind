@@ -1,0 +1,32 @@
+{
+  "name": "hivemind",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "node --import tsx src/cli.ts",
+    "demo": "node --import tsx src/cli.ts --config examples/demo.json --task 'Write a short introduction to Hivemind'",
+    "build": "tsc",
+    "check": "tsc --noEmit",
+    "test": "node --import tsx --test test/*.test.ts test/*.test.tsx",
+    "tui": "node --import tsx src/cli.ts --tui"
+  },
+  "dependencies": {
+    "@langchain/langgraph": "1.4.21",
+    "ink": "^8.0.0",
+    "react": "^19.3.0",
+    "smol-toml": "^1.9.1",
+    "string-width": "^8.3.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.3.0",
+    "ink-testing-library": "^4.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0"
+  }
+}

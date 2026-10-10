@@ -1,0 +1,63 @@
+{
+  "maxAttempts": 3,
+  "timeoutMs": 120000,
+  "harnesses": {
+    "decision-model": {
+      "type": "openai-compatible",
+      "baseUrl": "https://replace-with-provider.example/v1",
+      "model": "replace-with-jev-model-id",
+      "apiKeyEnv": "JEV_API_KEY"
+    },
+    "worker-model": {
+      "type": "openai-compatible",
+      "baseUrl": "https://replace-with-worker-provider.example/v1",
+      "model": "replace-with-worker-model-id",
+      "apiKeyEnv": "WORKER_API_KEY"
+    },
+    "opencode-worker": {
+      "type": "opencode",
+      "agent": "build",
+      "cwd": "."
+    },
+    "pi-reviewer": {
+      "type": "pi",
+      "cwd": ".",
+      "tools": [
+        "read",
+        "grep",
+        "find",
+        "ls"
+      ]
+    }
+  },
+  "agents": [
+    {
+      "id": "jev",
+      "role": "router",
+      "harness": "decision-model",
+      "description": "Selects a worker or stops the workflow"
+    },
+    {
+      "id": "developer",
+      "role": "worker",
+      "harness": "opencode-worker",
+      "description": "Implements tasks using the native OpenCode CLI"
+    },
+    {
+      "id": "writer",
+      "role": "worker",
+      "harness": "worker-model",
+      "description": "Model-backed drafting and reasoning"
+    },
+    {
+      "id": "reviewer",
+      "role": "reviewer",
+      "harness": "pi-reviewer",
+      "description": "Reviews artifacts and project files using the native Pi CLI"
+    }
+  ],
+  "router": {
+    "type": "model",
+    "agent": "jev"
+  }
+}
