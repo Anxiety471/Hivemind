@@ -44,9 +44,9 @@ export const INSTALL_TIMEOUT_MS = 5 * 60_000
 
 interface Definition { name: string; description: string; executable: string; pkg: string }
 
-// Package names verified against the npm registry: `opencode-ai` (bin `opencode`) and `@earendil-works/pi-coding-agent` (bin `pi`; the legacy `@mariozechner` package is 0.73.1).
+// Package names verified against the npm registry: `@opencode/cli` (OpenCode 2, bin `opencode`) and `@earendil-works/pi-coding-agent` (bin `pi`; the legacy `@mariozechner` package is 0.73.1).
 export const HARNESSES: Record<HarnessType, Definition> = {
-  opencode: { name: 'OpenCode', description: 'Open-source terminal coding agent, driven through `opencode run`.', executable: 'opencode', pkg: 'opencode-ai' },
+  opencode: { name: 'OpenCode', description: 'Open-source terminal coding agent, driven through `opencode run`.', executable: 'opencode', pkg: '@opencode/cli' },
   pi: { name: 'Pi', description: 'Minimal terminal coding agent with read, bash, edit and write tools.', executable: 'pi', pkg: '@earendil-works/pi-coding-agent' },
 }
 

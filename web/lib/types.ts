@@ -2,7 +2,7 @@
 
 export type RunStatus = 'running' | 'completed' | 'blocked' | 'exhausted'
 export type RunPhaseStatus = RunStatus | 'failed' | 'cancelled'
-export type NodeName = 'decide' | 'research' | 'plan' | 'design' | 'work' | 'review'
+export type NodeName = 'decide' | 'orchestrate' | 'security-review' | 'research' | 'plan' | 'design' | 'work' | 'review'
 export type StageName = 'research' | 'plan' | 'design' | 'work'
 
 export interface StageTask {
@@ -30,7 +30,7 @@ export interface Progress {
 
 export type Decision =
   | { action: 'work'; agent: string; instructions: string; reason: string }
-  | { action: 'dispatch'; stages: DispatchStage[]; reason: string }
+  | { action: 'dispatch'; stages: DispatchStage[]; parallelPreparation?: boolean; reason: string }
   | { action: 'finish'; reason: string }
   | { action: 'block'; reason: string }
 export interface RunEvent { node: string; attempt: number; message: string }
@@ -44,6 +44,9 @@ export interface RunState {
   approved: boolean
   decision: Decision | null
   events: RunEvent[]
+  messages?: { from: string; to: string; kind: 'assignment' | 'result' | 'question' | 'blocked' | 'review'; content: string; attempt: number }[]
+  reviews?: { agent: string; role: 'reviewer' | 'security-reviewer'; verdict: 'approved' | 'revise' | 'blocked'; feedback: string; attempt: number }[]
+  spawnedAgents?: AgentConfig[]
 }
 
 export interface Run {
@@ -58,7 +61,7 @@ export interface Run {
   endedAt?: string
 }
 
-export type Role = 'worker' | 'reviewer' | 'router' | 'planner' | 'designer' | 'researcher'
+export type Role = 'worker' | 'reviewer' | 'security-reviewer' | 'orchestrator' | 'router' | 'planner' | 'designer' | 'researcher'
 
 export interface AgentConfig { id: string; role: Role; harness: string; description: string; model?: string }
 
@@ -77,7 +80,7 @@ export type HarnessConfig =
   | { type: 'command'; command: string; args: string[]; cwd?: string; maxOutputBytes: number }
   | { type: 'openai-compatible'; baseUrl: string; model: string; apiKeyEnv: string; maxTokens: number }
 
-export type RouterConfig = { type: 'rule' } | { type: 'model'; agent: string }
+export type RouterConfig = { type: 'rule' } | { type: 'model'; agent: string } | { type: 'jev'; endpoint: string; model: string; apiKeyEnv: string; minConfidence: number }
 
 export interface Config {
   maxAttempts: number

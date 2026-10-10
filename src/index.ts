@@ -12,3 +12,6 @@ export * from './types.js'
 export { OpenCodeHarness, PiHarness } from './native-harnesses.js'
 export type { OpenCodeOptions, PiOptions } from './native-harnesses.js'
 export type { RunControls, Progress } from './graph.js'
+
+export { JevRouter } from './jev.js'
+export { withDefaultAgents } from './orchestrator.js'

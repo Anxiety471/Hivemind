@@ -240,7 +240,7 @@ test('progress observers receive ordered live start/end updates without changing
   const updates: Progress[] = []
   const result = await fromConfig(config, { onProgress: update => updates.push(update) }).run('Write')
   assert.equal(result.status, 'completed')
-  assert.deepEqual(updates.slice(0, 4).map(u => `${u.node}:${u.phase}`), ['decide:start', 'decide:end', 'work:start', 'work:end'])
+  assert.deepEqual(updates.slice(0, 4).map(u => `${u.node}:${u.phase}`), ['decide:start', 'decide:end', 'orchestrate:start', 'orchestrate:end'])
   assert.equal(updates.filter(u => u.phase === 'end').length, result.events.length)
   assert.ok(updates.some(u => u.artifact?.includes('Revised draft')))
 })
@@ -388,7 +388,7 @@ test('TUI settings switches the router between rule and a router agent', async (
     agents: [{ id: 'writer', role: 'worker', harness: 'demo' }, { id: 'reviewer', role: 'reviewer', harness: 'demo' },
       { id: 'planner', role: 'router', harness: 'demo' }], router: { type: 'rule' } })
   const { dir, path } = await tempConfig(routed)
-  const app = render(<HivemindTui config={routed} configPath={path} />)
+  const app = render(<HivemindTui config={routed} configPath={path} project="/work/site" />)
   try {
     await waitText(app, PROMPT)
     app.stdin.write('\x13') // Ctrl+S
@@ -535,7 +535,7 @@ test('loop view resets work/review on each revise lap and settles on the run out
   const reviewEnd = updates.findIndex(u => u.node === 'review' && u.phase === 'end')
   assert.equal(loopView(updates.slice(0, reviewEnd + 1)).review, 'revise')
   const secondLap = loopView(updates.slice(0, reviewEnd + 2))
-  assert.deepEqual([secondLap.decide, secondLap.work, secondLap.review, secondLap.backEdge, secondLap.laps], ['active', 'idle', 'idle', 'active', 1])
+  assert.deepEqual([secondLap.decide, secondLap.work, secondLap.review, secondLap.backEdge, secondLap.laps], ['done', 'active', 'idle', 'active', 1])
   const done = loopView(updates, 'completed')
   assert.deepEqual([done.review, done.finish, done.finishLabel, done.attempt], ['done', 'done', 'completed', 2])
   const cancelled = loopView(updates.slice(0, reviewEnd + 4), 'cancelled')

@@ -53,6 +53,9 @@ export function serializeConfig(config: Config, format: ConfigFormat): string {
 export function assertRunnable(config: Config): void {
   const reviewers = config.agents.filter(agent => agent.role === 'reviewer').length
   if (reviewers !== 1) throw new Error(`Config must have exactly one reviewer agent, found ${reviewers}`)
+  for (const role of ['orchestrator', 'security-reviewer'] as const) {
+    if (config.agents.filter(agent => agent.role === role).length > 1) throw new Error(`Config must have at most one ${role} agent`)
+  }
   if (!config.agents.some(agent => agent.role === 'worker')) throw new Error('Config must have at least one worker agent')
   for (const agent of config.agents) {
     if (!Object.hasOwn(config.harnesses, agent.harness)) throw new Error(`Agent "${agent.id}" references unknown harness "${agent.harness}"`)

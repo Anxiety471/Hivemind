@@ -17,7 +17,7 @@ function rosterOf(config: ConfigResponse['config']): Roster {
     return found ? { agent: found.id, harness: found.harness } : undefined
   }
   return {
-    router: config.router.type === 'rule' ? 'rule' : agent(config.router.agent),
+    router: config.router.type === 'model' ? agent(config.router.agent) : config.router.type,
     reviewer: byRole('reviewer'),
     agents: Object.fromEntries(config.agents.map(item => [
       item.id, { agent: item.id, harness: item.harness, role: item.role },

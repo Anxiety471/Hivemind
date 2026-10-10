@@ -18,3 +18,15 @@ id = "reviewer"
 role = "reviewer"
 harness = "demo"
 description = "Checks the latest artifact"
+
+[[agents]]
+id = "orchestrator"
+role = "orchestrator"
+harness = "demo"
+description = "Coordinates workers"
+
+[[agents]]
+id = "security-reviewer"
+role = "security-reviewer"
+harness = "demo"
+description = "Checks security independently"

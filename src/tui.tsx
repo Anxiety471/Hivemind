@@ -186,7 +186,7 @@ export function HivemindTui({ config: initialConfig, configPath, initialTask = '
           runSteps.push(step)
           if (!mounted.current) return
           setSteps(previous => [...previous, step])
-          if (progress.phase === 'start' && !abort.signal.aborted) setStage(`${progress.node === 'decide' ? 'Deciding' : progress.node === 'work' ? 'Working' : 'Reviewing'} · ${step.message}`)
+          if (progress.phase === 'start' && !abort.signal.aborted) setStage(`${progress.node === 'decide' ? 'Deciding' : progress.node === 'orchestrate' ? 'Orchestrating' : progress.node === 'work' ? 'Working' : progress.node === 'security-review' ? 'Security review' : progress.node === 'review' ? 'Reviewing' : progress.node} · ${step.message}`)
         },
       })
       const finished = await runtime.run(text)
