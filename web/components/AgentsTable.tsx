@@ -6,7 +6,7 @@ import type { AgentConfig, Config, HarnessConfig, Role } from '@/lib/types'
 import ModelSelect from './ModelSelect'
 import { ROLE_HELP } from './RoleGuide'
 
-const ROLES: Role[] = ['worker', 'reviewer', 'router', 'planner', 'designer', 'researcher']
+const ROLES: Role[] = ['worker', 'orchestrator', 'reviewer', 'security-reviewer', 'router', 'planner', 'designer', 'researcher']
 
 /** Only opencode and pi take a per-agent model; other harness types ignore it. */
 const takesModel = (harness: HarnessConfig | undefined) => harness?.type === 'opencode' || harness?.type === 'pi'

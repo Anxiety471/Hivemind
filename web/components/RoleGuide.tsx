@@ -2,7 +2,9 @@ import type { AgentConfig, Config, Role } from '@/lib/types'
 
 export const ROLE_HELP: Record<Role, string> = {
   worker: 'Does the work and produces the artifact. At least one is required. With the rule router the first worker always runs; with the model router the router agent picks among workers.',
-  reviewer: 'Reviews each artifact and answers approved, revise or blocked; the loop ends once it approves. Exactly one is required.',
+  orchestrator: 'Selects and spawns run-scoped workers after routing; receives results and questions and directs revisions. Added from the first worker when missing.',
+  'security-reviewer': 'Independently checks security. Both reviewers must approve the same artifact. Added from the general reviewer when missing.',
+  reviewer: 'Reviews each artifact and answers approved, revise or blocked; completion requires its approval and security-reviewer approval. Exactly one is required.',
   router: 'Optional. Only used when Loop → Router is "model": it decides whether to work, finish or block. Ignored with the rule router.',
   planner: 'Optional. Breaks down complex tasks into architectural roadmaps and execution plans for subsequent stages.',
   designer: 'Optional. Defines visual structure, component interfaces, design tokens, and UX specifications.',
@@ -10,6 +12,8 @@ export const ROLE_HELP: Record<Role, string> = {
 }
 
 const GUIDE: [Role, string][] = [
+  ['orchestrator', 'spawns workers and coordinates two-way messages and revisions'],
+  ['security-reviewer', 'checks security independently; must agree with the general reviewer'],
   ['worker', 'does the work and produces the artifact (at least one)'],
   ['reviewer', 'approves, requests a revision or blocks each artifact (exactly one)'],
   ['router', 'optional; decides work / finish / block, only when Router = model'],

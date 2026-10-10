@@ -95,7 +95,7 @@ export class OpenAICompatibleHarness implements Harness {
       body: JSON.stringify({ model: this.options.model, max_tokens: this.options.maxTokens ?? 2048,
         messages: [
           { role: 'system', content: request.instructions },
-          { role: 'user', content: JSON.stringify({ task: request.task, artifact: request.artifact, feedback: request.feedback, attempt: request.attempt }) },
+          { role: 'user', content: JSON.stringify({ task: request.task, artifact: request.artifact, feedback: request.feedback, attempt: request.attempt, messages: request.messages ?? [] }) },
         ],
       }),
     })
@@ -109,7 +109,14 @@ export class OpenAICompatibleHarness implements Harness {
 
 export class DemoHarness implements Harness {
   async run(request: HarnessRequest): Promise<string> {
-    if (request.agent.role === 'reviewer') return JSON.stringify({
+    if (request.agent.role === 'orchestrator') {
+      const ready = request.instructions.includes('Ready for review: true')
+      if (ready) return JSON.stringify({ action: 'review', reason: 'All workers returned completed artifacts.' })
+      const roster = JSON.parse(request.instructions.split('Available agents: ')[1]!.split('\n')[0]!) as import('./types.js').Agent[]
+      const worker = roster.find(agent => agent.role === 'worker')!
+      return JSON.stringify({ action: 'dispatch', stages: [{ stage: 'work', tasks: [{ agent: worker.id, instructions: request.feedback || 'Complete the user task.' }] }], reason: 'Assign a worker.' })
+    }
+    if (request.agent.role === 'reviewer' || request.agent.role === 'security-reviewer') return JSON.stringify({
       verdict: request.attempt > 1 ? 'approved' : 'revise',
       feedback: request.attempt > 1 ? 'The demonstration revision meets the example requirements.' : 'Explain harness selection and the stopping rule.',
     })

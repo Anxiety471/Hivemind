@@ -21,7 +21,7 @@ test('runs the actual LangGraph revision loop and finishes after approval', asyn
   const result = await runtime().run('Write an introduction')
   assert.equal(result.status, 'completed')
   assert.equal(result.attempts, 2)
-  assert.deepEqual(result.events.map(e => e.node), ['decide', 'work', 'review', 'decide', 'work', 'review', 'decide'])
+  assert.deepEqual(result.events.map(e => e.node), ['decide', 'orchestrate', 'work', 'orchestrate', 'security-review', 'review', 'orchestrate', 'work', 'orchestrate', 'security-review', 'review', 'decide'])
   assert.match(result.artifact, /Revised/)
 })
 test('stops an endless revision loop at the host attempt limit', async () => {
@@ -100,7 +100,7 @@ for (const entrypoint of ['direct runtime', 'configuration'] as const) {
       if (entrypoint === 'configuration') {
         // Mock only the external adapter boundary; config parsing and the graph are real.
         t.mock.method(OpenAICompatibleHarness.prototype, 'run', (request: HarnessRequest, signal: AbortSignal) =>
-          request.agent.role === 'reviewer' ? approves.run(request, signal) : worker.run(request, signal))
+          request.agent.role === 'orchestrator' ? new DemoHarness().run(request) : ['reviewer', 'security-reviewer'].includes(request.agent.role) ? approves.run(request, signal) : worker.run(request, signal))
       }
       const runner = entrypoint === 'configuration'
         ? fromConfig({ agents, harnesses: { worker: model, review: model }, router: { type: 'rule' },
@@ -115,12 +115,12 @@ for (const entrypoint of ['direct runtime', 'configuration'] as const) {
         assert.equal(abortedAfterTwoMinutes, false)
         assert.equal(result.status, 'completed')
         assert.equal(result.artifact, 'Implemented feature')
-        assert.deepEqual(result.events.map(event => event.node), ['decide', 'work', 'review', 'decide'])
+        assert.deepEqual(result.events.map(event => event.node), ['decide', 'orchestrate', 'work', 'orchestrate', 'security-review', 'review', 'decide'])
       } else {
         assert.equal(abortedAfterTwoMinutes, true)
         assert.equal(result.status, 'blocked')
         assert.match(result.feedback, /timed out/)
-        assert.deepEqual(result.events.map(event => event.node), ['decide', 'work'])
+        assert.deepEqual(result.events.map(event => event.node), ['decide', 'orchestrate', 'work'])
       }
     })
   }
@@ -143,7 +143,7 @@ test('a model router can select different harnesses and approval is reset after 
   const result = await createHivemind({ agents: [...agents, extra, routerAgent], harnesses: registry, router: new ModelRouter(routerAgent, registry) }).run('Write')
   assert.deepEqual(seen, ['first', 'second'])
   assert.equal(result.events.filter(e => e.node === 'review').length, 2)
-  assert.equal(result.artifact, 'second')
+  assert.equal(result.artifact, '[writer]:\nfirst\n\n[second]:\nsecond')
   assert.equal(result.status, 'completed')
 })
 
@@ -185,8 +185,8 @@ test('model router task and stage rationales reach real stage execution without 
   assert.equal(workerRequests.length, 1)
   assert.equal(workerRequests[0]!.agent.id, 'writer')
   assert.equal(workerRequests[0]!.task, 'Fix the coding task')
-  assert.equal(workerRequests[0]!.instructions, instructions)
-  assert.deepEqual(result.events.map(event => event.node), ['decide', 'work', 'review', 'decide'])
+  assert.ok(workerRequests[0]!.instructions.startsWith(instructions))
+  assert.deepEqual(result.events.map(event => event.node), ['decide', 'orchestrate', 'work', 'orchestrate', 'security-review', 'review', 'decide'])
   assert.equal(progress.some(item => item.retry !== undefined), false)
   const decision = progress.find(item => item.node === 'decide' && item.phase === 'end')?.decision
   assert.equal(decision?.action, 'dispatch')
@@ -216,11 +216,11 @@ test('a transient worker, review, and router failure is retried and the run comp
   const progress: Progress[] = []
   const result = await runtime(worker, review, router, 3, 5000, { onProgress: item => progress.push(item) }).run('Draft')
   assert.equal(result.status, 'completed')
-  assert.deepEqual(calls, { worker: 2, review: 3, router: 3 })
+  assert.deepEqual(calls, { worker: 2, review: 4, router: 3 })
   assert.equal(result.attempts, 1)
   const retries = progress.filter(item => item.retry !== undefined)
   assert.deepEqual(retries.map(item => [item.node, item.phase, item.retry, item.attempt]),
-    [['decide', 'start', 1, 0], ['work', 'start', 1, 1], ['review', 'start', 1, 1], ['review', 'start', 2, 1]])
+    [['decide', 'start', 1, 0], ['work', 'start', 1, 1], ['review', 'start', 1, 1], ['review', 'start', 1, 1]])
   assert.equal(retries[1]!.message, 'Retry 1/2 after: Worker unavailable')
   assert.match(retries[0]!.message, /^Retry 1\/2 after: Router down/)
   assert.equal(result.events.filter(event => /^Retry \d\/2 after:/.test(event.message)).length, 4)
@@ -385,7 +385,7 @@ test('router can dispatch a multi-stage plan: research -> plan -> work -> review
   const result = await runner.run('Build feature X')
   assert.equal(result.status, 'completed')
   assert.deepEqual(stagesExecuted, ['research', 'plan', 'work'])
-  assert.deepEqual(result.events.map(e => e.node), ['decide', 'research', 'plan', 'work', 'review', 'decide'])
+  assert.deepEqual(result.events.map(e => e.node), ['decide', 'orchestrate', 'research', 'plan', 'work', 'orchestrate', 'security-review', 'review', 'decide'])
   assert.match(result.artifact, /Final draft based on: Architecture plan/)
 
   const startUpdates = progressUpdates.filter(p => p.phase === 'start')
@@ -487,7 +487,7 @@ test('skipping optional stages: dispatches only work, or research and work witho
   }
   const workOnlyResult = await createHivemind({ agents: customAgents, harnesses, router: workOnlyRouter }).run('Task 1')
   assert.equal(workOnlyResult.status, 'completed')
-  assert.deepEqual(workOnlyResult.events.map(e => e.node), ['decide', 'work', 'review', 'decide'])
+  assert.deepEqual(workOnlyResult.events.map(e => e.node), ['decide', 'orchestrate', 'work', 'orchestrate', 'security-review', 'review', 'decide'])
 
   const researchAndWorkRouter: Router = {
     async decide(context) {
@@ -504,7 +504,7 @@ test('skipping optional stages: dispatches only work, or research and work witho
   }
   const researchAndWorkResult = await createHivemind({ agents: customAgents, harnesses, router: researchAndWorkRouter }).run('Task 2')
   assert.equal(researchAndWorkResult.status, 'completed')
-  assert.deepEqual(researchAndWorkResult.events.map(e => e.node), ['decide', 'research', 'work', 'review', 'decide'])
+  assert.deepEqual(researchAndWorkResult.events.map(e => e.node), ['decide', 'orchestrate', 'research', 'work', 'orchestrate', 'security-review', 'review', 'decide'])
 })
 
 test('RuleRouter automatically dispatches configured pipeline stages on first attempt', async () => {
@@ -524,5 +524,5 @@ test('RuleRouter automatically dispatches configured pipeline stages on first at
 
   const result = await createHivemind({ agents: customAgents, harnesses, router: new RuleRouter() }).run('Create full project')
   assert.equal(result.status, 'completed')
-  assert.deepEqual(result.events.map(e => e.node), ['decide', 'research', 'plan', 'design', 'work', 'review', 'decide'])
+  assert.deepEqual(result.events.map(e => e.node), ['decide', 'orchestrate', 'research', 'design', 'plan', 'work', 'orchestrate', 'security-review', 'review', 'decide'])
 })

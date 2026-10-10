@@ -93,7 +93,8 @@ before(async () => {
   await writeFile(slowConfigPath, JSON.stringify({
     ...demo,
     harnesses: { ...demo.harnesses, slow: { type: 'command', command: process.execPath, args: ['-e', 'setTimeout(() => {}, 60000)'] } },
-    agents: demo.agents.map(agent => agent.role === 'worker' ? { ...agent, harness: 'slow' } : agent),
+    agents: [...demo.agents.map(agent => agent.role === 'worker' ? { ...agent, harness: 'slow' } : agent),
+      { id: 'orchestrator', role: 'orchestrator', harness: 'demo', description: 'Coordinates the slow worker' }],
   }))
 })
 

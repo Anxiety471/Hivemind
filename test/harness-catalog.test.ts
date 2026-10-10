@@ -284,7 +284,7 @@ test('detectHarnesses scans PATH without a shell and probes --version', { skip: 
   assert.deepEqual([pi.installed, pi.path, pi.version, pi.installable], [true, path.join(dir, 'pi'), 'pi 9.9.9', true])
   const opencode = harnesses.find(item => item.type === 'opencode')!
   assert.deepEqual([opencode.installed, opencode.path, opencode.version], [false, undefined, undefined])
-  assert.equal(opencode.installCommand, 'bun add -g opencode-ai')
+  assert.equal(opencode.installCommand, 'bun add -g @opencode/cli')
 })
 
 test('without bun or npm nothing is installable', async () => {

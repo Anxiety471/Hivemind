@@ -214,8 +214,9 @@ export default function SettingsPage() {
               </div>
               <div className="field">
                 <label htmlFor="routerType">Router</label>
-                <select id="routerType" value={draft.router.type} onChange={event => update({ router: event.target.value === 'model' ? { type: 'model', agent: routerAgents[0]?.id ?? '' } : { type: 'rule' } })}>
+                <select id="routerType" value={draft.router.type} onChange={event => update({ router: event.target.value === 'model' ? { type: 'model', agent: routerAgents[0]?.id ?? '' } : event.target.value === 'jev' ? { type: 'jev', endpoint: 'https://api.typesafe.ai/v1/systemone', model: 'jev-latest', apiKeyEnv: 'TYPESAFE_API_KEY', minConfidence: 0.7 } : { type: 'rule' } })}>
                   <option value="rule">rule</option>
+                  <option value="jev">Jev (typed routing)</option>
                   <option value="model">model</option>
                 </select>
               </div>

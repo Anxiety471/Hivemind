@@ -56,7 +56,9 @@ if (scenario === 'stderr-exit' || scenario === 'stdout-exit' || scenario === 'bo
   process.exitCode = 7
 } else {
   const context = JSON.parse(stdin.slice(stdin.lastIndexOf('\n{')).trim()) as { attempt: number }
-  const text = scenario === 'review' ? JSON.stringify({ verdict: context.attempt === 1 ? 'revise' : 'approved', feedback: 'Native adapter review' }) : 'Final native artifact'
+  const text = stdin.startsWith('You are the orchestrator agent')
+    ? JSON.stringify(stdin.includes('Ready for review: true') ? { action: 'review', reason: 'Ready' } : { action: 'dispatch', stages: [{ stage: 'work', tasks: [{ agent: (JSON.parse(stdin.split('Available agents: ')[1]!.split('\n')[0]!) as { id: string; role: string }[]).find(agent => agent.role === 'worker')!.id, instructions: 'Write the artifact' }] }], reason: 'Assign worker' })
+    : scenario === 'review' ? JSON.stringify({ verdict: context.attempt === 1 ? 'revise' : 'approved', feedback: 'Native adapter review' }) : 'Final native artifact'
   if (kind === 'opencode') {
     emit({ type: 'step_start', part: { messageID: 'intermediate' } })
     emit({ type: 'text', part: { type: 'text', id: 'intro', messageID: 'intermediate', text: 'Thinking about the task' } })

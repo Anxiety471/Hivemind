@@ -1,6 +1,6 @@
 # Hivemind
 
-A fresh **TypeScript terminal app** built on LangGraph, with a basic interactive TUI and scriptable CLI. A router chooses a worker, the worker runs through its configured harness, and a reviewer checks the resulting artifact. Review feedback can send the task through another iteration.
+A fresh **TypeScript terminal app** built on LangGraph, with a basic interactive TUI and scriptable CLI. A router selects the execution route; an orchestrator spawns task workers and coordinates their replies. General and security reviewers independently inspect the same artifact. Both must approve before completion, and either can return findings to the orchestrator for repair.
 
 This is the new workflow foundation. It does not restore the previous Hivemind application.
 
@@ -39,7 +39,7 @@ The web run visualization shows **Router → selected agents → Reviewer**, wit
 
 ## Configuration files
 
-A config file names the harness registrations, the agents (one reviewer, one or more workers, optional router agent), the router, and the loop limits. JSON uses the camelCase field names shown elsewhere in this README. TOML uses the same structure with `snake_case` keys — the mapping is mechanical and uniform in both directions (`maxAttempts` ↔ `max_attempts`, `timeoutMs` ↔ `timeout_ms`, `baseUrl` ↔ `base_url`, `apiKeyEnv` ↔ `api_key_env`, `maxTokens` ↔ `max_tokens`, `executableArgs` ↔ `executable_args`, `maxOutputBytes` ↔ `max_output_bytes`), with no per-field exceptions. Harnesses are `[harnesses.<id>]` tables and agents are an `[[agents]]` array of tables.
+A config file names the harness registrations, the agents (one reviewer, one or more workers, an orchestrator, a security reviewer, and an optional router agent), the router, and the loop limits. JSON uses the camelCase field names shown elsewhere in this README. TOML uses the same structure with `snake_case` keys — the mapping is mechanical and uniform in both directions (`maxAttempts` ↔ `max_attempts`, `timeoutMs` ↔ `timeout_ms`, `baseUrl` ↔ `base_url`, `apiKeyEnv` ↔ `api_key_env`, `maxTokens` ↔ `max_tokens`, `executableArgs` ↔ `executable_args`, `maxOutputBytes` ↔ `max_output_bytes`), with no per-field exceptions. Harnesses are `[harnesses.<id>]` tables and agents are an `[[agents]]` array of tables.
 
 ```toml
 max_attempts = 3
@@ -117,7 +117,7 @@ API progress events carry an `at` ISO timestamp assigned once when the server re
 
 `GET /api/harness-catalog` detects the native harness CLIs (`opencode`, `pi`) with a fresh PATH scan (no shell), automatically persists installed types missing from the active config, and returns `{ harnesses: [{ type, name, description, executable, installed, path?, version?, installable, installCommand }], installer: 'bun' | 'npm' | null, config: { path, project, config } }`; the nested config response reflects the saved configuration. `version` is the first line of `<exe> --version` (5 s timeout). Existing harness registrations and custom settings are preserved: a type registered under any id is not added again; a new registration uses its type as the id, or the first available `<type>-2`, `<type>-3`, etc. if that id is occupied. Automatic registration does not change agents or the router and does not save the active project directory as a harness `cwd`. Settings refreshes the persisted harness list after detection, without a separate **Add to config** action.
 
-`POST /api/harness-catalog/:type/install` globally installs a missing harness with bun (preferred) or npm (`opencode-ai`, `@earendil-works/pi-coding-agent`), registers detected installed harnesses in the active config before reporting success, and returns `{ entry, output }` with the last 8 KB of installer output. The web app then refreshes the catalog and persisted config. It answers 404 for an unknown type, 409 while that type is already installing, and 500 `{ error }` on failure, including installation failure (with the output tail), timeout (5 minutes), an installed binary not on PATH, or a config persistence error.
+`POST /api/harness-catalog/:type/install` globally installs a missing harness with bun (preferred) or npm (`@opencode/cli`, `@earendil-works/pi-coding-agent`), registers detected installed harnesses in the active config before reporting success, and returns `{ entry, output }` with the last 8 KB of installer output. The web app then refreshes the catalog and persisted config. It answers 404 for an unknown type, 409 while that type is already installing, and 500 `{ error }` on failure, including installation failure (with the output tail), timeout (5 minutes), an installed binary not on PATH, or a config persistence error.
 
 `GET /api/harness-models?harness=<harness id>` lists selectable models for an `opencode` (`opencode models`) or `pi` (`pi --list-models`) harness from the config, as `provider/model` strings: `{ models: string[], error?: string }`. Other harness types return `{ models: [] }`, an unknown id is 404, and a failing CLI yields `{ models: [], error }` with status 200 (15 s timeout; successful lists are cached for 60 s per harness).
 
@@ -208,23 +208,70 @@ The TUI shows workflow progress and completed worker artifacts, rather than stre
 
 ## Routing and stopping
 
-The built-in rule router selects the first configured worker and finishes after review approval. A model router can select any configured worker based on its description and the current task, artifact, and feedback.
+The router selects the initial route and whether preparation can be parallel. The orchestrator owns the task after routing: it selects existing agents or spawns specialized workers from configured worker templates, assigns work, reads worker results/questions/blockers, and sends answers or repairs back to the responsible workers. The router may finish only after both reviewers approve a nonempty artifact.
 
-Model decisions are validated against these JSON shapes:
+Configured roles are `orchestrator`, `worker`, `reviewer` (general), `security-reviewer`, `router`, `researcher`, `designer`, and `planner`. `fromConfig` adds a missing orchestrator using the first worker's harness/model and a missing security reviewer using the general reviewer's harness/model. They are separate agent calls with separate instructions. Configure both explicitly to give them different models or harnesses. The lower-level `createHivemind` API uses a deterministic host coordinator if no model orchestrator is supplied; security review is still mandatory. Duplicate control roles are rejected.
+
+The orchestrator returns a dispatch, review request, or external blocker. Example dispatch:
 
 ```json
-{"action":"work","agent":"writer","instructions":"Revise using the review findings","reason":"The artifact needs changes"}
+{
+  "action": "dispatch",
+  "spawn": [
+    { "id": "frontend", "template": "writer", "description": "Frontend implementation" },
+    { "id": "backend", "template": "writer", "description": "Backend implementation" }
+  ],
+  "stages": [{ "stage": "work", "tasks": [
+    { "agent": "frontend", "instructions": "Implement the UI in web/; use the agreed API contract" },
+    { "agent": "backend", "instructions": "Implement and test the API in api/" }
+  ] }],
+  "reason": "Separate frontend and backend ownership"
+}
+```
+
+Spawning copies a **configured worker** template's harness/model into a run-scoped worker. It cannot create new harnesses, grant tools/permissions, alter executable settings, or spawn reviewers. IDs must be unique. Limit: 16 new workers per dispatch, 32 per run, 16 assignments per stage. Reuse spawned IDs for revisions; they are not persisted to config or carried into another run. Workers sharing a directory need disjoint file ownership.
+
+Workers can return plain artifact text for compatibility or explicit two-way messages:
+
+```json
+{"status":"question","artifact":"","message":"Which API path should the frontend use?"}
 ```
 
 ```json
-{"action":"finish","reason":"The latest artifact passed review"}
+{"status":"completed","artifact":"Implemented /api/notes with validation","message":"Ready for both reviewers"}
 ```
+
+`blocked` is also a worker status. The host records assignments and results/questions as directed `messages`; the orchestrator sees the full transcript, and each worker receives its own conversation plus its next assignment. Pending questions block review. Completed outputs from unchanged workers survive partial repairs.
+
+Router and orchestrator dispatches can set `parallelPreparation: true`. When research and design stages are present, both run concurrently from the same input, their outputs are combined, and **Planner waits for both** before synthesizing them. Tasks within any one stage also run concurrently. With the flag false, the ordered pipeline remains research → plan → design → work. Stage declarations are unique and ordered; in parallel mode design execution moves before planning automatically. Use parallel mode only for independent preparation tasks.
+
+Review calls run independently against the identical artifact; neither receives the other's verdict. Each returns `approved`, `revise`, or `blocked` plus specific findings. Both must approve the latest revision. A nonapproval sends both reports to the orchestrator, which dispatches repairs; every changed artifact invalidates both approvals. A malformed/failed reviewer call blocks the run. An external blocker or host attempt limit prevents endless loops. An attempt is one orchestrator-dispatched batch, including preparation/planning-only batches; parallel branches share one attempt.
+
+### Jev routing
+
+Jev is optional: it classifies orchestration versus missing-input blocking and parallel versus sequential preparation. It uses TypeSafe's native typed Choice API, not chat completions. It does not generate assignments, code, or reviewer findings and cannot override the dual approval gate.
 
 ```json
-{"action":"block","reason":"The required source file is missing"}
+"router": {
+  "type": "jev",
+  "endpoint": "https://api.typesafe.ai/v1/systemone",
+  "model": "jev-latest",
+  "apiKeyEnv": "TYPESAFE_API_KEY",
+  "minConfidence": 0.7
+}
 ```
 
-The host rejects unknown workers and completion without approval of a nonempty artifact. Every new artifact clears prior approval and receives a fresh review. An attempt is one worker execution; router and reviewer calls have timeouts too. `maxAttempts` bounds the loop even when the router keeps requesting work. If the latest artifact is approved at the moment the limit is reached, the run finishes as `completed` rather than `exhausted`; only an unapproved artifact at the limit stops as `exhausted`.
+Set `TYPESAFE_API_KEY` on the server. Missing credentials, invalid responses, provider errors, a 10-second Jev deadline, or low-confidence routing fall back to the rule router. Cancellation propagates. CLI selection: `--set-router jev`; the web settings also offer Jev. Credentials stay in environment variables, never config or command arguments. API format: [TypeSafe quick start](https://docs.typesafe.ai/introduction/quickstart).
+
+### Live acceptance evidence
+
+Install **OpenCode 2** (`npm install -g @opencode/cli`), then run:
+
+```sh
+node --import tsx scripts/verify-free-workflow.ts
+```
+
+The script uses `opencode/mimo-v2.6-flash-free` for every role, builds a tiny notes app in a new temporary directory, and records per-agent request/final-response timestamps, directed messages, review verdicts, progress, and copied deliverables in `docs/evidence/free-opencode/`. Override the binary with `OPENCODE_EXECUTABLE`, model with `HIVEMIND_FREE_MODEL`, or task with `HIVEMIND_LIVE_TASK`. The script exits unsuccessfully unless both reviewers approve. Free-model availability and rate limits may change. These are live native calls, separate from the deterministic test fixtures. See [the recorded acceptance report](docs/evidence/README.md) for results and limits.
 
 `timeoutMs` (TOML `timeout_ms`) defaults to `1800000` (30 minutes) both in config files and in direct `createHivemind` calls. It is a hard wall-clock limit for each harness operation, not an idle timeout or a total run limit: ongoing output and tool activity do not reset it. The default accommodates native coding workloads that need time to inspect files, implement changes, and run checks. Set an explicit positive value to use a shorter or longer limit; explicit overrides are preserved. Worker execution, review, and model routing each receive their own limit, and each retry starts a fresh one. Run cancellation still stops immediately.
 
@@ -232,7 +279,7 @@ Results contain the artifact, feedback, decision, status, attempt count, and exe
 
 ### Harness retries
 
-`harnessRetries` (TOML `harness_retries`; integer 0–10, default `2`) is the number of retries after the first try of each harness call: worker execution, review, and the model router's decision. Timeouts, non-zero exits, empty artifacts, and unparsable or invalid review/router output all count as failures. With the default a call is tried up to 3 times; `0` disables retries. Each retry waits a linear, abortable backoff of 1 s × retry number (1 s, then 2 s, …), and `timeoutMs` applies to every try separately. Retries do not count toward `maxAttempts`, which still counts only worker executions for the revision loop. Cancelling the run is never retried and stops immediately, even during a backoff wait.
+`harnessRetries` (TOML `harness_retries`; integer 0–10, default `2`) is the number of retries after the first try of each harness call: worker execution, review, and the model router's decision. Timeouts, non-zero exits, empty artifacts, and unparsable or invalid review/router output all count as failures. With the default a call is tried up to 3 times; `0` disables retries. Each retry waits a linear, abortable backoff of 1 s × retry number (1 s, then 2 s, …), and `timeoutMs` applies to every try separately. Retries do not count toward `maxAttempts`, which still counts dispatch batches for the revision loop. Cancelling the run is never retried and stops immediately, even during a backoff wait.
 
 Each retry is reported as a progress event (`node` of the failing step, `phase: 'start'`, the current `attempt`, `retry: <n>` and a message such as `Retry 1/2 after: Harness operation timed out`) and is appended to the result's execution `events`. After the last retry fails the run is `blocked` with the final error, suffixed with `(after N retries)`. The programmatic `createHivemind` option `retryDelayMs?: (retry: number) => number` overrides the backoff, e.g. for tests.
 
@@ -242,7 +289,7 @@ Review approval is a model judgment about the returned artifact. It is not proof
 
 ## Multiple harnesses
 
-Each agent has a `harness` reference. Workers, reviewer, and router can use different registrations; several registrations can use the same adapter with different configuration.
+Each agent has a `harness` reference. Workers, orchestrator, both reviewers, and router can use different registrations; several registrations can use the same adapter with different configuration.
 
 | Adapter type | Behavior |
 | --- | --- |
@@ -268,7 +315,7 @@ Install the CLIs separately and authenticate/select a model in each CLI before r
 
 ```sh
 # OpenCode npm distribution
-npm install -g opencode-ai
+npm install -g @opencode/cli
 # Current Pi npm distribution (the legacy @mariozechner package also provides pi)
 npm install -g @earendil-works/pi-coding-agent
 

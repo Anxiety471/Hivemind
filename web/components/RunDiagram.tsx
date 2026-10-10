@@ -6,15 +6,17 @@ import type { Decision, NodeName, Progress, Role, Run, RunPhaseStatus, StageName
 export type NodeState = 'idle' | 'active' | 'done' | 'blocked' | 'interrupted' | 'failed'
 export interface AgentInfo { agent: string; harness: string; role?: Role }
 export interface Roster {
-  router?: AgentInfo | 'rule'
+  router?: AgentInfo | 'rule' | 'jev'
   reviewer?: AgentInfo
   agents: Record<string, AgentInfo>
 }
 type Tone = 'idle' | 'info' | 'ok' | 'warn' | 'err'
 
-export const NODES: NodeName[] = ['decide', 'research', 'plan', 'design', 'work', 'review']
+export const NODES: NodeName[] = ['decide', 'orchestrate', 'research', 'plan', 'design', 'work', 'review', 'security-review']
 const ROLES: Record<NodeName, Role> = {
   decide: 'router',
+  orchestrate: 'orchestrator',
+  'security-review': 'security-reviewer',
   research: 'researcher',
   plan: 'planner',
   design: 'designer',
@@ -27,6 +29,8 @@ const VIA = /^(.+?) via (.+)$/
 
 const ICONS: Record<string, string[]> = {
   router: ['M6 3v12', 'M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6z', 'M6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6z', 'M18 9a9 9 0 0 1-9 9'],
+  orchestrator: ['M12 3v6', 'M5 15v-3h14v3', 'M5 15v6', 'M19 15v6', 'M12 9v12'],
+  'security-reviewer': ['M12 2 3 6v6c0 5 4 8 9 10 5-2 9-5 9-10V6z', 'M8 12l3 3 5-6'],
   worker: ['M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z'],
   reviewer: ['M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z', 'M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0z'],
   researcher: ['M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16z', 'm21 21-4.35-4.35'],
@@ -145,12 +149,12 @@ function currentCycle(progress: Progress[], run: Run) {
 
   // Keep the last executed dispatch visible after a terminal Router decision,
   // but never reuse it while that next Router decision is still being evaluated.
-  const dispatchEvent = findLast(core, item => item.node === 'decide' && item.phase === 'end' && isSpawnDecision(item.decision))
+  const dispatchEvent = findLast(core, item => (item.node === 'decide' || item.node === 'orchestrate') && item.phase === 'end' && isSpawnDecision(item.decision))
   const resultDecision = run.result?.decision
   const decision = dispatchEvent?.decision ?? (isSpawnDecision(resultDecision) ? resultDecision : undefined)
   const attempt = dispatchEvent ? dispatchEvent.attempt + 1 : maxAttempt
-  const events = progress.filter(item => item.node !== 'decide' && item.attempt === attempt)
-  return { attempt, events, routerEvents, decision, looped: routerEvents.some(item => item.attempt > 0) }
+  const events = progress.filter(item => item.node !== 'decide' && (item.attempt === attempt || item.node === 'orchestrate' && item.attempt === attempt - 1))
+  return { attempt, events, routerEvents, decision, looped: routerEvents.some(item => item.attempt > 0) || attempt > 1 }
 }
 
 function messageAgent(message: string, agent: string): string {
@@ -343,14 +347,18 @@ export default function RunDiagram({ run, progress, maxAttempts, roster }: {
     }
   }
   const router = roster?.router
-  const routerAgent = router === 'rule' ? 'rule-based router' : router?.agent ?? 'router'
+  const routerAgent = router === 'rule' ? 'rule-based router' : router === 'jev' ? 'Jev typed router' : router?.agent ?? 'router'
   const reviewerStart = findLast(cycle.events, item => item.node === 'review' && item.phase === 'start' && retryOf(item) === undefined)
   const reviewerAgent = reviewerStart ? parseAgentsFromMessage(reviewerStart.message).agents[0] ?? 'reviewer' : roster?.reviewer?.agent ?? 'reviewer'
   const routerNode = makeNode('decide', 'decide', routerAgent, 'router')
-  if (router && router !== 'rule' && !routerNode.via) routerNode.via = `via ${router.harness}`
+  if (router && typeof router === 'object' && !routerNode.via) routerNode.via = `via ${router.harness}`
   const reviewerNode = makeNode('review', 'review', reviewerAgent, 'reviewer')
   if (roster?.reviewer?.agent === reviewerAgent && !reviewerNode.via) reviewerNode.via = `via ${roster.reviewer.harness}`
   const groups: NodeView[][] = [[routerNode]]
+  if (cycle.events.some(item => item.node === 'orchestrate')) {
+    const start = findLast(cycle.events, item => item.node === 'orchestrate' && item.phase === 'start')
+    groups.push([makeNode('orchestrate', 'orchestrate', start ? parseAgentsFromMessage(start.message).agents[0] ?? 'orchestrator' : 'orchestrator', 'orchestrator')])
+  }
   for (const stage of STAGES) {
     const decision = cycle.decision
     const tasks = decision?.action === 'dispatch'
@@ -370,7 +378,10 @@ export default function RunDiagram({ run, progress, maxAttempts, roster }: {
       )))
     }
   }
-  groups.push([reviewerNode])
+  const reviewNodes = [reviewerNode]
+  const securityStart = findLast(cycle.events, item => item.node === 'security-review' && item.phase === 'start')
+  if (securityStart) reviewNodes.push(makeNode('security-review', 'security-review', parseAgentsFromMessage(securityStart.message).agents[0] ?? 'security-reviewer', 'security-reviewer'))
+  groups.push(reviewNodes)
   const nodes = groups.flat()
   const active = nodes.some(item => item.state === 'active')
   useEffect(() => {

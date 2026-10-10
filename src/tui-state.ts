@@ -10,7 +10,7 @@ export type Config = z.infer<typeof configSchema>
 export interface SettingField { key: string; label: string; value: string }
 
 export function routerLabel(router: Config['router']): string {
-  return router.type === 'model' ? `model:${router.agent}` : 'rule'
+  return router.type === 'model' ? `model:${router.agent}` : router.type
 }
 // The editable setup rows shown by the Settings overlay. Static shape: only values change as the draft is edited.
 export function settingsFields(config: Config): SettingField[] {
@@ -22,10 +22,11 @@ export function settingsFields(config: Config): SettingField[] {
   ]
 }
 function routerOptions(config: Config): Config['router'][] {
-  return [{ type: 'rule' }, ...config.agents.filter(agent => agent.role === 'router').map(agent => ({ type: 'model' as const, agent: agent.id }))]
+  return [...(config.router.type === 'jev' ? [config.router] : []), { type: 'rule' }, ...config.agents.filter(agent => agent.role === 'router').map(agent => ({ type: 'model' as const, agent: agent.id }))]
 }
 function sameRouter(left: Config['router'], right: Config['router']): boolean {
-  return left.type === 'rule' && right.type === 'rule'
+  return left.type === 'jev' && right.type === 'jev'
+    || left.type === 'rule' && right.type === 'rule'
     || left.type === 'model' && right.type === 'model' && left.agent === right.agent
 }
 // Cycle one setting with Left/Right. Returns the input config unchanged when the step is a no-op; unknown keys throw.
@@ -109,7 +110,7 @@ export function loopView(progress: Progress[], outcome?: LoopOutcome): LoopView 
   for (const step of progress) {
     view.attempt = Math.max(view.attempt, step.attempt)
     if (step.phase === 'start') {
-      if (step.node === 'decide' && view.review === 'revise') {
+      if ((step.node === 'decide' || step.node === 'orchestrate') && view.review === 'revise') {
         view.laps += 1; view.work = 'idle'; view.review = 'idle'; view.backEdge = 'active'
       }
       if (step.node === 'decide' || step.node === 'review') view[step.node] = 'active'

@@ -1,5 +1,6 @@
+import { roles } from './types.js'
 import { parseArgs } from 'node:util'
-import { fromConfig } from './config.js'
+import { fromConfig, configSchema } from './config.js'
 import { applyProject, resolveProject } from './projects.js'
 import type { Config } from './config-file.js'
 import { addAgent, assertRunnable, formatFor, loadConfig, removeAgent, removeHarness, saveConfig, serializeConfig,
@@ -42,14 +43,14 @@ Usage: npm run dev -- --config <file> --task <request> [--json]
 Edit the config file in place; a .toml extension selects TOML, anything else selects JSON.
 --show-config    Print the effective config in the file's format and exit
 --dry-run        Print what the setters would save instead of writing the file
---set-router <rule|model:AGENT>
+--set-router <rule|jev|model:AGENT>
 --set-max-attempts <1..100>
 --set-timeout-ms <positive integer>
 --set-harness-retries <0..10>   Retries after a failed harness call (timeout, bad output); default 2
 --set-agent-harness <agentId>=<harnessId>
 --set-harness-model <harnessId>=<model>
 --set-harness-cwd <harnessId>=<path>
---add-agent <id>:<role>:<harnessId>   role is worker, reviewer, or router
+--add-agent <id>:<role>:<harnessId>   role is worker, orchestrator, reviewer, security-reviewer, router, planner, designer, or researcher
 --remove-agent <id>
 --remove-harness <id>
 --migrate-config [outPath]   Write --config as TOML (default: same path with a .toml extension)
@@ -76,6 +77,7 @@ API keys are read from environment variables; optionally use Node's --env-file=.
   const setters: Array<(config: Config) => Config> = []
   const routerValue = values['set-router']
   if (routerValue !== undefined) setters.push(current => {
+    if (routerValue === 'jev') return configSchema.parse({ ...current, router: { type: 'jev' } })
     if (routerValue === 'rule') return withRouter(current, { type: 'rule' })
     if (!routerValue.startsWith('model:') || routerValue.length === 'model:'.length)
       throw new Error(`--set-router expects rule or model:<agentId>, received "${routerValue}"`)
@@ -122,9 +124,9 @@ API keys are read from environment variables; optionally use Node's --env-file=.
     const parts = addAgentValue.split(':')
     const [id, role, harness] = parts
     if (parts.length !== 3 || !id || !role || !harness) throw new Error('--add-agent expects <id>:<role>:<harnessId>')
-    if (role !== 'worker' && role !== 'reviewer' && role !== 'router')
-      throw new Error(`--add-agent role must be worker, reviewer, or router, received "${role}"`)
-    setters.push(current => addAgent(current, { id, role, harness }))
+    if (!roles.includes(role as typeof roles[number]))
+      throw new Error(`--add-agent role must be one of ${roles.join(', ')}, received "${role}"`)
+    setters.push(current => addAgent(current, { id, role: role as typeof roles[number], harness }))
   }
   const removeAgentValue = values['remove-agent']
   if (removeAgentValue !== undefined) setters.push(current => removeAgent(current, removeAgentValue))
