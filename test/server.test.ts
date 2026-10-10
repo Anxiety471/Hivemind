@@ -15,7 +15,16 @@ interface Reply extends Run {
 type Api = (route: string, init?: RequestInit) => Promise<Response>
 interface Frame { event: string; data: unknown }
 
-const demo = JSON.parse(await readFile('examples/demo.json', 'utf8')) as Config
+// Own fixture: examples/demo.json is edited through the settings UI and must not influence tests.
+const demo: Config = {
+  maxAttempts: 3, timeoutMs: 120_000, harnessRetries: 2,
+  harnesses: { demo: { type: 'demo' } },
+  agents: [
+    { id: 'writer', role: 'worker', harness: 'demo', description: 'Writes and revises the artifact' },
+    { id: 'reviewer', role: 'reviewer', harness: 'demo', description: 'Checks the latest artifact' },
+  ],
+  router: { type: 'rule' },
+}
 
 let root: string
 let configPath: string
@@ -54,7 +63,7 @@ async function events(fetchApi: Api, id: string): Promise<Frame[]> {
 }
 
 // Resolves once the live stream has delivered a progress item matching `match`.
-async function untilProgress(fetchApi: Api, id: string, match: (item: Progress) => boolean): Promise<void> {
+async function untilProgress(fetchApi: Api, id: string, match: (item: Progress) => boolean): Promise<Progress> {
   const response = await fetchApi(`/api/runs/${id}/events`)
   const decoder = new TextDecoder()
   let buffered = ''
@@ -63,8 +72,9 @@ async function untilProgress(fetchApi: Api, id: string, match: (item: Progress) 
     const frames = buffered.split('\n\n')
     buffered = frames.pop()!
     for (const frame of frames) {
-      if (frame.startsWith('event: progress') && match(JSON.parse(/^data: (.*)$/m.exec(frame)![1]!) as Progress)) {
-        return // leaving the loop cancels the response body
+      if (frame.startsWith('event: progress')) {
+        const item = JSON.parse(/^data: (.*)$/m.exec(frame)![1]!) as Progress
+        if (match(item)) return item // leaving the loop cancels the response body
       }
     }
   }
@@ -77,7 +87,7 @@ before(async () => {
   project = path.join(root, 'project')
   await mkdir(path.join(project, 'sub'), { recursive: true })
   configPath = path.join(root, 'demo.json')
-  await writeFile(configPath, await readFile('examples/demo.json', 'utf8'))
+  await writeFile(configPath, JSON.stringify(demo, null, 2))
   // The worker blocks until aborted so cancellation can be observed.
   slowConfigPath = path.join(root, 'slow.json')
   await writeFile(slowConfigPath, JSON.stringify({
@@ -127,6 +137,10 @@ test('run lifecycle with SSE replay, listing and live streaming', async () => {
   assert.equal(last.result!.status, 'completed')
   assert.ok(live.slice(0, -1).every(frame => frame.event === 'progress'))
   assert.ok(live.length > 1)
+  for (const item of last.progress) {
+    assert.ok(item.at, `${item.node} ${item.phase} has a server receipt time`)
+    assert.equal(new Date(item.at).toISOString(), item.at)
+  }
 
   const replay = await events(fetchApi, run.id)
   assert.deepEqual(replay, live)
@@ -144,6 +158,37 @@ test('run lifecycle with SSE replay, listing and live streaming', async () => {
   assert.equal((await call('POST', `/api/runs/${run.id}/cancel`)).status, 409)
   assert.equal((await call('GET', '/api/runs/nope')).status, 404)
   assert.equal((await call('GET', '/api/runs/nope/events')).status, 404)
+})
+
+test('active stage origin survives elapsed time, GET, listing and SSE reconnects', async t => {
+  // Advance only Date: the real subprocess and graph timers keep running normally.
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() })
+  const { fetchApi, call } = await start(slowConfigPath)
+  const run = (await call('POST', '/api/runs', { task: 'Keep working across reconnects' })).body as Run
+  const isWorkStart = (item: Progress) => item.node === 'work' && item.phase === 'start' && !item.retry
+  try {
+    const original = await untilProgress(fetchApi, run.id, isWorkStart)
+    assert.ok(original.at)
+    const origin = Date.parse(original.at)
+    assert.equal(new Date(origin).toISOString(), original.at)
+
+    // The worker stays active while the browser would be disconnected.
+    t.mock.timers.tick(60_000)
+    assert.equal(Date.now() - origin, 60_000)
+    const fetched = (await call('GET', `/api/runs/${run.id}`)).body as Run
+    assert.equal(fetched.status, 'running')
+    assert.deepEqual(fetched.progress.find(isWorkStart), original)
+    const listed = (await call('GET', '/api/runs')).body.runs.find(item => item.id === run.id)!
+    assert.deepEqual(listed.progress.find(isWorkStart), original)
+
+    const reconnected = await untilProgress(fetchApi, run.id, isWorkStart)
+    assert.deepEqual(reconnected, original)
+    t.mock.timers.tick(60_000)
+    assert.deepEqual(await untilProgress(fetchApi, run.id, isWorkStart), original)
+    assert.deepEqual(((await call('GET', `/api/runs/${run.id}`)).body as Run).progress.find(isWorkStart), original)
+  } finally {
+    await call('POST', `/api/runs/${run.id}/cancel`)
+  }
 })
 
 test('run input validation', async () => {

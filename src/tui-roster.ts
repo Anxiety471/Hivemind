@@ -6,7 +6,7 @@ type HarnessSettings = Config['harnesses'][string]
 type AgentEntry = Config['agents'][number]
 export type HarnessType = HarnessSettings['type']
 export const harnessTypes: readonly HarnessType[] = ['pi', 'opencode', 'command', 'openai-compatible', 'demo']
-const roles = ['worker', 'reviewer', 'router'] as const
+const roles = ['worker', 'reviewer', 'router', 'planner', 'designer', 'researcher'] as const
 const thinkingLevels = ['', 'off', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const
 // Harness types the agent form can create inline: they need no settings beyond an optional model.
 const quickTypes: readonly HarnessType[] = ['pi', 'opencode', 'demo']

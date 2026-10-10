@@ -112,11 +112,14 @@ export function loopView(progress: Progress[], outcome?: LoopOutcome): LoopView 
       if (step.node === 'decide' && view.review === 'revise') {
         view.laps += 1; view.work = 'idle'; view.review = 'idle'; view.backEdge = 'active'
       }
-      view[step.node] = 'active'
+      if (step.node === 'decide' || step.node === 'review') view[step.node] = 'active'
+      else view.work = 'active'
       continue
     }
     const failed = step.status === 'blocked' || step.status === 'exhausted'
-    view[step.node] = failed ? 'failed' : step.node === 'review' && /^revise\b/.test(step.message) ? 'revise' : 'done'
+    if (step.node === 'decide') view.decide = failed ? 'failed' : 'done'
+    else if (step.node === 'review') view.review = failed ? 'failed' : /^revise\b/.test(step.message) ? 'revise' : 'done'
+    else view.work = failed ? 'failed' : 'done'
     if (step.node === 'decide' && view.backEdge === 'active') view.backEdge = 'taken'
   }
   if (outcome && outcome !== 'running') {

@@ -88,3 +88,29 @@ test('current Pi waits for settled completion and allows successful retry recove
   ]
   assert.equal(parsePiOutput(records.map(e => JSON.stringify(e)).join('\n')), 'Recovered artifact')
 })
+test('agent model overrides the harness model and falls back to it when absent', async () => {
+  for (const kind of ['opencode', 'pi']) {
+    const expected = async (agentModel: string | undefined, harnessModel: string | undefined) => {
+      const f = await fixtureOptions(kind)
+      try {
+        const options = { ...f.options, model: harnessModel }
+        const adapter = kind === 'opencode' ? new OpenCodeHarness(options) : new PiHarness(options)
+        await adapter.run({ ...request, agent: { ...request.agent, model: agentModel } }, new AbortController().signal)
+        const args: string[] = JSON.parse(await readFile(f.capture, 'utf8')).args
+        const at = args.indexOf('--model')
+        return at < 0 ? undefined : args[at + 1]
+      } finally { await rm(f.directory, { recursive: true }) }
+    }
+    assert.equal(await expected('agent/model', 'harness/model'), 'agent/model')
+    assert.equal(await expected(undefined, 'harness/model'), 'harness/model')
+    assert.equal(await expected('agent/model', undefined), 'agent/model')
+    assert.equal(await expected(undefined, undefined), undefined)
+  }
+})
+test('config accepts an optional agent model and rejects an empty one', () => {
+  const base = { harnesses: { h: { type: 'demo' } }, router: { type: 'rule' } }
+  const agents = (model?: string) => [{ id: 'w', role: 'worker', harness: 'h', ...(model === undefined ? {} : { model }) }, { id: 'r', role: 'reviewer', harness: 'h' }]
+  assert.equal(configSchema.parse({ ...base, agents: agents('p/m') }).agents[0]?.model, 'p/m')
+  assert.equal(configSchema.parse({ ...base, agents: agents() }).agents[0]?.model, undefined)
+  assert.throws(() => configSchema.parse({ ...base, agents: agents('') }))
+})

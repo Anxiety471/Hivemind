@@ -19,9 +19,10 @@ const harnessSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('openai-compatible'), baseUrl: z.url(), model: z.string().min(1), apiKeyEnv: z.string().min(1), maxTokens: z.number().int().positive().default(2048) }).strict(),
 ])
 export const configSchema = z.object({
-  maxAttempts: z.number().int().min(1).max(100).default(3), timeoutMs: z.number().int().positive().default(120_000),
+  maxAttempts: z.number().int().min(1).max(100).default(3), timeoutMs: z.number().int().positive().default(1_800_000),
+  harnessRetries: z.number().int().min(0).max(10).default(2),
   harnesses: z.record(z.string(), harnessSchema),
-  agents: z.array(z.object({ id: z.string().min(1), role: z.enum(['worker', 'reviewer', 'router']), harness: z.string().min(1), description: z.string().default('') }).strict()).min(2),
+  agents: z.array(z.object({ id: z.string().min(1), role: z.enum(['worker', 'reviewer', 'router', 'planner', 'designer', 'researcher']), harness: z.string().min(1), model: z.string().min(1).optional(), description: z.string().default('') }).strict()).min(2),
   router: z.discriminatedUnion('type', [
     z.object({ type: z.literal('rule') }).strict(),
     z.object({ type: z.literal('model'), agent: z.string().min(1) }).strict(),
@@ -39,5 +40,5 @@ export function fromConfig(input: unknown, controls: RunControls = {}) {
   const agent = routerConfig.type === 'model' ? config.agents.find(a => a.id === routerConfig.agent) : undefined
   if (config.router.type === 'model' && agent?.role !== 'router') throw new Error('Model router must reference a router agent')
   const router = agent ? new ModelRouter(agent, harnesses) : new RuleRouter()
-  return createHivemind({ ...controls, agents: config.agents, harnesses, router, maxAttempts: config.maxAttempts, timeoutMs: config.timeoutMs })
+  return createHivemind({ ...controls, agents: config.agents, harnesses, router, maxAttempts: config.maxAttempts, timeoutMs: config.timeoutMs, harnessRetries: config.harnessRetries })
 }

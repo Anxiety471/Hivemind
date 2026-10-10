@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import type { HarnessConfig } from '@/lib/types'
+import type { HarnessCatalogEntry, HarnessConfig } from '@/lib/types'
 
 function keyFields(settings: HarnessConfig): [string, string][] {
   const pairs: [string, string | number | undefined][] = (() => {
@@ -16,10 +16,12 @@ function keyFields(settings: HarnessConfig): [string, string][] {
   return pairs.filter((pair): pair is [string, string | number] => pair[1] !== undefined && pair[1] !== '').map(([key, value]) => [key, String(value)])
 }
 
-export default function HarnessCard({ id, settings, usedBy, onChange, onRemove }: {
+export default function HarnessCard({ id, settings, usedBy, catalog, onChange, onRemove }: {
   id: string
   settings: HarnessConfig
   usedBy: string[]
+  /** Catalog entry for this harness's type (opencode / pi), when the catalog has loaded. */
+  catalog?: HarnessCatalogEntry
   onChange: (settings: HarnessConfig) => void
   onRemove: () => void
 }) {
@@ -27,6 +29,11 @@ export default function HarnessCard({ id, settings, usedBy, onChange, onRemove }
   const [text, setText] = useState('')
   const [error, setError] = useState('')
   const fields = keyFields(settings)
+  const executable = settings.type === 'opencode' || settings.type === 'pi' ? settings.executable : undefined
+  const customExecutable = !!executable && executable !== catalog?.executable
+  const availability = !catalog ? undefined : customExecutable ? { cls: 'custom', label: 'Custom executable', title: `Uses ${executable}; not checked` }
+    : catalog.installed ? { cls: 'completed', label: 'Installed', title: [catalog.version, catalog.path].filter(Boolean).join(' · ') || catalog.executable }
+      : { cls: 'failed', label: 'Not installed', title: `\`${catalog.executable}\` was not found on PATH` }
 
   function toggle() {
     if (!editing) { setText(JSON.stringify(settings, null, 2)); setError('') }
@@ -47,18 +54,29 @@ export default function HarnessCard({ id, settings, usedBy, onChange, onRemove }
   }
 
   return (
-    <div className="harness card inner" data-harness={id}>
+    <div className={`harness card inner ${availability?.cls === 'failed' ? 'is-missing' : ''}`} data-harness={id}>
       <div className="row between">
-        <div className="row"><strong>{id}</strong><span className="tag type">{settings.type}</span></div>
+        <div className="harness-title"><strong>{id}</strong><span className="tag type">{settings.type}</span></div>
         <div className="row">
           <button type="button" className="ghost small" onClick={toggle}>{editing ? 'Close JSON' : 'Edit JSON'}</button>
           <button type="button" className="ghost small danger-text" onClick={onRemove}>Remove</button>
         </div>
       </div>
+      {availability && (
+        <div className="row">
+          <span className={`badge ${availability.cls}`} title={availability.title}>{availability.label}</span>
+          {availability.cls === 'completed' && catalog?.version && <span className="muted small-text">{catalog.version}</span>}
+        </div>
+      )}
       {fields.length === 0
         ? <p className="muted small-text">No settings.</p>
         : <dl className="fields">{fields.map(([key, value]) => <div key={key}><dt>{key}</dt><dd><code>{value}</code></dd></div>)}</dl>}
-      {usedBy.length > 0 && <p className="muted small-text">Used by {usedBy.join(', ')}</p>}
+      <div className="used-by">
+        <span className="label">Used by</span>
+        {usedBy.length > 0
+          ? usedBy.map(agent => <span key={agent} className="chip">{agent}</span>)
+          : <span className="muted small-text">no agents</span>}
+      </div>
       {editing && (
         <div className="stack">
           <textarea className="mono" rows={Math.min(18, text.split('\n').length + 1)} value={text} spellCheck={false} onChange={event => setText(event.target.value)} aria-label={`JSON settings for ${id}`} />

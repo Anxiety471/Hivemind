@@ -1,26 +1,60 @@
 {
   "maxAttempts": 3,
-  "timeoutMs": 120000,
+  "timeoutMs": 1800000,
+  "harnessRetries": 2,
   "harnesses": {
-    "demo": {
-      "type": "demo"
+    "opencode": {
+      "type": "opencode",
+      "executableArgs": [],
+      "maxOutputBytes": 8388608
     }
   },
   "agents": [
     {
       "id": "writer",
       "role": "worker",
-      "harness": "demo",
+      "harness": "opencode",
+      "model": "opencode-go/deepseek-v4-flash",
       "description": "Writes and revises the artifact"
     },
     {
       "id": "reviewer",
       "role": "reviewer",
-      "harness": "demo",
+      "harness": "opencode",
+      "model": "opencode-go/deepseek-v4-flash",
       "description": "Checks the latest artifact"
+    },
+    {
+      "id": "router",
+      "role": "router",
+      "harness": "opencode",
+      "model": "opencode-go/deepseek-v4-flash",
+      "description": "Router"
+    },
+    {
+      "id": "Planner",
+      "role": "planner",
+      "harness": "opencode",
+      "model": "opencode-go/deepseek-v4-flash",
+      "description": "Planner"
+    },
+    {
+      "id": "Designer",
+      "role": "designer",
+      "harness": "opencode",
+      "model": "opencode-go/deepseek-v4-flash",
+      "description": "Designer"
+    },
+    {
+      "id": "Researcher",
+      "role": "researcher",
+      "harness": "opencode",
+      "model": "opencode-go/deepseek-v4-flash",
+      "description": "Researcher"
     }
   ],
   "router": {
-    "type": "rule"
+    "type": "model",
+    "agent": "router"
   }
 }

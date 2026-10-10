@@ -1,0 +1,1 @@
+{"task":"Hello","artifact":"Revised draft for: Hello\nHivemind uses a decision → worker → review loop. Each agent selects a registered harness. Review approval allows completion; the attempt limit prevents endless execution.","feedback":"The demonstration revision meets the example requirements.","attempt":3}

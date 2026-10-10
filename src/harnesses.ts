@@ -23,7 +23,7 @@ export function runProcess(options: ProcessOptions, stdin: string, signal: Abort
     // Node does not update PWD when cwd is set; some CLIs (OpenCode 2.x) resolve the project from $PWD.
     const env = options.cwd ? { ...process.env, PWD: options.cwd } : process.env
     const child = spawn(options.command, options.args ?? [], {
-      cwd: options.cwd, shell: false, signal, killSignal: 'SIGKILL', stdio: ['pipe', 'pipe', 'pipe'],
+      cwd: options.cwd, env, shell: false, signal, killSignal: 'SIGKILL', stdio: ['pipe', 'pipe', 'pipe'],
     })
     const chunks: Buffer[] = []
     let bytes = 0

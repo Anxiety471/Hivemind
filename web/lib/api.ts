@@ -1,4 +1,4 @@
-import type { Config, ConfigResponse, DirectoriesResponse, ProjectsResponse, Run } from './types'
+import type { Config, ConfigResponse, DirectoriesResponse, HarnessCatalogEntry, HarnessCatalogResponse, HarnessInstallResponse, HarnessModelsResponse, ProjectsResponse, Run } from './types'
 
 /** `unreachable` is true when the API could not be contacted (network error or proxy failure). */
 export class ApiError extends Error {
@@ -57,5 +57,9 @@ export const api = {
   listRuns: () => request<{ runs: Run[] }>('/api/runs').then(r => r.runs),
   getRun: (id: string) => request<Run>(`/api/runs/${encodeURIComponent(id)}`),
   cancelRun: (id: string) => request<Run>(`/api/runs/${encodeURIComponent(id)}/cancel`, { method: 'POST' }),
+  getHarnessCatalog: () => request<HarnessCatalogResponse>('/api/harness-catalog'),
+  installHarness: (type: HarnessCatalogEntry['type']) =>
+    request<HarnessInstallResponse>(`/api/harness-catalog/${encodeURIComponent(type)}/install`, { method: 'POST' }),
+  getHarnessModels: (harness: string) => request<HarnessModelsResponse>(`/api/harness-models?harness=${encodeURIComponent(harness)}`),
   eventsUrl: (id: string) => `/api/runs/${encodeURIComponent(id)}/events`,
 }

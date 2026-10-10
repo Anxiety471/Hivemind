@@ -1,6 +1,6 @@
 {
   "maxAttempts": 3,
-  "timeoutMs": 120000,
+  "timeoutMs": 1800000,
   "harnesses": {
     "decision-model": {
       "type": "openai-compatible",

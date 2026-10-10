@@ -2,22 +2,37 @@
 
 export type RunStatus = 'running' | 'completed' | 'blocked' | 'exhausted'
 export type RunPhaseStatus = RunStatus | 'failed' | 'cancelled'
-export type NodeName = 'decide' | 'work' | 'review'
+export type NodeName = 'decide' | 'research' | 'plan' | 'design' | 'work' | 'review'
+export type StageName = 'research' | 'plan' | 'design' | 'work'
+
+export interface StageTask {
+  agent: string
+  role?: Role
+  instructions: string
+}
+
+export interface DispatchStage {
+  stage: StageName
+  tasks: StageTask[]
+}
 
 export interface Progress {
   node: NodeName
   phase: 'start' | 'end'
   attempt: number
   message: string
+  at?: string
   artifact?: string
   status?: RunStatus
+  retry?: number
+  decision?: Decision
 }
 
 export type Decision =
   | { action: 'work'; agent: string; instructions: string; reason: string }
+  | { action: 'dispatch'; stages: DispatchStage[]; reason: string }
   | { action: 'finish'; reason: string }
   | { action: 'block'; reason: string }
-
 export interface RunEvent { node: string; attempt: number; message: string }
 
 export interface RunState {
@@ -43,9 +58,9 @@ export interface Run {
   endedAt?: string
 }
 
-export type Role = 'worker' | 'reviewer' | 'router'
+export type Role = 'worker' | 'reviewer' | 'router' | 'planner' | 'designer' | 'researcher'
 
-export interface AgentConfig { id: string; role: Role; harness: string; description: string }
+export interface AgentConfig { id: string; role: Role; harness: string; description: string; model?: string }
 
 interface NativeFields {
   executable?: string
@@ -66,6 +81,7 @@ export type RouterConfig = { type: 'rule' } | { type: 'model'; agent: string }
 
 export interface Config {
   maxAttempts: number
+  harnessRetries: number
   timeoutMs: number
   harnesses: Record<string, HarnessConfig>
   agents: AgentConfig[]
@@ -75,3 +91,18 @@ export interface Config {
 export interface ConfigResponse { path: string; project: string; config: Config }
 export interface ProjectsResponse { current: string; recent: string[] }
 export interface DirectoriesResponse { path: string; parent: string | null; directories: string[] }
+
+export interface HarnessCatalogEntry {
+  type: 'opencode' | 'pi'
+  name: string
+  description: string
+  executable: string
+  installed: boolean
+  path?: string
+  version?: string
+  installable: boolean
+  installCommand: string
+}
+export interface HarnessCatalogResponse { harnesses: HarnessCatalogEntry[]; installer: 'bun' | 'npm' | null }
+export interface HarnessInstallResponse { entry: HarnessCatalogEntry; output: string }
+export interface HarnessModelsResponse { models: string[]; error?: string }

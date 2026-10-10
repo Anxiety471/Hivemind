@@ -35,6 +35,8 @@ flowchart TD
 
 Use `--graph` to print Mermaid generated from the actual LangGraph workflow.
 
+The web run visualization shows **Router → selected agents → Reviewer**, with a separate card for each dispatched task/agent. Only selected research, planning, design, or work stages appear, in execution order; same-stage agents fan out and rejoin before the next stage or Reviewer. A worker-only decision is a three-card graph. The Reviewer retains its revise connection to Router, and a Router evaluating the next decision shows no stale agents from the previous attempt. Agent cards share their stage's progress and retry status because the API does not emit individual-agent telemetry; the run's final status is shown outside the graph rather than as another node.
+
 ## Configuration files
 
 A config file names the harness registrations, the agents (one reviewer, one or more workers, optional router agent), the router, and the loop limits. JSON uses the camelCase field names shown elsewhere in this README. TOML uses the same structure with `snake_case` keys — the mapping is mechanical and uniform in both directions (`maxAttempts` ↔ `max_attempts`, `timeoutMs` ↔ `timeout_ms`, `baseUrl` ↔ `base_url`, `apiKeyEnv` ↔ `api_key_env`, `maxTokens` ↔ `max_tokens`, `executableArgs` ↔ `executable_args`, `maxOutputBytes` ↔ `max_output_bytes`), with no per-field exceptions. Harnesses are `[harnesses.<id>]` tables and agents are an `[[agents]]` array of tables.
@@ -87,6 +89,7 @@ npm run cli -- --config hivemind.toml --dry-run --remove-agent editor
 | `--set-router <rule\|model:AGENT>` | Set the router: the built-in rule router, or the model router backed by the named router agent |
 | `--set-max-attempts <n>` | Set `max_attempts` / `maxAttempts` (1–100) |
 | `--set-timeout-ms <ms>` | Set `timeout_ms` / `timeoutMs` (positive) |
+| `--set-harness-retries <n>` | Set `harness_retries` / `harnessRetries` (0–10, default 2) |
 | `--set-agent-harness <agentId>=<harnessId>` | Point an agent at an existing harness registration |
 | `--set-harness-model <harnessId>=<model>` | Set a harness's `model` |
 | `--set-harness-cwd <harnessId>=<path>` | Set a harness's `cwd` working directory |
@@ -108,7 +111,13 @@ bun scripts/dev.ts --config hivemind.toml --project ~/code/site --web-port 3001 
 bun run api -- --port 4100      # API only (Elysia, runs on Bun)
 ```
 
-`bun run dev` starts the Elysia API (`src/server.ts`, `/api/*`: config, projects, runs with Server-Sent Events progress, cancel) and the Next.js app in `web/`, which proxies `/api` to it (`HIVEMIND_API_URL`). The web console runs tasks with live decide → work → review progress, browses run history, switches the project directory, and edits the config at `/settings`. The API binds to 127.0.0.1, requires `Content-Type: application/json` on bodies, and rejects foreign `Host` headers. The TUI is unchanged: `bun run tui`.
+`bun run dev` starts the Elysia API (`src/server.ts`, `/api/*`: config, projects, runs with Server-Sent Events progress, cancel, harness catalog) and the Next.js app in `web/`, which proxies `/api` to it (`HIVEMIND_API_URL`). The web console runs tasks with live decide → work → review progress, browses run history, switches the project directory, and edits the config at `/settings`. The API binds to 127.0.0.1, requires `Content-Type: application/json` on bodies, and rejects foreign `Host` headers. The TUI is unchanged: `bun run tui`.
+
+API progress events carry an `at` ISO timestamp assigned once when the server receives them. Run detail/list responses, live SSE, and SSE history replay retain that same timestamp, so an active graph stage's elapsed time survives browser refreshes and reconnects. Harness retries remain part of the same stage timer; older progress without a valid timestamp shows “running” instead of an estimated counter. Run history remains in memory and is lost when the API restarts.
+
+`GET /api/harness-catalog` detects the native harness CLIs (`opencode`, `pi`) with a fresh PATH scan (no shell) and returns `{ harnesses: [{ type, name, description, executable, installed, path?, version?, installable, installCommand }], installer: 'bun' | 'npm' | null }`; `version` is the first line of `<exe> --version` (5 s timeout). `POST /api/harness-catalog/:type/install` globally installs a missing harness with bun (preferred) or npm (`opencode-ai`, `@earendil-works/pi-coding-agent`) and returns `{ entry, output }` with the last 8 KB of installer output. It answers 404 for an unknown type, 409 while that type is already installing, and 500 `{ error }` (including the output tail) on failure, timeout (5 minutes), or when the installed binary is not on PATH.
+
+`GET /api/harness-models?harness=<harness id>` lists selectable models for an `opencode` (`opencode models`) or `pi` (`pi --list-models`) harness from the config, as `provider/model` strings: `{ models: string[], error?: string }`. Other harness types return `{ models: [] }`, an unknown id is 404, and a failing CLI yields `{ models: [], error }` with status 200 (15 s timeout; successful lists are cached for 60 s per harness).
 
 ## Interactive TUI
 
@@ -215,7 +224,15 @@ Model decisions are validated against these JSON shapes:
 
 The host rejects unknown workers and completion without approval of a nonempty artifact. Every new artifact clears prior approval and receives a fresh review. An attempt is one worker execution; router and reviewer calls have timeouts too. `maxAttempts` bounds the loop even when the router keeps requesting work. If the latest artifact is approved at the moment the limit is reached, the run finishes as `completed` rather than `exhausted`; only an unapproved artifact at the limit stops as `exhausted`.
 
-Results contain the artifact, feedback, decision, status, attempt count, and execution events. Status is `completed`, `blocked`, or `exhausted`. A blocked run exits with its reason; it does not silently retry errors or claim success.
+`timeoutMs` (TOML `timeout_ms`) defaults to `1800000` (30 minutes) both in config files and in direct `createHivemind` calls. It is a hard wall-clock limit for each harness operation, not an idle timeout or a total run limit: ongoing output and tool activity do not reset it. The default accommodates native coding workloads that need time to inspect files, implement changes, and run checks. Set an explicit positive value to use a shorter or longer limit; explicit overrides are preserved. Worker execution, review, and model routing each receive their own limit, and each retry starts a fresh one. Run cancellation still stops immediately.
+
+Results contain the artifact, feedback, decision, status, attempt count, and execution events. Status is `completed`, `blocked`, or `exhausted`. A blocked run exits with its reason; it does not claim success.
+
+### Harness retries
+
+`harnessRetries` (TOML `harness_retries`; integer 0–10, default `2`) is the number of retries after the first try of each harness call: worker execution, review, and the model router's decision. Timeouts, non-zero exits, empty artifacts, and unparsable or invalid review/router output all count as failures. With the default a call is tried up to 3 times; `0` disables retries. Each retry waits a linear, abortable backoff of 1 s × retry number (1 s, then 2 s, …), and `timeoutMs` applies to every try separately. Retries do not count toward `maxAttempts`, which still counts only worker executions for the revision loop. Cancelling the run is never retried and stops immediately, even during a backoff wait.
+
+Each retry is reported as a progress event (`node` of the failing step, `phase: 'start'`, the current `attempt`, `retry: <n>` and a message such as `Retry 1/2 after: Harness operation timed out`) and is appended to the result's execution `events`. After the last retry fails the run is `blocked` with the final error, suffixed with `(after N retries)`. The programmatic `createHivemind` option `retryDelayMs?: (retry: number) => number` overrides the backoff, e.g. for tests.
 
 Review approval is a model judgment about the returned artifact. It is not proof that code was tested or that a task's external effects occurred. A future tool-backed validation step can enforce those requirements.
 
@@ -274,6 +291,8 @@ These examples use each CLI's configured default model. Set `model` explicitly w
 | `thinking` | — | `off`, `minimal`, `low`, `medium`, `high`, `xhigh` |
 | `tools` | Configured through OpenCode | Tool allowlist; `[]` disables tools |
 | `maxOutputBytes` | Combined stdout/stderr cap; default 8 MiB | Combined stdout/stderr cap; default 8 MiB |
+
+An agent may set its own optional `model` (`agents[].model`, same format as the harness `model`); the effective model is `agent.model ?? harness.model`. It applies to the `opencode` and `pi` adapters.
 
 The prompt and previous artifact/feedback go through stdin, avoiding command-line prompt size limits and shell interpolation. The adapters consume native JSONL streams, exclude tool output and intermediate reasoning, and return final assistant text. Reviewer/router JSON stays intact for the graph's schema validation.
 

@@ -21,7 +21,7 @@ async function main() {
     graph: { type: 'boolean', default: false }, json: { type: 'boolean', default: false },
     tui: { type: 'boolean', default: false },
     'show-config': { type: 'boolean', default: false }, 'dry-run': { type: 'boolean', default: false },
-    'set-router': { type: 'string' }, 'set-max-attempts': { type: 'string' }, 'set-timeout-ms': { type: 'string' },
+    'set-router': { type: 'string' }, 'set-max-attempts': { type: 'string' }, 'set-timeout-ms': { type: 'string' }, 'set-harness-retries': { type: 'string' },
     'set-agent-harness': { type: 'string' }, 'set-harness-model': { type: 'string' }, 'set-harness-cwd': { type: 'string' },
     'add-agent': { type: 'string' }, 'remove-agent': { type: 'string' }, 'remove-harness': { type: 'string' },
     'migrate-config': { type: 'string' },
@@ -45,6 +45,7 @@ Edit the config file in place; a .toml extension selects TOML, anything else sel
 --set-router <rule|model:AGENT>
 --set-max-attempts <1..100>
 --set-timeout-ms <positive integer>
+--set-harness-retries <0..10>   Retries after a failed harness call (timeout, bad output); default 2
 --set-agent-harness <agentId>=<harnessId>
 --set-harness-model <harnessId>=<model>
 --set-harness-cwd <harnessId>=<path>
@@ -94,6 +95,12 @@ API keys are read from environment variables; optionally use Node's --env-file=.
     if (!/^\d+$/.test(timeoutValue) || Number(timeoutValue) < 1)
       throw new Error(`--set-timeout-ms expects a positive integer, received "${timeoutValue}"`)
     return withLimits(current, { timeoutMs: Number(timeoutValue) })
+  })
+  const retriesValue = values['set-harness-retries']
+  if (retriesValue !== undefined) setters.push(current => {
+    if (!/^\d+$/.test(retriesValue) || Number(retriesValue) > 10)
+      throw new Error(`--set-harness-retries expects an integer 0..10, received "${retriesValue}"`)
+    return withLimits(current, { harnessRetries: Number(retriesValue) })
   })
   const agentHarnessValue = values['set-agent-harness']
   if (agentHarnessValue !== undefined) {

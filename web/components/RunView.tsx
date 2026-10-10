@@ -2,17 +2,27 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, ApiError, errorMessage } from '@/lib/api'
-import type { NodeName, Progress, Run } from '@/lib/types'
+import type { ConfigResponse, Progress, Role, Run } from '@/lib/types'
+import RunDiagram, { NODES, nodeState, retryOf, type Roster } from './RunDiagram'
 import StatusBadge from './StatusBadge'
 
-const NODES: NodeName[] = ['decide', 'work', 'review']
-type NodeState = 'idle' | 'active' | 'done' | 'stopped'
 
-function nodeState(items: Progress[], node: NodeName, running: boolean): NodeState {
-  const last = [...items].reverse().find(item => item.node === node)
-  if (!last) return 'idle'
-  if (last.phase === 'end') return 'done'
-  return running ? 'active' : 'stopped'
+function rosterOf(config: ConfigResponse['config']): Roster {
+  const agent = (id: string) => {
+    const found = config.agents.find(item => item.id === id)
+    return found ? { agent: found.id, harness: found.harness } : undefined
+  }
+  const byRole = (role: Role) => {
+    const found = config.agents.find(item => item.role === role)
+    return found ? { agent: found.id, harness: found.harness } : undefined
+  }
+  return {
+    router: config.router.type === 'rule' ? 'rule' : agent(config.router.agent),
+    reviewer: byRole('reviewer'),
+    agents: Object.fromEntries(config.agents.map(item => [
+      item.id, { agent: item.id, harness: item.harness, role: item.role },
+    ])),
+  }
 }
 
 function duration(run: Run): string {
@@ -21,14 +31,17 @@ function duration(run: Run): string {
   return seconds < 60 ? `${seconds.toFixed(1)}s` : `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`
 }
 
-export default function RunView({ runId, onChange }: { runId: string; onChange: () => void }) {
+export default function RunView({ runId, onChange, onSelect }: { runId: string; onChange: () => void; onSelect?: (id: string) => void }) {
   const [run, setRun] = useState<Run | null>(null)
   const [progress, setProgress] = useState<Progress[]>([])
   const [error, setError] = useState('')
   const [cancelling, setCancelling] = useState(false)
+  const [retrying, setRetrying] = useState(false)
+  const [config, setConfig] = useState<ConfigResponse['config'] | null>(null)
   const changed = useRef(onChange)
   const logEnd = useRef<HTMLLIElement>(null)
   useEffect(() => { changed.current = onChange }, [onChange])
+  useEffect(() => { api.getConfig().then(response => setConfig(response.config), () => undefined) }, [])
 
   useEffect(() => {
     let closed = false
@@ -78,12 +91,14 @@ export default function RunView({ runId, onChange }: { runId: string; onChange: 
 
   const running = run?.status === 'running'
   const attempts = useMemo(() => {
-    const numbers = [...new Set(progress.map(item => item.attempt))].sort((a, b) => a - b)
-    return numbers.map(attempt => ({ attempt, items: progress.filter(item => item.attempt === attempt) }))
+    const core = progress.filter(item => retryOf(item) === undefined)
+    const numbers = [...new Set(core.map(item => item.attempt))].sort((a, b) => a - b)
+    return numbers.map(attempt => ({ attempt, items: core.filter(item => item.attempt === attempt) }))
   }, [progress])
+  const roster = useMemo(() => config ? rosterOf(config) : undefined, [config])
   const latestArtifact = useMemo(() => [...progress].reverse().find(item => item.artifact)?.artifact, [progress])
   const artifact = run?.result?.artifact || latestArtifact
-  const maxAttempt = progress.reduce((max, item) => Math.max(max, item.attempt), 0)
+  const maxAttempt = attempts.at(-1)?.attempt ?? 0
 
   async function cancel() {
     setCancelling(true)
@@ -94,6 +109,20 @@ export default function RunView({ runId, onChange }: { runId: string; onChange: 
       setError(errorMessage(caught))
     } finally {
       setCancelling(false)
+    }
+  }
+
+  async function retry() {
+    if (!run) return
+    setRetrying(true)
+    try {
+      const next = await api.startRun(run.task)
+      onSelect?.(next.id)
+      changed.current()
+    } catch (caught) {
+      setError(errorMessage(caught))
+    } finally {
+      setRetrying(false)
     }
   }
 
@@ -112,28 +141,14 @@ export default function RunView({ runId, onChange }: { runId: string; onChange: 
         <div className="run-actions">
           <StatusBadge status={run.status} />
           {running && <button type="button" className="danger" disabled={cancelling} onClick={() => void cancel()}>{cancelling ? 'Cancelling…' : 'Cancel'}</button>}
+          {!running && run.status !== 'completed' && <button type="button" className="ghost" disabled={retrying} onClick={() => void retry()}>{retrying ? 'Starting…' : 'Retry run'}</button>}
         </div>
       </div>
 
       {error && <p className="field-error" role="alert">{error}</p>}
       {run.error && <p className="field-error" role="alert">{run.error}</p>}
 
-      <div className="pipeline" aria-label="Loop state">
-        {NODES.map((node, index) => {
-          const state = nodeState(progress, node, running)
-          return (
-            <div key={node} className="pipeline-step">
-              <div className={`node ${state}`} data-state={state}>
-                <span className="node-name">{node}</span>
-                <span className="node-state">{state === 'idle' ? 'waiting' : state === 'active' ? 'running' : state === 'done' ? 'done' : 'interrupted'}</span>
-              </div>
-              {index < NODES.length - 1 && <span className="arrow" aria-hidden>→</span>}
-            </div>
-          )
-        })}
-        <span className="arrow loop" aria-hidden>↺</span>
-        <div className="attempt-count">Attempt <strong>{maxAttempt}</strong></div>
-      </div>
+      <RunDiagram run={run} progress={progress} maxAttempts={config?.maxAttempts} roster={roster} />
 
       {attempts.length > 0 && (
         <div className="attempts">
@@ -141,7 +156,7 @@ export default function RunView({ runId, onChange }: { runId: string; onChange: 
             <div key={attempt} className="attempt-row">
               <span className="attempt-label">#{attempt}</span>
               {NODES.map(node => {
-                const state = nodeState(items, node, running && attempt === maxAttempt)
+                const state = nodeState(items, node, attempt === maxAttempt ? run.status : 'completed')
                 return state === 'idle' ? null : <span key={node} className={`chip ${state}`}>{node}</span>
               })}
             </div>
@@ -153,11 +168,23 @@ export default function RunView({ runId, onChange }: { runId: string; onChange: 
       <ul className="log">
         {progress.length === 0 && <li className="muted">{running ? 'Waiting for the first event…' : 'No events recorded.'}</li>}
         {progress.map((item, index) => (
-          <li key={index} className={`log-item ${item.phase}`}>
+          <li key={index} className={`log-item ${item.phase}${retryOf(item) === undefined ? '' : ' retry'}`}>
             <span className={`tag ${item.node}`}>{item.node}</span>
-            <span className="log-phase">{item.phase}</span>
+            <span className="log-phase">{retryOf(item) === undefined ? item.phase : 'retry'}</span>
             <span className="log-attempt">#{item.attempt}</span>
-            <span className="log-message">{item.message}</span>
+            <span className="log-message">
+              {item.message}
+              {item.decision?.action === 'dispatch' && (
+                <span className="chip ok" style={{ marginLeft: '8px' }}>
+                  Spawned: {item.decision.stages.map(s => `${s.stage} [${s.tasks.map(t => t.agent).join(', ')}]`).join(' → ')}
+                </span>
+              )}
+              {item.decision?.action === 'work' && (
+                <span className="chip ok" style={{ marginLeft: '8px' }}>
+                  Spawned: worker ({item.decision.agent})
+                </span>
+              )}
+            </span>
             {item.status && item.status !== 'running' && <StatusBadge status={item.status} />}
           </li>
         ))}
@@ -167,7 +194,12 @@ export default function RunView({ runId, onChange }: { runId: string; onChange: 
       {run.result && (run.result.feedback || run.result.decision) && (
         <div className="notes">
           {run.result.feedback && <p><span className="label">Reviewer feedback</span> {run.result.feedback}</p>}
-          {run.result.decision && <p><span className="label">Final decision</span> {run.result.decision.action} — {run.result.decision.reason}</p>}
+          {run.result.decision && (
+            <p>
+              <span className="label">Final decision</span> {run.result.decision.action}
+              {run.result.decision.action === 'dispatch' && ` (${run.result.decision.stages.map(s => `${s.stage} [${s.tasks.map(t => t.agent).join(', ')}]`).join(' → ')})`} — {run.result.decision.reason}
+            </p>
+          )}
         </div>
       )}
 

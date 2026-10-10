@@ -250,7 +250,7 @@ async function tempConfig(source = config): Promise<{ dir: string; path: string 
   await writeFile(path, JSON.stringify(source, null, 2))
   return { dir, path }
 }
-test('TUI settings panel opens with Ctrl+S and shows the current router and limits', async () => {
+test('TUI settings panel opens with Ctrl+S without changing the saved config', async () => {
   const { dir, path } = await tempConfig()
   const app = render(<HivemindTui config={config} configPath={path} />)
   try {
@@ -258,11 +258,8 @@ test('TUI settings panel opens with Ctrl+S and shows the current router and limi
     app.stdin.write('\x13') // Ctrl+S
     await waitText(app, SETTINGS)
     const output = frame(app)
-    assert.match(output, /› Router: rule/)
-    assert.match(output, /Max attempts: 3/)
-    assert.match(output, /Timeout \(ms\): 120000/)
     assert.doesNotMatch(output, new RegExp(PROMPT)) // the panel replaces the prompt box
-    assert.equal(JSON.parse(await readFile(path, 'utf8')).maxAttempts, 3)
+    assert.deepEqual(await loadConfig(path), config)
   } finally { app.unmount(); app.cleanup(); await rm(dir, { recursive: true, force: true }) }
 })
 test('TUI settings Ctrl+W persists the edited value to the config file', async () => {

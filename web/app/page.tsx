@@ -61,7 +61,7 @@ export default function ConsolePage() {
         </form>
 
         <div className="card">
-          {selected ? <RunView key={selected} runId={selected} onChange={() => void refresh()} />
+          {selected ? <RunView key={selected} runId={selected} onChange={() => void refresh()} onSelect={setSelected} />
             : <p className="muted">Submit a task or pick a run from the history to see the decide → work → review loop.</p>}
         </div>
       </section>

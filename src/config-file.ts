@@ -4,6 +4,7 @@ import { basename, dirname, join } from 'node:path'
 import { parse, stringify, type TomlTable } from 'smol-toml'
 import type { z } from 'zod'
 import { configSchema } from './config.js'
+import type { Role } from './types.js'
 
 export type Config = z.infer<typeof configSchema>
 
@@ -60,6 +61,9 @@ export function assertRunnable(config: Config): void {
     throw new Error(`maxAttempts must be an integer between 1 and 100, found ${config.maxAttempts}`)
   }
   if (!Number.isInteger(config.timeoutMs) || config.timeoutMs < 1) throw new Error(`timeoutMs must be a positive integer, found ${config.timeoutMs}`)
+  if (!Number.isInteger(config.harnessRetries) || config.harnessRetries < 0 || config.harnessRetries > 10) {
+    throw new Error(`harnessRetries must be an integer between 0 and 10, found ${config.harnessRetries}`)
+  }
 }
 
 function replace(config: Config, patch: Partial<Config>): Config {
@@ -70,10 +74,11 @@ export function withRouter(config: Config, router: Config['router']): Config {
   return replace(config, { router })
 }
 
-export function withLimits(config: Config, patch: { maxAttempts?: number; timeoutMs?: number }): Config {
+export function withLimits(config: Config, patch: { maxAttempts?: number; timeoutMs?: number; harnessRetries?: number }): Config {
   const limits: Partial<Config> = {}
   if (patch.maxAttempts !== undefined) limits.maxAttempts = patch.maxAttempts
   if (patch.timeoutMs !== undefined) limits.timeoutMs = patch.timeoutMs
+  if (patch.harnessRetries !== undefined) limits.harnessRetries = patch.harnessRetries
   return replace(config, limits)
 }
 
@@ -93,7 +98,7 @@ export function withHarnessPatch(config: Config, harnessId: string, patch: Recor
   return replace(config, { harnesses })
 }
 
-export function addAgent(config: Config, agent: { id: string; role: 'worker' | 'reviewer' | 'router'; harness: string; description?: string }): Config {
+export function addAgent(config: Config, agent: { id: string; role: Role; harness: string; description?: string; model?: string }): Config {
   if (config.agents.some(existing => existing.id === agent.id)) throw new Error(`Agent "${agent.id}" already exists`)
   return replace(config, { agents: [...structuredClone(config.agents), { description: '', ...agent }] })
 }

@@ -17,7 +17,7 @@ export function agentsView(config: Config, state: AgentsState): AgentsView {
 }
 
 const SIDEBAR = 28
-const roleColor: Record<string, string | undefined> = { all: undefined, worker: 'green', reviewer: 'yellow', router: 'magenta' }
+const roleColor: Record<string, string | undefined> = { all: undefined, worker: 'green', reviewer: 'yellow', router: 'magenta', planner: 'blue', designer: 'cyan', researcher: 'blue' }
 const clip = (text: string, width: number) => Array.from(text).length > width ? `${Array.from(text).slice(0, Math.max(0, width - 1)).join('')}…` : text
 
 function Sidebar({ view }: { view: AgentsView }) {

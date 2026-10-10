@@ -3,7 +3,9 @@ import path from 'node:path'
 import { Elysia, t } from 'elysia'
 import { ZodError } from 'zod'
 import { configSchema, fromConfig } from './config.js'
+import { defaultHarnessModelLister, MODEL_CACHE_MS, type HarnessModelLister, type ModelListing } from './harness-models.js'
 import { assertRunnable, loadConfig, saveConfig } from './config-file.js'
+import { defaultHarnessTools, HarnessInstallError, isHarnessType, tail, type HarnessTools } from './harness-catalog.js'
 import type { Progress } from './graph.js'
 import { applyProject, listDirectories, loadRecentProjects, rememberProject, resolveProject } from './projects.js'
 import type { RunState } from './types.js'
@@ -38,6 +40,10 @@ export interface ApiOptions {
   configPath: string
   /** Initial project directory (must already exist). */
   project: string
+  /** Harness detection/installation; defaults to the real PATH scan and bun/npm. Tests inject fakes. */
+  harnessTools?: HarnessTools
+  /** Model listing for opencode/pi harnesses; defaults to running their CLIs. Tests inject fakes. */
+  harnessModels?: HarnessModelLister
 }
 
 class Runs implements RunStore {
@@ -67,8 +73,9 @@ class Runs implements RunStore {
 
   progress(entry: Entry, item: Progress): void {
     if (entry.run.status !== 'running') return
-    entry.run.progress.push(item)
-    for (const listener of entry.listeners) listener.progress(item)
+    const stamped = { ...item, at: new Date().toISOString() }
+    entry.run.progress.push(stamped)
+    for (const listener of entry.listeners) listener.progress(stamped)
   }
 
   finish(entry: Entry, status: RunStatus, extra: { result?: RunState; error?: string } = {}): void {
@@ -161,6 +168,24 @@ export function createApiApp(options: ApiOptions) {
   const configPath = path.resolve(options.configPath)
   let current = options.project
   const runs = new Runs()
+  const harnessTools = options.harnessTools ?? defaultHarnessTools
+  const installing = new Set<string>()
+  const modelLister = options.harnessModels ?? defaultHarnessModelLister
+  const modelCache = new Map<string, { at: number; value: ModelListing }>()
+
+  async function harnessModels(id: string): Promise<ModelListing> {
+    const config = applyProject(await loadConfig(configPath).catch(error => { throw new HttpError(500, describeError(error)) }), current)
+    const settings = Object.hasOwn(config.harnesses, id) ? config.harnesses[id] : undefined
+    if (!settings) throw new HttpError(404, `Unknown harness "${id}"`)
+    if (settings.type !== 'opencode' && settings.type !== 'pi') return { models: [] }
+    const target = { type: settings.type, executable: settings.executable, executableArgs: settings.executableArgs, cwd: settings.cwd }
+    const key = JSON.stringify([id, target])
+    const hit = modelCache.get(key)
+    if (hit && Date.now() - hit.at < MODEL_CACHE_MS) return hit.value
+    const value = await modelLister.list(target).catch((error): ModelListing => ({ models: [], error: describeError(error) }))
+    if (!value.error) modelCache.set(key, { at: Date.now(), value })
+    return value
+  }
 
   const configPayload = async () => ({ path: configPath, project: current, config: await loadConfig(configPath).catch(error => { throw new HttpError(500, describeError(error)) }) })
   const projectsPayload = async () => ({ current, recent: await loadRecentProjects() })
@@ -185,6 +210,21 @@ export function createApiApp(options: ApiOptions) {
     return started.run
   }
 
+  async function installHarness(type: string) {
+    if (!isHarnessType(type)) throw new HttpError(404, `Unknown harness "${type}"`)
+    if (installing.has(type)) throw new HttpError(409, `${type} is already being installed`)
+    installing.add(type)
+    try {
+      const output = tail(await harnessTools.install(type).catch(error => {
+        const detail = error instanceof HarnessInstallError ? error.output : ''
+        throw new HttpError(500, detail ? `${describeError(error)}\n${tail(detail)}` : describeError(error))
+      }))
+      const entry = (await harnessTools.detect()).harnesses.find(item => item.type === type)!
+      if (!entry.installed) throw new HttpError(500, `${entry.name} was installed but "${entry.executable}" is not on PATH yet; add the global bin directory to PATH.\n${output}`)
+      return { entry, output }
+    } finally { installing.delete(type) }
+  }
+
   const notAllowed = () => { throw new HttpError(405, 'Method not allowed') }
 
   const app = new Elysia()
@@ -203,6 +243,12 @@ export function createApiApp(options: ApiOptions) {
     })
     .get('/api/health', () => ({ ok: true }))
     .get('/api/config', () => configPayload())
+    .get('/api/harness-catalog', () => harnessTools.detect())
+    .get('/api/harness-models', ({ query }) => {
+      if (!query.harness) throw new HttpError(400, '"harness" query parameter is required')
+      return harnessModels(query.harness)
+    })
+    .post('/api/harness-catalog/:type/install', ({ params }) => installHarness(params.type))
     .put('/api/config', async ({ body }) => {
       let config
       try { config = configSchema.parse(body.config); assertRunnable(config) } catch (error) { throw new HttpError(400, describeError(error)) }
@@ -241,6 +287,9 @@ export function createApiApp(options: ApiOptions) {
     .all('/api/project', notAllowed)
     .all('/api/directories', notAllowed)
     .all('/api/runs', notAllowed)
+    .all('/api/harness-catalog', notAllowed)
+    .all('/api/harness-models', notAllowed)
+    .all('/api/harness-catalog/:type/install', notAllowed)
     .all('/api/runs/:id', notAllowed)
     .all('/api/runs/:id/cancel', notAllowed)
     .all('/api/runs/:id/events', notAllowed)

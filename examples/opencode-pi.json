@@ -1,6 +1,6 @@
 {
   "maxAttempts": 3,
-  "timeoutMs": 180000,
+  "timeoutMs": 1800000,
   "harnesses": {
     "opencode-worker": { "type": "opencode", "agent": "build", "cwd": "." },
     "pi-reviewer": { "type": "pi", "cwd": ".", "tools": ["read", "grep", "find", "ls"] }

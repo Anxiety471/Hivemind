@@ -1,12 +1,13 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import AgentsTable from '@/components/AgentsTable'
 import HarnessCard from '@/components/HarnessCard'
+import HarnessCatalog from '@/components/HarnessCatalog'
 import NumberField from '@/components/NumberField'
+import RoleGuide from '@/components/RoleGuide'
 import { api, errorMessage } from '@/lib/api'
-import type { AgentConfig, Config, ConfigResponse, HarnessConfig, Role } from '@/lib/types'
-
-const ROLES: Role[] = ['worker', 'reviewer', 'router']
+import type { AgentConfig, Config, ConfigResponse, HarnessCatalogEntry, HarnessCatalogResponse, HarnessConfig } from '@/lib/types'
 
 function nextName(prefix: string, taken: string[]): string {
   let index = taken.length + 1
@@ -23,6 +24,9 @@ export default function SettingsPage() {
   const [saveError, setSaveError] = useState('')
   const [saving, setSaving] = useState(false)
   const [savedAt, setSavedAt] = useState<number | null>(null)
+  const [catalog, setCatalog] = useState<HarnessCatalogResponse | null>(null)
+  const [catalogLoading, setCatalogLoading] = useState(false)
+  const [catalogError, setCatalogError] = useState('')
 
   const load = useCallback(async () => {
     try {
@@ -37,6 +41,20 @@ export default function SettingsPage() {
   }, [])
 
   useEffect(() => { void load() }, [load])
+
+  const loadCatalog = useCallback(async () => {
+    setCatalogLoading(true)
+    try {
+      setCatalog(await api.getHarnessCatalog())
+      setCatalogError('')
+    } catch (caught) {
+      setCatalogError(errorMessage(caught))
+    } finally {
+      setCatalogLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { void loadCatalog() }, [loadCatalog])
 
   const dirty = useMemo(() => {
     if (!loaded || !draft) return false
@@ -100,6 +118,14 @@ export default function SettingsPage() {
   }
 
   const harnessIds = Object.keys(draft.harnesses)
+  const configured: Record<string, string[]> = {}
+  for (const id of harnessIds) (configured[draft.harnesses[id]?.type ?? ''] ??= []).push(id)
+
+  const addDetected = (type: HarnessCatalogEntry['type']) => {
+    const id = harnessIds.includes(type) ? nextName(type, harnessIds) : type
+    update({ harnesses: { ...draft.harnesses, [id]: { type, executableArgs: [], maxOutputBytes: 8388608 } } })
+  }
+
   const routerAgents = draft.agents.filter(agent => agent.role === 'router')
   const routerAgent = draft.router.type === 'model' ? draft.router.agent : undefined
 
@@ -135,6 +161,11 @@ export default function SettingsPage() {
                 <NumberField id="timeoutMs" value={draft.timeoutMs} min={1} onChange={timeoutMs => update({ timeoutMs })} />
               </div>
               <div className="field">
+                <label htmlFor="harnessRetries">Harness retries</label>
+                <NumberField id="harnessRetries" value={draft.harnessRetries} min={0} max={10} onChange={harnessRetries => update({ harnessRetries })} />
+                <span className="muted small-text">Retries after a harness error or timeout before the run is blocked</span>
+              </div>
+              <div className="field">
                 <label htmlFor="routerType">Router</label>
                 <select id="routerType" value={draft.router.type} onChange={event => update({ router: event.target.value === 'model' ? { type: 'model', agent: routerAgents[0]?.id ?? '' } : { type: 'rule' } })}>
                   <option value="rule">rule</option>
@@ -157,49 +188,46 @@ export default function SettingsPage() {
             <div className="row between"><h2>Agents</h2>
               <button type="button" className="ghost small" onClick={() => update({ agents: [...draft.agents, { id: nextName('agent', draft.agents.map(agent => agent.id)), role: 'worker', harness: harnessIds[0] ?? '', description: '' }] })}>+ Add agent</button>
             </div>
-            <div className="table-wrap">
-              <table className="agents">
-                <thead><tr><th>ID</th><th>Role</th><th>Harness</th><th>Description</th><th /></tr></thead>
-                <tbody>
-                  {draft.agents.map((agent, index) => (
-                    <tr key={index}>
-                      <td><input value={agent.id} aria-label={`Agent ${index + 1} id`} spellCheck={false} onChange={event => updateAgent(index, { id: event.target.value })} /></td>
-                      <td>
-                        <select value={agent.role} aria-label={`Agent ${index + 1} role`} onChange={event => updateAgent(index, { role: event.target.value as Role })}>
-                          {ROLES.map(role => <option key={role} value={role}>{role}</option>)}
-                        </select>
-                      </td>
-                      <td>
-                        <select value={agent.harness} aria-label={`Agent ${index + 1} harness`} onChange={event => updateAgent(index, { harness: event.target.value })}>
-                          {!harnessIds.includes(agent.harness) && <option value={agent.harness}>{agent.harness || '— select —'}</option>}
-                          {harnessIds.map(id => <option key={id} value={id}>{id}</option>)}
-                        </select>
-                      </td>
-                      <td><input value={agent.description} aria-label={`Agent ${index + 1} description`} onChange={event => updateAgent(index, { description: event.target.value })} /></td>
-                      <td><button type="button" className="ghost small danger-text" onClick={() => update({ agents: draft.agents.filter((_, position) => position !== index) })}>Remove</button></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <RoleGuide agents={draft.agents} router={draft.router} />
+            <AgentsTable
+              agents={draft.agents}
+              harnesses={draft.harnesses}
+              savedHarnesses={loaded.config.harnesses}
+              onUpdate={updateAgent}
+              onRemove={index => update({ agents: draft.agents.filter((_, position) => position !== index) })}
+            />
           </section>
 
           <section className="card stack">
             <div className="row between"><h2>Harnesses</h2>
               <button type="button" className="ghost small" onClick={() => update({ harnesses: { ...draft.harnesses, [nextName('harness', harnessIds)]: { type: 'demo' } } })}>+ Add harness</button>
             </div>
+            <HarnessCatalog
+              catalog={catalog}
+              loading={catalogLoading}
+              error={catalogError}
+              configured={configured}
+              onRefresh={() => void loadCatalog()}
+              onInstalled={entry => setCatalog(current => current && { ...current, harnesses: current.harnesses.map(existing => existing.type === entry.type ? entry : existing) })}
+              onAdd={addDetected}
+            />
+            <h3 className="section-label">Configured harnesses</h3>
             {harnessIds.length === 0 && <p className="muted">No harnesses configured.</p>}
             <div className="harnesses">
-              {harnessIds.map(id => (
-                <HarnessCard
-                  key={id}
-                  id={id}
-                  settings={draft.harnesses[id] as HarnessConfig}
-                  usedBy={draft.agents.filter(agent => agent.harness === id).map(agent => agent.id)}
-                  onChange={settings => update({ harnesses: { ...draft.harnesses, [id]: settings } })}
-                  onRemove={() => update({ harnesses: Object.fromEntries(Object.entries(draft.harnesses).filter(([key]) => key !== id)) })}
-                />
-              ))}
+              {harnessIds.map(id => {
+                const settings = draft.harnesses[id] as HarnessConfig
+                return (
+                  <HarnessCard
+                    key={id}
+                    id={id}
+                    settings={settings}
+                    usedBy={draft.agents.filter(agent => agent.harness === id).map(agent => agent.id)}
+                    catalog={catalog?.harnesses.find(entry => entry.type === settings.type)}
+                    onChange={next => update({ harnesses: { ...draft.harnesses, [id]: next } })}
+                    onRemove={() => update({ harnesses: Object.fromEntries(Object.entries(draft.harnesses).filter(([key]) => key !== id)) })}
+                  />
+                )
+              })}
             </div>
           </section>
         </>

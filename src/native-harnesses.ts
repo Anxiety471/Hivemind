@@ -96,7 +96,8 @@ export class OpenCodeHarness implements Harness {
   constructor(private options: OpenCodeOptions = {}) {}
   async run(request: HarnessRequest, signal: AbortSignal): Promise<string> {
     const args = [...(this.options.executableArgs ?? []), 'run', '--format', 'json']
-    if (this.options.model) args.push('--model', this.options.model)
+    const model = request.agent.model ?? this.options.model
+    if (model) args.push('--model', model)
     if (this.options.agent) args.push('--agent', this.options.agent)
     if (this.options.variant) args.push('--variant', this.options.variant)
     const output = await runProcess({ command: this.options.executable ?? 'opencode', args,
@@ -109,7 +110,8 @@ export class PiHarness implements Harness {
   async run(request: HarnessRequest, signal: AbortSignal): Promise<string> {
     const args = [...(this.options.executableArgs ?? []), '--print', '--mode', 'json', '--no-session']
     if (this.options.provider) args.push('--provider', this.options.provider)
-    if (this.options.model) args.push('--model', this.options.model)
+    const model = request.agent.model ?? this.options.model
+    if (model) args.push('--model', model)
     if (this.options.thinking) args.push('--thinking', this.options.thinking)
     if (this.options.tools) {
       if (this.options.tools.length) args.push('--tools', this.options.tools.join(','))

@@ -107,6 +107,7 @@ test('parseConfigText reports invalid JSON and invalid TOML as Errors', () => {
 })
 
 test('withRouter and withLimits return new validated configs', () => {
+  const original = structuredClone(minimal)
   const rerouted = withRouter(minimal, { type: 'model', agent: 'checker' })
   assert.notEqual(rerouted, minimal)
   assert.deepEqual(minimal.router, { type: 'rule' })
@@ -114,7 +115,7 @@ test('withRouter and withLimits return new validated configs', () => {
   const limited = withLimits(minimal, { maxAttempts: 7, timeoutMs: 250 })
   assert.notEqual(limited, minimal)
   assert.deepEqual([limited.maxAttempts, limited.timeoutMs], [7, 250])
-  assert.deepEqual([minimal.maxAttempts, minimal.timeoutMs], [3, 120_000])
+  assert.deepEqual(minimal, original)
   assert.throws(() => withLimits(minimal, { maxAttempts: 101 }))
   assert.throws(() => withLimits(minimal, { maxAttempts: 0 }))
   assert.throws(() => withLimits(minimal, { timeoutMs: 0 }))
