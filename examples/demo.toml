@@ -1,0 +1,20 @@
+# TOML equivalent of examples/demo.json.
+max_attempts = 3
+
+[router]
+type = "rule"
+
+[harnesses.demo]
+type = "demo"
+
+[[agents]]
+id = "writer"
+role = "worker"
+harness = "demo"
+description = "Writes and revises the artifact"
+
+[[agents]]
+id = "reviewer"
+role = "reviewer"
+harness = "demo"
+description = "Checks the latest artifact"

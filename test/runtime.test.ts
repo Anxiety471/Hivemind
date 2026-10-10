@@ -31,6 +31,20 @@ test('stops an endless revision loop at the host attempt limit', async () => {
 test('allows completion when approval occurs on the final attempt', async () => {
   assert.equal((await runtime(new DemoHarness(), approves, new RuleRouter(), 1).run('Draft')).status, 'completed')
 })
+test('treats an approved artifact at the attempt limit as completed', async () => {
+  // A model router can request another work step at the limit; an approved artifact must not be discarded as exhausted.
+  const requestsWork: Router = { async decide() { return { action: 'work', agent: 'writer', instructions: 'Keep going', reason: 'Another pass' } } }
+  const approved = await runtime(new DemoHarness(), approves, requestsWork, 1).run('Draft')
+  assert.equal(approved.status, 'completed')
+  assert.equal(approved.attempts, 1)
+  assert.equal(approved.approved, true)
+  assert.match(approved.artifact, /Draft for: Draft/)
+  assert.equal(approved.events.at(-1)?.message, 'Attempt limit reached with an approved artifact.')
+  const rejected = await runtime(new DemoHarness(), { async run() { return JSON.stringify({ verdict: 'revise', feedback: 'Try again.' }) } }, requestsWork, 1).run('Draft')
+  assert.equal(rejected.status, 'exhausted')
+  assert.equal(rejected.approved, false)
+  assert.equal(rejected.events.at(-1)?.message, 'Attempt limit reached.')
+})
 test('rejects premature completion, unknown workers, and malformed decisions', async () => {
   for (const decision of [{ action: 'finish', reason: 'Done' }, { action: 'work', agent: 'missing', instructions: 'Go', reason: 'Go' }, { action: 'anything' }]) {
     const router = { async decide() { return decision } } as Router

@@ -67,7 +67,10 @@ export function createHivemind(options: RuntimeOptions) {
         const decision = decisionSchema.parse(await bounded(signal => options.router.decide({ ...s, agents: options.agents }, signal)))
         if (decision.action === 'finish' && (!s.approved || !s.artifact.trim())) throw new Error('Completion requires review approval of a nonempty artifact')
         if (decision.action === 'work') {
-          if (s.attempts >= maxAttempts) return { status: 'exhausted' as const, events: event('decide', s, 'Attempt limit reached.') }
+          // Invariant: an approved nonempty artifact must never be discarded as exhausted at the attempt limit.
+          if (s.attempts >= maxAttempts) return s.approved && s.artifact.trim()
+            ? { status: 'completed' as const, events: event('decide', s, 'Attempt limit reached with an approved artifact.') }
+            : { status: 'exhausted' as const, events: event('decide', s, 'Attempt limit reached.') }
           if (agents.get(decision.agent)?.role !== 'worker') throw new Error('Router selected an unknown or non-worker agent')
         }
         return { decision, status: decision.action === 'finish' ? 'completed' as const : decision.action === 'block' ? 'blocked' as const : 'running' as const,

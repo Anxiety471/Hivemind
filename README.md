@@ -14,7 +14,10 @@ npm run demo
 npm run dev -- --task "Write a project introduction"
 npm run dev -- --config examples/demo.json --graph
 npm run dev -- --config examples/demo.json --task "Write a project introduction" --json
+npm run dev -- --config examples/demo.toml --task "Write a project introduction"
 ```
+
+`--config` accepts both `.json` and `.toml`; the extension selects the parser and the format that setters write back. The shipped `examples/demo.toml` and `examples/multi-harness.toml` mirror their `.json` counterparts.
 
 The demo runs offline without API keys. It deliberately rejects the first draft, revises it, approves the second draft, and finishes. Demo responses are deterministic examples, not live AI results.
 
@@ -25,12 +28,76 @@ flowchart TD
     W --> R["Review artifact"]
     R -->|Approved or needs revision| D
     D -->|Approved and finish selected| E["Completed"]
-    D -->|Blocked or attempt limit| X["Stopped with reason"]
+    D -->|Blocked or unapproved attempt limit| X["Stopped with reason"]
     W -->|Failure| X
     R -->|Blocked or failure| X
 ```
 
 Use `--graph` to print Mermaid generated from the actual LangGraph workflow.
+
+## Configuration files
+
+A config file names the harness registrations, the agents (one reviewer, one or more workers, optional router agent), the router, and the loop limits. JSON uses the camelCase field names shown elsewhere in this README. TOML uses the same structure with `snake_case` keys — the mapping is mechanical and uniform in both directions (`maxAttempts` ↔ `max_attempts`, `timeoutMs` ↔ `timeout_ms`, `baseUrl` ↔ `base_url`, `apiKeyEnv` ↔ `api_key_env`, `maxTokens` ↔ `max_tokens`, `executableArgs` ↔ `executable_args`, `maxOutputBytes` ↔ `max_output_bytes`), with no per-field exceptions. Harnesses are `[harnesses.<id>]` tables and agents are an `[[agents]]` array of tables.
+
+```toml
+max_attempts = 3
+
+[router]
+type = "rule"
+
+[harnesses.demo]
+type = "demo"
+
+[[agents]]
+id = "writer"
+role = "worker"
+harness = "demo"
+description = "Writes and revises the artifact"
+
+[[agents]]
+id = "reviewer"
+role = "reviewer"
+harness = "demo"
+description = "Checks the latest artifact"
+```
+
+On load, `personas` is accepted as an alias for the `agents` array (compatibility with the `hivemind.toml` shape), but agents are always serialized back as `agents`. Run the TOML example:
+
+```sh
+npm run dev -- --config examples/demo.toml --task "Write a project introduction"
+```
+
+The TOML is deliberately `hivemind.toml`-style (snake_case, `[[agents]]`), but it is **not** field-for-field compatible with the Rust backend's config on `main`. This restart uses a different runtime model — harness registrations plus agents — rather than that backend's personas and runtimes, so a Rust config is not a drop-in replacement and `--migrate-config` only converts between this project's own JSON and TOML formats.
+
+### Editing configuration from the CLI
+
+The setters rewrite the file you pass to `--config` in place, preserving its format; they validate before writing, so an invalid edit fails without touching the file. Copy a shipped example to a scratch file before editing it — the repository examples are not writable working copies:
+
+```sh
+cp examples/demo.toml hivemind.toml
+npm run dev -- --config hivemind.toml --show-config
+npm run dev -- --config hivemind.toml --add-agent "editor:worker:demo" --set-max-attempts 5
+npm run dev -- --config hivemind.toml --dry-run --remove-agent editor
+```
+
+| Flag | Effect |
+| --- | --- |
+| `--show-config` | Print the effective configuration in the target file's format and exit without running the workflow |
+| `--dry-run` | Apply the setters and print the resulting config text instead of writing the file |
+| `--set-router <rule\|model:AGENT>` | Set the router: the built-in rule router, or the model router backed by the named router agent |
+| `--set-max-attempts <n>` | Set `max_attempts` / `maxAttempts` (1–100) |
+| `--set-timeout-ms <ms>` | Set `timeout_ms` / `timeoutMs` (positive) |
+| `--set-agent-harness <agentId>=<harnessId>` | Point an agent at an existing harness registration |
+| `--set-harness-model <harnessId>=<model>` | Set a harness's `model` |
+| `--set-harness-cwd <harnessId>=<path>` | Set a harness's `cwd` working directory |
+| `--add-agent <id>:<role>:<harnessId>` | Add an agent with the given role and harness |
+| `--remove-agent <id>` | Remove an agent, unless it would leave the config without a worker |
+| `--remove-harness <id>` | Remove an unused harness registration |
+| `--migrate-config [outPath]` | Read `--config` and write the same configuration as TOML; defaults to the input path with its extension swapped to `.toml` |
+
+The format is always chosen by the `--config` file's extension, never by a flag. Setters apply in the order they are listed above, then the result is checked for runnability and saved (unless `--dry-run`).
+
+Invalid edits — duplicate agent IDs, a removed harness still referenced by an agent, a missing worker, or unknown IDs — stop with an error before anything is written. Before any save, the CLI and TUI check the config is runnable: exactly one reviewer, at least one worker, every agent's harness registered, and in-range limits.
 
 ## Interactive TUI
 
@@ -40,28 +107,68 @@ npm run tui
 npm run tui -- --config examples/opencode-pi.json
 # Prefill a task without automatically starting it:
 npm run tui -- --task "Review the project"
+# Let the agents work in another directory instead of the terminal's:
+npm run tui -- --project ~/code/site
 ```
 
 Running `npm run dev` without a task in an interactive terminal also opens the TUI. Scriptable `--task`, `--json`, and `--graph` commands retain their existing behavior. Explicit `--tui` requires an interactive stdin/stdout and cannot be combined with `--json` or `--graph`.
 
-The screen shows worker/harness selection, the configured reviewer/router, task entry, live decision/work/review stages, the three latest workflow events, and a scrollable artifact pane. Demo harnesses are visibly marked as simulated.
+### Layout
+
+The TUI works like Claude Code: the conversation is a transcript that flows into your terminal's normal scrollback, with a prompt box and a status line at the bottom.
+
+- **Transcript** — a welcome banner (working directory and config file), then each task you submit (`> task`), and for each run a one-line summary such as `● completed · 2 attempts · 1 revision` (yellow or red, with the reason, when a run is cancelled, blocked, exhausted, or fails) followed by the worker's artifact under `⎿`. Command output such as `/help` or `Working directory → ~/code/site` appears the same way. Finished entries are written once, so scroll back with your terminal as usual.
+- **Live run** — while a run is active, the decide ──▶ work ──▶ review loop diagram (with the revise back-edge, attempt pips, and the three latest workflow events) and the current stage, e.g. `◉ Working · writer via demo`, appear above the prompt.
+- **Prompt** — type a task and press Enter. The prompt stays editable during a run so you can draft the next task, but Enter only starts a new task once the current run ends. Typing `/` opens the command menu under the prompt.
+- **Status line** — the project directory, the selected `worker → harness`, the reviewer, the router (`rule` or `model:<agent>`), a yellow `demo` tag when the worker or reviewer harness is simulated, and the config file name.
+
+### Slash commands
+
+All configuration lives behind `/` commands. While the input is a bare `/word`, the menu lists matching commands: `↑`/`↓` move the highlight, `Tab` completes it, `Enter` runs it (or the exact command you typed), and `Esc` closes the menu.
+
+| Command | Action |
+| --- | --- |
+| `/help` | List commands and key bindings |
+| `/settings` (alias `/config`) | Open the settings editor: router, limits, and each agent's harness, saved to the config file |
+| `/cwd [path]` (alias `/dir`) | Change the project directory; without a path, open the directory picker |
+| `/worker [id]` | Choose the worker for the next runs; without an id, pick from a list |
+| `/harness [id]` | Choose the selected worker's harness for the next runs; without an id, pick from a list |
+| `/clear` | Clear the screen and the transcript |
+| `/exit` (alias `/quit`) | Interrupt any run and exit |
+
+An unknown command prints `Unknown command /foo — /help lists commands`.
+
+`/worker` and `/harness` apply to the following runs of this session only and are never written to the config file; choosing a worker also resets the harness to that worker's configured one. The reviewer and router stay as configured. Each submission starts a fresh graph run, and the transcript is not fed into later tasks.
+
+### Settings editor
+
+`/settings` (or `Ctrl+S` / `Ctrl+O` from the prompt) replaces the prompt with the settings editor, which edits the persistent configuration and saves it to the config file you passed, so changes survive the session. `↑`/`↓` or `Tab`/`Shift+Tab` change the field, `←`/`→` cycle the focused value, `Enter`, `s`, `Ctrl+W`, or `Ctrl+E` save, and `q`, `Esc`, `Ctrl+S`, or `Ctrl+O` close it, discarding unsaved edits. Saving is refused while a run is active, and every save is first checked for runnability. After a save, the next run uses the new setup, starting from the first worker.
+
+Every Ctrl chord has a plain-key alternative because some terminals intercept them before the app sees them — Zed's built-in terminal, for example, does not deliver `Ctrl+S` ([zed#57216](https://github.com/zed-industries/zed/issues/57216)). Typing `/settings`, then `s` to save and `q` to close, needs only ordinary keys.
+
+### Keys
 
 | Key | Action |
 | --- | --- |
-| Tab / Shift+Tab | Move between worker, harness, and task fields |
-| Left / Right | Select worker/harness, or move the task cursor |
-| Home / End | Move to the start/end of the task |
-| Backspace / Delete | Edit the task |
-| Enter in task field | Start the selected workflow |
-| Page Up / Page Down | Scroll the artifact or history pane |
-| Ctrl+Y | Toggle in-memory conversation history |
-| Ctrl+U | Clear the task field |
-| Escape while running | Cancel the current run and keep the TUI open |
-| Escape while idle / Ctrl+C | Exit the TUI |
+| Enter | Run the task, or the highlighted `/` command |
+| ↑ / ↓ · Tab | Move through the `/` menu · complete the highlighted command |
+| ← / → · Home / End | Move the prompt cursor |
+| Backspace / Delete | Edit the prompt |
+| Ctrl+U | Clear the prompt |
+| Esc | Close an open panel; otherwise interrupt the active run; otherwise clear the prompt. Esc never exits |
+| Ctrl+S / Ctrl+O | Open settings |
+| Ctrl+C | Interrupt the active run, or exit when idle |
+| Ctrl+D | Exit from an empty prompt |
 
-Worker and harness choices use your loaded config. Selecting a worker restricts that run to the selected worker; the reviewer and router stay as configured. The harness selector lists configured registrations, including their existing tool settings. Each submission starts a fresh graph run. History is for the current TUI session and is not persisted or automatically fed into later tasks.
+### Project directory
 
-The TUI shows workflow progress and completed worker artifacts, rather than streaming model tokens. Cancellation propagates to API calls and native CLI processes; custom harnesses must honor their abort signal. Already-completed filesystem changes are not undone by cancellation. Resize to at least 60 columns × 20 rows to use the interface.
+Agents work in the **project directory**, which defaults to the directory you launched Hivemind from — the same rule as Claude Code. `--project <dir>` starts in another directory (it also applies to `--task` runs), and `/cwd <path>` changes it during a session; relative paths resolve against the current project and `~` expands to your home directory. `/cwd` without a path opens a picker: `✓ Use <dir>` selects the directory being browsed, `..` and subdirectories descend (`←` also goes up), typing filters the subdirectories, a **Recent** section jumps to previously used projects, and `Esc` cancels.
+
+For every run, filesystem harnesses (`opencode`, `pi`, and `command`) run in the project directory. A harness `cwd` in the config is resolved against the project, so `"cwd": "packages/web"` follows whichever project is active, while an absolute `cwd` is kept as is. `demo` and `openai-compatible` harnesses do not use a directory. The project is never stored in the config file.
+
+Projects you start in or select are remembered, most recent first (up to 10), in `projects.json` under `$HIVEMIND_STATE_DIR`, or `$XDG_STATE_HOME/hivemind` (default `~/.local/state/hivemind`).
+
+The TUI shows workflow progress and completed worker artifacts, rather than streaming model tokens. Cancellation propagates to API calls and native CLI processes; custom harnesses must honor their abort signal. Already-completed filesystem changes are not undone by cancellation. The layout adapts to the terminal width; below 40 columns it asks you to widen the window.
 
 ## Routing and stopping
 
@@ -81,7 +188,7 @@ Model decisions are validated against these JSON shapes:
 {"action":"block","reason":"The required source file is missing"}
 ```
 
-The host rejects unknown workers and completion without approval of a nonempty artifact. Every new artifact clears prior approval and receives a fresh review. An attempt is one worker execution; router and reviewer calls have timeouts too. `maxAttempts` bounds the loop even when the router keeps requesting work.
+The host rejects unknown workers and completion without approval of a nonempty artifact. Every new artifact clears prior approval and receives a fresh review. An attempt is one worker execution; router and reviewer calls have timeouts too. `maxAttempts` bounds the loop even when the router keeps requesting work. If the latest artifact is approved at the moment the limit is reached, the run finishes as `completed` rather than `exhausted`; only an unapproved artifact at the limit stops as `exhausted`.
 
 Results contain the artifact, feedback, decision, status, attempt count, and execution events. Status is `completed`, `blocked`, or `exhausted`. A blocked run exits with its reason; it does not silently retry errors or claim success.
 
@@ -103,6 +210,8 @@ Try the command adapter and a separate demo review adapter together:
 
 ```sh
 npm run dev -- --config examples/multi-harness.json --task "Explain the workflow"
+# Same configuration in TOML:
+npm run dev -- --config examples/multi-harness.toml --task "Explain the workflow"
 ```
 
 OpenCode and Pi have dedicated native adapters; no user-written wrapper is required. OMP, Claude Code, Codex, and other harnesses can use the generic command adapter until dedicated integrations are added. The command example is a runnable protocol demonstration, not a coding agent.
@@ -234,4 +343,4 @@ node dist/src/cli.js --config examples/demo.json --task "Write an introduction"
 
 CLI exit codes: `0` completed/help/graph; `1` configuration or startup error; `2` blocked/exhausted run.
 
-This first version executes one worker at a time, uses one reviewer, and keeps state in memory for the current invocation. Restart recovery, persistent sessions, parallel workers, tool policy, and a web interface are outside this foundation. A blocked run currently requires a new invocation with the missing information supplied.
+This first version executes one worker at a time, uses one reviewer, and keeps run state in memory for the current invocation. The configuration itself is persistent — `--config` reads a JSON or TOML file and the setters and TUI write it back — but restart recovery of an in-flight run, persistent sessions, parallel workers, tool policy, and a web interface are outside this foundation. A blocked run currently requires a new invocation with the missing information supplied.
