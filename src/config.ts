@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { CommandHarness, DemoHarness, HarnessRegistry, OpenAICompatibleHarness } from './harnesses.js'
 import { OpenCodeHarness, PiHarness } from './native-harnesses.js'
-import { createHivemind } from './graph.js'
+import { createHivemind, type RunControls } from './graph.js'
 import { ModelRouter, RuleRouter } from './routers.js'
 
 const nativeFields = {
@@ -27,7 +27,7 @@ export const configSchema = z.object({
     z.object({ type: z.literal('model'), agent: z.string().min(1) }).strict(),
   ]),
 }).strict()
-export function fromConfig(input: unknown) {
+export function fromConfig(input: unknown, controls: RunControls = {}) {
   const config = configSchema.parse(input)
   const harnesses = new HarnessRegistry()
   for (const [id, settings] of Object.entries(config.harnesses)) {
@@ -39,5 +39,5 @@ export function fromConfig(input: unknown) {
   const agent = routerConfig.type === 'model' ? config.agents.find(a => a.id === routerConfig.agent) : undefined
   if (config.router.type === 'model' && agent?.role !== 'router') throw new Error('Model router must reference a router agent')
   const router = agent ? new ModelRouter(agent, harnesses) : new RuleRouter()
-  return createHivemind({ agents: config.agents, harnesses, router, maxAttempts: config.maxAttempts, timeoutMs: config.timeoutMs })
+  return createHivemind({ ...controls, agents: config.agents, harnesses, router, maxAttempts: config.maxAttempts, timeoutMs: config.timeoutMs })
 }

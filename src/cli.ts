@@ -6,13 +6,16 @@ async function main() {
   const { values } = parseArgs({ options: {
     config: { type: 'string', default: 'examples/demo.json' }, task: { type: 'string' },
     graph: { type: 'boolean', default: false }, json: { type: 'boolean', default: false },
+    tui: { type: 'boolean', default: false },
     help: { type: 'boolean', short: 'h', default: false },
   } })
   if (values.help) {
     console.log(`Hivemind — TypeScript LangGraph CLI
 Usage: npm run dev -- --config <file> --task <request> [--json]
        npm run dev -- --config <file> --graph
+       npm run tui -- --config <file>
 
+--tui    Open the interactive terminal UI (also the default in a terminal without --task)
 --graph  Print the workflow as Mermaid without invoking any models
 --json   Print the complete result and execution events as JSON
 
@@ -21,7 +24,14 @@ Config paths and command harness working directories are relative to your curren
 API keys are read from environment variables; optionally use Node's --env-file=.env.`)
     return
   }
-  const runtime = fromConfig(JSON.parse(await readFile(values.config, 'utf8')))
+  const input: unknown = JSON.parse(await readFile(values.config, 'utf8'))
+  if (values.tui && (values.graph || values.json)) throw new Error('--tui cannot be combined with --graph or --json')
+  if (values.tui || (!values.task && !values.graph && !values.json && process.stdin.isTTY && process.stdout.isTTY)) {
+    const { launchTui } = await import('./tui.js')
+    await launchTui(input, values.config, values.task)
+    return
+  }
+  const runtime = fromConfig(input)
   if (values.graph) {
     console.log((await runtime.graph.getGraphAsync()).drawMermaid())
     return

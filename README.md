@@ -1,6 +1,6 @@
 # Hivemind
 
-A fresh **TypeScript CLI** built on LangGraph. A router chooses a worker, the worker runs through its configured harness, and a reviewer checks the resulting artifact. Review feedback can send the task through another iteration.
+A fresh **TypeScript terminal app** built on LangGraph, with a basic interactive TUI and scriptable CLI. A router chooses a worker, the worker runs through its configured harness, and a reviewer checks the resulting artifact. Review feedback can send the task through another iteration.
 
 This is the new workflow foundation. It does not restore the previous Hivemind application.
 
@@ -31,6 +31,37 @@ flowchart TD
 ```
 
 Use `--graph` to print Mermaid generated from the actual LangGraph workflow.
+
+## Interactive TUI
+
+```sh
+npm run tui
+# Native OpenCode worker + Pi reviewer, after authenticating both CLIs:
+npm run tui -- --config examples/opencode-pi.json
+# Prefill a task without automatically starting it:
+npm run tui -- --task "Review the project"
+```
+
+Running `npm run dev` without a task in an interactive terminal also opens the TUI. Scriptable `--task`, `--json`, and `--graph` commands retain their existing behavior. Explicit `--tui` requires an interactive stdin/stdout and cannot be combined with `--json` or `--graph`.
+
+The screen shows worker/harness selection, the configured reviewer/router, task entry, live decision/work/review stages, the three latest workflow events, and a scrollable artifact pane. Demo harnesses are visibly marked as simulated.
+
+| Key | Action |
+| --- | --- |
+| Tab / Shift+Tab | Move between worker, harness, and task fields |
+| Left / Right | Select worker/harness, or move the task cursor |
+| Home / End | Move to the start/end of the task |
+| Backspace / Delete | Edit the task |
+| Enter in task field | Start the selected workflow |
+| Page Up / Page Down | Scroll the artifact or history pane |
+| Ctrl+Y | Toggle in-memory conversation history |
+| Ctrl+U | Clear the task field |
+| Escape while running | Cancel the current run and keep the TUI open |
+| Escape while idle / Ctrl+C | Exit the TUI |
+
+Worker and harness choices use your loaded config. Selecting a worker restricts that run to the selected worker; the reviewer and router stay as configured. The harness selector lists configured registrations, including their existing tool settings. Each submission starts a fresh graph run. History is for the current TUI session and is not persisted or automatically fed into later tasks.
+
+The TUI shows workflow progress and completed worker artifacts, rather than streaming model tokens. Cancellation propagates to API calls and native CLI processes; custom harnesses must honor their abort signal. Already-completed filesystem changes are not undone by cancellation. Resize to at least 60 columns × 20 rows to use the interface.
 
 ## Routing and stopping
 
