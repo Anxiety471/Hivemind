@@ -62,6 +62,8 @@ Each agent has a `harness` reference. Workers, reviewer, and router can use diff
 
 | Adapter type | Behavior |
 | --- | --- |
+| `opencode` | Native `opencode run --format json`, with final assistant text extraction |
+| `pi` | Native `pi --print --mode json --no-session`, with final assistant text extraction |
 | `openai-compatible` | Calls a configured `/chat/completions` endpoint and model |
 | `command` | Runs a local executable with a JSON request on stdin and artifact text on stdout |
 | `demo` | Offline workflow demonstration |
@@ -72,7 +74,53 @@ Try the command adapter and a separate demo review adapter together:
 npm run dev -- --config examples/multi-harness.json --task "Explain the workflow"
 ```
 
-The command adapter is the extension point for Pi, OMP, Claude Code, Codex, or another harness. This restart does **not** ship native integrations for those CLIs. A wrapper must translate Hivemind's request into the selected harness's actual SDK/CLI protocol and normalize its output. The command example is a runnable protocol demonstration, not a coding agent.
+OpenCode and Pi have dedicated native adapters; no user-written wrapper is required. OMP, Claude Code, Codex, and other harnesses can use the generic command adapter until dedicated integrations are added. The command example is a runnable protocol demonstration, not a coding agent.
+
+### Native OpenCode and Pi
+
+Install the CLIs separately and authenticate/select a model in each CLI before running Hivemind. The adapters inherit their existing provider configuration and authentication; Hivemind does not copy credentials or pass API keys in command arguments.
+
+```sh
+# OpenCode npm distribution
+npm install -g opencode-ai
+# Current Pi npm distribution (the legacy @mariozechner package also provides pi)
+npm install -g @earendil-works/pi-coding-agent
+
+opencode auth login
+pi
+# In Pi: /login if needed, then /model. Exit when configured.
+
+npm run dev -- --config examples/opencode-pi.json --task "Implement the requested change and report checks run"
+# Reverse the harness roles:
+npm run dev -- --config examples/pi-opencode.json --task "Implement the requested change and report checks run"
+```
+
+These examples use each CLI's configured default model. Set `model` explicitly when you need a particular model. OpenCode accepts `provider/model`; Pi accepts `provider` together with `model`, or a provider-qualified model ID.
+
+| Setting | OpenCode | Pi |
+| --- | --- | --- |
+| `executable` | Default `opencode` | Default `pi` |
+| `executableArgs` | Optional runtime prefix arguments | Optional runtime prefix arguments |
+| `cwd` | Local project directory | Local project directory |
+| `model` | Provider/model ID | Model ID or pattern |
+| `agent` | OpenCode primary agent, such as `build` or `plan` | — |
+| `variant` | Provider-specific reasoning variant | — |
+| `provider` | — | Pi provider name |
+| `thinking` | — | `off`, `minimal`, `low`, `medium`, `high`, `xhigh` |
+| `tools` | Configured through OpenCode | Tool allowlist; `[]` disables tools |
+| `maxOutputBytes` | Combined stdout/stderr cap; default 8 MiB | Combined stdout/stderr cap; default 8 MiB |
+
+The prompt and previous artifact/feedback go through stdin, avoiding command-line prompt size limits and shell interpolation. The adapters consume native JSONL streams, exclude tool output and intermediate reasoning, and return final assistant text. Reviewer/router JSON stays intact for the graph's schema validation.
+
+OpenCode gets a new session per call; Pi uses `--no-session`. Neither adapter resumes a global last session, so shared graph state supplies continuity. OpenCode may still save its fresh sessions through its own configuration. Nonzero exits, malformed/incomplete event streams, native session errors, and truncated/aborted final responses stop the run. No automatic fallback to raw protocol output is used.
+
+The adapters preserve the harnesses' configured permissions and extensions; Hivemind does not add OpenCode's auto-approval flag. The Pi reviewer example selects read tools, but this is an allowlist configuration, not a filesystem sandbox. Configure each harness's permissions for your project.
+
+On Windows, use a directly executable binary or `executable: "node"` with `executableArgs: ["path/to/the/CLI/entry.js"]` for npm JavaScript entry points. The adapters do not invoke `.cmd` launchers through a shell.
+
+Protocols were checked against installed OpenCode 1.18.35, legacy Pi 0.73.1, current Pi 1.1.0, and the upstream CLI/event documentation. Tests use subprocess protocol fixtures, including a full OpenCode-worker/Pi-reviewer revision loop. Both installed Pi versions also completed native-adapter smoke runs with an offline test provider. Current Pi completion waits for `agent_settled`; legacy Pi uses `agent_end`. Paid/live model execution depends on your configured providers.
+
+References: [OpenCode CLI](https://opencode.ai/docs/cli/), [OpenCode run implementation](https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/cli/cmd/run.ts), [Pi CLI](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/README.md), [Pi JSON events](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/json.md).
 
 ### Command protocol
 
@@ -125,10 +173,10 @@ const registry = new HarnessRegistry().register('my-harness', harness)
 
 ## Configure Jev later
 
-`examples/model-router.json` demonstrates a model router, model-backed worker/reviewer, and command-backed worker. The endpoint and model IDs are deliberate placeholders because Jev's provider details have not been configured.
+`examples/model-router.json` demonstrates a model router, a model-backed worker, native OpenCode worker, and native Pi reviewer. The endpoint and model IDs are deliberate placeholders because Jev's provider details have not been configured.
 
 1. Replace `decision-model.baseUrl` and `decision-model.model` with the real provider endpoint and Jev model ID.
-2. Configure worker endpoints/models and replace the example command worker with a real harness wrapper.
+2. Configure the model-backed worker endpoint/model and authenticate the native OpenCode/Pi CLIs.
 3. Set `JEV_API_KEY` and `WORKER_API_KEY` in your environment.
 4. Run:
 

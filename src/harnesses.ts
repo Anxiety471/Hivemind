@@ -15,36 +15,45 @@ export class HarnessRegistry {
   }
 }
 
-// The wrapper owns each CLI's flags/session protocol. No shell interpolation.
-export class CommandHarness implements Harness {
-  constructor(private options: { command: string; args?: string[]; cwd?: string; maxOutputBytes?: number }) {}
-  run(request: HarnessRequest, signal: AbortSignal): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const child = spawn(this.options.command, this.options.args ?? [], {
-        cwd: this.options.cwd, shell: false, signal, killSignal: 'SIGKILL', stdio: ['pipe', 'pipe', 'pipe'],
-      })
-      const chunks: Buffer[] = []
-      let bytes = 0
-      let failure: Error | undefined
-      const limit = this.options.maxOutputBytes ?? 1_048_576
-      const collect = (chunk: Buffer, stdout: boolean) => {
-        bytes += chunk.length
-        if (bytes > limit) {
-          failure = new Error('Harness output exceeded limit')
-          child.kill('SIGKILL')
-        } else if (stdout) chunks.push(chunk)
-      }
-      child.stdout.on('data', (chunk: Buffer) => collect(chunk, true))
-      child.stderr.on('data', (chunk: Buffer) => collect(chunk, false))
-      child.on('error', reject)
-      child.stdin.on('error', () => { /* close/error events report process failure */ })
-      child.on('close', code => {
-        if (failure) reject(failure)
-        else if (code !== 0) reject(new Error(`Harness process exited with code ${code}`))
-        else resolve(Buffer.concat(chunks).toString('utf8').trim())
-      })
-      child.stdin.end(JSON.stringify(request) + '\n')
+export interface ProcessOptions {
+  command: string; args?: string[]; cwd?: string; maxOutputBytes?: number
+}
+export function runProcess(options: ProcessOptions, stdin: string, signal: AbortSignal): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(options.command, options.args ?? [], {
+      cwd: options.cwd, shell: false, signal, killSignal: 'SIGKILL', stdio: ['pipe', 'pipe', 'pipe'],
     })
+    const chunks: Buffer[] = []
+    let bytes = 0
+    let failure: Error | undefined
+    const limit = options.maxOutputBytes ?? 1_048_576
+    const collect = (chunk: Buffer, stdout: boolean) => {
+      bytes += chunk.length
+      if (bytes > limit) {
+        failure = new Error('Harness output exceeded limit')
+        child.kill('SIGKILL')
+      } else if (stdout) chunks.push(chunk)
+    }
+    child.stdout.on('data', (chunk: Buffer) => collect(chunk, true))
+    child.stderr.on('data', (chunk: Buffer) => collect(chunk, false))
+    child.on('error', error => {
+      reject(new Error(`Cannot run ${options.command}: ${error.message}`))
+    })
+    child.stdin.on('error', () => { /* close/error events report process failure */ })
+    child.on('close', code => {
+      if (failure) reject(failure)
+      else if (code !== 0) reject(new Error(`Harness process exited with code ${code}`))
+      else resolve(Buffer.concat(chunks).toString('utf8').trim())
+    })
+    child.stdin.end(stdin)
+  })
+}
+
+// Generic protocol for user-written wrappers. Native adapters have their own protocols.
+export class CommandHarness implements Harness {
+  constructor(private options: ProcessOptions) {}
+  run(request: HarnessRequest, signal: AbortSignal): Promise<string> {
+    return runProcess(this.options, JSON.stringify(request) + '\n', signal)
   }
 }
 

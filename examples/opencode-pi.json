@@ -1,0 +1,13 @@
+{
+  "maxAttempts": 3,
+  "timeoutMs": 180000,
+  "harnesses": {
+    "opencode-worker": { "type": "opencode", "agent": "build", "cwd": "." },
+    "pi-reviewer": { "type": "pi", "cwd": ".", "tools": ["read", "grep", "find", "ls"] }
+  },
+  "agents": [
+    { "id": "developer", "role": "worker", "harness": "opencode-worker", "description": "Implements and revises the task using OpenCode" },
+    { "id": "reviewer", "role": "reviewer", "harness": "pi-reviewer", "description": "Reviews the artifact and project files using Pi" }
+  ],
+  "router": { "type": "rule" }
+}
