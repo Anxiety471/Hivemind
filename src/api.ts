@@ -5,7 +5,7 @@ import { ZodError } from 'zod'
 import { configSchema, fromConfig } from './config.js'
 import { defaultHarnessModelLister, MODEL_CACHE_MS, type HarnessModelLister, type ModelListing } from './harness-models.js'
 import { assertRunnable, loadConfig, saveConfig } from './config-file.js'
-import { defaultHarnessTools, HarnessInstallError, isHarnessType, tail, type HarnessTools } from './harness-catalog.js'
+import { defaultHarnessTools, HarnessInstallError, isHarnessType, tail, type HarnessCatalogResponse, type HarnessTools } from './harness-catalog.js'
 import type { Progress } from './graph.js'
 import { applyProject, listDirectories, loadRecentProjects, rememberProject, resolveProject } from './projects.js'
 import type { RunState } from './types.js'
@@ -172,6 +172,29 @@ export function createApiApp(options: ApiOptions) {
   const installing = new Set<string>()
   const modelLister = options.harnessModels ?? defaultHarnessModelLister
   const modelCache = new Map<string, { at: number; value: ModelListing }>()
+  // Only disk read/modify/write transactions are sequenced; CLI detection/install stays concurrent.
+  let configWrites: Promise<unknown> = Promise.resolve()
+  function writeConfig<T>(transaction: () => Promise<T>): Promise<T> {
+    const result = configWrites.then(transaction)
+    configWrites = result.catch(() => {})
+    return result
+  }
+
+  function registerHarnesses(catalog: HarnessCatalogResponse) {
+    return writeConfig(async () => {
+      const config = await loadConfig(configPath)
+      let changed = false
+      for (const entry of catalog.harnesses) {
+        if (!entry.installed || Object.values(config.harnesses).some(settings => settings.type === entry.type)) continue
+        let id: string = entry.type
+        for (let suffix = 2; Object.hasOwn(config.harnesses, id); suffix++) id = `${entry.type}-${suffix}`
+        config.harnesses[id] = { type: entry.type, executableArgs: [], maxOutputBytes: 8_388_608 }
+        changed = true
+      }
+      if (changed) await saveConfig(configPath, config)
+      return { path: configPath, project: current, config }
+    })
+  }
 
   async function harnessModels(id: string): Promise<ModelListing> {
     const config = applyProject(await loadConfig(configPath).catch(error => { throw new HttpError(500, describeError(error)) }), current)
@@ -219,8 +242,10 @@ export function createApiApp(options: ApiOptions) {
         const detail = error instanceof HarnessInstallError ? error.output : ''
         throw new HttpError(500, detail ? `${describeError(error)}\n${tail(detail)}` : describeError(error))
       }))
-      const entry = (await harnessTools.detect()).harnesses.find(item => item.type === type)!
+      const catalog = await harnessTools.detect()
+      const entry = catalog.harnesses.find(item => item.type === type)!
       if (!entry.installed) throw new HttpError(500, `${entry.name} was installed but "${entry.executable}" is not on PATH yet; add the global bin directory to PATH.\n${output}`)
+      await registerHarnesses(catalog)
       return { entry, output }
     } finally { installing.delete(type) }
   }
@@ -243,7 +268,10 @@ export function createApiApp(options: ApiOptions) {
     })
     .get('/api/health', () => ({ ok: true }))
     .get('/api/config', () => configPayload())
-    .get('/api/harness-catalog', () => harnessTools.detect())
+    .get('/api/harness-catalog', async () => {
+      const catalog = await harnessTools.detect()
+      return { ...catalog, config: await registerHarnesses(catalog) }
+    })
     .get('/api/harness-models', ({ query }) => {
       if (!query.harness) throw new HttpError(400, '"harness" query parameter is required')
       return harnessModels(query.harness)
@@ -252,8 +280,10 @@ export function createApiApp(options: ApiOptions) {
     .put('/api/config', async ({ body }) => {
       let config
       try { config = configSchema.parse(body.config); assertRunnable(config) } catch (error) { throw new HttpError(400, describeError(error)) }
-      await saveConfig(configPath, config)
-      return configPayload()
+      return writeConfig(async () => {
+        await saveConfig(configPath, config)
+        return configPayload()
+      })
     }, { ...jsonBody, body: t.Object({ config: t.Unknown() }, { error: '"config" is required' }) })
     .get('/api/projects', () => projectsPayload())
     .put('/api/project', async ({ body }) => {

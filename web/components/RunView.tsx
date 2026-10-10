@@ -159,6 +159,7 @@ export default function RunView({ runId, onChange, onSelect }: { runId: string; 
                 const state = nodeState(items, node, attempt === maxAttempt ? run.status : 'completed')
                 return state === 'idle' ? null : <span key={node} className={`chip ${state}`}>{node}</span>
               })}
+              {run.status === 'completed' && attempt === maxAttempt && <span className="chip done">Done</span>}
             </div>
           ))}
         </div>

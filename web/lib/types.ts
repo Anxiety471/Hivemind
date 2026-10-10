@@ -103,6 +103,6 @@ export interface HarnessCatalogEntry {
   installable: boolean
   installCommand: string
 }
-export interface HarnessCatalogResponse { harnesses: HarnessCatalogEntry[]; installer: 'bun' | 'npm' | null }
+export interface HarnessCatalogResponse { harnesses: HarnessCatalogEntry[]; installer: 'bun' | 'npm' | null; config: ConfigResponse }
 export interface HarnessInstallResponse { entry: HarnessCatalogEntry; output: string }
 export interface HarnessModelsResponse { models: string[]; error?: string }

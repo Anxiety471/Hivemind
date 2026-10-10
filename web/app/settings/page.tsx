@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import AgentsTable from '@/components/AgentsTable'
 import HarnessCard from '@/components/HarnessCard'
 import HarnessCatalog from '@/components/HarnessCatalog'
@@ -15,11 +15,35 @@ function nextName(prefix: string, taken: string[]): string {
   return `${prefix}-${index}`
 }
 
+type EditorState = { loaded: ConfigResponse; draft: Config; raw: string; rawBaseline: Config }
+
+function editorFor(response: ConfigResponse): EditorState {
+  return { loaded: response, draft: response.config, raw: JSON.stringify(response.config, null, 2), rawBaseline: response.config }
+}
+
+/** Carry only newly persisted harnesses into an edited config, leaving deliberate edits intact. */
+function mergeDetected(config: Config, baseline: Config, persisted: Config): Config {
+  const additions = Object.entries(persisted.harnesses).filter(([id]) => !(id in baseline.harnesses))
+  if (!additions.length) return config
+  const harnesses = { ...config.harnesses }
+  let changed = false
+  for (const [id, settings] of additions) {
+    if (Object.values(harnesses).some(existing => existing.type === settings.type)) continue
+    let key = id
+    let suffix = 2
+    while (key in harnesses) key = `${id}-${suffix++}`
+    harnesses[key] = settings
+    changed = true
+  }
+  return changed ? { ...config, harnesses } : config
+}
+
 export default function SettingsPage() {
-  const [loaded, setLoaded] = useState<ConfigResponse | null>(null)
-  const [draft, setDraft] = useState<Config | null>(null)
+  const [editor, setEditor] = useState<EditorState | null>(null)
+  const loaded = editor?.loaded ?? null
+  const draft = editor?.draft ?? null
+  const raw = editor?.raw ?? ''
   const [mode, setMode] = useState<'form' | 'raw'>('form')
-  const [raw, setRaw] = useState('')
   const [loadError, setLoadError] = useState('')
   const [saveError, setSaveError] = useState('')
   const [saving, setSaving] = useState(false)
@@ -27,34 +51,61 @@ export default function SettingsPage() {
   const [catalog, setCatalog] = useState<HarnessCatalogResponse | null>(null)
   const [catalogLoading, setCatalogLoading] = useState(false)
   const [catalogError, setCatalogError] = useState('')
-
-  const load = useCallback(async () => {
-    try {
-      const response = await api.getConfig()
-      setLoaded(response)
-      setDraft(response.config)
-      setRaw(JSON.stringify(response.config, null, 2))
-      setLoadError('')
-    } catch (caught) {
-      setLoadError(errorMessage(caught))
-    }
-  }, [])
-
-  useEffect(() => { void load() }, [load])
+  const catalogRequest = useRef(0)
 
   const loadCatalog = useCallback(async () => {
     setCatalogLoading(true)
+    const request = ++catalogRequest.current
     try {
-      setCatalog(await api.getHarnessCatalog())
+      const response = await api.getHarnessCatalog()
+      if (request !== catalogRequest.current) return
+      setCatalog(response)
+      setEditor(current => {
+        if (!current) return editorFor(response.config)
+        const draftClean = JSON.stringify(current.draft) === JSON.stringify(current.loaded.config)
+        const rawClean = current.raw === JSON.stringify(current.rawBaseline, null, 2)
+        if (draftClean && rawClean) return editorFor(response.config)
+        let raw = current.raw
+        let rawBaseline = current.rawBaseline
+        try {
+          const parsed = JSON.parse(raw) as Config
+          const merged = mergeDetected(parsed, rawBaseline, response.config.config)
+          if (merged !== parsed) raw = JSON.stringify(merged, null, 2)
+          rawBaseline = response.config.config
+        } catch {
+          // Keep incomplete JSON untouched; merge deferred additions when it can be parsed.
+        }
+        return {
+          ...current,
+          loaded: response.config,
+          draft: mergeDetected(current.draft, current.loaded.config, response.config.config),
+          raw: rawClean ? JSON.stringify(response.config.config, null, 2) : raw,
+          rawBaseline: rawClean ? response.config.config : rawBaseline,
+        }
+      })
+      setLoadError('')
       setCatalogError('')
     } catch (caught) {
+      if (request !== catalogRequest.current) return
+      setLoadError(errorMessage(caught))
       setCatalogError(errorMessage(caught))
     } finally {
-      setCatalogLoading(false)
+      if (request === catalogRequest.current) setCatalogLoading(false)
     }
   }, [])
 
   useEffect(() => { void loadCatalog() }, [loadCatalog])
+
+  async function installHarness(type: HarnessCatalogEntry['type']) {
+    setCatalogLoading(true)
+    try {
+      const result = await api.installHarness(type)
+      await loadCatalog()
+      return result
+    } finally {
+      setCatalogLoading(false)
+    }
+  }
 
   const dirty = useMemo(() => {
     if (!loaded || !draft) return false
@@ -62,7 +113,7 @@ export default function SettingsPage() {
   }, [loaded, draft, mode, raw])
 
   function update(patch: Partial<Config>) {
-    setDraft(current => (current ? { ...current, ...patch } : current))
+    setEditor(current => current ? { ...current, draft: { ...current.draft, ...patch } } : current)
     setSavedAt(null)
   }
 
@@ -72,12 +123,13 @@ export default function SettingsPage() {
   }
 
   function switchMode(next: 'form' | 'raw') {
-    if (next === mode || !draft) return
+    if (next === mode || !editor) return
     if (next === 'raw') {
-      setRaw(JSON.stringify(draft, null, 2))
+      setEditor({ ...editor, raw: JSON.stringify(editor.draft, null, 2), rawBaseline: editor.loaded.config })
     } else {
       try {
-        setDraft(JSON.parse(raw) as Config)
+        const parsed = JSON.parse(raw) as Config
+        setEditor({ ...editor, draft: mergeDetected(parsed, editor.rawBaseline, editor.loaded.config) })
       } catch (caught) {
         setSaveError(`Invalid JSON: ${errorMessage(caught)}`)
         return
@@ -88,10 +140,12 @@ export default function SettingsPage() {
   }
 
   async function save() {
-    if (!draft) return
+    if (!editor || catalogLoading) return
     let config: Config
     try {
-      config = mode === 'raw' ? (JSON.parse(raw) as Config) : draft
+      config = mode === 'raw'
+        ? mergeDetected(JSON.parse(raw) as Config, editor.rawBaseline, editor.loaded.config)
+        : editor.draft
     } catch (caught) {
       setSaveError(`Invalid JSON: ${errorMessage(caught)}`)
       return
@@ -100,9 +154,7 @@ export default function SettingsPage() {
     setSaveError('')
     try {
       const response = await api.saveConfig(config)
-      setLoaded(response)
-      setDraft(response.config)
-      setRaw(JSON.stringify(response.config, null, 2))
+      setEditor(editorFor(response))
       setSavedAt(Date.now())
     } catch (caught) {
       setSaveError(errorMessage(caught))
@@ -113,18 +165,13 @@ export default function SettingsPage() {
 
   if (!draft || !loaded) {
     return loadError
-      ? <div className="card"><p className="field-error" role="alert">{loadError}</p><button type="button" onClick={() => void load()}>Retry</button></div>
+      ? <div className="card"><p className="field-error" role="alert">{loadError}</p><button type="button" onClick={() => void loadCatalog()}>Retry</button></div>
       : <p className="muted">Loading configuration…</p>
   }
 
   const harnessIds = Object.keys(draft.harnesses)
   const configured: Record<string, string[]> = {}
   for (const id of harnessIds) (configured[draft.harnesses[id]?.type ?? ''] ??= []).push(id)
-
-  const addDetected = (type: HarnessCatalogEntry['type']) => {
-    const id = harnessIds.includes(type) ? nextName(type, harnessIds) : type
-    update({ harnesses: { ...draft.harnesses, [id]: { type, executableArgs: [], maxOutputBytes: 8388608 } } })
-  }
 
   const routerAgents = draft.agents.filter(agent => agent.role === 'router')
   const routerAgent = draft.router.type === 'model' ? draft.router.agent : undefined
@@ -145,7 +192,7 @@ export default function SettingsPage() {
       {mode === 'raw' ? (
         <section className="card stack">
           <p className="muted small-text">The whole config as JSON — use this for harness types the form cannot edit.</p>
-          <textarea className="mono raw" rows={28} value={raw} spellCheck={false} aria-label="Raw config JSON" onChange={event => { setRaw(event.target.value); setSavedAt(null) }} />
+          <textarea className="mono raw" rows={28} value={raw} spellCheck={false} aria-label="Raw config JSON" onChange={event => { const value = event.target.value; setEditor(current => current ? { ...current, raw: value } : current); setSavedAt(null) }} />
         </section>
       ) : (
         <>
@@ -204,12 +251,11 @@ export default function SettingsPage() {
             </div>
             <HarnessCatalog
               catalog={catalog}
-              loading={catalogLoading}
+              loading={catalogLoading || saving}
               error={catalogError}
               configured={configured}
               onRefresh={() => void loadCatalog()}
-              onInstalled={entry => setCatalog(current => current && { ...current, harnesses: current.harnesses.map(existing => existing.type === entry.type ? entry : existing) })}
-              onAdd={addDetected}
+              onInstall={installHarness}
             />
             <h3 className="section-label">Configured harnesses</h3>
             {harnessIds.length === 0 && <p className="muted">No harnesses configured.</p>}
@@ -239,8 +285,8 @@ export default function SettingsPage() {
           {!saveError && savedAt && !dirty && <p className="ok" role="status">Saved.</p>}
           {!saveError && dirty && <p className="muted">Unsaved changes.</p>}
         </div>
-        <button type="button" className="ghost" disabled={!dirty || saving} onClick={() => { setDraft(loaded.config); setRaw(JSON.stringify(loaded.config, null, 2)); setSaveError(''); setSavedAt(null) }}>Discard</button>
-        <button type="button" disabled={!dirty || saving} onClick={() => void save()}>{saving ? 'Saving…' : 'Save'}</button>
+        <button type="button" className="ghost" disabled={!dirty || saving || catalogLoading} onClick={() => { setEditor(editorFor(loaded)); setSaveError(''); setSavedAt(null) }}>Discard</button>
+        <button type="button" disabled={!dirty || saving || catalogLoading} onClick={() => void save()}>{saving ? 'Saving…' : 'Save'}</button>
       </div>
     </div>
   )

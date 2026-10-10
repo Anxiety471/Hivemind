@@ -35,7 +35,7 @@ flowchart TD
 
 Use `--graph` to print Mermaid generated from the actual LangGraph workflow.
 
-The web run visualization shows **Router → selected agents → Reviewer**, with a separate card for each dispatched task/agent. Only selected research, planning, design, or work stages appear, in execution order; same-stage agents fan out and rejoin before the next stage or Reviewer. A worker-only decision is a three-card graph. The Reviewer retains its revise connection to Router, and a Router evaluating the next decision shows no stale agents from the previous attempt. Agent cards share their stage's progress and retry status because the API does not emit individual-agent telemetry; the run's final status is shown outside the graph rather than as another node.
+The web run visualization shows **Router → selected agents → Reviewer**, with a separate card for each dispatched task/agent. Only selected research, planning, design, or work stages appear, in execution order; same-stage agents fan out and rejoin before the next stage or Reviewer. A worker-only decision is a three-card graph. The Reviewer retains its revise connection to Router, and a Router evaluating the next decision shows no stale agents from the previous attempt. Agent cards share their stage's progress and retry status because the API does not emit individual-agent telemetry; the run's final status is shown outside the graph rather than as another node. A completed run's final attempt row ends with a **Done** chip. Earlier revised attempts and running, failed, blocked, exhausted, or cancelled runs never show that success indicator.
 
 ## Configuration files
 
@@ -115,7 +115,9 @@ bun run api -- --port 4100      # API only (Elysia, runs on Bun)
 
 API progress events carry an `at` ISO timestamp assigned once when the server receives them. Run detail/list responses, live SSE, and SSE history replay retain that same timestamp, so an active graph stage's elapsed time survives browser refreshes and reconnects. Harness retries remain part of the same stage timer; older progress without a valid timestamp shows “running” instead of an estimated counter. Run history remains in memory and is lost when the API restarts.
 
-`GET /api/harness-catalog` detects the native harness CLIs (`opencode`, `pi`) with a fresh PATH scan (no shell) and returns `{ harnesses: [{ type, name, description, executable, installed, path?, version?, installable, installCommand }], installer: 'bun' | 'npm' | null }`; `version` is the first line of `<exe> --version` (5 s timeout). `POST /api/harness-catalog/:type/install` globally installs a missing harness with bun (preferred) or npm (`opencode-ai`, `@earendil-works/pi-coding-agent`) and returns `{ entry, output }` with the last 8 KB of installer output. It answers 404 for an unknown type, 409 while that type is already installing, and 500 `{ error }` (including the output tail) on failure, timeout (5 minutes), or when the installed binary is not on PATH.
+`GET /api/harness-catalog` detects the native harness CLIs (`opencode`, `pi`) with a fresh PATH scan (no shell), automatically persists installed types missing from the active config, and returns `{ harnesses: [{ type, name, description, executable, installed, path?, version?, installable, installCommand }], installer: 'bun' | 'npm' | null, config: { path, project, config } }`; the nested config response reflects the saved configuration. `version` is the first line of `<exe> --version` (5 s timeout). Existing harness registrations and custom settings are preserved: a type registered under any id is not added again; a new registration uses its type as the id, or the first available `<type>-2`, `<type>-3`, etc. if that id is occupied. Automatic registration does not change agents or the router and does not save the active project directory as a harness `cwd`. Settings refreshes the persisted harness list after detection, without a separate **Add to config** action.
+
+`POST /api/harness-catalog/:type/install` globally installs a missing harness with bun (preferred) or npm (`opencode-ai`, `@earendil-works/pi-coding-agent`), registers detected installed harnesses in the active config before reporting success, and returns `{ entry, output }` with the last 8 KB of installer output. The web app then refreshes the catalog and persisted config. It answers 404 for an unknown type, 409 while that type is already installing, and 500 `{ error }` on failure, including installation failure (with the output tail), timeout (5 minutes), an installed binary not on PATH, or a config persistence error.
 
 `GET /api/harness-models?harness=<harness id>` lists selectable models for an `opencode` (`opencode models`) or `pi` (`pi --list-models`) harness from the config, as `provider/model` strings: `{ models: string[], error?: string }`. Other harness types return `{ models: [] }`, an unknown id is 404, and a failing CLI yields `{ models: [], error }` with status 200 (15 s timeout; successful lists are cached for 60 s per harness).
 
@@ -234,6 +236,8 @@ Results contain the artifact, feedback, decision, status, attempt count, and exe
 
 Each retry is reported as a progress event (`node` of the failing step, `phase: 'start'`, the current `attempt`, `retry: <n>` and a message such as `Retry 1/2 after: Harness operation timed out`) and is appended to the result's execution `events`. After the last retry fails the run is `blocked` with the final error, suffixed with `(after N retries)`. The programmatic `createHivemind` option `retryDelayMs?: (retry: number) => number` overrides the backoff, e.g. for tests.
 
+Non-zero harness exits include up to 4096 characters of stderr (retaining its tail), or the last stdout JSON error event when stderr is empty. If no terminal error event exists, a failed native tool event is preferred over the remaining stdout, so a cancelled websearch is not hidden by later artifact text. Native OpenCode/Pi session errors also retain their error payload. These diagnostics appear in retry events and final blocked feedback; a non-zero exit remains a failure even if the process emitted artifact text.
+
 Review approval is a model judgment about the returned artifact. It is not proof that code was tested or that a task's external effects occurred. A future tool-backed validation step can enforce those requirements.
 
 ## Multiple harnesses
@@ -242,7 +246,7 @@ Each agent has a `harness` reference. Workers, reviewer, and router can use diff
 
 | Adapter type | Behavior |
 | --- | --- |
-| `opencode` | Native `opencode run --format json`, with final assistant text extraction |
+| `opencode` | Native `opencode run --standalone --format json`, with final assistant text extraction |
 | `pi` | Native `pi --print --mode json --no-session`, with final assistant text extraction |
 | `openai-compatible` | Calls a configured `/chat/completions` endpoint and model |
 | `command` | Runs a local executable with a JSON request on stdin and artifact text on stdout |
@@ -297,6 +301,10 @@ An agent may set its own optional `model` (`agents[].model`, same format as the 
 The prompt and previous artifact/feedback go through stdin, avoiding command-line prompt size limits and shell interpolation. The adapters consume native JSONL streams, exclude tool output and intermediate reasoning, and return final assistant text. Reviewer/router JSON stays intact for the graph's schema validation.
 
 OpenCode gets a new session per call; Pi uses `--no-session`. Neither adapter resumes a global last session, so shared graph state supplies continuity. OpenCode may still save its fresh sessions through its own configuration. Nonzero exits, malformed/incomplete event streams, native session errors, and truncated/aborted final responses stop the run. No automatic fallback to raw protocol output is used.
+
+OpenCode requires the private-server CLI options and `api ... config.get` available in OpenCode 2.0.22. Before each call, Hivemind asks `opencode api --standalone config.get` for the project's ordered configuration sources (a separate, bounded 30-second initialization). OpenCode itself discovers files, parses JSONC, expands configuration variables, and normalizes settings. An explicit `websearch: false` or provider from any source is left alone, including inherited `OPENCODE_CONFIG` and `OPENCODE_CONFIG_CONTENT`. When no source declares `websearch`, Hivemind supplies `{ "websearch": { "provider": "random" } }` through the run child's `OPENCODE_CONFIG_CONTENT`, retaining the inherited inline source's other effective, normalized settings. This selects a provider unattended instead of triggering the `websearch.provider` form that a noninteractive CLI cancels. An inherited inline document rejected by OpenCode causes a visible failure rather than being silently replaced.
+
+Both initialization and the actual run use `--standalone`: a previously running managed server may retain an older environment and ignore child configuration. Private servers avoid that stale-config boundary without restarting or reconfiguring the user's managed service. Hivemind does not alter global/project configuration files or the parent environment. OpenCode may still persist sessions and other normal runtime state. Configuration can change between initialization and execution; the selected child default applies to that call. The extra initialization costs one CLI/private-server startup per call. Pi's invocation is unchanged.
 
 The adapters preserve the harnesses' configured permissions and extensions; Hivemind does not add OpenCode's auto-approval flag. The Pi reviewer example selects read tools, but this is an allowlist configuration, not a filesystem sandbox. Configure each harness's permissions for your project.
 

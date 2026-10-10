@@ -17,15 +17,17 @@ export class HarnessRegistry {
 
 export interface ProcessOptions {
   command: string; args?: string[]; cwd?: string; maxOutputBytes?: number
+  env?: NodeJS.ProcessEnv
 }
 export function runProcess(options: ProcessOptions, stdin: string, signal: AbortSignal): Promise<string> {
   return new Promise((resolve, reject) => {
     // Node does not update PWD when cwd is set; some CLIs (OpenCode 2.x) resolve the project from $PWD.
-    const env = options.cwd ? { ...process.env, PWD: options.cwd } : process.env
+    const env = { ...process.env, ...options.env, ...(options.cwd ? { PWD: options.cwd } : {}) }
     const child = spawn(options.command, options.args ?? [], {
       cwd: options.cwd, env, shell: false, signal, killSignal: 'SIGKILL', stdio: ['pipe', 'pipe', 'pipe'],
     })
     const chunks: Buffer[] = []
+    const stderrChunks: Buffer[] = []
     let bytes = 0
     let failure: Error | undefined
     const limit = options.maxOutputBytes ?? 1_048_576
@@ -34,7 +36,7 @@ export function runProcess(options: ProcessOptions, stdin: string, signal: Abort
       if (bytes > limit) {
         failure = new Error('Harness output exceeded limit')
         child.kill('SIGKILL')
-      } else if (stdout) chunks.push(chunk)
+      } else (stdout ? chunks : stderrChunks).push(chunk)
     }
     child.stdout.on('data', (chunk: Buffer) => collect(chunk, true))
     child.stderr.on('data', (chunk: Buffer) => collect(chunk, false))
@@ -44,7 +46,27 @@ export function runProcess(options: ProcessOptions, stdin: string, signal: Abort
     child.stdin.on('error', () => { /* close/error events report process failure */ })
     child.on('close', code => {
       if (failure) reject(failure)
-      else if (code !== 0) reject(new Error(`Harness process exited with code ${code}`))
+      else if (code !== 0) {
+        let detail = Buffer.concat(stderrChunks).toString('utf8').trim()
+        if (!detail) {
+          const stdout = Buffer.concat(chunks).toString('utf8').trim()
+          // Terminal errors take priority; some CLIs only expose cancelled
+          // forms through a failed tool event before successful final text.
+          const lines = stdout.split(/\r?\n/).reverse()
+          const errorEvent = lines.find(line => {
+            try { return JSON.parse(line)?.type === 'error' } catch { return false }
+          })
+          const toolError = errorEvent === undefined ? lines.find(line => {
+            try {
+              const event = JSON.parse(line)
+              return event?.type === 'tool_use' && event.part?.state?.status === 'error'
+            } catch { return false }
+          }) : undefined
+          detail = errorEvent ?? toolError ?? stdout
+        }
+        const bounded = detail.length > 4096 ? `…${detail.slice(-4096)}` : detail
+        reject(new Error(`Harness process exited with code ${code}${bounded ? `: ${bounded}` : ''}`))
+      }
       else resolve(Buffer.concat(chunks).toString('utf8').trim())
     })
     child.stdin.end(stdin)

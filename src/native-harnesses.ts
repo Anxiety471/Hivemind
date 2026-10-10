@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { resolve } from 'node:path'
 import { runProcess } from './harnesses.js'
 import type { Harness, HarnessRequest } from './types.js'
 
@@ -37,7 +38,7 @@ export function parseOpenCodeOutput(output: string): string {
   const finishes = new Map<string, string>()
   let lastFinish: string | undefined
   for (const event of events(output)) {
-    if (event.type === 'error') throw new Error('OpenCode reported a session error')
+    if (event.type === 'error') throw new Error(`OpenCode reported a session error: ${JSON.stringify(event.error ?? event.message ?? event).slice(0, 4096)}`)
     if (event.type === 'text') {
       const part = textPartSchema.parse(event.part)
       texts.set(part.id, part)
@@ -66,7 +67,7 @@ export function parsePiOutput(output: string): string {
   let final: z.infer<typeof assistantSchema> | undefined
   let completed = false
   for (const event of events(output)) {
-    if (event.type === 'error') throw new Error('Pi reported an error')
+    if (event.type === 'error') throw new Error(`Pi reported an error: ${JSON.stringify(event.error ?? event.message ?? event).slice(0, 4096)}`)
     if (event.type === 'agent_start') completed = false
     if (event.type === 'message_end') {
       const message = z.object({ role: z.string() }).passthrough().parse(event.message)
@@ -95,13 +96,38 @@ export function parsePiOutput(output: string): string {
 export class OpenCodeHarness implements Harness {
   constructor(private options: OpenCodeOptions = {}) {}
   async run(request: HarnessRequest, signal: AbortSignal): Promise<string> {
-    const args = [...(this.options.executableArgs ?? []), 'run', '--format', 'json']
+    const args = [...(this.options.executableArgs ?? []), 'run', '--standalone', '--format', 'json']
     const model = request.agent.model ?? this.options.model
     if (model) args.push('--model', model)
     if (this.options.agent) args.push('--agent', this.options.agent)
     if (this.options.variant) args.push('--variant', this.options.variant)
+    const inherited = process.env.OPENCODE_CONFIG_CONTENT
+    // Resolve configuration in a fresh private server, not the user's managed
+    // service, which may have started with a different environment.
+    const sourcesOutput = await runProcess({
+      command: this.options.executable ?? 'opencode',
+      args: [...(this.options.executableArgs ?? []), 'api', '--standalone', 'config.get',
+        '--param', `location[directory]=${resolve(this.options.cwd ?? process.cwd())}`],
+      cwd: this.options.cwd, maxOutputBytes: this.options.maxOutputBytes ?? 8_388_608,
+    }, '', AbortSignal.any([signal, AbortSignal.timeout(30_000)]))
+    const sources = z.array(z.object({
+      type: z.string(), path: z.string().optional(),
+      info: z.record(z.string(), z.unknown()).optional(),
+    })).parse(JSON.parse(sourcesOutput))
+    // The inline document is last and pathless; OpenCode has already parsed
+    // JSONC, substituted variables, and normalized it into canonical Info.
+    const last = sources.at(-1)
+    const inline = inherited === undefined ? undefined
+      : last?.type === 'document' && last.path === undefined ? last.info : undefined
+    if (inherited !== undefined && inline === undefined) {
+      throw new Error('OpenCode rejected inherited OPENCODE_CONFIG_CONTENT')
+    }
+    const declared = sources.some(source => source.type === 'document' && source.info && Object.hasOwn(source.info, 'websearch'))
+    const env = declared ? undefined : {
+      OPENCODE_CONFIG_CONTENT: JSON.stringify({ ...inline, websearch: { provider: 'random' } }),
+    }
     const output = await runProcess({ command: this.options.executable ?? 'opencode', args,
-      cwd: this.options.cwd, maxOutputBytes: this.options.maxOutputBytes ?? 8_388_608 }, prompt(request), signal)
+      cwd: this.options.cwd, env, maxOutputBytes: this.options.maxOutputBytes ?? 8_388_608 }, prompt(request), signal)
     return parseOpenCodeOutput(output)
   }
 }

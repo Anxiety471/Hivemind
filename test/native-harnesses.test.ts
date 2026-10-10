@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { OpenCodeHarness, PiHarness, parseOpenCodeOutput, parsePiOutput } from '../src/native-harnesses.js'
+import { runProcess } from '../src/harnesses.js'
 import { fromConfig, configSchema } from '../src/config.js'
 import type { HarnessRequest } from '../src/types.js'
 const fixture = resolve('test/fixtures/native-cli.ts')
@@ -19,12 +20,103 @@ test('OpenCode native invocation sends context on stdin, sets flags, and returns
     const text = await new OpenCodeHarness({ ...f.options, model: 'provider/model', agent: 'build', variant: 'high' }).run(request, new AbortController().signal)
     assert.equal(text, 'Final native artifact')
     const captured = JSON.parse(await readFile(f.capture, 'utf8'))
-    assert.deepEqual(captured.args, ['run', '--format', 'json', '--model', 'provider/model', '--agent', 'build', '--variant', 'high'])
+    assert.deepEqual(captured.args, ['run', '--standalone', '--format', 'json', '--model', 'provider/model', '--agent', 'build', '--variant', 'high'])
     assert.ok(captured.stdin.includes(request.task))
     assert.ok(captured.stdin.includes(request.artifact))
     assert.ok(captured.stdin.includes(request.feedback))
     assert.equal(captured.cwd, process.cwd())
   } finally { await rm(f.directory, { recursive: true }) }
+})
+test('OpenCode standalone initialization prevents provider forms in fresh and already managed projects', async () => {
+  const savedContent = process.env.OPENCODE_CONFIG_CONTENT
+  const savedFile = process.env.OPENCODE_CONFIG
+  delete process.env.OPENCODE_CONFIG_CONTENT
+  delete process.env.OPENCODE_CONFIG
+  try {
+    for (const managed of [false, true]) {
+      const f = await fixtureOptions('opencode', 'websearch')
+      try {
+        if (managed) await writeFile(`${f.capture}.managed`, '{}')
+        // Negative control reproduces the actual cancellation/exit-1 behavior:
+        // final text is emitted, but an unconfigured server asks a provider form.
+        await assert.rejects(runProcess({ command: f.options.executable,
+          args: [...f.options.executableArgs, 'run', '--format', 'json'], cwd: f.options.cwd },
+        'Context\n{"attempt":1}', new AbortController().signal), (error: Error) => {
+          assert.match(error.message, /Harness process exited with code 1/)
+          assert.match(error.message, /Web search cancelled/)
+          assert.doesNotMatch(error.message, /Final native artifact/)
+          return true
+        })
+        assert.equal(await new OpenCodeHarness(f.options).run(request, new AbortController().signal), 'Final native artifact')
+        const initialized = JSON.parse(await readFile(`${f.capture}.initialized`, 'utf8'))
+        assert.deepEqual(initialized.websearch, { provider: 'random' })
+        assert.equal(process.env.OPENCODE_CONFIG_CONTENT, undefined)
+        assert.equal(process.env.OPENCODE_CONFIG, undefined)
+        if (managed) assert.equal(await readFile(`${f.capture}.managed`, 'utf8'), '{}')
+      } finally { await rm(f.directory, { recursive: true }) }
+    }
+  } finally {
+    if (savedContent === undefined) delete process.env.OPENCODE_CONFIG_CONTENT
+    else process.env.OPENCODE_CONFIG_CONTENT = savedContent
+    if (savedFile === undefined) delete process.env.OPENCODE_CONFIG
+    else process.env.OPENCODE_CONFIG = savedFile
+  }
+})
+
+test('OpenCode retains inherited settings and explicit inline, file, and discovered websearch choices', async () => {
+  const savedContent = process.env.OPENCODE_CONFIG_CONTENT
+  const savedFile = process.env.OPENCODE_CONFIG
+  try {
+    for (const choice of ['default', 'inline-off', 'inline-provider', 'source-off', 'source-provider', 'explicit-file']) {
+      const f = await fixtureOptions('opencode', 'websearch')
+      const unrelated = { permissions: [{ action: 'edit', resource: '*', effect: 'deny' }], model: 'provider/model' }
+      const inline = choice === 'inline-off' ? { websearch: false } : choice === 'inline-provider' ? { websearch: { provider: 'exa' } } : {}
+      const content = JSON.stringify({ ...unrelated, ...inline })
+      process.env.OPENCODE_CONFIG_CONTENT = content
+      delete process.env.OPENCODE_CONFIG
+      try {
+        const fileChoice = choice === 'source-off' ? false : { provider: 'tavily' }
+        if (choice.startsWith('source-')) {
+          await writeFile(`${f.capture}.sources`, JSON.stringify([{ type: 'document', path: '/fixture/opencode.jsonc', info: { websearch: fileChoice } }]))
+        }
+        if (choice === 'explicit-file') {
+          process.env.OPENCODE_CONFIG = join(f.directory, 'opencode.jsonc')
+          await writeFile(process.env.OPENCODE_CONFIG, '{"websearch":false}')
+        }
+        assert.equal(await new OpenCodeHarness(f.options).run(request, new AbortController().signal), 'Final native artifact')
+        const initialized = JSON.parse(await readFile(`${f.capture}.initialized`, 'utf8'))
+        assert.deepEqual(initialized.permissions, unrelated.permissions)
+        assert.equal(initialized.model, unrelated.model)
+        const expected = choice === 'default' ? { provider: 'random' } : choice === 'inline-provider' ? inline.websearch : choice === 'source-provider' ? fileChoice : false
+        assert.deepEqual(initialized.websearch, expected)
+        assert.equal(process.env.OPENCODE_CONFIG_CONTENT, content)
+        if (choice === 'explicit-file') {
+          assert.equal(await readFile(process.env.OPENCODE_CONFIG!, 'utf8'), '{"websearch":false}')
+        }
+      } finally { await rm(f.directory, { recursive: true }) }
+    }
+  } finally {
+    if (savedContent === undefined) delete process.env.OPENCODE_CONFIG_CONTENT
+    else process.env.OPENCODE_CONFIG_CONTENT = savedContent
+    if (savedFile === undefined) delete process.env.OPENCODE_CONFIG
+    else process.env.OPENCODE_CONFIG = savedFile
+  }
+})
+
+test('OpenCode malformed inherited inline configuration is a visible failure, never replaced by defaults', async () => {
+  const saved = process.env.OPENCODE_CONFIG_CONTENT
+  const f = await fixtureOptions('opencode', 'websearch')
+  const content = '{"permission":'
+  process.env.OPENCODE_CONFIG_CONTENT = content
+  try {
+    await assert.rejects(new OpenCodeHarness(f.options).run(request, new AbortController().signal),
+      /OpenCode rejected inherited OPENCODE_CONFIG_CONTENT/)
+    assert.equal(process.env.OPENCODE_CONFIG_CONTENT, content)
+  } finally {
+    if (saved === undefined) delete process.env.OPENCODE_CONFIG_CONTENT
+    else process.env.OPENCODE_CONFIG_CONTENT = saved
+    await rm(f.directory, { recursive: true })
+  }
 })
 test('Pi native invocation selects provider/model/tools and uses an ephemeral JSON session', async () => {
   const f = await fixtureOptions('pi')
@@ -42,6 +134,54 @@ test('native adapters detect terminal errors, truncation, and failed subprocesse
     try {
       const adapter = kind === 'opencode' ? new OpenCodeHarness(f.options) : new PiHarness(f.options)
       await assert.rejects(adapter.run(request, new AbortController().signal))
+    } finally { await rm(f.directory, { recursive: true }) }
+  }
+})
+test('native subprocess failures preserve stderr first and stdout error events otherwise', async () => {
+  for (const kind of ['opencode', 'pi']) for (const scenario of ['stderr-exit', 'stdout-exit', 'error']) {
+    const f = await fixtureOptions(kind, scenario)
+    try {
+      const adapter = kind === 'opencode' ? new OpenCodeHarness(f.options) : new PiHarness(f.options)
+      await assert.rejects(adapter.run(request, new AbortController().signal), (error: Error) => {
+        if (scenario === 'error') {
+          assert.match(error.message, /reported .*error/)
+        } else {
+          assert.match(error.message, /Harness process exited with code 7/)
+        }
+        assert.match(error.message, scenario === 'stderr-exit' ? /Credentials rejected by provider/ : /Provider quota exhausted/)
+        if (scenario === 'stderr-exit') assert.doesNotMatch(error.message, /Provider quota exhausted/)
+        if (scenario === 'stdout-exit') assert.doesNotMatch(error.message, /Final native artifact/)
+        return true
+      })
+    } finally { await rm(f.directory, { recursive: true }) }
+  }
+})
+test('native failure detail is bounded and retains the end of stderr', async () => {
+  const f = await fixtureOptions('opencode', 'bounded-exit')
+  try {
+    await assert.rejects(new OpenCodeHarness({ ...f.options, maxOutputBytes: 8192 }).run(request, new AbortController().signal), (error: Error) => {
+      assert.match(error.message, /Harness process exited with code 7: …/)
+      assert.match(error.message, /Credentials rejected by provider$/)
+      assert.ok(error.message.length < 4200)
+      assert.doesNotMatch(error.message, /Provider quota exhausted/)
+      return true
+    })
+  } finally { await rm(f.directory, { recursive: true }) }
+})
+test('combined stdout and stderr output limit takes precedence over exit details', async () => {
+  const f = await fixtureOptions('opencode', 'output-limit')
+  try {
+    await assert.rejects(new OpenCodeHarness({ ...f.options, maxOutputBytes: 1024 }).run(request, new AbortController().signal), {
+      message: 'Harness output exceeded limit',
+    })
+  } finally { await rm(f.directory, { recursive: true }) }
+})
+test('native final text never makes a nonzero subprocess exit successful', async () => {
+  for (const kind of ['opencode', 'pi']) {
+    const f = await fixtureOptions(kind, 'success-exit')
+    try {
+      const adapter = kind === 'opencode' ? new OpenCodeHarness(f.options) : new PiHarness(f.options)
+      await assert.rejects(adapter.run(request, new AbortController().signal), /Harness process exited with code 7/)
     } finally { await rm(f.directory, { recursive: true }) }
   }
 })

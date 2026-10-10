@@ -1,30 +1,27 @@
 'use client'
 
 import { useState } from 'react'
-import { api, errorMessage } from '@/lib/api'
-import type { HarnessCatalogEntry, HarnessCatalogResponse } from '@/lib/types'
+import { errorMessage } from '@/lib/api'
+import type { HarnessCatalogEntry, HarnessCatalogResponse, HarnessInstallResponse } from '@/lib/types'
 
 type InstallState = { running: boolean; ok?: boolean; text?: string }
 
-export default function HarnessCatalog({ catalog, loading, error, configured, onRefresh, onInstalled, onAdd }: {
+export default function HarnessCatalog({ catalog, loading, error, configured, onRefresh, onInstall }: {
   catalog: HarnessCatalogResponse | null
   loading: boolean
   error: string
   /** Ids of configured harnesses, per catalog type. */
   configured: Record<string, string[]>
   onRefresh: () => void
-  onInstalled: (entry: HarnessCatalogEntry) => void
-  onAdd: (type: HarnessCatalogEntry['type']) => void
+  onInstall: (type: HarnessCatalogEntry['type']) => Promise<HarnessInstallResponse>
 }) {
   const [installs, setInstalls] = useState<Record<string, InstallState>>({})
 
   async function install(entry: HarnessCatalogEntry) {
     setInstalls(current => ({ ...current, [entry.type]: { running: true } }))
     try {
-      const result = await api.installHarness(entry.type)
-      onInstalled(result.entry)
+      const result = await onInstall(entry.type)
       setInstalls(current => ({ ...current, [entry.type]: { running: false, ok: result.entry.installed, text: result.output.trim() || (result.entry.installed ? 'Installed.' : 'Installer finished, but the executable was not found on PATH.') } }))
-      onRefresh()
     } catch (caught) {
       setInstalls(current => ({ ...current, [entry.type]: { running: false, ok: false, text: errorMessage(caught) } }))
     }
@@ -63,7 +60,7 @@ export default function HarnessCatalog({ catalog, loading, error, configured, on
           {catalog.harnesses.map(entry => {
             const state = installs[entry.type]
             const ids = configured[entry.type] ?? []
-            const installDisabled = state?.running || !entry.installable
+            const installDisabled = loading || anyInstalling || !entry.installable
             return (
               <div key={entry.type} className={`catalog-card ${entry.installed ? 'installed' : 'missing'}`} data-catalog={entry.type}>
                 <div className="row between">
@@ -78,9 +75,7 @@ export default function HarnessCatalog({ catalog, loading, error, configured, on
                   {!entry.installed && <div><dt>install</dt><dd><code>{entry.installCommand}</code></dd></div>}
                 </dl>
                 <div className="row wrap catalog-actions">
-                  {entry.installed ? (
-                    <button type="button" className="small" onClick={() => onAdd(entry.type)}>Add to config</button>
-                  ) : (
+                  {!entry.installed && (
                     <button
                       type="button"
                       className="small"
