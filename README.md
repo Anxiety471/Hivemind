@@ -11,10 +11,10 @@ Requires Node.js 22 or newer and npm.
 ```sh
 npm ci
 npm run demo
-npm run dev -- --task "Write a project introduction"
-npm run dev -- --config examples/demo.json --graph
-npm run dev -- --config examples/demo.json --task "Write a project introduction" --json
-npm run dev -- --config examples/demo.toml --task "Write a project introduction"
+npm run cli -- --task "Write a project introduction"
+npm run cli -- --config examples/demo.json --graph
+npm run cli -- --config examples/demo.json --task "Write a project introduction" --json
+npm run cli -- --config examples/demo.toml --task "Write a project introduction"
 ```
 
 `--config` accepts both `.json` and `.toml`; the extension selects the parser and the format that setters write back. The shipped `examples/demo.toml` and `examples/multi-harness.toml` mirror their `.json` counterparts.
@@ -64,7 +64,7 @@ description = "Checks the latest artifact"
 On load, `personas` is accepted as an alias for the `agents` array (compatibility with the `hivemind.toml` shape), but agents are always serialized back as `agents`. Run the TOML example:
 
 ```sh
-npm run dev -- --config examples/demo.toml --task "Write a project introduction"
+npm run cli -- --config examples/demo.toml --task "Write a project introduction"
 ```
 
 The TOML is deliberately `hivemind.toml`-style (snake_case, `[[agents]]`), but it is **not** field-for-field compatible with the Rust backend's config on `main`. This restart uses a different runtime model — harness registrations plus agents — rather than that backend's personas and runtimes, so a Rust config is not a drop-in replacement and `--migrate-config` only converts between this project's own JSON and TOML formats.
@@ -75,9 +75,9 @@ The setters rewrite the file you pass to `--config` in place, preserving its for
 
 ```sh
 cp examples/demo.toml hivemind.toml
-npm run dev -- --config hivemind.toml --show-config
-npm run dev -- --config hivemind.toml --add-agent "editor:worker:demo" --set-max-attempts 5
-npm run dev -- --config hivemind.toml --dry-run --remove-agent editor
+npm run cli -- --config hivemind.toml --show-config
+npm run cli -- --config hivemind.toml --add-agent "editor:worker:demo" --set-max-attempts 5
+npm run cli -- --config hivemind.toml --dry-run --remove-agent editor
 ```
 
 | Flag | Effect |
@@ -99,6 +99,17 @@ The format is always chosen by the `--config` file's extension, never by a flag.
 
 Invalid edits — duplicate agent IDs, a removed harness still referenced by an agent, a missing worker, or unknown IDs — stop with an error before anything is written. Before any save, the CLI and TUI check the config is runnable: exactly one reviewer, at least one worker, every agent's harness registered, and in-range limits.
 
+## Web app and API
+
+```sh
+bun install
+bun run dev                     # API on :4100 + Next.js web app on :3000
+bun scripts/dev.ts --config hivemind.toml --project ~/code/site --web-port 3001 --api-port 4200
+bun run api -- --port 4100      # API only (Elysia, runs on Bun)
+```
+
+`bun run dev` starts the Elysia API (`src/server.ts`, `/api/*`: config, projects, runs with Server-Sent Events progress, cancel) and the Next.js app in `web/`, which proxies `/api` to it (`HIVEMIND_API_URL`). The web console runs tasks with live decide → work → review progress, browses run history, switches the project directory, and edits the config at `/settings`. The API binds to 127.0.0.1, requires `Content-Type: application/json` on bodies, and rejects foreign `Host` headers. The TUI is unchanged: `bun run tui`.
+
 ## Interactive TUI
 
 ```sh
@@ -111,7 +122,7 @@ npm run tui -- --task "Review the project"
 npm run tui -- --project ~/code/site
 ```
 
-Running `npm run dev` without a task in an interactive terminal also opens the TUI. Scriptable `--task`, `--json`, and `--graph` commands retain their existing behavior. Explicit `--tui` requires an interactive stdin/stdout and cannot be combined with `--json` or `--graph`.
+Running `npm run cli` without a task in an interactive terminal also opens the TUI. Scriptable `--task`, `--json`, and `--graph` commands retain their existing behavior. Explicit `--tui` requires an interactive stdin/stdout and cannot be combined with `--json` or `--graph`.
 
 ### Layout
 
@@ -223,9 +234,9 @@ Each agent has a `harness` reference. Workers, reviewer, and router can use diff
 Try the command adapter and a separate demo review adapter together:
 
 ```sh
-npm run dev -- --config examples/multi-harness.json --task "Explain the workflow"
+npm run cli -- --config examples/multi-harness.json --task "Explain the workflow"
 # Same configuration in TOML:
-npm run dev -- --config examples/multi-harness.toml --task "Explain the workflow"
+npm run cli -- --config examples/multi-harness.toml --task "Explain the workflow"
 ```
 
 OpenCode and Pi have dedicated native adapters; no user-written wrapper is required. OMP, Claude Code, Codex, and other harnesses can use the generic command adapter until dedicated integrations are added. The command example is a runnable protocol demonstration, not a coding agent.
@@ -244,9 +255,9 @@ opencode auth login
 pi
 # In Pi: /login if needed, then /model. Exit when configured.
 
-npm run dev -- --config examples/opencode-pi.json --task "Implement the requested change and report checks run"
+npm run cli -- --config examples/opencode-pi.json --task "Implement the requested change and report checks run"
 # Reverse the harness roles:
-npm run dev -- --config examples/pi-opencode.json --task "Implement the requested change and report checks run"
+npm run cli -- --config examples/pi-opencode.json --task "Implement the requested change and report checks run"
 ```
 
 These examples use each CLI's configured default model. Set `model` explicitly when you need a particular model. OpenCode accepts `provider/model`; Pi accepts `provider` together with `model`, or a provider-qualified model ID.
@@ -335,7 +346,7 @@ const registry = new HarnessRegistry().register('my-harness', harness)
 4. Run:
 
 ```sh
-npm run dev -- --config examples/model-router.json --task "Your task" --json
+npm run cli -- --config examples/model-router.json --task "Your task" --json
 ```
 
 For an environment file, Node can load it explicitly:

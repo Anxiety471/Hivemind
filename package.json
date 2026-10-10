@@ -3,11 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "workspaces": ["web"],
   "engines": {
     "node": ">=22"
   },
   "scripts": {
-    "dev": "node --import tsx src/cli.ts",
+    "dev": "bun scripts/dev.ts",
+    "api": "bun src/server.ts",
+    "web": "bun run --cwd web dev",
+    "cli": "node --import tsx src/cli.ts",
     "demo": "node --import tsx src/cli.ts --config examples/demo.json --task 'Write a short introduction to Hivemind'",
     "build": "tsc",
     "check": "tsc --noEmit",
@@ -16,6 +20,7 @@
   },
   "dependencies": {
     "@langchain/langgraph": "1.4.21",
+    "elysia": "^1.4.30",
     "ink": "^8.0.0",
     "react": "^19.3.0",
     "smol-toml": "^1.9.1",
