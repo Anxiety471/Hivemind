@@ -130,6 +130,7 @@ All configuration lives behind `/` commands. While the input is a bare `/word`, 
 | --- | --- |
 | `/help` | List commands and key bindings |
 | `/settings` (alias `/config`) | Open the settings editor: router, limits, and each agent's harness, saved to the config file |
+| `/agents` (alias `/team`) | Open the agents & harnesses editor: add, edit, or remove agents and the harness registrations they run on, saved to the config file |
 | `/cwd [path]` (alias `/dir`) | Change the project directory; without a path, open the directory picker |
 | `/worker [id]` | Choose the worker for the next runs; without an id, pick from a list |
 | `/harness [id]` | Choose the selected worker's harness for the next runs; without an id, pick from a list |
@@ -145,6 +146,19 @@ An unknown command prints `Unknown command /foo — /help lists commands`.
 `/settings` (or `Ctrl+S` / `Ctrl+O` from the prompt) replaces the prompt with the settings editor, which edits the persistent configuration and saves it to the config file you passed, so changes survive the session. `↑`/`↓` or `Tab`/`Shift+Tab` change the field, `←`/`→` cycle the focused value, `Enter`, `s`, `Ctrl+W`, or `Ctrl+E` save, and `q`, `Esc`, `Ctrl+S`, or `Ctrl+O` close it, discarding unsaved edits. Saving is refused while a run is active, and every save is first checked for runnability. After a save, the next run uses the new setup, starting from the first worker.
 
 Every Ctrl chord has a plain-key alternative because some terminals intercept them before the app sees them — Zed's built-in terminal, for example, does not deliver `Ctrl+S` ([zed#57216](https://github.com/zed-industries/zed/issues/57216)). Typing `/settings`, then `s` to save and `q` to close, needs only ordinary keys.
+
+### Agents & harnesses
+
+`/agents` is where you build the team: for example `planner` on Pi, `coder` on OpenCode, and a `reviewer` on either. It takes over the bottom of the terminal with a browser laid out like omp's model picker, and edits a draft of the config that is saved the same way as `/settings`.
+
+- **Sidebar** — **Harnesses** (registrations in use / total), **All agents** (count), then every harness type: `●` when the config registers one of that type, `○` when not, with the number of agents running on it. `←`/`→` (or `Tab`/`Shift+Tab`) move between sections.
+- **List** — agents as `harness/agent` with role, harness type, and model columns (`◆` marks the model router); the Harnesses section lists registrations as `type/id` with model and users. Below the rule are the section's add actions: **+ Add agent**, or on a type, **+ Add pi agent** / **+ Add pi harness**. The footer details the highlighted row. `↑`/`↓` move, `PgUp`/`PgDn` jump.
+- **Role chips and search** — `Alt+←`/`Alt+→` filter by role (`all`, `worker`, `reviewer`, `router`); typing searches ids, harnesses, models, and descriptions (`Backspace` edits, `Ctrl+U` or `Esc` clears).
+- **Actions** — `Enter` edits the highlighted row or runs the add action, `Delete` or `Ctrl+D` removes the highlighted agent or harness, `Ctrl+W` or `Ctrl+E` save. `Esc` (or `Ctrl+S` / `Ctrl+O`) closes; with unsaved edits it first asks — `Enter` saves and closes, `Esc` discards — which is also the plain-key way to save.
+- **Agent form** — id, role (`worker`, `reviewer`, `router`), harness, and a description the model router reads when choosing a worker. The harness choice cycles through existing registrations and **+ new pi**, **+ new opencode**, and **+ new demo**; a new one is registered as `<agent>-<type>` (with an optional model) in the same step. Starting from a type's **+ Add … agent** preselects that type, so `Agent 1 = Pi, Agent 2 = OpenCode` is: `→` to pi, `Enter`, fill the form; `→` to opencode, `Enter`, fill the form; `Esc`, `Enter`.
+- **Harness form** — id, type, and the type's settings: model, agent, variant, cwd, and executable for `opencode`; model, provider, thinking, tools, cwd, and executable for `pi`; command, arguments, and cwd for `command`; base URL, model, API key variable, and max tokens for `openai-compatible`. Settings the form does not show (such as `maxOutputBytes`) are kept.
+
+In a form, `↑`/`↓`/`Tab` change the field, typing edits text (`Backspace`, `Ctrl+U` clears), `←`/`→` cycle choices, `Enter` applies the form to the draft, and `Esc` returns to the list. Invalid entries (duplicate ids, a Pi provider without a model, a harness still in use) are reported inline and leave the draft unchanged. Renaming a harness repoints its agents; renaming the model router agent moves the router with it, and that agent cannot be removed or given another role until the router is switched in `/settings`. TUI runs use the worker chosen with `/worker` (the first worker after a save); `--task` runs give a model router every configured worker to choose from.
 
 ### Keys
 

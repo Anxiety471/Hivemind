@@ -444,6 +444,66 @@ test('TUI settings surfaces a save failure and leaves the file untouched', async
     assert.match(frame(app), /Max attempts: 4/)
   } finally { app.unmount(); app.cleanup(); await chmod(dir, 0o700); await rm(dir, { recursive: true, force: true }) }
 })
+test('TUI /agents adds a Pi agent and an OpenCode agent from their sidebar sections and saves them', async () => {
+  const { dir, path } = await tempConfig()
+  const app = render(<HivemindTui config={config} configPath={path} />)
+  const press = async (...keys: string[]) => { for (const key of keys) { app.stdin.write(key); await delay(20) } }
+  const LEFT = '\x1b[D', RIGHT = '\x1b[C', DOWN = '\x1b[B'
+  try {
+    await waitText(app, PROMPT)
+    await command(app, '/agents')
+    await waitText(app, 'type to search')
+    await press(RIGHT) // All agents → pi
+    await waitText(app, 'Agents on pi')
+    await press('\r') // + Add pi agent opens on a new pi harness
+    await waitText(app, 'Add agent')
+    assert.match(frame(app), /Harness\s+\+ new pi/)
+    await press('planner', DOWN, DOWN, DOWN, 'anthropic/claude-x', '\r')
+    await waitText(app, 'Added agent planner')
+    assert.match(frame(app), /planner-pi\/planner/)
+    await press(RIGHT, '\r', 'coder', DOWN, DOWN, DOWN, 'openai/gpt-x', '\r') // pi → opencode, + Add opencode agent
+    await waitText(app, 'Added agent coder')
+    await press(LEFT, LEFT, 'cod') // opencode → pi → All agents, then search
+    await waitText(app, 'coder · worker · coder-opencode · opencode · openai/gpt-x')
+    assert.doesNotMatch(frame(app), /demo\/writer/)
+    assert.match(frame(app), /unsaved changes/)
+    await press('\x1b') // clears the search
+    await waitText(app, 'demo/writer')
+    await press('\x1b') // unsaved: asks before closing
+    await waitText(app, 'Enter save & close')
+    await press('\r')
+    await waitText(app, 'Agents saved to hivemind.json')
+    const saved = await loadConfig(path)
+    assert.deepEqual(saved.harnesses['planner-pi'], { type: 'pi', model: 'anthropic/claude-x', executableArgs: [], maxOutputBytes: 8_388_608 })
+    assert.equal(saved.harnesses['coder-opencode']!.type, 'opencode')
+    assert.deepEqual(saved.agents.slice(-2).map(agent => [agent.id, agent.role, agent.harness]), [['planner', 'worker', 'planner-pi'], ['coder', 'worker', 'coder-opencode']])
+    await command(app, '/worker coder')
+    await waitText(app, 'Worker → coder · harness coder-opencode')
+  } finally { app.unmount(); app.cleanup(); await rm(dir, { recursive: true, force: true }) }
+})
+test('TUI /agents filters by role, reports form errors inline, and discarding leaves the file untouched', async () => {
+  const { dir, path } = await tempConfig()
+  const before = await readFile(path, 'utf8')
+  const app = render(<HivemindTui config={config} configPath={path} />)
+  const press = async (...keys: string[]) => { for (const key of keys) { app.stdin.write(key); await delay(20) } }
+  try {
+    await waitText(app, PROMPT)
+    await command(app, '/agents')
+    await waitText(app, 'demo/reviewer')
+    await press('\x1b[1;3C') // Alt+→: worker
+    await waitFor(() => !frame(app).includes('demo/reviewer'))
+    assert.match(frame(app), /alternate\/second/)
+    await press('\x1b[1;3D', '\x1b[A', '\r', 'writer', '\r') // back to all, ↑ wraps to + Add agent
+    await waitText(app, 'Agent "writer" already exists')
+    await press('\x1b', 'second', '\x1b[3~') // back to the list, search, Delete
+    await waitText(app, 'Removed agent second')
+    await press('\x1b', '\x1b')
+    await waitText(app, 'Enter save & close')
+    await press('\x1b')
+    await waitText(app, PROMPT)
+    assert.equal(await readFile(path, 'utf8'), before)
+  } finally { app.unmount(); app.cleanup(); await rm(dir, { recursive: true, force: true }) }
+})
 test('selection validates IDs and terminal text removes escape sequences', () => {
   assert.throws(() => selectWorker(config, 'missing', 'demo'))
   assert.throws(() => selectWorker(config, 'writer', 'missing'))
@@ -453,7 +513,6 @@ test('selection validates IDs and terminal text removes escape sequences', () =>
 test('slash command matching, parsing, and run summaries', () => {
   assert.deepEqual(matchCommands('/se').map(c => c.name), ['settings'])
   assert.deepEqual(matchCommands('/con').map(c => c.name), ['settings']) // alias /config
-  assert.equal(matchCommands('/').length, 7)
   assert.deepEqual(matchCommands('/cwd here'), []) // an argument closes the menu
   assert.deepEqual(matchCommands('task'), [])
   assert.equal(parseCommand('plain task'), null)

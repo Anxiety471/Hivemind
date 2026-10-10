@@ -98,6 +98,33 @@ export function addAgent(config: Config, agent: { id: string; role: 'worker' | '
   return replace(config, { agents: [...structuredClone(config.agents), { description: '', ...agent }] })
 }
 
+export function addHarness(config: Config, harnessId: string, settings: Config['harnesses'][string]): Config {
+  if (Object.hasOwn(config.harnesses, harnessId)) throw new Error(`Harness "${harnessId}" already exists`)
+  return replace(config, { harnesses: { ...structuredClone(config.harnesses), [harnessId]: settings } })
+}
+
+// Replace an agent in place; a changed id also moves a model router that pointed at the old id.
+export function updateAgent(config: Config, agentId: string, agent: Config['agents'][number]): Config {
+  const index = config.agents.findIndex(existing => existing.id === agentId)
+  if (index === -1) throw new Error(`Unknown agent "${agentId}"`)
+  if (agent.id !== agentId && config.agents.some(existing => existing.id === agent.id)) throw new Error(`Agent "${agent.id}" already exists`)
+  if (!Object.hasOwn(config.harnesses, agent.harness)) throw new Error(`Unknown harness "${agent.harness}"`)
+  const agents = structuredClone(config.agents)
+  agents[index] = agent
+  const router = config.router.type === 'model' && config.router.agent === agentId ? { type: 'model' as const, agent: agent.id } : config.router
+  return replace(config, { agents, router })
+}
+
+// Replace a harness registration; a changed id is carried over to every agent that used the old id.
+export function updateHarness(config: Config, harnessId: string, nextId: string, settings: Config['harnesses'][string]): Config {
+  if (!Object.hasOwn(config.harnesses, harnessId)) throw new Error(`Unknown harness "${harnessId}"`)
+  if (nextId !== harnessId && Object.hasOwn(config.harnesses, nextId)) throw new Error(`Harness "${nextId}" already exists`)
+  const harnesses = Object.fromEntries(Object.entries(config.harnesses)
+    .map(([id, existing]) => id === harnessId ? [nextId, settings] : [id, existing]))
+  const agents = config.agents.map(agent => agent.harness === harnessId ? { ...agent, harness: nextId } : agent)
+  return replace(config, { harnesses, agents })
+}
+
 export function removeAgent(config: Config, agentId: string): Config {
   const agents = config.agents.filter(agent => agent.id !== agentId)
   if (agents.length === config.agents.length) throw new Error(`Unknown agent "${agentId}"`)

@@ -133,6 +133,7 @@ export interface SlashCommand { name: string; aliases: string[]; args?: string; 
 export const slashCommands: readonly SlashCommand[] = [
   { name: 'help', aliases: [], description: 'List commands and key bindings' },
   { name: 'settings', aliases: ['config'], description: 'Edit router, limits, and agent harnesses (saved to the config file)' },
+  { name: 'agents', aliases: ['team'], description: 'Add, edit, or remove agents and the harnesses they run on (saved to the config file)' },
   { name: 'cwd', aliases: ['dir'], args: '[path]', description: 'Change the project directory the agents work in' },
   { name: 'worker', aliases: [], args: '[id]', description: 'Choose the worker for the next runs' },
   { name: 'harness', aliases: [], args: '[id]', description: "Choose the selected worker's harness for the next runs" },

@@ -9,6 +9,10 @@ import {
   commandLabel, directoryEntries, keyBindings, loopView, matchCommands, pageLines, parseCommand, routerLabel, runSummary, safeText, selectWorker,
   settingsFields, slashCommands, stepSetting, windowStart, type Config, type LoopOutcome, type LoopView, type NodeState, type ParsedCommand, type RunSummary,
 } from './tui-state.js'
+import {
+  applyForm, cycleField, editAgentForm, editHarnessForm, formFields, newAgentForm, newHarnessForm, removeRow, roleFilters, typeIntoField,
+} from './tui-roster.js'
+import { AgentsBrowser, agentsView, type AgentsState } from './tui-agents.js'
 
 const MIN_COLUMNS = 40
 const PICKER_ROWS = 10
@@ -70,7 +74,7 @@ function TranscriptItem({ item, columns }: { item: Item; columns: number }) {
       <Text bold color="cyan">✻ Hivemind</Text>
       <Text>cwd: {safeText(displayPath(item.project))}</Text>
       <Text>config: {safeText(item.configPath)}</Text>
-      <Text dimColor>/help for commands · /settings to configure · /cwd to change directory</Text>
+      <Text dimColor>/help for commands · /agents to set up agents · /settings to configure · /cwd to change directory</Text>
     </Box>
   }
   if (item.kind === 'prompt') return <Box marginTop={1}><Echo text={item.text} /></Box>
@@ -111,6 +115,7 @@ type Panel =
   | { kind: 'settings' }
   | { kind: 'directory'; browsing: string; subdirs: string[]; recents: string[]; filter: string; index: number }
   | { kind: 'select'; target: 'worker' | 'harness'; index: number }
+  | AgentsState
 type Runner = typeof fromConfig
 export interface TuiProps { config: Config; configPath: string; initialTask?: string; runner?: Runner; project?: string }
 export function HivemindTui({ config: initialConfig, configPath, initialTask = '', runner = fromConfig, project: initialProject }: TuiProps) {
@@ -132,10 +137,12 @@ export function HivemindTui({ config: initialConfig, configPath, initialTask = '
   const [settingsIndex, setSettingsIndex] = useState(0)
   const [settingsDirty, setSettingsDirty] = useState(false)
   const [settingsNotice, setSettingsNotice] = useState('')
+  const [noticeError, setNoticeError] = useState(false)
   const [running, setRunning] = useState(false)
   const [stage, setStage] = useState('Starting')
   const [steps, setSteps] = useState<Progress[]>([])
   const [columns, setColumns] = useState(terminal.columns || 80)
+  const [rows, setRows] = useState(terminal.rows || 24)
   const controller = useRef<AbortController | null>(null)
   const busy = useRef(false)
   const mounted = useRef(true)
@@ -146,7 +153,7 @@ export function HivemindTui({ config: initialConfig, configPath, initialTask = '
   const harnessIds = Object.keys(config.harnesses)
   const reviewer = config.agents.find(agent => agent.role === 'reviewer')!
   useEffect(() => {
-    const resize = () => setColumns(terminal.columns || 80)
+    const resize = () => { setColumns(terminal.columns || 80); setRows(terminal.rows || 24) }
     stdout.on('resize', resize)
     return () => { stdout.off('resize', resize) }
   }, [stdout])
@@ -238,11 +245,15 @@ export function HivemindTui({ config: initialConfig, configPath, initialTask = '
     setPanel({ kind: 'select', target, index: Math.max(0, index) })
   }
   function openSettings() {
-    setDraft(config); setSettingsIndex(0); setSettingsDirty(false); setSettingsNotice(''); setPanel({ kind: 'settings' })
+    setDraft(config); setSettingsIndex(0); setSettingsDirty(false); setSettingsNotice(''); setNoticeError(false); setPanel({ kind: 'settings' })
+  }
+  function openAgents() {
+    setDraft(config); setSettingsDirty(false); setSettingsNotice(''); setNoticeError(false)
+    setPanel({ kind: 'agents', section: 'agents', role: 'all', query: '', index: 0, form: null, field: 0, confirmClose: false })
   }
   function closePanel() {
     pickerToken.current++
-    setPanel(null); setDraft(null); setSettingsDirty(false); setSettingsNotice('')
+    setPanel(null); setDraft(null); setSettingsDirty(false); setSettingsNotice(''); setNoticeError(false)
   }
   function clearScreen() {
     // Ink's write() lifts the live frame off, emits the clear, and repaints it; the remounted Static re-emits the banner.
@@ -255,15 +266,17 @@ export function HivemindTui({ config: initialConfig, configPath, initialTask = '
     if (!command) { notice(`Unknown command /${safeText(name)} — /help lists commands`, safeText(echo), true); return }
     if (command.name === 'help') append({ kind: 'help' })
     else if (command.name === 'settings') openSettings()
+    else if (command.name === 'agents') openAgents()
     else if (command.name === 'cwd') void (arg ? changeDirectory(arg, safeText(echo)) : openDirectoryPicker())
     else if (command.name === 'worker') arg ? chooseWorker(arg, safeText(echo)) : openSelect('worker')
     else if (command.name === 'harness') arg ? chooseHarness(arg, safeText(echo)) : openSelect('harness')
     else if (command.name === 'clear') clearScreen()
     else if (command.name === 'exit') quit()
   }
-  async function saveSettings() {
-    if (!draft) return
-    if (busy.current) { setSettingsNotice('A run is active; wait for it to finish before saving.'); return }
+  // Resolves true once the draft is on disk.
+  async function saveSettings(): Promise<boolean> {
+    if (!draft) return false
+    if (busy.current) { setSettingsNotice('A run is active; wait for it to finish before saving.'); setNoticeError(true); return false }
     try {
       assertRunnable(draft)
       await saveConfig(configPath, draft)
@@ -273,8 +286,12 @@ export function HivemindTui({ config: initialConfig, configPath, initialTask = '
       setHarnessId(worker.harness)
       setSettingsDirty(false)
       setSettingsNotice('Saved — next run uses the new setup.')
+      setNoticeError(false)
+      return true
     } catch (caught) {
       setSettingsNotice(`Save failed: ${safeText(caught instanceof Error ? caught.message : 'unknown error')}`)
+      setNoticeError(true)
+      return false
     }
   }
 
@@ -288,6 +305,7 @@ export function HivemindTui({ config: initialConfig, configPath, initialTask = '
       ? workers.map(agent => ({ id: agent.id, detail: `harness ${agent.harness}`, current: agent.id === workerId }))
       : harnessIds.map(id => ({ id, detail: config.harnesses[id]!.type, current: id === harnessId }))
     : []
+  const formRows = panel?.kind === 'agents' && panel.form && draft ? formFields(draft, panel.form) : []
 
   function settingsKeys(input: string, key: Key) {
     // Some terminals (Zed's built-in terminal) swallow Ctrl+S/Ctrl+W before Ink sees them, so every
@@ -325,6 +343,91 @@ export function HivemindTui({ config: initialConfig, configPath, initialTask = '
       if (state.target === 'worker') chooseWorker(id, '/worker')
       else chooseHarness(id, '/harness')
     }
+  }
+  function agentsKeys(state: AgentsState, input: string, key: Key) {
+    if (!draft) return
+    const note = (text: string, error: boolean) => { setSettingsNotice(safeText(text)); setNoticeError(error) }
+    const form = state.form
+    if (form) {
+      const field = formRows[Math.min(state.field, formRows.length - 1)]!
+      if (key.escape) { setPanel({ ...state, form: null }); note('', false); return }
+      if (key.return || key.ctrl && (input === 'w' || input === 'e')) {
+        try {
+          const next = applyForm(draft, form)
+          const id = (form.values.id ?? '').trim()
+          const index = agentsView(next, state).list.rows.findIndex(row => row.kind === form.target && row.id === id)
+          setDraft(next); setSettingsDirty(true)
+          setPanel({ ...state, form: null, index: index < 0 ? state.index : index })
+          note(`${form.original === null ? 'Added' : 'Updated'} ${form.target} ${id}`, false)
+        } catch (caught) { note(caught instanceof Error ? caught.message : 'Invalid entry', true) }
+        return
+      }
+      if (key.upArrow || key.downArrow || key.tab) {
+        const delta = key.upArrow || key.tab && key.shift ? -1 : 1
+        setPanel({ ...state, field: (state.field + delta + formRows.length) % formRows.length }); return
+      }
+      if (field.options) {
+        if (key.leftArrow || key.rightArrow) setPanel({ ...state, form: cycleField(draft, form, field.key, key.leftArrow ? -1 : 1) })
+        return
+      }
+      if (key.backspace || key.delete) { setPanel({ ...state, form: typeIntoField(form, field.key, value => Array.from(value).slice(0, -1).join('')) }); return }
+      if (key.ctrl && input === 'u') { setPanel({ ...state, form: typeIntoField(form, field.key, () => '') }); return }
+      const typed = safeText(input).replace(/\n/g, '')
+      if (typed && !key.ctrl && !key.meta) setPanel({ ...state, form: typeIntoField(form, field.key, value => value + typed) })
+      return
+    }
+    if (state.confirmClose) {
+      if (key.return) {
+        void saveSettings().then(saved => {
+          if (!saved || !mounted.current) return
+          closePanel(); notice(`Agents saved to ${safeText(path.basename(configPath))}`, '/agents')
+        })
+      } else if (key.escape) closePanel()
+      else setPanel({ ...state, confirmClose: false })
+      return
+    }
+    // Typing goes to the search box, so actions use Enter, Delete, Esc, and Ctrl chords; Esc → Enter is the plain-key save.
+    if (key.escape || key.ctrl && (input === 's' || input === 'o')) {
+      if (key.escape && state.query) setPanel({ ...state, query: '', index: 0 })
+      else if (settingsDirty) setPanel({ ...state, confirmClose: true })
+      else closePanel()
+      return
+    }
+    if (key.ctrl && (input === 'w' || input === 'e')) { void saveSettings(); return }
+    const view = agentsView(draft, state)
+    const count = view.list.rows.length
+    if (key.upArrow || key.downArrow) { setPanel({ ...state, index: (view.index + (key.upArrow ? -1 : 1) + count) % count }); return }
+    if (key.pageUp || key.pageDown) { setPanel({ ...state, index: Math.max(0, Math.min(count - 1, view.index + (key.pageUp ? -10 : 10))) }); return }
+    if (key.leftArrow || key.rightArrow || key.tab) {
+      const delta = key.leftArrow || key.tab && key.shift ? -1 : 1
+      if (key.meta && !key.tab) {
+        const role = roleFilters[(roleFilters.indexOf(state.role) + delta + roleFilters.length) % roleFilters.length]!
+        setPanel({ ...state, role, index: 0 }); return
+      }
+      const at = view.items.findIndex(item => item.section === view.section)
+      setPanel({ ...state, section: view.items[(at + delta + view.items.length) % view.items.length]!.key, index: 0 }); return
+    }
+    const row = view.list.rows[view.index]
+    if (key.return) {
+      if (!row) return
+      setPanel({ ...state, field: 0, form: row.kind === 'agent' ? editAgentForm(draft, row.id) : row.kind === 'harness' ? editHarnessForm(draft, row.id)
+        : row.kind === 'add-agent' ? newAgentForm(draft, row.preset) : newHarnessForm(row.preset) })
+      note('', false)
+      return
+    }
+    if (key.delete || key.ctrl && input === 'd') {
+      if (row?.kind !== 'agent' && row?.kind !== 'harness') return
+      try {
+        const next = removeRow(draft, row)
+        setDraft(next); setSettingsDirty(true)
+        note(`Removed ${row.kind} ${row.id}`, false)
+      } catch (caught) { note(caught instanceof Error ? caught.message : 'Unable to remove', true) }
+      return
+    }
+    if (key.backspace) { setPanel({ ...state, query: Array.from(state.query).slice(0, -1).join(''), index: 0 }); return }
+    if (key.ctrl && input === 'u') { setPanel({ ...state, query: '', index: 0 }); return }
+    const typed = safeText(input).replace(/\n/g, '')
+    if (typed && !key.ctrl && !key.meta) setPanel({ ...state, query: state.query + typed, index: 0 })
   }
   function promptKeys(input: string, key: Key) {
     const chars = Array.from(task)
@@ -364,6 +467,7 @@ export function HivemindTui({ config: initialConfig, configPath, initialTask = '
     if (panel?.kind === 'settings') settingsKeys(input, key)
     else if (panel?.kind === 'directory') directoryKeys(panel, input, key)
     else if (panel?.kind === 'select') selectKeys(panel, key)
+    else if (panel?.kind === 'agents') agentsKeys(panel, input, key)
     else promptKeys(input, key)
   })
 
@@ -384,7 +488,7 @@ export function HivemindTui({ config: initialConfig, configPath, initialTask = '
       <Text dimColor wrap="truncate">Router: rule or model:&lt;router agent&gt; · Timeout steps by 1000 ms.</Text>
       {fields.map((field, index) => <Text key={field.key} color={index === settingsIndex ? 'cyan' : undefined} wrap="truncate">
         {index === settingsIndex ? '› ' : '  '}{field.label}: {field.value}</Text>)}
-      {settingsNotice ? <Text color={settingsNotice.startsWith('Save failed') ? 'red' : 'green'} wrap="truncate">{settingsNotice}</Text> : null}
+      {settingsNotice ? <Text color={noticeError ? 'red' : 'green'} wrap="truncate">{settingsNotice}</Text> : null}
       {running ? <Text color="yellow" wrap="truncate">A run is active; saving is paused until it ends.</Text> : null}
       <Text dimColor wrap="truncate">↑/↓ field · ←/→ change · Enter or s save · q or Esc close{settingsDirty ? ' (discards edits)' : ''}</Text>
     </Box>
@@ -403,6 +507,8 @@ export function HivemindTui({ config: initialConfig, configPath, initialTask = '
   } else if (panel?.kind === 'select') {
     editor = <Picker title={panel.target === 'worker' ? 'Choose a worker' : `Choose a harness for ${workerId}`} index={panel.index}
       rows={options.map(option => ({ key: option.id, label: option.id, detail: `${option.detail}${option.current ? ' · current' : ''}` }))} hint="↑/↓ move · Enter select · Esc cancel" />
+  } else if (panel?.kind === 'agents' && draft) {
+    editor = <AgentsBrowser config={draft} state={panel} columns={columns} rows={rows} dirty={settingsDirty} notice={settingsNotice} noticeError={noticeError} running={running} />
   } else {
     editor = <Box borderStyle="round" borderColor="gray" paddingX={1}>
       <Text color="cyan" bold>{'> '}</Text>
