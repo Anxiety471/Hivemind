@@ -34,17 +34,26 @@ const finishSchema = z.object({ messageID: z.string(), reason: z.string() })
 
 export function parseOpenCodeOutput(output: string): string {
   const texts = new Map<string, z.infer<typeof textPartSchema>>()
-  let finish: z.infer<typeof finishSchema> | undefined
+  const finishes = new Map<string, string>()
+  let lastFinish: string | undefined
   for (const event of events(output)) {
     if (event.type === 'error') throw new Error('OpenCode reported a session error')
     if (event.type === 'text') {
       const part = textPartSchema.parse(event.part)
       texts.set(part.id, part)
     }
-    if (event.type === 'step_finish') finish = finishSchema.parse(event.part)
+    if (event.type === 'step_finish') {
+      const finish = finishSchema.parse(event.part)
+      finishes.set(finish.messageID, finish.reason)
+      lastFinish = finish.reason
+    }
   }
-  if (finish?.reason !== 'stop') throw new Error(`OpenCode did not finish successfully (${finish?.reason ?? 'missing step_finish'})`)
-  const text = [...texts.values()].filter(part => part.messageID === finish.messageID && !part.synthetic && !part.ignored).map(part => part.text).join('\n').trim()
+  const visible = [...texts.values()].filter(part => !part.synthetic && !part.ignored)
+  const finalId = visible.at(-1)?.messageID
+  // OpenCode >=2 omits step_finish on the final assistant message; only an explicit non-stop reason is a failure.
+  const reason = finalId === undefined ? lastFinish : finishes.get(finalId)
+  if (reason !== undefined && reason !== 'stop') throw new Error(`OpenCode did not finish successfully (${reason})`)
+  const text = visible.filter(part => part.messageID === finalId).map(part => part.text).join('\n').trim()
   if (!text) throw new Error('OpenCode returned no final assistant text')
   return text
 }

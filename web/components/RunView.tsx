@@ -158,7 +158,7 @@ export default function RunView({ runId, onChange }: { runId: string; onChange: 
             <span className="log-phase">{item.phase}</span>
             <span className="log-attempt">#{item.attempt}</span>
             <span className="log-message">{item.message}</span>
-            {item.status && <StatusBadge status={item.status} />}
+            {item.status && item.status !== 'running' && <StatusBadge status={item.status} />}
           </li>
         ))}
         <li ref={logEnd} aria-hidden />

@@ -49,6 +49,11 @@ test('native parsers reject malformed and incomplete output, preserving reviewer
   assert.throws(() => parseOpenCodeOutput('not JSON'))
   assert.throws(() => parsePiOutput('{"type":"agent_start"}'))
   assert.throws(() => parseOpenCodeOutput('{"type":"step_finish","part":{"messageID":"one","reason":"stop"}}'))
+  const t = (id: string, m: string, text: string) => JSON.stringify({ type: 'text', part: { type: 'text', id, messageID: m, text } })
+  const f = (m: string, reason: string) => JSON.stringify({ type: 'step_finish', part: { messageID: m, reason } })
+  assert.equal(parseOpenCodeOutput(['{"type":"step_start","part":{}}', t('a', 'm1', 'hi')].join('\n')), 'hi')
+  assert.equal(parseOpenCodeOutput([t('a', 'm1', 'run'), f('m1', 'tool-calls'), t('b', 'm2', 'done')].join('\n')), 'done')
+  assert.throws(() => parseOpenCodeOutput([t('a', 'm1', 'run'), f('m1', 'tool-calls')].join('\n')), /tool-calls/)
   const review = JSON.stringify({ verdict: 'approved', feedback: 'Ready' })
   const message = { role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text: review }] }
   assert.equal(parsePiOutput(JSON.stringify({ type: 'agent_end', messages: [message] })), review)
