@@ -1,0 +1,12 @@
+{
+  "maxAttempts": 3,
+  "harnesses": {
+    "cli-worker": { "type": "command", "command": "node", "args": ["--import", "tsx", "examples/command-worker.ts"] },
+    "demo-review": { "type": "demo" }
+  },
+  "agents": [
+    { "id": "command-worker", "role": "worker", "harness": "cli-worker", "description": "Demonstrates the command protocol" },
+    { "id": "reviewer", "role": "reviewer", "harness": "demo-review", "description": "Deterministic demo review" }
+  ],
+  "router": { "type": "rule" }
+}

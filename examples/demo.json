@@ -1,0 +1,9 @@
+{
+  "maxAttempts": 3,
+  "harnesses": { "demo": { "type": "demo" } },
+  "agents": [
+    { "id": "writer", "role": "worker", "harness": "demo", "description": "Writes and revises the artifact" },
+    { "id": "reviewer", "role": "reviewer", "harness": "demo", "description": "Checks the latest artifact" }
+  ],
+  "router": { "type": "rule" }
+}
