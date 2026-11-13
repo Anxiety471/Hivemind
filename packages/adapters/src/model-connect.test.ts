@@ -744,7 +744,7 @@ describe("compatible connection updates", () => {
     ).not.toHaveProperty("apiKey");
   });
 
-  it("keeps image capability scoped to each explicitly enabled model", () => {
+  it("applies a tick to every enabled model and an untick only to the selected model", () => {
     const vision = connectAsOwner({ ...input, supportsImages: true });
     const text = connectAsOwner({ ...input, modelId: "text-model", supportsImages: false }, vision);
     const nextVision = connectAsOwner(
@@ -755,8 +755,9 @@ describe("compatible connection updates", () => {
     expect(parseModelSecret(text)).toMatchObject({
       visionModelIds: ["arbitrary-model"],
     });
+    // A later tick covers every model enabled by then, including one unticked earlier.
     expect(parseModelSecret(nextVision)).toMatchObject({
-      visionModelIds: ["arbitrary-model", "another-vision-model"],
+      visionModelIds: ["arbitrary-model", "another-vision-model", "text-model"],
     });
   });
   it("stores the enabled models de-duplicated with the default first", () => {

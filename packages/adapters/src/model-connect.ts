@@ -120,11 +120,6 @@ export function buildModelConnectPlaintext(
     if (!modelOutputLeavesInputRoom(maxTokens, contextWindow)) {
       throw new Error("Maximum output tokens must leave room for input");
     }
-    const visionModelIds = updateModelImageCapabilities(
-      previousVisionModelIds,
-      prepared.modelId,
-      input.supportsImages,
-    );
     const includeVisionModelIds =
       !options?.omitVisionModelIds &&
       (input.supportsImages !== undefined || previousVisionModelIds !== undefined);
@@ -137,6 +132,19 @@ export function buildModelConnectPlaintext(
       prepared.modelId,
     );
     const reasoning = input.reasoning ?? compatiblePrevious?.reasoning;
+    // Local patch: ticking "Supports images" applies to every enabled model of the
+    // provider, not just the one selected in the dropdown. Unticking affects only
+    // the selected model.
+    let visionModelIds = updateModelImageCapabilities(
+      previousVisionModelIds,
+      prepared.modelId,
+      input.supportsImages,
+    );
+    if (input.supportsImages === true) {
+      for (const enabledId of enabledModelIds) {
+        visionModelIds = updateModelImageCapabilities(visionModelIds, enabledId, true);
+      }
+    }
     const compatibleCacheCapabilities =
       input.cacheCapabilities ?? compatiblePrevious?.cacheCapabilities;
     const secret: StoredModelSecret = {
