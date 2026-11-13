@@ -19,6 +19,15 @@ const BUILT_IN_PUBLIC_MODEL_HOSTS = new Set(["ollama.com"]);
 /** Hosted compatible services the catalog offers by name. Each one needs a key. */
 export const COMPATIBLE_ENDPOINT_PRESETS: CompatibleEndpointPreset[] = [
   { name: "Ollama Cloud", baseUrl: "https://ollama.com/v1" },
+  { name: "LongCat", baseUrl: "https://api.longcat.chat/openai" },
+  {
+    name: "Alibaba Cloud Token Plan (Singapore)",
+    baseUrl: "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+  },
+  {
+    name: "Alibaba Cloud (Qwen, Singapore)",
+    baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+  },
 ];
 
 export function compatibleEndpointPreset(baseUrl: string | undefined) {
