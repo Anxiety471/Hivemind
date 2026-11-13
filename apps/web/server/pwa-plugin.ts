@@ -17,8 +17,8 @@ export function webManifest() {
   }));
   return {
     id: "/",
-    name: "Pstack",
-    short_name: "Pstack",
+    name: "Backroom",
+    short_name: "Backroom",
     description: "Your team of always-on agents.",
     start_url: "/",
     scope: "/",
