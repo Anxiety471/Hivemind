@@ -1,5 +1,9 @@
 import { useLingui } from "@lingui/react/macro";
-import { DARWIN_WINDOW_CONTROLS_WIDTH_PX, desktopBridge, windowChromeKind } from "../lib/desktop";
+import {
+  DARWIN_WINDOW_CONTROLS_WIDTH_PX,
+  desktopBridge,
+  windowChromeKind,
+} from "../lib/platform/desktop";
 
 // macOS traffic-light colours: fixed platform colours, deliberately not theme tokens.
 export const TRAFFIC_LIGHT_CLOSE = "#FF5F57";
