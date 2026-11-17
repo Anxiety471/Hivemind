@@ -10,6 +10,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/availability"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/botsections"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/pages"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/spendinglimit"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/trustedlinksites"
 )
@@ -83,6 +84,13 @@ func All(database *db.DB) []local.Procedure {
 			ReadOnly: true,
 			Serve: func(ctx context.Context, actor db.Actor, _ orpc.Input) (any, *orpc.Error) {
 				return botsections.List(ctx, database, actor)
+			},
+		},
+		{
+			Name:     "pages.list",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return pages.List(ctx, database, actor, input)
 			},
 		},
 	}
