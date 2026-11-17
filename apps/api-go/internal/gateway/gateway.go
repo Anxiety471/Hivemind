@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/local"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/routes"
 )
 
@@ -29,6 +30,9 @@ type Options struct {
 	Upstream *url.URL
 	Routes   *routes.Store
 	Logger   *slog.Logger
+	// Local serves the procedures this build implements. Nil keeps every entry
+	// that asks for one failing closed instead of silently proxying it.
+	Local *local.Server
 }
 
 // Gateway routes /rpc requests either to the configured procedures' Go handlers
@@ -39,6 +43,7 @@ type Gateway struct {
 	logger    *slog.Logger
 	proxy     *httputil.ReverseProxy
 	transport *http.Transport
+	local     *local.Server
 }
 
 // New builds the gateway handler.
@@ -61,6 +66,7 @@ func New(options Options) *Gateway {
 		routes:    options.Routes,
 		logger:    options.Logger,
 		transport: transport,
+		local:     options.Local,
 	}
 	gateway.proxy = &httputil.ReverseProxy{
 		Rewrite: gateway.rewrite,
@@ -84,15 +90,30 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.URL.Path == "/healthz":
 		g.healthz(status, r)
 	case r.URL.Path == "/rpc" || strings.HasPrefix(r.URL.Path, "/rpc/"):
-		switch g.routes.ModeFor(r.URL.Path) {
+		mode, readOnly := g.routes.Lookup(r.URL.Path)
+		switch mode {
 		case routes.Proxy:
 			g.proxy.ServeHTTP(status, r)
-		case routes.Shadow, routes.Go:
-			// Fail closed and visibly: a table entry for a mode this build does
-			// not implement must not silently change behaviour.
-			g.logger.Error("procedure mode is not implemented by this build",
-				"procedure", procedure, "mode", string(g.routes.ModeFor(r.URL.Path)))
-			writeEnvelope(status, http.StatusNotImplemented, "NOT_IMPLEMENTED", "Not Implemented")
+		case routes.Go:
+			if g.local != nil && g.local.Has(procedure) {
+				g.local.ServeHTTP(status, r, procedure)
+			} else {
+				g.logger.Error("procedure mode is not implemented by this build",
+					"procedure", procedure, "mode", string(mode))
+				writeEnvelope(status, http.StatusNotImplemented, "NOT_IMPLEMENTED", "Not Implemented")
+			}
+		case routes.Shadow:
+			if g.local == nil || !g.local.Has(procedure) {
+				g.logger.Error("procedure shadow has no Go implementation",
+					"procedure", procedure)
+				writeEnvelope(status, http.StatusNotImplemented, "NOT_IMPLEMENTED", "Not Implemented")
+			} else if !readOnly {
+				// Shadowing a write would duplicate it.
+				g.logger.Error("refusing to shadow a write procedure", "procedure", procedure)
+				writeEnvelope(status, http.StatusInternalServerError, "INTERNAL_SERVER_ERROR", "Internal server error")
+			} else {
+				g.shadow(status, r, procedure)
+			}
 		default:
 			writeEnvelope(status, http.StatusInternalServerError, "INTERNAL_SERVER_ERROR", "Internal server error")
 		}

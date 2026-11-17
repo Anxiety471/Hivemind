@@ -133,12 +133,30 @@ func knownMode(mode Mode) bool {
 
 // ModeFor answers what to do with a request path.
 func (s *Store) ModeFor(path string) Mode {
+	mode, _ := s.Lookup(path)
+	return mode
+}
+
+// Lookup answers the mode and whether the procedure is declared read-only.
+func (s *Store) Lookup(path string) (Mode, bool) {
 	config := s.current.Load()
 	key := ProcedureKey(path)
 	if route, ok := config.Routes[key]; ok {
-		return route.Mode
+		return route.Mode, route.ReadOnly
 	}
-	return config.Default
+	return config.Default, false
+}
+
+// HasLocal reports whether any entry asks this build to serve a procedure,
+// which is when the process needs the database and auth secrets.
+func (s *Store) HasLocal() bool {
+	config := s.current.Load()
+	for _, route := range config.Routes {
+		if route.Mode == Shadow || route.Mode == Go {
+			return true
+		}
+	}
+	return false
 }
 
 // Len is the number of explicit entries, for health and logs.
