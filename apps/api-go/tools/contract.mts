@@ -30,7 +30,12 @@ if (!GO_BINARY) throw new Error("GO_BINARY is required");
 const BUILD_ID_FILE = process.env.BUILD_ID_FILE ?? join(process.cwd(), "apps/web/dist/build-id");
 const SECRET = "contract-test-secret-0123456789abcdef";
 const WEB_ORIGIN = "http://127.0.0.1:5173";
-const GO_URL = "http://127.0.0.1:3201";
+// RUN_TAG separates ids and GO_PORT the listener when another run shares the database and host.
+// biome-ignore lint/suspicious/noUndeclaredEnvVars: manual harness, not a turbo task
+const RUN_TAG = process.env.RUN_TAG ? `-${process.env.RUN_TAG}` : "";
+// biome-ignore lint/suspicious/noUndeclaredEnvVars: manual harness, not a turbo task
+const GO_PORT = process.env.GO_PORT ?? "3201";
+const GO_URL = `http://127.0.0.1:${GO_PORT}`;
 
 type Seeded = {
   userId: string;
@@ -124,7 +129,7 @@ go = spawn(
   GO_BINARY,
   [
     "-listen",
-    "127.0.0.1:3201",
+    `127.0.0.1:${GO_PORT}`,
     "-upstream",
     "http://127.0.0.1:3999",
     "-routes",
@@ -298,15 +303,15 @@ function trustedLinkSiteCases(): Case[] {
 function ids(caseName: string) {
   const suffix = caseName.replace(/[^a-z0-9]/g, "");
   return {
-    userId: `ct-${suffix}-u`,
-    orgId: `ct-${suffix}-o`,
-    spaces: [`ct-${suffix}-s1`, `ct-${suffix}-s2`, `ct-${suffix}-s3`] as [string, string, string],
-    skillId: `ct-${suffix}-sk`,
+    userId: `ct${RUN_TAG}-${suffix}-u`,
+    orgId: `ct${RUN_TAG}-${suffix}-o`,
+    spaces: [`ct${RUN_TAG}-${suffix}-s1`, `ct${RUN_TAG}-${suffix}-s2`, `ct${RUN_TAG}-${suffix}-s3`] as [string, string, string],
+    skillId: `ct${RUN_TAG}-${suffix}-sk`,
     skillName: `Contract skill ${suffix}`,
-    serverId: `ct-${suffix}-sv`,
-    serverSlug: `contract-server-${suffix}`,
-    installId: `ct-${suffix}-in`,
-    sessionToken: `token-${suffix}-${"0".repeat(24)}`,
+    serverId: `ct${RUN_TAG}-${suffix}-sv`,
+    serverSlug: `contract-server${RUN_TAG}-${suffix}`,
+    installId: `ct${RUN_TAG}-${suffix}-in`,
+    sessionToken: `token${RUN_TAG}-${suffix}-${"0".repeat(24)}`,
   };
 }
 
@@ -1552,15 +1557,30 @@ function normalize<T>(value: T): T {
 const realtimeSignals: string[] = [];
 
 /** Runs a call and reports the roster and Space-change signals published while it ran. */
-async function observed(settleMs: number, call: () => Promise<any>) {
+async function observed(settleMs: number, call: () => Promise<any>, seeded: Seeded) {
   realtimeSignals.length = 0;
   const result = await call();
   await sleep(settleMs);
+  // Background publishes (TypeScript's and Go's) may still be in flight. Wait until nothing has arrived
+  // for a quiet period, with a hard cap, so none can land in the next case's capture; attribution by the
+  // case's own ids (below) then makes a stray one impossible to misread.
+  const QUIET_MS = 150;
+  const CAP_MS = 4000;
+  const waitStart = Date.now();
+  for (let seen = -1; seen !== realtimeSignals.length && Date.now() - waitStart < CAP_MS; ) {
+    seen = realtimeSignals.length;
+    await sleep(QUIET_MS);
+  }
+  // The database may be shared with another run: only signals naming this case's own ids count.
+  const own = [seeded.userId, ...seeded.spaces];
   const notifications = realtimeSignals
     .filter((payload) => {
       try {
         const { topic } = JSON.parse(payload) as { topic: string };
-        return topic.startsWith("roster-") || topic.startsWith("space-changes:");
+        return (
+          (topic.startsWith("roster-") || topic.startsWith("space-changes:")) &&
+          own.some((id) => topic.endsWith(`:${id}`))
+        );
       } catch {
         return false;
       }
@@ -1712,12 +1732,12 @@ for (const testCase of cases) {
 
   let seeded = await seed(caseIds);
   if (testCase.seed) await testCase.seed(seeded);
-  const tsResult = await observed(settle, () => run(testCase, tsCall, input, seeded));
+  const tsResult = await observed(settle, () => run(testCase, tsCall, input, seeded), seeded);
   const tsState = normalize(await databaseState(caseIds));
 
   seeded = await seed(caseIds);
   if (testCase.seed) await testCase.seed(seeded);
-  const goResult = await observed(settle, () => run(testCase, goCall, input, seeded));
+  const goResult = await observed(settle, () => run(testCase, goCall, input, seeded), seeded);
   const goState = normalize(await databaseState(caseIds));
 
   try {
