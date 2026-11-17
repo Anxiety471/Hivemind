@@ -66,7 +66,7 @@ import { useThreadTranscript } from "../../lib/thread/thread-transcript";
 import { useAutoSpeakReply, useSpeakMessages, useThreadVoiceCall } from "../../lib/thread/thread-voice";
 import { liveEndRunError } from "../../lib/thread/thread-window";
 import { FailedSendBubble } from "./failed-send-bubble";
-import { NewestPageCards } from "../pages/page-card";
+import { NewestPageCards } from "../../lib/pages/page-card";
 import { RunErrorSheet } from "../cards/run-error-sheet";
 import { SelectTextSheet } from "../messages/select-text-sheet";
 import { ThreadComposer } from "../composer/thread-composer";

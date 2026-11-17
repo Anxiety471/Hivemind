@@ -3,9 +3,9 @@ import { useQuery } from "@tanstack/react-query";
 import { Navigate, useParams } from "react-router-dom";
 import { PageHeader } from "../components/PageHeader";
 import { PageLoading } from "../components/PageLoading";
+import { WindowChrome } from "../components/WindowChrome";
 import { desktopBridge } from "../lib/platform/desktop";
 import { rpc } from "../lib/query/rpc";
-import { WindowChrome } from "./WindowChrome";
 
 export function NavLinkPage() {
   const { linkId } = useParams();

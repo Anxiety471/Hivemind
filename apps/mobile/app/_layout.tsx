@@ -58,7 +58,7 @@ import { installClientUpdates, watchForegroundUpdates } from "../lib/api/client-
 import { loadHapticsPreference } from "../lib/native/haptics";
 import { bootstrapI18n } from "../lib/i18n/i18n";
 import { startIncomingCalls } from "../lib/calls/incoming-calls";
-import { clearLastBot } from "../lib/home/last-bot";
+import { clearLastBot } from "../lib/inbox/last-bot";
 import { loadLinkFavicon } from "../lib/messages/link-favicons";
 import {
   configureForegroundNotifications,
@@ -70,13 +70,13 @@ import { native, useMobileTokens, useResolvedAppearance } from "../lib/native/na
 import { useNavigatorMounted } from "../lib/navigation/navigator-mounted";
 import { useNotificationResponses } from "../lib/notifications/open-notification";
 import { clearQueries, resetRpcQueries } from "../lib/query/query";
-import { useReferral } from "../lib/spaces/referral";
+import { useReferral } from "../lib/billing/referral";
 import {
   getCachedRemoteImagesEnabled,
   loadRemoteImagesPreference,
   subscribeRemoteImages,
-} from "../lib/settings/remote-images-preference";
-import { loadResponseStreamingPreference } from "../lib/settings/response-streaming";
+} from "../lib/preferences/remote-images-preference";
+import { loadResponseStreamingPreference } from "../lib/preferences/response-streaming";
 import { clearSavedChats } from "../lib/inbox/saved-chats";
 import {
   currentReadySessionGeneration,

@@ -30,7 +30,7 @@ import { GroupAvatar } from "../bots/group-avatar";
 import { NativeSymbol } from "../native/native-symbol";
 import { DragSafePressable } from "../ui/drag-safe-pressable";
 import type { BotOrganizationUpdate } from "./bot-organize-modal";
-import { createHomeStyles, INBOX_ROW } from "./home-styles";
+import { createHomeStyles, INBOX_ROW } from "./inbox-styles";
 import { InboxSwipeRow } from "./inbox-swipe-row";
 
 export const FALLBACK_COLOR = botColors[3];

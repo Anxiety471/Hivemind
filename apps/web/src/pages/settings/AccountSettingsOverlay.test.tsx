@@ -135,7 +135,7 @@ import {
   composerEnterToSendPreference,
 } from "../../lib/composer/composer-enter-to-send-pref";
 import { localTimezone } from "../../lib/locale/local-timezone";
-import { remoteImagesPreference } from "../../lib/chat/remote-images-preference";
+import { remoteImagesPreference } from "../../lib/preferences/remote-images-preference";
 import { TOOL_ACTIVITY_STORAGE_KEY } from "../../lib/chat/tool-activity-preference";
 import { GeneralSettingsPanels } from "./AccountSettingsOverlay";
 

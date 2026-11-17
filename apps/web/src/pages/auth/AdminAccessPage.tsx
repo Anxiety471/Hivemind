@@ -7,10 +7,10 @@ import { useState } from "react";
 import { Navigate } from "react-router-dom";
 import { PageHeader } from "../../components/PageHeader";
 import { PageLoading } from "../../components/PageLoading";
-import { formatBillingAmount } from "../../lib/billing";
+import { WindowChrome } from "../../components/WindowChrome";
+import { formatBillingAmount } from "../../lib/billing/billing";
 import { useSave, useSpaceQueries } from "../../lib/query/query";
 import { errorText } from "../../lib/query/user-error";
-import { WindowChrome } from "../WindowChrome";
 
 export function AdminAccessPage() {
   const me = useQuery(useSpaceQueries().me.queryOptions());

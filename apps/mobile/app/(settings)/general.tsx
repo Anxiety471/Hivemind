@@ -41,12 +41,12 @@ import {
   getCachedRemoteImagesEnabled,
   setRemoteImagesPreference,
   subscribeRemoteImages,
-} from "../../lib/settings/remote-images-preference";
+} from "../../lib/preferences/remote-images-preference";
 import {
   getCachedResponseStreamingEnabled,
   setResponseStreamingPreference,
   subscribeResponseStreaming,
-} from "../../lib/settings/response-streaming";
+} from "../../lib/preferences/response-streaming";
 import { useScreenQuery } from "../../lib/query/screen-query";
 import { loadSessionToken } from "../../lib/api/session";
 import { createSettingsPageStyles } from "../../lib/settings/settings-page-styles";

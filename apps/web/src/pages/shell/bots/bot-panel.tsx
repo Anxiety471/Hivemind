@@ -28,7 +28,7 @@ import type { ComponentProps, ReactNode } from "react";
 import { Suspense, useEffect, useId, useRef, useState } from "react";
 import { BotEmailAddressField } from "../../../components/BotEmailAddressField";
 import { ErrorBoundary, SectionLoadFailed } from "../../../components/ErrorBoundary";
-import { InstructionSettings } from "../../../components/settings/InstructionSettings";
+import { InstructionSettings } from "./instruction-settings";
 import { PagesList } from "../../../components/pages/PagesList";
 import { botModelChoices } from "../../../lib/bot-model-choices";
 import { botProfilePatch } from "../../../lib/bots/bot-profile-patch";

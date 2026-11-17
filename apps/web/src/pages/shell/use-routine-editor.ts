@@ -8,7 +8,7 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { REVEAL_MS } from "../../components/vault/VaultItemDetail";
 import { localTimezone } from "../../lib/locale/local-timezone";
 import { parseModelOptionKey } from "../../lib/models/model-catalog";
-import type { Panel } from "../../lib/right-panel-state";
+import type { Panel } from "./right-panel-state";
 import type { RoutineDraftState } from "../../lib/routines/routine-draft";
 import {
   draftStateFromRoutine,

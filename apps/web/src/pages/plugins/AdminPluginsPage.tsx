@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Navigate } from "react-router-dom";
 import { PageHeader } from "../../components/PageHeader";
 import { PageLoading } from "../../components/PageLoading";
+import { WindowChrome } from "../../components/WindowChrome";
 import { useSpaceQueries } from "../../lib/query/query";
 import { PluginSubmissionsPanel } from "./PluginSubmissionsPanel";
 import { WindowChrome } from "../WindowChrome";

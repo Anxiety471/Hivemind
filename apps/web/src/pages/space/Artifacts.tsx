@@ -61,7 +61,7 @@ import { useObjectUrl } from "../../lib/pages/use-object-url";
 import type { ErrorDetails } from "../../lib/query/user-error";
 import { errorDetails, errorText } from "../../lib/query/user-error";
 import { useRedrawAtMidnight } from "../shell/chat/use-redraw-at-midnight";
-import { WindowChrome } from "../WindowChrome";
+import { WindowChrome } from "../../components/WindowChrome";
 
 type ViewMode = "grid" | "list";
 type DateFilter = "all" | "today" | "week" | "month";

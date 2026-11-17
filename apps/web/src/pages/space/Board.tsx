@@ -26,10 +26,10 @@ import { PageHeader } from "../../components/PageHeader";
 import { useSave, useSpaceQueries } from "../../lib/query/query";
 import { formatRelativeTime } from "../../lib/locale/relative-time";
 import { rpc } from "../../lib/query/rpc";
-import { useTicketPriorityLabels } from "../../lib/ticket-priority";
-import { useTicketStatusLabels } from "../../lib/ticket-status";
+import { useTicketPriorityLabels } from "./ticket-priority";
+import { useTicketStatusLabels } from "./ticket-status";
 import { errorText } from "../../lib/query/user-error";
-import { WindowChrome } from "../WindowChrome";
+import { WindowChrome } from "../../components/WindowChrome";
 
 export function BoardPage() {
   const statuses = useTicketStatusLabels();
