@@ -15,9 +15,11 @@ afterEach(async () => {
 });
 
 /** A stand-in API that accepts upgrades and echoes the headers each request arrived with. */
-async function startApi() {
+async function startApi(marker = "") {
   const upgrades: http.IncomingHttpHeaders[] = [];
-  const api = http.createServer((req, res) => res.end(JSON.stringify(req.headers)));
+  const api = http.createServer((req, res) =>
+    res.end(JSON.stringify({ marker, headers: req.headers })),
+  );
   api.on("upgrade", (req, socket) => {
     upgrades.push(req.headers);
     socket.end(
@@ -32,6 +34,7 @@ async function startApi() {
 async function startPreview(
   target: string,
   allowedHosts: string[] | true = ["app.example.test", ".team.example.test"],
+  rpcTarget?: string,
 ) {
   const root = await mkdtemp(path.join(tmpdir(), "rakazo-api-proxy-"));
   cleanup.push(() => rm(root, { recursive: true, force: true }));
@@ -45,7 +48,7 @@ async function startPreview(
       host: "127.0.0.1",
       port: 0,
       allowedHosts,
-      proxy: apiProxy(target, () => allowedHosts),
+      proxy: apiProxy(target, () => allowedHosts, rpcTarget),
     },
   });
   cleanup.push(() => server.close());
@@ -116,7 +119,33 @@ describe("apiProxy", () => {
     const response = await fetch(`http://127.0.0.1:${port}/api/devices`, {
       headers: { "X-Forwarded-For": "203.0.113.9" },
     });
-    expect(await response.json()).toMatchObject({ "x-forwarded-for": "203.0.113.9, 127.0.0.1" });
+    expect(await response.json()).toMatchObject({
+      headers: { "x-forwarded-for": "203.0.113.9, 127.0.0.1" },
+    });
+  });
+
+  it("sends /rpc to a configured gateway while other API routes stay on the API", async () => {
+    const { target: apiTarget } = await startApi("api");
+    const { target: rpcTarget } = await startApi("rpc");
+    const port = await startPreview(apiTarget, ["app.example.test"], rpcTarget);
+
+    const rpc = await fetch(`http://127.0.0.1:${port}/rpc/health`, {
+      headers: { "X-Forwarded-For": "203.0.113.9" },
+    });
+    expect(await rpc.json()).toMatchObject({
+      marker: "rpc",
+      headers: { "x-forwarded-for": "203.0.113.9, 127.0.0.1" },
+    });
+
+    const api = await fetch(`http://127.0.0.1:${port}/api/devices`);
+    expect(await api.json()).toMatchObject({ marker: "api" });
+  });
+
+  it("keeps /rpc on the API when no gateway is configured", async () => {
+    const { target } = await startApi("api");
+    const port = await startPreview(target);
+    const rpc = await fetch(`http://127.0.0.1:${port}/rpc/health`);
+    expect(await rpc.json()).toMatchObject({ marker: "api" });
   });
 
   it.each([

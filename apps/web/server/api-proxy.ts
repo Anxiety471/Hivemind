@@ -33,14 +33,16 @@ export function forwardsToApi(url: string | undefined, upgrade = false): boolean
 /**
  * The API routes as Vite proxy options, for development and `vite preview` deployments.
  * `allowedHosts` reads the running server's own list: Vite checks it for plain requests but not
- * for the upgrades its proxy forwards.
+ * for the upgrades its proxy forwards. `rpcTarget` lets a deployment send `/rpc` through a
+ * gateway while every other API route keeps talking to the API directly.
  */
 export function apiProxy(
   target: string,
   allowedHosts: () => readonly string[] | true,
+  rpcTarget?: string,
 ): Record<string, ProxyOptions> {
-  const options = (upgrades: boolean): ProxyOptions => ({
-    target,
+  const options = (upgrades: boolean, routeTarget = target): ProxyOptions => ({
+    target: routeTarget,
     changeOrigin: true,
     ws: upgrades,
     ...(upgrades
@@ -65,7 +67,10 @@ export function apiProxy(
     },
   });
   return Object.fromEntries(
-    Object.entries(API_ROUTES).map(([route, upgrades]) => [route, options(upgrades)]),
+    Object.entries(API_ROUTES).map(([route, upgrades]) => [
+      route,
+      options(upgrades, route === "/rpc" && rpcTarget ? rpcTarget : target),
+    ]),
   );
 }
 

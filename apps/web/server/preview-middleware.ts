@@ -487,6 +487,8 @@ export function webServerSettings(read: (name: string) => string | undefined, lo
   return {
     log,
     api: read("API_PROXY_TARGET") ?? "http://127.0.0.1:3100",
+    /** Optional gateway for `/rpc`; unset keeps the API target for every route. */
+    rpcApi: read("RAKAZO_RPC_PROXY_TARGET"),
     allowedHosts: [
       read("RAKAZO_HOST") ?? "localhost",
       ...(read("RAKAZO_ALLOWED_HOSTS") ?? "")

@@ -33,11 +33,11 @@ export default defineConfig(({ command, mode }) => {
     (name) => process.env[name] ?? rootEnv[name],
     createServiceLogger({ service: "rakazo-web" }),
   );
-  const { api, allowedHosts, appPolicy, instanceTheme } = settings;
+  const { api, rpcApi, allowedHosts, appPolicy, instanceTheme } = settings;
   // Set by the server built from this config; reusing one config object for two servers would
   // leave the last one's list.
   let proxyHosts: readonly string[] | true = [];
-  const proxy = apiProxy(api, () => proxyHosts);
+  const proxy = apiProxy(api, () => proxyHosts, rpcApi);
   return {
     build: {
       sourcemap: true,
