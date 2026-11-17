@@ -55,7 +55,39 @@ func Marshal(value any) ([]byte, error) {
 	if err := encoder.Encode(value); err != nil {
 		return nil, err
 	}
-	return bytes.TrimSuffix(buffer.Bytes(), []byte("\n")), nil
+	return unescapeLineSeparators(bytes.TrimSuffix(buffer.Bytes(), []byte("\n"))), nil
+}
+
+// unescapeLineSeparators undoes Go's escaping of U+2028 and U+2029, which
+// JSON.stringify writes as the characters themselves. Only a `\u202X` escape that
+// starts a token is replaced: one after an odd run of backslashes is escaped text.
+func unescapeLineSeparators(body []byte) []byte {
+	if !bytes.Contains(body, []byte(`\u202`)) {
+		return body
+	}
+	var out bytes.Buffer
+	out.Grow(len(body))
+	for i := 0; i < len(body); i++ {
+		if body[i] == '\\' {
+			if i+1 < len(body) && body[i+1] == '\\' {
+				out.WriteString(`\\`)
+				i++
+				continue
+			}
+			if bytes.HasPrefix(body[i:], []byte(`\u2028`)) {
+				out.WriteString("\u2028")
+				i += 5
+				continue
+			}
+			if bytes.HasPrefix(body[i:], []byte(`\u2029`)) {
+				out.WriteString("\u2029")
+				i += 5
+				continue
+			}
+		}
+		out.WriteByte(body[i])
+	}
+	return out.Bytes()
 }
 
 // WriteJSON writes a successful {json: value} reply.

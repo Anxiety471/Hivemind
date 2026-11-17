@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"io"
 	"math"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -32,6 +33,9 @@ func (p Path) with(key any) Path {
 
 // With returns the path extended by one key.
 func (p Path) With(key any) Path { return p.with(key) }
+
+// Raw is the path as the issue's `path` array.
+func (p Path) Raw() []any { return p.json() }
 
 func (p Path) json() []any {
 	if p == nil {
@@ -448,6 +452,34 @@ func ArrayBounds(path Path, length, minimum, maximum int) []Issue {
 		issues = append(issues, tooBig("array", maximum, path))
 	}
 	return issues
+}
+
+const (
+	isoDateSource = `(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))`
+	isoTimeSource = `(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?`
+	// z.iso.datetime({ offset: true }): seconds are required wherever the time carries Z or an offset.
+	isoDateTimeSource = `^` + isoDateSource + `T(?:` + isoTimeSource + `(?:Z|([+-](?:[01]\d|2[0-3]):[0-5]\d)))$`
+)
+
+var isoDateTimePattern = regexp.MustCompile(isoDateTimeSource)
+
+// ISODateTime validates z.iso.datetime({ offset: true }); nullable adds .nullable().
+// A valid value is returned as text (nil for an accepted null).
+func ISODateTime(path Path, raw any, nullable bool) (*string, []Issue) {
+	if raw == nil && nullable {
+		return nil, nil
+	}
+	text, ok := raw.(string)
+	if !ok {
+		return nil, []Issue{TypeIssue("string", JSType(raw), path)}
+	}
+	if !isoDateTimePattern.MatchString(text) {
+		return nil, []Issue{{
+			"origin": "string", "code": "invalid_format", "format": "datetime",
+			"pattern": "/" + isoDateTimeSource + "/", "path": path.json(), "message": "Invalid ISO datetime",
+		}}
+	}
+	return &text, nil
 }
 
 // Enum validates z.enum([...]): anything else, whatever its type, is invalid_value.

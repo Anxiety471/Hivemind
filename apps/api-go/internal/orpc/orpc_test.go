@@ -61,3 +61,14 @@ func TestDecodeInput(t *testing.T) {
 		t.Errorf("oversized failure = %v", failure)
 	}
 }
+
+func TestMarshalWritesLineSeparatorsLikeJSONStringify(t *testing.T) {
+	body, err := Marshal(map[string]any{"a": "x\u2028y\u2029z", "b": `\u2028 literal`, "c": "<&>"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "{\"a\":\"x\u2028y\u2029z\",\"b\":\"\\\\u2028 literal\",\"c\":\"<&>\"}"
+	if string(body) != want {
+		t.Fatalf("got %q want %q", body, want)
+	}
+}
