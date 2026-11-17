@@ -9,8 +9,9 @@
  *   GO_BINARY=/tmp/rakazo-gateway node_modules/.bin/tsx apps/api-go/tools/contract.mts
  */
 import assert from "node:assert/strict";
-import { spawn, type ChildProcess } from "node:child_process";
-import { createHmac, randomBytes } from "node:crypto";
+import type { ChildProcess } from "node:child_process";
+import { spawn } from "node:child_process";
+import { createHmac } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,8 +21,10 @@ import { createApp } from "../../api/src/app.js";
 
 const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) throw new Error("DATABASE_URL is required");
+// biome-ignore lint/suspicious/noUndeclaredEnvVars: manual harness, not a turbo task
 const GO_BINARY = process.env.GO_BINARY;
 if (!GO_BINARY) throw new Error("GO_BINARY is required");
+// biome-ignore lint/suspicious/noUndeclaredEnvVars: manual harness, not a turbo task
 const BUILD_ID_FILE = process.env.BUILD_ID_FILE ?? join(process.cwd(), "apps/web/dist/build-id");
 const SECRET = "contract-test-secret-0123456789abcdef";
 const WEB_ORIGIN = "http://127.0.0.1:5173";
@@ -220,10 +223,20 @@ async function reset(seeded: ReturnType<typeof ids>) {
 async function seed(caseIds: ReturnType<typeof ids>): Promise<Seeded> {
   await reset(caseIds);
   await system.user.create({
-    data: { id: caseIds.userId, name: "Contract User", email: `${caseIds.userId}@example.test`, emailVerified: true },
+    data: {
+      id: caseIds.userId,
+      name: "Contract User",
+      email: `${caseIds.userId}@example.test`,
+      emailVerified: true,
+    },
   });
   await system.organization.create({
-    data: { id: caseIds.orgId, name: "Contract Org", slug: `contract-${caseIds.userId}`, createdAt: new Date() },
+    data: {
+      id: caseIds.orgId,
+      name: "Contract Org",
+      slug: `contract-${caseIds.userId}`,
+      createdAt: new Date(),
+    },
   });
   await system.member.create({
     data: {
@@ -236,7 +249,12 @@ async function seed(caseIds: ReturnType<typeof ids>): Promise<Seeded> {
   });
   for (const [index, spaceId] of caseIds.spaces.entries()) {
     await system.space.create({
-      data: { id: spaceId, organizationId: caseIds.orgId, name: `Space ${index + 1}`, isDefault: index === 0 },
+      data: {
+        id: spaceId,
+        organizationId: caseIds.orgId,
+        name: `Space ${index + 1}`,
+        isDefault: index === 0,
+      },
     });
     await system.spaceMember.create({
       data: {
