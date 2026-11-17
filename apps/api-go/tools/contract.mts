@@ -15,7 +15,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { asSystem } from "@rakazo/db";
+import { asSystem } from "../../../packages/db/src/index.js";
 import { createApp } from "../../api/src/app.js";
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -83,6 +83,16 @@ await writeFile(
     },
   }),
 );
+process.on("uncaughtException", (error) => {
+  go?.kill("SIGKILL");
+  console.error(error);
+  process.exit(1);
+});
+process.on("unhandledRejection", (error) => {
+  go?.kill("SIGKILL");
+  console.error(error);
+  process.exit(1);
+});
 go = spawn(
   GO_BINARY,
   [
@@ -213,10 +223,16 @@ async function seed(caseIds: ReturnType<typeof ids>): Promise<Seeded> {
     data: { id: caseIds.userId, name: "Contract User", email: `${caseIds.userId}@example.test`, emailVerified: true },
   });
   await system.organization.create({
-    data: { id: caseIds.orgId, name: "Contract Org", slug: `contract-${caseIds.userId}` },
+    data: { id: caseIds.orgId, name: "Contract Org", slug: `contract-${caseIds.userId}`, createdAt: new Date() },
   });
   await system.member.create({
-    data: { id: `${caseIds.orgId}-m`, organizationId: caseIds.orgId, userId: caseIds.userId, role: "owner" },
+    data: {
+      id: `${caseIds.orgId}-m`,
+      organizationId: caseIds.orgId,
+      userId: caseIds.userId,
+      role: "owner",
+      createdAt: new Date(),
+    },
   });
   for (const [index, spaceId] of caseIds.spaces.entries()) {
     await system.space.create({

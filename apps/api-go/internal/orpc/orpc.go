@@ -16,6 +16,8 @@ type Error struct {
 	Code    string
 	Status  int
 	Message string
+	// Data is the optional error payload; validation errors carry zod issues.
+	Data any
 }
 
 func (e *Error) Error() string { return fmt.Sprintf("%s: %s", e.Code, e.Message) }
@@ -26,12 +28,20 @@ func New(code string, status int, message string) *Error {
 }
 
 func BadRequest(message string) *Error { return New("BAD_REQUEST", 400, message) }
-func Unauthorized() *Error             { return New("UNAUTHORIZED", 401, "Unauthorized") }
-func Forbidden(message string) *Error  { return New("FORBIDDEN", 403, message) }
-func NotFound(message string) *Error   { return New("NOT_FOUND", 404, message) }
-func Conflict(message string) *Error   { return New("CONFLICT", 409, message) }
-func TooLarge(message string) *Error   { return New("PAYLOAD_TOO_LARGE", 413, message) }
-func Unavailable() *Error              { return New("SERVICE_UNAVAILABLE", 503, "Service Unavailable") }
+
+// InvalidInput is the shape the oRPC contract layer produces for a failed
+// schema check: message plus the zod issues under data.
+func InvalidInput(issues ...map[string]any) *Error {
+	failure := New("BAD_REQUEST", 400, "Input validation failed")
+	failure.Data = map[string]any{"issues": issues}
+	return failure
+}
+func Unauthorized() *Error            { return New("UNAUTHORIZED", 401, "Unauthorized") }
+func Forbidden(message string) *Error { return New("FORBIDDEN", 403, message) }
+func NotFound(message string) *Error  { return New("NOT_FOUND", 404, message) }
+func Conflict(message string) *Error  { return New("CONFLICT", 409, message) }
+func TooLarge(message string) *Error  { return New("PAYLOAD_TOO_LARGE", 413, message) }
+func Unavailable() *Error             { return New("SERVICE_UNAVAILABLE", 503, "Service Unavailable") }
 func Internal() *Error {
 	return New("INTERNAL_SERVER_ERROR", 500, "Internal server error")
 }
@@ -63,14 +73,16 @@ func WriteJSON(w http.ResponseWriter, status int, value any) {
 // WriteError writes the ORPC error envelope. The client requires exactly these
 // keys and rejects extra ones.
 func WriteError(w http.ResponseWriter, failure *Error) {
-	body, err := Marshal(map[string]any{
-		"json": map[string]any{
-			"defined": false,
-			"code":    failure.Code,
-			"status":  failure.Status,
-			"message": failure.Message,
-		},
-	})
+	envelope := map[string]any{
+		"defined": false,
+		"code":    failure.Code,
+		"status":  failure.Status,
+		"message": failure.Message,
+	}
+	if failure.Data != nil {
+		envelope["data"] = failure.Data
+	}
+	body, err := Marshal(map[string]any{"json": envelope})
 	if err != nil {
 		body = []byte(`{"json":{"defined":false,"code":"INTERNAL_SERVER_ERROR","status":500,"message":"Internal server error"}}`)
 		failure = Internal()
