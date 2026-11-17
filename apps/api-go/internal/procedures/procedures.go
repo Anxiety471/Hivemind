@@ -10,6 +10,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/availability"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/botsections"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/messaging"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/pages"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/spendinglimit"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/trustedlinksites"
@@ -115,6 +116,56 @@ func All(database *db.DB) []local.Procedure {
 			Name: "botSections.remove",
 			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
 				return botsections.Remove(ctx, database, actor, input)
+			},
+		},
+		{
+			Name: "messaging.link.start",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return messaging.LinkStart(ctx, database, actor, input)
+			},
+		},
+		{
+			Name: "messaging.identities.setBot",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return messaging.SetBot(ctx, database, actor, input)
+			},
+		},
+		{
+			Name: "messaging.identities.unlink",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return messaging.Unlink(ctx, database, actor, input)
+			},
+		},
+		{
+			Name:     "messaging.channels.list",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return messaging.ChannelsList(ctx, database, actor, input)
+			},
+		},
+		{
+			Name: "messaging.channels.respond",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return messaging.ChannelsRespond(ctx, database, actor, input)
+			},
+		},
+		{
+			Name: "messaging.channels.leave",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return messaging.ChannelsLeave(ctx, database, actor, input)
+			},
+		},
+		{
+			Name:     "messaging.connections.list",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return messaging.ConnectionsList(ctx, database, actor, input)
+			},
+		},
+		{
+			Name: "messaging.connections.revoke",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return messaging.ConnectionsRevoke(ctx, database, actor, input)
 			},
 		},
 	}

@@ -19,7 +19,9 @@ func TestRegistryHasTheServedProceduresAndNotTrust(t *testing.T) {
 		"availability.items", "availability.set", "availability.chooseForSpace",
 		"trustedLinkSites.list", "trustedLinkSites.remove",
 		"spendingLimit.payments", "spendingLimit.get", "botSections.list", "pages.list",
-		"spendingLimit.set", "botSections.create", "botSections.update", "botSections.remove",
+		"spendingLimit.set",
+		"messaging.link.start", "messaging.identities.setBot", "messaging.identities.unlink", "messaging.channels.list",
+		"messaging.channels.respond", "messaging.channels.leave", "messaging.connections.list", "messaging.connections.revoke", "botSections.create", "botSections.update", "botSections.remove",
 	} {
 		if !seen[name] {
 			t.Errorf("missing %s", name)
@@ -28,6 +30,14 @@ func TestRegistryHasTheServedProceduresAndNotTrust(t *testing.T) {
 	// trust needs WHATWG URL parsing and the tldts suffix list; it stays on TypeScript.
 	if seen["trustedLinkSites.trust"] {
 		t.Error("trustedLinkSites.trust must not be served locally")
+	}
+	// installations.* need Slack and the delivery outbox; status and installations.list read
+	// deployment configuration; connections.respond writes the outbox.
+	for _, name := range []string{"messaging.status", "messaging.installations.list", "messaging.installations.start",
+		"messaging.installations.complete", "messaging.installations.remove", "messaging.connections.respond"} {
+		if seen[name] {
+			t.Errorf("%s must not be served locally", name)
+		}
 	}
 	// The other pages procedures read share secrets and versions; they stay on TypeScript.
 	for _, name := range []string{"pages.get", "pages.rename", "pages.setVisibility", "pages.pin", "pages.remove"} {
