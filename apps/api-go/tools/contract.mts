@@ -19,6 +19,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { asSystem } from "../../../packages/db/src/index.js";
 import { createApp } from "../../api/src/app.js";
 import { spendingPeriodStart } from "../../../packages/core/src/spending.js";
+import { createRequire } from "node:module";
 
 const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) throw new Error("DATABASE_URL is required");
@@ -94,6 +95,10 @@ await writeFile(
       "spendingLimit.get": { mode: "go", readOnly: true },
       "botSections.list": { mode: "go", readOnly: true },
       "pages.list": { mode: "go", readOnly: true },
+      "spendingLimit.set": { mode: "go" },
+      "botSections.create": { mode: "go" },
+      "botSections.update": { mode: "go" },
+      "botSections.remove": { mode: "go" },
     },
   }),
 );
@@ -141,6 +146,16 @@ for (let attempt = 0; attempt < 100; attempt += 1) {
   if (attempt === 99) throw new Error("go gateway did not start");
   await sleep(50);
 }
+
+// A listener on the realtime channel: TypeScript and Go must publish identical signals.
+const databaseRequire = createRequire(new URL("../../../packages/db/package.json", import.meta.url));
+const { Client: PgClient } = databaseRequire("pg") as { Client: new (options: { connectionString: string }) => any };
+const realtime = new PgClient({ connectionString: DATABASE_URL });
+await realtime.connect();
+await realtime.query("LISTEN rakazo_events");
+realtime.on("notification", (notification: { payload?: string }) => {
+  if (notification.payload) realtimeSignals.push(notification.payload);
+});
 
 const cases: Case[] = [
   { name: "items", procedure: "availability.items", input: {} },
@@ -197,10 +212,33 @@ const cases: Case[] = [
       });
     },
   },
+  // Validation shapes for availability that the first slice did not compare.
+  { name: "set-invalid-kind", procedure: "availability.set", input: { kind: "bogus", id: "__skill__", allSpaces: false, spaceIds: ["__sp1__"] } },
+  { name: "set-invalid-missing-all", procedure: "availability.set", input: {} },
+  { name: "set-invalid-types", procedure: "availability.set", input: { kind: 5, id: 7, allSpaces: "no", spaceIds: "x" } },
+  { name: "set-invalid-empty-id", procedure: "availability.set", input: { kind: "skill", id: "", allSpaces: false, spaceIds: [""] } },
+  { name: "choose-invalid-kind", procedure: "availability.chooseForSpace", input: { spaceId: "__sp1__", items: [{ kind: "bogus", id: "x" }] } },
+  { name: "choose-invalid-types", procedure: "availability.chooseForSpace", input: { spaceId: 5, items: "x" } },
+  { name: "choose-invalid-empty", procedure: "availability.chooseForSpace", input: { spaceId: "", items: [{ kind: "skill", id: "" }] } },
+  { name: "set-invalid-array-input", procedure: "availability.set", input: [] },
+  { name: "set-invalid-null-input", procedure: "availability.set", input: null },
+  { name: "set-invalid-no-input", procedure: "availability.set", input: undefined },
+  { name: "set-invalid-spaceids-mixed", procedure: "availability.set", input: { kind: "skill", id: "__skill__", allSpaces: false, spaceIds: [1, "", null, "ok"] } },
+  { name: "set-invalid-spaceids-empty-and-id", procedure: "availability.set", input: { kind: "skill", id: "", allSpaces: true, spaceIds: [] } },
+  { name: "set-invalid-id-array", procedure: "availability.set", input: { kind: "skill", id: [], allSpaces: true, spaceIds: ["__sp1__"] } },
+  { name: "set-invalid-extra-keys-ok", procedure: "availability.set", input: { kind: "skill", id: "missing", allSpaces: true, spaceIds: ["__sp1__"], more: 1 } },
+  { name: "choose-invalid-array-input", procedure: "availability.chooseForSpace", input: [] },
+  { name: "choose-invalid-no-input", procedure: "availability.chooseForSpace", input: undefined },
+  { name: "choose-invalid-items-mixed", procedure: "availability.chooseForSpace", input: { spaceId: "__sp1__", items: [1, null, [], {}, { kind: "skill" }, { kind: "skill", id: "x" }] } },
+  { name: "choose-invalid-too-many", procedure: "availability.chooseForSpace", input: { spaceId: "__sp1__", items: Array.from({ length: 501 }, () => ({ kind: "skill", id: "x" })) } },
+  { name: "choose-invalid-too-many-and-bad", procedure: "availability.chooseForSpace", input: { spaceId: "", items: Array.from({ length: 501 }, () => ({ kind: "bogus", id: "" })) } },
+  { name: "choose-invalid-items-missing", procedure: "availability.chooseForSpace", input: { spaceId: "__sp1__" } },
   ...trustedLinkSiteCases(),
   ...spendingLimitCases(),
   ...botSectionCases(),
   ...pageCases(),
+  ...botSectionWriteCases(),
+  ...spendingSetCases(),
 ];
 
 const SITES = ["zeta.example", "alpha.example", "Beta.example", "_under.example", "10.0.0.1"];
@@ -570,6 +608,247 @@ async function seedPages(seeded: Seeded) {
   await page("x2", "other user", PAGE_BASE, { userId: other });
 }
 
+type WriteSeed = { deleting?: boolean; noSections?: boolean };
+
+/** Bots, groups and sections for the botSections write cases (ids: `${userId}-ba` and so on). */
+function seedWrites(config: WriteSeed = {}) {
+  return async (seeded: Seeded) => {
+    const other = `${seeded.userId}-other`;
+    await system.user.create({
+      data: { id: other, name: "Other", email: `${other}@example.test`, emailVerified: true },
+    });
+    const user = seeded.userId;
+    const old = new Date(Date.UTC(2020, 0, 1));
+    const base = Date.UTC(2026, 4, 1, 12, 0, 0, 0);
+    const section = (id: string, spaceId: string, userId: string, name: string, position: number, offset: number) =>
+      system.botSection.create({
+        data: {
+          id: `${user}-${id}`,
+          spaceId,
+          userId,
+          name,
+          position,
+          createdAt: new Date(base + offset),
+          updatedAt: new Date(base + offset + 1),
+        },
+      });
+    if (!config.noSections) {
+      await section("s1", seeded.spaces[0], user, "Work", 0, 0);
+      await section("s2", seeded.spaces[0], other, "Play", 1, 1000);
+      await section("s3", seeded.spaces[1], user, "Elsewhere", 0, 0);
+    }
+    const bot = (id: string, spaceId: string, name: string, extra: Record<string, unknown> = {}) =>
+      system.bot.create({
+        data: { id: `${user}-${id}`, spaceId, userId: user, name, color: "blue", updatedAt: old, ...extra },
+      });
+    await bot("ba", seeded.spaces[0], "Bot A");
+    await bot("bb", seeded.spaces[0], "Bot B", config.noSections ? {} : { sectionId: `${user}-s2` });
+    await bot("bx", seeded.spaces[1], "Bot X");
+    await bot("barch", seeded.spaces[0], "Bot archived", { archivedAt: old });
+    const group = (id: string, name: string, extra: Record<string, unknown> = {}) =>
+      system.chatGroup.create({
+        data: { id: `${user}-${id}`, spaceId: seeded.spaces[0], userId: user, name, updatedAt: old, ...extra },
+      });
+    await group("grp", "Group", config.noSections ? {} : { sectionId: `${user}-s2` });
+    await group("garch", "Group archived", { archivedAt: old });
+    if (config.deleting) {
+      await system.space.update({ where: { id: seeded.spaces[0] }, data: { deletingAt: new Date() } });
+    }
+  };
+}
+
+function botSectionWriteCases(): Case[] {
+  const create = (name: string, input: unknown, extra: Partial<Case> = {}): Case => ({
+    name: `bsw-create-${name}`,
+    procedure: "botSections.create",
+    input,
+    seed: seedWrites(),
+    ...extra,
+  });
+  const update = (name: string, input: unknown, extra: Partial<Case> = {}): Case => ({
+    name: `bsw-update-${name}`,
+    procedure: "botSections.update",
+    input,
+    seed: seedWrites(),
+    ...extra,
+  });
+  const remove = (name: string, input: unknown, extra: Partial<Case> = {}): Case => ({
+    name: `bsw-remove-${name}`,
+    procedure: "botSections.remove",
+    input,
+    seed: seedWrites(),
+    ...extra,
+  });
+  return [
+    create("bot-new", { botId: "__ba__", name: "Fresh" }),
+    create("bot-new-empty-space", { botId: "__ba__", name: "Fresh" }, { seed: seedWrites({ noSections: true }) }),
+    create("bot-existing-own", { botId: "__ba__", name: "Work" }),
+    create("bot-existing-other-member", { botId: "__ba__", name: "Play" }),
+    create("bot-moves-section", { botId: "__bb__", name: "Work" }),
+    create("bot-already-in-section", { botId: "__bb__", name: "Play" }),
+    create("group-new", { groupId: "__grp__", name: "Fresh" }),
+    create("group-existing", { groupId: "__grp__", name: "Work" }),
+    create("trim", { botId: "__ba__", name: "  Spaced \t" }),
+    create("case-sensitive", { botId: "__ba__", name: "work" }),
+    create("name-60", { botId: "__ba__", name: "n".repeat(60) }),
+    create("name-astral-60", { botId: "__ba__", name: "😀".repeat(60) }),
+    create("name-61", { botId: "__ba__", name: "n".repeat(61) }),
+    create("name-astral-61", { botId: "__ba__", name: "😀".repeat(61) }),
+    create("name-padded-61", { botId: "__ba__", name: ` ${"n".repeat(61)} ` }),
+    create("bot-other-space", { botId: "__bx__", name: "x" }),
+    create("bot-archived", { botId: "__barch__", name: "x" }),
+    create("bot-unknown", { botId: "nope", name: "x" }),
+    create("group-archived", { groupId: "__garch__", name: "x" }),
+    create("group-unknown", { groupId: "nope", name: "x" }),
+    create("space-deleting", { botId: "__ba__", name: "x" }, { seed: seedWrites({ deleting: true }) }),
+    create("space-deleting-unknown-bot", { botId: "nope", name: "x" }, { seed: seedWrites({ deleting: true }) }),
+    create("neither", { name: "x" }),
+    create("both", { botId: "__ba__", groupId: "__grp__", name: "x" }),
+    create("empty-bot-id", { botId: "", name: "x" }),
+    create("empty-bot-id-with-group", { botId: "", groupId: "__grp__", name: "x" }),
+    create("empty-both-ids", { botId: "", groupId: "", name: "x" }),
+    create("bot-id-number", { botId: 5, name: "x" }),
+    create("bot-id-null", { botId: null, name: "x" }),
+    create("group-id-empty-array", { groupId: [], name: "x" }),
+    create("group-id-array", { groupId: [1], name: "x" }),
+    create("name-missing", { botId: "__ba__" }),
+    create("name-number", { botId: "__ba__", name: 5 }),
+    create("name-null", { botId: "__ba__", name: null }),
+    create("name-blank", { botId: "__ba__", name: "   " }),
+    create("name-empty", { botId: "__ba__", name: "" }),
+    create("name-nbsp-only", { botId: "__ba__", name: "\u00a0\u3000" }),
+    create("name-array", { botId: "__ba__", name: [] }),
+    create("name-object-length", { botId: "__ba__", name: { length: 70 } }),
+    create("many-issues", { botId: "", groupId: "", name: "" }),
+    create("extra-keys-ignored", { botId: "__ba__", name: "Extra", more: 1 }),
+    create("no-input", undefined),
+    create("null-input", null),
+    create("array-input", []),
+    create("string-input", "x"),
+    create("anonymous", { botId: "__ba__", name: "Fresh" }, { anonymous: true }),
+    update("rename", { sectionId: "__s1__", name: "Office" }),
+    update("rename-trim", { sectionId: "__s1__", name: "  Office  " }),
+    update("rename-case", { sectionId: "__s1__", name: "work" }),
+    update("same-name", { sectionId: "__s1__", name: "Work" }),
+    update("same-name-after-trim", { sectionId: "__s1__", name: "  Work  " }),
+    update("conflict", { sectionId: "__s1__", name: "Play" }),
+    update("conflict-other-member-rename", { sectionId: "__s2__", name: "Work" }),
+    update("other-space-section", { sectionId: "__s3__", name: "Z" }),
+    update("other-space-same-name", { sectionId: "__s3__", name: "Elsewhere" }),
+    update("unknown", { sectionId: "nope", name: "Z" }),
+    update("name-61", { sectionId: "__s1__", name: "n".repeat(61) }),
+    update("name-60-astral", { sectionId: "__s1__", name: "😀".repeat(60) }),
+    update("section-missing", { name: "Z" }),
+    update("section-empty", { sectionId: "", name: "Z" }),
+    update("section-number", { sectionId: 5, name: "Z" }),
+    update("section-array", { sectionId: [], name: "Z" }),
+    update("name-missing", { sectionId: "__s1__" }),
+    update("name-blank", { sectionId: "__s1__", name: "  " }),
+    update("name-null", { sectionId: "__s1__", name: null }),
+    update("both-invalid", { sectionId: "", name: "" }),
+    update("extra-keys-ignored", { sectionId: "__s1__", name: "Office", more: 1 }),
+    update("no-input", undefined),
+    update("null-input", null),
+    update("space-deleting-rename", { sectionId: "__s1__", name: "Office" }, { seed: seedWrites({ deleting: true }) }),
+    update("space-deleting-same-name", { sectionId: "__s1__", name: "Work" }, { seed: seedWrites({ deleting: true }) }),
+    update("anonymous", { sectionId: "__s1__", name: "Office" }, { anonymous: true }),
+    remove("with-members", { sectionId: "__s2__" }),
+    remove("empty", { sectionId: "__s1__" }),
+    remove("other-space", { sectionId: "__s3__" }),
+    remove("unknown", { sectionId: "nope" }),
+    remove("missing", {}),
+    remove("empty-id", { sectionId: "" }),
+    remove("number-id", { sectionId: 5 }),
+    remove("array-id", { sectionId: [] }),
+    remove("array-id-one", { sectionId: [1] }),
+    remove("extra-keys-ignored", { sectionId: "__s1__", more: 1 }),
+    remove("no-input", undefined),
+    remove("null-input", null),
+    remove("array-input", []),
+    remove("space-deleting", { sectionId: "__s1__" }, { seed: seedWrites({ deleting: true }) }),
+    remove("anonymous", { sectionId: "__s1__" }, { anonymous: true }),
+  ];
+}
+
+function spendingSetCases(): Case[] {
+  const set = (name: string, input: unknown, seed?: Case["seed"], extra: Partial<Case> = {}): Case => ({
+    name: `sls-${name}`,
+    procedure: "spendingLimit.set",
+    input,
+    seed: seed ?? seedSpending(),
+    ...extra,
+  });
+  const long = new Date(Date.UTC(2020, 0, 1));
+  const limit = (amount: number, currency: string, period: string) => ({ limit: { amount, currency, period } });
+  const cases: Case[] = [];
+  for (const currency of ["usd", "eur", "gbp", "ils"]) {
+    for (const period of ["day", "week", "month", "none"]) {
+      cases.push(set(`new-${currency}-${period}`, limit(250, currency, period)));
+    }
+  }
+  const existing = (period: string) =>
+    seedSpending({ limit: { amount: 1000, currency: "usd", period, startsAt: long } });
+  return [
+    ...cases,
+    set("replace-same-period", limit(2000, "eur", "week"), existing("week")),
+    set("replace-day-with-week", limit(2000, "usd", "week"), existing("day")),
+    set("day-to-none-restarts", limit(500, "usd", "none"), existing("day")),
+    set("none-to-none-keeps-start", limit(500, "eur", "none"), existing("none")),
+    set("none-to-day-keeps-start", limit(500, "usd", "day"), existing("none")),
+    set("remove-existing", { limit: null }, existing("week")),
+    set("remove-none-existing", { limit: null }),
+    set(
+      "with-payments-in-status",
+      limit(900, "usd", "day"),
+      seedSpending({
+        limit: { amount: 1000, currency: "usd", period: "week", startsAt: long },
+        payments: ({ now }) => [{ id: "a", botId: "b", currency: "usd", amount: 70, createdAt: new Date(now.getTime() - 1000) }],
+      }),
+    ),
+    set("card-makes-it-shown", { limit: null }, seedSpending({ card: "account" })),
+    set("amount-1", limit(1, "usd", "day")),
+    set("amount-max", limit(100_000_000, "usd", "day")),
+    set("amount-over-max", limit(100_000_001, "usd", "day")),
+    set("amount-zero", limit(0, "usd", "day")),
+    set("amount-negative", limit(-1, "usd", "day")),
+    set("amount-fraction", limit(1.5, "usd", "day")),
+    set("amount-small-fraction", limit(0.5, "usd", "day")),
+    set("amount-string", limit("5" as never, "usd", "day")),
+    set("amount-null", limit(null as never, "usd", "day")),
+    set("amount-bool", limit(true as never, "usd", "day")),
+    set("amount-huge", limit(1e300, "usd", "day")),
+    set("amount-negative-huge", limit(-1e300, "usd", "day")),
+    set("amount-unsafe", limit(9007199254740993, "usd", "day")),
+    set("amount-missing", { limit: { currency: "usd", period: "day" } }),
+    set("currency-unknown", limit(5, "jpy", "day")),
+    set("currency-uppercase", limit(5, "USD", "day")),
+    set("currency-number", limit(5, 5 as never, "day")),
+    set("currency-null", limit(5, null as never, "day")),
+    set("currency-array", limit(5, [] as never, "day")),
+    set("currency-missing", { limit: { amount: 5, period: "day" } }),
+    set("period-unknown", limit(5, "usd", "hourly")),
+    set("period-null", limit(5, "usd", null as never)),
+    set("period-missing", { limit: { amount: 5, currency: "usd" } }),
+    set("all-invalid", limit(0, "jpy", "hourly")),
+    set("all-missing", { limit: {} }),
+    set("limit-missing", {}),
+    set("limit-string", { limit: "x" }),
+    set("limit-number", { limit: 5 }),
+    set("limit-array", { limit: [] }),
+    set("limit-bool", { limit: true }),
+    set("limit-extra-key", { limit: { amount: 5, currency: "usd", period: "day", more: 1 } }),
+    set("outer-extra-key", { limit: null, more: 1 }),
+    set("outer-extra-key-with-limit", { ...limit(5, "usd", "day"), b: 1, 2: 1 }),
+    set("both-extra-keys", { limit: { amount: 0, currency: "usd", period: "day", more: 1 }, other: 1 }),
+    set("no-input", undefined),
+    set("null-input", null),
+    set("array-input", []),
+    set("string-input", "x"),
+    set("anonymous", limit(5, "usd", "day"), undefined, { anonymous: true }),
+    set("anonymous-remove", { limit: null }, undefined, { anonymous: true }),
+  ];
+}
+
 function pageCases(): Case[] {
   const b64 = (text: string) => Buffer.from(text).toString("base64url");
   const cursorOf = (updatedAt: unknown, pinnedAt: unknown = null, id: unknown = "zzz") =>
@@ -730,6 +1009,10 @@ async function run(
 
 async function reset(seeded: ReturnType<typeof ids>) {
   const { userId, orgId } = seeded;
+  await system.securityEvent.deleteMany({ where: { userId: { in: [userId, `${userId}-other`] } } });
+  await system.auditEvent.deleteMany({ where: { OR: [{ organizationId: orgId }, { actorId: userId }] } });
+  await system.page.deleteMany({ where: { userId: { in: [userId, `${userId}-other`] } } });
+  await system.chatGroup.deleteMany({ where: { userId: { in: [userId, `${userId}-other`] } } });
   await system.trustedLinkSite.deleteMany({ where: { userId: { in: [userId, `${userId}-other`] } } });
   await system.payment.deleteMany({ where: { userId: { in: [userId, `${userId}-other`] } } });
   await system.spendingLimit.deleteMany({ where: { userId: { in: [userId, `${userId}-other`] } } });
@@ -866,7 +1149,16 @@ function withIds(input: unknown, seeded: ReturnType<typeof ids>) {
       .replaceAll("__sp2__", seeded.spaces[1])
       .replaceAll("__sp3__", seeded.spaces[2])
       .replaceAll("__bot__", `${seeded.userId}-bot`)
-      .replaceAll("__group__", `${seeded.userId}-group`),
+      .replaceAll("__group__", `${seeded.userId}-group`)
+      .replaceAll("__ba__", `${seeded.userId}-ba`)
+      .replaceAll("__bb__", `${seeded.userId}-bb`)
+      .replaceAll("__bx__", `${seeded.userId}-bx`)
+      .replaceAll("__barch__", `${seeded.userId}-barch`)
+      .replaceAll("__grp__", `${seeded.userId}-grp`)
+      .replaceAll("__garch__", `${seeded.userId}-garch`)
+      .replaceAll("__s1__", `${seeded.userId}-s1`)
+      .replaceAll("__s2__", `${seeded.userId}-s2`)
+      .replaceAll("__s3__", `${seeded.userId}-s3`),
   );
 }
 
@@ -885,16 +1177,16 @@ function selectedHeaders(headers: Headers) {
 }
 
 async function tsCall(procedure: string, input: unknown, seeded: Seeded) {
-  const response = await handles.app.request(`/rpc/${procedure.replaceAll(".", "/")}`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      origin: WEB_ORIGIN,
-      cookie: seeded.cookie,
-      "x-rakazo-space-id": seeded.spaces[0],
+  const response = await handles.app.request(
+    `/rpc/${procedure.replaceAll(".", "/")}`,
+    {
+      method: "POST",
+      headers: callHeaders(seeded),
+      body: input === undefined ? undefined : JSON.stringify({ json: input }),
     },
-    body: input === undefined ? undefined : JSON.stringify({ json: input }),
-  });
+    // Hono reads the socket peer from the Node bindings; this is the loopback hop the Go side sees.
+    { incoming: { socket: { remoteAddress: "127.0.0.1" } } },
+  );
   const text = await response.text();
   return {
     status: response.status,
@@ -906,12 +1198,7 @@ async function tsCall(procedure: string, input: unknown, seeded: Seeded) {
 async function goCall(procedure: string, input: unknown, seeded: Seeded) {
   const response = await fetch(`${GO_URL}/rpc/${procedure.replaceAll(".", "/")}`, {
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-      origin: WEB_ORIGIN,
-      cookie: seeded.cookie,
-      "x-rakazo-space-id": seeded.spaces[0],
-    },
+    headers: callHeaders(seeded),
     body: input === undefined ? undefined : JSON.stringify({ json: input }),
   });
   const text = await response.text();
@@ -920,6 +1207,71 @@ async function goCall(procedure: string, input: unknown, seeded: Seeded) {
     headers: selectedHeaders(response.headers),
     body: text ? JSON.parse(text) : null,
   };
+}
+
+function callHeaders(seeded: Seeded) {
+  return {
+    "content-type": "application/json",
+    origin: WEB_ORIGIN,
+    cookie: seeded.cookie,
+    "x-rakazo-space-id": seeded.spaces[0],
+    // What a security event records about the caller.
+    "user-agent": "contract-harness/1",
+    "x-forwarded-for": "198.51.100.77",
+  };
+}
+
+const WRITE_PROCEDURES = new Set([
+  "spendingLimit.set",
+  "botSections.create",
+  "botSections.update",
+  "botSections.remove",
+  "availability.set",
+  "availability.chooseForSpace",
+  "trustedLinkSites.remove",
+]);
+
+const CUID = /^c[0-9a-z]{24}$/;
+const ISO_TIME = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/;
+const HARNESS_START = Date.now() - 3_600_000;
+
+/**
+ * Ids and times each side generates itself differ run to run. A fresh cuid becomes "<cuid>" and a time
+ * since the harness started becomes "<now>", so shape and recency are still compared exactly.
+ */
+function normalize<T>(value: T): T {
+  const visit = (node: unknown): unknown => {
+    if (typeof node === "string") {
+      if (CUID.test(node)) return "<cuid>";
+      if (ISO_TIME.test(node) && Date.parse(node) >= HARNESS_START) return "<now>";
+      return node;
+    }
+    if (Array.isArray(node)) return node.map(visit);
+    if (node && typeof node === "object")
+      return Object.fromEntries(Object.entries(node).map(([key, item]) => [key, visit(item)]));
+    return node;
+  };
+  return visit(JSON.parse(JSON.stringify(value))) as T;
+}
+
+const realtimeSignals: string[] = [];
+
+/** Runs a call and reports the roster and Space-change signals published while it ran. */
+async function observed(settleMs: number, call: () => Promise<any>) {
+  realtimeSignals.length = 0;
+  const result = await call();
+  await sleep(settleMs);
+  const notifications = realtimeSignals
+    .filter((payload) => {
+      try {
+        const { topic } = JSON.parse(payload) as { topic: string };
+        return topic.startsWith("roster-") || topic.startsWith("space-changes:");
+      } catch {
+        return false;
+      }
+    })
+    .sort();
+  return { ...result, notifications };
 }
 
 async function databaseState(seeded: ReturnType<typeof ids>) {
@@ -986,6 +1338,24 @@ async function databaseState(seeded: ReturnType<typeof ids>) {
     select: { userId: true, site: true },
     orderBy: [{ userId: "asc" }, { site: "asc" }],
   });
+  const byJson = (left: unknown, right: unknown) =>
+    JSON.stringify(left) < JSON.stringify(right) ? -1 : 1;
+  const securityEvents = (await system.securityEvent.findMany({ where: { userId: owners } })).sort(byJson);
+  const auditEvents = (
+    await system.auditEvent.findMany({
+      where: { OR: [{ organizationId: seeded.orgId }, { actorId: seeded.userId }] },
+    })
+  ).sort(byJson);
+  const bots = await system.bot.findMany({
+    where: { userId: owners },
+    select: { id: true, spaceId: true, archivedAt: true, updatedAt: true, section: { select: { name: true } } },
+    orderBy: { id: "asc" },
+  });
+  const groups = await system.chatGroup.findMany({
+    where: { userId: owners },
+    select: { id: true, spaceId: true, archivedAt: true, updatedAt: true, section: { select: { name: true } } },
+    orderBy: { id: "asc" },
+  });
   return {
     skills,
     skillSpaces,
@@ -999,6 +1369,10 @@ async function databaseState(seeded: ReturnType<typeof ids>) {
     spendingLimits,
     botSections,
     pages,
+    securityEvents,
+    auditEvents,
+    bots,
+    groups,
   };
 }
 
@@ -1009,22 +1383,24 @@ for (const testCase of cases) {
   if (process.env.CASE_FILTER && !new RegExp(process.env.CASE_FILTER).test(testCase.name)) continue;
   const caseIds = ids(testCase.name);
   const input = withIds(testCase.input, caseIds);
+  // A write has realtime signals to wait for; a read only needs to show it sent none.
+  const settle = WRITE_PROCEDURES.has(testCase.procedure) ? 400 : 40;
 
   let seeded = await seed(caseIds);
   if (testCase.seed) await testCase.seed(seeded);
-  const tsResult = await run(testCase, tsCall, input, seeded);
-  const tsState = await databaseState(caseIds);
+  const tsResult = await observed(settle, () => run(testCase, tsCall, input, seeded));
+  const tsState = normalize(await databaseState(caseIds));
 
   seeded = await seed(caseIds);
   if (testCase.seed) await testCase.seed(seeded);
-  // Wait a moment after re-seeding so Prisma's timestamps settle, then call Go.
-  const goResult = await run(testCase, goCall, input, seeded);
-  const goState = await databaseState(caseIds);
+  const goResult = await observed(settle, () => run(testCase, goCall, input, seeded));
+  const goState = normalize(await databaseState(caseIds));
 
   try {
     assert.equal(goResult.status, tsResult.status, `${testCase.name}: status`);
     assert.deepEqual(goResult.headers, tsResult.headers, `${testCase.name}: headers`);
-    assert.deepEqual(goResult.body, tsResult.body, `${testCase.name}: body`);
+    assert.deepEqual(normalize(goResult.body), normalize(tsResult.body), `${testCase.name}: body`);
+    assert.deepEqual(goResult.notifications, tsResult.notifications, `${testCase.name}: realtime signals`);
     assert.deepEqual(goState, tsState, `${testCase.name}: database state`);
     console.log(`ok   ${testCase.name} (${tsResult.status})`);
   } catch (error) {
@@ -1036,6 +1412,8 @@ for (const testCase of cases) {
   }
   await reset(caseIds);
 }
+
+await realtime.end();
 
 go?.kill("SIGTERM");
 await handles.stop();
