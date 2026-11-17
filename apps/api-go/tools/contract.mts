@@ -18,6 +18,7 @@ import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { asSystem } from "../../../packages/db/src/index.js";
 import { createApp } from "../../api/src/app.js";
+import { spendingPeriodStart } from "../../../packages/core/src/spending.js";
 
 const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) throw new Error("DATABASE_URL is required");
@@ -87,6 +88,8 @@ await writeFile(
       "availability.chooseForSpace": { mode: "go" },
       "trustedLinkSites.list": { mode: "go", readOnly: true },
       "trustedLinkSites.remove": { mode: "go" },
+      "spendingLimit.payments": { mode: "go", readOnly: true },
+      "spendingLimit.get": { mode: "go", readOnly: true },
     },
   }),
 );
@@ -191,6 +194,7 @@ const cases: Case[] = [
     },
   },
   ...trustedLinkSiteCases(),
+  ...spendingLimitCases(),
 ];
 
 const SITES = ["zeta.example", "alpha.example", "Beta.example", "_under.example", "10.0.0.1"];
@@ -253,9 +257,233 @@ function ids(caseName: string) {
   };
 }
 
+type SpendingSeed = {
+  /** The user's timezone; unset leaves the column null. */
+  timezone?: string;
+  limit?: { amount: number; currency: string; period: string; startsAt?: Date };
+  payments?: (ctx: SpendingContext) => Array<{
+    id: string;
+    owner?: "user" | "other";
+    botId: string;
+    currency: string;
+    amount: number;
+    createdAt: Date;
+    released?: boolean;
+  }>;
+  card?: "account" | "other-space" | "login";
+  wallet?: "pending" | "connected";
+  bots?: boolean;
+};
+type SpendingContext = { seeded: Seeded; now: Date; startOf: (period: "day" | "week" | "month") => Date };
+
+function seedSpending(config: SpendingSeed = {}) {
+  return async (seeded: Seeded) => {
+    const other = `${seeded.userId}-other`;
+    await system.user.create({
+      data: { id: other, name: "Other", email: `${other}@example.test`, emailVerified: true },
+    });
+    if (config.timezone) {
+      await system.user.update({ where: { id: seeded.userId }, data: { timezone: config.timezone } });
+    }
+    const now = new Date();
+    if (config.limit) {
+      await system.spendingLimit.create({
+        data: { userId: seeded.userId, ...config.limit, startsAt: config.limit.startsAt ?? now },
+      });
+      // A limit for the other user must never leak into this user's status.
+      await system.spendingLimit.create({
+        data: { userId: other, amount: 5, currency: "usd", period: "day" },
+      });
+    }
+    if (config.bots) {
+      const foreignOrg = `${seeded.orgId}-f`;
+      const foreignSpace = `${seeded.spaces[0]}-f`;
+      await system.organization.create({
+        data: { id: foreignOrg, name: "Foreign", slug: foreignOrg, createdAt: new Date() },
+      });
+      await system.space.create({
+        data: { id: foreignSpace, organizationId: foreignOrg, name: "Foreign", isDefault: true },
+      });
+      await system.bot.create({
+        data: { id: `${seeded.userId}-own-bot`, spaceId: seeded.spaces[1], userId: seeded.userId, name: "Own bot", color: "blue" },
+      });
+      await system.bot.create({
+        data: { id: `${seeded.userId}-foreign-bot`, spaceId: foreignSpace, userId: other, name: "Foreign bot", color: "red" },
+      });
+    }
+    if (config.card) {
+      await system.vaultCredential.create({
+        data: {
+          id: `${seeded.userId}-vault`,
+          userId: seeded.userId,
+          spaceId: config.card === "other-space" ? seeded.spaces[1] : null,
+          name: "item",
+          origin: "https://shop.example",
+          auth: { type: config.card === "login" ? "login" : "card" },
+          ciphertext: "sealed",
+        },
+      });
+    }
+    if (config.wallet) {
+      await system.paymentWallet.create({
+        data: {
+          id: `${seeded.userId}-wallet`,
+          userId: seeded.userId,
+          provider: "test",
+          status: config.wallet,
+          ciphertext: "sealed",
+        },
+      });
+    }
+    if (config.payments) {
+      const startOf = (period: "day" | "week" | "month") =>
+        spendingPeriodStart(period, now, config.timezone, now);
+      for (const payment of config.payments({ seeded, now, startOf })) {
+        await system.payment.create({
+          data: {
+            id: payment.id,
+            operationKey: payment.id,
+            userId: payment.owner === "other" ? other : seeded.userId,
+            spaceId: seeded.spaces[0],
+            botId: payment.botId,
+            threadId: "thread",
+            site: `shop-${payment.id}.example`,
+            amount: payment.amount,
+            currency: payment.currency,
+            createdAt: payment.createdAt,
+            releasedAt: payment.released ? payment.createdAt : null,
+          },
+        });
+      }
+    }
+  };
+}
+
+function spendingLimitCases(): Case[] {
+  const get = (name: string, seed?: Case["seed"], extra: Partial<Case> = {}): Case => ({
+    name: `spend-get-${name}`,
+    procedure: "spendingLimit.get",
+    input: {},
+    seed,
+    ...extra,
+  });
+  const hour = 3_600_000;
+  // Payments one second before the period start (out) and after it (in), same currency.
+  const around = (period: "day" | "week" | "month") => (ctx: SpendingContext) => {
+    const start = ctx.startOf(period).getTime();
+    return [
+      { id: "in1", botId: "b", currency: "usd", amount: 120, createdAt: new Date(start + 1000) },
+      { id: "in2", botId: "b", currency: "usd", amount: 30, createdAt: new Date(ctx.now.getTime() - 1000) },
+      { id: "out", botId: "b", currency: "usd", amount: 7, createdAt: new Date(start - 1000) },
+      { id: "eur", botId: "b", currency: "eur", amount: 55, createdAt: new Date(start + 1000) },
+      { id: "rel", botId: "b", currency: "usd", amount: 9, createdAt: new Date(start + 1000), released: true },
+      { id: "oth", owner: "other" as const, botId: "b", currency: "usd", amount: 11, createdAt: new Date(start + 1000) },
+    ];
+  };
+  return [
+    {
+      name: "spend-pay-empty",
+      procedure: "spendingLimit.payments",
+      input: {},
+      seed: seedSpending({ bots: true, payments: () => [{ id: "x", owner: "other", botId: "b", currency: "usd", amount: 1, createdAt: new Date(0) }] }),
+    },
+    {
+      name: "spend-pay-list",
+      procedure: "spendingLimit.payments",
+      input: {},
+      seed: seedSpending({
+        bots: true,
+        payments: ({ seeded }) => {
+          const t = Date.UTC(2026, 4, 1, 12, 0, 0, 123);
+          return [
+            { id: "p1", botId: `${seeded.userId}-own-bot`, currency: "usd", amount: 500, createdAt: new Date(t) },
+            { id: "p2", botId: `${seeded.userId}-foreign-bot`, currency: "eur", amount: 700, createdAt: new Date(t + hour) },
+            { id: "p3", botId: "gone", currency: "usd", amount: 900, createdAt: new Date(t + 2 * hour) },
+            { id: "p4", botId: `${seeded.userId}-own-bot`, currency: "usd", amount: 100, createdAt: new Date(t + 3 * hour), released: true },
+            { id: "p5", botId: `${seeded.userId}-own-bot`, currency: "ils", amount: 300, createdAt: new Date(t + hour) },
+            { id: "px", owner: "other", botId: `${seeded.userId}-own-bot`, currency: "usd", amount: 111, createdAt: new Date(t) },
+          ];
+        },
+      }),
+    },
+    {
+      name: "spend-pay-cap",
+      procedure: "spendingLimit.payments",
+      input: {},
+      seed: seedSpending({
+        payments: () =>
+          Array.from({ length: 55 }, (_, i) => ({
+            id: `c${String(i).padStart(2, "0")}`,
+            botId: "b",
+            currency: "usd",
+            amount: i + 1,
+            createdAt: new Date(Date.UTC(2026, 4, 1) + (i % 5) * 60_000),
+          })),
+      }),
+    },
+    { name: "spend-pay-no-input", procedure: "spendingLimit.payments", input: undefined, seed: seedSpending({ bots: true }) },
+    { name: "spend-pay-anonymous", procedure: "spendingLimit.payments", input: {}, anonymous: true },
+    get("nothing", seedSpending()),
+    get("no-input", seedSpending(), { input: undefined }),
+    get("anonymous", seedSpending(), { anonymous: true }),
+    get("card-account", seedSpending({ card: "account" })),
+    get("card-other-space", seedSpending({ card: "other-space" })),
+    get("login-only", seedSpending({ card: "login" })),
+    get("wallet-pending", seedSpending({ wallet: "pending" })),
+    get("wallet-connected", seedSpending({ wallet: "connected" })),
+    get("paid-no-limit", seedSpending({ payments: ({ now }) => [{ id: "a", botId: "b", currency: "usd", amount: 5, createdAt: now }] })),
+    get("paid-released-only", seedSpending({ payments: ({ now }) => [{ id: "a", botId: "b", currency: "usd", amount: 5, createdAt: now, released: true }] })),
+    get("day-utc", seedSpending({ limit: { amount: 1000, currency: "usd", period: "day" }, payments: around("day") })),
+    get("day-no-payments", seedSpending({ limit: { amount: 1000, currency: "usd", period: "day" } })),
+    get(
+      "week-auckland",
+      seedSpending({ timezone: "Pacific/Auckland", limit: { amount: 2000, currency: "usd", period: "week" }, payments: around("week") }),
+    ),
+    get(
+      "month-new-york-lowercase",
+      seedSpending({ timezone: "america/new_york", limit: { amount: 3000, currency: "usd", period: "month" }, payments: around("month") }),
+    ),
+    get(
+      "day-kiritimati",
+      seedSpending({ timezone: "Pacific/Kiritimati", limit: { amount: 1000, currency: "eur", period: "day" }, payments: around("day") }),
+    ),
+    get(
+      "day-unknown-timezone",
+      seedSpending({ timezone: "No/Such_Zone", limit: { amount: 1000, currency: "usd", period: "day" }, payments: around("day") }),
+    ),
+    get(
+      "none-since-start",
+      seedSpending({
+        limit: { amount: 1000, currency: "usd", period: "none", startsAt: new Date(Date.now() - 48 * hour) },
+        payments: ({ now }) => [
+          { id: "old", botId: "b", currency: "usd", amount: 3, createdAt: new Date(now.getTime() - 72 * hour) },
+          { id: "new", botId: "b", currency: "usd", amount: 4, createdAt: new Date(now.getTime() - 24 * hour) },
+        ],
+      }),
+    ),
+    get(
+      "invalid-stored-limit",
+      seedSpending({
+        limit: { amount: 0, currency: "jpy", period: "hourly" },
+        payments: ({ now }) => [{ id: "a", botId: "b", currency: "usd", amount: 5, createdAt: now }],
+      }),
+    ),
+    get(
+      "oversized-stored-limit",
+      seedSpending({ limit: { amount: 2_000_000_000, currency: "gbp", period: "day" }, payments: around("day") }),
+    ),
+    get("limit-with-card", seedSpending({ card: "account", limit: { amount: 100, currency: "ils", period: "week" } })),
+  ];
+}
+
 async function reset(seeded: ReturnType<typeof ids>) {
   const { userId, orgId } = seeded;
   await system.trustedLinkSite.deleteMany({ where: { userId: { in: [userId, `${userId}-other`] } } });
+  await system.payment.deleteMany({ where: { userId: { in: [userId, `${userId}-other`] } } });
+  await system.spendingLimit.deleteMany({ where: { userId: { in: [userId, `${userId}-other`] } } });
+  await system.vaultCredential.deleteMany({ where: { userId } });
+  await system.paymentWallet.deleteMany({ where: { userId } });
+  await system.bot.deleteMany({ where: { userId: { in: [userId, `${userId}-other`] } } });
   await system.agentSkillSpace.deleteMany({ where: { userId } });
   await system.mcpServerSpace.deleteMany({ where: { userId } });
   await system.capabilityInstallSpace.deleteMany({ where: { userId } });
@@ -265,7 +493,8 @@ async function reset(seeded: ReturnType<typeof ids>) {
   await system.secret.deleteMany({ where: { userId } });
   await system.session.deleteMany({ where: { userId } });
   await system.spaceMember.deleteMany({ where: { userId } });
-  await system.space.deleteMany({ where: { organizationId: orgId } });
+  await system.space.deleteMany({ where: { organizationId: { in: [orgId, `${orgId}-f`] } } });
+  await system.organization.deleteMany({ where: { id: `${orgId}-f` } });
   await system.member.deleteMany({ where: { organizationId: orgId } });
   await system.organization.deleteMany({ where: { id: orgId } });
   await system.user.deleteMany({ where: { id: { in: [userId, `${userId}-other`] } } });
@@ -475,6 +704,19 @@ async function databaseState(seeded: ReturnType<typeof ids>) {
     select: { id: true, spaceId: true },
     orderBy: { id: "asc" },
   });
+  const owners = { in: [seeded.userId, `${seeded.userId}-other`] };
+  const paymentRows = await system.payment.findMany({
+    where: { userId: owners },
+    select: { id: true, userId: true, amount: true, currency: true, releasedAt: true },
+    orderBy: { id: "asc" },
+  });
+  // Each side seeds at its own "now"; whether a payment is released is what matters.
+  const payments = paymentRows.map(({ releasedAt, ...row }) => ({ ...row, released: releasedAt !== null }));
+  const spendingLimits = await system.spendingLimit.findMany({
+    where: { userId: owners },
+    select: { userId: true, amount: true, currency: true, period: true },
+    orderBy: { userId: "asc" },
+  });
   const trustedLinkSites = await system.trustedLinkSite.findMany({
     where: { userId: { in: [seeded.userId, `${seeded.userId}-other`] } },
     select: { userId: true, site: true },
@@ -489,6 +731,8 @@ async function databaseState(seeded: ReturnType<typeof ids>) {
     installSpaces,
     secrets,
     trustedLinkSites,
+    payments,
+    spendingLimits,
   };
 }
 
