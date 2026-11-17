@@ -49,6 +49,8 @@ type Case = {
   input: unknown;
   /** Extra fixture state for this case. */
   seed?: (seeded: Seeded) => Promise<void>;
+  /** Send the request without a session cookie. */
+  anonymous?: boolean;
 };
 
 function cookieFor(token: string) {
@@ -83,6 +85,8 @@ await writeFile(
       "availability.items": { mode: "go", readOnly: true },
       "availability.set": { mode: "go" },
       "availability.chooseForSpace": { mode: "go" },
+      "trustedLinkSites.list": { mode: "go", readOnly: true },
+      "trustedLinkSites.remove": { mode: "go" },
     },
   }),
 );
@@ -186,7 +190,53 @@ const cases: Case[] = [
       });
     },
   },
+  ...trustedLinkSiteCases(),
 ];
+
+const SITES = ["zeta.example", "alpha.example", "Beta.example", "_under.example", "10.0.0.1"];
+
+async function seedSites(seeded: Seeded) {
+  const other = `${seeded.userId}-other`;
+  await system.user.create({
+    data: { id: other, name: "Other", email: `${other}@example.test`, emailVerified: true },
+  });
+  for (const site of SITES) {
+    await system.trustedLinkSite.create({ data: { userId: seeded.userId, site } });
+  }
+  await system.trustedLinkSite.create({ data: { userId: other, site: "alpha.example" } });
+  await system.trustedLinkSite.create({ data: { userId: other, site: "other-only.example" } });
+}
+
+function trustedLinkSiteCases(): Case[] {
+  const remove = (name: string, input: unknown, extra: Partial<Case> = {}): Case => ({
+    name,
+    procedure: "trustedLinkSites.remove",
+    input,
+    ...extra,
+  });
+  return [
+    { name: "sites-list", procedure: "trustedLinkSites.list", input: {}, seed: seedSites },
+    { name: "sites-list-empty", procedure: "trustedLinkSites.list", input: {} },
+    { name: "sites-list-no-input", procedure: "trustedLinkSites.list", input: undefined, seed: seedSites },
+    { name: "sites-list-anonymous", procedure: "trustedLinkSites.list", input: {}, anonymous: true },
+    remove("sites-remove", { site: "alpha.example" }, { seed: seedSites }),
+    remove("sites-remove-other-users-only", { site: "other-only.example" }, { seed: seedSites }),
+    remove("sites-remove-absent", { site: "absent.example" }, { seed: seedSites }),
+    remove("sites-remove-ignores-extra-keys", { site: "zeta.example", more: 1 }, { seed: seedSites }),
+    remove("sites-remove-empty", { site: "" }, { seed: seedSites }),
+    remove("sites-remove-too-long", { site: "a".repeat(254) }, { seed: seedSites }),
+    remove("sites-remove-max-length", { site: "a".repeat(253) }, { seed: seedSites }),
+    remove("sites-remove-astral-max-length", { site: "😀".repeat(253) }),
+    remove("sites-remove-astral-too-long", { site: "😀".repeat(254) }),
+    remove("sites-remove-missing-site", {}),
+    remove("sites-remove-wrong-type", { site: 3 }),
+    remove("sites-remove-null-site", { site: null }),
+    remove("sites-remove-not-object", []),
+    remove("sites-remove-null-input", null),
+    remove("sites-remove-no-input", undefined),
+    remove("sites-remove-anonymous", { site: "alpha.example" }, { seed: seedSites, anonymous: true }),
+  ];
+}
 
 function ids(caseName: string) {
   const suffix = caseName.replace(/[^a-z0-9]/g, "");
@@ -205,6 +255,7 @@ function ids(caseName: string) {
 
 async function reset(seeded: ReturnType<typeof ids>) {
   const { userId, orgId } = seeded;
+  await system.trustedLinkSite.deleteMany({ where: { userId: { in: [userId, `${userId}-other`] } } });
   await system.agentSkillSpace.deleteMany({ where: { userId } });
   await system.mcpServerSpace.deleteMany({ where: { userId } });
   await system.capabilityInstallSpace.deleteMany({ where: { userId } });
@@ -217,7 +268,7 @@ async function reset(seeded: ReturnType<typeof ids>) {
   await system.space.deleteMany({ where: { organizationId: orgId } });
   await system.member.deleteMany({ where: { organizationId: orgId } });
   await system.organization.deleteMany({ where: { id: orgId } });
-  await system.user.deleteMany({ where: { id: userId } });
+  await system.user.deleteMany({ where: { id: { in: [userId, `${userId}-other`] } } });
 }
 
 async function seed(caseIds: ReturnType<typeof ids>): Promise<Seeded> {
@@ -321,7 +372,12 @@ async function seed(caseIds: ReturnType<typeof ids>): Promise<Seeded> {
   return { ...caseIds, cookie: cookieFor(caseIds.sessionToken) };
 }
 
+function called(seeded: Seeded, testCase: Case): Seeded {
+  return testCase.anonymous ? { ...seeded, cookie: "" } : seeded;
+}
+
 function withIds(input: unknown, seeded: ReturnType<typeof ids>) {
+  if (input === undefined) return undefined;
   return JSON.parse(
     JSON.stringify(input)
       .replaceAll("__skill__", seeded.skillId)
@@ -354,7 +410,7 @@ async function tsCall(procedure: string, input: unknown, seeded: Seeded) {
       cookie: seeded.cookie,
       "x-rakazo-space-id": seeded.spaces[0],
     },
-    body: JSON.stringify({ json: input }),
+    body: input === undefined ? undefined : JSON.stringify({ json: input }),
   });
   const text = await response.text();
   return {
@@ -373,7 +429,7 @@ async function goCall(procedure: string, input: unknown, seeded: Seeded) {
       cookie: seeded.cookie,
       "x-rakazo-space-id": seeded.spaces[0],
     },
-    body: JSON.stringify({ json: input }),
+    body: input === undefined ? undefined : JSON.stringify({ json: input }),
   });
   const text = await response.text();
   return {
@@ -419,7 +475,21 @@ async function databaseState(seeded: ReturnType<typeof ids>) {
     select: { id: true, spaceId: true },
     orderBy: { id: "asc" },
   });
-  return { skills, skillSpaces, servers, serverSpaces, installs, installSpaces, secrets };
+  const trustedLinkSites = await system.trustedLinkSite.findMany({
+    where: { userId: { in: [seeded.userId, `${seeded.userId}-other`] } },
+    select: { userId: true, site: true },
+    orderBy: [{ userId: "asc" }, { site: "asc" }],
+  });
+  return {
+    skills,
+    skillSpaces,
+    servers,
+    serverSpaces,
+    installs,
+    installSpaces,
+    secrets,
+    trustedLinkSites,
+  };
 }
 
 let failures = 0;
@@ -429,13 +499,13 @@ for (const testCase of cases) {
 
   let seeded = await seed(caseIds);
   if (testCase.seed) await testCase.seed(seeded);
-  const tsResult = await tsCall(testCase.procedure, input, seeded);
+  const tsResult = await tsCall(testCase.procedure, input, called(seeded, testCase));
   const tsState = await databaseState(caseIds);
 
   seeded = await seed(caseIds);
   if (testCase.seed) await testCase.seed(seeded);
   // Wait a moment after re-seeding so Prisma's timestamps settle, then call Go.
-  const goResult = await goCall(testCase.procedure, input, seeded);
+  const goResult = await goCall(testCase.procedure, input, called(seeded, testCase));
   const goState = await databaseState(caseIds);
 
   try {
