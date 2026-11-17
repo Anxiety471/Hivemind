@@ -136,7 +136,7 @@ func TestMessagingChannelsAndConnections(t *testing.T) {
 	}
 	// The invite is undelivered (sent without a provider handle), another key is untouched.
 	exec(t, database, `INSERT INTO messaging_outbound (id, "idempotencyKey", kind, body, status, "updatedAt") VALUES
-		('o1-'||$2::text, $1, 'dm', 'x', 'sent', now()), ('o3-'||$2::text, 'connect:other', 'dm', 'x', 'pending', now())`,
+		('o1-'||$2::text, $1, 'dm', 'x', 'sent', now()), ('o3-'||$2::text, 'connect:other:'||$2::text, 'dm', 'x', 'pending', now())`,
 		"connect:"+mine+":"+theirs, s.UserID)
 	if _, failure := messaging.ConnectionsRevoke(ctx, database, actor, raw(`{"connectionId":"c1-`+s.UserID+`"}`)); failure != nil {
 		t.Fatalf("revoke: %v", failure)
