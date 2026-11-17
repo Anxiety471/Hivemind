@@ -90,6 +90,9 @@ func (s *Server) Has(name string) bool {
 	return ok
 }
 
+// Count is how many procedures this build serves locally.
+func (s *Server) Count() int { return len(s.procs) }
+
 // MaxBody is the largest request shadow mode can copy.
 func (s *Server) MaxBody() int64 { return s.maxBody }
 
