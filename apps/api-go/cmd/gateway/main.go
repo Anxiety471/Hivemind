@@ -64,7 +64,7 @@ func main() {
 		} else {
 			localServer = server
 			defer closeDatabase()
-			logger.Info("local procedures ready", "procedures", 3)
+			logger.Info("local procedures ready", "procedures", server.Count())
 		}
 	} else if wantsLocal {
 		logger.Error("the routing table needs local procedures but DATABASE_URL/BETTER_AUTH_SECRET are unset")
