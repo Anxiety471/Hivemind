@@ -99,6 +99,14 @@ await writeFile(
       "botSections.create": { mode: "go" },
       "botSections.update": { mode: "go" },
       "botSections.remove": { mode: "go" },
+      "messaging.link.start": { mode: "go" },
+      "messaging.identities.setBot": { mode: "go" },
+      "messaging.identities.unlink": { mode: "go" },
+      "messaging.channels.list": { mode: "go", readOnly: true },
+      "messaging.channels.respond": { mode: "go" },
+      "messaging.channels.leave": { mode: "go" },
+      "messaging.connections.list": { mode: "go", readOnly: true },
+      "messaging.connections.revoke": { mode: "go" },
     },
   }),
 );
@@ -239,6 +247,7 @@ const cases: Case[] = [
   ...pageCases(),
   ...botSectionWriteCases(),
   ...spendingSetCases(),
+  ...messagingCases(),
 ];
 
 const SITES = ["zeta.example", "alpha.example", "Beta.example", "_under.example", "10.0.0.1"];
@@ -849,6 +858,258 @@ function spendingSetCases(): Case[] {
   ];
 }
 
+type MessagingSeed = {
+  ownerName?: string;
+  /** Outbound row for the c1 invite: its status and provider handle. */
+  outbound?: { status: string; providerHandle?: string };
+  noIdentities?: boolean;
+  noChannels?: boolean;
+  noConnections?: boolean;
+  existingCode?: boolean;
+};
+
+function seedMessaging(config: MessagingSeed = {}) {
+  return async (seeded: Seeded) => {
+    const user = seeded.userId;
+    const other = `${user}-other`;
+    await system.user.create({
+      data: { id: other, name: config.ownerName ?? "Jane Quinn", email: `${other}@example.test`, emailVerified: true },
+    });
+    const old = new Date(Date.UTC(2020, 0, 1));
+    const base = Date.UTC(2026, 4, 1, 12, 0, 0, 0);
+    const bot = (id: string, spaceId: string, owner: string, name: string, extra: Record<string, unknown> = {}) =>
+      system.bot.create({
+        data: { id: `${user}-${id}`, spaceId, userId: owner, name, color: "blue", updatedAt: old, ...extra },
+      });
+    await bot("mb1", seeded.spaces[0], user, "My bot one");
+    await bot("mb2", seeded.spaces[0], user, "My bot two");
+    await bot("mbx", seeded.spaces[1], user, "My bot in space two");
+    await bot("march", seeded.spaces[0], user, "My archived bot", { archivedAt: old });
+    await bot("pb1", seeded.spaces[1], other, "Peer bot one");
+    await bot("pb2", seeded.spaces[1], other, "Peer bot two");
+    await bot("pb3", seeded.spaces[1], other, "Peer bot three");
+    await bot("pb4", seeded.spaces[0], other, "Peer bot in space one");
+    const identity = (id: string, owner: string, spaceId: string, botId: string, extra: Record<string, unknown> = {}) =>
+      system.messagingIdentity.create({
+        data: {
+          id: `${user}-${id}`,
+          provider: "telegram",
+          address: `${user}-${id}-addr`,
+          userId: owner,
+          spaceId,
+          botId: `${user}-${botId}`,
+          updatedAt: old,
+          ...extra,
+        },
+      });
+    if (!config.noIdentities) {
+      await identity("id1", user, seeded.spaces[0], "mb1");
+      await identity("id2", user, seeded.spaces[0], "mb2");
+      await identity("idx", other, seeded.spaces[1], "pb1");
+      await identity("idpb2", other, seeded.spaces[1], "pb2");
+      const installation = await system.messagingInstallation.create({
+        data: {
+          id: `${user}-inst`,
+          provider: "slack",
+          workspaceId: `${user}-ws`,
+          workspaceName: "Workspace",
+          spaceId: seeded.spaces[1],
+          userId: user,
+          botId: `${user}-mbx`,
+          ciphertext: "sealed",
+        },
+      });
+      await system.bot.create({
+        data: { id: `${user}-mb5`, spaceId: seeded.spaces[1], userId: user, name: "Slack bot", color: "blue", updatedAt: old },
+      });
+      await identity("idsl", user, seeded.spaces[1], "mb5", { installationId: installation.id });
+    }
+    if (config.existingCode) {
+      await system.messagingLinkCode.create({
+        data: { id: `${user}-oldcode`, code: "AAAAAAAA", userId: user, spaceId: seeded.spaces[0], botId: `${user}-mb2`, expiresAt: new Date(Date.now() + 60_000) },
+      });
+    }
+    if (!config.noChannels) {
+      const channel = (id: string, name: string | null, threadId: string) =>
+        system.messagingChannel.create({ data: { id: `${user}-${id}`, provider: "telegram", name, threadId: `${user}-${threadId}` } });
+      await channel("cn1", "Team", "th1");
+      await channel("cn2", null, "th2");
+      await channel("cn3", "Other people", "th3");
+      const member = (id: string, channelId: string, address: string, identityId: string | null, status: string, offset: number) =>
+        system.messagingChannelMember.create({
+          data: {
+            id: `${user}-${id}`,
+            channelId: `${user}-${channelId}`,
+            address,
+            identityId: identityId ? `${user}-${identityId}` : null,
+            status,
+            createdAt: new Date(base + offset),
+            updatedAt: new Date(base + offset),
+          },
+        });
+      await member("mm1", "cn1", "a1", "id1", "invited", 1000);
+      await member("mm2", "cn1", "a2", "id2", "approved", 2000);
+      await member("mm3", "cn1", "a3", null, "approved", 3000);
+      await member("mm4", "cn1", "a4", null, "left", 4000);
+      await member("mm5", "cn2", "a5", "id1", "left", 5000);
+      await member("mm6", "cn2", "a6", "id2", "invited", 6000);
+      await member("mm7", "cn3", "a7", `${"idx"}`, "invited", 7000);
+    }
+    if (!config.noConnections) {
+      const connection = (id: string, requester: string, target: string, status: string, offset: number) =>
+        system.agentConnection.create({
+          data: {
+            id: `${user}-${id}`,
+            requesterBotId: `${user}-${requester}`,
+            targetBotId: `${user}-${target}`,
+            status,
+            requestVersion: 3,
+            createdAt: new Date(base + offset),
+            updatedAt: new Date(base + offset),
+          },
+        });
+      await connection("cn4", "mb1", "pb1", "pending", 1000);
+      await connection("cn5", "pb2", "mb2", "pending", 2000);
+      await connection("cn6", "mb1", "pb2", "approved", 3000);
+      await connection("cn7", "pb3", "mb1", "declined", 4000);
+      await connection("cn8", "mb2", "pb3", "revoked", 5000);
+      await connection("cn9", "pb1", "pb2", "pending", 6000);
+      await connection("cn10", "mb2", "pb4", "approved", 7000);
+      if (config.outbound) {
+        await system.messagingOutbound.create({
+          data: {
+            id: `${user}-ob1`,
+            idempotencyKey: `connect:${user}-mb1:${user}-pb1`,
+            kind: "dm",
+            body: "invite",
+            status: config.outbound.status,
+            providerHandle: config.outbound.providerHandle ?? null,
+          },
+        });
+      }
+      await system.messagingOutbound.create({
+        data: { id: `${user}-ob2`, idempotencyKey: `connect:other:${user}`, kind: "dm", body: "unrelated", status: "pending" },
+      });
+    }
+  };
+}
+
+function messagingCases(): Case[] {
+  const mk = (procedure: string, label: string) => (name: string, input: unknown, extra: Partial<Case> = {}): Case => ({
+    name: `msg-${label}-${name}`,
+    procedure: `messaging.${procedure}`,
+    input,
+    seed: seedMessaging(),
+    ...extra,
+  });
+  const link = mk("link.start", "link");
+  const setBot = mk("identities.setBot", "setbot");
+  const unlink = mk("identities.unlink", "unlink");
+  const channels = mk("channels.list", "chlist");
+  const respond = mk("channels.respond", "respond");
+  const leave = mk("channels.leave", "leave");
+  const connections = mk("connections.list", "connlist");
+  const revoke = mk("connections.revoke", "revoke");
+  const outbound = (status: string, providerHandle?: string) => seedMessaging({ outbound: { status, providerHandle } });
+  return [
+    link("new", { botId: "__mb1__" }),
+    link("second-bot-supersedes", { botId: "__mb2__" }, { seed: seedMessaging({ existingCode: true }) }),
+    link("bot-in-shared-space", { botId: "__mbx__" }),
+    link("already-linked", { botId: "__mb1__" }),
+    link("unknown-bot", { botId: "nope" }),
+    link("archived-bot", { botId: "__march__" }),
+    link("peer-bot-not-mine", { botId: "__pb1__" }),
+    link("no-identities-new", { botId: "__mb1__" }, { seed: seedMessaging({ noIdentities: true }) }),
+    link("missing", {}),
+    link("empty", { botId: "" }),
+    link("number", { botId: 5 }),
+    link("array", { botId: [] }),
+    link("extra-keys", { botId: "__mb1__", more: 1 }),
+    link("no-input", undefined),
+    link("null-input", null),
+    link("anonymous", { botId: "__mb1__" }, { anonymous: true }),
+    setBot("to-free-bot", { identityId: "__id1__", botId: "__mb2__" }, { seed: seedMessaging({ noChannels: true }) }),
+    setBot("to-linked-bot", { identityId: "__id1__", botId: "__mb2__" }),
+    setBot("same-bot", { identityId: "__id1__", botId: "__mb1__" }),
+    setBot("archived-bot", { identityId: "__id1__", botId: "__march__" }),
+    setBot("unknown-bot", { identityId: "__id1__", botId: "nope" }),
+    setBot("other-space-bot", { identityId: "__id1__", botId: "__mbx__" }),
+    setBot("peer-bot", { identityId: "__id1__", botId: "__pb4__" }),
+    setBot("unknown-identity", { identityId: "nope", botId: "__mb2__" }),
+    setBot("someone-elses-identity", { identityId: "__idx__", botId: "__mb2__" }),
+    setBot("workspace-identity-other-space", { identityId: "__idsl__", botId: "__mb2__" }),
+    setBot("missing-both", {}),
+    setBot("types", { identityId: 5, botId: [] }),
+    setBot("empty-ids", { identityId: "", botId: "" }),
+    setBot("no-input", undefined),
+    setBot("anonymous", { identityId: "__id1__", botId: "__mb2__" }, { anonymous: true }),
+    unlink("own", { identityId: "__id1__" }),
+    unlink("unknown", { identityId: "nope" }),
+    unlink("someone-elses", { identityId: "__idx__" }),
+    unlink("missing", {}),
+    unlink("empty", { identityId: "" }),
+    unlink("number", { identityId: 5 }),
+    unlink("array-one", { identityId: [1] }),
+    unlink("anonymous", { identityId: "__id1__" }, { anonymous: true }),
+    channels("memberships", {}),
+    channels("no-identities", {}, { seed: seedMessaging({ noIdentities: true }) }),
+    channels("no-channels", {}, { seed: seedMessaging({ noChannels: true }) }),
+    channels("no-input", undefined),
+    channels("anonymous", {}, { anonymous: true }),
+    respond("accept", { membershipId: "__mm1__", accept: true }),
+    respond("decline", { membershipId: "__mm1__", accept: false }),
+    respond("invited-on-second-identity", { membershipId: "__mm6__", accept: true }),
+    respond("already-approved", { membershipId: "__mm2__", accept: true }),
+    respond("left", { membershipId: "__mm5__", accept: true }),
+    respond("someone-elses", { membershipId: "__mm7__", accept: true }),
+    respond("unknown", { membershipId: "nope", accept: true }),
+    respond("no-identities", { membershipId: "__mm1__", accept: true }, { seed: seedMessaging({ noIdentities: true }) }),
+    respond("accept-string", { membershipId: "__mm1__", accept: "yes" }),
+    respond("accept-missing", { membershipId: "__mm1__" }),
+    respond("both-invalid", { membershipId: "", accept: 1 }),
+    respond("no-input", undefined),
+    respond("anonymous", { membershipId: "__mm1__", accept: true }, { anonymous: true }),
+    leave("approved", { membershipId: "__mm2__" }),
+    leave("invited", { membershipId: "__mm1__" }),
+    leave("already-left", { membershipId: "__mm5__" }),
+    leave("someone-elses", { membershipId: "__mm7__" }),
+    leave("unknown", { membershipId: "nope" }),
+    leave("no-identities", { membershipId: "__mm1__" }, { seed: seedMessaging({ noIdentities: true }) }),
+    leave("missing", {}),
+    leave("empty", { membershipId: "" }),
+    leave("anonymous", { membershipId: "__mm1__" }, { anonymous: true }),
+    connections("mixed", {}),
+    connections("no-identities", {}, { seed: seedMessaging({ noIdentities: true }) }),
+    connections("none", {}, { seed: seedMessaging({ noConnections: true }) }),
+    connections("owner-name-multiword", {}, { seed: seedMessaging({ ownerName: "  \u00a0Mary-Jane  Smith" }) }),
+    connections("owner-name-opaque", {}, { seed: seedMessaging({ ownerName: "ck1234567890123456789abcd" }) }),
+    connections("owner-name-uuid", {}, { seed: seedMessaging({ ownerName: "123e4567-e89b-12d3-a456-426614174000" }) }),
+    connections("owner-name-symbols", {}, { seed: seedMessaging({ ownerName: "😀 ✨" }) }),
+    connections("owner-name-unicode-space", {}, { seed: seedMessaging({ ownerName: "Zoë\u2003Ünï" }) }),
+    connections("owner-name-dunder", {}, { seed: seedMessaging({ ownerName: "__Placeholder_1__" }) }),
+    connections("owner-name-camel", {}, { seed: seedMessaging({ ownerName: "AliceSmith1234567890Longname" }) }),
+    connections("owner-name-mixed-long", {}, { seed: seedMessaging({ ownerName: "aB3dE6gH9jK2mN5pQ8sT" }) }),
+    connections("no-input", undefined),
+    connections("anonymous", {}, { anonymous: true }),
+    revoke("pending-outgoing", { connectionId: "__cn4__" }, { seed: outbound("pending") }),
+    revoke("pending-outgoing-retry", { connectionId: "__cn4__" }, { seed: outbound("retry") }),
+    revoke("sent-without-handle", { connectionId: "__cn4__" }, { seed: outbound("sent") }),
+    revoke("sent-with-handle", { connectionId: "__cn4__" }, { seed: outbound("sent", "provider-1") }),
+    revoke("failed-invite-kept", { connectionId: "__cn4__" }, { seed: outbound("failed") }),
+    revoke("incoming-pending", { connectionId: "__cn5__" }),
+    revoke("approved", { connectionId: "__cn6__" }),
+    revoke("declined", { connectionId: "__cn7__" }),
+    revoke("already-revoked", { connectionId: "__cn8__" }),
+    revoke("between-strangers", { connectionId: "__cn9__" }),
+    revoke("unknown", { connectionId: "nope" }),
+    revoke("no-identities", { connectionId: "__cn4__" }, { seed: seedMessaging({ noIdentities: true }) }),
+    revoke("missing", {}),
+    revoke("empty", { connectionId: "" }),
+    revoke("number", { connectionId: 5 }),
+    revoke("anonymous", { connectionId: "__cn4__" }, { anonymous: true }),
+  ];
+}
+
 function pageCases(): Case[] {
   const b64 = (text: string) => Buffer.from(text).toString("base64url");
   const cursorOf = (updatedAt: unknown, pinnedAt: unknown = null, id: unknown = "zzz") =>
@@ -1009,6 +1270,12 @@ async function run(
 
 async function reset(seeded: ReturnType<typeof ids>) {
   const { userId, orgId } = seeded;
+  await system.messagingOutbound.deleteMany({ where: { id: { startsWith: userId } } });
+  await system.agentConnection.deleteMany({ where: { id: { startsWith: userId } } });
+  await system.messagingChannel.deleteMany({ where: { id: { startsWith: userId } } });
+  await system.messagingLinkCode.deleteMany({ where: { userId: { in: [userId, `${userId}-other`] } } });
+  await system.messagingIdentity.deleteMany({ where: { userId: { in: [userId, `${userId}-other`] } } });
+  await system.messagingInstallation.deleteMany({ where: { userId } });
   await system.securityEvent.deleteMany({ where: { userId: { in: [userId, `${userId}-other`] } } });
   await system.auditEvent.deleteMany({ where: { OR: [{ organizationId: orgId }, { actorId: userId }] } });
   await system.page.deleteMany({ where: { userId: { in: [userId, `${userId}-other`] } } });
@@ -1158,7 +1425,33 @@ function withIds(input: unknown, seeded: ReturnType<typeof ids>) {
       .replaceAll("__garch__", `${seeded.userId}-garch`)
       .replaceAll("__s1__", `${seeded.userId}-s1`)
       .replaceAll("__s2__", `${seeded.userId}-s2`)
-      .replaceAll("__s3__", `${seeded.userId}-s3`),
+      .replaceAll("__s3__", `${seeded.userId}-s3`)
+      .replaceAll("__id1__", `${seeded.userId}-id1`)
+      .replaceAll("__id2__", `${seeded.userId}-id2`)
+      .replaceAll("__idx__", `${seeded.userId}-idx`)
+      .replaceAll("__idsl__", `${seeded.userId}-idsl`)
+      .replaceAll("__mb1__", `${seeded.userId}-mb1`)
+      .replaceAll("__mb2__", `${seeded.userId}-mb2`)
+      .replaceAll("__mbx__", `${seeded.userId}-mbx`)
+      .replaceAll("__march__", `${seeded.userId}-march`)
+      .replaceAll("__pb1__", `${seeded.userId}-pb1`)
+      .replaceAll("__mm1__", `${seeded.userId}-mm1`)
+      .replaceAll("__mm2__", `${seeded.userId}-mm2`)
+      .replaceAll("__mm3__", `${seeded.userId}-mm3`)
+      .replaceAll("__mm4__", `${seeded.userId}-mm4`)
+      .replaceAll("__mm5__", `${seeded.userId}-mm5`)
+      .replaceAll("__cn1__", `${seeded.userId}-cn1`)
+      .replaceAll("__cn2__", `${seeded.userId}-cn2`)
+      .replaceAll("__cn3__", `${seeded.userId}-cn3`)
+      .replaceAll("__cn4__", `${seeded.userId}-cn4`)
+      .replaceAll("__cn5__", `${seeded.userId}-cn5`)
+      .replaceAll("__cn6__", `${seeded.userId}-cn6`)
+      .replaceAll("__cn7__", `${seeded.userId}-cn7`)
+      .replaceAll("__cn8__", `${seeded.userId}-cn8`)
+      .replaceAll("__cn9__", `${seeded.userId}-cn9`)
+      .replaceAll("__mm6__", `${seeded.userId}-mm6`)
+      .replaceAll("__mm7__", `${seeded.userId}-mm7`)
+      .replaceAll("__pb4__", `${seeded.userId}-pb4`),
   );
 }
 
@@ -1232,6 +1525,7 @@ const WRITE_PROCEDURES = new Set([
 ]);
 
 const CUID = /^c[0-9a-z]{24}$/;
+const LINK_CODE = /^(?:[A-HJKMNP-TV-Z2-9]{4}-[A-HJKMNP-TV-Z2-9]{4}|[A-HJKMNP-TV-Z2-9]{8})$/;
 const ISO_TIME = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/;
 const HARNESS_START = Date.now() - 3_600_000;
 
@@ -1243,6 +1537,7 @@ function normalize<T>(value: T): T {
   const visit = (node: unknown): unknown => {
     if (typeof node === "string") {
       if (CUID.test(node)) return "<cuid>";
+      if (LINK_CODE.test(node)) return "<code>";
       if (ISO_TIME.test(node) && Date.parse(node) >= HARNESS_START) return "<now>";
       return node;
     }
@@ -1333,6 +1628,30 @@ async function databaseState(seeded: ReturnType<typeof ids>) {
     select: { id: true, spaceId: true, userId: true, name: true, position: true },
     orderBy: { id: "asc" },
   });
+  const messagingIdentities = await system.messagingIdentity.findMany({
+    where: { userId: owners },
+    select: { id: true, userId: true, spaceId: true, botId: true, provider: true, address: true, installationId: true, updatedAt: true },
+    orderBy: { id: "asc" },
+  });
+  const messagingLinkCodes = await system.messagingLinkCode.findMany({
+    where: { userId: owners },
+    select: { code: true, userId: true, spaceId: true, botId: true, expiresAt: true },
+  });
+  const messagingMemberships = await system.messagingChannelMember.findMany({
+    where: { channelId: { startsWith: seeded.userId } },
+    select: { id: true, channelId: true, status: true, identityId: true, updatedAt: true },
+    orderBy: { id: "asc" },
+  });
+  const agentConnections = await system.agentConnection.findMany({
+    where: { id: { startsWith: seeded.userId } },
+    select: { id: true, status: true, requestVersion: true, updatedAt: true },
+    orderBy: { id: "asc" },
+  });
+  const messagingOutbound = await system.messagingOutbound.findMany({
+    where: { id: { startsWith: seeded.userId } },
+    select: { id: true, idempotencyKey: true, status: true, providerHandle: true },
+    orderBy: { id: "asc" },
+  });
   const trustedLinkSites = await system.trustedLinkSite.findMany({
     where: { userId: { in: [seeded.userId, `${seeded.userId}-other`] } },
     select: { userId: true, site: true },
@@ -1373,6 +1692,11 @@ async function databaseState(seeded: ReturnType<typeof ids>) {
     auditEvents,
     bots,
     groups,
+    messagingIdentities,
+    messagingLinkCodes,
+    messagingMemberships,
+    agentConnections,
+    messagingOutbound,
   };
 }
 
@@ -1384,7 +1708,7 @@ for (const testCase of cases) {
   const caseIds = ids(testCase.name);
   const input = withIds(testCase.input, caseIds);
   // A write has realtime signals to wait for; a read only needs to show it sent none.
-  const settle = WRITE_PROCEDURES.has(testCase.procedure) ? 400 : 40;
+  const settle = WRITE_PROCEDURES.has(testCase.procedure) || testCase.procedure.startsWith("messaging.") ? 400 : 40;
 
   let seeded = await seed(caseIds);
   if (testCase.seed) await testCase.seed(seeded);
