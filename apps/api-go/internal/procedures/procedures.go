@@ -28,8 +28,8 @@ func All(database *db.DB) []local.Procedure {
 		{
 			Name: "availability.set",
 			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
-				var parsed availability.SetInput
-				if failure := input.DecodeInto(&parsed); failure != nil {
+				parsed, failure := availability.ParseSet(input)
+				if failure != nil {
 					return nil, failure
 				}
 				result, failure := availability.Set(ctx, database, actor, parsed)
@@ -42,8 +42,8 @@ func All(database *db.DB) []local.Procedure {
 		{
 			Name: "availability.chooseForSpace",
 			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
-				var parsed availability.ChooseInput
-				if failure := input.DecodeInto(&parsed); failure != nil {
+				parsed, failure := availability.ParseChoose(input)
+				if failure != nil {
 					return nil, failure
 				}
 				if failure := availability.ChooseForSpace(ctx, database, actor, parsed); failure != nil {

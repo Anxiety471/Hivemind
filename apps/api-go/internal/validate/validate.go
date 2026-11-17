@@ -419,6 +419,37 @@ func formatNumber(value float64) string {
 	return strconv.FormatFloat(value, 'f', -1, 64)
 }
 
+// Boolean validates z.boolean().
+func Boolean(path Path, raw any) (bool, []Issue) {
+	value, ok := raw.(bool)
+	if !ok {
+		return false, []Issue{TypeIssue("boolean", JSType(raw), path)}
+	}
+	return value, nil
+}
+
+// AsArray validates the type of z.array(...); the caller validates each item,
+// then applies ArrayBounds (zod checks the length after the items).
+func AsArray(path Path, raw any) ([]any, []Issue) {
+	items, ok := raw.([]any)
+	if !ok {
+		return nil, []Issue{TypeIssue("array", JSType(raw), path)}
+	}
+	return items, nil
+}
+
+// ArrayBounds are .min(n) and .max(n) on an array of the given length; 0 skips a bound.
+func ArrayBounds(path Path, length, minimum, maximum int) []Issue {
+	var issues []Issue
+	if minimum > 0 && length < minimum {
+		issues = append(issues, tooSmall("array", minimum, path))
+	}
+	if maximum > 0 && length > maximum {
+		issues = append(issues, tooBig("array", maximum, path))
+	}
+	return issues
+}
+
 // Enum validates z.enum([...]): anything else, whatever its type, is invalid_value.
 func Enum(path Path, raw any, values ...string) (string, []Issue) {
 	if text, ok := raw.(string); ok {

@@ -69,10 +69,6 @@ const (
 	kindInstall   = "install"
 )
 
-func validKind(kind string) bool {
-	return kind == kindSkill || kind == kindMcpServer || kind == kindInstall
-}
-
 // Items implements availability.items.
 func Items(ctx context.Context, database *db.DB, actor db.Actor) ([]AccountItem, *orpc.Error) {
 	var items []AccountItem
@@ -95,9 +91,6 @@ func Items(ctx context.Context, database *db.DB, actor db.Actor) ([]AccountItem,
 
 // Set implements availability.set.
 func Set(ctx context.Context, database *db.DB, actor db.Actor, input SetInput) (SpaceAvailability, *orpc.Error) {
-	if failure := validateSet(input); failure != nil {
-		return SpaceAvailability{}, failure
-	}
 	spaceIDs := *input.SpaceIDs
 	requested := SpaceAvailability{AllSpaces: *input.AllSpaces, SpaceIDs: spaceIDs}
 	var result SpaceAvailability
@@ -131,9 +124,6 @@ func Set(ctx context.Context, database *db.DB, actor db.Actor, input SetInput) (
 
 // ChooseForSpace implements availability.chooseForSpace.
 func ChooseForSpace(ctx context.Context, database *db.DB, actor db.Actor, input ChooseInput) *orpc.Error {
-	if failure := validateChoose(input); failure != nil {
-		return failure
-	}
 	err := database.Tenant(ctx, actor, func(tx pgx.Tx) error {
 		if err := assertOwnSpaces(ctx, tx, actor.UserID, []string{input.SpaceID}); err != nil {
 			return err
@@ -178,80 +168,6 @@ func ChooseForSpace(ctx context.Context, database *db.DB, actor db.Actor, input 
 			return failure
 		}
 		return failure(err)
-	}
-	return nil
-}
-
-func validateSet(input SetInput) *orpc.Error {
-	if !validKind(input.Kind) {
-		return orpc.InvalidInput(map[string]any{
-			"origin": "string", "code": "invalid_value",
-			"values": []string{"skill", "mcpServer", "install"},
-			"path":   []string{"kind"}, "message": "Invalid option",
-		})
-	}
-	if strings.TrimSpace(input.ID) == "" {
-		return orpc.InvalidInput(map[string]any{
-			"origin": "string", "code": "too_small", "minimum": 1, "inclusive": true,
-			"path": []string{"id"}, "message": "Too small: expected string to have >=1 characters",
-		})
-	}
-	if input.AllSpaces == nil {
-		return orpc.InvalidInput(map[string]any{
-			"origin": "value", "code": "invalid_type", "expected": "boolean",
-			"path": []string{"allSpaces"}, "message": "Invalid input: expected boolean, received undefined",
-		})
-	}
-	if input.SpaceIDs == nil {
-		return orpc.InvalidInput(map[string]any{
-			"origin": "value", "code": "invalid_type", "expected": "array",
-			"path": []string{"spaceIds"}, "message": "Invalid input: expected array, received undefined",
-		})
-	}
-	if len(*input.SpaceIDs) == 0 {
-		return orpc.InvalidInput(map[string]any{
-			"origin": "array", "code": "too_small", "minimum": 1, "inclusive": true,
-			"path": []string{"spaceIds"}, "message": "Too small: expected array to have >=1 items",
-		})
-	}
-	for _, id := range *input.SpaceIDs {
-		if strings.TrimSpace(id) == "" {
-			return orpc.InvalidInput(map[string]any{
-				"origin": "string", "code": "too_small", "minimum": 1, "inclusive": true,
-				"path": []string{"spaceIds"}, "message": "Too small: expected string to have >=1 characters",
-			})
-		}
-	}
-	return nil
-}
-
-func validateChoose(input ChooseInput) *orpc.Error {
-	if strings.TrimSpace(input.SpaceID) == "" {
-		return orpc.InvalidInput(map[string]any{
-			"origin": "string", "code": "too_small", "minimum": 1, "inclusive": true,
-			"path": []string{"spaceId"}, "message": "Too small: expected string to have >=1 characters",
-		})
-	}
-	if len(input.Items) > 500 {
-		return orpc.InvalidInput(map[string]any{
-			"origin": "array", "code": "too_big", "maximum": 500, "inclusive": true,
-			"path": []string{"items"}, "message": "Too big: expected array to have <=500 items",
-		})
-	}
-	for _, item := range input.Items {
-		if !validKind(item.Kind) {
-			return orpc.InvalidInput(map[string]any{
-				"origin": "string", "code": "invalid_value",
-				"values": []string{"skill", "mcpServer", "install"},
-				"path":   []string{"items"}, "message": "Invalid option",
-			})
-		}
-		if strings.TrimSpace(item.ID) == "" {
-			return orpc.InvalidInput(map[string]any{
-				"origin": "string", "code": "too_small", "minimum": 1, "inclusive": true,
-				"path": []string{"items"}, "message": "Too small: expected string to have >=1 characters",
-			})
-		}
 	}
 	return nil
 }

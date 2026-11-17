@@ -190,14 +190,7 @@ func TestRowLevelSecurityScopesReads(t *testing.T) {
 }
 
 func TestInvalidInput(t *testing.T) {
-	database := openTestDB(t)
-	seed := seed(t, database)
-	_, failure := availability.Set(context.Background(), database, db.Actor{UserID: seed.UserID, SpaceID: seed.Space1}, availability.SetInput{
-		Kind:      "skill",
-		ID:        seed.SkillID,
-		AllSpaces: new(false),
-		SpaceIDs:  new([]string{}),
-	})
+	_, failure := availability.ParseSet(raw(`{"kind":"skill","id":"x","allSpaces":false,"spaceIds":[]}`))
 	if failure == nil || failure.Status != 400 {
 		t.Fatalf("failure = %+v, want 400", failure)
 	}
