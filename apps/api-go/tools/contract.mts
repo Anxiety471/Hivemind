@@ -52,6 +52,8 @@ type Case = {
   seed?: (seeded: Seeded) => Promise<void>;
   /** Send the request without a session cookie. */
   anonymous?: boolean;
+  /** Call repeatedly, feeding each nextCursor back in, and compare every page. */
+  paginate?: boolean;
 };
 
 function cookieFor(token: string) {
@@ -91,6 +93,7 @@ await writeFile(
       "spendingLimit.payments": { mode: "go", readOnly: true },
       "spendingLimit.get": { mode: "go", readOnly: true },
       "botSections.list": { mode: "go", readOnly: true },
+      "pages.list": { mode: "go", readOnly: true },
     },
   }),
 );
@@ -197,6 +200,7 @@ const cases: Case[] = [
   ...trustedLinkSiteCases(),
   ...spendingLimitCases(),
   ...botSectionCases(),
+  ...pageCases(),
 ];
 
 const SITES = ["zeta.example", "alpha.example", "Beta.example", "_under.example", "10.0.0.1"];
@@ -513,6 +517,217 @@ function botSectionCases(): Case[] {
   ];
 }
 
+const PAGE_BASE = Date.UTC(2026, 4, 1, 12, 0, 0, 0);
+
+async function seedPages(seeded: Seeded) {
+  const other = `${seeded.userId}-other`;
+  await system.user.create({
+    data: { id: other, name: "Other", email: `${other}@example.test`, emailVerified: true },
+  });
+  const bot = `${seeded.userId}-bot`;
+  const group = `${seeded.userId}-group`;
+  await system.bot.create({
+    data: { id: bot, spaceId: seeded.spaces[0], userId: seeded.userId, name: "Bot", color: "blue" },
+  });
+  await system.chatGroup.create({
+    data: { id: group, spaceId: seeded.spaces[0], userId: seeded.userId, name: "Group" },
+  });
+  const hour = 3_600_000;
+  const page = (
+    id: string,
+    title: string,
+    updated: number,
+    extra: { pinned?: number; botId?: string; groupId?: string; spaceId?: string; userId?: string; visibility?: string; version?: number } = {},
+  ) =>
+    system.page.create({
+      data: {
+        id: `${seeded.userId}-${id}`,
+        spaceId: extra.spaceId ?? seeded.spaces[0],
+        userId: extra.userId ?? seeded.userId,
+        title,
+        botId: extra.botId ?? null,
+        groupId: extra.groupId ?? null,
+        visibility: extra.visibility ?? "private",
+        currentVersion: extra.version ?? 1,
+        pinnedAt: extra.pinned === undefined ? null : new Date(extra.pinned),
+        createdAt: new Date(updated - hour),
+        updatedAt: new Date(updated),
+      },
+    });
+  await page("pa", "Alpha pinned", PAGE_BASE - 72 * hour, { pinned: PAGE_BASE - hour });
+  await page("pb", "Beta pinned", PAGE_BASE - 48 * hour, { pinned: PAGE_BASE - 2 * hour, visibility: "link", version: 3 });
+  await page("pc", "Tie pin", PAGE_BASE - 10 * hour, { pinned: PAGE_BASE - hour });
+  await page("pd", "Tie pin newer update", PAGE_BASE - 9 * hour, { pinned: PAGE_BASE - hour + 5 });
+  await page("u1", "100% sure", PAGE_BASE);
+  await page("u2", "a_b", PAGE_BASE);
+  await page("u3", "axb", PAGE_BASE, { botId: bot });
+  await page("u4", "back\\slash", PAGE_BASE + 123);
+  await page("u5", "Ünïcode Straße", PAGE_BASE, { visibility: "weird" });
+  await page("u6", "plain Plain PLAIN", PAGE_BASE - hour);
+  await page("g1", "group page", PAGE_BASE - 2 * hour, { groupId: group });
+  await page("g2", "group bot page", PAGE_BASE - 2 * hour, { groupId: group, botId: bot });
+  await page("x1", "other space", PAGE_BASE, { spaceId: seeded.spaces[1] });
+  await page("x2", "other user", PAGE_BASE, { userId: other });
+}
+
+function pageCases(): Case[] {
+  const b64 = (text: string) => Buffer.from(text).toString("base64url");
+  const cursorOf = (updatedAt: unknown, pinnedAt: unknown = null, id: unknown = "zzz") =>
+    b64(JSON.stringify({ pinnedAt, updatedAt, id }));
+  const list = (name: string, input: unknown, extra: Partial<Case> = {}): Case => ({
+    name: `pages-${name}`,
+    procedure: "pages.list",
+    input,
+    seed: seedPages,
+    ...extra,
+  });
+  const T = "2026-05-01T12:00:00.000Z";
+  return [
+    list("all", {}),
+    list("all-no-seed", {}, { seed: undefined }),
+    list("limit-1-walk", { limit: 1 }, { paginate: true }),
+    list("limit-2-walk", { limit: 2 }, { paginate: true }),
+    list("limit-3-walk", { limit: 3 }, { paginate: true }),
+    list("limit-60", { limit: 60 }),
+    list("bot", { botId: "__bot__" }),
+    list("bot-walk", { botId: "__bot__", limit: 1 }, { paginate: true }),
+    list("group", { groupId: "__group__" }),
+    list("bot-and-group", { botId: "__bot__", groupId: "__group__" }),
+    list("unknown-bot", { botId: "nope" }),
+    list("query-percent", { query: "%" }),
+    list("query-underscore", { query: "_" }),
+    list("query-backslash", { query: "\\" }),
+    list("query-percent-word", { query: "100%" }),
+    list("query-wild-underscore", { query: "a_b" }),
+    list("query-case", { query: "PLAIN" }),
+    list("query-trim", { query: "  \u00a0\u3000 plain \t\n" }),
+    list("query-unicode", { query: "STRASSE" }),
+    list("query-unicode-lower", { query: "ünï" }),
+    list("query-x", { query: "x", limit: 1 }, { paginate: true }),
+    list("query-none", { query: "zzzz" }),
+    list("query-with-bot", { query: "b", botId: "__bot__" }),
+    list("anonymous", {}, { anonymous: true }),
+    list("no-input", undefined),
+    list("null-input", null),
+    list("array-input", []),
+    list("string-input", "x"),
+    list("number-input", 5),
+    list("unknown-key", { nope: 1 }),
+    list("unknown-keys-order", { b: 1, 2: 1, 1: 1, a: 1, "01": 1 }),
+    list("unknown-with-invalid", { zzz: 1, limit: 0, botId: "", query: "  " }),
+    list("botid-empty", { botId: "" }),
+    list("botid-number", { botId: 5 }),
+    list("botid-null", { botId: null }),
+    list("groupid-empty", { groupId: "" }),
+    list("groupid-array", { groupId: [] }),
+    list("groupid-array-one", { groupId: [1] }),
+    list("botid-array-empty-and-limit", { botId: [], limit: 99, nope: 1 }),
+    list("botid-object-length-zero", { botId: { length: 0 } }),
+    list("botid-object-length-null", { botId: { length: null } }),
+    list("botid-object-length-string", { botId: { length: "x" } }),
+    list("botid-object-no-length", { botId: { size: 0 } }),
+    list("cursor-array-long", { cursor: Array.from({ length: 501 }, () => 1) }),
+    list("cursor-array-short", { cursor: [1, 2] }),
+    list("cursor-object-length-big", { cursor: { length: 999 } }),
+    list("query-array-empty", { query: [] }),
+    list("query-array-long", { query: Array.from({ length: 201 }, () => 1) }),
+    list("query-object-length-big", { query: { length: 999 } }),
+    list("query-bool", { query: false }),
+    list("cursor-too-long", { cursor: "a".repeat(501) }),
+    list("cursor-max-length-invalid", { cursor: "a".repeat(500) }),
+    list("cursor-empty", { cursor: "" }),
+    list("cursor-number", { cursor: 5 }),
+    list("cursor-null", { cursor: null }),
+    list("limit-zero", { limit: 0 }),
+    list("limit-61", { limit: 61 }),
+    list("limit-negative", { limit: -3 }),
+    list("limit-fraction", { limit: 1.5 }),
+    list("limit-fraction-small", { limit: 0.5 }),
+    list("limit-string", { limit: "5" }),
+    list("limit-null", { limit: null }),
+    list("limit-bool", { limit: true }),
+    list("limit-huge", { limit: 1e300 }),
+    list("limit-unsafe", { limit: 9007199254740993 }),
+    list("limit-negative-huge", { limit: -1e300 }),
+    list("query-empty", { query: "" }),
+    list("query-blank", { query: " \n\t" }),
+    list("query-too-long", { query: "q".repeat(201) }),
+    list("query-max-length", { query: "q".repeat(200) }),
+    list("query-padded-max", { query: ` ${"q".repeat(200)} ` }),
+    list("query-number", { query: 5 }),
+    list("query-null", { query: null }),
+    // Cursors: ones the server writes, written by hand, and broken ones.
+    list("cursor-unpinned", { cursor: cursorOf(T, null, "zzz") }),
+    list("cursor-unpinned-tie", { cursor: cursorOf(T, null, "~") }),
+    list("cursor-pinned", { cursor: cursorOf(T, "2026-04-30T11:00:00.000Z", "zzz") }),
+    list("cursor-pinned-tie", { cursor: cursorOf("2026-04-21T02:00:00.000Z", "2026-05-01T11:00:00.000Z", "~") }),
+    list("cursor-date-only", { cursor: cursorOf("2026-05-01", "2026-04-30") }),
+    list("cursor-year-only", { cursor: cursorOf("2026", null) }),
+    list("cursor-offset", { cursor: cursorOf("2026-05-01T17:30:00.000+05:30", null) }),
+    list("cursor-no-fraction", { cursor: cursorOf("2026-05-01T12:00:00Z", null) }),
+    list("cursor-lowercase-z", { cursor: cursorOf("2026-05-01T12:00:00z", null) }),
+    list("cursor-long-fraction", { cursor: cursorOf("2026-05-01T12:00:00.1239999Z", null) }),
+    list("cursor-24h", { cursor: cursorOf("2026-04-30T24:00:00.000Z", null) }),
+    list("cursor-local-time", { cursor: cursorOf("2026-05-01T12:00:00.000", null) }),
+    list("cursor-space-separator", { cursor: cursorOf("2026-05-01 12:00:00", null) }),
+    list("cursor-ms-offset", { cursor: cursorOf("2026-05-01T12:00:00.123456+00:00", null) }),
+    list("cursor-pinned-after-all", { cursor: cursorOf(T, "1999-01-01T00:00:00.000Z", "a") }),
+    list("cursor-standard-base64", { cursor: Buffer.from(JSON.stringify({ pinnedAt: null, updatedAt: T, id: "zzz??" })).toString("base64") }),
+    list("cursor-padded", { cursor: `${cursorOf(T, null, "zzz")}==` }),
+    list("cursor-whitespace", { cursor: ` ${cursorOf(T, null, "zzz").slice(0, 10)}\n ${cursorOf(T, null, "zzz").slice(10)}` }),
+    list("cursor-junk-chars", { cursor: `${cursorOf(T, null, "zzz").slice(0, 10)}*.${cursorOf(T, null, "zzz").slice(10)}` }),
+    list("cursor-extra-keys", { cursor: b64(JSON.stringify({ pinnedAt: null, updatedAt: T, id: "zzz", more: [1] })) }),
+    list("cursor-garbage", { cursor: "!!!" }),
+    list("cursor-plain-text", { cursor: "hello" }),
+    list("cursor-not-json", { cursor: b64("not json") }),
+    list("cursor-null-doc", { cursor: b64("null") }),
+    list("cursor-array-doc", { cursor: b64("[]") }),
+    list("cursor-number-doc", { cursor: b64("5") }),
+    list("cursor-string-doc", { cursor: b64('"x"') }),
+    list("cursor-empty-object", { cursor: b64("{}") }),
+    list("cursor-no-id", { cursor: b64(JSON.stringify({ pinnedAt: null, updatedAt: T })) }),
+    list("cursor-id-number", { cursor: cursorOf(T, null, 5) }),
+    list("cursor-id-null", { cursor: cursorOf(T, null, null) }),
+    list("cursor-id-empty", { cursor: cursorOf(T, null, "") }),
+    list("cursor-no-pinned", { cursor: b64(JSON.stringify({ updatedAt: T, id: "zzz" })) }),
+    list("cursor-no-updated", { cursor: b64(JSON.stringify({ pinnedAt: null, id: "zzz" })) }),
+    list("cursor-bad-updated", { cursor: cursorOf("yesterday", null) }),
+    list("cursor-bad-pinned", { cursor: cursorOf(T, "soon") }),
+    list("cursor-updated-null", { cursor: cursorOf(null, null) }),
+    list("cursor-bad-month", { cursor: cursorOf("2026-13-01", null) }),
+    list("cursor-bad-day", { cursor: cursorOf("2026-05-32", null) }),
+    list("cursor-feb-30", { cursor: cursorOf("2026-02-30", null) }),
+    list("cursor-hour-25", { cursor: cursorOf("2026-05-01T25:00:00Z", null) }),
+    list("cursor-minute-60", { cursor: cursorOf("2026-05-01T12:60:00Z", null) }),
+    list("cursor-24h-nonzero", { cursor: cursorOf("2026-05-01T24:00:01Z", null) }),
+    list("cursor-empty-date", { cursor: cursorOf("", null) }),
+    list("cursor-bad-with-valid-limit", { cursor: "!!!", limit: 5 }),
+  ];
+}
+
+/** One call, or the whole cursor walk when the case paginates. */
+async function run(
+  testCase: Case,
+  call: (procedure: string, input: unknown, seeded: Seeded) => Promise<{ status: number; headers: unknown; body: any }>,
+  input: unknown,
+  seeded: Seeded,
+) {
+  if (!testCase.paginate) return call(testCase.procedure, input, called(seeded, testCase));
+  const pages: Awaited<ReturnType<typeof call>>[] = [];
+  let cursor: string | undefined;
+  for (let step = 0; step < 30; step += 1) {
+    const result = await call(
+      testCase.procedure,
+      { ...(input as object), ...(cursor ? { cursor } : {}) },
+      called(seeded, testCase),
+    );
+    pages.push(result);
+    cursor = result.body?.json?.nextCursor ?? undefined;
+    if (!cursor) break;
+  }
+  return { status: pages[0]!.status, headers: pages[0]!.headers, body: pages.map((page) => page.body) };
+}
+
 async function reset(seeded: ReturnType<typeof ids>) {
   const { userId, orgId } = seeded;
   await system.trustedLinkSite.deleteMany({ where: { userId: { in: [userId, `${userId}-other`] } } });
@@ -649,7 +864,9 @@ function withIds(input: unknown, seeded: ReturnType<typeof ids>) {
       .replaceAll("__skill__", seeded.skillId)
       .replaceAll("__sp1__", seeded.spaces[0])
       .replaceAll("__sp2__", seeded.spaces[1])
-      .replaceAll("__sp3__", seeded.spaces[2]),
+      .replaceAll("__sp3__", seeded.spaces[2])
+      .replaceAll("__bot__", `${seeded.userId}-bot`)
+      .replaceAll("__group__", `${seeded.userId}-group`),
   );
 }
 
@@ -754,6 +971,11 @@ async function databaseState(seeded: ReturnType<typeof ids>) {
     select: { userId: true, amount: true, currency: true, period: true },
     orderBy: { userId: "asc" },
   });
+  const pages = await system.page.findMany({
+    where: { spaceId: { in: seeded.spaces } },
+    select: { id: true, userId: true, title: true, pinnedAt: true, updatedAt: true },
+    orderBy: { id: "asc" },
+  });
   const botSections = await system.botSection.findMany({
     where: { spaceId: { in: seeded.spaces } },
     select: { id: true, spaceId: true, userId: true, name: true, position: true },
@@ -776,23 +998,27 @@ async function databaseState(seeded: ReturnType<typeof ids>) {
     payments,
     spendingLimits,
     botSections,
+    pages,
   };
 }
 
 let failures = 0;
 for (const testCase of cases) {
+  // CASE_FILTER=<regexp> reruns only the matching cases.
+  // biome-ignore lint/suspicious/noUndeclaredEnvVars: manual harness, not a turbo task
+  if (process.env.CASE_FILTER && !new RegExp(process.env.CASE_FILTER).test(testCase.name)) continue;
   const caseIds = ids(testCase.name);
   const input = withIds(testCase.input, caseIds);
 
   let seeded = await seed(caseIds);
   if (testCase.seed) await testCase.seed(seeded);
-  const tsResult = await tsCall(testCase.procedure, input, called(seeded, testCase));
+  const tsResult = await run(testCase, tsCall, input, seeded);
   const tsState = await databaseState(caseIds);
 
   seeded = await seed(caseIds);
   if (testCase.seed) await testCase.seed(seeded);
   // Wait a moment after re-seeding so Prisma's timestamps settle, then call Go.
-  const goResult = await goCall(testCase.procedure, input, called(seeded, testCase));
+  const goResult = await run(testCase, goCall, input, seeded);
   const goState = await databaseState(caseIds);
 
   try {
