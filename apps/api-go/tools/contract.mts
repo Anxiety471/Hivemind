@@ -90,6 +90,7 @@ await writeFile(
       "trustedLinkSites.remove": { mode: "go" },
       "spendingLimit.payments": { mode: "go", readOnly: true },
       "spendingLimit.get": { mode: "go", readOnly: true },
+      "botSections.list": { mode: "go", readOnly: true },
     },
   }),
 );
@@ -195,6 +196,7 @@ const cases: Case[] = [
   },
   ...trustedLinkSiteCases(),
   ...spendingLimitCases(),
+  ...botSectionCases(),
 ];
 
 const SITES = ["zeta.example", "alpha.example", "Beta.example", "_under.example", "10.0.0.1"];
@@ -476,6 +478,41 @@ function spendingLimitCases(): Case[] {
   ];
 }
 
+function botSectionCases(): Case[] {
+  const base = Date.UTC(2026, 4, 1, 12, 0, 0, 456);
+  const seedSections = (extra?: Case["seed"]) => async (seeded: Seeded) => {
+    const other = `${seeded.userId}-other`;
+    await system.user.create({
+      data: { id: other, name: "Other", email: `${other}@example.test`, emailVerified: true },
+    });
+    const make = (id: string, spaceId: string, userId: string, name: string, position: number, offset: number) =>
+      system.botSection.create({
+        data: {
+          id: `${seeded.userId}-${id}`,
+          spaceId,
+          userId,
+          name,
+          position,
+          createdAt: new Date(base + offset),
+          updatedAt: new Date(base + offset + 1),
+        },
+      });
+    await make("a", seeded.spaces[0], seeded.userId, "Late", 2, 0);
+    await make("b", seeded.spaces[0], other, "Second by time", 1, 3_600_000);
+    await make("c", seeded.spaces[0], seeded.userId, "First by time", 1, 0);
+    await make("d", seeded.spaces[0], seeded.userId, "Zero", 0, 7);
+    await make("e", seeded.spaces[1], seeded.userId, "Other space", 0, 0);
+    await extra?.(seeded);
+  };
+  return [
+    { name: "sections-list", procedure: "botSections.list", input: {}, seed: seedSections() },
+    { name: "sections-list-empty", procedure: "botSections.list", input: {} },
+    { name: "sections-list-no-input", procedure: "botSections.list", input: undefined, seed: seedSections() },
+    { name: "sections-list-ignores-input", procedure: "botSections.list", input: { anything: 1 }, seed: seedSections() },
+    { name: "sections-list-anonymous", procedure: "botSections.list", input: {}, anonymous: true },
+  ];
+}
+
 async function reset(seeded: ReturnType<typeof ids>) {
   const { userId, orgId } = seeded;
   await system.trustedLinkSite.deleteMany({ where: { userId: { in: [userId, `${userId}-other`] } } });
@@ -717,6 +754,11 @@ async function databaseState(seeded: ReturnType<typeof ids>) {
     select: { userId: true, amount: true, currency: true, period: true },
     orderBy: { userId: "asc" },
   });
+  const botSections = await system.botSection.findMany({
+    where: { spaceId: { in: seeded.spaces } },
+    select: { id: true, spaceId: true, userId: true, name: true, position: true },
+    orderBy: { id: "asc" },
+  });
   const trustedLinkSites = await system.trustedLinkSite.findMany({
     where: { userId: { in: [seeded.userId, `${seeded.userId}-other`] } },
     select: { userId: true, site: true },
@@ -733,6 +775,7 @@ async function databaseState(seeded: ReturnType<typeof ids>) {
     trustedLinkSites,
     payments,
     spendingLimits,
+    botSections,
   };
 }
 
