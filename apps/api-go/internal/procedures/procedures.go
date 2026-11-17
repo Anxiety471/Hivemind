@@ -3,11 +3,13 @@ package procedures
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/local"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/availability"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/spendinglimit"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/trustedlinksites"
 )
 
@@ -59,6 +61,20 @@ func All(database *db.DB) []local.Procedure {
 			Name: "trustedLinkSites.remove",
 			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
 				return trustedlinksites.Remove(ctx, database, actor, input)
+			},
+		},
+		{
+			Name:     "spendingLimit.payments",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, _ orpc.Input) (any, *orpc.Error) {
+				return spendinglimit.Payments(ctx, database, actor)
+			},
+		},
+		{
+			Name:     "spendingLimit.get",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, _ orpc.Input) (any, *orpc.Error) {
+				return spendinglimit.Get(ctx, database, actor, slog.Default())
 			},
 		},
 	}

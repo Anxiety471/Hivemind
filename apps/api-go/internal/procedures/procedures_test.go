@@ -18,6 +18,7 @@ func TestRegistryHasTheServedProceduresAndNotTrust(t *testing.T) {
 	for _, name := range []string{
 		"availability.items", "availability.set", "availability.chooseForSpace",
 		"trustedLinkSites.list", "trustedLinkSites.remove",
+		"spendingLimit.payments", "spendingLimit.get",
 	} {
 		if !seen[name] {
 			t.Errorf("missing %s", name)
@@ -26,5 +27,9 @@ func TestRegistryHasTheServedProceduresAndNotTrust(t *testing.T) {
 	// trust needs WHATWG URL parsing and the tldts suffix list; it stays on TypeScript.
 	if seen["trustedLinkSites.trust"] {
 		t.Error("trustedLinkSites.trust must not be served locally")
+	}
+	// set is audited as a security event and takes the spending advisory lock; it stays on TypeScript.
+	if seen["spendingLimit.set"] {
+		t.Error("spendingLimit.set must not be served locally")
 	}
 }
