@@ -198,7 +198,9 @@ type statusWriter struct {
 }
 
 func (w *statusWriter) WriteHeader(status int) {
-	if w.status == 0 {
+	// 1xx are informational (a 100 Continue from an upload); the log wants the
+	// response the client ends with.
+	if w.status == 0 && (status >= 200 || status == http.StatusSwitchingProtocols) {
 		w.status = status
 	}
 	w.ResponseWriter.WriteHeader(status)

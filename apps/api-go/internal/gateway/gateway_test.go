@@ -323,3 +323,13 @@ func TestUnimplementedModeFailsClosed(t *testing.T) {
 		t.Errorf("proxied status = %d, want 200", response.StatusCode)
 	}
 }
+
+func TestStatusWriterRecordsFinalStatus(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	writer := &statusWriter{ResponseWriter: recorder}
+	writer.WriteHeader(http.StatusContinue)
+	writer.WriteHeader(http.StatusUnauthorized)
+	if got := writer.Status(); got != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", got)
+	}
+}
