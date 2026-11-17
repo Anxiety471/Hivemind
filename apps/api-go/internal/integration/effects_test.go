@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,7 +15,7 @@ import (
 )
 
 // listen subscribes to the realtime channel; collect returns what arrived within the wait.
-func listen(t *testing.T, database *db.DB) func(wait time.Duration) []string {
+func listen(t *testing.T, database *db.DB, needles ...string) func(wait time.Duration) []string {
 	t.Helper()
 	ctx := context.Background()
 	conn, err := database.Pool.Acquire(ctx)
@@ -35,7 +36,10 @@ func listen(t *testing.T, database *db.DB) func(wait time.Duration) []string {
 				sort.Strings(payloads)
 				return payloads
 			}
-			payloads = append(payloads, notification.Payload)
+			// The fixture database is shared; only signals about this test's own ids count.
+			if matches(notification.Payload, needles) {
+				payloads = append(payloads, notification.Payload)
+			}
 		}
 	}
 }
@@ -99,7 +103,7 @@ func TestRunnerSignalsRosterAndSpaceChanges(t *testing.T) {
 	database := openTestDB(t)
 	s := seed(t, database)
 	runner := effects.NewRunner(database, nil)
-	collect := listen(t, database)
+	collect := listen(t, database, s.UserID, s.Space1, s.Space2)
 	actor := db.Actor{UserID: s.UserID, SpaceID: s.Space1}
 
 	runner.After(context.Background(), "botSections.create", actor, nil, nil)
@@ -123,4 +127,16 @@ func TestRunnerSignalsRosterAndSpaceChanges(t *testing.T) {
 			t.Fatalf("notifications = %q, want %q", got, want)
 		}
 	}
+}
+
+func matches(payload string, needles []string) bool {
+	if len(needles) == 0 {
+		return true
+	}
+	for _, needle := range needles {
+		if strings.Contains(payload, needle) {
+			return true
+		}
+	}
+	return false
 }

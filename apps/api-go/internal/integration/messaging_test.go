@@ -158,7 +158,7 @@ func TestHTTPMessaging(t *testing.T) {
 	s := seed(t, database)
 	server := testServer(t, database, local.Config{})
 	cookie := "better-auth.session_token=" + signedCookie(testSecret, s.SessionToken)
-	collect := listen(t, database)
+	collect := listen(t, database, s.UserID, s.Space1, s.Space2)
 	response, body := do(t, http.MethodPost, server.URL+"/rpc/messaging/channels/list", cookie, "", nil)
 	if response.StatusCode != 200 || string(body) != `{"json":[]}` {
 		t.Fatalf("list = %d %s", response.StatusCode, body)

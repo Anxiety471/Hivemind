@@ -164,7 +164,7 @@ func TestHTTPWritesRunTheirEffects(t *testing.T) {
 	s := seed(t, database)
 	server := testServer(t, database, local.Config{})
 	cookie := "better-auth.session_token=" + signedCookie(testSecret, s.SessionToken)
-	collect := listen(t, database)
+	collect := listen(t, database, s.UserID, s.Space1, s.Space2)
 	addBot(t, database, "bot-"+s.UserID, s.Space1, s.UserID, "Bot")
 	headers := map[string]string{"x-rakazo-space-id": s.Space1, "user-agent": "http-test/2", "x-forwarded-for": "198.51.100.77"}
 
