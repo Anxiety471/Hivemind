@@ -110,6 +110,9 @@ func (s *Server) Has(name string) bool {
 	return ok
 }
 
+// Wait blocks until the background realtime signals of served procedures have gone out.
+func (s *Server) Wait() { s.effects.Wait() }
+
 // Count is how many procedures this build serves locally.
 func (s *Server) Count() int { return len(s.procs) }
 

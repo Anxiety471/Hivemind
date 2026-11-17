@@ -95,7 +95,9 @@ func main() {
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+	drained := make(chan struct{})
 	go func() {
+		defer close(drained)
 		signal := <-stop
 		logger.Info("shutting down", "signal", signal.String())
 		// Streams can outlive a deploy; give ordinary requests a moment, then cut.
@@ -110,6 +112,12 @@ func main() {
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Error("server failed", "error", err)
 		os.Exit(1)
+	}
+	// ListenAndServe returns as soon as shutdown starts. Wait for in-flight requests to finish
+	// (a write may be mid-transaction) and for background signals to go out before the pool closes.
+	<-drained
+	if localServer != nil {
+		localServer.Wait()
 	}
 }
 
