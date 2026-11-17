@@ -20,6 +20,7 @@ import (
 
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/auth"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/effects"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
 )
 
@@ -39,6 +40,10 @@ type Config struct {
 	WebOrigin      string
 	TrustedOrigins []string
 	Logger         *slog.Logger
+	// ClientIP resolves the caller's address for security events; nil trusts
+	// loopback (or the container's networks), as an unset TRUSTED_PROXIES does.
+	ClientIP       *effects.ClientIPResolver
+	ClientIPHeader string
 }
 
 // Server handles /rpc requests for procedures this build implements.
@@ -49,6 +54,10 @@ type Server struct {
 	config   Config
 	maxBody  int64
 	maxLabel string
+
+	clientIP       *effects.ClientIPResolver
+	clientIPHeader string
+	effects        *effects.Runner
 }
 
 // New builds the local server.
@@ -64,13 +73,24 @@ func New(database *db.DB, sessions *auth.Service, procedures []Procedure, config
 	if config.MaxUploadBytes > 0 {
 		label = fmt.Sprintf("%d MB", config.MaxUploadBytes/(1024*1024))
 	}
+	resolver := config.ClientIP
+	if resolver == nil {
+		resolver, _ = effects.NewClientIPResolver(effects.DefaultTrustedProxies())
+	}
+	header := strings.ToLower(config.ClientIPHeader)
+	if header == "" {
+		header = "x-forwarded-for"
+	}
 	return &Server{
-		db:       database,
-		auth:     sessions,
-		procs:    registry,
-		config:   config,
-		maxBody:  RequestMaxBytes(config.MaxUploadBytes),
-		maxLabel: label,
+		db:             database,
+		auth:           sessions,
+		procs:          registry,
+		config:         config,
+		maxBody:        RequestMaxBytes(config.MaxUploadBytes),
+		maxLabel:       label,
+		clientIP:       resolver,
+		clientIPHeader: header,
+		effects:        effects.NewRunner(database, config.Logger),
 	}
 }
 
@@ -159,12 +179,21 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request, procedure str
 		s.log(r, procedure, status.Status(), started)
 		return
 	}
-	output, failure := handler.Serve(r.Context(), actor, input)
+	// The caller a security event records: the resolved client address and user agent.
+	caller := effects.Caller{
+		IP:        s.clientIP.Resolve(effects.PeerIP(r.RemoteAddr), strings.Join(r.Header.Values(s.clientIPHeader), ", ")),
+		UserAgent: r.Header.Get("User-Agent"),
+	}
+	ctx := effects.WithCaller(r.Context(), caller)
+	output, failure := handler.Serve(ctx, actor, input)
 	if failure != nil {
 		orpc.WriteError(status, failure)
 		s.log(r, procedure, status.Status(), started)
 		return
 	}
+	// What `authed` does once a procedure has returned: its security event is
+	// written before the reply, roster and Space signals go out in the background.
+	s.effects.After(context.WithoutCancel(ctx), procedure, actor, input.Raw, output)
 	orpc.WriteJSON(status, http.StatusOK, output)
 	s.log(r, procedure, status.Status(), started)
 }
