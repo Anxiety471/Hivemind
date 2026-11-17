@@ -93,5 +93,29 @@ func All(database *db.DB) []local.Procedure {
 				return pages.List(ctx, database, actor, input)
 			},
 		},
+		{
+			Name: "spendingLimit.set",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return spendinglimit.Set(ctx, database, actor, input, slog.Default())
+			},
+		},
+		{
+			Name: "botSections.create",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return botsections.Create(ctx, database, actor, input)
+			},
+		},
+		{
+			Name: "botSections.update",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return botsections.Update(ctx, database, actor, input)
+			},
+		},
+		{
+			Name: "botSections.remove",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return botsections.Remove(ctx, database, actor, input)
+			},
+		},
 	}
 }

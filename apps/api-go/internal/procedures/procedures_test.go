@@ -19,6 +19,7 @@ func TestRegistryHasTheServedProceduresAndNotTrust(t *testing.T) {
 		"availability.items", "availability.set", "availability.chooseForSpace",
 		"trustedLinkSites.list", "trustedLinkSites.remove",
 		"spendingLimit.payments", "spendingLimit.get", "botSections.list", "pages.list",
+		"spendingLimit.set", "botSections.create", "botSections.update", "botSections.remove",
 	} {
 		if !seen[name] {
 			t.Errorf("missing %s", name)
@@ -28,20 +29,10 @@ func TestRegistryHasTheServedProceduresAndNotTrust(t *testing.T) {
 	if seen["trustedLinkSites.trust"] {
 		t.Error("trustedLinkSites.trust must not be served locally")
 	}
-	// create, update and remove publish roster changes; they stay on TypeScript.
-	for _, name := range []string{"botSections.create", "botSections.update", "botSections.remove"} {
-		if seen[name] {
-			t.Errorf("%s must not be served locally", name)
-		}
-	}
 	// The other pages procedures read share secrets and versions; they stay on TypeScript.
 	for _, name := range []string{"pages.get", "pages.rename", "pages.setVisibility", "pages.pin", "pages.remove"} {
 		if seen[name] {
 			t.Errorf("%s must not be served locally", name)
 		}
-	}
-	// set is audited as a security event and takes the spending advisory lock; it stays on TypeScript.
-	if seen["spendingLimit.set"] {
-		t.Error("spendingLimit.set must not be served locally")
 	}
 }
