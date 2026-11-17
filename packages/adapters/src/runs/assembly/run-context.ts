@@ -39,7 +39,7 @@ import type { VaultItemUse } from "../../secrets/bot-secrets.js";
 import { partitionTools } from "../../tools/builtin-tool-bridge.js";
 import type { ComputerExecutionLease } from "../../computers/computer-lifecycle.js";
 import type { UnchangedVisualStreak } from "../../computers/screens/computer-tools.js";
-import type { selectRunConnections } from "../../connectors/connection-context.js";
+import type { selectRunConnections } from "../../integrations/connection-context.js";
 import type { ExecutorDeps } from "../executor/executor-deps.js";
 import type { FleetRun } from "../../tools/fleet-tools.js";
 import { namedAgentTools } from "../../runtime/pi/tools/pi-runtime-tools.js";
