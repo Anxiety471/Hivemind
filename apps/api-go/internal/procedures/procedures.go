@@ -8,6 +8,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/local"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/availability"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/trustedlinksites"
 )
 
 // All returns every locally served procedure.
@@ -45,6 +46,19 @@ func All(database *db.DB) []local.Procedure {
 					return nil, failure
 				}
 				return map[string]any{"ok": true}, nil
+			},
+		},
+		{
+			Name:     "trustedLinkSites.list",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, _ orpc.Input) (any, *orpc.Error) {
+				return trustedlinksites.List(ctx, database, actor)
+			},
+		},
+		{
+			Name: "trustedLinkSites.remove",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return trustedlinksites.Remove(ctx, database, actor, input)
 			},
 		},
 	}
