@@ -48,6 +48,7 @@ type Seeded = {
   installId: string;
   sessionToken: string;
   cookie: string;
+  activeSpace?: number;
 };
 
 type Case = {
@@ -60,6 +61,10 @@ type Case = {
   anonymous?: boolean;
   /** Call repeatedly, feeding each nextCursor back in, and compare every page. */
   paginate?: boolean;
+  /** Active Space for the call: an index into the case's three Spaces (default 0). */
+  space?: 0 | 1 | 2;
+  /** Reads TypeScript makes afterwards, as the web app does; they must read the same state either way. */
+  after?: Array<{ procedure: string; input: unknown }>;
 };
 
 function cookieFor(token: string) {
@@ -112,6 +117,11 @@ await writeFile(
       "messaging.channels.leave": { mode: "go" },
       "messaging.connections.list": { mode: "go", readOnly: true },
       "messaging.connections.revoke": { mode: "go" },
+      "threads.head": { mode: "go", readOnly: true },
+      "threads.markRead": { mode: "go" },
+      "threads.markUnread": { mode: "go" },
+      "threads.snooze": { mode: "go" },
+      "externalConversations.updatePolicy": { mode: "go" },
     },
   }),
 );
@@ -169,6 +179,17 @@ await realtime.query("LISTEN rakazo_events");
 realtime.on("notification", (notification: { payload?: string }) => {
   if (notification.payload) realtimeSignals.push(notification.payload);
 });
+
+// Fixed once per run: both sides of a case must seed identical times.
+const THREAD_PAST = new Date(Date.now() - 2 * 3_600_000);
+const THREAD_FUTURE = new Date(Date.now() + 30 * 86_400_000);
+
+/** What the web app reloads right after a read-state change. */
+const AFTER = [
+  { procedure: "bots.list", input: {} },
+  { procedure: "groups.list", input: {} },
+  { procedure: "spaces.list", input: {} },
+];
 
 const cases: Case[] = [
   { name: "items", procedure: "availability.items", input: {} },
@@ -253,6 +274,8 @@ const cases: Case[] = [
   ...botSectionWriteCases(),
   ...spendingSetCases(),
   ...messagingCases(),
+  ...threadCases(),
+  ...policyCases(),
 ];
 
 const SITES = ["zeta.example", "alpha.example", "Beta.example", "_under.example", "10.0.0.1"];
@@ -1257,7 +1280,10 @@ async function run(
   input: unknown,
   seeded: Seeded,
 ) {
-  if (!testCase.paginate) return call(testCase.procedure, input, called(seeded, testCase));
+  if (!testCase.paginate) {
+    const result = await call(testCase.procedure, input, called(seeded, testCase));
+    return testCase.after ? { ...result, followUps: await followUps(testCase, seeded) } : result;
+  }
   const pages: Awaited<ReturnType<typeof call>>[] = [];
   let cursor: string | undefined;
   for (let step = 0; step < 30; step += 1) {
@@ -1273,14 +1299,385 @@ async function run(
   return { status: pages[0]!.status, headers: pages[0]!.headers, body: pages.map((page) => page.body) };
 }
 
+/** What the web app does right after a read-state change: it reloads the chat lists (through TypeScript). */
+async function followUps(testCase: Case, seeded: Seeded) {
+  const results = [];
+  for (const step of testCase.after ?? []) {
+    results.push(await tsCall(step.procedure, step.input, called(seeded, testCase)));
+  }
+  return results;
+}
+
+type ThreadSeed = { noReads?: boolean };
+
+/**
+ * Chats for the thread read-state cases: bots tb1..tb5 and tbfresh (space 1), an archived bot, a bot without a
+ * thread, a bot in space two, groups tg1/tg2 (one with a single active member), their threads, events, messages and
+ * per-user reads (including another member's, which must stay untouched).
+ */
+function seedThreads(config: ThreadSeed = {}) {
+  return async (seeded: Seeded) => {
+    const user = seeded.userId;
+    const other = `${user}-other`;
+    await system.user.create({
+      data: { id: other, name: "Other", email: `${other}@example.test`, emailVerified: true },
+    });
+    await system.member.create({
+      data: { id: `${seeded.orgId}-mo`, organizationId: seeded.orgId, userId: other, role: "member", createdAt: new Date() },
+    });
+    // Creating a member also adds them to the organization's default Space (space one).
+    const old = new Date(Date.UTC(2020, 0, 1));
+    const bot = (id: string, spaceId: string, name: string, extra: Record<string, unknown> = {}) =>
+      system.bot.create({ data: { id: `${user}-${id}`, spaceId, userId: user, name, color: "blue", updatedAt: old, ...extra } });
+    await bot("tb1", seeded.spaces[0], "Chat one");
+    await bot("tb2", seeded.spaces[0], "Chat two");
+    await bot("tb3", seeded.spaces[0], "Chat three");
+    await bot("tb4", seeded.spaces[0], "Chat four");
+    await bot("tb5", seeded.spaces[0], "Chat five");
+    await bot("tbfresh", seeded.spaces[0], "Chat fresh");
+    await bot("tbarch", seeded.spaces[0], "Chat archived", { archivedAt: old });
+    await bot("tbnone", seeded.spaces[0], "Chat without a thread");
+    await bot("tbx", seeded.spaces[1], "Chat in space two");
+    const thread = (id: string, spaceId: string, extra: Record<string, unknown>, next: number) =>
+      system.thread.create({ data: { id: `${user}-${id}`, spaceId, userId: user, nextMessageSeq: next, nextEventSeq: next, ...extra } });
+    await thread("th-tb1", seeded.spaces[0], { botId: `${user}-tb1` }, 10);
+    await thread("th-tb2", seeded.spaces[0], { botId: `${user}-tb2` }, 10);
+    await thread("th-tb3", seeded.spaces[0], { botId: `${user}-tb3` }, 10);
+    await thread("th-tb4", seeded.spaces[0], { botId: `${user}-tb4` }, 0);
+    await thread("th-tb5", seeded.spaces[0], { botId: `${user}-tb5` }, 10);
+    await thread("th-tbfresh", seeded.spaces[0], { botId: `${user}-tbfresh` }, 10);
+    await thread("th-tbarch", seeded.spaces[0], { botId: `${user}-tbarch` }, 10);
+    await thread("th-tbx", seeded.spaces[1], { botId: `${user}-tbx` }, 10);
+    const group = (id: string, name: string, extra: Record<string, unknown> = {}) =>
+      system.chatGroup.create({ data: { id: `${user}-${id}`, spaceId: seeded.spaces[0], userId: user, name, updatedAt: old, ...extra } });
+    await group("tg1", "Group one");
+    await group("tg2", "Group two");
+    await group("tgone", "Group of one");
+    await group("tgarch", "Group archived", { archivedAt: old });
+    await group("tgnone", "Group without a thread");
+    const member = (groupId: string, botId: string) =>
+      system.chatGroupMember.create({ data: { id: `${user}-gm-${groupId}-${botId}`, groupId: `${user}-${groupId}`, botId: `${user}-${botId}` } });
+    for (const id of ["tg1", "tg2", "tgarch", "tgnone"]) {
+      await member(id, "tb1");
+      await member(id, "tb2");
+    }
+    await member("tgone", "tb1");
+    await member("tgone", "tbarch");
+    await thread("th-tg1", seeded.spaces[0], { groupId: `${user}-tg1` }, 10);
+    await thread("th-tg2", seeded.spaces[0], { groupId: `${user}-tg2` }, 3);
+    await thread("th-tgone", seeded.spaces[0], { groupId: `${user}-tgone` }, 10);
+    await thread("th-tgarch", seeded.spaces[0], { groupId: `${user}-tgarch` }, 10);
+    const event = (threadId: string, seq: number) =>
+      system.event.create({
+        data: { id: `${user}-ev-${threadId}-${seq}`, spaceId: seeded.spaces[0], threadId: `${user}-${threadId}`, botId: `${user}-tb1`, seq, type: "note", payload: { n: seq } },
+      });
+    for (const seq of [0, 3, 7]) await event("th-tb1", seq);
+    await event("th-tg1", 2);
+    const message = (id: string, threadId: string, seq: number) =>
+      system.message.create({
+        data: { id: `${user}-${id}`, threadId: `${user}-${threadId}`, seq, role: "user", blocks: [{ kind: "text", text: "hi" }] },
+      });
+    await message("msg5", "th-tb1", 5);
+    await message("msg0", "th-tb1", 0);
+    await message("msgother", "th-tb2", 4);
+    if (config.noReads) return;
+    const read = (threadId: string, data: Record<string, unknown>, userId = user) =>
+      system.threadRead.create({ data: { threadId: `${user}-${threadId}`, userId, spaceId: seeded.spaces[0], ...data } });
+    await read("th-tb1", { unread: true, lastReadSeq: 4 });
+    await read("th-tb2", { unread: false, lastReadSeq: 9 });
+    await read("th-tb3", { unread: false, lastReadSeq: 3 });
+    await read("th-tb4", { unread: true, lastReadSeq: -1 });
+    await read("th-tb5", { unread: true, lastReadSeq: 9, snoozedUntil: THREAD_PAST });
+    await read("th-tg1", { unread: false, lastReadSeq: 9, snoozedUntil: THREAD_FUTURE });
+    await read("th-tg2", { unread: true, lastReadSeq: 0 });
+    // Someone else's state for the same chats must stay untouched.
+    await read("th-tb1", { unread: true, lastReadSeq: 1 }, other);
+    await read("th-tb2", { unread: true, lastReadSeq: 2, snoozedUntil: THREAD_FUTURE }, other);
+  };
+}
+
+function threadCases(): Case[] {
+  const mk = (procedure: string, label: string) => (name: string, input: unknown, extra: Partial<Case> = {}): Case => ({
+    name: `thr-${label}-${name}`,
+    procedure: `threads.${procedure}`,
+    input,
+    seed: seedThreads(),
+    after: AFTER,
+    ...extra,
+  });
+  const read = mk("markRead", "read");
+  const unread = mk("markUnread", "unread");
+  const snooze = mk("snooze", "snooze");
+  const head = mk("head", "head");
+  const days = (n: number) => new Date(THREAD_FUTURE.getTime() + (n - 30) * 86_400_000).toISOString();
+  // The same instant written with an offset, as a phone in another zone might.
+  const wire = (n: number) => new Date(THREAD_FUTURE.getTime() + (n - 30) * 86_400_000 + 19_800_000).toISOString().replace("Z", "+05:30");
+  return [
+    // markRead: the client sends { botId } or { groupId }.
+    read("bot-unread-with-gap", { botId: "__tb1__" }),
+    read("bot-read-behind-without-dot", { botId: "__tb3__" }),
+    read("bot-already-caught-up", { botId: "__tb2__" }),
+    read("bot-empty-thread-unread", { botId: "__tb4__" }),
+    read("bot-woken-snooze-ends", { botId: "__tb5__" }),
+    read("bot-no-read-state", { botId: "__tbfresh__" }),
+    read("bot-no-reads-at-all", { botId: "__tb1__" }, { seed: seedThreads({ noReads: true }) }),
+    read("group-running-snooze-stays", { groupId: "__tg1__" }),
+    read("group-unread", { groupId: "__tg2__" }),
+    read("group-single-active-member", { groupId: "__tgone__" }),
+    read("group-archived", { groupId: "__tgarch__" }),
+    read("group-without-thread", { groupId: "__tgnone__" }),
+    read("bot-archived", { botId: "__tbarch__" }),
+    read("bot-without-thread", { botId: "__tbnone__" }),
+    read("bot-in-other-space-wrong-header", { botId: "__tbx__" }),
+    read("bot-in-other-space-own-header", { botId: "__tbx__" }, { space: 1 }),
+    read("unknown-bot", { botId: "nope" }),
+    read("unknown-group", { groupId: "nope" }),
+    read("neither", {}),
+    read("both", { botId: "__tb1__", groupId: "__tg1__" }),
+    read("empty-bot-id", { botId: "" }),
+    read("empty-both", { botId: "", groupId: "" }),
+    read("bot-id-number", { botId: 5 }),
+    read("bot-id-null", { botId: null }),
+    read("group-id-array", { groupId: [] }),
+    read("extra-keys-ignored", { botId: "__tb1__", messageId: "x", more: 1 }),
+    read("no-input", undefined),
+    read("null-input", null),
+    read("array-input", []),
+    read("anonymous", { botId: "__tb1__" }, { anonymous: true }),
+    // markUnread: { botId|groupId, messageId? }.
+    unread("bot-no-message", { botId: "__tb2__" }),
+    unread("bot-no-read-state", { botId: "__tbfresh__" }),
+    unread("bot-no-reads-at-all", { botId: "__tb1__" }, { seed: seedThreads({ noReads: true }) }),
+    unread("bot-from-message", { botId: "__tb1__", messageId: "__msg5__" }),
+    unread("bot-from-first-message", { botId: "__tb1__", messageId: "__msg0__" }),
+    unread("bot-from-message-no-read-state", { botId: "__tbfresh__", messageId: "__msg5__" }),
+    unread("group-no-message", { groupId: "__tg2__" }),
+    unread("group-from-message-of-another-chat", { groupId: "__tg1__", messageId: "__msg5__" }),
+    unread("bot-message-of-another-thread", { botId: "__tb1__", messageId: "__msgother__" }),
+    unread("bot-unknown-message", { botId: "__tb1__", messageId: "nope" }),
+    unread("bot-empty-message-id", { botId: "__tb1__", messageId: "" }),
+    unread("bot-message-id-number", { botId: "__tb1__", messageId: 5 }),
+    unread("bot-message-id-null", { botId: "__tb1__", messageId: null }),
+    unread("bot-message-id-array", { botId: "__tb1__", messageId: [] }),
+    unread("bot-archived", { botId: "__tbarch__" }),
+    unread("group-single-active-member", { groupId: "__tgone__" }),
+    unread("unknown-bot-with-message", { botId: "nope", messageId: "__msg5__" }),
+    unread("neither", { messageId: "__msg5__" }),
+    unread("both", { botId: "__tb1__", groupId: "__tg1__" }),
+    unread("everything-wrong", { botId: 5, groupId: "", messageId: 7 }),
+    unread("no-input", undefined),
+    unread("array-input", []),
+    unread("null-input", null),
+    unread("anonymous", { botId: "__tb1__" }, { anonymous: true }),
+    // snooze: until is toISOString() or null.
+    snooze("bot-30-days", { botId: "__tb1__", until: days(30) }),
+    snooze("bot-offset-notation", { botId: "__tb2__", until: wire(20) }),
+    snooze("bot-fraction-digits", { botId: "__tb2__", until: days(20).replace(/Z$/, "456Z") }),
+    snooze("bot-no-fraction", { botId: "__tb2__", until: days(20).replace(/\.\d+Z$/, "Z") }),
+    snooze("bot-no-read-state", { botId: "__tbfresh__", until: days(2) }),
+    snooze("bot-no-reads-at-all", { botId: "__tb1__", until: days(2) }, { seed: seedThreads({ noReads: true }) }),
+    snooze("bot-keeps-unread-and-cursor", { botId: "__tb4__", until: days(2) }),
+    snooze("bot-null-wakes", { botId: "__tb5__", until: null }),
+    snooze("group-null-wakes", { groupId: "__tg1__", until: null }),
+    snooze("bot-null-no-read-state-creates-nothing", { botId: "__tbfresh__", until: null }),
+    snooze("group-replaces-snooze", { groupId: "__tg1__", until: days(300) }),
+    snooze("bot-in-the-past", { botId: "__tb1__", until: "2020-01-01T00:00:00.000Z" }),
+    snooze("bot-just-past", { botId: "__tb1__", until: new Date(Date.now() - 1000).toISOString() }),
+    snooze("bot-365-days", { botId: "__tb1__", until: days(365) }),
+    snooze("bot-367-days", { botId: "__tb1__", until: days(367) }),
+    snooze("bot-far-future", { botId: "__tb1__", until: "2999-01-01T00:00:00.000Z" }),
+    snooze("unknown-bot-bad-time", { botId: "nope", until: "2020-01-01T00:00:00.000Z" }),
+    snooze("archived-bot", { botId: "__tbarch__", until: days(2) }),
+    snooze("group-single-active-member", { groupId: "__tgone__", until: days(2) }),
+    snooze("date-only", { botId: "__tb1__", until: "2026-12-01" }),
+    snooze("no-seconds", { botId: "__tb1__", until: "2026-12-01T10:00Z" }),
+    snooze("no-zone", { botId: "__tb1__", until: "2026-12-01T10:00:00" }),
+    snooze("compact-offset", { botId: "__tb1__", until: "2026-12-01T10:00:00+0530" }),
+    snooze("space-separator", { botId: "__tb1__", until: "2026-12-01 10:00:00Z" }),
+    snooze("impossible-date", { botId: "__tb1__", until: "2026-02-30T10:00:00Z" }),
+    snooze("hour-24", { botId: "__tb1__", until: "2026-12-01T24:00:00Z" }),
+    snooze("leading-space", { botId: "__tb1__", until: " 2026-12-01T10:00:00Z" }),
+    snooze("empty-string", { botId: "__tb1__", until: "" }),
+    snooze("number", { botId: "__tb1__", until: 5 }),
+    snooze("missing", { botId: "__tb1__" }),
+    snooze("bool", { botId: "__tb1__", until: false }),
+    snooze("array", { botId: "__tb1__", until: [] }),
+    snooze("target-and-time-wrong", { botId: 5, until: 5 }),
+    snooze("neither-target", { until: null }),
+    snooze("both-targets", { botId: "__tb1__", groupId: "__tg1__", until: null }),
+    snooze("no-input", undefined),
+    snooze("array-input", []),
+    snooze("anonymous", { botId: "__tb1__", until: null }, { anonymous: true }),
+    // head
+    head("bot-with-events", { botId: "__tb1__" }, { after: [] }),
+    head("bot-without-events", { botId: "__tb2__" }, { after: [] }),
+    head("group-with-events", { groupId: "__tg1__" }, { after: [] }),
+    head("group-without-events", { groupId: "__tg2__" }, { after: [] }),
+    head("archived-bot", { botId: "__tbarch__" }, { after: [] }),
+    head("bot-without-thread", { botId: "__tbnone__" }, { after: [] }),
+    head("group-single-active-member", { groupId: "__tgone__" }, { after: [] }),
+    head("other-space-bot", { botId: "__tbx__" }, { after: [] }),
+    head("other-space-bot-own-header", { botId: "__tbx__" }, { after: [], space: 1 }),
+    head("unknown", { groupId: "nope" }, { after: [] }),
+    head("neither", {}, { after: [] }),
+    head("both", { botId: "__tb1__", groupId: "__tg1__" }, { after: [] }),
+    head("bot-id-number", { botId: 5 }, { after: [] }),
+    head("empty-id", { botId: "" }, { after: [] }),
+    head("extra-keys", { botId: "__tb1__", signal: true }, { after: [] }),
+    head("no-input", undefined, { after: [] }),
+    head("array-input", [], { after: [] }),
+    head("anonymous", { botId: "__tb1__" }, { after: [], anonymous: true }),
+  ];
+}
+
+function seedConversations() {
+  return async (seeded: Seeded) => {
+    const user = seeded.userId;
+    const other = `${user}-other`;
+    await system.user.create({
+      data: { id: other, name: "Other", email: `${other}@example.test`, emailVerified: true },
+    });
+    await system.member.create({
+      data: { id: `${seeded.orgId}-mo`, organizationId: seeded.orgId, userId: other, role: "member", createdAt: new Date() },
+    });
+    // Creating a member also adds them to the organization's default Space (space one).
+    const old = new Date(Date.UTC(2020, 0, 1));
+    await system.bot.create({ data: { id: `${user}-tb1`, spaceId: seeded.spaces[0], userId: user, name: "Bot", color: "blue", updatedAt: old } });
+    await system.bot.create({ data: { id: `${user}-tbx`, spaceId: seeded.spaces[1], userId: user, name: "Bot x", color: "blue", updatedAt: old } });
+    const conversation = (id: string, owner: string, spaceId: string, botId: string) =>
+      system.externalConversation.create({
+        data: {
+          id: `${user}-${id}`,
+          provider: "telegram",
+          workspaceId: "w",
+          externalKey: `${user}-${id}`,
+          conversationId: `${user}-${id}`,
+          spaceId,
+          botId: `${user}-${botId}`,
+          userId: owner,
+          teamChatAmbientEnabled: true,
+          teamChatRules: "old rules",
+          automatedSenderPolicies: { old: { name: "Old", mode: "ignore" } },
+          updatedAt: old,
+        },
+      });
+    await conversation("ec1", user, seeded.spaces[0], "tb1");
+    await conversation("ec2", other, seeded.spaces[0], "tb1");
+    await conversation("ec3", user, seeded.spaces[1], "tbx");
+  };
+}
+
+function policyCases(): Case[] {
+  const update = (name: string, input: unknown, extra: Partial<Case> = {}): Case => ({
+    name: `ecp-${name}`,
+    procedure: "externalConversations.updatePolicy",
+    input,
+    seed: seedConversations(),
+    ...extra,
+  });
+  const policy = (automatedSenderPolicies: unknown, rest: Record<string, unknown> = {}) => ({
+    externalConversationId: "__ec1__",
+    teamChatAmbientEnabled: true,
+    teamChatRules: "Be brief.",
+    automatedSenderPolicies,
+    ...rest,
+  });
+  const entries = (count: number) =>
+    Object.fromEntries(Array.from({ length: count }, (_, i) => [`sender-${String(i).padStart(3, "0")}`, { name: `Sender ${i}`, mode: "ignore" }]));
+  return [
+    // The web client sends the whole form.
+    update("client-shape", policy({ "bot-1": { name: "CI bot", mode: "rollup", rollupHours: 24 }, "bot-2": { name: "Alerts", mode: "action" } })),
+    update("empty-policies", policy({})),
+    update("ambient-null-rules-null", policy({}, { teamChatAmbientEnabled: null, teamChatRules: null })),
+    update("ambient-false", policy({}, { teamChatAmbientEnabled: false, teamChatRules: "" })),
+    update("all-modes", policy({ a: { name: "A", mode: "ignore" }, b: { name: "B", mode: "rollup", rollupHours: 1 }, c: { name: "C", mode: "action" }, d: { name: "D", mode: "user" } })),
+    update("rollup-hours-720", policy({ a: { name: "A", mode: "rollup", rollupHours: 720 } })),
+    update("hours-with-other-mode", policy({ a: { name: "A", mode: "user", rollupHours: 5 } })),
+    update("keys-trimmed", policy({ "  padded \t": { name: "  Padded name  ", mode: "ignore" } })),
+    update("keys-collide-after-trim", policy({ " a ": { name: "first", mode: "ignore" }, a: { name: "second", mode: "user" } })),
+    update("numeric-keys-order", policy({ b: { name: "b", mode: "ignore" }, 10: { name: "ten", mode: "ignore" }, 2: { name: "two", mode: "ignore" }, a: { name: "a", mode: "ignore" } })),
+    update("proto-key-dropped", JSON.parse(`{"externalConversationId":"__ec1__","teamChatAmbientEnabled":true,"teamChatRules":"r","automatedSenderPolicies":{"__proto__":{"name":"x","mode":"ignore"},"ok":{"name":"y","mode":"ignore"}}}`)),
+    update("unknown-keys-stripped", policy({ a: { name: "A", mode: "ignore", extra: [1], deep: { x: 1 } } }, { more: true })),
+    update("unicode", policy({ "ключ-😀": { name: "Имя ✨", mode: "ignore" } }, { teamChatRules: "règles — 日本語 😀" })),
+    update("line-separators-in-text", policy({ a: { name: "A\u2028B", mode: "ignore" } }, { teamChatRules: "x\u2028y\u2029z <b> & \"q\" \\ /" })),
+    update("nul-in-rules-and-names", policy({ "k\u0000": { name: "n\u0000m", mode: "ignore" } }, { teamChatRules: "a\u0000b" })),
+    update("controls-and-escapes", policy({ a: { name: "tab\there", mode: "ignore" } }, { teamChatRules: "line1\nline2\r\n\u0007\u007f" })),
+    update("rules-4000", policy({}, { teamChatRules: "r".repeat(4000) })),
+    update("rules-4001", policy({}, { teamChatRules: "r".repeat(4001) })),
+    update("rules-astral-4000", policy({}, { teamChatRules: "😀".repeat(4000) })),
+    update("rules-astral-4001", policy({}, { teamChatRules: "😀".repeat(4001) })),
+    update("name-120", policy({ a: { name: "n".repeat(120), mode: "ignore" } })),
+    update("name-121", policy({ a: { name: "n".repeat(121), mode: "ignore" } })),
+    update("name-padded-121", policy({ a: { name: ` ${"n".repeat(121)} `, mode: "ignore" } })),
+    update("key-200", policy({ ["k".repeat(200)]: { name: "A", mode: "ignore" } })),
+    update("key-201", policy({ ["k".repeat(201)]: { name: "A", mode: "ignore" } })),
+    update("key-empty", policy({ "": { name: "A", mode: "ignore" } })),
+    update("key-blank", policy({ " \u00a0\u3000": { name: "A", mode: "ignore" } })),
+    update("key-invalid-and-value-invalid", policy({ "": { name: "", mode: "bad" } })),
+    update("entries-50", policy(entries(50))),
+    update("entries-51", policy(entries(51))),
+    update("entries-51-with-bad-value", policy({ ...entries(51), bad: { name: "", mode: "ignore" } })),
+    update("entries-51-with-type-error", policy({ ...entries(51), bad: 5 })),
+    update("entries-51-with-key-error", policy({ ...entries(51), "": { name: "A", mode: "ignore" } })),
+    update("entries-51-collapse-to-50", policy({ ...entries(50), " sender-000 ": { name: "dup", mode: "user" } })),
+    update("rollup-without-hours", policy({ a: { name: "A", mode: "rollup" } })),
+    update("rollup-without-hours-two-keys", policy({ a: { name: "A", mode: "rollup" }, b: { name: "B", mode: "rollup" } })),
+    update("rollup-blank-name-no-hours", policy({ a: { name: " ", mode: "rollup" } })),
+    update("rollup-wrong-name-type-no-hours", policy({ a: { name: 5, mode: "rollup" } })),
+    update("rollup-bad-hours-type", policy({ a: { name: "A", mode: "rollup", rollupHours: "3" } })),
+    update("hours-0", policy({ a: { name: "A", mode: "ignore", rollupHours: 0 } })),
+    update("hours-721", policy({ a: { name: "A", mode: "ignore", rollupHours: 721 } })),
+    update("hours-fraction", policy({ a: { name: "A", mode: "ignore", rollupHours: 1.5 } })),
+    update("hours-null", policy({ a: { name: "A", mode: "ignore", rollupHours: null } })),
+    update("hours-negative-huge", policy({ a: { name: "A", mode: "ignore", rollupHours: -1e300 } })),
+    update("mode-unknown", policy({ a: { name: "A", mode: "block" } })),
+    update("mode-missing", policy({ a: { name: "A" } })),
+    update("mode-number", policy({ a: { name: "A", mode: 1 } })),
+    update("name-missing", policy({ a: { mode: "ignore" } })),
+    update("name-null", policy({ a: { name: null, mode: "ignore" } })),
+    update("value-not-object", policy({ a: 5, b: "x", c: null, d: [], e: true })),
+    update("policies-array", policy([])),
+    update("policies-null", policy(null)),
+    update("policies-string", policy("x")),
+    update("policies-missing", { externalConversationId: "__ec1__", teamChatAmbientEnabled: true, teamChatRules: "r" }),
+    update("ambient-string", policy({}, { teamChatAmbientEnabled: "yes" })),
+    update("ambient-missing", { externalConversationId: "__ec1__", teamChatRules: "r", automatedSenderPolicies: {} }),
+    update("rules-number", policy({}, { teamChatRules: 5 })),
+    update("rules-array", policy({}, { teamChatRules: [] })),
+    update("rules-missing", { externalConversationId: "__ec1__", teamChatAmbientEnabled: true, automatedSenderPolicies: {} }),
+    update("id-empty", policy({}, { externalConversationId: "" })),
+    update("id-number", policy({}, { externalConversationId: 5 })),
+    update("id-missing", { teamChatAmbientEnabled: true, teamChatRules: "r", automatedSenderPolicies: {} }),
+    update("everything-wrong", { externalConversationId: "", teamChatAmbientEnabled: "y", teamChatRules: 5, automatedSenderPolicies: [] }),
+    update("empty-object", {}),
+    update("no-input", undefined),
+    update("null-input", null),
+    update("array-input", []),
+    update("someone-elses-conversation", policy({}, { externalConversationId: "__ec2__" })),
+    update("other-space-conversation", policy({}, { externalConversationId: "__ec3__" })),
+    update("other-space-conversation-own-header", policy({}, { externalConversationId: "__ec3__" }), { space: 1 }),
+    update("unknown-conversation", policy({}, { externalConversationId: "nope" })),
+    update("anonymous", policy({}), { anonymous: true }),
+  ];
+}
+
 async function reset(seeded: ReturnType<typeof ids>) {
   const { userId, orgId } = seeded;
   await system.messagingOutbound.deleteMany({ where: { id: { startsWith: userId } } });
   await system.agentConnection.deleteMany({ where: { id: { startsWith: userId } } });
+  // Delete the chat rows explicitly rather than relying on cascades under the runtime role.
+  const own = { in: [userId, `${userId}-other`] };
+  await system.externalConversation.deleteMany({ where: { userId: own } });
+  await system.threadRead.deleteMany({ where: { threadId: { startsWith: userId } } });
+  await system.message.deleteMany({ where: { threadId: { startsWith: userId } } });
+  await system.event.deleteMany({ where: { threadId: { startsWith: userId } } });
+  await system.thread.deleteMany({ where: { userId } });
+  await system.chatGroupMember.deleteMany({ where: { id: { startsWith: userId } } });
   await system.messagingChannel.deleteMany({ where: { id: { startsWith: userId } } });
   await system.messagingLinkCode.deleteMany({ where: { userId: { in: [userId, `${userId}-other`] } } });
   await system.messagingIdentity.deleteMany({ where: { userId: { in: [userId, `${userId}-other`] } } });
   await system.messagingInstallation.deleteMany({ where: { userId } });
+  await system.spaceMember.deleteMany({ where: { userId: own } });
   await system.securityEvent.deleteMany({ where: { userId: { in: [userId, `${userId}-other`] } } });
   await system.auditEvent.deleteMany({ where: { OR: [{ organizationId: orgId }, { actorId: userId }] } });
   await system.page.deleteMany({ where: { userId: { in: [userId, `${userId}-other`] } } });
@@ -1409,7 +1806,8 @@ async function seed(caseIds: ReturnType<typeof ids>): Promise<Seeded> {
 }
 
 function called(seeded: Seeded, testCase: Case): Seeded {
-  return testCase.anonymous ? { ...seeded, cookie: "" } : seeded;
+  const active = testCase.space === undefined ? seeded : { ...seeded, activeSpace: testCase.space };
+  return testCase.anonymous ? { ...active, cookie: "" } : active;
 }
 
 function withIds(input: unknown, seeded: ReturnType<typeof ids>) {
@@ -1456,7 +1854,27 @@ function withIds(input: unknown, seeded: ReturnType<typeof ids>) {
       .replaceAll("__cn9__", `${seeded.userId}-cn9`)
       .replaceAll("__mm6__", `${seeded.userId}-mm6`)
       .replaceAll("__mm7__", `${seeded.userId}-mm7`)
-      .replaceAll("__pb4__", `${seeded.userId}-pb4`),
+      .replaceAll("__pb4__", `${seeded.userId}-pb4`)
+      .replaceAll("__tb1__", `${seeded.userId}-tb1`)
+      .replaceAll("__tb2__", `${seeded.userId}-tb2`)
+      .replaceAll("__tb3__", `${seeded.userId}-tb3`)
+      .replaceAll("__tb4__", `${seeded.userId}-tb4`)
+      .replaceAll("__tb5__", `${seeded.userId}-tb5`)
+      .replaceAll("__tbarch__", `${seeded.userId}-tbarch`)
+      .replaceAll("__tbnone__", `${seeded.userId}-tbnone`)
+      .replaceAll("__tbx__", `${seeded.userId}-tbx`)
+      .replaceAll("__tbfresh__", `${seeded.userId}-tbfresh`)
+      .replaceAll("__tg1__", `${seeded.userId}-tg1`)
+      .replaceAll("__tg2__", `${seeded.userId}-tg2`)
+      .replaceAll("__tgarch__", `${seeded.userId}-tgarch`)
+      .replaceAll("__tgone__", `${seeded.userId}-tgone`)
+      .replaceAll("__tgnone__", `${seeded.userId}-tgnone`)
+      .replaceAll("__msg5__", `${seeded.userId}-msg5`)
+      .replaceAll("__msg0__", `${seeded.userId}-msg0`)
+      .replaceAll("__msgother__", `${seeded.userId}-msgother`)
+      .replaceAll("__ec1__", `${seeded.userId}-ec1`)
+      .replaceAll("__ec2__", `${seeded.userId}-ec2`)
+      .replaceAll("__ec3__", `${seeded.userId}-ec3`),
   );
 }
 
@@ -1512,7 +1930,7 @@ function callHeaders(seeded: Seeded) {
     "content-type": "application/json",
     origin: WEB_ORIGIN,
     cookie: seeded.cookie,
-    "x-rakazo-space-id": seeded.spaces[0],
+    "x-rakazo-space-id": seeded.spaces[seeded.activeSpace ?? 0],
     // What a security event records about the caller.
     "user-agent": "contract-harness/1",
     "x-forwarded-for": "198.51.100.77",
@@ -1543,7 +1961,9 @@ function normalize<T>(value: T): T {
     if (typeof node === "string") {
       if (CUID.test(node)) return "<cuid>";
       if (LINK_CODE.test(node)) return "<code>";
-      if (ISO_TIME.test(node) && Date.parse(node) >= HARNESS_START) return "<now>";
+      // Times near now (link-code expiry is minutes ahead) vary per run; instants days away are the case's own data.
+      if (ISO_TIME.test(node) && Date.parse(node) >= HARNESS_START && Date.parse(node) <= Date.now() + 6 * 3_600_000)
+        return "<now>";
       return node;
     }
     if (Array.isArray(node)) return node.map(visit);
@@ -1648,6 +2068,16 @@ async function databaseState(seeded: ReturnType<typeof ids>) {
     select: { id: true, spaceId: true, userId: true, name: true, position: true },
     orderBy: { id: "asc" },
   });
+  const threadReads = await system.threadRead.findMany({
+    where: { spaceId: { in: seeded.spaces } },
+    select: { threadId: true, userId: true, spaceId: true, unread: true, lastReadSeq: true, snoozedUntil: true },
+    orderBy: [{ threadId: "asc" }, { userId: "asc" }],
+  });
+  const externalConversations = await system.externalConversation.findMany({
+    where: { spaceId: { in: seeded.spaces } },
+    select: { id: true, userId: true, teamChatAmbientEnabled: true, teamChatRules: true, automatedSenderPolicies: true, updatedAt: true },
+    orderBy: { id: "asc" },
+  });
   const messagingIdentities = await system.messagingIdentity.findMany({
     where: { userId: owners },
     select: { id: true, userId: true, spaceId: true, botId: true, provider: true, address: true, installationId: true, updatedAt: true },
@@ -1717,6 +2147,8 @@ async function databaseState(seeded: ReturnType<typeof ids>) {
     messagingMemberships,
     agentConnections,
     messagingOutbound,
+    threadReads,
+    externalConversations,
   };
 }
 
