@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/effects"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/local"
 )
 
@@ -23,6 +24,8 @@ type Config struct {
 	MaxUploadBytes  int64
 	Minimums        map[string]string
 	TrustedOrigins  []string
+	ClientIP        *effects.ClientIPResolver
+	ClientIPHeader  string
 }
 
 // Load reads the environment. Only a build that serves procedures needs the
@@ -73,6 +76,21 @@ func Load() (Config, error) {
 		"http://127.0.0.1:19006",
 	)
 	config.TrustedOrigins = origins
+
+	// Built before anything listens, so a bad TRUSTED_PROXIES entry stops startup.
+	trusted := effects.ParseTrustedProxies(os.Getenv("TRUSTED_PROXIES"))
+	if len(trusted) == 0 {
+		trusted = effects.DefaultTrustedProxies()
+	}
+	resolver, err := effects.NewClientIPResolver(trusted)
+	if err != nil {
+		return Config{}, err
+	}
+	config.ClientIP = resolver
+	config.ClientIPHeader = strings.ToLower(strings.TrimSpace(os.Getenv("CLIENT_IP_HEADER")))
+	if config.ClientIPHeader == "" {
+		config.ClientIPHeader = "x-forwarded-for"
+	}
 	return config, nil
 }
 
