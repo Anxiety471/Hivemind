@@ -10,9 +10,11 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/availability"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/botsections"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/externalconversations"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/messaging"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/pages"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/spendinglimit"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/threads"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/trustedlinksites"
 )
 
@@ -166,6 +168,37 @@ func All(database *db.DB) []local.Procedure {
 			Name: "messaging.connections.revoke",
 			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
 				return messaging.ConnectionsRevoke(ctx, database, actor, input)
+			},
+		},
+		{
+			Name:     "threads.head",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return threads.Head(ctx, database, actor, input)
+			},
+		},
+		{
+			Name: "threads.markRead",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return threads.MarkRead(ctx, database, actor, input)
+			},
+		},
+		{
+			Name: "threads.markUnread",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return threads.MarkUnread(ctx, database, actor, input)
+			},
+		},
+		{
+			Name: "threads.snooze",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return threads.Snooze(ctx, database, actor, input)
+			},
+		},
+		{
+			Name: "externalConversations.updatePolicy",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return externalconversations.UpdatePolicy(ctx, database, actor, input)
 			},
 		},
 	}
