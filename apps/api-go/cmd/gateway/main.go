@@ -50,42 +50,25 @@ func main() {
 		os.Exit(1)
 	}
 
+	wantsLocal := store.HasLocal()
+	secretsReady := os.Getenv("DATABASE_URL") != "" && os.Getenv("BETTER_AUTH_SECRET") != ""
 	var localServer *local.Server
-	if store.HasLocal() {
-		deployment, err := config.Load()
+	if secretsReady {
+		server, closeDatabase, err := setupLocal(*buildIDFile, logger)
 		if err != nil {
-			logger.Error("configuration for local procedures", "error", err)
-			os.Exit(1)
+			if wantsLocal {
+				logger.Error("cannot serve local procedures", "error", err)
+				os.Exit(1)
+			}
+			logger.Warn("local procedures unavailable; serving proxy routes only", "error", err)
+		} else {
+			localServer = server
+			defer closeDatabase()
+			logger.Info("local procedures ready", "procedures", 3)
 		}
-		startup, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		database, err := db.Open(startup, deployment.DatabaseURL, "rakazo-api-go")
-		if err != nil {
-			cancel()
-			logger.Error("open database", "error", err)
-			os.Exit(1)
-		}
-		if err := database.StartupCheck(startup); err != nil {
-			cancel()
-			database.Close()
-			logger.Error("database is not safe for row-level security", "error", err)
-			os.Exit(1)
-		}
-		cancel()
-		defer database.Close()
-		sessions := auth.New(database, auth.Config{
-			Secret:          deployment.AuthSecret,
-			AuthURL:         deployment.AuthURL,
-			SignupAllowlist: deployment.SignupAllowlist,
-			OIDCBypass:      deployment.OIDCBypass,
-		})
-		localServer = local.New(database, sessions, procedures.All(database), local.Config{
-			BuildID:        readBuildID(*buildIDFile),
-			Minimums:       deployment.Minimums,
-			MaxUploadBytes: deployment.MaxUploadBytes,
-			WebOrigin:      deployment.WebOrigin,
-			TrustedOrigins: deployment.TrustedOrigins,
-			Logger:         logger,
-		})
+	} else if wantsLocal {
+		logger.Error("the routing table needs local procedures but DATABASE_URL/BETTER_AUTH_SECRET are unset")
+		os.Exit(1)
 	}
 
 	handler := gateway.New(gateway.Options{Upstream: target, Routes: store, Logger: logger, Local: localServer})
@@ -148,4 +131,39 @@ func readBuildID(path string) string {
 		}
 	}
 	return value
+}
+
+// setupLocal opens the database and builds the local procedure server. It is
+// called whenever the deployment's secrets are present, even if every route is
+// still proxy, so a SIGHUP cutover can use it without a restart.
+func setupLocal(buildIDFile string, logger *slog.Logger) (*local.Server, func(), error) {
+	deployment, err := config.Load()
+	if err != nil {
+		return nil, nil, err
+	}
+	startup, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	database, err := db.Open(startup, deployment.DatabaseURL, "rakazo-api-go")
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := database.StartupCheck(startup); err != nil {
+		database.Close()
+		return nil, nil, err
+	}
+	sessions := auth.New(database, auth.Config{
+		Secret:          deployment.AuthSecret,
+		AuthURL:         deployment.AuthURL,
+		SignupAllowlist: deployment.SignupAllowlist,
+		OIDCBypass:      deployment.OIDCBypass,
+	})
+	server := local.New(database, sessions, procedures.All(database), local.Config{
+		BuildID:        readBuildID(buildIDFile),
+		Minimums:       deployment.Minimums,
+		MaxUploadBytes: deployment.MaxUploadBytes,
+		WebOrigin:      deployment.WebOrigin,
+		TrustedOrigins: deployment.TrustedOrigins,
+		Logger:         logger,
+	})
+	return server, database.Close, nil
 }

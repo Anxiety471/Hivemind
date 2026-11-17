@@ -181,6 +181,22 @@ func TestHTTPRenewalAndBearer(t *testing.T) {
 	}
 }
 
+func TestHTTPActorWithoutSpaceHeader(t *testing.T) {
+	database := openTestDB(t)
+	seed := seed(t, database)
+	server := testServer(t, database, local.Config{})
+	cookie := "better-auth.session_token=" + signedCookie(testSecret, seed.SessionToken)
+
+	response, body := do(t, http.MethodPost, server.URL+"/rpc/availability/items", cookie, `{"json":{}}`, map[string]string{"x-rakazo-space-id": ""})
+	if response.StatusCode != 200 {
+		t.Fatalf("no space header = %d %s", response.StatusCode, body)
+	}
+	response, body = do(t, http.MethodPost, server.URL+"/rpc/availability/items", cookie, `{"json":{}}`, map[string]string{"x-rakazo-space-id": "some-other-space"})
+	if response.StatusCode != 401 {
+		t.Fatalf("foreign space = %d %s", response.StatusCode, body)
+	}
+}
+
 func TestHTTPLookupAuthorization(t *testing.T) {
 	database := openTestDB(t)
 	seed := seed(t, database)
