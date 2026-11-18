@@ -9,7 +9,6 @@ import (
 	"crypto/rand"
 	"errors"
 	"math/big"
-	"regexp"
 	"strings"
 	"time"
 
@@ -91,25 +90,6 @@ func botIDs(identities []identityRef) []string {
 	return ids
 }
 
-// objectWithIDs validates z.object({ <key>: Id, ... }) for string id fields.
-func objectWithIDs(raw orpc.Input, keys ...string) (map[string]string, *orpc.Error) {
-	object, issues := validate.Decode(raw.Raw, nil)
-	if issues != nil {
-		return nil, validate.Fail(issues)
-	}
-	var found []validate.Issue
-	values := map[string]string{}
-	for _, key := range keys {
-		value, problems := validate.String(validate.Path{key}, object.Field(key), validate.StringRules{Min: 1})
-		found = append(found, problems...)
-		values[key] = value
-	}
-	if found != nil {
-		return nil, validate.Fail(found)
-	}
-	return values, nil
-}
-
 // LinkStarted is messaging.link.start's output.
 type LinkStarted struct {
 	Code      string `json:"code"`
@@ -120,7 +100,7 @@ type LinkStarted struct {
 // LinkStart implements messaging.link.start: issue the user's single active code
 // for one of their bots, superseding the previous one.
 func LinkStart(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input) (any, *orpc.Error) {
-	values, failure := objectWithIDs(raw, "botId")
+	values, failure := shared.IDFields(raw, "botId")
 	if failure != nil {
 		return nil, failure
 	}
@@ -213,7 +193,7 @@ type Identity struct {
 // SetBot implements messaging.identities.setBot: point one of the user's linked
 // chat apps at a bot in the active Space.
 func SetBot(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input) (any, *orpc.Error) {
-	values, failure := objectWithIDs(raw, "identityId", "botId")
+	values, failure := shared.IDFields(raw, "identityId", "botId")
 	if failure != nil {
 		return nil, failure
 	}
@@ -284,7 +264,7 @@ func SetBot(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input
 
 // Unlink implements messaging.identities.unlink.
 func Unlink(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input) (any, *orpc.Error) {
-	values, failure := objectWithIDs(raw, "identityId")
+	values, failure := shared.IDFields(raw, "identityId")
 	if failure != nil {
 		return nil, failure
 	}
@@ -420,7 +400,7 @@ func ChannelsRespond(ctx context.Context, database *db.DB, actor db.Actor, raw o
 
 // ChannelsLeave implements messaging.channels.leave.
 func ChannelsLeave(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input) (any, *orpc.Error) {
-	values, failure := objectWithIDs(raw, "membershipId")
+	values, failure := shared.IDFields(raw, "membershipId")
 	if failure != nil {
 		return nil, failure
 	}
@@ -546,14 +526,14 @@ func connectionDTO(ctx context.Context, database *db.DB, tx pgx.Tx, mine map[str
 			return Connection{}, err
 		}
 	}
-	result.PeerOwnerLabel = firstWord(displayName(ownerName, ""))
+	result.PeerOwnerLabel = firstWord(shared.DisplayName(ownerName, ""))
 	return result, nil
 }
 
 // ConnectionsRevoke implements messaging.connections.revoke: end a connection
 // and cancel the invite DM that was never delivered, in one transaction.
 func ConnectionsRevoke(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input) (any, *orpc.Error) {
-	values, failure := objectWithIDs(raw, "connectionId")
+	values, failure := shared.IDFields(raw, "connectionId")
 	if failure != nil {
 		return nil, failure
 	}
@@ -599,41 +579,6 @@ func ConnectionsRevoke(ctx context.Context, database *db.DB, actor db.Actor, raw
 		return nil, asFailure(err)
 	}
 	return map[string]any{"ok": true}, nil
-}
-
-var (
-	letterOrNumber = regexp.MustCompile(`[\p{L}\p{N}]`)
-	uuidName       = regexp.MustCompile(`(?i)^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$`)
-	dunderName     = regexp.MustCompile(`^__[A-Za-z0-9_-]+__$`)
-	cuidName       = regexp.MustCompile(`^c[a-z0-9]{24}$`)
-	cuid2Name      = regexp.MustCompile(`^[a-z][a-z0-9]{23}$`)
-	digit          = regexp.MustCompile(`[0-9]`)
-	longName       = regexp.MustCompile(`^[A-Za-z0-9_-]{20,}$`)
-	lower          = regexp.MustCompile(`[a-z]`)
-	upper          = regexp.MustCompile(`[A-Z]`)
-	lettersDigits  = regexp.MustCompile(`^[A-Za-z_-]+[0-9]+$`)
-	camelName      = regexp.MustCompile(`^[A-Za-z][a-z]*(?:[A-Z][a-z]+|[0-9]|[_-][A-Za-z][a-z]+)*$`)
-)
-
-// isOpaqueName is isOpaqueName in packages/core/src/display-name.ts.
-func isOpaqueName(name string) bool {
-	return dunderName.MatchString(name) || uuidName.MatchString(name) ||
-		(cuidName.MatchString(name) && digit.MatchString(name)) ||
-		(cuid2Name.MatchString(name) && digit.MatchString(name)) ||
-		(longName.MatchString(name) && lower.MatchString(name) && upper.MatchString(name) && digit.MatchString(name) &&
-			!lettersDigits.MatchString(name) && !camelName.MatchString(name))
-}
-
-// displayName is displayName in packages/core/src/display-name.ts.
-func displayName(name *string, fallback string) string {
-	if name == nil {
-		return fallback
-	}
-	trimmed := validate.JSTrim(*name)
-	if trimmed != "" && letterOrNumber.MatchString(trimmed) && !isOpaqueName(trimmed) {
-		return trimmed
-	}
-	return fallback
 }
 
 // firstWord is `text.split(/\s+/)[0]` with JavaScript's whitespace.
