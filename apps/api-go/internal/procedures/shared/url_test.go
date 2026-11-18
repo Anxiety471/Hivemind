@@ -54,3 +54,16 @@ func TestJoinURLNormalisesTheOrigin(t *testing.T) {
 		}
 	}
 }
+
+func TestJoinURLRefusesHostsWHATWGRewrites(t *testing.T) {
+	for _, origin := range []string{"http://127.1:5173", "http://0x7f.1", "http://2130706433", "http://1.2.3", "http://[0:0:0:0:0:0:0:1]:80", "http://[::FFFF:1.2.3.4]", "http://example.1"} {
+		if got, err := JoinURL(origin, "/join/abc"); !errors.Is(err, ErrUnsupportedURL) {
+			t.Errorf("JoinURL(%q) = %q, %v; want ErrUnsupportedURL", origin, got, err)
+		}
+	}
+	for origin, want := range map[string]string{"http://127.0.0.1:5173": "http://127.0.0.1:5173/join/abc", "http://[::1]:5173": "http://[::1]:5173/join/abc", "https://a1.example": "https://a1.example/join/abc"} {
+		if got, err := JoinURL(origin, "/join/abc"); err != nil || got != want {
+			t.Errorf("JoinURL(%q) = %q, %v", origin, got, err)
+		}
+	}
+}

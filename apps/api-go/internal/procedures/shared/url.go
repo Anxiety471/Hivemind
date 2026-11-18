@@ -2,6 +2,7 @@ package shared
 
 import (
 	"errors"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
@@ -27,7 +28,17 @@ func JoinURL(origin, path string) (string, error) {
 		}
 	}
 	if strings.Contains(host, ":") {
+		// An IPv6 literal is served only in the form WHATWG serialises it (compressed, lower case).
+		if address, err := netip.ParseAddr(host); err != nil || !address.Is6() || address.String() != host {
+			return "", ErrUnsupportedURL
+		}
 		host = "[" + host + "]"
+	} else if last := host[strings.LastIndexByte(host, '.')+1:]; last == "" || (last[0] >= '0' && last[0] <= '9') {
+		// A host ending in a number is an IPv4 candidate that WHATWG rewrites (127.1, 0x7f.1,
+		// 2130706433): served only as a canonical dotted quad.
+		if address, err := netip.ParseAddr(host); err != nil || !address.Is4() || address.String() != host {
+			return "", ErrUnsupportedURL
+		}
 	}
 	port := base.Port()
 	if port != "" {
