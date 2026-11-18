@@ -83,7 +83,7 @@ func All(ctx context.Context, database *db.DB, actor db.Actor) ([]Assignment, *o
 		rows, err := tx.Query(ctx, `SELECT `+columns+` FROM bot_mcp_servers a
 			WHERE a."spaceId" = $1 AND a."userId" = $2
 				AND EXISTS (SELECT 1 FROM bots b WHERE b.id = a."botId" AND b."archivedAt" IS NULL)
-				AND `+available+` ORDER BY a."createdAt" ASC`, actor.SpaceID, actor.UserID)
+				AND `+available+` ORDER BY a."createdAt" ASC, a.ctid`, actor.SpaceID, actor.UserID)
 		if err != nil {
 			return err
 		}
@@ -117,7 +117,7 @@ func List(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input) 
 			return err
 		}
 		rows, err := tx.Query(ctx, `SELECT `+columns+` FROM bot_mcp_servers a
-			WHERE a."botId" = $3 AND a."spaceId" = $1 AND a."userId" = $2 AND `+available+` ORDER BY a."createdAt" ASC`,
+			WHERE a."botId" = $3 AND a."spaceId" = $1 AND a."userId" = $2 AND `+available+` ORDER BY a."createdAt" ASC, a.ctid`,
 			actor.SpaceID, actor.UserID, id)
 		if err != nil {
 			return err

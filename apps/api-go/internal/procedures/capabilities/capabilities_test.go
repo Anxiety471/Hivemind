@@ -10,10 +10,12 @@ import (
 // a "__proto__" key as z.record does, and reads anything else as {}.
 func TestInstallConfigMatchesTheRecordParse(t *testing.T) {
 	for stored, want := range map[string]string{
-		`{"b": 1, "a": [1.0, 1e3], "10": "x", "2": "y"}`: `{"2":"y","10":"x","b":1,"a":[1,1000]}`,
-		`{"__proto__": {"x": 1}, "a": 1}`:                `{"a":1}`,
-		`{}`:                                             `{}`,
-		`{"k": "\u2028 <b> & \"q\" \\ /"}`:               "{\"k\":\"\u2028 <b> & \\\"q\\\" \\\\ /\"}",
+		`{"b": 1, "a": [1.0, 1e3], "10": "x", "2": "y"}`:        `{"2":"y","10":"x","b":1,"a":[1,1000]}`,
+		`{"__proto__": {"x": 1}, "a": 1}`:                       `{"a":1}`,
+		`{"a": {"__proto__": {"x": 1}}, "__proto__": {"y": 2}}`: `{"a":{}}`,
+		`{"l": [{"__proto__": 1, "k": 2}, [{"__proto__": 3}]]}`: `{"l":[{"k":2},[{}]]}`,
+		`{}`:                               `{}`,
+		`{"k": "\u2028 <b> & \"q\" \\ /"}`: "{\"k\":\"\u2028 <b> & \\\"q\\\" \\\\ /\"}",
 	} {
 		if got := string(installConfig("row", []byte(stored), nil)); got != want {
 			t.Errorf("installConfig(%s) = %s, want %s", stored, got, want)

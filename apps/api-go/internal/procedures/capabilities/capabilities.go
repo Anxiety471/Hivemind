@@ -115,23 +115,39 @@ func List(ctx context.Context, database *db.DB, actor db.Actor, logger *slog.Log
 
 // installConfig is installConfig in plugin-installs.ts: a stored object, as
 // JSON.parse and JSON.stringify would pass it on; anything else reads as {} (with a
-// warning, as readJsonColumn gives). The router then parses it as
-// z.record(z.string(), z.unknown()), which leaves out a "__proto__" key.
+// warning, as readJsonColumn gives). The response then travels through oRPC's
+// serializer, which assigns each key into a fresh object, so a "__proto__" key is
+// swallowed by the prototype setter at every depth, objects inside arrays included.
 func installConfig(id string, stored []byte, logger *slog.Logger) json.RawMessage {
 	value, err := validate.DecodeAny(stored)
 	if object, ok := value.(*validate.Object); ok && err == nil {
-		record := &validate.Object{Values: map[string]any{}}
-		for _, key := range object.Keys {
-			if key != "__proto__" {
-				record.Keys = append(record.Keys, key)
-				record.Values[key] = object.Values[key]
-			}
-		}
-		return json.RawMessage(validate.Stringify(record))
+		return json.RawMessage(validate.Stringify(withoutProto(object)))
 	}
 	if logger != nil {
 		logger.Warn("Stored JSON column does not match its schema; using the fallback",
 			"table", "capability_installs", "column", "config", "row.id", id)
 	}
 	return json.RawMessage(`{}`)
+}
+
+// withoutProto copies a decoded JSON value, leaving out every "__proto__" key.
+func withoutProto(value any) any {
+	switch typed := value.(type) {
+	case *validate.Object:
+		copied := &validate.Object{Values: map[string]any{}}
+		for _, key := range typed.Keys {
+			if key != "__proto__" {
+				copied.Keys = append(copied.Keys, key)
+				copied.Values[key] = withoutProto(typed.Values[key])
+			}
+		}
+		return copied
+	case []any:
+		items := make([]any, len(typed))
+		for index, item := range typed {
+			items[index] = withoutProto(item)
+		}
+		return items
+	}
+	return value
 }

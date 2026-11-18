@@ -5,6 +5,7 @@ package usage
 
 import (
 	"context"
+	"math"
 	"sort"
 	"time"
 
@@ -48,7 +49,7 @@ func List(ctx context.Context, database *db.DB, actor db.Actor) ([]Record, *orpc
 		rows, err := tx.Query(ctx, `SELECT id, "botId", "runId", provider, model, "inputTokens", "outputTokens", "cacheReadTokens",
 				"cacheWriteTokens", "cacheWrite1hTokens", "reasoningTokens", "totalTokens", "costUsd", "costSource", "pricingVersion",
 				"usageSource", "callId", "operationId", "operationKind", "parentRunId", "agentId", "createdAt"
-			FROM usage_records WHERE "spaceId" = $1 AND "userId" = $2 ORDER BY "createdAt" DESC LIMIT 100`, actor.SpaceID, actor.UserID)
+			FROM usage_records WHERE "spaceId" = $1 AND "userId" = $2 ORDER BY "createdAt" DESC, ctid LIMIT 100`, actor.SpaceID, actor.UserID)
 		if err != nil {
 			return err
 		}
@@ -89,7 +90,16 @@ func valid(record Record) bool {
 	default:
 		return false
 	}
-	return record.CostUSD == nil || *record.CostUSD >= 0
+	// z.number().nonnegative() also refuses NaN and Infinity.
+	return record.CostUSD == nil || (!math.IsNaN(*record.CostUSD) && !math.IsInf(*record.CostUSD, 0) && *record.CostUSD >= 0)
+}
+
+func modelTotals(models []ModelTotals) []Totals {
+	found := make([]Totals, len(models))
+	for index, model := range models {
+		found[index] = model.Totals
+	}
+	return found
 }
 
 // Totals are the figures of one group: each is null when any counted call lacks it,
@@ -229,6 +239,12 @@ func SummaryOf(ctx context.Context, database *db.DB, actor db.Actor) (any, *orpc
 			}
 			return models[a].ModelCalls > models[b].ModelCalls
 		})
+		// z.number() refuses a non-finite figure (a cost of NaN or Infinity, or a sum that overflows).
+		for _, totals := range append([]Totals{whole.totals()}, modelTotals(models)...) {
+			if totals.CostUSD != nil && (math.IsNaN(*totals.CostUSD) || math.IsInf(*totals.CostUSD, 0)) {
+				return shared.OutputInvalid()
+			}
+		}
 		summary = Summary{Totals: whole.totals(), Runs: len(runs), Models: models}
 		return nil
 	})

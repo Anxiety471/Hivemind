@@ -325,14 +325,6 @@ func scanMembership(row pgx.Row) (Membership, error) {
 	var membership Membership
 	var identityID *string
 	err := row.Scan(&membership.ID, &membership.ChannelID, &identityID, &membership.Provider, &membership.Name, &membership.Status, &membership.MemberCount)
-	// The router parses the output: a membership's status is one of four.
-	if err == nil {
-		switch membership.Status {
-		case "invited", "approved", "declined", "left":
-		default:
-			return Membership{}, shared.OutputInvalid()
-		}
-	}
 	if identityID != nil {
 		membership.IdentityID = *identityID
 	}
@@ -356,6 +348,14 @@ func ChannelsList(ctx context.Context, database *db.DB, actor db.Actor, _ orpc.I
 			membership, err := scanMembership(rows)
 			if err != nil {
 				return err
+			}
+			// The router parses the list against the schema: a membership's status is one of
+			// four. (respond answers 404 for any status but "invited" before it gets here, and
+			// its reload can only be approved or declined, so it needs no check.)
+			switch membership.Status {
+			case "invited", "approved", "declined", "left":
+			default:
+				return shared.OutputInvalid()
 			}
 			memberships = append(memberships, membership)
 		}

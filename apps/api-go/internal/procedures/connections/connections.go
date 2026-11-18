@@ -33,17 +33,21 @@ type Connection struct {
 
 const columns = `id, "connectorId", provider, "displayName", status, "createdAt"`
 
+// checkStatus is the router's output parse: a status outside the schema's enum fails the
+// call. rename runs it after its write has committed, as the router does.
+func checkStatus(connection Connection) *orpc.Error {
+	switch connection.Status {
+	case "pending", "connected", "revoked", "error":
+		return nil
+	}
+	return shared.OutputInvalid()
+}
+
 func scan(row pgx.Row) (Connection, error) {
 	var connection Connection
 	var createdAt time.Time
 	if err := row.Scan(&connection.ID, &connection.ConnectorID, &connection.Provider, &connection.DisplayName, &connection.Status, &createdAt); err != nil {
 		return Connection{}, err
-	}
-	// The router validates the output: a status outside the schema's enum fails the call.
-	switch connection.Status {
-	case "pending", "connected", "revoked", "error":
-	default:
-		return Connection{}, shared.OutputInvalid()
 	}
 	connection.Capabilities = []string{}
 	connection.CreatedAt = shared.ISO(createdAt)
@@ -71,6 +75,11 @@ func List(ctx context.Context, database *db.DB, actor db.Actor) ([]Connection, *
 	})
 	if err != nil {
 		return nil, shared.Failure(err)
+	}
+	for _, connection := range found {
+		if failure := checkStatus(connection); failure != nil {
+			return nil, failure
+		}
 	}
 	return found, nil
 }
@@ -115,6 +124,9 @@ func Rename(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input
 	})
 	if err != nil {
 		return nil, shared.Failure(err)
+	}
+	if failure := checkStatus(renamed); failure != nil {
+		return nil, failure
 	}
 	return renamed, nil
 }
