@@ -504,15 +504,18 @@ function seedSpending(config: SpendingSeed = {}) {
       const startOf = (period: "day" | "week" | "month") =>
         spendingPeriodStart(period, now, config.timezone, now);
       for (const payment of config.payments({ seeded, now, startOf })) {
+        // Ids are per case, not the short literals the configs name: a pass aborted mid-case leaves
+        // an earlier run's row behind, and reset can only delete rows it knows this case owns.
+        const id = `${seeded.userId}-${payment.id}`;
         await system.payment.create({
           data: {
-            id: payment.id,
-            operationKey: payment.id,
+            id,
+            operationKey: id,
             userId: payment.owner === "other" ? other : seeded.userId,
             spaceId: seeded.spaces[0],
             botId: payment.botId,
             threadId: "thread",
-            site: `shop-${payment.id}.example`,
+            site: `shop-${id}.example`,
             amount: payment.amount,
             currency: payment.currency,
             createdAt: payment.createdAt,
