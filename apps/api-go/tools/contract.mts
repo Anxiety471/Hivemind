@@ -194,6 +194,8 @@ const { Client: PgClient } = databaseRequire("pg") as { Client: new (options: { 
 const realtime = new PgClient({ connectionString: DATABASE_URL });
 await realtime.connect();
 await realtime.query("LISTEN rakazo_events");
+// Declared before the listener: a notification can arrive the moment LISTEN is issued.
+const realtimeSignals: string[] = [];
 realtime.on("notification", (notification: { payload?: string }) => {
   if (notification.payload) realtimeSignals.push(notification.payload);
 });
@@ -1071,7 +1073,7 @@ function seedMessaging(config: MessagingSeed = {}) {
       await connection("cn8", "mb2", "pb3", "revoked", 5000);
       await connection("cn9", "pb1", "pb2", "pending", 6000);
       await connection("cn10", "mb2", "pb4", "approved", 7000);
-      if (config.oddConnection) await connection("cn11", "mb1", "pb1", "weird", 8000);
+      if (config.oddConnection) await connection("cn11", "mb2", "pb1", "weird", 8000);
       if (config.outbound) {
         await system.messagingOutbound.create({
           data: {
@@ -1159,6 +1161,9 @@ function messagingCases(): Case[] {
     respond("invited-on-second-identity", { membershipId: "__mm6__", accept: true }),
     respond("already-approved", { membershipId: "__mm2__", accept: true }),
     respond("left", { membershipId: "__mm5__", accept: true }),
+    respond("odd-status-is-not-found-accept", { membershipId: "__s-mm8__", accept: true }, { seed: seedMessaging({ oddMembership: true }) }),
+    respond("odd-status-is-not-found-decline", { membershipId: "__s-mm8__", accept: false }, { seed: seedMessaging({ oddMembership: true }) }),
+    leave("odd-status", { membershipId: "__s-mm8__" }, { seed: seedMessaging({ oddMembership: true }) }),
     respond("someone-elses", { membershipId: "__mm7__", accept: true }),
     respond("unknown", { membershipId: "nope", accept: true }),
     respond("no-identities", { membershipId: "__mm1__", accept: true }, { seed: seedMessaging({ noIdentities: true }) }),
@@ -2297,6 +2302,8 @@ function capabilityCases(): Case[] {
     withConfig("nested-object", '{"b": 1, "a": [1.0, 2.50, 1e3, -0, 1e21, 1E-7, 123456789012345678901234567890, 0.1], "10": "x", "2": "y", "z": {"é": "ü", "\\u2028": "<>&\\u0007\\u007f"}}'),
     withConfig("integer-like-keys-first", '{"b": 1, "2": 2, "1": 3, "a": 4, "-1": 5, "01": 6, "4294967295": 7, "4294967294": 8}'),
     withConfig("proto-key", '{"__proto__": {"x": 1}, "a": 1}'),
+    withConfig("proto-key-nested", '{"a": {"__proto__": {"x": 1}}, "__proto__": {"y": 2}, "b": 1}'),
+    withConfig("proto-key-in-arrays", '{"l": [{"__proto__": 1, "k": 2}, [{"__proto__": 3}], 4]}'),
     withConfig("escapes", '{"quote\\"": "tab\\t newline\\n bs\\\\ slash\\/ \\b\\f \\u0001 \\u001f \\u2029 \\ud83d\\ude00"}'),
     withConfig("array", "[1, 2]"),
     withConfig("string", '"x"'),
@@ -2314,7 +2321,7 @@ function capabilityCases(): Case[] {
  * null figures, a subagent run, an empty run id, floats, sums beyond 32 bits, and rows that
  * belong to someone else or to another Space.
  */
-function seedUsage(config: { none?: boolean; many?: boolean; emptyRun?: boolean; badCost?: boolean; badKind?: boolean } = {}) {
+function seedUsage(config: { none?: boolean; many?: boolean; emptyRun?: boolean; badCost?: boolean; weirdCost?: number; badKind?: boolean } = {}) {
   return async (seeded: Seeded) => {
     const user = seeded.userId;
     const other = await seedOtherMember(seeded);
@@ -2353,6 +2360,7 @@ function seedUsage(config: { none?: boolean; many?: boolean; emptyRun?: boolean;
     await row("u12", { provider: "zeta", model: "z", runId: `${user}-r6` }, 15);
     await row("u13", { provider: "zeta", model: "y", runId: `${user}-r5` }, 16);
     if (config.badCost) await row("bad", { costUsd: -1 }, 20);
+    if (config.weirdCost !== undefined) await row("bad", { costUsd: config.weirdCost }, 20);
     if (config.badKind) await row("bad", { operationKind: "weird" }, 20);
     await row("o1", { inputTokens: 999, totalTokens: 999 }, 12, one, other);
     await row("x1", { inputTokens: 888, totalTokens: 888, runId: `${user}-r8` }, 13, two);
@@ -2374,6 +2382,9 @@ function usageCases(): Case[] {
     list("default"),
     list("empty-run-id-fails-the-output-check", { seed: seedUsage({ emptyRun: true }) }),
     list("negative-cost-fails-the-output-check", { seed: seedUsage({ badCost: true }) }),
+    list("infinite-cost-fails-the-output-check", { seed: seedUsage({ weirdCost: Number.POSITIVE_INFINITY }) }),
+    list("negative-infinite-cost-fails-the-output-check", { seed: seedUsage({ weirdCost: Number.NEGATIVE_INFINITY }) }),
+    list("nan-cost-fails-the-output-check", { seed: seedUsage({ weirdCost: Number.NaN }) }),
     list("unknown-operation-kind-fails-the-output-check", { seed: seedUsage({ badKind: true }) }),
     list("none", { seed: seedUsage({ none: true }) }),
     list("limit-100-newest-first", { seed: seedUsage({ many: true }) }),
@@ -2383,6 +2394,9 @@ function usageCases(): Case[] {
     summary("default"),
     summary("empty-run-id-is-no-run", { seed: seedUsage({ emptyRun: true }) }),
     summary("negative-cost-is-not-checked", { seed: seedUsage({ badCost: true }) }),
+    summary("infinite-cost-fails-the-output-check", { seed: seedUsage({ weirdCost: Number.POSITIVE_INFINITY }) }),
+    summary("negative-infinite-cost", { seed: seedUsage({ weirdCost: Number.NEGATIVE_INFINITY }) }),
+    summary("nan-cost-fails-the-output-check", { seed: seedUsage({ weirdCost: Number.NaN }) }),
     summary("unknown-operation-kind-is-not-checked", { seed: seedUsage({ badKind: true }) }),
     summary("none", { seed: seedUsage({ none: true }) }),
     summary("many-rows-no-limit", { seed: seedUsage({ many: true }) }),
@@ -2640,8 +2654,15 @@ async function reset(seeded: ReturnType<typeof ids>) {
   await system.userModelCredential.deleteMany({ where: { userId: own } });
   await system.userVoiceCredential.deleteMany({ where: { userId: own } });
   await system.vaultCredential.deleteMany({ where: { userId: own } });
-  // usage_records is append-only for the runtime role and has no foreign keys: clear it as the table owner.
-  await owner?.query('DELETE FROM usage_records WHERE "spaceId" = ANY($1)', [seeded.spaces]);
+  // usage_records is append-only for the runtime role, and each row leaves an append-only billing audit
+  // row with a unique source: clear both as the table owner (a superuser) with triggers off.
+  if (owner) {
+    await owner.query("BEGIN");
+    await owner.query("SET LOCAL session_replication_role = replica");
+    await owner.query('DELETE FROM billing_audit_events WHERE "spaceId" = ANY($1)', [seeded.spaces]);
+    await owner.query('DELETE FROM usage_records WHERE "spaceId" = ANY($1)', [seeded.spaces]);
+    await owner.query("COMMIT");
+  }
   await system.botMcpServer.deleteMany({ where: { spaceId: { in: seeded.spaces } } });
   await system.mcpServerSpace.deleteMany({ where: { userId: own } });
   await system.computerUpdate.deleteMany({ where: { computerId: { startsWith: userId } } });
@@ -2950,8 +2971,6 @@ function normalize<T>(value: T): T {
   };
   return visit(JSON.parse(JSON.stringify(value))) as T;
 }
-
-const realtimeSignals: string[] = [];
 
 /** Runs a call and reports the roster and Space-change signals published while it ran. */
 async function observed(settleMs: number, call: () => Promise<any>, seeded: Seeded) {
