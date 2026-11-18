@@ -208,6 +208,8 @@ await owner?.connect();
 // Fixed once per run: both sides of a case must seed identical times.
 const THREAD_PAST = new Date(Date.now() - 2 * 3_600_000);
 const THREAD_FUTURE = new Date(Date.now() + 30 * 86_400_000);
+// Fixed per run so both sides seed computer updates in the same relative order.
+const COMPUTER_UPDATE_BASE = Date.now() - 30_000;
 
 /** What the web app reloads right after a read-state change. */
 const AFTER = [
@@ -1337,6 +1339,10 @@ function pageCases(): Case[] {
     list("cursor-whitespace", { cursor: ` ${cursorOf(T, null, "zzz").slice(0, 10)}\n ${cursorOf(T, null, "zzz").slice(10)}` }),
     list("cursor-junk-chars", { cursor: `${cursorOf(T, null, "zzz").slice(0, 10)}*.${cursorOf(T, null, "zzz").slice(10)}` }),
     list("cursor-extra-keys", { cursor: b64(JSON.stringify({ pinnedAt: null, updatedAt: T, id: "zzz", more: [1] })) }),
+    list("cursor-key-case-id", { cursor: b64(JSON.stringify({ pinnedAt: null, updatedAt: T, ID: "zzz" })) }),
+    list("cursor-key-case-updated", { cursor: b64(JSON.stringify({ pinnedAt: null, UpdatedAt: T, id: "zzz" })) }),
+    list("cursor-key-case-pinned", { cursor: b64(JSON.stringify({ PINNEDAT: null, updatedAt: T, id: "zzz" })) }),
+    list("cursor-key-case-extra-valid", { cursor: b64(JSON.stringify({ pinnedAt: null, updatedAt: T, id: "zzz", ID: "other" })) }),
     list("cursor-garbage", { cursor: "!!!" }),
     list("cursor-plain-text", { cursor: "hello" }),
     list("cursor-not-json", { cursor: b64("not json") }),
@@ -2419,7 +2425,9 @@ function seedComputerUpdates(config: { badAction?: boolean; badStage?: boolean; 
       system.bot.create({ data: { id: `${user}-${id}`, spaceId, userId: user, name: `Bot ${id}`, color: "blue", computerId: computerId && `${user}-${computerId}`, ...extra } });
     const update = (id: string, computerId: string, botId: string, action: string, status: string, stage: string, offset: number) =>
       system.computerUpdate.create({
-        data: { id: `${user}-${id}`, computerId: `${user}-${computerId}`, botId: `${user}-${botId}`, action, status, stage, createdAt: new Date(SETTINGS_BASE + offset * 1000) },
+        // Recent, not 2020: the API's own reconciler treats an old queued or running update as abandoned and
+        // announces a Space change for it, which would land in whichever side's signal window it falls in.
+        data: { id: `${user}-${id}`, computerId: `${user}-${computerId}`, botId: `${user}-${botId}`, action, status, stage, createdAt: new Date(COMPUTER_UPDATE_BASE + offset * 1000) },
       });
     await computer("cp1", one, "team");
     await computer("cp2", one, "dedicated");
