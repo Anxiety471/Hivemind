@@ -88,6 +88,9 @@ func Updates(ctx context.Context, database *db.DB, actor db.Actor) ([]Update, *o
 			return err
 		}
 		for _, r := range found {
+			// computerUpdateView runs ComputerUpdateSchema.parse inside the handler, so a
+			// row it cannot read is an ordinary error: the generic 500, not the router's
+			// "Output validation failed" (verified against @orpc's toORPCError).
 			if !actions[r.action] || !stages[r.stage] || r.id == "" || r.botID == "" {
 				return orpc.Internal()
 			}

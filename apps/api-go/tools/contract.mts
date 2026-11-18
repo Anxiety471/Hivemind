@@ -545,6 +545,12 @@ function spendingLimitCases(): Case[] {
       }),
     },
     { name: "spend-pay-no-input", procedure: "spendingLimit.payments", input: undefined, seed: seedSpending({ bots: true }) },
+    {
+      name: "spend-pay-zero-amount-fails-the-output-check",
+      procedure: "spendingLimit.payments",
+      input: {},
+      seed: seedSpending({ bots: true, payments: ({ now }) => [{ id: "zero", botId: "b", currency: "usd", amount: 0, createdAt: now }] }),
+    },
     { name: "spend-pay-anonymous", procedure: "spendingLimit.payments", input: {}, anonymous: true },
     get("nothing", seedSpending()),
     get("no-input", seedSpending(), { input: undefined }),
@@ -596,6 +602,13 @@ function spendingLimitCases(): Case[] {
       seedSpending({ limit: { amount: 2_000_000_000, currency: "gbp", period: "day" }, payments: around("day") }),
     ),
     get("limit-with-card", seedSpending({ card: "account", limit: { amount: 100, currency: "ils", period: "week" } })),
+    get(
+      "negative-spent-fails-the-output-check",
+      seedSpending({
+        limit: { amount: 1000, currency: "usd", period: "week" },
+        payments: ({ now }) => [{ id: "neg", botId: "b", currency: "usd", amount: -7, createdAt: now }],
+      }),
+    ),
   ];
 }
 
@@ -630,6 +643,16 @@ function botSectionCases(): Case[] {
     { name: "sections-list-empty", procedure: "botSections.list", input: {} },
     { name: "sections-list-no-input", procedure: "botSections.list", input: undefined, seed: seedSections() },
     { name: "sections-list-ignores-input", procedure: "botSections.list", input: { anything: 1 }, seed: seedSections() },
+    {
+      name: "sections-list-negative-position-fails-the-output-check",
+      procedure: "botSections.list",
+      input: {},
+      seed: seedSections(async (seeded) => {
+        await system.botSection.create({
+          data: { id: `${seeded.userId}-neg`, spaceId: seeded.spaces[0], userId: seeded.userId, name: "Negative", position: -1, createdAt: new Date(base), updatedAt: new Date(base) },
+        });
+      }),
+    },
     { name: "sections-list-anonymous", procedure: "botSections.list", input: {}, anonymous: true },
   ];
 }
@@ -935,7 +958,9 @@ type MessagingSeed = {
   noIdentities?: boolean;
   noChannels?: boolean;
   noConnections?: boolean;
-  existingCode?: boolean;
+  /** A membership or connection whose stored status sits outside the output schema. */
+  oddMembership?: boolean;
+  oddConnection?: boolean;
 };
 
 function seedMessaging(config: MessagingSeed = {}) {
@@ -1024,6 +1049,7 @@ function seedMessaging(config: MessagingSeed = {}) {
       await member("mm5", "cn2", "a5", "id1", "left", 5000);
       await member("mm6", "cn2", "a6", "id2", "invited", 6000);
       await member("mm7", "cn3", "a7", `${"idx"}`, "invited", 7000);
+      if (config.oddMembership) await member("mm8", "cn2", "a8", "id1", "weird", 8000);
     }
     if (!config.noConnections) {
       const connection = (id: string, requester: string, target: string, status: string, offset: number) =>
@@ -1045,6 +1071,7 @@ function seedMessaging(config: MessagingSeed = {}) {
       await connection("cn8", "mb2", "pb3", "revoked", 5000);
       await connection("cn9", "pb1", "pb2", "pending", 6000);
       await connection("cn10", "mb2", "pb4", "approved", 7000);
+      if (config.oddConnection) await connection("cn11", "mb1", "pb1", "weird", 8000);
       if (config.outbound) {
         await system.messagingOutbound.create({
           data: {
@@ -1124,6 +1151,7 @@ function messagingCases(): Case[] {
     channels("memberships", {}),
     channels("no-identities", {}, { seed: seedMessaging({ noIdentities: true }) }),
     channels("no-channels", {}, { seed: seedMessaging({ noChannels: true }) }),
+    channels("odd-membership-status-fails-the-output-check", {}, { seed: seedMessaging({ oddMembership: true }) }),
     channels("no-input", undefined),
     channels("anonymous", {}, { anonymous: true }),
     respond("accept", { membershipId: "__mm1__", accept: true }),
@@ -1151,6 +1179,7 @@ function messagingCases(): Case[] {
     connections("mixed", {}),
     connections("no-identities", {}, { seed: seedMessaging({ noIdentities: true }) }),
     connections("none", {}, { seed: seedMessaging({ noConnections: true }) }),
+    connections("odd-connection-status-fails-the-output-check", {}, { seed: seedMessaging({ oddConnection: true }) }),
     connections("owner-name-multiword", {}, { seed: seedMessaging({ ownerName: "  \u00a0Mary-Jane  Smith" }) }),
     connections("owner-name-opaque", {}, { seed: seedMessaging({ ownerName: "ck1234567890123456789abcd" }) }),
     connections("owner-name-uuid", {}, { seed: seedMessaging({ ownerName: "123e4567-e89b-12d3-a456-426614174000" }) }),
@@ -1216,6 +1245,22 @@ function pageCases(): Case[] {
     list("query-x", { query: "x", limit: 1 }, { paginate: true }),
     list("query-none", { query: "zzzz" }),
     list("query-with-bot", { query: "b", botId: "__bot__" }),
+    list("long-title-fails-the-output-check", {}, {
+      seed: async (seeded) => {
+        await seedPages(seeded);
+        await system.page.create({
+          data: { id: `${seeded.userId}-bad`, spaceId: seeded.spaces[0], userId: seeded.userId, title: "t".repeat(201), visibility: "private", currentVersion: 1, pinnedAt: null, createdAt: new Date(PAGE_BASE), updatedAt: new Date(PAGE_BASE) },
+        });
+      },
+    }),
+    list("zero-version-fails-the-output-check", {}, {
+      seed: async (seeded) => {
+        await seedPages(seeded);
+        await system.page.create({
+          data: { id: `${seeded.userId}-bad`, spaceId: seeded.spaces[0], userId: seeded.userId, title: "Zero version", visibility: "private", currentVersion: 0, pinnedAt: null, createdAt: new Date(PAGE_BASE), updatedAt: new Date(PAGE_BASE) },
+        });
+      },
+    }),
     list("anonymous", {}, { anonymous: true }),
     list("no-input", undefined),
     list("null-input", null),
@@ -1908,6 +1953,9 @@ type SettingsSeed = {
   strayCopy?: boolean;
   /** The account has nothing saved to copy. */
   bare?: boolean;
+  /** A legacy rule whose stored kind or effect sits outside the output schema. */
+  badKind?: boolean;
+  badEffect?: boolean;
 };
 
 /**
@@ -1933,6 +1981,8 @@ function seedSettings(config: SettingsSeed = {}) {
       await rule("ra6", "always_allow", "tool", "i\u0307x", 6);
       await rule("ra7", "always_allow", "tool", "ΑΣ", 7);
       await rule("ra8", "always_allow", "tool", "MiXed", 8);
+      if (config.badKind) await rule("rbk", "deny", "regex", "legacy", 20);
+      if (config.badEffect) await rule("rbe", "block", "tool", "legacy", 21);
       await system.userActionAutoReviewPreference.create({ data: { userId: user, enabled: true, skipApprovals: true } });
       for (const id of ["mc1", "vc1", "vc2"]) {
         await system.secret.create({ data: { id: `${user}-sec-${id}`, userId: user, spaceId: null, kind: id.startsWith("vc") ? "voice" : "model", ciphertext: "sealed" } });
@@ -2008,6 +2058,8 @@ function approvalRuleCases(): Case[] {
   const rule = (matchValue: string, effect: string | null = "deny", matchKind = "tool", more: Record<string, unknown> = {}) => ({ effect, matchKind, matchValue, ...more });
   return [
     list("account-copy-by-default", undefined),
+    list("stored-kind-outside-the-enum-fails-the-output-check", undefined, { seed: seedSettings({ badKind: true }) }),
+    list("stored-effect-outside-the-enum-fails-the-output-check", undefined, { seed: seedSettings({ badEffect: true }) }),
     list("empty-object", {}),
     list("space-copy-when-overridden", undefined, overridden),
     list("scope-account-while-overridden", { scope: "account" }, overridden),

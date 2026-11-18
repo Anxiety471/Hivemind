@@ -4,18 +4,25 @@ package pages
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 )
 
-const defaultListLimit = 30
+const (
+	defaultListLimit = 30
+	// PAGE_TITLE_MAX_LENGTH (packages/contracts/src/pages.ts:4).
+	titleMaxLength = 200
+)
 
 // Summary is the wire shape of PageSummarySchema.
 type Summary struct {
@@ -97,6 +104,11 @@ func List(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input) 
 				&item.summary.Visibility, &item.summary.CurrentVersion, &item.pinnedAt, &createdAt, &item.updatedAt); err != nil {
 				return err
 			}
+			// The router parses the output against PageSummarySchema: a title past its
+			// bound, or a version below one, fails the call.
+			if utf8.RuneCountInString(item.summary.Title) > titleMaxLength || item.summary.CurrentVersion < 1 {
+				return shared.OutputInvalid()
+			}
 			if item.summary.Visibility != "link" {
 				item.summary.Visibility = "private"
 			}
@@ -108,6 +120,10 @@ func List(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input) 
 		return result.Err()
 	})
 	if err != nil {
+		var failure *orpc.Error
+		if errors.As(err, &failure) {
+			return nil, failure
+		}
 		if db.IsUnavailable(err) {
 			return nil, orpc.Unavailable()
 		}

@@ -15,6 +15,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/effects"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/spacesettings"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/validate"
 )
@@ -85,6 +86,18 @@ func List(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input) 
 			rule, err := scanRule(rows)
 			if err != nil {
 				return err
+			}
+			// The router parses the output against ActionApprovalRuleSchema: the
+			// effect and the match kind are enums a legacy row could sit outside.
+			switch rule.Effect {
+			case "always_allow", "require_approval", "deny":
+			default:
+				return shared.OutputInvalid()
+			}
+			switch rule.MatchKind {
+			case "tool", "connector", "site", "category":
+			default:
+				return shared.OutputInvalid()
 			}
 			rules = append(rules, rule)
 		}

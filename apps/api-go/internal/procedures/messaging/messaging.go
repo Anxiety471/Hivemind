@@ -19,6 +19,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/effects"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/validate"
 )
 
@@ -324,6 +325,14 @@ func scanMembership(row pgx.Row) (Membership, error) {
 	var membership Membership
 	var identityID *string
 	err := row.Scan(&membership.ID, &membership.ChannelID, &identityID, &membership.Provider, &membership.Name, &membership.Status, &membership.MemberCount)
+	// The router parses the output: a membership's status is one of four.
+	if err == nil {
+		switch membership.Status {
+		case "invited", "approved", "declined", "left":
+		default:
+			return Membership{}, shared.OutputInvalid()
+		}
+	}
 	if identityID != nil {
 		membership.IdentityID = *identityID
 	}
@@ -500,6 +509,12 @@ func ConnectionsList(ctx context.Context, database *db.DB, actor db.Actor, _ orp
 
 // connectionDTO is messagingConnectionDto: the peer stays opaque until they approve.
 func connectionDTO(ctx context.Context, database *db.DB, tx pgx.Tx, mine map[string]bool, id, requester, target, status string) (Connection, error) {
+	// The router parses the output: a connection's status is one of four.
+	switch status {
+	case "pending", "approved", "declined", "revoked":
+	default:
+		return Connection{}, shared.OutputInvalid()
+	}
 	incoming := mine[target]
 	if !incoming && status != "approved" {
 		return Connection{ID: id, PeerBotName: "agent", PeerOwnerLabel: "owner", Status: status, Incoming: incoming}, nil

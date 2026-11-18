@@ -14,6 +14,7 @@ import (
 
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 )
 
 const (
@@ -70,6 +71,11 @@ func Payments(ctx context.Context, database *db.DB, actor db.Actor) ([]Payment, 
 			if err := rows.Scan(&payment.ID, &payment.Site, &payment.Amount, &payment.Currency, &botID, &createdAt); err != nil {
 				rows.Close()
 				return err
+			}
+			// The router parses the output: a payment's amount must be positive.
+			if payment.Amount <= 0 {
+				rows.Close()
+				return shared.OutputInvalid()
 			}
 			payment.CreatedAt = createdAt.UTC().Format("2006-01-02T15:04:05.000Z")
 			payments = append(payments, payment)
@@ -137,6 +143,10 @@ func get(ctx context.Context, database *db.DB, actor db.Actor, logger *slog.Logg
 				return err
 			}
 			status.Spent = spent
+			// The router parses the output: spent is a nonnegative count of minor units.
+			if spent < 0 {
+				return shared.OutputInvalid()
+			}
 			status.Shown = true
 			return nil
 		}
@@ -225,6 +235,10 @@ func validPeriod(value string) bool {
 }
 
 func failure(err error) *orpc.Error {
+	var answer *orpc.Error
+	if errors.As(err, &answer) {
+		return answer
+	}
 	if db.IsUnavailable(err) {
 		return orpc.Unavailable()
 	}
