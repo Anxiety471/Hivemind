@@ -32,21 +32,18 @@ func encodeCursor(pinnedAt *time.Time, updatedAt time.Time, id string) string {
 // decodeCursor is decodeCursor in pages.ts. ok is false where it throws
 // PageListCursorError.
 func decodeCursor(value string) (cursor, bool) {
-	var parsed struct {
-		PinnedAt  json.RawMessage `json:"pinnedAt"`
-		UpdatedAt json.RawMessage `json:"updatedAt"`
-		ID        json.RawMessage `json:"id"`
-	}
+	// A map, not a struct: JSON.parse matches keys exactly, encoding/json ignores case.
+	var parsed map[string]json.RawMessage
 	text := strings.ToValidUTF8(string(lenientBase64URL(value)), "\uFFFD")
 	if err := json.Unmarshal([]byte(text), &parsed); err != nil {
 		return cursor{}, false
 	}
 	var id string
-	if len(parsed.ID) == 0 || string(parsed.ID) == "null" || json.Unmarshal(parsed.ID, &id) != nil {
+	if len(parsed["id"]) == 0 || string(parsed["id"]) == "null" || json.Unmarshal(parsed["id"], &id) != nil {
 		return cursor{}, false
 	}
 	var updatedText string
-	if err := json.Unmarshal(parsed.UpdatedAt, &updatedText); err != nil {
+	if err := json.Unmarshal(parsed["updatedAt"], &updatedText); err != nil {
 		return cursor{}, false
 	}
 	updated, ok := parseJSDate(updatedText)
@@ -54,9 +51,9 @@ func decodeCursor(value string) (cursor, bool) {
 		return cursor{}, false
 	}
 	result := cursor{UpdatedAt: updated, ID: id}
-	if string(parsed.PinnedAt) != "null" {
+	if string(parsed["pinnedAt"]) != "null" {
 		var pinnedText string
-		if err := json.Unmarshal(parsed.PinnedAt, &pinnedText); err != nil {
+		if err := json.Unmarshal(parsed["pinnedAt"], &pinnedText); err != nil {
 			return cursor{}, false
 		}
 		pinned, ok := parseJSDate(pinnedText)

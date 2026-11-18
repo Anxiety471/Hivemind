@@ -94,6 +94,9 @@ func TestCursorRoundTripAndRejection(t *testing.T) {
 		"id null":          encode(`{"pinnedAt":null,"updatedAt":"2026-05-01T00:00:00.000Z","id":null}`),
 		"hour 25":          encode(`{"pinnedAt":null,"updatedAt":"2026-05-01T25:00:00.000Z","id":"a"}`),
 		"array":            encode(`[]`),
+		"id key in caps":   encode(`{"pinnedAt":null,"updatedAt":"2026-05-01T00:00:00.000Z","ID":"a"}`),
+		"updatedAt caps":   encode(`{"pinnedAt":null,"UpdatedAt":"2026-05-01T00:00:00.000Z","id":"a"}`),
+		"pinnedAt caps":    encode(`{"PinnedAt":null,"updatedAt":"2026-05-01T00:00:00.000Z","id":"a"}`),
 	} {
 		if _, ok := decodeCursor(bad); ok {
 			t.Errorf("%s accepted", name)
