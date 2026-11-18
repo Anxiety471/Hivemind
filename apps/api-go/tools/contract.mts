@@ -20,6 +20,7 @@ import { asSystem } from "../../../packages/db/src/index.js";
 import { createApp } from "../../api/src/app.js";
 import { spendingPeriodStart } from "../../../packages/core/src/spending.js";
 import { createRequire } from "node:module";
+import { membershipCases, membershipReset, membershipState } from "./contract-membership.mts";
 
 const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) throw new Error("DATABASE_URL is required");
@@ -36,8 +37,17 @@ const RUN_TAG = process.env.RUN_TAG ? `-${process.env.RUN_TAG}` : "";
 // biome-ignore lint/suspicious/noUndeclaredEnvVars: manual harness, not a turbo task
 const GO_PORT = process.env.GO_PORT ?? "3201";
 const GO_URL = `http://127.0.0.1:${GO_PORT}`;
+// CONTRACT_EMAIL=1 runs the cases flagged `email` (the server sends email) and skips the others: the two
+// sides must agree on whether email delivery is configured, which changes who may accept an invitation.
+// biome-ignore lint/suspicious/noUndeclaredEnvVars: manual harness, not a turbo task
+const EMAIL_ON = process.env.CONTRACT_EMAIL === "1";
+/** An email provider that sends nothing: TypeScript only asks whether one is configured. */
+const CONTRACT_EMAIL = {
+  describe: () => ({ id: "contract-email", transactional: true }),
+  send: async () => {},
+};
 
-type Seeded = {
+export type Seeded = {
   userId: string;
   orgId: string;
   spaces: [string, string, string];
@@ -51,7 +61,7 @@ type Seeded = {
   activeSpace?: number;
 };
 
-type Case = {
+export type Case = {
   name: string;
   procedure: string;
   input: unknown;
@@ -67,6 +77,8 @@ type Case = {
   after?: Array<{ procedure: string; input: unknown }>;
   /** The API sets no order on the list (Prisma's findMany without orderBy): compare it by id. */
   unordered?: boolean;
+  /** Runs only with CONTRACT_EMAIL=1 (email delivery configured on both sides); otherwise only without it. */
+  email?: boolean;
 };
 
 function cookieFor(token: string) {
@@ -88,6 +100,7 @@ const handles = await createApp({
   agentRuntime: "scripted",
   sandboxProvider: "fake",
   wakeupDriver: "memory",
+  ...(EMAIL_ON ? { email: CONTRACT_EMAIL } : {}),
 } as never);
 const system = asSystem(handles.prisma);
 
@@ -140,6 +153,16 @@ await writeFile(
       "mcp.assignments.all": { mode: "go", readOnly: true },
       "mcp.assignments.list": { mode: "go", readOnly: true },
       "models.backups": { mode: "go", readOnly: true },
+      "spaces.rename": { mode: "go" },
+      "spaces.members.list": { mode: "go", readOnly: true },
+      "spaces.members.add": { mode: "go" },
+      "spaces.invites.preview": { mode: "go", readOnly: true },
+      "spaces.invites.accept": { mode: "go" },
+      "spaces.invites.cancel": { mode: "go" },
+      "organizations.list": { mode: "go", readOnly: true },
+      "organizations.rename": { mode: "go" },
+      "organizations.members.list": { mode: "go", readOnly: true },
+      "organizations.invitations.preview": { mode: "go", readOnly: true },
     },
   }),
 );
@@ -173,6 +196,10 @@ go = spawn(
       BETTER_AUTH_URL: WEB_ORIGIN,
       WEB_ORIGIN,
       MAX_UPLOAD_SIZE_MB: "10",
+      // Email delivery is configured when SMTP_URL is: the same variables TypeScript reads.
+      SMTP_URL: EMAIL_ON ? "smtp://127.0.0.1:2525" : "",
+      EMAIL_PROVIDER: "",
+      EMAIL_EMULATOR: "",
     },
     stdio: ["ignore", "inherit", "inherit"],
   },
@@ -322,6 +349,7 @@ const cases: Case[] = [
   ...computerUpdateCases(),
   ...mcpAssignmentCases(),
   ...modelBackupCases(),
+  ...membershipCases(system),
 ];
 
 const SITES = ["zeta.example", "alpha.example", "Beta.example", "_under.example", "10.0.0.1"];
@@ -2707,6 +2735,8 @@ async function reset(seeded: ReturnType<typeof ids>) {
   await system.member.deleteMany({ where: { organizationId: orgId } });
   await system.organization.deleteMany({ where: { id: orgId } });
   await system.user.deleteMany({ where: { id: { in: [userId, `${userId}-other`] } } });
+  // Last: the foreign organizations, Spaces, links and people the membership cases add.
+  await membershipReset(system, seeded);
 }
 
 async function seed(caseIds: ReturnType<typeof ids>): Promise<Seeded> {
@@ -2823,6 +2853,8 @@ function withIds(input: unknown, seeded: ReturnType<typeof ids>) {
       .replaceAll("__sp1__", seeded.spaces[0])
       .replaceAll("__sp2__", seeded.spaces[1])
       .replaceAll("__sp3__", seeded.spaces[2])
+      .replaceAll("__org__", seeded.orgId)
+      .replaceAll("__user__", seeded.userId)
       .replaceAll("__bot__", `${seeded.userId}-bot`)
       .replaceAll("__group__", `${seeded.userId}-group`)
       .replaceAll("__ba__", `${seeded.userId}-ba`)
@@ -2950,6 +2982,11 @@ const WRITE_PROCEDURES = new Set([
   "botSections.remove",
   "availability.set",
   "availability.chooseForSpace",
+  "spaces.rename",
+  "spaces.members.add",
+  "spaces.invites.accept",
+  "spaces.invites.cancel",
+  "organizations.rename",
   "trustedLinkSites.remove",
 ]);
 
@@ -3003,7 +3040,9 @@ async function observed(settleMs: number, call: () => Promise<any>, seeded: Seed
         const { topic } = JSON.parse(payload) as { topic: string };
         return (
           (topic.startsWith("roster-") || topic.startsWith("space-changes:")) &&
-          own.some((id) => topic.endsWith(`:${id}`))
+          (own.some((id) => topic.endsWith(`:${id}`)) ||
+            // Ids a case creates beside its own (other people, another organization's Spaces).
+            topic.slice(topic.indexOf(":") + 1).startsWith(seeded.userId.slice(0, -1)))
         );
       } catch {
         return false;
@@ -3202,6 +3241,7 @@ async function databaseState(seeded: ReturnType<typeof ids>) {
     autoReviewPreferences,
     vaultCredentials,
     connections,
+    membership: await membershipState(system, seeded),
   };
 }
 
@@ -3210,6 +3250,7 @@ for (const testCase of cases) {
   // CASE_FILTER=<regexp> reruns only the matching cases.
   // biome-ignore lint/suspicious/noUndeclaredEnvVars: manual harness, not a turbo task
   if (process.env.CASE_FILTER && !new RegExp(process.env.CASE_FILTER).test(testCase.name)) continue;
+  if (Boolean(testCase.email) !== EMAIL_ON) continue;
   const caseIds = ids(testCase.name);
   const input = withIds(testCase.input, caseIds);
   // A write has realtime signals to wait for; a read only needs to show it sent none.
