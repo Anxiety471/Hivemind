@@ -65,6 +65,8 @@ type Case = {
   space?: 0 | 1 | 2;
   /** Reads TypeScript makes afterwards, as the web app does; they must read the same state either way. */
   after?: Array<{ procedure: string; input: unknown }>;
+  /** The API sets no order on the list (Prisma's findMany without orderBy): compare it by id. */
+  unordered?: boolean;
 };
 
 function cookieFor(token: string) {
@@ -129,6 +131,15 @@ await writeFile(
       "approvalRules.list": { mode: "go", readOnly: true },
       "approvalRules.set": { mode: "go" },
       "spaceSettings.overrides": { mode: "go", readOnly: true },
+      "connections.list": { mode: "go", readOnly: true },
+      "connections.rename": { mode: "go" },
+      "capabilities.list": { mode: "go", readOnly: true },
+      "usage.list": { mode: "go", readOnly: true },
+      "usage.summary": { mode: "go", readOnly: true },
+      "computer.updates": { mode: "go", readOnly: true },
+      "mcp.assignments.all": { mode: "go", readOnly: true },
+      "mcp.assignments.list": { mode: "go", readOnly: true },
+      "models.backups": { mode: "go", readOnly: true },
     },
   }),
 );
@@ -186,6 +197,11 @@ await realtime.query("LISTEN rakazo_events");
 realtime.on("notification", (notification: { payload?: string }) => {
   if (notification.payload) realtimeSignals.push(notification.payload);
 });
+
+// biome-ignore lint/suspicious/noUndeclaredEnvVars: manual harness, not a turbo task
+const OWNER_URL = process.env.DATABASE_MIGRATION_URL;
+const owner = OWNER_URL ? new PgClient({ connectionString: OWNER_URL }) : undefined;
+await owner?.connect();
 
 // Fixed once per run: both sides of a case must seed identical times.
 const THREAD_PAST = new Date(Date.now() - 2 * 3_600_000);
@@ -296,6 +312,12 @@ const cases: Case[] = [
   ...scratchpadCases(),
   ...approvalRuleCases(),
   ...spaceSettingCases(),
+  ...connectionCases(),
+  ...capabilityCases(),
+  ...usageCases(),
+  ...computerUpdateCases(),
+  ...mcpAssignmentCases(),
+  ...modelBackupCases(),
 ];
 
 const SITES = ["zeta.example", "alpha.example", "Beta.example", "_under.example", "10.0.0.1"];
@@ -1301,7 +1323,8 @@ async function run(
   seeded: Seeded,
 ) {
   if (!testCase.paginate) {
-    const result = await call(testCase.procedure, input, called(seeded, testCase));
+    const raw = await call(testCase.procedure, input, called(seeded, testCase));
+    const result = testCase.unordered ? sortedById(raw) : raw;
     return testCase.after ? { ...result, followUps: await followUps(testCase, seeded) } : result;
   }
   const pages: Awaited<ReturnType<typeof call>>[] = [];
@@ -1323,9 +1346,18 @@ async function run(
 async function followUps(testCase: Case, seeded: Seeded) {
   const results = [];
   for (const step of testCase.after ?? []) {
-    results.push(await tsCall(step.procedure, withIds(step.input, seeded), called(seeded, testCase)));
+    const result = await tsCall(step.procedure, withIds(step.input, seeded), called(seeded, testCase));
+    results.push(testCase.unordered ? sortedById(result) : result);
   }
   return results;
+}
+
+/** A list the API does not order is compared by id: the order Postgres returns it in is not a contract. */
+function sortedById<T extends { body: any }>(result: T): T {
+  const json = result.body?.json;
+  if (!Array.isArray(json)) return result;
+  const key = (item: any) => String(item?.id);
+  return { ...result, body: { ...result.body, json: [...json].sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0)) } };
 }
 
 type ThreadSeed = { noReads?: boolean };
@@ -2074,6 +2106,463 @@ function spaceSettingCases(): Case[] {
   ];
 }
 
+// ---- Slice 7c: connections, capabilities, usage, computer updates, MCP assignments, model backups ----
+
+function seedConnections(config: { none?: boolean; odd?: boolean } = {}) {
+  return async (seeded: Seeded) => {
+    const user = seeded.userId;
+    const other = await seedOtherMember(seeded);
+    if (config.none) return;
+    const connection = (id: string, spaceId: string, userId: string, provider: string, displayName: string, status: string, offset: number) =>
+      system.connection.create({
+        data: {
+          id: `${user}-${id}`,
+          spaceId,
+          userId,
+          provider,
+          displayName,
+          status,
+          connectorId: "managed",
+          providerRef: "provider-ref",
+          metadata: { note: "kept" },
+          createdAt: new Date(SETTINGS_BASE + offset * 1000),
+        },
+      });
+    await connection("c1", seeded.spaces[0], user, "github", "GitHub work", "connected", 1);
+    await connection("c2", seeded.spaces[0], user, "slack", "Slack", "pending", 2);
+    await connection("c3", seeded.spaces[0], user, "notion", "Notion old", "revoked", 3);
+    await connection("c4", seeded.spaces[0], user, "linear", "Linear", "error", 4);
+    if (config.odd) await connection("c5", seeded.spaces[0], user, "odd", "Odd status \u2028 <b>", "weird", 5);
+    await connection("co", seeded.spaces[0], other, "github", "Someone else's", "connected", 6);
+    await connection("cx", seeded.spaces[1], user, "github", "In space two", "connected", 7);
+  };
+}
+
+function connectionCases(): Case[] {
+  const mk = (procedure: string) => (name: string, input: unknown, extra: Partial<Case> = {}): Case => ({
+    name: `cn-${procedure}-${name}`,
+    procedure: `connections.${procedure}`,
+    input,
+    seed: seedConnections(),
+    after: procedure === "rename" ? [{ procedure: "connections.list", input: undefined }] : undefined,
+    unordered: true,
+    ...extra,
+  });
+  const list = mk("list");
+  const rename = mk("rename");
+  const long = (count: number, character = "n") => character.repeat(count);
+  return [
+    list("default", undefined),
+    list("odd-status-fails-the-output-check", undefined, { seed: seedConnections({ odd: true }) }),
+    list("none", undefined, { seed: seedConnections({ none: true }) }),
+    list("space-two-header", undefined, { space: 1 }),
+    list("space-three-header", undefined, { space: 2 }),
+    list("junk-input-is-ignored", { anything: 1 }),
+    list("anonymous", undefined, { anonymous: true }),
+
+    rename("client-shape", { connectionId: "__s-c1__", displayName: "Renamed" }),
+    rename("trimmed", { connectionId: "__s-c1__", displayName: "  Padded \t\u00a0" }),
+    rename("same-name", { connectionId: "__s-c1__", displayName: "GitHub work" }),
+    rename("revoked-connection", { connectionId: "__s-c3__", displayName: "Still renamable" }),
+    rename("pending-connection", { connectionId: "__s-c2__", displayName: "P" }),
+    rename("odd-status-fails-the-output-check", { connectionId: "__s-c5__", displayName: "Odd" }, { seed: seedConnections({ odd: true }) }),
+    rename("other-connection-while-one-has-an-odd-status", { connectionId: "__s-c1__", displayName: "Fine" }, { seed: seedConnections({ odd: true }) }),
+    rename("name-80", { connectionId: "__s-c1__", displayName: long(80) }),
+    rename("name-81", { connectionId: "__s-c1__", displayName: long(81) }),
+    rename("name-astral-80", { connectionId: "__s-c1__", displayName: long(80, "😀") }),
+    rename("name-astral-81", { connectionId: "__s-c1__", displayName: long(81, "😀") }),
+    rename("name-padded-81", { connectionId: "__s-c1__", displayName: ` ${long(81)} ` }),
+    rename("unicode-and-separators", { connectionId: "__s-c1__", displayName: "Ключ 日本語 \u2028\u2029 <b> & \"q\" \\ /" }),
+    rename("nul", { connectionId: "__s-c1__", displayName: "a\u0000b" }),
+    rename("lone-surrogate-escape", JSON.parse(`{"connectionId":"__s-c1__","displayName":"a\\ud800b"}`)),
+    rename("blank", { connectionId: "__s-c1__", displayName: "   " }),
+    rename("empty", { connectionId: "__s-c1__", displayName: "" }),
+    rename("name-missing", { connectionId: "__s-c1__" }),
+    rename("name-null", { connectionId: "__s-c1__", displayName: null }),
+    rename("name-number", { connectionId: "__s-c1__", displayName: 5 }),
+    rename("name-array", { connectionId: "__s-c1__", displayName: [] }),
+    rename("id-missing", { displayName: "X" }),
+    rename("id-empty", { connectionId: "", displayName: "X" }),
+    rename("id-number", { connectionId: 5, displayName: "X" }),
+    rename("everything-wrong", { connectionId: "", displayName: "" }),
+    rename("someone-elses-connection", { connectionId: "__s-co__", displayName: "X" }),
+    rename("other-space-connection", { connectionId: "__s-cx__", displayName: "X" }),
+    rename("other-space-connection-own-header", { connectionId: "__s-cx__", displayName: "X" }, { space: 1 }),
+    rename("unknown", { connectionId: "nope", displayName: "X" }),
+    rename("invalid-name-before-unknown-id", { connectionId: "nope", displayName: "" }),
+    rename("extra-keys-ignored", { connectionId: "__s-c1__", displayName: "X", status: "revoked" }),
+    rename("no-input", undefined),
+    rename("null-input", null),
+    rename("array-input", []),
+    rename("anonymous", { connectionId: "__s-c1__", displayName: "X" }, { anonymous: true }),
+  ];
+}
+
+/** The member's installs in several shapes of availability and stored settings. */
+function seedCapabilities(config: { config?: string; secretId?: string | null; version?: string | null } = {}) {
+  return async (seeded: Seeded) => {
+    const user = seeded.userId;
+    const other = await seedOtherMember(seeded);
+    const [one, two, three] = seeded.spaces;
+    const install = (id: string, spaceId: string, extra: Record<string, unknown>, offset: number, userId = user) =>
+      system.capabilityInstall.create({
+        data: { id: `${user}-${id}`, spaceId, userId, kind: "plugin", name: `Install ${id}`, source: `https://example.test/${id}`, config: {}, createdAt: new Date(SETTINGS_BASE + offset * 1000), ...extra },
+      });
+    await install("k1", one, { version: config.version === undefined ? "1.2.3" : config.version, digest: "sha256:abc", secretId: config.secretId === undefined ? `${user}-sec` : config.secretId }, 1);
+    await install("k2", two, { allSpaces: true, kind: "mcp" }, 2);
+    await install("k3", two, { kind: "api" }, 3);
+    await system.capabilityInstallSpace.create({ data: { installId: `${user}-k3`, spaceId: one, userId: user } });
+    await system.capabilityInstallSpace.create({ data: { installId: `${user}-k3`, spaceId: three, userId: user } });
+    await install("k4", two, { kind: "connection" }, 4);
+    await install("k5", one, { kind: "skill" }, 5);
+    await system.capabilityInstallSpace.create({ data: { installId: `${user}-k5`, spaceId: one, userId: user } });
+    await system.capabilityInstallSpace.create({ data: { installId: `${user}-k5`, spaceId: two, userId: user } });
+    await install("ko", one, { allSpaces: true }, 6, other);
+    if (config.config !== undefined) {
+      await system.$executeRaw`UPDATE capability_installs SET config = ${config.config}::jsonb WHERE id = ${`${user}-k1`}`;
+    }
+  };
+}
+
+function capabilityCases(): Case[] {
+  const list = (name: string, extra: Partial<Case> = {}): Case => ({
+    name: `cap-list-${name}`,
+    procedure: "capabilities.list",
+    input: undefined,
+    unordered: true,
+    seed: seedCapabilities(),
+    ...extra,
+  });
+  const withConfig = (name: string, config: string) => list(`config-${name}`, { seed: seedCapabilities({ config }) });
+  return [
+    list("default"),
+    list("space-two-header", { space: 1 }),
+    list("space-three-header", { space: 2 }),
+    list("junk-input-is-ignored", { input: { anything: 1 } }),
+    list("anonymous", { anonymous: true }),
+    list("no-version-and-null-secret", { seed: seedCapabilities({ version: null, secretId: null }) }),
+    list("empty-string-secret-is-not-configured", { seed: seedCapabilities({ secretId: "" }) }),
+    withConfig("nested-object", '{"b": 1, "a": [1.0, 2.50, 1e3, -0, 1e21, 1E-7, 123456789012345678901234567890, 0.1], "10": "x", "2": "y", "z": {"é": "ü", "\\u2028": "<>&\\u0007\\u007f"}}'),
+    withConfig("integer-like-keys-first", '{"b": 1, "2": 2, "1": 3, "a": 4, "-1": 5, "01": 6, "4294967295": 7, "4294967294": 8}'),
+    withConfig("proto-key", '{"__proto__": {"x": 1}, "a": 1}'),
+    withConfig("escapes", '{"quote\\"": "tab\\t newline\\n bs\\\\ slash\\/ \\b\\f \\u0001 \\u001f \\u2029 \\ud83d\\ude00"}'),
+    withConfig("array", "[1, 2]"),
+    withConfig("string", '"x"'),
+    withConfig("number", "5"),
+    withConfig("null", "null"),
+    withConfig("true", "true"),
+    withConfig("empty-object", "{}"),
+    withConfig("big-exponent", '{"n": 1e400, "m": -1e400, "s": 5e-324, "t": 1.7976931348623157e308}'),
+    withConfig("deep", '{"a": {"b": {"c": {"d": [[], {}, [{"e": null}]]}}}}'),
+  ];
+}
+
+/**
+ * Usage records for the member in space one, with the shapes the summary treats specially:
+ * null figures, a subagent run, an empty run id, floats, sums beyond 32 bits, and rows that
+ * belong to someone else or to another Space.
+ */
+function seedUsage(config: { none?: boolean; many?: boolean; emptyRun?: boolean; badCost?: boolean; badKind?: boolean } = {}) {
+  return async (seeded: Seeded) => {
+    const user = seeded.userId;
+    const other = await seedOtherMember(seeded);
+    const [one, two] = seeded.spaces;
+    if (config.none) return;
+    const row = (id: string, data: Record<string, unknown>, offset: number, spaceId = one, userId = user) =>
+      system.usageRecord.create({
+        data: {
+          id: `${user}-${id}`,
+          spaceId,
+          userId,
+          provider: "openai",
+          model: "gpt-a",
+          createdAt: new Date(SETTINGS_BASE + offset * 1000),
+          ...data,
+        },
+      });
+    if (config.many) {
+      for (let index = 0; index < 120; index += 1) {
+        await row(`m${String(index).padStart(3, "0")}`, { inputTokens: index, outputTokens: 1, totalTokens: index + 1, costUsd: index / 1000, runId: `${user}-run${index % 7}` }, index);
+      }
+      await row("mx", { inputTokens: 1 }, 500, two);
+      return;
+    }
+    await row("u1", { inputTokens: 10, outputTokens: 5, totalTokens: 15, costUsd: 0.0000123, runId: `${user}-r1`, botId: null, callId: `${user}-call1`, costSource: "provider", pricingVersion: "v1", usageSource: "api", operationId: "op1", agentId: "agent" }, 1);
+    await row("u2", { inputTokens: 20, outputTokens: 10, totalTokens: 30, costUsd: 1e-7, runId: `${user}-r1`, cacheReadTokens: 3, cacheWriteTokens: 4, cacheWrite1hTokens: 5, reasoningTokens: 6 }, 2);
+    await row("u3", { model: "gpt-b", runId: `${user}-r2`, operationKind: "setup" }, 3);
+    await row("u4", { provider: "anthropic", model: "claude", inputTokens: 100, outputTokens: 50, totalTokens: 150, costUsd: 0.1, runId: `${user}-r3`, parentRunId: `${user}-r1`, operationKind: "subagent" }, 4);
+    await row("u5", { provider: "anthropic", model: "claude", inputTokens: 5, outputTokens: 5, totalTokens: 10, costUsd: 0.2, runId: config.emptyRun ? "" : null }, 5);
+    await row("u6", { provider: "anthropic", model: "claude", inputTokens: 1, outputTokens: 1, totalTokens: 2, costUsd: 0.1 + 0.2, parentRunId: `${user}-r9`, operationKind: "compaction" }, 6);
+    await row("u7", { provider: "local", model: "m", inputTokens: 2_000_000_000, outputTokens: 2_000_000_000, totalTokens: 2_147_483_647, costUsd: 1e21 }, 7);
+    await row("u8", { provider: "local", model: "m", inputTokens: 2_000_000_000, outputTokens: 1, totalTokens: 2_147_483_647, costUsd: 123456789.123 }, 8);
+    await row("u9", { provider: "zeta", model: "z", runId: `${user}-r4` }, 9);
+    await row("u10", { provider: "zeta", model: "z", runId: `${user}-r4`, operationKind: "retrieval" }, 10);
+    await row("u11", { provider: "zeta", model: "y", runId: `${user}-r5` }, 11);
+    await row("u12", { provider: "zeta", model: "z", runId: `${user}-r6` }, 15);
+    await row("u13", { provider: "zeta", model: "y", runId: `${user}-r5` }, 16);
+    if (config.badCost) await row("bad", { costUsd: -1 }, 20);
+    if (config.badKind) await row("bad", { operationKind: "weird" }, 20);
+    await row("o1", { inputTokens: 999, totalTokens: 999 }, 12, one, other);
+    await row("x1", { inputTokens: 888, totalTokens: 888, runId: `${user}-r8` }, 13, two);
+    await row("x2", { provider: "elsewhere", model: "e", inputTokens: 7, totalTokens: 7 }, 14, two);
+  };
+}
+
+function usageCases(): Case[] {
+  const mk = (procedure: string) => (name: string, extra: Partial<Case> = {}): Case => ({
+    name: `usg-${procedure}-${name}`,
+    procedure: `usage.${procedure}`,
+    input: undefined,
+    seed: seedUsage(),
+    ...extra,
+  });
+  const list = mk("list");
+  const summary = mk("summary");
+  return [
+    list("default"),
+    list("empty-run-id-fails-the-output-check", { seed: seedUsage({ emptyRun: true }) }),
+    list("negative-cost-fails-the-output-check", { seed: seedUsage({ badCost: true }) }),
+    list("unknown-operation-kind-fails-the-output-check", { seed: seedUsage({ badKind: true }) }),
+    list("none", { seed: seedUsage({ none: true }) }),
+    list("limit-100-newest-first", { seed: seedUsage({ many: true }) }),
+    list("space-two-header", { space: 1 }),
+    list("junk-input-is-ignored", { input: { anything: 1 } }),
+    list("anonymous", { anonymous: true }),
+    summary("default"),
+    summary("empty-run-id-is-no-run", { seed: seedUsage({ emptyRun: true }) }),
+    summary("negative-cost-is-not-checked", { seed: seedUsage({ badCost: true }) }),
+    summary("unknown-operation-kind-is-not-checked", { seed: seedUsage({ badKind: true }) }),
+    summary("none", { seed: seedUsage({ none: true }) }),
+    summary("many-rows-no-limit", { seed: seedUsage({ many: true }) }),
+    summary("space-two-header", { space: 1 }),
+    summary("junk-input-is-ignored", { input: { anything: 1 } }),
+    summary("anonymous", { anonymous: true }),
+  ];
+}
+
+/** Computers with updates in every status, bots archived or missing, and one malformed row. */
+function seedComputerUpdates(config: { badAction?: boolean; badStage?: boolean; none?: boolean } = {}) {
+  return async (seeded: Seeded) => {
+    const user = seeded.userId;
+    await seedOtherMember(seeded);
+    const [one, two] = seeded.spaces;
+    if (config.none) return;
+    const computer = (id: string, spaceId: string, scope: string) =>
+      system.computer.create({ data: { id: `${user}-${id}`, spaceId, userId: user, kind: "local", scope, scopeKey: `${user}-${id}-sk`, homeKey: `${user}-${id}-hk` } });
+    const bot = (id: string, spaceId: string, computerId: string | null, extra: Record<string, unknown> = {}) =>
+      system.bot.create({ data: { id: `${user}-${id}`, spaceId, userId: user, name: `Bot ${id}`, color: "blue", computerId: computerId && `${user}-${computerId}`, ...extra } });
+    const update = (id: string, computerId: string, botId: string, action: string, status: string, stage: string, offset: number) =>
+      system.computerUpdate.create({
+        data: { id: `${user}-${id}`, computerId: `${user}-${computerId}`, botId: `${user}-${botId}`, action, status, stage, createdAt: new Date(SETTINGS_BASE + offset * 1000) },
+      });
+    await computer("cp1", one, "team");
+    await computer("cp2", one, "dedicated");
+    await computer("cp3", one, "team");
+    await computer("cp4", one, "team");
+    await computer("cpx", two, "team");
+    await bot("b1", one, "cp1");
+    await bot("b2", one, "cp1");
+    await bot("b3", one, "cp2");
+    await bot("b4", one, "cp3", { archivedAt: new Date(SETTINGS_BASE) });
+    await bot("b5", one, "cp4");
+    await bot("b5a", one, "cp4", { archivedAt: new Date(SETTINGS_BASE) });
+    await bot("bx", two, "cpx");
+    await update("up1", "cp1", "b1", "update", "queued", "preparing", 1);
+    await update("up2", "cp1", "b2", "update", "running", "saving", 2);
+    await update("up3", "cp1", "b1", "recover", "interrupted", "recreating", 3);
+    await update("up4", "cp2", "b3", "update", "failed", "restoring", 4);
+    await update("up5", "cp1", "b2", "update", "completed", "reconnecting", 5);
+    await update("up6", "cp3", "b4", "update", "queued", "preparing", 6);
+    await update("up7", "cp4", "b5a", "update", "running", "saving", 7);
+    await update("up8", "cp4", "b5", "update", "queued", "preparing", 8);
+    await update("up9", "cpx", "bx", "update", "queued", "preparing", 9);
+    await update("up10", "cp1", "nobot", "update", "failed", "preparing", 10);
+    if (config.badAction) await update("up11", "cp2", "b3", "reinstall", "queued", "preparing", 11);
+    if (config.badStage) await update("up12", "cp2", "b3", "update", "queued", "rebooting", 12);
+  };
+}
+
+function computerUpdateCases(): Case[] {
+  const updates = (name: string, extra: Partial<Case> = {}): Case => ({
+    name: `cu-updates-${name}`,
+    procedure: "computer.updates",
+    input: undefined,
+    seed: seedComputerUpdates(),
+    ...extra,
+  });
+  return [
+    updates("default"),
+    updates("none", { seed: seedComputerUpdates({ none: true }) }),
+    updates("space-two-header", { space: 1 }),
+    updates("space-three-header", { space: 2 }),
+    updates("unknown-action-fails-the-call", { seed: seedComputerUpdates({ badAction: true }) }),
+    updates("unknown-stage-fails-the-call", { seed: seedComputerUpdates({ badStage: true }) }),
+    updates("junk-input-is-ignored", { input: { anything: 1 } }),
+    updates("anonymous", { anonymous: true }),
+  ];
+}
+
+/** MCP servers (own, everywhere, shared, elsewhere, someone else's) and bot assignments of them. */
+function seedMcp(config: { none?: boolean; tools?: string } = {}) {
+  return async (seeded: Seeded) => {
+    const user = seeded.userId;
+    const other = await seedOtherMember(seeded);
+    const [one, two, three] = seeded.spaces;
+    const server = (id: string, spaceId: string, extra: Record<string, unknown> = {}, userId = user) =>
+      system.mcpServer.create({ data: { id: `${user}-${id}`, spaceId, userId, slug: `${id}`, name: `Server ${id}`, transport: "stdio", command: "true", ...extra } });
+    const bot = (id: string, spaceId: string, extra: Record<string, unknown> = {}) =>
+      system.bot.create({ data: { id: `${user}-${id}`, spaceId, userId: user, name: id, color: "blue", ...extra } });
+    await bot("b1", one);
+    await bot("b2", one);
+    await bot("barch", one, { archivedAt: new Date(SETTINGS_BASE) });
+    await bot("bx", two);
+    if (config.none) return;
+    await server("m1", one);
+    await server("m2", two, { allSpaces: true });
+    await server("m3", two);
+    await system.mcpServerSpace.create({ data: { serverId: `${user}-m3`, spaceId: one, userId: user } });
+    await server("m4", two);
+    await server("m5", one, {}, other);
+    await server("m6", three, { allSpaces: false });
+    const assign = (id: string, botId: string, serverId: string, spaceId: string, offset: number, extra: Record<string, unknown> = {}, userId = user) =>
+      system.botMcpServer.create({
+        data: { id: `${user}-${id}`, spaceId, botId: `${user}-${botId}`, serverId: `${user}-${serverId}`, userId, createdAt: new Date(SETTINGS_BASE + offset * 1000), ...extra },
+      });
+    await assign("a1", "b1", "m1", one, 3, { allowAllTools: false, allowedTools: ["read", "write"] });
+    await assign("a2", "b1", "m2", one, 1, { allowedTools: [] });
+    await assign("a3", "b1", "m3", one, 2, { allowAllTools: false, allowedTools: ["a", 1, null, "c", { x: 1 }, ["d"], true] });
+    await assign("a4", "b2", "m1", one, 4, { allowedTools: ["only-b2"] });
+    await assign("a5", "b1", "m4", one, 5);
+    await assign("a6", "b1", "m5", one, 6);
+    await assign("a7", "barch", "m1", one, 7);
+    await assign("a8", "bx", "m2", two, 8);
+    await assign("a9", "b2", "m2", one, 9, {}, other);
+    await assign("a10", "b2", "m3", one, 9);
+    if (config.tools !== undefined) {
+      await system.$executeRaw`UPDATE bot_mcp_servers SET "allowedTools" = ${config.tools}::jsonb WHERE id = ${`${user}-a1`}`;
+    }
+  };
+}
+
+function mcpAssignmentCases(): Case[] {
+  const mk = (procedure: string) => (name: string, input: unknown, extra: Partial<Case> = {}): Case => ({
+    name: `mcp-${procedure}-${name}`,
+    procedure: `mcp.assignments.${procedure}`,
+    input,
+    seed: seedMcp(),
+    ...extra,
+  });
+  const all = mk("all");
+  const list = mk("list");
+  const tools = (name: string, text: string) => list(`tools-${name}`, { botId: "__s-b1__" }, { seed: seedMcp({ tools: text }) });
+  return [
+    all("default", undefined),
+    all("none", undefined, { seed: seedMcp({ none: true }) }),
+    all("space-two-header", undefined, { space: 1 }),
+    all("space-three-header", undefined, { space: 2 }),
+    all("junk-input-is-ignored", { anything: 1 }),
+    all("anonymous", undefined, { anonymous: true }),
+    list("bot-with-shared-and-everywhere-servers", { botId: "__s-b1__" }),
+    list("second-bot", { botId: "__s-b2__" }),
+    list("archived-bot-is-allowed", { botId: "__s-barch__" }),
+    list("none", { botId: "__s-b1__" }, { seed: seedMcp({ none: true }) }),
+    list("other-space-bot", { botId: "__s-bx__" }),
+    list("other-space-bot-own-header", { botId: "__s-bx__" }, { space: 1 }),
+    list("unknown-bot", { botId: "nope" }),
+    list("extra-keys-ignored", { botId: "__s-b1__", more: 1 }),
+    list("bot-id-missing", {}),
+    list("bot-id-empty", { botId: "" }),
+    list("bot-id-number", { botId: 5 }),
+    list("bot-id-null", { botId: null }),
+    list("no-input", undefined),
+    list("null-input", null),
+    list("array-input", []),
+    list("anonymous", { botId: "__s-b1__" }, { anonymous: true }),
+    tools("object", '{"x": 1}'),
+    tools("string", '"read"'),
+    tools("null", "null"),
+    tools("mixed", '["a", 1, "b", null, ["c"], "\\u2028", "é"]'),
+    tools("duplicates", '["a", "a"]'),
+    tools("empty-name-fails-the-output-check", '["", "a"]'),
+    tools("name-200", JSON.stringify(["x".repeat(200)])),
+    tools("name-201-fails-the-output-check", JSON.stringify(["x".repeat(201)])),
+    tools("name-astral-200", JSON.stringify(["😀".repeat(200)])),
+    tools("name-astral-201-fails-the-output-check", JSON.stringify(["😀".repeat(201)])),
+    all("empty-name-fails-the-output-check", undefined, { seed: seedMcp({ tools: '["", "a"]' }) }),
+    all("long-name-fails-the-output-check", undefined, { seed: seedMcp({ tools: JSON.stringify(["x".repeat(201)]) }) }),
+    all("odd-allowed-tools-shapes", undefined, { seed: seedMcp({ tools: '["a", 1, null, ["b"], {"c": 1}]' }) }),
+  ];
+}
+
+/** The member's model roles: account rows, and a Space copy (with or without the override row). */
+function seedModels(config: { overrides?: string[]; strayCopy?: boolean; none?: boolean; backups?: Array<[string, string]> } = {}) {
+  return async (seeded: Seeded) => {
+    const user = seeded.userId;
+    const other = await seedOtherMember(seeded);
+    const [one, two] = seeded.spaces;
+    if (!config.none) {
+      await system.secret.create({ data: { id: `${user}-sec-mc`, userId: user, spaceId: null, kind: "model", ciphertext: "sealed" } });
+      await system.userModelCredential.create({ data: { id: `${user}-mc1`, userId: user, provider: "openai", label: "Key", secretId: `${user}-sec-mc` } });
+      const choice = (userId: string, role: string, position: number, provider: string, modelId: string, thinkingLevel: string | null, credentialId: string | null) =>
+        system.userModelRoleChoice.create({ data: { userId, role, position, provider, modelId, thinkingLevel, credentialId } });
+      await choice(user, "main", 0, "openai", "gpt-a", "high", `${user}-mc1`);
+      await choice(user, "main", 1, "anthropic", "claude-b", "low", null);
+      await choice(user, "main", 2, "openai", "gpt-c", null, `${user}-mc1`);
+      await choice(user, "main", 3, "google", "gemini-d", "bogus", null);
+      for (const [index, [provider, modelId]] of (config.backups ?? []).entries()) {
+        await choice(user, "main", 10 + index, provider, modelId, null, null);
+      }
+      await choice(user, "summary", 0, "openai", "gpt-s", null, null);
+      await choice(user, "summary", 1, "openai", "gpt-s2", null, null);
+      await choice(other, "main", 0, "other", "other-a", null, null);
+      await choice(other, "main", 1, "other", "other-b", null, null);
+    }
+    for (const setting of config.overrides ?? []) {
+      await system.spaceSettingOverride.create({ data: { spaceId: one, userId: user, setting } });
+    }
+    if ((config.overrides ?? []).includes("models") || config.strayCopy) {
+      const copy = (spaceId: string, role: string, position: number, provider: string, modelId: string) =>
+        system.spaceModelRoleChoice.create({ data: { spaceId, userId: user, role, position, provider, modelId, thinkingLevel: "high", credentialId: null } });
+      await copy(one, "main", 0, "space", "space-primary");
+      await copy(one, "main", 1, "space", "space-backup-1");
+      await copy(one, "main", 2, "space", "space-backup-2");
+      await copy(one, "summary", 1, "space", "space-summary-backup");
+      await copy(two, "main", 1, "space2", "elsewhere-backup");
+    }
+  };
+}
+
+function modelBackupCases(): Case[] {
+  const backups = (name: string, extra: Partial<Case> = {}): Case => ({
+    name: `mb-backups-${name}`,
+    procedure: "models.backups",
+    input: undefined,
+    seed: seedModels(),
+    ...extra,
+  });
+  return [
+    backups("account-copy"),
+    backups("padded-values-are-returned-trimmed", { seed: seedModels({ backups: [[" openai\t", " gpt-x \u00a0"]] }) }),
+    backups("provider-128", { seed: seedModels({ backups: [["p".repeat(128), "m"]] }) }),
+    backups("provider-129-fails-the-output-check", { seed: seedModels({ backups: [["p".repeat(129), "m"]] }) }),
+    backups("provider-astral-128", { seed: seedModels({ backups: [["😀".repeat(128), "m"]] }) }),
+    backups("provider-astral-129-fails", { seed: seedModels({ backups: [["😀".repeat(129), "m"]] }) }),
+    backups("model-512", { seed: seedModels({ backups: [["p", "m".repeat(512)]] }) }),
+    backups("model-513-fails-the-output-check", { seed: seedModels({ backups: [["p", "m".repeat(513)]] }) }),
+    backups("padded-513-is-trimmed-to-511", { seed: seedModels({ backups: [["p", ` ${"m".repeat(511)} `]] }) }),
+    backups("blank-provider-fails-the-output-check", { seed: seedModels({ backups: [["  \t", "m"]] }) }),
+    backups("blank-model-fails-the-output-check", { seed: seedModels({ backups: [["p", ""]] }) }),
+    backups("unicode-and-separators", { seed: seedModels({ backups: [["Ключ\u2028", "日本語 <b> & \"q\""]] }) }),
+    backups("nothing-saved", { seed: seedModels({ none: true }) }),
+    backups("space-copy-when-overridden", { seed: seedModels({ overrides: ["models"] }) }),
+    backups("other-settings-override-does-not-switch", { seed: seedModels({ overrides: ["voice", "confirmations", "credentials"] }) }),
+    backups("stray-space-copy-without-override", { seed: seedModels({ strayCopy: true }) }),
+    backups("space-two-header-uses-the-account", { space: 1, seed: seedModels({ overrides: ["models"] }) }),
+    backups("junk-input-is-ignored", { input: { anything: 1 } }),
+    backups("anonymous", { anonymous: true }),
+  ];
+}
+
 async function reset(seeded: ReturnType<typeof ids>) {
   const { userId, orgId } = seeded;
   await system.messagingOutbound.deleteMany({ where: { id: { startsWith: userId } } });
@@ -2099,6 +2588,15 @@ async function reset(seeded: ReturnType<typeof ids>) {
   await system.userModelCredential.deleteMany({ where: { userId: own } });
   await system.userVoiceCredential.deleteMany({ where: { userId: own } });
   await system.vaultCredential.deleteMany({ where: { userId: own } });
+  // usage_records is append-only for the runtime role and has no foreign keys: clear it as the table owner.
+  await owner?.query('DELETE FROM usage_records WHERE "spaceId" = ANY($1)', [seeded.spaces]);
+  await system.botMcpServer.deleteMany({ where: { spaceId: { in: seeded.spaces } } });
+  await system.mcpServerSpace.deleteMany({ where: { userId: own } });
+  await system.computerUpdate.deleteMany({ where: { computerId: { startsWith: userId } } });
+  await system.connection.deleteMany({ where: { spaceId: { in: seeded.spaces } } });
+  await system.capabilityInstallSpace.deleteMany({ where: { userId: own } });
+  await system.bot.deleteMany({ where: { userId: own } });
+  await system.computer.deleteMany({ where: { spaceId: { in: seeded.spaces } } });
   await system.messagingChannel.deleteMany({ where: { id: { startsWith: userId } } });
   await system.messagingLinkCode.deleteMany({ where: { userId: { in: [userId, `${userId}-other`] } } });
   await system.messagingIdentity.deleteMany({ where: { userId: { in: [userId, `${userId}-other`] } } });
@@ -2564,6 +3062,11 @@ async function databaseState(seeded: ReturnType<typeof ids>) {
     select: { id: true, userId: true, spaceId: true },
     orderBy: { id: "asc" },
   });
+  const connections = await system.connection.findMany({
+    where: { spaceId: { in: seeded.spaces } },
+    select: { id: true, spaceId: true, userId: true, provider: true, displayName: true, status: true, connectorId: true, createdAt: true, updatedAt: true },
+    orderBy: { id: "asc" },
+  });
   const trustedLinkSites = await system.trustedLinkSite.findMany({
     where: { userId: { in: [seeded.userId, `${seeded.userId}-other`] } },
     select: { userId: true, site: true },
@@ -2619,6 +3122,7 @@ async function databaseState(seeded: ReturnType<typeof ids>) {
     spaceVoicePreferences,
     autoReviewPreferences,
     vaultCredentials,
+    connections,
   };
 }
 
@@ -2660,6 +3164,7 @@ for (const testCase of cases) {
 }
 
 await realtime.end();
+await owner?.end();
 
 go?.kill("SIGTERM");
 await handles.stop();
