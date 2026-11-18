@@ -24,10 +24,18 @@ var redactorWords = []string{
 	"sk-", "sk_", "ak_", "ck_", "eyj",
 }
 
+// knownSafe are exact values the gate's word list would refuse that the TypeScript
+// redactor was run on and leaves unchanged: a space setting's name, which an enum
+// bounds. A contract case records each, so a redactor change shows as a mismatch.
+var knownSafe = map[string]bool{"credentials": true}
+
 // redactText is redactSensitiveText for the plain identifiers Go records: names,
 // kinds and ids made of letters, digits, dot, underscore and hyphen. Such text has
 // no separator, address, URL, path or whitespace for a redaction rule to match.
 func redactText(text string) (string, error) {
+	if knownSafe[text] {
+		return text, nil
+	}
 	if !safeText.MatchString(text) {
 		return "", ErrUnredactable
 	}

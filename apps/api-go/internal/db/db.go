@@ -66,6 +66,12 @@ func (d *DB) Tenant(ctx context.Context, actor Actor, fn func(pgx.Tx) error) err
 	return d.inTx(ctx, []string{actor.SpaceID, actor.UserID, "off", ""}, fn)
 }
 
+// TenantSerializable is Tenant at the SERIALIZABLE isolation level; the caller
+// reruns it on a serialization failure.
+func (d *DB) TenantSerializable(ctx context.Context, actor Actor, fn func(pgx.Tx) error) error {
+	return d.inTxWith(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable}, []string{actor.SpaceID, actor.UserID, "off", ""}, fn)
+}
+
 // System runs fn across tenants, with the named reason kept for logs. The
 // bypass needs both the setting and the key derived from the login password.
 func (d *DB) System(ctx context.Context, reason string, fn func(pgx.Tx) error) error {
@@ -74,7 +80,11 @@ func (d *DB) System(ctx context.Context, reason string, fn func(pgx.Tx) error) e
 }
 
 func (d *DB) inTx(ctx context.Context, settings []string, fn func(pgx.Tx) error) error {
-	tx, err := d.Pool.BeginTx(ctx, pgx.TxOptions{})
+	return d.inTxWith(ctx, pgx.TxOptions{}, settings, fn)
+}
+
+func (d *DB) inTxWith(ctx context.Context, options pgx.TxOptions, settings []string, fn func(pgx.Tx) error) error {
+	tx, err := d.Pool.BeginTx(ctx, options)
 	if err != nil {
 		return err
 	}

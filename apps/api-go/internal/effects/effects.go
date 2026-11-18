@@ -62,6 +62,9 @@ type audited struct {
 // values checked against the redaction gate (redact.go) and a contract case.
 var auditedProcedures = map[string]audited{
 	"spendingLimit.set": {Type: "approval.policy.changed", Kind: "spending_limit", Fields: []string{"limit.currency", "limit.period"}},
+	// approvalRules.remove is not served: it records the caller's own `id`, free text.
+	"approvalRules.set":         {Type: "approval.policy.changed", Fields: []string{"effect", "matchKind"}},
+	"spaceSettings.setOverride": {Type: "approval.policy.changed", Fields: []string{"setting", "enabled"}},
 }
 
 // SecurityEventFor is procedureSecurityEvent: the event for a procedure that just

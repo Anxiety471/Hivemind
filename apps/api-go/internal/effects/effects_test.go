@@ -166,3 +166,37 @@ func TestEnvelopeMatchesJSONStringify(t *testing.T) {
 		t.Error("an oversized signal must be refused")
 	}
 }
+
+func TestSettingsProceduresAreAuditedWithTheTypeScriptMetadata(t *testing.T) {
+	actor := db.Actor{UserID: "u1", SpaceID: "s1"}
+	rule, ok := SecurityEventFor("approvalRules.set", map[string]any{"effect": "deny", "matchKind": "tool", "matchValue": "bash", "scope": "space"}, actor)
+	want := []Meta{{"procedure", "approvalRules.set"}, {"effect", "deny"}, {"matchKind", "tool"}}
+	if !ok || rule.Type != "approval.policy.changed" || !reflect.DeepEqual(rule.Metadata, want) {
+		t.Fatalf("approvalRules.set = %+v", rule)
+	}
+	override, ok := SecurityEventFor("spaceSettings.setOverride", map[string]any{"setting": "credentials", "enabled": false}, actor)
+	want = []Meta{{"procedure", "spaceSettings.setOverride"}, {"setting", "credentials"}, {"enabled", false}}
+	if !ok || !reflect.DeepEqual(override.Metadata, want) {
+		t.Fatalf("spaceSettings.setOverride = %+v", override)
+	}
+	// Every value an enum can produce passes the gate; the one its word list would refuse is
+	// listed as known safe, and nothing else containing the word is.
+	kept, err := securityEventMetadata(override.Metadata)
+	if err != nil || kept["setting"] != "credentials" {
+		t.Fatalf("credentials must be recorded as is: %v %v", kept, err)
+	}
+	for _, value := range []string{"models", "voice", "confirmations", "always_allow", "require_approval", "deny", "tool", "connector", "site"} {
+		if _, err := redactText(value); err != nil {
+			t.Errorf("%s must pass the gate: %v", value, err)
+		}
+	}
+	for _, value := range []string{"credentials2", "my-credentials", "Credentials"} {
+		if _, err := redactText(value); err == nil {
+			t.Errorf("%s must stay refused", value)
+		}
+	}
+	// approvalRules.remove records the caller's own id, which the gate cannot prove safe: not served.
+	if _, ok := SecurityEventFor("approvalRules.remove", map[string]any{"id": "x"}, actor); ok {
+		t.Error("approvalRules.remove is not served here")
+	}
+}
