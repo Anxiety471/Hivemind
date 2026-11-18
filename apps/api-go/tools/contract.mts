@@ -241,8 +241,9 @@ await owner?.connect();
 // Fixed once per run: both sides of a case must seed identical times.
 const THREAD_PAST = new Date(Date.now() - 2 * 3_600_000);
 const THREAD_FUTURE = new Date(Date.now() + 30 * 86_400_000);
-// Fixed per run so both sides seed computer updates in the same relative order.
-const COMPUTER_UPDATE_BASE = Date.now() - 30_000;
+// Reset at the start of each case (both sides of a case share it, so they seed identical times). It must be
+// recent when the case runs: the API's reconciler treats an old queued or running update as abandoned.
+let COMPUTER_UPDATE_BASE = Date.now() - 30_000;
 
 /** What the web app reloads right after a read-state change. */
 const AFTER = [
@@ -3866,6 +3867,7 @@ for (const testCase of cases) {
   if (process.env.CASE_FILTER && !new RegExp(process.env.CASE_FILTER).test(testCase.name)) continue;
   if (Boolean(testCase.email) !== EMAIL_ON) continue;
   const caseIds = ids(testCase.name);
+  COMPUTER_UPDATE_BASE = Date.now() - 30_000;
   const input = withIds(testCase.input, caseIds);
   // A write has realtime signals to wait for; a read only needs to show it sent none.
   const settle = WRITE_PROCEDURES.has(testCase.procedure) || testCase.procedure.startsWith("messaging.") ? 400 : 40;
