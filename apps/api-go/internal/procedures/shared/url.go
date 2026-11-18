@@ -29,7 +29,7 @@ func JoinURL(origin, path string) (string, error) {
 	}
 	if strings.Contains(host, ":") {
 		// An IPv6 literal is served only in the form WHATWG serialises it (compressed, lower case).
-		if address, err := netip.ParseAddr(host); err != nil || !address.Is6() || address.String() != host {
+		if address, err := netip.ParseAddr(host); err != nil || !address.Is6() || address.Is4In6() || address.String() != host {
 			return "", ErrUnsupportedURL
 		}
 		host = "[" + host + "]"
