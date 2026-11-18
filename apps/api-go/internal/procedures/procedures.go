@@ -10,6 +10,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/local"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/approvalrules"
+	artifacts "github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/artifactlist"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/availability"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/botsections"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/capabilities"
@@ -317,6 +318,45 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 			ReadOnly: true,
 			Serve: func(ctx context.Context, actor db.Actor, _ orpc.Input) (any, *orpc.Error) {
 				return models.Backups(ctx, database, actor)
+			},
+		},
+		{
+			Name: "models.rename",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return models.Rename(ctx, database, actor, input)
+			},
+		},
+		{
+			Name: "pages.rename",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return pages.Rename(ctx, database, actor, input)
+			},
+		},
+		{
+			Name: "pages.pin",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return pages.Pin(ctx, database, actor, input)
+			},
+		},
+		{
+			Name:     "artifacts.list",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return artifacts.List(ctx, database, actor, input)
+			},
+		},
+		{
+			Name:     "artifacts.listSpace",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return artifacts.ListSpace(ctx, database, actor, input)
+			},
+		},
+		{
+			Name:     "artifacts.listVersions",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return artifacts.ListVersions(ctx, database, actor, input)
 			},
 		},
 	}

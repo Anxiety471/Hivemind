@@ -36,6 +36,7 @@ func TestRegistryHasTheServedProceduresAndNotTrust(t *testing.T) {
 		"spaces.invites.preview", "spaces.invites.accept", "spaces.invites.cancel",
 		"organizations.list", "organizations.rename", "organizations.members.list",
 		"organizations.invitations.preview",
+		"models.rename", "pages.rename", "pages.pin", "artifacts.list", "artifacts.listSpace", "artifacts.listVersions",
 	} {
 		if !seen[name] {
 			t.Errorf("missing %s", name)
@@ -67,8 +68,10 @@ func TestRegistryHasTheServedProceduresAndNotTrust(t *testing.T) {
 			t.Errorf("%s must not be served locally", name)
 		}
 	}
-	// The other pages procedures read share secrets and versions; they stay on TypeScript.
-	for _, name := range []string{"pages.get", "pages.rename", "pages.setVisibility", "pages.pin", "pages.remove"} {
+	// pages.get with link:true reads the page's sealed share token from the secret store
+	// (apps/api/src/pages.ts:141-153, secrets.load at :151, called from getPage at :180); setVisibility
+	// and remove write it. They stay on TypeScript.
+	for _, name := range []string{"pages.get", "pages.setVisibility", "pages.remove"} {
 		if seen[name] {
 			t.Errorf("%s must not be served locally", name)
 		}
