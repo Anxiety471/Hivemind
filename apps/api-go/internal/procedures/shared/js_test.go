@@ -67,13 +67,20 @@ func TestParseDate(t *testing.T) {
 		"2026-05-01T10:00:00+05:30":    utc(2026, 5, 1, 4, 30, 0, 0),
 		"2026-05-01T24:00:00Z":         utc(2026, 5, 2, 0, 0, 0, 0),
 		"+020000-01-01T00:00:00Z":      utc(20000, 1, 1, 0, 0, 0, 0),
+		// ECMAScript TimeClip boundaries: both are valid Dates.
+		"+275760-09-13T00:00:00.000Z": utc(275760, 9, 13, 0, 0, 0, 0),
+		"-271821-04-20T00:00:00.000Z": utc(-271821, 4, 20, 0, 0, 0, 0),
 	} {
 		got, ok := ParseDate(text)
 		if !ok || got.UnixMilli() != want {
 			t.Errorf("%q = %v ok=%v, want %d", text, got.UnixMilli(), ok, want)
 		}
 	}
-	for _, text := range []string{"", "yesterday", "2026-13-01", "2026-05-32", "2026-05-01T10:60", "2026-05-01T24:00:01Z", "May 1 2026"} {
+	for _, text := range []string{
+		"", "yesterday", "2026-13-01", "2026-05-32", "2026-05-01T10:60", "2026-05-01T24:00:01Z", "May 1 2026",
+		// One millisecond outside the TimeClip range each way is Invalid Date.
+		"+275760-09-13T00:00:00.001Z", "-271821-04-19T23:59:59.999Z",
+	} {
 		if _, ok := ParseDate(text); ok {
 			t.Errorf("%q accepted", text)
 		}

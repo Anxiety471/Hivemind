@@ -157,8 +157,16 @@ func ParseDate(text string) (time.Time, bool) {
 		location = time.FixedZone("", sign*(hours*3600+minutes*60))
 	}
 	moment := time.Date(year, time.Month(month), day, hour, minute, second, nanos, location)
+	// ECMAScript TimeClip: a Date more than 8.64e15 ms from the epoch is Invalid Date,
+	// so Date.parse rejects it (e.g. +275760-09-13T00:00:00.001Z).
+	if milliseconds := moment.UnixMilli(); milliseconds > maxTimeClip || milliseconds < -maxTimeClip {
+		return time.Time{}, false
+	}
 	return moment.UTC(), true
 }
+
+// maxTimeClip is the ECMAScript maximum absolute time value, in milliseconds.
+const maxTimeClip = 8_640_000_000_000_000
 
 // ISOString is Date.prototype.toISOString for a UTC instant, including the signed six-digit
 // year it writes outside 0000..9999.

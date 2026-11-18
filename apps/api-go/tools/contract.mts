@@ -1406,6 +1406,9 @@ function pageCases(): Case[] {
     list("cursor-updated-null", { cursor: cursorOf(null, null) }),
     list("cursor-bad-month", { cursor: cursorOf("2026-13-01", null) }),
     list("cursor-bad-day", { cursor: cursorOf("2026-05-32", null) }),
+    // ECMAScript TimeClip: one millisecond outside the range Date can represent is Invalid Date.
+    list("cursor-just-past-max-time", { cursor: cursorOf("+275760-09-13T00:00:00.001Z", null) }),
+    list("cursor-just-below-min-time", { cursor: cursorOf("-271821-04-19T23:59:59.999Z", null) }),
     list("cursor-feb-30", { cursor: cursorOf("2026-02-30", null) }),
     list("cursor-hour-25", { cursor: cursorOf("2026-05-01T25:00:00Z", null) }),
     list("cursor-minute-60", { cursor: cursorOf("2026-05-01T12:60:00Z", null) }),
@@ -3173,6 +3176,11 @@ function artifactCases(): Case[] {
     spaceCase("cursor-created-at-long-fraction", { cursor: cur({ ...good, createdAt: "2026-04-30T10:00:00.1234567Z" }) }),
     spaceCase("cursor-created-at-hour-24", { cursor: cur({ ...good, createdAt: "2026-05-01T24:00:00Z" }) }),
     spaceCase("cursor-created-at-hour-25", { cursor: cur({ ...good, createdAt: "2026-05-01T25:00:00Z" }) }),
+    // ECMAScript TimeClip: one millisecond outside the range Date can represent is Invalid Date.
+    spaceCase("cursor-created-at-just-past-max-time", { cursor: cur({ ...good, createdAt: "+275760-09-13T00:00:00.001Z" }) }),
+    spaceCase("cursor-created-at-just-below-min-time", { cursor: cur({ ...good, createdAt: "-271821-04-19T23:59:59.999Z" }) }),
+    spaceCase("cursor-as-of-just-past-max-time", { cursor: cur({ ...good, asOf: "+275760-09-13T00:00:00.001Z" }) }),
+    spaceCase("cursor-as-of-just-below-min-time", { cursor: cur({ ...good, asOf: "-271821-04-19T23:59:59.999Z" }) }),
     spaceCase("cursor-created-at-feb-30", { cursor: cur({ ...good, createdAt: "2026-02-30" }) }),
     spaceCase("cursor-created-at-month-13", { cursor: cur({ ...good, createdAt: "2026-13-01" }) }),
     spaceCase("cursor-as-of-missing", { cursor: cur({ createdAt: good.createdAt, id: good.id, botId: null, madeByBots: false }) }),
