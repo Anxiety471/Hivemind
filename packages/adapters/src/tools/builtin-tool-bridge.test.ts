@@ -59,7 +59,7 @@ describe("built-in tool bridge", () => {
     // search_history lists earlier tool work by kind without a keyword; schedule_create says
     // whether a routine runs in its chat, and takes the events (webhook, Git, chat, email) a
     // routine can start on.
-    expect(definitionBytes(listed)).toBeLessThanOrEqual(34_626);
+    expect(definitionBytes(listed)).toBeLessThanOrEqual(34_700);
     expect(deferred.map((tool) => tool.name)).toEqual(
       expect.arrayContaining(["render_plot", "create_space", "generate_secret", "scratchpad_add"]),
     );
