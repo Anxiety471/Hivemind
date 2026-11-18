@@ -2,6 +2,7 @@ package procedures
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/effects"
@@ -15,8 +16,12 @@ import (
 // membership lists the Space and organization procedures: who belongs where, and the
 // invitations that bring people in. Writes record their own audit event, as the TypeScript
 // handlers call recordAuditEvent themselves.
+//
+// organizations.members.list builds each invitation's link from WEB_ORIGIN; for an origin
+// JoinURL does not normalise (a non-ASCII host, credentials) it is not served, so it stays on
+// TypeScript rather than answering 500.
 func membership(database *db.DB, deployment shared.Deployment, audit *effects.Recorder) []local.Procedure {
-	return []local.Procedure{
+	procedures := []local.Procedure{
 		{
 			Name: "spaces.rename",
 			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
@@ -69,13 +74,6 @@ func membership(database *db.DB, deployment shared.Deployment, audit *effects.Re
 			},
 		},
 		{
-			Name:     "organizations.members.list",
-			ReadOnly: true,
-			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
-				return organizations.MembersList(ctx, database, deployment, actor, input)
-			},
-		},
-		{
 			Name:     "organizations.invitations.preview",
 			ReadOnly: true,
 			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
@@ -83,4 +81,16 @@ func membership(database *db.DB, deployment shared.Deployment, audit *effects.Re
 			},
 		},
 	}
+	if _, err := shared.JoinURL(deployment.WebOrigin, "/join/probe"); err != nil {
+		slog.Warn("organizations.members.list is not served: WEB_ORIGIN is not a plain http(s)://host[:port] origin",
+			"web_origin", deployment.WebOrigin)
+		return procedures
+	}
+	return append(procedures, local.Procedure{
+		Name:     "organizations.members.list",
+		ReadOnly: true,
+		Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+			return organizations.MembersList(ctx, database, deployment, actor, input)
+		},
+	})
 }

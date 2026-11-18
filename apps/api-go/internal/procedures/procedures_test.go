@@ -10,7 +10,7 @@ import (
 // dropped entry would silently fall back to "not implemented" once routed.
 func TestRegistryHasTheServedProceduresAndNotTrust(t *testing.T) {
 	seen := map[string]bool{}
-	for _, procedure := range All(nil, shared.Deployment{}) {
+	for _, procedure := range All(nil, shared.Deployment{WebOrigin: "https://app.example.test"}) {
 		if seen[procedure.Name] {
 			t.Errorf("duplicate procedure %s", procedure.Name)
 		}
@@ -83,6 +83,32 @@ func TestRegistryHasTheServedProceduresAndNotTrust(t *testing.T) {
 		"organizations.invitations.accept"} {
 		if seen[name] {
 			t.Errorf("%s must not be served locally", name)
+		}
+	}
+}
+
+// organizations.members.list builds invitation links from WEB_ORIGIN. For an origin the URL joiner does
+// not normalise the way WHATWG does, it is left to TypeScript instead of answering a different link.
+func TestMembersListIsServedOnlyForAnOriginItCanJoin(t *testing.T) {
+	names := func(deployment shared.Deployment) map[string]bool {
+		served := map[string]bool{}
+		for _, procedure := range All(nil, deployment) {
+			served[procedure.Name] = true
+		}
+		return served
+	}
+	for _, origin := range []string{"https://app.example.test", "http://127.0.0.1:5173", "https://Example.COM:443"} {
+		if !names(shared.Deployment{WebOrigin: origin})["organizations.members.list"] {
+			t.Errorf("not served for %q", origin)
+		}
+	}
+	for _, origin := range []string{"", "https://bücher.example", "https://user:pw@example.com", "ftp://example.com", "not a url"} {
+		served := names(shared.Deployment{WebOrigin: origin})
+		if served["organizations.members.list"] {
+			t.Errorf("served for %q", origin)
+		}
+		if !served["organizations.list"] || !served["spaces.rename"] {
+			t.Errorf("the other membership procedures vanished for %q", origin)
 		}
 	}
 }
