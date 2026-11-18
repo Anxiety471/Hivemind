@@ -120,6 +120,8 @@ export function selectBuiltinToolsForRun(options: {
   /** Built-in names this bot turned off. Unknown names are ignored. */
   disabledBuiltinTools?: readonly string[];
   fleetManagement?: boolean;
+  /** The bot belongs to a group other than the one this run is in. */
+  hasGroups?: boolean;
   /** A follow-up run whose source message the user wrote. */
   followUpFromUser?: boolean;
   /** The person who started this run has their desktop connected (see userComputerOwner). */
@@ -173,6 +175,7 @@ export function selectBuiltinToolsForRun(options: {
       (options.mediaImagesEnabled || tool.name !== "generate_image") &&
       (options.mediaVideoEnabled || tool.name !== "generate_video") &&
       (options.paidServicesEnabled || !PAID_SERVICE_TOOL_NAMES.has(tool.name)) &&
+      (options.hasGroups === true || tool.name !== "post_to_group") &&
       (options.ticketBoardEnabled ||
         (tool.name !== "board_tickets" && !tool.name.startsWith("ticket_"))) &&
       (!isBackgroundRunTrigger(options.trigger) ||

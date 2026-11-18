@@ -657,6 +657,18 @@ export async function selectRunTools(
     userComputerShell,
     voiceCall,
   } = parts.capabilities;
+  // Another group the bot belongs to, which post_to_group can post into.
+  const otherGroups = await deps.prisma.chatGroup.findMany({
+    where: {
+      spaceId: run.spaceId,
+      archivedAt: null,
+      thread: { isNot: null },
+      members: { some: { botId: bot.id } },
+      ...(conversationThread.groupId ? { id: { not: conversationThread.groupId } } : {}),
+    },
+    select: { id: true },
+    take: 1,
+  });
   const builtins = [
     ...selectBuiltinToolsForRun({
       ticketBoardEnabled,
@@ -684,6 +696,7 @@ export async function selectRunTools(
         ? [...(bot.disabledBuiltinTools ?? []), "handoff_to_bot"]
         : bot.disabledBuiltinTools,
       fleetManagement: bot.fleetManagement,
+      hasGroups: otherGroups.length > 0,
       followUpFromUser: sourceMessage?.role === "user",
       userComputer: userComputerShell,
       userComputerScreen,
