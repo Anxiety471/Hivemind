@@ -134,6 +134,12 @@ type aggregate struct {
 	costSum                                        *float64
 }
 
+// aggregateColumns is the aggregate Prisma issues for `_sum`/`_count` (routes/content.ts summary):
+// a single SQL SUM per figure, not a fold in JavaScript. Keep it SQL, and keep the column set the
+// same, so both sides run the identical operation. A float8 SUM is order-dependent: its value
+// follows the scan order of the heap, which is insertion order here because usage_records is
+// append-only. Two equivalent datasets inserted into different heap layouts can differ in the last
+// bit, which is why the contract harness truncates the table before seeding each side.
 const aggregateColumns = `count(*), count("inputTokens"), count("outputTokens"), count("totalTokens"), count("costUsd"),
 	sum("inputTokens")::bigint, sum("outputTokens")::bigint, sum("totalTokens")::bigint, sum("costUsd")`
 

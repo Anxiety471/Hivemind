@@ -2355,7 +2355,9 @@ function capabilityCases(): Case[] {
  * null figures, a subagent run, an empty run id, floats, sums beyond 32 bits, and rows that
  * belong to someone else or to another Space.
  */
-function seedUsage(config: { none?: boolean; many?: boolean; emptyRun?: boolean; badCost?: boolean; weirdCost?: number; badKind?: boolean } = {}) {
+function seedUsage(
+  config: { none?: boolean; many?: boolean; orderSensitive?: boolean; tiedTimes?: boolean; emptyRun?: boolean; badCost?: boolean; weirdCost?: number; badKind?: boolean } = {},
+) {
   return async (seeded: Seeded) => {
     const user = seeded.userId;
     const other = await seedOtherMember(seeded);
@@ -2374,10 +2376,15 @@ function seedUsage(config: { none?: boolean; many?: boolean; emptyRun?: boolean;
         },
       });
     if (config.many) {
+      // Mixed magnitudes and (optionally) one shared createdAt: the cost total is then sensitive to
+      // the order Postgres sums in, so the case only matches when both sides read the same heap
+      // layout. reset() truncates usage_records, as production never deletes a usage row.
       for (let index = 0; index < 120; index += 1) {
-        await row(`m${String(index).padStart(3, "0")}`, { inputTokens: index, outputTokens: 1, totalTokens: index + 1, costUsd: index / 1000, runId: `${user}-run${index % 7}` }, index);
+        const at = config.tiedTimes ? 0 : index;
+        const costUsd = config.orderSensitive ? (index % 2 === 0 ? 1e6 * (index + 1) : 1e-6 * (index + 1)) : index / 1000;
+        await row(`m${String(index).padStart(3, "0")}`, { inputTokens: index, outputTokens: 1, totalTokens: index + 1, costUsd, runId: `${user}-run${index % 7}` }, at);
       }
-      await row("mx", { inputTokens: 1 }, 500, two);
+      await row("mx", { inputTokens: 1 }, config.tiedTimes ? 0 : 500, two);
       return;
     }
     await row("u1", { inputTokens: 10, outputTokens: 5, totalTokens: 15, costUsd: 0.0000123, runId: `${user}-r1`, botId: null, callId: `${user}-call1`, costSource: "provider", pricingVersion: "v1", usageSource: "api", operationId: "op1", agentId: "agent" }, 1);
@@ -2421,7 +2428,11 @@ function usageCases(): Case[] {
     list("nan-cost-fails-the-output-check", { seed: seedUsage({ weirdCost: Number.NaN }) }),
     list("unknown-operation-kind-fails-the-output-check", { seed: seedUsage({ badKind: true }) }),
     list("none", { seed: seedUsage({ none: true }) }),
+    // No case ties every createdAt here: with more rows than the limit, which equal-keyed rows
+    // survive is up to the plan, so the returned set is not a contract. summary has one, where the
+    // total over all rows is well defined once both sides read the same heap.
     list("limit-100-newest-first", { seed: seedUsage({ many: true }) }),
+    list("limit-100-order-sensitive", { seed: seedUsage({ many: true, orderSensitive: true }) }),
     list("space-two-header", { space: 1 }),
     list("junk-input-is-ignored", { input: { anything: 1 } }),
     list("anonymous", { anonymous: true }),
@@ -2434,6 +2445,8 @@ function usageCases(): Case[] {
     summary("unknown-operation-kind-is-not-checked", { seed: seedUsage({ badKind: true }) }),
     summary("none", { seed: seedUsage({ none: true }) }),
     summary("many-rows-no-limit", { seed: seedUsage({ many: true }) }),
+    summary("many-rows-order-sensitive", { seed: seedUsage({ many: true, orderSensitive: true }) }),
+    summary("many-rows-order-sensitive-tied-times", { seed: seedUsage({ many: true, orderSensitive: true, tiedTimes: true }) }),
     summary("space-two-header", { space: 1 }),
     summary("junk-input-is-ignored", { input: { anything: 1 } }),
     summary("anonymous", { anonymous: true }),
@@ -2690,13 +2703,16 @@ async function reset(seeded: ReturnType<typeof ids>) {
   await system.userModelCredential.deleteMany({ where: { userId: own } });
   await system.userVoiceCredential.deleteMany({ where: { userId: own } });
   await system.vaultCredential.deleteMany({ where: { userId: own } });
-  // usage_records is append-only for the runtime role, and each row leaves an append-only billing audit
-  // row with a unique source: clear both as the table owner (a superuser) with triggers off.
+  // usage_records is append-only for the runtime role, and each row leaves an append-only billing
+  // audit row with a unique source. Both are cleared as the table owner (a superuser), triggers off.
+  // Truncate, not delete: usage_records never loses a row in production, so a fresh heap is the
+  // faithful state, and it is also what makes the two sides' scan order identical. A sum over
+  // float8 depends on that order (see usg-summary-many-rows-order-sensitive).
   if (owner) {
     await owner.query("BEGIN");
     await owner.query("SET LOCAL session_replication_role = replica");
     await owner.query('DELETE FROM billing_audit_events WHERE "spaceId" = ANY($1)', [seeded.spaces]);
-    await owner.query('DELETE FROM usage_records WHERE "spaceId" = ANY($1)', [seeded.spaces]);
+    await owner.query("TRUNCATE usage_records");
     await owner.query("COMMIT");
   }
   await system.botMcpServer.deleteMany({ where: { spaceId: { in: seeded.spaces } } });
