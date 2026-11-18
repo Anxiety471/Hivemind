@@ -15,6 +15,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/effects"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/spacesettings"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/validate"
 )
@@ -60,16 +61,6 @@ func scanItem(row pgx.Row) (Item, error) {
 }
 
 func now() time.Time { return time.Now().UTC().Truncate(time.Millisecond) }
-
-// requireBot is repos.getBot: a bot of the Space that is not archived.
-func requireBot(ctx context.Context, tx pgx.Tx, actor db.Actor, botID string) error {
-	var found string
-	err := tx.QueryRow(ctx, `SELECT id FROM bots WHERE id = $1 AND "spaceId" = $2 AND "archivedAt" IS NULL`, botID, actor.SpaceID).Scan(&found)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return errIsolation
-	}
-	return err
-}
 
 func id(object *validate.Object, key string) (string, []validate.Issue) {
 	return validate.String(validate.Path{key}, object.Field(key), validate.StringRules{Min: 1})
@@ -138,7 +129,7 @@ func List(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input) 
 	}
 	items := []Item{}
 	err := database.Tenant(ctx, actor, func(tx pgx.Tx) error {
-		if err := requireBot(ctx, tx, actor, input.BotID); err != nil {
+		if err := shared.RequireBot(ctx, tx, actor, input.BotID); err != nil {
 			return err
 		}
 		query := `SELECT ` + columns + ` FROM scratchpad_items WHERE "spaceId" = $1 AND "botId" = $2`
@@ -221,7 +212,7 @@ func Create(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input
 	}
 	var item Item
 	err := database.Tenant(ctx, actor, func(tx pgx.Tx) error {
-		if err := requireBot(ctx, tx, actor, input.BotID); err != nil {
+		if err := shared.RequireBot(ctx, tx, actor, input.BotID); err != nil {
 			return err
 		}
 		var err error

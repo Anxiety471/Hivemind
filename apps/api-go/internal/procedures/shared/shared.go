@@ -2,8 +2,11 @@
 package shared
 
 import (
+	"context"
 	"errors"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
@@ -43,4 +46,18 @@ func OutputInvalid() *orpc.Error {
 type Deployment struct {
 	WebOrigin     string
 	EmailDelivery bool
+}
+
+// RequireBot is repos.getBot (packages/db/src/repos.ts:415): a bot of the actor's Space that
+// is not archived, or the isolation error. TypeScript reads the whole bot, thread and computer
+// rows to answer; the thread's encrypted compaction summary is decrypted on the way and the
+// value discarded, so the only observable difference is when that ciphertext is unreadable
+// (hook-audit.md R1).
+func RequireBot(ctx context.Context, tx pgx.Tx, actor db.Actor, botID string) error {
+	var found string
+	err := tx.QueryRow(ctx, `SELECT id FROM bots WHERE id = $1 AND "spaceId" = $2 AND "archivedAt" IS NULL`, botID, actor.SpaceID).Scan(&found)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return NotFound
+	}
+	return err
 }
