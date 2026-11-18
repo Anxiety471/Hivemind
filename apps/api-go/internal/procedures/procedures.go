@@ -8,11 +8,14 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/local"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/approvalrules"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/availability"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/botsections"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/externalconversations"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/messaging"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/pages"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/scratchpad"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/spacesettings"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/spendinglimit"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/threads"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/trustedlinksites"
@@ -199,6 +202,57 @@ func All(database *db.DB) []local.Procedure {
 			Name: "externalConversations.updatePolicy",
 			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
 				return externalconversations.UpdatePolicy(ctx, database, actor, input)
+			},
+		},
+		{
+			Name:     "scratchpad.list",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return scratchpad.List(ctx, database, actor, input)
+			},
+		},
+		{
+			Name: "scratchpad.create",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return scratchpad.Create(ctx, database, actor, input)
+			},
+		},
+		{
+			Name: "scratchpad.update",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return scratchpad.Update(ctx, database, actor, input)
+			},
+		},
+		{
+			Name: "scratchpad.remove",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return scratchpad.Remove(ctx, database, actor, input)
+			},
+		},
+		{
+			Name:     "approvalRules.list",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return approvalrules.List(ctx, database, actor, input)
+			},
+		},
+		{
+			Name: "approvalRules.set",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return approvalrules.Set(ctx, database, actor, input)
+			},
+		},
+		{
+			Name:     "spaceSettings.overrides",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, _ orpc.Input) (any, *orpc.Error) {
+				return spacesettings.Overrides(ctx, database, actor)
+			},
+		},
+		{
+			Name: "spaceSettings.setOverride",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return spacesettings.SetOverride(ctx, database, actor, input)
 			},
 		},
 	}

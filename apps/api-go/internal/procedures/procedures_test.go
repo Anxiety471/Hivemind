@@ -21,6 +21,8 @@ func TestRegistryHasTheServedProceduresAndNotTrust(t *testing.T) {
 		"spendingLimit.payments", "spendingLimit.get", "botSections.list", "pages.list",
 		"spendingLimit.set",
 		"threads.head", "threads.markRead", "threads.markUnread", "threads.snooze", "externalConversations.updatePolicy",
+		"scratchpad.list", "scratchpad.create", "scratchpad.update", "scratchpad.remove",
+		"approvalRules.list", "approvalRules.set", "spaceSettings.overrides", "spaceSettings.setOverride",
 		"messaging.link.start", "messaging.identities.setBot", "messaging.identities.unlink", "messaging.channels.list",
 		"messaging.channels.respond", "messaging.channels.leave", "messaging.connections.list", "messaging.connections.revoke", "botSections.create", "botSections.update", "botSections.remove",
 	} {
@@ -31,6 +33,12 @@ func TestRegistryHasTheServedProceduresAndNotTrust(t *testing.T) {
 	// trust needs WHATWG URL parsing and the tldts suffix list; it stays on TypeScript.
 	if seen["trustedLinkSites.trust"] {
 		t.Error("trustedLinkSites.trust must not be served locally")
+	}
+	// approvalRules.remove is audited with a caller-chosen id the redaction gate cannot prove safe.
+	for _, name := range []string{"approvalRules.remove", "autoReview.get", "autoReview.set"} {
+		if seen[name] {
+			t.Errorf("%s must not be served locally", name)
+		}
 	}
 	// The rest of threads reads or writes encrypted messages and events, or starts runs.
 	for _, name := range []string{"threads.get", "threads.messages", "threads.send", "threads.followUp", "threads.stop", "threads.clear", "threads.subscribe"} {
