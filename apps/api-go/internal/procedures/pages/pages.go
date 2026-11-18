@@ -1,10 +1,9 @@
-// Package pages ports pages.list. The other pages procedures read and write
-// share secrets, versions and files, and stay on the TypeScript API.
+// Package pages ports pages.list, rename and pin. pages.get, setVisibility and remove read
+// or write the sealed share token in the secret store, and stay on the TypeScript API.
 package pages
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -80,16 +79,11 @@ func List(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input) 
 	if input.HasQuery {
 		conditions = append(conditions, `title ILIKE '%' || `+arg(escapeSearchWildcards(input.Query))+` || '%'`)
 	}
-	query := fmt.Sprintf(`SELECT id, title, "botId", "groupId", visibility, "currentVersion", "pinnedAt", "createdAt", "updatedAt"
+	query := fmt.Sprintf(`SELECT `+summaryColumns+`
 		FROM pages WHERE %s
 		ORDER BY "pinnedAt" DESC NULLS LAST, "updatedAt" DESC, id DESC
 		LIMIT %s`, strings.Join(conditions, " AND "), arg(limit+1))
 
-	type row struct {
-		summary   Summary
-		pinnedAt  *time.Time
-		updatedAt time.Time
-	}
 	var rows []row
 	err := database.Tenant(ctx, actor, func(tx pgx.Tx) error {
 		result, err := tx.Query(ctx, query, args...)
@@ -98,36 +92,16 @@ func List(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input) 
 		}
 		defer result.Close()
 		for result.Next() {
-			var item row
-			var createdAt time.Time
-			if err := result.Scan(&item.summary.ID, &item.summary.Title, &item.summary.BotID, &item.summary.GroupID,
-				&item.summary.Visibility, &item.summary.CurrentVersion, &item.pinnedAt, &createdAt, &item.updatedAt); err != nil {
+			item, err := scanRow(result)
+			if err != nil {
 				return err
 			}
-			// The router parses the output against PageSummarySchema: a title past its
-			// bound, or a version below one, fails the call.
-			if utf8.RuneCountInString(item.summary.Title) > titleMaxLength || item.summary.CurrentVersion < 1 {
-				return shared.OutputInvalid()
-			}
-			if item.summary.Visibility != "link" {
-				item.summary.Visibility = "private"
-			}
-			item.summary.Pinned = item.pinnedAt != nil
-			item.summary.CreatedAt = createdAt.UTC().Format(isoMillis)
-			item.summary.UpdatedAt = item.updatedAt.UTC().Format(isoMillis)
 			rows = append(rows, item)
 		}
 		return result.Err()
 	})
 	if err != nil {
-		var failure *orpc.Error
-		if errors.As(err, &failure) {
-			return nil, failure
-		}
-		if db.IsUnavailable(err) {
-			return nil, orpc.Unavailable()
-		}
-		return nil, orpc.Internal()
+		return nil, shared.Failure(err)
 	}
 
 	output := ListOutput{Items: []Summary{}}
@@ -136,6 +110,11 @@ func List(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input) 
 		page = page[:limit]
 	}
 	for _, item := range page {
+		// The router parses the output, which holds the page and not the extra row read to
+		// learn whether another page follows.
+		if item.invalid() {
+			return nil, shared.OutputInvalid()
+		}
 		output.Items = append(output.Items, item.summary)
 	}
 	if len(rows) > limit && len(page) > 0 {
@@ -144,6 +123,44 @@ func List(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input) 
 		output.NextCursor = &next
 	}
 	return output, nil
+}
+
+// summaryColumns are the columns of a page that PageSummarySchema is built from.
+const summaryColumns = `id, title, "botId", "groupId", visibility, "currentVersion", "pinnedAt", "createdAt", "updatedAt"`
+
+// row is a page as stored, with the times its list cursor needs.
+type row struct {
+	summary   Summary
+	pinnedAt  *time.Time
+	updatedAt time.Time
+	createdAt time.Time
+}
+
+// scanRow reads summaryColumns as pageSummary does: a visibility other than link reads as
+// private. The output checks are left to invalid, after the work is committed.
+func scanRow(source pgx.Row) (row, error) {
+	var item row
+	if err := source.Scan(&item.summary.ID, &item.summary.Title, &item.summary.BotID, &item.summary.GroupID,
+		&item.summary.Visibility, &item.summary.CurrentVersion, &item.pinnedAt, &item.createdAt, &item.updatedAt); err != nil {
+		return row{}, err
+	}
+	if item.summary.Visibility != "link" {
+		item.summary.Visibility = "private"
+	}
+	item.summary.Pinned = item.pinnedAt != nil
+	item.summary.CreatedAt = item.createdAt.UTC().Format(isoMillis)
+	item.summary.UpdatedAt = item.updatedAt.UTC().Format(isoMillis)
+	return item, nil
+}
+
+// invalid is whether the router would refuse this row against PageSummarySchema (a strict
+// object): non-empty ids, a title within bounds, a positive version, four-digit-year times.
+func (r row) invalid() bool {
+	empty := func(id *string) bool { return id != nil && *id == "" }
+	fourDigits := func(at time.Time) bool { return at.UTC().Year() >= 0 && at.UTC().Year() <= 9999 }
+	return r.summary.ID == "" || empty(r.summary.BotID) || empty(r.summary.GroupID) ||
+		utf8.RuneCountInString(r.summary.Title) > titleMaxLength || r.summary.CurrentVersion < 1 ||
+		!fourDigits(r.createdAt) || !fourDigits(r.updatedAt)
 }
 
 // afterCursor selects the rows after the cursor in list order.
