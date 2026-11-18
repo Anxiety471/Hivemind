@@ -122,6 +122,14 @@ await writeFile(
       "threads.markUnread": { mode: "go" },
       "threads.snooze": { mode: "go" },
       "externalConversations.updatePolicy": { mode: "go" },
+      "scratchpad.list": { mode: "go", readOnly: true },
+      "scratchpad.create": { mode: "go" },
+      "scratchpad.update": { mode: "go" },
+      "scratchpad.remove": { mode: "go" },
+      "approvalRules.list": { mode: "go", readOnly: true },
+      "approvalRules.set": { mode: "go" },
+      "spaceSettings.overrides": { mode: "go", readOnly: true },
+      "spaceSettings.setOverride": { mode: "go" },
     },
   }),
 );
@@ -189,6 +197,16 @@ const AFTER = [
   { procedure: "bots.list", input: {} },
   { procedure: "groups.list", input: {} },
   { procedure: "spaces.list", input: {} },
+];
+
+const SCRATCH_AFTER = [{ procedure: "scratchpad.list", input: { botId: "__s-tb1__", includeDone: true } }];
+
+/** What the settings screens reload after a change. */
+const SETTINGS_AFTER = [
+  { procedure: "spaceSettings.overrides", input: undefined },
+  { procedure: "approvalRules.list", input: undefined },
+  { procedure: "approvalRules.list", input: { scope: "account" } },
+  { procedure: "approvalRules.list", input: { scope: "space" } },
 ];
 
 const cases: Case[] = [
@@ -276,6 +294,9 @@ const cases: Case[] = [
   ...messagingCases(),
   ...threadCases(),
   ...policyCases(),
+  ...scratchpadCases(),
+  ...approvalRuleCases(),
+  ...spaceSettingCases(),
 ];
 
 const SITES = ["zeta.example", "alpha.example", "Beta.example", "_under.example", "10.0.0.1"];
@@ -1303,7 +1324,7 @@ async function run(
 async function followUps(testCase: Case, seeded: Seeded) {
   const results = [];
   for (const step of testCase.after ?? []) {
-    results.push(await tsCall(step.procedure, step.input, called(seeded, testCase)));
+    results.push(await tsCall(step.procedure, withIds(step.input, seeded), called(seeded, testCase)));
   }
   return results;
 }
@@ -1661,6 +1682,425 @@ function policyCases(): Case[] {
   ];
 }
 
+const SETTINGS_BASE = Date.UTC(2020, 0, 1);
+const HOUR = 3_600_000;
+
+/** A second member of the organization, who shares Space one with the case's user. */
+async function seedOtherMember(seeded: Seeded) {
+  const other = `${seeded.userId}-other`;
+  await system.user.create({
+    data: { id: other, name: "Other", email: `${other}@example.test`, emailVerified: true },
+  });
+  await system.member.create({
+    data: { id: `${seeded.orgId}-mo`, organizationId: seeded.orgId, userId: other, role: "member", createdAt: new Date() },
+  });
+  // Creating a member also adds them to the organization's default Space (space one).
+  return other;
+}
+
+/** Bots tb1/tb2/tbarch in space one and tbx in space two, with the items notes on them. */
+function seedScratchpad() {
+  return async (seeded: Seeded) => {
+    const user = seeded.userId;
+    const other = await seedOtherMember(seeded);
+    const bot = (id: string, spaceId: string, extra: Record<string, unknown> = {}) =>
+      system.bot.create({ data: { id: `${user}-${id}`, spaceId, userId: user, name: id, color: "blue", ...extra } });
+    await bot("tb1", seeded.spaces[0]);
+    await bot("tb2", seeded.spaces[0]);
+    await bot("tbarch", seeded.spaces[0], { archivedAt: new Date(SETTINGS_BASE) });
+    await bot("tbx", seeded.spaces[1]);
+    const item = (id: string, botId: string, spaceId: string, title: string, status: string, updated: number, created: number, userId = user) =>
+      system.scratchpadItem.create({
+        data: {
+          id: `${user}-${id}`,
+          spaceId,
+          botId: `${user}-${botId}`,
+          userId,
+          title,
+          status,
+          notes: `notes of ${title}`,
+          createdAt: new Date(SETTINGS_BASE + created * HOUR),
+          updatedAt: new Date(SETTINGS_BASE + updated * HOUR),
+        },
+      });
+    await item("i1", "tb1", seeded.spaces[0], "Alpha", "open", 1, 1);
+    await item("i2", "tb1", seeded.spaces[0], "Beta", "parked", 2, 2);
+    await item("i3", "tb1", seeded.spaces[0], "Gamma", "done", 3, 3);
+    await item("i4", "tb1", seeded.spaces[0], "Delta", "weird", 4, 4);
+    await item("i5", "tb1", seeded.spaces[0], "Tie", "open", 1, 5);
+    await item("i6", "tb1", seeded.spaces[0], "Someone else's", "open", 6, 6, other);
+    await item("i7", "tb2", seeded.spaces[0], "Other bot", "open", 1, 1);
+    await item("i8", "tbarch", seeded.spaces[0], "Archived bot", "open", 1, 1);
+    await item("i9", "tbx", seeded.spaces[1], "Space two", "open", 1, 1);
+  };
+}
+
+function scratchpadCases(): Case[] {
+  const mk = (procedure: string) => (name: string, input: unknown, extra: Partial<Case> = {}): Case => ({
+    name: `scr-${procedure}-${name}`,
+    procedure: `scratchpad.${procedure}`,
+    input,
+    seed: seedScratchpad(),
+    after: procedure === "list" ? undefined : SCRATCH_AFTER,
+    ...extra,
+  });
+  const list = mk("list");
+  const create = mk("create");
+  const update = mk("update");
+  const remove = mk("remove");
+  const long = (count: number, character = "t") => character.repeat(count);
+  return [
+    list("open-and-parked-by-default", { botId: "__s-tb1__" }),
+    list("include-done", { botId: "__s-tb1__", includeDone: true }),
+    list("include-done-false", { botId: "__s-tb1__", includeDone: false }),
+    list("status-open", { botId: "__s-tb1__", status: "open" }),
+    list("status-parked", { botId: "__s-tb1__", status: "parked" }),
+    list("status-done", { botId: "__s-tb1__", status: "done" }),
+    list("status-wins-over-include-done", { botId: "__s-tb1__", status: "open", includeDone: true }),
+    list("bot-with-an-item", { botId: "__s-tb2__" }),
+    list("archived-bot", { botId: "__s-tbarch__" }),
+    list("unknown-bot", { botId: "nope" }),
+    list("other-space-bot", { botId: "__s-tbx__" }),
+    list("other-space-bot-own-header", { botId: "__s-tbx__" }, { space: 1 }),
+    list("extra-keys-ignored", { botId: "__s-tb1__", more: true }),
+    list("status-unknown", { botId: "__s-tb1__", status: "weird" }),
+    list("status-null", { botId: "__s-tb1__", status: null }),
+    list("status-number", { botId: "__s-tb1__", status: 1 }),
+    list("include-done-string", { botId: "__s-tb1__", includeDone: "yes" }),
+    list("include-done-null", { botId: "__s-tb1__", includeDone: null }),
+    list("bot-id-missing", {}),
+    list("bot-id-empty", { botId: "" }),
+    list("bot-id-number", { botId: 5 }),
+    list("everything-wrong", { botId: 5, status: "x", includeDone: 1 }),
+    list("no-input", undefined),
+    list("null-input", null),
+    list("array-input", []),
+    list("anonymous", { botId: "__s-tb1__" }, { anonymous: true }),
+
+    create("client-shape", { botId: "__s-tb1__", title: "Call the bank", status: "open", notes: "" }),
+    create("defaults", { botId: "__s-tb1__", title: "Only a title" }),
+    create("trimmed", { botId: "__s-tb1__", title: "  Padded\t", notes: "\n  padded notes \u00a0\ufeff" }),
+    create("whitespace-only-title-stores-empty", { botId: "__s-tb1__", title: "   " }),
+    create("status-parked", { botId: "__s-tb1__", title: "Parked", status: "parked" }),
+    create("status-done", { botId: "__s-tb1__", title: "Done", status: "done", notes: "n" }),
+    create("title-200", { botId: "__s-tb1__", title: long(200) }),
+    create("title-201", { botId: "__s-tb1__", title: long(201) }),
+    create("title-astral-200", { botId: "__s-tb1__", title: long(200, "😀") }),
+    create("title-astral-201", { botId: "__s-tb1__", title: long(201, "😀") }),
+    create("title-padded-201-trims-to-200", { botId: "__s-tb1__", title: ` ${long(199)} ` }),
+    create("notes-4000", { botId: "__s-tb1__", title: "N", notes: long(4000, "n") }),
+    create("notes-4001", { botId: "__s-tb1__", title: "N", notes: long(4001, "n") }),
+    create("notes-astral-4000", { botId: "__s-tb1__", title: "N", notes: long(4000, "😀") }),
+    create("notes-astral-4001", { botId: "__s-tb1__", title: "N", notes: long(4001, "😀") }),
+    create("unicode-and-separators", { botId: "__s-tb1__", title: "Ключ 日本語 \u2028 <b> & \"q\" \\ /", notes: "line1\nline2\r\n\u2029 ✨" }),
+    create("nul-in-title", { botId: "__s-tb1__", title: "a\u0000b" }),
+    create("nul-in-notes", { botId: "__s-tb1__", title: "ok", notes: "a\u0000b" }),
+    create("lone-surrogate-escape", JSON.parse(`{"botId":"__s-tb1__","title":"a\\ud800b"}`)),
+    create("status-unknown", { botId: "__s-tb1__", title: "T", status: "weird" }),
+    create("status-null", { botId: "__s-tb1__", title: "T", status: null }),
+    create("notes-null", { botId: "__s-tb1__", title: "T", notes: null }),
+    create("notes-number", { botId: "__s-tb1__", title: "T", notes: 5 }),
+    create("title-empty", { botId: "__s-tb1__", title: "" }),
+    create("title-null", { botId: "__s-tb1__", title: null }),
+    create("title-missing", { botId: "__s-tb1__" }),
+    create("title-array", { botId: "__s-tb1__", title: [] }),
+    create("bot-id-missing", { title: "T" }),
+    create("bot-id-empty", { botId: "", title: "T" }),
+    create("everything-wrong", { botId: 5, title: "", status: "x", notes: 5 }),
+    create("archived-bot", { botId: "__s-tbarch__", title: "T" }),
+    create("unknown-bot", { botId: "nope", title: "T" }),
+    create("other-space-bot", { botId: "__s-tbx__", title: "T" }),
+    create("other-space-bot-own-header", { botId: "__s-tbx__", title: "T" }, { space: 1 }),
+    create("invalid-input-before-missing-bot", { botId: "nope", title: "" }),
+    create("extra-keys-ignored", { botId: "__s-tb1__", title: "T", id: "x", userId: "y" }),
+    create("no-input", undefined),
+    create("null-input", null),
+    create("array-input", []),
+    create("anonymous", { botId: "__s-tb1__", title: "T" }, { anonymous: true }),
+
+    update("title-only", { itemId: "__s-i1__", title: "Renamed" }),
+    update("status-only", { itemId: "__s-i1__", status: "done" }),
+    update("notes-only", { itemId: "__s-i1__", notes: "new notes" }),
+    update("all-fields", { itemId: "__s-i2__", title: "T2", status: "open", notes: "N2" }),
+    update("no-fields-writes-nothing", { itemId: "__s-i1__" }),
+    update("trimmed", { itemId: "__s-i1__", title: "  x  ", notes: "  y  " }),
+    update("whitespace-only-title-stores-empty", { itemId: "__s-i1__", title: "   " }),
+    update("empty-notes-clear", { itemId: "__s-i1__", notes: "" }),
+    update("odd-stored-status-reads-open", { itemId: "__s-i4__", title: "Kept weird" }),
+    update("done-item-reopened", { itemId: "__s-i3__", status: "open" }),
+    update("someone-elses-item-in-my-space", { itemId: "__s-i6__", title: "Edited" }),
+    update("title-200", { itemId: "__s-i1__", title: long(200) }),
+    update("title-201", { itemId: "__s-i1__", title: long(201) }),
+    update("notes-4000", { itemId: "__s-i1__", notes: long(4000, "n") }),
+    update("notes-4001", { itemId: "__s-i1__", notes: long(4001, "n") }),
+    update("nul-in-title", { itemId: "__s-i1__", title: "a\u0000b" }),
+    update("title-empty", { itemId: "__s-i1__", title: "" }),
+    update("title-null", { itemId: "__s-i1__", title: null }),
+    update("status-null", { itemId: "__s-i1__", status: null }),
+    update("status-unknown", { itemId: "__s-i1__", status: "weird" }),
+    update("notes-null", { itemId: "__s-i1__", notes: null }),
+    update("notes-number", { itemId: "__s-i1__", notes: 5 }),
+    update("everything-wrong", { itemId: "", title: "", status: "x", notes: 5 }),
+    update("item-id-missing", { title: "T" }),
+    update("item-id-empty", { itemId: "" }),
+    update("unknown-item", { itemId: "nope", title: "T" }),
+    update("invalid-input-before-missing-item", { itemId: "nope", title: "" }),
+    update("other-space-item", { itemId: "__s-i9__", title: "T" }),
+    update("other-space-item-own-header", { itemId: "__s-i9__", title: "T" }, { space: 1 }),
+    update("archived-bot-item", { itemId: "__s-i8__", title: "T" }),
+    update("extra-keys-ignored", { itemId: "__s-i1__", title: "T", botId: "other" }),
+    update("no-input", undefined),
+    update("array-input", []),
+    update("anonymous", { itemId: "__s-i1__", title: "T" }, { anonymous: true }),
+
+    remove("item", { itemId: "__s-i1__" }),
+    remove("done-item", { itemId: "__s-i3__" }),
+    remove("someone-elses-item-in-my-space", { itemId: "__s-i6__" }),
+    remove("archived-bot-item", { itemId: "__s-i8__" }),
+    remove("unknown", { itemId: "nope" }),
+    remove("other-space-item", { itemId: "__s-i9__" }),
+    remove("other-space-item-own-header", { itemId: "__s-i9__" }, { space: 1 }),
+    remove("item-id-missing", {}),
+    remove("item-id-empty", { itemId: "" }),
+    remove("item-id-number", { itemId: 5 }),
+    remove("extra-keys-ignored", { itemId: "__s-i1__", botId: "x" }),
+    remove("no-input", undefined),
+    remove("null-input", null),
+    remove("anonymous", { itemId: "__s-i1__" }, { anonymous: true }),
+  ];
+}
+
+type SettingsSeed = {
+  /** Settings Space one overrides, each with a Space copy that differs from the account's. */
+  overrides?: string[];
+  /** A Space copy with no override row, as a half-finished earlier run could leave. */
+  strayCopy?: boolean;
+  /** The account has nothing saved to copy. */
+  bare?: boolean;
+};
+
+/**
+ * The member's account settings (model roles, voice, confirmations, vault) and, when asked, Space overrides with
+ * their own copies; a second member's rows in the same Space must never move.
+ */
+function seedSettings(config: SettingsSeed = {}) {
+  return async (seeded: Seeded) => {
+    const user = seeded.userId;
+    const other = await seedOtherMember(seeded);
+    const [one, two] = seeded.spaces;
+    const at = (offset: number) => new Date(SETTINGS_BASE + offset * 1000);
+    const rule = (id: string, effect: string, matchKind: string, matchValue: string, offset: number) =>
+      system.userActionApprovalRule.create({ data: { id: `${user}-${id}`, userId: user, effect, matchKind, matchValue, createdAt: at(offset) } });
+    const spaceRule = (id: string, spaceId: string, effect: string, matchKind: string, matchValue: string, offset: number, userId = user) =>
+      system.actionApprovalRule.create({ data: { id: `${user}-${id}`, spaceId, createdByUserId: userId, effect, matchKind, matchValue, createdAt: at(offset) } });
+    if (!config.bare) {
+      await rule("ra1", "always_allow", "tool", "bash", 1);
+      await rule("ra2", "deny", "site", "Example.com", 2);
+      await rule("ra3", "require_approval", "connector", "github", 3);
+      await rule("ra4", "deny", "category", "web", 4);
+      await rule("ra5", "always_allow", "tool", "Under_score", 5);
+      await rule("ra6", "always_allow", "tool", "i\u0307x", 6);
+      await rule("ra7", "always_allow", "tool", "ΑΣ", 7);
+      await rule("ra8", "always_allow", "tool", "MiXed", 8);
+      await system.userActionAutoReviewPreference.create({ data: { userId: user, enabled: true, skipApprovals: true } });
+      for (const id of ["mc1", "vc1", "vc2"]) {
+        await system.secret.create({ data: { id: `${user}-sec-${id}`, userId: user, spaceId: null, kind: id.startsWith("vc") ? "voice" : "model", ciphertext: "sealed" } });
+      }
+      await system.userModelCredential.create({
+        data: { id: `${user}-mc1`, userId: user, provider: "openai", label: "Key", secretId: `${user}-sec-mc1` },
+      });
+      const choice = (role: string, position: number, provider: string, modelId: string, thinkingLevel: string | null, credentialId: string | null) =>
+        system.userModelRoleChoice.create({ data: { userId: user, role, position, provider, modelId, thinkingLevel, credentialId } });
+      await choice("chat", 0, "openai", "gpt-a", "high", `${user}-mc1`);
+      await choice("chat", 1, "anthropic", "claude-b", null, null);
+      await choice("summary", 0, "openai", "gpt-c", null, `${user}-mc1`);
+      for (const id of ["vc1", "vc2"]) {
+        await system.userVoiceCredential.create({ data: { id: `${user}-${id}`, userId: user, provider: "fish", secretId: `${user}-sec-${id}` } });
+      }
+      await system.userVoicePreference.create({
+        data: { userId: user, credentialId: `${user}-vc1`, voiceId: "voice-one", speechModel: "s1", isDefault: true },
+      });
+      await system.userVoicePreference.create({
+        data: { userId: user, credentialId: `${user}-vc2`, voiceId: "voice-two", speechModel: null, isDefault: false },
+      });
+    }
+    const vault = (id: string, spaceId: string | null, userId = user) =>
+      system.vaultCredential.create({
+        data: { id: `${user}-${id}`, userId, spaceId, name: id, origin: "https://example.test", auth: {}, ciphertext: "sealed" },
+      });
+    await vault("v1", one);
+    await vault("v2", two);
+    await vault("v3", null);
+    await vault("vo", one, other);
+    await spaceRule("rs1", one, "deny", "tool", "bash", 11);
+    await spaceRule("rs2", one, "always_allow", "site", "space.example", 12);
+    await spaceRule("rs3", one, "deny", "tool", "SPACE", 13);
+    await spaceRule("rt1", two, "deny", "tool", "bash", 14);
+    await system.userActionApprovalRule.create({ data: { id: `${user}-rao`, userId: other, effect: "deny", matchKind: "tool", matchValue: "bash", createdAt: at(15) } });
+    await spaceRule("rso", one, "deny", "tool", "bash", 16, other);
+    await system.spaceSettingOverride.create({ data: { spaceId: one, userId: other, setting: "confirmations" } });
+    for (const setting of config.overrides ?? []) {
+      await system.spaceSettingOverride.create({ data: { spaceId: one, userId: user, setting } });
+    }
+    const copies = new Set(config.overrides ?? []);
+    if (config.strayCopy) for (const setting of ["models", "voice", "confirmations"]) copies.add(setting);
+    if (copies.has("models")) {
+      await system.spaceModelRoleChoice.create({
+        data: { spaceId: one, userId: user, role: "chat", position: 0, provider: "stale", modelId: "stale-model", thinkingLevel: null, credentialId: null },
+      });
+    }
+    if (copies.has("voice") && !config.bare) {
+      await system.spaceVoicePreference.create({
+        data: { id: `${user}-svp`, spaceId: one, userId: user, credentialId: `${user}-vc1`, voiceId: "stale-voice", isDefault: true },
+      });
+    }
+    if (copies.has("confirmations")) {
+      await system.actionAutoReviewPreference.create({ data: { id: `${user}-sar`, spaceId: one, userId: user, enabled: false, skipApprovals: false } });
+    }
+    await system.actionAutoReviewPreference.create({ data: { id: `${user}-saro`, spaceId: one, userId: other, enabled: true, skipApprovals: true } });
+    await system.actionAutoReviewPreference.create({ data: { id: `${user}-sar2`, spaceId: two, userId: user, enabled: true, skipApprovals: false } });
+  };
+}
+
+function approvalRuleCases(): Case[] {
+  const mk = (procedure: string, seed = seedSettings()) => (name: string, input: unknown, extra: Partial<Case> = {}): Case => ({
+    name: `apr-${procedure}-${name}`,
+    procedure: `approvalRules.${procedure}`,
+    input,
+    seed,
+    after: procedure === "set" ? SETTINGS_AFTER : undefined,
+    ...extra,
+  });
+  const list = mk("list");
+  const set = mk("set");
+  const overridden = { seed: seedSettings({ overrides: ["confirmations"] }) };
+  const rule = (matchValue: string, effect: string | null = "deny", matchKind = "tool", more: Record<string, unknown> = {}) => ({ effect, matchKind, matchValue, ...more });
+  return [
+    list("account-copy-by-default", undefined),
+    list("empty-object", {}),
+    list("space-copy-when-overridden", undefined, overridden),
+    list("scope-account-while-overridden", { scope: "account" }, overridden),
+    list("scope-space-while-overridden", { scope: "space" }, overridden),
+    list("scope-space-without-override", { scope: "space" }),
+    list("scope-account", { scope: "account" }),
+    list("other-settings-override-does-not-switch", undefined, { seed: seedSettings({ overrides: ["models", "voice", "credentials"] }) }),
+    list("space-two-header", undefined, { space: 1 }),
+    list("nothing-saved", undefined, { seed: seedSettings({ bare: true }) }),
+    list("extra-keys-ignored", { scope: "space", more: 1 }),
+    list("scope-unknown", { scope: "team" }),
+    list("scope-null", { scope: null }),
+    list("scope-number", { scope: 1 }),
+    list("null-input", null),
+    list("array-input", []),
+    list("string-input", "account"),
+    list("anonymous", undefined, { anonymous: true }),
+
+    set("client-shape-new-rule", rule("git", "always_allow")),
+    set("new-rule-each-kind-connector", rule("slack", "require_approval", "connector")),
+    set("new-rule-each-kind-site", rule("new.example", "deny", "site")),
+    set("same-rule-again-returns-the-existing-one", rule("bash", "always_allow")),
+    set("other-effect-replaces", rule("bash", "deny")),
+    set("require-approval-replaces", rule("bash", "require_approval")),
+    set("different-case-same-effect-replaces-spelling", rule("BASH", "always_allow")),
+    set("different-case-other-effect-replaces", rule("Bash", "deny")),
+    set("site-case-replaces", rule("EXAMPLE.COM", "deny", "site")),
+    set("padded-value-is-trimmed", rule("  bash \t", "deny")),
+    set("padded-value-with-unicode-spaces", rule("\u00a0\ufeffbash\u3000", "deny")),
+    set("underscore-is-not-a-wildcard", rule("underXscore", "deny")),
+    set("underscore-matches-itself-in-any-case", rule("UNDER_score", "deny")),
+    set("percent-is-not-a-wildcard", rule("%", "deny")),
+    set("kind-is-part-of-the-match", rule("github", "deny", "tool")),
+    set("category-rows-are-left-alone", rule("web", "deny", "tool")),
+    set("dotted-capital-i-lowercases-to-i-and-a-dot", rule("\u0130x", "deny")),
+    set("final-sigma-matches", rule("ας", "deny")),
+    set("medial-sigma-differs", rule("ασ", "deny")),
+    set("sigma-after-apostrophe", rule("Α'Σ", "deny")),
+    set("mixed-case-lookup", rule("mixed", "deny")),
+    set("unicode-value", rule("ключ-😀 日本語", "always_allow")),
+    set("line-separators-in-value", rule("a\u2028b <x> & \"q\" \\ /", "deny")),
+    set("nul-in-value", rule("a\u0000b", "deny")),
+    set("long-value", rule("v".repeat(5000), "deny")),
+    set("scope-account-explicit", rule("git", "deny", "tool", { scope: "account" })),
+    set("scope-space-explicit", rule("git", "deny", "tool", { scope: "space" })),
+    set("space-copy-when-overridden", rule("git", "deny"), overridden),
+    set("space-copy-replaces-other-effect", rule("bash", "always_allow"), overridden),
+    set("space-copy-same-rule-again", rule("bash", "deny"), overridden),
+    set("scope-account-while-overridden", rule("git", "deny", "tool", { scope: "account" }), overridden),
+    set("scope-space-without-override", rule("bash", "always_allow", "tool", { scope: "space" })),
+    set("space-two-header", rule("git", "deny"), { space: 1 }),
+    set("nothing-saved-yet", rule("git", "deny"), { seed: seedSettings({ bare: true }) }),
+    set("extra-keys-ignored", rule("git", "deny", "tool", { id: "x", createdAt: "y" })),
+    set("effect-unknown", rule("git", "block")),
+    set("effect-missing", { matchKind: "tool", matchValue: "git" }),
+    set("effect-null", rule("git", null)),
+    set("kind-category-is-not-settable", rule("git", "deny", "category")),
+    set("kind-unknown", rule("git", "deny", "plugin")),
+    set("kind-missing", { effect: "deny", matchValue: "git" }),
+    set("value-empty", rule("")),
+    set("value-whitespace", rule(" \t\u00a0\u2028 ")),
+    set("value-missing", { effect: "deny", matchKind: "tool" }),
+    set("value-null", { effect: "deny", matchKind: "tool", matchValue: null }),
+    set("value-number", { effect: "deny", matchKind: "tool", matchValue: 5 }),
+    set("value-array", { effect: "deny", matchKind: "tool", matchValue: [] }),
+    set("scope-unknown", rule("git", "deny", "tool", { scope: "team" })),
+    set("scope-null", rule("git", "deny", "tool", { scope: null })),
+    set("everything-wrong", { scope: 1, effect: 2, matchKind: 3, matchValue: 4 }),
+    set("empty-object", {}),
+    set("no-input", undefined),
+    set("null-input", null),
+    set("array-input", []),
+    set("anonymous", rule("git"), { anonymous: true }),
+  ];
+}
+
+function spaceSettingCases(): Case[] {
+  const mk = (procedure: string) => (name: string, input: unknown, extra: Partial<Case> = {}): Case => ({
+    name: `sso-${procedure}-${name}`,
+    procedure: `spaceSettings.${procedure}`,
+    input,
+    seed: seedSettings(),
+    after: procedure === "setOverride" ? SETTINGS_AFTER : undefined,
+    ...extra,
+  });
+  const overrides = mk("overrides");
+  const set = mk("setOverride");
+  const all = ["models", "voice", "confirmations", "credentials"];
+  const some = (...overrides: string[]) => ({ seed: seedSettings({ overrides }) });
+  return [
+    overrides("none", undefined),
+    overrides("some-in-enum-order", undefined, some("credentials", "voice")),
+    overrides("all", undefined, some(...all)),
+    overrides("space-two-header", undefined, { space: 1, ...some("models") }),
+    overrides("junk-input-is-ignored", { anything: 1 }),
+    overrides("anonymous", undefined, { anonymous: true }),
+
+    ...all.flatMap((setting) => [
+      set(`${setting}-enable`, { setting, enabled: true }),
+      set(`${setting}-disable`, { setting, enabled: false }, some(setting)),
+      set(`${setting}-enable-when-already-on`, { setting, enabled: true }, some(setting)),
+      set(`${setting}-disable-when-already-off`, { setting, enabled: false }),
+      set(`${setting}-enable-over-a-stray-copy`, { setting, enabled: true }, { seed: seedSettings({ strayCopy: true }) }),
+      set(`${setting}-enable-with-nothing-to-copy`, { setting, enabled: true }, { seed: seedSettings({ bare: true }) }),
+      set(`${setting}-disable-leaves-the-others`, { setting, enabled: false }, some(...all)),
+      set(`${setting}-enable-in-space-two`, { setting, enabled: true }, { space: 1 }),
+    ]),
+    set("extra-keys-ignored", { setting: "models", enabled: true, more: 1 }),
+    set("setting-unknown", { setting: "billing", enabled: true }),
+    set("setting-null", { setting: null, enabled: true }),
+    set("setting-number", { setting: 1, enabled: true }),
+    set("setting-missing", { enabled: true }),
+    set("enabled-string", { setting: "models", enabled: "true" }),
+    set("enabled-null", { setting: "models", enabled: null }),
+    set("enabled-missing", { setting: "models" }),
+    set("everything-wrong", { setting: 1, enabled: 2 }),
+    set("empty-object", {}),
+    set("no-input", undefined),
+    set("null-input", null),
+    set("array-input", []),
+    set("anonymous", { setting: "models", enabled: true }, { anonymous: true }),
+  ];
+}
+
 async function reset(seeded: ReturnType<typeof ids>) {
   const { userId, orgId } = seeded;
   await system.messagingOutbound.deleteMany({ where: { id: { startsWith: userId } } });
@@ -1673,6 +2113,19 @@ async function reset(seeded: ReturnType<typeof ids>) {
   await system.event.deleteMany({ where: { threadId: { startsWith: userId } } });
   await system.thread.deleteMany({ where: { userId } });
   await system.chatGroupMember.deleteMany({ where: { id: { startsWith: userId } } });
+  await system.scratchpadItem.deleteMany({ where: { spaceId: { in: seeded.spaces } } });
+  await system.actionApprovalRule.deleteMany({ where: { spaceId: { in: seeded.spaces } } });
+  await system.actionAutoReviewPreference.deleteMany({ where: { spaceId: { in: seeded.spaces } } });
+  await system.spaceSettingOverride.deleteMany({ where: { spaceId: { in: seeded.spaces } } });
+  await system.spaceModelRoleChoice.deleteMany({ where: { spaceId: { in: seeded.spaces } } });
+  await system.spaceVoicePreference.deleteMany({ where: { spaceId: { in: seeded.spaces } } });
+  await system.userActionApprovalRule.deleteMany({ where: { userId: own } });
+  await system.userActionAutoReviewPreference.deleteMany({ where: { userId: own } });
+  await system.userModelRoleChoice.deleteMany({ where: { userId: own } });
+  await system.userVoicePreference.deleteMany({ where: { userId: own } });
+  await system.userModelCredential.deleteMany({ where: { userId: own } });
+  await system.userVoiceCredential.deleteMany({ where: { userId: own } });
+  await system.vaultCredential.deleteMany({ where: { userId: own } });
   await system.messagingChannel.deleteMany({ where: { id: { startsWith: userId } } });
   await system.messagingLinkCode.deleteMany({ where: { userId: { in: [userId, `${userId}-other`] } } });
   await system.messagingIdentity.deleteMany({ where: { userId: { in: [userId, `${userId}-other`] } } });
@@ -1874,7 +2327,8 @@ function withIds(input: unknown, seeded: ReturnType<typeof ids>) {
       .replaceAll("__msgother__", `${seeded.userId}-msgother`)
       .replaceAll("__ec1__", `${seeded.userId}-ec1`)
       .replaceAll("__ec2__", `${seeded.userId}-ec2`)
-      .replaceAll("__ec3__", `${seeded.userId}-ec3`),
+      .replaceAll("__ec3__", `${seeded.userId}-ec3`)
+      .replace(/__s-([a-z0-9]+)__/g, (_match, name: string) => `${seeded.userId}-${name}`),
   );
 }
 
@@ -2102,6 +2556,41 @@ async function databaseState(seeded: ReturnType<typeof ids>) {
     select: { id: true, idempotencyKey: true, status: true, providerHandle: true },
     orderBy: { id: "asc" },
   });
+  const settingsOwners = { in: [seeded.userId, `${seeded.userId}-other`] };
+  const scratchpadItems = await system.scratchpadItem.findMany({
+    where: { spaceId: { in: seeded.spaces } },
+    orderBy: [{ spaceId: "asc" }, { title: "asc" }, { notes: "asc" }],
+  });
+  const approvalRulesAccount = await system.userActionApprovalRule.findMany({
+    where: { userId: settingsOwners },
+    orderBy: [{ userId: "asc" }, { matchKind: "asc" }, { matchValue: "asc" }, { effect: "asc" }],
+  });
+  const approvalRulesSpace = await system.actionApprovalRule.findMany({
+    where: { spaceId: { in: seeded.spaces } },
+    orderBy: [{ spaceId: "asc" }, { createdByUserId: "asc" }, { matchKind: "asc" }, { matchValue: "asc" }, { effect: "asc" }],
+  });
+  const spaceSettingOverrides = await system.spaceSettingOverride.findMany({
+    where: { spaceId: { in: seeded.spaces } },
+    orderBy: [{ spaceId: "asc" }, { userId: "asc" }, { setting: "asc" }],
+  });
+  const spaceModelChoices = await system.spaceModelRoleChoice.findMany({
+    where: { spaceId: { in: seeded.spaces } },
+    orderBy: [{ spaceId: "asc" }, { userId: "asc" }, { role: "asc" }, { position: "asc" }],
+  });
+  const spaceVoicePreferences = await system.spaceVoicePreference.findMany({
+    where: { spaceId: { in: seeded.spaces } },
+    orderBy: [{ spaceId: "asc" }, { userId: "asc" }, { credentialId: "asc" }],
+  });
+  const autoReviewPreferences = await system.actionAutoReviewPreference.findMany({
+    where: { spaceId: { in: seeded.spaces } },
+    orderBy: [{ spaceId: "asc" }, { userId: "asc" }],
+  });
+  // Which credentials exist, never what they hold.
+  const vaultCredentials = await system.vaultCredential.findMany({
+    where: { userId: settingsOwners },
+    select: { id: true, userId: true, spaceId: true },
+    orderBy: { id: "asc" },
+  });
   const trustedLinkSites = await system.trustedLinkSite.findMany({
     where: { userId: { in: [seeded.userId, `${seeded.userId}-other`] } },
     select: { userId: true, site: true },
@@ -2149,6 +2638,14 @@ async function databaseState(seeded: ReturnType<typeof ids>) {
     messagingOutbound,
     threadReads,
     externalConversations,
+    scratchpadItems,
+    approvalRulesAccount,
+    approvalRulesSpace,
+    spaceSettingOverrides,
+    spaceModelChoices,
+    spaceVoicePreferences,
+    autoReviewPreferences,
+    vaultCredentials,
   };
 }
 
