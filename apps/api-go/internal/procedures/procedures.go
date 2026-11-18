@@ -11,14 +11,20 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/approvalrules"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/availability"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/botsections"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/capabilities"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/computer"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/connections"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/externalconversations"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/mcpassignments"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/messaging"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/models"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/pages"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/scratchpad"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/spacesettings"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/spendinglimit"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/threads"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/trustedlinksites"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/usage"
 )
 
 // All returns every locally served procedure.
@@ -247,6 +253,68 @@ func All(database *db.DB) []local.Procedure {
 			ReadOnly: true,
 			Serve: func(ctx context.Context, actor db.Actor, _ orpc.Input) (any, *orpc.Error) {
 				return spacesettings.Overrides(ctx, database, actor)
+			},
+		},
+		{
+			Name:     "connections.list",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, _ orpc.Input) (any, *orpc.Error) {
+				return connections.List(ctx, database, actor)
+			},
+		},
+		{
+			Name: "connections.rename",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return connections.Rename(ctx, database, actor, input)
+			},
+		},
+		{
+			Name:     "capabilities.list",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, _ orpc.Input) (any, *orpc.Error) {
+				return capabilities.List(ctx, database, actor, slog.Default())
+			},
+		},
+		{
+			Name:     "usage.list",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, _ orpc.Input) (any, *orpc.Error) {
+				return usage.List(ctx, database, actor)
+			},
+		},
+		{
+			Name:     "usage.summary",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, _ orpc.Input) (any, *orpc.Error) {
+				return usage.SummaryOf(ctx, database, actor)
+			},
+		},
+		{
+			Name:     "computer.updates",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, _ orpc.Input) (any, *orpc.Error) {
+				return computer.Updates(ctx, database, actor)
+			},
+		},
+		{
+			Name:     "mcp.assignments.all",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, _ orpc.Input) (any, *orpc.Error) {
+				return mcpassignments.All(ctx, database, actor)
+			},
+		},
+		{
+			Name:     "mcp.assignments.list",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return mcpassignments.List(ctx, database, actor, input)
+			},
+		},
+		{
+			Name:     "models.backups",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, _ orpc.Input) (any, *orpc.Error) {
+				return models.Backups(ctx, database, actor)
 			},
 		},
 	}

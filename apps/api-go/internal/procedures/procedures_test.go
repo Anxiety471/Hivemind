@@ -25,6 +25,9 @@ func TestRegistryHasTheServedProceduresAndNotTrust(t *testing.T) {
 		"approvalRules.list", "approvalRules.set", "spaceSettings.overrides",
 		"messaging.link.start", "messaging.identities.setBot", "messaging.identities.unlink", "messaging.channels.list",
 		"messaging.channels.respond", "messaging.channels.leave", "messaging.connections.list", "messaging.connections.revoke", "botSections.create", "botSections.update", "botSections.remove",
+		"connections.list", "connections.rename", "capabilities.list",
+		"usage.list", "usage.summary", "computer.updates",
+		"mcp.assignments.all", "mcp.assignments.list", "models.backups",
 	} {
 		if !seen[name] {
 			t.Errorf("missing %s", name)
