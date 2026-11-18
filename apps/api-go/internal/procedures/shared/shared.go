@@ -36,3 +36,11 @@ func Failure(err error) *orpc.Error {
 func OutputInvalid() *orpc.Error {
 	return orpc.New("INTERNAL_SERVER_ERROR", 500, "Output validation failed")
 }
+
+// Deployment is the process configuration some procedures read: where links to the web
+// app point, and whether the server sends email (which decides whether an invitee must
+// have verified theirs before accepting).
+type Deployment struct {
+	WebOrigin     string
+	EmailDelivery bool
+}

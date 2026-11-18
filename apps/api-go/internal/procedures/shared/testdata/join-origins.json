@@ -1,0 +1,42 @@
+[
+{
+"origin": "https://bots.bocchi.trade",
+"href": "https://bots.bocchi.trade/join/abc"
+},
+{
+"origin": "http://127.0.0.1:5173",
+"href": "http://127.0.0.1:5173/join/abc"
+},
+{
+"origin": "https://Example.COM:443",
+"href": "https://example.com/join/abc"
+},
+{
+"origin": "http://example.com:80",
+"href": "http://example.com/join/abc"
+},
+{
+"origin": "https://example.com:8443",
+"href": "https://example.com:8443/join/abc"
+},
+{
+"origin": "http://[::1]:5173",
+"href": "http://[::1]:5173/join/abc"
+},
+{
+"origin": "https://bücher.example",
+"href": "https://xn--bcher-kva.example/join/abc"
+},
+{
+"origin": "https://user:pw@example.com",
+"href": "https://user:pw@example.com/join/abc"
+},
+{
+"origin": "https://example.com/app",
+"href": "https://example.com/join/abc"
+},
+{
+"origin": "https://xn--bcher-kva.example",
+"href": "https://xn--bcher-kva.example/join/abc"
+}
+]
