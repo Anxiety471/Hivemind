@@ -17,6 +17,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/gateway"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/local"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/routes"
 )
 
@@ -28,7 +29,7 @@ func testLocalServer(t *testing.T, database *db.DB) *local.Server {
 	t.Helper()
 	secret, authURL := testAuthConfig()
 	sessions := auth.New(database, auth.Config{Secret: secret, AuthURL: authURL})
-	return local.New(database, sessions, procedures.All(database), local.Config{
+	return local.New(database, sessions, procedures.All(database, shared.Deployment{WebOrigin: "https://app.example.test"}), local.Config{
 		BuildID:        testBuildID,
 		MaxUploadBytes: 10 * 1024 * 1024,
 		WebOrigin:      "https://app.example.test",

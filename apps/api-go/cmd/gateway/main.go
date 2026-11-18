@@ -21,6 +21,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/gateway"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/local"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/routes"
 )
 
@@ -165,7 +166,10 @@ func setupLocal(buildIDFile string, logger *slog.Logger) (*local.Server, func(),
 		SignupAllowlist: deployment.SignupAllowlist,
 		OIDCBypass:      deployment.OIDCBypass,
 	})
-	server := local.New(database, sessions, procedures.All(database), local.Config{
+	server := local.New(database, sessions, procedures.All(database, shared.Deployment{
+		WebOrigin:     strings.TrimRight(deployment.WebOrigin, "/"),
+		EmailDelivery: deployment.EmailDelivery,
+	}), local.Config{
 		BuildID:        readBuildID(buildIDFile),
 		Minimums:       deployment.Minimums,
 		MaxUploadBytes: deployment.MaxUploadBytes,

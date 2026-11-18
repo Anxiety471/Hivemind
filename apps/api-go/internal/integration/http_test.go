@@ -15,6 +15,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/local"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/availability"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/routes"
 )
 
@@ -26,6 +27,13 @@ func testServer(t *testing.T, database *db.DB, config local.Config) *httptest.Se
 }
 
 func testServerWithAllowlist(t *testing.T, database *db.DB, config local.Config, allowlist []string) *httptest.Server {
+	t.Helper()
+	return testServerDeployed(t, database, config, allowlist, shared.Deployment{})
+}
+
+// testServerDeployed is testServer with the deployment settings some procedures read; an
+// empty WebOrigin is the test origin.
+func testServerDeployed(t *testing.T, database *db.DB, config local.Config, allowlist []string, deployment shared.Deployment) *httptest.Server {
 	t.Helper()
 	secret, authURL := testAuthConfig()
 	sessions := auth.New(database, auth.Config{Secret: secret, AuthURL: authURL, SignupAllowlist: allowlist})
@@ -41,7 +49,10 @@ func testServerWithAllowlist(t *testing.T, database *db.DB, config local.Config,
 	if config.MaxUploadBytes == 0 {
 		config.MaxUploadBytes = 10 * 1024 * 1024
 	}
-	server := local.New(database, sessions, procedures.All(database), config)
+	if deployment.WebOrigin == "" {
+		deployment.WebOrigin = config.WebOrigin
+	}
+	server := local.New(database, sessions, procedures.All(database, deployment), config)
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		server.ServeHTTP(w, r, routes.ProcedureKey(r.URL.Path))
 	})

@@ -1,12 +1,16 @@
 package procedures
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
+)
 
 // The registry is the list of procedures the gateway can serve locally; a
 // dropped entry would silently fall back to "not implemented" once routed.
 func TestRegistryHasTheServedProceduresAndNotTrust(t *testing.T) {
 	seen := map[string]bool{}
-	for _, procedure := range All(nil) {
+	for _, procedure := range All(nil, shared.Deployment{}) {
 		if seen[procedure.Name] {
 			t.Errorf("duplicate procedure %s", procedure.Name)
 		}
@@ -28,6 +32,10 @@ func TestRegistryHasTheServedProceduresAndNotTrust(t *testing.T) {
 		"connections.list", "connections.rename", "capabilities.list",
 		"usage.list", "usage.summary", "computer.updates",
 		"mcp.assignments.all", "mcp.assignments.list", "models.backups",
+		"spaces.rename", "spaces.members.list", "spaces.members.add",
+		"spaces.invites.preview", "spaces.invites.accept", "spaces.invites.cancel",
+		"organizations.list", "organizations.rename", "organizations.members.list",
+		"organizations.invitations.preview",
 	} {
 		if !seen[name] {
 			t.Errorf("missing %s", name)
@@ -61,6 +69,18 @@ func TestRegistryHasTheServedProceduresAndNotTrust(t *testing.T) {
 	}
 	// The other pages procedures read share secrets and versions; they stay on TypeScript.
 	for _, name := range []string{"pages.get", "pages.rename", "pages.setVisibility", "pages.pin", "pages.remove"} {
+		if seen[name] {
+			t.Errorf("%s must not be served locally", name)
+		}
+	}
+	// create seeds an encrypted memory document; remove, the departures and account deletion
+	// run teardown; invites.create and organizations.invitations.create send email;
+	// setRole, remove and invitations.cancel publish organization changes (a product event);
+	// invitations.accept also syncs billing seats.
+	for _, name := range []string{"spaces.create", "spaces.remove", "spaces.members.remove", "spaces.members.leave",
+		"spaces.invites.create", "organizations.create", "organizations.remove", "organizations.members.setRole",
+		"organizations.members.remove", "organizations.invitations.create", "organizations.invitations.cancel",
+		"organizations.invitations.accept"} {
 		if seen[name] {
 			t.Errorf("%s must not be served locally", name)
 		}

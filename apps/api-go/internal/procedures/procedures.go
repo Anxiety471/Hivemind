@@ -6,6 +6,7 @@ import (
 	"log/slog"
 
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/effects"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/local"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/approvalrules"
@@ -20,6 +21,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/models"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/pages"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/scratchpad"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/spacesettings"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/spendinglimit"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/threads"
@@ -28,8 +30,8 @@ import (
 )
 
 // All returns every locally served procedure.
-func All(database *db.DB) []local.Procedure {
-	return []local.Procedure{
+func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
+	procedures := []local.Procedure{
 		{
 			Name:     "availability.items",
 			ReadOnly: true,
@@ -318,4 +320,5 @@ func All(database *db.DB) []local.Procedure {
 			},
 		},
 	}
+	return append(procedures, membership(database, deployment, effects.NewRecorder(database, slog.Default()))...)
 }

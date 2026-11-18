@@ -26,6 +26,10 @@ type Config struct {
 	TrustedOrigins  []string
 	ClientIP        *effects.ClientIPResolver
 	ClientIPHeader  string
+	// EmailDelivery is whether the API sends email, which TypeScript derives from the same
+	// variables (configuredEmailProvider, or the development emulator): an invitee must then
+	// have verified their address.
+	EmailDelivery bool
 }
 
 // Load reads the environment. Only a build that serves procedures needs the
@@ -58,6 +62,7 @@ func Load() (Config, error) {
 	config.SignupAllowlist = splitList(os.Getenv("SIGNUP_ALLOWLIST"))
 	config.OIDCBypass = os.Getenv("OIDC_ALLOW_SIGNUP_BYPASS") == "true" && strings.TrimSpace(os.Getenv("OIDC_ISSUER")) != ""
 	config.MaxUploadBytes = uploadBytes(os.Getenv("MAX_UPLOAD_SIZE_MB"))
+	config.EmailDelivery = emailDelivery(os.Getenv)
 
 	minimums, err := local.ParseMinimums(os.Getenv("RAKAZO_MIN_CLIENT_BUILD"))
 	if err != nil {
@@ -92,6 +97,25 @@ func Load() (Config, error) {
 		config.ClientIPHeader = "x-forwarded-for"
 	}
 	return config, nil
+}
+
+// emailDelivery is `Boolean(deps.email)` (apps/api/src/app.ts:422-434): a provider chosen by
+// EMAIL_PROVIDER (SMTP_URL alone chooses smtp, as packages/adapters/src/email-provider.ts:18
+// does), or the emulator outside production. TypeScript refuses to start for a provider it
+// does not know, so any value but "none" counts as configured: the stricter reading.
+func emailDelivery(getenv func(string) string) bool {
+	provider := strings.TrimSpace(getenv("EMAIL_PROVIDER"))
+	if provider == "" {
+		if strings.TrimSpace(getenv("SMTP_URL")) != "" {
+			provider = "smtp"
+		} else {
+			provider = "none"
+		}
+	}
+	if provider != "none" {
+		return true
+	}
+	return getenv("EMAIL_EMULATOR") == "true" && getenv("NODE_ENV") != "production"
 }
 
 func splitList(raw string) []string {
