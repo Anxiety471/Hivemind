@@ -163,6 +163,12 @@ await writeFile(
       "organizations.rename": { mode: "go" },
       "organizations.members.list": { mode: "go", readOnly: true },
       "organizations.invitations.preview": { mode: "go", readOnly: true },
+      "models.rename": { mode: "go" },
+      "pages.rename": { mode: "go" },
+      "pages.pin": { mode: "go" },
+      "artifacts.list": { mode: "go", readOnly: true },
+      "artifacts.listSpace": { mode: "go", readOnly: true },
+      "artifacts.listVersions": { mode: "go", readOnly: true },
     },
   }),
 );
@@ -350,6 +356,9 @@ const cases: Case[] = [
   ...mcpAssignmentCases(),
   ...modelBackupCases(),
   ...membershipCases(system),
+  ...pageWriteCases(),
+  ...modelRenameCases(),
+  ...artifactCases(),
 ];
 
 const SITES = ["zeta.example", "alpha.example", "Beta.example", "_under.example", "10.0.0.1"];
@@ -1333,6 +1342,9 @@ function pageCases(): Case[] {
     list("limit-negative", { limit: -3 }),
     list("limit-fraction", { limit: 1.5 }),
     list("limit-fraction-small", { limit: 0.5 }),
+    // The list parses the output, which holds the page and not the extra row read to know whether another follows.
+    list("bad-row-just-past-the-page-is-not-parsed", { limit: 12 }, { seed: seedOldestBadPage }),
+    list("bad-row-last-in-the-page-fails", { limit: 13 }, { seed: seedOldestBadPage }),
     list("limit-string", { limit: "5" }),
     list("limit-null", { limit: null }),
     list("limit-bool", { limit: true }),
@@ -2678,7 +2690,559 @@ function modelBackupCases(): Case[] {
   ];
 }
 
+/** The oldest unpinned page, with a title past the bound: the list has to leave it out of a page it is not in. */
+async function seedOldestBadPage(seeded: Seeded) {
+  await seedPages(seeded);
+  await system.page.create({
+    data: { id: `${seeded.userId}-bad`, spaceId: seeded.spaces[0], userId: seeded.userId, title: "t".repeat(201), visibility: "private", currentVersion: 1, pinnedAt: null, createdAt: new Date(PAGE_BASE - 101 * 3_600_000), updatedAt: new Date(PAGE_BASE - 100 * 3_600_000) },
+  });
+}
+
+/** pages.rename and pages.pin, on the pages of seedPages (`__s-u1__` is a plain page, `__s-pa__` a pinned one). */
+function pageWriteCases(): Case[] {
+  // What the web app reloads afterwards: the list, ordered by pin and update time, and a title search.
+  const after = [
+    { procedure: "pages.list", input: {} },
+    { procedure: "pages.list", input: { query: "ren" } },
+  ];
+  const rename = (name: string, input: unknown, extra: Partial<Case> = {}): Case => ({
+    name: `pw-rename-${name}`,
+    procedure: "pages.rename",
+    input,
+    seed: seedPages,
+    after,
+    ...extra,
+  });
+  const pin = (name: string, input: unknown, extra: Partial<Case> = {}): Case => ({
+    name: `pw-pin-${name}`,
+    procedure: "pages.pin",
+    input,
+    seed: seedPages,
+    after,
+    ...extra,
+  });
+  /** A page of the first Space with stored values the contract refuses, next to the seeded ones. */
+  const badPage = (data: Record<string, unknown>, pinned = false) => async (seeded: Seeded) => {
+    await seedPages(seeded);
+    await system.page.create({
+      data: { id: `${seeded.userId}-bad`, spaceId: seeded.spaces[0], userId: seeded.userId, title: "Bad", visibility: "private", currentVersion: 1, pinnedAt: pinned ? new Date(PAGE_BASE) : null, createdAt: new Date(PAGE_BASE), updatedAt: new Date(PAGE_BASE), ...data },
+    });
+  };
+  const titled = (title: unknown) => ({ pageId: "__s-u1__", title });
+  const titles: Array<[string, unknown]> = [
+    ["tabs-and-newlines", "a\tb\nc\rd"],
+    ["nul", "a\u0000b"],
+    ["nul-at-the-ends", "\u0000 x \u0000"],
+    ["line-separators", "a\u2028b\u2029c"],
+    ["unicode-spaces", "a\u00a0\u3000\u2003b"],
+    ["bom-at-the-ends", "\ufeffx\ufeff"],
+    ["next-line", "a\u0085b"],
+    ["delete", "a\u007fb"],
+    ["zero-width-space-is-kept", "a\u200bb"],
+    ["soft-hyphen-is-kept", "a\u00adb"],
+    ["mongolian-vowel-separator-is-kept", "a\u180eb"],
+    ["runs-of-spaces", "a        b"],
+    ["padded", "   renamed padded   "],
+    ["emoji", "😀 ok 😀"],
+    ["combining", "e\u0301"],
+    ["right-to-left", "שלום עולם"],
+    ["lone-high-surrogate", "a\ud800"],
+    ["lone-low-surrogate", "\udc00b"],
+    ["lone-surrogate-between", "x\ud800y"],
+    ["valid-pair", "x\ud83d\ude00y"],
+    ["reversed-pair", "\ude00\ud83d"],
+    ["replacement-character", "a\ufffdb"],
+    ["quotes-and-markup", "<b> & \"q\" 'x'"],
+    ["backslash", "a\\b"],
+    ["percent-and-underscore", "100%_sure"],
+    ["200-characters", "x".repeat(200)],
+    ["201-characters-fails", "x".repeat(201)],
+    ["200-characters-padded", `  ${"x".repeat(200)}  `],
+    ["fold-makes-it-201-fails", `${"x".repeat(100)}\t\t${"x".repeat(100)}`],
+    ["fold-makes-it-200", `${"x".repeat(99)}\t\t\t${"x".repeat(100)}`],
+    ["200-emoji", "😀".repeat(200)],
+    ["201-emoji-fails", "😀".repeat(201)],
+    ["200-with-a-lone-surrogate", `${"x".repeat(199)}\ud800`],
+    ["201-with-a-lone-surrogate-fails", `${"x".repeat(200)}\ud800`],
+    ["many-fold-runs", "a ".repeat(100)],
+    ["empty-fails", ""],
+    ["spaces-only-fails", "   "],
+    ["nul-only-fails", "\u0000"],
+    ["whitespace-controls-only-fails", "\t\n\u2028\u00a0\u0000\ufeff"],
+    ["bom-only-fails", "\ufeff"],
+    ["not-a-string-number", 5],
+    ["not-a-string-null", null],
+    ["not-a-string-true", true],
+    ["not-a-string-array", []],
+    ["not-a-string-array-of-one", ["a"]],
+    ["not-a-string-long-array", Array.from({ length: 300 }, () => 1)],
+    ["not-a-string-object", {}],
+    ["not-a-string-object-length", { length: 3 }],
+    ["not-a-string-object-length-big", { length: 999 }],
+  ];
+  return [
+    rename("plain", titled("Renamed page")),
+    rename("same-title", { pageId: "__s-u1__", title: "100% sure" }),
+    rename("pinned-page-stays-pinned", { pageId: "__s-pa__", title: "Renamed alpha" }),
+    rename("link-page", { pageId: "__s-pb__", title: "Renamed beta" }),
+    rename("weird-visibility-reads-as-private", { pageId: "__s-u5__", title: "Renamed weird" }),
+    rename("bot-page", { pageId: "__s-u3__", title: "renamed bot page" }),
+    rename("group-page", { pageId: "__s-g1__", title: "renamed group page" }),
+    ...titles.map(([name, title]) => rename(`title-${name}`, titled(title))),
+    rename("unknown-page", { pageId: "nope", title: "x" }),
+    rename("other-members-page", { pageId: "__s-x2__", title: "x" }),
+    rename("other-space-page-from-space-one", { pageId: "__s-x1__", title: "x" }),
+    rename("other-space-page-from-space-two", { pageId: "__s-x1__", title: "renamed x" }, { space: 1 }),
+    rename("space-one-page-from-space-two", { pageId: "__s-u1__", title: "x" }, { space: 1 }),
+    rename("space-three-sees-nothing", { pageId: "__s-u1__", title: "x" }, { space: 2 }),
+    rename("page-id-empty", { pageId: "", title: "x" }),
+    rename("page-id-number", { pageId: 5, title: "x" }),
+    rename("page-id-null", { pageId: null, title: "x" }),
+    rename("page-id-array", { pageId: [], title: "x" }),
+    rename("page-id-object-length", { pageId: { length: 0 }, title: "x" }),
+    rename("page-id-nul", { pageId: "a\u0000b", title: "x" }),
+    rename("missing-page-id", { title: "x" }),
+    rename("missing-title", { pageId: "__s-u1__" }),
+    rename("missing-both", {}),
+    rename("both-invalid", { pageId: "", title: " " }),
+    rename("extra-key-is-refused", { pageId: "__s-u1__", title: "x", more: 1 }),
+    rename("extra-keys-in-js-order", { b: 1, 2: 1, pageId: "__s-u1__", title: "x", a: 1, 1: 1 }),
+    rename("extra-key-and-invalid-values", { zzz: 1, pageId: "", title: " ", aaa: 2 }),
+    rename("extra-key-and-unknown-page", { pageId: "nope", title: "x", more: 1 }),
+    rename("array-input", []),
+    rename("null-input", null),
+    rename("no-input", undefined),
+    rename("string-input", "x"),
+    rename("number-input", 5),
+    rename("anonymous", titled("x"), { anonymous: true }),
+    rename("stored-version-zero-fails-the-output-check-after-the-write", { pageId: "__s-bad__", title: "fixed" }, { seed: badPage({ currentVersion: 0 }) }),
+    rename("stored-long-title-is-replaced", { pageId: "__s-bad__", title: "short" }, { seed: badPage({ title: "t".repeat(201) }) }),
+    pin("pin-a-loose-page", { pageId: "__s-u1__", pinned: true }),
+    pin("unpin-a-pinned-page", { pageId: "__s-pa__", pinned: false }),
+    pin("pin-a-pinned-page-writes-nothing", { pageId: "__s-pa__", pinned: true }),
+    pin("unpin-a-loose-page-writes-nothing", { pageId: "__s-u1__", pinned: false }),
+    pin("unpin-the-link-page", { pageId: "__s-pb__", pinned: false }),
+    pin("weird-visibility-reads-as-private", { pageId: "__s-u5__", pinned: true }),
+    pin("bot-page", { pageId: "__s-u3__", pinned: true }),
+    pin("group-page", { pageId: "__s-g1__", pinned: true }),
+    pin("pin-time-tie", { pageId: "__s-pd__", pinned: false }),
+    pin("unknown-page", { pageId: "nope", pinned: true }),
+    pin("other-members-page", { pageId: "__s-x2__", pinned: true }),
+    pin("other-space-page-from-space-one", { pageId: "__s-x1__", pinned: true }),
+    pin("other-space-page-from-space-two", { pageId: "__s-x1__", pinned: true }, { space: 1 }),
+    pin("space-one-page-from-space-two", { pageId: "__s-u1__", pinned: true }, { space: 1 }),
+    pin("pinned-string", { pageId: "__s-u1__", pinned: "true" }),
+    pin("pinned-number", { pageId: "__s-u1__", pinned: 1 }),
+    pin("pinned-null", { pageId: "__s-u1__", pinned: null }),
+    pin("pinned-array", { pageId: "__s-u1__", pinned: [] }),
+    pin("pinned-object", { pageId: "__s-u1__", pinned: {} }),
+    pin("pinned-missing", { pageId: "__s-u1__" }),
+    pin("page-id-empty", { pageId: "", pinned: true }),
+    pin("page-id-number", { pageId: 5, pinned: true }),
+    pin("page-id-null", { pageId: null, pinned: true }),
+    pin("page-id-array", { pageId: [], pinned: true }),
+    pin("page-id-nul", { pageId: "a\u0000b", pinned: true }),
+    pin("missing-both", {}),
+    pin("both-invalid", { pageId: "", pinned: "yes" }),
+    pin("extra-key-is-refused", { pageId: "__s-u1__", pinned: true, more: 1 }),
+    pin("extra-key-and-invalid-values", { zzz: 1, pageId: "", pinned: 5 }),
+    pin("extra-key-and-unknown-page", { pageId: "nope", pinned: true, more: 1 }),
+    pin("array-input", []),
+    pin("null-input", null),
+    pin("no-input", undefined),
+    pin("string-input", "x"),
+    pin("anonymous", { pageId: "__s-u1__", pinned: true }, { anonymous: true }),
+    pin("stored-long-title-fails-the-output-check-after-the-pin", { pageId: "__s-bad__", pinned: true }, { seed: badPage({ title: "t".repeat(201) }) }),
+    pin("stored-long-title-already-pinned-fails-without-a-write", { pageId: "__s-bad__", pinned: true }, { seed: badPage({ title: "t".repeat(201) }, true) }),
+    pin("stored-version-zero-fails-the-output-check-after-the-pin", { pageId: "__s-bad__", pinned: true }, { seed: badPage({ currentVersion: 0 }) }),
+  ];
+}
+
+/** Three connections of the member (`__s-cr1__`, `__s-cr2__`) and another member's (`__s-cro__`). */
+async function seedCredentials(seeded: Seeded) {
+  const other = `${seeded.userId}-other`;
+  await system.user.create({
+    data: { id: other, name: "Other", email: `${other}@example.test`, emailVerified: true },
+  });
+  const credential = (key: string, userId: string, label: string) =>
+    system.userModelCredential.create({
+      data: { id: `${seeded.userId}-${key}`, userId, provider: "openai", label, secretId: `${seeded.userId}-secret-${key}`, createdAt: new Date(PAGE_BASE), updatedAt: new Date(PAGE_BASE) },
+    });
+  await credential("cr1", seeded.userId, "Old name");
+  await credential("cr2", seeded.userId, "Sibling");
+  await credential("cro", other, "Other member");
+}
+
+function modelRenameCases(): Case[] {
+  const rename = (name: string, input: unknown, extra: Partial<Case> = {}): Case => ({
+    name: `mr-${name}`,
+    procedure: "models.rename",
+    input,
+    seed: seedCredentials,
+    ...extra,
+  });
+  const labeled = (label: unknown) => ({ credentialId: "__s-cr1__", label });
+  const labels: Array<[string, unknown]> = [
+    ["plain", "New name"],
+    ["same-label", "Old name"],
+    ["trimmed", " \t padded \u00a0\n"],
+    ["inner-whitespace-is-kept", "a \t b"],
+    ["nul", "a\u0000b"],
+    ["nul-at-the-end", "ab\u0000"],
+    ["nul-only", "\u0000"],
+    ["nul-between-spaces", " \u0000 "],
+    ["lone-high-surrogate", "a\ud800"],
+    ["lone-low-surrogate", "\udc00b"],
+    ["valid-pair", "x\ud83d\ude00y"],
+    ["unicode", "Ключ 日本語"],
+    ["markup", "<b> & \"q\""],
+    ["80-characters", "x".repeat(80)],
+    ["81-characters-fails", "x".repeat(81)],
+    ["80-characters-padded", `  ${"x".repeat(80)}\t`],
+    ["81-characters-padded-fails", `     ${"x".repeat(81)}`],
+    ["80-emoji", "😀".repeat(80)],
+    ["81-emoji-fails", "😀".repeat(81)],
+    ["empty-fails", ""],
+    ["spaces-only-fails", "  "],
+    ["unicode-spaces-only-fails", "\u3000\u2003"],
+    ["bom-only-fails", "\ufeff"],
+    ["line-separator-only-fails", "\u2028"],
+    ["not-a-string-number", 5],
+    ["not-a-string-null", null],
+    ["not-a-string-true", true],
+    ["not-a-string-array", []],
+    ["not-a-string-array-of-one", [1]],
+    ["not-a-string-array-of-81", Array.from({ length: 81 }, () => 1)],
+    ["not-a-string-object", {}],
+    ["not-a-string-object-length-zero", { length: 0 }],
+    ["not-a-string-object-length-big", { length: 999 }],
+  ];
+  return [
+    ...labels.map(([name, label]) => rename(`label-${name}`, labeled(label))),
+    rename("renamed-from-space-two", labeled("From space two"), { space: 1 }),
+    rename("renamed-from-space-three", labeled("From space three"), { space: 2 }),
+    rename("sibling-connection", { credentialId: "__s-cr2__", label: "Renamed sibling" }),
+    rename("other-members-connection", { credentialId: "__s-cro__", label: "x" }),
+    rename("unknown-connection", { credentialId: "nope", label: "x" }),
+    rename("id-nul", { credentialId: "a\u0000b", label: "x" }),
+    rename("id-empty", { credentialId: "", label: "x" }),
+    rename("id-number", { credentialId: 5, label: "x" }),
+    rename("id-null", { credentialId: null, label: "x" }),
+    rename("id-array", { credentialId: [], label: "x" }),
+    rename("id-object-length", { credentialId: { length: 0 }, label: "x" }),
+    rename("missing-id", { label: "x" }),
+    rename("missing-label", { credentialId: "__s-cr1__" }),
+    rename("missing-both", {}),
+    rename("both-invalid", { credentialId: "", label: " " }),
+    rename("both-invalid-types", { credentialId: 5, label: 7 }),
+    rename("extra-keys-are-ignored", { credentialId: "__s-cr1__", label: "With extras", more: 1, 2: 3 }),
+    rename("extra-keys-and-unknown-connection", { credentialId: "nope", label: "x", more: 1 }),
+    rename("array-input", []),
+    rename("null-input", null),
+    rename("no-input", undefined),
+    rename("string-input", "x"),
+    rename("number-input", 5),
+    rename("anonymous", labeled("x"), { anonymous: true }),
+  ];
+}
+
+/**
+ * Files for the artifact reads, in the first Space unless noted: report.md in four versions (the newest visible
+ * one has a run; the fourth is an MCP app's hidden HTML), another member's upload, a bot-made image, two files
+ * with the same time, group files, a standalone file, files of an archived bot and of no bot, every hidden type,
+ * a file made after now and one in the second Space. Bots: `__s-ab1__`, `__s-ab2__`, `__s-ab3__` (no files),
+ * `__s-abarch__` (archived), `__s-abx__` (second Space).
+ */
+async function seedArtifacts(seeded: Seeded) {
+  const u = seeded.userId;
+  const other = `${u}-other`;
+  await system.user.create({
+    data: { id: other, name: "Other", email: `${other}@example.test`, emailVerified: true },
+  });
+  const hour = 3_600_000;
+  const base = Date.UTC(2026, 4, 1, 12, 0, 0, 0);
+  const at = (hoursAgo: number) => new Date(base - hoursAgo * hour);
+  for (const [key, space, archived] of [["ab1", 0, false], ["ab2", 0, false], ["ab3", 0, false], ["abarch", 0, true], ["abx", 1, false]] as const) {
+    await system.bot.create({
+      data: { id: `${u}-${key}`, spaceId: seeded.spaces[space], userId: u, name: key, color: "blue", archivedAt: archived ? new Date(base) : null },
+    });
+  }
+  await system.chatGroup.create({ data: { id: `${u}-ag1`, spaceId: seeded.spaces[0], userId: u, name: "Group" } });
+  const file = (key: string, over: Record<string, unknown>) =>
+    system.artifact.create({
+      data: { id: `${u}-${key}`, spaceId: seeded.spaces[0], userId: u, botId: `${u}-ab1`, name: "file.txt", description: null, mimeType: "text/plain", size: 12, hash: "h", storageKey: `k-${key}`, version: 1, createdAt: new Date(base), ...over },
+    });
+  const root = `${u}-r1`;
+  await file("r1", { name: "report.md", description: "First", createdAt: at(30) });
+  await file("r2", { name: "report.md", version: 2, rootArtifactId: root, createdAt: at(20) });
+  await file("r3", { name: "report.md", version: 3, rootArtifactId: root, runId: "run-r", description: "Latest", createdAt: at(10) });
+  await file("r4", { name: "report.md", version: 4, rootArtifactId: root, mimeType: "text/html;profile=mcp-app", createdAt: at(9) });
+  await file("s1", { name: "notes.txt", botId: `${u}-ab2`, userId: other, createdAt: at(25) });
+  await file("t1", { name: "made.png", mimeType: "image/png", botId: `${u}-ab2`, runId: "run-t", createdAt: at(40) });
+  await file("c1", { name: "Case.txt", createdAt: at(15) });
+  await file("c2", { name: "case.TXT", createdAt: at(15) });
+  await file("g1", { name: "group.txt", groupId: `${u}-ag1`, createdAt: at(12) });
+  await file("g2", { name: "group-only.txt", botId: null, groupId: `${u}-ag1`, createdAt: at(11) });
+  await file("st1", { name: "report.md", standalone: true, createdAt: at(8) });
+  await file("a1", { name: "gone.txt", botId: `${u}-abarch`, createdAt: at(6) });
+  await file("nb", { name: "orphan.txt", botId: null, createdAt: at(3) });
+  await file("u1", { name: "日本語 <b> & \"q\" \u2028", mimeType: "text/plain; charset=utf-8", description: "d", size: 2147483647, createdAt: at(2) });
+  await file("hv", { name: "big-version.txt", version: 2147483647, createdAt: at(1) });
+  await file("app", { name: "app.html", mimeType: "text/html;profile=mcp-app", createdAt: at(7) });
+  for (const [index, mimeType] of ["image/jpeg", "image/png", "image/webp", "image/gif"].entries()) {
+    await file(`ss${index}`, { name: `shot${index}.png`, mimeType: `${mimeType};profile=step-screenshot`, createdAt: at(4 + index) });
+  }
+  // Hidden types are matched exactly: this one is a file like any other.
+  await file("ssc", { name: "shot-case.png", mimeType: "Image/Png;profile=step-screenshot", createdAt: at(5) });
+  await file("fut", { name: "future.txt", createdAt: THREAD_FUTURE });
+  await system.artifact.create({
+    data: { id: `${u}-x1`, spaceId: seeded.spaces[1], userId: u, botId: `${u}-abx`, name: "elsewhere.txt", description: null, mimeType: "text/plain", size: 1, hash: "h", storageKey: "k-x1", version: 1, createdAt: at(1) },
+  });
+}
+
+function artifactCases(): Case[] {
+  const base = Date.UTC(2026, 4, 1, 12, 0, 0, 0);
+  const iso = (hoursAgo: number) => new Date(base - hoursAgo * 3_600_000).toISOString();
+  const listCase = (name: string, input: unknown, extra: Partial<Case> = {}): Case => ({
+    name: `art-list-${name}`,
+    procedure: "artifacts.list",
+    input,
+    seed: seedArtifacts,
+    unordered: true,
+    ...extra,
+  });
+  const spaceCase = (name: string, input: unknown, extra: Partial<Case> = {}): Case => ({
+    name: `art-space-${name}`,
+    procedure: "artifacts.listSpace",
+    input,
+    seed: seedArtifacts,
+    ...extra,
+  });
+  const versionsCase = (name: string, input: unknown, extra: Partial<Case> = {}): Case => ({
+    name: `art-versions-${name}`,
+    procedure: "artifacts.listVersions",
+    input,
+    seed: seedArtifacts,
+    ...extra,
+  });
+  /** A cursor as the server writes it, or as a caller might alter it. */
+  const cur = (fields: Record<string, unknown>) => `v1.${Buffer.from(JSON.stringify(fields)).toString("base64url")}`;
+  const good = { createdAt: iso(10), id: "zzz", botId: null, madeByBots: false, asOf: iso(0) };
+  /** A cursor bound to one of the case's own bots, whose ids depend on the case name. */
+  const botCursor = (name: string, input: Record<string, unknown>, fields: Record<string, unknown>, bot: string | null, extra: Partial<Case> = {}) =>
+    spaceCase(name, { ...input, cursor: cur({ ...fields, botId: bot === null ? null : `${ids(`art-space-${name}`).userId}-${bot}` }) }, extra);
+  const rawCursor = (text: string) => `v1.${Buffer.from(text).toString("base64url")}`;
+  const seedWith = (more: (seeded: Seeded) => Promise<unknown>) => async (seeded: Seeded) => {
+    await seedArtifacts(seeded);
+    await more(seeded);
+  };
+  const extraFile = (key: string, over: Record<string, unknown>) => async (seeded: Seeded) =>
+    system.artifact.create({
+      data: { id: `${seeded.userId}-${key}`, spaceId: seeded.spaces[0], userId: seeded.userId, botId: `${seeded.userId}-ab1`, name: "extra.txt", description: null, mimeType: "text/plain", size: 1, hash: "h", storageKey: `k-${key}`, version: 1, createdAt: new Date(base - 100 * 3_600_000), ...over },
+    });
+  const farFuture = new Date(Date.now() + 60 * 86_400_000).toISOString();
+  return [
+    // artifacts.list: one bot's own chat, every version, no group file and no hidden type, in no set order.
+    listCase("bot-one", { botId: "__s-ab1__" }),
+    listCase("bot-two", { botId: "__s-ab2__" }),
+    listCase("bot-without-files", { botId: "__s-ab3__" }),
+    listCase("archived-bot", { botId: "__s-abarch__" }),
+    listCase("unknown-bot", { botId: "nope" }),
+    listCase("bot-of-another-space", { botId: "__s-abx__" }),
+    listCase("bot-of-another-space-from-its-space", { botId: "__s-abx__" }, { space: 1 }),
+    listCase("group-id-as-bot", { botId: "__s-ag1__" }),
+    listCase("space-three", { botId: "__s-ab1__" }, { space: 2 }),
+    listCase("extra-keys-are-ignored", { botId: "__s-ab1__", more: 1, 2: 3 }),
+    listCase("empty-run-id-fails-the-output-check", { botId: "__s-ab1__" }, { seed: seedWith(extraFile("z1", { runId: "" })) }),
+    listCase("empty-run-id-on-another-bot-is-not-listed", { botId: "__s-ab2__" }, { seed: seedWith(extraFile("z1", { runId: "" })) }),
+    listCase("bot-id-empty", { botId: "" }),
+    listCase("bot-id-number", { botId: 5 }),
+    listCase("bot-id-null", { botId: null }),
+    listCase("bot-id-array", { botId: [] }),
+    listCase("bot-id-object-length", { botId: { length: 0 } }),
+    listCase("missing-bot-id", {}),
+    listCase("array-input", []),
+    listCase("null-input", null),
+    listCase("no-input", undefined),
+    listCase("string-input", "x"),
+    listCase("anonymous", { botId: "__s-ab1__" }, { anonymous: true }),
+
+    // artifacts.listSpace: one entry per file family, newest first, with the count of its visible versions.
+    spaceCase("all", {}),
+    spaceCase("empty-object-with-extra-keys", { more: 1 }),
+    spaceCase("limit-1-walk", { limit: 1 }, { paginate: true }),
+    spaceCase("limit-2-walk", { limit: 2 }, { paginate: true }),
+    spaceCase("limit-3-walk", { limit: 3 }, { paginate: true }),
+    spaceCase("limit-5-walk", { limit: 5 }, { paginate: true }),
+    spaceCase("limit-60", { limit: 60 }),
+    spaceCase("made-by-bots", { madeByBots: true }),
+    spaceCase("made-by-bots-false", { madeByBots: false }),
+    spaceCase("made-by-bots-walk", { madeByBots: true, limit: 1 }, { paginate: true }),
+    spaceCase("bot-one", { botId: "__s-ab1__" }),
+    spaceCase("bot-one-walk", { botId: "__s-ab1__", limit: 2 }, { paginate: true }),
+    spaceCase("bot-one-made-by-bots", { botId: "__s-ab1__", madeByBots: true }),
+    spaceCase("bot-two", { botId: "__s-ab2__" }),
+    spaceCase("bot-two-walk", { botId: "__s-ab2__", limit: 1 }, { paginate: true }),
+    spaceCase("bot-without-files", { botId: "__s-ab3__" }),
+    spaceCase("archived-bot", { botId: "__s-abarch__" }),
+    spaceCase("unknown-bot", { botId: "nope" }),
+    spaceCase("unknown-bot-before-the-cursor", { botId: "nope", cursor: "junk" }),
+    spaceCase("bot-of-another-space", { botId: "__s-abx__" }),
+    spaceCase("group-id-as-bot", { botId: "__s-ag1__" }),
+    spaceCase("second-space", {}, { space: 1 }),
+    spaceCase("second-space-bot", { botId: "__s-abx__" }, { space: 1 }),
+    spaceCase("third-space", {}, { space: 2 }),
+    spaceCase("empty-run-id-on-the-newest-fails-the-output-check", {}, { seed: seedWith(extraFile("z1", { runId: "" })) }),
+    spaceCase("empty-run-id-just-past-the-page-is-not-parsed", { limit: 13 }, { seed: seedWith(extraFile("z1", { runId: "" })) }),
+    spaceCase("empty-run-id-last-in-the-page-fails", { limit: 14 }, { seed: seedWith(extraFile("z1", { runId: "" })) }),
+    spaceCase("empty-run-id-on-an-older-version", {}, {
+      seed: seedWith(async (seeded) => {
+        await extraFile("y1", { name: "y.txt", runId: "" })(seeded);
+        await extraFile("y2", { name: "y.txt", version: 2, rootArtifactId: `${seeded.userId}-y1`, createdAt: new Date(base - 99 * 3_600_000) })(seeded);
+      }),
+    }),
+    spaceCase("limit-0", { limit: 0 }),
+    spaceCase("limit-61", { limit: 61 }),
+    spaceCase("limit-negative", { limit: -1 }),
+    spaceCase("limit-fraction", { limit: 1.5 }),
+    spaceCase("limit-string", { limit: "5" }),
+    spaceCase("limit-null", { limit: null }),
+    spaceCase("limit-true", { limit: true }),
+    spaceCase("limit-huge", { limit: 1e300 }),
+    spaceCase("limit-unsafe", { limit: 9007199254740993 }),
+    spaceCase("made-by-bots-string", { madeByBots: "yes" }),
+    spaceCase("made-by-bots-number", { madeByBots: 1 }),
+    spaceCase("made-by-bots-null", { madeByBots: null }),
+    spaceCase("bot-id-empty", { botId: "" }),
+    spaceCase("bot-id-number", { botId: 5 }),
+    spaceCase("bot-id-null", { botId: null }),
+    spaceCase("bot-id-array", { botId: [] }),
+    spaceCase("cursor-number", { cursor: 5 }),
+    spaceCase("cursor-null", { cursor: null }),
+    spaceCase("cursor-array", { cursor: [] }),
+    spaceCase("cursor-object", { cursor: {} }),
+    spaceCase("cursor-true", { cursor: true }),
+    spaceCase("cursor-empty-string-is-no-cursor", { cursor: "" }),
+    spaceCase("everything-invalid", { botId: 5, madeByBots: "x", cursor: 5, limit: 0 }),
+    spaceCase("array-input", []),
+    spaceCase("null-input", null),
+    spaceCase("no-input", undefined),
+    spaceCase("string-input", "x"),
+    spaceCase("anonymous", {}, { anonymous: true }),
+
+    // Cursors: what the server writes and what a caller might change.
+    spaceCase("cursor-valid-middle", { limit: 3, cursor: cur(good) }),
+    spaceCase("cursor-valid-walk", { limit: 2, cursor: cur(good) }, { paginate: true }),
+    spaceCase("cursor-at-the-oldest", { cursor: cur({ ...good, createdAt: iso(40), id: "zzz" }) }),
+    spaceCase("cursor-same-time-different-id", { cursor: cur({ ...good, createdAt: iso(15), id: "ct-" }) }),
+    spaceCase("cursor-asof-freezes-newer-versions", { cursor: cur({ ...good, createdAt: iso(0), asOf: iso(15) }) }),
+    spaceCase("cursor-asof-before-everything", { cursor: cur({ ...good, createdAt: iso(0), asOf: iso(400) }) }),
+    spaceCase("cursor-asof-after-the-future-file", { cursor: cur({ ...good, createdAt: "2100-01-01T00:00:00.000Z", asOf: farFuture }), limit: 2 }),
+    botCursor("cursor-scope-bot-matches", { botId: "__s-ab1__" }, good, "ab1"),
+    botCursor("cursor-scope-other-bot", { botId: "__s-ab1__" }, good, "ab2"),
+    botCursor("cursor-scope-bot-in-the-cursor-only", {}, good, "ab1"),
+    spaceCase("cursor-scope-bot-in-the-input-only", { botId: "__s-ab1__", cursor: cur(good) }),
+    spaceCase("cursor-scope-made-by-bots-matches", { madeByBots: true, cursor: cur({ ...good, madeByBots: true }) }),
+    spaceCase("cursor-scope-made-by-bots-in-the-input-only", { madeByBots: true, cursor: cur(good) }),
+    spaceCase("cursor-scope-made-by-bots-in-the-cursor-only", { cursor: cur({ ...good, madeByBots: true }) }),
+    spaceCase("cursor-made-by-bots-absent-reads-false", { cursor: cur({ createdAt: good.createdAt, id: good.id, botId: null, asOf: good.asOf }) }),
+    spaceCase("cursor-made-by-bots-null-reads-false", { cursor: cur({ ...good, madeByBots: null }) }),
+    spaceCase("cursor-made-by-bots-string", { cursor: cur({ ...good, madeByBots: "yes" }) }),
+    spaceCase("cursor-made-by-bots-number", { cursor: cur({ ...good, madeByBots: 1 }) }),
+    spaceCase("cursor-bot-id-missing", { cursor: cur({ createdAt: good.createdAt, id: good.id, madeByBots: false, asOf: good.asOf }) }),
+    spaceCase("cursor-bot-id-number", { cursor: cur({ ...good, botId: 5 }) }),
+    spaceCase("cursor-bot-id-empty-string", { cursor: cur({ ...good, botId: "" }) }),
+    spaceCase("cursor-id-empty", { cursor: cur({ ...good, id: "" }) }),
+    spaceCase("cursor-id-null", { cursor: cur({ ...good, id: null }) }),
+    spaceCase("cursor-id-number", { cursor: cur({ ...good, id: 5 }) }),
+    spaceCase("cursor-id-missing", { cursor: cur({ createdAt: good.createdAt, botId: null, madeByBots: false, asOf: good.asOf }) }),
+    spaceCase("cursor-id-unicode", { cursor: cur({ ...good, id: "日本語" }) }),
+    spaceCase("cursor-id-emoji", { cursor: cur({ ...good, id: "😀" }) }),
+    spaceCase("cursor-id-nul", { cursor: cur({ ...good, id: "a\u0000b" }) }),
+    spaceCase("cursor-id-long", { cursor: cur({ ...good, id: "x".repeat(10_000) }) }),
+    spaceCase("cursor-created-at-missing", { cursor: cur({ id: good.id, botId: null, madeByBots: false, asOf: good.asOf }) }),
+    spaceCase("cursor-created-at-number", { cursor: cur({ ...good, createdAt: 5 }) }),
+    spaceCase("cursor-created-at-null", { cursor: cur({ ...good, createdAt: null }) }),
+    spaceCase("cursor-created-at-text", { cursor: cur({ ...good, createdAt: "yesterday" }) }),
+    spaceCase("cursor-created-at-date-only", { cursor: cur({ ...good, createdAt: "2026-04-30" }) }),
+    spaceCase("cursor-created-at-offset", { cursor: cur({ ...good, createdAt: "2026-04-30T10:00:00+05:30" }) }),
+    spaceCase("cursor-created-at-long-fraction", { cursor: cur({ ...good, createdAt: "2026-04-30T10:00:00.1234567Z" }) }),
+    spaceCase("cursor-created-at-hour-24", { cursor: cur({ ...good, createdAt: "2026-05-01T24:00:00Z" }) }),
+    spaceCase("cursor-created-at-hour-25", { cursor: cur({ ...good, createdAt: "2026-05-01T25:00:00Z" }) }),
+    spaceCase("cursor-created-at-feb-30", { cursor: cur({ ...good, createdAt: "2026-02-30" }) }),
+    spaceCase("cursor-created-at-month-13", { cursor: cur({ ...good, createdAt: "2026-13-01" }) }),
+    spaceCase("cursor-as-of-missing", { cursor: cur({ createdAt: good.createdAt, id: good.id, botId: null, madeByBots: false }) }),
+    spaceCase("cursor-as-of-number", { cursor: cur({ ...good, asOf: 5 }) }),
+    spaceCase("cursor-as-of-null", { cursor: cur({ ...good, asOf: null }) }),
+    spaceCase("cursor-as-of-text", { cursor: cur({ ...good, asOf: "soon" }) }),
+    spaceCase("cursor-as-of-offset", { cursor: cur({ ...good, asOf: "2026-05-01T17:30:00+05:30" }) }),
+    spaceCase("cursor-extra-keys", { cursor: cur({ ...good, more: [1] }) }),
+    spaceCase("cursor-keys-in-another-order", { cursor: cur({ asOf: good.asOf, madeByBots: false, botId: null, id: "zzz", createdAt: good.createdAt }) }),
+    spaceCase("cursor-duplicate-keys-last-wins", {
+      cursor: rawCursor(`{"createdAt":"${good.createdAt}","id":"a","id":"zzz","botId":null,"asOf":"${good.asOf}"}`),
+    }),
+    spaceCase("cursor-upper-case-keys", { cursor: cur({ CreatedAt: good.createdAt, ID: "zzz", BotId: null, AsOf: good.asOf }) }),
+    spaceCase("cursor-capitalized-id", { cursor: cur({ createdAt: good.createdAt, Id: "zzz", botId: null, asOf: good.asOf }) }),
+    spaceCase("cursor-no-prefix", { cursor: cur(good).slice(3) }),
+    spaceCase("cursor-prefix-upper-case", { cursor: `V1.${cur(good).slice(3)}` }),
+    spaceCase("cursor-prefix-v2", { cursor: `v2.${cur(good).slice(3)}` }),
+    spaceCase("cursor-prefix-without-dot", { cursor: `v1${cur(good).slice(3)}` }),
+    spaceCase("cursor-prefix-only", { cursor: "v1." }),
+    spaceCase("cursor-junk", { cursor: "v1.!!!" }),
+    spaceCase("cursor-not-json", { cursor: rawCursor("nope") }),
+    spaceCase("cursor-null-document", { cursor: rawCursor("null") }),
+    spaceCase("cursor-array-document", { cursor: rawCursor("[]") }),
+    spaceCase("cursor-number-document", { cursor: rawCursor("5") }),
+    spaceCase("cursor-string-document", { cursor: rawCursor('"x"') }),
+    spaceCase("cursor-empty-object", { cursor: rawCursor("{}") }),
+    spaceCase("cursor-padded", { cursor: `${cur(good)}==` }),
+    spaceCase("cursor-standard-base64", { cursor: `v1.${Buffer.from(JSON.stringify({ ...good, id: "zz\u00ffz??>>" })).toString("base64")}` }),
+    spaceCase("cursor-whitespace-inside", { cursor: `${cur(good).slice(0, 14)} \n ${cur(good).slice(14)}` }),
+    spaceCase("cursor-junk-characters-inside", { cursor: `${cur(good).slice(0, 14)}*.${cur(good).slice(14)}` }),
+    spaceCase("cursor-byte-order-mark", { cursor: rawCursor(`\ufeff${JSON.stringify(good)}`) }),
+    spaceCase("cursor-invalid-utf8-in-the-id", {
+      cursor: `v1.${Buffer.concat([Buffer.from(`{"createdAt":"${good.createdAt}","id":"a`), Buffer.from([0xe2, 0x82]), Buffer.from(`b","botId":null,"asOf":"${good.asOf}"}`)]).toString("base64url")}`,
+    }),
+
+    // artifacts.listVersions: the family any version's id names, newest first, hidden members included.
+    versionsCase("first-version", { familyId: "__s-r1__" }),
+    versionsCase("middle-version", { familyId: "__s-r2__" }),
+    versionsCase("newest-version", { familyId: "__s-r3__" }),
+    versionsCase("hidden-member-of-the-family", { familyId: "__s-r4__" }),
+    versionsCase("single-file", { familyId: "__s-s1__" }),
+    versionsCase("standalone-file", { familyId: "__s-st1__" }),
+    versionsCase("same-name-file-is-another-family", { familyId: "__s-c1__" }),
+    versionsCase("mcp-app-html", { familyId: "__s-app__" }),
+    versionsCase("group-file", { familyId: "__s-g1__" }),
+    versionsCase("file-of-an-archived-bot", { familyId: "__s-a1__" }),
+    versionsCase("file-of-no-bot", { familyId: "__s-nb__" }),
+    versionsCase("file-with-the-largest-version", { familyId: "__s-hv__" }),
+    versionsCase("file-made-after-now", { familyId: "__s-fut__" }),
+    versionsCase("step-screenshot", { familyId: "__s-ss0__" }),
+    versionsCase("step-screenshot-webp", { familyId: "__s-ss2__" }),
+    versionsCase("step-screenshot-in-another-case-is-a-file", { familyId: "__s-ssc__" }),
+    versionsCase("file-of-another-space", { familyId: "__s-x1__" }),
+    versionsCase("file-of-another-space-from-its-space", { familyId: "__s-x1__" }, { space: 1 }),
+    versionsCase("file-of-the-first-space-from-the-second", { familyId: "__s-r1__" }, { space: 1 }),
+    versionsCase("unknown-file", { familyId: "nope" }),
+    versionsCase("family-id-nul", { familyId: "a\u0000b" }),
+    versionsCase("extra-keys-are-ignored", { familyId: "__s-r2__", more: 1 }),
+    versionsCase("family-id-empty", { familyId: "" }),
+    versionsCase("family-id-number", { familyId: 5 }),
+    versionsCase("family-id-null", { familyId: null }),
+    versionsCase("family-id-array", { familyId: [] }),
+    versionsCase("family-id-object-length", { familyId: { length: 0 } }),
+    versionsCase("missing-family-id", {}),
+    versionsCase("array-input", []),
+    versionsCase("null-input", null),
+    versionsCase("no-input", undefined),
+    versionsCase("string-input", "x"),
+    versionsCase("anonymous", { familyId: "__s-r1__" }, { anonymous: true }),
+  ];
+}
+
 async function reset(seeded: ReturnType<typeof ids>) {
+  await system.artifact.deleteMany({ where: { spaceId: { in: seeded.spaces } } });
   const { userId, orgId } = seeded;
   await system.messagingOutbound.deleteMany({ where: { id: { startsWith: userId } } });
   await system.agentConnection.deleteMany({ where: { id: { startsWith: userId } } });
@@ -3004,6 +3568,9 @@ const WRITE_PROCEDURES = new Set([
   "spaces.invites.cancel",
   "organizations.rename",
   "trustedLinkSites.remove",
+  "pages.rename",
+  "pages.pin",
+  "models.rename",
 ]);
 
 const CUID = /^c[0-9a-z]{24}$/;
@@ -3013,11 +3580,15 @@ const HARNESS_START = Date.now() - 3_600_000;
 
 /**
  * Ids and times each side generates itself differ run to run. A fresh cuid becomes "<cuid>" and a time
- * since the harness started becomes "<now>", so shape and recency are still compared exactly.
+ * since the harness started becomes "<now>", so shape and recency are still compared exactly. An artifact
+ * list cursor carries the instant its sequence started (asOf), which each side takes from its own clock: that
+ * one field is read like any other time, and the rest of the cursor is compared as is.
  */
 function normalize<T>(value: T): T {
   const visit = (node: unknown): unknown => {
     if (typeof node === "string") {
+      const cursor = artifactCursor(node);
+      if (cursor) return cursor;
       if (CUID.test(node)) return "<cuid>";
       if (LINK_CODE.test(node)) return "<code>";
       // Times near now (link-code expiry is minutes ahead) vary per run; instants days away are the case's own data.
@@ -3031,6 +3602,21 @@ function normalize<T>(value: T): T {
     return node;
   };
   return visit(JSON.parse(JSON.stringify(value))) as T;
+}
+
+const ARTIFACT_CURSOR_KEYS = ["createdAt", "id", "botId", "madeByBots", "asOf"].join(",");
+
+/** An artifact list cursor with its asOf read as a time, or undefined when the string is not one. */
+function artifactCursor(text: string): string | undefined {
+  if (!text.startsWith("v1.")) return undefined;
+  try {
+    const record = JSON.parse(Buffer.from(text.slice(3), "base64url").toString("utf8"));
+    if (!record || typeof record !== "object" || Object.keys(record).join(",") !== ARTIFACT_CURSOR_KEYS) return undefined;
+    const near = ISO_TIME.test(record.asOf) && Date.parse(record.asOf) >= HARNESS_START && Date.parse(record.asOf) <= Date.now() + 6 * 3_600_000;
+    return `v1.${Buffer.from(JSON.stringify({ ...record, asOf: near ? "<now>" : record.asOf })).toString("base64url")}`;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Runs a call and reports the roster and Space-change signals published while it ran. */
@@ -3119,7 +3705,7 @@ async function databaseState(seeded: ReturnType<typeof ids>) {
   });
   const pages = await system.page.findMany({
     where: { spaceId: { in: seeded.spaces } },
-    select: { id: true, userId: true, title: true, pinnedAt: true, updatedAt: true },
+    select: { id: true, userId: true, botId: true, groupId: true, title: true, visibility: true, currentVersion: true, shareTokenHash: true, shareSecretId: true, pinnedAt: true, createdAt: true, updatedAt: true },
     orderBy: { id: "asc" },
   });
   const botSections = await system.botSection.findMany({
@@ -3201,6 +3787,16 @@ async function databaseState(seeded: ReturnType<typeof ids>) {
     select: { id: true, spaceId: true, userId: true, provider: true, displayName: true, status: true, connectorId: true, createdAt: true, updatedAt: true },
     orderBy: { id: "asc" },
   });
+  const artifacts = await system.artifact.findMany({
+    where: { spaceId: { in: seeded.spaces } },
+    select: { id: true, spaceId: true, userId: true, botId: true, groupId: true, runId: true, name: true, mimeType: true, version: true, rootArtifactId: true, standalone: true, createdAt: true },
+    orderBy: { id: "asc" },
+  });
+  const modelCredentials = await system.userModelCredential.findMany({
+    where: { userId: owners },
+    select: { id: true, userId: true, provider: true, label: true, secretId: true, supportsImages: true, createdAt: true, updatedAt: true },
+    orderBy: { id: "asc" },
+  });
   const trustedLinkSites = await system.trustedLinkSite.findMany({
     where: { userId: { in: [seeded.userId, `${seeded.userId}-other`] } },
     select: { userId: true, site: true },
@@ -3258,6 +3854,8 @@ async function databaseState(seeded: ReturnType<typeof ids>) {
     vaultCredentials,
     connections,
     membership: await membershipState(system, seeded),
+    artifacts,
+    modelCredentials,
   };
 }
 
