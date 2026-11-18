@@ -129,7 +129,6 @@ await writeFile(
       "approvalRules.list": { mode: "go", readOnly: true },
       "approvalRules.set": { mode: "go" },
       "spaceSettings.overrides": { mode: "go", readOnly: true },
-      "spaceSettings.setOverride": { mode: "go" },
     },
   }),
 );
@@ -2059,11 +2058,10 @@ function spaceSettingCases(): Case[] {
     procedure: `spaceSettings.${procedure}`,
     input,
     seed: seedSettings(),
-    after: procedure === "setOverride" ? SETTINGS_AFTER : undefined,
+    after: undefined,
     ...extra,
   });
   const overrides = mk("overrides");
-  const set = mk("setOverride");
   const all = ["models", "voice", "confirmations", "credentials"];
   const some = (...overrides: string[]) => ({ seed: seedSettings({ overrides }) });
   return [
@@ -2073,31 +2071,6 @@ function spaceSettingCases(): Case[] {
     overrides("space-two-header", undefined, { space: 1, ...some("models") }),
     overrides("junk-input-is-ignored", { anything: 1 }),
     overrides("anonymous", undefined, { anonymous: true }),
-
-    ...all.flatMap((setting) => [
-      set(`${setting}-enable`, { setting, enabled: true }),
-      set(`${setting}-disable`, { setting, enabled: false }, some(setting)),
-      set(`${setting}-enable-when-already-on`, { setting, enabled: true }, some(setting)),
-      set(`${setting}-disable-when-already-off`, { setting, enabled: false }),
-      set(`${setting}-enable-over-a-stray-copy`, { setting, enabled: true }, { seed: seedSettings({ strayCopy: true }) }),
-      set(`${setting}-enable-with-nothing-to-copy`, { setting, enabled: true }, { seed: seedSettings({ bare: true }) }),
-      set(`${setting}-disable-leaves-the-others`, { setting, enabled: false }, some(...all)),
-      set(`${setting}-enable-in-space-two`, { setting, enabled: true }, { space: 1 }),
-    ]),
-    set("extra-keys-ignored", { setting: "models", enabled: true, more: 1 }),
-    set("setting-unknown", { setting: "billing", enabled: true }),
-    set("setting-null", { setting: null, enabled: true }),
-    set("setting-number", { setting: 1, enabled: true }),
-    set("setting-missing", { enabled: true }),
-    set("enabled-string", { setting: "models", enabled: "true" }),
-    set("enabled-null", { setting: "models", enabled: null }),
-    set("enabled-missing", { setting: "models" }),
-    set("everything-wrong", { setting: 1, enabled: 2 }),
-    set("empty-object", {}),
-    set("no-input", undefined),
-    set("null-input", null),
-    set("array-input", []),
-    set("anonymous", { setting: "models", enabled: true }, { anonymous: true }),
   ];
 }
 

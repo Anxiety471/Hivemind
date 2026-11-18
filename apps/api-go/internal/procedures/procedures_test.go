@@ -22,7 +22,7 @@ func TestRegistryHasTheServedProceduresAndNotTrust(t *testing.T) {
 		"spendingLimit.set",
 		"threads.head", "threads.markRead", "threads.markUnread", "threads.snooze", "externalConversations.updatePolicy",
 		"scratchpad.list", "scratchpad.create", "scratchpad.update", "scratchpad.remove",
-		"approvalRules.list", "approvalRules.set", "spaceSettings.overrides", "spaceSettings.setOverride",
+		"approvalRules.list", "approvalRules.set", "spaceSettings.overrides",
 		"messaging.link.start", "messaging.identities.setBot", "messaging.identities.unlink", "messaging.channels.list",
 		"messaging.channels.respond", "messaging.channels.leave", "messaging.connections.list", "messaging.connections.revoke", "botSections.create", "botSections.update", "botSections.remove",
 	} {
@@ -35,7 +35,9 @@ func TestRegistryHasTheServedProceduresAndNotTrust(t *testing.T) {
 		t.Error("trustedLinkSites.trust must not be served locally")
 	}
 	// approvalRules.remove is audited with a caller-chosen id the redaction gate cannot prove safe.
-	for _, name := range []string{"approvalRules.remove", "autoReview.get", "autoReview.set"} {
+	// spaceSettings.setOverride deletes vault credentials, and the API's Prisma client runs secret
+	// persistence on that (write-ahead cleanup jobs, remote SecretStore deletes) that a plain DELETE skips.
+	for _, name := range []string{"approvalRules.remove", "autoReview.get", "autoReview.set", "spaceSettings.setOverride"} {
 		if seen[name] {
 			t.Errorf("%s must not be served locally", name)
 		}

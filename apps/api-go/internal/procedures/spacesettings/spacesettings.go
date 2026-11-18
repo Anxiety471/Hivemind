@@ -1,6 +1,13 @@
 // Package spacesettings ports spaceSettings.overrides and spaceSettings.setOverride
 // (packages/db/src/space-settings.ts), and the helpers every member-settings
 // procedure shares: the membership lock and the choice of account or Space copy.
+//
+// Only overrides is registered. setOverride is not served: its credentials branch
+// deletes vault_credentials rows, and the API's Prisma client (withSecretPersistence,
+// packages/adapters/src/secret-persistence.ts) captures their secret refs, enqueues
+// write-ahead cleanup jobs and deletes remote secrets after commit, which a plain
+// DELETE here would skip. The code is kept, tested, and unregistered until that
+// cleanup is ported.
 package spacesettings
 
 import (

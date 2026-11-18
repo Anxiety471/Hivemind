@@ -174,8 +174,9 @@ func TestHTTPSettingsWritesAreAuditedAndSilent(t *testing.T) {
 	if status, body := call("approvalRules/set", `{"effect":"deny","matchKind":"site","matchValue":"x.example"}`); status != 200 || !strings.Contains(body, `"matchValue":"x.example"`) {
 		t.Fatalf("set = %d %s", status, body)
 	}
-	if status, body := call("spaceSettings/setOverride", `{"setting":"credentials","enabled":true}`); status != 200 || body != `{"json":["credentials"]}` {
-		t.Fatalf("setOverride = %d %s", status, body)
+	// setOverride is not served here (it deletes vault credentials); the gateway proxies it.
+	if status, _ := call("spaceSettings/setOverride", `{"setting":"models","enabled":true}`); status == 200 {
+		t.Fatal("setOverride must not be served locally")
 	}
 	if status, body := call("approvalRules/set", `{"effect":"deny","matchKind":"category","matchValue":"x"}`); status != 400 {
 		t.Fatalf("an invalid rule = %d %s", status, body)
@@ -184,12 +185,12 @@ func TestHTTPSettingsWritesAreAuditedAndSilent(t *testing.T) {
 		t.Fatalf("signals = %q", got)
 	}
 	rows := systemScalar[string](t, database, `SELECT string_agg(metadata::text, ' | ' ORDER BY metadata::text) FROM security_events WHERE "userId" = $1 AND type = 'approval.policy.changed'`, s.UserID)
-	want := `{"effect": "deny", "matchKind": "site", "procedure": "approvalRules.set"} | {"enabled": true, "setting": "credentials", "procedure": "spaceSettings.setOverride"}`
+	want := `{"effect": "deny", "matchKind": "site", "procedure": "approvalRules.set"}`
 	if rows != want {
 		t.Fatalf("security events = %s", rows)
 	}
-	if n := systemScalar[int](t, database, `SELECT count(*)::int FROM audit_events WHERE "actorId" = $1 AND action = 'approval.policy.changed'`, s.UserID); n != 2 {
-		t.Fatalf("%d audit rows, want 2", n)
+	if n := systemScalar[int](t, database, `SELECT count(*)::int FROM audit_events WHERE "actorId" = $1 AND action = 'approval.policy.changed'`, s.UserID); n != 1 {
+		t.Fatalf("%d audit rows, want 1", n)
 	}
 }
 

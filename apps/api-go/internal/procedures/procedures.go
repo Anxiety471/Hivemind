@@ -249,11 +249,5 @@ func All(database *db.DB) []local.Procedure {
 				return spacesettings.Overrides(ctx, database, actor)
 			},
 		},
-		{
-			Name: "spaceSettings.setOverride",
-			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
-				return spacesettings.SetOverride(ctx, database, actor, input)
-			},
-		},
 	}
 }
