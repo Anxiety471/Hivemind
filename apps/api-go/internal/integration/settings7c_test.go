@@ -16,8 +16,8 @@ import (
 
 func addConnection(t *testing.T, database *db.DB, id, spaceID, userID, status string, offset int) {
 	t.Helper()
-	exec(t, database, `INSERT INTO connections (id, "spaceId", "userId", provider, "displayName", status, "connectorId", "createdAt")
-		VALUES ($1, $2, $3, 'github', $4, $5, 'managed', now() + ($6 || ' seconds')::interval)`,
+	exec(t, database, `INSERT INTO connections (id, "spaceId", "userId", provider, "displayName", status, "connectorId", "createdAt", "updatedAt")
+		VALUES ($1, $2, $3, 'github', $4, $5, 'managed', now() + make_interval(secs => $6::int), now())`,
 		id, spaceID, userID, "Connection "+id, status, offset)
 }
 
@@ -75,10 +75,17 @@ func TestCapabilitiesConfigFallbackAndAvailability(t *testing.T) {
 	if failure != nil {
 		t.Fatal(failure)
 	}
-	if len(installs) != 1 {
+	// The seed's own install is in this Space too; find the one this test added.
+	var found capabilities.Install
+	seen := false
+	for _, install := range installs {
+		if install.ID == "k2-"+s.UserID {
+			found, seen = install, true
+		}
+	}
+	if !seen {
 		t.Fatalf("installs = %+v", installs)
 	}
-	found := installs[0]
 	if string(found.Config) != "{}" || !found.SecretConfigured || found.Availability.AllSpaces ||
 		found.Availability.SpaceIDs[0] != s.Space2 || len(found.Availability.SpaceIDs) != 2 {
 		t.Fatalf("install = %+v", found)
@@ -91,27 +98,28 @@ func TestUsageSummaryTotalsAndRuns(t *testing.T) {
 	database := openTestDB(t)
 	s := seed(t, database)
 	actor := db.Actor{UserID: s.UserID, SpaceID: s.Space1}
-	record := func(id, spaceID, userID string, tokens *int32, cost *float64, runID, parentRunID *string) {
+	record := func(id, spaceID, userID string, input *int32, total *int32, cost *float64, runID, parentRunID *string) {
 		t.Helper()
 		exec(t, database, `INSERT INTO usage_records (id, "spaceId", "userId", provider, model, "inputTokens", "totalTokens", "costUsd", "runId", "parentRunId")
 			VALUES ($1, $2, $3, 'openai', 'gpt-a', $4, $5, $6, $7, $8)`,
-			id, spaceID, userID, tokens, tokens, cost, runID, parentRunID)
+			id, spaceID, userID, input, total, cost, runID, parentRunID)
 	}
-	record("u1-"+s.UserID, s.Space1, s.UserID, new(int32(10)), new(0.25), new("r1-"+s.UserID), nil)
-	record("u2-"+s.UserID, s.Space1, s.UserID, new(int32(20)), nil, new("r2-"+s.UserID), nil)
-	record("u3-"+s.UserID, s.Space1, s.UserID, nil, nil, new("r3-"+s.UserID), new("r1-"+s.UserID))
-	record("u4-"+s.UserID, s.Space1, s.User2ID, new(int32(999)), nil, new("r4-"+s.UserID), nil)
-	record("u5-"+s.UserID, s.Space2, s.UserID, new(int32(888)), nil, new("r5-"+s.UserID), nil)
+	record("u1-"+s.UserID, s.Space1, s.UserID, new(int32(10)), new(int32(15)), new(0.25), new("r1-"+s.UserID), nil)
+	record("u2-"+s.UserID, s.Space1, s.UserID, new(int32(20)), new(int32(30)), nil, new("r2-"+s.UserID), nil)
+	// The subagent row: an input figure, no total, and its parent's run.
+	record("u3-"+s.UserID, s.Space1, s.UserID, new(int32(5)), nil, nil, new("r3-"+s.UserID), new("r1-"+s.UserID))
+	record("u4-"+s.UserID, s.Space1, s.User2ID, new(int32(999)), new(int32(999)), nil, new("r4-"+s.UserID), nil)
+	record("u5-"+s.UserID, s.Space2, s.UserID, new(int32(888)), new(int32(888)), nil, new("r5-"+s.UserID), nil)
 	summary, failure := usage.SummaryOf(context.Background(), database, actor)
 	if failure != nil {
 		t.Fatal(failure)
 	}
 	result := summary.(usage.Summary)
-	// totalTokens is null (u3 lacks it); the input figure is complete over three rows.
-	if result.TotalTokens != nil {
-		t.Fatalf("totalTokens = %v", result.TotalTokens)
+	// totalTokens is null (u3 lacks it) and so is the cost (only u1 has one); input is complete.
+	if result.TotalTokens != nil || result.CostUSD != nil {
+		t.Fatalf("totals = %+v", result.Totals)
 	}
-	if result.InputTokens == nil || *result.InputTokens != 30 || result.CostUSD == nil || *result.CostUSD != 0.25 {
+	if result.InputTokens == nil || *result.InputTokens != 35 || result.OutputTokens != nil {
 		t.Fatalf("totals = %+v", result.Totals)
 	}
 	if result.ModelCalls != 3 || result.Runs != 2 { // r1 (with r3 folded in) and r2
@@ -127,13 +135,13 @@ func TestComputerUpdatesRejectASchemaBreakingRow(t *testing.T) {
 	database := openTestDB(t)
 	s := seed(t, database)
 	actor := db.Actor{UserID: s.UserID, SpaceID: s.Space1}
-	exec(t, database, `INSERT INTO computers (id, "spaceId", "userId", kind, scope, "scopeKey", "homeKey") VALUES ($1, $2, $3, 'local', 'team', $4, $5)`,
+	exec(t, database, `INSERT INTO computers (id, "spaceId", "userId", kind, scope, "scopeKey", "homeKey", "updatedAt") VALUES ($1, $2, $3, 'local', 'team', $4, $5, now())`,
 		"cp-"+s.UserID, s.Space1, s.UserID, "sk-"+s.UserID, "hk-"+s.UserID)
 	addBot(t, database, "cb-"+s.UserID, s.Space1, s.UserID, "Bot")
 	exec(t, database, `UPDATE bots SET "computerId" = $1 WHERE id = $2`, "cp-"+s.UserID, "cb-"+s.UserID)
 	update := func(id, action, status, stage string) {
 		t.Helper()
-		exec(t, database, `INSERT INTO computer_updates (id, "computerId", "botId", action, status, stage) VALUES ($1, $2, $3, $4, $5, $6)`,
+		exec(t, database, `INSERT INTO computer_updates (id, "computerId", "botId", action, status, stage, "updatedAt") VALUES ($1, $2, $3, $4, $5, $6, now())`,
 			id, "cp-"+s.UserID, "cb-"+s.UserID, action, status, stage)
 	}
 	update("up1-"+s.UserID, "update", "queued", "preparing")
@@ -142,7 +150,8 @@ func TestComputerUpdatesRejectASchemaBreakingRow(t *testing.T) {
 		t.Fatalf("updates = %+v %v", updates, failure)
 	}
 	update("up2-"+s.UserID, "reinstall", "queued", "preparing")
-	if _, failure := computer.Updates(context.Background(), database, actor); failure == nil || failure.Message != "Output validation failed" {
+	// TypeScript parses these rows inside the handler, so the answer is the generic 500.
+	if _, failure := computer.Updates(context.Background(), database, actor); failure == nil || failure.Message != "Internal server error" {
 		t.Fatalf("bad action = %v", failure)
 	}
 }
@@ -152,12 +161,12 @@ func TestMcpAssignmentsReadAllowedTools(t *testing.T) {
 	database := openTestDB(t)
 	s := seed(t, database)
 	actor := db.Actor{UserID: s.UserID, SpaceID: s.Space1}
-	exec(t, database, `INSERT INTO mcp_servers (id, "spaceId", "userId", slug, name, transport, command) VALUES ($1, $2, $3, 'm', 'Server', 'stdio', 'true')`,
+	exec(t, database, `INSERT INTO mcp_servers (id, "spaceId", "userId", slug, name, transport, command, "updatedAt") VALUES ($1, $2, $3, 'm', 'Server', 'stdio', 'true', now())`,
 		"m1-"+s.UserID, s.Space1, s.UserID)
 	addBot(t, database, "mb-"+s.UserID, s.Space1, s.UserID, "Bot")
 	assign := func(id, tools string) {
 		t.Helper()
-		exec(t, database, `INSERT INTO bot_mcp_servers (id, "spaceId", "userId", "botId", "serverId", "allowAllTools", "allowedTools") VALUES ($1, $2, $3, $4, $5, false, $6::jsonb)`,
+		exec(t, database, `INSERT INTO bot_mcp_servers (id, "spaceId", "userId", "botId", "serverId", "allowAllTools", "allowedTools", "updatedAt") VALUES ($1, $2, $3, $4, $5, false, $6::jsonb, now())`,
 			id, s.Space1, s.UserID, "mb-"+s.UserID, "m1-"+s.UserID, tools)
 	}
 	assign("a1-"+s.UserID, `["read", 1, null, {"x":1}]`)
@@ -165,7 +174,8 @@ func TestMcpAssignmentsReadAllowedTools(t *testing.T) {
 	if failure != nil || len(found) != 1 || strings.Join(found[0].AllowedTools, ",") != "read" {
 		t.Fatalf("assignments = %+v %v", found, failure)
 	}
-	assign("a2-"+s.UserID, `["ok", "x"]`)
+	// An empty tool name breaks the schema's 1..200 bound (one character is fine).
+	exec(t, database, `UPDATE bot_mcp_servers SET "allowedTools" = '["ok", ""]'::jsonb WHERE id = $1`, "a1-"+s.UserID)
 	if _, failure := mcpassignments.List(context.Background(), database, actor, raw(`{"botId":"mb-`+s.UserID+`"}`)); failure == nil || failure.Message != "Output validation failed" {
 		t.Fatalf("short tool name = %v", failure)
 	}
