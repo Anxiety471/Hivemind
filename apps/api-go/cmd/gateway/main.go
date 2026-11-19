@@ -17,6 +17,7 @@ import (
 
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/auth"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/config"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/contentcrypto"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/gateway"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/local"
@@ -166,11 +167,17 @@ func setupLocal(buildIDFile string, logger *slog.Logger) (*local.Server, func(),
 		SignupAllowlist: deployment.SignupAllowlist,
 		OIDCBypass:      deployment.OIDCBypass,
 	})
+	ring, closeRing, err := contentRing(startup, database, deployment, logger)
+	if err != nil {
+		database.Close()
+		return nil, nil, err
+	}
 	server := local.New(database, sessions, procedures.All(database, shared.Deployment{
 		WebOrigin:           strings.TrimRight(deployment.WebOrigin, "/"),
 		EmailDelivery:       deployment.EmailDelivery,
 		InboundEmailDomain:  deployment.InboundEmailDomain,
 		MaxComputersPerUser: deployment.MaxComputersPerUser,
+		Content:             ring,
 	}), local.Config{
 		BuildID:        readBuildID(buildIDFile),
 		Minimums:       deployment.Minimums,
@@ -181,5 +188,30 @@ func setupLocal(buildIDFile string, logger *slog.Logger) (*local.Server, func(),
 		TrustedOrigins: deployment.TrustedOrigins,
 		Logger:         logger,
 	})
-	return server, database.Close, nil
+	return server, func() {
+		closeRing()
+		database.Close()
+	}, nil
+}
+
+// contentRing builds the Space key ring. A provider this build cannot use, a missing master
+// key or a stored key no master key unwraps stops startup: serving encrypted procedures with
+// a ring that cannot open rows would turn every memory read into a 500, silently (apps/api/src/
+// app.ts:342-346 logs the last case at startup for the same reason).
+func contentRing(ctx context.Context, database *db.DB, deployment config.Config, logger *slog.Logger) (*contentcrypto.KeyRing, func(), error) {
+	provider, err := contentcrypto.NewLocalKeyProvider(deployment.MasterKeys)
+	if err != nil {
+		return nil, nil, err
+	}
+	store, err := contentcrypto.OpenPgSpaceKeyStore(ctx, database)
+	if err != nil {
+		return nil, nil, err
+	}
+	ring := contentcrypto.NewKeyRing(provider, store, contentcrypto.KeyRingOptions{
+		EncryptWrites: deployment.ContentEncryption,
+	})
+	if unreadable := ring.UnreadableMasterKeys(ctx); len(unreadable) > 0 {
+		logger.Error("stored space keys need master keys that are not configured", "masterKeyIds", unreadable)
+	}
+	return ring, store.Close, nil
 }
