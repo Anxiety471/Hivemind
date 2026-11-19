@@ -86,6 +86,11 @@ export type Case = {
   after?: Array<{ procedure: string; input: unknown }>;
   /** The API sets no order on the list (Prisma's findMany without orderBy): compare it by id. */
   unordered?: boolean;
+  /**
+   * A string result whose concatenated parts have no order either (memory.exportMarkdown joins
+   * rows with no ORDER BY): compare the parts as a set, split at the `\n\n# ` boundary.
+   */
+  unorderedSections?: boolean;
   /** Runs only with CONTRACT_EMAIL=1 (email delivery configured on both sides); otherwise only without it. */
   email?: boolean;
 };
@@ -1462,7 +1467,8 @@ async function run(
   if (!testCase.paginate) {
     const raw = await call(testCase.procedure, input, called(seeded, testCase));
     const result = testCase.unordered ? sortedById(raw) : raw;
-    return testCase.after ? { ...result, followUps: await followUps(testCase, seeded) } : result;
+    const settled = testCase.unorderedSections ? sortedSections(result) : result;
+    return testCase.after ? { ...settled, followUps: await followUps(testCase, seeded) } : settled;
   }
   const pages: Awaited<ReturnType<typeof call>>[] = [];
   let cursor: string | undefined;
@@ -1487,6 +1493,14 @@ async function followUps(testCase: Case, seeded: Seeded) {
     results.push(testCase.unordered ? sortedById(result) : result);
   }
   return results;
+}
+
+/** An unordered concatenation is compared by part: the order the rows arrive in is not a contract. */
+function sortedSections<T extends { body: any }>(result: T): T {
+  const text = result.body?.json;
+  if (typeof text !== "string" || text === "") return result;
+  const sections = text.split(/\n\n(?=# )/).sort();
+  return { ...result, body: { ...result.body, json: sections.join("\n\n") } };
 }
 
 /** A list the API does not order is compared by id: the order Postgres returns it in is not a contract. */
@@ -3388,7 +3402,7 @@ const memoryAt = (minutesAgo: number) => new Date(MEMORY_TIME - minutesAgo * 60_
 /** The documents most memory cases share: a bot's index and notes, and the Space's shared memory. */
 function seedMemoryLibrary(seeded: Seeded) {
   return seedMemoryDocuments(seeded, [
-    { id: `${seeded.userId}-mem1`, scope: "bot", path: "MEMORY.md", botId: `${seeded.userId}-membot`, content: "# Memory\n\n- likes tea", revision: 3, updatedAt: memoryAt(10) },
+    { id: `${seeded.userId}-mem1`, scope: "bot", path: "MEMORY.md", botId: `${seeded.userId}-membot`, content: "Memory notes\n\n- likes tea", revision: 3, updatedAt: memoryAt(10) },
     { id: `${seeded.userId}-mem2`, scope: "bot", path: "notes/shopping.md", botId: `${seeded.userId}-membot`, content: "milk\neggs", revision: 1, updatedAt: memoryAt(20) },
     { id: `${seeded.userId}-mem3`, scope: "user", path: "MEMORY.md", content: "shared preferences", revision: 7, updatedAt: memoryAt(30) },
     { id: `${seeded.userId}-mem4`, scope: "user", path: "house.md", botId: `${seeded.userId}-membot`, content: "bin day is Tuesday", revision: 2, updatedAt: memoryAt(40) },
@@ -3408,6 +3422,8 @@ function memoryCases(): Case[] {
     name: `mem-export-${name}`,
     procedure: "memory.exportMarkdown",
     input,
+    // The join has no ORDER BY on either side; each document is still compared exactly.
+    unorderedSections: true,
     ...extra,
   });
   const update = (name: string, input: unknown, extra: Partial<Case> = {}): Case => ({
