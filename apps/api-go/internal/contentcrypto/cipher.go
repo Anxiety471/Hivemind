@@ -215,28 +215,48 @@ func decodeUTF8Node(value []byte) string {
 }
 
 // decodeBase64Lenient is Buffer.from(value, "base64url") /
-// Buffer.from(value, "base64") (content-crypto.ts:75, content-keys.ts:25):
-// both alphabets are accepted, characters outside them are ignored, and a "="
-// ends the input, after which everything is ignored, exactly as Node's decoder
-// does. A trailing group of one character carries no whole byte and decodes to
-// nothing.
+// Buffer.from(value, "base64") (content-crypto.ts:75, content-keys.ts:25).
+// Node reads the string's UTF-16 code units and looks at each unit's low byte:
+// '=' ends the input, the two alphabets' digits accumulate (with "-"/"_"
+// mapped to "+"/"/"), and every other byte is ignored. A trailing group of one
+// digit carries no whole byte and decodes to nothing. The low-byte rule is why
+// a non-ASCII unit such as U+4E2D ("中", low byte '-') is a digit to Node.
 func decodeBase64Lenient(value string) []byte {
-	cleaned := make([]byte, 0, len(value))
-	for index := range len(value) {
-		character := value[index]
-		if character == '=' {
-			break
+	// Canonical unpadded URL-safe bodies, the common case, decode directly.
+	if len(value)%4 != 1 && isCanonicalBase64URL(value) {
+		if decoded, err := base64.RawURLEncoding.DecodeString(value); err == nil {
+			return decoded
 		}
+	}
+	cleaned := make([]byte, 0, len(value))
+	process := func(unit byte) bool {
 		switch {
-		case character >= 'A' && character <= 'Z',
-			character >= 'a' && character <= 'z',
-			character >= '0' && character <= '9',
-			character == '+', character == '/':
-			cleaned = append(cleaned, character)
-		case character == '-':
+		case unit == '=':
+			return false
+		case unit >= 'A' && unit <= 'Z',
+			unit >= 'a' && unit <= 'z',
+			unit >= '0' && unit <= '9',
+			unit == '+', unit == '/':
+			cleaned = append(cleaned, unit)
+		case unit == '-':
 			cleaned = append(cleaned, '+')
-		case character == '_':
+		case unit == '_':
 			cleaned = append(cleaned, '/')
+		}
+		return true
+	}
+	for _, character := range value {
+		if character <= 0xFFFF {
+			if !process(byte(character)) {
+				break
+			}
+			continue
+		}
+		// An astral code point is two UTF-16 code units to Node; each one's
+		// low byte is processed in order.
+		offset := character - 0x10000
+		if !process(byte(0xD800+(offset>>10))) || !process(byte(0xDC00+(offset&0x3FF))) {
+			break
 		}
 	}
 	if len(cleaned)%4 == 1 {
@@ -248,6 +268,22 @@ func decodeBase64Lenient(value string) []byte {
 		return nil
 	}
 	return decoded[:size]
+}
+
+// isCanonicalBase64URL reports whether every byte is an unpadded URL-safe
+// base64 digit, so the strict decoder yields exactly what Node would.
+func isCanonicalBase64URL(value string) bool {
+	for index := range len(value) {
+		character := value[index]
+		if (character >= 'A' && character <= 'Z') ||
+			(character >= 'a' && character <= 'z') ||
+			(character >= '0' && character <= '9') ||
+			character == '-' || character == '_' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // canonicalJSON converts Go-typed JSON values (typed slices, maps with other

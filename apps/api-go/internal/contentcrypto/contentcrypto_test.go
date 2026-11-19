@@ -328,6 +328,17 @@ func TestDecodeBase64LenientMatchesNode(t *testing.T) {
 		"A A":        "00",
 		" QUJD":      "414243",
 		"QUJD\nQUJD": "414243414243",
+		// Node reads UTF-16 code units and uses each unit's low byte: 中 is
+		// '-', Ł and ａ are 'A', U+013D and U+FE3D are '=', and 😀 expands to
+		// surrogates whose low bytes are '=' then 0x00.
+		"QUJD中QUJD":      "414243f90509",
+		"QUJDŁQUJD":      "414243010509",
+		"QUJDａQUJD":      "414243010509",
+		"QUJD\u013DQUJD": "414243",
+		"QUJD︽QUJD":      "414243",
+		"QUJDéQUJD":      "414243414243",
+		"A😀B":            "",
+		"AA😀AA":          "00",
 	}
 	for input, wantHex := range cases {
 		got := hexString(decodeBase64Lenient(input))

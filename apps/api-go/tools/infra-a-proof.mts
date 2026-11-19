@@ -478,6 +478,9 @@ for (const failure of failureCases) {
     ["standard alphabet", `${prefix}${standard}`],
     // Buffer.from stops at the first "=", so the repeated body is ignored.
     ["padding ends the input", `${prefix}${body}=${body}`],
+    // Node reads each UTF-16 code unit's low byte: U+013D is "=" and ends the
+    // input, exactly like ASCII padding.
+    ["non-ASCII '=' ends the input", `${prefix}${body}\u013D${body}`],
   ];
   const key = await contentKeys.byId(keyA);
   for (const [name, value] of variants) {
@@ -491,6 +494,28 @@ for (const failure of failureCases) {
     await check(`body form: ${name} opens identically`, () => {
       assert.equal(tsOpened, contentA);
       assert.equal(goOpened.plaintext, tsOpened);
+    });
+  }
+  // "中" has low byte 0x2D ("-"), a real digit: two of them change the body
+  // and both sides must reject it. A byte-wise Go decoder would ignore them
+  // and wrongly open the plaintext.
+  {
+    const value = `${prefix}${body}中中`;
+    let tsError = "";
+    try {
+      decryptText(key, contentLocation, value);
+    } catch (error) {
+      tsError = (error as Error).message;
+    }
+    const goMessage = await goError({
+      op: "decrypt-text",
+      keyId: keyA,
+      ...contentLocation,
+      value,
+    });
+    await check("body form: non-ASCII digits change the body identically", () => {
+      assert.equal(tsError, "Encrypted content could not be decrypted");
+      assert.equal(goMessage, tsError);
     });
   }
 }
