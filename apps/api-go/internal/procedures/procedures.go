@@ -21,6 +21,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/externalconversations"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/groups"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/mcpassignments"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/memory"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/memorycfg"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/messaging"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/models"
@@ -439,6 +440,39 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 			Name: "agentSkills.remove",
 			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
 				return agentskills.Remove(ctx, database, actor, input)
+			},
+		},
+		{
+			Name:     "memory.list",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return memory.List(ctx, database, actor, deployment.Content, input)
+			},
+		},
+		{
+			Name:     "memory.budget",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return memory.Budget(ctx, database, actor, deployment.Content, input)
+			},
+		},
+		{
+			Name: "memory.update",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return memory.Update(ctx, database, actor, deployment.Content, input)
+			},
+		},
+		{
+			Name: "memory.remove",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return memory.Remove(ctx, database, actor, deployment.Content, input)
+			},
+		},
+		{
+			Name:     "memory.exportMarkdown",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return memory.ExportMarkdown(ctx, database, actor, deployment.Content, input)
 			},
 		},
 	}
