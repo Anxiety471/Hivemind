@@ -28,6 +28,10 @@ const ReplySnapshotSchema = z.object({
   computerTaskStarted: z.boolean(),
   assistantTurnBreakPending: z.boolean(),
   progressBudgetStart: z.number(),
+  /** A reasoning stream still open at the checkpoint; blocks already kept are in its blocks. */
+  thinking: z
+    .object({ startedAt: z.number(), text: z.string(), lastFlushedAt: z.number() })
+    .optional(),
   // Added after the first release of this snapshot, so a saved reply without them keeps the
   // fresh attempt's values. Times are wall-clock milliseconds, the same on any process.
   steeringReplyPending: z.boolean().optional(),
@@ -71,6 +75,7 @@ export function snapshotReply(reply: ReplyState): ReplySnapshot {
     computerTaskStarted: reply.computerTaskStarted,
     assistantTurnBreakPending: reply.assistantTurnBreakPending,
     progressBudgetStart: reply.progressBudgetStart,
+    ...(reply.thinking && { thinking: reply.thinking }),
     steeringReplyPending: reply.steeringReplyPending,
     steeringResets: reply.steeringResets,
     // Never reset is -Infinity, which JSON cannot hold.

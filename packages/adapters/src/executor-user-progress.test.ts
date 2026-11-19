@@ -2061,6 +2061,33 @@ describe("a group member the message named nobody for", () => {
     expect(markUnread).toBe(true);
   });
 
+  it("stays silent when its only reasoning is followed by NO_RESPONSE", async () => {
+    const result = await turn(true, [
+      { type: "thinking", active: true },
+      { type: "thinking_delta", text: "Nothing worth saying." },
+      { type: "thinking", active: false },
+      text("NO_RESPONSE"),
+      done,
+    ]);
+    expect(result.finalizeRun).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ outcome: "completed", blocks: [], markUnread: false }),
+    );
+    expect(result.messages).toEqual([]);
+  });
+
+  it("keeps the reasoning before a real reply", async () => {
+    const result = await turn(true, [
+      { type: "thinking", active: true },
+      { type: "thinking_delta", text: "The draft is ready." },
+      { type: "thinking", active: false },
+      text("The draft is posted."),
+      done,
+    ]);
+    const [{ blocks, markUnread }] = result.finalizeRun.mock.calls[0]!;
+    expect(blocks.map((block) => block.kind)).toEqual(["thinking", "text"]);
+    expect(markUnread).toBe(true);
+  });
+
   it("is not silent after it already posted a progress message", async () => {
     const result = await runTurn("", false, "", [], "request", {
       group: { optional: true },

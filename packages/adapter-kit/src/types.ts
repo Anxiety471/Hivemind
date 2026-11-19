@@ -812,8 +812,10 @@ export interface ModelCallObserver {
 
 export type AgentRuntimeEvent =
   | { type: "text"; text: string }
-  /** Explicit provider reasoning lifecycle only; never contains reasoning text. */
+  /** Explicit provider reasoning lifecycle; the reasoning itself streams as thinking_delta. */
   | { type: "thinking"; active: boolean }
+  /** The provider streamed reasoning text; only while thinking is active. */
+  | { type: "thinking_delta"; text: string }
   /** A new assistant message starts; its text does not continue the previous text. */
   | { type: "turn" }
   /** Messages sent while the bot worked were handed to the model before this turn. */

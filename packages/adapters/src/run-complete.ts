@@ -33,6 +33,7 @@ import {
   runSendsFinishNotification,
 } from "./run-notifications.js";
 import {
+  closeThinkingSegment,
   flushPendingTools,
   flushProgress,
   recordExplicitNoResponse,
@@ -123,6 +124,8 @@ export async function completeRun(ctx: RunContext) {
   await ctx.computer.checkpoint.flush();
   ctx.state.terminalCheckpointComplete = true;
 
+  // A provider that ended while still reasoning keeps what it thought before the reply.
+  await closeThinkingSegment(ctx);
   const { blocks, text, groupSilentEnd } = await finalReply(ctx);
   if (!(await renewRunLease(deps, runId, ctx.workerId, ctx.fence))) return;
   const botMessageOutcome =
@@ -289,7 +292,9 @@ async function finalReply(ctx: RunContext) {
       !(reply.assembled.trim() || reply.messageSegments.length)) &&
     !reply.publishedMidTurnUserMessage &&
     !reply.publishedTerminalSubagent &&
-    reply.messageSegments.every((block) => block.kind === "text") &&
+    // Reasoning is something a person watched the bot do, not a reply: like text, it never
+    // turns a silent member's empty answer into an activity bubble.
+    reply.messageSegments.every((block) => block.kind === "text" || block.kind === "thinking") &&
     (await groupSilenceStillAllowed(ctx));
   const silentReply = groupSilentEnd
     ? { assembled: "", blocks: [] }

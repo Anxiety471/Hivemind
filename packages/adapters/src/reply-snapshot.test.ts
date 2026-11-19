@@ -51,6 +51,30 @@ describe("a reply saved with a handed-back turn", () => {
     expect(after.latestScreenshot).toEqual(before.latestScreenshot);
   });
 
+  it("round-trips the reasoning it already kept and the stream still open", async () => {
+    const before = await freshReply();
+    before.messageSegments = [{ kind: "thinking", durationMs: 1_200, lines: ["Checking."] }];
+    before.thinking = { startedAt: 1_700_000_000_000, text: "Still weighing", lastFlushedAt: 5 };
+
+    const after = await freshReply();
+    restoreReply(after, JSON.parse(JSON.stringify(snapshotReply(before))), "run-1");
+
+    expect(after.messageSegments).toEqual(before.messageSegments);
+    expect(after.thinking).toEqual({
+      startedAt: 1_700_000_000_000,
+      text: "Still weighing",
+      lastFlushedAt: 5,
+    });
+    // An older checkpoint without reasoning still resumes with none open.
+    const older = await freshReply();
+    restoreReply(
+      older,
+      JSON.parse(JSON.stringify({ ...snapshotReply(before), thinking: undefined })),
+      "run-2",
+    );
+    expect(older.thinking).toBeNull();
+  });
+
   it("keeps the answer allowance, steering limits and turn clock of the saved turn", async () => {
     const before = await freshReply();
     before.steeringReplyPending = true;

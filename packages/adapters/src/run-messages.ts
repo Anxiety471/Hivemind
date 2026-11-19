@@ -64,6 +64,9 @@ export function redactBlocks(blocks: MessageBlock[], secrets: string[]): Message
     if (block.kind === "bot_message_sent" || block.kind === "bot_message_received") {
       return { ...block, text: redactSecrets(block.text, secrets) };
     }
+    if (block.kind === "thinking") {
+      return { ...block, lines: block.lines.map((line) => redactSecrets(line, secrets)) };
+    }
     if (block.kind === "page") return { ...block, title: redactSecrets(block.title, secrets) };
     if (block.kind === "steps") {
       return {

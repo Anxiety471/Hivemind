@@ -13,10 +13,10 @@ import {
   withToolStepOutcomes,
 } from "@rakazo/core";
 import type { Run } from "@rakazo/db";
-import { storedMessageBlocks } from "@rakazo/db";
+import { RunHistoryWriteError, storedMessageBlocks } from "@rakazo/db";
 import type { ExecutorDeps } from "./executor-deps.js";
 import { IMAGE_RETURNING_COMPUTER_TOOLS } from "./model-vision.js";
-import type { ReplyState, RunContext } from "./run-context.js";
+import type { ReplyState, RunContext, ThinkingSegmentState } from "./run-context.js";
 import { publishMessage } from "./run-messages.js";
 import {
   messageBlocksText,
@@ -73,6 +73,8 @@ export async function createReplyState(
     lastProgressAt: 0,
     hasStreamedText: false,
     assistantTurnBreakPending: false,
+    thinking: null,
+    thinkingRedactor: createStreamingRedactor(secrets),
     redactor: createStreamingRedactor(secrets),
   };
   const priorProgress = await deps.prisma.message.findMany({
@@ -251,6 +253,121 @@ export async function flushProgress(ctx: RunContext) {
   reply.hasStreamedText = true;
   reply.pendingProgress = "";
   reply.lastProgressAt = Date.now();
+}
+
+/** The first non-empty reasoning lines a block keeps; later ones are dropped, not rolled. */
+export const THINKING_BLOCK_MAX_LINES = 8;
+/** A kept line is clamped to this many characters, its cut end marked with an ellipsis. */
+export const THINKING_LINE_MAX_CHARS = 600;
+/** The whole block's text budget, ~5 KB; 8 clamped lines always stay under it. */
+export const THINKING_BLOCK_MAX_CHARS = 4_800;
+/** The cadence of a live reasoning snapshot, the same one the reply text streams at. */
+export const THINKING_LIVE_FLUSH_MS = 250;
+
+/**
+ * Reasoning is transcript content for a person watching the bot, like its narration: routine,
+ * background and scripted work keep it out of the thread.
+ */
+export function thinkingCaptureEnabled(ctx: Pick<RunContext, "scripted" | "run">) {
+  return !ctx.scripted && ctx.run.trigger !== "routine" && !isBackgroundRunTrigger(ctx.run.trigger);
+}
+
+/** The first lines a reasoning block keeps: blanks skipped, each clamped, later lines dropped. */
+export function thinkingBlockLines(text: string): string[] {
+  const lines: string[] = [];
+  let kept = 0;
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+    const room = Math.min(THINKING_LINE_MAX_CHARS, THINKING_BLOCK_MAX_CHARS - kept);
+    if (room <= 0) break;
+    const clamped = line.length <= room ? line : `${line.slice(0, room - 1)}…`;
+    lines.push(clamped);
+    kept += clamped.length;
+    if (lines.length >= THINKING_BLOCK_MAX_LINES) break;
+  }
+  return lines;
+}
+
+/** Appends what the redactor let through, without keeping more than the block's budget. */
+export function appendThinkingText(segment: ThinkingSegmentState, text: string) {
+  const room = THINKING_BLOCK_MAX_CHARS - segment.text.length;
+  if (room > 0 && text) segment.text += text.slice(0, room);
+}
+
+/** Starts a reasoning segment when the provider begins one; text and steps before it go first. */
+export async function openThinkingSegment(ctx: RunContext) {
+  const { reply } = ctx.state;
+  if (reply.thinking || !thinkingCaptureEnabled(ctx)) return;
+  // What the bot streamed and did before it started reasoning comes first in its message.
+  flushPendingTools(reply);
+  await flushProgress(ctx);
+  reply.thinking = { startedAt: Date.now(), text: "", lastFlushedAt: 0 };
+}
+
+/** Adds reasoning the provider streamed, publishing a live snapshot at the reply text's cadence. */
+export async function streamThinking(ctx: RunContext, text: string) {
+  if (!text || !thinkingCaptureEnabled(ctx)) return;
+  const { reply } = ctx.state;
+  reply.thinking ??= { startedAt: Date.now(), text: "", lastFlushedAt: 0 };
+  appendThinkingText(reply.thinking, reply.thinkingRedactor.push(text));
+  const now = Date.now();
+  if (now - reply.thinking.lastFlushedAt < THINKING_LIVE_FLUSH_MS) return;
+  reply.thinking.lastFlushedAt = now;
+  await publishThinkingSnapshot(ctx, {
+    segment: reply.messageSegments.filter((block) => block.kind === "thinking").length,
+    durationMs: now - reply.thinking.startedAt,
+    lines: thinkingBlockLines(reply.thinking.text),
+  });
+}
+
+/**
+ * Ends the open reasoning segment: keeps its block in the reply, before whatever ended it, and
+ * publishes its final live snapshot. A segment left empty by redaction keeps no block at all.
+ */
+export async function closeThinkingSegment(ctx: RunContext) {
+  const { reply } = ctx.state;
+  const segment = reply.thinking;
+  if (!segment) return;
+  reply.thinking = null;
+  appendThinkingText(segment, reply.thinkingRedactor.finish());
+  const lines = thinkingBlockLines(segment.text);
+  if (lines.length === 0) return;
+  const durationMs = Math.max(0, Math.round(Date.now() - segment.startedAt));
+  const segmentIndex = reply.messageSegments.filter((block) => block.kind === "thinking").length;
+  reply.messageSegments.push({ kind: "thinking", durationMs, lines });
+  await publishThinkingSnapshot(ctx, { segment: segmentIndex, durationMs, lines });
+}
+
+/**
+ * Publishes the reasoning a message holds so far as a snapshot of its segment, so a repeated
+ * delivery lands on the same block instead of growing the message.
+ */
+async function publishThinkingSnapshot(
+  ctx: RunContext,
+  snapshot: { segment: number; durationMs: number; lines: string[] },
+) {
+  const { deps, run, runId, bot, thread } = ctx;
+  if (snapshot.lines.length === 0) return;
+  try {
+    await deps.events.append({
+      spaceId: run.spaceId,
+      threadId: thread.id,
+      botId: bot.id,
+      type: "thread.thinking",
+      runId,
+      lease: { owner: ctx.workerId, fence: ctx.fence },
+      payload: {
+        segment: snapshot.segment,
+        durationMs: Math.max(0, Math.round(snapshot.durationMs)),
+        lines: snapshot.lines,
+      },
+    });
+  } catch (error) {
+    // A superseded attempt still finishes its turn; its live reasoning must never override
+    // the attempt that owns the run now.
+    if (!(error instanceof RunHistoryWriteError)) throw error;
+  }
 }
 
 /**

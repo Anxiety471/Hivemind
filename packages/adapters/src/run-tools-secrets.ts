@@ -39,6 +39,7 @@ import {
 import { recordEffect } from "./run-effects.js";
 import { enqueueSteeringContinuation, renewRunLease } from "./run-lifecycle.js";
 import { notifyRun, secretAskNotification } from "./run-notifications.js";
+import { appendThinkingText } from "./run-progress.js";
 import {
   commitConsumedRunSecret,
   normalizeSecretAskPurpose,
@@ -250,6 +251,9 @@ export const secretTools: ToolHandlers = {
       // Keep the tail the old redactor still holds; a fresh instance drops it.
       reply.pendingProgress += reply.redactor.finish();
       reply.redactor = createStreamingRedactor(ctx.secrets);
+      const reasoning = reply.thinkingRedactor.finish();
+      if (reply.thinking) appendThinkingText(reply.thinking, reasoning);
+      reply.thinkingRedactor = createStreamingRedactor(ctx.secrets);
       const purpose = String(args.purpose ?? "otp");
       if (applied && !call.claimedEffect) {
         if (applied.effect.status === "intended") {

@@ -17,7 +17,7 @@ import type {
   ReplyMode,
   ToolStepCall,
 } from "@rakazo/contracts";
-import type { ToolStepOutcome } from "@rakazo/core";
+import type { StreamingRedactor, ToolStepOutcome } from "@rakazo/core";
 import { createStreamingRedactor } from "@rakazo/core";
 import { toolEffectIdempotencyKey } from "@rakazo/core/node/approval-effect-key";
 import type { Bot, Computer, effectiveMemoryScope, Run, Task, Thread } from "@rakazo/db";
@@ -50,6 +50,7 @@ import type { createRunWorkspaceCheckpoint } from "./run-lifecycle.js";
 import { PausedTurnToolsUnavailableError } from "./run-lifecycle.js";
 import { publishMessage } from "./run-messages.js";
 import { subagentMarksUnread } from "./run-notifications.js";
+import { appendThinkingText } from "./run-progress.js";
 import { secretPausedToolResult } from "./run-secret.js";
 import type { createRunTrustLoaders } from "./run-trust.js";
 import type { ScreenTurn } from "./screen-turn.js";
@@ -158,8 +159,28 @@ export interface ReplyState {
    * assistant turn and needs a break from the earlier text that stayed in this reply.
    */
   assistantTurnBreakPending: boolean;
+  /**
+   * The reasoning stream the model is writing right now, or null when it is not thinking.
+   * Its block joins messageSegments when the stream ends, before whatever ended it.
+   */
+  thinking: ThinkingSegmentState | null;
+  /**
+   * Redacts the reasoning stream alone. Sharing the reply text's redactor would let a match
+   * join two streams the model never wrote together, hiding or leaking the wrong text.
+   */
+  thinkingRedactor: StreamingRedactor;
   /** Replaced whenever a secret is added, so streamed progress hides it too. */
-  redactor: ReturnType<typeof createStreamingRedactor>;
+  redactor: StreamingRedactor;
+}
+
+/** One provider reasoning stream, from its first delta until the model writes anything else. */
+export interface ThinkingSegmentState {
+  /** Wall-clock start, so its block reports the time the reasoning took. */
+  startedAt: number;
+  /** Redacted reasoning so far, bounded by the block's budgets (see run-progress). */
+  text: string;
+  /** Throttle clock of its live snapshot; 0 admits the first lines at once. */
+  lastFlushedAt: number;
 }
 
 export interface ApprovalState {
@@ -381,6 +402,10 @@ export function addRunSecrets(ctx: RunContext, values: string[]) {
   reply.pendingProgress += reply.redactor.finish();
   ctx.secrets.push(...additions);
   reply.redactor = createStreamingRedactor(ctx.secrets);
+  // The reasoning stream keeps its own buffer, so a value split inside it stays whole too.
+  const reasoning = reply.thinkingRedactor.finish();
+  if (reply.thinking) appendThinkingText(reply.thinking, reasoning);
+  reply.thinkingRedactor = createStreamingRedactor(ctx.secrets);
 }
 
 // Once per item and site per attempt: a sign-in types several fields, and a card's approval resumes

@@ -10,14 +10,18 @@ import { publishMessage } from "./run-messages.js";
 import { subagentMarksUnread } from "./run-notifications.js";
 import {
   canPublishDurableNarration,
+  closeThinkingSegment,
   flushProgress,
   mayBeSilentEnding,
   narrationBecomesMessages,
+  openThinkingSegment,
   progressHeldForSilence,
   publishInterimMessage,
   publishMidTurnNarration,
   recordExplicitNoResponse,
   showNarrationStatus,
+  streamThinking,
+  thinkingCaptureEnabled,
   tryFlushPendingTools,
 } from "./run-progress.js";
 import { pauseForAnswer, pauseForTakeover } from "./run-turn-pause.js";
@@ -53,6 +57,12 @@ export async function consumeRunEvents(
   const publishThinking = async (active: boolean) => {
     if (thinking === active) return;
     thinking = active;
+    if (thinkingCaptureEnabled(ctx)) {
+      // The reply's reasoning block starts and ends with the provider's own lifecycle, so it
+      // reports the wall time the model actually spent thinking.
+      if (active) await openThinkingSegment(ctx);
+      else await closeThinkingSegment(ctx);
+    }
     if (ctx.scripted || isBackgroundRunTrigger(run.trigger)) return;
     try {
       await deps.events.append({
@@ -98,6 +108,14 @@ export async function consumeRunEvents(
         await publishThinking(event.active);
         continue;
       }
+      if (event.type === "thinking_delta") {
+        await streamThinking(ctx, event.text);
+        continue;
+      }
+      // The live provider observation can report the end of a reasoning stream before its
+      // buffered deltas reach this consumer, so any following event ends the open segment
+      // itself: its block lands in the message before whatever came next.
+      await closeThinkingSegment(ctx);
       if (
         (event.type === "text" && event.text.length > 0) ||
         event.type === "tool" ||

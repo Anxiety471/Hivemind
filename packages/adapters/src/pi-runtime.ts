@@ -946,6 +946,15 @@ export class PiAgentRuntime implements AgentRuntime {
               }
             }
           }
+          // Reasoning reaches the consumer only as its own stream: it never joins the reply's
+          // text, so search, compaction, later turns and the transcript's text stay unaware.
+          if (
+            event.type === "message_update" &&
+            event.assistantMessageEvent.type === "thinking_delta"
+          ) {
+            const delta = event.assistantMessageEvent.delta;
+            if (delta) queue.push({ type: "thinking_delta", text: delta });
+          }
           if (event.type === "turn_end") {
             const messageText =
               event.message.role === "assistant" ? assistantText(event.message) : "";
