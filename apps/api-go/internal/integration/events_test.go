@@ -289,6 +289,64 @@ func TestAppendRecordsFirstResponse(t *testing.T) {
 	}
 }
 
+func TestAppendAloneKeepsRejectedSeq(t *testing.T) {
+	database := openTestDB(t)
+	fixture := seedEventsFixture(t, database)
+	ring := keyedRing(t, database)
+	ctx := context.Background()
+
+	readNextSeq := func() int32 {
+		t.Helper()
+		var next int32
+		if err := database.System(ctx, "read next seq", func(tx pgx.Tx) error {
+			return tx.QueryRow(ctx, `SELECT "nextEventSeq" FROM threads WHERE id = $1`,
+				fixture.threadID).Scan(&next)
+		}); err != nil {
+			t.Fatalf("next seq: %v", err)
+		}
+		return next
+	}
+
+	// A lease that does not own the run makes the run check reject the insert.
+	rejected := events.Input{
+		SpaceID: fixture.spaceID, ThreadID: fixture.threadID, BotID: fixture.botID,
+		Type: "thread.progress", Payload: map[string]any{"delta": "x", "streaming": true},
+		RunID: fixture.runID, Lease: &events.Lease{Owner: "worker-2", Fence: 2},
+	}
+	if _, err := events.AppendAlone(ctx, database, ring, rejected); !errors.Is(err, events.ErrRunHistoryWrite) {
+		t.Fatalf("rejected append = %v", err)
+	}
+	// TS's autocommit statement keeps the seq it allocated: the next seq is 1
+	// even though no event row exists.
+	if next := readNextSeq(); next != 1 {
+		t.Fatalf("nextEventSeq after rejection = %d, want 1", next)
+	}
+	var stored int
+	if err := database.System(ctx, "count events", func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT count(*) FROM events WHERE "threadId" = $1`,
+			fixture.threadID).Scan(&stored)
+	}); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if stored != 0 {
+		t.Fatalf("rejected append stored %d events", stored)
+	}
+	// The next accepted event takes the following seq, leaving TS's gap.
+	accepted, err := events.AppendAlone(ctx, database, ring, events.Input{
+		SpaceID: fixture.spaceID, ThreadID: fixture.threadID, BotID: fixture.botID,
+		Type: "thread.progress", Payload: map[string]any{"delta": "next", "streaming": true},
+	})
+	if err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	if accepted.Seq != 1 {
+		t.Fatalf("accepted seq = %d, want 1", accepted.Seq)
+	}
+	if next := readNextSeq(); next != 2 {
+		t.Fatalf("nextEventSeq after success = %d, want 2", next)
+	}
+}
+
 func TestNotifyCommittedPublishesExactEnvelope(t *testing.T) {
 	database := openTestDB(t)
 	fixture := seedEventsFixture(t, database)

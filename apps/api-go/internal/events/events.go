@@ -196,6 +196,35 @@ func Append(ctx context.Context, tx pgx.Tx, ring *contentcrypto.KeyRing, input I
 	return event, nil
 }
 
+// AppendAlone is appendEvent's standalone shape: the same one-statement CTE,
+// run in its own transaction on database (a system context, like the server's
+// event appends), committed even when the run check inserted nothing. A rejected
+// run therefore still consumes its seq, exactly as the TS statement's autocommit
+// does (events.ts:663-733); the thread row lock is held from the UPDATE to the
+// commit, so events still commit in seq order and no caller work is committed.
+// Use Append to join a caller's transaction: a rejection there rolls the seq back
+// with that transaction instead.
+func AppendAlone(ctx context.Context, database *db.DB, ring *contentcrypto.KeyRing, input Input) (Event, error) {
+	var event Event
+	var appendErr error
+	err := database.System(ctx, "append a product event", func(tx pgx.Tx) error {
+		event, appendErr = Append(ctx, tx, ring, input)
+		if errors.Is(appendErr, ErrRunHistoryWrite) || errors.Is(appendErr, ErrThreadNotFound) {
+			// The thread UPDATE ran inside this transaction; commit it so the
+			// allocated seq is used exactly as TS's autocommit statement does.
+			return nil
+		}
+		return appendErr
+	})
+	if err != nil {
+		return Event{}, err
+	}
+	if appendErr != nil {
+		return Event{}, appendErr
+	}
+	return event, nil
+}
+
 // AppendTx is appendEventInTransaction: the seq is allocated with a thread
 // UPDATE, the run's writability is asserted with SELECTs, and the event is
 // inserted, all inside the caller's transaction.
