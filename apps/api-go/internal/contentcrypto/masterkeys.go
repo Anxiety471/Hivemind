@@ -207,8 +207,8 @@ func (p *LocalKeyProvider) Unwrap(wrapped WrappedDataKey, context KeyWrapContext
 	fail := func() ([]byte, error) {
 		return nil, fmt.Errorf("Space key could not be unwrapped with master key %s", wrapped.MasterKeyID)
 	}
-	body, err := decodeBase64URL(wrapped.WrappedKey)
-	if err != nil || len(body) < ivBytes+tagBytes {
+	body := decodeBase64Lenient(wrapped.WrappedKey)
+	if len(body) < ivBytes+tagBytes {
 		return fail()
 	}
 	block, err := aes.NewCipher(master)

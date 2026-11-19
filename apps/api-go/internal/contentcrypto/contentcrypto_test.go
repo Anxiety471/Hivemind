@@ -298,3 +298,56 @@ func hexString(value []byte) string {
 	}
 	return string(out)
 }
+
+func TestDecodeBase64LenientMatchesNode(t *testing.T) {
+	// Buffer.from(value, "base64"/"base64url"): both alphabets, characters
+	// outside them ignored, "=" ends the input, and a trailing one-character
+	// group decodes to nothing. Expected values come from Node 24.
+	cases := map[string]string{
+		"AB==":       "00",
+		"AB":         "00",
+		"AB!CD":      "001083",
+		"-_":         "fb",
+		"+/":         "fb",
+		"%%%":        "",
+		"A":          "",
+		"AB=CD":      "00",
+		"A=B=":       "",
+		"Q=UJD":      "",
+		"QUJ=D":      "4142",
+		"QQ==QQ==":   "41",
+		"QU=JD":      "41",
+		"=QUJD":      "",
+		"QUJD=":      "414243",
+		"QUJD==x":    "414243",
+		"A A":        "00",
+		" QUJD":      "414243",
+		"QUJD\nQUJD": "414243414243",
+	}
+	for input, wantHex := range cases {
+		got := hexString(decodeBase64Lenient(input))
+		if got != wantHex {
+			t.Fatalf("decode %q = %q, want %q", input, got, wantHex)
+		}
+	}
+}
+
+func TestDecryptTextAcceptsNodeBase64Forms(t *testing.T) {
+	const prefix = "rkz1:key-1:"
+	body := tsCiphertext[len(prefix):]
+	standard := strings.NewReplacer("-", "+", "_", "/").Replace(body)
+	variants := map[string]string{
+		"standard alphabet with padding": standard + "==",
+		"junk characters inserted":       body[:10] + "!!" + body[10:],
+		"standard alphabet with junk":    standard[:5] + " %%" + standard[5:] + "=",
+		// Node's decoder stops at the first "=", so the repeated body is ignored
+		// and the first, valid body still opens.
+		"padding ends the input": body + "=" + body,
+	}
+	for name, value := range variants {
+		plaintext, err := DecryptText(testKey(), testLocation(), prefix+value)
+		if err != nil || plaintext != tsPlaintext {
+			t.Fatalf("%s: %q, %v", name, plaintext, err)
+		}
+	}
+}

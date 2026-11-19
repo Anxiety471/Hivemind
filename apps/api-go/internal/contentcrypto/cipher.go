@@ -122,9 +122,8 @@ func DecryptText(key DataKey, location Location, value string) (string, error) {
 	if !ok || keyID != key.ID {
 		return "", ErrAnotherKey
 	}
-	// Node's "base64url" decoder accepts padding; so do we.
-	body, err := decodeBase64URL(value[len(CiphertextPrefix)+len(keyID)+1:])
-	if err != nil || len(body) < ivBytes+tagBytes {
+	body := decodeBase64Lenient(value[len(CiphertextPrefix)+len(keyID)+1:])
+	if len(body) < ivBytes+tagBytes {
 		return "", ErrDecryption
 	}
 	block, err := aes.NewCipher(key.Key)
@@ -142,12 +141,40 @@ func DecryptText(key DataKey, location Location, value string) (string, error) {
 	return string(plaintext), nil
 }
 
-// decodeBase64URL accepts the padded and unpadded base64url Node decodes.
-func decodeBase64URL(value string) ([]byte, error) {
-	if decoded, err := base64.RawURLEncoding.DecodeString(value); err == nil {
-		return decoded, nil
+// decodeBase64Lenient is Buffer.from(value, "base64url") /
+// Buffer.from(value, "base64") (content-crypto.ts:75, content-keys.ts:25):
+// both alphabets are accepted, characters outside them are ignored, and a "="
+// ends the input, after which everything is ignored, exactly as Node's decoder
+// does. A trailing group of one character carries no whole byte and decodes to
+// nothing.
+func decodeBase64Lenient(value string) []byte {
+	cleaned := make([]byte, 0, len(value))
+	for index := range len(value) {
+		character := value[index]
+		if character == '=' {
+			break
+		}
+		switch {
+		case character >= 'A' && character <= 'Z',
+			character >= 'a' && character <= 'z',
+			character >= '0' && character <= '9',
+			character == '+', character == '/':
+			cleaned = append(cleaned, character)
+		case character == '-':
+			cleaned = append(cleaned, '+')
+		case character == '_':
+			cleaned = append(cleaned, '/')
+		}
 	}
-	return base64.URLEncoding.DecodeString(value)
+	if len(cleaned)%4 == 1 {
+		cleaned = cleaned[:len(cleaned)-1]
+	}
+	decoded := make([]byte, base64.RawStdEncoding.DecodedLen(len(cleaned)))
+	size, err := base64.RawStdEncoding.Decode(decoded, cleaned)
+	if err != nil {
+		return nil
+	}
+	return decoded[:size]
 }
 
 // isRecord is content-crypto.ts:98-100: a non-null object that is not an array.
