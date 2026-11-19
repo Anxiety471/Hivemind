@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Bots' streamed reasoning appears as a **Thought for Ns** card in the transcript's activity panel alongside the tool rows, behind the existing show-tool-activity setting. The panel shows the latest activity, whether a current thought or tool, as its summary line.
+
 ### Changed
 
 - Full-window pages (free access, admin plugins, the board, link pages) share one page header, and its title now uses the standard heading size.
