@@ -23,9 +23,11 @@ import {
   contentEncryptionOf,
   createDb,
   decryptText,
+  encryptText,
   readRunTimingFields,
 } from "../../../packages/db/src/index.js";
 import { appendEvent } from "../../../packages/db/src/events.js";
+import { sanitizeJsonValue } from "../../../packages/core/src/events.js";
 import { PostgresRealtimeFanout } from "../../../packages/adapters/src/realtime.js";
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -36,7 +38,11 @@ if (!process.env.ENCRYPTION_KEY) throw new Error("ENCRYPTION_KEY is required (a 
 process.env.CONTENT_ENCRYPTION ??= "on";
 
 // ---------------------------------------------------------------- Go driver
-const child = spawn(GO_PROOF_BIN, [], { stdio: ["pipe", "pipe", "inherit"] });
+const child = spawn(GO_PROOF_BIN, [], {
+  stdio: ["pipe", "pipe", "inherit"],
+  // The key-rotation check waits this out instead of the ten-minute default.
+  env: { ...process.env, GO_PROOF_KEY_TTL_MS: process.env.GO_PROOF_KEY_TTL_MS ?? "1000" },
+});
 process.on("exit", () => child.kill());
 const lines = createInterface({ input: child.stdout! });
 const pending = new Map<number, { resolve: (value: any) => void; reject: (error: Error) => void }>();
@@ -92,6 +98,8 @@ const user = { id: id("u"), name: "Proof User", email: `${id("u")}@example.test`
 const org = { id: id("org"), name: "Proof Org", slug: id("org"), createdAt: new Date() };
 const spaceA = id("sp-a");
 const spaceB = id("sp-b");
+// spaceC starts with no content key: Go creates it, TS rotates it.
+const spaceC = id("sp-c");
 const bot = { id: id("bot"), spaceId: spaceA, userId: user.id, name: "Proof Bot", color: "blue" };
 const bot2 = { id: id("bot2"), spaceId: spaceA, userId: user.id, name: "Proof Bot 2", color: "red" };
 const threadA = id("th");
@@ -137,6 +145,7 @@ await system.member.create({
 for (const [spaceId, name, isDefault] of [
   [spaceA, "Space A", true],
   [spaceB, "Space B", false],
+  [spaceC, "Space C", false],
 ] as const) {
   await system.space.create({ data: { id: spaceId, organizationId: org.id, name, isDefault } });
   await system.spaceMember.create({
@@ -456,6 +465,138 @@ for (const failure of failureCases) {
     assert.equal(tsError, "Encrypted content belongs to another space");
     assert.equal(goMessage, tsError);
   });
+}
+
+// ------------------------------------------------- Node base64 leniency
+{
+  const prefix = ciphertextA.slice(0, ciphertextA.indexOf(":", "rkz1:".length) + 1);
+  const body = ciphertextA.slice(prefix.length);
+  const standard = body.replace(/-/g, "+").replace(/_/g, "/");
+  const variants: Array<[string, string]> = [
+    ["padded", `${prefix}${body}==`],
+    ["junk characters", `${prefix}${body.slice(0, 10)}!!${body.slice(10)}`],
+    ["standard alphabet", `${prefix}${standard}`],
+    // Buffer.from stops at the first "=", so the repeated body is ignored.
+    ["padding ends the input", `${prefix}${body}=${body}`],
+  ];
+  const key = await contentKeys.byId(keyA);
+  for (const [name, value] of variants) {
+    const tsOpened = decryptText(key, contentLocation, value);
+    const goOpened = await go({
+      op: "decrypt-text",
+      keyId: keyA,
+      ...contentLocation,
+      value,
+    });
+    await check(`body form: ${name} opens identically`, () => {
+      assert.equal(tsOpened, contentA);
+      assert.equal(goOpened.plaintext, tsOpened);
+    });
+  }
+}
+
+// ------------------------------------------------- key lifecycle
+const keyLocation = {
+  table: "threads",
+  column: "historyCompactionSummary",
+  rowId: id("th-keys"),
+  owner: user.id,
+};
+{
+  const created = await go({ op: "current-key", spaceId: spaceC });
+  await check("key: Go creates a space key TypeScript unwraps", async () => {
+    const tsKey = await contentKeys.byId(created.keyId);
+    assert.equal(tsKey.id, created.keyId);
+    assert.equal(tsKey.spaceId, spaceC);
+    assert.equal(tsKey.version, created.version);
+    const sealedByTs = encryptText(tsKey, keyLocation, "TS sealed under a Go-created key İ 😀");
+    const goOpened = await go({
+      op: "decrypt-text",
+      keyId: created.keyId,
+      ...keyLocation,
+      value: sealedByTs,
+    });
+    assert.equal(goOpened.plaintext, "TS sealed under a Go-created key İ 😀");
+    const sealedByGo = await go({
+      op: "encrypt-text",
+      keyId: created.keyId,
+      ...keyLocation,
+      plaintext: "Go sealed under its own key",
+    });
+    assert.equal(decryptText(tsKey, keyLocation, sealedByGo.ciphertext), "Go sealed under its own key");
+  });
+}
+
+{
+  const rotated = await contentKeys.rotate(spaceC);
+  await check("key: Go uses a TypeScript rotation after its key TTL", async () => {
+    // The driver's ring uses GO_PROOF_KEY_TTL_MS=1000 (set when it is spawned).
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    const current = await go({ op: "current-key", spaceId: spaceC });
+    assert.equal(current.keyId, rotated.id);
+    assert.equal(current.version, rotated.version);
+    assert.equal(rotated.version, 2);
+    const sealedByGo = await go({
+      op: "encrypt-text",
+      keyId: current.keyId,
+      ...keyLocation,
+      plaintext: "rotated key seal",
+    });
+    const tsKey = await contentKeys.byId(current.keyId);
+    assert.equal(decryptText(tsKey, keyLocation, sealedByGo.ciphertext), "rotated key seal");
+  });
+}
+
+{
+  const userVault = await contentKeys.current(`user:${user.id}`);
+  const goUserVault = await go({ op: "current-key", spaceId: `user:${user.id}` });
+  await check("key: Go unwraps the TypeScript user vault key", async () => {
+    assert.equal(goUserVault.keyId, userVault.id);
+    assert.equal(goUserVault.version, userVault.version);
+    const sealedByGo = await go({
+      op: "encrypt-text",
+      keyId: goUserVault.keyId,
+      ...keyLocation,
+      plaintext: "user vault seal",
+    });
+    assert.equal(decryptText(userVault, keyLocation, sealedByGo.ciphertext), "user vault seal");
+  });
+
+  const spaceVault = await contentKeys.current(`vault:${spaceC}`);
+  const goSpaceVault = await go({ op: "current-key", spaceId: `vault:${spaceC}` });
+  await check("key: Go unwraps the TypeScript space vault key", async () => {
+    assert.equal(goSpaceVault.keyId, spaceVault.id);
+    assert.equal(goSpaceVault.version, spaceVault.version);
+    const sealedByTs = encryptText(spaceVault, keyLocation, "space vault seal");
+    const goOpened = await go({
+      op: "decrypt-text",
+      keyId: spaceVault.id,
+      ...keyLocation,
+      value: sealedByTs,
+    });
+    assert.equal(goOpened.plaintext, "space vault seal");
+  });
+}
+
+// ------------------------------------------------- sanitization parity
+{
+  const payloads = [
+    {
+      text: "nul\u0000inside",
+      nested: { list: ["a\ud800b", 1, true, null] },
+    },
+    // Distinct keys that collapse to the same sanitized string; the insertion
+    // order here matches Go's sorted order, so the suffix assignment agrees.
+    { "\u0000": "first", "\uFFFD": "second" },
+  ];
+  for (const [index, payload] of payloads.entries()) {
+    const tsSanitized = plain(sanitizeJsonValue(payload));
+    const goSanitized = (await go({ op: "sanitize", payload })).value;
+    await check(`sanitize: payload ${index} matches TypeScript`, () => {
+      assert.deepStrictEqual(goSanitized, tsSanitized);
+      assert(!JSON.stringify(goSanitized).includes("\\u0000"));
+    });
+  }
 }
 
 // ------------------------------------------------- event append + notify

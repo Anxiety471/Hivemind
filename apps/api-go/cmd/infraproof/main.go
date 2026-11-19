@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -64,6 +65,8 @@ type response struct {
 	Event      *eventOut        `json:"event,omitempty"`
 	MasterIDs  []string         `json:"masterIds,omitempty"`
 	Active     string           `json:"active,omitempty"`
+	KeyID      string           `json:"keyId,omitempty"`
+	Version    int              `json:"version,omitempty"`
 	Timing     map[string]any   `json:"timing,omitempty"`
 }
 
@@ -108,7 +111,18 @@ func run() error {
 		return err
 	}
 	defer store.Close()
-	ring := contentcrypto.NewKeyRing(provider, store, contentcrypto.KeyRingOptions{EncryptWrites: true})
+	// The rotation proof sets a short TTL so a TS rotation is visible to Go
+	// without waiting the production ten minutes.
+	keyTTL := 10 * time.Minute
+	if raw := os.Getenv("GO_PROOF_KEY_TTL_MS"); raw != "" {
+		milliseconds, err := strconv.Atoi(raw)
+		if err != nil || milliseconds <= 0 {
+			return fmt.Errorf("GO_PROOF_KEY_TTL_MS must be a positive integer")
+		}
+		keyTTL = time.Duration(milliseconds) * time.Millisecond
+	}
+	ring := contentcrypto.NewKeyRing(provider, store,
+		contentcrypto.KeyRingOptions{TTL: keyTTL, EncryptWrites: true})
 	publisher := &events.PGPublisher{Pool: database.Pool}
 
 	masterIDs := make([]string, len(masters))
@@ -149,6 +163,14 @@ func handle(ctx context.Context, database *db.DB, ring *contentcrypto.KeyRing,
 	case "master-ids":
 		provider, _ := contentcrypto.NewLocalKeyProvider(masters)
 		return response{MasterIDs: masterIDs, Active: provider.ActiveKeyID()}
+	case "current-key":
+		key, err := ring.Current(ctx, in.SpaceID)
+		if err != nil {
+			return response{Error: err.Error()}
+		}
+		return response{KeyID: key.ID, Version: key.Version}
+	case "sanitize":
+		return response{Value: events.SanitizeJSON(in.Payload)}
 	case "open-model":
 		if err := ring.OpenRows(ctx, in.Model, in.Rows); err != nil {
 			return response{Error: err.Error()}
