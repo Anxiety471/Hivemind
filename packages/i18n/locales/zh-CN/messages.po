@@ -1832,14 +1832,11 @@ msgstr "运行中"
 #: apps/web/src/components/bot-templates/bot-templates-dialog.tsx
 #: apps/web/src/components/integrations/plugin-marketplace.tsx
 #: apps/web/src/components/integrations/skills-dialog.tsx
+#: apps/web/src/components/PageHeader.tsx
 #: apps/web/src/components/SettingsPageHeader.tsx
-#: apps/web/src/pages/AdminAccessPage.tsx
-#: apps/web/src/pages/AdminPluginsPage.tsx
 #: apps/web/src/pages/Artifacts.tsx
 #: apps/web/src/pages/Auth.tsx
-#: apps/web/src/pages/Board.tsx
 #: apps/web/src/pages/McpServerForm.tsx
-#: apps/web/src/pages/NavLinkPage.tsx
 #: apps/web/src/pages/plugins/connector-detail.tsx
 #: apps/web/src/pages/plugins/parts.tsx
 #: apps/web/src/pages/RoutineEditor.tsx
@@ -10873,6 +10870,10 @@ msgstr "此模板刚刚更新，请重新查看。"
 msgid "This week"
 msgstr "本周"
 
+#: apps/web/src/components/ThinkingPanel.tsx
+msgid "Thought for {duration}"
+msgstr "思考了 {duration}"
+
 #: apps/mobile/app/_layout.tsx
 #: apps/mobile/components/chat-header-title.tsx
 #: apps/mobile/components/thread/thread-header.tsx
@@ -11058,6 +11059,7 @@ msgstr "受信任的网站"
 #: apps/mobile/components/home-error-state.tsx
 #: apps/mobile/components/pages/page-load-failure.tsx
 #: apps/mobile/components/routine-run-history.tsx
+#: apps/web/src/components/ErrorNotice.tsx
 #: apps/web/src/components/pages/PageNotice.tsx
 #: apps/web/src/components/pages/PagesList.tsx
 #: apps/web/src/pages/ActivityList.tsx
