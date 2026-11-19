@@ -19,7 +19,8 @@ the sign-in screen and enter its address. For a server on your local network, fo
 
 - Chat with bots and groups, attach photos, files or camera shots, and talk instead of typing.
 - Answer questions and [approvals](./approvals.md), and save credentials a bot asks for.
-- Open a bot's profile to see its **Computer**, **Routines** and settings.
+- Open a bot's profile to see its **Computer** and settings, or go to **Routines** to
+  [create or edit a routine](./routines.md#on-mobile).
 - Take control of a bot's computer, with an on-screen keyboard.
 - Call a bot, or answer when a bot calls you. See [Voice and calls](./voice-and-calls.md).
 - Connect apps, manage skills, models, voice, approvals, chat apps and your vault from Settings.
@@ -33,8 +34,6 @@ Turn off **Haptics** in Settings if you don't want touch feedback.
 
 ## What stays on web and desktop
 
-- Creating or editing [routines](./routines.md). On mobile you can pause, delete and review them, or
-  ask the bot in chat to set one up.
 - [Teach a task](./skills.md#teach-a-task-by-showing-it).
 - [Using your own computer](./desktop-app.md) with bots.
 
