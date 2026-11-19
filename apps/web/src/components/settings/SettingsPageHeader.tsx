@@ -11,11 +11,14 @@ export function SettingsPageHeader({
   title,
   subtitle,
   leading,
+  trailing,
   onBack,
 }: {
   title: string;
   subtitle?: ReactNode;
   leading?: ReactNode;
+  /** An action for the whole page, at the end of the header. */
+  trailing?: ReactNode;
   onBack: () => void;
 }) {
   const { t } = useLingui();
@@ -41,6 +44,7 @@ export function SettingsPageHeader({
         </SectionHeading>
         {subtitle ? <p className="text-body-sm text-muted-foreground">{subtitle}</p> : null}
       </div>
+      {trailing ? <div className="ms-auto shrink-0">{trailing}</div> : null}
     </div>
   );
 }
