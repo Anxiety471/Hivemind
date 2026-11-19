@@ -394,13 +394,30 @@ type FailureCase = {
   location?: Record<string, string>;
   value: string;
 };
+/**
+ * Flips one bit of ciphertext, never the tag, and re-encodes canonically.
+ * Changing the last base64url character alone can be a no-op: for a body whose
+ * length mod 3 is 2, the final character carries only four significant bits, so
+ * swapping A for B can leave the decoded bytes identical and both sides would
+ * still decrypt. Decoding, flipping a whole ciphertext byte and re-encoding
+ * always tampers. A body with no ciphertext byte (empty plaintext) flips an IV
+ * byte, which GCM authentication still rejects.
+ */
+function tamperedBody(ciphertext: string): string {
+  const separator = ciphertext.indexOf(":", "rkz1:".length);
+  const body = Buffer.from(ciphertext.slice(separator + 1), "base64url");
+  const at = Math.max(0, body.length - 16 - 1);
+  body[at] ^= 0x01;
+  return `${ciphertext.slice(0, separator + 1)}${body.toString("base64url")}`;
+}
+
 const failureCases: FailureCase[] = [
   { name: "wrong owner", keyId: keyA, location: { ...contentLocation, owner: `${user.id}-other` }, value: ciphertextA },
   { name: "wrong column", keyId: keyA, location: { ...contentLocation, column: "content2" }, value: ciphertextA },
   { name: "wrong row", keyId: keyA, location: { ...contentLocation, rowId: `${docA.id}-other` }, value: ciphertextA },
   { name: "wrong space", keyId: keyA, keySpaceId: spaceB, value: ciphertextA },
   { name: "another key id", keyId: keyB, value: ciphertextA },
-  { name: "tampered body", keyId: keyA, value: `${ciphertextA.slice(0, -1)}${ciphertextA.endsWith("A") ? "B" : "A"}` },
+  { name: "tampered body", keyId: keyA, value: tamperedBody(ciphertextA) },
   { name: "truncated body", keyId: keyA, value: `rkz1:${keyA}:AAAA` },
 ];
 for (const failure of failureCases) {
