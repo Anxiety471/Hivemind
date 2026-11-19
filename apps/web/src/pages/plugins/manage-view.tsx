@@ -7,7 +7,6 @@ import type { PluginSelection } from "../../components/integrations/plugin-marke
 import {
   PluginLogo,
   ROW_BUTTON,
-  ROW_HOVER,
   ROW_SHELL,
 } from "../../components/integrations/plugin-marketplace";
 import {
@@ -184,7 +183,7 @@ function InstalledPluginRow({
 }) {
   const signInNeeded = servers.some(mcpServerNeedsSignIn);
   return (
-    <div data-testid="installed-plugin" className={`${ROW_SHELL} ${ROW_HOVER}`}>
+    <div data-testid="installed-plugin" className={`${ROW_SHELL} list-row`}>
       <button type="button" className={ROW_BUTTON} onClick={() => onOpen(selection)}>
         <PluginLogo name={selection.name} logo={selection.logo} site={selection.site} />
         <span className="min-w-0 flex-1">

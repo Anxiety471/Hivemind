@@ -228,7 +228,7 @@ function RecentPayments({
         ))}
       </ul>
       {!all && payments.length > FIRST_PAYMENTS ? (
-        <Button variant="ghost" size="sm" className="-ml-2" onClick={() => setAll(true)}>
+        <Button variant="ghost" size="sm" className="-ms-2" onClick={() => setAll(true)}>
           <Trans>Show all</Trans>
         </Button>
       ) : null}

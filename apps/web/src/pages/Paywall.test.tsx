@@ -48,6 +48,11 @@ vi.mock("@rakazo/ui-web", () => {
   const Container = ({ children }: { children?: ReactNode }) => <div>{children}</div>;
   return {
     Button,
+    SectionHeading: ({
+      as: _as,
+      variant: _variant,
+      ...props
+    }: ComponentProps<"h3"> & { as?: string; variant?: string }) => <h3 {...props} />,
     Card: Container,
     CardContent: Container,
     CardFooter: Container,

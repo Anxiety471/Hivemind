@@ -1,16 +1,13 @@
-import { useLingui } from "@lingui/react/macro";
 import { navLinkSandbox } from "@rakazo/contracts";
-import { buttonVariants } from "@rakazo/ui-web";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronLeft } from "lucide-react";
-import { Link, Navigate, useParams } from "react-router-dom";
+import { Navigate, useParams } from "react-router-dom";
+import { PageHeader } from "../components/PageHeader";
 import { PageLoading } from "../components/PageLoading";
 import { desktopBridge } from "../lib/desktop";
 import { rpc } from "../lib/rpc";
 import { WindowChrome } from "./WindowChrome";
 
 export function NavLinkPage() {
-  const { t } = useLingui();
   const { linkId } = useParams();
   // The desktop renderer is not served from the deployment's origin, so the path would miss.
   const desktop = Boolean(desktopBridge());
@@ -27,16 +24,7 @@ export function NavLinkPage() {
   return (
     <div className="flex h-full min-w-0 flex-col overflow-hidden bg-background text-foreground">
       <WindowChrome />
-      <header className="flex items-center gap-3 border-b px-4 py-3">
-        <Link
-          to="/app"
-          className={buttonVariants({ variant: "ghost", size: "icon" })}
-          aria-label={t`Back`}
-        >
-          <ChevronLeft />
-        </Link>
-        <h1 className="flex-1 font-medium">{link.label}</h1>
-      </header>
+      <PageHeader title={link.label} />
       <iframe
         key={link.id}
         title={link.label}

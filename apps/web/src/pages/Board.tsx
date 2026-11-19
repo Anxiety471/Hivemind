@@ -12,7 +12,6 @@ import { abortableDelay, isRetryableError, reconnectDelayMs, retryDelayMs } from
 import { fetchFresh, writeSaved } from "@rakazo/core/query";
 import {
   Button,
-  buttonVariants,
   Dialog,
   DialogContent,
   DialogHeader,
@@ -22,9 +21,8 @@ import {
   Textarea,
 } from "@rakazo/ui-web";
 import { skipToken, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronLeft } from "lucide-react";
 import { useEffect, useId, useState } from "react";
-import { Link } from "react-router-dom";
+import { PageHeader } from "../components/PageHeader";
 import { useSave, useSpaceQueries } from "../lib/query";
 import { formatRelativeTime } from "../lib/relative-time";
 import { rpc } from "../lib/rpc";
@@ -34,7 +32,6 @@ import { errorText } from "../lib/user-error";
 import { WindowChrome } from "./WindowChrome";
 
 export function BoardPage() {
-  const { t } = useLingui();
   const statuses = useTicketStatusLabels();
   const queries = useSpaceQueries();
   const queryClient = useQueryClient();
@@ -103,30 +100,30 @@ export function BoardPage() {
   return (
     <div className="flex h-full min-w-0 flex-col overflow-hidden bg-background text-foreground">
       <WindowChrome />
-      <header className="flex items-center gap-3 border-b px-4 py-3">
-        <Link
-          to="/app"
-          className={buttonVariants({ variant: "ghost", size: "icon" })}
-          aria-label={t`Back`}
-        >
-          <ChevronLeft />
-        </Link>
-        <h1 className="flex-1 font-medium">
-          <Trans>Board</Trans>
-        </h1>
-        <Button onClick={() => setSelected("new")} disabled={bots.length === 0}>
-          <Trans>New ticket</Trans>
-        </Button>
-      </header>
+      <PageHeader
+        title={<Trans>Board</Trans>}
+        actions={
+          <Button onClick={() => setSelected("new")} disabled={bots.length === 0}>
+            <Trans>New ticket</Trans>
+          </Button>
+        }
+      />
       {error ? (
         <p role="alert" className="px-4 py-2 text-body text-destructive">
           {error}
         </p>
       ) : null}
-      <main className="relative min-h-0 min-w-0 flex-1 overflow-auto p-4">
-        <div data-testid="board-columns" className="flex min-h-full gap-3">
+      <main className="relative min-h-0 min-w-0 flex-1 overflow-y-auto p-4">
+        {/* Narrow screens swipe one comfortable column at a time; wider ones fill the row. */}
+        <div
+          data-testid="board-columns"
+          className="flex min-h-full snap-x snap-mandatory gap-3 overflow-x-auto overscroll-x-contain md:snap-none md:overflow-visible"
+        >
           {TICKET_STATUSES.map((status) => (
-            <section key={status} className="min-w-40 flex-1 space-y-2">
+            <section
+              key={status}
+              className="w-[280px] shrink-0 snap-start space-y-2 md:w-auto md:min-w-40 md:flex-1"
+            >
               <h2 className="px-1 text-body font-medium">{statuses[status]}</h2>
               {tickets
                 .filter((ticket) => ticket.status === status)
@@ -135,7 +132,7 @@ export function BoardPage() {
                     key={ticket.id}
                     data-testid={`board-card-${ticket.id}`}
                     variant="outline"
-                    className="h-auto w-full flex-col items-start gap-1 whitespace-normal p-3 text-left font-normal"
+                    className="h-auto w-full flex-col items-start gap-1 whitespace-normal p-3 text-start font-normal"
                     onClick={() => setSelected(ticket)}
                   >
                     <span className="text-label text-muted-foreground">{ticket.ref}</span>

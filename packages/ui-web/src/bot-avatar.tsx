@@ -32,6 +32,10 @@ export { BOT_COLOR_LIST, BOT_COLORS, DEFAULT_BOT_AVATAR_COLOR, resolvePersonaCol
 export const BOT_SHAPES = SHIPPED_BOT_AVATAR_SHAPES;
 export const SHIPPED_SHAPE_KEYS = SHIPPED_BOT_AVATAR_SHAPE_KEYS;
 const VIEWBOX = SHIPPED_BOT_AVATAR_VIEWBOX;
+// Orange used when a stored avatar value has no colour of its own (distinct from the palette default).
+const FALLBACK_AVATAR_COLOR = "#F97316";
+// Pure white for the avatar's glow/highlight; fixed, no matching theme token.
+const AVATAR_GLOW_WHITE = "#ffffff";
 
 export const BOT_MASCOT_SHAPES = SHIPPED_SHAPE_KEYS.map(
   (k) => BOT_SHAPES[k] ?? FALLBACK_SHAPE_PATH,
@@ -48,11 +52,11 @@ export function parseBotAvatar(
   isImage: boolean;
   imageUrl?: string;
 } {
-  if (!rawColor) return { color: "#F97316", isImage: false };
+  if (!rawColor) return { color: FALLBACK_AVATAR_COLOR, isImage: false };
   // Only data: image URLs are rendered. Arbitrary http(s)/blob values in `color`
   // must not become <img src> (SSRF / tracking when other members view the bot).
   if (rawColor.startsWith("data:image/")) {
-    return { color: "#F97316", isImage: true, imageUrl: rawColor };
+    return { color: FALLBACK_AVATAR_COLOR, isImage: true, imageUrl: rawColor };
   }
   if (rawColor.includes("::shape_")) {
     const parts = rawColor.split("::shape_");
@@ -60,7 +64,7 @@ export function parseBotAvatar(
     const parsedShapeIdx = /^\d+$/.test(rawShapeIdx) ? Number(rawShapeIdx) : 0;
     const shapeIdx = Number.isSafeInteger(parsedShapeIdx) ? parsedShapeIdx : 0;
     return {
-      color: parts[0] || "#F97316",
+      color: parts[0] || FALLBACK_AVATAR_COLOR,
       shapeIndex: shapeIdx % SHIPPED_SHAPE_KEYS.length,
       isImage: false,
     };
@@ -186,7 +190,7 @@ export const BotAvatar = memo(function BotAvatar({
           inset: -4,
           width: size + 8,
           height: size + 8,
-          filter: `drop-shadow(0 0 6px ${colorDef.hex}) drop-shadow(0 0 10px #ffffff)`,
+          filter: `drop-shadow(0 0 6px ${colorDef.hex}) drop-shadow(0 0 10px ${AVATAR_GLOW_WHITE})`,
         }}
         viewBox="0 0 48 48"
         fill="none"
@@ -201,10 +205,10 @@ export const BotAvatar = memo(function BotAvatar({
           strokeLinecap="round"
           strokeDasharray="45 80"
         />
-        <circle cx="43" cy="24" r="2.8" fill="#ffffff" />
+        <circle cx="43" cy="24" r="2.8" fill={AVATAR_GLOW_WHITE} />
         <defs>
           <linearGradient id={`${id}-ring`} x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" stopColor="#ffffff" stopOpacity="1" />
+            <stop offset="0%" stopColor={AVATAR_GLOW_WHITE} stopOpacity="1" />
             <stop offset="60%" stopColor={colorDef.hex} stopOpacity="0.9" />
             <stop offset="100%" stopColor={colorDef.hex} stopOpacity="0" />
           </linearGradient>
@@ -224,7 +228,7 @@ export const BotAvatar = memo(function BotAvatar({
           width: size,
           height: size,
           filter: isWorking
-            ? `drop-shadow(0 0 8px ${colorDef.hex}) drop-shadow(0 0 2px #ffffff)`
+            ? `drop-shadow(0 0 8px ${colorDef.hex}) drop-shadow(0 0 2px ${AVATAR_GLOW_WHITE})`
             : "drop-shadow(0 2px 4px rgba(0,0,0,0.45))",
         }}
       >

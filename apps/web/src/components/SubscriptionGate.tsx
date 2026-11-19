@@ -169,8 +169,9 @@ export function SubscriptionGate({
         // Over the app rather than replacing it, so closing keeps its state.
         <Dialog open={plansOpen} onOpenChange={setPlansOpen}>
           <DialogContent
+            variant="fullscreen"
             aria-label={t`Choose how to use Rakazo`}
-            className="inset-0 top-0 left-0 block h-dvh max-w-none translate-x-0 translate-y-0 overflow-y-auto rounded-none bg-background p-0 ring-0 sm:max-w-none"
+            className="overflow-y-auto bg-background"
           >
             <Suspense fallback={fallback}>
               <PaywallPage status={state.status} client={state.client} dismissible />

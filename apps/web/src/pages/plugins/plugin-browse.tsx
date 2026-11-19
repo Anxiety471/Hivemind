@@ -15,7 +15,6 @@ import {
   PluginRow,
   pluginSelection,
   ROW_BUTTON,
-  ROW_HOVER,
   ROW_SHELL,
 } from "../../components/integrations/plugin-marketplace";
 import type { TileContext } from "./parts";
@@ -199,7 +198,7 @@ export function PluginBrowse({
   /** Nothing leaves for the public catalog until the person picks this row. */
   function renderPublicCatalogRow(query: string) {
     return (
-      <div className={`mt-2 ${ROW_SHELL} ${ROW_HOVER}`}>
+      <div className={`mt-2 ${ROW_SHELL} list-row`}>
         <button
           type="button"
           className={ROW_BUTTON}

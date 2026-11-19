@@ -192,6 +192,7 @@ export function ComputerOverlay({
                   ref={frame.held ? undefined : screenFrameRef}
                   src={frame.url}
                   sandbox={screenIframeSandbox(frame.url)}
+                  // bg-black on purpose: the remote computer screen is framed in black, not themed.
                   className={`h-full w-full border-0 bg-black${frame.held ? " absolute inset-0" : ""}`}
                   allow="clipboard-read; clipboard-write; fullscreen"
                   style={{

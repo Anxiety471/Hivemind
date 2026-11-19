@@ -203,7 +203,7 @@ function SettledComputerCard({
         type="button"
         aria-expanded={expanded}
         data-testid="computer-card-toggle"
-        className="flex w-full min-w-0 cursor-pointer items-center px-[18px] py-3 text-left"
+        className="flex w-full min-w-0 cursor-pointer items-center px-[18px] py-3 text-start"
         onClick={() => setExpanded((open) => !open)}
       >
         <Header>

@@ -36,6 +36,11 @@ vi.mock("@rakazo/ui-web", () => {
   return {
     Button,
     Skeleton: (props: ComponentProps<"div">) => <div {...props} />,
+    SectionHeading: ({
+      as: _as,
+      variant: _variant,
+      ...props
+    }: ComponentProps<"h3"> & { as?: string; variant?: string }) => <h3 {...props} />,
     Card: Container,
     CardContent: Container,
     CardFooter: Container,

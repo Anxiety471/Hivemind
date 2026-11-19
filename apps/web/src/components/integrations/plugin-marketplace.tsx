@@ -80,9 +80,6 @@ export const ROW_SHELL = "flex min-w-0 items-center gap-3 rounded-xl px-2.5 py-2
 export const ROW_BUTTON =
   "flex min-w-0 flex-1 items-center gap-3 text-start focus-visible:outline-none";
 
-/** The whole row highlights, including for keyboard focus on its main button. */
-export const ROW_HOVER = "hover:bg-accent/60 has-[button:focus-visible]:bg-accent/60";
-
 export function PluginRow({
   name,
   description,
@@ -99,7 +96,7 @@ export function PluginRow({
   onOpen: () => void;
 }) {
   return (
-    <div data-testid="plugin-row" className={`${ROW_SHELL} ${ROW_HOVER}`}>
+    <div data-testid="plugin-row" className={`${ROW_SHELL} list-row`}>
       <button type="button" onClick={onOpen} className={ROW_BUTTON}>
         <PluginLogo name={name} logo={logo} site={site} />
         <span className="min-w-0 flex-1">

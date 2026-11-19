@@ -35,7 +35,7 @@ export function InfoTooltip({ label, children }: { label: string; children: stri
         aria-describedby={descriptionId}
         delay={0}
         closeOnClick={false}
-        className="-ms-1 -my-1 inline-flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="-ms-1 -my-1 inline-flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground focus-ring"
         onPointerLeave={() => {
           dismissed.current = false;
         }}

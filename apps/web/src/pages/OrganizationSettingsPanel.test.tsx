@@ -51,6 +51,11 @@ vi.mock("@rakazo/ui-web", () => {
   const Box = ({ children }: { children?: ReactNode }) => <div>{children}</div>;
   return {
     Button: (props: ComponentProps<"button">) => <button type="button" {...props} />,
+    SectionHeading: ({
+      as: _as,
+      variant: _variant,
+      ...props
+    }: ComponentProps<"h3"> & { as?: string; variant?: string }) => <h3 {...props} />,
     Input: (props: ComponentProps<"input">) => <input {...props} />,
     Dialog: ({ open, children }: { open: boolean; children?: ReactNode }) =>
       open ? <div>{children}</div> : null,

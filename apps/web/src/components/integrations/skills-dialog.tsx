@@ -21,13 +21,7 @@ import { useState } from "react";
 import { useSpaceQueries } from "../../lib/query";
 import { AgentSkills } from "../../pages/KnowledgeSection";
 import type { PluginSelection } from "./plugin-marketplace";
-import {
-  PluginDetail,
-  PluginLogo,
-  PluginRow,
-  pluginSelection,
-  ROW_HOVER,
-} from "./plugin-marketplace";
+import { PluginDetail, PluginLogo, PluginRow, pluginSelection } from "./plugin-marketplace";
 
 const NO_ENTRIES: PluginMarketplaceEntry[] = [];
 const NO_SERVERS: never[] = [];
@@ -173,7 +167,7 @@ export function SkillsDialog({
                     type="button"
                     data-testid="plugin-skill-set"
                     onClick={() => setSelection(set)}
-                    className={`flex min-w-0 items-center gap-3 rounded-xl px-2.5 py-2 text-start focus-visible:outline-none ${ROW_HOVER}`}
+                    className="flex min-w-0 items-center gap-3 rounded-xl px-2.5 py-2 text-start list-row"
                   >
                     <PluginLogo name={set.name} logo={set.logo} site={set.site} />
                     <span className="min-w-0 flex-1">

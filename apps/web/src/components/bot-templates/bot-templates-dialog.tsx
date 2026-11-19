@@ -34,7 +34,7 @@ import { cronLabels } from "../../lib/cron";
 import { useSave, useSpaceQueries } from "../../lib/query";
 import { errorDetails } from "../../lib/user-error";
 import { ErrorNotice } from "../ErrorNotice";
-import { PluginLogo, ROW_HOVER } from "../integrations/plugin-marketplace";
+import { PluginLogo } from "../integrations/plugin-marketplace";
 import { useBotTemplateCopy } from "./bot-template-copy";
 
 const ICONS: Record<string, LucideIcon> = {
@@ -116,7 +116,7 @@ export function BotTemplatesDialog({
               type="button"
               data-testid="bot-template-card"
               onClick={() => setOpenId(template.id)}
-              className={`flex min-w-0 flex-col gap-3 rounded-2xl border border-border/70 p-4 text-start focus-visible:outline-none ${ROW_HOVER}`}
+              className="flex min-w-0 flex-col gap-3 rounded-2xl border border-border/70 p-4 text-start list-row"
             >
               <span className="flex min-w-0 items-center gap-3">
                 <TemplateIcon id={template.id} />
@@ -303,7 +303,7 @@ function TemplateDetail({
                   type="button"
                   aria-expanded={isOpen}
                   onClick={() => setExpanded(isOpen ? null : row.key)}
-                  className="flex w-full items-center gap-3 px-4 py-3 text-start focus-visible:outline-none"
+                  className="flex w-full items-center gap-3 px-4 py-3 text-start list-row"
                 >
                   <Icon size={16} className="shrink-0 text-muted-foreground" />
                   <span className="min-w-0 flex-1">

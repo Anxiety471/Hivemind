@@ -68,7 +68,7 @@ function AddressField({
 
   if (address) {
     return (
-      <div className="flex items-center gap-1 rounded-lg bg-muted py-0.5 pr-0.5 pl-2.5">
+      <div className="flex items-center gap-1 rounded-lg bg-muted py-0.5 pe-0.5 ps-2.5">
         <span className="min-w-0 flex-1 break-all font-mono text-label text-foreground/75">
           {address}
         </span>

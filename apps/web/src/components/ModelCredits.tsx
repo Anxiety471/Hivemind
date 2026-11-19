@@ -34,6 +34,7 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
+  SectionHeading,
   Select,
   SelectContent,
   SelectGroup,
@@ -235,7 +236,7 @@ export function CreditAmountSelect({
         aria-label={monthly ? t`Monthly credits` : t`Credit amount`}
         className={cn(
           "w-full",
-          !compact && "rounded-xl pr-3 pl-4 text-body-lg data-[size=default]:h-12",
+          !compact && "rounded-xl pe-3 ps-4 text-body-lg data-[size=default]:h-12",
         )}
       >
         <SelectValue />
@@ -315,7 +316,9 @@ function TierPlans({
           return (
             <Card key={offer.tier} className={index === 0 ? "ring-2 ring-primary" : undefined}>
               <CardHeader>
-                <h2 className="text-heading3 font-medium">{name}</h2>
+                <SectionHeading as="h2" variant="heading">
+                  {name}
+                </SectionHeading>
               </CardHeader>
               <CardContent className="flex flex-1 flex-col gap-4">
                 <p className="flex items-baseline gap-1">
@@ -373,9 +376,9 @@ function TierPlans({
       <Card>
         <CardContent className="flex flex-col gap-4 min-[640px]:flex-row min-[640px]:items-center">
           <div className="flex-1">
-            <h2 className="text-heading3 font-medium">
+            <SectionHeading as="h2" variant="heading">
               <Trans>No plan or key? Use credits</Trans>
-            </h2>
+            </SectionHeading>
             <p className="mt-1 text-body text-muted-foreground">
               <Trans>All {credit} goes to model usage.</Trans>
             </p>
@@ -502,9 +505,9 @@ export function CreditChoice({
         <div className="grid gap-4 min-[480px]:grid-cols-2">
           <Card>
             <CardHeader>
-              <h2 className="text-heading3 font-medium">
+              <SectionHeading as="h2" variant="heading">
                 <Trans>Your subscription or API key</Trans>
-              </h2>
+              </SectionHeading>
             </CardHeader>
             <CardContent className="flex flex-1 flex-col gap-4">
               {status.byokPriceCents && status.byokAnnualPriceCents ? (
@@ -575,9 +578,9 @@ export function CreditChoice({
           </Card>
           <Card>
             <CardHeader>
-              <h2 className="text-heading3 font-medium">
+              <SectionHeading as="h2" variant="heading">
                 <Trans>Credits</Trans>
-              </h2>
+              </SectionHeading>
             </CardHeader>
             <CardContent className="flex flex-1 flex-col gap-4">
               <CreditAmountSelect

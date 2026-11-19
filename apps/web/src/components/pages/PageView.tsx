@@ -75,12 +75,12 @@ export function PageView({
   // In the macOS app the window controls sit in the top-left corner over a full-window page, so
   // its top row starts below them, as the main window's rows do.
   const macChrome = !compact && windowChromeKind(desktopBridge()) === "darwin";
-  const control = `grid place-items-center rounded-full p-0 border border-foreground/[0.06] text-foreground outline-none hover:bg-foreground/[0.06] focus-visible:ring-2 focus-visible:ring-ring ${compact ? "size-11" : "size-[35px]"}`;
+  const control = `grid place-items-center rounded-full p-0 border border-foreground/[0.06] text-foreground hover:bg-foreground/[0.06] focus-ring ${compact ? "size-11" : "size-[35px]"}`;
   // The browser close control sits 11px in. On macOS that inset starts after the traffic-light
   // strip. The sum is a style because Tailwind only emits `left-[…]` from a complete literal.
   const closeLeadingInsetPx = 11;
   const closeButtonClass = cn(
-    "app-no-drag absolute z-10 grid place-items-center rounded-full border border-foreground/[0.06] text-foreground/90 outline-none print:hidden hover:bg-foreground/[0.06] focus-visible:ring-2 focus-visible:ring-ring",
+    "app-no-drag absolute z-10 grid place-items-center rounded-full border border-foreground/[0.06] text-foreground/90 print:hidden hover:bg-foreground/[0.06] focus-ring",
     compact ? "top-[6px] left-[6px] size-11" : "size-9",
     !compact && (macChrome ? "top-[42px]" : "top-[6px]"),
   );
@@ -111,6 +111,7 @@ export function PageView({
       }}
     >
       <DialogContent
+        variant="fullscreen"
         showCloseButton={false}
         // Full screen, the page covers the chat whole: dimming it underneath would only flash
         // darker as the page fades in and out. The tablet sheet keeps it over the chat's edges.
@@ -121,7 +122,7 @@ export function PageView({
         finalFocus={returnFocus}
         data-testid="page-view"
         data-page-print
-        className={`app-no-drag print:static print:h-auto print:overflow-visible print:bg-transparent print:animate-none top-0 left-0 block h-dvh w-screen max-w-none translate-x-0 translate-y-0 gap-0 overflow-hidden rounded-none bg-card p-0 ring-0 sm:max-w-none ease-[cubic-bezier(0.16,1,0.3,1)] data-open:duration-[260ms] data-open:zoom-in-[0.98] data-open:slide-in-from-bottom-3 data-closed:duration-150 data-closed:zoom-out-100 data-closed:fill-mode-forwards motion-reduce:data-open:zoom-in-100 motion-reduce:data-open:slide-in-from-bottom-0 ${
+        className={`app-no-drag print:static print:h-auto print:overflow-visible print:bg-transparent print:animate-none w-screen gap-0 overflow-hidden bg-card ease-[cubic-bezier(0.16,1,0.3,1)] data-open:duration-[260ms] data-open:zoom-in-[0.98] data-open:slide-in-from-bottom-3 data-closed:duration-150 data-closed:zoom-out-100 data-closed:fill-mode-forwards motion-reduce:data-open:zoom-in-100 motion-reduce:data-open:slide-in-from-bottom-0 ${
           compact ? "min-[900px]:bg-transparent" : ""
         }`}
       >
@@ -275,7 +276,7 @@ function TitlePill({ title, onRename }: { title: string; onRename?: (title: stri
           disabled={!onRename}
           onClick={() => setDraft(title)}
           title={onRename ? t`Rename` : undefined}
-          className={`group/title ${pill} bg-card outline-none hover:bg-foreground/[0.04] focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:hover:bg-transparent`}
+          className={`group/title ${pill} bg-card hover:bg-foreground/[0.04] focus-ring disabled:cursor-default disabled:hover:bg-transparent`}
         />
       }
     >

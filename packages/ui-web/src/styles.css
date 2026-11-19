@@ -119,6 +119,32 @@
   }
 }
 
+/* One keyboard focus treatment for hand-rolled controls: a 2px ring set off the control, matching
+   what the collapsible triggers got from ring-2 plus ring-offset-2. */
+@utility focus-ring {
+  &:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+}
+
+/* A list row: highlights on hover or keyboard focus, and carries the focus ring itself, including
+   when a control inside it has focus. The ring is inset so a rounded, clipping list cannot cut it
+   off. */
+@utility list-row {
+  &:hover,
+  &:focus-visible,
+  &:has(:focus-visible) {
+    background-color: var(--accent);
+  }
+
+  &:focus-visible,
+  &:has(:focus-visible) {
+    outline: 2px solid var(--ring);
+    outline-offset: -2px;
+  }
+}
+
 /* Native <details> fold-outs slide open and closed instead of snapping. */
 @media (prefers-reduced-motion: no-preference) {
   :root {

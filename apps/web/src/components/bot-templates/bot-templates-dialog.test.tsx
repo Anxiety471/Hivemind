@@ -48,7 +48,7 @@ vi.mock("@rakazo/ui-web", () => {
     Spinner: () => <span role="status" />,
   };
 });
-vi.mock("../integrations/plugin-marketplace", () => ({ PluginLogo: () => null, ROW_HOVER: "" }));
+vi.mock("../integrations/plugin-marketplace", () => ({ PluginLogo: () => null }));
 
 import { useSpaceQueries } from "../../lib/query";
 import { BotTemplatesDialog } from "./bot-templates-dialog";

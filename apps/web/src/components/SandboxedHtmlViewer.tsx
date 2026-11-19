@@ -31,6 +31,7 @@ function previewDocument(html: string): string {
 export function SandboxedHtmlViewer({
   html,
   title,
+  // White on purpose: the sandboxed document is rendered as a light page whatever the app theme.
   className = "bg-white",
   onFrameMessage,
 }: {

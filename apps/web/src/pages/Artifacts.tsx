@@ -47,6 +47,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { VideoPreview } from "../components/ArtifactFileCard";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { ErrorNotice } from "../components/ErrorNotice";
 import { IconTooltip } from "../components/IconTooltip";
 import { PdfViewer } from "../components/PdfViewer";
 import { SandboxedHtmlViewer } from "../components/SandboxedHtmlViewer";
@@ -57,7 +58,8 @@ import { useSave, useSpaceQueries } from "../lib/query";
 import { formatRelativeTime } from "../lib/relative-time";
 import { createStoredPreference } from "../lib/stored-preference";
 import { useObjectUrl } from "../lib/use-object-url";
-import { errorText } from "../lib/user-error";
+import type { ErrorDetails } from "../lib/user-error";
+import { errorDetails, errorText } from "../lib/user-error";
 import { useRedrawAtMidnight } from "./shell/use-redraw-at-midnight";
 import { WindowChrome } from "./WindowChrome";
 
@@ -127,12 +129,15 @@ export function ArtifactsPage() {
   const nextCursor = listing.data?.pages.at(-1)?.nextCursor ?? null;
   const loadingMore = listing.isFetchingNextPage;
   const loadError =
-    listing.error && !listing.data ? errorText(listing.error, t`Could not load artifacts.`) : null;
+    listing.error && !listing.data
+      ? errorDetails(listing.error, t`Could not load artifacts.`)
+      : null;
   // A failed refresh over the cached list is still said; a failed next page keeps Load more.
   const refreshError =
     listing.data && listing.isRefetchError
-      ? errorText(listing.error, t`Could not load artifacts.`)
+      ? errorDetails(listing.error, t`Could not load artifacts.`)
       : null;
+  const retryListing = () => listing.refetch();
 
   function loadMore() {
     // A failed page keeps what is shown so Load more can be retried.
@@ -303,9 +308,9 @@ export function ArtifactsPage() {
       </header>
 
       {refreshError ? (
-        <p role="alert" className="px-6 py-2 text-body text-destructive">
-          {refreshError}
-        </p>
+        <div className="px-6 py-2">
+          <ErrorNotice error={refreshError} onRetry={retryListing} />
+        </div>
       ) : null}
       <div className="flex min-h-0 flex-1 overflow-hidden">
         {artifactId ? (
@@ -314,6 +319,7 @@ export function ArtifactsPage() {
               <IndexPane
                 items={filteredItems}
                 loadError={loadError}
+                onRetry={retryListing}
                 botsById={botsById}
                 selectedId={artifactId}
                 onRequestDelete={setPendingDelete}
@@ -334,6 +340,7 @@ export function ArtifactsPage() {
           <BrowsingPane
             items={filteredItems}
             loadError={loadError}
+            onRetry={retryListing}
             viewMode={viewMode}
             botsById={botsById}
             onRequestDelete={setPendingDelete}
@@ -375,6 +382,7 @@ export function ArtifactsPage() {
 function BrowsingPane({
   items,
   loadError,
+  onRetry,
   viewMode,
   botsById,
   onRequestDelete,
@@ -384,7 +392,8 @@ function BrowsingPane({
   empty,
 }: {
   items: ArtifactSummary[] | null;
-  loadError: string | null;
+  loadError: ErrorDetails | null;
+  onRetry: () => unknown;
   viewMode: ViewMode;
   botsById: Map<string, Bot>;
   onRequestDelete: (artifact: ArtifactSummary) => void;
@@ -395,8 +404,12 @@ function BrowsingPane({
 }) {
   if (items === null) {
     return (
-      <div className="grid flex-1 place-items-center text-body text-muted-foreground/80">
-        {loadError ?? <Spinner aria-label={t`Loading…`} />}
+      <div className="grid flex-1 place-items-center p-6 text-body text-muted-foreground/80">
+        {loadError ? (
+          <ErrorNotice error={loadError} onRetry={onRetry} />
+        ) : (
+          <Spinner aria-label={t`Loading…`} />
+        )}
       </div>
     );
   }
@@ -650,6 +663,7 @@ function BotOption({ bot }: { bot: Bot }) {
 function IndexPane({
   items,
   loadError,
+  onRetry,
   botsById,
   selectedId,
   onRequestDelete,
@@ -659,7 +673,8 @@ function IndexPane({
   empty,
 }: {
   items: ArtifactSummary[] | null;
-  loadError: string | null;
+  loadError: ErrorDetails | null;
+  onRetry: () => unknown;
   botsById: Map<string, Bot>;
   selectedId: string;
   onRequestDelete: (artifact: ArtifactSummary) => void;
@@ -672,7 +687,11 @@ function IndexPane({
     <aside className="flex w-[320px] shrink-0 flex-col overflow-y-auto border-e border-border">
       {items === null ? (
         <div className="grid flex-1 place-items-center p-6 text-center text-body text-muted-foreground/80">
-          {loadError ?? <Spinner aria-label={t`Loading…`} />}
+          {loadError ? (
+            <ErrorNotice error={loadError} onRetry={onRetry} />
+          ) : (
+            <Spinner aria-label={t`Loading…`} />
+          )}
         </div>
       ) : items.length === 0 ? (
         empty
@@ -901,14 +920,11 @@ function PreviewPane({
   const state:
     | { status: "loading" }
     | { status: "ready"; artifact: Artifact; bytes: Uint8Array }
-    | { status: "error"; message: string } =
+    | { status: "error"; error: unknown } =
     artifactQuery.data && bytes
       ? { status: "ready", artifact: artifactQuery.data, bytes }
       : artifactQuery.error
-        ? {
-            status: "error",
-            message: errorText(artifactQuery.error, t`Could not load this artifact.`),
-          }
+        ? { status: "error", error: artifactQuery.error }
         : { status: "loading" };
 
   return (
@@ -974,7 +990,10 @@ function PreviewPane({
           </div>
         ) : state.status === "error" ? (
           <div className="rounded-xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-destructive">
-            {state.message}
+            <ErrorNotice
+              error={errorDetails(state.error, t`Could not load this artifact.`)}
+              onRetry={() => artifactQuery.refetch()}
+            />
           </div>
         ) : (
           <div className="relative h-full overflow-hidden rounded-2xl border border-border">

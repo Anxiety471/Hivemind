@@ -171,7 +171,7 @@ function OwnerPages({
         <button
           type="button"
           onClick={() => openPage(page.id)}
-          className="flex min-w-0 flex-1 items-center gap-3 rounded-md px-2 py-2 text-start outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="flex min-w-0 flex-1 items-center gap-3 rounded-md px-2 py-2 text-start focus-ring"
         >
           <span className="grid size-8 shrink-0 place-items-center rounded-sm bg-muted text-foreground">
             <PageIcon className="h-5 w-4" />
@@ -196,7 +196,7 @@ function OwnerPages({
       <DropdownMenu>
         <DropdownMenuTrigger
           aria-label={t`Actions for ${page.title}`}
-          className="me-1 grid size-8 shrink-0 place-items-center rounded-full text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-popup-open:bg-accent"
+          className="me-1 grid size-8 shrink-0 place-items-center rounded-full text-muted-foreground hover:text-foreground focus-ring data-popup-open:bg-accent"
         >
           <MoreHorizontal className="size-4" />
         </DropdownMenuTrigger>
@@ -274,7 +274,7 @@ function OwnerPages({
             <button
               type="button"
               onClick={preview.onOpenAll}
-              className="flex items-center gap-1 rounded-sm outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+              className="flex items-center gap-1 rounded-sm hover:text-foreground focus-ring"
             >
               <Trans>Pages</Trans>
               <ChevronRight aria-hidden="true" className="size-3.5 rtl:rotate-180" />

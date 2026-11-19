@@ -30,8 +30,9 @@ import { ChevronDown, ChevronRight, FileUp, Plus } from "lucide-react";
 import { Fragment, useEffect, useRef, useState } from "react";
 import { useSpaceQueries } from "../lib/query";
 import { useSpaceRpc } from "../lib/space-rpc";
-import { errorCode, errorText } from "../lib/user-error";
+import { errorCode, errorDetails, errorText } from "../lib/user-error";
 import { useIdentityConfirmation } from "./ConfirmIdentityDialog";
+import { ErrorNotice } from "./ErrorNotice";
 import { useOwnSpaces } from "./integrations/space-availability";
 import { BotEmailAddresses } from "./vault/BotEmailAddresses";
 import { useVaultKindLabels, useVaultSubtitle, VaultTile } from "./vault/kinds";
@@ -442,9 +443,10 @@ export function VaultSettings({
         </p>
       ) : null}
       {listQuery.isError ? (
-        <p className="text-body-sm text-destructive">
-          <Trans>Could not load credentials.</Trans>
-        </p>
+        <ErrorNotice
+          error={errorDetails(listQuery.error, t`Could not load credentials.`)}
+          onRetry={() => listQuery.refetch()}
+        />
       ) : null}
       {shown.length ? (
         <ul data-testid="vault-card" className="overflow-hidden rounded-xl bg-muted/50">
@@ -457,7 +459,7 @@ export function VaultSettings({
                   type="button"
                   data-testid="vault-credential-row"
                   data-name={item.name}
-                  className="flex w-full items-center gap-3 px-3.5 py-2.5 text-start hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
+                  className="flex w-full items-center gap-3 px-3.5 py-2.5 text-start list-row"
                   onClick={() => {
                     setDetailError(null);
                     setOpened(item.name);

@@ -44,6 +44,11 @@ function DialogOverlay({ className, ...props }: DialogPrimitive.Backdrop.Props) 
 // their own panes.
 const largeDialog = "flex max-h-[calc(100%-2rem)] flex-col gap-0 overflow-hidden rounded-2xl p-0";
 
+// `fullscreen` drops the floating panel: it fills the window and the caller keeps only the
+// background and the scrolling its content needs.
+const fullscreenDialog =
+  "inset-0 top-0 left-0 block h-dvh max-w-none translate-x-0 translate-y-0 rounded-none p-0 ring-0 sm:max-w-none";
+
 const dialogContentVariants = cva(
   "fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl bg-dialog p-6 text-body text-foreground ring-1 ring-foreground/10 duration-100 outline-none sm:max-w-sm data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
   {
@@ -55,8 +60,12 @@ const dialogContentVariants = cva(
         xl: `${largeDialog} h-[680px] w-[920px] sm:max-w-[920px]`,
         "2xl": `${largeDialog} h-[760px] w-[1080px] sm:max-w-[1080px]`,
       },
+      variant: {
+        default: "",
+        fullscreen: fullscreenDialog,
+      },
     },
-    defaultVariants: { size: "default" },
+    defaultVariants: { size: "default", variant: "default" },
   },
 );
 
@@ -66,6 +75,7 @@ function DialogContent({
   showCloseButton = true,
   overlayClassName,
   size,
+  variant,
   ...props
 }: DialogPrimitive.Popup.Props &
   VariantProps<typeof dialogContentVariants> & {
@@ -77,7 +87,7 @@ function DialogContent({
       <DialogOverlay className={overlayClassName} />
       <DialogPrimitive.Popup
         data-slot="dialog-content"
-        className={cn(dialogContentVariants({ size }), className)}
+        className={cn(dialogContentVariants({ size, variant }), className)}
         {...props}
       >
         {children}

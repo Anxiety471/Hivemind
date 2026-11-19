@@ -1,5 +1,5 @@
 import { useLingui } from "@lingui/react/macro";
-import { Button } from "@rakazo/ui-web";
+import { Button, SectionHeading } from "@rakazo/ui-web";
 import { ArrowLeft } from "lucide-react";
 import type { ReactNode } from "react";
 
@@ -36,12 +36,9 @@ export function SettingsPageHeader({
       </Button>
       {leading}
       <div className="min-w-0">
-        <h3
-          data-testid="settings-page-title"
-          className="truncate text-body-lg font-medium text-foreground"
-        >
+        <SectionHeading data-testid="settings-page-title" variant="title" className="truncate">
           {title}
-        </h3>
+        </SectionHeading>
         {subtitle ? <p className="text-body-sm text-muted-foreground">{subtitle}</p> : null}
       </div>
     </div>

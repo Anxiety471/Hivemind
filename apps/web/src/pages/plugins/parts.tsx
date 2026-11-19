@@ -10,7 +10,7 @@ import { catalogItemKey } from "@rakazo/core";
 import { Button, SectionHeading } from "@rakazo/ui-web";
 import { Check, ChevronLeft, CircleAlert, TriangleAlert } from "lucide-react";
 import type { ReactElement, ReactNode } from "react";
-import { ROW_BUTTON, ROW_HOVER, ROW_SHELL } from "../../components/integrations/plugin-marketplace";
+import { ROW_BUTTON, ROW_SHELL } from "../../components/integrations/plugin-marketplace";
 import type { PluginConnections } from "./use-plugin-connections";
 
 export function ConnectorIcon({ name, logo }: { name: string; logo?: string | null }) {
@@ -131,7 +131,7 @@ export function CatalogTile({
   return (
     <div
       data-testid={tileTestId ? `connection-tile-${item.slug.toLowerCase()}` : undefined}
-      className={`${ROW_SHELL}${openable ? ` ${ROW_HOVER}` : ""}`}
+      className={`${ROW_SHELL}${openable ? " list-row" : ""}`}
     >
       {openable ? (
         <button type="button" className={ROW_BUTTON} onClick={() => onOpenApp(item)}>
