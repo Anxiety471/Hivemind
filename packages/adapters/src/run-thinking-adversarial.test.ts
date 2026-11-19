@@ -127,6 +127,134 @@ describe("reasoning segment lifecycle", () => {
   });
 });
 
+describe("reopening a closed reasoning segment", () => {
+  it("rejoins a delta split mid-word across the end marker into one block", async () => {
+    const { ctx, appended } = await context();
+    await consumeRunEvents(
+      ctx,
+      runtimeEvents([
+        { type: "thinking", active: true },
+        { type: "thinking_delta", text: "hel" },
+        { type: "thinking", active: false },
+        { type: "thinking_delta", text: "lo" },
+        { type: "text", text: "Done." },
+        { type: "done", text: "Done." },
+      ]),
+    );
+    expect(ctx.state.reply.messageSegments).toEqual([
+      expect.objectContaining({ kind: "thinking", lines: ["hello"] }),
+    ]);
+    expect(liveThinking(appended).every((payload) => payload?.segment === 0)).toBe(true);
+    expect(liveThinking(appended).at(-1)?.lines).toEqual(["hello"]);
+  });
+
+  it("extends the newest stream, never an earlier closed one", async () => {
+    const { ctx } = await context();
+    await consumeRunEvents(
+      ctx,
+      runtimeEvents([
+        { type: "thinking", active: true },
+        { type: "thinking_delta", text: "first stream." },
+        { type: "thinking", active: false },
+        { type: "thinking", active: true },
+        { type: "thinking_delta", text: "second stream." },
+        { type: "thinking", active: false },
+        { type: "thinking_delta", text: "more of the second." },
+        { type: "text", text: "Done." },
+        { type: "done", text: "Done." },
+      ]),
+    );
+    expect(ctx.state.reply.messageSegments).toEqual([
+      expect.objectContaining({ kind: "thinking", lines: ["first stream."] }),
+      expect.objectContaining({
+        kind: "thinking",
+        lines: ["second stream.more of the second."],
+      }),
+    ]);
+  });
+
+  it("keeps the reopen slot out of the checkpoint snapshot", async () => {
+    const { ctx } = await context();
+    await consumeRunEvents(
+      ctx,
+      runtimeEvents([
+        { type: "thinking", active: true },
+        { type: "thinking_delta", text: "before the pause" },
+        { type: "thinking", active: false },
+      ]),
+    );
+    const snapshot = JSON.parse(JSON.stringify(snapshotReply(ctx.state.reply))) as Record<
+      string,
+      unknown
+    >;
+    expect("lastThinking" in snapshot).toBe(false);
+    expect(snapshot.thinking).toBeUndefined();
+    const fresh = await context();
+    restoreReply(fresh.ctx.state.reply, snapshot, "run-1");
+    await consumeRunEvents(
+      fresh.ctx,
+      runtimeEvents([
+        { type: "thinking_delta", text: " after the resume" },
+        { type: "text", text: "Done." },
+        { type: "done", text: "Done." },
+      ]),
+    );
+    // A restored reply has no reopen slot, so the stray delta is its own segment rather than
+    // rewriting the checkpoint's committed block.
+    expect(
+      fresh.ctx.state.reply.messageSegments.filter((block) => block.kind === "thinking"),
+    ).toHaveLength(2);
+  });
+
+  it("never lets a secret split across the end marker reach a live snapshot", async () => {
+    const secret = "sk-ant-cross-close";
+    const { ctx, appended } = await context({ secrets: [secret] });
+    // The redactor holds back a possible match's start; the close flushes it, and the late
+    // delta completes the value. Reopening must not publish the joined value.
+    const half = Math.floor(secret.length / 2);
+    await consumeRunEvents(
+      ctx,
+      runtimeEvents([
+        { type: "thinking", active: true },
+        { type: "thinking_delta", text: `key ${secret.slice(0, half)}` },
+        { type: "thinking", active: false },
+        { type: "thinking_delta", text: `${secret.slice(half)} done` },
+        { type: "text", text: "Done." },
+        { type: "done", text: "Done." },
+      ]),
+    );
+    // The live payload is what reaches the DB and every thread subscriber; the durable block
+    // is re-redacted when the run finishes, so this is the boundary that must hold.
+    expect(JSON.stringify(liveThinking(appended))).not.toContain(secret);
+  });
+
+  it("keeps the reopened live snapshots inside the cadence and the block budget", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-11-19T00:00:00.000Z"));
+    const { ctx, appended } = await context();
+    await consumeRunEvents(
+      ctx,
+      runtimeEvents([
+        { type: "thinking", active: true },
+        { type: "thinking_delta", text: "closed" },
+        { type: "thinking", active: false },
+      ]),
+    );
+    const before = liveThinking(appended).length;
+    const events: AgentRuntimeEvent[] = [];
+    for (let i = 0; i < 200; i += 1) events.push({ type: "thinking_delta", text: ` r${i}` });
+    events.push({ type: "text", text: "Done." }, { type: "done", text: "Done." });
+    await consumeRunEvents(ctx, runtimeEvents(events));
+    const after = liveThinking(appended);
+    expect(after.length - before).toBeLessThanOrEqual(2);
+    expect(after.every((payload) => payload?.segment === 0)).toBe(true);
+    const [block] = ctx.state.reply.messageSegments;
+    const lines = block?.kind === "thinking" ? block.lines : [];
+    expect(lines.length).toBeLessThanOrEqual(8);
+    expect(lines.join("").length).toBeLessThanOrEqual(THINKING_BLOCK_MAX_CHARS);
+  });
+});
+
 describe("reasoning redaction and truncation", () => {
   it("hides a secret split across deltas and clamps one huge line", async () => {
     const secret = "sk-ant-secret-value";
