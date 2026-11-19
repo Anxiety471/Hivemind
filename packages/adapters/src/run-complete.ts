@@ -283,13 +283,16 @@ async function finalReply(ctx: RunContext) {
   // Other runs still drop a stray sentinel at the edges of a real reply.
   // A member a group message named nobody for may end silently with the sentinel, a placeholder
   // such as a lone dot, or nothing at all, as long as it did no work: tool steps or a posted
-  // message are still shown.
+  // message are still shown. Reasoning is not an answer either, so it never makes the empty
+  // answer below look like one.
   const groupSilentEnd =
     ctx.groupReplyOptional &&
     !ctx.allowSilentEmptyRun &&
     (isNoResponseReply(reply.assembled, reply.messageSegments) ||
       isPlaceholderReply(reply.assembled, reply.messageSegments) ||
-      !(reply.assembled.trim() || reply.messageSegments.length)) &&
+      !(
+        reply.assembled.trim() || reply.messageSegments.some((block) => block.kind !== "thinking")
+      )) &&
     !reply.publishedMidTurnUserMessage &&
     !reply.publishedTerminalSubagent &&
     // Reasoning is something a person watched the bot do, not a reply: like text, it never

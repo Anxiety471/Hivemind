@@ -302,14 +302,23 @@ export async function openThinkingSegment(ctx: RunContext) {
   // What the bot streamed and did before it started reasoning comes first in its message.
   flushPendingTools(reply);
   await flushProgress(ctx);
+  reply.lastThinking = undefined;
   reply.thinking = { startedAt: Date.now(), text: "", lastFlushedAt: 0 };
 }
 
-/** Adds reasoning the provider streamed, publishing a live snapshot at the reply text's cadence. */
+/**
+ * Adds reasoning the provider streamed, publishing a live snapshot at the reply text's cadence.
+ * The provider can report the end of its reasoning before its buffered deltas arrive here, so a
+ * delta with no open segment reopens the reasoning block it extends: one stream stays one card.
+ */
 export async function streamThinking(ctx: RunContext, text: string) {
   if (!text || !thinkingCaptureEnabled(ctx)) return;
   const { reply } = ctx.state;
-  reply.thinking ??= { startedAt: Date.now(), text: "", lastFlushedAt: 0 };
+  reply.thinking ??= reopenedThinkingSegment(reply) ?? {
+    startedAt: Date.now(),
+    text: "",
+    lastFlushedAt: 0,
+  };
   appendThinkingText(reply.thinking, reply.thinkingRedactor.push(text));
   const now = Date.now();
   if (now - reply.thinking.lastFlushedAt < THINKING_LIVE_FLUSH_MS) return;
@@ -319,6 +328,21 @@ export async function streamThinking(ctx: RunContext, text: string) {
     durationMs: now - reply.thinking.startedAt,
     lines: thinkingBlockLines(reply.thinking.text),
   });
+}
+
+/**
+ * The reasoning segment a late delta continues: the reply's newest block, when it is reasoning
+ * and nothing has been written after it. Its block comes back out so closing can put that same
+ * segment's block in the same place, keeping the start it had so its duration stays honest.
+ */
+function reopenedThinkingSegment(reply: ReplyState): ThinkingSegmentState | undefined {
+  const last = reply.messageSegments.at(-1);
+  const closed = reply.lastThinking;
+  if (last?.kind !== "thinking" || !closed) return undefined;
+  reply.messageSegments.pop();
+  reply.lastThinking = undefined;
+  // 0 admits the next live snapshot at once, so the reopened card shows both halves.
+  return { startedAt: closed.startedAt, text: closed.text, lastFlushedAt: 0 };
 }
 
 /**
@@ -332,10 +356,16 @@ export async function closeThinkingSegment(ctx: RunContext) {
   reply.thinking = null;
   appendThinkingText(segment, reply.thinkingRedactor.finish());
   const lines = thinkingBlockLines(segment.text);
-  if (lines.length === 0) return;
+  if (lines.length === 0) {
+    reply.lastThinking = undefined;
+    return;
+  }
   const durationMs = Math.max(0, Math.round(Date.now() - segment.startedAt));
   const segmentIndex = reply.messageSegments.filter((block) => block.kind === "thinking").length;
   reply.messageSegments.push({ kind: "thinking", durationMs, lines });
+  // The provider can still deliver deltas it buffered before its end marker; keep the exact
+  // text so one split word rejoins whole if they come.
+  reply.lastThinking = { startedAt: segment.startedAt, text: segment.text };
   await publishThinkingSnapshot(ctx, { segment: segmentIndex, durationMs, lines });
 }
 

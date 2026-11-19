@@ -165,6 +165,11 @@ export interface ReplyState {
    */
   thinking: ThinkingSegmentState | null;
   /**
+   * The reasoning segment just ended, while a delta the provider buffered may still continue
+   * it. Its exact text (not the display lines) keeps a word split across the pair whole.
+   */
+  lastThinking?: { startedAt: number; text: string };
+  /**
    * Redacts the reasoning stream alone. Sharing the reply text's redactor would let a match
    * join two streams the model never wrote together, hiding or leaking the wrong text.
    */

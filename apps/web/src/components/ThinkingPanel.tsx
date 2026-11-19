@@ -3,15 +3,8 @@ import { formatCompactDuration } from "@rakazo/core";
 
 /**
  * The reasoning a bot did before it answered: "Thought for 2s" over the first few lines it
- * streamed while thinking.
- *
- * PROPOSED CONTRACT (backend workstream): add
- * `{ kind: "thinking"; durationMs: number; lines: string[] }` as an additive member of
- * `MessageBlock` in `packages/contracts/src/events.ts`, and render it from the block switch in
- * `apps/web/src/pages/shell/message-view.tsx` beside the `steps` branch (above the tool activity
- * card), in a full-width message frame so the card spans the transcript. `lines` is raw
- * thinking-delta capture, truncated to the first few lines; `durationMs` is the thinking
- * segment's wall time.
+ * streamed while thinking. It renders one `{ kind: "thinking"; durationMs; lines }` block of
+ * the reply, inside the message's one activity panel beside the tool rows.
  */
 export function ThinkingPanel({ durationMs, lines }: { durationMs: number; lines: string[] }) {
   const duration = formatCompactDuration(durationMs);
