@@ -46,6 +46,13 @@ func OutputInvalid() *orpc.Error {
 type Deployment struct {
 	WebOrigin     string
 	EmailDelivery bool
+	// InboundEmailDomain is env.inboundEmail?.domain (apps/api/src/env.ts:416): the lowercased
+	// INBOUND_EMAIL_DOMAIN, absent when the server receives no email.
+	InboundEmailDomain string
+	// MaxComputersPerUser is the raw SANDBOX_MAX_COMPUTERS_PER_USER; procedures resolve it
+	// per call as resolveMaxComputersPerUser does, because a bad value fails the call, not
+	// the process.
+	MaxComputersPerUser string
 }
 
 // RequireBot is repos.getBot (packages/db/src/repos.ts:415): a bot of the actor's Space that

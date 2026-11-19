@@ -30,6 +30,12 @@ type Config struct {
 	// variables (configuredEmailProvider, or the development emulator): an invitee must then
 	// have verified their address.
 	EmailDelivery bool
+	// InboundEmailDomain is env.inboundEmail.domain for bots.emailAddress*: the lowercased
+	// INBOUND_EMAIL_DOMAIN, empty when the server receives no email.
+	InboundEmailDomain string
+	// MaxComputersPerUser is the raw SANDBOX_MAX_COMPUTERS_PER_USER the restore procedures
+	// resolve per call.
+	MaxComputersPerUser string
 }
 
 // Load reads the environment. Only a build that serves procedures needs the
@@ -63,6 +69,8 @@ func Load() (Config, error) {
 	config.OIDCBypass = os.Getenv("OIDC_ALLOW_SIGNUP_BYPASS") == "true" && strings.TrimSpace(os.Getenv("OIDC_ISSUER")) != ""
 	config.MaxUploadBytes = uploadBytes(os.Getenv("MAX_UPLOAD_SIZE_MB"))
 	config.EmailDelivery = emailDelivery(os.Getenv)
+	config.InboundEmailDomain = strings.ToLower(strings.TrimSpace(os.Getenv("INBOUND_EMAIL_DOMAIN")))
+	config.MaxComputersPerUser = strings.TrimSpace(os.Getenv("SANDBOX_MAX_COMPUTERS_PER_USER"))
 
 	minimums, err := local.ParseMinimums(os.Getenv("RAKAZO_MIN_CLIENT_BUILD"))
 	if err != nil {

@@ -167,8 +167,10 @@ func setupLocal(buildIDFile string, logger *slog.Logger) (*local.Server, func(),
 		OIDCBypass:      deployment.OIDCBypass,
 	})
 	server := local.New(database, sessions, procedures.All(database, shared.Deployment{
-		WebOrigin:     strings.TrimRight(deployment.WebOrigin, "/"),
-		EmailDelivery: deployment.EmailDelivery,
+		WebOrigin:           strings.TrimRight(deployment.WebOrigin, "/"),
+		EmailDelivery:       deployment.EmailDelivery,
+		InboundEmailDomain:  deployment.InboundEmailDomain,
+		MaxComputersPerUser: deployment.MaxComputersPerUser,
 	}), local.Config{
 		BuildID:        readBuildID(buildIDFile),
 		Minimums:       deployment.Minimums,

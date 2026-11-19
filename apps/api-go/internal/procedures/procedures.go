@@ -9,15 +9,19 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/effects"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/local"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/agentskills"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/approvalrules"
 	artifacts "github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/artifactlist"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/availability"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/bots"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/botsections"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/capabilities"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/computer"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/connections"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/externalconversations"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/groups"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/mcpassignments"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/memorycfg"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/messaging"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/models"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/pages"
@@ -357,6 +361,84 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 			ReadOnly: true,
 			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
 				return artifacts.ListVersions(ctx, database, actor, input)
+			},
+		},
+		{
+			Name: "bots.reorder",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return bots.Reorder(ctx, database, actor, input)
+			},
+		},
+		{
+			Name: "bots.restore",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return bots.Restore(ctx, database, actor, deployment, input)
+			},
+		},
+		{
+			Name:     "bots.removePreview",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return bots.RemovePreview(ctx, database, actor, input)
+			},
+		},
+		{
+			Name:     "bots.emailAddress",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return bots.EmailAddress(ctx, database, actor, deployment, input)
+			},
+		},
+		{
+			Name:     "bots.emailAddresses",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, _ orpc.Input) (any, *orpc.Error) {
+				return bots.EmailAddresses(ctx, database, actor, deployment)
+			},
+		},
+		{
+			Name: "bots.claimEmailAddress",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return bots.ClaimEmailAddress(ctx, database, actor, deployment, input)
+			},
+		},
+		{
+			Name:     "memory.providerConfig",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, _ orpc.Input) (any, *orpc.Error) {
+				return memorycfg.ProviderConfig(ctx, database, actor)
+			},
+		},
+		{
+			Name: "memory.setDefaultScope",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return memorycfg.SetDefaultScope(ctx, database, actor, input)
+			},
+		},
+		{
+			Name: "groups.restore",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return groups.Restore(ctx, database, actor, deployment, input)
+			},
+		},
+		{
+			Name:     "agentSkills.list",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, _ orpc.Input) (any, *orpc.Error) {
+				return agentskills.List(ctx, database, actor)
+			},
+		},
+		{
+			Name:     "agentSkills.get",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return agentskills.Get(ctx, database, actor, input)
+			},
+		},
+		{
+			Name: "agentSkills.remove",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return agentskills.Remove(ctx, database, actor, input)
 			},
 		},
 	}
