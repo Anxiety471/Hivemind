@@ -2075,6 +2075,18 @@ describe("a group member the message named nobody for", () => {
     expect(result.messages).toEqual([]);
   });
 
+  it("stays silent when its only reasoning ends with no answer at all", async () => {
+    const result = await turn(true, [
+      { type: "thinking", active: true },
+      { type: "thinking_delta", text: "Nothing worth saying." },
+      { type: "thinking", active: false },
+      done,
+    ]);
+    expect(result.finalizeRun).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ outcome: "completed", blocks: [], markUnread: false }),
+    );
+  });
+
   it("keeps the reasoning before a real reply", async () => {
     const result = await turn(true, [
       { type: "thinking", active: true },
