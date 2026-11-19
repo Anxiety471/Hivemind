@@ -311,6 +311,18 @@ export function laneDCases(system: System): Case[] {
       await system.bot.update({ where: { id: `${seeded.userId}-target` }, data: { archivedAt: old } });
     },
   }));
+  // A member bot in another Space is hidden by row-level security: TypeScript reads the
+  // relation as null and throws (500); Go must answer the same.
+  addCase(list, preview("hidden-member", { botId: "__s-target__" }, {
+    seed: async (seeded) => {
+      await previewSeed()(seeded);
+      await addBot(seeded, "foreign", 1);
+      await addGroup(seeded, "ghidden", "Hidden member group", 0);
+      await addGroupMember(seeded, "ghidden", "target");
+      await addGroupMember(seeded, "ghidden", "foreign");
+    },
+    after: [],
+  }));
   addCase(list, preview("other-space-wrong-header", { botId: "__s-target__" }, {
     seed: async (seeded) => {
       await addBot(seeded, "target", 1);

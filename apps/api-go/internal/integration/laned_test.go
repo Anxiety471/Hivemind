@@ -258,3 +258,23 @@ func TestAgentSkillRemoveCascadesAvailability(t *testing.T) {
 		t.Fatalf("get after remove = %+v", failure)
 	}
 }
+
+// A group member bot of another Space is hidden by row-level security: TypeScript reads the
+// relation as null and throws (a generic 500), so the preview must fail the same way instead
+// of silently dropping the member.
+func TestRemovePreviewHiddenMemberFailsLikeTypeScript(t *testing.T) {
+	database := openTestDB(t)
+	s := seed(t, database)
+	actor := db.Actor{UserID: s.UserID, SpaceID: s.Space1}
+	ctx := context.Background()
+	target, foreign, group := "target-"+s.UserID, "foreign-"+s.UserID, "g-"+s.UserID
+	addBotRow(t, database, target, s.Space1, s.UserID, "Target", nil, nil)
+	addBotRow(t, database, foreign, s.Space2, s.UserID, "Foreign", nil, nil)
+	addGroupRow(t, database, group, s.Space1, s.UserID, "Hidden member group", nil)
+	addGroupMemberRow(t, database, "gm1-"+s.UserID, group, target, time.Now())
+	addGroupMemberRow(t, database, "gm2-"+s.UserID, group, foreign, time.Now())
+	_, failure := bots.RemovePreview(ctx, database, actor, raw(`{"botId":"`+target+`"}`))
+	if failure == nil || failure.Code != "INTERNAL_SERVER_ERROR" || failure.Message != "Internal server error" {
+		t.Fatalf("failure = %+v", failure)
+	}
+}
