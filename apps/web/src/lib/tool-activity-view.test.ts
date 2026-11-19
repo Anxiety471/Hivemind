@@ -4,6 +4,7 @@ import {
   activityBlocks,
   activityDurationMs,
   activityStepCount,
+  activitySummaryParts,
   isToolOnlyNarration,
   latestActivity,
   messageHasVisibleBlocks,
@@ -46,6 +47,52 @@ describe("activity selection", () => {
     expect(
       activityDurationMs([thinkingBlock, stepsBlock, { ...stepsNoDuration, durationMs: 900 }]),
     ).toBe(900);
+  });
+});
+
+describe("activity summary parts", () => {
+  it("counts recognized actions and keeps the readable order", () => {
+    const blocks: MessageBlock = {
+      kind: "steps",
+      steps: [
+        { label: "Web search", count: 2 },
+        { label: "Web fetch", count: 1 },
+        { label: "Shell", count: 3 },
+      ],
+    };
+    expect(activitySummaryParts([blocks])).toEqual([
+      { kind: "pages", count: 1 },
+      { kind: "search", count: 2 },
+      { kind: "commands", count: 3 },
+    ]);
+  });
+
+  it("adds up an action split across steps blocks", () => {
+    const first: MessageBlock = { kind: "steps", steps: [{ label: "Web fetch", count: 1 }] };
+    const second: MessageBlock = { kind: "steps", steps: [{ label: "Web fetch", count: 2 }] };
+    expect(activitySummaryParts([first, thinkingBlock, second])).toEqual([
+      { kind: "pages", count: 3 },
+    ]);
+  });
+
+  it("leaves unrecognized calls to the plain latest line", () => {
+    expect(
+      activitySummaryParts([{ kind: "steps", steps: [{ label: "Open calendar", count: 1 }] }]),
+    ).toEqual([]);
+    expect(activitySummaryParts([thinkingBlock])).toEqual([]);
+  });
+
+  it("keeps a summary to the clauses a trigger can read", () => {
+    const blocks: MessageBlock = {
+      kind: "steps",
+      steps: [
+        { label: "Web fetch", count: 1 },
+        { label: "Web search", count: 1 },
+        { label: "Shell", count: 1 },
+        { label: "Write file", count: 1 },
+      ],
+    };
+    expect(activitySummaryParts([blocks])).toHaveLength(3);
   });
 });
 

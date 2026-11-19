@@ -627,7 +627,11 @@ export const Transcript = memo(function Transcript({
                                 (block) =>
                                   block.kind === "app_connect" ||
                                   block.kind === "page" ||
-                                  block.kind === "computer",
+                                  block.kind === "computer" ||
+                                  // The activity panel is a page-level block above the
+                                  // reply, so the column, not the bubble, sets its width.
+                                  block.kind === "thinking" ||
+                                  block.kind === "steps",
                               ) || pageView.pages.has(message.id)
                                 ? "w-full"
                                 : "w-fit"

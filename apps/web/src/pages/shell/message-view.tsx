@@ -276,29 +276,28 @@ export const MessageView = memo(function MessageView({
         </>
       );
     }
-    // One activity panel stands where the bot's reasoning and tool rows first appear; the
-    // later activity blocks are part of it and render nothing of their own.
-    const firstActivityIndex = visibleNarrationBlocks.findIndex(
-      (block) => block.kind === "thinking" || block.kind === "steps",
+    // The activity panel is its own block above the reply, never part of the bubble: the
+    // reasoning and tool rows happened before the words. The bubble holds only the reply's
+    // text, and a message with nothing to say draws no empty bubble under the panel.
+    const hasActivity = showToolActivity && messageActivity.length > 0;
+    const replyBlocks = visibleNarrationBlocks.filter(
+      (block): block is Extract<MessageBlock, { kind: "text" | "progress" }> =>
+        (block.kind === "text" || block.kind === "progress") && block.text.trim().length > 0,
     );
     return (
       <>
         {messageContext}
-        <div className="relative w-fit max-w-full [@media(hover:none)]:w-full">
-          <div className="flex w-fit max-w-full justify-start [@media(hover:none)]:w-full">
-            <div
-              data-testid="message-bot-bubble"
-              className="max-w-full space-y-2.5 rounded-2xl bg-muted px-[18px] py-3 text-body-lg text-foreground"
-              dir="auto"
-            >
-              {visibleNarrationBlocks.map((block, i) => {
-                if (block.kind === "thinking" || block.kind === "steps") {
-                  return i === firstActivityIndex ? (
-                    <ActivityPanel key={i} blocks={blocks} live={isLive} />
-                  ) : null;
-                }
-                if (block.kind === "text" || block.kind === "progress") {
-                  return (
+        <div className="flex w-full min-w-0 flex-col gap-2">
+          {hasActivity ? <ActivityPanel blocks={blocks} live={isLive} /> : null}
+          {replyBlocks.length > 0 ? (
+            <div className="relative w-fit max-w-full [@media(hover:none)]:w-full">
+              <div className="flex w-fit max-w-full justify-start [@media(hover:none)]:w-full">
+                <div
+                  data-testid="message-bot-bubble"
+                  className="max-w-full space-y-2.5 rounded-2xl bg-muted px-[18px] py-3 text-body-lg text-foreground"
+                  dir="auto"
+                >
+                  {replyBlocks.map((block, i) => (
                     <div
                       key={i}
                       data-quote-message-id={block.kind === "text" ? quoteMessageId : undefined}
@@ -311,26 +310,27 @@ export const MessageView = memo(function MessageView({
                         {block.text}
                       </ChatMarkdown>
                     </div>
-                  );
-                }
-                return null;
-              })}
-              {!isLive && voiceReady && message.blocks.some((block) => block.kind === "text") ? (
-                <Button
-                  variant="text"
-                  size="xs"
-                  aria-label={speaking ? t`Stop speaking` : t`Speak this reply`}
-                  // Stopping the speech in progress stays available; a call blocks new reads.
-                  disabled={callHoldsSpeaker && !speaking}
-                  onClick={speak}
-                  className="font-normal"
-                >
-                  {speaking ? <Trans>Stop</Trans> : <Trans>Speak</Trans>}
-                </Button>
-              ) : null}
+                  ))}
+                  {!isLive &&
+                  voiceReady &&
+                  message.blocks.some((block) => block.kind === "text") ? (
+                    <Button
+                      variant="text"
+                      size="xs"
+                      aria-label={speaking ? t`Stop speaking` : t`Speak this reply`}
+                      // Stopping the speech in progress stays available; a call blocks new reads.
+                      disabled={callHoldsSpeaker && !speaking}
+                      onClick={speak}
+                      className="font-normal"
+                    >
+                      {speaking ? <Trans>Stop</Trans> : <Trans>Speak</Trans>}
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+              {hoverActions}
             </div>
-          </div>
-          {hoverActions}
+          ) : null}
         </div>
         {pageCards}
       </>

@@ -416,7 +416,7 @@ it("stops a background helper from its saved running card, never a turn's live o
   });
 });
 
-it("groups its reasoning and tool rows into one activity panel above the reply", () => {
+it("puts its activity panel above the reply as its own block, never inside the bubble", () => {
   renderView(
     "bot",
     [
@@ -426,16 +426,38 @@ it("groups its reasoning and tool rows into one activity panel above the reply",
     ],
     { showToolActivity: true },
   );
+  const panel = container.querySelector<HTMLElement>('[data-testid="tool-activity"]');
+  const bubble = container.querySelector<HTMLElement>('[data-testid="message-bot-bubble"]');
   expect(container.querySelectorAll('[data-testid="tool-activity"]')).toHaveLength(1);
+  expect(panel).not.toBeNull();
+  expect(bubble).not.toBeNull();
+  // The panel stands on the page above the bubble, both in the message column.
+  expect(bubble?.contains(panel!)).toBe(false);
+  expect(panel?.contains(bubble!)).toBe(false);
+  expect(panel?.parentElement?.contains(bubble!)).toBe(true);
+  expect(container.textContent?.indexOf("Checking the calendar.")).toBeLessThan(
+    container.textContent?.indexOf("Tuesday at 2 pm is free.") ?? -1,
+  );
+  // The bubble holds the answer alone; the reasoning is never repeated in it.
+  expect(bubble?.textContent).toBe("Tuesday at 2 pm is free.");
   expect(container.querySelectorAll('[data-testid="thinking-row"]')).toHaveLength(1);
   expect(container.querySelector('[data-testid="activity-trigger"]')?.textContent).toContain(
     "Open calendar · 1 tool · 4s",
   );
-  expect(container.textContent).toContain("Checking the calendar.");
-  expect(container.textContent).toContain("Tuesday at 2 pm is free.");
-  expect(container.textContent?.indexOf("Checking the calendar.")).toBeLessThan(
-    container.textContent?.indexOf("Tuesday at 2 pm is free.") ?? -1,
+});
+
+it("draws no empty bubble under a panel when the reply has no words", () => {
+  renderView(
+    "bot",
+    [
+      { kind: "thinking", durationMs: 2_000, lines: ["Checking the calendar."] },
+      { kind: "steps", steps: [{ label: "Open calendar", count: 1 }] },
+      { kind: "progress", text: "   " },
+    ],
+    { showToolActivity: true },
   );
+  expect(container.querySelectorAll('[data-testid="tool-activity"]')).toHaveLength(1);
+  expect(container.querySelectorAll('[data-testid="message-bot-bubble"]')).toHaveLength(0);
 });
 
 it("shows a reasoning-only live message as one slim activity line, not a bubble", () => {

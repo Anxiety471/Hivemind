@@ -52,6 +52,55 @@ export function latestActivity(blocks: readonly MessageBlock[]): string | undefi
   return undefined;
 }
 
+/** The kinds of action a finished run summarizes itself by, in the order its phrase lists them. */
+export type ActivitySummaryKind =
+  | "pages"
+  | "files"
+  | "search"
+  | "commands"
+  | "writes"
+  | "edits"
+  | "browser"
+  | "computer";
+
+/** How many action clauses a summary keeps before it gets too long for a trigger. */
+export const ACTIVITY_SUMMARY_MAX_CLAUSES = 3;
+
+const SUMMARY_ACTIONS: readonly { kind: ActivitySummaryKind; match: RegExp }[] = [
+  // A page it fetched, a file it opened, then what it ran — the order the phrase reads in.
+  { kind: "pages", match: /^(web[ _]fetch|fetch|open[ _]url)$/ },
+  { kind: "files", match: /^(read[ _]file|read[ _]history|skill[ _]read|list[ _]files|view)$/ },
+  { kind: "search", match: /^(web[ _]search|websearch)$/ },
+  { kind: "commands", match: /^(shell|bash|terminal|run[ _]command|execute)$/ },
+  { kind: "writes", match: /^(write[ _]file|create[ _]file)$/ },
+  { kind: "edits", match: /^(edit|apply[ _]patch|str[ _]replace|multiedit)$/ },
+  { kind: "browser", match: /^browser[ _]/ },
+  { kind: "computer", match: /^computer[ _]/ },
+];
+
+/**
+ * What a finished run's steps add up to, as counted actions: "2 pages, 1 search". The kinds
+ * come in a fixed, readable order (not the call order); a trigger turns the counts into words.
+ * Undefined when no step is a recognized action, so the trigger keeps the plain latest line.
+ */
+export function activitySummaryParts(
+  blocks: readonly MessageBlock[],
+): { kind: ActivitySummaryKind; count: number }[] {
+  const counts = new Map<ActivitySummaryKind, number>();
+  for (const block of activityBlocks(blocks)) {
+    if (block.kind !== "steps") continue;
+    for (const step of block.steps) {
+      const label = step.label.trim().toLowerCase().replace(/\s+/g, " ");
+      const action = SUMMARY_ACTIONS.find((candidate) => candidate.match.test(label));
+      if (action) counts.set(action.kind, (counts.get(action.kind) ?? 0) + step.count);
+    }
+  }
+  return SUMMARY_ACTIONS.flatMap(({ kind }) => {
+    const count = counts.get(kind);
+    return count ? [{ kind, count }] : [];
+  }).slice(0, ACTIVITY_SUMMARY_MAX_CLAUSES);
+}
+
 /** Blocks that survive into a message render. */
 export function renderableMessageBlocks(
   blocks: readonly MessageBlock[],

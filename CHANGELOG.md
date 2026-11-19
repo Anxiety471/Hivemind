@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- Bots' streamed reasoning appears as a **Thought for Ns** card in the transcript's activity panel alongside the tool rows, behind the existing show-tool-activity setting. The panel shows the latest activity, whether a current thought or tool, as its summary line.
+- A bot's streamed reasoning and tool calls appear as one flat, in-order activity list above its reply, as their own block on the page rather than part of the message bubble. A collapsed trigger summarizes what was done (**Read 2 pages, searched the web · 4m 06s**), and expanding it shows hairline-divided rows in the order they happened: each reasoning row opens to its **Thought for Ns** lines, and each tool row opens to what the bot wrote before the call. The panel shows by default, and the existing show-tool-activity setting hides it.
 
 ### Changed
 

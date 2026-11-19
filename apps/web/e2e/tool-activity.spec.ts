@@ -42,17 +42,18 @@ test("tool activity shows for live and finished runs by default", async ({ page 
     const liveLine = page.getByTestId("tool-activity-line");
     await expect(liveLine).toHaveCount(1);
     await expect(page.getByTestId("message-bot-bubble")).toHaveCount(0);
-    const liveCard = page.getByTestId("tool-activity");
-    await expect(liveCard.locator("button[aria-expanded]")).toHaveAttribute(
-      "aria-expanded",
-      "true",
-    );
     const liveTrigger = page.getByTestId("activity-trigger");
+    await expect(liveTrigger).toHaveAttribute("aria-expanded", "true");
     await expect(liveTrigger).toContainText(/Check conflicts\s*·\s*8 tools/);
     // A live run has no duration yet.
     await expect(liveTrigger).not.toContainText(/\d+(ms|s)\b/);
     await expect(page.getByTestId("thinking-row")).toHaveCount(1);
     await expect(page.getByTestId("thinking-row")).toContainText(
+      "The person needs a free slot on Tuesday.",
+    );
+    // The newest reasoning row stays open while the run streams.
+    await expect(page.getByTestId("thinking-trigger")).toHaveAttribute("aria-expanded", "true");
+    await expect(page.getByTestId("thinking-detail")).toContainText(
       "Checking Tuesday afternoon first.",
     );
     await expect(page.getByTestId("tool-rows-hidden")).toHaveText("+2 earlier steps");
@@ -62,36 +63,37 @@ test("tool activity shows for live and finished runs by default", async ({ page 
     await expect(page.locator("body")).toHaveJSProperty("scrollWidth", viewport.width);
     await captureScreenshot(page, testInfo, `default-live-${viewport.name}`);
 
-    await liveCard.locator("button[aria-expanded]").click();
-    await expect(liveCard.locator("button[aria-expanded]")).toHaveAttribute(
-      "aria-expanded",
-      "false",
-    );
+    await liveTrigger.click();
+    await expect(liveTrigger).toHaveAttribute("aria-expanded", "false");
 
     await openThread(page, "done");
     await expect(page.getByTestId("message-bot-bubble")).toContainText(REPLY_TEXT);
-    const doneCard = page.getByTestId("tool-activity");
-    await expect(doneCard).toHaveCount(1);
-    await expect(doneCard.locator("button[aria-expanded]")).toHaveAttribute(
-      "aria-expanded",
-      "false",
+    // The panel is its own block above the bubble, not part of it.
+    await expect(page.getByTestId("message-bot-bubble")).not.toContainText(
+      "The person needs a free slot",
     );
-    await expect(page.getByTestId("activity-trigger")).toContainText(
-      /Check conflicts\s*·\s*8 tools\s*·\s*12s/,
-    );
+    const doneTrigger = page.getByTestId("activity-trigger");
+    await expect(doneTrigger).toHaveCount(1);
+    await expect(doneTrigger).toHaveAttribute("aria-expanded", "false");
+    await expect(doneTrigger).toContainText(/Check conflicts\s*·\s*8 tools\s*·\s*12s/);
     await captureScreenshot(page, testInfo, `default-done-collapsed-${viewport.name}`);
 
-    await doneCard.locator("button[aria-expanded]").click();
-    await expect(doneCard.locator("button[aria-expanded]")).toHaveAttribute(
-      "aria-expanded",
-      "true",
-    );
+    await doneTrigger.click();
+    await expect(doneTrigger).toHaveAttribute("aria-expanded", "true");
     await expect(page.getByTestId("tool-rows-hidden")).toHaveCount(0);
+    // A finished run folds every row to its one-line summary.
+    const thinkingTrigger = page.getByTestId("thinking-trigger");
+    await expect(thinkingTrigger).toHaveAttribute("aria-expanded", "false");
     await expect(page.getByTestId("thinking-row")).toContainText(
-      "Checking Tuesday afternoon first.",
+      "The person needs a free slot on Tuesday.",
     );
     await expect(page.getByTestId("tool-rows")).toContainText("Open calendar");
     await expect(page.getByTestId("tool-rows")).toContainText("Check conflicts");
+    await thinkingTrigger.click();
+    await expect(page.getByTestId("thinking-detail")).toContainText(
+      "Checking Tuesday afternoon first.",
+    );
+    await page.getByTestId("activity-row-trigger").filter({ hasText: "Check conflicts" }).click();
     await expect(page.getByTestId("tool-step-note")).toHaveText(NOTE_TEXT);
     await expect(page.locator("body")).toHaveJSProperty("scrollWidth", viewport.width);
     await captureScreenshot(page, testInfo, `default-done-expanded-${viewport.name}`);

@@ -104,7 +104,7 @@ it("mounts one panel for reasoning and steps wherever they appear between text",
   renderView([text("First."), thinking("Mid reasoning."), text("Second."), steps("Open calendar")]);
   expect(panels()).toHaveLength(1);
   expect(trigger()).toContain("Open calendar");
-  // Every text block keeps its place; the panel stands where the first activity block was.
+  // Every text block keeps its place; the one panel stands above the reply, not between them.
   const order = container.textContent ?? "";
   expect(order.indexOf("First.")).toBeLessThan(order.indexOf("Second."));
 });
