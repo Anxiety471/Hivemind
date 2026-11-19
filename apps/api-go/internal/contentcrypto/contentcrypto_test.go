@@ -1,6 +1,8 @@
 package contentcrypto
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -384,5 +386,80 @@ func TestMasterKeysAcceptNodeBase64Forms(t *testing.T) {
 		if got := hexString(keys[0].Key); got != tsMasterKey2Hex {
 			t.Fatalf("parse %q = %s, want %s", value, got, tsMasterKey2Hex)
 		}
+	}
+}
+
+// sealRawBytes makes a valid envelope around arbitrary plaintext bytes, as the
+// TypeScript side would have if it could hold invalid UTF-8.
+func sealRawBytes(t *testing.T, key DataKey, location Location, plaintext []byte) string {
+	t.Helper()
+	block, err := aes.NewCipher(key.Key)
+	if err != nil {
+		t.Fatalf("cipher: %v", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		t.Fatalf("gcm: %v", err)
+	}
+	iv := make([]byte, ivBytes)
+	body := gcm.Seal(nil, iv, plaintext, contentAAD(location, key.SpaceID))
+	return CiphertextPrefix + key.ID + ":" + base64.RawURLEncoding.EncodeToString(append(iv, body...))
+}
+
+func TestDecodeUTF8MatchesNode(t *testing.T) {
+	// Expected values are Buffer.from(bytes).toString("utf8") from Node 24:
+	// one U+FFFD per maximal invalid subsequence, not per invalid byte.
+	cases := []struct{ hex, want string }{
+		{"e0a441", "\uFFFDA"},
+		{"f09f98", "\uFFFD"},
+		{"c080", "\uFFFD\uFFFD"},
+		{"eda080", "\uFFFD\uFFFD\uFFFD"},
+		{"f4908080", "\uFFFD\uFFFD\uFFFD\uFFFD"},
+		{"8080", "\uFFFD\uFFFD"},
+		{"e08080", "\uFFFD\uFFFD\uFFFD"},
+		{"f0808080", "\uFFFD\uFFFD\uFFFD\uFFFD"},
+		{"41e28241", "A\uFFFDA"},
+		{"c2", "\uFFFD"},
+		{"e282", "\uFFFD"},
+		{"f09f", "\uFFFD"},
+		{"f09f9880", "😀"},
+		{"feff", "\uFFFD\uFFFD"},
+	}
+	for _, testCase := range cases {
+		raw, err := hex.DecodeString(testCase.hex)
+		if err != nil {
+			t.Fatalf("vector %s: %v", testCase.hex, err)
+		}
+		if got := decodeUTF8Node(raw); got != testCase.want {
+			t.Fatalf("decode %s = %q, want %q", testCase.hex, got, testCase.want)
+		}
+	}
+}
+
+func TestDecryptTextReplacesInvalidUTF8LikeNode(t *testing.T) {
+	key, location := testKey(), testLocation()
+	cases := []struct{ hex, want string }{
+		{"e0a441", "\uFFFDA"},
+		{"eda080", "\uFFFD\uFFFD\uFFFD"},
+		{"41e28241", "A\uFFFDA"},
+	}
+	for _, testCase := range cases {
+		raw, err := hex.DecodeString(testCase.hex)
+		if err != nil {
+			t.Fatalf("vector %s: %v", testCase.hex, err)
+		}
+		got, err := DecryptText(key, location, sealRawBytes(t, key, location, raw))
+		if err != nil {
+			t.Fatalf("decrypt %s: %v", testCase.hex, err)
+		}
+		if got != testCase.want {
+			t.Fatalf("decrypt %s = %q, want %q", testCase.hex, got, testCase.want)
+		}
+	}
+}
+
+func TestEncryptTextRejectsInvalidUTF8(t *testing.T) {
+	if _, err := EncryptText(testKey(), testLocation(), string([]byte{0xff})); err == nil {
+		t.Fatal("invalid UTF-8 plaintext must be rejected")
 	}
 }

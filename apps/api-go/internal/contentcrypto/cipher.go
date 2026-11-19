@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 )
 
 // CiphertextPrefix starts every sealed value; the space-key id follows it up to
@@ -98,6 +99,13 @@ func CiphertextKeyID(value any) (string, bool) {
 
 // EncryptText seals plaintext with a fresh IV (content-crypto.ts:63-70).
 func EncryptText(key DataKey, location Location, plaintext string) (string, error) {
+	// TypeScript encrypts a JS string, which is always valid UTF-16 and becomes
+	// valid UTF-8 in Buffer.from(plaintext, "utf8"). Invalid bytes cannot have a
+	// TS equivalent, so refuse them instead of storing something TS would have
+	// sanitized differently.
+	if !utf8.ValidString(plaintext) {
+		return "", errors.New("content cipher: plaintext is not valid UTF-8")
+	}
 	block, err := aes.NewCipher(key.Key)
 	if err != nil {
 		return "", fmt.Errorf("content cipher: %w", err)
@@ -138,7 +146,69 @@ func DecryptText(key DataKey, location Location, value string) (string, error) {
 	if err != nil {
 		return "", ErrDecryption
 	}
-	return string(plaintext), nil
+	// Buffer#toString("utf8") replaces each maximal invalid subsequence with
+	// U+FFFD; returning raw bytes would hand a caller a string JS cannot make.
+	return decodeUTF8Node(plaintext), nil
+}
+
+// decodeUTF8Node is Buffer#toString("utf8"): a maximal invalid subsequence
+// becomes one U+FFFD, following the Unicode replacement policy, rather than
+// one replacement per invalid byte.
+func decodeUTF8Node(value []byte) string {
+	if utf8.Valid(value) {
+		return string(value)
+	}
+	var builder strings.Builder
+	builder.Grow(len(value) + utf8.UTFMax)
+	for index := 0; index < len(value); {
+		lead := value[index]
+		if lead < utf8.RuneSelf {
+			builder.WriteByte(lead)
+			index++
+			continue
+		}
+		width, low, high := 0, byte(0x80), byte(0xBF)
+		switch {
+		case lead >= 0xC2 && lead <= 0xDF:
+			width = 2
+		case lead == 0xE0:
+			width, low = 3, 0xA0
+		case lead >= 0xE1 && lead <= 0xEC:
+			width = 3
+		case lead == 0xED:
+			width, high = 3, 0x9F
+		case lead >= 0xEE && lead <= 0xEF:
+			width = 3
+		case lead == 0xF0:
+			width, low = 4, 0x90
+		case lead >= 0xF1 && lead <= 0xF3:
+			width = 4
+		case lead == 0xF4:
+			width, high = 4, 0x8F
+		}
+		next := index + 1
+		if width > 0 {
+			for next < index+width && next < len(value) {
+				unit := value[next]
+				if next == index+1 {
+					if unit < low || unit > high {
+						break
+					}
+				} else if unit < 0x80 || unit > 0xBF {
+					break
+				}
+				next++
+			}
+			if next == index+width {
+				builder.Write(value[index:next])
+				index = next
+				continue
+			}
+		}
+		builder.WriteRune(utf8.RuneError)
+		index = next
+	}
+	return builder.String()
 }
 
 // decodeBase64Lenient is Buffer.from(value, "base64url") /
