@@ -5,6 +5,7 @@ import {
   hasThinkingActivityMarker,
   STEP_SCREENSHOT_MIME_TYPES,
   ThreadActivityPayloadSchema,
+  ThreadThinkingPayloadSchema,
 } from "@rakazo/contracts";
 import {
   BACKGROUND_HELPER_TRIGGER,
@@ -100,6 +101,7 @@ export function transientRunEventsWhere(): Prisma.EventWhereInput {
   return {
     OR: [
       { type: "thread.progress" },
+      { type: "thread.thinking" },
       { type: "thread.meta", payload: { equals: { activity: { thinking: true } } } },
       { type: "thread.meta", payload: { equals: { activity: { thinking: false } } } },
     ],
@@ -994,8 +996,13 @@ export async function appendEventInTransaction(
   return { ...event, firstResponse };
 }
 
-/** Thinking markers come only from the run's current lease holder. */
+/** Live reasoning and thinking markers come only from the run's current lease holder. */
 function isActivityEvent(input: AppendEventInput): boolean {
+  if (input.type === "thread.thinking") {
+    ThreadThinkingPayloadSchema.parse(input.payload);
+    if (!input.runId || !input.lease) throw new RunHistoryWriteError();
+    return true;
+  }
   if (input.type !== "thread.meta" || !hasThinkingActivityMarker(input.payload)) return false;
   ThreadActivityPayloadSchema.parse(input.payload);
   if (!input.runId || !input.lease) throw new RunHistoryWriteError();

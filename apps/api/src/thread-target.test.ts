@@ -762,6 +762,16 @@ describe("threadSnapshot", () => {
       };
       const findManyEvents = vi.fn().mockResolvedValue([
         {
+          id: "event-0",
+          threadId: "thread-1",
+          botId: "bot-1",
+          seq: 3,
+          type: "thread.thinking",
+          runId: "run-1",
+          payload: { segment: 0, durationMs: 900, lines: ["Checking the channels."] },
+          createdAt: new Date("2026-08-23T00:00:00.000Z"),
+        },
+        {
           id: "event-1",
           threadId: "thread-1",
           botId: "bot-1",
@@ -815,6 +825,7 @@ describe("threadSnapshot", () => {
             type: {
               in: [
                 "thread.progress",
+                "thread.thinking",
                 "thread.subagent",
                 "run.waiting_input",
                 "computer.takeover.requested",
@@ -830,6 +841,7 @@ describe("threadSnapshot", () => {
           id: "progress:run-1",
           botId: "bot-1",
           blocks: [
+            { kind: "thinking", durationMs: 900, lines: ["Checking the channels."] },
             {
               kind: "steps",
               steps: [{ label: "Slack find channels", count: 1 }],
@@ -5087,6 +5099,7 @@ describe("stopThreadRuns", () => {
       where: {
         OR: [
           { type: "thread.progress" },
+          { type: "thread.thinking" },
           { type: "thread.meta", payload: { equals: { activity: { thinking: true } } } },
           { type: "thread.meta", payload: { equals: { activity: { thinking: false } } } },
         ],

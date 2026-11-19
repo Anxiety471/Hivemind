@@ -5,7 +5,7 @@ import { cancelRunsInTransaction } from "./cancel-runs.js";
 import type { PrismaClient } from "./client.js";
 import { Prisma } from "./client.js";
 import { computerScopeKey, userControlHeldBy } from "./computers.js";
-import { appendEventInTransaction } from "./events.js";
+import { appendEventInTransaction, transientRunEventsWhere } from "./events.js";
 import type { RunTeardownTarget } from "./groups.js";
 import { snapshotRunTeardownTargets } from "./groups.js";
 import {
@@ -731,7 +731,7 @@ async function departSpace(
           const latestSeq = new Map<string, number>();
           if (cancelled.length) {
             await tx.event.deleteMany({
-              where: { type: "thread.progress", runId: { in: cancelledRunIds } },
+              where: { runId: { in: cancelledRunIds }, ...transientRunEventsWhere() },
             });
             for (const run of cancelled) {
               const event = await appendEventInTransaction(tx, {

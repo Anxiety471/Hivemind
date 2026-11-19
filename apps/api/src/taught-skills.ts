@@ -46,6 +46,7 @@ import {
   IsolationError,
   isUniqueViolation,
   storedMessageBlocks,
+  transientRunEventsWhere,
 } from "@rakazo/db";
 import { getLogger } from "@rakazo/logging";
 import { takeComputerControl } from "./computer-control.js";
@@ -114,7 +115,7 @@ async function cancelActiveRuns(
   await clearEndedRunState(deps.prisma, runIds);
   await expireComputerExecutionLeases(deps.prisma, { botId, runId: { in: runIds } });
   await deps.prisma.event.deleteMany({
-    where: { type: "thread.progress", runId: { in: runIds } },
+    where: { runId: { in: runIds }, ...transientRunEventsWhere() },
   });
 }
 

@@ -158,6 +158,18 @@ describe("finalizeRun", () => {
         where: { runId: "run-1", kind: "runtime_checkpoint", status: "runtime_checkpoint" },
       });
       expect(createEvent).toHaveBeenCalledOnce();
+      // The live reasoning a client already showed is replaced by the durable message.
+      expect(tx.event.deleteMany).toHaveBeenCalledWith({
+        where: {
+          runId: "run-1",
+          OR: [
+            { type: "thread.progress" },
+            { type: "thread.thinking" },
+            { type: "thread.meta", payload: { equals: { activity: { thinking: true } } } },
+            { type: "thread.meta", payload: { equals: { activity: { thinking: false } } } },
+          ],
+        },
+      });
       expect(publish.mock.calls.map(([topic]) => topic)).toEqual([
         "thread:thread-1",
         "space-changes:space-1",

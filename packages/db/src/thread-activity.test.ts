@@ -70,11 +70,12 @@ describe("transient thread activity writes", () => {
   });
 });
 
-it("limits transient cleanup to progress and exact owned thinking metadata", () => {
+it("limits transient cleanup to progress, live reasoning and exact owned thinking metadata", () => {
   const filter = transientRunEventsWhere();
   expect(filter).toEqual({
     OR: [
       { type: "thread.progress" },
+      { type: "thread.thinking" },
       { type: "thread.meta", payload: { equals: { activity: { thinking: true } } } },
       { type: "thread.meta", payload: { equals: { activity: { thinking: false } } } },
     ],
@@ -90,5 +91,59 @@ it("retains normal metadata semantics without an activity fence", async () => {
   await f.append(notice);
   expect(f.tx.event.create).toHaveBeenCalledWith({
     data: expect.objectContaining({ type: "thread.meta", payload: notice.payload }),
+  });
+});
+
+describe("live reasoning writes", () => {
+  const reasoning: AppendEventInput = {
+    ...input,
+    type: "thread.thinking",
+    payload: { segment: 0, durationMs: 250, lines: ["Checking the totals."] },
+  };
+
+  it("persists a reasoning snapshot from the run's current lease holder", async () => {
+    const f = fixture();
+    await f.append(reasoning);
+    expect(f.tx.event.create).toHaveBeenCalledWith({
+      data: {
+        spaceId: "space-1",
+        threadId: "thread-1",
+        botId: "bot-1",
+        runId: "run-1",
+        type: "thread.thinking",
+        seq: 1,
+        payload: reasoning.payload,
+      },
+    });
+  });
+
+  it.each([
+    ["waiting_input", "worker-1", 2],
+    ["completed", "worker-1", 2],
+    ["cancelled", "worker-1", 2],
+    ["running", "worker-new", 3],
+  ])("rejects an ended or superseded attempt (%s/%s/%s)", async (status, owner, fence) => {
+    const f = fixture(String(status), String(owner), Number(fence));
+    await expect(f.append(reasoning)).rejects.toThrow(RunHistoryWriteError);
+    expect(f.tx.event.create).not.toHaveBeenCalled();
+  });
+
+  it("rejects a malformed payload or absent attempt scope before writing", async () => {
+    const f = fixture();
+    for (const payload of [
+      { segment: -1, durationMs: 250, lines: [] },
+      { segment: 0.5, durationMs: 250, lines: [] },
+      { segment: 0, durationMs: -1, lines: [] },
+      { ...reasoning.payload, text: "private fixture reasoning" },
+    ]) {
+      await expect(f.append({ ...reasoning, payload })).rejects.toThrow();
+    }
+    await expect(f.append({ ...reasoning, lease: undefined })).rejects.toThrow(
+      RunHistoryWriteError,
+    );
+    await expect(f.append({ ...reasoning, runId: undefined })).rejects.toThrow(
+      RunHistoryWriteError,
+    );
+    expect(f.tx.event.create).not.toHaveBeenCalled();
   });
 });
