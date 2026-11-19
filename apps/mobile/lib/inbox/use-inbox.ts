@@ -22,6 +22,7 @@ import { saveInbox } from "./saved-chats";
 import { currentSessionGeneration } from "../api/session";
 import type { LoadFailureKind } from "../api/user-error";
 import { errorText, loadFailureKind } from "../api/user-error";
+import { askFirstBot, needsFirstBot } from "./first-bot";
 
 /** The account this launch has saved its language to (see the inbox load). */
 let localeReportedFor: string | null = null;
@@ -47,6 +48,8 @@ export function useHomeInbox(
     null,
   );
   const [refreshing, setRefreshing] = useState(false);
+  // While the server makes a new account's first bot, the empty inbox offers no New bot.
+  const [creatingFirstBot, setCreatingFirstBot] = useState(false);
   const [badgeLoad, setBadgeLoad] = useState<{ generation: number } | null>(null);
   const inboxRequestId = useRef(0);
   const inboxLoaded = useRef(false);
@@ -114,6 +117,17 @@ export function useHomeInbox(
       void ensureOrganizations();
       setBadgeLoad({ generation: badgeGeneration });
       setLoadFailure(null);
+      if (needsFirstBot(navigation)) {
+        setCreatingFirstBot(true);
+        void askFirstBot(`${apiBase}:${generation}:${nextMe.userId}:${navigation.current.id}`, () =>
+          rpc("onboarding/firstBot"),
+        )
+          .then(async (botId) => {
+            if (botId && generation === currentSessionGeneration() && apiBase === currentApiBase())
+              await loadBots();
+          })
+          .finally(() => setCreatingFirstBot(false));
+      }
       saveInbox(
         {
           apiBase,
@@ -169,6 +183,7 @@ export function useHomeInbox(
     inboxLoading,
     loadFailure,
     refreshing,
+    creatingFirstBot,
     badgeLoad,
     inboxRequestId,
     inboxLoaded,
