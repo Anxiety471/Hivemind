@@ -91,14 +91,9 @@ func parseKeyMaterial(value string) ([]byte, error) {
 		}
 		key = decoded
 	} else {
-		decoded, err := base64.StdEncoding.DecodeString(trimmed)
-		if err != nil {
-			decoded, err = base64.RawStdEncoding.DecodeString(trimmed)
-		}
-		if err != nil {
-			return nil, errors.New("Each master key must be 32 bytes as hex or base64")
-		}
-		key = decoded
+		// Buffer.from(value, "base64") ignores padding and non-alphabet
+		// characters and accepts the URL-safe alphabet (content-keys.ts:25).
+		key = decodeBase64Lenient(trimmed)
 	}
 	if len(key) != 32 {
 		return nil, errors.New("Each master key must be 32 bytes as hex or base64")

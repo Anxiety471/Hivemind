@@ -1,6 +1,8 @@
 package contentcrypto
 
 import (
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"reflect"
@@ -348,6 +350,39 @@ func TestDecryptTextAcceptsNodeBase64Forms(t *testing.T) {
 		plaintext, err := DecryptText(testKey(), testLocation(), prefix+value)
 		if err != nil || plaintext != tsPlaintext {
 			t.Fatalf("%s: %q, %v", name, plaintext, err)
+		}
+	}
+}
+
+func TestMasterKeysAcceptNodeBase64Forms(t *testing.T) {
+	material, err := hex.DecodeString(tsMasterKey2Hex)
+	if err != nil {
+		t.Fatalf("vector: %v", err)
+	}
+	// Buffer.from(value, "base64") accepts the URL-safe alphabet, padding and
+	// junk, and stops at the first "=" (content-keys.ts:25).
+	encoded := base64.RawURLEncoding.EncodeToString(material)
+	values := []string{
+		encoded,
+		encoded[:20] + "!?" + encoded[20:] + "==",
+		strings.NewReplacer("-", "+", "_", "/").Replace(encoded),
+		encoded + "=" + encoded,
+	}
+	for _, value := range values {
+		keys, err := MasterKeysFromEnv(func(name string) string {
+			if name == "ENCRYPTION_KEY" {
+				return "test-encryption-key-0123456789abcdef"
+			}
+			if name == "ENCRYPTION_MASTER_KEYS" {
+				return "k1:" + value
+			}
+			return ""
+		})
+		if err != nil {
+			t.Fatalf("parse %q: %v", value, err)
+		}
+		if got := hexString(keys[0].Key); got != tsMasterKey2Hex {
+			t.Fatalf("parse %q = %s, want %s", value, got, tsMasterKey2Hex)
 		}
 	}
 }
