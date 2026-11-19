@@ -29,6 +29,13 @@ const STEP_LABELS = [
 
 const NOTE_TEXT = "Anna is free all Tuesday afternoon.";
 
+const thinkingBlock: MessageBlock = {
+  kind: "thinking",
+  // A live reasoning stream has run for a moment; the finished reply keeps its wall time.
+  durationMs: live ? 1_200 : 2_400,
+  lines: ["The person needs a free slot on Tuesday.", "Checking Tuesday afternoon first."],
+};
+
 const stepsBlock: MessageBlock = {
   kind: "steps",
   steps: STEP_LABELS.map((label) => ({
@@ -42,7 +49,7 @@ const stepsBlock: MessageBlock = {
 
 const createdAt = "2026-08-16T00:00:01.000Z";
 
-// A live run that has only called tools so far, or the finished reply with its tool card.
+// A live run that has only reasoned and called tools so far, or the finished reply.
 const messages: ThreadMessage[] = [
   {
     id: "user-1",
@@ -57,7 +64,9 @@ const messages: ThreadMessage[] = [
     threadId: "thread-1",
     seq: 2,
     role: "bot",
-    blocks: live ? [stepsBlock] : [stepsBlock, { kind: "text", text: REPLY_TEXT }],
+    blocks: live
+      ? [thinkingBlock, stepsBlock]
+      : [thinkingBlock, stepsBlock, { kind: "text", text: REPLY_TEXT }],
     botId: "bot-1",
     runId: "run-1",
     createdAt,

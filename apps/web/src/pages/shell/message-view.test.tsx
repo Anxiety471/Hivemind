@@ -22,6 +22,8 @@ vi.mock("@lingui/core/macro", () => ({
 
 vi.mock("@lingui/react/macro", () => ({
   Trans: ({ children }: { children: ReactNode }) => children,
+  Plural: ({ value, one, other }: { value: number; one: string; other: string }) =>
+    (value === 1 ? one : other).replace("#", String(value)),
   useLingui: () => ({
     t: (strings: TemplateStringsArray, ...values: unknown[]) => String.raw(strings, ...values),
   }),
@@ -412,4 +414,78 @@ it("stops a background helper from its saved running card, never a turn's live o
     botId: "bot-1",
     messageId: "card-1",
   });
+});
+
+it("groups its reasoning and tool rows into one activity panel above the reply", () => {
+  renderView(
+    "bot",
+    [
+      { kind: "thinking", durationMs: 2_000, lines: ["Checking the calendar."] },
+      { kind: "steps", steps: [{ label: "Open calendar", count: 1 }], durationMs: 4_000 },
+      { kind: "text", text: "Tuesday at 2 pm is free." },
+    ],
+    { showToolActivity: true },
+  );
+  expect(container.querySelectorAll('[data-testid="tool-activity"]')).toHaveLength(1);
+  expect(container.querySelectorAll('[data-testid="thinking-row"]')).toHaveLength(1);
+  expect(container.querySelector('[data-testid="activity-trigger"]')?.textContent).toContain(
+    "Open calendar · 1 tool · 4s",
+  );
+  expect(container.textContent).toContain("Checking the calendar.");
+  expect(container.textContent).toContain("Tuesday at 2 pm is free.");
+  expect(container.textContent?.indexOf("Checking the calendar.")).toBeLessThan(
+    container.textContent?.indexOf("Tuesday at 2 pm is free.") ?? -1,
+  );
+});
+
+it("shows a reasoning-only live message as one slim activity line, not a bubble", () => {
+  renderView("bot", [{ kind: "thinking", durationMs: 800, lines: ["Checking the calendar."] }], {
+    showToolActivity: true,
+    message: {
+      id: "progress:run-1",
+      threadId: "thread",
+      seq: 2,
+      role: "bot",
+      createdAt: new Date().toISOString(),
+      blocks: [{ kind: "thinking", durationMs: 800, lines: ["Checking the calendar."] }],
+    },
+  });
+  expect(container.querySelectorAll('[data-testid="tool-activity-line"]')).toHaveLength(1);
+  expect(container.querySelectorAll('[data-testid="message-bot-bubble"]')).toHaveLength(0);
+  expect(container.querySelector('[data-testid="activity-trigger"]')?.textContent).toContain(
+    "Checking the calendar.",
+  );
+});
+
+it("hides the activity panel when the preference is off", () => {
+  renderView(
+    "bot",
+    [
+      { kind: "thinking", durationMs: 2_000, lines: ["Checking the calendar."] },
+      { kind: "steps", steps: [{ label: "Open calendar", count: 1 }] },
+      { kind: "text", text: "Tuesday at 2 pm is free." },
+    ],
+    { showToolActivity: false },
+  );
+  expect(container.querySelectorAll('[data-testid="tool-activity"]')).toHaveLength(0);
+  expect(container.textContent).toContain("Tuesday at 2 pm is free.");
+  expect(container.textContent).not.toContain("Checking the calendar.");
+});
+
+it("puts one standalone activity panel beside a message's cards, before them", () => {
+  renderView(
+    "bot",
+    [
+      { kind: "thinking", durationMs: 1_000, lines: ["Checking the calendar."] },
+      { kind: "steps", steps: [{ label: "Open calendar", count: 1 }], durationMs: 3_000 },
+      { kind: "card", lines: [{ k: "When", v: "Tuesday at 2 pm" }] },
+    ],
+    { showToolActivity: true },
+  );
+  expect(container.querySelectorAll('[data-testid="tool-activity-line"]')).toHaveLength(1);
+  expect(container.querySelectorAll('[data-testid="tool-activity"]')).toHaveLength(1);
+  expect(container.textContent).toContain("Tuesday at 2 pm");
+  expect(container.textContent?.indexOf("Open calendar")).toBeLessThan(
+    container.textContent?.indexOf("Tuesday at 2 pm") ?? -1,
+  );
 });

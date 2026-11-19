@@ -366,7 +366,7 @@ msgstr "{fromName} bis {toName}"
 msgid "{header}, column {index}"
 msgstr "{header}, Spalte {index}"
 
-#: apps/web/src/components/ToolActivityDisclosure.tsx
+#: apps/web/src/components/ActivityPanel.tsx
 msgid "{hidden, plural, one {+# earlier step} other {+# earlier steps}}"
 msgstr "{hidden, plural, one {+# früherer Schritt} other {+# frühere Schritte}}"
 
@@ -699,7 +699,7 @@ msgstr "{title}, {label}"
 msgid "{title}, saved as {savedAs}"
 msgstr "{title}, gespeichert als {savedAs}"
 
-#: apps/web/src/components/ToolActivityDisclosure.tsx
+#: apps/web/src/components/ActivityPanel.tsx
 #: apps/web/src/pages/plugins/connector-detail.tsx
 msgid "{toolCount, plural, one {# tool} other {# tools}}"
 msgstr "{toolCount, plural, one {# Tool} other {# Tools}}"
@@ -4896,8 +4896,8 @@ msgstr "Du hast noch kein Konto?"
 #: apps/mobile/lib/activity.ts
 #: apps/mobile/lib/board.ts
 #: apps/web/src/components/AccountDataSettings.tsx
+#: apps/web/src/components/ActivityPanel.tsx
 #: apps/web/src/components/ComputerCard.tsx
-#: apps/web/src/components/ToolActivityDisclosure.tsx
 #: apps/web/src/components/vault/VaultImport.tsx
 #: apps/web/src/lib/ticket-status.ts
 #: apps/web/src/pages/ActivityList.tsx
@@ -11805,7 +11805,7 @@ msgstr "Arbeitsanweisungen"
 #: apps/mobile/components/inbox-rows.tsx
 #: apps/mobile/components/integration-detail.tsx
 #: apps/mobile/components/thread/thread-screen.tsx
-#: apps/web/src/components/ToolActivityDisclosure.tsx
+#: apps/web/src/components/ActivityPanel.tsx
 #: apps/web/src/lib/roster-status.ts
 #: apps/web/src/pages/Auth.tsx
 #: apps/web/src/pages/shell/transcript.tsx

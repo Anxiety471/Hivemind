@@ -367,7 +367,7 @@ msgstr "{fromName}至{toName}"
 msgid "{header}, column {index}"
 msgstr "{header}，第 {index} 欄"
 
-#: apps/web/src/components/ToolActivityDisclosure.tsx
+#: apps/web/src/components/ActivityPanel.tsx
 msgid "{hidden, plural, one {+# earlier step} other {+# earlier steps}}"
 msgstr "{hidden, plural, one {還有 # 個先前步驟} other {還有 # 個先前步驟}}"
 
@@ -700,7 +700,7 @@ msgstr "{title}，{label}"
 msgid "{title}, saved as {savedAs}"
 msgstr "{title}，儲存為 {savedAs}"
 
-#: apps/web/src/components/ToolActivityDisclosure.tsx
+#: apps/web/src/components/ActivityPanel.tsx
 #: apps/web/src/pages/plugins/connector-detail.tsx
 msgid "{toolCount, plural, one {# tool} other {# tools}}"
 msgstr "{toolCount, plural, one {# 個工具} other {# 個工具}}"
@@ -4897,8 +4897,8 @@ msgstr "還沒有帳號？"
 #: apps/mobile/lib/activity.ts
 #: apps/mobile/lib/board.ts
 #: apps/web/src/components/AccountDataSettings.tsx
+#: apps/web/src/components/ActivityPanel.tsx
 #: apps/web/src/components/ComputerCard.tsx
-#: apps/web/src/components/ToolActivityDisclosure.tsx
 #: apps/web/src/components/vault/VaultImport.tsx
 #: apps/web/src/lib/ticket-status.ts
 #: apps/web/src/pages/ActivityList.tsx
@@ -11806,7 +11806,7 @@ msgstr "工作指示"
 #: apps/mobile/components/inbox-rows.tsx
 #: apps/mobile/components/integration-detail.tsx
 #: apps/mobile/components/thread/thread-screen.tsx
-#: apps/web/src/components/ToolActivityDisclosure.tsx
+#: apps/web/src/components/ActivityPanel.tsx
 #: apps/web/src/lib/roster-status.ts
 #: apps/web/src/pages/Auth.tsx
 #: apps/web/src/pages/shell/transcript.tsx

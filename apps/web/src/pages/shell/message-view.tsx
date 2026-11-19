@@ -14,6 +14,11 @@ import { isPeerReceiptBlocks, isToolActivityBlock, otherAuthor } from "@rakazo/c
 import { BotAvatar, Button, cn, resolvePersonaColorDef } from "@rakazo/ui-web";
 import { UserRound } from "lucide-react";
 import { memo, useCallback, useMemo } from "react";
+import {
+  ActivityOnlyNarration,
+  ActivityPanel,
+  StandaloneActivity,
+} from "../../components/ActivityPanel";
 import { ArtifactFileCard } from "../../components/ArtifactFileCard";
 import { AskCard } from "../../components/AskCard";
 import { CollaborationMarker } from "../../components/ai/CollaborationMarker";
@@ -22,13 +27,6 @@ import { ComputerCard } from "../../components/ComputerCard";
 import { McpAppCard } from "../../components/McpAppCard";
 import { PageBlockCard } from "../../components/pages/PageBlockCard";
 import { SubagentCard } from "../../components/SubagentCard";
-import {
-  LIVE_TOOL_STEP_WINDOW,
-  StandaloneToolActivity,
-  ToolActivityDisclosure,
-  ToolOnlyNarration,
-  ToolSteps,
-} from "../../components/ToolActivityDisclosure";
 import { SkillDraftCard } from "../../components/teach/SkillDraftCard";
 import type { ArtifactTarget } from "../../lib/artifact-open";
 import { messageProviderLabel } from "../../lib/messaging";
@@ -36,10 +34,9 @@ import type { PageBlock } from "../../lib/page-cards";
 import { useOpenPage } from "../../lib/pages";
 import type { createSpaceRpc } from "../../lib/rpc";
 import {
+  activityBlocks,
   isToolOnlyNarration,
   renderableMessageBlocks,
-  shouldRenderToolCard,
-  toolStepCount,
 } from "../../lib/tool-activity-view";
 import { ReplyLine } from "./chat-context";
 import { FALLBACK_BOT_COLOR, previewMessageText } from "./chat-shared";
@@ -149,7 +146,11 @@ export const MessageView = memo(function MessageView({
     message.role === "bot" &&
     message.blocks.length > 0 &&
     message.blocks.every(
-      (block) => block.kind === "text" || block.kind === "progress" || block.kind === "steps",
+      (block) =>
+        block.kind === "text" ||
+        block.kind === "progress" ||
+        block.kind === "steps" ||
+        block.kind === "thinking",
     );
   const isLive = message.id.startsWith("progress:");
   const quoteMessageId = message.id.includes(":") ? undefined : message.id;
@@ -248,6 +249,10 @@ export const MessageView = memo(function MessageView({
       ? message.blocks.findIndex((block) => block.kind === "ask")
       : textAnchorIndex;
   const peerReceipt = isPeerReceiptBlocks(message.blocks);
+  const messageActivity = activityBlocks(blocks);
+  const firstActivityIndex = blocks.findIndex(
+    (block) => block.kind === "thinking" || block.kind === "steps",
+  );
   const hoverActions = peerReceipt ? null : (
     <MessageHoverActions
       message={message}
@@ -265,12 +270,17 @@ export const MessageView = memo(function MessageView({
         <>
           {messageContext}
           <div className="relative">
-            <ToolOnlyNarration blocks={visibleNarrationBlocks} live={isLive} />
+            <ActivityOnlyNarration blocks={blocks} live={isLive} />
             {hoverActions}
           </div>
         </>
       );
     }
+    // One activity panel stands where the bot's reasoning and tool rows first appear; the
+    // later activity blocks are part of it and render nothing of their own.
+    const firstActivityIndex = visibleNarrationBlocks.findIndex(
+      (block) => block.kind === "thinking" || block.kind === "steps",
+    );
     return (
       <>
         {messageContext}
@@ -282,21 +292,10 @@ export const MessageView = memo(function MessageView({
               dir="auto"
             >
               {visibleNarrationBlocks.map((block, i) => {
-                if (block.kind === "steps") {
-                  return (
-                    <ToolActivityDisclosure
-                      key={i}
-                      live={isLive}
-                      stepCount={toolStepCount(block.steps)}
-                      durationMs={block.durationMs}
-                    >
-                      <ToolSteps
-                        steps={block.steps}
-                        currentIndex={isLive ? block.steps.length - 1 : undefined}
-                        limit={isLive ? LIVE_TOOL_STEP_WINDOW : undefined}
-                      />
-                    </ToolActivityDisclosure>
-                  );
+                if (block.kind === "thinking" || block.kind === "steps") {
+                  return i === firstActivityIndex ? (
+                    <ActivityPanel key={i} blocks={blocks} live={isLive} />
+                  ) : null;
                 }
                 if (block.kind === "text" || block.kind === "progress") {
                   return (
@@ -347,16 +346,13 @@ export const MessageView = memo(function MessageView({
         )}
       >
         {blocks.map((block, i) => {
-          if (block.kind === "steps" && shouldRenderToolCard(block, showToolActivity)) {
-            return (
-              <StandaloneToolActivity
-                key={i}
-                live={isLive}
-                steps={block.steps}
-                stepCount={toolStepCount(block.steps)}
-                durationMs={block.durationMs}
-              />
-            );
+          if (block.kind === "thinking" || block.kind === "steps") {
+            if (!showToolActivity || messageActivity.length === 0) return null;
+            // The one activity panel stands at the first activity block; later ones add
+            // their rows to it rather than rendering a card of their own.
+            return i === firstActivityIndex ? (
+              <StandaloneActivity key={i} live={isLive} blocks={blocks} />
+            ) : null;
           }
           if (isToolActivityBlock(block)) return null;
           if (block.kind === "handoff") {

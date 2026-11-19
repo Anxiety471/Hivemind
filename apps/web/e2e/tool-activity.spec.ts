@@ -57,7 +57,14 @@ test("tool activity shows for live and finished runs when the user turned it on"
       "aria-expanded",
       "true",
     );
-    await expect(liveCard.locator("button[aria-expanded]")).toContainText(/Working…\s*8 tools/);
+    const liveTrigger = page.getByTestId("activity-trigger");
+    await expect(liveTrigger).toContainText(/Check conflicts\s*·\s*8 tools/);
+    // A live run has no duration yet.
+    await expect(liveTrigger).not.toContainText(/\d+(ms|s)\b/);
+    await expect(page.getByTestId("thinking-row")).toHaveCount(1);
+    await expect(page.getByTestId("thinking-row")).toContainText(
+      "Checking Tuesday afternoon first.",
+    );
     await expect(page.getByTestId("tool-rows-hidden")).toHaveText("+2 earlier steps");
     await expect(page.getByTestId("tool-rows")).not.toContainText("Open calendar");
     await expect(page.getByTestId("tool-rows")).toContainText("Check conflicts");
@@ -79,7 +86,9 @@ test("tool activity shows for live and finished runs when the user turned it on"
       "aria-expanded",
       "false",
     );
-    await expect(doneCard.locator("button[aria-expanded]")).toContainText(/Done\s*8 tools\s*12s/);
+    await expect(page.getByTestId("activity-trigger")).toContainText(
+      /Check conflicts\s*·\s*8 tools\s*·\s*12s/,
+    );
     await captureScreenshot(page, testInfo, `default-done-collapsed-${viewport.name}`);
 
     await doneCard.locator("button[aria-expanded]").click();
@@ -88,6 +97,9 @@ test("tool activity shows for live and finished runs when the user turned it on"
       "true",
     );
     await expect(page.getByTestId("tool-rows-hidden")).toHaveCount(0);
+    await expect(page.getByTestId("thinking-row")).toContainText(
+      "Checking Tuesday afternoon first.",
+    );
     await expect(page.getByTestId("tool-rows")).toContainText("Open calendar");
     await expect(page.getByTestId("tool-rows")).toContainText("Check conflicts");
     await expect(page.getByTestId("tool-step-note")).toHaveText(NOTE_TEXT);
@@ -115,7 +127,8 @@ test("the settings toggle hides and restores tool activity", async ({ page }, te
   await openThread(page, "done");
   await expect(page.getByTestId("message-bot-bubble")).toHaveText(REPLY_TEXT);
   await expect(page.getByTestId("tool-activity")).toHaveCount(0);
-  await expect(page.getByText(/Done\s*8 tools/)).toHaveCount(0);
+  await expect(page.getByTestId("activity-trigger")).toHaveCount(0);
+  await expect(page.getByText("Checking Tuesday afternoon first.")).toHaveCount(0);
   await captureScreenshot(page, testInfo, "off-done");
 
   await openThread(page, "live");
@@ -129,8 +142,6 @@ test("the settings toggle hides and restores tool activity", async ({ page }, te
 
   await openThread(page, "done");
   await expect(page.getByTestId("tool-activity")).toHaveCount(1);
-  await expect(page.getByTestId("tool-activity").locator("button[aria-expanded]")).toContainText(
-    /Done\s*8 tools/,
-  );
+  await expect(page.getByTestId("activity-trigger")).toContainText(/Check conflicts\s*·\s*8 tools/);
   await captureScreenshot(page, testInfo, "on-again-done");
 });
