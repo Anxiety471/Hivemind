@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -249,6 +250,125 @@ func decodeBase64Lenient(value string) []byte {
 	return decoded[:size]
 }
 
+// canonicalJSON converts Go-typed JSON values (typed slices, maps with other
+// key types, structs) to the shapes encoding/json decodes JSON into: []any,
+// map[string]any and scalars. That is what makes a []Block, []string or
+// []map[string]any seal per element like a JS array and lets the blind-index
+// walkers see typed blocks. Containers already in those shapes are returned
+// unchanged, and copied only when a child changes, so decoded-JSON input
+// allocates nothing.
+func canonicalJSON(value any) any {
+	switch typed := value.(type) {
+	case nil, string, bool, json.Number,
+		int, int8, int16, int32, int64,
+		uint, uint8, uint16, uint32, uint64,
+		float32, float64:
+		return value
+	case []any:
+		var out []any
+		for index, item := range typed {
+			next := canonicalJSON(item)
+			if out == nil && !sameJSONValue(next, item) {
+				out = make([]any, len(typed))
+				copy(out, typed)
+			}
+			if out != nil {
+				out[index] = next
+			}
+		}
+		if out != nil {
+			return out
+		}
+		return typed
+	case map[string]any:
+		var out map[string]any
+		for key, item := range typed {
+			next := canonicalJSON(item)
+			if out == nil && !sameJSONValue(next, item) {
+				out = make(map[string]any, len(typed))
+				for name, current := range typed {
+					out[name] = current
+				}
+			}
+			if out != nil {
+				out[key] = next
+			}
+		}
+		if out != nil {
+			return out
+		}
+		return typed
+	case []byte:
+		// encoding/json writes a byte slice as a base64 string, and
+		// Array.isArray(Buffer) is false: not a JSON array.
+		return value
+	}
+	reflected := reflect.ValueOf(value)
+	switch reflected.Kind() {
+	case reflect.Slice, reflect.Array:
+		if reflected.Kind() == reflect.Slice && reflected.Type().Elem().Kind() == reflect.Uint8 {
+			// encoding/json writes every byte slice, named or not, as a base64
+			// string; Array.isArray(Buffer) is false.
+			return value
+		}
+		out := make([]any, reflected.Len())
+		for index := range out {
+			out[index] = canonicalJSON(reflected.Index(index).Interface())
+		}
+		return out
+	case reflect.Map:
+		if reflected.Type().Key().Kind() == reflect.String {
+			out := make(map[string]any, reflected.Len())
+			iterator := reflected.MapRange()
+			for iterator.Next() {
+				out[iterator.Key().String()] = canonicalJSON(iterator.Value().Interface())
+			}
+			return out
+		}
+	case reflect.Pointer:
+		if reflected.IsNil() {
+			return nil
+		}
+		return canonicalJSON(reflected.Elem().Interface())
+	case reflect.Struct:
+	default:
+		return value
+	}
+	// Structs (respecting their JSON tags), non-string-keyed maps and types
+	// implementing Marshaler go through the same encoder that seals them.
+	encoded, err := marshalJSON(value)
+	if err != nil {
+		return value
+	}
+	decoder := json.NewDecoder(strings.NewReader(encoded))
+	decoder.UseNumber()
+	var decoded any
+	if err := decoder.Decode(&decoded); err != nil {
+		return value
+	}
+	return decoded
+}
+
+// sameJSONValue reports whether canonicalJSON left a value untouched, so a
+// container can be returned without copying.
+func sameJSONValue(next, previous any) bool {
+	if next == nil || previous == nil {
+		return next == nil && previous == nil
+	}
+	nextValue, previousValue := reflect.ValueOf(next), reflect.ValueOf(previous)
+	if nextValue.Type() != previousValue.Type() {
+		return false
+	}
+	switch nextValue.Kind() {
+	case reflect.Slice, reflect.Map, reflect.Pointer:
+		return nextValue.Pointer() == previousValue.Pointer()
+	}
+	if !nextValue.Comparable() {
+		return false
+	}
+	return nextValue.Interface() == previousValue.Interface()
+}
+
 // isRecord is content-crypto.ts:98-100: a non-null object that is not an array.
 func isRecord(value any) (map[string]any, bool) {
 	record, ok := value.(map[string]any)
@@ -274,6 +394,7 @@ func isSealedJSON(value any) (string, bool) {
 // copies of the plain keys so existing JSON filters still match, and the sealed
 // copy is the source of truth on read.
 func SealJSON(value any, plainKeys map[string]bool, seal func(string) (string, error)) (any, error) {
+	value = canonicalJSON(value)
 	one := func(item any) (any, error) {
 		sealed := map[string]any{}
 		if record, ok := isRecord(item); ok {
@@ -329,6 +450,7 @@ func isJSONScalar(value any) bool {
 // OpenJSON is openJson (content-crypto.ts:131-136). Plaintext elements pass
 // through, so rows written before encryption stay readable.
 func OpenJSON(value any, open func(string) (string, error)) (any, error) {
+	value = canonicalJSON(value)
 	one := func(item any) (any, error) {
 		ciphertext, ok := isSealedJSON(item)
 		if !ok {
@@ -362,6 +484,7 @@ func OpenJSON(value any, open func(string) (string, error)) (any, error) {
 
 // JSONKeyIDs is jsonKeyIds (content-crypto.ts:138-143).
 func JSONKeyIDs(value any) []string {
+	value = canonicalJSON(value)
 	items, ok := value.([]any)
 	if !ok {
 		items = []any{value}
@@ -382,6 +505,7 @@ func JSONKeyIDs(value any) []string {
 // JSONNeedsSealing is jsonNeedsSealing (content-crypto.ts:145-149): empty
 // arrays count as sealed.
 func JSONNeedsSealing(value any) bool {
+	value = canonicalJSON(value)
 	items, ok := value.([]any)
 	if !ok {
 		items = []any{value}

@@ -75,6 +75,10 @@ func conversationText(block map[string]any) []string {
 // Empty block texts still contribute their separator, as `flatMap(...).join`
 // leaves the trailing newline a blank block adds.
 func HistoryMessageText(blocks any) string {
+	return historyMessageText(canonicalJSON(blocks))
+}
+
+func historyMessageText(blocks any) string {
 	var parts []string
 	for _, block := range objectBlocks(blocks) {
 		parts = append(parts, conversationText(block)...)
@@ -85,8 +89,12 @@ func HistoryMessageText(blocks any) string {
 // HistorySearchText is historySearchText: message text, attachment names, and
 // tool-step labels and notes, one per line.
 func HistorySearchText(blocks any) string {
+	return historySearchText(canonicalJSON(blocks))
+}
+
+func historySearchText(blocks any) string {
 	var parts []string
-	parts = append(parts, HistoryMessageText(blocks))
+	parts = append(parts, historyMessageText(blocks))
 	for _, block := range objectBlocks(blocks) {
 		kind, _ := block["kind"].(string)
 		if kind != "file" && kind != "image" {
@@ -142,6 +150,10 @@ func joinStrings(parts []string, separator string) string {
 // StringsIn is stringsIn (content-encryption.ts:117-121): every string leaf in
 // a JSON value, in the order the values are walked.
 func StringsIn(value any) []string {
+	return stringsIn(canonicalJSON(value))
+}
+
+func stringsIn(value any) []string {
 	var out []string
 	collectStrings(value, &out)
 	return out

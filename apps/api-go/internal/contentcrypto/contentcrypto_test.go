@@ -496,3 +496,106 @@ func TestSealJSONWritesNegativeZeroLikeJSONStringify(t *testing.T) {
 		})
 	}
 }
+
+type typedStep struct {
+	Label string `json:"label"`
+	Note  string `json:"note,omitempty"`
+}
+
+type typedBlock struct {
+	Kind   string      `json:"kind"`
+	Text   string      `json:"text,omitempty"`
+	Status string      `json:"status,omitempty"`
+	Steps  []typedStep `json:"steps,omitempty"`
+}
+
+func TestSealJSONTreatsTypedSlicesAsArrays(t *testing.T) {
+	key, location := testKey(), testLocation()
+	seal := func(plaintext string) (string, error) { return EncryptText(key, location, plaintext) }
+	open := func(ciphertext string) (string, error) { return DecryptText(key, location, ciphertext) }
+	blocks := []typedBlock{
+		{Kind: "text", Text: "Pelican <&>", Status: "done"},
+		{Kind: "steps", Steps: []typedStep{{Label: "Search", Note: "found"}}},
+	}
+	sealed, err := SealJSON(blocks, messageBlockPlainKeys, seal)
+	if err != nil {
+		t.Fatalf("seal: %v", err)
+	}
+	items, ok := sealed.([]any)
+	if !ok || len(items) != len(blocks) {
+		t.Fatalf("typed slice sealed as %T, want %d-element array", sealed, len(blocks))
+	}
+	first := items[0].(map[string]any)
+	if first["kind"] != "text" || first["status"] != "done" {
+		t.Fatalf("plain keys not kept: %#v", first)
+	}
+	if _, ok := first["text"]; ok {
+		t.Fatalf("sealed element kept the plaintext: %#v", first)
+	}
+	wantFirst := `{"kind":"text","status":"done","text":"Pelican <&>"}`
+	if got, err := open(first[SealedField].(string)); err != nil || got != wantFirst {
+		t.Fatalf("first seal opens as %q, %v; want %q", got, err, wantFirst)
+	}
+
+	opened, err := OpenJSON(sealed, open)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	want := []any{
+		map[string]any{"kind": "text", "status": "done", "text": "Pelican <&>"},
+		map[string]any{"kind": "steps", "steps": []any{
+			map[string]any{"label": "Search", "note": "found"},
+		}},
+	}
+	if !reflect.DeepEqual(opened, want) {
+		t.Fatalf("opened = %#v, want %#v", opened, want)
+	}
+}
+
+func TestTypedSlicesKeepHistoryTextAndTokens(t *testing.T) {
+	typed := []typedBlock{
+		{Kind: "text", Text: "Pelican İstanbul 😀 report", Status: "done"},
+		{Kind: "steps", Steps: []typedStep{{Label: "Search the web", Note: "found pelican"}, {Label: "Read file"}}},
+		{Kind: "file", Text: "", Status: "done"},
+	}
+	canonical := canonicalJSON(typed)
+	if got, want := HistorySearchText(typed), HistorySearchText(canonical); got != want {
+		t.Fatalf("history text = %q, want %q", got, want)
+	}
+	key := testKey()
+	typedTokens := SearchTokens(key, HistorySearchText(typed), StringsIn(typed))
+	canonicalTokens := SearchTokens(key, HistorySearchText(canonical), StringsIn(canonical))
+	if !reflect.DeepEqual(typedTokens, canonicalTokens) {
+		t.Fatalf("typed tokens = %v, want %v", typedTokens, canonicalTokens)
+	}
+	if len(typedTokens) == 0 {
+		t.Fatal("typed blocks produced no tokens")
+	}
+}
+
+func TestSealJSONTypedStringSliceKeepsEveryElement(t *testing.T) {
+	key, location := testKey(), testLocation()
+	seal := func(plaintext string) (string, error) { return EncryptText(key, location, plaintext) }
+	open := func(ciphertext string) (string, error) { return DecryptText(key, location, ciphertext) }
+	sealed, err := SealJSON([]string{"a", "b"}, nil, seal)
+	if err != nil {
+		t.Fatalf("seal: %v", err)
+	}
+	items, ok := sealed.([]any)
+	if !ok || len(items) != 2 {
+		t.Fatalf("sealed as %T, want 2 elements", sealed)
+	}
+	for index, want := range []string{`"a"`, `"b"`} {
+		got, err := open(items[index].(map[string]any)[SealedField].(string))
+		if err != nil || got != want {
+			t.Fatalf("element %d opens as %q, %v; want %s", index, got, err, want)
+		}
+	}
+	opened, err := OpenJSON(sealed, open)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if !reflect.DeepEqual(opened, []any{"a", "b"}) {
+		t.Fatalf("opened = %#v", opened)
+	}
+}
