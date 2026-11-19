@@ -2449,7 +2449,10 @@ function seedUsage(
     await row("u13", { provider: "zeta", model: "y", runId: `${user}-r5` }, 16);
     if (config.badCost) await row("bad", { costUsd: -1 }, 20);
     if (config.weirdCost !== undefined) await row("bad", { costUsd: config.weirdCost }, 20);
-    if (config.badKind) await row("bad", { operationKind: "weird" }, 20);
+    // The summary reports a group's token sum only when every row has the column, so this row
+    // carries totalTokens: 0 (still "unknown kind") and keeps openai/gpt-a's weight distinct from
+    // zeta/z instead of tying it, whose group order the database does not contract.
+    if (config.badKind) await row("bad", { operationKind: "weird", totalTokens: 0 }, 20);
     await row("o1", { inputTokens: 999, totalTokens: 999 }, 12, one, other);
     await row("x1", { inputTokens: 888, totalTokens: 888, runId: `${user}-r8` }, 13, two);
     await row("x2", { provider: "elsewhere", model: "e", inputTokens: 7, totalTokens: 7 }, 14, two);
