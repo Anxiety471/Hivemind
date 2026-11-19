@@ -15,6 +15,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -392,15 +394,72 @@ func JSONNeedsSealing(value any) bool {
 	return false
 }
 
+// normalizeNegativeZero rewrites a negative zero as 0, which is what
+// JSON.stringify writes; Go's encoder would seal "-0" and TypeScript would
+// parse a different number than it wrote. Containers are copied only when a
+// child changes.
+func normalizeNegativeZero(value any) (any, bool) {
+	switch typed := value.(type) {
+	case float64:
+		if typed == 0 && math.Signbit(typed) {
+			return float64(0), true
+		}
+	case float32:
+		if typed == 0 && math.Signbit(float64(typed)) {
+			return float32(0), true
+		}
+	case json.Number:
+		number, err := strconv.ParseFloat(typed.String(), 64)
+		if err == nil && number == 0 && math.Signbit(number) {
+			return json.Number("0"), true
+		}
+	case []any:
+		var out []any
+		for index, item := range typed {
+			next, changed := normalizeNegativeZero(item)
+			if !changed {
+				continue
+			}
+			if out == nil {
+				out = make([]any, len(typed))
+				copy(out, typed)
+			}
+			out[index] = next
+		}
+		if out != nil {
+			return out, true
+		}
+	case map[string]any:
+		var out map[string]any
+		for key, item := range typed {
+			next, changed := normalizeNegativeZero(item)
+			if !changed {
+				continue
+			}
+			if out == nil {
+				out = make(map[string]any, len(typed))
+				for name, current := range typed {
+					out[name] = current
+				}
+			}
+			out[key] = next
+		}
+		if out != nil {
+			return out, true
+		}
+	}
+	return value, false
+}
+
 // marshalJSON encodes a decoded JSON value the way JSON.stringify would leave
-// it parseable by TypeScript: no HTML escaping, and json.Number (or integer Go
-// values) kept exact. Go sorts map keys; JSON.parse does not care, and the
-// TS→Go direction never re-encodes, so this only shapes Go-written ciphertext.
+// it parseable by TypeScript: no HTML escaping, negative zero written as 0,
+// and json.Number (or integer Go values) kept exact.
 func marshalJSON(value any) (string, error) {
+	normalized, _ := normalizeNegativeZero(value)
 	var builder strings.Builder
 	encoder := json.NewEncoder(&builder)
 	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(value); err != nil {
+	if err := encoder.Encode(normalized); err != nil {
 		return "", fmt.Errorf("content json: %w", err)
 	}
 	return strings.TrimSuffix(builder.String(), "\n"), nil

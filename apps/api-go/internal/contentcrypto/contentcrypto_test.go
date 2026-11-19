@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"math"
 	"reflect"
 	"strings"
 	"testing"
@@ -461,5 +462,37 @@ func TestDecryptTextReplacesInvalidUTF8LikeNode(t *testing.T) {
 func TestEncryptTextRejectsInvalidUTF8(t *testing.T) {
 	if _, err := EncryptText(testKey(), testLocation(), string([]byte{0xff})); err == nil {
 		t.Fatal("invalid UTF-8 plaintext must be rejected")
+	}
+}
+
+func TestSealJSONWritesNegativeZeroLikeJSONStringify(t *testing.T) {
+	negativeZero := math.Copysign(0, -1)
+	identity := func(plaintext string) (string, error) { return plaintext, nil }
+	cases := []struct {
+		name  string
+		value any
+		want  string
+	}{
+		{"float64", map[string]any{"n": negativeZero}, `{"n":0}`},
+		{"number", map[string]any{"n": json.Number("-0")}, `{"n":0}`},
+		{"number with exponent", map[string]any{"n": json.Number("-0e3")}, `{"n":0}`},
+		{"nested", map[string]any{"a": []any{json.Number("-0.0"), json.Number("1.5")}}, `{"a":[0,1.5]}`},
+		{"positive values unchanged", map[string]any{"n": json.Number("0"), "m": json.Number("-2")}, `{"m":-2,"n":0}`},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			sealed, err := SealJSON(testCase.value, nil, identity)
+			if err != nil {
+				t.Fatalf("seal: %v", err)
+			}
+			record, ok := sealed.(map[string]any)
+			if !ok {
+				t.Fatalf("sealed value is %T", sealed)
+			}
+			got, _ := record[SealedField].(string)
+			if got != testCase.want {
+				t.Fatalf("sealed plaintext = %q, want %q", got, testCase.want)
+			}
+		})
 	}
 }
