@@ -41,7 +41,7 @@ export function ChatHeader({
   const [inviteOpen, setInviteOpen] = useState(false);
   const macChrome = windowChromeKind(desktopBridge()) === "darwin";
   return (
-    <div className="pointer-events-none absolute inset-x-0 top-0 z-10 grid grid-cols-[1fr_minmax(0,auto)_1fr] items-center gap-2 px-3 py-[13px] md:px-[22px] [&_button]:pointer-events-auto">
+    <div className="pointer-events-none absolute inset-x-0 top-0 z-10 grid grid-cols-[1fr_minmax(0,auto)_1fr] items-center gap-2 px-3 py-3 md:px-[22px] [&_button]:pointer-events-auto">
       <div className="flex items-center">
         {macChrome ? <WindowChrome className="md:hidden" /> : null}
         <Button
@@ -51,7 +51,7 @@ export function ChatHeader({
           onClick={onOpenNavigation}
           className="app-no-drag md:hidden"
         >
-          <Menu strokeWidth={1.7} className="size-[19px]" />
+          <Menu strokeWidth={1.75} className="size-4.5" />
         </Button>
       </div>
       <Button
@@ -93,7 +93,7 @@ export function ChatHeader({
               data-voice-ready={voiceReady ? "" : undefined}
               className="app-no-drag"
             >
-              <Phone strokeWidth={1.6} className="size-[17px]" />
+              <Phone strokeWidth={1.75} className="size-4.5" />
             </Button>
           </IconTooltip>
         ) : null}
@@ -106,7 +106,7 @@ export function ChatHeader({
               onClick={() => setInviteOpen(true)}
               className="app-no-drag"
             >
-              <Gift strokeWidth={1.6} className="size-[17px]" />
+              <Gift strokeWidth={1.75} className="size-4.5" />
             </Button>
           </IconTooltip>
         ) : null}
