@@ -3673,7 +3673,7 @@ function artifactCursor(text: string): string | undefined {
 }
 
 /** Runs a call and reports the roster and Space-change signals published while it ran. */
-async function observed(settleMs: number, call: () => Promise<any>, seeded: Seeded) {
+async function observed(settleMs: number, call: () => Promise<any>, seeded: Seeded, procedure: string) {
   realtimeSignals.length = 0;
   const result = await call();
   await sleep(settleMs);
@@ -3692,7 +3692,14 @@ async function observed(settleMs: number, call: () => Promise<any>, seeded: Seed
   const notifications = realtimeSignals
     .filter((payload) => {
       try {
-        const { topic } = JSON.parse(payload) as { topic: string };
+        const signal = JSON.parse(payload) as { topic?: unknown; payload?: unknown };
+        const topic = typeof signal.topic === "string" ? signal.topic : "";
+        const body = typeof signal.payload === "string" ? signal.payload : "";
+        // The API's own 30s job reconciler drains the seeded ComputerUpdate rows and announces each
+        // one; computer.updates is a read and publishes nothing, so its window cannot own these.
+        if (procedure === "computer.updates" && topic.startsWith("space-changes:") && body === "computerUpdates") {
+          return false;
+        }
         return (
           (topic.startsWith("roster-") || topic.startsWith("space-changes:")) &&
           (own.some((id) => topic.endsWith(`:${id}`)) ||
@@ -3942,12 +3949,12 @@ for (const testCase of cases) {
 
   let seeded = await seed(caseIds);
   if (testCase.seed) await testCase.seed(seeded);
-  const tsResult = await observed(settle, () => run(testCase, tsCall, input, seeded), seeded);
+  const tsResult = await observed(settle, () => run(testCase, tsCall, input, seeded), seeded, testCase.procedure);
   const tsState = normalize(await databaseState(caseIds));
 
   seeded = await seed(caseIds);
   if (testCase.seed) await testCase.seed(seeded);
-  const goResult = await observed(settle, () => run(testCase, goCall, input, seeded), seeded);
+  const goResult = await observed(settle, () => run(testCase, goCall, input, seeded), seeded, testCase.procedure);
   const goState = normalize(await databaseState(caseIds));
 
   try {
