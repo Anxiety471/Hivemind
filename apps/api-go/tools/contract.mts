@@ -3938,6 +3938,11 @@ async function databaseState(seeded: ReturnType<typeof ids>) {
   };
 }
 
+// A killed run leaves the rows of the case it was in. Invites carry a globally unique token
+// hash, so an earlier case in the next run could collide with one: the fixture is disposable,
+// so a run starts with the invite table empty (each case seeds and resets its own).
+await system.spaceInvite.deleteMany({});
+
 let failures = 0;
 for (const testCase of cases) {
   // CASE_FILTER=<regexp> reruns only the matching cases.
