@@ -146,6 +146,7 @@ export const ROW_SECURITY_MODELS: ReadonlySet<string> = new Set([
   "BotMcpServer",
   "Computer",
   "ComputerRun",
+  "ComputerHomeVersion",
   "HomeDeletionNotice",
   "Board",
   "Ticket",
