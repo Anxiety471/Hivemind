@@ -109,6 +109,7 @@ export async function threadSnapshot(
                   type: {
                     in: [
                       "thread.progress",
+                      "thread.thinking",
                       "thread.subagent",
                       "run.waiting_input",
                       "computer.takeover.requested",
@@ -202,6 +203,7 @@ export async function threadSnapshot(
                 type: {
                   in: [
                     "thread.progress",
+                    "thread.thinking",
                     "thread.subagent",
                     "run.waiting_input",
                     "computer.takeover.requested",
@@ -289,7 +291,11 @@ function messagesWithLiveEvents(
   runs: NonNullable<Parameters<typeof projectMessages>[1]>,
 ) {
   const live = projectMessages(liveEvents, runs).filter((message) => {
-    if (message.blocks.some((block) => block.kind === "progress" || block.kind === "steps")) {
+    if (
+      message.blocks.some(
+        (block) => block.kind === "progress" || block.kind === "thinking" || block.kind === "steps",
+      )
+    ) {
       return true;
     }
     if (!message.id.startsWith("subagent:")) return false;
