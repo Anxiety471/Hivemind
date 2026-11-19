@@ -21,6 +21,7 @@ import { createApp } from "../../api/src/app.js";
 import { spendingPeriodStart } from "../../../packages/core/src/spending.js";
 import { createRequire } from "node:module";
 import { membershipCases, membershipReset, membershipState } from "./contract-membership.mts";
+import { laneDCases } from "./contract-lane-d.mts";
 
 const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) throw new Error("DATABASE_URL is required");
@@ -46,6 +47,14 @@ const CONTRACT_EMAIL = {
   describe: () => ({ id: "contract-email", transactional: true }),
   send: async () => {},
 };
+
+// The inbound address domain bots.emailAddress* read (a server that receives email), and the
+// computer quota the restore cases exercise. Test values only; each side sees the same ones.
+const INBOUND_EMAIL_DOMAIN = "bots.contract.test";
+const INBOUND_EMAIL_SECRET = "contract-inbound-email-secret-0123456789";
+const MAX_COMPUTERS_PER_USER = "2";
+// resolveMaxComputersPerUser reads process.env at call time on the TypeScript side.
+process.env.SANDBOX_MAX_COMPUTERS_PER_USER = MAX_COMPUTERS_PER_USER;
 
 export type Seeded = {
   userId: string;
@@ -98,6 +107,8 @@ const handles = await createApp({
   nodeEnv: "test",
   signupsEnabled: "true",
   agentRuntime: "scripted",
+  // The same inbound-email configuration the Go child gets through the environment.
+  inboundEmail: { domain: INBOUND_EMAIL_DOMAIN, secret: INBOUND_EMAIL_SECRET },
   sandboxProvider: "fake",
   wakeupDriver: "memory",
   ...(EMAIL_ON ? { email: CONTRACT_EMAIL } : {}),
@@ -169,6 +180,18 @@ await writeFile(
       "artifacts.list": { mode: "go", readOnly: true },
       "artifacts.listSpace": { mode: "go", readOnly: true },
       "artifacts.listVersions": { mode: "go", readOnly: true },
+      "bots.reorder": { mode: "go" },
+      "bots.restore": { mode: "go" },
+      "bots.removePreview": { mode: "go", readOnly: true },
+      "bots.emailAddress": { mode: "go", readOnly: true },
+      "bots.emailAddresses": { mode: "go", readOnly: true },
+      "bots.claimEmailAddress": { mode: "go" },
+      "memory.providerConfig": { mode: "go", readOnly: true },
+      "memory.setDefaultScope": { mode: "go" },
+      "groups.restore": { mode: "go" },
+      "agentSkills.list": { mode: "go", readOnly: true },
+      "agentSkills.get": { mode: "go", readOnly: true },
+      "agentSkills.remove": { mode: "go" },
     },
   }),
 );
@@ -206,6 +229,10 @@ go = spawn(
       SMTP_URL: EMAIL_ON ? "smtp://127.0.0.1:2525" : "",
       EMAIL_PROVIDER: "",
       EMAIL_EMULATOR: "",
+      // The inbound domain bots.emailAddress* read, and the restore quota, as on the TypeScript side.
+      INBOUND_EMAIL_DOMAIN,
+      INBOUND_EMAIL_SECRET,
+      SANDBOX_MAX_COMPUTERS_PER_USER: MAX_COMPUTERS_PER_USER,
     },
     stdio: ["ignore", "inherit", "inherit"],
   },
@@ -360,6 +387,7 @@ const cases: Case[] = [
   ...pageWriteCases(),
   ...modelRenameCases(),
   ...artifactCases(),
+  ...laneDCases(system),
 ];
 
 const SITES = ["zeta.example", "alpha.example", "Beta.example", "_under.example", "10.0.0.1"];
@@ -3260,6 +3288,10 @@ async function reset(seeded: ReturnType<typeof ids>) {
   await system.agentConnection.deleteMany({ where: { id: { startsWith: userId } } });
   // Delete the chat rows explicitly rather than relying on cascades under the runtime role.
   const own = { in: [userId, `${userId}-other`] };
+  // Email names are a global registry: rows outlive their bot (botId set null), so clear every
+  // name this run tag claimed before the case starts.
+  await system.botEmailAddress.deleteMany({ where: { name: { startsWith: `ct${RUN_TAG}-` } } });
+  await system.spaceMemoryConfig.deleteMany({ where: { spaceId: { in: seeded.spaces } } });
   await system.externalConversation.deleteMany({ where: { userId: own } });
   await system.threadRead.deleteMany({ where: { threadId: { startsWith: userId } } });
   await system.message.deleteMany({ where: { threadId: { startsWith: userId } } });
@@ -3313,10 +3345,10 @@ async function reset(seeded: ReturnType<typeof ids>) {
   await system.vaultCredential.deleteMany({ where: { userId } });
   await system.paymentWallet.deleteMany({ where: { userId } });
   await system.bot.deleteMany({ where: { userId: { in: [userId, `${userId}-other`] } } });
-  await system.agentSkillSpace.deleteMany({ where: { userId } });
+  await system.agentSkillSpace.deleteMany({ where: { userId: own } });
   await system.mcpServerSpace.deleteMany({ where: { userId } });
   await system.capabilityInstallSpace.deleteMany({ where: { userId } });
-  await system.agentSkill.deleteMany({ where: { userId } });
+  await system.agentSkill.deleteMany({ where: { userId: own } });
   await system.mcpServer.deleteMany({ where: { userId } });
   await system.capabilityInstall.deleteMany({ where: { userId } });
   await system.secret.deleteMany({ where: { userId } });
@@ -3501,6 +3533,9 @@ function withIds(input: unknown, seeded: ReturnType<typeof ids>) {
       .replaceAll("__msg5__", `${seeded.userId}-msg5`)
       .replaceAll("__msg0__", `${seeded.userId}-msg0`)
       .replaceAll("__msgother__", `${seeded.userId}-msgother`)
+      .replaceAll("__skillname__", seeded.skillName)
+      .replaceAll("__skillupper__", seeded.skillName.toUpperCase())
+      .replaceAll("__upper__", `${seeded.userId}-UP`.toUpperCase())
       .replaceAll("__ec1__", `${seeded.userId}-ec1`)
       .replaceAll("__ec2__", `${seeded.userId}-ec2`)
       .replaceAll("__ec3__", `${seeded.userId}-ec3`)
@@ -3583,6 +3618,12 @@ const WRITE_PROCEDURES = new Set([
   "pages.rename",
   "pages.pin",
   "models.rename",
+  "bots.reorder",
+  "bots.restore",
+  "bots.claimEmailAddress",
+  "memory.setDefaultScope",
+  "groups.restore",
+  "agentSkills.remove",
 ]);
 
 const CUID = /^c[0-9a-z]{24}$/;
@@ -3667,13 +3708,17 @@ async function observed(settleMs: number, call: () => Promise<any>, seeded: Seed
 }
 
 async function databaseState(seeded: ReturnType<typeof ids>) {
+  const stateUsers = { in: [seeded.userId, `${seeded.userId}-other`] };
   const skills = await system.agentSkill.findMany({
-    where: { userId: seeded.userId },
-    select: { id: true, spaceId: true, allSpaces: true },
+    where: { userId: stateUsers },
+    select: {
+      id: true, spaceId: true, allSpaces: true,
+      name: true, description: true, content: true, source: true,
+    },
     orderBy: { id: "asc" },
   });
   const skillSpaces = await system.agentSkillSpace.findMany({
-    where: { userId: seeded.userId },
+    where: { userId: stateUsers },
     select: { skillId: true, spaceId: true },
     orderBy: [{ skillId: "asc" }, { spaceId: "asc" }],
   });
@@ -3824,13 +3869,23 @@ async function databaseState(seeded: ReturnType<typeof ids>) {
   ).sort(byJson);
   const bots = await system.bot.findMany({
     where: { userId: owners },
-    select: { id: true, spaceId: true, archivedAt: true, updatedAt: true, section: { select: { name: true } } },
+    select: { id: true, spaceId: true, archivedAt: true, updatedAt: true, position: true, section: { select: { name: true } } },
     orderBy: { id: "asc" },
   });
   const groups = await system.chatGroup.findMany({
     where: { userId: owners },
     select: { id: true, spaceId: true, archivedAt: true, updatedAt: true, section: { select: { name: true } } },
     orderBy: { id: "asc" },
+  });
+  const botEmailAddresses = await system.botEmailAddress.findMany({
+    where: { name: { startsWith: `ct${RUN_TAG}-` } },
+    select: { name: true, botId: true, createdAt: true },
+    orderBy: { name: "asc" },
+  });
+  const spaceMemoryConfigs = await system.spaceMemoryConfig.findMany({
+    where: { spaceId: { in: seeded.spaces } },
+    select: { spaceId: true, provider: true, settings: true, defaultMemoryScope: true, secretId: true, updatedAt: true },
+    orderBy: { spaceId: "asc" },
   });
   return {
     skills,
@@ -3849,6 +3904,8 @@ async function databaseState(seeded: ReturnType<typeof ids>) {
     auditEvents,
     bots,
     groups,
+    botEmailAddresses,
+    spaceMemoryConfigs,
     messagingIdentities,
     messagingLinkCodes,
     messagingMemberships,
