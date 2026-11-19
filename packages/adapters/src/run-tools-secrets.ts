@@ -251,7 +251,7 @@ export const secretTools: ToolHandlers = {
       // Keep the tail the old redactor still holds; a fresh instance drops it.
       reply.pendingProgress += reply.redactor.finish();
       reply.redactor = createStreamingRedactor(ctx.secrets);
-      const reasoning = reply.thinkingRedactor.finish();
+      const reasoning = reply.thinkingRedactor?.finish() ?? "";
       if (reply.thinking) appendThinkingText(reply.thinking, reasoning);
       reply.thinkingRedactor = createStreamingRedactor(ctx.secrets);
       const purpose = String(args.purpose ?? "otp");

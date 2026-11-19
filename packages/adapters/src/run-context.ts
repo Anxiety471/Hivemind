@@ -403,7 +403,7 @@ export function addRunSecrets(ctx: RunContext, values: string[]) {
   ctx.secrets.push(...additions);
   reply.redactor = createStreamingRedactor(ctx.secrets);
   // The reasoning stream keeps its own buffer, so a value split inside it stays whole too.
-  const reasoning = reply.thinkingRedactor.finish();
+  const reasoning = reply.thinkingRedactor?.finish() ?? "";
   if (reply.thinking) appendThinkingText(reply.thinking, reasoning);
   reply.thinkingRedactor = createStreamingRedactor(ctx.secrets);
 }
