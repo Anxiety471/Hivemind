@@ -12,6 +12,7 @@ export const ProductEventType = z.enum([
   "thread.message.updated",
   "thread.message.reaction",
   "thread.progress",
+  "thread.thinking",
   "thread.artifact",
   "thread.ask",
   "thread.choice",
@@ -250,6 +251,13 @@ export const MessageBlock = z.discriminatedUnion("kind", [
     /** Provider-generated tool status rather than assistant-authored narration. */
     activity: z.literal(true).optional(),
     pendingToolNames: z.array(z.string()).optional(),
+  }),
+  z.object({
+    /** The reasoning a model streamed before answering, kept to its first few lines. */
+    kind: z.literal("thinking"),
+    /** Wall time the model spent on that reasoning stream. */
+    durationMs: z.number().int().nonnegative(),
+    lines: z.array(z.string()),
   }),
   z.object({
     kind: z.literal("steps"),
@@ -494,6 +502,20 @@ export function hasThinkingActivityMarker(payload: Record<string, unknown>): pay
   return activity !== null && typeof activity === "object" && "thinking" in activity;
 }
 
+/**
+ * The reasoning stream a run is showing live: its ordinal among the message's thinking blocks,
+ * the wall time it has taken so far, and the lines kept from it. A snapshot, not a delta, so a
+ * repeated or out-of-order delivery lands on the same block.
+ */
+export const ThreadThinkingPayloadSchema = z
+  .object({
+    segment: z.number().int().nonnegative(),
+    durationMs: z.number().int().nonnegative(),
+    lines: z.array(z.string()),
+  })
+  .strict();
+export type ThreadThinkingPayload = z.infer<typeof ThreadThinkingPayloadSchema>;
+
 export const ProductEventSchema = z
   .object({
     id: Id,
@@ -507,6 +529,12 @@ export const ProductEventSchema = z
     payload: z.record(z.string(), z.unknown()),
   })
   .superRefine((event, ctx) => {
+    if (event.type === "thread.thinking") {
+      if (!event.runId || !ThreadThinkingPayloadSchema.safeParse(event.payload).success) {
+        ctx.addIssue({ code: "custom", path: ["payload"], message: "Invalid run reasoning" });
+      }
+      return;
+    }
     if (event.type !== "thread.meta" || !hasThinkingActivityMarker(event.payload)) return;
     if (!event.runId || !ThreadActivityPayloadSchema.safeParse(event.payload).success) {
       ctx.addIssue({ code: "custom", path: ["payload"], message: "Invalid run activity" });
