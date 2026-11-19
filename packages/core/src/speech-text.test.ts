@@ -138,6 +138,12 @@ describe("speakable", () => {
     expect(
       speechFromBlocks([{ kind: "progress", text: "Searching the web: weather", activity: true }]),
     ).toBe("");
+    expect(
+      speechFromBlocks([
+        { kind: "thinking", durationMs: 2_000, lines: ["Checking the premise."] },
+        { kind: "text", text: "It passes." },
+      ]),
+    ).toBe("It passes.");
   });
 });
 

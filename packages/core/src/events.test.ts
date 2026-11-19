@@ -108,6 +108,7 @@ describe("response streaming preference", () => {
       id: "progress:run-1",
       blocks: [
         { kind: "text" as const, text: "I'm checking that now." },
+        { kind: "thinking" as const, durationMs: 800, lines: ["Checking the sources."] },
         { kind: "steps" as const, steps: [{ label: "Browser", count: 1 }] },
         { kind: "progress" as const, text: "Lisbon is the cap" },
       ],
@@ -191,6 +192,33 @@ describe("reduceLiveMessageBlocks", () => {
       { kind: "progress", text: "They match." },
     ]);
   });
+
+  it("upserts each reasoning segment in place as its snapshot grows", () => {
+    let blocks = reduceLiveMessageBlocks([], {
+      type: "thinking",
+      segment: 0,
+      durationMs: 250,
+      lines: ["Checking"],
+    });
+    blocks = reduceLiveMessageBlocks(blocks, { type: "progress", payload: { text: "Done." } });
+    blocks = reduceLiveMessageBlocks(blocks, {
+      type: "thinking",
+      segment: 1,
+      durationMs: 100,
+      lines: ["Again"],
+    });
+    blocks = reduceLiveMessageBlocks(blocks, {
+      type: "thinking",
+      segment: 0,
+      durationMs: 900,
+      lines: ["Checking", "Weighing"],
+    });
+    expect(blocks).toEqual([
+      { kind: "thinking", durationMs: 900, lines: ["Checking", "Weighing"] },
+      { kind: "progress", text: "Done." },
+      { kind: "thinking", durationMs: 100, lines: ["Again"] },
+    ]);
+  });
 });
 
 describe("runFailureError", () => {
@@ -268,6 +296,46 @@ describe("projectMessages", () => {
     expect(messages).toHaveLength(2);
     expect(messages[0]?.blocks[0]).toEqual({ kind: "text", text: "hi" });
     expect(messages[1]?.blocks[0]).toEqual({ kind: "progress", text: "Lisbon" });
+  });
+
+  it("projects live reasoning as one thinking block that later text follows", () => {
+    const messages = projectMessages([
+      {
+        id: "e1",
+        threadId: "t1",
+        seq: 0,
+        type: "thread.thinking",
+        runId: "r1",
+        payload: { segment: 0, durationMs: 250, lines: ["Checking"] },
+        createdAt: "2026-01-01T00:00:01.000Z",
+      },
+      {
+        id: "e2",
+        threadId: "t1",
+        seq: 1,
+        type: "thread.thinking",
+        runId: "r1",
+        payload: { segment: 0, durationMs: 900, lines: ["Checking", "Weighing"] },
+        createdAt: "2026-01-01T00:00:02.000Z",
+      },
+      {
+        id: "e3",
+        threadId: "t1",
+        seq: 2,
+        type: "thread.progress",
+        runId: "r1",
+        payload: { delta: "Done.", streaming: true },
+        createdAt: "2026-01-01T00:00:03.000Z",
+      },
+    ]);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({
+      id: "progress:r1",
+      blocks: [
+        { kind: "thinking", durationMs: 900, lines: ["Checking", "Weighing"] },
+        { kind: "progress", text: "Done." },
+      ],
+    });
   });
 
   it("drops streaming tokens once the completed message is durable", () => {

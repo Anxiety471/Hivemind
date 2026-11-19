@@ -115,6 +115,17 @@ export function projectMessages(
       };
       continue;
     }
+    if (event.type === "thread.thinking") {
+      const live = liveProjection(event, createdAt);
+      live.blocks = reduceLiveMessageBlocks(live.blocks, thinkingLiveUpdate(payload));
+      live.meta = {
+        ...live.meta,
+        seq: event.seq,
+        botId: event.botId ?? undefined,
+        createdAt,
+      };
+      continue;
+    }
     if (event.type === "agent.tool.called") {
       if (!showsAsLiveStep(payload.name)) continue;
       const live = liveProjection(event, createdAt);
@@ -255,7 +266,10 @@ export function stripLiveStreamingProgress<
       continue;
     }
     const blocks = message.blocks.filter(
-      (block) => block.kind !== "text" && (block.kind !== "progress" || block.activity === true),
+      (block) =>
+        block.kind !== "text" &&
+        block.kind !== "thinking" &&
+        (block.kind !== "progress" || block.activity === true),
     );
     if (blocks.length === message.blocks.length) {
       next.push(message);
@@ -310,12 +324,32 @@ function clampRunFailure(message: string): string {
 
 export type LiveMessageUpdate =
   | { type: "progress"; payload: Record<string, unknown> | undefined }
-  | { type: "tool"; name: string };
+  | { type: "tool"; name: string }
+  | { type: "thinking"; segment: number; durationMs: number; lines: string[] };
+
+/** A live reasoning snapshot from its event payload, tolerant of a partial producer. */
+export function thinkingLiveUpdate(
+  payload: Record<string, unknown> | undefined,
+): Extract<LiveMessageUpdate, { type: "thinking" }> {
+  const count = (value: unknown) => {
+    const number = Math.trunc(Number(value ?? 0));
+    return Number.isFinite(number) && number > 0 ? number : 0;
+  };
+  return {
+    type: "thinking",
+    segment: count(payload?.segment),
+    durationMs: count(payload?.durationMs),
+    lines: Array.isArray(payload?.lines)
+      ? payload.lines.filter((line): line is string => typeof line === "string")
+      : [],
+  };
+}
 
 export function reduceLiveMessageBlocks(
   current: readonly MessageBlock[],
   update: LiveMessageUpdate,
 ): MessageBlock[] {
+  if (update.type === "thinking") return upsertThinkingBlock(current, update);
   // A reset drops the text streamed so far (it will not be in the reply) and keeps the steps,
   // including tools still waiting on that text to finish its sentence.
   let blocks = current;
@@ -361,6 +395,31 @@ export function reduceLiveMessageBlocks(
       ...(pendingToolNames.length > 0 ? { pendingToolNames } : {}),
     },
   ];
+}
+
+/**
+ * A live reasoning snapshot replaces the block of its segment in place, so a repeated or
+ * out-of-order delivery shows the newest lines without duplicating the card.
+ */
+function upsertThinkingBlock(
+  current: readonly MessageBlock[],
+  update: Extract<LiveMessageUpdate, { type: "thinking" }>,
+): MessageBlock[] {
+  const block: MessageBlock = {
+    kind: "thinking",
+    durationMs: update.durationMs,
+    lines: update.lines,
+  };
+  let ordinal = -1;
+  let replaced = false;
+  const next = current.map((existing) => {
+    if (existing.kind !== "thinking") return existing;
+    ordinal += 1;
+    if (ordinal !== update.segment) return existing;
+    replaced = true;
+    return block;
+  });
+  return replaced ? next : [...current, block];
 }
 
 function liveMessageText(blocks: readonly MessageBlock[]): string {
@@ -802,7 +861,15 @@ export function sanitizeJsonValue<T>(value: T): T {
   return value;
 }
 
-export function createStreamingRedactor(secrets: string[]) {
+/** Redacts secrets in text that arrives in chunks, holding back a possible match's start. */
+export interface StreamingRedactor {
+  push(chunk: string): string;
+  finish(): string;
+  /** Drops what is held back without showing it, but keeps matching against it. */
+  skip(): void;
+}
+
+export function createStreamingRedactor(secrets: string[]): StreamingRedactor {
   const values = protectedValues(secrets);
   const maxLength = Math.max(0, ...values.map((value) => value.length));
   let buffer = "";

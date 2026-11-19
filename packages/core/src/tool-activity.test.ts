@@ -7,6 +7,7 @@ describe("tool activity", () => {
     { kind: "steps", steps: [{ label: "Browser", count: 1 }] },
     { kind: "progress", text: "Using browser", activity: true },
     { kind: "progress", text: "Using brex: list_expenses", activity: true },
+    { kind: "thinking", durationMs: 1_200, lines: ["Checking the totals."] },
   ])("recognizes $kind activity", (block) => {
     expect(isToolActivityBlock(block)).toBe(true);
   });

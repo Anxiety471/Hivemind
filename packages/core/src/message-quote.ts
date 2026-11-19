@@ -191,6 +191,8 @@ function replyBlockText(block: MessageBlock): string {
     case "file":
       return block.name || blocksToAgentHistoryText([block]);
     case "delivery":
+      // Reasoning is not the reply, so a reply to it never quotes it.
+    case "thinking":
       return "";
   }
 }

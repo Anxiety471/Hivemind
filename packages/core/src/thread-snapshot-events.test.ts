@@ -275,6 +275,36 @@ describe("thread event reduction", () => {
     ]);
   });
 
+  it("shows live reasoning as a thinking card that a repeat updates in place", () => {
+    const initial = snapshot([]);
+    const first = reduceThreadSnapshot(
+      initial,
+      event({
+        type: "thread.thinking",
+        seq: 4,
+        runId: "run-1",
+        payload: { segment: 0, durationMs: 250, lines: ["Checking"] },
+      }),
+    );
+    const second = reduceThreadSnapshot(
+      first,
+      event({
+        type: "thread.thinking",
+        seq: 5,
+        runId: "run-1",
+        payload: { segment: 0, durationMs: 800, lines: ["Checking", "Weighing"] },
+      }),
+    );
+
+    expect(second?.cursor).toBe(5);
+    expect(second?.messages).toEqual([
+      expect.objectContaining({
+        id: "progress:run-1",
+        blocks: [{ kind: "thinking", durationMs: 800, lines: ["Checking", "Weighing"] }],
+      }),
+    ]);
+  });
+
   it("keeps hidden token progress so re-enabling streaming stays continuous", () => {
     const initial = snapshot([]);
     const afterTokens = reduceThreadSnapshot(
@@ -555,6 +585,7 @@ describe("thread event reduction", () => {
     expect(isThreadSnapshotEvent(event({ type: "computer.takeover.requested" }))).toBe(true);
     expect(isThreadSnapshotEvent(event({ type: "computer.takeover.released" }))).toBe(true);
     expect(isThreadSnapshotEvent(event({ type: "agent.tool.completed" }))).toBe(true);
+    expect(isThreadSnapshotEvent(event({ type: "thread.thinking" }))).toBe(true);
     expect(isThreadSnapshotEvent({ type: "thread.message.reaction" })).toBe(false);
   });
 

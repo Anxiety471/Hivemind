@@ -6,5 +6,9 @@ export function isRetiredImportSetup(block: MessageBlock): boolean {
 }
 
 export function isToolActivityBlock(block: MessageBlock): boolean {
-  return block.kind === "steps" || (block.kind === "progress" && block.activity === true);
+  return (
+    block.kind === "thinking" ||
+    block.kind === "steps" ||
+    (block.kind === "progress" && block.activity === true)
+  );
 }

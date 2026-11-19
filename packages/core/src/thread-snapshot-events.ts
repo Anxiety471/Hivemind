@@ -9,6 +9,7 @@ import {
   showsAsLiveStep,
   stopsRunHelpers,
   subagentBlockFromPayload,
+  thinkingLiveUpdate,
 } from "./events.js";
 import { mergeThreadHistory, upsertMessageById } from "./message-pages.js";
 import { payloadAuthor, replyMetadata } from "./message-replies.js";
@@ -68,6 +69,7 @@ export function isThreadSnapshotEvent(event: { type: string }): boolean {
   return (
     event.type === "thread.cleared" ||
     event.type === "thread.progress" ||
+    event.type === "thread.thinking" ||
     event.type === "thread.subagent" ||
     event.type === "thread.cloud_agent" ||
     event.type === "agent.tool.called" ||
@@ -288,14 +290,20 @@ function reduce(prev: LiveThreadSnapshot, event: ThreadSnapshotEvent): LiveThrea
     };
   }
   if (event.type === "agent.tool.called" && !showsAsLiveStep(payload.name)) return advanced();
-  if (event.type === "thread.progress" || event.type === "agent.tool.called") {
+  if (
+    event.type === "thread.progress" ||
+    event.type === "thread.thinking" ||
+    event.type === "agent.tool.called"
+  ) {
     const liveId = progressMessageId(event);
     const { previous, remaining } = takeLiveMessage(prev.messages, liveId);
     const blocks = reduceLiveMessageBlocks(
       previous?.blocks ?? [],
       event.type === "thread.progress"
         ? { type: "progress", payload }
-        : { type: "tool", name: String(payload.name ?? "") },
+        : event.type === "thread.thinking"
+          ? thinkingLiveUpdate(payload)
+          : { type: "tool", name: String(payload.name ?? "") },
     );
     return {
       ...prev,
