@@ -181,7 +181,7 @@ func (r *KeyRing) SealRow(ctx context.Context, model string, row map[string]any)
 			value = canonicalJSON(value)
 			words = append(words, historySearchText(value))
 			indexedStrings = append(indexedStrings, stringsIn(value)...)
-			sealed, err := SealJSON(value, field.Spec.PlainKeys, encrypt)
+			sealed, err := sealJSON(value, field.Spec.PlainKeys, encrypt)
 			if err != nil {
 				return nil, err
 			}

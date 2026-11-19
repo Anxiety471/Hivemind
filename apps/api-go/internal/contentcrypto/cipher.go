@@ -402,7 +402,7 @@ func sameJSONValue(next, previous any) bool {
 	if !nextValue.Comparable() {
 		return false
 	}
-	return nextValue.Interface() == previousValue.Interface()
+	return nextValue.Equal(previousValue)
 }
 
 // isRecord is content-crypto.ts:98-100: a non-null object that is not an array.
@@ -430,7 +430,12 @@ func isSealedJSON(value any) (string, bool) {
 // copies of the plain keys so existing JSON filters still match, and the sealed
 // copy is the source of truth on read.
 func SealJSON(value any, plainKeys map[string]bool, seal func(string) (string, error)) (any, error) {
-	value = canonicalJSON(value)
+	return sealJSON(canonicalJSON(value), plainKeys, seal)
+}
+
+// sealJSON seals a value already in canonical JSON shape; SealRow canonicalizes
+// a column once and calls this rather than canonicalizing it again.
+func sealJSON(value any, plainKeys map[string]bool, seal func(string) (string, error)) (any, error) {
 	one := func(item any) (any, error) {
 		sealed := map[string]any{}
 		if record, ok := isRecord(item); ok {
