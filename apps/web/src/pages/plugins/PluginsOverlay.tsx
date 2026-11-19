@@ -397,7 +397,8 @@ export function PluginsOverlay({
             {browsing && appCount > 0 ? (
               <Button
                 variant="ghost"
-                className="-my-1 h-9 gap-2.5 px-2.5 text-body text-muted-foreground"
+                size="lg"
+                className="-my-1 gap-2.5 px-2.5 text-body text-muted-foreground"
                 onClick={() => setView("manage")}
               >
                 <span aria-hidden className="flex -space-x-1.5">
@@ -424,7 +425,8 @@ export function PluginsOverlay({
             {browsing && onOpenTemplates ? (
               <Button
                 variant="ghost"
-                className="-my-1 h-9 gap-2 px-2.5 text-body text-muted-foreground"
+                size="lg"
+                className="-my-1 gap-2 px-2.5 text-body text-muted-foreground"
                 data-testid="open-bot-templates"
                 onClick={onOpenTemplates}
               >
@@ -464,7 +466,7 @@ export function PluginsOverlay({
               }}
               aria-label={t`Search apps`}
               placeholder={t`Search apps`}
-              className="h-11 rounded-xl px-4 md:text-body-lg"
+              size="xl"
             />
             {categories.length >= 2 || category ? (
               <div className="flex flex-wrap gap-2" data-testid="integration-categories">
@@ -472,10 +474,9 @@ export function PluginsOverlay({
                   <Button
                     key={name ?? "all"}
                     type="button"
-                    size="sm"
                     variant={category === name ? "default" : "secondary"}
                     aria-pressed={category === name}
-                    className="h-8 rounded-full px-3.5 text-body-sm"
+                    className="rounded-full px-3.5 text-body-sm"
                     onClick={() => {
                       setCategory(name);
                       setPluginCount(PLUGIN_PAGE_SIZE);
@@ -490,13 +491,12 @@ export function PluginsOverlay({
                       render={
                         <Button
                           type="button"
-                          size="sm"
                           variant={
                             category && !categories.slice(0, CHIP_COUNT).includes(category)
                               ? "default"
                               : "secondary"
                           }
-                          className="h-8 rounded-full px-3.5 text-body-sm"
+                          className="rounded-full px-3.5 text-body-sm"
                         />
                       }
                     >

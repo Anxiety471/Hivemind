@@ -99,7 +99,7 @@ function LegacyPaywallPage({ status, client }: { status: BillingStatus; client: 
           </ul>
         ) : null}
         {showCheckout ? (
-          <Button type="submit" size="lg" disabled={pending || signingOut} className={submitClass}>
+          <Button type="submit" size="xl" disabled={pending || signingOut} className={submitClass}>
             {status.trialAvailable ? (
               <Trans>Start {trialDays}-day free trial</Trans>
             ) : (
@@ -110,7 +110,7 @@ function LegacyPaywallPage({ status, client }: { status: BillingStatus; client: 
         {showPortal ? (
           <Button
             type="button"
-            size="lg"
+            size="xl"
             variant={showCheckout ? "secondary" : "default"}
             disabled={pending || signingOut}
             className={submitClass}
