@@ -320,6 +320,9 @@ export async function streamThinking(ctx: RunContext, text: string) {
     lastFlushedAt: 0,
   };
   appendThinkingText(reply.thinking, reply.thinkingRedactor.push(text));
+  // A late delta can complete a secret whose prefix the end marker already flushed; the
+  // streaming buffer no longer knows that prefix, so re-redact the whole segment.
+  reply.thinking.text = redactSecrets(reply.thinking.text, ctx.secrets);
   const now = Date.now();
   if (now - reply.thinking.lastFlushedAt < THINKING_LIVE_FLUSH_MS) return;
   reply.thinking.lastFlushedAt = now;
@@ -378,7 +381,10 @@ async function publishThinkingSnapshot(
   snapshot: { segment: number; durationMs: number; lines: string[] },
 ) {
   const { deps, run, runId, bot, thread } = ctx;
-  if (snapshot.lines.length === 0) return;
+  // This payload reaches the database and every thread subscriber before the run finalizes,
+  // so it is re-redacted here whatever path built the lines.
+  const lines = snapshot.lines.map((line) => redactSecrets(line, ctx.secrets));
+  if (lines.length === 0) return;
   try {
     await deps.events.append({
       spaceId: run.spaceId,
@@ -390,7 +396,7 @@ async function publishThinkingSnapshot(
       payload: {
         segment: snapshot.segment,
         durationMs: Math.max(0, Math.round(snapshot.durationMs)),
-        lines: snapshot.lines,
+        lines,
       },
     });
   } catch (error) {
