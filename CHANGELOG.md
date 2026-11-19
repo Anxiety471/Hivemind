@@ -15,6 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Full-window pages (free access, admin plugins, the board, link pages) share one page header, and its title now uses the standard heading size.
 - Keyboard focus uses one ring treatment across hand-rolled controls, and selectable rows (plugins, skills, bot templates, vault credentials) show a real focus ring instead of a hover highlight alone.
 - On narrow screens the ticket board swipes one column at a time; wider screens keep equal columns.
+- The transcript's activity panel, including reasoning cards, is now shown by default; the existing setting still hides it.
 
 ### Fixed
 

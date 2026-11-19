@@ -2,9 +2,12 @@ import { createStoredPreference } from "./stored-preference";
 
 export const TOOL_ACTIVITY_STORAGE_KEY = "rakazo.showToolActivity";
 
-/** Only a saved "on" shows tool cards. Missing or unreadable storage stays off so chats stay clean. */
+/**
+ * Only a saved "off" hides tool cards. Missing, unreadable, or unknown storage stays on so the
+ * activity panel, including reasoning cards, shows by default.
+ */
 export function normalizeToolActivityEnabled(raw: string | null | undefined): boolean {
-  return raw?.trim().toLowerCase() === "on";
+  return raw?.trim().toLowerCase() !== "off";
 }
 
 export const toolActivityPreference = createStoredPreference({

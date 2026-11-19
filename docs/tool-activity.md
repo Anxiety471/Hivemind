@@ -5,7 +5,7 @@ tools the bot called during the run.
 
 ## Behavior
 
-- Off by default, so chats stay clean. **Settings → General → Advanced → Show tool activity** turns it on. Nothing stored counts as off; only a saved "on" shows the cards.
+- On by default, including the reasoning card, so the activity panel is always available. **Settings → General → Advanced → Show tool activity** turns it off. Only a saved "off" hides the cards; a missing or unreadable choice shows them.
 - The choice is stored in the browser's local storage (`rakazo.showToolActivity`), so it
   applies to that browser or desktop install only. It is not saved to the account and does
   not sync between devices.
