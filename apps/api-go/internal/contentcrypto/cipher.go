@@ -559,29 +559,43 @@ func JSONNeedsSealing(value any) bool {
 	return false
 }
 
-// normalizeNegativeZero rewrites a negative zero as 0, which is what
-// JSON.stringify writes; Go's encoder would seal "-0" and TypeScript would
-// parse a different number than it wrote. Containers are copied only when a
-// child changes.
-func normalizeNegativeZero(value any) (any, bool) {
+// normalizeJSONNumbers rewrites the number forms JSON.stringify would not
+// write: negative zero becomes 0, and a non-finite number (NaN or ±Infinity,
+// including a json.Number that overflows float64 such as "1e400") becomes null.
+// Go's encoder would write "-0" or reject the non-finite value, and TypeScript
+// would then read a different value than it wrote. Containers are copied only
+// when a child changes.
+func normalizeJSONNumbers(value any) (any, bool) {
 	switch typed := value.(type) {
 	case float64:
+		if math.IsNaN(typed) || math.IsInf(typed, 0) {
+			return nil, true
+		}
 		if typed == 0 && math.Signbit(typed) {
 			return float64(0), true
 		}
 	case float32:
-		if typed == 0 && math.Signbit(float64(typed)) {
+		number := float64(typed)
+		if math.IsNaN(number) || math.IsInf(number, 0) {
+			return nil, true
+		}
+		if typed == 0 && math.Signbit(number) {
 			return float32(0), true
 		}
 	case json.Number:
 		number, err := strconv.ParseFloat(typed.String(), 64)
-		if err == nil && number == 0 && math.Signbit(number) {
-			return json.Number("0"), true
+		if err == nil || errors.Is(err, strconv.ErrRange) {
+			if math.IsNaN(number) || math.IsInf(number, 0) {
+				return nil, true
+			}
+			if number == 0 && math.Signbit(number) {
+				return json.Number("0"), true
+			}
 		}
 	case []any:
 		var out []any
 		for index, item := range typed {
-			next, changed := normalizeNegativeZero(item)
+			next, changed := normalizeJSONNumbers(item)
 			if !changed {
 				continue
 			}
@@ -597,7 +611,7 @@ func normalizeNegativeZero(value any) (any, bool) {
 	case map[string]any:
 		var out map[string]any
 		for key, item := range typed {
-			next, changed := normalizeNegativeZero(item)
+			next, changed := normalizeJSONNumbers(item)
 			if !changed {
 				continue
 			}
@@ -618,9 +632,9 @@ func normalizeNegativeZero(value any) (any, bool) {
 
 // marshalJSON encodes a decoded JSON value the way JSON.stringify would leave
 // it parseable by TypeScript: no HTML escaping, negative zero written as 0,
-// and json.Number (or integer Go values) kept exact.
+// non-finite numbers as null, and json.Number (or integer Go values) kept exact.
 func marshalJSON(value any) (string, error) {
-	normalized, _ := normalizeNegativeZero(value)
+	normalized, _ := normalizeJSONNumbers(value)
 	var builder strings.Builder
 	encoder := json.NewEncoder(&builder)
 	encoder.SetEscapeHTML(false)

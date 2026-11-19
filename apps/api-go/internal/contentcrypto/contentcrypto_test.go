@@ -339,6 +339,9 @@ func TestDecodeBase64LenientMatchesNode(t *testing.T) {
 		"QUJDéQUJD":      "414243414243",
 		"A😀B":            "",
 		"AA😀AA":          "00",
+		// 40 'A' digits then non-ASCII units: Node reads 'A', 'C', 'A' from
+		// Ł/Ń/Ł, then '=' from Ľ and stops, yielding 32 bytes ending 0020.
+		"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAŁŃŁĽGTA": "0000000000000000000000000000000000000000000000000000000000000020",
 	}
 	for input, wantHex := range cases {
 		got := hexString(decodeBase64Lenient(input))
@@ -608,5 +611,103 @@ func TestSealJSONTypedStringSliceKeepsEveryElement(t *testing.T) {
 	}
 	if !reflect.DeepEqual(opened, []any{"a", "b"}) {
 		t.Fatalf("opened = %#v", opened)
+	}
+}
+
+func TestSealJSONWritesNonFiniteNumbersAsNull(t *testing.T) {
+	identity := func(plaintext string) (string, error) { return plaintext, nil }
+	cases := []struct {
+		name  string
+		value any
+		want  string
+	}{
+		{"overflowing number", map[string]any{"n": json.Number("1e400")}, `{"n":null}`},
+		{"negative overflow", map[string]any{"n": json.Number("-1e400")}, `{"n":null}`},
+		{"nan number", map[string]any{"n": json.Number("NaN")}, `{"n":null}`},
+		{"float non-finite", map[string]any{"a": math.Inf(1), "b": math.NaN(), "c": math.Inf(-1)}, `{"a":null,"b":null,"c":null}`},
+		{"nested", map[string]any{"a": []any{json.Number("1e400"), json.Number("1.5")}}, `{"a":[null,1.5]}`},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			sealed, err := SealJSON(testCase.value, nil, identity)
+			if err != nil {
+				t.Fatalf("seal: %v", err)
+			}
+			record, ok := sealed.(map[string]any)
+			if !ok {
+				t.Fatalf("sealed value is %T", sealed)
+			}
+			if got := record[SealedField]; got != testCase.want {
+				t.Fatalf("sealed plaintext = %q, want %q", got, testCase.want)
+			}
+		})
+	}
+}
+
+func TestMasterKeyTrimMatchesJavaScript(t *testing.T) {
+	hexKey := strings.Repeat("ab", 32)
+	parse := func(entry string) ([]MasterKey, error) {
+		return MasterKeysFromEnv(func(name string) string {
+			switch name {
+			case "ENCRYPTION_KEY":
+				return "test-encryption-key-0123456789abcdef"
+			case "ENCRYPTION_MASTER_KEYS":
+				return entry
+			}
+			return ""
+		})
+	}
+	// String.prototype.trim strips U+FEFF (and the Zs spaces) but not U+0085.
+	accepted := []string{
+		"k1:" + "\uFEFF" + hexKey,
+		"k1:" + hexKey + "\uFEFF",
+		"k1:" + "\u00A0" + hexKey + "\u3000",
+		"\uFEFFk1:" + hexKey,
+		"k1:" + strings.Repeat("A", 40) + "ŁŃŁĽGTA",
+	}
+	for _, entry := range accepted {
+		keys, err := parse(entry)
+		if err != nil {
+			t.Fatalf("parse %q: %v", entry, err)
+		}
+		if entry == accepted[4] {
+			if got := hexString(keys[0].Key); got != strings.Repeat("0", 62)+"20" {
+				t.Fatalf("non-ASCII material = %s", got)
+			}
+			continue
+		}
+		if got := hexString(keys[0].Key); got != hexKey {
+			t.Fatalf("parse %q = %s", entry, got)
+		}
+	}
+	// U+0085 is not JS whitespace: a 64-hex key with one attached is 65 runes,
+	// takes the base64 branch and decodes to 48 bytes, which must be rejected.
+	for _, entry := range []string{"k1:" + hexKey + "\u0085", "k1:" + "\u0085" + hexKey} {
+		if _, err := parse(entry); err == nil {
+			t.Fatalf("U+0085 must not be trimmed: %q", entry)
+		}
+	}
+}
+
+func TestEncryptionKeyTrimMatchesJavaScript(t *testing.T) {
+	getenv := func(key string) func(string) string {
+		return func(name string) string {
+			if name == "ENCRYPTION_KEY" {
+				return key
+			}
+			return ""
+		}
+	}
+	// U+FEFF is trimmed away, leaving nothing: the key is required.
+	if _, err := MasterKeysFromEnv(getenv("\uFEFF")); err == nil {
+		t.Fatal("a U+FEFF-only ENCRYPTION_KEY is empty after JS trim")
+	}
+	// U+0085 is not trimmed, so JS sees a non-empty (odd) key and so must Go.
+	keys, err := MasterKeysFromEnv(getenv("\u0085"))
+	if err != nil {
+		t.Fatalf("U+0085 is not JS whitespace: %v", err)
+	}
+	if len(keys) != 1 || keys[0].ID != DerivedMasterKeyID {
+		t.Fatalf("derived key missing: %#v", keys)
 	}
 }

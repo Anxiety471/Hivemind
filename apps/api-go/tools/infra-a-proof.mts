@@ -496,6 +496,32 @@ for (const failure of failureCases) {
       assert.equal(goOpened.plaintext, tsOpened);
     });
   }
+  // The plain standard-alphabet variant is only meaningful when the body
+  // contains "-" or "_"; force a body with both so the rewrite is never a
+  // no-op.
+  {
+    let mixed = ciphertextA;
+    let mixedPlaintext = contentA;
+    for (let attempt = 0; !(mixed.includes("-") && mixed.includes("_")); attempt += 1) {
+      mixedPlaintext = `mixed alphabet body ${attempt}`;
+      mixed = encryptText(key, contentLocation, mixedPlaintext);
+    }
+    const mixedPrefix = mixed.slice(0, mixed.indexOf(":", "rkz1:".length) + 1);
+    const mixedBody = mixed.slice(mixedPrefix.length);
+    const standardMixed = `${mixedPrefix}${mixedBody.replace(/-/g, "+").replace(/_/g, "/")}`;
+    const tsOpened = decryptText(key, contentLocation, standardMixed);
+    const goOpened = await go({
+      op: "decrypt-text",
+      keyId: keyA,
+      ...contentLocation,
+      value: standardMixed,
+    });
+    await check("body form: standard alphabet changes both - and _", () => {
+      assert(mixedBody.includes("-") && mixedBody.includes("_"));
+      assert.equal(tsOpened, mixedPlaintext);
+      assert.equal(goOpened.plaintext, mixedPlaintext);
+    });
+  }
   // "中" has low byte 0x2D ("-"), a real digit: two of them change the body
   // and both sides must reject it. A byte-wise Go decoder would ignore them
   // and wrongly open the plaintext.

@@ -32,7 +32,7 @@ var masterKeyIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,32}$`)
 // key still unwraps.
 func MasterKeysFromEnv(getenv func(string) string) ([]MasterKey, error) {
 	encryptionKey := getenv("ENCRYPTION_KEY")
-	if strings.TrimSpace(encryptionKey) == "" {
+	if trimJS(encryptionKey) == "" {
 		// TypeScript allows a development placeholder when NODE_ENV is not
 		// production. Go refuses: a process serving content must have material.
 		return nil, errors.New("ENCRYPTION_KEY is required for content encryption")
@@ -44,7 +44,7 @@ func MasterKeysFromEnv(getenv func(string) string) ([]MasterKey, error) {
 	var keys []MasterKey
 	seen := map[string]bool{DerivedMasterKeyID: true}
 	for _, entry := range strings.Split(getenv("ENCRYPTION_MASTER_KEYS"), ",") {
-		entry = strings.TrimSpace(entry)
+		entry = trimJS(entry)
 		if entry == "" {
 			continue
 		}
@@ -71,6 +71,23 @@ func MasterKeysFromEnv(getenv func(string) string) ([]MasterKey, error) {
 	return append(keys, MasterKey{ID: DerivedMasterKeyID, Key: derived}), nil
 }
 
+// trimJS is JavaScript's String.prototype.trim (content-keys.ts:18,25): the
+// ECMAScript WhiteSpace and LineTerminator sets. Go's strings.TrimSpace differs:
+// it strips U+0085 (NEL), which JS keeps, and keeps U+FEFF (ZWNBSP), which JS
+// strips. A master key or ENCRYPTION_KEY goes through the same trim in both
+// implementations, so this must match exactly.
+func trimJS(value string) string {
+	return strings.TrimFunc(value, func(character rune) bool {
+		switch character {
+		case '\u0009', '\u000A', '\u000B', '\u000C', '\u000D', '\u0020',
+			'\u00A0', '\uFEFF', '\u1680', '\u2028', '\u2029', '\u202F',
+			'\u205F', '\u3000':
+			return true
+		}
+		return character >= '\u2000' && character <= '\u200A'
+	})
+}
+
 // deriveMasterKey is hkdfSync("sha256", ENCRYPTION_KEY, "rakazo",
 // "rakazo/content-master-key/v1", 32) on the raw, untrimmed value
 // (content-keys.ts:38-46).
@@ -82,7 +99,7 @@ func deriveMasterKey(encryptionKey string) ([]byte, error) {
 // parseKeyMaterial reads 32 bytes as 64 hex characters or base64
 // (content-keys.ts:22-27).
 func parseKeyMaterial(value string) ([]byte, error) {
-	trimmed := strings.TrimSpace(value)
+	trimmed := trimJS(value)
 	var key []byte
 	if len(trimmed) == 64 && isHex(trimmed) {
 		decoded, err := hex.DecodeString(trimmed)
