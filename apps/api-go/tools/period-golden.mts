@@ -4,7 +4,7 @@
  * Run from a checkout that has node_modules, e.g. the deployed one:
  *   node_modules/.bin/tsx apps/api-go/tools/period-golden.mts > period_golden.json
  */
-import { spendingPeriodStart } from "../../../packages/core/src/spending.js";
+import { spendingPeriodStart } from "../../../packages/core/src/billing/spending.js";
 
 const zones = [
   "UTC",
