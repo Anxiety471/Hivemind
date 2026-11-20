@@ -3,6 +3,8 @@ package placeholderlint
 import (
 	"slices"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // TemplateToken flags values that are, or contain as a clearly delimited
@@ -165,13 +167,23 @@ func angleTokenDenied(content string, extra []string) bool {
 }
 
 func angleDelimited(value string, start, end int) bool {
-	if start > 0 && isWordByte(value[start-1]) {
-		return false
+	if start > 0 {
+		previous, _ := utf8.DecodeLastRuneInString(value[:start])
+		if isWordRune(previous) {
+			return false
+		}
 	}
-	if end+1 < len(value) && isWordByte(value[end+1]) {
-		return false
+	if end+1 < len(value) {
+		next, _ := utf8.DecodeRuneInString(value[end+1:])
+		if isWordRune(next) {
+			return false
+		}
 	}
 	return true
+}
+
+func isWordRune(character rune) bool {
+	return unicode.IsLetter(character) || unicode.IsDigit(character) || character == '_'
 }
 
 func isWordByte(character byte) bool {
