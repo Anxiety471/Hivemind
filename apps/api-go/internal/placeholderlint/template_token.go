@@ -198,8 +198,9 @@ func isWordByte(character byte) bool {
 // forms such as "%.2f", "%02d" and "%3.1f", flag forms such as "%+v", "%#v"
 // and "%-10s", and the positional tokens "%1" through "%9". Percent-encoding
 // comes first: a leading 1-9 followed by a hexadecimal digit, or 0 followed
-// by d/D/f/F, is treated as an escape ("%20", "%2F", "%25", "%1F", "%0d"),
-// never as printf. A token followed by another word character does not count,
+// by a hexadecimal digit that is also a verb once case-folded (b, d, e, f),
+// is treated as an escape ("%20", "%2F", "%25", "%1F", "%0d", "%0b"), never
+// as printf. A token followed by another word character does not count,
 // which keeps words like "%done" and "%d0" alone.
 func containsPrintfToken(value string) bool {
 	for index := range len(value) {
@@ -222,11 +223,8 @@ func percentEncodingLike(value string, index int) bool {
 	}
 	leading := value[index+1]
 	if leading == '0' {
-		switch value[index+2] {
-		case 'd', 'D', 'f', 'F':
-			return true
-		}
-		return false
+		second := value[index+2]
+		return isHexByte(second) && isPrintfVerb(lowerASCII(second))
 	}
 	return leading >= '1' && leading <= '9' && isHexByte(value[index+2])
 }
@@ -239,16 +237,20 @@ func numericPrintfToken(value string, index int) bool {
 	for cursor < len(value) && (isASCIIDigit(value[cursor]) || value[cursor] == '.') {
 		cursor++
 	}
-	if cursor >= len(value) {
-		return false
-	}
-	switch value[cursor] {
-	case 's', 'd', 'f', 'v', 'q', 't', 'x', 'X', 'e', 'g', 'E', 'G', 'b', 'o':
-	default:
+	if cursor >= len(value) || !isPrintfVerb(value[cursor]) {
 		return false
 	}
 	following := cursor + 1
 	return following >= len(value) || !isWordByte(value[following])
+}
+
+func isPrintfVerb(character byte) bool {
+	switch character {
+	case 's', 'd', 'f', 'v', 'q', 't', 'x', 'X', 'e', 'g', 'E', 'G', 'b', 'o':
+		return true
+	default:
+		return false
+	}
 }
 
 func isPrintfFlag(character byte) bool {
