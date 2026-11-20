@@ -162,19 +162,20 @@ describe("modelRetryDecision", () => {
 
   it("stops waiting for a service that does not answer", async () => {
     vi.stubEnv("MODEL_RETRY_RULES_URL", RULES_URL);
+    let requestSignal: AbortSignal | undefined;
     vi.stubGlobal(
       "fetch",
       vi.fn((_url: string, init: RequestInit) => {
+        requestSignal = init.signal ?? undefined;
         const { promise, reject } = deferred<Response>();
         init.signal?.addEventListener("abort", () => reject(init.signal?.reason));
         return promise;
       }),
     );
-    const started = Date.now();
     await expect(decide("HTTP 503 unavailable")).resolves.toEqual({
       switchToBackup: true,
       retrySameModel: true,
     });
-    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(requestSignal?.reason).toMatchObject({ name: "TimeoutError" });
   });
 });

@@ -65,6 +65,11 @@ import { fallbackSystemPrompt } from "../runtime.prompt.js";
 import { withoutThinkingFrom } from "../thinking-signatures.js";
 import { estimatePiImageTokens } from "./pi-image-context.js";
 import {
+  continuationRepeat,
+  MAX_CONTINUATION_MARKER,
+  MAX_CONTINUATION_OVERLAP,
+} from "./pi-runtime-continuation.js";
+import {
   assistantText,
   messageHasToolCall,
   modelFailure,
@@ -73,13 +78,7 @@ import {
   sanitizeProviderError,
 } from "./pi-runtime-errors.js";
 import type { FallbackStreamState } from "./pi-runtime-fallback.js";
-import {
-  continuationRepeat,
-  fallbackAwareModelStream,
-  MAX_CONTINUATION_MARKER,
-  MAX_CONTINUATION_OVERLAP,
-  MAX_SELF_RECOVERIES_PER_RUN,
-} from "./pi-runtime-fallback.js";
+import { fallbackAwareModelStream, MAX_SELF_RECOVERIES_PER_RUN } from "./pi-runtime-fallback.js";
 import {
   isHistoryReply,
   speakerText,

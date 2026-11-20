@@ -33,7 +33,7 @@ vi.mock("./models/pi-openai-compatible-provider.js", () => ({
 }));
 
 import { PiAgentRuntime } from "./pi-runtime.js";
-import { continuationOverlap, continuationRepeat } from "./pi-runtime-fallback.js";
+import { continuationOverlap, continuationRepeat } from "./pi-runtime-continuation.js";
 
 // A plain model with a card ceiling above the 4k completion default, and a reasoning model
 // already at its 32k default with the input reserve as the limit.

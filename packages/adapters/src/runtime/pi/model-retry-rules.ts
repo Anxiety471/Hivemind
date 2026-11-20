@@ -5,7 +5,7 @@ import {
   isTransientModelError,
   modelErrorStatus,
 } from "@rakazo/adapter-kit";
-import { isContentFilterRejection, normalizeRunError } from "@rakazo/core";
+import { deadlineSignal, isContentFilterRejection, normalizeRunError } from "@rakazo/core";
 import { getLogger } from "@rakazo/logging";
 import { unrecognizedModelFailure } from "./pi-runtime-errors.js";
 
@@ -129,7 +129,7 @@ export async function modelRetryDecision(
         runId: log.runId,
         model: log.model,
       }),
-      signal: AbortSignal.any([signal, AbortSignal.timeout(RULES_SERVICE_TIMEOUT_MS)]),
+      signal: deadlineSignal(RULES_SERVICE_TIMEOUT_MS, signal),
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     remote = parseDecision(await response.json());
