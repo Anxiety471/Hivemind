@@ -62,11 +62,11 @@ import { TimeSeparator, UnreadDivider } from "./chat-context";
 import { MessageView } from "./message-view";
 import { QuoteSelectionButton } from "./quote-selection-button";
 
-/** Bubbles stop at a readable line length instead of stretching with wide windows. */
+/** User bubbles stop at a readable line length; bot replies use the column, leaving room for the hover rail. */
 export function bubbleFrameWidth(role: ThreadMessage["role"]) {
   return role === "user"
     ? "max-w-[min(84%,calc(100%_-_8rem),39rem)] [@media(hover:none)]:max-w-[min(84%,39rem)]"
-    : "max-w-[min(88%,calc(100%_-_8rem),39rem)] [@media(hover:none)]:max-w-[min(88%,39rem)]";
+    : "max-w-[min(96%,calc(100%_-_5rem))] [@media(hover:none)]:max-w-[96%]";
 }
 
 /** Rows drawn in the frame a chat opens; the rest mount right after without blocking input. */
