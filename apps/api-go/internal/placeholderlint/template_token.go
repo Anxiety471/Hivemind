@@ -196,12 +196,14 @@ func isWordByte(character byte) bool {
 // containsPrintfToken looks for "%s", "%d", "%f", "%v", "%q", "%t", "%x",
 // "%X", "%e", "%g", "%E", "%G", "%b" and "%o", numeric width and precision
 // forms such as "%.2f", "%02d" and "%3.1f", flag forms such as "%+v", "%#v"
-// and "%-10s", and the positional tokens "%1" through "%9". Percent-encoding
-// comes first: a leading 1-9 followed by a hexadecimal digit, or 0 followed
-// by a hexadecimal digit that is also a verb once case-folded (b, d, e, f),
-// is treated as an escape ("%20", "%2F", "%25", "%1F", "%0d", "%0b"), never
-// as printf. A token followed by another word character does not count,
-// which keeps words like "%done" and "%d0" alone.
+// and "%-10s", and the positional tokens "%1" through "%9". The space flag is
+// deliberately not recognized so ratio and chemistry text such as "5% v/v"
+// and "5% e.g." stays quiet. Percent-encoding comes first: a leading 1-9
+// followed by a hexadecimal digit, or 0 followed by a hexadecimal digit that
+// is also a verb once case-folded (b, d, e, f), is treated as an escape
+// ("%20", "%2F", "%25", "%1F", "%0d", "%0b"), never as printf. A token
+// followed by another word character does not count, which keeps words like
+// "%done" and "%d0" alone.
 func containsPrintfToken(value string) bool {
 	for index := range len(value) {
 		if value[index] != '%' || percentEncodingLike(value, index) {
@@ -255,7 +257,7 @@ func isPrintfVerb(character byte) bool {
 
 func isPrintfFlag(character byte) bool {
 	switch character {
-	case '+', '#', '-', ' ':
+	case '+', '#', '-':
 		return true
 	default:
 		return false
