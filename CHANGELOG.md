@@ -18,6 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Keyboard focus uses one ring treatment across hand-rolled controls, and selectable rows (plugins, skills, bot templates, vault credentials) show a real focus ring instead of a hover highlight alone.
 - On narrow screens the ticket board swipes one column at a time; wider screens keep equal columns.
 - The transcript's activity panel, including reasoning cards, is now shown by default; the existing setting still hides it.
+- With `MODEL_RETRY_RULES_URL` set, the Go gateway decides whether a failed model call moves to a backup model or retries the same model. If the gateway doesn't answer, the runtime uses its own copy of the same rules ([configuration](docs/self-host-configuration.md)).
 
 ### Fixed
 

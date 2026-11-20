@@ -95,6 +95,16 @@ func TestCorpusMatchesTypeScript(t *testing.T) {
 		if decision.SwitchToBackup != testCase.SwitchToBackup || decision.RetrySameModel != testCase.RetrySameModel {
 			t.Fatalf("%sDecide = %+v, want {SwitchToBackup:%t RetrySameModel:%t}", prefix, decision, testCase.SwitchToBackup, testCase.RetrySameModel)
 		}
+		// The worker logs a failure as unexplained only when nothing placed it.
+		placed := testCase.RequestLimitTooSmall || testCase.ProviderUnavailable ||
+			testCase.CredentialRejected || testCase.ContentFilter
+		wantUnexplained := !placed && testCase.Unrecognized
+		if (decision.Unexplained != nil) != wantUnexplained {
+			t.Fatalf("%sDecide unexplained = %t, want %t", prefix, decision.Unexplained != nil, wantUnexplained)
+		}
+		if decision.Unexplained != nil && *decision.Unexplained != unrecognized {
+			t.Fatalf("%sDecide unexplained = %+v, want %+v", prefix, *decision.Unexplained, unrecognized)
+		}
 		if got := IsComputerAllowanceUsed(text); got != testCase.ComputerAllowance {
 			t.Fatalf("%sIsComputerAllowanceUsed = %t, want %t", prefix, got, testCase.ComputerAllowance)
 		}

@@ -73,6 +73,10 @@ type Decision struct {
 	// failures and unexplained failures without a status qualify: a status means
 	// the provider refused this exact request.
 	RetrySameModel bool
+	// Unexplained is set when no rule places the failure and nothing marks it as
+	// permanent. The caller logs it, so a request Rakazo built wrong still
+	// surfaces when a backup or a retry succeeds.
+	Unexplained *Unrecognized
 }
 
 // Failure classifies a provider failure for reporting. provider served the
@@ -146,6 +150,7 @@ func Decide(message, provider string, requestLimitTooSmall bool) Decision {
 		return Decision{
 			SwitchToBackup: true,
 			RetrySameModel: IsTransient(message) || !unrecognized.HasStatus,
+			Unexplained:    &unrecognized,
 		}
 	}
 	return Decision{

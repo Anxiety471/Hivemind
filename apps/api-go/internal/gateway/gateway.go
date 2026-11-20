@@ -36,7 +36,8 @@ type Options struct {
 }
 
 // Gateway routes /rpc requests either to the configured procedures' Go handlers
-// (not implemented yet) or to the TypeScript API, and answers /healthz locally.
+// or to the TypeScript API, answers /healthz locally, and answers this host's
+// model-retry questions (ModelRetryPath).
 type Gateway struct {
 	upstream  *url.URL
 	routes    *routes.Store
@@ -89,6 +90,8 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.URL.Path == "/healthz":
 		g.healthz(status, r)
+	case r.URL.Path == ModelRetryPath:
+		g.modelRetry(status, r)
 	case r.URL.Path == "/rpc" || strings.HasPrefix(r.URL.Path, "/rpc/"):
 		mode, readOnly := g.routes.Lookup(r.URL.Path)
 		switch mode {
