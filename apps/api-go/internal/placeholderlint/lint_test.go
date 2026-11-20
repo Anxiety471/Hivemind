@@ -188,6 +188,61 @@ func TestLintMessages(t *testing.T) {
 	}
 }
 
+func TestArgumentNameForBracketKeyUnderArray(t *testing.T) {
+	t.Parallel()
+
+	args := map[string]any{
+		"]":   "TODO",
+		"arr": []any{map[string]any{"x]": "TODO"}},
+		"cfg": map[string]any{"arr": []any{map[string]any{"x]": "TODO"}}},
+	}
+	capture := &captureRule{}
+	New(capture).Lint("demo", args)
+
+	names := make(map[string]string, len(capture.arguments))
+	for _, argument := range capture.arguments {
+		names[argument.Path] = argument.Name
+	}
+	want := map[string]string{
+		`\]`:             "]",
+		`arr[0].x\]`:     "x]",
+		`cfg.arr[0].x\]`: "x]",
+	}
+	if !reflect.DeepEqual(names, want) {
+		t.Fatalf("argument names = %#v, want %#v", names, want)
+	}
+}
+
+func TestNameExemptionForBracketKeyUnderArray(t *testing.T) {
+	t.Parallel()
+
+	args := map[string]any{
+		"]":   "TODO",
+		"arr": []any{map[string]any{"x]": "TODO"}},
+	}
+	policy := Policy{ExemptArgs: map[string][]string{"demo": {"x]"}}}
+	got := New(DefaultRules()...).Lint("demo", args, WithPolicy(policy))
+	want := []Finding{{Path: `\]`, Value: "TODO", Rule: "placeholder-word"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Lint() = %#v, want %#v", got, want)
+	}
+}
+
+func TestNameKnownValuesForBracketKeyUnderArray(t *testing.T) {
+	t.Parallel()
+
+	args := map[string]any{
+		"arr":   []any{map[string]any{"x]": "TODO"}},
+		"plain": "A",
+	}
+	known := KnownValues{"x]": {"TODO"}}
+	got := New(DefaultRules()...).Lint("demo", args, WithKnownValues(known))
+	want := []Finding{{Path: "plain", Value: "A", Rule: "alphabet-index"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Lint() = %#v, want %#v", got, want)
+	}
+}
+
 func TestLintPolicy(t *testing.T) {
 	t.Parallel()
 
@@ -547,6 +602,17 @@ type constantRule struct {
 func (r constantRule) Name() string { return r.name }
 
 func (r constantRule) Check(argument Argument) bool { return argument.Value == r.value }
+
+type captureRule struct {
+	arguments []Argument
+}
+
+func (*captureRule) Name() string { return "capture" }
+
+func (r *captureRule) Check(argument Argument) bool {
+	r.arguments = append(r.arguments, argument)
+	return false
+}
 
 func TestLintIgnoresNilRules(t *testing.T) {
 	t.Parallel()

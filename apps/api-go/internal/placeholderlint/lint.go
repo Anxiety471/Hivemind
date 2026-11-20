@@ -197,7 +197,7 @@ func escapeKey(key string) string {
 // array indices at the end of the path.
 func leafName(path string) string {
 	end := len(path)
-	for end > 0 && path[end-1] == ']' {
+	for end > 0 && path[end-1] == ']' && !isEscapedAt(path, end-1) {
 		opening := lastUnescapedByte(path[:end], '[')
 		if opening < 0 {
 			break
