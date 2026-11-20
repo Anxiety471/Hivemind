@@ -71,10 +71,9 @@ describe("ActivityPanel", () => {
     expect(text).toContain("read 2 pages");
     expect(text).toContain("searched the web · 12s");
     expect(html).toContain('data-testid="activity-trigger"');
-    // The one rounded container holds the divided rows on the page background.
-    expect(html).toContain("border-border/50");
-    expect(html).toContain("bg-card/55");
-    expect(html).toContain("divide-border/40");
+    // The rows sit flat and indented under the summary, with no box around them.
+    expect(html).toContain("ms-5 mt-1");
+    expect(html).not.toContain("bg-card/55");
   });
 
   it("says each summarized action in its singular or its counted form", () => {
