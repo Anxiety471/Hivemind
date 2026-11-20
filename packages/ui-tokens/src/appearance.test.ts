@@ -8,10 +8,12 @@ import {
   darkTokens,
   lightTokens,
   normalizeAppearancePreference,
+  normalizeWebAppearancePreference,
   persistAppearancePreference,
   renderTokensCss,
   resolveAppearance,
   resolveAppearancePreference,
+  resolveWebAppearance,
   tokensForAppearance,
   UI_APPEARANCE_STORAGE_KEY,
   webDarkOverrides,
@@ -297,5 +299,27 @@ describe.each([
 
   it.each(pairs)("%s on %s meets WCAG AA (4.5:1)", (text, surface) => {
     expect(contrastRatio(palette[text], palette[surface])).toBeGreaterThanOrEqual(4.5);
+  });
+});
+
+describe("web palettes", () => {
+  it("resolves a named palette to its base scheme, whatever the system is", () => {
+    expect(resolveWebAppearance("warm", "dark")).toEqual({ scheme: "light", palette: "warm" });
+    expect(resolveWebAppearance("tokyo-night", "light")).toEqual({
+      scheme: "dark",
+      palette: "tokyo-night",
+    });
+    expect(resolveWebAppearance("system", "light")).toEqual({ scheme: "light", palette: null });
+  });
+
+  it("falls back to system for an unknown stored value", () => {
+    expect(normalizeWebAppearancePreference("tokyo-night")).toBe("tokyo-night");
+    expect(normalizeWebAppearancePreference("neon")).toBe("system");
+  });
+
+  it("renders a block per palette in tokens.css", () => {
+    const css = renderTokensCss();
+    expect(css).toContain('[data-theme][data-palette="warm"]');
+    expect(css).toContain('[data-theme][data-palette="tokyo-night"]');
   });
 });

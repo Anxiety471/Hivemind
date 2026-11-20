@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { webDarkTokens, webLightTokens } from "@rakazo/ui-tokens";
+import { webDarkTokens, webLightTokens, webPalettes } from "@rakazo/ui-tokens";
 import { describe, expect, it } from "vitest";
 
 // index.html sets theme-color before any module loads, so it cannot import the
@@ -18,6 +18,15 @@ describe("index.html theme bootstrap", () => {
     expect(script).toContain(
       `theme === "light" ? "${webLightTokens.background.toLowerCase()}" : "${webDarkTokens.background.toLowerCase()}"`,
     );
+  });
+
+  it("pins each named palette's background in the bootstrap", () => {
+    for (const [name, palette] of Object.entries(webPalettes)) {
+      const key = /^[a-z]+$/.test(name) ? name : `"${name}"`;
+      expect(script).toContain(
+        `${key}: ["${palette.scheme}", "${palette.tokens.background.toLowerCase()}"]`,
+      );
+    }
   });
 
   it("loads the bootstrap as a file so the CSP needs no inline scripts", () => {

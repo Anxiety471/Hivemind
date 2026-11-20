@@ -274,6 +274,107 @@ export const webLightOverrides = {
 export const webDarkTokens: WebColorTokens = { ...darkTokens, ...webDarkOverrides };
 export const webLightTokens: WebColorTokens = { ...lightTokens, ...webLightOverrides };
 
+/** Web and Electron only: named palettes on top of a light or dark base. */
+export const WEB_PALETTE_NAMES = ["warm", "tokyo-night"] as const;
+export type WebPaletteName = (typeof WEB_PALETTE_NAMES)[number];
+
+/** What the web app stores: the shared preferences plus the named palettes. */
+export type WebAppearancePreference = AppearancePreference | WebPaletteName;
+export const WEB_APPEARANCE_PREFERENCES = [
+  "system",
+  "light",
+  "warm",
+  "dark",
+  "tokyo-night",
+] as const satisfies readonly WebAppearancePreference[];
+
+const warmOverrides = {
+  background: "#FAF6EE",
+  dialog: "#FFFBF4",
+  foreground: "#3A2F25",
+  card: "#F1EADC",
+  cardForeground: "#3A2F25",
+  popover: "#FFFBF4",
+  popoverForeground: "#3A2F25",
+  primary: "#3A2F25",
+  primaryHover: "#54463A",
+  primaryDisabled: "#3A2F2526",
+  primaryForeground: "#FAF6EE",
+  secondary: "#3A2F250F",
+  secondaryForeground: "#3A2F25",
+  chatUser: "#3A2F25",
+  muted: "#F1EADC",
+  mutedForeground: "#3A2F25AD",
+  faintForeground: "#3A2F258F",
+  accent: "#3A2F2512",
+  accentForeground: "#3A2F25",
+  border: "#3A2F251F",
+  input: "#3A2F253D",
+  ring: "#B4691F",
+  sidebar: "#F3ECDF",
+  sidebarForeground: "#3A2F25",
+  sidebarBorder: "#3A2F251F",
+  sidebarAccent: "#3A2F2514",
+  sidebarAccentForeground: "#3A2F25",
+  link: "#9A5416",
+  success: "#2F7A3E",
+  warning: "#9A5B00",
+  statusWorking: "#9A5416",
+  unread: "#B4691F",
+  scrollbar: "#3A2F253D",
+  scrollbarHover: "#3A2F2585",
+} as const satisfies Partial<WebColorTokens>;
+
+const tokyoNightOverrides = {
+  background: "#1A1B26",
+  dialog: "#1F2030",
+  foreground: "#C0CAF5",
+  card: "#24283B",
+  cardForeground: "#C0CAF5",
+  popover: "#24283B",
+  popoverForeground: "#C0CAF5",
+  primary: "#C0CAF5",
+  primaryHover: "#A9B4E8",
+  primaryDisabled: "#C0CAF521",
+  primaryForeground: "#1A1B26",
+  secondary: "#C0CAF50F",
+  secondaryForeground: "#C0CAF5",
+  chatUser: "#2F334D",
+  chatUserForeground: "#C0CAF5",
+  muted: "#24283B",
+  mutedForeground: "#C0CAF5A8",
+  faintForeground: "#C0CAF58A",
+  accent: "#C0CAF51A",
+  accentForeground: "#C0CAF5",
+  destructive: "#F7768E",
+  destructiveFill: "#C7425B",
+  border: "#C0CAF51A",
+  input: "#C0CAF538",
+  ring: "#7AA2F7",
+  sidebar: "#16161E",
+  sidebarForeground: "#C0CAF5",
+  sidebarBorder: "#C0CAF50F",
+  sidebarAccent: "#C0CAF514",
+  sidebarAccentForeground: "#C0CAF5",
+  link: "#7AA2F7",
+  success: "#9ECE6A",
+  warning: "#E0AF68",
+  statusWorking: "#7AA2F7",
+  unread: "#7AA2F7",
+  workingDot: "#9ECE6A",
+  scrollbar: "#C0CAF538",
+  scrollbarHover: "#C0CAF580",
+} as const satisfies Partial<WebColorTokens>;
+
+/** Each palette's base scheme (what `color-scheme` and `data-theme` carry) and its colors. */
+export const webPalettes: Record<
+  WebPaletteName,
+  { scheme: ResolvedAppearance; tokens: WebColorTokens }
+> = {
+  warm: { scheme: "light", tokens: { ...webLightTokens, ...warmOverrides } },
+  "tokyo-night": { scheme: "dark", tokens: { ...webDarkTokens, ...tokyoNightOverrides } },
+};
+
 /** Dark palette. Prefer `tokensForAppearance` when theme-aware. */
 export const tokens = darkTokens;
 
@@ -431,6 +532,31 @@ export function normalizeAppearancePreference(
   return isAppearancePreference(raw) ? raw : "system";
 }
 
+export function isWebAppearancePreference(
+  value: string | null | undefined,
+): value is WebAppearancePreference {
+  return (
+    isAppearancePreference(value) || (WEB_PALETTE_NAMES as readonly string[]).includes(value ?? "")
+  );
+}
+
+export function normalizeWebAppearancePreference(
+  raw: string | null | undefined,
+): WebAppearancePreference {
+  return isWebAppearancePreference(raw) ? raw : "system";
+}
+
+/** The scheme a web preference draws with, and the named palette on top of it, if any. */
+export function resolveWebAppearance(
+  preference: WebAppearancePreference,
+  system: ResolvedAppearance = "dark",
+): { scheme: ResolvedAppearance; palette: WebPaletteName | null } {
+  if (preference === "warm" || preference === "tokyo-night") {
+    return { scheme: webPalettes[preference].scheme, palette: preference };
+  }
+  return { scheme: resolveAppearance(preference, system), palette: null };
+}
+
 export type ResolveAppearancePreferenceOptions = {
   stored?: string | null;
   storage?: Pick<Storage, "getItem"> | null;
@@ -454,8 +580,19 @@ export function resolveAppearancePreference(
   return normalizeAppearancePreference(stored);
 }
 
+/** `resolveAppearancePreference` for the web app, which also stores the named palettes. */
+export function resolveWebAppearancePreference(
+  options: ResolveAppearancePreferenceOptions = {},
+): WebAppearancePreference {
+  const stored =
+    options.stored !== undefined
+      ? options.stored
+      : readStoredAppearance(options.storage ?? getLocalStorage());
+  return normalizeWebAppearancePreference(stored);
+}
+
 export function persistAppearancePreference(
-  preference: AppearancePreference,
+  preference: WebAppearancePreference,
   storage: Pick<Storage, "setItem"> | null = getLocalStorage(),
 ): void {
   if (!storage) return;
@@ -510,5 +647,12 @@ export function renderTokensCss(): string {
     "/* Generated by `pnpm --filter @rakazo/ui-tokens generate`. Edit src/index.ts instead. */",
     renderBlock(':root,\n[data-theme="dark"]', "dark", webDarkTokens),
     renderBlock('[data-theme="light"]', "light", webLightTokens),
+    ...WEB_PALETTE_NAMES.map((name) =>
+      renderBlock(
+        `[data-theme][data-palette="${name}"]`,
+        webPalettes[name].scheme,
+        webPalettes[name].tokens,
+      ),
+    ),
   ].join("\n\n")}\n`;
 }

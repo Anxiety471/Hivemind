@@ -1,12 +1,17 @@
-import type { AppearancePreference, ResolvedAppearance } from "@rakazo/ui-tokens";
+import type {
+  ResolvedAppearance,
+  WebAppearancePreference,
+  WebPaletteName,
+} from "@rakazo/ui-tokens";
 import {
   persistAppearancePreference,
-  resolveAppearance,
-  resolveAppearancePreference,
+  resolveWebAppearance,
+  resolveWebAppearancePreference,
   webTokensForAppearance,
 } from "@rakazo/ui-tokens";
 
-export type { AppearancePreference, ResolvedAppearance };
+export type AppearancePreference = WebAppearancePreference;
+export type { ResolvedAppearance };
 
 const THEME_COLOR_META = 'meta[name="theme-color"]';
 
@@ -21,9 +26,12 @@ export function readSystemAppearance(
 export function applyResolvedAppearance(
   appearance: ResolvedAppearance,
   root: HTMLElement | null = typeof document !== "undefined" ? document.documentElement : null,
+  palette: WebPaletteName | null = null,
 ): void {
   if (!root) return;
   root.dataset.theme = appearance;
+  if (palette) root.dataset.palette = palette;
+  else delete root.dataset.palette;
   root.style.colorScheme = appearance;
   if (typeof document === "undefined") return;
   const meta = document.querySelector(THEME_COLOR_META);
@@ -35,12 +43,12 @@ export function applyResolvedAppearance(
 }
 
 export function applyUiAppearance(
-  preference: AppearancePreference = resolveAppearancePreference(),
+  preference: AppearancePreference = resolveWebAppearancePreference(),
   system: ResolvedAppearance = readSystemAppearance(),
 ): ResolvedAppearance {
-  const resolved = resolveAppearance(preference, system);
-  applyResolvedAppearance(resolved);
-  return resolved;
+  const { scheme, palette } = resolveWebAppearance(preference, system);
+  applyResolvedAppearance(scheme, undefined, palette);
+  return scheme;
 }
 
 export function setUiAppearance(preference: AppearancePreference): ResolvedAppearance {
@@ -49,13 +57,13 @@ export function setUiAppearance(preference: AppearancePreference): ResolvedAppea
 }
 
 export function getUiAppearancePreference(): AppearancePreference {
-  return resolveAppearancePreference();
+  return resolveWebAppearancePreference();
 }
 
 /** Keep `data-theme` in sync when the OS scheme changes and preference is System. */
 export function watchSystemAppearance(
   onChange: (system: ResolvedAppearance) => void = () => {
-    if (resolveAppearancePreference() === "system") applyUiAppearance("system");
+    if (resolveWebAppearancePreference() === "system") applyUiAppearance("system");
   },
 ): () => void {
   if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
