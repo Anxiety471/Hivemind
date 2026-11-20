@@ -154,7 +154,7 @@ func (w *walker) check(path, value string) {
 // Paths are injective: a map key is escaped so it cannot be confused with the
 // path syntax. A backslash escapes the next byte, "." separates map keys, and
 // "[n]" is an array index. In a map key, "\" becomes "\\", "." becomes "\.",
-// "[" becomes "\[", "]" becomes "]", and an empty key becomes "\0". An array
+// "[" becomes "\[", "]" becomes "\]", and an empty key becomes "\0". An array
 // element appends "[n]" without a separator, so {"hosts": ["x"]} has the path
 // "hosts[0]" while {"hosts.0": "x"} has "hosts\.0" and {"hosts[0]": "x"} has
 // "hosts\[0\]".
