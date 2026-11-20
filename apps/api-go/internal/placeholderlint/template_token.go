@@ -181,12 +181,14 @@ func isWordByte(character byte) bool {
 		character == '_'
 }
 
-// containsPrintfToken looks for "%s", "%d", "%f", "%v", "%q", numeric width
-// and precision forms such as "%.2f", "%02d" and "%3.1f", and the positional
-// tokens "%1" through "%9". Percent-encoding comes first: a leading 1-9
-// followed by a hexadecimal digit is treated as an escape ("%20", "%2F",
-// "%25", "%1F"), never as printf. A token followed by another word character
-// does not count, which keeps words like "%done" and "%d0" alone.
+// containsPrintfToken looks for "%s", "%d", "%f", "%v", "%q", "%t", "%x",
+// "%X", "%e", "%g", "%E", "%G", "%b" and "%o", numeric width and precision
+// forms such as "%.2f", "%02d" and "%3.1f", flag forms such as "%+v", "%#v"
+// and "%-10s", and the positional tokens "%1" through "%9". Percent-encoding
+// comes first: a leading 1-9 followed by a hexadecimal digit, or 0 followed
+// by d/D/f/F, is treated as an escape ("%20", "%2F", "%25", "%1F", "%0d"),
+// never as printf. A token followed by another word character does not count,
+// which keeps words like "%done" and "%d0" alone.
 func containsPrintfToken(value string) bool {
 	for index := range len(value) {
 		if value[index] != '%' || percentEncodingLike(value, index) {
@@ -219,6 +221,9 @@ func percentEncodingLike(value string, index int) bool {
 
 func numericPrintfToken(value string, index int) bool {
 	cursor := index + 1
+	for cursor < len(value) && isPrintfFlag(value[cursor]) {
+		cursor++
+	}
 	for cursor < len(value) && (isASCIIDigit(value[cursor]) || value[cursor] == '.') {
 		cursor++
 	}
@@ -226,12 +231,21 @@ func numericPrintfToken(value string, index int) bool {
 		return false
 	}
 	switch value[cursor] {
-	case 's', 'd', 'f', 'v', 'q':
+	case 's', 'd', 'f', 'v', 'q', 't', 'x', 'X', 'e', 'g', 'E', 'G', 'b', 'o':
 	default:
 		return false
 	}
 	following := cursor + 1
 	return following >= len(value) || !isWordByte(value[following])
+}
+
+func isPrintfFlag(character byte) bool {
+	switch character {
+	case '+', '#', '-', ' ':
+		return true
+	default:
+		return false
+	}
 }
 
 func isASCIIDigit(character byte) bool {
