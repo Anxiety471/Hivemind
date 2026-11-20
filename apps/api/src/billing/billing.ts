@@ -23,7 +23,14 @@ import {
   sandboxHoursLeft,
   sandboxKindCapabilities,
 } from "@rakazo/adapters";
-import type { Actor, BillingStatus, ByokInterval, ByokTier, ComputerSize } from "@rakazo/contracts";
+import type {
+  Actor,
+  BillingStatus,
+  ByokInterval,
+  ByokTier,
+  CloudComputers,
+  ComputerSize,
+} from "@rakazo/contracts";
 import {
   BYOK_TIERS,
   byokTierPriceCents,
@@ -38,7 +45,6 @@ import {
   billingAccountForOrganization,
   byokFreeUntil,
   claimCheckoutLease,
-  computerSizeSettings,
   createBillingAccount,
   creditAccount,
   expireModelCredits,
@@ -71,7 +77,7 @@ import { bestEffort, getLogger } from "@rakazo/logging";
 import { applyAccessGrants } from "../auth/access-grants.js";
 import { createExperiments } from "../telemetry/experiments.js";
 import { byokTierOffers, byokTrialAvailable, planTerms, subscribedByokPrice } from "./byok-terms.js";
-import { readComputerUsage, saveComputerSize } from "./computer-usage.js";
+import { readCloudComputers, readComputerUsage, saveCloudComputerSize } from "./computer-usage.js";
 import { createPartnerSales } from "./partner-sales.js";
 import { createReferrals } from "./referrals.js";
 
@@ -104,7 +110,9 @@ export interface BillingService {
   readonly referralsEnabled: boolean;
   status(actor: Actor): Promise<BillingStatus>;
   computerUsage(actor: Actor): ReturnType<typeof readComputerUsage>;
-  setComputerSize(actor: Actor, size: ComputerSize): Promise<void>;
+  /** Null where sizes cannot be chosen. */
+  cloudComputers(actor: Actor): Promise<CloudComputers | null>;
+  setComputerSize(actor: Actor, computerId: string, size: ComputerSize): Promise<void>;
   selectFunding(
     actor: Actor,
     funding: "byok" | "credits",
@@ -732,11 +740,17 @@ export function createBillingService(deps: {
       return readComputerUsage(prisma, deps.sandbox, organizationId, actor.spaceId);
     },
 
-    async setComputerSize(actor, size) {
+    async cloudComputers(actor) {
+      if (!modelCredits || !supportsComputerSizing()) return null;
+      const { organizationId, isOwner } = await organization(actor);
+      return readCloudComputers(prisma, organizationId, actor.spaceId, isOwner);
+    },
+
+    async setComputerSize(actor, computerId, size) {
       const { organizationId } = await managedOrganization(actor);
       if (!modelCredits || !supportsComputerSizing())
         throw new ClientError("NOT_FOUND", "Computer size settings are unavailable");
-      await saveComputerSize(prisma, organizationId, size);
+      await saveCloudComputerSize(prisma, organizationId, actor.spaceId, computerId, size);
       await publishOrganizationChange(prisma, deps.realtime, organizationId);
     },
 
@@ -748,22 +762,13 @@ export function createBillingService(deps: {
             getLogger().error("access grant failed", error),
           );
         const sized = supportsComputerSizing();
-        const [credits, account, computerAllowance, days, hadTrial, sizePreference] =
-          await Promise.all([
-            unexpiredCreditAccount(prisma, organizationId),
-            billingAccountForOrganization(prisma, organizationId),
-            deps.sandbox
-              ? sandboxAllowance({ prisma, sandbox: deps.sandbox }, organizationId)
-              : null,
-            trialDays(organizationId),
-            organizationOwnerHadTrial(prisma, organizationId, "byok"),
-            sized
-              ? prisma.organization.findUnique({
-                  where: { id: organizationId },
-                  select: { computerSize: true },
-                })
-              : null,
-          ]);
+        const [credits, account, computerAllowance, days, hadTrial] = await Promise.all([
+          unexpiredCreditAccount(prisma, organizationId),
+          billingAccountForOrganization(prisma, organizationId),
+          deps.sandbox ? sandboxAllowance({ prisma, sandbox: deps.sandbox }, organizationId) : null,
+          trialDays(organizationId),
+          organizationOwnerHadTrial(prisma, organizationId, "byok"),
+        ]);
         const freeUntil =
           credits.mode === "byok" &&
           BYOK_TIERS.standard.monthlyPriceCents !== null &&
@@ -774,9 +779,6 @@ export function createBillingService(deps: {
         const tier = subscribed?.tier ?? "standard";
         const hourMicros = deps.sandbox && sandboxDisplayedHourMicros(deps.sandbox);
         const offers = byokTierOffers(Boolean(sized), hourMicros);
-        const sizing =
-          sizePreference &&
-          computerSizeSettings({ ...sizePreference, modelCredits: credits, billing: account });
         return {
           access: hasModelAccess(credits, account?.status ?? null),
           funding:
@@ -823,9 +825,9 @@ export function createBillingService(deps: {
             computerAllowance &&
             sandboxHoursLeft(
               computerAllowance,
-              sizing ? SANDBOX_SIZE_HOURLY_COST_MICROS[sizing.size] : hourMicros,
+              sized ? SANDBOX_SIZE_HOURLY_COST_MICROS.standard : hourMicros,
             ),
-          ...(sizing && { computerSizeSettings: sizing }),
+          ...(sized && { standardComputerHours: true as const }),
           computerHoursResetAt: computerAllowance?.resetsAt?.toISOString() ?? null,
           referral: await referrals.status(organizationId, isOwner),
         };

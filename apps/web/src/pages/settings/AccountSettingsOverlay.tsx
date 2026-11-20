@@ -14,7 +14,6 @@ import {
   Input,
   Label,
   OptionSelect,
-  SectionHeading,
   Switch,
   ToggleGroup,
   ToggleGroupItem,
@@ -23,7 +22,6 @@ import { useEffect, useId, useRef, useState } from "react";
 import { AccountAccess, LinkSsoRow } from "../../components/account/AccountAccess";
 import { AccountDataSettings } from "../../components/settings/AccountDataSettings";
 import { SuccessPop } from "../../components/ai/primitives";
-import { ComputerDeviceSettings } from "../../components/computers/ComputerDeviceSettings";
 import { ComputerProviderSettings } from "../../components/computers/ComputerProviderSettings";
 import {
   ComputersUnavailableHint,
@@ -493,7 +491,6 @@ export function GeneralSettingsPanels({
       </SettingsGroup>
 
       <TrustedLinkSitesSettings />
-      <ComputerDeviceSettings />
 
       {showPassword || canLinkSso || passkeysSupported || unlinkedProviders.length > 0 ? (
         <SettingsGroup title={<Trans>Security</Trans>}>
@@ -541,14 +538,11 @@ export function ComputerSettingsPanel({
   return (
     <div
       data-testid="computers-setup-settings"
-      className="rounded-xl border border-border px-4 py-4"
+      className="rounded-xl border border-border px-4 py-4 [&>form:first-child]:mt-0"
     >
-      <SectionHeading variant="heading">
-        <Trans>Computers</Trans>
-      </SectionHeading>
       {hintShown ? (
         <ComputersUnavailableHint
-          className="mt-3 text-body-sm leading-relaxed text-muted-foreground"
+          className="text-body-sm leading-relaxed text-muted-foreground"
           sandboxProvider={sandboxProvider}
           onRecovered={onSandboxProviderChange}
           onRecoveryDismissed={onRecoveryDismissed}
