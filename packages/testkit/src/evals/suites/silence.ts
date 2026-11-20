@@ -17,7 +17,7 @@ export type RoutineEvidence = {
   scheduled?: { at: string | null; timezone: string; createdAt: string };
 };
 const prompt =
-  "Check releases of example/widget on GitHub. I have already been notified about v2.1.0 and all older releases. Notify me only about a release I have not been told about, with its exact version and changes. Remember which releases you report so later checks do not repeat them. If there is nothing new, stay silent. If you cannot complete the check, tell me that the check failed; never claim there are no new releases without checking. Do not modify GitHub or any other connected app.";
+  "Check releases of acme/widget on GitHub. I have already been notified about v2.1.0 and all older releases. Notify me only about a release I have not been told about, with its exact version and changes. Remember which releases you report so later checks do not repeat them. If there is nothing new, stay silent. If you cannot complete the check, tell me that the check failed; never claim there are no new releases without checking. Do not modify GitHub or any other connected app.";
 // The routine reads release notes and then remembers what it reported. A save after outside
 // content asks first unless the owner allows it, as an owner running this routine would.
 const routineCase = { routine: { prompt }, alwaysAllowTools: ["remember"] };
@@ -27,7 +27,7 @@ const checked = (run: RoutineEvidence) =>
     (call) =>
       (call.tool === "GITHUB_LIST_RELEASES" ||
         (call.tool === "GITHUB_GET_RELEASE" && !call.args.tag)) &&
-      call.args.owner === "example" &&
+      call.args.owner === "acme" &&
       call.args.repo === "widget" &&
       call.outcome === "read",
   );

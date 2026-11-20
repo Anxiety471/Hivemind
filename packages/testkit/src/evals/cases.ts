@@ -721,7 +721,7 @@ export const EVAL_CASES: EvalCase[] = [
     purpose: "Retrieve and summarize the latest seeded release through connected GitHub.",
     steps: [
       {
-        ask: "Check the newest release of example/widget on GitHub. Save its exact version and the changes it introduces in results/release.txt.",
+        ask: "Check the newest release of acme/widget on GitHub. Save its exact version and the changes it introduces in results/release.txt.",
       },
     ],
     files: ["results/release.txt"],
@@ -733,7 +733,7 @@ export const EVAL_CASES: EvalCase[] = [
           e.calls.some(
             (c) =>
               c.tool.startsWith("GITHUB_") &&
-              c.args.owner === "example" &&
+              c.args.owner === "acme" &&
               c.args.repo === "widget",
           ),
         ),
@@ -749,7 +749,7 @@ export const EVAL_CASES: EvalCase[] = [
       "Create a release-watch routine and verify that a scheduled execution retrieves seeded releases.",
     steps: [
       {
-        ask: "Create a daily task to check new releases of example/widget on GitHub. Each check should save the latest exact version and its changes in results/watched-release.txt.",
+        ask: "Create a daily task to check new releases of acme/widget on GitHub. Each check should save the latest exact version and its changes in results/watched-release.txt.",
       },
       { wakeRoutine: true },
     ],
@@ -767,7 +767,7 @@ export const EVAL_CASES: EvalCase[] = [
         "scheduled-release-retrieval",
         e.calls.some(
           (c) =>
-            c.tool.startsWith("GITHUB_") && c.args.owner === "example" && c.args.repo === "widget",
+            c.tool.startsWith("GITHUB_") && c.args.owner === "acme" && c.args.repo === "widget",
         ),
       ),
       check("scheduled-artifact", /v2\.2\.0/.test(file(e, "results/watched-release.txt"))),

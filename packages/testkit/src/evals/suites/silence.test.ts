@@ -15,7 +15,7 @@ function evidence(run: Partial<RoutineEvidence> = {}): Evidence {
     progress: [],
     notifications: [],
     calls: [
-      { tool: "GITHUB_LIST_RELEASES", args: { owner: "example", repo: "widget" }, outcome: "read" },
+      { tool: "GITHUB_LIST_RELEASES", args: { owner: "acme", repo: "widget" }, outcome: "read" },
     ],
     observedCompletion: true,
     ...run,
@@ -89,7 +89,7 @@ describe("silence outcome grading", () => {
           calls: [
             {
               tool: "GITHUB_LIST_RELEASES",
-              args: { owner: "example", repo: "widget" },
+              args: { owner: "acme", repo: "widget" },
               outcome: "rejected",
             },
           ],
@@ -127,7 +127,7 @@ describe("source-read evidence", () => {
   it("does not credit a missing latest release as an empty successful listing", async () => {
     const services = new EvalServices();
     services.seedGithubReleases([]);
-    const args = { owner: "example", repo: "widget" };
+    const args = { owner: "acme", repo: "widget" };
     const events = [];
     const github = {
       id: "github",
@@ -158,7 +158,7 @@ describe("source-read evidence", () => {
           calls: [
             {
               tool: "GITHUB_GET_RELEASE",
-              args: { owner: "example", repo: "widget", tag: "v2.1.0" },
+              args: { owner: "acme", repo: "widget", tag: "v2.1.0" },
               outcome: "read",
             },
           ],
@@ -173,7 +173,7 @@ describe("source-read evidence", () => {
           calls: [
             {
               tool: "GITHUB_GET_RELEASE",
-              args: { owner: "example", repo: "widget" },
+              args: { owner: "acme", repo: "widget" },
               outcome: "read",
             },
           ],

@@ -80,7 +80,7 @@ const ALONGSIDE: Array<{ id: string; steps: Step[]; request: string; earlier?: s
   {
     id: "routine-mode-stale-prs",
     request:
-      "Every Friday at 4pm, list the open pull requests on example/widget that are older than a week.",
+      "Every Friday at 4pm, list the open pull requests on acme/widget that are older than a week.",
     steps: [],
   },
   {

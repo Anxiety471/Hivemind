@@ -708,7 +708,7 @@ export async function runTrial(
         if (step.releases === undefined || step.releases === "new")
           services.seedGithubReleases([
             {
-              owner: "example",
+              owner: "acme",
               repo: "widget",
               tag: "v2.2.0",
               name: "Widget 2.2",

@@ -69,7 +69,7 @@ export class EvalServices extends ComposioConnector {
     this.composio = composio;
     composio.seedGithubReleases([
       {
-        owner: "example",
+        owner: "acme",
         repo: "widget",
         tag: "v2.1.0",
         name: "Widget 2.1",
@@ -78,7 +78,7 @@ export class EvalServices extends ComposioConnector {
         htmlUrl: "https://example.test/widget/releases/v2.1.0",
       },
       {
-        owner: "example",
+        owner: "acme",
         repo: "widget",
         tag: "v2.0.0",
         name: "Widget 2.0",
