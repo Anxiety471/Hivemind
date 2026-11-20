@@ -1,7 +1,7 @@
 // Runs before first paint, as a file because the app's CSP blocks inline scripts.
 (() => {
   const key = "rakazo.uiAppearance";
-  let preference = "system";
+  let preference = "warm";
   try {
     const stored = localStorage.getItem(key);
     if (/^(system|light|dark|warm|tokyo-night)$/.test(stored || "")) preference = stored;

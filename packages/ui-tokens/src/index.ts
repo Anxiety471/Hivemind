@@ -288,6 +288,9 @@ export const WEB_APPEARANCE_PREFERENCES = [
   "tokyo-night",
 ] as const satisfies readonly WebAppearancePreference[];
 
+/** What a web visitor with no stored choice gets (mobile keeps following the system). */
+export const DEFAULT_WEB_APPEARANCE: WebAppearancePreference = "warm";
+
 const warmOverrides = {
   background: "#FAF6EE",
   dialog: "#FFFBF4",
@@ -543,7 +546,7 @@ export function isWebAppearancePreference(
 export function normalizeWebAppearancePreference(
   raw: string | null | undefined,
 ): WebAppearancePreference {
-  return isWebAppearancePreference(raw) ? raw : "system";
+  return isWebAppearancePreference(raw) ? raw : DEFAULT_WEB_APPEARANCE;
 }
 
 /** The scheme a web preference draws with, and the named palette on top of it, if any. */

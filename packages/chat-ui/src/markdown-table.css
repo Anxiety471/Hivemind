@@ -146,7 +146,7 @@
   overflow: visible;
   margin: 0;
   border-collapse: collapse;
-  font-size: 0.9em;
+  font-size: 1em;
   line-height: 1.5;
 }
 
@@ -457,7 +457,7 @@ button.rk-table-sort {
 /* Fills the panel and wraps like the card; the zoom scales the font, and
    every length in the table is em-based, so the whole grid scales with it. */
 .rk-table-dialog .rk-table {
-  font-size: calc(0.95em * var(--rk-table-zoom, 1));
+  font-size: calc(1em * var(--rk-table-zoom, 1));
 }
 
 .rk-table-dialog .rk-table-cell-text {

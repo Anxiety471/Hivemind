@@ -312,9 +312,11 @@ describe("web palettes", () => {
     expect(resolveWebAppearance("system", "light")).toEqual({ scheme: "light", palette: null });
   });
 
-  it("falls back to system for an unknown stored value", () => {
+  it("falls back to warm for a missing or unknown stored value, but keeps an explicit system choice", () => {
     expect(normalizeWebAppearancePreference("tokyo-night")).toBe("tokyo-night");
-    expect(normalizeWebAppearancePreference("neon")).toBe("system");
+    expect(normalizeWebAppearancePreference("system")).toBe("system");
+    expect(normalizeWebAppearancePreference("neon")).toBe("warm");
+    expect(normalizeWebAppearancePreference(null)).toBe("warm");
   });
 
   it("renders a block per palette in tokens.css", () => {
