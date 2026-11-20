@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf16"
@@ -195,6 +196,11 @@ func jsString(value any) string {
 			parts[index] = jsString(item)
 		}
 		return strings.Join(parts, ",")
+	case float64:
+		// The database driver decodes JSON numbers as float64, while the wire parser's
+		// DecodeAny yields json.Number. Both are JavaScript numbers: render them the way
+		// String() does, which validate.Stringify already implements for json.Number.
+		return validate.Stringify(json.Number(strconv.FormatFloat(typed, 'g', -1, 64)))
 	case map[string]any:
 		return "[object Object]"
 	}

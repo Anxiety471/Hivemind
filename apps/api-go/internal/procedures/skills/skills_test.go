@@ -49,6 +49,9 @@ func TestJsStringIsJavaScriptString(t *testing.T) {
 		{true, "true"},
 		{false, "false"},
 		{json.Number("7"), "7"},
+		{float64(2), "2"},
+		{[]any{float64(2), nil}, "2,"},
+		{float64(1e21), "1e+21"},
 		{[]any{"a", json.Number("1")}, "a,1"},
 		{map[string]any{"k": "v"}, "[object Object]"},
 	}
