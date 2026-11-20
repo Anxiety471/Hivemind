@@ -43,7 +43,7 @@ function script(steps: Array<string | undefined>) {
     const path = steps.shift();
     const call: Pick<ToolCall, "name" | "arguments"> =
       path === "ask"
-        ? { name: "ask_user", arguments: { question: "Which?", options: ["a", "b"] } }
+        ? { name: "ask_user", arguments: { question: "Which?", options: ["First", "Second"] } }
         : { name: "list_files", arguments: { path: path ?? "" } };
     const message: AssistantMessage = {
       role: "assistant",
@@ -110,15 +110,15 @@ beforeEach(() => {
 describe("a turn whose process starts stopping", () => {
   it("hands back after the step in flight, and resumes with the next model call", async () => {
     const stopping = new AbortController();
-    const input = request(stopping, "a");
-    script(["a", "b", undefined]);
+    const input = request(stopping, "first");
+    script(["first", "second", undefined]);
 
     const events = await run(input);
     const yielded = events.find((event) => event.type === "yielded");
     expect(yielded).toBeDefined();
     expect(events.some((event) => event.type === "done")).toBe(false);
     expect(fake.stream).toHaveBeenCalledTimes(1);
-    expect(calledPaths(input)).toEqual(["a"]);
+    expect(calledPaths(input)).toEqual(["first"]);
 
     // Another process resumes the run from the turn the first one saved.
     const resumed = {
@@ -129,12 +129,12 @@ describe("a turn whose process starts stopping", () => {
     const resumedEvents = await run(resumed);
 
     // The finished step is not repeated: the next model call already has its result.
-    expect(calledPaths(resumed)).toEqual(["b"]);
+    expect(calledPaths(resumed)).toEqual(["second"]);
     expect(fake.stream).toHaveBeenCalledTimes(3);
     const nextCall = fake.stream.mock.calls[1]![1] as Context;
     expect(nextCall.messages.at(-1)).toMatchObject({
       role: "toolResult",
-      toolCallId: "call-a",
+      toolCallId: "call-first",
     });
     expect(resumedEvents.at(-1)).toEqual({ type: "done", text: "Done." });
   });
@@ -144,14 +144,14 @@ describe("a turn whose process starts stopping", () => {
     const input = request(stopping);
     const shell = deferred<{ stdout: string; stderr: string; code: number }>();
     input.executeTool = vi.fn(async (_name, args, _id, _route, observer) => {
-      if (args.path === "a") observer?.onShellStillRunning?.(shell.promise);
-      if (args.path === "b") {
+      if (args.path === "first") observer?.onShellStillRunning?.(shell.promise);
+      if (args.path === "second") {
         shell.resolve({ stdout: "built", stderr: "", code: 0 });
         stopping.abort();
       }
       return { entries: [`${args.path}/file.txt`] };
     });
-    script(["a", "b", undefined]);
+    script(["first", "second", undefined]);
 
     const events = await run(input);
     const yielded = events.find((event) => event.type === "yielded");
@@ -170,17 +170,17 @@ describe("a turn whose process starts stopping", () => {
 
   it("does not repeat a mid-turn message the saved turn already holds", async () => {
     const stopping = new AbortController();
-    const input = request(stopping, "b");
+    const input = request(stopping, "second");
     const steering = {
       id: "steer-1",
       messageId: "message-1",
-      text: "Also check c",
+      text: "Also check third",
       origin: "user",
     };
     // Claimed rows stay tied to the run, so every later claim of a fresh attempt returns them.
     let claims = 0;
     input.claimSteering = vi.fn(async () => (++claims === 2 ? [steering as never] : []));
-    script(["a", "b", undefined]);
+    script(["first", "second", undefined]);
 
     const events = await run(input);
     const yielded = events.find((event) => event.type === "yielded");
@@ -194,7 +194,7 @@ describe("a turn whose process starts stopping", () => {
     });
     const nextCall = fake.stream.mock.calls[2]![1] as Context;
     const mentions = nextCall.messages.filter((message) =>
-      JSON.stringify(message.content).includes("Also check c"),
+      JSON.stringify(message.content).includes("Also check third"),
     );
     expect(mentions).toHaveLength(1);
   });
@@ -202,8 +202,8 @@ describe("a turn whose process starts stopping", () => {
   it("counts the saved turn's tool calls toward the per-turn limit on another process", async () => {
     vi.stubEnv("MAX_TOOL_CALLS_PER_TURN", "3");
     try {
-      const input = request(new AbortController(), "b");
-      script(["a", "b", "c", "d", undefined]);
+      const input = request(new AbortController(), "second");
+      script(["first", "second", "third", "fourth", undefined]);
       const events = await run(input);
       const yielded = events.find((event) => event.type === "yielded");
       expect(yielded).toBeDefined();
@@ -216,7 +216,7 @@ describe("a turn whose process starts stopping", () => {
         turnCheckpoint: yielded?.type === "yielded" ? yielded.checkpoint : undefined,
       });
 
-      expect(calledPaths(resumed)).toEqual(["c"]);
+      expect(calledPaths(resumed)).toEqual(["third"]);
       expect(resumedEvents).toContainEqual({
         type: "progress",
         text: "Stopped: more than 3 tool calls in one turn.",
@@ -227,13 +227,13 @@ describe("a turn whose process starts stopping", () => {
   });
 
   it("goes on in this process when the hand-back fails", async () => {
-    const input = request(new AbortController(), "a");
-    script(["a", "b", undefined]);
+    const input = request(new AbortController(), "first");
+    script(["first", "second", undefined]);
 
     const events = await run(input, false);
 
     expect(events.filter((event) => event.type === "yielded")).toHaveLength(1);
-    expect(calledPaths(input)).toEqual(["a", "b"]);
+    expect(calledPaths(input)).toEqual(["first", "second"]);
     expect(events.at(-1)).toEqual({ type: "done", text: "Done." });
   });
 
@@ -258,7 +258,7 @@ it("counts a question the turn paused on toward the per-turn limit on another pr
     input.onCheckpoint = async (capture) => {
       checkpoint = capture();
     };
-    script(["a", "ask", "b", "c", undefined]);
+    script(["first", "ask", "second", "third", undefined]);
     expect(await run(input)).toContainEqual(expect.objectContaining({ type: "ask" }));
     releaseToolCallBudget(input.runId, false);
 
@@ -281,12 +281,12 @@ it("counts a question the turn paused on toward the per-turn limit on another pr
 
 it("runs every step of a turn whose process is not stopping", async () => {
   const input = request(new AbortController());
-  script(["a", "b", undefined]);
+  script(["first", "second", undefined]);
 
   const events = await run(input);
 
   expect(events.some((event) => event.type === "yielded")).toBe(false);
-  expect(calledPaths(input)).toEqual(["a", "b"]);
+  expect(calledPaths(input)).toEqual(["first", "second"]);
   expect(fake.stream).toHaveBeenCalledTimes(3);
   expect(events.at(-1)).toEqual({ type: "done", text: "Done." });
 });

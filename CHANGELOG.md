@@ -20,6 +20,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The transcript's activity panel, including reasoning cards, is now shown by default; the existing setting still hides it.
 - With `MODEL_RETRY_RULES_URL` set, the Go gateway decides whether a failed model call moves to a backup model or retries the same model. If the gateway doesn't answer, the runtime uses its own copy of the same rules ([configuration](docs/self-host-configuration.md)).
 - Each failed model call logs which rule placed it, who decided, whether the run moved to a backup, retried or gave up, and whether a retry or backup recovered it. The provider's error text isn't included ([log events](docs/self-host-configuration.md)).
+- A bot can no longer run a tool call whose arguments are placeholders. A value like **placeholder**, **test**, **a**, **b**, **TODO**, **${name}** or **xxx** is refused with a message asking the model for the actual value, and the call is logged as `agent.tool.placeholder_rejected`. File contents, shell commands and prompts a bot may be asked to write verbatim are exempt, as are the computer tools and values the tool's schema declares.
 
 ### Fixed
 
