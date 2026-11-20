@@ -33,7 +33,11 @@ afterEach(() => {
   host.remove();
 });
 
-function renderPanel(onOpenSettings = vi.fn()) {
+function renderPanel(
+  onOpenSettings = vi.fn(),
+  routines: Routine[] = [routine],
+  onCreate = vi.fn(),
+) {
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -43,9 +47,9 @@ function renderPanel(onOpenSettings = vi.fn()) {
         bot={bot}
         boardEnabled={false}
         routineList={{
-          routines: [routine],
+          routines,
           loaded: true,
-          onCreate: vi.fn(),
+          onCreate,
           onEdit: vi.fn(),
           onStop: vi.fn(),
           onToggle: vi.fn(),
@@ -68,4 +72,11 @@ it("opens settings from the gear", () => {
   const onOpenSettings = renderPanel();
   act(() => host.querySelector<HTMLElement>('[data-testid="home-panel-settings"]')?.click());
   expect(onOpenSettings).toHaveBeenCalled();
+});
+
+it("offers a new routine instead of a blank panel when there is nothing to list", () => {
+  const onCreate = vi.fn();
+  renderPanel(vi.fn(), [], onCreate);
+  act(() => host.querySelector<HTMLElement>('[data-testid="home-new-routine"]')?.click());
+  expect(onCreate).toHaveBeenCalled();
 });

@@ -13,6 +13,7 @@ import {
   CircleCheck,
   CircleDashed,
   LoaderCircle,
+  Plus,
   Settings,
   X,
 } from "lucide-react";
@@ -105,6 +106,18 @@ export function HomePanel({
       <Section title={t`Automations`} count={routineList.routines.length}>
         <AutomationRows routineList={routineList} />
       </Section>
+      {/* With nothing to list, the one thing to do is offered, so the panel is not left blank. */}
+      {routineList.routines.length === 0 && routineList.loaded && tickets.length === 0 ? (
+        <Button
+          variant="ghost"
+          data-testid="home-new-routine"
+          className="justify-start"
+          onClick={routineList.onCreate}
+        >
+          <Plus aria-hidden />
+          <Trans>New routine</Trans>
+        </Button>
+      ) : null}
     </div>
   );
 }
