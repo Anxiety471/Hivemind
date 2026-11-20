@@ -6,6 +6,12 @@
 // mutable state. A Linter is an ordered list of rules; Lint walks one tool
 // call's arguments and returns at most one Finding per string argument path.
 //
+// Arguments are expected in their decoded JSON shape: a map[string]any whose
+// values are string, map[string]any, []any, map[string]string or []string,
+// nested in those same shapes. Values of any other dynamic type, including
+// named types and typed containers such as map[string][]any or
+// []map[string]any, are ignored.
+//
 // Rules depend only on the tool name, the argument path and value, and
 // caller-supplied metadata. They never hardcode knowledge of a particular
 // tool: optional fields, enum values and required-content arguments are all

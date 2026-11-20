@@ -7,8 +7,11 @@ import (
 	"strings"
 )
 
-// Lint walks the string values in args, including nested maps and slices, and
-// returns one Finding per argument path whose first matching rule flags it.
+// Lint walks the string values in args and returns one Finding per argument
+// path whose first matching rule flags it. The accepted shapes are JSON
+// decoding shapes: map[string]any, []any, map[string]string, []string and
+// string. Values of any other dynamic type, including named types and typed
+// containers such as map[string][]any or []map[string]any, are ignored.
 // Findings are sorted by path, so repeated calls with the same input produce
 // identical results.
 //

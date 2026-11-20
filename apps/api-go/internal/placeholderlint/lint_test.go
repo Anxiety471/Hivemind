@@ -444,6 +444,29 @@ func TestLintIgnoresNonStringValues(t *testing.T) {
 	}
 }
 
+func TestLintIgnoresTypedContainers(t *testing.T) {
+	t.Parallel()
+
+	type namedMap map[string]any
+	type namedSlice []any
+	type namedString string
+
+	args := map[string]any{
+		"namedMap":    namedMap{"name": "TODO"},
+		"namedSlice":  namedSlice{"TODO"},
+		"namedString": namedString("TODO"),
+		"mapOfSlices": map[string][]any{"name": {"TODO"}},
+		"sliceOfMaps": []map[string]any{{"name": "TODO"}},
+		"control":     "TODO",
+	}
+
+	got := New(DefaultRules()...).Lint("demo", args)
+	want := []Finding{{Path: "control", Value: "TODO", Rule: "placeholder-word"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Lint() = %#v, want %#v", got, want)
+	}
+}
+
 func TestLintHandlesCycles(t *testing.T) {
 	t.Parallel()
 
