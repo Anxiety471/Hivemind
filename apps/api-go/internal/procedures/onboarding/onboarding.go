@@ -34,8 +34,21 @@ import (
 const focusDismissedAnswerID = "_dismissed"
 
 // threadLockTimeout is THREAD_LOCK_TRANSACTION_OPTIONS.timeout (transaction-retry.ts:11): the
-// transaction is given 20 seconds, and it is not rerun on a conflict.
-const threadLockTimeout = 20 * time.Second
+// transaction is given 20 seconds, and it is not rerun on a conflict. A var so the integration
+// test can shorten the wait; SetThreadLockTimeoutForTest is its only other writer.
+var threadLockTimeout = 20 * time.Second
+
+// SetThreadLockTimeoutForTest shortens the thread-lock wait and returns the restore. Tests only.
+func SetThreadLockTimeoutForTest(timeout time.Duration) func() {
+	previous := threadLockTimeout
+	threadLockTimeout = timeout
+	return func() { threadLockTimeout = previous }
+}
+
+// errLockTimeout stands for Prisma's P2028 when the transaction's budget ran out while it waited
+// for the thread row. P2028 is not in UNAVAILABLE_CODES (packages/db/src/client.ts:167-194), so
+// the API answers the generic 500, not the 503 a lost database gets.
+var errLockTimeout = errors.New("the thread lock wait expired")
 
 // focusOptions is FOCUS_OPTIONS (onboarding.ts:29-55); the card keeps only id, letter and label.
 type focusOption struct{ ID, Letter, Label string }
@@ -104,11 +117,33 @@ func parseBotID(raw orpc.Input) (string, *orpc.Error) {
 }
 
 // locked runs fn in the tenant transaction promptFocus and answerPendingChoice open: the thread
-// row is held FOR UPDATE first, for at most 20 seconds, and never rerun.
+// row is held FOR UPDATE first, for at most 20 seconds, and never rerun. A wait that runs out is
+// the generic 500 (errLockTimeout), not the 503 db.IsUnavailable gives a lost database.
 func locked(ctx context.Context, database *db.DB, actor db.Actor, fn func(context.Context, pgx.Tx) error) error {
 	runCtx, cancel := context.WithTimeout(ctx, threadLockTimeout)
 	defer cancel()
-	return database.Tenant(runCtx, actor, func(tx pgx.Tx) error { return fn(runCtx, tx) })
+	err := database.Tenant(runCtx, actor, func(tx pgx.Tx) error { return fn(runCtx, tx) })
+	if lockExpired(runCtx, err) {
+		return errLockTimeout
+	}
+	return err
+}
+
+// lockExpired reports whether err is the transaction's budget running out: its own deadline, or
+// the statement Postgres cancelled because of it. A failure raised on purpose is never.
+func lockExpired(ctx context.Context, err error) bool {
+	if err == nil || ctx.Err() == nil {
+		return false
+	}
+	var failure *orpc.Error
+	if errors.As(err, &failure) {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var postgres interface{ SQLState() string }
+	return errors.As(err, &postgres) && postgres.SQLState() == "57014"
 }
 
 // lockThread is `SELECT id FROM threads WHERE id = $1 FOR UPDATE`; a thread this Space cannot see

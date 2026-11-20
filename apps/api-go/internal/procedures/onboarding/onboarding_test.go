@@ -1,8 +1,14 @@
 package onboarding
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 )
 
 func TestPendingChoiceFollowsJavaScriptFalsiness(t *testing.T) {
@@ -42,5 +48,29 @@ func TestChoiceBlockCarriesOnlyTheCardFields(t *testing.T) {
 	}
 	if _, answered := block["answerId"]; answered {
 		t.Fatal("a posted card has no answerId")
+	}
+}
+
+// TestLockExpiredOnlyConvertsTheBudget covers the scoped mapping: a wait that ran out is the
+// generic 500, while a failure raised on purpose or another database error keeps its own answer.
+func TestLockExpiredOnlyConvertsTheBudget(t *testing.T) {
+	expired, cancelExpired := context.WithTimeout(context.Background(), time.Nanosecond)
+	defer cancelExpired()
+	<-expired.Done()
+	if !lockExpired(expired, context.DeadlineExceeded) {
+		t.Fatal("the transaction's deadline is the lock wait expiring")
+	}
+	// pgx may report the server's cancellation of the waiting statement instead.
+	if !lockExpired(expired, &pgconn.PgError{Code: "57014"}) {
+		t.Fatal("a cancelled statement is the lock wait expiring")
+	}
+	if lockExpired(context.Background(), context.DeadlineExceeded) {
+		t.Fatal("without an expired budget nothing is converted")
+	}
+	if lockExpired(expired, shared.NotFound) || lockExpired(expired, errThreadGone) {
+		t.Fatal("a failure raised on purpose is not converted")
+	}
+	if lockExpired(expired, &pgconn.PgError{Code: "23505"}) {
+		t.Fatal("a constraint violation is not converted")
 	}
 }
