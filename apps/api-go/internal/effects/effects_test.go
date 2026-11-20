@@ -150,8 +150,10 @@ func TestSliceUTF16(t *testing.T) {
 	if got := sliceUTF16("abcdef", 3); got != "abc" {
 		t.Error(got)
 	}
-	if got := sliceUTF16("a😀b", 2); got != "a" {
-		t.Errorf("an astral character is not split: %q", got)
+	// slice(0, 2) of "a😀b" keeps 'a' and the pair's high half; the write sanitizer turns that
+	// lone half into U+FFFD (text-sanitization.ts:58).
+	if got := sliceUTF16("a😀b", 2); got != "a\uFFFD" {
+		t.Errorf("a split pair becomes U+FFFD: %q", got)
 	}
 	if got := sliceUTF16("a😀b", 3); got != "a😀" {
 		t.Errorf("got %q", got)

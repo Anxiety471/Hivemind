@@ -20,9 +20,22 @@ func TestParsePlaybookCoercesLikeTypeScript(t *testing.T) {
 	if len(playbook.Inputs) != 3 || playbook.Inputs[1] != "2" || playbook.Inputs[2] != "true" {
 		t.Fatalf("inputs = %v", playbook.Inputs)
 	}
-	// Not an object: every field is empty, as buildPlaybookFromRecording("", []) gives.
-	if empty := parsePlaybook("nope"); empty.WhenToUse != "" || len(empty.Steps) != 0 {
-		t.Fatalf("empty playbook = %+v", empty)
+	// Not an object: buildPlaybookFromRecording("", []) and its non-empty defaults.
+	for _, value := range []any{nil, "nope", 7, true} {
+		fallback := parsePlaybook(value)
+		if fallback.WhenToUse != defaultWhenToUse || len(fallback.Steps) != 1 || fallback.Steps[0] != defaultStep {
+			t.Fatalf("%v: fallback = %+v", value, fallback)
+		}
+		if fallback.HowToCheck != defaultHowToCheck || fallback.WhatToReturn != defaultWhatToReturn ||
+			fallback.ApprovalBoundaries != defaultApproval || fallback.FailureHandling != defaultFailure ||
+			len(fallback.Inputs) != 0 {
+			t.Fatalf("%v: fallback = %+v", value, fallback)
+		}
+	}
+	// An array is an object to JavaScript: its fields are absent, so they coerce to empty.
+	list := parsePlaybook([]any{"a"})
+	if list.WhenToUse != "" || len(list.Steps) != 0 || len(list.Inputs) != 0 {
+		t.Fatalf("list playbook = %+v", list)
 	}
 }
 
@@ -50,14 +63,17 @@ func TestSliceUTF16CountsCodeUnits(t *testing.T) {
 	if got := sliceUTF16("abcdef", 0, 3); got != "abc" {
 		t.Fatalf("got %q", got)
 	}
-	// An astral character is two units, so a slice between its halves cannot include it.
+	// An astral character is two units, so a slice between its halves keeps both units.
 	if got := sliceUTF16("😀😀", 0, 2); got != "😀" {
 		t.Fatalf("got %q", got)
 	}
-	// A start inside a pair cannot exist in a Go string: the helper never splits one, where
-	// JavaScript's slice would hand back an unpaired surrogate.
-	if got := sliceUTF16("😀x", 1, 3); got != "😀x" {
-		t.Fatalf("got %q", got)
+	// A cut inside a pair leaves a lone half, and the write sanitizer turns it into U+FFFD:
+	// goal.slice(0, 80) then sanitizeUtf16ForJson (text-sanitization.ts:58).
+	if got := sliceUTF16("😀x", 1, 3); got != "\uFFFDx" {
+		t.Fatalf("a low half alone becomes U+FFFD: %q", got)
+	}
+	if got := sliceUTF16("a"+"😀", 0, 2); got != "a\uFFFD" {
+		t.Fatalf("a high half alone becomes U+FFFD: %q", got)
 	}
 	if got := sliceUTF16("short", 0, 80); got != "short" {
 		t.Fatalf("got %q", got)
@@ -67,7 +83,7 @@ func TestSliceUTF16CountsCodeUnits(t *testing.T) {
 func TestOutputValidChecksTheStoredRows(t *testing.T) {
 	valid := Skill{
 		ID: "s", BotID: "b", Status: "draft",
-		Recording: Recording{Events: []any{}, Snapshots: []any{}},
+		Recording: Recording{Events: []RecordingEvent{}, Snapshots: []RecordingSnapshot{}},
 	}
 	if !outputValid(valid) {
 		t.Fatal("a draft with an empty recording is valid")
@@ -77,20 +93,46 @@ func TestOutputValidChecksTheStoredRows(t *testing.T) {
 	if outputValid(bad) {
 		t.Fatal("a status outside the enum fails the output parse")
 	}
-	bad = valid
-	bad.Recording = Recording{Events: []any{map[string]any{"at": "x", "kind": "weird"}}, Snapshots: []any{}}
-	if outputValid(bad) {
+	if _, ok := parseRecording(map[string]any{"events": []any{map[string]any{"at": "x", "kind": "weird"}}, "snapshots": []any{}}); ok {
 		t.Fatal("an event kind outside the enum fails the output parse")
 	}
-	bad = valid
-	bad.Recording = Recording{Events: []any{}, Snapshots: []any{map[string]any{"at": "x"}}}
-	if outputValid(bad) {
+	if _, ok := parseRecording(map[string]any{"events": []any{}, "snapshots": []any{map[string]any{"at": "x"}}}); ok {
 		t.Fatal("a snapshot without a summary fails the output parse")
 	}
-	ok := valid
-	ok.Recording = Recording{Events: []any{map[string]any{"at": "x", "kind": "key", "key": "a", "sensitive": true, "x": json.Number("3")}}, Snapshots: []any{map[string]any{"at": "y", "summary": "s"}}}
-	if !outputValid(ok) {
+	// A present optional key must hold a value: zod's .optional() refuses null.
+	if _, ok := parseRecording(map[string]any{"events": []any{map[string]any{"at": "x", "kind": "key", "x": nil}}, "snapshots": []any{}}); ok {
+		t.Fatal("a null x fails the output parse")
+	}
+	if _, ok := parseRecording(map[string]any{"events": []any{}, "snapshots": []any{map[string]any{"at": "x", "summary": "s", "hash": nil}}}); ok {
+		t.Fatal("a null hash fails the output parse")
+	}
+	// An unknown key is stripped: the output carries the schema's keys only.
+	recording, ok := parseRecording(map[string]any{
+		"events": []any{map[string]any{
+			"at": "x", "kind": "key", "key": "a", "sensitive": true, "x": json.Number("3"), "extra": 1,
+		}},
+		"snapshots":      []any{map[string]any{"at": "y", "summary": "s", "extra": true}},
+		"controlLeaseId": "lease",
+		"unknown":        "dropped",
+	})
+	if !ok {
 		t.Fatal("a recording inside the schema is valid")
+	}
+	if len(recording.Events) != 1 || recording.Events[0].Key == nil || *recording.Events[0].Key != "a" ||
+		recording.Events[0].X == nil || *recording.Events[0].X != 3 || recording.Events[0].Sensitive == nil {
+		t.Fatalf("event = %+v", recording.Events)
+	}
+	body, err := json.Marshal(recording)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"events":[{"at":"x","kind":"key","x":3,"key":"a","sensitive":true}],"snapshots":[{"at":"y","summary":"s"}],"controlLeaseId":"lease"}`
+	if string(body) != want {
+		t.Fatalf("recording = %s", body)
+	}
+	// A stored recording that is not an object reads as an empty one on both sides.
+	if empty, ok := parseRecording("nope"); !ok || len(empty.Events) != 0 || len(empty.Snapshots) != 0 {
+		t.Fatalf("scalar recording = %+v %v", empty, ok)
 	}
 }
 

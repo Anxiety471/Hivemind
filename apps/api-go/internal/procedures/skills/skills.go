@@ -15,6 +15,7 @@ import (
 	"reflect"
 	"strings"
 	"time"
+	"unicode/utf16"
 
 	"github.com/jackc/pgx/v5"
 
@@ -43,11 +44,33 @@ type Playbook struct {
 	FailureHandling    string   `json:"failureHandling"`
 }
 
-// Recording is TeachRecordingSchema: what parseRecording hands on unchanged.
+// RecordingEvent is TeachRecordingEventSchema (packages/contracts/src/domain.ts:730-742). The
+// output parse keeps only these keys, so an unknown key in the stored JSON is dropped.
+type RecordingEvent struct {
+	At        string   `json:"at"`
+	Kind      string   `json:"kind"`
+	X         *float64 `json:"x,omitempty"`
+	Y         *float64 `json:"y,omitempty"`
+	Button    *string  `json:"button,omitempty"`
+	Type      *string  `json:"type,omitempty"`
+	Key       *string  `json:"key,omitempty"`
+	Text      *string  `json:"text,omitempty"`
+	Summary   *string  `json:"summary,omitempty"`
+	Sensitive *bool    `json:"sensitive,omitempty"`
+}
+
+// RecordingSnapshot is TeachSnapshotSchema (packages/contracts/src/domain.ts:744-748).
+type RecordingSnapshot struct {
+	At      string  `json:"at"`
+	Summary string  `json:"summary"`
+	Hash    *string `json:"hash,omitempty"`
+}
+
+// Recording is TeachRecordingSchema: parseRecording's view, narrowed by the output parse.
 type Recording struct {
-	Events         []any   `json:"events"`
-	Snapshots      []any   `json:"snapshots"`
-	ControlLeaseID *string `json:"controlLeaseId,omitempty"`
+	Events         []RecordingEvent    `json:"events"`
+	Snapshots      []RecordingSnapshot `json:"snapshots"`
+	ControlLeaseID *string             `json:"controlLeaseId,omitempty"`
 }
 
 // Skill is TaughtSkillSchema (packages/contracts/src/domain.ts:758-771).
@@ -93,11 +116,36 @@ var (
 
 func now() time.Time { return time.Now().UTC().Truncate(time.Millisecond) }
 
-// parsePlaybook is parsePlaybook: every field coerced, never refused (teaching-session.ts:86-100).
+// The prompt constants buildPlaybookFromRecording("", []) answers with (teach-playbook.prompt.ts:1-14).
+const (
+	defaultWhenToUse    = "When the user asks to repeat the demonstrated task."
+	defaultStep         = "Repeat the demonstrated workflow using the same navigation pattern."
+	defaultHowToCheck   = "Confirm the outcome matches the user's goal before reporting success."
+	defaultWhatToReturn = "A short summary of what was completed and where outputs were saved."
+	defaultApproval     = "Do not send messages, spend money, publish content, or delete data without explicit user approval."
+	defaultFailure      = "If a step fails or the expected screen is not visible, stop and ask the user before retrying."
+)
+
+// defaultPlaybook is buildPlaybookFromRecording("", []) (teach-playbook.ts:88-243): what
+// parsePlaybook answers for a stored value JavaScript does not see as an object.
+func defaultPlaybook() Playbook {
+	return Playbook{
+		WhenToUse: defaultWhenToUse, Inputs: []string{}, Steps: []string{defaultStep},
+		HowToCheck: defaultHowToCheck, WhatToReturn: defaultWhatToReturn,
+		ApprovalBoundaries: defaultApproval, FailureHandling: defaultFailure,
+	}
+}
+
+// parsePlaybook is parsePlaybook: every field coerced, never refused (teaching-session.ts:100-115).
 func parsePlaybook(value any) Playbook {
 	object, ok := value.(map[string]any)
 	if !ok {
-		return Playbook{Inputs: []string{}, Steps: []string{}}
+		// An array is an object to JavaScript, so its missing fields coerce to the empty values;
+		// anything else (null, a string, a number) takes the recording defaults.
+		if _, isList := value.([]any); !isList {
+			return defaultPlaybook()
+		}
+		object = map[string]any{}
 	}
 	text := func(key string) string {
 		field, present := object[key]
@@ -149,30 +197,155 @@ func jsString(value any) string {
 	return validate.Stringify(value)
 }
 
-// parseRecording is parseRecording: the stored arrays pass through as they are.
-func parseRecording(value any) Recording {
-	recording := Recording{Events: []any{}, Snapshots: []any{}}
+// recordingKinds is the TeachRecordingEventSchema kind enum (domain.ts:732).
+var recordingKinds = []string{"pointer", "key", "clipboard", "snapshot", "scroll"}
+
+// parseRecording is parseRecording (teaching-session.ts:73-81), narrowed by the output parse:
+// the stored arrays keep only the schema's keys (zod strips the rest), and a value the schema
+// refuses reports false so the procedure answers Output validation failed. A recording that is
+// not an object reads as an empty one, as parseRecording's `record.events` is then undefined.
+func parseRecording(value any) (Recording, bool) {
+	recording := Recording{Events: []RecordingEvent{}, Snapshots: []RecordingSnapshot{}}
 	object, ok := value.(map[string]any)
 	if !ok {
-		return recording
-	}
-	if list, ok := object["events"].([]any); ok {
-		recording.Events = list
-	}
-	if list, ok := object["snapshots"].([]any); ok {
-		recording.Snapshots = list
+		return recording, true
 	}
 	if lease, ok := object["controlLeaseId"].(string); ok {
 		recording.ControlLeaseID = &lease
 	}
-	return recording
+	if list, ok := object["events"].([]any); ok {
+		events := make([]RecordingEvent, 0, len(list))
+		for _, entry := range list {
+			event, ok := narrowEvent(entry)
+			if !ok {
+				return recording, false
+			}
+			events = append(events, event)
+		}
+		recording.Events = events
+	}
+	if list, ok := object["snapshots"].([]any); ok {
+		snapshots := make([]RecordingSnapshot, 0, len(list))
+		for _, entry := range list {
+			snapshot, ok := narrowSnapshot(entry)
+			if !ok {
+				return recording, false
+			}
+			snapshots = append(snapshots, snapshot)
+		}
+		recording.Snapshots = snapshots
+	}
+	return recording, true
 }
 
-// mapSkill is mapTaughtSkill (packages/adapters/src/teaching-session.ts:102-117).
-func mapSkill(value row) Skill {
+// narrowEvent is one TeachRecordingEventSchema parse. A present key that is null or of another
+// type fails: zod's .optional() admits an absent key or a value, never null.
+func narrowEvent(value any) (RecordingEvent, bool) {
+	entry, ok := value.(map[string]any)
+	if !ok {
+		return RecordingEvent{}, false
+	}
+	at, ok := entry["at"].(string)
+	if !ok {
+		return RecordingEvent{}, false
+	}
+	kind, ok := entry["kind"].(string)
+	if !ok {
+		return RecordingEvent{}, false
+	}
+	known := false
+	for _, candidate := range recordingKinds {
+		if kind == candidate {
+			known = true
+		}
+	}
+	if !known {
+		return RecordingEvent{}, false
+	}
+	event := RecordingEvent{At: at, Kind: kind}
+	for key, target := range map[string]**float64{"x": &event.X, "y": &event.Y} {
+		if raw, present := entry[key]; present {
+			number, ok := recordingNumber(raw)
+			if !ok {
+				return RecordingEvent{}, false
+			}
+			*target = number
+		}
+	}
+	for key, target := range map[string]**string{
+		"button": &event.Button, "type": &event.Type, "key": &event.Key,
+		"text": &event.Text, "summary": &event.Summary,
+	} {
+		if raw, present := entry[key]; present {
+			text, ok := raw.(string)
+			if !ok {
+				return RecordingEvent{}, false
+			}
+			*target = &text
+		}
+	}
+	if raw, present := entry["sensitive"]; present {
+		flag, ok := raw.(bool)
+		if !ok {
+			return RecordingEvent{}, false
+		}
+		event.Sensitive = &flag
+	}
+	return event, true
+}
+
+// recordingNumber is z.number(): any finite JSON number.
+func recordingNumber(value any) (*float64, bool) {
+	switch typed := value.(type) {
+	case float64:
+		return &typed, true
+	case json.Number:
+		parsed, err := typed.Float64()
+		if err != nil {
+			return nil, false
+		}
+		return &parsed, true
+	case int64:
+		parsed := float64(typed)
+		return &parsed, true
+	case int:
+		parsed := float64(typed)
+		return &parsed, true
+	}
+	return nil, false
+}
+
+func narrowSnapshot(value any) (RecordingSnapshot, bool) {
+	entry, ok := value.(map[string]any)
+	if !ok {
+		return RecordingSnapshot{}, false
+	}
+	at, ok := entry["at"].(string)
+	if !ok {
+		return RecordingSnapshot{}, false
+	}
+	summary, ok := entry["summary"].(string)
+	if !ok {
+		return RecordingSnapshot{}, false
+	}
+	snapshot := RecordingSnapshot{At: at, Summary: summary}
+	if raw, present := entry["hash"]; present {
+		hash, ok := raw.(string)
+		if !ok {
+			return RecordingSnapshot{}, false
+		}
+		snapshot.Hash = &hash
+	}
+	return snapshot, true
+}
+
+// mapSkill is mapTaughtSkill (packages/adapters/src/teaching-session.ts:117-132). The bool is the
+// output parse of the recording: false means a stored entry the schema refuses.
+func mapSkill(value row) (Skill, bool) {
+	recording, ok := parseRecording(value.Recording)
 	skill := Skill{
 		ID: value.ID, BotID: value.BotID, Name: value.Name, Goal: value.Goal, Status: value.Status,
-		Playbook: parsePlaybook(value.Playbook), Recording: parseRecording(value.Recording),
+		Playbook: parsePlaybook(value.Playbook), Recording: recording,
 		CreatedAt: shared.ISO(value.CreatedAt), UpdatedAt: shared.ISO(value.UpdatedAt),
 	}
 	if value.StartedAt != nil {
@@ -187,20 +360,22 @@ func mapSkill(value row) Skill {
 		at := shared.ISO(*value.StoppedAt)
 		skill.StoppedAt = &at
 	}
-	return skill
+	return skill, ok
 }
 
-// skillFor is skillFor: the caller's own recording, or an empty one to others.
-func skillFor(actor db.Actor, value row) Skill {
-	skill := mapSkill(value)
+// skillFor is skillFor: the caller's own recording, or an empty one to others. A recording the
+// schema refuses is only their own problem: the replacement is parsed, so it is valid.
+func skillFor(actor db.Actor, value row) (Skill, bool) {
+	skill, ok := mapSkill(value)
 	if value.UserID != actor.UserID {
-		skill.Recording = parseRecording(emptyRecording)
+		skill.Recording, _ = parseRecording(emptyRecording)
+		ok = true
 	}
-	return skill
+	return skill, ok
 }
 
-// outputValid is the router's TaughtSkillSchema parse: the status enum, the recording entries
-// (teach event kinds and snapshot fields), and the playbook fields that parsePlaybook fabricated.
+// outputValid is the rest of the router's TaughtSkillSchema parse: the status enum and the ids.
+// The recording was already narrowed and checked by parseRecording.
 func outputValid(skill Skill) bool {
 	known := false
 	for _, status := range statuses {
@@ -208,66 +383,7 @@ func outputValid(skill Skill) bool {
 			known = true
 		}
 	}
-	if !known || skill.ID == "" || skill.BotID == "" {
-		return false
-	}
-	for _, event := range skill.Recording.Events {
-		entry, ok := event.(map[string]any)
-		if !ok {
-			return false
-		}
-		if _, ok := entry["at"].(string); !ok {
-			return false
-		}
-		kind, ok := entry["kind"].(string)
-		if !ok {
-			return false
-		}
-		switch kind {
-		case "pointer", "key", "clipboard", "snapshot", "scroll":
-		default:
-			return false
-		}
-		for _, key := range []string{"x", "y"} {
-			if value, present := entry[key]; present && value != nil {
-				if _, ok := value.(json.Number); !ok {
-					if _, isFloat := value.(float64); !isFloat {
-						return false
-					}
-				}
-			}
-		}
-		for _, key := range []string{"button", "type", "key", "text", "summary"} {
-			if value, present := entry[key]; present && value != nil {
-				if _, ok := value.(string); !ok {
-					return false
-				}
-			}
-		}
-		if value, present := entry["sensitive"]; present && value != nil {
-			if _, ok := value.(bool); !ok {
-				return false
-			}
-		}
-	}
-	for _, snapshot := range skill.Recording.Snapshots {
-		entry, ok := snapshot.(map[string]any)
-		if !ok {
-			return false
-		}
-		if _, ok := entry["at"].(string); !ok {
-			return false
-		}
-		if _, ok := entry["summary"].(string); !ok {
-			return false
-		}
-		if hash, present := entry["hash"]; present && hash != nil {
-			if _, ok := hash.(string); !ok {
-				return false
-			}
-		}
-	}
-	return true
+	return known && skill.ID != "" && skill.BotID != ""
 }
 
 // getOwned is getOwnedSkill: the skill of the actor's Space (not necessarily theirs).
@@ -596,15 +712,15 @@ func UpdateDraft(ctx context.Context, database *db.DB, deployment shared.Deploym
 		parsePlaybook(updated.Playbook), updated.Status); err != nil {
 		return nil, shared.Failure(err)
 	}
-	skill := skillFor(actor, updated)
-	if !outputValid(skill) {
+	skill, recordingOK := skillFor(actor, updated)
+	if !recordingOK || !outputValid(skill) {
 		return nil, shared.OutputInvalid()
 	}
 	return skill, nil
 }
 
-// updateSkill is the taught_skills update both procedures make; `recording` is nil when the
-// caller owns the session and the stored recording stays.
+// updateSkill is updateDraft's taught_skills update: the editor's playbook replaces the stored one,
+// and `recording` is nil when the caller owns the session, so the stored recording stays.
 func updateSkill(ctx context.Context, tx pgx.Tx, id, userID, name string, playbook map[string]any, status string, recording any) (row, error) {
 	if recording == nil {
 		value, err := scan(tx.QueryRow(ctx, `UPDATE taught_skills SET "userId" = $2, name = $3, playbook = $4::jsonb,
@@ -687,7 +803,7 @@ func Save(ctx context.Context, database *db.DB, deployment shared.Deployment, ac
 		if current.UserID != actor.UserID {
 			recording = emptyRecording
 		}
-		updated, err = updateSkill(ctx, tx, current.ID, actor.UserID, name, parsePlaybookJSON(current.Playbook), "saved", recording)
+		updated, err = saveSkill(ctx, tx, current.ID, actor.UserID, name, "saved", recording)
 		return err
 	})
 	if err != nil {
@@ -725,45 +841,58 @@ func Save(ctx context.Context, database *db.DB, deployment shared.Deployment, ac
 		}
 		notify(ctx, deployment, *appended)
 	}
-	skill := skillFor(actor, updated)
-	if !outputValid(skill) {
+	skill, recordingOK := skillFor(actor, updated)
+	if !recordingOK || !outputValid(skill) {
 		return nil, shared.OutputInvalid()
 	}
 	return skill, nil
 }
 
-// parsePlaybookJSON keeps the stored playbook as written for the save path, where updateDraft
-// would have replaced it: `playbook` is not in save's input.
-func parsePlaybookJSON(value any) map[string]any {
-	object, ok := value.(map[string]any)
-	if !ok {
-		return playbookValue(Playbook{Inputs: []string{}, Steps: []string{}})
+// saveSkill is save's taught_skills update. TypeScript's data has userId, the recording handed
+// over, status and name only: the stored playbook is left as written (taught-skills.ts:475-482).
+func saveSkill(ctx context.Context, tx pgx.Tx, id, userID, name, status string, recording any) (row, error) {
+	if recording == nil {
+		value, err := scan(tx.QueryRow(ctx, `UPDATE taught_skills SET "userId" = $2, name = $3,
+			status = $4, "updatedAt" = $5 WHERE id = $1 RETURNING `+columns,
+			id, userID, shared.StoredText(name), status, now()))
+		return value, err
 	}
-	return object
+	value, err := scan(tx.QueryRow(ctx, `UPDATE taught_skills SET "userId" = $2, name = $3,
+		status = $4, recording = $5::jsonb, "updatedAt" = $6 WHERE id = $1 RETURNING `+columns,
+		id, userID, shared.StoredText(name), status, mustJSON(recording), now()))
+	return value, err
 }
 
-// sliceUTF16 is goal.slice(0, 80): UTF-16 code units, so a surrogate pair counts twice.
+// sliceUTF16 is text.slice(start, end) in UTF-16 code units, then the write hook's
+// sanitizeUtf16ForJson (text-sanitization.ts:58, packages/core/src/events.ts:772-777): a cut that
+// lands inside a surrogate pair leaves one lone half, and each lone half becomes U+FFFD.
 func sliceUTF16(text string, start, end int) string {
-	units := 0
-	from := -1
-	for index, character := range text {
-		if units == start && from < 0 {
-			from = index
-		}
-		step := 1
-		if character > 0xFFFF {
-			step = 2
-		}
-		if units+step > end {
-			if from < 0 {
-				return ""
-			}
-			return text[from:index]
-		}
-		units += step
+	units := utf16.Encode([]rune(text))
+	if start < 0 {
+		start = 0
 	}
-	if from < 0 {
-		return text
+	if start > len(units) {
+		start = len(units)
 	}
-	return text[from:]
+	if end > len(units) {
+		end = len(units)
+	}
+	if end < start {
+		end = start
+	}
+	var out strings.Builder
+	for index := start; index < end; index++ {
+		unit := units[index]
+		if unit >= 0xD800 && unit <= 0xDBFF && index+1 < end && units[index+1] >= 0xDC00 && units[index+1] <= 0xDFFF {
+			out.WriteRune(utf16.DecodeRune(rune(unit), rune(units[index+1])))
+			index++
+			continue
+		}
+		if unit >= 0xD800 && unit <= 0xDFFF {
+			out.WriteRune('\uFFFD')
+			continue
+		}
+		out.WriteRune(rune(unit))
+	}
+	return out.String()
 }

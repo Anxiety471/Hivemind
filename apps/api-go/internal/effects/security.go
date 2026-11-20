@@ -197,23 +197,30 @@ func bounded(value string, max int) string {
 
 func utf16Length(value string) int { return len(utf16.Encode([]rune(value))) }
 
-// sliceUTF16 is value.slice(0, max) in UTF-16 code units, never splitting a pair.
+// sliceUTF16 is value.slice(0, max) in UTF-16 code units, then the write hook's
+// sanitizeUtf16ForJson (packages/db/src/security-events.ts:134, text-sanitization.ts:58): a cut
+// that lands inside a surrogate pair leaves one lone half, which becomes U+FFFD.
 func sliceUTF16(value string, max int) string {
-	if utf16Length(value) <= max {
-		return value
+	units := utf16.Encode([]rune(value))
+	if max < 0 {
+		max = 0
+	}
+	if max > len(units) {
+		max = len(units)
 	}
 	var out strings.Builder
-	units := 0
-	for _, character := range value {
-		width := 1
-		if character > 0xFFFF {
-			width = 2
+	for index := 0; index < max; index++ {
+		unit := units[index]
+		if unit >= 0xD800 && unit <= 0xDBFF && index+1 < max && units[index+1] >= 0xDC00 && units[index+1] <= 0xDFFF {
+			out.WriteRune(utf16.DecodeRune(rune(unit), rune(units[index+1])))
+			index++
+			continue
 		}
-		if units+width > max {
-			break
+		if unit >= 0xD800 && unit <= 0xDFFF {
+			out.WriteRune('\uFFFD')
+			continue
 		}
-		units += width
-		out.WriteRune(character)
+		out.WriteRune(rune(unit))
 	}
 	return out.String()
 }
