@@ -46,19 +46,30 @@ type Rule interface {
 
 // Linter holds an ordered rule slice. The first rule that matches an argument
 // produces that argument's only finding. Register appends a rule, and Lint is
-// safe for concurrent use as long as no rule is registered concurrently.
+// safe for concurrent use as long as no rule is registered concurrently. Nil
+// rules are ignored.
 type Linter struct {
 	rules []Rule
 }
 
-// New returns a Linter with the given rules in order. A nil rules slice gives
-// a Linter that reports nothing until Register is called.
+// New returns a Linter with the given rules in order. Nil rules are ignored. A
+// nil rules slice gives a Linter that reports nothing until Register is called.
 func New(rules ...Rule) *Linter {
-	return &Linter{rules: append([]Rule(nil), rules...)}
+	linter := &Linter{rules: make([]Rule, 0, len(rules))}
+	for _, rule := range rules {
+		if rule != nil {
+			linter.rules = append(linter.rules, rule)
+		}
+	}
+	return linter
 }
 
-// Register appends a rule after the linter's existing rules.
+// Register appends a rule after the linter's existing rules. A nil rule is
+// ignored.
 func (l *Linter) Register(rule Rule) {
+	if rule == nil {
+		return
+	}
 	l.rules = append(l.rules, rule)
 }
 

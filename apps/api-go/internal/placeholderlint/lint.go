@@ -134,6 +134,9 @@ func (w *walker) check(path, value string) {
 		RequiredContent: w.config.requires(path, name),
 	}
 	for _, rule := range w.linter.rules {
+		if rule == nil {
+			continue
+		}
 		if rule.Check(argument) {
 			w.findings = append(w.findings, Finding{
 				Path:  path,

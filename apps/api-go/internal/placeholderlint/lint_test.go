@@ -525,6 +525,30 @@ func (r constantRule) Name() string { return r.name }
 
 func (r constantRule) Check(argument Argument) bool { return argument.Value == r.value }
 
+func TestLintIgnoresNilRules(t *testing.T) {
+	t.Parallel()
+
+	var missing Rule
+	rules := append(DefaultRules(), missing)
+	linter := New(rules...)
+	args := map[string]any{"name": "TODO"}
+	want := []Finding{{Path: "name", Value: "TODO", Rule: "placeholder-word"}}
+
+	if got := linter.Lint("demo", args); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Lint() with a nil constructor rule = %#v, want %#v", got, want)
+	}
+
+	linter.Register(missing)
+	if got := linter.Lint("demo", args); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Lint() after registering a nil rule = %#v, want %#v", got, want)
+	}
+
+	onlyNil := &Linter{rules: []Rule{missing}}
+	if got := onlyNil.Lint("demo", args); len(got) != 0 {
+		t.Fatalf("Lint() with only nil rules = %#v, want none", got)
+	}
+}
+
 func TestLintFirstMatchingRuleWins(t *testing.T) {
 	t.Parallel()
 
