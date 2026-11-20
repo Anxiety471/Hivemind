@@ -498,5 +498,9 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 			},
 		},
 	}
-	return append(procedures, membership(database, deployment, effects.NewRecorder(database, slog.Default()))...)
+	audit := deployment.Audit
+	if audit == nil {
+		audit = effects.NewRecorder(database, slog.Default())
+	}
+	return append(procedures, membership(database, deployment, audit)...)
 }

@@ -19,6 +19,8 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/config"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/contentcrypto"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/effects"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/events"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/gateway"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/local"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures"
@@ -172,12 +174,20 @@ func setupLocal(buildIDFile string, logger *slog.Logger) (*local.Server, func(),
 		database.Close()
 		return nil, nil, err
 	}
+	// One runner per process: the middleware publishes its own roster/Space signals through
+	// it, and the procedures publish thread cursors, organization and board changes through
+	// the same notifier, so Wait() covers every signal either side started.
+	effectsRunner := effects.NewRunner(database, logger)
 	server := local.New(database, sessions, procedures.All(database, shared.Deployment{
 		WebOrigin:           strings.TrimRight(deployment.WebOrigin, "/"),
 		EmailDelivery:       deployment.EmailDelivery,
 		InboundEmailDomain:  deployment.InboundEmailDomain,
 		MaxComputersPerUser: deployment.MaxComputersPerUser,
 		Content:             ring,
+		Events:              &events.PGPublisher{Pool: database.Pool},
+		Signals:             effectsRunner.Signals(),
+		BoardLab:            deployment.BoardLab,
+		Audit:               effectsRunner.Recorder(),
 	}), local.Config{
 		BuildID:        readBuildID(buildIDFile),
 		Minimums:       deployment.Minimums,
@@ -187,6 +197,7 @@ func setupLocal(buildIDFile string, logger *slog.Logger) (*local.Server, func(),
 		WebOrigin:      deployment.WebOrigin,
 		TrustedOrigins: deployment.TrustedOrigins,
 		Logger:         logger,
+		Effects:        effectsRunner,
 	})
 	return server, func() {
 		closeRing()

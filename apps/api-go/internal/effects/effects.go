@@ -25,6 +25,14 @@ func NewRunner(database *db.DB, logger *slog.Logger) *Runner {
 // Wait blocks until every background signal has been delivered or dropped.
 func (r *Runner) Wait() { r.notifier.Wait() }
 
+// Recorder is the audit and security-event writer the procedures share, so one process does
+// not build several recorders over the same database.
+func (r *Runner) Recorder() *Recorder { return r.recorder }
+
+// Signals is the realtime notifier the procedures publish through: thread cursors, organization
+// changes and board changes all reach subscribers through it.
+func (r *Runner) Signals() *Notifier { return r.notifier }
+
 // After runs the effects of a procedure that succeeded. The security event is
 // written before it returns; roster and Space signals go out in the background.
 func (r *Runner) After(ctx context.Context, procedure string, actor db.Actor, input json.RawMessage, output any) {

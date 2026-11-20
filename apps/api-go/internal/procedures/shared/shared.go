@@ -10,6 +10,8 @@ import (
 
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/contentcrypto"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/effects"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/events"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
 )
 
@@ -57,6 +59,18 @@ type Deployment struct {
 	// Content is the Space key ring (contentcrypto) that seals and opens rkz1 content. It is
 	// nil only in tests that never touch an encrypted model.
 	Content *contentcrypto.KeyRing
+	// Events publishes a committed thread cursor (events.NotifyCommitted). nil in tests that
+	// never append a product event.
+	Events events.Publisher
+	// Signals is the realtime notifier procedures publish organization and board changes
+	// through. nil in tests that never publish one.
+	Signals *effects.Notifier
+	// BoardLab is TICKET_BOARD_ENABLED: the board feature this deployment turns on for every
+	// account (packages/adapters/src/labs-env.ts:4-11).
+	BoardLab bool
+	// Audit records the audit events a procedure raises itself (recordAuditEvent). nil in tests
+	// that never record one.
+	Audit *effects.Recorder
 }
 
 // RequireBot is repos.getBot (packages/db/src/repos.ts:415): a bot of the actor's Space that

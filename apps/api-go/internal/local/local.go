@@ -44,6 +44,10 @@ type Config struct {
 	// loopback (or the container's networks), as an unset TRUSTED_PROXIES does.
 	ClientIP       *effects.ClientIPResolver
 	ClientIPHeader string
+	// Effects runs the middleware's own effects and owns the audit recorder and realtime
+	// notifier the procedures publish through. nil builds its own, which no procedure can
+	// reach: a procedure that publishes signals needs the runner handed in.
+	Effects *effects.Runner
 }
 
 // Server handles /rpc requests for procedures this build implements.
@@ -81,6 +85,10 @@ func New(database *db.DB, sessions *auth.Service, procedures []Procedure, config
 	if header == "" {
 		header = "x-forwarded-for"
 	}
+	runner := config.Effects
+	if runner == nil {
+		runner = effects.NewRunner(database, config.Logger)
+	}
 	return &Server{
 		db:             database,
 		auth:           sessions,
@@ -90,7 +98,7 @@ func New(database *db.DB, sessions *auth.Service, procedures []Procedure, config
 		maxLabel:       label,
 		clientIP:       resolver,
 		clientIPHeader: header,
-		effects:        effects.NewRunner(database, config.Logger),
+		effects:        runner,
 	}
 }
 

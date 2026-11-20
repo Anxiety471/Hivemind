@@ -1,6 +1,7 @@
 package effects
 
 import (
+	"encoding/json"
 	"reflect"
 	"regexp"
 	"strings"
@@ -198,5 +199,23 @@ func TestSettingsProceduresAreAuditedWithTheTypeScriptMetadata(t *testing.T) {
 	// approvalRules.remove records the caller's own id, which the gate cannot prove safe: not served.
 	if _, ok := SecurityEventFor("approvalRules.remove", map[string]any{"id": "x"}, actor); ok {
 		t.Error("approvalRules.remove is not served here")
+	}
+}
+
+func TestBoardEventCarriesOnlyTheNamedIds(t *testing.T) {
+	// BoardEventSchema (packages/contracts/src/board.ts:155-161): the optional ids are absent when
+	// the change has none, in this key order, as JSON.stringify writes them.
+	event := BoardEvent{SpaceID: "space", TicketID: "ticket", CreatedAt: "2026-01-02T03:04:05.678Z"}
+	body, err := json.Marshal(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"spaceId":"space","ticketId":"ticket","createdAt":"2026-01-02T03:04:05.678Z"}`
+	if string(body) != want {
+		t.Fatalf("board event = %s", body)
+	}
+	both, _ := json.Marshal(BoardEvent{SpaceID: "space", BoardID: "board", TicketID: "ticket", CreatedAt: "x"})
+	if string(both) != `{"spaceId":"space","boardId":"board","ticketId":"ticket","createdAt":"x"}` {
+		t.Fatalf("board event with both ids = %s", both)
 	}
 }

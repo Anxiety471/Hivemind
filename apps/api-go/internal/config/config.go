@@ -45,6 +45,9 @@ type Config struct {
 	// from ENCRYPTION_KEY). Read at startup so a process that serves encrypted content cannot run
 	// without material.
 	MasterKeys []contentcrypto.MasterKey
+	// BoardLab is TICKET_BOARD_ENABLED: the Labs board feature turned on for every account
+	// (packages/adapters/src/labs-env.ts:4-11).
+	BoardLab bool
 }
 
 // Load reads the environment. Only a build that serves procedures needs the
@@ -97,6 +100,7 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	config.MasterKeys = keys
+	config.BoardLab = os.Getenv("TICKET_BOARD_ENABLED") == "true"
 
 	minimums, err := local.ParseMinimums(os.Getenv("RAKAZO_MIN_CLIENT_BUILD"))
 	if err != nil {
