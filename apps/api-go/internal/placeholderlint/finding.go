@@ -19,13 +19,18 @@ type Finding struct {
 
 // Message is the stable, model-facing feedback line for this finding. Long
 // values are truncated to feedbackValueLimit characters, including the
-// trailing ellipsis.
+// trailing ellipsis. The path is unescaped for display; Finding.Path keeps the
+// canonical encoded form.
 func (f Finding) Message() string {
 	return fmt.Sprintf(
 		"argument %q looks like a placeholder (%q); provide the actual value, or ask the user if it's unknown",
-		f.Path,
+		displayPath(f.Path),
 		truncateValue(f.Value),
 	)
+}
+
+func displayPath(path string) string {
+	return unescapeKey(path)
 }
 
 func truncateValue(value string) string {
