@@ -13,6 +13,7 @@ import type {
 import { DEFAULT_CONTEXT_STRATEGY } from "@rakazo/adapter-kit";
 import { FLEET_TOOL_NAMES } from "@rakazo/contracts";
 import { batchActions, humanizeToolName, redactSecrets } from "@rakazo/core";
+import { getLogger } from "@rakazo/logging";
 import { MAX_APPROVAL_DETAIL_LENGTH } from "./approval-ask.js";
 import {
   isInternalTermination,
@@ -39,6 +40,7 @@ import {
 import type { RuntimeModelTarget } from "./pi-runtime-models.js";
 import { parametersFor, prepareFleetArguments } from "./pi-runtime-tool-parameters.js";
 import { recordPiTelemetryContent, withPiTelemetrySpan } from "./pi-telemetry.js";
+import { lintPlaceholderArguments, placeholderRejectionMessage } from "./placeholder-args.js";
 import { VERBATIM_TOOL_RESULTS } from "./runtime-context.js";
 import { SCHEDULE_TOOL_NAMES } from "./schedule-tools.js";
 import type { FinishedShellCommand } from "./shell-command-stream.js";
