@@ -430,12 +430,16 @@ function SpaceShell() {
       focusComposer();
     },
   });
+  function openBotSettings(bot: Bot) {
+    setPanel("settings");
+    // Refresh run/computer so Take control isn't stuck on a stale busyBotName.
+    void refreshThread(bot.id).catch(() => undefined);
+  }
   function toggleChatPanel() {
     if (chatPanelOpen) setPanel(null);
     else if (inGroup) setPanel("group-settings");
     else if (active) {
       setPanel("home");
-      // Refresh run/computer so Take control isn't stuck on a stale busyBotName.
       void refreshThread(active.id).catch(() => undefined);
     } else return false;
     return true;
@@ -1365,6 +1369,7 @@ function SpaceShell() {
           ) : null
         }
         boardEnabled={hasLab(bootstrapMe?.labs, "board")}
+        onOpenBotSettings={openBotSettings}
         routineList={{
           routines: activeRoutines,
           loaded: routinesLoaded,

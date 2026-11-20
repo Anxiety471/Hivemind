@@ -34,6 +34,7 @@ export function ShellSidePanel({
   routineList,
   routineEditorProps,
   boardEnabled,
+  onOpenBotSettings,
   openBot,
   openCreatedBot,
   modelFocusRequest,
@@ -57,6 +58,8 @@ export function ShellSidePanel({
   routineList: Omit<ComponentProps<typeof RoutineList>, "preview">;
   routineEditorProps: ComponentProps<typeof RoutineEditor> | null;
   boardEnabled: boolean;
+  /** Opens the bot's settings and refreshes its run and computer state. */
+  onOpenBotSettings: (bot: Bot) => void;
   openBot: (botId: string) => void;
   openCreatedBot: (bot: Bot) => void;
   modelFocusRequest: number;
@@ -112,7 +115,7 @@ export function ShellSidePanel({
               bot={active}
               boardEnabled={boardEnabled}
               routineList={routineList}
-              onOpenSettings={() => setPanel("settings")}
+              onOpenSettings={() => onOpenBotSettings(active)}
               onClose={() => setPanel(null)}
             />
           ) : null}
