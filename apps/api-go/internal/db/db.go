@@ -30,6 +30,9 @@ type Actor struct {
 type DB struct {
 	Pool      *pgxpool.Pool
 	bypassKey string
+	// connectionString lets a sibling pool (content-key loads) reuse the same
+	// login without callers re-reading the environment.
+	connectionString string
 }
 
 // Open connects with UTC and the API's application name.
@@ -48,7 +51,7 @@ func Open(ctx context.Context, connectionString, applicationName string) (*DB, e
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
-	database := &DB{Pool: pool, bypassKey: bypassKey(connectionString)}
+	database := &DB{Pool: pool, bypassKey: bypassKey(connectionString), connectionString: connectionString}
 	if err := pool.Ping(ctx); err != nil {
 		pool.Close()
 		return nil, fmt.Errorf("ping database: %w", err)
@@ -58,6 +61,33 @@ func Open(ctx context.Context, connectionString, applicationName string) (*DB, e
 
 // Close releases the pool.
 func (d *DB) Close() { d.Pool.Close() }
+
+// NewPool opens a second, independently sized pool with the same login and
+// bypass key. The content key ring uses one so a key lookup never waits on the
+// caller's pool: TypeScript gives keys their own two-connection pool for the
+// same reason (packages/db/src/client.ts:98-106).
+func (d *DB) NewPool(ctx context.Context, maxConns int32, applicationName string) (*DB, error) {
+	config, err := pgxpool.ParseConfig(d.connectionString)
+	if err != nil {
+		return nil, fmt.Errorf("parse DATABASE_URL: %w", err)
+	}
+	config.MaxConns = maxConns
+	config.MinConns = 0
+	config.MaxConnLifetime = 30 * time.Minute
+	config.MaxConnIdleTime = 0
+	config.ConnConfig.RuntimeParams["timezone"] = "UTC"
+	config.ConnConfig.RuntimeParams["application_name"] = applicationName
+	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		return nil, fmt.Errorf("open %s database pool: %w", applicationName, err)
+	}
+	sibling := &DB{Pool: pool, bypassKey: d.bypassKey, connectionString: d.connectionString}
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("ping %s database pool: %w", applicationName, err)
+	}
+	return sibling, nil
+}
 
 // Tenant runs fn in a transaction whose connection is scoped to the actor's
 // Space and user. The settings are transaction-local, so a pooled connection

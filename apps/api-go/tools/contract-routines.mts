@@ -8,7 +8,6 @@ import type { Case, Seeded } from "./contract.mts";
 
 // The seeded Prisma client is passed untyped, as in the other case files; each helper names the
 // model call it makes.
-// biome-ignore lint/suspicious/noExplicitAny: the harness hands over its Prisma client as a value
 type System = any;
 
 export function routineCases(system: System): Case[] {

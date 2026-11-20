@@ -9,7 +9,6 @@
  */
 import type { Case, Seeded } from "./contract.mts";
 
-// biome-ignore lint/suspicious/noExplicitAny: manual harness; the system Prisma client is passed in untyped
 type System = any;
 
 export function laneDCases(system: System): Case[] {

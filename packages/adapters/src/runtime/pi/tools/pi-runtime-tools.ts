@@ -13,6 +13,7 @@ import type {
 import { DEFAULT_CONTEXT_STRATEGY } from "@rakazo/adapter-kit";
 import { FLEET_TOOL_NAMES } from "@rakazo/contracts";
 import { batchActions, humanizeToolName, redactSecrets } from "@rakazo/core";
+import { getLogger } from "@rakazo/logging";
 import { MAX_APPROVAL_DETAIL_LENGTH } from "../../../approvals/approval-ask.js";
 import {
   isInternalTermination,
@@ -31,6 +32,10 @@ import {
 } from "../../../secrets/bot-secrets.js";
 import { FIND_TOOL, USE_TOOL } from "../../../tools/builtin.tool-definition.js";
 import { findTools, partitionTools } from "../../../tools/builtin-tool-bridge.js";
+import {
+  lintPlaceholderArguments,
+  placeholderRejectionMessage,
+} from "../../../tools/placeholder-args.js";
 import { SCHEDULE_TOOL_NAMES } from "../../../tools/schedule-tools.js";
 import { positiveIntegerArg } from "../../../tools/workspace-file-tools.js";
 import { shortenToolResultText } from "../../context/context-selection.js";
@@ -508,6 +513,17 @@ function toAgentTool(
           )
             throw new Error("Enter top-level computer mode before using computer tools");
           const args = (params ?? {}) as Record<string, unknown>;
+          const placeholders = lintPlaceholderArguments(tool.name, args, tool.inputSchema);
+          if (placeholders.length > 0) {
+            // The tool never runs, so nothing records the call: no checkpoint, approval or
+            // queue entry, and the finding values stay out of the log.
+            getLogger().warn("agent.tool.placeholder_rejected", {
+              runId: host.request.runId,
+              "tool.name": tool.name,
+              findings: placeholders.map(({ path, rule }) => ({ path, rule })),
+            });
+            throw new Error(placeholderRejectionMessage(placeholders));
+          }
           const keepToolResultWhole = (name: string, callArgs: Record<string, unknown>) =>
             VERBATIM_TOOL_RESULTS.has(name) ||
             isVerbatimMcpResult(name, callArgs, host.request.verbatimMcpServers);

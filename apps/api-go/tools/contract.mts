@@ -18,7 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { spendingPeriodStart } from "../../../packages/core/src/billing/spending.js";
-import { asSystem } from "../../../packages/db/src/index.js";
+import { asSystem, contentEncryptionOf } from "../../../packages/db/src/index.js";
 import { createApp } from "../../api/src/app.js";
 import { laneDCases } from "./contract-lane-d.mts";
 import { membershipCases, membershipReset, membershipState } from "./contract-membership.mts";
@@ -88,6 +88,11 @@ export type Case = {
   after?: Array<{ procedure: string; input: unknown }>;
   /** The API sets no order on the list (Prisma's findMany without orderBy): compare it by id. */
   unordered?: boolean;
+  /**
+   * A string result whose concatenated parts have no order either (memory.exportMarkdown joins
+   * rows with no ORDER BY): compare the parts as a set, split at the `\n\n# ` boundary.
+   */
+  unorderedSections?: boolean;
   /** Runs only with CONTRACT_EMAIL=1 (email delivery configured on both sides); otherwise only without it. */
   email?: boolean;
 };
@@ -197,6 +202,11 @@ await writeFile(
       "agentSkills.list": { mode: "go", readOnly: true },
       "agentSkills.get": { mode: "go", readOnly: true },
       "agentSkills.remove": { mode: "go" },
+      "memory.list": { mode: "go", readOnly: true },
+      "memory.budget": { mode: "go", readOnly: true },
+      "memory.exportMarkdown": { mode: "go", readOnly: true },
+      "memory.update": { mode: "go" },
+      "memory.remove": { mode: "go" },
     },
   }),
 );
@@ -469,6 +479,7 @@ const cases: Case[] = [
   ...laneDCases(system),
   ...routineResumeCases(system),
   ...routineCases(system),
+  ...memoryCases(),
 ];
 
 const SITES = ["zeta.example", "alpha.example", "Beta.example", "_under.example", "10.0.0.1"];
@@ -2023,7 +2034,6 @@ async function run(
     procedure: string,
     input: unknown,
     seeded: Seeded,
-    // biome-ignore lint/suspicious/noExplicitAny: manual harness; response bodies are untyped JSON
   ) => Promise<{ status: number; headers: unknown; body: any }>,
   input: unknown,
   seeded: Seeded,
@@ -2031,7 +2041,8 @@ async function run(
   if (!testCase.paginate) {
     const raw = await call(testCase.procedure, input, called(seeded, testCase));
     const result = testCase.unordered ? sortedById(raw) : raw;
-    return testCase.after ? { ...result, followUps: await followUps(testCase, seeded) } : result;
+    const settled = testCase.unorderedSections ? sortedSections(result) : result;
+    return testCase.after ? { ...settled, followUps: await followUps(testCase, seeded) } : settled;
   }
   const pages: Awaited<ReturnType<typeof call>>[] = [];
   let cursor: string | undefined;
@@ -2066,8 +2077,15 @@ async function followUps(testCase: Case, seeded: Seeded) {
   return results;
 }
 
+/** An unordered concatenation is compared by part: the order the rows arrive in is not a contract. */
+function sortedSections<T extends { body: any }>(result: T): T {
+  const text = result.body?.json;
+  if (typeof text !== "string" || text === "") return result;
+  const sections = text.split(/\n\n(?=# )/).sort();
+  return { ...result, body: { ...result.body, json: sections.join("\n\n") } };
+}
+
 /** A list the API does not order is compared by id: the order Postgres returns it in is not a contract. */
-// biome-ignore lint/suspicious/noExplicitAny: manual harness; response bodies are untyped JSON
 function sortedById<T extends { body: any }>(result: T): T {
   const json = result.body?.json;
   if (!Array.isArray(json)) return result;
@@ -3505,13 +3523,19 @@ function seedUsage(
       await row("mx", { inputTokens: 1 }, config.tiedTimes ? 0 : 500, two);
       return;
     }
+    // The summary's per-group cost is Postgres sum(float8), which accumulates in scan order, and each
+    // side reads its own freshly reseeded heap: 0.0000123 + 1e-7 + (-1) came out as -0.9999876 and
+    // -0.9999876000000001 depending on that order (usg-summary-negative-cost, pass 6), and 0.1 + 0.2 +
+    // (0.1 + 0.2) was 0.6 or 0.6000000000000001. Dyadic costs whose partial sums need at most 25
+    // significand bits (2^-16, 2^-24, -1) sum identically in every order, and 0.01 + 0.2 + (0.1 + 0.2)
+    // is 0.51 in every order; u6 still carries the long expansion for usage.list.
     await row(
       "u1",
       {
         inputTokens: 10,
         outputTokens: 5,
         totalTokens: 15,
-        costUsd: 0.0000123,
+        costUsd: 2 ** -16,
         runId: `${user}-r1`,
         botId: null,
         callId: `${user}-call1`,
@@ -3529,7 +3553,7 @@ function seedUsage(
         inputTokens: 20,
         outputTokens: 10,
         totalTokens: 30,
-        costUsd: 1e-7,
+        costUsd: 2 ** -24,
         runId: `${user}-r1`,
         cacheReadTokens: 3,
         cacheWriteTokens: 4,
@@ -3547,7 +3571,7 @@ function seedUsage(
         inputTokens: 100,
         outputTokens: 50,
         totalTokens: 150,
-        costUsd: 0.1,
+        costUsd: 0.01,
         runId: `${user}-r3`,
         parentRunId: `${user}-r1`,
         operationKind: "subagent",
@@ -4891,8 +4915,921 @@ function artifactCases(): Case[] {
   ];
 }
 
+// ---------------------------------------------------------------- memory (Lane F)
+//
+// Memory documents are the first contract rows whose text is rkz1 ciphertext. Seeds write through
+// the real Prisma client, so TypeScript seals them; the Go side must open those values with the
+// same keys, and every write it makes must open again through the TypeScript extension — which is
+// what databaseState checks below by reading the raw column and opening it here.
+
+type MemorySeedDoc = {
+  id?: string;
+  scope: "bot" | "user";
+  path: string;
+  content: string;
+  botId?: string | null;
+  userId?: string;
+  revision?: number;
+  updatedAt?: Date;
+  space?: 0 | 1 | 2;
+};
+
+/** Seals the documents through the API's own client, as a real writer would. */
+async function seedMemoryDocuments(seeded: Seeded, docs: MemorySeedDoc[]) {
+  for (const [index, doc] of docs.entries()) {
+    await system.memoryDocument.create({
+      data: {
+        id: doc.id ?? `${seeded.userId}-mem${index + 1}`,
+        spaceId: seeded.spaces[doc.space ?? 0],
+        userId: doc.userId ?? seeded.userId,
+        botId: doc.botId ?? null,
+        scope: doc.scope,
+        path: doc.path,
+        content: doc.content,
+        revision: doc.revision ?? 1,
+        ...(doc.updatedAt ? { createdAt: doc.updatedAt, updatedAt: doc.updatedAt } : {}),
+      },
+    });
+  }
+}
+
+/** A bot (`__membot__`) and, unless `thread: false`, its thread in the first Space. */
+async function seedMemoryBot(
+  seeded: Seeded,
+  options: { archived?: boolean; space?: 0 | 1 | 2; thread?: boolean; summary?: string } = {},
+) {
+  const spaceId = seeded.spaces[options.space ?? 0];
+  await system.bot.create({
+    data: {
+      id: `${seeded.userId}-membot`,
+      spaceId,
+      userId: seeded.userId,
+      name: "Memory bot",
+      color: "blue",
+      ...(options.archived ? { archivedAt: new Date(Date.UTC(2020, 0, 1)) } : {}),
+    },
+  });
+  if (options.thread === false) return;
+  await system.thread.create({
+    data: {
+      id: `${seeded.userId}-membot-thread`,
+      spaceId,
+      userId: seeded.userId,
+      botId: `${seeded.userId}-membot`,
+      nextMessageSeq: 0,
+      nextEventSeq: 0,
+      ...(options.summary === undefined ? {} : { historyCompactionSummary: options.summary }),
+    },
+  });
+}
+
+/** The stored (sealed) content of a memory document. */
+async function storedMemoryContent(id: string): Promise<string> {
+  const rows =
+    (await system.$queryRaw`SELECT content FROM memory_documents WHERE id = ${id}`) as Array<{
+      content: string;
+    }>;
+  return rows[0]!.content;
+}
+
+async function overwriteMemoryContent(id: string, content: string) {
+  await system.$executeRaw`UPDATE memory_documents SET content = ${content} WHERE id = ${id}`;
+}
+
+/** A valid envelope whose body is one different base64url character: the tag no longer checks. */
+function tamperBody(value: string): string {
+  const bodyStart = value.indexOf(":", "rkz1:".length) + 1;
+  const replacement = value[bodyStart] === "A" ? "B" : "A";
+  return `${value.slice(0, bodyStart)}${replacement}${value.slice(bodyStart + 1)}`;
+}
+
+/** A valid envelope cut short inside its body (below the 12-byte IV plus 16-byte tag). */
+function truncateBody(value: string): string {
+  const bodyStart = value.indexOf(":", "rkz1:".length) + 1;
+  return value.slice(0, bodyStart + 4);
+}
+
+const MEMORY_TIME = Date.UTC(2026, 4, 1, 12, 0, 0, 0);
+const memoryAt = (minutesAgo: number) => new Date(MEMORY_TIME - minutesAgo * 60_000);
+
+/** The documents most memory cases share: a bot's index and notes, and the Space's shared memory. */
+function seedMemoryLibrary(seeded: Seeded) {
+  return seedMemoryDocuments(seeded, [
+    {
+      id: `${seeded.userId}-mem1`,
+      scope: "bot",
+      path: "MEMORY.md",
+      botId: `${seeded.userId}-membot`,
+      content: "Memory notes\n\n- likes tea",
+      revision: 3,
+      updatedAt: memoryAt(10),
+    },
+    {
+      id: `${seeded.userId}-mem2`,
+      scope: "bot",
+      path: "notes/shopping.md",
+      botId: `${seeded.userId}-membot`,
+      content: "milk\neggs",
+      revision: 1,
+      updatedAt: memoryAt(20),
+    },
+    {
+      id: `${seeded.userId}-mem3`,
+      scope: "user",
+      path: "MEMORY.md",
+      content: "shared preferences",
+      revision: 7,
+      updatedAt: memoryAt(30),
+    },
+    {
+      id: `${seeded.userId}-mem4`,
+      scope: "user",
+      path: "house.md",
+      botId: `${seeded.userId}-membot`,
+      content: "bin day is Tuesday",
+      revision: 2,
+      updatedAt: memoryAt(40),
+    },
+  ]);
+}
+
+function memoryCases(): Case[] {
+  const list = (name: string, input: unknown, extra: Partial<Case> = {}): Case => ({
+    name: `mem-list-${name}`,
+    procedure: "memory.list",
+    input,
+    seed: library,
+    unordered: true,
+    ...extra,
+  });
+  const exportCase = (name: string, input: unknown, extra: Partial<Case> = {}): Case => ({
+    name: `mem-export-${name}`,
+    procedure: "memory.exportMarkdown",
+    input,
+    // The join has no ORDER BY on either side; each document is still compared exactly.
+    unorderedSections: true,
+    ...extra,
+  });
+  const update = (name: string, input: unknown, extra: Partial<Case> = {}): Case => ({
+    name: `mem-update-${name}`,
+    procedure: "memory.update",
+    input,
+    ...extra,
+  });
+  const remove = (name: string, input: unknown, extra: Partial<Case> = {}): Case => ({
+    name: `mem-remove-${name}`,
+    procedure: "memory.remove",
+    input,
+    ...extra,
+  });
+  const budget = (name: string, input: unknown, extra: Partial<Case> = {}): Case => ({
+    name: `mem-budget-${name}`,
+    procedure: "memory.budget",
+    input,
+    ...extra,
+  });
+  /** A seed that adds the memory library and then one raw tamper of it. */
+  const tampered = (change: (seeded: Seeded) => Promise<void>) => async (seeded: Seeded) => {
+    await seedMemoryBot(seeded);
+    await seedMemoryLibrary(seeded);
+    await change(seeded);
+  };
+  const library = (seeded: Seeded) => seedMemoryBot(seeded).then(() => seedMemoryLibrary(seeded));
+
+  return [
+    // memory.list: every document of the Space, decrypted, optionally one bot or one scope.
+    list("empty", {}),
+    list("no-input", undefined),
+    list("library", {}),
+    list("bot", { botId: "__membot__" }),
+    list("bot-unknown", { botId: "nope" }),
+    list("scope-user", { scope: "user" }),
+    list("scope-bot", { scope: "bot" }),
+    list("extra-keys", { more: 1 }),
+    list("invalid-scope", { scope: "space" }),
+    list("invalid-scope-null", { scope: null }),
+    list("invalid-types", { botId: 5, scope: 1 }),
+    list("invalid-bot-empty", { botId: "" }),
+    list("array-input", []),
+    list("null-input", null),
+    list("string-input", "x"),
+    list("anonymous", {}, { anonymous: true }),
+    list("from-another-space", {}, { space: 1 }),
+    // A stored scope outside the enum is what the router's output parse refuses.
+    list(
+      "odd-scope-fails-the-output-check",
+      {},
+      {
+        seed: async (seeded) => {
+          await seedMemoryDocuments(seeded, [
+            { id: `${seeded.userId}-mem1`, scope: "bot", path: "MEMORY.md", content: "ok" },
+          ]);
+          await system.$executeRaw`UPDATE memory_documents SET scope = 'space' WHERE id = ${`${seeded.userId}-mem1`}`;
+        },
+      },
+    ),
+    // Plaintext rows written before encryption read unchanged.
+    list(
+      "plaintext",
+      {},
+      {
+        seed: async (seeded) => {
+          await seedMemoryDocuments(seeded, [
+            { id: `${seeded.userId}-mem1`, scope: "bot", path: "MEMORY.md", content: "sealed" },
+          ]);
+          await overwriteMemoryContent(`${seeded.userId}-mem1`, "legacy plaintext");
+        },
+      },
+    ),
+    // The crypto failures, which the API answers as a 500 rather than a value.
+    list(
+      "tampered",
+      {},
+      {
+        seed: tampered(async (seeded) => {
+          await overwriteMemoryContent(
+            `${seeded.userId}-mem1`,
+            tamperBody(await storedMemoryContent(`${seeded.userId}-mem1`)),
+          );
+        }),
+      },
+    ),
+    list(
+      "truncated-body",
+      {},
+      {
+        seed: tampered(async (seeded) => {
+          await overwriteMemoryContent(
+            `${seeded.userId}-mem1`,
+            truncateBody(await storedMemoryContent(`${seeded.userId}-mem1`)),
+          );
+        }),
+      },
+    ),
+    list(
+      "another-key",
+      {},
+      {
+        seed: tampered(async (seeded) => {
+          await overwriteMemoryContent(
+            `${seeded.userId}-mem1`,
+            "rkz1:nokey:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          );
+        }),
+      },
+    ),
+    // The envelope is bound to its row: copied into another document of the same Space it fails.
+    list(
+      "content-of-another-row",
+      {},
+      {
+        seed: tampered(async (seeded) => {
+          await overwriteMemoryContent(
+            `${seeded.userId}-mem1`,
+            await storedMemoryContent(`${seeded.userId}-mem2`),
+          );
+        }),
+      },
+    ),
+    // ... and bound to its Space.
+    list(
+      "content-of-another-space",
+      {},
+      {
+        seed: async (seeded) => {
+          await seedMemoryDocuments(seeded, [
+            {
+              id: `${seeded.userId}-memx`,
+              scope: "bot",
+              path: "MEMORY.md",
+              content: "foreign secret",
+              space: 2,
+            },
+            { id: `${seeded.userId}-mem1`, scope: "bot", path: "MEMORY.md", content: "own" },
+          ]);
+          await overwriteMemoryContent(
+            `${seeded.userId}-mem1`,
+            await storedMemoryContent(`${seeded.userId}-memx`),
+          );
+        },
+      },
+    ),
+
+    // memory.exportMarkdown: `# path` and the content of every document, or of one bot's.
+    exportCase("empty", {}),
+    exportCase("no-input", undefined),
+    exportCase("bot", { botId: "__membot__" }, { seed: library }),
+    exportCase("bot-unknown", { botId: "nope" }, { seed: library }),
+    exportCase("library", {}, { seed: library }),
+    exportCase("extra-keys", { more: 1 }, { seed: library }),
+    exportCase("invalid-bot", { botId: 5 }, { seed: library }),
+    exportCase("invalid-bot-empty", { botId: "" }, { seed: library }),
+    exportCase("array-input", []),
+    exportCase("anonymous", {}, { anonymous: true, seed: library }),
+    exportCase("from-another-space", {}, { seed: library, space: 1 }),
+    exportCase(
+      "tampered",
+      {},
+      {
+        seed: tampered(async (seeded) => {
+          await overwriteMemoryContent(
+            `${seeded.userId}-mem3`,
+            tamperBody(await storedMemoryContent(`${seeded.userId}-mem3`)),
+          );
+        }),
+      },
+    ),
+
+    // memory.update: replaces the content, bumps the revision, appends the sealed history row.
+    update("content", { documentId: "__mem2__", content: "new list\n- bread" }, { seed: library }),
+    update(
+      "same-content",
+      { documentId: "__mem1__", content: "# Memory\n\n- likes tea" },
+      { seed: library },
+    ),
+    update("empty-content", { documentId: "__mem2__", content: "" }, { seed: library }),
+    update(
+      "huge-content",
+      { documentId: "__mem2__", content: "x".repeat(40_000) },
+      { seed: library },
+    ),
+    update(
+      "unicode-content",
+      { documentId: "__mem2__", content: "日本語 😀\u2028line\u0000nul" },
+      { seed: library },
+    ),
+    update(
+      "lone-surrogate-content",
+      { documentId: "__mem2__", content: "a\ud800b" },
+      { seed: library },
+    ),
+    update(
+      "ciphertext-looking-content",
+      { documentId: "__mem2__", content: "rkz1:zzzz:AAAA" },
+      { seed: library },
+    ),
+    update(
+      "expected-revision-matches",
+      { documentId: "__mem2__", content: "kept", expectedRevision: 1 },
+      { seed: library },
+    ),
+    update(
+      "expected-revision-conflict",
+      { documentId: "__mem2__", content: "lost", expectedRevision: 2 },
+      { seed: library },
+    ),
+    update(
+      "expected-revision-on-a-bumped-revision",
+      { documentId: "__mem3__", content: "ok", expectedRevision: 7 },
+      { seed: library },
+    ),
+    update(
+      "expected-revision-zero",
+      { documentId: "__mem2__", content: "x", expectedRevision: 0 },
+      { seed: library },
+    ),
+    update(
+      "expected-revision-negative",
+      { documentId: "__mem2__", content: "x", expectedRevision: -1 },
+      { seed: library },
+    ),
+    update(
+      "expected-revision-float",
+      { documentId: "__mem2__", content: "x", expectedRevision: 1.5 },
+      { seed: library },
+    ),
+    update(
+      "expected-revision-string",
+      { documentId: "__mem2__", content: "x", expectedRevision: "1" },
+      { seed: library },
+    ),
+    update(
+      "expected-revision-null",
+      { documentId: "__mem2__", content: "x", expectedRevision: null },
+      { seed: library },
+    ),
+    update(
+      "expected-revision-too-large",
+      { documentId: "__mem2__", content: "x", expectedRevision: 9007199254740992 },
+      { seed: library },
+    ),
+    update("missing-document", { documentId: "nope", content: "x" }, { seed: library }),
+    update(
+      "other-space-document",
+      { documentId: "__memx__", content: "x" },
+      {
+        seed: async (seeded) => {
+          await seedMemoryDocuments(seeded, [
+            {
+              id: `${seeded.userId}-memx`,
+              scope: "bot",
+              path: "MEMORY.md",
+              content: "elsewhere",
+              space: 2,
+            },
+          ]);
+        },
+      },
+    ),
+    update(
+      "other-users-document",
+      { documentId: "__mem2__", content: "x" },
+      {
+        seed: async (seeded) => {
+          const other = `${seeded.userId}-other`;
+          await system.user.create({
+            data: { id: other, name: "Other", email: `${other}@example.test`, emailVerified: true },
+          });
+          await seedMemoryDocuments(seeded, [
+            {
+              id: `${seeded.userId}-mem2`,
+              scope: "bot",
+              path: "MEMORY.md",
+              content: "theirs",
+              userId: other,
+            },
+          ]);
+        },
+      },
+    ),
+    update(
+      "plaintext-document",
+      { documentId: "__mem2__", content: "resaved" },
+      {
+        seed: async (seeded) => {
+          await seedMemoryDocuments(seeded, [
+            { id: `${seeded.userId}-mem2`, scope: "bot", path: "MEMORY.md", content: "sealed" },
+          ]);
+          await overwriteMemoryContent(`${seeded.userId}-mem2`, "legacy plaintext");
+        },
+      },
+    ),
+    update(
+      "revision-collision",
+      { documentId: "__mem2__", content: "x" },
+      {
+        seed: async (seeded) => {
+          await seedMemoryDocuments(seeded, [
+            {
+              id: `${seeded.userId}-mem2`,
+              scope: "bot",
+              path: "MEMORY.md",
+              content: "sealed",
+              revision: 1,
+            },
+          ]);
+          await system.memoryRevision.create({
+            data: {
+              id: `${seeded.userId}-rev2`,
+              documentId: `${seeded.userId}-mem2`,
+              revision: 2,
+              content: "taken",
+              sourceRunId: null,
+              sourceThreadId: null,
+            },
+          });
+        },
+      },
+    ),
+    update(
+      "tampered-document",
+      { documentId: "__mem2__", content: "x" },
+      {
+        seed: tampered(async (seeded) => {
+          await overwriteMemoryContent(
+            `${seeded.userId}-mem2`,
+            tamperBody(await storedMemoryContent(`${seeded.userId}-mem2`)),
+          );
+        }),
+      },
+    ),
+    update("missing-content", { documentId: "__mem2__" }, { seed: library }),
+    update("null-content", { documentId: "__mem2__", content: null }, { seed: library }),
+    update("number-content", { documentId: "__mem2__", content: 5 }, { seed: library }),
+    update("missing-document-id", { content: "x" }, { seed: library }),
+    update("document-id-empty", { documentId: "", content: "x" }, { seed: library }),
+    update("document-id-number", { documentId: 5, content: "x" }, { seed: library }),
+    update("array-input", [], { seed: library }),
+    update("null-input", null, { seed: library }),
+    update("extra-keys", { documentId: "__mem2__", content: "x", more: 1 }, { seed: library }),
+    update(
+      "anonymous",
+      { documentId: "__mem2__", content: "x" },
+      { seed: library, anonymous: true },
+    ),
+    update(
+      "from-another-space",
+      { documentId: "__mem1__", content: "x" },
+      { seed: library, space: 1 },
+    ),
+
+    // memory.remove: the index is refused, other documents and their revisions go.
+    remove(
+      "document",
+      { documentId: "__mem2__" },
+      {
+        seed: async (seeded) => {
+          await library(seeded);
+          await system.memoryDocument.update({
+            where: { id: `${seeded.userId}-mem2` },
+            data: { revision: 2 },
+          });
+          await system.memoryRevision.create({
+            data: {
+              id: `${seeded.userId}-rev1`,
+              documentId: `${seeded.userId}-mem2`,
+              revision: 1,
+              content: "old",
+              sourceRunId: null,
+              sourceThreadId: null,
+            },
+          });
+          await system.memoryRevision.create({
+            data: {
+              id: `${seeded.userId}-rev2`,
+              documentId: `${seeded.userId}-mem2`,
+              revision: 2,
+              content: "older still",
+              sourceRunId: "run",
+              sourceThreadId: "thread",
+            },
+          });
+        },
+      },
+    ),
+    remove("index", { documentId: "__mem1__" }, { seed: library }),
+    remove(
+      "plaintext-document",
+      { documentId: "__mem2__" },
+      {
+        seed: async (seeded) => {
+          await library(seeded);
+          await overwriteMemoryContent(`${seeded.userId}-mem2`, "legacy plaintext");
+        },
+      },
+    ),
+    remove("missing-document", { documentId: "nope" }, { seed: library }),
+    remove(
+      "other-space-document",
+      { documentId: "__memx__" },
+      {
+        seed: async (seeded) => {
+          await seedMemoryDocuments(seeded, [
+            {
+              id: `${seeded.userId}-memx`,
+              scope: "bot",
+              path: "MEMORY.md",
+              content: "elsewhere",
+              space: 2,
+            },
+          ]);
+        },
+      },
+    ),
+    remove(
+      "tampered-document",
+      { documentId: "__mem2__" },
+      {
+        seed: tampered(async (seeded) => {
+          await overwriteMemoryContent(
+            `${seeded.userId}-mem2`,
+            tamperBody(await storedMemoryContent(`${seeded.userId}-mem2`)),
+          );
+        }),
+      },
+    ),
+    remove("missing-document-id", {}, { seed: library }),
+    remove("document-id-empty", { documentId: "" }, { seed: library }),
+    remove("document-id-number", { documentId: 5 }, { seed: library }),
+    remove("array-input", [], { seed: library }),
+    remove("null-input", null, { seed: library }),
+    remove("extra-keys", { documentId: "__mem2__", more: 1 }, { seed: library }),
+    remove("anonymous", { documentId: "__mem2__" }, { seed: library, anonymous: true }),
+
+    // memory.budget: what the bot's prompt would carry, and what did not fit.
+    budget(
+      "empty",
+      { botId: "__membot__" },
+      {
+        seed: async (seeded) => {
+          await seedMemoryBot(seeded);
+        },
+      },
+    ),
+    budget("library", { botId: "__membot__" }, { seed: library }),
+    budget(
+      "other-bot-ignored",
+      { botId: "__membot__" },
+      {
+        seed: async (seeded) => {
+          await library(seeded);
+          await system.bot.create({
+            data: {
+              id: `${seeded.userId}-membot2`,
+              spaceId: seeded.spaces[0],
+              userId: seeded.userId,
+              name: "Other bot",
+              color: "red",
+            },
+          });
+          await seedMemoryDocuments(seeded, [
+            {
+              id: `${seeded.userId}-mem5`,
+              scope: "bot",
+              path: "MEMORY.md",
+              botId: `${seeded.userId}-membot2`,
+              content: "another bot's",
+            },
+          ]);
+        },
+      },
+    ),
+    budget(
+      "user-scope-ignores-bot",
+      { botId: "__membot__" },
+      {
+        seed: async (seeded) => {
+          await library(seeded);
+          await seedMemoryDocuments(seeded, [
+            {
+              id: `${seeded.userId}-mem5`,
+              scope: "user",
+              path: "other-bot-shared.md",
+              botId: null,
+              content: "everyone reads this",
+            },
+          ]);
+        },
+      },
+    ),
+    budget(
+      "index-usage",
+      { botId: "__membot__" },
+      {
+        seed: async (seeded) => {
+          await seedMemoryBot(seeded);
+          await seedMemoryDocuments(seeded, [
+            {
+              id: `${seeded.userId}-mem1`,
+              scope: "bot",
+              path: "MEMORY.md",
+              botId: `${seeded.userId}-membot`,
+              content: "x".repeat(1500),
+              revision: 1,
+              updatedAt: memoryAt(1),
+            },
+          ]);
+        },
+      },
+    ),
+    // Same instant and revision: the scope and path comparison decides, as String#localeCompare does.
+    budget(
+      "ties-on-time-and-revision",
+      { botId: "__membot__" },
+      {
+        seed: async (seeded) => {
+          await seedMemoryBot(seeded);
+          const at = memoryAt(5);
+          await seedMemoryDocuments(seeded, [
+            {
+              id: `${seeded.userId}-mema`,
+              scope: "bot",
+              path: "a.md",
+              botId: `${seeded.userId}-membot`,
+              content: "a",
+              revision: 1,
+              updatedAt: at,
+            },
+            {
+              id: `${seeded.userId}-memb`,
+              scope: "bot",
+              path: "A.md",
+              botId: `${seeded.userId}-membot`,
+              content: "A",
+              revision: 1,
+              updatedAt: at,
+            },
+            {
+              id: `${seeded.userId}-memc`,
+              scope: "bot",
+              path: "_u.md",
+              botId: `${seeded.userId}-membot`,
+              content: "u",
+              revision: 1,
+              updatedAt: at,
+            },
+            {
+              id: `${seeded.userId}-memd`,
+              scope: "bot",
+              path: "-d.md",
+              botId: `${seeded.userId}-membot`,
+              content: "d",
+              revision: 1,
+              updatedAt: at,
+            },
+            {
+              id: `${seeded.userId}-meme`,
+              scope: "bot",
+              path: "10.md",
+              botId: `${seeded.userId}-membot`,
+              content: "ten",
+              revision: 1,
+              updatedAt: at,
+            },
+            {
+              id: `${seeded.userId}-memf`,
+              scope: "bot",
+              path: "2.md",
+              botId: `${seeded.userId}-membot`,
+              content: "two",
+              revision: 1,
+              updatedAt: at,
+            },
+            {
+              id: `${seeded.userId}-memg`,
+              scope: "user",
+              path: "é.md",
+              content: "eacute",
+              revision: 1,
+              updatedAt: at,
+            },
+            {
+              id: `${seeded.userId}-memh`,
+              scope: "user",
+              path: "e.md",
+              content: "e",
+              revision: 1,
+              updatedAt: at,
+            },
+            {
+              id: `${seeded.userId}-memi`,
+              scope: "user",
+              path: "日本.md",
+              content: "jp",
+              revision: 1,
+              updatedAt: at,
+            },
+          ]);
+        },
+      },
+    ),
+    // A revision and a fresher document both win over an older one.
+    budget(
+      "revision-and-time",
+      { botId: "__membot__" },
+      {
+        seed: async (seeded) => {
+          await seedMemoryBot(seeded);
+          await seedMemoryDocuments(seeded, [
+            {
+              id: `${seeded.userId}-mema`,
+              scope: "bot",
+              path: "old.md",
+              botId: `${seeded.userId}-membot`,
+              content: "old body",
+              revision: 1,
+              updatedAt: memoryAt(100),
+            },
+            {
+              id: `${seeded.userId}-memb`,
+              scope: "bot",
+              path: "bumped.md",
+              botId: `${seeded.userId}-membot`,
+              content: "bumped body",
+              revision: 9,
+              updatedAt: memoryAt(100),
+            },
+            {
+              id: `${seeded.userId}-memc`,
+              scope: "bot",
+              path: "fresh.md",
+              botId: `${seeded.userId}-membot`,
+              content: "fresh body",
+              revision: 1,
+              updatedAt: memoryAt(1),
+            },
+          ]);
+        },
+      },
+    ),
+    // More than a prompt carries: the tail is truncated or left out, the plan says which.
+    budget(
+      "overflow",
+      { botId: "__membot__" },
+      {
+        seed: async (seeded) => {
+          await seedMemoryBot(seeded);
+          await seedMemoryDocuments(seeded, [
+            {
+              id: `${seeded.userId}-mema`,
+              scope: "bot",
+              path: "MEMORY.md",
+              botId: `${seeded.userId}-membot`,
+              content: "a".repeat(20_000),
+              revision: 1,
+              updatedAt: memoryAt(1),
+            },
+            {
+              id: `${seeded.userId}-memb`,
+              scope: "bot",
+              path: "second.md",
+              botId: `${seeded.userId}-membot`,
+              content: "b".repeat(20_000),
+              revision: 1,
+              updatedAt: memoryAt(2),
+            },
+            {
+              id: `${seeded.userId}-memc`,
+              scope: "user",
+              path: "shared.md",
+              content: "😀".repeat(4000),
+              revision: 1,
+              updatedAt: memoryAt(3),
+            },
+          ]);
+        },
+      },
+    ),
+    budget(
+      "bot-without-a-thread",
+      { botId: "__membot__" },
+      {
+        seed: async (seeded) => {
+          await seedMemoryBot(seeded, { thread: false });
+        },
+      },
+    ),
+    budget(
+      "archived-bot",
+      { botId: "__membot__" },
+      {
+        seed: async (seeded) => {
+          await seedMemoryBot(seeded, { archived: true });
+        },
+      },
+    ),
+    budget("unknown-bot", { botId: "nope" }, { seed: library }),
+    budget(
+      "bot-of-another-space",
+      { botId: "__membot__" },
+      {
+        seed: async (seeded) => {
+          await seedMemoryBot(seeded, { space: 2 });
+        },
+      },
+    ),
+    budget("no-bot-id", {}, { seed: library }),
+    budget("bot-id-empty", { botId: "" }, { seed: library }),
+    budget("bot-id-number", { botId: 5 }, { seed: library }),
+    budget("array-input", [], { seed: library }),
+    budget("null-input", null, { seed: library }),
+    budget("extra-keys", { botId: "__membot__", more: 1 }, { seed: library }),
+    budget("anonymous", { botId: "__membot__" }, { seed: library, anonymous: true }),
+    budget(
+      "tampered",
+      { botId: "__membot__" },
+      {
+        seed: tampered(async (seeded) => {
+          await overwriteMemoryContent(
+            `${seeded.userId}-mem2`,
+            tamperBody(await storedMemoryContent(`${seeded.userId}-mem2`)),
+          );
+        }),
+      },
+    ),
+    // repos.getBot includes the bot thread, so its sealed summary is decrypted on the way: a good
+    // one is transparent, a stored value no key opens fails the request.
+    budget(
+      "thread-summary-sealed",
+      { botId: "__membot__" },
+      {
+        seed: async (seeded) => {
+          await seedMemoryBot(seeded, { summary: "a compacted conversation" });
+          await seedMemoryDocuments(seeded, [
+            { id: `${seeded.userId}-mem1`, scope: "bot", path: "MEMORY.md", content: "still fine" },
+          ]);
+        },
+      },
+    ),
+    budget(
+      "thread-summary-unreadable",
+      { botId: "__membot__" },
+      {
+        seed: async (seeded) => {
+          await seedMemoryBot(seeded);
+          await system.$executeRaw`UPDATE threads SET "historyCompactionSummary" = ${"rkz1:nokey:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"} WHERE id = ${`${seeded.userId}-membot-thread`}`;
+        },
+      },
+    ),
+  ];
+}
+
 async function reset(seeded: ReturnType<typeof ids>) {
   await system.artifact.deleteMany({ where: { spaceId: { in: seeded.spaces } } });
+  await system.memoryRevision.deleteMany({
+    where: { document: { spaceId: { in: seeded.spaces } } },
+  });
+  await system.memoryDocument.deleteMany({ where: { spaceId: { in: seeded.spaces } } });
   const { userId, orgId } = seeded;
   await system.messagingOutbound.deleteMany({ where: { id: { startsWith: userId } } });
   await system.agentConnection.deleteMany({ where: { id: { startsWith: userId } } });
@@ -4981,6 +5918,12 @@ async function reset(seeded: ReturnType<typeof ids>) {
   await system.user.deleteMany({ where: { id: { in: [userId, `${userId}-other`] } } });
   // Last: the foreign organizations, Spaces, links and people the membership cases add.
   await membershipReset(system, seeded);
+  // Deleting a Space shreds its content keys (the shred_space_keys trigger), and each case re-creates
+  // its Spaces under the same ids. Drop this process's cached copies too, as the content-encryption
+  // hook does for a delete that names one Space, or the next case would seal under a key row that no
+  // longer exists.
+  const ring = contentEncryptionOf(system)?.ring;
+  for (const spaceId of seeded.spaces) ring?.forget(spaceId);
 }
 
 async function seed(caseIds: ReturnType<typeof ids>): Promise<Seeded> {
@@ -5110,6 +6053,11 @@ function withIds(input: unknown, seeded: ReturnType<typeof ids>) {
       .replaceAll("__s1__", `${seeded.userId}-s1`)
       .replaceAll("__s2__", `${seeded.userId}-s2`)
       .replaceAll("__s3__", `${seeded.userId}-s3`)
+      .replaceAll("__membot__", `${seeded.userId}-membot`)
+      .replaceAll("__mem1__", `${seeded.userId}-mem1`)
+      .replaceAll("__mem2__", `${seeded.userId}-mem2`)
+      .replaceAll("__mem3__", `${seeded.userId}-mem3`)
+      .replaceAll("__memx__", `${seeded.userId}-memx`)
       .replaceAll("__id1__", `${seeded.userId}-id1`)
       .replaceAll("__id2__", `${seeded.userId}-id2`)
       .replaceAll("__idx__", `${seeded.userId}-idx`)
@@ -5244,6 +6192,8 @@ const WRITE_PROCEDURES = new Set([
   "memory.setDefaultScope",
   "groups.restore",
   "agentSkills.remove",
+  "memory.update",
+  "memory.remove",
 ]);
 
 const CUID = /^c[0-9a-z]{24}$/;
@@ -5307,7 +6257,6 @@ function artifactCursor(text: string): string | undefined {
 /** Runs a call and reports the roster and Space-change signals published while it ran. */
 async function observed(
   settleMs: number,
-  // biome-ignore lint/suspicious/noExplicitAny: manual harness; response bodies are untyped JSON
   call: () => Promise<any>,
   seeded: Seeded,
   procedure: string,
@@ -5594,6 +6543,56 @@ async function databaseState(seeded: ReturnType<typeof ids>) {
     },
     orderBy: { id: "asc" },
   });
+  // Memory content is stored sealed: read the raw column and open it with the same extension the
+  // API reads through, so a row written by Go must open here (and a row sealed here must open in Go,
+  // which every memory case proves by reading the seeded values).
+  const inspectMemoryContent = async (model: "MemoryDocument" | "MemoryRevision", raw: any) => {
+    const value = raw.content;
+    if (typeof value !== "string" || !value.startsWith("rkz1:"))
+      return { sealed: false, content: value ?? null };
+    try {
+      const [opened] = await contentEncryptionOf(system)!.openRows(model, [raw]);
+      return { sealed: true, content: opened.content };
+    } catch (error) {
+      return { sealed: true, error: (error as Error).message };
+    }
+  };
+  const rawMemoryDocuments =
+    (await system.$queryRaw`SELECT id, "spaceId", "userId", "botId", scope, path, content, revision, "createdAt", "updatedAt"
+    FROM memory_documents WHERE "spaceId" = ANY(${seeded.spaces}::text[])
+    ORDER BY "spaceId", scope, path, id`) as any[];
+  const memoryDocuments = [];
+  for (const raw of rawMemoryDocuments) {
+    memoryDocuments.push({
+      id: raw.id,
+      spaceId: raw.spaceId,
+      userId: raw.userId,
+      botId: raw.botId,
+      scope: raw.scope,
+      path: raw.path,
+      revision: raw.revision,
+      createdAt: raw.createdAt,
+      updatedAt: raw.updatedAt,
+      ...(await inspectMemoryContent("MemoryDocument", raw)),
+    });
+  }
+  const rawMemoryRevisions =
+    (await system.$queryRaw`SELECT r.id, r."documentId", r.revision, r.content, r."sourceRunId", r."sourceThreadId", r."createdAt"
+    FROM memory_revisions r JOIN memory_documents d ON d.id = r."documentId"
+    WHERE d."spaceId" = ANY(${seeded.spaces}::text[])
+    ORDER BY r."documentId", r.revision, r.id`) as any[];
+  const memoryRevisions = [];
+  for (const raw of rawMemoryRevisions) {
+    memoryRevisions.push({
+      id: raw.id,
+      documentId: raw.documentId,
+      revision: raw.revision,
+      sourceRunId: raw.sourceRunId,
+      sourceThreadId: raw.sourceThreadId,
+      createdAt: raw.createdAt,
+      ...(await inspectMemoryContent("MemoryRevision", raw)),
+    });
+  }
   const trustedLinkSites = await system.trustedLinkSite.findMany({
     where: { userId: { in: [seeded.userId, `${seeded.userId}-other`] } },
     select: { userId: true, site: true },
@@ -5714,6 +6713,8 @@ async function databaseState(seeded: ReturnType<typeof ids>) {
     membership: await membershipState(system, seeded),
     artifacts,
     modelCredentials,
+    memoryDocuments,
+    memoryRevisions,
   };
 }
 

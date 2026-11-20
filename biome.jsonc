@@ -134,6 +134,11 @@
       }
     },
     {
+      // Manual TypeScript-vs-Go harnesses that read untyped JSON responses and raw SQL rows.
+      "includes": ["apps/api-go/tools/**"],
+      "linter": { "rules": { "suspicious": { "noExplicitAny": "off" } } }
+    },
+    {
       "includes": ["packages/ui-web/src/components/ui/**", "packages/ui-web/src/shadcn.css"],
       "linter": {
         "rules": {

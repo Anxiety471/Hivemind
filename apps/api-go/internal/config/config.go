@@ -2,11 +2,13 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
 
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/contentcrypto"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/effects"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/local"
 )
@@ -36,6 +38,13 @@ type Config struct {
 	// MaxComputersPerUser is the raw SANDBOX_MAX_COMPUTERS_PER_USER the restore procedures
 	// resolve per call.
 	MaxComputersPerUser string
+	// ContentEncryption is CONTENT_ENCRYPTION (resolveContentEncryption): on seals new content,
+	// off stores plaintext but still decrypts existing ciphertext.
+	ContentEncryption bool
+	// MasterKeys wrap each Space's data keys (ENCRYPTION_MASTER_KEYS first, then the key derived
+	// from ENCRYPTION_KEY). Read at startup so a process that serves encrypted content cannot run
+	// without material.
+	MasterKeys []contentcrypto.MasterKey
 }
 
 // Load reads the environment. Only a build that serves procedures needs the
@@ -72,6 +81,23 @@ func Load() (Config, error) {
 	config.InboundEmailDomain = strings.ToLower(strings.TrimSpace(os.Getenv("INBOUND_EMAIL_DOMAIN")))
 	config.MaxComputersPerUser = strings.TrimSpace(os.Getenv("SANDBOX_MAX_COMPUTERS_PER_USER"))
 
+	// A process that serves content reads these before listening: an unsupported key provider or
+	// missing master keys must stop startup rather than turn every encrypted read into a 500
+	// (apps/api/src/app.ts:296-301, packages/adapters/src/key-provider-factory.ts:24-42).
+	if _, err := keyProviderName(os.Getenv); err != nil {
+		return Config{}, err
+	}
+	encryption, err := contentEncryptionEnabled(os.Getenv)
+	if err != nil {
+		return Config{}, err
+	}
+	config.ContentEncryption = encryption
+	keys, err := contentcrypto.MasterKeysFromEnv(os.Getenv)
+	if err != nil {
+		return Config{}, err
+	}
+	config.MasterKeys = keys
+
 	minimums, err := local.ParseMinimums(os.Getenv("RAKAZO_MIN_CLIENT_BUILD"))
 	if err != nil {
 		return Config{}, err
@@ -105,6 +131,37 @@ func Load() (Config, error) {
 		config.ClientIPHeader = "x-forwarded-for"
 	}
 	return config, nil
+}
+
+// keyProviderName is the MASTER_KEY_PROVIDER check (packages/adapters/src/key-provider-factory.ts:24-42):
+// empty and "local" wrap Space keys here; any other provider needs a key manager this build does not
+// have, and a deployment that keeps one must not start and quietly wrap keys with the local master keys.
+func keyProviderName(getenv func(string) string) (string, error) {
+	provider := strings.TrimSpace(getenv("MASTER_KEY_PROVIDER"))
+	switch provider {
+	case "", "local":
+		return "local", nil
+	default:
+		return "", fmt.Errorf(
+			"MASTER_KEY_PROVIDER %q is not supported by this build: only \"local\" master keys unwrap Space keys",
+			provider,
+		)
+	}
+}
+
+// contentEncryptionEnabled is resolveContentEncryption (packages/core/src/node/secrets-guard.ts:35-41):
+// CONTENT_ENCRYPTION "on"/"off"; unset means on outside a development secret setup.
+func contentEncryptionEnabled(getenv func(string) string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(getenv("CONTENT_ENCRYPTION"))) {
+	case "on":
+		return true, nil
+	case "off":
+		return false, nil
+	case "":
+		return getenv("NODE_ENV") != "development" && getenv("RAKAZO_ALLOW_DEV_SECRETS") != "1", nil
+	default:
+		return false, errors.New(`CONTENT_ENCRYPTION must be "on" or "off".`)
+	}
 }
 
 // emailDelivery is `Boolean(deps.email)` (apps/api/src/app.ts:422-434): a provider chosen by

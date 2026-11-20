@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/contentcrypto"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
 )
@@ -41,8 +42,8 @@ func OutputInvalid() *orpc.Error {
 }
 
 // Deployment is the process configuration some procedures read: where links to the web
-// app point, and whether the server sends email (which decides whether an invitee must
-// have verified theirs before accepting).
+// app point, whether the server sends email (which decides whether an invitee must have
+// verified theirs before accepting), and the content key ring the encrypted procedures use.
 type Deployment struct {
 	WebOrigin     string
 	EmailDelivery bool
@@ -53,6 +54,9 @@ type Deployment struct {
 	// per call as resolveMaxComputersPerUser does, because a bad value fails the call, not
 	// the process.
 	MaxComputersPerUser string
+	// Content is the Space key ring (contentcrypto) that seals and opens rkz1 content. It is
+	// nil only in tests that never touch an encrypted model.
+	Content *contentcrypto.KeyRing
 }
 
 // RequireBot is repos.getBot (packages/db/src/repos.ts:415): a bot of the actor's Space that

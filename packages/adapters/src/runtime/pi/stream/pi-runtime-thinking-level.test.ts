@@ -220,12 +220,12 @@ describe("Pi agent thinking level", () => {
     fakeAgentState.subagentArgs = {
       name: "helper",
       task: "help",
-      model_provider: "test",
+      model_provider: "fixture-provider",
       model_id: "reasoning-model",
     };
     await runWithModel("plain-model");
     expect(fakeAgentState.delegated).toEqual([
-      expect.objectContaining({ model_provider: "test", model_id: "reasoning-model" }),
+      expect.objectContaining({ model_provider: "fixture-provider", model_id: "reasoning-model" }),
     ]);
     expect(fakeAgentState.models).toHaveLength(1);
     expect(fakeAgentState.models[0]?.id).toBe("plain-model");
@@ -242,7 +242,7 @@ describe("Pi agent thinking level", () => {
       fakeAgentState.subagentArgs = {
         name: "helper",
         task: "inspect screenshots",
-        model_provider: "test",
+        model_provider: "fixture-provider",
         model_id: "plain-model",
       };
       await runWithModel(

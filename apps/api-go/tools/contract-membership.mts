@@ -13,7 +13,6 @@
 import { createHash } from "node:crypto";
 import type { Case, Seeded } from "./contract.mts";
 
-// biome-ignore lint/suspicious/noExplicitAny: manual harness; the system Prisma client is passed in untyped
 type System = any;
 
 const sha = (token: string) => createHash("sha256").update(token).digest("hex");
