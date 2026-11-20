@@ -41,14 +41,91 @@ func TestLintFindsNestedStringValues(t *testing.T) {
 	got := New(DefaultRules()...).Lint("demo", args)
 	want := []Finding{
 		{Path: "config.host", Value: "B", Rule: "alphabet-index"},
-		{Path: "config.tags.0", Value: "xxx", Rule: "filler-repeat"},
-		{Path: "config.tags.2", Value: "A1", Rule: "alphabet-index"},
-		{Path: "labels.1", Value: "dummy", Rule: "placeholder-word"},
+		{Path: "config.tags[0]", Value: "xxx", Rule: "filler-repeat"},
+		{Path: "config.tags[2]", Value: "A1", Rule: "alphabet-index"},
+		{Path: "labels[1]", Value: "dummy", Rule: "placeholder-word"},
 		{Path: "metadata.owner", Value: "B2", Rule: "alphabet-index"},
 		{Path: "name", Value: "TODO", Rule: "placeholder-word"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Lint() = %#v, want %#v", got, want)
+	}
+}
+
+func TestLintEscapedPathsAreDistinct(t *testing.T) {
+	t.Parallel()
+
+	args := map[string]any{
+		"a.b":      "TODO",                   // a\.b
+		"a":        map[string]any{"b": "A"}, // a.b
+		"c\\d":     "E",                      // c\\d
+		"c":        map[string]any{"d": "F"}, // c.d
+		"hosts":    []any{"B"},               // hosts[0]
+		"hosts.0":  "C",                      // hosts\.0
+		"hosts[0]": "D",                      // hosts\[0\]
+		"":         map[string]any{"x": "G"}, // \0.x
+		"x":        "H",                      // x
+	}
+
+	got := New(DefaultRules()...).Lint("demo", args)
+	want := []Finding{
+		{Path: `\0.x`, Value: "G", Rule: "alphabet-index"},
+		{Path: "a.b", Value: "A", Rule: "alphabet-index"},
+		{Path: `a\.b`, Value: "TODO", Rule: "placeholder-word"},
+		{Path: "c.d", Value: "F", Rule: "alphabet-index"},
+		{Path: `c\\d`, Value: "E", Rule: "alphabet-index"},
+		{Path: "hosts[0]", Value: "B", Rule: "alphabet-index"},
+		{Path: `hosts\.0`, Value: "C", Rule: "alphabet-index"},
+		{Path: `hosts\[0\]`, Value: "D", Rule: "alphabet-index"},
+		{Path: "x", Value: "H", Rule: "alphabet-index"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Lint() = %#v, want %#v", got, want)
+	}
+}
+
+func TestLintPathEncodingIsDeterministic(t *testing.T) {
+	t.Parallel()
+
+	args := map[string]any{
+		"a.b":      "TODO",
+		"a":        map[string]any{"b": "A"},
+		"hosts":    []any{"B"},
+		"hosts.0":  "C",
+		"hosts[0]": "D",
+		"c\\d":     "E",
+		"c":        map[string]any{"d": "F"},
+	}
+	linter := New(DefaultRules()...)
+
+	first := findingLines(linter.Lint("demo", args))
+	for iteration := range 100 {
+		got := findingLines(linter.Lint("demo", args))
+		if !reflect.DeepEqual(got, first) {
+			t.Fatalf("Lint() iteration %d = %v, want %v", iteration, got, first)
+		}
+	}
+}
+
+func TestLintPolicyMatchesEscapedPaths(t *testing.T) {
+	t.Parallel()
+
+	args := map[string]any{"a.b": "TODO"}
+	linter := New(DefaultRules()...)
+
+	exemptPath := Policy{ExemptArgs: map[string][]string{"demo": {`a\.b`}}}
+	if got := linter.Lint("demo", args, WithPolicy(exemptPath)); len(got) != 0 {
+		t.Fatalf("Lint() with an escaped path exemption = %#v, want none", got)
+	}
+
+	exemptName := Policy{ExemptArgs: map[string][]string{"demo": {"a.b"}}}
+	if got := linter.Lint("demo", args, WithPolicy(exemptName)); len(got) != 0 {
+		t.Fatalf("Lint() with a name exemption = %#v, want none", got)
+	}
+
+	knownPath := KnownValues{`a\.b`: {"TODO"}}
+	if got := linter.Lint("demo", args, WithKnownValues(knownPath)); len(got) != 0 {
+		t.Fatalf("Lint() with an escaped known path = %#v, want none", got)
 	}
 }
 
@@ -333,7 +410,7 @@ func TestLintHandlesCycles(t *testing.T) {
 		{
 			name: "slice contains itself",
 			args: map[string]any{"items": cyclicSlice},
-			want: []Finding{{Path: "items.0", Value: "xxx", Rule: "filler-repeat"}},
+			want: []Finding{{Path: "items[0]", Value: "xxx", Rule: "filler-repeat"}},
 		},
 		{
 			name: "map and slice cycle",

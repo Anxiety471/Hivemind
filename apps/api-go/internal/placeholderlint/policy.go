@@ -9,15 +9,16 @@ type Policy struct {
 	DisabledTools []string
 	// ExemptArgs maps a tool name to argument names or dotted paths that are
 	// never linted. An entry matches both the argument's own name ("query")
-	// and its full path ("request.query").
+	// and its full path ("request.query"). A path entry uses the same escaped
+	// form as Finding.Path, so a map key containing a dot is written "a\.b".
 	ExemptArgs map[string][]string
 }
 
 // KnownValues lists values that are legitimate for an argument, normally the
 // enum or const values of the tool's JSON schema. The key is an argument name
-// ("mode") or a dotted path ("config.mode"); an exact path key takes
-// precedence over a name key. Argument values in the matching set are never
-// linted.
+// ("mode") or a dotted path ("config.mode") in the same escaped form as
+// Finding.Path; an exact path key takes precedence over a name key. Argument
+// values in the matching set are never linted.
 type KnownValues map[string][]string
 
 // Option configures one Lint call. Later options replace earlier ones.

@@ -16,11 +16,15 @@ package placeholderlint
 type Argument struct {
 	// Tool is the tool name passed to Lint.
 	Tool string
-	// Path is the dotted path from the tool call's arguments to this value,
-	// such as "name" or "config.host". Array elements use their index as a
-	// path segment, such as "hosts.0".
+	// Path is the escaped path from the tool call's arguments to this value,
+	// such as "name" or "config.host". In a map key, "\" is written "\\",
+	// "." is written "\.", "[" is written "\[", "]" is written "\]" and an
+	// empty key is written "\0". Array elements append their index in
+	// brackets, such as "hosts[0]".
 	Path string
-	// Name is the last segment of Path: the argument's own name.
+	// Name is the unescaped name of the nearest map key: the argument's own
+	// name. For an array element it is the array's key, such as "tags" for
+	// the path "tags[0]".
 	Name string
 	// Value is the string leaf being checked.
 	Value string

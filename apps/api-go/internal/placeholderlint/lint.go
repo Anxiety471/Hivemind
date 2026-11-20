@@ -63,7 +63,7 @@ func (w *walker) walk(prefix string, value any) {
 		}
 	case []string:
 		for index, item := range typed {
-			w.check(joinPath(prefix, strconv.Itoa(index)), item)
+			w.check(indexPath(prefix, index), item)
 		}
 	case string:
 		w.check(prefix, typed)
@@ -96,7 +96,7 @@ func (w *walker) walkSlice(prefix string, values []any) {
 	defer w.leave(pointer)
 
 	for index, value := range values {
-		w.walk(joinPath(prefix, strconv.Itoa(index)), value)
+		w.walk(indexPath(prefix, index), value)
 	}
 }
 
@@ -145,16 +145,96 @@ func (w *walker) check(path, value string) {
 	}
 }
 
+// Paths are injective: a map key is escaped so it cannot be confused with the
+// path syntax. A backslash escapes the next byte, "." separates map keys, and
+// "[n]" is an array index. In a map key, "\" becomes "\\", "." becomes "\.",
+// "[" becomes "\[", "]" becomes "]", and an empty key becomes "\0". An array
+// element appends "[n]" without a separator, so {"hosts": ["x"]} has the path
+// "hosts[0]" while {"hosts.0": "x"} has "hosts\.0" and {"hosts[0]": "x"} has
+// "hosts\[0\]".
 func joinPath(prefix, key string) string {
+	escaped := escapeKey(key)
 	if prefix == "" {
-		return key
+		return escaped
 	}
-	return prefix + "." + key
+	return prefix + "." + escaped
 }
 
-func leafName(path string) string {
-	if index := strings.LastIndexByte(path, '.'); index >= 0 {
-		return path[index+1:]
+func indexPath(prefix string, index int) string {
+	return prefix + "[" + strconv.Itoa(index) + "]"
+}
+
+func escapeKey(key string) string {
+	if key == "" {
+		return `\0`
 	}
-	return path
+	var escaped strings.Builder
+	escaped.Grow(len(key))
+	for index := range len(key) {
+		switch key[index] {
+		case '\\':
+			escaped.WriteString(`\\`)
+		case '.':
+			escaped.WriteString(`\.`)
+		case '[':
+			escaped.WriteString(`\[`)
+		case ']':
+			escaped.WriteString(`\]`)
+		default:
+			escaped.WriteByte(key[index])
+		}
+	}
+	return escaped.String()
+}
+
+// leafName returns the unescaped name of the nearest map key, skipping any
+// array indices at the end of the path.
+func leafName(path string) string {
+	end := len(path)
+	for end > 0 && path[end-1] == ']' {
+		opening := lastUnescapedByte(path[:end], '[')
+		if opening < 0 {
+			break
+		}
+		end = opening
+	}
+	segment := path[:end]
+	if separator := lastUnescapedByte(segment, '.'); separator >= 0 {
+		segment = segment[separator+1:]
+	}
+	return unescapeKey(segment)
+}
+
+func lastUnescapedByte(value string, target byte) int {
+	for index := len(value) - 1; index >= 0; index-- {
+		if value[index] == target && !isEscapedAt(value, index) {
+			return index
+		}
+	}
+	return -1
+}
+
+func isEscapedAt(value string, index int) bool {
+	backslashes := 0
+	for cursor := index - 1; cursor >= 0 && value[cursor] == '\\'; cursor-- {
+		backslashes++
+	}
+	return backslashes%2 == 1
+}
+
+func unescapeKey(segment string) string {
+	var unescaped strings.Builder
+	unescaped.Grow(len(segment))
+	for index := 0; index < len(segment); index++ {
+		if segment[index] != '\\' || index+1 == len(segment) {
+			unescaped.WriteByte(segment[index])
+			continue
+		}
+		index++
+		if segment[index] == '0' {
+			continue // The escaped form of an empty key.
+		}
+		unescaped.WriteByte(segment[index])
+	}
+	return unescaped.String()
 }

@@ -8,7 +8,8 @@ const feedbackValueLimit = 40
 
 // Finding is one argument that a rule flagged.
 type Finding struct {
-	// Path is the dotted path of the argument, such as "config.host".
+	// Path is the escaped path of the argument, such as "config.host" or
+	// "hosts[0]". See Argument.Path for the escaping rules.
 	Path string
 	// Value is the full offending value, not truncated.
 	Value string
