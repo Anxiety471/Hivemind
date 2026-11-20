@@ -12,6 +12,7 @@
   "apps/web/src/components/billing/ModelCredits.tsx": 2,
   "apps/web/src/components/billing/SpendingLimitSettings.tsx": 1,
   "apps/web/src/components/computers/ComputerCard.tsx": 1,
+  "apps/web/src/components/messages/ActivityPanel.tsx": 2,
   "apps/web/src/components/messages/AskCard.tsx": 1,
   "apps/web/src/components/pages/PageCard.tsx": 5,
   "apps/web/src/components/pages/PagesList.tsx": 1,

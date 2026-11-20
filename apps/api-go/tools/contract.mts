@@ -13,15 +13,15 @@ import type { ChildProcess } from "node:child_process";
 import { spawn } from "node:child_process";
 import { createHmac } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { spendingPeriodStart } from "../../../packages/core/src/billing/spending.js";
 import { asSystem } from "../../../packages/db/src/index.js";
 import { createApp } from "../../api/src/app.js";
-import { spendingPeriodStart } from "../../../packages/core/src/billing/spending.js";
-import { createRequire } from "node:module";
-import { membershipCases, membershipReset, membershipState } from "./contract-membership.mts";
 import { laneDCases } from "./contract-lane-d.mts";
+import { membershipCases, membershipReset, membershipState } from "./contract-membership.mts";
 import { routineResumeCases } from "./contract-routine-resume.mts";
 import { routineCases } from "./contract-routines.mts";
 
@@ -254,8 +254,18 @@ for (let attempt = 0; attempt < 100; attempt += 1) {
 }
 
 // A listener on the realtime channel: TypeScript and Go must publish identical signals.
-const databaseRequire = createRequire(new URL("../../../packages/db/package.json", import.meta.url));
-const { Client: PgClient } = databaseRequire("pg") as { Client: new (options: { connectionString: string }) => any };
+const databaseRequire = createRequire(
+  new URL("../../../packages/db/package.json", import.meta.url),
+);
+type PgClientLike = {
+  connect(): Promise<void>;
+  query(text: string, values?: unknown[]): Promise<unknown>;
+  end(): Promise<void>;
+  on(event: "notification", listener: (notification: { payload?: string }) => void): void;
+};
+const { Client: PgClient } = databaseRequire("pg") as {
+  Client: new (options: { connectionString: string }) => PgClientLike;
+};
 const realtime = new PgClient({ connectionString: DATABASE_URL });
 await realtime.connect();
 await realtime.query("LISTEN rakazo_events");
@@ -284,7 +294,9 @@ const AFTER = [
   { procedure: "spaces.list", input: {} },
 ];
 
-const SCRATCH_AFTER = [{ procedure: "scratchpad.list", input: { botId: "__s-tb1__", includeDone: true } }];
+const SCRATCH_AFTER = [
+  { procedure: "scratchpad.list", input: { botId: "__s-tb1__", includeDone: true } },
+];
 
 /** What the settings screens reload after a change. */
 const SETTINGS_AFTER = [
@@ -350,26 +362,88 @@ const cases: Case[] = [
     },
   },
   // Validation shapes for availability that the first slice did not compare.
-  { name: "set-invalid-kind", procedure: "availability.set", input: { kind: "bogus", id: "__skill__", allSpaces: false, spaceIds: ["__sp1__"] } },
+  {
+    name: "set-invalid-kind",
+    procedure: "availability.set",
+    input: { kind: "bogus", id: "__skill__", allSpaces: false, spaceIds: ["__sp1__"] },
+  },
   { name: "set-invalid-missing-all", procedure: "availability.set", input: {} },
-  { name: "set-invalid-types", procedure: "availability.set", input: { kind: 5, id: 7, allSpaces: "no", spaceIds: "x" } },
-  { name: "set-invalid-empty-id", procedure: "availability.set", input: { kind: "skill", id: "", allSpaces: false, spaceIds: [""] } },
-  { name: "choose-invalid-kind", procedure: "availability.chooseForSpace", input: { spaceId: "__sp1__", items: [{ kind: "bogus", id: "x" }] } },
-  { name: "choose-invalid-types", procedure: "availability.chooseForSpace", input: { spaceId: 5, items: "x" } },
-  { name: "choose-invalid-empty", procedure: "availability.chooseForSpace", input: { spaceId: "", items: [{ kind: "skill", id: "" }] } },
+  {
+    name: "set-invalid-types",
+    procedure: "availability.set",
+    input: { kind: 5, id: 7, allSpaces: "no", spaceIds: "x" },
+  },
+  {
+    name: "set-invalid-empty-id",
+    procedure: "availability.set",
+    input: { kind: "skill", id: "", allSpaces: false, spaceIds: [""] },
+  },
+  {
+    name: "choose-invalid-kind",
+    procedure: "availability.chooseForSpace",
+    input: { spaceId: "__sp1__", items: [{ kind: "bogus", id: "x" }] },
+  },
+  {
+    name: "choose-invalid-types",
+    procedure: "availability.chooseForSpace",
+    input: { spaceId: 5, items: "x" },
+  },
+  {
+    name: "choose-invalid-empty",
+    procedure: "availability.chooseForSpace",
+    input: { spaceId: "", items: [{ kind: "skill", id: "" }] },
+  },
   { name: "set-invalid-array-input", procedure: "availability.set", input: [] },
   { name: "set-invalid-null-input", procedure: "availability.set", input: null },
   { name: "set-invalid-no-input", procedure: "availability.set", input: undefined },
-  { name: "set-invalid-spaceids-mixed", procedure: "availability.set", input: { kind: "skill", id: "__skill__", allSpaces: false, spaceIds: [1, "", null, "ok"] } },
-  { name: "set-invalid-spaceids-empty-and-id", procedure: "availability.set", input: { kind: "skill", id: "", allSpaces: true, spaceIds: [] } },
-  { name: "set-invalid-id-array", procedure: "availability.set", input: { kind: "skill", id: [], allSpaces: true, spaceIds: ["__sp1__"] } },
-  { name: "set-invalid-extra-keys-ok", procedure: "availability.set", input: { kind: "skill", id: "missing", allSpaces: true, spaceIds: ["__sp1__"], more: 1 } },
+  {
+    name: "set-invalid-spaceids-mixed",
+    procedure: "availability.set",
+    input: { kind: "skill", id: "__skill__", allSpaces: false, spaceIds: [1, "", null, "ok"] },
+  },
+  {
+    name: "set-invalid-spaceids-empty-and-id",
+    procedure: "availability.set",
+    input: { kind: "skill", id: "", allSpaces: true, spaceIds: [] },
+  },
+  {
+    name: "set-invalid-id-array",
+    procedure: "availability.set",
+    input: { kind: "skill", id: [], allSpaces: true, spaceIds: ["__sp1__"] },
+  },
+  {
+    name: "set-invalid-extra-keys-ok",
+    procedure: "availability.set",
+    input: { kind: "skill", id: "missing", allSpaces: true, spaceIds: ["__sp1__"], more: 1 },
+  },
   { name: "choose-invalid-array-input", procedure: "availability.chooseForSpace", input: [] },
   { name: "choose-invalid-no-input", procedure: "availability.chooseForSpace", input: undefined },
-  { name: "choose-invalid-items-mixed", procedure: "availability.chooseForSpace", input: { spaceId: "__sp1__", items: [1, null, [], {}, { kind: "skill" }, { kind: "skill", id: "x" }] } },
-  { name: "choose-invalid-too-many", procedure: "availability.chooseForSpace", input: { spaceId: "__sp1__", items: Array.from({ length: 501 }, () => ({ kind: "skill", id: "x" })) } },
-  { name: "choose-invalid-too-many-and-bad", procedure: "availability.chooseForSpace", input: { spaceId: "", items: Array.from({ length: 501 }, () => ({ kind: "bogus", id: "" })) } },
-  { name: "choose-invalid-items-missing", procedure: "availability.chooseForSpace", input: { spaceId: "__sp1__" } },
+  {
+    name: "choose-invalid-items-mixed",
+    procedure: "availability.chooseForSpace",
+    input: {
+      spaceId: "__sp1__",
+      items: [1, null, [], {}, { kind: "skill" }, { kind: "skill", id: "x" }],
+    },
+  },
+  {
+    name: "choose-invalid-too-many",
+    procedure: "availability.chooseForSpace",
+    input: {
+      spaceId: "__sp1__",
+      items: Array.from({ length: 501 }, () => ({ kind: "skill", id: "x" })),
+    },
+  },
+  {
+    name: "choose-invalid-too-many-and-bad",
+    procedure: "availability.chooseForSpace",
+    input: { spaceId: "", items: Array.from({ length: 501 }, () => ({ kind: "bogus", id: "" })) },
+  },
+  {
+    name: "choose-invalid-items-missing",
+    procedure: "availability.chooseForSpace",
+    input: { spaceId: "__sp1__" },
+  },
   ...trustedLinkSiteCases(),
   ...spendingLimitCases(),
   ...botSectionCases(),
@@ -421,12 +495,26 @@ function trustedLinkSiteCases(): Case[] {
   return [
     { name: "sites-list", procedure: "trustedLinkSites.list", input: {}, seed: seedSites },
     { name: "sites-list-empty", procedure: "trustedLinkSites.list", input: {} },
-    { name: "sites-list-no-input", procedure: "trustedLinkSites.list", input: undefined, seed: seedSites },
-    { name: "sites-list-anonymous", procedure: "trustedLinkSites.list", input: {}, anonymous: true },
+    {
+      name: "sites-list-no-input",
+      procedure: "trustedLinkSites.list",
+      input: undefined,
+      seed: seedSites,
+    },
+    {
+      name: "sites-list-anonymous",
+      procedure: "trustedLinkSites.list",
+      input: {},
+      anonymous: true,
+    },
     remove("sites-remove", { site: "alpha.example" }, { seed: seedSites }),
     remove("sites-remove-other-users-only", { site: "other-only.example" }, { seed: seedSites }),
     remove("sites-remove-absent", { site: "absent.example" }, { seed: seedSites }),
-    remove("sites-remove-ignores-extra-keys", { site: "zeta.example", more: 1 }, { seed: seedSites }),
+    remove(
+      "sites-remove-ignores-extra-keys",
+      { site: "zeta.example", more: 1 },
+      { seed: seedSites },
+    ),
     remove("sites-remove-empty", { site: "" }, { seed: seedSites }),
     remove("sites-remove-too-long", { site: "a".repeat(254) }, { seed: seedSites }),
     remove("sites-remove-max-length", { site: "a".repeat(253) }, { seed: seedSites }),
@@ -438,7 +526,11 @@ function trustedLinkSiteCases(): Case[] {
     remove("sites-remove-not-object", []),
     remove("sites-remove-null-input", null),
     remove("sites-remove-no-input", undefined),
-    remove("sites-remove-anonymous", { site: "alpha.example" }, { seed: seedSites, anonymous: true }),
+    remove(
+      "sites-remove-anonymous",
+      { site: "alpha.example" },
+      { seed: seedSites, anonymous: true },
+    ),
   ];
 }
 
@@ -447,7 +539,11 @@ function ids(caseName: string) {
   return {
     userId: `ct${RUN_TAG}-${suffix}-u`,
     orgId: `ct${RUN_TAG}-${suffix}-o`,
-    spaces: [`ct${RUN_TAG}-${suffix}-s1`, `ct${RUN_TAG}-${suffix}-s2`, `ct${RUN_TAG}-${suffix}-s3`] as [string, string, string],
+    spaces: [
+      `ct${RUN_TAG}-${suffix}-s1`,
+      `ct${RUN_TAG}-${suffix}-s2`,
+      `ct${RUN_TAG}-${suffix}-s3`,
+    ] as [string, string, string],
     skillId: `ct${RUN_TAG}-${suffix}-sk`,
     skillName: `Contract skill ${suffix}`,
     serverId: `ct${RUN_TAG}-${suffix}-sv`,
@@ -474,7 +570,11 @@ type SpendingSeed = {
   wallet?: "pending" | "connected";
   bots?: boolean;
 };
-type SpendingContext = { seeded: Seeded; now: Date; startOf: (period: "day" | "week" | "month") => Date };
+type SpendingContext = {
+  seeded: Seeded;
+  now: Date;
+  startOf: (period: "day" | "week" | "month") => Date;
+};
 
 function seedSpending(config: SpendingSeed = {}) {
   return async (seeded: Seeded) => {
@@ -483,7 +583,10 @@ function seedSpending(config: SpendingSeed = {}) {
       data: { id: other, name: "Other", email: `${other}@example.test`, emailVerified: true },
     });
     if (config.timezone) {
-      await system.user.update({ where: { id: seeded.userId }, data: { timezone: config.timezone } });
+      await system.user.update({
+        where: { id: seeded.userId },
+        data: { timezone: config.timezone },
+      });
     }
     const now = new Date();
     if (config.limit) {
@@ -505,10 +608,22 @@ function seedSpending(config: SpendingSeed = {}) {
         data: { id: foreignSpace, organizationId: foreignOrg, name: "Foreign", isDefault: true },
       });
       await system.bot.create({
-        data: { id: `${seeded.userId}-own-bot`, spaceId: seeded.spaces[1], userId: seeded.userId, name: "Own bot", color: "blue" },
+        data: {
+          id: `${seeded.userId}-own-bot`,
+          spaceId: seeded.spaces[1],
+          userId: seeded.userId,
+          name: "Own bot",
+          color: "blue",
+        },
       });
       await system.bot.create({
-        data: { id: `${seeded.userId}-foreign-bot`, spaceId: foreignSpace, userId: other, name: "Foreign bot", color: "red" },
+        data: {
+          id: `${seeded.userId}-foreign-bot`,
+          spaceId: foreignSpace,
+          userId: other,
+          name: "Foreign bot",
+          color: "red",
+        },
       });
     }
     if (config.card) {
@@ -576,11 +691,31 @@ function spendingLimitCases(): Case[] {
     const start = ctx.startOf(period).getTime();
     return [
       { id: "in1", botId: "b", currency: "usd", amount: 120, createdAt: new Date(start + 1000) },
-      { id: "in2", botId: "b", currency: "usd", amount: 30, createdAt: new Date(ctx.now.getTime() - 1000) },
+      {
+        id: "in2",
+        botId: "b",
+        currency: "usd",
+        amount: 30,
+        createdAt: new Date(ctx.now.getTime() - 1000),
+      },
       { id: "out", botId: "b", currency: "usd", amount: 7, createdAt: new Date(start - 1000) },
       { id: "eur", botId: "b", currency: "eur", amount: 55, createdAt: new Date(start + 1000) },
-      { id: "rel", botId: "b", currency: "usd", amount: 9, createdAt: new Date(start + 1000), released: true },
-      { id: "oth", owner: "other" as const, botId: "b", currency: "usd", amount: 11, createdAt: new Date(start + 1000) },
+      {
+        id: "rel",
+        botId: "b",
+        currency: "usd",
+        amount: 9,
+        createdAt: new Date(start + 1000),
+        released: true,
+      },
+      {
+        id: "oth",
+        owner: "other" as const,
+        botId: "b",
+        currency: "usd",
+        amount: 11,
+        createdAt: new Date(start + 1000),
+      },
     ];
   };
   return [
@@ -588,7 +723,19 @@ function spendingLimitCases(): Case[] {
       name: "spend-pay-empty",
       procedure: "spendingLimit.payments",
       input: {},
-      seed: seedSpending({ bots: true, payments: () => [{ id: "x", owner: "other", botId: "b", currency: "usd", amount: 1, createdAt: new Date(0) }] }),
+      seed: seedSpending({
+        bots: true,
+        payments: () => [
+          {
+            id: "x",
+            owner: "other",
+            botId: "b",
+            currency: "usd",
+            amount: 1,
+            createdAt: new Date(0),
+          },
+        ],
+      }),
     },
     {
       name: "spend-pay-list",
@@ -599,12 +746,50 @@ function spendingLimitCases(): Case[] {
         payments: ({ seeded }) => {
           const t = Date.UTC(2026, 4, 1, 12, 0, 0, 123);
           return [
-            { id: "p1", botId: `${seeded.userId}-own-bot`, currency: "usd", amount: 500, createdAt: new Date(t) },
-            { id: "p2", botId: `${seeded.userId}-foreign-bot`, currency: "eur", amount: 700, createdAt: new Date(t + hour) },
-            { id: "p3", botId: "gone", currency: "usd", amount: 900, createdAt: new Date(t + 2 * hour) },
-            { id: "p4", botId: `${seeded.userId}-own-bot`, currency: "usd", amount: 100, createdAt: new Date(t + 3 * hour), released: true },
-            { id: "p5", botId: `${seeded.userId}-own-bot`, currency: "ils", amount: 300, createdAt: new Date(t + hour) },
-            { id: "px", owner: "other", botId: `${seeded.userId}-own-bot`, currency: "usd", amount: 111, createdAt: new Date(t) },
+            {
+              id: "p1",
+              botId: `${seeded.userId}-own-bot`,
+              currency: "usd",
+              amount: 500,
+              createdAt: new Date(t),
+            },
+            {
+              id: "p2",
+              botId: `${seeded.userId}-foreign-bot`,
+              currency: "eur",
+              amount: 700,
+              createdAt: new Date(t + hour),
+            },
+            {
+              id: "p3",
+              botId: "gone",
+              currency: "usd",
+              amount: 900,
+              createdAt: new Date(t + 2 * hour),
+            },
+            {
+              id: "p4",
+              botId: `${seeded.userId}-own-bot`,
+              currency: "usd",
+              amount: 100,
+              createdAt: new Date(t + 3 * hour),
+              released: true,
+            },
+            {
+              id: "p5",
+              botId: `${seeded.userId}-own-bot`,
+              currency: "ils",
+              amount: 300,
+              createdAt: new Date(t + hour),
+            },
+            {
+              id: "px",
+              owner: "other",
+              botId: `${seeded.userId}-own-bot`,
+              currency: "usd",
+              amount: 111,
+              createdAt: new Date(t),
+            },
           ];
         },
       }),
@@ -624,14 +809,29 @@ function spendingLimitCases(): Case[] {
           })),
       }),
     },
-    { name: "spend-pay-no-input", procedure: "spendingLimit.payments", input: undefined, seed: seedSpending({ bots: true }) },
+    {
+      name: "spend-pay-no-input",
+      procedure: "spendingLimit.payments",
+      input: undefined,
+      seed: seedSpending({ bots: true }),
+    },
     {
       name: "spend-pay-zero-amount-fails-the-output-check",
       procedure: "spendingLimit.payments",
       input: {},
-      seed: seedSpending({ bots: true, payments: ({ now }) => [{ id: "zero", botId: "b", currency: "usd", amount: 0, createdAt: now }] }),
+      seed: seedSpending({
+        bots: true,
+        payments: ({ now }) => [
+          { id: "zero", botId: "b", currency: "usd", amount: 0, createdAt: now },
+        ],
+      }),
     },
-    { name: "spend-pay-anonymous", procedure: "spendingLimit.payments", input: {}, anonymous: true },
+    {
+      name: "spend-pay-anonymous",
+      procedure: "spendingLimit.payments",
+      input: {},
+      anonymous: true,
+    },
     get("nothing", seedSpending()),
     get("no-input", seedSpending(), { input: undefined }),
     get("anonymous", seedSpending(), { anonymous: true }),
@@ -640,33 +840,89 @@ function spendingLimitCases(): Case[] {
     get("login-only", seedSpending({ card: "login" })),
     get("wallet-pending", seedSpending({ wallet: "pending" })),
     get("wallet-connected", seedSpending({ wallet: "connected" })),
-    get("paid-no-limit", seedSpending({ payments: ({ now }) => [{ id: "a", botId: "b", currency: "usd", amount: 5, createdAt: now }] })),
-    get("paid-released-only", seedSpending({ payments: ({ now }) => [{ id: "a", botId: "b", currency: "usd", amount: 5, createdAt: now, released: true }] })),
-    get("day-utc", seedSpending({ limit: { amount: 1000, currency: "usd", period: "day" }, payments: around("day") })),
-    get("day-no-payments", seedSpending({ limit: { amount: 1000, currency: "usd", period: "day" } })),
+    get(
+      "paid-no-limit",
+      seedSpending({
+        payments: ({ now }) => [
+          { id: "a", botId: "b", currency: "usd", amount: 5, createdAt: now },
+        ],
+      }),
+    ),
+    get(
+      "paid-released-only",
+      seedSpending({
+        payments: ({ now }) => [
+          { id: "a", botId: "b", currency: "usd", amount: 5, createdAt: now, released: true },
+        ],
+      }),
+    ),
+    get(
+      "day-utc",
+      seedSpending({
+        limit: { amount: 1000, currency: "usd", period: "day" },
+        payments: around("day"),
+      }),
+    ),
+    get(
+      "day-no-payments",
+      seedSpending({ limit: { amount: 1000, currency: "usd", period: "day" } }),
+    ),
     get(
       "week-auckland",
-      seedSpending({ timezone: "Pacific/Auckland", limit: { amount: 2000, currency: "usd", period: "week" }, payments: around("week") }),
+      seedSpending({
+        timezone: "Pacific/Auckland",
+        limit: { amount: 2000, currency: "usd", period: "week" },
+        payments: around("week"),
+      }),
     ),
     get(
       "month-new-york-lowercase",
-      seedSpending({ timezone: "america/new_york", limit: { amount: 3000, currency: "usd", period: "month" }, payments: around("month") }),
+      seedSpending({
+        timezone: "america/new_york",
+        limit: { amount: 3000, currency: "usd", period: "month" },
+        payments: around("month"),
+      }),
     ),
     get(
       "day-kiritimati",
-      seedSpending({ timezone: "Pacific/Kiritimati", limit: { amount: 1000, currency: "eur", period: "day" }, payments: around("day") }),
+      seedSpending({
+        timezone: "Pacific/Kiritimati",
+        limit: { amount: 1000, currency: "eur", period: "day" },
+        payments: around("day"),
+      }),
     ),
     get(
       "day-unknown-timezone",
-      seedSpending({ timezone: "No/Such_Zone", limit: { amount: 1000, currency: "usd", period: "day" }, payments: around("day") }),
+      seedSpending({
+        timezone: "No/Such_Zone",
+        limit: { amount: 1000, currency: "usd", period: "day" },
+        payments: around("day"),
+      }),
     ),
     get(
       "none-since-start",
       seedSpending({
-        limit: { amount: 1000, currency: "usd", period: "none", startsAt: new Date(Date.now() - 48 * hour) },
+        limit: {
+          amount: 1000,
+          currency: "usd",
+          period: "none",
+          startsAt: new Date(Date.now() - 48 * hour),
+        },
         payments: ({ now }) => [
-          { id: "old", botId: "b", currency: "usd", amount: 3, createdAt: new Date(now.getTime() - 72 * hour) },
-          { id: "new", botId: "b", currency: "usd", amount: 4, createdAt: new Date(now.getTime() - 24 * hour) },
+          {
+            id: "old",
+            botId: "b",
+            currency: "usd",
+            amount: 3,
+            createdAt: new Date(now.getTime() - 72 * hour),
+          },
+          {
+            id: "new",
+            botId: "b",
+            currency: "usd",
+            amount: 4,
+            createdAt: new Date(now.getTime() - 24 * hour),
+          },
         ],
       }),
     ),
@@ -674,19 +930,29 @@ function spendingLimitCases(): Case[] {
       "invalid-stored-limit",
       seedSpending({
         limit: { amount: 0, currency: "jpy", period: "hourly" },
-        payments: ({ now }) => [{ id: "a", botId: "b", currency: "usd", amount: 5, createdAt: now }],
+        payments: ({ now }) => [
+          { id: "a", botId: "b", currency: "usd", amount: 5, createdAt: now },
+        ],
       }),
     ),
     get(
       "oversized-stored-limit",
-      seedSpending({ limit: { amount: 2_000_000_000, currency: "gbp", period: "day" }, payments: around("day") }),
+      seedSpending({
+        limit: { amount: 2_000_000_000, currency: "gbp", period: "day" },
+        payments: around("day"),
+      }),
     ),
-    get("limit-with-card", seedSpending({ card: "account", limit: { amount: 100, currency: "ils", period: "week" } })),
+    get(
+      "limit-with-card",
+      seedSpending({ card: "account", limit: { amount: 100, currency: "ils", period: "week" } }),
+    ),
     get(
       "negative-spent-fails-the-output-check",
       seedSpending({
         limit: { amount: 1000, currency: "usd", period: "week" },
-        payments: ({ now }) => [{ id: "neg", botId: "b", currency: "usd", amount: -7, createdAt: now }],
+        payments: ({ now }) => [
+          { id: "neg", botId: "b", currency: "usd", amount: -7, createdAt: now },
+        ],
       }),
     ),
   ];
@@ -699,7 +965,14 @@ function botSectionCases(): Case[] {
     await system.user.create({
       data: { id: other, name: "Other", email: `${other}@example.test`, emailVerified: true },
     });
-    const make = (id: string, spaceId: string, userId: string, name: string, position: number, offset: number) =>
+    const make = (
+      id: string,
+      spaceId: string,
+      userId: string,
+      name: string,
+      position: number,
+      offset: number,
+    ) =>
       system.botSection.create({
         data: {
           id: `${seeded.userId}-${id}`,
@@ -721,15 +994,33 @@ function botSectionCases(): Case[] {
   return [
     { name: "sections-list", procedure: "botSections.list", input: {}, seed: seedSections() },
     { name: "sections-list-empty", procedure: "botSections.list", input: {} },
-    { name: "sections-list-no-input", procedure: "botSections.list", input: undefined, seed: seedSections() },
-    { name: "sections-list-ignores-input", procedure: "botSections.list", input: { anything: 1 }, seed: seedSections() },
+    {
+      name: "sections-list-no-input",
+      procedure: "botSections.list",
+      input: undefined,
+      seed: seedSections(),
+    },
+    {
+      name: "sections-list-ignores-input",
+      procedure: "botSections.list",
+      input: { anything: 1 },
+      seed: seedSections(),
+    },
     {
       name: "sections-list-negative-position-fails-the-output-check",
       procedure: "botSections.list",
       input: {},
       seed: seedSections(async (seeded) => {
         await system.botSection.create({
-          data: { id: `${seeded.userId}-neg`, spaceId: seeded.spaces[0], userId: seeded.userId, name: "Negative", position: -1, createdAt: new Date(base), updatedAt: new Date(base) },
+          data: {
+            id: `${seeded.userId}-neg`,
+            spaceId: seeded.spaces[0],
+            userId: seeded.userId,
+            name: "Negative",
+            position: -1,
+            createdAt: new Date(base),
+            updatedAt: new Date(base),
+          },
         });
       }),
     },
@@ -757,7 +1048,15 @@ async function seedPages(seeded: Seeded) {
     id: string,
     title: string,
     updated: number,
-    extra: { pinned?: number; botId?: string; groupId?: string; spaceId?: string; userId?: string; visibility?: string; version?: number } = {},
+    extra: {
+      pinned?: number;
+      botId?: string;
+      groupId?: string;
+      spaceId?: string;
+      userId?: string;
+      visibility?: string;
+      version?: number;
+    } = {},
   ) =>
     system.page.create({
       data: {
@@ -775,7 +1074,11 @@ async function seedPages(seeded: Seeded) {
       },
     });
   await page("pa", "Alpha pinned", PAGE_BASE - 72 * hour, { pinned: PAGE_BASE - hour });
-  await page("pb", "Beta pinned", PAGE_BASE - 48 * hour, { pinned: PAGE_BASE - 2 * hour, visibility: "link", version: 3 });
+  await page("pb", "Beta pinned", PAGE_BASE - 48 * hour, {
+    pinned: PAGE_BASE - 2 * hour,
+    visibility: "link",
+    version: 3,
+  });
   await page("pc", "Tie pin", PAGE_BASE - 10 * hour, { pinned: PAGE_BASE - hour });
   await page("pd", "Tie pin newer update", PAGE_BASE - 9 * hour, { pinned: PAGE_BASE - hour + 5 });
   await page("u1", "100% sure", PAGE_BASE);
@@ -802,7 +1105,14 @@ function seedWrites(config: WriteSeed = {}) {
     const user = seeded.userId;
     const old = new Date(Date.UTC(2020, 0, 1));
     const base = Date.UTC(2026, 4, 1, 12, 0, 0, 0);
-    const section = (id: string, spaceId: string, userId: string, name: string, position: number, offset: number) =>
+    const section = (
+      id: string,
+      spaceId: string,
+      userId: string,
+      name: string,
+      position: number,
+      offset: number,
+    ) =>
       system.botSection.create({
         data: {
           id: `${user}-${id}`,
@@ -821,20 +1131,43 @@ function seedWrites(config: WriteSeed = {}) {
     }
     const bot = (id: string, spaceId: string, name: string, extra: Record<string, unknown> = {}) =>
       system.bot.create({
-        data: { id: `${user}-${id}`, spaceId, userId: user, name, color: "blue", updatedAt: old, ...extra },
+        data: {
+          id: `${user}-${id}`,
+          spaceId,
+          userId: user,
+          name,
+          color: "blue",
+          updatedAt: old,
+          ...extra,
+        },
       });
     await bot("ba", seeded.spaces[0], "Bot A");
-    await bot("bb", seeded.spaces[0], "Bot B", config.noSections ? {} : { sectionId: `${user}-s2` });
+    await bot(
+      "bb",
+      seeded.spaces[0],
+      "Bot B",
+      config.noSections ? {} : { sectionId: `${user}-s2` },
+    );
     await bot("bx", seeded.spaces[1], "Bot X");
     await bot("barch", seeded.spaces[0], "Bot archived", { archivedAt: old });
     const group = (id: string, name: string, extra: Record<string, unknown> = {}) =>
       system.chatGroup.create({
-        data: { id: `${user}-${id}`, spaceId: seeded.spaces[0], userId: user, name, updatedAt: old, ...extra },
+        data: {
+          id: `${user}-${id}`,
+          spaceId: seeded.spaces[0],
+          userId: user,
+          name,
+          updatedAt: old,
+          ...extra,
+        },
       });
     await group("grp", "Group", config.noSections ? {} : { sectionId: `${user}-s2` });
     await group("garch", "Group archived", { archivedAt: old });
     if (config.deleting) {
-      await system.space.update({ where: { id: seeded.spaces[0] }, data: { deletingAt: new Date() } });
+      await system.space.update({
+        where: { id: seeded.spaces[0] },
+        data: { deletingAt: new Date() },
+      });
     }
   };
 }
@@ -863,7 +1196,11 @@ function botSectionWriteCases(): Case[] {
   });
   return [
     create("bot-new", { botId: "__ba__", name: "Fresh" }),
-    create("bot-new-empty-space", { botId: "__ba__", name: "Fresh" }, { seed: seedWrites({ noSections: true }) }),
+    create(
+      "bot-new-empty-space",
+      { botId: "__ba__", name: "Fresh" },
+      { seed: seedWrites({ noSections: true }) },
+    ),
     create("bot-existing-own", { botId: "__ba__", name: "Work" }),
     create("bot-existing-other-member", { botId: "__ba__", name: "Play" }),
     create("bot-moves-section", { botId: "__bb__", name: "Work" }),
@@ -882,8 +1219,16 @@ function botSectionWriteCases(): Case[] {
     create("bot-unknown", { botId: "nope", name: "x" }),
     create("group-archived", { groupId: "__garch__", name: "x" }),
     create("group-unknown", { groupId: "nope", name: "x" }),
-    create("space-deleting", { botId: "__ba__", name: "x" }, { seed: seedWrites({ deleting: true }) }),
-    create("space-deleting-unknown-bot", { botId: "nope", name: "x" }, { seed: seedWrites({ deleting: true }) }),
+    create(
+      "space-deleting",
+      { botId: "__ba__", name: "x" },
+      { seed: seedWrites({ deleting: true }) },
+    ),
+    create(
+      "space-deleting-unknown-bot",
+      { botId: "nope", name: "x" },
+      { seed: seedWrites({ deleting: true }) },
+    ),
     create("neither", { name: "x" }),
     create("both", { botId: "__ba__", groupId: "__grp__", name: "x" }),
     create("empty-bot-id", { botId: "", name: "x" }),
@@ -931,8 +1276,16 @@ function botSectionWriteCases(): Case[] {
     update("extra-keys-ignored", { sectionId: "__s1__", name: "Office", more: 1 }),
     update("no-input", undefined),
     update("null-input", null),
-    update("space-deleting-rename", { sectionId: "__s1__", name: "Office" }, { seed: seedWrites({ deleting: true }) }),
-    update("space-deleting-same-name", { sectionId: "__s1__", name: "Work" }, { seed: seedWrites({ deleting: true }) }),
+    update(
+      "space-deleting-rename",
+      { sectionId: "__s1__", name: "Office" },
+      { seed: seedWrites({ deleting: true }) },
+    ),
+    update(
+      "space-deleting-same-name",
+      { sectionId: "__s1__", name: "Work" },
+      { seed: seedWrites({ deleting: true }) },
+    ),
     update("anonymous", { sectionId: "__s1__", name: "Office" }, { anonymous: true }),
     remove("with-members", { sectionId: "__s2__" }),
     remove("empty", { sectionId: "__s1__" }),
@@ -953,7 +1306,12 @@ function botSectionWriteCases(): Case[] {
 }
 
 function spendingSetCases(): Case[] {
-  const set = (name: string, input: unknown, seed?: Case["seed"], extra: Partial<Case> = {}): Case => ({
+  const set = (
+    name: string,
+    input: unknown,
+    seed?: Case["seed"],
+    extra: Partial<Case> = {},
+  ): Case => ({
     name: `sls-${name}`,
     procedure: "spendingLimit.set",
     input,
@@ -961,7 +1319,9 @@ function spendingSetCases(): Case[] {
     ...extra,
   });
   const long = new Date(Date.UTC(2020, 0, 1));
-  const limit = (amount: number, currency: string, period: string) => ({ limit: { amount, currency, period } });
+  const limit = (amount: number, currency: string, period: string) => ({
+    limit: { amount, currency, period },
+  });
   const cases: Case[] = [];
   for (const currency of ["usd", "eur", "gbp", "ils"]) {
     for (const period of ["day", "week", "month", "none"]) {
@@ -984,7 +1344,15 @@ function spendingSetCases(): Case[] {
       limit(900, "usd", "day"),
       seedSpending({
         limit: { amount: 1000, currency: "usd", period: "week", startsAt: long },
-        payments: ({ now }) => [{ id: "a", botId: "b", currency: "usd", amount: 70, createdAt: new Date(now.getTime() - 1000) }],
+        payments: ({ now }) => [
+          {
+            id: "a",
+            botId: "b",
+            currency: "usd",
+            amount: 70,
+            createdAt: new Date(now.getTime() - 1000),
+          },
+        ],
       }),
     ),
     set("card-makes-it-shown", { limit: null }, seedSpending({ card: "account" })),
@@ -1000,7 +1368,7 @@ function spendingSetCases(): Case[] {
     set("amount-bool", limit(true as never, "usd", "day")),
     set("amount-huge", limit(1e300, "usd", "day")),
     set("amount-negative-huge", limit(-1e300, "usd", "day")),
-    set("amount-unsafe", limit(9007199254740993, "usd", "day")),
+    set("amount-unsafe", limit(Number.MAX_SAFE_INTEGER + 1, "usd", "day")),
     set("amount-missing", { limit: { currency: "usd", period: "day" } }),
     set("currency-unknown", limit(5, "jpy", "day")),
     set("currency-uppercase", limit(5, "USD", "day")),
@@ -1021,7 +1389,10 @@ function spendingSetCases(): Case[] {
     set("limit-extra-key", { limit: { amount: 5, currency: "usd", period: "day", more: 1 } }),
     set("outer-extra-key", { limit: null, more: 1 }),
     set("outer-extra-key-with-limit", { ...limit(5, "usd", "day"), b: 1, 2: 1 }),
-    set("both-extra-keys", { limit: { amount: 0, currency: "usd", period: "day", more: 1 }, other: 1 }),
+    set("both-extra-keys", {
+      limit: { amount: 0, currency: "usd", period: "day", more: 1 },
+      other: 1,
+    }),
     set("no-input", undefined),
     set("null-input", null),
     set("array-input", []),
@@ -1048,13 +1419,32 @@ function seedMessaging(config: MessagingSeed = {}) {
     const user = seeded.userId;
     const other = `${user}-other`;
     await system.user.create({
-      data: { id: other, name: config.ownerName ?? "Jane Quinn", email: `${other}@example.test`, emailVerified: true },
+      data: {
+        id: other,
+        name: config.ownerName ?? "Jane Quinn",
+        email: `${other}@example.test`,
+        emailVerified: true,
+      },
     });
     const old = new Date(Date.UTC(2020, 0, 1));
     const base = Date.UTC(2026, 4, 1, 12, 0, 0, 0);
-    const bot = (id: string, spaceId: string, owner: string, name: string, extra: Record<string, unknown> = {}) =>
+    const bot = (
+      id: string,
+      spaceId: string,
+      owner: string,
+      name: string,
+      extra: Record<string, unknown> = {},
+    ) =>
       system.bot.create({
-        data: { id: `${user}-${id}`, spaceId, userId: owner, name, color: "blue", updatedAt: old, ...extra },
+        data: {
+          id: `${user}-${id}`,
+          spaceId,
+          userId: owner,
+          name,
+          color: "blue",
+          updatedAt: old,
+          ...extra,
+        },
       });
     await bot("mb1", seeded.spaces[0], user, "My bot one");
     await bot("mb2", seeded.spaces[0], user, "My bot two");
@@ -1064,7 +1454,13 @@ function seedMessaging(config: MessagingSeed = {}) {
     await bot("pb2", seeded.spaces[1], other, "Peer bot two");
     await bot("pb3", seeded.spaces[1], other, "Peer bot three");
     await bot("pb4", seeded.spaces[0], other, "Peer bot in space one");
-    const identity = (id: string, owner: string, spaceId: string, botId: string, extra: Record<string, unknown> = {}) =>
+    const identity = (
+      id: string,
+      owner: string,
+      spaceId: string,
+      botId: string,
+      extra: Record<string, unknown> = {},
+    ) =>
       system.messagingIdentity.create({
         data: {
           id: `${user}-${id}`,
@@ -1095,22 +1491,50 @@ function seedMessaging(config: MessagingSeed = {}) {
         },
       });
       await system.bot.create({
-        data: { id: `${user}-mb5`, spaceId: seeded.spaces[1], userId: user, name: "Slack bot", color: "blue", updatedAt: old },
+        data: {
+          id: `${user}-mb5`,
+          spaceId: seeded.spaces[1],
+          userId: user,
+          name: "Slack bot",
+          color: "blue",
+          updatedAt: old,
+        },
       });
       await identity("idsl", user, seeded.spaces[1], "mb5", { installationId: installation.id });
     }
     if (config.existingCode) {
       await system.messagingLinkCode.create({
-        data: { id: `${user}-oldcode`, code: "AAAAAAAA", userId: user, spaceId: seeded.spaces[0], botId: `${user}-mb2`, expiresAt: new Date(Date.now() + 60_000) },
+        data: {
+          id: `${user}-oldcode`,
+          code: "AAAAAAAA",
+          userId: user,
+          spaceId: seeded.spaces[0],
+          botId: `${user}-mb2`,
+          expiresAt: new Date(Date.now() + 60_000),
+        },
       });
     }
     if (!config.noChannels) {
       const channel = (id: string, name: string | null, threadId: string) =>
-        system.messagingChannel.create({ data: { id: `${user}-${id}`, provider: "telegram", name, threadId: `${user}-${threadId}` } });
+        system.messagingChannel.create({
+          data: {
+            id: `${user}-${id}`,
+            provider: "telegram",
+            name,
+            threadId: `${user}-${threadId}`,
+          },
+        });
       await channel("cn1", "Team", "th1");
       await channel("cn2", null, "th2");
       await channel("cn3", "Other people", "th3");
-      const member = (id: string, channelId: string, address: string, identityId: string | null, status: string, offset: number) =>
+      const member = (
+        id: string,
+        channelId: string,
+        address: string,
+        identityId: string | null,
+        status: string,
+        offset: number,
+      ) =>
         system.messagingChannelMember.create({
           data: {
             id: `${user}-${id}`,
@@ -1132,7 +1556,13 @@ function seedMessaging(config: MessagingSeed = {}) {
       if (config.oddMembership) await member("mm8", "cn2", "a8", "id1", "weird", 8000);
     }
     if (!config.noConnections) {
-      const connection = (id: string, requester: string, target: string, status: string, offset: number) =>
+      const connection = (
+        id: string,
+        requester: string,
+        target: string,
+        status: string,
+        offset: number,
+      ) =>
         system.agentConnection.create({
           data: {
             id: `${user}-${id}`,
@@ -1165,20 +1595,28 @@ function seedMessaging(config: MessagingSeed = {}) {
         });
       }
       await system.messagingOutbound.create({
-        data: { id: `${user}-ob2`, idempotencyKey: `connect:other:${user}`, kind: "dm", body: "unrelated", status: "pending" },
+        data: {
+          id: `${user}-ob2`,
+          idempotencyKey: `connect:other:${user}`,
+          kind: "dm",
+          body: "unrelated",
+          status: "pending",
+        },
       });
     }
   };
 }
 
 function messagingCases(): Case[] {
-  const mk = (procedure: string, label: string) => (name: string, input: unknown, extra: Partial<Case> = {}): Case => ({
-    name: `msg-${label}-${name}`,
-    procedure: `messaging.${procedure}`,
-    input,
-    seed: seedMessaging(),
-    ...extra,
-  });
+  const mk =
+    (procedure: string, label: string) =>
+    (name: string, input: unknown, extra: Partial<Case> = {}): Case => ({
+      name: `msg-${label}-${name}`,
+      procedure: `messaging.${procedure}`,
+      input,
+      seed: seedMessaging(),
+      ...extra,
+    });
   const link = mk("link.start", "link");
   const setBot = mk("identities.setBot", "setbot");
   const unlink = mk("identities.unlink", "unlink");
@@ -1187,16 +1625,25 @@ function messagingCases(): Case[] {
   const leave = mk("channels.leave", "leave");
   const connections = mk("connections.list", "connlist");
   const revoke = mk("connections.revoke", "revoke");
-  const outbound = (status: string, providerHandle?: string) => seedMessaging({ outbound: { status, providerHandle } });
+  const outbound = (status: string, providerHandle?: string) =>
+    seedMessaging({ outbound: { status, providerHandle } });
   return [
     link("new", { botId: "__mb1__" }),
-    link("second-bot-supersedes", { botId: "__mb2__" }, { seed: seedMessaging({ existingCode: true }) }),
+    link(
+      "second-bot-supersedes",
+      { botId: "__mb2__" },
+      { seed: seedMessaging({ existingCode: true }) },
+    ),
     link("bot-in-shared-space", { botId: "__mbx__" }),
     link("already-linked", { botId: "__mb1__" }),
     link("unknown-bot", { botId: "nope" }),
     link("archived-bot", { botId: "__march__" }),
     link("peer-bot-not-mine", { botId: "__pb1__" }),
-    link("no-identities-new", { botId: "__mb1__" }, { seed: seedMessaging({ noIdentities: true }) }),
+    link(
+      "no-identities-new",
+      { botId: "__mb1__" },
+      { seed: seedMessaging({ noIdentities: true }) },
+    ),
     link("missing", {}),
     link("empty", { botId: "" }),
     link("number", { botId: 5 }),
@@ -1205,7 +1652,11 @@ function messagingCases(): Case[] {
     link("no-input", undefined),
     link("null-input", null),
     link("anonymous", { botId: "__mb1__" }, { anonymous: true }),
-    setBot("to-free-bot", { identityId: "__id1__", botId: "__mb2__" }, { seed: seedMessaging({ noChannels: true }) }),
+    setBot(
+      "to-free-bot",
+      { identityId: "__id1__", botId: "__mb2__" },
+      { seed: seedMessaging({ noChannels: true }) },
+    ),
     setBot("to-linked-bot", { identityId: "__id1__", botId: "__mb2__" }),
     setBot("same-bot", { identityId: "__id1__", botId: "__mb1__" }),
     setBot("archived-bot", { identityId: "__id1__", botId: "__march__" }),
@@ -1231,7 +1682,11 @@ function messagingCases(): Case[] {
     channels("memberships", {}),
     channels("no-identities", {}, { seed: seedMessaging({ noIdentities: true }) }),
     channels("no-channels", {}, { seed: seedMessaging({ noChannels: true }) }),
-    channels("odd-membership-status-fails-the-output-check", {}, { seed: seedMessaging({ oddMembership: true }) }),
+    channels(
+      "odd-membership-status-fails-the-output-check",
+      {},
+      { seed: seedMessaging({ oddMembership: true }) },
+    ),
     channels("no-input", undefined),
     channels("anonymous", {}, { anonymous: true }),
     respond("accept", { membershipId: "__mm1__", accept: true }),
@@ -1239,12 +1694,28 @@ function messagingCases(): Case[] {
     respond("invited-on-second-identity", { membershipId: "__mm6__", accept: true }),
     respond("already-approved", { membershipId: "__mm2__", accept: true }),
     respond("left", { membershipId: "__mm5__", accept: true }),
-    respond("odd-status-is-not-found-accept", { membershipId: "__s-mm8__", accept: true }, { seed: seedMessaging({ oddMembership: true }) }),
-    respond("odd-status-is-not-found-decline", { membershipId: "__s-mm8__", accept: false }, { seed: seedMessaging({ oddMembership: true }) }),
-    leave("odd-status", { membershipId: "__s-mm8__" }, { seed: seedMessaging({ oddMembership: true }) }),
+    respond(
+      "odd-status-is-not-found-accept",
+      { membershipId: "__s-mm8__", accept: true },
+      { seed: seedMessaging({ oddMembership: true }) },
+    ),
+    respond(
+      "odd-status-is-not-found-decline",
+      { membershipId: "__s-mm8__", accept: false },
+      { seed: seedMessaging({ oddMembership: true }) },
+    ),
+    leave(
+      "odd-status",
+      { membershipId: "__s-mm8__" },
+      { seed: seedMessaging({ oddMembership: true }) },
+    ),
     respond("someone-elses", { membershipId: "__mm7__", accept: true }),
     respond("unknown", { membershipId: "nope", accept: true }),
-    respond("no-identities", { membershipId: "__mm1__", accept: true }, { seed: seedMessaging({ noIdentities: true }) }),
+    respond(
+      "no-identities",
+      { membershipId: "__mm1__", accept: true },
+      { seed: seedMessaging({ noIdentities: true }) },
+    ),
     respond("accept-string", { membershipId: "__mm1__", accept: "yes" }),
     respond("accept-missing", { membershipId: "__mm1__" }),
     respond("both-invalid", { membershipId: "", accept: 1 }),
@@ -1255,28 +1726,68 @@ function messagingCases(): Case[] {
     leave("already-left", { membershipId: "__mm5__" }),
     leave("someone-elses", { membershipId: "__mm7__" }),
     leave("unknown", { membershipId: "nope" }),
-    leave("no-identities", { membershipId: "__mm1__" }, { seed: seedMessaging({ noIdentities: true }) }),
+    leave(
+      "no-identities",
+      { membershipId: "__mm1__" },
+      { seed: seedMessaging({ noIdentities: true }) },
+    ),
     leave("missing", {}),
     leave("empty", { membershipId: "" }),
     leave("anonymous", { membershipId: "__mm1__" }, { anonymous: true }),
     connections("mixed", {}),
     connections("no-identities", {}, { seed: seedMessaging({ noIdentities: true }) }),
     connections("none", {}, { seed: seedMessaging({ noConnections: true }) }),
-    connections("odd-connection-status-fails-the-output-check", {}, { seed: seedMessaging({ oddConnection: true }) }),
-    connections("owner-name-multiword", {}, { seed: seedMessaging({ ownerName: "  \u00a0Mary-Jane  Smith" }) }),
-    connections("owner-name-opaque", {}, { seed: seedMessaging({ ownerName: "ck1234567890123456789abcd" }) }),
-    connections("owner-name-uuid", {}, { seed: seedMessaging({ ownerName: "123e4567-e89b-12d3-a456-426614174000" }) }),
+    connections(
+      "odd-connection-status-fails-the-output-check",
+      {},
+      { seed: seedMessaging({ oddConnection: true }) },
+    ),
+    connections(
+      "owner-name-multiword",
+      {},
+      { seed: seedMessaging({ ownerName: "  \u00a0Mary-Jane  Smith" }) },
+    ),
+    connections(
+      "owner-name-opaque",
+      {},
+      { seed: seedMessaging({ ownerName: "ck1234567890123456789abcd" }) },
+    ),
+    connections(
+      "owner-name-uuid",
+      {},
+      { seed: seedMessaging({ ownerName: "123e4567-e89b-12d3-a456-426614174000" }) },
+    ),
     connections("owner-name-symbols", {}, { seed: seedMessaging({ ownerName: "😀 ✨" }) }),
-    connections("owner-name-unicode-space", {}, { seed: seedMessaging({ ownerName: "Zoë\u2003Ünï" }) }),
-    connections("owner-name-dunder", {}, { seed: seedMessaging({ ownerName: "__Placeholder_1__" }) }),
-    connections("owner-name-camel", {}, { seed: seedMessaging({ ownerName: "AliceSmith1234567890Longname" }) }),
-    connections("owner-name-mixed-long", {}, { seed: seedMessaging({ ownerName: "aB3dE6gH9jK2mN5pQ8sT" }) }),
+    connections(
+      "owner-name-unicode-space",
+      {},
+      { seed: seedMessaging({ ownerName: "Zoë\u2003Ünï" }) },
+    ),
+    connections(
+      "owner-name-dunder",
+      {},
+      { seed: seedMessaging({ ownerName: "__Placeholder_1__" }) },
+    ),
+    connections(
+      "owner-name-camel",
+      {},
+      { seed: seedMessaging({ ownerName: "AliceSmith1234567890Longname" }) },
+    ),
+    connections(
+      "owner-name-mixed-long",
+      {},
+      { seed: seedMessaging({ ownerName: "aB3dE6gH9jK2mN5pQ8sT" }) },
+    ),
     connections("no-input", undefined),
     connections("anonymous", {}, { anonymous: true }),
     revoke("pending-outgoing", { connectionId: "__cn4__" }, { seed: outbound("pending") }),
     revoke("pending-outgoing-retry", { connectionId: "__cn4__" }, { seed: outbound("retry") }),
     revoke("sent-without-handle", { connectionId: "__cn4__" }, { seed: outbound("sent") }),
-    revoke("sent-with-handle", { connectionId: "__cn4__" }, { seed: outbound("sent", "provider-1") }),
+    revoke(
+      "sent-with-handle",
+      { connectionId: "__cn4__" },
+      { seed: outbound("sent", "provider-1") },
+    ),
     revoke("failed-invite-kept", { connectionId: "__cn4__" }, { seed: outbound("failed") }),
     revoke("incoming-pending", { connectionId: "__cn5__" }),
     revoke("approved", { connectionId: "__cn6__" }),
@@ -1284,7 +1795,11 @@ function messagingCases(): Case[] {
     revoke("already-revoked", { connectionId: "__cn8__" }),
     revoke("between-strangers", { connectionId: "__cn9__" }),
     revoke("unknown", { connectionId: "nope" }),
-    revoke("no-identities", { connectionId: "__cn4__" }, { seed: seedMessaging({ noIdentities: true }) }),
+    revoke(
+      "no-identities",
+      { connectionId: "__cn4__" },
+      { seed: seedMessaging({ noIdentities: true }) },
+    ),
     revoke("missing", {}),
     revoke("empty", { connectionId: "" }),
     revoke("number", { connectionId: 5 }),
@@ -1328,22 +1843,50 @@ function pageCases(): Case[] {
     list("query-x", { query: "x", limit: 1 }, { paginate: true }),
     list("query-none", { query: "zzzz" }),
     list("query-with-bot", { query: "b", botId: "__bot__" }),
-    list("long-title-fails-the-output-check", {}, {
-      seed: async (seeded) => {
-        await seedPages(seeded);
-        await system.page.create({
-          data: { id: `${seeded.userId}-bad`, spaceId: seeded.spaces[0], userId: seeded.userId, title: "t".repeat(201), visibility: "private", currentVersion: 1, pinnedAt: null, createdAt: new Date(PAGE_BASE), updatedAt: new Date(PAGE_BASE) },
-        });
+    list(
+      "long-title-fails-the-output-check",
+      {},
+      {
+        seed: async (seeded) => {
+          await seedPages(seeded);
+          await system.page.create({
+            data: {
+              id: `${seeded.userId}-bad`,
+              spaceId: seeded.spaces[0],
+              userId: seeded.userId,
+              title: "t".repeat(201),
+              visibility: "private",
+              currentVersion: 1,
+              pinnedAt: null,
+              createdAt: new Date(PAGE_BASE),
+              updatedAt: new Date(PAGE_BASE),
+            },
+          });
+        },
       },
-    }),
-    list("zero-version-fails-the-output-check", {}, {
-      seed: async (seeded) => {
-        await seedPages(seeded);
-        await system.page.create({
-          data: { id: `${seeded.userId}-bad`, spaceId: seeded.spaces[0], userId: seeded.userId, title: "Zero version", visibility: "private", currentVersion: 0, pinnedAt: null, createdAt: new Date(PAGE_BASE), updatedAt: new Date(PAGE_BASE) },
-        });
+    ),
+    list(
+      "zero-version-fails-the-output-check",
+      {},
+      {
+        seed: async (seeded) => {
+          await seedPages(seeded);
+          await system.page.create({
+            data: {
+              id: `${seeded.userId}-bad`,
+              spaceId: seeded.spaces[0],
+              userId: seeded.userId,
+              title: "Zero version",
+              visibility: "private",
+              currentVersion: 0,
+              pinnedAt: null,
+              createdAt: new Date(PAGE_BASE),
+              updatedAt: new Date(PAGE_BASE),
+            },
+          });
+        },
       },
-    }),
+    ),
     list("anonymous", {}, { anonymous: true }),
     list("no-input", undefined),
     list("null-input", null),
@@ -1388,7 +1931,7 @@ function pageCases(): Case[] {
     list("limit-null", { limit: null }),
     list("limit-bool", { limit: true }),
     list("limit-huge", { limit: 1e300 }),
-    list("limit-unsafe", { limit: 9007199254740993 }),
+    list("limit-unsafe", { limit: Number.MAX_SAFE_INTEGER + 1 }),
     list("limit-negative-huge", { limit: -1e300 }),
     list("query-empty", { query: "" }),
     list("query-blank", { query: " \n\t" }),
@@ -1401,7 +1944,9 @@ function pageCases(): Case[] {
     list("cursor-unpinned", { cursor: cursorOf(T, null, "zzz") }),
     list("cursor-unpinned-tie", { cursor: cursorOf(T, null, "~") }),
     list("cursor-pinned", { cursor: cursorOf(T, "2026-04-30T11:00:00.000Z", "zzz") }),
-    list("cursor-pinned-tie", { cursor: cursorOf("2026-04-21T02:00:00.000Z", "2026-05-01T11:00:00.000Z", "~") }),
+    list("cursor-pinned-tie", {
+      cursor: cursorOf("2026-04-21T02:00:00.000Z", "2026-05-01T11:00:00.000Z", "~"),
+    }),
     list("cursor-date-only", { cursor: cursorOf("2026-05-01", "2026-04-30") }),
     list("cursor-year-only", { cursor: cursorOf("2026", null) }),
     list("cursor-offset", { cursor: cursorOf("2026-05-01T17:30:00.000+05:30", null) }),
@@ -1413,15 +1958,33 @@ function pageCases(): Case[] {
     list("cursor-space-separator", { cursor: cursorOf("2026-05-01 12:00:00", null) }),
     list("cursor-ms-offset", { cursor: cursorOf("2026-05-01T12:00:00.123456+00:00", null) }),
     list("cursor-pinned-after-all", { cursor: cursorOf(T, "1999-01-01T00:00:00.000Z", "a") }),
-    list("cursor-standard-base64", { cursor: Buffer.from(JSON.stringify({ pinnedAt: null, updatedAt: T, id: "zzz??" })).toString("base64") }),
+    list("cursor-standard-base64", {
+      cursor: Buffer.from(JSON.stringify({ pinnedAt: null, updatedAt: T, id: "zzz??" })).toString(
+        "base64",
+      ),
+    }),
     list("cursor-padded", { cursor: `${cursorOf(T, null, "zzz")}==` }),
-    list("cursor-whitespace", { cursor: ` ${cursorOf(T, null, "zzz").slice(0, 10)}\n ${cursorOf(T, null, "zzz").slice(10)}` }),
-    list("cursor-junk-chars", { cursor: `${cursorOf(T, null, "zzz").slice(0, 10)}*.${cursorOf(T, null, "zzz").slice(10)}` }),
-    list("cursor-extra-keys", { cursor: b64(JSON.stringify({ pinnedAt: null, updatedAt: T, id: "zzz", more: [1] })) }),
-    list("cursor-key-case-id", { cursor: b64(JSON.stringify({ pinnedAt: null, updatedAt: T, ID: "zzz" })) }),
-    list("cursor-key-case-updated", { cursor: b64(JSON.stringify({ pinnedAt: null, UpdatedAt: T, id: "zzz" })) }),
-    list("cursor-key-case-pinned", { cursor: b64(JSON.stringify({ PINNEDAT: null, updatedAt: T, id: "zzz" })) }),
-    list("cursor-key-case-extra-valid", { cursor: b64(JSON.stringify({ pinnedAt: null, updatedAt: T, id: "zzz", ID: "other" })) }),
+    list("cursor-whitespace", {
+      cursor: ` ${cursorOf(T, null, "zzz").slice(0, 10)}\n ${cursorOf(T, null, "zzz").slice(10)}`,
+    }),
+    list("cursor-junk-chars", {
+      cursor: `${cursorOf(T, null, "zzz").slice(0, 10)}*.${cursorOf(T, null, "zzz").slice(10)}`,
+    }),
+    list("cursor-extra-keys", {
+      cursor: b64(JSON.stringify({ pinnedAt: null, updatedAt: T, id: "zzz", more: [1] })),
+    }),
+    list("cursor-key-case-id", {
+      cursor: b64(JSON.stringify({ pinnedAt: null, updatedAt: T, ID: "zzz" })),
+    }),
+    list("cursor-key-case-updated", {
+      cursor: b64(JSON.stringify({ pinnedAt: null, UpdatedAt: T, id: "zzz" })),
+    }),
+    list("cursor-key-case-pinned", {
+      cursor: b64(JSON.stringify({ PINNEDAT: null, updatedAt: T, id: "zzz" })),
+    }),
+    list("cursor-key-case-extra-valid", {
+      cursor: b64(JSON.stringify({ pinnedAt: null, updatedAt: T, id: "zzz", ID: "other" })),
+    }),
     list("cursor-garbage", { cursor: "!!!" }),
     list("cursor-plain-text", { cursor: "hello" }),
     list("cursor-not-json", { cursor: b64("not json") }),
@@ -1456,7 +2019,12 @@ function pageCases(): Case[] {
 /** One call, or the whole cursor walk when the case paginates. */
 async function run(
   testCase: Case,
-  call: (procedure: string, input: unknown, seeded: Seeded) => Promise<{ status: number; headers: unknown; body: any }>,
+  call: (
+    procedure: string,
+    input: unknown,
+    seeded: Seeded,
+    // biome-ignore lint/suspicious/noExplicitAny: manual harness; response bodies are untyped JSON
+  ) => Promise<{ status: number; headers: unknown; body: any }>,
   input: unknown,
   seeded: Seeded,
 ) {
@@ -1477,25 +2045,40 @@ async function run(
     cursor = result.body?.json?.nextCursor ?? undefined;
     if (!cursor) break;
   }
-  return { status: pages[0]!.status, headers: pages[0]!.headers, body: pages.map((page) => page.body) };
+  return {
+    status: pages[0]!.status,
+    headers: pages[0]!.headers,
+    body: pages.map((page) => page.body),
+  };
 }
 
 /** What the web app does right after a read-state change: it reloads the chat lists (through TypeScript). */
 async function followUps(testCase: Case, seeded: Seeded) {
   const results = [];
   for (const step of testCase.after ?? []) {
-    const result = await tsCall(step.procedure, withIds(step.input, seeded), called(seeded, testCase));
+    const result = await tsCall(
+      step.procedure,
+      withIds(step.input, seeded),
+      called(seeded, testCase),
+    );
     results.push(testCase.unordered ? sortedById(result) : result);
   }
   return results;
 }
 
 /** A list the API does not order is compared by id: the order Postgres returns it in is not a contract. */
+// biome-ignore lint/suspicious/noExplicitAny: manual harness; response bodies are untyped JSON
 function sortedById<T extends { body: any }>(result: T): T {
   const json = result.body?.json;
   if (!Array.isArray(json)) return result;
-  const key = (item: any) => String(item?.id);
-  return { ...result, body: { ...result.body, json: [...json].sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0)) } };
+  const key = (item: { id?: unknown } | null) => String(item?.id);
+  return {
+    ...result,
+    body: {
+      ...result.body,
+      json: [...json].sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0)),
+    },
+  };
 }
 
 type ThreadSeed = { noReads?: boolean };
@@ -1513,12 +2096,28 @@ function seedThreads(config: ThreadSeed = {}) {
       data: { id: other, name: "Other", email: `${other}@example.test`, emailVerified: true },
     });
     await system.member.create({
-      data: { id: `${seeded.orgId}-mo`, organizationId: seeded.orgId, userId: other, role: "member", createdAt: new Date() },
+      data: {
+        id: `${seeded.orgId}-mo`,
+        organizationId: seeded.orgId,
+        userId: other,
+        role: "member",
+        createdAt: new Date(),
+      },
     });
     // Creating a member also adds them to the organization's default Space (space one).
     const old = new Date(Date.UTC(2020, 0, 1));
     const bot = (id: string, spaceId: string, name: string, extra: Record<string, unknown> = {}) =>
-      system.bot.create({ data: { id: `${user}-${id}`, spaceId, userId: user, name, color: "blue", updatedAt: old, ...extra } });
+      system.bot.create({
+        data: {
+          id: `${user}-${id}`,
+          spaceId,
+          userId: user,
+          name,
+          color: "blue",
+          updatedAt: old,
+          ...extra,
+        },
+      });
     await bot("tb1", seeded.spaces[0], "Chat one");
     await bot("tb2", seeded.spaces[0], "Chat two");
     await bot("tb3", seeded.spaces[0], "Chat three");
@@ -1529,7 +2128,16 @@ function seedThreads(config: ThreadSeed = {}) {
     await bot("tbnone", seeded.spaces[0], "Chat without a thread");
     await bot("tbx", seeded.spaces[1], "Chat in space two");
     const thread = (id: string, spaceId: string, extra: Record<string, unknown>, next: number) =>
-      system.thread.create({ data: { id: `${user}-${id}`, spaceId, userId: user, nextMessageSeq: next, nextEventSeq: next, ...extra } });
+      system.thread.create({
+        data: {
+          id: `${user}-${id}`,
+          spaceId,
+          userId: user,
+          nextMessageSeq: next,
+          nextEventSeq: next,
+          ...extra,
+        },
+      });
     await thread("th-tb1", seeded.spaces[0], { botId: `${user}-tb1` }, 10);
     await thread("th-tb2", seeded.spaces[0], { botId: `${user}-tb2` }, 10);
     await thread("th-tb3", seeded.spaces[0], { botId: `${user}-tb3` }, 10);
@@ -1539,14 +2147,29 @@ function seedThreads(config: ThreadSeed = {}) {
     await thread("th-tbarch", seeded.spaces[0], { botId: `${user}-tbarch` }, 10);
     await thread("th-tbx", seeded.spaces[1], { botId: `${user}-tbx` }, 10);
     const group = (id: string, name: string, extra: Record<string, unknown> = {}) =>
-      system.chatGroup.create({ data: { id: `${user}-${id}`, spaceId: seeded.spaces[0], userId: user, name, updatedAt: old, ...extra } });
+      system.chatGroup.create({
+        data: {
+          id: `${user}-${id}`,
+          spaceId: seeded.spaces[0],
+          userId: user,
+          name,
+          updatedAt: old,
+          ...extra,
+        },
+      });
     await group("tg1", "Group one");
     await group("tg2", "Group two");
     await group("tgone", "Group of one");
     await group("tgarch", "Group archived", { archivedAt: old });
     await group("tgnone", "Group without a thread");
     const member = (groupId: string, botId: string) =>
-      system.chatGroupMember.create({ data: { id: `${user}-gm-${groupId}-${botId}`, groupId: `${user}-${groupId}`, botId: `${user}-${botId}` } });
+      system.chatGroupMember.create({
+        data: {
+          id: `${user}-gm-${groupId}-${botId}`,
+          groupId: `${user}-${groupId}`,
+          botId: `${user}-${botId}`,
+        },
+      });
     for (const id of ["tg1", "tg2", "tgarch", "tgnone"]) {
       await member(id, "tb1");
       await member(id, "tb2");
@@ -1559,20 +2182,36 @@ function seedThreads(config: ThreadSeed = {}) {
     await thread("th-tgarch", seeded.spaces[0], { groupId: `${user}-tgarch` }, 10);
     const event = (threadId: string, seq: number) =>
       system.event.create({
-        data: { id: `${user}-ev-${threadId}-${seq}`, spaceId: seeded.spaces[0], threadId: `${user}-${threadId}`, botId: `${user}-tb1`, seq, type: "note", payload: { n: seq } },
+        data: {
+          id: `${user}-ev-${threadId}-${seq}`,
+          spaceId: seeded.spaces[0],
+          threadId: `${user}-${threadId}`,
+          botId: `${user}-tb1`,
+          seq,
+          type: "note",
+          payload: { n: seq },
+        },
       });
     for (const seq of [0, 3, 7]) await event("th-tb1", seq);
     await event("th-tg1", 2);
     const message = (id: string, threadId: string, seq: number) =>
       system.message.create({
-        data: { id: `${user}-${id}`, threadId: `${user}-${threadId}`, seq, role: "user", blocks: [{ kind: "text", text: "hi" }] },
+        data: {
+          id: `${user}-${id}`,
+          threadId: `${user}-${threadId}`,
+          seq,
+          role: "user",
+          blocks: [{ kind: "text", text: "hi" }],
+        },
       });
     await message("msg5", "th-tb1", 5);
     await message("msg0", "th-tb1", 0);
     await message("msgother", "th-tb2", 4);
     if (config.noReads) return;
     const read = (threadId: string, data: Record<string, unknown>, userId = user) =>
-      system.threadRead.create({ data: { threadId: `${user}-${threadId}`, userId, spaceId: seeded.spaces[0], ...data } });
+      system.threadRead.create({
+        data: { threadId: `${user}-${threadId}`, userId, spaceId: seeded.spaces[0], ...data },
+      });
     await read("th-tb1", { unread: true, lastReadSeq: 4 });
     await read("th-tb2", { unread: false, lastReadSeq: 9 });
     await read("th-tb3", { unread: false, lastReadSeq: 3 });
@@ -1587,21 +2226,27 @@ function seedThreads(config: ThreadSeed = {}) {
 }
 
 function threadCases(): Case[] {
-  const mk = (procedure: string, label: string) => (name: string, input: unknown, extra: Partial<Case> = {}): Case => ({
-    name: `thr-${label}-${name}`,
-    procedure: `threads.${procedure}`,
-    input,
-    seed: seedThreads(),
-    after: AFTER,
-    ...extra,
-  });
+  const mk =
+    (procedure: string, label: string) =>
+    (name: string, input: unknown, extra: Partial<Case> = {}): Case => ({
+      name: `thr-${label}-${name}`,
+      procedure: `threads.${procedure}`,
+      input,
+      seed: seedThreads(),
+      after: AFTER,
+      ...extra,
+    });
   const read = mk("markRead", "read");
   const unread = mk("markUnread", "unread");
   const snooze = mk("snooze", "snooze");
   const head = mk("head", "head");
-  const days = (n: number) => new Date(THREAD_FUTURE.getTime() + (n - 30) * 86_400_000).toISOString();
+  const days = (n: number) =>
+    new Date(THREAD_FUTURE.getTime() + (n - 30) * 86_400_000).toISOString();
   // The same instant written with an offset, as a phone in another zone might.
-  const wire = (n: number) => new Date(THREAD_FUTURE.getTime() + (n - 30) * 86_400_000 + 19_800_000).toISOString().replace("Z", "+05:30");
+  const wire = (n: number) =>
+    new Date(THREAD_FUTURE.getTime() + (n - 30) * 86_400_000 + 19_800_000)
+      .toISOString()
+      .replace("Z", "+05:30");
   return [
     // markRead: the client sends { botId } or { groupId }.
     read("bot-unread-with-gap", { botId: "__tb1__" }),
@@ -1665,7 +2310,11 @@ function threadCases(): Case[] {
     snooze("bot-fraction-digits", { botId: "__tb2__", until: days(20).replace(/Z$/, "456Z") }),
     snooze("bot-no-fraction", { botId: "__tb2__", until: days(20).replace(/\.\d+Z$/, "Z") }),
     snooze("bot-no-read-state", { botId: "__tbfresh__", until: days(2) }),
-    snooze("bot-no-reads-at-all", { botId: "__tb1__", until: days(2) }, { seed: seedThreads({ noReads: true }) }),
+    snooze(
+      "bot-no-reads-at-all",
+      { botId: "__tb1__", until: days(2) },
+      { seed: seedThreads({ noReads: true }) },
+    ),
     snooze("bot-keeps-unread-and-cursor", { botId: "__tb4__", until: days(2) }),
     snooze("bot-null-wakes", { botId: "__tb5__", until: null }),
     snooze("group-null-wakes", { groupId: "__tg1__", until: null }),
@@ -1728,12 +2377,36 @@ function seedConversations() {
       data: { id: other, name: "Other", email: `${other}@example.test`, emailVerified: true },
     });
     await system.member.create({
-      data: { id: `${seeded.orgId}-mo`, organizationId: seeded.orgId, userId: other, role: "member", createdAt: new Date() },
+      data: {
+        id: `${seeded.orgId}-mo`,
+        organizationId: seeded.orgId,
+        userId: other,
+        role: "member",
+        createdAt: new Date(),
+      },
     });
     // Creating a member also adds them to the organization's default Space (space one).
     const old = new Date(Date.UTC(2020, 0, 1));
-    await system.bot.create({ data: { id: `${user}-tb1`, spaceId: seeded.spaces[0], userId: user, name: "Bot", color: "blue", updatedAt: old } });
-    await system.bot.create({ data: { id: `${user}-tbx`, spaceId: seeded.spaces[1], userId: user, name: "Bot x", color: "blue", updatedAt: old } });
+    await system.bot.create({
+      data: {
+        id: `${user}-tb1`,
+        spaceId: seeded.spaces[0],
+        userId: user,
+        name: "Bot",
+        color: "blue",
+        updatedAt: old,
+      },
+    });
+    await system.bot.create({
+      data: {
+        id: `${user}-tbx`,
+        spaceId: seeded.spaces[1],
+        userId: user,
+        name: "Bot x",
+        color: "blue",
+        updatedAt: old,
+      },
+    });
     const conversation = (id: string, owner: string, spaceId: string, botId: string) =>
       system.externalConversation.create({
         data: {
@@ -1773,25 +2446,87 @@ function policyCases(): Case[] {
     ...rest,
   });
   const entries = (count: number) =>
-    Object.fromEntries(Array.from({ length: count }, (_, i) => [`sender-${String(i).padStart(3, "0")}`, { name: `Sender ${i}`, mode: "ignore" }]));
+    Object.fromEntries(
+      Array.from({ length: count }, (_, i) => [
+        `sender-${String(i).padStart(3, "0")}`,
+        { name: `Sender ${i}`, mode: "ignore" },
+      ]),
+    );
   return [
     // The web client sends the whole form.
-    update("client-shape", policy({ "bot-1": { name: "CI bot", mode: "rollup", rollupHours: 24 }, "bot-2": { name: "Alerts", mode: "action" } })),
+    update(
+      "client-shape",
+      policy({
+        "bot-1": { name: "CI bot", mode: "rollup", rollupHours: 24 },
+        "bot-2": { name: "Alerts", mode: "action" },
+      }),
+    ),
     update("empty-policies", policy({})),
-    update("ambient-null-rules-null", policy({}, { teamChatAmbientEnabled: null, teamChatRules: null })),
+    update(
+      "ambient-null-rules-null",
+      policy({}, { teamChatAmbientEnabled: null, teamChatRules: null }),
+    ),
     update("ambient-false", policy({}, { teamChatAmbientEnabled: false, teamChatRules: "" })),
-    update("all-modes", policy({ a: { name: "A", mode: "ignore" }, b: { name: "B", mode: "rollup", rollupHours: 1 }, c: { name: "C", mode: "action" }, d: { name: "D", mode: "user" } })),
+    update(
+      "all-modes",
+      policy({
+        a: { name: "A", mode: "ignore" },
+        b: { name: "B", mode: "rollup", rollupHours: 1 },
+        c: { name: "C", mode: "action" },
+        d: { name: "D", mode: "user" },
+      }),
+    ),
     update("rollup-hours-720", policy({ a: { name: "A", mode: "rollup", rollupHours: 720 } })),
     update("hours-with-other-mode", policy({ a: { name: "A", mode: "user", rollupHours: 5 } })),
     update("keys-trimmed", policy({ "  padded \t": { name: "  Padded name  ", mode: "ignore" } })),
-    update("keys-collide-after-trim", policy({ " a ": { name: "first", mode: "ignore" }, a: { name: "second", mode: "user" } })),
-    update("numeric-keys-order", policy({ b: { name: "b", mode: "ignore" }, 10: { name: "ten", mode: "ignore" }, 2: { name: "two", mode: "ignore" }, a: { name: "a", mode: "ignore" } })),
-    update("proto-key-dropped", JSON.parse(`{"externalConversationId":"__ec1__","teamChatAmbientEnabled":true,"teamChatRules":"r","automatedSenderPolicies":{"__proto__":{"name":"x","mode":"ignore"},"ok":{"name":"y","mode":"ignore"}}}`)),
-    update("unknown-keys-stripped", policy({ a: { name: "A", mode: "ignore", extra: [1], deep: { x: 1 } } }, { more: true })),
-    update("unicode", policy({ "ключ-😀": { name: "Имя ✨", mode: "ignore" } }, { teamChatRules: "règles — 日本語 😀" })),
-    update("line-separators-in-text", policy({ a: { name: "A\u2028B", mode: "ignore" } }, { teamChatRules: "x\u2028y\u2029z <b> & \"q\" \\ /" })),
-    update("nul-in-rules-and-names", policy({ "k\u0000": { name: "n\u0000m", mode: "ignore" } }, { teamChatRules: "a\u0000b" })),
-    update("controls-and-escapes", policy({ a: { name: "tab\there", mode: "ignore" } }, { teamChatRules: "line1\nline2\r\n\u0007\u007f" })),
+    update(
+      "keys-collide-after-trim",
+      policy({ " a ": { name: "first", mode: "ignore" }, a: { name: "second", mode: "user" } }),
+    ),
+    update(
+      "numeric-keys-order",
+      policy({
+        b: { name: "b", mode: "ignore" },
+        10: { name: "ten", mode: "ignore" },
+        2: { name: "two", mode: "ignore" },
+        a: { name: "a", mode: "ignore" },
+      }),
+    ),
+    update(
+      "proto-key-dropped",
+      JSON.parse(
+        `{"externalConversationId":"__ec1__","teamChatAmbientEnabled":true,"teamChatRules":"r","automatedSenderPolicies":{"__proto__":{"name":"x","mode":"ignore"},"ok":{"name":"y","mode":"ignore"}}}`,
+      ),
+    ),
+    update(
+      "unknown-keys-stripped",
+      policy({ a: { name: "A", mode: "ignore", extra: [1], deep: { x: 1 } } }, { more: true }),
+    ),
+    update(
+      "unicode",
+      policy(
+        { "ключ-😀": { name: "Имя ✨", mode: "ignore" } },
+        { teamChatRules: "règles — 日本語 😀" },
+      ),
+    ),
+    update(
+      "line-separators-in-text",
+      policy(
+        { a: { name: "A\u2028B", mode: "ignore" } },
+        { teamChatRules: 'x\u2028y\u2029z <b> & "q" \\ /' },
+      ),
+    ),
+    update(
+      "nul-in-rules-and-names",
+      policy({ "k\u0000": { name: "n\u0000m", mode: "ignore" } }, { teamChatRules: "a\u0000b" }),
+    ),
+    update(
+      "controls-and-escapes",
+      policy(
+        { a: { name: "tab\there", mode: "ignore" } },
+        { teamChatRules: "line1\nline2\r\n\u0007\u007f" },
+      ),
+    ),
     update("rules-4000", policy({}, { teamChatRules: "r".repeat(4000) })),
     update("rules-4001", policy({}, { teamChatRules: "r".repeat(4001) })),
     update("rules-astral-4000", policy({}, { teamChatRules: "😀".repeat(4000) })),
@@ -1806,12 +2541,24 @@ function policyCases(): Case[] {
     update("key-invalid-and-value-invalid", policy({ "": { name: "", mode: "bad" } })),
     update("entries-50", policy(entries(50))),
     update("entries-51", policy(entries(51))),
-    update("entries-51-with-bad-value", policy({ ...entries(51), bad: { name: "", mode: "ignore" } })),
+    update(
+      "entries-51-with-bad-value",
+      policy({ ...entries(51), bad: { name: "", mode: "ignore" } }),
+    ),
     update("entries-51-with-type-error", policy({ ...entries(51), bad: 5 })),
-    update("entries-51-with-key-error", policy({ ...entries(51), "": { name: "A", mode: "ignore" } })),
-    update("entries-51-collapse-to-50", policy({ ...entries(50), " sender-000 ": { name: "dup", mode: "user" } })),
+    update(
+      "entries-51-with-key-error",
+      policy({ ...entries(51), "": { name: "A", mode: "ignore" } }),
+    ),
+    update(
+      "entries-51-collapse-to-50",
+      policy({ ...entries(50), " sender-000 ": { name: "dup", mode: "user" } }),
+    ),
     update("rollup-without-hours", policy({ a: { name: "A", mode: "rollup" } })),
-    update("rollup-without-hours-two-keys", policy({ a: { name: "A", mode: "rollup" }, b: { name: "B", mode: "rollup" } })),
+    update(
+      "rollup-without-hours-two-keys",
+      policy({ a: { name: "A", mode: "rollup" }, b: { name: "B", mode: "rollup" } }),
+    ),
     update("rollup-blank-name-no-hours", policy({ a: { name: " ", mode: "rollup" } })),
     update("rollup-wrong-name-type-no-hours", policy({ a: { name: 5, mode: "rollup" } })),
     update("rollup-bad-hours-type", policy({ a: { name: "A", mode: "rollup", rollupHours: "3" } })),
@@ -1819,7 +2566,10 @@ function policyCases(): Case[] {
     update("hours-721", policy({ a: { name: "A", mode: "ignore", rollupHours: 721 } })),
     update("hours-fraction", policy({ a: { name: "A", mode: "ignore", rollupHours: 1.5 } })),
     update("hours-null", policy({ a: { name: "A", mode: "ignore", rollupHours: null } })),
-    update("hours-negative-huge", policy({ a: { name: "A", mode: "ignore", rollupHours: -1e300 } })),
+    update(
+      "hours-negative-huge",
+      policy({ a: { name: "A", mode: "ignore", rollupHours: -1e300 } }),
+    ),
     update("mode-unknown", policy({ a: { name: "A", mode: "block" } })),
     update("mode-missing", policy({ a: { name: "A" } })),
     update("mode-number", policy({ a: { name: "A", mode: 1 } })),
@@ -1829,23 +2579,48 @@ function policyCases(): Case[] {
     update("policies-array", policy([])),
     update("policies-null", policy(null)),
     update("policies-string", policy("x")),
-    update("policies-missing", { externalConversationId: "__ec1__", teamChatAmbientEnabled: true, teamChatRules: "r" }),
+    update("policies-missing", {
+      externalConversationId: "__ec1__",
+      teamChatAmbientEnabled: true,
+      teamChatRules: "r",
+    }),
     update("ambient-string", policy({}, { teamChatAmbientEnabled: "yes" })),
-    update("ambient-missing", { externalConversationId: "__ec1__", teamChatRules: "r", automatedSenderPolicies: {} }),
+    update("ambient-missing", {
+      externalConversationId: "__ec1__",
+      teamChatRules: "r",
+      automatedSenderPolicies: {},
+    }),
     update("rules-number", policy({}, { teamChatRules: 5 })),
     update("rules-array", policy({}, { teamChatRules: [] })),
-    update("rules-missing", { externalConversationId: "__ec1__", teamChatAmbientEnabled: true, automatedSenderPolicies: {} }),
+    update("rules-missing", {
+      externalConversationId: "__ec1__",
+      teamChatAmbientEnabled: true,
+      automatedSenderPolicies: {},
+    }),
     update("id-empty", policy({}, { externalConversationId: "" })),
     update("id-number", policy({}, { externalConversationId: 5 })),
-    update("id-missing", { teamChatAmbientEnabled: true, teamChatRules: "r", automatedSenderPolicies: {} }),
-    update("everything-wrong", { externalConversationId: "", teamChatAmbientEnabled: "y", teamChatRules: 5, automatedSenderPolicies: [] }),
+    update("id-missing", {
+      teamChatAmbientEnabled: true,
+      teamChatRules: "r",
+      automatedSenderPolicies: {},
+    }),
+    update("everything-wrong", {
+      externalConversationId: "",
+      teamChatAmbientEnabled: "y",
+      teamChatRules: 5,
+      automatedSenderPolicies: [],
+    }),
     update("empty-object", {}),
     update("no-input", undefined),
     update("null-input", null),
     update("array-input", []),
     update("someone-elses-conversation", policy({}, { externalConversationId: "__ec2__" })),
     update("other-space-conversation", policy({}, { externalConversationId: "__ec3__" })),
-    update("other-space-conversation-own-header", policy({}, { externalConversationId: "__ec3__" }), { space: 1 }),
+    update(
+      "other-space-conversation-own-header",
+      policy({}, { externalConversationId: "__ec3__" }),
+      { space: 1 },
+    ),
     update("unknown-conversation", policy({}, { externalConversationId: "nope" })),
     update("anonymous", policy({}), { anonymous: true }),
   ];
@@ -1861,7 +2636,13 @@ async function seedOtherMember(seeded: Seeded) {
     data: { id: other, name: "Other", email: `${other}@example.test`, emailVerified: true },
   });
   await system.member.create({
-    data: { id: `${seeded.orgId}-mo`, organizationId: seeded.orgId, userId: other, role: "member", createdAt: new Date() },
+    data: {
+      id: `${seeded.orgId}-mo`,
+      organizationId: seeded.orgId,
+      userId: other,
+      role: "member",
+      createdAt: new Date(),
+    },
   });
   // Creating a member also adds them to the organization's default Space (space one).
   return other;
@@ -1873,12 +2654,23 @@ function seedScratchpad() {
     const user = seeded.userId;
     const other = await seedOtherMember(seeded);
     const bot = (id: string, spaceId: string, extra: Record<string, unknown> = {}) =>
-      system.bot.create({ data: { id: `${user}-${id}`, spaceId, userId: user, name: id, color: "blue", ...extra } });
+      system.bot.create({
+        data: { id: `${user}-${id}`, spaceId, userId: user, name: id, color: "blue", ...extra },
+      });
     await bot("tb1", seeded.spaces[0]);
     await bot("tb2", seeded.spaces[0]);
     await bot("tbarch", seeded.spaces[0], { archivedAt: new Date(SETTINGS_BASE) });
     await bot("tbx", seeded.spaces[1]);
-    const item = (id: string, botId: string, spaceId: string, title: string, status: string, updated: number, created: number, userId = user) =>
+    const item = (
+      id: string,
+      botId: string,
+      spaceId: string,
+      title: string,
+      status: string,
+      updated: number,
+      created: number,
+      userId = user,
+    ) =>
       system.scratchpadItem.create({
         data: {
           id: `${user}-${id}`,
@@ -1905,14 +2697,16 @@ function seedScratchpad() {
 }
 
 function scratchpadCases(): Case[] {
-  const mk = (procedure: string) => (name: string, input: unknown, extra: Partial<Case> = {}): Case => ({
-    name: `scr-${procedure}-${name}`,
-    procedure: `scratchpad.${procedure}`,
-    input,
-    seed: seedScratchpad(),
-    after: procedure === "list" ? undefined : SCRATCH_AFTER,
-    ...extra,
-  });
+  const mk =
+    (procedure: string) =>
+    (name: string, input: unknown, extra: Partial<Case> = {}): Case => ({
+      name: `scr-${procedure}-${name}`,
+      procedure: `scratchpad.${procedure}`,
+      input,
+      seed: seedScratchpad(),
+      after: procedure === "list" ? undefined : SCRATCH_AFTER,
+      ...extra,
+    });
   const list = mk("list");
   const create = mk("create");
   const update = mk("update");
@@ -1925,7 +2719,11 @@ function scratchpadCases(): Case[] {
     list("status-open", { botId: "__s-tb1__", status: "open" }),
     list("status-parked", { botId: "__s-tb1__", status: "parked" }),
     list("status-done", { botId: "__s-tb1__", status: "done" }),
-    list("status-wins-over-include-done", { botId: "__s-tb1__", status: "open", includeDone: true }),
+    list("status-wins-over-include-done", {
+      botId: "__s-tb1__",
+      status: "open",
+      includeDone: true,
+    }),
     list("bot-with-an-item", { botId: "__s-tb2__" }),
     list("archived-bot", { botId: "__s-tbarch__" }),
     list("unknown-bot", { botId: "nope" }),
@@ -1946,9 +2744,18 @@ function scratchpadCases(): Case[] {
     list("array-input", []),
     list("anonymous", { botId: "__s-tb1__" }, { anonymous: true }),
 
-    create("client-shape", { botId: "__s-tb1__", title: "Call the bank", status: "open", notes: "" }),
+    create("client-shape", {
+      botId: "__s-tb1__",
+      title: "Call the bank",
+      status: "open",
+      notes: "",
+    }),
     create("defaults", { botId: "__s-tb1__", title: "Only a title" }),
-    create("trimmed", { botId: "__s-tb1__", title: "  Padded\t", notes: "\n  padded notes \u00a0\ufeff" }),
+    create("trimmed", {
+      botId: "__s-tb1__",
+      title: "  Padded\t",
+      notes: "\n  padded notes \u00a0\ufeff",
+    }),
     create("whitespace-only-title-stores-empty", { botId: "__s-tb1__", title: "   " }),
     create("status-parked", { botId: "__s-tb1__", title: "Parked", status: "parked" }),
     create("status-done", { botId: "__s-tb1__", title: "Done", status: "done", notes: "n" }),
@@ -1961,7 +2768,11 @@ function scratchpadCases(): Case[] {
     create("notes-4001", { botId: "__s-tb1__", title: "N", notes: long(4001, "n") }),
     create("notes-astral-4000", { botId: "__s-tb1__", title: "N", notes: long(4000, "😀") }),
     create("notes-astral-4001", { botId: "__s-tb1__", title: "N", notes: long(4001, "😀") }),
-    create("unicode-and-separators", { botId: "__s-tb1__", title: "Ключ 日本語 \u2028 <b> & \"q\" \\ /", notes: "line1\nline2\r\n\u2029 ✨" }),
+    create("unicode-and-separators", {
+      botId: "__s-tb1__",
+      title: 'Ключ 日本語 \u2028 <b> & "q" \\ /',
+      notes: "line1\nline2\r\n\u2029 ✨",
+    }),
     create("nul-in-title", { botId: "__s-tb1__", title: "a\u0000b" }),
     create("nul-in-notes", { botId: "__s-tb1__", title: "ok", notes: "a\u0000b" }),
     create("lone-surrogate-escape", JSON.parse(`{"botId":"__s-tb1__","title":"a\\ud800b"}`)),
@@ -2061,10 +2872,43 @@ function seedSettings(config: SettingsSeed = {}) {
     const other = await seedOtherMember(seeded);
     const [one, two] = seeded.spaces;
     const at = (offset: number) => new Date(SETTINGS_BASE + offset * 1000);
-    const rule = (id: string, effect: string, matchKind: string, matchValue: string, offset: number) =>
-      system.userActionApprovalRule.create({ data: { id: `${user}-${id}`, userId: user, effect, matchKind, matchValue, createdAt: at(offset) } });
-    const spaceRule = (id: string, spaceId: string, effect: string, matchKind: string, matchValue: string, offset: number, userId = user) =>
-      system.actionApprovalRule.create({ data: { id: `${user}-${id}`, spaceId, createdByUserId: userId, effect, matchKind, matchValue, createdAt: at(offset) } });
+    const rule = (
+      id: string,
+      effect: string,
+      matchKind: string,
+      matchValue: string,
+      offset: number,
+    ) =>
+      system.userActionApprovalRule.create({
+        data: {
+          id: `${user}-${id}`,
+          userId: user,
+          effect,
+          matchKind,
+          matchValue,
+          createdAt: at(offset),
+        },
+      });
+    const spaceRule = (
+      id: string,
+      spaceId: string,
+      effect: string,
+      matchKind: string,
+      matchValue: string,
+      offset: number,
+      userId = user,
+    ) =>
+      system.actionApprovalRule.create({
+        data: {
+          id: `${user}-${id}`,
+          spaceId,
+          createdByUserId: userId,
+          effect,
+          matchKind,
+          matchValue,
+          createdAt: at(offset),
+        },
+      });
     if (!config.bare) {
       await rule("ra1", "always_allow", "tool", "bash", 1);
       await rule("ra2", "deny", "site", "Example.com", 2);
@@ -2076,31 +2920,83 @@ function seedSettings(config: SettingsSeed = {}) {
       await rule("ra8", "always_allow", "tool", "MiXed", 8);
       if (config.badKind) await rule("rbk", "deny", "regex", "legacy", 20);
       if (config.badEffect) await rule("rbe", "block", "tool", "legacy", 21);
-      await system.userActionAutoReviewPreference.create({ data: { userId: user, enabled: true, skipApprovals: true } });
+      await system.userActionAutoReviewPreference.create({
+        data: { userId: user, enabled: true, skipApprovals: true },
+      });
       for (const id of ["mc1", "vc1", "vc2"]) {
-        await system.secret.create({ data: { id: `${user}-sec-${id}`, userId: user, spaceId: null, kind: id.startsWith("vc") ? "voice" : "model", ciphertext: "sealed" } });
+        await system.secret.create({
+          data: {
+            id: `${user}-sec-${id}`,
+            userId: user,
+            spaceId: null,
+            kind: id.startsWith("vc") ? "voice" : "model",
+            ciphertext: "sealed",
+          },
+        });
       }
       await system.userModelCredential.create({
-        data: { id: `${user}-mc1`, userId: user, provider: "openai", label: "Key", secretId: `${user}-sec-mc1` },
+        data: {
+          id: `${user}-mc1`,
+          userId: user,
+          provider: "openai",
+          label: "Key",
+          secretId: `${user}-sec-mc1`,
+        },
       });
-      const choice = (role: string, position: number, provider: string, modelId: string, thinkingLevel: string | null, credentialId: string | null) =>
-        system.userModelRoleChoice.create({ data: { userId: user, role, position, provider, modelId, thinkingLevel, credentialId } });
+      const choice = (
+        role: string,
+        position: number,
+        provider: string,
+        modelId: string,
+        thinkingLevel: string | null,
+        credentialId: string | null,
+      ) =>
+        system.userModelRoleChoice.create({
+          data: { userId: user, role, position, provider, modelId, thinkingLevel, credentialId },
+        });
       await choice("chat", 0, "openai", "gpt-a", "high", `${user}-mc1`);
       await choice("chat", 1, "anthropic", "claude-b", null, null);
       await choice("summary", 0, "openai", "gpt-c", null, `${user}-mc1`);
       for (const id of ["vc1", "vc2"]) {
-        await system.userVoiceCredential.create({ data: { id: `${user}-${id}`, userId: user, provider: "fish", secretId: `${user}-sec-${id}` } });
+        await system.userVoiceCredential.create({
+          data: {
+            id: `${user}-${id}`,
+            userId: user,
+            provider: "fish",
+            secretId: `${user}-sec-${id}`,
+          },
+        });
       }
       await system.userVoicePreference.create({
-        data: { userId: user, credentialId: `${user}-vc1`, voiceId: "voice-one", speechModel: "s1", isDefault: true },
+        data: {
+          userId: user,
+          credentialId: `${user}-vc1`,
+          voiceId: "voice-one",
+          speechModel: "s1",
+          isDefault: true,
+        },
       });
       await system.userVoicePreference.create({
-        data: { userId: user, credentialId: `${user}-vc2`, voiceId: "voice-two", speechModel: null, isDefault: false },
+        data: {
+          userId: user,
+          credentialId: `${user}-vc2`,
+          voiceId: "voice-two",
+          speechModel: null,
+          isDefault: false,
+        },
       });
     }
     const vault = (id: string, spaceId: string | null, userId = user) =>
       system.vaultCredential.create({
-        data: { id: `${user}-${id}`, userId, spaceId, name: id, origin: "https://example.test", auth: {}, ciphertext: "sealed" },
+        data: {
+          id: `${user}-${id}`,
+          userId,
+          spaceId,
+          name: id,
+          origin: "https://example.test",
+          auth: {},
+          ciphertext: "sealed",
+        },
       });
     await vault("v1", one);
     await vault("v2", two);
@@ -2110,56 +3006,109 @@ function seedSettings(config: SettingsSeed = {}) {
     await spaceRule("rs2", one, "always_allow", "site", "space.example", 12);
     await spaceRule("rs3", one, "deny", "tool", "SPACE", 13);
     await spaceRule("rt1", two, "deny", "tool", "bash", 14);
-    await system.userActionApprovalRule.create({ data: { id: `${user}-rao`, userId: other, effect: "deny", matchKind: "tool", matchValue: "bash", createdAt: at(15) } });
+    await system.userActionApprovalRule.create({
+      data: {
+        id: `${user}-rao`,
+        userId: other,
+        effect: "deny",
+        matchKind: "tool",
+        matchValue: "bash",
+        createdAt: at(15),
+      },
+    });
     await spaceRule("rso", one, "deny", "tool", "bash", 16, other);
-    await system.spaceSettingOverride.create({ data: { spaceId: one, userId: other, setting: "confirmations" } });
+    await system.spaceSettingOverride.create({
+      data: { spaceId: one, userId: other, setting: "confirmations" },
+    });
     for (const setting of config.overrides ?? []) {
       await system.spaceSettingOverride.create({ data: { spaceId: one, userId: user, setting } });
     }
     const copies = new Set(config.overrides ?? []);
-    if (config.strayCopy) for (const setting of ["models", "voice", "confirmations"]) copies.add(setting);
+    if (config.strayCopy)
+      for (const setting of ["models", "voice", "confirmations"]) copies.add(setting);
     if (copies.has("models")) {
       await system.spaceModelRoleChoice.create({
-        data: { spaceId: one, userId: user, role: "chat", position: 0, provider: "stale", modelId: "stale-model", thinkingLevel: null, credentialId: null },
+        data: {
+          spaceId: one,
+          userId: user,
+          role: "chat",
+          position: 0,
+          provider: "stale",
+          modelId: "stale-model",
+          thinkingLevel: null,
+          credentialId: null,
+        },
       });
     }
     if (copies.has("voice") && !config.bare) {
       await system.spaceVoicePreference.create({
-        data: { id: `${user}-svp`, spaceId: one, userId: user, credentialId: `${user}-vc1`, voiceId: "stale-voice", isDefault: true },
+        data: {
+          id: `${user}-svp`,
+          spaceId: one,
+          userId: user,
+          credentialId: `${user}-vc1`,
+          voiceId: "stale-voice",
+          isDefault: true,
+        },
       });
     }
     if (copies.has("confirmations")) {
-      await system.actionAutoReviewPreference.create({ data: { id: `${user}-sar`, spaceId: one, userId: user, enabled: false, skipApprovals: false } });
+      await system.actionAutoReviewPreference.create({
+        data: {
+          id: `${user}-sar`,
+          spaceId: one,
+          userId: user,
+          enabled: false,
+          skipApprovals: false,
+        },
+      });
     }
-    await system.actionAutoReviewPreference.create({ data: { id: `${user}-saro`, spaceId: one, userId: other, enabled: true, skipApprovals: true } });
-    await system.actionAutoReviewPreference.create({ data: { id: `${user}-sar2`, spaceId: two, userId: user, enabled: true, skipApprovals: false } });
+    await system.actionAutoReviewPreference.create({
+      data: { id: `${user}-saro`, spaceId: one, userId: other, enabled: true, skipApprovals: true },
+    });
+    await system.actionAutoReviewPreference.create({
+      data: { id: `${user}-sar2`, spaceId: two, userId: user, enabled: true, skipApprovals: false },
+    });
   };
 }
 
 function approvalRuleCases(): Case[] {
-  const mk = (procedure: string, seed = seedSettings()) => (name: string, input: unknown, extra: Partial<Case> = {}): Case => ({
-    name: `apr-${procedure}-${name}`,
-    procedure: `approvalRules.${procedure}`,
-    input,
-    seed,
-    after: procedure === "set" ? SETTINGS_AFTER : undefined,
-    ...extra,
-  });
+  const mk =
+    (procedure: string, seed = seedSettings()) =>
+    (name: string, input: unknown, extra: Partial<Case> = {}): Case => ({
+      name: `apr-${procedure}-${name}`,
+      procedure: `approvalRules.${procedure}`,
+      input,
+      seed,
+      after: procedure === "set" ? SETTINGS_AFTER : undefined,
+      ...extra,
+    });
   const list = mk("list");
   const set = mk("set");
   const overridden = { seed: seedSettings({ overrides: ["confirmations"] }) };
-  const rule = (matchValue: string, effect: string | null = "deny", matchKind = "tool", more: Record<string, unknown> = {}) => ({ effect, matchKind, matchValue, ...more });
+  const rule = (
+    matchValue: string,
+    effect: string | null = "deny",
+    matchKind = "tool",
+    more: Record<string, unknown> = {},
+  ) => ({ effect, matchKind, matchValue, ...more });
   return [
     list("account-copy-by-default", undefined),
-    list("stored-kind-outside-the-enum-fails-the-output-check", undefined, { seed: seedSettings({ badKind: true }) }),
-    list("stored-effect-outside-the-enum-fails-the-output-check", undefined, { seed: seedSettings({ badEffect: true }) }),
+    list("stored-kind-outside-the-enum-fails-the-output-check", undefined, {
+      seed: seedSettings({ badKind: true }),
+    }),
+    list("stored-effect-outside-the-enum-fails-the-output-check", undefined, {
+      seed: seedSettings({ badEffect: true }),
+    }),
     list("empty-object", {}),
     list("space-copy-when-overridden", undefined, overridden),
     list("scope-account-while-overridden", { scope: "account" }, overridden),
     list("scope-space-while-overridden", { scope: "space" }, overridden),
     list("scope-space-without-override", { scope: "space" }),
     list("scope-account", { scope: "account" }),
-    list("other-settings-override-does-not-switch", undefined, { seed: seedSettings({ overrides: ["models", "voice", "credentials"] }) }),
+    list("other-settings-override-does-not-switch", undefined, {
+      seed: seedSettings({ overrides: ["models", "voice", "credentials"] }),
+    }),
     list("space-two-header", undefined, { space: 1 }),
     list("nothing-saved", undefined, { seed: seedSettings({ bare: true }) }),
     list("extra-keys-ignored", { scope: "space", more: 1 }),
@@ -2193,7 +3142,7 @@ function approvalRuleCases(): Case[] {
     set("sigma-after-apostrophe", rule("Α'Σ", "deny")),
     set("mixed-case-lookup", rule("mixed", "deny")),
     set("unicode-value", rule("ключ-😀 日本語", "always_allow")),
-    set("line-separators-in-value", rule("a\u2028b <x> & \"q\" \\ /", "deny")),
+    set("line-separators-in-value", rule('a\u2028b <x> & "q" \\ /', "deny")),
     set("nul-in-value", rule("a\u0000b", "deny")),
     set("long-value", rule("v".repeat(5000), "deny")),
     set("scope-account-explicit", rule("git", "deny", "tool", { scope: "account" })),
@@ -2201,7 +3150,11 @@ function approvalRuleCases(): Case[] {
     set("space-copy-when-overridden", rule("git", "deny"), overridden),
     set("space-copy-replaces-other-effect", rule("bash", "always_allow"), overridden),
     set("space-copy-same-rule-again", rule("bash", "deny"), overridden),
-    set("scope-account-while-overridden", rule("git", "deny", "tool", { scope: "account" }), overridden),
+    set(
+      "scope-account-while-overridden",
+      rule("git", "deny", "tool", { scope: "account" }),
+      overridden,
+    ),
     set("scope-space-without-override", rule("bash", "always_allow", "tool", { scope: "space" })),
     set("space-two-header", rule("git", "deny"), { space: 1 }),
     set("nothing-saved-yet", rule("git", "deny"), { seed: seedSettings({ bare: true }) }),
@@ -2230,14 +3183,16 @@ function approvalRuleCases(): Case[] {
 }
 
 function spaceSettingCases(): Case[] {
-  const mk = (procedure: string) => (name: string, input: unknown, extra: Partial<Case> = {}): Case => ({
-    name: `sso-${procedure}-${name}`,
-    procedure: `spaceSettings.${procedure}`,
-    input,
-    seed: seedSettings(),
-    after: undefined,
-    ...extra,
-  });
+  const mk =
+    (procedure: string) =>
+    (name: string, input: unknown, extra: Partial<Case> = {}): Case => ({
+      name: `sso-${procedure}-${name}`,
+      procedure: `spaceSettings.${procedure}`,
+      input,
+      seed: seedSettings(),
+      after: undefined,
+      ...extra,
+    });
   const overrides = mk("overrides");
   const all = ["models", "voice", "confirmations", "credentials"];
   const some = (...overrides: string[]) => ({ seed: seedSettings({ overrides }) });
@@ -2258,7 +3213,15 @@ function seedConnections(config: { none?: boolean; odd?: boolean } = {}) {
     const user = seeded.userId;
     const other = await seedOtherMember(seeded);
     if (config.none) return;
-    const connection = (id: string, spaceId: string, userId: string, provider: string, displayName: string, status: string, offset: number) =>
+    const connection = (
+      id: string,
+      spaceId: string,
+      userId: string,
+      provider: string,
+      displayName: string,
+      status: string,
+      offset: number,
+    ) =>
       system.connection.create({
         data: {
           id: `${user}-${id}`,
@@ -2277,22 +3240,26 @@ function seedConnections(config: { none?: boolean; odd?: boolean } = {}) {
     await connection("c2", seeded.spaces[0], user, "slack", "Slack", "pending", 2);
     await connection("c3", seeded.spaces[0], user, "notion", "Notion old", "revoked", 3);
     await connection("c4", seeded.spaces[0], user, "linear", "Linear", "error", 4);
-    if (config.odd) await connection("c5", seeded.spaces[0], user, "odd", "Odd status \u2028 <b>", "weird", 5);
+    if (config.odd)
+      await connection("c5", seeded.spaces[0], user, "odd", "Odd status \u2028 <b>", "weird", 5);
     await connection("co", seeded.spaces[0], other, "github", "Someone else's", "connected", 6);
     await connection("cx", seeded.spaces[1], user, "github", "In space two", "connected", 7);
   };
 }
 
 function connectionCases(): Case[] {
-  const mk = (procedure: string) => (name: string, input: unknown, extra: Partial<Case> = {}): Case => ({
-    name: `cn-${procedure}-${name}`,
-    procedure: `connections.${procedure}`,
-    input,
-    seed: seedConnections(),
-    after: procedure === "rename" ? [{ procedure: "connections.list", input: undefined }] : undefined,
-    unordered: true,
-    ...extra,
-  });
+  const mk =
+    (procedure: string) =>
+    (name: string, input: unknown, extra: Partial<Case> = {}): Case => ({
+      name: `cn-${procedure}-${name}`,
+      procedure: `connections.${procedure}`,
+      input,
+      seed: seedConnections(),
+      after:
+        procedure === "rename" ? [{ procedure: "connections.list", input: undefined }] : undefined,
+      unordered: true,
+      ...extra,
+    });
   const list = mk("list");
   const rename = mk("rename");
   const long = (count: number, character = "n") => character.repeat(count);
@@ -2310,16 +3277,30 @@ function connectionCases(): Case[] {
     rename("same-name", { connectionId: "__s-c1__", displayName: "GitHub work" }),
     rename("revoked-connection", { connectionId: "__s-c3__", displayName: "Still renamable" }),
     rename("pending-connection", { connectionId: "__s-c2__", displayName: "P" }),
-    rename("odd-status-fails-the-output-check", { connectionId: "__s-c5__", displayName: "Odd" }, { seed: seedConnections({ odd: true }) }),
-    rename("other-connection-while-one-has-an-odd-status", { connectionId: "__s-c1__", displayName: "Fine" }, { seed: seedConnections({ odd: true }) }),
+    rename(
+      "odd-status-fails-the-output-check",
+      { connectionId: "__s-c5__", displayName: "Odd" },
+      { seed: seedConnections({ odd: true }) },
+    ),
+    rename(
+      "other-connection-while-one-has-an-odd-status",
+      { connectionId: "__s-c1__", displayName: "Fine" },
+      { seed: seedConnections({ odd: true }) },
+    ),
     rename("name-80", { connectionId: "__s-c1__", displayName: long(80) }),
     rename("name-81", { connectionId: "__s-c1__", displayName: long(81) }),
     rename("name-astral-80", { connectionId: "__s-c1__", displayName: long(80, "😀") }),
     rename("name-astral-81", { connectionId: "__s-c1__", displayName: long(81, "😀") }),
     rename("name-padded-81", { connectionId: "__s-c1__", displayName: ` ${long(81)} ` }),
-    rename("unicode-and-separators", { connectionId: "__s-c1__", displayName: "Ключ 日本語 \u2028\u2029 <b> & \"q\" \\ /" }),
+    rename("unicode-and-separators", {
+      connectionId: "__s-c1__",
+      displayName: 'Ключ 日本語 \u2028\u2029 <b> & "q" \\ /',
+    }),
     rename("nul", { connectionId: "__s-c1__", displayName: "a\u0000b" }),
-    rename("lone-surrogate-escape", JSON.parse(`{"connectionId":"__s-c1__","displayName":"a\\ud800b"}`)),
+    rename(
+      "lone-surrogate-escape",
+      JSON.parse(`{"connectionId":"__s-c1__","displayName":"a\\ud800b"}`),
+    ),
     rename("blank", { connectionId: "__s-c1__", displayName: "   " }),
     rename("empty", { connectionId: "__s-c1__", displayName: "" }),
     rename("name-missing", { connectionId: "__s-c1__" }),
@@ -2332,7 +3313,11 @@ function connectionCases(): Case[] {
     rename("everything-wrong", { connectionId: "", displayName: "" }),
     rename("someone-elses-connection", { connectionId: "__s-co__", displayName: "X" }),
     rename("other-space-connection", { connectionId: "__s-cx__", displayName: "X" }),
-    rename("other-space-connection-own-header", { connectionId: "__s-cx__", displayName: "X" }, { space: 1 }),
+    rename(
+      "other-space-connection-own-header",
+      { connectionId: "__s-cx__", displayName: "X" },
+      { space: 1 },
+    ),
     rename("unknown", { connectionId: "nope", displayName: "X" }),
     rename("invalid-name-before-unknown-id", { connectionId: "nope", displayName: "" }),
     rename("extra-keys-ignored", { connectionId: "__s-c1__", displayName: "X", status: "revoked" }),
@@ -2344,24 +3329,59 @@ function connectionCases(): Case[] {
 }
 
 /** The member's installs in several shapes of availability and stored settings. */
-function seedCapabilities(config: { config?: string; secretId?: string | null; version?: string | null } = {}) {
+function seedCapabilities(
+  config: { config?: string; secretId?: string | null; version?: string | null } = {},
+) {
   return async (seeded: Seeded) => {
     const user = seeded.userId;
     const other = await seedOtherMember(seeded);
     const [one, two, three] = seeded.spaces;
-    const install = (id: string, spaceId: string, extra: Record<string, unknown>, offset: number, userId = user) =>
+    const install = (
+      id: string,
+      spaceId: string,
+      extra: Record<string, unknown>,
+      offset: number,
+      userId = user,
+    ) =>
       system.capabilityInstall.create({
-        data: { id: `${user}-${id}`, spaceId, userId, kind: "plugin", name: `Install ${id}`, source: `https://example.test/${id}`, config: {}, createdAt: new Date(SETTINGS_BASE + offset * 1000), ...extra },
+        data: {
+          id: `${user}-${id}`,
+          spaceId,
+          userId,
+          kind: "plugin",
+          name: `Install ${id}`,
+          source: `https://example.test/${id}`,
+          config: {},
+          createdAt: new Date(SETTINGS_BASE + offset * 1000),
+          ...extra,
+        },
       });
-    await install("k1", one, { version: config.version === undefined ? "1.2.3" : config.version, digest: "sha256:abc", secretId: config.secretId === undefined ? `${user}-sec` : config.secretId }, 1);
+    await install(
+      "k1",
+      one,
+      {
+        version: config.version === undefined ? "1.2.3" : config.version,
+        digest: "sha256:abc",
+        secretId: config.secretId === undefined ? `${user}-sec` : config.secretId,
+      },
+      1,
+    );
     await install("k2", two, { allSpaces: true, kind: "mcp" }, 2);
     await install("k3", two, { kind: "api" }, 3);
-    await system.capabilityInstallSpace.create({ data: { installId: `${user}-k3`, spaceId: one, userId: user } });
-    await system.capabilityInstallSpace.create({ data: { installId: `${user}-k3`, spaceId: three, userId: user } });
+    await system.capabilityInstallSpace.create({
+      data: { installId: `${user}-k3`, spaceId: one, userId: user },
+    });
+    await system.capabilityInstallSpace.create({
+      data: { installId: `${user}-k3`, spaceId: three, userId: user },
+    });
     await install("k4", two, { kind: "connection" }, 4);
     await install("k5", one, { kind: "skill" }, 5);
-    await system.capabilityInstallSpace.create({ data: { installId: `${user}-k5`, spaceId: one, userId: user } });
-    await system.capabilityInstallSpace.create({ data: { installId: `${user}-k5`, spaceId: two, userId: user } });
+    await system.capabilityInstallSpace.create({
+      data: { installId: `${user}-k5`, spaceId: one, userId: user },
+    });
+    await system.capabilityInstallSpace.create({
+      data: { installId: `${user}-k5`, spaceId: two, userId: user },
+    });
     await install("ko", one, { allSpaces: true }, 6, other);
     if (config.config !== undefined) {
       await system.$executeRaw`UPDATE capability_installs SET config = ${config.config}::jsonb WHERE id = ${`${user}-k1`}`;
@@ -2378,28 +3398,43 @@ function capabilityCases(): Case[] {
     seed: seedCapabilities(),
     ...extra,
   });
-  const withConfig = (name: string, config: string) => list(`config-${name}`, { seed: seedCapabilities({ config }) });
+  const withConfig = (name: string, config: string) =>
+    list(`config-${name}`, { seed: seedCapabilities({ config }) });
   return [
     list("default"),
     list("space-two-header", { space: 1 }),
     list("space-three-header", { space: 2 }),
     list("junk-input-is-ignored", { input: { anything: 1 } }),
     list("anonymous", { anonymous: true }),
-    list("no-version-and-null-secret", { seed: seedCapabilities({ version: null, secretId: null }) }),
+    list("no-version-and-null-secret", {
+      seed: seedCapabilities({ version: null, secretId: null }),
+    }),
     list("empty-string-secret-is-not-configured", { seed: seedCapabilities({ secretId: "" }) }),
-    withConfig("nested-object", '{"b": 1, "a": [1.0, 2.50, 1e3, -0, 1e21, 1E-7, 123456789012345678901234567890, 0.1], "10": "x", "2": "y", "z": {"é": "ü", "\\u2028": "<>&\\u0007\\u007f"}}'),
-    withConfig("integer-like-keys-first", '{"b": 1, "2": 2, "1": 3, "a": 4, "-1": 5, "01": 6, "4294967295": 7, "4294967294": 8}'),
+    withConfig(
+      "nested-object",
+      '{"b": 1, "a": [1.0, 2.50, 1e3, -0, 1e21, 1E-7, 123456789012345678901234567890, 0.1], "10": "x", "2": "y", "z": {"é": "ü", "\\u2028": "<>&\\u0007\\u007f"}}',
+    ),
+    withConfig(
+      "integer-like-keys-first",
+      '{"b": 1, "2": 2, "1": 3, "a": 4, "-1": 5, "01": 6, "4294967295": 7, "4294967294": 8}',
+    ),
     withConfig("proto-key", '{"__proto__": {"x": 1}, "a": 1}'),
     withConfig("proto-key-nested", '{"a": {"__proto__": {"x": 1}}, "__proto__": {"y": 2}, "b": 1}'),
     withConfig("proto-key-in-arrays", '{"l": [{"__proto__": 1, "k": 2}, [{"__proto__": 3}], 4]}'),
-    withConfig("escapes", '{"quote\\"": "tab\\t newline\\n bs\\\\ slash\\/ \\b\\f \\u0001 \\u001f \\u2029 \\ud83d\\ude00"}'),
+    withConfig(
+      "escapes",
+      '{"quote\\"": "tab\\t newline\\n bs\\\\ slash\\/ \\b\\f \\u0001 \\u001f \\u2029 \\ud83d\\ude00"}',
+    ),
     withConfig("array", "[1, 2]"),
     withConfig("string", '"x"'),
     withConfig("number", "5"),
     withConfig("null", "null"),
     withConfig("true", "true"),
     withConfig("empty-object", "{}"),
-    withConfig("big-exponent", '{"n": 1e400, "m": -1e400, "s": 5e-324, "t": 1.7976931348623157e308}'),
+    withConfig(
+      "big-exponent",
+      '{"n": 1e400, "m": -1e400, "s": 5e-324, "t": 1.7976931348623157e308}',
+    ),
     withConfig("deep", '{"a": {"b": {"c": {"d": [[], {}, [{"e": null}]]}}}}'),
   ];
 }
@@ -2410,14 +3445,29 @@ function capabilityCases(): Case[] {
  * belong to someone else or to another Space.
  */
 function seedUsage(
-  config: { none?: boolean; many?: boolean; orderSensitive?: boolean; tiedTimes?: boolean; emptyRun?: boolean; badCost?: boolean; weirdCost?: number; badKind?: boolean } = {},
+  config: {
+    none?: boolean;
+    many?: boolean;
+    orderSensitive?: boolean;
+    tiedTimes?: boolean;
+    emptyRun?: boolean;
+    badCost?: boolean;
+    weirdCost?: number;
+    badKind?: boolean;
+  } = {},
 ) {
   return async (seeded: Seeded) => {
     const user = seeded.userId;
     const other = await seedOtherMember(seeded);
     const [one, two] = seeded.spaces;
     if (config.none) return;
-    const row = (id: string, data: Record<string, unknown>, offset: number, spaceId = one, userId = user) =>
+    const row = (
+      id: string,
+      data: Record<string, unknown>,
+      offset: number,
+      spaceId = one,
+      userId = user,
+    ) =>
       system.usageRecord.create({
         data: {
           id: `${user}-${id}`,
@@ -2435,22 +3485,132 @@ function seedUsage(
       // layout. reset() truncates usage_records, as production never deletes a usage row.
       for (let index = 0; index < 120; index += 1) {
         const at = config.tiedTimes ? 0 : index;
-        const costUsd = config.orderSensitive ? (index % 2 === 0 ? 1e6 * (index + 1) : 1e-6 * (index + 1)) : index / 1000;
-        await row(`m${String(index).padStart(3, "0")}`, { inputTokens: index, outputTokens: 1, totalTokens: index + 1, costUsd, runId: `${user}-run${index % 7}` }, at);
+        const costUsd = config.orderSensitive
+          ? index % 2 === 0
+            ? 1e6 * (index + 1)
+            : 1e-6 * (index + 1)
+          : index / 1000;
+        await row(
+          `m${String(index).padStart(3, "0")}`,
+          {
+            inputTokens: index,
+            outputTokens: 1,
+            totalTokens: index + 1,
+            costUsd,
+            runId: `${user}-run${index % 7}`,
+          },
+          at,
+        );
       }
       await row("mx", { inputTokens: 1 }, config.tiedTimes ? 0 : 500, two);
       return;
     }
-    await row("u1", { inputTokens: 10, outputTokens: 5, totalTokens: 15, costUsd: 0.0000123, runId: `${user}-r1`, botId: null, callId: `${user}-call1`, costSource: "provider", pricingVersion: "v1", usageSource: "api", operationId: "op1", agentId: "agent" }, 1);
-    await row("u2", { inputTokens: 20, outputTokens: 10, totalTokens: 30, costUsd: 1e-7, runId: `${user}-r1`, cacheReadTokens: 3, cacheWriteTokens: 4, cacheWrite1hTokens: 5, reasoningTokens: 6 }, 2);
+    await row(
+      "u1",
+      {
+        inputTokens: 10,
+        outputTokens: 5,
+        totalTokens: 15,
+        costUsd: 0.0000123,
+        runId: `${user}-r1`,
+        botId: null,
+        callId: `${user}-call1`,
+        costSource: "provider",
+        pricingVersion: "v1",
+        usageSource: "api",
+        operationId: "op1",
+        agentId: "agent",
+      },
+      1,
+    );
+    await row(
+      "u2",
+      {
+        inputTokens: 20,
+        outputTokens: 10,
+        totalTokens: 30,
+        costUsd: 1e-7,
+        runId: `${user}-r1`,
+        cacheReadTokens: 3,
+        cacheWriteTokens: 4,
+        cacheWrite1hTokens: 5,
+        reasoningTokens: 6,
+      },
+      2,
+    );
     await row("u3", { model: "gpt-b", runId: `${user}-r2`, operationKind: "setup" }, 3);
-    await row("u4", { provider: "anthropic", model: "claude", inputTokens: 100, outputTokens: 50, totalTokens: 150, costUsd: 0.1, runId: `${user}-r3`, parentRunId: `${user}-r1`, operationKind: "subagent" }, 4);
-    await row("u5", { provider: "anthropic", model: "claude", inputTokens: 5, outputTokens: 5, totalTokens: 10, costUsd: 0.2, runId: config.emptyRun ? "" : null }, 5);
-    await row("u6", { provider: "anthropic", model: "claude", inputTokens: 1, outputTokens: 1, totalTokens: 2, costUsd: 0.1 + 0.2, parentRunId: `${user}-r9`, operationKind: "compaction" }, 6);
-    await row("u7", { provider: "local", model: "m", inputTokens: 2_000_000_000, outputTokens: 2_000_000_000, totalTokens: 2_147_483_647, costUsd: 1e21 }, 7);
-    await row("u8", { provider: "local", model: "m", inputTokens: 2_000_000_000, outputTokens: 1, totalTokens: 2_147_483_647, costUsd: 123456789.123 }, 8);
+    await row(
+      "u4",
+      {
+        provider: "anthropic",
+        model: "claude",
+        inputTokens: 100,
+        outputTokens: 50,
+        totalTokens: 150,
+        costUsd: 0.1,
+        runId: `${user}-r3`,
+        parentRunId: `${user}-r1`,
+        operationKind: "subagent",
+      },
+      4,
+    );
+    await row(
+      "u5",
+      {
+        provider: "anthropic",
+        model: "claude",
+        inputTokens: 5,
+        outputTokens: 5,
+        totalTokens: 10,
+        costUsd: 0.2,
+        runId: config.emptyRun ? "" : null,
+      },
+      5,
+    );
+    await row(
+      "u6",
+      {
+        provider: "anthropic",
+        model: "claude",
+        inputTokens: 1,
+        outputTokens: 1,
+        totalTokens: 2,
+        costUsd: 0.1 + 0.2,
+        parentRunId: `${user}-r9`,
+        operationKind: "compaction",
+      },
+      6,
+    );
+    await row(
+      "u7",
+      {
+        provider: "local",
+        model: "m",
+        inputTokens: 2_000_000_000,
+        outputTokens: 2_000_000_000,
+        totalTokens: 2_147_483_647,
+        costUsd: 1e21,
+      },
+      7,
+    );
+    await row(
+      "u8",
+      {
+        provider: "local",
+        model: "m",
+        inputTokens: 2_000_000_000,
+        outputTokens: 1,
+        totalTokens: 2_147_483_647,
+        costUsd: 123456789.123,
+      },
+      8,
+    );
     await row("u9", { provider: "zeta", model: "z", runId: `${user}-r4` }, 9);
-    await row("u10", { provider: "zeta", model: "z", runId: `${user}-r4`, operationKind: "retrieval" }, 10);
+    await row(
+      "u10",
+      { provider: "zeta", model: "z", runId: `${user}-r4`, operationKind: "retrieval" },
+      10,
+    );
     await row("u11", { provider: "zeta", model: "y", runId: `${user}-r5` }, 11);
     await row("u12", { provider: "zeta", model: "z", runId: `${user}-r6` }, 15);
     await row("u13", { provider: "zeta", model: "y", runId: `${user}-r5` }, 16);
@@ -2458,7 +3618,8 @@ function seedUsage(
     // rows carry totalTokens: 0 and keep openai/gpt-a's weight distinct from zeta/z instead of
     // tying it, whose group order the database does not contract.
     if (config.badCost) await row("bad", { costUsd: -1, totalTokens: 0 }, 20);
-    if (config.weirdCost !== undefined) await row("bad", { costUsd: config.weirdCost, totalTokens: 0 }, 20);
+    if (config.weirdCost !== undefined)
+      await row("bad", { costUsd: config.weirdCost, totalTokens: 0 }, 20);
     // Still "unknown kind": the case only proves the summary does not check the column.
     if (config.badKind) await row("bad", { operationKind: "weird", totalTokens: 0 }, 20);
     await row("o1", { inputTokens: 999, totalTokens: 999 }, 12, one, other);
@@ -2468,21 +3629,27 @@ function seedUsage(
 }
 
 function usageCases(): Case[] {
-  const mk = (procedure: string) => (name: string, extra: Partial<Case> = {}): Case => ({
-    name: `usg-${procedure}-${name}`,
-    procedure: `usage.${procedure}`,
-    input: undefined,
-    seed: seedUsage(),
-    ...extra,
-  });
+  const mk =
+    (procedure: string) =>
+    (name: string, extra: Partial<Case> = {}): Case => ({
+      name: `usg-${procedure}-${name}`,
+      procedure: `usage.${procedure}`,
+      input: undefined,
+      seed: seedUsage(),
+      ...extra,
+    });
   const list = mk("list");
   const summary = mk("summary");
   return [
     list("default"),
     list("empty-run-id-fails-the-output-check", { seed: seedUsage({ emptyRun: true }) }),
     list("negative-cost-fails-the-output-check", { seed: seedUsage({ badCost: true }) }),
-    list("infinite-cost-fails-the-output-check", { seed: seedUsage({ weirdCost: Number.POSITIVE_INFINITY }) }),
-    list("negative-infinite-cost-fails-the-output-check", { seed: seedUsage({ weirdCost: Number.NEGATIVE_INFINITY }) }),
+    list("infinite-cost-fails-the-output-check", {
+      seed: seedUsage({ weirdCost: Number.POSITIVE_INFINITY }),
+    }),
+    list("negative-infinite-cost-fails-the-output-check", {
+      seed: seedUsage({ weirdCost: Number.NEGATIVE_INFINITY }),
+    }),
     list("nan-cost-fails-the-output-check", { seed: seedUsage({ weirdCost: Number.NaN }) }),
     list("unknown-operation-kind-fails-the-output-check", { seed: seedUsage({ badKind: true }) }),
     list("none", { seed: seedUsage({ none: true }) }),
@@ -2497,14 +3664,18 @@ function usageCases(): Case[] {
     summary("default"),
     summary("empty-run-id-is-no-run", { seed: seedUsage({ emptyRun: true }) }),
     summary("negative-cost-is-not-checked", { seed: seedUsage({ badCost: true }) }),
-    summary("infinite-cost-fails-the-output-check", { seed: seedUsage({ weirdCost: Number.POSITIVE_INFINITY }) }),
+    summary("infinite-cost-fails-the-output-check", {
+      seed: seedUsage({ weirdCost: Number.POSITIVE_INFINITY }),
+    }),
     summary("negative-infinite-cost", { seed: seedUsage({ weirdCost: Number.NEGATIVE_INFINITY }) }),
     summary("nan-cost-fails-the-output-check", { seed: seedUsage({ weirdCost: Number.NaN }) }),
     summary("unknown-operation-kind-is-not-checked", { seed: seedUsage({ badKind: true }) }),
     summary("none", { seed: seedUsage({ none: true }) }),
     summary("many-rows-no-limit", { seed: seedUsage({ many: true }) }),
     summary("many-rows-order-sensitive", { seed: seedUsage({ many: true, orderSensitive: true }) }),
-    summary("many-rows-order-sensitive-tied-times", { seed: seedUsage({ many: true, orderSensitive: true, tiedTimes: true }) }),
+    summary("many-rows-order-sensitive-tied-times", {
+      seed: seedUsage({ many: true, orderSensitive: true, tiedTimes: true }),
+    }),
     summary("space-two-header", { space: 1 }),
     summary("junk-input-is-ignored", { input: { anything: 1 } }),
     summary("anonymous", { anonymous: true }),
@@ -2512,21 +3683,64 @@ function usageCases(): Case[] {
 }
 
 /** Computers with updates in every status, bots archived or missing, and one malformed row. */
-function seedComputerUpdates(config: { badAction?: boolean; badStage?: boolean; none?: boolean } = {}) {
+function seedComputerUpdates(
+  config: { badAction?: boolean; badStage?: boolean; none?: boolean } = {},
+) {
   return async (seeded: Seeded) => {
     const user = seeded.userId;
     await seedOtherMember(seeded);
     const [one, two] = seeded.spaces;
     if (config.none) return;
     const computer = (id: string, spaceId: string, scope: string) =>
-      system.computer.create({ data: { id: `${user}-${id}`, spaceId, userId: user, kind: "local", scope, scopeKey: `${user}-${id}-sk`, homeKey: `${user}-${id}-hk` } });
-    const bot = (id: string, spaceId: string, computerId: string | null, extra: Record<string, unknown> = {}) =>
-      system.bot.create({ data: { id: `${user}-${id}`, spaceId, userId: user, name: `Bot ${id}`, color: "blue", computerId: computerId && `${user}-${computerId}`, ...extra } });
-    const update = (id: string, computerId: string, botId: string, action: string, status: string, stage: string, offset: number) =>
+      system.computer.create({
+        data: {
+          id: `${user}-${id}`,
+          spaceId,
+          userId: user,
+          kind: "local",
+          scope,
+          scopeKey: `${user}-${id}-sk`,
+          homeKey: `${user}-${id}-hk`,
+        },
+      });
+    const bot = (
+      id: string,
+      spaceId: string,
+      computerId: string | null,
+      extra: Record<string, unknown> = {},
+    ) =>
+      system.bot.create({
+        data: {
+          id: `${user}-${id}`,
+          spaceId,
+          userId: user,
+          name: `Bot ${id}`,
+          color: "blue",
+          computerId: computerId && `${user}-${computerId}`,
+          ...extra,
+        },
+      });
+    const update = (
+      id: string,
+      computerId: string,
+      botId: string,
+      action: string,
+      status: string,
+      stage: string,
+      offset: number,
+    ) =>
       system.computerUpdate.create({
         // Recent, not 2020: the API's own reconciler treats an old queued or running update as abandoned and
         // announces a Space change for it, which would land in whichever side's signal window it falls in.
-        data: { id: `${user}-${id}`, computerId: `${user}-${computerId}`, botId: `${user}-${botId}`, action, status, stage, createdAt: new Date(COMPUTER_UPDATE_BASE + offset * 1000) },
+        data: {
+          id: `${user}-${id}`,
+          computerId: `${user}-${computerId}`,
+          botId: `${user}-${botId}`,
+          action,
+          status,
+          stage,
+          createdAt: new Date(COMPUTER_UPDATE_BASE + offset * 1000),
+        },
       });
     await computer("cp1", one, "team");
     await computer("cp2", one, "dedicated");
@@ -2581,10 +3795,28 @@ function seedMcp(config: { none?: boolean; tools?: string } = {}) {
     const user = seeded.userId;
     const other = await seedOtherMember(seeded);
     const [one, two, three] = seeded.spaces;
-    const server = (id: string, spaceId: string, extra: Record<string, unknown> = {}, userId = user) =>
-      system.mcpServer.create({ data: { id: `${user}-${id}`, spaceId, userId, slug: `${id}`, name: `Server ${id}`, transport: "stdio", command: "true", ...extra } });
+    const server = (
+      id: string,
+      spaceId: string,
+      extra: Record<string, unknown> = {},
+      userId = user,
+    ) =>
+      system.mcpServer.create({
+        data: {
+          id: `${user}-${id}`,
+          spaceId,
+          userId,
+          slug: `${id}`,
+          name: `Server ${id}`,
+          transport: "stdio",
+          command: "true",
+          ...extra,
+        },
+      });
     const bot = (id: string, spaceId: string, extra: Record<string, unknown> = {}) =>
-      system.bot.create({ data: { id: `${user}-${id}`, spaceId, userId: user, name: id, color: "blue", ...extra } });
+      system.bot.create({
+        data: { id: `${user}-${id}`, spaceId, userId: user, name: id, color: "blue", ...extra },
+      });
     await bot("b1", one);
     await bot("b2", one);
     await bot("barch", one, { archivedAt: new Date(SETTINGS_BASE) });
@@ -2593,17 +3825,41 @@ function seedMcp(config: { none?: boolean; tools?: string } = {}) {
     await server("m1", one);
     await server("m2", two, { allSpaces: true });
     await server("m3", two);
-    await system.mcpServerSpace.create({ data: { serverId: `${user}-m3`, spaceId: one, userId: user } });
+    await system.mcpServerSpace.create({
+      data: { serverId: `${user}-m3`, spaceId: one, userId: user },
+    });
     await server("m4", two);
     await server("m5", one, {}, other);
     await server("m6", three, { allSpaces: false });
-    const assign = (id: string, botId: string, serverId: string, spaceId: string, offset: number, extra: Record<string, unknown> = {}, userId = user) =>
+    const assign = (
+      id: string,
+      botId: string,
+      serverId: string,
+      spaceId: string,
+      offset: number,
+      extra: Record<string, unknown> = {},
+      userId = user,
+    ) =>
       system.botMcpServer.create({
-        data: { id: `${user}-${id}`, spaceId, botId: `${user}-${botId}`, serverId: `${user}-${serverId}`, userId, createdAt: new Date(SETTINGS_BASE + offset * 1000), ...extra },
+        data: {
+          id: `${user}-${id}`,
+          spaceId,
+          botId: `${user}-${botId}`,
+          serverId: `${user}-${serverId}`,
+          userId,
+          createdAt: new Date(SETTINGS_BASE + offset * 1000),
+          ...extra,
+        },
       });
-    await assign("a1", "b1", "m1", one, 3, { allowAllTools: false, allowedTools: ["read", "write"] });
+    await assign("a1", "b1", "m1", one, 3, {
+      allowAllTools: false,
+      allowedTools: ["read", "write"],
+    });
     await assign("a2", "b1", "m2", one, 1, { allowedTools: [] });
-    await assign("a3", "b1", "m3", one, 2, { allowAllTools: false, allowedTools: ["a", 1, null, "c", { x: 1 }, ["d"], true] });
+    await assign("a3", "b1", "m3", one, 2, {
+      allowAllTools: false,
+      allowedTools: ["a", 1, null, "c", { x: 1 }, ["d"], true],
+    });
     await assign("a4", "b2", "m1", one, 4, { allowedTools: ["only-b2"] });
     await assign("a5", "b1", "m4", one, 5);
     await assign("a6", "b1", "m5", one, 6);
@@ -2618,16 +3874,19 @@ function seedMcp(config: { none?: boolean; tools?: string } = {}) {
 }
 
 function mcpAssignmentCases(): Case[] {
-  const mk = (procedure: string) => (name: string, input: unknown, extra: Partial<Case> = {}): Case => ({
-    name: `mcp-${procedure}-${name}`,
-    procedure: `mcp.assignments.${procedure}`,
-    input,
-    seed: seedMcp(),
-    ...extra,
-  });
+  const mk =
+    (procedure: string) =>
+    (name: string, input: unknown, extra: Partial<Case> = {}): Case => ({
+      name: `mcp-${procedure}-${name}`,
+      procedure: `mcp.assignments.${procedure}`,
+      input,
+      seed: seedMcp(),
+      ...extra,
+    });
   const all = mk("all");
   const list = mk("list");
-  const tools = (name: string, text: string) => list(`tools-${name}`, { botId: "__s-b1__" }, { seed: seedMcp({ tools: text }) });
+  const tools = (name: string, text: string) =>
+    list(`tools-${name}`, { botId: "__s-b1__" }, { seed: seedMcp({ tools: text }) });
   return [
     all("default", undefined),
     all("none", undefined, { seed: seedMcp({ none: true }) }),
@@ -2662,22 +3921,59 @@ function mcpAssignmentCases(): Case[] {
     tools("name-astral-200", JSON.stringify(["😀".repeat(200)])),
     tools("name-astral-201-fails-the-output-check", JSON.stringify(["😀".repeat(201)])),
     all("empty-name-fails-the-output-check", undefined, { seed: seedMcp({ tools: '["", "a"]' }) }),
-    all("long-name-fails-the-output-check", undefined, { seed: seedMcp({ tools: JSON.stringify(["x".repeat(201)]) }) }),
-    all("odd-allowed-tools-shapes", undefined, { seed: seedMcp({ tools: '["a", 1, null, ["b"], {"c": 1}]' }) }),
+    all("long-name-fails-the-output-check", undefined, {
+      seed: seedMcp({ tools: JSON.stringify(["x".repeat(201)]) }),
+    }),
+    all("odd-allowed-tools-shapes", undefined, {
+      seed: seedMcp({ tools: '["a", 1, null, ["b"], {"c": 1}]' }),
+    }),
   ];
 }
 
 /** The member's model roles: account rows, and a Space copy (with or without the override row). */
-function seedModels(config: { overrides?: string[]; strayCopy?: boolean; none?: boolean; backups?: Array<[string, string]> } = {}) {
+function seedModels(
+  config: {
+    overrides?: string[];
+    strayCopy?: boolean;
+    none?: boolean;
+    backups?: Array<[string, string]>;
+  } = {},
+) {
   return async (seeded: Seeded) => {
     const user = seeded.userId;
     const other = await seedOtherMember(seeded);
     const [one, two] = seeded.spaces;
     if (!config.none) {
-      await system.secret.create({ data: { id: `${user}-sec-mc`, userId: user, spaceId: null, kind: "model", ciphertext: "sealed" } });
-      await system.userModelCredential.create({ data: { id: `${user}-mc1`, userId: user, provider: "openai", label: "Key", secretId: `${user}-sec-mc` } });
-      const choice = (userId: string, role: string, position: number, provider: string, modelId: string, thinkingLevel: string | null, credentialId: string | null) =>
-        system.userModelRoleChoice.create({ data: { userId, role, position, provider, modelId, thinkingLevel, credentialId } });
+      await system.secret.create({
+        data: {
+          id: `${user}-sec-mc`,
+          userId: user,
+          spaceId: null,
+          kind: "model",
+          ciphertext: "sealed",
+        },
+      });
+      await system.userModelCredential.create({
+        data: {
+          id: `${user}-mc1`,
+          userId: user,
+          provider: "openai",
+          label: "Key",
+          secretId: `${user}-sec-mc`,
+        },
+      });
+      const choice = (
+        userId: string,
+        role: string,
+        position: number,
+        provider: string,
+        modelId: string,
+        thinkingLevel: string | null,
+        credentialId: string | null,
+      ) =>
+        system.userModelRoleChoice.create({
+          data: { userId, role, position, provider, modelId, thinkingLevel, credentialId },
+        });
       await choice(user, "main", 0, "openai", "gpt-a", "high", `${user}-mc1`);
       await choice(user, "main", 1, "anthropic", "claude-b", "low", null);
       await choice(user, "main", 2, "openai", "gpt-c", null, `${user}-mc1`);
@@ -2694,8 +3990,25 @@ function seedModels(config: { overrides?: string[]; strayCopy?: boolean; none?: 
       await system.spaceSettingOverride.create({ data: { spaceId: one, userId: user, setting } });
     }
     if ((config.overrides ?? []).includes("models") || config.strayCopy) {
-      const copy = (spaceId: string, role: string, position: number, provider: string, modelId: string) =>
-        system.spaceModelRoleChoice.create({ data: { spaceId, userId: user, role, position, provider, modelId, thinkingLevel: "high", credentialId: null } });
+      const copy = (
+        spaceId: string,
+        role: string,
+        position: number,
+        provider: string,
+        modelId: string,
+      ) =>
+        system.spaceModelRoleChoice.create({
+          data: {
+            spaceId,
+            userId: user,
+            role,
+            position,
+            provider,
+            modelId,
+            thinkingLevel: "high",
+            credentialId: null,
+          },
+        });
       await copy(one, "main", 0, "space", "space-primary");
       await copy(one, "main", 1, "space", "space-backup-1");
       await copy(one, "main", 2, "space", "space-backup-2");
@@ -2715,22 +4028,41 @@ function modelBackupCases(): Case[] {
   });
   return [
     backups("account-copy"),
-    backups("padded-values-are-returned-trimmed", { seed: seedModels({ backups: [[" openai\t", " gpt-x \u00a0"]] }) }),
+    backups("padded-values-are-returned-trimmed", {
+      seed: seedModels({ backups: [[" openai\t", " gpt-x \u00a0"]] }),
+    }),
     backups("provider-128", { seed: seedModels({ backups: [["p".repeat(128), "m"]] }) }),
-    backups("provider-129-fails-the-output-check", { seed: seedModels({ backups: [["p".repeat(129), "m"]] }) }),
+    backups("provider-129-fails-the-output-check", {
+      seed: seedModels({ backups: [["p".repeat(129), "m"]] }),
+    }),
     backups("provider-astral-128", { seed: seedModels({ backups: [["😀".repeat(128), "m"]] }) }),
-    backups("provider-astral-129-fails", { seed: seedModels({ backups: [["😀".repeat(129), "m"]] }) }),
+    backups("provider-astral-129-fails", {
+      seed: seedModels({ backups: [["😀".repeat(129), "m"]] }),
+    }),
     backups("model-512", { seed: seedModels({ backups: [["p", "m".repeat(512)]] }) }),
-    backups("model-513-fails-the-output-check", { seed: seedModels({ backups: [["p", "m".repeat(513)]] }) }),
-    backups("padded-513-is-trimmed-to-511", { seed: seedModels({ backups: [["p", ` ${"m".repeat(511)} `]] }) }),
-    backups("blank-provider-fails-the-output-check", { seed: seedModels({ backups: [["  \t", "m"]] }) }),
+    backups("model-513-fails-the-output-check", {
+      seed: seedModels({ backups: [["p", "m".repeat(513)]] }),
+    }),
+    backups("padded-513-is-trimmed-to-511", {
+      seed: seedModels({ backups: [["p", ` ${"m".repeat(511)} `]] }),
+    }),
+    backups("blank-provider-fails-the-output-check", {
+      seed: seedModels({ backups: [["  \t", "m"]] }),
+    }),
     backups("blank-model-fails-the-output-check", { seed: seedModels({ backups: [["p", ""]] }) }),
-    backups("unicode-and-separators", { seed: seedModels({ backups: [["Ключ\u2028", "日本語 <b> & \"q\""]] }) }),
+    backups("unicode-and-separators", {
+      seed: seedModels({ backups: [["Ключ\u2028", '日本語 <b> & "q"']] }),
+    }),
     backups("nothing-saved", { seed: seedModels({ none: true }) }),
     backups("space-copy-when-overridden", { seed: seedModels({ overrides: ["models"] }) }),
-    backups("other-settings-override-does-not-switch", { seed: seedModels({ overrides: ["voice", "confirmations", "credentials"] }) }),
+    backups("other-settings-override-does-not-switch", {
+      seed: seedModels({ overrides: ["voice", "confirmations", "credentials"] }),
+    }),
     backups("stray-space-copy-without-override", { seed: seedModels({ strayCopy: true }) }),
-    backups("space-two-header-uses-the-account", { space: 1, seed: seedModels({ overrides: ["models"] }) }),
+    backups("space-two-header-uses-the-account", {
+      space: 1,
+      seed: seedModels({ overrides: ["models"] }),
+    }),
     backups("junk-input-is-ignored", { input: { anything: 1 } }),
     backups("anonymous", { anonymous: true }),
   ];
@@ -2740,7 +4072,17 @@ function modelBackupCases(): Case[] {
 async function seedOldestBadPage(seeded: Seeded) {
   await seedPages(seeded);
   await system.page.create({
-    data: { id: `${seeded.userId}-bad`, spaceId: seeded.spaces[0], userId: seeded.userId, title: "t".repeat(201), visibility: "private", currentVersion: 1, pinnedAt: null, createdAt: new Date(PAGE_BASE - 101 * 3_600_000), updatedAt: new Date(PAGE_BASE - 100 * 3_600_000) },
+    data: {
+      id: `${seeded.userId}-bad`,
+      spaceId: seeded.spaces[0],
+      userId: seeded.userId,
+      title: "t".repeat(201),
+      visibility: "private",
+      currentVersion: 1,
+      pinnedAt: null,
+      createdAt: new Date(PAGE_BASE - 101 * 3_600_000),
+      updatedAt: new Date(PAGE_BASE - 100 * 3_600_000),
+    },
   });
 }
 
@@ -2768,12 +4110,25 @@ function pageWriteCases(): Case[] {
     ...extra,
   });
   /** A page of the first Space with stored values the contract refuses, next to the seeded ones. */
-  const badPage = (data: Record<string, unknown>, pinned = false) => async (seeded: Seeded) => {
-    await seedPages(seeded);
-    await system.page.create({
-      data: { id: `${seeded.userId}-bad`, spaceId: seeded.spaces[0], userId: seeded.userId, title: "Bad", visibility: "private", currentVersion: 1, pinnedAt: pinned ? new Date(PAGE_BASE) : null, createdAt: new Date(PAGE_BASE), updatedAt: new Date(PAGE_BASE), ...data },
-    });
-  };
+  const badPage =
+    (data: Record<string, unknown>, pinned = false) =>
+    async (seeded: Seeded) => {
+      await seedPages(seeded);
+      await system.page.create({
+        data: {
+          id: `${seeded.userId}-bad`,
+          spaceId: seeded.spaces[0],
+          userId: seeded.userId,
+          title: "Bad",
+          visibility: "private",
+          currentVersion: 1,
+          pinnedAt: pinned ? new Date(PAGE_BASE) : null,
+          createdAt: new Date(PAGE_BASE),
+          updatedAt: new Date(PAGE_BASE),
+          ...data,
+        },
+      });
+    };
   const titled = (title: unknown) => ({ pageId: "__s-u1__", title });
   const titles: Array<[string, unknown]> = [
     ["tabs-and-newlines", "a\tb\nc\rd"],
@@ -2838,7 +4193,11 @@ function pageWriteCases(): Case[] {
     rename("unknown-page", { pageId: "nope", title: "x" }),
     rename("other-members-page", { pageId: "__s-x2__", title: "x" }),
     rename("other-space-page-from-space-one", { pageId: "__s-x1__", title: "x" }),
-    rename("other-space-page-from-space-two", { pageId: "__s-x1__", title: "renamed x" }, { space: 1 }),
+    rename(
+      "other-space-page-from-space-two",
+      { pageId: "__s-x1__", title: "renamed x" },
+      { space: 1 },
+    ),
     rename("space-one-page-from-space-two", { pageId: "__s-u1__", title: "x" }, { space: 1 }),
     rename("space-three-sees-nothing", { pageId: "__s-u1__", title: "x" }, { space: 2 }),
     rename("page-id-empty", { pageId: "", title: "x" }),
@@ -2861,8 +4220,16 @@ function pageWriteCases(): Case[] {
     rename("string-input", "x"),
     rename("number-input", 5),
     rename("anonymous", titled("x"), { anonymous: true }),
-    rename("stored-version-zero-fails-the-output-check-after-the-write", { pageId: "__s-bad__", title: "fixed" }, { seed: badPage({ currentVersion: 0 }) }),
-    rename("stored-long-title-is-replaced", { pageId: "__s-bad__", title: "short" }, { seed: badPage({ title: "t".repeat(201) }) }),
+    rename(
+      "stored-version-zero-fails-the-output-check-after-the-write",
+      { pageId: "__s-bad__", title: "fixed" },
+      { seed: badPage({ currentVersion: 0 }) },
+    ),
+    rename(
+      "stored-long-title-is-replaced",
+      { pageId: "__s-bad__", title: "short" },
+      { seed: badPage({ title: "t".repeat(201) }) },
+    ),
     pin("pin-a-loose-page", { pageId: "__s-u1__", pinned: true }),
     pin("unpin-a-pinned-page", { pageId: "__s-pa__", pinned: false }),
     pin("pin-a-pinned-page-writes-nothing", { pageId: "__s-pa__", pinned: true }),
@@ -2898,9 +4265,21 @@ function pageWriteCases(): Case[] {
     pin("no-input", undefined),
     pin("string-input", "x"),
     pin("anonymous", { pageId: "__s-u1__", pinned: true }, { anonymous: true }),
-    pin("stored-long-title-fails-the-output-check-after-the-pin", { pageId: "__s-bad__", pinned: true }, { seed: badPage({ title: "t".repeat(201) }) }),
-    pin("stored-long-title-already-pinned-fails-without-a-write", { pageId: "__s-bad__", pinned: true }, { seed: badPage({ title: "t".repeat(201) }, true) }),
-    pin("stored-version-zero-fails-the-output-check-after-the-pin", { pageId: "__s-bad__", pinned: true }, { seed: badPage({ currentVersion: 0 }) }),
+    pin(
+      "stored-long-title-fails-the-output-check-after-the-pin",
+      { pageId: "__s-bad__", pinned: true },
+      { seed: badPage({ title: "t".repeat(201) }) },
+    ),
+    pin(
+      "stored-long-title-already-pinned-fails-without-a-write",
+      { pageId: "__s-bad__", pinned: true },
+      { seed: badPage({ title: "t".repeat(201) }, true) },
+    ),
+    pin(
+      "stored-version-zero-fails-the-output-check-after-the-pin",
+      { pageId: "__s-bad__", pinned: true },
+      { seed: badPage({ currentVersion: 0 }) },
+    ),
   ];
 }
 
@@ -2912,7 +4291,15 @@ async function seedCredentials(seeded: Seeded) {
   });
   const credential = (key: string, userId: string, label: string) =>
     system.userModelCredential.create({
-      data: { id: `${seeded.userId}-${key}`, userId, provider: "openai", label, secretId: `${seeded.userId}-secret-${key}`, createdAt: new Date(PAGE_BASE), updatedAt: new Date(PAGE_BASE) },
+      data: {
+        id: `${seeded.userId}-${key}`,
+        userId,
+        provider: "openai",
+        label,
+        secretId: `${seeded.userId}-secret-${key}`,
+        createdAt: new Date(PAGE_BASE),
+        updatedAt: new Date(PAGE_BASE),
+      },
     });
   await credential("cr1", seeded.userId, "Old name");
   await credential("cr2", seeded.userId, "Sibling");
@@ -2941,7 +4328,7 @@ function modelRenameCases(): Case[] {
     ["lone-low-surrogate", "\udc00b"],
     ["valid-pair", "x\ud83d\ude00y"],
     ["unicode", "Ключ 日本語"],
-    ["markup", "<b> & \"q\""],
+    ["markup", '<b> & "q"'],
     ["80-characters", "x".repeat(80)],
     ["81-characters-fails", "x".repeat(81)],
     ["80-characters-padded", `  ${"x".repeat(80)}\t`],
@@ -2981,7 +4368,12 @@ function modelRenameCases(): Case[] {
     rename("missing-both", {}),
     rename("both-invalid", { credentialId: "", label: " " }),
     rename("both-invalid-types", { credentialId: 5, label: 7 }),
-    rename("extra-keys-are-ignored", { credentialId: "__s-cr1__", label: "With extras", more: 1, 2: 3 }),
+    rename("extra-keys-are-ignored", {
+      credentialId: "__s-cr1__",
+      label: "With extras",
+      more: 1,
+      2: 3,
+    }),
     rename("extra-keys-and-unknown-connection", { credentialId: "nope", label: "x", more: 1 }),
     rename("array-input", []),
     rename("null-input", null),
@@ -3008,23 +4400,71 @@ async function seedArtifacts(seeded: Seeded) {
   const hour = 3_600_000;
   const base = Date.UTC(2026, 4, 1, 12, 0, 0, 0);
   const at = (hoursAgo: number) => new Date(base - hoursAgo * hour);
-  for (const [key, space, archived] of [["ab1", 0, false], ["ab2", 0, false], ["ab3", 0, false], ["abarch", 0, true], ["abx", 1, false]] as const) {
+  for (const [key, space, archived] of [
+    ["ab1", 0, false],
+    ["ab2", 0, false],
+    ["ab3", 0, false],
+    ["abarch", 0, true],
+    ["abx", 1, false],
+  ] as const) {
     await system.bot.create({
-      data: { id: `${u}-${key}`, spaceId: seeded.spaces[space], userId: u, name: key, color: "blue", archivedAt: archived ? new Date(base) : null },
+      data: {
+        id: `${u}-${key}`,
+        spaceId: seeded.spaces[space],
+        userId: u,
+        name: key,
+        color: "blue",
+        archivedAt: archived ? new Date(base) : null,
+      },
     });
   }
-  await system.chatGroup.create({ data: { id: `${u}-ag1`, spaceId: seeded.spaces[0], userId: u, name: "Group" } });
+  await system.chatGroup.create({
+    data: { id: `${u}-ag1`, spaceId: seeded.spaces[0], userId: u, name: "Group" },
+  });
   const file = (key: string, over: Record<string, unknown>) =>
     system.artifact.create({
-      data: { id: `${u}-${key}`, spaceId: seeded.spaces[0], userId: u, botId: `${u}-ab1`, name: "file.txt", description: null, mimeType: "text/plain", size: 12, hash: "h", storageKey: `k-${key}`, version: 1, createdAt: new Date(base), ...over },
+      data: {
+        id: `${u}-${key}`,
+        spaceId: seeded.spaces[0],
+        userId: u,
+        botId: `${u}-ab1`,
+        name: "file.txt",
+        description: null,
+        mimeType: "text/plain",
+        size: 12,
+        hash: "h",
+        storageKey: `k-${key}`,
+        version: 1,
+        createdAt: new Date(base),
+        ...over,
+      },
     });
   const root = `${u}-r1`;
   await file("r1", { name: "report.md", description: "First", createdAt: at(30) });
   await file("r2", { name: "report.md", version: 2, rootArtifactId: root, createdAt: at(20) });
-  await file("r3", { name: "report.md", version: 3, rootArtifactId: root, runId: "run-r", description: "Latest", createdAt: at(10) });
-  await file("r4", { name: "report.md", version: 4, rootArtifactId: root, mimeType: "text/html;profile=mcp-app", createdAt: at(9) });
+  await file("r3", {
+    name: "report.md",
+    version: 3,
+    rootArtifactId: root,
+    runId: "run-r",
+    description: "Latest",
+    createdAt: at(10),
+  });
+  await file("r4", {
+    name: "report.md",
+    version: 4,
+    rootArtifactId: root,
+    mimeType: "text/html;profile=mcp-app",
+    createdAt: at(9),
+  });
   await file("s1", { name: "notes.txt", botId: `${u}-ab2`, userId: other, createdAt: at(25) });
-  await file("t1", { name: "made.png", mimeType: "image/png", botId: `${u}-ab2`, runId: "run-t", createdAt: at(40) });
+  await file("t1", {
+    name: "made.png",
+    mimeType: "image/png",
+    botId: `${u}-ab2`,
+    runId: "run-t",
+    createdAt: at(40),
+  });
   await file("c1", { name: "Case.txt", createdAt: at(15) });
   await file("c2", { name: "case.TXT", createdAt: at(15) });
   await file("g1", { name: "group.txt", groupId: `${u}-ag1`, createdAt: at(12) });
@@ -3032,17 +4472,49 @@ async function seedArtifacts(seeded: Seeded) {
   await file("st1", { name: "report.md", standalone: true, createdAt: at(8) });
   await file("a1", { name: "gone.txt", botId: `${u}-abarch`, createdAt: at(6) });
   await file("nb", { name: "orphan.txt", botId: null, createdAt: at(3) });
-  await file("u1", { name: "日本語 <b> & \"q\" \u2028", mimeType: "text/plain; charset=utf-8", description: "d", size: 2147483647, createdAt: at(2) });
+  await file("u1", {
+    name: '日本語 <b> & "q" \u2028',
+    mimeType: "text/plain; charset=utf-8",
+    description: "d",
+    size: 2147483647,
+    createdAt: at(2),
+  });
   await file("hv", { name: "big-version.txt", version: 2147483647, createdAt: at(1) });
   await file("app", { name: "app.html", mimeType: "text/html;profile=mcp-app", createdAt: at(7) });
-  for (const [index, mimeType] of ["image/jpeg", "image/png", "image/webp", "image/gif"].entries()) {
-    await file(`ss${index}`, { name: `shot${index}.png`, mimeType: `${mimeType};profile=step-screenshot`, createdAt: at(4 + index) });
+  for (const [index, mimeType] of [
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/gif",
+  ].entries()) {
+    await file(`ss${index}`, {
+      name: `shot${index}.png`,
+      mimeType: `${mimeType};profile=step-screenshot`,
+      createdAt: at(4 + index),
+    });
   }
   // Hidden types are matched exactly: this one is a file like any other.
-  await file("ssc", { name: "shot-case.png", mimeType: "Image/Png;profile=step-screenshot", createdAt: at(5) });
+  await file("ssc", {
+    name: "shot-case.png",
+    mimeType: "Image/Png;profile=step-screenshot",
+    createdAt: at(5),
+  });
   await file("fut", { name: "future.txt", createdAt: THREAD_FUTURE });
   await system.artifact.create({
-    data: { id: `${u}-x1`, spaceId: seeded.spaces[1], userId: u, botId: `${u}-abx`, name: "elsewhere.txt", description: null, mimeType: "text/plain", size: 1, hash: "h", storageKey: "k-x1", version: 1, createdAt: at(1) },
+    data: {
+      id: `${u}-x1`,
+      spaceId: seeded.spaces[1],
+      userId: u,
+      botId: `${u}-abx`,
+      name: "elsewhere.txt",
+      description: null,
+      mimeType: "text/plain",
+      size: 1,
+      hash: "h",
+      storageKey: "k-x1",
+      version: 1,
+      createdAt: at(1),
+    },
   });
 }
 
@@ -3072,11 +4544,28 @@ function artifactCases(): Case[] {
     ...extra,
   });
   /** A cursor as the server writes it, or as a caller might alter it. */
-  const cur = (fields: Record<string, unknown>) => `v1.${Buffer.from(JSON.stringify(fields)).toString("base64url")}`;
+  const cur = (fields: Record<string, unknown>) =>
+    `v1.${Buffer.from(JSON.stringify(fields)).toString("base64url")}`;
   const good = { createdAt: iso(10), id: "zzz", botId: null, madeByBots: false, asOf: iso(0) };
   /** A cursor bound to one of the case's own bots, whose ids depend on the case name. */
-  const botCursor = (name: string, input: Record<string, unknown>, fields: Record<string, unknown>, bot: string | null, extra: Partial<Case> = {}) =>
-    spaceCase(name, { ...input, cursor: cur({ ...fields, botId: bot === null ? null : `${ids(`art-space-${name}`).userId}-${bot}` }) }, extra);
+  const botCursor = (
+    name: string,
+    input: Record<string, unknown>,
+    fields: Record<string, unknown>,
+    bot: string | null,
+    extra: Partial<Case> = {},
+  ) =>
+    spaceCase(
+      name,
+      {
+        ...input,
+        cursor: cur({
+          ...fields,
+          botId: bot === null ? null : `${ids(`art-space-${name}`).userId}-${bot}`,
+        }),
+      },
+      extra,
+    );
   const rawCursor = (text: string) => `v1.${Buffer.from(text).toString("base64url")}`;
   const seedWith = (more: (seeded: Seeded) => Promise<unknown>) => async (seeded: Seeded) => {
     await seedArtifacts(seeded);
@@ -3084,7 +4573,21 @@ function artifactCases(): Case[] {
   };
   const extraFile = (key: string, over: Record<string, unknown>) => async (seeded: Seeded) =>
     system.artifact.create({
-      data: { id: `${seeded.userId}-${key}`, spaceId: seeded.spaces[0], userId: seeded.userId, botId: `${seeded.userId}-ab1`, name: "extra.txt", description: null, mimeType: "text/plain", size: 1, hash: "h", storageKey: `k-${key}`, version: 1, createdAt: new Date(base - 100 * 3_600_000), ...over },
+      data: {
+        id: `${seeded.userId}-${key}`,
+        spaceId: seeded.spaces[0],
+        userId: seeded.userId,
+        botId: `${seeded.userId}-ab1`,
+        name: "extra.txt",
+        description: null,
+        mimeType: "text/plain",
+        size: 1,
+        hash: "h",
+        storageKey: `k-${key}`,
+        version: 1,
+        createdAt: new Date(base - 100 * 3_600_000),
+        ...over,
+      },
     });
   const farFuture = new Date(Date.now() + 60 * 86_400_000).toISOString();
   return [
@@ -3099,8 +4602,16 @@ function artifactCases(): Case[] {
     listCase("group-id-as-bot", { botId: "__s-ag1__" }),
     listCase("space-three", { botId: "__s-ab1__" }, { space: 2 }),
     listCase("extra-keys-are-ignored", { botId: "__s-ab1__", more: 1, 2: 3 }),
-    listCase("empty-run-id-fails-the-output-check", { botId: "__s-ab1__" }, { seed: seedWith(extraFile("z1", { runId: "" })) }),
-    listCase("empty-run-id-on-another-bot-is-not-listed", { botId: "__s-ab2__" }, { seed: seedWith(extraFile("z1", { runId: "" })) }),
+    listCase(
+      "empty-run-id-fails-the-output-check",
+      { botId: "__s-ab1__" },
+      { seed: seedWith(extraFile("z1", { runId: "" })) },
+    ),
+    listCase(
+      "empty-run-id-on-another-bot-is-not-listed",
+      { botId: "__s-ab2__" },
+      { seed: seedWith(extraFile("z1", { runId: "" })) },
+    ),
     listCase("bot-id-empty", { botId: "" }),
     listCase("bot-id-number", { botId: 5 }),
     listCase("bot-id-null", { botId: null }),
@@ -3138,15 +4649,36 @@ function artifactCases(): Case[] {
     spaceCase("second-space", {}, { space: 1 }),
     spaceCase("second-space-bot", { botId: "__s-abx__" }, { space: 1 }),
     spaceCase("third-space", {}, { space: 2 }),
-    spaceCase("empty-run-id-on-the-newest-fails-the-output-check", {}, { seed: seedWith(extraFile("z1", { runId: "" })) }),
-    spaceCase("empty-run-id-just-past-the-page-is-not-parsed", { limit: 13 }, { seed: seedWith(extraFile("z1", { runId: "" })) }),
-    spaceCase("empty-run-id-last-in-the-page-fails", { limit: 14 }, { seed: seedWith(extraFile("z1", { runId: "" })) }),
-    spaceCase("empty-run-id-on-an-older-version", {}, {
-      seed: seedWith(async (seeded) => {
-        await extraFile("y1", { name: "y.txt", runId: "" })(seeded);
-        await extraFile("y2", { name: "y.txt", version: 2, rootArtifactId: `${seeded.userId}-y1`, createdAt: new Date(base - 99 * 3_600_000) })(seeded);
-      }),
-    }),
+    spaceCase(
+      "empty-run-id-on-the-newest-fails-the-output-check",
+      {},
+      { seed: seedWith(extraFile("z1", { runId: "" })) },
+    ),
+    spaceCase(
+      "empty-run-id-just-past-the-page-is-not-parsed",
+      { limit: 13 },
+      { seed: seedWith(extraFile("z1", { runId: "" })) },
+    ),
+    spaceCase(
+      "empty-run-id-last-in-the-page-fails",
+      { limit: 14 },
+      { seed: seedWith(extraFile("z1", { runId: "" })) },
+    ),
+    spaceCase(
+      "empty-run-id-on-an-older-version",
+      {},
+      {
+        seed: seedWith(async (seeded) => {
+          await extraFile("y1", { name: "y.txt", runId: "" })(seeded);
+          await extraFile("y2", {
+            name: "y.txt",
+            version: 2,
+            rootArtifactId: `${seeded.userId}-y1`,
+            createdAt: new Date(base - 99 * 3_600_000),
+          })(seeded);
+        }),
+      },
+    ),
     spaceCase("limit-0", { limit: 0 }),
     spaceCase("limit-61", { limit: 61 }),
     spaceCase("limit-negative", { limit: -1 }),
@@ -3155,7 +4687,7 @@ function artifactCases(): Case[] {
     spaceCase("limit-null", { limit: null }),
     spaceCase("limit-true", { limit: true }),
     spaceCase("limit-huge", { limit: 1e300 }),
-    spaceCase("limit-unsafe", { limit: 9007199254740993 }),
+    spaceCase("limit-unsafe", { limit: Number.MAX_SAFE_INTEGER + 1 }),
     spaceCase("made-by-bots-string", { madeByBots: "yes" }),
     spaceCase("made-by-bots-number", { madeByBots: 1 }),
     spaceCase("made-by-bots-null", { madeByBots: null }),
@@ -3180,60 +4712,121 @@ function artifactCases(): Case[] {
     spaceCase("cursor-valid-middle", { limit: 3, cursor: cur(good) }),
     spaceCase("cursor-valid-walk", { limit: 2, cursor: cur(good) }, { paginate: true }),
     spaceCase("cursor-at-the-oldest", { cursor: cur({ ...good, createdAt: iso(40), id: "zzz" }) }),
-    spaceCase("cursor-same-time-different-id", { cursor: cur({ ...good, createdAt: iso(15), id: "ct-" }) }),
-    spaceCase("cursor-asof-freezes-newer-versions", { cursor: cur({ ...good, createdAt: iso(0), asOf: iso(15) }) }),
-    spaceCase("cursor-asof-before-everything", { cursor: cur({ ...good, createdAt: iso(0), asOf: iso(400) }) }),
-    spaceCase("cursor-asof-after-the-future-file", { cursor: cur({ ...good, createdAt: "2100-01-01T00:00:00.000Z", asOf: farFuture }), limit: 2 }),
+    spaceCase("cursor-same-time-different-id", {
+      cursor: cur({ ...good, createdAt: iso(15), id: "ct-" }),
+    }),
+    spaceCase("cursor-asof-freezes-newer-versions", {
+      cursor: cur({ ...good, createdAt: iso(0), asOf: iso(15) }),
+    }),
+    spaceCase("cursor-asof-before-everything", {
+      cursor: cur({ ...good, createdAt: iso(0), asOf: iso(400) }),
+    }),
+    spaceCase("cursor-asof-after-the-future-file", {
+      cursor: cur({ ...good, createdAt: "2100-01-01T00:00:00.000Z", asOf: farFuture }),
+      limit: 2,
+    }),
     botCursor("cursor-scope-bot-matches", { botId: "__s-ab1__" }, good, "ab1"),
     botCursor("cursor-scope-other-bot", { botId: "__s-ab1__" }, good, "ab2"),
     botCursor("cursor-scope-bot-in-the-cursor-only", {}, good, "ab1"),
     spaceCase("cursor-scope-bot-in-the-input-only", { botId: "__s-ab1__", cursor: cur(good) }),
-    spaceCase("cursor-scope-made-by-bots-matches", { madeByBots: true, cursor: cur({ ...good, madeByBots: true }) }),
-    spaceCase("cursor-scope-made-by-bots-in-the-input-only", { madeByBots: true, cursor: cur(good) }),
-    spaceCase("cursor-scope-made-by-bots-in-the-cursor-only", { cursor: cur({ ...good, madeByBots: true }) }),
-    spaceCase("cursor-made-by-bots-absent-reads-false", { cursor: cur({ createdAt: good.createdAt, id: good.id, botId: null, asOf: good.asOf }) }),
-    spaceCase("cursor-made-by-bots-null-reads-false", { cursor: cur({ ...good, madeByBots: null }) }),
+    spaceCase("cursor-scope-made-by-bots-matches", {
+      madeByBots: true,
+      cursor: cur({ ...good, madeByBots: true }),
+    }),
+    spaceCase("cursor-scope-made-by-bots-in-the-input-only", {
+      madeByBots: true,
+      cursor: cur(good),
+    }),
+    spaceCase("cursor-scope-made-by-bots-in-the-cursor-only", {
+      cursor: cur({ ...good, madeByBots: true }),
+    }),
+    spaceCase("cursor-made-by-bots-absent-reads-false", {
+      cursor: cur({ createdAt: good.createdAt, id: good.id, botId: null, asOf: good.asOf }),
+    }),
+    spaceCase("cursor-made-by-bots-null-reads-false", {
+      cursor: cur({ ...good, madeByBots: null }),
+    }),
     spaceCase("cursor-made-by-bots-string", { cursor: cur({ ...good, madeByBots: "yes" }) }),
     spaceCase("cursor-made-by-bots-number", { cursor: cur({ ...good, madeByBots: 1 }) }),
-    spaceCase("cursor-bot-id-missing", { cursor: cur({ createdAt: good.createdAt, id: good.id, madeByBots: false, asOf: good.asOf }) }),
+    spaceCase("cursor-bot-id-missing", {
+      cursor: cur({ createdAt: good.createdAt, id: good.id, madeByBots: false, asOf: good.asOf }),
+    }),
     spaceCase("cursor-bot-id-number", { cursor: cur({ ...good, botId: 5 }) }),
     spaceCase("cursor-bot-id-empty-string", { cursor: cur({ ...good, botId: "" }) }),
     spaceCase("cursor-id-empty", { cursor: cur({ ...good, id: "" }) }),
     spaceCase("cursor-id-null", { cursor: cur({ ...good, id: null }) }),
     spaceCase("cursor-id-number", { cursor: cur({ ...good, id: 5 }) }),
-    spaceCase("cursor-id-missing", { cursor: cur({ createdAt: good.createdAt, botId: null, madeByBots: false, asOf: good.asOf }) }),
+    spaceCase("cursor-id-missing", {
+      cursor: cur({ createdAt: good.createdAt, botId: null, madeByBots: false, asOf: good.asOf }),
+    }),
     spaceCase("cursor-id-unicode", { cursor: cur({ ...good, id: "日本語" }) }),
     spaceCase("cursor-id-emoji", { cursor: cur({ ...good, id: "😀" }) }),
     spaceCase("cursor-id-nul", { cursor: cur({ ...good, id: "a\u0000b" }) }),
     spaceCase("cursor-id-long", { cursor: cur({ ...good, id: "x".repeat(10_000) }) }),
-    spaceCase("cursor-created-at-missing", { cursor: cur({ id: good.id, botId: null, madeByBots: false, asOf: good.asOf }) }),
+    spaceCase("cursor-created-at-missing", {
+      cursor: cur({ id: good.id, botId: null, madeByBots: false, asOf: good.asOf }),
+    }),
     spaceCase("cursor-created-at-number", { cursor: cur({ ...good, createdAt: 5 }) }),
     spaceCase("cursor-created-at-null", { cursor: cur({ ...good, createdAt: null }) }),
     spaceCase("cursor-created-at-text", { cursor: cur({ ...good, createdAt: "yesterday" }) }),
     spaceCase("cursor-created-at-date-only", { cursor: cur({ ...good, createdAt: "2026-04-30" }) }),
-    spaceCase("cursor-created-at-offset", { cursor: cur({ ...good, createdAt: "2026-04-30T10:00:00+05:30" }) }),
-    spaceCase("cursor-created-at-long-fraction", { cursor: cur({ ...good, createdAt: "2026-04-30T10:00:00.1234567Z" }) }),
-    spaceCase("cursor-created-at-hour-24", { cursor: cur({ ...good, createdAt: "2026-05-01T24:00:00Z" }) }),
-    spaceCase("cursor-created-at-hour-25", { cursor: cur({ ...good, createdAt: "2026-05-01T25:00:00Z" }) }),
+    spaceCase("cursor-created-at-offset", {
+      cursor: cur({ ...good, createdAt: "2026-04-30T10:00:00+05:30" }),
+    }),
+    spaceCase("cursor-created-at-long-fraction", {
+      cursor: cur({ ...good, createdAt: "2026-04-30T10:00:00.1234567Z" }),
+    }),
+    spaceCase("cursor-created-at-hour-24", {
+      cursor: cur({ ...good, createdAt: "2026-05-01T24:00:00Z" }),
+    }),
+    spaceCase("cursor-created-at-hour-25", {
+      cursor: cur({ ...good, createdAt: "2026-05-01T25:00:00Z" }),
+    }),
     // ECMAScript TimeClip: one millisecond outside the range Date can represent is Invalid Date.
-    spaceCase("cursor-created-at-just-past-max-time", { cursor: cur({ ...good, createdAt: "+275760-09-13T00:00:00.001Z" }) }),
-    spaceCase("cursor-created-at-just-below-min-time", { cursor: cur({ ...good, createdAt: "-271821-04-19T23:59:59.999Z" }) }),
-    spaceCase("cursor-as-of-just-past-max-time", { cursor: cur({ ...good, asOf: "+275760-09-13T00:00:00.001Z" }) }),
-    spaceCase("cursor-as-of-just-below-min-time", { cursor: cur({ ...good, asOf: "-271821-04-19T23:59:59.999Z" }) }),
+    spaceCase("cursor-created-at-just-past-max-time", {
+      cursor: cur({ ...good, createdAt: "+275760-09-13T00:00:00.001Z" }),
+    }),
+    spaceCase("cursor-created-at-just-below-min-time", {
+      cursor: cur({ ...good, createdAt: "-271821-04-19T23:59:59.999Z" }),
+    }),
+    spaceCase("cursor-as-of-just-past-max-time", {
+      cursor: cur({ ...good, asOf: "+275760-09-13T00:00:00.001Z" }),
+    }),
+    spaceCase("cursor-as-of-just-below-min-time", {
+      cursor: cur({ ...good, asOf: "-271821-04-19T23:59:59.999Z" }),
+    }),
     spaceCase("cursor-created-at-feb-30", { cursor: cur({ ...good, createdAt: "2026-02-30" }) }),
     spaceCase("cursor-created-at-month-13", { cursor: cur({ ...good, createdAt: "2026-13-01" }) }),
-    spaceCase("cursor-as-of-missing", { cursor: cur({ createdAt: good.createdAt, id: good.id, botId: null, madeByBots: false }) }),
+    spaceCase("cursor-as-of-missing", {
+      cursor: cur({ createdAt: good.createdAt, id: good.id, botId: null, madeByBots: false }),
+    }),
     spaceCase("cursor-as-of-number", { cursor: cur({ ...good, asOf: 5 }) }),
     spaceCase("cursor-as-of-null", { cursor: cur({ ...good, asOf: null }) }),
     spaceCase("cursor-as-of-text", { cursor: cur({ ...good, asOf: "soon" }) }),
-    spaceCase("cursor-as-of-offset", { cursor: cur({ ...good, asOf: "2026-05-01T17:30:00+05:30" }) }),
-    spaceCase("cursor-extra-keys", { cursor: cur({ ...good, more: [1] }) }),
-    spaceCase("cursor-keys-in-another-order", { cursor: cur({ asOf: good.asOf, madeByBots: false, botId: null, id: "zzz", createdAt: good.createdAt }) }),
-    spaceCase("cursor-duplicate-keys-last-wins", {
-      cursor: rawCursor(`{"createdAt":"${good.createdAt}","id":"a","id":"zzz","botId":null,"asOf":"${good.asOf}"}`),
+    spaceCase("cursor-as-of-offset", {
+      cursor: cur({ ...good, asOf: "2026-05-01T17:30:00+05:30" }),
     }),
-    spaceCase("cursor-upper-case-keys", { cursor: cur({ CreatedAt: good.createdAt, ID: "zzz", BotId: null, AsOf: good.asOf }) }),
-    spaceCase("cursor-capitalized-id", { cursor: cur({ createdAt: good.createdAt, Id: "zzz", botId: null, asOf: good.asOf }) }),
+    spaceCase("cursor-extra-keys", { cursor: cur({ ...good, more: [1] }) }),
+    spaceCase("cursor-keys-in-another-order", {
+      cursor: cur({
+        asOf: good.asOf,
+        madeByBots: false,
+        botId: null,
+        id: "zzz",
+        createdAt: good.createdAt,
+      }),
+    }),
+    spaceCase("cursor-duplicate-keys-last-wins", {
+      cursor: rawCursor(
+        `{"createdAt":"${good.createdAt}","id":"a","id":"zzz","botId":null,"asOf":"${good.asOf}"}`,
+      ),
+    }),
+    spaceCase("cursor-upper-case-keys", {
+      cursor: cur({ CreatedAt: good.createdAt, ID: "zzz", BotId: null, AsOf: good.asOf }),
+    }),
+    spaceCase("cursor-capitalized-id", {
+      cursor: cur({ createdAt: good.createdAt, Id: "zzz", botId: null, asOf: good.asOf }),
+    }),
     spaceCase("cursor-no-prefix", { cursor: cur(good).slice(3) }),
     spaceCase("cursor-prefix-upper-case", { cursor: `V1.${cur(good).slice(3)}` }),
     spaceCase("cursor-prefix-v2", { cursor: `v2.${cur(good).slice(3)}` }),
@@ -3247,9 +4840,15 @@ function artifactCases(): Case[] {
     spaceCase("cursor-string-document", { cursor: rawCursor('"x"') }),
     spaceCase("cursor-empty-object", { cursor: rawCursor("{}") }),
     spaceCase("cursor-padded", { cursor: `${cur(good)}==` }),
-    spaceCase("cursor-standard-base64", { cursor: `v1.${Buffer.from(JSON.stringify({ ...good, id: "zz\u00ffz??>>" })).toString("base64")}` }),
-    spaceCase("cursor-whitespace-inside", { cursor: `${cur(good).slice(0, 14)} \n ${cur(good).slice(14)}` }),
-    spaceCase("cursor-junk-characters-inside", { cursor: `${cur(good).slice(0, 14)}*.${cur(good).slice(14)}` }),
+    spaceCase("cursor-standard-base64", {
+      cursor: `v1.${Buffer.from(JSON.stringify({ ...good, id: "zz\u00ffz??>>" })).toString("base64")}`,
+    }),
+    spaceCase("cursor-whitespace-inside", {
+      cursor: `${cur(good).slice(0, 14)} \n ${cur(good).slice(14)}`,
+    }),
+    spaceCase("cursor-junk-characters-inside", {
+      cursor: `${cur(good).slice(0, 14)}*.${cur(good).slice(14)}`,
+    }),
     spaceCase("cursor-byte-order-mark", { cursor: rawCursor(`\ufeff${JSON.stringify(good)}`) }),
     spaceCase("cursor-invalid-utf8-in-the-id", {
       cursor: `v1.${Buffer.concat([Buffer.from(`{"createdAt":"${good.createdAt}","id":"a`), Buffer.from([0xe2, 0x82]), Buffer.from(`b","botId":null,"asOf":"${good.asOf}"}`)]).toString("base64url")}`,
@@ -3330,7 +4929,9 @@ async function reset(seeded: ReturnType<typeof ids>) {
   if (owner) {
     await owner.query("BEGIN");
     await owner.query("SET LOCAL session_replication_role = replica");
-    await owner.query('DELETE FROM billing_audit_events WHERE "spaceId" = ANY($1)', [seeded.spaces]);
+    await owner.query('DELETE FROM billing_audit_events WHERE "spaceId" = ANY($1)', [
+      seeded.spaces,
+    ]);
     await owner.query("TRUNCATE usage_records");
     await owner.query("COMMIT");
   }
@@ -3342,15 +4943,23 @@ async function reset(seeded: ReturnType<typeof ids>) {
   await system.bot.deleteMany({ where: { userId: own } });
   await system.computer.deleteMany({ where: { spaceId: { in: seeded.spaces } } });
   await system.messagingChannel.deleteMany({ where: { id: { startsWith: userId } } });
-  await system.messagingLinkCode.deleteMany({ where: { userId: { in: [userId, `${userId}-other`] } } });
-  await system.messagingIdentity.deleteMany({ where: { userId: { in: [userId, `${userId}-other`] } } });
+  await system.messagingLinkCode.deleteMany({
+    where: { userId: { in: [userId, `${userId}-other`] } },
+  });
+  await system.messagingIdentity.deleteMany({
+    where: { userId: { in: [userId, `${userId}-other`] } },
+  });
   await system.messagingInstallation.deleteMany({ where: { userId } });
   await system.spaceMember.deleteMany({ where: { userId: own } });
   await system.securityEvent.deleteMany({ where: { userId: { in: [userId, `${userId}-other`] } } });
-  await system.auditEvent.deleteMany({ where: { OR: [{ organizationId: orgId }, { actorId: userId }] } });
+  await system.auditEvent.deleteMany({
+    where: { OR: [{ organizationId: orgId }, { actorId: userId }] },
+  });
   await system.page.deleteMany({ where: { userId: { in: [userId, `${userId}-other`] } } });
   await system.chatGroup.deleteMany({ where: { userId: { in: [userId, `${userId}-other`] } } });
-  await system.trustedLinkSite.deleteMany({ where: { userId: { in: [userId, `${userId}-other`] } } });
+  await system.trustedLinkSite.deleteMany({
+    where: { userId: { in: [userId, `${userId}-other`] } },
+  });
   await system.payment.deleteMany({ where: { userId: { in: [userId, `${userId}-other`] } } });
   await system.spendingLimit.deleteMany({ where: { userId: { in: [userId, `${userId}-other`] } } });
   await system.vaultCredential.deleteMany({ where: { userId } });
@@ -3656,7 +5265,11 @@ function normalize<T>(value: T): T {
       if (CUID.test(node)) return "<cuid>";
       if (LINK_CODE.test(node)) return "<code>";
       // Times near now (link-code expiry is minutes ahead) vary per run; instants days away are the case's own data.
-      if (ISO_TIME.test(node) && Date.parse(node) >= HARNESS_START && Date.parse(node) <= Date.now() + 6 * 3_600_000)
+      if (
+        ISO_TIME.test(node) &&
+        Date.parse(node) >= HARNESS_START &&
+        Date.parse(node) <= Date.now() + 6 * 3_600_000
+      )
         return "<now>";
       return node;
     }
@@ -3675,8 +5288,16 @@ function artifactCursor(text: string): string | undefined {
   if (!text.startsWith("v1.")) return undefined;
   try {
     const record = JSON.parse(Buffer.from(text.slice(3), "base64url").toString("utf8"));
-    if (!record || typeof record !== "object" || Object.keys(record).join(",") !== ARTIFACT_CURSOR_KEYS) return undefined;
-    const near = ISO_TIME.test(record.asOf) && Date.parse(record.asOf) >= HARNESS_START && Date.parse(record.asOf) <= Date.now() + 6 * 3_600_000;
+    if (
+      !record ||
+      typeof record !== "object" ||
+      Object.keys(record).join(",") !== ARTIFACT_CURSOR_KEYS
+    )
+      return undefined;
+    const near =
+      ISO_TIME.test(record.asOf) &&
+      Date.parse(record.asOf) >= HARNESS_START &&
+      Date.parse(record.asOf) <= Date.now() + 6 * 3_600_000;
     return `v1.${Buffer.from(JSON.stringify({ ...record, asOf: near ? "<now>" : record.asOf })).toString("base64url")}`;
   } catch {
     return undefined;
@@ -3684,7 +5305,13 @@ function artifactCursor(text: string): string | undefined {
 }
 
 /** Runs a call and reports the roster and Space-change signals published while it ran. */
-async function observed(settleMs: number, call: () => Promise<any>, seeded: Seeded, procedure: string) {
+async function observed(
+  settleMs: number,
+  // biome-ignore lint/suspicious/noExplicitAny: manual harness; response bodies are untyped JSON
+  call: () => Promise<any>,
+  seeded: Seeded,
+  procedure: string,
+) {
   realtimeSignals.length = 0;
   const result = await call();
   await sleep(settleMs);
@@ -3708,7 +5335,11 @@ async function observed(settleMs: number, call: () => Promise<any>, seeded: Seed
         const body = typeof signal.payload === "string" ? signal.payload : "";
         // The API's own 30s job reconciler drains the seeded ComputerUpdate rows and announces each
         // one; computer.updates is a read and publishes nothing, so its window cannot own these.
-        if (procedure === "computer.updates" && topic.startsWith("space-changes:") && body === "computerUpdates") {
+        if (
+          procedure === "computer.updates" &&
+          topic.startsWith("space-changes:") &&
+          body === "computerUpdates"
+        ) {
           return false;
         }
         // TypeScript's routine sweep wakes the seeded overdue routine at its own moment and announces
@@ -3739,8 +5370,13 @@ async function databaseState(seeded: ReturnType<typeof ids>) {
   const skills = await system.agentSkill.findMany({
     where: { userId: stateUsers },
     select: {
-      id: true, spaceId: true, allSpaces: true,
-      name: true, description: true, content: true, source: true,
+      id: true,
+      spaceId: true,
+      allSpaces: true,
+      name: true,
+      description: true,
+      content: true,
+      source: true,
     },
     orderBy: { id: "asc" },
   });
@@ -3781,7 +5417,10 @@ async function databaseState(seeded: ReturnType<typeof ids>) {
     orderBy: { id: "asc" },
   });
   // Each side seeds at its own "now"; whether a payment is released is what matters.
-  const payments = paymentRows.map(({ releasedAt, ...row }) => ({ ...row, released: releasedAt !== null }));
+  const payments = paymentRows.map(({ releasedAt, ...row }) => ({
+    ...row,
+    released: releasedAt !== null,
+  }));
   const spendingLimits = await system.spendingLimit.findMany({
     where: { userId: owners },
     select: { userId: true, amount: true, currency: true, period: true },
@@ -3789,7 +5428,20 @@ async function databaseState(seeded: ReturnType<typeof ids>) {
   });
   const pages = await system.page.findMany({
     where: { spaceId: { in: seeded.spaces } },
-    select: { id: true, userId: true, botId: true, groupId: true, title: true, visibility: true, currentVersion: true, shareTokenHash: true, shareSecretId: true, pinnedAt: true, createdAt: true, updatedAt: true },
+    select: {
+      id: true,
+      userId: true,
+      botId: true,
+      groupId: true,
+      title: true,
+      visibility: true,
+      currentVersion: true,
+      shareTokenHash: true,
+      shareSecretId: true,
+      pinnedAt: true,
+      createdAt: true,
+      updatedAt: true,
+    },
     orderBy: { id: "asc" },
   });
   const botSections = await system.botSection.findMany({
@@ -3799,17 +5451,40 @@ async function databaseState(seeded: ReturnType<typeof ids>) {
   });
   const threadReads = await system.threadRead.findMany({
     where: { spaceId: { in: seeded.spaces } },
-    select: { threadId: true, userId: true, spaceId: true, unread: true, lastReadSeq: true, snoozedUntil: true },
+    select: {
+      threadId: true,
+      userId: true,
+      spaceId: true,
+      unread: true,
+      lastReadSeq: true,
+      snoozedUntil: true,
+    },
     orderBy: [{ threadId: "asc" }, { userId: "asc" }],
   });
   const externalConversations = await system.externalConversation.findMany({
     where: { spaceId: { in: seeded.spaces } },
-    select: { id: true, userId: true, teamChatAmbientEnabled: true, teamChatRules: true, automatedSenderPolicies: true, updatedAt: true },
+    select: {
+      id: true,
+      userId: true,
+      teamChatAmbientEnabled: true,
+      teamChatRules: true,
+      automatedSenderPolicies: true,
+      updatedAt: true,
+    },
     orderBy: { id: "asc" },
   });
   const messagingIdentities = await system.messagingIdentity.findMany({
     where: { userId: owners },
-    select: { id: true, userId: true, spaceId: true, botId: true, provider: true, address: true, installationId: true, updatedAt: true },
+    select: {
+      id: true,
+      userId: true,
+      spaceId: true,
+      botId: true,
+      provider: true,
+      address: true,
+      installationId: true,
+      updatedAt: true,
+    },
     orderBy: { id: "asc" },
   });
   const messagingLinkCodes = await system.messagingLinkCode.findMany({
@@ -3842,7 +5517,13 @@ async function databaseState(seeded: ReturnType<typeof ids>) {
   });
   const approvalRulesSpace = await system.actionApprovalRule.findMany({
     where: { spaceId: { in: seeded.spaces } },
-    orderBy: [{ spaceId: "asc" }, { createdByUserId: "asc" }, { matchKind: "asc" }, { matchValue: "asc" }, { effect: "asc" }],
+    orderBy: [
+      { spaceId: "asc" },
+      { createdByUserId: "asc" },
+      { matchKind: "asc" },
+      { matchValue: "asc" },
+      { effect: "asc" },
+    ],
   });
   const spaceSettingOverrides = await system.spaceSettingOverride.findMany({
     where: { spaceId: { in: seeded.spaces } },
@@ -3868,17 +5549,49 @@ async function databaseState(seeded: ReturnType<typeof ids>) {
   });
   const connections = await system.connection.findMany({
     where: { spaceId: { in: seeded.spaces } },
-    select: { id: true, spaceId: true, userId: true, provider: true, displayName: true, status: true, connectorId: true, createdAt: true, updatedAt: true },
+    select: {
+      id: true,
+      spaceId: true,
+      userId: true,
+      provider: true,
+      displayName: true,
+      status: true,
+      connectorId: true,
+      createdAt: true,
+      updatedAt: true,
+    },
     orderBy: { id: "asc" },
   });
   const artifacts = await system.artifact.findMany({
     where: { spaceId: { in: seeded.spaces } },
-    select: { id: true, spaceId: true, userId: true, botId: true, groupId: true, runId: true, name: true, mimeType: true, version: true, rootArtifactId: true, standalone: true, createdAt: true },
+    select: {
+      id: true,
+      spaceId: true,
+      userId: true,
+      botId: true,
+      groupId: true,
+      runId: true,
+      name: true,
+      mimeType: true,
+      version: true,
+      rootArtifactId: true,
+      standalone: true,
+      createdAt: true,
+    },
     orderBy: { id: "asc" },
   });
   const modelCredentials = await system.userModelCredential.findMany({
     where: { userId: owners },
-    select: { id: true, userId: true, provider: true, label: true, secretId: true, supportsImages: true, createdAt: true, updatedAt: true },
+    select: {
+      id: true,
+      userId: true,
+      provider: true,
+      label: true,
+      secretId: true,
+      supportsImages: true,
+      createdAt: true,
+      updatedAt: true,
+    },
     orderBy: { id: "asc" },
   });
   const trustedLinkSites = await system.trustedLinkSite.findMany({
@@ -3888,7 +5601,9 @@ async function databaseState(seeded: ReturnType<typeof ids>) {
   });
   const byJson = (left: unknown, right: unknown) =>
     JSON.stringify(left) < JSON.stringify(right) ? -1 : 1;
-  const securityEvents = (await system.securityEvent.findMany({ where: { userId: owners } })).sort(byJson);
+  const securityEvents = (await system.securityEvent.findMany({ where: { userId: owners } })).sort(
+    byJson,
+  );
   const auditEvents = (
     await system.auditEvent.findMany({
       where: { OR: [{ organizationId: seeded.orgId }, { actorId: seeded.userId }] },
@@ -3896,12 +5611,25 @@ async function databaseState(seeded: ReturnType<typeof ids>) {
   ).sort(byJson);
   const bots = await system.bot.findMany({
     where: { userId: owners },
-    select: { id: true, spaceId: true, archivedAt: true, updatedAt: true, position: true, section: { select: { name: true } } },
+    select: {
+      id: true,
+      spaceId: true,
+      archivedAt: true,
+      updatedAt: true,
+      position: true,
+      section: { select: { name: true } },
+    },
     orderBy: { id: "asc" },
   });
   const groups = await system.chatGroup.findMany({
     where: { userId: owners },
-    select: { id: true, spaceId: true, archivedAt: true, updatedAt: true, section: { select: { name: true } } },
+    select: {
+      id: true,
+      spaceId: true,
+      archivedAt: true,
+      updatedAt: true,
+      section: { select: { name: true } },
+    },
     orderBy: { id: "asc" },
   });
   const botEmailAddresses = await system.botEmailAddress.findMany({
@@ -3911,16 +5639,33 @@ async function databaseState(seeded: ReturnType<typeof ids>) {
   });
   const spaceMemoryConfigs = await system.spaceMemoryConfig.findMany({
     where: { spaceId: { in: seeded.spaces } },
-    select: { spaceId: true, provider: true, settings: true, defaultMemoryScope: true, secretId: true, updatedAt: true },
+    select: {
+      spaceId: true,
+      provider: true,
+      settings: true,
+      defaultMemoryScope: true,
+      secretId: true,
+      updatedAt: true,
+    },
     orderBy: { spaceId: "asc" },
   });
   const routineRows = await system.routine.findMany({
     where: { spaceId: { in: seeded.spaces } },
-    select: { id: true, botId: true, userId: true, active: true, resumeOnRestore: true, nextRunAt: true },
+    select: {
+      id: true,
+      botId: true,
+      userId: true,
+      active: true,
+      resumeOnRestore: true,
+      nextRunAt: true,
+    },
     orderBy: { id: "asc" },
   });
   // Each side computes from its own "now"; whether a run is scheduled is what matters.
-  const routines = routineRows.map(({ nextRunAt, ...row }) => ({ ...row, nextRunAt: nextRunAt ? "<set>" : null }));
+  const routines = routineRows.map(({ nextRunAt, ...row }) => ({
+    ...row,
+    nextRunAt: nextRunAt ? "<set>" : null,
+  }));
   // The rows a routine change posts in its chat: one system message per change.
   const routineNotices = (
     await system.message.findMany({
@@ -3987,23 +5732,40 @@ for (const testCase of cases) {
   COMPUTER_UPDATE_BASE = Date.now() - 30_000;
   const input = withIds(testCase.input, caseIds);
   // A write has realtime signals to wait for; a read only needs to show it sent none.
-  const settle = WRITE_PROCEDURES.has(testCase.procedure) || testCase.procedure.startsWith("messaging.") ? 400 : 40;
+  const settle =
+    WRITE_PROCEDURES.has(testCase.procedure) || testCase.procedure.startsWith("messaging.")
+      ? 400
+      : 40;
 
   let seeded = await seed(caseIds);
   if (testCase.seed) await testCase.seed(seeded);
-  const tsResult = await observed(settle, () => run(testCase, tsCall, input, seeded), seeded, testCase.procedure);
+  const tsResult = await observed(
+    settle,
+    () => run(testCase, tsCall, input, seeded),
+    seeded,
+    testCase.procedure,
+  );
   const tsState = normalize(await databaseState(caseIds));
 
   seeded = await seed(caseIds);
   if (testCase.seed) await testCase.seed(seeded);
-  const goResult = await observed(settle, () => run(testCase, goCall, input, seeded), seeded, testCase.procedure);
+  const goResult = await observed(
+    settle,
+    () => run(testCase, goCall, input, seeded),
+    seeded,
+    testCase.procedure,
+  );
   const goState = normalize(await databaseState(caseIds));
 
   try {
     assert.equal(goResult.status, tsResult.status, `${testCase.name}: status`);
     assert.deepEqual(goResult.headers, tsResult.headers, `${testCase.name}: headers`);
     assert.deepEqual(normalize(goResult.body), normalize(tsResult.body), `${testCase.name}: body`);
-    assert.deepEqual(goResult.notifications, tsResult.notifications, `${testCase.name}: realtime signals`);
+    assert.deepEqual(
+      goResult.notifications,
+      tsResult.notifications,
+      `${testCase.name}: realtime signals`,
+    );
     assert.deepEqual(goState, tsState, `${testCase.name}: database state`);
     console.log(`ok   ${testCase.name} (${tsResult.status})`);
   } catch (error) {

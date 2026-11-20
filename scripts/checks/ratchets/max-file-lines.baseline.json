@@ -1,4 +1,8 @@
 {
+  "apps/api-go/tools/contract-lane-d.mts": 1,
+  "apps/api-go/tools/contract-membership.mts": 1,
+  "apps/api-go/tools/contract.mts": 1,
+  "apps/api-go/tools/modelretry-corpus.mts": 1,
   "apps/api/src/account/account-import.ts": 1,
   "apps/api/src/app.ts": 1,
   "apps/api/src/messaging/messaging-inbound.test.ts": 1,

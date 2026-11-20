@@ -44,7 +44,8 @@ const random = () => {
 };
 const from = Date.UTC(2018, 0, 1);
 const to = Date.UTC(2027, 0, 1);
-for (const zone of zones) for (let i = 0; i < 120; i += 1) add(zone, Math.floor(from + random() * (to - from)));
+for (const zone of zones)
+  for (let i = 0; i < 120; i += 1) add(zone, Math.floor(from + random() * (to - from)));
 // Midnight gaps and overlaps: every hour for two days around the change.
 const windows: Array<[string, string]> = [
   ["America/Sao_Paulo", "2018-11-04T00:00:00Z"],
