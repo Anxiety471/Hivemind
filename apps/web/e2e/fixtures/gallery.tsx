@@ -7,10 +7,10 @@ import { Button } from "@rakazo/ui-web";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { bootstrapI18n, i18n } from "../../src/lib/i18n";
-import { queryClient } from "../../src/lib/query";
-import type { ResolvedAppearance } from "../../src/lib/ui-appearance";
-import { applyResolvedAppearance } from "../../src/lib/ui-appearance";
+import { bootstrapI18n, i18n } from "../../src/lib/locale/i18n";
+import type { ResolvedAppearance } from "../../src/lib/preferences/ui-appearance";
+import { applyResolvedAppearance } from "../../src/lib/preferences/ui-appearance";
+import { queryClient } from "../../src/lib/query/query";
 import "../../src/styles.css";
 import { BOT, FixtureTranscript } from "./thread-fixture";
 
@@ -505,6 +505,26 @@ const team: Scenario = {
   ],
 };
 
+const routine = (
+  change: "created" | "updated" | "enabled" | "disabled" | "deleted",
+  name: string,
+) => message("system", [{ kind: "routine_event", change, name }]);
+const routines: Scenario = {
+  id: "routines",
+  label: "Routine changes",
+  messages: [
+    user("Remind me to stretch every morning."),
+    routine("created", "Morning stretch"),
+    say("Done. I'll remind you at 8:00 every day."),
+    routine("updated", "Morning stretch"),
+    routine("updated", "Morning stretch"),
+    routine("disabled", "Morning stretch"),
+    routine("enabled", "Morning stretch"),
+    say("Back on."),
+    routine("deleted", "Morning stretch"),
+  ],
+};
+
 const rich: Scenario = {
   id: "rich",
   label: "Rich content",
@@ -679,6 +699,7 @@ const SCENARIOS: Scenario[] = [
   secrets,
   working,
   team,
+  routines,
   rich,
   calls,
 ];

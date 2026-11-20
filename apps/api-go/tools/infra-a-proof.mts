@@ -18,6 +18,8 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
+import { PostgresRealtimeFanout } from "../../../packages/adapters/src/notifications/realtime.js";
+import { sanitizeJsonValue } from "../../../packages/core/src/messages/events.js";
 import {
   asSystem,
   contentEncryptionOf,
@@ -26,9 +28,7 @@ import {
   encryptText,
   readRunTimingFields,
 } from "../../../packages/db/src/index.js";
-import { appendEvent } from "../../../packages/db/src/events.js";
-import { sanitizeJsonValue } from "../../../packages/core/src/events.js";
-import { PostgresRealtimeFanout } from "../../../packages/adapters/src/realtime.js";
+import { appendEvent } from "../../../packages/db/src/threads/events.js";
 
 const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) throw new Error("DATABASE_URL is required");
@@ -45,7 +45,10 @@ const child = spawn(GO_PROOF_BIN, [], {
 });
 process.on("exit", () => child.kill());
 const lines = createInterface({ input: child.stdout! });
-const pending = new Map<number, { resolve: (value: any) => void; reject: (error: Error) => void }>();
+const pending = new Map<
+  number,
+  { resolve: (value: any) => void; reject: (error: Error) => void }
+>();
 let nextRequest = 0;
 lines.on("line", (line) => {
   const message = JSON.parse(line);
@@ -94,22 +97,42 @@ function check(name: string, body: () => void | Promise<void>) {
   return run();
 }
 
-const user = { id: id("u"), name: "Proof User", email: `${id("u")}@example.test`, emailVerified: true };
+const user = {
+  id: id("u"),
+  name: "Proof User",
+  email: `${id("u")}@example.test`,
+  emailVerified: true,
+};
 const org = { id: id("org"), name: "Proof Org", slug: id("org"), createdAt: new Date() };
 const spaceA = id("sp-a");
 const spaceB = id("sp-b");
 // spaceC starts with no content key: Go creates it, TS rotates it.
 const spaceC = id("sp-c");
 const bot = { id: id("bot"), spaceId: spaceA, userId: user.id, name: "Proof Bot", color: "blue" };
-const bot2 = { id: id("bot2"), spaceId: spaceA, userId: user.id, name: "Proof Bot 2", color: "red" };
+const bot2 = {
+  id: id("bot2"),
+  spaceId: spaceA,
+  userId: user.id,
+  name: "Proof Bot 2",
+  color: "red",
+};
 const threadA = id("th");
 const docA = { id: id("doc"), spaceId: spaceA, userId: user.id, scope: "space", path: "MEMORY.md" };
-const docB = { id: id("doc-b"), spaceId: spaceB, userId: user.id, scope: "space", path: "MEMORY.md" };
+const docB = {
+  id: id("doc-b"),
+  spaceId: spaceB,
+  userId: user.id,
+  scope: "space",
+  path: "MEMORY.md",
+};
 
 const summary = "Compacted history: Pelican İstanbul 😀 <&> summary";
 const blocks = [
   { kind: "text", status: "done", text: "Pelican İstanbul 😀 report", extra: 1 },
-  { kind: "steps", steps: [{ label: "Search the web", note: "found pelican" }, { label: "Read file" }] },
+  {
+    kind: "steps",
+    steps: [{ label: "Search the web", note: "found pelican" }, { label: "Read file" }],
+  },
   { kind: "file", artifactId: "art-1", name: "photo.png", size: 10 },
   { kind: "subagent", task: "Summarize", result: "done" },
 ];
@@ -140,7 +163,13 @@ const email = {
 await system.user.create({ data: user });
 await system.organization.create({ data: org });
 await system.member.create({
-  data: { id: id("member"), organizationId: org.id, userId: user.id, role: "owner", createdAt: new Date() },
+  data: {
+    id: id("member"),
+    organizationId: org.id,
+    userId: user.id,
+    role: "owner",
+    createdAt: new Date(),
+  },
 });
 for (const [spaceId, name, isDefault] of [
   [spaceA, "Space A", true],
@@ -162,7 +191,13 @@ for (const [spaceId, name, isDefault] of [
 await system.bot.create({ data: bot });
 await system.bot.create({ data: bot2 });
 await system.thread.create({
-  data: { id: threadA, spaceId: spaceA, userId: user.id, botId: bot.id, historyCompactionSummary: summary },
+  data: {
+    id: threadA,
+    spaceId: spaceA,
+    userId: user.id,
+    botId: bot.id,
+    historyCompactionSummary: summary,
+  },
 });
 await system.memoryDocument.create({ data: { ...docA, content: contentA, updatedAt: new Date() } });
 await system.memoryDocument.create({ data: { ...docB, content: contentB, updatedAt: new Date() } });
@@ -330,7 +365,12 @@ for (const entry of modelRows) {
 const goRows = [
   {
     model: "Thread",
-    row: { id: id("th-go"), spaceId: spaceA, userId: user.id, historyCompactionSummary: "Go summary 😀 <&>" },
+    row: {
+      id: id("th-go"),
+      spaceId: spaceA,
+      userId: user.id,
+      historyCompactionSummary: "Go summary 😀 <&>",
+    },
     fields: ["historyCompactionSummary"],
   },
   {
@@ -340,7 +380,13 @@ const goRows = [
   },
   {
     model: "Event",
-    row: { id: id("ev-go"), spaceId: spaceA, threadId: threadA, botId: bot.id, payload: eventPayload },
+    row: {
+      id: id("ev-go"),
+      spaceId: spaceA,
+      threadId: threadA,
+      botId: bot.id,
+      payload: eventPayload,
+    },
     fields: ["payload"],
   },
   {
@@ -369,7 +415,8 @@ for (const entry of goRows) {
   await check(`${entry.model}: TypeScript opens Go ciphertext`, () => {
     for (const field of entry.fields) {
       const original = entry.row[field as keyof typeof entry.row];
-      if (field === "blocks" || field === "payload") assert.deepStrictEqual(toOpen[field], plain(original));
+      if (field === "blocks" || field === "payload")
+        assert.deepStrictEqual(toOpen[field], plain(original));
       else assert.equal(toOpen[field], original);
     }
   });
@@ -383,18 +430,27 @@ for (const entry of goRows) {
 }
 
 // ------------------------------------------------- failure cases
-const docARaw = (await system.$queryRawUnsafe<any[]>(
-  `SELECT id, "spaceId", "userId", content FROM memory_documents WHERE id = $1`,
-  docA.id,
-))[0];
-const docBRaw = (await system.$queryRawUnsafe<any[]>(
-  `SELECT id, "spaceId", "userId", content FROM memory_documents WHERE id = $1`,
-  docB.id,
-))[0];
+const docARaw = (
+  await system.$queryRawUnsafe<any[]>(
+    `SELECT id, "spaceId", "userId", content FROM memory_documents WHERE id = $1`,
+    docA.id,
+  )
+)[0];
+const docBRaw = (
+  await system.$queryRawUnsafe<any[]>(
+    `SELECT id, "spaceId", "userId", content FROM memory_documents WHERE id = $1`,
+    docB.id,
+  )
+)[0];
 const ciphertextA = docARaw.content as string;
 const keyA = ciphertextA.slice(5, ciphertextA.indexOf(":", 5));
 const keyB = (docBRaw.content as string).slice(5, (docBRaw.content as string).indexOf(":", 5));
-const contentLocation = { table: "memory_documents", column: "content", rowId: docA.id, owner: user.id };
+const contentLocation = {
+  table: "memory_documents",
+  column: "content",
+  rowId: docA.id,
+  owner: user.id,
+};
 
 type FailureCase = {
   name: string;
@@ -421,9 +477,24 @@ function tamperedBody(ciphertext: string): string {
 }
 
 const failureCases: FailureCase[] = [
-  { name: "wrong owner", keyId: keyA, location: { ...contentLocation, owner: `${user.id}-other` }, value: ciphertextA },
-  { name: "wrong column", keyId: keyA, location: { ...contentLocation, column: "content2" }, value: ciphertextA },
-  { name: "wrong row", keyId: keyA, location: { ...contentLocation, rowId: `${docA.id}-other` }, value: ciphertextA },
+  {
+    name: "wrong owner",
+    keyId: keyA,
+    location: { ...contentLocation, owner: `${user.id}-other` },
+    value: ciphertextA,
+  },
+  {
+    name: "wrong column",
+    keyId: keyA,
+    location: { ...contentLocation, column: "content2" },
+    value: ciphertextA,
+  },
+  {
+    name: "wrong row",
+    keyId: keyA,
+    location: { ...contentLocation, rowId: `${docA.id}-other` },
+    value: ciphertextA,
+  },
   { name: "wrong space", keyId: keyA, keySpaceId: spaceB, value: ciphertextA },
   { name: "another key id", keyId: keyB, value: ciphertextA },
   { name: "tampered body", keyId: keyA, value: tamperedBody(ciphertextA) },
@@ -434,7 +505,11 @@ for (const failure of failureCases) {
   const key = await contentKeys.byId(failure.keyId);
   let tsError = "";
   try {
-    decryptText(failure.keySpaceId ? { ...key, spaceId: failure.keySpaceId } : key, location, failure.value);
+    decryptText(
+      failure.keySpaceId ? { ...key, spaceId: failure.keySpaceId } : key,
+      location,
+      failure.value,
+    );
   } catch (error) {
     tsError = (error as Error).message;
   }
@@ -460,7 +535,11 @@ for (const failure of failureCases) {
   } catch (error) {
     tsError = (error as Error).message;
   }
-  const goMessage = await goError({ op: "open-model", model: "MemoryDocument", rows: [{ ...plain(docBRaw), content: ciphertextA }] });
+  const goMessage = await goError({
+    op: "open-model",
+    model: "MemoryDocument",
+    rows: [{ ...plain(docBRaw), content: ciphertextA }],
+  });
   await check("failure: ciphertext in another Space fails identically", () => {
     assert.equal(tsError, "Encrypted content belongs to another space");
     assert.equal(goMessage, tsError);
@@ -574,7 +653,10 @@ const keyLocation = {
       ...keyLocation,
       plaintext: "Go sealed under its own key",
     });
-    assert.equal(decryptText(tsKey, keyLocation, sealedByGo.ciphertext), "Go sealed under its own key");
+    assert.equal(
+      decryptText(tsKey, keyLocation, sealedByGo.ciphertext),
+      "Go sealed under its own key",
+    );
   });
 }
 
@@ -652,11 +734,14 @@ const keyLocation = {
 
 // ------------------------------------------------- event append + notify
 const eventThread = id("th-events");
-await system.thread.create({ data: { id: eventThread, spaceId: spaceA, userId: user.id, botId: bot2.id } });
+await system.thread.create({
+  data: { id: eventThread, spaceId: spaceA, userId: user.id, botId: bot2.id },
+});
 const listener = await pool.connect();
 const captured: string[] = [];
 listener.on("notification", (notification) => {
-  if (notification.channel === "rakazo_events" && notification.payload) captured.push(notification.payload);
+  if (notification.channel === "rakazo_events" && notification.payload)
+    captured.push(notification.payload);
 });
 await listener.query("LISTEN rakazo_events");
 const fanout = new PostgresRealtimeFanout({
@@ -690,7 +775,12 @@ for (let n = 0; n < 3; n += 1) {
     payload: { delta: `go-${n}`, streaming: true },
     notify: true,
   });
-  appended.push({ producer: "go", seq: event.event.seq, payload: event.event.payload, id: event.event.id });
+  appended.push({
+    producer: "go",
+    seq: event.event.seq,
+    payload: event.event.payload,
+    id: event.event.id,
+  });
 }
 {
   const [tsEvents, goEvents] = await Promise.all([
@@ -728,7 +818,10 @@ const waitUntil = async (predicate: () => boolean, what: string) => {
 await waitUntil(() => captured.length >= expectedEvents, "realtime notifications");
 
 await check("event seqs are gap-free and distinct", async () => {
-  const rows = await system.event.findMany({ where: { threadId: eventThread }, orderBy: { seq: "asc" } });
+  const rows = await system.event.findMany({
+    where: { threadId: eventThread },
+    orderBy: { seq: "asc" },
+  });
   assert.equal(rows.length, expectedEvents);
   assert.deepStrictEqual(
     rows.map((row: any) => row.seq),
@@ -772,11 +865,18 @@ await check("notify envelopes are identical and complete", () => {
     [...cursorByEnvelope.values()].sort((a, b) => a - b),
     Array.from({ length: expectedEvents }, (_, index) => index),
   );
-  const producedByTs = appended.filter((event) => event.producer === "ts").map((event) => event.seq);
-  const producedByGo = appended.filter((event) => event.producer === "go").map((event) => event.seq);
+  const producedByTs = appended
+    .filter((event) => event.producer === "ts")
+    .map((event) => event.seq);
+  const producedByGo = appended
+    .filter((event) => event.producer === "go")
+    .map((event) => event.seq);
   for (const cursor of [...producedByTs, ...producedByGo]) {
     const raw = [...cursorByEnvelope.entries()].find(([, value]) => value === cursor)![0];
-    const expected = JSON.stringify({ topic: `thread:${eventThread}`, payload: JSON.stringify({ cursor }) });
+    const expected = JSON.stringify({
+      topic: `thread:${eventThread}`,
+      payload: JSON.stringify({ cursor }),
+    });
     assert.equal(raw, expected);
   }
 });
@@ -811,11 +911,22 @@ for (const producer of ["ts", "go"] as const) {
       leaseFence: 1,
     },
   });
-  const payload = { messageId: id(`msg-${producer}`), role: "bot", blocks: [{ kind: "text", text: `hello from ${producer}` }] };
+  const payload = {
+    messageId: id(`msg-${producer}`),
+    role: "bot",
+    blocks: [{ kind: "text", text: `hello from ${producer}` }],
+  };
   if (producer === "ts") {
     const event = await appendEvent(
       system as any,
-      { spaceId: spaceA, threadId: eventThread, botId: bot2.id, type: "thread.message.created", payload, runId: run.id },
+      {
+        spaceId: spaceA,
+        threadId: eventThread,
+        botId: bot2.id,
+        type: "thread.message.created",
+        payload,
+        runId: run.id,
+      },
       fanout as any,
     );
     firstRuns.push({ producer, runId: run.id, event });

@@ -25,7 +25,8 @@ import {
 } from "@rakazo/core";
 import { urlSite } from "@rakazo/core/egress";
 import {
-  auditLogOrganization,
+  auditLogAccess,
+  auditLogScope,
   commitBotUpdate,
   findAutoReviewPreference,
   findDefaultVoiceCredential,
@@ -48,12 +49,10 @@ import {
   withTransactionRetry,
 } from "@rakazo/db";
 import { getLogger } from "@rakazo/logging";
-import { createAccessGrant, listAccessGrants, revokeAccessGrant } from "../access-grants.js";
-import { requireAdmin } from "../admins.js";
-import { aiConsentStatus, allowAiConsent } from "../ai-consent.js";
-import type { BillingService } from "../billing.js";
-import { firstModelConnectAnalytics } from "../model-connect-analytics.js";
-import type { RouterDeps } from "../router.js";
+import { aiConsentStatus, allowAiConsent } from "../account/ai-consent.js";
+import { createAccessGrant, listAccessGrants, revokeAccessGrant } from "../auth/access-grants.js";
+import { requireAdmin } from "../auth/admins.js";
+import type { BillingService } from "../billing/billing.js";
 import {
   accountVoiceCatalog,
   disconnectVoiceCredential,
@@ -69,7 +68,9 @@ import {
   voiceCredentialServer,
   voiceProviderFor,
   withVoiceConnection,
-} from "../voice.js";
+} from "../calls/voice.js";
+import { firstModelConnectAnalytics } from "../models/model-connect-analytics.js";
+import type { RouterDeps } from "../router.js";
 import type { RouterContext } from "./context.js";
 import { HEARTBEAT, meDto, mergeStreams, withHeartbeats } from "./shared.js";
 
@@ -113,6 +114,16 @@ export function accountRoutes(ctx: RouterContext) {
     },
     health: os.health.handler(async () => ({ ok: true as const, version: "0.1.0" })),
     me: authed.me.handler(async ({ context }): Promise<Me> => meDto(deps, context.actor)),
+    cloudComputers: {
+      list: authed.cloudComputers.list.handler(
+        async ({ context }) => (await deps.billing?.cloudComputers(context.actor)) ?? null,
+      ),
+      setSize: authed.cloudComputers.setSize.handler(async ({ context, input }) => {
+        const billing = requireBilling(deps);
+        await billing.setComputerSize(context.actor, input.computerId, input.size);
+        return { ok: true as const };
+      }),
+    },
     billing: {
       selectFunding: authed.billing.selectFunding.handler(async ({ context, input }) => {
         const billing = requireBilling(deps);
@@ -140,6 +151,9 @@ export function accountRoutes(ctx: RouterContext) {
         if (input?.referralCode) await billing.claimReferral(context.actor, input.referralCode);
         return billing.status(context.actor);
       }),
+      computerUsage: authed.billing.computerUsage.handler(async ({ context }) =>
+        requireBilling(deps).computerUsage(context.actor),
+      ),
       refresh: authed.billing.refresh.handler(async ({ context }) => {
         const billing = requireBilling(deps);
         await billing.syncForActor(context.actor);
@@ -283,10 +297,10 @@ export function accountRoutes(ctx: RouterContext) {
     },
     audit: {
       events: authed.audit.events.handler(async ({ context, input }) => {
-        const organizationId = await auditLogOrganization(deps.prisma, context.actor);
-        if (!organizationId) throw new ORPCError("FORBIDDEN");
+        const access = await auditLogAccess(deps.prisma, context.actor);
+        if (!access) throw new ORPCError("FORBIDDEN");
         return runAsSystem("read the organization's audit log", () =>
-          listAuditEvents(deps.prisma, organizationId, input),
+          listAuditEvents(deps.prisma, access.organizationId, auditLogScope(access, input)),
         );
       }),
     },

@@ -5,7 +5,7 @@ import { act } from "react";
 import type { Root } from "react-dom/client";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { ErrorDetails } from "../lib/user-error";
+import type { ErrorDetails } from "../lib/query/user-error";
 import { ErrorNotice } from "./ErrorNotice";
 
 vi.mock("@lingui/react/macro", () => ({

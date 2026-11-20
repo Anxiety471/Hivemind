@@ -1,6 +1,7 @@
 import type {
   BillingCancellationReason,
   ByokTier,
+  ComputerSize,
   CacheCapabilities as ConnectionCacheCapabilities,
   ConnectionCatalogItem,
   HistoryToolStep,
@@ -120,6 +121,13 @@ export interface ComputerRef {
   fresh?: boolean;
   /** True when this call started a stopped computer. Providers that cannot tell leave it unset. */
   started?: boolean;
+  /** Size the provider confirmed for this running machine. */
+  size?: ComputerSize;
+  /**
+   * Size to start the machine at when a call finds it stopped and wakes it. A running machine
+   * keeps the size it has, and without one a woken machine keeps it too.
+   */
+  startSize?: ComputerSize;
 }
 
 export type WorkspaceDirectoryRequest =
@@ -290,6 +298,10 @@ export interface SandboxKindCapabilities {
   serverOwnsStoredTeamHome: boolean;
   /** The computer works in a copy on a host that outlives it; the stored home only backs it up. */
   storedHomeIsBackup: boolean;
+  /** The provider can read the disk of a stopped sandbox without starting it. */
+  readStoppedFiles?: boolean;
+  /** The provider confirms machine size for size-based allowance accounting. */
+  sizedUsage?: boolean;
 }
 
 export interface SandboxCapabilities {

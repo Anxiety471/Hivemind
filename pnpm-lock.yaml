@@ -190,6 +190,7 @@ overrides:
   '@xmldom/xmldom@>=0.9 <0.9.12': 0.9.12
   brace-expansion@>=2 <2.1.7: 2.1.7
   compression@<1.8.2: 1.8.2
+  effect@>=3 <3.22.1: 3.22.5
   fast-xml-parser@>=5 <5.12.0: 5.12.0
   glob@>=13 <13.0.7: 13.0.7
   js-yaml@>=4 <4.3.2: 4.3.2
@@ -750,7 +751,7 @@ importers:
         version: 3.11.0(@aws-sdk/credential-provider-web-identity@3.972.86)(ws@8.22.0)
       astro:
         specifier: 7.4.7
-        version: 7.4.7(@types/node@24.19.2)(@vercel/functions@3.11.0(@aws-sdk/credential-provider-web-identity@3.972.86)(ws@8.22.0))(esbuild@0.28.2)(jiti@2.7.0)(terser@5.50.0)(tsx@4.23.15)(yaml@2.9.1)
+        version: 7.4.7(@azure/storage-blob@12.34.0(supports-color@8.1.1))(@types/node@24.19.2)(@vercel/functions@3.11.0(@aws-sdk/credential-provider-web-identity@3.972.86)(ws@8.22.0))(esbuild@0.28.2)(jiti@2.7.0)(terser@5.50.0)(tsx@4.23.15)(yaml@2.9.1)
       posthog-js:
         specifier: 1.445.3
         version: 1.445.3(@types/react@19.3.0)(react@19.3.1)
@@ -913,7 +914,7 @@ importers:
         version: 4.44.0(supports-color@8.1.1)(zod@4.6.7)
       '@composio/core':
         specifier: 0.28.0
-        version: 0.28.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/signature-v4@5.7.5)(effect@3.20.0)(google-auth-library@10.9.1(supports-color@8.1.1))(ws@8.22.0)(zod@4.6.7)
+        version: 0.28.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/signature-v4@5.7.5)(effect@3.22.5)(google-auth-library@10.9.1(supports-color@8.1.1))(ws@8.22.0)(zod@4.6.7)
       '@darabonba/typescript':
         specifier: 1.0.6
         version: 1.0.6(supports-color@8.1.1)
@@ -1325,6 +1326,9 @@ importers:
       '@lingui/core':
         specifier: 6.12.0
         version: 6.12.0(@babel/core@7.29.13(supports-color@8.1.1))
+      '@rakazo/contracts':
+        specifier: workspace:*
+        version: link:../contracts
       '@rakazo/core':
         specifier: workspace:*
         version: link:../core
@@ -2751,7 +2755,7 @@ packages:
     resolution: {integrity: sha512-1+Azl8W/grinmXVt6KhDKy5UlvTiv7MCMgjqBDxd8TqndjM92/HotxLabnB63A285bvo5Lcu4kbOz413uaPmEQ==}
     engines: {node: '>=22'}
     peerDependencies:
-      effect: '*'
+      effect: 3.22.5
     peerDependenciesMeta:
       effect:
         optional: true
@@ -6772,6 +6776,7 @@ packages:
   '@typespec/ts-http-runtime@0.3.10':
     resolution: {integrity: sha512-vddvvtZ7sejSlCv+OIkn2ztjB1O31Fc2JsxI/YK725r3elXXlF/J3o3lbXJFRhoeWRWK1tjdZ+GTi6Fdtrp+EA==}
     engines: {node: '>=22.0.0'}
+    deprecated: A newer version 0.3.11 has been published.
 
   '@ungap/structured-clone@1.3.3':
     resolution: {integrity: sha512-60YRaenCQcVjYEKOcG824+DRGGIQ3VKErcBoAEDJZz5bKIs2ZG+X/H9Nk+Q6EVkwJk5QNApxbrc5QtBSwtrXAg==}
@@ -8503,8 +8508,8 @@ packages:
   ee-first@1.1.1:
     resolution: {integrity: sha512-WMwm9LhRUo+WUaRN+vRuETqG89IgZphVSNkdFgeb6sS/E4OrDIN7t48CAewSHXc6C8lefD8KKfr5vY61brQlow==}
 
-  effect@3.20.0:
-    resolution: {integrity: sha512-qMLfDJscrNG8p/aw+IkT9W7fgj50Z4wG5bLBy0Txsxz8iUHjDIkOgO3SV0WZfnQbNG2VJYb0b+rDLMrhM4+Krw==}
+  effect@3.22.5:
+    resolution: {integrity: sha512-AdIU4llI19BzhJ4xUBZix7kS8oiYSlCsJ61j3UM3UyJw9ecDrsrrweDFm/Ku1nHbJWMLoynK+1Me4it3Zkmjpw==}
 
   ejs@3.1.10:
     resolution: {integrity: sha512-UeJmFfOrAQS8OJWPZ4qtgHyWExa088/MtK5UEyoJGFH67cDEXkZSviOiKRCZ4Xij0zxI3JECgYs3oKx+AizQBA==}
@@ -15340,13 +15345,13 @@ snapshots:
   '@colors/colors@1.5.0':
     optional: true
 
-  '@composio/client@2.0.1(effect@3.20.0)':
+  '@composio/client@2.0.1(effect@3.22.5)':
     optionalDependencies:
-      effect: 3.20.0
+      effect: 3.22.5
 
-  '@composio/core@0.28.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/signature-v4@5.7.5)(effect@3.20.0)(google-auth-library@10.9.1(supports-color@8.1.1))(ws@8.22.0)(zod@4.6.7)':
+  '@composio/core@0.28.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/signature-v4@5.7.5)(effect@3.22.5)(google-auth-library@10.9.1(supports-color@8.1.1))(ws@8.22.0)(zod@4.6.7)':
     dependencies:
-      '@composio/client': 2.0.1(effect@3.20.0)
+      '@composio/client': 2.0.1(effect@3.22.5)
       '@composio/json-schema-to-zod': 0.4.0(zod@4.6.7)
       '@types/json-schema': 7.0.15
       is-fs-case-sensitive: 2.0.0
@@ -18139,7 +18144,7 @@ snapshots:
     dependencies:
       c12: 3.3.4(magicast@0.5.5)
       deepmerge-ts: 8.0.2
-      effect: 3.20.0
+      effect: 3.22.5
       empathic: 2.0.0
     transitivePeerDependencies:
       - magicast
@@ -20398,7 +20403,7 @@ snapshots:
 
   astral-regex@2.0.0: {}
 
-  astro@7.4.7(@types/node@24.19.2)(@vercel/functions@3.11.0(@aws-sdk/credential-provider-web-identity@3.972.86)(ws@8.22.0))(esbuild@0.28.2)(jiti@2.7.0)(terser@5.50.0)(tsx@4.23.15)(yaml@2.9.1):
+  astro@7.4.7(@azure/storage-blob@12.34.0(supports-color@8.1.1))(@types/node@24.19.2)(@vercel/functions@3.11.0(@aws-sdk/credential-provider-web-identity@3.972.86)(ws@8.22.0))(esbuild@0.28.2)(jiti@2.7.0)(terser@5.50.0)(tsx@4.23.15)(yaml@2.9.1):
     dependencies:
       '@astrojs/compiler-rs': 0.5.2
       '@astrojs/internal-helpers': 0.13.1
@@ -20445,7 +20450,7 @@ snapshots:
       tinyps: 0.5.2
       ultrahtml: 1.7.0
       unifont: 1.0.3
-      unstorage: 1.17.6(@vercel/functions@3.11.0(@aws-sdk/credential-provider-web-identity@3.972.86)(ws@8.22.0))
+      unstorage: 1.17.6(@azure/storage-blob@12.34.0(supports-color@8.1.1))(@vercel/functions@3.11.0(@aws-sdk/credential-provider-web-identity@3.972.86)(ws@8.22.0))
       verkit: 0.5.0
       vite: 8.3.5(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.50.0)(tsx@4.23.15)(yaml@2.9.1)
       vitefu: 1.1.3(vite@8.3.5(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.50.0)(tsx@4.23.15)(yaml@2.9.1))
@@ -22036,7 +22041,7 @@ snapshots:
 
   ee-first@1.1.1: {}
 
-  effect@3.20.0:
+  effect@3.22.5:
     dependencies:
       '@standard-schema/spec': 1.1.0
       fast-check: 3.23.2
@@ -27429,7 +27434,7 @@ snapshots:
 
   unpipe@1.0.0: {}
 
-  unstorage@1.17.6(@vercel/functions@3.11.0(@aws-sdk/credential-provider-web-identity@3.972.86)(ws@8.22.0)):
+  unstorage@1.17.6(@azure/storage-blob@12.34.0(supports-color@8.1.1))(@vercel/functions@3.11.0(@aws-sdk/credential-provider-web-identity@3.972.86)(ws@8.22.0)):
     dependencies:
       anymatch: 3.1.3
       chokidar: 5.0.0
@@ -27440,6 +27445,7 @@ snapshots:
       ofetch: 1.5.1
       ufo: 1.6.4
     optionalDependencies:
+      '@azure/storage-blob': 12.34.0(supports-color@8.1.1)
       '@vercel/functions': 3.11.0(@aws-sdk/credential-provider-web-identity@3.972.86)(ws@8.22.0)
 
   untildify@4.0.0: {}

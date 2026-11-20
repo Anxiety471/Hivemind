@@ -41,6 +41,7 @@ x-app-environment: &app-environment # Runtime
   API_URL:
   MAX_UPLOAD_SIZE_MB:
   MAX_ATTACHMENTS_PER_MESSAGE:
+  WORKSPACE_SAVE_MAX_GB:
   RAKAZO_UPDATE_RESTART_SUPERVISOR:
   TICKET_BOARD_ENABLED:
   USER_DEVICES_ENABLED:
@@ -110,6 +111,7 @@ x-app-environment: &app-environment # Runtime
   MODEL_STREAM_TIMEOUT_MS:
   MODEL_CONNECT_TIMEOUT_MS:
   MODEL_STREAM_IDLE_TIMEOUT_MS:
+  MODEL_RETRY_RULES_URL:
   RAKAZO_LOCAL_MODELS:
   RAKAZO_LOCAL_MODELS_URL:
   RAKAZO_LOCAL_MODELS_API_KEY:
@@ -577,7 +579,7 @@ services:
     # takes most of the worker's CPU.
     command: ["node", "--enable-source-maps", "--max-semi-space-size=64", "dist/index.js"]
     # A stop lets the running jobs finish rather than killing them mid-way, which would leave each
-    # locked for hours. Above JOB_DRAIN_TIMEOUT_MS in packages/adapters/src/wakeup.ts.
+    # locked for hours. Above JOB_DRAIN_TIMEOUT_MS in packages/adapters/src/runs/wakeups/wakeup.ts.
     stop_grace_period: 50m
     healthcheck:
       test: ["CMD", "node", "dist/health-check.js"]

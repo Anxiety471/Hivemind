@@ -4,14 +4,14 @@ import { Button } from "@rakazo/ui-web";
 import { X } from "lucide-react";
 import type { ComponentProps, Dispatch, ReactNode, SetStateAction } from "react";
 import { PagesList } from "../../components/pages/PagesList";
-import type { Panel } from "../../lib/right-panel-state";
-import type { createSpaceRpc } from "../../lib/rpc";
-import { CreateGroupForm, GroupSettings } from "../GroupPanel";
-import { ResizableSidePanel } from "../ResizableSidePanel";
-import { RoutineEditor } from "../RoutineEditor";
-import type { RoutineList } from "../RoutineList";
-import { AgentImportForm } from "./agent-import";
-import { BotSettings } from "./bot-panel";
+import type { createSpaceRpc } from "../../lib/query/rpc";
+import { RoutineEditor } from "../routines/RoutineEditor";
+import type { RoutineList } from "../routines/RoutineList";
+import { CreateGroupForm, GroupSettings } from "../space/GroupPanel";
+import { AgentImportForm } from "./bots/agent-import";
+import { BotSettings } from "./bots/bot-panel";
+import { ResizableSidePanel } from "./resizable-side-panel";
+import type { Panel } from "./right-panel-state";
 import { firstThreadRoute } from "./use-shell-navigation";
 
 /** The panel beside the chat: a bot, a routine, a group, or an import. */
@@ -78,7 +78,7 @@ export function ShellSidePanel({
   return (
     <ResizableSidePanel open={open} panel={panel ?? "closed"}>
       {open ? (
-        <div className="rk-scroll h-full w-full overflow-y-auto px-5 py-[17px]">
+        <div className="rk-scroll h-full w-full overflow-y-auto px-5 pt-3.5 pb-[17px]">
           {!(botView && active) &&
           panel !== "routine" &&
           panel !== "create-group" &&
@@ -93,11 +93,11 @@ export function ShellSidePanel({
               <div className="ml-auto flex gap-1">
                 <Button
                   variant="ghost"
-                  size="icon-sm"
+                  size="icon"
                   aria-label={t`Close panel`}
                   onClick={() => setPanel(null)}
                 >
-                  <X size={16} strokeWidth={1.8} />
+                  <X className="size-4.5" strokeWidth={1.75} />
                 </Button>
               </div>
             </div>

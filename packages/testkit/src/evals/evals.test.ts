@@ -24,7 +24,7 @@ import {
 import type { EvalApp } from "./runner.js";
 import { runTrial } from "./runner.js";
 import { EvalServices } from "./services.js";
-import { TOOL_CHOICE_CASES } from "./tool-choice-cases.js";
+import { TOOL_CHOICE_CASES } from "./suites/tool-choice-cases.js";
 
 const context: AdapterContext = {
   operationId: "synthetic",
@@ -357,11 +357,11 @@ describe("independent outcome graders", () => {
   it("requires the fresh scheduled release rather than an old setup artifact", () => {
     const e = evidence();
     e.routines = [
-      { name: "Release watch", prompt: "Check example/widget", crons: ["0 9 * * *"], active: true },
+      { name: "Release watch", prompt: "Check acme/widget", crons: ["0 9 * * *"], active: true },
     ];
     e.calls.push({
       tool: "GITHUB_LIST_RELEASES",
-      args: { owner: "example", repo: "widget" },
+      args: { owner: "acme", repo: "widget" },
       outcome: "read",
     });
     e.files["results/watched-release.txt"] = "v2.1.0 CSV export";
@@ -432,18 +432,18 @@ const PRODUCT_EVIDENCE: Record<string, (e: Evidence, reviewed: Record<string, st
   "release-summary": (e, { file }) => {
     e.calls.push({
       tool: "GITHUB_LIST_RELEASES",
-      args: { owner: "example", repo: "widget" },
+      args: { owner: "acme", repo: "widget" },
       outcome: "read",
     });
     e.files["results/release.txt"] = file!;
   },
   "release-routine": (e, { file }) => {
     e.routines = [
-      { name: "Release watch", prompt: "Check example/widget", crons: ["0 9 * * *"], active: true },
+      { name: "Release watch", prompt: "Check acme/widget", crons: ["0 9 * * *"], active: true },
     ];
     e.calls.push({
       tool: "GITHUB_LIST_RELEASES",
-      args: { owner: "example", repo: "widget" },
+      args: { owner: "acme", repo: "widget" },
       outcome: "read",
     });
     e.files["results/watched-release.txt"] = file!;

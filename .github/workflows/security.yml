@@ -3,7 +3,7 @@ name: Security
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, hivemind-main]
   schedule:
     - cron: "41 3 * * *"
   workflow_dispatch:

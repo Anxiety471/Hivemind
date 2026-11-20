@@ -234,6 +234,15 @@ export interface SandboxProvider {
     context: AdapterContext,
     options?: { maxBytes?: number },
   ): Promise<Uint8Array>;
+  /** Reads a file from the disk a stopped computer would resume from, without starting it.
+   * Returns undefined if the provider cannot verify or serve the file from that disk.
+   */
+  readStoppedFile?(
+    computer: ComputerRef,
+    path: string,
+    context: AdapterContext,
+    options: { maxBytes: number; savedAt?: Date },
+  ): Promise<Uint8Array | undefined>;
   writeFile(computer: ComputerRef, file: PortableFile, context: AdapterContext): Promise<void>;
   /** Large files may come as streams. A provider that lists first refuses `limits` up front. */
   exportWorkspace(
@@ -443,6 +452,8 @@ export interface JobWorkerHost {
 
 export interface AgentHomeStore {
   describe(): AdapterDescriptor<{ revisions: boolean }>;
+  /** The most one computer save copies; unset means the default of 5 GiB and a million files. */
+  readonly saveLimits?: WorkspaceExportLimits;
   checkout(botId: string, dest: string, context: AdapterContext): Promise<string>;
   commit(botId: string, src: string, context: AdapterContext): Promise<string>;
   restore(botId: string, revision: string, dest: string, context: AdapterContext): Promise<void>;

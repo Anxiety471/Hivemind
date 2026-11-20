@@ -1,5 +1,6 @@
 // Package groups ports groups.restore (apps/api/src/routes/bots.ts:784 over
-// packages/db/src/groups.ts:599). The rest of the group stays on TypeScript:
+// packages/db/src/groups.ts:599), including the routine resume the route runs after
+// the group and its bots are back. The rest of the group stays on TypeScript:
 // create/update/archive/duplicate/remove run thread teardown, run cancellation and
 // product events, and the reads build previews from decrypted message blocks.
 package groups
@@ -13,6 +14,7 @@ import (
 
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/bots"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/validate"
 )
@@ -46,7 +48,8 @@ type archivedMember struct {
 // each within its computer's owner's quota, all in one transaction, so one bot that does
 // not fit leaves everything archived (restoreGroup, packages/db/src/groups.ts:599). The
 // group row is locked first, and the transaction reruns on a serialization conflict as
-// withTransactionRetry does. The roster signal comes from the effects runner.
+// withTransactionRetry does. After it commits, every member bot's routines the archive
+// turned off resume, as the route does. The roster signal comes from the effects runner.
 func Restore(ctx context.Context, database *db.DB, actor db.Actor, deployment shared.Deployment, raw orpc.Input) (any, *orpc.Error) {
 	groupID, failure := parseGroupID(raw)
 	if failure != nil {
@@ -57,6 +60,15 @@ func Restore(ctx context.Context, database *db.DB, actor db.Actor, deployment sh
 			return restore(ctx, database, tx, actor, deployment, groupID)
 		})
 		if err == nil {
+			// The route reads the group's members after restoreGroup, then resumes the
+			// caller's marked routines on every one of them, live or just restored.
+			botIDs, err := groupMemberBotIDs(ctx, database, actor, groupID)
+			if err != nil {
+				return nil, shared.Failure(err)
+			}
+			if err := bots.ResumeRoutinesAfterRestore(ctx, database, actor, botIDs); err != nil {
+				return nil, shared.Failure(err)
+			}
 			return map[string]any{"ok": true}, nil
 		}
 		if attempt >= maxTransactionTries || !shared.TransactionConflict(err) {
@@ -127,4 +139,28 @@ func restore(ctx context.Context, database *db.DB, tx pgx.Tx, actor db.Actor, de
 		return orpc.Internal()
 	}
 	return nil
+}
+
+// groupMemberBotIDs is the chatGroupMember.findMany between restoreGroup and the
+// resume: every member of the group in the caller's Space, archived or not.
+func groupMemberBotIDs(ctx context.Context, database *db.DB, actor db.Actor, groupID string) ([]string, error) {
+	var botIDs []string
+	err := database.Tenant(ctx, actor, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT m."botId" FROM chat_group_members m
+			JOIN chat_groups g ON g.id = m."groupId"
+			WHERE m."groupId" = $1 AND g."spaceId" = $2`, groupID, actor.SpaceID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var botID string
+			if err := rows.Scan(&botID); err != nil {
+				return err
+			}
+			botIDs = append(botIDs, botID)
+		}
+		return rows.Err()
+	})
+	return botIDs, err
 }

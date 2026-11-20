@@ -102,12 +102,12 @@ disagree on is logged as `model.retry_rules.mismatch`.
 Every failed model call the runtime decides on is logged, with or without the variable. None of
 these events include the provider's error text:
 
-| Event | Logged by | Fields |
-|---|---|---|
-| `model.retry.decided` | API and worker | `retry.source` (`gateway`, `local`, or `local_fallback` when the gateway didn't answer), `retry.rule` (`transient`, `exhausted`, `credential`, `content_filter`, `request_limit`, `unrecognized`, `permanent`), `retry.switch_to_backup`, `retry.same_model`, `retry.unrecognized`, `error.kind`, `error.status`, `retry.rules_ms` |
-| `model.retry.action` | API and worker | `retry.action`: `backup` (with `retry.to_provider` and `retry.to_model`), `retry` (with `retry.attempt` and `retry.delay_ms`), or `surface` (with `retry.reason`: `not_retryable`, `no_backup` or `retry_budget_spent`, and `retry.failures`) |
-| `model.retry.recovered` | API and worker | the model that answered, `retry.failures`, `retry.elapsed_ms` |
-| `model.retry.decided` | Go gateway | `run.id`, `retry.class`, the decision, `error.status` |
+| Event                   | Logged by      | Fields                                                                                                                                                                                                                                                                                                                             |
+| ----------------------- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `model.retry.decided`   | API and worker | `retry.source` (`gateway`, `local`, or `local_fallback` when the gateway didn't answer), `retry.rule` (`transient`, `exhausted`, `credential`, `content_filter`, `request_limit`, `unrecognized`, `permanent`), `retry.switch_to_backup`, `retry.same_model`, `retry.unrecognized`, `error.kind`, `error.status`, `retry.rules_ms` |
+| `model.retry.action`    | API and worker | `retry.action`: `backup` (with `retry.to_provider` and `retry.to_model`), `retry` (with `retry.attempt` and `retry.delay_ms`), or `surface` (with `retry.reason`: `not_retryable`, `no_backup` or `retry_budget_spent`, and `retry.failures`)                                                                                      |
+| `model.retry.recovered` | API and worker | the model that answered, `retry.failures`, `retry.elapsed_ms`                                                                                                                                                                                                                                                                      |
+| `model.retry.decided`   | Go gateway     | `run.id`, `retry.class`, the decision, `error.status`                                                                                                                                                                                                                                                                              |
 
 Every event carries `runId` (`run.id` on the gateway), `provider` and `model`.
 

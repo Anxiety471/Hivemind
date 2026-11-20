@@ -1,2350 +1,2350 @@
 [
-{
-"id": "a\u0000b",
-"href": "https://bots.bocchi.trade/join/a%00b"
-},
-{
-"id": "\u0000",
-"href": "https://bots.bocchi.trade/join/"
-},
-{
-"id": "\u0000a",
-"href": "https://bots.bocchi.trade/join/%00a"
-},
-{
-"id": "a\u0000",
-"href": "https://bots.bocchi.trade/join/a"
-},
-{
-"id": "a\u0001b",
-"href": "https://bots.bocchi.trade/join/a%01b"
-},
-{
-"id": "\u0001",
-"href": "https://bots.bocchi.trade/join/"
-},
-{
-"id": "\u0001a",
-"href": "https://bots.bocchi.trade/join/%01a"
-},
-{
-"id": "a\u0001",
-"href": "https://bots.bocchi.trade/join/a"
-},
-{
-"id": "a\u0002b",
-"href": "https://bots.bocchi.trade/join/a%02b"
-},
-{
-"id": "\u0002",
-"href": "https://bots.bocchi.trade/join/"
-},
-{
-"id": "\u0002a",
-"href": "https://bots.bocchi.trade/join/%02a"
-},
-{
-"id": "a\u0002",
-"href": "https://bots.bocchi.trade/join/a"
-},
-{
-"id": "a\u0003b",
-"href": "https://bots.bocchi.trade/join/a%03b"
-},
-{
-"id": "\u0003",
-"href": "https://bots.bocchi.trade/join/"
-},
-{
-"id": "\u0003a",
-"href": "https://bots.bocchi.trade/join/%03a"
-},
-{
-"id": "a\u0003",
-"href": "https://bots.bocchi.trade/join/a"
-},
-{
-"id": "a\u0004b",
-"href": "https://bots.bocchi.trade/join/a%04b"
-},
-{
-"id": "\u0004",
-"href": "https://bots.bocchi.trade/join/"
-},
-{
-"id": "\u0004a",
-"href": "https://bots.bocchi.trade/join/%04a"
-},
-{
-"id": "a\u0004",
-"href": "https://bots.bocchi.trade/join/a"
-},
-{
-"id": "a\u0005b",
-"href": "https://bots.bocchi.trade/join/a%05b"
-},
-{
-"id": "\u0005",
-"href": "https://bots.bocchi.trade/join/"
-},
-{
-"id": "\u0005a",
-"href": "https://bots.bocchi.trade/join/%05a"
-},
-{
-"id": "a\u0005",
-"href": "https://bots.bocchi.trade/join/a"
-},
-{
-"id": "a\u0006b",
-"href": "https://bots.bocchi.trade/join/a%06b"
-},
-{
-"id": "\u0006",
-"href": "https://bots.bocchi.trade/join/"
-},
-{
-"id": "\u0006a",
-"href": "https://bots.bocchi.trade/join/%06a"
-},
-{
-"id": "a\u0006",
-"href": "https://bots.bocchi.trade/join/a"
-},
-{
-"id": "a\u0007b",
-"href": "https://bots.bocchi.trade/join/a%07b"
-},
-{
-"id": "\u0007",
-"href": "https://bots.bocchi.trade/join/"
-},
-{
-"id": "\u0007a",
-"href": "https://bots.bocchi.trade/join/%07a"
-},
-{
-"id": "a\u0007",
-"href": "https://bots.bocchi.trade/join/a"
-},
-{
-"id": "a\bb",
-"href": "https://bots.bocchi.trade/join/a%08b"
-},
-{
-"id": "\b",
-"href": "https://bots.bocchi.trade/join/"
-},
-{
-"id": "\ba",
-"href": "https://bots.bocchi.trade/join/%08a"
-},
-{
-"id": "a\b",
-"href": "https://bots.bocchi.trade/join/a"
-},
-{
-"id": "a\tb",
-"href": "https://bots.bocchi.trade/join/ab"
-},
-{
-"id": "\t",
-"href": "https://bots.bocchi.trade/join/"
-},
-{
-"id": "\ta",
-"href": "https://bots.bocchi.trade/join/a"
-},
-{
-"id": "a\t",
-"href": "https://bots.bocchi.trade/join/a"
-},
-{
-"id": "a\nb",
-"href": "https://bots.bocchi.trade/join/ab"
-},
-{
-"id": "\n",
-"href": "https://bots.bocchi.trade/join/"
-},
-{
-"id": "\na",
-"href": "https://bots.bocchi.trade/join/a"
-},
-{
-"id": "a\n",
-"href": "https://bots.bocchi.trade/join/a"
-},
-{
-"id": "a\u000bb",
-"href": "https://bots.bocchi.trade/join/a%0Bb"
-},
-{
-"id": "\u000b",
-"href": "https://bots.bocchi.trade/join/"
-},
-{
-"id": "\u000ba",
-"href": "https://bots.bocchi.trade/join/%0Ba"
-},
-{
-"id": "a\u000b",
-"href": "https://bots.bocchi.trade/join/a"
-},
-{
-"id": "a\fb",
-"href": "https://bots.bocchi.trade/join/a%0Cb"
-},
-{
-"id": "\f",
-"href": "https://bots.bocchi.trade/join/"
-},
-{
-"id": "\fa",
-"href": "https://bots.bocchi.trade/join/%0Ca"
-},
-{
-"id": "a\f",
-"href": "https://bots.bocchi.trade/join/a"
-},
-{
-"id": "a\rb",
-"href": "https://bots.bocchi.trade/join/ab"
-},
-{
-"id": "\r",
-"href": "https://bots.bocchi.trade/join/"
-},
-{
-"id": "\ra",
-"href": "https://bots.bocchi.trade/join/a"
-},
-{
-"id": "a\r",
-"href": "https://bots.bocchi.trade/join/a"
-},
-{
-"id": "a\u000eb",
-"href": "https://bots.bocchi.trade/join/a%0Eb"
-},
-{
-"id": "\u000e",
-"href": "https://bots.bocchi.trade/join/"
-},
-{
-"id": "\u000ea",
-"href": "https://bots.bocchi.trade/join/%0Ea"
-},
-{
-"id": "a\u000e",
-"href": "https://bots.bocchi.trade/join/a"
-},
-{
-"id": "a\u000fb",
-"href": "https://bots.bocchi.trade/join/a%0Fb"
-},
-{
-"id": "\u000f",
-"href": "https://bots.bocchi.trade/join/"
-},
-{
-"id": "\u000fa",
-"href": "https://bots.bocchi.trade/join/%0Fa"
-},
-{
-"id": "a\u000f",
-"href": "https://bots.bocchi.trade/join/a"
-},
-{
-"id": "a\u0010b",
-"href": "https://bots.bocchi.trade/join/a%10b"
-},
-{
-"id": "\u0010",
-"href": "https://bots.bocchi.trade/join/"
-},
-{
-"id": "\u0010a",
-"href": "https://bots.bocchi.trade/join/%10a"
-},
-{
-"id": "a\u0010",
-"href": "https://bots.bocchi.trade/join/a"
-},
-{
-"id": "a\u0011b",
-"href": "https://bots.bocchi.trade/join/a%11b"
-},
-{
-"id": "\u0011",
-"href": "https://bots.bocchi.trade/join/"
-},
-{
-"id": "\u0011a",
-"href": "https://bots.bocchi.trade/join/%11a"
-},
-{
-"id": "a\u0011",
-"href": "https://bots.bocchi.trade/join/a"
-},
-{
-"id": "a\u0012b",
-"href": "https://bots.bocchi.trade/join/a%12b"
-},
-{
-"id": "\u0012",
-"href": "https://bots.bocchi.trade/join/"
-},
-{
-"id": "\u0012a",
-"href": "https://bots.bocchi.trade/join/%12a"
-},
-{
-"id": "a\u0012",
-"href": "https://bots.bocchi.trade/join/a"
-},
-{
-"id": "a\u0013b",
-"href": "https://bots.bocchi.trade/join/a%13b"
-},
-{
-"id": "\u0013",
-"href": "https://bots.bocchi.trade/join/"
-},
-{
-"id": "\u0013a",
-"href": "https://bots.bocchi.trade/join/%13a"
-},
-{
-"id": "a\u0013",
-"href": "https://bots.bocchi.trade/join/a"
-},
-{
-"id": "a\u0014b",
-"href": "https://bots.bocchi.trade/join/a%14b"
-},
-{
-"id": "\u0014",
-"href": "https://bots.bocchi.trade/join/"
-},
-{
-"id": "\u0014a",
-"href": "https://bots.bocchi.trade/join/%14a"
-},
-{
-"id": "a\u0014",
-"href": "https://bots.bocchi.trade/join/a"
-},
-{
-"id": "a\u0015b",
-"href": "https://bots.bocchi.trade/join/a%15b"
-},
-{
-"id": "\u0015",
-"href": "https://bots.bocchi.trade/join/"
-},
-{
-"id": "\u0015a",
-"href": "https://bots.bocchi.trade/join/%15a"
-},
-{
-"id": "a\u0015",
-"href": "https://bots.bocchi.trade/join/a"
-},
-{
-"id": "a\u0016b",
-"href": "https://bots.bocchi.trade/join/a%16b"
-},
-{
-"id": "\u0016",
-"href": "https://bots.bocchi.trade/join/"
-},
-{
-"id": "\u0016a",
-"href": "https://bots.bocchi.trade/join/%16a"
-},
-{
-"id": "a\u0016",
-"href": "https://bots.bocchi.trade/join/a"
-},
-{
-"id": "a\u0017b",
-"href": "https://bots.bocchi.trade/join/a%17b"
-},
-{
-"id": "\u0017",
-"href": "https://bots.bocchi.trade/join/"
-},
-{
-"id": "\u0017a",
-"href": "https://bots.bocchi.trade/join/%17a"
-},
-{
-"id": "a\u0017",
-"href": "https://bots.bocchi.trade/join/a"
-},
-{
-"id": "a\u0018b",
-"href": "https://bots.bocchi.trade/join/a%18b"
-},
-{
-"id": "\u0018",
-"href": "https://bots.bocchi.trade/join/"
-},
-{
-"id": "\u0018a",
-"href": "https://bots.bocchi.trade/join/%18a"
-},
-{
-"id": "a\u0018",
-"href": "https://bots.bocchi.trade/join/a"
-},
-{
-"id": "a\u0019b",
-"href": "https://bots.bocchi.trade/join/a%19b"
-},
-{
-"id": "\u0019",
-"href": "https://bots.bocchi.trade/join/"
-},
-{
-"id": "\u0019a",
-"href": "https://bots.bocchi.trade/join/%19a"
-},
-{
-"id": "a\u0019",
-"href": "https://bots.bocchi.trade/join/a"
-},
-{
-"id": "a\u001ab",
-"href": "https://bots.bocchi.trade/join/a%1Ab"
-},
-{
-"id": "\u001a",
-"href": "https://bots.bocchi.trade/join/"
-},
-{
-"id": "\u001aa",
-"href": "https://bots.bocchi.trade/join/%1Aa"
-},
-{
-"id": "a\u001a",
-"href": "https://bots.bocchi.trade/join/a"
-},
-{
-"id": "a\u001bb",
-"href": "https://bots.bocchi.trade/join/a%1Bb"
-},
-{
-"id": "\u001b",
-"href": "https://bots.bocchi.trade/join/"
-},
-{
-"id": "\u001ba",
-"href": "https://bots.bocchi.trade/join/%1Ba"
-},
-{
-"id": "a\u001b",
-"href": "https://bots.bocchi.trade/join/a"
-},
-{
-"id": "a\u001cb",
-"href": "https://bots.bocchi.trade/join/a%1Cb"
-},
-{
-"id": "\u001c",
-"href": "https://bots.bocchi.trade/join/"
-},
-{
-"id": "\u001ca",
-"href": "https://bots.bocchi.trade/join/%1Ca"
-},
-{
-"id": "a\u001c",
-"href": "https://bots.bocchi.trade/join/a"
-},
-{
-"id": "a\u001db",
-"href": "https://bots.bocchi.trade/join/a%1Db"
-},
-{
-"id": "\u001d",
-"href": "https://bots.bocchi.trade/join/"
-},
-{
-"id": "\u001da",
-"href": "https://bots.bocchi.trade/join/%1Da"
-},
-{
-"id": "a\u001d",
-"href": "https://bots.bocchi.trade/join/a"
-},
-{
-"id": "a\u001eb",
-"href": "https://bots.bocchi.trade/join/a%1Eb"
-},
-{
-"id": "\u001e",
-"href": "https://bots.bocchi.trade/join/"
-},
-{
-"id": "\u001ea",
-"href": "https://bots.bocchi.trade/join/%1Ea"
-},
-{
-"id": "a\u001e",
-"href": "https://bots.bocchi.trade/join/a"
-},
-{
-"id": "a\u001fb",
-"href": "https://bots.bocchi.trade/join/a%1Fb"
-},
-{
-"id": "\u001f",
-"href": "https://bots.bocchi.trade/join/"
-},
-{
-"id": "\u001fa",
-"href": "https://bots.bocchi.trade/join/%1Fa"
-},
-{
-"id": "a\u001f",
-"href": "https://bots.bocchi.trade/join/a"
-},
-{
-"id": "a b",
-"href": "https://bots.bocchi.trade/join/a%20b"
-},
-{
-"id": " ",
-"href": "https://bots.bocchi.trade/join/"
-},
-{
-"id": " a",
-"href": "https://bots.bocchi.trade/join/%20a"
-},
-{
-"id": "a ",
-"href": "https://bots.bocchi.trade/join/a"
-},
-{
-"id": "a!b",
-"href": "https://bots.bocchi.trade/join/a!b"
-},
-{
-"id": "!",
-"href": "https://bots.bocchi.trade/join/!"
-},
-{
-"id": "!a",
-"href": "https://bots.bocchi.trade/join/!a"
-},
-{
-"id": "a!",
-"href": "https://bots.bocchi.trade/join/a!"
-},
-{
-"id": "a\"b",
-"href": "https://bots.bocchi.trade/join/a%22b"
-},
-{
-"id": "\"",
-"href": "https://bots.bocchi.trade/join/%22"
-},
-{
-"id": "\"a",
-"href": "https://bots.bocchi.trade/join/%22a"
-},
-{
-"id": "a\"",
-"href": "https://bots.bocchi.trade/join/a%22"
-},
-{
-"id": "a#b",
-"href": "https://bots.bocchi.trade/join/a#b"
-},
-{
-"id": "#",
-"href": "https://bots.bocchi.trade/join/#"
-},
-{
-"id": "#a",
-"href": "https://bots.bocchi.trade/join/#a"
-},
-{
-"id": "a#",
-"href": "https://bots.bocchi.trade/join/a#"
-},
-{
-"id": "a$b",
-"href": "https://bots.bocchi.trade/join/a$b"
-},
-{
-"id": "$",
-"href": "https://bots.bocchi.trade/join/$"
-},
-{
-"id": "$a",
-"href": "https://bots.bocchi.trade/join/$a"
-},
-{
-"id": "a$",
-"href": "https://bots.bocchi.trade/join/a$"
-},
-{
-"id": "a%b",
-"href": "https://bots.bocchi.trade/join/a%b"
-},
-{
-"id": "%",
-"href": "https://bots.bocchi.trade/join/%"
-},
-{
-"id": "%a",
-"href": "https://bots.bocchi.trade/join/%a"
-},
-{
-"id": "a%",
-"href": "https://bots.bocchi.trade/join/a%"
-},
-{
-"id": "a&b",
-"href": "https://bots.bocchi.trade/join/a&b"
-},
-{
-"id": "&",
-"href": "https://bots.bocchi.trade/join/&"
-},
-{
-"id": "&a",
-"href": "https://bots.bocchi.trade/join/&a"
-},
-{
-"id": "a&",
-"href": "https://bots.bocchi.trade/join/a&"
-},
-{
-"id": "a'b",
-"href": "https://bots.bocchi.trade/join/a'b"
-},
-{
-"id": "'",
-"href": "https://bots.bocchi.trade/join/'"
-},
-{
-"id": "'a",
-"href": "https://bots.bocchi.trade/join/'a"
-},
-{
-"id": "a'",
-"href": "https://bots.bocchi.trade/join/a'"
-},
-{
-"id": "a(b",
-"href": "https://bots.bocchi.trade/join/a(b"
-},
-{
-"id": "(",
-"href": "https://bots.bocchi.trade/join/("
-},
-{
-"id": "(a",
-"href": "https://bots.bocchi.trade/join/(a"
-},
-{
-"id": "a(",
-"href": "https://bots.bocchi.trade/join/a("
-},
-{
-"id": "a)b",
-"href": "https://bots.bocchi.trade/join/a)b"
-},
-{
-"id": ")",
-"href": "https://bots.bocchi.trade/join/)"
-},
-{
-"id": ")a",
-"href": "https://bots.bocchi.trade/join/)a"
-},
-{
-"id": "a)",
-"href": "https://bots.bocchi.trade/join/a)"
-},
-{
-"id": "a*b",
-"href": "https://bots.bocchi.trade/join/a*b"
-},
-{
-"id": "*",
-"href": "https://bots.bocchi.trade/join/*"
-},
-{
-"id": "*a",
-"href": "https://bots.bocchi.trade/join/*a"
-},
-{
-"id": "a*",
-"href": "https://bots.bocchi.trade/join/a*"
-},
-{
-"id": "a+b",
-"href": "https://bots.bocchi.trade/join/a+b"
-},
-{
-"id": "+",
-"href": "https://bots.bocchi.trade/join/+"
-},
-{
-"id": "+a",
-"href": "https://bots.bocchi.trade/join/+a"
-},
-{
-"id": "a+",
-"href": "https://bots.bocchi.trade/join/a+"
-},
-{
-"id": "a,b",
-"href": "https://bots.bocchi.trade/join/a,b"
-},
-{
-"id": ",",
-"href": "https://bots.bocchi.trade/join/,"
-},
-{
-"id": ",a",
-"href": "https://bots.bocchi.trade/join/,a"
-},
-{
-"id": "a,",
-"href": "https://bots.bocchi.trade/join/a,"
-},
-{
-"id": "a-b",
-"href": "https://bots.bocchi.trade/join/a-b"
-},
-{
-"id": "-",
-"href": "https://bots.bocchi.trade/join/-"
-},
-{
-"id": "-a",
-"href": "https://bots.bocchi.trade/join/-a"
-},
-{
-"id": "a-",
-"href": "https://bots.bocchi.trade/join/a-"
-},
-{
-"id": "a.b",
-"href": "https://bots.bocchi.trade/join/a.b"
-},
-{
-"id": ".",
-"href": "https://bots.bocchi.trade/join/"
-},
-{
-"id": ".a",
-"href": "https://bots.bocchi.trade/join/.a"
-},
-{
-"id": "a.",
-"href": "https://bots.bocchi.trade/join/a."
-},
-{
-"id": "a/b",
-"href": "https://bots.bocchi.trade/join/a/b"
-},
-{
-"id": "/",
-"href": "https://bots.bocchi.trade/join//"
-},
-{
-"id": "/a",
-"href": "https://bots.bocchi.trade/join//a"
-},
-{
-"id": "a/",
-"href": "https://bots.bocchi.trade/join/a/"
-},
-{
-"id": "a0b",
-"href": "https://bots.bocchi.trade/join/a0b"
-},
-{
-"id": "0",
-"href": "https://bots.bocchi.trade/join/0"
-},
-{
-"id": "0a",
-"href": "https://bots.bocchi.trade/join/0a"
-},
-{
-"id": "a0",
-"href": "https://bots.bocchi.trade/join/a0"
-},
-{
-"id": "a1b",
-"href": "https://bots.bocchi.trade/join/a1b"
-},
-{
-"id": "1",
-"href": "https://bots.bocchi.trade/join/1"
-},
-{
-"id": "1a",
-"href": "https://bots.bocchi.trade/join/1a"
-},
-{
-"id": "a1",
-"href": "https://bots.bocchi.trade/join/a1"
-},
-{
-"id": "a2b",
-"href": "https://bots.bocchi.trade/join/a2b"
-},
-{
-"id": "2",
-"href": "https://bots.bocchi.trade/join/2"
-},
-{
-"id": "2a",
-"href": "https://bots.bocchi.trade/join/2a"
-},
-{
-"id": "a2",
-"href": "https://bots.bocchi.trade/join/a2"
-},
-{
-"id": "a3b",
-"href": "https://bots.bocchi.trade/join/a3b"
-},
-{
-"id": "3",
-"href": "https://bots.bocchi.trade/join/3"
-},
-{
-"id": "3a",
-"href": "https://bots.bocchi.trade/join/3a"
-},
-{
-"id": "a3",
-"href": "https://bots.bocchi.trade/join/a3"
-},
-{
-"id": "a4b",
-"href": "https://bots.bocchi.trade/join/a4b"
-},
-{
-"id": "4",
-"href": "https://bots.bocchi.trade/join/4"
-},
-{
-"id": "4a",
-"href": "https://bots.bocchi.trade/join/4a"
-},
-{
-"id": "a4",
-"href": "https://bots.bocchi.trade/join/a4"
-},
-{
-"id": "a5b",
-"href": "https://bots.bocchi.trade/join/a5b"
-},
-{
-"id": "5",
-"href": "https://bots.bocchi.trade/join/5"
-},
-{
-"id": "5a",
-"href": "https://bots.bocchi.trade/join/5a"
-},
-{
-"id": "a5",
-"href": "https://bots.bocchi.trade/join/a5"
-},
-{
-"id": "a6b",
-"href": "https://bots.bocchi.trade/join/a6b"
-},
-{
-"id": "6",
-"href": "https://bots.bocchi.trade/join/6"
-},
-{
-"id": "6a",
-"href": "https://bots.bocchi.trade/join/6a"
-},
-{
-"id": "a6",
-"href": "https://bots.bocchi.trade/join/a6"
-},
-{
-"id": "a7b",
-"href": "https://bots.bocchi.trade/join/a7b"
-},
-{
-"id": "7",
-"href": "https://bots.bocchi.trade/join/7"
-},
-{
-"id": "7a",
-"href": "https://bots.bocchi.trade/join/7a"
-},
-{
-"id": "a7",
-"href": "https://bots.bocchi.trade/join/a7"
-},
-{
-"id": "a8b",
-"href": "https://bots.bocchi.trade/join/a8b"
-},
-{
-"id": "8",
-"href": "https://bots.bocchi.trade/join/8"
-},
-{
-"id": "8a",
-"href": "https://bots.bocchi.trade/join/8a"
-},
-{
-"id": "a8",
-"href": "https://bots.bocchi.trade/join/a8"
-},
-{
-"id": "a9b",
-"href": "https://bots.bocchi.trade/join/a9b"
-},
-{
-"id": "9",
-"href": "https://bots.bocchi.trade/join/9"
-},
-{
-"id": "9a",
-"href": "https://bots.bocchi.trade/join/9a"
-},
-{
-"id": "a9",
-"href": "https://bots.bocchi.trade/join/a9"
-},
-{
-"id": "a:b",
-"href": "https://bots.bocchi.trade/join/a:b"
-},
-{
-"id": ":",
-"href": "https://bots.bocchi.trade/join/:"
-},
-{
-"id": ":a",
-"href": "https://bots.bocchi.trade/join/:a"
-},
-{
-"id": "a:",
-"href": "https://bots.bocchi.trade/join/a:"
-},
-{
-"id": "a;b",
-"href": "https://bots.bocchi.trade/join/a;b"
-},
-{
-"id": ";",
-"href": "https://bots.bocchi.trade/join/;"
-},
-{
-"id": ";a",
-"href": "https://bots.bocchi.trade/join/;a"
-},
-{
-"id": "a;",
-"href": "https://bots.bocchi.trade/join/a;"
-},
-{
-"id": "a<b",
-"href": "https://bots.bocchi.trade/join/a%3Cb"
-},
-{
-"id": "<",
-"href": "https://bots.bocchi.trade/join/%3C"
-},
-{
-"id": "<a",
-"href": "https://bots.bocchi.trade/join/%3Ca"
-},
-{
-"id": "a<",
-"href": "https://bots.bocchi.trade/join/a%3C"
-},
-{
-"id": "a=b",
-"href": "https://bots.bocchi.trade/join/a=b"
-},
-{
-"id": "=",
-"href": "https://bots.bocchi.trade/join/="
-},
-{
-"id": "=a",
-"href": "https://bots.bocchi.trade/join/=a"
-},
-{
-"id": "a=",
-"href": "https://bots.bocchi.trade/join/a="
-},
-{
-"id": "a>b",
-"href": "https://bots.bocchi.trade/join/a%3Eb"
-},
-{
-"id": ">",
-"href": "https://bots.bocchi.trade/join/%3E"
-},
-{
-"id": ">a",
-"href": "https://bots.bocchi.trade/join/%3Ea"
-},
-{
-"id": "a>",
-"href": "https://bots.bocchi.trade/join/a%3E"
-},
-{
-"id": "a?b",
-"href": "https://bots.bocchi.trade/join/a?b"
-},
-{
-"id": "?",
-"href": "https://bots.bocchi.trade/join/?"
-},
-{
-"id": "?a",
-"href": "https://bots.bocchi.trade/join/?a"
-},
-{
-"id": "a?",
-"href": "https://bots.bocchi.trade/join/a?"
-},
-{
-"id": "a@b",
-"href": "https://bots.bocchi.trade/join/a@b"
-},
-{
-"id": "@",
-"href": "https://bots.bocchi.trade/join/@"
-},
-{
-"id": "@a",
-"href": "https://bots.bocchi.trade/join/@a"
-},
-{
-"id": "a@",
-"href": "https://bots.bocchi.trade/join/a@"
-},
-{
-"id": "aAb",
-"href": "https://bots.bocchi.trade/join/aAb"
-},
-{
-"id": "A",
-"href": "https://bots.bocchi.trade/join/A"
-},
-{
-"id": "Aa",
-"href": "https://bots.bocchi.trade/join/Aa"
-},
-{
-"id": "aA",
-"href": "https://bots.bocchi.trade/join/aA"
-},
-{
-"id": "aBb",
-"href": "https://bots.bocchi.trade/join/aBb"
-},
-{
-"id": "B",
-"href": "https://bots.bocchi.trade/join/B"
-},
-{
-"id": "Ba",
-"href": "https://bots.bocchi.trade/join/Ba"
-},
-{
-"id": "aB",
-"href": "https://bots.bocchi.trade/join/aB"
-},
-{
-"id": "aCb",
-"href": "https://bots.bocchi.trade/join/aCb"
-},
-{
-"id": "C",
-"href": "https://bots.bocchi.trade/join/C"
-},
-{
-"id": "Ca",
-"href": "https://bots.bocchi.trade/join/Ca"
-},
-{
-"id": "aC",
-"href": "https://bots.bocchi.trade/join/aC"
-},
-{
-"id": "aDb",
-"href": "https://bots.bocchi.trade/join/aDb"
-},
-{
-"id": "D",
-"href": "https://bots.bocchi.trade/join/D"
-},
-{
-"id": "Da",
-"href": "https://bots.bocchi.trade/join/Da"
-},
-{
-"id": "aD",
-"href": "https://bots.bocchi.trade/join/aD"
-},
-{
-"id": "aEb",
-"href": "https://bots.bocchi.trade/join/aEb"
-},
-{
-"id": "E",
-"href": "https://bots.bocchi.trade/join/E"
-},
-{
-"id": "Ea",
-"href": "https://bots.bocchi.trade/join/Ea"
-},
-{
-"id": "aE",
-"href": "https://bots.bocchi.trade/join/aE"
-},
-{
-"id": "aFb",
-"href": "https://bots.bocchi.trade/join/aFb"
-},
-{
-"id": "F",
-"href": "https://bots.bocchi.trade/join/F"
-},
-{
-"id": "Fa",
-"href": "https://bots.bocchi.trade/join/Fa"
-},
-{
-"id": "aF",
-"href": "https://bots.bocchi.trade/join/aF"
-},
-{
-"id": "aGb",
-"href": "https://bots.bocchi.trade/join/aGb"
-},
-{
-"id": "G",
-"href": "https://bots.bocchi.trade/join/G"
-},
-{
-"id": "Ga",
-"href": "https://bots.bocchi.trade/join/Ga"
-},
-{
-"id": "aG",
-"href": "https://bots.bocchi.trade/join/aG"
-},
-{
-"id": "aHb",
-"href": "https://bots.bocchi.trade/join/aHb"
-},
-{
-"id": "H",
-"href": "https://bots.bocchi.trade/join/H"
-},
-{
-"id": "Ha",
-"href": "https://bots.bocchi.trade/join/Ha"
-},
-{
-"id": "aH",
-"href": "https://bots.bocchi.trade/join/aH"
-},
-{
-"id": "aIb",
-"href": "https://bots.bocchi.trade/join/aIb"
-},
-{
-"id": "I",
-"href": "https://bots.bocchi.trade/join/I"
-},
-{
-"id": "Ia",
-"href": "https://bots.bocchi.trade/join/Ia"
-},
-{
-"id": "aI",
-"href": "https://bots.bocchi.trade/join/aI"
-},
-{
-"id": "aJb",
-"href": "https://bots.bocchi.trade/join/aJb"
-},
-{
-"id": "J",
-"href": "https://bots.bocchi.trade/join/J"
-},
-{
-"id": "Ja",
-"href": "https://bots.bocchi.trade/join/Ja"
-},
-{
-"id": "aJ",
-"href": "https://bots.bocchi.trade/join/aJ"
-},
-{
-"id": "aKb",
-"href": "https://bots.bocchi.trade/join/aKb"
-},
-{
-"id": "K",
-"href": "https://bots.bocchi.trade/join/K"
-},
-{
-"id": "Ka",
-"href": "https://bots.bocchi.trade/join/Ka"
-},
-{
-"id": "aK",
-"href": "https://bots.bocchi.trade/join/aK"
-},
-{
-"id": "aLb",
-"href": "https://bots.bocchi.trade/join/aLb"
-},
-{
-"id": "L",
-"href": "https://bots.bocchi.trade/join/L"
-},
-{
-"id": "La",
-"href": "https://bots.bocchi.trade/join/La"
-},
-{
-"id": "aL",
-"href": "https://bots.bocchi.trade/join/aL"
-},
-{
-"id": "aMb",
-"href": "https://bots.bocchi.trade/join/aMb"
-},
-{
-"id": "M",
-"href": "https://bots.bocchi.trade/join/M"
-},
-{
-"id": "Ma",
-"href": "https://bots.bocchi.trade/join/Ma"
-},
-{
-"id": "aM",
-"href": "https://bots.bocchi.trade/join/aM"
-},
-{
-"id": "aNb",
-"href": "https://bots.bocchi.trade/join/aNb"
-},
-{
-"id": "N",
-"href": "https://bots.bocchi.trade/join/N"
-},
-{
-"id": "Na",
-"href": "https://bots.bocchi.trade/join/Na"
-},
-{
-"id": "aN",
-"href": "https://bots.bocchi.trade/join/aN"
-},
-{
-"id": "aOb",
-"href": "https://bots.bocchi.trade/join/aOb"
-},
-{
-"id": "O",
-"href": "https://bots.bocchi.trade/join/O"
-},
-{
-"id": "Oa",
-"href": "https://bots.bocchi.trade/join/Oa"
-},
-{
-"id": "aO",
-"href": "https://bots.bocchi.trade/join/aO"
-},
-{
-"id": "aPb",
-"href": "https://bots.bocchi.trade/join/aPb"
-},
-{
-"id": "P",
-"href": "https://bots.bocchi.trade/join/P"
-},
-{
-"id": "Pa",
-"href": "https://bots.bocchi.trade/join/Pa"
-},
-{
-"id": "aP",
-"href": "https://bots.bocchi.trade/join/aP"
-},
-{
-"id": "aQb",
-"href": "https://bots.bocchi.trade/join/aQb"
-},
-{
-"id": "Q",
-"href": "https://bots.bocchi.trade/join/Q"
-},
-{
-"id": "Qa",
-"href": "https://bots.bocchi.trade/join/Qa"
-},
-{
-"id": "aQ",
-"href": "https://bots.bocchi.trade/join/aQ"
-},
-{
-"id": "aRb",
-"href": "https://bots.bocchi.trade/join/aRb"
-},
-{
-"id": "R",
-"href": "https://bots.bocchi.trade/join/R"
-},
-{
-"id": "Ra",
-"href": "https://bots.bocchi.trade/join/Ra"
-},
-{
-"id": "aR",
-"href": "https://bots.bocchi.trade/join/aR"
-},
-{
-"id": "aSb",
-"href": "https://bots.bocchi.trade/join/aSb"
-},
-{
-"id": "S",
-"href": "https://bots.bocchi.trade/join/S"
-},
-{
-"id": "Sa",
-"href": "https://bots.bocchi.trade/join/Sa"
-},
-{
-"id": "aS",
-"href": "https://bots.bocchi.trade/join/aS"
-},
-{
-"id": "aTb",
-"href": "https://bots.bocchi.trade/join/aTb"
-},
-{
-"id": "T",
-"href": "https://bots.bocchi.trade/join/T"
-},
-{
-"id": "Ta",
-"href": "https://bots.bocchi.trade/join/Ta"
-},
-{
-"id": "aT",
-"href": "https://bots.bocchi.trade/join/aT"
-},
-{
-"id": "aUb",
-"href": "https://bots.bocchi.trade/join/aUb"
-},
-{
-"id": "U",
-"href": "https://bots.bocchi.trade/join/U"
-},
-{
-"id": "Ua",
-"href": "https://bots.bocchi.trade/join/Ua"
-},
-{
-"id": "aU",
-"href": "https://bots.bocchi.trade/join/aU"
-},
-{
-"id": "aVb",
-"href": "https://bots.bocchi.trade/join/aVb"
-},
-{
-"id": "V",
-"href": "https://bots.bocchi.trade/join/V"
-},
-{
-"id": "Va",
-"href": "https://bots.bocchi.trade/join/Va"
-},
-{
-"id": "aV",
-"href": "https://bots.bocchi.trade/join/aV"
-},
-{
-"id": "aWb",
-"href": "https://bots.bocchi.trade/join/aWb"
-},
-{
-"id": "W",
-"href": "https://bots.bocchi.trade/join/W"
-},
-{
-"id": "Wa",
-"href": "https://bots.bocchi.trade/join/Wa"
-},
-{
-"id": "aW",
-"href": "https://bots.bocchi.trade/join/aW"
-},
-{
-"id": "aXb",
-"href": "https://bots.bocchi.trade/join/aXb"
-},
-{
-"id": "X",
-"href": "https://bots.bocchi.trade/join/X"
-},
-{
-"id": "Xa",
-"href": "https://bots.bocchi.trade/join/Xa"
-},
-{
-"id": "aX",
-"href": "https://bots.bocchi.trade/join/aX"
-},
-{
-"id": "aYb",
-"href": "https://bots.bocchi.trade/join/aYb"
-},
-{
-"id": "Y",
-"href": "https://bots.bocchi.trade/join/Y"
-},
-{
-"id": "Ya",
-"href": "https://bots.bocchi.trade/join/Ya"
-},
-{
-"id": "aY",
-"href": "https://bots.bocchi.trade/join/aY"
-},
-{
-"id": "aZb",
-"href": "https://bots.bocchi.trade/join/aZb"
-},
-{
-"id": "Z",
-"href": "https://bots.bocchi.trade/join/Z"
-},
-{
-"id": "Za",
-"href": "https://bots.bocchi.trade/join/Za"
-},
-{
-"id": "aZ",
-"href": "https://bots.bocchi.trade/join/aZ"
-},
-{
-"id": "a[b",
-"href": "https://bots.bocchi.trade/join/a[b"
-},
-{
-"id": "[",
-"href": "https://bots.bocchi.trade/join/["
-},
-{
-"id": "[a",
-"href": "https://bots.bocchi.trade/join/[a"
-},
-{
-"id": "a[",
-"href": "https://bots.bocchi.trade/join/a["
-},
-{
-"id": "a\\b",
-"href": "https://bots.bocchi.trade/join/a/b"
-},
-{
-"id": "\\",
-"href": "https://bots.bocchi.trade/join//"
-},
-{
-"id": "\\a",
-"href": "https://bots.bocchi.trade/join//a"
-},
-{
-"id": "a\\",
-"href": "https://bots.bocchi.trade/join/a/"
-},
-{
-"id": "a]b",
-"href": "https://bots.bocchi.trade/join/a]b"
-},
-{
-"id": "]",
-"href": "https://bots.bocchi.trade/join/]"
-},
-{
-"id": "]a",
-"href": "https://bots.bocchi.trade/join/]a"
-},
-{
-"id": "a]",
-"href": "https://bots.bocchi.trade/join/a]"
-},
-{
-"id": "a^b",
-"href": "https://bots.bocchi.trade/join/a%5Eb"
-},
-{
-"id": "^",
-"href": "https://bots.bocchi.trade/join/%5E"
-},
-{
-"id": "^a",
-"href": "https://bots.bocchi.trade/join/%5Ea"
-},
-{
-"id": "a^",
-"href": "https://bots.bocchi.trade/join/a%5E"
-},
-{
-"id": "a_b",
-"href": "https://bots.bocchi.trade/join/a_b"
-},
-{
-"id": "_",
-"href": "https://bots.bocchi.trade/join/_"
-},
-{
-"id": "_a",
-"href": "https://bots.bocchi.trade/join/_a"
-},
-{
-"id": "a_",
-"href": "https://bots.bocchi.trade/join/a_"
-},
-{
-"id": "a`b",
-"href": "https://bots.bocchi.trade/join/a%60b"
-},
-{
-"id": "`",
-"href": "https://bots.bocchi.trade/join/%60"
-},
-{
-"id": "`a",
-"href": "https://bots.bocchi.trade/join/%60a"
-},
-{
-"id": "a`",
-"href": "https://bots.bocchi.trade/join/a%60"
-},
-{
-"id": "aab",
-"href": "https://bots.bocchi.trade/join/aab"
-},
-{
-"id": "a",
-"href": "https://bots.bocchi.trade/join/a"
-},
-{
-"id": "aa",
-"href": "https://bots.bocchi.trade/join/aa"
-},
-{
-"id": "aa",
-"href": "https://bots.bocchi.trade/join/aa"
-},
-{
-"id": "abb",
-"href": "https://bots.bocchi.trade/join/abb"
-},
-{
-"id": "b",
-"href": "https://bots.bocchi.trade/join/b"
-},
-{
-"id": "ba",
-"href": "https://bots.bocchi.trade/join/ba"
-},
-{
-"id": "ab",
-"href": "https://bots.bocchi.trade/join/ab"
-},
-{
-"id": "acb",
-"href": "https://bots.bocchi.trade/join/acb"
-},
-{
-"id": "c",
-"href": "https://bots.bocchi.trade/join/c"
-},
-{
-"id": "ca",
-"href": "https://bots.bocchi.trade/join/ca"
-},
-{
-"id": "ac",
-"href": "https://bots.bocchi.trade/join/ac"
-},
-{
-"id": "adb",
-"href": "https://bots.bocchi.trade/join/adb"
-},
-{
-"id": "d",
-"href": "https://bots.bocchi.trade/join/d"
-},
-{
-"id": "da",
-"href": "https://bots.bocchi.trade/join/da"
-},
-{
-"id": "ad",
-"href": "https://bots.bocchi.trade/join/ad"
-},
-{
-"id": "aeb",
-"href": "https://bots.bocchi.trade/join/aeb"
-},
-{
-"id": "e",
-"href": "https://bots.bocchi.trade/join/e"
-},
-{
-"id": "ea",
-"href": "https://bots.bocchi.trade/join/ea"
-},
-{
-"id": "ae",
-"href": "https://bots.bocchi.trade/join/ae"
-},
-{
-"id": "afb",
-"href": "https://bots.bocchi.trade/join/afb"
-},
-{
-"id": "f",
-"href": "https://bots.bocchi.trade/join/f"
-},
-{
-"id": "fa",
-"href": "https://bots.bocchi.trade/join/fa"
-},
-{
-"id": "af",
-"href": "https://bots.bocchi.trade/join/af"
-},
-{
-"id": "agb",
-"href": "https://bots.bocchi.trade/join/agb"
-},
-{
-"id": "g",
-"href": "https://bots.bocchi.trade/join/g"
-},
-{
-"id": "ga",
-"href": "https://bots.bocchi.trade/join/ga"
-},
-{
-"id": "ag",
-"href": "https://bots.bocchi.trade/join/ag"
-},
-{
-"id": "ahb",
-"href": "https://bots.bocchi.trade/join/ahb"
-},
-{
-"id": "h",
-"href": "https://bots.bocchi.trade/join/h"
-},
-{
-"id": "ha",
-"href": "https://bots.bocchi.trade/join/ha"
-},
-{
-"id": "ah",
-"href": "https://bots.bocchi.trade/join/ah"
-},
-{
-"id": "aib",
-"href": "https://bots.bocchi.trade/join/aib"
-},
-{
-"id": "i",
-"href": "https://bots.bocchi.trade/join/i"
-},
-{
-"id": "ia",
-"href": "https://bots.bocchi.trade/join/ia"
-},
-{
-"id": "ai",
-"href": "https://bots.bocchi.trade/join/ai"
-},
-{
-"id": "ajb",
-"href": "https://bots.bocchi.trade/join/ajb"
-},
-{
-"id": "j",
-"href": "https://bots.bocchi.trade/join/j"
-},
-{
-"id": "ja",
-"href": "https://bots.bocchi.trade/join/ja"
-},
-{
-"id": "aj",
-"href": "https://bots.bocchi.trade/join/aj"
-},
-{
-"id": "akb",
-"href": "https://bots.bocchi.trade/join/akb"
-},
-{
-"id": "k",
-"href": "https://bots.bocchi.trade/join/k"
-},
-{
-"id": "ka",
-"href": "https://bots.bocchi.trade/join/ka"
-},
-{
-"id": "ak",
-"href": "https://bots.bocchi.trade/join/ak"
-},
-{
-"id": "alb",
-"href": "https://bots.bocchi.trade/join/alb"
-},
-{
-"id": "l",
-"href": "https://bots.bocchi.trade/join/l"
-},
-{
-"id": "la",
-"href": "https://bots.bocchi.trade/join/la"
-},
-{
-"id": "al",
-"href": "https://bots.bocchi.trade/join/al"
-},
-{
-"id": "amb",
-"href": "https://bots.bocchi.trade/join/amb"
-},
-{
-"id": "m",
-"href": "https://bots.bocchi.trade/join/m"
-},
-{
-"id": "ma",
-"href": "https://bots.bocchi.trade/join/ma"
-},
-{
-"id": "am",
-"href": "https://bots.bocchi.trade/join/am"
-},
-{
-"id": "anb",
-"href": "https://bots.bocchi.trade/join/anb"
-},
-{
-"id": "n",
-"href": "https://bots.bocchi.trade/join/n"
-},
-{
-"id": "na",
-"href": "https://bots.bocchi.trade/join/na"
-},
-{
-"id": "an",
-"href": "https://bots.bocchi.trade/join/an"
-},
-{
-"id": "aob",
-"href": "https://bots.bocchi.trade/join/aob"
-},
-{
-"id": "o",
-"href": "https://bots.bocchi.trade/join/o"
-},
-{
-"id": "oa",
-"href": "https://bots.bocchi.trade/join/oa"
-},
-{
-"id": "ao",
-"href": "https://bots.bocchi.trade/join/ao"
-},
-{
-"id": "apb",
-"href": "https://bots.bocchi.trade/join/apb"
-},
-{
-"id": "p",
-"href": "https://bots.bocchi.trade/join/p"
-},
-{
-"id": "pa",
-"href": "https://bots.bocchi.trade/join/pa"
-},
-{
-"id": "ap",
-"href": "https://bots.bocchi.trade/join/ap"
-},
-{
-"id": "aqb",
-"href": "https://bots.bocchi.trade/join/aqb"
-},
-{
-"id": "q",
-"href": "https://bots.bocchi.trade/join/q"
-},
-{
-"id": "qa",
-"href": "https://bots.bocchi.trade/join/qa"
-},
-{
-"id": "aq",
-"href": "https://bots.bocchi.trade/join/aq"
-},
-{
-"id": "arb",
-"href": "https://bots.bocchi.trade/join/arb"
-},
-{
-"id": "r",
-"href": "https://bots.bocchi.trade/join/r"
-},
-{
-"id": "ra",
-"href": "https://bots.bocchi.trade/join/ra"
-},
-{
-"id": "ar",
-"href": "https://bots.bocchi.trade/join/ar"
-},
-{
-"id": "asb",
-"href": "https://bots.bocchi.trade/join/asb"
-},
-{
-"id": "s",
-"href": "https://bots.bocchi.trade/join/s"
-},
-{
-"id": "sa",
-"href": "https://bots.bocchi.trade/join/sa"
-},
-{
-"id": "as",
-"href": "https://bots.bocchi.trade/join/as"
-},
-{
-"id": "atb",
-"href": "https://bots.bocchi.trade/join/atb"
-},
-{
-"id": "t",
-"href": "https://bots.bocchi.trade/join/t"
-},
-{
-"id": "ta",
-"href": "https://bots.bocchi.trade/join/ta"
-},
-{
-"id": "at",
-"href": "https://bots.bocchi.trade/join/at"
-},
-{
-"id": "aub",
-"href": "https://bots.bocchi.trade/join/aub"
-},
-{
-"id": "u",
-"href": "https://bots.bocchi.trade/join/u"
-},
-{
-"id": "ua",
-"href": "https://bots.bocchi.trade/join/ua"
-},
-{
-"id": "au",
-"href": "https://bots.bocchi.trade/join/au"
-},
-{
-"id": "avb",
-"href": "https://bots.bocchi.trade/join/avb"
-},
-{
-"id": "v",
-"href": "https://bots.bocchi.trade/join/v"
-},
-{
-"id": "va",
-"href": "https://bots.bocchi.trade/join/va"
-},
-{
-"id": "av",
-"href": "https://bots.bocchi.trade/join/av"
-},
-{
-"id": "awb",
-"href": "https://bots.bocchi.trade/join/awb"
-},
-{
-"id": "w",
-"href": "https://bots.bocchi.trade/join/w"
-},
-{
-"id": "wa",
-"href": "https://bots.bocchi.trade/join/wa"
-},
-{
-"id": "aw",
-"href": "https://bots.bocchi.trade/join/aw"
-},
-{
-"id": "axb",
-"href": "https://bots.bocchi.trade/join/axb"
-},
-{
-"id": "x",
-"href": "https://bots.bocchi.trade/join/x"
-},
-{
-"id": "xa",
-"href": "https://bots.bocchi.trade/join/xa"
-},
-{
-"id": "ax",
-"href": "https://bots.bocchi.trade/join/ax"
-},
-{
-"id": "ayb",
-"href": "https://bots.bocchi.trade/join/ayb"
-},
-{
-"id": "y",
-"href": "https://bots.bocchi.trade/join/y"
-},
-{
-"id": "ya",
-"href": "https://bots.bocchi.trade/join/ya"
-},
-{
-"id": "ay",
-"href": "https://bots.bocchi.trade/join/ay"
-},
-{
-"id": "azb",
-"href": "https://bots.bocchi.trade/join/azb"
-},
-{
-"id": "z",
-"href": "https://bots.bocchi.trade/join/z"
-},
-{
-"id": "za",
-"href": "https://bots.bocchi.trade/join/za"
-},
-{
-"id": "az",
-"href": "https://bots.bocchi.trade/join/az"
-},
-{
-"id": "a{b",
-"href": "https://bots.bocchi.trade/join/a%7Bb"
-},
-{
-"id": "{",
-"href": "https://bots.bocchi.trade/join/%7B"
-},
-{
-"id": "{a",
-"href": "https://bots.bocchi.trade/join/%7Ba"
-},
-{
-"id": "a{",
-"href": "https://bots.bocchi.trade/join/a%7B"
-},
-{
-"id": "a|b",
-"href": "https://bots.bocchi.trade/join/a|b"
-},
-{
-"id": "|",
-"href": "https://bots.bocchi.trade/join/|"
-},
-{
-"id": "|a",
-"href": "https://bots.bocchi.trade/join/|a"
-},
-{
-"id": "a|",
-"href": "https://bots.bocchi.trade/join/a|"
-},
-{
-"id": "a}b",
-"href": "https://bots.bocchi.trade/join/a%7Db"
-},
-{
-"id": "}",
-"href": "https://bots.bocchi.trade/join/%7D"
-},
-{
-"id": "}a",
-"href": "https://bots.bocchi.trade/join/%7Da"
-},
-{
-"id": "a}",
-"href": "https://bots.bocchi.trade/join/a%7D"
-},
-{
-"id": "a~b",
-"href": "https://bots.bocchi.trade/join/a~b"
-},
-{
-"id": "~",
-"href": "https://bots.bocchi.trade/join/~"
-},
-{
-"id": "~a",
-"href": "https://bots.bocchi.trade/join/~a"
-},
-{
-"id": "a~",
-"href": "https://bots.bocchi.trade/join/a~"
-},
-{
-"id": "ab",
-"href": "https://bots.bocchi.trade/join/a%7Fb"
-},
-{
-"id": "",
-"href": "https://bots.bocchi.trade/join/%7F"
-},
-{
-"id": "a",
-"href": "https://bots.bocchi.trade/join/%7Fa"
-},
-{
-"id": "a",
-"href": "https://bots.bocchi.trade/join/a%7F"
-},
-{
-"id": "aéb",
-"href": "https://bots.bocchi.trade/join/a%C3%A9b"
-},
-{
-"id": "é",
-"href": "https://bots.bocchi.trade/join/%C3%A9"
-},
-{
-"id": "a😀b",
-"href": "https://bots.bocchi.trade/join/a%F0%9F%98%80b"
-},
-{
-"id": "😀",
-"href": "https://bots.bocchi.trade/join/%F0%9F%98%80"
-},
-{
-"id": "a b",
-"href": "https://bots.bocchi.trade/join/a%C2%A0b"
-},
-{
-"id": " ",
-"href": "https://bots.bocchi.trade/join/%C2%A0"
-},
-{
-"id": "a b",
-"href": "https://bots.bocchi.trade/join/a%E2%80%A8b"
-},
-{
-"id": " ",
-"href": "https://bots.bocchi.trade/join/%E2%80%A8"
-},
-{
-"id": "a�b",
-"href": "https://bots.bocchi.trade/join/a%EF%BF%BDb"
-},
-{
-"id": "�",
-"href": "https://bots.bocchi.trade/join/%EF%BF%BD"
-},
-{
-"id": "a日本b",
-"href": "https://bots.bocchi.trade/join/a%E6%97%A5%E6%9C%ACb"
-},
-{
-"id": "日本",
-"href": "https://bots.bocchi.trade/join/%E6%97%A5%E6%9C%AC"
-},
-{
-"id": "ab",
-"href": "https://bots.bocchi.trade/join/a%C2%85b"
-},
-{
-"id": "",
-"href": "https://bots.bocchi.trade/join/%C2%85"
-},
-{
-"id": "?a'b",
-"href": "https://bots.bocchi.trade/join/?a%27b"
-},
-{
-"id": "?a b",
-"href": "https://bots.bocchi.trade/join/?a%20b"
-},
-{
-"id": "?a\"b",
-"href": "https://bots.bocchi.trade/join/?a%22b"
-},
-{
-"id": "?a<b",
-"href": "https://bots.bocchi.trade/join/?a%3Cb"
-},
-{
-"id": "?a>b",
-"href": "https://bots.bocchi.trade/join/?a%3Eb"
-},
-{
-"id": "?a`b",
-"href": "https://bots.bocchi.trade/join/?a`b"
-},
-{
-"id": "?a{b",
-"href": "https://bots.bocchi.trade/join/?a{b"
-},
-{
-"id": "?a^b",
-"href": "https://bots.bocchi.trade/join/?a^b"
-},
-{
-"id": "?é",
-"href": "https://bots.bocchi.trade/join/?%C3%A9"
-},
-{
-"id": "?\u0001",
-"href": "https://bots.bocchi.trade/join/?"
-},
-{
-"id": "#a`b",
-"href": "https://bots.bocchi.trade/join/#a%60b"
-},
-{
-"id": "#a b",
-"href": "https://bots.bocchi.trade/join/#a%20b"
-},
-{
-"id": "#a\"b",
-"href": "https://bots.bocchi.trade/join/#a%22b"
-},
-{
-"id": "#a<b",
-"href": "https://bots.bocchi.trade/join/#a%3Cb"
-},
-{
-"id": "#a>b",
-"href": "https://bots.bocchi.trade/join/#a%3Eb"
-},
-{
-"id": "#a'b",
-"href": "https://bots.bocchi.trade/join/#a'b"
-},
-{
-"id": "#é",
-"href": "https://bots.bocchi.trade/join/#%C3%A9"
-},
-{
-"id": "#\u0001",
-"href": "https://bots.bocchi.trade/join/#"
-},
-{
-"id": "a?b?c",
-"href": "https://bots.bocchi.trade/join/a?b?c"
-},
-{
-"id": "a#b#c",
-"href": "https://bots.bocchi.trade/join/a#b#c"
-},
-{
-"id": "a?b#c?d",
-"href": "https://bots.bocchi.trade/join/a?b#c?d"
-},
-{
-"id": "x?y\\z",
-"href": "https://bots.bocchi.trade/join/x?y\\z"
-},
-{
-"id": "x#y\\z",
-"href": "https://bots.bocchi.trade/join/x#y\\z"
-},
-{
-"id": "?%",
-"href": "https://bots.bocchi.trade/join/?%"
-},
-{
-"id": "#%",
-"href": "https://bots.bocchi.trade/join/#%"
-},
-{
-"id": ".",
-"href": "https://bots.bocchi.trade/join/"
-},
-{
-"id": "..",
-"href": "https://bots.bocchi.trade/"
-},
-{
-"id": "...",
-"href": "https://bots.bocchi.trade/join/..."
-},
-{
-"id": "%2e",
-"href": "https://bots.bocchi.trade/join/"
-},
-{
-"id": "%2E",
-"href": "https://bots.bocchi.trade/join/"
-},
-{
-"id": "%2e%2e",
-"href": "https://bots.bocchi.trade/"
-},
-{
-"id": ".%2e",
-"href": "https://bots.bocchi.trade/"
-},
-{
-"id": "%2e.",
-"href": "https://bots.bocchi.trade/"
-},
-{
-"id": "a/..",
-"href": "https://bots.bocchi.trade/join/"
-},
-{
-"id": "a/../b",
-"href": "https://bots.bocchi.trade/join/b"
-},
-{
-"id": "a/./b",
-"href": "https://bots.bocchi.trade/join/a/b"
-},
-{
-"id": "a\\b",
-"href": "https://bots.bocchi.trade/join/a/b"
-},
-{
-"id": "a\\..\\b",
-"href": "https://bots.bocchi.trade/join/b"
-},
-{
-"id": "?x",
-"href": "https://bots.bocchi.trade/join/?x"
-},
-{
-"id": "#y",
-"href": "https://bots.bocchi.trade/join/#y"
-},
-{
-"id": "a?b#c",
-"href": "https://bots.bocchi.trade/join/a?b#c"
-},
-{
-"id": "a%",
-"href": "https://bots.bocchi.trade/join/a%"
-},
-{
-"id": "%zz",
-"href": "https://bots.bocchi.trade/join/%zz"
-},
-{
-"id": "%41",
-"href": "https://bots.bocchi.trade/join/%41"
-},
-{
-"id": "a b",
-"href": "https://bots.bocchi.trade/join/a%20b"
-},
-{
-"id": " a",
-"href": "https://bots.bocchi.trade/join/%20a"
-},
-{
-"id": "a ",
-"href": "https://bots.bocchi.trade/join/a"
-},
-{
-"id": "\t",
-"href": "https://bots.bocchi.trade/join/"
-},
-{
-"id": "a\tb",
-"href": "https://bots.bocchi.trade/join/ab"
-},
-{
-"id": "a\nb",
-"href": "https://bots.bocchi.trade/join/ab"
-},
-{
-"id": "x/",
-"href": "https://bots.bocchi.trade/join/x/"
-},
-{
-"id": "/x",
-"href": "https://bots.bocchi.trade/join//x"
-},
-{
-"id": "//x",
-"href": "https://bots.bocchi.trade/join///x"
-},
-{
-"id": "a//b",
-"href": "https://bots.bocchi.trade/join/a//b"
-},
-{
-"id": "..%2f",
-"href": "https://bots.bocchi.trade/join/..%2f"
-},
-{
-"id": "a;b",
-"href": "https://bots.bocchi.trade/join/a;b"
-},
-{
-"id": "a=b",
-"href": "https://bots.bocchi.trade/join/a=b"
-},
-{
-"id": "a@b",
-"href": "https://bots.bocchi.trade/join/a@b"
-},
-{
-"id": "a:b",
-"href": "https://bots.bocchi.trade/join/a:b"
-},
-{
-"id": "uuid-1234-ABCD",
-"href": "https://bots.bocchi.trade/join/uuid-1234-ABCD"
-},
-{
-"id": "123e4567-e89b-12d3-a456-426614174000",
-"href": "https://bots.bocchi.trade/join/123e4567-e89b-12d3-a456-426614174000"
-}
+  {
+    "id": "a\u0000b",
+    "href": "https://bots.bocchi.trade/join/a%00b"
+  },
+  {
+    "id": "\u0000",
+    "href": "https://bots.bocchi.trade/join/"
+  },
+  {
+    "id": "\u0000a",
+    "href": "https://bots.bocchi.trade/join/%00a"
+  },
+  {
+    "id": "a\u0000",
+    "href": "https://bots.bocchi.trade/join/a"
+  },
+  {
+    "id": "a\u0001b",
+    "href": "https://bots.bocchi.trade/join/a%01b"
+  },
+  {
+    "id": "\u0001",
+    "href": "https://bots.bocchi.trade/join/"
+  },
+  {
+    "id": "\u0001a",
+    "href": "https://bots.bocchi.trade/join/%01a"
+  },
+  {
+    "id": "a\u0001",
+    "href": "https://bots.bocchi.trade/join/a"
+  },
+  {
+    "id": "a\u0002b",
+    "href": "https://bots.bocchi.trade/join/a%02b"
+  },
+  {
+    "id": "\u0002",
+    "href": "https://bots.bocchi.trade/join/"
+  },
+  {
+    "id": "\u0002a",
+    "href": "https://bots.bocchi.trade/join/%02a"
+  },
+  {
+    "id": "a\u0002",
+    "href": "https://bots.bocchi.trade/join/a"
+  },
+  {
+    "id": "a\u0003b",
+    "href": "https://bots.bocchi.trade/join/a%03b"
+  },
+  {
+    "id": "\u0003",
+    "href": "https://bots.bocchi.trade/join/"
+  },
+  {
+    "id": "\u0003a",
+    "href": "https://bots.bocchi.trade/join/%03a"
+  },
+  {
+    "id": "a\u0003",
+    "href": "https://bots.bocchi.trade/join/a"
+  },
+  {
+    "id": "a\u0004b",
+    "href": "https://bots.bocchi.trade/join/a%04b"
+  },
+  {
+    "id": "\u0004",
+    "href": "https://bots.bocchi.trade/join/"
+  },
+  {
+    "id": "\u0004a",
+    "href": "https://bots.bocchi.trade/join/%04a"
+  },
+  {
+    "id": "a\u0004",
+    "href": "https://bots.bocchi.trade/join/a"
+  },
+  {
+    "id": "a\u0005b",
+    "href": "https://bots.bocchi.trade/join/a%05b"
+  },
+  {
+    "id": "\u0005",
+    "href": "https://bots.bocchi.trade/join/"
+  },
+  {
+    "id": "\u0005a",
+    "href": "https://bots.bocchi.trade/join/%05a"
+  },
+  {
+    "id": "a\u0005",
+    "href": "https://bots.bocchi.trade/join/a"
+  },
+  {
+    "id": "a\u0006b",
+    "href": "https://bots.bocchi.trade/join/a%06b"
+  },
+  {
+    "id": "\u0006",
+    "href": "https://bots.bocchi.trade/join/"
+  },
+  {
+    "id": "\u0006a",
+    "href": "https://bots.bocchi.trade/join/%06a"
+  },
+  {
+    "id": "a\u0006",
+    "href": "https://bots.bocchi.trade/join/a"
+  },
+  {
+    "id": "a\u0007b",
+    "href": "https://bots.bocchi.trade/join/a%07b"
+  },
+  {
+    "id": "\u0007",
+    "href": "https://bots.bocchi.trade/join/"
+  },
+  {
+    "id": "\u0007a",
+    "href": "https://bots.bocchi.trade/join/%07a"
+  },
+  {
+    "id": "a\u0007",
+    "href": "https://bots.bocchi.trade/join/a"
+  },
+  {
+    "id": "a\bb",
+    "href": "https://bots.bocchi.trade/join/a%08b"
+  },
+  {
+    "id": "\b",
+    "href": "https://bots.bocchi.trade/join/"
+  },
+  {
+    "id": "\ba",
+    "href": "https://bots.bocchi.trade/join/%08a"
+  },
+  {
+    "id": "a\b",
+    "href": "https://bots.bocchi.trade/join/a"
+  },
+  {
+    "id": "a\tb",
+    "href": "https://bots.bocchi.trade/join/ab"
+  },
+  {
+    "id": "\t",
+    "href": "https://bots.bocchi.trade/join/"
+  },
+  {
+    "id": "\ta",
+    "href": "https://bots.bocchi.trade/join/a"
+  },
+  {
+    "id": "a\t",
+    "href": "https://bots.bocchi.trade/join/a"
+  },
+  {
+    "id": "a\nb",
+    "href": "https://bots.bocchi.trade/join/ab"
+  },
+  {
+    "id": "\n",
+    "href": "https://bots.bocchi.trade/join/"
+  },
+  {
+    "id": "\na",
+    "href": "https://bots.bocchi.trade/join/a"
+  },
+  {
+    "id": "a\n",
+    "href": "https://bots.bocchi.trade/join/a"
+  },
+  {
+    "id": "a\u000bb",
+    "href": "https://bots.bocchi.trade/join/a%0Bb"
+  },
+  {
+    "id": "\u000b",
+    "href": "https://bots.bocchi.trade/join/"
+  },
+  {
+    "id": "\u000ba",
+    "href": "https://bots.bocchi.trade/join/%0Ba"
+  },
+  {
+    "id": "a\u000b",
+    "href": "https://bots.bocchi.trade/join/a"
+  },
+  {
+    "id": "a\fb",
+    "href": "https://bots.bocchi.trade/join/a%0Cb"
+  },
+  {
+    "id": "\f",
+    "href": "https://bots.bocchi.trade/join/"
+  },
+  {
+    "id": "\fa",
+    "href": "https://bots.bocchi.trade/join/%0Ca"
+  },
+  {
+    "id": "a\f",
+    "href": "https://bots.bocchi.trade/join/a"
+  },
+  {
+    "id": "a\rb",
+    "href": "https://bots.bocchi.trade/join/ab"
+  },
+  {
+    "id": "\r",
+    "href": "https://bots.bocchi.trade/join/"
+  },
+  {
+    "id": "\ra",
+    "href": "https://bots.bocchi.trade/join/a"
+  },
+  {
+    "id": "a\r",
+    "href": "https://bots.bocchi.trade/join/a"
+  },
+  {
+    "id": "a\u000eb",
+    "href": "https://bots.bocchi.trade/join/a%0Eb"
+  },
+  {
+    "id": "\u000e",
+    "href": "https://bots.bocchi.trade/join/"
+  },
+  {
+    "id": "\u000ea",
+    "href": "https://bots.bocchi.trade/join/%0Ea"
+  },
+  {
+    "id": "a\u000e",
+    "href": "https://bots.bocchi.trade/join/a"
+  },
+  {
+    "id": "a\u000fb",
+    "href": "https://bots.bocchi.trade/join/a%0Fb"
+  },
+  {
+    "id": "\u000f",
+    "href": "https://bots.bocchi.trade/join/"
+  },
+  {
+    "id": "\u000fa",
+    "href": "https://bots.bocchi.trade/join/%0Fa"
+  },
+  {
+    "id": "a\u000f",
+    "href": "https://bots.bocchi.trade/join/a"
+  },
+  {
+    "id": "a\u0010b",
+    "href": "https://bots.bocchi.trade/join/a%10b"
+  },
+  {
+    "id": "\u0010",
+    "href": "https://bots.bocchi.trade/join/"
+  },
+  {
+    "id": "\u0010a",
+    "href": "https://bots.bocchi.trade/join/%10a"
+  },
+  {
+    "id": "a\u0010",
+    "href": "https://bots.bocchi.trade/join/a"
+  },
+  {
+    "id": "a\u0011b",
+    "href": "https://bots.bocchi.trade/join/a%11b"
+  },
+  {
+    "id": "\u0011",
+    "href": "https://bots.bocchi.trade/join/"
+  },
+  {
+    "id": "\u0011a",
+    "href": "https://bots.bocchi.trade/join/%11a"
+  },
+  {
+    "id": "a\u0011",
+    "href": "https://bots.bocchi.trade/join/a"
+  },
+  {
+    "id": "a\u0012b",
+    "href": "https://bots.bocchi.trade/join/a%12b"
+  },
+  {
+    "id": "\u0012",
+    "href": "https://bots.bocchi.trade/join/"
+  },
+  {
+    "id": "\u0012a",
+    "href": "https://bots.bocchi.trade/join/%12a"
+  },
+  {
+    "id": "a\u0012",
+    "href": "https://bots.bocchi.trade/join/a"
+  },
+  {
+    "id": "a\u0013b",
+    "href": "https://bots.bocchi.trade/join/a%13b"
+  },
+  {
+    "id": "\u0013",
+    "href": "https://bots.bocchi.trade/join/"
+  },
+  {
+    "id": "\u0013a",
+    "href": "https://bots.bocchi.trade/join/%13a"
+  },
+  {
+    "id": "a\u0013",
+    "href": "https://bots.bocchi.trade/join/a"
+  },
+  {
+    "id": "a\u0014b",
+    "href": "https://bots.bocchi.trade/join/a%14b"
+  },
+  {
+    "id": "\u0014",
+    "href": "https://bots.bocchi.trade/join/"
+  },
+  {
+    "id": "\u0014a",
+    "href": "https://bots.bocchi.trade/join/%14a"
+  },
+  {
+    "id": "a\u0014",
+    "href": "https://bots.bocchi.trade/join/a"
+  },
+  {
+    "id": "a\u0015b",
+    "href": "https://bots.bocchi.trade/join/a%15b"
+  },
+  {
+    "id": "\u0015",
+    "href": "https://bots.bocchi.trade/join/"
+  },
+  {
+    "id": "\u0015a",
+    "href": "https://bots.bocchi.trade/join/%15a"
+  },
+  {
+    "id": "a\u0015",
+    "href": "https://bots.bocchi.trade/join/a"
+  },
+  {
+    "id": "a\u0016b",
+    "href": "https://bots.bocchi.trade/join/a%16b"
+  },
+  {
+    "id": "\u0016",
+    "href": "https://bots.bocchi.trade/join/"
+  },
+  {
+    "id": "\u0016a",
+    "href": "https://bots.bocchi.trade/join/%16a"
+  },
+  {
+    "id": "a\u0016",
+    "href": "https://bots.bocchi.trade/join/a"
+  },
+  {
+    "id": "a\u0017b",
+    "href": "https://bots.bocchi.trade/join/a%17b"
+  },
+  {
+    "id": "\u0017",
+    "href": "https://bots.bocchi.trade/join/"
+  },
+  {
+    "id": "\u0017a",
+    "href": "https://bots.bocchi.trade/join/%17a"
+  },
+  {
+    "id": "a\u0017",
+    "href": "https://bots.bocchi.trade/join/a"
+  },
+  {
+    "id": "a\u0018b",
+    "href": "https://bots.bocchi.trade/join/a%18b"
+  },
+  {
+    "id": "\u0018",
+    "href": "https://bots.bocchi.trade/join/"
+  },
+  {
+    "id": "\u0018a",
+    "href": "https://bots.bocchi.trade/join/%18a"
+  },
+  {
+    "id": "a\u0018",
+    "href": "https://bots.bocchi.trade/join/a"
+  },
+  {
+    "id": "a\u0019b",
+    "href": "https://bots.bocchi.trade/join/a%19b"
+  },
+  {
+    "id": "\u0019",
+    "href": "https://bots.bocchi.trade/join/"
+  },
+  {
+    "id": "\u0019a",
+    "href": "https://bots.bocchi.trade/join/%19a"
+  },
+  {
+    "id": "a\u0019",
+    "href": "https://bots.bocchi.trade/join/a"
+  },
+  {
+    "id": "a\u001ab",
+    "href": "https://bots.bocchi.trade/join/a%1Ab"
+  },
+  {
+    "id": "\u001a",
+    "href": "https://bots.bocchi.trade/join/"
+  },
+  {
+    "id": "\u001aa",
+    "href": "https://bots.bocchi.trade/join/%1Aa"
+  },
+  {
+    "id": "a\u001a",
+    "href": "https://bots.bocchi.trade/join/a"
+  },
+  {
+    "id": "a\u001bb",
+    "href": "https://bots.bocchi.trade/join/a%1Bb"
+  },
+  {
+    "id": "\u001b",
+    "href": "https://bots.bocchi.trade/join/"
+  },
+  {
+    "id": "\u001ba",
+    "href": "https://bots.bocchi.trade/join/%1Ba"
+  },
+  {
+    "id": "a\u001b",
+    "href": "https://bots.bocchi.trade/join/a"
+  },
+  {
+    "id": "a\u001cb",
+    "href": "https://bots.bocchi.trade/join/a%1Cb"
+  },
+  {
+    "id": "\u001c",
+    "href": "https://bots.bocchi.trade/join/"
+  },
+  {
+    "id": "\u001ca",
+    "href": "https://bots.bocchi.trade/join/%1Ca"
+  },
+  {
+    "id": "a\u001c",
+    "href": "https://bots.bocchi.trade/join/a"
+  },
+  {
+    "id": "a\u001db",
+    "href": "https://bots.bocchi.trade/join/a%1Db"
+  },
+  {
+    "id": "\u001d",
+    "href": "https://bots.bocchi.trade/join/"
+  },
+  {
+    "id": "\u001da",
+    "href": "https://bots.bocchi.trade/join/%1Da"
+  },
+  {
+    "id": "a\u001d",
+    "href": "https://bots.bocchi.trade/join/a"
+  },
+  {
+    "id": "a\u001eb",
+    "href": "https://bots.bocchi.trade/join/a%1Eb"
+  },
+  {
+    "id": "\u001e",
+    "href": "https://bots.bocchi.trade/join/"
+  },
+  {
+    "id": "\u001ea",
+    "href": "https://bots.bocchi.trade/join/%1Ea"
+  },
+  {
+    "id": "a\u001e",
+    "href": "https://bots.bocchi.trade/join/a"
+  },
+  {
+    "id": "a\u001fb",
+    "href": "https://bots.bocchi.trade/join/a%1Fb"
+  },
+  {
+    "id": "\u001f",
+    "href": "https://bots.bocchi.trade/join/"
+  },
+  {
+    "id": "\u001fa",
+    "href": "https://bots.bocchi.trade/join/%1Fa"
+  },
+  {
+    "id": "a\u001f",
+    "href": "https://bots.bocchi.trade/join/a"
+  },
+  {
+    "id": "a b",
+    "href": "https://bots.bocchi.trade/join/a%20b"
+  },
+  {
+    "id": " ",
+    "href": "https://bots.bocchi.trade/join/"
+  },
+  {
+    "id": " a",
+    "href": "https://bots.bocchi.trade/join/%20a"
+  },
+  {
+    "id": "a ",
+    "href": "https://bots.bocchi.trade/join/a"
+  },
+  {
+    "id": "a!b",
+    "href": "https://bots.bocchi.trade/join/a!b"
+  },
+  {
+    "id": "!",
+    "href": "https://bots.bocchi.trade/join/!"
+  },
+  {
+    "id": "!a",
+    "href": "https://bots.bocchi.trade/join/!a"
+  },
+  {
+    "id": "a!",
+    "href": "https://bots.bocchi.trade/join/a!"
+  },
+  {
+    "id": "a\"b",
+    "href": "https://bots.bocchi.trade/join/a%22b"
+  },
+  {
+    "id": "\"",
+    "href": "https://bots.bocchi.trade/join/%22"
+  },
+  {
+    "id": "\"a",
+    "href": "https://bots.bocchi.trade/join/%22a"
+  },
+  {
+    "id": "a\"",
+    "href": "https://bots.bocchi.trade/join/a%22"
+  },
+  {
+    "id": "a#b",
+    "href": "https://bots.bocchi.trade/join/a#b"
+  },
+  {
+    "id": "#",
+    "href": "https://bots.bocchi.trade/join/#"
+  },
+  {
+    "id": "#a",
+    "href": "https://bots.bocchi.trade/join/#a"
+  },
+  {
+    "id": "a#",
+    "href": "https://bots.bocchi.trade/join/a#"
+  },
+  {
+    "id": "a$b",
+    "href": "https://bots.bocchi.trade/join/a$b"
+  },
+  {
+    "id": "$",
+    "href": "https://bots.bocchi.trade/join/$"
+  },
+  {
+    "id": "$a",
+    "href": "https://bots.bocchi.trade/join/$a"
+  },
+  {
+    "id": "a$",
+    "href": "https://bots.bocchi.trade/join/a$"
+  },
+  {
+    "id": "a%b",
+    "href": "https://bots.bocchi.trade/join/a%b"
+  },
+  {
+    "id": "%",
+    "href": "https://bots.bocchi.trade/join/%"
+  },
+  {
+    "id": "%a",
+    "href": "https://bots.bocchi.trade/join/%a"
+  },
+  {
+    "id": "a%",
+    "href": "https://bots.bocchi.trade/join/a%"
+  },
+  {
+    "id": "a&b",
+    "href": "https://bots.bocchi.trade/join/a&b"
+  },
+  {
+    "id": "&",
+    "href": "https://bots.bocchi.trade/join/&"
+  },
+  {
+    "id": "&a",
+    "href": "https://bots.bocchi.trade/join/&a"
+  },
+  {
+    "id": "a&",
+    "href": "https://bots.bocchi.trade/join/a&"
+  },
+  {
+    "id": "a'b",
+    "href": "https://bots.bocchi.trade/join/a'b"
+  },
+  {
+    "id": "'",
+    "href": "https://bots.bocchi.trade/join/'"
+  },
+  {
+    "id": "'a",
+    "href": "https://bots.bocchi.trade/join/'a"
+  },
+  {
+    "id": "a'",
+    "href": "https://bots.bocchi.trade/join/a'"
+  },
+  {
+    "id": "a(b",
+    "href": "https://bots.bocchi.trade/join/a(b"
+  },
+  {
+    "id": "(",
+    "href": "https://bots.bocchi.trade/join/("
+  },
+  {
+    "id": "(a",
+    "href": "https://bots.bocchi.trade/join/(a"
+  },
+  {
+    "id": "a(",
+    "href": "https://bots.bocchi.trade/join/a("
+  },
+  {
+    "id": "a)b",
+    "href": "https://bots.bocchi.trade/join/a)b"
+  },
+  {
+    "id": ")",
+    "href": "https://bots.bocchi.trade/join/)"
+  },
+  {
+    "id": ")a",
+    "href": "https://bots.bocchi.trade/join/)a"
+  },
+  {
+    "id": "a)",
+    "href": "https://bots.bocchi.trade/join/a)"
+  },
+  {
+    "id": "a*b",
+    "href": "https://bots.bocchi.trade/join/a*b"
+  },
+  {
+    "id": "*",
+    "href": "https://bots.bocchi.trade/join/*"
+  },
+  {
+    "id": "*a",
+    "href": "https://bots.bocchi.trade/join/*a"
+  },
+  {
+    "id": "a*",
+    "href": "https://bots.bocchi.trade/join/a*"
+  },
+  {
+    "id": "a+b",
+    "href": "https://bots.bocchi.trade/join/a+b"
+  },
+  {
+    "id": "+",
+    "href": "https://bots.bocchi.trade/join/+"
+  },
+  {
+    "id": "+a",
+    "href": "https://bots.bocchi.trade/join/+a"
+  },
+  {
+    "id": "a+",
+    "href": "https://bots.bocchi.trade/join/a+"
+  },
+  {
+    "id": "a,b",
+    "href": "https://bots.bocchi.trade/join/a,b"
+  },
+  {
+    "id": ",",
+    "href": "https://bots.bocchi.trade/join/,"
+  },
+  {
+    "id": ",a",
+    "href": "https://bots.bocchi.trade/join/,a"
+  },
+  {
+    "id": "a,",
+    "href": "https://bots.bocchi.trade/join/a,"
+  },
+  {
+    "id": "a-b",
+    "href": "https://bots.bocchi.trade/join/a-b"
+  },
+  {
+    "id": "-",
+    "href": "https://bots.bocchi.trade/join/-"
+  },
+  {
+    "id": "-a",
+    "href": "https://bots.bocchi.trade/join/-a"
+  },
+  {
+    "id": "a-",
+    "href": "https://bots.bocchi.trade/join/a-"
+  },
+  {
+    "id": "a.b",
+    "href": "https://bots.bocchi.trade/join/a.b"
+  },
+  {
+    "id": ".",
+    "href": "https://bots.bocchi.trade/join/"
+  },
+  {
+    "id": ".a",
+    "href": "https://bots.bocchi.trade/join/.a"
+  },
+  {
+    "id": "a.",
+    "href": "https://bots.bocchi.trade/join/a."
+  },
+  {
+    "id": "a/b",
+    "href": "https://bots.bocchi.trade/join/a/b"
+  },
+  {
+    "id": "/",
+    "href": "https://bots.bocchi.trade/join//"
+  },
+  {
+    "id": "/a",
+    "href": "https://bots.bocchi.trade/join//a"
+  },
+  {
+    "id": "a/",
+    "href": "https://bots.bocchi.trade/join/a/"
+  },
+  {
+    "id": "a0b",
+    "href": "https://bots.bocchi.trade/join/a0b"
+  },
+  {
+    "id": "0",
+    "href": "https://bots.bocchi.trade/join/0"
+  },
+  {
+    "id": "0a",
+    "href": "https://bots.bocchi.trade/join/0a"
+  },
+  {
+    "id": "a0",
+    "href": "https://bots.bocchi.trade/join/a0"
+  },
+  {
+    "id": "a1b",
+    "href": "https://bots.bocchi.trade/join/a1b"
+  },
+  {
+    "id": "1",
+    "href": "https://bots.bocchi.trade/join/1"
+  },
+  {
+    "id": "1a",
+    "href": "https://bots.bocchi.trade/join/1a"
+  },
+  {
+    "id": "a1",
+    "href": "https://bots.bocchi.trade/join/a1"
+  },
+  {
+    "id": "a2b",
+    "href": "https://bots.bocchi.trade/join/a2b"
+  },
+  {
+    "id": "2",
+    "href": "https://bots.bocchi.trade/join/2"
+  },
+  {
+    "id": "2a",
+    "href": "https://bots.bocchi.trade/join/2a"
+  },
+  {
+    "id": "a2",
+    "href": "https://bots.bocchi.trade/join/a2"
+  },
+  {
+    "id": "a3b",
+    "href": "https://bots.bocchi.trade/join/a3b"
+  },
+  {
+    "id": "3",
+    "href": "https://bots.bocchi.trade/join/3"
+  },
+  {
+    "id": "3a",
+    "href": "https://bots.bocchi.trade/join/3a"
+  },
+  {
+    "id": "a3",
+    "href": "https://bots.bocchi.trade/join/a3"
+  },
+  {
+    "id": "a4b",
+    "href": "https://bots.bocchi.trade/join/a4b"
+  },
+  {
+    "id": "4",
+    "href": "https://bots.bocchi.trade/join/4"
+  },
+  {
+    "id": "4a",
+    "href": "https://bots.bocchi.trade/join/4a"
+  },
+  {
+    "id": "a4",
+    "href": "https://bots.bocchi.trade/join/a4"
+  },
+  {
+    "id": "a5b",
+    "href": "https://bots.bocchi.trade/join/a5b"
+  },
+  {
+    "id": "5",
+    "href": "https://bots.bocchi.trade/join/5"
+  },
+  {
+    "id": "5a",
+    "href": "https://bots.bocchi.trade/join/5a"
+  },
+  {
+    "id": "a5",
+    "href": "https://bots.bocchi.trade/join/a5"
+  },
+  {
+    "id": "a6b",
+    "href": "https://bots.bocchi.trade/join/a6b"
+  },
+  {
+    "id": "6",
+    "href": "https://bots.bocchi.trade/join/6"
+  },
+  {
+    "id": "6a",
+    "href": "https://bots.bocchi.trade/join/6a"
+  },
+  {
+    "id": "a6",
+    "href": "https://bots.bocchi.trade/join/a6"
+  },
+  {
+    "id": "a7b",
+    "href": "https://bots.bocchi.trade/join/a7b"
+  },
+  {
+    "id": "7",
+    "href": "https://bots.bocchi.trade/join/7"
+  },
+  {
+    "id": "7a",
+    "href": "https://bots.bocchi.trade/join/7a"
+  },
+  {
+    "id": "a7",
+    "href": "https://bots.bocchi.trade/join/a7"
+  },
+  {
+    "id": "a8b",
+    "href": "https://bots.bocchi.trade/join/a8b"
+  },
+  {
+    "id": "8",
+    "href": "https://bots.bocchi.trade/join/8"
+  },
+  {
+    "id": "8a",
+    "href": "https://bots.bocchi.trade/join/8a"
+  },
+  {
+    "id": "a8",
+    "href": "https://bots.bocchi.trade/join/a8"
+  },
+  {
+    "id": "a9b",
+    "href": "https://bots.bocchi.trade/join/a9b"
+  },
+  {
+    "id": "9",
+    "href": "https://bots.bocchi.trade/join/9"
+  },
+  {
+    "id": "9a",
+    "href": "https://bots.bocchi.trade/join/9a"
+  },
+  {
+    "id": "a9",
+    "href": "https://bots.bocchi.trade/join/a9"
+  },
+  {
+    "id": "a:b",
+    "href": "https://bots.bocchi.trade/join/a:b"
+  },
+  {
+    "id": ":",
+    "href": "https://bots.bocchi.trade/join/:"
+  },
+  {
+    "id": ":a",
+    "href": "https://bots.bocchi.trade/join/:a"
+  },
+  {
+    "id": "a:",
+    "href": "https://bots.bocchi.trade/join/a:"
+  },
+  {
+    "id": "a;b",
+    "href": "https://bots.bocchi.trade/join/a;b"
+  },
+  {
+    "id": ";",
+    "href": "https://bots.bocchi.trade/join/;"
+  },
+  {
+    "id": ";a",
+    "href": "https://bots.bocchi.trade/join/;a"
+  },
+  {
+    "id": "a;",
+    "href": "https://bots.bocchi.trade/join/a;"
+  },
+  {
+    "id": "a<b",
+    "href": "https://bots.bocchi.trade/join/a%3Cb"
+  },
+  {
+    "id": "<",
+    "href": "https://bots.bocchi.trade/join/%3C"
+  },
+  {
+    "id": "<a",
+    "href": "https://bots.bocchi.trade/join/%3Ca"
+  },
+  {
+    "id": "a<",
+    "href": "https://bots.bocchi.trade/join/a%3C"
+  },
+  {
+    "id": "a=b",
+    "href": "https://bots.bocchi.trade/join/a=b"
+  },
+  {
+    "id": "=",
+    "href": "https://bots.bocchi.trade/join/="
+  },
+  {
+    "id": "=a",
+    "href": "https://bots.bocchi.trade/join/=a"
+  },
+  {
+    "id": "a=",
+    "href": "https://bots.bocchi.trade/join/a="
+  },
+  {
+    "id": "a>b",
+    "href": "https://bots.bocchi.trade/join/a%3Eb"
+  },
+  {
+    "id": ">",
+    "href": "https://bots.bocchi.trade/join/%3E"
+  },
+  {
+    "id": ">a",
+    "href": "https://bots.bocchi.trade/join/%3Ea"
+  },
+  {
+    "id": "a>",
+    "href": "https://bots.bocchi.trade/join/a%3E"
+  },
+  {
+    "id": "a?b",
+    "href": "https://bots.bocchi.trade/join/a?b"
+  },
+  {
+    "id": "?",
+    "href": "https://bots.bocchi.trade/join/?"
+  },
+  {
+    "id": "?a",
+    "href": "https://bots.bocchi.trade/join/?a"
+  },
+  {
+    "id": "a?",
+    "href": "https://bots.bocchi.trade/join/a?"
+  },
+  {
+    "id": "a@b",
+    "href": "https://bots.bocchi.trade/join/a@b"
+  },
+  {
+    "id": "@",
+    "href": "https://bots.bocchi.trade/join/@"
+  },
+  {
+    "id": "@a",
+    "href": "https://bots.bocchi.trade/join/@a"
+  },
+  {
+    "id": "a@",
+    "href": "https://bots.bocchi.trade/join/a@"
+  },
+  {
+    "id": "aAb",
+    "href": "https://bots.bocchi.trade/join/aAb"
+  },
+  {
+    "id": "A",
+    "href": "https://bots.bocchi.trade/join/A"
+  },
+  {
+    "id": "Aa",
+    "href": "https://bots.bocchi.trade/join/Aa"
+  },
+  {
+    "id": "aA",
+    "href": "https://bots.bocchi.trade/join/aA"
+  },
+  {
+    "id": "aBb",
+    "href": "https://bots.bocchi.trade/join/aBb"
+  },
+  {
+    "id": "B",
+    "href": "https://bots.bocchi.trade/join/B"
+  },
+  {
+    "id": "Ba",
+    "href": "https://bots.bocchi.trade/join/Ba"
+  },
+  {
+    "id": "aB",
+    "href": "https://bots.bocchi.trade/join/aB"
+  },
+  {
+    "id": "aCb",
+    "href": "https://bots.bocchi.trade/join/aCb"
+  },
+  {
+    "id": "C",
+    "href": "https://bots.bocchi.trade/join/C"
+  },
+  {
+    "id": "Ca",
+    "href": "https://bots.bocchi.trade/join/Ca"
+  },
+  {
+    "id": "aC",
+    "href": "https://bots.bocchi.trade/join/aC"
+  },
+  {
+    "id": "aDb",
+    "href": "https://bots.bocchi.trade/join/aDb"
+  },
+  {
+    "id": "D",
+    "href": "https://bots.bocchi.trade/join/D"
+  },
+  {
+    "id": "Da",
+    "href": "https://bots.bocchi.trade/join/Da"
+  },
+  {
+    "id": "aD",
+    "href": "https://bots.bocchi.trade/join/aD"
+  },
+  {
+    "id": "aEb",
+    "href": "https://bots.bocchi.trade/join/aEb"
+  },
+  {
+    "id": "E",
+    "href": "https://bots.bocchi.trade/join/E"
+  },
+  {
+    "id": "Ea",
+    "href": "https://bots.bocchi.trade/join/Ea"
+  },
+  {
+    "id": "aE",
+    "href": "https://bots.bocchi.trade/join/aE"
+  },
+  {
+    "id": "aFb",
+    "href": "https://bots.bocchi.trade/join/aFb"
+  },
+  {
+    "id": "F",
+    "href": "https://bots.bocchi.trade/join/F"
+  },
+  {
+    "id": "Fa",
+    "href": "https://bots.bocchi.trade/join/Fa"
+  },
+  {
+    "id": "aF",
+    "href": "https://bots.bocchi.trade/join/aF"
+  },
+  {
+    "id": "aGb",
+    "href": "https://bots.bocchi.trade/join/aGb"
+  },
+  {
+    "id": "G",
+    "href": "https://bots.bocchi.trade/join/G"
+  },
+  {
+    "id": "Ga",
+    "href": "https://bots.bocchi.trade/join/Ga"
+  },
+  {
+    "id": "aG",
+    "href": "https://bots.bocchi.trade/join/aG"
+  },
+  {
+    "id": "aHb",
+    "href": "https://bots.bocchi.trade/join/aHb"
+  },
+  {
+    "id": "H",
+    "href": "https://bots.bocchi.trade/join/H"
+  },
+  {
+    "id": "Ha",
+    "href": "https://bots.bocchi.trade/join/Ha"
+  },
+  {
+    "id": "aH",
+    "href": "https://bots.bocchi.trade/join/aH"
+  },
+  {
+    "id": "aIb",
+    "href": "https://bots.bocchi.trade/join/aIb"
+  },
+  {
+    "id": "I",
+    "href": "https://bots.bocchi.trade/join/I"
+  },
+  {
+    "id": "Ia",
+    "href": "https://bots.bocchi.trade/join/Ia"
+  },
+  {
+    "id": "aI",
+    "href": "https://bots.bocchi.trade/join/aI"
+  },
+  {
+    "id": "aJb",
+    "href": "https://bots.bocchi.trade/join/aJb"
+  },
+  {
+    "id": "J",
+    "href": "https://bots.bocchi.trade/join/J"
+  },
+  {
+    "id": "Ja",
+    "href": "https://bots.bocchi.trade/join/Ja"
+  },
+  {
+    "id": "aJ",
+    "href": "https://bots.bocchi.trade/join/aJ"
+  },
+  {
+    "id": "aKb",
+    "href": "https://bots.bocchi.trade/join/aKb"
+  },
+  {
+    "id": "K",
+    "href": "https://bots.bocchi.trade/join/K"
+  },
+  {
+    "id": "Ka",
+    "href": "https://bots.bocchi.trade/join/Ka"
+  },
+  {
+    "id": "aK",
+    "href": "https://bots.bocchi.trade/join/aK"
+  },
+  {
+    "id": "aLb",
+    "href": "https://bots.bocchi.trade/join/aLb"
+  },
+  {
+    "id": "L",
+    "href": "https://bots.bocchi.trade/join/L"
+  },
+  {
+    "id": "La",
+    "href": "https://bots.bocchi.trade/join/La"
+  },
+  {
+    "id": "aL",
+    "href": "https://bots.bocchi.trade/join/aL"
+  },
+  {
+    "id": "aMb",
+    "href": "https://bots.bocchi.trade/join/aMb"
+  },
+  {
+    "id": "M",
+    "href": "https://bots.bocchi.trade/join/M"
+  },
+  {
+    "id": "Ma",
+    "href": "https://bots.bocchi.trade/join/Ma"
+  },
+  {
+    "id": "aM",
+    "href": "https://bots.bocchi.trade/join/aM"
+  },
+  {
+    "id": "aNb",
+    "href": "https://bots.bocchi.trade/join/aNb"
+  },
+  {
+    "id": "N",
+    "href": "https://bots.bocchi.trade/join/N"
+  },
+  {
+    "id": "Na",
+    "href": "https://bots.bocchi.trade/join/Na"
+  },
+  {
+    "id": "aN",
+    "href": "https://bots.bocchi.trade/join/aN"
+  },
+  {
+    "id": "aOb",
+    "href": "https://bots.bocchi.trade/join/aOb"
+  },
+  {
+    "id": "O",
+    "href": "https://bots.bocchi.trade/join/O"
+  },
+  {
+    "id": "Oa",
+    "href": "https://bots.bocchi.trade/join/Oa"
+  },
+  {
+    "id": "aO",
+    "href": "https://bots.bocchi.trade/join/aO"
+  },
+  {
+    "id": "aPb",
+    "href": "https://bots.bocchi.trade/join/aPb"
+  },
+  {
+    "id": "P",
+    "href": "https://bots.bocchi.trade/join/P"
+  },
+  {
+    "id": "Pa",
+    "href": "https://bots.bocchi.trade/join/Pa"
+  },
+  {
+    "id": "aP",
+    "href": "https://bots.bocchi.trade/join/aP"
+  },
+  {
+    "id": "aQb",
+    "href": "https://bots.bocchi.trade/join/aQb"
+  },
+  {
+    "id": "Q",
+    "href": "https://bots.bocchi.trade/join/Q"
+  },
+  {
+    "id": "Qa",
+    "href": "https://bots.bocchi.trade/join/Qa"
+  },
+  {
+    "id": "aQ",
+    "href": "https://bots.bocchi.trade/join/aQ"
+  },
+  {
+    "id": "aRb",
+    "href": "https://bots.bocchi.trade/join/aRb"
+  },
+  {
+    "id": "R",
+    "href": "https://bots.bocchi.trade/join/R"
+  },
+  {
+    "id": "Ra",
+    "href": "https://bots.bocchi.trade/join/Ra"
+  },
+  {
+    "id": "aR",
+    "href": "https://bots.bocchi.trade/join/aR"
+  },
+  {
+    "id": "aSb",
+    "href": "https://bots.bocchi.trade/join/aSb"
+  },
+  {
+    "id": "S",
+    "href": "https://bots.bocchi.trade/join/S"
+  },
+  {
+    "id": "Sa",
+    "href": "https://bots.bocchi.trade/join/Sa"
+  },
+  {
+    "id": "aS",
+    "href": "https://bots.bocchi.trade/join/aS"
+  },
+  {
+    "id": "aTb",
+    "href": "https://bots.bocchi.trade/join/aTb"
+  },
+  {
+    "id": "T",
+    "href": "https://bots.bocchi.trade/join/T"
+  },
+  {
+    "id": "Ta",
+    "href": "https://bots.bocchi.trade/join/Ta"
+  },
+  {
+    "id": "aT",
+    "href": "https://bots.bocchi.trade/join/aT"
+  },
+  {
+    "id": "aUb",
+    "href": "https://bots.bocchi.trade/join/aUb"
+  },
+  {
+    "id": "U",
+    "href": "https://bots.bocchi.trade/join/U"
+  },
+  {
+    "id": "Ua",
+    "href": "https://bots.bocchi.trade/join/Ua"
+  },
+  {
+    "id": "aU",
+    "href": "https://bots.bocchi.trade/join/aU"
+  },
+  {
+    "id": "aVb",
+    "href": "https://bots.bocchi.trade/join/aVb"
+  },
+  {
+    "id": "V",
+    "href": "https://bots.bocchi.trade/join/V"
+  },
+  {
+    "id": "Va",
+    "href": "https://bots.bocchi.trade/join/Va"
+  },
+  {
+    "id": "aV",
+    "href": "https://bots.bocchi.trade/join/aV"
+  },
+  {
+    "id": "aWb",
+    "href": "https://bots.bocchi.trade/join/aWb"
+  },
+  {
+    "id": "W",
+    "href": "https://bots.bocchi.trade/join/W"
+  },
+  {
+    "id": "Wa",
+    "href": "https://bots.bocchi.trade/join/Wa"
+  },
+  {
+    "id": "aW",
+    "href": "https://bots.bocchi.trade/join/aW"
+  },
+  {
+    "id": "aXb",
+    "href": "https://bots.bocchi.trade/join/aXb"
+  },
+  {
+    "id": "X",
+    "href": "https://bots.bocchi.trade/join/X"
+  },
+  {
+    "id": "Xa",
+    "href": "https://bots.bocchi.trade/join/Xa"
+  },
+  {
+    "id": "aX",
+    "href": "https://bots.bocchi.trade/join/aX"
+  },
+  {
+    "id": "aYb",
+    "href": "https://bots.bocchi.trade/join/aYb"
+  },
+  {
+    "id": "Y",
+    "href": "https://bots.bocchi.trade/join/Y"
+  },
+  {
+    "id": "Ya",
+    "href": "https://bots.bocchi.trade/join/Ya"
+  },
+  {
+    "id": "aY",
+    "href": "https://bots.bocchi.trade/join/aY"
+  },
+  {
+    "id": "aZb",
+    "href": "https://bots.bocchi.trade/join/aZb"
+  },
+  {
+    "id": "Z",
+    "href": "https://bots.bocchi.trade/join/Z"
+  },
+  {
+    "id": "Za",
+    "href": "https://bots.bocchi.trade/join/Za"
+  },
+  {
+    "id": "aZ",
+    "href": "https://bots.bocchi.trade/join/aZ"
+  },
+  {
+    "id": "a[b",
+    "href": "https://bots.bocchi.trade/join/a[b"
+  },
+  {
+    "id": "[",
+    "href": "https://bots.bocchi.trade/join/["
+  },
+  {
+    "id": "[a",
+    "href": "https://bots.bocchi.trade/join/[a"
+  },
+  {
+    "id": "a[",
+    "href": "https://bots.bocchi.trade/join/a["
+  },
+  {
+    "id": "a\\b",
+    "href": "https://bots.bocchi.trade/join/a/b"
+  },
+  {
+    "id": "\\",
+    "href": "https://bots.bocchi.trade/join//"
+  },
+  {
+    "id": "\\a",
+    "href": "https://bots.bocchi.trade/join//a"
+  },
+  {
+    "id": "a\\",
+    "href": "https://bots.bocchi.trade/join/a/"
+  },
+  {
+    "id": "a]b",
+    "href": "https://bots.bocchi.trade/join/a]b"
+  },
+  {
+    "id": "]",
+    "href": "https://bots.bocchi.trade/join/]"
+  },
+  {
+    "id": "]a",
+    "href": "https://bots.bocchi.trade/join/]a"
+  },
+  {
+    "id": "a]",
+    "href": "https://bots.bocchi.trade/join/a]"
+  },
+  {
+    "id": "a^b",
+    "href": "https://bots.bocchi.trade/join/a%5Eb"
+  },
+  {
+    "id": "^",
+    "href": "https://bots.bocchi.trade/join/%5E"
+  },
+  {
+    "id": "^a",
+    "href": "https://bots.bocchi.trade/join/%5Ea"
+  },
+  {
+    "id": "a^",
+    "href": "https://bots.bocchi.trade/join/a%5E"
+  },
+  {
+    "id": "a_b",
+    "href": "https://bots.bocchi.trade/join/a_b"
+  },
+  {
+    "id": "_",
+    "href": "https://bots.bocchi.trade/join/_"
+  },
+  {
+    "id": "_a",
+    "href": "https://bots.bocchi.trade/join/_a"
+  },
+  {
+    "id": "a_",
+    "href": "https://bots.bocchi.trade/join/a_"
+  },
+  {
+    "id": "a`b",
+    "href": "https://bots.bocchi.trade/join/a%60b"
+  },
+  {
+    "id": "`",
+    "href": "https://bots.bocchi.trade/join/%60"
+  },
+  {
+    "id": "`a",
+    "href": "https://bots.bocchi.trade/join/%60a"
+  },
+  {
+    "id": "a`",
+    "href": "https://bots.bocchi.trade/join/a%60"
+  },
+  {
+    "id": "aab",
+    "href": "https://bots.bocchi.trade/join/aab"
+  },
+  {
+    "id": "a",
+    "href": "https://bots.bocchi.trade/join/a"
+  },
+  {
+    "id": "aa",
+    "href": "https://bots.bocchi.trade/join/aa"
+  },
+  {
+    "id": "aa",
+    "href": "https://bots.bocchi.trade/join/aa"
+  },
+  {
+    "id": "abb",
+    "href": "https://bots.bocchi.trade/join/abb"
+  },
+  {
+    "id": "b",
+    "href": "https://bots.bocchi.trade/join/b"
+  },
+  {
+    "id": "ba",
+    "href": "https://bots.bocchi.trade/join/ba"
+  },
+  {
+    "id": "ab",
+    "href": "https://bots.bocchi.trade/join/ab"
+  },
+  {
+    "id": "acb",
+    "href": "https://bots.bocchi.trade/join/acb"
+  },
+  {
+    "id": "c",
+    "href": "https://bots.bocchi.trade/join/c"
+  },
+  {
+    "id": "ca",
+    "href": "https://bots.bocchi.trade/join/ca"
+  },
+  {
+    "id": "ac",
+    "href": "https://bots.bocchi.trade/join/ac"
+  },
+  {
+    "id": "adb",
+    "href": "https://bots.bocchi.trade/join/adb"
+  },
+  {
+    "id": "d",
+    "href": "https://bots.bocchi.trade/join/d"
+  },
+  {
+    "id": "da",
+    "href": "https://bots.bocchi.trade/join/da"
+  },
+  {
+    "id": "ad",
+    "href": "https://bots.bocchi.trade/join/ad"
+  },
+  {
+    "id": "aeb",
+    "href": "https://bots.bocchi.trade/join/aeb"
+  },
+  {
+    "id": "e",
+    "href": "https://bots.bocchi.trade/join/e"
+  },
+  {
+    "id": "ea",
+    "href": "https://bots.bocchi.trade/join/ea"
+  },
+  {
+    "id": "ae",
+    "href": "https://bots.bocchi.trade/join/ae"
+  },
+  {
+    "id": "afb",
+    "href": "https://bots.bocchi.trade/join/afb"
+  },
+  {
+    "id": "f",
+    "href": "https://bots.bocchi.trade/join/f"
+  },
+  {
+    "id": "fa",
+    "href": "https://bots.bocchi.trade/join/fa"
+  },
+  {
+    "id": "af",
+    "href": "https://bots.bocchi.trade/join/af"
+  },
+  {
+    "id": "agb",
+    "href": "https://bots.bocchi.trade/join/agb"
+  },
+  {
+    "id": "g",
+    "href": "https://bots.bocchi.trade/join/g"
+  },
+  {
+    "id": "ga",
+    "href": "https://bots.bocchi.trade/join/ga"
+  },
+  {
+    "id": "ag",
+    "href": "https://bots.bocchi.trade/join/ag"
+  },
+  {
+    "id": "ahb",
+    "href": "https://bots.bocchi.trade/join/ahb"
+  },
+  {
+    "id": "h",
+    "href": "https://bots.bocchi.trade/join/h"
+  },
+  {
+    "id": "ha",
+    "href": "https://bots.bocchi.trade/join/ha"
+  },
+  {
+    "id": "ah",
+    "href": "https://bots.bocchi.trade/join/ah"
+  },
+  {
+    "id": "aib",
+    "href": "https://bots.bocchi.trade/join/aib"
+  },
+  {
+    "id": "i",
+    "href": "https://bots.bocchi.trade/join/i"
+  },
+  {
+    "id": "ia",
+    "href": "https://bots.bocchi.trade/join/ia"
+  },
+  {
+    "id": "ai",
+    "href": "https://bots.bocchi.trade/join/ai"
+  },
+  {
+    "id": "ajb",
+    "href": "https://bots.bocchi.trade/join/ajb"
+  },
+  {
+    "id": "j",
+    "href": "https://bots.bocchi.trade/join/j"
+  },
+  {
+    "id": "ja",
+    "href": "https://bots.bocchi.trade/join/ja"
+  },
+  {
+    "id": "aj",
+    "href": "https://bots.bocchi.trade/join/aj"
+  },
+  {
+    "id": "akb",
+    "href": "https://bots.bocchi.trade/join/akb"
+  },
+  {
+    "id": "k",
+    "href": "https://bots.bocchi.trade/join/k"
+  },
+  {
+    "id": "ka",
+    "href": "https://bots.bocchi.trade/join/ka"
+  },
+  {
+    "id": "ak",
+    "href": "https://bots.bocchi.trade/join/ak"
+  },
+  {
+    "id": "alb",
+    "href": "https://bots.bocchi.trade/join/alb"
+  },
+  {
+    "id": "l",
+    "href": "https://bots.bocchi.trade/join/l"
+  },
+  {
+    "id": "la",
+    "href": "https://bots.bocchi.trade/join/la"
+  },
+  {
+    "id": "al",
+    "href": "https://bots.bocchi.trade/join/al"
+  },
+  {
+    "id": "amb",
+    "href": "https://bots.bocchi.trade/join/amb"
+  },
+  {
+    "id": "m",
+    "href": "https://bots.bocchi.trade/join/m"
+  },
+  {
+    "id": "ma",
+    "href": "https://bots.bocchi.trade/join/ma"
+  },
+  {
+    "id": "am",
+    "href": "https://bots.bocchi.trade/join/am"
+  },
+  {
+    "id": "anb",
+    "href": "https://bots.bocchi.trade/join/anb"
+  },
+  {
+    "id": "n",
+    "href": "https://bots.bocchi.trade/join/n"
+  },
+  {
+    "id": "na",
+    "href": "https://bots.bocchi.trade/join/na"
+  },
+  {
+    "id": "an",
+    "href": "https://bots.bocchi.trade/join/an"
+  },
+  {
+    "id": "aob",
+    "href": "https://bots.bocchi.trade/join/aob"
+  },
+  {
+    "id": "o",
+    "href": "https://bots.bocchi.trade/join/o"
+  },
+  {
+    "id": "oa",
+    "href": "https://bots.bocchi.trade/join/oa"
+  },
+  {
+    "id": "ao",
+    "href": "https://bots.bocchi.trade/join/ao"
+  },
+  {
+    "id": "apb",
+    "href": "https://bots.bocchi.trade/join/apb"
+  },
+  {
+    "id": "p",
+    "href": "https://bots.bocchi.trade/join/p"
+  },
+  {
+    "id": "pa",
+    "href": "https://bots.bocchi.trade/join/pa"
+  },
+  {
+    "id": "ap",
+    "href": "https://bots.bocchi.trade/join/ap"
+  },
+  {
+    "id": "aqb",
+    "href": "https://bots.bocchi.trade/join/aqb"
+  },
+  {
+    "id": "q",
+    "href": "https://bots.bocchi.trade/join/q"
+  },
+  {
+    "id": "qa",
+    "href": "https://bots.bocchi.trade/join/qa"
+  },
+  {
+    "id": "aq",
+    "href": "https://bots.bocchi.trade/join/aq"
+  },
+  {
+    "id": "arb",
+    "href": "https://bots.bocchi.trade/join/arb"
+  },
+  {
+    "id": "r",
+    "href": "https://bots.bocchi.trade/join/r"
+  },
+  {
+    "id": "ra",
+    "href": "https://bots.bocchi.trade/join/ra"
+  },
+  {
+    "id": "ar",
+    "href": "https://bots.bocchi.trade/join/ar"
+  },
+  {
+    "id": "asb",
+    "href": "https://bots.bocchi.trade/join/asb"
+  },
+  {
+    "id": "s",
+    "href": "https://bots.bocchi.trade/join/s"
+  },
+  {
+    "id": "sa",
+    "href": "https://bots.bocchi.trade/join/sa"
+  },
+  {
+    "id": "as",
+    "href": "https://bots.bocchi.trade/join/as"
+  },
+  {
+    "id": "atb",
+    "href": "https://bots.bocchi.trade/join/atb"
+  },
+  {
+    "id": "t",
+    "href": "https://bots.bocchi.trade/join/t"
+  },
+  {
+    "id": "ta",
+    "href": "https://bots.bocchi.trade/join/ta"
+  },
+  {
+    "id": "at",
+    "href": "https://bots.bocchi.trade/join/at"
+  },
+  {
+    "id": "aub",
+    "href": "https://bots.bocchi.trade/join/aub"
+  },
+  {
+    "id": "u",
+    "href": "https://bots.bocchi.trade/join/u"
+  },
+  {
+    "id": "ua",
+    "href": "https://bots.bocchi.trade/join/ua"
+  },
+  {
+    "id": "au",
+    "href": "https://bots.bocchi.trade/join/au"
+  },
+  {
+    "id": "avb",
+    "href": "https://bots.bocchi.trade/join/avb"
+  },
+  {
+    "id": "v",
+    "href": "https://bots.bocchi.trade/join/v"
+  },
+  {
+    "id": "va",
+    "href": "https://bots.bocchi.trade/join/va"
+  },
+  {
+    "id": "av",
+    "href": "https://bots.bocchi.trade/join/av"
+  },
+  {
+    "id": "awb",
+    "href": "https://bots.bocchi.trade/join/awb"
+  },
+  {
+    "id": "w",
+    "href": "https://bots.bocchi.trade/join/w"
+  },
+  {
+    "id": "wa",
+    "href": "https://bots.bocchi.trade/join/wa"
+  },
+  {
+    "id": "aw",
+    "href": "https://bots.bocchi.trade/join/aw"
+  },
+  {
+    "id": "axb",
+    "href": "https://bots.bocchi.trade/join/axb"
+  },
+  {
+    "id": "x",
+    "href": "https://bots.bocchi.trade/join/x"
+  },
+  {
+    "id": "xa",
+    "href": "https://bots.bocchi.trade/join/xa"
+  },
+  {
+    "id": "ax",
+    "href": "https://bots.bocchi.trade/join/ax"
+  },
+  {
+    "id": "ayb",
+    "href": "https://bots.bocchi.trade/join/ayb"
+  },
+  {
+    "id": "y",
+    "href": "https://bots.bocchi.trade/join/y"
+  },
+  {
+    "id": "ya",
+    "href": "https://bots.bocchi.trade/join/ya"
+  },
+  {
+    "id": "ay",
+    "href": "https://bots.bocchi.trade/join/ay"
+  },
+  {
+    "id": "azb",
+    "href": "https://bots.bocchi.trade/join/azb"
+  },
+  {
+    "id": "z",
+    "href": "https://bots.bocchi.trade/join/z"
+  },
+  {
+    "id": "za",
+    "href": "https://bots.bocchi.trade/join/za"
+  },
+  {
+    "id": "az",
+    "href": "https://bots.bocchi.trade/join/az"
+  },
+  {
+    "id": "a{b",
+    "href": "https://bots.bocchi.trade/join/a%7Bb"
+  },
+  {
+    "id": "{",
+    "href": "https://bots.bocchi.trade/join/%7B"
+  },
+  {
+    "id": "{a",
+    "href": "https://bots.bocchi.trade/join/%7Ba"
+  },
+  {
+    "id": "a{",
+    "href": "https://bots.bocchi.trade/join/a%7B"
+  },
+  {
+    "id": "a|b",
+    "href": "https://bots.bocchi.trade/join/a|b"
+  },
+  {
+    "id": "|",
+    "href": "https://bots.bocchi.trade/join/|"
+  },
+  {
+    "id": "|a",
+    "href": "https://bots.bocchi.trade/join/|a"
+  },
+  {
+    "id": "a|",
+    "href": "https://bots.bocchi.trade/join/a|"
+  },
+  {
+    "id": "a}b",
+    "href": "https://bots.bocchi.trade/join/a%7Db"
+  },
+  {
+    "id": "}",
+    "href": "https://bots.bocchi.trade/join/%7D"
+  },
+  {
+    "id": "}a",
+    "href": "https://bots.bocchi.trade/join/%7Da"
+  },
+  {
+    "id": "a}",
+    "href": "https://bots.bocchi.trade/join/a%7D"
+  },
+  {
+    "id": "a~b",
+    "href": "https://bots.bocchi.trade/join/a~b"
+  },
+  {
+    "id": "~",
+    "href": "https://bots.bocchi.trade/join/~"
+  },
+  {
+    "id": "~a",
+    "href": "https://bots.bocchi.trade/join/~a"
+  },
+  {
+    "id": "a~",
+    "href": "https://bots.bocchi.trade/join/a~"
+  },
+  {
+    "id": "ab",
+    "href": "https://bots.bocchi.trade/join/a%7Fb"
+  },
+  {
+    "id": "",
+    "href": "https://bots.bocchi.trade/join/%7F"
+  },
+  {
+    "id": "a",
+    "href": "https://bots.bocchi.trade/join/%7Fa"
+  },
+  {
+    "id": "a",
+    "href": "https://bots.bocchi.trade/join/a%7F"
+  },
+  {
+    "id": "aéb",
+    "href": "https://bots.bocchi.trade/join/a%C3%A9b"
+  },
+  {
+    "id": "é",
+    "href": "https://bots.bocchi.trade/join/%C3%A9"
+  },
+  {
+    "id": "a😀b",
+    "href": "https://bots.bocchi.trade/join/a%F0%9F%98%80b"
+  },
+  {
+    "id": "😀",
+    "href": "https://bots.bocchi.trade/join/%F0%9F%98%80"
+  },
+  {
+    "id": "a b",
+    "href": "https://bots.bocchi.trade/join/a%C2%A0b"
+  },
+  {
+    "id": " ",
+    "href": "https://bots.bocchi.trade/join/%C2%A0"
+  },
+  {
+    "id": "a b",
+    "href": "https://bots.bocchi.trade/join/a%E2%80%A8b"
+  },
+  {
+    "id": " ",
+    "href": "https://bots.bocchi.trade/join/%E2%80%A8"
+  },
+  {
+    "id": "a�b",
+    "href": "https://bots.bocchi.trade/join/a%EF%BF%BDb"
+  },
+  {
+    "id": "�",
+    "href": "https://bots.bocchi.trade/join/%EF%BF%BD"
+  },
+  {
+    "id": "a日本b",
+    "href": "https://bots.bocchi.trade/join/a%E6%97%A5%E6%9C%ACb"
+  },
+  {
+    "id": "日本",
+    "href": "https://bots.bocchi.trade/join/%E6%97%A5%E6%9C%AC"
+  },
+  {
+    "id": "ab",
+    "href": "https://bots.bocchi.trade/join/a%C2%85b"
+  },
+  {
+    "id": "",
+    "href": "https://bots.bocchi.trade/join/%C2%85"
+  },
+  {
+    "id": "?a'b",
+    "href": "https://bots.bocchi.trade/join/?a%27b"
+  },
+  {
+    "id": "?a b",
+    "href": "https://bots.bocchi.trade/join/?a%20b"
+  },
+  {
+    "id": "?a\"b",
+    "href": "https://bots.bocchi.trade/join/?a%22b"
+  },
+  {
+    "id": "?a<b",
+    "href": "https://bots.bocchi.trade/join/?a%3Cb"
+  },
+  {
+    "id": "?a>b",
+    "href": "https://bots.bocchi.trade/join/?a%3Eb"
+  },
+  {
+    "id": "?a`b",
+    "href": "https://bots.bocchi.trade/join/?a`b"
+  },
+  {
+    "id": "?a{b",
+    "href": "https://bots.bocchi.trade/join/?a{b"
+  },
+  {
+    "id": "?a^b",
+    "href": "https://bots.bocchi.trade/join/?a^b"
+  },
+  {
+    "id": "?é",
+    "href": "https://bots.bocchi.trade/join/?%C3%A9"
+  },
+  {
+    "id": "?\u0001",
+    "href": "https://bots.bocchi.trade/join/?"
+  },
+  {
+    "id": "#a`b",
+    "href": "https://bots.bocchi.trade/join/#a%60b"
+  },
+  {
+    "id": "#a b",
+    "href": "https://bots.bocchi.trade/join/#a%20b"
+  },
+  {
+    "id": "#a\"b",
+    "href": "https://bots.bocchi.trade/join/#a%22b"
+  },
+  {
+    "id": "#a<b",
+    "href": "https://bots.bocchi.trade/join/#a%3Cb"
+  },
+  {
+    "id": "#a>b",
+    "href": "https://bots.bocchi.trade/join/#a%3Eb"
+  },
+  {
+    "id": "#a'b",
+    "href": "https://bots.bocchi.trade/join/#a'b"
+  },
+  {
+    "id": "#é",
+    "href": "https://bots.bocchi.trade/join/#%C3%A9"
+  },
+  {
+    "id": "#\u0001",
+    "href": "https://bots.bocchi.trade/join/#"
+  },
+  {
+    "id": "a?b?c",
+    "href": "https://bots.bocchi.trade/join/a?b?c"
+  },
+  {
+    "id": "a#b#c",
+    "href": "https://bots.bocchi.trade/join/a#b#c"
+  },
+  {
+    "id": "a?b#c?d",
+    "href": "https://bots.bocchi.trade/join/a?b#c?d"
+  },
+  {
+    "id": "x?y\\z",
+    "href": "https://bots.bocchi.trade/join/x?y\\z"
+  },
+  {
+    "id": "x#y\\z",
+    "href": "https://bots.bocchi.trade/join/x#y\\z"
+  },
+  {
+    "id": "?%",
+    "href": "https://bots.bocchi.trade/join/?%"
+  },
+  {
+    "id": "#%",
+    "href": "https://bots.bocchi.trade/join/#%"
+  },
+  {
+    "id": ".",
+    "href": "https://bots.bocchi.trade/join/"
+  },
+  {
+    "id": "..",
+    "href": "https://bots.bocchi.trade/"
+  },
+  {
+    "id": "...",
+    "href": "https://bots.bocchi.trade/join/..."
+  },
+  {
+    "id": "%2e",
+    "href": "https://bots.bocchi.trade/join/"
+  },
+  {
+    "id": "%2E",
+    "href": "https://bots.bocchi.trade/join/"
+  },
+  {
+    "id": "%2e%2e",
+    "href": "https://bots.bocchi.trade/"
+  },
+  {
+    "id": ".%2e",
+    "href": "https://bots.bocchi.trade/"
+  },
+  {
+    "id": "%2e.",
+    "href": "https://bots.bocchi.trade/"
+  },
+  {
+    "id": "a/..",
+    "href": "https://bots.bocchi.trade/join/"
+  },
+  {
+    "id": "a/../b",
+    "href": "https://bots.bocchi.trade/join/b"
+  },
+  {
+    "id": "a/./b",
+    "href": "https://bots.bocchi.trade/join/a/b"
+  },
+  {
+    "id": "a\\b",
+    "href": "https://bots.bocchi.trade/join/a/b"
+  },
+  {
+    "id": "a\\..\\b",
+    "href": "https://bots.bocchi.trade/join/b"
+  },
+  {
+    "id": "?x",
+    "href": "https://bots.bocchi.trade/join/?x"
+  },
+  {
+    "id": "#y",
+    "href": "https://bots.bocchi.trade/join/#y"
+  },
+  {
+    "id": "a?b#c",
+    "href": "https://bots.bocchi.trade/join/a?b#c"
+  },
+  {
+    "id": "a%",
+    "href": "https://bots.bocchi.trade/join/a%"
+  },
+  {
+    "id": "%zz",
+    "href": "https://bots.bocchi.trade/join/%zz"
+  },
+  {
+    "id": "%41",
+    "href": "https://bots.bocchi.trade/join/%41"
+  },
+  {
+    "id": "a b",
+    "href": "https://bots.bocchi.trade/join/a%20b"
+  },
+  {
+    "id": " a",
+    "href": "https://bots.bocchi.trade/join/%20a"
+  },
+  {
+    "id": "a ",
+    "href": "https://bots.bocchi.trade/join/a"
+  },
+  {
+    "id": "\t",
+    "href": "https://bots.bocchi.trade/join/"
+  },
+  {
+    "id": "a\tb",
+    "href": "https://bots.bocchi.trade/join/ab"
+  },
+  {
+    "id": "a\nb",
+    "href": "https://bots.bocchi.trade/join/ab"
+  },
+  {
+    "id": "x/",
+    "href": "https://bots.bocchi.trade/join/x/"
+  },
+  {
+    "id": "/x",
+    "href": "https://bots.bocchi.trade/join//x"
+  },
+  {
+    "id": "//x",
+    "href": "https://bots.bocchi.trade/join///x"
+  },
+  {
+    "id": "a//b",
+    "href": "https://bots.bocchi.trade/join/a//b"
+  },
+  {
+    "id": "..%2f",
+    "href": "https://bots.bocchi.trade/join/..%2f"
+  },
+  {
+    "id": "a;b",
+    "href": "https://bots.bocchi.trade/join/a;b"
+  },
+  {
+    "id": "a=b",
+    "href": "https://bots.bocchi.trade/join/a=b"
+  },
+  {
+    "id": "a@b",
+    "href": "https://bots.bocchi.trade/join/a@b"
+  },
+  {
+    "id": "a:b",
+    "href": "https://bots.bocchi.trade/join/a:b"
+  },
+  {
+    "id": "uuid-1234-ABCD",
+    "href": "https://bots.bocchi.trade/join/uuid-1234-ABCD"
+  },
+  {
+    "id": "123e4567-e89b-12d3-a456-426614174000",
+    "href": "https://bots.bocchi.trade/join/123e4567-e89b-12d3-a456-426614174000"
+  }
 ]
