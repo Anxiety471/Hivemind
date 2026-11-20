@@ -98,11 +98,11 @@ func EnsureBoard(ctx context.Context, tx pgx.Tx, spaceID string) (Board, error) 
 
 func now() time.Time { return time.Now().UTC().Truncate(time.Millisecond) }
 
-// openBoard is the route's own first step: the lab gate and ensureBoard, committed before the
-// write it precedes.
-func openBoard(ctx context.Context, database *db.DB, deployment shared.Deployment, actor db.Actor) (Board, error) {
-	var board Board
-	err := database.Tenant(ctx, actor, func(tx pgx.Tx) error {
+// Gate is the boardEnabled middleware (routes/context.ts:471-480): the deployment's lab, else the
+// account's own list. The route runs it before it parses the input, so bad input against an
+// account without the lab is a 404 rather than a 400.
+func Gate(ctx context.Context, database *db.DB, deployment shared.Deployment, actor db.Actor) error {
+	return database.Tenant(ctx, actor, func(tx pgx.Tx) error {
 		enabled, err := Enabled(ctx, tx, deployment, actor.UserID)
 		if err != nil {
 			return err
@@ -110,6 +110,16 @@ func openBoard(ctx context.Context, database *db.DB, deployment shared.Deploymen
 		if !enabled {
 			return errBoardDisabled
 		}
+		return nil
+	})
+}
+
+// openBoard is the route's own first step after the input is parsed: ensureBoard, committed in
+// its own transaction before the write it precedes.
+func openBoard(ctx context.Context, database *db.DB, actor db.Actor) (Board, error) {
+	var board Board
+	err := database.Tenant(ctx, actor, func(tx pgx.Tx) error {
+		var err error
 		board, err = EnsureBoard(ctx, tx, actor.SpaceID)
 		return err
 	})
@@ -259,13 +269,17 @@ func parseMove(raw orpc.Input) (moveInput, *orpc.Error) {
 // Move implements tickets.move: updateTicket with only a status (ticket-tools.ts:207-259 as the
 // move route calls it). The assignee is untouched, so nothing wakes.
 func Move(ctx context.Context, database *db.DB, deployment shared.Deployment, actor db.Actor, raw orpc.Input) (any, *orpc.Error) {
+	// boardEnabled runs before the input parse, as the route's middleware does.
+	if err := Gate(ctx, database, deployment, actor); err != nil {
+		return nil, shared.Failure(err)
+	}
 	input, failure := parseMove(raw)
 	if failure != nil {
 		return nil, failure
 	}
 	// ensureBoard runs on its own, as it does in TypeScript: a move that then fails leaves the
 	// board it created behind.
-	board, err := openBoard(ctx, database, deployment, actor)
+	board, err := openBoard(ctx, database, actor)
 	if err != nil {
 		return nil, shared.Failure(err)
 	}
@@ -352,12 +366,16 @@ func findTicket(ctx context.Context, tx pgx.Tx, spaceID, boardID, ticketID strin
 // Comment implements tickets.comment: commentTicket (ticket-tools.ts:266-299). The author is the
 // signed-in person; no bot authors a comment from this route.
 func Comment(ctx context.Context, database *db.DB, deployment shared.Deployment, actor db.Actor, raw orpc.Input) (any, *orpc.Error) {
+	// boardEnabled runs before the input parse, as the route's middleware does.
+	if err := Gate(ctx, database, deployment, actor); err != nil {
+		return nil, shared.Failure(err)
+	}
 	input, failure := parseComment(raw)
 	if failure != nil {
 		return nil, failure
 	}
 	// ensureBoard commits on its own here too, so a comment on an unknown ticket still opens the board.
-	board, err := openBoard(ctx, database, deployment, actor)
+	board, err := openBoard(ctx, database, actor)
 	if err != nil {
 		return nil, shared.Failure(err)
 	}
