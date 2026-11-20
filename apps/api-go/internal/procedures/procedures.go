@@ -25,6 +25,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/memorycfg"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/messaging"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/models"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/onboarding"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/pages"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/routines"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/scratchpad"
@@ -495,6 +496,25 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 			ReadOnly: true,
 			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
 				return memory.ExportMarkdown(ctx, database, actor, deployment.Content, input)
+			},
+		},
+		{
+			Name: "onboarding.promptFocus",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return onboarding.PromptFocus(ctx, database, deployment, actor, input)
+			},
+		},
+		{
+			Name: "onboarding.dismissFocus",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return onboarding.DismissFocus(ctx, database, deployment, actor, input)
+			},
+		},
+		{
+			Name:     "computer.commands",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return computer.Commands(ctx, database, deployment, actor, input)
 			},
 		},
 	}

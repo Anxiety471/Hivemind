@@ -38,6 +38,7 @@ func TestRegistryHasTheServedProceduresAndNotTrust(t *testing.T) {
 		"organizations.invitations.preview",
 		"models.rename", "pages.rename", "pages.pin", "artifacts.list", "artifacts.listSpace", "artifacts.listVersions",
 		"memory.list", "memory.budget", "memory.update", "memory.remove", "memory.exportMarkdown",
+		"onboarding.promptFocus", "onboarding.dismissFocus", "computer.commands",
 	} {
 		if !seen[name] {
 			t.Errorf("missing %s", name)
@@ -79,11 +80,11 @@ func TestRegistryHasTheServedProceduresAndNotTrust(t *testing.T) {
 	}
 	// create seeds an encrypted memory document; remove, the departures and account deletion
 	// run teardown; invites.create and organizations.invitations.create send email;
-	// setRole, remove and invitations.cancel publish organization changes (a product event);
-	// invitations.accept also syncs billing seats.
+	// members.remove and invitations.accept hand Spaces over or sync billing seats. setRole and
+	// invitations.cancel are served: their organization signal is internal/effects.
 	for _, name := range []string{"spaces.create", "spaces.remove", "spaces.members.remove", "spaces.members.leave",
-		"spaces.invites.create", "organizations.create", "organizations.remove", "organizations.members.setRole",
-		"organizations.members.remove", "organizations.invitations.create", "organizations.invitations.cancel",
+		"spaces.invites.create", "organizations.create", "organizations.remove",
+		"organizations.members.remove", "organizations.invitations.create",
 		"organizations.invitations.accept"} {
 		if seen[name] {
 			t.Errorf("%s must not be served locally", name)
