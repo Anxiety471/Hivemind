@@ -3,6 +3,7 @@
  * implementation for the Go port's golden test (internal/cron/testdata).
  * Run from the repo root:
  *   node_modules/.bin/tsx apps/api-go/tools/cron-golden.mts > apps/api-go/internal/cron/testdata/cron_golden.json
+ *   pnpm exec biome format --write apps/api-go/internal/cron/testdata/cron_golden.json
  *
  * Every case carries the cron list, the starting instant, the timezone and the
  * ISO result (null when TypeScript throws or there is no next run). Cases with
