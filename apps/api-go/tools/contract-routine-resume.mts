@@ -146,6 +146,8 @@ export function routineResumeCases(system: System): Case[] {
     after: [{ procedure: "routines.list", input: { botId: `__s-${bot}__` } }],
     // routines.list has no orderBy: compare it by id, as the other unordered reads are.
     unordered: true,
+    // The resumed watch routine's first run executes in this process seconds later.
+    gapMs: 5000,
   });
   return [
     restoreCase("archived", "rrbot", seedRestore),
@@ -162,6 +164,8 @@ export function routineResumeCases(system: System): Case[] {
       ],
       // routines.list has no orderBy: compare it by id, as the other unordered reads are.
       unordered: true,
+      // The resumed routines' first runs execute in this process seconds later.
+      gapMs: 5000,
     },
   ];
 }

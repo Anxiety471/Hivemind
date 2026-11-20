@@ -95,6 +95,12 @@ export type Case = {
   unorderedSections?: boolean;
   /** Runs only with CONTRACT_EMAIL=1 (email delivery configured on both sides); otherwise only without it. */
   email?: boolean;
+  /**
+   * Pause between the two sides' windows so a TypeScript background job's Space changes (the
+   * in-process wakeup queue may finish a restored routine seconds after the response; the Go
+   * side only enqueues its job and nothing executes it here) land in neither window.
+   */
+  gapMs?: number;
 };
 
 function cookieFor(token: string) {
@@ -7589,6 +7595,12 @@ for (const testCase of cases) {
     testCase.procedure,
   );
   const tsState = normalize(await databaseState(caseIds));
+
+  // A TypeScript background job (a restored routine's first run, say) publishes its Space changes
+  // after the request returned; the Go side enqueues the same job but nothing executes it in the
+  // harness, so its signals would land only on the TypeScript side's tab. Drop the stragglers in
+  // this gap, before the Go window starts capturing.
+  if (testCase.gapMs) await sleep(testCase.gapMs);
 
   seeded = await seed(caseIds);
   if (testCase.seed) await testCase.seed(seeded);
