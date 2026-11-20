@@ -473,6 +473,22 @@ export function fallbackAwareModelStream(
     let buffered: AssistantMessageEvent[] = [];
     let retries = 0;
     let recoveredIdle = false;
+    // Failures this call moved past by a retry or a backup, for model.retry.recovered.
+    let handledFailures = 0;
+    let firstFailureAt = 0;
+    /** What the call did with a failure the retry rules decided on, for studying them from logs. */
+    const logRetryAction = (
+      from: RuntimeModelTarget,
+      action: "backup" | "retry" | "surface",
+      details: Record<string, string | number>,
+    ) =>
+      getLogger().info("model.retry.action", {
+        runId: state.request.runId,
+        provider: from.config.provider,
+        model: from.config.id,
+        "retry.action": action,
+        ...details,
+      });
     let sizingFailure: Extract<AssistantMessageEvent, { type: "error" }> | undefined;
     // Bound same-model retries. Explicit backups retain their per-model header
     // timeout: a post-header idle watchdog can already exceed that timeout.
@@ -742,6 +758,11 @@ export function fallbackAwareModelStream(
               const switched = await switchToNext(target);
               if (failIfAborted(target)) return;
               if (switched) {
+                if (handledFailures++ === 0) firstFailureAt = Date.now();
+                logRetryAction(target, "backup", {
+                  "retry.to_provider": state.getActive().config.provider,
+                  "retry.to_model": state.getActive().config.id,
+                });
                 resetForBackup();
                 buffered = [];
                 restart = true;
@@ -768,6 +789,11 @@ export function fallbackAwareModelStream(
                 // Ordinary failures and backoff share the remaining retry window.
                 if (delay !== undefined && Date.now() - startedAt + delay < timeoutMs) {
                   retries += 1;
+                  if (handledFailures++ === 0) firstFailureAt = Date.now();
+                  logRetryAction(target, "retry", {
+                    "retry.attempt": retries,
+                    "retry.delay_ms": delay,
+                  });
                   await abortableDelay(delay, signal);
                   if (failIfAborted(target)) return;
                   if (Date.now() - startedAt < timeoutMs) {
@@ -778,6 +804,16 @@ export function fallbackAwareModelStream(
                 }
                 terminalEvent = firstRetryableError;
               }
+            }
+            if (decision) {
+              logRetryAction(target, "surface", {
+                "retry.reason": !decision.switchToBackup
+                  ? "not_retryable"
+                  : decision.retrySameModel
+                    ? "retry_budget_spent"
+                    : "no_backup",
+                "retry.failures": handledFailures + 1,
+              });
             }
             const cutText = lastPartial ? assistantText(lastPartial) : "";
             if (
@@ -825,6 +861,16 @@ export function fallbackAwareModelStream(
             // A recovered call must not replace a later failure with its old error.
             state.primaryFailure = undefined;
             state.backupOutcomes.delete(targetKey);
+            if (handledFailures > 0) {
+              getLogger().info("model.retry.recovered", {
+                runId: state.request.runId,
+                provider: target.config.provider,
+                model: target.config.id,
+                "retry.failures": handledFailures,
+                "retry.elapsed_ms": Date.now() - firstFailureAt,
+              });
+              handledFailures = 0;
+            }
             if (
               event.message.stopReason === "length" &&
               !event.message.errorMessage &&

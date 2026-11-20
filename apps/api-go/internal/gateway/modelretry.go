@@ -23,6 +23,10 @@ type modelRetryRequest struct {
 	Message              string `json:"message"`
 	Provider             string `json:"provider"`
 	RequestLimitTooSmall bool   `json:"requestLimitTooSmall"`
+	// RunID and Model are only logged, so a decision can be matched to the
+	// runtime's own log lines.
+	RunID string `json:"runId"`
+	Model string `json:"model"`
 }
 
 type modelRetryResponse struct {
@@ -72,6 +76,21 @@ func (g *Gateway) modelRetry(w http.ResponseWriter, r *http.Request) {
 			response.Unrecognized.Status = &status
 		}
 	}
+	// The provider's message is not logged: it can quote the request.
+	attributes := []any{
+		"run.id", request.RunID,
+		"provider", request.Provider,
+		"model", request.Model,
+		"retry.class", modelretry.Failure(request.Message, request.Provider, request.Provider, false).String(),
+		"retry.switch_to_backup", decision.SwitchToBackup,
+		"retry.same_model", decision.RetrySameModel,
+		"retry.unrecognized", decision.Unexplained != nil,
+		"retry.request_limit_too_small", request.RequestLimitTooSmall,
+	}
+	if status, ok := modelretry.Status(request.Message); ok {
+		attributes = append(attributes, "error.status", status)
+	}
+	g.logger.Info("model.retry.decided", attributes...)
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(response)

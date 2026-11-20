@@ -19,6 +19,7 @@ import {
 } from "@rakazo/core";
 import type { Deferred } from "@rakazo/core/test-async";
 import { deferred, flush } from "@rakazo/core/test-async";
+import { createLogger, createTestSink, installLogger } from "@rakazo/logging";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const providerState = vi.hoisted(() => ({
@@ -427,6 +428,80 @@ describe("Pi runtime transient model retries", () => {
     expect(events.at(-1)).toEqual({ type: "done", text: "Recovered." });
     expect(providerState.stream).toHaveBeenCalledTimes(2);
     expect(providerState.delay.mock.calls.map(([delay]) => delay)).toEqual([2_000]);
+  });
+
+  it("logs each failure's decision, what the call did with it and the recovery", async () => {
+    const sink = createTestSink();
+    installLogger(createLogger({ service: "rakazo-worker", sinks: [sink] }));
+    providerState.stream.mockImplementation((target: Model<"openai-completions">) =>
+      target.provider === primary.provider
+        ? stream(target, message(target, [], "error", "HTTP 503 unavailable"))
+        : providerState.stream.mock.calls.filter(([called]) => called.provider !== primary.provider)
+              .length === 1
+          ? stream(target, message(target, [], "error", unexplained))
+          : stream(target, message(target, [{ type: "text", text: "backup answer" }], "stop")),
+    );
+    await run(request([{ provider: backupA.provider, id: backupA.id, apiKey: "backup-key" }]));
+    const retryLogs = sink.events
+      .filter((event) => event.message.startsWith("model.retry."))
+      .map(({ message, provider, model, ...fields }) => ({
+        message,
+        provider,
+        model,
+        ...Object.fromEntries(Object.entries(fields).filter(([key]) => key.startsWith("retry."))),
+      }));
+    expect(retryLogs).toEqual([
+      expect.objectContaining({
+        message: "model.retry.decided",
+        provider: primary.provider,
+        "retry.rule": "transient",
+        "retry.source": "local",
+      }),
+      {
+        message: "model.retry.action",
+        provider: primary.provider,
+        model: primary.id,
+        "retry.action": "backup",
+        "retry.to_provider": backupA.provider,
+        "retry.to_model": backupA.id,
+      },
+      expect.objectContaining({
+        message: "model.retry.decided",
+        provider: backupA.provider,
+        "retry.rule": "unrecognized",
+      }),
+      {
+        message: "model.retry.action",
+        provider: backupA.provider,
+        model: backupA.id,
+        "retry.action": "retry",
+        "retry.attempt": 1,
+        "retry.delay_ms": 2_000,
+      },
+      {
+        message: "model.retry.recovered",
+        provider: backupA.provider,
+        model: backupA.id,
+        "retry.failures": 2,
+        "retry.elapsed_ms": expect.any(Number),
+      },
+    ]);
+  });
+
+  it("logs why a failure reached the run", async () => {
+    const sink = createTestSink();
+    installLogger(createLogger({ service: "rakazo-worker", sinks: [sink] }));
+    providerState.stream.mockImplementation(() =>
+      stream(primary, message(primary, [], "error", "permission denied; terminated")),
+    );
+    await expect(run(request())).rejects.toThrow();
+    expect(sink.events.filter((event) => event.message === "model.retry.action")).toEqual([
+      expect.objectContaining({
+        "retry.action": "surface",
+        "retry.reason": "not_retryable",
+        "retry.failures": 1,
+      }),
+    ]);
   });
 
   it("exhausts the retry budget on an unexplained failure and surfaces it", async () => {

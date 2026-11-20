@@ -1,7 +1,9 @@
 package gateway
 
 import (
+	"bytes"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -13,6 +15,11 @@ import (
 
 func modelRetryGateway(t *testing.T) *Gateway {
 	t.Helper()
+	return modelRetryGatewayLogging(t, discardLogger())
+}
+
+func modelRetryGatewayLogging(t *testing.T, logger *slog.Logger) *Gateway {
+	t.Helper()
 	target, err := url.Parse("http://127.0.0.1:1")
 	if err != nil {
 		t.Fatalf("parse upstream: %v", err)
@@ -21,7 +28,46 @@ func modelRetryGateway(t *testing.T) *Gateway {
 	if err := store.Load(); err != nil {
 		t.Fatalf("load routes: %v", err)
 	}
-	return New(Options{Upstream: target, Routes: store, Logger: discardLogger()})
+	return New(Options{Upstream: target, Routes: store, Logger: logger})
+}
+
+func TestModelRetryLogsTheDecisionWithoutTheProviderText(t *testing.T) {
+	t.Parallel()
+	var logs bytes.Buffer
+	gateway := modelRetryGatewayLogging(t, slog.New(slog.NewJSONHandler(&logs, nil)))
+	body := `{"message":"400 {\"error\":{\"message\":\"Upstream returned an unexpected reply about secret-plan.\"}}","provider":"provider-a","runId":"run-1","model":"primary"}`
+	if response := askModelRetry(t, gateway, "127.0.0.1:41000", body, nil); response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", response.Code)
+	}
+	var decided map[string]any
+	for line := range strings.SplitSeq(strings.TrimSpace(logs.String()), "\n") {
+		var entry map[string]any
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			t.Fatalf("log line %q: %v", line, err)
+		}
+		if entry["msg"] == "model.retry.decided" {
+			decided = entry
+		}
+	}
+	want := map[string]any{
+		"run.id":                        "run-1",
+		"provider":                      "provider-a",
+		"model":                         "primary",
+		"retry.class":                   "server",
+		"retry.switch_to_backup":        true,
+		"retry.same_model":              false,
+		"retry.unrecognized":            true,
+		"retry.request_limit_too_small": false,
+		"error.status":                  float64(400),
+	}
+	for key, value := range want {
+		if decided[key] != value {
+			t.Fatalf("model.retry.decided %s = %v, want %v (entry %v)", key, decided[key], value, decided)
+		}
+	}
+	if strings.Contains(logs.String(), "secret-plan") {
+		t.Fatalf("logs quote the provider's message: %s", logs.String())
+	}
 }
 
 func askModelRetry(t *testing.T, gateway *Gateway, remote string, body string, header http.Header) *httptest.ResponseRecorder {
