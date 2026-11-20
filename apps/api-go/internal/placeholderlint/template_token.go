@@ -1,6 +1,9 @@
 package placeholderlint
 
-import "strings"
+import (
+	"slices"
+	"strings"
+)
 
 // TemplateToken flags values that are, or contain as a clearly delimited
 // token, a template escape: "${...}", "{{...}}", an angle token such as
@@ -75,7 +78,52 @@ func angleTokenContent(content string) bool {
 			return false
 		}
 	}
-	return hasLetter
+	return hasLetter && !angleTokenDenied(content)
+}
+
+// angleTokenDenylist holds markup tag names and C++ standard header names
+// that are real content rather than placeholders. Add names here; matching is
+// case-insensitive. "path" and "text" are deliberately absent because they
+// are also common placeholder names.
+var angleTokenDenylist = []string{
+	// HTML elements.
+	"a", "abbr", "address", "area", "article", "aside", "audio", "b", "base",
+	"bdi", "bdo", "blockquote", "body", "br", "button", "canvas", "caption",
+	"cite", "code", "col", "colgroup", "data", "datalist", "dd", "del",
+	"details", "dfn", "dialog", "div", "dl", "dt", "em", "embed", "fieldset",
+	"figcaption", "figure", "footer", "form", "h1", "h2", "h3", "h4", "h5",
+	"h6", "head", "header", "hgroup", "hr", "html", "i", "iframe", "img",
+	"input", "ins", "kbd", "label", "legend", "li", "link", "main", "map",
+	"mark", "menu", "meta", "meter", "nav", "noscript", "object", "ol",
+	"optgroup", "option", "output", "p", "picture", "pre", "progress", "q",
+	"rp", "rt", "ruby", "s", "samp", "script", "search", "section", "select",
+	"slot", "small", "source", "span", "strong", "style", "sub", "summary",
+	"sup", "table", "tbody", "td", "template", "textarea", "tfoot", "th",
+	"thead", "time", "title", "tr", "track", "u", "ul", "var", "video", "wbr",
+	// Common SVG elements.
+	"circle", "clippath", "defs", "desc", "ellipse", "g", "image", "line",
+	"lineargradient", "marker", "mask", "metadata", "pattern", "polygon",
+	"polyline", "radialgradient", "rect", "stop", "svg", "switch", "symbol",
+	"tspan", "use", "view",
+	// C++ standard headers.
+	"algorithm", "array", "atomic", "bitset", "cassert", "cctype", "cerrno",
+	"cfloat", "chrono", "cinttypes", "climits", "cmath", "codecvt", "complex",
+	"condition_variable", "csetjmp", "csignal", "cstdarg", "cstddef",
+	"cstdint", "cstdio", "cstdlib", "cstring", "ctime", "cwchar", "cwctype",
+	"deque", "exception", "filesystem", "forward_list", "fstream",
+	"functional", "future", "initializer_list", "iomanip", "ios", "iosfwd",
+	"iostream", "istream", "iterator", "limits", "list", "locale", "map",
+	"memory", "mutex", "new", "numeric", "optional", "ostream", "queue",
+	"random", "ratio", "regex", "set", "shared_mutex", "sstream", "stack",
+	"stdbool", "stdexcept", "stdio.h", "stdlib.h", "string", "string.h",
+	"string_view", "system_error", "thread", "tuple", "type_traits",
+	"typeindex", "typeinfo", "unordered_map", "unordered_set", "utility",
+	"valarray", "variant", "vector", "wchar.h", "wctype.h",
+}
+
+func angleTokenDenied(content string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(content))
+	return slices.Contains(angleTokenDenylist, normalized)
 }
 
 func angleDelimited(value string, start, end int) bool {
