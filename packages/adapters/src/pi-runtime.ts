@@ -18,7 +18,12 @@ import type {
   AgentUsage,
   ModelCallObserver,
 } from "@rakazo/adapter-kit";
-import { ModelAccountError, ModelOutputError, TransientModelError } from "@rakazo/adapter-kit";
+import {
+  ModelAccountError,
+  ModelContentFilterError,
+  ModelOutputError,
+  TransientModelError,
+} from "@rakazo/adapter-kit";
 import {
   MISSING_TOOL_FINAL_RESPONSE_ERROR,
   MODEL_IMAGE_INPUT_ERROR,
@@ -1347,9 +1352,11 @@ export class PiAgentRuntime implements AgentRuntime {
             ? new TransientModelError(message)
             : error instanceof ModelAccountError
               ? new ModelAccountError(message)
-              : error instanceof ModelOutputError
-                ? new ModelOutputError(message)
-                : attachRejectedRequests(new Error(message), rejectedRequestsOf(error) ?? []),
+              : error instanceof ModelContentFilterError
+                ? new ModelContentFilterError(message)
+                : error instanceof ModelOutputError
+                  ? new ModelOutputError(message)
+                  : attachRejectedRequests(new Error(message), rejectedRequestsOf(error) ?? []),
         );
       } finally {
         stopThinking();

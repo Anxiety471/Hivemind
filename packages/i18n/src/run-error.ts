@@ -84,6 +84,13 @@ export const translateRunError: RunErrorTranslator = (message, values) => {
         message: "The model returned an unusable response. Try again.",
         values,
       });
+    case "The model provider's content filter blocked this request. Try another model or rephrase your message.":
+      return i18n._({
+        id: "The model provider's content filter blocked this request. Try another model or rephrase your message.",
+        message:
+          "The model provider's content filter blocked this request. Try another model or rephrase your message.",
+        values,
+      });
     case "The model hit its output limit before finishing its reply.":
       return i18n._({
         id: "The model hit its output limit before finishing its reply.",

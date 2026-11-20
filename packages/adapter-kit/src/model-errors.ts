@@ -30,6 +30,17 @@ export class ModelOutputError extends Error {
   }
 }
 
+/**
+ * The provider's content filter refused the conversation. The same request on the same model is
+ * refused again; another model, or a rephrased message, can get through.
+ */
+export class ModelContentFilterError extends ModelOutputError {
+  constructor(message: string) {
+    super(message);
+    this.name = "ModelContentFilterError";
+  }
+}
+
 function errorFacts(value: unknown) {
   const text: string[] = [];
   const statuses = new Set<number>();
@@ -111,6 +122,39 @@ export function isSignInRetryRequest(error: unknown): boolean {
   );
 }
 
+/** Wording that puts a failure on the request or the caller: cancelled, unauthorised or invalid. */
+const PERMANENT_FAILURE_WORDS =
+  /\b(abort(?:ed)?|cancel(?:lation|led|ed)?|unauthori[sz]ed|forbidden|permission(?: is)? (?:denied|refused|declined)|access denied|consent(?: is)? (?:required|denied|refused|declined|not granted)|user (?:refused|declined)|invalid api key|invalid credential|(?:expired|revoked|missing) (?:api )?(?:key|credential|token)|(?:api )?(?:key|credential|token) (?:expired|revoked|missing)|authentication (?:failed|failure|denied|expired|invalid)|authorization (?:failed|failure|denied|expired|invalid)|bad request|invalid request|invalid input|invalid argument|context length|model not found|unsupported parameter)\b/;
+
+/** Fetch refused a key that is not a valid header value; the quoted key can read like anything. */
+const INVALID_KEY_HEADER =
+  /\bheaders\.append: "[\s\S]*" is an invalid header value\.|\bcannot convert argument to a bytestring because\b/;
+
+/** Error codes for a request too large, unauthorised or malformed. */
+const PERMANENT_FAILURE_CODES =
+  /context[ _-](?:length|window)|too many tokens|maximum context|token limit|request too large|invalid_api_key|authentication_error|permission_error|bad_request/;
+
+/**
+ * Whether the failure says the request or the caller is at fault: cancelled, unauthorised,
+ * invalid, too large, or for a model the provider does not serve. Repeating such a request fails
+ * the same way.
+ */
+export function namesPermanentModelFailure(error: unknown): boolean {
+  const { text } = errorFacts(error);
+  return (
+    PERMANENT_FAILURE_WORDS.test(text) ||
+    INVALID_KEY_HEADER.test(text) ||
+    PERMANENT_FAILURE_CODES.test(text) ||
+    /invalid_request/.test(text)
+  );
+}
+
+/** The HTTP status a model failure reports in its fields or its text; the first of several. */
+export function modelErrorStatus(error: unknown): number | undefined {
+  const [status] = errorFacts(error).statuses;
+  return status;
+}
+
 /** Only provider availability failures may advance the user's explicit chain. */
 export function isRetryableProviderUnavailable(error: unknown): boolean {
   const { text, statuses } = errorFacts(error);
@@ -134,29 +178,11 @@ export function isRetryableProviderUnavailable(error: unknown): boolean {
   ) {
     return false;
   }
-  if (
-    /\b(abort(?:ed)?|cancel(?:lation|led|ed)?|unauthori[sz]ed|forbidden|permission(?: is)? (?:denied|refused|declined)|access denied|consent(?: is)? (?:required|denied|refused|declined|not granted)|user (?:refused|declined)|invalid api key|invalid credential|(?:expired|revoked|missing) (?:api )?(?:key|credential|token)|(?:api )?(?:key|credential|token) (?:expired|revoked|missing)|authentication (?:failed|failure|denied|expired|invalid)|authorization (?:failed|failure|denied|expired|invalid)|bad request|invalid request|invalid input|invalid argument|context length|model not found|unsupported parameter)\b/.test(
-      text,
-    )
-  ) {
-    return false;
-  }
-  // Fetch refused a key that is not a valid header value; the quoted key can read like anything.
-  if (
-    /\bheaders\.append: "[\s\S]*" is an invalid header value\.|\bcannot convert argument to a bytestring because\b/.test(
-      text,
-    )
-  )
-    return false;
+  if (PERMANENT_FAILURE_WORDS.test(text) || INVALID_KEY_HEADER.test(text)) return false;
   // Some providers label payment failures with a generic invalid_request_error code.
   // Their explicit balance error still means a configured backup can serve the call.
   const insufficientBalance = statuses.has(402) && /\binsufficient_balance_error\b/.test(text);
-  if (
-    /context[ _-](?:length|window)|too many tokens|maximum context|token limit|request too large|invalid_api_key|authentication_error|permission_error|bad_request/.test(
-      text,
-    ) ||
-    (!insufficientBalance && /invalid_request/.test(text))
-  )
+  if (PERMANENT_FAILURE_CODES.test(text) || (!insufficientBalance && /invalid_request/.test(text)))
     return false;
   if (statuses.has(402)) {
     return /quota|billing|credit|payment limit|insufficient (?:funds|balance)|insufficient_balance_error/.test(

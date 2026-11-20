@@ -1,11 +1,15 @@
 import {
   isTransientModelError,
   ModelAccountError,
+  ModelContentFilterError,
   ModelOutputError,
+  modelErrorStatus,
+  namesPermanentModelFailure,
   TransientModelError,
 } from "@rakazo/adapter-kit";
 import { OPENAI_COMPATIBLE_PROVIDER_ID } from "@rakazo/contracts";
 import {
+  isContentFilterRejection,
   MODEL_OUTPUT_LIMIT_ERROR,
   normalizeRunError,
   parseModelFallbackFailure,
@@ -120,15 +124,44 @@ export function modelFailure(
   const fallback = parseModelFallbackFailure(message);
   const failures = fallback
     ? [
-        modelFailureClass(fallback.primaryError, fallback.primaryError, primaryProvider),
+        { text: fallback.primaryError, provider: primaryProvider },
         ...fallback.backups
           .filter((item) => item.status === "failed")
-          .map((item) => modelFailureClass(item.reason, item.reason, item.provider)),
+          .map((item) => ({ text: item.reason, provider: item.provider })),
       ]
+    : undefined;
+  // Every model that ran was refused by its content filter: other wording or another model fixes it.
+  if ((failures?.map((item) => item.text) ?? [message]).every(isContentFilterRejection)) {
+    return new ModelContentFilterError(message);
+  }
+  const ranks = failures
+    ? failures.map((item) => modelFailureClass(item.text, item.text, item.provider))
     : [modelFailureClass(error, message, provider, failedAfterAccepting)];
-  const Failure = MODEL_FAILURE_RANK[Math.max(...failures)] ?? Error;
+  const Failure = MODEL_FAILURE_RANK[Math.max(...ranks)] ?? Error;
   return new Failure(message);
 }
+
+/**
+ * A provider failure no rule places: not transient, not unusable output, not the user's account,
+ * key or model, and nothing says the request was invalid or cancelled. Another try or another
+ * model may still succeed. `status` is the HTTP status the provider answered with: it refused
+ * this exact request, so the same model is not asked again, but a backup may be.
+ */
+export function unrecognizedModelFailure(
+  message: string,
+  provider: string,
+): { status: number | undefined } | undefined {
+  if (namesPermanentModelFailure(message)) return undefined;
+  if (modelFailureClass(message, message, provider) !== MODEL_FAILURE_RANK.indexOf(Error)) {
+    return undefined;
+  }
+  // A JSON envelope can carry the status where only the run error parser reads it.
+  const status = modelErrorStatus(message) ?? normalizeRunError(message).status;
+  return status !== undefined && PLACED_STATUSES.has(status) ? undefined : { status };
+}
+
+/** Statuses that name the failure on their own: auth, payment, permission, a gone model, size. */
+const PLACED_STATUSES = new Set([401, 402, 403, 404, 410, 413]);
 
 /** Least to most severe; a server fault (plain Error) is last. */
 const MODEL_FAILURE_RANK = [TransientModelError, ModelOutputError, ModelAccountError, Error];

@@ -1,4 +1,9 @@
-import { ModelAccountError, ModelOutputError, TransientModelError } from "@rakazo/adapter-kit";
+import {
+  ModelAccountError,
+  ModelContentFilterError,
+  ModelOutputError,
+  TransientModelError,
+} from "@rakazo/adapter-kit";
 import {
   MODEL_CONTEXT_TOO_SMALL_ERROR,
   MODEL_CREDITS_EXHAUSTED_ERROR,
@@ -219,7 +224,6 @@ describe("Pi runtime errors", () => {
     "Cyber safeguards flagged this message. If this is legitimate security work, you can apply for the Cyber Verification Program: https://support.claude.com/en/articles/<article-id>",
     "This request triggered cyber-related safeguards. To learn about the Cyber Verification Program, see https://support.claude.com/en/articles/<article-id>",
     "SAFETY",
-    '400: {"code":"data_inspection_failed","param":null,"message":"Input text data may contain inappropriate content.","type":"data_inspection_failed"}',
     'unexpected tokens remaining in message header: Some("to=functions.example")',
     'HarmonyError: unexpected tokens remaining in message header: Some("analysis")',
     '500: {"message":"unexpected tokens remaining in message header: Some(\\"analysis\\")"}',
@@ -234,6 +238,16 @@ describe("Pi runtime errors", () => {
     provider.errorMessage = message;
     const failure = consume();
     await expect(failure).rejects.toBeInstanceOf(ModelOutputError);
+    await expect(failure).rejects.toThrow(message);
+  });
+
+  it.each([
+    '400: {"code":"data_inspection_failed","param":null,"message":"Input text data may contain inappropriate content.","type":"data_inspection_failed"}',
+    '400 data: {"error":{"code":"data_inspection_failed","param":null,"message":"Input text data may contain inappropriate content.","type":"data_inspection_failed"}}',
+  ])("marks a content filter refusal as its own failure: %s", async (message) => {
+    provider.errorMessage = message;
+    const failure = consume();
+    await expect(failure).rejects.toBeInstanceOf(ModelContentFilterError);
     await expect(failure).rejects.toThrow(message);
   });
 
@@ -410,6 +424,15 @@ describe("Pi runtime errors after every backup failed", () => {
     await expect(consume()).rejects.toBeInstanceOf(ModelAccountError);
     provider.errorMessage = chain("fake-provider");
     await expect(consume()).rejects.not.toBeInstanceOf(ModelAccountError);
+  });
+
+  it("calls a chain a content filter refusal only when every model that ran was filtered", async () => {
+    const filtered =
+      '400 data: {"error":{"code":"data_inspection_failed","message":"Input text data may contain inappropriate content."}}';
+    provider.errorMessage = exhausted(filtered, [filtered], ["No credential is available."]);
+    await expect(consume()).rejects.toBeInstanceOf(ModelContentFilterError);
+    provider.errorMessage = exhausted(filtered, [timedOut]);
+    await expect(consume()).rejects.not.toBeInstanceOf(ModelContentFilterError);
   });
 
   it("keeps the chain a server error when any failure is unexplained", async () => {

@@ -221,6 +221,19 @@ const MODEL_OUTPUT_LIMIT_REACHED = /\bcut ?off by max_(?:completion_|output_)?to
 const MALFORMED_KEY_HEADER =
   /^(?:TypeError: )?(?:Headers\.append: "[\s\S]*" is an invalid header value\.|Cannot convert argument to a ByteString because the character at index \d+ has a value of \d+ which is greater than 255\.)$/;
 
+/** The provider's content filter refused the conversation before the model saw it. */
+export const MODEL_CONTENT_FILTER_ERROR =
+  "The model provider's content filter blocked this request. Try another model or rephrase your message.";
+
+/** Error codes providers answer a filtered request with, inside a JSON body that may be escaped. */
+const CONTENT_FILTER_CODE =
+  /\\*"(?:code|type)\\*"\s*:\s*\\*"(?:data_inspection_failed|content_filter|content_policy_violation)\\*"/;
+
+/** Whether a provider error is its content filter refusing the request. */
+export function isContentFilterRejection(details: string): boolean {
+  return CONTENT_FILTER_CODE.test(details);
+}
+
 /** The provider says the selected model is gone or cannot serve this kind of request. */
 const MODEL_UNAVAILABLE =
   /^(?:unsupported|unknown|unrecognized)[ _-]model\b(?![ :]+(?:parameters?|fields?|options?|settings?)\b)|\bmodel\b(?:(?!\.\s)[\s\S]){0,80}?\b(?:not found|does not exist|unavailable|not available|not supported|isn['\u2019]t supported|(?:is|has been) deprecated|does(?: not|n['\u2019]t) support|requires the use of|requires [\w -]{1,30}\bregions?|is hosted outside\b|is not a chat model|only supports (?:the )?(?:\/|[\w ./-]{1,40}\b(?:endpoint|API)\b))|\bnot supported (?:with|by|for) (?:this|the) model\b|^feature 'tool calls' is not (?:currently )?supported\b|^Invalid inference request\. Check the model's supported parameters\b|\bDEGRADED function cannot be invoked\b/i;
@@ -265,7 +278,8 @@ export function normalizeRunError(
   const prefix = trimmed.match(
     /^(?:[^\n():]{1,60} API error \((\d{3})\):\s*|(\d{3})(?:\s*:\s*|\s+))/,
   );
-  const body = trimmed.slice(prefix?.[0].length ?? 0);
+  // A streamed error event arrives as an SSE frame, "data: {...}".
+  const body = trimmed.slice(prefix?.[0].length ?? 0).replace(/^data:\s*/, "");
   const record = asRecord(parseJson(body));
   const fallback = parseModelFallbackFailure(trimmed);
   if (fallback) {
@@ -348,13 +362,21 @@ export function normalizeRunError(
       .find((value) => Number.isInteger(value) && value >= 100 && value <= 599) ??
     // Bedrock names its modeled exception instead of reporting the HTTP status.
     (/^AccessDeniedException\b/.test(trimmed) ? 403 : undefined);
+  if (isContentFilterRejection(trimmed)) {
+    return {
+      summary: translate(MODEL_CONTENT_FILTER_ERROR),
+      details,
+      recovery: "model",
+      kind: "output",
+      ...(status !== undefined ? { status } : {}),
+      providerMessage: message,
+    };
+  }
   // Output diagnostics can quote generated text that mentions a timeout or a quota.
   if (
     trimmed === MODEL_OUTPUT_LIMIT_ERROR ||
     MODEL_OUTPUT_FAILURE.test(trimmed) ||
-    MODEL_OUTPUT_FAILURE.test(message) ||
-    // The provider's content filter refused the conversation.
-    payload.code === "data_inspection_failed"
+    MODEL_OUTPUT_FAILURE.test(message)
   ) {
     return {
       summary: translate("The model returned an unusable response. Try again."),

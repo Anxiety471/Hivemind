@@ -22,6 +22,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Inline load failures offer **Try again** where refreshing exists, including the artifacts list and vault credentials.
 - Menus, cards and address fields align and pad correctly in right-to-left layouts.
+- When a model provider's content filter refuses a request, the run moves to the bot's backup models instead of failing. If no backup gets through, the run says the content filter blocked it, instead of showing the provider's raw error.
+- A model error Rakazo doesn't recognize is tried on the bot's backup models. With no backup left, the same model is tried again after short waits, as for an overloaded provider. If the provider answered with an HTTP status, the same model isn't asked again.
 
 ## [0.12.0] - 2026-11-16
 

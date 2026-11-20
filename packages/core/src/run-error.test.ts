@@ -13,6 +13,7 @@ import {
   isModelRequiredSendError,
   MISSING_MODEL_RUN_ERROR,
   MISSING_TOOL_FINAL_RESPONSE_ERROR,
+  MODEL_CONTENT_FILTER_ERROR,
   MODEL_CONTEXT_TOO_SMALL_ERROR,
   MODEL_CREDIT_CAP_REACHED_ERROR,
   MODEL_CREDITS_EXHAUSTED_ERROR,
@@ -483,7 +484,6 @@ describe("normalizeRunError", () => {
       "This request triggered cyber-related safeguards. To learn about the Cyber Verification Program, see https://support.claude.com/en/articles/<article-id>",
       "SAFETY",
       "PROHIBITED_CONTENT",
-      '400: {"code":"data_inspection_failed","param":null,"message":"Input text data may contain inappropriate content.","type":"data_inspection_failed"}',
       MODEL_OUTPUT_LIMIT_ERROR,
       "Upstream error from Example: HttpError: HTTP 400: Tool calls cutoff by max_tokens.",
     ])("calls unusable model output what it is: %s", (details) => {
@@ -492,6 +492,31 @@ describe("normalizeRunError", () => {
         details,
         kind: "output",
         recovery: "model",
+      });
+    });
+
+    it.each([
+      [
+        '400: {"code":"data_inspection_failed","param":null,"message":"Input text data may contain inappropriate content.","type":"data_inspection_failed"}',
+        "Input text data may contain inappropriate content.",
+      ],
+      // A streamed error event reaches the run as an SSE frame behind the status.
+      [
+        '400 data: {"error":{"code":"data_inspection_failed","param":null,"message":"Input text data may contain inappropriate content.","type":"data_inspection_failed"}}',
+        "Input text data may contain inappropriate content.",
+      ],
+      [
+        '400 {"error":{"message":"The prompt was filtered by the content management policy.","type":null,"param":"prompt","code":"content_filter","status":400}}',
+        "The prompt was filtered by the content management policy.",
+      ],
+    ])("names a content filter refusal and keeps the provider's reason: %s", (details, reason) => {
+      expect(normalizeRunError(details)).toEqual({
+        summary: MODEL_CONTENT_FILTER_ERROR,
+        details,
+        kind: "output",
+        recovery: "model",
+        status: 400,
+        providerMessage: reason,
       });
     });
 

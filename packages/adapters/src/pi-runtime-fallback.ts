@@ -18,6 +18,7 @@ import {
 import type { ModelBackupOutcome } from "@rakazo/core";
 import {
   abortableDelay,
+  isContentFilterRejection,
   MODEL_CONTEXT_TOO_SMALL_ERROR,
   MODEL_OUTPUT_CUT_ERROR,
   MODEL_OUTPUT_LIMIT_ERROR,
@@ -32,7 +33,12 @@ import { IMAGE_RETURNING_COMPUTER_TOOLS } from "./model-vision.js";
 import { affordableOpenRouterOutput } from "./openrouter-output-budget.js";
 import { estimatePiImageTokens } from "./pi-image-context.js";
 import { OPENAI_COMPATIBLE_PROVIDER_ID } from "./pi-openai-compatible-provider.js";
-import { assistantText, messageHasToolCall, sanitizeProviderError } from "./pi-runtime-errors.js";
+import {
+  assistantText,
+  messageHasToolCall,
+  sanitizeProviderError,
+  unrecognizedModelFailure,
+} from "./pi-runtime-errors.js";
 import {
   effectiveOutputReserve,
   modelStreamTimeoutMs,
@@ -704,16 +710,38 @@ export function fallbackAwareModelStream(
               restart = true;
               break;
             }
-            if (
+            const refusedBeforeOutput =
               !sawVisibleOutput &&
               !hasTerminalVisibleOutput &&
               event.reason === "error" &&
               !signalAborted() &&
-              state.isProviderFailure(event.error) &&
+              state.isProviderFailure(event.error);
+            const failureText = event.error.errorMessage ?? "Model request failed.";
+            const placedFailure =
+              refusedBeforeOutput &&
               (requestLimitTooSmall ||
                 isRetryableProviderUnavailable(event.error) ||
-                isModelCredentialRejected(event.error))
-            ) {
+                isModelCredentialRejected(event.error) ||
+                // Another provider's filter may let the same request through.
+                isContentFilterRejection(failureText));
+            // Nothing explains this failure, so it is retried and moved like a transient one, and
+            // logged so a request Rakazo built wrong still surfaces.
+            const unrecognized =
+              refusedBeforeOutput && !placedFailure
+                ? unrecognizedModelFailure(failureText, target.config.provider)
+                : undefined;
+            if (unrecognized) {
+              getLogger().warn("model.unrecognized_failure", {
+                runId: state.request.runId,
+                provider: target.config.provider,
+                model: target.config.id,
+                ...(unrecognized.status !== undefined
+                  ? { "error.status": unrecognized.status }
+                  : {}),
+                reason: sanitizeProviderError(target.config.provider, failureText),
+              });
+            }
+            if (placedFailure || unrecognized) {
               state.primaryFailure ??= sanitizeProviderError(
                 target.config.provider,
                 terminalEvent.error.errorMessage ?? "Model request failed.",
@@ -726,9 +754,14 @@ export function fallbackAwareModelStream(
                 restart = true;
                 break;
               }
-              // An exhausted quota, usage window or rejected credential can move to a backup
-              // but will not clear within the retry budget, so only transient failures retry the same model.
-              if (isTransientModelError(event.error)) {
+              // An exhausted quota, usage window, rejected credential or content filter can move to
+              // a backup but will not clear within the retry budget, so only transient failures
+              // retry the same model, and unexplained ones with no status: a status means the
+              // provider refused this exact request.
+              if (
+                isTransientModelError(event.error) ||
+                (unrecognized !== undefined && unrecognized.status === undefined)
+              ) {
                 firstRetryableError ??= event;
                 const idle = event.error.errorMessage === MODEL_STREAM_IDLE_TIMEOUT_MESSAGE;
                 const delay = idle

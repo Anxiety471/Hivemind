@@ -10,6 +10,7 @@ import type {
 import { clampThinkingLevel } from "@earendil-works/pi-ai";
 import { AssistantMessageEventStream } from "@earendil-works/pi-ai/utils/event-stream";
 import type { AgentRunRequest, AgentRuntimeEvent, ModelCallObserver } from "@rakazo/adapter-kit";
+import { ModelContentFilterError } from "@rakazo/adapter-kit";
 import type * as Core from "@rakazo/core";
 import {
   MODEL_CONTEXT_TOO_SMALL_ERROR,
@@ -380,6 +381,88 @@ describe("Pi runtime transient model retries", () => {
       run(request([{ provider: backupA.provider, id: backupA.id, apiKey: "backup-key" }])),
     ).rejects.toThrow(error);
     expect(providerState.stream).toHaveBeenCalledTimes(1);
+    expect(providerState.delay).not.toHaveBeenCalled();
+  });
+
+  const contentFiltered =
+    '400 data: {"error":{"code":"data_inspection_failed","message":"Input text data may contain inappropriate content."}}';
+
+  it("moves a content filter refusal to the backup without repeating it", async () => {
+    providerState.stream.mockImplementation((target: Model<"openai-completions">) =>
+      target.provider === primary.provider
+        ? stream(target, message(target, [], "error", contentFiltered))
+        : stream(target, message(target, [{ type: "text", text: "backup answer" }], "stop")),
+    );
+    const events = await run(
+      request([{ provider: backupA.provider, id: backupA.id, apiKey: "backup-key" }]),
+    );
+    expect(events.at(-1)).toEqual({ type: "done", text: "backup answer" });
+    expect(providerState.stream.mock.calls.map(([target]) => target.provider)).toEqual([
+      primary.provider,
+      backupA.provider,
+    ]);
+    expect(providerState.delay).not.toHaveBeenCalled();
+  });
+
+  it("fails a content filter refusal at once without a backup", async () => {
+    providerState.stream.mockImplementation(() =>
+      stream(primary, message(primary, [], "error", contentFiltered)),
+    );
+    await expect(run(request())).rejects.toBeInstanceOf(ModelContentFilterError);
+    expect(providerState.stream).toHaveBeenCalledOnce();
+    expect(providerState.delay).not.toHaveBeenCalled();
+  });
+
+  const unexplained = "Cannot read properties of undefined (reading 'choices')";
+
+  it("retries an unexplained failure on the same model without a backup", async () => {
+    providerState.stream
+      .mockImplementationOnce(() => stream(primary, message(primary, [], "error", unexplained)))
+      .mockImplementation(() =>
+        stream(primary, message(primary, [{ type: "text", text: "Recovered." }], "stop")),
+      );
+    const events = await run(request());
+    expect(events.at(-1)).toEqual({ type: "done", text: "Recovered." });
+    expect(providerState.stream).toHaveBeenCalledTimes(2);
+    expect(providerState.delay.mock.calls.map(([delay]) => delay)).toEqual([2_000]);
+  });
+
+  it("exhausts the retry budget on an unexplained failure and surfaces it", async () => {
+    providerState.stream.mockImplementation(() =>
+      stream(primary, message(primary, [], "error", unexplained)),
+    );
+    await expect(run(request())).rejects.toThrow(unexplained);
+    expect(providerState.stream).toHaveBeenCalledTimes(4);
+    expect(providerState.delay.mock.calls.map(([delay]) => delay)).toEqual([2_000, 8_000, 20_000]);
+  });
+
+  it.each([unexplained, '400 {"error":{"message":"Upstream returned an unexpected reply."}}'])(
+    "moves an unexplained failure to the backup first: %s",
+    async (error) => {
+      providerState.stream.mockImplementation((target: Model<"openai-completions">) =>
+        target.provider === primary.provider
+          ? stream(target, message(target, [], "error", error))
+          : stream(target, message(target, [{ type: "text", text: "backup answer" }], "stop")),
+      );
+      const events = await run(
+        request([{ provider: backupA.provider, id: backupA.id, apiKey: "backup-key" }]),
+      );
+      expect(events.at(-1)).toEqual({ type: "done", text: "backup answer" });
+      expect(providerState.stream.mock.calls.map(([target]) => target.provider)).toEqual([
+        primary.provider,
+        backupA.provider,
+      ]);
+      expect(providerState.delay).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not repeat an unexplained failure the provider answered with a status", async () => {
+    const error = '400 {"error":{"message":"Upstream returned an unexpected reply."}}';
+    providerState.stream.mockImplementation(() =>
+      stream(primary, message(primary, [], "error", error)),
+    );
+    await expect(run(request())).rejects.toThrow(error);
+    expect(providerState.stream).toHaveBeenCalledOnce();
     expect(providerState.delay).not.toHaveBeenCalled();
   });
 
