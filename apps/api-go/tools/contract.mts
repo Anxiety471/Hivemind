@@ -18,10 +18,12 @@ import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { asSystem } from "../../../packages/db/src/index.js";
 import { createApp } from "../../api/src/app.js";
-import { spendingPeriodStart } from "../../../packages/core/src/spending.js";
+import { spendingPeriodStart } from "../../../packages/core/src/billing/spending.js";
 import { createRequire } from "node:module";
 import { membershipCases, membershipReset, membershipState } from "./contract-membership.mts";
 import { laneDCases } from "./contract-lane-d.mts";
+import { routineResumeCases } from "./contract-routine-resume.mts";
+import { routineCases } from "./contract-routines.mts";
 
 const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) throw new Error("DATABASE_URL is required");
@@ -189,6 +191,9 @@ await writeFile(
       "memory.providerConfig": { mode: "go", readOnly: true },
       "memory.setDefaultScope": { mode: "go" },
       "groups.restore": { mode: "go" },
+      "routines.listForMentions": { mode: "go", readOnly: true },
+      "routines.list": { mode: "go", readOnly: true },
+      "routines.history": { mode: "go", readOnly: true },
       "agentSkills.list": { mode: "go", readOnly: true },
       "agentSkills.get": { mode: "go", readOnly: true },
       "agentSkills.remove": { mode: "go" },
@@ -388,6 +393,8 @@ const cases: Case[] = [
   ...modelRenameCases(),
   ...artifactCases(),
   ...laneDCases(system),
+  ...routineResumeCases(system),
+  ...routineCases(system),
 ];
 
 const SITES = ["zeta.example", "alpha.example", "Beta.example", "_under.example", "10.0.0.1"];
@@ -3704,6 +3711,15 @@ async function observed(settleMs: number, call: () => Promise<any>, seeded: Seed
         if (procedure === "computer.updates" && topic.startsWith("space-changes:") && body === "computerUpdates") {
           return false;
         }
+        // TypeScript's routine sweep wakes the seeded overdue routine at its own moment and announces
+        // the run it starts; routines.list is a read and publishes nothing, so its window cannot own these.
+        if (
+          procedure === "routines.list" &&
+          topic.startsWith("space-changes:") &&
+          (body === "routines" || body === "runs")
+        ) {
+          return false;
+        }
         return (
           (topic.startsWith("roster-") || topic.startsWith("space-changes:")) &&
           (own.some((id) => topic.endsWith(`:${id}`)) ||
@@ -3898,6 +3914,21 @@ async function databaseState(seeded: ReturnType<typeof ids>) {
     select: { spaceId: true, provider: true, settings: true, defaultMemoryScope: true, secretId: true, updatedAt: true },
     orderBy: { spaceId: "asc" },
   });
+  const routineRows = await system.routine.findMany({
+    where: { spaceId: { in: seeded.spaces } },
+    select: { id: true, botId: true, userId: true, active: true, resumeOnRestore: true, nextRunAt: true },
+    orderBy: { id: "asc" },
+  });
+  // Each side computes from its own "now"; whether a run is scheduled is what matters.
+  const routines = routineRows.map(({ nextRunAt, ...row }) => ({ ...row, nextRunAt: nextRunAt ? "<set>" : null }));
+  // The rows a routine change posts in its chat: one system message per change.
+  const routineNotices = (
+    await system.message.findMany({
+      where: { thread: { spaceId: { in: seeded.spaces } }, role: "system" },
+      select: { threadId: true, seq: true, botId: true, blocks: true },
+      orderBy: [{ threadId: "asc" }, { seq: "asc" }],
+    })
+  ).filter((row) => JSON.stringify(row.blocks).includes('"routine_event"'));
   return {
     skills,
     skillSpaces,
@@ -3917,6 +3948,8 @@ async function databaseState(seeded: ReturnType<typeof ids>) {
     groups,
     botEmailAddresses,
     spaceMemoryConfigs,
+    routines,
+    routineNotices,
     messagingIdentities,
     messagingLinkCodes,
     messagingMemberships,

@@ -25,6 +25,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/messaging"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/models"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/pages"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/routines"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/scratchpad"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/spacesettings"
@@ -439,6 +440,27 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 			Name: "agentSkills.remove",
 			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
 				return agentskills.Remove(ctx, database, actor, input)
+			},
+		},
+		{
+			Name:     "routines.listForMentions",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return routines.ListForMentions(ctx, database, actor, input)
+			},
+		},
+		{
+			Name:     "routines.list",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return routines.List(ctx, database, actor, input)
+			},
+		},
+		{
+			Name:     "routines.history",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return routines.History(ctx, database, actor, input)
 			},
 		},
 	}
