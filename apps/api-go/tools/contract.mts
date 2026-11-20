@@ -6363,6 +6363,10 @@ function laneGCases2(): Case[] {
     cancel("unknown-invitation", { organizationId: "__org__", invitationId: "nope" }, async (seeded) => void (await seedOrganizationPeople(seeded))),
     cancel("other-organization", { organizationId: "__org__", invitationId: "__s-inv1__" }, async (seeded) => {
       await seedOrganizationPeople(seeded);
+      // The invitation belongs to another organization, which has to exist for the foreign key.
+      await system.organization.create({
+        data: { id: `${seeded.orgId}-f`, name: "Far Org", slug: `far-${seeded.userId}`, createdAt: LANE_G_OLD() },
+      });
       await system.invitation.updateMany({ where: { id: `${seeded.userId}-inv1` }, data: { organizationId: `${seeded.orgId}-f` } });
     }),
     cancel("not-a-manager", { organizationId: "__org__", invitationId: "__s-inv1__" }, async (seeded) => {
