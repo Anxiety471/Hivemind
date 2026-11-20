@@ -732,9 +732,7 @@ export const EVAL_CASES: EvalCase[] = [
           "retrieved-releases",
           e.calls.some(
             (c) =>
-              c.tool.startsWith("GITHUB_") &&
-              c.args.owner === "acme" &&
-              c.args.repo === "widget",
+              c.tool.startsWith("GITHUB_") && c.args.owner === "acme" && c.args.repo === "widget",
           ),
         ),
         check("latest-version", /v2\.1\.0/.test(s)),
