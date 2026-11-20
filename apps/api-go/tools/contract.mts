@@ -489,6 +489,8 @@ const cases: Case[] = [
   ...routineResumeCases(system),
   ...routineCases(system),
   ...memoryCases(),
+  ...laneGCases(),
+  ...laneGCases2(),
 ];
 
 const SITES = ["zeta.example", "alpha.example", "Beta.example", "_under.example", "10.0.0.1"];
@@ -6116,8 +6118,658 @@ function withIds(input: unknown, seeded: ReturnType<typeof ids>) {
       .replaceAll("__ec1__", `${seeded.userId}-ec1`)
       .replaceAll("__ec2__", `${seeded.userId}-ec2`)
       .replaceAll("__ec3__", `${seeded.userId}-ec3`)
+      .replaceAll("__s-member2__", `${seeded.userId}-member2`)
       .replace(/__s-([a-z0-9]+)__/g, (_match, name: string) => `${seeded.userId}-${name}`),
   );
+}
+
+// ---- Lane G, second batch: tickets, taught skills and organization writes ----------------------
+
+/** Turns the board lab on for the case's own account (the deployment flag stays off). */
+async function withBoardLab(seeded: Seeded) {
+  await system.user.update({ where: { id: seeded.userId }, data: { labs: ["board"] } });
+}
+
+/** A Space with its board and one ticket, plus the lab on for the caller. */
+function seedBoardTicket(
+  options: { status?: string; priority?: string | null; title?: string; completedAt?: Date; number?: number } = {},
+) {
+  return async (seeded: Seeded) => {
+  await withBoardLab(seeded);
+  const spaceId = seeded.spaces[0];
+  await system.board.create({
+    data: {
+      id: `${seeded.userId}-board`, spaceId, name: "Board", ticketPrefix: "RAK", nextNumber: 4,
+      createdAt: LANE_G_OLD(), updatedAt: LANE_G_OLD(),
+    },
+  });
+  await system.ticket.create({
+    data: {
+      id: `${seeded.userId}-t1`, boardId: `${seeded.userId}-board`, spaceId,
+      number: options.number ?? 3, title: options.title ?? "First ticket", description: "as filed",
+      status: options.status ?? "todo", priority: options.priority === undefined ? "normal" : options.priority,
+      createdByUserId: seeded.userId, createdAt: LANE_G_OLD(), updatedAt: LANE_G_OLD(),
+      ...(options.completedAt ? { completedAt: options.completedAt } : {}),
+    },
+  });
+  };
+}
+
+/** A taught skill (with the bot, thread and draft card it edits) in the case's first Space. */
+async function seedTaughtSkill(
+  seeded: Seeded,
+  options: {
+    status?: string;
+    name?: string;
+    goal?: string;
+    owner?: string;
+    playbook?: unknown;
+    recording?: unknown;
+    card?: boolean;
+    cardStatus?: string;
+    cardSeq?: number;
+    messageCount?: number;
+    noThread?: boolean;
+  } = {},
+) {
+  const found = await seedLaneGBot(seeded, { bot: "sk1", thread: "th-sk1", nextMessageSeq: options.card === false ? 0 : 1 });
+  await system.taughtSkill.create({
+    data: {
+      id: `${seeded.userId}-ts1`, spaceId: found.spaceId, botId: found.botId,
+      userId: options.owner ?? seeded.userId, name: options.name ?? "Teach me", goal: options.goal ?? "goal",
+      status: options.status ?? "draft",
+      playbook: (options.playbook ?? {}) as never,
+      recording: (options.recording ?? { events: [], snapshots: [] }) as never,
+      createdAt: LANE_G_OLD(), updatedAt: LANE_G_OLD(),
+    },
+  });
+  if (options.card === false) return;
+  const card = {
+    kind: "skill_draft", skillId: `${seeded.userId}-ts1`, name: options.name ?? "Teach me",
+    goal: options.goal ?? "goal",
+    playbook: { whenToUse: "when", inputs: [], steps: ["one"], howToCheck: "check", whatToReturn: "back", approvalBoundaries: "none", failureHandling: "retry" },
+    status: options.cardStatus ?? "draft",
+  };
+  const messages: SeedMessage[] = [];
+  for (let index = 0; index < (options.messageCount ?? 1); index += 1) {
+    messages.push({ seq: index, blocks: index === 0 ? [{ kind: "text", text: "before" }, card] : [{ kind: "mcp_approval", name: "x", serverId: "srv", transport: "stdio", endpoint: null, needsOAuth: false }] });
+  }
+  await seedLaneGMessages(seeded, found.threadId, messages);
+}
+
+/** A second person in the organization, and one pending invitation they may own. */
+async function seedOrganizationPeople(seeded: Seeded, options: { role?: string; invitationStatus?: string; inviterIsOther?: boolean } = {}) {
+  const other = `${seeded.userId}-member2`;
+  await system.user.create({ data: { id: other, name: "Second Person", email: `${other}@example.test`, emailVerified: true } });
+  await system.member.create({
+    data: { id: `${seeded.userId}-mem2`, organizationId: seeded.orgId, userId: other, role: options.role ?? "member", createdAt: LANE_G_OLD() },
+  });
+  await system.invitation.create({
+    data: {
+      id: `${seeded.userId}-inv1`, organizationId: seeded.orgId, email: `${seeded.userId}-invitee@example.test`,
+      role: "member", status: options.invitationStatus ?? "pending",
+      expiresAt: new Date(Date.UTC(2030, 0, 2)), createdAt: LANE_G_OLD(),
+      inviterId: options.inviterIsOther ? other : seeded.userId,
+    },
+  });
+}
+
+function laneGCases2(): Case[] {
+  const move = (name: string, input: unknown, seed?: Case["seed"], extra: Partial<Case> = {}): Case => ({
+    name: `tk-move-${name}`, procedure: "tickets.move", input, ...(seed ? { seed } : {}), ...extra,
+  });
+  const comment = (name: string, input: unknown, seed?: Case["seed"], extra: Partial<Case> = {}): Case => ({
+    name: `tk-comment-${name}`, procedure: "tickets.comment", input, ...(seed ? { seed } : {}), ...extra,
+  });
+  const draft = (name: string, input: unknown, seed?: Case["seed"], extra: Partial<Case> = {}): Case => ({
+    name: `sk-draft-${name}`, procedure: "skills.updateDraft", input, ...(seed ? { seed } : {}), ...extra,
+  });
+  const save = (name: string, input: unknown, seed?: Case["seed"], extra: Partial<Case> = {}): Case => ({
+    name: `sk-save-${name}`, procedure: "skills.save", input, ...(seed ? { seed } : {}), ...extra,
+  });
+  const role = (name: string, input: unknown, seed?: Case["seed"], extra: Partial<Case> = {}): Case => ({
+    name: `org-role-${name}`, procedure: "organizations.members.setRole", input, ...(seed ? { seed } : {}), ...extra,
+  });
+  const cancel = (name: string, input: unknown, seed?: Case["seed"], extra: Partial<Case> = {}): Case => ({
+    name: `org-cancel-${name}`, procedure: "organizations.invitations.cancel", input, ...(seed ? { seed } : {}), ...extra,
+  });
+  const playbook = {
+    whenToUse: "when the user asks", inputs: ["a", "b"], steps: ["one", "two"],
+    howToCheck: "read the page", whatToReturn: "the total", approvalBoundaries: "ask before paying",
+    failureHandling: "stop and report",
+  };
+  const skill = { skillId: "__s-ts1__" };
+  const ticket = { id: "__s-t1__" };
+  const member = { organizationId: "__org__", userId: "__s-member2__" };
+
+  return [
+    // tickets.move -----------------------------------------------------------------------------
+    move("to-doing", { ...ticket, status: "doing" }, seedBoardTicket()),
+    move("to-done-stamps-completion", { ...ticket, status: "done" }, seedBoardTicket()),
+    move("keeps-first-completion", { ...ticket, status: "closed" }, seedBoardTicket({ status: "done", completedAt: LANE_G_OLD() })),
+    move("reopens-clears-completion", { ...ticket, status: "todo" }, seedBoardTicket({ status: "done", completedAt: LANE_G_OLD() })),
+    move("coerces-legacy-status", { ...ticket, status: "doing" }, seedBoardTicket({ status: "weird" })),
+    move("coerces-null-priority", { ...ticket, status: "review" }, seedBoardTicket({ priority: null })),
+    move("missing-ticket", { id: "nope", status: "doing" }, seedBoardTicket()),
+    move("other-board-ticket", { id: "__s-t1__", status: "doing" }, async (seeded) => {
+      await withBoardLab(seeded);
+      await system.board.create({ data: { id: `${seeded.userId}-board2`, spaceId: seeded.spaces[1], name: "Other", ticketPrefix: "OTH", createdAt: LANE_G_OLD(), updatedAt: LANE_G_OLD() } });
+      await system.ticket.create({ data: { id: `${seeded.userId}-t1`, boardId: `${seeded.userId}-board2`, spaceId: seeded.spaces[1], number: 1, title: "Elsewhere", status: "todo", createdAt: LANE_G_OLD(), updatedAt: LANE_G_OLD() } });
+    }),
+    move("lab-off", { ...ticket, status: "doing" }, async (seeded) => {
+      await seedBoardTicket()(seeded);
+      await system.user.update({ where: { id: seeded.userId }, data: { labs: [] } });
+    }),
+    move("lab-on-by-deployment", { ...ticket, status: "doing" }, seedBoardTicket()),
+    move("anonymous", { ...ticket, status: "doing" }, seedBoardTicket(), { anonymous: true }),
+    move("bad-status", { ...ticket, status: "archived" }, seedBoardTicket()),
+    move("missing-status", { id: "__s-t1__" }, seedBoardTicket()),
+    move("missing-id", { status: "doing" }, seedBoardTicket()),
+    move("empty-id", { id: "", status: "doing" }, seedBoardTicket()),
+    move("null-input", null, seedBoardTicket()),
+    move("ticket-in-another-space", { id: "__s-t1__", status: "doing" }, seedBoardTicket(), { space: 1 }),
+
+    // tickets.comment --------------------------------------------------------------------------
+    comment("basic", { ticketId: "__s-t1__", body: "  a note  " }, seedBoardTicket()),
+    comment("keeps-unicode", { ticketId: "__s-t1__", body: "héllo 😀" }, seedBoardTicket()),
+    comment("nul-in-body", { ticketId: "__s-t1__", body: "a\u0000b" }, seedBoardTicket()),
+    comment("missing-ticket", { ticketId: "nope", body: "note" }, seedBoardTicket()),
+    comment("empty-body", { ticketId: "__s-t1__", body: "   " }, seedBoardTicket()),
+    comment("long-body", { ticketId: "__s-t1__", body: "x".repeat(10_001) }, seedBoardTicket()),
+    comment("lab-off", { ticketId: "__s-t1__", body: "note" }, async (seeded) => {
+      await seedBoardTicket()(seeded);
+      await system.user.update({ where: { id: seeded.userId }, data: { labs: [] } });
+    }),
+    comment("anonymous", { ticketId: "__s-t1__", body: "note" }, seedBoardTicket(), { anonymous: true }),
+    comment("bad-input-array", [], seedBoardTicket()),
+    comment("ticket-in-another-space", { ticketId: "__s-t1__", body: "note" }, seedBoardTicket(), { space: 1 }),
+
+    // skills.updateDraft -----------------------------------------------------------------------
+    draft("updates-card", { ...skill, name: "Renamed", playbook }, async (seeded) => void (await seedTaughtSkill(seeded))),
+    draft("keeps-name", { ...skill, playbook }, async (seeded) => void (await seedTaughtSkill(seeded, { name: "Kept" }))),
+    draft("saved-stays-saved", { ...skill, playbook }, async (seeded) => void (await seedTaughtSkill(seeded, { status: "saved", cardStatus: "saved" }))),
+    draft("hands-over-recording", { ...skill, playbook }, async (seeded) => {
+      await seedTaughtSkill(seeded, { owner: `${seeded.userId}-other`, recording: { events: [{ at: "2021-01-01T00:00:00.000Z", kind: "key" }], snapshots: [] } });
+    }),
+    draft("skips-other-skills-card", { ...skill, playbook }, async (seeded) => {
+      const found = await seedLaneGBot(seeded, { bot: "sk1", thread: "th-sk1", nextMessageSeq: 2 });
+      await system.taughtSkill.create({
+        data: { id: `${seeded.userId}-ts1`, spaceId: found.spaceId, botId: found.botId, userId: seeded.userId, name: "Mine", goal: "g", status: "draft", playbook: {} as never, recording: { events: [], snapshots: [] } as never, createdAt: LANE_G_OLD(), updatedAt: LANE_G_OLD() },
+      });
+      // The newest message carries another skill's card; the next one carries ours.
+      await seedLaneGMessages(seeded, found.threadId, [
+        { seq: 0, blocks: [{ kind: "skill_draft", skillId: `${seeded.userId}-ts1`, name: "Mine", goal: "g", playbook, status: "draft" }] },
+        { seq: 1, blocks: [{ kind: "skill_draft", skillId: `${seeded.userId}-ts9`, name: "Theirs", goal: "g", playbook, status: "draft" }] },
+      ]);
+    }),
+    draft("bot-without-thread", { ...skill, playbook }, async (seeded) => {
+      await seedTaughtSkill(seeded);
+      await system.thread.deleteMany({ where: { botId: `${seeded.userId}-sk1` } });
+    }),
+    draft("recording-status-refused", { ...skill, playbook }, async (seeded) => void (await seedTaughtSkill(seeded, { status: "recording" }))),
+    draft("drafting-status-refused", { ...skill, playbook }, async (seeded) => void (await seedTaughtSkill(seeded, { status: "drafting" }))),
+    draft("missing-skill", { skillId: "nope", playbook }, async (seeded) => void (await seedTaughtSkill(seeded))),
+    draft("other-space-skill", { ...skill, playbook }, async (seeded) => {
+      await seedTaughtSkill(seeded);
+      await system.taughtSkill.update({ where: { id: `${seeded.userId}-ts1` }, data: { spaceId: seeded.spaces[1] } });
+    }),
+    draft("anonymous", { ...skill, playbook }, async (seeded) => void (await seedTaughtSkill(seeded)), { anonymous: true }),
+    draft("bad-playbook-missing-field", { ...skill, playbook: { ...playbook, steps: undefined } }, async (seeded) => void (await seedTaughtSkill(seeded))),
+    draft("bad-playbook-number-step", { ...skill, playbook: { ...playbook, steps: [1] } }, async (seeded) => void (await seedTaughtSkill(seeded))),
+    draft("bad-name-number", { ...skill, name: 7, playbook }, async (seeded) => void (await seedTaughtSkill(seeded))),
+    draft("stored-status-outside-enum", { ...skill, playbook }, async (seeded) => void (await seedTaughtSkill(seeded, { status: "weird" }))),
+    draft("stored-recording-outside-schema", { ...skill, playbook }, async (seeded) => void (await seedTaughtSkill(seeded, { recording: { events: [{ at: "x", kind: "weird" }], snapshots: [] } }))),
+    draft("unreadable-card-blocks", { ...skill, playbook }, async (seeded) => {
+      await seedTaughtSkill(seeded);
+      await owner!.query(`UPDATE messages SET blocks = jsonb_set(blocks, '{1,$sealed}', to_jsonb((blocks->1->>'$sealed') || 'AAAA')) WHERE "threadId" = $1`, [`${seeded.userId}-th-sk1`]);
+    }),
+
+    // skills.save ------------------------------------------------------------------------------
+    save("saves", { ...skill }, async (seeded) => void (await seedTaughtSkill(seeded, { name: "Named" }))),
+    save("names-from-goal", { ...skill }, async (seeded) => void (await seedTaughtSkill(seeded, { name: "", goal: "Do the thing" }))),
+    save("keeps-given-name", { ...skill, name: "Given" }, async (seeded) => void (await seedTaughtSkill(seeded, { name: "Old" }))),
+    save("hands-over-recording", { ...skill }, async (seeded) => {
+      await seedTaughtSkill(seeded, { owner: `${seeded.userId}-other`, recording: { events: [{ at: "2021-01-01T00:00:00.000Z", kind: "scroll", y: 2 }], snapshots: [] } });
+    }),
+    save("no-card-still-appends", { ...skill }, async (seeded) => void (await seedTaughtSkill(seeded, { card: false }))),
+    save("recording-status-refused", { ...skill }, async (seeded) => void (await seedTaughtSkill(seeded, { status: "recording" }))),
+    save("missing-skill", { skillId: "nope" }, async (seeded) => void (await seedTaughtSkill(seeded))),
+    save("anonymous", { ...skill }, async (seeded) => void (await seedTaughtSkill(seeded)), { anonymous: true }),
+    save("bad-name-null", { ...skill, name: null }, async (seeded) => void (await seedTaughtSkill(seeded))),
+    save("bot-without-thread", { ...skill }, async (seeded) => {
+      await seedTaughtSkill(seeded, { card: false });
+      await system.thread.deleteMany({ where: { botId: `${seeded.userId}-sk1` } });
+    }),
+
+    // organizations.members.setRole ------------------------------------------------------------
+    role("promote", { ...member, role: "admin" }, async (seeded) => void (await seedOrganizationPeople(seeded))),
+    role("demote-withdraws-invitations", { ...member, role: "member" }, async (seeded) => void (await seedOrganizationPeople(seeded, { role: "admin" }))),
+    role("demote-member-keeps-own-invitation", { ...member, role: "member" }, async (seeded) => void (await seedOrganizationPeople(seeded, { role: "admin", inviterIsOther: true }))),
+    role("owner-refused", { organizationId: "__org__", userId: "__user__", role: "admin" }, async (seeded) => void (await seedOrganizationPeople(seeded))),
+    role("target-unknown", { organizationId: "__org__", userId: "nope", role: "admin" }, async (seeded) => void (await seedOrganizationPeople(seeded))),
+    role("not-a-manager", { ...member, role: "admin" }, async (seeded) => {
+      await seedOrganizationPeople(seeded);
+      // The caller is only a member of the organization.
+      await system.member.updateMany({ where: { organizationId: seeded.orgId, userId: seeded.userId }, data: { role: "member" } });
+    }),
+    role("stranger", { ...member, role: "admin" }, async (seeded) => void (await seedOrganizationPeople(seeded)), { space: 1 }),
+    role("bad-role", { ...member, role: "owner" }, async (seeded) => void (await seedOrganizationPeople(seeded))),
+    role("anonymous", { ...member, role: "admin" }, async (seeded) => void (await seedOrganizationPeople(seeded)), { anonymous: true }),
+    role("bad-input-missing-user", { organizationId: "__org__", role: "admin" }, async (seeded) => void (await seedOrganizationPeople(seeded))),
+
+    // organizations.invitations.cancel ---------------------------------------------------------
+    cancel("cancels", { organizationId: "__org__", invitationId: "__s-inv1__" }, async (seeded) => void (await seedOrganizationPeople(seeded))),
+    cancel("already-cancelled", { organizationId: "__org__", invitationId: "__s-inv1__" }, async (seeded) => void (await seedOrganizationPeople(seeded, { invitationStatus: "canceled" }))),
+    cancel("unknown-invitation", { organizationId: "__org__", invitationId: "nope" }, async (seeded) => void (await seedOrganizationPeople(seeded))),
+    cancel("other-organization", { organizationId: "__org__", invitationId: "__s-inv1__" }, async (seeded) => {
+      await seedOrganizationPeople(seeded);
+      await system.invitation.updateMany({ where: { id: `${seeded.userId}-inv1` }, data: { organizationId: `${seeded.orgId}-f` } });
+    }),
+    cancel("not-a-manager", { organizationId: "__org__", invitationId: "__s-inv1__" }, async (seeded) => {
+      await seedOrganizationPeople(seeded);
+      await system.member.updateMany({ where: { organizationId: seeded.orgId, userId: seeded.userId }, data: { role: "member" } });
+    }),
+    cancel("anonymous", { organizationId: "__org__", invitationId: "__s-inv1__" }, async (seeded) => void (await seedOrganizationPeople(seeded)), { anonymous: true }),
+    cancel("bad-input-missing", {}, async (seeded) => void (await seedOrganizationPeople(seeded))),
+  ];
+}
+
+// ---- Lane G: thread-writing procedures over rkz1 content and computer.commands ----------------
+
+/** The fixed timestamp the lane's seeds carry (a function: the case list builds before consts). */
+function LANE_G_OLD() {
+  return new Date(Date.UTC(2020, 0, 1));
+}
+
+/** A bot and (unless `thread: false`) its thread, in one of the case's Spaces. */
+async function seedLaneGBot(
+  seeded: Seeded,
+  options: {
+    bot?: string;
+    space?: string;
+    archived?: boolean;
+    thread?: boolean | string;
+    nextMessageSeq?: number;
+    nextEventSeq?: number;
+    summary?: string;
+  } = {},
+) {
+  const botId = `${seeded.userId}-${options.bot ?? "ob1"}`;
+  const spaceId = options.space ?? seeded.spaces[0];
+  await system.bot.create({
+    data: {
+      id: botId,
+      spaceId,
+      userId: seeded.userId,
+      name: "Onboarding bot",
+      color: "blue",
+      updatedAt: LANE_G_OLD(),
+      ...(options.archived ? { archivedAt: LANE_G_OLD() } : {}),
+    },
+  });
+  const threadId = `${seeded.userId}-${typeof options.thread === "string" ? options.thread : "th-ob1"}`;
+  if (options.thread !== false) {
+    await system.thread.create({
+      data: {
+        id: threadId,
+        spaceId,
+        userId: seeded.userId,
+        botId,
+        nextMessageSeq: options.nextMessageSeq ?? 0,
+        nextEventSeq: options.nextEventSeq ?? 0,
+        ...(options.summary ? { historyCompactionSummary: options.summary } : {}),
+      },
+    });
+  }
+  return { botId, threadId, spaceId };
+}
+
+type SeedMessage = {
+  seq: number;
+  role?: string;
+  blocks: unknown;
+  botId?: string | null;
+  authorUserId?: string | null;
+  createdAt?: Date;
+};
+
+/** Messages written through the API's client, so their blocks are sealed as production stores them. */
+async function seedLaneGMessages(seeded: Seeded, threadId: string, messages: SeedMessage[]) {
+  for (const message of messages) {
+    await system.message.create({
+      data: {
+        id: `${threadId}-m${message.seq}`,
+        threadId,
+        seq: message.seq,
+        role: message.role ?? "bot",
+        blocks: message.blocks as never,
+        botId: message.botId ?? null,
+        authorUserId: message.authorUserId ?? null,
+        createdAt: message.createdAt ?? new Date(Date.UTC(2021, 0, 1) + message.seq * 1000),
+      },
+    });
+  }
+}
+
+async function seedLaneGEvent(seeded: Seeded, spaceId: string, threadId: string, botId: string, seq: number, type: string, payload: unknown) {
+  await system.event.create({
+    data: { id: `${threadId}-e${seq}`, spaceId, threadId, botId, seq, type, payload: payload as never, createdAt: new Date(Date.UTC(2021, 1, 1) + seq * 1000) },
+  });
+}
+
+/** Declared as a function so the case list, built at module load, can reach it (hoisting). */
+function CHOICE_CARD() {
+  return {
+    kind: "choice",
+    question: "What do you want me on first?",
+    options: [{ id: "day", letter: "A", label: "Day-to-day work" }],
+  };
+}
+
+/** Replaces a thread's sealed compaction summary with a value that cannot be opened. */
+async function breakThreadSummary(threadId: string) {
+  const [row] = (await system.$queryRaw`SELECT "historyCompactionSummary" AS summary FROM threads WHERE id = ${threadId}`) as any[];
+  const value = row.summary as string;
+  const broken = `${value.slice(0, -3)}${value.slice(-3) === "AAA" ? "BBB" : "AAA"}`;
+  await owner!.query('UPDATE threads SET "historyCompactionSummary" = $1 WHERE id = $2', [broken, threadId]);
+}
+
+/** Copies another thread's sealed summary onto `threadId`, so it names a key of another Space. */
+async function moveSummary(threadId: string, fromThreadId: string) {
+  await owner!.query(
+    'UPDATE threads SET "historyCompactionSummary" = (SELECT "historyCompactionSummary" FROM threads WHERE id = $2) WHERE id = $1',
+    [threadId, fromThreadId],
+  );
+}
+
+/** Copies another message's sealed blocks onto `toMessageId`. */
+async function moveMessageBlocks(toMessageId: string, fromMessageId: string) {
+  await owner!.query("UPDATE messages SET blocks = (SELECT blocks FROM messages WHERE id = $2) WHERE id = $1", [toMessageId, fromMessageId]);
+}
+
+/** Copies another event's sealed payload onto `toEventId`. */
+async function moveEventPayload(toEventId: string, fromEventId: string) {
+  await owner!.query("UPDATE events SET payload = (SELECT payload FROM events WHERE id = $2) WHERE id = $1", [toEventId, fromEventId]);
+}
+
+function laneGCases(): Case[] {
+  const focus = (name: string, input: unknown, seed?: Case["seed"], extra: Partial<Case> = {}): Case => ({
+    name: `focus-${name}`,
+    procedure: "onboarding.promptFocus",
+    input,
+    ...(seed ? { seed } : {}),
+    ...extra,
+  });
+  const dismiss = (name: string, input: unknown, seed?: Case["seed"], extra: Partial<Case> = {}): Case => ({
+    name: `fdismiss-${name}`,
+    procedure: "onboarding.dismissFocus",
+    input,
+    ...(seed ? { seed } : {}),
+    ...extra,
+  });
+  const commands = (name: string, input: unknown, seed?: Case["seed"], extra: Partial<Case> = {}): Case => ({
+    name: `cmd-${name}`,
+    procedure: "computer.commands",
+    input,
+    ...(seed ? { seed } : {}),
+    ...extra,
+  });
+  const bot = { botId: "__s-ob1__" };
+  /** A bot whose thread already holds `messages`, with the sequence counters they imply. */
+  const withMessages = (messages: SeedMessage[], options: { nextMessageSeq?: number; nextEventSeq?: number; bot?: string; thread?: boolean | string } = {}) => {
+    return async (seeded: Seeded) => {
+      const found = await seedLaneGBot(seeded, {
+        ...options,
+        nextMessageSeq: options.nextMessageSeq ?? messages.length,
+      });
+      if (options.thread !== false) await seedLaneGMessages(seeded, found.threadId, messages);
+    };
+  };
+  const command = (overrides: Record<string, unknown> = {}) => ({
+    executionId: "exec-1",
+    kind: "shell",
+    command: "ls -la",
+    cwd: "/work",
+    status: "done",
+    exitCode: 0,
+    output: "total 0",
+    ...overrides,
+  });
+  /** A bot with a thread and these command events, oldest first. */
+  const withCommands = (payloads: Array<{ type?: string; payload: unknown; botId?: string }>, options: { bot?: string; archived?: boolean; thread?: boolean } = {}) => {
+    return async (seeded: Seeded) => {
+      const found = await seedLaneGBot(seeded, { ...options, nextEventSeq: payloads.length });
+      // An event names its thread (FK), so a bot without one has no history to seed.
+      if (options.thread === false) return;
+      for (const [index, entry] of payloads.entries()) {
+        await seedLaneGEvent(seeded, found.spaceId, found.threadId, entry.botId ?? found.botId, index, entry.type ?? "computer.command", entry.payload);
+      }
+    };
+  };
+
+  return [
+    // onboarding.promptFocus -------------------------------------------------------------------
+    focus("prompt-posts", bot, async (seeded) => void (await seedLaneGBot(seeded))),
+    focus(
+      "prompt-posts-after-messages",
+      bot,
+      withMessages(
+        [
+          { seq: 0, blocks: [{ kind: "text", text: "hello" }] },
+          { seq: 1, blocks: [{ kind: "meta", text: "note" }] },
+        ],
+        { nextEventSeq: 1 },
+      ),
+    ),
+    focus("prompt-skips-user-message", bot, withMessages([{ seq: 0, role: "user", blocks: [{ kind: "text", text: "hi" }] }])),
+    focus("prompt-skips-choice", bot, withMessages([{ seq: 0, blocks: [CHOICE_CARD()] }])),
+    focus("prompt-skips-ask", bot, withMessages([{ seq: 0, blocks: [{ kind: "ask", text: "which?" }] }])),
+    focus("prompt-skips-answered-choice", bot, withMessages([{ seq: 0, blocks: [{ ...CHOICE_CARD(), answerId: "day" }] }])),
+    focus(
+      "prompt-skips-intro-run",
+      bot,
+      async (seeded) => {
+        const found = await seedLaneGBot(seeded);
+        await system.task.create({
+          data: {
+            id: `${seeded.userId}-task1`, spaceId: found.spaceId, botId: found.botId, threadId: found.threadId,
+            userId: seeded.userId, prompt: "intro", status: "running",
+          } as never,
+        });
+        await system.run.create({
+          data: {
+            id: `${seeded.userId}-run1`, spaceId: found.spaceId, botId: found.botId, threadId: found.threadId,
+            taskId: `${seeded.userId}-task1`, userId: seeded.userId, status: "running", trigger: "created",
+          } as never,
+        });
+      },
+    ),
+    focus(
+      "prompt-posts-after-failed-intro",
+      bot,
+      async (seeded) => {
+        const found = await seedLaneGBot(seeded);
+        await system.task.create({
+          data: {
+            id: `${seeded.userId}-task1`, spaceId: found.spaceId, botId: found.botId, threadId: found.threadId,
+            userId: seeded.userId, prompt: "intro", status: "running",
+          } as never,
+        });
+        await system.run.create({
+          data: {
+            id: `${seeded.userId}-run1`, spaceId: found.spaceId, botId: found.botId, threadId: found.threadId,
+            taskId: `${seeded.userId}-task1`, userId: seeded.userId, status: "failed", trigger: "created",
+          } as never,
+        });
+      },
+    ),
+    focus("prompt-archived-bot-posts", bot, async (seeded) => void (await seedLaneGBot(seeded, { archived: true }))),
+    focus("prompt-bot-without-thread", bot, async (seeded) => void (await seedLaneGBot(seeded, { thread: false }))),
+    focus("prompt-other-space-bot", bot, async (seeded) => void (await seedLaneGBot(seeded, { space: seeded.spaces[1] }))),
+    focus("prompt-unknown-bot", { botId: "missing" }, async (seeded) => void (await seedLaneGBot(seeded))),
+    focus("prompt-anonymous", bot, async (seeded) => void (await seedLaneGBot(seeded)), { anonymous: true }),
+    focus("prompt-bad-input-missing", {}, async (seeded) => void (await seedLaneGBot(seeded))),
+    focus("prompt-bad-input-empty", { botId: "" }, async (seeded) => void (await seedLaneGBot(seeded))),
+    focus("prompt-bad-input-number", { botId: 7 }, async (seeded) => void (await seedLaneGBot(seeded))),
+    focus("prompt-bad-input-null", null, async (seeded) => void (await seedLaneGBot(seeded))),
+    focus("prompt-bad-input-array", [], async (seeded) => void (await seedLaneGBot(seeded))),
+    focus("prompt-bad-input-extra", { botId: "__s-ob1__", more: true }, async (seeded) => void (await seedLaneGBot(seeded))),
+    focus(
+      "prompt-tampered-summary",
+      bot,
+      async (seeded) => {
+        const found = await seedLaneGBot(seeded, { summary: "a summary" });
+        await breakThreadSummary(found.threadId);
+      },
+    ),
+    focus(
+      "prompt-other-space-summary",
+      bot,
+      async (seeded) => {
+        const found = await seedLaneGBot(seeded);
+        const elsewhere = await seedLaneGBot(seeded, { bot: "obx", thread: "th-obx", space: seeded.spaces[1], summary: "another space" });
+        await moveSummary(found.threadId, elsewhere.threadId);
+      },
+    ),
+    focus("prompt-plaintext-blocks", bot, withMessages([{ seq: 0, blocks: [{ kind: "text", text: "legacy" }] }])),
+
+    // onboarding.dismissFocus ------------------------------------------------------------------
+    dismiss("answers", bot, withMessages([{ seq: 0, blocks: [CHOICE_CARD()] }])),
+    dismiss("answers-second-message", bot, withMessages([{ seq: 0, blocks: [{ kind: "text", text: "hello" }] }, { seq: 1, blocks: [CHOICE_CARD()] }])),
+    dismiss("no-choice", bot, withMessages([{ seq: 0, blocks: [{ kind: "text", text: "hello" }] }])),
+    dismiss("already-answered", bot, withMessages([{ seq: 0, blocks: [{ ...CHOICE_CARD(), answerId: "day" }] }])),
+    dismiss("empty-answer-is-pending", bot, withMessages([{ seq: 0, blocks: [{ ...CHOICE_CARD(), answerId: "" }] }])),
+    dismiss(
+      "answers-first-of-two-cards",
+      bot,
+      withMessages([{ seq: 0, blocks: [CHOICE_CARD()] }, { seq: 1, blocks: [{ ...CHOICE_CARD(), question: "Second?" }] }]),
+    ),
+    dismiss("text-before-choice", bot, withMessages([{ seq: 0, blocks: [{ kind: "text", text: "before" }, CHOICE_CARD()] }])),
+    dismiss(
+      "keeps-stray-entries",
+      bot,
+      withMessages([{ seq: 0, blocks: [CHOICE_CARD(), "stray", { no: "kind" }, { kind: 7 }] }]),
+    ),
+    dismiss("bot-without-thread", bot, async (seeded) => void (await seedLaneGBot(seeded, { thread: false }))),
+    dismiss("other-space-bot", bot, async (seeded) => void (await seedLaneGBot(seeded, { space: seeded.spaces[1] }))),
+    dismiss("unknown-bot", { botId: "missing" }, async (seeded) => void (await seedLaneGBot(seeded))),
+    dismiss("anonymous", bot, withMessages([{ seq: 0, blocks: [CHOICE_CARD()] }]), { anonymous: true }),
+    dismiss("bad-input-missing", {}, withMessages([{ seq: 0, blocks: [CHOICE_CARD()] }])),
+    dismiss("bad-input-null", null, withMessages([{ seq: 0, blocks: [CHOICE_CARD()] }])),
+    dismiss(
+      "tampered-blocks",
+      bot,
+      async (seeded) => {
+        const found = await seedLaneGBot(seeded, { nextMessageSeq: 1 });
+        await seedLaneGMessages(seeded, found.threadId, [{ seq: 0, blocks: [CHOICE_CARD()] }]);
+        await owner!.query(
+          `UPDATE messages SET blocks = jsonb_set(blocks, '{0,$sealed}', to_jsonb((blocks->0->>'$sealed') || 'AAAA')) WHERE "threadId" = $1`,
+          [found.threadId],
+        );
+      },
+    ),
+    dismiss(
+      "other-space-blocks",
+      bot,
+      async (seeded) => {
+        const found = await seedLaneGBot(seeded, { nextMessageSeq: 1 });
+        await seedLaneGMessages(seeded, found.threadId, [{ seq: 0, blocks: [CHOICE_CARD()] }]);
+        const elsewhere = await seedLaneGBot(seeded, { bot: "obx", thread: "th-obx", space: seeded.spaces[1], nextMessageSeq: 1 });
+        await seedLaneGMessages(seeded, elsewhere.threadId, [{ seq: 0, blocks: [CHOICE_CARD()] }]);
+        await moveMessageBlocks(`${found.threadId}-m0`, `${elsewhere.threadId}-m0`);
+      },
+    ),
+
+    // computer.commands ------------------------------------------------------------------------
+    commands("empty", bot, withCommands([])),
+    commands("one", bot, withCommands([{ payload: command() }])),
+    commands("folds-running-then-done", bot, withCommands([{ payload: command({ status: "running", exitCode: null, output: "" }) }, { payload: command() }])),
+    commands("keeps-done-before-running", bot, withCommands([{ payload: command() }, { payload: command({ status: "running", exitCode: null }) }])),
+    commands(
+      "orders-by-execution",
+      bot,
+      withCommands([
+        { payload: command({ executionId: "b", command: "two" }) },
+        { payload: command({ executionId: "a", command: "one" }) },
+        { payload: command({ executionId: "b", command: "two again" }) },
+      ]),
+    ),
+    commands(
+      "drops-bad-payloads",
+      bot,
+      withCommands([
+        { payload: command({ executionId: "good" }) },
+        { payload: { ...command(), exitCode: undefined } },
+        { payload: command({ kind: "rm" }) },
+        { payload: command({ bytes: -1 }) },
+        { payload: command({ bytes: null }) },
+        { payload: command({ status: "queued" }) },
+        { payload: { executionId: "no-fields" } },
+        { payload: "not an object" },
+        { payload: null },
+      ]),
+    ),
+    commands(
+      "keeps-optional-bytes",
+      bot,
+      withCommands([{ payload: command({ kind: "write_file", bytes: 42, exitCode: null }) }]),
+    ),
+    commands(
+      "ignores-other-events-and-bots",
+      bot,
+      async (seeded) => {
+        const found = await seedLaneGBot(seeded, { nextEventSeq: 3 });
+        // A second bot of the same Space, whose commands are not this bot's history.
+        await seedLaneGBot(seeded, { bot: "ob2", thread: "th-ob2" });
+        await seedLaneGEvent(seeded, found.spaceId, found.threadId, found.botId, 0, "thread.message.created", command({ executionId: "other-type" }));
+        await seedLaneGEvent(seeded, found.spaceId, found.threadId, `${seeded.userId}-ob2`, 1, "computer.command", command({ executionId: "other-bot" }));
+        await seedLaneGEvent(seeded, found.spaceId, found.threadId, found.botId, 2, "computer.command", command({ executionId: "mine" }));
+      },
+    ),
+    commands("bot-without-thread", bot, withCommands([{ payload: command() }], { thread: false })),
+    commands("archived-bot", bot, withCommands([{ payload: command() }], { archived: true })),
+    commands("other-space-bot", bot, async (seeded) => void (await seedLaneGBot(seeded, { space: seeded.spaces[1] }))),
+    commands("unknown-bot", { botId: "missing" }, withCommands([])),
+    commands("anonymous", bot, withCommands([{ payload: command() }]), { anonymous: true }),
+    commands("bad-input-missing", {}, withCommands([])),
+    commands("bad-input-empty", { botId: "" }, withCommands([])),
+    commands("bad-input-number", { botId: 3 }, withCommands([])),
+    commands(
+      "plaintext-payload",
+      bot,
+      async (seeded) => {
+        const found = await seedLaneGBot(seeded, { nextEventSeq: 1 });
+        await owner!.query(
+          `INSERT INTO events (id, "spaceId", "threadId", "botId", seq, type, payload, "createdAt")
+           VALUES ($1, $2, $3, $4, 0, 'computer.command', $5::jsonb, now())`,
+          [`${found.threadId}-legacy`, found.spaceId, found.threadId, found.botId, JSON.stringify(command({ executionId: "legacy" }))],
+        );
+      },
+    ),
+    commands(
+      "tampered-payload",
+      bot,
+      async (seeded) => {
+        const found = await seedLaneGBot(seeded, { nextEventSeq: 1 });
+        await seedLaneGEvent(seeded, found.spaceId, found.threadId, found.botId, 0, "computer.command", command());
+        await owner!.query(
+          `UPDATE events SET payload = jsonb_set(payload, '{$sealed}', to_jsonb((payload->>'$sealed') || 'AAAA')) WHERE id = $1`,
+          [`${found.threadId}-e0`],
+        );
+      },
+    ),
+    commands(
+      "other-space-payload",
+      bot,
+      async (seeded) => {
+        const found = await seedLaneGBot(seeded, { nextEventSeq: 1 });
+        await seedLaneGEvent(seeded, found.spaceId, found.threadId, found.botId, 0, "computer.command", command());
+        const elsewhere = await seedLaneGBot(seeded, { bot: "obx", thread: "th-obx", space: seeded.spaces[1], nextEventSeq: 1 });
+        await seedLaneGEvent(seeded, elsewhere.spaceId, elsewhere.threadId, elsewhere.botId, 0, "computer.command", command());
+        await moveEventPayload(`${found.threadId}-e0`, `${elsewhere.threadId}-e0`);
+      },
+    ),
+  ];
 }
 
 const SELECTED_HEADERS = [
@@ -6851,6 +7503,12 @@ async function databaseState(seeded: ReturnType<typeof ids>) {
     threads,
     messages,
     events,
+    boards,
+    tickets,
+    ticketComments,
+    taughtSkills,
+    members,
+    invitations,
   };
 }
 

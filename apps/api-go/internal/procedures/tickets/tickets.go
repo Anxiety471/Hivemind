@@ -10,6 +10,7 @@ package tickets
 import (
 	"context"
 	"errors"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -97,6 +98,24 @@ func EnsureBoard(ctx context.Context, tx pgx.Tx, spaceID string) (Board, error) 
 
 func now() time.Time { return time.Now().UTC().Truncate(time.Millisecond) }
 
+// openBoard is the route's own first step: the lab gate and ensureBoard, committed before the
+// write it precedes.
+func openBoard(ctx context.Context, database *db.DB, deployment shared.Deployment, actor db.Actor) (Board, error) {
+	var board Board
+	err := database.Tenant(ctx, actor, func(tx pgx.Tx) error {
+		enabled, err := Enabled(ctx, tx, deployment, actor.UserID)
+		if err != nil {
+			return err
+		}
+		if !enabled {
+			return errBoardDisabled
+		}
+		board, err = EnsureBoard(ctx, tx, actor.SpaceID)
+		return err
+	})
+	return board, err
+}
+
 // Ticket is TicketSchema (packages/contracts/src/board.ts:88-105).
 type Ticket struct {
 	ID              string  `json:"id"`
@@ -158,7 +177,7 @@ func scanTicket(row pgx.Row) (ticketRow, error) {
 }
 
 func ticketRef(prefix string, number int64) string {
-	return prefix + "-" + validate.Stringify(number)
+	return prefix + "-" + strconv.FormatInt(number, 10)
 }
 
 // coerceStatus and coercePriority are toTicketDto's fallbacks for a legacy stored value.
@@ -244,19 +263,14 @@ func Move(ctx context.Context, database *db.DB, deployment shared.Deployment, ac
 	if failure != nil {
 		return nil, failure
 	}
+	// ensureBoard runs on its own, as it does in TypeScript: a move that then fails leaves the
+	// board it created behind.
+	board, err := openBoard(ctx, database, deployment, actor)
+	if err != nil {
+		return nil, shared.Failure(err)
+	}
 	var ticket Ticket
-	err := database.Tenant(ctx, actor, func(tx pgx.Tx) error {
-		enabled, err := Enabled(ctx, tx, deployment, actor.UserID)
-		if err != nil {
-			return err
-		}
-		if !enabled {
-			return errBoardDisabled
-		}
-		board, err := EnsureBoard(ctx, tx, actor.SpaceID)
-		if err != nil {
-			return err
-		}
+	err = database.Tenant(ctx, actor, func(tx pgx.Tx) error {
 		// The ticketRow is held (FOR UPDATE) before it is read, so a concurrent move cannot interleave.
 		if _, err := tx.Exec(ctx, `SELECT id FROM tickets WHERE id = $1 AND "spaceId" = $2 FOR UPDATE`,
 			input.ID, actor.SpaceID); err != nil {
@@ -342,19 +356,13 @@ func Comment(ctx context.Context, database *db.DB, deployment shared.Deployment,
 	if failure != nil {
 		return nil, failure
 	}
+	// ensureBoard commits on its own here too, so a comment on an unknown ticket still opens the board.
+	board, err := openBoard(ctx, database, deployment, actor)
+	if err != nil {
+		return nil, shared.Failure(err)
+	}
 	var comment TicketComment
-	err := database.Tenant(ctx, actor, func(tx pgx.Tx) error {
-		enabled, err := Enabled(ctx, tx, deployment, actor.UserID)
-		if err != nil {
-			return err
-		}
-		if !enabled {
-			return errBoardDisabled
-		}
-		board, err := EnsureBoard(ctx, tx, actor.SpaceID)
-		if err != nil {
-			return err
-		}
+	err = database.Tenant(ctx, actor, func(tx pgx.Tx) error {
 		ticket, err := findTicket(ctx, tx, actor.SpaceID, board.ID, input.TicketID)
 		if err != nil {
 			return err

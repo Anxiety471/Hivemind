@@ -325,20 +325,62 @@ func sameBlock(left, right map[string]any) bool {
 
 // updateDraftMessage is updateSkillDraftMessage (taught-skills.ts:211-262): the newest bot message
 // holding this skill's draft card is rewritten, then the thread hears the update.
-func updateDraftMessage(ctx context.Context, tx pgx.Tx, ring *contentcrypto.KeyRing, deployment shared.Deployment,
+func updateDraftMessage(ctx context.Context, database *db.DB, ring *contentcrypto.KeyRing, deployment shared.Deployment,
 	actor db.Actor, skill row, name string, playbook Playbook, status string) error {
-	bot, err := botWithThread(ctx, tx, ring, skill.BotID)
+	var card cardUpdate
+	err := database.Tenant(ctx, actor, func(tx pgx.Tx) error {
+		update, err := findAndRewriteCard(ctx, tx, ring, actor, skill, name, playbook, status)
+		card = update
+		return err
+	})
+	if err != nil || !card.written {
+		return err
+	}
+	var appended *events.Event
+	err = database.Tenant(ctx, actor, func(tx pgx.Tx) error {
+		event, err := events.Append(ctx, tx, ring, events.Input{
+			SpaceID: actor.SpaceID, ThreadID: card.ThreadID, BotID: card.BotID,
+			Type: "thread.message.updated",
+			Payload: map[string]any{
+				"messageId": card.MessageID, "role": "bot", "blocks": messageblocks.JSONValue(card.Blocks),
+			},
+		})
+		if err != nil {
+			return err
+		}
+		appended = &event
+		return nil
+	})
 	if err != nil {
 		return err
 	}
+	notify(ctx, deployment, *appended)
+	return nil
+}
+
+// cardUpdate is what the message-rewrite transaction found and wrote.
+type cardUpdate struct {
+	written   bool
+	ThreadID  string
+	BotID     string
+	MessageID string
+	Blocks    []map[string]any
+}
+
+func findAndRewriteCard(ctx context.Context, tx pgx.Tx, ring *contentcrypto.KeyRing, actor db.Actor,
+	skill row, name string, playbook Playbook, status string) (cardUpdate, error) {
+	bot, err := botWithThread(ctx, tx, ring, skill.BotID)
+	if err != nil {
+		return cardUpdate{}, err
+	}
 	if bot.ThreadID == nil {
-		return nil
+		return cardUpdate{}, nil
 	}
 	threadID := *bot.ThreadID
 	rows, err := tx.Query(ctx, `SELECT id, blocks FROM messages WHERE "threadId" = $1 AND role = 'bot'
 		ORDER BY seq DESC LIMIT $2`, threadID, draftedMessages)
 	if err != nil {
-		return err
+		return cardUpdate{}, err
 	}
 	type storedMessage struct {
 		ID     string
@@ -349,13 +391,13 @@ func updateDraftMessage(ctx context.Context, tx pgx.Tx, ring *contentcrypto.KeyR
 		var message storedMessage
 		if err := rows.Scan(&message.ID, &message.Blocks); err != nil {
 			rows.Close()
-			return err
+			return cardUpdate{}, err
 		}
 		messages = append(messages, message)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return err
+		return cardUpdate{}, err
 	}
 	opened := make([]map[string]any, len(messages))
 	for index, message := range messages {
@@ -363,7 +405,7 @@ func updateDraftMessage(ctx context.Context, tx pgx.Tx, ring *contentcrypto.KeyR
 	}
 	if len(opened) > 0 {
 		if err := ring.OpenRows(ctx, "Message", opened); err != nil {
-			return err
+			return cardUpdate{}, err
 		}
 	}
 	for index, message := range messages {
@@ -388,41 +430,31 @@ func updateDraftMessage(ctx context.Context, tx pgx.Tx, ring *contentcrypto.KeyR
 			return block, false
 		})
 		if !ok || !changed {
-			return nil
+			return cardUpdate{}, nil
 		}
 		sealed, err := ring.SealRow(ctx, "Message", map[string]any{
 			"id": message.ID, "threadId": threadID, "blocks": stored,
 		})
 		if err != nil {
-			return err
+			return cardUpdate{}, err
 		}
 		body, err := json.Marshal(sealed["blocks"])
 		if err != nil {
-			return fmt.Errorf("store message blocks: %w", err)
+			return cardUpdate{}, fmt.Errorf("store message blocks: %w", err)
 		}
 		if ring.EncryptWrites {
 			if _, err := tx.Exec(ctx, `UPDATE messages SET blocks = $1::jsonb, "searchTokens" = $3 WHERE id = $2`,
 				string(body), message.ID, sealed["searchTokens"]); err != nil {
-				return err
+				return cardUpdate{}, err
 			}
 		} else if _, err := tx.Exec(ctx, `UPDATE messages SET blocks = $1::jsonb, "searchTokens" = '{}' WHERE id = $2`,
 			string(body), message.ID); err != nil {
-			return err
+			return cardUpdate{}, err
 		}
-		event, err := events.Append(ctx, tx, ring, events.Input{
-			SpaceID: actor.SpaceID, ThreadID: threadID, BotID: bot.BotID,
-			Type: "thread.message.updated",
-			Payload: map[string]any{
-				"messageId": message.ID, "role": "bot", "blocks": messageblocks.JSONValue(shown),
-			},
-		})
-		if err != nil {
-			return err
-		}
-		notify(ctx, deployment, event)
-		return nil
+		return cardUpdate{written: true, ThreadID: threadID, BotID: bot.BotID, MessageID: message.ID,
+			Blocks: shown}, nil
 	}
-	return nil
+	return cardUpdate{}, nil
 }
 
 // playbookValue is the stored JSON of a playbook: its seven fields, in schema order.
@@ -532,7 +564,7 @@ func UpdateDraft(ctx context.Context, database *db.DB, deployment shared.Deploym
 	if ring == nil {
 		return nil, shared.Failure(errors.New("content encryption is not configured"))
 	}
-	var skill Skill
+	var updated row
 	err := database.Tenant(ctx, actor, func(tx pgx.Tx) error {
 		current, err := getOwned(ctx, tx, actor, input.SkillID)
 		if err != nil {
@@ -553,20 +585,18 @@ func UpdateDraft(ctx context.Context, database *db.DB, deployment shared.Deploym
 		if current.UserID != actor.UserID {
 			recording = emptyRecording
 		}
-		updated, err := updateSkill(ctx, tx, current.ID, actor.UserID, name, playbookValue(input.Playbook), status, recording)
-		if err != nil {
-			return err
-		}
-		if err := updateDraftMessage(ctx, tx, ring, deployment, actor, updated, updated.Name,
-			parsePlaybook(updated.Playbook), status); err != nil {
-			return err
-		}
-		skill = skillFor(actor, updated)
-		return nil
+		updated, err = updateSkill(ctx, tx, current.ID, actor.UserID, name, playbookValue(input.Playbook), status, recording)
+		return err
 	})
 	if err != nil {
 		return nil, shared.Failure(err)
 	}
+	// Each of these is its own statement in TypeScript: a failure leaves the row update committed.
+	if err := updateDraftMessage(ctx, database, ring, deployment, actor, updated, updated.Name,
+		parsePlaybook(updated.Playbook), updated.Status); err != nil {
+		return nil, shared.Failure(err)
+	}
+	skill := skillFor(actor, updated)
 	if !outputValid(skill) {
 		return nil, shared.OutputInvalid()
 	}
@@ -633,9 +663,10 @@ func Save(ctx context.Context, database *db.DB, deployment shared.Deployment, ac
 	}
 	ring := deployment.Content
 	if ring == nil {
-		return nil, shared.Failure(errors.New("content encryption is not configured"))
+		return nil, shared.Failure(errors.New("encryption is not configured"))
 	}
-	var skill Skill
+	var updated row
+	var bot botThread
 	err := database.Tenant(ctx, actor, func(tx pgx.Tx) error {
 		current, err := getOwned(ctx, tx, actor, input.SkillID)
 		if err != nil {
@@ -656,19 +687,28 @@ func Save(ctx context.Context, database *db.DB, deployment shared.Deployment, ac
 		if current.UserID != actor.UserID {
 			recording = emptyRecording
 		}
-		updated, err := updateSkill(ctx, tx, current.ID, actor.UserID, name, parsePlaybookJSON(current.Playbook), "saved", recording)
-		if err != nil {
-			return err
-		}
-		bot, err := botWithThread(ctx, tx, ring, updated.BotID)
-		if err != nil {
-			return err
-		}
-		if err := updateDraftMessage(ctx, tx, ring, deployment, actor, updated, updated.Name,
-			parsePlaybook(updated.Playbook), "saved"); err != nil {
-			return err
-		}
-		if bot.ThreadID != nil {
+		updated, err = updateSkill(ctx, tx, current.ID, actor.UserID, name, parsePlaybookJSON(current.Playbook), "saved", recording)
+		return err
+	})
+	if err != nil {
+		return nil, shared.Failure(err)
+	}
+	// The bot lookup and the card rewrite are separate statements in TypeScript as well.
+	err = database.Tenant(ctx, actor, func(tx pgx.Tx) error {
+		found, err := botWithThread(ctx, tx, ring, updated.BotID)
+		bot = found
+		return err
+	})
+	if err != nil {
+		return nil, shared.Failure(err)
+	}
+	if err := updateDraftMessage(ctx, database, ring, deployment, actor, updated, updated.Name,
+		parsePlaybook(updated.Playbook), "saved"); err != nil {
+		return nil, shared.Failure(err)
+	}
+	if bot.ThreadID != nil {
+		var appended *events.Event
+		err := database.Tenant(ctx, actor, func(tx pgx.Tx) error {
 			event, err := events.Append(ctx, tx, ring, events.Input{
 				SpaceID: actor.SpaceID, ThreadID: *bot.ThreadID, BotID: bot.BotID,
 				Type:    "skill.saved",
@@ -677,14 +717,15 @@ func Save(ctx context.Context, database *db.DB, deployment shared.Deployment, ac
 			if err != nil {
 				return err
 			}
-			notify(ctx, deployment, event)
+			appended = &event
+			return nil
+		})
+		if err != nil {
+			return nil, shared.Failure(err)
 		}
-		skill = skillFor(actor, updated)
-		return nil
-	})
-	if err != nil {
-		return nil, shared.Failure(err)
+		notify(ctx, deployment, *appended)
 	}
+	skill := skillFor(actor, updated)
 	if !outputValid(skill) {
 		return nil, shared.OutputInvalid()
 	}

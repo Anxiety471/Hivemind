@@ -75,9 +75,14 @@ func requireBotThread(ctx context.Context, tx pgx.Tx, ring *contentcrypto.KeyRin
 		return botThread{}, shared.NotFound
 	}
 	found.ThreadID, found.SpaceID = *threadID, *spaceID
+	// The value must be the string itself (nil when absent): a *string is not a ciphertext to open.
+	var stored any
+	if summary != nil {
+		stored = *summary
+	}
 	row := map[string]any{
 		"id": *threadID, "spaceId": *spaceID, "userId": *userID,
-		"historyCompactionSummary": summary,
+		"historyCompactionSummary": stored,
 	}
 	if err := ring.OpenRows(ctx, "Thread", []map[string]any{row}); err != nil {
 		return botThread{}, err
