@@ -1,0 +1,60 @@
+package placeholderlint
+
+import "testing"
+
+func TestTemplateToken(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		value string
+		want  bool
+	}{
+		{name: "dollar whole value", value: "${name}", want: true},
+		{name: "dollar empty", value: "${}", want: true},
+		{name: "dollar inside a sentence", value: "Hello ${name}, welcome", want: true},
+		{name: "brace whole value", value: "{{name}}", want: true},
+		{name: "brace inside a sentence", value: "Deploy to {{host}} now", want: true},
+		{name: "angle whole value", value: "<name>", want: true},
+		{name: "angle with underscore", value: "<your_name>", want: true},
+		{name: "angle inside a sentence", value: "Hi <name>, welcome", want: true},
+		{name: "printf string", value: "%s", want: true},
+		{name: "printf decimal", value: "id=%d", want: true},
+		{name: "printf positional one", value: "%1", want: true},
+		{name: "printf positional with text", value: "%9 items", want: true},
+		{name: "printf in a query", value: "SELECT * FROM t WHERE id = %s", want: true},
+
+		{name: "empty", value: "", want: false},
+		{name: "plain", value: "plain value", want: false},
+		{name: "url percent encoding space", value: "https://x/a%20b", want: false},
+		{name: "url percent encodings", value: "https://example.com/a%2Fb?q=100%25", want: false},
+		{name: "percent encoded text", value: "50%25 done", want: false},
+		{name: "literal percent", value: "100% done", want: false},
+		{name: "percent word", value: "%done", want: false},
+		{name: "percent then hex", value: "%d0", want: false},
+		{name: "percent then hex digit", value: "%1F", want: false},
+		{name: "less than prose", value: "x < y", want: false},
+		{name: "angle comparison prose", value: "a < b and c > d", want: false},
+		{name: "numeric comparison", value: "5 < 10 > 3", want: false},
+		{name: "heart emoticon", value: "<3", want: false},
+		{name: "heart emoticon in text", value: "I <3 Go", want: false},
+		{name: "closing tag", value: "</div>", want: false},
+		{name: "tag with attribute", value: `<div class="x">`, want: false},
+		{name: "angle token glued to a word", value: "a<name>b", want: false},
+		{name: "email", value: "user@example.com", want: false},
+		{name: "square brackets", value: "use [name] instead", want: false},
+		{name: "unclosed brace token", value: "{{", want: false},
+		{name: "unclosed dollar token", value: "${name", want: false},
+		{name: "trailing percent", value: "100%", want: false},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			got := (TemplateToken{}).Check(Argument{Path: "field", Name: "field", Value: testCase.value})
+			if got != testCase.want {
+				t.Fatalf("TemplateToken.Check(%q) = %v, want %v", testCase.value, got, testCase.want)
+			}
+		})
+	}
+}
