@@ -6178,7 +6178,7 @@ async function seedTaughtSkill(
       id: `${seeded.userId}-ts1`, spaceId: found.spaceId, botId: found.botId,
       userId: options.owner ?? seeded.userId, name: options.name ?? "Teach me", goal: options.goal ?? "goal",
       status: options.status ?? "draft",
-      playbook: (options.playbook ?? {}) as never,
+      playbook: (options.playbook === undefined ? {} : options.playbook) as never,
       recording: (options.recording ?? { events: [], snapshots: [] }) as never,
       createdAt: LANE_G_OLD(), updatedAt: LANE_G_OLD(),
     },
@@ -6375,6 +6375,44 @@ function laneGCases2(): Case[] {
     }),
     cancel("anonymous", { organizationId: "__org__", invitationId: "__s-inv1__" }, async (seeded) => void (await seedOrganizationPeople(seeded)), { anonymous: true }),
     cancel("bad-input-missing", {}, async (seeded) => void (await seedOrganizationPeople(seeded))),
+
+    // The independent reviewer's repros: each one is a divergence it found between this port and
+    // TypeScript, kept as a contract case.
+    save("gr-goal-splits-emoji", { ...skill }, async (seeded) =>
+      void (await seedTaughtSkill(seeded, { name: "", goal: `${"a".repeat(79)}😀` }))),
+    save("gr-stored-null-playbook", { ...skill }, async (seeded) => {
+      await seedTaughtSkill(seeded, { name: "Named" });
+      await owner!.query(`UPDATE taught_skills SET playbook = 'null'::jsonb WHERE id = $1`, [`${seeded.userId}-ts1`]);
+    }),
+    save("gr-stored-playbook-is-a-string", { ...skill }, async (seeded) =>
+      void (await seedTaughtSkill(seeded, { name: "Named", playbook: "not an object" }))),
+    save("gr-stored-playbook-is-a-list", { ...skill }, async (seeded) =>
+      void (await seedTaughtSkill(seeded, { name: "Named", playbook: ["a", "b"] }))),
+    // zod's .optional() admits a value or an absent key, never null: the output parse fails.
+    save("gr-recording-null-optional-key", { ...skill }, async (seeded) =>
+      void (await seedTaughtSkill(seeded, {
+        name: "Named",
+        recording: { events: [{ at: "2021-01-01T00:00:00.000Z", kind: "scroll", y: null }], snapshots: [] },
+      }))),
+    // A key the schemas do not name is stripped from the answer, here and in the nested entries.
+    save("gr-recording-unknown-key", { ...skill }, async (seeded) =>
+      void (await seedTaughtSkill(seeded, {
+        name: "Named",
+        recording: {
+          events: [{ at: "2021-01-01T00:00:00.000Z", kind: "key", key: "a", extra: 1 }],
+          snapshots: [{ at: "2021-01-01T00:00:00.000Z", summary: "s", extra: true }],
+          extra: 1,
+        },
+      }))),
+    // boardEnabled is a middleware: with the lab off it answers 404 before the input is parsed.
+    move("gr-lab-off-bad-input", { id: "__s-t1__" }, async (seeded) => {
+      await seedBoardTicket()(seeded);
+      await system.user.update({ where: { id: seeded.userId }, data: { labs: [] } });
+    }),
+    comment("gr-lab-off-bad-body", { ticketId: "__s-t1__", body: "   " }, async (seeded) => {
+      await seedBoardTicket()(seeded);
+      await system.user.update({ where: { id: seeded.userId }, data: { labs: [] } });
+    }),
   ];
 }
 
