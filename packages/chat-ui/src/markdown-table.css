@@ -4,6 +4,7 @@
 
 .rk-table-head {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
   gap: 0.15em;
   padding: 0.3em 0.45em;
@@ -14,14 +15,17 @@
   flex-shrink: 0;
   align-items: center;
   justify-content: center;
-  width: 1.7em;
-  height: 1.7em;
+  width: 1.75em;
+  height: 1.75em;
   border: 0;
   border-radius: 0.45em;
   background: transparent;
   color: var(--muted-foreground);
   cursor: pointer;
   padding: 0;
+  transition:
+    background-color 120ms,
+    color 120ms;
 }
 
 .rk-table-tool:disabled {
@@ -44,15 +48,17 @@
   user-select: none;
 }
 
+/* The inline card grows with its rows (pagination caps them at a page), so
+   there is no nested vertical scroller; only a table too wide to wrap scrolls
+   sideways, and that gesture stays inside the card. */
 .rk-table-scroll {
-  overflow: auto;
-  max-height: 20em;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
 }
 
 .rk-table td {
-  font-family: var(--font-mono);
-  font-size: 0.92em;
   color: var(--foreground);
+  font-variant-numeric: tabular-nums;
 }
 
 .rk-table thead th {
@@ -60,6 +66,7 @@
   top: 0;
   z-index: 1;
   background: var(--muted);
+  color: var(--muted-foreground);
   font-weight: 600;
   text-align: left;
 }
@@ -104,6 +111,20 @@ button.rk-table-sort {
   flex-direction: column;
   flex-shrink: 0;
   line-height: 0;
+  transition: opacity 120ms;
+}
+
+/* Sort arrows are clutter until wanted: show them on the hovered or focused
+   header and on the sorted column. Touch keeps them, having no hover. */
+@media (hover: hover) and (pointer: fine) {
+  .rk-table thead th:not([aria-sort]) .rk-table-sort-icon {
+    opacity: 0;
+  }
+
+  .rk-table thead th:hover .rk-table-sort-icon,
+  .rk-table thead th:focus-within .rk-table-sort-icon {
+    opacity: 1;
+  }
 }
 
 .rk-table-empty {
@@ -118,21 +139,20 @@ button.rk-table-sort {
   justify-content: flex-end;
   gap: 0.4em;
   border-top: 1px solid var(--border);
-  padding: 0.2em 0.5em;
+  padding: 0.25em 0.6em;
   font-size: 0.8em;
   color: var(--muted-foreground);
 }
 
+/* Cells wrap rather than truncate: the card shows the whole value without a
+   tooltip or a sideways drag, and the line length stays readable. */
 .rk-table-cell-text {
   display: block;
-  max-width: 60ch;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  max-width: 80ch;
 }
 
 .rk-table .rk-align-right {
   text-align: right;
-  font-variant-numeric: tabular-nums;
 }
 
 .rk-table .rk-align-center {
@@ -140,8 +160,8 @@ button.rk-table-sort {
 }
 
 .rk-table-box .rk-table .rk-table-gutter {
-  width: 2.2em;
-  min-width: 2.2em;
+  width: 2.4em;
+  min-width: 2.4em;
   text-align: center;
   color: var(--muted-foreground);
   background: var(--muted);
@@ -176,26 +196,21 @@ button.rk-table-sort {
 
 .rk-chat-markdown .rk-table-card {
   position: relative;
-  margin: 0.65em 0;
+  margin: 0.9em 0;
   border: 1px solid var(--border);
   border-radius: 0.75em;
   background: var(--card);
   overflow: hidden;
 }
 
-/* Inline card: reserved static strip so tools never overlay sortable headers.
-   Tools fade in on hover/focus; the dialog head stays always-visible. */
+/* Inline card: reserved static strip so tools never overlay sortable headers. */
 .rk-table-card > .rk-table-head {
   position: static;
-  padding: 0.3em 0.45em;
+  padding: 0.25em 0.45em;
   border: 0;
   border-bottom: 1px solid var(--border);
   border-radius: 0;
   background: transparent;
-}
-
-.rk-table-card > .rk-table-head .rk-table-tool {
-  opacity: 0;
 }
 
 .rk-table-dialog .rk-table-head {
@@ -203,31 +218,57 @@ button.rk-table-sort {
   border-bottom: 1px solid var(--border);
 }
 
+/* The card's table spans the card and wraps its cells to fit; columns keep a
+   content-based floor, and only a table whose floors overflow scrolls. */
 .rk-table-box .rk-table {
   display: table;
-  width: max-content;
-  min-width: 100%;
+  width: 100%;
   /* Cancel the legacy .rk-chat-markdown table clamp so wide tables overflow
      into .rk-table-scroll instead of scrolling the <table> element itself. */
   max-width: none;
   overflow: visible;
   margin: 0;
   border-collapse: collapse;
-  font-size: 0.85em;
+  font-size: 0.875em;
+  line-height: 1.5;
 }
 
 .rk-table-box .rk-table th,
 .rk-table-box .rk-table td {
   border: 0;
   border-bottom: 1px solid var(--border);
-  padding: 0.35em 0.75em;
-  white-space: nowrap;
-  overflow-wrap: normal;
+  padding: 0.55em 0.85em;
+  vertical-align: baseline;
 }
 
-.rk-table-card:hover > .rk-table-head .rk-table-tool,
-.rk-table-card:focus-within > .rk-table-head .rk-table-tool {
-  opacity: 1;
+.rk-table-box .rk-table th {
+  white-space: normal;
+  overflow-wrap: normal;
+  vertical-align: middle;
+}
+
+/* `anywhere` lets a long token shrink its column's min-content; the per-column
+   min-width floor keeps that from collapsing a column to a sliver. */
+.rk-table-box .rk-table td {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* Inline code inside a cell sits in the cell's line instead of the prose
+   chip's fixed size, so it scales with the table and stays light. */
+.rk-table-box .rk-table code {
+  border-color: transparent;
+  padding: 0.05em 0.3em;
+  font-size: 0.9em;
+  overflow-wrap: anywhere;
+}
+
+/* Phones: tighter gutters so three columns fit the card without a sideways scroll. */
+@media (max-width: 480px) {
+  .rk-table-card .rk-table th,
+  .rk-table-card .rk-table td {
+    padding-inline: 0.55em;
+  }
 }
 
 @media (hover: none), (pointer: coarse) {
@@ -241,21 +282,18 @@ button.rk-table-sort {
     min-width: 44px;
     min-height: 44px;
   }
-
-  .rk-table-card > .rk-table-head .rk-table-tool {
-    opacity: 1;
-  }
 }
 
-/* DialogContent's default text-sm shrinks cells below the card's; the dialog
-   is the expanded view, so it tracks the document base size instead. */
+/* Full view: a near-window panel so the whole table, every row, has room;
+   its size doesn't follow the zoom, so zooming never jumps the panel. */
 .rk-table-dialog {
   display: flex;
   flex-direction: column;
   font-size: 1rem;
-  min-width: min(32rem, 94vw);
-  max-width: 94vw;
-  max-height: 90vh;
+  width: min(96vw, 120rem);
+  height: 92dvh;
+  max-width: none;
+  max-height: none;
   gap: 0;
   padding: 0;
   border: 1px solid var(--border);
@@ -278,6 +316,41 @@ button.rk-table-sort {
   border: 0;
 }
 
+.rk-table-zoom {
+  display: flex;
+  align-items: center;
+  gap: 0.15em;
+  margin-inline-end: auto;
+}
+
+.rk-table-tool.rk-table-zoom-level {
+  width: auto;
+  min-width: 3.6em;
+  padding: 0 0.4em;
+  font-size: 0.8em;
+  font-variant-numeric: tabular-nums;
+}
+
+.rk-table-dialog-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 1em 1.25em;
+}
+
+/* Sized by content and centred; the zoom scales the font, and every length
+   in the table is em-based, so the whole grid scales with it. */
+.rk-table-dialog .rk-table {
+  width: max-content;
+  min-width: 0;
+  margin-inline: auto;
+  border: 1px solid var(--border);
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: calc(0.95em * var(--rk-table-zoom, 1));
+}
+
 .rk-table-dialog .rk-table th,
 .rk-table-dialog .rk-table td,
 .rk-table-dialog .rk-table-cell-text {
@@ -286,7 +359,6 @@ button.rk-table-sort {
 }
 
 .rk-table-dialog .rk-table-cell-text {
-  max-width: min(60ch, 76vw);
   overflow: visible;
   text-overflow: clip;
 }
@@ -294,11 +366,8 @@ button.rk-table-sort {
 .rk-table-box .rk-table tbody tr:last-child td {
   border-bottom: 0;
 }
-
-.rk-table-dialog-scroll {
-  max-height: none;
-  flex: 1;
-  min-height: 0;
+.rk-table-box .rk-table tbody tr:hover td {
+  background: color-mix(in oklab, var(--accent) 55%, transparent);
 }
 
 .rk-sr-only {

@@ -83,7 +83,9 @@ test("markdown tables render as an interactive card", async ({ page }, testInfo)
 
   await card.getByRole("button", { name: "Expand table" }).click();
   const dialog = page.getByRole("dialog", { name: "Table" });
-  await expect(dialog.locator("tbody tr")).toHaveCount(10);
+  // The full view lists every row, not the card's page.
+  await expect(dialog.locator("tbody tr")).toHaveCount(12);
+  await expect(dialog.getByText("12 rows")).toBeVisible();
   // Focus moves to the close control, and cells keep their card styling even
   // though the Base UI dialog portal sits outside .rk-chat-markdown.
   await expect(dialog.getByRole("button", { name: "Close table" })).toBeFocused();
@@ -132,7 +134,7 @@ test("rich table links participate in dialog keyboard navigation", async ({ page
   await expect(dialog.locator("code")).toHaveCSS("border-top-style", "solid");
   await dialogLink.focus();
   await page.keyboard.press("Tab");
-  await expect(dialog.getByRole("button", { name: "Copy rows" })).toBeFocused();
+  await expect(dialog.getByRole("button", { name: "Zoom out" })).toBeFocused();
   await page.keyboard.press("Shift+Tab");
   await expect(dialogLink).toBeFocused();
 });
@@ -170,22 +172,32 @@ test("rich table cells stay associated through sorting and pagination", async ({
   );
 });
 
-test("expanded tables show long cell content without truncation", async ({ page }, testInfo) => {
+test("table cells wrap in the card and the full view fills the window", async ({
+  page,
+}, testInfo) => {
   await page.goto(`${fixture}?long=1`);
   const card = page.getByTestId("table-card");
   const inlineCell = card.locator(".rk-table-cell-text").filter({ hasText: longValue });
   const inlineMetrics = await inlineCell.evaluate((element) => {
     const style = getComputedStyle(element);
     return {
+      clientHeight: element.clientHeight,
       clientWidth: element.clientWidth,
       scrollWidth: element.scrollWidth,
-      textOverflow: style.textOverflow,
-      whiteSpace: style.whiteSpace,
+      lineHeight: Number.parseFloat(style.lineHeight),
     };
   });
-  expect(inlineMetrics.whiteSpace).toBe("nowrap");
-  expect(inlineMetrics.textOverflow).toBe("ellipsis");
-  expect(inlineMetrics.scrollWidth).toBeGreaterThan(inlineMetrics.clientWidth);
+  // Wrapped onto several lines with nothing clipped, and the card needs no sideways scroll.
+  expect(inlineMetrics.scrollWidth - inlineMetrics.clientWidth).toBeLessThanOrEqual(1);
+  expect(inlineMetrics.clientHeight).toBeGreaterThan(inlineMetrics.lineHeight * 1.5);
+  const scroll = await card.locator(":scope > .rk-table-scroll").evaluate((element) => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+    clientHeight: element.clientHeight,
+    scrollHeight: element.scrollHeight,
+  }));
+  expect(scroll.scrollWidth - scroll.clientWidth).toBeLessThanOrEqual(1);
+  expect(scroll.scrollHeight - scroll.clientHeight).toBeLessThanOrEqual(1);
 
   await card.getByRole("button", { name: "Expand table" }).click();
   const dialogCell = page
@@ -200,22 +212,65 @@ test("expanded tables show long cell content without truncation", async ({ page 
       clientWidth: element.clientWidth,
       scrollWidth: element.scrollWidth,
       overflow: style.overflow,
-      textOverflow: style.textOverflow,
       whiteSpace: style.whiteSpace,
     };
   });
   expect(dialogMetrics.whiteSpace).toBe("normal");
   expect(dialogMetrics.overflow).toBe("visible");
-  expect(dialogMetrics.textOverflow).toBe("clip");
   expect(dialogMetrics.scrollHeight - dialogMetrics.clientHeight).toBeLessThanOrEqual(1);
   expect(dialogMetrics.scrollWidth - dialogMetrics.clientWidth).toBeLessThanOrEqual(1);
 
-  // The dialog sizes to content: a two-column table hugs its ~32rem floor.
   const box = await page.getByRole("dialog", { name: "Table" }).boundingBox();
-  const viewportWidth = page.viewportSize()?.width ?? 1280;
+  const viewport = page.viewportSize() ?? { width: 1280, height: 720 };
   expect(box).not.toBeNull();
-  expect(box!.width).toBeLessThan(viewportWidth * 0.6);
+  expect(box!.width).toBeGreaterThan(viewport.width * 0.9);
+  expect(box!.height).toBeGreaterThan(viewport.height * 0.85);
   await captureScreenshot(page, testInfo, "table-dialog-width");
+});
+
+test("the full view zooms by buttons, keys, and ctrl+wheel, and fits wide tables", async ({
+  page,
+}) => {
+  await page.goto(`${fixture}?wide=1`);
+  await page.getByTestId("table-card").getByRole("button", { name: "Expand table" }).click();
+  const dialog = page.getByRole("dialog", { name: "Table" });
+  const table = dialog.locator("table");
+  const fontSize = () =>
+    table.evaluate((element) => Number.parseFloat(getComputedStyle(element).fontSize));
+  const base = await fontSize();
+
+  await expect(dialog.getByRole("button", { name: "Reset zoom, 100%" })).toBeVisible();
+  await dialog.getByRole("button", { name: "Zoom in" }).click();
+  await expect(dialog.getByRole("button", { name: "Reset zoom, 110%" })).toBeVisible();
+  expect(await fontSize()).toBeCloseTo(base * 1.1, 0);
+
+  await page.keyboard.press("-");
+  await page.keyboard.press("-");
+  await expect(dialog.getByRole("button", { name: "Reset zoom, 90%" })).toBeVisible();
+  await page.keyboard.press("0");
+  await expect(dialog.getByRole("button", { name: "Reset zoom, 100%" })).toBeVisible();
+
+  const scroll = dialog.locator(".rk-table-dialog-scroll");
+  await scroll.hover();
+  await page.keyboard.down("Control");
+  await page.mouse.wheel(0, 100);
+  await page.keyboard.up("Control");
+  await expect.poll(fontSize).toBeLessThan(base);
+
+  // The wide fixture overflows at 100%; fit shrinks it to the view's width.
+  await page.keyboard.press("0");
+  await dialog.getByRole("button", { name: "Fit to width" }).click();
+  await expect(dialog.getByRole("button", { name: "Reset zoom, 100%" })).toHaveCount(0);
+  const fitted = await scroll.evaluate((element) => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+  }));
+  expect(fitted.scrollWidth - fitted.clientWidth).toBeLessThanOrEqual(1);
+
+  // Reopening starts at 100% again.
+  await page.keyboard.press("Escape");
+  await page.getByTestId("table-card").getByRole("button", { name: "Expand table" }).click();
+  await expect(dialog.getByRole("button", { name: "Reset zoom, 100%" })).toBeVisible();
 });
 
 test("nested table dialogs close independently", async ({ page }) => {
@@ -274,7 +329,9 @@ test("streaming rows preserve state while schema changes reset it", async ({ pag
     "aria-sort",
     "ascending",
   );
-  await expect(dialog.getByText("11–13 of 13 rows")).toBeVisible();
+  // The full view lists every row; the card keeps its page behind it.
+  await expect(dialog.getByText("13 rows")).toBeVisible();
+  await expect(card.locator(".rk-table-range")).toHaveText("11–13 of 13 rows");
   await expect(dialog.getByRole("button", { name: "Copy rows" })).toBeVisible();
   await expect(dialog).toContainText("item-updated");
 

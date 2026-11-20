@@ -197,8 +197,10 @@ export function nextSort(
   return null;
 }
 
-// The .rk-table-cell-text max-width, so min-width never outgrows it.
-const MAX_WIDTH_CHARS = 60;
+// Past this a column wraps instead of widening, so one long column never
+// pushes the inline card into a sideways scroll; short values still keep one
+// line. The vw bound lets three columns share a phone screen.
+const MIN_WIDTH_CHARS = 18;
 
 /** ch-based min-width per column from the longest cell, capped. */
 export function columnMinWidths(columns: string[], rows: string[][]): Record<number, string> {
@@ -209,9 +211,29 @@ export function columnMinWidths(columns: string[], rows: string[][]): Record<num
       const chars = (row[i] ?? "").length;
       if (chars > maxChars) maxChars = chars;
     }
-    widths[i] = `calc(${Math.min(maxChars, MAX_WIDTH_CHARS)}ch + 1.5rem)`;
+    widths[i] = `min(${Math.min(maxChars, MIN_WIDTH_CHARS)}ch + 1.75rem, 24vw)`;
   });
   return widths;
+}
+
+/** Zoom stops the expanded table steps through, as fractions of its base size. */
+const TABLE_ZOOM_STEPS = [0.25, 0.33, 0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5];
+export const TABLE_ZOOM_MIN = 0.25;
+export const TABLE_ZOOM_MAX = 2.5;
+
+export function clampZoom(zoom: number): number {
+  return Math.min(TABLE_ZOOM_MAX, Math.max(TABLE_ZOOM_MIN, zoom));
+}
+
+/** The next stop past `zoom` in `direction`; a level between stops (after fit or
+    pinch) moves to the nearest stop on that side, not a full step further. */
+export function stepZoom(zoom: number, direction: 1 | -1): number {
+  const epsilon = 0.005;
+  const next =
+    direction > 0
+      ? TABLE_ZOOM_STEPS.find((stop) => stop > zoom + epsilon)
+      : TABLE_ZOOM_STEPS.findLast((stop) => stop < zoom - epsilon);
+  return next ?? clampZoom(zoom);
 }
 
 // Leading = + - @ after any whitespace would be evaluated as a formula by

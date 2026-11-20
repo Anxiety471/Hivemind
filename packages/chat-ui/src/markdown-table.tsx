@@ -6,12 +6,19 @@ import {
   DialogTitle,
   useCopyText,
 } from "@rakazo/ui-web";
-import type { ComponentPropsWithoutRef, ReactElement, ReactNode } from "react";
+import type {
+  ComponentPropsWithoutRef,
+  CSSProperties,
+  KeyboardEvent,
+  ReactElement,
+  ReactNode,
+} from "react";
 import {
   Children,
   createContext,
   isValidElement,
   memo,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
@@ -22,11 +29,15 @@ import { CheckIcon, CopyIcon } from "./icons";
 import { useMarkdownCopy } from "./markdown-copy";
 import type { ExtractedTable, HastNode, TableAlign, TableSortDirection } from "./table-utils";
 import {
+  clampZoom,
   columnSortLabel,
   extractTable,
   nextSort,
   sortRows,
+  stepZoom,
   TABLE_PAGE_SIZE,
+  TABLE_ZOOM_MAX,
+  TABLE_ZOOM_MIN,
   tableToCsv,
   tableToTsv,
 } from "./table-utils";
@@ -83,12 +94,15 @@ export const TableCard = memo(function TableCard({
   const [sort, setSort] = useState<SortState>(null);
   const [page, setPage] = useState(0);
   const [expanded, setExpanded] = useState(false);
+  // Expanded view only: a scale on the table's base size, reset each time it opens.
+  const [zoom, setZoom] = useState(1);
   // The data the copy was taken from: the check mark drops once the rows change.
   const [copiedSignature, setCopiedSignature] = useState<string | null>(null);
   const [announcement, setAnnouncement] = useState("");
   const announceTimer = useRef<number | undefined>(undefined);
   const expandButtonRef = useRef<HTMLButtonElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const dialogScrollRef = useRef<HTMLElement | null>(null);
 
   const copied = copiedNow && copiedSignature === dataSignature;
 
@@ -158,12 +172,60 @@ export const TableCard = memo(function TableCard({
     window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
   };
 
+  const openChange = (open: boolean) => {
+    if (open) setZoom(1);
+    setExpanded(open);
+  };
+
+  // Ctrl/⌘ + wheel (and trackpad pinch, which browsers report the same way) zooms
+  // the table instead of the page. React's onWheel is passive, so it can't cancel.
+  const attachDialogScroll = useCallback((element: HTMLElement | null) => {
+    dialogScrollRef.current = element;
+    if (!element) return;
+    const onWheel = (event: WheelEvent) => {
+      if (!event.ctrlKey && !event.metaKey) return;
+      event.preventDefault();
+      const pixels =
+        event.deltaMode === WheelEvent.DOM_DELTA_LINE ? event.deltaY * 16 : event.deltaY;
+      const delta = Math.max(-50, Math.min(50, pixels));
+      setZoom((current) => clampZoom(current * Math.exp(-delta * 0.004)));
+    };
+    element.addEventListener("wheel", onWheel, { passive: false });
+    return () => {
+      element.removeEventListener("wheel", onWheel);
+      dialogScrollRef.current = null;
+    };
+  }, []);
+
+  // Shrinks a table wider than the view until it fits; never enlarges past 100%.
+  const fitWidth = () => {
+    const scroll = dialogScrollRef.current;
+    const table = scroll?.querySelector("table");
+    if (!scroll || !table) return;
+    const style = getComputedStyle(scroll);
+    const available =
+      scroll.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+    const natural = table.offsetWidth / zoom;
+    if (natural <= 0) return;
+    setZoom(clampZoom(Math.min(1, Math.floor((available / natural) * 100) / 100)));
+  };
+
+  const onDialogKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    if (event.key === "+" || event.key === "=") setZoom((current) => stepZoom(current, 1));
+    else if (event.key === "-" || event.key === "_") setZoom((current) => stepZoom(current, -1));
+    else if (event.key === "0") setZoom(1);
+    else return;
+    event.preventDefault();
+  };
+
   const tableView = (mode: "card" | "dialog") => (
     <TableView
       columns={columns}
       aligns={aligns}
-      rows={pageRows}
-      rowOffset={safePage * TABLE_PAGE_SIZE}
+      // The expanded view is the full view: every row, no pages.
+      rows={mode === "dialog" ? sortedRows : pageRows}
+      rowOffset={mode === "dialog" ? 0 : safePage * TABLE_PAGE_SIZE}
       numericColumns={numericColumns}
       minWidths={minWidths}
       renderedHeaders={renderedHeaders}
@@ -215,8 +277,48 @@ export const TableCard = memo(function TableCard({
     </div>
   );
 
+  const zoomPercent = Math.round(zoom * 100);
+  const zoomLabel = `${zoomPercent}%`;
+  const zoomControls = (
+    <div className="rk-table-zoom">
+      <button
+        type="button"
+        className="rk-table-tool"
+        onClick={() => setZoom((current) => stepZoom(current, -1))}
+        disabled={zoom <= TABLE_ZOOM_MIN + 0.001}
+        aria-label={copy.zoomOut}
+        aria-keyshortcuts="-"
+      >
+        <ZoomOutIcon />
+      </button>
+      <button
+        type="button"
+        className="rk-table-tool rk-table-zoom-level"
+        onClick={() => setZoom(1)}
+        aria-label={copy.resetZoom(zoomPercent)}
+        aria-keyshortcuts="0"
+      >
+        {zoomLabel}
+      </button>
+      <button
+        type="button"
+        className="rk-table-tool"
+        onClick={() => setZoom((current) => stepZoom(current, 1))}
+        disabled={zoom >= TABLE_ZOOM_MAX - 0.001}
+        aria-label={copy.zoomIn}
+        aria-keyshortcuts="+"
+      >
+        <ZoomInIcon />
+      </button>
+      <button type="button" className="rk-table-tool" onClick={fitWidth} aria-label={copy.fitWidth}>
+        <FitWidthIcon />
+      </button>
+    </div>
+  );
+
   const tools = (mode: "card" | "dialog") => (
     <div className="rk-table-head">
+      {mode === "dialog" ? zoomControls : null}
       <button
         type="button"
         className="rk-table-tool"
@@ -238,7 +340,7 @@ export const TableCard = memo(function TableCard({
           type="button"
           className="rk-table-tool"
           ref={expandButtonRef}
-          onClick={() => setExpanded(true)}
+          onClick={() => openChange(true)}
           aria-label={copy.expandTable}
         >
           <ExpandIcon />
@@ -262,7 +364,7 @@ export const TableCard = memo(function TableCard({
   );
 
   return (
-    <Dialog open={expanded} onOpenChange={setExpanded}>
+    <Dialog open={expanded} onOpenChange={openChange}>
       <CopyTextFallback
         open={copyFailed}
         onOpenChange={resetCopy}
@@ -284,7 +386,8 @@ export const TableCard = memo(function TableCard({
         showCloseButton={false}
         initialFocus={closeButtonRef}
         finalFocus={expandButtonRef}
-        className="rk-table-dialog rk-table-box rk-chat-markdown w-auto sm:max-w-none"
+        onKeyDown={onDialogKeyDown}
+        className="rk-table-dialog rk-table-box rk-chat-markdown"
       >
         <DialogTitle className="rk-table-dialog-title">{copy.table}</DialogTitle>
         {expanded ? status : null}
@@ -292,14 +395,18 @@ export const TableCard = memo(function TableCard({
         {/* biome-ignore-start lint/a11y/noNoninteractiveTabindex: a scrollable region must
             be keyboard-focusable (WCAG 2.1.1 / axe scrollable-region-focusable). */}
         <section
+          ref={attachDialogScroll}
           className="rk-table-scroll rk-table-dialog-scroll"
           aria-label={copy.table}
           tabIndex={0}
+          style={{ "--rk-table-zoom": zoom } as CSSProperties}
         >
           {tableView("dialog")}
         </section>
         {/* biome-ignore-end lint/a11y/noNoninteractiveTabindex: end of scrollable region. */}
-        {pager}
+        <div className="rk-table-footer">
+          <span className="rk-table-range">{copy.rowCount(sortedRows.length)}</span>
+        </div>
       </DialogContent>
     </Dialog>
   );
@@ -377,10 +484,7 @@ function TableView({
                     style={{ minWidth: expanded ? undefined : minWidths[columnIndex] }}
                     className={alignClass(columnIndex)}
                   >
-                    <span
-                      className="rk-table-cell-text"
-                      title={!expanded && value ? value : undefined}
-                    >
+                    <span className="rk-table-cell-text">
                       {renderedRows.get(row)?.[columnIndex] ?? value}
                     </span>
                   </td>
@@ -517,6 +621,43 @@ function ExpandIcon() {
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
       <path
         d="M8 3H5a2 2 0 0 0-2 2v3m13-5h3a2 2 0 0 1 2 2v3m0 8v3a2 2 0 0 0 2 2h-3M3 16v3a2 2 0 0 0 2 2h3"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function ZoomOutIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle cx="11" cy="11" r="7" stroke="currentColor" strokeWidth="2" />
+      <path d="M8 11h6m6 9-4-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function ZoomInIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle cx="11" cy="11" r="7" stroke="currentColor" strokeWidth="2" />
+      <path
+        d="M8 11h6m-3-3v6m9 6-4-4"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function FitWidthIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path
+        d="M3 4v16m18-16v16M7 12h10M7 12l3-3m-3 3 3 3m7-3-3-3m3 3-3 3"
         stroke="currentColor"
         strokeWidth="2"
         strokeLinecap="round"

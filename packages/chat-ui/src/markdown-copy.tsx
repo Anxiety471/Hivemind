@@ -20,6 +20,9 @@ export type MarkdownCopy = {
   downloadCsv: string;
   expandTable: string;
   closeTable: string;
+  zoomIn: string;
+  zoomOut: string;
+  fitWidth: string;
   sortCleared: string;
   pageOf: (page: number, count: number) => string;
   rowCount: (count: number) => string;
@@ -29,6 +32,8 @@ export type MarkdownCopy = {
   columnCollision: (label: string) => string;
   sortBy: (column: string) => string;
   sortedBy: (column: string, direction: TableSortDirection) => string;
+  /** The zoom level button: names the reset it performs and the current level. */
+  resetZoom: (percent: number) => string;
 };
 
 export const defaultMarkdownCopy: MarkdownCopy = {
@@ -45,6 +50,9 @@ export const defaultMarkdownCopy: MarkdownCopy = {
   downloadCsv: "Download CSV",
   expandTable: "Expand table",
   closeTable: "Close table",
+  zoomIn: "Zoom in",
+  zoomOut: "Zoom out",
+  fitWidth: "Fit to width",
   sortCleared: "Sort cleared",
   pageOf: (page, count) => `Page ${page} of ${count}`,
   rowCount: (count) => `${count} ${count === 1 ? "row" : "rows"}`,
@@ -55,6 +63,7 @@ export const defaultMarkdownCopy: MarkdownCopy = {
   sortBy: (column) => `Sort by ${column}`,
   sortedBy: (column, direction) =>
     `Sorted by ${column}, ${direction === "asc" ? "ascending" : "descending"}`,
+  resetZoom: (percent) => `Reset zoom, ${percent}%`,
 };
 
 const MarkdownCopyContext = createContext<MarkdownCopy>(defaultMarkdownCopy);

@@ -23,6 +23,9 @@ export function MarkdownChrome({ children }: { children: ReactNode }) {
       downloadCsv: t`Download CSV`,
       expandTable: t`Expand table`,
       closeTable: t`Close table`,
+      zoomIn: t`Zoom in`,
+      zoomOut: t`Zoom out`,
+      fitWidth: t`Fit to width`,
       sortCleared: t`Sort cleared`,
       pageOf: (page, count) => t`Page ${page} of ${count}`,
       rowCount: (count) => t`${plural(count, { one: "# row", other: "# rows" })}`,
@@ -35,6 +38,7 @@ export function MarkdownChrome({ children }: { children: ReactNode }) {
         direction === "asc"
           ? t`Sorted by ${column}, ascending`
           : t`Sorted by ${column}, descending`,
+      resetZoom: (percent) => t`Reset zoom, ${percent}%`,
     }),
     [t],
   );

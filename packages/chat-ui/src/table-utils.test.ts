@@ -8,6 +8,7 @@ import {
   nextSort,
   parseNumericText,
   sortRows,
+  stepZoom,
   tableToCsv,
   tableToTsv,
 } from "./table-utils";
@@ -310,6 +311,18 @@ describe("nextSort", () => {
     expect(nextSort({ column: 0, direction: "asc" }, 0)).toEqual({ column: 0, direction: "desc" });
     expect(nextSort({ column: 0, direction: "desc" }, 0)).toBeNull();
     expect(nextSort({ column: 0, direction: "desc" }, 1)).toEqual({ column: 1, direction: "asc" });
+  });
+});
+
+describe("stepZoom", () => {
+  it("moves an in-between level to the nearest stop on that side and stops at the ends", () => {
+    expect(stepZoom(1, 1)).toBe(1.1);
+    expect(stepZoom(1, -1)).toBe(0.9);
+    // A fit or pinch level between stops lands on the adjacent stop, not one past it.
+    expect(stepZoom(0.72, 1)).toBe(0.75);
+    expect(stepZoom(0.72, -1)).toBe(0.67);
+    expect(stepZoom(2.5, 1)).toBe(2.5);
+    expect(stepZoom(0.25, -1)).toBe(0.25);
   });
 });
 

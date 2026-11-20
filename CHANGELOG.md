@@ -15,6 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 - Full-window pages (free access, admin plugins, the board, link pages) share one page header, and its title now uses the standard heading size.
+- Tables in replies wrap long cells instead of cutting them off, grow with their rows instead of scrolling inside a short box, and only scroll sideways when the columns can't fit. Sort arrows show on hover or on the sorted column. **Expand table** opens a near-full-window view of every row with zoom out, zoom in, a level that resets to 100%, and **Fit to width**; **+**, **−**, **0** and Ctrl/⌘ + scroll or pinch zoom too.
 - Keyboard focus uses one ring treatment across hand-rolled controls, and selectable rows (plugins, skills, bot templates, vault credentials) show a real focus ring instead of a hover highlight alone.
 - On narrow screens the ticket board swipes one column at a time; wider screens keep equal columns.
 - The transcript's activity panel, including reasoning cards, is now shown by default; the existing setting still hides it.
