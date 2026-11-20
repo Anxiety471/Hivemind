@@ -6388,6 +6388,12 @@ function laneGCases2(): Case[] {
       void (await seedTaughtSkill(seeded, { name: "Named", playbook: "not an object" }))),
     save("gr-stored-playbook-is-a-list", { ...skill }, async (seeded) =>
       void (await seedTaughtSkill(seeded, { name: "Named", playbook: ["a", "b"] }))),
+    // G7: Array#join renders a null element as an empty field, not "null" (out-of-schema playbook).
+    save("grx3-playbook-array-with-null", { ...skill }, async (seeded) =>
+      void (await seedTaughtSkill(seeded, {
+        name: "Named",
+        playbook: { whenToUse: ["a", null], inputs: [[null], 2] },
+      }))),
     // zod's .optional() admits a value or an absent key, never null: the output parse fails.
     save("gr-recording-null-optional-key", { ...skill }, async (seeded) =>
       void (await seedTaughtSkill(seeded, {

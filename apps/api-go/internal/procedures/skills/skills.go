@@ -186,8 +186,12 @@ func jsString(value any) string {
 		}
 		return "false"
 	case []any:
+		// Array#join renders null/undefined as an empty field, not as "null".
 		parts := make([]string, len(typed))
 		for index, item := range typed {
+			if item == nil {
+				continue
+			}
 			parts[index] = jsString(item)
 		}
 		return strings.Join(parts, ",")
