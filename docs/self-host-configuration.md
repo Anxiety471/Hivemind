@@ -91,6 +91,14 @@ silent stream sooner.
   OpenAI-compatible model or speech connection added in the app. `RAKAZO_LOCAL_MODELS` servers
   and built-in providers retain Node's own connection timeout.
 
+`MODEL_RETRY_RULES_URL` points the runtime at the Go gateway's
+`/internal/model-retry/decide` on the same host, for example
+`http://127.0.0.1:3200/internal/model-retry/decide`. The gateway then decides whether a failed
+model call moves to a backup model or retries the same model. It answers only callers on its own
+host that did not come through the web server. When the variable is unset, or the gateway does
+not answer within 500 ms, the runtime uses its own copy of the same rules. A decision the two
+disagree on is logged as `model.retry_rules.mismatch`.
+
 ### Reaching Rakazo from a second address
 
 Sign-in and API calls are accepted only from `WEB_ORIGIN`, `API_URL`, `BETTER_AUTH_URL` and the

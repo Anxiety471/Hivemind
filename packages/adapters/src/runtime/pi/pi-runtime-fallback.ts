@@ -10,15 +10,10 @@ import type {
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { AssistantMessageEventStream } from "@earendil-works/pi-ai/utils/event-stream";
 import type { AgentRunRequest, ConnectorTool } from "@rakazo/adapter-kit";
-import {
-  isModelCredentialRejected,
-  isRetryableProviderUnavailable,
-  isTransientModelError,
-} from "@rakazo/adapter-kit";
+import { isTransientModelError } from "@rakazo/adapter-kit";
 import type { ModelBackupOutcome } from "@rakazo/core";
 import {
   abortableDelay,
-  isContentFilterRejection,
   MODEL_CONTEXT_TOO_SMALL_ERROR,
   MODEL_OUTPUT_CUT_ERROR,
   MODEL_OUTPUT_LIMIT_ERROR,
@@ -39,14 +34,10 @@ import {
   withoutThinkingBlocks,
   withoutThinkingFrom,
 } from "../thinking-signatures.js";
+import { modelRetryDecision } from "./model-retry-rules.js";
 import { OPENAI_COMPATIBLE_PROVIDER_ID } from "./models/pi-openai-compatible-provider.js";
 import { estimatePiImageTokens } from "./pi-image-context.js";
-import {
-  assistantText,
-  messageHasToolCall,
-  sanitizeProviderError,
-  unrecognizedModelFailure,
-} from "./pi-runtime-errors.js";
+import { assistantText, messageHasToolCall, sanitizeProviderError } from "./pi-runtime-errors.js";
 import {
   effectiveOutputReserve,
   modelStreamTimeoutMs,
@@ -716,32 +707,34 @@ export function fallbackAwareModelStream(
               event.reason === "error" &&
               !signalAborted() &&
               state.isProviderFailure(event.error);
-            const failureText = event.error.errorMessage ?? "Model request failed.";
-            const placedFailure =
-              refusedBeforeOutput &&
-              (requestLimitTooSmall ||
-                isRetryableProviderUnavailable(event.error) ||
-                isModelCredentialRejected(event.error) ||
-                // Another provider's filter may let the same request through.
-                isContentFilterRejection(failureText));
-            // Nothing explains this failure, so it is retried and moved like a transient one, and
-            // logged so a request Rakazo built wrong still surfaces.
-            const unrecognized =
-              refusedBeforeOutput && !placedFailure
-                ? unrecognizedModelFailure(failureText, target.config.provider)
-                : undefined;
-            if (unrecognized) {
+            // A placed failure (an outage, a rejected credential, a content filter another
+            // provider may not apply, a request too large for this model) and one nothing explains
+            // both move to a backup; see model-retry-rules.ts.
+            const decision = refusedBeforeOutput
+              ? await modelRetryDecision(
+                  event.error,
+                  target.config.provider,
+                  requestLimitTooSmall,
+                  signal,
+                  { runId: state.request.runId, model: target.config.id },
+                )
+              : undefined;
+            if (decision?.unrecognized) {
+              // Logged so a request Rakazo built wrong still surfaces when a retry or backup succeeds.
               getLogger().warn("model.unrecognized_failure", {
                 runId: state.request.runId,
                 provider: target.config.provider,
                 model: target.config.id,
-                ...(unrecognized.status !== undefined
-                  ? { "error.status": unrecognized.status }
+                ...(decision.unrecognized.status !== undefined
+                  ? { "error.status": decision.unrecognized.status }
                   : {}),
-                reason: sanitizeProviderError(target.config.provider, failureText),
+                reason: sanitizeProviderError(
+                  target.config.provider,
+                  event.error.errorMessage ?? "Model request failed.",
+                ),
               });
             }
-            if (placedFailure || unrecognized) {
+            if (decision?.switchToBackup) {
               state.primaryFailure ??= sanitizeProviderError(
                 target.config.provider,
                 terminalEvent.error.errorMessage ?? "Model request failed.",
@@ -758,10 +751,7 @@ export function fallbackAwareModelStream(
               // a backup but will not clear within the retry budget, so only transient failures
               // retry the same model, and unexplained ones with no status: a status means the
               // provider refused this exact request.
-              if (
-                isTransientModelError(event.error) ||
-                (unrecognized !== undefined && unrecognized.status === undefined)
-              ) {
+              if (decision.retrySameModel) {
                 firstRetryableError ??= event;
                 const idle = event.error.errorMessage === MODEL_STREAM_IDLE_TIMEOUT_MESSAGE;
                 const delay = idle
