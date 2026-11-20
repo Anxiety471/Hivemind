@@ -169,6 +169,13 @@ func percentEncodingLike(value string, index int) bool {
 		return false
 	}
 	leading := value[index+1]
+	if leading == '0' {
+		switch value[index+2] {
+		case 'd', 'D', 'f', 'F':
+			return true
+		}
+		return false
+	}
 	return leading >= '1' && leading <= '9' && isHexByte(value[index+2])
 }
 
