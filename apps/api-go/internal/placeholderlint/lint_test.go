@@ -580,6 +580,28 @@ func (bananaRule) Check(argument Argument) bool {
 		strings.Contains(argument.Value, "banana")
 }
 
+func TestLintExtraDenylistedAngleNames(t *testing.T) {
+	t.Parallel()
+
+	linter := New(PlaceholderWord{})
+	linter.Register(TemplateToken{ExtraDenylistedNames: []string{"widget"}})
+	args := map[string]any{
+		"custom":      "<widget>",
+		"placeholder": "<name>",
+	}
+	got := linter.Lint("demo", args)
+	want := []Finding{{Path: "placeholder", Value: "<name>", Rule: "template-token"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Lint() with a custom denylist = %#v, want %#v", got, want)
+	}
+
+	defaults := New(DefaultRules()...).Lint("demo", map[string]any{"custom": "<widget>"})
+	wantDefault := []Finding{{Path: "custom", Value: "<widget>", Rule: "template-token"}}
+	if !reflect.DeepEqual(defaults, wantDefault) {
+		t.Fatalf("default rules = %#v, want %#v", defaults, wantDefault)
+	}
+}
+
 func TestLintExtensibilityWithCustomRule(t *testing.T) {
 	t.Parallel()
 

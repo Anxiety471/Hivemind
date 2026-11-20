@@ -1,6 +1,58 @@
 package placeholderlint
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
+
+func TestTemplateTokenExtraDenylistedNames(t *testing.T) {
+	t.Parallel()
+
+	custom := TemplateToken{ExtraDenylistedNames: []string{"widget", "MyTag"}}
+	cases := []struct {
+		name  string
+		value string
+		want  bool
+	}{
+		{name: "extra whole value", value: "<widget>", want: false},
+		{name: "extra case insensitive", value: "<Widget>", want: false},
+		{name: "extra camel case", value: "<mytag>", want: false},
+		{name: "built-in markup", value: "<html>", want: false},
+		{name: "real placeholder", value: "<name>", want: true},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			got := custom.Check(Argument{Path: "field", Name: "field", Value: testCase.value})
+			if got != testCase.want {
+				t.Fatalf("TemplateToken.Check(%q) = %v, want %v", testCase.value, got, testCase.want)
+			}
+		})
+	}
+
+	if !(TemplateToken{}).Check(Argument{Path: "field", Name: "field", Value: "<widget>"}) {
+		t.Fatal("the default rule no longer flags a name only the custom rule denies")
+	}
+}
+
+func TestDeniedAngleNames(t *testing.T) {
+	t.Parallel()
+
+	names := DeniedAngleNames()
+	for _, want := range []string{"html", "vector", "stdio.h", "feed", "config"} {
+		if !slices.Contains(names, want) {
+			t.Fatalf("DeniedAngleNames() does not contain %q", want)
+		}
+	}
+	if slices.Contains(names, "widget") {
+		t.Fatal("DeniedAngleNames() contains a name that is not a default")
+	}
+
+	names[0] = "changed"
+	if slices.Contains(DeniedAngleNames(), "changed") {
+		t.Fatal("DeniedAngleNames() returns the mutable backing slice")
+	}
+}
 
 func TestTemplateToken(t *testing.T) {
 	t.Parallel()
@@ -70,6 +122,21 @@ func TestTemplateToken(t *testing.T) {
 		{name: "include string header", value: "#include <string>", want: false},
 		{name: "uppercase html tag", value: "<HTML>", want: false},
 		{name: "uppercase vector header", value: "<Vector>", want: false},
+		{name: "xml feed", value: "<feed>", want: false},
+		{name: "xml rss", value: "<rss>", want: false},
+		{name: "xml urlset", value: "<urlset>", want: false},
+		{name: "xml sitemapindex", value: "<sitemapindex>", want: false},
+		{name: "xml catalog", value: "<catalog>", want: false},
+		{name: "xml note", value: "<note>", want: false},
+		{name: "xml config", value: "<config>", want: false},
+		{name: "xml manifest", value: "<manifest>", want: false},
+		{name: "xml root", value: "<root>", want: false},
+		{name: "c assert header", value: "#include <assert.h>", want: false},
+		{name: "c unistd header", value: "#include <unistd.h>", want: false},
+		{name: "c pthread header", value: "#include <pthread.h>", want: false},
+		{name: "cpp any header", value: "#include <any>", want: false},
+		{name: "cpp ranges header", value: "#include <ranges>", want: false},
+		{name: "cpp spanstream header", value: "<spanstream>", want: false},
 		{name: "angle token glued to a word", value: "a<name>b", want: false},
 		{name: "email", value: "user@example.com", want: false},
 		{name: "square brackets", value: "use [name] instead", want: false},

@@ -11,19 +11,34 @@ import (
 //
 // The check stays conservative around characters that are ordinary in real
 // values: percent-encoding in URLs ("%20", "%2F") is not a printf token, and
-// comparison prose ("x < y", "5 < 10 > 3") is not an angle token.
-type TemplateToken struct{}
+// comparison prose ("x < y", "5 < 10 > 3") is not an angle token. Markup tag
+// names and C/C++ standard header names are not angle placeholders either.
+//
+// The zero value uses the built-in denylist. ExtraDenylistedNames adds more
+// names for this rule (matching is case-insensitive), and DeniedAngleNames
+// returns the built-in list for inspection or composition. DefaultRules uses
+// the zero value, so its behavior is unchanged.
+type TemplateToken struct {
+	// ExtraDenylistedNames extends the built-in markup and header denylist.
+	ExtraDenylistedNames []string
+}
 
 // Name implements Rule.
 func (TemplateToken) Name() string { return "template-token" }
 
 // Check implements Rule.
-func (TemplateToken) Check(argument Argument) bool {
+func (t TemplateToken) Check(argument Argument) bool {
 	value := argument.Value
 	return containsDollarToken(value) ||
 		containsBraceToken(value) ||
-		containsAngleToken(value) ||
+		containsAngleToken(value, t.ExtraDenylistedNames) ||
 		containsPrintfToken(value)
+}
+
+// DeniedAngleNames returns a copy of the names that TemplateToken's angle
+// check treats as markup or standard headers rather than placeholders.
+func DeniedAngleNames() []string {
+	return slices.Clone(angleTokenDenylist)
 }
 
 func containsDollarToken(value string) bool {
@@ -40,7 +55,7 @@ func containsBraceToken(value string) bool {
 // placeholder name. Anything with an attribute, a closing tag, a doctype or
 // non-name characters is left alone, as is a token that touches a word
 // character on either side.
-func containsAngleToken(value string) bool {
+func containsAngleToken(value string, extra []string) bool {
 	for start := range len(value) {
 		if value[start] != '<' {
 			continue
@@ -50,14 +65,14 @@ func containsAngleToken(value string) bool {
 			return false
 		}
 		end := start + 1 + closing
-		if angleTokenContent(value[start+1:end]) && angleDelimited(value, start, end) {
+		if angleTokenContent(value[start+1:end], extra) && angleDelimited(value, start, end) {
 			return true
 		}
 	}
 	return false
 }
 
-func angleTokenContent(content string) bool {
+func angleTokenContent(content string, extra []string) bool {
 	if len(content) == 0 || len(content) > 60 {
 		return false
 	}
@@ -78,7 +93,7 @@ func angleTokenContent(content string) bool {
 			return false
 		}
 	}
-	return hasLetter && !angleTokenDenied(content)
+	return hasLetter && !angleTokenDenied(content, extra)
 }
 
 // angleTokenDenylist holds markup tag names and C++ standard header names
@@ -105,25 +120,48 @@ var angleTokenDenylist = []string{
 	"lineargradient", "marker", "mask", "metadata", "pattern", "polygon",
 	"polyline", "radialgradient", "rect", "stop", "svg", "switch", "symbol",
 	"tspan", "use", "view",
+	// Common XML roots.
+	"catalog", "config", "feed", "manifest", "note", "root", "rss",
+	"sitemapindex", "urlset",
+	// C standard headers.
+	"assert.h", "complex.h", "ctype.h", "errno.h", "fenv.h", "float.h",
+	"inttypes.h", "iso646.h", "limits.h", "locale.h", "math.h", "pthread.h",
+	"setjmp.h", "signal.h", "stdalign.h", "stdarg.h", "stdatomic.h",
+	"stddef.h", "stdint.h", "stdnoreturn.h", "tgmath.h", "threads.h",
+	"time.h", "uchar.h", "unistd.h",
 	// C++ standard headers.
-	"algorithm", "array", "atomic", "bitset", "cassert", "cctype", "cerrno",
-	"cfloat", "chrono", "cinttypes", "climits", "cmath", "codecvt", "complex",
-	"condition_variable", "csetjmp", "csignal", "cstdarg", "cstddef",
-	"cstdint", "cstdio", "cstdlib", "cstring", "ctime", "cwchar", "cwctype",
-	"deque", "exception", "filesystem", "forward_list", "fstream",
-	"functional", "future", "initializer_list", "iomanip", "ios", "iosfwd",
-	"iostream", "istream", "iterator", "limits", "list", "locale", "map",
-	"memory", "mutex", "new", "numeric", "optional", "ostream", "queue",
-	"random", "ratio", "regex", "set", "shared_mutex", "sstream", "stack",
-	"stdbool", "stdexcept", "stdio.h", "stdlib.h", "string", "string.h",
-	"string_view", "system_error", "thread", "tuple", "type_traits",
-	"typeindex", "typeinfo", "unordered_map", "unordered_set", "utility",
-	"valarray", "variant", "vector", "wchar.h", "wctype.h",
+	"algorithm", "any", "array", "atomic", "barrier", "bit", "bitset",
+	"cassert", "cctype", "cerrno", "cfenv", "cfloat", "charconv", "chrono",
+	"cinttypes", "climits", "clocale", "cmath", "codecvt", "compare",
+	"complex", "concepts", "condition_variable", "coroutine", "csetjmp",
+	"csignal", "cstdarg", "cstddef", "cstdint", "cstdio", "cstdlib",
+	"cstring", "ctgmath", "ctime", "cuchar", "cwchar", "cwctype", "deque",
+	"exception", "execution", "expected", "filesystem", "format",
+	"forward_list", "fstream", "functional", "future", "generator",
+	"initializer_list", "iomanip", "ios", "iosfwd", "iostream", "istream",
+	"iterator", "latch", "limits", "list", "locale", "map", "mdspan",
+	"memory", "memory_resource", "mutex", "new", "numbers", "numeric",
+	"optional", "ostream", "queue", "random", "ranges", "ratio", "regex",
+	"scoped_allocator", "semaphore", "set", "shared_mutex", "source_location",
+	"spanstream", "sstream", "stack", "stacktrace", "stdbool", "stdexcept",
+	"stdio.h", "stdlib.h", "stop_token", "streambuf", "string", "string.h",
+	"string_view", "strstream", "syncstream", "system_error", "thread",
+	"tuple", "type_traits", "typeindex", "typeinfo", "unordered_map",
+	"unordered_set", "utility", "valarray", "variant", "vector", "version",
+	"wchar.h", "wctype.h",
 }
 
-func angleTokenDenied(content string) bool {
+func angleTokenDenied(content string, extra []string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(content))
-	return slices.Contains(angleTokenDenylist, normalized)
+	if slices.Contains(angleTokenDenylist, normalized) {
+		return true
+	}
+	for _, name := range extra {
+		if strings.EqualFold(strings.TrimSpace(name), normalized) {
+			return true
+		}
+	}
+	return false
 }
 
 func angleDelimited(value string, start, end int) bool {
