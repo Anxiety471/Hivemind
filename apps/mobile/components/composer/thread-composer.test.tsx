@@ -7,10 +7,10 @@ import { act, Children, createElement, createRef, isValidElement, useMemo } from
 import type { Root } from "react-dom/client";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ThreadComposerHandle } from "./thread-composer";
-import { ThreadComposer } from "./thread-composer";
 import { settleComposer } from "../../lib/thread/send/thread-feedback";
 import { useThreadMentionCatalog } from "../../lib/thread/thread-mention-catalog";
+import type { ThreadComposerHandle } from "./thread-composer";
+import { ThreadComposer } from "./thread-composer";
 
 const dimensions = vi.hoisted(() => ({ fontScale: 1 }));
 

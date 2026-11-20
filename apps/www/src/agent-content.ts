@@ -1,5 +1,5 @@
 // Relative source path: the edge middleware bundles this file and cannot resolve workspace packages.
-import { ANDROID_APP_STORE_URL } from "../../../packages/contracts/src/client-build.js";
+import { ANDROID_APP_STORE_URL } from "../../../packages/contracts/src/clients/client-build.js";
 import { ALTERNATIVES, alternativeMarkdown } from "./alternatives";
 import { BLOG_CATEGORIES } from "./blog/categories";
 import { BRAND_COLORS, BRAND_LOGOS } from "./brand";

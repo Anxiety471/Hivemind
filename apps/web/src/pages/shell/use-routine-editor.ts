@@ -8,7 +8,9 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { REVEAL_MS } from "../../components/vault/VaultItemDetail";
 import { localTimezone } from "../../lib/locale/local-timezone";
 import { parseModelOptionKey } from "../../lib/models/model-catalog";
-import type { Panel } from "./right-panel-state";
+import type { createSpaceRpc } from "../../lib/query/rpc";
+import { sharedInflight } from "../../lib/query/shared-inflight";
+import { errorCode, errorText } from "../../lib/query/user-error";
 import type { RoutineDraftState } from "../../lib/routines/routine-draft";
 import {
   draftStateFromRoutine,
@@ -16,10 +18,8 @@ import {
   routineNeedsOneShotArm,
   watchFromDraft,
 } from "../../lib/routines/routine-draft";
-import type { createSpaceRpc } from "../../lib/query/rpc";
-import { sharedInflight } from "../../lib/query/shared-inflight";
-import { errorCode, errorText } from "../../lib/query/user-error";
 import type { RoutineEditor } from "../routines/RoutineEditor";
+import type { Panel } from "./right-panel-state";
 
 export function useRoutineEditor({
   rpc,

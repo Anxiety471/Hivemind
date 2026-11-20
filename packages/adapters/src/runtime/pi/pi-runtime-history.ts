@@ -3,6 +3,11 @@ import type { AssistantMessage, Context, Message, ToolCall } from "@earendil-wor
 import type { AgentRunRequest, AgentSteeringMessage } from "@rakazo/adapter-kit";
 import { TOOL_STEP_CALLS_KEPT, toolStepOutcomeText } from "@rakazo/core";
 import {
+  bounded,
+  IMAGE_NOT_KEPT,
+  TOOL_CALL_TEXT_MAX_CHARS,
+} from "../../runs/turn/tool-step-calls.js";
+import {
   CONVERSATION_START,
   imageNotKeptNote,
   REPLAYED_SCREENSHOT_LEAD,
@@ -10,7 +15,6 @@ import {
 } from "../context/history-replay.prompt.js";
 import { neutralizeSpeakerLabels } from "../context/history-speakers.js";
 import { normalizeAgentToolName } from "./tools/pi-runtime-tools.js";
-import { bounded, IMAGE_NOT_KEPT, TOOL_CALL_TEXT_MAX_CHARS } from "../../runs/turn/tool-step-calls.js";
 
 export function toPiImages(images: AgentRunRequest["currentTurnImages"]) {
   return (images ?? []).map((image) => ({

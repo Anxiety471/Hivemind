@@ -13,10 +13,10 @@ import Models from "../../app/(settings)/models";
 import BotModelScreen from "../../app/bot-model";
 import BotSettingsScreen from "../../app/bot-settings";
 import { ModelPickerList } from "../../components/models/model-picker-list";
+import { queryClient } from "../query/query";
 import type { ModelConnectionRequest } from "./model-connection-request";
 import { modelConnectionRequest, openModelConnection } from "./model-connection-request";
 import { modelPickerRequest } from "./model-picker-selection";
-import { queryClient } from "../query/query";
 
 const mocks = vi.hoisted(() => ({
   showMenu: vi.fn(),
@@ -99,7 +99,9 @@ vi.mock("../layout/floating-header", () => ({ useFloatingHeaderInset: () => mock
 vi.mock("expo-clipboard", () => ({ setStringAsync: vi.fn() }));
 vi.mock("../appearance/appearance", () => ({ mobileTokens: () => ({}) }));
 vi.mock("../messages/message-action-sheet", () => ({ presentMessageActionSheet: vi.fn() }));
-vi.mock("../notifications/live-notifications", () => ({ afterChatNotifyChange: vi.fn(async () => undefined) }));
+vi.mock("../notifications/live-notifications", () => ({
+  afterChatNotifyChange: vi.fn(async () => undefined),
+}));
 
 vi.mock("../api/session", () => ({
   loadSessionToken: async () => "token",
@@ -532,7 +534,9 @@ vi.mock("../../components/settings/settings-group", () => ({
   },
 }));
 vi.mock("../../components/bots/bot-avatar", () => ({ BotAvatar: () => null }));
-vi.mock("../../components/computers/computer-mode-picker", () => ({ ComputerModePicker: () => null }));
+vi.mock("../../components/computers/computer-mode-picker", () => ({
+  ComputerModePicker: () => null,
+}));
 vi.mock("../../components/native/native-action-button", () => ({
   NativeActionButton: ({
     label,

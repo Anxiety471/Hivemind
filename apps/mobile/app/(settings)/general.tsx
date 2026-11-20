@@ -14,14 +14,22 @@ import {
   useStackedSettings,
 } from "../../components/settings/settings-group";
 import { currentApiBase, selectedSpaceId } from "../../lib/api/api";
-import { getCachedAppearancePreference, setAppearancePreference } from "../../lib/appearance/appearance";
+import type { MobileMe } from "../../lib/api/mobile-types";
+import { loadSessionToken } from "../../lib/api/session";
+import { errorText } from "../../lib/api/user-error";
+import {
+  getCachedAppearancePreference,
+  setAppearancePreference,
+} from "../../lib/appearance/appearance";
+import { useUiLocale } from "../../lib/i18n/i18n";
+import { useSideInsets } from "../../lib/layout/side-insets";
 import {
   getHapticsEnabled,
   loadHapticsPreference,
   setHapticsEnabled,
   subscribeHaptics,
 } from "../../lib/native/haptics";
-import { useUiLocale } from "../../lib/i18n/i18n";
+import { useThemedStyles } from "../../lib/native/native";
 import type { LiveNotificationSettings } from "../../lib/notifications/live-notifications";
 import {
   canPostPromotedNotifications,
@@ -32,11 +40,7 @@ import {
   openPromotedNotificationSettings,
   setLiveNotificationSettings,
 } from "../../lib/notifications/live-notifications";
-import type { MobileMe } from "../../lib/api/mobile-types";
-import { useThemedStyles } from "../../lib/native/native";
 import { registerPushToken } from "../../lib/notifications/push";
-import { accountRpcQuery, queryClient, useSave } from "../../lib/query/query";
-import { createQueuedSave } from "../../lib/query/queued-save";
 import {
   getCachedRemoteImagesEnabled,
   setRemoteImagesPreference,
@@ -47,12 +51,11 @@ import {
   setResponseStreamingPreference,
   subscribeResponseStreaming,
 } from "../../lib/preferences/response-streaming";
+import { accountRpcQuery, queryClient, useSave } from "../../lib/query/query";
+import { createQueuedSave } from "../../lib/query/queued-save";
 import { useScreenQuery } from "../../lib/query/screen-query";
-import { loadSessionToken } from "../../lib/api/session";
-import { createSettingsPageStyles } from "../../lib/settings/settings-page-styles";
 import { ACCOUNT_SETTINGS } from "../../lib/query/settings-target";
-import { useSideInsets } from "../../lib/layout/side-insets";
-import { errorText } from "../../lib/api/user-error";
+import { createSettingsPageStyles } from "../../lib/settings/settings-page-styles";
 
 let hapticsSaveVersion = 0;
 

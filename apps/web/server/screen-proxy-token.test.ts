@@ -171,6 +171,7 @@ async function startProxy() {
   const settings: WebServerSettings = {
     log: logger,
     api: authorityOrigin,
+    rpcApi: undefined,
     allowedHosts: [],
     screenProxySecret: () => secret,
     performanceAssetDelayMs: 0,

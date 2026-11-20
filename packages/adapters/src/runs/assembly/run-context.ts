@@ -34,33 +34,33 @@ import {
   OWNER_SETTINGS_REFUSAL_REPLY,
   terminatingToolResult,
 } from "../../approvals/approval-effect.js";
-import type { loadBotMessageContext } from "../../messaging/bot-messages.js";
-import type { VaultItemUse } from "../../secrets/bot-secrets.js";
-import { partitionTools } from "../../tools/builtin-tool-bridge.js";
 import type { ComputerExecutionLease } from "../../computers/computer-lifecycle.js";
 import type { UnchangedVisualStreak } from "../../computers/screens/computer-tools.js";
 import type { selectRunConnections } from "../../integrations/connection-context.js";
-import type { ExecutorDeps } from "../executor/executor-deps.js";
-import type { FleetRun } from "../../tools/fleet-tools.js";
+import type { loadBotMessageContext } from "../../messaging/bot-messages.js";
 import { namedAgentTools } from "../../runtime/pi/tools/pi-runtime-tools.js";
-import type { ReplySnapshot } from "./reply-snapshot.js";
-import { restoreReply, snapshotReply } from "./reply-snapshot.js";
-import type { lazyRunComputer } from "./run-computer.js";
+import type { inferScript } from "../../runtime/scripted-runtime.js";
+import type { VaultItemUse } from "../../secrets/bot-secrets.js";
+import { secretPausedToolResult } from "../../secrets/run-secret.js";
+import { recordVaultItemUse } from "../../secrets/vault/vault-activity.js";
+import { partitionTools } from "../../tools/builtin-tool-bridge.js";
+import type { FleetRun } from "../../tools/fleet-tools.js";
+import type { ExecutorDeps } from "../executor/executor-deps.js";
 import type { createRunWorkspaceCheckpoint } from "../lifecycle/run-lifecycle.js";
 import { PausedTurnToolsUnavailableError } from "../lifecycle/run-lifecycle.js";
-import { publishMessage } from "./run-messages.js";
 import { subagentMarksUnread } from "../lifecycle/run-notifications.js";
 import { appendThinkingText } from "../lifecycle/run-progress.js";
-import { secretPausedToolResult } from "../../secrets/run-secret.js";
-import type { createRunTrustLoaders } from "./run-trust.js";
 import type { ScreenTurn } from "../turn/screen-turn.js";
-import type { inferScript } from "../../runtime/scripted-runtime.js";
 import { providerToolCallId, runToolCallIds } from "../turn/tool-call-ids.js";
 import type { LoopGuardStreak } from "../turn/tool-loop.js";
 import type { ToolRefusal } from "../turn/tool-refusal.js";
 import { refusal } from "../turn/tool-refusal.js";
 import { restoreTurnCheckpoint, unresolvedTurnCheckpointCalls } from "../turn/turn-checkpoint.js";
-import { recordVaultItemUse } from "../../secrets/vault/vault-activity.js";
+import type { ReplySnapshot } from "./reply-snapshot.js";
+import { restoreReply, snapshotReply } from "./reply-snapshot.js";
+import type { lazyRunComputer } from "./run-computer.js";
+import { publishMessage } from "./run-messages.js";
+import type { createRunTrustLoaders } from "./run-trust.js";
 
 export type RunningHelper = Omit<Extract<MessageBlock, { kind: "subagent" }>, "kind">;
 

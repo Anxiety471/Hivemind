@@ -1,8 +1,8 @@
 import type { AgentRuntimeEvent } from "@rakazo/adapter-kit";
 import type { AppendEventInput } from "@rakazo/db";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { restoreReply, snapshotReply } from "./reply-snapshot.js";
-import type { RunContext } from "./run-context.js";
+import { restoreReply, snapshotReply } from "../assembly/reply-snapshot.js";
+import type { RunContext } from "../assembly/run-context.js";
 import {
   closeThinkingSegment,
   createReplyState,
@@ -10,7 +10,7 @@ import {
   THINKING_BLOCK_MAX_CHARS,
   THINKING_LINE_MAX_CHARS,
   thinkingBlockLines,
-} from "./run-progress.js";
+} from "../lifecycle/run-progress.js";
 import { consumeRunEvents } from "./run-turn.js";
 
 async function context(options: { secrets?: string[] } = {}) {

@@ -45,12 +45,12 @@ import {
 } from "@rakazo/db";
 import { getLogger } from "@rakazo/logging";
 import { z } from "zod";
-import { MessagingSendError } from "./chat-sdk-surface.js";
-import { splitOutboundBody } from "./messaging-platforms.js";
 import { loadRunOrigin } from "../runs/lifecycle/run-origin.js";
-import { resolveMessagingThreadId } from "./team-chat/team-chat-messaging.js";
 import { isUserProgressClientNonce } from "../runs/lifecycle/user-progress.js";
 import { wakeRun } from "../runs/wakeups/wake-run.js";
+import { MessagingSendError } from "./chat-sdk-surface.js";
+import { splitOutboundBody } from "./messaging-platforms.js";
+import { resolveMessagingThreadId } from "./team-chat/team-chat-messaging.js";
 
 const SteeringDeliveryProof = z.object({ externalSafe: z.boolean().optional() });
 

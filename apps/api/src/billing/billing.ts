@@ -76,7 +76,12 @@ import {
 import { bestEffort, getLogger } from "@rakazo/logging";
 import { applyAccessGrants } from "../auth/access-grants.js";
 import { createExperiments } from "../telemetry/experiments.js";
-import { byokTierOffers, byokTrialAvailable, planTerms, subscribedByokPrice } from "./byok-terms.js";
+import {
+  byokTierOffers,
+  byokTrialAvailable,
+  planTerms,
+  subscribedByokPrice,
+} from "./byok-terms.js";
 import { readCloudComputers, readComputerUsage, saveCloudComputerSize } from "./computer-usage.js";
 import { createPartnerSales } from "./partner-sales.js";
 import { createReferrals } from "./referrals.js";

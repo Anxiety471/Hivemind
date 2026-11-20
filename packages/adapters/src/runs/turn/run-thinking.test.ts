@@ -1,7 +1,7 @@
 import type { AgentRuntimeEvent } from "@rakazo/adapter-kit";
 import type { AppendEventInput } from "@rakazo/db";
 import { describe, expect, it, vi } from "vitest";
-import type { RunContext } from "./run-context.js";
+import type { RunContext } from "../assembly/run-context.js";
 import {
   createReplyState,
   flushPendingTools,
@@ -9,7 +9,7 @@ import {
   THINKING_BLOCK_MAX_LINES,
   THINKING_LINE_MAX_CHARS,
   thinkingBlockLines,
-} from "./run-progress.js";
+} from "../lifecycle/run-progress.js";
 import { consumeRunEvents } from "./run-turn.js";
 
 async function context(options: { scripted?: boolean; trigger?: string; secrets?: string[] } = {}) {

@@ -14,34 +14,34 @@ import { isPeerReceiptBlocks, isToolActivityBlock, otherAuthor } from "@rakazo/c
 import { BotAvatar, Button, cn, resolvePersonaColorDef } from "@rakazo/ui-web";
 import { UserRound } from "lucide-react";
 import { memo, useCallback, useMemo } from "react";
+import { CollaborationMarker } from "../../../components/ai/CollaborationMarker";
+import { ComputerCard } from "../../../components/computers/ComputerCard";
 import {
   ActivityOnlyNarration,
   ActivityPanel,
   StandaloneActivity,
-} from "../../../components/ActivityPanel";
+} from "../../../components/messages/ActivityPanel";
 import { ArtifactFileCard } from "../../../components/messages/ArtifactFileCard";
 import { AskCard } from "../../../components/messages/AskCard";
-import { CollaborationMarker } from "../../../components/ai/CollaborationMarker";
 import { CloudAgentCard } from "../../../components/messages/CloudAgentCard";
-import { ComputerCard } from "../../../components/computers/ComputerCard";
 import { McpAppCard } from "../../../components/messages/McpAppCard";
-import { PageBlockCard } from "../../../components/pages/PageBlockCard";
 import { SubagentCard } from "../../../components/messages/SubagentCard";
+import { PageBlockCard } from "../../../components/pages/PageBlockCard";
 import { SkillDraftCard } from "../../../components/teach/SkillDraftCard";
-import type { ArtifactTarget } from "../../../lib/pages/artifact-open";
-import { messageProviderLabel } from "../../../lib/integrations/messaging";
-import type { PageBlock } from "../../../lib/pages/page-cards";
-import { useOpenPage } from "../../../lib/pages/pages";
-import type { createSpaceRpc } from "../../../lib/query/rpc";
 import {
   activityBlocks,
   isToolOnlyNarration,
   renderableMessageBlocks,
 } from "../../../lib/chat/tool-activity-view";
-import { ReplyLine } from "./chat-context";
-import { FALLBACK_BOT_COLOR, previewMessageText } from "./chat-shared";
+import { messageProviderLabel } from "../../../lib/integrations/messaging";
+import type { ArtifactTarget } from "../../../lib/pages/artifact-open";
+import type { PageBlock } from "../../../lib/pages/page-cards";
+import { useOpenPage } from "../../../lib/pages/pages";
+import type { createSpaceRpc } from "../../../lib/query/rpc";
 import type { ImportSetupTarget } from "../bots/import-setup-card";
 import { ImportSetupCard } from "../bots/import-setup-card";
+import { ReplyLine } from "./chat-context";
+import { FALLBACK_BOT_COLOR, previewMessageText } from "./chat-shared";
 import {
   AppConnectCard,
   ArtifactImage,

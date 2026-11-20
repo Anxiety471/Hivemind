@@ -5,10 +5,6 @@ import type { RefObject } from "react";
 import { useCallback, useRef, useState } from "react";
 import { currentApiBase, rpc, selectedSpaceId } from "../api/api";
 import { selectInitialSpace } from "../api/api-server";
-import { appBadgeGeneration } from "../notifications/app-badge";
-import { isPaywallShown } from "../billing/billing";
-import { getActiveUiLocale } from "../i18n/i18n";
-import { retainInboxValue } from "./inbox-retention";
 import type {
   MobileBot,
   MobileBotSection,
@@ -16,21 +12,23 @@ import type {
   MobileMe,
   MobileSpace,
 } from "../api/mobile-types";
-import { ensureOrganizations } from "../spaces/organizations";
-import { forgetReferrals, rememberReferral } from "../billing/referral";
-import { saveInbox } from "./saved-chats";
 import { currentSessionGeneration } from "../api/session";
 import type { LoadFailureKind } from "../api/user-error";
 import { errorText, loadFailureKind } from "../api/user-error";
+import { isPaywallShown } from "../billing/billing";
+import { forgetReferrals, rememberReferral } from "../billing/referral";
+import { getActiveUiLocale } from "../i18n/i18n";
+import { appBadgeGeneration } from "../notifications/app-badge";
+import { ensureOrganizations } from "../spaces/organizations";
 import { askFirstBot, needsFirstBot } from "./first-bot";
+import { retainInboxValue } from "./inbox-retention";
+import { saveInbox } from "./saved-chats";
 
 /** The account this launch has saved its language to (see the inbox load). */
 let localeReportedFor: string | null = null;
 
 /** The inbox's chats, Spaces, and account, and the load that fetches them. */
-export function useHomeInbox(
-  spaceActionRef: RefObject<{ busy: boolean; recoveryId: string | null }>,
-) {
+export function useInbox(spaceActionRef: RefObject<{ busy: boolean; recoveryId: string | null }>) {
   const { t } = useLingui();
   const router = useRouter();
   const [bots, setBots] = useState<MobileBot[]>([]);

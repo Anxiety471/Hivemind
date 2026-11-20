@@ -8,7 +8,7 @@ import type { ReactNode } from "react";
 import { act, useEffect } from "react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, expect, it, vi } from "vitest";
-import { createQueryRoot as createRoot } from "../../lib/query/query-root.test-support.tsx";
+import { createQueryRoot as createRoot } from "../../lib/query/query-root.test-support";
 
 vi.mock("@lingui/react/macro", () => ({
   useLingui: () => ({
@@ -108,8 +108,12 @@ vi.mock("../../components/account/AccountAccess", () => ({
   },
 }));
 
-vi.mock("../../components/settings/AccountDataSettings", () => ({ AccountDataSettings: () => null }));
-vi.mock("../../components/settings/ApprovalRulesSettings", () => ({ ApprovalRulesSettings: () => null }));
+vi.mock("../../components/settings/AccountDataSettings", () => ({
+  AccountDataSettings: () => null,
+}));
+vi.mock("../../components/settings/ApprovalRulesSettings", () => ({
+  ApprovalRulesSettings: () => null,
+}));
 vi.mock("../../components/settings/TrustedLinkSitesSettings", () => ({
   TrustedLinkSitesSettings: () => null,
 }));
@@ -117,9 +121,13 @@ vi.mock("../../components/ai/primitives", () => ({ SuccessPop: () => null }));
 vi.mock("../../components/computers/ComputersUnavailableHint", () => ({
   ComputersUnavailableHint: () => null,
 }));
-vi.mock("../../components/computers/ComputerDeviceSettings", () => ({ ComputerDeviceSettings: () => null }));
+vi.mock("../../components/computers/ComputerDeviceSettings", () => ({
+  ComputerDeviceSettings: () => null,
+}));
 vi.mock("../../components/DesktopUpdates", () => ({ DesktopUpdateSection: () => null }));
-vi.mock("../../lib/auth/auth", () => ({ authClient: { changePassword: vi.fn(), updateUser: vi.fn() } }));
+vi.mock("../../lib/auth/auth", () => ({
+  authClient: { changePassword: vi.fn(), updateUser: vi.fn() },
+}));
 vi.mock("../../lib/locale/i18n", () => ({
   getActiveUiLocale: () => "en",
   setUiLocale: (locale: string) => Promise.resolve(locale),
@@ -130,13 +138,13 @@ vi.mock("../../lib/preferences/ui-appearance", () => ({
 }));
 
 import { authClient } from "../../lib/auth/auth";
+import { TOOL_ACTIVITY_STORAGE_KEY } from "../../lib/chat/tool-activity-preference";
 import {
   COMPOSER_ENTER_TO_SEND_STORAGE_KEY,
   composerEnterToSendPreference,
 } from "../../lib/composer/composer-enter-to-send-pref";
 import { localTimezone } from "../../lib/locale/local-timezone";
 import { remoteImagesPreference } from "../../lib/preferences/remote-images-preference";
-import { TOOL_ACTIVITY_STORAGE_KEY } from "../../lib/chat/tool-activity-preference";
 import { GeneralSettingsPanels } from "./AccountSettingsOverlay";
 
 afterEach(() => {

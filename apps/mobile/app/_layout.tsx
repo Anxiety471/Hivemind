@@ -27,18 +27,18 @@ import { Gesture, GestureDetector, GestureHandlerRootView } from "react-native-g
 import { KeyboardAvoidingView, KeyboardProvider } from "react-native-keyboard-controller";
 import Animated, { useAnimatedStyle, useSharedValue } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { AppErrorBoundary } from "../components/ui/app-error-boundary";
 import { CallCard } from "../components/calls/CallCard";
-import { chatRouteHeader } from "../components/thread/header/chat-route-header";
-import { CodeCopyButton } from "../components/messages/code-copy-button";
-import { ComputerUpdateProgress } from "../components/computers/computer-update-progress";
-import { floatingHeaderOptions, glassHeaderOptions } from "../components/native/glass-title";
 import { IncomingCall } from "../components/calls/IncomingCall";
+import { VoicePlayerBar } from "../components/calls/voice-player-bar";
+import { ComputerUpdateProgress } from "../components/computers/computer-update-progress";
+import { CodeCopyButton } from "../components/messages/code-copy-button";
 import { MermaidDiagram } from "../components/messages/mermaid-diagram";
 import { MessageMenuHost } from "../components/messages/message-action-menu";
 import { MessageActionSheetHost } from "../components/messages/message-action-sheet-host";
+import { floatingHeaderOptions, glassHeaderOptions } from "../components/native/glass-title";
 import { NativeSymbol } from "../components/native/native-symbol";
-import { VoicePlayerBar } from "../components/calls/voice-player-bar";
+import { chatRouteHeader } from "../components/thread/header/chat-route-header";
+import { AppErrorBoundary } from "../components/ui/app-error-boundary";
 import {
   currentApiBase,
   rpc,
@@ -48,42 +48,24 @@ import {
   subscribeSessionRejected,
 } from "../lib/api/api";
 import { loadApiBase } from "../lib/api/api-server";
-import { clearAppBadge } from "../lib/notifications/app-badge";
-import { loadAppearancePreference, mobileTokens } from "../lib/appearance/appearance";
-import { replaceWithSignIn } from "../lib/auth/auth-routing";
-import { AvatarScreenFocus } from "../lib/bots/avatar-life";
-import { CallKeyboardContext } from "../lib/calls/call-keyboard-context";
-import { useCallActive } from "../lib/calls/call-session";
 import { installClientUpdates, watchForegroundUpdates } from "../lib/api/client-update";
-import { loadHapticsPreference } from "../lib/native/haptics";
-import { bootstrapI18n } from "../lib/i18n/i18n";
-import { startIncomingCalls } from "../lib/calls/incoming-calls";
-import { clearLastBot } from "../lib/inbox/last-bot";
-import { loadLinkFavicon } from "../lib/messages/link-favicons";
-import {
-  configureForegroundNotifications,
-  resumeLiveNotifications,
-} from "../lib/notifications/live-notifications";
-import { OpenPageContext } from "../lib/messages/message-mentions";
-import { setMobileMonitoringScreen } from "../lib/platform/monitoring";
-import { native, useMobileTokens, useResolvedAppearance } from "../lib/native/native";
-import { useNavigatorMounted } from "../lib/navigation/navigator-mounted";
-import { useNotificationResponses } from "../lib/notifications/open-notification";
-import { clearQueries, resetRpcQueries } from "../lib/query/query";
-import { useReferral } from "../lib/billing/referral";
-import {
-  getCachedRemoteImagesEnabled,
-  loadRemoteImagesPreference,
-  subscribeRemoteImages,
-} from "../lib/preferences/remote-images-preference";
-import { loadResponseStreamingPreference } from "../lib/preferences/response-streaming";
-import { clearSavedChats } from "../lib/inbox/saved-chats";
 import {
   currentReadySessionGeneration,
   loadSessionToken,
   registerSessionDiskCache,
   subscribeSessionGeneration,
 } from "../lib/api/session";
+import { loadAppearancePreference, mobileTokens } from "../lib/appearance/appearance";
+import { capTextScaling } from "../lib/appearance/text-scale";
+import { replaceWithSignIn } from "../lib/auth/auth-routing";
+import { useReferral } from "../lib/billing/referral";
+import { AvatarScreenFocus } from "../lib/bots/avatar-life";
+import { CallKeyboardContext } from "../lib/calls/call-keyboard-context";
+import { useCallActive } from "../lib/calls/call-session";
+import { startIncomingCalls } from "../lib/calls/incoming-calls";
+import { bootstrapI18n } from "../lib/i18n/i18n";
+import { clearLastBot } from "../lib/inbox/last-bot";
+import { clearSavedChats } from "../lib/inbox/saved-chats";
 import { InboxBesideContext } from "../lib/layout/side-insets";
 import {
   chooseInboxWidth,
@@ -93,19 +75,37 @@ import {
   setInboxHidden,
   useSplitView,
 } from "../lib/layout/split-view";
+import { loadLinkFavicon } from "../lib/messages/link-favicons";
+import { OpenPageContext } from "../lib/messages/message-mentions";
+import { loadHapticsPreference } from "../lib/native/haptics";
+import { native, useMobileTokens, useResolvedAppearance } from "../lib/native/native";
+import { useNavigatorMounted } from "../lib/navigation/navigator-mounted";
+import { clearAppBadge } from "../lib/notifications/app-badge";
+import {
+  configureForegroundNotifications,
+  resumeLiveNotifications,
+} from "../lib/notifications/live-notifications";
+import { useNotificationResponses } from "../lib/notifications/open-notification";
+import { startWorkActivities } from "../lib/notifications/work-activity";
+import { setMobileMonitoringScreen } from "../lib/platform/monitoring";
 import {
   completeMobileStartup,
   markMobileStartupMounted,
   trackMobileStartup,
 } from "../lib/platform/startup";
-import { capTextScaling } from "../lib/appearance/text-scale";
+import {
+  getCachedRemoteImagesEnabled,
+  loadRemoteImagesPreference,
+  subscribeRemoteImages,
+} from "../lib/preferences/remote-images-preference";
+import { loadResponseStreamingPreference } from "../lib/preferences/response-streaming";
+import { clearQueries, resetRpcQueries } from "../lib/query/query";
 import {
   loadTrustedLinkSites,
   trustLinkSite,
   useTrustedLinkSites,
 } from "../lib/settings/trusted-link-sites";
 import { startUnsentSends } from "../lib/thread/send/unsent-sends";
-import { startWorkActivities } from "../lib/notifications/work-activity";
 import { InboxPane } from "./index";
 
 // Before anything renders: text grows with the iOS text size only up to a fixed maximum.

@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
-  MessageBlock,
   ProductEventSchema,
   ThreadActivityPayloadSchema,
   ThreadThinkingPayloadSchema,
 } from "./events.js";
+import { MessageBlock } from "./message-blocks.js";
 
 const event = {
   id: "event-1",

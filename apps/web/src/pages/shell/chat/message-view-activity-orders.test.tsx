@@ -5,10 +5,10 @@ import { act } from "react";
 import type { Root } from "react-dom/client";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { rpc } from "../../lib/rpc";
+import { rpc } from "../../../lib/query/rpc";
 import { MessageView } from "./message-view";
 
-vi.mock("../../lib/rpc", () => ({ rpc: { skills: {}, artifacts: { get: vi.fn() } } }));
+vi.mock("../../../lib/query/rpc", () => ({ rpc: { skills: {}, artifacts: { get: vi.fn() } } }));
 
 vi.mock("@lingui/core/macro", () => ({
   plural: (count: number, forms: { one: string; other: string }) =>

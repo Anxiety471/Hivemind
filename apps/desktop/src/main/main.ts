@@ -25,25 +25,45 @@ import {
   shell,
   systemPreferences,
 } from "electron";
-import { applicationMenuInstaller, followUpdateState, installUpdate } from "./windows/app-menu.js";
-import { createAppOpener } from "./windows/app-opener.js";
-import {
-  createWindow,
-  developmentIcon,
-  installBundledRenderer,
-  markOnce,
-  PROBE_TIMEOUT_MS,
-  probeDocument,
-  remoteServerOrigin,
-  resolveSessionForTarget,
-  ServerUnavailable,
-} from "./windows/app-window.js";
-import type { ElectronAutoUpdater } from "./updates/auto-update.js";
-import { DesktopUpdateController } from "./updates/auto-update.js";
-import { createBadgeHandler } from "./system/badge.js";
 import { openBrowserAuth } from "./auth/browser-auth.js";
-import { createClipboardHandler } from "./system/clipboard.js";
+import { associatedPasskeyRpIds } from "./auth/passkeys.js";
+import { installSessionPermissions } from "./auth/session-permissions.js";
+import { createUserDeviceAccess, deviceName } from "./auth/user-device.js";
 import { appWindowTargets, desktop, permissionTarget } from "./desktop-state.js";
+import { createLocaleHandler, errorDetail, startDesktopLocale, t, withDetail } from "./i18n.js";
+import type { IpcCaller } from "./ipc/ipc.js";
+import { handleIpc, sentFrom } from "./ipc/ipc.js";
+import { installServerHeaders } from "./setup/server-request-headers.js";
+import {
+  DEFAULT_LOCAL_WEB_URL,
+  desktopStackImageTag,
+  isRakazoHealth,
+  managedLocalOpenUrl,
+  maySendDesktopStackToken,
+  normalizeServerUrl,
+  probeFailureMessage,
+  readProbeJson,
+  resolveStartupTarget,
+} from "./setup/setup-config.js";
+import {
+  clearSetup,
+  readSetup,
+  readUiLocale,
+  writeSetup,
+  writeUiLocale,
+} from "./setup/setup-store.js";
+import { destroySetupWindow, registerSetupIpc, showSetupWindow } from "./setup/setup-window.js";
+import { createBadgeHandler } from "./system/badge.js";
+import { createClipboardHandler } from "./system/clipboard.js";
+import {
+  configureDesktopMonitoring,
+  desktopReportsErrors,
+  disableDesktopMonitoring,
+  installDesktopEarlyErrorReporting,
+  refreshDesktopMonitoringUser,
+  reportDesktopError,
+} from "./system/monitoring.js";
+import { createSystemSpeech } from "./system/system-speech.js";
 import { launchDockerApp, resolveDockerBinary, runDocker } from "./this-computer/docker-cli.js";
 import type { StackChoice } from "./this-computer/docker-move.js";
 import {
@@ -62,11 +82,10 @@ import {
   screenDriverInstaller,
   screenDriverRelease,
 } from "./this-computer/host-screen.js";
-import { createLocaleHandler, errorDetail, startDesktopLocale, t, withDetail } from "./i18n.js";
-import type { IpcCaller } from "./ipc/ipc.js";
-import { handleIpc, sentFrom } from "./ipc/ipc.js";
-import { verifyDownloadedLinuxUpdate } from "./updates/linux-update-signature.js";
-import { createLocalComputerChoice, saveLocalComputerHost } from "./this-computer/local-settings.js";
+import {
+  createLocalComputerChoice,
+  saveLocalComputerHost,
+} from "./this-computer/local-settings.js";
 import {
   defaultSleep,
   LocalStackController,
@@ -78,35 +97,28 @@ import {
 } from "./this-computer/local-stack.js";
 import type { ServerBundle } from "./this-computer/mac-runtime.js";
 import { nativeStackEligible, readServerBundle } from "./this-computer/mac-runtime.js";
-import {
-  configureDesktopMonitoring,
-  desktopReportsErrors,
-  disableDesktopMonitoring,
-  installDesktopEarlyErrorReporting,
-  refreshDesktopMonitoringUser,
-  reportDesktopError,
-} from "./system/monitoring.js";
 import { NativeStackController } from "./this-computer/native-stack.js";
-import { associatedPasskeyRpIds } from "./auth/passkeys.js";
-import { revealSecondInstanceWindow, secondInstanceWindow } from "./windows/second-instance.js";
-import { installServerHeaders } from "./setup/server-request-headers.js";
-import { installSessionPermissions } from "./auth/session-permissions.js";
 import {
-  DEFAULT_LOCAL_WEB_URL,
-  desktopStackImageTag,
-  isRakazoHealth,
-  managedLocalOpenUrl,
-  maySendDesktopStackToken,
-  normalizeServerUrl,
-  probeFailureMessage,
-  readProbeJson,
-  resolveStartupTarget,
-} from "./setup/setup-config.js";
-import { clearSetup, readSetup, readUiLocale, writeSetup, writeUiLocale } from "./setup/setup-store.js";
-import { destroySetupWindow, registerSetupIpc, showSetupWindow } from "./setup/setup-window.js";
-import { StackStopMenuAvailability, stopStackLeftBehind } from "./this-computer/stop-local-stack.js";
-import { createSystemSpeech } from "./system/system-speech.js";
-import { createUserDeviceAccess, deviceName } from "./auth/user-device.js";
+  StackStopMenuAvailability,
+  stopStackLeftBehind,
+} from "./this-computer/stop-local-stack.js";
+import type { ElectronAutoUpdater } from "./updates/auto-update.js";
+import { DesktopUpdateController } from "./updates/auto-update.js";
+import { verifyDownloadedLinuxUpdate } from "./updates/linux-update-signature.js";
+import { applicationMenuInstaller, followUpdateState, installUpdate } from "./windows/app-menu.js";
+import { createAppOpener } from "./windows/app-opener.js";
+import {
+  createWindow,
+  developmentIcon,
+  installBundledRenderer,
+  markOnce,
+  PROBE_TIMEOUT_MS,
+  probeDocument,
+  remoteServerOrigin,
+  resolveSessionForTarget,
+  ServerUnavailable,
+} from "./windows/app-window.js";
+import { revealSecondInstanceWindow, secondInstanceWindow } from "./windows/second-instance.js";
 import { registerWindowControls } from "./windows/window-controls.js";
 import { isMcpOAuthServerId, mcpOAuthPartition } from "./windows/window-open.js";
 

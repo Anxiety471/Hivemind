@@ -12,6 +12,7 @@ import { abortableDelay, isRetryableError, reconnectDelayMs, retryDelayMs } from
 import { fetchFresh, writeSaved } from "@rakazo/core/query";
 import {
   Button,
+  buttonVariants,
   Dialog,
   DialogContent,
   DialogHeader,
@@ -29,13 +30,13 @@ import { useEffect, useId, useState } from "react";
 import { Link } from "react-router-dom";
 import { IconTooltip } from "../../components/IconTooltip";
 import { PageHeader } from "../../components/PageHeader";
-import { useSave, useSpaceQueries } from "../../lib/query/query";
+import { WindowChrome } from "../../components/WindowChrome";
 import { formatRelativeTime } from "../../lib/locale/relative-time";
+import { useSave, useSpaceQueries } from "../../lib/query/query";
 import { rpc } from "../../lib/query/rpc";
+import { errorText } from "../../lib/query/user-error";
 import { useTicketPriorityLabels } from "./ticket-priority";
 import { useTicketStatusLabels } from "./ticket-status";
-import { errorText } from "../../lib/query/user-error";
-import { WindowChrome } from "../../components/WindowChrome";
 
 export function BoardPage() {
   const statuses = useTicketStatusLabels();

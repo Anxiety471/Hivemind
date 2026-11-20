@@ -26,12 +26,12 @@ import {
 import { CallKeyboardContext } from "../../lib/calls/call-keyboard-context";
 import { useContentBottomInset } from "../../lib/layout/content-bottom-inset";
 import { useFloatingHeaderInset } from "../../lib/layout/floating-header";
-import { native, useThemedStyles } from "../../lib/native/native";
 import { useSideInsets } from "../../lib/layout/side-insets";
+import { native, useThemedStyles } from "../../lib/native/native";
 import { useListSearch } from "../../lib/search/use-list-search";
+import { SettingsLabel, SettingsRow } from "../settings/settings-group";
 import { ListSearchInput } from "../ui/list-search-input";
 import { Checkmark } from "../ui/row-accessories";
-import { SettingsLabel, SettingsRow } from "../settings/settings-group";
 import { TextOnlyMark } from "../ui/text-only-mark";
 
 const newestChoicesFirst = (choices: ChatModelChoice[]) =>

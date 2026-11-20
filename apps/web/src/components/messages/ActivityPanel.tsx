@@ -9,14 +9,14 @@ import {
 } from "@rakazo/ui-web/components/ui/collapsible";
 import { ChevronRight } from "lucide-react";
 import { Fragment } from "react";
-import type { ActivitySummaryKind } from "../lib/tool-activity-view";
+import type { ActivitySummaryKind } from "../../lib/chat/tool-activity-view";
 import {
   activityBlocks,
   activityDurationMs,
   activityStepCount,
   activitySummaryParts,
   latestActivity,
-} from "../lib/tool-activity-view";
+} from "../../lib/chat/tool-activity-view";
 
 type ToolStep = Extract<ThreadMessage["blocks"][number], { kind: "steps" }>["steps"][number];
 

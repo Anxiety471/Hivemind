@@ -13,8 +13,10 @@ vi.mock("@earendil-works/pi-ai/providers/all", () => ({
     streamSimple: (...args: unknown[]) => providerState.stream(...args),
   }),
 }));
-vi.mock("./pi-local-provider.js", () => ({ registerLocalProvider: (models: unknown) => models }));
-vi.mock("./pi-openai-compatible-provider.js", () => ({
+vi.mock("./models/pi-local-provider.js", () => ({
+  registerLocalProvider: (models: unknown) => models,
+}));
+vi.mock("./models/pi-openai-compatible-provider.js", () => ({
   OPENAI_COMPATIBLE_PROVIDER_ID: "openai-compatible",
   registerOpenAiCompatibleCatalog: (models: unknown) => models,
   registerOpenAiCompatibleRuntime: (models: unknown) => models,
