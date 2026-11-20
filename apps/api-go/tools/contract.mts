@@ -2454,10 +2454,16 @@ function seedUsage(
       await row("mx", { inputTokens: 1 }, config.tiedTimes ? 0 : 500, two);
       return;
     }
-    await row("u1", { inputTokens: 10, outputTokens: 5, totalTokens: 15, costUsd: 0.0000123, runId: `${user}-r1`, botId: null, callId: `${user}-call1`, costSource: "provider", pricingVersion: "v1", usageSource: "api", operationId: "op1", agentId: "agent" }, 1);
-    await row("u2", { inputTokens: 20, outputTokens: 10, totalTokens: 30, costUsd: 1e-7, runId: `${user}-r1`, cacheReadTokens: 3, cacheWriteTokens: 4, cacheWrite1hTokens: 5, reasoningTokens: 6 }, 2);
+    // The summary's per-group cost is Postgres sum(float8), which accumulates in scan order, and each
+    // side reads its own freshly reseeded heap: 0.0000123 + 1e-7 + (-1) came out as -0.9999876 and
+    // -0.9999876000000001 depending on that order (usg-summary-negative-cost, pass 6), and 0.1 + 0.2 +
+    // (0.1 + 0.2) was 0.6 or 0.6000000000000001. Dyadic costs whose partial sums need at most 25
+    // significand bits (2^-16, 2^-24, -1) sum identically in every order, and 0.01 + 0.2 + (0.1 + 0.2)
+    // is 0.51 in every order; u6 still carries the long expansion for usage.list.
+    await row("u1", { inputTokens: 10, outputTokens: 5, totalTokens: 15, costUsd: 2 ** -16, runId: `${user}-r1`, botId: null, callId: `${user}-call1`, costSource: "provider", pricingVersion: "v1", usageSource: "api", operationId: "op1", agentId: "agent" }, 1);
+    await row("u2", { inputTokens: 20, outputTokens: 10, totalTokens: 30, costUsd: 2 ** -24, runId: `${user}-r1`, cacheReadTokens: 3, cacheWriteTokens: 4, cacheWrite1hTokens: 5, reasoningTokens: 6 }, 2);
     await row("u3", { model: "gpt-b", runId: `${user}-r2`, operationKind: "setup" }, 3);
-    await row("u4", { provider: "anthropic", model: "claude", inputTokens: 100, outputTokens: 50, totalTokens: 150, costUsd: 0.1, runId: `${user}-r3`, parentRunId: `${user}-r1`, operationKind: "subagent" }, 4);
+    await row("u4", { provider: "anthropic", model: "claude", inputTokens: 100, outputTokens: 50, totalTokens: 150, costUsd: 0.01, runId: `${user}-r3`, parentRunId: `${user}-r1`, operationKind: "subagent" }, 4);
     await row("u5", { provider: "anthropic", model: "claude", inputTokens: 5, outputTokens: 5, totalTokens: 10, costUsd: 0.2, runId: config.emptyRun ? "" : null }, 5);
     await row("u6", { provider: "anthropic", model: "claude", inputTokens: 1, outputTokens: 1, totalTokens: 2, costUsd: 0.1 + 0.2, parentRunId: `${user}-r9`, operationKind: "compaction" }, 6);
     await row("u7", { provider: "local", model: "m", inputTokens: 2_000_000_000, outputTokens: 2_000_000_000, totalTokens: 2_147_483_647, costUsd: 1e21 }, 7);
