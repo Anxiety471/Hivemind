@@ -3,8 +3,9 @@ import {
   isModelCredentialRejected,
   isRetryableProviderUnavailable,
   isTransientModelError,
+  modelErrorStatus,
 } from "@rakazo/adapter-kit";
-import { isContentFilterRejection } from "@rakazo/core";
+import { isContentFilterRejection, normalizeRunError } from "@rakazo/core";
 import { getLogger } from "@rakazo/logging";
 import { unrecognizedModelFailure } from "./pi-runtime-errors.js";
 
@@ -48,10 +49,44 @@ export function localModelRetryDecision(
 }
 
 /**
+ * Which rule placed a failure, named for the logs. The decision does not depend on which of
+ * several matching rules is named here; the order only picks the most specific name.
+ */
+export type ModelRetryRule =
+  | "request_limit"
+  | "content_filter"
+  | "credential"
+  | "transient"
+  | "exhausted"
+  | "unrecognized"
+  | "permanent";
+
+export function modelRetryRule(
+  message: string,
+  provider: string,
+  requestLimitTooSmall: boolean,
+): ModelRetryRule {
+  if (requestLimitTooSmall) return "request_limit";
+  if (isContentFilterRejection(message)) return "content_filter";
+  if (isModelCredentialRejected(message)) return "credential";
+  if (isRetryableProviderUnavailable(message)) {
+    return isTransientModelError(message) ? "transient" : "exhausted";
+  }
+  return unrecognizedModelFailure(message, provider) ? "unrecognized" : "permanent";
+}
+
+/** Who answered: the rules service, the runtime because none is set, or the runtime after the service failed. */
+type DecisionSource = "gateway" | "local" | "local_fallback";
+
+/**
  * The decision for a failed call. With MODEL_RETRY_RULES_URL set, the rules service on this host
  * (the Go gateway) answers and its answer is used; a service that cannot answer in time, or
  * answers with anything but a decision, leaves the runtime's own rules in charge. A decision the
  * two disagree on is logged, so the implementations cannot drift apart unnoticed.
+ *
+ * Every decision is logged as `model.retry.decided`, with what kind of failure it was, which rule
+ * placed it and who decided, so how failed calls are handled can be studied from the logs. The
+ * provider's message is not logged here: it can quote the request.
  */
 export async function modelRetryDecision(
   error: AssistantMessage,
@@ -63,39 +98,58 @@ export async function modelRetryDecision(
   const message = error.errorMessage ?? "Model request failed.";
   const local = localModelRetryDecision(message, provider, requestLimitTooSmall);
   const url = process.env.MODEL_RETRY_RULES_URL?.trim();
-  if (!url || signal.aborted) return local;
+  const fields = { runId: log.runId, provider, model: log.model };
+  const decided = (decision: ModelRetryDecision, source: DecisionSource, rulesMs?: number) => {
+    const classified = normalizeRunError(message);
+    const status = modelErrorStatus(message) ?? classified.status;
+    getLogger().info("model.retry.decided", {
+      ...fields,
+      "retry.source": source,
+      "retry.rule": modelRetryRule(message, provider, requestLimitTooSmall),
+      "retry.switch_to_backup": decision.switchToBackup,
+      "retry.same_model": decision.retrySameModel,
+      "retry.unrecognized": decision.unrecognized !== undefined,
+      "error.kind": classified.kind ?? "unclassified",
+      ...(status !== undefined ? { "error.status": status } : {}),
+      ...(rulesMs !== undefined ? { "retry.rules_ms": rulesMs } : {}),
+    });
+    return decision;
+  };
+  if (!url || signal.aborted) return decided(local, "local");
+  const started = performance.now();
   let remote: ModelRetryDecision;
   try {
     const response = await fetch(url, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ message, provider, requestLimitTooSmall }),
+      body: JSON.stringify({
+        message,
+        provider,
+        requestLimitTooSmall,
+        runId: log.runId,
+        model: log.model,
+      }),
       signal: AbortSignal.any([signal, AbortSignal.timeout(RULES_SERVICE_TIMEOUT_MS)]),
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     remote = parseDecision(await response.json());
   } catch (cause) {
     // A run stopping mid-question is not the service's failure.
-    if (!signal.aborted) {
-      getLogger().warn("model.retry_rules.unavailable", {
-        runId: log.runId,
-        provider,
-        model: log.model,
-        reason: cause instanceof Error ? cause.message : String(cause),
-      });
-    }
-    return local;
+    if (signal.aborted) return local;
+    getLogger().warn("model.retry_rules.unavailable", {
+      ...fields,
+      reason: cause instanceof Error ? cause.message : String(cause),
+    });
+    return decided(local, "local_fallback", Math.round(performance.now() - started));
   }
   if (!sameDecision(local, remote)) {
     getLogger().warn("model.retry_rules.mismatch", {
-      runId: log.runId,
-      provider,
-      model: log.model,
+      ...fields,
       local: JSON.stringify(local),
       remote: JSON.stringify(remote),
     });
   }
-  return remote;
+  return decided(remote, "gateway", Math.round(performance.now() - started));
 }
 
 function parseDecision(value: unknown): ModelRetryDecision {

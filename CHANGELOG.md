@@ -19,6 +19,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - On narrow screens the ticket board swipes one column at a time; wider screens keep equal columns.
 - The transcript's activity panel, including reasoning cards, is now shown by default; the existing setting still hides it.
 - With `MODEL_RETRY_RULES_URL` set, the Go gateway decides whether a failed model call moves to a backup model or retries the same model. If the gateway doesn't answer, the runtime uses its own copy of the same rules ([configuration](docs/self-host-configuration.md)).
+- Each failed model call logs which rule placed it, who decided, whether the run moved to a backup, retried or gave up, and whether a retry or backup recovered it. The provider's error text isn't included ([log events](docs/self-host-configuration.md)).
 
 ### Fixed
 

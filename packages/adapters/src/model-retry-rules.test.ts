@@ -1,5 +1,6 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { deferred } from "@rakazo/core/test-async";
+import { createLogger, createTestSink, installLogger } from "@rakazo/logging";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { modelRetryDecision } from "./model-retry-rules.js";
 
@@ -75,9 +76,60 @@ describe("modelRetryDecision", () => {
           message: unexplained,
           provider: "provider-a",
           requestLimitTooSmall: false,
+          model: "primary",
         }),
       }),
     );
+  });
+
+  it("logs who decided, which rule placed the failure and its status, never the provider's text", async () => {
+    const sink = createTestSink();
+    installLogger(createLogger({ service: "rakazo-worker", sinks: [sink] }));
+    const filtered =
+      '400 data: {"error":{"code":"data_inspection_failed","message":"Input text data may contain inappropriate content."}}';
+    vi.stubEnv("MODEL_RETRY_RULES_URL", RULES_URL);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({ switchToBackup: true, retrySameModel: false, unrecognized: null }),
+          ),
+      ),
+    );
+    await decide(filtered);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("fetch failed");
+      }),
+    );
+    await decide(unexplained);
+    const decided = sink.events.filter((event) => event.message === "model.retry.decided");
+    expect(decided).toEqual([
+      expect.objectContaining({
+        provider: "provider-a",
+        model: "primary",
+        "retry.source": "gateway",
+        "retry.rule": "content_filter",
+        "retry.switch_to_backup": true,
+        "retry.same_model": false,
+        "retry.unrecognized": false,
+        "error.kind": "output",
+        "error.status": 400,
+        "retry.rules_ms": expect.any(Number),
+      }),
+      expect.objectContaining({
+        "retry.source": "local_fallback",
+        "retry.rule": "unrecognized",
+        "retry.switch_to_backup": true,
+        "retry.same_model": true,
+        "retry.unrecognized": true,
+        "error.kind": "unclassified",
+      }),
+    ]);
+    expect(JSON.stringify(decided)).not.toContain("inappropriate");
+    expect(JSON.stringify(decided)).not.toContain("choices");
   });
 
   it.each([
