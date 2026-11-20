@@ -39,8 +39,7 @@ test("markdown tables render as an interactive card", async ({ page }, testInfo)
   expect(toolbarBox!.y + toolbarBox!.height).toBeLessThanOrEqual(headerBox!.y + 1);
 
   // Numeric sort: desc puts qty 12 first; lexicographic would put 9 first.
-  // thead th nth(0) is the row-number gutter, so Qty sits at index 2.
-  const qtyHeader = card.locator("thead th").nth(2);
+  const qtyHeader = card.locator("thead th").nth(1);
   await card.getByRole("button", { name: "Sort by Qty" }).click();
   await expect(qtyHeader).toHaveAttribute("aria-sort", "ascending");
   await expect(card.locator("tbody tr").first()).toContainText("item-01");
@@ -108,7 +107,7 @@ test("rich table links participate in dialog keyboard navigation", async ({ page
     "https://example.test/ref",
   );
   await expect(card.locator("thead .rk-table-sort-label strong")).toHaveText("Note");
-  const referenceHeader = card.locator("thead th").nth(1);
+  const referenceHeader = card.locator("thead th").nth(0);
   await expect(referenceHeader).not.toHaveAttribute("aria-sort", /./);
   const headerLink = card.locator("thead .rk-table-sort-label a");
   await headerLink.evaluate((element) => {
@@ -379,11 +378,7 @@ test("table chrome follows right-to-left direction", async ({ page }) => {
   );
 
   await page.locator("html").evaluate((element) => element.setAttribute("dir", "rtl"));
-  const gutter = card.locator("tbody .rk-table-gutter").first();
-  await expect(gutter).toHaveCSS("border-left-width", "1px");
-  await expect(gutter).toHaveCSS("border-right-width", "0px");
-
-  const qtyHeader = card.locator("thead th").nth(2);
+  const qtyHeader = card.locator("thead th").nth(1);
   const labelBox = await qtyHeader.locator(".rk-table-sort-label").boundingBox();
   const iconBox = await qtyHeader.locator(".rk-table-sort-icon").boundingBox();
   expect(labelBox).not.toBeNull();
@@ -434,21 +429,18 @@ test("paging announces the visible range", async ({ page }) => {
 test.describe("touch table controls", () => {
   test.use({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 844 } });
 
-  test("toolbar controls are visible, large enough, and do not cover the table", async ({
-    page,
-  }) => {
+  test("table actions are visible, large enough, and do not cover the table", async ({ page }) => {
     await page.goto(fixture);
     const card = page.getByTestId("table-card");
-    const toolbar = card.locator(":scope > .rk-table-head");
+    const actions = card.locator(":scope > .rk-table-actions");
     const scroll = card.locator(":scope > .rk-table-scroll");
-    await expect(toolbar).toBeVisible();
-    await expect(toolbar).toHaveCSS("position", "static");
+    await expect(actions).toBeVisible();
 
-    const toolbarBox = await toolbar.boundingBox();
+    const actionsBox = await actions.boundingBox();
     const scrollBox = await scroll.boundingBox();
-    expect(toolbarBox).not.toBeNull();
+    expect(actionsBox).not.toBeNull();
     expect(scrollBox).not.toBeNull();
-    expect(toolbarBox!.y + toolbarBox!.height).toBeLessThanOrEqual(scrollBox!.y + 1);
+    expect(actionsBox!.y).toBeGreaterThanOrEqual(scrollBox!.y + scrollBox!.height - 1);
 
     for (const name of ["Copy rows", "Download CSV", "Expand table"]) {
       const box = await card.getByRole("button", { name }).boundingBox();

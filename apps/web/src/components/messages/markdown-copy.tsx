@@ -15,7 +15,6 @@ export function MarkdownChrome({ children }: { children: ReactNode }) {
       copyDiagramSource: t`Copy diagram source`,
       table: t`Table`,
       markdownTable: t`Markdown table`,
-      row: t`Row`,
       noRows: t`No rows`,
       previousPage: t`Previous page`,
       nextPage: t`Next page`,

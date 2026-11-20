@@ -225,7 +225,6 @@ export const TableCard = memo(function TableCard({
       aligns={aligns}
       // The expanded view is the full view: every row, no pages.
       rows={mode === "dialog" ? sortedRows : pageRows}
-      rowOffset={mode === "dialog" ? 0 : safePage * TABLE_PAGE_SIZE}
       numericColumns={numericColumns}
       minWidths={minWidths}
       renderedHeaders={renderedHeaders}
@@ -237,6 +236,7 @@ export const TableCard = memo(function TableCard({
     />
   );
 
+  const pageIndex = `${safePage + 1} / ${pageCount}`;
   const pager = showPagination ? (
     <div className="rk-table-footer">
       <span className="rk-table-range">
@@ -248,7 +248,7 @@ export const TableCard = memo(function TableCard({
       </span>
       <button
         type="button"
-        className="rk-table-tool"
+        className="rk-table-page"
         aria-label={copy.previousPage}
         disabled={safePage === 0}
         onClick={() => {
@@ -258,9 +258,12 @@ export const TableCard = memo(function TableCard({
       >
         <ChevronLeftIcon />
       </button>
+      <span className="rk-table-page-index" aria-hidden="true">
+        {pageIndex}
+      </span>
       <button
         type="button"
-        className="rk-table-tool"
+        className="rk-table-page"
         aria-label={copy.nextPage}
         disabled={safePage >= pageCount - 1}
         onClick={() => {
@@ -271,11 +274,7 @@ export const TableCard = memo(function TableCard({
         <ChevronRightIcon />
       </button>
     </div>
-  ) : (
-    <div className="rk-table-footer">
-      <span className="rk-table-range">{copy.rowCount(sortedRows.length)}</span>
-    </div>
-  );
+  ) : null;
 
   const zoomPercent = Math.round(zoom * 100);
   const zoomLabel = `${zoomPercent}%`;
@@ -316,46 +315,49 @@ export const TableCard = memo(function TableCard({
     </div>
   );
 
-  const tools = (mode: "card" | "dialog") => (
-    <div className="rk-table-head">
-      {mode === "dialog" ? zoomControls : null}
-      <button
-        type="button"
-        className="rk-table-tool"
-        onClick={copyRows}
-        aria-label={copied ? copy.copied : copy.copyRows}
-      >
-        {copied ? <CheckIcon /> : <CopyIcon />}
-      </button>
-      <button
-        type="button"
-        className="rk-table-tool"
-        onClick={downloadCsv}
-        aria-label={copy.downloadCsv}
-      >
-        <DownloadIcon />
-      </button>
-      {mode === "card" ? (
+  // The card labels its actions; the full view's toolbar keeps compact icons.
+  const tools = (mode: "card" | "dialog") => {
+    const labelled = mode === "card";
+    const className = labelled ? "rk-table-action" : "rk-table-tool";
+    const copyLabel = copied ? copy.copied : copy.copyRows;
+    return (
+      <div className="rk-table-actions">
+        <button type="button" className={className} onClick={copyRows} aria-label={copyLabel}>
+          {copied ? <CheckIcon /> : <CopyIcon />}
+          {labelled ? <span>{copyLabel}</span> : null}
+        </button>
         <button
           type="button"
-          className="rk-table-tool"
-          ref={expandButtonRef}
-          onClick={() => openChange(true)}
-          aria-label={copy.expandTable}
+          className={className}
+          onClick={downloadCsv}
+          aria-label={copy.downloadCsv}
         >
-          <ExpandIcon />
+          <DownloadIcon />
+          {labelled ? <span>{copy.downloadCsv}</span> : null}
         </button>
-      ) : (
-        <DialogClose
-          ref={closeButtonRef}
-          aria-label={copy.closeTable}
-          render={<button type="button" className="rk-table-tool" />}
-        >
-          <CloseIcon />
-        </DialogClose>
-      )}
-    </div>
-  );
+        {labelled ? (
+          <button
+            type="button"
+            className={className}
+            ref={expandButtonRef}
+            onClick={() => openChange(true)}
+            aria-label={copy.expandTable}
+          >
+            <ExpandIcon />
+            <span>{copy.expandTable}</span>
+          </button>
+        ) : (
+          <DialogClose
+            ref={closeButtonRef}
+            aria-label={copy.closeTable}
+            render={<button type="button" className={className} />}
+          >
+            <CloseIcon />
+          </DialogClose>
+        )}
+      </div>
+    );
+  };
 
   const status = (
     <div role="status" className="rk-sr-only">
@@ -374,13 +376,18 @@ export const TableCard = memo(function TableCard({
       <div className="rk-table-card rk-table-box" data-testid="table-card">
         {/* Keep the live region in the active view — dialog content is outside the card. */}
         {expanded ? null : status}
-        {tools("card")}
+        <div className="rk-table-head">
+          <TableIcon />
+          <span className="rk-table-title">{copy.table}</span>
+          <span className="rk-table-count">{copy.rowCount(sortedRows.length)}</span>
+        </div>
         {/* biome-ignore lint/a11y/noNoninteractiveTabindex: a scrollable region must
             be keyboard-focusable (WCAG 2.1.1 / axe scrollable-region-focusable). */}
         <section className="rk-table-scroll" aria-label={copy.table} tabIndex={0}>
           {tableView("card")}
         </section>
         {pager}
+        {tools("card")}
       </div>
       <DialogContent
         showCloseButton={false}
@@ -391,7 +398,10 @@ export const TableCard = memo(function TableCard({
       >
         <DialogTitle className="rk-table-dialog-title">{copy.table}</DialogTitle>
         {expanded ? status : null}
-        {tools("dialog")}
+        <div className="rk-table-head">
+          {zoomControls}
+          {tools("dialog")}
+        </div>
         {/* biome-ignore-start lint/a11y/noNoninteractiveTabindex: a scrollable region must
             be keyboard-focusable (WCAG 2.1.1 / axe scrollable-region-focusable). */}
         <section
@@ -405,7 +415,7 @@ export const TableCard = memo(function TableCard({
         </section>
         {/* biome-ignore-end lint/a11y/noNoninteractiveTabindex: end of scrollable region. */}
         <div className="rk-table-footer">
-          <span className="rk-table-range">{copy.rowCount(sortedRows.length)}</span>
+          <span className="rk-table-count">{copy.rowCount(sortedRows.length)}</span>
         </div>
       </DialogContent>
     </Dialog>
@@ -416,7 +426,6 @@ function TableView({
   columns,
   aligns,
   rows,
-  rowOffset,
   numericColumns,
   minWidths,
   renderedHeaders,
@@ -429,7 +438,6 @@ function TableView({
   columns: string[];
   aligns: TableAlign[];
   rows: string[][];
-  rowOffset: number;
   numericColumns: ReadonlySet<number>;
   minWidths: Record<number, string>;
   renderedHeaders?: ReactNode[];
@@ -452,7 +460,6 @@ function TableView({
     <table className="rk-table" aria-label={copy.markdownTable}>
       <thead>
         <tr>
-          <th className="rk-table-gutter" scope="col" aria-label={copy.row} />
           {columns.map((column, i) => (
             <SortableColumnHeader
               key={i}
@@ -468,14 +475,13 @@ function TableView({
       <tbody>
         {rows.length === 0 ? (
           <tr>
-            <td colSpan={columns.length + 1} className="rk-table-empty">
+            <td colSpan={columns.length} className="rk-table-empty">
               {copy.noRows}
             </td>
           </tr>
         ) : (
-          rows.map((row, rowIndex) => (
+          rows.map((row) => (
             <tr key={rowKeys.get(row)}>
-              <td className="rk-table-gutter">{rowOffset + rowIndex + 1}</td>
               {columns.map((_, columnIndex) => {
                 const value = row[columnIndex] ?? "";
                 return (
@@ -612,6 +618,22 @@ function DownloadIcon() {
         strokeWidth="2"
         strokeLinecap="round"
       />
+    </svg>
+  );
+}
+
+function TableIcon() {
+  return (
+    <svg
+      className="rk-table-icon"
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      aria-hidden="true"
+    >
+      <rect x="3" y="4" width="18" height="16" rx="2" stroke="currentColor" strokeWidth="2" />
+      <path d="M3 10h18M3 15h18M9 4v16M15 4v16" stroke="currentColor" strokeWidth="1.6" />
     </svg>
   );
 }

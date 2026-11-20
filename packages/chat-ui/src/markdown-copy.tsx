@@ -11,8 +11,6 @@ export type MarkdownCopy = {
   /** Scrollable regions and the expanded dialog's title. */
   table: string;
   markdownTable: string;
-  /** Gutter column header. */
-  row: string;
   noRows: string;
   previousPage: string;
   nextPage: string;
@@ -42,7 +40,6 @@ export const defaultMarkdownCopy: MarkdownCopy = {
   copyDiagramSource: "Copy diagram source",
   table: "Table",
   markdownTable: "Markdown table",
-  row: "Row",
   noRows: "No rows",
   previousPage: "Previous page",
   nextPage: "Next page",
