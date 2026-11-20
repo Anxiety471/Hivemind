@@ -143,27 +143,54 @@ func isWordByte(character byte) bool {
 		character == '_'
 }
 
-// containsPrintfToken looks for "%s", "%d" and "%1" through "%9". A token
-// followed by another word character does not count, which keeps words like
-// "%done" and positional text alone; two characters after "%2" or "%1" that
-// are both hexadecimal digits mean percent-encoding, not printf.
+// containsPrintfToken looks for "%s", "%d", "%f", "%v", "%q", numeric width
+// and precision forms such as "%.2f", "%02d" and "%3.1f", and the positional
+// tokens "%1" through "%9". Percent-encoding comes first: a leading 1-9
+// followed by a hexadecimal digit is treated as an escape ("%20", "%2F",
+// "%25", "%1F"), never as printf. A token followed by another word character
+// does not count, which keeps words like "%done" and "%d0" alone.
 func containsPrintfToken(value string) bool {
-	for index := range len(value) - 1 {
-		if value[index] != '%' {
+	for index := range len(value) {
+		if value[index] != '%' || percentEncodingLike(value, index) {
 			continue
 		}
-		switch verb := value[index+1]; {
-		case verb == 's' || verb == 'd':
-			if index+2 >= len(value) || !isWordByte(value[index+2]) {
-				return true
-			}
-		case verb >= '1' && verb <= '9':
-			if index+2 >= len(value) || !isHexByte(value[index+2]) {
-				return true
-			}
+		if numericPrintfToken(value, index) {
+			return true
+		}
+		if index+1 < len(value) && value[index+1] >= '1' && value[index+1] <= '9' {
+			return true
 		}
 	}
 	return false
+}
+
+func percentEncodingLike(value string, index int) bool {
+	if index+2 >= len(value) {
+		return false
+	}
+	leading := value[index+1]
+	return leading >= '1' && leading <= '9' && isHexByte(value[index+2])
+}
+
+func numericPrintfToken(value string, index int) bool {
+	cursor := index + 1
+	for cursor < len(value) && (isASCIIDigit(value[cursor]) || value[cursor] == '.') {
+		cursor++
+	}
+	if cursor >= len(value) {
+		return false
+	}
+	switch value[cursor] {
+	case 's', 'd', 'f', 'v', 'q':
+	default:
+		return false
+	}
+	following := cursor + 1
+	return following >= len(value) || !isWordByte(value[following])
+}
+
+func isASCIIDigit(character byte) bool {
+	return character >= '0' && character <= '9'
 }
 
 func isHexByte(character byte) bool {

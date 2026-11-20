@@ -27,6 +27,13 @@ func TestTemplateToken(t *testing.T) {
 		{name: "printf positional one", value: "%1", want: true},
 		{name: "printf positional with text", value: "%9 items", want: true},
 		{name: "printf in a query", value: "SELECT * FROM t WHERE id = %s", want: true},
+		{name: "printf precision float", value: "Total: %.2f", want: true},
+		{name: "printf value", value: "value=%v", want: true},
+		{name: "printf quoted", value: "name=%q", want: true},
+		{name: "printf float", value: "ratio %f", want: true},
+		{name: "printf zero padded", value: "count %02d", want: true},
+		{name: "printf width and precision", value: "value %3.1f", want: true},
+		{name: "printf width string", value: "value %8s", want: true},
 
 		{name: "empty", value: "", want: false},
 		{name: "plain", value: "plain value", want: false},
