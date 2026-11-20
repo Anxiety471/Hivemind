@@ -1,4 +1,5 @@
 export type Panel =
+  | "home"
   | "routines"
   | "pages"
   | "settings"
@@ -12,6 +13,7 @@ export type RightPanelState = { panel: Panel; routineId?: string };
 /** Panels that are safe to remember across reloads. */
 const durablePanels: readonly (string | null)[] = [
   "computer",
+  "home",
   "routines",
   "pages",
   "settings",

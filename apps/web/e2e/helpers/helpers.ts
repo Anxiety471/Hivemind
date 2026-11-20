@@ -123,7 +123,7 @@ export async function openIntegrationsAdd(page: Page, item: string) {
 }
 
 /**
- * Opens the bot panel from the header pill on the panel itself (profile, computer, routines,
+ * Opens the bot panel from the header pill (through Home's gear) on the panel itself (profile, computer, routines,
  * pages), leaving an open routine editor or one of the panel's whole lists.
  */
 export async function openBotPanel(page: Page) {
@@ -139,6 +139,10 @@ export async function openBotPanel(page: Page) {
         await expect(pill).toHaveAttribute("aria-expanded", "false", { timeout: 2_000 });
       }
       await pill.click();
+      // The pill opens the Home panel; its gear leads to the profile and settings.
+      const gear = page.getByTestId("home-panel-settings");
+      await expect(gear.or(profile)).toBeVisible({ timeout: 2_000 });
+      if (await gear.isVisible()) await gear.click();
     }
     await expect(profile).toBeVisible({ timeout: 2_000 });
   }).toPass({ timeout: 20_000 });

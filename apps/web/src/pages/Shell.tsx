@@ -279,7 +279,11 @@ function SpaceShell() {
   const inGroup = Boolean(groupId);
   const chatPanelOpen = inGroup
     ? panel === "group-settings"
-    : panel === "routines" || panel === "pages" || panel === "settings" || panel === "routine";
+    : panel === "home" ||
+      panel === "routines" ||
+      panel === "pages" ||
+      panel === "settings" ||
+      panel === "routine";
   // Until the route names the chat reopened from cache, that chat stands in for it.
   const routeChat = botId || groupId ? undefined : startChat;
   const active =
@@ -430,7 +434,7 @@ function SpaceShell() {
     if (chatPanelOpen) setPanel(null);
     else if (inGroup) setPanel("group-settings");
     else if (active) {
-      setPanel("settings");
+      setPanel("home");
       // Refresh run/computer so Take control isn't stuck on a stale busyBotName.
       void refreshThread(active.id).catch(() => undefined);
     } else return false;
@@ -1360,6 +1364,7 @@ function SpaceShell() {
             />
           ) : null
         }
+        boardEnabled={hasLab(bootstrapMe?.labs, "board")}
         routineList={{
           routines: activeRoutines,
           loaded: routinesLoaded,

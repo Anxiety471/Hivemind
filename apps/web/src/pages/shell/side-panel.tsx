@@ -10,6 +10,7 @@ import type { RoutineList } from "../routines/RoutineList";
 import { CreateGroupForm, GroupSettings } from "../space/GroupPanel";
 import { AgentImportForm } from "./bots/agent-import";
 import { BotSettings } from "./bots/bot-panel";
+import { HomePanel } from "./home/home-panel";
 import { ResizableSidePanel } from "./resizable-side-panel";
 import type { Panel } from "./right-panel-state";
 import { firstThreadRoute } from "./use-shell-navigation";
@@ -32,6 +33,7 @@ export function ShellSidePanel({
   computerPanel,
   routineList,
   routineEditorProps,
+  boardEnabled,
   openBot,
   openCreatedBot,
   modelFocusRequest,
@@ -54,6 +56,7 @@ export function ShellSidePanel({
   computerPanel: ReactNode;
   routineList: Omit<ComponentProps<typeof RoutineList>, "preview">;
   routineEditorProps: ComponentProps<typeof RoutineEditor> | null;
+  boardEnabled: boolean;
   openBot: (botId: string) => void;
   openCreatedBot: (bot: Bot) => void;
   modelFocusRequest: number;
@@ -80,6 +83,7 @@ export function ShellSidePanel({
       {open ? (
         <div className="rk-scroll h-full w-full overflow-y-auto px-5 pt-3.5 pb-[17px]">
           {!(botView && active) &&
+          !(panel === "home" && active) &&
           panel !== "routine" &&
           panel !== "create-group" &&
           panel !== "group-settings" &&
@@ -101,6 +105,16 @@ export function ShellSidePanel({
                 </Button>
               </div>
             </div>
+          ) : null}
+          {panel === "home" && active ? (
+            <HomePanel
+              key={active.id}
+              bot={active}
+              boardEnabled={boardEnabled}
+              routineList={routineList}
+              onOpenSettings={() => setPanel("settings")}
+              onClose={() => setPanel(null)}
+            />
           ) : null}
           {panel === "create-group" ? (
             <CreateGroupForm
