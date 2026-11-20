@@ -76,9 +76,13 @@ func Commands(ctx context.Context, database *db.DB, deployment shared.Deployment
 			return err
 		}
 		if threadID != nil && threadSpace != nil && threadUser != nil {
+			var stored any
+			if summary != nil {
+				stored = *summary
+			}
 			if err := ring.OpenRows(ctx, "Thread", []map[string]any{{
 				"id": *threadID, "spaceId": *threadSpace, "userId": *threadUser,
-				"historyCompactionSummary": summary,
+				"historyCompactionSummary": stored,
 			}}); err != nil {
 				return err
 			}

@@ -68,6 +68,18 @@ func membership(database *db.DB, deployment shared.Deployment, audit *effects.Re
 			},
 		},
 		{
+			Name: "organizations.members.setRole",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return organizations.SetRole(ctx, database, deployment, audit, actor, input)
+			},
+		},
+		{
+			Name: "organizations.invitations.cancel",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return organizations.CancelInvitation(ctx, database, deployment, audit, actor, input)
+			},
+		},
+		{
 			Name: "organizations.rename",
 			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
 				return organizations.Rename(ctx, database, audit, actor, input)

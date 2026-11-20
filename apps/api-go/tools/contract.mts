@@ -207,6 +207,15 @@ await writeFile(
       "memory.exportMarkdown": { mode: "go", readOnly: true },
       "memory.update": { mode: "go" },
       "memory.remove": { mode: "go" },
+      "onboarding.promptFocus": { mode: "go" },
+      "onboarding.dismissFocus": { mode: "go" },
+      "computer.commands": { mode: "go", readOnly: true },
+      "tickets.move": { mode: "go" },
+      "tickets.comment": { mode: "go" },
+      "skills.updateDraft": { mode: "go" },
+      "skills.save": { mode: "go" },
+      "organizations.members.setRole": { mode: "go" },
+      "organizations.invitations.cancel": { mode: "go" },
     },
   }),
 );
@@ -6194,6 +6203,14 @@ const WRITE_PROCEDURES = new Set([
   "agentSkills.remove",
   "memory.update",
   "memory.remove",
+  "onboarding.promptFocus",
+  "onboarding.dismissFocus",
+  "tickets.move",
+  "tickets.comment",
+  "skills.updateDraft",
+  "skills.save",
+  "organizations.members.setRole",
+  "organizations.invitations.cancel",
 ]);
 
 const CUID = /^c[0-9a-z]{24}$/;
@@ -6300,18 +6317,50 @@ async function observed(
         ) {
           return false;
         }
+        const name = topic.slice(topic.indexOf(":") + 1);
+        // A case's ids: its own people, its Spaces, and every thread it seeds (all of which start
+        // with the case's user id). Ids a case creates beside its own (other people, another
+        // organization's Spaces) share the id prefix too.
+        const ownId = (id: string) =>
+          own.includes(id) || id.startsWith(`${seeded.userId}-`) || id === `${seeded.orgId}-f`;
+        if (topic.startsWith("thread:")) return body.startsWith('{"cursor":') && ownId(name);
+        if (topic.startsWith("board:")) return own.includes(name);
+        if (topic.startsWith("organization-changes:")) {
+          return ownId(name) || idPrefixOfOrgMember(name, seeded);
+        }
         return (
           (topic.startsWith("roster-") || topic.startsWith("space-changes:")) &&
           (own.some((id) => topic.endsWith(`:${id}`)) ||
             // Ids a case creates beside its own (other people, another organization's Spaces).
-            topic.slice(topic.indexOf(":") + 1).startsWith(seeded.userId.slice(0, -1)))
+            name.startsWith(seeded.userId.slice(0, -1)))
         );
       } catch {
         return false;
       }
     })
+    // A board frame carries the instant it was made; each side takes its own clock.
+    .map(normalizeSignal)
     .sort();
   return { ...result, notifications };
+}
+
+/** Whether a person is one the case added beside its own (a member seeded for an organization case). */
+function idPrefixOfOrgMember(id: string, seeded: Seeded) {
+  return id === `${seeded.userId}-other` || id.startsWith(`${seeded.userId}-m`);
+}
+
+/** Reads a board frame's createdAt like any other instant: recency is compared, not the value. */
+function normalizeSignal(payload: string) {
+  try {
+    const signal = JSON.parse(payload) as { topic?: string; payload?: string };
+    if (!signal.topic?.startsWith("board:") || typeof signal.payload !== "string") return payload;
+    const frame = JSON.parse(signal.payload) as { createdAt?: string };
+    if (typeof frame.createdAt !== "string") return payload;
+    const near = Date.parse(frame.createdAt) >= HARNESS_START && Date.parse(frame.createdAt) <= Date.now() + 6 * 3_600_000;
+    return JSON.stringify({ ...signal, payload: JSON.stringify({ ...frame, createdAt: near ? "<now>" : frame.createdAt }) });
+  } catch {
+    return payload;
+  }
 }
 
 async function databaseState(seeded: ReturnType<typeof ids>) {
@@ -6593,6 +6642,90 @@ async function databaseState(seeded: ReturnType<typeof ids>) {
       ...(await inspectMemoryContent("MemoryRevision", raw)),
     });
   }
+  // Messages and events are rkz1 JSON columns: read them raw and open them with the extension,
+  // so a row written by either side must open here, and each side's rows must match.
+  const inspectContent = async (model: "Message" | "Event", raw: any, field: "blocks" | "payload") => {
+    // Each side seals with its own freshly created Space key, so raw ciphertext never matches; the
+    // opened value is what both sides must agree on.
+    const value = raw[field];
+    const sealed = typeof value === "string" || (Array.isArray(value) && value.some((entry: any) => entry && typeof entry === "object" && "$sealed" in entry));
+    try {
+      const [opened] = await contentEncryptionOf(system)!.openRows(model, [raw]);
+      return { sealed, [field]: opened[field] };
+    } catch (error) {
+      // The ciphertext itself is each side's own; the failure is what has to match.
+      return { sealed, [field]: null, error: (error as Error).message };
+    }
+  };
+  const rawThreads = (await system.$queryRaw`SELECT id, "spaceId", "botId", "groupId", "nextMessageSeq", "nextEventSeq", "historyCompactedUpToSeq", "historyCompactionSummary"
+    FROM threads WHERE "userId" = ANY(${owners.in}::text[]) ORDER BY id`) as any[];
+  const threads = [];
+  for (const raw of rawThreads) {
+    const summary = raw.historyCompactionSummary;
+    let summaryState: any = { sealed: false, content: summary ?? null };
+    if (typeof summary === "string" && summary.startsWith("rkz1:")) {
+      try {
+        const [opened] = await contentEncryptionOf(system)!.openRows("Thread", [raw]);
+        summaryState = { sealed: true, content: opened.historyCompactionSummary };
+      } catch (error) {
+        summaryState = { sealed: true, error: (error as Error).message };
+      }
+    }
+    threads.push({
+      id: raw.id, spaceId: raw.spaceId, botId: raw.botId, groupId: raw.groupId,
+      nextMessageSeq: raw.nextMessageSeq, nextEventSeq: raw.nextEventSeq,
+      historyCompactedUpToSeq: raw.historyCompactedUpToSeq, summary: summaryState,
+    });
+  }
+  const rawMessages = (await system.$queryRaw`SELECT id, "threadId", seq, role, blocks, "botId", "authorUserId", "replyToMessageId", "replyQuote", "runId", "clientNonce", "searchTokens", "createdAt"
+    FROM messages WHERE "threadId" LIKE ${`${seeded.userId}-%`} ORDER BY "threadId", seq, id`) as any[];
+  const messages = [];
+  for (const raw of rawMessages) {
+    // Blind-index tokens are an HMAC under the Space key, and each side has its own key, so the
+    // numbers cannot be equal. Their presence and how many there are still must be (infra-a's
+    // proof pins the arithmetic itself).
+    const tokens = Array.isArray(raw.searchTokens) ? { present: true, count: raw.searchTokens.length } : { present: false };
+    const { searchTokens: _tokens, ...rest } = raw;
+    messages.push({ ...rest, searchTokens: tokens, ...(await inspectContent("Message", raw, "blocks")) });
+  }
+  const rawEvents = (await system.$queryRaw`SELECT id, "spaceId", "threadId", "botId", seq, type, payload, "runId", "createdAt"
+    FROM events WHERE "threadId" LIKE ${`${seeded.userId}-%`} ORDER BY "threadId", seq, id`) as any[];
+  const events = [];
+  for (const raw of rawEvents) {
+    events.push({ ...raw, ...(await inspectContent("Event", raw, "payload")) });
+  }
+  // The rows the ticket, taught-skill and organization writes leave behind.
+  const boards = await system.board.findMany({
+    where: { spaceId: { in: seeded.spaces } },
+    select: { id: true, spaceId: true, name: true, ticketPrefix: true, nextNumber: true },
+    orderBy: { spaceId: "asc" },
+  });
+  const tickets = await system.ticket.findMany({
+    where: { spaceId: { in: seeded.spaces } },
+    select: { id: true, boardId: true, spaceId: true, number: true, title: true, description: true, status: true, priority: true, assigneeBotId: true, createdByBotId: true, createdByUserId: true, completedAt: true, updatedAt: true },
+    orderBy: { id: "asc" },
+  });
+  const ticketComments = await system.ticketComment.findMany({
+    where: { spaceId: { in: seeded.spaces } },
+    select: { id: true, ticketId: true, spaceId: true, authorUserId: true, authorBotId: true, body: true, updatedAt: true },
+    orderBy: { id: "asc" },
+  });
+  const taughtSkills = await system.taughtSkill.findMany({
+    where: { spaceId: { in: seeded.spaces } },
+    select: { id: true, spaceId: true, botId: true, userId: true, name: true, goal: true, status: true, playbook: true, recording: true, startedAt: true, expiresAt: true, stoppedAt: true, updatedAt: true },
+    orderBy: { id: "asc" },
+  });
+  const organizationIDs = [seeded.orgId, `${seeded.orgId}-f`];
+  const members = await system.member.findMany({
+    where: { organizationId: { in: organizationIDs } },
+    select: { organizationId: true, userId: true, role: true },
+    orderBy: [{ organizationId: "asc" }, { userId: "asc" }],
+  });
+  const invitations = await system.invitation.findMany({
+    where: { organizationId: { in: organizationIDs } },
+    select: { id: true, organizationId: true, email: true, role: true, status: true, expiresAt: true, inviterId: true },
+    orderBy: { id: "asc" },
+  });
   const trustedLinkSites = await system.trustedLinkSite.findMany({
     where: { userId: { in: [seeded.userId, `${seeded.userId}-other`] } },
     select: { userId: true, site: true },
@@ -6715,6 +6848,9 @@ async function databaseState(seeded: ReturnType<typeof ids>) {
     modelCredentials,
     memoryDocuments,
     memoryRevisions,
+    threads,
+    messages,
+    events,
   };
 }
 

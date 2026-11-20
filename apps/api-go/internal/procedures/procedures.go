@@ -30,9 +30,11 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/routines"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/scratchpad"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/skills"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/spacesettings"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/spendinglimit"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/threads"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/tickets"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/trustedlinksites"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/usage"
 )
@@ -515,6 +517,30 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 			ReadOnly: true,
 			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
 				return computer.Commands(ctx, database, deployment, actor, input)
+			},
+		},
+		{
+			Name: "tickets.move",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return tickets.Move(ctx, database, deployment, actor, input)
+			},
+		},
+		{
+			Name: "tickets.comment",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return tickets.Comment(ctx, database, deployment, actor, input)
+			},
+		},
+		{
+			Name: "skills.updateDraft",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return skills.UpdateDraft(ctx, database, deployment, actor, input)
+			},
+		},
+		{
+			Name: "skills.save",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return skills.Save(ctx, database, deployment, actor, input)
 			},
 		},
 	}
