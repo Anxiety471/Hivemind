@@ -185,6 +185,8 @@ func TestTemplateToken(t *testing.T) {
 		{name: "angle token after accented word", value: "café<name>", want: false},
 		{name: "angle token after Chinese word", value: "你好<name>", want: false},
 		{name: "angle token before Chinese word", value: "<name>你", want: false},
+		{name: "angle token after combining mark", value: "e\u0301<name>", want: false},
+		{name: "angle token before combining mark", value: "<name>\u0301", want: false},
 		{name: "email", value: "user@example.com", want: false},
 		{name: "square brackets", value: "use [name] instead", want: false},
 		{name: "unclosed brace token", value: "{{", want: false},

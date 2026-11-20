@@ -186,7 +186,8 @@ func angleDelimited(value string, start, end int) bool {
 }
 
 func isWordRune(character rune) bool {
-	return unicode.IsLetter(character) || unicode.IsDigit(character) || character == '_'
+	return unicode.IsLetter(character) || unicode.IsDigit(character) ||
+		unicode.IsMark(character) || character == '_'
 }
 
 func isWordByte(character byte) bool {
