@@ -230,7 +230,6 @@ export const TableCard = memo(function TableCard({
       renderedHeaders={renderedHeaders}
       renderedRows={renderedRowsBySource}
       rowKeys={rowKeys}
-      expanded={mode === "dialog"}
       sort={sort}
       onToggleSort={toggleSort}
     />
@@ -315,30 +314,29 @@ export const TableCard = memo(function TableCard({
     </div>
   );
 
-  // The card labels its actions; the full view's toolbar keeps compact icons.
+  // Copy and CSV are labelled pills in both views; the card ends with Expand,
+  // the full view with a compact close button.
   const tools = (mode: "card" | "dialog") => {
-    const labelled = mode === "card";
-    const className = labelled ? "rk-table-action" : "rk-table-tool";
     const copyLabel = copied ? copy.copied : copy.copyRows;
     return (
       <div className="rk-table-actions">
-        <button type="button" className={className} onClick={copyRows} aria-label={copyLabel}>
+        <button type="button" className="rk-table-action" onClick={copyRows} aria-label={copyLabel}>
           {copied ? <CheckIcon /> : <CopyIcon />}
-          {labelled ? <span>{copyLabel}</span> : null}
+          <span>{copyLabel}</span>
         </button>
         <button
           type="button"
-          className={className}
+          className="rk-table-action"
           onClick={downloadCsv}
           aria-label={copy.downloadCsv}
         >
           <DownloadIcon />
-          {labelled ? <span>{copy.downloadCsv}</span> : null}
+          <span>{copy.downloadCsv}</span>
         </button>
-        {labelled ? (
+        {mode === "card" ? (
           <button
             type="button"
-            className={className}
+            className="rk-table-action"
             ref={expandButtonRef}
             onClick={() => openChange(true)}
             aria-label={copy.expandTable}
@@ -350,7 +348,7 @@ export const TableCard = memo(function TableCard({
           <DialogClose
             ref={closeButtonRef}
             aria-label={copy.closeTable}
-            render={<button type="button" className={className} />}
+            render={<button type="button" className="rk-table-tool rk-table-close" />}
           >
             <CloseIcon />
           </DialogClose>
@@ -396,9 +394,11 @@ export const TableCard = memo(function TableCard({
         onKeyDown={onDialogKeyDown}
         className="rk-table-dialog rk-table-box rk-chat-markdown"
       >
-        <DialogTitle className="rk-table-dialog-title">{copy.table}</DialogTitle>
         {expanded ? status : null}
         <div className="rk-table-head">
+          <TableIcon />
+          <DialogTitle className="rk-table-title">{copy.table}</DialogTitle>
+          <span className="rk-table-count">{copy.rowCount(sortedRows.length)}</span>
           {zoomControls}
           {tools("dialog")}
         </div>
@@ -414,9 +414,6 @@ export const TableCard = memo(function TableCard({
           {tableView("dialog")}
         </section>
         {/* biome-ignore-end lint/a11y/noNoninteractiveTabindex: end of scrollable region. */}
-        <div className="rk-table-footer">
-          <span className="rk-table-count">{copy.rowCount(sortedRows.length)}</span>
-        </div>
       </DialogContent>
     </Dialog>
   );
@@ -431,7 +428,6 @@ function TableView({
   renderedHeaders,
   renderedRows,
   rowKeys,
-  expanded,
   sort,
   onToggleSort,
 }: {
@@ -443,7 +439,6 @@ function TableView({
   renderedHeaders?: ReactNode[];
   renderedRows: Map<string[], ReactNode[] | undefined>;
   rowKeys: Map<string[], string>;
-  expanded: boolean;
   sort: SortState;
   onToggleSort: (column: number) => void;
 }) {
@@ -487,7 +482,7 @@ function TableView({
                 return (
                   <td
                     key={columnIndex}
-                    style={{ minWidth: expanded ? undefined : minWidths[columnIndex] }}
+                    style={{ minWidth: minWidths[columnIndex] }}
                     className={alignClass(columnIndex)}
                   >
                     <span className="rk-table-cell-text">

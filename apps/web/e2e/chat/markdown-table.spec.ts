@@ -171,7 +171,7 @@ test("rich table cells stay associated through sorting and pagination", async ({
   );
 });
 
-test("table cells wrap in the card and the full view fills the window", async ({
+test("table cells wrap in the card and the full view spans the window", async ({
   page,
 }, testInfo) => {
   await page.goto(`${fixture}?long=1`);
@@ -219,11 +219,12 @@ test("table cells wrap in the card and the full view fills the window", async ({
   expect(dialogMetrics.scrollHeight - dialogMetrics.clientHeight).toBeLessThanOrEqual(1);
   expect(dialogMetrics.scrollWidth - dialogMetrics.clientWidth).toBeLessThanOrEqual(1);
 
+  // Window-wide, but only as tall as its rows: a one-row table gets a short panel.
   const box = await page.getByRole("dialog", { name: "Table" }).boundingBox();
   const viewport = page.viewportSize() ?? { width: 1280, height: 720 };
   expect(box).not.toBeNull();
   expect(box!.width).toBeGreaterThan(viewport.width * 0.9);
-  expect(box!.height).toBeGreaterThan(viewport.height * 0.85);
+  expect(box!.height).toBeLessThan(viewport.height * 0.5);
   await captureScreenshot(page, testInfo, "table-dialog-width");
 });
 
