@@ -21,6 +21,7 @@ import {
   ChevronDown,
   CircleAlert,
   Globe,
+  LoaderCircle,
   Lock,
   MoreHorizontal,
   Pencil,
@@ -328,11 +329,11 @@ export function SidebarRoster({
                       avatarSet={item.chat.avatarSet}
                       color={item.chat.color}
                       identity={item.chat.id}
-                      size={mini ? 40 : compact ? 28 : 38}
+                      size={mini ? 40 : compact ? 28 : 36}
                       status={item.chat.status}
                     />
                   ) : (
-                    <GroupAvatar members={groupMembers} size={mini ? 40 : compact ? 28 : 38} />
+                    <GroupAvatar members={groupMembers} size={mini ? 40 : compact ? 28 : 36} />
                   );
                 const chatTrigger = (
                   <ContextMenuTrigger
@@ -410,7 +411,7 @@ export function SidebarRoster({
                         ? "mx-auto size-12 justify-center rounded-xl"
                         : compact
                           ? "w-full min-h-11 gap-2 rounded-xl px-2.5 py-1.5"
-                          : "w-full gap-3 rounded-xl px-2.5 py-[10px]"
+                          : "w-full gap-3 rounded-lg px-2.5 py-2"
                     } text-start ${
                       selected || rosterDropKey === rowDropKey
                         ? "bg-sidebar-accent"
@@ -480,6 +481,12 @@ export function SidebarRoster({
                               >
                                 <Trans>Woke</Trans>
                               </span>
+                            ) : workStatusLabel && !compact ? (
+                              <LoaderCircle
+                                data-roster-spinner
+                                aria-hidden="true"
+                                className="size-3.5 animate-spin text-warning motion-reduce:animate-none"
+                              />
                             ) : !compact ? (
                               <span
                                 data-roster-time

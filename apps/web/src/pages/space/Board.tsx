@@ -8,8 +8,7 @@ import {
   TICKET_STATUSES,
   TICKET_TITLE_MAX_LENGTH,
 } from "@rakazo/contracts";
-import { abortableDelay, isRetryableError, reconnectDelayMs, retryDelayMs } from "@rakazo/core";
-import { fetchFresh, writeSaved } from "@rakazo/core/query";
+import { writeSaved } from "@rakazo/core/query";
 import {
   Button,
   buttonVariants,
@@ -26,22 +25,21 @@ import {
 } from "@rakazo/ui-web";
 import { skipToken, useQuery, useQueryClient } from "@tanstack/react-query";
 import { MessageCircle } from "lucide-react";
-import { useEffect, useId, useState } from "react";
+import { useId, useState } from "react";
 import { Link } from "react-router-dom";
 import { IconTooltip } from "../../components/IconTooltip";
 import { PageHeader } from "../../components/PageHeader";
 import { WindowChrome } from "../../components/WindowChrome";
 import { formatRelativeTime } from "../../lib/locale/relative-time";
 import { useSave, useSpaceQueries } from "../../lib/query/query";
-import { rpc } from "../../lib/query/rpc";
 import { errorText } from "../../lib/query/user-error";
 import { useTicketPriorityLabels } from "./ticket-priority";
 import { useTicketStatusLabels } from "./ticket-status";
+import { useBoardStream } from "./use-board-stream";
 
 export function BoardPage() {
   const statuses = useTicketStatusLabels();
   const queries = useSpaceQueries();
-  const queryClient = useQueryClient();
   const ticketsOptions = queries.tickets.list.queryOptions({ input: {} });
   const ticketsQuery = useQuery(ticketsOptions);
   const botsQuery = useQuery(queries.bots.list.queryOptions());
@@ -52,57 +50,7 @@ export function BoardPage() {
   const loadFailed = ticketsQuery.error ?? botsQuery.error;
   const error = streamError || (loadFailed ? errorText(loadFailed) : "");
 
-  useEffect(() => {
-    let currentController: AbortController | undefined;
-    let active = true;
-    // Live events refresh the board and any open ticket's comments.
-    const refreshComments = (ticketId?: string) =>
-      void queryClient.invalidateQueries({
-        queryKey: ticketId
-          ? queries.tickets.comments.queryKey({ input: { ticketId } })
-          : queries.tickets.comments.key(),
-      });
-    const stopped = new AbortController();
-    void (async () => {
-      while (active) {
-        const controller = new AbortController();
-        currentController = controller;
-        let failure: unknown;
-        let opened = false;
-        try {
-          const stream = await rpc.boards.subscribe(undefined, {
-            signal: controller.signal,
-          });
-          if (!active) return;
-          await fetchFresh(queryClient, ticketsOptions);
-          if (!active) return;
-          refreshComments();
-          setError("");
-          opened = true;
-          for await (const event of stream) {
-            if (!active) return;
-            refreshComments(event.ticketId);
-            await fetchFresh(queryClient, ticketsOptions);
-          }
-        } catch (cause) {
-          failure = cause;
-          if (active) setError(errorText(cause));
-        } finally {
-          controller.abort();
-        }
-        if (!active || !isRetryableError(failure)) return;
-        await abortableDelay(
-          opened ? reconnectDelayMs(failure) : retryDelayMs(failure, 1_000),
-          stopped.signal,
-        );
-      }
-    })();
-    return () => {
-      active = false;
-      currentController?.abort();
-      stopped.abort();
-    };
-  }, [queries]);
+  useBoardStream(ticketsOptions, setError);
 
   return (
     <div className="flex h-full min-w-0 flex-col overflow-hidden bg-background text-foreground">

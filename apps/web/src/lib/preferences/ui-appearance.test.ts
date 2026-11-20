@@ -16,4 +16,13 @@ describe("ui-appearance", () => {
     expect(root.dataset.theme).toBe("light");
     expect(root.style.colorScheme).toBe("light");
   });
+
+  it("marks a named palette on top of its base scheme", () => {
+    const root = { dataset: {} as DOMStringMap, style: { colorScheme: "" } };
+    applyResolvedAppearance("dark", root as unknown as HTMLElement, "tokyo-night");
+    expect(root.dataset.theme).toBe("dark");
+    expect(root.dataset.palette).toBe("tokyo-night");
+    applyResolvedAppearance("light", root as unknown as HTMLElement);
+    expect(root.dataset.palette).toBeUndefined();
+  });
 });

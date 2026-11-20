@@ -743,7 +743,9 @@ function AppearancePicker({
   const options: { value: AppearancePreference; label: string }[] = [
     { value: "system", label: t`System` },
     { value: "light", label: t`Light` },
+    { value: "warm", label: t`Warm` },
     { value: "dark", label: t`Dark` },
+    { value: "tokyo-night", label: t`Tokyo Night` },
   ];
 
   return (
@@ -755,7 +757,7 @@ function AppearancePicker({
         if (next) onChange(next as AppearancePreference);
       }}
       spacing={1}
-      className="grid min-w-0 grid-cols-3 rounded-lg bg-muted p-1"
+      className="grid min-w-0 grid-cols-3 rounded-lg bg-muted p-1 sm:grid-cols-5"
     >
       {options.map((option) => (
         <ToggleGroupItem

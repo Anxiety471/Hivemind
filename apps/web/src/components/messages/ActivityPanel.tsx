@@ -288,10 +288,7 @@ export function ActivityPanel({
         {duration ? <span className="shrink-0 text-muted-foreground"> · {duration}</span> : null}
       </CollapsibleTrigger>
       <CollapsibleContent hiddenUntilFound>
-        <div
-          data-testid="tool-rows"
-          className="mt-2 divide-y divide-border/40 overflow-hidden rounded-xl border border-border/50 bg-card/55"
-        >
+        <div data-testid="tool-rows" className="ms-5 mt-1 overflow-hidden">
           {hiddenSteps > 0 ? (
             <div
               data-testid="tool-rows-hidden"

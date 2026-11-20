@@ -142,6 +142,13 @@ it("names a new bot inline in the reply, in its color", () => {
   expect(onOpenBot).toHaveBeenCalledWith("child");
 });
 
+it("sets a bot's reply as plain text on the page, without a bubble", () => {
+  renderMessage([{ kind: "text", text: "Ready when you are." }], existingBot, [planner()]);
+  const reply = container.querySelector<HTMLElement>('[data-testid="message-bot-bubble"]');
+  expect(reply?.className).not.toContain("bg-muted");
+  expect(reply?.className).not.toContain("rounded");
+});
+
 it("puts the bot first when the reply does not name it", () => {
   renderMessage([{ kind: "text", text: "Ready when you are." }], existingBot, [planner()]);
   expect(container.querySelector('[data-testid="message-bot-bubble"]')?.textContent).toBe(
