@@ -220,6 +220,67 @@ func TestLintPolicy(t *testing.T) {
 	}
 }
 
+func TestLintArrayAncestorMatching(t *testing.T) {
+	t.Parallel()
+
+	args := map[string]any{
+		"tags": []any{"A", "B", map[string]any{"name": "C"}},
+	}
+	linter := New(DefaultRules()...)
+
+	wantAll := []Finding{
+		{Path: "tags[0]", Value: "A", Rule: "alphabet-index"},
+		{Path: "tags[1]", Value: "B", Rule: "alphabet-index"},
+		{Path: "tags[2].name", Value: "C", Rule: "alphabet-index"},
+	}
+	if got := linter.Lint("demo", args); !reflect.DeepEqual(got, wantAll) {
+		t.Fatalf("Lint() = %#v, want %#v", got, wantAll)
+	}
+
+	exempt := WithPolicy(Policy{ExemptArgs: map[string][]string{"demo": {"tags"}}})
+	if got := linter.Lint("demo", args, exempt); len(got) != 0 {
+		t.Fatalf("Lint() with a list-container exemption = %#v, want none", got)
+	}
+
+	known := WithKnownValues(KnownValues{"tags": {"A", "B", "C"}})
+	if got := linter.Lint("demo", args, known); len(got) != 0 {
+		t.Fatalf("Lint() with list-container known values = %#v, want none", got)
+	}
+
+	knownFirst := WithKnownValues(KnownValues{"tags[0]": {"A"}})
+	wantRest := []Finding{
+		{Path: "tags[1]", Value: "B", Rule: "alphabet-index"},
+		{Path: "tags[2].name", Value: "C", Rule: "alphabet-index"},
+	}
+	if got := linter.Lint("demo", args, knownFirst); !reflect.DeepEqual(got, wantRest) {
+		t.Fatalf("Lint() with a per-element known value = %#v, want %#v", got, wantRest)
+	}
+
+	precedence := WithKnownValues(KnownValues{"tags[0]": {"Z"}, "tags": {"A"}})
+	wantFirst := []Finding{{Path: "tags[0]", Value: "A", Rule: "alphabet-index"}}
+	single := map[string]any{"tags": []any{"A"}}
+	if got := linter.Lint("demo", single, precedence); !reflect.DeepEqual(got, wantFirst) {
+		t.Fatalf("Lint() with an exact path key = %#v, want %#v", got, wantFirst)
+	}
+}
+
+func TestLintRequiredContentCoversListElements(t *testing.T) {
+	t.Parallel()
+
+	args := map[string]any{
+		"tags": []any{"", " ", map[string]any{"name": ""}},
+	}
+	got := New(DefaultRules()...).Lint("demo", args, WithRequiredContent("tags"))
+	want := []Finding{
+		{Path: "tags[0]", Value: "", Rule: "blank-required"},
+		{Path: "tags[1]", Value: " ", Rule: "blank-required"},
+		{Path: "tags[2].name", Value: "", Rule: "blank-required"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Lint() = %#v, want %#v", got, want)
+	}
+}
+
 func TestLintKnownValues(t *testing.T) {
 	t.Parallel()
 
