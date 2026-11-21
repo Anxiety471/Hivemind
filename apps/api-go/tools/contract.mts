@@ -23,6 +23,8 @@ import { createApp } from "../../api/src/app.js";
 import { laneDCases } from "./contract-lane-d.mts";
 import { laneHCases, laneHState } from "./contract-lane-h.mts";
 import { laneICases } from "./contract-lane-i.mts";
+import { laneJCases, laneJState } from "./contract-lane-j.mts";
+import { CONTRACT_ENCRYPTION_KEY } from "./contract-key.mts";
 import { membershipCases, membershipReset, membershipState } from "./contract-membership.mts";
 import { routineResumeCases } from "./contract-routine-resume.mts";
 import { routineCases } from "./contract-routines.mts";
@@ -125,7 +127,7 @@ const handles = await createApp({
   databaseUrl: DATABASE_URL,
   dataDir,
   authSecret: SECRET,
-  encryptionKey: "contract-test-encryption-key-0123456789abcdef",
+  encryptionKey: CONTRACT_ENCRYPTION_KEY,
   screenProxySecret: "contract-test-screen-secret-0123456789abcdef",
   webOrigin: WEB_ORIGIN,
   authUrl: WEB_ORIGIN,
@@ -250,6 +252,9 @@ await writeFile(
       "agentSecrets.list": { mode: "go", readOnly: true },
       "audit.events": { mode: "go", readOnly: true },
       "vault.activity": { mode: "go", readOnly: true },
+      "bots.rotateWebhookSecret": { mode: "go" },
+      "bots.revealWebhookSecret": { mode: "go", readOnly: true },
+      "pages.remove": { mode: "go" },
       "computer.dismissUpdate": { mode: "go" },
       "computer.dismissDiskWarning": { mode: "go" },
       "boards.list": { mode: "go" },
@@ -287,6 +292,9 @@ go = spawn(
       BETTER_AUTH_SECRET: SECRET,
       BETTER_AUTH_URL: WEB_ORIGIN,
       WEB_ORIGIN,
+      // The credential store both sides seal with. The same test key the TypeScript app uses.
+      ENCRYPTION_KEY: CONTRACT_ENCRYPTION_KEY,
+      CONTENT_ENCRYPTION: "on",
       MAX_UPLOAD_SIZE_MB: "10",
       // Email delivery is configured when SMTP_URL is: the same variables TypeScript reads.
       SMTP_URL: EMAIL_ON ? "smtp://127.0.0.1:2525" : "",
@@ -534,6 +542,7 @@ const cases: Case[] = [
   ...laneGCases2(),
   ...laneHCases(system),
   ...laneICases(system),
+  ...laneJCases(system),
 ];
 
 const SITES = ["zeta.example", "alpha.example", "Beta.example", "_under.example", "10.0.0.1"];
@@ -5964,6 +5973,15 @@ async function reset(seeded: ReturnType<typeof ids>) {
   await system.capabilityInstall.deleteMany({ where: { userId } });
   await system.secret.deleteMany({ where: { userId } });
   await system.session.deleteMany({ where: { userId } });
+  // Identity confirmations are bound to the session id, which is the same for every case of a
+  // run: a case that confirms must not leave the gate open for the next one.
+  await system.verification.deleteMany({
+    where: {
+      identifier: {
+        in: [`identity-confirmed-${userId}-session`, `oidc-reauth-${userId}-session`],
+      },
+    },
+  });
   await system.spaceMember.deleteMany({ where: { userId } });
   await system.space.deleteMany({ where: { organizationId: { in: [orgId, `${orgId}-f`] } } });
   await system.organization.deleteMany({ where: { id: `${orgId}-f` } });
@@ -7587,9 +7605,15 @@ const WRITE_PROCEDURES = new Set([
   "boards.list",
   "boards.get",
   "boards.rename",
+  "bots.rotateWebhookSecret",
+  "pages.remove",
 ]);
 
 const CUID = /^c[0-9a-z]{24}$/;
+// The credential store's record ids are 12 random bytes as hex; a webhook secret is 32 random
+// bytes as unpadded base64url. Both sides generate their own, so only the shape is compared.
+const SECRET_ID = /^[0-9a-f]{24}$/;
+const WEBHOOK_SECRET = /^[A-Za-z0-9_-]{43}$/;
 const LINK_CODE = /^(?:[A-HJKMNP-TV-Z2-9]{4}-[A-HJKMNP-TV-Z2-9]{4}|[A-HJKMNP-TV-Z2-9]{8})$/;
 const ISO_TIME = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/;
 const HARNESS_START = Date.now() - 3_600_000;
@@ -7606,6 +7630,8 @@ function normalize<T>(value: T): T {
       const cursor = artifactCursor(node);
       if (cursor) return cursor;
       if (CUID.test(node)) return "<cuid>";
+      if (SECRET_ID.test(node)) return "<secret-id>";
+      if (WEBHOOK_SECRET.test(node)) return "<webhook-secret>";
       if (LINK_CODE.test(node)) return "<code>";
       // Times near now (link-code expiry is minutes ahead) vary per run; instants days away are the case's own data.
       if (
@@ -7729,6 +7755,17 @@ function idPrefixOfOrgMember(id: string, seeded: Seeded) {
 function normalizeSignal(payload: string) {
   try {
     const signal = JSON.parse(payload) as { topic?: string; payload?: string };
+    if (signal.topic === "secret-store-change" && typeof signal.payload === "string") {
+      // Each side seals its own refs and has its own process origin; the shape and the order of
+      // the announcements are what must match.
+      const event = JSON.parse(signal.payload) as { origin?: string; ref?: string };
+      const ref = typeof event.ref === "string" ? event.ref : "";
+      const kind = ref.startsWith("rkz1:") ? "<rkz1>" : ref.startsWith("v2:") ? "<v2>" : ref;
+      return JSON.stringify({
+        topic: signal.topic,
+        payload: JSON.stringify({ origin: "<origin>", ref: kind }),
+      });
+    }
     if (!signal.topic?.startsWith("board:") || typeof signal.payload !== "string") return payload;
     const frame = JSON.parse(signal.payload) as { createdAt?: string };
     if (typeof frame.createdAt !== "string") return payload;
@@ -8307,6 +8344,7 @@ async function databaseState(seeded: ReturnType<typeof ids>, procedure?: string)
     members,
     invitations,
     ...(await laneHState(system, seeded)),
+    ...(await laneJState(system, seeded, procedure)),
     // computer.updates is a read; the API's in-process reconciler can drain the seeded
     // ComputerUpdate rows between the two sides' captures, so those volatile rows are not
     // compared for it (the response body and the other tables still are).

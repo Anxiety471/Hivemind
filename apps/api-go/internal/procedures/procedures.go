@@ -673,6 +673,25 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 			},
 		},
 		{
+			Name: "bots.rotateWebhookSecret",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return bots.RotateWebhookSecret(ctx, database, deployment, actor, input)
+			},
+		},
+		{
+			Name:     "bots.revealWebhookSecret",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return bots.RevealWebhookSecret(ctx, database, deployment, actor, input)
+			},
+		},
+		{
+			Name: "pages.remove",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return pages.Remove(ctx, database, deployment, actor, input)
+			},
+		},
+		{
 			Name: "computer.dismissUpdate",
 			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
 				return computer.DismissUpdate(ctx, database, deployment, actor, input)
@@ -708,4 +727,16 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 		audit = effects.NewRecorder(database, slog.Default())
 	}
 	return append(procedures, membership(database, deployment, audit)...)
+}
+
+// VaultProcedures are the procedures that need the credential store. The gateway reads
+// ENCRYPTION_KEY at startup only when one of them is routed to shadow or go, so a proxy-only
+// table still starts without it (Lane F), and a vault route fails loudly rather than sealing
+// under a key TypeScript would not read.
+func VaultProcedures() []string {
+	return []string{
+		"bots.rotateWebhookSecret",
+		"bots.revealWebhookSecret",
+		"pages.remove",
+	}
 }

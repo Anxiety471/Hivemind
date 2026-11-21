@@ -21,6 +21,9 @@ type Actor struct {
 	UserID  string
 	SpaceID string
 	Email   string
+	// SessionID is the signed-in session, for the step-up gates that read the
+	// verification rows a session confirms its identity with (identity-confirmation.ts:10-23).
+	SessionID string
 	// Deprecated wire field; app accounts have no deployment role.
 	IsDeploymentOwner bool
 }

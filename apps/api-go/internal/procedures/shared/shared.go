@@ -79,6 +79,10 @@ type Deployment struct {
 	// Audit records the audit events a procedure raises itself (recordAuditEvent). nil in tests
 	// that never record one.
 	Audit *effects.Recorder
+	// Vault is the credential store the VAULT procedures read and write. nil when the process
+	// was started without a vault route or without ENCRYPTION_KEY; a procedure that needs it
+	// then fails rather than writing a value the TypeScript API could not read.
+	Vault *SecretVault
 	// Waker wakes a ticket's worker bots through the task queue (retries, backoff, coalescing).
 	// nil in tests that never wake one.
 	Waker TicketWaker

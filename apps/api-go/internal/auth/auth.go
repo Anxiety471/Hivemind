@@ -209,7 +209,7 @@ func (s *Service) renew(ctx context.Context, session *Session) (*http.Cookie, er
 // the named Space header, else the session's pinned organization, else the
 // organization of the latest finished run, else the first membership.
 func (s *Service) Actor(ctx context.Context, session *Session, requestedSpace string) (db.Actor, *orpc.Error) {
-	actor := db.Actor{UserID: session.UserID, SpaceID: "", Email: session.Email}
+	actor := db.Actor{UserID: session.UserID, SpaceID: "", Email: session.Email, SessionID: session.ID}
 	spaceID := ""
 	var failure *orpc.Error
 	if requestedSpace != "" {

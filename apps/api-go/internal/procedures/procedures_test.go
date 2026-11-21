@@ -39,7 +39,8 @@ func TestRegistryHasTheServedProceduresAndNotTrust(t *testing.T) {
 		"spaces.invites.preview", "spaces.invites.accept", "spaces.invites.cancel",
 		"organizations.list", "organizations.rename", "organizations.members.list",
 		"organizations.invitations.preview",
-		"models.rename", "pages.rename", "pages.pin", "artifacts.list", "artifacts.listSpace", "artifacts.listVersions",
+		"models.rename", "pages.rename", "pages.pin", "pages.remove", "artifacts.list", "artifacts.listSpace", "artifacts.listVersions",
+		"bots.rotateWebhookSecret", "bots.revealWebhookSecret",
 		"memory.list", "memory.budget", "memory.update", "memory.remove", "memory.exportMarkdown",
 		"onboarding.promptFocus", "onboarding.dismissFocus", "onboarding.start", "computer.commands",
 		"tickets.list", "tickets.create", "tickets.update", "tickets.move", "tickets.comment",
@@ -80,9 +81,10 @@ func TestRegistryHasTheServedProceduresAndNotTrust(t *testing.T) {
 		}
 	}
 	// pages.get with link:true reads the page's sealed share token from the secret store
-	// (apps/api/src/pages.ts:141-153, secrets.load at :151, called from getPage at :180); setVisibility
-	// and remove write it. They stay on TypeScript.
-	for _, name := range []string{"pages.get", "pages.setVisibility", "pages.remove"} {
+	// (apps/api/src/pages.ts:141-153, secrets.load at :151, called from getPage at :180);
+	// setVisibility writes it. They stay on TypeScript. pages.remove is served: its share-secret
+	// cleanup is the persistence hook plus the explicit store delete, proved by Lane J.
+	for _, name := range []string{"pages.get", "pages.setVisibility"} {
 		if seen[name] {
 			t.Errorf("%s must not be served locally", name)
 		}
