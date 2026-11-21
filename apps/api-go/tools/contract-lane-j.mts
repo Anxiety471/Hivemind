@@ -14,7 +14,7 @@
  */
 import { EncryptedSecretStore } from "../../../packages/adapters/src/secrets/secrets.js";
 import { openVaultValue } from "../../../packages/adapters/src/secrets/vault/vault-values.js";
-import { contentEncryptionOf } from "../../../packages/db/src/index.js";
+import { contentEncryptionOf, encryptText } from "../../../packages/db/src/index.js";
 import type { Case, Seeded } from "./contract.mts";
 import { CONTRACT_ENCRYPTION_KEY } from "./contract-key.mts";
 
@@ -107,6 +107,96 @@ export function laneJCases(system: System): Case[] {
       },
     });
   };
+  // A v2 vault row: sealed with the SecretStore key, bound to its record id.
+  const addVault = async (
+    seeded: Seeded,
+    id: string,
+    plaintext: string,
+    extra: Record<string, unknown> = {},
+  ) => {
+    const { scope: _scope, vaultSpaceId: _space, ...fields } = extra;
+    return system.vaultCredential.create({
+      data: {
+        id: `${seeded.userId}-${id}`,
+        userId: seeded.userId,
+        spaceId: null,
+        name: "item",
+        origin: "https://example.test",
+        auth: { type: "value" },
+        ciphertext: await seal(`${seeded.userId}-${id}`, plaintext),
+        ...fields,
+      },
+    });
+  };
+  // An rkz1 vault row under a vault's own content key, as sealVaultValue writes once a key exists.
+  const addRkz1Vault = async (
+    seeded: Seeded,
+    id: string,
+    plaintext: string,
+    extra: Record<string, unknown> = {},
+  ) => {
+    const { scope: scopeValue, vaultSpaceId, ...fields } = extra as {
+      scope?: string;
+      vaultSpaceId?: string;
+    } & Record<string, unknown>;
+    const scope = scopeValue ?? `user:${seeded.userId}`;
+    const ring = contentEncryptionOf(system)!.ring;
+    // reset() forgets the Space scopes but not a member's; the row is shredded with the user,
+    // so drop the cached key before asking for the current one or the second seed would seal
+    // under a key no row holds.
+    ring.forget(scope);
+    const key = await ring.current(scope);
+    const ciphertext = encryptText(
+      key,
+      { table: "vault_credentials", column: "ciphertext", rowId: `${seeded.userId}-${id}`, owner: seeded.userId },
+      plaintext,
+    );
+    return system.vaultCredential.create({
+      data: {
+        id: `${seeded.userId}-${id}`,
+        userId: seeded.userId,
+        spaceId: vaultSpaceId ?? null,
+        name: "item",
+        origin: "https://example.test",
+        auth: { type: "value" },
+        ciphertext,
+        ...fields,
+      },
+    });
+  };
+
+  const addMaterial = async (
+    seeded: Seeded,
+    id: string,
+    material: Record<string, unknown>,
+  ) => {
+    const ciphertext = await seal(`${seeded.userId}-${id}`, JSON.stringify(material));
+    return system.secret.create({
+      data: {
+        id: `${seeded.userId}-${id}`,
+        userId: seeded.userId,
+        spaceId: seeded.spaces[0],
+        kind: "mcp",
+        ciphertext,
+      },
+    });
+  };
+  const addServer = async (
+    seeded: Seeded,
+    id: string,
+    extra: Record<string, unknown> = {},
+  ) =>
+    system.mcpServer.create({
+      data: {
+        id: `${seeded.userId}-${id}`,
+        spaceId: seeded.spaces[0],
+        userId: seeded.userId,
+        slug: id,
+        name: id,
+        transport: "streamable_http",
+        ...extra,
+      },
+    });
 
   const base = (name: string, procedure: string, input: unknown, extra: Partial<Case> = {}): Case => ({
     name: `j-${name}`,
@@ -263,6 +353,273 @@ export function laneJCases(system: System): Case[] {
     base("page-remove-extra-key", "pages.remove", { pageId: "__s-page__", extra: 1 }, {
       seed: async (seeded) => {
         await addPage(seeded, "page");
+      },
+    }),
+
+    // ---- vault.list ------------------------------------------------------------------------
+    base("vault-list-empty", "vault.list", undefined),
+    base("vault-list-kinds", "vault.list", undefined, {
+      seed: async (seeded) => {
+        await addVault(seeded, "vvalue", "the value", {
+          name: "value-item", title: "Value item", note: "a note", policy: "off",
+        });
+        await addVault(seeded, "vcommand", "command value", {
+          name: "command-item", auth: { type: "command" },
+        });
+      },
+    }),
+    base("vault-list-login", "vault.list", undefined, {
+      seed: async (seeded) => {
+        await addVault(seeded, "vlogin", JSON.stringify({
+          fields: [
+            { label: "Username", value: "  alice@example.test  ", hidden: false },
+            { label: "Password", value: "hunter2", hidden: true },
+          ],
+          otp: "JBSWY3DPEHPK3PXP",
+        }), { name: "login-item", auth: { type: "login" }, alsoOn: ["https://other.example"] });
+      },
+    }),
+    base("vault-list-card", "vault.list", undefined, {
+      seed: async (seeded) => {
+        await addVault(seeded, "vcard", JSON.stringify({
+          number: "4242 4242 4242 4242",
+          expMonth: 8,
+          expYear: 2029,
+          cvc: "123",
+          name: "Ada Lovelace",
+        }), { name: "card-item", auth: { type: "card" } });
+      },
+    }),
+    base("vault-list-contact", "vault.list", undefined, {
+      seed: async (seeded) => {
+        await addVault(seeded, "vcontact", JSON.stringify({
+          name: " Grace Hopper ",
+          city: " Arlington ",
+        }), { name: "contact-item", auth: { type: "contact" } });
+      },
+    }),
+    base("vault-list-tampered", "vault.list", undefined, {
+      seed: async (seeded) => {
+        const row = await addVault(seeded, "vtampered", JSON.stringify({
+          fields: [{ label: "Username", value: "u", hidden: false }, { label: "Password", value: "p", hidden: true }],
+        }), { name: "tampered-item", auth: { type: "login" } });
+        const at = Math.floor(row.ciphertext.length / 2);
+        const body = row.ciphertext;
+        await system.vaultCredential.update({
+          where: { id: row.id },
+          data: { ciphertext: `${body.slice(0, at)}${body[at] === "A" ? "B" : "A"}${body.slice(at + 1)}` },
+        });
+      },
+    }),
+    base("vault-list-bad-destination", "vault.list", undefined, {
+      seed: async (seeded) => {
+        await addVault(seeded, "vbad", "value", {
+          name: "bad-item",
+          origin: "ftp://files.example",
+          auth: { type: "login" },
+        });
+      },
+    }),
+    base("vault-list-space-scope", "vault.list", undefined, {
+      seed: async (seeded) => {
+        await system.spaceSettingOverride.create({
+          data: { spaceId: seeded.spaces[0], userId: seeded.userId, setting: "credentials" },
+        });
+        await addVault(seeded, "vspace", "space value", {
+          name: "space-item", spaceId: seeded.spaces[0],
+        });
+        await addVault(seeded, "vaccount", "account value", { name: "account-item" });
+      },
+    }),
+    base("vault-list-space-requested", "vault.list", { scope: "space" }, {
+      seed: async (seeded) => {
+        await system.spaceSettingOverride.create({
+          data: { spaceId: seeded.spaces[0], userId: seeded.userId, setting: "credentials" },
+        });
+        await addRkz1Vault(seeded, "vspace", JSON.stringify({
+          fields: [{ label: "Username", value: "spaceuser", hidden: false }],
+        }), { name: "space-item", auth: { type: "login" },
+          scope: `vault:${seeded.spaces[0]}`, vaultSpaceId: seeded.spaces[0] });
+        await addVault(seeded, "vaccount", "account value", { name: "account-item" });
+      },
+    }),
+    base("vault-list-other-space", "vault.list", undefined, {
+      seed: async (seeded) => {
+        await addVault(seeded, "velsewhere", "elsewhere", {
+          name: "elsewhere", spaceId: seeded.spaces[2],
+        });
+        await addVault(seeded, "vhere", "here", { name: "here" });
+      },
+    }),
+    base("vault-list-other-user", "vault.list", undefined, {
+      seed: async (seeded) => {
+        await system.user.create({
+          data: {
+            id: `${seeded.userId}-other`,
+            name: "Other",
+            email: `${seeded.userId}-other@example.test`,
+            emailVerified: true,
+          },
+        });
+        await system.vaultCredential.create({
+          data: {
+            id: `${seeded.userId}-vother`,
+            userId: `${seeded.userId}-other`,
+            spaceId: null,
+            name: "other-item",
+            origin: "https://other.example",
+            auth: { type: "value" },
+            ciphertext: await seal("other-vault", "other value"),
+          },
+        });
+        await addVault(seeded, "vmine", "mine", { name: "mine" });
+      },
+    }),
+    base("vault-list-policy", "vault.list", undefined, {
+      seed: async (seeded) => {
+        await addVault(seeded, "vallow", "a", { name: "a-allow", policy: "allow" });
+        await addVault(seeded, "vask", "b", { name: "b-ask", policy: "ask" });
+        await addVault(seeded, "vodd", "c", { name: "c-odd", policy: "weird" });
+      },
+    }),
+    base("vault-list-limits", "vault.list", undefined, {
+      seed: async (seeded) => {
+        await addBot(seeded, "bot");
+        const row = await addVault(seeded, "vlimited", "limited", { name: "limited" });
+        await addVault(seeded, "vopen", "open", { name: "open" });
+        await system.vaultCredentialLimit.create({
+          data: { id: `${seeded.userId}-limit`, credentialId: row.id, userId: seeded.userId, spaceId: seeded.spaces[0] },
+        });
+        await system.vaultCredentialBot.create({
+          data: {
+            id: `${seeded.userId}-chosen`, credentialId: row.id, botId: `${seeded.userId}-bot`,
+            userId: seeded.userId, spaceId: seeded.spaces[0],
+          },
+        });
+      },
+    }),
+    base("vault-list-rkz1-mix", "vault.list", undefined, {
+      seed: async (seeded) => {
+        await addVault(seeded, "vv2", JSON.stringify({
+          fields: [{ label: "Username", value: "v2user", hidden: false }],
+        }), { name: "a-v2", auth: { type: "login" } });
+        await addRkz1Vault(seeded, "vrkz", JSON.stringify({
+          fields: [{ label: "Username", value: "rkzuser", hidden: false }],
+        }), { name: "b-rkz1", auth: { type: "login" } });
+      },
+    }),
+
+    // ---- botSecrets.list -------------------------------------------------------------------
+    base("botsecrets-list-ok", "botSecrets.list", { botId: "__s-bot__" }, {
+      seed: async (seeded) => {
+        await addBot(seeded, "bot");
+        await addVault(seeded, "vitem", JSON.stringify({
+          fields: [{ label: "Username", value: "someone", hidden: false }],
+        }), { name: "item", auth: { type: "login" } });
+      },
+    }),
+    base("botsecrets-list-missing", "botSecrets.list", { botId: "no-such-bot" }),
+    base("botsecrets-list-foreign", "botSecrets.list", { botId: "__s-bot__" }, {
+      seed: async (seeded) => {
+        await addBot(seeded, "bot", 2);
+      },
+    }),
+    base("botsecrets-list-archived", "botSecrets.list", { botId: "__s-bot__" }, {
+      seed: async (seeded) => {
+        await addBot(seeded, "bot", 0, { archivedAt: OLD });
+      },
+    }),
+
+    // ---- mcp.servers.list ------------------------------------------------------------------
+    base("mcp-list-empty", "mcp.servers.list", undefined),
+    base("mcp-list-fields", "mcp.servers.list", undefined, {
+      seed: async (seeded) => {
+        const material = await addMaterial(seeded, "msecret", {
+          secret: "a-token",
+          env: { B_TOKEN: "b", A_TOKEN: "a" },
+          files: { CONFIG: "template" },
+          headers: { "X-Api-Key": "a", "X-Other": "b" },
+          oauthClient: { client_id: "client-123" },
+          oauth: { tokens: { access_token: "x" } },
+        });
+        await addServer(seeded, "server", {
+          endpoint: "https://mcp.example/sse",
+          transport: "sse",
+          args: ["--legacy", 3, "--second"],
+          env: { SECOND: "2", FIRST: "1" },
+          files: { FILE_B: "b", FILE_A: "a" },
+          headers: { "X-One": "1" },
+          secretId: material.id,
+          healthStatus: "ok",
+          healthToolCount: 7,
+        });
+      },
+    }),
+    base("mcp-list-states", "mcp.servers.list", undefined, {
+      seed: async (seeded) => {
+        await addServer(seeded, "none", { slug: "a-none" });
+        const reconnect = await addMaterial(seeded, "reconnect", { oauth: { generation: 1 } });
+        await addServer(seeded, "reconnect", { slug: "b-reconnect", secretId: reconnect.id });
+        const connected = await addMaterial(seeded, "connected", {
+          oauth: { tokens: { access_token: "x" } },
+        });
+        await addServer(seeded, "connected", { slug: "c-connected", secretId: connected.id });
+      },
+    }),
+    base("mcp-list-tampered", "mcp.servers.list", undefined, {
+      seed: async (seeded) => {
+        const material = await addMaterial(seeded, "broken", { secret: "x" });
+        const body = material.ciphertext;
+        const at = Math.floor(body.length / 2);
+        await system.secret.update({
+          where: { id: material.id },
+          data: { ciphertext: `${body.slice(0, at)}${body[at] === "A" ? "B" : "A"}${body.slice(at + 1)}` },
+        });
+        await addServer(seeded, "broken", { slug: "broken", secretId: material.id });
+      },
+    }),
+    base("mcp-list-other-user", "mcp.servers.list", undefined, {
+      seed: async (seeded) => {
+        await system.user.create({
+          data: {
+            id: `${seeded.userId}-other`,
+            name: "Other",
+            email: `${seeded.userId}-other@example.test`,
+            emailVerified: true,
+          },
+        });
+        await addServer(seeded, "other", { slug: "other", userId: `${seeded.userId}-other` });
+        await addServer(seeded, "mine", { slug: "mine" });
+      },
+    }),
+    base("mcp-list-visibility", "mcp.servers.list", undefined, {
+      seed: async (seeded) => {
+        await addServer(seeded, "elsewhere", { slug: "elsewhere", spaceId: seeded.spaces[2] });
+        await addServer(seeded, "allspaces", { slug: "allspaces", allSpaces: true });
+        const shared = await addServer(seeded, "shared", { slug: "shared" });
+        await system.mcpServerSpace.create({
+          data: { serverId: shared.id, spaceId: seeded.spaces[1], userId: seeded.userId },
+        });
+      },
+    }),
+    base("mcp-list-health", "mcp.servers.list", undefined, {
+      seed: async (seeded) => {
+        await addServer(seeded, "needsclient", {
+          slug: "needsclient",
+          healthStatus: "error",
+          healthMessage: "Incompatible auth server: does not support dynamic client registration",
+        });
+        await addServer(seeded, "othererror", {
+          slug: "othererror",
+          healthStatus: "error",
+          healthMessage: "connection refused",
+        });
+        await addServer(seeded, "oddstatus", { slug: "oddstatus", healthStatus: "weird" });
+      },
+    }),
+    base("mcp-list-bad-transport", "mcp.servers.list", undefined, {
+      seed: async (seeded) => {
+        await addServer(seeded, "bad", { slug: "bad", transport: "carrier-pigeon" });
       },
     }),
   ];

@@ -45,6 +45,7 @@ func TestRegistryHasTheServedProceduresAndNotTrust(t *testing.T) {
 		"onboarding.promptFocus", "onboarding.dismissFocus", "onboarding.start", "computer.commands",
 		"tickets.list", "tickets.create", "tickets.update", "tickets.move", "tickets.comment",
 		"bots.templates", "skills.list", "agentSecrets.list", "audit.events", "vault.activity",
+		"vault.list", "botSecrets.list", "mcp.servers.list",
 		"computer.dismissUpdate", "computer.dismissDiskWarning",
 		"boards.list", "boards.get", "boards.rename",
 		"tickets.get", "tickets.comments", "boards.subscribe",

@@ -24,6 +24,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/externalconversations"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/groups"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/mcpassignments"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/mcpservers"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/memory"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/memorycfg"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/messaging"
@@ -41,6 +42,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/trustedlinksites"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/usage"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/vaultactivity"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/vaultitems"
 )
 
 // All returns every locally served procedure.
@@ -317,6 +319,13 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 			ReadOnly: true,
 			Serve: func(ctx context.Context, actor db.Actor, _ orpc.Input) (any, *orpc.Error) {
 				return mcpassignments.All(ctx, database, actor)
+			},
+		},
+		{
+			Name:     "mcp.servers.list",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return mcpservers.List(ctx, database, deployment, actor, input)
 			},
 		},
 		{
@@ -673,6 +682,20 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 			},
 		},
 		{
+			Name:     "vault.list",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return vaultitems.List(ctx, database, deployment, actor, input)
+			},
+		},
+		{
+			Name:     "botSecrets.list",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return vaultitems.ListBotSecrets(ctx, database, deployment, actor, input)
+			},
+		},
+		{
 			Name: "bots.rotateWebhookSecret",
 			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
 				return bots.RotateWebhookSecret(ctx, database, deployment, actor, input)
@@ -738,5 +761,8 @@ func VaultProcedures() []string {
 		"bots.rotateWebhookSecret",
 		"bots.revealWebhookSecret",
 		"pages.remove",
+		"vault.list",
+		"botSecrets.list",
+		"mcp.servers.list",
 	}
 }
