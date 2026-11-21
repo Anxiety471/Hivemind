@@ -413,6 +413,79 @@ func (s *Service) SweepStalledTickets(ctx context.Context) (int, error) {
 	return bumped, nil
 }
 
+// RerunAllOpen immediately enqueues a forced bump for every open todo/doing
+// ticket whose worker bot is non-archived and not currently running, bypassing
+// both the idle age threshold and cooldown window.
+func (s *Service) RerunAllOpen(ctx context.Context) (RerunAllResponse, error) {
+	resp := RerunAllResponse{Driver: s.store.Driver()}
+	if s.db == nil {
+		return resp, nil
+	}
+	type candidate struct {
+		spaceID  string
+		ticketID string
+		botID    string
+	}
+	var candidates []candidate
+
+	err := s.db.System(ctx, "rerun all open ticket tasks", func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
+			SELECT DISTINCT ON (b.id) t."spaceId", t.id, b.id
+			FROM tickets t
+			CROSS JOIN LATERAL (
+				SELECT unnest(
+					CASE
+						WHEN cardinality(t."workerBotIds") > 0 THEN t."workerBotIds"
+						WHEN t."assigneeBotId" IS NOT NULL THEN ARRAY[t."assigneeBotId"]
+						ELSE ARRAY[]::text[]
+					END
+				) AS bot_id
+			) w
+			JOIN bots b ON b.id = w.bot_id AND b."spaceId" = t."spaceId" AND b."archivedAt" IS NULL
+			JOIN threads th ON th."botId" = b.id
+			WHERE t.status IN ('todo', 'doing')
+			  AND NOT EXISTS (
+			      SELECT 1 FROM runs r
+			      WHERE r."botId" = b.id
+			        AND r.status IN ('queued', 'running', 'waiting_input', 'waiting_approval', 'waiting_takeover')
+			  )
+			ORDER BY b.id, CASE WHEN t.status = 'doing' THEN 0 ELSE 1 END, t."updatedAt" DESC
+		`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var c candidate
+			if err := rows.Scan(&c.spaceID, &c.ticketID, &c.botID); err != nil {
+				return err
+			}
+			candidates = append(candidates, c)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return resp, err
+	}
+
+	resp.Found = len(candidates)
+	for _, c := range candidates {
+		queued, err := s.EnqueueBump(ctx, BumpRequest{
+			SpaceID:  c.spaceID,
+			TicketID: c.ticketID,
+			BotID:    c.botID,
+			Force:    true,
+		})
+		if err != nil {
+			return resp, err
+		}
+		if queued.Queued {
+			resp.Queued++
+		}
+	}
+	return resp, nil
+}
+
 // wakeBotForTicket creates the hidden ticket task + run in Postgres and publishes
 // runs:ready so rakazo-worker starts the bot immediately.
 func (s *Service) wakeBotForTicket(ctx context.Context, job Job) (WakeResult, error) {

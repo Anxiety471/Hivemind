@@ -29,6 +29,10 @@ func (s *stubTaskQueue) EnqueueBump(_ context.Context, req taskqueue.BumpRequest
 	return taskqueue.DispatchResponse{Queued: true, Driver: "redis"}, nil
 }
 
+func (s *stubTaskQueue) RerunAllOpen(_ context.Context) (taskqueue.RerunAllResponse, error) {
+	return taskqueue.RerunAllResponse{Found: 3, Queued: 3, Driver: "redis"}, nil
+}
+
 func (s *stubTaskQueue) Health(_ context.Context) taskqueue.HealthResponse {
 	return s.health
 }

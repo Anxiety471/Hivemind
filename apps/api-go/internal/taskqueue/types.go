@@ -88,6 +88,13 @@ type HealthResponse struct {
 	Dead      int64  `json:"dead"`
 }
 
+// RerunAllResponse reports how many open task worker bots were queued to rerun.
+type RerunAllResponse struct {
+	Found  int    `json:"found"`
+	Queued int    `json:"queued"`
+	Driver string `json:"driver"`
+}
+
 // QueueStats summarizes queue sizes.
 type QueueStats struct {
 	Pending int64

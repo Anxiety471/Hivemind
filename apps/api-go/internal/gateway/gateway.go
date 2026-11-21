@@ -110,6 +110,8 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		g.taskQueueDispatch(status, r)
 	case r.URL.Path == TaskQueueBumpPath:
 		g.taskQueueBump(status, r)
+	case r.URL.Path == TaskQueueRerunAllPath:
+		g.taskQueueRerunAll(status, r)
 	case r.URL.Path == TaskQueueHealthPath:
 		g.taskQueueHealth(status, r)
 	case r.URL.Path == "/rpc" || strings.HasPrefix(r.URL.Path, "/rpc/"):
