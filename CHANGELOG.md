@@ -14,7 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
-- The web app opens in the Warm theme when you haven't picked one; an explicit choice in Settings, including System, is kept. Text in reply tables is now the same size as the reply text around it.
+- The web app opens in the Warm theme when you haven't picked one; an explicit choice in Settings, including System, is kept. Warm is now a dark charcoal theme with off-white text and an amber accent, and replies in it are set in a serif at the reply text size. Text in reply tables is now the same size as the reply text around it.
 - Full-window pages (free access, admin plugins, the board, link pages) share one page header, and its title now uses the standard heading size.
 - Tables in replies are redrawn as plain document tables in a quiet card: a **Table** head with a row-count badge, bold column headings, hairline row rules, no row numbers or shaded bands, and labelled **Copy rows**, **Download CSV** and **Expand table** buttons underneath. Long cells wrap instead of being cut off, the card grows with its rows instead of scrolling inside a short box, and paged tables show the range with **‹ 1 / 2 ›**. Sort arrows show on hover or on the sorted column. **Expand table** opens a near-full-window view of every row with zoom out, zoom in, a level that resets to 100%, and **Fit to width**; **+**, **−**, **0** and Ctrl/⌘ + scroll or pinch zoom too.
 - Keyboard focus uses one ring treatment across hand-rolled controls, and selectable rows (plugins, skills, bot templates, vault credentials) show a real focus ring instead of a hover highlight alone.

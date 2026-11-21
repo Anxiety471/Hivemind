@@ -41,6 +41,7 @@
 .rk-table-footer,
 .rk-table-empty {
   user-select: none;
+  font-family: var(--font-sans);
 }
 
 .rk-chat-markdown .rk-table-card {

@@ -9,7 +9,7 @@
   const systemLight =
     typeof matchMedia === "function" && matchMedia("(prefers-color-scheme: light)").matches;
   // Named palettes draw on a light or dark base, matching the web palettes in ui-tokens.
-  const palettes = { warm: ["light", "#faf6ee"], "tokyo-night": ["dark", "#1a1b26"] };
+  const palettes = { warm: ["dark", "#191919"], "tokyo-night": ["dark", "#1a1b26"] };
   const palette = palettes[preference];
   const theme = palette
     ? palette[0]

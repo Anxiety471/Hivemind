@@ -3,6 +3,13 @@
   overflow-wrap: anywhere;
 }
 
+/* Warm reads like a printed page: replies set in a serif at the body size, while code keeps its
+   own mono and the table card's chrome (head, buttons, pager) stays in the UI font. */
+[data-palette="warm"] .rk-chat-markdown {
+  font-family:
+    ui-serif, "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, "Times New Roman", serif;
+}
+
 /* Semibold, not bold: the system font's 700 reads heavy and smudged beside 420 body text. */
 .rk-chat-markdown strong,
 .rk-chat-markdown b {

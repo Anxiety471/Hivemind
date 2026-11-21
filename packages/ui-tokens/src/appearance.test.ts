@@ -304,7 +304,7 @@ describe.each([
 
 describe("web palettes", () => {
   it("resolves a named palette to its base scheme, whatever the system is", () => {
-    expect(resolveWebAppearance("warm", "dark")).toEqual({ scheme: "light", palette: "warm" });
+    expect(resolveWebAppearance("warm", "light")).toEqual({ scheme: "dark", palette: "warm" });
     expect(resolveWebAppearance("tokyo-night", "light")).toEqual({
       scheme: "dark",
       palette: "tokyo-night",
