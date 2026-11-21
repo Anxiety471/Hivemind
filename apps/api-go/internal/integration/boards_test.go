@@ -145,8 +145,12 @@ func TestBlockedTicketNamesWhoItWaitsOn(t *testing.T) {
 		t.Fatalf("comment: %v", failure)
 	}
 	fetched, failure := tickets.Get(ctx, database, lab, actor, jsonInput(`{"id":"`+id+`"}`))
-	if failure != nil || len(fetched.(tickets.Ticket).WaitingOnBotIDs) != 1 || fetched.(tickets.Ticket).WaitingOnBotIDs[0] != botID {
-		t.Fatalf("get waitingOn = %#v, %v", fetched, failure)
+	// tickets.get answers toTicketDto alone; only tickets.list adds waitingOnBotIds (TS boards.ts).
+	if failure != nil {
+		t.Fatalf("get: %v", failure)
+	}
+	if got := fetched.(tickets.Ticket).WaitingOnBotIDs; len(got) != 0 {
+		t.Fatalf("get waitingOn = %#v, want none", got)
 	}
 	listed, failure := tickets.List(ctx, database, lab, actor, jsonInput(`{}`))
 	rows := listed.(tickets.ListOutput).Tickets
