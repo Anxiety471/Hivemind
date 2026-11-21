@@ -710,8 +710,9 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 			},
 		},
 		{
-			Name:     "bots.revealWebhookSecret",
-			ReadOnly: true,
+			Name:        "bots.revealWebhookSecret",
+			ReadOnly:    true,
+			SelfAudited: true,
 			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
 				return bots.RevealWebhookSecret(ctx, database, deployment, actor, input)
 			},

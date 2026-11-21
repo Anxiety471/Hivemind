@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -15,6 +16,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/local"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/routes"
 )
 
@@ -321,6 +325,55 @@ func TestUnimplementedModeFailsClosed(t *testing.T) {
 	response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		t.Errorf("proxied status = %d, want 200", response.StatusCode)
+	}
+}
+
+func TestSelfAuditedProcedureIsProxiedNotShadowed(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"json":{"from":"typescript"}}`))
+	}))
+	t.Cleanup(upstream.Close)
+
+	path := filepath.Join(t.TempDir(), "routes.json")
+	if err := os.WriteFile(path, []byte(`{"default":"proxy","routes":{"bots.revealWebhookSecret":{"mode":"shadow","readOnly":true}}}`), 0o600); err != nil {
+		t.Fatalf("write routes: %v", err)
+	}
+	target, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatalf("parse upstream: %v", err)
+	}
+	store := routes.NewStore(path)
+	if err := store.Load(); err != nil {
+		t.Fatalf("load routes: %v", err)
+	}
+	served := false
+	localServer := local.New(nil, nil, []local.Procedure{{
+		Name:        "bots.revealWebhookSecret",
+		ReadOnly:    true,
+		SelfAudited: true,
+		Serve: func(context.Context, db.Actor, orpc.Input) (any, *orpc.Error) {
+			served = true
+			return map[string]any{"from": "go"}, nil
+		},
+	}}, local.Config{Logger: discardLogger()})
+	server := httptest.NewServer(New(Options{Upstream: target, Routes: store, Logger: discardLogger(), Local: localServer}))
+	t.Cleanup(server.Close)
+
+	response, err := http.Post(server.URL+"/rpc/bots/revealWebhookSecret", "application/json", strings.NewReader(`{"json":{}}`))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer response.Body.Close()
+	body, _ := io.ReadAll(response.Body)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", response.StatusCode)
+	}
+	if !strings.Contains(string(body), "typescript") {
+		t.Fatalf("body = %s, want the TypeScript answer", body)
+	}
+	if served {
+		t.Fatal("the Go handler ran for a shadowed self-audited procedure")
 	}
 }
 

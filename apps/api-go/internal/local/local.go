@@ -29,7 +29,12 @@ import (
 type Procedure struct {
 	Name     string
 	ReadOnly bool
-	Serve    func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error)
+	// SelfAudited marks a procedure that records its own security event inside the handler (the
+	// hand-recorded events such as credential.revealed). It is never shadowed: the shadow's Go
+	// snapshot runs the handler, so the event would be recorded a second time while the
+	// TypeScript answer is served. The audited middleware's own events are not affected.
+	SelfAudited bool
+	Serve       func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error)
 	// Stream, when set, replaces Serve: the procedure answers with an event stream. It is never
 	// shadowed (a comparison would wait for a stream that does not end).
 	Stream *Stream
@@ -166,6 +171,13 @@ func (s *Server) Has(name string) bool {
 func (s *Server) Streams(name string) bool {
 	procedure, ok := s.procs[name]
 	return ok && procedure.Stream != nil
+}
+
+// SelfAudited reports whether the procedure records its own security event, which makes it
+// unsafe to shadow (the snapshot would record the event twice).
+func (s *Server) SelfAudited(name string) bool {
+	procedure, ok := s.procs[name]
+	return ok && procedure.SelfAudited
 }
 
 // Wait blocks until the background realtime signals of served procedures have gone out.
