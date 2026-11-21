@@ -17,6 +17,7 @@ export function AskActions({
   approval,
   instructions,
   disabled,
+  allowOther = false,
   selectedAnswer,
   onAnswer,
   accessibilityActions,
@@ -27,6 +28,7 @@ export function AskActions({
   approval: boolean;
   instructions?: string;
   disabled?: boolean;
+  allowOther?: boolean;
   selectedAnswer?: string;
   onAnswer: (answer: string) => Promise<void>;
   accessibilityActions?: ViewProps["accessibilityActions"];
@@ -36,6 +38,8 @@ export function AskActions({
   const tokens = mobileTokens();
   const [pendingAction, setPendingAction] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
+  const [otherOpen, setOtherOpen] = useState(false);
+  const [otherDraft, setOtherDraft] = useState("");
   const [draft, setDraft] = useState(instructions ?? "");
   const submitting = pendingAction !== null;
   const displayActions =
@@ -130,7 +134,43 @@ export function AskActions({
             />
           );
         })}
+        {allowOther && !approval && instructions === undefined && !disabled ? (
+          <NativeActionButton
+            label={t`Other`}
+            prominence="secondary"
+            fill
+            selected={otherOpen}
+            align="start"
+            disabled={submitting}
+            onPress={() => setOtherOpen((value) => !value)}
+          />
+        ) : null}
       </View>
+      {allowOther && otherOpen && !disabled ? (
+        <View style={{ gap: 8, marginTop: 4 }}>
+          <TextInput
+            accessibilityLabel={t`Other answer`}
+            placeholder={t`Type your answer…`}
+            multiline
+            value={otherDraft}
+            onChangeText={setOtherDraft}
+            style={{
+              color: tokens.foreground,
+              backgroundColor: native.fill,
+              borderRadius: 10,
+              padding: 12,
+            }}
+          />
+          <NativeActionButton
+            label={t`Send`}
+            prominence="primary"
+            fill={false}
+            disabled={submitting || !otherDraft.trim()}
+            busy={submitting && pendingAction !== null}
+            onPress={() => void submit(otherDraft.trim())}
+          />
+        </View>
+      ) : null}
     </View>
   );
 }

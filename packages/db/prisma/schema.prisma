@@ -2624,6 +2624,7 @@ model Ticket {
   completedAt       DateTime?
   // Set by the periodic sweep once a done or closed ticket is a week old; cleared if it reopens.
   archivedAt      DateTime?
+  decision        Json?
   comments        TicketComment[]
 
   @@unique([boardId, number])

@@ -1,7 +1,7 @@
 import { MenuView } from "@expo/ui/community/menu";
 import { useLingui } from "@lingui/react/macro";
 import type { Ticket, TicketStatus } from "@rakazo/contracts";
-import { TICKET_STATUSES } from "@rakazo/contracts";
+import { hasPendingTicketDecision, TICKET_STATUSES } from "@rakazo/contracts";
 import { useState } from "react";
 import { RefreshControl, ScrollView, StyleSheet, Text } from "react-native";
 import {
@@ -18,12 +18,13 @@ export type BoardListProps = {
   sections: BoardSection[];
   /** A failed refresh while older tickets are still shown. */
   error: string;
+  onSelect?: (ticket: Ticket) => void;
   onMove: (ticket: Ticket, status: TicketStatus) => void;
   onRefresh: () => Promise<void>;
 };
 
 /** Settings-style groups, one per column; iOS renders the same groups as a SwiftUI list. */
-export function BoardList({ sections, error, onMove, onRefresh }: BoardListProps) {
+export function BoardList({ sections, error, onSelect, onMove, onRefresh }: BoardListProps) {
   const { t } = useLingui();
   const styles = useThemedStyles(createStyles);
   const stacked = useStackedSettings();
@@ -51,6 +52,7 @@ export function BoardList({ sections, error, onMove, onRefresh }: BoardListProps
           {section.tickets.map((ticket) => (
             <MenuView
               key={ticket.id}
+              shouldOpenOnLongPress={Boolean(onSelect)}
               actions={TICKET_STATUSES.filter((status) => status !== ticket.status).map(
                 (status) => ({ id: status, title: ticketStatusLabel(status) }),
               )}
@@ -58,7 +60,14 @@ export function BoardList({ sections, error, onMove, onRefresh }: BoardListProps
               onPressAction={(event) => onMove(ticket, event.nativeEvent.event as TicketStatus)}
               title={t`Move to`}
             >
-              <SettingsRow accessibilityRole="button" title={ticket.title} detail={ticket.ref} />
+              <SettingsRow
+                accessibilityRole="button"
+                title={ticket.title}
+                detail={ticket.ref}
+                value={hasPendingTicketDecision(ticket) ? t`Needs you` : undefined}
+                chevron={onSelect ? "right" : undefined}
+                onPress={onSelect ? () => onSelect(ticket) : undefined}
+              />
             </MenuView>
           ))}
         </SettingsGroup>

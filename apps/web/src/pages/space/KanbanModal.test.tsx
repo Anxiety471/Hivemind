@@ -17,6 +17,7 @@ const api = vi.hoisted(() => ({
     create: vi.fn(),
     comment: vi.fn(),
     comments: vi.fn(),
+    decide: vi.fn(),
   },
 }));
 
@@ -225,5 +226,169 @@ it("defaults new tasks to Owner=Me with the current bot as worker", async () => 
     ownerBotId: null,
     workerBotIds: ["bot-1"],
     priority: "normal",
+  });
+});
+
+it("renders 3-option + recommended + Other decision controls and submits both modes", async () => {
+  const decision = {
+    question: "Should we mirror repair bundles in R2?",
+    options: [
+      { id: "skip", label: "Skip repair tarballs", recommended: true },
+      { id: "bundle", label: "Store .bundle copies" },
+      { id: "off", label: "Disable repair check" },
+    ],
+  };
+  const blockedTicket = makeTicket({
+    id: "t-dec",
+    ref: "RAK-67",
+    status: "blocked",
+    description: "Blocked on @user",
+    decision,
+  });
+  api.tickets.list.mockResolvedValue({ tickets: [blockedTicket] });
+  api.tickets.decide.mockResolvedValue({
+    ticket: {
+      ...blockedTicket,
+      status: "todo",
+      decision: {
+        ...decision,
+        answer: "Skip repair tarballs",
+        answeredAt: new Date().toISOString(),
+      },
+    },
+    comment: {
+      id: "c-1",
+      ticketId: "t-dec",
+      body: "> Should we mirror repair bundles in R2?\n\nSkip repair tarballs",
+      authorUserId: "u-1",
+      authorBotId: null,
+      authorName: "User",
+      createdAt: new Date().toISOString(),
+    },
+  });
+
+  await act(async () => {
+    root.render(
+      <QueryClientProvider client={client}>
+        <KanbanModal
+          open
+          target={blockedTicket}
+          botId="bot-1"
+          botName="Scout"
+          bots={bots}
+          onClose={vi.fn()}
+        />
+      </QueryClientProvider>,
+    );
+  });
+  await act(async () => {
+    await flush();
+  });
+
+  const decisionCard = host.querySelector('[data-testid="ticket-decision-card"]')!;
+  expect(decisionCard).not.toBeNull();
+  const commentPanel = host.querySelector('[data-testid="kanban-comment-panel"]')!;
+  expect(commentPanel).not.toBeNull();
+  expect(commentPanel.querySelector('textarea[aria-label="Comment"]')).not.toBeNull();
+  expect(host.querySelector('[data-testid="ticket-legacy-needs-you"]')).toBeNull();
+  expect(decisionCard.textContent).toContain("Recommended");
+  expect(decisionCard.textContent).toContain("Other");
+
+  const firstOption = Array.from(decisionCard.querySelectorAll("button")).find((button) =>
+    button.textContent?.includes("Skip repair tarballs"),
+  )!;
+  await act(async () => firstOption.click());
+  await act(async () => {
+    await flush();
+  });
+  expect(api.tickets.decide).toHaveBeenCalledWith({ ticketId: "t-dec", optionId: "skip" });
+
+  const otherButton = Array.from(decisionCard.querySelectorAll("button")).find((button) =>
+    button.textContent?.includes("Other"),
+  )!;
+  await act(async () => otherButton.click());
+  const customInput = decisionCard.querySelector<HTMLTextAreaElement>(
+    'textarea[aria-label="Custom decision"]',
+  )!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(
+      customInput,
+      "Pause backups tonight",
+    );
+    customInput.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => {
+    customInput
+      .closest("form")!
+      .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await flush();
+  });
+  expect(api.tickets.decide).toHaveBeenCalledWith({
+    ticketId: "t-dec",
+    customAnswer: "Pause backups tonight",
+  });
+});
+
+it("derives 3 choices (+ Recommended + Other) for legacy blocked tickets with side comment panel", async () => {
+  const legacyBlocked = makeTicket({
+    id: "t-legacy",
+    ref: "RAK-114",
+    title: "Decide R2 overage after preserving archive",
+    status: "blocked",
+    description:
+      "Decision on R2 overage: choose keep (accept overage) or delete before next snapshot.",
+  });
+  api.tickets.list.mockResolvedValue({ tickets: [legacyBlocked] });
+  api.tickets.decide.mockResolvedValue({
+    ticket: { ...legacyBlocked, status: "todo" },
+    comment: {
+      id: "c-legacy",
+      ticketId: "t-legacy",
+      body: "Keep preserved archive (accept overage)",
+      authorUserId: "u-1",
+      authorBotId: null,
+      authorName: "User",
+      createdAt: new Date().toISOString(),
+    },
+  });
+
+  await act(async () => {
+    root.render(
+      <QueryClientProvider client={client}>
+        <KanbanModal
+          open
+          target={legacyBlocked}
+          botId="bot-1"
+          botName="Scout"
+          bots={bots}
+          onClose={vi.fn()}
+        />
+      </QueryClientProvider>,
+    );
+  });
+  await act(async () => {
+    await flush();
+  });
+
+  const decisionCard = host.querySelector('[data-testid="ticket-decision-card"]')!;
+  expect(decisionCard).not.toBeNull();
+  const commentPanel = host.querySelector('[data-testid="kanban-comment-panel"]')!;
+  expect(commentPanel).not.toBeNull();
+  expect(commentPanel.querySelector('textarea[aria-label="Comment"]')).not.toBeNull();
+  expect(host.textContent).not.toContain("Reply to unblock");
+  expect(decisionCard.textContent).toContain("Keep preserved archive (accept overage)");
+  expect(decisionCard.textContent).toContain("Recommended");
+  expect(decisionCard.textContent).toContain("Other");
+
+  const firstOption = Array.from(decisionCard.querySelectorAll("button")).find((button) =>
+    button.textContent?.includes("Keep preserved archive (accept overage)"),
+  )!;
+  await act(async () => firstOption.click());
+  await act(async () => {
+    await flush();
+  });
+  expect(api.tickets.decide).toHaveBeenCalledWith({
+    ticketId: "t-legacy",
+    customAnswer: "Keep preserved archive (accept overage)",
   });
 });

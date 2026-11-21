@@ -1,4 +1,4 @@
-import { Button, Menu, Section, Text, VStack } from "@expo/ui/swift-ui";
+import { Button, ContextMenu, Section, Text, VStack } from "@expo/ui/swift-ui";
 import {
   contentShape,
   font,
@@ -10,15 +10,15 @@ import {
   shapes,
 } from "@expo/ui/swift-ui/modifiers";
 import { useLingui } from "@lingui/react/macro";
-import { TICKET_STATUSES } from "@rakazo/contracts";
+import { hasPendingTicketDecision, TICKET_STATUSES } from "@rakazo/contracts";
 import { NativeInsetList, useInsetListEdges } from "../../components/native/native-inset-list";
 import { useFloatingHeaderInset } from "../layout/floating-header";
 import { native, useMobileTokens, useResolvedAppearance } from "../native/native";
 import { ticketStatusLabel } from "./board";
 import type { BoardListProps } from "./board-list";
 
-/** A SwiftUI inset list: a section per column, and a pull-down menu on each ticket to move it. */
-export function BoardList({ sections, error, onMove, onRefresh }: BoardListProps) {
+/** A SwiftUI inset list: a section per column, tap to view/decide and hold to move. */
+export function BoardList({ sections, error, onSelect, onMove, onRefresh }: BoardListProps) {
   const { t } = useLingui();
   const headerInset = useFloatingHeaderInset();
   const edges = useInsetListEdges();
@@ -50,47 +50,51 @@ export function BoardList({ sections, error, onMove, onRefresh }: BoardListProps
           footer={section.status === lastStatus ? edges.footer : undefined}
         >
           {section.tickets.map((ticket) => (
-            <Menu
-              key={ticket.id}
-              label={
-                <VStack
-                  alignment="leading"
-                  spacing={2}
-                  modifiers={[
-                    frame({ maxWidth: Number.POSITIVE_INFINITY, alignment: "leading" }),
-                    contentShape(shapes.rectangle()),
-                  ]}
-                >
-                  <Text
+            <ContextMenu key={ticket.id} modifiers={[contentShape(shapes.rectangle())]}>
+              <ContextMenu.Trigger>
+                <Button onPress={() => onSelect?.(ticket)}>
+                  <VStack
+                    alignment="leading"
+                    spacing={2}
                     modifiers={[
-                      font({ textStyle: "footnote" }),
-                      foregroundStyle({ type: "hierarchical", style: "secondary" }),
+                      frame({ maxWidth: Number.POSITIVE_INFINITY, alignment: "leading" }),
+                      contentShape(shapes.rectangle()),
                     ]}
                   >
-                    {ticket.ref}
-                  </Text>
-                  <Text
-                    modifiers={[
-                      lineLimit(2),
-                      multilineTextAlignment("leading"),
-                      foregroundStyle(tokens.foreground),
-                    ]}
-                  >
-                    {ticket.title}
-                  </Text>
-                </VStack>
-              }
-            >
-              <Section title={t`Move to`}>
-                {TICKET_STATUSES.filter((status) => status !== ticket.status).map((status) => (
-                  <Button
-                    key={status}
-                    label={ticketStatusLabel(status)}
-                    onPress={() => onMove(ticket, status)}
-                  />
-                ))}
-              </Section>
-            </Menu>
+                    <Text
+                      modifiers={[
+                        font({ textStyle: "footnote" }),
+                        foregroundStyle({ type: "hierarchical", style: "secondary" }),
+                      ]}
+                    >
+                      {hasPendingTicketDecision(ticket)
+                        ? `${ticket.ref} — ${t`Needs decision`}`
+                        : ticket.ref}
+                    </Text>
+                    <Text
+                      modifiers={[
+                        lineLimit(2),
+                        multilineTextAlignment("leading"),
+                        foregroundStyle(tokens.foreground),
+                      ]}
+                    >
+                      {ticket.title}
+                    </Text>
+                  </VStack>
+                </Button>
+              </ContextMenu.Trigger>
+              <ContextMenu.Items>
+                <Section title={t`Move to`}>
+                  {TICKET_STATUSES.filter((status) => status !== ticket.status).map((status) => (
+                    <Button
+                      key={status}
+                      label={ticketStatusLabel(status)}
+                      onPress={() => onMove(ticket, status)}
+                    />
+                  ))}
+                </Section>
+              </ContextMenu.Items>
+            </ContextMenu>
           ))}
         </Section>
       ))}

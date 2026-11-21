@@ -590,6 +590,12 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 			},
 		},
 		{
+			Name: "tickets.decide",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return tickets.Decide(ctx, database, deployment, actor, input)
+			},
+		},
+		{
 			Name:     "tickets.get",
 			ReadOnly: true,
 			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {

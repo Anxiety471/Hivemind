@@ -93,7 +93,7 @@ export const conversationTools: ConnectorTool[] = [
   {
     name: "ask_user",
     description:
-      "Ask the user one short multiple-choice question with tappable options, then wait for their selection. Use this instead of asking them to type when two to four concise choices are enough. Put the content the user is deciding about, such as a draft email, in `detail`.",
+      "Ask a short choice question and wait. Give 3 options with recommended set to one (UI adds Other); put draft context in `detail`.",
     inputSchema: {
       type: "object",
       properties: {
@@ -105,6 +105,11 @@ export const conversationTools: ConnectorTool[] = [
           minItems: 2,
           maxItems: 4,
           uniqueItems: true,
+        },
+        recommended: {
+          type: "string",
+          maxLength: 80,
+          description: "Recommended option from options.",
         },
       },
       required: ["question", "options"],

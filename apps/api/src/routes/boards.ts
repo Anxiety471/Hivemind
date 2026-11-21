@@ -1,5 +1,11 @@
 import { ORPCError } from "@orpc/server";
-import { commentTicket, createTicket, ticketWaitingOnBotIds, updateTicket } from "@rakazo/adapters";
+import {
+  commentTicket,
+  createTicket,
+  decideTicket,
+  ticketWaitingOnBotIds,
+  updateTicket,
+} from "@rakazo/adapters";
 import { parseTicketRef } from "@rakazo/contracts";
 import { escapeSearchWildcards } from "@rakazo/core";
 import type { Board as BoardRow, Prisma, PrismaClient } from "@rakazo/db";
@@ -238,6 +244,17 @@ export function boardsRoutes(ctx: RouterContext) {
         });
         if ("error" in result) throw new ORPCError("BAD_REQUEST", { message: result.error });
         return result.comment;
+      }),
+      decide: boardEnabled.tickets.decide.handler(async ({ context, input }) => {
+        const result = await decideTicket(ticketDeps, {
+          ticketId: input.ticketId,
+          optionId: input.optionId,
+          customAnswer: input.customAnswer,
+          spaceId: context.actor.spaceId,
+          userId: context.actor.userId,
+        });
+        if ("error" in result) throw new ORPCError("BAD_REQUEST", { message: result.error });
+        return result;
       }),
       comments: boardEnabled.tickets.comments.handler(async ({ context, input }) => {
         const board = await ensureBoard(deps.prisma, context.actor.spaceId);

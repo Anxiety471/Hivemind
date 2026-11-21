@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"unicode"
+
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/tickets"
 )
 
 const (
@@ -150,6 +152,7 @@ func SanitizeActions(actions []Action) []Action {
 			cleaned := sanitizeIDList(*action.WorkerBotIDs, maxWorkerBots)
 			workerBotIDs = &cleaned
 		}
+		decision := sanitizeDecision(action.Decision)
 
 		if op == "create" {
 			if title == "" {
@@ -170,6 +173,7 @@ func SanitizeActions(actions []Action) []Action {
 				OwnerUserID:  ownerUserID,
 				OwnerBotID:   ownerBotID,
 				WorkerBotIDs: workerBotIDs,
+				Decision:     decision,
 			})
 			continue
 		}
@@ -179,7 +183,7 @@ func SanitizeActions(actions []Action) []Action {
 			continue
 		}
 		if title == "" && description == nil && status == "" && priority == "" &&
-			ownerUserID == nil && ownerBotID == nil && workerBotIDs == nil {
+			ownerUserID == nil && ownerBotID == nil && workerBotIDs == nil && decision == nil {
 			continue
 		}
 		out = append(out, Action{
@@ -193,9 +197,33 @@ func SanitizeActions(actions []Action) []Action {
 			OwnerUserID:  ownerUserID,
 			OwnerBotID:   ownerBotID,
 			WorkerBotIDs: workerBotIDs,
+			Decision:     decision,
 		})
 	}
 	return out
+}
+
+func sanitizeDecision(raw *tickets.TicketDecisionInput) *tickets.TicketDecisionInput {
+	if raw == nil {
+		return nil
+	}
+	normalized, ok := tickets.NormalizeTicketDecision(*raw)
+	if !ok {
+		return nil
+	}
+	opts := make([]string, len(normalized.Options))
+	var rec string
+	for i, opt := range normalized.Options {
+		opts[i] = opt.Label
+		if opt.Recommended {
+			rec = opt.Label
+		}
+	}
+	return &tickets.TicketDecisionInput{
+		Question:    normalized.Question,
+		Options:     opts,
+		Recommended: rec,
+	}
 }
 
 func sanitizeOptionalID(raw *string) *string {

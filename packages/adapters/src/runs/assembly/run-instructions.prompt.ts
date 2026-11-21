@@ -281,7 +281,7 @@ function ticketBoardClause(
     create ? "ticket_create" : undefined,
     update ? "ticket_update" : undefined,
   ].filter((name): name is string => Boolean(name));
-  return `Kanban board is enabled as the source of truth for tracked work: for meaningful multi-step tasks or open follow-ups (never casual Q&A), track them with ${tools.join(" / ")} (avoiding duplicates of open tickets already assigned to you) and keep statuses current (doing while working, blocked/review when waiting, done when verified).`;
+  return `Kanban board is enabled as the source of truth for tracked work: for meaningful multi-step tasks or open follow-ups (never casual Q&A), track them with ${tools.join(" / ")} (avoiding duplicates of open tickets already assigned to you) and keep statuses current (doing while working, blocked/review with a 3-option + 1-recommended decision when waiting on the user, done when verified).`;
 }
 
 /**

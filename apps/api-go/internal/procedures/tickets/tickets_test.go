@@ -191,3 +191,47 @@ func TestWaitingOnBotIDs(t *testing.T) {
 		t.Fatalf("a ticket that is not blocked waits on nobody, got %+v", got)
 	}
 }
+
+func TestParseDecideAndNormalizeTicketDecision(t *testing.T) {
+	dec, ok := NormalizeTicketDecision(TicketDecisionInput{
+		Question:    "  Which region should we deploy to?  ",
+		Options:     []string{"  Singapore  ", "Virginia", "Frankfurt"},
+		Recommended: "singapore",
+	})
+	if !ok || dec.Question != "Which region should we deploy to?" || len(dec.Options) != 3 {
+		t.Fatalf("normalized decision = %+v ok=%v", dec, ok)
+	}
+	if dec.Options[0].ID != "choice-1" || dec.Options[0].Label != "Singapore" || !dec.Options[0].Recommended || dec.Options[1].Recommended || dec.Options[2].Recommended {
+		t.Fatalf("unexpected normalized options: %+v", dec.Options)
+	}
+
+	if _, ok := NormalizeTicketDecision(TicketDecisionInput{
+		Question:    "Mismatch recommended",
+		Options:     []string{"One", "Two", "Three"},
+		Recommended: "Four",
+	}); ok {
+		t.Fatal("expected decision without matching recommended option to fail")
+	}
+
+	if parsed, failure := parseDecide(input(`{"ticketId":"t1","optionId":"choice-1"}`)); failure != nil || parsed.TicketID != "t1" || parsed.OptionID == nil || *parsed.OptionID != "choice-1" {
+		t.Fatalf("parseDecide(optionId) = %+v, failure = %v", parsed, failure)
+	}
+	if parsed, failure := parseDecide(input(`{"ticketId":"t1","customAnswer":"  Use Tokyo  "}`)); failure != nil || parsed.CustomAnswer == nil || *parsed.CustomAnswer != "Use Tokyo" {
+		t.Fatalf("parseDecide(customAnswer) = %+v, failure = %v", parsed, failure)
+	}
+	for _, bad := range []string{
+		`{"ticketId":"t1"}`,
+		`{"ticketId":"t1","optionId":"choice-1","customAnswer":"Use Tokyo"}`,
+		`{"ticketId":"","optionId":"choice-1"}`,
+	} {
+		if _, failure := parseDecide(input(bad)); failure == nil {
+			t.Errorf("parseDecide(%s) expected error", bad)
+		}
+	}
+	if _, failure := parseUpdate(input(`{"id":"t1","decision":{"question":"Q?","options":["One","Two"],"recommended":"One"}}`)); failure == nil {
+		t.Fatal("expected parseUpdate to reject a 2-option decision")
+	}
+	if parsed, failure := parseCreate(input(`{"title":"Ship","decision":{"question":"Deploy now?","options":["Canary","Full","Hold"],"recommended":"Canary"}}`)); failure != nil || !parsed.HasDecision || parsed.Decision == nil {
+		t.Fatalf("expected parseCreate to accept valid decision, got %+v failure=%v", parsed, failure)
+	}
+}

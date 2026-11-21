@@ -204,3 +204,40 @@ func TestBuildExtractionPromptEscapesData(t *testing.T) {
 		t.Fatalf("prompt data must be escaped: %s", prompt)
 	}
 }
+
+func TestParseAndSanitizeDecision(t *testing.T) {
+	raw := `{"actions":[
+		{
+			"op":"update",
+			"ticketId":"t1",
+			"status":"blocked",
+			"description":"Blocked on @user",
+			"decision":{
+				"question":"  Pick rollout plan  ",
+				"options":["  Canary 10% ","Full rollout","Pause deploy"],
+				"recommended":"canary 10%"
+			}
+		},
+		{
+			"op":"create",
+			"title":"Follow up",
+			"decision":{"question":"Invalid","options":["Only one"],"recommended":"Only one"}
+		}
+	]}`
+	actions, err := ParseModelOutput(raw)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(actions) != 2 {
+		t.Fatalf("len = %d, want 2", len(actions))
+	}
+	if actions[0].Decision == nil || actions[0].Decision.Question != "Pick rollout plan" || len(actions[0].Decision.Options) != 3 {
+		t.Fatalf("expected valid decision preserved, got %+v", actions[0].Decision)
+	}
+	if actions[0].Decision.Recommended != "Canary 10%" {
+		t.Fatalf("expected canonical recommended label 'Canary 10%%', got %q", actions[0].Decision.Recommended)
+	}
+	if actions[1].Decision != nil {
+		t.Fatalf("expected malformed decision to be stripped, got %+v", actions[1].Decision)
+	}
+}

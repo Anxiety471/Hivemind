@@ -1,3 +1,5 @@
+import type { TicketDecisionInput } from "@rakazo/contracts";
+import { TicketDecisionInputSchema } from "@rakazo/contracts";
 import {
   desktopGuardApplies,
   desktopProtectionGuardMessage,
@@ -20,6 +22,7 @@ import {
   listBoardTickets,
   updateTicket,
   validateBlockedTicketMention,
+  validateUserDecisionRequirement,
 } from "../../tasks/ticket-tools.js";
 import {
   cancelScheduleFromTool,
@@ -70,6 +73,21 @@ export async function scheduleCreateRefusal(
       ...scheduleCreateFields(args),
     }));
   return error ? { error } : undefined;
+}
+
+function parseDecisionArg(raw: unknown): {
+  value?: TicketDecisionInput | null;
+  error?: string;
+} {
+  if (raw === undefined) return {};
+  if (raw === null) return { value: null };
+  const parsed = TicketDecisionInputSchema.safeParse(raw);
+  if (!parsed.success) {
+    return {
+      error: parsed.error.issues.map((issue) => issue.message).join("; "),
+    };
+  }
+  return { value: parsed.data };
 }
 
 /** The task catalog, scratchpad, ticket board, schedules and skills. */
@@ -185,6 +203,8 @@ export const taskTools: ToolHandlers = {
     const workerBotIds = Array.isArray(args.workerBotIds)
       ? args.workerBotIds.filter((item): item is string => typeof item === "string")
       : undefined;
+    const parsedDecision = parseDecisionArg(args.decision);
+    if (parsedDecision.error) return call.finish({ error: `decision: ${parsedDecision.error}` });
     return call.finish(
       await createTicket(deps, {
         spaceId: run.spaceId,
@@ -196,6 +216,7 @@ export const taskTools: ToolHandlers = {
         ownerBotId: args.ownerBotId !== undefined ? String(args.ownerBotId) : undefined,
         ownerUserId,
         workerBotIds,
+        ...(parsedDecision.value !== undefined ? { decision: parsedDecision.value } : {}),
       }),
     );
   },
@@ -211,6 +232,8 @@ export const taskTools: ToolHandlers = {
     const workerBotIds = Array.isArray(args.workerBotIds)
       ? args.workerBotIds.filter((item): item is string => typeof item === "string")
       : undefined;
+    const parsedDecision = parseDecisionArg(args.decision);
+    if (parsedDecision.error) return call.finish({ error: `decision: ${parsedDecision.error}` });
     return call.finish(
       await updateTicket(deps, {
         spaceId: run.spaceId,
@@ -224,6 +247,7 @@ export const taskTools: ToolHandlers = {
         ownerBotId: args.ownerBotId !== undefined ? String(args.ownerBotId) : undefined,
         ownerUserId,
         workerBotIds,
+        ...(parsedDecision.value !== undefined ? { decision: parsedDecision.value } : {}),
       }),
     );
   },
@@ -258,6 +282,10 @@ export const taskTools: ToolHandlers = {
       const workerBotIds = Array.isArray(item.workerBotIds)
         ? item.workerBotIds.filter((id): id is string => typeof id === "string")
         : undefined;
+      const parsedDecision = parseDecisionArg(item.decision);
+      if (parsedDecision.error) {
+        return call.finish({ error: `decision: ${parsedDecision.error}` });
+      }
       actions.push({
         op,
         ...(typeof item.ticketId === "string" ? { ticketId: item.ticketId } : {}),
@@ -269,6 +297,7 @@ export const taskTools: ToolHandlers = {
         ...(typeof item.ownerBotId === "string" ? { ownerBotId: item.ownerBotId } : {}),
         ...(ownerUserId !== undefined ? { ownerUserId } : {}),
         ...(workerBotIds !== undefined ? { workerBotIds } : {}),
+        ...(parsedDecision.value !== undefined ? { decision: parsedDecision.value } : {}),
       });
     }
     for (const action of actions) {
@@ -278,9 +307,25 @@ export const taskTools: ToolHandlers = {
           userId: run.userId,
           botId: bot.id,
           ticketId: action.ticketId,
+          ref: action.ref,
           description: action.description,
+          decision: action.decision,
         });
         if (mentionError) return call.finish({ error: mentionError });
+      }
+      if (action.status === "blocked" || action.status === "review") {
+        const decisionError = await validateUserDecisionRequirement(deps, {
+          spaceId: run.spaceId,
+          userId: run.userId,
+          botId: bot.id,
+          ticketId: action.ticketId,
+          ref: action.ref,
+          status: action.status,
+          title: action.title,
+          description: action.description,
+          decision: action.decision,
+        });
+        if (decisionError) return call.finish({ error: decisionError });
       }
     }
     return call.finish(

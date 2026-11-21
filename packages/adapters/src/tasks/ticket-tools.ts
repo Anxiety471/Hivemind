@@ -1,18 +1,24 @@
-import type { TicketStatus } from "@rakazo/contracts";
+import type { TicketDecision, TicketDecisionInput, TicketStatus } from "@rakazo/contracts";
 import {
   CommentTicketInput,
   CreateTicketInput,
+  DecideTicketInput,
+  hasPendingTicketDecision,
   isTicketCompletedStatus,
+  normalizeTicketDecision,
+  TicketDecisionSchema,
   TicketStatusSchema,
   UpdateTicketInput,
 } from "@rakazo/contracts";
 import { sliceWellFormed } from "@rakazo/core";
-import type { Prisma, PrismaClient } from "@rakazo/db";
+import type { PrismaClient } from "@rakazo/db";
 import {
   allocateTicketNumber,
   ensureBoard,
   findTicket,
   listTicketComments,
+  Prisma,
+  readTicketDecision,
   toTicketCommentDto,
   toTicketDto,
 } from "@rakazo/db";
@@ -56,6 +62,9 @@ const COMMENT_NOTE_CHARS = 400;
 
 export const BLOCKED_MENTION_ERROR =
   "Moving a task to blocked requires an @mention of the user or bot it is blocked on (for example @user or @BotName) in the description or a ticket comment.";
+
+export const USER_DECISION_REQUIRED_ERROR =
+  "When a task waits on the user (blocked on @user or review needing user input), include a structured 'decision' with a short 'question', exactly 3 distinct 'options', and 'recommended' matching one of the 3 options (the UI adds an Other free-text option automatically).";
 
 function commentExcerpt(body: string): string {
   return body.length > COMMENT_NOTE_CHARS ? `${sliceWellFormed(body, COMMENT_NOTE_CHARS)}…` : body;
@@ -192,39 +201,52 @@ async function loadSpaceMentionDirectory(
   return { bots: validBots, userNames };
 }
 
-export async function validateBlockedTicketMention(
+async function loadTicketValidationContext(
   deps: TicketToolDeps,
   input: {
     spaceId: string;
-    userId: string;
-    botId?: string;
     ticketId?: string;
+    ref?: string;
     description?: string | null;
   },
-): Promise<string | null> {
-  const { bots, userNames } = await loadSpaceMentionDirectory(deps, input.spaceId, input.userId);
+) {
   const texts: string[] = [];
   if (typeof input.description === "string" && input.description.trim()) {
     texts.push(input.description);
   }
-  if (input.ticketId) {
+  let hasStoredPendingDecision = false;
+  let resolvedTicketId = input.ticketId;
+  if (!resolvedTicketId && input.ref) {
+    const board = await ensureBoard(deps.prisma, input.spaceId);
+    const byRef = await findTicket(deps.prisma, input.spaceId, board, { ref: input.ref });
+    if (byRef) resolvedTicketId = byRef.id;
+  }
+  if (resolvedTicketId) {
     const [existingTicket, comments] = await Promise.all([
-      input.description === undefined
-        ? (deps.prisma.ticket?.findFirst?.({
-            where: { id: input.ticketId, spaceId: input.spaceId },
-            select: { description: true },
-          }) ?? Promise.resolve(null))
-        : Promise.resolve(null),
+      deps.prisma.ticket?.findFirst?.({
+        where: { id: resolvedTicketId, spaceId: input.spaceId },
+        select: { id: true, title: true, description: true, decision: true },
+      }) ?? Promise.resolve(null),
       deps.prisma.ticketComment?.findMany?.({
-        where: { ticketId: input.ticketId, spaceId: input.spaceId },
+        where: { ticketId: resolvedTicketId, spaceId: input.spaceId },
         select: { body: true },
       }) ?? Promise.resolve([]),
     ]);
-    if (
-      existingTicket &&
-      typeof (existingTicket as { description?: unknown }).description === "string"
-    ) {
-      texts.push((existingTicket as { description: string }).description);
+    if (existingTicket) {
+      const row = existingTicket as {
+        id?: unknown;
+        title?: unknown;
+        description?: unknown;
+        decision?: unknown;
+      };
+      if (typeof row.title === "string" && row.title.trim()) texts.push(row.title);
+      if (input.description === undefined && typeof row.description === "string") {
+        texts.push(row.description);
+      }
+      if (row.decision != null) {
+        const parsed = TicketDecisionSchema.safeParse(row.decision);
+        if (parsed.success && !parsed.data.answer) hasStoredPendingDecision = true;
+      }
     }
     if (Array.isArray(comments)) {
       for (const c of comments) {
@@ -234,7 +256,26 @@ export async function validateBlockedTicketMention(
       }
     }
   }
-  const combined = texts.join("\n");
+  return { combined: texts.join("\n"), hasStoredPendingDecision };
+}
+
+export async function validateBlockedTicketMention(
+  deps: TicketToolDeps,
+  input: {
+    spaceId: string;
+    userId: string;
+    botId?: string;
+    ticketId?: string;
+    ref?: string;
+    description?: string | null;
+    decision?: TicketDecisionInput | null;
+  },
+): Promise<string | null> {
+  if (input.decision) return null;
+  const [{ bots, userNames }, { combined }] = await Promise.all([
+    loadSpaceMentionDirectory(deps, input.spaceId, input.userId),
+    loadTicketValidationContext(deps, input),
+  ]);
   if (
     hasAnyAtMentionToken(combined) ||
     textMentionsUser(combined, userNames) ||
@@ -243,6 +284,35 @@ export async function validateBlockedTicketMention(
     return null;
   }
   return BLOCKED_MENTION_ERROR;
+}
+
+export async function validateUserDecisionRequirement(
+  deps: TicketToolDeps,
+  input: {
+    spaceId: string;
+    userId: string;
+    botId?: string;
+    ticketId?: string;
+    ref?: string;
+    status?: string;
+    title?: string;
+    description?: string | null;
+    decision?: TicketDecisionInput | null;
+  },
+): Promise<string | null> {
+  if (!input.botId) return null;
+  if (input.status !== "blocked" && input.status !== "review") return null;
+  if (input.decision) return null;
+  const [{ userNames }, { combined, hasStoredPendingDecision }] = await Promise.all([
+    loadSpaceMentionDirectory(deps, input.spaceId, input.userId),
+    loadTicketValidationContext(deps, input),
+  ]);
+  if (hasStoredPendingDecision && input.decision !== null) return null;
+  const textWithTitle = [input.title, combined].filter(Boolean).join("\n");
+  if (textMentionsUser(textWithTitle, userNames)) {
+    return USER_DECISION_REQUIRED_ERROR;
+  }
+  return null;
 }
 
 /**
@@ -417,6 +487,19 @@ export async function getTicket(deps: TicketToolDeps, input: { spaceId: string; 
   };
 }
 
+function toDecisionJsonInput(decision: TicketDecision): Prisma.InputJsonObject {
+  return {
+    question: decision.question,
+    options: decision.options.map((option) => ({
+      id: option.id,
+      label: option.label,
+      ...(option.recommended ? { recommended: true } : {}),
+    })),
+    ...(decision.answer ? { answer: decision.answer } : {}),
+    ...(decision.answeredAt ? { answeredAt: decision.answeredAt } : {}),
+  };
+}
+
 export async function createTicket(
   deps: TicketToolDeps,
   input: {
@@ -430,6 +513,7 @@ export async function createTicket(
     ownerBotId?: string | null;
     workerBotIds?: string[];
     assigneeBotId?: string | null;
+    decision?: TicketDecisionInput | null;
   },
 ) {
   const parsed = CreateTicketInput.safeParse(input);
@@ -483,6 +567,7 @@ export async function createTicket(
   const { bots: spaceBots } = mayContainMention(data.description)
     ? await loadSpaceMentionDirectory(deps, input.spaceId, input.userId)
     : { bots: [] };
+  const normalizedDecision = data.decision ? normalizeTicketDecision(data.decision) : undefined;
   const row = await deps.prisma.$transaction(async (tx) => {
     const number = await allocateTicketNumber(tx, board.id);
     return tx.ticket.create({
@@ -499,6 +584,7 @@ export async function createTicket(
         workerBotIds,
         createdByBotId: input.botId ?? null,
         createdByUserId: input.userId,
+        ...(normalizedDecision ? { decision: toDecisionJsonInput(normalizedDecision) } : {}),
       },
     });
   });
@@ -539,6 +625,7 @@ export async function updateTicket(
     ownerBotId?: string | null;
     workerBotIds?: string[];
     assigneeBotId?: string | null;
+    decision?: TicketDecisionInput | null;
   },
 ) {
   const parsed = UpdateTicketInput.safeParse(input);
@@ -588,14 +675,34 @@ export async function updateTicket(
       botId: input.botId,
       ticketId: data.id,
       description: data.description,
+      decision: data.decision,
     });
     if (mentionError) return { error: mentionError };
+  }
+  if (input.botId && (data.status === "blocked" || data.status === "review")) {
+    const decisionError = await validateUserDecisionRequirement(deps, {
+      spaceId: input.spaceId,
+      userId: input.userId,
+      botId: input.botId,
+      ticketId: data.id,
+      status: data.status,
+      title: data.title,
+      description: data.description,
+      decision: data.decision,
+    });
+    if (decisionError) return { error: decisionError };
   }
 
   const { bots: spaceBots } = mayContainMention(data.description)
     ? await loadSpaceMentionDirectory(deps, input.spaceId, input.userId)
     : { bots: [] };
   const board = await ensureBoard(deps.prisma, input.spaceId);
+  const normalizedDecision =
+    data.decision !== undefined
+      ? data.decision
+        ? toDecisionJsonInput(normalizeTicketDecision(data.decision))
+        : Prisma.DbNull
+      : undefined;
   const result = await deps.prisma.$transaction(async (tx) => {
     await tx.$queryRaw`SELECT id FROM tickets WHERE id = ${data.id} AND "spaceId" = ${input.spaceId} FOR UPDATE`;
     const current = await tx.ticket.findFirst({
@@ -609,6 +716,13 @@ export async function updateTicket(
           ? [current.assigneeBotId]
           : [],
     );
+    const shouldClearPendingDecision =
+      normalizedDecision === undefined &&
+      data.status !== undefined &&
+      data.status !== "blocked" &&
+      data.status !== "review" &&
+      current.decision != null &&
+      hasPendingTicketDecision({ decision: readTicketDecision(current) });
     const row = await tx.ticket.update({
       where: { id: current.id },
       data: {
@@ -619,6 +733,11 @@ export async function updateTicket(
         ...(nextWorkers !== undefined
           ? { workerBotIds: nextWorkers, assigneeBotId: nextWorkers[0] ?? null }
           : {}),
+        ...(normalizedDecision !== undefined
+          ? { decision: normalizedDecision }
+          : shouldClearPendingDecision
+            ? { decision: Prisma.DbNull }
+            : {}),
         ...(data.status !== undefined
           ? {
               status: data.status,
@@ -721,4 +840,100 @@ export async function commentTicket(
     ...(wakeNote ? { wakeNote } : {}),
   });
   return { comment: toTicketCommentDto(row) };
+}
+
+export async function decideTicket(
+  deps: TicketToolDeps,
+  input: {
+    spaceId: string;
+    userId: string;
+    ticketId: string;
+    optionId?: string;
+    customAnswer?: string;
+  },
+) {
+  const parsed = DecideTicketInput.safeParse({
+    ticketId: input.ticketId,
+    optionId: input.optionId,
+    customAnswer: input.customAnswer,
+  });
+  if (!parsed.success) return { error: ticketInputError(parsed.error) };
+  const data = parsed.data;
+  const board = await ensureBoard(deps.prisma, input.spaceId);
+
+  const outcome = await deps.prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM tickets WHERE id = ${data.ticketId} AND "spaceId" = ${input.spaceId} FOR UPDATE`;
+    const current = await tx.ticket.findFirst({
+      where: { id: data.ticketId, spaceId: input.spaceId, boardId: board.id },
+    });
+    if (!current) return { error: "Ticket not found." as const };
+
+    const existingDecision = readTicketDecision(current);
+    let answerText: string;
+    if (data.optionId) {
+      const option = existingDecision?.options.find((item) => item.id === data.optionId);
+      if (!option) return { error: "Decision option not found." as const };
+      answerText = option.label;
+    } else {
+      answerText = data.customAnswer!;
+    }
+
+    const commentBody = existingDecision
+      ? `> ${existingDecision.question}\n\n${data.optionId ? answerText : `Other: ${answerText}`}`
+      : answerText;
+    const now = new Date();
+    const nextStatus =
+      current.status === "blocked" || current.status === "review" ? "todo" : current.status;
+    const nextDecision = existingDecision
+      ? toDecisionJsonInput({
+          ...existingDecision,
+          answer: answerText,
+          answeredAt: now.toISOString(),
+        })
+      : undefined;
+
+    const updatedTicket = await tx.ticket.update({
+      where: { id: current.id },
+      data: {
+        status: nextStatus,
+        ...(nextStatus === "todo" ? { completedAt: null, archivedAt: null } : {}),
+        ...(nextDecision ? { decision: nextDecision } : {}),
+        updatedAt: now,
+      },
+    });
+    const comment = await tx.ticketComment.create({
+      include: { authorBot: { select: { name: true } }, authorUser: { select: { name: true } } },
+      data: {
+        ticketId: current.id,
+        spaceId: input.spaceId,
+        authorBotId: null,
+        authorUserId: input.userId,
+        body: commentBody,
+      },
+    });
+    return { error: null, updatedTicket, comment, answerText };
+  });
+
+  if (outcome.error !== null) return { error: outcome.error };
+  const workers = ticketWorkers(outcome.updatedTicket);
+  const wakeBotIds =
+    workers.length > 0
+      ? workers
+      : outcome.updatedTicket.ownerBotId
+        ? [outcome.updatedTicket.ownerBotId]
+        : [];
+  const excerpt = JSON.stringify(commentExcerpt(outcome.answerText));
+  await deps.onTicketChange?.({
+    spaceId: input.spaceId,
+    boardId: board.id,
+    ticketId: outcome.updatedTicket.id,
+    assigneeBotId: outcome.updatedTicket.assigneeBotId,
+    wakeAssignee: wakeBotIds.length > 0,
+    wakeBotIds,
+    ...(wakeBotIds.length > 0 ? { wakeNote: `User answered decision: ${excerpt}` } : {}),
+  });
+  return {
+    ticket: toTicketDto(outcome.updatedTicket, board.ticketPrefix),
+    comment: toTicketCommentDto(outcome.comment),
+  };
 }

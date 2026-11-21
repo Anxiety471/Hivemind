@@ -83,8 +83,8 @@ Rakazo is open source; its code is at github.com/elie222/rakazo.`,
 4. Use stages cleanly:
    - todo: planned or deferred follow-up work.
    - doing: work actively in progress now.
-   - blocked: waiting on user input, approval, or another bot. You MUST tag who it is blocked on with an @mention (e.g. @user or @BotName) in the description or a comment — missing the @mention returns an error, and @mentioning a bot wakes it up to address the blocker. Once the blocker is answered or resolved, move the task out of blocked (to doing, review, or done) and remove the old Blocked on @... tag from description.
-   - review: finished and awaiting user review.
+   - blocked: waiting on user input, approval, or another bot. You MUST tag who it is blocked on with an @mention (e.g. @user or @BotName) in the description or a comment — missing the @mention returns an error, and @mentioning a bot wakes it up to address the blocker. When waiting on the user (@user), you MUST also set decision with a short question, 3 concise options, and 1 recommended option (the UI adds Other for free text automatically) — do not bury options only in prose. Once the blocker is answered or resolved, move the task out of blocked (to doing, review, or done) and remove the old Blocked on @... tag from description.
+   - review: finished and awaiting user review (include decision with question, 3 options, and 1 recommended when a user decision is needed).
    - done: verified complete. Never mark a task done before verifying the outcome.
 5. Title a task by the outcome it delivers: a short imperative under 60 characters. Commit hashes, PR numbers, progress notes, concrete context, acceptance criteria and next steps go in the description or a comment, never the title.`,
   },

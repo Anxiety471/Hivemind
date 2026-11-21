@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const fakeAgentState = vi.hoisted(() => ({
   options: ["Berlin", "Seoul", "Toronto"],
+  recommended: undefined as string | undefined,
   detail: undefined as string | undefined,
   tools: [] as Array<{
     name: string;
@@ -30,6 +31,9 @@ vi.mock("@earendil-works/pi-agent-core", () => ({
       const raw = {
         question: "Which city should I use?",
         options: fakeAgentState.options,
+        ...(fakeAgentState.recommended === undefined
+          ? {}
+          : { recommended: fakeAgentState.recommended }),
         ...(fakeAgentState.detail === undefined ? {} : { detail: fakeAgentState.detail }),
       };
       const args = askUser.prepareArguments?.(raw) ?? raw;
@@ -100,6 +104,7 @@ describe("Pi choice asks", () => {
   beforeEach(() => {
     fakeAgentState.tools = [];
     fakeAgentState.options = ["Berlin", "Seoul", "Toronto"];
+    fakeAgentState.recommended = undefined;
     fakeAgentState.detail = undefined;
   });
 
@@ -151,5 +156,30 @@ describe("Pi choice asks", () => {
       for await (const event of runtime.run(runRequest, runContext)) events.push(event);
     }).rejects.toThrow("ask_user requires two to four unique, non-empty options");
     expect(events.some((event) => event.type === "ask")).toBe(false);
+  });
+
+  it("marks the matching ask_user option as recommended and rejects an unknown recommendation", async () => {
+    fakeAgentState.recommended = "Seoul";
+    const runtime = new PiAgentRuntime();
+    const events: AgentRuntimeEvent[] = [];
+
+    for await (const event of runtime.run(runRequest, runContext)) events.push(event);
+
+    expect(events).toContainEqual({
+      type: "ask",
+      text: "Which city should I use?",
+      actions: [
+        { id: "choice-1", label: "Berlin" },
+        { id: "choice-2", label: "Seoul", recommended: true },
+        { id: "choice-3", label: "Toronto" },
+      ],
+    });
+
+    fakeAgentState.recommended = "Tokyo";
+    await expect(async () => {
+      for await (const _event of runtime.run(runRequest, runContext)) {
+        // exhaust generator
+      }
+    }).rejects.toThrow("ask_user recommended option must match one of the provided options");
   });
 });

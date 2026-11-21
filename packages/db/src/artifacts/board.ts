@@ -1,11 +1,20 @@
-import type { Board, Ticket, TicketComment, TicketPriority, TicketStatus } from "@rakazo/contracts";
+import type {
+  Board,
+  Ticket,
+  TicketComment,
+  TicketDecision,
+  TicketPriority,
+  TicketStatus,
+} from "@rakazo/contracts";
 import {
   parseTicketRef,
   TICKET_ARCHIVE_AFTER_DAYS,
+  TicketDecisionSchema,
   TicketPrioritySchema,
   TicketStatusSchema,
   ticketRef,
 } from "@rakazo/contracts";
+import { readJsonColumn } from "../database/json-column.js";
 import type {
   Board as BoardRow,
   Prisma,
@@ -91,10 +100,21 @@ function coerceTicketPriority(value: string | null | undefined): TicketPriority 
   return parsed.success ? parsed.data : "normal";
 }
 
+export function readTicketDecision(row: Pick<TicketRow, "id" | "decision">): TicketDecision | null {
+  if (row.decision == null) return null;
+  return readJsonColumn(
+    TicketDecisionSchema.nullable(),
+    row.decision,
+    { table: "tickets", column: "decision", id: row.id },
+    { fallback: null },
+  );
+}
+
 export function toTicketDto(row: TicketRow, ticketPrefix: string): Ticket {
   const rawWorkers = Array.isArray(row.workerBotIds) ? row.workerBotIds : [];
   const workerBotIds =
     rawWorkers.length > 0 ? rawWorkers : row.assigneeBotId ? [row.assigneeBotId] : [];
+  const decision = readTicketDecision(row);
   return {
     id: row.id,
     boardId: row.boardId,
@@ -114,6 +134,7 @@ export function toTicketDto(row: TicketRow, ticketPrefix: string): Ticket {
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     completedAt: row.completedAt ? row.completedAt.toISOString() : null,
+    ...(decision ? { decision } : {}),
   };
 }
 

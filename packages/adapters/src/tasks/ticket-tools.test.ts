@@ -3,13 +3,16 @@ import {
   TICKET_DESCRIPTION_MAX_LENGTH,
   TICKET_TITLE_MAX_LENGTH,
 } from "@rakazo/contracts";
+import { Prisma } from "@rakazo/db";
 import { describe, expect, it, vi } from "vitest";
 import {
   commentTicket,
   createTicket,
+  decideTicket,
   getTicket,
   listBoardTickets,
   ticketWaitingOnBotIds,
+  USER_DECISION_REQUIRED_ERROR,
   updateTicket,
 } from "./ticket-tools.js";
 
@@ -57,6 +60,7 @@ function ticket(overrides: Record<string, unknown> = {}) {
     workerBotIds: ["bot-1"],
     createdByBotId: null,
     createdByUserId: null,
+    decision: null,
     createdAt: NOW,
     updatedAt: NOW,
     completedAt: null,
@@ -616,5 +620,107 @@ describe("ticket mutations", () => {
       }),
     ).resolves.toEqual({ error: "Unknown user." });
     expect(s.prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("requires a structured 3-option decision when a bot waits on @user, and clears pending decision when resumed", async () => {
+    const s = mutationDeps();
+    await expect(
+      updateTicket(s.deps, {
+        spaceId: "ws",
+        userId: "user-1",
+        botId: "bot-1",
+        id: "t1",
+        status: "blocked",
+        description: "Blocked on @user to pick a strategy",
+      }),
+    ).resolves.toEqual({ error: USER_DECISION_REQUIRED_ERROR });
+
+    const decision = {
+      question: "Which backup format should we store?",
+      options: ["Git bundle", "Skip repair tarballs", "Keep both"],
+      recommended: "Git bundle",
+    };
+    const updated = await updateTicket(s.deps, {
+      spaceId: "ws",
+      userId: "user-1",
+      botId: "bot-1",
+      id: "t1",
+      status: "blocked",
+      description: "Blocked on @user to pick a strategy",
+      decision,
+    });
+    expect("ticket" in updated && updated.ticket?.decision).toEqual({
+      question: "Which backup format should we store?",
+      options: [
+        { id: "choice-1", label: "Git bundle", recommended: true },
+        { id: "choice-2", label: "Skip repair tarballs" },
+        { id: "choice-3", label: "Keep both" },
+      ],
+    });
+
+    const decided = await updateTicket(s.deps, {
+      spaceId: "ws",
+      userId: "user-1",
+      botId: "bot-1",
+      id: "t1",
+      status: "doing",
+    });
+    expect(s.tx.ticket.update).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: "doing", decision: Prisma.DbNull }),
+      }),
+    );
+    expect("ticket" in decided && decided.ticket?.decision).toBeUndefined();
+  });
+
+  it("records option and custom user decisions, moves blocked tickets to todo, and wakes workers", async () => {
+    const s = mutationDeps();
+    s.tx.ticket.findFirst.mockResolvedValue(
+      ticket({
+        status: "blocked",
+        workerBotIds: ["bot-1"],
+        decision: {
+          question: "Which region?",
+          options: [
+            { id: "sg", label: "Singapore", recommended: true },
+            { id: "us", label: "Virginia", recommended: false },
+            { id: "eu", label: "Frankfurt", recommended: false },
+          ],
+        },
+      }),
+    );
+
+    const chosen = await decideTicket(s.deps, {
+      spaceId: "ws",
+      userId: "user-1",
+      ticketId: "t1",
+      optionId: "sg",
+    });
+    expect("ticket" in chosen && Boolean(chosen.ticket)).toBe(true);
+    if ("ticket" in chosen && chosen.ticket && chosen.comment) {
+      expect(chosen.ticket.status).toBe("todo");
+      expect(chosen.ticket.decision?.answer).toBe("Singapore");
+      expect(chosen.ticket.decision?.answeredAt).toEqual(expect.any(String));
+      expect(chosen.comment.body).toBe("> Which region?\n\nSingapore");
+    }
+    expect(s.changes).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        wakeAssignee: true,
+        wakeBotIds: ["bot-1"],
+        wakeNote: 'User answered decision: "Singapore"',
+      }),
+    );
+
+    const custom = await decideTicket(s.deps, {
+      spaceId: "ws",
+      userId: "user-1",
+      ticketId: "t1",
+      customAnswer: "Use Tokyo instead",
+    });
+    expect("ticket" in custom && Boolean(custom.ticket)).toBe(true);
+    if ("ticket" in custom && custom.ticket && custom.comment) {
+      expect(custom.ticket.decision?.answer).toBe("Use Tokyo instead");
+      expect(custom.comment.body).toBe("> Which region?\n\nOther: Use Tokyo instead");
+    }
   });
 });

@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
   CreateTicketInput,
+  DecideTicketInput,
   GetTicketInput,
+  hasPendingTicketDecision,
   isTicketCompletedStatus,
+  normalizeTicketDecision,
   parseTicketRef,
   TICKET_PRIORITIES,
   TICKET_STATUSES,
+  TicketDecisionInputSchema,
   TicketSchema,
   UpdateTicketInput,
 } from "./board.js";
@@ -145,6 +149,69 @@ describe("ticket contracts", () => {
     );
     expect(() =>
       UpdateTicketInput.parse({ id: "ticket-1", ownerUserId: "user-1", ownerBotId: "bot-2" }),
+    ).toThrow();
+  });
+
+  it("validates 3-option + 1-recommended ticket decisions", () => {
+    const input = TicketDecisionInputSchema.parse({
+      question: "  Keep nightly tarballs in R2?  ",
+      options: ["  Skip tarballs ", "Upload bundles", "Disable repair snapshots"],
+      recommended: "skip tarballs",
+    });
+    const normalized = normalizeTicketDecision(input);
+    expect(normalized).toEqual({
+      question: "Keep nightly tarballs in R2?",
+      options: [
+        { id: "choice-1", label: "Skip tarballs", recommended: true },
+        { id: "choice-2", label: "Upload bundles" },
+        { id: "choice-3", label: "Disable repair snapshots" },
+      ],
+    });
+    expect(hasPendingTicketDecision({ decision: normalized })).toBe(true);
+    expect(hasPendingTicketDecision({ decision: null })).toBe(false);
+    expect(
+      hasPendingTicketDecision({
+        decision: { ...normalized, answer: "Skip tarballs", answeredAt: "2026-11-21T00:00:00Z" },
+      }),
+    ).toBe(false);
+
+    expect(() =>
+      TicketDecisionInputSchema.parse({
+        question: "Pick one?",
+        options: ["One", "Two"],
+        recommended: "One",
+      }),
+    ).toThrow();
+
+    expect(() =>
+      TicketDecisionInputSchema.parse({
+        question: "Pick one?",
+        options: ["One", "Two", "Three"],
+        recommended: "Four",
+      }),
+    ).toThrow();
+
+    expect(() =>
+      TicketDecisionInputSchema.parse({
+        question: "Pick one?",
+        options: ["One", "one", "Three"],
+        recommended: "One",
+      }),
+    ).toThrow();
+
+    expect(DecideTicketInput.parse({ ticketId: "t1", optionId: "opt_1" })).toEqual({
+      ticketId: "t1",
+      optionId: "opt_1",
+    });
+    expect(
+      DecideTicketInput.parse({ ticketId: "t1", customAnswer: "  Wait until Monday  " }),
+    ).toEqual({
+      ticketId: "t1",
+      customAnswer: "Wait until Monday",
+    });
+    expect(() => DecideTicketInput.parse({ ticketId: "t1" })).toThrow();
+    expect(() =>
+      DecideTicketInput.parse({ ticketId: "t1", optionId: "opt_1", customAnswer: "Both" }),
     ).toThrow();
   });
 });

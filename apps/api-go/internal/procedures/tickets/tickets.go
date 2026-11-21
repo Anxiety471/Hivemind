@@ -11,6 +11,7 @@ package tickets
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -34,7 +35,11 @@ const (
 	maxWorkers           = 20
 	searchMaxLength      = 200
 	// commentMaxLength is TICKET_COMMENT_MAX_LENGTH (packages/contracts/src/board.ts:26).
-	commentMaxLength = 10_000
+	commentMaxLength          = 10_000
+	decisionOptionCount       = 3
+	decisionQuestionMaxLength = 300
+	decisionOptionMaxLength   = 160
+	decisionAnswerMaxLength   = 2_000
 )
 
 var (
@@ -157,27 +162,95 @@ func openBoard(ctx context.Context, database *db.DB, actor db.Actor) (Board, err
 	return board, err
 }
 
+// TicketDecisionOption is one choice on a user decision card.
+type TicketDecisionOption struct {
+	ID          string `json:"id"`
+	Label       string `json:"label"`
+	Recommended bool   `json:"recommended,omitempty"`
+}
+
+// TicketDecision is TicketDecisionSchema (packages/contracts/src/artifacts/board.ts).
+type TicketDecision struct {
+	Question   string                 `json:"question"`
+	Options    []TicketDecisionOption `json:"options"`
+	Answer     string                 `json:"answer,omitempty"`
+	AnsweredAt string                 `json:"answeredAt,omitempty"`
+}
+
+// TicketDecisionInput is TicketDecisionInputSchema (packages/contracts/src/artifacts/board.ts).
+type TicketDecisionInput struct {
+	Question    string   `json:"question"`
+	Options     []string `json:"options"`
+	Recommended string   `json:"recommended"`
+}
+
+// NormalizeTicketDecision validates and normalizes a 3-choice decision input into stored form.
+func NormalizeTicketDecision(input TicketDecisionInput) (TicketDecision, bool) {
+	question := validate.JSTrim(input.Question)
+	if question == "" || len([]rune(question)) > decisionQuestionMaxLength || len(input.Options) != decisionOptionCount {
+		return TicketDecision{}, false
+	}
+	seen := make(map[string]bool, decisionOptionCount)
+	cleaned := make([]string, 0, decisionOptionCount)
+	for _, raw := range input.Options {
+		opt := validate.JSTrim(raw)
+		if opt == "" || len([]rune(opt)) > decisionOptionMaxLength {
+			return TicketDecision{}, false
+		}
+		lower := strings.ToLower(opt)
+		if seen[lower] {
+			return TicketDecision{}, false
+		}
+		seen[lower] = true
+		cleaned = append(cleaned, opt)
+	}
+	recLower := strings.ToLower(validate.JSTrim(input.Recommended))
+	if recLower == "" {
+		return TicketDecision{}, false
+	}
+	recIndex := -1
+	for i, opt := range cleaned {
+		if strings.ToLower(opt) == recLower {
+			recIndex = i
+			break
+		}
+	}
+	if recIndex < 0 {
+		return TicketDecision{}, false
+	}
+	options := make([]TicketDecisionOption, decisionOptionCount)
+	for i, opt := range cleaned {
+		options[i] = TicketDecisionOption{
+			ID:          fmt.Sprintf("choice-%d", i+1),
+			Label:       opt,
+			Recommended: i == recIndex,
+		}
+	}
+	return TicketDecision{Question: question, Options: options}, true
+}
+
 // Ticket is TicketSchema (packages/contracts/src/artifacts/board.ts).
 type Ticket struct {
-	ID              string   `json:"id"`
-	BoardID         string   `json:"boardId"`
-	SpaceID         string   `json:"spaceId"`
-	Number          int64    `json:"number"`
-	Ref             string   `json:"ref"`
-	Title           string   `json:"title"`
-	Description     *string  `json:"description"`
-	Status          string   `json:"status"`
-	Priority        string   `json:"priority"`
-	AssigneeBotID   *string  `json:"assigneeBotId"`
-	OwnerUserID     *string  `json:"ownerUserId"`
-	OwnerBotID      *string  `json:"ownerBotId"`
-	WorkerBotIDs    []string `json:"workerBotIds"`
-	CreatedByBotID  *string  `json:"createdByBotId"`
-	CreatedByUserID *string  `json:"createdByUserId"`
-	CreatedAt       string   `json:"createdAt"`
-	UpdatedAt       string   `json:"updatedAt"`
-	CompletedAt     *string  `json:"completedAt"`
-	WaitingOnBotIDs []string `json:"waitingOnBotIds,omitempty"`
+	ID              string          `json:"id"`
+	BoardID         string          `json:"boardId"`
+	SpaceID         string          `json:"spaceId"`
+	Number          int64           `json:"number"`
+	Ref             string          `json:"ref"`
+	Title           string          `json:"title"`
+	Description     *string         `json:"description"`
+	Status          string          `json:"status"`
+	Priority        string          `json:"priority"`
+	AssigneeBotID   *string         `json:"assigneeBotId"`
+	OwnerUserID     *string         `json:"ownerUserId"`
+	OwnerBotID      *string         `json:"ownerBotId"`
+	WorkerBotIDs    []string        `json:"workerBotIds"`
+	CreatedByBotID  *string         `json:"createdByBotId"`
+	CreatedByUserID *string         `json:"createdByUserId"`
+	CreatedAt       string          `json:"createdAt"`
+	UpdatedAt       string          `json:"updatedAt"`
+	CompletedAt     *string         `json:"completedAt"`
+	Decision        *TicketDecision `json:"decision,omitempty"`
+	WaitingOnBotIDs []string        `json:"waitingOnBotIds,omitempty"`
 }
 
 // TicketComment is TicketCommentSchema (packages/contracts/src/board.ts:75-85).
@@ -211,17 +284,18 @@ type ticketRow struct {
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 	CompletedAt     *time.Time
+	Decision        []byte
 }
 
 const ticketColumns = `id, "boardId", "spaceId", number, title, description, status, priority, "assigneeBotId",
-	"ownerUserId", "ownerBotId", "workerBotIds", "createdByBotId", "createdByUserId", "createdAt", "updatedAt", "completedAt"`
+	"ownerUserId", "ownerBotId", "workerBotIds", "createdByBotId", "createdByUserId", "createdAt", "updatedAt", "completedAt", decision`
 
 func scanTicket(row pgx.Row) (ticketRow, error) {
 	var value ticketRow
 	err := row.Scan(&value.ID, &value.BoardID, &value.SpaceID, &value.Number, &value.Title, &value.Description,
 		&value.Status, &value.Priority, &value.AssigneeBotID, &value.OwnerUserID, &value.OwnerBotID,
 		&value.WorkerBotIDs, &value.CreatedByBotID, &value.CreatedByUserID,
-		&value.CreatedAt, &value.UpdatedAt, &value.CompletedAt)
+		&value.CreatedAt, &value.UpdatedAt, &value.CompletedAt, &value.Decision)
 	return value, err
 }
 
@@ -252,6 +326,25 @@ func coercePriority(value *string) string {
 	return "normal"
 }
 
+func readStoredDecision(raw []byte) *TicketDecision {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	var d TicketDecision
+	if err := json.Unmarshal(raw, &d); err != nil {
+		return nil
+	}
+	if validate.JSTrim(d.Question) == "" || len(d.Options) != decisionOptionCount {
+		return nil
+	}
+	for _, opt := range d.Options {
+		if validate.JSTrim(opt.ID) == "" || validate.JSTrim(opt.Label) == "" {
+			return nil
+		}
+	}
+	return &d
+}
+
 // dto is toTicketDto over a ticketRow.
 func dto(value ticketRow, prefix string) (Ticket, bool) {
 	workers := value.WorkerBotIDs
@@ -274,6 +367,7 @@ func dto(value ticketRow, prefix string) (Ticket, bool) {
 		WorkerBotIDs: workers, CreatedByBotID: value.CreatedByBotID,
 		CreatedByUserID: value.CreatedByUserID,
 		CreatedAt:       shared.ISO(value.CreatedAt), UpdatedAt: shared.ISO(value.UpdatedAt),
+		Decision: readStoredDecision(value.Decision),
 	}
 	if value.CompletedAt != nil {
 		at := shared.ISO(*value.CompletedAt)
@@ -375,9 +469,16 @@ func Move(ctx context.Context, database *db.DB, deployment shared.Deployment, ac
 			completed = nil
 		}
 		updated := now()
+		nextDecision := current.Decision
+		if input.Status != "blocked" && input.Status != "review" {
+			if existing := readStoredDecision(current.Decision); existing != nil && existing.Answer == "" {
+				nextDecision = nil
+			}
+		}
 		value, err := scanTicket(tx.QueryRow(ctx, `UPDATE tickets SET status = $2, "completedAt" = $3, "updatedAt" = $4,
-			"archivedAt" = CASE WHEN $2 IN ('done', 'closed') THEN "archivedAt" END
-			WHERE id = $1 RETURNING `+ticketColumns, current.ID, input.Status, completed, updated))
+			"archivedAt" = CASE WHEN $2 IN ('done', 'closed') THEN "archivedAt" END,
+			decision = $5
+			WHERE id = $1 RETURNING `+ticketColumns, current.ID, input.Status, completed, updated, nextDecision))
 		if err != nil {
 			return err
 		}
@@ -522,6 +623,176 @@ func Comment(ctx context.Context, database *db.DB, deployment shared.Deployment,
 		deployment.Waker.WakeWorkers(ctx, actor.SpaceID, input.TicketID, wakeBotIDs, commentNote(input.Body))
 	}
 	return comment, nil
+}
+
+type decideInput struct {
+	TicketID     string
+	OptionID     *string
+	CustomAnswer *string
+}
+
+type decideOutput struct {
+	Ticket  Ticket        `json:"ticket"`
+	Comment TicketComment `json:"comment"`
+}
+
+func parseDecide(raw orpc.Input) (decideInput, *orpc.Error) {
+	object, issues := validate.Decode(raw.Raw, nil)
+	if issues != nil {
+		return decideInput{}, validate.Fail(issues)
+	}
+	var found []validate.Issue
+	ticketID, problems := validate.String(validate.Path{"ticketId"}, object.Field("ticketId"), validate.StringRules{Min: 1})
+	found = append(found, problems...)
+	var optionID *string
+	if v := object.Field("optionId"); v != validate.Undefined {
+		str, p := validate.String(validate.Path{"optionId"}, v, validate.StringRules{Trim: true, Min: 1, Max: 64})
+		found = append(found, p...)
+		optionID = &str
+	}
+	var customAnswer *string
+	if v := object.Field("customAnswer"); v != validate.Undefined {
+		str, p := validate.String(validate.Path{"customAnswer"}, v, validate.StringRules{Trim: true, Min: 1, Max: decisionAnswerMaxLength})
+		found = append(found, p...)
+		customAnswer = &str
+	}
+	if len(found) == 0 && (optionID != nil) == (customAnswer != nil) {
+		found = append(found, validate.Issue{
+			"code":    "custom",
+			"path":    []any{},
+			"message": "Provide exactly one of optionId or customAnswer",
+		})
+	}
+	if found != nil {
+		return decideInput{}, validate.Fail(found)
+	}
+	return decideInput{TicketID: ticketID, OptionID: optionID, CustomAnswer: customAnswer}, nil
+}
+
+// Decide implements tickets.decide: records the user's choice or free-text reply, moves blocked/review
+// tickets back to todo, adds a user comment, and wakes the responsible bots.
+func Decide(ctx context.Context, database *db.DB, deployment shared.Deployment, actor db.Actor, raw orpc.Input) (any, *orpc.Error) {
+	if err := Gate(ctx, database, deployment, actor); err != nil {
+		return nil, shared.Failure(err)
+	}
+	input, failure := parseDecide(raw)
+	if failure != nil {
+		return nil, failure
+	}
+	board, err := openBoard(ctx, database, actor)
+	if err != nil {
+		return nil, shared.Failure(err)
+	}
+	var (
+		outTicket  Ticket
+		outComment TicketComment
+		answerText string
+		wakeBotIDs []string
+	)
+	err = database.Tenant(ctx, actor, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `SELECT id FROM tickets WHERE id = $1 AND "spaceId" = $2 FOR UPDATE`,
+			input.TicketID, actor.SpaceID); err != nil {
+			return err
+		}
+		current, err := findTicket(ctx, tx, actor.SpaceID, board.ID, input.TicketID)
+		if err != nil {
+			return err
+		}
+		existingDecision := readStoredDecision(current.Decision)
+		if input.OptionID != nil {
+			var matched *TicketDecisionOption
+			if existingDecision != nil {
+				for i := range existingDecision.Options {
+					if existingDecision.Options[i].ID == *input.OptionID {
+						matched = &existingDecision.Options[i]
+						break
+					}
+				}
+			}
+			if matched == nil {
+				return orpc.BadRequest("Decision option not found.")
+			}
+			answerText = matched.Label
+		} else {
+			answerText = *input.CustomAnswer
+		}
+
+		commentBody := answerText
+		if existingDecision != nil {
+			if input.OptionID != nil {
+				commentBody = "> " + existingDecision.Question + "\n\n" + answerText
+			} else {
+				commentBody = "> " + existingDecision.Question + "\n\nOther: " + answerText
+			}
+		}
+
+		at := now()
+		nextStatus := current.Status
+		if current.Status == "blocked" || current.Status == "review" {
+			nextStatus = "todo"
+		}
+		nextDecisionBytes := current.Decision
+		if existingDecision != nil {
+			updatedDecision := *existingDecision
+			updatedDecision.Answer = answerText
+			updatedDecision.AnsweredAt = shared.ISO(at)
+			encoded, err := json.Marshal(updatedDecision)
+			if err != nil {
+				return err
+			}
+			nextDecisionBytes = encoded
+		}
+		var value ticketRow
+		if nextStatus == "todo" {
+			value, err = scanTicket(tx.QueryRow(ctx, `UPDATE tickets
+				SET status = 'todo', "completedAt" = NULL, "archivedAt" = NULL, decision = $2, "updatedAt" = $3
+				WHERE id = $1 RETURNING `+ticketColumns, current.ID, nextDecisionBytes, at))
+		} else {
+			value, err = scanTicket(tx.QueryRow(ctx, `UPDATE tickets
+				SET decision = $2, "updatedAt" = $3
+				WHERE id = $1 RETURNING `+ticketColumns, current.ID, nextDecisionBytes, at))
+		}
+		if err != nil {
+			return err
+		}
+
+		commentID := effects.NewID()
+		storedBody := shared.StoredText(commentBody)
+		if _, err := tx.Exec(ctx, `INSERT INTO ticket_comments (id, "ticketId", "spaceId", "authorUserId", body, "createdAt", "updatedAt")
+			VALUES ($1, $2, $3, $4, $5, $6, $6)`, commentID, current.ID, actor.SpaceID, actor.UserID, storedBody, at); err != nil {
+			return err
+		}
+		var authorName *string
+		if err := tx.QueryRow(ctx, `SELECT name FROM "user" WHERE id = $1`, actor.UserID).Scan(&authorName); err != nil {
+			return err
+		}
+		authorID := actor.UserID
+		outComment = TicketComment{
+			ID: commentID, TicketID: current.ID, Body: storedBody,
+			AuthorUserID: &authorID, AuthorName: authorName,
+			CreatedAt: shared.ISO(at), UpdatedAt: shared.ISO(at),
+		}
+		outTicket, _ = dto(value, board.Prefix)
+		wakeBotIDs = append([]string{}, outTicket.WorkerBotIDs...)
+		if len(wakeBotIDs) == 0 && outTicket.OwnerBotID != nil {
+			wakeBotIDs = []string{*outTicket.OwnerBotID}
+		}
+		if deployment.Signals != nil {
+			deployment.Signals.PublishBoard(actor.SpaceID, board.ID, current.ID)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, shared.Failure(err)
+	}
+	if !ticketValid(outTicket) || outTicket.ID == "" {
+		return nil, shared.OutputInvalid()
+	}
+	if deployment.Waker != nil && len(wakeBotIDs) > 0 {
+		note := strings.Replace(commentNote(answerText), "A person commented: ", "User answered decision: ", 1)
+		deployment.Waker.WakeWorkers(ctx, actor.SpaceID, outTicket.ID, wakeBotIDs, note)
+	}
+	return decideOutput{Ticket: outTicket, Comment: outComment}, nil
 }
 
 // SpaceBot is an active bot in a Space used to resolve @mentions on tickets.
@@ -909,6 +1180,90 @@ type createInput struct {
 	WorkerBotIDs     []string
 	HasAssigneeBotID bool
 	AssigneeBotID    *string
+	HasDecision      bool
+	Decision         *TicketDecision
+}
+
+func parseNullableDecision(object *validate.Object, found *[]validate.Issue) (bool, *TicketDecision) {
+	v := object.Field("decision")
+	if v == validate.Undefined {
+		return false, nil
+	}
+	if v == nil {
+		return true, nil
+	}
+	path := validate.Path{"decision"}
+	obj, ok := v.(*validate.Object)
+	if !ok {
+		*found = append(*found, validate.Issue{
+			"code":    "invalid_type",
+			"path":    []any{"decision"},
+			"message": "Invalid input: expected object, received " + fmt.Sprintf("%T", v),
+		})
+		return true, nil
+	}
+	var local []validate.Issue
+	question, p := validate.String(path.With("question"), obj.Field("question"),
+		validate.StringRules{Trim: true, Min: 1, Max: decisionQuestionMaxLength})
+	local = append(local, p...)
+
+	optsVal := obj.Field("options")
+	items, arrProblems := validate.AsArray(path.With("options"), optsVal)
+	var options []string
+	if arrProblems != nil {
+		local = append(local, arrProblems...)
+	} else {
+		if len(items) < decisionOptionCount {
+			local = append(local, validate.Issue{
+				"origin":    "array",
+				"code":      "too_small",
+				"minimum":   decisionOptionCount,
+				"inclusive": true,
+				"exact":     true,
+				"path":      []any{"decision", "options"},
+				"message":   fmt.Sprintf("Too small: expected array to have exactly %d items", decisionOptionCount),
+			})
+		} else if len(items) > decisionOptionCount {
+			local = append(local, validate.Issue{
+				"origin":    "array",
+				"code":      "too_big",
+				"maximum":   decisionOptionCount,
+				"inclusive": true,
+				"exact":     true,
+				"path":      []any{"decision", "options"},
+				"message":   fmt.Sprintf("Too big: expected array to have exactly %d items", decisionOptionCount),
+			})
+		}
+		for i, item := range items {
+			opt, optProblems := validate.String(path.With("options").With(i), item,
+				validate.StringRules{Trim: true, Min: 1, Max: decisionOptionMaxLength})
+			local = append(local, optProblems...)
+			options = append(options, opt)
+		}
+	}
+
+	recommended, recProblems := validate.String(path.With("recommended"), obj.Field("recommended"),
+		validate.StringRules{Trim: true, Min: 1, Max: decisionOptionMaxLength})
+	local = append(local, recProblems...)
+
+	if len(local) == 0 {
+		normalized, ok := NormalizeTicketDecision(TicketDecisionInput{
+			Question:    question,
+			Options:     options,
+			Recommended: recommended,
+		})
+		if !ok {
+			local = append(local, validate.Issue{
+				"code":    "custom",
+				"path":    []any{"decision"},
+				"message": "Decision must have 3 distinct options and recommended matching one of them.",
+			})
+		} else {
+			return true, &normalized
+		}
+	}
+	*found = append(*found, local...)
+	return true, nil
 }
 
 func parseNullableOptID(object *validate.Object, key string, found *[]validate.Issue) (bool, *string) {
@@ -979,6 +1334,7 @@ func parseCreate(raw orpc.Input) (createInput, *orpc.Error) {
 	out.HasOwnerBotID, out.OwnerBotID = parseNullableOptID(object, "ownerBotId", &found)
 	out.HasWorkerBotIDs, out.WorkerBotIDs = parseWorkerBotIDs(object, &found)
 	out.HasAssigneeBotID, out.AssigneeBotID = parseNullableOptID(object, "assigneeBotId", &found)
+	out.HasDecision, out.Decision = parseNullableDecision(object, &found)
 	if found == nil && out.OwnerUserID != nil && out.OwnerBotID != nil {
 		found = append(found, validate.Issue{
 			"code":    "custom",
@@ -1104,17 +1460,26 @@ func Create(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 			stored := shared.StoredText(*input.Description)
 			desc = &stored
 		}
+		var decisionJSON *string
+		if input.Decision != nil {
+			encoded, err := json.Marshal(input.Decision)
+			if err != nil {
+				return err
+			}
+			s := string(encoded)
+			decisionJSON = &s
+		}
 		at := now()
 		value, err := scanTicket(tx.QueryRow(ctx, `
 			INSERT INTO tickets (
 				id, "boardId", "spaceId", number, title, description, status, priority,
 				"assigneeBotId", "ownerUserId", "ownerBotId", "workerBotIds",
-				"createdByBotId", "createdByUserId", "createdAt", "updatedAt"
+				"createdByBotId", "createdByUserId", "createdAt", "updatedAt", decision
 			)
-			VALUES ($1, $2, $3, $4, $5, $6, 'todo', $7, $8, $9, $10, $11, NULL, $12, $13, $13)
+			VALUES ($1, $2, $3, $4, $5, $6, 'todo', $7, $8, $9, $10, $11, NULL, $12, $13, $13, $14)
 			RETURNING `+ticketColumns,
 			effects.NewID(), board.ID, actor.SpaceID, number, shared.StoredText(input.Title), desc,
-			input.Priority, assigneeBotID, ownerUserID, ownerBotID, workerBotIDs, actor.UserID, at,
+			input.Priority, assigneeBotID, ownerUserID, ownerBotID, workerBotIDs, actor.UserID, at, decisionJSON,
 		))
 		if err != nil {
 			return err
@@ -1165,6 +1530,8 @@ type updateInput struct {
 	WorkerBotIDs     []string
 	HasAssigneeBotID bool
 	AssigneeBotID    *string
+	HasDecision      bool
+	Decision         *TicketDecision
 }
 
 // parseUpdate is UpdateTicketInput (packages/contracts/src/artifacts/board.ts:150-165).
@@ -1214,6 +1581,7 @@ func parseUpdate(raw orpc.Input) (updateInput, *orpc.Error) {
 	out.HasOwnerBotID, out.OwnerBotID = parseNullableOptID(object, "ownerBotId", &found)
 	out.HasWorkerBotIDs, out.WorkerBotIDs = parseWorkerBotIDs(object, &found)
 	out.HasAssigneeBotID, out.AssigneeBotID = parseNullableOptID(object, "assigneeBotId", &found)
+	out.HasDecision, out.Decision = parseNullableDecision(object, &found)
 	if found == nil && out.OwnerUserID != nil && out.OwnerBotID != nil {
 		found = append(found, validate.Issue{
 			"code":    "custom",
@@ -1411,6 +1779,23 @@ func Update(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 			}
 		}
 
+		nextDecision := current.Decision
+		if input.HasDecision {
+			if input.Decision != nil {
+				encoded, err := json.Marshal(input.Decision)
+				if err != nil {
+					return err
+				}
+				nextDecision = encoded
+			} else {
+				nextDecision = nil
+			}
+		} else if input.HasStatus && status != "blocked" && status != "review" {
+			if existing := readStoredDecision(current.Decision); existing != nil && existing.Answer == "" {
+				nextDecision = nil
+			}
+		}
+
 		updatedAt := now()
 		value, err := scanTicket(tx.QueryRow(ctx, `
 			UPDATE tickets
@@ -1418,13 +1803,14 @@ func Update(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 			    "ownerUserId" = $5, "ownerBotId" = $6,
 			    "workerBotIds" = $7, "assigneeBotId" = $8,
 			    status = $9, "completedAt" = $10, "updatedAt" = $11,
-			    "archivedAt" = CASE WHEN $9 IN ('done', 'closed') THEN "archivedAt" END
+			    "archivedAt" = CASE WHEN $9 IN ('done', 'closed') THEN "archivedAt" END,
+			    decision = $12
 			WHERE id = $1
 			RETURNING `+ticketColumns,
 			current.ID, title, description, priority,
 			ownerUserID, ownerBotID,
 			workerBotIDs, assigneeBotID,
-			status, completedAt, updatedAt,
+			status, completedAt, updatedAt, nextDecision,
 		))
 		if err != nil {
 			return err

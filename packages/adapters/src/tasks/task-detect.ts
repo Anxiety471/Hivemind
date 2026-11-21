@@ -1,4 +1,5 @@
 import type { AgentRunRequest, AgentRuntime } from "@rakazo/adapter-kit";
+import type { TicketDecisionInput } from "@rakazo/contracts";
 import { deadlineSignal } from "@rakazo/core";
 import type { PrismaClient } from "@rakazo/db";
 import { recordUsage, runAsTenant } from "@rakazo/db";
@@ -82,6 +83,7 @@ export type TaskSyncAction = {
   ownerUserId?: string | null;
   ownerBotId?: string | null;
   workerBotIds?: string[];
+  decision?: TicketDecisionInput | null;
 };
 
 /**
@@ -156,6 +158,7 @@ export async function syncTasksViaGoOrLocal(
           ...(action.ownerUserId !== undefined ? { ownerUserId: action.ownerUserId } : {}),
           ...(action.ownerBotId !== undefined ? { ownerBotId: action.ownerBotId } : {}),
           ...(action.workerBotIds !== undefined ? { workerBotIds: action.workerBotIds } : {}),
+          ...(action.decision !== undefined ? { decision: action.decision } : {}),
         });
         if (!("error" in res)) {
           updated.push({
@@ -180,6 +183,7 @@ export async function syncTasksViaGoOrLocal(
         ...(action.ownerUserId !== undefined ? { ownerUserId: action.ownerUserId } : {}),
         ...(action.ownerBotId !== undefined ? { ownerBotId: action.ownerBotId } : {}),
         ...(action.workerBotIds !== undefined ? { workerBotIds: action.workerBotIds } : {}),
+        ...(action.decision !== undefined ? { decision: action.decision } : {}),
       });
       if (!("error" in res)) {
         let ticket = res.ticket;
@@ -228,6 +232,7 @@ export async function syncTasksViaGoOrLocal(
       ...(action.ownerUserId !== undefined ? { ownerUserId: action.ownerUserId } : {}),
       ...(action.ownerBotId !== undefined ? { ownerBotId: action.ownerBotId } : {}),
       ...(action.workerBotIds !== undefined ? { workerBotIds: action.workerBotIds } : {}),
+      ...(action.decision !== undefined ? { decision: action.decision } : {}),
     });
     if (!("error" in res)) {
       updated.push({

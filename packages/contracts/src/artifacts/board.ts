@@ -25,6 +25,72 @@ const TICKET_PREFIX_MAX_LENGTH = 12;
 // Ticket numbers are stored as PostgreSQL Int values.
 const TICKET_NUMBER_MAX = 2_147_483_647;
 export const TICKET_COMMENT_MAX_LENGTH = 10_000;
+export const TICKET_DECISION_OPTION_COUNT = 3;
+export const TICKET_DECISION_QUESTION_MAX_LENGTH = 300;
+export const TICKET_DECISION_OPTION_MAX_LENGTH = 160;
+export const TICKET_DECISION_ANSWER_MAX_LENGTH = 2_000;
+
+export const TicketDecisionOptionSchema = z.object({
+  id: z.string().trim().min(1).max(64),
+  label: z.string().trim().min(1).max(TICKET_DECISION_OPTION_MAX_LENGTH),
+  recommended: z.boolean().optional(),
+});
+export type TicketDecisionOption = z.infer<typeof TicketDecisionOptionSchema>;
+
+export const TicketDecisionSchema = z.object({
+  question: z.string().trim().min(1).max(TICKET_DECISION_QUESTION_MAX_LENGTH),
+  options: z.array(TicketDecisionOptionSchema).length(TICKET_DECISION_OPTION_COUNT),
+  answer: z.string().trim().min(1).max(TICKET_DECISION_ANSWER_MAX_LENGTH).optional(),
+  answeredAt: z.string().optional(),
+});
+export type TicketDecision = z.infer<typeof TicketDecisionSchema>;
+
+export const TicketDecisionInputSchema = z
+  .object({
+    question: z.string().trim().min(1).max(TICKET_DECISION_QUESTION_MAX_LENGTH),
+    options: z
+      .array(z.string().trim().min(1).max(TICKET_DECISION_OPTION_MAX_LENGTH))
+      .length(TICKET_DECISION_OPTION_COUNT),
+    recommended: z.string().trim().min(1).max(TICKET_DECISION_OPTION_MAX_LENGTH),
+  })
+  .superRefine((value, ctx) => {
+    const normalized = value.options.map((item) => item.toLowerCase());
+    if (new Set(normalized).size !== normalized.length) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["options"],
+        message: "Decision options must be 3 distinct non-empty choices.",
+      });
+    }
+    const rec = value.recommended.toLowerCase();
+    if (!normalized.includes(rec)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["recommended"],
+        message: "Recommended option must match one of the 3 options.",
+      });
+    }
+  });
+export type TicketDecisionInput = z.infer<typeof TicketDecisionInputSchema>;
+
+export function normalizeTicketDecision(input: TicketDecisionInput): TicketDecision {
+  const recommendedLower = input.recommended.trim().toLowerCase();
+  const recommendedIndex = input.options.findIndex(
+    (option) => option.trim().toLowerCase() === recommendedLower,
+  );
+  return {
+    question: input.question.trim(),
+    options: input.options.map((option, index) => ({
+      id: `choice-${index + 1}`,
+      label: option.trim(),
+      ...(index === Math.max(recommendedIndex, 0) ? { recommended: true } : {}),
+    })),
+  };
+}
+
+export function hasPendingTicketDecision(ticket: { decision?: TicketDecision | null }): boolean {
+  return Boolean(ticket.decision && !ticket.decision.answer);
+}
 
 const TicketPrefixSchema = z
   .string()
@@ -106,6 +172,7 @@ export const TicketSchema = z.object({
   createdAt: z.string(),
   updatedAt: z.string(),
   completedAt: z.string().nullable(),
+  decision: TicketDecisionSchema.optional(),
   mentionsMe: z.boolean().optional(),
   /**
    * Bots a blocked ticket waits on, from the @mentions in its title, description and latest
@@ -151,6 +218,7 @@ export const CreateTicketInput = z
     ownerBotId: Id.nullable().optional(),
     workerBotIds: z.array(Id).max(TICKET_MAX_WORKERS).optional(),
     assigneeBotId: Id.nullable().optional(),
+    decision: TicketDecisionInputSchema.nullable().optional(),
   })
   .refine((value) => !(value.ownerUserId && value.ownerBotId), {
     message: "Specify at most one of ownerUserId or ownerBotId",
@@ -169,6 +237,7 @@ export const UpdateTicketInput = z
     ownerBotId: Id.nullable().optional(),
     workerBotIds: z.array(Id).max(TICKET_MAX_WORKERS).optional(),
     assigneeBotId: Id.nullable().optional(),
+    decision: TicketDecisionInputSchema.nullable().optional(),
   })
   .refine((value) => !(value.ownerUserId && value.ownerBotId), {
     message: "Specify at most one of ownerUserId or ownerBotId",
@@ -187,6 +256,23 @@ export const CommentTicketInput = z.object({
   body: z.string().trim().min(1).max(TICKET_COMMENT_MAX_LENGTH),
 });
 export type CommentTicketInput = z.infer<typeof CommentTicketInput>;
+
+export const DecideTicketInput = z
+  .object({
+    ticketId: Id,
+    optionId: z.string().trim().min(1).max(64).optional(),
+    customAnswer: z.string().trim().min(1).max(TICKET_DECISION_ANSWER_MAX_LENGTH).optional(),
+  })
+  .refine((value) => Boolean(value.optionId) !== Boolean(value.customAnswer), {
+    message: "Provide exactly one of optionId or customAnswer",
+  });
+export type DecideTicketInput = z.infer<typeof DecideTicketInput>;
+
+export const DecideTicketOutput = z.object({
+  ticket: TicketSchema,
+  comment: TicketCommentSchema,
+});
+export type DecideTicketOutput = z.infer<typeof DecideTicketOutput>;
 
 export const BoardEventSchema = z.object({
   spaceId: Id,

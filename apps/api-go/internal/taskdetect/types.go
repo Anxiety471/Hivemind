@@ -5,6 +5,8 @@
 // triggering bot wakeup loops.
 package taskdetect
 
+import "github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/tickets"
+
 // MaxActionsPerTurn bounds how many ticket creates/updates one detected turn may apply.
 const MaxActionsPerTurn = 5
 
@@ -68,16 +70,17 @@ type PrepareResponse struct {
 
 // Action is one task mutation extracted from a completed turn.
 type Action struct {
-	Op           string    `json:"op"`
-	TicketID     string    `json:"ticketId,omitempty"`
-	Ref          string    `json:"ref,omitempty"`
-	Title        string    `json:"title,omitempty"`
-	Description  *string   `json:"description,omitempty"`
-	Status       string    `json:"status,omitempty"`
-	Priority     string    `json:"priority,omitempty"`
-	OwnerUserID  *string   `json:"ownerUserId,omitempty"`
-	OwnerBotID   *string   `json:"ownerBotId,omitempty"`
-	WorkerBotIDs *[]string `json:"workerBotIds,omitempty"`
+	Op           string                       `json:"op"`
+	TicketID     string                       `json:"ticketId,omitempty"`
+	Ref          string                       `json:"ref,omitempty"`
+	Title        string                       `json:"title,omitempty"`
+	Description  *string                      `json:"description,omitempty"`
+	Status       string                       `json:"status,omitempty"`
+	Priority     string                       `json:"priority,omitempty"`
+	OwnerUserID  *string                      `json:"ownerUserId,omitempty"`
+	OwnerBotID   *string                      `json:"ownerBotId,omitempty"`
+	WorkerBotIDs *[]string                    `json:"workerBotIds,omitempty"`
+	Decision     *tickets.TicketDecisionInput `json:"decision,omitempty"`
 }
 
 // ApplyRequest applies either raw model output or structured actions to the Space's board.

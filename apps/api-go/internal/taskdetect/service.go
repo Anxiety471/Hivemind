@@ -545,16 +545,25 @@ func insertDetectedTicket(
 		stored := shared.StoredText(*action.Description)
 		desc = &stored
 	}
+	var decisionJSON *string
+	if action.Decision != nil {
+		if normalized, ok := tickets.NormalizeTicketDecision(*action.Decision); ok {
+			if encoded, err := json.Marshal(normalized); err == nil {
+				s := string(encoded)
+				decisionJSON = &s
+			}
+		}
+	}
 	title := shared.StoredText(action.Title)
 
 	_, err = tx.Exec(ctx, `
 		INSERT INTO tickets (
 			id, "boardId", "spaceId", number, title, description, status, priority,
 			"assigneeBotId", "ownerUserId", "ownerBotId", "workerBotIds",
-			"createdByBotId", "createdByUserId", "createdAt", "updatedAt", "completedAt"
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $15, $16)
+			"createdByBotId", "createdByUserId", "createdAt", "updatedAt", "completedAt", decision
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $15, $16, $17)
 	`, id, board.ID, spaceID, nextNumber, title, desc, status, priority,
-		assigneeBotID, ownerUserID, ownerBotID, workerBotIDs, botID, userID, at, completedAt)
+		assigneeBotID, ownerUserID, ownerBotID, workerBotIDs, botID, userID, at, completedAt, decisionJSON)
 	if err != nil {
 		return AppliedTicket{}, OpenTicket{}, false, err
 	}
@@ -601,15 +610,16 @@ func applyUpdateToTicket(
 		currentOwnerUserID   *string
 		currentOwnerBotID    *string
 		currentWorkerBotIDs  []string
+		currentDecision      []byte
 	)
 	err := tx.QueryRow(ctx, `
 		SELECT title, description, status, priority, "completedAt",
-		       "assigneeBotId", "ownerUserId", "ownerBotId", "workerBotIds"
+		       "assigneeBotId", "ownerUserId", "ownerBotId", "workerBotIds", decision
 		FROM tickets
 		WHERE id = $1 AND "spaceId" = $2 AND "boardId" = $3
 	`, target.ID, spaceID, board.ID).Scan(
 		&currentTitle, &currentDescription, &currentStatus, &currentPriority, &currentCompletedAt,
-		&currentAssigneeBotID, &currentOwnerUserID, &currentOwnerBotID, &currentWorkerBotIDs,
+		&currentAssigneeBotID, &currentOwnerUserID, &currentOwnerBotID, &currentWorkerBotIDs, &currentDecision,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AppliedTicket{}, false, nil
@@ -687,11 +697,22 @@ func applyUpdateToTicket(
 		}
 	}
 
+	nextDecision := currentDecision
+	decisionChanged := false
+	if action.Decision != nil {
+		if normalized, ok := tickets.NormalizeTicketDecision(*action.Decision); ok {
+			if encoded, err := json.Marshal(normalized); err == nil {
+				nextDecision = encoded
+				decisionChanged = string(currentDecision) != string(encoded)
+			}
+		}
+	}
+
 	descChanged := !sameStringPtr(currentDescription, nextDescription)
 	priorityChanged := currentPriority == nil || *currentPriority != nextPriority
 	ownerChanged := !sameStringPtr(currentOwnerUserID, nextOwnerUserID) || !sameStringPtr(currentOwnerBotID, nextOwnerBotID)
 	workersChanged := !sameStringSlice(currentWorkerBotIDs, nextWorkerBotIDs) || !sameStringPtr(currentAssigneeBotID, nextAssigneeBotID)
-	if nextTitle == currentTitle && nextStatus == currentStatus && !descChanged && !priorityChanged && !ownerChanged && !workersChanged {
+	if nextTitle == currentTitle && nextStatus == currentStatus && !descChanged && !priorityChanged && !ownerChanged && !workersChanged && !decisionChanged {
 		return AppliedTicket{}, false, nil
 	}
 
@@ -708,10 +729,10 @@ func applyUpdateToTicket(
 		UPDATE tickets
 		SET title = $2, description = $3, status = $4, priority = $5,
 		    "assigneeBotId" = $6, "ownerUserId" = $7, "ownerBotId" = $8, "workerBotIds" = $9,
-		    "completedAt" = $10, "updatedAt" = $11
+		    "completedAt" = $10, "updatedAt" = $11, decision = $12
 		WHERE id = $1
 	`, target.ID, nextTitle, nextDescription, nextStatus, nextPriority,
-		nextAssigneeBotID, nextOwnerUserID, nextOwnerBotID, nextWorkerBotIDs, completedAt, at)
+		nextAssigneeBotID, nextOwnerUserID, nextOwnerBotID, nextWorkerBotIDs, completedAt, at, nextDecision)
 	if err != nil {
 		return AppliedTicket{}, false, err
 	}

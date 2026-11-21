@@ -1,6 +1,9 @@
 import type { ConnectorTool } from "@rakazo/adapter-kit";
 import {
   TICKET_COMMENT_MAX_LENGTH,
+  TICKET_DECISION_OPTION_COUNT,
+  TICKET_DECISION_OPTION_MAX_LENGTH,
+  TICKET_DECISION_QUESTION_MAX_LENGTH,
   TICKET_DESCRIPTION_MAX_LENGTH,
   TICKET_PRIORITIES,
   TICKET_STATUSES,
@@ -14,6 +17,35 @@ import { SCHEDULE_TIMING_FIELDS } from "./schedule-tools.js";
 
 const TICKET_TITLE_GUIDANCE =
   'The outcome the task delivers, as a short imperative under 60 characters (e.g. "Exclude caches from VPS backup"). Commit hashes, PR numbers and progress notes go in the description or a comment, never the title.';
+
+const ticketDecisionSpec = {
+  type: "object",
+  description:
+    "Required when waiting on the user (blocked on @user or review awaiting user decision): a short question, exactly 3 distinct options, and 1 recommended option (the UI adds Other for free text automatically).",
+  properties: {
+    question: {
+      type: "string",
+      minLength: 1,
+      maxLength: TICKET_DECISION_QUESTION_MAX_LENGTH,
+      description: "Short decision question for the user.",
+    },
+    options: {
+      type: "array",
+      items: { type: "string", minLength: 1, maxLength: TICKET_DECISION_OPTION_MAX_LENGTH },
+      minItems: TICKET_DECISION_OPTION_COUNT,
+      maxItems: TICKET_DECISION_OPTION_COUNT,
+      description: "Exactly 3 concise, distinct choices.",
+    },
+    recommended: {
+      type: "string",
+      minLength: 1,
+      maxLength: TICKET_DECISION_OPTION_MAX_LENGTH,
+      description: "Exact text of the one recommended option from options.",
+    },
+  },
+  required: ["question", "options", "recommended"],
+  additionalProperties: false,
+};
 
 const scheduleCreateProperties = {
   name: { type: "string", description: "Short label shown in Routines." },
@@ -315,6 +347,7 @@ export const workTools: ConnectorTool[] = [
           items: { type: "string" },
           description: "Bot ids assigned to execute this ticket. Defaults to you.",
         },
+        decision: ticketDecisionSpec,
       },
       required: ["title"],
     },
@@ -337,7 +370,7 @@ export const workTools: ConnectorTool[] = [
           type: "string",
           enum: TICKET_STATUSES,
           description:
-            "Task status. Setting status to 'blocked' requires an @mention of the user or bot it is blocked on (e.g. @user or @BotName) in description or a comment.",
+            "Task status. Setting status to 'blocked' requires an @mention of the user or bot it is blocked on (e.g. @user or @BotName) in description or a comment. When waiting on the user, also pass 'decision' with a question, 3 options, and 1 recommended option.",
         },
         ownerBotId: { type: "string", description: "Bot id that owns the ticket." },
         ownerUserId: {
@@ -349,6 +382,7 @@ export const workTools: ConnectorTool[] = [
           items: { type: "string" },
           description: "Bot ids assigned to execute this ticket.",
         },
+        decision: { anyOf: [ticketDecisionSpec, { type: "null" }] },
       },
       required: ["id"],
     },
@@ -403,7 +437,7 @@ export const workTools: ConnectorTool[] = [
                 type: "string",
                 enum: ["todo", "doing", "review", "blocked", "done"],
                 description:
-                  "Task stage on the Kanban board. Setting status to 'blocked' requires an @mention of the user or bot it is blocked on (e.g. @user or @BotName) in description or a comment.",
+                  "Task stage on the Kanban board. Setting status to 'blocked' requires an @mention of the user or bot it is blocked on (e.g. @user or @BotName) in description or a comment. When waiting on the user, also pass 'decision'.",
               },
               priority: {
                 type: "string",
@@ -420,6 +454,7 @@ export const workTools: ConnectorTool[] = [
                 items: { type: "string" },
                 description: "Bot ids assigned to execute this task.",
               },
+              decision: { anyOf: [ticketDecisionSpec, { type: "null" }] },
             },
             required: ["op"],
           },

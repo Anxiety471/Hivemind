@@ -74,6 +74,7 @@ function builtinParameters(tool: ConnectorTool) {
         maxItems: 4,
         uniqueItems: true,
       }),
+      recommended: Type.Optional(Type.String({ maxLength: 80 })),
     });
   }
   if (tool.name === "remember") {

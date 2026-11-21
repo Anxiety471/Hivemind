@@ -1,85 +1,74 @@
 import { useLingui } from "@lingui/react/macro";
 import type { Ticket, TicketStatus } from "@rakazo/contracts";
-import { useFocusEffect } from "expo-router";
-import { useCallback, useRef, useState } from "react";
+import { fontWeight, typeScale } from "@rakazo/ui-tokens";
+import { useState } from "react";
 import { ActivityIndicator, Alert, StyleSheet, Text, View } from "react-native";
 import { LoadFailure } from "../components/ui/load-failure";
-import { rpc } from "../lib/api/api";
 import { errorText } from "../lib/api/user-error";
 import { boardSections } from "../lib/board/board";
 import { BoardList } from "../lib/board/board-list";
+import { TicketDetailSheet } from "../lib/board/ticket-detail-sheet";
 import { useSideInsets } from "../lib/layout/side-insets";
 import { native, useThemedStyles } from "../lib/native/native";
+import { queryClient, rpcQuery, useSave } from "../lib/query/query";
+import { useScreenQuery } from "../lib/query/screen-query";
 
 /** The Space's ticket board: every column, with the status changed in place. */
 export default function BoardScreen() {
   const { t } = useLingui();
   const styles = useThemedStyles(createStyles);
   const sideInsets = useSideInsets();
-  const [tickets, setTickets] = useState<Ticket[]>([]);
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(true);
-  const live = useRef(true);
-  // A load that started before a later load, a move, or a blur must not overwrite newer rows.
-  const generation = useRef(0);
-  const moving = useRef(new Set<string>());
+  const [selectedTicketId, setSelectedTicketId] = useState<string | null>(null);
+  const ticketsRead = rpcQuery("tickets/list", {});
+  const ticketsQuery = useScreenQuery(ticketsRead);
+  const tickets = ticketsQuery.data?.tickets ?? [];
 
-  const load = useCallback(async () => {
-    const current = ++generation.current;
-    try {
-      const { tickets: rows } = await rpc("tickets/list", {});
-      if (current !== generation.current) return;
-      setTickets(rows);
-      setError("");
-    } catch (cause) {
-      if (current !== generation.current) return;
-      setError(errorText(cause, t`Try again.`));
-    } finally {
-      if (current === generation.current) setLoading(false);
-    }
-  }, [t]);
+  const moveSave = useSave<{ ticket: Ticket; status: TicketStatus }, Ticket>({
+    save: ({ ticket, status }, send) => send("tickets/move", { id: ticket.id, status }),
+    stale: [ticketsRead.queryKey],
+    onSaved: (updated) => {
+      queryClient.setQueryData(ticketsRead.queryKey, (current) => ({
+        tickets: [updated, ...(current?.tickets ?? []).filter((row) => row.id !== updated.id)],
+      }));
+    },
+    onFailed: (cause) => Alert.alert(t`Could not move the ticket`, errorText(cause, t`Try again.`)),
+  });
 
-  useFocusEffect(
-    useCallback(() => {
-      live.current = true;
-      void load();
-      return () => {
-        live.current = false;
-        generation.current += 1;
-      };
-    }, [load]),
-  );
+  const decideSave = useSave<
+    { ticketId: string; optionId?: string; customAnswer?: string },
+    { ticket: Ticket }
+  >({
+    save: (input, send) => send("tickets/decide", input),
+    stale: [ticketsRead.queryKey],
+    onSaved: (result) => {
+      queryClient.setQueryData(ticketsRead.queryKey, (current) => ({
+        tickets: [
+          result.ticket,
+          ...(current?.tickets ?? []).filter((row) => row.id !== result.ticket.id),
+        ],
+      }));
+    },
+    onFailed: (cause) => Alert.alert(t`Could not submit decision`, errorText(cause, t`Try again.`)),
+  });
 
-  async function move(ticket: Ticket, status: TicketStatus) {
-    if (moving.current.has(ticket.id)) return;
-    moving.current.add(ticket.id);
-    generation.current += 1;
-    try {
-      const updated = await rpc("tickets/move", { id: ticket.id, status });
-      // A refresh that started while the move was in flight may have read the old status.
-      generation.current += 1;
-      if (live.current)
-        setTickets((rows) => [updated, ...rows.filter((row) => row.id !== updated.id)]);
-    } catch (cause) {
-      Alert.alert(t`Could not move the ticket`, errorText(cause, t`Try again.`));
-    } finally {
-      moving.current.delete(ticket.id);
-    }
-  }
+  const error = ticketsQuery.error ? errorText(ticketsQuery.error, t`Try again.`) : "";
+  const loading = ticketsQuery.isPending || (ticketsQuery.isFetching && tickets.length === 0);
+  const selectedTicket = selectedTicketId
+    ? (tickets.find((row) => row.id === selectedTicketId) ?? null)
+    : null;
 
-  if (loading || tickets.length === 0) {
+  if (loading && tickets.length === 0) {
     return (
       <View style={[styles.centered, sideInsets]}>
-        {loading ? (
-          <ActivityIndicator color={native.secondaryLabel} />
-        ) : error ? (
-          <LoadFailure
-            message={error}
-            onRetry={() => {
-              setLoading(true);
-              void load();
-            }}
-          />
+        <ActivityIndicator color={native.secondaryLabel} />
+      </View>
+    );
+  }
+  if (tickets.length === 0) {
+    return (
+      <View style={[styles.centered, sideInsets]}>
+        {error ? (
+          <LoadFailure message={error} onRetry={() => void ticketsQuery.refetch()} />
         ) : (
           <Text style={styles.message}>{t`No tickets yet.`}</Text>
         )}
@@ -87,12 +76,26 @@ export default function BoardScreen() {
     );
   }
   return (
-    <BoardList
-      sections={boardSections(tickets)}
-      error={error}
-      onMove={(ticket, status) => void move(ticket, status)}
-      onRefresh={load}
-    />
+    <>
+      <BoardList
+        sections={boardSections(tickets)}
+        error={error}
+        onSelect={(ticket) => setSelectedTicketId(ticket.id)}
+        onMove={(ticket, status) => moveSave.run({ ticket, status })}
+        onRefresh={async () => {
+          await ticketsQuery.refetch();
+        }}
+      />
+      {selectedTicket ? (
+        <TicketDetailSheet
+          ticket={selectedTicket}
+          deciding={decideSave.pending}
+          onClose={() => setSelectedTicketId(null)}
+          onMove={(ticket, status) => moveSave.run({ ticket, status })}
+          onDecide={(ticket, input) => decideSave.run({ ticketId: ticket.id, ...input })}
+        />
+      ) : null}
+    </>
   );
 }
 
@@ -105,6 +108,7 @@ function createStyles() {
       paddingHorizontal: 32,
       backgroundColor: native.groupedPage,
     },
-    message: { color: native.secondaryLabel, fontSize: 17, textAlign: "center" },
+    message: { ...typeScale.body, color: native.secondaryLabel, textAlign: "center" },
+    badge: { fontWeight: fontWeight.medium },
   });
 }

@@ -504,6 +504,7 @@ const MessageBubbleContent = memo(function MessageBubbleContent({
                   actions={askBlock.actions}
                   approval={false}
                   disabled={answered}
+                  allowOther={canAnswer && !answered}
                   selectedAnswer={answered ? askBlock.answer : undefined}
                   accessibilityActions={actionProps.accessibilityActions}
                   onAccessibilityAction={actionProps.onAccessibilityAction}

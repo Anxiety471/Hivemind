@@ -437,6 +437,48 @@ it("letters question options and fills them only on hover", async () => {
   expect(option.querySelector("[aria-hidden]")?.textContent).toBe("B");
 });
 
+it("shows a Recommended badge and submits a custom answer via Other", async () => {
+  const onAnswer = vi.fn(async () => undefined);
+  await render(
+    {
+      kind: "ask",
+      text: "Which rollout?",
+      status: "pending",
+      actions: [
+        { id: "a", label: "Canary 5%", recommended: true },
+        { id: "b", label: "Full deploy" },
+        { id: "c", label: "Hold until Monday" },
+      ],
+    },
+    undefined,
+    onAnswer,
+  );
+
+  expect(container.textContent).toContain("Recommended");
+  const other = button("DOther")!;
+  expect(other).toBeDefined();
+  await act(async () => other.click());
+
+  const textarea = container.querySelector<HTMLTextAreaElement>(
+    'textarea[aria-label="Other answer"]',
+  )!;
+  expect(textarea).not.toBeNull();
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(
+      textarea,
+      "Deploy 20% in APAC only",
+    );
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () =>
+    textarea
+      .closest("form")!
+      .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })),
+  );
+
+  expect(onAnswer).toHaveBeenCalledWith("Deploy 20% in APAC only");
+});
+
 it("sizes approval buttons like the other card buttons", async () => {
   await render({
     kind: "ask",

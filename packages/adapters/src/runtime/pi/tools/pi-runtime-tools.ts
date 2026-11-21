@@ -417,6 +417,9 @@ function toAgentTool(
           // Keep a missing/invalid options value as-is so schema minItems can reject it;
           // coercing to [] would look like a valid empty list upstream.
           options,
+          ...(typeof raw.recommended === "string" && raw.recommended.trim()
+            ? { recommended: raw.recommended.trim() }
+            : {}),
         };
       }
       if (tool.name === "request_secret") {
@@ -585,6 +588,18 @@ function toAgentTool(
                 ) {
                   throw new Error("ask_user requires two to four unique, non-empty options");
                 }
+                const recommendedRaw =
+                  typeof args.recommended === "string" ? args.recommended.trim() : "";
+                let recommendedIndex = -1;
+                if (recommendedRaw) {
+                  const lower = recommendedRaw.toLowerCase();
+                  recommendedIndex = options.findIndex((option) => option.toLowerCase() === lower);
+                  if (recommendedIndex < 0) {
+                    throw new Error(
+                      "ask_user recommended option must match one of the provided options",
+                    );
+                  }
+                }
                 host.pausePending = true;
                 host.queue.push({
                   type: "ask",
@@ -596,6 +611,7 @@ function toAgentTool(
                   actions: options.map((label, index) => ({
                     id: `choice-${index + 1}`,
                     label,
+                    ...(index === recommendedIndex ? { recommended: true } : {}),
                   })),
                 });
                 return {

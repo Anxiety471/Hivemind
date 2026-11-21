@@ -7,12 +7,14 @@ export function OptionRow({
   letter,
   selected,
   disabled,
+  badge,
   onClick,
   children,
 }: {
   letter: string;
   selected?: boolean;
   disabled?: boolean;
+  badge?: ReactNode;
   onClick: () => void;
   children: ReactNode;
 }) {
@@ -34,6 +36,7 @@ export function OptionRow({
         {letter}
       </span>
       <span className="flex-1">{children}</span>
+      {badge}
       {selected ? <Check aria-hidden className="text-muted-foreground" /> : null}
     </Button>
   );

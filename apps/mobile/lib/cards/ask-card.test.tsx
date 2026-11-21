@@ -748,3 +748,44 @@ it("only marks question options selected after an answer exists", async () => {
     ).toEqual(selectedAnswer ? ["true", "false"] : [null, null]);
   }
 });
+
+it("marks recommended actions and submits free-text via Other when allowOther is true", async () => {
+  const onAnswer = vi.fn(async () => undefined);
+  await act(async () =>
+    root.render(
+      <AskActions
+        approval={false}
+        allowOther
+        actions={[
+          { id: "first", label: "Use bundle", recommended: true },
+          { id: "second", label: "Skip tarballs" },
+          { id: "third", label: "Keep both" },
+        ]}
+        onAnswer={onAnswer}
+      />,
+    ),
+  );
+
+  const buttons = [...container.querySelectorAll("button")];
+  expect(buttons.map((b) => b.textContent)).toEqual([
+    "Use bundle (Recommended)",
+    "Skip tarballs",
+    "Keep both",
+    "Other",
+  ]);
+
+  await act(async () => buttons.find((b) => b.textContent === "Other")!.click());
+  const input = container.querySelector<HTMLInputElement>('input[aria-label="Other answer"]')!;
+  expect(input).not.toBeNull();
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
+      input,
+      "Deploy later tonight",
+    );
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () =>
+    [...container.querySelectorAll("button")].find((b) => b.textContent === "Send")!.click(),
+  );
+  expect(onAnswer).toHaveBeenCalledWith("Deploy later tonight");
+});

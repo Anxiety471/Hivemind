@@ -13,6 +13,8 @@ import {
   BoardSchema,
   CommentTicketInput,
   CreateTicketInput,
+  DecideTicketInput,
+  DecideTicketOutput,
   GetTicketInput,
   ListTicketsInput,
   ListTicketsOutput,
@@ -44,6 +46,7 @@ export const artifactsRpc = {
     update: oc.input(UpdateTicketInput).output(TicketSchema),
     move: oc.input(MoveTicketInput).output(TicketSchema),
     comment: oc.input(CommentTicketInput).output(TicketCommentSchema),
+    decide: oc.input(DecideTicketInput).output(DecideTicketOutput),
     comments: oc.input(z.object({ ticketId: Id })).output(z.array(TicketCommentSchema)),
   },
   artifacts: {

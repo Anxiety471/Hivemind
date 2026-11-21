@@ -147,6 +147,8 @@ function PromptAskCard({
 }: AskCardProps) {
   const { t } = useLingui();
   const [editing, setEditing] = useState(false);
+  const [otherOpen, setOtherOpen] = useState(false);
+  const [otherText, setOtherText] = useState("");
   const [answer, setAnswer] = useState(block.instructionUpdate?.after ?? "");
   const [acceptedAnswer, setAcceptedAnswer] = useState<string>();
   const [undone, setUndone] = useState(false);
@@ -307,11 +309,53 @@ function PromptAskCard({
               letter={optionLetter(index)}
               selected={chosenOption?.id === action.id}
               disabled={answered || !canAnswer || submitting}
+              badge={
+                action.recommended ? (
+                  <span className="shrink-0 rounded-full border border-border bg-background px-2 py-0.5 text-caption font-medium text-foreground">
+                    <Trans>Recommended</Trans>
+                  </span>
+                ) : undefined
+              }
               onClick={() => void submitAnswer(action.id)}
             >
               {pendingAction === action.id ? <Trans>Sending…</Trans> : action.label}
             </OptionRow>
           ))}
+          {canAnswer && !answered ? (
+            <>
+              <OptionRow
+                letter={optionLetter(askActions?.length ?? 0)}
+                selected={otherOpen}
+                disabled={submitting}
+                onClick={() => setOtherOpen((prev) => !prev)}
+              >
+                <Trans>Other</Trans>
+              </OptionRow>
+              {otherOpen ? (
+                <form
+                  className="mt-2 flex flex-col gap-2 pt-1"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void submitAnswer(otherText);
+                  }}
+                >
+                  <Textarea
+                    aria-label={t`Other answer`}
+                    placeholder={t`Type your answer…`}
+                    value={otherText}
+                    onChange={(event) => setOtherText(event.target.value)}
+                    disabled={submitting}
+                    autoFocus
+                  />
+                  <div className="flex justify-end">
+                    <Button type="submit" size="sm" disabled={submitting || !otherText.trim()}>
+                      {submitting ? <Trans>Sending…</Trans> : <Trans>Send</Trans>}
+                    </Button>
+                  </div>
+                </form>
+              ) : null}
+            </>
+          ) : null}
         </div>
       ) : typedAnswer ? (
         answerIsSeparate ? null : (

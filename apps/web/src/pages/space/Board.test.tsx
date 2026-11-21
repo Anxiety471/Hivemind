@@ -19,6 +19,7 @@ const api = vi.hoisted(() => ({
     create: vi.fn(),
     comment: vi.fn(),
     comments: vi.fn(),
+    decide: vi.fn(),
   },
 }));
 vi.mock("../../lib/query/rpc", () => ({
@@ -176,16 +177,24 @@ it("renders status columns and opens a ticket with comments", async () => {
       "5m ago",
     ]);
     expect(
+      page.container.querySelector('[data-testid="kanban-ticket-detail"] [role="combobox"]'),
+    ).not.toBeNull();
+    expect(
+      Array.from(page.container.querySelectorAll('button[type="submit"]')).map(
+        (node) => node.parentElement?.className,
+      ),
+    ).toEqual(["flex justify-end"]);
+    expect(api.tickets.comments).toHaveBeenCalledWith({ ticketId: "ticket-1" }, expect.anything());
+    const editButton = Array.from(page.container.querySelectorAll("button")).find(
+      (node) => node.textContent === "Edit",
+    )!;
+    await act(async () => editButton.click());
+    expect(
       Array.from(page.container.querySelectorAll('[role="combobox"]')).every((node) =>
         node.classList.contains("w-full"),
       ),
     ).toBe(true);
-    const submitButtons = page.container.querySelectorAll('button[type="submit"]');
-    expect(Array.from(submitButtons).map((node) => node.parentElement?.className)).toEqual([
-      "flex justify-end",
-      "flex justify-end",
-    ]);
-    expect(api.tickets.comments).toHaveBeenCalledWith({ ticketId: "ticket-1" }, expect.anything());
+    expect(api.tickets.comments).toHaveBeenCalledTimes(1);
   } finally {
     await page.cleanup();
   }
@@ -311,6 +320,10 @@ it("saves only edits and refreshes comments for the open ticket", async () => {
     expect(page.container.querySelector('[data-testid="ticket-comments"]')?.textContent).toContain(
       "Bot progress",
     );
+    const editButton = Array.from(page.container.querySelectorAll("button")).find(
+      (node) => node.textContent === "Edit",
+    )!;
+    await act(async () => editButton.click());
     const input = page.container.querySelector("input")!;
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
@@ -663,6 +676,69 @@ it("holds the comment box while a comment posts, and says when it fails", async 
     );
     expect(post()?.disabled).toBe(false);
     expect(box?.value).toBe("New note");
+  } finally {
+    await page.cleanup();
+    vi.unstubAllGlobals();
+  }
+});
+
+it("renders a 3-choice recommended decision card in BoardPage detail view and submits Other free text", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  api.bots.list.mockResolvedValue([bot("bot-1", "Helper")]);
+  api.tickets.comments.mockResolvedValue([]);
+  const blockedTicket = {
+    ...ticket(
+      "Approve backup rule",
+      "ticket-dec",
+      "blocked",
+      "RAK-67",
+      "bot-1",
+      "Blocked on @user",
+    ),
+    decision: {
+      question: "Keep .git repair tarballs in R2?",
+      options: [
+        { id: "skip", label: "Skip tarballs", recommended: true },
+        { id: "bundle", label: "Add .bundle copies" },
+        { id: "both", label: "Keep both" },
+      ],
+    },
+  };
+  api.tickets.list.mockResolvedValue({ tickets: [blockedTicket] });
+  api.tickets.decide.mockReset().mockResolvedValue({});
+  const page = await renderBoard();
+  try {
+    await act(async () =>
+      (
+        page.container.querySelector('[data-testid="board-card-ticket-dec"]') as HTMLButtonElement
+      ).click(),
+    );
+    await settle();
+    const card = page.container.querySelector('[data-testid="ticket-decision-card"]')!;
+    expect(card).not.toBeNull();
+    const commentPanel = page.container.querySelector('[data-testid="kanban-comment-panel"]')!;
+    expect(commentPanel).not.toBeNull();
+    expect(commentPanel.querySelector('textarea[aria-label="Comment"]')).not.toBeNull();
+    expect(card.textContent).toContain("Recommended");
+    const otherButton = Array.from(card.querySelectorAll("button")).find((node) =>
+      node.textContent?.includes("Other"),
+    )!;
+    await act(async () => otherButton.click());
+    const box = card.querySelector<HTMLTextAreaElement>('textarea[aria-label="Custom decision"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(
+        box,
+        "Run bundle repair locally only",
+      );
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () =>
+      box.closest("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })),
+    );
+    expect(api.tickets.decide).toHaveBeenCalledWith({
+      ticketId: "ticket-dec",
+      customAnswer: "Run bundle repair locally only",
+    });
   } finally {
     await page.cleanup();
     vi.unstubAllGlobals();
