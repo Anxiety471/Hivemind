@@ -123,13 +123,13 @@ export function SidebarFooter({
   return (
     <div
       data-testid="sidebar-footer"
-      className={`flex shrink-0 items-center gap-2 bg-transparent ${mini ? "flex-col px-1 py-2" : "px-2.5 py-3"}`}
+      className={`flex shrink-0 items-center gap-2 bg-transparent ${mini ? "flex-col px-1 py-2" : "border-t border-sidebar-border px-2.5 py-2.5"}`}
     >
       <Popover open={open} onOpenChange={onOpenChange}>
         <PopoverTrigger
           data-testid="user-menu-trigger"
           aria-label={t`Account menu for ${name}`}
-          className="grid size-9 shrink-0 place-items-center overflow-hidden rounded-full bg-secondary text-body font-semibold text-secondary-foreground outline-none hover:ring-2 hover:ring-foreground/15 focus-visible:ring-2 focus-visible:ring-ring"
+          className="grid size-9 shrink-0 place-items-center overflow-hidden rounded-full border border-sidebar-border bg-secondary text-body font-semibold text-secondary-foreground outline-none transition-colors hover:border-foreground/20 hover:ring-2 hover:ring-foreground/15 focus-visible:ring-2 focus-visible:ring-ring"
         >
           {image && failedImage !== image ? (
             <img
@@ -299,7 +299,7 @@ export function SidebarFooter({
           ref={pillRef}
           onClick={onIntegrations}
           size="lg"
-          className="min-w-0 flex-1 justify-between"
+          className="min-w-0 flex-1 justify-between border border-sidebar-border transition-colors hover:border-foreground/15"
         >
           <span ref={labelRef} className="flex min-w-0 items-center gap-2">
             <Plug className="text-muted-foreground" strokeWidth={1.75} aria-hidden="true" />

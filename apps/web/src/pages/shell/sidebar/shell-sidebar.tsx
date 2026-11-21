@@ -199,7 +199,7 @@ export function ShellSidebar({
         ) ? null : (
           <InputGroup
             data-testid="sidebar-search"
-            className="mx-2.5 mb-3 w-auto rounded-xl bg-card dark:bg-input border border-border text-muted-foreground focus-within:border-ring"
+            className="mx-2.5 mt-2.5 mb-2 w-auto rounded-xl border border-border bg-card text-muted-foreground focus-within:border-ring dark:bg-input"
           >
             <InputGroupAddon>
               <Search size={16} strokeWidth={1.8} aria-hidden="true" />
@@ -251,7 +251,7 @@ export function ShellSidebar({
         )}
         <div
           onScroll={resetFadeWhenUnscrollable}
-          className="rk-scroll scroll-fade-y scroll-fade-12 flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2.5 pb-2.5"
+          className="rk-scroll scroll-fade-y scroll-fade-12 flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2.5 pt-1.5 pb-2.5"
         >
           {showSpaceSearch && !mini ? (
             <SpaceSearchResults

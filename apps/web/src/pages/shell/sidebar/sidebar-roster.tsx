@@ -131,17 +131,23 @@ export function SidebarRoster({
               if (!mini) toggleSidebarSection(group.key);
             }}
             data-sidebar-group={group.key}
-            className={`flex flex-col gap-0.5 ${mini && groupIndex > 0 ? "mt-2 border-t border-sidebar-border pt-2" : ""}`}
+            className={`flex flex-col gap-0.5 ${
+              groupIndex > 0
+                ? mini
+                  ? "mt-2 border-t border-sidebar-border pt-2"
+                  : "mt-2 border-t border-sidebar-border/80 pt-1"
+                : ""
+            }`}
           >
             {!mini && (group.title || hasSpaceActions) ? (
               // biome-ignore lint/a11y/useSemanticElements: groups sidebar controls, not form fields; Move to remains the keyboard alternative.
               <div
                 role="group"
                 data-roster-drop={rosterDropKey === headerDropKey ? "true" : undefined}
-                className={`${
+                className={`group/section ${
                   group.title && hasSpaceActions
-                    ? "grid pt-3 pb-0.5"
-                    : `flex items-center pt-3 pb-0.5${group.title ? "" : " justify-end"}`
+                    ? "grid pt-1.5 pb-1"
+                    : `flex items-center pt-1.5 pb-1${group.title ? "" : " justify-end"}`
                 } rounded-lg ${rosterDropKey === headerDropKey ? "bg-sidebar-accent" : ""}`}
                 onDragOver={(event) => {
                   if (!headerDropTarget || !rosterDropAction(headerDropTarget, false)) return;
@@ -166,7 +172,7 @@ export function SidebarRoster({
                       render={
                         group.emptySpaceId ? <button type="button" /> : <CollapsibleTrigger />
                       }
-                      className={`flex min-w-0 items-center justify-between gap-2 rounded-lg px-2.5 py-1 text-label font-medium text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring ${hasSpaceActions ? "col-start-1 row-start-1 w-full" : "flex-1"}`}
+                      className={`flex min-w-0 items-center justify-between gap-2 rounded-lg px-2.5 py-1 text-label font-medium text-muted-foreground transition-colors hover:bg-sidebar-accent/70 hover:text-sidebar-accent-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring ${hasSpaceActions ? "col-start-1 row-start-1 w-full" : "flex-1"}`}
                       onClick={() => {
                         if (group.emptySpaceId) {
                           openSpaceChat(group.emptySpaceId, "/onboarding");
@@ -211,8 +217,16 @@ export function SidebarRoster({
                         ) : null}
                         <span className="truncate">{group.title}</span>
                         {group.subtitle ? (
-                          <span className="ms-0.5 truncate text-muted-foreground">
+                          <span className="ms-0.5 truncate text-faint-foreground">
                             {group.subtitle}
+                          </span>
+                        ) : null}
+                        {group.bots.length > 0 ? (
+                          <span
+                            data-sidebar-section-count
+                            className="shrink-0 text-caption font-normal tabular-nums text-faint-foreground/80"
+                          >
+                            {group.bots.length}
                           </span>
                         ) : null}
                       </span>
@@ -221,7 +235,9 @@ export function SidebarRoster({
                           size={14}
                           strokeWidth={1.8}
                           className={
-                            collapsed ? "-rotate-90 transition-transform" : "transition-transform"
+                            collapsed
+                              ? "-rotate-90 text-faint-foreground transition-transform"
+                              : "text-faint-foreground transition-transform"
                           }
                           aria-hidden="true"
                         />
@@ -259,8 +275,8 @@ export function SidebarRoster({
                     size="icon-sm"
                     className={
                       group.title
-                        ? `col-start-1 row-start-1 justify-self-end self-center ${group.emptySpaceId ? "" : "me-6"}`
-                        : undefined
+                        ? `col-start-1 row-start-1 justify-self-end self-center text-faint-foreground opacity-65 transition-opacity hover:text-foreground group-hover/section:opacity-100 focus-visible:opacity-100 ${group.emptySpaceId ? "" : "me-6"}`
+                        : "text-faint-foreground hover:text-foreground"
                     }
                     aria-label={t`Actions for ${group.spaceName}`}
                     onClick={(event) => {
@@ -335,6 +351,7 @@ export function SidebarRoster({
                   ) : (
                     <GroupAvatar members={groupMembers} size={mini ? 40 : compact ? 28 : 36} />
                   );
+                const { primary: primaryName, role: roleSuffix } = splitRosterName(item.chat.name);
                 const chatTrigger = (
                   <ContextMenuTrigger
                     render={<button type="button" />}
@@ -406,7 +423,7 @@ export function SidebarRoster({
                     }}
                     // Focus the row so closing the menu returns focus here.
                     onContextMenu={(event) => event.currentTarget.focus()}
-                    className={`flex items-center ${
+                    className={`relative flex items-center transition-colors duration-150 ${
                       mini
                         ? "mx-auto size-12 justify-center rounded-xl"
                         : compact
@@ -414,8 +431,10 @@ export function SidebarRoster({
                           : "w-full gap-3 rounded-lg px-2.5 py-2"
                     } text-start ${
                       selected || rosterDropKey === rowDropKey
-                        ? "bg-sidebar-accent"
-                        : "group-hover/row:bg-accent"
+                        ? mini
+                          ? "bg-sidebar-accent ring-1 ring-inset ring-foreground/12"
+                          : "bg-sidebar-accent ring-1 ring-inset ring-foreground/12 before:pointer-events-none before:absolute before:inset-y-2 before:start-0 before:w-0.5 before:rounded-full before:bg-foreground/60"
+                        : "group-hover/row:bg-accent dark:group-hover/row:bg-foreground/[0.045]"
                     }`}
                   >
                     {mini ? (
@@ -452,7 +471,16 @@ export function SidebarRoster({
                         ) : null}
                       </span>
                     ) : (
-                      avatar
+                      <span className="relative shrink-0">
+                        {avatar}
+                        {workStatusLabel ? (
+                          <span
+                            aria-hidden="true"
+                            data-roster-working-badge
+                            className="absolute -end-0.5 -bottom-0.5 size-2 rounded-full bg-status-working ring-2 ring-sidebar"
+                          />
+                        ) : null}
+                      </span>
                     )}
                     {!mini ? (
                       <div className="min-w-0 flex-1">
@@ -461,11 +489,21 @@ export function SidebarRoster({
                             <span
                               dir="auto"
                               data-roster-bot-name={item.kind === "bot" ? "" : undefined}
-                              className={`max-w-full shrink-0 truncate text-body-sm text-foreground ${
-                                item.chat.unread ? "font-semibold" : "font-medium"
-                              }`}
+                              className={`max-w-full shrink-0 truncate text-body-sm ${
+                                selected || item.chat.unread
+                                  ? "text-foreground"
+                                  : "text-foreground/90 group-hover/row:text-foreground"
+                              } ${item.chat.unread ? "font-semibold" : "font-medium"}`}
                             >
-                              {item.chat.name}
+                              {primaryName}
+                              {roleSuffix ? (
+                                <span
+                                  data-roster-bot-role
+                                  className="font-normal text-faint-foreground"
+                                >
+                                  {roleSuffix}
+                                </span>
+                              ) : null}
                             </span>
                             {item.chat.unread ? (
                               <span className="sr-only">
@@ -477,7 +515,7 @@ export function SidebarRoster({
                             {item.woke ? (
                               <span
                                 data-roster-woke
-                                className="text-label font-medium text-foreground/75"
+                                className="text-caption font-medium text-foreground/75"
                               >
                                 <Trans>Woke</Trans>
                               </span>
@@ -490,7 +528,7 @@ export function SidebarRoster({
                             ) : !compact ? (
                               <span
                                 data-roster-time
-                                className="text-label text-faint-foreground tabular-nums"
+                                className="text-caption text-faint-foreground tabular-nums"
                               >
                                 {formatRosterTime(item.chat.updatedAt)}
                               </span>
@@ -531,7 +569,7 @@ export function SidebarRoster({
                           <div
                             dir="auto"
                             data-roster-preview={!workStatusLabel ? "true" : undefined}
-                            className={`mt-1 truncate text-label ${
+                            className={`mt-0.5 truncate text-label ${
                               workStatusLabel
                                 ? "font-semibold text-status-working"
                                 : item.chat.unread
@@ -620,12 +658,19 @@ export function SidebarRoster({
   );
 }
 
+/** Splits "Name · Role" into a primary name and muted role suffix while keeping full text intact. */
+export function splitRosterName(name: string): { primary: string; role: string | null } {
+  const index = name.indexOf(" · ");
+  if (index <= 0 || index + 3 >= name.length) return { primary: name, role: null };
+  return { primary: name.slice(0, index), role: name.slice(index) };
+}
+
 /** A space section header's name as one phrase, for accessible labels. */
 function headerName(group: { title?: string | null; subtitle?: string }): string {
   return group.subtitle ? `${group.title}, ${group.subtitle}` : (group.title ?? "");
 }
 
-function formatRosterTime(isoDate?: string | null): string {
+export function formatRosterTime(isoDate?: string | null): string {
   if (!isoDate) return "";
   try {
     const d = new Date(isoDate);
@@ -637,7 +682,10 @@ function formatRosterTime(isoDate?: string | null): string {
       d.getMonth() === now.getMonth() &&
       d.getFullYear() === now.getFullYear();
     if (isToday) {
-      return d.toLocaleTimeString(locale, { hour: "numeric", minute: "2-digit" });
+      const formatted = d.toLocaleTimeString(locale, { hour: "numeric", minute: "2-digit" });
+      return /^en(?:-|$)/i.test(locale)
+        ? formatted.replace(/\s*([AP])M$/i, (_, period: string) => period.toLowerCase())
+        : formatted;
     }
     const yesterday = new Date(now);
     yesterday.setDate(now.getDate() - 1);

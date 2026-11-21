@@ -55,7 +55,7 @@ export function SidebarHeader({
       <Button
         variant="ghost"
         size="icon"
-        className={`app-no-drag hidden text-muted-foreground md:inline-flex ${railTile}`}
+        className={`app-no-drag hidden text-muted-foreground transition-colors hover:text-foreground md:inline-flex ${railTile}`}
         aria-label={toggleLabel}
         data-testid={mini ? "restore-bots-sidebar" : "minimize-bots-sidebar"}
         onClick={() => setBotsSidebarCollapsedPref(!mini)}
@@ -70,7 +70,7 @@ export function SidebarHeader({
   );
   return (
     <div
-      className={`app-drag flex items-center ${mini ? `flex-col gap-1 px-0 pb-3 ${hasWindowChrome ? "pt-4" : "pt-2"}` : "justify-between px-3 pb-3 pt-[14px]"}`}
+      className={`app-drag flex items-center ${mini ? `flex-col gap-1 px-0 pb-3 ${hasWindowChrome ? "pt-4" : "pt-2"}` : "justify-between border-b border-sidebar-border px-3 py-2.5"}`}
     >
       <div className={`flex items-center ${mini ? "flex-col gap-2" : "gap-2"}`}>
         {hasWindowChrome ? <WindowChrome /> : null}
@@ -87,7 +87,7 @@ export function SidebarHeader({
               aria-pressed={searchOpen}
               data-testid="sidebar-search-trigger"
               onClick={onSearch}
-              className="app-no-drag text-muted-foreground"
+              className={`app-no-drag transition-colors ${searchOpen ? "bg-sidebar-accent text-foreground" : "text-muted-foreground hover:text-foreground"}`}
             >
               <Search className={ICON} strokeWidth={STROKE} aria-hidden="true" />
             </Button>
@@ -102,7 +102,7 @@ export function SidebarHeader({
               aria-pressed={activityMode}
               data-activity-mode={activityMode ? "on" : "off"}
               onClick={toggleActivityMode}
-              className={`app-no-drag ${activityMode ? "bg-accent text-foreground" : "text-muted-foreground"}`}
+              className={`app-no-drag transition-colors ${activityMode ? "bg-sidebar-accent text-foreground" : "text-muted-foreground hover:text-foreground"}`}
             >
               {/* A filled bell marks Activity on, so on and hovered never look alike. */}
               <Bell
@@ -121,7 +121,7 @@ export function SidebarHeader({
                 <Button
                   variant="ghost"
                   size="icon"
-                  className={`app-no-drag text-muted-foreground ${railTile}`}
+                  className={`app-no-drag text-muted-foreground transition-colors hover:text-foreground ${railTile}`}
                 />
               }
               aria-label={t`Create`}

@@ -14,6 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- The bots sidebar has clearer visual hierarchy: subtle hairline dividers frame the header, sections and footer, section headers show item counts, `Name · Role` titles mute the role suffix, compact timestamps free up title width, working bots show a status badge on their avatar, and active rows are visually distinct from dark-theme hover highlights.
 - The web app opens in the Warm theme when you haven't picked one; an explicit choice in Settings, including System, is kept. Warm is now a dark charcoal theme with off-white text and an amber accent, and replies in it, including their tables and code, are set in JetBrains Mono (bundled, SIL Open Font License) at the reply text size.
 - Replies have more room: lines are set at 1.65, with larger gaps between paragraphs, lists, code blocks and headings, and between list items.
 - Full-window pages (free access, admin plugins, the board, link pages) share one page header, and its title now uses the standard heading size.
