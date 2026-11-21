@@ -1,6 +1,7 @@
 .rk-chat-markdown {
   min-width: 0;
   overflow-wrap: anywhere;
+  line-height: 1.65;
 }
 
 /* Warm reads like a printed page: replies set in a serif at the body size, while code keeps its
@@ -32,7 +33,7 @@
 .rk-chat-markdown table,
 .rk-chat-markdown ul,
 .rk-chat-markdown ol {
-  margin: 0.65em 0;
+  margin: 0.9em 0;
 }
 
 .rk-chat-markdown h1,
@@ -41,7 +42,7 @@
 .rk-chat-markdown h4,
 .rk-chat-markdown h5,
 .rk-chat-markdown h6 {
-  margin: 0.9em 0 0.35em;
+  margin: 1.25em 0 0.5em;
   color: var(--foreground);
   font-weight: 650;
   line-height: 1.25;
@@ -80,11 +81,11 @@
 }
 
 .rk-chat-markdown li + li {
-  margin-top: 0.25em;
+  margin-top: 0.45em;
 }
 
 .rk-chat-markdown li > p {
-  margin: 0.2em 0;
+  margin: 0.3em 0;
 }
 
 .rk-chat-markdown .contains-task-list,
@@ -126,7 +127,7 @@
   flex-direction: column;
   align-items: flex-start;
   gap: 0.25em;
-  margin: 0.65em 0;
+  margin: 0.9em 0;
 }
 
 .rk-chat-markdown .rk-chat-markdown-image:hover {
@@ -179,7 +180,7 @@
 
 .rk-chat-markdown-pre-wrap {
   position: relative;
-  margin: 0.65em 0;
+  margin: 0.9em 0;
 }
 
 /* A text fence reads as prose: the body font and wrapped lines on the code card, each line taking
@@ -290,7 +291,7 @@
   display: block;
   max-width: 100%;
   height: auto;
-  margin: 0.65em 0;
+  margin: 0.9em 0;
   border-radius: 0.65em;
 }
 
