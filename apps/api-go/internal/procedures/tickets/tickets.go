@@ -159,7 +159,7 @@ type Ticket struct {
 	CreatedAt       string   `json:"createdAt"`
 	UpdatedAt       string   `json:"updatedAt"`
 	CompletedAt     *string  `json:"completedAt"`
-	MentionsMe      bool     `json:"mentionsMe,omitempty"`
+	MentionsMe      bool     `json:"mentionsMe"`
 }
 
 // TicketComment is TicketCommentSchema (packages/contracts/src/board.ts:75-85).
@@ -624,17 +624,29 @@ func TextMentionsUser(text string, userNames []string) bool {
 	return false
 }
 
-func ticketMentionsUser(t Ticket, commentBodies []string, userNames []string) bool {
+type latestTicketComment struct {
+	AuthorUserID *string
+	Body         string
+}
+
+func ticketMentionsUser(t Ticket, latestComment *latestTicketComment, userID string, userNames []string) bool {
+	// Mentions only need the user's attention while a task is blocked or awaiting review.
+	// Moving the task to todo, doing, done, or closed resolves the mention.
+	if t.Status != "blocked" && t.Status != "review" {
+		return false
+	}
+	// If the latest comment on the task was written by the user, the user has already answered.
+	if latestComment != nil && latestComment.AuthorUserID != nil && *latestComment.AuthorUserID == userID {
+		return false
+	}
+	if latestComment != nil && TextMentionsUser(latestComment.Body, userNames) {
+		return true
+	}
 	if TextMentionsUser(t.Title, userNames) {
 		return true
 	}
 	if t.Description != nil && TextMentionsUser(*t.Description, userNames) {
 		return true
-	}
-	for _, body := range commentBodies {
-		if TextMentionsUser(body, userNames) {
-			return true
-		}
 	}
 	return false
 }
@@ -850,22 +862,33 @@ func List(ctx context.Context, database *db.DB, deployment shared.Deployment, ac
 			for i := range tickets {
 				ticketIDs[i] = tickets[i].ID
 			}
-			commentByTicket := make(map[string][]string, len(tickets))
+			latestByTicket := make(map[string]*latestTicketComment, len(tickets))
 			cRows, err := tx.Query(ctx, `
-				SELECT "ticketId", body FROM ticket_comments
+				SELECT DISTINCT ON ("ticketId") "ticketId", "authorUserId", body
+				FROM ticket_comments
 				WHERE "spaceId" = $1 AND "ticketId" = ANY($2)
+				ORDER BY "ticketId", "createdAt" DESC, id DESC
 			`, actor.SpaceID, ticketIDs)
 			if err == nil {
 				for cRows.Next() {
-					var tid, body string
-					if err := cRows.Scan(&tid, &body); err == nil {
-						commentByTicket[tid] = append(commentByTicket[tid], body)
+					var (
+						tid          string
+						authorUserID *string
+						body         string
+					)
+					if err := cRows.Scan(&tid, &authorUserID, &body); err == nil {
+						latestByTicket[tid] = &latestTicketComment{AuthorUserID: authorUserID, Body: body}
 					}
 				}
 				cRows.Close()
 			}
 			for i := range tickets {
-				tickets[i].MentionsMe = ticketMentionsUser(tickets[i], commentByTicket[tickets[i].ID], userNames)
+				tickets[i].MentionsMe = ticketMentionsUser(
+					tickets[i],
+					latestByTicket[tickets[i].ID],
+					actor.UserID,
+					userNames,
+				)
 			}
 		}
 		return nil
@@ -1106,7 +1129,7 @@ func Create(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 			deployment.Signals.PublishBoard(actor.SpaceID, board.ID, value.ID)
 		}
 		ticket, _ = dto(value, board.Prefix)
-		ticket.MentionsMe = ticketMentionsUser(ticket, nil, loadUserNames(ctx, tx, actor.UserID))
+		ticket.MentionsMe = ticketMentionsUser(ticket, nil, actor.UserID, loadUserNames(ctx, tx, actor.UserID))
 		if desc != nil {
 			if spaceBots, err := LoadSpaceBots(ctx, tx, actor.SpaceID); err == nil {
 				mentionedBots = ExtractMentionedBotIDs(*desc, spaceBots, "")
@@ -1416,7 +1439,7 @@ func Update(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 			deployment.Signals.PublishBoard(actor.SpaceID, board.ID, value.ID)
 		}
 		ticket, _ = dto(value, board.Prefix)
-		ticket.MentionsMe = ticketMentionsUser(ticket, nil, loadUserNames(ctx, tx, actor.UserID))
+		ticket.MentionsMe = ticketMentionsUser(ticket, nil, actor.UserID, loadUserNames(ctx, tx, actor.UserID))
 		if input.HasDescription && description != nil {
 			if spaceBots, err := LoadSpaceBots(ctx, tx, actor.SpaceID); err == nil {
 				mentionedBots = ExtractMentionedBotIDs(*description, spaceBots, "")

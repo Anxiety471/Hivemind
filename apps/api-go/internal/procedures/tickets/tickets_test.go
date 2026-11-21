@@ -179,4 +179,22 @@ func TestExtractMentionedBotIDsAndTextMentionsUser(t *testing.T) {
 	if TextMentionsUser("Routine background check completed", []string{"Joshua"}) {
 		t.Fatal("expected unrelated text not to match user mention")
 	}
+
+	desc := "Blocked on @Joshua for approval"
+	blockedTicket := Ticket{ID: "t1", Status: "blocked", Title: "Deploy", Description: &desc}
+	if !ticketMentionsUser(blockedTicket, nil, "u1", []string{"Joshua"}) {
+		t.Fatal("expected blocked ticket mentioning user to flag MentionsMe")
+	}
+	userID := "u1"
+	if ticketMentionsUser(blockedTicket, &latestTicketComment{AuthorUserID: &userID, Body: "Approved"}, "u1", []string{"Joshua"}) {
+		t.Fatal("expected user reply comment to resolve MentionsMe")
+	}
+	doingTicket := Ticket{ID: "t1", Status: "doing", Title: "Deploy", Description: &desc}
+	if ticketMentionsUser(doingTicket, nil, "u1", []string{"Joshua"}) {
+		t.Fatal("expected doing ticket not to flag MentionsMe")
+	}
+	doneTicket := Ticket{ID: "t1", Status: "done", Title: "Deploy", Description: &desc}
+	if ticketMentionsUser(doneTicket, nil, "u1", []string{"Joshua"}) {
+		t.Fatal("expected done ticket not to flag MentionsMe")
+	}
 }

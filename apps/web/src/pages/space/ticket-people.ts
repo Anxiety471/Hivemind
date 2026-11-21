@@ -93,7 +93,8 @@ export function textMentionsCurrentUser(
 }
 
 export function ticketMentionsMe(ticket: Ticket, currentUserName?: string | null): boolean {
-  if (ticket.mentionsMe) return true;
+  if (ticket.status !== "blocked" && ticket.status !== "review") return false;
+  if (ticket.mentionsMe !== undefined) return ticket.mentionsMe;
   return (
     textMentionsCurrentUser(ticket.title, currentUserName) ||
     textMentionsCurrentUser(ticket.description, currentUserName)

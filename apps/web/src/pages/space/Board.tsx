@@ -232,7 +232,7 @@ function TicketDialog({
       // Listed now, so the box empties before the list is read again.
       setBody("");
     },
-    stale: [commentsOptions.queryKey],
+    stale: [commentsOptions.queryKey, queries.tickets.list.key()],
   });
   const ownerBot = owner.startsWith("bot:")
     ? bots.find((bot) => bot.id === owner.slice(4))

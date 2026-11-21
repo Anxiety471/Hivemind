@@ -327,7 +327,7 @@ function TicketDetailView({
       }
       setBody("");
     },
-    stale: [commentsOptions.queryKey],
+    stale: [commentsOptions.queryKey, queries.tickets.list.key()],
   });
 
   if (editing) {
@@ -373,13 +373,25 @@ function TicketDetailView({
             </Button>
             <span className="text-label text-muted-foreground">{ticket.ref}</span>
             {ticketMentionsMe(ticket) ? (
-              <span
-                data-testid={`kanban-detail-mention-${ticket.id}`}
-                title={t`Mentioned you`}
-                className="inline-flex size-4 shrink-0 items-center justify-center rounded-full bg-destructive/15 text-caption font-bold text-destructive"
-              >
-                !
-              </span>
+              <>
+                <span
+                  data-testid={`kanban-detail-mention-${ticket.id}`}
+                  title={t`Mentioned you`}
+                  className="inline-flex size-4 shrink-0 items-center justify-center rounded-full bg-destructive/15 text-caption font-bold text-destructive"
+                >
+                  !
+                </span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="xs"
+                  data-testid="kanban-resolve-mention"
+                  disabled={moving.pending}
+                  onClick={() => moving.run("todo")}
+                >
+                  <Trans>Resolve</Trans>
+                </Button>
+              </>
             ) : null}
           </div>
           <DialogTitle className="text-start" dir="auto">
