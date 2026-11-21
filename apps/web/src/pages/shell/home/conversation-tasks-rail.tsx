@@ -21,6 +21,8 @@ import {
   CircleDot,
   Columns3,
   LoaderCircle,
+  PanelRightClose,
+  PanelRightOpen,
   Plus,
 } from "lucide-react";
 import type { ReactNode } from "react";
@@ -45,6 +47,13 @@ const PROMPT_TICKET_REF_RE = /\b([A-Za-z][A-Za-z0-9]*-\d+)\b/;
 
 const RAIL_SECTIONS = ["needsYou", "doing", "review", "blocked", "planned", "done"] as const;
 type RailSectionKey = (typeof RAIL_SECTIONS)[number];
+
+/** Whether the user collapsed the Tasks rail, kept on this device for every bot. */
+const railCollapsedPreference = createStoredPreference<boolean>({
+  key: "rakazo.tasksRailMinimized",
+  parse: (raw) => raw === "1",
+  serialize: (collapsed) => (collapsed ? "1" : null),
+});
 
 /** The rail sections the user folded, kept on this device for every bot. */
 const collapsedSectionsPreference = createStoredPreference<ReadonlySet<RailSectionKey>>({
@@ -119,8 +128,9 @@ export function ConversationTasksRail({ bot, bots }: { bot: Bot; bots: Bot[] }) 
   const { t } = useLingui();
   const queries = useSpaceQueries();
   const [kanbanTarget, setKanbanTarget] = useState<KanbanModalTarget | null>(null);
-  const tickets = useBotTickets(bot.id, true);
-  const activeRun = useBotActiveRun(bot.id, true);
+  const railCollapsed = railCollapsedPreference.use();
+  const tickets = useBotTickets(bot.id, !railCollapsed);
+  const activeRun = useBotActiveRun(bot.id, !railCollapsed);
   const collapsed = collapsedSectionsPreference.use();
   const moving = useSave({
     save: async (input: { id: string; status: TicketStatus }, rpc) => {
@@ -187,9 +197,35 @@ export function ConversationTasksRail({ bot, bots }: { bot: Bot; bots: Bot[] }) 
     />
   );
 
+  if (railCollapsed) {
+    return (
+      <aside
+        data-testid="conversation-tasks-rail"
+        data-collapsed="true"
+        aria-label={t`Tasks`}
+        className="hidden shrink-0 flex-col items-center border-s border-sidebar-border bg-background px-2 pt-3.5 pb-4 lg:flex"
+      >
+        <IconTooltip label={t`Show tasks`} side="inline-start">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            aria-label={t`Show tasks`}
+            aria-expanded={false}
+            data-testid="tasks-rail-toggle"
+            onClick={() => railCollapsedPreference.set(false)}
+          >
+            <PanelRightOpen className="size-4" strokeWidth={1.75} />
+          </Button>
+        </IconTooltip>
+      </aside>
+    );
+  }
+
   return (
     <aside
       data-testid="conversation-tasks-rail"
+      data-collapsed="false"
       aria-label={t`Tasks`}
       className="hidden w-[276px] shrink-0 flex-col border-s border-sidebar-border bg-background lg:flex xl:w-[308px]"
     >
@@ -221,6 +257,19 @@ export function ConversationTasksRail({ bot, bots }: { bot: Bot; bots: Bot[] }) 
                 onClick={() => setKanbanTarget("new")}
               >
                 <Plus className="size-4" strokeWidth={1.75} />
+              </Button>
+            </IconTooltip>
+            <IconTooltip label={t`Hide tasks`}>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                aria-label={t`Hide tasks`}
+                aria-expanded={true}
+                data-testid="tasks-rail-toggle"
+                onClick={() => railCollapsedPreference.set(true)}
+              >
+                <PanelRightClose className="size-4" strokeWidth={1.75} />
               </Button>
             </IconTooltip>
           </div>

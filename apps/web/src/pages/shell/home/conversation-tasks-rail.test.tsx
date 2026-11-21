@@ -302,3 +302,62 @@ it("remembers a folded section after the rail remounts", async () => {
   });
   expect(localStorage.getItem("rakazo.tasksRailCollapsed")).toBeNull();
 });
+
+it("collapses and expands the entire Tasks rail and persists the state", async () => {
+  botTickets.current = [
+    {
+      id: "t-1",
+      boardId: "b-1",
+      spaceId: "s-1",
+      number: 1,
+      ref: "TASK-1",
+      title: "Planned item",
+      description: null,
+      status: "todo",
+      priority: "normal",
+      assigneeBotId: "bot-1",
+      ownerUserId: null,
+      ownerBotId: "bot-1",
+      workerBotIds: ["bot-1"],
+      createdByBotId: "bot-1",
+      createdByUserId: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      completedAt: null,
+    },
+  ];
+  const rail = () => host.querySelector<HTMLElement>('[data-testid="conversation-tasks-rail"]');
+  const toggle = () => host.querySelector<HTMLElement>('[data-testid="tasks-rail-toggle"]');
+
+  await act(async () => {
+    root.render(<ConversationTasksRail bot={bot} bots={[bot]} />);
+  });
+  expect(rail()?.getAttribute("data-collapsed")).toBe("false");
+  expect(toggle()?.getAttribute("aria-expanded")).toBe("true");
+  expect(host.textContent).toContain("Planned item");
+
+  await act(async () => {
+    toggle()?.click();
+    await flush();
+  });
+
+  expect(rail()?.getAttribute("data-collapsed")).toBe("true");
+  expect(toggle()?.getAttribute("aria-expanded")).toBe("false");
+  expect(host.textContent).not.toContain("Planned item");
+  expect(localStorage.getItem("rakazo.tasksRailMinimized")).toBe("1");
+
+  act(() => root.unmount());
+  root = createRoot(host);
+  await act(async () => {
+    root.render(<ConversationTasksRail bot={{ ...bot, id: "bot-9" }} bots={[bot]} />);
+  });
+  expect(rail()?.getAttribute("data-collapsed")).toBe("true");
+
+  await act(async () => {
+    toggle()?.click();
+    await flush();
+  });
+  expect(rail()?.getAttribute("data-collapsed")).toBe("false");
+  expect(host.textContent).toContain("Planned item");
+  expect(localStorage.getItem("rakazo.tasksRailMinimized")).toBeNull();
+});
