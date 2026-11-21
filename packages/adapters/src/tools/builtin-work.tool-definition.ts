@@ -267,7 +267,7 @@ export const workTools: ConnectorTool[] = [
     inputSchema: {
       type: "object",
       properties: {
-        ref: { type: "string", description: "Ticket reference such as RAK-42, or the ticket id." },
+        ref: { type: "string", description: "Ticket reference such as TASK-42, or the ticket id." },
       },
       required: ["ref"],
     },
@@ -368,7 +368,10 @@ export const workTools: ConnectorTool[] = [
             properties: {
               op: { type: "string", enum: ["create", "update"] },
               ticketId: { type: "string", description: "Existing ticket id (for update)." },
-              ref: { type: "string", description: "Existing ticket ref like RAK-12 (for update)." },
+              ref: {
+                type: "string",
+                description: "Existing ticket ref like TASK-12 (for update).",
+              },
               title: {
                 type: "string",
                 maxLength: TICKET_TITLE_MAX_LENGTH,

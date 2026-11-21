@@ -222,7 +222,7 @@ export async function loadTurnContext(
       discoveredPromise,
       loadCurrentTurnImages(deps, turnBlocks, context),
       nonOwnerChatRun ? Promise.resolve("") : loadAgentMemoryContext(deps.memory, bot.id, context),
-      nonOwnerChatRun
+      nonOwnerChatRun || ticketBoardEnabled
         ? Promise.resolve("")
         : loadAgentScratchpadContext(deps, {
             spaceId: run.spaceId,

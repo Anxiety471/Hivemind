@@ -198,6 +198,10 @@ it("defaults new tasks to Owner=Me with the current bot as worker", async () => 
     await flush();
   });
 
+  expect(
+    Array.from(host.querySelectorAll("label")).map((label) => label.textContent),
+  ).not.toContain("Owner");
+
   const input = host.querySelector("input")!;
   await act(async () => {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(

@@ -2588,7 +2588,7 @@ model Board {
   spaceId      String   @unique
   space        Space    @relation(fields: [spaceId], references: [id], onDelete: Cascade)
   name         String   @default("Board")
-  ticketPrefix String   @default("RAK")
+  ticketPrefix String   @default("TASK")
   nextNumber   Int      @default(1)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt

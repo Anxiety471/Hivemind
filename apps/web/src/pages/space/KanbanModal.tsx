@@ -492,8 +492,8 @@ function TicketEditForm({
 
   const saving = useSave({
     save: async (_input, rpc) => {
-      const ownerPatch = ownerPayloadFromValue(owner, currentUserId);
       if (ticket) {
+        const ownerPatch = ownerPayloadFromValue(owner, currentUserId);
         await rpc.tickets.update({
           id: ticket.id,
           ...(title !== ticket.title ? { title } : {}),
@@ -507,7 +507,7 @@ function TicketEditForm({
         await rpc.tickets.create({
           title,
           description,
-          ...ownerPatch,
+          ...ownerPayloadFromValue(OWNER_ME_VALUE, currentUserId),
           workerBotIds,
           priority,
         });
@@ -563,17 +563,19 @@ function TicketEditForm({
               maxLength={TICKET_DESCRIPTION_MAX_LENGTH}
             />
           </Field>
-          <Field>
-            <FieldLabel htmlFor={`${formId}-owner`}>
-              <Trans>Owner</Trans>
-            </FieldLabel>
-            <OptionSelect
-              id={`${formId}-owner`}
-              value={owner}
-              onValueChange={setOwner}
-              options={ownerOptions}
-            />
-          </Field>
+          {ticket ? (
+            <Field>
+              <FieldLabel htmlFor={`${formId}-owner`}>
+                <Trans>Owner</Trans>
+              </FieldLabel>
+              <OptionSelect
+                id={`${formId}-owner`}
+                value={owner}
+                onValueChange={setOwner}
+                options={ownerOptions}
+              />
+            </Field>
+          ) : null}
           <Field>
             <FieldLabel htmlFor={`${formId}-workers`}>
               <Trans>Workers</Trans>

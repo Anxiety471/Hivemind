@@ -292,6 +292,9 @@ function ticketBoardClause(
 const FOLLOW_UP_INSTRUCTION =
   "Do not wait to be asked about open loops. When something is left open until a known time, you may schedule_create one one-shot follow-up for then that checks the scratchpad item and stays silent if it is done, and record the follow-up's routineId in that item's notes. When the item is resolved, complete it and schedule_cancel its follow-up. Never follow up on something the user declined.";
 
+const TICKET_FOLLOW_UP_INSTRUCTION =
+  "Do not wait to be asked about open loops. When something is left open until a known time, you may schedule_create one one-shot follow-up for then that checks the Kanban ticket with ticket_get and stays silent if it is done, and record the follow-up's routineId in that ticket's description or a comment. When the task is resolved, mark it done with ticket_update and schedule_cancel its follow-up. Never follow up on something the user declined.";
+
 function spawnBotClause(disabled?: ReadonlySet<string>): string | undefined {
   if (!builtinOffered(disabled, "spawn_bot")) return undefined;
   const demo = builtinOffered(disabled, "run_subagent") ? " Do not run_subagent to demo it." : "";
@@ -357,8 +360,12 @@ function toolUsageLine(parts: {
       : undefined,
     builtinOffered(disabled, "remember") ? "Use remember for durable facts." : undefined,
     ticketBoardClause(parts.ticketBoardEnabled, disabled),
-    scratchpadClause(disabled),
-    parts.followUpsOffered ? FOLLOW_UP_INSTRUCTION : undefined,
+    parts.ticketBoardEnabled ? undefined : scratchpadClause(disabled),
+    parts.followUpsOffered
+      ? parts.ticketBoardEnabled
+        ? TICKET_FOLLOW_UP_INSTRUCTION
+        : FOLLOW_UP_INSTRUCTION
+      : undefined,
     builtinOffered(disabled, "request_takeover")
       ? "When the user only needs to see something on the computer screen, such as a QR code, take a screenshot and use attach_file to send it into the chat. Use request_takeover when the user must provide protected input or human judgment, or operate the screen."
       : undefined,

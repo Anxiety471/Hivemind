@@ -180,6 +180,7 @@ export function selectBuiltinToolsForRun(options: {
         (tool.name !== "board_tickets" &&
           tool.name !== "task_sync" &&
           !tool.name.startsWith("ticket_"))) &&
+      (!options.ticketBoardEnabled || !tool.name.startsWith("scratchpad_")) &&
       (!isBackgroundRunTrigger(options.trigger) ||
         ![
           "message_user",
@@ -243,12 +244,9 @@ export function offeredFleetTools(tools: readonly { name: string }[]): string[] 
   return tools.map((tool) => tool.name).filter((name) => FLEET_TOOL_NAMES_SET.has(name));
 }
 
-const FOLLOW_UP_TOOL_NAMES = [
-  "scratchpad_add",
-  "scratchpad_complete",
-  "schedule_create",
-  "schedule_cancel",
-];
+const FOLLOW_UP_SCHEDULE_TOOLS = ["schedule_create", "schedule_cancel"];
+const FOLLOW_UP_SCRATCHPAD_TOOLS = ["scratchpad_add", "scratchpad_complete"];
+const FOLLOW_UP_TICKET_TOOLS = ["ticket_create", "ticket_update"];
 
 /**
  * Whether this run can set its own follow-ups. Only a run the owner started can tell what is
@@ -259,8 +257,12 @@ export function followUpsOffered(
   tools: readonly { name: string }[],
   ownerStartedRun: boolean,
 ): boolean {
+  if (!ownerStartedRun) return false;
+  const offered = new Set(tools.map((tool) => tool.name));
+  const hasSchedule = FOLLOW_UP_SCHEDULE_TOOLS.every((name) => offered.has(name));
+  if (!hasSchedule) return false;
   return (
-    ownerStartedRun &&
-    FOLLOW_UP_TOOL_NAMES.every((name) => tools.some((tool) => tool.name === name))
+    FOLLOW_UP_SCRATCHPAD_TOOLS.every((name) => offered.has(name)) ||
+    FOLLOW_UP_TICKET_TOOLS.every((name) => offered.has(name))
   );
 }

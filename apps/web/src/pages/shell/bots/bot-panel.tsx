@@ -48,10 +48,6 @@ import {
 } from "./bot-settings-sections";
 import { InstructionSettings } from "./instruction-settings";
 
-const ScratchpadSection = lazyComponent(() =>
-  import("../../space/ScratchpadSection").then((module) => module.ScratchpadSection),
-);
-
 const KnowledgeSection = lazyComponent(() =>
   import("../../space/KnowledgeSection").then((module) => module.KnowledgeSection),
 );
@@ -661,11 +657,6 @@ export function BotSettings({
           ) : null}
           <PagesList botId={bot.id} preview={{ onOpenAll: () => onViewChange?.("pages") }} />
         </div>
-        <ErrorBoundary fallback={<SectionLoadFailed />}>
-          <Suspense fallback={null}>
-            <ScratchpadSection botId={bot.id} />
-          </Suspense>
-        </ErrorBoundary>
         <div className="mt-6" data-testid="bot-settings-advanced">
           <SectionHeading variant="label" className="flex min-h-6 items-center">
             <button

@@ -204,9 +204,11 @@ it("creates a ticket without a status picker", async () => {
         .find((button) => button.textContent === "New ticket")!
         .click(),
     );
-    expect(
-      Array.from(page.container.querySelectorAll("label")).map((label) => label.textContent),
-    ).not.toContain("Status");
+    const labels = Array.from(page.container.querySelectorAll("label")).map(
+      (label) => label.textContent,
+    );
+    expect(labels).not.toContain("Status");
+    expect(labels).not.toContain("Owner");
     const input = page.container.querySelector("input")!;
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
