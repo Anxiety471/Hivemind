@@ -21,6 +21,7 @@ import { CONTRACT_ENCRYPTION_KEY } from "./contract-key.mts";
 type System = any;
 
 const OLD = new Date(Date.UTC(2022, 4, 1));
+const at = (seconds: number) => new Date(OLD.getTime() + seconds * 1000);
 const expires = () => new Date(Date.now() + 5 * 60_000);
 const store = new EncryptedSecretStore(CONTRACT_ENCRYPTION_KEY);
 const sealContext = {
@@ -195,6 +196,83 @@ export function laneJCases(system: System): Case[] {
         name: id,
         transport: "streamable_http",
         ...extra,
+      },
+    });
+
+  const addModel = async (
+    seeded: Seeded,
+    id: string,
+    provider: string,
+    secretText: string,
+    extra: Record<string, unknown> = {},
+  ) => {
+    const { wrongKey, ...fields } = extra as { wrongKey?: boolean } & Record<string, unknown>;
+    const recordId = `${seeded.userId}-${id}-secret`;
+    const ciphertext = wrongKey
+      ? (
+          await new EncryptedSecretStore("another-contract-key-0123456789abcdef").put(
+            secretText,
+            sealContext,
+            { recordId },
+          )
+        ).ciphertext
+      : await seal(recordId, secretText);
+    await system.secret.create({
+      data: {
+        id: recordId,
+        userId: seeded.userId,
+        spaceId: null,
+        kind: "model",
+        ciphertext,
+      },
+    });
+    const credential = await system.userModelCredential.create({
+      data: {
+        id: `${seeded.userId}-${id}`,
+        userId: seeded.userId,
+        provider,
+        label: id,
+        secretId: recordId,
+        ...fields,
+      },
+    });
+    return { ...credential, secretId: recordId, ciphertext };
+  };
+  const addPreference = (
+    seeded: Seeded,
+    credentialId: string,
+    modelId: string | null,
+    thinkingLevel: string | null,
+    updatedAt: Date,
+  ) =>
+    system.userModelPreference.create({
+      data: {
+        userId: seeded.userId,
+        credentialId,
+        modelId,
+        thinkingLevel,
+        createdAt: updatedAt,
+        updatedAt,
+      },
+    });
+  const addRoleChoice = (
+    seeded: Seeded,
+    choice: {
+      provider: string;
+      modelId: string;
+      thinkingLevel?: string;
+      credentialId?: string;
+    },
+  ) =>
+    system.userModelRoleChoice.create({
+      data: {
+        userId: seeded.userId,
+        role: "main",
+        position: 0,
+        provider: choice.provider,
+        modelId: choice.modelId,
+        thinkingLevel: choice.thinkingLevel ?? null,
+        credentialId: choice.credentialId ?? null,
       },
     });
 
@@ -620,6 +698,200 @@ export function laneJCases(system: System): Case[] {
     base("mcp-list-bad-transport", "mcp.servers.list", undefined, {
       seed: async (seeded) => {
         await addServer(seeded, "bad", { slug: "bad", transport: "carrier-pigeon" });
+      },
+    }),
+
+    // ---- models.credentials -----------------------------------------------------------------
+    base("model-credentials-empty", "models.credentials", undefined),
+    base("model-credentials-api-key", "models.credentials", undefined, {
+      seed: async (seeded) => {
+        await addModel(seeded, "key", "anthropic", "sk-ant-raw-key");
+      },
+    }),
+    base("model-credentials-api-key-json", "models.credentials", undefined, {
+      seed: async (seeded) => {
+        await addModel(seeded, "keyjson", "openai", JSON.stringify({
+          kind: "api_key",
+          key: "sk-openai",
+          maxTokens: 1024,
+          contextWindow: 8192,
+          accountId: "acct-1",
+          gatewayId: "gateway-1",
+          projectId: "project-1",
+          region: "eu",
+          cacheCapabilities: {
+            scope: "connection", retentionMs: 60000, minimumTokens: 128,
+            retentionMode: "short", inputCostPerMillion: 3, readCostPerMillion: 0.3,
+            writeCostPerMillion: 3.75,
+          },
+          models: { "gpt-5": { maxTokens: 512, contextWindow: 4096, reasoning: true } },
+        }));
+      },
+    }),
+    base("model-credentials-oauth", "models.credentials", undefined, {
+      seed: async (seeded) => {
+        await addModel(seeded, "oauth", "openai-codex", JSON.stringify({
+          kind: "oauth",
+          credential: { type: "oauth", access: "access-token", refresh: "refresh-token", expires: 1_900_000_000_000 },
+          maxTokens: 2048,
+        }));
+        await addModel(seeded, "legacy", "openai-codex", JSON.stringify({
+          type: "oauth", access: "legacy-access", refresh: "legacy-refresh", expires: 1_900_000_000_000,
+        }));
+      },
+    }),
+    base("model-credentials-oauth-reconnect", "models.credentials", undefined, {
+      seed: async (seeded) => {
+        await addModel(seeded, "reconnect", "openai-codex", JSON.stringify({
+          kind: "oauth", reconnectRequired: true, maxTokens: 4096,
+          models: { "gpt-5": { reasoning: false } },
+        }));
+      },
+    }),
+    base("model-credentials-unreadable", "models.credentials", undefined, {
+      seed: async (seeded) => {
+        const row = await addModel(seeded, "tampered", "anthropic", "sk-ant-tampered");
+        const body = row.ciphertext;
+        const at = Math.floor(body.length / 2);
+        await system.secret.update({
+          where: { id: row.secretId },
+          data: { ciphertext: `${body.slice(0, at)}${body[at] === "A" ? "B" : "A"}${body.slice(at + 1)}` },
+        });
+        await addModel(seeded, "wrongkey", "anthropic", "sk-ant-wrong-key", { wrongKey: true });
+        await system.userModelCredential.create({
+          data: {
+            id: `${seeded.userId}-missing`,
+            userId: seeded.userId,
+            provider: "anthropic",
+            label: "missing",
+            secretId: `${seeded.userId}-no-such-secret`,
+          },
+        });
+      },
+    }),
+    base("model-credentials-preferences", "models.credentials", undefined, {
+      seed: async (seeded) => {
+        const first = await addModel(seeded, "older", "anthropic", "sk-ant-older", { updatedAt: at(1) });
+        const second = await addModel(seeded, "newer", "anthropic", "sk-ant-newer", { updatedAt: at(2) });
+        await addPreference(seeded, first.id, "claude-sonnet-4", "high", at(10));
+        await addPreference(seeded, second.id, "claude-opus-4", "medium", at(20));
+      },
+    }),
+    base("model-credentials-main-choice", "models.credentials", undefined, {
+      seed: async (seeded) => {
+        const chosen = await addModel(seeded, "main", "anthropic", "sk-ant-main", { updatedAt: at(1) });
+        await addModel(seeded, "other", "openai", "sk-openai-other", { updatedAt: at(2) });
+        await addPreference(seeded, chosen.id, "claude-haiku-4", "low", at(5));
+        await addRoleChoice(seeded, {
+          provider: "anthropic", modelId: "claude-sonnet-4", thinkingLevel: "high",
+          credentialId: chosen.id,
+        });
+      },
+    }),
+    base("model-credentials-main-preference", "models.credentials", undefined, {
+      seed: async (seeded) => {
+        const preferred = await addModel(seeded, "preferred", "anthropic", "sk-ant-preferred", { updatedAt: at(1) });
+        await addModel(seeded, "newest", "anthropic", "sk-ant-newest", { updatedAt: at(2) });
+        await addPreference(seeded, preferred.id, "claude-sonnet-4", "medium", at(9));
+        await addRoleChoice(seeded, { provider: "anthropic", modelId: "claude-sonnet-4" });
+      },
+    }),
+    base("model-credentials-main-newest", "models.credentials", undefined, {
+      seed: async (seeded) => {
+        await addModel(seeded, "older", "anthropic", "sk-ant-older", { updatedAt: at(1) });
+        await addModel(seeded, "newest", "anthropic", "sk-ant-newest", { updatedAt: at(2) });
+        await addRoleChoice(seeded, { provider: "anthropic", modelId: "claude-sonnet-4" });
+      },
+    }),
+    base("model-credentials-space-main", "models.credentials", undefined, {
+      seed: async (seeded) => {
+        const account = await addModel(seeded, "account", "anthropic", "sk-ant-account", { updatedAt: at(1) });
+        const space = await addModel(seeded, "space", "openai", "sk-openai-space", { updatedAt: at(2) });
+        await system.spaceSettingOverride.create({
+          data: { spaceId: seeded.spaces[0], userId: seeded.userId, setting: "models" },
+        });
+        await system.spaceModelRoleChoice.create({
+          data: {
+            spaceId: seeded.spaces[0], userId: seeded.userId, role: "main", position: 0,
+            provider: "openai", modelId: "gpt-5", thinkingLevel: "low", credentialId: space.id,
+          },
+        });
+        await system.userModelRoleChoice.create({
+          data: {
+            userId: seeded.userId, role: "main", position: 0, provider: "anthropic",
+            modelId: "claude-sonnet-4", credentialId: account.id,
+          },
+        });
+      },
+    }),
+    base("model-credentials-other-user", "models.credentials", undefined, {
+      seed: async (seeded) => {
+        await system.user.create({
+          data: {
+            id: `${seeded.userId}-other`,
+            name: "Other",
+            email: `${seeded.userId}-other@example.test`,
+            emailVerified: true,
+          },
+        });
+        await addModel(seeded, "mine", "anthropic", "sk-ant-mine");
+        const ciphertext = await seal("other-model", "sk-ant-other");
+        await system.secret.create({
+          data: {
+            id: `${seeded.userId}-other-secret`, userId: `${seeded.userId}-other`,
+            spaceId: null, kind: "model", ciphertext,
+          },
+        });
+        await system.userModelCredential.create({
+          data: {
+            id: `${seeded.userId}-other-model`, userId: `${seeded.userId}-other`,
+            provider: "anthropic", label: "other", secretId: `${seeded.userId}-other-secret`,
+          },
+        });
+      },
+    }),
+    base("model-credentials-compatible", "models.credentials", undefined, {
+      seed: async (seeded) => {
+        await addModel(seeded, "compat", "openai-compatible", JSON.stringify({
+          kind: "openai_compatible",
+          baseUrl: "https://ollama.com/v1",
+          apiProtocol: "responses",
+          headers: { "X-Api-Key": "secret-value", "X-Second": "two" },
+          apiKey: "sk-compatible",
+          reasoning: false,
+          maxTokens: 512,
+          contextWindow: 8192,
+          visionModelIds: ["vision-model"],
+          enabledModelIds: ["model-a", "vision-model"],
+          maxImagesPerPrompt: 3,
+          cacheCapabilities: { scope: "account" },
+          models: { "model-a": { images: true, reasoning: true } },
+        }), { supportsImages: true });
+      },
+    }),
+    base("model-credentials-compatible-reasoning", "models.credentials", undefined, {
+      seed: async (seeded) => {
+        await addModel(seeded, "reasoning", "openai-compatible", JSON.stringify({
+          kind: "openai_compatible",
+          baseUrl: "https://api.longcat.chat/openai",
+          reasoning: true,
+          enabledModelIds: ["model-b"],
+        }));
+      },
+    }),
+    base("model-credentials-compatible-main-other", "models.credentials", undefined, {
+      seed: async (seeded) => {
+        const first = await addModel(seeded, "first", "openai-compatible", JSON.stringify({
+          kind: "openai_compatible", baseUrl: "https://example.test/v1",
+          enabledModelIds: ["model-a"],
+        }), { updatedAt: at(2) });
+        const enabling = await addModel(seeded, "enabling", "openai-compatible", JSON.stringify({
+          kind: "openai_compatible", baseUrl: "https://example.test/v1",
+          enabledModelIds: ["model-b"],
+        }), { updatedAt: at(1) });
+        await addRoleChoice(seeded, { provider: "openai-compatible", modelId: "model-b" });
+        void first;
+        void enabling;
       },
     }),
   ];

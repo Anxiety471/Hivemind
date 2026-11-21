@@ -28,6 +28,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/memory"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/memorycfg"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/messaging"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/modelcredentials"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/models"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/onboarding"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/pages"
@@ -340,6 +341,13 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 			ReadOnly: true,
 			Serve: func(ctx context.Context, actor db.Actor, _ orpc.Input) (any, *orpc.Error) {
 				return models.Backups(ctx, database, actor)
+			},
+		},
+		{
+			Name:     "models.credentials",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return modelcredentials.List(ctx, database, deployment, actor, input)
 			},
 		},
 		{
@@ -764,5 +772,6 @@ func VaultProcedures() []string {
 		"vault.list",
 		"botSecrets.list",
 		"mcp.servers.list",
+		"models.credentials",
 	}
 }

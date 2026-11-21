@@ -256,6 +256,7 @@ await writeFile(
       "vault.list": { mode: "go", readOnly: true },
       "botSecrets.list": { mode: "go", readOnly: true },
       "mcp.servers.list": { mode: "go", readOnly: true },
+      "models.credentials": { mode: "go", readOnly: true },
       "bots.revealWebhookSecret": { mode: "go", readOnly: true },
       "pages.remove": { mode: "go" },
       "computer.dismissUpdate": { mode: "go" },

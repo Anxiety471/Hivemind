@@ -34,7 +34,7 @@ func TestRegistryHasTheServedProceduresAndNotTrust(t *testing.T) {
 		"messaging.channels.respond", "messaging.channels.leave", "messaging.connections.list", "messaging.connections.revoke", "botSections.create", "botSections.update", "botSections.remove",
 		"connections.list", "connections.rename", "capabilities.list",
 		"usage.list", "usage.summary", "computer.updates",
-		"mcp.assignments.all", "mcp.assignments.list", "models.backups",
+		"mcp.assignments.all", "mcp.assignments.list", "models.backups", "models.credentials",
 		"spaces.rename", "spaces.members.list", "spaces.members.add",
 		"spaces.invites.preview", "spaces.invites.accept", "spaces.invites.cancel",
 		"organizations.list", "organizations.rename", "organizations.members.list",
