@@ -179,8 +179,9 @@ func List(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input) 
 			if err != nil {
 				return err
 			}
-			// new Date(text) is an absolute instant; TIMESTAMP(3) has no zone, so bind it in UTC.
-			args = append(args, at.UTC())
+			// new Date(text) is an absolute instant truncated to milliseconds; TIMESTAMP(3) has
+			// no zone, so bind the UTC wall clock at the same precision.
+			args = append(args, at.UTC().Truncate(time.Millisecond))
 			where += " AND \"createdAt\" >= $" + itoa(len(args))
 		}
 		if input.to != nil {
@@ -188,7 +189,7 @@ func List(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input) 
 			if err != nil {
 				return err
 			}
-			args = append(args, at.UTC())
+			args = append(args, at.UTC().Truncate(time.Millisecond))
 			where += " AND \"createdAt\" < $" + itoa(len(args))
 		}
 		if hasAfter {

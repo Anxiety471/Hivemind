@@ -165,7 +165,7 @@ export function laneHCases(system: System): Case[] {
 
   // ---- audit.events -------------------------------------------------------------------------
   const seedAudit = (options: {
-    role?: string; noMember?: boolean; foreignOnly?: boolean; metadata?: string; odd?: boolean; many?: number;
+    role?: string; noMember?: boolean; foreignOnly?: boolean; metadata?: string; odd?: boolean; many?: number; fraction?: boolean;
   } = {}) => async (seeded: Seeded) => {
     const user = seeded.userId;
     const row = (id: string, extra: Record<string, unknown> = {}) => ({
@@ -197,6 +197,9 @@ export function laneHCases(system: System): Case[] {
       }
     }
     if (options.odd) rows.push(row("avo", { createdAt: at(9), actorType: "robot", outcome: "maybe" }));
+    if (options.fraction) {
+      rows.push(row("avfrac", { createdAt: new Date(OLD.getTime() + 2123), action: "fraction.event" }));
+    }
     if (options.metadata === "list") {
       rows.push(row("avj", {
         createdAt: at(10),
@@ -437,6 +440,8 @@ export function laneHCases(system: System): Case[] {
     auditCase("from-and-to", { from: "2021-01-01T00:00:01.000Z", to: "2021-01-01T00:00:03.000Z" }),
     auditCase("offset-from", { from: "2021-01-01T05:30:02.000+05:30" }),
     auditCase("negative-offset-to", { to: "2020-12-31T19:00:03.000-05:00" }),
+    auditCase("sub-ms-from", { from: "2021-01-01T00:00:02.1235Z" }, seedAudit({ fraction: true })),
+    auditCase("sub-ms-to", { to: "2021-01-01T00:00:02.1235Z" }, seedAudit({ fraction: true })),
     auditCase("empty-filter-values-are-ignored", { spaceId: "", actorId: "", action: "" }),
     auditCase("limit-two-pages", { limit: 2 }, undefined, { paginate: true }),
     auditCase("limit-one-walk", { limit: 1 }, undefined, { paginate: true }),
