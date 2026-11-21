@@ -163,6 +163,7 @@ it("opens directly in read-first ticket detail view when targeting a ticket", as
   });
 
   expect(host.querySelector('[data-testid="kanban-ticket-detail"]')).not.toBeNull();
+  expect(host.querySelector('[data-testid="kanban-comment-panel"]')).not.toBeNull();
   expect(host.textContent).toContain("RAK-1");
   expect(host.textContent).toContain("Verify deploy");
 });

@@ -23,7 +23,7 @@ import {
   Textarea,
 } from "@rakazo/ui-web";
 import { skipToken, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Columns3, Pencil, Plus } from "lucide-react";
+import { ArrowLeft, Columns3, Pencil, Plus, Reply } from "lucide-react";
 import { useId, useState } from "react";
 import { formatRelativeTime } from "../../lib/locale/relative-time";
 import { useSave, useSpaceQueries } from "../../lib/query/query";
@@ -45,6 +45,15 @@ import { useBoardStream } from "./use-board-stream";
 import { WorkerBotsSelect } from "./WorkerBotsSelect";
 
 const KANBAN_COLUMNS: readonly TicketStatus[] = ["todo", "doing", "review", "blocked", "done"];
+
+function oneLineExcerpt(text: string, maxChars = 120): string {
+  const cleaned = text
+    .replace(/^>\s*In reply to[^\n]*\n+/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (cleaned.length <= maxChars) return cleaned;
+  return `${cleaned.slice(0, maxChars - 1)}…`;
+}
 
 export type KanbanModalTarget = "board" | "new" | Ticket;
 
@@ -99,7 +108,9 @@ export function KanbanModal({
     >
       <DialogContent
         data-testid="kanban-modal"
-        className={`max-h-[85vh] overflow-y-auto ${view === "board" ? "sm:max-w-5xl" : "sm:max-w-2xl"}`}
+        className={`max-h-[85vh] overflow-y-auto ${
+          view === "board" ? "sm:max-w-5xl" : view === "new" ? "sm:max-w-2xl" : "sm:max-w-4xl"
+        }`}
       >
         {view === "board" ? (
           <KanbanBoardView
@@ -302,11 +313,54 @@ function TicketDetailView({
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState(false);
   const [body, setBody] = useState("");
+  const [selectedReplyTarget, setSelectedReplyTarget] = useState<string | null>(null);
   const commentsOptions = queries.tickets.comments.queryOptions({
     input: ticket ? { ticketId: ticket.id } : skipToken,
   });
   const commentsQuery = useQuery(commentsOptions);
   const comments = commentsQuery.data ?? [];
+  const newestComments = [...comments].reverse();
+  const latestBotComment = newestComments.find((item) => Boolean(item.authorBotId));
+  const hasDescription = Boolean(ticket.description?.trim());
+  const defaultReplyTarget = latestBotComment
+    ? `comment:${latestBotComment.id}`
+    : hasDescription
+      ? "description"
+      : "general";
+  const effectiveReplyTarget = selectedReplyTarget ?? defaultReplyTarget;
+
+  const replyReference = (() => {
+    if (effectiveReplyTarget === "description" && ticket.description?.trim()) {
+      return {
+        label: t`Description`,
+        excerpt: oneLineExcerpt(ticket.description, 140),
+      };
+    }
+    if (effectiveReplyTarget.startsWith("comment:")) {
+      const targetId = effectiveReplyTarget.slice("comment:".length);
+      const found = comments.find((item) => item.id === targetId);
+      if (found) {
+        return {
+          label: found.authorName || t`Comment`,
+          excerpt: oneLineExcerpt(found.body, 140),
+        };
+      }
+    }
+    return null;
+  })();
+
+  const replyTargetOptions = [
+    ...(hasDescription ? [{ value: "description", label: t`Description` }] : []),
+    ...newestComments.map((item, index) => {
+      const author = item.authorName || t`Comment`;
+      const prefix = index === 0 ? `${author} (${t`latest`})` : author;
+      return {
+        value: `comment:${item.id}`,
+        label: `${prefix}: ${oneLineExcerpt(item.body, 40)}`,
+      };
+    }),
+    { value: "general", label: t`General comment` },
+  ];
 
   const moving = useSave({
     save: async (status: TicketStatus, rpc) => {
@@ -317,7 +371,14 @@ function TicketDetailView({
 
   const commenting = useSave({
     save: async (text: string, rpc) => {
-      const row = await rpc.tickets.comment({ ticketId: ticket.id, body: text });
+      const trimmed = text.trim();
+      const formatted = replyReference
+        ? `> In reply to ${replyReference.label}: "${replyReference.excerpt}"\n\n${trimmed}`.slice(
+            0,
+            TICKET_COMMENT_MAX_LENGTH,
+          )
+        : trimmed;
+      const row = await rpc.tickets.comment({ ticketId: ticket.id, body: formatted });
       if (queryClient.getQueryData(commentsOptions.queryKey)) {
         await writeSaved(queryClient, commentsOptions.queryKey, (previous = []) =>
           previous.some((item) => item.id === row.id) ? previous : [...previous, row],
@@ -439,42 +500,121 @@ function TicketDetailView({
         </span>
       </div>
 
-      {ticket.description?.trim() ? (
-        <div className="text-body text-foreground">
-          <ChatMarkdown>{ticket.description}</ChatMarkdown>
-        </div>
-      ) : null}
-
-      <div data-testid="kanban-ticket-comments" className="space-y-3 border-t border-border pt-3">
-        {comments.map((row) => (
-          <div key={row.id} className="text-body">
-            <div className="mb-1 flex items-center justify-between gap-3 text-label text-muted-foreground">
-              <span>{row.authorName}</span>
-              <time dateTime={row.createdAt}>{formatRelativeTime(row.createdAt)}</time>
+      <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,1fr)_280px]">
+        <div className="flex min-w-0 flex-col gap-3">
+          {ticket.description?.trim() ? (
+            <div
+              className={`rounded-lg border p-3 text-body text-foreground ${
+                effectiveReplyTarget === "description"
+                  ? "border-foreground/30 bg-muted/30"
+                  : "border-border/60 bg-muted/10"
+              }`}
+            >
+              <div className="mb-1.5 flex items-center justify-between gap-2 text-label text-muted-foreground">
+                <span>
+                  <Trans>Description</Trans>
+                </span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="xs"
+                  data-testid="kanban-reply-description"
+                  onClick={() => setSelectedReplyTarget("description")}
+                >
+                  <Reply className="size-3" aria-hidden />
+                  <Trans>Reply</Trans>
+                </Button>
+              </div>
+              <ChatMarkdown>{ticket.description}</ChatMarkdown>
             </div>
-            <ChatMarkdown>{row.body}</ChatMarkdown>
-          </div>
-        ))}
-        <form
-          className="space-y-2"
-          onSubmit={(event) => {
-            event.preventDefault();
-            commenting.run(body);
-          }}
+          ) : null}
+
+          {newestComments.length > 0 ? (
+            <div data-testid="kanban-ticket-comments" className="flex flex-col gap-2.5">
+              {newestComments.map((row) => {
+                const targetValue = `comment:${row.id}`;
+                const isTargeted = effectiveReplyTarget === targetValue;
+                return (
+                  <div
+                    key={row.id}
+                    data-testid={`kanban-comment-${row.id}`}
+                    className={`rounded-lg border p-3 text-body ${
+                      isTargeted ? "border-foreground/30 bg-muted/30" : "border-border/60 bg-card"
+                    }`}
+                  >
+                    <div className="mb-1.5 flex items-center justify-between gap-2 text-label text-muted-foreground">
+                      <span className="truncate font-medium text-foreground">{row.authorName}</span>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <time dateTime={row.createdAt}>{formatRelativeTime(row.createdAt)}</time>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="xs"
+                          data-testid={`kanban-reply-comment-${row.id}`}
+                          onClick={() => setSelectedReplyTarget(targetValue)}
+                        >
+                          <Reply className="size-3" aria-hidden />
+                          <Trans>Reply</Trans>
+                        </Button>
+                      </div>
+                    </div>
+                    <ChatMarkdown>{row.body}</ChatMarkdown>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <p data-testid="kanban-ticket-comments" className="text-body-sm text-muted-foreground">
+              <Trans>No comments yet</Trans>
+            </p>
+          )}
+        </div>
+
+        <aside
+          data-testid="kanban-comment-panel"
+          className="flex flex-col gap-2.5 rounded-lg border border-border bg-muted/20 p-3 lg:sticky lg:top-0"
         >
-          <Textarea
-            aria-label={t`Comment`}
-            placeholder={t`Add a note`}
-            value={body}
-            onChange={(event) => setBody(event.target.value)}
-            maxLength={TICKET_COMMENT_MAX_LENGTH}
-          />
-          <div className="flex justify-end">
-            <Button type="submit" size="sm" disabled={commenting.pending || !body.trim()}>
-              <Trans>Comment</Trans>
-            </Button>
+          <div className="flex flex-col gap-1.5">
+            <span className="text-label text-muted-foreground">
+              <Trans>Reply to</Trans>
+            </span>
+            <OptionSelect<string>
+              aria-label={t`Reply target`}
+              size="sm"
+              value={effectiveReplyTarget}
+              onValueChange={(value) => setSelectedReplyTarget(value)}
+              options={replyTargetOptions}
+            />
+            {replyReference ? (
+              <p
+                data-testid="kanban-reply-preview"
+                className="line-clamp-2 rounded border-s-2 border-muted-foreground/40 bg-background/60 px-2 py-1 text-label text-muted-foreground"
+              >
+                {replyReference.excerpt}
+              </p>
+            ) : null}
           </div>
-        </form>
+          <form
+            className="flex flex-col gap-2"
+            onSubmit={(event) => {
+              event.preventDefault();
+              commenting.run(body);
+            }}
+          >
+            <Textarea
+              aria-label={t`Comment`}
+              placeholder={t`Add a note`}
+              value={body}
+              onChange={(event) => setBody(event.target.value)}
+              maxLength={TICKET_COMMENT_MAX_LENGTH}
+            />
+            <div className="flex justify-end">
+              <Button type="submit" size="sm" disabled={commenting.pending || !body.trim()}>
+                <Trans>Comment</Trans>
+              </Button>
+            </div>
+          </form>
+        </aside>
       </div>
 
       {shownError ? (
