@@ -87,3 +87,31 @@ export function useBotTickets(botId: string | undefined, enabled: boolean) {
   useBoardStream(options, undefined, enabled && Boolean(botId));
   return query.data?.tickets ?? [];
 }
+
+/**
+ * The bot's current active run (including background `tickets` runs), kept live via the Space's
+ * `runs` change signal without polling.
+ */
+export function useBotActiveRun(botId: string | undefined, enabled: boolean) {
+  const queries = useSpaceQueries();
+  const runsOptions = queries.runs?.list?.queryOptions({
+    input: { filter: "active", includeTickets: true },
+    refetchOnWindowFocus: "always",
+  });
+  const query = useQuery({
+    queryKey: runsOptions?.queryKey ?? ["runs", "list", "active", "tickets", "disabled"],
+    queryFn: runsOptions?.queryFn ?? (async () => ({ runs: [] })),
+    enabled: enabled && Boolean(botId) && Boolean(runsOptions),
+    refetchOnWindowFocus: "always",
+  });
+  if (!botId) return null;
+  const botRuns = (query.data?.runs ?? []).filter((run) => run.botId === botId);
+  if (botRuns.length === 0) return null;
+  return (
+    botRuns.find((run) => run.status === "running") ??
+    botRuns.find((run) => run.status === "leased") ??
+    botRuns.find((run) => run.status === "waiting_input" || run.status === "waiting_takeover") ??
+    botRuns[0] ??
+    null
+  );
+}

@@ -4,6 +4,7 @@ import { Button, Collapsible, CollapsibleContent, CollapsibleTrigger } from "@ra
 import {
   ChevronDown,
   Circle,
+  CircleAlert,
   CircleCheck,
   CircleDashed,
   Columns3,
@@ -15,8 +16,7 @@ import { lazy, Suspense, useState } from "react";
 import { IconTooltip } from "../../../components/IconTooltip";
 import { formatRelativeTime } from "../../../lib/locale/relative-time";
 import type { KanbanModalTarget } from "../../space/KanbanModal";
-import { useBotTickets } from "../../space/use-board-stream";
-import { homeGroups } from "./home-groups";
+import { useBotActiveRun, useBotTickets } from "../../space/use-board-stream";
 
 const KanbanModal = lazy(() =>
   import("../../space/KanbanModal").then((module) => ({ default: module.KanbanModal })),
@@ -24,14 +24,31 @@ const KanbanModal = lazy(() =>
 
 const CLOSED_PREVIEW_COUNT = 3;
 
-const statusIcon: Record<TicketStatus, ReactNode> = {
-  todo: <CircleDashed className="size-3.5 text-muted-foreground" aria-hidden />,
-  doing: <LoaderCircle className="size-3.5 text-warning" aria-hidden />,
-  review: <Circle className="size-3.5 text-warning" aria-hidden />,
-  blocked: <Circle className="size-3.5 text-destructive" aria-hidden />,
-  done: <CircleCheck className="size-3.5 text-success" aria-hidden />,
-  closed: <CircleCheck className="size-3.5 text-muted-foreground" aria-hidden />,
-};
+function newestFirst(a: Ticket, b: Ticket): number {
+  return Date.parse(b.updatedAt) - Date.parse(a.updatedAt);
+}
+
+function ticketStatusIcon(status: TicketStatus, working: boolean): ReactNode {
+  switch (status) {
+    case "todo":
+      return <CircleDashed className="size-3.5 text-muted-foreground" aria-hidden />;
+    case "doing":
+      return (
+        <LoaderCircle
+          className={`size-3.5 text-warning ${working ? "animate-spin" : ""}`}
+          aria-hidden
+        />
+      );
+    case "review":
+      return <Circle className="size-3.5 text-warning" aria-hidden />;
+    case "blocked":
+      return <CircleAlert className="size-3.5 text-destructive" aria-hidden />;
+    case "done":
+      return <CircleCheck className="size-3.5 text-success" aria-hidden />;
+    case "closed":
+      return <CircleCheck className="size-3.5 text-muted-foreground" aria-hidden />;
+  }
+}
 
 /**
  * Persistent right-side task visualization shown alongside a bot conversation when the Kanban
@@ -41,10 +58,38 @@ export function ConversationTasksRail({ bot, bots }: { bot: Bot; bots: Bot[] }) 
   const { t } = useLingui();
   const [kanbanTarget, setKanbanTarget] = useState<KanbanModalTarget | null>(null);
   const tickets = useBotTickets(bot.id, true);
-  const groups = homeGroups(tickets);
+  const activeRun = useBotActiveRun(bot.id, true);
+  const doing = tickets.filter((item) => item.status === "doing").sort(newestFirst);
+  const review = tickets.filter((item) => item.status === "review").sort(newestFirst);
+  const blocked = tickets.filter((item) => item.status === "blocked").sort(newestFirst);
+  const planned = tickets.filter((item) => item.status === "todo").sort(newestFirst);
+  const closed = tickets
+    .filter((item) => item.status === "done" || item.status === "closed")
+    .sort(newestFirst);
+
   const total = tickets.length;
-  const activeCount = groups.inProgress.length + groups.planned.length;
-  const doneCount = groups.closed.length;
+  const activeCount = doing.length + review.length + blocked.length + planned.length;
+  const doneCount = closed.length;
+  const working = Boolean(
+    activeRun &&
+      (activeRun.status === "running" ||
+        activeRun.status === "leased" ||
+        activeRun.status === "queued"),
+  );
+  const waiting = Boolean(
+    activeRun && (activeRun.status === "waiting_input" || activeRun.status === "waiting_takeover"),
+  );
+  const activityLabel = activeRun
+    ? activeRun.status === "queued"
+      ? t`Queued`
+      : activeRun.status === "leased"
+        ? t`Starting…`
+        : waiting
+          ? t`Waiting on you`
+          : activeRun.trigger === "tickets"
+            ? t`Working on tasks`
+            : t`Working`
+    : null;
 
   return (
     <aside
@@ -85,6 +130,19 @@ export function ConversationTasksRail({ bot, bots }: { bot: Bot; bots: Bot[] }) 
           </div>
         </div>
 
+        {activityLabel ? (
+          <div
+            data-testid="tasks-rail-activity"
+            className="mb-3 flex items-center gap-2 rounded-md border border-border/60 bg-muted/30 px-2.5 py-1.5 text-label text-foreground"
+          >
+            <LoaderCircle
+              className={`size-3.5 shrink-0 text-warning ${working ? "animate-spin" : ""}`}
+              aria-hidden
+            />
+            <span className="truncate">{activityLabel}</span>
+          </div>
+        ) : null}
+
         {total > 0 ? (
           <>
             <div data-testid="tasks-rail-progress" className="mb-3.5 flex flex-col gap-1.5">
@@ -107,29 +165,41 @@ export function ConversationTasksRail({ bot, bots }: { bot: Bot; bots: Bot[] }) 
                 {doneCount > 0 ? (
                   <div className="bg-success" style={{ width: `${(doneCount / total) * 100}%` }} />
                 ) : null}
-                {groups.inProgress.length > 0 ? (
+                {doing.length + review.length > 0 ? (
                   <div
                     className="bg-warning"
-                    style={{ width: `${(groups.inProgress.length / total) * 100}%` }}
+                    style={{ width: `${((doing.length + review.length) / total) * 100}%` }}
                   />
                 ) : null}
-                {groups.planned.length > 0 ? (
+                {blocked.length > 0 ? (
+                  <div
+                    className="bg-destructive"
+                    style={{ width: `${(blocked.length / total) * 100}%` }}
+                  />
+                ) : null}
+                {planned.length > 0 ? (
                   <div
                     className="bg-muted-foreground/30"
-                    style={{ width: `${(groups.planned.length / total) * 100}%` }}
+                    style={{ width: `${(planned.length / total) * 100}%` }}
                   />
                 ) : null}
               </div>
             </div>
 
-            <RailSection title={t`In progress`} count={groups.inProgress.length}>
-              <RailTicketRows tickets={groups.inProgress} onSelect={setKanbanTarget} />
+            <RailSection title={t`Doing`} count={doing.length}>
+              <RailTicketRows tickets={doing} working={working} onSelect={setKanbanTarget} />
             </RailSection>
-            <RailSection title={t`Planned`} count={groups.planned.length}>
-              <RailTicketRows tickets={groups.planned} onSelect={setKanbanTarget} />
+            <RailSection title={t`Review`} count={review.length}>
+              <RailTicketRows tickets={review} working={false} onSelect={setKanbanTarget} />
             </RailSection>
-            <RailSection title={t`Done`} count={groups.closed.length}>
-              <RailClosedRows tickets={groups.closed} onSelect={setKanbanTarget} />
+            <RailSection title={t`Blocked`} count={blocked.length}>
+              <RailTicketRows tickets={blocked} working={false} onSelect={setKanbanTarget} />
+            </RailSection>
+            <RailSection title={t`Planned`} count={planned.length}>
+              <RailTicketRows tickets={planned} working={false} onSelect={setKanbanTarget} />
+            </RailSection>
+            <RailSection title={t`Done`} count={closed.length}>
+              <RailClosedRows tickets={closed} onSelect={setKanbanTarget} />
             </RailSection>
           </>
         ) : (
@@ -200,9 +270,11 @@ function RailSection({
 
 function RailTicketRows({
   tickets,
+  working,
   onSelect,
 }: {
   tickets: Ticket[];
+  working: boolean;
   onSelect: (ticket: Ticket) => void;
 }) {
   return (
@@ -216,7 +288,7 @@ function RailTicketRows({
             className="flex w-full flex-col gap-0.5 rounded-md px-1.5 py-1.5 text-start transition-colors hover:bg-accent"
           >
             <div className="flex w-full items-center gap-2">
-              <span className="shrink-0">{statusIcon[ticket.status]}</span>
+              <span className="shrink-0">{ticketStatusIcon(ticket.status, working)}</span>
               <span className="min-w-0 flex-1 truncate text-body-sm text-foreground" dir="auto">
                 {ticket.title}
               </span>
@@ -244,7 +316,7 @@ function RailClosedRows({
   const hidden = tickets.length - shown.length;
   return (
     <>
-      <RailTicketRows tickets={shown} onSelect={onSelect} />
+      <RailTicketRows tickets={shown} working={false} onSelect={onSelect} />
       {hidden > 0 ? (
         <button
           type="button"

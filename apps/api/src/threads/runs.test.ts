@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { activityNotificationsEnabled, activityPreview } from "./runs.js";
+import { describe, expect, it, vi } from "vitest";
+import { activityNotificationsEnabled, activityPreview, listSpaceRuns } from "./runs.js";
 
 describe("run activity copy", () => {
   it.each([
@@ -140,5 +140,31 @@ it("hides opaque sender names in Activity previews", () => {
   ).toEqual({
     promptSnippet: "Update from Another agent: Ready",
     agentMessage: { fromBotName: "", kind: "update", text: "Ready" },
+  });
+});
+
+describe("listSpaceRuns", () => {
+  it("excludes background ticket runs by default and includes them when requested", async () => {
+    const findMany = vi.fn(async () => []);
+    const prisma = { run: { findMany } } as never;
+    const actor = { spaceId: "space-1", userId: "user-1" } as never;
+
+    await listSpaceRuns(prisma, actor, "active");
+    expect(findMany).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          trigger: { notIn: expect.arrayContaining(["tickets"]) },
+        }),
+      }),
+    );
+
+    await listSpaceRuns(prisma, actor, "active", { includeTickets: true });
+    expect(findMany).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          trigger: { notIn: expect.not.arrayContaining(["tickets"]) },
+        }),
+      }),
+    );
   });
 });

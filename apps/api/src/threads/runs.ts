@@ -15,11 +15,8 @@ import { Prisma } from "@rakazo/db";
 const RECENT_LIMIT = 20;
 // Background ticket work belongs on the board, not in the activity list. A background helper and
 // the turn passing on its result show in the chat, on the helper's card.
-const ACTIVITY_HIDDEN_TRIGGERS = [
-  ...BACKGROUND_RUN_TRIGGERS,
-  BACKGROUND_HELPER_TRIGGER,
-  HELPER_RESULT_TRIGGER,
-] as const;
+const HELPER_HIDDEN_TRIGGERS = [BACKGROUND_HELPER_TRIGGER, HELPER_RESULT_TRIGGER] as const;
+const ACTIVITY_HIDDEN_TRIGGERS = [...BACKGROUND_RUN_TRIGGERS, ...HELPER_HIDDEN_TRIGGERS] as const;
 const TERMINAL_STATUSES = ["completed", "failed", "cancelled"] as const;
 
 function promptSnippet(prompt: string, max = 120): string {
@@ -69,17 +66,24 @@ export async function listSpaceRuns(
   prisma: PrismaClient,
   actor: Actor,
   filter: "active" | "recent",
+  options?: { includeTickets?: boolean },
 ): Promise<RunActivityRow[]> {
+  const hiddenTriggers = options?.includeTickets
+    ? HELPER_HIDDEN_TRIGGERS
+    : ACTIVITY_HIDDEN_TRIGGERS;
   const rows = await prisma.run.findMany({
     where:
       filter === "active"
         ? {
             spaceId: actor.spaceId,
             bot: { archivedAt: null },
-            trigger: { notIn: [...ACTIVITY_HIDDEN_TRIGGERS] },
+            trigger: { notIn: [...hiddenTriggers] },
             status: { in: [...ACTIVE_RUN_STATUSES] },
           }
-        : { spaceId: actor.spaceId, id: { in: await latestFinishedRunPerChat(prisma, actor) } },
+        : {
+            spaceId: actor.spaceId,
+            id: { in: await latestFinishedRunPerChat(prisma, actor, hiddenTriggers) },
+          },
     include: {
       bot: { select: { name: true, archivedAt: true, notifyOnFinish: true } },
       task: { select: { prompt: true } },
@@ -120,7 +124,11 @@ export async function listSpaceRuns(
 }
 
 /** Recent lists chats keyed like `activitySections`, so one busy chat must not push the others out of the limit. */
-async function latestFinishedRunPerChat(prisma: PrismaClient, actor: Actor): Promise<string[]> {
+async function latestFinishedRunPerChat(
+  prisma: PrismaClient,
+  actor: Actor,
+  hiddenTriggers: readonly string[] = ACTIVITY_HIDDEN_TRIGGERS,
+): Promise<string[]> {
   const rows = await prisma.$queryRaw<Array<{ id: string }>>`
     SELECT id FROM (
       SELECT DISTINCT ON (COALESCE('group:' || t."groupId", 'bot:' || r."botId")) r.id, r."completedAt", r."updatedAt"
@@ -129,7 +137,7 @@ async function latestFinishedRunPerChat(prisma: PrismaClient, actor: Actor): Pro
       JOIN bots b ON b.id = r."botId"
       WHERE r."spaceId" = ${actor.spaceId}
         AND b."archivedAt" IS NULL
-        AND r.trigger NOT IN (${Prisma.join([...ACTIVITY_HIDDEN_TRIGGERS])})
+        AND r.trigger NOT IN (${Prisma.join([...hiddenTriggers])})
         AND r.status IN (${Prisma.join([...TERMINAL_STATUSES])})
       ORDER BY COALESCE('group:' || t."groupId", 'bot:' || r."botId"), r."completedAt" DESC, r."updatedAt" DESC, r.id DESC
     ) latest

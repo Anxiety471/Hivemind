@@ -605,6 +605,7 @@ func (s *Service) wakeBotForTicket(ctx context.Context, job Job) (WakeResult, er
 	}
 	if result.RunID != "" && s.signals != nil {
 		s.signals.PublishRunReady(result.RunID)
+		s.signals.PublishSpaceChange(job.SpaceID, "runs")
 	}
 	return result, nil
 }
