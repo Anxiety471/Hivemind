@@ -1,7 +1,8 @@
-// Package tickets ports tickets.move and tickets.comment (apps/api/src/routes/boards.ts:167-184
-// over packages/adapters/src/ticket-tools.ts:207-299 and packages/db/src/board.ts).
+// Package tickets serves the board and its tickets: boards.list, get, rename and subscribe, and
+// tickets.list, get, create, update, move, comment and comments (apps/api/src/routes/boards.ts over
+// packages/adapters/src/tasks/ticket-tools.ts and packages/db/src/artifacts/board.ts).
 //
-// Both are behind boardEnabled (routes/context.ts:471-480): TICKET_BOARD_ENABLED for every account,
+// All of them are behind boardEnabled (routes/context.ts:471-480): TICKET_BOARD_ENABLED for every account,
 // else each account's own labs list. The writes are plain tickets/ticket_comments rows. After the
 // board frame BoardEvents.notify publishes, a move to todo, doing or review and every comment wake
 // the ticket's worker bots through the Go task queue (Deployment.Waker); done, closed and blocked

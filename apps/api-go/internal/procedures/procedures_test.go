@@ -15,8 +15,11 @@ func TestRegistryHasTheServedProceduresAndNotTrust(t *testing.T) {
 			t.Errorf("duplicate procedure %s", procedure.Name)
 		}
 		seen[procedure.Name] = true
-		if procedure.Serve == nil {
+		if procedure.Serve == nil && (procedure.Stream == nil || procedure.Stream.Follow == nil || procedure.Stream.Frame == nil) {
 			t.Errorf("%s has no handler", procedure.Name)
+		}
+		if procedure.Serve != nil && procedure.Stream != nil {
+			t.Errorf("%s is both a call and a stream", procedure.Name)
 		}
 	}
 	for _, name := range []string{
@@ -43,6 +46,7 @@ func TestRegistryHasTheServedProceduresAndNotTrust(t *testing.T) {
 		"bots.templates", "skills.list", "agentSecrets.list", "audit.events", "vault.activity",
 		"computer.dismissUpdate", "computer.dismissDiskWarning",
 		"boards.list", "boards.get", "boards.rename",
+		"tickets.get", "tickets.comments", "boards.subscribe",
 	} {
 		if !seen[name] {
 			t.Errorf("missing %s", name)

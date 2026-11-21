@@ -200,6 +200,8 @@ func setupLocal(buildIDFile string, logger *slog.Logger) (*local.Server, *taskde
 	// it, and the procedures publish thread cursors, organization and board changes through
 	// the same notifier, so Wait() covers every signal either side started.
 	effectsRunner := effects.NewRunner(database, logger)
+	// One listener on rakazo_events serves every event stream this process answers.
+	realtime := events.NewFanout(database.Pool.Config().ConnConfig, logger)
 	// The queue is built before the procedures so a ticket move or comment can wake workers on it.
 	var queueStore taskqueue.QueueStore
 	if deployment.RedisURL != "" {
@@ -232,6 +234,7 @@ func setupLocal(buildIDFile string, logger *slog.Logger) (*local.Server, *taskde
 		MaxComputersPerUser: deployment.MaxComputersPerUser,
 		Content:             ring,
 		Events:              &events.PGPublisher{Pool: database.Pool},
+		Realtime:            realtime,
 		Signals:             effectsRunner.Signals(),
 		BoardLab:            deployment.BoardLab,
 		Audit:               effectsRunner.Recorder(),
@@ -257,6 +260,7 @@ func setupLocal(buildIDFile string, logger *slog.Logger) (*local.Server, *taskde
 	}
 	return server, detector, queueSvc, func() {
 		_ = queueSvc.Close()
+		realtime.Close()
 		closeRing()
 		database.Close()
 	}, nil

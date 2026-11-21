@@ -555,6 +555,29 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 			},
 		},
 		{
+			Name:     "tickets.get",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return tickets.Get(ctx, database, deployment, actor, input)
+			},
+		},
+		{
+			Name:     "tickets.comments",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return tickets.Comments(ctx, database, deployment, actor, input)
+			},
+		},
+		{
+			Name: "boards.subscribe",
+			Stream: &local.Stream{
+				Follow: func(ctx context.Context, actor db.Actor, input orpc.Input) (<-chan string, func(), *orpc.Error) {
+					return tickets.FollowBoard(ctx, database, deployment, actor, input)
+				},
+				Frame: tickets.BoardFrame,
+			},
+		},
+		{
 			Name: "skills.updateDraft",
 			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
 				return skills.UpdateDraft(ctx, database, deployment, actor, input)

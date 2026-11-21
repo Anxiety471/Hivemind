@@ -132,6 +132,10 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				g.logger.Error("procedure shadow has no Go implementation",
 					"procedure", procedure)
 				writeEnvelope(status, http.StatusNotImplemented, "NOT_IMPLEMENTED", "Not Implemented")
+			} else if g.local.Streams(procedure) {
+				// A comparison waits for the whole body, and a stream has none.
+				g.logger.Error("refusing to shadow a stream procedure", "procedure", procedure)
+				g.proxy.ServeHTTP(status, r)
 			} else if !readOnly {
 				// Shadowing a write would duplicate it.
 				g.logger.Error("refusing to shadow a write procedure", "procedure", procedure)

@@ -102,9 +102,10 @@ func WriteJSON(w http.ResponseWriter, status int, value any) {
 	_, _ = w.Write(body)
 }
 
-// WriteError writes the ORPC error envelope. The client requires exactly these
-// keys and rejects extra ones.
-func WriteError(w http.ResponseWriter, failure *Error) {
+// ErrorBody is the ORPC error envelope as a response body, and as the data of an event stream's
+// error event. The client requires exactly these keys and rejects extra ones. A failure that
+// cannot be encoded is answered as an internal error.
+func ErrorBody(failure *Error) ([]byte, *Error) {
 	envelope := map[string]any{
 		"defined": false,
 		"code":    failure.Code,
@@ -116,9 +117,14 @@ func WriteError(w http.ResponseWriter, failure *Error) {
 	}
 	body, err := Marshal(map[string]any{"json": envelope})
 	if err != nil {
-		body = []byte(`{"json":{"defined":false,"code":"INTERNAL_SERVER_ERROR","status":500,"message":"Internal server error"}}`)
-		failure = Internal()
+		return []byte(`{"json":{"defined":false,"code":"INTERNAL_SERVER_ERROR","status":500,"message":"Internal server error"}}`), Internal()
 	}
+	return body, failure
+}
+
+// WriteError writes the ORPC error envelope.
+func WriteError(w http.ResponseWriter, failure *Error) {
+	body, failure := ErrorBody(failure)
 	w.Header().Set("Content-Type", "application/json")
 	if failure.Status == http.StatusServiceUnavailable {
 		w.Header().Set("Retry-After", "5")

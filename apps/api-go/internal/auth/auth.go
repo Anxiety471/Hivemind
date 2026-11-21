@@ -69,25 +69,12 @@ type Session struct {
 // better-auth would: same token, new expiry, one Set-Cookie for the cookie the
 // caller actually sent.
 func (s *Service) Authenticate(ctx context.Context, r *http.Request) (*Session, *http.Cookie, *orpc.Error) {
-	token, cookieName, viaCookie, signed := credentials(r, s.names)
-	if token == "" {
-		return nil, nil, orpc.Unauthorized()
-	}
-	raw, ok := s.verify(token)
-	if !ok || !signed {
-		return nil, nil, orpc.Unauthorized()
-	}
-	session, failure := s.load(ctx, raw)
+	session, failure := s.session(ctx, r)
 	if failure != nil {
 		return nil, nil, failure
 	}
-	session.CookieName = cookieName
-	session.ViaCookie = viaCookie
-	if failure := s.authorized(ctx, session); failure != nil {
-		return nil, nil, failure
-	}
 	var renewal *http.Cookie
-	if viaCookie && time.Until(session.ExpiresAt) <= renewAfter {
+	if session.ViaCookie && time.Until(session.ExpiresAt) <= renewAfter {
 		if cookie, err := s.renew(ctx, session); err == nil {
 			renewal = cookie
 		} else if db.IsUnavailable(err) {
@@ -95,6 +82,39 @@ func (s *Service) Authenticate(ctx context.Context, r *http.Request) (*Session, 
 		}
 	}
 	return session, renewal, nil
+}
+
+// Recheck is the authorization a stream repeats while it stays open: the session and the Space
+// are resolved again without renewing the cookie, as requestSession(request, true) does. A
+// session that has ended, or a person who left the Space, comes back as Unauthorized.
+func (s *Service) Recheck(ctx context.Context, r *http.Request) (db.Actor, *orpc.Error) {
+	session, failure := s.session(ctx, r)
+	if failure != nil {
+		return db.Actor{}, failure
+	}
+	return s.Actor(ctx, session, r.Header.Get("x-rakazo-space-id"))
+}
+
+// session finds and authorizes the request's session.
+func (s *Service) session(ctx context.Context, r *http.Request) (*Session, *orpc.Error) {
+	token, cookieName, viaCookie, signed := credentials(r, s.names)
+	if token == "" {
+		return nil, orpc.Unauthorized()
+	}
+	raw, ok := s.verify(token)
+	if !ok || !signed {
+		return nil, orpc.Unauthorized()
+	}
+	session, failure := s.load(ctx, raw)
+	if failure != nil {
+		return nil, failure
+	}
+	session.CookieName = cookieName
+	session.ViaCookie = viaCookie
+	if failure := s.authorized(ctx, session); failure != nil {
+		return nil, failure
+	}
+	return session, nil
 }
 
 func (s *Service) load(ctx context.Context, token string) (*Session, *orpc.Error) {

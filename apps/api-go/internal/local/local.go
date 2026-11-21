@@ -30,6 +30,48 @@ type Procedure struct {
 	Name     string
 	ReadOnly bool
 	Serve    func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error)
+	// Stream, when set, replaces Serve: the procedure answers with an event stream. It is never
+	// shadowed (a comparison would wait for a stream that does not end).
+	Stream *Stream
+}
+
+// Stream is a procedure that answers with an oRPC event iterator over server-sent events.
+// The server owns the framing, the keepalive comments, the heartbeat and the periodic
+// re-check that the session is still the one that opened the stream.
+type Stream struct {
+	// Follow runs the procedure's own checks and starts listening. A failure is answered as an
+	// ordinary error before any stream starts. Each payload read from signals becomes a Frame;
+	// stop ends the listening.
+	Follow func(ctx context.Context, actor db.Actor, input orpc.Input) (signals <-chan string, stop func(), failure *orpc.Error)
+	// Frame is the event a signal's payload stands for. An empty payload is the heartbeat the
+	// server sends after a quiet spell: any frame tells the client the stream is alive, and
+	// makes it read again if a signal was missed.
+	Frame func(actor db.Actor, payload string) any
+}
+
+// StreamTiming sets how a stream paces itself; zero fields take the defaults the TypeScript
+// API uses.
+type StreamTiming struct {
+	// Keepalive is how often an empty comment goes out (oRPC's event-stream default).
+	Keepalive time.Duration
+	// Heartbeat is the silence after which a stream sends a frame of its own (HEARTBEAT_MS).
+	Heartbeat time.Duration
+	// Recheck is how often the session is looked up again before a frame goes out
+	// (SESSION_RECHECK_MS).
+	Recheck time.Duration
+}
+
+func (t StreamTiming) withDefaults() StreamTiming {
+	if t.Keepalive <= 0 {
+		t.Keepalive = 5 * time.Second
+	}
+	if t.Heartbeat <= 0 {
+		t.Heartbeat = 20 * time.Second
+	}
+	if t.Recheck <= 0 {
+		t.Recheck = 10 * time.Second
+	}
+	return t
 }
 
 // Config is the per-deployment middleware configuration.
@@ -48,6 +90,8 @@ type Config struct {
 	// notifier the procedures publish through. nil builds its own, which no procedure can
 	// reach: a procedure that publishes signals needs the runner handed in.
 	Effects *effects.Runner
+	// Stream paces the procedures that answer with an event stream.
+	Stream StreamTiming
 }
 
 // Server handles /rpc requests for procedures this build implements.
@@ -116,6 +160,12 @@ func RequestMaxBytes(maxUpload int64) int64 {
 func (s *Server) Has(name string) bool {
 	_, ok := s.procs[name]
 	return ok
+}
+
+// Streams reports whether the procedure answers with an event stream.
+func (s *Server) Streams(name string) bool {
+	procedure, ok := s.procs[name]
+	return ok && procedure.Stream != nil
 }
 
 // Wait blocks until the background realtime signals of served procedures have gone out.
@@ -196,6 +246,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request, procedure str
 		UserAgent: r.Header.Get("User-Agent"),
 	}
 	ctx := effects.WithCaller(r.Context(), caller)
+	if handler.Stream != nil {
+		s.serveStream(status, r, procedure, handler.Stream, actor, input, ctx)
+		s.log(r, procedure, status.Status(), started)
+		return
+	}
 	output, failure := handler.Serve(ctx, actor, input)
 	if failure != nil {
 		orpc.WriteError(status, failure)

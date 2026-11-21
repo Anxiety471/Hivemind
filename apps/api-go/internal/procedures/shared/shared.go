@@ -65,6 +65,9 @@ type Deployment struct {
 	// Signals is the realtime notifier procedures publish organization and board changes
 	// through. nil in tests that never publish one.
 	Signals *effects.Notifier
+	// Realtime delivers the signals other processes publish (board changes, for the board
+	// stream). nil when no listener is wired: a stream then stays open and quiet.
+	Realtime *events.Fanout
 	// BoardLab is TICKET_BOARD_ENABLED: the board feature this deployment turns on for every
 	// account (packages/adapters/src/labs-env.ts:4-11).
 	BoardLab bool
