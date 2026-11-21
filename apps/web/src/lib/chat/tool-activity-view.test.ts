@@ -9,6 +9,8 @@ import {
   latestActivity,
   messageHasVisibleBlocks,
   renderableMessageBlocks,
+  STEP_DETAIL_EXPAND_THRESHOLD,
+  stepDisplayInfo,
   toolStepCount,
 } from "./tool-activity-view";
 
@@ -176,5 +178,56 @@ describe("a retired import checklist", () => {
     const live: MessageBlock = { kind: "import_setup", items: [item] };
     expect(messageHasVisibleBlocks([live], false)).toBe(true);
     expect(renderableMessageBlocks([retired[0]!, textBlock], false)).toEqual([textBlock]);
+  });
+});
+
+describe("stepDisplayInfo", () => {
+  it("extracts hostnames for fetched and navigated URLs", () => {
+    expect(stepDisplayInfo({ label: "Web fetch", detail: "https://www.bend-lang.com/" })).toEqual({
+      action: { kind: "fetch", host: "bend-lang.com" },
+      target: "https://www.bend-lang.com/",
+      detail: "https://www.bend-lang.com/",
+      expandable: false,
+    });
+    expect(
+      stepDisplayInfo({
+        label: "Browser navigate",
+        detail: "https://github.com/HigherOrderCO/Bend",
+      }),
+    ).toEqual({
+      action: { kind: "browser_navigate", host: "github.com" },
+      target: "https://github.com/HigherOrderCO/Bend",
+      detail: "https://github.com/HigherOrderCO/Bend",
+      expandable: false,
+    });
+  });
+
+  it("maps file, search, and shell steps and leaves unknown tools verbatim", () => {
+    expect(stepDisplayInfo({ label: "Web search", detail: "Bend language" })).toMatchObject({
+      action: { kind: "search" },
+      target: "Bend language",
+      expandable: false,
+    });
+    expect(stepDisplayInfo({ label: "Write file", detail: "src/app.ts" })).toMatchObject({
+      action: { kind: "write_file", hasTarget: true },
+      target: "src/app.ts",
+    });
+    expect(stepDisplayInfo({ label: "Shell", detail: "pnpm test" })).toMatchObject({
+      action: { kind: "shell", hasTarget: true },
+      target: "pnpm test",
+    });
+    expect(stepDisplayInfo({ label: "Open calendar" })).toMatchObject({
+      action: { kind: "raw", label: "Open calendar" },
+      expandable: false,
+    });
+  });
+
+  it("marks steps expandable when they carry a note or a long detail", () => {
+    expect(
+      stepDisplayInfo({ label: "Web search", detail: "short query", note: "Checking results." }),
+    ).toMatchObject({ target: "short query", expandable: true });
+    expect(
+      stepDisplayInfo({ label: "Shell", detail: "x".repeat(STEP_DETAIL_EXPAND_THRESHOLD + 1) }),
+    ).toMatchObject({ expandable: true });
   });
 });

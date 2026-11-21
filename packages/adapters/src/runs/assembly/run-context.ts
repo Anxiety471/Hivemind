@@ -139,6 +139,8 @@ export interface ReplyState {
    * sentence boundary, so the step chips never render in the middle of a clause.
    */
   pendingToolNames: string[];
+  /** Parallel to `pendingToolNames`: each waiting tool call's short redacted target, or null. */
+  pendingToolDetails: (string | null)[];
   /** Every step label a call made, in call order, so its outcome can be saved on its step. */
   toolCalls: { label: string; executionId: string; tool?: string }[];
   /** How each finished call ended, by execution id. */

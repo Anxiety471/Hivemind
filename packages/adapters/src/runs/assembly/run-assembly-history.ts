@@ -64,6 +64,7 @@ export async function readThreadHistory(hold: RunHold, parts: { records: RunReco
                   : {
                       steps: segment.steps.map((step) => ({
                         ...step,
+                        ...(step.detail ? { detail: neutral(step.detail) } : {}),
                         ...(step.note ? { note: neutral(step.note) } : {}),
                         ...(step.calls
                           ? {

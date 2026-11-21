@@ -297,13 +297,23 @@ function reduce(prev: LiveThreadSnapshot, event: ThreadSnapshotEvent): LiveThrea
   ) {
     const liveId = progressMessageId(event);
     const { previous, remaining } = takeLiveMessage(prev.messages, liveId);
+    const detail =
+      event.type === "agent.tool.called" &&
+      typeof payload.detail === "string" &&
+      payload.detail.trim()
+        ? payload.detail.trim()
+        : undefined;
     const blocks = reduceLiveMessageBlocks(
       previous?.blocks ?? [],
       event.type === "thread.progress"
         ? { type: "progress", payload }
         : event.type === "thread.thinking"
           ? thinkingLiveUpdate(payload)
-          : { type: "tool", name: String(payload.name ?? "") },
+          : {
+              type: "tool",
+              name: String(payload.name ?? ""),
+              ...(detail ? { detail } : {}),
+            },
     );
     return {
       ...prev,

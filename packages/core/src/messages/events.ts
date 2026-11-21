@@ -129,9 +129,14 @@ export function projectMessages(
     if (event.type === "agent.tool.called") {
       if (!showsAsLiveStep(payload.name)) continue;
       const live = liveProjection(event, createdAt);
+      const detail =
+        typeof payload.detail === "string" && payload.detail.trim()
+          ? payload.detail.trim()
+          : undefined;
       live.blocks = reduceLiveMessageBlocks(live.blocks, {
         type: "tool",
         name: String(payload.name ?? ""),
+        ...(detail ? { detail } : {}),
       });
       live.meta = {
         ...live.meta,
@@ -324,7 +329,7 @@ function clampRunFailure(message: string): string {
 
 export type LiveMessageUpdate =
   | { type: "progress"; payload: Record<string, unknown> | undefined }
-  | { type: "tool"; name: string }
+  | { type: "tool"; name: string; detail?: string }
   | { type: "thinking"; segment: number; durationMs: number; lines: string[] };
 
 /** A live reasoning snapshot from its event payload, tolerant of a partial producer. */
@@ -356,8 +361,14 @@ export function reduceLiveMessageBlocks(
   if (update.type === "progress" && update.payload?.reset === true) {
     const waiting = current.at(-1)?.kind === "progress" ? current.at(-1) : undefined;
     blocks = current.filter((block) => block.kind !== "text" && block.kind !== "progress");
-    for (const name of waiting?.kind === "progress" ? (waiting.pendingToolNames ?? []) : []) {
-      blocks = appendToolCallSegment(blocks, name);
+    const waitingNames = waiting?.kind === "progress" ? (waiting.pendingToolNames ?? []) : [];
+    const waitingDetails = waiting?.kind === "progress" ? (waiting.pendingToolDetails ?? []) : [];
+    for (let index = 0; index < waitingNames.length; index += 1) {
+      blocks = appendToolCallSegment(
+        blocks,
+        waitingNames[index]!,
+        waitingDetails[index] ?? undefined,
+      );
     }
   }
   const tail = blocks.at(-1);
@@ -371,9 +382,15 @@ export function reduceLiveMessageBlocks(
       : tail?.kind === "progress"
         ? tail.text
         : "";
-  const pendingToolNames = [
-    ...(tail?.kind === "progress" ? (tail.pendingToolNames ?? []) : []),
-    ...(update.type === "tool" ? [update.name] : []),
+  const priorPendingNames = tail?.kind === "progress" ? (tail.pendingToolNames ?? []) : [];
+  const priorPendingDetails =
+    tail?.kind === "progress"
+      ? priorPendingNames.map((_, index) => tail.pendingToolDetails?.[index] ?? null)
+      : [];
+  const pendingToolNames = [...priorPendingNames, ...(update.type === "tool" ? [update.name] : [])];
+  const pendingToolDetails = [
+    ...priorPendingDetails,
+    ...(update.type === "tool" ? [update.detail?.trim() || null] : []),
   ];
   const activity =
     update.type === "progress"
@@ -382,7 +399,13 @@ export function reduceLiveMessageBlocks(
 
   if (pendingToolNames.length > 0 && endsSentence(tailText)) {
     let next = activity ? [...segments] : appendTextSegment(segments, tailText);
-    for (const name of pendingToolNames) next = appendToolCallSegment(next, name);
+    for (let index = 0; index < pendingToolNames.length; index += 1) {
+      next = appendToolCallSegment(
+        next,
+        pendingToolNames[index]!,
+        pendingToolDetails[index] ?? undefined,
+      );
+    }
     return next;
   }
   if (!tailText) return [...segments];
@@ -393,6 +416,7 @@ export function reduceLiveMessageBlocks(
       text: tailText,
       ...(activity ? { activity: true as const } : {}),
       ...(pendingToolNames.length > 0 ? { pendingToolNames } : {}),
+      ...(pendingToolDetails.some(Boolean) ? { pendingToolDetails } : {}),
     },
   ];
 }
@@ -552,13 +576,18 @@ export function withToolHistory(
   );
 }
 
-export function appendToolStep(steps: readonly ToolStep[], toolName: string): ToolStep[] {
+export function appendToolStep(
+  steps: readonly ToolStep[],
+  toolName: string,
+  detail?: string,
+): ToolStep[] {
   const label = humanizeToolName(toolName);
+  const normalizedDetail = detail?.trim() || undefined;
   const last = steps.at(-1);
-  if (last && last.label === label) {
+  if (last && last.label === label && (last.detail ?? undefined) === normalizedDetail) {
     return [...steps.slice(0, -1), { ...last, count: last.count + 1 }];
   }
-  return [...steps, { label, count: 1 }];
+  return [...steps, { label, count: 1, ...(normalizedDetail ? { detail: normalizedDetail } : {}) }];
 }
 
 /** Puts a note on the newest step, splitting it off a run of the same step so it stays in order. */
@@ -569,7 +598,10 @@ export function noteLastToolStep(segments: readonly MessageBlock[], note: string
   if (block?.kind !== "steps" || !last) return [...segments];
   const steps = block.steps.slice(0, -1);
   if (last.count > 1)
-    steps.push({ ...last, count: last.count - 1 }, { label: last.label, count: 1, note });
+    steps.push(
+      { ...last, count: last.count - 1 },
+      { label: last.label, count: 1, ...(last.detail ? { detail: last.detail } : {}), note },
+    );
   else steps.push({ ...last, note: last.note ? `${last.note}\n\n${note}` : note });
   const next = [...segments];
   next[index] = { ...block, steps };
@@ -646,10 +678,11 @@ export function appendTextSegment(segments: readonly MessageBlock[], text: strin
 export function appendToolCallSegment(
   segments: readonly MessageBlock[],
   toolName: string,
+  detail?: string,
 ): MessageBlock[] {
   const last = segments.at(-1);
   const priorSteps = last?.kind === "steps" ? last.steps : [];
-  const steps = appendToolStep(priorSteps, toolName);
+  const steps = appendToolStep(priorSteps, toolName, detail);
   if (last?.kind === "steps") {
     return [...segments.slice(0, -1), { kind: "steps", steps }];
   }

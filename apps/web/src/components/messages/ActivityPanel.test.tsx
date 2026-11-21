@@ -7,11 +7,14 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 // The macros compile away in the app build; tests run the source, so expand the
-// plural by hand to assert the singular vs plural English forms.
+// plural and t tag by hand to assert the English forms.
 vi.mock("@lingui/react/macro", () => ({
   Trans: ({ children }: { children: unknown }) => children,
   Plural: ({ value, one, other }: { value: number; one: string; other: string }) =>
     (value === 1 ? one : other).replaceAll("#", String(value)),
+  useLingui: () => ({
+    t: (strings: TemplateStringsArray, ...values: unknown[]) => String.raw(strings, ...values),
+  }),
 }));
 
 /** The words a reader sees, with each element's text as its own word. */
@@ -32,11 +35,13 @@ const steps = (
   labels: string[],
   durationMs?: number,
   notes: Record<number, string> = {},
+  details: Record<number, string> = {},
 ): MessageBlock => ({
   kind: "steps",
   steps: labels.map((label, index) => ({
     label,
     count: 1,
+    ...(details[index] === undefined ? {} : { detail: details[index] }),
     ...(notes[index] === undefined ? {} : { note: notes[index] }),
   })),
   ...(durationMs === undefined ? {} : { durationMs }),
@@ -71,9 +76,19 @@ describe("ActivityPanel", () => {
     expect(text).toContain("read 2 pages");
     expect(text).toContain("searched the web · 12s");
     expect(html).toContain('data-testid="activity-trigger"');
-    // The rows sit flat and indented under the summary, with no box around them.
-    expect(html).toContain("ms-5 mt-1");
+    // The rows sit inside one hairline-bordered, divided container flush with the trigger.
+    expect(html).toContain(
+      "divide-y divide-border overflow-hidden rounded-lg border border-border",
+    );
     expect(html).not.toContain("bg-card/55");
+  });
+
+  it("summarizes recognized live actions too instead of falling back to a raw tool name", () => {
+    const html = markup([steps(["Write file", "Write file", "Shell"])], true);
+    const text = visibleText(html);
+    expect(text).toContain("ran a command");
+    expect(text).toContain("wrote 2 files");
+    expect(text).not.toContain("3 tools");
   });
 
   it("says each summarized action in its singular or its counted form", () => {
@@ -197,13 +212,36 @@ describe("ActivityPanel", () => {
     panel.unmount();
   });
 
-  it("says what a tool call touched, underlining a URL it names", () => {
+  it("says what a tool call touched, naming fetched hosts and underlining URLs", () => {
     const html = markup([
-      steps(["Web fetch"], undefined, { 0: "https://bend-lang.com/ — the docs" }),
+      steps(
+        ["Web fetch", "Write file", "Shell"],
+        undefined,
+        {},
+        {
+          0: "https://bend-lang.com/",
+          1: "src/app.ts",
+          2: "pnpm test",
+        },
+      ),
     ]);
-    expect(visibleText(html)).toContain("Web fetch https://bend-lang.com/ — the docs");
-    expect(html).toContain("text-foreground/85");
-    expect(html).toContain("underline underline-offset-2");
+    const text = visibleText(html);
+    expect(text).toContain("Read bend-lang.com https://bend-lang.com/");
+    expect(text).toContain("Wrote src/app.ts");
+    expect(text).toContain("Ran pnpm test");
+    expect(html).toContain("text-foreground/90");
+    expect(html).toContain("underline decoration-foreground/50 underline-offset-2");
+    // Short details with no note stay calm plain rows without expand chevrons.
+    expect(html).not.toContain('data-testid="activity-row-trigger"');
+  });
+
+  it("expands a tool row to its full detail when the detail is long", () => {
+    const panel = mountPanel();
+    const longCommand = `pnpm --filter @rakazo/web test ${"--reporter=verbose ".repeat(6)}src/components/messages/ActivityPanel.test.tsx`;
+    panel.render([steps(["Shell"], undefined, {}, { 0: longCommand })], false);
+    flushSync(() => panel.byTestId("activity-row-trigger")?.click());
+    expect(panel.byTestId("tool-step-note")?.textContent).toContain(longCommand);
+    panel.unmount();
   });
 
   it("expands a tool row to the note the bot wrote before the call", () => {

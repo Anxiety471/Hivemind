@@ -42,15 +42,17 @@ import {
   keptToolArguments,
   saveLatestStepScreenshot,
 } from "./tool-step-calls.js";
+import { summarizeToolCallDetail } from "./tool-step-detail.js";
 
-function showToolStep(ctx: RunContext, event: RuntimeEvent<"tool">) {
+function showToolStep(ctx: RunContext, event: RuntimeEvent<"tool">, detail: string | undefined) {
   const { reply } = ctx.state;
   // Queued first so the text written before this call becomes its note.
   const stepNames = connectorStepNames(ctx.tools.connector.get(event.name), event.args);
   const callSteps = stepNames.length > 0 ? stepNames : [event.name];
-  reply.pendingToolNames.push(...callSteps);
-  // A call that shows as its own step keeps what it was called with, for later turns to replay.
   const ownStep = callSteps.length === 1 && callSteps[0] === event.name;
+  reply.pendingToolNames.push(...callSteps);
+  reply.pendingToolDetails.push(...callSteps.map(() => (ownStep ? (detail ?? null) : null)));
+  // A call that shows as its own step keeps what it was called with, for later turns to replay.
   const early = reply.earlyCompletions?.get(event.executionId);
   reply.earlyCompletions?.delete(event.executionId);
   if (ownStep) {
@@ -75,9 +77,10 @@ export async function onToolCalled(ctx: RunContext, event: RuntimeEvent<"tool">)
   // Preserve event ordering when the throttle still holds recent narration: the
   // client must see that text before the tool call it describes.
   await flushProgress(ctx);
+  const detail = summarizeToolCallDetail(event.name, event.args, ctx.secrets);
   // The call a paused turn resumes on already shows as a step in the reply it saved.
   if (!reply.toolCalls.some((call) => call.executionId === event.executionId))
-    showToolStep(ctx, event);
+    showToolStep(ctx, event, detail);
   // Text before ask_user stays pending: the run pauses next, and the question needs it.
   const heldNote =
     event.name === "message_user" || event.name === "ask_user"
@@ -94,7 +97,11 @@ export async function onToolCalled(ctx: RunContext, event: RuntimeEvent<"tool">)
     botId: bot.id,
     type: "agent.tool.called",
     runId,
-    payload: { name: event.name, executionId: event.executionId },
+    payload: {
+      name: event.name,
+      executionId: event.executionId,
+      ...(detail ? { detail } : {}),
+    },
   });
   await showNarrationStatus(ctx, heldNote);
   tryFlushPendingTools(reply);

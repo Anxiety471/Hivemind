@@ -69,6 +69,7 @@ export async function createReplyState(
     narrationSoFar: "",
     narrationStatusShowing: false,
     pendingToolNames: [],
+    pendingToolDetails: [],
     toolCalls: [],
     toolOutcomes: new Map(),
     toolStepCalls: new Map(),
@@ -184,10 +185,15 @@ export function flushPendingTools(reply: ReplyState) {
     reply.messageSegments = appendTextSegment(reply.messageSegments, reply.currentTextSegment);
     reply.currentTextSegment = "";
   }
-  for (const name of reply.pendingToolNames) {
-    reply.messageSegments = appendToolCallSegment(reply.messageSegments, name);
+  for (let index = 0; index < reply.pendingToolNames.length; index += 1) {
+    reply.messageSegments = appendToolCallSegment(
+      reply.messageSegments,
+      reply.pendingToolNames[index]!,
+      reply.pendingToolDetails?.[index] ?? undefined,
+    );
   }
   reply.pendingToolNames = [];
+  reply.pendingToolDetails = [];
 }
 
 /**

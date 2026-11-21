@@ -216,6 +216,7 @@ export const MessageBlock = z.discriminatedUnion("kind", [
     /** Provider-generated tool status rather than assistant-authored narration. */
     activity: z.literal(true).optional(),
     pendingToolNames: z.array(z.string()).optional(),
+    pendingToolDetails: z.array(z.string().nullable()).optional(),
   }),
   z.object({
     /** The reasoning a model streamed before answering, kept to its first few lines. */
@@ -230,6 +231,8 @@ export const MessageBlock = z.discriminatedUnion("kind", [
       z.object({
         label: z.string(),
         count: z.number().int().positive(),
+        /** Short redacted summary of what the call targeted (URL, path, query, command). */
+        detail: z.string().optional(),
         /** What the bot wrote just before this step, kept out of its reply. */
         note: z.string().optional(),
         /** How many of this step's calls succeeded, failed, or were stopped before finishing. */

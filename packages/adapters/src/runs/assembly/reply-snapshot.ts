@@ -9,6 +9,7 @@ const ReplySnapshotSchema = z.object({
   currentTextSegment: z.string(),
   messageSegments: z.array(MessageBlock),
   pendingToolNames: z.array(z.string()),
+  pendingToolDetails: z.array(z.string().nullable()).optional(),
   toolCalls: z.array(
     z.object({ label: z.string(), executionId: z.string(), tool: z.string().optional() }),
   ),
@@ -54,6 +55,9 @@ export function snapshotReply(reply: ReplyState): ReplySnapshot {
     currentTextSegment: reply.currentTextSegment,
     messageSegments: reply.messageSegments,
     pendingToolNames: reply.pendingToolNames,
+    ...(reply.pendingToolDetails.some(Boolean)
+      ? { pendingToolDetails: reply.pendingToolDetails }
+      : {}),
     toolCalls: reply.toolCalls,
     toolOutcomes: [...reply.toolOutcomes],
     toolStepCalls: [...reply.toolStepCalls],
@@ -102,8 +106,16 @@ export function restoreReply(reply: ReplyState, saved: unknown, runId: string): 
     );
     return;
   }
-  const { latestScreenshot, toolOutcomes, toolStepCalls, version: _, ...rest } = parsed.data;
+  const {
+    latestScreenshot,
+    toolOutcomes,
+    toolStepCalls,
+    pendingToolDetails,
+    version: _,
+    ...rest
+  } = parsed.data;
   Object.assign(reply, rest);
+  reply.pendingToolDetails = pendingToolDetails ?? rest.pendingToolNames.map(() => null);
   reply.toolOutcomes = new Map(toolOutcomes);
   reply.toolStepCalls = new Map(toolStepCalls);
   const mimeType = latestScreenshot && storedImageMimeType(latestScreenshot.mimeType);

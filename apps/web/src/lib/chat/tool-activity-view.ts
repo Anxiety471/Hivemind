@@ -69,14 +69,144 @@ export const ACTIVITY_SUMMARY_MAX_CLAUSES = 3;
 const SUMMARY_ACTIONS: readonly { kind: ActivitySummaryKind; match: RegExp }[] = [
   // A page it fetched, a file it opened, then what it ran — the order the phrase reads in.
   { kind: "pages", match: /^(web[ _]fetch|fetch|open[ _]url)$/ },
-  { kind: "files", match: /^(read[ _]file|read[ _]history|skill[ _]read|list[ _]files|view)$/ },
-  { kind: "search", match: /^(web[ _]search|websearch)$/ },
-  { kind: "commands", match: /^(shell|bash|terminal|run[ _]command|execute)$/ },
-  { kind: "writes", match: /^(write[ _]file|create[ _]file)$/ },
+  {
+    kind: "files",
+    match:
+      /^(read[ _]file|read[ _]history|skill[ _]read|list[ _]files|attach[ _]file|open[ _]path|view)$/,
+  },
+  { kind: "search", match: /^(web[ _]search|websearch|search[ _]history)$/ },
+  {
+    kind: "commands",
+    match: /^(shell|user[ _]computer[ _]shell|bash|terminal|run[ _]command|execute)$/,
+  },
+  { kind: "writes", match: /^(write[ _]file|create[ _]file|save[ _]page)$/ },
   { kind: "edits", match: /^(edit|apply[ _]patch|str[ _]replace|multiedit)$/ },
   { kind: "browser", match: /^browser[ _]/ },
-  { kind: "computer", match: /^computer[ _]/ },
+  { kind: "computer", match: /^(computer[ _]|user[ _]computer[ _])/ },
 ];
+
+/** Details longer than this are likely truncated on one line, so the row expands to show them whole. */
+export const STEP_DETAIL_EXPAND_THRESHOLD = 90;
+
+export type StepActionKind =
+  | { kind: "fetch"; host?: string }
+  | { kind: "search" }
+  | { kind: "read_file"; hasTarget: boolean }
+  | { kind: "write_file"; hasTarget: boolean }
+  | { kind: "edit_file"; hasTarget: boolean }
+  | { kind: "list_files"; hasTarget: boolean }
+  | { kind: "shell"; hasTarget: boolean }
+  | { kind: "browser_navigate"; host?: string }
+  | { kind: "browser_snapshot" }
+  | { kind: "browser_act" }
+  | { kind: "computer_observe" }
+  | { kind: "computer_act" }
+  | { kind: "attach_file"; hasTarget: boolean }
+  | { kind: "open_path"; hasTarget: boolean }
+  | { kind: "launch_app"; hasTarget: boolean }
+  | { kind: "save_page" }
+  | { kind: "search_history" }
+  | { kind: "read_history" }
+  | { kind: "raw"; label: string };
+
+export type StepDisplayInfo = {
+  action: StepActionKind;
+  /** The one-line detail shown beside the action: the call's target, or the first line of its note. */
+  target?: string;
+  /** The call's redacted target detail, when recorded. */
+  detail?: string;
+  /** The full note written before the call, when recorded. */
+  note?: string;
+  /** True when clicking the row reveals more (a note, or a long target that may truncate). */
+  expandable: boolean;
+};
+
+const FIRST_URL_RE = /https?:\/\/[^\s]+/i;
+
+function extractHost(text: string | undefined): string | undefined {
+  if (!text) return undefined;
+  const match = text.match(FIRST_URL_RE);
+  if (!match) return undefined;
+  try {
+    const host = new URL(match[0]).hostname.replace(/^www\./i, "");
+    return host || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Turns a stored tool step into a quiet action verb ("Read bend-lang.com", "Searched the web",
+ * "Wrote", "Ran") plus the brighter thing it touched. Unknown tools keep their stored label.
+ */
+export function stepDisplayInfo(step: {
+  label: string;
+  detail?: string;
+  note?: string;
+}): StepDisplayInfo {
+  const detail = step.detail?.trim() || undefined;
+  const note = step.note?.trim() || undefined;
+  const firstNoteLine = note
+    ?.split("\n")
+    .find((line) => line.trim().length > 0)
+    ?.trim();
+  const target = detail ?? firstNoteLine;
+  const hasTarget = target !== undefined;
+  const normalized = step.label.trim().toLowerCase().replace(/\s+/g, " ");
+
+  let action: StepActionKind;
+  if (/^(web[ _]fetch|fetch|open[ _]url)$/.test(normalized)) {
+    action = { kind: "fetch", host: extractHost(target) };
+  } else if (/^(web[ _]search|websearch)$/.test(normalized)) {
+    action = { kind: "search" };
+  } else if (/^(read[ _]file|view)$/.test(normalized)) {
+    action = { kind: "read_file", hasTarget };
+  } else if (/^(write[ _]file|create[ _]file)$/.test(normalized)) {
+    action = { kind: "write_file", hasTarget };
+  } else if (/^(edit|apply[ _]patch|str[ _]replace|multiedit)$/.test(normalized)) {
+    action = { kind: "edit_file", hasTarget };
+  } else if (/^list[ _]files$/.test(normalized)) {
+    action = { kind: "list_files", hasTarget };
+  } else if (
+    /^(shell|user[ _]computer[ _]shell|bash|terminal|run[ _]command|execute)$/.test(normalized)
+  ) {
+    action = { kind: "shell", hasTarget };
+  } else if (/^browser[ _]navigate$/.test(normalized)) {
+    action = { kind: "browser_navigate", host: extractHost(target) };
+  } else if (/^browser[ _]snapshot$/.test(normalized)) {
+    action = { kind: "browser_snapshot" };
+  } else if (/^browser[ _]act$/.test(normalized)) {
+    action = { kind: "browser_act" };
+  } else if (/^(computer[ _]observe|user[ _]computer[ _]observe)$/.test(normalized)) {
+    action = { kind: "computer_observe" };
+  } else if (/^(computer[ _]act|user[ _]computer[ _]act)$/.test(normalized)) {
+    action = { kind: "computer_act" };
+  } else if (/^attach[ _]file$/.test(normalized)) {
+    action = { kind: "attach_file", hasTarget };
+  } else if (/^open[ _]path$/.test(normalized)) {
+    action = { kind: "open_path", hasTarget };
+  } else if (/^launch[ _]app$/.test(normalized)) {
+    action = { kind: "launch_app", hasTarget };
+  } else if (/^save[ _]page$/.test(normalized)) {
+    action = { kind: "save_page" };
+  } else if (/^search[ _]history$/.test(normalized)) {
+    action = { kind: "search_history" };
+  } else if (/^read[ _]history$/.test(normalized)) {
+    action = { kind: "read_history" };
+  } else {
+    action = { kind: "raw", label: step.label };
+  }
+
+  const expandable =
+    Boolean(note) || (detail !== undefined && detail.length > STEP_DETAIL_EXPAND_THRESHOLD);
+  return {
+    action,
+    ...(target ? { target } : {}),
+    ...(detail ? { detail } : {}),
+    ...(note ? { note } : {}),
+    expandable,
+  };
+}
 
 /**
  * What a finished run's steps add up to, as counted actions: "2 pages, 1 search". The kinds

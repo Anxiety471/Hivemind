@@ -74,6 +74,7 @@ export function redactBlocks(blocks: MessageBlock[], secrets: string[]): Message
         steps: (block.steps as HistoryToolStep[]).map((step) => ({
           ...step,
           label: redactSecrets(step.label, secrets),
+          ...(step.detail === undefined ? {} : { detail: redactSecrets(step.detail, secrets) }),
           ...(step.note === undefined ? {} : { note: redactSecrets(step.note, secrets) }),
           // Secrets a later call revealed are redacted from earlier calls' arguments too.
           ...(step.calls

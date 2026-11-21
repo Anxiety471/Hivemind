@@ -1,4 +1,4 @@
-import { Plural, Trans } from "@lingui/react/macro";
+import { Plural, Trans, useLingui } from "@lingui/react/macro";
 import { ChatMarkdown } from "@rakazo/chat-ui/web";
 import type { MessageBlock, ThreadMessage } from "@rakazo/contracts";
 import { formatCompactDuration } from "@rakazo/core";
@@ -7,15 +7,16 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@rakazo/ui-web/components/ui/collapsible";
-import { ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import { Fragment } from "react";
-import type { ActivitySummaryKind } from "../../lib/chat/tool-activity-view";
+import type { ActivitySummaryKind, StepActionKind } from "../../lib/chat/tool-activity-view";
 import {
   activityBlocks,
   activityDurationMs,
   activityStepCount,
   activitySummaryParts,
   latestActivity,
+  stepDisplayInfo,
 } from "../../lib/chat/tool-activity-view";
 
 type ToolStep = Extract<ThreadMessage["blocks"][number], { kind: "steps" }>["steps"][number];
@@ -62,7 +63,10 @@ function RowText({ text }: { text: string }) {
     <>
       {text.split(URL_TEXT_RE).map((part, index) =>
         index % 2 === 1 ? (
-          <span key={index} className="underline underline-offset-2 break-all">
+          <span
+            key={index}
+            className="underline decoration-foreground/50 underline-offset-2 break-all"
+          >
             {part}
           </span>
         ) : (
@@ -92,7 +96,7 @@ function ThinkingRow({
   const expandable = lines.length > 1;
   const text = (
     <span
-      className="min-w-0 flex-1 truncate text-start text-body-sm text-muted-foreground"
+      className="min-w-0 truncate text-start text-body-sm text-muted-foreground"
       title={lines.join("\n")}
     >
       {summary}
@@ -100,7 +104,7 @@ function ThinkingRow({
   );
   if (!expandable) {
     return (
-      <div data-testid="thinking-row" className="flex min-w-0 items-center gap-1.5 px-3 py-2">
+      <div data-testid="thinking-row" className="flex min-w-0 items-center gap-1.5 px-3.5 py-2.5">
         {text}
       </div>
     );
@@ -114,18 +118,21 @@ function ThinkingRow({
     >
       <CollapsibleTrigger
         data-testid="thinking-trigger"
-        className="flex w-full min-w-0 cursor-pointer items-center gap-1.5 px-3 py-2 text-start hover:bg-accent/40 focus-ring"
+        className="flex w-full min-w-0 cursor-pointer items-center gap-1.5 px-3.5 py-2.5 text-start transition-colors hover:bg-accent/35 focus-ring"
       >
         {text}
         <ChevronRight
           aria-hidden
           size={13}
-          strokeWidth={1.8}
+          strokeWidth={1.75}
           className="shrink-0 text-muted-foreground/70 transition-transform duration-150 group-data-open/row:rotate-90 motion-reduce:transition-none"
         />
       </CollapsibleTrigger>
       <CollapsibleContent hiddenUntilFound>
-        <div data-testid="thinking-detail" className="px-3 pb-3 text-body-sm text-muted-foreground">
+        <div
+          data-testid="thinking-detail"
+          className="px-3.5 pb-3 text-body-sm text-muted-foreground"
+        >
           {duration ? (
             <div className="mb-1 text-label text-muted-foreground/70">
               <Trans>Thought for {duration}</Trans>
@@ -142,41 +149,84 @@ function ThinkingRow({
   );
 }
 
+/** Localized muted verb for one tool row ("Read bend-lang.com", "Searched the web", "Wrote"). */
+function useStepActionLabel(action: StepActionKind): string {
+  const { t } = useLingui();
+  switch (action.kind) {
+    case "fetch":
+      return action.host ? t`Read ${action.host}` : t`Read page`;
+    case "search":
+      return t`Searched the web`;
+    case "read_file":
+      return action.hasTarget ? t`Read` : t`Read file`;
+    case "write_file":
+      return action.hasTarget ? t`Wrote` : t`Wrote file`;
+    case "edit_file":
+      return action.hasTarget ? t`Edited` : t`Edited file`;
+    case "list_files":
+      return action.hasTarget ? t`Listed` : t`Listed files`;
+    case "shell":
+      return action.hasTarget ? t`Ran` : t`Ran command`;
+    case "browser_navigate":
+      return action.host ? t`Opened ${action.host}` : t`Opened page`;
+    case "browser_snapshot":
+      return t`Inspected page`;
+    case "browser_act":
+      return t`Used browser`;
+    case "computer_observe":
+      return t`Viewed screen`;
+    case "computer_act":
+      return t`Used computer`;
+    case "attach_file":
+      return action.hasTarget ? t`Attached` : t`Attached file`;
+    case "open_path":
+      return action.hasTarget ? t`Opened` : t`Opened file`;
+    case "launch_app":
+      return action.hasTarget ? t`Launched` : t`Launched app`;
+    case "save_page":
+      return t`Saved page`;
+    case "search_history":
+      return t`Searched history`;
+    case "read_history":
+      return t`Read history`;
+    case "raw":
+      return action.label;
+  }
+}
+
 /**
- * One line for a tool call: its muted action, then the brighter thing it touched — the note
- * the bot wrote before the call. A call with more to say folds open to the full note.
+ * One line for a tool call: its quiet verb, then the brighter thing it touched (the call's
+ * target or the note written before it). Rows with a note or long target expand on click.
  */
 function StepRow({ step, current }: { step: ToolStep; current: boolean }) {
-  const note = step.note?.trim();
-  const object = note
-    ?.split("\n")
-    .find((line) => line.trim().length > 0)
-    ?.trim();
+  const { action, target, detail, note, expandable } = stepDisplayInfo(step);
+  const actionLabel = useStepActionLabel(action);
   const content = (
     <>
       <span className="shrink-0 text-body-sm text-muted-foreground" title={step.label}>
-        {step.label}
+        {actionLabel}
         {step.count > 1 ? ` ×${step.count}` : ""}
       </span>
-      {object ? (
-        <span className="min-w-0 flex-1 truncate text-body-sm text-foreground/85" title={note}>
-          <RowText text={object} />
-        </span>
-      ) : null}
-      {current ? (
-        <span
-          aria-hidden
-          className="shrink-0 text-label text-muted-foreground motion-safe:animate-[rkPulse_1.2s_ease-in-out_infinite]"
-        >
-          ◷
+      {target ? (
+        <span className="min-w-0 truncate text-body-sm text-foreground/90" title={detail ?? note}>
+          <RowText text={target} />
         </span>
       ) : null}
     </>
   );
-  if (!note) {
+  const liveMark = current ? (
+    <span
+      aria-hidden
+      className="ms-auto shrink-0 text-label text-muted-foreground motion-safe:animate-[rkPulse_1.2s_ease-in-out_infinite]"
+    >
+      ◷
+    </span>
+  ) : null;
+  if (!expandable) {
     return (
-      <div data-testid="activity-row" className="flex min-w-0 items-center gap-1.5 px-3 py-2">
+      <div data-testid="activity-row" className="flex min-w-0 items-center gap-2 px-3.5 py-2.5">
         {content}
+        {liveMark}
       </div>
     );
   }
@@ -184,19 +234,28 @@ function StepRow({ step, current }: { step: ToolStep; current: boolean }) {
     <Collapsible data-testid="activity-row" className="group/row">
       <CollapsibleTrigger
         data-testid="activity-row-trigger"
-        className="flex w-full min-w-0 cursor-pointer items-center gap-1.5 px-3 py-2 text-start hover:bg-accent/40 focus-ring"
+        className="flex w-full min-w-0 cursor-pointer items-center gap-2 px-3.5 py-2.5 text-start transition-colors hover:bg-accent/35 focus-ring"
       >
         {content}
         <ChevronRight
           aria-hidden
           size={13}
-          strokeWidth={1.8}
+          strokeWidth={1.75}
           className="shrink-0 text-muted-foreground/70 transition-transform duration-150 group-data-open/row:rotate-90 motion-reduce:transition-none"
         />
+        {liveMark}
       </CollapsibleTrigger>
       <CollapsibleContent hiddenUntilFound>
-        <div data-testid="tool-step-note" className="px-3 pb-3 text-body-sm text-muted-foreground">
-          <ChatMarkdown>{note}</ChatMarkdown>
+        <div
+          data-testid="tool-step-note"
+          className="space-y-2 px-3.5 pb-3 text-body-sm text-muted-foreground"
+        >
+          {detail && (!note || detail !== target) ? (
+            <div className="break-words text-foreground/85">
+              <RowText text={detail} />
+            </div>
+          ) : null}
+          {note ? <ChatMarkdown>{note}</ChatMarkdown> : null}
         </div>
       </CollapsibleContent>
     </Collapsible>
@@ -227,8 +286,8 @@ function SummaryClause({ kind, count }: { kind: ActivitySummaryKind; count: numb
 
 /** One collapsible block for what a bot did before or while answering: the reasoning it
  * streamed and the tools it ran, as one flat list in the order they happened. Its trigger
- * summarizes the finished run's actions ("read 2 pages, searched the web"), or names the
- * newest thing while it runs; it starts open while the run is live and folds when it ends.
+ * summarizes recognized actions ("Read 2 pages, searched the web"), or falls back to the
+ * newest line; it starts open while the run is live and folds when it ends.
  * The keyed default keeps manual toggles until the run changes phase.
  */
 export function ActivityPanel({
@@ -240,7 +299,7 @@ export function ActivityPanel({
   live: boolean;
 }) {
   const rows = activityRows(blocks, live);
-  const summary = live ? [] : activitySummaryParts(blocks);
+  const summary = activitySummaryParts(blocks);
   const toolCount = activityStepCount(blocks);
   const duration = live ? null : formatCompactDuration(activityDurationMs(blocks));
   const latest = latestActivity(blocks);
@@ -261,14 +320,8 @@ export function ActivityPanel({
     >
       <CollapsibleTrigger
         data-testid="activity-trigger"
-        className="flex min-h-6 w-fit max-w-full cursor-pointer list-none items-center gap-1.5 rounded-md text-body-sm font-medium text-foreground/80 hover:text-foreground focus-ring"
+        className="flex min-h-6 w-fit max-w-full cursor-pointer list-none items-center gap-1.5 rounded-md text-body-sm font-normal text-muted-foreground transition-colors hover:text-foreground focus-ring"
       >
-        <ChevronRight
-          aria-hidden
-          size={14}
-          strokeWidth={1.8}
-          className="shrink-0 transition-transform duration-150 group-data-open:rotate-90 motion-reduce:transition-none"
-        />
         <span className="min-w-0 truncate first-letter:uppercase" title={live ? latest : undefined}>
           {summary.length > 0
             ? summary.map((part, index) => (
@@ -279,20 +332,29 @@ export function ActivityPanel({
               ))
             : (latest ?? (live ? <Trans>Working…</Trans> : <Trans>Done</Trans>))}
         </span>
-        {toolCount > 0 && (live || summary.length === 0) ? (
+        {toolCount > 0 && summary.length === 0 ? (
           <span className="shrink-0 text-muted-foreground">
             {" · "}
             <Plural value={toolCount} one="# tool" other="# tools" />
           </span>
         ) : null}
         {duration ? <span className="shrink-0 text-muted-foreground"> · {duration}</span> : null}
+        <ChevronDown
+          aria-hidden
+          size={14}
+          strokeWidth={1.75}
+          className="-rotate-90 shrink-0 text-muted-foreground/80 transition-transform duration-150 group-data-open:rotate-0 motion-reduce:transition-none"
+        />
       </CollapsibleTrigger>
       <CollapsibleContent hiddenUntilFound>
-        <div data-testid="tool-rows" className="ms-5 mt-1 overflow-hidden">
+        <div
+          data-testid="tool-rows"
+          className="mt-2 divide-y divide-border overflow-hidden rounded-lg border border-border"
+        >
           {hiddenSteps > 0 ? (
             <div
               data-testid="tool-rows-hidden"
-              className="px-3 py-1.5 text-label text-muted-foreground/70"
+              className="px-3.5 py-2 text-label text-muted-foreground/70"
             >
               <Plural value={hiddenSteps} one="+# earlier step" other="+# earlier steps" />
             </div>

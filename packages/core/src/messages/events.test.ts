@@ -831,6 +831,19 @@ describe("appendToolStep", () => {
       { label: "Slack fetch conversation history", count: 1 },
     ]);
   });
+
+  it("keeps consecutive calls separate when their details differ and collapses identical details", () => {
+    const first = appendToolStep([], "write_file", "src/a.ts");
+    const second = appendToolStep(first, "write_file", "src/b.ts");
+    expect(second).toEqual([
+      { label: "Write file", count: 1, detail: "src/a.ts" },
+      { label: "Write file", count: 1, detail: "src/b.ts" },
+    ]);
+    expect(appendToolStep(second, "write_file", "src/b.ts")).toEqual([
+      { label: "Write file", count: 1, detail: "src/a.ts" },
+      { label: "Write file", count: 2, detail: "src/b.ts" },
+    ]);
+  });
 });
 
 describe("trackToolCallStreak", () => {
