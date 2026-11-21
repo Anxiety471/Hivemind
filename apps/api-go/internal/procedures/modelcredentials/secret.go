@@ -9,7 +9,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
+	"unicode/utf16"
 )
 
 const maxModelContextWindow = 2_147_483_647
@@ -354,7 +357,7 @@ func parseHeaders(value any) (map[string]string, []string, bool) {
 				return nil, nil, false
 			}
 		}
-		if !headerNamePattern.MatchString(rawName) {
+		if !headerNamePattern.MatchString(rawName) || utf16Len(rawName) > 256 {
 			return nil, nil, false
 		}
 		name := trimJS(rawName)
@@ -402,7 +405,37 @@ func orderedObjectKeys(value any) []string {
 		}
 		keys = append(keys, key)
 	}
-	return keys
+	return jsKeyOrder(keys)
+}
+
+// jsKeyOrder is Object.keys' order: array-index keys ascending first, then insertion order.
+func jsKeyOrder(keys []string) []string {
+	indices := []string{}
+	others := []string{}
+	for _, key := range keys {
+		if isArrayIndex(key) {
+			indices = append(indices, key)
+		} else {
+			others = append(others, key)
+		}
+	}
+	sort.SliceStable(indices, func(left, right int) bool {
+		a, _ := strconv.ParseUint(indices[left], 10, 64)
+		b, _ := strconv.ParseUint(indices[right], 10, 64)
+		return a < b
+	})
+	return append(indices, others...)
+}
+
+func isArrayIndex(key string) bool {
+	if key == "" || (len(key) > 1 && key[0] == '0') {
+		return false
+	}
+	value, err := strconv.ParseUint(key, 10, 64)
+	if err != nil || value > 4294967294 {
+		return false
+	}
+	return strconv.FormatUint(value, 10) == key
 }
 
 func contains(values []string, value string) bool {
@@ -429,3 +462,5 @@ func usableModelID(value string) (string, bool) {
 	trimmed := trimJS(value)
 	return trimmed, trimmed != ""
 }
+
+func utf16Len(value string) int { return len(utf16.Encode([]rune(value))) }

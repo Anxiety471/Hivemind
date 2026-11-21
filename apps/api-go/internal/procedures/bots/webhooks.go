@@ -134,9 +134,14 @@ func RevealWebhookSecret(
 		return nil, shared.Failure(err)
 	}
 	var current string
-	if err := database.Tenant(ctx, actor, func(tx pgx.Tx) error {
+	err = database.Tenant(ctx, actor, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx, `SELECT coalesce("webhookSecretId", '') FROM bots WHERE id = $1`, botID).Scan(&current)
-	}); err != nil {
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		// The bot was deleted or moved while the value decrypted: a rotation or removal did commit.
+		return nil, orpc.Conflict("The webhook key just changed")
+	}
+	if err != nil {
 		return nil, shared.Failure(err)
 	}
 	if current != storedID {

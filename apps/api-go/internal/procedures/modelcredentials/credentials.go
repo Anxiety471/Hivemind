@@ -712,11 +712,37 @@ func thinkingLevelsFor(parsed *secret, row credentialRow, modelID string) []stri
 	if !reasoning {
 		return []string{"off"}
 	}
-	levels := []string{"off", "minimal", "low", "medium", "high"}
-	if parsed.APIProtocol == nil || *parsed.APIProtocol != "anthropic-messages" {
-		levels = append(levels, "xhigh", "max")
+	if parsed.APIProtocol != nil && *parsed.APIProtocol == "anthropic-messages" {
+		if levels, known := anthropicThinkingLevels[lookup]; known {
+			return append([]string(nil), levels...)
+		}
+		return []string{"off", "minimal", "low", "medium", "high"}
 	}
-	return levels
+	// The synthetic map names off, xhigh and max; the extended filter includes the rest.
+	return []string{"off", "minimal", "low", "medium", "high", "xhigh", "max"}
+}
+
+// anthropicThinkingLevels is getSupportedThinkingLevels over the pinned Anthropic catalog's
+// thinkingLevelMap for each model it describes (@earendil-works/pi-ai 1.5.0
+// providers/data/anthropic.json; anthropicCatalogThinking copies the map for anthropic-messages).
+var anthropicThinkingLevels = map[string][]string{
+	"claude-fable-5":             {"minimal", "low", "medium", "high", "xhigh", "max"},
+	"claude-fable-5-1":           {"minimal", "low", "medium", "high", "xhigh", "max"},
+	"claude-haiku-4-5":           {"off", "minimal", "low", "medium", "high"},
+	"claude-haiku-4-5-20251001":  {"off", "minimal", "low", "medium", "high"},
+	"claude-haiku-5-5":           {"off", "low", "medium", "high", "xhigh", "max"},
+	"claude-opus-4-5":            {"off", "minimal", "low", "medium", "high"},
+	"claude-opus-4-5-20251101":   {"off", "minimal", "low", "medium", "high"},
+	"claude-opus-4-6":            {"off", "minimal", "low", "medium", "high", "max"},
+	"claude-opus-4-7":            {"off", "minimal", "low", "medium", "high", "xhigh", "max"},
+	"claude-opus-4-8":            {"off", "minimal", "low", "medium", "high", "xhigh", "max"},
+	"claude-opus-5":              {"off", "minimal", "low", "medium", "high", "xhigh", "max"},
+	"claude-opus-5-5":            {"low", "medium", "high", "xhigh", "max"},
+	"claude-sonnet-4-5":          {"off", "minimal", "low", "medium", "high"},
+	"claude-sonnet-4-5-20250929": {"off", "minimal", "low", "medium", "high"},
+	"claude-sonnet-4-6":          {"off", "minimal", "low", "medium", "high", "max"},
+	"claude-sonnet-5":            {"off", "minimal", "low", "medium", "high", "xhigh", "max"},
+	"claude-sonnet-5-5":          {"low", "medium", "high", "xhigh", "max"},
 }
 
 // endpointName is compatibleEndpointPreset's match over the built-in hosted services.

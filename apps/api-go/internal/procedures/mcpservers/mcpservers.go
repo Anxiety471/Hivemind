@@ -9,7 +9,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/url"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -185,7 +188,13 @@ func List(
 			summary := oauthSummary{status: "none"}
 			if record.secretID != nil {
 				if ciphertext, ok := ciphertexts[*record.secretID]; ok {
-					summary = summarizeMaterial(vault, ctx, ciphertext, *record.secretID)
+					value, err := summarizeMaterial(vault, ctx, ciphertext, *record.secretID)
+					if err != nil {
+						// A reference the store cannot serve fails the whole list, as the shipped
+						// reader rethrows SecretStoreUnavailable instead of hiding it.
+						return err
+					}
+					summary = value
 				}
 			}
 			spaceIDs := []string{record.spaceID}
@@ -255,15 +264,15 @@ type oauthSummary struct {
 }
 
 // summarizeMaterial is McpOAuthBroker.summaryForCiphertext: JSON material, or an empty one when
-// the value cannot be read; the shipped reader rethrows only an unavailable store, which the
-// local store does not have.
-func summarizeMaterial(vault *shared.SecretVault, ctx context.Context, ciphertext, recordID string) oauthSummary {
+// the value cannot be read. An unavailable store is rethrown (the shipped reader does the same):
+// the local store has none except an `infisical:` ref, which this build cannot serve.
+func summarizeMaterial(vault *shared.SecretVault, ctx context.Context, ciphertext, recordID string) (oauthSummary, error) {
 	plaintext, err := vault.Writer.Load(ctx, ciphertext, recordID)
 	if err != nil {
-		if err == secretstore.ErrRemoteUnsupported {
-			return oauthSummary{status: "none"}
+		if errors.Is(err, secretstore.ErrRemoteUnsupported) {
+			return oauthSummary{}, err
 		}
-		return oauthSummary{status: "none"}
+		return oauthSummary{status: "none"}, nil
 	}
 	var material map[string]any
 	if err := json.Unmarshal([]byte(plaintext), &material); err != nil || material == nil {
@@ -290,7 +299,7 @@ func summarizeMaterial(vault *shared.SecretVault, ctx context.Context, ciphertex
 		len(objectKeysRaw(material["headers"])) > 0 ||
 		material["oauthClient"] != nil ||
 		material["oauth"] != nil
-	return summary
+	return summary, nil
 }
 
 func arrayLength(value any) int {
@@ -326,7 +335,38 @@ func objectKeys(raw []byte) []string {
 		}
 		keys = append(keys, key)
 	}
-	return keys
+	return jsPropertyOrder(keys)
+}
+
+// jsPropertyOrder is Object.keys' order: array-index keys ascending first, then the rest in
+// insertion (document) order.
+func jsPropertyOrder(keys []string) []string {
+	indices := []string{}
+	others := []string{}
+	for _, key := range keys {
+		if isArrayIndex(key) {
+			indices = append(indices, key)
+		} else {
+			others = append(others, key)
+		}
+	}
+	sort.SliceStable(indices, func(left, right int) bool {
+		a, _ := strconv.ParseUint(indices[left], 10, 64)
+		b, _ := strconv.ParseUint(indices[right], 10, 64)
+		return a < b
+	})
+	return append(indices, others...)
+}
+
+func isArrayIndex(key string) bool {
+	if key == "" || (len(key) > 1 && key[0] == '0') {
+		return false
+	}
+	value, err := strconv.ParseUint(key, 10, 64)
+	if err != nil || value > 4294967294 {
+		return false
+	}
+	return strconv.FormatUint(value, 10) == key
 }
 
 func objectKeysRaw(value any) []string {

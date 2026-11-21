@@ -7825,11 +7825,20 @@ async function databaseState(seeded: ReturnType<typeof ids>, procedure?: string)
     select: { installId: true, spaceId: true },
     orderBy: [{ installId: "asc" }, { spaceId: "asc" }],
   });
-  const secrets = await system.secret.findMany({
+  const secretRows = await system.secret.findMany({
     where: { userId: seeded.userId },
     select: { id: true, spaceId: true },
     orderBy: { id: "asc" },
   });
+  // A procedure that lets the store choose its record id (bots.rotateWebhookSecret) makes the raw
+  // id random, and ordering by it before normalization would let two different rows swap places
+  // between the two sides. Order by the normalized id instead; rows that normalize alike are
+  // identical after normalization, so their relative order cannot matter.
+  const secretOrder = (row: { id: string; spaceId: string | null }) =>
+    `${SECRET_ID.test(row.id) ? "<secret-id>" : row.id}|${row.spaceId ?? ""}`;
+  const secrets = secretRows.sort((left, right) =>
+    secretOrder(left).localeCompare(secretOrder(right)),
+  );
   const owners = { in: [seeded.userId, `${seeded.userId}-other`] };
   const paymentRows = await system.payment.findMany({
     where: { userId: owners },

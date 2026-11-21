@@ -894,6 +894,83 @@ export function laneJCases(system: System): Case[] {
         void enabling;
       },
     }),
+
+    // ---- review round 2 (J3, J4, J5 and the minor parity notes) -----------------------------
+    base("vault-command-reserved-name", "vault.list", undefined, {
+      seed: async (seeded) => {
+        await addVault(seeded, "vpath", "value", { name: "path", auth: { type: "command" } });
+        await addVault(seeded, "vgood", "value", { name: "good", auth: { type: "command" } });
+      },
+    }),
+    base("vault-header-reserved-name", "vault.list", undefined, {
+      seed: async (seeded) => {
+        await addVault(seeded, "vcookie", "value", { name: "cookie", auth: { type: "header", name: "Cookie" } });
+        await addVault(seeded, "vforwarded", "value", {
+          name: "forwarded", auth: { type: "header", name: "X-Forwarded-For" },
+        });
+        await addVault(seeded, "vokheader", "value", {
+          name: "okheader", auth: { type: "header", name: "X-Api-Key" },
+        });
+      },
+    }),
+    base("vault-long-origin", "vault.list", undefined, {
+      seed: async (seeded) => {
+        await addVault(seeded, "vlong", "value", {
+          name: "long-origin",
+          origin: `https://${"a".repeat(2040)}.test`,
+          auth: { type: "bearer" },
+        });
+      },
+    }),
+    base("vault-mailto-title", "vault.list", undefined, {
+      seed: async (seeded) => {
+        await addVault(seeded, "vmailto", "value", {
+          name: "mailto-item", origin: "mailto:someone@example.test", auth: { type: "bearer" },
+        });
+      },
+    }),
+    base("mcp-infisical-ref", "mcp.servers.list", undefined, {
+      seed: async (seeded) => {
+        await system.secret.create({
+          data: {
+            id: `${seeded.userId}-infisical`, userId: seeded.userId, spaceId: seeded.spaces[0],
+            kind: "mcp", ciphertext: "infisical:v1:rakazo_aaaaaaaaaaaaaaaaaaaaaaaa_x",
+          },
+        });
+        await addServer(seeded, "remote", { slug: "remote", secretId: `${seeded.userId}-infisical` });
+      },
+    }),
+    base("mcp-numeric-env-keys", "mcp.servers.list", undefined, {
+      seed: async (seeded) => {
+        await addServer(seeded, "numeric", {
+          slug: "numeric",
+          env: { "2": "b", "10": "ten", "1": "a", ZED: "z", alpha: "a" },
+          headers: { "2": "b", "1": "a", "X-One": "1" },
+        });
+      },
+    }),
+    base("model-compat-anthropic-known", "models.credentials", undefined, {
+      seed: async (seeded) => {
+        const model = await addModel(seeded, "anthropicmap", "openai-compatible", JSON.stringify({
+          kind: "openai_compatible",
+          baseUrl: "https://api.example.test/v1",
+          apiProtocol: "anthropic-messages",
+          reasoning: true,
+        }));
+        await addPreference(seeded, model.id, "claude-fable-5", null, at(1));
+      },
+    }),
+    base("model-compat-anthropic-unknown", "models.credentials", undefined, {
+      seed: async (seeded) => {
+        const model = await addModel(seeded, "anthropicunknown", "openai-compatible", JSON.stringify({
+          kind: "openai_compatible",
+          baseUrl: "https://api.example.test/v1",
+          apiProtocol: "anthropic-messages",
+          reasoning: true,
+        }));
+        await addPreference(seeded, model.id, "claude-unlisted-9", null, at(1));
+      },
+    }),
   ];
 }
 

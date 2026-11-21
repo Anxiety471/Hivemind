@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 	"unicode/utf16"
+
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/agentsecrets"
 )
 
 // The value formats below are packages/contracts/src/bots/bot-secrets.ts. A list shows a login's
@@ -25,6 +27,12 @@ const (
 )
 
 var botSecretName = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
+
+// SecretHeaderName (bot-secrets.ts:16-24): a token name, minus the headers the transport owns.
+var secretHeaderName = regexp.MustCompile("^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,120}$")
+
+var reservedSecretHeader = regexp.MustCompile(
+	`(?i)^(host|connection|content-length|content-type|transfer-encoding|te|trailer|upgrade|cookie|origin|referer|accept|proxy-.*|sec-.*|.*forwarded.*)$`)
 
 // decodeLoginPreview is decodeLoginSecret + itemPreview's login branch.
 func decodeLoginPreview(plaintext string) (username string, hasUsername, otp bool, ok bool) {
@@ -335,9 +343,16 @@ func destinationValid(name, origin string, auth map[string]any) bool {
 		if origin != "" {
 			return false
 		}
+		// A command's name must export to a usable, non-reserved environment variable.
+		if kind == "command" {
+			variable := agentsecrets.CommandVariableName(name)
+			if agentsecrets.CommandVariableProblem(variable) != "" {
+				return false
+			}
+		}
 		return true
 	}
-	if origin == "" {
+	if origin == "" || utf16Len(origin) > 2048 {
 		return false
 	}
 	parsed, err := url.Parse(origin)
@@ -410,7 +425,7 @@ func authValue(raw any) (map[string]any, bool) {
 		return map[string]any{"type": kind}, true
 	case "header":
 		name, ok := record["name"].(string)
-		if !ok || !regexp.MustCompile(`^[!#$%&'*+.^_`+"`"+`|~0-9A-Za-z-]{1,120}$`).MatchString(name) {
+		if !ok || !secretHeaderName.MatchString(name) || reservedSecretHeader.MatchString(name) {
 			return nil, false
 		}
 		return map[string]any{"type": "header", "name": name}, true
@@ -474,7 +489,8 @@ func titleFor(rowTitle, origin, name string, preview *Preview) string {
 			return contactName
 		}
 	}
-	if parsed, err := url.Parse(origin); err == nil && parsed.Host != "" {
+	if parsed, err := url.Parse(origin); err == nil && parsed.Scheme != "" &&
+		(parsed.Host != "" || parsed.Opaque != "") {
 		return strings.TrimPrefix(parsed.Host, "www.")
 	}
 	return name
