@@ -1140,9 +1140,12 @@ function SpaceShell() {
             phoneCallsEnabled={Boolean(bootstrapMe?.phoneCallsEnabled)}
             voiceReady={Boolean(voiceStatus?.ready)}
             inCall={Boolean(active) && call?.botId === active?.id}
+            boardEnabled={hasLab(bootstrapMe?.labs, "board")}
+            tasksOpen={panel === "home"}
             panelOpen={chatPanelOpen}
             onOpenNavigation={() => setMobileSidebarOpen(true)}
             onTogglePanel={toggleChatPanel}
+            onToggleTasks={() => setPanel((current) => (current === "home" ? null : "home"))}
             onCall={(bot) => {
               if (call?.botId === bot.id) {
                 setCallMinimized(false);

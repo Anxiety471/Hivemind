@@ -34,6 +34,7 @@ function handlers(): BackgroundJobHandlers {
     "call.expire": vi.fn(async () => undefined),
     "history.compact": vi.fn(async () => undefined),
     "memory.retain-turn": vi.fn(async () => undefined),
+    "task.detect": vi.fn(async () => undefined),
     "memory.purge-history": vi.fn(async () => undefined),
     "messaging.send": vi.fn(async () => undefined),
     "messaging.reply": vi.fn(async () => undefined),

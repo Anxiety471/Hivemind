@@ -54,6 +54,9 @@ export const CORE_BUILTIN_TOOL_NAMES: ReadonlySet<string> = new Set([
   "read_email",
   "send_email",
   "end_call",
+  "task_sync",
+  "ticket_create",
+  "ticket_update",
 ]);
 
 const FLEET_NAMES: ReadonlySet<string> = new Set(FLEET_TOOL_NAMES);
@@ -64,7 +67,8 @@ const AREAS: Array<[area: string, matches: (name: string) => boolean]> = [
   [
     "tasks",
     (name) =>
-      /^(scratchpad_|ticket_)/.test(name) || ["board_tickets", "task_catalog"].includes(name),
+      /^(scratchpad_|ticket_)/.test(name) ||
+      ["board_tickets", "task_catalog", "task_sync"].includes(name),
   ],
   ["skills", (name) => name.startsWith("skill_")],
   ["schedules", (name) => name.startsWith("schedule_")],

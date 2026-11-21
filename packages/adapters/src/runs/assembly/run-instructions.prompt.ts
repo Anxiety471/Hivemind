@@ -267,6 +267,23 @@ function scratchpadClause(disabled?: ReadonlySet<string>): string | undefined {
   return `Use ${pads.join(" / ")} for open work that should outlive this turn${reminder}.`;
 }
 
+function ticketBoardClause(
+  ticketBoardEnabled?: boolean,
+  disabled?: ReadonlySet<string>,
+): string | undefined {
+  if (!ticketBoardEnabled) return undefined;
+  const sync = builtinOffered(disabled, "task_sync");
+  const create = builtinOffered(disabled, "ticket_create");
+  const update = builtinOffered(disabled, "ticket_update");
+  if (!sync && !create && !update) return undefined;
+  const tools = [
+    sync ? "task_sync" : undefined,
+    create ? "ticket_create" : undefined,
+    update ? "ticket_update" : undefined,
+  ].filter((name): name is string => Boolean(name));
+  return `Kanban board is enabled as the source of truth for tracked work: for meaningful multi-step tasks or open follow-ups (never casual Q&A), track them with ${tools.join(" / ")} (avoiding duplicates of open tickets already assigned to you) and keep statuses current (doing while working, blocked/review when waiting, done when verified).`;
+}
+
 /**
  * Open loops get one follow-up the bot sets itself. The follow-up runs as a routine, which
  * cannot see the chat, so the scratchpad item is what tells it whether the loop has closed;
@@ -328,6 +345,7 @@ function toolUsageLine(parts: {
   pageBrowserAllowed: boolean;
   disabledBuiltinTools?: ReadonlySet<string>;
   followUpsOffered?: boolean;
+  ticketBoardEnabled?: boolean;
 }): string {
   const disabled = parts.disabledBuiltinTools;
   const clauses = [
@@ -338,6 +356,7 @@ function toolUsageLine(parts: {
       ? "Use connect_app when an app needs connecting or the user asks to connect one, then wait for them."
       : undefined,
     builtinOffered(disabled, "remember") ? "Use remember for durable facts." : undefined,
+    ticketBoardClause(parts.ticketBoardEnabled, disabled),
     scratchpadClause(disabled),
     parts.followUpsOffered ? FOLLOW_UP_INSTRUCTION : undefined,
     builtinOffered(disabled, "request_takeover")
@@ -420,6 +439,8 @@ export function userTurnInstructions(parts: {
   followUpsOffered?: boolean;
   /** Whether this turn may start a background helper (only in the bot's own app chat). */
   backgroundHelpersAllowed?: boolean;
+  /** Whether the Space Kanban board is enabled for this run's owner. */
+  ticketBoardEnabled?: boolean;
   userComputer?: UserComputerState;
 }): (string | undefined)[] {
   return [

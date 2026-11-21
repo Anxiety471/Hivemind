@@ -33,18 +33,21 @@ type Options struct {
 	// Local serves the procedures this build implements. Nil keeps every entry
 	// that asks for one failing closed instead of silently proxying it.
 	Local *local.Server
+	// TaskDetector serves the internal task-detection and Kanban sync endpoints.
+	TaskDetector TaskDetector
 }
 
 // Gateway routes /rpc requests either to the configured procedures' Go handlers
 // or to the TypeScript API, answers /healthz locally, and answers this host's
-// model-retry questions (ModelRetryPath).
+// model-retry and task-detection questions.
 type Gateway struct {
-	upstream  *url.URL
-	routes    *routes.Store
-	logger    *slog.Logger
-	proxy     *httputil.ReverseProxy
-	transport *http.Transport
-	local     *local.Server
+	upstream   *url.URL
+	routes     *routes.Store
+	logger     *slog.Logger
+	proxy      *httputil.ReverseProxy
+	transport  *http.Transport
+	local      *local.Server
+	taskDetect TaskDetector
 }
 
 // New builds the gateway handler.
@@ -63,11 +66,12 @@ func New(options Options) *Gateway {
 		ForceAttemptHTTP2:  false,
 	}
 	gateway := &Gateway{
-		upstream:  options.Upstream,
-		routes:    options.Routes,
-		logger:    options.Logger,
-		transport: transport,
-		local:     options.Local,
+		upstream:   options.Upstream,
+		routes:     options.Routes,
+		logger:     options.Logger,
+		transport:  transport,
+		local:      options.Local,
+		taskDetect: options.TaskDetector,
 	}
 	gateway.proxy = &httputil.ReverseProxy{
 		Rewrite: gateway.rewrite,
@@ -92,6 +96,12 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		g.healthz(status, r)
 	case r.URL.Path == ModelRetryPath:
 		g.modelRetry(status, r)
+	case r.URL.Path == TaskDetectContextPath:
+		g.taskDetectContext(status, r)
+	case r.URL.Path == TaskDetectPreparePath:
+		g.taskDetectPrepare(status, r)
+	case r.URL.Path == TaskDetectApplyPath:
+		g.taskDetectApply(status, r)
 	case r.URL.Path == "/rpc" || strings.HasPrefix(r.URL.Path, "/rpc/"):
 		mode, readOnly := g.routes.Lookup(r.URL.Path)
 		switch mode {

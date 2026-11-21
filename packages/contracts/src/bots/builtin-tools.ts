@@ -85,6 +85,7 @@ export const BUILTIN_TOOL_NAMES = [
   "ticket_create",
   "ticket_update",
   "ticket_comment",
+  "task_sync",
   "schedule_create",
   "schedule_list",
   "schedule_update",

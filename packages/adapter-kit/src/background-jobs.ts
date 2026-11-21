@@ -57,6 +57,10 @@ const payloadSchemas = {
       })
       .optional(),
   }),
+  "task.detect": z.object({
+    runId: z.string().min(1),
+    messageIds: z.array(z.string().min(1)).optional(),
+  }),
   "messaging.send": z.object({ outboundId: z.string().min(1) }),
   "messaging.reply": z.object({ runId: z.string().min(1) }),
   "messaging.deliver": z.object({ runId: z.string().min(1).optional() }),
@@ -407,6 +411,19 @@ export function memoryRetainTurnJob(
       : `memory.retain-turn:${runId}${options.pending ? ":settle" : ""}`,
     ...(options.availableAt ? { availableAt: options.availableAt } : {}),
     maxAttempts: 4,
+  };
+}
+
+/** Keyed to the completed run so retries never duplicate Kanban detection work. */
+export function taskDetectJob(runId: string, messageIds: string[] = []): BackgroundJob {
+  return {
+    name: "task.detect",
+    payload: {
+      runId,
+      ...(messageIds.length ? { messageIds } : {}),
+    },
+    replaceKey: `task.detect:${runId}`,
+    maxAttempts: 3,
   };
 }
 

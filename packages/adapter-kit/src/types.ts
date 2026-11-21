@@ -993,6 +993,11 @@ export interface BackgroundJobPayloads {
       source: { spaceId: string; userId: string; botId: string; threadId: string };
     };
   };
+  /** Inspect one completed turn and sync missed tasks to the Space's Kanban board via Go. */
+  "task.detect": {
+    runId: string;
+    messageIds?: string[];
+  };
   /** Backup for one recorded outgoing chat message, and the conversation queued behind it. */
   "messaging.send": { outboundId: string };
   /** Backup for recording and sending what an ended run said where its turn came from. */

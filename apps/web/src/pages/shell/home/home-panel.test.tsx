@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
-import type { Bot, Routine } from "@rakazo/contracts";
+import type { Bot, Routine, Ticket } from "@rakazo/contracts";
 import type { ReactNode } from "react";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { HomePanel } from "./home-panel";
+
+const botTickets = vi.hoisted(() => ({ current: [] as Ticket[] }));
 
 vi.mock("@lingui/react/macro", () => ({
   useLingui: () => ({
@@ -17,8 +19,11 @@ vi.mock("@rakazo/ui-web", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@rakazo/ui-web")>()),
   BotAvatar: () => null,
 }));
+vi.mock("../../../components/IconTooltip", () => ({
+  IconTooltip: ({ children }: { children: ReactNode }) => children,
+}));
 vi.mock("../../routines/RoutineList", () => ({ routineTriggerSummary: () => "Daily" }));
-vi.mock("../../space/use-board-stream", () => ({ useBotTickets: () => [] }));
+vi.mock("../../space/use-board-stream", () => ({ useBotTickets: () => botTickets.current }));
 vi.mock("../../../lib/chat/roster-status", () => ({ compactRosterStatusLabel: () => null }));
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -28,16 +33,21 @@ const routine = { id: "r1", name: "Morning digest" } as unknown as Routine;
 
 let host: HTMLDivElement;
 let root: ReturnType<typeof createRoot>;
+beforeEach(() => {
+  botTickets.current = [];
+});
 afterEach(() => {
   act(() => root.unmount());
   host.remove();
 });
 
-function renderPanel(
+function renderPanel({
   onOpenSettings = vi.fn(),
-  routines: Routine[] = [routine],
+  onOpenKanban = vi.fn(),
+  routines = [routine] as Routine[],
   onCreate = vi.fn(),
-) {
+  boardEnabled = false,
+} = {}) {
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -45,7 +55,7 @@ function renderPanel(
     root.render(
       <HomePanel
         bot={bot}
-        boardEnabled={false}
+        boardEnabled={boardEnabled}
         routineList={{
           routines,
           loaded: true,
@@ -54,12 +64,13 @@ function renderPanel(
           onStop: vi.fn(),
           onToggle: vi.fn(),
         }}
+        onOpenKanban={onOpenKanban}
         onOpenSettings={onOpenSettings}
         onClose={vi.fn()}
       />,
     ),
   );
-  return onOpenSettings;
+  return { onOpenSettings, onOpenKanban, onCreate };
 }
 
 it("lists the bot's automations and leaves tickets out without the board", () => {
@@ -69,14 +80,42 @@ it("lists the bot's automations and leaves tickets out without the board", () =>
 });
 
 it("opens settings from the gear", () => {
-  const onOpenSettings = renderPanel();
+  const { onOpenSettings } = renderPanel();
   act(() => host.querySelector<HTMLElement>('[data-testid="home-panel-settings"]')?.click());
   expect(onOpenSettings).toHaveBeenCalled();
 });
 
 it("offers a new routine instead of a blank panel when there is nothing to list", () => {
-  const onCreate = vi.fn();
-  renderPanel(vi.fn(), [], onCreate);
+  const { onCreate } = renderPanel({ routines: [] });
   act(() => host.querySelector<HTMLElement>('[data-testid="home-new-routine"]')?.click());
   expect(onCreate).toHaveBeenCalled();
+});
+
+it("shows task progress and opens the Kanban modal on click", () => {
+  const ticket: Ticket = {
+    id: "t1",
+    boardId: "b1",
+    spaceId: "s1",
+    number: 7,
+    ref: "RAK-7",
+    title: "Ship Go task detector",
+    description: null,
+    status: "doing",
+    priority: "normal",
+    assigneeBotId: "bot1",
+    createdByBotId: "bot1",
+    createdByUserId: "u1",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    completedAt: null,
+  };
+  botTickets.current = [ticket];
+  const { onOpenKanban } = renderPanel({ boardEnabled: true });
+
+  expect(host.querySelector('[data-testid="home-task-progress"]')).not.toBeNull();
+  act(() => host.querySelector<HTMLElement>('[data-testid="home-ticket"]')?.click());
+  expect(onOpenKanban).toHaveBeenCalledWith(ticket);
+
+  act(() => host.querySelector<HTMLElement>('[data-testid="home-open-kanban"]')?.click());
+  expect(onOpenKanban).toHaveBeenCalledWith("board");
 });

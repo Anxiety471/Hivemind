@@ -3,11 +3,18 @@ import type { Bot, Group, ThreadSnapshot } from "@rakazo/contracts";
 import { Button } from "@rakazo/ui-web";
 import { X } from "lucide-react";
 import type { ComponentProps, Dispatch, ReactNode, SetStateAction } from "react";
+import { lazy, Suspense, useState } from "react";
 import { PagesList } from "../../components/pages/PagesList";
 import type { createSpaceRpc } from "../../lib/query/rpc";
 import { RoutineEditor } from "../routines/RoutineEditor";
 import type { RoutineList } from "../routines/RoutineList";
 import { CreateGroupForm, GroupSettings } from "../space/GroupPanel";
+import type { KanbanModalTarget } from "../space/KanbanModal";
+
+const KanbanModal = lazy(() =>
+  import("../space/KanbanModal").then((module) => ({ default: module.KanbanModal })),
+);
+
 import { AgentImportForm } from "./bots/agent-import";
 import { BotSettings } from "./bots/bot-panel";
 import { HomePanel } from "./home/home-panel";
@@ -68,6 +75,7 @@ export function ShellSidePanel({
   discardChatAttachments: (threadKey: string) => void;
 }) {
   const { t } = useLingui();
+  const [kanbanTarget, setKanbanTarget] = useState<KanbanModalTarget | null>(null);
   const open = Boolean(panel && (active || activeGroup || panel === "import-agent"));
   const botView = panel === "routines" || panel === "pages" || panel === "settings" ? panel : null;
 
@@ -115,6 +123,7 @@ export function ShellSidePanel({
               bot={active}
               boardEnabled={boardEnabled}
               routineList={routineList}
+              onOpenKanban={boardEnabled ? (target) => setKanbanTarget(target) : undefined}
               onOpenSettings={() => onOpenBotSettings(active)}
               onClose={() => setPanel(null)}
             />
@@ -209,6 +218,23 @@ export function ShellSidePanel({
             <RoutineEditor {...routineEditorProps} />
           ) : null}
         </div>
+      ) : null}
+      {boardEnabled && kanbanTarget ? (
+        <Suspense fallback={null}>
+          <KanbanModal
+            key={
+              kanbanTarget === "board" || kanbanTarget === "new"
+                ? kanbanTarget
+                : `ticket:${kanbanTarget.id}`
+            }
+            open
+            target={kanbanTarget}
+            botId={active?.id}
+            botName={active?.name}
+            bots={bots}
+            onClose={() => setKanbanTarget(null)}
+          />
+        </Suspense>
       ) : null}
     </ResizableSidePanel>
   );

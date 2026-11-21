@@ -11,6 +11,8 @@ import {
   updateScratchpadItemFromTool,
 } from "../../tasks/scratchpad-tools.js";
 import { taskCatalogFromTool } from "../../tasks/task-catalog.js";
+import type { TaskSyncAction } from "../../tasks/task-detect.js";
+import { syncTasksViaGoOrLocal } from "../../tasks/task-detect.js";
 import {
   commentTicket,
   createTicket,
@@ -203,6 +205,35 @@ export const taskTools: ToolHandlers = {
         userId: run.userId,
         id: String(args.id ?? ""),
         body: String(args.body ?? ""),
+      }),
+    );
+  },
+  async task_sync(ctx, call) {
+    const { deps, run, bot } = ctx;
+    const rawActions = Array.isArray(call.args.actions) ? call.args.actions : [];
+    const actions: TaskSyncAction[] = [];
+    for (const entry of rawActions) {
+      if (!entry || typeof entry !== "object") continue;
+      const item = entry as Record<string, unknown>;
+      const op = item.op === "create" || item.op === "update" ? item.op : null;
+      if (!op) continue;
+      actions.push({
+        op,
+        ...(typeof item.ticketId === "string" ? { ticketId: item.ticketId } : {}),
+        ...(typeof item.ref === "string" ? { ref: item.ref } : {}),
+        ...(typeof item.title === "string" ? { title: item.title } : {}),
+        ...(typeof item.description === "string" ? { description: item.description } : {}),
+        ...(typeof item.status === "string" ? { status: item.status } : {}),
+        ...(typeof item.priority === "string" ? { priority: item.priority } : {}),
+      });
+    }
+    return call.finish(
+      await syncTasksViaGoOrLocal(deps, {
+        runId: run.id,
+        spaceId: run.spaceId,
+        userId: run.userId,
+        botId: bot.id,
+        actions,
       }),
     );
   },

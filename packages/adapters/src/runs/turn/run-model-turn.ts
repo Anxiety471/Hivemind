@@ -231,6 +231,7 @@ function modelTurnRequest(
       backgroundHelpersAllowed: backgroundHelpersAllowed({
         trigger: run.trigger,
       }),
+      ticketBoardEnabled: ctx.source.ticketBoardEnabled,
       userComputer,
     })
       .filter((instruction): instruction is string => Boolean(instruction))

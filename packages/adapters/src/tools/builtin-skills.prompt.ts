@@ -67,6 +67,22 @@ ${RAKAZO_DOCS.map(([topics, url]) => `- ${topics}: ${url}`).join("\n")}
 
 Rakazo is open source; its code is at github.com/elie222/rakazo.`,
   },
+  {
+    name: "Tasks",
+    description: "Track multi-step work and follow-ups on the Kanban board",
+    body: `Keep the Space Kanban board accurate as the single source of truth for real work.
+
+1. Decide what belongs on the board: track multi-step tasks, concrete deliverables, blockers, and open follow-ups. Skip casual Q&A, greetings, and quick one-off lookups.
+2. Check existing work first: read your open tickets in context or call board_tickets so you never create duplicate cards.
+3. Keep cards synced while working: use task_sync to create or update several tasks in one call, or ticket_create / ticket_update / ticket_comment for individual cards.
+4. Use stages cleanly:
+   - todo: planned or deferred follow-up work.
+   - doing: work actively in progress now.
+   - blocked: waiting on user input, approval, or an external dependency.
+   - review: finished and awaiting user review.
+   - done: verified complete. Never mark a task done before verifying the outcome.
+5. Keep titles short and imperative. Put concrete context, acceptance criteria, or next steps in the description or a comment.`,
+  },
 ];
 
 export const BUILTIN_AGENT_SKILLS: Array<{

@@ -2,6 +2,7 @@ import {
   DEFAULT_CONTEXT_STRATEGY,
   historyCompactJob,
   memoryRetainTurnJob,
+  taskDetectJob,
 } from "@rakazo/adapter-kit";
 import {
   BACKGROUND_HELPER_TRIGGER,
@@ -26,6 +27,7 @@ import {
   shouldEnqueueCompaction,
 } from "../../runtime/context/history-compaction.js";
 import { returnHelperOutcome } from "../../tasks/background-helpers.js";
+import { shouldEnqueueTaskDetect } from "../../tasks/task-detect.js";
 import type { RunContext } from "../assembly/run-context.js";
 import { redactBlocks } from "../assembly/run-messages.js";
 import {
@@ -112,6 +114,30 @@ export async function enqueueConversationRetention(
     .catch((error) => getLogger().error("memory.retain-turn enqueue failed", error));
 }
 
+async function taskDetectMessages(ctx: RunContext): Promise<string[] | undefined> {
+  const { run, thread } = ctx;
+  if (
+    !shouldEnqueueTaskDetect({
+      ticketBoardEnabled: Boolean(ctx.source.ticketBoardEnabled),
+      trigger: run.trigger,
+      sourceMessageId: run.sourceMessageId,
+      runBotId: run.botId,
+      threadBotId: thread.botId,
+      threadGroupId: thread.groupId,
+      nonOwnerChatRun: ctx.source.messagingChannelRun,
+    })
+  )
+    return undefined;
+  return answeredSteeringMessageIds(ctx.deps, ctx.runId);
+}
+
+async function enqueueTaskDetection(ctx: RunContext, messageIds: string[] | undefined) {
+  if (!messageIds) return;
+  await ctx.deps.jobs
+    .enqueue(taskDetectJob(ctx.runId, messageIds))
+    .catch((error) => getLogger().error("task.detect enqueue failed", error));
+}
+
 /** The turn ended: apply a scripted runtime's files and memory, then finalize the reply. */
 export async function completeRun(ctx: RunContext) {
   const { deps, run, runId, bot, thread } = ctx;
@@ -142,7 +168,10 @@ export async function completeRun(ctx: RunContext) {
     ctx.source.peerMessage?.repliesToRequest === true,
   );
   await ctx.settleRunningHelpers();
-  const answeredMessageIds = await conversationRetentionMessages(ctx);
+  const [answeredMessageIds, taskDetectMessageIds] = await Promise.all([
+    conversationRetentionMessages(ctx),
+    taskDetectMessages(ctx),
+  ]);
   const completed = await deps.events.finalizeRun({
     spaceId: run.spaceId,
     threadId: thread.id,
@@ -205,6 +234,7 @@ export async function completeRun(ctx: RunContext) {
     });
   }
   await enqueueConversationRetention(ctx, answeredMessageIds);
+  await enqueueTaskDetection(ctx, taskDetectMessageIds);
   await enqueueHistoryCompaction(ctx);
 }
 

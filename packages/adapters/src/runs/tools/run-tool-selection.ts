@@ -177,7 +177,9 @@ export function selectBuiltinToolsForRun(options: {
       (options.paidServicesEnabled || !PAID_SERVICE_TOOL_NAMES.has(tool.name)) &&
       (options.hasGroups === true || tool.name !== "post_to_group") &&
       (options.ticketBoardEnabled ||
-        (tool.name !== "board_tickets" && !tool.name.startsWith("ticket_"))) &&
+        (tool.name !== "board_tickets" &&
+          tool.name !== "task_sync" &&
+          !tool.name.startsWith("ticket_"))) &&
       (!isBackgroundRunTrigger(options.trigger) ||
         ![
           "message_user",
@@ -215,6 +217,7 @@ export function selectBuiltinToolsForRun(options: {
             "reflect_memory",
             "task_catalog",
             "board_tickets",
+            "task_sync",
           ].includes(tool.name) &&
           !tool.name.startsWith("scratchpad_") &&
           !tool.name.startsWith("ticket_"))),

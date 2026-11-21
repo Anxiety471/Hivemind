@@ -302,6 +302,8 @@ export interface RunSource {
   peerMessage: Awaited<ReturnType<typeof loadBotMessageContext>>;
   /** Whose own computer user_computer_shell may reach (see userComputerOwner). */
   userComputerOwner: string | undefined;
+  /** Whether the Space Kanban board is enabled for this run's owner. */
+  ticketBoardEnabled?: boolean;
 }
 
 export interface RunTools {

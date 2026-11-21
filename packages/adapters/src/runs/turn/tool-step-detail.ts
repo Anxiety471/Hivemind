@@ -143,6 +143,14 @@ function rawDetailForTool(toolName: string, args: Record<string, unknown>): stri
     case "scratchpad_add":
     case "scratchpad_update":
       return nonEmptyString(args.title);
+    case "task_sync": {
+      const actions = Array.isArray(args.actions) ? args.actions : [];
+      const first = actions.find(
+        (entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object",
+      );
+      if (!first) return undefined;
+      return nonEmptyString(first.title) ?? nonEmptyString(first.ref);
+    }
     case "schedule_create":
     case "schedule_update":
     case "schedule_cancel":

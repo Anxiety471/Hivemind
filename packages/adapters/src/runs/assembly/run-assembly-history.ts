@@ -233,6 +233,8 @@ export async function loadTurnContext(
         : loadAgentTicketContext(deps, {
             spaceId: run.spaceId,
             text: task.prompt,
+            botId: bot.id,
+            userId: run.userId,
           }),
       recallPromise,
     ]);

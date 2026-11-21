@@ -88,6 +88,7 @@ export async function createRunContext(
     conversationThread,
     conversationRun,
     origin,
+    ticketBoardEnabled,
   } = parts.records;
   const { connectedPlugins, context, memoryScope, runAbortController, semanticMemory } =
     parts.connected;
@@ -208,6 +209,7 @@ export async function createRunContext(
       callClientNonce: callClientNonceForRun,
       peerMessage,
       userComputerOwner: userComputerOwnerId,
+      ticketBoardEnabled,
     },
     computer: {
       stored: storedComputer,

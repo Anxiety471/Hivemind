@@ -330,6 +330,51 @@ export const workTools: ConnectorTool[] = [
     },
   },
   {
+    name: "task_sync",
+    description:
+      "Create or update a batch of tasks on your Kanban board in one call (max 5 actions). Deduplicates against your open tickets and never re-wakes you. Use for meaningful multi-step work or open follow-ups; skip casual Q&A.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        actions: {
+          type: "array",
+          minItems: 1,
+          maxItems: 5,
+          items: {
+            type: "object",
+            properties: {
+              op: { type: "string", enum: ["create", "update"] },
+              ticketId: { type: "string", description: "Existing ticket id (for update)." },
+              ref: { type: "string", description: "Existing ticket ref like RAK-12 (for update)." },
+              title: {
+                type: "string",
+                maxLength: TICKET_TITLE_MAX_LENGTH,
+                description: "Short imperative task title (required for create).",
+              },
+              description: {
+                type: "string",
+                maxLength: TICKET_DESCRIPTION_MAX_LENGTH,
+                description: "Concise context, checklist, or next steps.",
+              },
+              status: {
+                type: "string",
+                enum: ["todo", "doing", "review", "blocked", "done"],
+                description: "Task stage on the Kanban board.",
+              },
+              priority: {
+                type: "string",
+                enum: TICKET_PRIORITIES,
+                description: "Task priority (defaults to normal).",
+              },
+            },
+            required: ["op"],
+          },
+        },
+      },
+      required: ["actions"],
+    },
+  },
+  {
     name: "schedule_create",
     description:
       'Create a reminder or recurring job for this bot. Use for "remind me in 10 minutes" or "every morning send a joke". Repeats: cron or every/unit (min 1 minute), optionally from startAt. One-shot: runAt, delayMinutes, or delaySeconds. A repeating job carries out the user\'s lasting request each time, not a copy of what was decided today. inChat true only when each run continues work this chat is doing, such as updating a draft or plan written here or fixing something started here; it then waits for work under way here. Otherwise false: it runs on time, seeing this chat\'s latest messages and its own earlier results. on: run on events too, or only (no timing); each run receives the event: webhook, git (a GitHub repo webhook the user adds with the routine URL and key; needs no connected app), chat (your connected chat app, by name), email (to your address from the owner or their domain).',

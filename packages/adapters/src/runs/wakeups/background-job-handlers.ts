@@ -56,6 +56,7 @@ import { pollPurchase } from "../../payments/purchase-poll.js";
 import { compactHistory } from "../../runtime/context/history-compaction.js";
 import { expireRunSecrets } from "../../secrets/run-secrets-expiry.js";
 import { retrySecretCleanup } from "../../secrets/secret-cleanup.js";
+import { detectRunTasks } from "../../tasks/task-detect.js";
 import type { createRunExecutor } from "../executor/executor.js";
 
 type Tenant = { spaceId: string; userId: string };
@@ -314,6 +315,19 @@ export function createBackgroundJobHandlers(deps: {
       async (payload: BackgroundJobPayloads["memory.purge-history"]) => payload,
       async (payload) => retryConversationMemoryPurge(deps, payload),
     ),
+    "task.detect": asOwner(run, async (payload) => {
+      await detectRunTasks(
+        {
+          prisma: deps.prisma,
+          runtime: deps.runtime,
+          deploymentModelKey: deps.deploymentModelKey,
+          deploymentModelConfigured: deps.deploymentModelConfigured,
+          ...(deps.executor.resolveModel ? { resolveModel: deps.executor.resolveModel } : {}),
+        },
+        payload.runId,
+        payload.messageIds,
+      );
+    }),
     "memory.retain-turn": asOwner(
       async (payload: BackgroundJobPayloads["memory.retain-turn"]) =>
         // Source was captured from the run before submission; group deletion may remove that row.

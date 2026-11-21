@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   extractTicketRefs,
   loadAgentTicketContext,
+  renderAssignedTicketsContext,
   renderTicketContext,
 } from "./ticket-context.js";
 
@@ -84,4 +85,24 @@ it("does not query tickets for an out-of-range reference in a message", async ()
     ),
   ).resolves.toBeUndefined();
   expect(findMany).not.toHaveBeenCalled();
+});
+
+describe("renderAssignedTicketsContext", () => {
+  it("renders open assigned tickets with escaping and status/priority", () => {
+    const block = renderAssignedTicketsContext([
+      {
+        id: "t-1",
+        ref: "RAK-7",
+        title: "Build <sync>",
+        status: "doing",
+        priority: "high",
+        description: "Wire Go backend & tests",
+      },
+    ]);
+    expect(block).toContain("<assigned_tickets>");
+    expect(block).toContain(
+      "- RAK-7 [doing/high] Build &lt;sync&gt; — Wire Go backend &amp; tests (id: t-1)",
+    );
+    expect(block?.endsWith("</assigned_tickets>")).toBe(true);
+  });
 });

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { connectedPluginsInstruction, taughtSkillsInstruction } from "./run-instructions.prompt.js";
+import {
+  connectedPluginsInstruction,
+  taughtSkillsInstruction,
+  userTurnInstructions,
+} from "./run-instructions.prompt.js";
 
 describe("connectedPluginsInstruction", () => {
   it("names each connected plugin and prefers its tools to browsing", () => {
@@ -32,5 +36,37 @@ describe("taughtSkillsInstruction", () => {
 
   it("adds nothing when no skill was taught", () => {
     expect(taughtSkillsInstruction([])).toBeUndefined();
+  });
+});
+
+describe("userTurnInstructions Kanban board clause", () => {
+  const base = {
+    botInstructions: "",
+    groupContext: undefined,
+    messagingContext: undefined,
+    redactedMemoryContext: undefined,
+    redactedScratchpadContext: undefined,
+    hasHistoricalContext: false,
+    computerInstruction: "Computer.",
+    pageBrowserAllowed: false,
+    workspaceInstruction: "",
+    agentEnvironmentInstruction: undefined,
+    botDirectory: undefined,
+    pluginLine: undefined,
+    agentSkillsLine: undefined,
+    taughtSkillsLine: undefined,
+    replyGuidance: "",
+  };
+
+  it("includes Kanban board guidance only when ticketBoardEnabled is true", () => {
+    const withoutBoard = userTurnInstructions(base).filter(Boolean).join("\n");
+    expect(withoutBoard).not.toContain("Kanban board is enabled");
+
+    const withBoard = userTurnInstructions({ ...base, ticketBoardEnabled: true })
+      .filter(Boolean)
+      .join("\n");
+    expect(withBoard).toContain("Kanban board is enabled");
+    expect(withBoard).toContain("ticket_create");
+    expect(withBoard).toContain("ticket_update");
   });
 });

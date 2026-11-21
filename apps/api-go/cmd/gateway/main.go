@@ -26,6 +26,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/routes"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/taskdetect"
 )
 
 func main() {
@@ -57,8 +58,9 @@ func main() {
 	wantsLocal := store.HasLocal()
 	secretsReady := os.Getenv("DATABASE_URL") != "" && os.Getenv("BETTER_AUTH_SECRET") != ""
 	var localServer *local.Server
+	var taskDetector *taskdetect.Service
 	if secretsReady {
-		server, closeDatabase, err := setupLocal(*buildIDFile, logger)
+		server, detector, closeDatabase, err := setupLocal(*buildIDFile, logger)
 		if err != nil {
 			if wantsLocal {
 				logger.Error("cannot serve local procedures", "error", err)
@@ -67,6 +69,7 @@ func main() {
 			logger.Warn("local procedures unavailable; serving proxy routes only", "error", err)
 		} else {
 			localServer = server
+			taskDetector = detector
 			defer closeDatabase()
 			logger.Info("local procedures ready", "procedures", server.Count())
 		}
@@ -75,7 +78,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	handler := gateway.New(gateway.Options{Upstream: target, Routes: store, Logger: logger, Local: localServer})
+	handler := gateway.New(gateway.Options{
+		Upstream:     target,
+		Routes:       store,
+		Logger:       logger,
+		Local:        localServer,
+		TaskDetector: taskDetector,
+	})
 	server := &http.Server{
 		Addr:              *listen,
 		Handler:           handler,
@@ -148,20 +157,20 @@ func readBuildID(path string) string {
 // setupLocal opens the database and builds the local procedure server. It is
 // called whenever the deployment's secrets are present, even if every route is
 // still proxy, so a SIGHUP cutover can use it without a restart.
-func setupLocal(buildIDFile string, logger *slog.Logger) (*local.Server, func(), error) {
+func setupLocal(buildIDFile string, logger *slog.Logger) (*local.Server, *taskdetect.Service, func(), error) {
 	deployment, err := config.Load()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	startup, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	database, err := db.Open(startup, deployment.DatabaseURL, "rakazo-api-go")
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if err := database.StartupCheck(startup); err != nil {
 		database.Close()
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	sessions := auth.New(database, auth.Config{
 		Secret:          deployment.AuthSecret,
@@ -172,7 +181,7 @@ func setupLocal(buildIDFile string, logger *slog.Logger) (*local.Server, func(),
 	ring, closeRing, err := contentRing(startup, database, deployment, logger)
 	if err != nil {
 		database.Close()
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	// One runner per process: the middleware publishes its own roster/Space signals through
 	// it, and the procedures publish thread cursors, organization and board changes through
@@ -199,7 +208,14 @@ func setupLocal(buildIDFile string, logger *slog.Logger) (*local.Server, func(),
 		Logger:         logger,
 		Effects:        effectsRunner,
 	})
-	return server, func() {
+	detector := &taskdetect.Service{
+		DB:       database,
+		BoardLab: deployment.BoardLab,
+		Content:  ring,
+		Signals:  effectsRunner.Signals(),
+		Logger:   logger,
+	}
+	return server, detector, func() {
 		closeRing()
 		database.Close()
 	}, nil
