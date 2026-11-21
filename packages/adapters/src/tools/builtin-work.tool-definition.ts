@@ -248,6 +248,11 @@ export const workTools: ConnectorTool[] = [
       properties: {
         status: { type: "string", enum: TICKET_STATUSES, description: "Filter by status." },
         ownerBotId: { type: "string", description: "Filter by owner bot id." },
+        ownerUserId: {
+          type: "string",
+          description: "Filter by owner user id (or 'me' for the user).",
+        },
+        workerBotId: { type: "string", description: "Filter by assigned worker bot id." },
         cursor: {
           type: "string",
           description: "nextCursor from the previous page. Omit for the first page.",
@@ -270,7 +275,7 @@ export const workTools: ConnectorTool[] = [
   },
   {
     name: "ticket_create",
-    description: "Create a ticket. Owner defaults to you.",
+    description: "Create a ticket. Owner and worker default to you unless specified.",
     inputSchema: {
       type: "object",
       properties: {
@@ -291,7 +296,16 @@ export const workTools: ConnectorTool[] = [
         },
         ownerBotId: {
           type: "string",
-          description: "Bot in this space to own it. Defaults to you.",
+          description: "Bot in this space that owns the ticket.",
+        },
+        ownerUserId: {
+          type: "string",
+          description: "User id that owns the ticket (pass 'me' for the user).",
+        },
+        workerBotIds: {
+          type: "array",
+          items: { type: "string" },
+          description: "Bot ids assigned to execute this ticket. Defaults to you.",
         },
       },
       required: ["title"],
@@ -299,7 +313,7 @@ export const workTools: ConnectorTool[] = [
   },
   {
     name: "ticket_update",
-    description: "Update a ticket, including status and owner.",
+    description: "Update a ticket, including status, owner, and assigned worker bots.",
     inputSchema: {
       type: "object",
       properties: {
@@ -308,7 +322,16 @@ export const workTools: ConnectorTool[] = [
         description: { type: "string", maxLength: TICKET_DESCRIPTION_MAX_LENGTH },
         priority: { type: "string", enum: TICKET_PRIORITIES },
         status: { type: "string", enum: TICKET_STATUSES },
-        ownerBotId: { type: "string" },
+        ownerBotId: { type: "string", description: "Bot id that owns the ticket." },
+        ownerUserId: {
+          type: "string",
+          description: "User id that owns the ticket (pass 'me' for the user).",
+        },
+        workerBotIds: {
+          type: "array",
+          items: { type: "string" },
+          description: "Bot ids assigned to execute this ticket.",
+        },
       },
       required: ["id"],
     },
@@ -365,6 +388,16 @@ export const workTools: ConnectorTool[] = [
                 type: "string",
                 enum: TICKET_PRIORITIES,
                 description: "Task priority (defaults to normal).",
+              },
+              ownerBotId: { type: "string", description: "Bot id that owns this task." },
+              ownerUserId: {
+                type: "string",
+                description: "User id that owns this task (pass 'me' for the user).",
+              },
+              workerBotIds: {
+                type: "array",
+                items: { type: "string" },
+                description: "Bot ids assigned to execute this task.",
               },
             },
             required: ["op"],

@@ -1,6 +1,6 @@
 import { Trans, useLingui } from "@lingui/react/macro";
 import { ChatMarkdown } from "@rakazo/chat-ui/web";
-import type { Bot, Ticket, TicketPriority, TicketStatus } from "@rakazo/contracts";
+import type { Bot, Me, Ticket, TicketPriority, TicketStatus } from "@rakazo/contracts";
 import {
   TICKET_COMMENT_MAX_LENGTH,
   TICKET_DESCRIPTION_MAX_LENGTH,
@@ -28,9 +28,20 @@ import { useId, useState } from "react";
 import { formatRelativeTime } from "../../lib/locale/relative-time";
 import { useSave, useSpaceQueries } from "../../lib/query/query";
 import { errorText } from "../../lib/query/user-error";
+import {
+  OWNER_ME_VALUE,
+  ownerOptionValue,
+  ownerPayloadFromValue,
+  sameIdList,
+  ticketInvolvesBot,
+  ticketOwnerLabel,
+  ticketWorkerIds,
+  ticketWorkerNames,
+} from "./ticket-people";
 import { useTicketPriorityLabels } from "./ticket-priority";
 import { useTicketStatusLabels } from "./ticket-status";
 import { useBoardStream } from "./use-board-stream";
+import { WorkerBotsSelect } from "./WorkerBotsSelect";
 
 const KANBAN_COLUMNS: readonly TicketStatus[] = ["todo", "doing", "review", "blocked", "done"];
 
@@ -59,6 +70,9 @@ export function KanbanModal({
   const [scope, setScope] = useState<"bot" | "all">(botId ? "bot" : "all");
   const [streamError, setStreamError] = useState("");
   const queries = useSpaceQueries();
+  const queryClient = useQueryClient();
+  const meKey = queries.me?.queryKey?.();
+  const currentUserId = meKey ? queryClient.getQueryData<Me>(meKey)?.userId : undefined;
   const ticketsOptions = queries.tickets.list.queryOptions({ input: {} });
   const ticketsQuery = useQuery({ ...ticketsOptions, enabled: open });
   useBoardStream(ticketsOptions, setStreamError, open);
@@ -66,7 +80,7 @@ export function KanbanModal({
   const allTickets = ticketsQuery.data?.tickets ?? [];
   const visibleTickets =
     scope === "bot" && botId
-      ? allTickets.filter((ticket) => ticket.assigneeBotId === botId)
+      ? allTickets.filter((ticket) => ticketInvolvesBot(ticket, botId))
       : allTickets;
 
   // Keep an open ticket synced with live board updates as the bot works.
@@ -92,6 +106,7 @@ export function KanbanModal({
             bots={bots}
             botId={botId}
             botName={botName}
+            currentUserId={currentUserId}
             scope={scope}
             error={loadError}
             onScopeChange={setScope}
@@ -101,7 +116,8 @@ export function KanbanModal({
         ) : view === "new" ? (
           <TicketEditForm
             ticket={null}
-            defaultOwnerId={botId ?? bots[0]?.id ?? ""}
+            defaultWorkerIds={botId ? [botId] : []}
+            currentUserId={currentUserId}
             bots={bots}
             onBack={() => setView("board")}
             onDone={() => setView("board")}
@@ -110,6 +126,7 @@ export function KanbanModal({
           <TicketDetailView
             key={activeTicket.id}
             ticket={activeTicket}
+            currentUserId={currentUserId}
             bots={bots}
             onBack={() => setView("board")}
           />
@@ -124,6 +141,7 @@ function KanbanBoardView({
   bots,
   botId,
   botName,
+  currentUserId,
   scope,
   error,
   onScopeChange,
@@ -134,6 +152,7 @@ function KanbanBoardView({
   bots: Bot[];
   botId?: string;
   botName?: string;
+  currentUserId?: string;
   scope: "bot" | "all";
   error: string;
   onScopeChange: (scope: "bot" | "all") => void;
@@ -143,6 +162,7 @@ function KanbanBoardView({
   const { t } = useLingui();
   const statuses = useTicketStatusLabels();
   const priorities = useTicketPriorityLabels();
+  const ownerLabels = { me: t`Me`, member: t`Member` };
 
   return (
     <div className="flex flex-col gap-4">
@@ -177,7 +197,7 @@ function KanbanBoardView({
               </Button>
             </fieldset>
           ) : null}
-          <Button type="button" size="sm" onClick={onCreate} disabled={bots.length === 0}>
+          <Button type="button" size="sm" onClick={onCreate}>
             <Plus className="size-3.5" aria-hidden />
             <Trans>New task</Trans>
           </Button>
@@ -207,7 +227,11 @@ function KanbanBoardView({
               </header>
               <div className="flex flex-col gap-1.5">
                 {columnTickets.map((ticket) => {
-                  const owner = bots.find((bot) => bot.id === ticket.assigneeBotId)?.name;
+                  const workers = ticketWorkerNames(ticket, bots);
+                  const cardPeople =
+                    workers.length > 0
+                      ? workers.join(", ")
+                      : ticketOwnerLabel(ticket, bots, currentUserId, ownerLabels);
                   return (
                     <button
                       key={ticket.id}
@@ -228,11 +252,7 @@ function KanbanBoardView({
                         {ticket.title}
                       </span>
                       <div className="flex w-full items-center justify-between gap-2 pt-0.5 text-label text-muted-foreground">
-                        {scope === "all" && owner ? (
-                          <span className="truncate">{owner}</span>
-                        ) : (
-                          <span />
-                        )}
+                        {cardPeople ? <span className="truncate">{cardPeople}</span> : <span />}
                         <span className="shrink-0">{formatRelativeTime(ticket.updatedAt)}</span>
                       </div>
                     </button>
@@ -254,10 +274,12 @@ function KanbanBoardView({
 
 function TicketDetailView({
   ticket,
+  currentUserId,
   bots,
   onBack,
 }: {
   ticket: Ticket;
+  currentUserId?: string;
   bots: Bot[];
   onBack: () => void;
 }) {
@@ -300,7 +322,8 @@ function TicketDetailView({
     return (
       <TicketEditForm
         ticket={ticket}
-        defaultOwnerId={ticket.assigneeBotId ?? bots[0]?.id ?? ""}
+        defaultWorkerIds={ticketWorkerIds(ticket)}
+        currentUserId={currentUserId}
         bots={bots}
         onBack={() => setEditing(false)}
         onDone={() => setEditing(false)}
@@ -308,7 +331,11 @@ function TicketDetailView({
     );
   }
 
-  const ownerName = bots.find((bot) => bot.id === ticket.assigneeBotId)?.name;
+  const ownerName = ticketOwnerLabel(ticket, bots, currentUserId, {
+    me: t`Me`,
+    member: t`Member`,
+  });
+  const workerNames = ticketWorkerNames(ticket, bots);
   const shownError = moving.error
     ? errorText(moving.error)
     : commenting.error
@@ -364,7 +391,16 @@ function TicketDetailView({
           />
         </div>
         <span className="text-body-sm text-muted-foreground">{priorities[ticket.priority]}</span>
-        {ownerName ? <span className="text-body-sm text-muted-foreground">{ownerName}</span> : null}
+        {ownerName ? (
+          <span className="text-body-sm text-muted-foreground">
+            <Trans>Owner: {ownerName}</Trans>
+          </span>
+        ) : null}
+        {workerNames.length > 0 ? (
+          <span className="text-body-sm text-muted-foreground">
+            <Trans>Workers: {workerNames.join(", ")}</Trans>
+          </span>
+        ) : null}
         <span className="ms-auto text-body-sm text-faint-foreground">
           {formatRelativeTime(ticket.updatedAt)}
         </span>
@@ -419,13 +455,15 @@ function TicketDetailView({
 
 function TicketEditForm({
   ticket,
-  defaultOwnerId,
+  defaultWorkerIds,
+  currentUserId,
   bots,
   onBack,
   onDone,
 }: {
   ticket: Ticket | null;
-  defaultOwnerId: string;
+  defaultWorkerIds: string[];
+  currentUserId?: string;
   bots: Bot[];
   onBack: () => void;
   onDone: () => void;
@@ -435,20 +473,33 @@ function TicketEditForm({
   const statuses = useTicketStatusLabels();
   const priorities = useTicketPriorityLabels();
   const queries = useSpaceQueries();
+  const initialOwner = ownerOptionValue(ticket, currentUserId);
+  const initialWorkers = ticket ? ticketWorkerIds(ticket) : defaultWorkerIds;
   const [title, setTitle] = useState(ticket?.title ?? "");
   const [description, setDescription] = useState(ticket?.description ?? "");
-  const [owner, setOwner] = useState(ticket?.assigneeBotId ?? defaultOwnerId);
+  const [owner, setOwner] = useState(initialOwner);
+  const [workerBotIds, setWorkerBotIds] = useState<string[]>(initialWorkers);
   const [status, setStatus] = useState<TicketStatus>(ticket?.status ?? "todo");
   const [priority, setPriority] = useState<TicketPriority>(ticket?.priority ?? "normal");
 
+  const ownerOptions = [
+    { value: OWNER_ME_VALUE, label: t`Me` },
+    ...bots.map((bot) => ({ value: `bot:${bot.id}`, label: bot.name })),
+  ];
+  if (owner && owner !== OWNER_ME_VALUE && !ownerOptions.some((option) => option.value === owner)) {
+    ownerOptions.unshift({ value: owner, label: t`Member` });
+  }
+
   const saving = useSave({
     save: async (_input, rpc) => {
+      const ownerPatch = ownerPayloadFromValue(owner, currentUserId);
       if (ticket) {
         await rpc.tickets.update({
           id: ticket.id,
           ...(title !== ticket.title ? { title } : {}),
           ...(description !== (ticket.description ?? "") ? { description } : {}),
-          ...(owner !== (ticket.assigneeBotId ?? defaultOwnerId) ? { assigneeBotId: owner } : {}),
+          ...(owner !== initialOwner ? ownerPatch : {}),
+          ...(!sameIdList(workerBotIds, initialWorkers) ? { workerBotIds } : {}),
           ...(status !== ticket.status ? { status } : {}),
           ...(priority !== ticket.priority ? { priority } : {}),
         });
@@ -456,7 +507,8 @@ function TicketEditForm({
         await rpc.tickets.create({
           title,
           description,
-          assigneeBotId: owner,
+          ...ownerPatch,
+          workerBotIds,
           priority,
         });
       }
@@ -517,10 +569,21 @@ function TicketEditForm({
             </FieldLabel>
             <OptionSelect
               id={`${formId}-owner`}
-              value={owner || null}
+              value={owner}
               onValueChange={setOwner}
-              required
-              options={bots.map((bot) => ({ value: bot.id, label: bot.name }))}
+              options={ownerOptions}
+            />
+          </Field>
+          <Field>
+            <FieldLabel htmlFor={`${formId}-workers`}>
+              <Trans>Workers</Trans>
+            </FieldLabel>
+            <WorkerBotsSelect
+              id={`${formId}-workers`}
+              bots={bots}
+              value={workerBotIds}
+              onChange={setWorkerBotIds}
+              disabled={saving.pending}
             />
           </Field>
           {ticket ? (
@@ -551,7 +614,7 @@ function TicketEditForm({
             <Button type="button" variant="ghost" onClick={onBack}>
               <Trans>Cancel</Trans>
             </Button>
-            <Button type="submit" disabled={saving.pending || !title.trim() || !owner}>
+            <Button type="submit" disabled={saving.pending || !title.trim()}>
               {ticket ? t`Save` : t`Create`}
             </Button>
           </div>

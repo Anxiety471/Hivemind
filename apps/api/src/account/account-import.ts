@@ -842,6 +842,9 @@ class AccountImporter implements ArchiveSink {
       case "ticket": {
         if (!space.boardId) throw missingRecord();
         space.maxTicketNumber = Math.max(space.maxTicketNumber, record.number);
+        const assigneeBotId = space.optional(record.assigneeBotId);
+        const createdByBotId = space.optional(record.createdByBotId);
+        const createdByUserId = record.createdByExporter ? userId : null;
         await prisma.ticket.create({
           data: {
             id: newId(),
@@ -852,9 +855,12 @@ class AccountImporter implements ArchiveSink {
             description: record.description,
             status: record.status,
             priority: record.priority,
-            assigneeBotId: space.optional(record.assigneeBotId),
-            createdByBotId: space.optional(record.createdByBotId),
-            createdByUserId: record.createdByExporter ? userId : null,
+            assigneeBotId,
+            workerBotIds: assigneeBotId ? [assigneeBotId] : [],
+            ownerBotId: createdByBotId,
+            ownerUserId: createdByBotId ? null : createdByUserId,
+            createdByBotId,
+            createdByUserId,
             createdAt: new Date(record.createdAt),
             updatedAt: new Date(record.updatedAt),
             completedAt: date(record.completedAt),

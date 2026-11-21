@@ -63,8 +63,35 @@ func TestTicketDtoCoercion(t *testing.T) {
 	if ticketValid(Ticket{Number: 1, AssigneeBotID: &empty}) {
 		t.Fatal("an empty assignee id is not a valid ticket")
 	}
+	if ticketValid(Ticket{Number: 1, OwnerUserID: &empty}) {
+		t.Fatal("an empty owner user id is not a valid ticket")
+	}
+	if ticketValid(Ticket{Number: 1, OwnerBotID: &empty}) {
+		t.Fatal("an empty owner bot id is not a valid ticket")
+	}
+	if ticketValid(Ticket{Number: 1, WorkerBotIDs: []string{"bot-1", ""}}) {
+		t.Fatal("an empty worker bot id is not a valid ticket")
+	}
 	if ticketValid(Ticket{Number: 0}) {
 		t.Fatal("a non-positive number is not a valid ticket")
+	}
+	botID := "bot-1"
+	userID := "user-1"
+	mapped, ok := dto(ticketRow{
+		ID:            "t1",
+		BoardID:       "b1",
+		SpaceID:       "s1",
+		Number:        1,
+		Title:         "Ship",
+		Status:        "todo",
+		AssigneeBotID: &botID,
+		OwnerUserID:   &userID,
+	}, "RAK")
+	if !ok || mapped.OwnerUserID == nil || *mapped.OwnerUserID != "user-1" {
+		t.Fatalf("unexpected dto: %+v ok=%v", mapped, ok)
+	}
+	if len(mapped.WorkerBotIDs) != 1 || mapped.WorkerBotIDs[0] != "bot-1" {
+		t.Fatalf("expected legacy assigneeBotId to populate WorkerBotIDs, got %+v", mapped.WorkerBotIDs)
 	}
 }
 

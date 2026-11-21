@@ -109,6 +109,33 @@ func TestParseModelOutput(t *testing.T) {
 			t.Fatal("expected error for non-JSON output")
 		}
 	})
+
+	t.Run("sanitizes owner and workerBotIds on create and update", func(t *testing.T) {
+		raw := `{"actions":[
+			{"op":"create","title":"Delegate review","ownerUserId":"  user-1  ","workerBotIds":["bot-1"," bot-2 ","bot-1",""]},
+			{"op":"update","ticketId":"t1","workerBotIds":["bot-3"]},
+			{"op":"create","title":"Ambiguous owner","ownerUserId":"u1","ownerBotId":"b1"}
+		]}`
+		actions, err := ParseModelOutput(raw)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(actions) != 3 {
+			t.Fatalf("len = %d, want 3", len(actions))
+		}
+		if actions[0].OwnerUserID == nil || *actions[0].OwnerUserID != "user-1" {
+			t.Fatalf("expected trimmed ownerUserId, got %+v", actions[0].OwnerUserID)
+		}
+		if actions[0].WorkerBotIDs == nil || len(*actions[0].WorkerBotIDs) != 2 || (*actions[0].WorkerBotIDs)[0] != "bot-1" || (*actions[0].WorkerBotIDs)[1] != "bot-2" {
+			t.Fatalf("expected deduped workerBotIds, got %+v", actions[0].WorkerBotIDs)
+		}
+		if actions[1].Op != "update" || actions[1].WorkerBotIDs == nil || len(*actions[1].WorkerBotIDs) != 1 || (*actions[1].WorkerBotIDs)[0] != "bot-3" {
+			t.Fatalf("expected worker-only update to be preserved, got %+v", actions[1])
+		}
+		if actions[2].OwnerUserID != nil || actions[2].OwnerBotID != nil {
+			t.Fatalf("expected ambiguous owner to be cleared, got %+v", actions[2])
+		}
+	})
 }
 
 func TestFindDuplicate(t *testing.T) {

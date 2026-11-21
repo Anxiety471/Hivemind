@@ -10,6 +10,7 @@ import (
 const (
 	titleMaxLen       = 200
 	descriptionMaxLen = 20_000
+	maxWorkerBots     = 20
 	// duplicateThreshold is the minimum Jaccard token overlap for treating a
 	// newly detected task as a duplicate of an existing open ticket.
 	duplicateThreshold = 0.75
@@ -137,6 +138,18 @@ func SanitizeActions(actions []Action) []Action {
 		}
 		ticketID := strings.TrimSpace(action.TicketID)
 		ref := strings.ToUpper(strings.TrimSpace(action.Ref))
+		ownerUserID := sanitizeOptionalID(action.OwnerUserID)
+		ownerBotID := sanitizeOptionalID(action.OwnerBotID)
+		if ownerUserID != nil && ownerBotID != nil {
+			// Ambiguous owner specification; ignore both so defaults/existing owner stay intact.
+			ownerUserID = nil
+			ownerBotID = nil
+		}
+		var workerBotIDs *[]string
+		if action.WorkerBotIDs != nil {
+			cleaned := sanitizeIDList(*action.WorkerBotIDs, maxWorkerBots)
+			workerBotIDs = &cleaned
+		}
 
 		if op == "create" {
 			if title == "" {
@@ -149,11 +162,14 @@ func SanitizeActions(actions []Action) []Action {
 				priority = "normal"
 			}
 			out = append(out, Action{
-				Op:          "create",
-				Title:       title,
-				Description: description,
-				Status:      status,
-				Priority:    priority,
+				Op:           "create",
+				Title:        title,
+				Description:  description,
+				Status:       status,
+				Priority:     priority,
+				OwnerUserID:  ownerUserID,
+				OwnerBotID:   ownerBotID,
+				WorkerBotIDs: workerBotIDs,
 			})
 			continue
 		}
@@ -162,18 +178,50 @@ func SanitizeActions(actions []Action) []Action {
 		if ticketID == "" && ref == "" {
 			continue
 		}
-		if title == "" && description == nil && status == "" && priority == "" {
+		if title == "" && description == nil && status == "" && priority == "" &&
+			ownerUserID == nil && ownerBotID == nil && workerBotIDs == nil {
 			continue
 		}
 		out = append(out, Action{
-			Op:          "update",
-			TicketID:    ticketID,
-			Ref:         ref,
-			Title:       title,
-			Description: description,
-			Status:      status,
-			Priority:    priority,
+			Op:           "update",
+			TicketID:     ticketID,
+			Ref:          ref,
+			Title:        title,
+			Description:  description,
+			Status:       status,
+			Priority:     priority,
+			OwnerUserID:  ownerUserID,
+			OwnerBotID:   ownerBotID,
+			WorkerBotIDs: workerBotIDs,
 		})
+	}
+	return out
+}
+
+func sanitizeOptionalID(raw *string) *string {
+	if raw == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(*raw)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
+}
+
+func sanitizeIDList(ids []string, maxLen int) []string {
+	seen := make(map[string]bool, len(ids))
+	out := make([]string, 0, min(len(ids), maxLen))
+	for _, raw := range ids {
+		if len(out) >= maxLen {
+			break
+		}
+		id := strings.TrimSpace(raw)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
 	}
 	return out
 }

@@ -7408,7 +7408,7 @@ async function databaseState(seeded: ReturnType<typeof ids>) {
   });
   const tickets = await system.ticket.findMany({
     where: { spaceId: { in: seeded.spaces } },
-    select: { id: true, boardId: true, spaceId: true, number: true, title: true, description: true, status: true, priority: true, assigneeBotId: true, createdByBotId: true, createdByUserId: true, completedAt: true, updatedAt: true },
+    select: { id: true, boardId: true, spaceId: true, number: true, title: true, description: true, status: true, priority: true, assigneeBotId: true, ownerUserId: true, ownerBotId: true, workerBotIds: true, createdByBotId: true, createdByUserId: true, completedAt: true, updatedAt: true },
     orderBy: { id: "asc" },
   });
   const ticketComments = await system.ticketComment.findMany({

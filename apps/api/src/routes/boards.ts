@@ -110,19 +110,43 @@ export function boardsRoutes(ctx: RouterContext) {
         // would otherwise widen the match, and a `\` would swallow the
         // character after it.
         const likeQ = q ? escapeSearchWildcards(q) : q;
+        const filters: Prisma.TicketWhereInput[] = [];
+        if (input.assigneeBotId) {
+          filters.push({
+            OR: [
+              { assigneeBotId: input.assigneeBotId },
+              { workerBotIds: { has: input.assigneeBotId } },
+              { ownerBotId: input.assigneeBotId },
+            ],
+          });
+        }
+        if (input.workerBotId) {
+          filters.push({
+            OR: [
+              { workerBotIds: { has: input.workerBotId } },
+              { assigneeBotId: input.workerBotId },
+            ],
+          });
+        }
+        if (input.ownerBotId) filters.push({ ownerBotId: input.ownerBotId });
+        if (input.ownerUserId) {
+          filters.push({
+            ownerUserId: input.ownerUserId === "me" ? context.actor.userId : input.ownerUserId,
+          });
+        }
+        if (q) {
+          filters.push({
+            OR: [
+              { title: { contains: likeQ, mode: "insensitive" } },
+              { description: { contains: likeQ, mode: "insensitive" } },
+            ],
+          });
+        }
         const where: Prisma.TicketWhereInput = {
           spaceId: context.actor.spaceId,
           boardId: board.id,
           ...(input.status ? { status: input.status } : {}),
-          ...(input.assigneeBotId ? { assigneeBotId: input.assigneeBotId } : {}),
-          ...(q
-            ? {
-                OR: [
-                  { title: { contains: likeQ, mode: "insensitive" } },
-                  { description: { contains: likeQ, mode: "insensitive" } },
-                ],
-              }
-            : {}),
+          ...(filters.length > 0 ? { AND: filters } : {}),
         };
         const rows = await deps.prisma.ticket.findMany({
           where,
@@ -143,23 +167,31 @@ export function boardsRoutes(ctx: RouterContext) {
       }),
       create: boardEnabled.tickets.create.handler(async ({ context, input }) => {
         await resolveSpaceBoard(deps.prisma, context.actor.spaceId, input.boardId);
-        await repos.getBot(context.actor, input.assigneeBotId);
+        const botIds = new Set<string>();
+        if (input.ownerBotId) botIds.add(input.ownerBotId);
+        if (input.assigneeBotId) botIds.add(input.assigneeBotId);
+        for (const id of input.workerBotIds ?? []) botIds.add(id);
+        for (const botId of botIds) await repos.getBot(context.actor, botId);
         const result = await createTicket(ticketDeps, {
           ...input,
+          ...(input.ownerUserId === "me" ? { ownerUserId: context.actor.userId } : {}),
           spaceId: context.actor.spaceId,
           userId: context.actor.userId,
-          ownerBotId: input.assigneeBotId,
         });
         if ("error" in result) throw new ORPCError("BAD_REQUEST", { message: result.error });
         return result.ticket;
       }),
       update: boardEnabled.tickets.update.handler(async ({ context, input }) => {
-        if (input.assigneeBotId) await repos.getBot(context.actor, input.assigneeBotId);
+        const botIds = new Set<string>();
+        if (input.ownerBotId) botIds.add(input.ownerBotId);
+        if (input.assigneeBotId) botIds.add(input.assigneeBotId);
+        for (const id of input.workerBotIds ?? []) botIds.add(id);
+        for (const botId of botIds) await repos.getBot(context.actor, botId);
         const result = await updateTicket(ticketDeps, {
           ...input,
+          ...(input.ownerUserId === "me" ? { ownerUserId: context.actor.userId } : {}),
           spaceId: context.actor.spaceId,
           userId: context.actor.userId,
-          ownerBotId: input.assigneeBotId,
         });
         if ("error" in result) throw new ORPCError("BAD_REQUEST", { message: result.error });
         return result.ticket;

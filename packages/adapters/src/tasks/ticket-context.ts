@@ -153,7 +153,11 @@ export async function loadAgentTicketContext(
       where: {
         spaceId: input.spaceId,
         boardId: board.id,
-        assigneeBotId: input.botId,
+        OR: [
+          { assigneeBotId: input.botId },
+          { workerBotIds: { has: input.botId } },
+          { ownerBotId: input.botId },
+        ],
         status: { notIn: ["done", "closed"] },
       },
       orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
@@ -198,14 +202,20 @@ export async function loadAgentTicketContext(
         const lastCommentByTicket = new Map<string, string>();
         for (const comment of comments) lastCommentByTicket.set(comment.ticketId, comment.body);
 
-        const assigneeBotIds = [
+        const workerBotIds = [
           ...new Set(
-            rows.map((row) => row.assigneeBotId).filter((botId): botId is string => Boolean(botId)),
+            rows.flatMap((row) =>
+              row.workerBotIds.length > 0
+                ? row.workerBotIds
+                : row.assigneeBotId
+                  ? [row.assigneeBotId]
+                  : [],
+            ),
           ),
         ];
-        const bots = assigneeBotIds.length
+        const bots = workerBotIds.length
           ? await deps.prisma.bot.findMany({
-              where: { id: { in: assigneeBotIds } },
+              where: { id: { in: workerBotIds } },
               select: { id: true, name: true },
             })
           : [];
@@ -216,11 +226,20 @@ export async function loadAgentTicketContext(
         for (const item of wanted) {
           const row = rowByNumber.get(item.number);
           if (!row) continue;
+          const assignedIdsForRow =
+            row.workerBotIds.length > 0
+              ? row.workerBotIds
+              : row.assigneeBotId
+                ? [row.assigneeBotId]
+                : [];
+          const workerNames = assignedIdsForRow
+            .map((id) => botNameById.get(id))
+            .filter((name): name is string => Boolean(name));
           entries.push({
             ref: item.ref,
             title: row.title,
             status: coerceTicketStatus(row.status),
-            assignee: row.assigneeBotId ? (botNameById.get(row.assigneeBotId) ?? null) : null,
+            assignee: workerNames.length > 0 ? workerNames.join(", ") : null,
             lastComment: lastCommentByTicket.get(row.id)?.trim() || null,
           });
         }

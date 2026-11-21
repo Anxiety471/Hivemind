@@ -54,6 +54,9 @@ describe("ticket contracts", () => {
     status: "todo",
     priority: "normal",
     assigneeBotId: null,
+    ownerUserId: "user-1",
+    ownerBotId: null,
+    workerBotIds: [],
     createdByBotId: null,
     createdByUserId: "user-1",
     createdAt: "2026-01-01T00:00:00.000Z",
@@ -103,14 +106,45 @@ describe("ticket contracts", () => {
     expect(() => GetTicketInput.parse({ id: "ticket-1", ref: "RAK-1" })).toThrow();
   });
 
-  it("requires an owner bot when creating a ticket", () => {
-    expect(() => CreateTicketInput.parse({ title: "Ship" })).toThrow();
+  it("allows creating a ticket owned by the user with multiple worker bots or none", () => {
+    expect(CreateTicketInput.parse({ title: "Ship" })).toEqual({
+      title: "Ship",
+      priority: "normal",
+    });
+    expect(
+      CreateTicketInput.parse({
+        title: "Ship",
+        ownerUserId: "user-1",
+        workerBotIds: ["bot-1", "bot-2"],
+      }),
+    ).toEqual({
+      title: "Ship",
+      ownerUserId: "user-1",
+      workerBotIds: ["bot-1", "bot-2"],
+      priority: "normal",
+    });
+    expect(() =>
+      CreateTicketInput.parse({ title: "Ship", ownerUserId: "user-1", ownerBotId: "bot-1" }),
+    ).toThrow();
   });
 
-  it("changes the owner without allowing it to be cleared", () => {
-    expect(UpdateTicketInput.parse({ id: "ticket-1", assigneeBotId: "bot-2" }).assigneeBotId).toBe(
-      "bot-2",
+  it("supports updating owner and worker bots independently while rejecting ambiguous owners", () => {
+    expect(
+      UpdateTicketInput.parse({
+        id: "ticket-1",
+        ownerUserId: "user-1",
+        workerBotIds: ["bot-2", "bot-3"],
+      }),
+    ).toEqual({
+      id: "ticket-1",
+      ownerUserId: "user-1",
+      workerBotIds: ["bot-2", "bot-3"],
+    });
+    expect(UpdateTicketInput.parse({ id: "ticket-1", assigneeBotId: null }).assigneeBotId).toBe(
+      null,
     );
-    expect(() => UpdateTicketInput.parse({ id: "ticket-1", assigneeBotId: null })).toThrow();
+    expect(() =>
+      UpdateTicketInput.parse({ id: "ticket-1", ownerUserId: "user-1", ownerBotId: "bot-2" }),
+    ).toThrow();
   });
 });

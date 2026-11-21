@@ -288,7 +288,7 @@ func (s *Service) Apply(ctx context.Context, req ApplyRequest) (ApplyResponse, e
 		for _, action := range actions {
 			if action.Op == "create" {
 				if dup, found := FindDuplicate(action.Title, open); found {
-					updated, changed, err := applyUpdateToTicket(ctx, tx, req.SpaceID, board, dup, action, s.now())
+					updated, changed, err := applyUpdateToTicket(ctx, tx, req.SpaceID, req.UserID, board, dup, action, s.now())
 					if err != nil {
 						return err
 					}
@@ -302,9 +302,13 @@ func (s *Service) Apply(ctx context.Context, req ApplyRequest) (ApplyResponse, e
 					continue
 				}
 
-				created, openEntry, err := insertDetectedTicket(ctx, tx, req.SpaceID, req.UserID, req.BotID, board, action, s.now())
+				created, openEntry, inserted, err := insertDetectedTicket(ctx, tx, req.SpaceID, req.UserID, req.BotID, board, action, s.now())
 				if err != nil {
 					return err
+				}
+				if !inserted {
+					resp.Skipped++
+					continue
 				}
 				resp.Created = append(resp.Created, created)
 				signals = append(signals, boardSignal{boardID: board.ID, ticketID: created.ID})
@@ -322,7 +326,7 @@ func (s *Service) Apply(ctx context.Context, req ApplyRequest) (ApplyResponse, e
 				resp.Skipped++
 				continue
 			}
-			updated, changed, err := applyUpdateToTicket(ctx, tx, req.SpaceID, board, target, action, s.now())
+			updated, changed, err := applyUpdateToTicket(ctx, tx, req.SpaceID, req.UserID, board, target, action, s.now())
 			if err != nil {
 				return err
 			}
@@ -387,6 +391,56 @@ func replaceOpenTicket(open []OpenTicket, byID, byRef map[string]OpenTicket, id 
 	}
 }
 
+func ownBotsInSpace(ctx context.Context, tx pgx.Tx, spaceID, userID string, botIDs []string) (bool, error) {
+	unique := sanitizeIDList(botIDs, maxWorkerBots+1)
+	if len(unique) == 0 {
+		return true, nil
+	}
+	var count int
+	err := tx.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM bots
+		WHERE id = ANY($1) AND "spaceId" = $2 AND "userId" = $3 AND "archivedAt" IS NULL
+	`, unique, spaceID, userID).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+	return count == len(unique), nil
+}
+
+func userInSpace(ctx context.Context, tx pgx.Tx, spaceID, actingUserID, targetUserID string) (bool, error) {
+	if targetUserID == actingUserID {
+		return true, nil
+	}
+	var exists bool
+	err := tx.QueryRow(ctx, `
+		SELECT EXISTS(SELECT 1 FROM space_members WHERE "spaceId" = $1 AND "userId" = $2)
+	`, spaceID, targetUserID).Scan(&exists)
+	return exists, err
+}
+
+func sameStringPtr(a, b *string) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
+}
+
+func sameStringSlice(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func insertDetectedTicket(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -394,16 +448,59 @@ func insertDetectedTicket(
 	board tickets.Board,
 	action Action,
 	at time.Time,
-) (AppliedTicket, OpenTicket, error) {
+) (AppliedTicket, OpenTicket, bool, error) {
+	var ownerUserID *string
+	var ownerBotID *string
+	if action.OwnerBotID != nil {
+		ownerBotID = action.OwnerBotID
+	} else if action.OwnerUserID != nil {
+		ownerUserID = action.OwnerUserID
+	} else {
+		defaultOwner := botID
+		ownerBotID = &defaultOwner
+	}
+
+	workerBotIDs := []string{botID}
+	if action.WorkerBotIDs != nil {
+		workerBotIDs = *action.WorkerBotIDs
+	}
+	var assigneeBotID *string
+	if len(workerBotIDs) > 0 {
+		first := workerBotIDs[0]
+		assigneeBotID = &first
+	}
+
+	botsToValidate := make([]string, 0, len(workerBotIDs)+1)
+	if ownerBotID != nil {
+		botsToValidate = append(botsToValidate, *ownerBotID)
+	}
+	botsToValidate = append(botsToValidate, workerBotIDs...)
+	validBots, err := ownBotsInSpace(ctx, tx, spaceID, userID, botsToValidate)
+	if err != nil {
+		return AppliedTicket{}, OpenTicket{}, false, err
+	}
+	if !validBots {
+		return AppliedTicket{}, OpenTicket{}, false, nil
+	}
+	if ownerUserID != nil {
+		validUser, err := userInSpace(ctx, tx, spaceID, userID, *ownerUserID)
+		if err != nil {
+			return AppliedTicket{}, OpenTicket{}, false, err
+		}
+		if !validUser {
+			return AppliedTicket{}, OpenTicket{}, false, nil
+		}
+	}
+
 	var nextNumber int64
-	err := tx.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
 		UPDATE boards
 		SET "nextNumber" = "nextNumber" + 1, "updatedAt" = $2
 		WHERE id = $1
 		RETURNING "nextNumber" - 1
 	`, board.ID, at).Scan(&nextNumber)
 	if err != nil {
-		return AppliedTicket{}, OpenTicket{}, err
+		return AppliedTicket{}, OpenTicket{}, false, err
 	}
 
 	id := effects.NewID()
@@ -429,11 +526,13 @@ func insertDetectedTicket(
 	_, err = tx.Exec(ctx, `
 		INSERT INTO tickets (
 			id, "boardId", "spaceId", number, title, description, status, priority,
-			"assigneeBotId", "createdByBotId", "createdByUserId", "createdAt", "updatedAt", "completedAt"
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $10, $11, $11, $12)
-	`, id, board.ID, spaceID, nextNumber, title, desc, status, priority, botID, userID, at, completedAt)
+			"assigneeBotId", "ownerUserId", "ownerBotId", "workerBotIds",
+			"createdByBotId", "createdByUserId", "createdAt", "updatedAt", "completedAt"
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $15, $16)
+	`, id, board.ID, spaceID, nextNumber, title, desc, status, priority,
+		assigneeBotID, ownerUserID, ownerBotID, workerBotIDs, botID, userID, at, completedAt)
 	if err != nil {
-		return AppliedTicket{}, OpenTicket{}, err
+		return AppliedTicket{}, OpenTicket{}, false, err
 	}
 
 	ref := fmt.Sprintf("%s-%d", board.Prefix, nextNumber)
@@ -453,13 +552,13 @@ func insertDetectedTicket(
 		Priority:    priority,
 		Description: desc,
 	}
-	return applied, entry, nil
+	return applied, entry, true, nil
 }
 
 func applyUpdateToTicket(
 	ctx context.Context,
 	tx pgx.Tx,
-	spaceID string,
+	spaceID, userID string,
 	board tickets.Board,
 	target OpenTicket,
 	action Action,
@@ -469,18 +568,24 @@ func applyUpdateToTicket(
 		return AppliedTicket{}, false, err
 	}
 	var (
-		currentTitle       string
-		currentDescription *string
-		currentStatus      string
-		currentPriority    *string
-		currentCompletedAt *time.Time
+		currentTitle         string
+		currentDescription   *string
+		currentStatus        string
+		currentPriority      *string
+		currentCompletedAt   *time.Time
+		currentAssigneeBotID *string
+		currentOwnerUserID   *string
+		currentOwnerBotID    *string
+		currentWorkerBotIDs  []string
 	)
 	err := tx.QueryRow(ctx, `
-		SELECT title, description, status, priority, "completedAt"
+		SELECT title, description, status, priority, "completedAt",
+		       "assigneeBotId", "ownerUserId", "ownerBotId", "workerBotIds"
 		FROM tickets
 		WHERE id = $1 AND "spaceId" = $2 AND "boardId" = $3
 	`, target.ID, spaceID, board.ID).Scan(
 		&currentTitle, &currentDescription, &currentStatus, &currentPriority, &currentCompletedAt,
+		&currentAssigneeBotID, &currentOwnerUserID, &currentOwnerBotID, &currentWorkerBotIDs,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AppliedTicket{}, false, nil
@@ -512,10 +617,57 @@ func applyUpdateToTicket(
 		}
 	}
 
-	descChanged := (currentDescription == nil) != (nextDescription == nil) ||
-		(currentDescription != nil && nextDescription != nil && *currentDescription != *nextDescription)
+	nextOwnerUserID := currentOwnerUserID
+	nextOwnerBotID := currentOwnerBotID
+	if action.OwnerBotID != nil {
+		valid, err := ownBotsInSpace(ctx, tx, spaceID, userID, []string{*action.OwnerBotID})
+		if err != nil {
+			return AppliedTicket{}, false, err
+		}
+		if !valid {
+			return AppliedTicket{}, false, nil
+		}
+		nextOwnerBotID = action.OwnerBotID
+		nextOwnerUserID = nil
+	} else if action.OwnerUserID != nil {
+		valid, err := userInSpace(ctx, tx, spaceID, userID, *action.OwnerUserID)
+		if err != nil {
+			return AppliedTicket{}, false, err
+		}
+		if !valid {
+			return AppliedTicket{}, false, nil
+		}
+		nextOwnerUserID = action.OwnerUserID
+		nextOwnerBotID = nil
+	}
+
+	nextWorkerBotIDs := currentWorkerBotIDs
+	if nextWorkerBotIDs == nil {
+		nextWorkerBotIDs = []string{}
+	}
+	nextAssigneeBotID := currentAssigneeBotID
+	if action.WorkerBotIDs != nil {
+		valid, err := ownBotsInSpace(ctx, tx, spaceID, userID, *action.WorkerBotIDs)
+		if err != nil {
+			return AppliedTicket{}, false, err
+		}
+		if !valid {
+			return AppliedTicket{}, false, nil
+		}
+		nextWorkerBotIDs = *action.WorkerBotIDs
+		if len(nextWorkerBotIDs) > 0 {
+			first := nextWorkerBotIDs[0]
+			nextAssigneeBotID = &first
+		} else {
+			nextAssigneeBotID = nil
+		}
+	}
+
+	descChanged := !sameStringPtr(currentDescription, nextDescription)
 	priorityChanged := currentPriority == nil || *currentPriority != nextPriority
-	if nextTitle == currentTitle && nextStatus == currentStatus && !descChanged && !priorityChanged {
+	ownerChanged := !sameStringPtr(currentOwnerUserID, nextOwnerUserID) || !sameStringPtr(currentOwnerBotID, nextOwnerBotID)
+	workersChanged := !sameStringSlice(currentWorkerBotIDs, nextWorkerBotIDs) || !sameStringPtr(currentAssigneeBotID, nextAssigneeBotID)
+	if nextTitle == currentTitle && nextStatus == currentStatus && !descChanged && !priorityChanged && !ownerChanged && !workersChanged {
 		return AppliedTicket{}, false, nil
 	}
 
@@ -530,9 +682,12 @@ func applyUpdateToTicket(
 
 	_, err = tx.Exec(ctx, `
 		UPDATE tickets
-		SET title = $2, description = $3, status = $4, priority = $5, "completedAt" = $6, "updatedAt" = $7
+		SET title = $2, description = $3, status = $4, priority = $5,
+		    "assigneeBotId" = $6, "ownerUserId" = $7, "ownerBotId" = $8, "workerBotIds" = $9,
+		    "completedAt" = $10, "updatedAt" = $11
 		WHERE id = $1
-	`, target.ID, nextTitle, nextDescription, nextStatus, nextPriority, completedAt, at)
+	`, target.ID, nextTitle, nextDescription, nextStatus, nextPriority,
+		nextAssigneeBotID, nextOwnerUserID, nextOwnerBotID, nextWorkerBotIDs, completedAt, at)
 	if err != nil {
 		return AppliedTicket{}, false, err
 	}
@@ -560,7 +715,7 @@ func loadOpenAssignedTickets(
 		FROM tickets
 		WHERE "spaceId" = $1
 		  AND "boardId" = $2
-		  AND "assigneeBotId" = $3
+		  AND ("assigneeBotId" = $3 OR $3 = ANY("workerBotIds") OR "ownerBotId" = $3)
 		  AND status NOT IN ('done', 'closed')
 		ORDER BY "updatedAt" DESC, id DESC
 		LIMIT $4
@@ -611,7 +766,13 @@ func loadReferencedTickets(
 	skipIDs map[string]bool,
 ) ([]ReferencedTicketEntry, error) {
 	rows, err := tx.Query(ctx, `
-		SELECT t.id, t.number, t.title, t.status, COALESCE(b.name, ''),
+		SELECT t.id, t.number, t.title, t.status,
+		       COALESCE((
+		           SELECT string_agg(b.name, ', ' ORDER BY b.name)
+		           FROM bots b
+		           WHERE b.id = ANY(t."workerBotIds")
+		              OR (cardinality(t."workerBotIds") = 0 AND b.id = t."assigneeBotId")
+		       ), ''),
 		       COALESCE((
 		           SELECT c.body FROM ticket_comments c
 		           WHERE c."spaceId" = t."spaceId" AND c."ticketId" = t.id
@@ -619,7 +780,6 @@ func loadReferencedTickets(
 		           LIMIT 1
 		       ), '')
 		FROM tickets t
-		LEFT JOIN bots b ON b.id = t."assigneeBotId"
 		WHERE t."spaceId" = $1 AND t."boardId" = $2 AND t.number = ANY($3)
 	`, spaceID, board.ID, numbers)
 	if err != nil {

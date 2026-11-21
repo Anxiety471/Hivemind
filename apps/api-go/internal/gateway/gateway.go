@@ -35,6 +35,8 @@ type Options struct {
 	Local *local.Server
 	// TaskDetector serves the internal task-detection and Kanban sync endpoints.
 	TaskDetector TaskDetector
+	// TaskQueue serves the internal Redis-backed ticket wake & bump queue endpoints.
+	TaskQueue TaskQueue
 }
 
 // Gateway routes /rpc requests either to the configured procedures' Go handlers
@@ -48,6 +50,7 @@ type Gateway struct {
 	transport  *http.Transport
 	local      *local.Server
 	taskDetect TaskDetector
+	taskQueue  TaskQueue
 }
 
 // New builds the gateway handler.
@@ -72,6 +75,7 @@ func New(options Options) *Gateway {
 		transport:  transport,
 		local:      options.Local,
 		taskDetect: options.TaskDetector,
+		taskQueue:  options.TaskQueue,
 	}
 	gateway.proxy = &httputil.ReverseProxy{
 		Rewrite: gateway.rewrite,
@@ -102,6 +106,12 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		g.taskDetectPrepare(status, r)
 	case r.URL.Path == TaskDetectApplyPath:
 		g.taskDetectApply(status, r)
+	case r.URL.Path == TaskQueueDispatchPath:
+		g.taskQueueDispatch(status, r)
+	case r.URL.Path == TaskQueueBumpPath:
+		g.taskQueueBump(status, r)
+	case r.URL.Path == TaskQueueHealthPath:
+		g.taskQueueHealth(status, r)
 	case r.URL.Path == "/rpc" || strings.HasPrefix(r.URL.Path, "/rpc/"):
 		mode, readOnly := g.routes.Lookup(r.URL.Path)
 		switch mode {

@@ -87,6 +87,9 @@ function ticket(
     status,
     priority: "normal",
     assigneeBotId,
+    ownerUserId: null,
+    ownerBotId: assigneeBotId,
+    workerBotIds: assigneeBotId ? [assigneeBotId] : [],
     createdByBotId: null,
     createdByUserId: null,
     createdAt: new Date().toISOString(),
@@ -220,7 +223,9 @@ it("creates a ticket without a status picker", async () => {
     expect(api.tickets.create).toHaveBeenCalledWith({
       title: "Launch",
       description: "",
-      assigneeBotId: "bot-1",
+      ownerUserId: "me",
+      ownerBotId: null,
+      workerBotIds: [],
       priority: "normal",
     });
   } finally {

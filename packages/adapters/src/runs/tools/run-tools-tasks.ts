@@ -144,11 +144,19 @@ export const taskTools: ToolHandlers = {
   async board_tickets(ctx, call) {
     const { deps, run } = ctx;
     const { args } = call;
+    const ownerUserId =
+      args.ownerUserId !== undefined
+        ? String(args.ownerUserId) === "me"
+          ? run.userId
+          : String(args.ownerUserId)
+        : undefined;
     return call.finish(
       await listBoardTickets(deps, {
         spaceId: run.spaceId,
         status: args.status !== undefined ? String(args.status) : undefined,
-        assigneeBotId: args.ownerBotId !== undefined ? String(args.ownerBotId) : undefined,
+        ownerBotId: args.ownerBotId !== undefined ? String(args.ownerBotId) : undefined,
+        ownerUserId,
+        workerBotId: args.workerBotId !== undefined ? String(args.workerBotId) : undefined,
         cursor: args.cursor !== undefined ? String(args.cursor) : undefined,
       }),
     );
@@ -166,6 +174,15 @@ export const taskTools: ToolHandlers = {
   async ticket_create(ctx, call) {
     const { deps, run, bot } = ctx;
     const { args } = call;
+    const ownerUserId =
+      args.ownerUserId !== undefined
+        ? String(args.ownerUserId) === "me"
+          ? run.userId
+          : String(args.ownerUserId)
+        : undefined;
+    const workerBotIds = Array.isArray(args.workerBotIds)
+      ? args.workerBotIds.filter((item): item is string => typeof item === "string")
+      : undefined;
     return call.finish(
       await createTicket(deps, {
         spaceId: run.spaceId,
@@ -175,12 +192,23 @@ export const taskTools: ToolHandlers = {
         description: args.description !== undefined ? String(args.description) : undefined,
         priority: args.priority !== undefined ? String(args.priority) : undefined,
         ownerBotId: args.ownerBotId !== undefined ? String(args.ownerBotId) : undefined,
+        ownerUserId,
+        workerBotIds,
       }),
     );
   },
   async ticket_update(ctx, call) {
     const { deps, run, bot } = ctx;
     const { args } = call;
+    const ownerUserId =
+      args.ownerUserId !== undefined
+        ? String(args.ownerUserId) === "me"
+          ? run.userId
+          : String(args.ownerUserId)
+        : undefined;
+    const workerBotIds = Array.isArray(args.workerBotIds)
+      ? args.workerBotIds.filter((item): item is string => typeof item === "string")
+      : undefined;
     return call.finish(
       await updateTicket(deps, {
         spaceId: run.spaceId,
@@ -192,6 +220,8 @@ export const taskTools: ToolHandlers = {
         priority: args.priority !== undefined ? String(args.priority) : undefined,
         status: args.status !== undefined ? String(args.status) : undefined,
         ownerBotId: args.ownerBotId !== undefined ? String(args.ownerBotId) : undefined,
+        ownerUserId,
+        workerBotIds,
       }),
     );
   },
@@ -217,6 +247,15 @@ export const taskTools: ToolHandlers = {
       const item = entry as Record<string, unknown>;
       const op = item.op === "create" || item.op === "update" ? item.op : null;
       if (!op) continue;
+      const ownerUserId =
+        typeof item.ownerUserId === "string"
+          ? item.ownerUserId === "me"
+            ? run.userId
+            : item.ownerUserId
+          : undefined;
+      const workerBotIds = Array.isArray(item.workerBotIds)
+        ? item.workerBotIds.filter((id): id is string => typeof id === "string")
+        : undefined;
       actions.push({
         op,
         ...(typeof item.ticketId === "string" ? { ticketId: item.ticketId } : {}),
@@ -225,6 +264,9 @@ export const taskTools: ToolHandlers = {
         ...(typeof item.description === "string" ? { description: item.description } : {}),
         ...(typeof item.status === "string" ? { status: item.status } : {}),
         ...(typeof item.priority === "string" ? { priority: item.priority } : {}),
+        ...(typeof item.ownerBotId === "string" ? { ownerBotId: item.ownerBotId } : {}),
+        ...(ownerUserId !== undefined ? { ownerUserId } : {}),
+        ...(workerBotIds !== undefined ? { workerBotIds } : {}),
       });
     }
     return call.finish(

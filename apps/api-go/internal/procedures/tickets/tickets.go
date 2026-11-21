@@ -126,23 +126,26 @@ func openBoard(ctx context.Context, database *db.DB, actor db.Actor) (Board, err
 	return board, err
 }
 
-// Ticket is TicketSchema (packages/contracts/src/board.ts:88-105).
+// Ticket is TicketSchema (packages/contracts/src/artifacts/board.ts).
 type Ticket struct {
-	ID              string  `json:"id"`
-	BoardID         string  `json:"boardId"`
-	SpaceID         string  `json:"spaceId"`
-	Number          int64   `json:"number"`
-	Ref             string  `json:"ref"`
-	Title           string  `json:"title"`
-	Description     *string `json:"description"`
-	Status          string  `json:"status"`
-	Priority        string  `json:"priority"`
-	AssigneeBotID   *string `json:"assigneeBotId"`
-	CreatedByBotID  *string `json:"createdByBotId"`
-	CreatedByUserID *string `json:"createdByUserId"`
-	CreatedAt       string  `json:"createdAt"`
-	UpdatedAt       string  `json:"updatedAt"`
-	CompletedAt     *string `json:"completedAt"`
+	ID              string   `json:"id"`
+	BoardID         string   `json:"boardId"`
+	SpaceID         string   `json:"spaceId"`
+	Number          int64    `json:"number"`
+	Ref             string   `json:"ref"`
+	Title           string   `json:"title"`
+	Description     *string  `json:"description"`
+	Status          string   `json:"status"`
+	Priority        string   `json:"priority"`
+	AssigneeBotID   *string  `json:"assigneeBotId"`
+	OwnerUserID     *string  `json:"ownerUserId"`
+	OwnerBotID      *string  `json:"ownerBotId"`
+	WorkerBotIDs    []string `json:"workerBotIds"`
+	CreatedByBotID  *string  `json:"createdByBotId"`
+	CreatedByUserID *string  `json:"createdByUserId"`
+	CreatedAt       string   `json:"createdAt"`
+	UpdatedAt       string   `json:"updatedAt"`
+	CompletedAt     *string  `json:"completedAt"`
 }
 
 // TicketComment is TicketCommentSchema (packages/contracts/src/board.ts:75-85).
@@ -168,6 +171,9 @@ type ticketRow struct {
 	Status          string
 	Priority        *string
 	AssigneeBotID   *string
+	OwnerUserID     *string
+	OwnerBotID      *string
+	WorkerBotIDs    []string
 	CreatedByBotID  *string
 	CreatedByUserID *string
 	CreatedAt       time.Time
@@ -176,12 +182,13 @@ type ticketRow struct {
 }
 
 const ticketColumns = `id, "boardId", "spaceId", number, title, description, status, priority, "assigneeBotId",
-	"createdByBotId", "createdByUserId", "createdAt", "updatedAt", "completedAt"`
+	"ownerUserId", "ownerBotId", "workerBotIds", "createdByBotId", "createdByUserId", "createdAt", "updatedAt", "completedAt"`
 
 func scanTicket(row pgx.Row) (ticketRow, error) {
 	var value ticketRow
 	err := row.Scan(&value.ID, &value.BoardID, &value.SpaceID, &value.Number, &value.Title, &value.Description,
-		&value.Status, &value.Priority, &value.AssigneeBotID, &value.CreatedByBotID, &value.CreatedByUserID,
+		&value.Status, &value.Priority, &value.AssigneeBotID, &value.OwnerUserID, &value.OwnerBotID,
+		&value.WorkerBotIDs, &value.CreatedByBotID, &value.CreatedByUserID,
 		&value.CreatedAt, &value.UpdatedAt, &value.CompletedAt)
 	return value, err
 }
@@ -215,11 +222,24 @@ func coercePriority(value *string) string {
 
 // dto is toTicketDto over a ticketRow.
 func dto(value ticketRow, prefix string) (Ticket, bool) {
+	workers := value.WorkerBotIDs
+	if len(workers) == 0 && value.AssigneeBotID != nil {
+		workers = []string{*value.AssigneeBotID}
+	}
+	if workers == nil {
+		workers = []string{}
+	}
+	assignee := value.AssigneeBotID
+	if assignee == nil && len(workers) > 0 {
+		first := workers[0]
+		assignee = &first
+	}
 	ticket := Ticket{
 		ID: value.ID, BoardID: value.BoardID, SpaceID: value.SpaceID, Number: value.Number,
 		Ref: ticketRef(prefix, value.Number), Title: value.Title, Description: value.Description,
 		Status: coerceStatus(value.Status), Priority: coercePriority(value.Priority),
-		AssigneeBotID: value.AssigneeBotID, CreatedByBotID: value.CreatedByBotID,
+		AssigneeBotID: assignee, OwnerUserID: value.OwnerUserID, OwnerBotID: value.OwnerBotID,
+		WorkerBotIDs: workers, CreatedByBotID: value.CreatedByBotID,
 		CreatedByUserID: value.CreatedByUserID,
 		CreatedAt:       shared.ISO(value.CreatedAt), UpdatedAt: shared.ISO(value.UpdatedAt),
 	}
@@ -236,8 +256,19 @@ func ticketValid(ticket Ticket) bool {
 	if ticket.Number <= 0 {
 		return false
 	}
-	for _, id := range []*string{ticket.AssigneeBotID, ticket.CreatedByBotID, ticket.CreatedByUserID} {
+	for _, id := range []*string{
+		ticket.AssigneeBotID,
+		ticket.OwnerUserID,
+		ticket.OwnerBotID,
+		ticket.CreatedByBotID,
+		ticket.CreatedByUserID,
+	} {
 		if id != nil && *id == "" {
+			return false
+		}
+	}
+	for _, id := range ticket.WorkerBotIDs {
+		if id == "" {
 			return false
 		}
 	}

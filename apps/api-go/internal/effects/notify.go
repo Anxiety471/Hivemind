@@ -74,6 +74,14 @@ func (n *Notifier) PublishSpaceChange(spaceID, kind string) {
 	n.publish("space-changes:"+spaceID, kind)
 }
 
+// PublishRunReady wakes worker processes listening on runs:ready for a newly queued run.
+func (n *Notifier) PublishRunReady(runID string) {
+	if runID == "" {
+		return
+	}
+	n.publish("runs:ready", runID)
+}
+
 // BoardEvent is the payload of a board:<spaceId> signal (board-live.ts:20-28): the board and
 // ticket are named when the change has one, and the client refetches on any frame.
 type BoardEvent struct {

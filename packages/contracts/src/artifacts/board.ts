@@ -17,6 +17,7 @@ const DEFAULT_TICKET_PRIORITY: TicketPriority = "normal";
 
 export const TICKET_TITLE_MAX_LENGTH = 200;
 export const TICKET_DESCRIPTION_MAX_LENGTH = 20_000;
+export const TICKET_MAX_WORKERS = 20;
 const TICKET_PREFIX_MAX_LENGTH = 12;
 // Ticket numbers are stored as PostgreSQL Int values.
 const TICKET_NUMBER_MAX = 2_147_483_647;
@@ -94,6 +95,9 @@ export const TicketSchema = z.object({
   status: TicketStatusSchema,
   priority: TicketPrioritySchema,
   assigneeBotId: Id.nullable(),
+  ownerUserId: Id.nullable(),
+  ownerBotId: Id.nullable(),
+  workerBotIds: z.array(Id),
   createdByBotId: Id.nullable(),
   createdByUserId: Id.nullable(),
   createdAt: z.string(),
@@ -106,6 +110,9 @@ export const ListTicketsInput = z.object({
   boardId: Id.optional(),
   status: TicketStatusSchema.optional(),
   assigneeBotId: Id.optional(),
+  workerBotId: Id.optional(),
+  ownerBotId: Id.optional(),
+  ownerUserId: Id.optional(),
   q: z.string().trim().max(200).optional(),
 });
 export type ListTicketsInput = z.infer<typeof ListTicketsInput>;
@@ -123,23 +130,39 @@ export const GetTicketInput = z
   });
 export type GetTicketInput = z.infer<typeof GetTicketInput>;
 
-export const CreateTicketInput = z.object({
-  boardId: Id.optional(),
-  title: z.string().trim().min(1).max(TICKET_TITLE_MAX_LENGTH),
-  description: z.string().max(TICKET_DESCRIPTION_MAX_LENGTH).optional(),
-  priority: TicketPrioritySchema.default(DEFAULT_TICKET_PRIORITY),
-  assigneeBotId: Id,
-});
+export const CreateTicketInput = z
+  .object({
+    boardId: Id.optional(),
+    title: z.string().trim().min(1).max(TICKET_TITLE_MAX_LENGTH),
+    description: z.string().max(TICKET_DESCRIPTION_MAX_LENGTH).optional(),
+    priority: TicketPrioritySchema.default(DEFAULT_TICKET_PRIORITY),
+    ownerUserId: Id.nullable().optional(),
+    ownerBotId: Id.nullable().optional(),
+    workerBotIds: z.array(Id).max(TICKET_MAX_WORKERS).optional(),
+    assigneeBotId: Id.nullable().optional(),
+  })
+  .refine((value) => !(value.ownerUserId && value.ownerBotId), {
+    message: "Specify at most one of ownerUserId or ownerBotId",
+    path: ["ownerBotId"],
+  });
 export type CreateTicketInput = z.infer<typeof CreateTicketInput>;
 
-export const UpdateTicketInput = z.object({
-  id: Id,
-  title: z.string().trim().min(1).max(TICKET_TITLE_MAX_LENGTH).optional(),
-  description: z.string().max(TICKET_DESCRIPTION_MAX_LENGTH).nullable().optional(),
-  priority: TicketPrioritySchema.nullable().optional(),
-  status: TicketStatusSchema.optional(),
-  assigneeBotId: Id.optional(),
-});
+export const UpdateTicketInput = z
+  .object({
+    id: Id,
+    title: z.string().trim().min(1).max(TICKET_TITLE_MAX_LENGTH).optional(),
+    description: z.string().max(TICKET_DESCRIPTION_MAX_LENGTH).nullable().optional(),
+    priority: TicketPrioritySchema.nullable().optional(),
+    status: TicketStatusSchema.optional(),
+    ownerUserId: Id.nullable().optional(),
+    ownerBotId: Id.nullable().optional(),
+    workerBotIds: z.array(Id).max(TICKET_MAX_WORKERS).optional(),
+    assigneeBotId: Id.nullable().optional(),
+  })
+  .refine((value) => !(value.ownerUserId && value.ownerBotId), {
+    message: "Specify at most one of ownerUserId or ownerBotId",
+    path: ["ownerBotId"],
+  });
 export type UpdateTicketInput = z.infer<typeof UpdateTicketInput>;
 
 export const MoveTicketInput = z.object({

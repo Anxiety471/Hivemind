@@ -65,6 +65,7 @@ const bots = [
 ] as Bot[];
 
 function makeTicket(overrides: Partial<Ticket>): Ticket {
+  const assignee = overrides.assigneeBotId !== undefined ? overrides.assigneeBotId : "bot-1";
   return {
     id: "t-1",
     boardId: "board-1",
@@ -75,7 +76,10 @@ function makeTicket(overrides: Partial<Ticket>): Ticket {
     description: "Sync tasks with Kanban",
     status: "doing",
     priority: "high",
-    assigneeBotId: "bot-1",
+    assigneeBotId: assignee,
+    ownerUserId: null,
+    ownerBotId: assignee,
+    workerBotIds: assignee ? [assignee] : [],
     createdByBotId: "bot-1",
     createdByUserId: "u-1",
     createdAt: new Date().toISOString(),
@@ -161,4 +165,60 @@ it("opens directly in read-first ticket detail view when targeting a ticket", as
   expect(host.querySelector('[data-testid="kanban-ticket-detail"]')).not.toBeNull();
   expect(host.textContent).toContain("RAK-1");
   expect(host.textContent).toContain("Verify deploy");
+});
+
+it("defaults new tasks to Owner=Me with the current bot as worker", async () => {
+  api.tickets.list.mockResolvedValue({ tickets: [] });
+  api.tickets.create.mockResolvedValue(
+    makeTicket({
+      id: "t-new",
+      ref: "RAK-9",
+      title: "Review release notes",
+      ownerUserId: "u-1",
+      ownerBotId: null,
+      workerBotIds: ["bot-1"],
+    }),
+  );
+
+  await act(async () => {
+    root.render(
+      <QueryClientProvider client={client}>
+        <KanbanModal
+          open
+          target="new"
+          botId="bot-1"
+          botName="Scout"
+          bots={bots}
+          onClose={vi.fn()}
+        />
+      </QueryClientProvider>,
+    );
+  });
+  await act(async () => {
+    await flush();
+  });
+
+  const input = host.querySelector("input")!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
+      input,
+      "Review release notes",
+    );
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => {
+    host
+      .querySelector("form")!
+      .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await flush();
+  });
+
+  expect(api.tickets.create).toHaveBeenCalledWith({
+    title: "Review release notes",
+    description: "",
+    ownerUserId: "me",
+    ownerBotId: null,
+    workerBotIds: ["bot-1"],
+    priority: "normal",
+  });
 });

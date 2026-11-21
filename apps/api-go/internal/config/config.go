@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/contentcrypto"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/effects"
@@ -48,6 +49,17 @@ type Config struct {
 	// BoardLab is TICKET_BOARD_ENABLED: the Labs board feature turned on for every account
 	// (packages/adapters/src/labs-env.ts:4-11).
 	BoardLab bool
+	// RedisURL is the optional REDIS_URL connection string for task queue dispatch,
+	// retry scheduling, and stalled-bot bump coordination.
+	RedisURL string
+	// TaskBumpInterval controls how often the stalled-bot ticket sweeper runs (min 30s).
+	TaskBumpInterval time.Duration
+	// TaskBumpIdle is how long an open todo/doing ticket sits without updates before an idle worker bot is bumped.
+	TaskBumpIdle time.Duration
+	// TaskBumpCooldown is the minimum time between automatic bumps for the same ticket and bot.
+	TaskBumpCooldown time.Duration
+	// TaskQueueMaxAttempts caps delivery retries before a dispatch job moves to the dead-letter list.
+	TaskQueueMaxAttempts int
 }
 
 // Load reads the environment. Only a build that serves procedures needs the
@@ -101,6 +113,11 @@ func Load() (Config, error) {
 	}
 	config.MasterKeys = keys
 	config.BoardLab = os.Getenv("TICKET_BOARD_ENABLED") == "true"
+	config.RedisURL = strings.TrimSpace(os.Getenv("REDIS_URL"))
+	config.TaskBumpInterval = max(durationSeconds(os.Getenv("TASK_BUMP_INTERVAL_SEC"), 60), 30*time.Second)
+	config.TaskBumpIdle = durationSeconds(os.Getenv("TASK_BUMP_IDLE_SEC"), 300)
+	config.TaskBumpCooldown = durationSeconds(os.Getenv("TASK_BUMP_COOLDOWN_SEC"), 900)
+	config.TaskQueueMaxAttempts = positiveInt(os.Getenv("TASK_QUEUE_MAX_ATTEMPTS"), 5)
 
 	minimums, err := local.ParseMinimums(os.Getenv("RAKAZO_MIN_CLIENT_BUILD"))
 	if err != nil {
@@ -202,4 +219,18 @@ func uploadBytes(raw string) int64 {
 		return int64(value) * 1024 * 1024
 	}
 	return 10 * 1024 * 1024
+}
+
+func durationSeconds(raw string, fallbackSec int) time.Duration {
+	if value, err := strconv.Atoi(strings.TrimSpace(raw)); err == nil && value > 0 {
+		return time.Duration(value) * time.Second
+	}
+	return time.Duration(fallbackSec) * time.Second
+}
+
+func positiveInt(raw string, fallback int) int {
+	if value, err := strconv.Atoi(strings.TrimSpace(raw)); err == nil && value > 0 {
+		return value
+	}
+	return fallback
 }

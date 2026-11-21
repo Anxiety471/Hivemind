@@ -1,6 +1,6 @@
 import { Trans, useLingui } from "@lingui/react/macro";
 import { ChatMarkdown } from "@rakazo/chat-ui/web";
-import type { Bot, Ticket, TicketPriority, TicketStatus } from "@rakazo/contracts";
+import type { Bot, Me, Ticket, TicketPriority, TicketStatus } from "@rakazo/contracts";
 import {
   TICKET_COMMENT_MAX_LENGTH,
   TICKET_DESCRIPTION_MAX_LENGTH,
@@ -33,13 +33,27 @@ import { WindowChrome } from "../../components/WindowChrome";
 import { formatRelativeTime } from "../../lib/locale/relative-time";
 import { useSave, useSpaceQueries } from "../../lib/query/query";
 import { errorText } from "../../lib/query/user-error";
+import {
+  OWNER_ME_VALUE,
+  ownerOptionValue,
+  ownerPayloadFromValue,
+  sameIdList,
+  ticketOwnerLabel,
+  ticketWorkerIds,
+  ticketWorkerNames,
+} from "./ticket-people";
 import { useTicketPriorityLabels } from "./ticket-priority";
 import { useTicketStatusLabels } from "./ticket-status";
 import { useBoardStream } from "./use-board-stream";
+import { WorkerBotsSelect } from "./WorkerBotsSelect";
 
 export function BoardPage() {
+  const { t } = useLingui();
   const statuses = useTicketStatusLabels();
   const queries = useSpaceQueries();
+  const queryClient = useQueryClient();
+  const meKey = queries.me?.queryKey?.();
+  const currentUserId = meKey ? queryClient.getQueryData<Me>(meKey)?.userId : undefined;
   const ticketsOptions = queries.tickets.list.queryOptions({ input: {} });
   const ticketsQuery = useQuery(ticketsOptions);
   const botsQuery = useQuery(queries.bots.list.queryOptions());
@@ -49,6 +63,7 @@ export function BoardPage() {
   const [streamError, setError] = useState("");
   const loadFailed = ticketsQuery.error ?? botsQuery.error;
   const error = streamError || (loadFailed ? errorText(loadFailed) : "");
+  const ownerLabels = { me: t`Me`, member: t`Member` };
 
   useBoardStream(ticketsOptions, setError);
 
@@ -58,7 +73,7 @@ export function BoardPage() {
       <PageHeader
         title={<Trans>Board</Trans>}
         actions={
-          <Button onClick={() => setSelected("new")} disabled={bots.length === 0}>
+          <Button onClick={() => setSelected("new")}>
             <Trans>New ticket</Trans>
           </Button>
         }
@@ -82,21 +97,26 @@ export function BoardPage() {
               <h2 className="px-1 text-body font-medium">{statuses[status]}</h2>
               {tickets
                 .filter((ticket) => ticket.status === status)
-                .map((ticket) => (
-                  <Button
-                    key={ticket.id}
-                    data-testid={`board-card-${ticket.id}`}
-                    variant="outline"
-                    className="h-auto w-full flex-col items-start gap-1 whitespace-normal p-3 text-start font-normal"
-                    onClick={() => setSelected(ticket)}
-                  >
-                    <span className="text-label text-muted-foreground">{ticket.ref}</span>
-                    <span>{ticket.title}</span>
-                    <span className="text-label text-muted-foreground">
-                      {bots.find((bot) => bot.id === ticket.assigneeBotId)?.name}
-                    </span>
-                  </Button>
-                ))}
+                .map((ticket) => {
+                  const workers = ticketWorkerNames(ticket, bots);
+                  const subtitle =
+                    workers.length > 0
+                      ? workers.join(", ")
+                      : ticketOwnerLabel(ticket, bots, currentUserId, ownerLabels);
+                  return (
+                    <Button
+                      key={ticket.id}
+                      data-testid={`board-card-${ticket.id}`}
+                      variant="outline"
+                      className="h-auto w-full flex-col items-start gap-1 whitespace-normal p-3 text-start font-normal"
+                      onClick={() => setSelected(ticket)}
+                    >
+                      <span className="text-label text-muted-foreground">{ticket.ref}</span>
+                      <span>{ticket.title}</span>
+                      <span className="text-label text-muted-foreground">{subtitle}</span>
+                    </Button>
+                  );
+                })}
             </section>
           ))}
         </div>
@@ -110,6 +130,7 @@ export function BoardPage() {
         <TicketDialog
           key={selected === "new" ? "new" : selected.id}
           ticket={selected === "new" ? null : selected}
+          currentUserId={currentUserId}
           bots={bots}
           onClose={() => setSelected(null)}
         />
@@ -120,10 +141,12 @@ export function BoardPage() {
 
 function TicketDialog({
   ticket,
+  currentUserId,
   bots,
   onClose,
 }: {
   ticket: Ticket | null;
+  currentUserId?: string;
   bots: Bot[];
   onClose: () => void;
 }) {
@@ -131,9 +154,12 @@ function TicketDialog({
   const formId = useId();
   const statuses = useTicketStatusLabels();
   const priorities = useTicketPriorityLabels();
+  const initialOwner = ownerOptionValue(ticket, currentUserId);
+  const initialWorkers = ticket ? ticketWorkerIds(ticket) : [];
   const [title, setTitle] = useState(ticket?.title ?? "");
   const [description, setDescription] = useState(ticket?.description ?? "");
-  const [owner, setOwner] = useState(ticket?.assigneeBotId ?? bots[0]?.id ?? "");
+  const [owner, setOwner] = useState(initialOwner);
+  const [workerBotIds, setWorkerBotIds] = useState<string[]>(initialWorkers);
   const [status, setStatus] = useState<TicketStatus>(ticket?.status ?? "todo");
   const [priority, setPriority] = useState<TicketPriority>(ticket?.priority ?? "normal");
   const queries = useSpaceQueries();
@@ -144,16 +170,23 @@ function TicketDialog({
   const commentsQuery = useQuery(commentsOptions);
   const comments = commentsQuery.data ?? [];
   const [body, setBody] = useState("");
+  const ownerOptions = [
+    { value: OWNER_ME_VALUE, label: t`Me` },
+    ...bots.map((bot) => ({ value: `bot:${bot.id}`, label: bot.name })),
+  ];
+  if (owner && owner !== OWNER_ME_VALUE && !ownerOptions.some((option) => option.value === owner)) {
+    ownerOptions.unshift({ value: owner, label: t`Member` });
+  }
   const saving = useSave({
     save: async (_input, rpc) => {
+      const ownerPatch = ownerPayloadFromValue(owner, currentUserId);
       if (ticket)
         await rpc.tickets.update({
           id: ticket.id,
           ...(title !== ticket.title ? { title } : {}),
           ...(description !== (ticket.description ?? "") ? { description } : {}),
-          ...(owner !== (ticket.assigneeBotId ?? bots[0]?.id ?? "")
-            ? { assigneeBotId: owner }
-            : {}),
+          ...(owner !== initialOwner ? ownerPatch : {}),
+          ...(!sameIdList(workerBotIds, initialWorkers) ? { workerBotIds } : {}),
           ...(status !== ticket.status ? { status } : {}),
           ...(priority !== ticket.priority ? { priority } : {}),
         });
@@ -161,7 +194,8 @@ function TicketDialog({
         await rpc.tickets.create({
           title,
           description,
-          assigneeBotId: owner,
+          ...ownerPatch,
+          workerBotIds,
           priority,
         });
     },
@@ -187,7 +221,13 @@ function TicketDialog({
     },
     stale: [commentsOptions.queryKey],
   });
-  const ownerBot = bots.find((bot) => bot.id === owner);
+  const ownerBot = owner.startsWith("bot:")
+    ? bots.find((bot) => bot.id === owner.slice(4))
+    : undefined;
+  const primaryWorkerBot = workerBotIds[0]
+    ? bots.find((bot) => bot.id === workerBotIds[0])
+    : undefined;
+  const chatBot = primaryWorkerBot ?? ownerBot;
   const busy = saving.pending || commenting.pending;
   const failure = saving.error ?? commenting.error;
   const shownError = failure
@@ -243,20 +283,32 @@ function TicketDialog({
               <FieldLabel htmlFor={`${formId}-owner`}>
                 <Trans>Owner</Trans>
               </FieldLabel>
+              <OptionSelect
+                id={`${formId}-owner`}
+                value={owner}
+                onValueChange={setOwner}
+                options={ownerOptions}
+              />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor={`${formId}-workers`}>
+                <Trans>Workers</Trans>
+              </FieldLabel>
               <div className="flex items-center gap-2">
-                <OptionSelect
-                  id={`${formId}-owner`}
-                  className="min-w-0 flex-1"
-                  value={owner || null}
-                  onValueChange={setOwner}
-                  required
-                  options={bots.map((bot) => ({ value: bot.id, label: bot.name }))}
-                />
-                {ownerBot ? (
-                  <IconTooltip label={t`Chat with ${ownerBot.name}`}>
+                <div className="min-w-0 flex-1">
+                  <WorkerBotsSelect
+                    id={`${formId}-workers`}
+                    bots={bots}
+                    value={workerBotIds}
+                    onChange={setWorkerBotIds}
+                    disabled={busy}
+                  />
+                </div>
+                {chatBot ? (
+                  <IconTooltip label={t`Chat with ${chatBot.name}`}>
                     <Link
-                      to={`/app/${ownerBot.id}`}
-                      aria-label={t`Chat with ${ownerBot.name}`}
+                      to={`/app/${chatBot.id}`}
+                      aria-label={t`Chat with ${chatBot.name}`}
                       className={buttonVariants({
                         variant: "ghost",
                         size: "icon",
@@ -294,7 +346,7 @@ function TicketDialog({
               />
             </Field>
             <div className="flex justify-end">
-              <Button type="submit" disabled={busy || !title.trim() || !owner}>
+              <Button type="submit" disabled={busy || !title.trim()}>
                 {ticket ? t`Save` : t`Create`}
               </Button>
             </div>

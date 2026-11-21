@@ -10,14 +10,18 @@ import type { PrismaClient } from "@rakazo/db";
 import { wakeRun } from "../runs/wakeups/wake-run.js";
 import { ticketWakePrompt } from "../runs/wakeups/wakes.prompt.js";
 
-/** Assignment wakes only its current owner, without posting a chat message. */
+/** Assignment wakes a newly assigned worker bot, without posting a chat message. */
 export async function wakeTicketAssignee(
   deps: { prisma: PrismaClient; jobs: JobPublisher; deploymentLabs?: readonly LabFeature[] },
   input: { spaceId: string; ticketId: string; botId: string },
 ): Promise<void> {
   const run = await deps.prisma.$transaction(async (tx) => {
     const ticket = await tx.ticket.findFirst({
-      where: { id: input.ticketId, spaceId: input.spaceId, assigneeBotId: input.botId },
+      where: {
+        id: input.ticketId,
+        spaceId: input.spaceId,
+        OR: [{ assigneeBotId: input.botId }, { workerBotIds: { has: input.botId } }],
+      },
       include: { board: { select: { ticketPrefix: true } } },
     });
     if (!ticket) return null;

@@ -27,6 +27,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/routes"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/taskdetect"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/taskqueue"
 )
 
 func main() {
@@ -57,10 +58,13 @@ func main() {
 
 	wantsLocal := store.HasLocal()
 	secretsReady := os.Getenv("DATABASE_URL") != "" && os.Getenv("BETTER_AUTH_SECRET") != ""
+	bgCtx, cancelBg := context.WithCancel(context.Background())
+	defer cancelBg()
 	var localServer *local.Server
 	var taskDetector *taskdetect.Service
+	var taskQueue *taskqueue.Service
 	if secretsReady {
-		server, detector, closeDatabase, err := setupLocal(*buildIDFile, logger)
+		server, detector, queueSvc, closeDatabase, err := setupLocal(*buildIDFile, logger)
 		if err != nil {
 			if wantsLocal {
 				logger.Error("cannot serve local procedures", "error", err)
@@ -70,6 +74,10 @@ func main() {
 		} else {
 			localServer = server
 			taskDetector = detector
+			taskQueue = queueSvc
+			if taskQueue != nil {
+				taskQueue.Start(bgCtx)
+			}
 			defer closeDatabase()
 			logger.Info("local procedures ready", "procedures", server.Count())
 		}
@@ -84,6 +92,7 @@ func main() {
 		Logger:       logger,
 		Local:        localServer,
 		TaskDetector: taskDetector,
+		TaskQueue:    taskQueue,
 	})
 	server := &http.Server{
 		Addr:              *listen,
@@ -129,6 +138,10 @@ func main() {
 	// ListenAndServe returns as soon as shutdown starts. Wait for in-flight requests to finish
 	// (a write may be mid-transaction) and for background signals to go out before the pool closes.
 	<-drained
+	cancelBg()
+	if taskQueue != nil {
+		taskQueue.Wait()
+	}
 	if localServer != nil {
 		localServer.Wait()
 	}
@@ -157,20 +170,20 @@ func readBuildID(path string) string {
 // setupLocal opens the database and builds the local procedure server. It is
 // called whenever the deployment's secrets are present, even if every route is
 // still proxy, so a SIGHUP cutover can use it without a restart.
-func setupLocal(buildIDFile string, logger *slog.Logger) (*local.Server, *taskdetect.Service, func(), error) {
+func setupLocal(buildIDFile string, logger *slog.Logger) (*local.Server, *taskdetect.Service, *taskqueue.Service, func(), error) {
 	deployment, err := config.Load()
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	startup, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	database, err := db.Open(startup, deployment.DatabaseURL, "rakazo-api-go")
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	if err := database.StartupCheck(startup); err != nil {
 		database.Close()
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	sessions := auth.New(database, auth.Config{
 		Secret:          deployment.AuthSecret,
@@ -181,7 +194,7 @@ func setupLocal(buildIDFile string, logger *slog.Logger) (*local.Server, *taskde
 	ring, closeRing, err := contentRing(startup, database, deployment, logger)
 	if err != nil {
 		database.Close()
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	// One runner per process: the middleware publishes its own roster/Space signals through
 	// it, and the procedures publish thread cursors, organization and board changes through
@@ -215,7 +228,32 @@ func setupLocal(buildIDFile string, logger *slog.Logger) (*local.Server, *taskde
 		Signals:  effectsRunner.Signals(),
 		Logger:   logger,
 	}
-	return server, detector, func() {
+	var queueStore taskqueue.QueueStore
+	if deployment.RedisURL != "" {
+		redisStore, redisErr := taskqueue.OpenRedis(startup, deployment.RedisURL, taskqueue.DefaultKeyPrefix)
+		if redisErr != nil {
+			logger.Warn("redis task queue unavailable; falling back to in-memory queue", "error", redisErr)
+			queueStore = taskqueue.NewMemoryStore(nil)
+		} else {
+			queueStore = redisStore
+			logger.Info("redis task queue connected")
+		}
+	} else {
+		queueStore = taskqueue.NewMemoryStore(nil)
+	}
+	queueSvc := taskqueue.New(taskqueue.Config{
+		Store:        queueStore,
+		DB:           database,
+		Signals:      effectsRunner.Signals(),
+		BoardLab:     deployment.BoardLab,
+		Logger:       logger,
+		MaxAttempts:  deployment.TaskQueueMaxAttempts,
+		BumpInterval: deployment.TaskBumpInterval,
+		BumpIdle:     deployment.TaskBumpIdle,
+		BumpCooldown: deployment.TaskBumpCooldown,
+	})
+	return server, detector, queueSvc, func() {
+		_ = queueSvc.Close()
 		closeRing()
 		database.Close()
 	}, nil

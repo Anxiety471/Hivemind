@@ -91,4 +91,10 @@ describe("ticket changes", () => {
     await s.changes({ ...change, assigneeBotId: null });
     expect(s.transaction).not.toHaveBeenCalled();
   });
+  it("wakes every unique worker bot listed in wakeBotIds", async () => {
+    const s = setup(["board"]);
+    await s.changes({ ...change, wakeBotIds: ["bot-1", "bot-2", "bot-1"] });
+    expect(s.createRun).toHaveBeenCalledTimes(2);
+    expect(s.enqueue).toHaveBeenCalledTimes(2);
+  });
 });

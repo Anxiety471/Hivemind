@@ -51,6 +51,9 @@ function ticket(overrides: Record<string, unknown> = {}) {
     status: "todo",
     priority: null,
     assigneeBotId: "bot-1",
+    ownerUserId: null,
+    ownerBotId: "bot-1",
+    workerBotIds: ["bot-1"],
     createdByBotId: null,
     createdByUserId: null,
     createdAt: NOW,
@@ -191,7 +194,13 @@ function mutationDeps() {
   };
   const prisma = {
     ...boardSpace(),
-    bot: { findFirst: vi.fn(async () => ({ id: "bot-2" })) },
+    bot: {
+      findFirst: vi.fn(async () => ({ id: "bot-2" })),
+      findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
+        where.id.in.map((id) => ({ id })),
+      ),
+    },
+    spaceMember: { findFirst: vi.fn(async () => ({ id: "member-1" })) },
     ticket: tx.ticket,
     ticketComment: { findMany: vi.fn(async () => []) },
     $transaction: vi.fn(async (fn: (client: typeof tx) => Promise<unknown>) => fn(tx)),
@@ -281,10 +290,16 @@ describe("ticket mutations", () => {
     expect(s.changes).not.toHaveBeenCalled();
   });
 
-  it("uses public parameter names and keeps blank comments rejected", async () => {
+  it("rejects ambiguous owners and keeps blank comments rejected", async () => {
     const s = mutationDeps();
     await expect(
-      createTicket(s.deps, { spaceId: "ws", userId: "user-1", title: "Ship" }),
+      createTicket(s.deps, {
+        spaceId: "ws",
+        userId: "user-1",
+        title: "Ship",
+        ownerUserId: "user-1",
+        ownerBotId: "bot-1",
+      }),
     ).resolves.toHaveProperty("error", expect.stringContaining("ownerBotId"));
     const result = await commentTicket(s.deps, { spaceId: "ws", id: "", body: " " });
     expect(result).toHaveProperty("error", expect.stringContaining("id:"));
@@ -295,46 +310,92 @@ describe("ticket mutations", () => {
     expect(s.changes).not.toHaveBeenCalled();
   });
 
-  it("allocates a number and wakes the assigned bot once", async () => {
+  it("defaults owner to the creating user and supports assigning multiple worker bots", async () => {
     const s = mutationDeps();
     const result = await createTicket(s.deps, {
       spaceId: "ws",
-      botId: "bot-1",
       userId: "user-1",
       title: "  Ship  ",
-      ownerBotId: "bot-2",
+      workerBotIds: ["bot-2", "bot-3", "bot-2"],
     });
     expect(result).toEqual({
-      ticket: expect.objectContaining({ ref: "RAK-1", title: "Ship", assigneeBotId: "bot-2" }),
+      ticket: expect.objectContaining({
+        ref: "RAK-1",
+        title: "Ship",
+        ownerUserId: "user-1",
+        ownerBotId: null,
+        workerBotIds: ["bot-2", "bot-3"],
+        assigneeBotId: "bot-2",
+      }),
     });
     expect(s.tx.board.update).toHaveBeenCalledWith(
       expect.objectContaining({ data: { nextNumber: { increment: 1 } } }),
     );
     expect(s.changes).toHaveBeenCalledOnce();
-    expect(s.changes).toHaveBeenCalledWith(expect.objectContaining({ wakeAssignee: true }));
+    expect(s.changes).toHaveBeenCalledWith(
+      expect.objectContaining({
+        wakeAssignee: true,
+        assigneeBotId: "bot-2",
+        wakeBotIds: ["bot-2", "bot-3"],
+      }),
+    );
   });
-  it("wakes on an actual reassignment once, and never on status edits or repeated assignment", async () => {
+
+  it("lets a user create a self-owned ticket with no worker bots without waking anyone", async () => {
+    const s = mutationDeps();
+    const result = await createTicket(s.deps, {
+      spaceId: "ws",
+      userId: "user-1",
+      title: "Draft roadmap",
+    });
+    expect(result).toEqual({
+      ticket: expect.objectContaining({
+        ownerUserId: "user-1",
+        ownerBotId: null,
+        workerBotIds: [],
+        assigneeBotId: null,
+      }),
+    });
+    expect(s.changes).toHaveBeenCalledWith(
+      expect.objectContaining({ wakeAssignee: false, wakeBotIds: [] }),
+    );
+  });
+
+  it("wakes only newly added worker bots, never on owner-only, status, or repeated worker edits", async () => {
     const s = mutationDeps();
     await updateTicket(s.deps, {
       spaceId: "ws",
       userId: "user-1",
       id: "t1",
-      ownerBotId: "bot-2",
-      status: "doing",
+      ownerUserId: "user-1",
     });
-    expect(s.changes).toHaveBeenCalledWith(
-      expect.objectContaining({ wakeAssignee: true, assigneeBotId: "bot-2" }),
+    expect(s.changes).toHaveBeenLastCalledWith(
+      expect.objectContaining({ wakeAssignee: false, wakeBotIds: [] }),
     );
     await updateTicket(s.deps, {
       spaceId: "ws",
       userId: "user-1",
       id: "t1",
-      ownerBotId: "bot-2",
+      workerBotIds: ["bot-1", "bot-2"],
+      status: "doing",
+    });
+    expect(s.changes).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        wakeAssignee: true,
+        assigneeBotId: "bot-1",
+        wakeBotIds: ["bot-2"],
+      }),
+    );
+    await updateTicket(s.deps, {
+      spaceId: "ws",
+      userId: "user-1",
+      id: "t1",
+      workerBotIds: ["bot-1", "bot-2"],
       status: "done",
     });
     expect(
       s.changes.mock.calls.map(([value]) => (value as { wakeAssignee: boolean }).wakeAssignee),
-    ).toEqual([true, false]);
+    ).toEqual([false, true, false]);
     expect(s.tx.ticket.update).toHaveBeenLastCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ status: "done", completedAt: expect.any(Date) }),
@@ -348,7 +409,7 @@ describe("ticket mutations", () => {
       spaceId: "ws",
       userId: "user-1",
       id: "t1",
-      ownerBotId: "bot-2",
+      workerBotIds: ["bot-2"],
       botId: "bot-2",
     });
     expect(s.changes.mock.calls.map(([value]) => value.wakeAssignee)).toEqual([false, false]);
@@ -378,9 +439,10 @@ describe("ticket mutations", () => {
       where: { number: 1, spaceId: "ws", boardId: "board-1" },
     });
   });
-  it("only assigns the acting user's own bots", async () => {
+  it("only assigns the acting user's own bots as owner or workers", async () => {
     const s = mutationDeps();
     s.prisma.bot.findFirst.mockResolvedValue(null as never);
+    s.prisma.bot.findMany.mockResolvedValue([] as never);
     await expect(
       createTicket(s.deps, {
         spaceId: "ws",
@@ -395,20 +457,17 @@ describe("ticket mutations", () => {
         spaceId: "ws",
         userId: "user-1",
         id: "t1",
-        ownerBotId: "other-members-bot",
+        workerBotIds: ["other-members-bot"],
       }),
     ).resolves.toEqual({ error: "Unknown bot." });
-    for (const [query] of s.prisma.bot.findFirst.mock.calls as unknown as [unknown][]) {
-      expect(query).toEqual({
-        where: { id: "other-members-bot", spaceId: "ws", userId: "user-1", archivedAt: null },
-        select: { id: true },
-      });
-    }
-    expect(s.prisma.bot.findFirst).toHaveBeenCalledTimes(2);
+    expect(s.prisma.bot.findFirst).toHaveBeenCalledWith({
+      where: { id: "other-members-bot", spaceId: "ws", userId: "user-1", archivedAt: null },
+      select: { id: true },
+    });
     expect(s.prisma.$transaction).not.toHaveBeenCalled();
     expect(s.changes).not.toHaveBeenCalled();
   });
-  it("rejects invalid input and foreign owners before a write", async () => {
+  it("rejects non-member ownerUserId and invalid input before a write", async () => {
     const s = mutationDeps();
     await expect(
       createTicket(s.deps, { spaceId: "ws", userId: "user-1", botId: "bot-1", title: " " }),
@@ -417,6 +476,15 @@ describe("ticket mutations", () => {
     await expect(
       updateTicket(s.deps, { spaceId: "ws", userId: "user-1", id: "t1", ownerBotId: "foreign" }),
     ).resolves.toHaveProperty("error");
+    s.prisma.spaceMember.findFirst.mockResolvedValueOnce(null as never);
+    await expect(
+      createTicket(s.deps, {
+        spaceId: "ws",
+        userId: "user-1",
+        title: "Ship",
+        ownerUserId: "outsider",
+      }),
+    ).resolves.toEqual({ error: "Unknown user." });
     expect(s.prisma.$transaction).not.toHaveBeenCalled();
   });
 });

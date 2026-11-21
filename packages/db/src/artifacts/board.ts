@@ -91,6 +91,9 @@ function coerceTicketPriority(value: string | null | undefined): TicketPriority 
 }
 
 export function toTicketDto(row: TicketRow, ticketPrefix: string): Ticket {
+  const rawWorkers = Array.isArray(row.workerBotIds) ? row.workerBotIds : [];
+  const workerBotIds =
+    rawWorkers.length > 0 ? rawWorkers : row.assigneeBotId ? [row.assigneeBotId] : [];
   return {
     id: row.id,
     boardId: row.boardId,
@@ -101,7 +104,10 @@ export function toTicketDto(row: TicketRow, ticketPrefix: string): Ticket {
     description: row.description,
     status: coerceTicketStatus(row.status),
     priority: coerceTicketPriority(row.priority),
-    assigneeBotId: row.assigneeBotId,
+    assigneeBotId: row.assigneeBotId ?? workerBotIds[0] ?? null,
+    ownerUserId: row.ownerUserId ?? null,
+    ownerBotId: row.ownerBotId ?? null,
+    workerBotIds,
     createdByBotId: row.createdByBotId,
     createdByUserId: row.createdByUserId,
     createdAt: row.createdAt.toISOString(),

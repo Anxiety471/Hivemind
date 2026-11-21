@@ -1,6 +1,7 @@
 import type { JobPublisher } from "@rakazo/adapter-kit";
 import type { LabFeature } from "@rakazo/contracts";
 import type { BoardEvents, PrismaClient } from "@rakazo/db";
+import { dispatchTicketWakeViaGo } from "./ticket-queue.js";
 import { wakeTicketAssignee } from "./ticket-wake.js";
 
 export type TicketChange = {
@@ -9,6 +10,7 @@ export type TicketChange = {
   ticketId: string;
   assigneeBotId: string | null;
   wakeAssignee: boolean;
+  wakeBotIds?: string[];
 };
 export type TicketChangeNotifier = (change: TicketChange) => Promise<void>;
 
@@ -25,12 +27,25 @@ export function createTicketChangeNotifier(deps: {
         ticketId: change.ticketId,
       })
       .catch(() => undefined);
-    if (change.wakeAssignee && change.assigneeBotId) {
-      await wakeTicketAssignee(deps, {
+    const botIds =
+      change.wakeBotIds !== undefined
+        ? [...new Set(change.wakeBotIds.filter(Boolean))]
+        : change.wakeAssignee && change.assigneeBotId
+          ? [change.assigneeBotId]
+          : [];
+    for (const botId of botIds) {
+      const dispatched = await dispatchTicketWakeViaGo({
         spaceId: change.spaceId,
         ticketId: change.ticketId,
-        botId: change.assigneeBotId,
+        botId,
       });
+      if (!dispatched) {
+        await wakeTicketAssignee(deps, {
+          spaceId: change.spaceId,
+          ticketId: change.ticketId,
+          botId,
+        });
+      }
     }
   };
 }

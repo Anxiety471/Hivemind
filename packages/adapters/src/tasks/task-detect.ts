@@ -79,6 +79,9 @@ export type TaskSyncAction = {
   description?: string;
   status?: string;
   priority?: string;
+  ownerUserId?: string | null;
+  ownerBotId?: string | null;
+  workerBotIds?: string[];
 };
 
 /**
@@ -150,6 +153,9 @@ export async function syncTasksViaGoOrLocal(
           ...(action.status ? { status: action.status } : {}),
           ...(action.description !== undefined ? { description: action.description } : {}),
           ...(action.priority ? { priority: action.priority } : {}),
+          ...(action.ownerUserId !== undefined ? { ownerUserId: action.ownerUserId } : {}),
+          ...(action.ownerBotId !== undefined ? { ownerBotId: action.ownerBotId } : {}),
+          ...(action.workerBotIds !== undefined ? { workerBotIds: action.workerBotIds } : {}),
         });
         if (!("error" in res)) {
           updated.push({
@@ -171,7 +177,9 @@ export async function syncTasksViaGoOrLocal(
         title,
         ...(action.description !== undefined ? { description: action.description } : {}),
         ...(action.priority ? { priority: action.priority } : {}),
-        ownerBotId: input.botId,
+        ...(action.ownerUserId !== undefined ? { ownerUserId: action.ownerUserId } : {}),
+        ...(action.ownerBotId !== undefined ? { ownerBotId: action.ownerBotId } : {}),
+        ...(action.workerBotIds !== undefined ? { workerBotIds: action.workerBotIds } : {}),
       });
       if (!("error" in res)) {
         let ticket = res.ticket;
@@ -217,6 +225,9 @@ export async function syncTasksViaGoOrLocal(
       ...(action.description !== undefined ? { description: action.description } : {}),
       ...(action.status ? { status: action.status } : {}),
       ...(action.priority ? { priority: action.priority } : {}),
+      ...(action.ownerUserId !== undefined ? { ownerUserId: action.ownerUserId } : {}),
+      ...(action.ownerBotId !== undefined ? { ownerBotId: action.ownerBotId } : {}),
+      ...(action.workerBotIds !== undefined ? { workerBotIds: action.workerBotIds } : {}),
     });
     if (!("error" in res)) {
       updated.push({
