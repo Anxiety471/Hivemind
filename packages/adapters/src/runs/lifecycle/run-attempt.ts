@@ -24,6 +24,7 @@ import {
   renewComputerExecutionLease,
 } from "../../computers/computer-lifecycle.js";
 import { lateRoutineRunDueAt } from "../../routines/routine-lateness.js";
+import { helperPlace } from "../../tasks/background-helpers.js";
 import type {
   RunComputerUseState,
   RunLeaseState,
@@ -131,11 +132,13 @@ export async function claimRunAttempt(deps: ExecutorDeps, run: ContinuableRun, w
           select: { threadId: true },
         })
       : null;
+  // Questions and alerts go to the chat the helper's tree belongs to, even from a nested helper.
+  const helperChat = helperConversation ? await helperPlace(deps.prisma, run) : null;
   return {
     ...claim,
     ...started,
     setupFailure,
-    helperConversationThreadId: helperConversation?.threadId,
+    helperConversationThreadId: helperChat?.chatThreadId,
   };
 }
 

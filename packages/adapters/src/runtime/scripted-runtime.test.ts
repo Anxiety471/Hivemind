@@ -54,7 +54,13 @@ describe("inferScript background helpers", () => {
 
   it("works a helper's brief as its task, even one that names another action", () => {
     const script = inferScript(
-      helperPrompt({ name: "venues", task: "find which venue needs a sign in", instructions: "" }),
+      helperPrompt({
+        name: "venues",
+        task: "find which venue needs a sign in",
+        instructions: "",
+        canDelegate: false,
+        workFolder: "helpers/venues-abc123",
+      }),
     );
     expect(script.some((turn) => turn.takeover)).toBe(false);
     expect(script.at(-1)).toMatchObject({ assistant: expect.stringContaining("helper result:") });

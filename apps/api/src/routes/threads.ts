@@ -35,6 +35,7 @@ import {
   routineTestRunNonce,
   routineTestTarget,
 } from "../routines/routines.js";
+import { resolveHelperThread } from "../threads/helper-thread.js";
 import { purgeClearedThreadMemory } from "../threads/thread-memory.js";
 import {
   isBackgroundRun,
@@ -313,6 +314,32 @@ export function threadsRoutes(ctx: RouterContext) {
         const target = await resolveThreadTarget(deps.prisma, context.actor, input);
         await stopThreadRuns(deps, context.actor, target, input.messageId);
         return { ok: true as const };
+      }),
+      helperGet: authed.threads.helperGet.handler(async ({ context, input }) => {
+        const target = await resolveHelperThread(deps.prisma, context.actor, input);
+        return threadSnapshot(deps, target, context.actor.userId);
+      }),
+      helperSubscribe: authed.threads.helperSubscribe.handler(async function* ({ context, input }) {
+        const target = await resolveHelperThread(deps.prisma, context.actor, input);
+        const events = withHeartbeats(context, (signal) =>
+          deps.events.follow(target.threadId, input.cursor, signal),
+        );
+        for await (const event of events) {
+          if (event !== HEARTBEAT) {
+            yield event;
+            continue;
+          }
+          yield {
+            id: "heartbeat",
+            spaceId: context.actor.spaceId,
+            threadId: target.threadId,
+            botId: target.botId,
+            seq: 0,
+            type: "heartbeat",
+            createdAt: new Date().toISOString(),
+            payload: {},
+          };
+        }
       }),
       clear: authed.threads.clear.handler(async ({ context, input }) => {
         const target = await resolveThreadTarget(deps.prisma, context.actor, input);

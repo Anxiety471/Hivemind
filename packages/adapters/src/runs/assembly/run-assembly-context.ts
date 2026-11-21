@@ -90,6 +90,7 @@ export async function createRunContext(
     conversationRun,
     origin,
     ticketBoardEnabled,
+    helperDepth,
   } = parts.records;
   const { connectedPlugins, context, memoryScope, runAbortController, semanticMemory } =
     parts.connected;
@@ -211,6 +212,7 @@ export async function createRunContext(
       peerMessage,
       userComputerOwner: userComputerOwnerId,
       ticketBoardEnabled,
+      helperDepth,
     },
     computer: {
       stored: storedComputer,

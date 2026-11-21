@@ -23,6 +23,19 @@ const START = {
   effectKey: "effect-1",
 };
 
+/** A helper's own thread with no other turn and no helper started from it. */
+function quietThread() {
+  return {
+    findUnique: vi.fn(async () => ({
+      threadId: "helper-thread",
+      createdAt: new Date("2026-01-01T00:00:00Z"),
+      trigger: "helper",
+    })),
+    findMany: vi.fn(async (_args: unknown): Promise<unknown[]> => []),
+    count: vi.fn(async (_args: unknown) => 0),
+  };
+}
+
 function harness(overrides: { trigger?: string; threadBotId?: string | null } = {}) {
   const createRun = vi.fn(async (_args: unknown) => ({ id: "helper-run" }));
   const tx = {
@@ -191,7 +204,7 @@ describe("returning a helper's outcome", () => {
   it("waits for the chat's lock with the thread-lock budget", async () => {
     const tx = {
       $queryRaw: vi.fn(async () => []),
-      run: { updateMany: vi.fn(async () => ({ count: 0 })) },
+      run: { ...quietThread(), updateMany: vi.fn(async () => ({ count: 0 })) },
     };
     const prisma = {
       message: { findUnique: vi.fn(async () => ({ threadId: "chat" })) },
@@ -216,7 +229,7 @@ describe("passing a helper's result back in a shared space", () => {
     const createRun = vi.fn(async (_args: unknown) => ({ id: "wake" }));
     const tx = {
       $queryRaw: vi.fn(async () => []),
-      run: { updateMany: vi.fn(async () => ({ count: 1 })), create: createRun },
+      run: { ...quietThread(), updateMany: vi.fn(async () => ({ count: 1 })), create: createRun },
       message: {
         findMany: vi.fn(async () =>
           overrides.attachments ? [{ id: "helper-file", blocks: overrides.attachments }] : [],
@@ -303,5 +316,191 @@ describe("passing a helper's result back in a shared space", () => {
     await h.returned;
     expect(h.createRun).not.toHaveBeenCalled();
     expect(h.enqueue).not.toHaveBeenCalled();
+  });
+});
+
+describe("helpers that start helpers", () => {
+  const SETTLED = new Date("2026-01-01T00:00:00Z");
+  const EARLIER = new Date("2025-12-31T23:55:00Z");
+  const LATER = new Date("2026-01-01T00:05:00Z");
+  const running = { kind: "subagent", agentId: "a", name: "scout", task: "t", status: "running" };
+
+  /** A run in a helper's own thread, which is where a nested helper's result comes back. */
+  function nested(
+    overrides: {
+      /** Other helper turns in the run's own thread. */
+      turns?: { id: string; status: string; createdAt: Date }[];
+      /** Helpers started from that thread that are working or have not returned. */
+      pendingChildren?: number;
+      /** The card sits in a helper's thread, not in a chat. */
+      cardInHelperThread?: boolean;
+      ownerCardStatus?: "running" | "completed";
+    } = {},
+  ) {
+    const createRun = vi.fn(async (_args: unknown) => ({ id: "wake" }));
+    const updateMany = vi.fn(async (_args: unknown) => ({ count: 1 }));
+    const messageUpdate = vi.fn(async () => ({}));
+    const tx = {
+      $queryRaw: vi.fn(async () => []),
+      run: {
+        findUnique: vi.fn(async () => ({
+          threadId: overrides.cardInHelperThread ? "child-thread" : "helper-thread",
+          createdAt: SETTLED,
+          trigger: "helper",
+        })),
+        findMany: vi.fn(async () => overrides.turns ?? []),
+        count: vi.fn(async () => overrides.pendingChildren ?? 0),
+        findFirst: vi.fn(async () => ({
+          id: "outer-run",
+          sourceMessageId: "outer-card",
+          modelProvider: null,
+          modelId: null,
+          modelPinned: false,
+          sourceMessage: {
+            id: "outer-card",
+            blocks: [{ ...running, status: overrides.ownerCardStatus ?? "running" }],
+          },
+        })),
+        updateMany,
+        create: createRun,
+      },
+      message: {
+        findMany: vi.fn(async () => []),
+        findFirst: vi.fn(async () => ({
+          id: "card",
+          threadId: overrides.cardInHelperThread ? "helper-thread" : "chat",
+          blocks: [running],
+          thread: { helperBotId: overrides.cardInHelperThread ? "bot" : null, group: null },
+        })),
+        update: messageUpdate,
+      },
+      spaceMember: { findUnique: vi.fn(async () => ({ id: "membership" })) },
+      bot: { findFirst: vi.fn(async () => ({ id: "bot" })) },
+      task: { create: vi.fn(async () => ({ id: "wake-task" })) },
+    };
+    const prisma = {
+      message: {
+        findUnique: vi.fn(async () => ({
+          threadId: overrides.cardInHelperThread ? "helper-thread" : "chat",
+        })),
+      },
+      $transaction: vi.fn(async (work: (client: typeof tx) => Promise<unknown>) => work(tx)),
+    };
+    const enqueue = vi.fn(async () => undefined);
+    const returned = returnHelperOutcome(
+      { prisma, events: { notify: vi.fn(async () => undefined) }, jobs: { enqueue } } as never,
+      {
+        id: "helper-run",
+        spaceId: "space",
+        botId: "bot",
+        userId: "user",
+        sourceMessageId: "card",
+      },
+      { status: "completed", text: "found three venues" },
+    );
+    return { returned, createRun, updateMany, messageUpdate, enqueue };
+  }
+
+  it("holds back a helper's answer while a helper it started is still working", async () => {
+    const h = nested({ pendingChildren: 1 });
+    await h.returned;
+    // Nothing is claimed, so the answer comes once the last of them has returned.
+    expect(h.updateMany).not.toHaveBeenCalled();
+    expect(h.messageUpdate).not.toHaveBeenCalled();
+    expect(h.createRun).not.toHaveBeenCalled();
+  });
+
+  it("holds back an answer while another turn of the same helper is working", async () => {
+    const h = nested({ turns: [{ id: "other", status: "running", createdAt: EARLIER }] });
+    await h.returned;
+    expect(h.updateMany).not.toHaveBeenCalled();
+    expect(h.createRun).not.toHaveBeenCalled();
+  });
+
+  it("lets a later turn of the helper answer in place of an earlier one", async () => {
+    const h = nested({ turns: [{ id: "later", status: "queued", createdAt: LATER }] });
+    await h.returned;
+    // The earlier turn is only marked returned: the card is the later turn's to settle.
+    expect(h.updateMany).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ where: expect.objectContaining({ id: "helper-run" }) }),
+    );
+    expect(h.messageUpdate).not.toHaveBeenCalled();
+    expect(h.createRun).not.toHaveBeenCalled();
+  });
+
+  it("brings a nested helper's result back to the helper that started it, as its own turn", async () => {
+    const h = nested({ cardInHelperThread: true });
+    await h.returned;
+    expect(h.createRun).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        threadId: "helper-thread",
+        trigger: "helper",
+        sourceMessageId: "outer-card",
+        delegatedFromRunId: "outer-run",
+        clientNonce: "helper-result:helper-run",
+      }),
+      select: { id: true },
+    });
+    expect(h.enqueue).toHaveBeenCalledExactlyOnceWith(runContinueJob("wake"));
+  });
+
+  it("only settles the card when the helper it belongs to is already settled", async () => {
+    const h = nested({ cardInHelperThread: true, ownerCardStatus: "completed" });
+    await h.returned;
+    expect(h.messageUpdate).toHaveBeenCalledOnce();
+    expect(h.createRun).not.toHaveBeenCalled();
+    expect(h.enqueue).not.toHaveBeenCalled();
+  });
+
+  /** A helper turn whose card is in `cardThread`, the chat or another helper's thread. */
+  function startFromHelper(cardThread: { id: string; helperBotId: string | null }, cap = 0) {
+    const h = harness({ trigger: "helper" });
+    Object.assign(h.ctx.run, {
+      threadId: "helper-thread",
+      sourceMessageId: "outer-card",
+    });
+    Object.assign(h.ctx.thread, { id: "helper-thread" });
+    Object.assign(h.ctx.deps.prisma, {
+      message: {
+        findUnique: vi.fn(async () => ({
+          threadId: cardThread.id,
+          thread: { helperBotId: cardThread.helperBotId },
+        })),
+      },
+      run: { findFirst: vi.fn(async () => ({ sourceMessage: { threadId: "chat" } })) },
+    });
+    h.tx.run.findFirst = vi.fn(async (args: unknown) =>
+      (args as { where: { clientNonce?: string } }).where.clientNonce
+        ? null
+        : ({ id: "outer-run" } as never),
+    );
+    h.tx.run.count.mockResolvedValue(cap);
+    return h;
+  }
+
+  it("lets a helper started from a chat start helpers of its own, answering to its first run", async () => {
+    const h = startFromHelper({ id: "chat", helperBotId: null });
+    await expect(startBackgroundHelper(h.ctx, START)).resolves.toMatchObject({ ok: true });
+    expect(h.createRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ trigger: "helper", delegatedFromRunId: "outer-run" }),
+      }),
+    );
+  });
+
+  it("stops at two levels: a helper that a helper started cannot start more", async () => {
+    const h = startFromHelper({ id: "other-helper-thread", helperBotId: "bot" });
+    await expect(startBackgroundHelper(h.ctx, START)).resolves.toEqual({
+      error: expect.stringContaining("cannot delegate further"),
+    });
+    expect(h.prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("counts every working helper of the chat's tree against one cap", async () => {
+    const h = startFromHelper({ id: "chat", helperBotId: null }, 8);
+    await expect(startBackgroundHelper(h.ctx, START)).resolves.toEqual({
+      error: expect.stringContaining("8 subagents"),
+    });
+    expect(h.createRun).not.toHaveBeenCalled();
   });
 });

@@ -7,6 +7,9 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@lingui/react/macro", () => ({
   Trans: ({ children }: { children: ReactNode }) => children,
+  useLingui: () => ({
+    t: (strings: TemplateStringsArray, ...values: unknown[]) => String.raw(strings, ...values),
+  }),
 }));
 vi.mock("@rakazo/chat-ui/web", () => ({
   ChatMarkdown: ({ children }: { children: string }) => <p>{children}</p>,
@@ -17,11 +20,12 @@ import { SubagentCard } from "./SubagentCard";
 function mountCard(
   block: Parameters<typeof SubagentCard>[0]["block"],
   onStop?: () => Promise<unknown>,
+  onOpen?: () => void,
 ) {
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
-  flushSync(() => root.render(<SubagentCard block={block} onStop={onStop} />));
+  flushSync(() => root.render(<SubagentCard block={block} onStop={onStop} onOpen={onOpen} />));
   const get = (id: string) => container.querySelector(`[data-testid="${id}"]`);
   const toggle = () => container.querySelector<HTMLButtonElement>("button[aria-expanded]");
   const click = () => flushSync(() => toggle()?.click());
@@ -149,6 +153,22 @@ describe("SubagentCard", () => {
       expect(stopButton()).toBeUndefined();
       card.unmount();
     }
+  });
+
+  it("offers Open only for a saved helper card and calls it", () => {
+    const onOpen = vi.fn();
+    const openButton = () =>
+      [...document.querySelectorAll("button")].find(
+        (button) => button.getAttribute("aria-label") === "Open helper thread",
+      );
+    const saved = mountCard({ ...finished, agentId: "open-1" }, undefined, onOpen);
+    expect(openButton()?.textContent).toContain("Open");
+    flushSync(() => (openButton() as HTMLButtonElement).click());
+    expect(onOpen).toHaveBeenCalledOnce();
+    saved.unmount();
+    const live = mountCard({ ...finished, agentId: "open-2", status: "running" });
+    expect(openButton()).toBeUndefined();
+    live.unmount();
   });
 
   it("shows a stopped helper as stopped, not failed", () => {

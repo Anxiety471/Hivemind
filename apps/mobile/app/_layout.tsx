@@ -579,6 +579,10 @@ function LayoutContent() {
                           ...chatRouteHeader(route, { split, inboxHidden, foldActive }, canInvite),
                         })}
                       />
+                      <Stack.Screen
+                        name="helper-thread"
+                        options={{ title: t`Subagent`, animation: chatAnimation }}
+                      />
                       <Stack.Screen name="routines" options={glassHeaderOptions(t`Routines`)} />
                       <Stack.Screen name="routine" options={glassHeaderOptions(t`Routine`)} />
                       <Stack.Screen

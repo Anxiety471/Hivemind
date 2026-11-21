@@ -38,6 +38,7 @@ import { rpcQuery } from "../../lib/query/query";
 import { useScreenQuery } from "../../lib/query/screen-query";
 import { cronLabels } from "../../lib/routines/cron";
 import { useInboxBot } from "../../lib/search/search-inbox";
+import { helperThreadParams } from "../../lib/thread/helper-thread";
 import {
   THREAD_HEADER_PILL_BOTTOM_INSET,
   threadColumnPadding,
@@ -440,6 +441,8 @@ export function Thread({ sessionEpoch, userId }: { sessionEpoch: number; userId:
   // Event actions read the latest committed screen state without invalidating settled rows.
   const rowActions = useLatestRowActions({
     helperToggle: scroll.helperToggle,
+    openHelper: (target) =>
+      router.push({ pathname: "/helper-thread", params: helperThreadParams(target) }),
     reply: (message) => {
       setReplyTarget(message);
       setReplyQuote(null);

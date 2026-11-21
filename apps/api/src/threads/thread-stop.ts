@@ -18,6 +18,7 @@ import {
   conversationRunsWhere,
   createThreadMessageInTransaction,
   expireComputerExecutionLeases,
+  startedHelpersWhere,
   THREAD_LOCK_TRANSACTION_OPTIONS,
   transientRunEventsWhere,
 } from "@rakazo/db";
@@ -67,18 +68,14 @@ export function cancelThreadRuns(
   note?: { botId: string },
   helperMessageId?: string,
 ) {
-  // Background helpers this chat started work in threads of their own.
-  const helpers = {
-    trigger: BACKGROUND_HELPER_TRIGGER,
-    sourceMessage: { threadId: target.threadId },
-  };
+  // Background helpers this chat started, and the ones those started, work in threads of
+  // their own.
+  const helpers = (messageId: string) => startedHelpersWhere(target.threadId, messageId);
   return async (tx: Prisma.TransactionClient) => {
     await tx.$queryRaw`SELECT id FROM threads WHERE id = ${target.threadId} FOR UPDATE`;
     const cancelled = await tx.run.updateManyAndReturn({
       where: {
-        ...(helperMessageId
-          ? { ...helpers, sourceMessageId: helperMessageId }
-          : conversationRunsWhere(target.threadId)),
+        ...(helperMessageId ? helpers(helperMessageId) : conversationRunsWhere(target.threadId)),
         status: { in: [...ACTIVE_RUN_STATUSES] },
       },
       data: { status: "cancelled", completedAt: new Date() },

@@ -46,9 +46,24 @@ export async function cancelRunsInTransaction<
   return cancelled;
 }
 
+/**
+ * The background helpers a thread started, and the helpers those started in turn: their runs
+ * work in threads of their own, so only their card points back. `messageId` narrows it to the
+ * helper behind that card of the thread, with what it started.
+ */
+export function startedHelpersWhere(threadId: string, messageId?: string): Prisma.RunWhereInput {
+  const card: Prisma.MessageWhereInput = { threadId, ...(messageId ? { id: messageId } : {}) };
+  const startedBy: Prisma.RunWhereInput = {
+    trigger: BACKGROUND_HELPER_TRIGGER,
+    sourceMessage: card,
+  };
+  return {
+    trigger: BACKGROUND_HELPER_TRIGGER,
+    OR: [{ sourceMessage: card }, { sourceMessage: { thread: { runs: { some: startedBy } } } }],
+  };
+}
+
 /** Work in a conversation, including delegates whose execution history lives elsewhere. */
 export function conversationRunsWhere(threadId: string): Prisma.RunWhereInput {
-  return {
-    OR: [{ threadId }, { trigger: BACKGROUND_HELPER_TRIGGER, sourceMessage: { threadId } }],
-  };
+  return { OR: [{ threadId }, startedHelpersWhere(threadId)] };
 }

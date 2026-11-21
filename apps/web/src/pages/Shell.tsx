@@ -46,6 +46,7 @@ import { PageViewHost } from "../components/pages/PageViewHost";
 import { authClient } from "../lib/auth/auth";
 import { peekBootstrapSeed } from "../lib/bootstrap";
 import { setCallMinimized, startCall, useCallSession } from "../lib/calls/call-session";
+import type { HelperThreadTarget } from "../lib/chat/helper-thread";
 import { toolActivityPreference } from "../lib/chat/tool-activity-preference";
 import { composerEnterToSendPreference } from "../lib/composer/composer-enter-to-send-pref";
 import { computersAreUnavailable } from "../lib/computers/computer-sandbox";
@@ -82,6 +83,7 @@ import { ChatContextMenu } from "./shell/chat/chat-context-menu";
 import { ChatFindBar } from "./shell/chat/chat-find-bar";
 import { ChatHeader } from "./shell/chat/chat-header";
 import { FALLBACK_BOT_COLOR } from "./shell/chat/chat-shared";
+import { HelperThreadView } from "./shell/chat/helper-thread-view";
 import { Transcript } from "./shell/chat/transcript";
 import { resolveTranscriptMemberName as groupTranscriptMemberName } from "./shell/chat/transcript-member-name";
 import { useChatRead } from "./shell/chat/use-chat-read";
@@ -218,6 +220,10 @@ function SpaceShell() {
     peerBotId: string;
     peerBotName: string;
   } | null>("peerConversation", null);
+  const [helperThread, setHelperThread] = usePreloadRecoveryState<HelperThreadTarget | null>(
+    "helperThread",
+    null,
+  );
   const agentSkillsQuery = useQuery(queries.agentSkills.list.queryOptions());
   const agentSkills = agentSkillsQuery.data ?? NO_AGENT_SKILLS;
   const refreshAgentSkills = useCallback(() => {
@@ -1195,6 +1201,7 @@ function SpaceShell() {
               onReact={composer.reactToMessage}
               onJumpToMessage={jumpToReplyMessage}
               onOpenPeerMessages={openPeerMessages}
+              onOpenSubagent={setHelperThread}
               memberName={resolveTranscriptMemberName}
               peerBot={resolveTranscriptBot}
               onRefresh={refreshActiveThread}
@@ -1487,6 +1494,25 @@ function SpaceShell() {
           peerBot={resolveTranscriptBot}
         />
       </Suspense>
+
+      {helperThread ? (
+        <HelperThreadView
+          target={helperThread}
+          rpc={rpc}
+          peerBot={resolveTranscriptBot}
+          onOpenBot={(botId) => {
+            setHelperThread(null);
+            openBot(botId);
+          }}
+          onOpenPeerMessages={(peer) => {
+            setHelperThread(null);
+            openPeerMessages(peer);
+          }}
+          onOpenComputer={computerControls.onOpenComputer}
+          onReleaseComputer={computerControls.onReleaseComputer}
+          onClose={() => setHelperThread(null)}
+        />
+      ) : null}
 
       <KeyboardShortcutsDialog
         open={shortcutsOpen}

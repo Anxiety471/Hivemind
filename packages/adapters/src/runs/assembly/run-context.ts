@@ -304,6 +304,8 @@ export interface RunSource {
   userComputerOwner: string | undefined;
   /** Whether the Space Kanban board is enabled for this run's owner. */
   ticketBoardEnabled?: boolean;
+  /** How deep a background helper this turn is (see helperPlace); 0 outside one. */
+  helperDepth?: number;
 }
 
 export interface RunTools {

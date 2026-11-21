@@ -1,3 +1,4 @@
+import { ph } from "@lingui/core/macro";
 import { useLingui } from "@lingui/react/macro";
 import { ChatMarkdown } from "@rakazo/chat-ui/native";
 import type { MessageBlock } from "@rakazo/contracts";
@@ -18,6 +19,8 @@ import type { UserBubble } from "../../lib/messages/user-bubble";
 import { withUserBubble } from "../../lib/messages/user-bubble";
 import { useResolvedAppearance } from "../../lib/native/native";
 import { useSave } from "../../lib/query/query";
+import { helperThreadTarget } from "../../lib/thread/helper-thread";
+import { useThreadReadOnly } from "../../lib/thread/thread-read-only";
 import { BotMention } from "../messages/bot-mention";
 import { NativeActionButton } from "../native/native-action-button";
 import { NativeSymbol } from "../native/native-symbol";
@@ -44,6 +47,7 @@ type SpecialMessageCardProps = {
   members?: MobileSnapshot["members"];
   onOpenBot: (botId: string, name: string) => void;
   onHelperToggle?: MessageRowActions["helperToggle"];
+  onOpenHelper?: MessageRowActions["openHelper"];
   userBubble?: UserBubble;
   /** A background helper's card: the bot chat and card message that Stop names. */
   stopHelper?: { botId: string; messageId: string };
@@ -53,13 +57,18 @@ function HelperMessageCard({
   special,
   actionProps,
   onHelperToggle,
+  onOpenHelper,
   userBubble,
   stopHelper,
-}: Pick<SpecialMessageCardProps, "actionProps" | "onHelperToggle" | "userBubble" | "stopHelper"> & {
+}: Pick<
+  SpecialMessageCardProps,
+  "actionProps" | "onHelperToggle" | "onOpenHelper" | "userBubble" | "stopHelper"
+> & {
   special: Extract<MessageBlock, { kind: "subagent" }>;
 }) {
   const colorScheme = useResolvedAppearance();
   const tokens = withUserBubble(mobileTokens(), userBubble);
+  const readOnly = useThreadReadOnly();
   const { t } = useLingui();
   const helperHeader = useRef<ViewInstance>(null);
   const helperCard = useRef<ViewInstance>(null);
@@ -83,7 +92,65 @@ function HelperMessageCard({
     closesScreen: true,
   });
   const running = special.status === "running";
+  const helperName = safeDisplayName(special.name, t`subagent`);
   const { stopped, failed, body } = helperCardState(special);
+  const statusLabel = running
+    ? t`Running`
+    : stopped
+      ? t`Stopped`
+      : special.status === "failed"
+        ? t`Failed`
+        : special.status === "completed"
+          ? t`Completed`
+          : special.status;
+  const statusColor = failed
+    ? tokens.destructive
+    : running
+      ? tokens.warning
+      : stopped
+        ? tokens.mutedForeground
+        : tokens.success;
+  // A saved card names its helper's thread; a live card from this turn has none.
+  const openTarget =
+    stopHelper && onOpenHelper ? helperThreadTarget(stopHelper.messageId, special) : undefined;
+  const toggleBody = () => {
+    const toggle = () => {
+      if (subagentOpen) openHelpers.delete(special.agentId);
+      else openHelpers.add(special.agentId);
+      setSubagentOpen(!subagentOpen);
+    };
+    if (!onHelperToggle) {
+      toggle();
+      return;
+    }
+    onHelperToggle(
+      (done) =>
+        helperHeader.current?.measureInWindow((_x, y) => {
+          helperCard.current?.measureInWindow((_cardX, cardY, _width, height) =>
+            done(y, cardY + height),
+          );
+        }),
+      toggle,
+      !subagentOpen,
+    );
+  };
+  const helperChevron = (
+    <Animated.View style={helperChevronStyle}>
+      <NativeSymbol
+        ios="chevron.down"
+        android="chevron-down"
+        size={12}
+        color={tokens.mutedForeground}
+      />
+    </Animated.View>
+  );
+  const cardLabel = [
+    openTarget ? t`Open ${ph({ name: helperName })}` : helperName,
+    statusLabel,
+    special.task,
+  ]
+    .filter(Boolean)
+    .join(", ");
   return (
     <Pressable
       {...actionProps}
@@ -95,92 +162,81 @@ function HelperMessageCard({
         backgroundColor: tokens.card,
       }}
     >
-      <Pressable
-        {...actionProps}
-        onPress={() => {
-          const toggle = () => {
-            if (subagentOpen) openHelpers.delete(special.agentId);
-            else openHelpers.add(special.agentId);
-            setSubagentOpen(!subagentOpen);
-          };
-          if (onHelperToggle) {
-            onHelperToggle(
-              (done) =>
-                helperHeader.current?.measureInWindow((_x, y) => {
-                  helperCard.current?.measureInWindow((_cardX, cardY, _width, height) =>
-                    done(y, cardY + height),
-                  );
-                }),
-              toggle,
-              !subagentOpen,
-            );
-          } else toggle();
-        }}
-        accessibilityRole="button"
-        accessibilityState={{ expanded: subagentOpen }}
-        style={{ paddingHorizontal: 16, paddingTop: 14, paddingBottom: 14, minHeight: 44 }}
-      >
-        <View ref={helperHeader} collapsable={false}>
-          <View
+      <View style={{ flexDirection: "row", alignItems: "flex-start" }}>
+        <Pressable
+          {...actionProps}
+          onPress={() => {
+            if (openTarget && onOpenHelper) onOpenHelper(openTarget);
+            else toggleBody();
+          }}
+          accessibilityRole="button"
+          accessibilityLabel={cardLabel}
+          accessibilityState={openTarget ? undefined : { expanded: subagentOpen }}
+          style={{ flex: 1, paddingStart: 16, paddingTop: 14, paddingBottom: 14, minHeight: 44 }}
+        >
+          <View ref={helperHeader} collapsable={false}>
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 8,
+              }}
+            >
+              <Text
+                style={{
+                  flexShrink: 1,
+                  flexGrow: 1,
+                  color: tokens.foreground,
+                  ...typeScale.cardTitle,
+                }}
+              >
+                {helperName}
+              </Text>
+              <Text style={{ color: statusColor, ...typeScale.caption }}>{statusLabel}</Text>
+            </View>
+            {special.task ? (
+              <Text
+                numberOfLines={subagentOpen ? undefined : 1}
+                style={{ color: tokens.mutedForeground, marginTop: 8, ...typeScale.secondary }}
+              >
+                {special.task}
+              </Text>
+            ) : null}
+          </View>
+        </Pressable>
+        {openTarget ? (
+          <Pressable
+            onPress={toggleBody}
+            accessibilityRole="button"
+            accessibilityLabel={t`Details`}
+            accessibilityState={{ expanded: subagentOpen }}
+            hitSlop={8}
             style={{
-              flexDirection: "row",
+              minWidth: 44,
+              minHeight: 44,
+              paddingHorizontal: 10,
+              paddingTop: 12,
               alignItems: "center",
-              justifyContent: "space-between",
-              gap: 8,
             }}
           >
-            <Text
-              style={{
-                flexShrink: 1,
-                flexGrow: 1,
-                color: tokens.foreground,
-                ...typeScale.cardTitle,
-              }}
-            >
-              {safeDisplayName(special.name, t`subagent`)}
-            </Text>
-            <Text
-              style={{
-                color: failed
-                  ? tokens.destructive
-                  : running
-                    ? tokens.warning
-                    : stopped
-                      ? tokens.mutedForeground
-                      : tokens.success,
-                ...typeScale.caption,
-              }}
-            >
-              {running
-                ? t`Running`
-                : stopped
-                  ? t`Stopped`
-                  : special.status === "failed"
-                    ? t`Failed`
-                    : special.status === "completed"
-                      ? t`Completed`
-                      : special.status}
-            </Text>
-            <Animated.View style={helperChevronStyle}>
-              <NativeSymbol
-                ios="chevron.down"
-                android="chevron-down"
-                size={12}
-                color={tokens.mutedForeground}
-              />
-            </Animated.View>
+            {helperChevron}
+          </Pressable>
+        ) : (
+          <View
+            style={{
+              minWidth: 44,
+              minHeight: 44,
+              paddingHorizontal: 10,
+              paddingTop: 12,
+              alignItems: "center",
+            }}
+          >
+            {helperChevron}
           </View>
-          {special.task ? (
-            <Text
-              numberOfLines={subagentOpen ? undefined : 1}
-              style={{ color: tokens.mutedForeground, marginTop: 8, ...typeScale.secondary }}
-            >
-              {special.task}
-            </Text>
-          ) : null}
-        </View>
-      </Pressable>
-      {running && stopHelper ? (
+        )}
+      </View>
+      {running && stopHelper && !readOnly ? (
         <NativeActionButton
           label={t`Stop`}
           prominence="secondary"

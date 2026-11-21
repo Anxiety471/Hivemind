@@ -22,7 +22,7 @@ test("a completed subagent card folds, opens from its header, and fills its widt
   const card = page.getByTestId("subagent-card");
   await expect(card).toBeVisible({ timeout: 30_000 });
   await expect(card).toContainText("Completed", { timeout: 30_000 });
-  const header = card.getByRole("button");
+  const header = card.locator("button[aria-expanded]");
   const body = card.getByTestId("subagent-body");
   await expect(header).toHaveAttribute("aria-expanded", "false");
   await expect(body).toBeHidden();
@@ -39,6 +39,16 @@ test("a completed subagent card folds, opens from its header, and fills its widt
   await captureScreenshot(page, testInfo, "subagent-card-open");
   await header.click();
   await expect(body).toBeHidden();
+
+  await card.getByRole("button", { name: "Open helper thread" }).click();
+  const helperThread = page.getByTestId("helper-thread-view");
+  await expect(helperThread).toBeVisible();
+  await expect(helperThread).toContainText("Completed");
+  await page.mouse.move(1, 1);
+  await captureScreenshot(page, testInfo, "subagent-thread");
+  await helperThread.getByRole("button", { name: "Close", exact: true }).click();
+  await expect(helperThread).toBeHidden();
+  await expect(card).toBeVisible();
 
   await page.setViewportSize({ width: 375, height: 812 });
   await expect(card).toBeVisible();

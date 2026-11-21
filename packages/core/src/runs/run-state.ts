@@ -108,6 +108,12 @@ export function isTerminal(status: string): boolean {
  */
 export const BACKGROUND_HELPER_TRIGGER = "helper";
 export const HELPER_RESULT_TRIGGER = "helper_result";
+/**
+ * A chat's bot starts helpers (depth 1) and those may start helpers of their own (depth 2);
+ * nothing goes deeper. The cap counts the live helper runs of one chat's whole tree.
+ */
+export const MAX_HELPER_DEPTH = 2;
+export const MAX_HELPERS_PER_CHAT = 8;
 /** The result a stopped background helper's card settles with, beside status "failed". */
 export const STOPPED_HELPER_RESULT = "stopped";
 

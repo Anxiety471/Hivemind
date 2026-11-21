@@ -13,6 +13,7 @@ import { describe, expect, it, vi } from "vitest";
 import { installSecurityEventStore } from "../account/security-events.js";
 import { commitBotUpdate } from "../bots/bot-update.js";
 import type { PrismaClient } from "../database/client.js";
+import { startedHelpersWhere } from "../runs/cancel-runs.js";
 import { endTakeoverWaits } from "../runs/expire-stuck-run.js";
 import { CrossSpaceCommunicationBlockedError } from "../spaces/cross-space-communication.js";
 import { followThreadEvents } from "./event-stream.js";
@@ -5343,10 +5344,7 @@ describe("clearThread", () => {
     expect(tx.run.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
-          OR: [
-            { threadId: "thread-group" },
-            { trigger: "helper", sourceMessage: { threadId: "thread-group" } },
-          ],
+          OR: [{ threadId: "thread-group" }, startedHelpersWhere("thread-group")],
           spaceId: "workspace-1",
         }),
       }),

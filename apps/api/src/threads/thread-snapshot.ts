@@ -1,13 +1,12 @@
 import type { ThreadSnapshot } from "@rakazo/contracts";
 import {
   ACTIVE_RUN_STATUSES,
-  BACKGROUND_HELPER_TRIGGER,
   BACKGROUND_RUN_TRIGGERS,
   projectMessages,
   runFailureError,
 } from "@rakazo/core";
 import type { PrismaClient } from "@rakazo/db";
-import { botRunStatuses, spaceIsShared } from "@rakazo/db";
+import { botRunStatuses, spaceIsShared, startedHelpersWhere } from "@rakazo/db";
 import { resolveComputerWork, toComputerStatus } from "../computers/computer-status.js";
 import { THREAD_MESSAGE_PAGE_SIZE } from "../routes/shared.js";
 import { loadMessagePage } from "./thread-message-pages.js";
@@ -48,11 +47,7 @@ export async function threadSnapshot(
                   {
                     OR: [
                       { threadId: target.threadId },
-                      {
-                        trigger: BACKGROUND_HELPER_TRIGGER,
-                        status: "waiting_input",
-                        sourceMessage: { threadId: target.threadId },
-                      },
+                      { ...startedHelpersWhere(target.threadId), status: "waiting_input" },
                     ],
                   },
                 ],
@@ -162,11 +157,7 @@ export async function threadSnapshot(
               {
                 OR: [
                   { threadId: target.threadId },
-                  {
-                    trigger: BACKGROUND_HELPER_TRIGGER,
-                    status: "waiting_input",
-                    sourceMessage: { threadId: target.threadId },
-                  },
+                  { ...startedHelpersWhere(target.threadId), status: "waiting_input" },
                 ],
               },
             ],

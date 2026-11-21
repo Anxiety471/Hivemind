@@ -39,6 +39,7 @@ import type { UserBubble } from "../../lib/messages/user-bubble";
 import { withUserBubble } from "../../lib/messages/user-bubble";
 import { useResolvedAppearance } from "../../lib/native/native";
 import { PageCard } from "../../lib/pages/page-card";
+import { helperCardMessageId } from "../../lib/thread/helper-thread";
 import { botDisplayName, speakerColorFor } from "../../lib/thread/thread-message-text";
 import { AppConnectCard } from "../cards/AppConnectCard";
 import { AskActions } from "../cards/AskActions";
@@ -165,6 +166,7 @@ function MessageBubbleBody(props: ComponentProps<typeof MessageBubbleContent>) {
   }
   const content = pieces.map((blocks, index) => {
     const first = blocks[0]!;
+    const helperMessageId = first.kind === "subagent" ? helperCardMessageId(message) : undefined;
     if (first.kind === "page")
       return <PageCard key={`page-${index}`} block={first} messageId={message.id} />;
     if (first.kind === "app")
@@ -184,11 +186,12 @@ function MessageBubbleBody(props: ComponentProps<typeof MessageBubbleContent>) {
         members={props.members}
         onOpenBot={props.onOpenBot}
         onHelperToggle={props.onHelperToggle}
+        onOpenHelper={props.onOpenHelper}
         userBubble={props.userBubble}
         // A saved running card is a background helper's; a live one belongs to this turn.
         stopHelper={
-          first.kind === "subagent" && message.botId && !message.id.startsWith("subagent:")
-            ? { botId: message.botId, messageId: message.id }
+          helperMessageId && message.botId
+            ? { botId: message.botId, messageId: helperMessageId }
             : undefined
         }
       />
@@ -232,6 +235,7 @@ const MessageBubbleContent = memo(function MessageBubbleContent({
   userBubble,
 }: {
   onHelperToggle?: MessageRowActions["helperToggle"];
+  onOpenHelper?: MessageRowActions["openHelper"];
   botId: string;
   /** Someone else in a shared space wrote this message: named and set apart. */
   authorName?: string;

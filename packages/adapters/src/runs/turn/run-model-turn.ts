@@ -230,6 +230,7 @@ function modelTurnRequest(
       followUpsOffered: followUpsOffered(strategicBuiltins, ownerStartedRun),
       backgroundHelpersAllowed: backgroundHelpersAllowed({
         trigger: run.trigger,
+        helperDepth: ctx.source.helperDepth,
       }),
       ticketBoardEnabled: ctx.source.ticketBoardEnabled,
       userComputer,

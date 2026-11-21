@@ -34,6 +34,7 @@ import type { Prisma, PrismaClient } from "../database/client.js";
 import { JsonObject, readJsonColumn } from "../database/json-column.js";
 import { THREAD_LOCK_TRANSACTION_OPTIONS } from "../database/transaction-retry.js";
 import { contentEncryptionOf } from "../encryption/content-encryption.js";
+import { startedHelpersWhere } from "../runs/cancel-runs.js";
 import { deleteRunSecretsInTransaction } from "../runs/run-secrets.js";
 import { RUN_TURN_CHECKPOINT_KIND } from "../runs/run-turn-checkpoint.js";
 import { publishSpaceChange } from "../spaces/space-changes.js";
@@ -205,13 +206,7 @@ async function commitAnswerRunInput(
     where: {
       id: input.runId,
       spaceId: input.spaceId,
-      OR: [
-        { threadId: input.threadId },
-        {
-          trigger: BACKGROUND_HELPER_TRIGGER,
-          sourceMessage: { threadId: input.threadId, thread: { spaceId: input.spaceId } },
-        },
-      ],
+      OR: [{ threadId: input.threadId }, startedHelpersWhere(input.threadId)],
       status: "waiting_input",
     },
     select: {
@@ -334,13 +329,7 @@ async function commitAnswerRunInput(
     where: {
       id: input.runId,
       spaceId: input.spaceId,
-      OR: [
-        { threadId: input.threadId },
-        {
-          trigger: BACKGROUND_HELPER_TRIGGER,
-          sourceMessage: { threadId: input.threadId, thread: { spaceId: input.spaceId } },
-        },
-      ],
+      OR: [{ threadId: input.threadId }, startedHelpersWhere(input.threadId)],
       status: "waiting_input",
     },
     data: {

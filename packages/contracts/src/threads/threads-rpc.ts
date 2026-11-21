@@ -70,6 +70,14 @@ export const threadsRpc = {
     stopHelper: oc
       .input(threadTarget.safeExtend({ messageId: Id }))
       .output(z.object({ ok: z.literal(true) })),
+    /**
+     * A background helper's own thread, found from the card that started it: the card sits in
+     * a chat, or in the thread of the helper that started this one. Read-only.
+     */
+    helperGet: oc.input(z.object({ messageId: Id })).output(ThreadSnapshotSchema),
+    helperSubscribe: oc
+      .input(z.object({ threadId: Id, cursor: z.number().int().min(-1) }))
+      .output(eventIterator(ProductEventSchema)),
     followUp: oc
       .input(
         threadTarget.safeExtend({

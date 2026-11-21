@@ -13,6 +13,7 @@ import type { PrismaClient, ThreadEvents } from "@rakazo/db";
 import { countUnreadInboxChats, membersSnoozing } from "@rakazo/db";
 import { getLogger } from "@rakazo/logging";
 import { notificationIdentity } from "../../notifications/notification-identity.js";
+import { helperPlace } from "../../tasks/background-helpers.js";
 import { messageBlocksText } from "../assembly/run-replies.prompt.js";
 import type { ExecutorDeps } from "../executor/executor-deps.js";
 
@@ -84,8 +85,9 @@ export async function notifyRun(
       select: { threadId: true },
     });
     if (!card) return;
-    run = { ...run, threadId: card.threadId };
-    message = { ...message, threadId: card.threadId };
+    const { chatThreadId } = await helperPlace(deps.prisma, run);
+    run = { ...run, threadId: chatThreadId };
+    message = { ...message, threadId: chatThreadId };
   }
   const routineId = message.kind === "failure" ? run.routineId : null;
   const notice = await runNotice(deps.prisma, run, routineId).catch((error) => {

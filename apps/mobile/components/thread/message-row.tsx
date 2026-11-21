@@ -38,6 +38,7 @@ import { messageRowLayout } from "../../lib/messages/message-row-layout";
 import { selectableTextFromMarkdown } from "../../lib/messages/selectable-text";
 import type { UserBubble } from "../../lib/messages/user-bubble";
 import { useMobileTokens, useResolvedAppearance } from "../../lib/native/native";
+import type { HelperThreadTarget } from "../../lib/thread/helper-thread";
 import { ThreadReadOnlyContext } from "../../lib/thread/thread-read-only";
 import { BotAvatar } from "../bots/bot-avatar";
 import type { ImageArtifactPreviewTarget } from "../media/image-artifact-viewer";
@@ -55,6 +56,8 @@ export type MessageRowActions = {
     toggle: () => void,
     opening: boolean,
   ) => void;
+  /** Opens a saved helper card's own thread, read-only. */
+  openHelper: (target: HelperThreadTarget) => void;
   reply: (message: MobileMessage) => void;
   quote: (message: MobileMessage) => void;
   select: (text: string) => void;
@@ -474,6 +477,7 @@ export const MessageRow = memo(function MessageRow({
                 actionProps={actionProps}
                 doubleTapSurface={Boolean(likeMessage)}
                 onHelperToggle={actions.helperToggle}
+                onOpenHelper={actions.openHelper}
                 userBubble={userBubble}
               />
             </ThreadReadOnlyContext.Provider>

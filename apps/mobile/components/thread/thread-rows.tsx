@@ -40,6 +40,7 @@ export function useLatestRowActions(current: MessageRowActions): MessageRowActio
     () => ({
       helperToggle: (measure, toggle, opening) =>
         rowActionsRef.current.helperToggle(measure, toggle, opening),
+      openHelper: (target) => rowActionsRef.current.openHelper(target),
       reply: (message) => rowActionsRef.current.reply(message),
       quote: (message) => rowActionsRef.current.quote(message),
       select: (text) => rowActionsRef.current.select(text),

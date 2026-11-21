@@ -162,12 +162,19 @@ const displayLink = {
   call: async (...args: Parameters<typeof link.call>) => {
     const [path, input, options] = args;
     const result = await link.call(path, input, options);
-    if (path.join("/") === "threads/subscribe") {
+    const procedure = path.join("/");
+    if (procedure === "threads/subscribe" || procedure === "threads/helperSubscribe") {
       return (async function* () {
         for await (const event of result as AsyncIterable<ProductEvent>) {
           yield displayIdentityEvent(event, identityLabels());
         }
       })();
+    }
+    // A helper's snapshot is the same shape as an open chat's, so it projects the same way.
+    if (procedure === "threads/helperGet") {
+      return i18n.locale
+        ? displayIdentityResult(["threads", "get"], result, identityLabels())
+        : result;
     }
     // Bootstrap can be prefetched before the locale catalog is ready. Its consumer projects it.
     return i18n.locale ? displayIdentityResult(path, result, identityLabels()) : result;

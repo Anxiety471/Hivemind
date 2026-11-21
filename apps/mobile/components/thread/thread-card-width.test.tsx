@@ -322,7 +322,7 @@ describe("thread cards", () => {
     });
     if (block.kind === "subagent") {
       expect(styleOf(container.querySelector("button[aria-expanded]"))).toMatchObject({
-        paddingHorizontal: 16,
+        paddingStart: 16,
         paddingTop: 14,
         paddingBottom: 14,
         minHeight: 44,

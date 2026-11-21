@@ -64,9 +64,8 @@ export const FLEET_WRITE_TOOL_NAMES_SET: ReadonlySet<string> = new Set(FLEET_WRI
  */
 const CREATED_RUN_TOOL_NAMES = new Set(["ask_user", "update_bot"]);
 
-/** Delegation stays one level deep; account settings and direct replies remain the parent's. */
+/** Delegation reaches two levels deep (see MAX_HELPER_DEPTH); account settings and direct replies remain the parent's. */
 export const SUBAGENT_HIDDEN_TOOLS: ReadonlySet<string> = new Set([
-  "run_subagent",
   "spawn_bot",
   "message_user",
   "call_user",

@@ -41,8 +41,13 @@ replies also reach members' bots in other spaces only when both bots have it on.
 ## Subagents
 
 For a big task, a bot can split off short-lived helpers that work in parallel and report back. Each
-appears as a card in the chat showing **Running**, **Completed** or **Failed**. Subagents finish with
-the task; they have no chat or memory of their own.
+appears as a card in the chat showing **Running**, **Completed** or **Failed**. Open a card to read
+what that helper is doing in its own thread, live. A helper works on the same computer as its bot,
+in a folder of its own, and has no memory of its own.
+
+A helper can split its task once more: its helpers appear as cards in its thread, and it reports to
+the bot only after they have returned. Nothing goes deeper, and at most 8 helpers of one chat work at
+a time. Stopping a helper stops the helpers it started.
 
 ## Bots that build bots
 

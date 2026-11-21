@@ -423,6 +423,34 @@ it("stops a background helper from its saved running card, never a turn's live o
   });
 });
 
+it("opens a saved helper's thread from its card, never a turn's live one", () => {
+  const onOpenSubagent = vi.fn();
+  const helper = (id: string): ThreadMessage => ({
+    id,
+    threadId: "thread",
+    seq: 1,
+    role: "bot",
+    botId: "bot-1",
+    createdAt: new Date().toISOString(),
+    blocks: [{ kind: "subagent", agentId: id, name: "scout", task: "venues", status: "completed" }],
+  });
+  const openButton = () =>
+    [...container.querySelectorAll("button")].find(
+      (button) => button.getAttribute("aria-label") === "Open helper thread",
+    );
+  renderView("bot", [], { message: helper("subagent:live"), onOpenSubagent });
+  expect(openButton()).toBeUndefined();
+  renderView("bot", [], { message: helper("card-1"), onOpenSubagent });
+  act(() => openButton()?.click());
+  expect(onOpenSubagent).toHaveBeenCalledExactlyOnceWith({
+    messageId: "card-1",
+    name: "scout",
+    task: "venues",
+    status: "completed",
+    stopped: false,
+  });
+});
+
 it("puts its activity panel above the reply as its own block, never inside the bubble", () => {
   renderView(
     "bot",

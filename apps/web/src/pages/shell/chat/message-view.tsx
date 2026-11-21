@@ -28,6 +28,8 @@ import { McpAppCard } from "../../../components/messages/McpAppCard";
 import { SubagentCard } from "../../../components/messages/SubagentCard";
 import { PageBlockCard } from "../../../components/pages/PageBlockCard";
 import { SkillDraftCard } from "../../../components/teach/SkillDraftCard";
+import type { HelperThreadTarget } from "../../../lib/chat/helper-thread";
+import { helperThreadTarget, isSavedHelperCard } from "../../../lib/chat/helper-thread";
 import {
   activityBlocks,
   isToolOnlyNarration,
@@ -65,6 +67,8 @@ export const MessageView = memo(function MessageView({
   onAnswer,
   onOpenBot,
   onOpenPeerMessages,
+  onOpenSubagent,
+  readOnly = false,
   peerExchange,
   speakerName,
   memberName,
@@ -110,6 +114,10 @@ export const MessageView = memo(function MessageView({
   ) => Promise<void>;
   onOpenBot: (botId: string) => void;
   onOpenPeerMessages: (peer: { peerBotId: string; peerBotName: string }) => void;
+  /** Opens a saved helper's own read-only thread from its card. */
+  onOpenSubagent?: (target: HelperThreadTarget) => void;
+  /** A helper's transcript: no reply, react, speak or answer actions of its own. */
+  readOnly?: boolean;
   /** The adjacent receipts represented by this peer line. */
   peerExchange?: PeerExchange;
   speakerName?: string;
@@ -254,16 +262,17 @@ export const MessageView = memo(function MessageView({
   const firstActivityIndex = blocks.findIndex(
     (block) => block.kind === "thinking" || block.kind === "steps",
   );
-  const hoverActions = peerReceipt ? null : (
-    <MessageHoverActions
-      message={message}
-      side={message.role === "user" ? "start" : "end"}
-      onReply={onReply}
-      onMarkUnread={onMarkUnread}
-      markedUnread={markedUnread}
-      onReact={onReact}
-    />
-  );
+  const hoverActions =
+    readOnly || peerReceipt ? null : (
+      <MessageHoverActions
+        message={message}
+        side={message.role === "user" ? "start" : "end"}
+        onReply={onReply}
+        onMarkUnread={onMarkUnread}
+        markedUnread={markedUnread}
+        onReact={onReact}
+      />
+    );
   if (isNarration) {
     if (visibleNarrationBlocks.length === 0) return null;
     if (isToolOnlyNarration(message.blocks, showToolActivity)) {
@@ -447,13 +456,25 @@ export const MessageView = memo(function MessageView({
             );
           }
           if (block.kind === "subagent") {
-            const { botId } = message;
             // A saved running card is a background helper's; a live one belongs to this turn.
-            const onStop =
-              botId && !message.id.startsWith("subagent:")
-                ? () => rpc.threads.stopHelper({ botId, messageId: message.id })
-                : undefined;
-            return <SubagentCard key={i} block={block} onStop={onStop} />;
+            const saved = isSavedHelperCard(message);
+            const botId = message.botId;
+            return (
+              <SubagentCard
+                key={i}
+                block={block}
+                onStop={
+                  saved && botId && !readOnly
+                    ? () => rpc.threads.stopHelper({ botId, messageId: message.id })
+                    : undefined
+                }
+                onOpen={
+                  saved && onOpenSubagent
+                    ? () => onOpenSubagent(helperThreadTarget(message, block))
+                    : undefined
+                }
+              />
+            );
           }
           if (block.kind === "child_bot") {
             return (
@@ -646,8 +667,8 @@ export const MessageView = memo(function MessageView({
                 <AskCard
                   block={block}
                   answerIsSeparate={separateAnswers?.has(block)}
-                  canAnswer={canAnswer}
-                  canDismiss={canDismiss}
+                  canAnswer={readOnly ? false : canAnswer}
+                  canDismiss={readOnly ? false : canDismiss}
                   onAnswer={(text, fields, remember) =>
                     onAnswer(message, text, fields, undefined, remember)
                   }

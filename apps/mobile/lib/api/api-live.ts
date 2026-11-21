@@ -65,6 +65,22 @@ export async function subscribeThread(
     () => mobileLogoAvatarActivity.resetSource(activityFeed.source),
   );
 }
+/** A background helper's own thread, read-only, found from its card's snapshot. */
+export async function subscribeHelperThread(
+  threadId: string,
+  cursor: number,
+  onEvent: (event: ThreadEvent) => void,
+  signal: AbortSignal,
+) {
+  const context = await captureApiRequestContext();
+  return subscribeRpcEvents(
+    "threads/helperSubscribe",
+    { threadId, cursor },
+    (event) => onEvent(displayIdentityEvent(event, identityLabels())),
+    signal,
+    context,
+  );
+}
 export async function subscribeIncomingCallEvents(
   onCalls: (calls: IncomingBotCall[]) => void,
   signal: AbortSignal,

@@ -43,6 +43,7 @@ import {
   loadRunCodeRedactions,
   loadRunLoginRedactions,
 } from "../../secrets/bot-secrets.js";
+import { helperPlace } from "../../tasks/background-helpers.js";
 import { listAgentSkillRecords } from "../../tools/skill-tools.js";
 import type { RunExecutorServices, RunHold } from "../lifecycle/run-attempt.js";
 import { PausedTurnModelUnlistedError } from "../lifecycle/run-lifecycle.js";
@@ -319,6 +320,7 @@ export async function loadRunRecords(
           modelChoice.modelId,
         )
       : null;
+  const { depth: helperDepth } = await helperPlace(deps.prisma, run);
   return {
     historyReach,
     origin,
@@ -342,6 +344,7 @@ export async function loadRunRecords(
     nonOwnerChatRun,
     replaysToolHistory,
     ticketBoardEnabled,
+    helperDepth,
     historySearchBeforeSeq,
     agentEnvironmentInstruction,
     modelChoice,

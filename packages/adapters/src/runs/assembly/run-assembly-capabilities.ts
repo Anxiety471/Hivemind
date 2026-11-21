@@ -640,6 +640,7 @@ export async function selectRunTools(
     task,
     conversationThread,
     ticketBoardEnabled,
+    helperDepth,
     unknownChannelSourceId,
   } = parts.records;
   const { connectedPlugins, semanticMemory } = parts.connected;
@@ -707,7 +708,9 @@ export async function selectRunTools(
       emailClaimable: Boolean(deps.inboundEmailDomain) && !emailName && run.userId === bot.userId,
       emailSend: Boolean(deps.email),
     }).filter(
-      (tool) => tool.name !== "run_subagent" || backgroundHelpersAllowed({ trigger: run.trigger }),
+      (tool) =>
+        tool.name !== "run_subagent" ||
+        backgroundHelpersAllowed({ trigger: run.trigger, helperDepth }),
     ),
     // Cross-owner agent connections only exist for chat-linked bots. The chat link is its
     // creator's, and a connected agent's messages run as them, so only their runs may

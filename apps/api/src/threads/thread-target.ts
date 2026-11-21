@@ -14,7 +14,6 @@ import {
 } from "@rakazo/contracts";
 import {
   ACTIVE_RUN_STATUSES,
-  BACKGROUND_HELPER_TRIGGER,
   callIdFromClientNonce,
   isConversationalRun,
   isQuestionAskBlock,
@@ -43,6 +42,7 @@ import {
   runHoldsChat,
   SpaceDeletionInProgressError,
   spaceTakesWork,
+  startedHelpersWhere,
   THREAD_LOCK_TRANSACTION_OPTIONS,
   touchGroupUpdatedAt,
   withTransactionRetry,
@@ -923,10 +923,7 @@ export async function sendThreadMessage(
               where: {
                 OR: [
                   { threadId: target.threadId, botId: { in: memberBotIds } },
-                  {
-                    trigger: BACKGROUND_HELPER_TRIGGER,
-                    sourceMessage: { threadId: target.threadId },
-                  },
+                  startedHelpersWhere(target.threadId),
                 ],
                 status: { in: [...ACTIVE_RUN_STATUSES] },
               },

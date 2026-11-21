@@ -4,6 +4,7 @@ import { callClientNonce } from "@rakazo/core";
 import type * as MessageQuoteModule from "@rakazo/core/message-quote";
 import { flush } from "@rakazo/core/test-async";
 import type { PrismaClient } from "@rakazo/db";
+import { startedHelpersWhere } from "@rakazo/db";
 import { describe, expect, it, vi } from "vitest";
 import { reactToThreadMessage } from "./thread-reactions.js";
 import { threadSnapshot } from "./thread-snapshot.js";
@@ -1180,11 +1181,7 @@ describe("threadSnapshot", () => {
             {
               OR: [
                 { threadId: "thread-1" },
-                {
-                  trigger: "helper",
-                  status: "waiting_input",
-                  sourceMessage: { threadId: "thread-1" },
-                },
+                { ...startedHelpersWhere("thread-1"), status: "waiting_input" },
               ],
             },
           ],

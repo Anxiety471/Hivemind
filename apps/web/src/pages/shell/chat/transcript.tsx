@@ -40,6 +40,7 @@ import {
 } from "react";
 import { ActiveBotGlyph } from "../../../components/ai/CollaborationMarker";
 import { VoiceChatCard } from "../../../components/call/VoiceChatCard";
+import type { HelperThreadTarget } from "../../../lib/chat/helper-thread";
 import {
   isDetachedRange,
   lastSelectedText,
@@ -102,6 +103,7 @@ export const Transcript = memo(function Transcript({
   onReact,
   onJumpToMessage,
   onOpenPeerMessages,
+  onOpenSubagent,
   memberName,
   peerBot,
   onRefresh,
@@ -155,6 +157,8 @@ export const Transcript = memo(function Transcript({
   onReact: (message: ThreadMessage, reaction: MessageReaction) => Promise<void>;
   onJumpToMessage: (messageId: string) => void;
   onOpenPeerMessages: (peer: { peerBotId: string; peerBotName: string }) => void;
+  /** Opens a saved helper's read-only thread from its card. */
+  onOpenSubagent?: (target: HelperThreadTarget) => void;
   memberName?: (botId: string | undefined) => string | undefined;
   peerBot: (
     botId: string,
@@ -726,6 +730,7 @@ export const Transcript = memo(function Transcript({
                       canDismiss={dismissableAskIds.has(message.id)}
                       onOpenBot={onOpenBot}
                       onOpenPeerMessages={onOpenPeerMessages}
+                      onOpenSubagent={onOpenSubagent}
                       peerExchange={exchanges.lines.get(message.id)}
                       onAnswer={onAnswer}
                       speakerName={
