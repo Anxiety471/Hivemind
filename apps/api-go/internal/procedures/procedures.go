@@ -577,7 +577,7 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 			Name:     "skills.list",
 			ReadOnly: true,
 			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
-				return skills.List(ctx, database, actor, input)
+				return skills.List(ctx, database, deployment, actor, input)
 			},
 		},
 		{

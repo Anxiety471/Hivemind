@@ -112,7 +112,7 @@ var (
 	errNotEditable = orpc.BadRequest("Skill is not editable yet")
 	// errOutputInvalid marks a stored row the router's TaughtSkillSchema parse refuses.
 	errOutputInvalid = errors.New("skill output validation failed")
-	errNotFinished = orpc.BadRequest("Finish recording before saving")
+	errNotFinished   = orpc.BadRequest("Finish recording before saving")
 	// emptyRecording is emptyRecording(): a non-teacher's edit clears the live recording.
 	emptyRecording = map[string]any{"events": []any{}, "snapshots": []any{}}
 )
@@ -911,10 +911,11 @@ func sliceUTF16(text string, start, end int) string {
 
 // List implements skills.list (apps/api/src/routes/memory.ts:217-220 over
 // apps/api/src/bots/taught-skills.ts:321-327): the Space's taught skills for a bot, newest edit
-// first. The bot is not looked up, so an id the caller cannot see simply lists nothing; another
-// person's recording is replaced by an empty one. A stored row the output schema refuses (an odd
-// status, or a recording a value breaks) answers the router's Output validation failed.
-func List(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input) (any, *orpc.Error) {
+// first. The route resolves the bot first with repos.getBot, so an unknown, archived or
+// other-Space bot answers 404; another person's recording is replaced by an empty one. A stored
+// row the output schema refuses (an odd status, or a recording a value breaks) answers the
+// router's Output validation failed.
+func List(ctx context.Context, database *db.DB, deployment shared.Deployment, actor db.Actor, raw orpc.Input) (any, *orpc.Error) {
 	object, issues := validate.Decode(raw.Raw, nil)
 	if issues != nil {
 		return nil, validate.Fail(issues)
@@ -925,6 +926,9 @@ func List(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input) 
 	}
 	list := []Skill{}
 	err := database.Tenant(ctx, actor, func(tx pgx.Tx) error {
+		if err := requireListBot(ctx, tx, deployment.Content, actor, botID); err != nil {
+			return err
+		}
 		rows, err := tx.Query(ctx, `SELECT `+columns+` FROM taught_skills
 			WHERE "spaceId" = $1 AND "botId" = $2 ORDER BY "updatedAt" DESC`, actor.SpaceID, botID)
 		if err != nil {
@@ -951,4 +955,39 @@ func List(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input) 
 		return nil, shared.Failure(err)
 	}
 	return list, nil
+}
+
+// requireListBot is repos.getBot (packages/db/src/bots/bot-repository.ts:415-427): a bot of the
+// actor's Space that is not archived, or the isolation error. Its `include: {thread: true}` also
+// decrypts the bot thread's historyCompactionSummary through the Prisma extension; the value is
+// discarded, but an unreadable one fails the request as TypeScript's does.
+func requireListBot(ctx context.Context, tx pgx.Tx, ring *contentcrypto.KeyRing, actor db.Actor, botID string) error {
+	var found string
+	err := tx.QueryRow(ctx, `SELECT id FROM bots WHERE id = $1 AND "spaceId" = $2 AND "archivedAt" IS NULL`,
+		botID, actor.SpaceID).Scan(&found)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return shared.NotFound
+	}
+	if err != nil {
+		return err
+	}
+	var threadID, spaceID, userID string
+	var summary *string
+	err = tx.QueryRow(ctx, `SELECT id, "spaceId", "userId", "historyCompactionSummary" FROM threads WHERE "botId" = $1`,
+		botID).Scan(&threadID, &spaceID, &userID, &summary)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if summary == nil {
+		return nil
+	}
+	if ring == nil {
+		return errors.New("content encryption is not configured")
+	}
+	return ring.OpenRows(ctx, "Thread", []map[string]any{{
+		"id": threadID, "spaceId": spaceID, "userId": userID, "historyCompactionSummary": *summary,
+	}})
 }

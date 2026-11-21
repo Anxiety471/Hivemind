@@ -51,11 +51,15 @@ export function laneHCases(system: System): Case[] {
   };
   const seedSkills = (options: {
     none?: boolean; space2?: boolean; otherOwner?: string; status?: string; recording?: unknown;
-    playbook?: unknown; second?: boolean;
+    playbook?: unknown; second?: boolean; archived?: boolean; otherSpace?: boolean;
   } = {}) => async (seeded: Seeded) => {
     const user = seeded.userId;
     await system.bot.create({
-      data: { id: `${user}-skbot`, spaceId: seeded.spaces[0], userId: user, name: "Skills bot", color: "blue", updatedAt: OLD },
+      data: {
+        id: `${user}-skbot`, spaceId: seeded.spaces[options.otherSpace ? 1 : 0], userId: user,
+        name: "Skills bot", color: "blue", updatedAt: OLD,
+        ...(options.archived ? { archivedAt: OLD } : {}),
+      },
     });
     await system.bot.create({
       data: { id: `${user}-skbot2`, spaceId: seeded.spaces[0], userId: user, name: "Other bot", color: "blue", updatedAt: OLD },
@@ -74,7 +78,7 @@ export function laneHCases(system: System): Case[] {
           createdAt: at(updated), updatedAt: at(updated), ...extra,
         },
       });
-    await skill("sk1", `${user}-skbot`, seeded.spaces[0], 1);
+    await skill("sk1", `${user}-skbot`, seeded.spaces[options.otherSpace ? 1 : 0], 1);
     if (options.second !== false) await skill("sk2", `${user}-skbot`, seeded.spaces[0], 2);
     if (options.space2) await skill("skx", `${user}-skbot`, seeded.spaces[1], 3);
     await skill("skotherbot", `${user}-skbot2`, seeded.spaces[0], 4);
@@ -377,6 +381,9 @@ export function laneHCases(system: System): Case[] {
     skList("odd-status-fails-the-output-check", { botId: "__s-skbot__" }, seedSkills({ status: "weird" })),
     skList("bad-recording-fails-the-output-check", { botId: "__s-skbot__" }, seedSkills({ recording: { events: [{ kind: "key" }] } })),
     skList("unknown-recording-kind-fails-the-output-check", { botId: "__s-skbot__" }, seedSkills({ recording: { events: [{ at: "2021-01-01T00:00:00.000Z", kind: "tap" }] } })),
+    skList("unknown-bot", { botId: "no-such-bot" }),
+    skList("archived-bot", { botId: "__s-skbot__" }, seedSkills({ archived: true })),
+    skList("other-space-bot", { botId: "__s-skbot__" }, seedSkills({ otherSpace: true })),
     skList("missing-bot", {}),
     skList("null-bot", { botId: null }),
     skList("empty-bot", { botId: "" }),
@@ -428,6 +435,8 @@ export function laneHCases(system: System): Case[] {
     auditCase("from-filter", { from: "2021-01-01T00:00:02.000Z" }),
     auditCase("to-filter", { to: "2021-01-01T00:00:02.000Z" }),
     auditCase("from-and-to", { from: "2021-01-01T00:00:01.000Z", to: "2021-01-01T00:00:03.000Z" }),
+    auditCase("offset-from", { from: "2021-01-01T05:30:02.000+05:30" }),
+    auditCase("negative-offset-to", { to: "2020-12-31T19:00:03.000-05:00" }),
     auditCase("empty-filter-values-are-ignored", { spaceId: "", actorId: "", action: "" }),
     auditCase("limit-two-pages", { limit: 2 }, undefined, { paginate: true }),
     auditCase("limit-one-walk", { limit: 1 }, undefined, { paginate: true }),

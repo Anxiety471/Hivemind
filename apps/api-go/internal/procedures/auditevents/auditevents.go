@@ -179,7 +179,8 @@ func List(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input) 
 			if err != nil {
 				return err
 			}
-			args = append(args, at)
+			// new Date(text) is an absolute instant; TIMESTAMP(3) has no zone, so bind it in UTC.
+			args = append(args, at.UTC())
 			where += " AND \"createdAt\" >= $" + itoa(len(args))
 		}
 		if input.to != nil {
@@ -187,7 +188,7 @@ func List(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input) 
 			if err != nil {
 				return err
 			}
-			args = append(args, at)
+			args = append(args, at.UTC())
 			where += " AND \"createdAt\" < $" + itoa(len(args))
 		}
 		if hasAfter {
