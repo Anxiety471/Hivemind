@@ -15,6 +15,7 @@ import { lateRoutineRunInstruction } from "../../routines/routine-lateness.promp
 import { routineRunInstruction } from "../../routines/routine-run.prompt.js";
 import { formatCompactedSummary } from "../../runtime/context/history-compaction.prompt.js";
 import { inferScript } from "../../runtime/scripted-runtime.js";
+import { BOARD_SKILL_NAME } from "../../tools/builtin-skills.prompt.js";
 import { partitionTools } from "../../tools/builtin-tool-bridge.js";
 import type { FleetRun } from "../../tools/fleet-tools.js";
 import { builtinAgentSkillRecords } from "../../tools/skill-tools.js";
@@ -293,7 +294,11 @@ export async function buildTurnPrompt(
   const { ctx } = parts;
   const pluginLine = connectedPluginsInstruction(connectedPlugins);
   const runSavedSkills = nonOwnerChatRun ? [] : savedSkills;
-  const runAgentSkills = nonOwnerChatRun ? builtinAgentSkillRecords() : agentSkills;
+  // The Tasks skill is only useful where the run can reach the board's tools.
+  const boardOffered = tools.some((tool) => tool.name === "ticket_update");
+  const runAgentSkills = (nonOwnerChatRun ? builtinAgentSkillRecords() : agentSkills).filter(
+    (skill) => boardOffered || skill.source !== "builtin" || skill.name !== BOARD_SKILL_NAME,
+  );
   const taughtSkillIndex = runSavedSkills.slice(0, 20);
   const taughtSkillsLine = taughtSkillsInstruction(
     taughtSkillIndex.map((skill) => ({

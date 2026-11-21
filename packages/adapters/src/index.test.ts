@@ -275,6 +275,7 @@ describe("builtin tools", () => {
       "ticket_create",
       "ticket_update",
       "ticket_comment",
+      "task_sync",
     ];
     const enabled = selectBuiltinToolsForRun({ ...options, ticketBoardEnabled: true }).map(
       (tool) => tool.name,
@@ -282,15 +283,18 @@ describe("builtin tools", () => {
     const disabled = selectBuiltinToolsForRun({ ...options, ticketBoardEnabled: false }).map(
       (tool) => tool.name,
     );
+    const withoutBoard = enabled.filter((name) => !ticketNames.includes(name));
     expect(enabled.filter((name) => ticketNames.includes(name))).toEqual(ticketNames);
-    expect(disabled).toEqual(enabled.filter((name) => !ticketNames.includes(name)));
+    // The scratchpad stands in for the board, so it is offered only while the board is off.
+    expect(disabled.filter((name) => !name.startsWith("scratchpad_"))).toEqual(withoutBoard);
+    expect(disabled.filter((name) => name.startsWith("scratchpad_")).length).toBeGreaterThan(0);
     expect(
       selectBuiltinToolsForRun({
         ...options,
         ticketBoardEnabled: true,
         disabledBuiltinTools: ticketNames,
       }).map((tool) => tool.name),
-    ).toEqual(disabled);
+    ).toEqual(withoutBoard);
     const purchaseNames = ["request_purchase", "purchase_status", "paid_request"];
     expect(enabled.filter((name) => purchaseNames.includes(name))).toEqual([]);
     expect(

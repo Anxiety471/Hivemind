@@ -37,6 +37,9 @@ const RAKAZO_DOCS: ReadonlyArray<readonly [topics: string, url: string]> = [
 /** Fixed URLs, so fetching one can't carry anything out of a run. */
 export const RAKAZO_DOCS_URLS = RAKAZO_DOCS.map(([, url]) => url);
 
+/** Needs the ticket tools, so a run offers it only where the board is enabled. */
+export const BOARD_SKILL_NAME = "Tasks";
+
 /**
  * Built-in Agent Skills (SKILL.md recipes) available to every user.
  * Only generic how-tos; no account-specific content.
@@ -68,7 +71,7 @@ ${RAKAZO_DOCS.map(([topics, url]) => `- ${topics}: ${url}`).join("\n")}
 Rakazo is open source; its code is at github.com/elie222/rakazo.`,
   },
   {
-    name: "Tasks",
+    name: BOARD_SKILL_NAME,
     description: "Track multi-step work and follow-ups on the Kanban board",
     body: `Keep the Space Kanban board accurate as the single source of truth for real work.
 

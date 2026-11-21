@@ -55,8 +55,11 @@ export const CORE_BUILTIN_TOOL_NAMES: ReadonlySet<string> = new Set([
   "send_email",
   "end_call",
   "task_sync",
+  "board_tickets",
+  "ticket_get",
   "ticket_create",
   "ticket_update",
+  "ticket_comment",
 ]);
 
 const FLEET_NAMES: ReadonlySet<string> = new Set(FLEET_TOOL_NAMES);
