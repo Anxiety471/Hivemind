@@ -188,8 +188,9 @@ func parseGet(raw orpc.Input) (getInput, *orpc.Error) {
 	return out, nil
 }
 
-// Get implements tickets.get (apps/api/src/routes/boards.ts:157-166): one ticket by id or by ref. Like
-// the list, the answer says whether it mentions the caller and whom a blocked one waits on.
+// Get implements tickets.get (apps/api/src/routes/boards.ts:157-166): one ticket by id or by ref.
+// TypeScript answers toTicketDto alone; unlike the list it adds neither mentionsMe nor
+// waitingOnBotIds, so neither is set here.
 func Get(ctx context.Context, database *db.DB, deployment shared.Deployment, actor db.Actor, raw orpc.Input) (any, *orpc.Error) {
 	if err := Gate(ctx, database, deployment, actor); err != nil {
 		return nil, shared.Failure(err)
@@ -228,24 +229,6 @@ func Get(ctx context.Context, database *db.DB, deployment shared.Deployment, act
 			return errInvalidRow
 		}
 		ticket = mapped
-		var latest *latestTicketComment
-		var authorUserID *string
-		var body string
-		err = tx.QueryRow(ctx, `SELECT "authorUserId", body FROM ticket_comments
-			WHERE "spaceId" = $1 AND "ticketId" = $2 ORDER BY "createdAt" DESC, id DESC LIMIT 1`,
-			actor.SpaceID, ticket.ID).Scan(&authorUserID, &body)
-		if err == nil {
-			latest = &latestTicketComment{AuthorUserID: authorUserID, Body: body}
-		} else if !errors.Is(err, pgx.ErrNoRows) {
-			return err
-		}
-		if ticket.Status == "blocked" {
-			bots, err := LoadSpaceBots(ctx, tx, actor.SpaceID)
-			if err != nil {
-				return err
-			}
-			ticket.WaitingOnBotIDs = waitingOnBotIDs(ticket, latest, bots)
-		}
 		return nil
 	})
 	if errors.Is(err, errInvalidRow) {

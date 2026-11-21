@@ -370,9 +370,14 @@ export function laneHCases(system: System): Case[] {
   const seedLabOnly = async (seeded: Seeded) => {
     await withLab(seeded);
   };
-  const seedTicketDto = (options: { status?: string; title?: string } = {}) => async (seeded: Seeded) => {
+  const seedTicketDto = (options: { status?: string; title?: string; bot?: boolean } = {}) => async (seeded: Seeded) => {
     await withLab(seeded);
     const spaceId = seeded.spaces[0];
+    if (options.bot) {
+      await system.bot.create({
+        data: { id: `${seeded.userId}-tkbot`, spaceId, userId: seeded.userId, name: "Potato · Dev Ops", color: "blue", updatedAt: OLD },
+      });
+    }
     await system.board.create({
       data: {
         id: `${seeded.userId}-tkbd`, spaceId, name: "Board", ticketPrefix: "RAK", nextNumber: 2,
@@ -592,6 +597,9 @@ export function laneHCases(system: System): Case[] {
     ticketDto("tickets.list", "tkd-list", "mention-looking-title", {}, seedTicketDto({ status: "review", title: "Blocked on @user for approval" })),
     ticketDto("tickets.get", "tkd-get", "mention-looking-title", { id: "__s-tkt__" }, seedTicketDto({ status: "review", title: "Blocked on @user for approval" })),
     ticketDto("tickets.get", "tkd-get", "missing", { id: "nope" }, seedTicketDto()),
+    // tickets.get never adds waitingOnBotIds (only tickets.list does), so a blocked ticket that
+    // names a Space bot must answer toTicketDto alone.
+    ticketDto("tickets.get", "tkd-get", "blocked-ticket-waits-on-nobody", { id: "__s-tkt__" }, seedTicketDto({ status: "blocked", title: "Blocked on @Potato", bot: true })),
     ticketDto("tickets.create", "tkd-create", "mention-looking-description", { title: "New task", description: "blocked on @user" }, seedLabOnly, { ignoreSignals: true }),
     ticketDto("tickets.update", "tkd-update", "mention-looking-title", { id: "__s-tkt__", title: "blocked on @user", status: "review" }, seedTicketDto()),
     ticketDto("tickets.move", "tkd-move", "mention-looking-title", { id: "__s-tkt__", status: "review" }, seedTicketDto({ status: "blocked", title: "Blocked on @user" })),
