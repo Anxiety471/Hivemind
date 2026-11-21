@@ -844,7 +844,9 @@ export function laneICases(system: System): Case[] {
             key: "b2", created: 2,
             messages: [{
               seq: 0,
-              blocks: [{ kind: "call_request", callId: 7, status: "ringing", reason: "r", opening: "o", expiresAt: new Date().toISOString() }],
+              // Must still be ringing at call time, or the invalid callId never reaches the
+              // output parse and the case proves nothing.
+              blocks: [{ kind: "call_request", callId: 7, status: "ringing", reason: "r", opening: "o", expiresAt: new Date(Date.now() + 60_000).toISOString() }],
               createdAt: new Date(),
               clientNonce: "call:call-2:request",
             }],
