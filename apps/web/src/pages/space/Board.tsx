@@ -149,7 +149,7 @@ function BoardTicketModal({
         if (!open) onClose();
       }}
     >
-      <DialogContent className="max-h-[90vh] overflow-y-auto overflow-x-hidden sm:max-w-4xl">
+      <DialogContent className="max-h-[90vh] overflow-y-auto overflow-x-hidden sm:max-w-5xl">
         {ticket ? (
           <TicketDetailView
             ticket={ticket}

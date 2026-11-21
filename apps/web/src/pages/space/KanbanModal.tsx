@@ -68,9 +68,7 @@ export function KanbanModal({
     >
       <DialogContent
         data-testid="kanban-modal"
-        className={`max-h-[85vh] overflow-y-auto overflow-x-hidden ${
-          view === "board" ? "sm:max-w-5xl" : "sm:max-w-4xl"
-        }`}
+        className="max-h-[85vh] overflow-y-auto overflow-x-hidden sm:max-w-5xl"
       >
         {view === "board" ? (
           <KanbanBoardView

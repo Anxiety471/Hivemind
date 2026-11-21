@@ -260,7 +260,7 @@ export function TicketDetailView({
         </span>
       </div>
 
-      <div className="grid min-w-0 grid-cols-1 items-start gap-4 md:grid-cols-[minmax(0,1.1fr)_minmax(280px,0.9fr)]">
+      <div className="grid min-w-0 grid-cols-1 items-start gap-4 md:grid-cols-2">
         <div className="flex min-w-0 flex-col gap-3">
           {pendingDecision ? (
             <section
@@ -404,6 +404,7 @@ export function TicketDetailView({
             <Textarea
               aria-label={t`Comment`}
               placeholder={t`Add a comment…`}
+              rows={2}
               value={body}
               onChange={(event) => setBody(event.target.value)}
               maxLength={TICKET_COMMENT_MAX_LENGTH}
@@ -416,17 +417,17 @@ export function TicketDetailView({
             </div>
           </form>
 
-          <div data-testid="ticket-comments" className="flex min-w-0 flex-col">
+          <div data-testid="ticket-comments" className="min-w-0">
             {newestComments.length > 0 ? (
               <div
                 data-testid="kanban-ticket-comments"
-                className="flex max-h-[48vh] min-w-0 flex-col gap-2 overflow-y-auto pe-0.5"
+                className="max-h-[58vh] min-w-0 space-y-2.5 overflow-y-auto pe-1"
               >
                 {newestComments.map((row) => (
                   <div
                     key={row.id}
                     data-testid={`kanban-comment-${row.id}`}
-                    className="min-w-0 overflow-hidden rounded-lg border border-border/50 bg-card/60 px-3 py-2.5 text-body"
+                    className="min-w-0 rounded-lg border border-border/50 bg-card/60 px-3 py-2.5 text-body"
                   >
                     <div className="mb-1 flex items-center justify-between gap-2 text-label text-muted-foreground">
                       {inRouter &&
@@ -457,7 +458,7 @@ export function TicketDetailView({
                         </Button>
                       </div>
                     </div>
-                    <div className="min-w-0 overflow-x-auto [&_pre]:max-w-full [&_pre]:overflow-x-auto">
+                    <div className="min-w-0 overflow-x-auto text-body-sm leading-relaxed text-foreground [&_pre]:max-w-full [&_pre]:overflow-x-auto">
                       <ChatMarkdown>{row.body}</ChatMarkdown>
                     </div>
                   </div>
