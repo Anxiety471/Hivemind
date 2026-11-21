@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -176,6 +177,7 @@ type Ticket struct {
 	UpdatedAt       string   `json:"updatedAt"`
 	CompletedAt     *string  `json:"completedAt"`
 	MentionsMe      bool     `json:"mentionsMe"`
+	WaitingOnBotIDs []string `json:"waitingOnBotIds,omitempty"`
 }
 
 // TicketComment is TicketCommentSchema (packages/contracts/src/board.ts:75-85).
@@ -667,6 +669,28 @@ func ticketMentionsUser(t Ticket, latestComment *latestTicketComment, userID str
 	return false
 }
 
+// waitingOnBotIDs is the bots a blocked ticket waits on: those @mentioned (or named after
+// "blocked/waiting on") in its title, description or latest comment, leaving out its own workers.
+func waitingOnBotIDs(t Ticket, latestComment *latestTicketComment, bots []SpaceBot) []string {
+	if t.Status != "blocked" {
+		return nil
+	}
+	text := t.Title
+	if t.Description != nil {
+		text += "\n" + *t.Description
+	}
+	if latestComment != nil {
+		text += "\n" + latestComment.Body
+	}
+	var waiting []string
+	for _, id := range ExtractMentionedBotIDs(text, bots, "") {
+		if !slices.Contains(t.WorkerBotIDs, id) {
+			waiting = append(waiting, id)
+		}
+	}
+	return waiting
+}
+
 // resolveSpaceBoard is resolveSpaceBoard (apps/api/src/routes/boards.ts:19-29): ensures the Space's
 // default board and checks an optional explicit boardId against the Space.
 func resolveSpaceBoard(ctx context.Context, database *db.DB, actor db.Actor, boardID *string) (Board, error) {
@@ -898,13 +922,16 @@ func List(ctx context.Context, database *db.DB, deployment shared.Deployment, ac
 				}
 				cRows.Close()
 			}
+			var bots []SpaceBot
+			if slices.ContainsFunc(tickets, func(t Ticket) bool { return t.Status == "blocked" }) {
+				if bots, err = LoadSpaceBots(ctx, tx, actor.SpaceID); err != nil {
+					return err
+				}
+			}
 			for i := range tickets {
-				tickets[i].MentionsMe = ticketMentionsUser(
-					tickets[i],
-					latestByTicket[tickets[i].ID],
-					actor.UserID,
-					userNames,
-				)
+				latest := latestByTicket[tickets[i].ID]
+				tickets[i].MentionsMe = ticketMentionsUser(tickets[i], latest, actor.UserID, userNames)
+				tickets[i].WaitingOnBotIDs = waitingOnBotIDs(tickets[i], latest, bots)
 			}
 		}
 		return nil

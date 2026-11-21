@@ -19,6 +19,7 @@ const activeRun = vi.hoisted(() => ({
 const modalProps = vi.hoisted(() => ({
   last: null as { open: boolean; target: unknown; botId?: string } | null,
 }));
+const moveTicket = vi.hoisted(() => vi.fn(async (_input: { id: string; status: string }) => {}));
 
 vi.mock("@lingui/react/macro", () => ({
   useLingui: () => ({
@@ -34,6 +35,18 @@ vi.mock("../../../lib/locale/relative-time", () => ({ formatRelativeTime: () => 
 vi.mock("../../space/use-board-stream", () => ({
   useBotTickets: () => botTickets.current,
   useBotActiveRun: () => activeRun.current,
+}));
+vi.mock("../../../lib/query/query", () => ({
+  useSpaceQueries: () => ({ tickets: { list: { key: () => ["tickets", "list"] } } }),
+  useSave: <Input,>({
+    save,
+  }: {
+    save: (input: Input, rpc: { tickets: { move: typeof moveTicket } }) => Promise<unknown>;
+  }) => ({
+    run: (input: Input) => void save(input, { tickets: { move: moveTicket } }),
+    pending: false,
+    error: null,
+  }),
 }));
 vi.mock("../../space/KanbanModal", () => ({
   KanbanModal: (props: { open: boolean; target: unknown; botId?: string }) => {
@@ -92,7 +105,7 @@ it("renders synced tasks inline beside the conversation and opens the Kanban mod
     root.render(<ConversationTasksRail bot={bot} bots={[bot]} />);
   });
 
-  expect(host.querySelector('[data-testid="tasks-rail-progress"]')).not.toBeNull();
+  expect(host.querySelector('[data-testid="tasks-rail-summary"]')?.textContent).toContain("1 open");
   expect(host.textContent).toContain("Verify wake PR #151");
   expect(host.textContent).toContain("RAK-1");
 
@@ -120,7 +133,7 @@ it("opens the board modal from the header Kanban icon", async () => {
   expect(modalProps.last?.target).toBe("board");
 });
 
-it("shows live working status and separates Blocked from Doing", async () => {
+it("puts tasks waiting on the user first and names the bots other blocked tasks wait on", async () => {
   const base: Omit<Ticket, "id" | "ref" | "title" | "status"> = {
     boardId: "b-1",
     spaceId: "s-1",
@@ -147,7 +160,18 @@ it("shows live working status and separates Blocked from Doing", async () => {
       status: "blocked",
       description: "Blocked on @user for approval",
     },
+    {
+      ...base,
+      id: "t-waiting-bot",
+      ref: "TASK-3",
+      title: "Ship the backup fix",
+      status: "blocked",
+      description: "Blocked on @Eggbot for SHIP",
+      mentionsMe: false,
+      waitingOnBotIds: ["bot-2"],
+    },
   ];
+  const eggbot = { id: "bot-2", name: "Eggbot · Reviewer" } as Bot;
   activeRun.current = {
     id: "run-1",
     botId: "bot-1",
@@ -157,15 +181,19 @@ it("shows live working status and separates Blocked from Doing", async () => {
   };
 
   await act(async () => {
-    root.render(<ConversationTasksRail bot={bot} bots={[bot]} />);
+    root.render(<ConversationTasksRail bot={bot} bots={[bot, eggbot]} />);
   });
 
   expect(host.querySelector('[data-testid="tasks-rail-activity"]')?.textContent).toContain(
     "Working TASK-1",
   );
-  expect(host.querySelector('[data-testid="tasks-rail-mention-t-blocked"]')?.textContent).toBe("!");
-  expect(host.textContent).toContain("Doing");
-  expect(host.textContent).toContain("Blocked");
+  const section = (id: string) =>
+    host.querySelector(`[data-testid="tasks-rail-section-${id}"]`)?.textContent ?? "";
+  expect(section("needsYou")).toContain("Waiting on review");
+  expect(section("blocked")).not.toContain("Waiting on review");
+  expect(section("blocked")).toContain("Waiting on Eggbot");
+  expect(section("blocked")).not.toContain("TASK-3");
+  expect(section("doing")).toContain("Active item");
 
   // Unrelated non-ticket runs without a TASK-* reference do not show the working banner.
   activeRun.current = {
@@ -176,7 +204,101 @@ it("shows live working status and separates Blocked from Doing", async () => {
     promptSnippet: "Hello there",
   };
   await act(async () => {
-    root.render(<ConversationTasksRail bot={bot} bots={[bot]} />);
+    root.render(<ConversationTasksRail bot={bot} bots={[bot, eggbot]} />);
   });
   expect(host.querySelector('[data-testid="tasks-rail-activity"]')).toBeNull();
+});
+
+it("changes a task's status from its right-click menu", async () => {
+  const ticket = {
+    id: "t-1",
+    boardId: "b-1",
+    spaceId: "s-1",
+    number: 1,
+    ref: "TASK-1",
+    title: "Exclude caches from backup",
+    description: null,
+    status: "doing",
+    priority: "normal",
+    assigneeBotId: "bot-1",
+    ownerUserId: null,
+    ownerBotId: "bot-1",
+    workerBotIds: ["bot-1"],
+    createdByBotId: "bot-1",
+    createdByUserId: null,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    completedAt: null,
+  } satisfies Ticket;
+  botTickets.current = [ticket];
+  await act(async () => {
+    root.render(<ConversationTasksRail bot={bot} bots={[bot]} />);
+  });
+
+  await act(async () => {
+    host
+      .querySelector('[data-testid="tasks-rail-ticket-t-1"]')
+      ?.dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 }),
+      );
+    await flush();
+  });
+  const done = [...document.querySelectorAll('[role="menuitemradio"]')].find(
+    (item) => item.textContent === "Done",
+  );
+  expect(done).toBeDefined();
+  await act(async () => {
+    (done as HTMLElement).click();
+    await flush();
+  });
+
+  expect(moveTicket).toHaveBeenCalledWith({ id: "t-1", status: "done" });
+  expect(modalProps.last).toBeNull();
+});
+
+it("remembers a folded section after the rail remounts", async () => {
+  botTickets.current = [
+    {
+      id: "t-1",
+      boardId: "b-1",
+      spaceId: "s-1",
+      number: 1,
+      ref: "TASK-1",
+      title: "Planned item",
+      description: null,
+      status: "todo",
+      priority: "normal",
+      assigneeBotId: "bot-1",
+      ownerUserId: null,
+      ownerBotId: "bot-1",
+      workerBotIds: ["bot-1"],
+      createdByBotId: "bot-1",
+      createdByUserId: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      completedAt: null,
+    },
+  ];
+  const toggle = () =>
+    host.querySelector<HTMLElement>('[data-testid="tasks-rail-section-planned"] button');
+  await act(async () => {
+    root.render(<ConversationTasksRail bot={bot} bots={[bot]} />);
+  });
+  await act(async () => {
+    toggle()?.click();
+    await flush();
+  });
+  act(() => root.unmount());
+  root = createRoot(host);
+  await act(async () => {
+    root.render(<ConversationTasksRail bot={{ ...bot, id: "bot-9" }} bots={[bot]} />);
+  });
+
+  expect(toggle()?.getAttribute("aria-expanded")).toBe("false");
+  expect(localStorage.getItem("rakazo.tasksRailCollapsed")).toBe('["planned"]');
+  await act(async () => {
+    toggle()?.click();
+    await flush();
+  });
+  expect(localStorage.getItem("rakazo.tasksRailCollapsed")).toBeNull();
 });

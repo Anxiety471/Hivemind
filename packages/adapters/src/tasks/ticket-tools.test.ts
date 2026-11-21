@@ -9,6 +9,7 @@ import {
   createTicket,
   getTicket,
   listBoardTickets,
+  ticketWaitingOnBotIds,
   updateTicket,
 } from "./ticket-tools.js";
 
@@ -212,6 +213,26 @@ function mutationDeps() {
     changes,
   };
 }
+
+it("names the bots a blocked ticket waits on, never its own workers", () => {
+  const bots = [
+    { id: "b1", name: "Grok Bot" },
+    { id: "b2", name: "Potato · Dev Ops" },
+    { id: "b3", name: "Eggbot" },
+  ];
+  const blocked = {
+    status: "blocked",
+    title: "Deploy",
+    description: "Blocked on @Potato for the host grant; @GrokBot keeps going after.",
+    workerBotIds: ["b1"],
+    assigneeBotId: null,
+  };
+  expect(ticketWaitingOnBotIds(blocked, "Also waiting on @Eggbot to ship.", bots)).toEqual([
+    "b2",
+    "b3",
+  ]);
+  expect(ticketWaitingOnBotIds({ ...blocked, status: "doing" }, undefined, bots)).toEqual([]);
+});
 
 describe("ticket mutations", () => {
   it.each([

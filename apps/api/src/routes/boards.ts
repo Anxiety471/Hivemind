@@ -1,5 +1,5 @@
 import { ORPCError } from "@orpc/server";
-import { commentTicket, createTicket, updateTicket } from "@rakazo/adapters";
+import { commentTicket, createTicket, ticketWaitingOnBotIds, updateTicket } from "@rakazo/adapters";
 import { parseTicketRef } from "@rakazo/contracts";
 import { escapeSearchWildcards } from "@rakazo/core";
 import type { Board as BoardRow, Prisma, PrismaClient } from "@rakazo/db";
@@ -152,7 +152,30 @@ export function boardsRoutes(ctx: RouterContext) {
           where,
           orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
         });
-        return { tickets: rows.map((row) => toTicketDto(row, board.ticketPrefix)) };
+        const blockedIds = rows.filter((row) => row.status === "blocked").map((row) => row.id);
+        const [bots, latestComments] =
+          blockedIds.length > 0
+            ? await Promise.all([
+                deps.prisma.bot.findMany({
+                  where: { spaceId: context.actor.spaceId, archivedAt: null },
+                  select: { id: true, name: true },
+                }),
+                deps.prisma.ticketComment.findMany({
+                  where: { spaceId: context.actor.spaceId, ticketId: { in: blockedIds } },
+                  orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+                  distinct: ["ticketId"],
+                  select: { ticketId: true, body: true },
+                }),
+              ])
+            : [[], []];
+        const latestBody = new Map(latestComments.map((row) => [row.ticketId, row.body]));
+        return {
+          tickets: rows.map((row) => {
+            const ticket = toTicketDto(row, board.ticketPrefix);
+            const waitingOnBotIds = ticketWaitingOnBotIds(row, latestBody.get(row.id), bots);
+            return waitingOnBotIds.length > 0 ? { ...ticket, waitingOnBotIds } : ticket;
+          }),
+        };
       }),
       get: boardEnabled.tickets.get.handler(async ({ context, input }) => {
         const board = await ensureBoard(deps.prisma, context.actor.spaceId);

@@ -110,6 +110,27 @@ export function extractMentionedBotIds(
 }
 
 /**
+ * The bots a blocked ticket waits on: those @mentioned (or named after "blocked/waiting on") in its
+ * title, description or latest comment, leaving out its own workers.
+ */
+export function ticketWaitingOnBotIds(
+  ticket: {
+    status: string;
+    title: string;
+    description: string | null;
+    workerBotIds: string[];
+    assigneeBotId: string | null;
+  },
+  latestCommentBody: string | undefined,
+  bots: ReadonlyArray<{ id: string; name: string }>,
+): string[] {
+  if (ticket.status !== "blocked") return [];
+  const text = [ticket.title, ticket.description, latestCommentBody].filter(Boolean).join("\n");
+  const workers = new Set(ticketWorkers(ticket));
+  return extractMentionedBotIds(text, bots).filter((id) => !workers.has(id));
+}
+
+/**
  * Checks whether text mentions the user via @user, @me, @owner, @<UserName>, or "blocked/waiting on <UserName>".
  */
 export function textMentionsUser(

@@ -104,6 +104,11 @@ export const TicketSchema = z.object({
   updatedAt: z.string(),
   completedAt: z.string().nullable(),
   mentionsMe: z.boolean().optional(),
+  /**
+   * Bots a blocked ticket waits on, from the @mentions in its title, description and latest
+   * comment, leaving out its own workers. Set by tickets.list.
+   */
+  waitingOnBotIds: z.array(Id).optional(),
 });
 export type Ticket = z.infer<typeof TicketSchema>;
 

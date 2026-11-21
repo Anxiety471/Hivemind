@@ -2,6 +2,7 @@ package tickets
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -196,5 +197,24 @@ func TestExtractMentionedBotIDsAndTextMentionsUser(t *testing.T) {
 	doneTicket := Ticket{ID: "t1", Status: "done", Title: "Deploy", Description: &desc}
 	if ticketMentionsUser(doneTicket, nil, "u1", []string{"Joshua"}) {
 		t.Fatal("expected done ticket not to flag MentionsMe")
+	}
+}
+
+func TestWaitingOnBotIDs(t *testing.T) {
+	bots := []SpaceBot{
+		{ID: "b1", Name: "Grok Bot"},
+		{ID: "b2", Name: "Potato · Dev Ops"},
+		{ID: "b3", Name: "Eggbot"},
+	}
+	desc := "Blocked on @Potato for the host grant; @GrokBot keeps going after."
+	blocked := Ticket{ID: "t1", Status: "blocked", Title: "Deploy", Description: &desc, WorkerBotIDs: []string{"b1"}}
+	comment := &latestTicketComment{Body: "Also waiting on @Eggbot to ship."}
+	if got := waitingOnBotIDs(blocked, comment, bots); !slices.Equal(got, []string{"b2", "b3"}) {
+		t.Fatalf("waiting on = %+v, want the mentioned bots without the ticket's own worker", got)
+	}
+	doing := blocked
+	doing.Status = "doing"
+	if got := waitingOnBotIDs(doing, comment, bots); got != nil {
+		t.Fatalf("a ticket that is not blocked waits on nobody, got %+v", got)
 	}
 }

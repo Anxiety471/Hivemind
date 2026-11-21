@@ -1,12 +1,24 @@
 import { Trans, useLingui } from "@lingui/react/macro";
 import type { Bot, Ticket, TicketStatus } from "@rakazo/contracts";
-import { Button, Collapsible, CollapsibleContent, CollapsibleTrigger } from "@rakazo/ui-web";
+import { TICKET_STATUSES } from "@rakazo/contracts";
+import {
+  Button,
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuRadioGroup,
+  ContextMenuRadioItem,
+  ContextMenuTrigger,
+} from "@rakazo/ui-web";
 import {
   ChevronDown,
   Circle,
   CircleAlert,
   CircleCheck,
   CircleDashed,
+  CircleDot,
   Columns3,
   LoaderCircle,
   Plus,
@@ -15,9 +27,14 @@ import type { ReactNode } from "react";
 import { lazy, Suspense, useState } from "react";
 import { IconTooltip } from "../../../components/IconTooltip";
 import { formatRelativeTime } from "../../../lib/locale/relative-time";
+import { createStoredPreference } from "../../../lib/preferences/stored-preference";
+import { useSave, useSpaceQueries } from "../../../lib/query/query";
+import { errorText } from "../../../lib/query/user-error";
 import type { KanbanModalTarget } from "../../space/KanbanModal";
 import { ticketMentionsMe } from "../../space/ticket-people";
+import { useTicketStatusLabels } from "../../space/ticket-status";
 import { useBotActiveRun, useBotTickets } from "../../space/use-board-stream";
+import { splitRosterName } from "../sidebar/sidebar-roster";
 
 const KanbanModal = lazy(() =>
   import("../../space/KanbanModal").then((module) => ({ default: module.KanbanModal })),
@@ -25,6 +42,23 @@ const KanbanModal = lazy(() =>
 
 const CLOSED_PREVIEW_COUNT = 3;
 const PROMPT_TICKET_REF_RE = /\b([A-Za-z][A-Za-z0-9]*-\d+)\b/;
+
+const RAIL_SECTIONS = ["needsYou", "doing", "review", "blocked", "planned", "done"] as const;
+type RailSectionKey = (typeof RAIL_SECTIONS)[number];
+
+/** The rail sections the user folded, kept on this device for every bot. */
+const collapsedSectionsPreference = createStoredPreference<ReadonlySet<RailSectionKey>>({
+  key: "rakazo.tasksRailCollapsed",
+  parse: (raw) => {
+    try {
+      const saved: unknown = raw ? JSON.parse(raw) : [];
+      return new Set(RAIL_SECTIONS.filter((key) => Array.isArray(saved) && saved.includes(key)));
+    } catch {
+      return new Set();
+    }
+  },
+  serialize: (keys) => (keys.size > 0 ? JSON.stringify([...keys]) : null),
+});
 
 function newestFirst(a: Ticket, b: Ticket): number {
   return Date.parse(b.updatedAt) - Date.parse(a.updatedAt);
@@ -60,11 +94,10 @@ function ticketStatusIcon(status: TicketStatus, working: boolean): ReactNode {
     case "todo":
       return <CircleDashed className="size-3.5 text-muted-foreground" aria-hidden />;
     case "doing":
-      return (
-        <LoaderCircle
-          className={`size-3.5 text-warning ${working ? "animate-spin" : ""}`}
-          aria-hidden
-        />
+      return working ? (
+        <LoaderCircle className="size-3.5 animate-spin text-warning" aria-hidden />
+      ) : (
+        <CircleDot className="size-3.5 text-warning" aria-hidden />
       );
     case "review":
       return <Circle className="size-3.5 text-warning" aria-hidden />;
@@ -79,24 +112,36 @@ function ticketStatusIcon(status: TicketStatus, working: boolean): ReactNode {
 
 /**
  * Persistent right-side task visualization shown alongside a bot conversation when the Kanban
- * board is enabled. Clicking any task or the board icon opens the detailed Kanban modal.
+ * board is enabled. Clicking any task or the board icon opens the detailed Kanban modal; a task's
+ * right-click menu changes its status in place.
  */
 export function ConversationTasksRail({ bot, bots }: { bot: Bot; bots: Bot[] }) {
   const { t } = useLingui();
+  const queries = useSpaceQueries();
   const [kanbanTarget, setKanbanTarget] = useState<KanbanModalTarget | null>(null);
   const tickets = useBotTickets(bot.id, true);
   const activeRun = useBotActiveRun(bot.id, true);
-  const doing = tickets.filter((item) => item.status === "doing").sort(newestFirst);
-  const review = tickets.filter((item) => item.status === "review").sort(newestFirst);
-  const blocked = tickets.filter((item) => item.status === "blocked").sort(newestFirst);
-  const planned = tickets.filter((item) => item.status === "todo").sort(newestFirst);
+  const collapsed = collapsedSectionsPreference.use();
+  const moving = useSave({
+    save: async (input: { id: string; status: TicketStatus }, rpc) => {
+      await rpc.tickets.move(input);
+    },
+    stale: [queries.tickets.list.key()],
+  });
+
+  const needsYou = tickets.filter((item) => ticketMentionsMe(item)).sort(newestFirst);
+  const inStatus = (status: TicketStatus) =>
+    tickets.filter((item) => item.status === status && !needsYou.includes(item)).sort(newestFirst);
+  const doing = inStatus("doing");
+  const review = inStatus("review");
+  const blocked = inStatus("blocked");
+  const planned = inStatus("todo");
   const closed = tickets
     .filter((item) => item.status === "done" || item.status === "closed")
     .sort(newestFirst);
 
-  const total = tickets.length;
-  const activeCount = doing.length + review.length + blocked.length + planned.length;
   const doneCount = closed.length;
+  const activeCount = tickets.length - doneCount;
   const activeTicketRef = resolveActiveTicketRef(activeRun, tickets, doing);
   const working = Boolean(
     activeTicketRef &&
@@ -108,6 +153,39 @@ export function ConversationTasksRail({ bot, bots }: { bot: Bot; bots: Bot[] }) 
         activeRun.status === "waiting_takeover"),
   );
   const activityLabel = working && activeTicketRef ? t`Working ${activeTicketRef}` : null;
+
+  const botNames = new Map(bots.map((item) => [item.id, splitRosterName(item.name).primary]));
+  const waitingOn = (ticket: Ticket) => {
+    const names = (ticket.waitingOnBotIds ?? []).flatMap((id) => botNames.get(id) ?? []);
+    return names.length > 0 ? t`Waiting on ${names.join(", ")}` : null;
+  };
+
+  const section = (key: RailSectionKey, title: string, children: ReactNode, count: number) => (
+    <RailSection
+      key={key}
+      id={key}
+      title={title}
+      count={count}
+      open={!collapsed.has(key)}
+      onOpenChange={(open) => {
+        const next = new Set(collapsed);
+        if (open) next.delete(key);
+        else next.add(key);
+        collapsedSectionsPreference.set(next);
+      }}
+    >
+      {children}
+    </RailSection>
+  );
+  const rows = (list: Ticket[], options: { working?: boolean; meta?: typeof waitingOn } = {}) => (
+    <RailTicketRows
+      tickets={list}
+      working={options.working ?? false}
+      meta={options.meta}
+      onSelect={setKanbanTarget}
+      onMove={(ticket, status) => moving.run({ id: ticket.id, status })}
+    />
+  );
 
   return (
     <aside
@@ -153,72 +231,42 @@ export function ConversationTasksRail({ bot, bots }: { bot: Bot; bots: Bot[] }) 
             data-testid="tasks-rail-activity"
             className="mb-3 flex items-center gap-2 rounded-md border border-border/60 bg-muted/30 px-2.5 py-1.5 text-label text-foreground"
           >
-            <LoaderCircle
-              className={`size-3.5 shrink-0 text-warning ${working ? "animate-spin" : ""}`}
-              aria-hidden
-            />
+            <LoaderCircle className="size-3.5 shrink-0 animate-spin text-warning" aria-hidden />
             <span className="truncate">{activityLabel}</span>
           </div>
         ) : null}
 
-        {total > 0 ? (
+        {moving.error ? (
+          <p role="alert" className="mb-2 text-label text-destructive">
+            {errorText(moving.error)}
+          </p>
+        ) : null}
+
+        {tickets.length > 0 ? (
           <>
-            <div data-testid="tasks-rail-progress" className="mb-3.5 flex flex-col gap-1.5">
-              <div className="flex items-center gap-3 text-label text-muted-foreground">
-                <span>
-                  <Trans>{activeCount} open</Trans>
-                </span>
-                <span>
-                  <Trans>{doneCount} done</Trans>
-                </span>
-              </div>
-              <div
-                role="progressbar"
-                aria-label={t`Task progress`}
-                aria-valuemin={0}
-                aria-valuemax={total}
-                aria-valuenow={doneCount}
-                className="flex h-1.5 w-full overflow-hidden rounded-full bg-muted"
-              >
-                {doneCount > 0 ? (
-                  <div className="bg-success" style={{ width: `${(doneCount / total) * 100}%` }} />
-                ) : null}
-                {doing.length + review.length > 0 ? (
-                  <div
-                    className="bg-warning"
-                    style={{ width: `${((doing.length + review.length) / total) * 100}%` }}
-                  />
-                ) : null}
-                {blocked.length > 0 ? (
-                  <div
-                    className="bg-destructive"
-                    style={{ width: `${(blocked.length / total) * 100}%` }}
-                  />
-                ) : null}
-                {planned.length > 0 ? (
-                  <div
-                    className="bg-muted-foreground/30"
-                    style={{ width: `${(planned.length / total) * 100}%` }}
-                  />
-                ) : null}
-              </div>
+            <div
+              data-testid="tasks-rail-summary"
+              className="mb-3 flex items-center gap-3 text-label text-muted-foreground"
+            >
+              <span>
+                <Trans>{activeCount} open</Trans>
+              </span>
+              <span>
+                <Trans>{doneCount} done</Trans>
+              </span>
             </div>
 
-            <RailSection title={t`Doing`} count={doing.length}>
-              <RailTicketRows tickets={doing} working={working} onSelect={setKanbanTarget} />
-            </RailSection>
-            <RailSection title={t`Review`} count={review.length}>
-              <RailTicketRows tickets={review} working={false} onSelect={setKanbanTarget} />
-            </RailSection>
-            <RailSection title={t`Blocked`} count={blocked.length}>
-              <RailTicketRows tickets={blocked} working={false} onSelect={setKanbanTarget} />
-            </RailSection>
-            <RailSection title={t`Planned`} count={planned.length}>
-              <RailTicketRows tickets={planned} working={false} onSelect={setKanbanTarget} />
-            </RailSection>
-            <RailSection title={t`Done`} count={closed.length}>
-              <RailClosedRows tickets={closed} onSelect={setKanbanTarget} />
-            </RailSection>
+            {section("needsYou", t`Needs you`, rows(needsYou), needsYou.length)}
+            {section("doing", t`Doing`, rows(doing, { working }), doing.length)}
+            {section("review", t`Review`, rows(review), review.length)}
+            {section("blocked", t`Blocked`, rows(blocked, { meta: waitingOn }), blocked.length)}
+            {section("planned", t`Planned`, rows(planned), planned.length)}
+            {section(
+              "done",
+              t`Done`,
+              <RailClosedRows tickets={closed} render={(shown) => rows(shown)} />,
+              closed.length,
+            )}
           </>
         ) : (
           <div className="flex flex-col items-start gap-2 pt-1 text-body-sm text-muted-foreground">
@@ -262,17 +310,28 @@ export function ConversationTasksRail({ bot, bots }: { bot: Bot; bots: Bot[] }) 
 }
 
 function RailSection({
+  id,
   title,
   count,
+  open,
+  onOpenChange,
   children,
 }: {
+  id: RailSectionKey;
   title: string;
   count: number;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
   children: ReactNode;
 }) {
   if (count === 0) return null;
   return (
-    <Collapsible defaultOpen className="mb-2.5">
+    <Collapsible
+      open={open}
+      onOpenChange={onOpenChange}
+      data-testid={`tasks-rail-section-${id}`}
+      className="mb-2.5"
+    >
       <CollapsibleTrigger className="group flex w-full items-center gap-1.5 rounded-md px-1 py-1 text-label text-muted-foreground hover:text-foreground">
         <ChevronDown
           className="size-3.5 -rotate-90 transition-transform group-data-[panel-open]:rotate-0"
@@ -289,47 +348,73 @@ function RailSection({
 function RailTicketRows({
   tickets,
   working,
+  meta,
   onSelect,
+  onMove,
 }: {
   tickets: Ticket[];
   working: boolean;
+  /** Replaces the ref and time under a ticket's title when it returns text. */
+  meta?: (ticket: Ticket) => string | null;
   onSelect: (ticket: Ticket) => void;
+  onMove: (ticket: Ticket, status: TicketStatus) => void;
 }) {
   const { t } = useLingui();
+  const statuses = useTicketStatusLabels();
   return (
     <ul className="mt-0.5 flex flex-col gap-0.5">
       {tickets.map((ticket) => {
-        const mentioned = ticketMentionsMe(ticket);
+        const note = meta?.(ticket) ?? null;
         return (
           <li key={ticket.id}>
-            <button
-              type="button"
-              data-testid={`tasks-rail-ticket-${ticket.id}`}
-              onClick={() => onSelect(ticket)}
-              className="flex w-full flex-col gap-0.5 rounded-md px-1.5 py-1.5 text-start transition-colors hover:bg-accent"
-            >
-              <div className="flex w-full items-center gap-2">
-                <span className="shrink-0">{ticketStatusIcon(ticket.status, working)}</span>
-                <span className="min-w-0 flex-1 truncate text-body-sm text-foreground" dir="auto">
-                  {ticket.title}
-                </span>
-                {mentioned ? (
-                  <span
-                    data-testid={`tasks-rail-mention-${ticket.id}`}
-                    title={t`Mentioned you`}
-                    className="inline-flex size-4 shrink-0 items-center justify-center rounded-full bg-destructive/15 text-caption font-bold text-destructive"
-                  >
-                    !
+            <ContextMenu>
+              <ContextMenuTrigger
+                render={<button type="button" />}
+                data-testid={`tasks-rail-ticket-${ticket.id}`}
+                onClick={() => onSelect(ticket)}
+                className="flex w-full flex-col gap-0.5 rounded-md px-1.5 py-1.5 text-start transition-colors hover:bg-accent"
+              >
+                <div className="flex w-full items-start gap-2">
+                  <span className="flex h-lh shrink-0 items-center text-body-sm">
+                    {ticketStatusIcon(ticket.status, working)}
                   </span>
-                ) : null}
-              </div>
-              <div className="flex w-full items-center justify-between gap-2 ps-5.5 text-label text-muted-foreground">
-                <span>{ticket.ref}</span>
-                <span className="text-faint-foreground">
-                  {formatRelativeTime(ticket.updatedAt)}
-                </span>
-              </div>
-            </button>
+                  <span
+                    className="line-clamp-2 min-w-0 flex-1 text-body-sm text-foreground"
+                    dir="auto"
+                  >
+                    {ticket.title}
+                  </span>
+                </div>
+                <div className="flex w-full items-center justify-between gap-2 ps-5.5 text-label text-muted-foreground">
+                  {note ? (
+                    <span className="truncate" dir="auto">
+                      {note}
+                    </span>
+                  ) : (
+                    <>
+                      <span>{ticket.ref}</span>
+                      <span className="text-faint-foreground">
+                        {formatRelativeTime(ticket.updatedAt)}
+                      </span>
+                    </>
+                  )}
+                </div>
+              </ContextMenuTrigger>
+              <ContextMenuContent aria-label={t`Status of ${ticket.ref}`}>
+                <ContextMenuRadioGroup
+                  value={ticket.status}
+                  onValueChange={(next: TicketStatus) => {
+                    if (next !== ticket.status) onMove(ticket, next);
+                  }}
+                >
+                  {TICKET_STATUSES.map((status) => (
+                    <ContextMenuRadioItem key={status} value={status}>
+                      {statuses[status]}
+                    </ContextMenuRadioItem>
+                  ))}
+                </ContextMenuRadioGroup>
+              </ContextMenuContent>
+            </ContextMenu>
           </li>
         );
       })}
@@ -339,17 +424,17 @@ function RailTicketRows({
 
 function RailClosedRows({
   tickets,
-  onSelect,
+  render,
 }: {
   tickets: Ticket[];
-  onSelect: (ticket: Ticket) => void;
+  render: (shown: Ticket[]) => ReactNode;
 }) {
   const [expanded, setExpanded] = useState(false);
   const shown = expanded ? tickets : tickets.slice(0, CLOSED_PREVIEW_COUNT);
   const hidden = tickets.length - shown.length;
   return (
     <>
-      <RailTicketRows tickets={shown} working={false} onSelect={onSelect} />
+      {render(shown)}
       {hidden > 0 ? (
         <button
           type="button"

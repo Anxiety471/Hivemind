@@ -12,6 +12,9 @@ import {
 } from "../tasks/scratchpad-tools.js";
 import { SCHEDULE_TIMING_FIELDS } from "./schedule-tools.js";
 
+const TICKET_TITLE_GUIDANCE =
+  'The outcome the task delivers, as a short imperative under 60 characters (e.g. "Exclude caches from VPS backup"). Commit hashes, PR numbers and progress notes go in the description or a comment, never the title.';
+
 const scheduleCreateProperties = {
   name: { type: "string", description: "Short label shown in Routines." },
   prompt: {
@@ -282,7 +285,7 @@ export const workTools: ConnectorTool[] = [
         title: {
           type: "string",
           maxLength: TICKET_TITLE_MAX_LENGTH,
-          description: "Short ticket title.",
+          description: TICKET_TITLE_GUIDANCE,
         },
         description: {
           type: "string",
@@ -318,7 +321,11 @@ export const workTools: ConnectorTool[] = [
       type: "object",
       properties: {
         id: { type: "string", description: "Ticket id." },
-        title: { type: "string", maxLength: TICKET_TITLE_MAX_LENGTH },
+        title: {
+          type: "string",
+          maxLength: TICKET_TITLE_MAX_LENGTH,
+          description: TICKET_TITLE_GUIDANCE,
+        },
         description: { type: "string", maxLength: TICKET_DESCRIPTION_MAX_LENGTH },
         priority: { type: "string", enum: TICKET_PRIORITIES },
         status: {
@@ -380,7 +387,7 @@ export const workTools: ConnectorTool[] = [
               title: {
                 type: "string",
                 maxLength: TICKET_TITLE_MAX_LENGTH,
-                description: "Short imperative task title (required for create).",
+                description: `${TICKET_TITLE_GUIDANCE} Required for create.`,
               },
               description: {
                 type: "string",
