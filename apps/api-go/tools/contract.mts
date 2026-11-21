@@ -7099,7 +7099,7 @@ function normalizeSignal(payload: string) {
   }
 }
 
-async function databaseState(seeded: ReturnType<typeof ids>) {
+async function databaseState(seeded: ReturnType<typeof ids>, procedure?: string) {
   const stateUsers = { in: [seeded.userId, `${seeded.userId}-other`] };
   const skills = await system.agentSkill.findMany({
     where: { userId: stateUsers },
@@ -7594,6 +7594,10 @@ async function databaseState(seeded: ReturnType<typeof ids>) {
     members,
     invitations,
     ...(await laneHState(system, seeded)),
+    // computer.updates is a read; the API's in-process reconciler can drain the seeded
+    // ComputerUpdate rows between the two sides' captures, so those volatile rows are not
+    // compared for it (the response body and the other tables still are).
+    ...(procedure === "computer.updates" ? { laneHComputerUpdates: [] } : {}),
   };
 }
 
@@ -7625,7 +7629,7 @@ for (const testCase of cases) {
     seeded,
     testCase.procedure,
   );
-  const tsState = normalize(await databaseState(caseIds));
+  const tsState = normalize(await databaseState(caseIds, testCase.procedure));
 
   // A TypeScript background job (a restored routine's first run, say) publishes its Space changes
   // after the request returned; the Go side enqueues the same job but nothing executes it in the
@@ -7641,7 +7645,7 @@ for (const testCase of cases) {
     seeded,
     testCase.procedure,
   );
-  const goState = normalize(await databaseState(caseIds));
+  const goState = normalize(await databaseState(caseIds, testCase.procedure));
 
   try {
     assert.equal(goResult.status, tsResult.status, `${testCase.name}: status`);
