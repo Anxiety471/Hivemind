@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -158,6 +159,7 @@ type Ticket struct {
 	CreatedAt       string   `json:"createdAt"`
 	UpdatedAt       string   `json:"updatedAt"`
 	CompletedAt     *string  `json:"completedAt"`
+	MentionsMe      bool     `json:"mentionsMe,omitempty"`
 }
 
 // TicketComment is TicketCommentSchema (packages/contracts/src/board.ts:75-85).
@@ -450,6 +452,7 @@ func Comment(ctx context.Context, database *db.DB, deployment shared.Deployment,
 	}
 	var comment TicketComment
 	var workers []string
+	var mentionedBots []string
 	err = database.Tenant(ctx, actor, func(tx pgx.Tx) error {
 		ticket, err := findTicket(ctx, tx, actor.SpaceID, board.ID, input.TicketID)
 		if err != nil {
@@ -458,6 +461,11 @@ func Comment(ctx context.Context, database *db.DB, deployment shared.Deployment,
 		if mapped, ok := dto(ticket, board.Prefix); ok {
 			workers = mapped.WorkerBotIDs
 		}
+		spaceBots, err := LoadSpaceBots(ctx, tx, actor.SpaceID)
+		if err != nil {
+			return err
+		}
+		mentionedBots = ExtractMentionedBotIDs(input.Body, spaceBots, "")
 		id := effects.NewID()
 		at := now()
 		if _, err := tx.Exec(ctx, `INSERT INTO ticket_comments (id, "ticketId", "spaceId", "authorUserId", body, "createdAt", "updatedAt")
@@ -490,10 +498,145 @@ func Comment(ctx context.Context, database *db.DB, deployment shared.Deployment,
 	if comment.ID == "" || comment.AuthorUserID == nil || *comment.AuthorUserID == "" {
 		return nil, shared.OutputInvalid()
 	}
-	if deployment.Waker != nil && len(workers) > 0 {
-		deployment.Waker.WakeWorkers(ctx, actor.SpaceID, input.TicketID, workers, commentNote(input.Body))
+	wakeBotIDs := dedupeIDs(append(workers, mentionedBots...))
+	if deployment.Waker != nil && len(wakeBotIDs) > 0 {
+		deployment.Waker.WakeWorkers(ctx, actor.SpaceID, input.TicketID, wakeBotIDs, commentNote(input.Body))
 	}
 	return comment, nil
+}
+
+// SpaceBot is an active bot in a Space used to resolve @mentions on tickets.
+type SpaceBot struct {
+	ID   string
+	Name string
+}
+
+// LoadSpaceBots returns all non-archived bots in the Space.
+func LoadSpaceBots(ctx context.Context, tx pgx.Tx, spaceID string) ([]SpaceBot, error) {
+	rows, err := tx.Query(ctx, `SELECT id, name FROM bots WHERE "spaceId" = $1 AND "archivedAt" IS NULL`, spaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var bots []SpaceBot
+	for rows.Next() {
+		var b SpaceBot
+		if err := rows.Scan(&b.ID, &b.Name); err != nil {
+			return nil, err
+		}
+		bots = append(bots, b)
+	}
+	return bots, rows.Err()
+}
+
+func loadUserNames(ctx context.Context, tx pgx.Tx, userID string) []string {
+	var name *string
+	if err := tx.QueryRow(ctx, `SELECT name FROM "user" WHERE id = $1`, userID).Scan(&name); err != nil || name == nil {
+		return nil
+	}
+	trimmed := validate.JSTrim(*name)
+	if trimmed == "" {
+		return nil
+	}
+	return []string{trimmed}
+}
+
+var (
+	userPronounAtRe      = regexp.MustCompile(`(?i)(?:^|[^\w])@(?:user|me|owner|you)(?:$|[^\w])`)
+	userPronounBlockedRe = regexp.MustCompile(`(?i)\b(?:blocked|waiting)\s+on\s+@?(?:user|me|owner|you)\b`)
+	nonAlnumRe           = regexp.MustCompile(`[^A-Za-z0-9]+`)
+)
+
+func botCandidateHandles(name string) []string {
+	trimmed := validate.JSTrim(name)
+	if trimmed == "" {
+		return nil
+	}
+	primary := trimmed
+	for _, sep := range []string{" · ", " - "} {
+		if idx := strings.Index(primary, sep); idx > 0 {
+			primary = validate.JSTrim(primary[:idx])
+			break
+		}
+	}
+	compact := nonAlnumRe.ReplaceAllString(primary, "")
+	seen := map[string]bool{}
+	var out []string
+	for _, c := range []string{trimmed, primary, compact} {
+		if len(c) >= 2 && !seen[c] {
+			seen[c] = true
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+func matchesHandleMention(text, handle string) bool {
+	escaped := regexp.QuoteMeta(handle)
+	atRe, err := regexp.Compile(`(?i)(?:^|[^\w])@` + escaped + `(?:$|[^\w])`)
+	if err == nil && atRe.MatchString(text) {
+		return true
+	}
+	blockedRe, err := regexp.Compile(`(?i)\b(?:blocked|waiting)\s+on\s+@?` + escaped + `(?:$|[^\w])`)
+	return err == nil && blockedRe.MatchString(text)
+}
+
+// ExtractMentionedBotIDs finds bots in the Space that are @mentioned or named after "blocked/waiting on".
+func ExtractMentionedBotIDs(text string, bots []SpaceBot, excludeBotID string) []string {
+	if validate.JSTrim(text) == "" {
+		return nil
+	}
+	var matched []string
+	for _, bot := range bots {
+		if excludeBotID != "" && bot.ID == excludeBotID {
+			continue
+		}
+		for _, handle := range botCandidateHandles(bot.Name) {
+			if matchesHandleMention(text, handle) {
+				matched = append(matched, bot.ID)
+				break
+			}
+		}
+	}
+	return dedupeIDs(matched)
+}
+
+// TextMentionsUser reports whether text mentions the user via @user, @me, @<UserName>, or "blocked/waiting on <UserName>".
+func TextMentionsUser(text string, userNames []string) bool {
+	if validate.JSTrim(text) == "" {
+		return false
+	}
+	if userPronounAtRe.MatchString(text) || userPronounBlockedRe.MatchString(text) {
+		return true
+	}
+	for _, rawName := range userNames {
+		trimmed := validate.JSTrim(rawName)
+		if trimmed == "" {
+			continue
+		}
+		first := strings.Fields(trimmed)[0]
+		for _, candidate := range []string{trimmed, first} {
+			if len(candidate) >= 2 && matchesHandleMention(text, candidate) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func ticketMentionsUser(t Ticket, commentBodies []string, userNames []string) bool {
+	if TextMentionsUser(t.Title, userNames) {
+		return true
+	}
+	if t.Description != nil && TextMentionsUser(*t.Description, userNames) {
+		return true
+	}
+	for _, body := range commentBodies {
+		if TextMentionsUser(body, userNames) {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveSpaceBoard is resolveSpaceBoard (apps/api/src/routes/boards.ts:19-29): ensures the Space's
@@ -698,7 +841,34 @@ func List(ctx context.Context, database *db.DB, deployment shared.Deployment, ac
 			}
 			tickets = append(tickets, mapped)
 		}
-		return rows.Err()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		if len(tickets) > 0 {
+			userNames := loadUserNames(ctx, tx, actor.UserID)
+			ticketIDs := make([]string, len(tickets))
+			for i := range tickets {
+				ticketIDs[i] = tickets[i].ID
+			}
+			commentByTicket := make(map[string][]string, len(tickets))
+			cRows, err := tx.Query(ctx, `
+				SELECT "ticketId", body FROM ticket_comments
+				WHERE "spaceId" = $1 AND "ticketId" = ANY($2)
+			`, actor.SpaceID, ticketIDs)
+			if err == nil {
+				for cRows.Next() {
+					var tid, body string
+					if err := cRows.Scan(&tid, &body); err == nil {
+						commentByTicket[tid] = append(commentByTicket[tid], body)
+					}
+				}
+				cRows.Close()
+			}
+			for i := range tickets {
+				tickets[i].MentionsMe = ticketMentionsUser(tickets[i], commentByTicket[tickets[i].ID], userNames)
+			}
+		}
+		return nil
 	})
 	if err != nil {
 		if err.Error() == "invalid ticket row" {
@@ -883,6 +1053,7 @@ func Create(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 	botsToValidate = append(botsToValidate, workerBotIDs...)
 
 	var ticket Ticket
+	var mentionedBots []string
 	err = database.Tenant(ctx, actor, func(tx pgx.Tx) error {
 		for _, botID := range requestedBots {
 			if err := shared.RequireBot(ctx, tx, actor, botID); err != nil {
@@ -935,6 +1106,12 @@ func Create(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 			deployment.Signals.PublishBoard(actor.SpaceID, board.ID, value.ID)
 		}
 		ticket, _ = dto(value, board.Prefix)
+		ticket.MentionsMe = ticketMentionsUser(ticket, nil, loadUserNames(ctx, tx, actor.UserID))
+		if desc != nil {
+			if spaceBots, err := LoadSpaceBots(ctx, tx, actor.SpaceID); err == nil {
+				mentionedBots = ExtractMentionedBotIDs(*desc, spaceBots, "")
+			}
+		}
 		return nil
 	})
 	if err != nil {
@@ -943,8 +1120,13 @@ func Create(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 	if !ticketValid(ticket) || ticket.ID == "" {
 		return nil, shared.OutputInvalid()
 	}
-	if deployment.Waker != nil && len(ticket.WorkerBotIDs) > 0 {
-		deployment.Waker.WakeWorkers(ctx, actor.SpaceID, ticket.ID, ticket.WorkerBotIDs, "")
+	wakeBotIDs := dedupeIDs(append(append([]string{}, ticket.WorkerBotIDs...), mentionedBots...))
+	if deployment.Waker != nil && len(wakeBotIDs) > 0 {
+		note := ""
+		if len(ticket.WorkerBotIDs) == 0 && len(mentionedBots) > 0 {
+			note = "You were mentioned on this ticket — read it with ticket_get and address what is needed from you."
+		}
+		deployment.Waker.WakeWorkers(ctx, actor.SpaceID, ticket.ID, wakeBotIDs, note)
 	}
 	return ticket, nil
 }
@@ -1112,6 +1294,7 @@ func Update(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 	var (
 		ticket        Ticket
 		addedWorkers  []string
+		mentionedBots []string
 		statusChanged bool
 	)
 	err = database.Tenant(ctx, actor, func(tx pgx.Tx) error {
@@ -1233,6 +1416,12 @@ func Update(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 			deployment.Signals.PublishBoard(actor.SpaceID, board.ID, value.ID)
 		}
 		ticket, _ = dto(value, board.Prefix)
+		ticket.MentionsMe = ticketMentionsUser(ticket, nil, loadUserNames(ctx, tx, actor.UserID))
+		if input.HasDescription && description != nil {
+			if spaceBots, err := LoadSpaceBots(ctx, tx, actor.SpaceID); err == nil {
+				mentionedBots = ExtractMentionedBotIDs(*description, spaceBots, "")
+			}
+		}
 		return nil
 	})
 	if err != nil {
@@ -1245,11 +1434,13 @@ func Update(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 	if statusChanged && wakesOnStatus(ticket.Status) {
 		statusWakes = ticket.WorkerBotIDs
 	}
-	wakeBotIDs := dedupeIDs(append(addedWorkers, statusWakes...))
+	wakeBotIDs := dedupeIDs(append(append(addedWorkers, statusWakes...), mentionedBots...))
 	if deployment.Waker != nil && len(wakeBotIDs) > 0 {
 		note := ""
 		if len(statusWakes) > 0 {
 			note = "Its status changed to " + ticket.Status + "."
+		} else if len(mentionedBots) > 0 && len(addedWorkers) == 0 {
+			note = "You were mentioned on this ticket — read it with ticket_get and address what is needed from you."
 		}
 		deployment.Waker.WakeWorkers(ctx, actor.SpaceID, ticket.ID, wakeBotIDs, note)
 	}

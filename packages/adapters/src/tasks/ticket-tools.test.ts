@@ -196,8 +196,8 @@ function mutationDeps() {
     ...boardSpace(),
     bot: {
       findFirst: vi.fn(async () => ({ id: "bot-2" })),
-      findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
-        where.id.in.map((id) => ({ id })),
+      findMany: vi.fn(async ({ where }: { where?: { id?: { in?: string[] } } } = {}) =>
+        (where?.id?.in ?? []).map((id) => ({ id })),
       ),
     },
     spaceMember: { findFirst: vi.fn(async () => ({ id: "member-1" })) },
@@ -424,6 +424,41 @@ describe("ticket mutations", () => {
     });
     expect(s.changes).toHaveBeenLastCalledWith(
       expect.objectContaining({ wakeAssignee: false, wakeBotIds: [] }),
+    );
+  });
+  it("refuses a bot moving a ticket to blocked without an @mention and wakes mentioned bots", async () => {
+    const s = mutationDeps();
+    s.prisma.bot.findMany.mockResolvedValue([
+      { id: "bot-1", name: "Grok Bot · Chief of Staff" },
+      { id: "bot-2", name: "Potato · Dev Ops" },
+    ] as never);
+
+    const refused = await updateTicket(s.deps, {
+      spaceId: "ws",
+      userId: "user-1",
+      botId: "bot-1",
+      id: "t1",
+      status: "blocked",
+      description: "Stuck waiting on external deploy",
+    });
+    expect(refused).toEqual({
+      error: expect.stringContaining("Moving a task to blocked requires an @mention"),
+    });
+
+    const allowed = await updateTicket(s.deps, {
+      spaceId: "ws",
+      userId: "user-1",
+      botId: "bot-1",
+      id: "t1",
+      status: "blocked",
+      description: "Blocked on @Potato for the exclude patch",
+    });
+    expect(allowed).toHaveProperty("ticket.status", "blocked");
+    expect(s.changes).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        wakeAssignee: true,
+        wakeBotIds: ["bot-2"],
+      }),
     );
   });
   it("does not wake a bot creating or assigning a ticket to itself", async () => {

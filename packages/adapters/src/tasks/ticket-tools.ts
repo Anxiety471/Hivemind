@@ -54,6 +54,9 @@ function dedupeIds(ids: readonly string[]): string[] {
 const TICKET_WAKE_STATUSES: ReadonlySet<string> = new Set(["todo", "doing", "review"]);
 const COMMENT_NOTE_CHARS = 400;
 
+export const BLOCKED_MENTION_ERROR =
+  "Moving a task to blocked requires an @mention of the user or bot it is blocked on (for example @user or @BotName) in the description or a ticket comment.";
+
 function commentExcerpt(body: string): string {
   return body.length > COMMENT_NOTE_CHARS ? `${sliceWellFormed(body, COMMENT_NOTE_CHARS)}…` : body;
 }
@@ -63,6 +66,162 @@ function ticketWorkers(row: { workerBotIds: string[]; assigneeBotId: string | nu
   return dedupeIds(
     row.workerBotIds.length > 0 ? row.workerBotIds : row.assigneeBotId ? [row.assigneeBotId] : [],
   );
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function botCandidateHandles(name: string): string[] {
+  const trimmed = name.trim();
+  if (!trimmed) return [];
+  const primary = trimmed.split(/\s+[·-]\s+/)[0]?.trim() ?? trimmed;
+  const compact = primary.replace(/[^A-Za-z0-9]+/g, "");
+  const handles = new Set<string>();
+  for (const candidate of [trimmed, primary, compact]) {
+    if (candidate.length >= 2) handles.add(candidate);
+  }
+  return [...handles];
+}
+
+/**
+ * Finds bots in the list that are @mentioned (or named after "blocked on" / "waiting on") in text.
+ */
+export function extractMentionedBotIds(
+  text: string | null | undefined,
+  bots: ReadonlyArray<{ id: string; name: string }>,
+  excludeBotId?: string,
+): string[] {
+  if (!text?.trim()) return [];
+  const matched: string[] = [];
+  for (const bot of bots) {
+    if (excludeBotId && bot.id === excludeBotId) continue;
+    for (const handle of botCandidateHandles(bot.name)) {
+      const escaped = escapeRegExp(handle);
+      const atRe = new RegExp(`(?:^|[^\\w])@${escaped}(?=$|[^\\w])`, "i");
+      const blockedRe = new RegExp(`\\b(?:blocked|waiting)\\s+on\\s+@?${escaped}(?=$|[^\\w])`, "i");
+      if (atRe.test(text) || blockedRe.test(text)) {
+        matched.push(bot.id);
+        break;
+      }
+    }
+  }
+  return dedupeIds(matched);
+}
+
+/**
+ * Checks whether text mentions the user via @user, @me, @owner, @<UserName>, or "blocked/waiting on <UserName>".
+ */
+export function textMentionsUser(
+  text: string | null | undefined,
+  userNames: readonly string[] = [],
+): boolean {
+  if (!text?.trim()) return false;
+  if (/(?:^|[^\w])@(?:user|me|owner|you)(?=$|[^\w])/i.test(text)) return true;
+  if (/\b(?:blocked|waiting)\s+on\s+@?(?:user|me|owner|you)\b/i.test(text)) return true;
+  for (const rawName of userNames) {
+    const trimmed = rawName.trim();
+    if (!trimmed) continue;
+    const first = trimmed.split(/\s+/)[0]?.trim() ?? "";
+    for (const candidate of [trimmed, first]) {
+      if (candidate.length < 2) continue;
+      const escaped = escapeRegExp(candidate);
+      const atRe = new RegExp(`(?:^|[^\\w])@${escaped}(?=$|[^\\w])`, "i");
+      const blockedRe = new RegExp(`\\b(?:blocked|waiting)\\s+on\\s+@?${escaped}(?=$|[^\\w])`, "i");
+      if (atRe.test(text) || blockedRe.test(text)) return true;
+    }
+  }
+  return false;
+}
+
+function hasAnyAtMentionToken(text: string | null | undefined): boolean {
+  if (!text) return false;
+  return /(?:^|[^\w])@[A-Za-z][A-Za-z0-9._-]*/.test(text);
+}
+
+function mayContainMention(text: string | null | undefined): boolean {
+  if (!text?.trim()) return false;
+  return text.includes("@") || /\b(?:blocked|waiting)\s+on\b/i.test(text);
+}
+
+async function loadSpaceMentionDirectory(
+  deps: TicketToolDeps,
+  spaceId: string,
+  userId: string,
+): Promise<{ bots: Array<{ id: string; name: string }>; userNames: string[] }> {
+  const [bots, user] = await Promise.all([
+    deps.prisma.bot?.findMany?.({
+      where: { spaceId, archivedAt: null },
+      select: { id: true, name: true },
+    }) ?? Promise.resolve([]),
+    deps.prisma.user?.findUnique?.({
+      where: { id: userId },
+      select: { name: true },
+    }) ?? Promise.resolve(null),
+  ]);
+  const validBots = Array.isArray(bots)
+    ? bots.filter((b): b is { id: string; name: string } =>
+        Boolean(b && typeof b.id === "string" && typeof b.name === "string"),
+      )
+    : [];
+  const userNames =
+    user && typeof (user as { name?: unknown }).name === "string"
+      ? [(user as { name: string }).name]
+      : [];
+  return { bots: validBots, userNames };
+}
+
+export async function validateBlockedTicketMention(
+  deps: TicketToolDeps,
+  input: {
+    spaceId: string;
+    userId: string;
+    botId?: string;
+    ticketId?: string;
+    description?: string | null;
+  },
+): Promise<string | null> {
+  const { bots, userNames } = await loadSpaceMentionDirectory(deps, input.spaceId, input.userId);
+  const texts: string[] = [];
+  if (typeof input.description === "string" && input.description.trim()) {
+    texts.push(input.description);
+  }
+  if (input.ticketId) {
+    const [existingTicket, comments] = await Promise.all([
+      input.description === undefined
+        ? (deps.prisma.ticket?.findFirst?.({
+            where: { id: input.ticketId, spaceId: input.spaceId },
+            select: { description: true },
+          }) ?? Promise.resolve(null))
+        : Promise.resolve(null),
+      deps.prisma.ticketComment?.findMany?.({
+        where: { ticketId: input.ticketId, spaceId: input.spaceId },
+        select: { body: true },
+      }) ?? Promise.resolve([]),
+    ]);
+    if (
+      existingTicket &&
+      typeof (existingTicket as { description?: unknown }).description === "string"
+    ) {
+      texts.push((existingTicket as { description: string }).description);
+    }
+    if (Array.isArray(comments)) {
+      for (const c of comments) {
+        if (c && typeof (c as { body?: unknown }).body === "string") {
+          texts.push((c as { body: string }).body);
+        }
+      }
+    }
+  }
+  const combined = texts.join("\n");
+  if (
+    hasAnyAtMentionToken(combined) ||
+    textMentionsUser(combined, userNames) ||
+    extractMentionedBotIds(combined, bots, input.botId).length > 0
+  ) {
+    return null;
+  }
+  return BLOCKED_MENTION_ERROR;
 }
 
 /**
@@ -297,6 +456,9 @@ export async function createTicket(
   }
 
   const board = await ensureBoard(deps.prisma, input.spaceId);
+  const { bots: spaceBots } = mayContainMention(data.description)
+    ? await loadSpaceMentionDirectory(deps, input.spaceId, input.userId)
+    : { bots: [] };
   const row = await deps.prisma.$transaction(async (tx) => {
     const number = await allocateTicketNumber(tx, board.id);
     return tx.ticket.create({
@@ -316,7 +478,11 @@ export async function createTicket(
       },
     });
   });
-  const wakeBotIds = workerBotIds.filter((id) => id !== input.botId);
+  const mentionedBots = extractMentionedBotIds(data.description, spaceBots, input.botId);
+  const wakeBotIds = dedupeIds([
+    ...workerBotIds.filter((id) => id !== input.botId),
+    ...mentionedBots,
+  ]);
   await deps.onTicketChange?.({
     spaceId: input.spaceId,
     boardId: board.id,
@@ -324,6 +490,12 @@ export async function createTicket(
     assigneeBotId: row.assigneeBotId,
     wakeAssignee: wakeBotIds.length > 0,
     wakeBotIds,
+    ...(mentionedBots.length > 0 && workerBotIds.filter((id) => id !== input.botId).length === 0
+      ? {
+          wakeNote:
+            "You were mentioned on this ticket — read it with ticket_get and address what is needed from you.",
+        }
+      : {}),
   });
   return { ticket: toTicketDto(row, board.ticketPrefix) };
 }
@@ -385,6 +557,20 @@ export async function updateTicket(
     return { error: "Unknown user." };
   }
 
+  if (input.botId && data.status === "blocked") {
+    const mentionError = await validateBlockedTicketMention(deps, {
+      spaceId: input.spaceId,
+      userId: input.userId,
+      botId: input.botId,
+      ticketId: data.id,
+      description: data.description,
+    });
+    if (mentionError) return { error: mentionError };
+  }
+
+  const { bots: spaceBots } = mayContainMention(data.description)
+    ? await loadSpaceMentionDirectory(deps, input.spaceId, input.userId)
+    : { bots: [] };
   const board = await ensureBoard(deps.prisma, input.spaceId);
   const result = await deps.prisma.$transaction(async (tx) => {
     await tx.$queryRaw`SELECT id FROM tickets WHERE id = ${data.id} AND "spaceId" = ${input.spaceId} FOR UPDATE`;
@@ -432,7 +618,17 @@ export async function updateTicket(
     result.statusChanged && data.status !== undefined && TICKET_WAKE_STATUSES.has(data.status)
       ? ticketWorkers(result.row).filter((id) => id !== input.botId)
       : [];
-  const wakeBotIds = dedupeIds([...result.addedWorkers, ...statusWakes]);
+  const mentionedBots =
+    data.description !== undefined
+      ? extractMentionedBotIds(data.description, spaceBots, input.botId)
+      : [];
+  const wakeBotIds = dedupeIds([...result.addedWorkers, ...statusWakes, ...mentionedBots]);
+  const wakeNote =
+    statusWakes.length > 0
+      ? `Its status changed to ${data.status}.`
+      : mentionedBots.length > 0
+        ? "You were mentioned on this ticket — read it with ticket_get and address what is needed from you."
+        : undefined;
   await deps.onTicketChange?.({
     spaceId: input.spaceId,
     boardId: board.id,
@@ -440,7 +636,7 @@ export async function updateTicket(
     assigneeBotId: result.row.assigneeBotId,
     wakeAssignee: wakeBotIds.length > 0,
     wakeBotIds,
-    ...(statusWakes.length > 0 ? { wakeNote: `Its status changed to ${data.status}.` } : {}),
+    ...(wakeNote ? { wakeNote } : {}),
   });
   return { ticket: toTicketDto(result.row, board.ticketPrefix) };
 }
@@ -474,9 +670,21 @@ export async function commentTicket(
     await tx.ticket.update({ where: { id: ticket.id }, data: { updatedAt: new Date() } });
     return comment;
   });
-  // A person's comment wakes the workers so a blocker can be answered. A bot's comment wakes
-  // nobody: two workers commenting at each other would wake each other forever.
-  const commentWakes = input.botId ? [] : ticketWorkers(ticket);
+  // A person's comment wakes the workers so a blocker can be answered. Any comment (by a person or
+  // a bot) that @mentions another bot in the Space wakes that mentioned bot so it can address it.
+  const { bots: spaceBots } = mayContainMention(parsed.data.body)
+    ? await loadSpaceMentionDirectory(deps, input.spaceId, input.userId ?? "")
+    : { bots: [] };
+  const mentionedBots = extractMentionedBotIds(parsed.data.body, spaceBots, input.botId);
+  const workerWakes = input.botId ? [] : ticketWorkers(ticket);
+  const commentWakes = dedupeIds([...workerWakes, ...mentionedBots]);
+  const excerpt = JSON.stringify(commentExcerpt(parsed.data.body));
+  const wakeNote =
+    commentWakes.length > 0
+      ? input.botId
+        ? `You were mentioned in a comment: ${excerpt}`
+        : `A person commented: ${excerpt}`
+      : undefined;
   await deps.onTicketChange?.({
     spaceId: input.spaceId,
     boardId: board.id,
@@ -484,9 +692,7 @@ export async function commentTicket(
     assigneeBotId: ticket.assigneeBotId,
     wakeAssignee: commentWakes.length > 0,
     wakeBotIds: commentWakes,
-    ...(commentWakes.length > 0
-      ? { wakeNote: `A person commented: ${JSON.stringify(commentExcerpt(parsed.data.body))}` }
-      : {}),
+    ...(wakeNote ? { wakeNote } : {}),
   });
   return { comment: toTicketCommentDto(row) };
 }

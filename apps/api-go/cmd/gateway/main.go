@@ -252,6 +252,7 @@ func setupLocal(buildIDFile string, logger *slog.Logger) (*local.Server, *taskde
 		BoardLab: deployment.BoardLab,
 		Content:  ring,
 		Signals:  effectsRunner.Signals(),
+		Waker:    queueSvc,
 		Logger:   logger,
 	}
 	return server, detector, queueSvc, func() {

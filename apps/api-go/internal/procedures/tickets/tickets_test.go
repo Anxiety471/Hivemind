@@ -159,3 +159,24 @@ func TestParseCreateAndUpdateValidateOwnerAndWorkers(t *testing.T) {
 		t.Fatal("setting both ownerUserId and ownerBotId on update must be refused")
 	}
 }
+
+func TestExtractMentionedBotIDsAndTextMentionsUser(t *testing.T) {
+	bots := []SpaceBot{
+		{ID: "b1", Name: "Grok Bot · Chief of Staff"},
+		{ID: "b2", Name: "Potato · Dev Ops"},
+		{ID: "b3", Name: "Cloudflare Manager"},
+	}
+	got := ExtractMentionedBotIDs("Blocked on @Potato and waiting on @Cloudflare Manager", bots, "b1")
+	if len(got) != 2 || got[0] != "b2" || got[1] != "b3" {
+		t.Fatalf("mentioned bots = %+v", got)
+	}
+	if !TextMentionsUser("Still blocked on Joshua: excludes go/no-go", []string{"Joshua"}) {
+		t.Fatal("expected blocked on Joshua to match user mention")
+	}
+	if !TextMentionsUser("Need approval from @user before proceeding", nil) {
+		t.Fatal("expected @user to match user mention")
+	}
+	if TextMentionsUser("Routine background check completed", []string{"Joshua"}) {
+		t.Fatal("expected unrelated text not to match user mention")
+	}
+}

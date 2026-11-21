@@ -16,6 +16,7 @@ import { lazy, Suspense, useState } from "react";
 import { IconTooltip } from "../../../components/IconTooltip";
 import { formatRelativeTime } from "../../../lib/locale/relative-time";
 import type { KanbanModalTarget } from "../../space/KanbanModal";
+import { ticketMentionsMe } from "../../space/ticket-people";
 import { useBotActiveRun, useBotTickets } from "../../space/use-board-stream";
 
 const KanbanModal = lazy(() =>
@@ -294,29 +295,44 @@ function RailTicketRows({
   working: boolean;
   onSelect: (ticket: Ticket) => void;
 }) {
+  const { t } = useLingui();
   return (
     <ul className="mt-0.5 flex flex-col gap-0.5">
-      {tickets.map((ticket) => (
-        <li key={ticket.id}>
-          <button
-            type="button"
-            data-testid={`tasks-rail-ticket-${ticket.id}`}
-            onClick={() => onSelect(ticket)}
-            className="flex w-full flex-col gap-0.5 rounded-md px-1.5 py-1.5 text-start transition-colors hover:bg-accent"
-          >
-            <div className="flex w-full items-center gap-2">
-              <span className="shrink-0">{ticketStatusIcon(ticket.status, working)}</span>
-              <span className="min-w-0 flex-1 truncate text-body-sm text-foreground" dir="auto">
-                {ticket.title}
-              </span>
-            </div>
-            <div className="flex w-full items-center justify-between gap-2 ps-5.5 text-label text-muted-foreground">
-              <span>{ticket.ref}</span>
-              <span className="text-faint-foreground">{formatRelativeTime(ticket.updatedAt)}</span>
-            </div>
-          </button>
-        </li>
-      ))}
+      {tickets.map((ticket) => {
+        const mentioned = ticketMentionsMe(ticket);
+        return (
+          <li key={ticket.id}>
+            <button
+              type="button"
+              data-testid={`tasks-rail-ticket-${ticket.id}`}
+              onClick={() => onSelect(ticket)}
+              className="flex w-full flex-col gap-0.5 rounded-md px-1.5 py-1.5 text-start transition-colors hover:bg-accent"
+            >
+              <div className="flex w-full items-center gap-2">
+                <span className="shrink-0">{ticketStatusIcon(ticket.status, working)}</span>
+                <span className="min-w-0 flex-1 truncate text-body-sm text-foreground" dir="auto">
+                  {ticket.title}
+                </span>
+                {mentioned ? (
+                  <span
+                    data-testid={`tasks-rail-mention-${ticket.id}`}
+                    title={t`Mentioned you`}
+                    className="inline-flex size-4 shrink-0 items-center justify-center rounded-full bg-destructive/15 text-caption font-bold text-destructive"
+                  >
+                    !
+                  </span>
+                ) : null}
+              </div>
+              <div className="flex w-full items-center justify-between gap-2 ps-5.5 text-label text-muted-foreground">
+                <span>{ticket.ref}</span>
+                <span className="text-faint-foreground">
+                  {formatRelativeTime(ticket.updatedAt)}
+                </span>
+              </div>
+            </button>
+          </li>
+        );
+      })}
     </ul>
   );
 }

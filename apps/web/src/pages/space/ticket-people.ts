@@ -63,3 +63,39 @@ export function ticketOwnerLabel(
 export function sameIdList(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((value, index) => value === b[index]);
 }
+
+const USER_MENTION_PRONOUN_RE =
+  /(?:^|[^\w])@(?:user|me|owner|you)(?=$|[^\w])|\b(?:blocked|waiting)\s+on\s+@?(?:user|me|owner|you)\b/i;
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export function textMentionsCurrentUser(
+  text: string | null | undefined,
+  currentUserName?: string | null,
+): boolean {
+  if (!text?.trim()) return false;
+  if (USER_MENTION_PRONOUN_RE.test(text)) return true;
+  const trimmed = currentUserName?.trim() ?? "";
+  if (!trimmed) return false;
+  const first = trimmed.split(/\s+/)[0]?.trim() ?? "";
+  for (const candidate of [trimmed, first]) {
+    if (candidate.length < 2) continue;
+    const escaped = escapeRegExp(candidate);
+    const re = new RegExp(
+      `(?:^|[^\\w])@${escaped}(?=$|[^\\w])|\\b(?:blocked|waiting)\\s+on\\s+@?${escaped}(?=$|[^\\w])`,
+      "i",
+    );
+    if (re.test(text)) return true;
+  }
+  return false;
+}
+
+export function ticketMentionsMe(ticket: Ticket, currentUserName?: string | null): boolean {
+  if (ticket.mentionsMe) return true;
+  return (
+    textMentionsCurrentUser(ticket.title, currentUserName) ||
+    textMentionsCurrentUser(ticket.description, currentUserName)
+  );
+}

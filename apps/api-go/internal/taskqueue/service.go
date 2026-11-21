@@ -506,19 +506,20 @@ func (s *Service) wakeBotForTicket(ctx context.Context, job Job) (WakeResult, er
 	var result WakeResult
 	err := s.db.System(ctx, "dispatch ticket wake", func(tx pgx.Tx) error {
 		var (
-			number int64
-			title  string
-			status string
-			prefix string
+			number        int64
+			title         string
+			status        string
+			prefix        string
+			assigneeBotID *string
+			workerBotIDs  []string
 		)
 		err := tx.QueryRow(ctx, `
-			SELECT t.number, t.title, t.status, bd."ticketPrefix"
+			SELECT t.number, t.title, t.status, bd."ticketPrefix", t."assigneeBotId", t."workerBotIds"
 			FROM tickets t
 			JOIN boards bd ON bd.id = t."boardId"
 			WHERE t.id = $1
 			  AND t."spaceId" = $2
-			  AND (t."assigneeBotId" = $3 OR $3 = ANY(t."workerBotIds"))
-		`, job.TicketID, job.SpaceID, job.BotID).Scan(&number, &title, &status, &prefix)
+		`, job.TicketID, job.SpaceID).Scan(&number, &title, &status, &prefix, &assigneeBotID, &workerBotIDs)
 		if errors.Is(err, pgx.ErrNoRows) {
 			result = WakeResult{Skipped: true, Reason: "ticket_unassigned"}
 			return nil
@@ -528,6 +529,17 @@ func (s *Service) wakeBotForTicket(ctx context.Context, job Job) (WakeResult, er
 		}
 
 		if job.Kind == KindBump {
+			assigned := assigneeBotID != nil && *assigneeBotID == job.BotID
+			for _, id := range workerBotIDs {
+				if id == job.BotID {
+					assigned = true
+					break
+				}
+			}
+			if !assigned {
+				result = WakeResult{Skipped: true, Reason: "ticket_unassigned"}
+				return nil
+			}
 			if status != "todo" && status != "doing" {
 				result = WakeResult{Skipped: true, Reason: "ticket_not_active"}
 				return nil

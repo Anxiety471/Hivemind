@@ -139,7 +139,14 @@ it("shows live working status and separates Blocked from Doing", async () => {
   };
   botTickets.current = [
     { ...base, id: "t-doing", ref: "TASK-1", title: "Active item", status: "doing" },
-    { ...base, id: "t-blocked", ref: "TASK-2", title: "Waiting on review", status: "blocked" },
+    {
+      ...base,
+      id: "t-blocked",
+      ref: "TASK-2",
+      title: "Waiting on review",
+      status: "blocked",
+      description: "Blocked on @user for approval",
+    },
   ];
   activeRun.current = {
     id: "run-1",
@@ -156,6 +163,7 @@ it("shows live working status and separates Blocked from Doing", async () => {
   expect(host.querySelector('[data-testid="tasks-rail-activity"]')?.textContent).toContain(
     "Working TASK-1",
   );
+  expect(host.querySelector('[data-testid="tasks-rail-mention-t-blocked"]')?.textContent).toBe("!");
   expect(host.textContent).toContain("Doing");
   expect(host.textContent).toContain("Blocked");
 

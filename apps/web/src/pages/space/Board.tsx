@@ -38,6 +38,7 @@ import {
   ownerOptionValue,
   ownerPayloadFromValue,
   sameIdList,
+  ticketMentionsMe,
   ticketOwnerLabel,
   ticketWorkerIds,
   ticketWorkerNames,
@@ -111,7 +112,18 @@ export function BoardPage() {
                       className="h-auto w-full flex-col items-start gap-1 whitespace-normal p-3 text-start font-normal"
                       onClick={() => setSelected(ticket)}
                     >
-                      <span className="text-label text-muted-foreground">{ticket.ref}</span>
+                      <span className="flex items-center gap-1.5 text-label text-muted-foreground">
+                        <span>{ticket.ref}</span>
+                        {ticketMentionsMe(ticket) ? (
+                          <span
+                            data-testid={`board-card-mention-${ticket.id}`}
+                            title={t`Mentioned you`}
+                            className="inline-flex size-4 shrink-0 items-center justify-center rounded-full bg-destructive/15 text-caption font-bold text-destructive"
+                          >
+                            !
+                          </span>
+                        ) : null}
+                      </span>
                       <span>{ticket.title}</span>
                       <span className="text-label text-muted-foreground">{subtitle}</span>
                     </Button>

@@ -19,6 +19,7 @@ import {
   getTicket,
   listBoardTickets,
   updateTicket,
+  validateBlockedTicketMention,
 } from "../../tasks/ticket-tools.js";
 import {
   cancelScheduleFromTool,
@@ -268,6 +269,18 @@ export const taskTools: ToolHandlers = {
         ...(ownerUserId !== undefined ? { ownerUserId } : {}),
         ...(workerBotIds !== undefined ? { workerBotIds } : {}),
       });
+    }
+    for (const action of actions) {
+      if (action.status === "blocked") {
+        const mentionError = await validateBlockedTicketMention(deps, {
+          spaceId: run.spaceId,
+          userId: run.userId,
+          botId: bot.id,
+          ticketId: action.ticketId,
+          description: action.description,
+        });
+        if (mentionError) return call.finish({ error: mentionError });
+      }
     }
     return call.finish(
       await syncTasksViaGoOrLocal(deps, {

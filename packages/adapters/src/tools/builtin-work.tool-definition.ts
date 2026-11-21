@@ -321,7 +321,12 @@ export const workTools: ConnectorTool[] = [
         title: { type: "string", maxLength: TICKET_TITLE_MAX_LENGTH },
         description: { type: "string", maxLength: TICKET_DESCRIPTION_MAX_LENGTH },
         priority: { type: "string", enum: TICKET_PRIORITIES },
-        status: { type: "string", enum: TICKET_STATUSES },
+        status: {
+          type: "string",
+          enum: TICKET_STATUSES,
+          description:
+            "Task status. Setting status to 'blocked' requires an @mention of the user or bot it is blocked on (e.g. @user or @BotName) in description or a comment.",
+        },
         ownerBotId: { type: "string", description: "Bot id that owns the ticket." },
         ownerUserId: {
           type: "string",
@@ -385,7 +390,8 @@ export const workTools: ConnectorTool[] = [
               status: {
                 type: "string",
                 enum: ["todo", "doing", "review", "blocked", "done"],
-                description: "Task stage on the Kanban board.",
+                description:
+                  "Task stage on the Kanban board. Setting status to 'blocked' requires an @mention of the user or bot it is blocked on (e.g. @user or @BotName) in description or a comment.",
               },
               priority: {
                 type: "string",

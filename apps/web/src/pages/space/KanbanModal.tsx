@@ -34,6 +34,7 @@ import {
   ownerPayloadFromValue,
   sameIdList,
   ticketInvolvesBot,
+  ticketMentionsMe,
   ticketOwnerLabel,
   ticketWorkerIds,
   ticketWorkerNames,
@@ -241,7 +242,18 @@ function KanbanBoardView({
                       className="flex w-full flex-col items-start gap-1 rounded-md border border-border bg-card p-2.5 text-start transition-colors hover:bg-accent"
                     >
                       <div className="flex w-full items-center justify-between gap-2">
-                        <span className="text-label text-muted-foreground">{ticket.ref}</span>
+                        <span className="flex items-center gap-1.5 text-label text-muted-foreground">
+                          <span>{ticket.ref}</span>
+                          {ticketMentionsMe(ticket) ? (
+                            <span
+                              data-testid={`kanban-card-mention-${ticket.id}`}
+                              title={t`Mentioned you`}
+                              className="inline-flex size-4 shrink-0 items-center justify-center rounded-full bg-destructive/15 text-caption font-bold text-destructive"
+                            >
+                              !
+                            </span>
+                          ) : null}
+                        </span>
                         {ticket.priority === "high" || ticket.priority === "urgent" ? (
                           <span className="text-label text-warning">
                             {priorities[ticket.priority]}
@@ -360,6 +372,15 @@ function TicketDetailView({
               <Trans>Board</Trans>
             </Button>
             <span className="text-label text-muted-foreground">{ticket.ref}</span>
+            {ticketMentionsMe(ticket) ? (
+              <span
+                data-testid={`kanban-detail-mention-${ticket.id}`}
+                title={t`Mentioned you`}
+                className="inline-flex size-4 shrink-0 items-center justify-center rounded-full bg-destructive/15 text-caption font-bold text-destructive"
+              >
+                !
+              </span>
+            ) : null}
           </div>
           <DialogTitle className="text-start" dir="auto">
             {ticket.title}

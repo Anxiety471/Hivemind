@@ -26,6 +26,7 @@ type Service struct {
 	BoardLab bool
 	Content  *contentcrypto.KeyRing
 	Signals  *effects.Notifier
+	Waker    shared.TicketWaker
 	Logger   *slog.Logger
 	Now      func() time.Time
 }
@@ -245,7 +246,12 @@ func (s *Service) Apply(ctx context.Context, req ApplyRequest) (ApplyResponse, e
 
 	actor := db.Actor{SpaceID: req.SpaceID, UserID: req.UserID}
 	type boardSignal struct{ boardID, ticketID string }
+	type mentionWake struct {
+		ticketID string
+		botIDs   []string
+	}
 	var signals []boardSignal
+	var mentionWakes []mentionWake
 
 	err := s.DB.Tenant(ctx, actor, func(tx pgx.Tx) error {
 		enabled, err := tickets.Enabled(ctx, tx, s.deployment(), req.UserID)
@@ -278,6 +284,15 @@ func (s *Service) Apply(ctx context.Context, req ApplyRequest) (ApplyResponse, e
 		if err != nil {
 			return err
 		}
+		spaceBots, _ := tickets.LoadSpaceBots(ctx, tx, req.SpaceID)
+		queueMentions := func(ticketID string, desc *string) {
+			if desc == nil || len(spaceBots) == 0 {
+				return
+			}
+			if mentioned := tickets.ExtractMentionedBotIDs(*desc, spaceBots, req.BotID); len(mentioned) > 0 {
+				mentionWakes = append(mentionWakes, mentionWake{ticketID: ticketID, botIDs: mentioned})
+			}
+		}
 		byID := make(map[string]OpenTicket, len(open))
 		byRef := make(map[string]OpenTicket, len(open))
 		for _, item := range open {
@@ -298,6 +313,7 @@ func (s *Service) Apply(ctx context.Context, req ApplyRequest) (ApplyResponse, e
 					}
 					resp.Updated = append(resp.Updated, updated)
 					signals = append(signals, boardSignal{boardID: board.ID, ticketID: updated.ID})
+					queueMentions(updated.ID, action.Description)
 					replaceOpenTicket(open, byID, byRef, dup.ID, updated, action.Description)
 					continue
 				}
@@ -312,6 +328,7 @@ func (s *Service) Apply(ctx context.Context, req ApplyRequest) (ApplyResponse, e
 				}
 				resp.Created = append(resp.Created, created)
 				signals = append(signals, boardSignal{boardID: board.ID, ticketID: created.ID})
+				queueMentions(created.ID, action.Description)
 				if created.Status != "done" && created.Status != "closed" {
 					open = append(open, openEntry)
 					byID[openEntry.ID] = openEntry
@@ -336,6 +353,7 @@ func (s *Service) Apply(ctx context.Context, req ApplyRequest) (ApplyResponse, e
 			}
 			resp.Updated = append(resp.Updated, updated)
 			signals = append(signals, boardSignal{boardID: board.ID, ticketID: updated.ID})
+			queueMentions(updated.ID, action.Description)
 			replaceOpenTicket(open, byID, byRef, target.ID, updated, action.Description)
 		}
 		return nil
@@ -344,10 +362,16 @@ func (s *Service) Apply(ctx context.Context, req ApplyRequest) (ApplyResponse, e
 		return ApplyResponse{}, err
 	}
 
-	// Publish realtime Kanban notifications after commit; never wake the bot.
+	// Publish realtime Kanban notifications after commit and wake any @mentioned bots.
 	if s.Signals != nil {
 		for _, sig := range signals {
 			s.Signals.PublishBoard(req.SpaceID, sig.boardID, sig.ticketID)
+		}
+	}
+	if s.Waker != nil {
+		for _, mw := range mentionWakes {
+			s.Waker.WakeWorkers(ctx, req.SpaceID, mw.ticketID, mw.botIDs,
+				"You were mentioned on this ticket — read it with ticket_get and address what is needed from you.")
 		}
 	}
 	return resp, nil

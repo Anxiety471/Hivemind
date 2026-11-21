@@ -20,7 +20,6 @@ export async function wakeTicketAssignee(
       where: {
         id: input.ticketId,
         spaceId: input.spaceId,
-        OR: [{ assigneeBotId: input.botId }, { workerBotIds: { has: input.botId } }],
       },
       include: { board: { select: { ticketPrefix: true } } },
     });
