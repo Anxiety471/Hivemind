@@ -96,6 +96,7 @@ import { useComposerMentions } from "./shell/composer/use-composer-mentions";
 import { ComputerOverlay } from "./shell/computers/computer-overlay";
 import { ComputerPanel } from "./shell/computers/computer-panel";
 import { useComputerControls, useComputerState } from "./shell/computers/use-computer";
+import { ConversationTasksRail } from "./shell/home/conversation-tasks-rail";
 import { HostComputerPrompt } from "./shell/host-computer-prompt";
 import { KeyboardShortcutsDialog } from "./shell/keyboard-shortcuts-dialog";
 import { rightPanelStorageKey } from "./shell/right-panel-state";
@@ -1140,12 +1141,9 @@ function SpaceShell() {
             phoneCallsEnabled={Boolean(bootstrapMe?.phoneCallsEnabled)}
             voiceReady={Boolean(voiceStatus?.ready)}
             inCall={Boolean(active) && call?.botId === active?.id}
-            boardEnabled={hasLab(bootstrapMe?.labs, "board")}
-            tasksOpen={panel === "home"}
             panelOpen={chatPanelOpen}
             onOpenNavigation={() => setMobileSidebarOpen(true)}
             onTogglePanel={toggleChatPanel}
-            onToggleTasks={() => setPanel((current) => (current === "home" ? null : "home"))}
             onCall={(bot) => {
               if (call?.botId === bot.id) {
                 setCallMinimized(false);
@@ -1306,6 +1304,10 @@ function SpaceShell() {
         transcribe={voiceStatus ? Boolean(voiceStatus.transcribe) : undefined}
         onAnswered={(botId) => navigate(`/app/${botId}`)}
       />
+
+      {hasLab(bootstrapMe?.labs, "board") && !inGroup && active && !panel ? (
+        <ConversationTasksRail key={active.id} bot={active} bots={bots} />
+      ) : null}
 
       <ShellSidePanel
         rpc={rpc}

@@ -1,7 +1,7 @@
 import { useLingui } from "@lingui/react/macro";
 import type { Bot, Group, ThreadSnapshot } from "@rakazo/contracts";
 import { BotAvatar, Button, GroupAvatar } from "@rakazo/ui-web";
-import { Gift, ListTodo, Menu, Phone } from "lucide-react";
+import { Gift, Menu, Phone } from "lucide-react";
 import { useState } from "react";
 import { useBilling } from "../../../components/billing/SubscriptionGate";
 import { IconTooltip } from "../../../components/IconTooltip";
@@ -18,12 +18,9 @@ export function ChatHeader({
   phoneCallsEnabled,
   voiceReady,
   inCall,
-  boardEnabled,
-  tasksOpen,
   panelOpen,
   onOpenNavigation,
   onTogglePanel,
-  onToggleTasks,
   onCall,
 }: {
   inGroup: boolean;
@@ -34,12 +31,9 @@ export function ChatHeader({
   /** False while the voice status loads or no voice is connected; the button then opens voice settings. */
   voiceReady: boolean;
   inCall: boolean;
-  boardEnabled?: boolean;
-  tasksOpen?: boolean;
   panelOpen: boolean;
   onOpenNavigation: () => void;
   onTogglePanel: () => void;
-  onToggleTasks?: () => void;
   onCall: (bot: Bot) => void;
 }) {
   const { t } = useLingui();
@@ -95,22 +89,6 @@ export function ChatHeader({
         <div />
       )}
       <div className="flex items-center justify-self-end gap-2">
-        {boardEnabled && !inGroup && active && onToggleTasks ? (
-          <IconTooltip label={tasksOpen ? t`Hide tasks` : t`Tasks`}>
-            <Button
-              variant="floating"
-              size="icon-lg"
-              data-testid="tasks-panel-toggle"
-              aria-label={tasksOpen ? t`Hide tasks` : t`Tasks`}
-              aria-expanded={tasksOpen}
-              data-active={tasksOpen ? "" : undefined}
-              onClick={onToggleTasks}
-              className="app-no-drag"
-            >
-              <ListTodo strokeWidth={1.75} className="size-4.5" />
-            </Button>
-          </IconTooltip>
-        ) : null}
         {phoneCallsEnabled && !inGroup && active ? (
           <IconTooltip label={inCall ? t`Open call` : t`Call`}>
             <Button
