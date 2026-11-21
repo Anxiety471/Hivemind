@@ -373,6 +373,27 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 			},
 		},
 		{
+			Name:     "bots.list",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, _ orpc.Input) (any, *orpc.Error) {
+				return bots.ListBots(ctx, database, deployment, actor)
+			},
+		},
+		{
+			Name:     "bots.listArchived",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, _ orpc.Input) (any, *orpc.Error) {
+				return bots.ListArchivedBots(ctx, database, deployment, actor)
+			},
+		},
+		{
+			Name:     "bots.get",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return bots.GetBot(ctx, database, deployment, actor, input)
+			},
+		},
+		{
 			Name: "bots.reorder",
 			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
 				return bots.Reorder(ctx, database, actor, input)
@@ -422,6 +443,20 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 			Name: "memory.setDefaultScope",
 			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
 				return memorycfg.SetDefaultScope(ctx, database, actor, input)
+			},
+		},
+		{
+			Name:     "groups.list",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, _ orpc.Input) (any, *orpc.Error) {
+				return groups.List(ctx, database, deployment, actor)
+			},
+		},
+		{
+			Name:     "groups.listArchived",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, _ orpc.Input) (any, *orpc.Error) {
+				return groups.ListArchived(ctx, database, deployment, actor)
 			},
 		},
 		{

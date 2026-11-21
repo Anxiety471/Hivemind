@@ -71,6 +71,11 @@ type Deployment struct {
 	// BoardLab is TICKET_BOARD_ENABLED: the board feature this deployment turns on for every
 	// account (packages/adapters/src/labs-env.ts:4-11).
 	BoardLab bool
+	// PhoneCallsEnabled is PHONE_CALLS_ENABLED (phoneCallSettings, call-request.ts:5): the
+	// roster shows a bot's incoming call only when calls are opted in.
+	PhoneCallsEnabled bool
+	// PhoneCallRingSeconds is PHONE_CALL_RING_SECONDS, the positive number or 45.
+	PhoneCallRingSeconds float64
 	// Audit records the audit events a procedure raises itself (recordAuditEvent). nil in tests
 	// that never record one.
 	Audit *effects.Recorder
@@ -98,4 +103,13 @@ func RequireBot(ctx context.Context, tx pgx.Tx, actor db.Actor, botID string) er
 		return NotFound
 	}
 	return err
+}
+
+// ISOOrNil is a nullable timestamp's toISOString, or null.
+func ISOOrNil(at *time.Time) *string {
+	if at == nil {
+		return nil
+	}
+	value := ISO(*at)
+	return &value
 }

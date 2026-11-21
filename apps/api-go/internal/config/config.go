@@ -4,6 +4,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -49,6 +50,10 @@ type Config struct {
 	// BoardLab is TICKET_BOARD_ENABLED: the Labs board feature turned on for every account
 	// (packages/adapters/src/labs-env.ts:4-11).
 	BoardLab bool
+	// PhoneCallsEnabled is PHONE_CALLS_ENABLED (phoneCallSettings, call-request.ts:5).
+	PhoneCallsEnabled bool
+	// PhoneCallRingSeconds is PHONE_CALL_RING_SECONDS: a positive Number(), else 45.
+	PhoneCallRingSeconds float64
 	// RedisURL is the optional REDIS_URL connection string for task queue dispatch,
 	// retry scheduling, and stalled-bot bump coordination.
 	RedisURL string
@@ -113,6 +118,8 @@ func Load() (Config, error) {
 	}
 	config.MasterKeys = keys
 	config.BoardLab = os.Getenv("TICKET_BOARD_ENABLED") == "true"
+	config.PhoneCallsEnabled = os.Getenv("PHONE_CALLS_ENABLED") == "true"
+	config.PhoneCallRingSeconds = positiveNumber(os.Getenv("PHONE_CALL_RING_SECONDS"), 45)
 	config.RedisURL = strings.TrimSpace(os.Getenv("REDIS_URL"))
 	config.TaskBumpInterval = max(durationSeconds(os.Getenv("TASK_BUMP_INTERVAL_SEC"), 60), 30*time.Second)
 	config.TaskBumpIdle = durationSeconds(os.Getenv("TASK_BUMP_IDLE_SEC"), 300)
@@ -233,4 +240,45 @@ func positiveInt(raw string, fallback int) int {
 		return value
 	}
 	return fallback
+}
+
+// positiveNumber is phoneCallSettings' `positive`: Number(value), kept when it is a finite
+// number above zero, otherwise the fallback.
+func positiveNumber(raw string, fallback float64) float64 {
+	value, ok := numberValue(raw)
+	if !ok || math.IsInf(value, 0) || math.IsNaN(value) || value <= 0 {
+		return fallback
+	}
+	return value
+}
+
+// numberValue is Number(text) for the forms a deployment variable holds: decimal and
+// exponent notation, hexadecimal/binary/octal prefixes, and Infinity.
+func numberValue(raw string) (float64, bool) {
+	text := strings.TrimSpace(raw)
+	if text == "" {
+		return 0, true
+	}
+	switch {
+	case strings.HasPrefix(text, "0x") || strings.HasPrefix(text, "0X"):
+		value, err := strconv.ParseUint(text[2:], 16, 64)
+		return float64(value), err == nil
+	case strings.HasPrefix(text, "0b") || strings.HasPrefix(text, "0B"):
+		value, err := strconv.ParseUint(text[2:], 2, 64)
+		return float64(value), err == nil
+	case strings.HasPrefix(text, "0o") || strings.HasPrefix(text, "0O"):
+		value, err := strconv.ParseUint(text[2:], 8, 64)
+		return float64(value), err == nil
+	}
+	switch text {
+	case "Infinity", "+Infinity":
+		return math.Inf(1), true
+	case "-Infinity":
+		return math.Inf(-1), true
+	}
+	value, err := strconv.ParseFloat(text, 64)
+	if err != nil {
+		return 0, false
+	}
+	return value, true
 }

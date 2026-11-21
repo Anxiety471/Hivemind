@@ -22,6 +22,7 @@ import { asSystem, contentEncryptionOf } from "../../../packages/db/src/index.js
 import { createApp } from "../../api/src/app.js";
 import { laneDCases } from "./contract-lane-d.mts";
 import { laneHCases, laneHState } from "./contract-lane-h.mts";
+import { laneICases } from "./contract-lane-i.mts";
 import { membershipCases, membershipReset, membershipState } from "./contract-membership.mts";
 import { routineResumeCases } from "./contract-routine-resume.mts";
 import { routineCases } from "./contract-routines.mts";
@@ -58,6 +59,10 @@ const INBOUND_EMAIL_SECRET = "contract-inbound-email-secret-0123456789";
 const MAX_COMPUTERS_PER_USER = "2";
 // resolveMaxComputersPerUser reads process.env at call time on the TypeScript side.
 process.env.SANDBOX_MAX_COMPUTERS_PER_USER = MAX_COMPUTERS_PER_USER;
+// Calls are off unless opted in; the roster's incoming-call read is exercised with them on, on both
+// sides (phoneCallSettings reads process.env, and the Go child inherits it).
+process.env.PHONE_CALLS_ENABLED = "true";
+process.env.PHONE_CALL_RING_SECONDS = "45";
 
 export type Seeded = {
   userId: string;
@@ -200,6 +205,11 @@ await writeFile(
       "artifacts.list": { mode: "go", readOnly: true },
       "artifacts.listSpace": { mode: "go", readOnly: true },
       "artifacts.listVersions": { mode: "go", readOnly: true },
+      "bots.list": { mode: "go", readOnly: true },
+      "bots.listArchived": { mode: "go", readOnly: true },
+      "bots.get": { mode: "go", readOnly: true },
+      "groups.list": { mode: "go", readOnly: true },
+      "groups.listArchived": { mode: "go", readOnly: true },
       "bots.reorder": { mode: "go" },
       "bots.restore": { mode: "go" },
       "bots.removePreview": { mode: "go", readOnly: true },
@@ -285,6 +295,8 @@ go = spawn(
       INBOUND_EMAIL_DOMAIN,
       INBOUND_EMAIL_SECRET,
       SANDBOX_MAX_COMPUTERS_PER_USER: MAX_COMPUTERS_PER_USER,
+      PHONE_CALLS_ENABLED: "true",
+      PHONE_CALL_RING_SECONDS: "45",
     },
     stdio: ["ignore", "inherit", "inherit"],
   },
@@ -520,6 +532,7 @@ const cases: Case[] = [
   ...laneGCases(),
   ...laneGCases2(),
   ...laneHCases(system),
+  ...laneICases(system),
 ];
 
 const SITES = ["zeta.example", "alpha.example", "Beta.example", "_under.example", "10.0.0.1"];
