@@ -520,6 +520,25 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 			},
 		},
 		{
+			Name:     "tickets.list",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return tickets.List(ctx, database, deployment, actor, input)
+			},
+		},
+		{
+			Name: "tickets.create",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return tickets.Create(ctx, database, deployment, actor, input)
+			},
+		},
+		{
+			Name: "tickets.update",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return tickets.Update(ctx, database, deployment, actor, input)
+			},
+		},
+		{
 			Name: "tickets.move",
 			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
 				return tickets.Move(ctx, database, deployment, actor, input)

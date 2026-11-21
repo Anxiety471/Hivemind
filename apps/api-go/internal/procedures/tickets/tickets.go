@@ -11,7 +11,9 @@ package tickets
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -23,13 +25,22 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/validate"
 )
 
-// commentMaxLength is TICKET_COMMENT_MAX_LENGTH (packages/contracts/src/board.ts:26).
-const commentMaxLength = 10_000
+const (
+	titleMaxLength       = 200
+	descriptionMaxLength = 20_000
+	maxWorkers           = 20
+	searchMaxLength      = 200
+	// commentMaxLength is TICKET_COMMENT_MAX_LENGTH (packages/contracts/src/board.ts:26).
+	commentMaxLength = 10_000
+)
 
 var (
 	// errBoardDisabled is `new ORPCError("NOT_FOUND")`: the lab is off for this account.
 	errBoardDisabled = orpc.NotFound("Not Found")
+	errBoardMissing  = orpc.BadRequest("Unknown board.")
 	errTicketMissing = orpc.BadRequest("Ticket not found.")
+	errBotMissing    = orpc.BadRequest("Unknown bot.")
+	errUserMissing   = orpc.BadRequest("Unknown user.")
 )
 
 var (
@@ -483,4 +494,764 @@ func Comment(ctx context.Context, database *db.DB, deployment shared.Deployment,
 		deployment.Waker.WakeWorkers(ctx, actor.SpaceID, input.TicketID, workers, commentNote(input.Body))
 	}
 	return comment, nil
+}
+
+// resolveSpaceBoard is resolveSpaceBoard (apps/api/src/routes/boards.ts:19-29): ensures the Space's
+// default board and checks an optional explicit boardId against the Space.
+func resolveSpaceBoard(ctx context.Context, database *db.DB, actor db.Actor, boardID *string) (Board, error) {
+	board, err := openBoard(ctx, database, actor)
+	if err != nil {
+		return Board{}, err
+	}
+	if boardID == nil || *boardID == board.ID {
+		return board, nil
+	}
+	var found Board
+	err = database.Tenant(ctx, actor, func(tx pgx.Tx) error {
+		err := tx.QueryRow(ctx, `SELECT id, "ticketPrefix" FROM boards WHERE id = $1 AND "spaceId" = $2`,
+			*boardID, actor.SpaceID).Scan(&found.ID, &found.Prefix)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return errBoardMissing
+		}
+		return err
+	})
+	return found, err
+}
+
+func dedupeIDs(ids []string) []string {
+	seen := make(map[string]bool, len(ids))
+	result := make([]string, 0, len(ids))
+	for _, raw := range ids {
+		id := validate.JSTrim(raw)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		result = append(result, id)
+	}
+	return result
+}
+
+func ownBotsInSpace(ctx context.Context, tx pgx.Tx, spaceID, userID string, botIDs []string) (bool, error) {
+	unique := dedupeIDs(botIDs)
+	if len(unique) == 0 {
+		return true, nil
+	}
+	var count int
+	err := tx.QueryRow(ctx, `
+		SELECT COUNT(*) FROM bots
+		WHERE id = ANY($1)
+		  AND "spaceId" = $2
+		  AND "userId" = $3
+		  AND "archivedAt" IS NULL
+	`, unique, spaceID, userID).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+	return count == len(unique), nil
+}
+
+func userInSpace(ctx context.Context, tx pgx.Tx, spaceID, actingUserID, targetUserID string) (bool, error) {
+	if targetUserID == actingUserID {
+		return true, nil
+	}
+	var exists bool
+	err := tx.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM space_members
+			WHERE "spaceId" = $1 AND "userId" = $2
+		)
+	`, spaceID, targetUserID).Scan(&exists)
+	return exists, err
+}
+
+func escapeSearchWildcards(value string) string {
+	var b strings.Builder
+	b.Grow(len(value))
+	for _, r := range value {
+		if r == '%' || r == '_' || r == '\\' {
+			b.WriteByte('\\')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+type listInput struct {
+	BoardID       *string
+	Status        *string
+	AssigneeBotID *string
+	WorkerBotID   *string
+	OwnerBotID    *string
+	OwnerUserID   *string
+	Q             *string
+}
+
+// parseList is ListTicketsInput (packages/contracts/src/artifacts/board.ts:109-117).
+func parseList(raw orpc.Input) (listInput, *orpc.Error) {
+	object, issues := validate.Decode(raw.Raw, nil)
+	if issues != nil {
+		return listInput{}, validate.Fail(issues)
+	}
+	var (
+		out   listInput
+		found []validate.Issue
+	)
+	optID := func(key string) *string {
+		v := object.Field(key)
+		if v == validate.Undefined {
+			return nil
+		}
+		str, problems := validate.String(validate.Path{key}, v, validate.StringRules{Min: 1})
+		found = append(found, problems...)
+		return &str
+	}
+	out.BoardID = optID("boardId")
+	if v := object.Field("status"); v != validate.Undefined {
+		status, problems := validate.Enum(validate.Path{"status"}, v, ticketStatuses...)
+		found = append(found, problems...)
+		out.Status = &status
+	}
+	out.AssigneeBotID = optID("assigneeBotId")
+	out.WorkerBotID = optID("workerBotId")
+	out.OwnerBotID = optID("ownerBotId")
+	out.OwnerUserID = optID("ownerUserId")
+	if v := object.Field("q"); v != validate.Undefined {
+		q, problems := validate.String(validate.Path{"q"}, v, validate.StringRules{Trim: true, Max: searchMaxLength})
+		found = append(found, problems...)
+		out.Q = &q
+	}
+	if found != nil {
+		return listInput{}, validate.Fail(found)
+	}
+	return out, nil
+}
+
+// ListOutput is ListTicketsOutput (packages/contracts/src/artifacts/board.ts:120).
+type ListOutput struct {
+	Tickets []Ticket `json:"tickets"`
+}
+
+// List implements tickets.list (apps/api/src/routes/boards.ts:106-156).
+func List(ctx context.Context, database *db.DB, deployment shared.Deployment, actor db.Actor, raw orpc.Input) (any, *orpc.Error) {
+	if err := Gate(ctx, database, deployment, actor); err != nil {
+		return nil, shared.Failure(err)
+	}
+	input, failure := parseList(raw)
+	if failure != nil {
+		return nil, failure
+	}
+	board, err := resolveSpaceBoard(ctx, database, actor, input.BoardID)
+	if err != nil {
+		return nil, shared.Failure(err)
+	}
+	tickets := []Ticket{}
+	err = database.Tenant(ctx, actor, func(tx pgx.Tx) error {
+		clauses := []string{`"spaceId" = $1`, `"boardId" = $2`}
+		args := []any{actor.SpaceID, board.ID}
+		addArg := func(v any) string {
+			args = append(args, v)
+			return fmt.Sprintf("$%d", len(args))
+		}
+		if input.Status != nil {
+			p := addArg(*input.Status)
+			clauses = append(clauses, fmt.Sprintf("status = %s", p))
+		}
+		if input.AssigneeBotID != nil {
+			p := addArg(*input.AssigneeBotID)
+			clauses = append(clauses, fmt.Sprintf(`("assigneeBotId" = %s OR %s = ANY("workerBotIds") OR "ownerBotId" = %s)`, p, p, p))
+		}
+		if input.WorkerBotID != nil {
+			p := addArg(*input.WorkerBotID)
+			clauses = append(clauses, fmt.Sprintf(`(%s = ANY("workerBotIds") OR "assigneeBotId" = %s)`, p, p))
+		}
+		if input.OwnerBotID != nil {
+			p := addArg(*input.OwnerBotID)
+			clauses = append(clauses, fmt.Sprintf(`"ownerBotId" = %s`, p))
+		}
+		if input.OwnerUserID != nil {
+			ownerUser := *input.OwnerUserID
+			if ownerUser == "me" {
+				ownerUser = actor.UserID
+			}
+			p := addArg(ownerUser)
+			clauses = append(clauses, fmt.Sprintf(`"ownerUserId" = %s`, p))
+		}
+		if input.Q != nil && *input.Q != "" {
+			p := addArg("%" + escapeSearchWildcards(*input.Q) + "%")
+			clauses = append(clauses, fmt.Sprintf(`(title ILIKE %s ESCAPE '\' OR COALESCE(description, '') ILIKE %s ESCAPE '\')`, p, p))
+		}
+		query := `SELECT ` + ticketColumns + ` FROM tickets WHERE ` + strings.Join(clauses, " AND ") + ` ORDER BY "updatedAt" DESC, id DESC`
+		rows, err := tx.Query(ctx, query, args...)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			row, err := scanTicket(rows)
+			if err != nil {
+				return err
+			}
+			mapped, ok := dto(row, board.Prefix)
+			if !ok {
+				return errors.New("invalid ticket row")
+			}
+			tickets = append(tickets, mapped)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		if err.Error() == "invalid ticket row" {
+			return nil, shared.OutputInvalid()
+		}
+		return nil, shared.Failure(err)
+	}
+	return ListOutput{Tickets: tickets}, nil
+}
+
+type createInput struct {
+	BoardID          *string
+	Title            string
+	Description      *string
+	Priority         string
+	HasOwnerUserID   bool
+	OwnerUserID      *string
+	HasOwnerBotID    bool
+	OwnerBotID       *string
+	HasWorkerBotIDs  bool
+	WorkerBotIDs     []string
+	HasAssigneeBotID bool
+	AssigneeBotID    *string
+}
+
+func parseNullableOptID(object *validate.Object, key string, found *[]validate.Issue) (bool, *string) {
+	v := object.Field(key)
+	if v == validate.Undefined {
+		return false, nil
+	}
+	if v == nil {
+		return true, nil
+	}
+	str, problems := validate.String(validate.Path{key}, v, validate.StringRules{Min: 1})
+	*found = append(*found, problems...)
+	return true, &str
+}
+
+func parseWorkerBotIDs(object *validate.Object, found *[]validate.Issue) (bool, []string) {
+	v := object.Field("workerBotIds")
+	if v == validate.Undefined {
+		return false, nil
+	}
+	path := validate.Path{"workerBotIds"}
+	items, problems := validate.AsArray(path, v)
+	if problems != nil {
+		*found = append(*found, problems...)
+		return true, nil
+	}
+	ids := make([]string, 0, len(items))
+	for index, item := range items {
+		id, itemProblems := validate.String(path.With(index), item, validate.StringRules{Min: 1})
+		*found = append(*found, itemProblems...)
+		ids = append(ids, id)
+	}
+	*found = append(*found, validate.ArrayBounds(path, len(items), 0, maxWorkers)...)
+	return true, ids
+}
+
+// parseCreate is CreateTicketInput (packages/contracts/src/artifacts/board.ts:133-147).
+func parseCreate(raw orpc.Input) (createInput, *orpc.Error) {
+	object, issues := validate.Decode(raw.Raw, nil)
+	if issues != nil {
+		return createInput{}, validate.Fail(issues)
+	}
+	var (
+		out   createInput
+		found []validate.Issue
+	)
+	if v := object.Field("boardId"); v != validate.Undefined {
+		boardID, problems := validate.String(validate.Path{"boardId"}, v, validate.StringRules{Min: 1})
+		found = append(found, problems...)
+		out.BoardID = &boardID
+	}
+	title, problems := validate.String(validate.Path{"title"}, object.Field("title"),
+		validate.StringRules{Trim: true, Min: 1, Max: titleMaxLength})
+	found = append(found, problems...)
+	out.Title = title
+	if v := object.Field("description"); v != validate.Undefined {
+		desc, problems := validate.String(validate.Path{"description"}, v, validate.StringRules{Max: descriptionMaxLength})
+		found = append(found, problems...)
+		out.Description = &desc
+	}
+	out.Priority = "normal"
+	if v := object.Field("priority"); v != validate.Undefined {
+		priority, problems := validate.Enum(validate.Path{"priority"}, v, ticketPriorities...)
+		found = append(found, problems...)
+		out.Priority = priority
+	}
+	out.HasOwnerUserID, out.OwnerUserID = parseNullableOptID(object, "ownerUserId", &found)
+	out.HasOwnerBotID, out.OwnerBotID = parseNullableOptID(object, "ownerBotId", &found)
+	out.HasWorkerBotIDs, out.WorkerBotIDs = parseWorkerBotIDs(object, &found)
+	out.HasAssigneeBotID, out.AssigneeBotID = parseNullableOptID(object, "assigneeBotId", &found)
+	if found == nil && out.OwnerUserID != nil && out.OwnerBotID != nil {
+		found = append(found, validate.Issue{
+			"code":    "custom",
+			"path":    []any{"ownerBotId"},
+			"message": "Specify at most one of ownerUserId or ownerBotId",
+		})
+	}
+	if found != nil {
+		return createInput{}, validate.Fail(found)
+	}
+	return out, nil
+}
+
+// Create implements tickets.create (apps/api/src/routes/boards.ts:168-183 over
+// packages/adapters/src/tasks/ticket-tools.ts:237-314).
+func Create(ctx context.Context, database *db.DB, deployment shared.Deployment, actor db.Actor, raw orpc.Input) (any, *orpc.Error) {
+	if err := Gate(ctx, database, deployment, actor); err != nil {
+		return nil, shared.Failure(err)
+	}
+	input, failure := parseCreate(raw)
+	if failure != nil {
+		return nil, failure
+	}
+	board, err := resolveSpaceBoard(ctx, database, actor, input.BoardID)
+	if err != nil {
+		return nil, shared.Failure(err)
+	}
+
+	var requestedBots []string
+	if input.OwnerBotID != nil {
+		requestedBots = append(requestedBots, *input.OwnerBotID)
+	}
+	if input.AssigneeBotID != nil {
+		requestedBots = append(requestedBots, *input.AssigneeBotID)
+	}
+	requestedBots = append(requestedBots, input.WorkerBotIDs...)
+	requestedBots = dedupeIDs(requestedBots)
+
+	ownerUserInput := input.OwnerUserID
+	if ownerUserInput != nil && *ownerUserInput == "me" {
+		me := actor.UserID
+		ownerUserInput = &me
+	}
+
+	var (
+		ownerUserID *string
+		ownerBotID  *string
+	)
+	switch {
+	case input.OwnerBotID != nil:
+		ownerBotID = input.OwnerBotID
+	case ownerUserInput != nil:
+		ownerUserID = ownerUserInput
+	case input.HasOwnerBotID && input.HasOwnerUserID:
+		// Both explicitly null.
+	case input.HasOwnerBotID:
+		me := actor.UserID
+		ownerUserID = &me
+	case input.HasOwnerUserID:
+		// ownerUserId explicitly null -> no user owner.
+	default:
+		me := actor.UserID
+		ownerUserID = &me
+	}
+
+	var workerBotIDs []string
+	switch {
+	case input.HasWorkerBotIDs:
+		workerBotIDs = dedupeIDs(input.WorkerBotIDs)
+	case input.HasAssigneeBotID:
+		if input.AssigneeBotID != nil {
+			workerBotIDs = []string{*input.AssigneeBotID}
+		} else {
+			workerBotIDs = []string{}
+		}
+	default:
+		workerBotIDs = []string{}
+	}
+	var assigneeBotID *string
+	if len(workerBotIDs) > 0 {
+		first := workerBotIDs[0]
+		assigneeBotID = &first
+	}
+
+	var botsToValidate []string
+	if ownerBotID != nil {
+		botsToValidate = append(botsToValidate, *ownerBotID)
+	}
+	botsToValidate = append(botsToValidate, workerBotIDs...)
+
+	var ticket Ticket
+	err = database.Tenant(ctx, actor, func(tx pgx.Tx) error {
+		for _, botID := range requestedBots {
+			if err := shared.RequireBot(ctx, tx, actor, botID); err != nil {
+				return err
+			}
+		}
+		validBots, err := ownBotsInSpace(ctx, tx, actor.SpaceID, actor.UserID, botsToValidate)
+		if err != nil {
+			return err
+		}
+		if !validBots {
+			return errBotMissing
+		}
+		if ownerUserID != nil {
+			validUser, err := userInSpace(ctx, tx, actor.SpaceID, actor.UserID, *ownerUserID)
+			if err != nil {
+				return err
+			}
+			if !validUser {
+				return errUserMissing
+			}
+		}
+		var nextNumber int64
+		if err := tx.QueryRow(ctx, `UPDATE boards SET "nextNumber" = "nextNumber" + 1 WHERE id = $1 RETURNING "nextNumber"`,
+			board.ID).Scan(&nextNumber); err != nil {
+			return err
+		}
+		number := nextNumber - 1
+		var desc *string
+		if input.Description != nil {
+			stored := shared.StoredText(*input.Description)
+			desc = &stored
+		}
+		at := now()
+		value, err := scanTicket(tx.QueryRow(ctx, `
+			INSERT INTO tickets (
+				id, "boardId", "spaceId", number, title, description, status, priority,
+				"assigneeBotId", "ownerUserId", "ownerBotId", "workerBotIds",
+				"createdByBotId", "createdByUserId", "createdAt", "updatedAt"
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, 'todo', $7, $8, $9, $10, $11, NULL, $12, $13, $13)
+			RETURNING `+ticketColumns,
+			effects.NewID(), board.ID, actor.SpaceID, number, shared.StoredText(input.Title), desc,
+			input.Priority, assigneeBotID, ownerUserID, ownerBotID, workerBotIDs, actor.UserID, at,
+		))
+		if err != nil {
+			return err
+		}
+		if deployment.Signals != nil {
+			deployment.Signals.PublishBoard(actor.SpaceID, board.ID, value.ID)
+		}
+		ticket, _ = dto(value, board.Prefix)
+		return nil
+	})
+	if err != nil {
+		return nil, shared.Failure(err)
+	}
+	if !ticketValid(ticket) || ticket.ID == "" {
+		return nil, shared.OutputInvalid()
+	}
+	if deployment.Waker != nil && len(ticket.WorkerBotIDs) > 0 {
+		deployment.Waker.WakeWorkers(ctx, actor.SpaceID, ticket.ID, ticket.WorkerBotIDs, "")
+	}
+	return ticket, nil
+}
+
+type updateInput struct {
+	ID               string
+	HasTitle         bool
+	Title            string
+	HasDescription   bool
+	Description      *string
+	HasPriority      bool
+	Priority         *string
+	HasStatus        bool
+	Status           string
+	HasOwnerUserID   bool
+	OwnerUserID      *string
+	HasOwnerBotID    bool
+	OwnerBotID       *string
+	HasWorkerBotIDs  bool
+	WorkerBotIDs     []string
+	HasAssigneeBotID bool
+	AssigneeBotID    *string
+}
+
+// parseUpdate is UpdateTicketInput (packages/contracts/src/artifacts/board.ts:150-165).
+func parseUpdate(raw orpc.Input) (updateInput, *orpc.Error) {
+	object, issues := validate.Decode(raw.Raw, nil)
+	if issues != nil {
+		return updateInput{}, validate.Fail(issues)
+	}
+	var (
+		out   updateInput
+		found []validate.Issue
+	)
+	id, problems := validate.String(validate.Path{"id"}, object.Field("id"), validate.StringRules{Min: 1})
+	found = append(found, problems...)
+	out.ID = id
+	if v := object.Field("title"); v != validate.Undefined {
+		out.HasTitle = true
+		title, problems := validate.String(validate.Path{"title"}, v,
+			validate.StringRules{Trim: true, Min: 1, Max: titleMaxLength})
+		found = append(found, problems...)
+		out.Title = title
+	}
+	if v := object.Field("description"); v != validate.Undefined {
+		out.HasDescription = true
+		if v != nil {
+			desc, problems := validate.String(validate.Path{"description"}, v,
+				validate.StringRules{Max: descriptionMaxLength})
+			found = append(found, problems...)
+			out.Description = &desc
+		}
+	}
+	if v := object.Field("priority"); v != validate.Undefined {
+		out.HasPriority = true
+		if v != nil {
+			priority, problems := validate.Enum(validate.Path{"priority"}, v, ticketPriorities...)
+			found = append(found, problems...)
+			out.Priority = &priority
+		}
+	}
+	if v := object.Field("status"); v != validate.Undefined {
+		out.HasStatus = true
+		status, problems := validate.Enum(validate.Path{"status"}, v, ticketStatuses...)
+		found = append(found, problems...)
+		out.Status = status
+	}
+	out.HasOwnerUserID, out.OwnerUserID = parseNullableOptID(object, "ownerUserId", &found)
+	out.HasOwnerBotID, out.OwnerBotID = parseNullableOptID(object, "ownerBotId", &found)
+	out.HasWorkerBotIDs, out.WorkerBotIDs = parseWorkerBotIDs(object, &found)
+	out.HasAssigneeBotID, out.AssigneeBotID = parseNullableOptID(object, "assigneeBotId", &found)
+	if found == nil && out.OwnerUserID != nil && out.OwnerBotID != nil {
+		found = append(found, validate.Issue{
+			"code":    "custom",
+			"path":    []any{"ownerBotId"},
+			"message": "Specify at most one of ownerUserId or ownerBotId",
+		})
+	}
+	if found != nil {
+		return updateInput{}, validate.Fail(found)
+	}
+	return out, nil
+}
+
+// Update implements tickets.update (apps/api/src/routes/boards.ts:184-198 over
+// packages/adapters/src/tasks/ticket-tools.ts:316-430).
+func Update(ctx context.Context, database *db.DB, deployment shared.Deployment, actor db.Actor, raw orpc.Input) (any, *orpc.Error) {
+	if err := Gate(ctx, database, deployment, actor); err != nil {
+		return nil, shared.Failure(err)
+	}
+	input, failure := parseUpdate(raw)
+	if failure != nil {
+		return nil, failure
+	}
+
+	var requestedBots []string
+	if input.OwnerBotID != nil {
+		requestedBots = append(requestedBots, *input.OwnerBotID)
+	}
+	if input.AssigneeBotID != nil {
+		requestedBots = append(requestedBots, *input.AssigneeBotID)
+	}
+	requestedBots = append(requestedBots, input.WorkerBotIDs...)
+	requestedBots = dedupeIDs(requestedBots)
+
+	ownerUserInput := input.OwnerUserID
+	if ownerUserInput != nil && *ownerUserInput == "me" {
+		me := actor.UserID
+		ownerUserInput = &me
+	}
+
+	hasWorkersUpdate := input.HasWorkerBotIDs || input.HasAssigneeBotID
+	var nextWorkers []string
+	if hasWorkersUpdate {
+		if input.HasWorkerBotIDs {
+			nextWorkers = dedupeIDs(input.WorkerBotIDs)
+		} else if input.AssigneeBotID != nil {
+			nextWorkers = []string{*input.AssigneeBotID}
+		} else {
+			nextWorkers = []string{}
+		}
+	}
+
+	var botsToValidate []string
+	if input.OwnerBotID != nil {
+		botsToValidate = append(botsToValidate, *input.OwnerBotID)
+	}
+	botsToValidate = append(botsToValidate, nextWorkers...)
+
+	// Validate requested bots and owner user before opening the board, matching the TS route order.
+	if len(requestedBots) > 0 || len(botsToValidate) > 0 || ownerUserInput != nil {
+		if err := database.Tenant(ctx, actor, func(tx pgx.Tx) error {
+			for _, botID := range requestedBots {
+				if err := shared.RequireBot(ctx, tx, actor, botID); err != nil {
+					return err
+				}
+			}
+			validBots, err := ownBotsInSpace(ctx, tx, actor.SpaceID, actor.UserID, botsToValidate)
+			if err != nil {
+				return err
+			}
+			if !validBots {
+				return errBotMissing
+			}
+			if ownerUserInput != nil {
+				validUser, err := userInSpace(ctx, tx, actor.SpaceID, actor.UserID, *ownerUserInput)
+				if err != nil {
+					return err
+				}
+				if !validUser {
+					return errUserMissing
+				}
+			}
+			return nil
+		}); err != nil {
+			return nil, shared.Failure(err)
+		}
+	}
+
+	board, err := openBoard(ctx, database, actor)
+	if err != nil {
+		return nil, shared.Failure(err)
+	}
+
+	var (
+		ticket        Ticket
+		addedWorkers  []string
+		statusChanged bool
+	)
+	err = database.Tenant(ctx, actor, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `SELECT id FROM tickets WHERE id = $1 AND "spaceId" = $2 FOR UPDATE`,
+			input.ID, actor.SpaceID); err != nil {
+			return err
+		}
+		current, err := scanTicket(tx.QueryRow(ctx, `SELECT `+ticketColumns+` FROM tickets
+			WHERE id = $1 AND "spaceId" = $2 AND "boardId" = $3`, input.ID, actor.SpaceID, board.ID))
+		if errors.Is(err, pgx.ErrNoRows) {
+			return errTicketMissing
+		}
+		if err != nil {
+			return err
+		}
+
+		prevWorkers := map[string]bool{}
+		if len(current.WorkerBotIDs) > 0 {
+			for _, id := range current.WorkerBotIDs {
+				prevWorkers[id] = true
+			}
+		} else if current.AssigneeBotID != nil {
+			prevWorkers[*current.AssigneeBotID] = true
+		}
+
+		title := current.Title
+		if input.HasTitle {
+			title = shared.StoredText(input.Title)
+		}
+		description := current.Description
+		if input.HasDescription {
+			if input.Description != nil {
+				stored := shared.StoredText(*input.Description)
+				description = &stored
+			} else {
+				description = nil
+			}
+		}
+		priority := coercePriority(current.Priority)
+		if input.HasPriority {
+			if input.Priority != nil {
+				priority = *input.Priority
+			} else {
+				priority = "normal"
+			}
+		}
+		ownerUserID := current.OwnerUserID
+		ownerBotID := current.OwnerBotID
+		if input.HasOwnerBotID || input.HasOwnerUserID {
+			switch {
+			case input.OwnerBotID != nil:
+				ownerBotID = input.OwnerBotID
+				ownerUserID = nil
+			case ownerUserInput != nil:
+				ownerUserID = ownerUserInput
+				ownerBotID = nil
+			default:
+				if input.HasOwnerBotID {
+					ownerBotID = nil
+				}
+				if input.HasOwnerUserID {
+					ownerUserID = nil
+				}
+			}
+		}
+		workerBotIDs := current.WorkerBotIDs
+		if workerBotIDs == nil {
+			workerBotIDs = []string{}
+		}
+		assigneeBotID := current.AssigneeBotID
+		if hasWorkersUpdate {
+			workerBotIDs = nextWorkers
+			if len(nextWorkers) > 0 {
+				first := nextWorkers[0]
+				assigneeBotID = &first
+			} else {
+				assigneeBotID = nil
+			}
+			for _, id := range nextWorkers {
+				if !prevWorkers[id] {
+					addedWorkers = append(addedWorkers, id)
+				}
+			}
+		}
+
+		status := current.Status
+		completedAt := current.CompletedAt
+		if input.HasStatus {
+			statusChanged = input.Status != current.Status
+			status = input.Status
+			if completedStatus(status) {
+				if completedAt == nil {
+					at := now()
+					completedAt = &at
+				}
+			} else {
+				completedAt = nil
+			}
+		}
+
+		updatedAt := now()
+		value, err := scanTicket(tx.QueryRow(ctx, `
+			UPDATE tickets
+			SET title = $2, description = $3, priority = $4,
+			    "ownerUserId" = $5, "ownerBotId" = $6,
+			    "workerBotIds" = $7, "assigneeBotId" = $8,
+			    status = $9, "completedAt" = $10, "updatedAt" = $11
+			WHERE id = $1
+			RETURNING `+ticketColumns,
+			current.ID, title, description, priority,
+			ownerUserID, ownerBotID,
+			workerBotIDs, assigneeBotID,
+			status, completedAt, updatedAt,
+		))
+		if err != nil {
+			return err
+		}
+		if deployment.Signals != nil {
+			deployment.Signals.PublishBoard(actor.SpaceID, board.ID, value.ID)
+		}
+		ticket, _ = dto(value, board.Prefix)
+		return nil
+	})
+	if err != nil {
+		return nil, shared.Failure(err)
+	}
+	if !ticketValid(ticket) || ticket.ID == "" {
+		return nil, shared.OutputInvalid()
+	}
+	var statusWakes []string
+	if statusChanged && wakesOnStatus(ticket.Status) {
+		statusWakes = ticket.WorkerBotIDs
+	}
+	wakeBotIDs := dedupeIDs(append(addedWorkers, statusWakes...))
+	if deployment.Waker != nil && len(wakeBotIDs) > 0 {
+		note := ""
+		if len(statusWakes) > 0 {
+			note = "Its status changed to " + ticket.Status + "."
+		}
+		deployment.Waker.WakeWorkers(ctx, actor.SpaceID, ticket.ID, wakeBotIDs, note)
+	}
+	return ticket, nil
 }

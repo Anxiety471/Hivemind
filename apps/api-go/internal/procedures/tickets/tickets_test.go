@@ -129,3 +129,33 @@ func TestEnsureBoardNameFallsBack(t *testing.T) {
 		}
 	}
 }
+
+func TestParseListValidatesOptionalFilters(t *testing.T) {
+	parsed, failure := parseList(input(`{"status":"doing","q":"  redis %_  ","workerBotId":"bot-1"}`))
+	if failure != nil || parsed.Status == nil || *parsed.Status != "doing" || parsed.Q == nil || *parsed.Q != "redis %_" {
+		t.Fatalf("parsed = %+v failure = %v", parsed, failure)
+	}
+	if escapeSearchWildcards(*parsed.Q) != `redis \%\_` {
+		t.Fatalf("escaped = %s", escapeSearchWildcards(*parsed.Q))
+	}
+	if _, failure := parseList(input(`{"status":"unknown"}`)); failure == nil {
+		t.Fatal("invalid status must be refused")
+	}
+}
+
+func TestParseCreateAndUpdateValidateOwnerAndWorkers(t *testing.T) {
+	created, failure := parseCreate(input(`{"title":"  Ship queue  ","workerBotIds":["bot-1","bot-2"]}`))
+	if failure != nil || created.Title != "Ship queue" || created.Priority != "normal" || len(created.WorkerBotIDs) != 2 {
+		t.Fatalf("created = %+v failure = %v", created, failure)
+	}
+	if _, failure := parseCreate(input(`{"title":"Ship","ownerUserId":"u1","ownerBotId":"b1"}`)); failure == nil {
+		t.Fatal("setting both ownerUserId and ownerBotId must be refused")
+	}
+	updated, failure := parseUpdate(input(`{"id":"t1","status":"review","ownerUserId":null}`))
+	if failure != nil || updated.ID != "t1" || !updated.HasStatus || updated.Status != "review" || !updated.HasOwnerUserID || updated.OwnerUserID != nil {
+		t.Fatalf("updated = %+v failure = %v", updated, failure)
+	}
+	if _, failure := parseUpdate(input(`{"id":"t1","ownerUserId":"u1","ownerBotId":"b1"}`)); failure == nil {
+		t.Fatal("setting both ownerUserId and ownerBotId on update must be refused")
+	}
+}

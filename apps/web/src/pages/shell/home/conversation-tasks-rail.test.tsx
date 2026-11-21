@@ -8,7 +8,13 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 const botTickets = vi.hoisted(() => ({ current: [] as Ticket[] }));
 const activeRun = vi.hoisted(() => ({
-  current: null as { id: string; botId: string; status: string; trigger: string } | null,
+  current: null as {
+    id: string;
+    botId: string;
+    status: string;
+    trigger: string;
+    promptSnippet?: string;
+  } | null,
 }));
 const modalProps = vi.hoisted(() => ({
   last: null as { open: boolean; target: unknown; botId?: string } | null,
@@ -135,15 +141,34 @@ it("shows live working status and separates Blocked from Doing", async () => {
     { ...base, id: "t-doing", ref: "TASK-1", title: "Active item", status: "doing" },
     { ...base, id: "t-blocked", ref: "TASK-2", title: "Waiting on review", status: "blocked" },
   ];
-  activeRun.current = { id: "run-1", botId: "bot-1", status: "running", trigger: "tickets" };
+  activeRun.current = {
+    id: "run-1",
+    botId: "bot-1",
+    status: "running",
+    trigger: "tickets",
+    promptSnippet: "Work on ticket TASK-1. Read it with ticket_get.",
+  };
 
   await act(async () => {
     root.render(<ConversationTasksRail bot={bot} bots={[bot]} />);
   });
 
   expect(host.querySelector('[data-testid="tasks-rail-activity"]')?.textContent).toContain(
-    "Working on tasks",
+    "Working TASK-1",
   );
   expect(host.textContent).toContain("Doing");
   expect(host.textContent).toContain("Blocked");
+
+  // Unrelated non-ticket runs without a TASK-* reference do not show the working banner.
+  activeRun.current = {
+    id: "run-2",
+    botId: "bot-1",
+    status: "running",
+    trigger: "user",
+    promptSnippet: "Hello there",
+  };
+  await act(async () => {
+    root.render(<ConversationTasksRail bot={bot} bots={[bot]} />);
+  });
+  expect(host.querySelector('[data-testid="tasks-rail-activity"]')).toBeNull();
 });

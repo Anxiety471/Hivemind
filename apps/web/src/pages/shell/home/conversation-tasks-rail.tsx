@@ -23,9 +23,35 @@ const KanbanModal = lazy(() =>
 );
 
 const CLOSED_PREVIEW_COUNT = 3;
+const PROMPT_TICKET_REF_RE = /\b([A-Za-z][A-Za-z0-9]*-\d+)\b/;
 
 function newestFirst(a: Ticket, b: Ticket): number {
   return Date.parse(b.updatedAt) - Date.parse(a.updatedAt);
+}
+
+/**
+ * Resolves the `TASK-*` reference the bot's active run is working on. Returns null when the active
+ * run does not reference a task so the Tasks rail stays quiet during unrelated chat turns.
+ */
+function resolveActiveTicketRef(
+  activeRun: { status: string; trigger: string; promptSnippet?: string } | null,
+  tickets: readonly Ticket[],
+  doing: readonly Ticket[],
+): string | null {
+  if (!activeRun) return null;
+  const snippet = activeRun.promptSnippet ?? "";
+  if (snippet) {
+    const upper = snippet.toUpperCase();
+    for (const ticket of tickets) {
+      if (upper.includes(ticket.ref.toUpperCase())) return ticket.ref;
+    }
+  }
+  if (activeRun.trigger === "tickets") {
+    const match = PROMPT_TICKET_REF_RE.exec(snippet);
+    if (match?.[1]) return match[1].toUpperCase();
+    return doing[0]?.ref ?? null;
+  }
+  return null;
 }
 
 function ticketStatusIcon(status: TicketStatus, working: boolean): ReactNode {
@@ -70,26 +96,17 @@ export function ConversationTasksRail({ bot, bots }: { bot: Bot; bots: Bot[] }) 
   const total = tickets.length;
   const activeCount = doing.length + review.length + blocked.length + planned.length;
   const doneCount = closed.length;
+  const activeTicketRef = resolveActiveTicketRef(activeRun, tickets, doing);
   const working = Boolean(
-    activeRun &&
+    activeTicketRef &&
+      activeRun &&
       (activeRun.status === "running" ||
         activeRun.status === "leased" ||
-        activeRun.status === "queued"),
+        activeRun.status === "queued" ||
+        activeRun.status === "waiting_input" ||
+        activeRun.status === "waiting_takeover"),
   );
-  const waiting = Boolean(
-    activeRun && (activeRun.status === "waiting_input" || activeRun.status === "waiting_takeover"),
-  );
-  const activityLabel = activeRun
-    ? activeRun.status === "queued"
-      ? t`Queued`
-      : activeRun.status === "leased"
-        ? t`Starting…`
-        : waiting
-          ? t`Waiting on you`
-          : activeRun.trigger === "tickets"
-            ? t`Working on tasks`
-            : t`Working`
-    : null;
+  const activityLabel = working && activeTicketRef ? t`Working ${activeTicketRef}` : null;
 
   return (
     <aside
