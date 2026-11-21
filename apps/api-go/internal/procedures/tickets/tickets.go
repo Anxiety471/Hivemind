@@ -177,7 +177,6 @@ type Ticket struct {
 	CreatedAt       string   `json:"createdAt"`
 	UpdatedAt       string   `json:"updatedAt"`
 	CompletedAt     *string  `json:"completedAt"`
-	MentionsMe      bool     `json:"mentionsMe"`
 	WaitingOnBotIDs []string `json:"waitingOnBotIds,omitempty"`
 }
 
@@ -549,22 +548,8 @@ func LoadSpaceBots(ctx context.Context, tx pgx.Tx, spaceID string) ([]SpaceBot, 
 	return bots, rows.Err()
 }
 
-func loadUserNames(ctx context.Context, tx pgx.Tx, userID string) []string {
-	var name *string
-	if err := tx.QueryRow(ctx, `SELECT name FROM "user" WHERE id = $1`, userID).Scan(&name); err != nil || name == nil {
-		return nil
-	}
-	trimmed := validate.JSTrim(*name)
-	if trimmed == "" {
-		return nil
-	}
-	return []string{trimmed}
-}
-
 var (
-	userPronounAtRe      = regexp.MustCompile(`(?i)(?:^|[^\w])@(?:user|me|owner|you)(?:$|[^\w])`)
-	userPronounBlockedRe = regexp.MustCompile(`(?i)\b(?:blocked|waiting)\s+on\s+@?(?:user|me|owner|you)\b`)
-	nonAlnumRe           = regexp.MustCompile(`[^A-Za-z0-9]+`)
+	nonAlnumRe = regexp.MustCompile(`[^A-Za-z0-9]+`)
 )
 
 func botCandidateHandles(name string) []string {
@@ -621,54 +606,9 @@ func ExtractMentionedBotIDs(text string, bots []SpaceBot, excludeBotID string) [
 	return dedupeIDs(matched)
 }
 
-// TextMentionsUser reports whether text mentions the user via @user, @me, @<UserName>, or "blocked/waiting on <UserName>".
-func TextMentionsUser(text string, userNames []string) bool {
-	if validate.JSTrim(text) == "" {
-		return false
-	}
-	if userPronounAtRe.MatchString(text) || userPronounBlockedRe.MatchString(text) {
-		return true
-	}
-	for _, rawName := range userNames {
-		trimmed := validate.JSTrim(rawName)
-		if trimmed == "" {
-			continue
-		}
-		first := strings.Fields(trimmed)[0]
-		for _, candidate := range []string{trimmed, first} {
-			if len(candidate) >= 2 && matchesHandleMention(text, candidate) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 type latestTicketComment struct {
 	AuthorUserID *string
 	Body         string
-}
-
-func ticketMentionsUser(t Ticket, latestComment *latestTicketComment, userID string, userNames []string) bool {
-	// Mentions only need the user's attention while a task is blocked or awaiting review.
-	// Moving the task to todo, doing, done, or closed resolves the mention.
-	if t.Status != "blocked" && t.Status != "review" {
-		return false
-	}
-	// If the latest comment on the task was written by the user, the user has already answered.
-	if latestComment != nil && latestComment.AuthorUserID != nil && *latestComment.AuthorUserID == userID {
-		return false
-	}
-	if latestComment != nil && TextMentionsUser(latestComment.Body, userNames) {
-		return true
-	}
-	if TextMentionsUser(t.Title, userNames) {
-		return true
-	}
-	if t.Description != nil && TextMentionsUser(*t.Description, userNames) {
-		return true
-	}
-	return false
 }
 
 // waitingOnBotIDs is the bots a blocked ticket waits on: those @mentioned (or named after
@@ -910,7 +850,6 @@ func List(ctx context.Context, database *db.DB, deployment shared.Deployment, ac
 			return err
 		}
 		if len(tickets) > 0 {
-			userNames := loadUserNames(ctx, tx, actor.UserID)
 			ticketIDs := make([]string, len(tickets))
 			for i := range tickets {
 				ticketIDs[i] = tickets[i].ID
@@ -943,7 +882,6 @@ func List(ctx context.Context, database *db.DB, deployment shared.Deployment, ac
 			}
 			for i := range tickets {
 				latest := latestByTicket[tickets[i].ID]
-				tickets[i].MentionsMe = ticketMentionsUser(tickets[i], latest, actor.UserID, userNames)
 				tickets[i].WaitingOnBotIDs = waitingOnBotIDs(tickets[i], latest, bots)
 			}
 		}
@@ -1185,7 +1123,6 @@ func Create(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 			deployment.Signals.PublishBoard(actor.SpaceID, board.ID, value.ID)
 		}
 		ticket, _ = dto(value, board.Prefix)
-		ticket.MentionsMe = ticketMentionsUser(ticket, nil, actor.UserID, loadUserNames(ctx, tx, actor.UserID))
 		if desc != nil {
 			if spaceBots, err := LoadSpaceBots(ctx, tx, actor.SpaceID); err == nil {
 				mentionedBots = ExtractMentionedBotIDs(*desc, spaceBots, "")
@@ -1496,7 +1433,6 @@ func Update(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 			deployment.Signals.PublishBoard(actor.SpaceID, board.ID, value.ID)
 		}
 		ticket, _ = dto(value, board.Prefix)
-		ticket.MentionsMe = ticketMentionsUser(ticket, nil, actor.UserID, loadUserNames(ctx, tx, actor.UserID))
 		if input.HasDescription && description != nil {
 			if spaceBots, err := LoadSpaceBots(ctx, tx, actor.SpaceID); err == nil {
 				mentionedBots = ExtractMentionedBotIDs(*description, spaceBots, "")

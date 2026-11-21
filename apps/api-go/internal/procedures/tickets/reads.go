@@ -239,7 +239,6 @@ func Get(ctx context.Context, database *db.DB, deployment shared.Deployment, act
 		} else if !errors.Is(err, pgx.ErrNoRows) {
 			return err
 		}
-		ticket.MentionsMe = ticketMentionsUser(ticket, latest, actor.UserID, loadUserNames(ctx, tx, actor.UserID))
 		if ticket.Status == "blocked" {
 			bots, err := LoadSpaceBots(ctx, tx, actor.SpaceID)
 			if err != nil {

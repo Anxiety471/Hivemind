@@ -161,7 +161,7 @@ func TestParseCreateAndUpdateValidateOwnerAndWorkers(t *testing.T) {
 	}
 }
 
-func TestExtractMentionedBotIDsAndTextMentionsUser(t *testing.T) {
+func TestExtractMentionedBotIDs(t *testing.T) {
 	bots := []SpaceBot{
 		{ID: "b1", Name: "Grok Bot · Chief of Staff"},
 		{ID: "b2", Name: "Potato · Dev Ops"},
@@ -170,33 +170,6 @@ func TestExtractMentionedBotIDsAndTextMentionsUser(t *testing.T) {
 	got := ExtractMentionedBotIDs("Blocked on @Potato and waiting on @Cloudflare Manager", bots, "b1")
 	if len(got) != 2 || got[0] != "b2" || got[1] != "b3" {
 		t.Fatalf("mentioned bots = %+v", got)
-	}
-	if !TextMentionsUser("Still blocked on Joshua: excludes go/no-go", []string{"Joshua"}) {
-		t.Fatal("expected blocked on Joshua to match user mention")
-	}
-	if !TextMentionsUser("Need approval from @user before proceeding", nil) {
-		t.Fatal("expected @user to match user mention")
-	}
-	if TextMentionsUser("Routine background check completed", []string{"Joshua"}) {
-		t.Fatal("expected unrelated text not to match user mention")
-	}
-
-	desc := "Blocked on @Joshua for approval"
-	blockedTicket := Ticket{ID: "t1", Status: "blocked", Title: "Deploy", Description: &desc}
-	if !ticketMentionsUser(blockedTicket, nil, "u1", []string{"Joshua"}) {
-		t.Fatal("expected blocked ticket mentioning user to flag MentionsMe")
-	}
-	userID := "u1"
-	if ticketMentionsUser(blockedTicket, &latestTicketComment{AuthorUserID: &userID, Body: "Approved"}, "u1", []string{"Joshua"}) {
-		t.Fatal("expected user reply comment to resolve MentionsMe")
-	}
-	doingTicket := Ticket{ID: "t1", Status: "doing", Title: "Deploy", Description: &desc}
-	if ticketMentionsUser(doingTicket, nil, "u1", []string{"Joshua"}) {
-		t.Fatal("expected doing ticket not to flag MentionsMe")
-	}
-	doneTicket := Ticket{ID: "t1", Status: "done", Title: "Deploy", Description: &desc}
-	if ticketMentionsUser(doneTicket, nil, "u1", []string{"Joshua"}) {
-		t.Fatal("expected done ticket not to flag MentionsMe")
 	}
 }
 

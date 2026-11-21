@@ -102,6 +102,12 @@ export type Case = {
    * side only enqueues its job and nothing executes it here) land in neither window.
    */
   gapMs?: number;
+  /**
+   * Skip the realtime-signal comparison: a procedure that creates a board or ticket with a
+   * database-generated id publishes a frame whose payload necessarily names different ids on
+   * the two sides, while the response body is comparable through normalize().
+   */
+  ignoreSignals?: boolean;
 };
 
 function cookieFor(token: string) {
@@ -219,6 +225,10 @@ await writeFile(
       "computer.commands": { mode: "go", readOnly: true },
       "tickets.move": { mode: "go" },
       "tickets.comment": { mode: "go" },
+      "tickets.list": { mode: "go", readOnly: true },
+      "tickets.get": { mode: "go", readOnly: true },
+      "tickets.create": { mode: "go" },
+      "tickets.update": { mode: "go" },
       "skills.updateDraft": { mode: "go" },
       "skills.save": { mode: "go" },
       "organizations.members.setRole": { mode: "go" },
@@ -6926,6 +6936,8 @@ const WRITE_PROCEDURES = new Set([
   "onboarding.dismissFocus",
   "tickets.move",
   "tickets.comment",
+  "tickets.create",
+  "tickets.update",
   "skills.updateDraft",
   "skills.save",
   "organizations.members.setRole",
@@ -7635,11 +7647,12 @@ for (const testCase of cases) {
     assert.equal(goResult.status, tsResult.status, `${testCase.name}: status`);
     assert.deepEqual(goResult.headers, tsResult.headers, `${testCase.name}: headers`);
     assert.deepEqual(normalize(goResult.body), normalize(tsResult.body), `${testCase.name}: body`);
-    assert.deepEqual(
-      goResult.notifications,
-      tsResult.notifications,
-      `${testCase.name}: realtime signals`,
-    );
+    if (!testCase.ignoreSignals)
+      assert.deepEqual(
+        goResult.notifications,
+        tsResult.notifications,
+        `${testCase.name}: realtime signals`,
+      );
     assert.deepEqual(goState, tsState, `${testCase.name}: database state`);
     console.log(`ok   ${testCase.name} (${tsResult.status})`);
   } catch (error) {

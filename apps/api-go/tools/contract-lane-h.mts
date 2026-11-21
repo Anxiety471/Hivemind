@@ -363,6 +363,34 @@ export function laneHCases(system: System): Case[] {
   const rename = (name: string, input: unknown, seed: Case["seed"] = seedBoard({ board: false }), extra: Partial<Case> = {}) =>
     boards("boards.rename", "bd-rename", name, input, seed, extra);
 
+  // Ticket-returning procedures: `mentionsMe` is optional in the contract, and TypeScript's
+  // toTicketDto (packages/db/src/artifacts/board.ts:93-118) never sets it, so the field must be
+  // absent from every answer. The seeds use mention-looking text (status review/blocked) so a
+  // server-side flag would be true rather than a merely omitted false.
+  const seedLabOnly = async (seeded: Seeded) => {
+    await withLab(seeded);
+  };
+  const seedTicketDto = (options: { status?: string; title?: string } = {}) => async (seeded: Seeded) => {
+    await withLab(seeded);
+    const spaceId = seeded.spaces[0];
+    await system.board.create({
+      data: {
+        id: `${seeded.userId}-tkbd`, spaceId, name: "Board", ticketPrefix: "RAK", nextNumber: 2,
+        createdAt: OLD, updatedAt: OLD,
+      },
+    });
+    await system.ticket.create({
+      data: {
+        id: `${seeded.userId}-tkt`, boardId: `${seeded.userId}-tkbd`, spaceId, number: 1,
+        title: options.title ?? "First", status: options.status ?? "todo", priority: "normal",
+        createdByUserId: seeded.userId, createdAt: OLD, updatedAt: OLD,
+      },
+    });
+  };
+  const ticketDto = (procedure: string, prefix: string, name: string, input: unknown, seed?: Case["seed"], extra: Partial<Case> = {}): Case => ({
+    name: `${prefix}-${name}`, procedure, input, ...(seed ? { seed } : {}), ...extra,
+  });
+
   return [
     // bots.templates -------------------------------------------------------------------------
     templates("empty"),
@@ -556,6 +584,18 @@ export function laneHCases(system: System): Case[] {
     rename("unknown-key-only", { other: 1 }),
     rename("array-input", []),
     rename("anonymous", { name: "X" }, undefined, { anonymous: true }),
+
+    // Ticket DTO: mentionsMe must be absent from every ticket-returning procedure, exactly as
+    // TypeScript's toTicketDto omits it (contract: optional). A mention-looking title/description
+    // would have made the server-side flag true; the answer must still not carry the field.
+    ticketDto("tickets.list", "tkd-list", "empty", {}, seedLabOnly),
+    ticketDto("tickets.list", "tkd-list", "mention-looking-title", {}, seedTicketDto({ status: "review", title: "Blocked on @user for approval" })),
+    ticketDto("tickets.get", "tkd-get", "mention-looking-title", { id: "__s-tkt__" }, seedTicketDto({ status: "review", title: "Blocked on @user for approval" })),
+    ticketDto("tickets.get", "tkd-get", "missing", { id: "nope" }, seedTicketDto()),
+    ticketDto("tickets.create", "tkd-create", "mention-looking-description", { title: "New task", description: "blocked on @user" }, seedLabOnly, { ignoreSignals: true }),
+    ticketDto("tickets.update", "tkd-update", "mention-looking-title", { id: "__s-tkt__", title: "blocked on @user", status: "review" }, seedTicketDto()),
+    ticketDto("tickets.move", "tkd-move", "mention-looking-title", { id: "__s-tkt__", status: "review" }, seedTicketDto({ status: "blocked", title: "Blocked on @user" })),
+    ticketDto("tickets.comment", "tkd-comment", "mention-looking-title", { ticketId: "__s-tkt__", body: "still blocked on @user" }, seedTicketDto({ status: "review", title: "Blocked on @user" })),
   ];
 }
 
