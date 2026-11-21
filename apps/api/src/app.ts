@@ -708,6 +708,7 @@ async function buildApp(overrides: CreateAppOverrides): Promise<AppHandles> {
           prisma,
           jobs,
           events,
+          boardEvents,
           notifications,
           cloudAgent,
           userCloudAgents,

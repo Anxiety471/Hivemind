@@ -2622,6 +2622,8 @@ model Ticket {
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
   completedAt       DateTime?
+  // Set by the periodic sweep once a done or closed ticket is a week old; cleared if it reopens.
+  archivedAt      DateTime?
   comments        TicketComment[]
 
   @@unique([boardId, number])
@@ -2629,6 +2631,7 @@ model Ticket {
   @@index([boardId, status])
   @@index([spaceId, ownerUserId])
   @@index([spaceId, ownerBotId])
+  @@index([status, archivedAt, completedAt])
   @@map("tickets")
 }
 

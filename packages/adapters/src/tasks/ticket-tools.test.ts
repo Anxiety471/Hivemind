@@ -78,11 +78,24 @@ describe("ticket tools", () => {
     });
 
     expect(findMany).toHaveBeenCalledWith({
-      where: { spaceId: "ws", boardId: "board-1", status: "doing" },
+      where: { spaceId: "ws", boardId: "board-1", archivedAt: null, status: "doing" },
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: 51,
     });
     expect(result).toEqual({ tickets: [expect.objectContaining({ ref: "RAK-1" })] });
+  });
+
+  it("lists only archived tickets, closed ones included, when asked", async () => {
+    const findMany = vi.fn(async () => []);
+    const prisma = { ...boardSpace(), ticket: { findMany } };
+
+    await listBoardTickets({ prisma } as never, { spaceId: "ws", archived: true });
+
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { spaceId: "ws", boardId: "board-1", archivedAt: { not: null } },
+      }),
+    );
   });
 
   it("leaves closed tickets out of an unfiltered list and shortens descriptions", async () => {
@@ -95,7 +108,12 @@ describe("ticket tools", () => {
 
     expect(findMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { spaceId: "ws", boardId: "board-1", status: { not: "closed" } },
+        where: {
+          spaceId: "ws",
+          boardId: "board-1",
+          archivedAt: null,
+          status: { not: "closed" },
+        },
         take: 51,
       }),
     );
@@ -147,6 +165,7 @@ describe("ticket tools", () => {
       where: {
         spaceId: "ws",
         boardId: "board-1",
+        archivedAt: null,
         status: { not: "closed" },
         OR: [
           { createdAt: { lt: rows[49]!.createdAt } },
@@ -421,6 +440,21 @@ describe("ticket mutations", () => {
     expect(s.tx.ticket.update).toHaveBeenLastCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ status: "done", completedAt: expect.any(Date) }),
+      }),
+    );
+  });
+  it("takes a ticket back out of the archive when it leaves done and closed", async () => {
+    const s = mutationDeps();
+    await updateTicket(s.deps, { spaceId: "ws", userId: "user-1", id: "t1", status: "doing" });
+    expect(s.tx.ticket.update).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: "doing", archivedAt: null }),
+      }),
+    );
+    await updateTicket(s.deps, { spaceId: "ws", userId: "user-1", id: "t1", status: "closed" });
+    expect(s.tx.ticket.update).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        data: expect.not.objectContaining({ archivedAt: expect.anything() }),
       }),
     );
   });

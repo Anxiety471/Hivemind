@@ -286,6 +286,7 @@ async function main() {
       prisma,
       jobs,
       events,
+      boardEvents,
       notifications,
       cloudAgent,
       userCloudAgents: connectors.userCloudAgents,

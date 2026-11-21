@@ -159,6 +159,7 @@ export const taskTools: ToolHandlers = {
         ownerUserId,
         workerBotId: args.workerBotId !== undefined ? String(args.workerBotId) : undefined,
         cursor: args.cursor !== undefined ? String(args.cursor) : undefined,
+        archived: args.archived === true,
       }),
     );
   },

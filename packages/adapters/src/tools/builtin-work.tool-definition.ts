@@ -260,6 +260,11 @@ export const workTools: ConnectorTool[] = [
           type: "string",
           description: "nextCursor from the previous page. Omit for the first page.",
         },
+        archived: {
+          type: "boolean",
+          description:
+            "List the archive instead. Done and closed tickets move there a week after they are completed.",
+        },
       },
     },
     readOnly: true,

@@ -14,3 +14,7 @@ Tickets move through **To do**, **In progress**, **In review**, **Blocked**, **D
 Assign a ticket to a bot and it starts working on it. Bots can also create, update and comment on
 tickets themselves. Ticket work stays out of your chats, but a bot that needs you still posts a
 card in its chat.
+
+A week after a ticket is marked **Done** or **Won't do**, it moves to the archive and leaves the
+board. Open **Archive** at the top of the board to see archived tickets. Moving one back out of
+Done or Won't do returns it to the board.

@@ -146,6 +146,7 @@ export function boardsRoutes(ctx: RouterContext) {
           spaceId: context.actor.spaceId,
           boardId: board.id,
           ...(input.status ? { status: input.status } : {}),
+          archivedAt: input.archived ? { not: null } : null,
           ...(filters.length > 0 ? { AND: filters } : {}),
         };
         const rows = await deps.prisma.ticket.findMany({

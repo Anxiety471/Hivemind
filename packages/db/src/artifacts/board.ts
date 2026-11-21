@@ -1,6 +1,7 @@
 import type { Board, Ticket, TicketComment, TicketPriority, TicketStatus } from "@rakazo/contracts";
 import {
   parseTicketRef,
+  TICKET_ARCHIVE_AFTER_DAYS,
   TicketPrioritySchema,
   TicketStatusSchema,
   ticketRef,
@@ -144,4 +145,44 @@ export function toTicketCommentDto(
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
+}
+
+const ARCHIVE_BATCH_SIZE = 500;
+
+/**
+ * Archives every done or closed ticket completed more than `afterDays` ago and returns the boards
+ * that changed. A ticket completed before completion was stamped falls back to its last update.
+ * The second query repeats the conditions, so a ticket reopened since the first is left alone.
+ */
+export async function archiveCompletedTickets(
+  prisma: Pick<PrismaClient, "ticket">,
+  now: Date,
+  afterDays = TICKET_ARCHIVE_AFTER_DAYS,
+): Promise<{ archived: number; boards: Array<{ spaceId: string; boardId: string }> }> {
+  const cutoff = new Date(now.getTime() - afterDays * 24 * 60 * 60 * 1000);
+  const due: Prisma.TicketWhereInput = {
+    archivedAt: null,
+    status: { in: ["done", "closed"] },
+    OR: [{ completedAt: { lte: cutoff } }, { completedAt: null, updatedAt: { lte: cutoff } }],
+  };
+  const boards = new Map<string, { spaceId: string; boardId: string }>();
+  let archived = 0;
+  for (;;) {
+    const rows = await prisma.ticket.findMany({
+      where: due,
+      select: { id: true, spaceId: true, boardId: true },
+      orderBy: { id: "asc" },
+      take: ARCHIVE_BATCH_SIZE,
+    });
+    if (rows.length === 0) break;
+    const { count } = await prisma.ticket.updateMany({
+      where: { ...due, id: { in: rows.map((row) => row.id) } },
+      data: { archivedAt: now },
+    });
+    archived += count;
+    for (const row of rows) boards.set(row.boardId, { spaceId: row.spaceId, boardId: row.boardId });
+    // Rows skipped by the guard would come back forever, so a short or empty pass ends the sweep.
+    if (rows.length < ARCHIVE_BATCH_SIZE || count === 0) break;
+  }
+  return { archived, boards: [...boards.values()] };
 }

@@ -336,6 +336,8 @@ export async function listBoardTickets(
     ownerBotId?: string;
     ownerUserId?: string;
     cursor?: string;
+    /** List only archived tickets; they are left out otherwise. */
+    archived?: boolean;
   },
 ) {
   let status: TicketStatus | undefined;
@@ -372,8 +374,9 @@ export async function listBoardTickets(
     where: {
       spaceId: input.spaceId,
       boardId: board.id,
-      // Closed tickets are history; they only show up when asked for by status.
-      ...(status ? { status } : { status: { not: "closed" } }),
+      archivedAt: input.archived ? { not: null } : null,
+      // Closed tickets are history; they only show up when asked for by status or in the archive.
+      ...(status ? { status } : input.archived ? {} : { status: { not: "closed" } }),
       ...(filters.length > 0 ? { AND: filters } : {}),
       ...(pageCursor
         ? {
@@ -622,6 +625,8 @@ export async function updateTicket(
               completedAt: isTicketCompletedStatus(data.status)
                 ? (current.completedAt ?? new Date())
                 : null,
+              // Reopening takes a ticket back out of the archive.
+              ...(isTicketCompletedStatus(data.status) ? {} : { archivedAt: null }),
             }
           : {}),
       },

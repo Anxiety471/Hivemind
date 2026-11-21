@@ -191,6 +191,36 @@ it("renders status columns and opens a ticket with comments", async () => {
   }
 });
 
+it("switches to the archive, which lists archived tickets and cannot add one", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  api.bots.list.mockResolvedValue([]);
+  api.tickets.list.mockImplementation(async (input: { archived?: boolean }) => ({
+    tickets: input.archived
+      ? [ticket("Old work", "ticket-9", "done", "RAK-9")]
+      : [ticket("Current", "ticket-1", "todo", "RAK-1")],
+  }));
+  const page = await renderBoard();
+  const button = (label: string) =>
+    Array.from(page.container.querySelectorAll("button")).find(
+      (node) => node.textContent === label,
+    ) as HTMLButtonElement | undefined;
+  try {
+    expect(page.container.textContent).toContain("Current");
+    expect(page.container.textContent).not.toContain("Old work");
+    await act(async () => button("Archive")!.click());
+    await settle();
+    expect(api.tickets.list).toHaveBeenLastCalledWith({ archived: true }, expect.anything());
+    expect(page.container.textContent).toContain("Old work");
+    expect(page.container.textContent).not.toContain("Current");
+    expect(button("New ticket")).toBeUndefined();
+    await act(async () => button("Board")!.click());
+    await settle();
+    expect(page.container.textContent).toContain("Current");
+  } finally {
+    await page.cleanup();
+  }
+});
+
 it("creates a ticket without a status picker", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   api.bots.list.mockResolvedValue([bot("bot-1", "Helper")]);

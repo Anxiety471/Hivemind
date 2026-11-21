@@ -376,7 +376,8 @@ func Move(ctx context.Context, database *db.DB, deployment shared.Deployment, ac
 			completed = nil
 		}
 		updated := now()
-		value, err := scanTicket(tx.QueryRow(ctx, `UPDATE tickets SET status = $2, "completedAt" = $3, "updatedAt" = $4
+		value, err := scanTicket(tx.QueryRow(ctx, `UPDATE tickets SET status = $2, "completedAt" = $3, "updatedAt" = $4,
+			"archivedAt" = CASE WHEN $2 IN ('done', 'closed') THEN "archivedAt" END
 			WHERE id = $1 RETURNING `+ticketColumns, current.ID, input.Status, completed, updated))
 		if err != nil {
 			return err
@@ -781,6 +782,7 @@ type listInput struct {
 	OwnerBotID    *string
 	OwnerUserID   *string
 	Q             *string
+	Archived      bool
 }
 
 // parseList is ListTicketsInput (packages/contracts/src/artifacts/board.ts:109-117).
@@ -817,6 +819,11 @@ func parseList(raw orpc.Input) (listInput, *orpc.Error) {
 		found = append(found, problems...)
 		out.Q = &q
 	}
+	if v := object.Field("archived"); v != validate.Undefined {
+		archived, problems := validate.Boolean(validate.Path{"archived"}, v)
+		found = append(found, problems...)
+		out.Archived = archived
+	}
 	if found != nil {
 		return listInput{}, validate.Fail(found)
 	}
@@ -852,6 +859,11 @@ func List(ctx context.Context, database *db.DB, deployment shared.Deployment, ac
 		if input.Status != nil {
 			p := addArg(*input.Status)
 			clauses = append(clauses, fmt.Sprintf("status = %s", p))
+		}
+		if input.Archived {
+			clauses = append(clauses, `"archivedAt" IS NOT NULL`)
+		} else {
+			clauses = append(clauses, `"archivedAt" IS NULL`)
 		}
 		if input.AssigneeBotID != nil {
 			p := addArg(*input.AssigneeBotID)
@@ -1468,7 +1480,8 @@ func Update(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 			SET title = $2, description = $3, priority = $4,
 			    "ownerUserId" = $5, "ownerBotId" = $6,
 			    "workerBotIds" = $7, "assigneeBotId" = $8,
-			    status = $9, "completedAt" = $10, "updatedAt" = $11
+			    status = $9, "completedAt" = $10, "updatedAt" = $11,
+			    "archivedAt" = CASE WHEN $9 IN ('done', 'closed') THEN "archivedAt" END
 			WHERE id = $1
 			RETURNING `+ticketColumns,
 			current.ID, title, description, priority,

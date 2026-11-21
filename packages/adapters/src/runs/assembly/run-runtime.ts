@@ -10,7 +10,7 @@ import type {
 import type { LabFeature } from "@rakazo/contracts";
 import { phoneCallSettings, uploadSizeFromEnv } from "@rakazo/core";
 import { resolveEncryptionKey } from "@rakazo/core/node/secrets-guard";
-import type { PrismaClient, ThreadEvents } from "@rakazo/db";
+import type { BoardEvents, PrismaClient, ThreadEvents } from "@rakazo/db";
 import {
   chatHistoryRetentionDays,
   createChatHistoryPruner,
@@ -55,6 +55,7 @@ import { createStrategicInitiativeReconciler } from "../../routines/strategic-in
 import { localModelsApiKey } from "../../runtime/pi/models/pi-local-provider-id.js";
 import type { SecretCleanupDeps } from "../../secrets/secret-cleanup.js";
 import { workspaceSaveLimits } from "../../storage/workspace-save-policy.js";
+import { createTicketArchiver } from "../../tasks/ticket-archive.js";
 import { createWebProvider } from "../../web/web-provider-factory.js";
 import { auditLogConfig, createAuditLogReconciler } from "../../webhooks/audit-forwarding.js";
 import { createRunExecutor } from "../executor/executor.js";
@@ -335,6 +336,7 @@ export function createRunReconciler(
     ExecutorDeps,
     "prisma" | "jobs" | "events" | "notifications" | "billingEnabled" | "mediaGeneration"
   > & {
+    boardEvents: BoardEvents;
     cloudAgent: NonNullable<ExecutorDeps["cloudAgent"]> | null;
     userCloudAgents?: ExecutorDeps["userCloudAgents"];
     paymentWallet: NonNullable<ExecutorDeps["paymentWallet"]> | null;
@@ -383,5 +385,6 @@ export function createRunReconciler(
     reconcileChatHistoryRetention:
       chatHistoryDays === null ? undefined : createChatHistoryPruner(prisma, chatHistoryDays),
     reconcileIdleComputers: createIdleComputerSweeper({ prisma, jobs }),
+    reconcileTicketArchive: createTicketArchiver({ prisma, boardEvents: deps.boardEvents }),
   });
 }

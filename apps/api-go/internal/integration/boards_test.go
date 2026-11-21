@@ -154,3 +154,51 @@ func TestBlockedTicketNamesWhoItWaitsOn(t *testing.T) {
 		t.Fatalf("list waitingOn = %#v, %v", listed, failure)
 	}
 }
+
+func TestArchivedTicketsLeaveTheListUntilReopened(t *testing.T) {
+	database := openTestDB(t)
+	s := seed(t, database)
+	ctx := context.Background()
+	actor := db.Actor{UserID: s.UserID, SpaceID: s.Space1}
+	lab := shared.Deployment{BoardLab: true}
+	created, failure := tickets.Create(ctx, database, lab, actor, jsonInput(`{"title":"Finished work"}`))
+	if failure != nil {
+		t.Fatalf("create: %v", failure)
+	}
+	id := created.(tickets.Ticket).ID
+	if _, failure := tickets.Move(ctx, database, lab, actor, jsonInput(`{"id":"`+id+`","status":"done"}`)); failure != nil {
+		t.Fatalf("move to done: %v", failure)
+	}
+	titles := func(input string) int {
+		listed, failure := tickets.List(ctx, database, lab, actor, jsonInput(input))
+		if failure != nil {
+			t.Fatalf("list %s: %v", input, failure)
+		}
+		return len(listed.(tickets.ListOutput).Tickets)
+	}
+	if titles(`{}`) != 1 || titles(`{"archived":true}`) != 0 {
+		t.Fatalf("before archiving: board %d, archive %d", titles(`{}`), titles(`{"archived":true}`))
+	}
+	if err := database.System(ctx, "archive ticket", func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE tickets SET "archivedAt" = now() WHERE id = $1`, id)
+		return err
+	}); err != nil {
+		t.Fatalf("archive: %v", err)
+	}
+	if titles(`{}`) != 0 || titles(`{"archived":true}`) != 1 {
+		t.Fatalf("after archiving: board %d, archive %d", titles(`{}`), titles(`{"archived":true}`))
+	}
+	// Moving within done and closed keeps it archived; reopening takes it back to the board.
+	if _, failure := tickets.Move(ctx, database, lab, actor, jsonInput(`{"id":"`+id+`","status":"closed"}`)); failure != nil {
+		t.Fatalf("move to closed: %v", failure)
+	}
+	if titles(`{"archived":true}`) != 1 {
+		t.Fatalf("closed ticket left the archive")
+	}
+	if _, failure := tickets.Update(ctx, database, lab, actor, jsonInput(`{"id":"`+id+`","status":"doing"}`)); failure != nil {
+		t.Fatalf("update to doing: %v", failure)
+	}
+	if titles(`{}`) != 1 || titles(`{"archived":true}`) != 0 {
+		t.Fatalf("after reopening: board %d, archive %d", titles(`{}`), titles(`{"archived":true}`))
+	}
+}

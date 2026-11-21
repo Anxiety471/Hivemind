@@ -55,7 +55,10 @@ export function BoardPage() {
   const queryClient = useQueryClient();
   const meKey = queries.me?.queryKey?.();
   const currentUserId = meKey ? queryClient.getQueryData<Me>(meKey)?.userId : undefined;
-  const ticketsOptions = queries.tickets.list.queryOptions({ input: {} });
+  const [showArchive, setShowArchive] = useState(false);
+  const ticketsOptions = queries.tickets.list.queryOptions({
+    input: showArchive ? { archived: true } : {},
+  });
   const ticketsQuery = useQuery(ticketsOptions);
   const botsQuery = useQuery(queries.bots.list.queryOptions());
   const tickets = ticketsQuery.data?.tickets ?? [];
@@ -72,11 +75,18 @@ export function BoardPage() {
     <div className="flex h-full min-w-0 flex-col overflow-hidden bg-background text-foreground">
       <WindowChrome />
       <PageHeader
-        title={<Trans>Board</Trans>}
+        title={showArchive ? <Trans>Archive</Trans> : <Trans>Board</Trans>}
         actions={
-          <Button onClick={() => setSelected("new")}>
-            <Trans>New ticket</Trans>
-          </Button>
+          <>
+            <Button variant="outline" onClick={() => setShowArchive(!showArchive)}>
+              {showArchive ? <Trans>Board</Trans> : <Trans>Archive</Trans>}
+            </Button>
+            {showArchive ? null : (
+              <Button onClick={() => setSelected("new")}>
+                <Trans>New ticket</Trans>
+              </Button>
+            )}
+          </>
         }
       />
       {error ? (

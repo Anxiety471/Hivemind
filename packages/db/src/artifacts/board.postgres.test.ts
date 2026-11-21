@@ -1,5 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { ensureBoard, listTicketComments, toTicketCommentDto } from "./board.js";
+import {
+  archiveCompletedTickets,
+  ensureBoard,
+  listTicketComments,
+  toTicketCommentDto,
+} from "./board.js";
 import type { PrismaClient } from "../database/client.js";
 import { createDb } from "../database/client.js";
 import { asSystem, runAsTenant } from "../database/row-security.js";
@@ -79,5 +84,36 @@ describePostgres("board creation (PostgreSQL)", () => {
         expect.objectContaining({ body: "Reviewed", authorName: "Planner" }),
       ]),
     );
+  });
+  it("archives done and closed tickets a week past completion and leaves the rest", async () => {
+    const board = await runAsTenant(tenant, () => ensureBoard(prisma, spaceId));
+    const now = new Date("2026-06-15T12:00:00Z");
+    const daysAgo = (days: number) => new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+    const make = (number: number, data: object) =>
+      fixtures.ticket.create({
+        data: { spaceId, boardId: board.id, number, title: `T${number}`, ...data },
+      });
+    const oldDone = await make(100, { status: "done", completedAt: daysAgo(8) });
+    const oldClosed = await make(101, { status: "closed", completedAt: daysAgo(30) });
+    const unstamped = await make(102, { status: "done", updatedAt: daysAgo(9) });
+    const recent = await make(103, { status: "done", completedAt: daysAgo(6) });
+    const reopened = await make(104, { status: "doing", completedAt: daysAgo(20) });
+    const already = await make(105, {
+      status: "done",
+      completedAt: daysAgo(20),
+      archivedAt: daysAgo(10),
+    });
+    const result = await archiveCompletedTickets(asSystem(prisma), now);
+    expect(result.boards).toContainEqual({ spaceId, boardId: board.id });
+    const archivedAt = async (id: string) =>
+      (await fixtures.ticket.findUniqueOrThrow({ where: { id } })).archivedAt;
+    expect(await archivedAt(oldDone.id)).toEqual(now);
+    expect(await archivedAt(oldClosed.id)).toEqual(now);
+    expect(await archivedAt(unstamped.id)).toEqual(now);
+    expect(await archivedAt(recent.id)).toBeNull();
+    expect(await archivedAt(reopened.id)).toBeNull();
+    expect(await archivedAt(already.id)).toEqual(daysAgo(10));
+    const again = await archiveCompletedTickets(asSystem(prisma), now);
+    expect(again.boards).not.toContainEqual({ spaceId, boardId: board.id });
   });
 });

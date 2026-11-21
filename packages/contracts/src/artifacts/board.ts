@@ -10,6 +10,9 @@ export function isTicketCompletedStatus(status: TicketStatus): boolean {
   return status === "done" || status === "closed";
 }
 
+/** A done or closed ticket moves to the archive this many days after it was completed. */
+export const TICKET_ARCHIVE_AFTER_DAYS = 7;
+
 export const TICKET_PRIORITIES = ["low", "normal", "high", "urgent"] as const;
 export const TicketPrioritySchema = z.enum(TICKET_PRIORITIES);
 export type TicketPriority = z.infer<typeof TicketPrioritySchema>;
@@ -120,6 +123,8 @@ export const ListTicketsInput = z.object({
   ownerBotId: Id.optional(),
   ownerUserId: Id.optional(),
   q: z.string().trim().max(200).optional(),
+  /** Archived tickets are left out unless this is true, which lists only them. */
+  archived: z.boolean().optional(),
 });
 export type ListTicketsInput = z.infer<typeof ListTicketsInput>;
 
