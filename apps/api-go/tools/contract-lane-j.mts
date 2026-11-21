@@ -734,10 +734,10 @@ export function laneJCases(system: System): Case[] {
           kind: "oauth",
           credential: { type: "oauth", access: "access-token", refresh: "refresh-token", expires: 1_900_000_000_000 },
           maxTokens: 2048,
-        }));
+        }), { updatedAt: at(1) });
         await addModel(seeded, "legacy", "openai-codex", JSON.stringify({
           type: "oauth", access: "legacy-access", refresh: "legacy-refresh", expires: 1_900_000_000_000,
-        }));
+        }), { updatedAt: at(2) });
       },
     }),
     base("model-credentials-oauth-reconnect", "models.credentials", undefined, {
@@ -750,14 +750,14 @@ export function laneJCases(system: System): Case[] {
     }),
     base("model-credentials-unreadable", "models.credentials", undefined, {
       seed: async (seeded) => {
-        const row = await addModel(seeded, "tampered", "anthropic", "sk-ant-tampered");
+        const row = await addModel(seeded, "tampered", "anthropic", "sk-ant-tampered", { updatedAt: at(1) });
         const body = row.ciphertext;
-        const at = Math.floor(body.length / 2);
+        const middle = Math.floor(body.length / 2);
         await system.secret.update({
           where: { id: row.secretId },
-          data: { ciphertext: `${body.slice(0, at)}${body[at] === "A" ? "B" : "A"}${body.slice(at + 1)}` },
+          data: { ciphertext: `${body.slice(0, middle)}${body[middle] === "A" ? "B" : "A"}${body.slice(middle + 1)}` },
         });
-        await addModel(seeded, "wrongkey", "anthropic", "sk-ant-wrong-key", { wrongKey: true });
+        await addModel(seeded, "wrongkey", "anthropic", "sk-ant-wrong-key", { wrongKey: true, updatedAt: at(2) });
         await system.userModelCredential.create({
           data: {
             id: `${seeded.userId}-missing`,
@@ -765,6 +765,7 @@ export function laneJCases(system: System): Case[] {
             provider: "anthropic",
             label: "missing",
             secretId: `${seeded.userId}-no-such-secret`,
+            updatedAt: at(3),
           },
         });
       },

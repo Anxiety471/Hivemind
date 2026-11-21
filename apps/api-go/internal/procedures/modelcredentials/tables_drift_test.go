@@ -39,6 +39,6 @@ func TestGeneratedModelTablesMatchSources(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(generated) != string(committed) {
-		t.Fatal("model tables have drifted from their sources; run go run ./apps/api-go/tools/gen-model-tables")
+		t.Fatal("model tables have drifted from their sources; run `cd apps/api-go && go run ./tools/gen-model-tables`")
 	}
 }

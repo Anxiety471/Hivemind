@@ -19,9 +19,9 @@ import (
 var thinkingOrders = []string{"off", "minimal", "low", "medium", "high", "xhigh", "max"}
 
 type anthropicModel struct {
-	ID              string             `json:"id"`
-	API             string             `json:"api"`
-	ThinkingLevels  map[string]*string `json:"thinkingLevelMap"`
+	ID             string             `json:"id"`
+	API            string             `json:"api"`
+	ThinkingLevels map[string]*string `json:"thinkingLevelMap"`
 }
 
 // Generate returns the Go source for the generated tables file.

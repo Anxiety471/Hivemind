@@ -39,7 +39,7 @@ func main() {
 			os.Exit(1)
 		}
 		if !bytes.Equal(generated, committed) {
-			fmt.Fprintln(os.Stderr, "gen-model-tables: generated tables differ from", *output, "- run go run ./apps/api-go/tools/gen-model-tables")
+			fmt.Fprintln(os.Stderr, "gen-model-tables: generated tables differ from", *output, "- run `cd apps/api-go && go run ./tools/gen-model-tables`")
 			os.Exit(1)
 		}
 		return
