@@ -802,12 +802,14 @@ func truncateUnits(text []uint16, maxChars int) []uint16 {
 		return text
 	}
 	if maxChars < 0 {
-		// slice(0, maxChars) with a negative end counts from the tail.
+		// slice(0, maxChars) with a negative end counts from the tail, and textBoundary got the
+		// negative offset (charCodeAt out of range is NaN, so it changed nothing): the cut may
+		// split a surrogate pair.
 		end := len(text) + maxChars
 		if end < 0 {
 			end = 0
 		}
-		return text[:TextBoundary(text, end)]
+		return text[:end]
 	}
 	return text[:TextBoundary(text, maxChars)]
 }

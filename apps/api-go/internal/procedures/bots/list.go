@@ -97,12 +97,20 @@ type activeRun struct {
 // ListBots implements bots.list: the Space's bots, pinned first then by position and creation
 // (repos.listBots, packages/db/src/bots/bot-repository.ts:356).
 func ListBots(ctx context.Context, database *db.DB, deployment shared.Deployment, actor db.Actor) (any, *orpc.Error) {
-	return listBots(ctx, database, deployment, actor, false)
+	bots, result := listBots(ctx, database, deployment, actor, false)
+	if result != nil {
+		return nil, result
+	}
+	return validatedBots(bots)
 }
 
 // ListArchivedBots implements bots.listArchived.
 func ListArchivedBots(ctx context.Context, database *db.DB, deployment shared.Deployment, actor db.Actor) (any, *orpc.Error) {
-	return listBots(ctx, database, deployment, actor, true)
+	bots, result := listBots(ctx, database, deployment, actor, true)
+	if result != nil {
+		return nil, result
+	}
+	return validatedBots(bots)
 }
 
 // GetBot implements bots.get: the same list, found by id; a bot it does not hold is the
@@ -118,6 +126,11 @@ func GetBot(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 	}
 	for _, bot := range bots {
 		if bot.ID == botID {
+			// The router parses only the value the handler returns, so an unrelated roster row
+			// that breaks BotSchema does not fail this call (routes/bots.ts:345).
+			if failure := validateBot(bot); failure != nil {
+				return nil, failure
+			}
 			return bot, nil
 		}
 	}
@@ -362,9 +375,6 @@ func listBots(ctx context.Context, database *db.DB, deployment shared.Deployment
 				archivedAt := shared.ISO(*row.ArchivedAt)
 				bot.ArchivedAt = &archivedAt
 			}
-			if failure := validateBot(bot); failure != nil {
-				return failure
-			}
 			bots = append(bots, bot)
 		}
 		return nil
@@ -592,6 +602,16 @@ func parseInstructionHistory(value any) ([]InstructionVersion, *orpc.Error) {
 		})
 	}
 	return history, nil
+}
+
+// validatedBots is BotSchema.array().parse of a list result.
+func validatedBots(bots []Bot) (any, *orpc.Error) {
+	for _, bot := range bots {
+		if failure := validateBot(bot); failure != nil {
+			return nil, failure
+		}
+	}
+	return bots, nil
 }
 
 // validateBot is BotSchema's parse of the mapped row.

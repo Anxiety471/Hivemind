@@ -425,11 +425,13 @@ function generatedCase(): TestCase {
     tag = "fuzz-mixed";
   }
   if (chance(0.4)) value = mutate(value);
-  const capChoices = [4096, 4096, 4096, 4096, 0, 1, 2, 3, 5, 16, 64, 100, 4095, 4097, 20000];
+  // Negative lengths are not reachable from the API, but truncatePlainText takes them and JS
+  // slice(0, -n) keeps a prefix, so the port must match it too.
+  const capChoices = [4096, 4096, 4096, 4096, 0, 1, 2, 3, 5, 16, 64, 100, 4095, 4097, 20000, -1, -3, -8];
   return {
     text: value,
     cap: pick(capChoices),
-    maxChars: pick([0, 1, 2, 3, 5, 8, 16, 32, 64, 100, 1000]),
+    maxChars: pick([0, 1, 2, 3, 5, 8, 16, 32, 64, 100, 1000, -1, -2, -5, -40]),
     tag,
   };
 }
@@ -474,8 +476,8 @@ for (const item of cases) size += 12 + item.text.length * 2;
 const corpus = Buffer.allocUnsafe(size);
 let offset = 0;
 for (const item of cases) {
-  corpus.writeUInt32LE(item.cap >>> 0, offset);
-  corpus.writeUInt32LE(item.maxChars >>> 0, offset + 4);
+  corpus.writeInt32LE(item.cap, offset);
+  corpus.writeInt32LE(item.maxChars, offset + 4);
   corpus.writeUInt32LE(item.text.length, offset + 8);
   offset += 12;
   for (let index = 0; index < item.text.length; index++) {
@@ -537,6 +539,11 @@ const readUint32 = (): number => {
   resultOffset += 4;
   return value;
 };
+const readInt32 = (): number => {
+  const value = results.readInt32LE(resultOffset);
+  resultOffset += 4;
+  return value;
+};
 const readUnits = (): string => {
   const length = readUint32();
   let value = "";
@@ -561,8 +568,8 @@ for (let index = 0; index < cases.length; index++) {
     ["plainText", readUnits()],
     ["truncatedPlainText", readUnits()],
     ["truncatePlainText", readUnits()],
-    ["shortenedTextLength", readUint32()],
-    ["textBoundary", readUint32()],
+    ["shortenedTextLength", readInt32()],
+    ["textBoundary", readInt32()],
   ];
   for (let field = 0; field < fields.length; field++) {
     const [fieldName, want] = expected[field]!;
@@ -627,6 +634,12 @@ if (GOLDEN !== "") {
       selected.push(members[Math.floor(index * step)]!);
     }
     taken[tag] = quota;
+  }
+  // A few pinned negative-length cases: the cut may split a surrogate pair, as slice(0, -n) does.
+  for (const value of ["ab😀cd𝕏ef", "😀😀", "a👍b", "x\n\ny", ""]) {
+    for (const length of [-1, -2, -3, -7]) {
+      selected.push({ text: value, cap: length, maxChars: length, tag: "negative-length" });
+    }
   }
   const unitsBase64 = (value: string): string => {
     const buffer = Buffer.allocUnsafe(value.length * 2);

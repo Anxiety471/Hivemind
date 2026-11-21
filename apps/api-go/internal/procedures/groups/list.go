@@ -196,10 +196,9 @@ func listGroups(ctx context.Context, database *db.DB, deployment shared.Deployme
 			return err
 		}
 
+		// TypeScript filters before it maps (groups.ts:358-378), so a group the list leaves out
+		// never reaches mapGroup and its missing thread is never asked for.
 		for _, row := range loaded {
-			if row.ThreadID == nil {
-				return errMissingThread
-			}
 			roster := members[row.ID]
 			if roster == nil {
 				roster = []GroupMember{}
@@ -213,6 +212,9 @@ func listGroups(ctx context.Context, database *db.DB, deployment shared.Deployme
 				}
 			} else if len(roster) < groupMemberMin {
 				continue
+			}
+			if row.ThreadID == nil {
+				return errMissingThread
 			}
 			group := Group{
 				ID:           row.ID,

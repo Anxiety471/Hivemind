@@ -3,8 +3,8 @@
 //
 // Corpus (little endian): repeated records of
 //
-//	uint32 maxSource
-//	uint32 maxChars
+//	int32 maxSource (negative lengths are part of the domain)
+//	int32 maxChars
 //	uint32 length
 //	length * uint16 UTF-16 code units
 //
@@ -13,8 +13,8 @@
 //	uint32 lengthA, A units  (plainTextFromMarkdown(markdown, {maxSource}))
 //	uint32 lengthB, B units  (truncatedPlainText(markdown, maxChars))
 //	uint32 lengthC, C units  (truncatePlainText(A, maxChars))
-//	uint32 D                 (shortenedTextLength(A))
-//	uint32 E                 (textBoundary(A, maxChars))
+//	int32 D                  (shortenedTextLength(A))
+//	int32 E                  (textBoundary(A, maxChars), negative for a negative offset)
 package main
 
 import (
@@ -48,8 +48,19 @@ func main() {
 		offset += 4
 		return value
 	}
+	readInt32 := func() int32 {
+		if offset+4 > len(data) {
+			fatal(fmt.Errorf("truncated corpus at %d", offset))
+		}
+		value := int32(binary.LittleEndian.Uint32(data[offset:]))
+		offset += 4
+		return value
+	}
 	writeUint32 := func(value uint32) {
 		out = binary.LittleEndian.AppendUint32(out, value)
+	}
+	writeInt32 := func(value int) {
+		out = binary.LittleEndian.AppendUint32(out, uint32(int32(value)))
 	}
 	writeUnits := func(units []uint16) {
 		writeUint32(uint32(len(units)))
@@ -59,8 +70,8 @@ func main() {
 	}
 	records := 0
 	for offset < len(data) {
-		maxSource := int(readUint32())
-		maxChars := int(readUint32())
+		maxSource := int(readInt32())
+		maxChars := int(readInt32())
 		length := int(readUint32())
 		if offset+2*length > len(data) {
 			fatal(fmt.Errorf("truncated record %d at %d", records, offset))
@@ -74,8 +85,8 @@ func main() {
 		writeUnits(plain)
 		writeUnits(mdtext.TruncatedPlainTextUnits(source, maxChars))
 		writeUnits(mdtext.TruncatePlainTextUnits(plain, maxChars))
-		writeUint32(uint32(mdtext.ShortenedTextLength(plain)))
-		writeUint32(uint32(mdtext.TextBoundary(plain, maxChars)))
+		writeInt32(mdtext.ShortenedTextLength(plain))
+		writeInt32(mdtext.TextBoundary(plain, maxChars))
 		records++
 	}
 	if err := os.WriteFile(*resultPath, out, 0o600); err != nil {
