@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { HistorySearchInputSchema } from "./history.js";
+import { HistoryListInputSchema, HistorySearchInputSchema } from "./history.js";
 
 describe("history date boundaries", () => {
   it.each([
@@ -88,5 +88,39 @@ describe("history query folding", () => {
   it("names the date forms it accepts", () => {
     const result = HistorySearchInputSchema.safeParse({ query: "a", after: "2026-11-04 08:00" });
     expect(result.error?.issues[0]?.message).toContain("2026-01-01T08:00:00+08:00");
+  });
+});
+
+describe("history list arguments", () => {
+  it("accepts empty browsing args and bounded pagination cursors", () => {
+    expect(HistoryListInputSchema.parse({})).toEqual({});
+    expect(
+      HistoryListInputSchema.parse({
+        scope: "my_chats",
+        beforeSeq: 20,
+        afterSeq: 5,
+        limit: 20,
+        offset: 10,
+      }),
+    ).toEqual({
+      scope: "my_chats",
+      beforeSeq: 20,
+      afterSeq: 5,
+      limit: 20,
+      offset: 10,
+    });
+  });
+
+  it("rejects out-of-bounds limits and invalid cursors", () => {
+    for (const input of [
+      { limit: 0 },
+      { limit: 21 },
+      { beforeSeq: -1 },
+      { afterSeq: -1 },
+      { offset: -1 },
+      { scope: "all" },
+    ]) {
+      expect(HistoryListInputSchema.safeParse(input).success).toBe(false);
+    }
   });
 });

@@ -104,15 +104,23 @@ describe("bot tool permissions", () => {
     };
     const baseline = selectBuiltinToolsForRun(options).map((tool) => tool.name);
     expect(baseline).toEqual(
-      expect.arrayContaining(["search_history", "read_history", "connect_app"]),
+      expect.arrayContaining(["search_history", "read_history", "list_history", "connect_app"]),
     );
     expect(
       selectBuiltinToolsForRun({
         ...options,
-        disabledBuiltinTools: ["search_history", "read_history", "connect_app", "unknown"],
+        disabledBuiltinTools: [
+          "search_history",
+          "read_history",
+          "list_history",
+          "connect_app",
+          "unknown",
+        ],
       }).map((tool) => tool.name),
     ).toEqual(
-      baseline.filter((name) => !["search_history", "read_history", "connect_app"].includes(name)),
+      baseline.filter(
+        (name) => !["search_history", "read_history", "list_history", "connect_app"].includes(name),
+      ),
     );
   });
 });

@@ -43,6 +43,7 @@ export const VERBATIM_TOOL_RESULTS: ReadonlySet<string> = new Set(["skill_read",
 const UNSHORTENED_TOOL_RESULTS = new Set([
   "read_history",
   "search_history",
+  "list_history",
   ...VERBATIM_TOOL_RESULTS,
 ]);
 const messageHash = (message: Message) =>
@@ -67,6 +68,13 @@ const SHORT_HISTORY_MAX_TOKENS = 16_384;
 const SNAPSHOT_RECENT_MESSAGES = 8;
 const SNAPSHOT_CATALOG_MAX_ENTRIES = 64;
 const SNAPSHOT_CATALOG_MAX_BYTES = 8192;
+/**
+ * Chunked recent-message window when older messages remain searchable via history tools:
+ * keeps 10..20 stored messages so prompt-cache prefixes stay stable across 10-message chunks
+ * before rolling forward back to 10.
+ */
+const RECENT_HISTORY_MIN_MESSAGES = 10;
+const RECENT_HISTORY_MAX_MESSAGES = 20;
 /** The context policy's tuning, part of the prompt version so a change shows up in run outcomes. */
 export const CONTEXT_POLICY_SETTINGS = {
   defaultStrategy: DEFAULT_CONTEXT_STRATEGY,
@@ -81,6 +89,8 @@ export const CONTEXT_POLICY_SETTINGS = {
   snapshotRecentMessages: SNAPSHOT_RECENT_MESSAGES,
   snapshotCatalogMaxEntries: SNAPSHOT_CATALOG_MAX_ENTRIES,
   snapshotCatalogMaxBytes: SNAPSHOT_CATALOG_MAX_BYTES,
+  recentHistoryMinMessages: RECENT_HISTORY_MIN_MESSAGES,
+  recentHistoryMaxMessages: RECENT_HISTORY_MAX_MESSAGES,
 } as const;
 export interface Size {
   tokens: number;
@@ -148,6 +158,17 @@ function storedMessagesStart(messages: Message[], count: number): number {
   }
   return 0;
 }
+function countStoredMessages(messages: Message[]): number {
+  const id = (message: Message | undefined) =>
+    (message as (Message & OriginalMetadata) | undefined)?.rakazoMessageId;
+  let seen = 0;
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const current = id(messages[index]);
+    if (current && current === id(messages[index - 1])) continue;
+    seen += 1;
+  }
+  return seen;
+}
 function text(message: Message): string {
   if (typeof message.content === "string") return message.content;
   return message.content
@@ -203,6 +224,7 @@ export function createRuntimeContextPolicy(
       .update(JSON.stringify([accountScope, connectionIdentity(model), model.id]))
       .digest("hex");
   let pending: CacheRequest | undefined;
+  let pendingHistoryPrefix: CacheRequest | undefined;
   let pendingProjection: { scope: string; entries: ProjectionEntry[] } | undefined;
   let decision: RuntimeContextDecision | undefined;
   let metadataPresent = false;
@@ -269,7 +291,7 @@ export function createRuntimeContextPolicy(
     model: Model<Api>,
   ): { messages: Message[]; catalogIds: string[]; navigation?: Message } | undefined {
     const prior = projections.get(projectionScope(model));
-    if (!prior) return;
+    if (!prior?.length) return;
     const result: Message[] = [];
     let latestMatchedIndex = -1;
     let catalogIds: string[] = [];
@@ -305,22 +327,25 @@ export function createRuntimeContextPolicy(
     modelWindow = request.model.contextWindow ?? model.contextWindow,
   ): Prepared {
     const ctx = pruned(source);
+    const hasHistoryRetrievalTools =
+      Boolean(request.executeTool) &&
+      ["read_history", "search_history"].every((name) =>
+        request.tools.some((tool) => tool.name === name),
+      );
     const standaloneHistoryFallback =
-      request.contextStrategy === undefined &&
-      (!request.executeTool ||
-        !["read_history", "search_history"].every((name) =>
-          request.tools.some((tool) => tool.name === name),
-        ));
+      request.contextStrategy === undefined && !hasHistoryRetrievalTools;
     // An explicitly declared cache window opts this connection into prefix reuse.
     // Without history retrieval, preserve fitting originals instead of replacing
     // them with cold snapshots the caller cannot follow back to the source.
     // Unknown/disabled caches retain the default; explicit overrides still win.
     const retention = request.model.cacheCapabilities?.retentionMs;
-    const strategy =
+    const explicitStrategy =
       // A restored turn must fit even when the unbounded diagnostic baseline was selected.
-      (request.turnCheckpoint && request.contextStrategy === "current"
+      request.turnCheckpoint && request.contextStrategy === "current"
         ? DEFAULT_CONTEXT_STRATEGY
-        : request.contextStrategy) ??
+        : request.contextStrategy;
+    const strategy =
+      explicitStrategy ??
       (!standaloneHistoryFallback &&
       request.model.cacheCapabilities?.retentionMode !== "none" &&
       typeof retention === "number" &&
@@ -328,6 +353,9 @@ export function createRuntimeContextPolicy(
       retention > 0
         ? "cache-aware"
         : DEFAULT_CONTEXT_STRATEGY);
+    const useDeltaWindow =
+      !standaloneHistoryFallback &&
+      (explicitStrategy === undefined || explicitStrategy === "retrieval");
     metadataPresent = ctx.messages.some((message) =>
       Boolean((message as Message & OriginalMetadata).rakazoHistory),
     );
@@ -345,19 +373,35 @@ export function createRuntimeContextPolicy(
     if (strategy === "cache-aware" && predictedCache !== "likely-warm") {
       const candidate = project(ctx, model);
       if (candidate) {
-        const prefix = providerContextPrefix(
-          ctx.systemPrompt ?? "",
-          ctx.tools ?? [],
-          candidate.messages,
+        let candidateStart = candidate.messages.findIndex(
+          (message) =>
+            message.role === "user" && message !== candidate.navigation && !original(message),
         );
-        const prediction = cache.predict({
-          ...cacheRequest,
-          prefix,
-          prefixTokens: estimateContextTokens(prefix, options.imageTokens),
-        });
-        if (prediction === "likely-warm") {
-          projected = candidate;
-          predictedCache = prediction;
+        if (candidateStart < 0)
+          candidateStart = candidate.messages.findLastIndex((message) => message.role === "user");
+        if (candidateStart < 0) candidateStart = 0;
+        const exceedsDeltaWindow =
+          useDeltaWindow &&
+          countStoredMessages(
+            candidate.messages
+              .slice(0, candidateStart)
+              .filter((message) => message.role !== "system"),
+          ) > RECENT_HISTORY_MAX_MESSAGES;
+        if (!exceedsDeltaWindow) {
+          const prefix = providerContextPrefix(
+            ctx.systemPrompt ?? "",
+            ctx.tools ?? [],
+            candidate.messages,
+          );
+          const prediction = cache.predict({
+            ...cacheRequest,
+            prefix,
+            prefixTokens: estimateContextTokens(prefix, options.imageTokens),
+          });
+          if (prediction === "likely-warm") {
+            projected = candidate;
+            predictedCache = prediction;
+          }
         }
       }
     }
@@ -414,7 +458,9 @@ export function createRuntimeContextPolicy(
       imageTokens: options.imageTokens,
     };
     const useSnapshots =
-      strategy === "snapshots" || (strategy === "cache-aware" && predictedCache !== "likely-warm");
+      !useDeltaWindow &&
+      (strategy === "snapshots" ||
+        (strategy === "cache-aware" && predictedCache !== "likely-warm"));
     const historical = messages.slice(0, currentIndex);
     const historicalContent = historical.filter((message) => message.role !== "system");
     const shortHistoryAllowance = Math.min(
@@ -429,7 +475,27 @@ export function createRuntimeContextPolicy(
         providerContextPrefix("", [], historicalContent),
         options.imageTokens,
       ) <= shortHistoryAllowance;
-    if (useSnapshots && !retainShortHistory) {
+    if (
+      useDeltaWindow &&
+      !projected &&
+      countStoredMessages(historicalContent) > RECENT_HISTORY_MAX_MESSAGES
+    ) {
+      const recentStart = storedMessagesStart(historical, RECENT_HISTORY_MIN_MESSAGES);
+      const earlierSystem = historical
+        .slice(0, recentStart)
+        .filter((message) => message.role === "system");
+      messages = [
+        ...earlierSystem,
+        ...historical.slice(recentStart),
+        ...messages.slice(currentIndex),
+      ];
+      currentIndex = earlierSystem.length + historical.length - recentStart;
+      protectedIndexes = messages.flatMap((message, index) =>
+        message.role === "system" || (index >= currentIndex && message.role === "user")
+          ? [index]
+          : [],
+      );
+    } else if (useSnapshots && !retainShortHistory) {
       const recentStart = storedMessagesStart(historical, SNAPSHOT_RECENT_MESSAGES);
       const old = historical.slice(0, recentStart);
       let catalog = "";
@@ -583,10 +649,12 @@ export function createRuntimeContextPolicy(
       verbatimMcpServers: request.verbatimMcpServers,
       cacheWarmth: predictedCache,
       recentExchanges:
-        retainShortHistory || standaloneHistoryFallback ? messages.length : 8 + laterUserMessages,
+        useDeltaWindow || retainShortHistory || standaloneHistoryFallback
+          ? messages.length
+          : 8 + laterUserMessages,
       // Eight exchanges is a floor: a request often depends on a decision made before them
       // without sounding like a question about the past, so the bot never thinks to search.
-      ...(strategy === "retrieval"
+      ...(strategy === "retrieval" && !useDeltaWindow
         ? { earlier: { before: currentIndex, tokens: shortHistoryAllowance } }
         : {}),
     };
@@ -652,6 +720,7 @@ export function createRuntimeContextPolicy(
     projection: ProjectionEntry[],
     model: Model<Api>,
     fields: Partial<Pick<RuntimeContextDecision, "droppedMessages" | "truncatedToolResults">> = {},
+    historyPrefixMessages?: Message[],
   ): Context {
     const prefix = providerContextPrefix(
       context.systemPrompt ?? "",
@@ -663,6 +732,24 @@ export function createRuntimeContextPolicy(
         ? built.decision.estimatedInputTokens
         : estimateContextTokens(prefix, options.imageTokens);
     pending = { ...built.cacheRequest, prefix, prefixTokens };
+    if (
+      historyPrefixMessages &&
+      historyPrefixMessages.length > 0 &&
+      historyPrefixMessages.length < context.messages.length
+    ) {
+      const historyPrefix = providerContextPrefix(
+        context.systemPrompt ?? "",
+        context.tools ?? [],
+        historyPrefixMessages,
+      );
+      pendingHistoryPrefix = {
+        ...built.cacheRequest,
+        prefix: historyPrefix,
+        prefixTokens: estimateContextTokens(historyPrefix, options.imageTokens),
+      };
+    } else {
+      pendingHistoryPrefix = undefined;
+    }
     pendingProjection = { scope: projectionScope(model), entries: projection };
     decision = {
       ...built.decision,
@@ -771,7 +858,13 @@ export function createRuntimeContextPolicy(
               : 0,
           )
         : built.context.messages;
-      const projection = messages.map((message) => ({
+      const historyPrefixMessages = messages.filter(
+        (message) =>
+          message === built.navigation?.message ||
+          message.role === "system" ||
+          Boolean(original(message)),
+      );
+      const projection = historyPrefixMessages.map((message) => ({
         hash: hash(message),
         ...(message === built.navigation?.message
           ? { catalogIds: built.navigation.catalogIds }
@@ -804,6 +897,8 @@ export function createRuntimeContextPolicy(
         built,
         projection,
         model,
+        undefined,
+        historyPrefixMessages,
       );
     },
     onUsage(usage: AgentUsage | null | undefined) {
@@ -819,12 +914,20 @@ export function createRuntimeContextPolicy(
         ].some((value) => typeof value === "number" && Number.isFinite(value));
       if (!reported) {
         pending = undefined;
+        pendingHistoryPrefix = undefined;
         pendingProjection = undefined;
         return;
       }
       const observation = cache.record(pending, usage?.cacheReadTokens);
+      if (
+        pendingHistoryPrefix &&
+        pendingHistoryPrefix.prefixTokens >= (pendingHistoryPrefix.capabilities?.minimumTokens ?? 0)
+      ) {
+        cache.record(pendingHistoryPrefix, usage?.cacheReadTokens);
+      }
       if (decision) decision.observedReuse = observation.observedReuse;
       pending = undefined;
+      pendingHistoryPrefix = undefined;
       if (pendingProjection) {
         projections.delete(pendingProjection.scope);
         projections.set(pendingProjection.scope, pendingProjection.entries);

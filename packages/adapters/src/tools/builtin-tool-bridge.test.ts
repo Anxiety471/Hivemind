@@ -61,7 +61,13 @@ describe("built-in tool bridge", () => {
     // routine can start on.
     expect(definitionBytes(listed)).toBeLessThanOrEqual(34_700);
     expect(deferred.map((tool) => tool.name)).toEqual(
-      expect.arrayContaining(["render_plot", "create_space", "generate_secret", "scratchpad_add"]),
+      expect.arrayContaining([
+        "render_plot",
+        "create_space",
+        "generate_secret",
+        "scratchpad_add",
+        "list_history",
+      ]),
     );
   });
 

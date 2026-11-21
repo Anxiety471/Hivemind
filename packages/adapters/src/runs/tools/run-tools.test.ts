@@ -75,17 +75,21 @@ beforeEach(() => {
 });
 
 describe("dispatchTool audit outcomes", () => {
-  it.each(["reflect_memory", "recall_memory", "save_memory", "forget_memory", "read_history"])(
-    "refuses an unoffered memory tool before approval or execution: %s",
-    async (name) => {
-      const ctx = dispatchContext(false);
-      vi.mocked(gateToolCall).mockClear();
-      const result = await applyTool(ctx as never, name, { query: "private context" }, "call-1");
-      expect(result).toMatchObject({ error: expect.any(String) });
-      expect(gateToolCall).not.toHaveBeenCalled();
-      expect(audited).toEqual([]);
-    },
-  );
+  it.each([
+    "reflect_memory",
+    "recall_memory",
+    "save_memory",
+    "forget_memory",
+    "read_history",
+    "list_history",
+  ])("refuses an unoffered memory tool before approval or execution: %s", async (name) => {
+    const ctx = dispatchContext(false);
+    vi.mocked(gateToolCall).mockClear();
+    const result = await applyTool(ctx as never, name, { query: "private context" }, "call-1");
+    expect(result).toMatchObject({ error: expect.any(String) });
+    expect(gateToolCall).not.toHaveBeenCalled();
+    expect(audited).toEqual([]);
+  });
   it("marks a replayed outside tool result before handing it to the model", async () => {
     const ctx = dispatchContext(false);
     vi.mocked(gateToolCall).mockResolvedValueOnce({

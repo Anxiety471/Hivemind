@@ -66,6 +66,7 @@ export const BUILTIN_TOOL_NAMES = [
   "paid_request",
   "search_history",
   "read_history",
+  "list_history",
   "read_email",
   "delete_email",
   "claim_email_address",

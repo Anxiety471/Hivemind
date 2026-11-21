@@ -1,10 +1,11 @@
 import { MemoryRevisionConflictError } from "@rakazo/adapter-kit";
 import {
+  HistoryListInputSchema,
   HistoryReadInputSchema,
   HistorySearchInputSchema,
   MEMORY_INDEX_PATH,
 } from "@rakazo/contracts";
-import { readHistory, searchHistory } from "@rakazo/db";
+import { listHistory, readHistory, searchHistory } from "@rakazo/db";
 import { redactConnectorPayload } from "../../integrations/connector-safety.js";
 import { editMemory } from "../../memory/memory-tools.js";
 import { MAX_RECALLED_MEMORIES } from "../../runtime/context/history-compaction.prompt.js";
@@ -46,8 +47,12 @@ async function readHistoryTool(ctx: RunContext, call: ToolCall) {
   const crossChat =
     name === "search_history"
       ? args.scope === "my_chats"
-      : typeof args.threadId === "string" &&
-        args.threadId !== (ctx.source.conversationThreadId ?? run.threadId);
+      : name === "list_history"
+        ? args.scope === "my_chats" ||
+          (typeof args.threadId === "string" &&
+            args.threadId !== (ctx.source.conversationThreadId ?? run.threadId))
+        : typeof args.threadId === "string" &&
+          args.threadId !== (ctx.source.conversationThreadId ?? run.threadId);
   // Channel or webhook text claimed mid-turn revokes the grant for the rest of the run.
   const allowMyChats =
     crossChat && ctx.source.myChatsAllowed && !(await ctx.trust.receivedOutsideMessage());
@@ -62,11 +67,15 @@ async function readHistoryTool(ctx: RunContext, call: ToolCall) {
     ...(run.trigger === "routine" ? { ownerOnly: run.userId } : {}),
   };
   const given = withoutBlankFields(args);
-  let response: Awaited<ReturnType<typeof searchHistory | typeof readHistory>>;
+  let response: Awaited<ReturnType<typeof listHistory | typeof searchHistory | typeof readHistory>>;
   if (name === "search_history") {
     const parsed = HistorySearchInputSchema.safeParse(given);
     if (!parsed.success) return call.finish({ error: argsError(parsed.error) });
     response = await searchHistory(deps.prisma, scope, parsed.data);
+  } else if (name === "list_history") {
+    const parsed = HistoryListInputSchema.safeParse(given);
+    if (!parsed.success) return call.finish({ error: argsError(parsed.error) });
+    response = await listHistory(deps.prisma, scope, parsed.data);
   } else {
     const parsed = HistoryReadInputSchema.safeParse(given);
     if (!parsed.success) return call.finish({ error: argsError(parsed.error) });
@@ -202,6 +211,7 @@ export const memoryTools: ToolHandlers = {
   },
   search_history: readHistoryTool,
   read_history: readHistoryTool,
+  list_history: readHistoryTool,
   async save_memory(ctx, call) {
     const { bot, context } = ctx;
     const { args } = call;

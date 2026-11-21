@@ -246,6 +246,7 @@ export function describeToolActivity(
   if (toolName === "user_computer_observe") return `Looking at ${detail(record.app)}`;
   if (toolName === "user_computer_act") return `Using ${detail(record.app)}`;
   if (toolName === "read_file") return `Reading ${detail(record.path)}`;
+  if (toolName === "list_history") return "Listing conversation history";
   if (toolName === "write_file") return `Writing ${detail(record.path)}`;
   if (toolName === "list_files") return `Listing ${detail(record.path ?? ".")}`;
   if (toolName === "attach_file") return `Attaching ${detail(record.path)}`;

@@ -75,6 +75,7 @@ const AREAS: Array<[area: string, matches: (name: string) => boolean]> = [
   ],
   ["skills", (name) => name.startsWith("skill_")],
   ["schedules", (name) => name.startsWith("schedule_")],
+  ["history", (name) => name.endsWith("_history")],
   ["memory", (name) => name.includes("memory")],
   [
     "media",

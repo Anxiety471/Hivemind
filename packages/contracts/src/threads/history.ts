@@ -108,5 +108,16 @@ export const HistoryReadInputSchema = z.object({
   direction: z.enum(["around", "older", "newer"]).optional(),
   limit: z.number().int().min(1).max(20).optional(),
 });
+export const HistoryListInputSchema = z.object({
+  scope: z.enum(["this_chat", "my_chats"]).optional(),
+  threadId: Id.optional(),
+  beforeSeq: z.number().int().nonnegative().optional(),
+  afterSeq: z.number().int().nonnegative().optional(),
+  before: HistoryDateBoundary.optional(),
+  after: HistoryDateBoundary.optional(),
+  offset: z.number().int().min(0).max(10000).optional(),
+  limit: z.number().int().min(1).max(20).optional(),
+});
 export type HistorySearchInput = z.infer<typeof HistorySearchInputSchema>;
 export type HistoryReadInput = z.infer<typeof HistoryReadInputSchema>;
+export type HistoryListInput = z.infer<typeof HistoryListInputSchema>;

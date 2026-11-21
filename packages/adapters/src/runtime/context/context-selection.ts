@@ -198,7 +198,12 @@ function shortenHistoryResult(
   size: number,
   tool: { name?: string; arguments?: unknown },
 ): string | undefined {
-  if (tool.name !== "read_history" && tool.name !== "search_history") return;
+  if (
+    tool.name !== "read_history" &&
+    tool.name !== "search_history" &&
+    tool.name !== "list_history"
+  )
+    return;
   const source =
     typeof content === "string"
       ? content

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { HistoryReadInput, HistorySearchInput } from "@rakazo/contracts";
+import type { HistoryListInput, HistoryReadInput, HistorySearchInput } from "@rakazo/contracts";
 import {
   ATTACHMENT_MAX_COUNT,
   HISTORY_ATTACHMENTS_PER_RESPONSE,
@@ -727,5 +727,123 @@ export async function readHistory(
     }),
     olderMessageId: rows[0]?.id ?? null,
     newerMessageId: rows.at(-1)?.id ?? null,
+  });
+}
+
+function rowHasSteps(blocks: Prisma.JsonValue): boolean {
+  return (
+    Array.isArray(blocks) &&
+    blocks.some(
+      (block) =>
+        block !== null && typeof block === "object" && "kind" in block && block.kind === "steps",
+    )
+  );
+}
+
+/**
+ * Browse compact message summaries newest-first without a keyword or anchor messageId,
+ * so runs with a bounded active window can scan older conversation turns and drill in with
+ * read_history.
+ */
+export async function listHistory(
+  prisma: PrismaClient,
+  scope: HistoryScope,
+  input: HistoryListInput,
+) {
+  const targetThreadId = input.threadId;
+  const crossThread = targetThreadId !== undefined && targetThreadId !== scope.threadId;
+  const myChats = input.scope === "my_chats" || crossThread;
+  if (myChats && (!scope.allowMyChats || scope.channelId))
+    throw new Error("my_chats is available only in direct human app runs; use this_chat.");
+  if (
+    input.beforeSeq !== undefined &&
+    (!Number.isInteger(input.beforeSeq) || input.beforeSeq < 0)
+  ) {
+    throw new Error("Invalid history cursor");
+  }
+  if (input.afterSeq !== undefined && (!Number.isInteger(input.afterSeq) || input.afterSeq < 0)) {
+    throw new Error("Invalid history cursor");
+  }
+  if (
+    scope.searchBeforeSeq !== undefined &&
+    (!Number.isInteger(scope.searchBeforeSeq) || scope.searchBeforeSeq < 0)
+  ) {
+    throw new Error("Invalid history search boundary");
+  }
+  const offset = input.offset ?? 0;
+  if (!Number.isInteger(offset) || offset < 0 || offset > MAX_SEARCH_OFFSET) {
+    throw new Error("Invalid history offset");
+  }
+  const limit = pageSize(input.limit ?? 10);
+  const before = date(input.before);
+  const after = date(input.after);
+  const beforeSeq = Math.min(
+    input.beforeSeq ?? Number.POSITIVE_INFINITY,
+    scope.searchBeforeSeq ?? Number.POSITIVE_INFINITY,
+  );
+  const byOffset = myChats && !targetThreadId;
+  const filters = Prisma.sql`
+    ${visible(scope, myChats, targetThreadId)}
+    ${before ? Prisma.sql`AND m."createdAt" < ${before}` : Prisma.empty}
+    ${after ? Prisma.sql`AND m."createdAt" >= ${after}` : Prisma.empty}
+    ${input.afterSeq !== undefined && !byOffset ? Prisma.sql`AND m.seq > ${input.afterSeq}` : Prisma.empty}
+    ${Number.isFinite(beforeSeq) && !byOffset ? Prisma.sql`AND m.seq < ${beforeSeq}` : Prisma.empty}
+    ${byOffset && scope.searchBeforeSeq !== undefined ? Prisma.sql`AND (t.id <> ${scope.threadId} OR m.seq < ${scope.searchBeforeSeq})` : Prisma.empty}
+    ${myChats && scope.searchAt ? Prisma.sql`AND m."createdAt" < ${scope.searchAt}` : Prisma.empty}`;
+  const rows = await messageRows(
+    prisma,
+    byOffset
+      ? Prisma.sql`
+    SELECT ${columns}, COALESCE(b.name, g.name) AS "chatName"
+    FROM messages m JOIN threads t ON t.id = m."threadId"
+    LEFT JOIN bots b ON b.id = t."botId" LEFT JOIN chat_groups g ON g.id = t."groupId"
+    WHERE ${filters}
+    ORDER BY m."createdAt" DESC, m.id DESC LIMIT ${limit + 1} OFFSET ${offset}`
+      : Prisma.sql`
+    SELECT ${columns}
+    FROM messages m JOIN threads t ON t.id = m."threadId"
+    WHERE ${filters}
+    ORDER BY m.seq DESC LIMIT ${limit + 1}`,
+  );
+  const hasMore = rows.length > limit;
+  const page = rows.slice(0, limit);
+  const attachments = await messageAttachments(prisma, scope, page);
+  const nextBeforeSeq = !byOffset && hasMore ? page.at(-1)!.seq : null;
+  const nextOffset = byOffset && hasMore ? offset + page.length : null;
+  const capped = byOffset && nextOffset !== null && nextOffset > MAX_SEARCH_OFFSET;
+  return bounded({
+    untrusted: true as const,
+    ...(byOffset
+      ? {
+          chats: [...new Set(page.map((row) => row.threadId))].map((threadId) => {
+            const hits = page.filter((row) => row.threadId === threadId);
+            return {
+              threadId,
+              name: hits[0]!.chatName,
+              lastHitAt: hits[0]!.createdAt.toISOString(),
+              messageIds: hits.map((row) => row.id),
+            };
+          }),
+        }
+      : {}),
+    messages: page.map((row) => ({
+      ...withAttachments(reference(row, "", 240), attachments),
+      ...(rowHasSteps(row.blocks) ? { usedTools: true } : {}),
+      ...(byOffset ? { threadId: row.threadId } : {}),
+    })),
+    hasMore: hasMore && !capped,
+    nextBeforeSeq,
+    nextList:
+      !hasMore || capped
+        ? null
+        : {
+            ...(input.scope ? { scope: input.scope } : {}),
+            ...(targetThreadId ? { threadId: targetThreadId } : {}),
+            ...(byOffset ? { offset: nextOffset! } : { beforeSeq: nextBeforeSeq! }),
+            ...(input.afterSeq !== undefined && !byOffset ? { afterSeq: input.afterSeq } : {}),
+            ...(input.before !== undefined ? { before: input.before } : {}),
+            ...(input.after !== undefined ? { after: input.after } : {}),
+            limit,
+          },
   });
 }

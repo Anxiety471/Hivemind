@@ -1019,4 +1019,86 @@ describe("runtime context policy", () => {
       context.messages.push({ role: "user", content: `Follow-up ${turn}`, timestamp: turn + 1 });
     }
   });
+
+  it("keeps up to 20 short messages and trims larger retrieval history to a 10-20 chunked window", () => {
+    const short = fixture(18);
+    enableHistoryRetrieval(short.request);
+    short.request.history.forEach((item, index) => {
+      item.content = `Short ${index}`;
+      (short.context.messages[index] as { content: string }).content = item.content;
+    });
+    const shortPrepared = createRuntimeContextPolicy(short.request).prepareContext(
+      short.context,
+      model,
+    );
+    expect(shortPrepared.messages).toHaveLength(19);
+
+    const long = fixture(25);
+    enableHistoryRetrieval(long.request);
+    long.request.history.forEach((item, index) => {
+      item.content = `Short ${index}`;
+      (long.context.messages[index] as { content: string }).content = item.content;
+    });
+    const longPrepared = createRuntimeContextPolicy(long.request).prepareContext(
+      long.context,
+      model,
+    );
+    expect(longPrepared.messages.slice(0, -1).map((m) => m.content)).toEqual(
+      Array.from({ length: 10 }, (_, index) => `Short ${15 + index}`),
+    );
+    expect(longPrepared.messages.at(-1)).toEqual(long.context.messages.at(-1));
+  });
+
+  it("grows a cached prefix from 10 to 20 across turns with changing timestamps, then resets to 10", () => {
+    const tracker = new ContextCacheTracker(() => 1000);
+    const threadId = "chunked-delta-cache-thread";
+    const makeTurn = (count: number, turnPrompt: string) => {
+      const built = fixture(count);
+      built.request.threadId = threadId;
+      built.request.prompt = turnPrompt;
+      built.request.model.cacheCapabilities = {
+        scope: "connection",
+        retentionMs: 300_000,
+        minimumTokens: 1,
+      };
+      enableHistoryRetrieval(built.request);
+      for (let index = 0; index < count; index++) {
+        const text = `Turn message ${index}: ${"context ".repeat(20)}`;
+        built.request.history[index]!.content = text;
+        (built.context.messages[index] as { content: string }).content = text;
+      }
+      built.context.messages[count] = { role: "user", content: turnPrompt, timestamp: 100 + count };
+      return built;
+    };
+
+    const runTurn = (count: number, prompt: string) => {
+      const { request, context } = makeTurn(count, prompt);
+      const policy = createRuntimeContextPolicy(request, undefined, { cacheTracker: tracker });
+      const prepared = policy.prepareContext(context, model);
+      policy.onUsage({ inputTokens: 1000, outputTokens: 20, cacheReadTokens: 800 });
+      return { prepared, decision: policy.getDecision()! };
+    };
+
+    // Cold start with 25 messages trims to the latest 10 stored messages + current prompt.
+    const first = runTurn(25, "Prompt 25\n<current_time>t=1</current_time>");
+    expect(first.prepared.messages).toHaveLength(11);
+    const firstHistory = first.prepared.messages.slice(0, 10);
+
+    // Next turns append up to 20 stored messages while preserving the exact prefix.
+    const second = runTurn(27, "Prompt 27\n<current_time>t=2</current_time>");
+    expect(second.decision.predictedCache).toBe("likely-warm");
+    expect(second.prepared.messages).toHaveLength(13);
+    expect(second.prepared.messages.slice(0, 10)).toEqual(firstHistory);
+
+    const sixth = runTurn(35, "Prompt 35\n<current_time>t=6</current_time>");
+    expect(sixth.decision.predictedCache).toBe("likely-warm");
+    expect(sixth.prepared.messages).toHaveLength(21);
+    expect(sixth.prepared.messages.slice(0, 10)).toEqual(firstHistory);
+
+    // Crossing 20 stored messages rolls the window forward back to the latest 10.
+    const seventh = runTurn(36, "Prompt 36\n<current_time>t=7</current_time>");
+    expect(seventh.decision.predictedCache).toBe("likely-cold");
+    expect(seventh.prepared.messages).toHaveLength(11);
+    expect(String(seventh.prepared.messages[0]!.content)).toContain("Turn message 26:");
+  });
 });

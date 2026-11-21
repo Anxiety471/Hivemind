@@ -6,6 +6,7 @@ import type { Prisma, PrismaClient } from "../database/client.js";
 import {
   historyMessageText,
   historyReadText,
+  listHistory,
   readHistory,
   searchHistory,
 } from "./history-retrieval.js";
@@ -560,5 +561,41 @@ describe("history search index", () => {
     expect(predicates).not.toHaveLength(0);
     const index = liveIndexExpression();
     expect(predicates).toEqual(predicates.map(() => index));
+  });
+
+  it("lists compact message summaries newest-first with opaque nextList cursors", async () => {
+    const { mock, prisma } = db();
+    mock.$queryRaw.mockResolvedValue([
+      {
+        ...row(12, "Latest"),
+        blocks: [
+          { kind: "steps", steps: [] },
+          { kind: "text", text: "Latest" },
+        ],
+      },
+      row(11, "Earlier"),
+      row(10, "Oldest"),
+    ]);
+    const result = await listHistory(prisma, { ...scope, searchBeforeSeq: 15 }, { limit: 2 });
+    expect(result.untrusted).toBe(true);
+    expect(result.hasMore).toBe(true);
+    expect(result.nextBeforeSeq).toBe(11);
+    expect(result.nextList).toEqual({ beforeSeq: 11, limit: 2 });
+    expect(result.messages.map((message) => [message.seq, message.text])).toEqual([
+      [12, "Latest"],
+      [11, "Earlier"],
+    ]);
+    expect(result.messages[0]).toMatchObject({ usedTools: true });
+    expect(sql(mock).values).toEqual(expect.arrayContaining(["space", "bot", "thread", 15, 3]));
+  });
+
+  it("rejects cross-chat listHistory when my_chats is not allowed", async () => {
+    const { prisma } = db();
+    await expect(listHistory(prisma, scope, { scope: "my_chats" })).rejects.toThrow(
+      "my_chats is available only in direct human app runs",
+    );
+    await expect(listHistory(prisma, scope, { threadId: "other-thread" })).rejects.toThrow(
+      "my_chats is available only in direct human app runs",
+    );
   });
 });

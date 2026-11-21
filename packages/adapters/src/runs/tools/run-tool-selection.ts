@@ -24,6 +24,7 @@ export const READ_ONLY_AGENT_TOOLS = new Set([
   "read_history",
   "read_email",
   "search_history",
+  "list_history",
   "request_takeover",
   "run_subagent",
   "task_catalog",
@@ -204,7 +205,7 @@ export function selectBuiltinToolsForRun(options: {
         !isBackgroundRunTrigger(options.trigger)) ||
         tool.name !== "call_user") &&
       (options.historyRetrievalEnabled ||
-        !["search_history", "read_history"].includes(tool.name)) &&
+        !["search_history", "read_history", "list_history"].includes(tool.name)) &&
       (!options.messagingChannelRun ||
         (!SCHEDULE_TOOL_NAMES.has(tool.name) &&
           !SKILL_TOOL_NAMES.has(tool.name) &&

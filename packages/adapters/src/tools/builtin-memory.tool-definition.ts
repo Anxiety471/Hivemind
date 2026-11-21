@@ -196,6 +196,46 @@ export const memoryTools: ConnectorTool[] = [
       required: ["messageId"],
     },
   },
+  {
+    name: "list_history",
+    description:
+      "Browse compact summaries of earlier messages newest-first (up to 20 per page) without needing keywords or a messageId. Use this to scan what happened earlier in this chat (or another authorized chat with scope my_chats), then call read_history on relevant messageIds for full text, attachments and linked runs. When nextList is present, pass its arguments to list_history to page further back.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        scope: { type: "string", enum: ["this_chat", "my_chats"] },
+        threadId: {
+          type: "string",
+          description: "Specific chat threadId from search_history or list_history.",
+        },
+        beforeSeq: {
+          type: "integer",
+          minimum: 0,
+          description: "Page older than this sequence number (or copy from nextList).",
+        },
+        afterSeq: {
+          type: "integer",
+          minimum: 0,
+          description: "Only messages after this sequence number.",
+        },
+        before: {
+          type: "string",
+          description: "Exclusive ISO date upper bound; date-only values mean UTC midnight.",
+        },
+        after: {
+          type: "string",
+          description: "Inclusive ISO date lower bound; date-only values mean UTC midnight.",
+        },
+        offset: {
+          type: "integer",
+          minimum: 0,
+          maximum: 10000,
+          description: "Pagination offset from nextList when browsing scope my_chats.",
+        },
+        limit: { type: "integer", minimum: 1, maximum: 20 },
+      },
+    },
+  },
   // Semantic-memory tools: exposed by selectMemoryTools() only when a
   // Space memory provider is configured (`remember` stays), and
   // forget_memory/reflect_memory only when that provider can forget/reflect.
