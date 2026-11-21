@@ -2,9 +2,10 @@
 // over packages/adapters/src/ticket-tools.ts:207-299 and packages/db/src/board.ts).
 //
 // Both are behind boardEnabled (routes/context.ts:471-480): TICKET_BOARD_ENABLED for every account,
-// else each account's own labs list. The writes are plain tickets/ticket_comments rows; the only
-// side effect is the board frame BoardEvents.notify publishes, and neither path wakes a run
-// (wakeAssignee is false for a move that changes no assignee and for every comment).
+// else each account's own labs list. The writes are plain tickets/ticket_comments rows. After the
+// board frame BoardEvents.notify publishes, a move to todo, doing or review and every comment wake
+// the ticket's worker bots through the Go task queue (Deployment.Waker); done, closed and blocked
+// moves wake nobody.
 package tickets
 
 import (
@@ -298,7 +299,8 @@ func parseMove(raw orpc.Input) (moveInput, *orpc.Error) {
 }
 
 // Move implements tickets.move: updateTicket with only a status (ticket-tools.ts:207-259 as the
-// move route calls it). The assignee is untouched, so nothing wakes.
+// move route calls it). The workers are untouched, but a move to todo, doing or review wakes
+// them: the person is asking for the work to be picked up.
 func Move(ctx context.Context, database *db.DB, deployment shared.Deployment, actor db.Actor, raw orpc.Input) (any, *orpc.Error) {
 	// boardEnabled runs before the input parse, as the route's middleware does.
 	if err := Gate(ctx, database, deployment, actor); err != nil {
@@ -315,6 +317,7 @@ func Move(ctx context.Context, database *db.DB, deployment shared.Deployment, ac
 		return nil, shared.Failure(err)
 	}
 	var ticket Ticket
+	var previousStatus string
 	err = database.Tenant(ctx, actor, func(tx pgx.Tx) error {
 		// The ticketRow is held (FOR UPDATE) before it is read, so a concurrent move cannot interleave.
 		if _, err := tx.Exec(ctx, `SELECT id FROM tickets WHERE id = $1 AND "spaceId" = $2 FOR UPDATE`,
@@ -329,6 +332,7 @@ func Move(ctx context.Context, database *db.DB, deployment shared.Deployment, ac
 		if err != nil {
 			return err
 		}
+		previousStatus = current.Status
 		// done and closed stamp the first completion; any other status clears it.
 		completed := current.CompletedAt
 		if completedStatus(input.Status) {
@@ -357,7 +361,30 @@ func Move(ctx context.Context, database *db.DB, deployment shared.Deployment, ac
 	if !ticketValid(ticket) || ticket.ID == "" {
 		return nil, shared.OutputInvalid()
 	}
+	if deployment.Waker != nil && previousStatus != ticket.Status && wakesOnStatus(ticket.Status) {
+		deployment.Waker.WakeWorkers(ctx, actor.SpaceID, ticket.ID, ticket.WorkerBotIDs,
+			"Its status changed to "+ticket.Status+".")
+	}
 	return ticket, nil
+}
+
+// wakesOnStatus is the statuses that ask a worker to pick the ticket up; blocked, done and closed
+// ask for nothing.
+func wakesOnStatus(status string) bool {
+	return status == "todo" || status == "doing" || status == "review"
+}
+
+// commentNote is the wake note for a comment: the comment itself, cut to a short excerpt, so the
+// bot sees what was said before it reads the thread.
+func commentNote(body string) string {
+	const limit = 400
+	excerpt := []rune(body)
+	suffix := ""
+	if len(excerpt) > limit {
+		excerpt = excerpt[:limit]
+		suffix = "…"
+	}
+	return "A person commented: " + strconv.Quote(string(excerpt)+suffix)
 }
 
 type commentInput struct {
@@ -411,10 +438,14 @@ func Comment(ctx context.Context, database *db.DB, deployment shared.Deployment,
 		return nil, shared.Failure(err)
 	}
 	var comment TicketComment
+	var workers []string
 	err = database.Tenant(ctx, actor, func(tx pgx.Tx) error {
 		ticket, err := findTicket(ctx, tx, actor.SpaceID, board.ID, input.TicketID)
 		if err != nil {
 			return err
+		}
+		if mapped, ok := dto(ticket, board.Prefix); ok {
+			workers = mapped.WorkerBotIDs
 		}
 		id := effects.NewID()
 		at := now()
@@ -447,6 +478,9 @@ func Comment(ctx context.Context, database *db.DB, deployment shared.Deployment,
 	}
 	if comment.ID == "" || comment.AuthorUserID == nil || *comment.AuthorUserID == "" {
 		return nil, shared.OutputInvalid()
+	}
+	if deployment.Waker != nil && len(workers) > 0 {
+		deployment.Waker.WakeWorkers(ctx, actor.SpaceID, input.TicketID, workers, commentNote(input.Body))
 	}
 	return comment, nil
 }

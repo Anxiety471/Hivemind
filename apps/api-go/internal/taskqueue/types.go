@@ -54,7 +54,9 @@ type Job struct {
 	Attempt     int    `json:"attempt"`
 	MaxAttempts int    `json:"maxAttempts"`
 	LastError   string `json:"lastError,omitempty"`
-	EnqueuedAt  string `json:"enqueuedAt"`
+	// Note says what changed on the ticket (a status move, a comment); it follows the wake prompt.
+	Note       string `json:"note,omitempty"`
+	EnqueuedAt string `json:"enqueuedAt"`
 }
 
 // DispatchRequest is the payload for POST /internal/task-queue/dispatch.
@@ -62,6 +64,7 @@ type DispatchRequest struct {
 	SpaceID  string `json:"spaceId"`
 	TicketID string `json:"ticketId"`
 	BotID    string `json:"botId"`
+	Note     string `json:"note,omitempty"`
 }
 
 // DispatchResponse reports whether a dispatch or bump was queued.
@@ -115,11 +118,16 @@ type QueueStore interface {
 }
 
 // TicketWakePrompt matches ticketWakePrompt in packages/adapters/src/runs/wakeups/wakes.prompt.ts.
-func TicketWakePrompt(ref string) string {
-	return fmt.Sprintf(
+// A note, when there is one, says what changed since the bot last looked.
+func TicketWakePrompt(ref, note string) string {
+	prompt := fmt.Sprintf(
 		"Work on ticket %s. Read it with ticket_get. Keep progress in ticket comments and update its status with ticket_update. Use ask or approval cards when user input is needed.",
 		ref,
 	)
+	if note != "" {
+		prompt += " " + note
+	}
+	return prompt
 }
 
 // TicketBumpPrompt nudges an idle bot that still has an open ticket in todo or doing.

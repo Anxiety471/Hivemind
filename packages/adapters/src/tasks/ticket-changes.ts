@@ -11,6 +11,8 @@ export type TicketChange = {
   assigneeBotId: string | null;
   wakeAssignee: boolean;
   wakeBotIds?: string[];
+  /** What changed, appended to the wake prompt so the bot sees it before it reads the ticket. */
+  wakeNote?: string;
 };
 export type TicketChangeNotifier = (change: TicketChange) => Promise<void>;
 
@@ -38,12 +40,14 @@ export function createTicketChangeNotifier(deps: {
         spaceId: change.spaceId,
         ticketId: change.ticketId,
         botId,
+        note: change.wakeNote,
       });
       if (!dispatched) {
         await wakeTicketAssignee(deps, {
           spaceId: change.spaceId,
           ticketId: change.ticketId,
           botId,
+          note: change.wakeNote,
         });
       }
     }

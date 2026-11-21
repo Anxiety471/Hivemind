@@ -14,6 +14,7 @@ export async function dispatchTicketWakeViaGo(input: {
   spaceId: string;
   ticketId: string;
   botId: string;
+  note?: string;
 }): Promise<boolean> {
   const baseUrl = taskDetectBaseUrl();
   if (!baseUrl) return false;

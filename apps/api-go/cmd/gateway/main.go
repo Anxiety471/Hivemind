@@ -200,34 +200,7 @@ func setupLocal(buildIDFile string, logger *slog.Logger) (*local.Server, *taskde
 	// it, and the procedures publish thread cursors, organization and board changes through
 	// the same notifier, so Wait() covers every signal either side started.
 	effectsRunner := effects.NewRunner(database, logger)
-	server := local.New(database, sessions, procedures.All(database, shared.Deployment{
-		WebOrigin:           strings.TrimRight(deployment.WebOrigin, "/"),
-		EmailDelivery:       deployment.EmailDelivery,
-		InboundEmailDomain:  deployment.InboundEmailDomain,
-		MaxComputersPerUser: deployment.MaxComputersPerUser,
-		Content:             ring,
-		Events:              &events.PGPublisher{Pool: database.Pool},
-		Signals:             effectsRunner.Signals(),
-		BoardLab:            deployment.BoardLab,
-		Audit:               effectsRunner.Recorder(),
-	}), local.Config{
-		BuildID:        readBuildID(buildIDFile),
-		Minimums:       deployment.Minimums,
-		MaxUploadBytes: deployment.MaxUploadBytes,
-		ClientIP:       deployment.ClientIP,
-		ClientIPHeader: deployment.ClientIPHeader,
-		WebOrigin:      deployment.WebOrigin,
-		TrustedOrigins: deployment.TrustedOrigins,
-		Logger:         logger,
-		Effects:        effectsRunner,
-	})
-	detector := &taskdetect.Service{
-		DB:       database,
-		BoardLab: deployment.BoardLab,
-		Content:  ring,
-		Signals:  effectsRunner.Signals(),
-		Logger:   logger,
-	}
+	// The queue is built before the procedures so a ticket move or comment can wake workers on it.
 	var queueStore taskqueue.QueueStore
 	if deployment.RedisURL != "" {
 		redisStore, redisErr := taskqueue.OpenRedis(startup, deployment.RedisURL, taskqueue.DefaultKeyPrefix)
@@ -252,6 +225,35 @@ func setupLocal(buildIDFile string, logger *slog.Logger) (*local.Server, *taskde
 		BumpIdle:     deployment.TaskBumpIdle,
 		BumpCooldown: deployment.TaskBumpCooldown,
 	})
+	server := local.New(database, sessions, procedures.All(database, shared.Deployment{
+		WebOrigin:           strings.TrimRight(deployment.WebOrigin, "/"),
+		EmailDelivery:       deployment.EmailDelivery,
+		InboundEmailDomain:  deployment.InboundEmailDomain,
+		MaxComputersPerUser: deployment.MaxComputersPerUser,
+		Content:             ring,
+		Events:              &events.PGPublisher{Pool: database.Pool},
+		Signals:             effectsRunner.Signals(),
+		BoardLab:            deployment.BoardLab,
+		Audit:               effectsRunner.Recorder(),
+		Waker:               queueSvc,
+	}), local.Config{
+		BuildID:        readBuildID(buildIDFile),
+		Minimums:       deployment.Minimums,
+		MaxUploadBytes: deployment.MaxUploadBytes,
+		ClientIP:       deployment.ClientIP,
+		ClientIPHeader: deployment.ClientIPHeader,
+		WebOrigin:      deployment.WebOrigin,
+		TrustedOrigins: deployment.TrustedOrigins,
+		Logger:         logger,
+		Effects:        effectsRunner,
+	})
+	detector := &taskdetect.Service{
+		DB:       database,
+		BoardLab: deployment.BoardLab,
+		Content:  ring,
+		Signals:  effectsRunner.Signals(),
+		Logger:   logger,
+	}
 	return server, detector, queueSvc, func() {
 		_ = queueSvc.Close()
 		closeRing()

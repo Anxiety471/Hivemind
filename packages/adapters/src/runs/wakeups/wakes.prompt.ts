@@ -1,5 +1,6 @@
-export function ticketWakePrompt(ticket: string): string {
-  return `Work on ticket ${ticket}. Read it with ticket_get. Keep progress in ticket comments and update its status with ticket_update. Use ask or approval cards when user input is needed.`;
+export function ticketWakePrompt(ticket: string, note?: string): string {
+  const prompt = `Work on ticket ${ticket}. Read it with ticket_get. Keep progress in ticket comments and update its status with ticket_update. Use ask or approval cards when user input is needed.`;
+  return note ? `${prompt} ${note}` : prompt;
 }
 
 export function purchaseWakePrompt(purchaseId: string, status: string): string {

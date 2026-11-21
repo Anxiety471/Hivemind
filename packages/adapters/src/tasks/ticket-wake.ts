@@ -13,7 +13,7 @@ import { ticketWakePrompt } from "../runs/wakeups/wakes.prompt.js";
 /** Assignment wakes a newly assigned worker bot, without posting a chat message. */
 export async function wakeTicketAssignee(
   deps: { prisma: PrismaClient; jobs: JobPublisher; deploymentLabs?: readonly LabFeature[] },
-  input: { spaceId: string; ticketId: string; botId: string },
+  input: { spaceId: string; ticketId: string; botId: string; note?: string },
 ): Promise<void> {
   const run = await deps.prisma.$transaction(async (tx) => {
     const ticket = await tx.ticket.findFirst({
@@ -40,7 +40,7 @@ export async function wakeTicketAssignee(
         botId: bot.id,
         threadId: bot.thread.id,
         userId: bot.userId,
-        prompt: ticketWakePrompt(`${ticket.board.ticketPrefix}-${ticket.number}`),
+        prompt: ticketWakePrompt(`${ticket.board.ticketPrefix}-${ticket.number}`, input.note),
         status: "queued",
       },
     });

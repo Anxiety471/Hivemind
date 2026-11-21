@@ -87,6 +87,34 @@ func TestServiceRetriesWithBackoffAndDeadLetters(t *testing.T) {
 	}
 }
 
+func TestWakeWorkersQueuesEachBotWithTheNote(t *testing.T) {
+	now := time.Date(2026, 11, 21, 10, 0, 0, 0, time.UTC)
+	svc := New(Config{
+		Store: NewMemoryStore(func() time.Time { return now }),
+		Now:   func() time.Time { return now },
+		WakeFunc: func(_ context.Context, _ Job) (WakeResult, error) {
+			return WakeResult{}, nil
+		},
+	})
+	ctx := context.Background()
+	svc.WakeWorkers(ctx, "s1", "t1", []string{"b1", "b2"}, "Its status changed to todo.")
+	jobs, err := svc.store.PopDue(ctx, now, 10)
+	if err != nil || len(jobs) != 2 {
+		t.Fatalf("jobs = %+v err = %v", jobs, err)
+	}
+	for _, job := range jobs {
+		if job.Kind != KindAssign || job.Note != "Its status changed to todo." {
+			t.Fatalf("unexpected job: %+v", job)
+		}
+	}
+	if got := TicketWakePrompt("TASK-1", jobs[0].Note); !strings.HasSuffix(got, " Its status changed to todo.") {
+		t.Fatalf("prompt = %q", got)
+	}
+	if got := TicketWakePrompt("TASK-1", ""); strings.HasSuffix(got, " ") {
+		t.Fatalf("a wake without a note ends the prompt: %q", got)
+	}
+}
+
 func TestServiceBumpCooldownAndForce(t *testing.T) {
 	now := time.Date(2026, 11, 21, 10, 0, 0, 0, time.UTC)
 	store := NewMemoryStore(func() time.Time { return now })

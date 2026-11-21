@@ -361,7 +361,7 @@ describe("ticket mutations", () => {
     );
   });
 
-  it("wakes only newly added worker bots, never on owner-only, status, or repeated worker edits", async () => {
+  it("wakes newly added workers, and all workers when a ticket moves to a status that asks for work", async () => {
     const s = mutationDeps();
     await updateTicket(s.deps, {
       spaceId: "ws",
@@ -383,7 +383,8 @@ describe("ticket mutations", () => {
       expect.objectContaining({
         wakeAssignee: true,
         assigneeBotId: "bot-1",
-        wakeBotIds: ["bot-2"],
+        wakeBotIds: ["bot-2", "bot-1"],
+        wakeNote: "Its status changed to doing.",
       }),
     );
     await updateTicket(s.deps, {
@@ -402,6 +403,29 @@ describe("ticket mutations", () => {
       }),
     );
   });
+  it("wakes the other workers on a status hand-off but never the bot that made it", async () => {
+    const s = mutationDeps();
+    await updateTicket(s.deps, {
+      spaceId: "ws",
+      userId: "user-1",
+      botId: "bot-1",
+      id: "t1",
+      workerBotIds: ["bot-1", "bot-2"],
+      status: "review",
+    });
+    expect(s.changes).toHaveBeenLastCalledWith(
+      expect.objectContaining({ wakeBotIds: ["bot-2"], wakeNote: "Its status changed to review." }),
+    );
+    await updateTicket(s.deps, {
+      spaceId: "ws",
+      userId: "user-1",
+      id: "t1",
+      status: "blocked",
+    });
+    expect(s.changes).toHaveBeenLastCalledWith(
+      expect.objectContaining({ wakeAssignee: false, wakeBotIds: [] }),
+    );
+  });
   it("does not wake a bot creating or assigning a ticket to itself", async () => {
     const s = mutationDeps();
     await createTicket(s.deps, { spaceId: "ws", userId: "user-1", botId: "bot-1", title: "Ship" });
@@ -414,7 +438,7 @@ describe("ticket mutations", () => {
     });
     expect(s.changes.mock.calls.map(([value]) => value.wakeAssignee)).toEqual([false, false]);
   });
-  it("comments without waking the owner", async () => {
+  it("comments without waking anyone when a bot writes the comment", async () => {
     const s = mutationDeps();
     const result = await commentTicket(s.deps, {
       spaceId: "ws",
@@ -428,6 +452,22 @@ describe("ticket mutations", () => {
       data: expect.objectContaining({ body: "Ready", ticketId: "t1" }),
     });
     expect(s.changes).toHaveBeenCalledWith(expect.objectContaining({ wakeAssignee: false }));
+  });
+  it("wakes the workers with the comment when a person writes it", async () => {
+    const s = mutationDeps();
+    await commentTicket(s.deps, {
+      spaceId: "ws",
+      userId: "user-1",
+      id: "t1",
+      body: "Use staging",
+    });
+    expect(s.changes).toHaveBeenCalledWith(
+      expect.objectContaining({
+        wakeAssignee: true,
+        wakeBotIds: ["bot-1"],
+        wakeNote: 'A person commented: "Use staging"',
+      }),
+    );
   });
   it("reads tickets with their comments", async () => {
     const s = mutationDeps();

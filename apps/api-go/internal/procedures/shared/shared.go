@@ -71,6 +71,16 @@ type Deployment struct {
 	// Audit records the audit events a procedure raises itself (recordAuditEvent). nil in tests
 	// that never record one.
 	Audit *effects.Recorder
+	// Waker wakes a ticket's worker bots through the task queue (retries, backoff, coalescing).
+	// nil in tests that never wake one.
+	Waker TicketWaker
+}
+
+// TicketWaker queues a wake for each bot, with a short note saying what changed on the ticket.
+// It never fails the write that triggered it: a lost wake is recovered by the queue's retries
+// and the idle-bot bump.
+type TicketWaker interface {
+	WakeWorkers(ctx context.Context, spaceID, ticketID string, botIDs []string, note string)
 }
 
 // RequireBot is repos.getBot (packages/db/src/repos.ts:415): a bot of the actor's Space that

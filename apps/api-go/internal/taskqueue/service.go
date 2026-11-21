@@ -137,6 +137,7 @@ func (s *Service) EnqueueAssign(ctx context.Context, req DispatchRequest) (Dispa
 		BotID:       req.BotID,
 		Attempt:     0,
 		MaxAttempts: s.maxAttempts,
+		Note:        req.Note,
 		EnqueuedAt:  shared.ISO(s.now()),
 	}
 	if err := s.store.Enqueue(ctx, job, s.now()); err != nil {
@@ -144,6 +145,16 @@ func (s *Service) EnqueueAssign(ctx context.Context, req DispatchRequest) (Dispa
 	}
 	s.signalDispatch()
 	return DispatchResponse{Queued: true, Driver: s.store.Driver()}, nil
+}
+
+// WakeWorkers queues a wake for each bot on a ticket the caller just changed. A failed enqueue is
+// logged, not returned: the write that caused it has already committed.
+func (s *Service) WakeWorkers(ctx context.Context, spaceID, ticketID string, botIDs []string, note string) {
+	for _, botID := range botIDs {
+		if _, err := s.EnqueueAssign(ctx, DispatchRequest{SpaceID: spaceID, TicketID: ticketID, BotID: botID, Note: note}); err != nil && s.logger != nil {
+			s.logger.Warn("ticket worker wake not queued", "ticket", ticketID, "bot", botID, "error", err)
+		}
+	}
 }
 
 // EnqueueBump schedules a nudge for an idle worker bot on an open ticket.
@@ -575,7 +586,7 @@ func (s *Service) wakeBotForTicket(ctx context.Context, job Job) (WakeResult, er
 		}
 
 		ref := fmt.Sprintf("%s-%d", prefix, number)
-		prompt := TicketWakePrompt(ref)
+		prompt := TicketWakePrompt(ref, job.Note)
 		if job.Kind == KindBump {
 			prompt = TicketBumpPrompt(ref, title, status)
 		}

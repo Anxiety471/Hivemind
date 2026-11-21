@@ -2,6 +2,7 @@ package tickets
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
@@ -92,6 +93,26 @@ func TestTicketDtoCoercion(t *testing.T) {
 	}
 	if len(mapped.WorkerBotIDs) != 1 || mapped.WorkerBotIDs[0] != "bot-1" {
 		t.Fatalf("expected legacy assigneeBotId to populate WorkerBotIDs, got %+v", mapped.WorkerBotIDs)
+	}
+}
+
+func TestWakesOnStatusAsksForWorkOnly(t *testing.T) {
+	for status, want := range map[string]bool{
+		"todo": true, "doing": true, "review": true, "blocked": false, "done": false, "closed": false,
+	} {
+		if wakesOnStatus(status) != want {
+			t.Errorf("%s: wakesOnStatus = %v, want %v", status, !want, want)
+		}
+	}
+}
+
+func TestCommentNoteQuotesAndCutsTheComment(t *testing.T) {
+	if got := commentNote(`Use "staging"`); got != `A person commented: "Use \"staging\""` {
+		t.Fatalf("note = %s", got)
+	}
+	long := commentNote(strings.Repeat("é", 500))
+	if !strings.HasSuffix(long, `…"`) || len([]rune(long)) > len("A person commented: ")+400+3 {
+		t.Fatalf("a long comment is cut: %d runes", len([]rune(long)))
 	}
 }
 

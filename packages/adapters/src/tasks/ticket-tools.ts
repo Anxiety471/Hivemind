@@ -50,6 +50,21 @@ function dedupeIds(ids: readonly string[]): string[] {
   return result;
 }
 
+/** The statuses that ask a worker to pick the ticket up. */
+const TICKET_WAKE_STATUSES: ReadonlySet<string> = new Set(["todo", "doing", "review"]);
+const COMMENT_NOTE_CHARS = 400;
+
+function commentExcerpt(body: string): string {
+  return body.length > COMMENT_NOTE_CHARS ? `${sliceWellFormed(body, COMMENT_NOTE_CHARS)}…` : body;
+}
+
+/** A ticket's workers, falling back to the legacy single assignee. */
+function ticketWorkers(row: { workerBotIds: string[]; assigneeBotId: string | null }): string[] {
+  return dedupeIds(
+    row.workerBotIds.length > 0 ? row.workerBotIds : row.assigneeBotId ? [row.assigneeBotId] : [],
+  );
+}
+
 /**
  * Every bot assigned as owner or worker must be one of the acting user's own
  * non-archived bots in the Space. Assigning a worker wakes the bot, which runs
@@ -407,16 +422,25 @@ export async function updateTicket(
     const addedWorkers = nextWorkers
       ? nextWorkers.filter((id) => !prevWorkers.has(id) && id !== input.botId)
       : [];
-    return { row, addedWorkers };
+    const statusChanged = data.status !== undefined && data.status !== current.status;
+    return { row, addedWorkers, statusChanged };
   });
   if (!result) return { error: "Ticket not found." };
+  // Moving a ticket to todo, doing or review asks its workers to pick it up, except the bot that
+  // moved it. Blocked, done and closed ask for nothing.
+  const statusWakes =
+    result.statusChanged && data.status !== undefined && TICKET_WAKE_STATUSES.has(data.status)
+      ? ticketWorkers(result.row).filter((id) => id !== input.botId)
+      : [];
+  const wakeBotIds = dedupeIds([...result.addedWorkers, ...statusWakes]);
   await deps.onTicketChange?.({
     spaceId: input.spaceId,
     boardId: board.id,
     ticketId: result.row.id,
     assigneeBotId: result.row.assigneeBotId,
-    wakeAssignee: result.addedWorkers.length > 0,
-    wakeBotIds: result.addedWorkers,
+    wakeAssignee: wakeBotIds.length > 0,
+    wakeBotIds,
+    ...(statusWakes.length > 0 ? { wakeNote: `Its status changed to ${data.status}.` } : {}),
   });
   return { ticket: toTicketDto(result.row, board.ticketPrefix) };
 }
@@ -450,12 +474,19 @@ export async function commentTicket(
     await tx.ticket.update({ where: { id: ticket.id }, data: { updatedAt: new Date() } });
     return comment;
   });
+  // A person's comment wakes the workers so a blocker can be answered. A bot's comment wakes
+  // nobody: two workers commenting at each other would wake each other forever.
+  const commentWakes = input.botId ? [] : ticketWorkers(ticket);
   await deps.onTicketChange?.({
     spaceId: input.spaceId,
     boardId: board.id,
     ticketId: ticket.id,
     assigneeBotId: ticket.assigneeBotId,
-    wakeAssignee: false,
+    wakeAssignee: commentWakes.length > 0,
+    wakeBotIds: commentWakes,
+    ...(commentWakes.length > 0
+      ? { wakeNote: `A person commented: ${JSON.stringify(commentExcerpt(parsed.data.body))}` }
+      : {}),
   });
   return { comment: toTicketCommentDto(row) };
 }
