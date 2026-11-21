@@ -722,43 +722,21 @@ func thinkingLevelsFor(parsed *secret, row credentialRow, modelID string) []stri
 	return []string{"off", "minimal", "low", "medium", "high", "xhigh", "max"}
 }
 
-// anthropicThinkingLevels is getSupportedThinkingLevels over the pinned Anthropic catalog's
-// thinkingLevelMap for each model it describes (@earendil-works/pi-ai 1.5.0
-// providers/data/anthropic.json; anthropicCatalogThinking copies the map for anthropic-messages).
-var anthropicThinkingLevels = map[string][]string{
-	"claude-fable-5":             {"minimal", "low", "medium", "high", "xhigh", "max"},
-	"claude-fable-5-1":           {"minimal", "low", "medium", "high", "xhigh", "max"},
-	"claude-haiku-4-5":           {"off", "minimal", "low", "medium", "high"},
-	"claude-haiku-4-5-20251001":  {"off", "minimal", "low", "medium", "high"},
-	"claude-haiku-5-5":           {"off", "low", "medium", "high", "xhigh", "max"},
-	"claude-opus-4-5":            {"off", "minimal", "low", "medium", "high"},
-	"claude-opus-4-5-20251101":   {"off", "minimal", "low", "medium", "high"},
-	"claude-opus-4-6":            {"off", "minimal", "low", "medium", "high", "max"},
-	"claude-opus-4-7":            {"off", "minimal", "low", "medium", "high", "xhigh", "max"},
-	"claude-opus-4-8":            {"off", "minimal", "low", "medium", "high", "xhigh", "max"},
-	"claude-opus-5":              {"off", "minimal", "low", "medium", "high", "xhigh", "max"},
-	"claude-opus-5-5":            {"low", "medium", "high", "xhigh", "max"},
-	"claude-sonnet-4-5":          {"off", "minimal", "low", "medium", "high"},
-	"claude-sonnet-4-5-20250929": {"off", "minimal", "low", "medium", "high"},
-	"claude-sonnet-4-6":          {"off", "minimal", "low", "medium", "high", "max"},
-	"claude-sonnet-5":            {"off", "minimal", "low", "medium", "high", "xhigh", "max"},
-	"claude-sonnet-5-5":          {"low", "medium", "high", "xhigh", "max"},
+// compatibleEndpointPreset is one CompatibleEndpointPreset the TypeScript source offers by name.
+type compatibleEndpointPreset struct {
+	Name    string
+	BaseURL string
 }
 
-// endpointName is compatibleEndpointPreset's match over the built-in hosted services.
+// endpointName is compatibleEndpointPreset's match over the hosted services.
 func endpointName(baseURL string) string {
 	normalized, ok := normalizeBaseURL(baseURL)
 	if !ok {
 		return ""
 	}
-	for _, preset := range []struct{ name, url string }{
-		{"Ollama Cloud", "https://ollama.com/v1"},
-		{"LongCat", "https://api.longcat.chat/openai"},
-		{"Alibaba Cloud Token Plan (Singapore)", "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1"},
-		{"Alibaba Cloud (Qwen, Singapore)", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"},
-	} {
-		if preset.url == normalized {
-			return preset.name
+	for _, preset := range compatibleEndpointPresets {
+		if preset.BaseURL == normalized {
+			return preset.Name
 		}
 	}
 	return ""
