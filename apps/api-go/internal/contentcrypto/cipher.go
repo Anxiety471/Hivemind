@@ -214,6 +214,12 @@ func decodeUTF8Node(value []byte) string {
 	return builder.String()
 }
 
+// DecodeBase64Node decodes a base64 or base64url string exactly as Node's
+// Buffer.from(value, "base64") does. The credential store's `v2:` envelope uses
+// the standard alphabet with padding (secrets.ts:56,125), so its reader needs
+// the same leniency Node gives it.
+func DecodeBase64Node(value string) []byte { return decodeBase64Lenient(value) }
+
 // decodeBase64Lenient is Buffer.from(value, "base64url") /
 // Buffer.from(value, "base64") (content-crypto.ts:75, content-keys.ts:25).
 // Node reads the string's UTF-16 code units and looks at each unit's low byte:
