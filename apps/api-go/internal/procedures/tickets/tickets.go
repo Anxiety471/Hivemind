@@ -73,14 +73,29 @@ func Enabled(ctx context.Context, tx pgx.Tx, deployment shared.Deployment, userI
 	return false, nil
 }
 
-// Board is the part of a boards ticketRow a ticket DTO needs.
-type Board struct{ ID, Prefix string }
+// Board is a boards row: the ticket DTO needs its id and prefix, boards.* its whole shape.
+type Board struct {
+	ID, SpaceID, Name, Prefix string
+	NextNumber                int64
+	CreatedAt, UpdatedAt      time.Time
+}
+
+// BoardColumns is the select list every boards row is read with.
+const BoardColumns = `id, "spaceId", name, "ticketPrefix", "nextNumber", "createdAt", "updatedAt"`
+
+// ScanBoard reads one boards row.
+func ScanBoard(row pgx.Row) (Board, error) {
+	var board Board
+	err := row.Scan(&board.ID, &board.SpaceID, &board.Name, &board.Prefix, &board.NextNumber,
+		&board.CreatedAt, &board.UpdatedAt)
+	return board, err
+}
 
 // EnsureBoard is ensureBoard (packages/db/src/board.ts:12-22): the Space's board, created on first
 // use with the Space's name (or "Board"). A concurrent first open is tolerated.
 func EnsureBoard(ctx context.Context, tx pgx.Tx, spaceID string) (Board, error) {
 	var board Board
-	err := tx.QueryRow(ctx, `SELECT id, "ticketPrefix" FROM boards WHERE "spaceId" = $1`, spaceID).Scan(&board.ID, &board.Prefix)
+	board, err := ScanBoard(tx.QueryRow(ctx, `SELECT `+BoardColumns+` FROM boards WHERE "spaceId" = $1`, spaceID))
 	if err == nil {
 		return board, nil
 	}
@@ -103,7 +118,8 @@ func EnsureBoard(ctx context.Context, tx pgx.Tx, spaceID string) (Board, error) 
 		VALUES ($1, $2, $3, $4, $4) ON CONFLICT ("spaceId") DO NOTHING`, effects.NewID(), spaceID, name, at); err != nil {
 		return Board{}, err
 	}
-	if err := tx.QueryRow(ctx, `SELECT id, "ticketPrefix" FROM boards WHERE "spaceId" = $1`, spaceID).Scan(&board.ID, &board.Prefix); err != nil {
+	board, err = ScanBoard(tx.QueryRow(ctx, `SELECT `+BoardColumns+` FROM boards WHERE "spaceId" = $1`, spaceID))
+	if err != nil {
 		return Board{}, err
 	}
 	return board, nil

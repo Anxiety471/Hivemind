@@ -9,10 +9,13 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/effects"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/local"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/agentsecrets"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/agentskills"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/approvalrules"
 	artifacts "github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/artifactlist"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/auditevents"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/availability"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/boards"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/bots"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/botsections"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/capabilities"
@@ -37,6 +40,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/tickets"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/trustedlinksites"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/usage"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/vaultactivity"
 )
 
 // All returns every locally served procedure.
@@ -560,6 +564,78 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 			Name: "skills.save",
 			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
 				return skills.Save(ctx, database, deployment, actor, input)
+			},
+		},
+		{
+			Name:     "bots.templates",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, _ orpc.Input) (any, *orpc.Error) {
+				return bots.ListTemplates(ctx, database, actor)
+			},
+		},
+		{
+			Name:     "skills.list",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return skills.List(ctx, database, actor, input)
+			},
+		},
+		{
+			Name:     "onboarding.start",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return onboarding.Start(ctx, database, deployment, actor, input)
+			},
+		},
+		{
+			Name:     "agentSecrets.list",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, _ orpc.Input) (any, *orpc.Error) {
+				return agentsecrets.List(ctx, database, actor)
+			},
+		},
+		{
+			Name:     "audit.events",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return auditevents.List(ctx, database, actor, input)
+			},
+		},
+		{
+			Name:     "vault.activity",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return vaultactivity.List(ctx, database, actor, input)
+			},
+		},
+		{
+			Name: "computer.dismissUpdate",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return computer.DismissUpdate(ctx, database, deployment, actor, input)
+			},
+		},
+		{
+			Name: "computer.dismissDiskWarning",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return computer.DismissDiskWarning(ctx, database, actor, input)
+			},
+		},
+		{
+			Name: "boards.list",
+			Serve: func(ctx context.Context, actor db.Actor, _ orpc.Input) (any, *orpc.Error) {
+				return boards.List(ctx, database, deployment, actor)
+			},
+		},
+		{
+			Name: "boards.get",
+			Serve: func(ctx context.Context, actor db.Actor, _ orpc.Input) (any, *orpc.Error) {
+				return boards.Get(ctx, database, deployment, actor)
+			},
+		},
+		{
+			Name: "boards.rename",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return boards.Rename(ctx, database, deployment, actor, input)
 			},
 		},
 	}

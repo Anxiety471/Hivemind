@@ -316,6 +316,33 @@ func choiceBlock() map[string]any {
 	}
 }
 
+// Start implements onboarding.start (apps/api/src/account/onboarding.ts:129-139): a validation
+// no-op. It resolves the bot's thread, exactly as requireBotThread does (including the encrypted
+// summary read), counts its messages, and writes nothing whether the thread is empty or not; the
+// focus card is posted later by promptFocus.
+func Start(ctx context.Context, database *db.DB, deployment shared.Deployment, actor db.Actor, raw orpc.Input) (any, *orpc.Error) {
+	botID, failure := parseBotID(raw)
+	if failure != nil {
+		return nil, failure
+	}
+	ring := deployment.Content
+	if ring == nil {
+		return nil, shared.Failure(errNoRing)
+	}
+	err := database.Tenant(ctx, actor, func(tx pgx.Tx) error {
+		found, err := requireBotThread(ctx, tx, ring, actor, botID)
+		if err != nil {
+			return err
+		}
+		var count int
+		return tx.QueryRow(ctx, `SELECT count(*) FROM messages WHERE "threadId" = $1`, found.ThreadID).Scan(&count)
+	})
+	if err != nil {
+		return nil, shared.Failure(err)
+	}
+	return map[string]any{"ok": true}, nil
+}
+
 // PromptFocus implements onboarding.promptFocus: post the focus card unless the thread already
 // asks something, the user has written, or a created-run intro is still going. Nothing is posted
 // in those cases and the call still answers ok.

@@ -21,6 +21,7 @@ import { spendingPeriodStart } from "../../../packages/core/src/billing/spending
 import { asSystem, contentEncryptionOf } from "../../../packages/db/src/index.js";
 import { createApp } from "../../api/src/app.js";
 import { laneDCases } from "./contract-lane-d.mts";
+import { laneHCases, laneHState } from "./contract-lane-h.mts";
 import { membershipCases, membershipReset, membershipState } from "./contract-membership.mts";
 import { routineResumeCases } from "./contract-routine-resume.mts";
 import { routineCases } from "./contract-routines.mts";
@@ -222,6 +223,17 @@ await writeFile(
       "skills.save": { mode: "go" },
       "organizations.members.setRole": { mode: "go" },
       "organizations.invitations.cancel": { mode: "go" },
+      "bots.templates": { mode: "go", readOnly: true },
+      "skills.list": { mode: "go", readOnly: true },
+      "onboarding.start": { mode: "go", readOnly: true },
+      "agentSecrets.list": { mode: "go", readOnly: true },
+      "audit.events": { mode: "go", readOnly: true },
+      "vault.activity": { mode: "go", readOnly: true },
+      "computer.dismissUpdate": { mode: "go" },
+      "computer.dismissDiskWarning": { mode: "go" },
+      "boards.list": { mode: "go" },
+      "boards.get": { mode: "go" },
+      "boards.rename": { mode: "go" },
     },
   }),
 );
@@ -497,6 +509,7 @@ const cases: Case[] = [
   ...memoryCases(),
   ...laneGCases(),
   ...laneGCases2(),
+  ...laneHCases(system),
 ];
 
 const SITES = ["zeta.example", "alpha.example", "Beta.example", "_under.example", "10.0.0.1"];
@@ -6917,6 +6930,11 @@ const WRITE_PROCEDURES = new Set([
   "skills.save",
   "organizations.members.setRole",
   "organizations.invitations.cancel",
+  "computer.dismissUpdate",
+  "computer.dismissDiskWarning",
+  "boards.list",
+  "boards.get",
+  "boards.rename",
 ]);
 
 const CUID = /^c[0-9a-z]{24}$/;
@@ -7563,6 +7581,7 @@ async function databaseState(seeded: ReturnType<typeof ids>) {
     taughtSkills,
     members,
     invitations,
+    ...(await laneHState(system, seeded)),
   };
 }
 

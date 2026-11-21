@@ -38,8 +38,11 @@ func TestRegistryHasTheServedProceduresAndNotTrust(t *testing.T) {
 		"organizations.invitations.preview",
 		"models.rename", "pages.rename", "pages.pin", "artifacts.list", "artifacts.listSpace", "artifacts.listVersions",
 		"memory.list", "memory.budget", "memory.update", "memory.remove", "memory.exportMarkdown",
-		"onboarding.promptFocus", "onboarding.dismissFocus", "computer.commands",
+		"onboarding.promptFocus", "onboarding.dismissFocus", "onboarding.start", "computer.commands",
 		"tickets.list", "tickets.create", "tickets.update", "tickets.move", "tickets.comment",
+		"bots.templates", "skills.list", "agentSecrets.list", "audit.events", "vault.activity",
+		"computer.dismissUpdate", "computer.dismissDiskWarning",
+		"boards.list", "boards.get", "boards.rename",
 	} {
 		if !seen[name] {
 			t.Errorf("missing %s", name)

@@ -110,6 +110,8 @@ func scan(row pgx.Row) (value row, err error) {
 
 var (
 	errNotEditable = orpc.BadRequest("Skill is not editable yet")
+	// errOutputInvalid marks a stored row the router's TaughtSkillSchema parse refuses.
+	errOutputInvalid = errors.New("skill output validation failed")
 	errNotFinished = orpc.BadRequest("Finish recording before saving")
 	// emptyRecording is emptyRecording(): a non-teacher's edit clears the live recording.
 	emptyRecording = map[string]any{"events": []any{}, "snapshots": []any{}}
@@ -905,4 +907,48 @@ func sliceUTF16(text string, start, end int) string {
 		out.WriteRune(rune(unit))
 	}
 	return out.String()
+}
+
+// List implements skills.list (apps/api/src/routes/memory.ts:217-220 over
+// apps/api/src/bots/taught-skills.ts:321-327): the Space's taught skills for a bot, newest edit
+// first. The bot is not looked up, so an id the caller cannot see simply lists nothing; another
+// person's recording is replaced by an empty one. A stored row the output schema refuses (an odd
+// status, or a recording a value breaks) answers the router's Output validation failed.
+func List(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input) (any, *orpc.Error) {
+	object, issues := validate.Decode(raw.Raw, nil)
+	if issues != nil {
+		return nil, validate.Fail(issues)
+	}
+	botID, problems := validate.String(validate.Path{"botId"}, object.Field("botId"), validate.StringRules{Min: 1})
+	if problems != nil {
+		return nil, validate.Fail(problems)
+	}
+	list := []Skill{}
+	err := database.Tenant(ctx, actor, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT `+columns+` FROM taught_skills
+			WHERE "spaceId" = $1 AND "botId" = $2 ORDER BY "updatedAt" DESC`, actor.SpaceID, botID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			value, err := scan(rows)
+			if err != nil {
+				return err
+			}
+			skill, recordingOK := skillFor(actor, value)
+			if !recordingOK || !outputValid(skill) {
+				return errOutputInvalid
+			}
+			list = append(list, skill)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		if errors.Is(err, errOutputInvalid) {
+			return nil, shared.OutputInvalid()
+		}
+		return nil, shared.Failure(err)
+	}
+	return list, nil
 }
