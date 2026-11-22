@@ -31,10 +31,9 @@ type Cancelled struct {
 // Canceller performs the run-side cancellation each procedure needs. Ring is
 // the content key ring the run.cancelled events seal with and the approval
 // cards open with; it is required. A deployment with content encryption off
-// builds a pass-through ring (contentcrypto.NewKeyRing(nil, nil,
-// contentcrypto.KeyRingOptions{})), as the secret store's tests do: TypeScript
-// always has a cipher, so a nil ring is a wiring mistake, not an
-// encryption-off deployment, and would silently skip sealed blocks.
+// passes contentcrypto.NoEncryptionKeyRing(): TypeScript always has a cipher, so
+// a nil ring is a wiring mistake, not an encryption-off deployment, and would
+// silently skip sealed blocks.
 // Vault, when set, announces the run-only secrets the cancellation drops, as
 // withSecretPersistence does for a Prisma delete (Infrastructure C).
 type Canceller struct {
@@ -106,8 +105,9 @@ func (c Canceller) CancelActive(
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	// TypeScript returns its input rows in input order; keep that for event seqs.
-	for _, id := range ids {
+	// TypeScript returns the rows its query found, once each, in input order;
+	// a request that names the same run twice still cancels and returns it once.
+	for _, id := range unique(ids) {
 		if run, ok := byID[id]; ok {
 			cancelled = append(cancelled, run)
 		}
@@ -132,6 +132,63 @@ func (c Canceller) CancelActive(
 		UPDATE tasks SET status = 'cancelled', "updatedAt" = now()
 		WHERE id = ANY($1::text[])`, taskIDs); err != nil {
 		return nil, fmt.Errorf("cancel tasks: %w", err)
+	}
+	return cancelled, nil
+}
+
+// CancelActiveForThread is CancelActive for a procedure that takes run ids from
+// a request. cancelRunsInTransaction's callers first load the runs under the
+// actor's scope; raw ids that skip that check could name another member's run in
+// the same Space. Every id must belong to threadID, the thread row is locked
+// first, and the whole body runs inside the 20 s thread-lock budget. An id from
+// another thread or Space is refused before anything is written.
+func (c Canceller) CancelActiveForThread(
+	ctx context.Context,
+	database *db.DB,
+	actor db.Actor,
+	threadID string,
+	ids []string,
+	at time.Time,
+	state *secretstore.State,
+) ([]Cancelled, error) {
+	if threadID == "" {
+		return nil, errors.New("runs: cancel active needs a thread id")
+	}
+	wanted := unique(ids)
+	if len(wanted) == 0 {
+		return nil, nil
+	}
+	var cancelled []Cancelled
+	err := ThreadLockTransaction(ctx, database, actor, threadID,
+		func(ctx context.Context, tx pgx.Tx) error {
+			rows, err := tx.Query(ctx, `SELECT id FROM runs WHERE "threadId" = $1 AND id = ANY($2::text[])`,
+				threadID, wanted)
+			if err != nil {
+				return err
+			}
+			found := map[string]bool{}
+			for rows.Next() {
+				var id string
+				if err := rows.Scan(&id); err != nil {
+					rows.Close()
+					return err
+				}
+				found[id] = true
+			}
+			rows.Close()
+			if err := rows.Err(); err != nil {
+				return err
+			}
+			for _, id := range wanted {
+				if !found[id] {
+					return fmt.Errorf("runs: run %s is not in thread %s", id, threadID)
+				}
+			}
+			cancelled, err = c.CancelActive(ctx, tx, wanted, at, state)
+			return err
+		})
+	if err != nil {
+		return nil, err
 	}
 	return cancelled, nil
 }
@@ -177,6 +234,9 @@ func (c Canceller) CancelConversationFor(
 	at time.Time,
 	state *secretstore.State,
 ) (ConversationCancel, error) {
+	if err := c.requireRing(); err != nil {
+		return ConversationCancel{}, err
+	}
 	var result ConversationCancel
 	err := ThreadLockTransaction(ctx, database, actor, target.ThreadID,
 		func(ctx context.Context, tx pgx.Tx) error {
@@ -307,12 +367,14 @@ func (c Canceller) cancelConversationLocked(
 			}
 		}
 	}
-	spaceID := target.SpaceID
-	if spaceID == "" {
-		if err := tx.QueryRow(ctx, `SELECT "spaceId" FROM runs WHERE id = ANY($1::text[]) LIMIT 1`, ids).Scan(&spaceID); err != nil && !errors.Is(err, pgx.ErrNoRows) {
-			return ConversationCancel{}, err
-		}
+	// The event's Space is the actor's, not something inferred from whichever
+	// cancelled run the database returns first: a helper tree can cross threads
+	// and RLS does not prove every run shares one Space. TypeScript uses
+	// actor.spaceId for every event (thread-stop.ts:63-196).
+	if target.SpaceID == "" {
+		return ConversationCancel{}, errors.New("runs: cancel conversation needs the actor's space")
 	}
+	spaceID := target.SpaceID
 	// One terminal event per cancelled run in this thread, in the same commit as
 	// the status flip and the progress purge (thread-stop.ts:120-137). A helper in
 	// a thread of its own gets none: its card tells the chat.
@@ -395,28 +457,56 @@ func (c Canceller) SupersedeQueued(
 		return nil, err
 	}
 	at = now(at)
+	// cancelSupersededQueuedRuns selects the candidates and then updates the
+	// selected ids with no status predicate (thread-target.ts:258-273). A worker
+	// that claims one of these runs between the two statements is overwritten to
+	// cancelled by TypeScript; re-checking the status here would silently keep
+	// it. The two steps are reproduced deliberately (design §12 R3).
 	rows, err := tx.Query(ctx, `
-		UPDATE runs r SET status = 'cancelled', "completedAt" = $4, "updatedAt" = now()
+		SELECT r.id FROM runs r
 		WHERE r."threadId" = $1 AND r."botId" = ANY($2::text[]) AND r.status = 'queued'
 		  AND r.id <> ALL($3::text[])
 		  AND (r.trigger = 'reaction'
 			OR (r.trigger = 'user' AND EXISTS (
-				SELECT 1 FROM messages m WHERE m.id = r."sourceMessageId" AND m.role = 'user')))
-		RETURNING `+cancelColumns, threadID, botIDs, keepRunIDs, at)
+				SELECT 1 FROM messages m WHERE m.id = r."sourceMessageId" AND m.role = 'user')))`,
+		threadID, botIDs, keepRunIDs)
+	if err != nil {
+		return nil, fmt.Errorf("select superseded runs: %w", err)
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	updated, err := tx.Query(ctx, `
+		UPDATE runs SET status = 'cancelled', "completedAt" = $2, "updatedAt" = now()
+		WHERE id = ANY($1::text[])
+		RETURNING `+cancelColumns, ids, at)
 	if err != nil {
 		return nil, fmt.Errorf("supersede queued runs: %w", err)
 	}
 	var cancelled []Cancelled
-	for rows.Next() {
-		run, err := scanCancelled(rows)
+	for updated.Next() {
+		run, err := scanCancelled(updated)
 		if err != nil {
-			rows.Close()
+			updated.Close()
 			return nil, err
 		}
 		cancelled = append(cancelled, run)
 	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
+	updated.Close()
+	if err := updated.Err(); err != nil {
 		return nil, err
 	}
 	if len(cancelled) == 0 {

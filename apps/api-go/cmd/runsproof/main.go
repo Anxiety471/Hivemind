@@ -382,7 +382,7 @@ func handle(ctx context.Context, database *db.DB, ring *contentcrypto.KeyRing, n
 		}
 		return out
 	case "wakeMany":
-		runs.WakeMany(ctx, database, actor, notifier, nil, in.RunIDs)
+		runs.WakeMany(ctx, database, actor, in.ThreadID, notifier, nil, in.RunIDs)
 		notifier.Wait()
 		return response{OK: true}
 	case "byThreadUserNonce":

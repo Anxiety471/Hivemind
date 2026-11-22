@@ -158,6 +158,7 @@ type Created struct {
 // Execer is the statement surface Create needs: a transaction.
 type Execer interface {
 	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+	QueryRow(ctx context.Context, sql string, arguments ...any) pgx.Row
 }
 
 // Querier reads rows back.
@@ -187,6 +188,23 @@ func Create(ctx context.Context, tx Execer, input CreateInput) (Created, error) 
 	if input.Trigger == "" {
 		return Created{}, errors.New("runs: create needs a trigger")
 	}
+	// The run row's own spaceId passes RLS, but its bot and thread must belong to
+	// that Space or the worker can never execute it. A procedure that trusts ids
+	// from a request must refuse a foreign one here; TypeScript's Prisma create
+	// would insert the mismatched row, so this is a deliberate Go-side guard
+	// (design §12 R10).
+	var botSpace, threadSpace *string
+	if err := tx.QueryRow(ctx, `
+		SELECT (SELECT "spaceId" FROM bots WHERE id = $1), (SELECT "spaceId" FROM threads WHERE id = $2)`,
+		input.BotID, input.ThreadID).Scan(&botSpace, &threadSpace); err != nil {
+		return Created{}, fmt.Errorf("check run owners: %w", err)
+	}
+	if botSpace == nil || *botSpace != input.SpaceID {
+		return Created{}, fmt.Errorf("runs: bot %s is not in space %s", input.BotID, input.SpaceID)
+	}
+	if threadSpace == nil || *threadSpace != input.SpaceID {
+		return Created{}, fmt.Errorf("runs: thread %s is not in space %s", input.ThreadID, input.SpaceID)
+	}
 	status := input.Status
 	if status == "" {
 		status = StatusQueued
@@ -201,9 +219,11 @@ func Create(ctx context.Context, tx Execer, input CreateInput) (Created, error) 
 		wakeAt = now(*input.WakeAt)
 	}
 	taskID, runID := effects.NewID(), effects.NewID()
+	// createdAt is the column's default now(): Prisma's create omits it and only
+	// sends @updatedAt. updatedAt is the request clock, so a test can pin it.
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO tasks (id, "spaceId", "botId", "threadId", "userId", prompt, status, "createdAt", "updatedAt")
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)`,
+		INSERT INTO tasks (id, "spaceId", "botId", "threadId", "userId", prompt, status, "updatedAt")
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 		taskID, input.SpaceID, input.BotID, input.ThreadID, input.UserID, input.Prompt,
 		taskStatus, at); err != nil {
 		return Created{}, fmt.Errorf("insert task: %w", err)
@@ -234,9 +254,9 @@ func Create(ctx context.Context, tx Execer, input CreateInput) (Created, error) 
 			id, "spaceId", "botId", "threadId", "taskId", "userId", status, trigger,
 			"modelProvider", "modelId", "thinkingLevel", "modelPinned", "groupReplyOptional",
 			"clientNonce", "sourceMessageId", "routineId", "delegatedFromRunId", "retryOfRunId",
-			"wakeAt", "createdAt", "updatedAt")
+			"wakeAt", "updatedAt")
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-			$14, $15, $16, $17, $18, $19, $20, $20)`,
+			$14, $15, $16, $17, $18, $19, $20)`,
 		runID, input.SpaceID, input.BotID, input.ThreadID, taskID, input.UserID, status,
 		input.Trigger, provider, model, thinking, pinned, input.GroupReplyOptional,
 		input.ClientNonce, input.SourceMessageID, input.RoutineID, input.DelegatedFromRunID,

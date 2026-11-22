@@ -173,8 +173,12 @@ func TestCreateRunWritesTheTypeScriptRow(t *testing.T) {
 			t.Errorf("runs.%s = %v, want %v", column, got, want)
 		}
 	}
-	if !row["createdAt"].(time.Time).Equal(at) || !row["updatedAt"].(time.Time).Equal(at) {
-		t.Errorf("timestamps = %v/%v, want %v", row["createdAt"], row["updatedAt"], at)
+	// createdAt is the database default now(); updatedAt is the sent clock.
+	if row["updatedAt"].(time.Time).Equal(at) == false {
+		t.Errorf("updatedAt = %v, want %v", row["updatedAt"], at)
+	}
+	if drift := time.Since(row["createdAt"].(time.Time)); drift < 0 || drift > 2*time.Minute {
+		t.Errorf("createdAt = %v, want the database default (drift %v)", row["createdAt"], drift)
 	}
 	task := systemScalar[string](t, database, `SELECT status || '|' || prompt FROM tasks WHERE id = $1`, created.TaskID)
 	if task != "queued|say hello" {
@@ -420,7 +424,7 @@ func TestWakeManyWakesOnlyContinuations(t *testing.T) {
 	exec(t, database, `UPDATE runs SET status = 'completed', "completedAt" = now() WHERE id = $1`, finished.RunID)
 	notifier := effects.NewNotifier(database, nil)
 	runs.WakeMany(context.Background(), database,
-		db.Actor{SpaceID: fixture.spaceID, UserID: fixture.userID}, notifier, nil,
+		db.Actor{SpaceID: fixture.spaceID, UserID: fixture.userID}, fixture.threadID, notifier, nil,
 		[]string{waiting.RunID, queued.RunID, takeover.RunID, finished.RunID})
 	notifier.Wait()
 	// RUNS_NEEDING_CONTINUE = {queued, waiting_takeover} (thread-target.ts:78).
