@@ -637,7 +637,7 @@ function frameCount(): number {
 /** Waits (bounded) for the expected frames: a NOTIFY can land just after a settle. */
 async function expectFrames(count: number, label: string): Promise<void> {
   const deadline = Date.now() + 5_000;
-  while (frames.length < count && Date.now() < deadline) {
+  while (frameCount() < count && Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   if (frames.length !== count && count === 0) {
