@@ -1,14 +1,44 @@
 package effects
 
 import (
+	"context"
 	"encoding/json"
 	"reflect"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
 )
+
+func TestPublishBoardRetriesThroughAnOutage(t *testing.T) {
+	n := NewNotifier(&db.DB{}, nil)
+	n.sleep = func(time.Duration) {}
+	attempts := 0
+	delivered := make(chan struct{}, 1)
+	n.execute = func(_ context.Context, _ string, _ ...any) (pgconn.CommandTag, error) {
+		attempts++
+		if attempts == 1 {
+			// A database failover: the connection died before the signal reached Postgres.
+			return pgconn.CommandTag{}, &pgconn.PgError{Code: "57P03"}
+		}
+		delivered <- struct{}{}
+		return pgconn.NewCommandTag("SELECT 1"), nil
+	}
+	n.PublishBoard("space-1", "board-1", "ticket-1")
+	n.Wait()
+	select {
+	case <-delivered:
+	default:
+		t.Fatalf("board signal not delivered after a transient failure (attempts %d)", attempts)
+	}
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want 2", attempts)
+	}
+}
 
 func TestClientIPResolver(t *testing.T) {
 	resolver, err := NewClientIPResolver([]string{"127.0.0.1", "::1", "10.0.0.0/8"})

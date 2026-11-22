@@ -29,7 +29,6 @@ export function useBoardStream(
     if (!enabled) return;
     let currentController: AbortController | undefined;
     let active = true;
-    let firstConnect = true;
     const refreshComments = (ticketId?: string) =>
       void queryClient.invalidateQueries({
         queryKey: ticketId
@@ -48,12 +47,7 @@ export function useBoardStream(
             signal: controller.signal,
           });
           if (!active) return;
-          // The screen that opened this stream asked for the same list; share that read instead
-          // of cancelling and repeating it. A reconnect reads fresh: what it missed happened
-          // after any read still in flight.
-          const reuse = firstConnect;
-          firstConnect = false;
-          await fetchFresh(queryClient, ticketsOptions, { reuse });
+          await fetchFresh(queryClient, ticketsOptions);
           if (!active) return;
           refreshComments();
           onError("");

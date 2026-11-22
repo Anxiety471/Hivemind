@@ -370,21 +370,19 @@ it("closes the subscription before retrying a failed ticket refresh", async () =
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.useFakeTimers();
   api.bots.list.mockResolvedValue([bot("bot-1", "Helper")]);
-  api.tickets.list.mockReset().mockResolvedValue({ tickets: [] });
-  const live = liveStream();
-  const page = await renderBoard(live.stream);
+  api.tickets.list
+    .mockReset()
+    .mockResolvedValueOnce({ tickets: [] })
+    .mockRejectedValueOnce(new Error("Refresh failed"))
+    .mockResolvedValue({ tickets: [ticket("After retry", "ticket-1")] });
+  const next = vi.fn(() => new Promise<IteratorResult<{ ticketId?: string }>>(() => {}));
+  const page = await renderBoard({ [Symbol.asyncIterator]: () => ({ next }) });
   try {
     const firstSignal = api.boards.subscribe.mock.calls[0]![1].signal as AbortSignal;
-    expect(firstSignal.aborted).toBe(false);
-    // The screen's own read answered on open; the read a board change starts fails.
-    const reads = api.tickets.list.mock.calls.length;
-    api.tickets.list.mockRejectedValueOnce(new Error("Refresh failed"));
-    await act(async () => live.event("ticket-9"));
-    expect(api.tickets.list).toHaveBeenCalledTimes(reads + 1);
     expect(firstSignal.aborted).toBe(true);
+    expect(next).not.toHaveBeenCalled();
     expect(api.boards.subscribe).toHaveBeenCalledTimes(1);
 
-    api.tickets.list.mockResolvedValue({ tickets: [ticket("After retry", "ticket-1")] });
     await act(async () => vi.advanceTimersByTimeAsync(1_000));
     expect(api.boards.subscribe).toHaveBeenCalledTimes(2);
     const retrySignal = api.boards.subscribe.mock.calls[1]![1].signal as AbortSignal;
