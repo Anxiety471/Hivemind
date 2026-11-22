@@ -1089,6 +1089,27 @@ if (picked("cancel-active")) {
   });
 }
 
+if (picked("cancel-malformed-ask")) {
+  await scenario("cancel-malformed-ask", async (side) => {
+    const runId = await seedActiveRun(side, "malformed-ask");
+    const message = await system.message.findFirstOrThrow({
+      where: { runId },
+      orderBy: { seq: "desc" },
+    });
+    // One invalid card after a valid open ask: MessageBlockSchema.array() fails
+    // the whole list, so neither side may deny the ask's effect.
+    await system.message.update({
+      where: { id: message.id },
+      data: { blocks: [...(message.blocks as any[]), { kind: "card", lines: [{ k: "missing-v" }] }] },
+    });
+    await cancelActive(side, [runId], new Date("2026-11-22T08:10:00.000Z"));
+    const effect = await system.externalEffect.findFirstOrThrow({
+      where: { runId, kind: "web_fetch" },
+    });
+    assert.equal(effect.status, "intended", `${side.kind}: a malformed block makes the whole ask list unparseable`);
+  });
+}
+
 if (picked("cancel-finished")) {
   await scenario("cancel-finished", async (side) => {
     const runId = await seedActiveRun(side, "a");

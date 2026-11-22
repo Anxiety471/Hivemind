@@ -11,6 +11,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/contentcrypto"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/events"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/messageblocks"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/secretstore"
 )
 
@@ -588,8 +589,17 @@ func openApprovalEffects(ctx context.Context, tx pgx.Tx, ring *contentcrypto.Key
 	}
 	var approvalIDs []string
 	for _, message := range messages {
-		blocks, ok := message["blocks"].([]any)
+		entries, ok := message["blocks"].([]any)
 		if !ok {
+			continue
+		}
+		// MessageBlockSchema.array().safeParse: one malformed entry makes the
+		// whole list unparseable, so no effect on it is opened or denied.
+		blocks, valid, decidable := messageblocks.ParseBlocks(entries)
+		if !decidable {
+			return nil, fmt.Errorf("open approval effects: %w", messageblocks.ErrUndecidable)
+		}
+		if !valid {
 			continue
 		}
 		for _, raw := range blocks {

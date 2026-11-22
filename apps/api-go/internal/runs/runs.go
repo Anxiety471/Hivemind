@@ -18,6 +18,16 @@
 // per-request timeout, so a procedure that takes the thread lock first runs its
 // body through ThreadLockTransaction (or CancelConversationFor); a wait that
 // runs out is ErrLockTimeout, the generic 500 TS gets from P2028.
+//
+// CancelActive, Wake and WakeMany are raw-id primitives: RLS limits them to the
+// actor's Space, not to the member or thread that supplied the id. TypeScript's
+// callers resolve the run under the actor before those functions (cancelRuns'
+// callers, sendUserMessage's replay), so a procedure that accepts an id from a
+// request must do the same. Request paths use the actor-scoped entry points:
+// Create checks the bot/thread belong to the Space, CancelActiveForThread
+// checks the run belongs to the thread and takes the thread lock, and
+// CancelConversationFor takes the actor's Space and the 20 s thread budget.
+// Raw CancelActive/Wake/WakeMany are for callers that already resolved the run.
 package runs
 
 import (

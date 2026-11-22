@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/local"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/messageblocks"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 )
 
@@ -147,7 +148,7 @@ func (s snapshotReader) loadMessagePage(threadID string, query pageQuery) (messa
 		// explicitly retains them and must receive each page for pagination.
 		substantive := false
 		for _, row := range visible {
-			if !isPeerReceipt(storedBlocks(row.Blocks)) {
+			if !isPeerReceipt(messageblocks.StoredBlocks(row.Blocks)) {
 				substantive = true
 				break
 			}
@@ -212,13 +213,13 @@ func (s snapshotReader) queryMessages(tail string, args ...any) ([]messageRow, e
 			rows.Close()
 			return nil, err
 		}
-		if row.Blocks, err = decodeJSON(blocks); err != nil {
+		if row.Blocks, err = messageblocks.DecodeJSON(blocks); err != nil {
 			rows.Close()
 			return nil, err
 		}
 		if parentID != nil {
 			parent.ThreadID, parent.Role = *parentThread, *parentRole
-			if parent.Blocks, err = decodeJSON(parentBlocks); err != nil {
+			if parent.Blocks, err = messageblocks.DecodeJSON(parentBlocks); err != nil {
 				rows.Close()
 				return nil, err
 			}
@@ -306,7 +307,7 @@ func (s snapshotReader) withoutPeerRunMessages(rows []messageRow) ([]messageRow,
 			kept = append(kept, row)
 			continue
 		}
-		blocks := storedBlocks(row.Blocks)
+		blocks := messageblocks.StoredBlocks(row.Blocks)
 		switch {
 		case background[*row.RunID]:
 			// A person's own message stays visible unless it is a delivery; ticket work stays off the
@@ -398,7 +399,7 @@ var messageRoles = []string{"user", "bot", "system"}
 
 // threadMessage is toThreadMessage, then ThreadMessageSchema.
 func threadMessage(row messageRow, authors map[string]map[string]any) (map[string]any, error) {
-	blocks, valid, decidable := parseBlocks(storedBlocks(row.Blocks))
+	blocks, valid, decidable := messageblocks.ParseBlocks(messageblocks.StoredBlocks(row.Blocks))
 	if !decidable {
 		return nil, local.ErrDecline
 	}
@@ -455,7 +456,7 @@ func parentPreview(parent *parentRow, authors map[string]map[string]any) (map[st
 	if !isList {
 		return nil, nil
 	}
-	blocks, valid, decidable := parseBlocks(entries)
+	blocks, valid, decidable := messageblocks.ParseBlocks(entries)
 	if !decidable {
 		return nil, local.ErrDecline
 	}

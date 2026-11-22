@@ -4,6 +4,7 @@ import (
 	"slices"
 
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/local"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/messageblocks"
 )
 
 // withLive is messagesWithLiveEvents: the persisted page, then the live progress of the active
@@ -36,7 +37,7 @@ func (s snapshotReader) withLive(threadID string, persisted []map[string]any, li
 			rows.Close()
 			return nil, err
 		}
-		decoded, err := decodeJSON(payload)
+		decoded, err := messageblocks.DecodeJSON(payload)
 		if err != nil {
 			rows.Close()
 			return nil, err
@@ -103,7 +104,7 @@ func liveView(message liveMessage) (map[string]any, error) {
 	for index, block := range message.Blocks {
 		entries[index] = numberize(block)
 	}
-	blocks, valid, decidable := parseBlocks(entries)
+	blocks, valid, decidable := messageblocks.ParseBlocks(entries)
 	if !decidable {
 		return nil, local.ErrDecline
 	}
