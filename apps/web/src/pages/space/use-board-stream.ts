@@ -12,7 +12,8 @@ type TicketsOptions = ReturnType<
 
 /**
  * Keeps a ticket list live: the board's event stream signals a change, and the list and any open
- * ticket's comments are read again. A dropped stream reconnects, and each connect reads once.
+ * ticket's comments are read again. A dropped stream reconnects, and each connect reads once. The
+ * liveness frame a quiet board gets changes nothing, so it reads nothing.
  */
 export function useBoardStream(
   ticketsOptions: TicketsOptions,
@@ -28,6 +29,7 @@ export function useBoardStream(
     if (!enabled) return;
     let currentController: AbortController | undefined;
     let active = true;
+    let firstConnect = true;
     const refreshComments = (ticketId?: string) =>
       void queryClient.invalidateQueries({
         queryKey: ticketId
@@ -46,13 +48,19 @@ export function useBoardStream(
             signal: controller.signal,
           });
           if (!active) return;
-          await fetchFresh(queryClient, ticketsOptions);
+          // The screen that opened this stream asked for the same list; share that read instead
+          // of cancelling and repeating it. A reconnect reads fresh: what it missed happened
+          // after any read still in flight.
+          const reuse = firstConnect;
+          firstConnect = false;
+          await fetchFresh(queryClient, ticketsOptions, { reuse });
           if (!active) return;
           refreshComments();
           onError("");
           opened = true;
           for await (const event of stream) {
             if (!active) return;
+            if (event.heartbeat) continue;
             refreshComments(event.ticketId);
             await fetchFresh(queryClient, ticketsOptions);
           }

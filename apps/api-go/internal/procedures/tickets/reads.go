@@ -77,6 +77,12 @@ func BoardFrame(actor db.Actor, payload string) any {
 	}
 }
 
+// BoardHeartbeat is the frame sent after a quiet spell (local.Stream.HeartbeatFrame): liveness
+// only, marked so a client reads nothing for it (apps/api/src/routes/boards.ts, use-board-stream).
+func BoardHeartbeat(actor db.Actor) any {
+	return effects.BoardEvent{SpaceID: actor.SpaceID, CreatedAt: shared.ISO(now()), Heartbeat: true}
+}
+
 // parseTicketID mirrors z.object({ ticketId: Id }).
 func parseTicketID(raw orpc.Input) (string, *orpc.Error) {
 	object, issues := validate.Decode(raw.Raw, nil)

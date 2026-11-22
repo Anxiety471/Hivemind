@@ -106,7 +106,10 @@ beforeEach(() => {
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 });
 
-async function renderBoard(stream?: AsyncIterable<{ ticketId?: string }>, refusal?: unknown) {
+async function renderBoard(
+  stream?: AsyncIterable<{ ticketId?: string; heartbeat?: boolean }>,
+  refusal?: unknown,
+) {
   api.boards.subscribe.mockReset();
   api.boards.subscribe.mockResolvedValue(
     stream ?? {
@@ -275,7 +278,7 @@ it("creates a ticket without a status picker", async () => {
 });
 
 function liveStream() {
-  let pending: Deferred<IteratorResult<{ ticketId?: string }>> | undefined;
+  let pending: Deferred<IteratorResult<{ ticketId?: string; heartbeat?: boolean }>> | undefined;
   return {
     stream: {
       [Symbol.asyncIterator]: () => ({
@@ -286,6 +289,7 @@ function liveStream() {
       }),
     },
     event: (ticketId: string) => pending?.resolve({ done: false, value: { ticketId } }),
+    heartbeat: () => pending?.resolve({ done: false, value: { heartbeat: true } }),
     end: () => pending?.resolve({ done: true, value: undefined }),
     error: () => pending?.reject(new Error("Disconnected")),
   };
@@ -343,23 +347,44 @@ it("saves only edits and refreshes comments for the open ticket", async () => {
   }
 });
 
+it("does not read the board for the stream's liveness frame", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  api.bots.list.mockResolvedValue([bot("bot-1", "Helper")]);
+  api.tickets.list.mockReset().mockResolvedValue({ tickets: [] });
+  const live = liveStream();
+  const page = await renderBoard(live.stream);
+  try {
+    const calls = api.tickets.list.mock.calls.length;
+    await act(async () => live.heartbeat());
+    await settle();
+    expect(api.tickets.list).toHaveBeenCalledTimes(calls);
+    await act(async () => live.event("ticket-1"));
+    await settle();
+    expect(api.tickets.list).toHaveBeenCalledTimes(calls + 1);
+  } finally {
+    await page.cleanup();
+  }
+});
+
 it("closes the subscription before retrying a failed ticket refresh", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.useFakeTimers();
   api.bots.list.mockResolvedValue([bot("bot-1", "Helper")]);
-  api.tickets.list
-    .mockReset()
-    .mockResolvedValueOnce({ tickets: [] })
-    .mockRejectedValueOnce(new Error("Refresh failed"))
-    .mockResolvedValue({ tickets: [ticket("After retry", "ticket-1")] });
-  const next = vi.fn(() => new Promise<IteratorResult<{ ticketId?: string }>>(() => {}));
-  const page = await renderBoard({ [Symbol.asyncIterator]: () => ({ next }) });
+  api.tickets.list.mockReset().mockResolvedValue({ tickets: [] });
+  const live = liveStream();
+  const page = await renderBoard(live.stream);
   try {
     const firstSignal = api.boards.subscribe.mock.calls[0]![1].signal as AbortSignal;
+    expect(firstSignal.aborted).toBe(false);
+    // The screen's own read answered on open; the read a board change starts fails.
+    const reads = api.tickets.list.mock.calls.length;
+    api.tickets.list.mockRejectedValueOnce(new Error("Refresh failed"));
+    await act(async () => live.event("ticket-9"));
+    expect(api.tickets.list).toHaveBeenCalledTimes(reads + 1);
     expect(firstSignal.aborted).toBe(true);
-    expect(next).not.toHaveBeenCalled();
     expect(api.boards.subscribe).toHaveBeenCalledTimes(1);
 
+    api.tickets.list.mockResolvedValue({ tickets: [ticket("After retry", "ticket-1")] });
     await act(async () => vi.advanceTimersByTimeAsync(1_000));
     expect(api.boards.subscribe).toHaveBeenCalledTimes(2);
     const retrySignal = api.boards.subscribe.mock.calls[1]![1].signal as AbortSignal;

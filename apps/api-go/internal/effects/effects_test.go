@@ -220,4 +220,8 @@ func TestBoardEventCarriesOnlyTheNamedIds(t *testing.T) {
 	if string(both) != `{"spaceId":"space","boardId":"board","ticketId":"ticket","createdAt":"x"}` {
 		t.Fatalf("board event with both ids = %s", both)
 	}
+	beat, _ := json.Marshal(BoardEvent{SpaceID: "space", CreatedAt: "x", Heartbeat: true})
+	if string(beat) != `{"spaceId":"space","createdAt":"x","heartbeat":true}` {
+		t.Fatalf("board heartbeat = %s", beat)
+	}
 }

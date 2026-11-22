@@ -89,6 +89,8 @@ type BoardEvent struct {
 	BoardID   string `json:"boardId,omitempty"`
 	TicketID  string `json:"ticketId,omitempty"`
 	CreatedAt string `json:"createdAt"`
+	// Heartbeat marks the stream's quiet-spell frame: liveness only, so no client reads for it.
+	Heartbeat bool `json:"heartbeat,omitempty"`
 }
 
 // PublishBoard is BoardEvents.notify (packages/db/src/board-live.ts:19-31): one frame per

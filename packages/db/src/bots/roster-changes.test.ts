@@ -146,6 +146,35 @@ describe("followRosterChanges", () => {
       vi.useRealTimers();
     }
   });
+  it("stays quiet for events that change nothing the sidebar shows", async () => {
+    const fanout = fakeFanout();
+    const scope = { spaceIds: [], threadIds: ["thread-1"] };
+    const controller = new AbortController();
+    const iterator = followRosterChanges(
+      fanout as never,
+      "user-1",
+      async () => scope,
+      controller.signal,
+      0,
+    );
+    await iterator.next();
+    let signals = 0;
+    const reading = (async () => {
+      while (!(await iterator.next()).done) signals += 1;
+    })();
+    for (const type of ["thread.progress", "thread.thinking", "agent.tool.completed"])
+      await fanout.publish("thread:thread-1", JSON.stringify({ cursor: 2, type }));
+    await flush();
+    expect(signals).toBe(0);
+    await fanout.publish(
+      "thread:thread-1",
+      JSON.stringify({ cursor: 3, type: "thread.message.created" }),
+    );
+    await flush();
+    expect(signals).toBe(1);
+    controller.abort();
+    await reading;
+  });
 });
 
 describe("publishRosterChange", () => {

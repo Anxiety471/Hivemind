@@ -19,6 +19,51 @@ const IDLE_WAIT_MS = 60_000;
 const spaceTopic = (spaceId: string) => `roster-space:${spaceId}`;
 const userTopic = (userId: string) => `roster-user:${userId}`;
 
+/**
+ * Events in a chat that stream while a bot works but change nothing the sidebar shows. Its
+ * preview, unread mark and run status move with messages and run transitions, not with the
+ * progress, reasoning, tool, computer and effect events that dominate a run.
+ */
+const QUIET_THREAD_EVENTS: Record<string, true> = {
+  "agent.tool.called": true,
+  "agent.tool.completed": true,
+  "computer.command": true,
+  "computer.status": true,
+  "computer.takeover.granted": true,
+  "computer.takeover.released": true,
+  "computer.takeover.requested": true,
+  "effect.recorded": true,
+  "effect.reconciled": true,
+  heartbeat: true,
+  "run.checkpointed": true,
+  "run.steering.claimed": true,
+  "thread.artifact": true,
+  "thread.cloud_agent": true,
+  "thread.computer": true,
+  "thread.progress": true,
+  "thread.subagent": true,
+  "thread.thinking": true,
+  "usage.recorded": true,
+};
+
+/**
+ * Whether waking for this event can change the member's sidebar. A publisher that names no type
+ * may have changed anything, so it wakes as before.
+ */
+export function threadEventChangesRoster(type: string | undefined): boolean {
+  return type === undefined || !Object.hasOwn(QUIET_THREAD_EVENTS, type);
+}
+
+/** The event type a thread signal names, if it names one. */
+function signalledType(payload: string): string | undefined {
+  try {
+    const parsed = JSON.parse(payload) as { type?: unknown } | null;
+    return typeof parsed?.type === "string" ? parsed.type : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 const PUBLISH_RETRY_MS = 15_000;
 
 /**
@@ -62,9 +107,11 @@ export function loadRosterScope(prisma: PrismaClient, userId: string): Promise<R
 
 /**
  * Signals once when following starts, then whenever the member's sidebar may have changed: a
- * roster change published for them or one of their Spaces, or any event in a chat of those
- * Spaces. Signals carry no content. The scope is re-read after each wake so new chats and Spaces
- * join, and signals are spaced so a burst becomes one.
+ * roster change published for them or one of their Spaces, or an event that changes a chat's
+ * preview, unread mark or run status. A run's progress, reasoning, tool, computer and effect
+ * events wake nobody: they change none of those, and a bot working all day would otherwise
+ * re-read the whole roster every spacing. Signals carry no content. The scope is re-read after
+ * each wake so new chats and Spaces join, and signals are spaced so a burst becomes one.
  */
 export async function* followRosterChanges(
   realtime: RealtimeFanout,
@@ -89,7 +136,12 @@ export async function* followRosterChanges(
     }
     for (const topic of topics) {
       if (subscriptions.has(topic)) continue;
-      subscriptions.set(topic, await realtime.subscribe(topic, () => latch.notify()));
+      subscriptions.set(
+        topic,
+        await realtime.subscribe(topic, (payload) => {
+          if (threadEventChangesRoster(signalledType(payload))) latch.notify();
+        }),
+      );
     }
   };
   try {

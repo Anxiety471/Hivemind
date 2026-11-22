@@ -51,10 +51,13 @@ type Stream struct {
 	// ordinary error before any stream starts. Each payload read from signals becomes a Frame;
 	// stop ends the listening.
 	Follow func(ctx context.Context, actor db.Actor, input orpc.Input) (signals <-chan string, stop func(), failure *orpc.Error)
-	// Frame is the event a signal's payload stands for. An empty payload is the heartbeat the
-	// server sends after a quiet spell: any frame tells the client the stream is alive, and
-	// makes it read again if a signal was missed.
+	// Frame is the event a signal's payload stands for. An empty payload is the fanout's
+	// catch-up after its listener reconnects: anything may have changed.
 	Frame func(actor db.Actor, payload string) any
+	// HeartbeatFrame is the frame sent after a quiet spell so a half-open stream is noticed and
+	// proxies keep the connection. Clients tell it apart from a change and do not read for it;
+	// without one, Frame(actor, "") stands in.
+	HeartbeatFrame func(actor db.Actor) any
 }
 
 // StreamTiming sets how a stream paces itself; zero fields take the defaults the TypeScript

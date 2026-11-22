@@ -653,7 +653,8 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 				Follow: func(ctx context.Context, actor db.Actor, input orpc.Input) (<-chan string, func(), *orpc.Error) {
 					return tickets.FollowBoard(ctx, database, deployment, actor, input)
 				},
-				Frame: tickets.BoardFrame,
+				Frame:          tickets.BoardFrame,
+				HeartbeatFrame: tickets.BoardHeartbeat,
 			},
 		},
 		{

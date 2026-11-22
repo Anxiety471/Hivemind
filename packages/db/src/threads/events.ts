@@ -658,6 +658,7 @@ export async function appendEvent(
     input.threadId,
     event.seq,
     event.firstResponse ? input.runId : undefined,
+    input.type,
   );
   return mapProductEvent(event);
 }
