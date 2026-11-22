@@ -71,10 +71,6 @@ func (s snapshotReader) messagePage(threadID string) (messagePage, error) {
 
 // loadMessagePage is loadMessagePage (apps/api/src/threads/thread-message-pages.ts:24).
 func (s snapshotReader) loadMessagePage(threadID string, query pageQuery) (messagePage, error) {
-	if query.Before != nil && *query.Before > math.MaxInt32 {
-		// Prisma sends Int filter values as int4: a larger `before` fails the request.
-		return messagePage{}, errSeqOutOfRange
-	}
 	if query.Around != nil {
 		targetSeq := query.Around.Seq
 		if targetSeq == nil && query.Around.MessageID != "" {
@@ -131,6 +127,11 @@ func (s snapshotReader) loadMessagePage(threadID string, query pageQuery) (messa
 		}
 	}
 	cursor := query.Before
+	if cursor != nil && *cursor > math.MaxInt32 {
+		// Prisma sends Int filter values as int4: a larger `before` fails the request. TypeScript
+		// reads `before` only after `around` resolved to nothing, so a resolved around ignores it.
+		return messagePage{}, errSeqOutOfRange
+	}
 	for {
 		rows, hasOlder, err := s.fetchRows(threadID, cursor)
 		if err != nil {

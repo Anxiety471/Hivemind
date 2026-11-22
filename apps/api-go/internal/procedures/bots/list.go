@@ -498,16 +498,15 @@ func rosterUpdatedAt(newest time.Time, botUpdatedAt time.Time) time.Time {
 	return newest
 }
 
-// primaryRunStatus is primaryActiveRun (thread-listing.ts:30) over statuses in creation order.
+// primaryRunStatus is primaryActiveRun (thread-listing.ts:30) over statuses newest first: the
+// newest waiting run wins, then running, then leased.
 func primaryRunStatus(statuses []string) string {
 	if len(statuses) == 0 {
 		return "idle"
 	}
-	for _, wanted := range []string{"waiting_takeover", "waiting_input"} {
-		for _, status := range statuses {
-			if status == wanted {
-				return status
-			}
+	for _, status := range statuses {
+		if status == "waiting_takeover" || status == "waiting_input" {
+			return status
 		}
 	}
 	for _, wanted := range []string{"running", "leased"} {

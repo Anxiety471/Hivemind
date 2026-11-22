@@ -30,6 +30,7 @@ import { membershipCases, membershipReset, membershipState } from "./contract-me
 import { modelsCases } from "./contract-models.mts";
 import { routineResumeCases } from "./contract-routine-resume.mts";
 import { routineCases } from "./contract-routines.mts";
+import { threadAdversarialCases } from "./contract-threads-adversarial.mts";
 import { threadGetCases } from "./contract-threads-get.mts";
 import { threadMoreCases } from "./contract-threads-more.mts";
 
@@ -594,6 +595,7 @@ const cases: Case[] = [
   ...laneJCases(system),
   ...modelsCases(system),
   ...threadGetCases(system),
+  ...threadAdversarialCases(system),
   ...threadMoreCases(system),
 ];
 
