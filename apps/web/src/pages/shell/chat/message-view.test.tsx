@@ -479,9 +479,9 @@ it("puts its activity panel above the reply as its own block, never inside the b
   // The bubble holds the answer alone; the reasoning is never repeated in it.
   expect(bubble?.textContent).toBe("Tuesday at 2 pm is free.");
   expect(container.querySelectorAll('[data-testid="thinking-row"]')).toHaveLength(1);
-  expect(container.querySelector('[data-testid="activity-trigger"]')?.textContent).toContain(
-    "Open calendar · 1 tool · 4s",
-  );
+  const panelText = container.querySelector('[data-testid="tool-activity"]')?.textContent ?? "";
+  expect(panelText).toContain("Open calendar");
+  expect(panelText).toContain("0:04");
 });
 
 it("draws no empty bubble under a panel when the reply has no words", () => {
@@ -512,7 +512,7 @@ it("shows a reasoning-only live message as one slim activity line, not a bubble"
   });
   expect(container.querySelectorAll('[data-testid="tool-activity-line"]')).toHaveLength(1);
   expect(container.querySelectorAll('[data-testid="message-bot-bubble"]')).toHaveLength(0);
-  expect(container.querySelector('[data-testid="activity-trigger"]')?.textContent).toContain(
+  expect(container.querySelector('[data-testid="tool-activity"]')?.textContent).toContain(
     "Checking the calendar.",
   );
 });

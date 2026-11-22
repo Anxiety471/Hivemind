@@ -1,3 +1,4 @@
+import type { LiveStepTiming } from "@rakazo/core";
 import { humanizeToolName, isBackgroundRunTrigger } from "@rakazo/core";
 import { getLogger } from "@rakazo/logging";
 import { isToolPauseResult } from "../../approvals/approval-effect.js";
@@ -44,14 +45,37 @@ import {
 } from "./tool-step-calls.js";
 import { summarizeToolCallDetail } from "./tool-step-detail.js";
 
-function showToolStep(ctx: RunContext, event: RuntimeEvent<"tool">, detail: string | undefined) {
+function showToolStep(
+  ctx: RunContext,
+  event: RuntimeEvent<"tool">,
+  detail: string | undefined,
+): LiveStepTiming {
   const { reply } = ctx.state;
+  const startedAtMs = Date.now();
+  const attempt = (reply.attempt ?? 1) > 1 ? reply.attempt : undefined;
+  const forkedFromStep = reply.pendingForkFromStep;
+  if (forkedFromStep !== undefined) reply.pendingForkFromStep = undefined;
+  reply.toolTimings ??= new Map();
+  reply.toolTimings.set(event.executionId, { startedAtMs });
   // Queued first so the text written before this call becomes its note.
   const stepNames = connectorStepNames(ctx.tools.connector.get(event.name), event.args);
   const callSteps = stepNames.length > 0 ? stepNames : [event.name];
   const ownStep = callSteps.length === 1 && callSteps[0] === event.name;
+  const timing: LiveStepTiming = {
+    startedAtMs,
+    ...(attempt !== undefined ? { attempt } : {}),
+    ...(forkedFromStep !== undefined ? { forkedFromStep } : {}),
+  };
+  reply.pendingToolTimings ??= [];
   reply.pendingToolNames.push(...callSteps);
   reply.pendingToolDetails.push(...callSteps.map(() => (ownStep ? (detail ?? null) : null)));
+  reply.pendingToolTimings.push(
+    ...callSteps.map((_, index) => ({
+      startedAtMs,
+      ...(attempt !== undefined ? { attempt } : {}),
+      ...(index === 0 && forkedFromStep !== undefined ? { forkedFromStep } : {}),
+    })),
+  );
   // A call that shows as its own step keeps what it was called with, for later turns to replay.
   const early = reply.earlyCompletions?.get(event.executionId);
   reply.earlyCompletions?.delete(event.executionId);
@@ -68,6 +92,7 @@ function showToolStep(ctx: RunContext, event: RuntimeEvent<"tool">, detail: stri
       ...(ownStep ? { tool: event.name } : {}),
     })),
   );
+  return timing;
 }
 
 /** Show the tool step, stop a repeating loop, and run the tool for scripted runtimes. */
@@ -79,8 +104,9 @@ export async function onToolCalled(ctx: RunContext, event: RuntimeEvent<"tool">)
   await flushProgress(ctx);
   const detail = summarizeToolCallDetail(event.name, event.args, ctx.secrets);
   // The call a paused turn resumes on already shows as a step in the reply it saved.
-  if (!reply.toolCalls.some((call) => call.executionId === event.executionId))
-    showToolStep(ctx, event, detail);
+  const stepTiming = !reply.toolCalls.some((call) => call.executionId === event.executionId)
+    ? showToolStep(ctx, event, detail)
+    : undefined;
   // Text before ask_user stays pending: the run pauses next, and the question needs it.
   const heldNote =
     event.name === "message_user" || event.name === "ask_user"
@@ -101,6 +127,11 @@ export async function onToolCalled(ctx: RunContext, event: RuntimeEvent<"tool">)
       name: event.name,
       executionId: event.executionId,
       ...(detail ? { detail } : {}),
+      ...(stepTiming?.startedAtMs !== undefined ? { startedAtMs: stepTiming.startedAtMs } : {}),
+      ...(stepTiming?.attempt !== undefined ? { attempt: stepTiming.attempt } : {}),
+      ...(stepTiming?.forkedFromStep !== undefined
+        ? { forkedFromStep: stepTiming.forkedFromStep }
+        : {}),
     },
   });
   await showNarrationStatus(ctx, heldNote);
@@ -146,8 +177,14 @@ export async function onToolCalled(ctx: RunContext, event: RuntimeEvent<"tool">)
   try {
     const result = await applyTool(ctx, event.name, event.args, event.executionId);
     toolResults.set(event.executionId, toolResultFingerprint(result));
+    const elapsedMs = Math.max(0, Date.now() - startedAt);
+    reply.toolTimings ??= new Map();
+    reply.toolTimings.set(event.executionId, {
+      ...reply.toolTimings.get(event.executionId),
+      durationMs: elapsedMs,
+    });
     const completion = toolCompletionFromResult(
-      { name: event.name, executionId: event.executionId, durationMs: Date.now() - startedAt },
+      { name: event.name, executionId: event.executionId, durationMs: elapsedMs },
       result,
     );
     const outcome = toolCompletionOutcome(completion);
@@ -156,6 +193,12 @@ export async function onToolCalled(ctx: RunContext, event: RuntimeEvent<"tool">)
     await appendToolCompletionAudit(deps, audit, completion, ctx.secrets);
     return isToolPauseResult(result);
   } catch (error) {
+    const elapsedMs = Math.max(0, Date.now() - startedAt);
+    reply.toolTimings ??= new Map();
+    reply.toolTimings.set(event.executionId, {
+      ...reply.toolTimings.get(event.executionId),
+      durationMs: elapsedMs,
+    });
     reply.toolOutcomes.set(event.executionId, "failed");
     await appendToolCompletionAudit(
       deps,
@@ -163,7 +206,7 @@ export async function onToolCalled(ctx: RunContext, event: RuntimeEvent<"tool">)
       {
         name: event.name,
         executionId: event.executionId,
-        durationMs: Date.now() - startedAt,
+        durationMs: elapsedMs,
         error,
       },
       ctx.secrets,

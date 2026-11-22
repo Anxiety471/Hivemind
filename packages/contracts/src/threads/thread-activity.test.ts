@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { RunSchema } from "../runs/runs.js";
 import {
   ProductEventSchema,
   ThreadActivityPayloadSchema,
   ThreadThinkingPayloadSchema,
 } from "./events.js";
 import { MessageBlock } from "./message-blocks.js";
+import { threadsRpc } from "./threads-rpc.js";
 
 const event = {
   id: "event-1",
@@ -98,5 +100,78 @@ describe("reasoning transcript contract", () => {
       expect(ThreadThinkingPayloadSchema.safeParse(payload).success).toBe(false);
       expect(ProductEventSchema.safeParse({ ...live, payload }).success).toBe(false);
     }
+  });
+});
+
+describe("steps monitor and checkpoint contracts", () => {
+  it("accepts optional step timings, attempt branches, cost, model info, and status", () => {
+    const block = {
+      kind: "steps",
+      steps: [
+        {
+          label: "Shell",
+          count: 1,
+          detail: "pnpm test",
+          startedAtMs: 1_700_000_000_000,
+          durationMs: 2_300,
+          attempt: 1,
+          status: "stopped",
+        },
+        {
+          label: "Web search",
+          count: 1,
+          detail: "release notes",
+          startedAtMs: 1_700_000_005_000,
+          attempt: 2,
+          forkedFromStep: 0,
+          status: "running",
+        },
+      ],
+      durationMs: 5_000,
+      costUsd: 0.038,
+      modelId: "claude-opus-4-6",
+      modelProvider: "anthropic",
+      attempts: 2,
+      status: "completed",
+    };
+    expect(MessageBlock.parse(block)).toEqual(block);
+  });
+
+  it("rejects negative step durations or cost and accepts nullable run cost", () => {
+    expect(
+      MessageBlock.safeParse({
+        kind: "steps",
+        steps: [{ label: "Shell", count: 1, durationMs: -1 }],
+      }).success,
+    ).toBe(false);
+    expect(
+      MessageBlock.safeParse({
+        kind: "steps",
+        steps: [{ label: "Shell", count: 1 }],
+        costUsd: -0.01,
+      }).success,
+    ).toBe(false);
+    expect(
+      RunSchema.parse({
+        id: "run-1",
+        taskId: "task-1",
+        botId: "bot-1",
+        threadId: "thread-1",
+        status: "running",
+        trigger: "user",
+        routineId: null,
+        modelProvider: null,
+        modelId: null,
+        costUsd: 0.055,
+        error: null,
+        startedAt: null,
+        completedAt: null,
+        createdAt: "2026-10-27T00:00:00Z",
+      }).costUsd,
+    ).toBe(0.055);
+  });
+
+  it("exposes threads.rewind in threadsRpc", () => {
+    expect(threadsRpc.threads.rewind).toBeDefined();
   });
 });

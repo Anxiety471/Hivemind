@@ -21,6 +21,7 @@ import {
   publishInterimMessage,
   publishMidTurnNarration,
   recordExplicitNoResponse,
+  recordLiveRunUsage,
   showNarrationStatus,
   streamThinking,
   thinkingCaptureEnabled,
@@ -164,6 +165,7 @@ export async function consumeRunEvents(
           parentRunId: runId,
           operationId: runId,
         });
+        await recordLiveRunUsage(ctx, event.costUsd);
       } else if (event.type === "done") {
         recordExplicitNoResponse(reply, event.text ?? "");
         if (!reply.assembled && event.text) {

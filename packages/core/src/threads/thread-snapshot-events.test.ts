@@ -2705,6 +2705,97 @@ describe("thread event reduction from sparse live events", () => {
     );
     expect(view?.messages[0]?.threadId).toBe("chat");
   });
+
+  it("tracks step start times, completion durations, live run cost, and checkpoint branches", () => {
+    const started = reduceThreadSnapshot(
+      snapshot([]),
+      event({ type: "run.started", seq: 4, runId: "run-1", payload: { trigger: "user" } }),
+    );
+    const withTool = reduceThreadSnapshot(
+      started,
+      event({
+        type: "agent.tool.called",
+        seq: 5,
+        runId: "run-1",
+        payload: { name: "shell", detail: "pnpm build", startedAtMs: 1_000 },
+      }),
+    );
+    expect(withTool?.messages.at(-1)?.blocks).toEqual([
+      {
+        kind: "steps",
+        steps: [
+          {
+            label: "Shell",
+            count: 1,
+            detail: "pnpm build",
+            startedAtMs: 1_000,
+            status: "running",
+          },
+        ],
+      },
+    ]);
+
+    const completed = reduceThreadSnapshot(
+      withTool,
+      event({
+        type: "agent.tool.completed",
+        seq: 6,
+        runId: "run-1",
+        payload: { name: "shell", durationMs: 2_300, outcome: "succeeded" },
+      }),
+    );
+    expect(completed?.messages.at(-1)?.blocks).toEqual([
+      {
+        kind: "steps",
+        steps: [
+          {
+            label: "Shell",
+            count: 1,
+            detail: "pnpm build",
+            startedAtMs: 1_000,
+            durationMs: 2_300,
+            status: "done",
+          },
+        ],
+      },
+    ]);
+
+    const billed = reduceThreadSnapshot(
+      completed,
+      event({
+        type: "usage.recorded",
+        seq: 7,
+        runId: "run-1",
+        payload: { costUsd: 0.015, runCostUsd: 0.038 },
+      }),
+    );
+    expect(billed?.run?.costUsd).toBe(0.038);
+    expect(billed?.messages.at(-1)?.blocks[0]).toMatchObject({ kind: "steps", costUsd: 0.038 });
+
+    const rewound = reduceThreadSnapshot(
+      billed,
+      event({
+        type: "run.checkpointed",
+        seq: 8,
+        runId: "run-2",
+        payload: {
+          attempts: 2,
+          costUsd: 0.038,
+          steps: [
+            { label: "Shell", count: 1, detail: "pnpm build", attempt: 1, status: "stopped" },
+          ],
+        },
+      }),
+    );
+    expect(rewound?.messages.find((m) => m.id === "progress:run-2")?.blocks).toEqual([
+      {
+        kind: "steps",
+        steps: [{ label: "Shell", count: 1, detail: "pnpm build", attempt: 1, status: "stopped" }],
+        attempts: 2,
+        costUsd: 0.038,
+      },
+    ]);
+  });
 });
 
 type LiveSnapshot = Omit<LiveThreadSnapshot, "members"> & {

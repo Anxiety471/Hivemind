@@ -107,21 +107,28 @@ export async function threadSnapshot(
                       "thread.thinking",
                       "thread.subagent",
                       "run.waiting_input",
+                      "run.checkpointed",
                       "computer.takeover.requested",
                       "agent.tool.called",
                       "agent.tool.completed",
+                      "usage.recorded",
                     ],
                   },
                 },
                 orderBy: { seq: "asc" },
               })
             : [];
+        const costByRunId = await loadRunCostMap(
+          tx,
+          [...activeRuns, ...(currentRun ? [currentRun] : [])].map((item) => item.id),
+        );
         return {
           messagePage,
           last,
           run: currentRun,
           activeRuns,
           liveEvents,
+          costByRunId,
           shared,
           computer,
           work,
@@ -135,8 +142,8 @@ export async function threadSnapshot(
       cursor: core.last?.seq ?? -1,
       messages: messagesWithLiveEvents(core.messagePage.messages, core.liveEvents, core.activeRuns),
       olderCursor: core.messagePage.olderCursor,
-      run: core.run ? mapRun(core.run) : null,
-      activeRuns: core.activeRuns.map(mapRun),
+      run: core.run ? mapRun(core.run, core.costByRunId) : null,
+      activeRuns: core.activeRuns.map((item) => mapRun(item, core.costByRunId)),
       computer: toComputerStatus(target.botId, core.computer, core.work, core.shared, viewerId),
     };
   }
@@ -197,21 +204,29 @@ export async function threadSnapshot(
                     "thread.thinking",
                     "thread.subagent",
                     "run.waiting_input",
+                    "run.checkpointed",
                     "computer.takeover.requested",
                     "agent.tool.called",
                     "agent.tool.completed",
+                    "usage.recorded",
                   ],
                 },
               },
               orderBy: { seq: "asc" },
             })
           : [];
+      const terminalRun = pickLatestTerminalRun(recentTerminals);
+      const costByRunId = await loadRunCostMap(
+        tx,
+        [...activeRuns, ...(terminalRun ? [terminalRun] : [])].map((item) => item.id),
+      );
       return {
         messagePage,
         last,
         activeRuns,
-        terminalRun: pickLatestTerminalRun(recentTerminals),
+        terminalRun,
         liveEvents,
+        costByRunId,
         memberStatuses,
       };
     },
@@ -233,11 +248,11 @@ export async function threadSnapshot(
     // still active or start late. A newer completed/cancelled terminal clears it.
     run:
       core.terminalRun?.status === "failed"
-        ? mapRun(core.terminalRun)
+        ? mapRun(core.terminalRun, core.costByRunId)
         : primaryActiveRun
-          ? mapRun(primaryActiveRun)
+          ? mapRun(primaryActiveRun, core.costByRunId)
           : null,
-    activeRuns: core.activeRuns.map(mapRun),
+    activeRuns: core.activeRuns.map((item) => mapRun(item, core.costByRunId)),
   };
 }
 
@@ -299,23 +314,48 @@ function messagesWithLiveEvents(
   return [...persisted, ...live];
 }
 
-function mapRun(run: {
-  id: string;
-  userId: string;
-  botId: string;
-  threadId: string;
-  taskId: string;
-  status: string;
-  trigger: string;
-  routineId: string | null;
-  routine?: { name: string } | null;
-  modelProvider: string | null;
-  modelId: string | null;
-  error: string | null;
-  startedAt: Date | null;
-  completedAt: Date | null;
-  createdAt: Date;
-}) {
+async function loadRunCostMap(
+  tx: { usageRecord?: PrismaClient["usageRecord"] },
+  runIds: string[],
+): Promise<Map<string, number>> {
+  const uniqueIds = [...new Set(runIds)];
+  const costs = new Map<string, number>();
+  if (uniqueIds.length === 0 || typeof tx.usageRecord?.groupBy !== "function") return costs;
+  const rows = await tx.usageRecord.groupBy({
+    by: ["runId"],
+    where: { runId: { in: uniqueIds } },
+    _sum: { costUsd: true },
+  });
+  for (const row of rows) {
+    const cost = row._sum.costUsd;
+    if (row.runId && typeof cost === "number" && Number.isFinite(cost) && cost >= 0) {
+      costs.set(row.runId, cost);
+    }
+  }
+  return costs;
+}
+
+function mapRun(
+  run: {
+    id: string;
+    userId: string;
+    botId: string;
+    threadId: string;
+    taskId: string;
+    status: string;
+    trigger: string;
+    routineId: string | null;
+    routine?: { name: string } | null;
+    modelProvider: string | null;
+    modelId: string | null;
+    error: string | null;
+    startedAt: Date | null;
+    completedAt: Date | null;
+    createdAt: Date;
+  },
+  costByRunId?: Map<string, number>,
+) {
+  const costUsd = costByRunId?.get(run.id);
   return {
     id: run.id,
     userId: run.userId,
@@ -328,6 +368,7 @@ function mapRun(run: {
     ...(run.routine ? { routineName: run.routine.name } : {}),
     modelProvider: run.modelProvider,
     modelId: run.modelId,
+    ...(costUsd !== undefined ? { costUsd } : {}),
     // Same display clamp as live run.failed events so a huge stored error cannot bypass it.
     error:
       run.status === "failed"

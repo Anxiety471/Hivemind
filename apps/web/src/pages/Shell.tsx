@@ -1186,6 +1186,10 @@ function SpaceShell() {
               running={transcriptRunning}
               workingBots={workingBots}
               workingRoutine={workingRoutineName(workingRuns)}
+              activeRun={workingRuns[0] ?? activeSnapshot?.run ?? null}
+              threadRuns={currentRuns}
+              onStop={stopRun}
+              onRewind={composer.rewindRun}
               userBubble={userBubble}
               onCallBack={
                 bootstrapMe?.phoneCallsEnabled && !inGroup && active

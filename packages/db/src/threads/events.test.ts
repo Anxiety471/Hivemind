@@ -101,6 +101,30 @@ describe("finalizeRun", () => {
         new Date("2026-09-01T12:01:43.000Z"),
       ),
     ).toEqual([blocks[0], blocks[1], { ...blocks[2], durationMs: 103_000 }]);
+    expect(
+      completedRunBlocks(
+        blocks,
+        new Date("2026-09-01T12:00:00.000Z"),
+        new Date("2026-09-01T12:01:43.000Z"),
+        {
+          costUsd: 0.042,
+          modelId: "claude-opus-4-6",
+          modelProvider: "anthropic",
+          status: "completed",
+        },
+      ),
+    ).toEqual([
+      blocks[0],
+      blocks[1],
+      {
+        ...blocks[2],
+        durationMs: 103_000,
+        costUsd: 0.042,
+        modelId: "claude-opus-4-6",
+        modelProvider: "anthropic",
+        status: "completed",
+      },
+    ]);
     expect(completedRunBlocks(blocks, null, new Date())).toBe(blocks);
   });
 

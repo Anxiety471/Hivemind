@@ -79,3 +79,45 @@ func TestSnoozeDatetimeFormat(t *testing.T) {
 		t.Errorf("undefined = %v", issues)
 	}
 }
+
+func TestLiveMonitorStepsCostAndCheckpoints(t *testing.T) {
+	runID := "run-1"
+	events := []liveEvent{
+		{
+			ID: "e1", ThreadID: "t1", BotID: "b1", Seq: 1, Type: "agent.tool.called", RunID: &runID,
+			Payload: map[string]any{
+				"name": "shell", "detail": "pnpm test", "startedAtMs": json.Number("1000"),
+			},
+		},
+		{
+			ID: "e2", ThreadID: "t1", BotID: "b1", Seq: 2, Type: "agent.tool.completed", RunID: &runID,
+			Payload: map[string]any{
+				"name": "shell", "durationMs": json.Number("2300"), "outcome": "succeeded",
+			},
+		},
+		{
+			ID: "e3", ThreadID: "t1", BotID: "b1", Seq: 3, Type: "usage.recorded", RunID: &runID,
+			Payload: map[string]any{
+				"runCostUsd": json.Number("0.042"),
+			},
+		},
+	}
+	projected := projectLive(events, map[string]string{runID: "running"})
+	if len(projected) != 1 {
+		t.Fatalf("expected 1 projected live message, got %d", len(projected))
+	}
+	view, err := liveView(projected[0])
+	if err != nil {
+		t.Fatalf("liveView failed: %v", err)
+	}
+	blocks := view["blocks"].([]any)
+	stepsBlock := blocks[0].(map[string]any)
+	if stepsBlock["costUsd"].(json.Number).String() != "0.042" {
+		t.Fatalf("expected costUsd 0.042, got %v", stepsBlock["costUsd"])
+	}
+	stepList := stepsBlock["steps"].([]any)
+	firstStep := stepList[0].(map[string]any)
+	if firstStep["durationMs"].(json.Number).String() != "2300" || firstStep["status"] != "done" {
+		t.Fatalf("unexpected first step: %+v", firstStep)
+	}
+}

@@ -10,12 +10,21 @@ import type {
   ThreadMessage,
 } from "@rakazo/contracts";
 import type { ChildBotBlock, PeerExchange } from "@rakazo/core";
-import { isPeerReceiptBlocks, isToolActivityBlock, otherAuthor } from "@rakazo/core";
+import {
+  isApprovalAskBlock,
+  isPeerReceiptBlocks,
+  isToolActivityBlock,
+  otherAuthor,
+} from "@rakazo/core";
 import { BotAvatar, Button, cn, resolvePersonaColorDef } from "@rakazo/ui-web";
 import { UserRound } from "lucide-react";
 import { memo, useCallback, useMemo } from "react";
 import { CollaborationMarker } from "../../../components/ai/CollaborationMarker";
 import { ComputerCard } from "../../../components/computers/ComputerCard";
+import type {
+  ActivityRunMeta,
+  PendingApprovalAction,
+} from "../../../components/messages/ActivityPanel";
 import {
   ActivityOnlyNarration,
   ActivityPanel,
@@ -87,6 +96,10 @@ export const MessageView = memo(function MessageView({
   onOpenImportSetup,
   rpc,
   showToolActivity,
+  runMeta,
+  cachedSteps,
+  onStop,
+  onRewind,
   onReply,
   onMarkUnread,
   markedUnread = false,
@@ -145,6 +158,16 @@ export const MessageView = memo(function MessageView({
   onOpenImportSetup?: (target: ImportSetupTarget) => void;
   rpc: ReturnType<typeof createSpaceRpc>;
   showToolActivity: boolean;
+  runMeta?: ActivityRunMeta;
+  cachedSteps?: Extract<MessageBlock, { kind: "steps" }>;
+  onStop?: () => void;
+  onRewind?: (input: {
+    messageId: string;
+    runId?: string;
+    stepIndex: number;
+    stepLabel?: string;
+    stepDetail?: string;
+  }) => Promise<void> | void;
   onReply: (message: ThreadMessage) => void;
   onMarkUnread: (message: ThreadMessage) => void;
   markedUnread?: boolean;
@@ -257,10 +280,47 @@ export const MessageView = memo(function MessageView({
       ? message.blocks.findIndex((block) => block.kind === "ask")
       : textAnchorIndex;
   const peerReceipt = isPeerReceiptBlocks(message.blocks);
-  const messageActivity = activityBlocks(blocks);
+  const simpleApprovalAsk =
+    showToolActivity && canAnswer && !readOnly ? blocks.find(isSimpleMonitorApproval) : undefined;
+  const activitySourceBlocks = useMemo(
+    () =>
+      simpleApprovalAsk && cachedSteps && activityBlocks(blocks).length === 0
+        ? [cachedSteps, ...blocks]
+        : blocks,
+    [simpleApprovalAsk, cachedSteps, blocks],
+  );
+  const messageActivity = activityBlocks(activitySourceBlocks);
   const firstActivityIndex = blocks.findIndex(
     (block) => block.kind === "thinking" || block.kind === "steps",
   );
+  const resolvedRunMeta: ActivityRunMeta | undefined =
+    runMeta || speakerName || speakerBot?.name || message.botId
+      ? {
+          ...runMeta,
+          runId: runMeta?.runId ?? message.runId ?? undefined,
+          botId: runMeta?.botId ?? message.botId ?? undefined,
+          botName: runMeta?.botName ?? speakerName ?? speakerBot?.name ?? undefined,
+          botColor: runMeta?.botColor ?? speakerBot?.color ?? FALLBACK_BOT_COLOR,
+        }
+      : undefined;
+  const pendingApproval: PendingApprovalAction | undefined = simpleApprovalAsk
+    ? {
+        block: simpleApprovalAsk,
+        canAnswer: !readOnly && canAnswer,
+        onAnswer: (text, fields, remember) => onAnswer(message, text, fields, undefined, remember),
+      }
+    : undefined;
+  const handleRewind =
+    onRewind && !readOnly
+      ? (stepIndex: number, step: Extract<MessageBlock, { kind: "steps" }>["steps"][number]) =>
+          onRewind({
+            messageId: message.id,
+            runId: resolvedRunMeta?.runId ?? message.runId ?? undefined,
+            stepIndex,
+            stepLabel: step.label,
+            stepDetail: step.detail,
+          })
+      : undefined;
   const hoverActions =
     readOnly || peerReceipt ? null : (
       <MessageHoverActions
@@ -279,7 +339,14 @@ export const MessageView = memo(function MessageView({
         <>
           {messageContext}
           <div className="relative">
-            <ActivityOnlyNarration blocks={blocks} live={isLive} />
+            <ActivityOnlyNarration
+              blocks={activitySourceBlocks}
+              live={isLive}
+              runMeta={resolvedRunMeta}
+              pendingApproval={pendingApproval}
+              onStop={isLive ? onStop : undefined}
+              onRewind={handleRewind}
+            />
             {hoverActions}
           </div>
         </>
@@ -297,7 +364,16 @@ export const MessageView = memo(function MessageView({
       <>
         {messageContext}
         <div className="flex w-full min-w-0 flex-col gap-2">
-          {hasActivity ? <ActivityPanel blocks={blocks} live={isLive} /> : null}
+          {hasActivity ? (
+            <ActivityPanel
+              blocks={activitySourceBlocks}
+              live={isLive}
+              runMeta={resolvedRunMeta}
+              pendingApproval={pendingApproval}
+              onStop={isLive ? onStop : undefined}
+              onRewind={handleRewind}
+            />
+          ) : null}
           {replyBlocks.length > 0 ? (
             <div className="relative w-fit max-w-full [@media(hover:none)]:w-full">
               <div className="flex w-fit max-w-full justify-start [@media(hover:none)]:w-full">
@@ -360,7 +436,15 @@ export const MessageView = memo(function MessageView({
             // The one activity panel stands at the first activity block; later ones add
             // their rows to it rather than rendering a card of their own.
             return i === firstActivityIndex ? (
-              <StandaloneActivity key={i} live={isLive} blocks={blocks} />
+              <StandaloneActivity
+                key={i}
+                live={isLive}
+                blocks={activitySourceBlocks}
+                runMeta={resolvedRunMeta}
+                pendingApproval={pendingApproval}
+                onStop={isLive ? onStop : undefined}
+                onRewind={handleRewind}
+              />
             ) : null;
           }
           if (isToolActivityBlock(block)) return null;
@@ -656,6 +740,22 @@ export const MessageView = memo(function MessageView({
             );
           }
           if (block.kind === "ask") {
+            if (pendingApproval && block === simpleApprovalAsk) {
+              if (firstActivityIndex !== -1) return null;
+              return (
+                <div key={i} className="relative w-full min-w-0">
+                  <StandaloneActivity
+                    live={false}
+                    blocks={cachedSteps ? [cachedSteps] : []}
+                    runMeta={{ ...resolvedRunMeta, status: "waiting_input" }}
+                    pendingApproval={pendingApproval}
+                    onStop={onStop}
+                    onRewind={handleRewind}
+                  />
+                  {i === hoverAnchorIndex ? hoverActions : null}
+                </div>
+              );
+            }
             return (
               <div key={i} className="relative w-full min-w-0">
                 <AskCard
@@ -701,6 +801,25 @@ export const MessageView = memo(function MessageView({
     </>
   );
 });
+
+/** Checks whether an unanswered approval ask fits cleanly inside the Monitor card footer. */
+function isSimpleMonitorApproval(
+  block: MessageBlock,
+): block is Extract<MessageBlock, { kind: "ask" }> {
+  return (
+    block.kind === "ask" &&
+    block.status !== "answered" &&
+    isApprovalAskBlock(block) &&
+    !block.loginFields?.length &&
+    !block.input &&
+    !block.purpose &&
+    !block.instructionUpdate &&
+    !block.settingsUpdate &&
+    !block.receipt &&
+    (!block.detail || (!block.detail.includes("\n") && block.detailFormat !== "text")) &&
+    (block.actions?.length ?? 0) === 2
+  );
+}
 
 /** A bot named inline in its color. A deleted, archived, or missing bot keeps only its name. */
 function BotMention({

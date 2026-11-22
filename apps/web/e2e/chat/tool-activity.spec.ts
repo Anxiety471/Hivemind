@@ -12,7 +12,7 @@ const viewports = [
   { name: "mobile-390x844", width: 390, height: 844 },
 ];
 
-async function openThread(page: Page, phase: "live" | "done") {
+async function openThread(page: Page, phase: "live" | "done" | "approval" | "rewound") {
   await page.goto(`${fixture}?view=thread&phase=${phase}`);
   await expect(page.getByTestId("message-user-bubble")).toBeVisible();
 }
@@ -34,7 +34,9 @@ async function setToggle(page: Page, on: boolean) {
   await toggle.scrollIntoViewIfNeeded();
 }
 
-test("tool activity shows for live and finished runs by default", async ({ page }, testInfo) => {
+test("monitor and checkpoints work across live, settled, approval, and rewound runs", async ({
+  page,
+}, testInfo) => {
   for (const viewport of viewports) {
     await page.setViewportSize(viewport);
 
@@ -44,22 +46,15 @@ test("tool activity shows for live and finished runs by default", async ({ page 
     await expect(page.getByTestId("message-bot-bubble")).toHaveCount(0);
     const liveTrigger = page.getByTestId("activity-trigger");
     await expect(liveTrigger).toHaveAttribute("aria-expanded", "true");
-    await expect(liveTrigger).toContainText(/Check conflicts\s*·\s*8 tools/);
-    // A live run has no duration yet.
-    await expect(liveTrigger).not.toContainText(/\d+(ms|s)\b/);
+    const livePanel = page.getByTestId("tool-activity");
+    await expect(livePanel).toContainText("Claude Opus 5.5");
+    await expect(livePanel).toContainText("$0.039");
+    await expect(livePanel).toContainText("Running");
+    await expect(livePanel).toContainText("Check conflicts");
     await expect(page.getByTestId("thinking-row")).toHaveCount(1);
-    await expect(page.getByTestId("thinking-row")).toContainText(
-      "The person needs a free slot on Tuesday.",
-    );
-    // The newest reasoning row stays open while the run streams.
-    await expect(page.getByTestId("thinking-trigger")).toHaveAttribute("aria-expanded", "true");
-    await expect(page.getByTestId("thinking-detail")).toContainText(
-      "Checking Tuesday afternoon first.",
-    );
-    await expect(page.getByTestId("tool-rows-hidden")).toHaveText("+2 earlier steps");
-    await expect(page.getByTestId("tool-rows")).not.toContainText("Open calendar");
+    await expect(page.getByTestId("thinking-trigger")).toHaveAttribute("aria-expanded", "false");
+    await expect(page.getByTestId("tool-rows")).toContainText("Open calendar");
     await expect(page.getByTestId("tool-rows")).toContainText("Check conflicts");
-    await expect(page.getByTestId("tool-step-note")).toHaveCount(0);
     await expect(page.locator("body")).toHaveJSProperty("scrollWidth", viewport.width);
     await captureScreenshot(page, testInfo, `default-live-${viewport.name}`);
 
@@ -68,42 +63,66 @@ test("tool activity shows for live and finished runs by default", async ({ page 
 
     await openThread(page, "done");
     await expect(page.getByTestId("message-bot-bubble")).toContainText(REPLY_TEXT);
-    // The panel is its own block above the bubble, not part of it.
+    // The monitor stands above the reply rather than inside its bubble.
     await expect(page.getByTestId("message-bot-bubble")).not.toContainText(
       "The person needs a free slot",
     );
+    const donePanel = page.getByTestId("tool-activity");
     const doneTrigger = page.getByTestId("activity-trigger");
     await expect(doneTrigger).toHaveCount(1);
     await expect(doneTrigger).toHaveAttribute("aria-expanded", "false");
-    await expect(doneTrigger).toContainText(/Check conflicts\s*·\s*8 tools\s*·\s*12s/);
+    await expect(donePanel).toContainText("Claude Opus 5.5");
+    await expect(donePanel).toContainText("+3");
+    await expect(donePanel).toContainText("$0.055");
     await captureScreenshot(page, testInfo, `default-done-collapsed-${viewport.name}`);
 
     await doneTrigger.click();
     await expect(doneTrigger).toHaveAttribute("aria-expanded", "true");
-    await expect(page.getByTestId("tool-rows-hidden")).toHaveCount(0);
-    // A finished run folds every row to its one-line summary.
     const thinkingTrigger = page.getByTestId("thinking-trigger");
     await expect(thinkingTrigger).toHaveAttribute("aria-expanded", "false");
-    await expect(page.getByTestId("thinking-row")).toContainText(
-      "The person needs a free slot on Tuesday.",
-    );
-    await expect(page.getByTestId("tool-rows")).toContainText("Open calendar");
-    await expect(page.getByTestId("tool-rows")).toContainText("Check conflicts");
     await thinkingTrigger.click();
     await expect(page.getByTestId("thinking-detail")).toContainText(
       "Checking Tuesday afternoon first.",
     );
-    await page.getByTestId("activity-row-trigger").filter({ hasText: "Check conflicts" }).click();
-    await expect(page.getByTestId("tool-step-note")).toHaveText(NOTE_TEXT);
+    await page
+      .locator("[data-step-inspector-trigger]")
+      .filter({ hasText: "Check conflicts" })
+      .first()
+      .click();
+    await expect(donePanel.getByRole("dialog")).toContainText(NOTE_TEXT);
     await expect(page.locator("body")).toHaveJSProperty("scrollWidth", viewport.width);
     await captureScreenshot(page, testInfo, `default-done-expanded-${viewport.name}`);
+
+    await donePanel.getByRole("button", { name: "Open execution log" }).click();
+    await expect(page.getByText("Execution trace")).toBeVisible();
+    await page.keyboard.press("Escape");
+
+    await openThread(page, "approval");
+    const approvalPanel = page.getByTestId("tool-activity");
+    await expect(approvalPanel).toContainText("Needs you");
+    await expect(approvalPanel).toContainText("Ready to ship");
+    await expect(approvalPanel.locator("code")).toContainText("gh release create v3.2.0");
+    await expect(page.getByRole("button", { name: "Allow", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Decline", exact: true })).toBeVisible();
+    await expect(page.locator("body")).toHaveJSProperty("scrollWidth", viewport.width);
+    await captureScreenshot(page, testInfo, `default-approval-${viewport.name}`);
+
+    await openThread(page, "rewound");
+    const rewoundTrigger = page.getByTestId("activity-trigger");
+    await expect(rewoundTrigger).toHaveAttribute("aria-expanded", "false");
+    await rewoundTrigger.click();
+    const rewoundPanel = page.getByTestId("tool-activity");
+    await expect(rewoundPanel.getByTestId("tool-rows").locator("svg")).toHaveCount(1);
+    await expect(rewoundPanel).toContainText("Attempt 2");
+    await expect(rewoundPanel).toContainText("Stopped");
+    await expect(page.locator("body")).toHaveJSProperty("scrollWidth", viewport.width);
+    await captureScreenshot(page, testInfo, `default-rewound-${viewport.name}`);
   }
 });
 
 test("the settings toggle hides and restores tool activity", async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1440, height: 900 });
 
-  // Nothing saved leaves the switch on and the cards visible.
   await page.goto(`${fixture}?view=settings`);
   const settings = page.getByTestId("user-settings");
   await expect(settings).toBeVisible();
@@ -119,7 +138,7 @@ test("the settings toggle hides and restores tool activity", async ({ page }, te
   await openThread(page, "done");
   await expect(page.getByTestId("message-bot-bubble")).toHaveText(REPLY_TEXT);
   await expect(page.getByTestId("tool-activity")).toHaveCount(1);
-  await expect(page.getByTestId("activity-trigger")).toContainText(/Check conflicts\s*·\s*8 tools/);
+  await expect(page.getByTestId("tool-activity")).toContainText("Claude Opus 5.5");
   await captureScreenshot(page, testInfo, "on-done");
 
   await openThread(page, "live");
@@ -148,6 +167,6 @@ test("the settings toggle hides and restores tool activity", async ({ page }, te
 
   await openThread(page, "done");
   await expect(page.getByTestId("tool-activity")).toHaveCount(1);
-  await expect(page.getByTestId("activity-trigger")).toContainText(/Check conflicts\s*·\s*8 tools/);
+  await expect(page.getByTestId("tool-activity")).toContainText("Claude Opus 5.5");
   await captureScreenshot(page, testInfo, "on-again-done");
 });

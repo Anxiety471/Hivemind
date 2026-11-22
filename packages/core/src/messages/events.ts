@@ -1,14 +1,53 @@
-import type {
-  HistoryToolStep,
-  MessageBlock,
-  ThreadMessage,
-  ToolHistory,
-  ToolStepCall,
-} from "@rakazo/contracts";
+import type { MessageBlock, ThreadMessage } from "@rakazo/contracts";
 import { preserveIdentitySource } from "../bots/identity-source.js";
 import { cloudAgentBlockFromPayload } from "../integrations/cloud-agent.js";
 import { modelFallbackFailure, parseModelFallbackFailure } from "../runs/run-error.js";
+import type { ToolStep } from "./live-step-updates.js";
+import {
+  appendTextSegment,
+  appendToolCallSegment,
+  appendToolStep,
+  currentLiveCostUsd,
+  endsSentence,
+  hasRunningStep,
+  humanizeToolName,
+  noteLastToolStep,
+  progressMessageText,
+  reduceLiveMessageBlocks,
+  splitToolHistory,
+  TOOL_STEP_CALLS_KEPT,
+  thinkingLiveUpdate,
+  validNonNegInt,
+  validNonNegNumber,
+  validPosInt,
+  withoutLastToolStepNotes,
+  withToolHistory,
+  withToolStepOutcomes,
+} from "./live-step-updates.js";
 import { payloadAuthor } from "./message-replies.js";
+
+export type {
+  LiveMessageUpdate,
+  LiveStepTiming,
+  ToolStep,
+  ToolStepOutcome,
+} from "./live-step-updates.js";
+export {
+  appendTextSegment,
+  appendToolCallSegment,
+  appendToolStep,
+  endsSentence,
+  humanizeToolName,
+  noteLastToolStep,
+  progressMessageText,
+  reduceLiveMessageBlocks,
+  splitToolHistory,
+  TOOL_STEP_CALLS_KEPT,
+  thinkingLiveUpdate,
+  withoutLastToolStepNotes,
+  withToolHistory,
+  withToolStepOutcomes,
+};
 
 export function projectMessages(
   events: Array<{
@@ -133,10 +172,73 @@ export function projectMessages(
         typeof payload.detail === "string" && payload.detail.trim()
           ? payload.detail.trim()
           : undefined;
+      const startedAtMs = validNonNegInt(payload.startedAtMs);
+      const attempt = validPosInt(payload.attempt);
+      const forkedFromStep = validNonNegInt(payload.forkedFromStep);
       live.blocks = reduceLiveMessageBlocks(live.blocks, {
         type: "tool",
         name: String(payload.name ?? ""),
         ...(detail ? { detail } : {}),
+        ...(startedAtMs !== undefined ? { startedAtMs } : {}),
+        ...(attempt !== undefined ? { attempt } : {}),
+        ...(forkedFromStep !== undefined ? { forkedFromStep } : {}),
+      });
+      live.meta = {
+        ...live.meta,
+        seq: event.seq,
+        botId: event.botId ?? undefined,
+        createdAt,
+      };
+      continue;
+    }
+    if (event.type === "agent.tool.completed") {
+      const live = liveById.get(progressMessageId(event));
+      const durationMs = validNonNegInt(payload.durationMs);
+      if (live && (durationMs !== undefined || hasRunningStep(live.blocks))) {
+        const outcome = typeof payload.outcome === "string" ? payload.outcome : undefined;
+        live.blocks = reduceLiveMessageBlocks(live.blocks, {
+          type: "tool_completed",
+          name: String(payload.name ?? ""),
+          durationMs: durationMs ?? 0,
+          ...(outcome ? { outcome } : {}),
+        });
+        live.meta = {
+          ...live.meta,
+          seq: event.seq,
+          botId: event.botId ?? undefined,
+          createdAt,
+        };
+      }
+      continue;
+    }
+    if (event.type === "usage.recorded") {
+      const live = liveById.get(progressMessageId(event));
+      const runCostUsd = validNonNegNumber(payload.runCostUsd);
+      const stepCostUsd = validNonNegNumber(payload.costUsd);
+      if (live && (runCostUsd !== undefined || stepCostUsd !== undefined)) {
+        const prevCost = currentLiveCostUsd(live.blocks) ?? 0;
+        const nextCost = runCostUsd ?? prevCost + (stepCostUsd ?? 0);
+        live.blocks = reduceLiveMessageBlocks(live.blocks, {
+          type: "usage",
+          costUsd: nextCost,
+        });
+      }
+      continue;
+    }
+    if (event.type === "run.checkpointed" && Array.isArray(payload.steps)) {
+      const live = liveProjection(event, createdAt);
+      const attempts = validPosInt(payload.attempts);
+      const costUsd = validNonNegNumber(payload.costUsd);
+      const modelId = typeof payload.modelId === "string" ? payload.modelId : undefined;
+      const modelProvider =
+        typeof payload.modelProvider === "string" ? payload.modelProvider : undefined;
+      live.blocks = reduceLiveMessageBlocks(live.blocks, {
+        type: "checkpoint",
+        steps: payload.steps as ToolStep[],
+        ...(attempts !== undefined ? { attempts } : {}),
+        ...(costUsd !== undefined ? { costUsd } : {}),
+        ...(modelId ? { modelId } : {}),
+        ...(modelProvider ? { modelProvider } : {}),
       });
       live.meta = {
         ...live.meta,
@@ -327,132 +429,6 @@ function clampRunFailure(message: string): string {
     : message;
 }
 
-export type LiveMessageUpdate =
-  | { type: "progress"; payload: Record<string, unknown> | undefined }
-  | { type: "tool"; name: string; detail?: string }
-  | { type: "thinking"; segment: number; durationMs: number; lines: string[] };
-
-/** A live reasoning snapshot from its event payload, tolerant of a partial producer. */
-export function thinkingLiveUpdate(
-  payload: Record<string, unknown> | undefined,
-): Extract<LiveMessageUpdate, { type: "thinking" }> {
-  const count = (value: unknown) => {
-    const number = Math.trunc(Number(value ?? 0));
-    return Number.isFinite(number) && number > 0 ? number : 0;
-  };
-  return {
-    type: "thinking",
-    segment: count(payload?.segment),
-    durationMs: count(payload?.durationMs),
-    lines: Array.isArray(payload?.lines)
-      ? payload.lines.filter((line): line is string => typeof line === "string")
-      : [],
-  };
-}
-
-export function reduceLiveMessageBlocks(
-  current: readonly MessageBlock[],
-  update: LiveMessageUpdate,
-): MessageBlock[] {
-  if (update.type === "thinking") return upsertThinkingBlock(current, update);
-  // A reset drops the text streamed so far (it will not be in the reply) and keeps the steps,
-  // including tools still waiting on that text to finish its sentence.
-  let blocks = current;
-  if (update.type === "progress" && update.payload?.reset === true) {
-    const waiting = current.at(-1)?.kind === "progress" ? current.at(-1) : undefined;
-    blocks = current.filter((block) => block.kind !== "text" && block.kind !== "progress");
-    const waitingNames = waiting?.kind === "progress" ? (waiting.pendingToolNames ?? []) : [];
-    const waitingDetails = waiting?.kind === "progress" ? (waiting.pendingToolDetails ?? []) : [];
-    for (let index = 0; index < waitingNames.length; index += 1) {
-      blocks = appendToolCallSegment(
-        blocks,
-        waitingNames[index]!,
-        waitingDetails[index] ?? undefined,
-      );
-    }
-  }
-  const tail = blocks.at(-1);
-  const segments = tail?.kind === "progress" ? blocks.slice(0, -1) : blocks;
-  const priorText = liveMessageText(blocks);
-  const flushedLength =
-    tail?.kind === "progress" ? priorText.length - tail.text.length : priorText.length;
-  const tailText =
-    update.type === "progress"
-      ? progressMessageText(update.payload, priorText).slice(flushedLength)
-      : tail?.kind === "progress"
-        ? tail.text
-        : "";
-  const priorPendingNames = tail?.kind === "progress" ? (tail.pendingToolNames ?? []) : [];
-  const priorPendingDetails =
-    tail?.kind === "progress"
-      ? priorPendingNames.map((_, index) => tail.pendingToolDetails?.[index] ?? null)
-      : [];
-  const pendingToolNames = [...priorPendingNames, ...(update.type === "tool" ? [update.name] : [])];
-  const pendingToolDetails = [
-    ...priorPendingDetails,
-    ...(update.type === "tool" ? [update.detail?.trim() || null] : []),
-  ];
-  const activity =
-    update.type === "progress"
-      ? update.payload?.activity === true
-      : tail?.kind === "progress" && tail.activity === true;
-
-  if (pendingToolNames.length > 0 && endsSentence(tailText)) {
-    let next = activity ? [...segments] : appendTextSegment(segments, tailText);
-    for (let index = 0; index < pendingToolNames.length; index += 1) {
-      next = appendToolCallSegment(
-        next,
-        pendingToolNames[index]!,
-        pendingToolDetails[index] ?? undefined,
-      );
-    }
-    return next;
-  }
-  if (!tailText) return [...segments];
-  return [
-    ...segments,
-    {
-      kind: "progress",
-      text: tailText,
-      ...(activity ? { activity: true as const } : {}),
-      ...(pendingToolNames.length > 0 ? { pendingToolNames } : {}),
-      ...(pendingToolDetails.some(Boolean) ? { pendingToolDetails } : {}),
-    },
-  ];
-}
-
-/**
- * A live reasoning snapshot replaces the block of its segment in place, so a repeated or
- * out-of-order delivery shows the newest lines without duplicating the card.
- */
-function upsertThinkingBlock(
-  current: readonly MessageBlock[],
-  update: Extract<LiveMessageUpdate, { type: "thinking" }>,
-): MessageBlock[] {
-  const block: MessageBlock = {
-    kind: "thinking",
-    durationMs: update.durationMs,
-    lines: update.lines,
-  };
-  let ordinal = -1;
-  let replaced = false;
-  const next = current.map((existing) => {
-    if (existing.kind !== "thinking") return existing;
-    ordinal += 1;
-    if (ordinal !== update.segment) return existing;
-    replaced = true;
-    return block;
-  });
-  return replaced ? next : [...current, block];
-}
-
-function liveMessageText(blocks: readonly MessageBlock[]): string {
-  return blocks
-    .filter((block) => block.kind === "text" || block.kind === "progress")
-    .map((block) => block.text)
-    .join("");
-}
-
 /**
  * Whether a live message is writing reply text right now: its newest block is the bot's
  * own narration, with no tool waiting to run. Tool status lines don't count.
@@ -474,160 +450,6 @@ export function liveActivityLine(
   const live = messages.findLast((message) => message.id.startsWith("progress:"));
   const tail = live?.blocks.at(-1);
   return (tail?.kind === "progress" && tail.activity && tail.text.trim()) || undefined;
-}
-
-export type ToolStepOutcome = "succeeded" | "failed" | "stopped";
-export type ToolStep = Extract<MessageBlock, { kind: "steps" }>["steps"][number];
-
-/**
- * Records how each call ended on the step it shows as. `calls` lists every step a call made, in
- * call order (a connector call can make several). If they stop lining up with the steps, the
- * steps are returned as they were rather than credited to the wrong step.
- */
-export function withToolStepOutcomes(
-  segments: readonly MessageBlock[],
-  calls: readonly {
-    label: string;
-    outcome: ToolStepOutcome | undefined;
-    /** The tool the call ran, and what it kept, when the call shows as its own step. */
-    tool?: string;
-    call?: ToolStepCall;
-  }[],
-): MessageBlock[] {
-  let next = 0;
-  const annotated: MessageBlock[] = [];
-  for (const block of segments) {
-    if (block.kind !== "steps") {
-      annotated.push(block);
-      continue;
-    }
-    const steps: HistoryToolStep[] = [];
-    for (const step of block.steps as HistoryToolStep[]) {
-      const outcomes: NonNullable<ToolStep["outcomes"]> = {};
-      const own = calls.slice(next, next + step.count);
-      next += step.count;
-      if (own.length < step.count || own.some((call) => call.label !== step.label))
-        return [...segments];
-      for (const call of own)
-        if (call.outcome) outcomes[call.outcome] = (outcomes[call.outcome] ?? 0) + 1;
-      const { outcomes: _previous, tool: _tool, calls: _calls, ...rest } = step;
-      // Calls are kept for a step only when every one of them was, all of the same tool.
-      const tool = own[0]?.tool;
-      const kept = own.flatMap((call) => (call.call ? [call.call] : []));
-      const replayable =
-        tool !== undefined &&
-        next <= TOOL_STEP_CALLS_KEPT &&
-        kept.length === step.count &&
-        own.every((call) => call.tool === tool);
-      steps.push({
-        ...rest,
-        ...(replayable ? { tool, calls: kept } : {}),
-        ...(Object.keys(outcomes).length > 0 ? { outcomes } : {}),
-      });
-    }
-    annotated.push({ ...block, steps });
-  }
-  return annotated;
-}
-
-/** Calls a reply keeps arguments and results for; a later turn replays no more than these. */
-export const TOOL_STEP_CALLS_KEPT = 40;
-
-/**
- * Splits a reply's kept tool calls off its blocks: the blocks keep only what the UI shows, and
- * the history (one entry per step, in order) is stored beside the message for later runs.
- * Every message write goes through this, so no tool output reaches a client in the blocks.
- */
-export function splitToolHistory(blocks: readonly MessageBlock[]): {
-  blocks: MessageBlock[];
-  toolHistory: ToolHistory | undefined;
-} {
-  const steps: ToolHistory["steps"] = [];
-  const shown = blocks.map((block): MessageBlock => {
-    if (block.kind !== "steps") return block;
-    return {
-      ...block,
-      steps: (block.steps as HistoryToolStep[]).map(({ tool, calls, ...step }) => {
-        steps.push(tool && calls?.length ? { tool, calls } : null);
-        return step;
-      }),
-    };
-  });
-  return { blocks: shown, toolHistory: steps.some(Boolean) ? { steps } : undefined };
-}
-
-/** The message's steps with the tool and calls its stored history keeps for them, for replay. */
-export function withToolHistory(
-  blocks: readonly MessageBlock[],
-  history: ToolHistory | undefined,
-): MessageBlock[] {
-  if (!history) return [...blocks];
-  let index = 0;
-  return blocks.map((block) =>
-    block.kind === "steps"
-      ? {
-          ...block,
-          steps: block.steps.map((step): HistoryToolStep => {
-            const kept = history.steps[index++];
-            return kept ? { ...step, tool: kept.tool, calls: kept.calls } : step;
-          }),
-        }
-      : block,
-  );
-}
-
-export function appendToolStep(
-  steps: readonly ToolStep[],
-  toolName: string,
-  detail?: string,
-): ToolStep[] {
-  const label = humanizeToolName(toolName);
-  const normalizedDetail = detail?.trim() || undefined;
-  const last = steps.at(-1);
-  if (last && last.label === label && (last.detail ?? undefined) === normalizedDetail) {
-    return [...steps.slice(0, -1), { ...last, count: last.count + 1 }];
-  }
-  return [...steps, { label, count: 1, ...(normalizedDetail ? { detail: normalizedDetail } : {}) }];
-}
-
-/** Puts a note on the newest step, splitting it off a run of the same step so it stays in order. */
-export function noteLastToolStep(segments: readonly MessageBlock[], note: string): MessageBlock[] {
-  const index = segments.findLastIndex((block) => block.kind === "steps");
-  const block = segments[index];
-  const last = block?.kind === "steps" ? block.steps.at(-1) : undefined;
-  if (block?.kind !== "steps" || !last) return [...segments];
-  const steps = block.steps.slice(0, -1);
-  if (last.count > 1)
-    steps.push(
-      { ...last, count: last.count - 1 },
-      { label: last.label, count: 1, ...(last.detail ? { detail: last.detail } : {}), note },
-    );
-  else steps.push({ ...last, note: last.note ? `${last.note}\n\n${note}` : note });
-  const next = [...segments];
-  next[index] = { ...block, steps };
-  return next;
-}
-
-/** Removes the newest `count` notes from the steps. */
-export function withoutLastToolStepNotes(
-  segments: readonly MessageBlock[],
-  count: number,
-): MessageBlock[] {
-  let left = count;
-  const next = [...segments];
-  for (let index = next.length - 1; index >= 0 && left > 0; index -= 1) {
-    const block = next[index];
-    if (block?.kind !== "steps") continue;
-    const steps = [...block.steps];
-    for (let step = steps.length - 1; step >= 0 && left > 0; step -= 1) {
-      const { note, ...rest } = steps[step]!;
-      if (note === undefined) continue;
-      steps[step] = rest;
-      left -= 1;
-    }
-    next[index] = { ...block, steps };
-  }
-  return next;
 }
 
 /** `shape` is the call with the digits in its text arguments blanked, so `echo n-1`, `echo n-2` match. */
@@ -659,43 +481,6 @@ export function trackToolNameStreak(streak: ToolNameStreak, name: string): ToolN
   return name === streak.name ? { name, count: streak.count + 1 } : { name, count: 1 };
 }
 
-const SENTENCE_END_RE = /[.!?]["'”’)\]]*\s*$/;
-
-/** True once `text` ends at a sentence boundary (or is empty) — safe to flush without cutting a clause. */
-export function endsSentence(text: string): boolean {
-  return text.trim() === "" || SENTENCE_END_RE.test(text);
-}
-
-export function appendTextSegment(segments: readonly MessageBlock[], text: string): MessageBlock[] {
-  if (!text) return [...segments];
-  const last = segments.at(-1);
-  if (last?.kind === "text") {
-    return [...segments.slice(0, -1), { kind: "text", text: last.text + text }];
-  }
-  return [...segments, { kind: "text", text }];
-}
-
-export function appendToolCallSegment(
-  segments: readonly MessageBlock[],
-  toolName: string,
-  detail?: string,
-): MessageBlock[] {
-  const last = segments.at(-1);
-  const priorSteps = last?.kind === "steps" ? last.steps : [];
-  const steps = appendToolStep(priorSteps, toolName, detail);
-  if (last?.kind === "steps") {
-    return [...segments.slice(0, -1), { kind: "steps", steps }];
-  }
-  return [...segments, { kind: "steps", steps }];
-}
-
-export function humanizeToolName(name: string): string {
-  const spaced = name.replace(/_/g, " ").trim();
-  if (!spaced) return name;
-  const lower = spaced.toLowerCase();
-  return lower.charAt(0).toUpperCase() + lower.slice(1);
-}
-
 /** "GMAIL_SEND_EMAIL" on Gmail's page reads as "Send email": the app is already the page title. */
 export function appToolLabel(name: string, appSlug: string): string {
   const prefix = `${appSlug}_`.toLowerCase();
@@ -705,15 +490,6 @@ export function appToolLabel(name: string, appSlug: string): string {
 /** Reverses humanizeToolName for a typed name; rules match tool names ignoring case. */
 export function toolNameFromLabel(label: string): string {
   return label.trim().replace(/\s+/g, "_");
-}
-
-export function progressMessageText(
-  payload: Record<string, unknown> | undefined,
-  previousText = "",
-): string {
-  return typeof payload?.delta === "string"
-    ? previousText + payload.delta
-    : String(payload?.text ?? "");
 }
 
 export function subagentBlockFromPayload(

@@ -1345,3 +1345,97 @@ describe("a reply's kept tool calls", () => {
     expect(splitToolHistory(shown).toolHistory).toBeUndefined();
   });
 });
+
+describe("timed live steps, cost, and checkpoint branches", () => {
+  it("tracks running steps, completion durations, usage cost, and attempt branches", () => {
+    let blocks = appendToolCallSegment([], "shell", "pnpm test", { startedAtMs: 1_000, attempt: 1 });
+    expect(blocks).toEqual([
+      {
+        kind: "steps",
+        steps: [
+          {
+            label: "Shell",
+            count: 1,
+            detail: "pnpm test",
+            startedAtMs: 1_000,
+            attempt: 1,
+            status: "running",
+          },
+        ],
+      },
+    ]);
+
+    blocks = reduceLiveMessageBlocks(blocks, {
+      type: "tool_completed",
+      name: "shell",
+      durationMs: 1_450,
+      outcome: "succeeded",
+    });
+    blocks = appendToolCallSegment(blocks, "shell", "pnpm test", {
+      startedAtMs: 3_000,
+      attempt: 2,
+      forkedFromStep: 0,
+    });
+    expect(blocks).toEqual([
+      {
+        kind: "steps",
+        attempts: 2,
+        steps: [
+          {
+            label: "Shell",
+            count: 1,
+            detail: "pnpm test",
+            startedAtMs: 1_000,
+            durationMs: 1_450,
+            attempt: 1,
+            status: "done",
+          },
+          {
+            label: "Shell",
+            count: 1,
+            detail: "pnpm test",
+            startedAtMs: 3_000,
+            attempt: 2,
+            forkedFromStep: 0,
+            status: "running",
+          },
+        ],
+      },
+    ]);
+
+    blocks = reduceLiveMessageBlocks(blocks, { type: "usage", costUsd: 0.042 });
+    expect(
+      withToolStepOutcomes(blocks, [
+        { label: "Shell", outcome: "succeeded", durationMs: 900, startedAtMs: 3_000 },
+      ]),
+    ).toEqual([
+      {
+        kind: "steps",
+        attempts: 2,
+        costUsd: 0.042,
+        steps: [
+          {
+            label: "Shell",
+            count: 1,
+            detail: "pnpm test",
+            startedAtMs: 1_000,
+            durationMs: 1_450,
+            attempt: 1,
+            status: "done",
+          },
+          {
+            label: "Shell",
+            count: 1,
+            detail: "pnpm test",
+            startedAtMs: 3_000,
+            durationMs: 900,
+            attempt: 2,
+            forkedFromStep: 0,
+            status: "done",
+            outcomes: { succeeded: 1 },
+          },
+        ],
+      },
+    ]);
+  });
+});

@@ -5,6 +5,7 @@ import type {
   BotAvatarSet,
   ComputerReleaseReason,
   LoginFieldInput,
+  MessageBlock,
   MessageReaction,
   ThreadMessage,
 } from "@rakazo/contracts";
@@ -40,6 +41,8 @@ import {
 } from "react";
 import { ActiveBotGlyph } from "../../../components/ai/CollaborationMarker";
 import { VoiceChatCard } from "../../../components/call/VoiceChatCard";
+import type { ActivityRunMeta } from "../../../components/messages/ActivityPanel";
+import { LiveRunMonitorCard } from "../../../components/messages/ActivityPanel";
 import type { HelperThreadTarget } from "../../../lib/chat/helper-thread";
 import {
   isDetachedRange,
@@ -73,6 +76,17 @@ export function bubbleFrameWidth(role: ThreadMessage["role"]) {
 /** Rows drawn in the frame a chat opens; the rest mount right after without blocking input. */
 const FIRST_FRAME_ROWS = 20;
 
+export type TranscriptRunSummary = {
+  id: string;
+  botId?: string;
+  modelId?: string | null;
+  modelProvider?: string | null;
+  costUsd?: number | null;
+  startedAt?: string | null;
+  status?: string;
+  routineName?: string | null;
+};
+
 export const Transcript = memo(function Transcript({
   scrollRef,
   scrollRequest,
@@ -90,7 +104,11 @@ export const Transcript = memo(function Transcript({
   running,
   workingBots,
   workingRoutine,
+  activeRun,
+  threadRuns,
   userBubble,
+  onStop,
+  onRewind,
   onCallBack,
   onLoadOlder,
   onOpenBot,
@@ -136,8 +154,18 @@ export const Transcript = memo(function Transcript({
   running: boolean;
   workingBots: GroupAvatarMember[];
   workingRoutine?: string;
+  activeRun?: TranscriptRunSummary | null;
+  threadRuns?: readonly TranscriptRunSummary[];
   /** Your bubbles take the bot's color in its own chat. */
   userBubble?: { background: string; foreground: string };
+  onStop?: () => void;
+  onRewind?: (input: {
+    messageId: string;
+    runId?: string;
+    stepIndex: number;
+    stepLabel?: string;
+    stepDetail?: string;
+  }) => Promise<void> | void;
   /** Calls the bot back from a missed call in the transcript. */
   onCallBack?: () => void;
   onLoadOlder: () => void | Promise<void>;
@@ -195,6 +223,9 @@ export const Transcript = memo(function Transcript({
   const [expandedPeerMarkers, setExpandedPeerMarkers] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
+  const [liveStepsCache, setLiveStepsCache] = useState<
+    ReadonlyMap<string, Extract<MessageBlock, { kind: "steps" }>>
+  >(() => new Map());
   // A jump to a folded reply expands its marker; the scroll effect below then finds the row.
   useLayoutEffect(() => {
     const markerId = scrollRequest && transcript.markerOf.get(scrollRequest.messageId);
@@ -207,6 +238,23 @@ export const Transcript = memo(function Transcript({
     () => expandPeerReplies(transcript, expandedPeerMarkers),
     [transcript, expandedPeerMarkers],
   );
+  useLayoutEffect(() => {
+    setLiveStepsCache((previous) => {
+      let updated: Map<string, Extract<MessageBlock, { kind: "steps" }>> | null = null;
+      for (const message of messages) {
+        if (!message.id.startsWith("progress:") || !message.runId) continue;
+        const latestSteps = message.blocks.findLast(
+          (block): block is Extract<MessageBlock, { kind: "steps" }> => block.kind === "steps",
+        );
+        if (!latestSteps) continue;
+        if (previous.get(message.runId) !== latestSteps) {
+          updated ??= new Map(previous);
+          updated.set(message.runId, latestSteps);
+        }
+      }
+      return updated ?? previous;
+    });
+  }, [messages]);
   const messageById = useMemo(
     () => new Map(messages.map((message) => [message.id, message])),
     [messages],
@@ -672,6 +720,32 @@ export const Transcript = memo(function Transcript({
           const message = item.message;
           const peerReceipt = isPeerReceiptBlocks(message.blocks);
           const messageReactions = reactionView.reactions.get(message.id);
+          const msgRun = message.runId
+            ? (threadRuns?.find((candidate) => candidate.id === message.runId) ??
+              (activeRun?.id === message.runId ? activeRun : undefined))
+            : message.id.startsWith("progress:")
+              ? (activeRun ?? undefined)
+              : undefined;
+          const msgRunMeta: ActivityRunMeta | undefined =
+            msgRun || (message.id.startsWith("progress:") && workingBots[0])
+              ? {
+                  runId: msgRun?.id ?? message.runId ?? undefined,
+                  botId: message.botId ?? msgRun?.botId ?? workingBots[0]?.botId,
+                  botName:
+                    (message.botId
+                      ? (memberName?.(message.botId) ?? peerBot(message.botId)?.name)
+                      : undefined) ?? workingBots[0]?.name,
+                  botColor:
+                    (message.botId ? peerBot(message.botId)?.color : undefined) ??
+                    workingBots[0]?.color,
+                  modelId: msgRun?.modelId,
+                  modelProvider: msgRun?.modelProvider,
+                  costUsd: msgRun?.costUsd,
+                  startedAt: msgRun?.startedAt,
+                  status: msgRun?.status,
+                  routineName: msgRun?.routineName ?? workingRoutine,
+                }
+              : undefined;
           return (
             <Fragment key={message.id}>
               {separatorIds.has(message.id) ? (
@@ -760,6 +834,10 @@ export const Transcript = memo(function Transcript({
                       onOpenImportSetup={onOpenImportSetup}
                       rpc={rpc}
                       showToolActivity={showToolActivity}
+                      runMeta={msgRunMeta}
+                      cachedSteps={message.runId ? liveStepsCache.get(message.runId) : undefined}
+                      onStop={onStop}
+                      onRewind={onRewind}
                       onReply={onReply}
                       onMarkUnread={onMarkUnread}
                       onReact={onReact}
@@ -793,7 +871,32 @@ export const Transcript = memo(function Transcript({
         !messages.some(
           (message) => message.id.startsWith("progress:") && liveMessageComposing(message.blocks),
         ) ? (
-          <ActiveBotGlyph bots={workingBots} label={workingLabel} />
+          showToolActivity ? (
+            !messages.some(
+              (message) =>
+                message.id.startsWith("progress:") &&
+                message.blocks.some((block) => block.kind === "steps" || block.kind === "thinking"),
+            ) ? (
+              <LiveRunMonitorCard
+                label={workingLabel}
+                runMeta={{
+                  runId: activeRun?.id,
+                  botId: activeRun?.botId ?? workingBots[0]?.botId,
+                  botName: workingBots[0]?.name,
+                  botColor: workingBots[0]?.color,
+                  modelId: activeRun?.modelId,
+                  modelProvider: activeRun?.modelProvider,
+                  costUsd: activeRun?.costUsd,
+                  startedAt: activeRun?.startedAt,
+                  status: activeRun?.status ?? "running",
+                  routineName: activeRun?.routineName ?? workingRoutine,
+                }}
+                onStop={onStop}
+              />
+            ) : null
+          ) : (
+            <ActiveBotGlyph bots={workingBots} label={workingLabel} />
+          )
         ) : null}
       </div>
       {quoteDraft ? <QuoteSelectionButton range={quoteDraft.range} onQuote={applyQuote} /> : null}

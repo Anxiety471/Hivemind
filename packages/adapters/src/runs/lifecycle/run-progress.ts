@@ -14,6 +14,7 @@ import {
 } from "@rakazo/core";
 import type { Run } from "@rakazo/db";
 import { RunHistoryWriteError, storedMessageBlocks } from "@rakazo/db";
+import { bestEffort } from "@rakazo/logging";
 import { USER_COMPUTER_SCREEN_TOOLS } from "../../computers/host/user-computer-tools.js";
 import { IMAGE_RETURNING_COMPUTER_TOOLS } from "../../models/model-vision.js";
 import type { ReplyState, RunContext, ThinkingSegmentState } from "../assembly/run-context.js";
@@ -45,6 +46,7 @@ export async function createReplyState(
   deps: ExecutorDeps,
   run: Run,
   secrets: string[],
+  sourceMessage?: { id?: string; blocks?: unknown } | null,
 ): Promise<ReplyState> {
   const reply: ReplyState = {
     assembled: "",
@@ -70,9 +72,13 @@ export async function createReplyState(
     narrationStatusShowing: false,
     pendingToolNames: [],
     pendingToolDetails: [],
+    pendingToolTimings: [],
     toolCalls: [],
+    toolTimings: new Map(),
     toolOutcomes: new Map(),
     toolStepCalls: new Map(),
+    costUsd: 0,
+    attempt: 1,
     keptResultChars: 0,
     pendingProgress: "",
     lastProgressAt: 0,
@@ -82,6 +88,26 @@ export async function createReplyState(
     thinkingRedactor: createStreamingRedactor(secrets),
     redactor: createStreamingRedactor(secrets),
   };
+  if (sourceMessage?.blocks !== undefined) {
+    const blocks = storedMessageBlocks({
+      id: sourceMessage.id ?? run.sourceMessageId ?? run.id,
+      blocks: sourceMessage.blocks,
+    });
+    const hasDelivery = blocks.some((block) => block.kind === "delivery");
+    const seedSteps = hasDelivery
+      ? blocks.findLast(
+          (block): block is Extract<MessageBlock, { kind: "steps" }> =>
+            block.kind === "steps" && (block.attempts ?? 1) > 1,
+        )
+      : undefined;
+    if (seedSteps) {
+      reply.messageSegments = [seedSteps];
+      reply.attempt = seedSteps.attempts ?? 1;
+      reply.costUsd = seedSteps.costUsd ?? 0;
+      const firstStopped = seedSteps.steps.findIndex((step) => step.status === "stopped");
+      reply.pendingForkFromStep = firstStopped > 0 ? firstStopped - 1 : 0;
+    }
+  }
   const priorProgress = await deps.prisma.message.findMany({
     where: { runId: run.id, role: "bot" },
     orderBy: { seq: "asc" },
@@ -190,10 +216,36 @@ export function flushPendingTools(reply: ReplyState) {
       reply.messageSegments,
       reply.pendingToolNames[index]!,
       reply.pendingToolDetails?.[index] ?? undefined,
+      reply.pendingToolTimings?.[index] ?? undefined,
     );
   }
   reply.pendingToolNames = [];
   reply.pendingToolDetails = [];
+  reply.pendingToolTimings = [];
+}
+
+/** Records live USD billing onto the reply and publishes a non-fatal live usage event. */
+export async function recordLiveRunUsage(ctx: RunContext, costUsd: number | null | undefined) {
+  if (typeof costUsd !== "number" || !Number.isFinite(costUsd) || costUsd < 0) return;
+  const { deps, run, runId, bot, thread } = ctx;
+  const { reply } = ctx.state;
+  reply.costUsd = (reply.costUsd ?? 0) + costUsd;
+  if (ctx.scripted || isBackgroundRunTrigger(run.trigger)) return;
+  await bestEffort(
+    "append live usage.recorded event",
+    deps.events
+      .append({
+        spaceId: run.spaceId,
+        threadId: thread.id,
+        botId: bot.id,
+        runId,
+        type: "usage.recorded",
+        payload: { costUsd, runCostUsd: reply.costUsd },
+      })
+      .catch((error: unknown) => {
+        if (!(error instanceof RunHistoryWriteError)) throw error;
+      }),
+  );
 }
 
 /**
@@ -206,12 +258,17 @@ export function withReplyToolOutcomes(
 ): MessageBlock[] {
   return withToolStepOutcomes(
     reply.messageSegments,
-    reply.toolCalls.map(({ label, executionId, tool }) => ({
-      label,
-      outcome: reply.toolOutcomes.get(executionId) ?? unfinished,
-      tool,
-      call: reply.toolStepCalls.get(executionId),
-    })),
+    reply.toolCalls.map(({ label, executionId, tool }) => {
+      const timing = reply.toolTimings?.get(executionId);
+      return {
+        label,
+        outcome: reply.toolOutcomes.get(executionId) ?? unfinished,
+        tool,
+        call: reply.toolStepCalls.get(executionId),
+        ...(timing?.durationMs !== undefined ? { durationMs: timing.durationMs } : {}),
+        ...(timing?.startedAtMs !== undefined ? { startedAtMs: timing.startedAtMs } : {}),
+      };
+    }),
   );
 }
 

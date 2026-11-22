@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"math"
 	"slices"
 	"time"
 
@@ -43,7 +44,7 @@ var (
 	}
 	liveEventTypes = []string{
 		"thread.progress", "thread.thinking", "thread.subagent", "run.waiting_input",
-		"computer.takeover.requested", "agent.tool.called", "agent.tool.completed",
+		"run.checkpointed", "computer.takeover.requested", "agent.tool.called", "agent.tool.completed", "usage.recorded",
 	}
 )
 
@@ -174,6 +175,11 @@ func (s snapshotReader) bot(actor db.Actor, botID string) (map[string]any, error
 	if err != nil {
 		return nil, err
 	}
+	costs, err := s.runCosts(collectRunIDs(activeRuns, current))
+	if err != nil {
+		return nil, err
+	}
+	applyRunCosts(activeRuns, current, costs)
 	run, err := optionalRun(current, withRoutine)
 	if err != nil {
 		return nil, err
@@ -278,6 +284,11 @@ func (s snapshotReader) group(actor db.Actor, groupID string) (map[string]any, e
 	} else if primary := pickPrimaryActiveRun(activeRuns); primary != nil {
 		current, withRoutine = primary, true
 	}
+	costs, err := s.runCosts(collectRunIDs(activeRuns, current))
+	if err != nil {
+		return nil, err
+	}
+	applyRunCosts(activeRuns, current, costs)
 	run, err := optionalRun(current, withRoutine)
 	if err != nil {
 		return nil, err
@@ -337,8 +348,62 @@ type runRow struct {
 	ID, UserID, BotID, ThreadID, TaskID, Status, Trigger string
 	RoutineID, RoutineName                               *string
 	ModelProvider, ModelID, Error                        *string
+	CostUSD                                              *float64
 	StartedAt, CompletedAt                               *time.Time
 	CreatedAt, UpdatedAt                                 time.Time
+}
+
+func collectRunIDs(runs []runRow, extra *runRow) []string {
+	seen := map[string]bool{}
+	var ids []string
+	for _, run := range runs {
+		if run.ID != "" && !seen[run.ID] {
+			seen[run.ID] = true
+			ids = append(ids, run.ID)
+		}
+	}
+	if extra != nil && extra.ID != "" && !seen[extra.ID] {
+		ids = append(ids, extra.ID)
+	}
+	return ids
+}
+
+func (s snapshotReader) runCosts(runIDs []string) (map[string]float64, error) {
+	costs := map[string]float64{}
+	if len(runIDs) == 0 {
+		return costs, nil
+	}
+	rows, err := s.tx.Query(s.ctx, `SELECT "runId", SUM("costUsd")::double precision FROM usage_records WHERE "runId" = ANY($1) GROUP BY "runId"`, runIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var runID *string
+		var sum *float64
+		if err := rows.Scan(&runID, &sum); err != nil {
+			return nil, err
+		}
+		if runID != nil && sum != nil && !math.IsNaN(*sum) && !math.IsInf(*sum, 0) && *sum >= 0 {
+			costs[*runID] = *sum
+		}
+	}
+	return costs, rows.Err()
+}
+
+func applyRunCosts(runs []runRow, extra *runRow, costs map[string]float64) {
+	for index := range runs {
+		if cost, ok := costs[runs[index].ID]; ok {
+			val := cost
+			runs[index].CostUSD = &val
+		}
+	}
+	if extra != nil {
+		if cost, ok := costs[extra.ID]; ok {
+			val := cost
+			extra.CostUSD = &val
+		}
+	}
 }
 
 // runs reads runs matching where (which may use alias r and the routine as ro).
@@ -506,6 +571,9 @@ func runView(run runRow, withRoutine bool) (map[string]any, bool) {
 	}
 	view["modelProvider"] = run.ModelProvider
 	view["modelId"] = run.ModelID
+	if run.CostUSD != nil {
+		view["costUsd"] = *run.CostUSD
+	}
 	// The same display clamp as live run.failed events, so a huge stored error cannot bypass it.
 	if run.Status == "failed" {
 		view["error"] = routines.RunFailureError(run.Status, run.Error)

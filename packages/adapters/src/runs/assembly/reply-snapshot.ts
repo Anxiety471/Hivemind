@@ -10,11 +10,33 @@ const ReplySnapshotSchema = z.object({
   messageSegments: z.array(MessageBlock),
   pendingToolNames: z.array(z.string()),
   pendingToolDetails: z.array(z.string().nullable()).optional(),
+  pendingToolTimings: z
+    .array(
+      z
+        .object({
+          startedAtMs: z.number().optional(),
+          attempt: z.number().optional(),
+          forkedFromStep: z.number().optional(),
+        })
+        .nullable(),
+    )
+    .optional(),
   toolCalls: z.array(
     z.object({ label: z.string(), executionId: z.string(), tool: z.string().optional() }),
   ),
+  toolTimings: z
+    .array(
+      z.tuple([
+        z.string(),
+        z.object({ startedAtMs: z.number().optional(), durationMs: z.number().optional() }),
+      ]),
+    )
+    .optional(),
   toolOutcomes: z.array(z.tuple([z.string(), z.enum(["succeeded", "failed", "stopped"])])),
   toolStepCalls: z.array(z.tuple([z.string(), ToolStepCallSchema])),
+  costUsd: z.number().optional(),
+  attempt: z.number().optional(),
+  pendingForkFromStep: z.number().optional(),
   keptResultChars: z.number(),
   latestScreenshot: z
     .object({ executionId: z.string(), mimeType: z.string(), data: z.string() })
@@ -58,9 +80,20 @@ export function snapshotReply(reply: ReplyState): ReplySnapshot {
     ...(reply.pendingToolDetails.some(Boolean)
       ? { pendingToolDetails: reply.pendingToolDetails }
       : {}),
+    ...(reply.pendingToolTimings?.some(Boolean)
+      ? { pendingToolTimings: reply.pendingToolTimings }
+      : {}),
     toolCalls: reply.toolCalls,
+    ...(reply.toolTimings && reply.toolTimings.size > 0
+      ? { toolTimings: [...reply.toolTimings] }
+      : {}),
     toolOutcomes: [...reply.toolOutcomes],
     toolStepCalls: [...reply.toolStepCalls],
+    ...(reply.costUsd ? { costUsd: reply.costUsd } : {}),
+    ...(reply.attempt && reply.attempt > 1 ? { attempt: reply.attempt } : {}),
+    ...(reply.pendingForkFromStep !== undefined
+      ? { pendingForkFromStep: reply.pendingForkFromStep }
+      : {}),
     keptResultChars: reply.keptResultChars,
     ...(shot && {
       latestScreenshot: {
@@ -111,11 +144,15 @@ export function restoreReply(reply: ReplyState, saved: unknown, runId: string): 
     toolOutcomes,
     toolStepCalls,
     pendingToolDetails,
+    pendingToolTimings,
+    toolTimings,
     version: _,
     ...rest
   } = parsed.data;
   Object.assign(reply, rest);
   reply.pendingToolDetails = pendingToolDetails ?? rest.pendingToolNames.map(() => null);
+  reply.pendingToolTimings = pendingToolTimings ?? rest.pendingToolNames.map(() => null);
+  reply.toolTimings = new Map(toolTimings ?? []);
   reply.toolOutcomes = new Map(toolOutcomes);
   reply.toolStepCalls = new Map(toolStepCalls);
   const mimeType = latestScreenshot && storedImageMimeType(latestScreenshot.mimeType);

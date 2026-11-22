@@ -218,6 +218,17 @@ export const MessageBlock = z.discriminatedUnion("kind", [
     activity: z.literal(true).optional(),
     pendingToolNames: z.array(z.string()).optional(),
     pendingToolDetails: z.array(z.string().nullable()).optional(),
+    pendingToolTimings: z
+      .array(
+        z
+          .object({
+            startedAtMs: z.number().int().nonnegative().optional(),
+            attempt: z.number().int().positive().optional(),
+            forkedFromStep: z.number().int().nonnegative().optional(),
+          })
+          .nullable(),
+      )
+      .optional(),
   }),
   z.object({
     /** The reasoning a model streamed before answering, kept to its first few lines. */
@@ -236,6 +247,16 @@ export const MessageBlock = z.discriminatedUnion("kind", [
         detail: z.string().optional(),
         /** What the bot wrote just before this step, kept out of its reply. */
         note: z.string().optional(),
+        /** Elapsed duration of this step in milliseconds. */
+        durationMs: z.number().int().nonnegative().optional(),
+        /** Epoch timestamp (ms) when this step began executing. */
+        startedAtMs: z.number().int().nonnegative().optional(),
+        /** Attempt number (1-indexed) this step belongs to after one or more rewinds. */
+        attempt: z.number().int().positive().optional(),
+        /** Index of the step in the timeline where this retry branch forked off. */
+        forkedFromStep: z.number().int().nonnegative().optional(),
+        /** Live execution state for this step. */
+        status: z.enum(["running", "done", "failed", "stopped"]).optional(),
         /** How many of this step's calls succeeded, failed, or were stopped before finishing. */
         outcomes: z
           .object({
@@ -247,6 +268,16 @@ export const MessageBlock = z.discriminatedUnion("kind", [
       }),
     ),
     durationMs: z.number().int().nonnegative().optional(),
+    /** Accumulated run cost in USD across billed turns for this steps block. */
+    costUsd: z.number().nonnegative().optional(),
+    /** Effective model identifier used for the run. */
+    modelId: z.string().optional(),
+    /** Provider id for the run's active model (for display labeling). */
+    modelProvider: z.string().optional(),
+    /** Highest attempt number reached across checkpoint rewinds for this run. */
+    attempts: z.number().int().positive().optional(),
+    /** Terminal run outcome recorded on the steps block. */
+    status: z.enum(["completed", "stopped", "failed"]).optional(),
   }),
   z.object({
     kind: z.literal("subagent"),

@@ -130,7 +130,7 @@ export async function createRunContext(
     trustLoaders,
   } = parts.tools;
   const { hostEnvironment } = parts.computerInstructions;
-  const reply = await createReplyState(deps, run, runSecrets);
+  const reply = await createReplyState(deps, run, runSecrets, sourceMessage);
   const script = scripted ? inferScript(task.prompt, takeoverResume?.checkpoint) : undefined;
   const state: RunState = {
     lease,

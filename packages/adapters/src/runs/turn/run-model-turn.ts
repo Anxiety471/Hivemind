@@ -1,7 +1,8 @@
 import type { AgentRunRequest } from "@rakazo/adapter-kit";
+import type { MessageBlock } from "@rakazo/contracts";
 import { BACKGROUND_HELPER_TRIGGER, redactSecrets } from "@rakazo/core";
-import { isDatabaseUnavailable, recordUsage } from "@rakazo/db";
-import { getLogger } from "@rakazo/logging";
+import { isDatabaseUnavailable, RunHistoryWriteError, recordUsage } from "@rakazo/db";
+import { bestEffort, getLogger } from "@rakazo/logging";
 import { isStrategicInitiativeRun } from "../../routines/strategic-initiative.js";
 import { personSpeaker } from "../../runtime/context/history-speakers.js";
 import { backgroundHelpersAllowed } from "../../tasks/background-helpers.js";
@@ -20,6 +21,7 @@ import {
 import type { RunExecutorServices, RunHold } from "../lifecycle/run-attempt.js";
 import { completeRun } from "../lifecycle/run-complete.js";
 import { failRun, handoffEndedTurn, requeueRunAfterDatabaseOutage } from "../lifecycle/run-fail.js";
+import { recordLiveRunUsage } from "../lifecycle/run-progress.js";
 import { followUpsOffered, offeredFleetTools } from "../tools/run-tool-selection.js";
 import { applyTool } from "../tools/run-tools.js";
 import { consumeRunEvents } from "./run-turn.js";
@@ -61,6 +63,36 @@ export async function runModelTurn(
         }),
       )
       .catch((error: unknown) => getLogger().warn("run.prompt_version_failed", { error }));
+    if ((state.reply.attempt ?? 1) > 1) {
+      const checkpointBlock = state.reply.messageSegments.findLast(
+        (block): block is Extract<MessageBlock, { kind: "steps" }> => block.kind === "steps",
+      );
+      if (checkpointBlock) {
+        await bestEffort(
+          "append run.checkpointed event",
+          deps.events
+            .append({
+              spaceId: ctx.run.spaceId,
+              threadId: ctx.thread.id,
+              botId: ctx.bot.id,
+              runId,
+              type: "run.checkpointed",
+              payload: {
+                steps: checkpointBlock.steps,
+                attempts: state.reply.attempt,
+                ...(state.reply.costUsd ? { costUsd: state.reply.costUsd } : {}),
+                ...(checkpointBlock.modelId ? { modelId: checkpointBlock.modelId } : {}),
+                ...(checkpointBlock.modelProvider
+                  ? { modelProvider: checkpointBlock.modelProvider }
+                  : {}),
+              },
+            })
+            .catch((error: unknown) => {
+              if (!(error instanceof RunHistoryWriteError)) throw error;
+            }),
+        );
+      }
+    }
     const runtimeEvents = deps.runtime.run(modelTurnRequest(services, hold, turn), {
       ...context,
       signal: AbortSignal.any([context.signal, ctx.runtimeAbortController.signal]),
@@ -171,6 +203,7 @@ function modelTurnRequest(
         parentRunId: runId,
         operationId: runId,
       });
+      await recordLiveRunUsage(ctx, event.costUsd);
     },
     prompt,
     ...(speakers &&
@@ -329,6 +362,13 @@ function modelTurnRequest(
       if (!completion.paused) effects.pendingTurnCheckpoints.delete(completion.executionId);
       const outcome = toolCompletionOutcome(completion);
       if (outcome) state.reply.toolOutcomes.set(completion.executionId, outcome);
+      if (Number.isFinite(completion.durationMs) && completion.durationMs >= 0) {
+        state.reply.toolTimings ??= new Map();
+        state.reply.toolTimings.set(completion.executionId, {
+          ...state.reply.toolTimings.get(completion.executionId),
+          durationMs: Math.round(completion.durationMs),
+        });
+      }
       keepToolStepResult(state.reply, completion, runSecrets);
       const audited = appendToolCompletionAudit(
         deps,

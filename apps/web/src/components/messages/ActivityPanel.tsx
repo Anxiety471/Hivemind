@@ -1,276 +1,80 @@
+import "./activity/monitor-animations.css";
 import { Plural, Trans, useLingui } from "@lingui/react/macro";
-import { ChatMarkdown } from "@rakazo/chat-ui/web";
-import type { MessageBlock, ThreadMessage } from "@rakazo/contracts";
-import { formatCompactDuration } from "@rakazo/core";
+import { useNow } from "@rakazo/chat-ui/hooks";
+import type { LoginFieldInput, MessageBlock, ThreadMessage } from "@rakazo/contracts";
+import { BotAvatar, Button, cn, DEFAULT_BOT_AVATAR_COLOR, Kbd } from "@rakazo/ui-web";
+import { ChevronDown, ExternalLink, Minimize2, Square } from "lucide-react";
+import { lazy, Suspense, useRef, useState } from "react";
+import type { CheckpointNode } from "../../lib/chat/checkpoint-graph";
 import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@rakazo/ui-web/components/ui/collapsible";
-import { ChevronDown, ChevronRight } from "lucide-react";
-import { Fragment } from "react";
-import type { ActivitySummaryKind, StepActionKind } from "../../lib/chat/tool-activity-view";
+  buildCheckpointGraph,
+  formatClockDuration,
+  formatModelTitle,
+  stepCategory,
+} from "../../lib/chat/checkpoint-graph";
+import type { ActivitySummaryKind } from "../../lib/chat/tool-activity-view";
 import {
   activityBlocks,
   activityDurationMs,
   activityStepCount,
   activitySummaryParts,
   latestActivity,
-  stepDisplayInfo,
 } from "../../lib/chat/tool-activity-view";
+import { useEventListener } from "../../lib/use-event-listener";
+import { isEditableTarget } from "../../pages/shell/shell-shortcuts";
+import { Shimmer } from "../ai/primitives";
+import { CheckpointTimeline } from "./activity/CheckpointTimeline";
+import { CollapsedMonitorPill } from "./activity/CollapsedMonitorPill";
+import { OdometerCost } from "./activity/OdometerCost";
+import { StepInspectorPopover } from "./activity/StepInspectorPopover";
+import { StepCategoryName, StepIconPlate } from "./activity/step-icons";
+
+const RunLogSheet = lazy(() => import("./activity/RunLogSheet"));
 
 type ToolStep = Extract<ThreadMessage["blocks"][number], { kind: "steps" }>["steps"][number];
+type StepsBlock = Extract<MessageBlock, { kind: "steps" }>;
 
-/** While a run is live, only the most recent tool rows are listed so a long run does not push the chat down. */
+/** While a run is live, keep enough steps visible cleanly before scrolling inside the card. */
 export const LIVE_TOOL_STEP_WINDOW = 6;
 
-type ActivityRow =
-  | { kind: "thinking"; key: string; lines: string[]; durationMs: number }
-  | { kind: "step"; key: string; step: ToolStep; current: boolean };
-
-/** One flat list of what the bot did, in the order it did it: each reasoning segment, then each tool call. */
-function activityRows(blocks: readonly MessageBlock[], live: boolean): ActivityRow[] {
-  const rows: ActivityRow[] = [];
-  for (const block of activityBlocks(blocks)) {
-    if (block.kind === "thinking") {
-      const lines = block.lines.filter((line) => line.trim().length > 0);
-      if (lines.length > 0) {
-        rows.push({
-          kind: "thinking",
-          key: `thinking:${rows.length}`,
-          lines,
-          durationMs: block.durationMs,
-        });
-      }
-      continue;
-    }
-    for (const step of block.steps) {
-      rows.push({ kind: "step", key: `step:${rows.length}`, step, current: false });
-    }
-  }
-  if (!live) return rows;
-  const lastStepIndex = rows.findLastIndex((row) => row.kind === "step");
-  const lastStep = rows[lastStepIndex];
-  if (lastStep?.kind === "step") rows[lastStepIndex] = { ...lastStep, current: true };
-  return rows;
+export interface ActivityRunMeta {
+  runId?: string;
+  botId?: string;
+  botName?: string;
+  botColor?: string;
+  modelId?: string | null;
+  modelProvider?: string | null;
+  costUsd?: number | null;
+  startedAt?: string | null;
+  status?: string;
+  routineName?: string | null;
+  label?: string;
 }
 
-const URL_TEXT_RE = /(https?:\/\/[^\s]+)/g;
-
-/** A row's one-line detail, with any URL underlined the way a fetched page reads. */
-function RowText({ text }: { text: string }) {
-  return (
-    <>
-      {text.split(URL_TEXT_RE).map((part, index) =>
-        index % 2 === 1 ? (
-          <span
-            key={index}
-            className="underline decoration-foreground/50 underline-offset-2 break-all"
-          >
-            {part}
-          </span>
-        ) : (
-          <Fragment key={index}>{part}</Fragment>
-        ),
-      )}
-    </>
-  );
+export interface PendingApprovalAction {
+  block: Extract<MessageBlock, { kind: "ask" }>;
+  canAnswer: boolean;
+  onAnswer: (text: string, fields?: LoginFieldInput[], remember?: false) => Promise<void>;
 }
 
-/**
- * One line for a reasoning segment: its first line, with the full lines on demand. The
- * duration is kept in the detail, so the row itself stays one quiet sentence.
- */
-function ThinkingRow({
-  lines,
-  durationMs,
-  newest,
-}: {
-  lines: string[];
-  durationMs: number;
-  /** The segment the live run is thinking right now; it starts open and folds once settled. */
-  newest: boolean;
-}) {
-  const summary = lines[0]!;
-  const duration = formatCompactDuration(durationMs);
-  const expandable = lines.length > 1;
-  const text = (
-    <span
-      className="min-w-0 truncate text-start text-body-sm text-muted-foreground"
-      title={lines.join("\n")}
-    >
-      {summary}
-    </span>
-  );
-  if (!expandable) {
-    return (
-      <div data-testid="thinking-row" className="flex min-w-0 items-center gap-1.5 px-3.5 py-2.5">
-        {text}
-      </div>
-    );
-  }
-  return (
-    <Collapsible
-      defaultOpen={newest}
-      data-testid="thinking-row"
-      className="group/row"
-      data-live={newest || undefined}
-    >
-      <CollapsibleTrigger
-        data-testid="thinking-trigger"
-        className="flex w-full min-w-0 cursor-pointer items-center gap-1.5 px-3.5 py-2.5 text-start transition-colors hover:bg-accent/35 focus-ring"
-      >
-        {text}
-        <ChevronRight
-          aria-hidden
-          size={13}
-          strokeWidth={1.75}
-          className="shrink-0 text-muted-foreground/70 transition-transform duration-150 group-data-open/row:rotate-90 motion-reduce:transition-none"
-        />
-      </CollapsibleTrigger>
-      <CollapsibleContent>
-        <div
-          data-testid="thinking-detail"
-          className="px-3.5 pb-3 text-body-sm text-muted-foreground"
-        >
-          {duration ? (
-            <div className="mb-1 text-label text-muted-foreground/70">
-              <Trans>Thought for {duration}</Trans>
-            </div>
-          ) : null}
-          <div className="space-y-1.5">
-            {lines.map((line, index) => (
-              <p key={index}>{line}</p>
-            ))}
-          </div>
-        </div>
-      </CollapsibleContent>
-    </Collapsible>
-  );
+export interface ActivityPanelProps {
+  /** The message's blocks; the panel picks the reasoning and steps out of them. */
+  blocks: readonly MessageBlock[];
+  live: boolean;
+  runMeta?: ActivityRunMeta;
+  pendingApproval?: PendingApprovalAction;
+  onStop?: () => void;
+  onRewind?: (stepIndex: number, step: ToolStep) => Promise<void> | void;
 }
 
-/** Localized muted verb for one tool row ("Read bend-lang.com", "Searched the web", "Wrote"). */
-function useStepActionLabel(action: StepActionKind): string {
-  const { t } = useLingui();
-  switch (action.kind) {
-    case "fetch":
-      return action.host ? t`Read ${action.host}` : t`Read page`;
-    case "search":
-      return t`Searched the web`;
-    case "read_file":
-      return action.hasTarget ? t`Read` : t`Read file`;
-    case "write_file":
-      return action.hasTarget ? t`Wrote` : t`Wrote file`;
-    case "edit_file":
-      return action.hasTarget ? t`Edited` : t`Edited file`;
-    case "list_files":
-      return action.hasTarget ? t`Listed` : t`Listed files`;
-    case "shell":
-      return action.hasTarget ? t`Ran` : t`Ran command`;
-    case "browser_navigate":
-      return action.host ? t`Opened ${action.host}` : t`Opened page`;
-    case "browser_snapshot":
-      return t`Inspected page`;
-    case "browser_act":
-      return t`Used browser`;
-    case "computer_observe":
-      return t`Viewed screen`;
-    case "computer_act":
-      return t`Used computer`;
-    case "attach_file":
-      return action.hasTarget ? t`Attached` : t`Attached file`;
-    case "open_path":
-      return action.hasTarget ? t`Opened` : t`Opened file`;
-    case "launch_app":
-      return action.hasTarget ? t`Launched` : t`Launched app`;
-    case "save_page":
-      return t`Saved page`;
-    case "search_history":
-      return t`Searched history`;
-    case "read_history":
-      return t`Read history`;
-    case "raw":
-      return action.label;
-  }
-}
-
-/**
- * One line for a tool call: its quiet verb, then the brighter thing it touched (the call's
- * target or the note written before it). Rows with a note or long target expand on click.
- */
-function StepRow({ step, current }: { step: ToolStep; current: boolean }) {
-  const { action, target, detail, note, expandable } = stepDisplayInfo(step);
-  const actionLabel = useStepActionLabel(action);
-  const content = (
-    <>
-      <span className="shrink-0 text-body-sm text-muted-foreground" title={step.label}>
-        {actionLabel}
-        {step.count > 1 ? ` ×${step.count}` : ""}
-      </span>
-      {target ? (
-        <span className="min-w-0 truncate text-body-sm text-foreground/90" title={detail ?? note}>
-          <RowText text={target} />
-        </span>
-      ) : null}
-    </>
-  );
-  const liveMark = current ? (
-    <span
-      aria-hidden
-      className="ms-auto shrink-0 text-label text-muted-foreground motion-safe:animate-[rkPulse_1.2s_ease-in-out_infinite]"
-    >
-      ◷
-    </span>
-  ) : null;
-  if (!expandable) {
-    return (
-      <div data-testid="activity-row" className="flex min-w-0 items-center gap-2 px-3.5 py-2.5">
-        {content}
-        {liveMark}
-      </div>
-    );
-  }
-  return (
-    <Collapsible data-testid="activity-row" className="group/row">
-      <CollapsibleTrigger
-        data-testid="activity-row-trigger"
-        className="flex w-full min-w-0 cursor-pointer items-center gap-2 px-3.5 py-2.5 text-start transition-colors hover:bg-accent/35 focus-ring"
-      >
-        {content}
-        <ChevronRight
-          aria-hidden
-          size={13}
-          strokeWidth={1.75}
-          className="shrink-0 text-muted-foreground/70 transition-transform duration-150 group-data-open/row:rotate-90 motion-reduce:transition-none"
-        />
-        {liveMark}
-      </CollapsibleTrigger>
-      <CollapsibleContent>
-        <div
-          data-testid="tool-step-note"
-          className="space-y-2 px-3.5 pb-3 text-body-sm text-muted-foreground"
-        >
-          {detail && (!note || detail !== target) ? (
-            <div className="break-words text-foreground/85">
-              <RowText text={detail} />
-            </div>
-          ) : null}
-          {note ? <ChatMarkdown>{note}</ChatMarkdown> : null}
-        </div>
-      </CollapsibleContent>
-    </Collapsible>
-  );
-}
-
-/** One counted action, said in words; the trigger capitalizes the first clause. */
 function SummaryClause({ kind, count }: { kind: ActivitySummaryKind; count: number }) {
   switch (kind) {
     case "pages":
       return <Plural value={count} one="read a page" other="read # pages" />;
     case "files":
-      return <Plural value={count} one="read a file" other="read # files" />;
+      return <Plural value={count} one="checked a file" other="checked # files" />;
     case "search":
-      return <Plural value={count} one="searched the web" other="searched the web # times" />;
+      return <Plural value={count} one="searched the web" other="searched # times" />;
     case "commands":
       return <Plural value={count} one="ran a command" other="ran # commands" />;
     case "writes":
@@ -284,130 +88,663 @@ function SummaryClause({ kind, count }: { kind: ActivitySummaryKind; count: numb
   }
 }
 
-/** One collapsible block for what a bot did before or while answering: the reasoning it
- * streamed and the tools it ran, as one flat list in the order they happened. Its trigger
- * summarizes recognized actions ("Read 2 pages, searched the web"), or falls back to the
- * newest line; it starts open while the run is live and folds when it ends.
- * The keyed default keeps manual toggles until the run changes phase.
- */
-export function ActivityPanel({
-  blocks,
-  live,
-}: {
-  /** The message's blocks; the panel picks the reasoning and steps out of them. */
-  blocks: readonly MessageBlock[];
-  live: boolean;
-}) {
-  const rows = activityRows(blocks, live);
-  const summary = activitySummaryParts(blocks);
-  const toolCount = activityStepCount(blocks);
-  const duration = live ? null : formatCompactDuration(activityDurationMs(blocks));
-  const latest = latestActivity(blocks);
-  // While live, the newest reasoning row stays open so a streaming thought is readable;
-  // a finished run folds every row back to its one-line summary.
-  const lastThinkingKey = rows.findLast((row) => row.kind === "thinking")?.key;
-  const stepIndexes = rows.flatMap((row, index) => (row.kind === "step" ? [index] : []));
-  const hiddenSteps = live ? Math.max(0, stepIndexes.length - LIVE_TOOL_STEP_WINDOW) : 0;
-  const hidden = new Set(stepIndexes.slice(0, hiddenSteps));
-  return (
-    <Collapsible
-      key={live ? "working" : "actions"}
-      defaultOpen={live}
-      data-testid="tool-activity"
-      data-live={live || undefined}
-      className="group w-full min-w-0"
-      dir="auto"
-    >
-      <CollapsibleTrigger
-        data-testid="activity-trigger"
-        className="flex min-h-6 w-fit max-w-full cursor-pointer list-none items-center gap-1.5 rounded-md text-body-sm font-normal text-muted-foreground transition-colors hover:text-foreground focus-ring"
-      >
-        <span className="min-w-0 truncate first-letter:uppercase" title={live ? latest : undefined}>
-          {summary.length > 0
-            ? summary.map((part, index) => (
-                <Fragment key={part.kind}>
-                  {index > 0 ? ", " : null}
-                  <SummaryClause kind={part.kind} count={part.count} />
-                </Fragment>
-              ))
-            : (latest ?? (live ? <Trans>Working…</Trans> : <Trans>Done</Trans>))}
-        </span>
-        {toolCount > 0 && summary.length === 0 ? (
-          <span className="shrink-0 text-muted-foreground">
-            {" · "}
-            <Plural value={toolCount} one="# tool" other="# tools" />
-          </span>
-        ) : null}
-        {duration ? <span className="shrink-0 text-muted-foreground"> · {duration}</span> : null}
-        <ChevronDown
-          aria-hidden
-          size={14}
-          strokeWidth={1.75}
-          className="-rotate-90 shrink-0 text-muted-foreground/80 transition-transform duration-150 group-data-open:rotate-0 motion-reduce:transition-none"
-        />
-      </CollapsibleTrigger>
-      {/* Folded rows stay unmounted: a long thread holds thousands of them, and mounting
-          them hidden (find-in-page) froze the transcript on open. */}
-      <CollapsibleContent>
-        <div
-          data-testid="tool-rows"
-          className="mt-2 divide-y divide-border overflow-hidden rounded-lg border border-border"
-        >
-          {hiddenSteps > 0 ? (
-            <div
-              data-testid="tool-rows-hidden"
-              className="px-3.5 py-2 text-label text-muted-foreground/70"
-            >
-              <Plural value={hiddenSteps} one="+# earlier step" other="+# earlier steps" />
-            </div>
-          ) : null}
-          {rows.map((row, index) => {
-            if (hidden.has(index)) return null;
-            if (row.kind === "step") {
-              return <StepRow key={row.key} step={row.step} current={row.current} />;
-            }
-            // A row stops being the live one when a newer thought starts; the new key folds it
-            // back to its summary instead of leaving every streamed segment open.
-            const newest = live && row.key === lastThinkingKey;
-            return (
-              <ThinkingRow
-                key={`${row.key}:${newest ? "live" : "settled"}`}
-                lines={row.lines}
-                durationMs={row.durationMs}
-                newest={newest}
-              />
-            );
-          })}
-        </div>
-      </CollapsibleContent>
-    </Collapsible>
-  );
+function collectActivityDetails(blocks: readonly MessageBlock[]) {
+  const activity = activityBlocks(blocks);
+  const steps: ToolStep[] = [];
+  const thinkingLines: string[] = [];
+  let costUsd: number | undefined;
+  let attempts: number | undefined;
+  let modelId: string | undefined;
+  let blockStatus: StepsBlock["status"];
+
+  for (const block of activity) {
+    if (block.kind === "thinking") {
+      for (const line of block.lines) {
+        const trimmed = line.trim();
+        if (trimmed) thinkingLines.push(trimmed);
+      }
+      continue;
+    }
+    steps.push(...block.steps);
+    if (block.costUsd !== undefined) costUsd = block.costUsd;
+    if (block.attempts !== undefined) attempts = block.attempts;
+    if (block.modelId) modelId = block.modelId;
+    if (block.status) blockStatus = block.status;
+  }
+
+  return { steps, thinkingLines, costUsd, attempts, modelId, blockStatus };
 }
 
-/**
- * An activity-only message: a plain line between messages, not a chat bubble.
- */
-export function StandaloneActivity({
+function pickApprovalActions(actions: NonNullable<PendingApprovalAction["block"]["actions"]>) {
+  const allow =
+    actions.find((action) => /^(allow|approve|confirm|continue|yes|run)$/i.test(action.id)) ??
+    actions[0];
+  const decline =
+    actions.find((action) => /^(deny|decline|reject|cancel|stop|no)$/i.test(action.id)) ??
+    actions.find((action) => action.id !== allow?.id);
+  return { allow, decline };
+}
+
+function resolveMonitorStatus({
+  live,
+  pendingApproval,
+  blockStatus,
+  runStatus,
+  steps,
+}: {
+  live: boolean;
+  pendingApproval?: PendingApprovalAction;
+  blockStatus?: StepsBlock["status"];
+  runStatus?: string;
+  steps: readonly ToolStep[];
+}): "running" | "waiting" | "completed" | "stopped" | "failed" {
+  if (pendingApproval) return "waiting";
+  if (runStatus === "waiting_input") return "waiting";
+  if (live) return "running";
+  if (blockStatus === "failed" || runStatus === "failed") return "failed";
+  if (blockStatus === "stopped" || runStatus === "cancelled") return "stopped";
+  if (steps.some((step) => step.status === "failed" || step.outcomes?.failed)) {
+    const allFailed = steps.every((step) => step.status === "failed");
+    if (allFailed) return "failed";
+  }
+  return "completed";
+}
+
+function ActivityPanelInner({
   blocks,
   live,
-}: {
-  blocks: readonly MessageBlock[];
-  live: boolean;
-}) {
+  runMeta,
+  pendingApproval,
+  onStop,
+  onRewind,
+}: ActivityPanelProps) {
+  const { t } = useLingui();
+  const isWaiting = Boolean(pendingApproval) || runMeta?.status === "waiting_input";
+  const defaultExpanded = live || isWaiting;
+  const [expanded, setExpanded] = useState(defaultExpanded);
+  const [inspectedStepIndex, setInspectedStepIndex] = useState<number | null>(null);
+  const [hoveredBarIndex, setHoveredBarIndex] = useState<number | null>(null);
+  const [logOpen, setLogOpen] = useState(false);
+  const [thinkingOpen, setThinkingOpen] = useState(false);
+  const [actionInFlight, setActionInFlight] = useState<
+    "allow" | "decline" | "stop" | "rewind" | null
+  >(null);
+  const cardRef = useRef<HTMLDivElement>(null);
+
+  const nowMs = useNow(live ? 1_000 : null);
+  const details = collectActivityDetails(blocks);
+  const modelId = details.modelId ?? runMeta?.modelId;
+  const costUsd = details.costUsd ?? runMeta?.costUsd;
+  const fallbackTitle = runMeta?.botName?.trim() || t`Agent`;
+  const title = formatModelTitle(modelId, fallbackTitle);
+
+  const parsedStart = runMeta?.startedAt ? Date.parse(runMeta.startedAt) : Number.NaN;
+  const runStartedAtMs = Number.isFinite(parsedStart)
+    ? parsedStart
+    : details.steps.find((step) => step.startedAtMs !== undefined)?.startedAtMs;
+
+  const visualStatus = resolveMonitorStatus({
+    live,
+    pendingApproval,
+    blockStatus: details.blockStatus,
+    runStatus: runMeta?.status,
+    steps: details.steps,
+  });
+
+  const graph = buildCheckpointGraph(details.steps, {
+    runStartedAtMs,
+    runAttempts: details.attempts,
+    runStatus: isWaiting ? "waiting_input" : live ? "running" : runMeta?.status,
+    nowMs,
+  });
+
+  const recordedDurationMs = activityDurationMs(blocks);
+  const elapsedMs =
+    !live && recordedDurationMs !== undefined
+      ? recordedDurationMs
+      : live && runStartedAtMs !== undefined
+        ? Math.max(0, nowMs - runStartedAtMs)
+        : graph.totalDurationMs;
+
+  const handleApprovalAnswer = async (kind: "allow" | "decline", actionId: string) => {
+    if (!pendingApproval?.canAnswer || actionInFlight) return;
+    setActionInFlight(kind);
+    try {
+      await pendingApproval.onAnswer(actionId);
+    } finally {
+      setActionInFlight(null);
+    }
+  };
+
+  const handleRewind = async (stepIndex: number, node: CheckpointNode) => {
+    if (!onRewind || actionInFlight) return;
+    setActionInFlight("rewind");
+    try {
+      await onRewind(stepIndex, node.step);
+      setInspectedStepIndex(null);
+    } finally {
+      setActionInFlight(null);
+    }
+  };
+
+  useEventListener(
+    typeof window === "undefined" || !pendingApproval?.canAnswer || !expanded ? null : window,
+    "keydown",
+    (event) => {
+      if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;
+      if (inspectedStepIndex !== null || logOpen || actionInFlight !== null) return;
+      if (isEditableTarget(document.activeElement)) return;
+      const actions = pendingApproval?.block.actions;
+      if (!actions || actions.length === 0) return;
+      const { allow, decline } = pickApprovalActions(actions);
+      if (event.key === "Enter" && allow) {
+        const active = document.activeElement;
+        if (
+          active instanceof HTMLElement &&
+          active.tagName === "BUTTON" &&
+          !cardRef.current?.contains(active)
+        ) {
+          return;
+        }
+        event.preventDefault();
+        void handleApprovalAnswer("allow", allow.id);
+      } else if (event.key === "Escape" && decline) {
+        event.preventDefault();
+        void handleApprovalAnswer("decline", decline.id);
+      }
+    },
+  );
+
+  if (!expanded) {
+    return (
+      <div
+        data-testid="tool-activity"
+        data-live={live || undefined}
+        className="w-full min-w-0"
+        dir="auto"
+      >
+        <div className="w-fit max-w-full" data-testid="activity-trigger-wrap">
+          <CollapsedMonitorPill
+            graph={graph}
+            title={fallbackTitle}
+            modelId={modelId}
+            costUsd={costUsd}
+            totalDurationMs={elapsedMs}
+            status={visualStatus}
+            onExpand={() => setExpanded(true)}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  const activeSpineNodes = graph.nodes.filter((node) => !node.isAbandonedBranch);
+  const progressNodes = activeSpineNodes.length > 0 ? activeSpineNodes : graph.nodes;
+  const activeStepNode =
+    graph.nodes.find((node) => node.state === "waiting" || node.state === "running") ??
+    activeSpineNodes.at(-1) ??
+    graph.nodes.at(-1);
+  const summaryParts = activitySummaryParts(blocks);
+  const totalCalls = activityStepCount(blocks);
+  const latestLine = latestActivity(blocks);
+  const bannerLabel = pendingApproval
+    ? pendingApproval.block.text
+    : activeStepNode
+      ? activeStepNode.step.label
+      : (details.thinkingLines.at(-1) ??
+        runMeta?.label ??
+        latestLine ??
+        (live ? t`Working…` : t`Completed`));
+
+  const bannerCategory = pendingApproval
+    ? stepCategory(pendingApproval.block.text, pendingApproval.block.detail)
+    : activeStepNode
+      ? stepCategory(activeStepNode.step.label, activeStepNode.step.detail)
+      : "tool";
+
+  const bannerClock = formatClockDuration(elapsedMs);
+  const inspectedIndex = inspectedStepIndex ?? hoveredBarIndex;
+  const inspectedNode = inspectedIndex !== null ? (graph.nodes[inspectedIndex] ?? null) : null;
+  const subtitleText =
+    runMeta?.botName && runMeta.botName !== title
+      ? runMeta.botName
+      : (runMeta?.routineName ?? undefined);
+
+  const approvalActions = pendingApproval?.block.actions?.length
+    ? pickApprovalActions(pendingApproval.block.actions)
+    : null;
+
   return (
-    <div className="w-full min-w-0" data-testid="tool-activity-line">
-      <ActivityPanel blocks={blocks} live={live} />
+    <div
+      ref={cardRef}
+      data-testid="tool-activity"
+      data-live={live || undefined}
+      className="monitor-card-enter w-full max-w-[440px] min-w-0 rounded-2xl border border-border bg-card p-3.5 shadow-sm"
+      dir="auto"
+    >
+      {/* Header: Avatar/Icon + Model & Subtitle + Cost Odometer + Status Pill + Minimize */}
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2.5">
+          {runMeta?.botId ? (
+            <BotAvatar
+              color={runMeta.botColor ?? DEFAULT_BOT_AVATAR_COLOR}
+              identity={runMeta.botId}
+              size={28}
+              className="shrink-0 rounded-lg"
+            />
+          ) : (
+            <StepIconPlate
+              category={bannerCategory}
+              tone={
+                visualStatus === "running"
+                  ? "working"
+                  : visualStatus === "waiting"
+                    ? "waiting"
+                    : "neutral"
+              }
+            />
+          )}
+          <div className="min-w-0">
+            <div className="truncate text-body-sm font-semibold text-foreground">{title}</div>
+            {(subtitleText || graph.totalAttempts > 1) && (
+              <div className="flex min-w-0 items-center gap-2 text-caption text-muted-foreground">
+                {subtitleText ? <span className="truncate">{subtitleText}</span> : null}
+                {graph.totalAttempts > 1 ? (
+                  <span className="shrink-0 tabular-nums">
+                    <Trans>{graph.totalAttempts} attempts</Trans>
+                  </span>
+                ) : null}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="flex shrink-0 items-center gap-2">
+          <OdometerCost costUsd={costUsd} />
+          <StatusPill status={visualStatus} />
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            data-testid="activity-trigger"
+            aria-expanded={expanded}
+            aria-label={t`Minimize agent monitor`}
+            onClick={() => setExpanded(false)}
+          >
+            <Minimize2 />
+          </Button>
+        </div>
+      </div>
+
+      {/* Active / Needs you / Finished status banner */}
+      <div
+        className={cn(
+          "mt-3 flex items-center justify-between gap-2.5 rounded-xl border px-3 py-2",
+          visualStatus === "waiting" && "border-warning/30 bg-warning/12",
+          visualStatus === "running" && "border-border/60 bg-muted/60",
+          visualStatus === "completed" && "border-border/60 bg-muted/40",
+          visualStatus === "stopped" && "border-border/60 bg-muted/40",
+          visualStatus === "failed" && "border-destructive/30 bg-destructive/10",
+        )}
+      >
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <StepIconPlate
+            category={bannerCategory}
+            size="sm"
+            tone={
+              visualStatus === "waiting"
+                ? "waiting"
+                : visualStatus === "running"
+                  ? "working"
+                  : visualStatus === "failed"
+                    ? "failed"
+                    : visualStatus === "completed"
+                      ? "done"
+                      : "neutral"
+            }
+          />
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            {live ? (
+              <span className="truncate text-body-sm font-medium text-foreground">
+                <Shimmer>{bannerLabel}</Shimmer>
+              </span>
+            ) : visualStatus === "completed" && summaryParts.length > 0 ? (
+              <span className="truncate text-body-sm font-medium text-foreground">
+                <Trans>Finished in {bannerClock}</Trans>
+                <span className="ml-2 font-normal text-muted-foreground">
+                  {summaryParts.map((part, index) => (
+                    <span key={part.kind}>
+                      {index > 0 ? ", " : ""}
+                      <SummaryClause kind={part.kind} count={part.count} />
+                    </span>
+                  ))}
+                </span>
+              </span>
+            ) : (
+              <span className="truncate text-body-sm font-medium text-foreground">
+                {bannerLabel}
+              </span>
+            )}
+            {pendingApproval?.block.detail ? (
+              <code className="max-w-44 shrink truncate rounded border border-border/70 bg-background/90 px-1.5 py-0.5 font-mono text-caption text-foreground">
+                {pendingApproval.block.detail}
+              </code>
+            ) : null}
+          </div>
+        </div>
+        <span className="shrink-0 font-mono text-label text-muted-foreground tabular-nums">
+          {bannerClock}
+        </span>
+      </div>
+
+      {/* Interactive segmented progress bar + floating Step Inspector */}
+      {progressNodes.length > 0 ? (
+        <div className="relative mt-3">
+          {inspectedNode ? (
+            <StepInspectorPopover
+              node={inspectedNode}
+              rewinding={actionInFlight === "rewind"}
+              onClose={() => {
+                setInspectedStepIndex(null);
+                setHoveredBarIndex(null);
+              }}
+              onRewind={onRewind ? handleRewind : undefined}
+            />
+          ) : null}
+
+          <div className="flex items-center gap-1.5">
+            <fieldset
+              className="m-0 flex h-2 min-w-0 flex-1 items-center gap-1 overflow-hidden rounded-full border-0 bg-muted/70 p-0.5"
+              aria-label={t`Step timeline progress`}
+            >
+              {progressNodes.map((node) => {
+                const isSelected = inspectedNode?.index === node.index;
+                return (
+                  <button
+                    key={`seg-${node.index}`}
+                    type="button"
+                    data-step-inspector-trigger=""
+                    aria-label={node.step.label}
+                    style={{ flexGrow: node.segmentWeight, flexBasis: 0 }}
+                    onMouseEnter={() => {
+                      if (inspectedStepIndex === null) setHoveredBarIndex(node.index);
+                    }}
+                    onMouseLeave={() => {
+                      setHoveredBarIndex((current) => (current === node.index ? null : current));
+                    }}
+                    onClick={() => {
+                      setHoveredBarIndex(null);
+                      setInspectedStepIndex((current) =>
+                        current === node.index ? null : node.index,
+                      );
+                    }}
+                    className={cn(
+                      "h-full min-w-2 cursor-pointer rounded-full transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                      node.state === "running" && "monitor-segment-shimmer",
+                      node.state === "waiting" && "bg-warning",
+                      node.state === "failed" && "bg-destructive",
+                      node.state === "done" && "bg-foreground/30 hover:bg-foreground/50",
+                      node.state === "stopped" && "bg-muted-foreground/30",
+                      isSelected && "ring-1 ring-foreground/60",
+                    )}
+                  />
+                );
+              })}
+            </fieldset>
+            {visualStatus === "waiting" ? (
+              <span
+                className="inline-block h-2 w-2 shrink-0 rounded-full bg-warning"
+                aria-hidden="true"
+              />
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
+      {/* Reasoning snippet */}
+      {details.thinkingLines.length > 0 ? (
+        <div
+          data-testid="thinking-row"
+          className="mt-2.5 rounded-lg border border-border/60 bg-muted/40 px-2.5 py-2"
+        >
+          {details.thinkingLines.length > 1 ? (
+            <>
+              <button
+                type="button"
+                data-testid="thinking-trigger"
+                aria-expanded={thinkingOpen}
+                onClick={() => setThinkingOpen((open) => !open)}
+                className="flex w-full items-center justify-between gap-2 text-left text-label text-muted-foreground"
+              >
+                <span className="truncate">{details.thinkingLines[0]}</span>
+                <ChevronDown
+                  className={cn(
+                    "h-3.5 w-3.5 shrink-0 transition-transform",
+                    !thinkingOpen && "-rotate-90",
+                  )}
+                  aria-hidden="true"
+                />
+              </button>
+              {thinkingOpen ? (
+                <div
+                  data-testid="thinking-detail"
+                  className="mt-1.5 space-y-1 text-caption text-muted-foreground"
+                >
+                  {details.thinkingLines.slice(1).map((line, index) => (
+                    <p key={`think-${index}`} className="leading-relaxed">
+                      {line}
+                    </p>
+                  ))}
+                </div>
+              ) : null}
+            </>
+          ) : (
+            <div className="truncate text-label text-muted-foreground">
+              {details.thinkingLines[0]}
+            </div>
+          )}
+        </div>
+      ) : null}
+
+      {/* Checkpoints timeline + optional SVG git-graph */}
+      {graph.nodes.length > 0 ? (
+        <div data-testid="tool-rows" className="mt-2.5 max-h-60 overflow-y-auto pr-0.5">
+          <CheckpointTimeline
+            graph={graph}
+            activeStepIndex={inspectedStepIndex ?? undefined}
+            isLive={live}
+            rewinding={actionInFlight === "rewind"}
+            onSelectStep={(node) => {
+              setHoveredBarIndex(null);
+              setInspectedStepIndex((current) => (current === node.index ? null : node.index));
+            }}
+            onRewind={onRewind ? handleRewind : undefined}
+          />
+        </div>
+      ) : null}
+
+      {/* Footer controls + step count + Log sheet trigger */}
+      <div className="mt-3 flex items-center justify-between gap-2 border-t border-border/60 pt-2.5">
+        <div className="flex items-center gap-1.5">
+          {pendingApproval?.canAnswer && approvalActions ? (
+            <>
+              {approvalActions.decline ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="xs"
+                  aria-keyshortcuts="Escape"
+                  disabled={actionInFlight !== null}
+                  onClick={() => void handleApprovalAnswer("decline", approvalActions.decline!.id)}
+                >
+                  <span>{approvalActions.decline.label}</span>
+                  <Kbd aria-hidden="true">Esc</Kbd>
+                </Button>
+              ) : null}
+              {approvalActions.allow ? (
+                <Button
+                  type="button"
+                  variant="default"
+                  size="xs"
+                  aria-keyshortcuts="Enter"
+                  disabled={actionInFlight !== null}
+                  onClick={() => void handleApprovalAnswer("allow", approvalActions.allow!.id)}
+                >
+                  <span>{approvalActions.allow.label}</span>
+                  <Kbd aria-hidden="true">↵</Kbd>
+                </Button>
+              ) : null}
+            </>
+          ) : live && onStop ? (
+            <Button
+              type="button"
+              variant="secondary"
+              size="xs"
+              disabled={actionInFlight === "stop"}
+              onClick={() => {
+                setActionInFlight("stop");
+                onStop();
+              }}
+            >
+              <Square />
+              <Trans>Cancel</Trans>
+            </Button>
+          ) : (
+            <span className="text-caption text-muted-foreground">
+              <StepCategoryName category={bannerCategory} />
+            </span>
+          )}
+        </div>
+
+        <div className="flex items-center gap-2.5">
+          {graph.totalCount > 0 ? (
+            <span className="font-mono text-caption text-muted-foreground tabular-nums">
+              {graph.completedCount}/{graph.totalCount}
+            </span>
+          ) : totalCalls > 0 ? (
+            <span className="font-mono text-caption text-muted-foreground tabular-nums">
+              {totalCalls}
+            </span>
+          ) : null}
+          <Button
+            type="button"
+            variant="ghost"
+            size="xs"
+            onClick={() => setLogOpen(true)}
+            aria-label={t`Open execution log`}
+          >
+            <Trans>Log</Trans>
+            <ExternalLink />
+          </Button>
+        </div>
+      </div>
+
+      {logOpen ? (
+        <Suspense fallback={null}>
+          <RunLogSheet
+            open={logOpen}
+            onOpenChange={setLogOpen}
+            title={fallbackTitle}
+            modelId={modelId}
+            costUsd={costUsd}
+            totalDurationMs={elapsedMs}
+            graph={graph}
+            thinkingLines={details.thinkingLines}
+            onRewind={onRewind ? handleRewind : undefined}
+            rewinding={actionInFlight === "rewind"}
+          />
+        </Suspense>
+      ) : null}
     </div>
   );
 }
 
-/** A bot message whose only visible blocks are activity: one slim line, no bubble. */
-export function ActivityOnlyNarration({
-  blocks,
-  live,
+function StatusPill({
+  status,
 }: {
-  blocks: readonly MessageBlock[];
-  live: boolean;
+  status: "running" | "waiting" | "completed" | "stopped" | "failed";
 }) {
-  return <StandaloneActivity blocks={blocks} live={live} />;
+  return (
+    <span
+      className={cn(
+        "inline-flex shrink-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-caption font-medium",
+        status === "running" && "bg-status-working/15 text-status-working",
+        status === "waiting" && "bg-warning/15 text-warning",
+        status === "completed" && "bg-success/15 text-success",
+        status === "stopped" && "bg-muted text-muted-foreground",
+        status === "failed" && "bg-destructive/15 text-destructive",
+      )}
+    >
+      <span
+        className={cn(
+          "inline-block h-1.5 w-1.5 rounded-full",
+          status === "running" && "animate-pulse bg-status-working",
+          status === "waiting" && "bg-warning",
+          status === "completed" && "bg-success",
+          status === "stopped" && "bg-muted-foreground",
+          status === "failed" && "bg-destructive",
+        )}
+        aria-hidden="true"
+      />
+      {status === "running" ? (
+        <Trans>Running</Trans>
+      ) : status === "waiting" ? (
+        <Trans>Needs you</Trans>
+      ) : status === "completed" ? (
+        <Trans>Finished</Trans>
+      ) : status === "stopped" ? (
+        <Trans>Stopped</Trans>
+      ) : (
+        <Trans>Failed</Trans>
+      )}
+    </span>
+  );
+}
+
+/**
+ * Monitor + Checkpoints card for a bot turn's tool execution, reasoning, approvals, cost, and rewind history.
+ * Keyed by active phase so finished turns collapse neatly into a pill while live/approval turns expand.
+ */
+export function ActivityPanel(props: ActivityPanelProps) {
+  const activePhase =
+    props.live || props.pendingApproval || props.runMeta?.status === "waiting_input"
+      ? "active"
+      : "settled";
+  return <ActivityPanelInner key={activePhase} {...props} />;
+}
+
+/** An activity-only message rendered as its own full-width row rather than a chat bubble. */
+export function StandaloneActivity(props: ActivityPanelProps) {
+  return (
+    <div className="w-full min-w-0" data-testid="tool-activity-line">
+      <ActivityPanel {...props} />
+    </div>
+  );
+}
+
+/** A bot message whose only visible blocks are activity: Monitor card row, no bubble. */
+export function ActivityOnlyNarration(props: ActivityPanelProps) {
+  return <StandaloneActivity {...props} />;
+}
+
+/** Initial working monitor shown as soon as a turn starts, before tool steps arrive. */
+export function LiveRunMonitorCard({
+  runMeta,
+  label,
+  onStop,
+}: {
+  runMeta?: ActivityRunMeta;
+  label?: string;
+  onStop?: () => void;
+}) {
+  return (
+    <div className="w-full min-w-0" data-testid="tool-activity-line">
+      <ActivityPanel
+        blocks={[]}
+        live
+        runMeta={{ ...runMeta, label: label ?? runMeta?.label }}
+        onStop={onStop}
+      />
+    </div>
+  );
 }

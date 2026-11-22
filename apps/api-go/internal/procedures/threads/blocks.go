@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"math"
 	"slices"
+	"strconv"
 	"unicode/utf8"
 
 	"golang.org/x/text/cases"
@@ -149,6 +151,18 @@ var (
 	nonNegative = integer(validate.NumberRules{Min: validate.Float(0)})
 	positive    = integer(validate.NumberRules{Gt: validate.Float(0)})
 )
+
+func nonNegativeFloat(value any) (any, bool) {
+	number, ok := value.(json.Number)
+	if !ok {
+		return nil, false
+	}
+	parsed, err := strconv.ParseFloat(number.String(), 64)
+	if err != nil || math.IsNaN(parsed) || math.IsInf(parsed, 0) || parsed < 0 {
+		return nil, false
+	}
+	return number, true
+}
 
 // anyValue is z.any(): the stored value as it is.
 func anyValue(value any) (any, bool) { return value, true }
@@ -301,6 +315,11 @@ var step = object(
 	required("count", positive),
 	optional("detail", str),
 	optional("note", str),
+	optional("durationMs", nonNegative),
+	optional("startedAtMs", nonNegative),
+	optional("attempt", positive),
+	optional("forkedFromStep", nonNegative),
+	optional("status", enum("running", "done", "failed", "stopped")),
 	optional("outcomes", object(
 		optional("succeeded", positive), optional("failed", positive), optional("stopped", positive),
 	)),
@@ -336,9 +355,14 @@ var blockSchemas = map[string]parser{
 		required("change", enum("created", "updated", "enabled", "disabled", "deleted")), required("name", strMax(200))),
 	"delivery": object(required("kind", literal("delivery"))),
 	"progress": object(required("kind", literal("progress")), required("text", str), optional("activity", literal(true)),
-		optional("pendingToolNames", array(str)), optional("pendingToolDetails", array(nullable(str)))),
+		optional("pendingToolNames", array(str)), optional("pendingToolDetails", array(nullable(str))),
+		optional("pendingToolTimings", array(nullable(object(
+			optional("startedAtMs", nonNegative), optional("attempt", positive), optional("forkedFromStep", nonNegative),
+		))))),
 	"thinking": object(required("kind", literal("thinking")), required("durationMs", nonNegative), required("lines", array(str))),
-	"steps":    object(required("kind", literal("steps")), required("steps", array(step)), optional("durationMs", nonNegative)),
+	"steps": object(required("kind", literal("steps")), required("steps", array(step)), optional("durationMs", nonNegative),
+		optional("costUsd", nonNegativeFloat), optional("modelId", str), optional("modelProvider", str),
+		optional("attempts", positive), optional("status", enum("completed", "stopped", "failed"))),
 	"subagent": object(required("kind", literal("subagent")), required("agentId", str), required("name", str),
 		required("task", str), required("status", enum("running", "completed", "failed")),
 		optional("progress", str), optional("result", str)),

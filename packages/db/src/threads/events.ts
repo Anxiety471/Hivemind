@@ -770,20 +770,41 @@ export async function finalizeRun(
   return { continuationRunId: committed.continuationRunId };
 }
 
-/** Stamps one turn-level wall-clock duration on the final tool block. */
+export interface CompletedRunBlockMeta {
+  costUsd?: number;
+  modelId?: string;
+  modelProvider?: string;
+  status?: "completed" | "stopped" | "failed";
+}
+
+/** Stamps turn-level wall-clock duration and optional run metadata on the final tool block. */
 export function completedRunBlocks(
   blocks: MessageBlock[],
   startedAt: Date | null,
   completedAt: Date,
+  meta?: CompletedRunBlockMeta,
 ): MessageBlock[] {
-  if (!startedAt) return blocks;
-  const durationMs = completedAt.getTime() - startedAt.getTime();
-  if (!Number.isFinite(durationMs) || durationMs < 0) return blocks;
+  const rawDurationMs = startedAt ? completedAt.getTime() - startedAt.getTime() : undefined;
+  const durationMs =
+    rawDurationMs !== undefined && Number.isFinite(rawDurationMs) && rawDurationMs >= 0
+      ? Math.round(rawDurationMs)
+      : undefined;
+  const hasMeta = Boolean(
+    meta && (meta.costUsd !== undefined || meta.modelId || meta.modelProvider || meta.status),
+  );
+  if (durationMs === undefined && !hasMeta) return blocks;
   const index = blocks.findLastIndex((block) => block.kind === "steps");
   if (index < 0) return blocks;
   return blocks.map((block, blockIndex) =>
     blockIndex === index && block.kind === "steps"
-      ? { ...block, durationMs: Math.round(durationMs) }
+      ? {
+          ...block,
+          ...(durationMs !== undefined ? { durationMs } : {}),
+          ...(meta?.costUsd !== undefined ? { costUsd: meta.costUsd } : {}),
+          ...(meta?.modelId ? { modelId: meta.modelId } : {}),
+          ...(meta?.modelProvider ? { modelProvider: meta.modelProvider } : {}),
+          ...(meta?.status ? { status: meta.status } : {}),
+        }
       : block,
   );
 }
@@ -884,12 +905,44 @@ async function finalizeRunOnce(
       });
     }
     let firstResponse = false;
+    const rawCandidateBlocks =
+      input.outcome === "completed" ? input.blocks : (input.partialReply ?? []);
+    let finalCandidateBlocks = rawCandidateBlocks;
+    if (rawCandidateBlocks.some((block) => block.kind === "steps")) {
+      const [runModel, usageSum] = await Promise.all([
+        typeof tx.run.findUnique === "function"
+          ? tx.run.findUnique({
+              where: { id: input.runId },
+              select: { modelProvider: true, modelId: true },
+            })
+          : null,
+        typeof (tx as Partial<typeof tx>).usageRecord?.aggregate === "function"
+          ? tx.usageRecord.aggregate({
+              where: { runId: input.runId },
+              _sum: { costUsd: true },
+            })
+          : null,
+      ]);
+      const aggregatedCost = usageSum?._sum?.costUsd;
+      const meta: CompletedRunBlockMeta = {
+        status: input.outcome === "completed" ? "completed" : "failed",
+        ...(typeof aggregatedCost === "number" &&
+        Number.isFinite(aggregatedCost) &&
+        aggregatedCost >= 0
+          ? { costUsd: aggregatedCost }
+          : {}),
+        ...(runModel?.modelId ? { modelId: runModel.modelId } : {}),
+        ...(runModel?.modelProvider ? { modelProvider: runModel.modelProvider } : {}),
+      };
+      finalCandidateBlocks = completedRunBlocks(
+        rawCandidateBlocks,
+        writableRun?.startedAt ?? null,
+        now,
+        meta,
+      );
+    }
     // Clients get the blocks without the kept calls, in the message and in its event alike.
-    const { blocks: replyBlocks, toolHistory } = splitToolHistory(
-      input.outcome === "completed"
-        ? completedRunBlocks(input.blocks, writableRun?.startedAt ?? null, now)
-        : (input.partialReply ?? []),
-    );
+    const { blocks: replyBlocks, toolHistory } = splitToolHistory(finalCandidateBlocks);
     if (replyBlocks.length > 0) {
       const message = await createThreadMessageInTransaction(tx, {
         threadId: input.threadId,

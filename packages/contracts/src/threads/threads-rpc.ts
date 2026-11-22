@@ -70,6 +70,26 @@ export const threadsRpc = {
     stopHelper: oc
       .input(threadTarget.safeExtend({ messageId: Id }))
       .output(z.object({ ok: z.literal(true) })),
+    /** Stop downstream work from a checkpoint and start a new retry branch from that step. */
+    rewind: oc
+      .input(
+        threadTarget.safeExtend({
+          messageId: Id,
+          runId: Id.optional(),
+          stepIndex: z.number().int().nonnegative(),
+          stepLabel: z.string().min(1).max(200).optional(),
+          stepDetail: z.string().max(400).optional(),
+          clientNonce: z.string().min(1).max(200).optional(),
+        }),
+      )
+      .output(
+        z.object({
+          ok: z.literal(true),
+          runId: Id,
+          taskId: Id,
+          attempt: z.number().int().positive(),
+        }),
+      ),
     /**
      * A background helper's own thread, found from the card that started it: the card sits in
      * a chat, or in the thread of the helper that started this one. Read-only.

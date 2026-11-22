@@ -97,13 +97,19 @@ function renderView(blocks: ThreadMessage["blocks"], showToolActivity = true) {
 }
 
 const panels = () => container.querySelectorAll('[data-testid="tool-activity"]');
-const trigger = () =>
-  container.querySelector('[data-testid="activity-trigger"]')?.textContent ?? "";
+const openPanelText = () => {
+  act(() => {
+    container.querySelector<HTMLButtonElement>('[data-testid="activity-trigger"]')?.click();
+  });
+  return container.querySelector('[data-testid="tool-activity"]')?.textContent ?? "";
+};
 
 it("mounts one panel for reasoning and steps wherever they appear between text", () => {
   renderView([text("First."), thinking("Mid reasoning."), text("Second."), steps("Open calendar")]);
   expect(panels()).toHaveLength(1);
-  expect(trigger()).toContain("Open calendar");
+  const panelText = openPanelText();
+  expect(panelText).toContain("Open calendar");
+  expect(panelText).toContain("Mid reasoning.");
   // Every text block keeps its place; the one panel stands above the reply, not between them.
   const order = container.textContent ?? "";
   expect(order.indexOf("First.")).toBeLessThan(order.indexOf("Second."));
@@ -112,16 +118,19 @@ it("mounts one panel for reasoning and steps wherever they appear between text",
 it("mounts one panel when steps come before the reasoning", () => {
   renderView([steps("Open calendar"), text("Answer."), thinking("Later reasoning.")]);
   expect(panels()).toHaveLength(1);
-  expect(trigger()).toContain("Later reasoning.");
+  const panelText = openPanelText();
+  expect(panelText).toContain("Open calendar");
+  expect(panelText).toContain("Later reasoning.");
 });
 
 it("mounts one panel when reasoning and steps wrap the text", () => {
   renderView([thinking("Before."), text("Answer."), steps("Check conflicts")]);
   expect(panels()).toHaveLength(1);
-  expect(trigger()).toContain("Check conflicts");
-  act(() =>
-    container.querySelector<HTMLButtonElement>('[data-testid="activity-trigger"]')?.click(),
-  );
+  expect(
+    container.querySelector('[data-testid="activity-trigger"]')?.getAttribute("aria-expanded"),
+  ).toBe("false");
+  const panelText = openPanelText();
+  expect(panelText).toContain("Check conflicts");
   expect(container.querySelector('[data-testid="thinking-row"]')?.textContent).toContain("Before.");
 });
 
@@ -135,5 +144,7 @@ it("hides reasoning with the activity preference and keeps the answer", () => {
 it("keeps one panel for two steps blocks instead of one per block", () => {
   renderView([steps("First step"), text("Answer."), steps("Second step")]);
   expect(panels()).toHaveLength(1);
-  expect(trigger()).toContain("Second step");
+  const panelText = openPanelText();
+  expect(panelText).toContain("First step");
+  expect(panelText).toContain("Second step");
 });

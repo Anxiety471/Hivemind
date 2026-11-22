@@ -52,6 +52,7 @@ import {
   setThreadSnooze,
   setThreadUnreadState,
 } from "../threads/thread-read-state.js";
+import { rewindThreadRun } from "../threads/thread-rewind.js";
 import { threadSnapshot } from "../threads/thread-snapshot.js";
 import { isStopMessage, stopThreadRuns } from "../threads/thread-stop.js";
 import type { ThreadTarget } from "../threads/thread-target.js";
@@ -315,6 +316,10 @@ export function threadsRoutes(ctx: RouterContext) {
         const target = await resolveThreadTarget(deps.prisma, context.actor, input);
         await stopThreadRuns(deps, context.actor, target, input.messageId);
         return { ok: true as const };
+      }),
+      rewind: authed.threads.rewind.handler(async ({ context, input }) => {
+        const target = await resolveThreadTarget(deps.prisma, context.actor, input);
+        return rewindThreadRun(deps, context.actor, target, input);
       }),
       helperGet: authed.threads.helperGet.handler(async ({ context, input }) => {
         const target = await resolveHelperThread(deps.prisma, context.actor, input);

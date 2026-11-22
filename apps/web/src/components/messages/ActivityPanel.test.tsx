@@ -1,347 +1,456 @@
 // @vitest-environment jsdom
-
 import type { MessageBlock } from "@rakazo/contracts";
 import type { ReactNode } from "react";
+import { act, Suspense } from "react";
 import { flushSync } from "react-dom";
+import type { Root } from "react-dom/client";
 import { createRoot } from "react-dom/client";
-import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ToolStep } from "../../lib/chat/checkpoint-graph";
+import type { ActivityPanelProps } from "./ActivityPanel";
+import {
+  ActivityOnlyNarration,
+  ActivityPanel,
+  LiveRunMonitorCard,
+  StandaloneActivity,
+} from "./ActivityPanel";
 
-// The macros compile away in the app build; tests run the source, so expand the
-// plural and t tag by hand to assert the English forms.
 vi.mock("@lingui/react/macro", () => ({
-  Trans: ({ children }: { children: unknown }) => children,
+  Trans: ({ children }: { children: ReactNode }) => children,
   Plural: ({ value, one, other }: { value: number; one: string; other: string }) =>
-    (value === 1 ? one : other).replaceAll("#", String(value)),
+    value === 1 ? one : other.replace("#", String(value)),
   useLingui: () => ({
     t: (strings: TemplateStringsArray, ...values: unknown[]) => String.raw(strings, ...values),
   }),
 }));
 
-/** The words a reader sees, with each element's text as its own word. */
-const visibleText = (html: string) =>
-  html
-    .replace(/<[^>]+>/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-
-import {
-  ActivityOnlyNarration,
-  ActivityPanel,
-  LIVE_TOOL_STEP_WINDOW,
-  StandaloneActivity,
-} from "./ActivityPanel";
-
-const steps = (
-  labels: string[],
-  durationMs?: number,
-  notes: Record<number, string> = {},
-  details: Record<number, string> = {},
-): MessageBlock => ({
-  kind: "steps",
-  steps: labels.map((label, index) => ({
-    label,
-    count: 1,
-    ...(details[index] === undefined ? {} : { detail: details[index] }),
-    ...(notes[index] === undefined ? {} : { note: notes[index] }),
-  })),
-  ...(durationMs === undefined ? {} : { durationMs }),
-});
-
 const thinking = (lines: string[], durationMs = 2_000): MessageBlock => ({
   kind: "thinking",
-  durationMs,
   lines,
+  durationMs,
 });
 
-const OPEN_TRIGGER = /aria-expanded="true"/;
+const step = (label: string, overrides: Partial<ToolStep> = {}): ToolStep => ({
+  label,
+  count: 1,
+  ...overrides,
+});
 
-function markup(blocks: MessageBlock[], live = false) {
-  return renderToStaticMarkup(<ActivityPanel blocks={blocks} live={live} />);
+const stepsBlock = (
+  steps: ToolStep[],
+  extra: Partial<Extract<MessageBlock, { kind: "steps" }>> = {},
+): MessageBlock => ({
+  kind: "steps",
+  steps,
+  ...extra,
+});
+
+let container: HTMLDivElement;
+let root: Root;
+
+beforeEach(() => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  window.matchMedia ??= ((query: string) => ({
+    matches: false,
+    media: query,
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+  })) as unknown as typeof window.matchMedia;
+  container = document.createElement("div");
+  document.body.append(container);
+  root = createRoot(container);
+});
+
+afterEach(() => {
+  act(() => root.unmount());
+  container.remove();
+  vi.unstubAllGlobals();
+});
+
+function renderPanel(props: ActivityPanelProps) {
+  act(() => {
+    flushSync(() =>
+      root.render(
+        <Suspense fallback={null}>
+          <ActivityPanel {...props} />
+        </Suspense>,
+      ),
+    );
+  });
 }
 
-function mountPanel() {
-  const container = document.createElement("div");
-  const root = createRoot(container);
-  const render = (blocks: MessageBlock[], live: boolean) =>
-    flushSync(() => root.render(<ActivityPanel blocks={blocks} live={live} />));
-  const trigger = () => container.querySelector<HTMLButtonElement>("button[aria-expanded]");
-  const open = () => flushSync(() => trigger()?.click());
-  const byTestId = (id: string) => container.querySelector<HTMLElement>(`[data-testid="${id}"]`);
-  return { container, render, trigger, open, byTestId, unmount: () => root.unmount() };
+function panelRoot(): HTMLElement {
+  const el = container.querySelector<HTMLElement>('[data-testid="tool-activity"]');
+  if (!el) throw new Error('Missing [data-testid="tool-activity"]');
+  return el;
 }
 
-/** A folded panel mounts its rows only once opened, so open it the way a reader does. */
-function openedMarkup(node: ReactNode) {
-  const container = document.createElement("div");
-  const root = createRoot(container);
-  flushSync(() => root.render(node));
-  flushSync(() =>
-    container.querySelector<HTMLButtonElement>('[data-testid="activity-trigger"]')?.click(),
-  );
-  const html = container.innerHTML;
-  root.unmount();
-  return html;
+function triggerButton(): HTMLButtonElement {
+  const el = container.querySelector<HTMLButtonElement>('[data-testid="activity-trigger"]');
+  if (!el) throw new Error('Missing [data-testid="activity-trigger"]');
+  return el;
 }
-
-const opened = (blocks: MessageBlock[]) =>
-  openedMarkup(<ActivityPanel blocks={blocks} live={false} />);
 
 describe("ActivityPanel", () => {
-  it("summarizes a finished run by the actions it took, with its duration", () => {
-    const html = markup([steps(["Web fetch", "Web fetch", "Web search"], 12_000)]);
-    const text = visibleText(html);
-    expect(text).toContain("read 2 pages");
-    expect(text).toContain("searched the web · 12s");
-    expect(html).toContain('data-testid="activity-trigger"');
-    // The rows sit inside one hairline-bordered, divided container flush with the trigger.
-    expect(opened([steps(["Web fetch"], 12_000)])).toContain(
-      "divide-y divide-border overflow-hidden rounded-lg border border-border",
-    );
-    expect(html).not.toContain("bg-card/55");
-  });
-
-  it("summarizes recognized live actions too instead of falling back to a raw tool name", () => {
-    const html = markup([steps(["Write file", "Write file", "Shell"])], true);
-    const text = visibleText(html);
-    expect(text).toContain("ran a command");
-    expect(text).toContain("wrote 2 files");
-    expect(text).not.toContain("3 tools");
-  });
-
-  it("says each summarized action in its singular or its counted form", () => {
-    expect(visibleText(markup([steps(["Web fetch"])]))).toContain("read a page");
-    expect(visibleText(markup([steps(["Read file"])]))).toContain("read a file");
-    expect(visibleText(markup([steps(["Web search"])]))).toContain("searched the web");
-    expect(visibleText(markup([steps(["Web search", "Web search"])]))).toContain(
-      "searched the web 2 times",
-    );
-    expect(visibleText(markup([steps(["Shell"])]))).toContain("ran a command");
-  });
-
-  it("falls back to the last thing it did, its tool calls and its duration", () => {
-    const html = markup([steps(["Open calendar", "Check conflicts"], 12_000)]);
-    expect(visibleText(html)).toContain("Check conflicts · 2 tools · 12s");
-  });
-
-  it("uses the singular for one tool and omits an unusable duration", () => {
-    expect(visibleText(markup([steps(["Analyze"])]))).toContain("Analyze · 1 tool");
-    expect(visibleText(markup([steps(["Analyze"])]))).not.toMatch(/Analyze · 1 tool · \d/);
-  });
-
-  it("shows the latest line with its tool count while a run is live", () => {
-    const html = markup(
-      [{ kind: "progress", text: "Searching the web", activity: true }, steps(["Read results"])],
-      true,
-    );
-    expect(visibleText(html)).toContain("Read results · 1 tool");
-    const html2 = markup([{ kind: "progress", text: "Searching the web", activity: true }], true);
-    expect(visibleText(html2)).toContain("Searching the web");
-  });
-
-  it("falls back to Working… while live and Done once finished", () => {
-    expect(visibleText(markup([thinking([])], true))).toContain("Working…");
-    expect(visibleText(markup([thinking([])], false))).toContain("Done");
-  });
-
-  it("starts open while working and folds when the run ends", () => {
-    expect(markup([steps(["Shell"])], true)).toMatch(OPEN_TRIGGER);
-    const folded = markup([steps(["Shell"], 4_000)], false);
-    expect(folded).toContain('aria-expanded="false"');
-    expect(folded).not.toMatch(OPEN_TRIGGER);
-  });
-
-  it("mounts a finished run's rows only once it is opened", () => {
-    const blocks = [thinking(["Checking.", "Weighing Tuesday."]), steps(["Read file"])];
-    const folded = markup(blocks);
-    expect(folded).not.toContain('data-testid="tool-rows"');
-    expect(folded).not.toContain("Weighing Tuesday.");
-    expect(opened(blocks)).toContain('data-testid="tool-rows"');
-  });
-
-  it("keeps a manual collapse while more activity arrives in the same run", () => {
-    const panel = mountPanel();
-    panel.render([steps(["One", "Two"])], true);
-    flushSync(() => panel.trigger()?.click());
-    expect(panel.trigger()?.getAttribute("aria-expanded")).toBe("false");
-
-    panel.render([steps(["One", "Two", "Three"])], true);
-    expect(panel.trigger()?.getAttribute("aria-expanded")).toBe("false");
-    expect(panel.trigger()?.textContent).toContain("Three");
-
-    panel.render([steps(["One", "Two", "Three"])], false);
-    expect(panel.trigger()?.getAttribute("aria-expanded")).toBe("false");
-    panel.unmount();
-  });
-
-  it("lists reasoning and tool rows flat, in the order they happened", () => {
-    const html = opened([
-      thinking(["First thought.", "Second thought."]),
-      steps(["Read file"]),
-      thinking(["Third thought."], 4_000),
-    ]);
-    expect(html.match(/data-testid="thinking-row"/g)).toHaveLength(2);
-    expect(html.match(/data-testid="activity-row"/g)).toHaveLength(1);
-    expect(html.indexOf("First thought.")).toBeLessThan(html.indexOf("Read file"));
-    expect(html.indexOf("Read file")).toBeLessThan(html.indexOf("Third thought."));
-    // Monochrome: no semantic success/warning colors on the rows.
-    expect(html).not.toContain("text-success");
-    expect(html).not.toContain("text-warning");
-    expect(html).toContain("text-muted-foreground");
-  });
-
-  it("summarizes a reasoning segment in one line and expands its full lines", () => {
-    const panel = mountPanel();
-    panel.render(
-      [thinking(["Checking the calendar.", "Weighing Tuesday."]), steps(["Read file"])],
-      false,
-    );
-    panel.open();
-    // Done runs open no row beyond its summary, so the full lines wait behind the chevron.
-    expect(panel.byTestId("thinking-trigger")?.getAttribute("aria-expanded")).toBe("false");
-    expect(panel.byTestId("thinking-row")?.textContent).toContain("Checking the calendar.");
-
-    flushSync(() => panel.byTestId("thinking-trigger")?.click());
-    expect(panel.byTestId("thinking-trigger")?.getAttribute("aria-expanded")).toBe("true");
-    expect(panel.byTestId("thinking-detail")?.textContent).toContain("Thought for 2s");
-    expect(panel.byTestId("thinking-detail")?.textContent).toContain("Weighing Tuesday.");
-    panel.unmount();
-  });
-
-  it("leaves a one-line thought as a plain row with nothing to expand", () => {
-    const html = opened([thinking(["Checking the calendar."]), steps(["Read file"])]);
-    expect(html.match(/data-testid="thinking-row"/g)).toHaveLength(1);
-    expect(html).not.toContain('data-testid="thinking-trigger"');
-  });
-
-  it("opens its newest reasoning row while the run is live", () => {
-    const panel = mountPanel();
-    panel.render([thinking(["Checking.", "Weighing Tuesday."]), steps(["Read file"])], true);
-    expect(panel.byTestId("thinking-trigger")?.getAttribute("aria-expanded")).toBe("true");
-    panel.unmount();
-  });
-
-  it("folds a reasoning row once a newer thought starts in the same live run", () => {
-    const panel = mountPanel();
-    panel.render([thinking(["Checking.", "Weighing Tuesday."]), steps(["Read file"])], true);
-    panel.render(
-      [
-        thinking(["Checking.", "Weighing Tuesday."]),
-        steps(["Read file"]),
-        thinking(["Drafting.", "Second draft thought."]),
+  it("renders expanded Monitor card while live with model title, cost, clock, segments, and Cancel", () => {
+    const onStop = vi.fn();
+    renderPanel({
+      live: true,
+      blocks: [
+        stepsBlock([
+          step("Compared 38 commits", {
+            startedAtMs: 1_000,
+            durationMs: 2_300,
+            status: "done",
+            detail: "git log v3.1..main",
+          }),
+          step("Drafting the release notes", {
+            startedAtMs: 3_500,
+            status: "running",
+          }),
+        ]),
       ],
-      true,
+      runMeta: {
+        botName: "Release agent",
+        modelId: "claude-opus-5-5",
+        costUsd: 0.039,
+        startedAt: new Date(Date.now() - 6_000).toISOString(),
+        status: "running",
+      },
+      onStop,
+    });
+
+    const panel = panelRoot();
+    expect(triggerButton().getAttribute("aria-expanded")).toBe("true");
+    expect(panel.textContent).toContain("Claude Opus 5.5");
+    expect(panel.textContent).toContain("Release agent");
+    expect(panel.textContent).toContain("$0.039");
+    expect(panel.textContent).toContain("Running");
+    expect(panel.textContent).toContain("Drafting the release notes");
+    expect(panel.textContent).toContain("Compared 38 commits");
+    expect(panel.textContent).toContain("2.3s");
+    expect(panel.textContent).toContain("1/2");
+    expect(panel.querySelectorAll('[aria-label="Step timeline progress"] button')).toHaveLength(2);
+
+    const cancelButton = Array.from(panel.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("Cancel"),
     );
-    const triggers = panel.container.querySelectorAll('[data-testid="thinking-trigger"]');
-    expect(triggers).toHaveLength(2);
-    expect(triggers[0]?.getAttribute("aria-expanded")).toBe("false");
-    expect(triggers[1]?.getAttribute("aria-expanded")).toBe("true");
-    panel.unmount();
+    expect(cancelButton).toBeTruthy();
+    act(() => {
+      cancelButton?.click();
+    });
+    expect(onStop).toHaveBeenCalledTimes(1);
   });
 
-  it("says what a tool call touched, naming fetched hosts and underlining URLs", () => {
-    const html = opened([
-      steps(
-        ["Web fetch", "Write file", "Shell"],
-        undefined,
-        {},
-        {
-          0: "https://bend-lang.com/",
-          1: "src/app.ts",
-          2: "pnpm test",
+  it("keeps manual collapse across live updates and renders settled turns as a collapsed pill", () => {
+    const firstBlocks = [stepsBlock([step("Open calendar"), step("Read events")])];
+    renderPanel({
+      live: true,
+      blocks: firstBlocks,
+      runMeta: { modelId: "claude-opus-5-5", costUsd: 0.015 },
+    });
+
+    act(() => {
+      triggerButton().click();
+    });
+    expect(triggerButton().getAttribute("aria-expanded")).toBe("false");
+
+    renderPanel({
+      live: true,
+      blocks: [stepsBlock([step("Open calendar"), step("Read events"), step("Check conflicts")])],
+      runMeta: { modelId: "claude-opus-5-5", costUsd: 0.022 },
+    });
+    expect(triggerButton().getAttribute("aria-expanded")).toBe("false");
+    expect(panelRoot().textContent).toContain("$0.022");
+
+    const sevenSteps = [
+      "Open calendar",
+      "Read events",
+      "Search inbox",
+      "Read message",
+      "Check zones",
+      "Draft invite",
+      "Check conflicts",
+    ].map((label, idx) => step(label, { status: "done", durationMs: 1_500 + idx * 100 }));
+
+    renderPanel({
+      live: false,
+      blocks: [stepsBlock(sevenSteps, { durationMs: 12_400, costUsd: 0.055 })],
+      runMeta: { modelId: "claude-opus-5-5", status: "completed" },
+    });
+
+    expect(triggerButton().getAttribute("aria-expanded")).toBe("false");
+    const panel = panelRoot();
+    expect(panel.querySelector('[data-testid="tool-rows"]')).toBeNull();
+    expect(panel.textContent).toContain("Claude Opus 5.5");
+    expect(panel.textContent).toContain("+2");
+    expect(panel.textContent).toContain("$0.055");
+    expect(panel.textContent).toContain("0:12");
+
+    act(() => {
+      triggerButton().click();
+    });
+    expect(triggerButton().getAttribute("aria-expanded")).toBe("true");
+    expect(panel.querySelector('[data-testid="tool-rows"]')).not.toBeNull();
+  });
+
+  it("renders a one-line thought without a trigger and expands a multi-line thought on click", () => {
+    renderPanel({
+      live: true,
+      blocks: [thinking(["Checking the calendar."]), stepsBlock([step("Open calendar")])],
+    });
+    expect(container.querySelector('[data-testid="thinking-row"]')?.textContent).toContain(
+      "Checking the calendar.",
+    );
+    expect(container.querySelector('[data-testid="thinking-trigger"]')).toBeNull();
+
+    renderPanel({
+      live: true,
+      blocks: [
+        thinking(["Checking the calendar.", "Comparing Tuesday afternoon slots."]),
+        stepsBlock([step("Open calendar")]),
+      ],
+    });
+    const thinkTrigger = container.querySelector<HTMLButtonElement>(
+      '[data-testid="thinking-trigger"]',
+    );
+    expect(thinkTrigger?.getAttribute("aria-expanded")).toBe("false");
+    expect(container.querySelector('[data-testid="thinking-detail"]')).toBeNull();
+
+    act(() => {
+      thinkTrigger?.click();
+    });
+    expect(thinkTrigger?.getAttribute("aria-expanded")).toBe("true");
+    expect(container.querySelector('[data-testid="thinking-detail"]')?.textContent).toContain(
+      "Comparing Tuesday afternoon slots.",
+    );
+  });
+
+  it("opens Step Inspector popover with timing/share/note/detail and supports Escape close and Rewind", async () => {
+    const onRewind = vi.fn(async () => undefined);
+    const firstStep = step("Compared 38 commits", {
+      startedAtMs: 1_000,
+      durationMs: 2_300,
+      status: "done",
+      detail: "git log v3.1..main",
+      note: "Found **3 release PRs** to include.",
+    });
+    const secondStep = step("Drafted release notes", {
+      startedAtMs: 3_500,
+      durationMs: 2_700,
+      status: "done",
+    });
+
+    renderPanel({
+      live: true,
+      blocks: [stepsBlock([firstStep, secondStep])],
+      runMeta: {
+        startedAt: new Date(1_000).toISOString(),
+        costUsd: 0.039,
+      },
+      onRewind,
+    });
+
+    const segmentButton = panelRoot().querySelector<HTMLButtonElement>(
+      '[aria-label="Step timeline progress"] button[aria-label="Compared 38 commits"]',
+    );
+    expect(segmentButton).not.toBeNull();
+
+    act(() => {
+      segmentButton?.click();
+    });
+
+    const dialog = panelRoot().querySelector<HTMLElement>('[role="dialog"]');
+    expect(dialog).not.toBeNull();
+    expect(dialog?.getAttribute("aria-label")).toBe("Step inspector: Compared 38 commits");
+    expect(dialog?.textContent).toContain("Started");
+    expect(dialog?.textContent).toContain("Took");
+    expect(dialog?.textContent).toContain("2.3s");
+    expect(dialog?.textContent).toContain("Share");
+    expect(dialog?.textContent).toContain("State");
+    expect(dialog?.textContent).toContain("Done");
+    expect(dialog?.textContent).toContain("Found 3 release PRs to include.");
+    expect(dialog?.textContent).toContain("git log v3.1..main");
+
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+    expect(panelRoot().querySelector('[role="dialog"]')).toBeNull();
+
+    act(() => {
+      segmentButton?.click();
+    });
+    const rewindButton = Array.from(
+      panelRoot().querySelectorAll<HTMLButtonElement>('[role="dialog"] button'),
+    ).find((button) => button.textContent?.includes("Rewind to here"));
+    expect(rewindButton).toBeTruthy();
+
+    await act(async () => {
+      rewindButton?.click();
+      await Promise.resolve();
+    });
+    expect(onRewind).toHaveBeenCalledWith(0, firstStep);
+    expect(panelRoot().querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it("renders Needs you approval banner and handles Allow/Decline buttons and keyboard shortcuts", async () => {
+    const onAnswer = vi.fn(async () => undefined);
+    renderPanel({
+      live: false,
+      blocks: [
+        stepsBlock([step("Built preview", { durationMs: 2_600, status: "done" })], {
+          costUsd: 0.055,
+        }),
+      ],
+      runMeta: {
+        botName: "Release agent",
+        modelId: "claude-opus-5-5",
+        status: "waiting_input",
+      },
+      pendingApproval: {
+        canAnswer: true,
+        block: {
+          kind: "ask",
+          text: "Ready to ship",
+          detail: "gh release create v3.2.0",
+          actions: [
+            { id: "allow", label: "Allow" },
+            { id: "deny", label: "Decline" },
+          ],
         },
-      ),
-    ]);
-    const text = visibleText(html);
-    expect(text).toContain("Read bend-lang.com https://bend-lang.com/");
-    expect(text).toContain("Wrote src/app.ts");
-    expect(text).toContain("Ran pnpm test");
-    expect(html).toContain("text-foreground/90");
-    expect(html).toContain("underline decoration-foreground/50 underline-offset-2");
-    // Short details with no note stay calm plain rows without expand chevrons.
-    expect(html).not.toContain('data-testid="activity-row-trigger"');
-  });
+        onAnswer,
+      },
+    });
 
-  it("expands a tool row to its full detail when the detail is long", () => {
-    const panel = mountPanel();
-    const longCommand = `pnpm --filter @rakazo/web test ${"--reporter=verbose ".repeat(6)}src/components/messages/ActivityPanel.test.tsx`;
-    panel.render([steps(["Shell"], undefined, {}, { 0: longCommand })], false);
-    panel.open();
-    flushSync(() => panel.byTestId("activity-row-trigger")?.click());
-    expect(panel.byTestId("tool-step-note")?.textContent).toContain(longCommand);
-    panel.unmount();
-  });
+    const panel = panelRoot();
+    expect(triggerButton().getAttribute("aria-expanded")).toBe("true");
+    expect(panel.textContent).toContain("Needs you");
+    expect(panel.textContent).toContain("Ready to ship");
+    expect(panel.querySelector("code")?.textContent).toBe("gh release create v3.2.0");
 
-  it("expands a tool row to the note the bot wrote before the call", () => {
-    const panel = mountPanel();
-    panel.render([steps(["Web search"], undefined, { 0: "Anna is free all Tuesday." })], false);
-    panel.open();
-    flushSync(() => panel.byTestId("activity-row-trigger")?.click());
-    expect(panel.byTestId("tool-step-note")?.textContent).toContain("Anna is free all Tuesday.");
-    panel.unmount();
-  });
-
-  it("marks only the call still running, with a safe pulse", () => {
-    const html = markup([steps(["Open calendar", "Check conflicts"])], true);
-    expect(html.match(/◷/g)).toHaveLength(1);
-    expect(html).toContain("motion-safe:animate-[rkPulse_1.2s_ease-in-out_infinite]");
-  });
-
-  it("lists only the last tool rows while live and counts the earlier ones", () => {
-    const labels = Array.from({ length: LIVE_TOOL_STEP_WINDOW + 2 }, (_, i) => `step-${i}`);
-    const html = markup([thinking(["Checking the calendar."]), steps(labels)], true);
-    expect(html).toContain('data-testid="tool-rows-hidden"');
-    expect(html).toContain("+2 earlier steps");
-    // The reasoning row stays visible; only old tool rows fold away.
-    expect(html).toContain("Checking the calendar.");
-    for (const hidden of ["step-0", "step-1"]) expect(html).not.toContain(`${hidden}<`);
-    for (let i = 2; i < labels.length; i++) expect(html).toContain(`step-${i}<`);
-    // The pulsing marker stays on the latest step after the window shifts the indexes.
-    expect(html).toMatch(/◷<\/span>/);
-    expect(html.match(/◷/g)).toHaveLength(1);
-  });
-
-  it("uses the singular for one hidden step", () => {
-    const labels = Array.from({ length: LIVE_TOOL_STEP_WINDOW + 1 }, (_, i) => `step-${i}`);
-    expect(markup([steps(labels)], true)).toContain("+1 earlier step");
-  });
-
-  it("lists every row when the list fits or the run has finished", () => {
-    const labels = Array.from({ length: LIVE_TOOL_STEP_WINDOW }, (_, i) => `step-${i}`);
-    const live = markup([steps(labels)], true);
-    expect(live).not.toContain("earlier");
-    for (const label of labels) expect(live).toContain(`${label}<`);
-    const doneLabels = [...labels, "step-last"];
-    const done = opened([steps(doneLabels)]);
-    expect(done).not.toContain("earlier");
-    for (const label of doneLabels) expect(done).toContain(`${label}<`);
-  });
-
-  it("exposes the full label as the title of a truncated row", () => {
-    const label = "Read apps/web/src/components/ActivityPanel.tsx";
-    const html = opened([steps([label])]);
-    expect(html).toContain(`title="${label}"`);
-  });
-
-  it("renders a panel for a standalone activity-only message", () => {
-    const html = renderToStaticMarkup(
-      <StandaloneActivity blocks={[steps(["Shell"], 4_000)]} live={false} />,
+    const allowButton = panel.querySelector<HTMLButtonElement>('button[aria-keyshortcuts="Enter"]');
+    const declineButton = panel.querySelector<HTMLButtonElement>(
+      'button[aria-keyshortcuts="Escape"]',
     );
-    expect(html).toContain('data-testid="tool-activity-line"');
-    expect(visibleText(html)).toContain("ran a command · 4s");
-    expect(html).not.toContain("bg-muted");
+    expect(allowButton?.querySelector('[aria-hidden="true"]')?.textContent).toBe("↵");
+    expect(declineButton?.querySelector('[aria-hidden="true"]')?.textContent).toBe("Esc");
+
+    const input = document.createElement("input");
+    document.body.append(input);
+    input.focus();
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+    expect(onAnswer).not.toHaveBeenCalled();
+    input.remove();
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      await Promise.resolve();
+    });
+    expect(onAnswer).toHaveBeenCalledWith("allow");
+
+    await act(async () => {
+      declineButton?.click();
+      await Promise.resolve();
+    });
+    expect(onAnswer).toHaveBeenCalledWith("deny");
   });
 
-  it("groups reasoning and steps into one slim line", () => {
-    const html = openedMarkup(
-      <ActivityOnlyNarration
-        blocks={[thinking(["Checking the calendar."]), steps(["Open calendar"], 12_000)]}
-        live={false}
-      />,
+  it("renders multi-attempt SVG git-graph with Stopped branch and Attempt 2 badge and supports row Rewind", async () => {
+    const onRewind = vi.fn(async () => undefined);
+    const branchStep1 = step("Open calendar", { attempt: 1, status: "done", durationMs: 1_100 });
+    const branchStep2 = step("Read old inbox", { attempt: 1, status: "stopped", durationMs: 900 });
+    const retryStep = step("Compare updated slots", {
+      attempt: 2,
+      forkedFromStep: 0,
+      status: "done",
+      durationMs: 1_800,
+    });
+
+    renderPanel({
+      live: true,
+      blocks: [
+        stepsBlock([branchStep1, branchStep2, retryStep], {
+          attempts: 2,
+          costUsd: 0.064,
+        }),
+      ],
+      onRewind,
+    });
+
+    const toolRows = container.querySelector('[data-testid="tool-rows"]');
+    expect(toolRows?.querySelector("svg")).not.toBeNull();
+    expect(toolRows?.textContent).toContain("Stopped");
+    expect(toolRows?.textContent).toContain("Attempt 2");
+    expect(panelRoot().textContent).toContain("2 attempts");
+
+    const rewindBtn = toolRows?.querySelector<HTMLButtonElement>(
+      'button[aria-label="Rewind to Open calendar"]',
     );
-    expect(html.match(/data-testid="tool-activity-line"/g)).toHaveLength(1);
-    expect(html.match(/data-testid="tool-activity"/g)).toHaveLength(1);
-    expect(html.match(/data-testid="thinking-row"/g)).toHaveLength(1);
-    expect(visibleText(html)).toContain("Open calendar · 1 tool · 12s");
+    expect(rewindBtn).not.toBeNull();
+
+    await act(async () => {
+      rewindBtn?.click();
+      await Promise.resolve();
+    });
+    expect(onRewind).toHaveBeenCalledWith(0, branchStep1);
+  });
+
+  it("opens the lazy RunLogSheet with execution trace and reasoning when Log is clicked", async () => {
+    renderPanel({
+      live: true,
+      blocks: [
+        thinking(["Planning release tag."]),
+        stepsBlock([step("Checked tags", { durationMs: 1_400, status: "done" })]),
+      ],
+      runMeta: { modelId: "claude-opus-5-5", costUsd: 0.012 },
+    });
+
+    const logButton = panelRoot().querySelector<HTMLButtonElement>(
+      'button[aria-label="Open execution log"]',
+    );
+    expect(logButton).not.toBeNull();
+
+    act(() => {
+      logButton?.click();
+    });
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("Execution trace");
+    });
+    expect(document.body.textContent).toContain("Reasoning");
+    expect(document.body.textContent).toContain("Planning release tag.");
+    expect(document.body.textContent).toContain("Checked tags");
+  });
+
+  it("renders StandaloneActivity, ActivityOnlyNarration, and LiveRunMonitorCard wrappers", () => {
+    act(() => {
+      flushSync(() =>
+        root.render(
+          <Suspense fallback={null}>
+            <StandaloneActivity
+              blocks={[stepsBlock([step("Shell")], { durationMs: 4_000 })]}
+              live={false}
+            />
+            <ActivityOnlyNarration
+              blocks={[
+                thinking(["Checking the calendar."]),
+                stepsBlock([step("Open calendar")], { durationMs: 12_000 }),
+              ]}
+              live={false}
+            />
+            <LiveRunMonitorCard
+              runMeta={{ botName: "Chief", modelId: "claude-opus-5-5" }}
+              label="Preparing run…"
+            />
+          </Suspense>,
+        ),
+      );
+    });
+
+    expect(container.querySelectorAll('[data-testid="tool-activity-line"]')).toHaveLength(3);
+    expect(container.querySelectorAll('[data-testid="tool-activity"]')).toHaveLength(3);
+    expect(container.textContent).toContain("Preparing run…");
   });
 });

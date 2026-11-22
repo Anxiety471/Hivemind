@@ -17,7 +17,7 @@ import type {
   ReplyMode,
   ToolStepCall,
 } from "@rakazo/contracts";
-import type { StreamingRedactor, ToolStepOutcome } from "@rakazo/core";
+import type { LiveStepTiming, StreamingRedactor, ToolStepOutcome } from "@rakazo/core";
 import { createStreamingRedactor } from "@rakazo/core";
 import { toolEffectIdempotencyKey } from "@rakazo/core/node/approval-effect-key";
 import type { Bot, Computer, effectiveMemoryScope, Run, Task, Thread } from "@rakazo/db";
@@ -141,12 +141,22 @@ export interface ReplyState {
   pendingToolNames: string[];
   /** Parallel to `pendingToolNames`: each waiting tool call's short redacted target, or null. */
   pendingToolDetails: (string | null)[];
+  /** Parallel to `pendingToolNames`: optional live start time and retry-branch coordinates. */
+  pendingToolTimings?: (LiveStepTiming | null)[];
   /** Every step label a call made, in call order, so its outcome can be saved on its step. */
   toolCalls: { label: string; executionId: string; tool?: string }[];
+  /** Elapsed timing per execution id for live monitor and persisted step blocks. */
+  toolTimings?: Map<string, { startedAtMs?: number; durationMs?: number }>;
   /** How each finished call ended, by execution id. */
   toolOutcomes: Map<string, ToolStepOutcome>;
   /** What each call that shows as its own step was called with and returned, by execution id. */
   toolStepCalls: Map<string, ToolStepCall>;
+  /** Running accumulated USD cost for this reply (seeded across rewound branches). */
+  costUsd?: number;
+  /** Current 1-indexed attempt branch on this reply when rewound from an earlier run. */
+  attempt?: number;
+  /** First step index in the new attempt attaches this fork origin to the branch graph. */
+  pendingForkFromStep?: number;
   /** Characters of results the reply has kept so far, against its budget. */
   keptResultChars: number;
   /** Calls that finished before their call event was handled, kept once it is. */

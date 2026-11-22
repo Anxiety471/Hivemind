@@ -157,6 +157,7 @@ export const RunSchema = z.object({
   routineName: z.string().nullable().optional(),
   modelProvider: z.string().nullable(),
   modelId: z.string().nullable(),
+  costUsd: z.number().nonnegative().nullable().optional(),
   error: z.string().nullable(),
   startedAt: z.string().nullable(),
   completedAt: z.string().nullable(),

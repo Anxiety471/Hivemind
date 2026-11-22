@@ -11,6 +11,7 @@ import {
   subagentBlockFromPayload,
   thinkingLiveUpdate,
 } from "../messages/events.js";
+import type { ToolStep } from "../messages/live-step-updates.js";
 import { mergeThreadHistory, upsertMessageById } from "../messages/message-pages.js";
 import { payloadAuthor, replyMetadata } from "../messages/message-replies.js";
 import {
@@ -74,6 +75,8 @@ export function isThreadSnapshotEvent(event: { type: string }): boolean {
     event.type === "thread.cloud_agent" ||
     event.type === "agent.tool.called" ||
     event.type === "agent.tool.completed" ||
+    event.type === "usage.recorded" ||
+    event.type === "run.checkpointed" ||
     event.type === "thread.message.created" ||
     event.type === "thread.message.updated" ||
     event.type === "run.started" ||
@@ -303,6 +306,11 @@ function reduce(prev: LiveThreadSnapshot, event: ThreadSnapshotEvent): LiveThrea
       payload.detail.trim()
         ? payload.detail.trim()
         : undefined;
+    const startedAtMs =
+      event.type === "agent.tool.called" ? validNonNegInt(payload.startedAtMs) : undefined;
+    const attempt = event.type === "agent.tool.called" ? validPosInt(payload.attempt) : undefined;
+    const forkedFromStep =
+      event.type === "agent.tool.called" ? validNonNegInt(payload.forkedFromStep) : undefined;
     const blocks = reduceLiveMessageBlocks(
       previous?.blocks ?? [],
       event.type === "thread.progress"
@@ -313,6 +321,9 @@ function reduce(prev: LiveThreadSnapshot, event: ThreadSnapshotEvent): LiveThrea
               type: "tool",
               name: String(payload.name ?? ""),
               ...(detail ? { detail } : {}),
+              ...(startedAtMs !== undefined ? { startedAtMs } : {}),
+              ...(attempt !== undefined ? { attempt } : {}),
+              ...(forkedFromStep !== undefined ? { forkedFromStep } : {}),
             },
     );
     return {
@@ -321,7 +332,102 @@ function reduce(prev: LiveThreadSnapshot, event: ThreadSnapshotEvent): LiveThrea
       messages: [...remaining, liveRow(prev, event, liveId, blocks)],
     };
   }
-  if (event.type === "agent.tool.completed") return advanced();
+  if (event.type === "agent.tool.completed") {
+    const liveId = progressMessageId(event);
+    const live = prev.messages.find((message) => message.id === liveId);
+    const durationMs = validNonNegInt(payload.durationMs);
+    if (
+      live &&
+      (durationMs !== undefined ||
+        live.blocks.some(
+          (block) =>
+            block.kind === "steps" && block.steps.some((step) => step.status === "running"),
+        ))
+    ) {
+      const outcome = typeof payload.outcome === "string" ? payload.outcome : undefined;
+      const blocks = reduceLiveMessageBlocks(live.blocks, {
+        type: "tool_completed",
+        name: String(payload.name ?? ""),
+        durationMs: durationMs ?? 0,
+        ...(outcome ? { outcome } : {}),
+      });
+      return {
+        ...prev,
+        cursor,
+        messages: prev.messages.map((message) =>
+          message.id === liveId ? { ...message, blocks } : message,
+        ),
+      };
+    }
+    return advanced();
+  }
+  if (event.type === "usage.recorded") {
+    const runCostUsd = validNonNegNumber(payload.runCostUsd);
+    const stepCostUsd = validNonNegNumber(payload.costUsd);
+    if (runCostUsd === undefined && stepCostUsd === undefined) return advanced();
+    const targetRunId = event.runId ?? prev.run?.id;
+    const currentRun =
+      (targetRunId
+        ? (prev.activeRuns?.find((candidate) => candidate.id === targetRunId) ??
+          (prev.run?.id === targetRunId ? prev.run : undefined))
+        : undefined) ?? prev.run;
+    const nextCostUsd = runCostUsd ?? (currentRun?.costUsd ?? 0) + (stepCostUsd ?? 0);
+    const run =
+      prev.run && (!targetRunId || prev.run.id === targetRunId)
+        ? { ...prev.run, costUsd: nextCostUsd }
+        : prev.run;
+    const activeRuns = prev.activeRuns?.map((candidate) =>
+      !targetRunId || candidate.id === targetRunId
+        ? { ...candidate, costUsd: nextCostUsd }
+        : candidate,
+    );
+    const liveId = progressMessageId(event);
+    const messages = prev.messages.some((message) => message.id === liveId)
+      ? prev.messages.map((message) =>
+          message.id === liveId
+            ? {
+                ...message,
+                blocks: reduceLiveMessageBlocks(message.blocks, {
+                  type: "usage",
+                  costUsd: nextCostUsd,
+                }),
+              }
+            : message,
+        )
+      : prev.messages;
+    return { ...prev, cursor, run, activeRuns, messages };
+  }
+  if (event.type === "run.checkpointed") {
+    if (!Array.isArray(payload.steps)) return advanced();
+    const liveId = progressMessageId(event);
+    const { previous, remaining } = takeLiveMessage(prev.messages, liveId);
+    const attempts = validPosInt(payload.attempts);
+    const costUsd = validNonNegNumber(payload.costUsd);
+    const modelId = typeof payload.modelId === "string" ? payload.modelId : undefined;
+    const modelProvider =
+      typeof payload.modelProvider === "string" ? payload.modelProvider : undefined;
+    const blocks = reduceLiveMessageBlocks(previous?.blocks ?? [], {
+      type: "checkpoint",
+      steps: payload.steps as ToolStep[],
+      ...(attempts !== undefined ? { attempts } : {}),
+      ...(costUsd !== undefined ? { costUsd } : {}),
+      ...(modelId ? { modelId } : {}),
+      ...(modelProvider ? { modelProvider } : {}),
+    });
+    const run =
+      costUsd !== undefined &&
+      prev.run &&
+      (!event.runId || prev.run.id === event.runId) &&
+      prev.run.costUsd == null
+        ? { ...prev.run, costUsd }
+        : prev.run;
+    return {
+      ...prev,
+      cursor,
+      run,
+      messages: [...remaining, liveRow(prev, event, liveId, blocks)],
+    };
+  }
   if (event.type === "thread.subagent") {
     const block = subagentBlockFromPayload(payload);
     const next = liveRow(prev, event, `subagent:${block.agentId}`, [block]);
@@ -417,11 +523,27 @@ function runFromStartedEvent(
     ...(typeof routineName === "string" ? { routineName } : {}),
     modelProvider: previous?.modelProvider ?? null,
     modelId: previous?.modelId ?? null,
+    ...(previous?.costUsd !== undefined ? { costUsd: previous.costUsd } : {}),
     error: null,
     startedAt: previous?.startedAt ?? event.createdAt,
     completedAt: null,
     createdAt: previous?.createdAt ?? event.createdAt,
   };
+}
+
+function validNonNegInt(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return undefined;
+  return Math.trunc(value);
+}
+
+function validPosInt(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) return undefined;
+  return value;
+}
+
+function validNonNegNumber(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return undefined;
+  return value;
 }
 
 function liveRow(

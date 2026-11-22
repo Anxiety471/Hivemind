@@ -5,6 +5,7 @@ import { DEFAULT_BOT_AVATAR_COLOR } from "@rakazo/ui-web";
 import type { ReactNode } from "react";
 import { useMemo, useRef } from "react";
 import { rpc } from "../../src/lib/query/rpc";
+import type { TranscriptRunSummary } from "../../src/pages/shell/chat/transcript";
 import { Transcript } from "../../src/pages/shell/chat/transcript";
 
 export const BOT = { botId: "bot-1", name: "Chief", color: DEFAULT_BOT_AVATAR_COLOR };
@@ -52,6 +53,11 @@ export function FixtureTranscript({
   header,
   answerableAskIds = NO_IDS,
   bots = [BOT],
+  activeRun,
+  threadRuns,
+  onStop,
+  onRewind,
+  onAnswer,
 }: {
   messages: readonly ThreadMessage[];
   running: boolean;
@@ -61,6 +67,17 @@ export function FixtureTranscript({
   answerableAskIds?: Set<string>;
   /** The chat's own bot first, then any peers it mentions or hands off to. */
   bots?: GroupAvatarMember[];
+  activeRun?: TranscriptRunSummary | null;
+  threadRuns?: readonly TranscriptRunSummary[];
+  onStop?: () => void;
+  onRewind?: (input: {
+    messageId: string;
+    runId?: string;
+    stepIndex: number;
+    stepLabel?: string;
+    stepDetail?: string;
+  }) => Promise<void> | void;
+  onAnswer?: (message: ThreadMessage, text: string) => Promise<void>;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const transcript = useMemo(
@@ -88,9 +105,13 @@ export function FixtureTranscript({
         dismissableAskIds={answerableAskIds}
         running={running}
         workingBots={running ? [bots[0]!] : []}
+        activeRun={activeRun}
+        threadRuns={threadRuns}
+        onStop={onStop}
+        onRewind={onRewind}
         onLoadOlder={noop}
         onOpenBot={noop}
-        onAnswer={resolved}
+        onAnswer={onAnswer ?? resolved}
         onReply={noop}
         onMarkUnread={noop}
         onQuote={noop}

@@ -618,6 +618,43 @@ export function useComposerActions({
     }
   }, [sending, t]);
 
+  const rewindRun = useCallback(
+    async (input: {
+      messageId: string;
+      runId?: string;
+      stepIndex: number;
+      stepLabel?: string;
+      stepDetail?: string;
+    }) => {
+      const botTarget = activeBotId.current;
+      const groupTarget = activeGroupId.current;
+      if (!botTarget && !groupTarget) return;
+      setSendError(null);
+      try {
+        await rpc.threads.rewind({
+          ...(groupTarget ? { groupId: groupTarget } : { botId: botTarget! }),
+          messageId: input.messageId,
+          ...(input.runId ? { runId: input.runId } : {}),
+          stepIndex: input.stepIndex,
+          ...(input.stepLabel ? { stepLabel: input.stepLabel } : {}),
+          ...(input.stepDetail ? { stepDetail: input.stepDetail } : {}),
+          clientNonce: newClientId(),
+        });
+      } catch (error) {
+        if (activeGroupId.current === groupTarget && activeBotId.current === botTarget) {
+          setSendError(errorText(error, t`Failed to rewind`));
+        }
+        return;
+      }
+      if (groupTarget) {
+        await refreshGroupThreadRef.current(groupTarget).catch(() => undefined);
+      } else if (botTarget) {
+        await refreshThreadRef.current(botTarget).catch(() => undefined);
+      }
+    },
+    [t],
+  );
+
   function dismissComposerError() {
     // The strip shows one message at a time, so only dismiss the run failure when it is the
     // one on screen; otherwise a live run would be silenced before it has even failed.
@@ -646,6 +683,7 @@ export function useComposerActions({
     sentCount,
     sendMessage,
     stopRun,
+    rewindRun,
     answerMessage,
     reactToMessage,
     sendError,
