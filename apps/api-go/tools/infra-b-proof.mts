@@ -1937,6 +1937,265 @@ if (picked("worker")) {
   });
 }
 
+// ---------------------------------------------------------------- run1 procedures
+if (picked("run1")) {
+  await check("run1: the real worker completes routine, skill and approved-chat runs", async () => {
+    const { createApp } = await import("../../api/src/app.js");
+    const { RunWorkerHost } = await import("../../../packages/adapters/src/runs/wakeups/run-wakeup.js");
+    const { EncryptedSecretStore } = await import("../../../packages/adapters/src/secrets/secrets.js");
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const path = await import("node:path");
+    // The worker case's app.stop() closed the shared fanout; this case owns one.
+    const run1Fanout = new PostgresRealtimeFanout({
+      connectionString: DATABASE_URL,
+      publisher: pool,
+    });
+    const fixture = await makeFixture("run1");
+    const dataDir = mkdtempSync(path.join(tmpdir(), "infra-b-run1-"));
+    process.env.BETTER_AUTH_SECRET ??= "infra-b-proof-secret-0123456789abcdef";
+    process.env.NODE_ENV ??= "test";
+    process.env.AGENT_RUNTIME = "scripted";
+    process.env.SANDBOX_PROVIDER = "fake";
+    process.env.WAKEUP_DRIVER = "postgres";
+    const app = await createApp({
+      databaseUrl: DATABASE_URL,
+      dataDir,
+      sandboxProvider: "fake",
+      agentRuntime: "scripted",
+      wakeupDriver: "postgres",
+      defaultProvider: "scripted",
+      defaultModel: "scripted",
+      realtime: run1Fanout,
+      prisma,
+    } as any);
+    await run1Fanout.subscribe("proof-warmup-run1", () => undefined);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const starter = new RunStarter(run1Fanout);
+    let handlerRuns = 0;
+    const host = new RunWorkerHost(prisma, run1Fanout, starter, {});
+    const handlers = {
+      "run.continue": async (payload: { runId: string }, execution?: any) => {
+        handlerRuns += 1;
+        await app.executor.continueRun(payload.runId, "proof-run1", execution?.onRunStarted);
+      },
+    } as any;
+    const waitForRun = async (runId: string, label: string) => {
+      const deadline = Date.now() + 60_000;
+      let run: any = undefined;
+      while (Date.now() < deadline) {
+        run = await system.run.findUnique({ where: { id: runId } });
+        if (run?.status === "completed" || run?.status === "failed") break;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      assert.equal(run?.status, "completed", `${label} must complete (${run?.status}: ${run?.error ?? ""})`);
+      return run;
+    };
+    try {
+      await host.start(handlers);
+
+      // A pinned routine model must also be a connected one, or the worker fails
+      // the run before the model (PINNED_PROVIDER_NOT_CONNECTED). The API reads
+      // this key through EncryptedSecretStore, so seal it the same way.
+      const secretId = id("run1-model-secret");
+      const secrets = new EncryptedSecretStore(process.env.ENCRYPTION_KEY!);
+      const sealed = await secrets.put("sk-infra-b-run1-proof", {
+        signal: new AbortController().signal,
+      } as any, { recordId: secretId });
+      await system.secret.create({
+        data: { id: secretId, userId: fixture.userId, spaceId: null, kind: "model", ciphertext: sealed.ciphertext },
+      });
+      const credentialId = id("run1-credential");
+      await system.userModelCredential.create({
+        data: {
+          id: credentialId,
+          userId: fixture.userId,
+          provider: "openrouter",
+          label: "Run1 OpenRouter",
+          secretId,
+        },
+      });
+      // The pin is a free-form id ("x/y"), so the connection must name it as its
+      // default model or the run path refuses it as UNKNOWN_PROVIDER_MODEL.
+      await system.userModelPreference.create({
+        data: { userId: fixture.userId, credentialId, modelId: "x/y", thinkingLevel: "high" },
+      });
+      await system.routine.update({
+        where: { id: fixture.routineId },
+        data: {
+          modelProvider: "openrouter",
+          modelId: "x/y",
+          thinkingLevel: "high",
+          // The test run ignores the schedule; inactive keeps a due occurrence from
+          // adding a fourth run while this case runs.
+          active: false,
+        },
+      });
+
+      const skillId = id("run1-skill");
+      await system.taughtSkill.create({
+        data: {
+          id: skillId,
+          spaceId: fixture.spaceId,
+          botId: fixture.botId,
+          userId: fixture.userId,
+          name: "Run1 taught skill",
+          goal: "prove the taught-skill trial run",
+          status: "saved",
+          playbook: {
+            whenToUse: "when the run1 proof runs",
+            inputs: [],
+            steps: ["one"],
+            howToCheck: "the run completes",
+            whatToReturn: "one sentence",
+            approvalBoundaries: "ask before sending anything",
+            failureHandling: "report the failure",
+          },
+        },
+      });
+
+      const serverId = id("run1-server");
+      await system.mcpServer.create({
+        data: {
+          id: serverId,
+          spaceId: fixture.spaceId,
+          userId: fixture.userId,
+          slug: `run1-${tag}`,
+          name: "Run1 MCP server",
+          transport: "http",
+          endpoint: "https://run1.example.test/mcp",
+          enabled: true,
+          allSpaces: true,
+        },
+      });
+
+      const actor = { spaceId: fixture.spaceId, userId: fixture.userId };
+
+      // 1. routines.testRun: the pin follows the routine.
+      const routine = await go({
+        op: "routineTestRun",
+        actor,
+        input: { routineId: fixture.routineId, clientNonce: "run1-routine" },
+      });
+      const routineRunId: string = routine.body.runId;
+      const routineRun = await waitForRun(routineRunId, "the routine test run");
+      assert.equal(routineRun.trigger, "routine", "the test run's trigger");
+      assert.equal(routineRun.routineId, fixture.routineId, "the test run's routine");
+      assert.equal(routineRun.modelPinned, true, "the routine model must stay pinned");
+      assert.equal(routineRun.modelProvider, "openrouter", "the pinned provider");
+      assert.equal(routineRun.modelId, "x/y", "the pinned model");
+      assert.equal(routineRun.thinkingLevel, "high", "the pinned thinking level");
+
+      // 2. skills.testRun with no prompt: the playbook is the task prompt.
+      const skill = await go({ op: "skillTestRun", actor, input: { skillId } });
+      const skillRunId: string = skill.body.runId;
+      const skillRun = await waitForRun(skillRunId, "the skill test run");
+      assert.equal(skillRun.trigger, "skill", "the trial run's trigger");
+      const skillTask = await system.task.findUniqueOrThrow({ where: { id: skillRun.taskId } });
+      assert.ok(
+        skillTask.prompt.startsWith("Run taught skill: "),
+        `the trial task renders the playbook (${skillTask.prompt.slice(0, 40)})`,
+      );
+
+      // Neither earlier run may hold the chat, or the approval queues nothing.
+      const thread = await system.thread.findUniqueOrThrow({
+        where: { id: fixture.threadId },
+        select: { nextMessageSeq: true },
+      });
+      const cardSeq = thread.nextMessageSeq;
+      await system.message.create({
+        data: {
+          id: id("run1-card"),
+          threadId: fixture.threadId,
+          seq: cardSeq,
+          role: "bot",
+          botId: fixture.botId,
+          blocks: [
+            {
+              kind: "mcp_approval",
+              name: "Run1 MCP server",
+              serverId,
+              transport: "http",
+              endpoint: "https://run1.example.test/mcp",
+              needsOAuth: false,
+              status: "pending",
+            },
+          ],
+        },
+      });
+      await system.thread.update({
+        where: { id: fixture.threadId },
+        data: { nextMessageSeq: cardSeq + 1 },
+      });
+
+      // 3. mcp.assignments.approve: the card is repainted connected, the bot is
+      // assigned, and the hidden follow-on turn is queued and woken.
+      frames = [];
+      const approve = await go({
+        op: "approveAssignment",
+        actor,
+        input: { botId: fixture.botId, serverId, threadId: fixture.threadId },
+      });
+      assert.equal(approve.body.serverId, serverId, "the approval returns the assignment");
+      const assignment = await system.botMcpServer.findUnique({
+        where: { botId_serverId: { botId: fixture.botId, serverId } },
+      });
+      assert.ok(assignment, "the approval must assign the server to the bot");
+      assert.equal(assignment.allowAllTools, true, "the new assignment allows every tool");
+      // The repaint's event is appended in the approval transaction; read it now so
+      // nothing the follow-on turn writes later can be mistaken for it.
+      const updated = await system.event.findFirst({
+        where: { threadId: fixture.threadId, type: "thread.message.updated" },
+        orderBy: { seq: "desc" },
+      });
+      assert.ok(updated, "the approve must append thread.message.updated");
+      const approvedRun = await system.run.findFirst({
+        where: {
+          threadId: fixture.threadId,
+          id: { notIn: [routineRunId, skillRunId] },
+        },
+        orderBy: { createdAt: "desc" },
+        include: { task: { select: { prompt: true } } },
+      });
+      assert.ok(approvedRun, "the approval must queue exactly one follow-on run");
+      assert.equal(approvedRun.trigger, "user", "the approved-chat run's trigger");
+      assert.ok(
+        approvedRun.task.prompt.includes("connected the MCP server"),
+        "the approved-chat run is the hidden follow-on turn",
+      );
+      await waitForRun(approvedRun.id, "the approved-chat run");
+
+      // The approve repaint announces its thread.message.updated cursor.
+      await settleFrames();
+      const repaint = frames.find((frame) => {
+        if (frame.topic !== `thread:${fixture.threadId}`) return false;
+        try {
+          return JSON.parse(frame.payload).cursor === updated!.seq;
+        } catch {
+          return false;
+        }
+      });
+      assert.ok(repaint, "the approve repaint must be announced on the thread topic");
+
+      // Each run's own reply is in the chat, and the host handled all three.
+      const replies = await system.message.count({
+        where: {
+          threadId: fixture.threadId,
+          role: "bot",
+          runId: { in: [routineRunId, skillRunId, approvedRun.id] },
+        },
+      });
+      assert.equal(replies, 3, "each run must write one bot reply");
+      assert.equal(handlerRuns, 3, "the RunWorkerHost must handle all three runs");
+    } finally {
+      await host.stop();
+      await app.stop();
+      await dropFixture(fixture);
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+}
+
 // ---------------------------------------------------------------- result
 child.kill();
 await Promise.race([

@@ -20,6 +20,11 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/effects"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/events"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/jobs"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/mcpassignments"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/routines"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/skills"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/runs"
 )
 
@@ -57,6 +62,9 @@ type request struct {
 	DelegatedFrom   *string        `json:"delegatedFromRunId"`
 	RetryOf         *string        `json:"retryOfRunId"`
 	WakeAt          string         `json:"wakeAt"`
+	// Input is the raw oRPC input of a procedure op (routines.testRun,
+	// skills.testRun, mcp.assignments.approve).
+	Input json.RawMessage `json:"input"`
 }
 
 type cancelledOut struct {
@@ -92,6 +100,8 @@ type response struct {
 	StoppedCount int             `json:"stoppedHelpers,omitempty"`
 	Computers    []computerOut   `json:"computers,omitempty"`
 	Raw          json.RawMessage `json:"raw,omitempty"`
+	// Body is what a procedure op returned, as its JSON result.
+	Body json.RawMessage `json:"body,omitempty"`
 }
 
 type leaseOut struct {
@@ -113,6 +123,40 @@ func at(value string) (time.Time, error) {
 		return time.Time{}, nil
 	}
 	return time.Parse(time.RFC3339Nano, value)
+}
+
+// proofDeployment is the deployment slice the procedure ports read: the Space
+// key ring, the process notifier, and the Postgres cursor publisher whose NOTIFY
+// announces the approve repaint, as cmd/gateway wires &events.PGPublisher.
+func proofDeployment(database *db.DB, ring *contentcrypto.KeyRing, notifier *effects.Notifier) shared.Deployment {
+	deployment := shared.Deployment{Content: ring, Signals: notifier}
+	if database != nil {
+		deployment.Events = &events.PGPublisher{Pool: database.Pool}
+	}
+	return deployment
+}
+
+// proofPublisher hands the notifier to a procedure that takes a runs.Publisher.
+// A nil *effects.Notifier stored in the interface would be non-nil, so a missing
+// notifier stays a nil interface and leaves only the durable wake.
+func proofPublisher(notifier *effects.Notifier) runs.Publisher {
+	if notifier == nil {
+		return nil
+	}
+	return notifier
+}
+
+// procedureBody is one procedure op's response: its result as `body`, or the
+// procedure's first error message.
+func procedureBody(value any, failure *orpc.Error) response {
+	if failure != nil {
+		return response{Error: failure.Message}
+	}
+	body, err := json.Marshal(value)
+	if err != nil {
+		return response{Error: err.Error()}
+	}
+	return response{OK: true, Body: body}
 }
 
 func main() {
@@ -365,6 +409,15 @@ func handle(ctx context.Context, database *db.DB, ring *contentcrypto.KeyRing, n
 			return response{Error: err.Error()}
 		}
 		return response{OK: true, Found: ok, RunID: ref.ID, TaskID: ref.TaskID, Status: ref.Status}
+	case "routineTestRun":
+		return procedureBody(routines.TestRun(ctx, database,
+			proofDeployment(database, ring, notifier), actor, orpc.Input{Raw: in.Input}))
+	case "skillTestRun":
+		return procedureBody(skills.TestRun(ctx, database,
+			proofDeployment(database, ring, notifier), proofPublisher(notifier), actor, orpc.Input{Raw: in.Input}))
+	case "approveAssignment":
+		return procedureBody(mcpassignments.Approve(ctx, database,
+			proofDeployment(database, ring, notifier), proofPublisher(notifier), actor, orpc.Input{Raw: in.Input}))
 	default:
 		return response{Error: "unknown op " + in.Op}
 	}
