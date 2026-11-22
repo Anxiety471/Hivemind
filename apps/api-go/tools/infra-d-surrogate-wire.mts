@@ -4,11 +4,13 @@
  * 1. Live Go paths: spaces.rename and organizations.rename echo `\ud800` through
  *    shared.EchoText; pages.rename stores through Postgres, where TS and Go both
  *    return U+FFFD. The responses are compared for each.
- * 2. Excluded cases: pages.rename rejects an unknown key containing `\ud800`, and
- *    computerProvider.update/get echoes a value containing it. TypeScript keeps the
- *    raw code unit in both; Go's encoding/json decoded it to U+FFFD before the
- *    procedure ran. The observed differences are written to
- *    tools/infra-d-surrogate-cases.json with `excluded: true`.
+ * 2. Excluded cases: the five live strict inputs (pages.list, pages.pin,
+ *    pages.remove, pages.rename, spendingLimit.set at its root and nested limit)
+ *    echo an unknown key raw in TypeScript and U+FFFD in Go; the live
+ *    externalConversations.updatePolicy response echoes the saved policy raw; and
+ *    TypeScript-only computerProvider.update/get echoes a value raw. The observed
+ *    differences are written to tools/infra-d-surrogate-cases.json with
+ *    `excluded: true`.
  *
  * Requires the disposable fixture database:
  *   set -a; . /home/hitori/go-port/fixture-db/.env.infra-d; set +a
@@ -39,8 +41,9 @@ const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) throw new Error("DATABASE_URL is required");
 const SECRET = "infra-d-surrogate-secret-0123456789abcdef";
 const WEB_ORIGIN = "http://127.0.0.1:5173";
-const GO_PORT = process.env.SURROGATE_GO_PORT ?? "55484";
-const UPSTREAM_PORT = process.env.SURROGATE_UPSTREAM_PORT ?? "55485";
+// 55484 is the gw-wtf8 lane's database; these are free harness-only ports.
+const GO_PORT = process.env.SURROGATE_GO_PORT ?? "55486";
+const UPSTREAM_PORT = process.env.SURROGATE_UPSTREAM_PORT ?? "55487";
 const GO_URL = `http://127.0.0.1:${GO_PORT}`;
 const dataDir = await mkdtemp(join(tmpdir(), "infra-d-surrogate-"));
 const gateway = join(dataDir, "rakazo-gateway");
@@ -100,7 +103,12 @@ await writeFile(
     routes: {
       "spaces.rename": { mode: "go" },
       "organizations.rename": { mode: "go" },
+      "pages.list": { mode: "go" },
+      "pages.pin": { mode: "go" },
+      "pages.remove": { mode: "go" },
       "pages.rename": { mode: "go" },
+      "spendingLimit.set": { mode: "go" },
+      "externalConversations.updatePolicy": { mode: "go" },
     },
   }),
 );
@@ -112,6 +120,8 @@ const ids = {
   space1: `sd-s1-${suffix}`,
   space2: `sd-s2-${suffix}`,
   pageId: `sd-p-${suffix}`,
+  botId: `sd-b-${suffix}`,
+  externalId: `sd-x-${suffix}`,
   token: `sd-token-${suffix}-${"0".repeat(20)}`,
 };
 const cookie = `better-auth.session_token=${encodeURIComponent(
@@ -173,6 +183,27 @@ async function seed(): Promise<void> {
       spaceId: ids.space1,
       userId: ids.userId,
       title: "Surrogate page",
+    },
+  });
+  await system.bot.create({
+    data: {
+      id: ids.botId,
+      spaceId: ids.space1,
+      userId: ids.userId,
+      name: "Surrogate Bot",
+      color: "#123456",
+    },
+  });
+  await system.externalConversation.create({
+    data: {
+      id: ids.externalId,
+      provider: "slack",
+      workspaceId: `sd-w-${suffix}`,
+      externalKey: `sd-x-${suffix}`,
+      conversationId: `sd-c-${suffix}`,
+      spaceId: ids.space1,
+      botId: ids.botId,
+      userId: ids.userId,
     },
   });
   await system.deploymentSettings.deleteMany({ where: { id: "default" } });
@@ -266,7 +297,9 @@ async function errorEcho(procedure: string, input: unknown, space: string, label
       JSON.stringify(input)
         .replaceAll(ids.space2, "__space2__")
         .replaceAll(ids.orgId, "__org__")
-        .replaceAll(ids.pageId, "__page__"),
+        .replaceAll(ids.pageId, "__page__")
+        .replaceAll(ids.botId, "__bot__")
+        .replaceAll(ids.externalId, "__external__"),
     ),
     typescript: tsResult.body,
     go: goResult.body,
@@ -274,6 +307,60 @@ async function errorEcho(procedure: string, input: unknown, space: string, label
     excluded: known,
     ...(known
       ? { reason: "unrecognized key contains an unpaired surrogate; Go decoded it to U+FFFD" }
+      : {}),
+  });
+  return known;
+}
+
+async function echoPolicy(space: string, label: string) {
+  const input = {
+    externalConversationId: ids.externalId,
+    teamChatAmbientEnabled: null,
+    teamChatRules: "rule\ud800text",
+    automatedSenderPolicies: {
+      "sender\ud800": { name: "name\ud800", mode: "ignore" },
+    },
+  };
+  const goResult = await call(GO_URL, "externalConversations.updatePolicy", input, space);
+  const response = await handles.app.request(
+    "/rpc/externalConversations/updatePolicy",
+    { method: "POST", headers: headers(space), body: JSON.stringify({ json: input }) },
+    { incoming: { socket: { remoteAddress: "127.0.0.1" } } },
+  );
+  const text = await response.text();
+  const tsResult = { status: response.status, text, body: text ? JSON.parse(text) : null };
+  const equal =
+    tsResult.status === goResult.status &&
+    isDeepStrictEqual(tsResult.body, goResult.body);
+  const repaired = (value: unknown) =>
+    JSON.parse(JSON.stringify(value).replaceAll("\\ud800", "\\ufffd"));
+  const sameApart =
+    tsResult.status === goResult.status &&
+    isDeepStrictEqual(repaired(tsResult.body), repaired(goResult.body));
+  const known =
+    !equal && sameApart && text.includes("\\ud800") && !goResult.text.includes("\\ud800");
+  if (!known) failures += 1;
+  console.log(
+    `${known ? "known" : equal ? "ok   " : "FAIL "} externalConversations.updatePolicy ${label}: ${tsResult.status}/${goResult.status}`,
+  );
+  if (!equal) console.log("  ts:", tsResult.text, "\n  go:", goResult.text);
+  cases.push({
+    procedure: "externalConversations.updatePolicy",
+    kind: label,
+    input: JSON.parse(
+      JSON.stringify(input)
+        .replaceAll(ids.space2, "__space2__")
+        .replaceAll(ids.orgId, "__org__")
+        .replaceAll(ids.pageId, "__page__")
+        .replaceAll(ids.botId, "__bot__")
+        .replaceAll(ids.externalId, "__external__"),
+    ),
+    typescript: tsResult.body,
+    go: goResult.body,
+    equal,
+    excluded: known,
+    ...(known
+      ? { reason: "the response echoes the saved policy; Go decoded the lone surrogates to U+FFFD" }
       : {}),
   });
   return known;
@@ -320,7 +407,9 @@ async function liveRename(
       JSON.stringify(input)
         .replaceAll(ids.space2, "__space2__")
         .replaceAll(ids.orgId, "__org__")
-        .replaceAll(ids.pageId, "__page__"),
+        .replaceAll(ids.pageId, "__page__")
+        .replaceAll(ids.botId, "__bot__")
+        .replaceAll(ids.externalId, "__external__"),
     ),
     field,
     typescript: value(tsResult) ?? null,
@@ -352,6 +441,37 @@ try {
     ids.space1,
     "unrecognized-key",
   );
+  await errorEcho(
+    "pages.list",
+    { ["bad\ud800"]: 1 },
+    ids.space1,
+    "unrecognized-key",
+  );
+  await errorEcho(
+    "pages.pin",
+    { pageId: ids.pageId, pinned: true, ["bad\ud800"]: 1 },
+    ids.space1,
+    "unrecognized-key",
+  );
+  await errorEcho(
+    "pages.remove",
+    { pageId: ids.pageId, ["bad\ud800"]: 1 },
+    ids.space1,
+    "unrecognized-key",
+  );
+  await errorEcho(
+    "spendingLimit.set",
+    { limit: null, ["bad\ud800"]: 1 },
+    ids.space1,
+    "unrecognized-key",
+  );
+  await errorEcho(
+    "spendingLimit.set",
+    { limit: { amount: 500, currency: "usd", period: "week", ["bad\ud800"]: 1 } },
+    ids.space1,
+    "unrecognized-nested-key",
+  );
+  await echoPolicy(ids.space1, "saved-policy-echo");
 
   // Excluded: computerProvider.update/get is TypeScript-only and echoes the raw
   // code unit; Go's decoder turns the same body into U+FFFD.
@@ -421,6 +541,8 @@ try {
   await system.deploymentSettings.deleteMany({ where: { id: "default" } });
   await system.session.deleteMany({ where: { id: `${ids.userId}-session` } });
   await system.page.deleteMany({ where: { id: ids.pageId } });
+  await system.externalConversation.deleteMany({ where: { id: ids.externalId } });
+  await system.bot.deleteMany({ where: { id: ids.botId } });
   await system.spaceMember.deleteMany({ where: { spaceId: { in: [ids.space1, ids.space2] } } });
   await system.space.deleteMany({ where: { id: { in: [ids.space1, ids.space2] } } });
   await system.organization.deleteMany({ where: { id: ids.orgId } });
