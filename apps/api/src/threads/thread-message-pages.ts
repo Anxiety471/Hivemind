@@ -5,6 +5,7 @@ import {
   callIdFromClientNonce,
   isBackgroundInputBlock,
   isBackgroundRunTrigger,
+  isDeliveryMessage,
   isPeerReceiptBlocks,
 } from "@rakazo/core";
 import { messageReplyPreview } from "@rakazo/core/message-quote";
@@ -118,6 +119,7 @@ export async function loadAllMessages(
 async function withoutPeerRunMessages<
   T extends {
     id: string;
+    role: string;
     runId: string | null;
     blocks: Prisma.JsonValue;
   },
@@ -141,6 +143,7 @@ async function withoutPeerRunMessages<
     if (!row.runId) return true;
     const blocks = storedMessageBlocks(row);
     if (backgroundRunIds.has(row.runId)) {
+      if (row.role === "user" && !isDeliveryMessage(blocks)) return true;
       // Ticket work stays off the transcript except existing user-input cards.
       return blocks.some(isBackgroundInputBlock);
     }
@@ -239,7 +242,7 @@ export function shouldForwardPeerThreadEvent(event: {
  */
 export function shouldForwardBackgroundThreadEvent(event: {
   type: string;
-  payload: { blocks?: unknown };
+  payload: { role?: unknown; blocks?: unknown };
 }): boolean {
   if (
     event.type === "run.completed" ||
@@ -254,7 +257,9 @@ export function shouldForwardBackgroundThreadEvent(event: {
     return false;
   }
   const blocks = event.payload.blocks;
-  return Array.isArray(blocks) && blocks.some(isBackgroundInputBlock);
+  if (!Array.isArray(blocks)) return false;
+  if (event.payload.role === "user" && !isDeliveryMessage(blocks)) return true;
+  return blocks.some(isBackgroundInputBlock);
 }
 
 type MessageRow = {

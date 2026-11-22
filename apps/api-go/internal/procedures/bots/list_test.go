@@ -159,8 +159,10 @@ func TestVisibleMessages(t *testing.T) {
 		withRun(&outlineMessage{ID: "m0", Blocks: loaded(block("delivery", nil), block("text", map[string]any{"text": "hidden"}))}, "other"),
 		// Ordinary user text.
 		{ID: "m1", Role: "user", Blocks: loaded(block("text", map[string]any{"text": "hi"}))},
-		// A background run's step text is hidden.
+		// A background run's step text is hidden, while a non-delivery user message linked to it stays.
 		withRun(&outlineMessage{ID: "m2", Role: "bot", Blocks: loaded(block("text", map[string]any{"text": "ticket work"}))}, "bg"),
+		withRun(&outlineMessage{ID: "m2u", Role: "user", Blocks: loaded(block("text", map[string]any{"text": "follow up"}))}, "bg"),
+		withRun(&outlineMessage{ID: "m2d", Role: "user", Blocks: loaded(block("delivery", nil), block("text", map[string]any{"text": "hidden"}))}, "bg"),
 		// Its ask card stays.
 		withRun(&outlineMessage{ID: "m3", Role: "bot", Blocks: loaded(block("ask", map[string]any{"text": "?"}))}, "bg"),
 		// Peer receipt rows are dropped in previews.
@@ -181,7 +183,7 @@ func TestVisibleMessages(t *testing.T) {
 	}
 	// m4 is a bare receipt and drops; m5 relays (its run's marker threads back to m1), so its
 	// text stays even with delegated reply text off.
-	want := []string{"m1", "m3", "m5"}
+	want := []string{"m1", "m2u", "m3", "m5"}
 	if len(ids) != len(want) {
 		t.Fatalf("visible = %v, want %v", ids, want)
 	}

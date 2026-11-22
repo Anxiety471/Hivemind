@@ -448,9 +448,20 @@ describe("user-visible messages", () => {
     ).toEqual(["ask", "reply", "answer"]);
   });
 
-  it("hides background ticket-run output except user-input cards", () => {
+  it("hides background ticket-run output except user messages and user-input cards", () => {
     const background = [
       message("wake", "run-ticket", [{ kind: "text", text: "Ticket check prompt" }]),
+      {
+        ...message("delivery", "run-ticket", [
+          { kind: "delivery" },
+          { kind: "text", text: "Work on ticket TASK-1." },
+        ]),
+        role: "user" as const,
+      },
+      {
+        ...message("user-followup", "run-ticket", [{ kind: "text", text: "Hello?" }]),
+        role: "user" as const,
+      },
       message("steps", "run-ticket", [
         { kind: "steps", steps: [{ label: "Ticket comment", count: 2 }] },
       ]),
@@ -489,6 +500,6 @@ describe("user-visible messages", () => {
 
     expect(
       userVisibleMessages(background, { backgroundRunIds: ["run-ticket"] }).map((m) => m.id),
-    ).toEqual(["ask", "computer", "approval", "connect", "user"]);
+    ).toEqual(["user-followup", "ask", "computer", "approval", "connect", "user"]);
   });
 });

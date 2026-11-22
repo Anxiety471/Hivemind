@@ -269,11 +269,26 @@ describe("thread message pages", () => {
     expect(findUnique).toHaveBeenCalledTimes(1);
   });
 
-  it("forwards only explicit user contact from a background run", () => {
+  it("forwards only explicit user contact and non-delivery user messages from a background run", () => {
     expect(
       shouldForwardBackgroundThreadEvent({
         type: "thread.message.created",
-        payload: { blocks: [{ kind: "text", text: "Working" }] },
+        payload: { role: "bot", blocks: [{ kind: "text", text: "Working" }] },
+      }),
+    ).toBe(false);
+    expect(
+      shouldForwardBackgroundThreadEvent({
+        type: "thread.message.created",
+        payload: { role: "user", blocks: [{ kind: "text", text: "Checking in" }] },
+      }),
+    ).toBe(true);
+    expect(
+      shouldForwardBackgroundThreadEvent({
+        type: "thread.message.created",
+        payload: {
+          role: "user",
+          blocks: [{ kind: "delivery" }, { kind: "text", text: "Hidden webhook" }],
+        },
       }),
     ).toBe(false);
     expect(
@@ -311,25 +326,36 @@ describe("thread message pages", () => {
     );
   });
 
-  it("hides ticket-run output from the transcript but keeps user-input cards", async () => {
+  it("hides ticket-run bot output from the transcript but keeps user messages and user-input cards", async () => {
     const rows = [
       {
         id: "message-computer",
+        role: "bot",
         blocks: [{ kind: "computer", state: "Needs you", text: "Sign in" }],
       },
-      { id: "message-approval", blocks: [{ kind: "mcp_approval" }] },
-      { id: "message-final", blocks: [{ kind: "text", text: "Closed the ticket." }] },
+      { id: "message-approval", role: "bot", blocks: [{ kind: "mcp_approval" }] },
+      { id: "message-final", role: "bot", blocks: [{ kind: "text", text: "Closed the ticket." }] },
       {
         id: "message-steps",
+        role: "bot",
         blocks: [{ kind: "steps", steps: [{ label: "Ticket comment", count: 1 }] }],
       },
-      { id: "message-user", blocks: [{ kind: "text", text: "Visible answer" }] },
+      {
+        id: "message-user-linked",
+        role: "user",
+        blocks: [{ kind: "text", text: "Are you free right now?" }],
+      },
+      {
+        id: "message-delivery-linked",
+        role: "user",
+        blocks: [{ kind: "delivery" }, { kind: "text", text: "Work on ticket TASK-1." }],
+      },
+      { id: "message-user", role: "bot", blocks: [{ kind: "text", text: "Visible answer" }] },
     ].map((row, index) => ({
       ...row,
       threadId: "thread-1",
-      seq: 4 - index,
-      role: "bot",
-      botId: "bot-1",
+      seq: 6 - index,
+      botId: row.role === "bot" ? "bot-1" : null,
       replyToMessageId: null,
       runId: row.id === "message-user" ? "run-user" : "run-ticket",
       clientNonce: null,
@@ -341,10 +367,11 @@ describe("thread message pages", () => {
       run: { findMany: vi.fn(async () => [{ id: "run-ticket", trigger: "tickets" }]) },
     } as unknown as PrismaClient;
 
-    const page = await loadMessagePage(prisma, "thread-1", undefined, 6);
+    const page = await loadMessagePage(prisma, "thread-1", undefined, 8);
 
     expect(page.messages.map((message) => message.id)).toEqual([
       "message-user",
+      "message-user-linked",
       "message-approval",
       "message-computer",
     ]);

@@ -17,6 +17,7 @@ import {
   appendEventInTransaction,
   createExternalConversationRepos,
   createThreadMessageInTransaction,
+  HOLDS_CHAT,
   IsolationError,
   isUniqueViolation,
   loadMessageAuthor,
@@ -422,6 +423,7 @@ export function threadsRoutes(ctx: RouterContext) {
               threadId: target.threadId,
               botId,
               status: { in: [...QUEUE_HOLDING_RUN_STATUSES] },
+              ...HOLDS_CHAT,
             },
             select: { id: true, userId: true },
           });

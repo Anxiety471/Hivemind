@@ -444,6 +444,10 @@ func visibleMessages(messages []*outlineMessage, knownPeerRunIDs, backgroundRunI
 			continue
 		}
 		if message.RunID != nil && backgroundRunIDs[*message.RunID] {
+			if message.Role == "user" {
+				visible = append(visible, message)
+				continue
+			}
 			if !blockMatches(message.Blocks, isBackgroundInputBlock) {
 				continue
 			}

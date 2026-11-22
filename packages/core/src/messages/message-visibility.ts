@@ -150,6 +150,7 @@ export function foldPeerReplies<T extends PresentableMessage>(
     // show; like a scheduled routine, only what the bot does with it appears.
     if (isDeliveryMessage(message.blocks)) return false;
     if (message.runId && backgroundRunIds.has(message.runId)) {
+      if (message.role === "user") return true;
       return message.blocks.some(isBackgroundInputBlock);
     }
     if (isPeerReceiptBlocks(message.blocks)) {

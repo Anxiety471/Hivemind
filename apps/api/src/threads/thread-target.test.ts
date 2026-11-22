@@ -2621,6 +2621,106 @@ describe("sendThreadMessage", () => {
     expect(enqueue).not.toHaveBeenCalled();
   });
 
+  it("starts a user run immediately while a background ticket run is working", async () => {
+    const tx = {
+      space: { findUnique: vi.fn(async () => null) },
+      user: { findMany: vi.fn().mockResolvedValue([]) },
+      spaceMember: { count: vi.fn().mockResolvedValue(1) },
+      $executeRaw: vi.fn(async () => 0),
+      $queryRaw: vi.fn().mockResolvedValue([]),
+      thread: {
+        update: vi.fn(async ({ data }: { data: { nextMessageSeq?: unknown } }) =>
+          data.nextMessageSeq ? { nextMessageSeq: 2 } : { nextEventSeq: 3 },
+        ),
+      },
+      message: {
+        create: vi.fn().mockResolvedValue({
+          id: "msg-1",
+          threadId: "thread-1",
+          seq: 1,
+          role: "user",
+          blocks: [{ kind: "text", text: "Check the inbox" }],
+          botId: null,
+          replyToMessageId: null,
+          runId: null,
+          createdAt: new Date(),
+        }),
+        update: vi.fn(),
+      },
+      run: {
+        findMany: vi
+          .fn()
+          .mockResolvedValueOnce([
+            {
+              id: "ticket-run",
+              taskId: "ticket-task",
+              status: "running",
+              trigger: "tickets",
+              userId: "user-1",
+            },
+          ])
+          .mockResolvedValue([]),
+        create: vi.fn().mockResolvedValue({
+          id: "run-user",
+          taskId: "task-user",
+          status: "queued",
+          userId: "user-1",
+        }),
+        findUnique: vi.fn().mockResolvedValue({ status: "queued", startedAt: null }),
+        updateMany: vi.fn(),
+      },
+      task: { create: vi.fn().mockResolvedValue({ id: "task-user" }), updateMany: vi.fn() },
+      steeringMessage: { create: vi.fn() },
+      event: { create: vi.fn().mockResolvedValue({ seq: 2, threadId: "thread-1" }) },
+    };
+    const prisma = {
+      message: { findUnique: vi.fn().mockResolvedValue(null) },
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    } as unknown as PrismaClient;
+    const actor = { spaceId: "workspace-1", userId: "user-1" } as Actor;
+    const target = {
+      kind: "bot",
+      botId: "bot-1",
+      threadId: "thread-1",
+      bot: { computer: null },
+    } as ThreadTarget;
+    const enqueue = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      sendThreadMessage(
+        {
+          prisma,
+          sandbox: {} as never,
+          events: { notify: vi.fn().mockResolvedValue(undefined) } as never,
+          jobs: { enqueue } as never,
+        },
+        actor,
+        target,
+        { text: "Check the inbox", clientNonce: "nonce-during-ticket" },
+      ),
+    ).resolves.toMatchObject({
+      runId: "run-user",
+      taskId: "task-user",
+      runIds: ["run-user"],
+    });
+    expect(tx.steeringMessage.create).not.toHaveBeenCalled();
+    expect(tx.run.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        botId: "bot-1",
+        trigger: "user",
+        status: "queued",
+        sourceMessageId: "msg-1",
+      }),
+    });
+    expect(tx.message.update).toHaveBeenCalledWith({
+      where: { id: "msg-1" },
+      data: { runId: "run-user" },
+    });
+    expect(enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "run.continue", payload: { runId: "run-user" } }),
+    );
+  });
+
   describe("in a shared space", () => {
     function busyThread(activeRuns: unknown[]) {
       let messageSeq = 0;
@@ -3266,7 +3366,11 @@ describe("sendThreadMessage", () => {
           update: vi.fn(),
           updateMany: vi.fn(),
           create: vi.fn(
-            async ({ data }: { data: { botId: string; groupReplyOptional?: boolean } }) => ({
+            async ({
+              data,
+            }: {
+              data: { botId: string; trigger?: string; groupReplyOptional?: boolean };
+            }) => ({
               id: `run-${++nextRun}`,
               taskId: `task-${nextRun}`,
               botId: data.botId,
@@ -3410,6 +3514,19 @@ describe("sendThreadMessage", () => {
       });
       const unnamed = await sendToGroup("and the budget?", undefined, [working]);
       expect(unnamed.tx.run.update).not.toHaveBeenCalled();
+    });
+
+    it("starts runs immediately for members working on a background ticket run", async () => {
+      const ticketRun = {
+        id: "run-ticket",
+        botId: "bot-a",
+        status: "running",
+        trigger: "tickets",
+        userId: "user-1",
+      };
+      const { created, tx } = await sendToGroup("@Alpha status?", ["bot-a"], [ticketRun]);
+      expect(tx.steeringMessage.create).not.toHaveBeenCalled();
+      expect(created.map((run) => [run.botId, run.trigger])).toEqual([["bot-a", "user"]]);
     });
   });
 
