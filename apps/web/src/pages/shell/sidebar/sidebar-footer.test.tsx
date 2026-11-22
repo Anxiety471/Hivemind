@@ -181,6 +181,19 @@ it("offers this deployment's own build over the store page", async () => {
   expect(mobile.href).toBe("https://example.test/rakazo.apk");
 });
 
+it("offers the deployment's own Android build on a desktop", async () => {
+  vi.spyOn(navigator, "userAgent", "get").mockReturnValue(
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+  );
+  await render("Demo User", undefined, vi.fn(), undefined, undefined, {
+    android: "https://example.test/rakazo.apk",
+  });
+  const mobile = [...document.querySelectorAll("a")].find(
+    (link) => link.textContent === "Get the mobile app",
+  )!;
+  expect(mobile.href).toBe("https://example.test/rakazo.apk");
+});
+
 it("falls back when app artwork fails and accepts replacement artwork", async () => {
   await render("Demo User", undefined, undefined, undefined, [
     { name: "Slack", logo: "https://example.test/slack.svg" },

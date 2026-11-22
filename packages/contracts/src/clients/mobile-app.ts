@@ -61,3 +61,34 @@ export function mobileAppUrl(
 ): string {
   return links?.[platform] ?? MOBILE_APP_STORE_URLS[platform];
 }
+
+/**
+ * The mobile platform a browser names, or null for a desktop. iPadOS reports the desktop Mac
+ * user agent, so its touch points are what tell an iPad (which wants iOS) from a Mac.
+ */
+export function deviceMobileAppPlatform(
+  userAgent: string,
+  maxTouchPoints = 0,
+): MobileAppPlatform | null {
+  if (/iPhone|iPad|iPod/i.test(userAgent)) return "ios";
+  if (/Macintosh/i.test(userAgent) && maxTouchPoints > 1) return "ios";
+  if (/Android/i.test(userAgent)) return "android";
+  return null;
+}
+
+/**
+ * The URL to offer a browser: its own platform's build, or for a desktop the build this
+ * deployment publishes itself (Android first, since that is the one self-hosting produces).
+ * A deployment publishing nothing still offers the App Store page a desktop saw before.
+ */
+export function preferredMobileAppUrl(
+  links: MobileAppLinks | null | undefined,
+  userAgent: string,
+  maxTouchPoints = 0,
+): string {
+  const platform =
+    deviceMobileAppPlatform(userAgent, maxTouchPoints) ??
+    // An Android build wins; otherwise iOS, which also keeps the App Store page when none exists.
+    (links?.android ? "android" : "ios");
+  return mobileAppUrl(links, platform);
+}

@@ -1,6 +1,6 @@
 import { Trans, useLingui } from "@lingui/react/macro";
 import type { MobileAppLinks, NavLink } from "@rakazo/contracts";
-import { mobileAppUrl } from "@rakazo/contracts";
+import { preferredMobileAppUrl } from "@rakazo/contracts";
 import {
   AppMarkStack,
   Button,
@@ -248,10 +248,7 @@ export function SidebarFooter({
             <div className="my-1 border-t border-border" />
             <a
               className={`${buttonVariants({ variant: "ghost", size: "lg" })} w-full justify-start gap-2.5 font-normal`}
-              href={mobileAppUrl(
-                mobileApp,
-                /Android/i.test(navigator.userAgent) ? "android" : "ios",
-              )}
+              href={preferredMobileAppUrl(mobileApp, navigator.userAgent, navigator.maxTouchPoints)}
               target="_blank"
               rel="noreferrer"
             >
