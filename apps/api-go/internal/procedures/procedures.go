@@ -24,6 +24,8 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/drivefiles"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/externalconversations"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/groups"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/integrationsetup"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/marketplace"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/mcpassignments"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/mcpservers"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/memory"
@@ -312,6 +314,13 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 			ReadOnly: true,
 			Serve: func(ctx context.Context, actor db.Actor, _ orpc.Input) (any, *orpc.Error) {
 				return capabilities.List(ctx, database, actor, slog.Default())
+			},
+		},
+		{
+			Name:     "marketplace.submissions",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return marketplace.Submissions(ctx, database, deployment, actor, input)
 			},
 		},
 		{
@@ -753,6 +762,13 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 			},
 		},
 		{
+			Name:     "integrationSetup.get",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return integrationsetup.Get(ctx, deployment, actor, input)
+			},
+		},
+		{
 			Name:     "agentSecrets.list",
 			ReadOnly: true,
 			Serve: func(ctx context.Context, actor db.Actor, _ orpc.Input) (any, *orpc.Error) {
@@ -808,6 +824,12 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 			},
 		},
 		{
+			Name: "pages.setVisibility",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return pages.SetVisibility(ctx, database, deployment, actor, input)
+			},
+		},
+		{
 			Name: "computer.dismissUpdate",
 			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
 				return computer.DismissUpdate(ctx, database, deployment, actor, input)
@@ -855,6 +877,7 @@ func VaultProcedures() []string {
 		"bots.rotateWebhookSecret",
 		"bots.revealWebhookSecret",
 		"pages.remove",
+		"pages.setVisibility",
 		"vault.list",
 		"botSecrets.list",
 		"mcp.servers.list",

@@ -1,5 +1,5 @@
-// Package pages ports pages.list, rename and pin. pages.get, setVisibility and remove read
-// or write the sealed share token in the secret store, and stay on the TypeScript API.
+// Package pages ports pages.list, rename, pin, remove and setVisibility. pages.get still
+// reads the page detail in TypeScript; every page share write here uses the SecretStore.
 package pages
 
 import (

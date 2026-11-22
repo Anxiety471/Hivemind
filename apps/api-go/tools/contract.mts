@@ -35,6 +35,7 @@ import { run1Cases } from "./contract-run1.mts";
 import { threadAdversarialCases } from "./contract-threads-adversarial.mts";
 import { threadGetCases } from "./contract-threads-get.mts";
 import { threadMoreCases } from "./contract-threads-more.mts";
+import { url1Cases } from "./contract-url1.mts";
 
 const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) throw new Error("DATABASE_URL is required");
@@ -70,6 +71,9 @@ const CONTRACT_EMAIL = {
 // computer quota the restore cases exercise. Test values only; each side sees the same ones.
 const INBOUND_EMAIL_DOMAIN = "bots.contract.test";
 const INBOUND_EMAIL_SECRET = "contract-inbound-email-secret-0123456789";
+// The address a case marked `admin` signs in with; only those cases replace the seeded user's
+// email, so me.isAdmin and every other admin gate stay false elsewhere.
+const CONTRACT_ADMIN_EMAIL = "contract-admin@example.test";
 const MAX_COMPUTERS_PER_USER = "2";
 // resolveMaxComputersPerUser reads process.env at call time on the TypeScript side.
 process.env.SANDBOX_MAX_COMPUTERS_PER_USER = MAX_COMPUTERS_PER_USER;
@@ -115,6 +119,8 @@ export type Case = {
   unorderedSections?: boolean;
   /** Runs only with CONTRACT_EMAIL=1 (email delivery configured on both sides); otherwise only without it. */
   email?: boolean;
+  /** Signs the seeded user in as CONTRACT_ADMIN_EMAIL, for admin-only procedures. */
+  admin?: boolean;
   /**
    * Pause between the two sides' windows so a TypeScript background job's Space changes (the
    * in-process wakeup queue may finish a restored routine seconds after the response; the Go
@@ -151,6 +157,7 @@ const handles = await createApp({
   nodeEnv: "test",
   signupsEnabled: "true",
   agentRuntime: "scripted",
+  adminEmails: [CONTRACT_ADMIN_EMAIL],
   // The same inbound-email configuration the Go child gets through the environment.
   inboundEmail: { domain: INBOUND_EMAIL_DOMAIN, secret: INBOUND_EMAIL_SECRET },
   sandboxProvider: "fake",
@@ -360,6 +367,7 @@ go = spawn(
       // The inbound domain bots.emailAddress* read, and the restore quota, as on the TypeScript side.
       INBOUND_EMAIL_DOMAIN,
       INBOUND_EMAIL_SECRET,
+      RAKAZO_ADMIN_EMAILS: CONTRACT_ADMIN_EMAIL,
       SANDBOX_MAX_COMPUTERS_PER_USER: MAX_COMPUTERS_PER_USER,
       PHONE_CALLS_ENABLED: "true",
       PHONE_CALL_RING_SECONDS: "45",
@@ -589,6 +597,7 @@ const cases: Case[] = [
   ...modelBackupCases(),
   ...membershipCases(system),
   ...pageWriteCases(),
+  ...url1Cases(system),
   ...modelRenameCases(),
   ...artifactCases(),
   ...laneDCases(system),
@@ -6022,6 +6031,7 @@ async function reset(seeded: ReturnType<typeof ids>) {
     where: { OR: [{ organizationId: orgId }, { actorId: userId }] },
   });
   await system.page.deleteMany({ where: { userId: { in: [userId, `${userId}-other`] } } });
+  await system.pluginSubmission.deleteMany({ where: { id: { startsWith: `${userId}-` } } });
   await system.chatGroup.deleteMany({ where: { userId: { in: [userId, `${userId}-other`] } } });
   await system.trustedLinkSite.deleteMany({
     where: { userId: { in: [userId, `${userId}-other`] } },
@@ -7677,6 +7687,7 @@ const WRITE_PROCEDURES = new Set([
   "boards.rename",
   "bots.rotateWebhookSecret",
   "pages.remove",
+  "pages.setVisibility",
 ]);
 
 const CUID = /^c[0-9a-z]{24}$/;
@@ -7684,6 +7695,8 @@ const CUID = /^c[0-9a-z]{24}$/;
 // bytes as unpadded base64url. Both sides generate their own, so only the shape is compared.
 const SECRET_ID = /^[0-9a-f]{24}$/;
 const WEBHOOK_SECRET = /^[A-Za-z0-9_-]{43}$/;
+const PAGE_SHARE_HASH = /^[0-9a-f]{64}$/;
+const PAGE_SHARE_URL = /^(.*\/p\/[^/?#]*?)([A-Za-z0-9_-]{43})$/;
 const LINK_CODE = /^(?:[A-HJKMNP-TV-Z2-9]{4}-[A-HJKMNP-TV-Z2-9]{4}|[A-HJKMNP-TV-Z2-9]{8})$/;
 const ISO_TIME = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/;
 const HARNESS_START = Date.now() - 3_600_000;
@@ -7699,6 +7712,9 @@ function normalize<T>(value: T): T {
     if (typeof node === "string") {
       const cursor = artifactCursor(node);
       if (cursor) return cursor;
+      const share = PAGE_SHARE_URL.exec(node);
+      if (share) return `${share[1]}<share-token>`;
+      if (PAGE_SHARE_HASH.test(node)) return "<share-token-hash>";
       if (CUID.test(node)) return "<cuid>";
       if (SECRET_ID.test(node)) return "<secret-id>";
       if (WEBHOOK_SECRET.test(node)) return "<webhook-secret>";
@@ -8515,6 +8531,11 @@ for (const testCase of cases) {
 
   let seeded = await seed(caseIds);
   if (testCase.seed) await testCase.seed(seeded);
+  if (testCase.admin)
+    await system.user.update({
+      where: { id: seeded.userId },
+      data: { email: CONTRACT_ADMIN_EMAIL, emailVerified: true },
+    });
   const tsResult = await observed(
     settle,
     () => run(testCase, tsCall, input, seeded),
@@ -8531,6 +8552,11 @@ for (const testCase of cases) {
 
   seeded = await seed(caseIds);
   if (testCase.seed) await testCase.seed(seeded);
+  if (testCase.admin)
+    await system.user.update({
+      where: { id: seeded.userId },
+      data: { email: CONTRACT_ADMIN_EMAIL, emailVerified: true },
+    });
   const hitsBefore = upstreamHits;
   const goResult = await observed(
     settle,
