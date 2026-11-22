@@ -425,7 +425,7 @@ export function normalizeRunError(
     status !== 413 &&
     quotaResetAt === undefined &&
     (status === 429 ||
-      /rate[_ -]limit|too many requests|resource[_ ]?exhausted|request limit reached/i.test(
+      /rate[_ -]limit|too many requests|resource[_ ]?exhausted|request limit reached|\b(?:concurren(?:cy|t[_ -]requests?)[_ -]limit[_ -]?(?:exceeded|reached|hit)|too many concurrent requests?|exceeded (?:your |the )?(?:max(?:imum)? )?concurrent requests?)\b/i.test(
         signals,
       )) &&
     // OpenAI's per-minute limits link to billing as a way to raise them.

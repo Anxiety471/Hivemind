@@ -462,7 +462,7 @@ var (
 
 	financialQuotaRE = regexp.MustCompile(`(?i)insufficient[_ ](?:quota|balance)|credits?|funds|spend|budget|billing|openrouter_key_limit`)
 
-	rateSignalsRE = regexp.MustCompile(`(?i)rate[_ -]limit|too many requests|resource[_ ]?exhausted|request limit reached`)
+	rateSignalsRE = regexp.MustCompile(`(?i)rate[_ -]limit|too many requests|resource[_ ]?exhausted|request limit reached|\b(?:concurren(?:cy|t[_ -]requests?)[_ -]limit[_ -]?(?:exceeded|reached|hit)|too many concurrent requests?|exceeded (?:your |the )?(?:max(?:imum)? )?concurrent requests?)\b`)
 
 	rpmTPMRE = regexp.MustCompile(`(?i)\b(?:rpm|tpm)\b`)
 

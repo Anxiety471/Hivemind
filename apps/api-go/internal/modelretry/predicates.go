@@ -76,7 +76,7 @@ func isTransientAt(message string, now time.Time) bool {
 		return false
 	}
 	// Short rate windows can reset during a retry; subscription and billing limits cannot.
-	shortWindow := shortWindowRE.MatchString(text)
+	shortWindow := shortWindowRE.MatchString(text) || concurrencyLimitRE.MatchString(text)
 	return IsRetryableProviderUnavailable(message) &&
 		!transientQuotaRE.MatchString(text) &&
 		// OpenAI's per-minute limits link to billing as a way to raise them.
@@ -97,6 +97,10 @@ func IsRetryableProviderUnavailable(message string) bool {
 	}
 	// The provider timed out fetching a file the request links to; another attempt fetches it again.
 	if downloadTimeoutRE.MatchString(text) {
+		return true
+	}
+	// Some providers report concurrency limits with HTTP 400 instead of 429.
+	if concurrencyLimitRE.MatchString(text) && !NamesPermanentFailure(message) {
 		return true
 	}
 	if hasAnyStatus(statuses, 400) {
@@ -279,6 +283,8 @@ var (
 	availabilityTextRE = regexp.MustCompile(`rate.?limit|too many requests|resource.?exhausted|request limit reached|quota|overload|capacity|temporarily unavailable|service unavailable|retry[- ](?:after|delay)|server[ _]error|upstream error|an error occurred while processing your request|could not complete this request\. please retry|gateway timeout|timed? out|timeout|connection (?:error|reset|refused)|network[ _]error|max retries exceeded|stream ended (?:without (?:a )?finish[_ ]reason|before \w+)|json error injected into sse stream|stream interrupted|incomplete json segment at the end|\bterminated\b|fetch failed|socket hang up|econnreset|econnrefused|etimedout|websocket closed`)
 
 	shortWindowRE = regexp.MustCompile(`\bper[- ](?:second|minute)\b|\b(?:rpm|tpm)\b|retry[- ]after[: ]+\d+(?:\.\d+)?\s*(?:seconds?|secs?|s)\b`)
+
+	concurrencyLimitRE = regexp.MustCompile(`\b(?:concurren(?:cy|t[ _-]requests?)[ _-]limit[ _-]?(?:exceeded|reached|hit)|too many concurrent requests?|exceeded (?:your |the )?(?:max(?:imum)? )?concurrent requests?)\b`)
 
 	transientQuotaRE = regexp.MustCompile(`insufficient_quota|exceeded your current quota|quota exhausted|(?:chatgpt|5-hour|weekly(?: \(7-day\))?|monthly) usage limit|credit balance|insufficient (?:funds|balance|credits)|out of budget`)
 

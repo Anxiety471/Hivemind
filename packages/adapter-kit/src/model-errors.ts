@@ -134,19 +134,26 @@ const INVALID_KEY_HEADER =
 const PERMANENT_FAILURE_CODES =
   /context[ _-](?:length|window)|too many tokens|maximum context|token limit|request too large|invalid_api_key|authentication_error|permission_error|bad_request/;
 
-/**
- * Whether the failure says the request or the caller is at fault: cancelled, unauthorised,
- * invalid, too large, or for a model the provider does not serve. Repeating such a request fails
- * the same way.
- */
-export function namesPermanentModelFailure(error: unknown): boolean {
-  const { text } = errorFacts(error);
+/** Explicit provider concurrency limit (some gateways report this with HTTP 400 instead of 429). */
+const CONCURRENCY_LIMIT_SIGNAL =
+  /\b(?:concurren(?:cy|t[ _-]requests?)[ _-]limit[ _-]?(?:exceeded|reached|hit)|too many concurrent requests?|exceeded (?:your |the )?(?:max(?:imum)? )?concurrent requests?)\b/;
+
+function isPermanentFailureText(text: string): boolean {
   return (
     PERMANENT_FAILURE_WORDS.test(text) ||
     INVALID_KEY_HEADER.test(text) ||
     PERMANENT_FAILURE_CODES.test(text) ||
     /invalid_request/.test(text)
   );
+}
+
+/**
+ * Whether the failure says the request or the caller is at fault: cancelled, unauthorised,
+ * invalid, too large, or for a model the provider does not serve. Repeating such a request fails
+ * the same way.
+ */
+export function namesPermanentModelFailure(error: unknown): boolean {
+  return isPermanentFailureText(errorFacts(error).text);
 }
 
 /** The HTTP status a model failure reports in its fields or its text; the first of several. */
@@ -167,6 +174,8 @@ export function isRetryableProviderUnavailable(error: unknown): boolean {
     )
   )
     return true;
+  // Some providers report concurrency limits with HTTP 400 instead of 429.
+  if (CONCURRENCY_LIMIT_SIGNAL.test(text) && !isPermanentFailureText(text)) return true;
   if (statuses.has(400)) return false;
   // The ChatGPT subscription (Codex) runtime reports an exhausted usage window without a status.
   if (/you have hit your chatgpt usage limit/.test(text)) return true;
@@ -217,7 +226,7 @@ export function isTransientModelError(error: unknown): boolean {
   const shortWindow =
     /\bper[- ](?:second|minute)\b|\b(?:rpm|tpm)\b|retry[- ]after[: ]+\d+(?:\.\d+)?\s*(?:seconds?|secs?|s)\b/.test(
       text,
-    );
+    ) || CONCURRENCY_LIMIT_SIGNAL.test(text);
   return (
     isRetryableProviderUnavailable(error) &&
     !/insufficient_quota|exceeded your current quota|quota exhausted|(?:chatgpt|5-hour|weekly(?: \(7-day\))?|monthly) usage limit|credit balance|insufficient (?:funds|balance|credits)|out of budget/.test(

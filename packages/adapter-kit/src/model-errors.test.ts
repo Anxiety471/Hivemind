@@ -19,6 +19,14 @@ describe("transient model errors", () => {
       "ResourceExhausted: Worker local total request limit reached (16/16)",
     ],
     [
+      "HTTP 400 tier concurrency limit",
+      '400: {"code":"tier_limit_exceeded","message":"[code=tier_limit_exceeded] membership concurrency limit exceeded: 11/10 resets 2026-11-22T07:08:00Z","type":"tier_limit_exceeded"}',
+    ],
+    [
+      "HTTP 400 too many concurrent requests",
+      '400: {"code":"concurrency_limit_exceeded","message":"Too many concurrent requests"}',
+    ],
+    [
       "rate limit",
       "429 rate_limit_error: Number of request tokens has exceeded your per-minute rate limit",
     ],
@@ -111,6 +119,14 @@ describe("transient model errors", () => {
       new TypeError(
         'Headers.append: "example key\nclient = Client(timeout=30, rate_limit=1)" is an invalid header value.',
       ),
+    ],
+    [
+      "unsupported concurrency parameter",
+      '400: {"message":"Unsupported parameter: concurrency_limit"}',
+    ],
+    [
+      "unauthorized concurrency limit",
+      '401: {"message":"Unauthorized: membership concurrency limit exceeded"}',
     ],
   ])("treats %s as permanent", (_label, error) => {
     expect(isTransientModelError(error)).toBe(false);

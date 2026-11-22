@@ -757,6 +757,8 @@ it.each([
 it.each([
   "ResourceExhausted: Worker local total request limit reached (16/16)",
   "ResourceExhausted: Worker local total request limit reached (4358/16)",
+  '400: {"code":"tier_limit_exceeded","message":"[code=tier_limit_exceeded] membership concurrency limit exceeded: 11/10 resets 2026-11-22T07:08:00Z","type":"tier_limit_exceeded"}',
+  '400: {"code":"concurrency_limit_exceeded","message":"Too many concurrent requests"}',
 ])("reads a provider concurrency limit as rate limiting: %s", (details) => {
   expect(normalizeRunError(details)).toMatchObject({
     summary: "Your model provider is rate limiting requests. Try again shortly.",

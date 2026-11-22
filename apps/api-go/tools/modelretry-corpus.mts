@@ -932,6 +932,10 @@ const extractedMessages: string[] = [
   "RECITATION",
   "model_not_found",
   "The model hit its output limit before writing a response.",
+  '400: {"code":"tier_limit_exceeded","message":"[code=tier_limit_exceeded] membership concurrency limit exceeded: 11/10 resets 2026-11-22T07:08:00Z","type":"tier_limit_exceeded"}',
+  '400: {"code":"concurrency_limit_exceeded","message":"Too many concurrent requests"}',
+  '400: {"message":"Unsupported parameter: concurrency_limit"}',
+  '401: {"message":"Unauthorized: membership concurrency limit exceeded"}',
 ];
 
 function className(error: Error): string {

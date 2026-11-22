@@ -337,6 +337,7 @@ describe("Pi runtime errors", () => {
   it.each([
     "ResourceExhausted: Worker local total request limit reached (16/16)",
     "ResourceExhausted: Worker local total request limit reached (4358/16)",
+    '400: {"code":"tier_limit_exceeded","message":"[code=tier_limit_exceeded] membership concurrency limit exceeded: 11/10 resets 2026-11-22T07:08:00Z","type":"tier_limit_exceeded"}',
   ])("treats a provider concurrency limit as transient: %s", async (message) => {
     provider.errorMessage = message;
     await expect(consume()).rejects.toBeInstanceOf(TransientModelError);
