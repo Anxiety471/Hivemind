@@ -27,6 +27,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/messageblocks"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/validate"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 )
 
 // statuses is TaughtSkillStatusSchema (packages/contracts/src/domain.ts:717).
@@ -880,7 +881,7 @@ func saveSkill(ctx context.Context, tx pgx.Tx, id, userID, name, status string, 
 // sanitizeUtf16ForJson (text-sanitization.ts:58, packages/core/src/events.ts:772-777): a cut that
 // lands inside a surrogate pair leaves one lone half, and each lone half becomes U+FFFD.
 func sliceUTF16(text string, start, end int) string {
-	units := utf16.Encode([]rune(text))
+	units := wtf8.Units(text)
 	if start < 0 {
 		start = 0
 	}

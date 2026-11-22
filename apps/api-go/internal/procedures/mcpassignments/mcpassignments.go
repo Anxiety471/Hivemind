@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"time"
-	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 
@@ -15,6 +14,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/validate"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 )
 
 // Assignment is the wire shape of BotMcpServerSchema.
@@ -50,7 +50,7 @@ func scan(rows pgx.Rows) (Assignment, error) {
 			for _, item := range items {
 				if text, ok := item.(string); ok {
 					// The router validates the output: each tool name is 1..200 characters.
-					if length := utf8.RuneCountInString(text); length < 1 || length > 200 {
+					if !wtf8.Fits(text, 1, 200) {
 						return Assignment{}, shared.OutputInvalid()
 					}
 					assignment.AllowedTools = append(assignment.AllowedTools, text)

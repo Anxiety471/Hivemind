@@ -8,6 +8,7 @@ import (
 	"sort"
 	"unicode/utf16"
 
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 	"golang.org/x/text/unicode/norm"
@@ -99,7 +100,7 @@ func SearchTokens(key DataKey, words string, strings []string) []int32 {
 		joined += value
 	}
 	for _, term := range SearchTerms(joined) {
-		units := utf16.Encode([]rune(term))
+		units := wtf8.Units(term)
 		limit := len(units)
 		if limit > maxPrefix {
 			limit = maxPrefix
@@ -134,7 +135,7 @@ func QuerySearchTokens(key DataKey, query string, domain SearchTokenDomain) []in
 	}
 	tokens := make([]int32, 0, len(terms))
 	for _, term := range terms {
-		units := utf16.Encode([]rune(term))
+		units := wtf8.Units(term)
 		if len(units) < minPrefix {
 			continue
 		}

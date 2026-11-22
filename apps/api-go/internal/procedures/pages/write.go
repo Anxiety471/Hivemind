@@ -13,6 +13,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/validate"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 )
 
 func now() time.Time { return time.Now().UTC().Truncate(time.Millisecond) }
@@ -33,16 +34,22 @@ func requirePage(ctx context.Context, tx pgx.Tx, actor db.Actor, pageID string) 
 func foldTitle(title string) string {
 	var out strings.Builder
 	folding := false
-	for _, r := range title {
-		if unicode.Is(unicode.Cc, r) || validate.IsJSSpace(r) {
-			folding = true
-			continue
+	for index := 0; index < len(title); {
+		r, size := wtf8.DecodeRuneInString(title[index:])
+		if r < 0xD800 || r > 0xDFFF {
+			if unicode.Is(unicode.Cc, r) || validate.IsJSSpace(r) {
+				folding = true
+				index += size
+				continue
+			}
 		}
 		if folding {
 			out.WriteByte(' ')
 			folding = false
 		}
-		out.WriteRune(r)
+		// A WTF-8 surrogate is not a valid rune: write the original bytes.
+		out.WriteString(title[index : index+size])
+		index += size
 	}
 	if folding {
 		out.WriteByte(' ')

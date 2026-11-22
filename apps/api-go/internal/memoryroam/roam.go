@@ -14,7 +14,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 
@@ -24,6 +23,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/events"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/memory"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 )
 
 const (
@@ -823,7 +823,7 @@ func promptFor(bot Bot, documents []memory.Document, maxBytes int, shared bool) 
 			instructions = "(empty)"
 		}
 		sections = append(sections, fmt.Sprintf("--- Instructions (writable; complete replacement if changed; %d characters) ---\n%s",
-			utf8.RuneCountInString(bot.Instructions), instructions))
+			wtf8.Length(bot.Instructions), instructions))
 		used += len([]byte(bot.Instructions))
 		writable = append(writable, "Instructions")
 	}
@@ -913,7 +913,7 @@ func validateChanges(parsed answer, documents []memory.Document, omitted []strin
 				}
 				continue
 			}
-			if utf8.RuneCountInString(content) > MaxInstructionsLength {
+			if wtf8.Length(content) > MaxInstructionsLength {
 				return validatedChanges{}, fmt.Errorf("model exceeded the instructions cap")
 			}
 			if content != existing {

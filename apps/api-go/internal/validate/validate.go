@@ -13,9 +13,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 )
 
 // Issue is one zod issue as it appears in the error envelope.
@@ -128,7 +128,12 @@ func (o *Object) Unrecognized(path Path, allowed ...string) []Issue {
 }
 
 func decodeValue(raw []byte) (any, error) {
-	dec := json.NewDecoder(bytes.NewReader(raw))
+	transformed, err := wtf8.Transform(raw)
+	if err != nil {
+		// The standard decoder reports the canonical syntax error.
+		transformed = raw
+	}
+	dec := json.NewDecoder(bytes.NewReader(transformed))
 	dec.UseNumber()
 	value, err := readValue(dec)
 	if err != nil {
@@ -148,6 +153,9 @@ func readValue(dec *json.Decoder) (any, error) {
 	}
 	delim, isDelim := token.(json.Delim)
 	if !isDelim {
+		if text, ok := token.(string); ok {
+			return wtf8.RestoreString(text), nil
+		}
 		return token, nil
 	}
 	if delim == '[' {
@@ -171,7 +179,7 @@ func readValue(dec *json.Decoder) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		key := keyToken.(string)
+		key := wtf8.RestoreString(keyToken.(string))
 		item, err := readValue(dec)
 		if err != nil {
 			return nil, err
@@ -266,12 +274,11 @@ func String(path Path, raw any, rules StringRules) (string, []Issue) {
 	if rules.Trim {
 		text = JSTrim(text)
 	}
-	count := utf8.RuneCountInString(text)
 	var issues []Issue
-	if rules.Min > 0 && count < rules.Min {
+	if rules.Min > 0 && !wtf8.ZodMinPass(text, rules.Min) {
 		issues = append(issues, tooSmall("string", rules.Min, path))
 	}
-	if rules.Max > 0 && count > rules.Max {
+	if rules.Max > 0 && !wtf8.ZodMaxPass(text, rules.Max) {
 		issues = append(issues, tooBig("string", rules.Max, path))
 	}
 	if issues != nil {

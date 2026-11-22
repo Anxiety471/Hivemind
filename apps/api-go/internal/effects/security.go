@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 )
 
 // SecurityEvent is one event to record (SecurityEventInput in security-events.ts).
@@ -195,13 +196,13 @@ func bounded(value string, max int) string {
 	return sliceUTF16(value, max)
 }
 
-func utf16Length(value string) int { return len(utf16.Encode([]rune(value))) }
+func utf16Length(value string) int { return len(wtf8.Units(value)) }
 
 // sliceUTF16 is value.slice(0, max) in UTF-16 code units, then the write hook's
 // sanitizeUtf16ForJson (packages/db/src/security-events.ts:134, text-sanitization.ts:58): a cut
 // that lands inside a surrogate pair leaves one lone half, which becomes U+FFFD.
 func sliceUTF16(value string, max int) string {
-	units := utf16.Encode([]rune(value))
+	units := wtf8.Units(value)
 	if max < 0 {
 		max = 0
 	}

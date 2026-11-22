@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"strconv"
-	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 
@@ -16,6 +15,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/spacesettings"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/validate"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 )
 
 // Roles is ModelRoleSchema.options.
@@ -404,10 +404,10 @@ func readRole(ctx context.Context, tx pgx.Tx, actor db.Actor, target, role strin
 // answered with the output failure.
 func storedChoice(provider, modelID string, thinkingLevel, credentialID *string) (RoleChoice, *orpc.Error) {
 	provider, modelID = validate.JSTrim(provider), validate.JSTrim(modelID)
-	if n := utf8.RuneCountInString(provider); n < 1 || n > maxProvider {
+	if !wtf8.Fits(provider, 1, maxProvider) {
 		return RoleChoice{}, shared.OutputInvalid()
 	}
-	if n := utf8.RuneCountInString(modelID); n < 1 || n > maxModelID {
+	if !wtf8.Fits(modelID, 1, maxModelID) {
 		return RoleChoice{}, shared.OutputInvalid()
 	}
 	choice := RoleChoice{Provider: provider, ModelID: modelID}

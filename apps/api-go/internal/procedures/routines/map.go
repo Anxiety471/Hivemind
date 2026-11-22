@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 )
 
 // Routine is the wire shape of RoutineSchema (packages/contracts/src/routines/routine.ts:45),
@@ -230,7 +231,7 @@ func (r Routine) valid() bool {
 		return false
 	}
 	if r.MessageProvider != nil {
-		if runeCount(*r.MessageProvider) > 50 || !messageProviderPattern(*r.MessageProvider) {
+		if !wtf8.ZodMaxPass(*r.MessageProvider, 50) || !messageProviderPattern(*r.MessageProvider) {
 			return false
 		}
 	}

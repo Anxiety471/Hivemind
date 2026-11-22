@@ -15,6 +15,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/messageblocks"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/validate"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 )
 
 // This file is projectMessages (packages/core/src/messages/events.ts) for the events threads.get
@@ -431,7 +432,7 @@ func subagentBlock(payload map[string]any) map[string]any {
 	return block
 }
 
-func units(text string) []uint16 { return utf16.Encode([]rune(text)) }
+func units(text string) []uint16 { return wtf8.Units(text) }
 
 func fromUnits(value []uint16) string { return string(utf16.Decode(value)) }
 

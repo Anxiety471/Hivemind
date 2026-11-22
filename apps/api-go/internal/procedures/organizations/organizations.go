@@ -279,11 +279,7 @@ func Rename(ctx context.Context, database *db.DB, audit *effects.Recorder, actor
 		Action: "organization.renamed", ActorID: actor.UserID, OrganizationID: organizationID,
 		TargetType: "organization", TargetID: organizationID, TargetLabel: trimmed,
 	})
-	var echoed any = trimmed
-	if exact, unpaired := shared.EchoText(raw.Raw, "name"); unpaired {
-		echoed = exact
-	}
-	return Renamed{ID: organizationID, Name: echoed}, nil
+	return Renamed{ID: organizationID, Name: trimmed}, nil
 }
 
 // Member is OrganizationMemberSchema.

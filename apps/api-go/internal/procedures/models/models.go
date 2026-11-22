@@ -4,7 +4,6 @@ package models
 
 import (
 	"context"
-	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 
@@ -13,6 +12,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/spacesettings"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/validate"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 )
 
 // Backup is the wire shape of ModelBackupChoiceSchema.
@@ -51,10 +51,10 @@ func Backups(ctx context.Context, database *db.DB, actor db.Actor) ([]Backup, *o
 			// The router parses the output as z.string().trim().min(1).max(n): the values are
 			// returned trimmed, and a stored one that is blank or too long fails the call.
 			backup.Provider, backup.ModelID = validate.JSTrim(backup.Provider), validate.JSTrim(backup.ModelID)
-			if n := utf8.RuneCountInString(backup.Provider); n < 1 || n > 128 {
+			if !wtf8.Fits(backup.Provider, 1, 128) {
 				return shared.OutputInvalid()
 			}
-			if n := utf8.RuneCountInString(backup.ModelID); n < 1 || n > 512 {
+			if !wtf8.Fits(backup.ModelID, 1, 512) {
 				return shared.OutputInvalid()
 			}
 			backups = append(backups, backup)

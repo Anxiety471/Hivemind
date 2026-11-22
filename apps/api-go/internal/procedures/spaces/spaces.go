@@ -143,11 +143,7 @@ func Rename(ctx context.Context, database *db.DB, audit *effects.Recorder, actor
 		Action: "space.renamed", ActorID: actor.UserID, SpaceID: input.SpaceID,
 		TargetType: "space", TargetID: input.SpaceID, TargetLabel: name,
 	})
-	var echoed any = name
-	if exact, unpaired := shared.EchoText(raw.Raw, "name"); unpaired {
-		echoed = exact
-	}
-	return Renamed{ID: input.SpaceID, Name: echoed}, nil
+	return Renamed{ID: input.SpaceID, Name: name}, nil
 }
 
 // rename is renameSpaceForMember's transaction body.

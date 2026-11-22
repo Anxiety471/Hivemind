@@ -8,13 +8,13 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 )
 
 const (
@@ -159,7 +159,7 @@ func (r row) invalid() bool {
 	empty := func(id *string) bool { return id != nil && *id == "" }
 	fourDigits := func(at time.Time) bool { return at.UTC().Year() >= 0 && at.UTC().Year() <= 9999 }
 	return r.summary.ID == "" || empty(r.summary.BotID) || empty(r.summary.GroupID) ||
-		utf8.RuneCountInString(r.summary.Title) > titleMaxLength || r.summary.CurrentVersion < 1 ||
+		!wtf8.ZodMaxPass(r.summary.Title, titleMaxLength) || r.summary.CurrentVersion < 1 ||
 		!fourDigits(r.createdAt) || !fourDigits(r.updatedAt)
 }
 

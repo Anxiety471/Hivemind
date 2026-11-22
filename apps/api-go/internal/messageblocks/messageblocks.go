@@ -6,12 +6,12 @@ import (
 	"math"
 	"slices"
 	"strconv"
-	"unicode/utf8"
 
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/validate"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 )
 
 // This file is MessageBlock (packages/contracts/src/threads/message-blocks.ts) as the router
@@ -80,7 +80,7 @@ func str(value any) (any, bool) {
 func strMax(limit int) parser {
 	return func(value any) (any, bool) {
 		text, ok := value.(string)
-		return text, ok && utf8.RuneCountInString(text) <= limit
+		return text, ok && wtf8.Length(text) <= limit
 	}
 }
 

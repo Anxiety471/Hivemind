@@ -16,6 +16,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/validate"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 )
 
 const (
@@ -191,6 +192,14 @@ func parseSenderPolicy(path validate.Path, raw any) (senderPolicy, []validate.Is
 	return result, found
 }
 
+// echoJSON writes a string the response echoes: an unpaired surrogate keeps its
+// JavaScript code unit (a \udXXX escape), as JSON.stringify writes it. The write
+// path keeps stringJSON, whose U+FFFD is what Prisma's sanitizer stores.
+func echoJSON(value string) string {
+	body, _ := wtf8.Marshal(value)
+	return string(body)
+}
+
 func stringJSON(value string) string {
 	var buffer bytes.Buffer
 	encoder := json.NewEncoder(&buffer)
@@ -242,9 +251,13 @@ func policiesJSON(entries []policyEntry, sanitize bool) string {
 		if index > 0 {
 			out.WriteByte(',')
 		}
-		out.WriteString(stringJSON(key))
+		encode := stringJSON
+		if !sanitize {
+			encode = echoJSON
+		}
+		out.WriteString(encode(key))
 		out.WriteString(`:{"name":`)
-		out.WriteString(stringJSON(clean(entry.Policy.Name)))
+		out.WriteString(encode(clean(entry.Policy.Name)))
 		out.WriteString(`,"mode":`)
 		out.WriteString(stringJSON(entry.Policy.Mode))
 		if entry.Policy.RollupHours != nil {
@@ -267,7 +280,7 @@ func (o Output) MarshalJSON() ([]byte, error) {
 		ambient = strconv.FormatBool(*o.policy.Ambient)
 	}
 	if o.policy.Rules != nil {
-		rules = stringJSON(*o.policy.Rules)
+		rules = echoJSON(*o.policy.Rules)
 	}
 	return []byte(`{"teamChatAmbientEnabled":` + ambient + `,"teamChatRules":` + rules + `,"automatedSenderPolicies":` + policiesJSON(o.policy.Policies, false) + `}`), nil
 }

@@ -125,7 +125,7 @@ func (d *DB) inTxWith(ctx context.Context, options pgx.TxOptions, settings []str
 	if err := setSettings(ctx, tx, settings); err != nil {
 		return err
 	}
-	if err := fn(tx); err != nil {
+	if err := fn(sanitizingTx{Tx: tx}); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

@@ -1,10 +1,10 @@
 package routines
 
 import (
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 	"strconv"
 	"strings"
 	"unicode/utf16"
-	"unicode/utf8"
 )
 
 // JavaScript counts and slices strings in UTF-16 code units, while Go counts runes. The two
@@ -14,7 +14,7 @@ import (
 // string's full length in units. A cut that splits a surrogate pair leaves the high half
 // alone, which no Go string can hold, so the returned units are quoted by quoteUnits.
 func sliceUnits(text string, limit int) ([]uint16, int) {
-	units := utf16.Encode([]rune(text))
+	units := wtf8.Units(text)
 	if len(units) <= limit {
 		return units, len(units)
 	}
@@ -23,7 +23,7 @@ func sliceUnits(text string, limit int) ([]uint16, int) {
 }
 
 // unitsOf is a string as UTF-16 code units.
-func unitsOf(text string) []uint16 { return utf16.Encode([]rune(text)) }
+func unitsOf(text string) []uint16 { return wtf8.Units(text) }
 
 // quoteUnits is JSON.stringify of a string read as UTF-16 code units. Well-formed pairs are
 // written as the character; an unpaired surrogate is written as a lower-case \udXXX escape,
@@ -71,4 +71,4 @@ func quoteUnits(units []uint16) []byte {
 func quoteText(text string) []byte { return quoteUnits(unitsOf(text)) }
 
 // runeCount is zod's string length check, which counts code points.
-func runeCount(text string) int { return utf8.RuneCountInString(text) }
+func runeCount(text string) int { return wtf8.Length(text) }
