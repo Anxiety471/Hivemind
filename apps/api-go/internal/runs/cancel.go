@@ -27,16 +27,28 @@ type Cancelled struct {
 	RoutineName     *string
 }
 
-// Canceller performs the run-side cancellation each procedure needs. Ring
-// opens sealed message blocks (clearEndedState) and is required by
-// CancelConversation, which appends run.cancelled events; a deployment with
-// content encryption off still builds a ring with EncryptWrites=false.
-// CancelActive and SupersedeQueued accept a nil ring when encryption is off.
+// Canceller performs the run-side cancellation each procedure needs. Ring is
+// the content key ring the run.cancelled events seal with and the approval
+// cards open with; it is required. A deployment with content encryption off
+// builds a pass-through ring (contentcrypto.NewKeyRing(nil, nil,
+// contentcrypto.KeyRingOptions{})), as the secret store's tests do: TypeScript
+// always has a cipher, so a nil ring is a wiring mistake, not an
+// encryption-off deployment, and would silently skip sealed blocks.
 // Vault, when set, announces the run-only secrets the cancellation drops, as
 // withSecretPersistence does for a Prisma delete (Infrastructure C).
 type Canceller struct {
 	Ring  *contentcrypto.KeyRing
 	Vault *secretstore.Persistence
+}
+
+// errRingRequired is the cancel refusing a nil ring (see Canceller.Ring).
+var errRingRequired = errors.New("runs: cancels need the content key ring (a pass-through ring when content encryption is off)")
+
+func (c Canceller) requireRing() error {
+	if c.Ring == nil {
+		return errRingRequired
+	}
+	return nil
 }
 
 const (
@@ -66,6 +78,9 @@ func (c Canceller) CancelActive(
 ) ([]Cancelled, error) {
 	if len(ids) == 0 {
 		return nil, nil
+	}
+	if err := c.requireRing(); err != nil {
+		return nil, err
 	}
 	at = now(at)
 	rows, err := tx.Query(ctx, `
@@ -140,8 +155,8 @@ func (c Canceller) CancelConversation(
 	at time.Time,
 	state *secretstore.State,
 ) (ConversationCancel, error) {
-	if c.Ring == nil {
-		return ConversationCancel{}, errors.New("runs: cancel conversation needs the content key ring for its events")
+	if err := c.requireRing(); err != nil {
+		return ConversationCancel{}, err
 	}
 	at = now(at)
 	// Thread row first, then run rows: the order clearThread/finalizeRun use, so
@@ -331,6 +346,9 @@ func (c Canceller) SupersedeQueued(
 	if len(botIDs) == 0 {
 		return nil, nil
 	}
+	if err := c.requireRing(); err != nil {
+		return nil, err
+	}
 	at = now(at)
 	rows, err := tx.Query(ctx, `
 		UPDATE runs r SET status = 'cancelled', "completedAt" = $4, "updatedAt" = now()
@@ -431,7 +449,7 @@ func openApprovalEffects(ctx context.Context, tx pgx.Tx, ring *contentcrypto.Key
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	if ring != nil && len(messages) > 0 {
+	if len(messages) > 0 {
 		if err := ring.OpenRows(ctx, "Message", messages); err != nil {
 			return nil, err
 		}

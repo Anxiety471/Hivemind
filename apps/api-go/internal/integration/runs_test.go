@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -326,7 +327,7 @@ func TestCancelOfAFinishedRunKeepsItsOutcome(t *testing.T) {
 	var cancelled []runs.Cancelled
 	err := database.System(context.Background(), "cancel a finished run", func(tx pgx.Tx) error {
 		var err error
-		cancelled, err = runs.Canceller{}.CancelActive(context.Background(), tx, []string{created.RunID}, time.Now(), nil)
+		cancelled, err = runs.Canceller{Ring: plainRing()}.CancelActive(context.Background(), tx, []string{created.RunID}, time.Now(), nil)
 		return err
 	})
 	if err != nil {
@@ -493,7 +494,7 @@ func TestCreateAndCancelRace(t *testing.T) {
 			if len(ids) > 0 {
 				count := 0
 				err = database.System(context.Background(), "race cancel", func(tx pgx.Tx) error {
-					cancelled, err := runs.Canceller{}.CancelActive(context.Background(), tx, ids, time.Now(), nil)
+					cancelled, err := runs.Canceller{Ring: plainRing()}.CancelActive(context.Background(), tx, ids, time.Now(), nil)
 					count = len(cancelled)
 					return err
 				})
@@ -538,7 +539,7 @@ func TestSupersedeQueuedKeepsTheNewestRun(t *testing.T) {
 	var cancelled []runs.Cancelled
 	err := database.System(context.Background(), "supersede queued runs", func(tx pgx.Tx) error {
 		var err error
-		cancelled, err = runs.Canceller{}.SupersedeQueued(context.Background(), tx,
+		cancelled, err = runs.Canceller{Ring: plainRing()}.SupersedeQueued(context.Background(), tx,
 			fixture.threadID, []string{fixture.botID}, []string{second.RunID}, time.Now(), nil)
 		return err
 	})
@@ -633,5 +634,47 @@ func TestCancelConversationWritesItsNotesOrRefuses(t *testing.T) {
 	}
 	if got := runRow(t, database, other.RunID)["status"]; got != "queued" {
 		t.Fatalf("refused cancel wrote status = %v", got)
+	}
+}
+
+// plainRing is the pass-through ring a deployment with content encryption off
+// builds: NewKeyRing with no provider or store and EncryptWrites false never
+// seals and opens only plaintext.
+func plainRing() *contentcrypto.KeyRing {
+	return contentcrypto.NewKeyRing(nil, nil, contentcrypto.KeyRingOptions{})
+}
+
+func TestCancelsRequireTheRing(t *testing.T) {
+	database := openTestDB(t)
+	fixture := seedRunsFixture(t, database)
+	ctx := context.Background()
+	created := createRun(t, database, fixture, runs.CreateInput{}, nil)
+	// TypeScript always has a cipher (a pass-through one when encryption is off),
+	// so a nil ring is a wiring mistake in all three cancels, not a mode.
+	err := database.System(ctx, "active cancel without a ring", func(tx pgx.Tx) error {
+		_, err := runs.Canceller{}.CancelActive(ctx, tx, []string{created.RunID}, time.Now(), nil)
+		return err
+	})
+	if err == nil || !strings.Contains(err.Error(), "content key ring") {
+		t.Fatalf("nil-ring CancelActive = %v", err)
+	}
+	err = database.System(ctx, "conversation cancel without a ring", func(tx pgx.Tx) error {
+		_, err := runs.Canceller{}.CancelConversation(ctx, tx, runs.ConversationTarget{
+			SpaceID: fixture.spaceID, ThreadID: fixture.threadID, BotIDs: []string{fixture.botID},
+		}, time.Now(), nil)
+		return err
+	})
+	if err == nil || !strings.Contains(err.Error(), "content key ring") {
+		t.Fatalf("nil-ring CancelConversation = %v", err)
+	}
+	err = database.System(ctx, "supersede without a ring", func(tx pgx.Tx) error {
+		_, err := runs.Canceller{}.SupersedeQueued(ctx, tx, fixture.threadID, []string{fixture.botID}, nil, time.Now(), nil)
+		return err
+	})
+	if err == nil || !strings.Contains(err.Error(), "content key ring") {
+		t.Fatalf("nil-ring SupersedeQueued = %v", err)
+	}
+	if got := runRow(t, database, created.RunID)["status"]; got != "queued" {
+		t.Fatalf("a refused cancel wrote status = %v", got)
 	}
 }
