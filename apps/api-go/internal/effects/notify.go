@@ -31,12 +31,18 @@ type Notifier struct {
 	wait    sync.WaitGroup
 }
 
-// NewNotifier returns a notifier publishing through database.
+// NewNotifier returns a notifier publishing through database. A nil database is a
+// process without signals, as the gateway's local-server tests build: the notifier
+// is usable and every publish is logged and dropped (never a nil pool dereference).
 func NewNotifier(database *db.DB, logger *slog.Logger) *Notifier {
 	if logger == nil {
 		logger = slog.New(slog.NewJSONHandler(discard{}, nil))
 	}
-	return &Notifier{db: database, logger: logger, sleep: time.Sleep, execute: database.Pool.Exec}
+	notifier := &Notifier{db: database, logger: logger, sleep: time.Sleep}
+	if database != nil {
+		notifier.execute = database.Pool.Exec
+	}
+	return notifier
 }
 
 // Wait blocks until every signal started so far has been delivered or dropped.
@@ -183,6 +189,10 @@ func (n *Notifier) send(ctx context.Context, topic, payload string, retry bool) 
 	body, err := Envelope(topic, payload)
 	if err != nil {
 		n.logger.Warn("realtime signal not published", "topic", topic, "error", err)
+		return
+	}
+	if n.execute == nil {
+		n.logger.Warn("realtime signal not published", "topic", topic, "reason", "no database")
 		return
 	}
 	deadline := time.Now().Add(publishRetryAfter)

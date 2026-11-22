@@ -129,6 +129,23 @@ func TestMcpApproveAuditMatchesSecurityAudit(t *testing.T) {
 	}
 }
 
+func TestNotifierWithoutADatabaseDropsSignalsInsteadOfPanicking(t *testing.T) {
+	// The gateway builds a local server with no database for its shadow tests, so
+	// a nil pool must not be dereferenced at construction or on a publish.
+	notifier := NewNotifier(nil, nil)
+	done := make(chan struct{})
+	go func() {
+		notifier.send(context.Background(), "thread:t", `{"cursor":1}`, true)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a publish without a database waited instead of dropping")
+	}
+	notifier.Wait()
+}
+
 func TestRosterAndSpaceChangeTables(t *testing.T) {
 	actor := db.Actor{UserID: "u1", SpaceID: "s1"}
 	check := func(procedure string, input map[string]any, output any, want RosterChange) {
