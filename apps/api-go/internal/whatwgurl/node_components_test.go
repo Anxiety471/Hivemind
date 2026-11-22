@@ -13,9 +13,15 @@ type corpusCase struct {
 	Throws   bool   `json:"throws"`
 	Href     string `json:"href"`
 	Origin   string `json:"origin"`
+	Protocol string `json:"protocol"`
+	Username string `json:"username"`
+	Password string `json:"password"`
 	Host     string `json:"host"`
 	Hostname string `json:"hostname"`
 	Port     string `json:"port"`
+	Pathname string `json:"pathname"`
+	Search   string `json:"search"`
+	Hash     string `json:"hash"`
 }
 
 // TestNodeCorpus is the WHATWG-level differential: each case is parsed with
@@ -48,11 +54,13 @@ func TestNodeCorpus(t *testing.T) {
 		if tc.Throws {
 			continue
 		}
-		if parsed.Href() != tc.Href || parsed.Origin() != tc.Origin ||
-			parsed.Host() != tc.Host || parsed.Hostname() != tc.Hostname || parsed.Port() != tc.Port {
-			t.Errorf("%s: got href=%q origin=%q host=%q hostname=%q port=%q, want href=%q origin=%q host=%q hostname=%q port=%q (%q base %q)",
-				tc.ID, parsed.Href(), parsed.Origin(), parsed.Host(), parsed.Hostname(), parsed.Port(),
-				tc.Href, tc.Origin, tc.Host, tc.Hostname, tc.Port, tc.Input, tc.Base)
+		got := [11]string{parsed.Href(), parsed.Origin(), parsed.Protocol(),
+			parsed.Username(), parsed.Password(), parsed.Host(), parsed.Hostname(),
+			parsed.Port(), parsed.Pathname(), parsed.Search(), parsed.Hash()}
+		want := [11]string{tc.Href, tc.Origin, tc.Protocol, tc.Username, tc.Password,
+			tc.Host, tc.Hostname, tc.Port, tc.Pathname, tc.Search, tc.Hash}
+		if got != want {
+			t.Errorf("%s: got %#v, want %#v (%q base %q)", tc.ID, got, want, tc.Input, tc.Base)
 		}
 	}
 }

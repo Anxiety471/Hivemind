@@ -19,6 +19,14 @@ interface UrlCase {
   host?: string;
   hostname?: string;
   port?: string;
+  // Every component messageblocks.validOrigin reads: the path/query/fragment
+  // and userinfo decide the accept/reject the same way the zod refine does.
+  protocol?: string;
+  pathname?: string;
+  search?: string;
+  hash?: string;
+  username?: string;
+  password?: string;
 }
 
 const path = process.argv[2] ?? "apps/api-go/internal/whatwgurl/testdata/whatwg-url-corpus.json";
@@ -34,6 +42,12 @@ for (const tc of input) {
     item.host = url.host;
     item.hostname = url.hostname;
     item.port = url.port;
+    item.protocol = url.protocol;
+    item.pathname = url.pathname;
+    item.search = url.search;
+    item.hash = url.hash;
+    item.username = url.username;
+    item.password = url.password;
   } catch {
     item.throws = true;
   }
