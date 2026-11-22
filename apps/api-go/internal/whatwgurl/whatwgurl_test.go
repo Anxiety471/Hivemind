@@ -361,3 +361,43 @@ func TestSearchEmptyVersusPresent(t *testing.T) {
 		t.Fatalf("href %q lost the empty query", u.Href())
 	}
 }
+
+func TestNewSearchParams(t *testing.T) {
+	params := NewSearchParams([]Pair{
+		{Name: "autoconnect", Value: "true"},
+		{Name: "path", Value: "/novnc/session/view/1.t/websockify"},
+		{Name: "space", Value: "1 2"},
+		{Name: "dup", Value: "1"},
+		{Name: "dup", Value: "2"},
+	})
+	want := "autoconnect=true&path=%2Fnovnc%2Fsession%2Fview%2F1.t%2Fwebsockify&space=1+2&dup=1&dup=2"
+	if got := params.String(); got != want {
+		t.Fatalf("String() = %q, want %q", got, want)
+	}
+	if got := params.Get("space"); got != "1 2" {
+		t.Fatalf("Get(space) = %q", got)
+	}
+	if got := params.Get("dup"); got != "1" {
+		t.Fatalf("Get(dup) = %q", got)
+	}
+	if got := params.Get("absent"); got != "" {
+		t.Fatalf("Get(absent) = %q", got)
+	}
+	params.Append("dup", "3")
+	params.Delete("autoconnect")
+	if got, want := params.String(), "path=%2Fnovnc%2Fsession%2Fview%2F1.t%2Fwebsockify&space=1+2&dup=1&dup=2&dup=3"; got != want {
+		t.Fatalf("after Append/Delete = %q, want %q", got, want)
+	}
+	u, err := Parse("https://screen.example.com/vnc?old=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	u.SetSearch(NewSearchParams([]Pair{{Name: "view_only", Value: "false"}}).String())
+	if got, want := u.Href(), "https://screen.example.com/vnc?view_only=false"; got != want {
+		t.Fatalf("href = %q, want %q", got, want)
+	}
+	u.SetSearch(NewSearchParams(nil).String())
+	if got, want := u.Href(), "https://screen.example.com/vnc"; got != want {
+		t.Fatalf("empty params href = %q, want %q", got, want)
+	}
+}

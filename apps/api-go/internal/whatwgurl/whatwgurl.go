@@ -155,6 +155,33 @@ type SearchParams struct {
 	params *wurl.SearchParams
 }
 
+// Pair is one name/value pair for NewSearchParams.
+type Pair struct {
+	Name  string
+	Value string
+}
+
+// NewSearchParams is `new URLSearchParams(iterable)` over ordered pairs, for
+// the object-literal form the screen and Slack URLs build
+// (packages/core/src/node/screen-capability.ts:122,
+// packages/adapters/src/providers/messaging/slack/slack-install-provider.ts:49).
+// Pairs append in the order given, duplicates included; an empty list is the
+// empty parameter string. JavaScript's object-literal order is insertion order
+// for non-index keys; callers spell that order in the slice.
+func NewSearchParams(pairs []Pair) *SearchParams {
+	// A fixed valid URL holds the parameter list; String reads it without
+	// exposing the holder.
+	u, err := Parse("https://rakazo.invalid/")
+	if err != nil {
+		panic("whatwgurl: the constant base URL does not parse: " + err.Error())
+	}
+	params := u.SearchParams()
+	for _, pair := range pairs {
+		params.Append(pair.Name, pair.Value)
+	}
+	return params
+}
+
 // Get is `searchParams.get(name)`.
 func (p *SearchParams) Get(name string) string { return p.params.Get(name) }
 
