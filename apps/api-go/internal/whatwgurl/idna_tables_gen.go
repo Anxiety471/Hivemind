@@ -9,6 +9,15 @@
 
 package whatwgurl
 
+// NodeVersion, ICUVersion and UnicodeVersion pin the host parser that
+// produced the tables below. Regenerate them with the same runtime when
+// any of these changes.
+const (
+	NodeVersion    = "24.22.3"
+	ICUVersion     = "78.3"
+	UnicodeVersion = "17.0"
+)
+
 const (
 	idnaStatusValid uint8 = iota
 	idnaStatusMapped

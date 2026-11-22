@@ -55,6 +55,29 @@ type contextFile struct {
 	Anomalies   []any    `json:"anomalies"`
 }
 
+type probeVersions struct {
+	node    string
+	icu     string
+	unicode string
+}
+
+func versionsOf(node, icu, unicode string) probeVersions {
+	return probeVersions{node: node, icu: icu, unicode: unicode}
+}
+
+// requireSameProbes refuses to generate tables from probe files that were
+// produced by different host parsers. Mixing them silently would make the
+// generated constants describe only one of the inputs.
+func requireSameProbes(want probeVersions, name string, got probeVersions) error {
+	if got.node == "" || got.icu == "" || got.unicode == "" {
+		return fmt.Errorf("%s probe has incomplete version metadata: Node %q, ICU %q, Unicode %q", name, got.node, got.icu, got.unicode)
+	}
+	if got != want {
+		return fmt.Errorf("%s probe was generated with Node %q, ICU %q, Unicode %q; the mapping probe uses Node %q, ICU %q, Unicode %q", name, got.node, got.icu, got.unicode, want.node, want.icu, want.unicode)
+	}
+	return nil
+}
+
 func readGzipJSON(path string, v any) error {
 	f, err := os.Open(path)
 	if err != nil {
@@ -112,6 +135,20 @@ func main() {
 	if err := readGzipJSON(*contextPath, &cf); err != nil {
 		fmt.Fprintln(os.Stderr, "context:", err)
 		os.Exit(1)
+	}
+	versions := versionsOf(mf.Meta.Node, mf.Meta.ICU, mf.Meta.Unicode)
+	for _, probe := range []struct {
+		name string
+		got  probeVersions
+	}{
+		{"mapping", versionsOf(mf.Meta.Node, mf.Meta.ICU, mf.Meta.Unicode)},
+		{"bidi", versionsOf(bf.Meta.Node, bf.Meta.ICU, bf.Meta.Unicode)},
+		{"context", versionsOf(cf.Meta.Node, cf.Meta.ICU, cf.Meta.Unicode)},
+	} {
+		if err := requireSameProbes(versions, probe.name, probe.got); err != nil {
+			fmt.Fprintln(os.Stderr, "probe metadata:", err)
+			os.Exit(1)
+		}
 	}
 	if err := checkCoverage("bidi", bf.Ranges); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -188,6 +225,15 @@ func main() {
 	fmt.Fprintf(w, "// Effective corpus: %s\n", cf.Meta.UCD)
 	fmt.Fprintf(w, "// Tested %d valid code points.\n", cf.Meta.Tested)
 	fmt.Fprintf(w, "\npackage whatwgurl\n\n")
+
+	fmt.Fprintf(w, "// NodeVersion, ICUVersion and UnicodeVersion pin the host parser that\n")
+	fmt.Fprintf(w, "// produced the tables below. Regenerate them with the same runtime when\n")
+	fmt.Fprintf(w, "// any of these changes.\n")
+	fmt.Fprintf(w, "const (\n")
+	fmt.Fprintf(w, "\tNodeVersion = %q\n", versions.node)
+	fmt.Fprintf(w, "\tICUVersion = %q\n", versions.icu)
+	fmt.Fprintf(w, "\tUnicodeVersion = %q\n", versions.unicode)
+	fmt.Fprintf(w, ")\n\n")
 
 	fmt.Fprintf(w, "const (\n")
 	fmt.Fprintf(w, "\tidnaStatusValid uint8 = iota\n")
