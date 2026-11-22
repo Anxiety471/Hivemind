@@ -1,5 +1,5 @@
 import { Trans, useLingui } from "@lingui/react/macro";
-import type { Bot, Group, NavLink } from "@rakazo/contracts";
+import type { Bot, Group, MobileAppLinks, NavLink } from "@rakazo/contracts";
 import { accountDisplay } from "@rakazo/core";
 import {
   Button,
@@ -82,6 +82,7 @@ export function ShellSidebar({
   user,
   boardEnabled,
   navLinks,
+  mobileApp,
   openSettings,
   openIntegrations,
   openSkills,
@@ -112,6 +113,7 @@ export function ShellSidebar({
   user: User | undefined;
   boardEnabled: boolean;
   navLinks: NavLink[];
+  mobileApp?: MobileAppLinks;
   openSettings: (section: SettingsSection) => void;
   openIntegrations: () => void;
   openSkills: () => void;
@@ -309,6 +311,7 @@ export function ShellSidebar({
           user={user}
           boardEnabled={boardEnabled}
           navLinks={navLinks}
+          mobileApp={mobileApp}
           closeMobileSidebar={() => setMobileOpen(false)}
           navigate={navigate}
           openSettings={openSettings}
@@ -327,6 +330,7 @@ function ShellSidebarFooter({
   user,
   boardEnabled,
   navLinks,
+  mobileApp,
   closeMobileSidebar,
   navigate,
   openSettings,
@@ -339,6 +343,7 @@ function ShellSidebarFooter({
   user: User | undefined;
   boardEnabled: boolean;
   navLinks: NavLink[];
+  mobileApp?: MobileAppLinks;
   closeMobileSidebar: () => void;
   navigate: (path: string) => void;
   openSettings: (section: SettingsSection) => void;
@@ -413,6 +418,7 @@ function ShellSidebarFooter({
             : undefined
         }
         links={navLinks}
+        mobileApp={mobileApp}
         onLink={(link) => {
           setMenuOpen(false);
           closeMobileSidebar();

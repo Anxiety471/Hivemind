@@ -1,6 +1,7 @@
 import * as z from "zod";
 import { BotSchema, BotSectionSchema } from "../bots/bot.js";
 import { BotAvatarSetSchema } from "../bots/bot-avatar.js";
+import { MobileAppLinksSchema } from "../clients/mobile-app.js";
 import { NavLinkSchema } from "../clients/nav-links.js";
 import { Id } from "../ids.js";
 import { LabFeatureSchema } from "../labs.js";
@@ -23,6 +24,11 @@ export const MeSchema = z.object({
   phoneCallsEnabled: z.boolean().default(false),
   /** Operator-configured menu links. Absent from older servers. */
   navLinks: z.array(NavLinkSchema).default([]),
+  /**
+   * Builds this deployment publishes itself (MOBILE_APP_ANDROID_URL, MOBILE_APP_IOS_URL);
+   * an unlisted platform offers the app's store page. Absent from older servers.
+   */
+  mobileApp: MobileAppLinksSchema.optional(),
   userId: Id,
   email: z.string().email(),
   name: z.string(),

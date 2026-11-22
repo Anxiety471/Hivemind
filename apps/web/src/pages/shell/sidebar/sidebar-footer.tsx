@@ -1,6 +1,6 @@
 import { Trans, useLingui } from "@lingui/react/macro";
-import type { NavLink } from "@rakazo/contracts";
-import { ANDROID_APP_STORE_URL, IOS_APP_STORE_URL } from "@rakazo/contracts";
+import type { MobileAppLinks, NavLink } from "@rakazo/contracts";
+import { mobileAppUrl } from "@rakazo/contracts";
 import {
   AppMarkStack,
   Button,
@@ -47,6 +47,8 @@ type Props = {
   onBoard?: () => void;
   links?: NavLink[];
   onLink?: (link: NavLink) => void;
+  /** This deployment's own mobile builds; a platform left out opens the store page. */
+  mobileApp?: MobileAppLinks;
   onFiles: () => void;
   onSettings: () => void;
   /** How much of the member's allowance is used; the Usage row shows only with one. */
@@ -81,6 +83,7 @@ export function SidebarFooter({
   onBoard,
   links = [],
   onLink,
+  mobileApp,
   onFiles,
   onSettings,
   usage,
@@ -245,9 +248,10 @@ export function SidebarFooter({
             <div className="my-1 border-t border-border" />
             <a
               className={`${buttonVariants({ variant: "ghost", size: "lg" })} w-full justify-start gap-2.5 font-normal`}
-              href={
-                /Android/i.test(navigator.userAgent) ? ANDROID_APP_STORE_URL : IOS_APP_STORE_URL
-              }
+              href={mobileAppUrl(
+                mobileApp,
+                /Android/i.test(navigator.userAgent) ? "android" : "ios",
+              )}
               target="_blank"
               rel="noreferrer"
             >

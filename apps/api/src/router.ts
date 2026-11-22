@@ -34,7 +34,7 @@ import type {
   WorkActivities,
 } from "@rakazo/adapters";
 import type { Auth } from "@rakazo/auth";
-import type { LabFeature, ModelCredential, NavLink } from "@rakazo/contracts";
+import type { LabFeature, MobileAppLinks, ModelCredential, NavLink } from "@rakazo/contracts";
 import type { BoardEvents, PrismaClient, ThreadEvents } from "@rakazo/db";
 import type { BillingService } from "./billing/billing.js";
 import type { VoiceDeps } from "./calls/voice.js";
@@ -135,6 +135,8 @@ export interface RouterDeps {
     /** Domain of bots' email addresses; unset when this server receives no email. */
     inboundEmailDomain?: string;
     navLinks?: NavLink[];
+    /** Builds this deployment publishes itself; a platform left out offers the store page. */
+    mobileApp?: MobileAppLinks;
     adminEmails?: string[];
     /** Labs features this deployment turns on for every account. */
     deploymentLabs?: LabFeature[];

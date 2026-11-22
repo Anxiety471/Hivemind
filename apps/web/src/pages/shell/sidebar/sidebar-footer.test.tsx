@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import type { DesktopUpdateState } from "@rakazo/contracts";
+import type { DesktopUpdateState, MobileAppLinks } from "@rakazo/contracts";
 import { Toaster } from "@rakazo/ui-web";
 import type { ReactNode } from "react";
 import { act } from "react";
@@ -34,6 +34,7 @@ async function render(
   onIntegrations = vi.fn(),
   onBoard?: () => void,
   logos?: Array<{ name: string; logo?: string }>,
+  mobileApp?: MobileAppLinks,
 ) {
   const email = "account@rakazo.test";
   await act(async () =>
@@ -55,6 +56,7 @@ async function render(
           onIntegrations={onIntegrations}
           onSkills={vi.fn()}
           onBoard={onBoard}
+          mobileApp={mobileApp}
           onFiles={() => {}}
           onSettings={() => {}}
           onLogOut={() => {}}
@@ -166,6 +168,17 @@ it("offers Google Play on Android", async () => {
     (link) => link.textContent === "Get the mobile app",
   )!;
   expect(mobile.href).toBe("https://play.google.com/store/apps/details?id=com.rakazo.app");
+});
+
+it("offers this deployment's own build over the store page", async () => {
+  vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Android");
+  await render("Demo User", undefined, vi.fn(), undefined, undefined, {
+    android: "https://example.test/rakazo.apk",
+  });
+  const mobile = [...document.querySelectorAll("a")].find(
+    (link) => link.textContent === "Get the mobile app",
+  )!;
+  expect(mobile.href).toBe("https://example.test/rakazo.apk");
 });
 
 it("falls back when app artwork fails and accepts replacement artwork", async () => {

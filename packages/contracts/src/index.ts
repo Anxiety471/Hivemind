@@ -31,6 +31,7 @@ export * from "./bots/scratchpad.js";
 export * from "./clients/client-build.js";
 export * from "./clients/desktop.js";
 export * from "./clients/local-settings.js";
+export * from "./clients/mobile-app.js";
 export * from "./clients/nav-links.js";
 export * from "./clients/network-host.js";
 export * from "./clients/server-headers.js";

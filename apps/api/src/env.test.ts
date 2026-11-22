@@ -86,6 +86,19 @@ describe("loadEnv", () => {
       loadEnv({ ...base, RAKAZO_NAV_LINKS: '[{"id":"x","label":"X","path":"/api/me"}]' }),
     ).toThrow("RAKAZO_NAV_LINKS");
   });
+  it("loads this deployment's mobile build links and refuses a non-https one", () => {
+    expect(loadEnv(base).mobileApp).toEqual({});
+    expect(
+      loadEnv({
+        ...base,
+        MOBILE_APP_ANDROID_URL: "https://example.test/rakazo.apk",
+        MOBILE_APP_IOS_URL: "https://example.test/app",
+      }).mobileApp,
+    ).toEqual({ android: "https://example.test/rakazo.apk", ios: "https://example.test/app" });
+    expect(() => loadEnv({ ...base, MOBILE_APP_IOS_URL: "http://example.test/app" })).toThrow(
+      "MOBILE_APP_IOS_URL",
+    );
+  });
   it("keeps Crisp chat off unless a valid website ID is set", () => {
     expect(loadEnv(base).crispWebsiteId).toBeNull();
     expect(

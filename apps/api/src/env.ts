@@ -19,8 +19,13 @@ import {
 } from "@rakazo/adapters";
 import type { OidcConfig, SocialAuthConfig } from "@rakazo/auth";
 import { socialAuthFromFields } from "@rakazo/auth";
-import type { LabFeature, MinimumClientBuilds, NavLink } from "@rakazo/contracts";
-import { isPrivateNetworkHost, parseMinimumClientBuilds, parseNavLinks } from "@rakazo/contracts";
+import type { LabFeature, MinimumClientBuilds, MobileAppLinks, NavLink } from "@rakazo/contracts";
+import {
+  isPrivateNetworkHost,
+  parseMinimumClientBuilds,
+  parseMobileAppLinks,
+  parseNavLinks,
+} from "@rakazo/contracts";
 import { parseCrispWebsiteId } from "@rakazo/contracts/content-security-policy";
 import {
   attachmentCountFromEnv,
@@ -85,6 +90,8 @@ export interface AppEnv extends MessagingEnvironmentValues {
   computerSettingsEnabled: boolean;
   /** Operator menu links that frame a same-origin page (RAKAZO_NAV_LINKS). */
   navLinks?: NavLink[];
+  /** Builds this deployment publishes itself (MOBILE_APP_ANDROID_URL, MOBILE_APP_IOS_URL). */
+  mobileApp: MobileAppLinks;
   /** Verified accounts that review plugin submissions, add stdio MCP servers, and grant access
    * (RAKAZO_ADMIN_EMAILS), lowercased. */
   adminEmails: string[];
@@ -281,6 +288,7 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
     userDevicesEnabled: source.USER_DEVICES_ENABLED !== "false",
     computerSettingsEnabled: source.COMPUTER_SETTINGS_ENABLED === "true",
     navLinks: parseNavLinks(source.RAKAZO_NAV_LINKS),
+    mobileApp: parseMobileAppLinks(source),
     adminEmails: list(source.RAKAZO_ADMIN_EMAILS).map((email) => email.toLowerCase()),
     ...phoneCallSettings(source),
     maxUploadSizeBytes: uploadSizeFromEnv(source),

@@ -1,6 +1,11 @@
 import { useLingui } from "@lingui/react/macro";
 import { useTimeout } from "@rakazo/chat-ui/hooks";
-import type { BotAvatarSet, LabFeature, SpaceMemoryConfig } from "@rakazo/contracts";
+import type {
+  BotAvatarSet,
+  LabFeature,
+  MobileAppLinks,
+  SpaceMemoryConfig,
+} from "@rakazo/contracts";
 import {
   Button,
   Dialog,
@@ -69,6 +74,7 @@ export function SettingsOverlay({
   onNameSaved,
   timezone,
   onTimezoneChange,
+  mobileApp,
   botAvatarSet,
   onBotAvatarSetChange,
   onAccountImported,
@@ -103,6 +109,8 @@ export function SettingsOverlay({
   onNameSaved?: () => Promise<void>;
   timezone: string | null;
   onTimezoneChange: (timezone: string, client: RpcClient) => Promise<void>;
+  /** This deployment's own mobile builds; a platform left out offers the store page. */
+  mobileApp?: MobileAppLinks;
   botAvatarSet?: BotAvatarSet;
   onBotAvatarSetChange?: (set: BotAvatarSet) => Promise<void>;
   onAccountImported?: () => Promise<void>;
@@ -419,6 +427,7 @@ export function SettingsOverlay({
                         onNameSaved={onNameSaved}
                         timezone={timezone}
                         onTimezoneChange={onTimezoneChange}
+                        mobileApp={mobileApp}
                         botAvatarSet={botAvatarSet}
                         onBotAvatarSetChange={onBotAvatarSetChange}
                         onAccountImported={onAccountImported}

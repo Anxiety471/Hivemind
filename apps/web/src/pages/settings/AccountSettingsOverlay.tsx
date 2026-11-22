@@ -1,5 +1,10 @@
 import { Trans, useLingui } from "@lingui/react/macro";
-import type { AccountSecurity, BotAvatarSet, SignInProvider } from "@rakazo/contracts";
+import type {
+  AccountSecurity,
+  BotAvatarSet,
+  MobileAppLinks,
+  SignInProvider,
+} from "@rakazo/contracts";
 import {
   APP_LOCALE_LABELS,
   accountDisplay,
@@ -29,6 +34,7 @@ import {
 } from "../../components/computers/ComputersUnavailableHint";
 import { DesktopUpdateSection } from "../../components/DesktopUpdates";
 import { AccountDataSettings } from "../../components/settings/AccountDataSettings";
+import { MobileAppSettings } from "../../components/settings/MobileAppSettings";
 import { SettingsGroup, SettingsRow } from "../../components/settings/SettingsRows";
 import { TrustedLinkSitesSettings } from "../../components/settings/TrustedLinkSitesSettings";
 import { authClient } from "../../lib/auth/auth";
@@ -58,6 +64,8 @@ export type SettingsGeneralProps = {
   /** The user's saved IANA timezone, or null before one is set. */
   timezone?: string | null;
   onTimezoneChange?: (timezone: string, client: RpcClient) => Promise<void>;
+  /** This deployment's own mobile builds; a platform left out offers the store page. */
+  mobileApp?: MobileAppLinks;
   /** The icon set new and unpinned bots wear; absent from servers that predate it. */
   botAvatarSet?: BotAvatarSet;
   onBotAvatarSetChange?: (set: BotAvatarSet) => Promise<void>;
@@ -71,6 +79,7 @@ export function GeneralSettingsPanels({
   onNameSaved,
   timezone = null,
   onTimezoneChange,
+  mobileApp,
   botAvatarSet,
   onBotAvatarSetChange,
   onAccountImported,
@@ -509,6 +518,8 @@ export function GeneralSettingsPanels({
           <PasskeySettings />
         </SettingsGroup>
       ) : null}
+
+      <MobileAppSettings links={mobileApp} />
 
       <SettingsGroup title={<Trans>Data</Trans>} data-testid="account-data">
         <AccountDataSettings onImported={onAccountImported} onImportAgent={onImportAgent} />

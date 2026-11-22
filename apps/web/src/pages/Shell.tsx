@@ -1097,6 +1097,7 @@ function SpaceShell() {
         user={session.data?.user}
         boardEnabled={hasLab(bootstrapMe?.labs, "board")}
         navLinks={desktopBridge() ? [] : (bootstrapMe?.navLinks ?? [])}
+        mobileApp={bootstrapMe?.mobileApp}
         openSettings={openSettings}
         openIntegrations={() => setOverlay({ kind: "integrations" })}
         openSkills={() => setOverlay({ kind: "skills" })}
