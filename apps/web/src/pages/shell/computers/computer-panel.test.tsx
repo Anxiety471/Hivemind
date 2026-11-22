@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { i18n } from "@lingui/core";
-import type { Bot, ComputerStatus } from "@rakazo/contracts";
+import type { ComputerStatus } from "@rakazo/contracts";
 import type { ComponentProps, ReactNode } from "react";
 import { act } from "react";
 import type { Root } from "react-dom/client";
@@ -12,7 +12,7 @@ vi.mock("@lingui/react/macro", () => ({
   Trans: ({ children }: { children: ReactNode }) => children,
 }));
 vi.mock("@rakazo/ui-web", () => ({
-  BotAvatar: () => null,
+  Spinner: () => null,
   Button: ({
     variant: _variant,
     size: _size,
@@ -29,8 +29,6 @@ import { ComputerPanel } from "./computer-panel";
 
 let container: HTMLDivElement;
 let root: Root;
-
-const bot = { id: "bot-1", name: "Ada" } as Bot;
 
 function computer(state: ComputerStatus["state"]): ComputerStatus {
   return {
@@ -60,7 +58,6 @@ async function render(
   await act(async () => {
     root.render(
       <ComputerPanel
-        bot={bot}
         computer={status}
         computerOpen={false}
         embeddedScreenUrl={embeddedScreenUrl}

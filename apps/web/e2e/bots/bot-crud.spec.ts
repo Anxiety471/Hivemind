@@ -160,11 +160,12 @@ test("bot creation, editing, and deletion persist", async ({ page }, testInfo) =
   const modelRow = settings.getByRole("button", { name: /^Model/ });
   const openWork = settings.getByTestId("bot-scratchpad");
   const notifications = settings.getByRole("switch", { name: "Notifications", exact: true });
-  // Settings fold away by default; the panel itself shows the profile, computer and routines.
+  // The panel shows the model and notifications; the rest waits behind Advanced.
   await page.getByRole("button", { name: "Close panel" }).click();
   await openBotPanel(page);
-  await expect(notifications).toHaveCount(0);
-  await expect(modelRow).toHaveCount(0);
+  await expect(notifications).toBeVisible();
+  await expect(modelRow).toBeVisible();
+  await expect(settings.getByRole("switch", { name: "Own computer", exact: true })).toHaveCount(0);
   await settings.getByRole("button", { name: "More actions", exact: true }).click();
   await expect(page.getByRole("menuitem", { name: "Export", exact: true })).toBeVisible();
   await expect(

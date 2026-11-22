@@ -113,15 +113,6 @@ export function BotSettings({
   const { t } = useLingui();
   const ids = useId();
   const modelRef = useRef<HTMLDivElement>(null);
-  // A model deep link opens Settings, then focuses the model once Settings is shown: a control
-  // inside a hidden section cannot take focus.
-  const modelFocusPending = useRef(false);
-  useEffect(() => {
-    if (focusModel && view === "settings") {
-      modelFocusPending.current = true;
-      setSettingsOpen(true);
-    }
-  }, [view, focusModel]);
   const [name, setName] = useState(bot.name);
   const savedNameRef = useRef(bot.name);
   const [description, setDescription] = useState(bot.description);
@@ -175,13 +166,12 @@ export function BotSettings({
     Object.entries(changed).some(([key, on]) => on !== changedBefore[key as keyof typeof changed])
   )
     setChangedBefore(changed);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   useEffect(() => {
-    if (!settingsOpen || !modelFocusPending.current) return;
-    modelFocusPending.current = false;
+    if (!focusModel || view !== "settings") return;
     modelRef.current?.scrollIntoView?.({ block: "nearest" });
     modelRef.current?.querySelector<HTMLElement>('[id$="-model"]')?.focus();
-  }, [settingsOpen, view, focusModel]);
+  }, [view, focusModel]);
   const [claimingEmail, setClaimingEmail] = useState(false);
   const [voiceId, setVoiceId] = useState(bot.voiceId ?? "");
   const [modelKey, setModelKey] = useState(
@@ -540,51 +530,13 @@ export function BotSettings({
       {view === "pages" ? <PagesList botId={bot.id} /> : null}
       {/* Stays mounted so drafts and the open sections survive a visit to a whole list. */}
       <div hidden={view !== "settings"}>
-        <div className="mb-4 flex items-center justify-end gap-1">
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="text-muted-foreground"
-                  aria-label={t`More actions`}
-                />
-              }
-            >
-              <MoreHorizontal className="size-4.5" strokeWidth={1.75} />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-52">
-              {email && !email.address && !claimingEmail ? (
-                <DropdownMenuItem onClick={() => setClaimingEmail(true)}>
-                  <Trans>Get an email address</Trans>
-                </DropdownMenuItem>
-              ) : null}
-              <DropdownMenuItem
-                onClick={() => {
-                  setError(null);
-                  onExport().catch((err: unknown) => setError(errorText(err)));
-                }}
-              >
-                <Trans>Export</Trans>
-              </DropdownMenuItem>
-              <DropdownMenuItem variant="destructive" onClick={onClear}>
-                <Trans>Clear conversation</Trans>
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-          {headerButtons}
-        </div>
-        <div
-          data-testid="bot-profile-header"
-          className="flex flex-col items-center pb-5 text-center"
-        >
-          <div className="flex justify-center pb-4">
+        <div data-testid="bot-profile-header">
+          <div className="mb-5 flex items-center gap-3">
             <AvatarStudioPopover
               value={color}
               identity={bot.id}
               status={bot.status}
-              size={76}
+              size={40}
               avatarSet={avatarSet}
               onChange={(newColor, nextAvatarSet) => {
                 setColor(newColor);
@@ -595,21 +547,63 @@ export function BotSettings({
                 });
               }}
             />
+            <div className="min-w-0 flex-1">
+              <InlineProfileField
+                label={t`Name`}
+                editLabel={t`Edit name`}
+                value={name}
+                maxLength={BOT_NAME_MAX_LENGTH}
+                className="text-body-lg font-semibold"
+                onCommit={(value) => {
+                  if (!value.trim()) return;
+                  setName(value.trim());
+                  void enqueueSave({ name: value });
+                }}
+              />
+              {description.trim() ? (
+                <p className="line-clamp-2 px-2 text-body-sm text-muted-foreground" dir="auto">
+                  {description}
+                </p>
+              ) : null}
+            </div>
+            <div className="flex shrink-0 items-center gap-1">
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  render={
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="text-muted-foreground"
+                      aria-label={t`More actions`}
+                    />
+                  }
+                >
+                  <MoreHorizontal className="size-4.5" strokeWidth={1.75} />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-52">
+                  {email && !email.address && !claimingEmail ? (
+                    <DropdownMenuItem onClick={() => setClaimingEmail(true)}>
+                      <Trans>Get an email address</Trans>
+                    </DropdownMenuItem>
+                  ) : null}
+                  <DropdownMenuItem
+                    onClick={() => {
+                      setError(null);
+                      onExport().catch((err: unknown) => setError(errorText(err)));
+                    }}
+                  >
+                    <Trans>Export</Trans>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem variant="destructive" onClick={onClear}>
+                    <Trans>Clear conversation</Trans>
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              {headerButtons}
+            </div>
           </div>
-          <InlineProfileField
-            label={t`Name`}
-            editLabel={t`Edit name`}
-            value={name}
-            maxLength={BOT_NAME_MAX_LENGTH}
-            className="text-heading2 font-semibold"
-            onCommit={(value) => {
-              if (!value.trim()) return;
-              setName(value.trim());
-              void enqueueSave({ name: value });
-            }}
-          />
           {email && (email.address || claimingEmail) ? (
-            <div data-testid="bot-email" className="mt-2 w-full max-w-sm text-left">
+            <div data-testid="bot-email" className="mb-5 w-full text-left">
               <BotEmailAddressField
                 bot={{ id: bot.id, name }}
                 domain={email.domain}
@@ -657,48 +651,52 @@ export function BotSettings({
           ) : null}
           <PagesList botId={bot.id} preview={{ onOpenAll: () => onViewChange?.("pages") }} />
         </div>
+        <div className="mt-6" data-testid="bot-settings-card">
+          <SettingsCard>
+            <ModelRow
+              ids={ids}
+              containerRef={modelRef}
+              choices={modelChoices}
+              value={selectedModelKey}
+              onModelChange={(key) => {
+                setModelKey(key);
+                setThinkingLevel("");
+              }}
+              thinkingOptions={thinkingOptions}
+              thinkingLevel={thinkingLevel}
+              defaultThinkingLevel={defaultThinkingLevel}
+              onThinkingLevelChange={setThinkingLevel}
+            />
+            <SwitchRow
+              id={`${ids}-notify-finish`}
+              label={<Trans>Notifications</Trans>}
+              checked={notifyOnFinish}
+              onChange={(checked) => {
+                setNotifyOnFinish(checked);
+                void enqueueSave({ notifyOnFinish: checked });
+              }}
+            />
+          </SettingsCard>
+        </div>
         <div className="mt-6" data-testid="bot-settings-advanced">
           <SectionHeading variant="label" className="flex min-h-6 items-center">
             <button
               type="button"
-              aria-expanded={settingsOpen}
-              aria-controls={`${ids}-settings`}
-              onClick={() => setSettingsOpen((open) => !open)}
+              aria-expanded={advancedOpen}
+              aria-controls={`${ids}-advanced`}
+              onClick={() => setAdvancedOpen((open) => !open)}
               className="-my-2 flex min-h-10 w-full items-center gap-1 rounded-sm outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
             >
-              <Trans>Settings</Trans>
+              <Trans>Advanced</Trans>
               <ChevronDown
                 aria-hidden="true"
-                className={`size-3.5 transition-transform ${settingsOpen ? "rotate-180" : ""}`}
+                className={`size-3.5 transition-transform ${advancedOpen ? "rotate-180" : ""}`}
               />
             </button>
           </SectionHeading>
           {/* Stays mounted so an instructions or description draft survives folding it away. */}
-          <div id={`${ids}-settings`} hidden={!settingsOpen} className="space-y-6 pt-2">
+          <div id={`${ids}-advanced`} hidden={!advancedOpen} className="space-y-6 pt-2">
             <SettingsCard>
-              <ModelRow
-                ids={ids}
-                containerRef={modelRef}
-                choices={modelChoices}
-                value={selectedModelKey}
-                onModelChange={(key) => {
-                  setModelKey(key);
-                  setThinkingLevel("");
-                }}
-                thinkingOptions={thinkingOptions}
-                thinkingLevel={thinkingLevel}
-                defaultThinkingLevel={defaultThinkingLevel}
-                onThinkingLevelChange={setThinkingLevel}
-              />
-              <SwitchRow
-                id={`${ids}-notify-finish`}
-                label={<Trans>Notifications</Trans>}
-                checked={notifyOnFinish}
-                onChange={(checked) => {
-                  setNotifyOnFinish(checked);
-                  void enqueueSave({ notifyOnFinish: checked });
-                }}
-              />
               <SwitchRow
                 id={`${ids}-own-computer`}
                 label={<Trans>Own computer</Trans>}
@@ -706,8 +704,6 @@ export function BotSettings({
                 disabled={saving}
                 onChange={(checked) => setComputerMode(checked ? "dedicated" : "team")}
               />
-              {/* Read only once the settings are open: listing versions reads object storage. */}
-              {settingsOpen ? <ComputerHomeVersions botId={bot.id} /> : null}
               {changed.readAloud ? (
                 <SwitchRow
                   id={`${ids}-auto-speak`}
@@ -785,6 +781,8 @@ export function BotSettings({
                 }}
               />
             ) : null}
+            {/* Read only once Advanced is open: listing versions reads object storage. */}
+            {advancedOpen ? <ComputerHomeVersions botId={bot.id} /> : null}
           </div>
         </div>
         {error ? <p className="mt-2 text-body-sm text-destructive">{error}</p> : null}
@@ -829,7 +827,7 @@ function InlineProfileField({
       aria-label={label}
       value={draft}
       maxLength={maxLength}
-      className={`h-auto border-transparent bg-transparent p-0 text-center shadow-none ${className}`}
+      className={`h-auto border-transparent bg-transparent p-0 text-start shadow-none ${className}`}
       onChange={(event) => setDraft(event.target.value)}
       onBlur={commit}
       onKeyDown={(event) => {
@@ -851,7 +849,7 @@ function InlineProfileField({
     <button
       type="button"
       aria-label={editLabel}
-      className={`min-w-0 max-w-full cursor-text break-words rounded px-2 outline-none focus-visible:ring-2 focus-visible:ring-ring ${className}`}
+      className={`min-w-0 max-w-full cursor-text truncate rounded px-2 text-start outline-none focus-visible:ring-2 focus-visible:ring-ring ${className}`}
       onClick={() => {
         cancelled.current = false;
         setDraft(value);

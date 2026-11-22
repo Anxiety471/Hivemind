@@ -295,7 +295,7 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-it("shows the profile and folds the settings away", async () => {
+it("shows the common settings and folds the rest away", async () => {
   await render("Billing");
   expect(container.querySelector('[data-testid="bot-profile-header"]')?.textContent).toContain(
     "Ada",
@@ -305,20 +305,20 @@ it("shows the profile and folds the settings away", async () => {
   expect(
     [...container.querySelectorAll("button")].some((button) => button.textContent === "Save"),
   ).toBe(false);
-  const settings = document.getElementById(settingsButton().getAttribute("aria-controls")!)!;
-  expect(settingsButton().getAttribute("aria-expanded")).toBe("false");
-  expect(settings.hidden).toBe(true);
-  await openSettings();
-  expect(settingsButton().getAttribute("aria-expanded")).toBe("true");
-  expect(settings.hidden).toBe(false);
-  expect(settings.querySelector('textarea[id$="-instructions"]')).not.toBeNull();
-  expect(settings.querySelector('[data-testid="bot-settings-tools"]')).toBeNull();
-  const card = settings.firstElementChild!;
+  const card = container.querySelector('[data-testid="bot-settings-card"]')!;
   expect(
     [...card.querySelectorAll('label, button[id$="-model"]')].map(
       (node) => node.firstChild?.textContent,
     ),
-  ).toEqual(["Model", "Notifications", "Own computer"]);
+  ).toEqual(["Model", "Notifications"]);
+  const advanced = document.getElementById(settingsButton().getAttribute("aria-controls")!)!;
+  expect(settingsButton().getAttribute("aria-expanded")).toBe("false");
+  expect(advanced.hidden).toBe(true);
+  await openSettings();
+  expect(settingsButton().getAttribute("aria-expanded")).toBe("true");
+  expect(advanced.hidden).toBe(false);
+  expect(advanced.querySelector('textarea[id$="-instructions"]')).not.toBeNull();
+  expect(advanced.querySelector('[data-testid="bot-settings-tools"]')).toBeNull();
 });
 
 describe("BotSettings model choices", () => {
@@ -731,7 +731,6 @@ it("cancels an inline name edit", async () => {
 
 it("focuses the model control for a model deep link", async () => {
   await render("", {}, 1);
-  expect(settingsButton().getAttribute("aria-expanded")).toBe("true");
   expect(document.activeElement?.id.endsWith("-model")).toBe(true);
 });
 

@@ -1,8 +1,8 @@
 import { t } from "@lingui/core/macro";
 import { Trans } from "@lingui/react/macro";
-import type { Bot, ComputerStatus } from "@rakazo/contracts";
+import type { ComputerStatus } from "@rakazo/contracts";
 import { computerPreviewPlaceholder } from "@rakazo/i18n/computer-preview";
-import { BotAvatar, Button } from "@rakazo/ui-web";
+import { Button, Spinner } from "@rakazo/ui-web";
 import { HardDrive, Maximize2, X } from "lucide-react";
 import type { ReactNode } from "react";
 import { ComputersUnavailableHint } from "../../../components/computers/ComputersUnavailableHint";
@@ -11,7 +11,6 @@ import { screenFrames, screenIframeSandbox } from "../../../lib/computers/comput
 import { DesktopKindEmptyState } from "./computer-view";
 
 type ComputerPanelProps = {
-  bot: Bot;
   computer: ComputerStatus | null;
   computerOpen: boolean;
   embeddedScreenUrl: string | null;
@@ -73,7 +72,6 @@ export function ComputerPanel({
 }
 
 function ComputerPreview({
-  bot,
   computer,
   computerOpen,
   embeddedScreenUrl,
@@ -105,21 +103,9 @@ function ComputerPreview({
       <div
         data-testid="computer-preview"
         data-state="idle"
-        className="flex aspect-[16/10] flex-col items-center justify-center gap-3 rounded-xl bg-muted/50 px-6"
+        className="flex min-h-12 items-center justify-between gap-3 rounded-xl bg-muted/50 px-4 py-1.5 text-body"
       >
-        <span aria-hidden className="relative">
-          <BotAvatar
-            avatarSet={bot.avatarSet}
-            color={bot.color}
-            identity={bot.id}
-            size={44}
-            className="opacity-50 grayscale"
-          />
-          <span className="absolute -end-3 -top-2 text-caption font-medium leading-none text-muted-foreground/70">
-            z<sup>z</sup>
-          </span>
-        </span>
-        <span className="text-body text-muted-foreground">
+        <span className="min-w-0 flex-1 truncate text-muted-foreground">
           <Trans>Asleep</Trans>
         </span>
         <Button variant="secondary" size="sm" data-testid="computer-preview-open" onClick={onOpen}>
@@ -129,6 +115,46 @@ function ComputerPreview({
     );
   }
   const canOpen = !computerScreenError && !showingRecoveryHint;
+  const liveScreen =
+    !runsOnUserMachine(computer) &&
+    computer?.state === "running" &&
+    Boolean(embeddedScreenUrl) &&
+    !computerScreenError;
+  // Nothing to look at yet: a boot, a connection, or a failure gets one line, not an empty frame.
+  if (
+    !computerOpen &&
+    !runsOnUserMachine(computer) &&
+    !liveScreen &&
+    !showingRecoveryHint &&
+    !computerScreenError
+  ) {
+    return (
+      <div
+        data-testid="computer-preview"
+        data-state={computer?.state === "running" ? "running" : undefined}
+        className="flex min-h-12 items-center justify-between gap-3 rounded-xl bg-muted/50 px-4 py-1.5 text-body"
+      >
+        <div className="flex min-w-0 flex-1 items-center gap-2 text-muted-foreground">
+          {!computerBooting && computer?.state === "running" ? (
+            <Spinner aria-hidden className="size-3.5 shrink-0 motion-reduce:animate-none" />
+          ) : null}
+          <span className="min-w-0 truncate">
+            {computerBooting ?? computerPreviewPlaceholder(computer?.state, booting)}
+          </span>
+        </div>
+        {canOpen ? (
+          <Button
+            variant="secondary"
+            size="sm"
+            data-testid="computer-preview-open"
+            onClick={onOpen}
+          >
+            <Trans>Open</Trans>
+          </Button>
+        ) : null}
+      </div>
+    );
+  }
   // The Open pill replaces the status text on hover; fade it so they never overlap.
   const hideOnHover = canOpen
     ? "transition-opacity group-hover:opacity-0 group-has-[:focus-visible]:opacity-0"
@@ -141,7 +167,7 @@ function ComputerPreview({
           computer?.state === "running" && !runsOnUserMachine(computer) ? "running" : undefined
         }
         className={`group relative rounded-xl bg-muted/50 ${
-          showingRecoveryHint ? "" : "aspect-[16/10] overflow-hidden"
+          showingRecoveryHint || computerScreenError ? "" : "aspect-[16/10] overflow-hidden"
         }`}
       >
         {computerOpen ? (
@@ -171,7 +197,9 @@ function ComputerPreview({
           ))
         ) : (
           <div
-            className={`grid h-full place-items-center px-6 text-center text-body text-muted-foreground/80 ${hideOnHover}`}
+            className={`grid h-full place-items-center px-6 text-center text-body text-muted-foreground/80 ${hideOnHover} ${
+              showingRecoveryHint || computerScreenError ? "py-6" : ""
+            }`}
           >
             {computerScreenError ??
               (showComputerRecoveryHint ? (

@@ -1334,7 +1334,6 @@ function SpaceShell() {
         computerPanel={
           active ? (
             <ComputerPanel
-              bot={active}
               computer={computer}
               computerOpen={computerOpen}
               embeddedScreenUrl={panel === "settings" ? computerControls.embeddedScreenUrl : null}
