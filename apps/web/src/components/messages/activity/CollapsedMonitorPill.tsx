@@ -60,7 +60,7 @@ export function CollapsedMonitorPill({
             )}
             aria-hidden="true"
           />
-          <span className="max-w-36 truncate text-label font-medium text-foreground">
+          <span className="max-w-64 truncate text-label font-medium text-foreground">
             {displayTitle}
           </span>
         </button>

@@ -2,7 +2,6 @@ import { Trans, useLingui } from "@lingui/react/macro";
 import { ChatMarkdown } from "@rakazo/chat-ui/web";
 import { Button, cn } from "@rakazo/ui-web";
 import { RotateCcw, X } from "lucide-react";
-import { useRef } from "react";
 import type { CheckpointNode } from "../../../lib/chat/checkpoint-graph";
 import {
   formatClockDuration,
@@ -27,17 +26,9 @@ export function StepInspectorPopover({
   rewinding = false,
 }: StepInspectorPopoverProps) {
   const { t } = useLingui();
-  const panelRef = useRef<HTMLDivElement>(null);
 
   useEventListener(typeof window === "undefined" ? null : window, "keydown", (event) => {
     if (event.key === "Escape") onClose();
-  });
-
-  useEventListener(typeof document === "undefined" ? null : document, "pointerdown", (event) => {
-    const target = event.target as Node | null;
-    if (!target || !panelRef.current || panelRef.current.contains(target)) return;
-    if ((target as Element).closest?.("[data-step-inspector-trigger]")) return;
-    onClose();
   });
 
   const info = stepDisplayInfo(node.step);
@@ -59,10 +50,9 @@ export function StepInspectorPopover({
 
   return (
     <div
-      ref={panelRef}
       role="dialog"
       aria-label={t`Step inspector: ${node.step.label}`}
-      className="monitor-card-enter absolute right-0 bottom-full left-0 z-30 mb-2 mx-auto w-full max-w-sm rounded-xl border border-border bg-popover p-3.5 text-popover-foreground shadow-lg"
+      className="monitor-card-enter w-full min-w-0 rounded-xl border border-border/80 bg-muted/35 p-3.5 text-foreground"
     >
       <div className="flex items-start justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2.5">
@@ -120,13 +110,13 @@ export function StepInspectorPopover({
       </div>
 
       {info.note ? (
-        <div className="mt-2.5 max-h-28 overflow-y-auto text-label leading-relaxed text-muted-foreground [&_p]:my-0">
+        <div className="mt-2.5 max-h-36 overflow-y-auto text-label leading-relaxed text-muted-foreground [&_p]:my-0">
           <ChatMarkdown>{info.note}</ChatMarkdown>
         </div>
       ) : null}
 
       {info.detail ? (
-        <div className="mt-2.5 rounded-md border border-border/70 bg-muted/40 px-2.5 py-1.5 font-mono text-caption text-foreground break-all">
+        <div className="mt-2.5 max-h-36 overflow-y-auto whitespace-pre-wrap break-words rounded-md border border-border/70 bg-background/80 px-2.5 py-1.5 font-mono text-caption text-foreground">
           {info.detail}
         </div>
       ) : null}

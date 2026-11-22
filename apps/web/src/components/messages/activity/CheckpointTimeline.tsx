@@ -4,6 +4,7 @@ import { RotateCcw } from "lucide-react";
 import { useState } from "react";
 import type { CheckpointGraph, CheckpointNode } from "../../../lib/chat/checkpoint-graph";
 import { formatStepDuration, stepCategory } from "../../../lib/chat/checkpoint-graph";
+import { stepDisplayInfo } from "../../../lib/chat/tool-activity-view";
 import { StepIconPlate } from "./step-icons";
 
 const ROW_HEIGHT_PX = 34;
@@ -13,6 +14,7 @@ const RAIL_BASE_X = 10;
 export interface CheckpointTimelineProps {
   graph: CheckpointGraph;
   activeStepIndex?: number;
+  highlightedStepIndex?: number;
   isLive?: boolean;
   onSelectStep: (node: CheckpointNode) => void;
   onHoverStep?: (node: CheckpointNode | null) => void;
@@ -23,6 +25,7 @@ export interface CheckpointTimelineProps {
 export function CheckpointTimeline({
   graph,
   activeStepIndex,
+  highlightedStepIndex,
   isLive = false,
   onSelectStep,
   onHoverStep,
@@ -200,8 +203,12 @@ export function CheckpointTimeline({
           const category = stepCategory(node.step.label, node.step.detail);
           const durationLabel = formatStepDuration(node.durationMs);
           const isInspected = activeStepIndex === node.index;
+          const isHighlighted = highlightedStepIndex === node.index && !isInspected;
           const isDimmedByHover = hoveredIndex !== null && hoveredIndex !== node.index;
           const canShowRewind = Boolean(onRewind) && node.state !== "running";
+          const info = stepDisplayInfo(node.step);
+          const targetText =
+            info.target && info.target !== node.step.label ? info.target : undefined;
 
           return (
             <div
@@ -209,7 +216,8 @@ export function CheckpointTimeline({
               className={cn(
                 "group/step relative flex min-h-[34px] items-center justify-between gap-2 rounded-lg pr-1.5 transition-opacity duration-150",
                 isInspected && "bg-accent/70",
-                !isInspected && "hover:bg-accent/45",
+                isHighlighted && "bg-accent/55",
+                !isInspected && !isHighlighted && "hover:bg-accent/45",
                 node.isAbandonedBranch && "opacity-55",
                 isDimmedByHover && !node.isAbandonedBranch && "opacity-45",
               )}
@@ -238,7 +246,7 @@ export function CheckpointTimeline({
                           : "neutral"
                   }
                 />
-                <span className="truncate text-body-sm text-foreground">
+                <span className="shrink-0 text-body-sm font-medium text-foreground">
                   {node.step.label}
                   {node.step.count > 1 ? (
                     <span className="ml-1 text-label text-muted-foreground tabular-nums">
@@ -246,6 +254,17 @@ export function CheckpointTimeline({
                     </span>
                   ) : null}
                 </span>
+                {targetText ? (
+                  <span
+                    className={cn(
+                      "min-w-0 flex-1 truncate text-caption text-muted-foreground",
+                      info.detail && "font-mono",
+                    )}
+                    title={targetText}
+                  >
+                    {targetText}
+                  </span>
+                ) : null}
                 {node.attemptBadge !== undefined ? (
                   <span className="inline-flex shrink-0 items-center rounded-full bg-status-working/12 px-1.5 py-0.5 text-caption font-medium text-status-working tabular-nums">
                     <Trans>Attempt {node.attemptBadge}</Trans>

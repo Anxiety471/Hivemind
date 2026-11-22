@@ -121,6 +121,9 @@ describe("ActivityPanel", () => {
     });
 
     const panel = panelRoot();
+    expect(panel.className).toContain("@container");
+    expect(panel.className).toContain("w-full");
+    expect(panel.className).not.toContain("max-w-[440px]");
     expect(triggerButton().getAttribute("aria-expanded")).toBe("true");
     expect(panel.textContent).toContain("Claude Opus 5.5");
     expect(panel.textContent).toContain("Release agent");
@@ -128,6 +131,9 @@ describe("ActivityPanel", () => {
     expect(panel.textContent).toContain("Running");
     expect(panel.textContent).toContain("Drafting the release notes");
     expect(panel.textContent).toContain("Compared 38 commits");
+    expect(panel.querySelector('[data-testid="tool-rows"]')?.textContent).toContain(
+      "git log v3.1..main",
+    );
     expect(panel.textContent).toContain("2.3s");
     expect(panel.textContent).toContain("1/2");
     expect(panel.querySelectorAll('[aria-label="Step timeline progress"] button')).toHaveLength(2);
@@ -192,6 +198,28 @@ describe("ActivityPanel", () => {
     });
     expect(triggerButton().getAttribute("aria-expanded")).toBe("true");
     expect(panel.querySelector('[data-testid="tool-rows"]')).not.toBeNull();
+  });
+
+  it("renders expanded completed summary without duplicate duration or footer category text", () => {
+    renderPanel({
+      live: false,
+      blocks: [
+        stepsBlock([step("Shell", { detail: "git status", durationMs: 4_000, status: "done" })], {
+          durationMs: 4_000,
+          costUsd: 0.01,
+        }),
+      ],
+      runMeta: { modelId: "claude-opus-5-5", status: "completed" },
+    });
+    act(() => {
+      triggerButton().click();
+    });
+    const completedText = panelRoot().textContent ?? "";
+    expect(completedText).not.toContain("Finished in");
+    expect(completedText).not.toContain("Terminal");
+    expect(completedText).toContain("ran a command");
+    expect(completedText).toContain("git status");
+    expect(completedText).toContain("0:04");
   });
 
   it("renders a one-line thought without a trigger and expands a multi-line thought on click", () => {

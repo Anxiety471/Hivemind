@@ -27,7 +27,7 @@ import { CheckpointTimeline } from "./activity/CheckpointTimeline";
 import { CollapsedMonitorPill } from "./activity/CollapsedMonitorPill";
 import { OdometerCost } from "./activity/OdometerCost";
 import { StepInspectorPopover } from "./activity/StepInspectorPopover";
-import { StepCategoryName, StepIconPlate } from "./activity/step-icons";
+import { StepIconPlate } from "./activity/step-icons";
 
 const RunLogSheet = lazy(() => import("./activity/RunLogSheet"));
 
@@ -303,8 +303,10 @@ function ActivityPanelInner({
       : "tool";
 
   const bannerClock = formatClockDuration(elapsedMs);
-  const inspectedIndex = inspectedStepIndex ?? hoveredBarIndex;
-  const inspectedNode = inspectedIndex !== null ? (graph.nodes[inspectedIndex] ?? null) : null;
+  const inspectedNode =
+    inspectedStepIndex !== null ? (graph.nodes[inspectedStepIndex] ?? null) : null;
+  const hasSidePanel = details.thinkingLines.length > 0 || inspectedNode !== null;
+  const twoColumnBody = graph.nodes.length > 0 && hasSidePanel;
   const subtitleText =
     runMeta?.botName && runMeta.botName !== title
       ? runMeta.botName
@@ -314,12 +316,97 @@ function ActivityPanelInner({
     ? pickApprovalActions(pendingApproval.block.actions)
     : null;
 
+  const inspectorPanel = inspectedNode ? (
+    <StepInspectorPopover
+      node={inspectedNode}
+      rewinding={actionInFlight === "rewind"}
+      onClose={() => {
+        setInspectedStepIndex(null);
+        setHoveredBarIndex(null);
+      }}
+      onRewind={onRewind ? handleRewind : undefined}
+    />
+  ) : null;
+
+  const thinkingSection =
+    details.thinkingLines.length > 0 ? (
+      <div
+        data-testid="thinking-row"
+        className="min-w-0 rounded-xl border border-border/60 bg-muted/40 px-3 py-2.5"
+      >
+        <div className="mb-1 text-caption font-medium text-muted-foreground">
+          <Trans>Reasoning</Trans>
+        </div>
+        {details.thinkingLines.length > 1 ? (
+          <>
+            <button
+              type="button"
+              data-testid="thinking-trigger"
+              aria-expanded={thinkingOpen}
+              onClick={() => setThinkingOpen((open) => !open)}
+              className="flex w-full items-start justify-between gap-2 text-left text-label leading-relaxed text-foreground/85"
+            >
+              <span
+                className={cn(
+                  "min-w-0 flex-1 whitespace-normal break-words",
+                  !thinkingOpen && "line-clamp-4",
+                )}
+              >
+                {details.thinkingLines[0]}
+              </span>
+              <ChevronDown
+                className={cn(
+                  "mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform",
+                  !thinkingOpen && "-rotate-90",
+                )}
+                aria-hidden="true"
+              />
+            </button>
+            {thinkingOpen ? (
+              <div
+                data-testid="thinking-detail"
+                className="mt-2 space-y-1.5 border-t border-border/50 pt-2 text-caption leading-relaxed text-muted-foreground"
+              >
+                {details.thinkingLines.slice(1).map((line, index) => (
+                  <p key={`think-${index}`} className="whitespace-normal break-words">
+                    {line}
+                  </p>
+                ))}
+              </div>
+            ) : null}
+          </>
+        ) : (
+          <p className="whitespace-normal break-words text-label leading-relaxed text-foreground/85">
+            {details.thinkingLines[0]}
+          </p>
+        )}
+      </div>
+    ) : null;
+
+  const timelineList =
+    graph.nodes.length > 0 ? (
+      <div data-testid="tool-rows" className="min-w-0 max-h-72 overflow-y-auto pr-0.5">
+        <CheckpointTimeline
+          graph={graph}
+          activeStepIndex={inspectedStepIndex ?? undefined}
+          highlightedStepIndex={hoveredBarIndex ?? undefined}
+          isLive={live}
+          rewinding={actionInFlight === "rewind"}
+          onSelectStep={(node) => {
+            setHoveredBarIndex(null);
+            setInspectedStepIndex((current) => (current === node.index ? null : node.index));
+          }}
+          onRewind={onRewind ? handleRewind : undefined}
+        />
+      </div>
+    ) : null;
+
   return (
     <div
       ref={cardRef}
       data-testid="tool-activity"
       data-live={live || undefined}
-      className="monitor-card-enter w-full max-w-[440px] min-w-0 rounded-2xl border border-border bg-card p-3.5 shadow-sm"
+      className="@container monitor-card-enter w-full min-w-0 rounded-2xl border border-border bg-card p-3.5 shadow-sm sm:p-4"
       dir="auto"
     >
       {/* Header: Avatar/Icon + Model & Subtitle + Cost Odometer + Status Pill + Minimize */}
@@ -409,24 +496,21 @@ function ActivityPanelInner({
                 <Shimmer>{bannerLabel}</Shimmer>
               </span>
             ) : visualStatus === "completed" && summaryParts.length > 0 ? (
-              <span className="truncate text-body-sm font-medium text-foreground">
-                <Trans>Finished in {bannerClock}</Trans>
-                <span className="ml-2 font-normal text-muted-foreground">
-                  {summaryParts.map((part, index) => (
-                    <span key={part.kind}>
-                      {index > 0 ? ", " : ""}
-                      <SummaryClause kind={part.kind} count={part.count} />
-                    </span>
-                  ))}
-                </span>
-              </span>
+              <div className="min-w-0 truncate text-body-sm font-medium text-foreground first-letter:uppercase">
+                {summaryParts.map((part, index) => (
+                  <span key={part.kind}>
+                    {index > 0 ? ", " : ""}
+                    <SummaryClause kind={part.kind} count={part.count} />
+                  </span>
+                ))}
+              </div>
             ) : (
               <span className="truncate text-body-sm font-medium text-foreground">
                 {bannerLabel}
               </span>
             )}
             {pendingApproval?.block.detail ? (
-              <code className="max-w-44 shrink truncate rounded border border-border/70 bg-background/90 px-1.5 py-0.5 font-mono text-caption text-foreground">
+              <code className="max-w-full shrink truncate rounded border border-border/70 bg-background/90 px-1.5 py-0.5 font-mono text-caption text-foreground @2xl:max-w-xl">
                 {pendingApproval.block.detail}
               </code>
             ) : null}
@@ -437,24 +521,12 @@ function ActivityPanelInner({
         </span>
       </div>
 
-      {/* Interactive segmented progress bar + floating Step Inspector */}
+      {/* Interactive segmented progress bar */}
       {progressNodes.length > 0 ? (
-        <div className="relative mt-3">
-          {inspectedNode ? (
-            <StepInspectorPopover
-              node={inspectedNode}
-              rewinding={actionInFlight === "rewind"}
-              onClose={() => {
-                setInspectedStepIndex(null);
-                setHoveredBarIndex(null);
-              }}
-              onRewind={onRewind ? handleRewind : undefined}
-            />
-          ) : null}
-
+        <div className="mt-3">
           <div className="flex items-center gap-1.5">
             <fieldset
-              className="m-0 flex h-2 min-w-0 flex-1 items-center gap-1 overflow-hidden rounded-full border-0 bg-muted/70 p-0.5"
+              className="m-0 flex h-2.5 min-w-0 flex-1 items-center gap-1 overflow-hidden rounded-full border-0 bg-muted/70 p-0.5"
               aria-label={t`Step timeline progress`}
             >
               {progressNodes.map((node) => {
@@ -466,9 +538,7 @@ function ActivityPanelInner({
                     data-step-inspector-trigger=""
                     aria-label={node.step.label}
                     style={{ flexGrow: node.segmentWeight, flexBasis: 0 }}
-                    onMouseEnter={() => {
-                      if (inspectedStepIndex === null) setHoveredBarIndex(node.index);
-                    }}
+                    onMouseEnter={() => setHoveredBarIndex(node.index)}
                     onMouseLeave={() => {
                       setHoveredBarIndex((current) => (current === node.index ? null : current));
                     }}
@@ -501,65 +571,20 @@ function ActivityPanelInner({
         </div>
       ) : null}
 
-      {/* Reasoning snippet */}
-      {details.thinkingLines.length > 0 ? (
-        <div
-          data-testid="thinking-row"
-          className="mt-2.5 rounded-lg border border-border/60 bg-muted/40 px-2.5 py-2"
-        >
-          {details.thinkingLines.length > 1 ? (
-            <>
-              <button
-                type="button"
-                data-testid="thinking-trigger"
-                aria-expanded={thinkingOpen}
-                onClick={() => setThinkingOpen((open) => !open)}
-                className="flex w-full items-center justify-between gap-2 text-left text-label text-muted-foreground"
-              >
-                <span className="truncate">{details.thinkingLines[0]}</span>
-                <ChevronDown
-                  className={cn(
-                    "h-3.5 w-3.5 shrink-0 transition-transform",
-                    !thinkingOpen && "-rotate-90",
-                  )}
-                  aria-hidden="true"
-                />
-              </button>
-              {thinkingOpen ? (
-                <div
-                  data-testid="thinking-detail"
-                  className="mt-1.5 space-y-1 text-caption text-muted-foreground"
-                >
-                  {details.thinkingLines.slice(1).map((line, index) => (
-                    <p key={`think-${index}`} className="leading-relaxed">
-                      {line}
-                    </p>
-                  ))}
-                </div>
-              ) : null}
-            </>
-          ) : (
-            <div className="truncate text-label text-muted-foreground">
-              {details.thinkingLines[0]}
-            </div>
-          )}
+      {/* Responsive body: 2-column Timeline + Docked Inspector / Reasoning when wide */}
+      {twoColumnBody ? (
+        <div className="mt-3 grid grid-cols-1 gap-3 @2xl:grid-cols-[minmax(0,1.5fr)_minmax(280px,1fr)] @2xl:items-start">
+          {timelineList}
+          <div className="flex min-w-0 flex-col gap-2.5">
+            {inspectorPanel}
+            {thinkingSection}
+          </div>
         </div>
-      ) : null}
-
-      {/* Checkpoints timeline + optional SVG git-graph */}
-      {graph.nodes.length > 0 ? (
-        <div data-testid="tool-rows" className="mt-2.5 max-h-60 overflow-y-auto pr-0.5">
-          <CheckpointTimeline
-            graph={graph}
-            activeStepIndex={inspectedStepIndex ?? undefined}
-            isLive={live}
-            rewinding={actionInFlight === "rewind"}
-            onSelectStep={(node) => {
-              setHoveredBarIndex(null);
-              setInspectedStepIndex((current) => (current === node.index ? null : node.index));
-            }}
-            onRewind={onRewind ? handleRewind : undefined}
-          />
+      ) : graph.nodes.length > 0 || hasSidePanel ? (
+        <div className="mt-3 flex flex-col gap-2.5">
+          {inspectorPanel}
+          {thinkingSection}
+          {timelineList}
         </div>
       ) : null}
 
@@ -609,11 +634,7 @@ function ActivityPanelInner({
               <Square />
               <Trans>Cancel</Trans>
             </Button>
-          ) : (
-            <span className="text-caption text-muted-foreground">
-              <StepCategoryName category={bannerCategory} />
-            </span>
-          )}
+          ) : null}
         </div>
 
         <div className="flex items-center gap-2.5">
@@ -738,7 +759,10 @@ export function LiveRunMonitorCard({
   onStop?: () => void;
 }) {
   return (
-    <div className="w-full min-w-0" data-testid="tool-activity-line">
+    <div
+      className="w-full min-w-0 max-w-[min(96%,calc(100%_-_5rem))] [@media(hover:none)]:max-w-[96%]"
+      data-testid="tool-activity-line"
+    >
       <ActivityPanel
         blocks={[]}
         live

@@ -772,6 +772,14 @@ export const Transcript = memo(function Transcript({
                         ? undefined
                         : message.blocks.some(
                               (block) => block.kind === "ask" || block.kind === "mcp_approval",
+                            ) &&
+                            !message.blocks.some(
+                              (block) => block.kind === "steps" || block.kind === "thinking",
+                            ) &&
+                            !(
+                              showToolActivity &&
+                              message.runId &&
+                              liveStepsCache.has(message.runId)
                             )
                           ? "relative w-full min-w-0 max-w-xl"
                           : `relative ${
@@ -785,7 +793,11 @@ export const Transcript = memo(function Transcript({
                                   block.kind === "thinking" ||
                                   block.kind === "steps" ||
                                   block.kind === "routine_event",
-                              ) || pageView.pages.has(message.id)
+                              ) ||
+                              (showToolActivity &&
+                                message.runId &&
+                                liveStepsCache.has(message.runId)) ||
+                              pageView.pages.has(message.id)
                                 ? "w-full"
                                 : "w-fit"
                             } min-w-0 ${bubbleFrameWidth(message.role)}`
