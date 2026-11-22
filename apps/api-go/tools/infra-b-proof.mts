@@ -824,6 +824,7 @@ if (picked("wake-many")) {
       await go({
         op: "wakeMany",
         actor: { spaceId: side.fixture.spaceId, userId: side.fixture.userId },
+        threadId: side.fixture.threadId,
         runIds: candidates.map((candidate) => candidate.id),
       });
     }
