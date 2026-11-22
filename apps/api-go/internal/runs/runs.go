@@ -15,9 +15,9 @@
 // Callers run inside the transaction budget TypeScript uses for thread work:
 // a 20 second transaction timeout (THREAD_LOCK_TRANSACTION_OPTIONS,
 // packages/db/src/database/transaction-retry.ts:9). The Go gateway has no
-// per-request timeout, so a procedure that takes the thread lock first
-// (CancelConversation, and any create under a thread lock) must apply that
-// deadline itself; otherwise a held lock waits indefinitely.
+// per-request timeout, so a procedure that takes the thread lock first runs its
+// body through ThreadLockTransaction (or CancelConversationFor); a wait that
+// runs out is ErrLockTimeout, the generic 500 TS gets from P2028.
 package runs
 
 import (

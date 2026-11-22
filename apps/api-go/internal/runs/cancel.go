@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/contentcrypto"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/events"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/secretstore"
 )
@@ -158,14 +159,50 @@ func (c Canceller) CancelConversation(
 	if err := c.requireRing(); err != nil {
 		return ConversationCancel{}, err
 	}
-	at = now(at)
 	// Thread row first, then run rows: the order clearThread/finalizeRun use, so
 	// a concurrent clear cannot deadlock here (thread-stop.ts:78).
-	var locked string
-	err := tx.QueryRow(ctx, `SELECT id FROM threads WHERE id = $1 FOR UPDATE`, target.ThreadID).Scan(&locked)
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+	if err := LockThread(ctx, tx, target.ThreadID); err != nil {
 		return ConversationCancel{}, err
 	}
+	return c.cancelConversationLocked(ctx, tx, target, at, state)
+}
+
+// CancelConversationFor is CancelConversation in the tenant transaction
+// THREAD_LOCK_TRANSACTION_OPTIONS describes: the thread row first, the whole
+// body inside the 20 s budget, and ErrLockTimeout (a generic 500) when the wait
+// runs out. A procedure that already owns the transaction calls
+// CancelConversation inside ThreadLockTransaction instead.
+func (c Canceller) CancelConversationFor(
+	ctx context.Context,
+	database *db.DB,
+	actor db.Actor,
+	target ConversationTarget,
+	at time.Time,
+	state *secretstore.State,
+) (ConversationCancel, error) {
+	var result ConversationCancel
+	err := ThreadLockTransaction(ctx, database, actor, target.ThreadID,
+		func(ctx context.Context, tx pgx.Tx) error {
+			var err error
+			result, err = c.cancelConversationLocked(ctx, tx, target, at, state)
+			return err
+		})
+	if err != nil {
+		return ConversationCancel{}, err
+	}
+	return result, nil
+}
+
+// cancelConversationLocked is the body of cancelThreadRuns under the thread row
+// lock the caller took.
+func (c Canceller) cancelConversationLocked(
+	ctx context.Context,
+	tx pgx.Tx,
+	target ConversationTarget,
+	at time.Time,
+	state *secretstore.State,
+) (ConversationCancel, error) {
+	at = now(at)
 	var helper any
 	if target.HelperMessageID != nil {
 		helper = *target.HelperMessageID
