@@ -34,6 +34,7 @@ const accountSalt = randomBytes(32);
 const sharedCacheTracker = new ContextCacheTracker();
 interface ProjectionEntry {
   hash: string;
+  messageId?: string;
   catalogIds?: string[];
 }
 const projections = new Map<string, ProjectionEntry[]>();
@@ -132,6 +133,7 @@ interface SentTranscript {
   source: string[];
   messages: Message[];
   projection: ProjectionEntry[];
+  historyPrefixMessages: Message[];
   truncatedToolResults: number;
   /** Size of the transcript at the last rebuild, and calls appended to it since. */
   rebuiltTokens: number;
@@ -296,25 +298,27 @@ export function createRuntimeContextPolicy(
     let latestMatchedIndex = -1;
     let catalogIds: string[] = [];
     let catalogMessage: Message | undefined;
-    const indexesByHash = new Map<string, number[]>();
-    for (const [index, message] of ctx.messages.entries()) {
-      const hash = messageHash(message);
-      const indexes = indexesByHash.get(hash) ?? [];
-      indexes.push(index);
-      indexesByHash.set(hash, indexes);
-    }
     for (const entry of prior) {
       if (entry.catalogIds) {
         const rebuilt = navigation(entry.catalogIds);
-        if (!rebuilt || messageHash(rebuilt) !== entry.hash) return;
+        if (!rebuilt || hash(rebuilt) !== entry.hash) return;
         result.push(rebuilt);
         catalogIds = entry.catalogIds;
         catalogMessage = rebuilt;
       } else {
-        const index = indexesByHash.get(entry.hash)?.shift();
-        if (index === undefined) return;
-        result.push(ctx.messages[index]!);
-        latestMatchedIndex = Math.max(latestMatchedIndex, index);
+        let matchedIndex = -1;
+        for (let index = latestMatchedIndex + 1; index < ctx.messages.length; index++) {
+          const message = ctx.messages[index]!;
+          const messageId = (message as Message & OriginalMetadata).rakazoMessageId;
+          if (entry.messageId !== undefined && messageId !== entry.messageId) continue;
+          if (hash(message) === entry.hash) {
+            matchedIndex = index;
+            break;
+          }
+        }
+        if (matchedIndex < 0) return;
+        result.push(ctx.messages[matchedIndex]!);
+        latestMatchedIndex = matchedIndex;
       }
     }
     result.push(...ctx.messages.slice(latestMatchedIndex + 1));
@@ -368,18 +372,32 @@ export function createRuntimeContextPolicy(
       prefixTokens: estimateContextTokens(fullPrefix, options.imageTokens),
       capabilities: request.model.cacheCapabilities,
     });
+    const findCurrentIndex = (list: Message[], navigationMessage?: Message) => {
+      let index = list.findIndex(
+        (message) => message.role === "user" && message !== navigationMessage && !original(message),
+      );
+      if (index < 0) index = list.findLastIndex((message) => message.role === "user");
+      return Math.max(index, 0);
+    };
+    const rawCurrentIndex = findCurrentIndex(ctx.messages);
+    const rawHistoricalCount = countStoredMessages(
+      ctx.messages.slice(0, rawCurrentIndex).filter((message) => message.role !== "system"),
+    );
     let predictedCache = cache.predict(cacheRequest);
     let projected: ReturnType<typeof project>;
-    if (strategy === "cache-aware" && predictedCache !== "likely-warm") {
+    const canReuseDeltaProjection =
+      useDeltaWindow &&
+      rawHistoricalCount > RECENT_HISTORY_MAX_MESSAGES &&
+      (strategy === "cache-aware" ||
+        (!promptCacheDeclaredOff(model.provider) &&
+          request.model.cacheCapabilities?.retentionMode !== "none"));
+    if (
+      canReuseDeltaProjection ||
+      (!useDeltaWindow && strategy === "cache-aware" && predictedCache !== "likely-warm")
+    ) {
       const candidate = project(ctx, model);
-      if (candidate) {
-        let candidateStart = candidate.messages.findIndex(
-          (message) =>
-            message.role === "user" && message !== candidate.navigation && !original(message),
-        );
-        if (candidateStart < 0)
-          candidateStart = candidate.messages.findLastIndex((message) => message.role === "user");
-        if (candidateStart < 0) candidateStart = 0;
+      if (candidate && (!useDeltaWindow || !candidate.navigation)) {
+        const candidateStart = findCurrentIndex(candidate.messages, candidate.navigation);
         const exceedsDeltaWindow =
           useDeltaWindow &&
           countStoredMessages(
@@ -398,7 +416,12 @@ export function createRuntimeContextPolicy(
             prefix,
             prefixTokens: estimateContextTokens(prefix, options.imageTokens),
           });
-          if (prediction === "likely-warm") {
+          if (strategy === "cache-aware") {
+            if (prediction === "likely-warm") {
+              projected = candidate;
+              predictedCache = prediction;
+            }
+          } else {
             projected = candidate;
             predictedCache = prediction;
           }
@@ -423,13 +446,7 @@ export function createRuntimeContextPolicy(
     let messages = (projected?.messages ?? ctx.messages).map(
       (message) => shortenedResults.get(hash(message)) ?? message,
     );
-    let currentIndex = messages.findIndex(
-      (message) =>
-        message.role === "user" && message !== projected?.navigation && !original(message),
-    );
-    if (currentIndex < 0)
-      currentIndex = messages.findLastIndex((message) => message.role === "user");
-    if (currentIndex < 0) currentIndex = 0;
+    let currentIndex = findCurrentIndex(messages, projected?.navigation);
     const currentMessage = messages[currentIndex];
     // Steering, follow-ups and finished shells arrive as user messages during the
     // run. Give each its own exchange so it does not push older history out:
@@ -834,21 +851,23 @@ export function createRuntimeContextPolicy(
             );
       }
       if (previous && appended && append) {
-        const projection = [
-          ...previous.projection,
-          ...ctx.messages.slice(previous.source.length).map((message) => ({ hash: hash(message) })),
-        ];
         sent = {
           ...previous,
           source,
           messages: appended,
-          projection,
           appends: previous.appends + 1,
         };
-        return commit({ ...ctx, messages: appended }, built, projection, model, {
-          droppedMessages: Math.max(0, ctx.messages.length - appended.length),
-          truncatedToolResults: previous.truncatedToolResults,
-        });
+        return commit(
+          { ...ctx, messages: appended },
+          built,
+          previous.projection,
+          model,
+          {
+            droppedMessages: Math.max(0, ctx.messages.length - appended.length),
+            truncatedToolResults: previous.truncatedToolResults,
+          },
+          previous.historyPrefixMessages,
+        );
       }
       const messages = previous
         ? withoutThinkingFrom(
@@ -864,12 +883,16 @@ export function createRuntimeContextPolicy(
           message.role === "system" ||
           Boolean(original(message)),
       );
-      const projection = historyPrefixMessages.map((message) => ({
-        hash: hash(message),
-        ...(message === built.navigation?.message
-          ? { catalogIds: built.navigation.catalogIds }
-          : {}),
-      }));
+      const projection = historyPrefixMessages.map((message) => {
+        const messageId = (message as Message & OriginalMetadata).rakazoMessageId;
+        return {
+          hash: hash(message),
+          ...(messageId ? { messageId } : {}),
+          ...(message === built.navigation?.message
+            ? { catalogIds: built.navigation.catalogIds }
+            : {}),
+        };
+      });
       const originalResults = new Map(
         ctx.messages.flatMap((message) =>
           message.role === "toolResult" ? [[message.toolCallId, message] as const] : [],
@@ -888,6 +911,7 @@ export function createRuntimeContextPolicy(
         // A copy, so a caller that later grows the array it passed in cannot change the record.
         messages: [...messages],
         projection,
+        historyPrefixMessages,
         truncatedToolResults: built.decision.truncatedToolResults,
         rebuiltTokens: measure(ctx, messages).tokens,
         appends: 0,

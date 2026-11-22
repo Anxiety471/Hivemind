@@ -779,7 +779,7 @@ export async function listHistory(
   const after = date(input.after);
   const beforeSeq = Math.min(
     input.beforeSeq ?? Number.POSITIVE_INFINITY,
-    scope.searchBeforeSeq ?? Number.POSITIVE_INFINITY,
+    !crossThread ? (scope.searchBeforeSeq ?? Number.POSITIVE_INFINITY) : Number.POSITIVE_INFINITY,
   );
   const byOffset = myChats && !targetThreadId;
   const filters = Prisma.sql`
