@@ -408,22 +408,36 @@ func TestEmptyPromptAndRoutineReplayLookups(t *testing.T) {
 	}
 }
 
-func TestWakeManyLeavesWaitingInputAlone(t *testing.T) {
+func TestWakeManyWakesOnlyContinuations(t *testing.T) {
 	database := openTestDB(t)
 	fixture := seedRunsFixture(t, database)
 	queued := createRun(t, database, fixture, runs.CreateInput{}, nil)
+	takeover := createRun(t, database, fixture, runs.CreateInput{Trigger: "follow_up"}, nil)
+	exec(t, database, `UPDATE runs SET status = 'waiting_takeover' WHERE id = $1`, takeover.RunID)
 	waiting := createRun(t, database, fixture, runs.CreateInput{Trigger: "follow_up"}, nil)
 	exec(t, database, `UPDATE runs SET status = 'waiting_input' WHERE id = $1`, waiting.RunID)
+	finished := createRun(t, database, fixture, runs.CreateInput{}, nil)
+	exec(t, database, `UPDATE runs SET status = 'completed', "completedAt" = now() WHERE id = $1`, finished.RunID)
 	notifier := effects.NewNotifier(database, nil)
 	runs.WakeMany(context.Background(), database,
 		db.Actor{SpaceID: fixture.spaceID, UserID: fixture.userID}, notifier, nil,
-		[]string{waiting.RunID, queued.RunID})
+		[]string{waiting.RunID, queued.RunID, takeover.RunID, finished.RunID})
 	notifier.Wait()
-	if got := runRow(t, database, waiting.RunID)["wakeAt"]; got != nil {
-		t.Errorf("waiting_input wakeAt = %v, want nil", got)
-	}
-	if got := runRow(t, database, queued.RunID)["wakeAt"]; got == nil {
-		t.Error("queued run was not woken")
+	// RUNS_NEEDING_CONTINUE = {queued, waiting_takeover} (thread-target.ts:78).
+	for _, run := range []struct {
+		name string
+		id   string
+		wake bool
+	}{
+		{"queued", queued.RunID, true},
+		{"waiting_takeover", takeover.RunID, true},
+		{"waiting_input", waiting.RunID, false},
+		{"completed", finished.RunID, false},
+	} {
+		woke := runRow(t, database, run.id)["wakeAt"] != nil
+		if woke != run.wake {
+			t.Errorf("%s run wakeAt set = %v, want %v", run.name, woke, run.wake)
+		}
 	}
 }
 

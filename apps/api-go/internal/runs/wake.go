@@ -117,43 +117,46 @@ var ContinueStatuses = []string{StatusQueued, StatusWaitingTakeover}
 
 // WakeMany is enqueueRunsNeedingContinue (thread-target.ts:163-170): wake the
 // runs that need a continuation, in the caller's order, and never fail the work
-// that recorded them. Runs in any other status (waiting_input in particular)
-// are left untouched.
+// that recorded them. The status filter is in the statement, not the caller's
+// snapshot, so a run that stopped being a continuation candidate (a waiting_input
+// run waiting for the user's answer, a finished one) is never touched or
+// announced, even if it changed after the caller read it. Only the rows this
+// statement woke are published, all due now as wakeRun's absent `at` is.
 func WakeMany(ctx context.Context, database *db.DB, actor db.Actor, publisher Publisher, logger *slog.Logger, runIDs []string) {
 	if len(runIDs) == 0 {
 		return
 	}
-	var due []string
+	at := now(time.Time{})
+	woken := make(map[string]bool, len(runIDs))
 	err := database.Tenant(ctx, actor, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT id FROM runs
-			WHERE id = ANY($1::text[]) AND status = ANY($2::text[])`, runIDs, ContinueStatuses)
+		rows, err := tx.Query(ctx, `
+			UPDATE runs SET "wakeAt" = $2, "updatedAt" = $2
+			WHERE id = ANY($1::text[]) AND status = ANY($3::text[])
+			RETURNING id`, runIDs, at, ContinueStatuses)
 		if err != nil {
 			return err
 		}
 		defer rows.Close()
-		found := map[string]bool{}
 		for rows.Next() {
 			var id string
 			if err := rows.Scan(&id); err != nil {
 				return err
 			}
-			found[id] = true
+			woken[id] = true
 		}
-		if err := rows.Err(); err != nil {
-			return err
-		}
-		for _, id := range runIDs {
-			if found[id] {
-				due = append(due, id)
-			}
-		}
-		return nil
+		return rows.Err()
 	})
 	if err != nil {
 		logWakeError(logger, "wake many", err)
 		return
 	}
-	for _, runID := range due {
-		TryWakeFor(ctx, database, actor, publisher, logger, runID, WakeOptions{})
+	if publisher == nil {
+		return
+	}
+	for _, runID := range runIDs {
+		if woken[runID] {
+			publisher.PublishRunReady(runID)
+			delete(woken, runID)
+		}
 	}
 }
