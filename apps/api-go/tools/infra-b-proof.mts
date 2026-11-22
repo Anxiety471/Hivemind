@@ -1251,6 +1251,21 @@ if (picked("cancel-origin-mixed-alabel")) {
     cancelWithCredentialOrigin(side, "origin-mixed-alabel", "https://xn--bcüer-kva.example/", "intended"));
 }
 
+// A valid A-label whose decoded label contains a code point ICU's UTS #46
+// tables accept but an older UCD-derived ContextJ/Bidi table rejected. Node
+// accepts the origin, so the open effect must be denied on both sides.
+if (picked("cancel-origin-icu-alabel")) {
+  await scenario("cancel-origin-icu-alabel", (side) =>
+    cancelWithCredentialOrigin(side, "origin-icu-alabel", "https://xn--csfe.ü/", "denied"));
+}
+
+// The reverse direction: Node/ICU rejects this A-label once the domain becomes
+// non-ASCII, so the ask list is unparseable and the effect stays intended.
+if (picked("cancel-origin-alabel-reverse")) {
+  await scenario("cancel-origin-alabel-reverse", (side) =>
+    cancelWithCredentialOrigin(side, "origin-alabel-reverse", "https://xn--nybvznylx.i.ü/", "intended"));
+}
+
 if (picked("cancel-finished")) {
   await scenario("cancel-finished", async (side) => {
     const runId = await seedActiveRun(side, "a");
