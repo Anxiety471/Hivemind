@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { ANDROID_APP_STORE_URL, IOS_APP_STORE_URL } from "./client-build.js";
-import { mobileAppUrl, parseMobileAppLinks, preferredMobileAppUrl } from "./mobile-app.js";
+import {
+  MOBILE_APP_ANDROID_DOWNLOAD_PATH,
+  MobileAppLinksSchema,
+  mobileAppUrl,
+  parseMobileAppLinks,
+  preferredMobileAppUrl,
+} from "./mobile-app.js";
 
 describe("parseMobileAppLinks", () => {
   it("publishes nothing of its own when unset", () => {
@@ -28,6 +34,7 @@ describe("parseMobileAppLinks", () => {
     "ftp://example.test/app",
     "https://user:secret@example.test/app",
     "javascript:alert(1)",
+    MOBILE_APP_ANDROID_DOWNLOAD_PATH,
   ])("rejects %s", (value) => {
     expect(() => parseMobileAppLinks({ MOBILE_APP_ANDROID_URL: value })).toThrow(
       "MOBILE_APP_ANDROID_URL",
@@ -35,10 +42,34 @@ describe("parseMobileAppLinks", () => {
   });
 });
 
+describe("MobileAppLinksSchema", () => {
+  it("accepts the deployment's own download path beside external links", () => {
+    expect(
+      MobileAppLinksSchema.parse({
+        android: MOBILE_APP_ANDROID_DOWNLOAD_PATH,
+        ios: "https://example.test/app",
+      }),
+    ).toEqual({ android: MOBILE_APP_ANDROID_DOWNLOAD_PATH, ios: "https://example.test/app" });
+  });
+
+  it.each(["//evil.test/app", "api/account/mobile-app/android", "javascript:alert(1)"])(
+    "rejects %s",
+    (value) => {
+      expect(MobileAppLinksSchema.safeParse({ android: value }).success).toBe(false);
+    },
+  );
+});
+
 describe("mobileAppUrl", () => {
   it("prefers the deployment's own build", () => {
     expect(mobileAppUrl({ android: "https://example.test/rakazo.apk" }, "android")).toBe(
       "https://example.test/rakazo.apk",
+    );
+  });
+
+  it("keeps the same-origin download path the server answers", () => {
+    expect(mobileAppUrl({ android: MOBILE_APP_ANDROID_DOWNLOAD_PATH }, "android")).toBe(
+      MOBILE_APP_ANDROID_DOWNLOAD_PATH,
     );
   });
 

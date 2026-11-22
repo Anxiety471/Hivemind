@@ -22,6 +22,7 @@ import { socialAuthFromFields } from "@rakazo/auth";
 import type { LabFeature, MinimumClientBuilds, MobileAppLinks, NavLink } from "@rakazo/contracts";
 import {
   isPrivateNetworkHost,
+  MOBILE_APP_ANDROID_DOWNLOAD_PATH,
   parseMinimumClientBuilds,
   parseMobileAppLinks,
   parseNavLinks,
@@ -92,6 +93,9 @@ export interface AppEnv extends MessagingEnvironmentValues {
   navLinks?: NavLink[];
   /** Builds this deployment publishes itself (MOBILE_APP_ANDROID_URL, MOBILE_APP_IOS_URL). */
   mobileApp: MobileAppLinks;
+  /** Server-side APK the API streams at MOBILE_APP_ANDROID_DOWNLOAD_PATH
+   * (MOBILE_APP_ANDROID_FILE), so only signed-in accounts can download it. */
+  mobileAppAndroidFile?: string;
   /** Verified accounts that review plugin submissions, add stdio MCP servers, and grant access
    * (RAKAZO_ADMIN_EMAILS), lowercased. */
   adminEmails: string[];
@@ -193,6 +197,10 @@ export function withEnvOverrides(env: AppEnv, overrides: Partial<AppEnv>): AppEn
 
 export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
   secretStoreOptionsFromEnv(source);
+  // A stored APK makes this deployment serve its own gated download; a stored Android build wins
+  // over an external Android URL, and iOS links stay external.
+  const mobileAppAndroidFile = optional(source.MOBILE_APP_ANDROID_FILE);
+  const externalMobileApp = parseMobileAppLinks(source);
   const issuer = optional(source.OIDC_ISSUER);
   const clientId = optional(source.OIDC_CLIENT_ID);
   const clientSecret = optional(source.OIDC_CLIENT_SECRET);
@@ -288,7 +296,10 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
     userDevicesEnabled: source.USER_DEVICES_ENABLED !== "false",
     computerSettingsEnabled: source.COMPUTER_SETTINGS_ENABLED === "true",
     navLinks: parseNavLinks(source.RAKAZO_NAV_LINKS),
-    mobileApp: parseMobileAppLinks(source),
+    mobileAppAndroidFile,
+    mobileApp: mobileAppAndroidFile
+      ? { ...externalMobileApp, android: MOBILE_APP_ANDROID_DOWNLOAD_PATH }
+      : externalMobileApp,
     adminEmails: list(source.RAKAZO_ADMIN_EMAILS).map((email) => email.toLowerCase()),
     ...phoneCallSettings(source),
     maxUploadSizeBytes: uploadSizeFromEnv(source),

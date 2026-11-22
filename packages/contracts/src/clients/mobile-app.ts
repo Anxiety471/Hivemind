@@ -20,19 +20,40 @@ function isPublicHttpsUrl(value: string) {
   }
 }
 
-const MobileAppUrlSchema = z
+/**
+ * A build this deployment offers: an external https:// URL, or a path this server answers
+ * (e.g. the gated APK download). A `//host` path would leave the origin, so it is refused.
+ */
+const MobileAppTargetSchema = z
   .string()
   .trim()
   .max(2048)
-  .refine(isPublicHttpsUrl, "Use an https:// URL");
+  .refine(
+    (value) =>
+      isPublicHttpsUrl(value) ||
+      (value.startsWith("/") && !value.startsWith("//") && !/[\s\\]/.test(value)),
+    "Use an https:// URL or a same-origin path",
+  );
+
+/** Operator configuration names an external build, so it stays https-only. */
+const ExternalMobileAppUrlSchema = MobileAppTargetSchema.refine(
+  isPublicHttpsUrl,
+  "Use an https:// URL",
+);
 
 /**
- * Builds this deployment publishes, keyed by platform (MOBILE_APP_ANDROID_URL, MOBILE_APP_IOS_URL).
+ * Where the API streams an APK it stores on the server (MOBILE_APP_ANDROID_FILE).
+ * Advertised in `me.mobileApp.android`, so only a signed-in account can download it.
+ */
+export const MOBILE_APP_ANDROID_DOWNLOAD_PATH = "/api/account/mobile-app/android";
+
+/**
+ * Builds this deployment publishes itself, keyed by platform (MOBILE_APP_ANDROID_URL, MOBILE_APP_IOS_URL).
  * A platform without one offers the app's store page instead; see `mobileAppUrl`.
  */
 export const MobileAppLinksSchema = z.object({
-  android: MobileAppUrlSchema.optional(),
-  ios: MobileAppUrlSchema.optional(),
+  android: MobileAppTargetSchema.optional(),
+  ios: MobileAppTargetSchema.optional(),
 });
 export type MobileAppLinks = z.infer<typeof MobileAppLinksSchema>;
 
@@ -47,7 +68,7 @@ export function parseMobileAppLinks(source: {
   for (const platform of MOBILE_APP_PLATFORMS) {
     const key = MOBILE_APP_ENV[platform];
     if (!source[key]?.trim()) continue;
-    const parsed = MobileAppUrlSchema.safeParse(source[key]);
+    const parsed = ExternalMobileAppUrlSchema.safeParse(source[key]);
     if (!parsed.success) throw new Error(`${key} must be an https:// URL`);
     links[platform] = parsed.data;
   }

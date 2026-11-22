@@ -2,6 +2,7 @@ import { generateKeyPairSync } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { MOBILE_APP_ANDROID_DOWNLOAD_PATH } from "@rakazo/contracts";
 import { describe, expect, it } from "vitest";
 import { loadEnv, parseExtraAuthOrigins, withEnvOverrides } from "./env.js";
 
@@ -98,6 +99,22 @@ describe("loadEnv", () => {
     expect(() => loadEnv({ ...base, MOBILE_APP_IOS_URL: "http://example.test/app" })).toThrow(
       "MOBILE_APP_IOS_URL",
     );
+  });
+  it("serves a stored APK behind the session and lets it win over an external Android URL", () => {
+    const file = "/srv/rakazo/app.apk";
+    expect(loadEnv({ ...base, MOBILE_APP_ANDROID_FILE: file }).mobileAppAndroidFile).toBe(file);
+    expect(loadEnv({ ...base, MOBILE_APP_ANDROID_FILE: file }).mobileApp).toEqual({
+      android: MOBILE_APP_ANDROID_DOWNLOAD_PATH,
+    });
+    expect(
+      loadEnv({
+        ...base,
+        MOBILE_APP_ANDROID_FILE: file,
+        MOBILE_APP_ANDROID_URL: "https://example.test/rakazo.apk",
+        MOBILE_APP_IOS_URL: "https://example.test/app",
+      }).mobileApp,
+    ).toEqual({ android: MOBILE_APP_ANDROID_DOWNLOAD_PATH, ios: "https://example.test/app" });
+    expect(loadEnv({ ...base, MOBILE_APP_ANDROID_FILE: "  " }).mobileApp).toEqual({});
   });
   it("keeps Crisp chat off unless a valid website ID is set", () => {
     expect(loadEnv(base).crispWebsiteId).toBeNull();

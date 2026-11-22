@@ -1,7 +1,8 @@
 name: release-mobile
 
 # Ships the app version in apps/mobile/app.json: iOS goes to App Store review and is released
-# when Apple approves it; Android goes to Google Play review and refreshes the rolling APK.
+# when Apple approves it; Android goes to Google Play review and the APK workflow delivers a
+# signed APK to this deployment for signed-in download.
 on:
   workflow_dispatch:
     inputs:

@@ -142,6 +142,7 @@ import { mountAccountExportRoute } from "./account/account-export.js";
 import { mountAccountImportRoute } from "./account/account-import.js";
 import { settleDirectoryChange } from "./account/account-status.js";
 import { mountAuditExportRoute } from "./account/audit-export.js";
+import { mountMobileAppDownloadRoute } from "./account/mobile-app-download.js";
 import { createAuthResponseAudit } from "./auth/security-audit.js";
 import { endUserDeviceSession, mountUserDeviceRoutes } from "./auth/user-devices.js";
 import { createBillingService } from "./billing/billing.js";
@@ -1118,6 +1119,7 @@ async function buildApp(overrides: CreateAppOverrides): Promise<AppHandles> {
   });
   mountAccountExportRoute(app, { prisma, auth, artifacts, home });
   mountAuditExportRoute(app, { prisma, sessionActor });
+  mountMobileAppDownloadRoute(app, { sessionActor, filePath: env.mobileAppAndroidFile });
   mountFileRoutes(app, {
     prisma,
     artifacts,

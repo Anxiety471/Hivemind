@@ -91,17 +91,15 @@ scores once processed. Managed publishing can delay release after approval.
 
 ## Android APK
 
-Android users should install [Rakazo from Google Play](https://play.google.com/store/apps/details?id=com.rakazo.app).
-For manual installation, an APK remains available.
-`release-mobile` publishes it, or run the `release-android-apk` workflow from
-`main` on its own. It builds the `android-apk` EAS profile, signed with the
-project's managed keystore, and replaces the rolling `android` GitHub release,
-so the download link stays the same:
+Android users can install [Rakazo from Google Play](https://play.google.com/store/apps/details?id=com.rakazo.app).
+For manual installation, a deployment can offer a signed APK to its own
+signed-in accounts; see
+[Offer the build in the app](#offer-the-build-in-the-app).
 
-```text
-https://github.com/elie222/rakazo/releases/download/android/rakazo.apk
-```
-
+`release-mobile` builds one through the `release-android-apk` workflow, and the
+`release-android-apk-selfbuilt` workflow builds one without Expo. Both deliver
+it over SSH to the deployment's `MOBILE_APP_ANDROID_FILE` when the
+`MOBILE_APK_SSH_*` secrets are set; neither publishes a public GitHub release.
 The APK uses the production update channel, so JavaScript changes reach it
 through the over-the-air updates below without a new APK. A Google Play install
 is signed with Play's key, so switching from the APK to Play means uninstalling
@@ -112,9 +110,9 @@ the APK first.
 A fork without an Expo account can build the APK entirely on a GitHub-hosted
 runner. The `release-android-apk-selfbuilt` workflow needs no `EXPO_TOKEN` or
 EAS project: it runs `expo prebuild` for Android, builds the release APK with
-Gradle, and publishes it to the same rolling `android` release. It runs on
-pushes that touch the mobile app or the packages it bundles, and on demand from
-the Actions tab.
+Gradle, and, when an SSH target is configured, delivers it to this deployment.
+It runs on pushes that touch the mobile app or the packages it bundles, and on
+demand from the Actions tab.
 
 Set this repository variable:
 
@@ -132,30 +130,54 @@ Optional repository variables and secrets:
   base64-encoded. Set all four or none. Without them the APK is signed with the
   template's debug keystore and the workflow prints a warning; it can then
   update only another debug-signed install.
+- `MOBILE_APK_SSH_HOST`, `MOBILE_APK_SSH_PORT`, `MOBILE_APK_SSH_USER`,
+  `MOBILE_APK_SSH_PRIVATE_KEY`, `MOBILE_APK_SSH_KNOWN_HOSTS`: where the job
+  delivers the signed APK. It runs `ssh host "sha256 <digest>" < app.apk`, so
+  the account's forced command receives the APK on stdin, verifies the digest
+  from `SSH_ORIGINAL_COMMAND`, checks the `PK` header and a size cap, and
+  installs it atomically at the configured `MOBILE_APP_ANDROID_FILE`. Without
+  these secrets the job builds the APK and stops with a notice: it no longer
+  publishes a public release asset.
+  Keep the SSH key restricted: a dedicated key whose `authorized_keys` entry
+  uses `restrict,command="<receiver>"`, with no pty, agent or port forwarding.
 
 The build disables Expo Updates in the runner's copy of `apps/mobile/app.json`,
 so the APK does not receive over-the-air updates from the upstream Expo
-project. Install a newer APK to update it. Every successful run replaces the
-rolling `android` release, so the download link stays the same:
-
-```text
-https://github.com/<owner>/<repo>/releases/download/android/app.apk
-```
+project. Install a newer APK to update it. Delivery replaces the server's file,
+so the signed-in download link stays the same.
 
 ## Offer the build in the app
 
-Settings and the account menu link to the mobile app. Point them at a
-deployment's own builds with https URLs:
+Settings and the account menu link to the mobile app. A deployment can serve a
+signed APK itself, so only signed-in accounts can download it:
+
+```sh
+MOBILE_APP_ANDROID_FILE=/srv/rakazo/app.apk
+```
+
+When the file is set, the API serves it at
+`/api/account/mobile-app/android` and advertises that same-origin path as this
+deployment's Android build. A request without a session gets 401; a missing file
+gets 404. The API's user must be able to read the file. Replace it atomically
+(write a temporary file beside it and rename it) so a download never reads a
+partial APK. A stored file takes precedence over `MOBILE_APP_ANDROID_URL` for
+Android.
+
+Deployments that host the build elsewhere can keep linking it with https URLs:
 
 ```sh
 MOBILE_APP_ANDROID_URL=https://example.com/rakazo.apk
 MOBILE_APP_IOS_URL=https://example.com/app-store-listing
 ```
 
-Set them in the deployment's environment beside the other server variables.
+Set these in the deployment's environment beside the other server variables.
 Either may be left out, and a platform without one opens the app's store page
-instead. Only https URLs are accepted; a malformed value fails at startup rather
-than hiding the link.
+instead. Only https URLs are accepted for these; a malformed value fails at
+startup rather than hiding the link.
+
+The gated path is same-origin, so the signed-in web session and the desktop
+app's own window carry the cookie. Do not publish the same APK as a public
+release asset while downloads must require sign-in.
 
 The default Android link is the Google Play listing and the default iOS link is
 the App Store listing, so a self-hosted install needs no mobile configuration:

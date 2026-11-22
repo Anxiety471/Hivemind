@@ -2,7 +2,8 @@ name: release-android-apk-selfbuilt
 
 # Builds a release APK from the checked-in Expo project on a GitHub-hosted runner, without an Expo
 # account, EAS CLI, or EXPO_TOKEN. release-android-apk.yml remains the EAS path for projects that
-# have an Expo account; this workflow exists so a fork can publish an installable APK anyway.
+# have an Expo account; this workflow exists so a fork can build an installable APK anyway and
+# deliver it to its own server, where only signed-in accounts can download it.
 on:
   push:
     branches:
@@ -25,8 +26,7 @@ permissions:
   contents: read
 
 concurrency:
-  # The rolling `android` release and its tag are shared with release-android-apk.yml, so the two
-  # workflows must never publish over each other.
+  # Both APK workflows deliver to the same server file, so they must never write over each other.
   group: release-android
   cancel-in-progress: false
 
@@ -58,7 +58,7 @@ jobs:
       build: ${{ steps.check.outputs.build }}
 
   build:
-    name: Build and publish the APK
+    name: Build and deliver the APK
     needs: configure
     if: needs.configure.outputs.build == 'true'
     runs-on: ubuntu-24.04
@@ -68,7 +68,6 @@ jobs:
     env:
       CI: "1"
       EXPO_PUBLIC_API_URL: ${{ vars.MOBILE_API_URL }}
-      RELEASE_TAG: android
       ASSET: app.apk
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -224,61 +223,29 @@ jobs:
           cp "$apk" "$RUNNER_TEMP/$ASSET"
           ls -lh "$RUNNER_TEMP/$ASSET"
 
-      # One rolling release keeps a stable download URL:
-      # https://github.com/<owner>/<repo>/releases/download/android/app.apk
-      # It never becomes GitHub's "latest" release, which the desktop updater reads. An existing
-      # release is updated in place: the new APK is uploaded under a temporary name before the old
-      # one is removed, so a failed run leaves the previous download working.
-      - name: Publish the rolling release
+      # Deliver the APK to the deployment itself. The server stores it behind a session, so the
+      # only download is GET /api/account/mobile-app/android for a signed-in account; no public
+      # release asset exists. The receiver sees the file on stdin and the digest in
+      # SSH_ORIGINAL_COMMAND.
+      - name: Deliver the APK to the deployment
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SIGNED: ${{ steps.signing.outputs.signed }}
+          SSH_HOST: ${{ secrets.MOBILE_APK_SSH_HOST }}
+          SSH_PORT: ${{ secrets.MOBILE_APK_SSH_PORT }}
+          SSH_USER: ${{ secrets.MOBILE_APK_SSH_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.MOBILE_APK_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.MOBILE_APK_SSH_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
-          version="$(jq -r '.expo.version' apps/mobile/app.json)"
-          version_code="$(jq -r '.expo.android.versionCode // empty' apps/mobile/app.json)"
-          [[ -n "$version_code" ]] || version_code="$GITHUB_RUN_NUMBER"
-          title="Rakazo for Android $version ($version_code)"
-          notes="Install $ASSET on your Android phone. This APK is built from source by GitHub Actions and does not use Expo over-the-air updates."
-          if [[ "$SIGNED" != "true" ]]; then
-            notes="$notes It is signed with the Android debug keystore, so treat it as a test build."
-          fi
-
-          if ! gh release view "$RELEASE_TAG" --json tagName > /dev/null 2> "$RUNNER_TEMP/view.err"; then
-            if ! grep -q "release not found" "$RUNNER_TEMP/view.err"; then
-              cat "$RUNNER_TEMP/view.err" >&2
-              exit 1
-            fi
-            gh release create "$RELEASE_TAG" "$RUNNER_TEMP/$ASSET" \
-              --target "$GITHUB_SHA" \
-              --title "$title" \
-              --notes "$notes" \
-              --latest=false
+          if [[ -z "$SSH_HOST" ]]; then
+            echo "::notice title=APK delivery skipped::Set the MOBILE_APK_SSH_* repository secrets to deliver the APK to a deployment."
             exit 0
           fi
-
-          staged="app-$GITHUB_RUN_ID.apk"
-          cp "$RUNNER_TEMP/$ASSET" "$RUNNER_TEMP/$staged"
-          gh release upload "$RELEASE_TAG" "$RUNNER_TEMP/$staged" --clobber
-          assets="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" --jq '.assets')"
-          staged_id="$(jq -r --arg name "$staged" '.[] | select(.name == $name) | .id' <<< "$assets")"
-          old_id="$(jq -r --arg name "$ASSET" '.[] | select(.name == $name) | .id' <<< "$assets")"
-          if [[ -z "$staged_id" ]]; then
-            echo "The uploaded $staged is missing from the release; leaving the previous APK in place." >&2
-            exit 1
-          fi
-          if [[ -n "$old_id" ]]; then
-            gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$old_id"
-          fi
-          for attempt in 1 2 3; do
-            if gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/assets/$staged_id" -f name="$ASSET" > /dev/null; then
-              break
-            fi
-            if [[ "$attempt" == 3 ]]; then
-              echo "Could not rename $staged to $ASSET; rename it on the release page." >&2
-              exit 1
-            fi
-            sleep 5
-          done
-          gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$RELEASE_TAG" -f sha="$GITHUB_SHA" -F force=true > /dev/null
-          gh release edit "$RELEASE_TAG" --title "$title" --notes "$notes" --latest=false
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/mobile-apk"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/mobile-apk" "$HOME/.ssh/known_hosts"
+          digest="$(sha256sum "$RUNNER_TEMP/$ASSET" | cut -d' ' -f1)"
+          ssh -F /dev/null -i "$HOME/.ssh/mobile-apk" \
+            -o BatchMode=yes -o ConnectTimeout=20 -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "sha256 $digest" < "$RUNNER_TEMP/$ASSET"
