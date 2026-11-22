@@ -600,10 +600,7 @@ func openApprovalEffects(ctx context.Context, tx pgx.Tx, ring *contentcrypto.Key
 		}
 		// MessageBlockSchema.array().safeParse: one malformed entry makes the
 		// whole list unparseable, so no effect on it is opened or denied.
-		blocks, valid, decidable := messageblocks.ParseBlocks(entries)
-		if !decidable {
-			return nil, fmt.Errorf("open approval effects: %w", messageblocks.ErrUndecidable)
-		}
+		blocks, valid := messageblocks.ParseBlocks(entries)
 		if !valid {
 			continue
 		}

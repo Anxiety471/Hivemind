@@ -399,10 +399,7 @@ var messageRoles = []string{"user", "bot", "system"}
 
 // threadMessage is toThreadMessage, then ThreadMessageSchema.
 func threadMessage(row messageRow, authors map[string]map[string]any) (map[string]any, error) {
-	blocks, valid, decidable := messageblocks.ParseBlocks(messageblocks.StoredBlocks(row.Blocks))
-	if !decidable {
-		return nil, local.ErrDecline
-	}
+	blocks, valid := messageblocks.ParseBlocks(messageblocks.StoredBlocks(row.Blocks))
 	if !valid || !slices.Contains(messageRoles, row.Role) || (row.BotID != nil && *row.BotID == "") ||
 		(row.RunID != nil && *row.RunID == "") || (row.ReplyToMessageID != nil && *row.ReplyToMessageID == "") {
 		return nil, outputInvalid()
@@ -456,10 +453,7 @@ func parentPreview(parent *parentRow, authors map[string]map[string]any) (map[st
 	if !isList {
 		return nil, nil
 	}
-	blocks, valid, decidable := messageblocks.ParseBlocks(entries)
-	if !decidable {
-		return nil, local.ErrDecline
-	}
+	blocks, valid := messageblocks.ParseBlocks(entries)
 	if !valid {
 		return nil, nil
 	}

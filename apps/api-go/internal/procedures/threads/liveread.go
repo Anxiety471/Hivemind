@@ -3,7 +3,6 @@ package threads
 import (
 	"slices"
 
-	"github.com/Anxiety471/Hivemind/apps/api-go/internal/local"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/messageblocks"
 )
 
@@ -104,10 +103,7 @@ func liveView(message liveMessage) (map[string]any, error) {
 	for index, block := range message.Blocks {
 		entries[index] = numberize(block)
 	}
-	blocks, valid, decidable := messageblocks.ParseBlocks(entries)
-	if !decidable {
-		return nil, local.ErrDecline
-	}
+	blocks, valid := messageblocks.ParseBlocks(entries)
 	if !valid || message.BotID == "" {
 		return nil, outputInvalid()
 	}
