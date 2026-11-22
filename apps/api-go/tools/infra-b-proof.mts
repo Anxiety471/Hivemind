@@ -1110,6 +1110,88 @@ if (picked("cancel-malformed-ask")) {
   });
 }
 
+if (picked("cancel-nested-credential")) {
+  await scenario("cancel-nested-credential", async (side) => {
+    const runId = await seedActiveRun(side, "nested-credential");
+    const message = await system.message.findFirstOrThrow({ where: { runId }, orderBy: { seq: "desc" } });
+    await system.message.update({
+      where: { id: message.id },
+      data: {
+        blocks: [
+          ...(message.blocks as any[]),
+          {
+            kind: "ask", text: "Sign in",
+            credential: { name: "site_login", origin: "https://www.example.test", auth: { type: "login" } },
+          },
+        ],
+      },
+    });
+    await cancelActive(side, [runId], new Date("2026-11-22T08:10:00.000Z"));
+    const effect = await system.externalEffect.findFirstOrThrow({ where: { runId, kind: "web_fetch" } });
+    assert.equal(effect.status, "denied", `${side.kind}: a valid credential ask must not abort the cancel`);
+  });
+}
+
+if (picked("cancel-nested-onetimecode")) {
+  await scenario("cancel-nested-onetimecode", async (side) => {
+    const runId = await seedActiveRun(side, "nested-onetimecode");
+    const message = await system.message.findFirstOrThrow({ where: { runId }, orderBy: { seq: "desc" } });
+    await system.message.update({
+      where: { id: message.id },
+      data: {
+        blocks: [
+          ...(message.blocks as any[]),
+          { kind: "ask", text: "Enter the code", oneTimeCode: { origin: "https://www.example.test" } },
+        ],
+      },
+    });
+    await cancelActive(side, [runId], new Date("2026-11-22T08:10:00.000Z"));
+    const effect = await system.externalEffect.findFirstOrThrow({ where: { runId, kind: "web_fetch" } });
+    assert.equal(effect.status, "denied", `${side.kind}: a valid oneTimeCode ask must not abort the cancel`);
+  });
+}
+
+if (picked("cancel-run-import-setup")) {
+  await scenario("cancel-run-import-setup", async (side) => {
+    const runId = await seedActiveRun(side, "run-import-setup");
+    const message = await system.message.findFirstOrThrow({ where: { runId }, orderBy: { seq: "desc" } });
+    await system.message.update({
+      where: { id: message.id },
+      data: {
+        blocks: [
+          ...(message.blocks as any[]),
+          { kind: "import_setup", items: [{ kind: "model", title: "M", provider: "p", providerName: "P" }] },
+        ],
+      },
+    });
+    await cancelActive(side, [runId], new Date("2026-11-22T08:10:00.000Z"));
+    const effect = await system.externalEffect.findFirstOrThrow({ where: { runId, kind: "web_fetch" } });
+    assert.equal(effect.status, "denied", `${side.kind}: a run-linked import_setup must not abort the cancel`);
+  });
+}
+
+if (picked("cancel-malformed-nested-credential")) {
+  await scenario("cancel-malformed-nested-credential", async (side) => {
+    const runId = await seedActiveRun(side, "malformed-nested-credential");
+    const message = await system.message.findFirstOrThrow({ where: { runId }, orderBy: { seq: "desc" } });
+    await system.message.update({
+      where: { id: message.id },
+      data: {
+        blocks: [
+          ...(message.blocks as any[]),
+          {
+            kind: "ask", text: "Sign in",
+            credential: { name: "k", origin: "https://www.example.test", auth: { type: "header", name: "Host" } },
+          },
+        ],
+      },
+    });
+    await cancelActive(side, [runId], new Date("2026-11-22T08:10:00.000Z"));
+    const effect = await system.externalEffect.findFirstOrThrow({ where: { runId, kind: "web_fetch" } });
+    assert.equal(effect.status, "intended", `${side.kind}: a malformed nested credential drops the whole list`);
+  });
+}
+
 if (picked("cancel-finished")) {
   await scenario("cancel-finished", async (side) => {
     const runId = await seedActiveRun(side, "a");
