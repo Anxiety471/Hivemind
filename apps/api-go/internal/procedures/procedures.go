@@ -366,6 +366,16 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 			},
 		},
 		{
+			Name: "mcp.assignments.approve",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				var publisher runslib.Publisher
+				if deployment.Signals != nil {
+					publisher = deployment.Signals
+				}
+				return mcpassignments.Approve(ctx, database, deployment, publisher, actor, input)
+			},
+		},
+		{
 			Name:     "mcp.assignments.list",
 			ReadOnly: true,
 			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
