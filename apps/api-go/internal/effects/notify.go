@@ -125,6 +125,12 @@ func (n *Notifier) PublishBoard(spaceID, boardID, ticketID string) {
 // publishes ride out a short database outage together, as retryWhileDatabaseUnavailable does;
 // a failure past 15s is logged and dropped.
 func (n *Notifier) PublishOrganization(organizationID string, also ...string) {
+	if n.db == nil {
+		// A gateway local server with no database has no members to read and no
+		// channel to publish on; drop it like any other signal without a pool.
+		n.logger.Warn("organization signal not published", "organization", organizationID, "reason", "no database")
+		return
+	}
 	n.wait.Add(1)
 	go func() {
 		defer n.wait.Done()

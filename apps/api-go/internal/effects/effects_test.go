@@ -144,6 +144,8 @@ func TestNotifierWithoutADatabaseDropsSignalsInsteadOfPanicking(t *testing.T) {
 		t.Fatal("a publish without a database waited instead of dropping")
 	}
 	notifier.Wait()
+	notifier.PublishOrganization("org1", "u2")
+	notifier.Wait()
 }
 
 func TestRosterAndSpaceChangeTables(t *testing.T) {
