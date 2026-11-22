@@ -324,18 +324,31 @@ func homeOrganization(ctx context.Context, tx pgx.Tx, actor db.Actor) (string, e
 	if memberRole != guestRole {
 		return organizationID, nil
 	}
-	// ownedOrganizationId: the oldest organization this person owns that is not being
-	// deleted, which LIVE_ORGANIZATION defines as having a default Space.
-	var owned string
-	err = tx.QueryRow(ctx, `SELECT m."organizationId" FROM member m
+	// ownedOrganizationId (packages/db/src/billing/billing.ts:447): the oldest LIVE
+	// organization whose membership role is owner. LIVE_ORGANIZATION means it still has a
+	// default Space that is not being deleted.
+	rows, err := tx.Query(ctx, `SELECT m."organizationId", m.role FROM member m
 		WHERE m."userId" = $1 AND EXISTS (
 			SELECT 1 FROM spaces s WHERE s."organizationId" = m."organizationId"
 				AND s."isDefault" AND s."deletingAt" IS NULL)
-		ORDER BY m."createdAt" ASC LIMIT 1`, actor.UserID).Scan(&owned)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return "", shared.NotFound
+		ORDER BY m."createdAt" ASC`, actor.UserID)
+	if err != nil {
+		return "", err
 	}
-	return owned, err
+	defer rows.Close()
+	for rows.Next() {
+		var owned, role string
+		if err := rows.Scan(&owned, &role); err != nil {
+			return "", err
+		}
+		if shared.IsOwnerRole(role) {
+			return owned, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	return "", shared.NotFound
 }
 
 // memberSpaces is the memberships query: the member's own organization's Spaces plus every

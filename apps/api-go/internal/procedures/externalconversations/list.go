@@ -257,16 +257,17 @@ func participantNames(stored any) ([]string, *orpc.Error) {
 	return names, nil
 }
 
-// storedPoliciesJSON is AutomatedSenderPoliciesSchema.parse of the stored jsonb, written
-// back in its parsed shape (keys and names trimmed, at most 50 entries).
+// storedPoliciesJSON is the parse the TypeScript handler runs over the stored jsonb. A
+// value outside AutomatedSenderPoliciesSchema throws inside the handler, so the API answers
+// the opaque 500 "Internal server error" (not the router's output failure).
 func storedPoliciesJSON(stored string) (json.RawMessage, *orpc.Error) {
 	object, issues := validate.Decode([]byte(stored), nil)
 	if issues != nil {
-		return nil, shared.OutputInvalid()
+		return nil, orpc.Internal()
 	}
 	entries, issues := parsePolicies(object)
 	if issues != nil {
-		return nil, shared.OutputInvalid()
+		return nil, orpc.Internal()
 	}
 	return json.RawMessage(policiesJSON(entries, false)), nil
 }

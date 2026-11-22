@@ -58,8 +58,41 @@ func TestActivityPreview(t *testing.T) {
 	if _, message, declined = activityPreview("bot_message", "ignored", []any{badIntent}); declined || message.Kind != "unknown" {
 		t.Fatalf("invalid intent must read as unknown (a failed MessageBlock parse)")
 	}
+	// text that JS trim() empties: U+FEFF and U+3000 are JS whitespace. U+0085 is not
+	// whitespace in ECMAScript (though Go's unicode.IsSpace trims it), so it stays text.
+	for blank, want := range map[string]string{
+		"\ufeff": "Ops asked",
+		"\u3000": "Ops asked",
+		"\u0085": "Ops asked: \u0085",
+	} {
+		block := map[string]any{
+			"kind": "bot_message_received", "fromBotId": "b", "fromBotName": "Ops", "text": blank,
+		}
+		snippet, message, declined = activityPreview("bot_message", "ignored", []any{block})
+		if declined || message == nil || message.Kind != "request" || snippet != want {
+			t.Fatalf("JS-blank text %q: %q %+v %v (want %q)", blank, snippet, message, declined, want)
+		}
+	}
+	// hop: sealed blocks decode as json.Number, legacy plaintext jsonb as float64.
+	for _, hop := range []any{json.Number("3"), float64(0), float64(2)} {
+		block := map[string]any{
+			"kind": "bot_message_received", "fromBotId": "b", "fromBotName": "Ops", "text": "H", "hop": hop,
+		}
+		if _, _, declined = activityPreview("bot_message", "ignored", []any{block}); declined {
+			t.Fatalf("hop %v must be accepted", hop)
+		}
+	}
+	for _, hop := range []any{float64(1.5), float64(-1), json.Number("-1"), json.Number("1.5"), "2"} {
+		block := map[string]any{
+			"kind": "bot_message_received", "fromBotId": "b", "fromBotName": "Ops", "text": "H", "hop": hop,
+		}
+		if _, message, declined = activityPreview("bot_message", "ignored", []any{block}); declined || message.Kind != "unknown" {
+			t.Fatalf("hop %v must read as unknown", hop)
+		}
+	}
 	// Two blocks are a MessageBlock union this port does not validate: hand it back.
-	_, _, declined = activityPreview("bot_message", "ignored", []any{block, block})
+	valid := map[string]any{"kind": "bot_message_received", "fromBotId": "b", "fromBotName": "Ops", "text": "H"}
+	_, _, declined = activityPreview("bot_message", "ignored", []any{valid, valid})
 	if !declined {
 		t.Fatal("multi-block bot_message must decline")
 	}

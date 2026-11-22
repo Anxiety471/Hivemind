@@ -9,6 +9,7 @@ package runs
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -345,7 +346,7 @@ func activityPreview(trigger, prompt string, blocks any) (string, *AgentMessage,
 		label = "Update from " + name
 	}
 	message := text
-	if strings.TrimSpace(message) != "" {
+	if validate.JSTrim(message) != "" {
 		message = label + ": " + text
 	} else {
 		message = label
@@ -387,12 +388,19 @@ func botMessageReceived(block map[string]any) (fromBotName, text, intent string,
 		}
 	}
 	if raw, present := block["hop"]; present {
-		number, ok := raw.(json.Number)
-		if !ok {
-			return "", "", "", false
-		}
-		value, err := strconv.ParseInt(string(number), 10, 64)
-		if err != nil || value < 0 {
+		// Sealed blocks decode with json.Number; a legacy plaintext jsonb value comes back
+		// as float64. Both must be a non-negative whole number, as z.number().int() accepts.
+		switch number := raw.(type) {
+		case json.Number:
+			value, err := strconv.ParseInt(string(number), 10, 64)
+			if err != nil || value < 0 {
+				return "", "", "", false
+			}
+		case float64:
+			if math.IsNaN(number) || math.IsInf(number, 0) || number < 0 || math.Trunc(number) != number {
+				return "", "", "", false
+			}
+		default:
 			return "", "", "", false
 		}
 	}

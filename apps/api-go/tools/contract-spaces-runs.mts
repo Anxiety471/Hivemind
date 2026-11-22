@@ -247,6 +247,194 @@ async function seedMulti(seeded: Seeded) {
   });
 }
 
+/** The guest home organization needs the oldest LIVE OWNED organization, not the oldest live one. */
+async function seedHomeOrg(seeded: Seeded) {
+  const { userId } = seeded;
+  await system.space.update({
+    where: { id: seeded.spaces[0] },
+    data: { deletingAt: new Date(Date.now() - 120_000) },
+  });
+  const now = Date.now();
+  const foreign = async (suffix: string, role: string, at: number) => {
+    const orgId = `${userId}-sp-o${suffix}`;
+    const spaceId = `${userId}-sp-gs${suffix}`;
+    await system.organization.upsert({
+      where: { id: orgId },
+      update: {},
+      create: { id: orgId, name: `Org ${suffix}`, slug: `${orgId}-slug`, createdAt: new Date(at) },
+    });
+    await system.member.upsert({
+      where: { organizationId_userId: { organizationId: orgId, userId } },
+      update: { role, createdAt: new Date(at) },
+      create: { id: `${orgId}-m`, organizationId: orgId, userId, role, createdAt: new Date(at) },
+    });
+    await system.space.upsert({
+      where: { id: spaceId },
+      update: {},
+      create: { id: spaceId, organizationId: orgId, name: `Space ${suffix}`, isDefault: true },
+    });
+    await system.spaceMember.upsert({
+      where: { spaceId_userId: { spaceId, userId } },
+      update: { role, createdAt: new Date(at) },
+      create: { id: `${spaceId}-m`, spaceId, organizationId: orgId, userId, role, createdAt: new Date(at) },
+    });
+    return spaceId;
+  };
+  // Older joined membership, then the owned one, then the host Space the caller is a guest in.
+  await foreign("m", "member", now + 1_000);
+  await foreign("o", "owner", now + 2_000);
+  const host = await foreign("g", "guest", now + 3_000);
+  seeded.spaces = [...seeded.spaces, host] as unknown as Seeded["spaces"];
+}
+
+/** Stored policies outside AutomatedSenderPoliciesSchema: the handler throws, so TS answers an opaque 500. */
+async function seedBadPolicies(seeded: Seeded) {
+  const { userId } = seeded;
+  await system.bot.create({
+    data: { id: `${userId}-sp-badpol`, spaceId: seeded.spaces[1], userId, name: "Bad policy bot", color: "blue" },
+  });
+  await system.thread.create({
+    data: {
+      id: `${userId}-sp-t-badpol`,
+      spaceId: seeded.spaces[1],
+      userId,
+      botId: `${userId}-sp-badpol`,
+      nextMessageSeq: 10,
+      nextEventSeq: 10,
+    },
+  });
+  await system.externalConversation.upsert({
+    where: { id: `${userId}-sp-e-bad` },
+    update: { automatedSenderPolicies: { alice: { name: "Alice", mode: "bogus" } } as never },
+    create: {
+      id: `${userId}-sp-e-bad`,
+      provider: "slack",
+      workspaceId: "workspace",
+      externalKey: "key",
+      conversationId: "conversation",
+      spaceId: seeded.spaces[1],
+      botId: `${userId}-sp-badpol`,
+      userId,
+      participantNames: ["Pat"],
+      automatedSenderPolicies: { alice: { name: "Alice", mode: "bogus" } } as never,
+    },
+  });
+  await system.thread.create({
+    data: {
+      id: `${userId}-sp-t-ebad`,
+      spaceId: seeded.spaces[1],
+      userId,
+      externalConversationId: `${userId}-sp-e-bad`,
+      nextMessageSeq: 10,
+      nextEventSeq: 10,
+    },
+  });
+}
+
+/** Every bot_message block shape the preview answers: one run each, declined shapes apart. */
+const ANSWERED_SHAPES: Array<[string, unknown[]]> = [
+  ["one-valid", [{ kind: "bot_message_received", fromBotId: "b1", fromBotName: "Researcher", text: "Peek", intent: "request" }]],
+  ["one-update", [{ kind: "bot_message_received", fromBotId: "b1", fromBotName: "Ops", text: "Done", intent: "result" }]],
+  ["one-hop", [{ kind: "bot_message_received", fromBotId: "b1", fromBotName: "Ops", text: "Chained", hop: 2 }]],
+  ["one-blank-text", [{ kind: "bot_message_received", fromBotId: "b1", fromBotName: "Ops", text: "   ", intent: "fyi" }]],
+  ["one-nel-text", [{ kind: "bot_message_received", fromBotId: "b1", fromBotName: "Ops", text: "\u0085" }]],
+  ["one-bom-text", [{ kind: "bot_message_received", fromBotId: "b1", fromBotName: "Ops", text: "\ufeff" }]],
+  ["one-bad-intent", [{ kind: "bot_message_received", fromBotId: "b1", fromBotName: "Ops", text: "x", intent: "shout" }]],
+  ["one-missing-from", [{ kind: "bot_message_received", fromBotName: "Ops", text: "x" }]],
+  ["one-empty-id", [{ kind: "bot_message_received", fromBotId: "", fromBotName: "Ops", text: "x" }]],
+  ["one-empty-return", [{ kind: "bot_message_received", fromBotId: "b1", fromBotName: "Ops", text: "x", returnToMessageId: "" }]],
+  ["one-fractional-hop", [{ kind: "bot_message_received", fromBotId: "b1", fromBotName: "Ops", text: "Half", hop: 1.5 }]],
+  ["one-negative-hop", [{ kind: "bot_message_received", fromBotId: "b1", fromBotName: "Ops", text: "Neg", hop: -1 }]],
+  ["empty", []],
+  ["unknown-name", [{ kind: "bot_message_received", fromBotId: "b1", fromBotName: "   ", text: "Anon" }]],
+  ["opaque-name", [{ kind: "bot_message_received", fromBotId: "b1", fromBotName: "c1234567890123456789012345", text: "Anon" }]],
+  ["long-text", [{ kind: "bot_message_received", fromBotId: "b1", fromBotName: "Ops", text: "y".repeat(400) }]],
+];
+
+async function seedPeerBlocks(seeded: Seeded) {
+  await seedRuns(seeded);
+  const { userId } = seeded;
+  let seq = 30;
+  for (const [name, blocks] of ANSWERED_SHAPES) {
+    const source = await system.message.create({
+      data: {
+        id: `${userId}-rl-src-${name}`,
+        threadId: `${userId}-rl-t1`,
+        seq: (seq += 1),
+        role: "user",
+        blocks: blocks as never,
+      },
+    });
+    await system.task.create({
+      data: {
+        id: `${userId}-rl-task-${name}`,
+        spaceId: seeded.spaces[0],
+        botId: `${userId}-rl-b1`,
+        threadId: `${userId}-rl-t1`,
+        userId,
+        prompt: `prompt ${name}`,
+        status: "completed",
+      },
+    });
+    await system.run.create({
+      data: {
+        id: `${userId}-rl-${name}`,
+        spaceId: seeded.spaces[0],
+        botId: `${userId}-rl-b1`,
+        threadId: `${userId}-rl-t1`,
+        userId,
+        taskId: `${userId}-rl-task-${name}`,
+        status: "running",
+        trigger: "bot_message",
+        sourceMessageId: source.id,
+        updatedAt: new Date(),
+      },
+    });
+  }
+  // A legacy plaintext block: pgx decodes its JSON numbers as float64, not json.Number.
+  const legacy = await system.message.create({
+    data: {
+      id: `${userId}-rl-src-legacy`,
+      threadId: `${userId}-rl-t1`,
+      seq: 60,
+      role: "user",
+      blocks: [{ kind: "text", text: "placeholder" }],
+    },
+  });
+  await system.$executeRawUnsafe(
+    `UPDATE messages SET blocks = $1::jsonb WHERE id = $2`,
+    JSON.stringify([
+      { kind: "bot_message_received", fromBotId: "b1", fromBotName: "Legacy", text: "Unsealed", hop: 3 },
+    ]),
+    legacy.id,
+  );
+  await system.task.create({
+    data: {
+      id: `${userId}-rl-task-legacy`,
+      spaceId: seeded.spaces[0],
+      botId: `${userId}-rl-b1`,
+      threadId: `${userId}-rl-t1`,
+      userId,
+      prompt: "legacy prompt",
+      status: "completed",
+    },
+  });
+  await system.run.create({
+    data: {
+      id: `${userId}-rl-legacy`,
+      spaceId: seeded.spaces[0],
+      botId: `${userId}-rl-b1`,
+      threadId: `${userId}-rl-t1`,
+      userId,
+      taskId: `${userId}-rl-task-legacy`,
+      status: "running",
+      trigger: "bot_message",
+      sourceMessageId: legacy.id,
+      updatedAt: new Date(),
+    },
+  });
+}
+
 function spaceCases(): Case[] {
   const call = (name: string, extra: Partial<Case> = {}): Case => ({
     name: `sp-${name}`,
@@ -262,6 +450,8 @@ function spaceCases(): Case[] {
     call("roster-in-space-three", { seed: seedRoster, space: 2 }),
     call("input-ignored", { seed: seedRoster, input: { extra: true } }),
     call("anonymous", { seed: seedRoster, anonymous: true }),
+    call("home-org-role", { seed: seedHomeOrg, space: 3 as unknown as 0 }),
+    call("bad-policies", { seed: seedBadPolicies }),
   ];
 }
 
@@ -286,6 +476,7 @@ function runCases(): Case[] {
     call("null-input", null),
     call("anonymous", { filter: "active" }, { anonymous: true }),
     call("peer-block-answers", { filter: "active" }, { seed: seedRuns, declines: false }),
+    call("peer-blocks-answered", { filter: "active" }, { seed: seedPeerBlocks, declines: false }),
     call(
       "peer-multi-blocks-declines",
       { filter: "active" },
