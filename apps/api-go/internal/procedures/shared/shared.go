@@ -97,11 +97,67 @@ type Deployment struct {
 	// ApprovalModelConfigured is isAutoReviewCheckerConfigured({}).
 	ApprovalModel           *ModelSelection
 	ApprovalModelConfigured bool
+	// Me is the deployment configuration `me` (account.Me) answers from: the same env.ts
+	// values the TypeScript API reads. config.MeEnv fills it at startup.
+	Me MeConfig
 	// Waker wakes a ticket's worker bots through the task queue (retries, backoff, coalescing).
 	// nil in tests that never wake one.
 	Waker TicketWaker
 	// Drive handles Space Drive file operations and streaming storage.
 	Drive *drive.Service
+}
+
+// MeConfig is apps/api/src/env.ts as `me` reads it (meDto, routes/shared.ts:34): the
+// fields that come from the environment rather than a row.
+type MeConfig struct {
+	// DeploymentProvider and DeploymentModel are env.defaultProvider/env.defaultModel:
+	// resolveDeploymentModel's provider and model, before a member or deployment choice.
+	DeploymentProvider string
+	DeploymentModel    string
+	// DeploymentModelConfigured and DeploymentModelHostCredentials are
+	// env.deploymentModelConfigured/env.deploymentModelHostCredentials.
+	DeploymentModelConfigured      bool
+	DeploymentModelHostCredentials bool
+	// DeploymentModelHostCredentialsUnknown marks the pi-ai environment lookup this port
+	// does not carry; `me` declines while it is set.
+	DeploymentModelHostCredentialsUnknown bool
+	// DeploymentLabs is env.deploymentLabs (deploymentLabsFromEnv): Labs features this
+	// deployment turns on for everyone. Only "board" exists today.
+	DeploymentLabs []string
+	// NavLinks is env.navLinks (parseNavLinks); NavLinksUnknown marks a value this port
+	// cannot confirm, so `me` declines.
+	NavLinks        []NavLink
+	NavLinksUnknown bool
+	// ComputerSettingsEnabled is COMPUTER_SETTINGS_ENABLED === "true".
+	ComputerSettingsEnabled bool
+	// DesktopHostChoiceEnabled is Boolean(env.desktopStackToken).
+	DesktopHostChoiceEnabled bool
+	// SandboxProvider is env.sandboxProvider (resolveSandboxProvider).
+	SandboxProvider string
+	// AgentRuntime is env.agentRuntime.
+	AgentRuntime string
+	// McpStdioEnabled is mcpStdioAvailable({stdioEnabled, allowedCommands}).
+	McpStdioEnabled bool
+	// AdminEmails is env.adminEmails (RAKAZO_ADMIN_EMAILS, lowercased).
+	AdminEmails []string
+	// MaxUploadBytes and MaxAttachmentsPerMessage are env.maxUploadSizeBytes and
+	// env.maxAttachmentsPerMessage; AttachmentsUnknown marks an invalid
+	// MAX_ATTACHMENTS_PER_MESSAGE, which stops the TypeScript server.
+	MaxUploadBytes           int64
+	MaxAttachmentsPerMessage int
+	AttachmentsUnknown       bool
+	// BillingConfigured is Boolean(deps.billing): Stripe's secrets or the emulator.
+	BillingConfigured bool
+	// PaymentWalletProvider is resolvePaymentWalletProvider: "link", "emulator" or "none".
+	PaymentWalletProvider string
+}
+
+// NavLink is NavLinkSchema, as `me` returns env.navLinks.
+type NavLink struct {
+	ID      string `json:"id"`
+	Label   string `json:"label"`
+	Path    string `json:"path"`
+	Trusted bool   `json:"trusted"`
 }
 
 // TicketWaker queues a wake for each bot, with a short note saying what changed on the ticket.

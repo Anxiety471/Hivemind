@@ -30,27 +30,11 @@ const isoMillis = "2006-01-02T15:04:05.000Z"
 func List(ctx context.Context, database *db.DB, actor db.Actor) ([]Section, *orpc.Error) {
 	sections := []Section{}
 	err := database.Tenant(ctx, actor, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT id, name, position, "createdAt", "updatedAt"
-			FROM bot_sections WHERE "spaceId" = $1 ORDER BY position ASC, "createdAt" ASC`, actor.SpaceID)
-		if err != nil {
-			return err
+		loaded, err := ListForSpaces(ctx, tx, []string{actor.SpaceID})
+		for _, section := range loaded {
+			sections = append(sections, section.Section)
 		}
-		defer rows.Close()
-		for rows.Next() {
-			var section Section
-			var createdAt, updatedAt time.Time
-			if err := rows.Scan(&section.ID, &section.Name, &section.Position, &createdAt, &updatedAt); err != nil {
-				return err
-			}
-			// The router parses the output: a section's position is a nonnegative count.
-			if section.Position < 0 {
-				return shared.OutputInvalid()
-			}
-			section.CreatedAt = createdAt.UTC().Format(isoMillis)
-			section.UpdatedAt = updatedAt.UTC().Format(isoMillis)
-			sections = append(sections, section)
-		}
-		return rows.Err()
+		return err
 	})
 	if err != nil {
 		var failure *orpc.Error
@@ -63,4 +47,44 @@ func List(ctx context.Context, database *db.DB, actor db.Actor) ([]Section, *orp
 		return nil, orpc.Internal()
 	}
 	return sections, nil
+}
+
+// SectionWithSpace is a BotSection row plus the Space it belongs to, which is what
+// listBotSectionsForSpaces returns and SpaceNavigation needs to partition; BotSectionSchema
+// on the wire has no Space id.
+type SectionWithSpace struct {
+	Section
+	SpaceID string
+}
+
+// ListForSpaces is listBotSectionsForSpaces (packages/db/src/bots/bot-repository.ts:167):
+// every section of each Space, by position then creation time. `spaces.list` reads the
+// member's Spaces as system; the caller limits the ids.
+func ListForSpaces(ctx context.Context, tx pgx.Tx, spaceIDs []string) ([]SectionWithSpace, error) {
+	sections := []SectionWithSpace{}
+	if len(spaceIDs) == 0 {
+		return sections, nil
+	}
+	rows, err := tx.Query(ctx, `SELECT id, name, position, "createdAt", "updatedAt", "spaceId"
+		FROM bot_sections WHERE "spaceId" = ANY($1) ORDER BY position ASC, "createdAt" ASC`, spaceIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var section SectionWithSpace
+		var createdAt, updatedAt time.Time
+		if err := rows.Scan(&section.ID, &section.Name, &section.Position, &createdAt, &updatedAt,
+			&section.SpaceID); err != nil {
+			return nil, err
+		}
+		// The router parses the output: a section's position is a nonnegative count.
+		if section.Position < 0 {
+			return nil, shared.OutputInvalid()
+		}
+		section.CreatedAt = createdAt.UTC().Format(isoMillis)
+		section.UpdatedAt = updatedAt.UTC().Format(isoMillis)
+		sections = append(sections, section)
+	}
+	return sections, rows.Err()
 }

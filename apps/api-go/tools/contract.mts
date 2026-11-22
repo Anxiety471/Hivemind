@@ -28,6 +28,7 @@ import { laneICases } from "./contract-lane-i.mts";
 import { laneJCases, laneJState } from "./contract-lane-j.mts";
 import { membershipCases, membershipReset, membershipState } from "./contract-membership.mts";
 import { modelsCases } from "./contract-models.mts";
+import { spaceRunCases } from "./contract-spaces-runs.mts";
 import { routineResumeCases } from "./contract-routine-resume.mts";
 import { routineCases } from "./contract-routines.mts";
 import { threadGetCases } from "./contract-threads-get.mts";
@@ -214,6 +215,8 @@ await writeFile(
       "threads.markRead": { mode: "go" },
       "threads.markUnread": { mode: "go" },
       "threads.snooze": { mode: "go" },
+      "spaces.list": { mode: "go", readOnly: true },
+      "runs.list": { mode: "go", readOnly: true },
       "externalConversations.updatePolicy": { mode: "go" },
       "scratchpad.list": { mode: "go", readOnly: true },
       "scratchpad.create": { mode: "go" },
@@ -591,6 +594,7 @@ const cases: Case[] = [
   ...laneJCases(system),
   ...modelsCases(system),
   ...threadGetCases(system),
+  ...spaceRunCases(system),
 ];
 
 const SITES = ["zeta.example", "alpha.example", "Beta.example", "_under.example", "10.0.0.1"];

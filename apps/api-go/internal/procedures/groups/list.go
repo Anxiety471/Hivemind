@@ -84,9 +84,100 @@ type memberRow struct {
 	Archived  *time.Time
 }
 
+// SpaceGroup is SpaceGroupSchema (packages/contracts/src/spaces/space.ts:35): the group row
+// a Space entry shows, without its archive state, thread or creation time.
+type SpaceGroup struct {
+	ID           string        `json:"id"`
+	SpaceID      string        `json:"spaceId"`
+	Name         string        `json:"name"`
+	Pinned       bool          `json:"pinned"`
+	SectionID    *string       `json:"sectionId"`
+	Members      []GroupMember `json:"members"`
+	Preview      string        `json:"preview"`
+	Unread       bool          `json:"unread"`
+	SnoozedUntil *string       `json:"snoozedUntil"`
+	UpdatedAt    string        `json:"updatedAt"`
+}
+
 func listGroups(ctx context.Context, database *db.DB, deployment shared.Deployment, actor db.Actor, archived bool) (any, *orpc.Error) {
+	groups, failure := ListRows(ctx, database, deployment, actor, archived)
+	if failure != nil {
+		return nil, failure
+	}
+	return groups, nil
+}
+
+// ListRows is repos.listGroups as validated Group rows: the Space's open groups, or the
+// archived list when `archived` is set.
+func ListRows(ctx context.Context, database *db.DB, deployment shared.Deployment, actor db.Actor, archived bool) ([]Group, *orpc.Error) {
 	groups := []Group{}
 	err := database.Tenant(ctx, actor, func(tx pgx.Tx) error {
+		loaded, err := groupRows(ctx, tx, deployment, []string{actor.SpaceID}, actor.UserID, archived)
+		groups = loaded
+		return err
+	})
+	if err != nil {
+		return nil, shared.Failure(err)
+	}
+	return groups, nil
+}
+
+// GroupRows is repos.listGroups over the given Spaces inside the caller's transaction:
+// spaces.list reads them as system, over every Space the member belongs to.
+func GroupRows(
+	ctx context.Context,
+	tx pgx.Tx,
+	deployment shared.Deployment,
+	spaceIDs []string,
+	userID string,
+) ([]Group, error) {
+	return groupRows(ctx, tx, deployment, spaceIDs, userID, false)
+}
+
+// SpaceGroupRows is listSpaceGroupsForSpaces (groups.ts:297): the open groups with enough
+// active bots to open, in SpaceGroupSchema's shape.
+func SpaceGroupRows(
+	ctx context.Context,
+	tx pgx.Tx,
+	deployment shared.Deployment,
+	spaceIDs []string,
+	userID string,
+) ([]SpaceGroup, error) {
+	groups, err := groupRows(ctx, tx, deployment, spaceIDs, userID, false)
+	if err != nil {
+		return nil, err
+	}
+	rows := make([]SpaceGroup, 0, len(groups))
+	for _, group := range groups {
+		rows = append(rows, SpaceGroup{
+			ID:           group.ID,
+			SpaceID:      group.SpaceID,
+			Name:         group.Name,
+			Pinned:       group.Pinned,
+			SectionID:    group.SectionID,
+			Members:      group.Members,
+			Preview:      group.Preview,
+			Unread:       group.Unread,
+			SnoozedUntil: group.SnoozedUntil,
+			UpdatedAt:    group.UpdatedAt,
+		})
+	}
+	return rows, nil
+}
+
+func groupRows(
+	ctx context.Context,
+	tx pgx.Tx,
+	deployment shared.Deployment,
+	spaceIDs []string,
+	userID string,
+	archived bool,
+) ([]Group, error) {
+	groups := []Group{}
+	if len(spaceIDs) == 0 {
+		return groups, nil
+	}
+	{
 		// groupInclude/archivedGroupInclude (groups.ts:181,189): the group, its thread and the
 		// caller's own read state.
 		query := `SELECT g.id, g."spaceId", g.name, g.pinned, g."sectionId", g."archivedAt",
@@ -94,7 +185,7 @@ func listGroups(ctx context.Context, database *db.DB, deployment shared.Deployme
 			FROM chat_groups g
 			LEFT JOIN threads t ON t."groupId" = g.id
 			LEFT JOIN thread_reads r ON r."threadId" = t.id AND r."userId" = $2
-			WHERE g."spaceId" = $1 AND g."archivedAt" IS NULL
+			WHERE g."spaceId" = ANY($1) AND g."archivedAt" IS NULL
 			ORDER BY g.pinned DESC, g."updatedAt" DESC`
 		if archived {
 			// Archived groups, and groups left with too few active bots to open, whatever
@@ -104,14 +195,14 @@ func listGroups(ctx context.Context, database *db.DB, deployment shared.Deployme
 				FROM chat_groups g
 				LEFT JOIN threads t ON t."groupId" = g.id
 				LEFT JOIN thread_reads r ON r."threadId" = t.id AND r."userId" = $2
-				WHERE g."spaceId" = $1 AND (g."archivedAt" IS NOT NULL OR EXISTS (
+				WHERE g."spaceId" = ANY($1) AND (g."archivedAt" IS NOT NULL OR EXISTS (
 					SELECT 1 FROM chat_group_members m JOIN bots b ON b.id = m."botId"
 					WHERE m."groupId" = g.id AND b."archivedAt" IS NOT NULL))
 				ORDER BY g.pinned DESC, g."updatedAt" DESC`
 		}
-		rows, err := tx.Query(ctx, query, actor.SpaceID, actor.UserID)
+		rows, err := tx.Query(ctx, query, spaceIDs, userID)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		loaded := []groupRow{}
 		for rows.Next() {
@@ -120,16 +211,16 @@ func listGroups(ctx context.Context, database *db.DB, deployment shared.Deployme
 				&row.ArchivedAt, &row.CreatedAt, &row.UpdatedAt, &row.ThreadID, &row.Unread,
 				&row.SnoozedUntil); err != nil {
 				rows.Close()
-				return err
+				return nil, err
 			}
 			loaded = append(loaded, row)
 		}
 		rows.Close()
 		if err := rows.Err(); err != nil {
-			return err
+			return nil, err
 		}
 		if len(loaded) == 0 {
-			return nil
+			return groups, nil
 		}
 
 		// withNewestThreadMessages(prisma, groups, 1): one indexed read of the newest message
@@ -152,7 +243,7 @@ func listGroups(ctx context.Context, database *db.DB, deployment shared.Deployme
 				) m
 				ORDER BY m."threadId", m.seq DESC`, threadIDs)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			type previewRow struct {
 				ThreadID string
@@ -164,13 +255,13 @@ func listGroups(ctx context.Context, database *db.DB, deployment shared.Deployme
 				var message previewRow
 				if err := messageRows.Scan(&message.ThreadID, &message.ID, &message.Blocks); err != nil {
 					messageRows.Close()
-					return err
+					return nil, err
 				}
 				messages = append(messages, message)
 			}
 			messageRows.Close()
 			if err := messageRows.Err(); err != nil {
-				return err
+				return nil, err
 			}
 			if ring := deployment.Content; ring != nil {
 				open := make([]map[string]any, len(messages))
@@ -180,7 +271,7 @@ func listGroups(ctx context.Context, database *db.DB, deployment shared.Deployme
 					}
 				}
 				if err := ring.OpenRows(ctx, "Message", open); err != nil {
-					return err
+					return nil, err
 				}
 				for index := range messages {
 					messages[index].Blocks = open[index]["blocks"]
@@ -193,7 +284,7 @@ func listGroups(ctx context.Context, database *db.DB, deployment shared.Deployme
 
 		members, activeCount, err := groupMembers(ctx, tx, groupIDs, archived)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		// TypeScript filters before it maps (groups.ts:358-378), so a group the list leaves out
@@ -214,7 +305,7 @@ func listGroups(ctx context.Context, database *db.DB, deployment shared.Deployme
 				continue
 			}
 			if row.ThreadID == nil {
-				return errMissingThread
+				return nil, errMissingThread
 			}
 			group := Group{
 				ID:           row.ID,
@@ -235,14 +326,10 @@ func listGroups(ctx context.Context, database *db.DB, deployment shared.Deployme
 				group.ArchivedAt = &archivedAt
 			}
 			if failure := validateGroup(group); failure != nil {
-				return failure
+				return nil, failure
 			}
 			groups = append(groups, group)
 		}
-		return nil
-	})
-	if err != nil {
-		return nil, shared.Failure(err)
 	}
 	return groups, nil
 }
