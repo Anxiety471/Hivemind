@@ -15,7 +15,8 @@
  */
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { createServer } from "node:http";
+import { createHmac, randomBytes } from "node:crypto";
 import { createInterface } from "node:readline";
 import { routineWakeupJob } from "../../../packages/adapter-kit/src/background-jobs.js";
 import { PostgresRealtimeFanout } from "../../../packages/adapters/src/notifications/realtime.js";
@@ -2191,6 +2192,293 @@ if (picked("run1")) {
       await host.stop();
       await app.stop();
       await dropFixture(fixture);
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+}
+
+if (picked("run1-signals")) {
+  await check("run1-signals: a Go-created test run publishes the same frames as TypeScript", async () => {
+    const { createApp } = await import("../../api/src/app.js");
+    const { RunWorkerHost } = await import("../../../packages/adapters/src/runs/wakeups/run-wakeup.js");
+    const { mkdtempSync, rmSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const path = await import("node:path");
+    const run1Fanout = new PostgresRealtimeFanout({
+      connectionString: DATABASE_URL,
+      publisher: pool,
+    });
+    // Two independent fixtures: each run's space, thread and bot are its own, so every frame is
+    // attributable and the same normalizer sees the same shape.
+    const fixtureGo = await makeFixture("sig-go");
+    const fixtureTs = await makeFixture("sig-ts");
+    const dataDir = mkdtempSync(path.join(tmpdir(), "infra-b-run1-signals-"));
+    process.env.BETTER_AUTH_SECRET ??= "infra-b-proof-secret-0123456789abcdef";
+    process.env.NODE_ENV ??= "test";
+    process.env.AGENT_RUNTIME = "scripted";
+    process.env.SANDBOX_PROVIDER = "fake";
+    process.env.WAKEUP_DRIVER = "postgres";
+    const app = await createApp({
+      databaseUrl: DATABASE_URL,
+      dataDir,
+      webOrigin: "http://127.0.0.1:5173",
+      authUrl: "http://127.0.0.1:5173",
+      sandboxProvider: "fake",
+      agentRuntime: "scripted",
+      wakeupDriver: "postgres",
+      defaultProvider: "scripted",
+      defaultModel: "scripted",
+      realtime: run1Fanout,
+      prisma,
+    } as any);
+    await run1Fanout.subscribe("proof-warmup-signals", () => undefined);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const starter = new RunStarter(run1Fanout);
+    let handlerRuns = 0;
+    let goGateway: any;
+    let upstreamServer: any;
+    const host = new RunWorkerHost(prisma, run1Fanout, starter, {});
+    const handlers = {
+      "run.continue": async (payload: { runId: string }, execution?: any) => {
+        handlerRuns += 1;
+        await app.executor.continueRun(payload.runId, "proof-run1-signals", execution?.onRunStarted);
+      },
+    } as any;
+    const waitForRun = async (runId: string, label: string) => {
+      const deadline = Date.now() + 60_000;
+      let run: any = undefined;
+      while (Date.now() < deadline) {
+        run = await system.run.findUnique({ where: { id: runId } });
+        if (run?.status === "completed" || run?.status === "failed") break;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      assert.equal(run?.status, "completed", `${label} must complete (${run?.status}: ${run?.error ?? ""})`);
+      return run;
+    };
+    try {
+      await host.start(handlers);
+
+      // The TypeScript twin runs on the worker path too: a TS API without spare capacity hands
+      // the run off with runs:ready instead of starting it locally. The app's RunJobPublisher
+      // calls its starter's start(); replacing that one method with the handoff is exactly the
+      // frame a full TS API process publishes, and the real worker host executes the run.
+      (app as any).jobs.starter = {
+        start: (runId: string) => {
+          void run1Fanout.publish("runs:ready", runId).catch(() => undefined);
+        },
+      };
+
+      // A real session for the TypeScript fixture's user, so the route runs as that member.
+      const sessionToken = `sigtok-${tag}-${randomBytes(12).toString("hex")}`;
+      await system.session.create({
+        data: {
+          id: `sigsess-${tag}`,
+          expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+          token: sessionToken,
+          userId: fixtureTs.userId,
+        },
+      });
+      const signature = createHmac("sha256", process.env.BETTER_AUTH_SECRET!)
+        .update(sessionToken)
+        .digest("base64");
+      const cookie = `better-auth.session_token=${encodeURIComponent(`${sessionToken}.${signature}`)}`;
+      const headers = {
+        "content-type": "application/json",
+        origin: "http://127.0.0.1:5173",
+        cookie,
+        "x-rakazo-space-id": fixtureTs.spaceId,
+      };
+
+      await settleFrames();
+      frames = [];
+      const beforeTs = frames.length;
+      const response = await app.app.request(
+        "/rpc/routines/testRun",
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ json: { routineId: fixtureTs.routineId } }),
+        },
+        { incoming: { socket: { remoteAddress: "127.0.0.1" } } } as any,
+      );
+      assert.equal(response.status, 200, "the TypeScript route must create the run");
+      const responseBody = (await response.json()) as any;
+      const tsRunId: string = responseBody?.json?.runId ?? responseBody?.runId;
+      assert.ok(tsRunId, `TypeScript route body = ${JSON.stringify(responseBody)}`);
+      const tsRun = await waitForRun(tsRunId, "the TypeScript-created run");
+
+      await settleFrames();
+      const tsFrames = frames
+        .slice(beforeTs)
+        .filter((frame) => frame.topic === "runs:ready"
+          ? frame.payload === tsRunId
+          : frame.topic === `space-changes:${fixtureTs.spaceId}` ||
+            frame.topic === `thread:${fixtureTs.threadId}`);
+
+      // The Go side must run through the real gateway, not the proof driver: the gateway is what
+      // runs the procedure's effects (security events, roster/space-change signals) outside the
+      // procedure body, exactly as the TypeScript route's authed middleware does.
+      const GO_GATEWAY_PORT = 3270;
+      const UPSTREAM_PORT = 3996;
+      const routesFile = path.join(dataDir, "routes-signals.json");
+      const buildIdFile = path.join(dataDir, "build-id-signals");
+      writeFileSync(routesFile, JSON.stringify({ routes: { "routines.testRun": { mode: "go" } } }));
+      writeFileSync(buildIdFile, "proof-signals");
+      upstreamServer = createServer(async (req: any, res: any) => {
+        try {
+          const chunks: Buffer[] = [];
+          for await (const chunk of req) chunks.push(Buffer.from(chunk));
+          const upstreamResponse = await app.app.request(
+            `http://127.0.0.1${req.url ?? "/"}`,
+            {
+              method: req.method,
+              headers: req.headers,
+              body: chunks.length ? Buffer.concat(chunks) : undefined,
+            },
+            { incoming: { socket: { remoteAddress: "127.0.0.1" } } } as any,
+          );
+          res.statusCode = upstreamResponse.status;
+          upstreamResponse.headers.forEach((value: string, key: string) => res.setHeader(key, value));
+          res.end(Buffer.from(await upstreamResponse.arrayBuffer()));
+        } catch (error) {
+          res.statusCode = 500;
+          res.end(String(error));
+        }
+      });
+      await new Promise<void>((resolve) => upstreamServer.listen(UPSTREAM_PORT, "127.0.0.1", resolve));
+      goGateway = spawn(process.env.GO_GATEWAY_BIN ?? "/tmp/infra-b/gateway-run1", [
+        "-listen", `127.0.0.1:${GO_GATEWAY_PORT}`,
+        "-upstream", `http://127.0.0.1:${UPSTREAM_PORT}`,
+        "-routes", routesFile,
+        "-build-id-file", buildIdFile,
+      ], {
+        env: {
+          ...process.env,
+          DATABASE_URL,
+          BETTER_AUTH_SECRET: process.env.BETTER_AUTH_SECRET!,
+          BETTER_AUTH_URL: "http://127.0.0.1:5173",
+          WEB_ORIGIN: "http://127.0.0.1:5173",
+          ENCRYPTION_KEY: process.env.ENCRYPTION_KEY!,
+          CONTENT_ENCRYPTION: "on",
+          MAX_UPLOAD_SIZE_MB: "10",
+          SMTP_URL: "",
+          EMAIL_PROVIDER: "",
+          EMAIL_EMULATOR: "",
+          INBOUND_EMAIL_DOMAIN: "inbound.contract.test",
+          INBOUND_EMAIL_SECRET: "inbound-email-secret-0123456789abcdef",
+          SANDBOX_MAX_COMPUTERS_PER_USER: "5",
+          PHONE_CALLS_ENABLED: "true",
+          PHONE_CALL_RING_SECONDS: "45",
+        },
+        stdio: ["ignore", "ignore", "pipe"],
+      });
+      const gatewayStderr: Buffer[] = [];
+      goGateway.stderr?.on("data", (chunk: Buffer) => gatewayStderr.push(chunk));
+      let gatewayReady = false;
+      for (let attempt = 0; attempt < 120; attempt += 1) {
+        try {
+          const health = await fetch(`http://127.0.0.1:${GO_GATEWAY_PORT}/healthz`);
+          if (health.ok) { gatewayReady = true; break; }
+        } catch { /* not up yet */ }
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      if (!gatewayReady) {
+        throw new Error(`the Go gateway did not become ready: ${Buffer.concat(gatewayStderr).toString()}`);
+      }
+
+      const goSessionToken = `sigtokgo-${tag}-${randomBytes(12).toString("hex")}`;
+      await system.session.create({
+        data: {
+          id: `sigsessgo-${tag}`,
+          expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+          token: goSessionToken,
+          userId: fixtureGo.userId,
+        },
+      });
+      const goSignature = createHmac("sha256", process.env.BETTER_AUTH_SECRET!)
+        .update(goSessionToken)
+        .digest("base64");
+      const goCookie = `better-auth.session_token=${encodeURIComponent(`${goSessionToken}.${goSignature}`)}`;
+
+      await settleFrames();
+      const beforeGo = frames.length;
+      const goResponse = await fetch(`http://127.0.0.1:${GO_GATEWAY_PORT}/rpc/routines/testRun`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          origin: "http://127.0.0.1:5173",
+          cookie: goCookie,
+          "x-rakazo-space-id": fixtureGo.spaceId,
+        },
+        body: JSON.stringify({ json: { routineId: fixtureGo.routineId } }),
+      });
+      if (goResponse.status !== 200) {
+        throw new Error(`the Go gateway route must create the run (${goResponse.status}: ${await goResponse.text()})`);
+      }
+      const goBody = (await goResponse.json()) as any;
+      const goRunId: string = goBody?.json?.runId ?? goBody?.runId;
+      assert.ok(goRunId, `Go gateway body = ${JSON.stringify(goBody)}`);
+      const goRun = await waitForRun(goRunId, "the Go-created run");
+      await settleFrames();
+      const goFrames = frames
+        .slice(beforeGo)
+        .filter((frame) => frame.topic === "runs:ready"
+          ? frame.payload === goRunId
+          : frame.topic === `space-changes:${fixtureGo.spaceId}` ||
+            frame.topic === `thread:${fixtureGo.threadId}`);
+
+      const normalizeFrames = (list: Array<{ topic: string; payload: string }>, fixture: Fixture, runId: string) => {
+        const labels = new Map<string, string>([
+          [fixture.orgId, "<org>"],
+          [fixture.userId, "<user>"],
+          [fixture.spaceId, "<space>"],
+          [fixture.botId, "<bot>"],
+          [fixture.threadId, "<thread>"],
+          [fixture.routineId, "<routine>"],
+          [fixture.computerId, "<computer>"],
+          [runId, "<run>"],
+        ]);
+        const replace = (text: string) => {
+          let out = replaceIds(text, labels);
+          out = out.replace(/c[a-z0-9]{24}/g, "<cuid>");
+          out = out.replace(/\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z/g, "<time>");
+          return out;
+        };
+        return list.map((frame) => ({ topic: replace(frame.topic), payload: replace(frame.payload) }));
+      };
+      const tsNormalized = normalizeFrames(tsFrames, fixtureTs, tsRunId);
+      const goNormalized = normalizeFrames(goFrames, fixtureGo, goRunId);
+      console.log("run1-signals typescript:", JSON.stringify(tsNormalized, null, 2));
+      console.log("run1-signals go:        ", JSON.stringify(goNormalized, null, 2));
+      // The two processes announce the same facts on independent channels (the
+      // gateway's effects and the procedure's wake), so delivery order between
+      // topics is not a contract; the set of frames is.
+      const sorted = (list: Array<{ topic: string; payload: string }>) =>
+        [...list].sort((left, right) =>
+          JSON.stringify(left).localeCompare(JSON.stringify(right)),
+        );
+      assert.deepEqual(sorted(goNormalized), sorted(tsNormalized), "worker-path realtime frames");
+
+      const tsTask = await system.task.findUniqueOrThrow({ where: { id: tsRun.taskId } });
+      const goTask = await system.task.findUniqueOrThrow({ where: { id: goRun.taskId } });
+      assert.equal(goTask.prompt, tsTask.prompt, "the test-run task prompt");
+      assert.equal(goRun.trigger, tsRun.trigger, "the test-run trigger");
+      assert.equal(goRun.routineId, fixtureGo.routineId, "the Go run's routine");
+      assert.equal(tsRun.routineId, fixtureTs.routineId, "the TypeScript run's routine");
+      assert.equal(handlerRuns, 2, "the real worker host must claim both runs");
+    } finally {
+      if (goGateway) {
+        goGateway.kill("SIGTERM");
+        await new Promise<void>((resolve) => {
+          if (goGateway.exitCode !== null) resolve();
+          else goGateway.once("exit", () => resolve());
+        });
+      }
+      if (upstreamServer) await new Promise<void>((resolve) => upstreamServer.close(() => resolve()));
+      await host.stop();
+      await app.stop();
+      await dropFixture(fixtureGo);
+      await dropFixture(fixtureTs);
       rmSync(dataDir, { recursive: true, force: true });
     }
   });
