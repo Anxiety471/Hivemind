@@ -121,7 +121,11 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			g.proxy.ServeHTTP(status, r)
 		case routes.Go:
 			if g.local != nil && g.local.Has(procedure) {
-				g.local.ServeHTTP(status, r, procedure)
+				if g.local.MayDecline(procedure) {
+					g.serveOrDecline(status, r, procedure)
+				} else {
+					g.local.ServeHTTP(status, r, procedure)
+				}
 			} else {
 				g.logger.Error("procedure mode is not implemented by this build",
 					"procedure", procedure, "mode", string(mode))
