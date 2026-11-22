@@ -9,7 +9,8 @@ import type {
   Space,
   ThreadSnapshot,
 } from "@rakazo/contracts";
-import { reorderBotTo } from "@rakazo/core";
+import type { RefreshCoalescer } from "@rakazo/core";
+import { createRefreshCoalescer, reorderBotTo } from "@rakazo/core";
 import { replaceEqualDeep } from "@tanstack/react-query";
 import type { RefObject } from "react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -113,7 +114,7 @@ export function useSpaceRoster({
     return pathname === renderedPath.current ? route : null;
   }, []);
 
-  const refreshBots = useCallback(
+  const refreshBotsNow = useCallback(
     async (includeArchived = false, replaceBotOrder = false) => {
       markOnce("rk:renderer:bots-request-start");
       const request = ++botsRefreshEpoch.current;
@@ -191,6 +192,22 @@ export function useSpaceRoster({
       }
     },
     [navigate, liveRoute],
+  );
+
+  // A server signal, a run's start or end, and a return to the window all ask for the same
+  // roster read. They share one read, and one that arrives during it reads again after, so a
+  // burst costs two requests instead of one per trigger. The archived lists and a forced bot
+  // order are user actions, not bursts, and read at once.
+  const refreshBotsNowRef = useRef(refreshBotsNow);
+  refreshBotsNowRef.current = refreshBotsNow;
+  const rosterReads = useRef<RefreshCoalescer | null>(null);
+  rosterReads.current ??= createRefreshCoalescer(() => refreshBotsNowRef.current());
+  const refreshBots = useCallback(
+    (includeArchived = false, replaceBotOrder = false) =>
+      includeArchived || replaceBotOrder
+        ? refreshBotsNow(includeArchived, replaceBotOrder)
+        : rosterReads.current!.invalidate(),
+    [refreshBotsNow],
   );
 
   /**

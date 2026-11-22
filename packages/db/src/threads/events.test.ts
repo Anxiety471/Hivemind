@@ -5461,7 +5461,7 @@ describe("appendEvent", () => {
     });
     expect(publish).toHaveBeenCalledExactlyOnceWith(
       "thread:thread-1",
-      JSON.stringify({ cursor: 7 }),
+      JSON.stringify({ cursor: 7, type: "thread.progress" }),
     );
   });
 

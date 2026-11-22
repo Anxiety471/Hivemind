@@ -47,6 +47,7 @@ func (s *Server) serveStream(w http.ResponseWriter, r *http.Request, procedure s
 	authorizedAt := time.Now()
 	for {
 		var payload string
+		quietFrame := false
 		select {
 		case <-ctx.Done():
 			return
@@ -57,6 +58,7 @@ func (s *Server) serveStream(w http.ResponseWriter, r *http.Request, procedure s
 			continue
 		case payload = <-signals:
 		case <-quiet.C:
+			quietFrame = true
 		}
 		if time.Since(authorizedAt) >= timing.Recheck {
 			current, failure := s.auth.Recheck(ctx, r)
@@ -74,7 +76,11 @@ func (s *Server) serveStream(w http.ResponseWriter, r *http.Request, procedure s
 			}
 			authorizedAt = time.Now()
 		}
-		body, err := orpc.Marshal(map[string]any{"json": stream.Frame(actor, payload)})
+		frame := stream.Frame(actor, payload)
+		if quietFrame && stream.HeartbeatFrame != nil {
+			frame = stream.HeartbeatFrame(actor)
+		}
+		body, err := orpc.Marshal(map[string]any{"json": frame})
 		if err != nil {
 			s.config.Logger.Error("stream frame not encodable", "procedure", procedure, "error", err)
 			return

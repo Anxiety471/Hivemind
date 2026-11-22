@@ -12,7 +12,8 @@ type TicketsOptions = ReturnType<
 
 /**
  * Keeps a ticket list live: the board's event stream signals a change, and the list and any open
- * ticket's comments are read again. A dropped stream reconnects, and each connect reads once.
+ * ticket's comments are read again. A dropped stream reconnects, and each connect reads once. The
+ * liveness frame a quiet board gets changes nothing, so it reads nothing.
  */
 export function useBoardStream(
   ticketsOptions: TicketsOptions,
@@ -53,6 +54,7 @@ export function useBoardStream(
           opened = true;
           for await (const event of stream) {
             if (!active) return;
+            if (event.heartbeat) continue;
             refreshComments(event.ticketId);
             await fetchFresh(queryClient, ticketsOptions);
           }

@@ -98,13 +98,15 @@ export function boardsRoutes(ctx: RouterContext) {
       }),
       subscribe: boardEnabled.boards.subscribe.handler(async function* ({ context }) {
         const spaceId = context.actor.spaceId;
-        // Board signals are transient, so a heartbeat stands in for liveness and
-        // gives the client a periodic catch-up reload if a push was missed.
+        // A quiet board still gets a frame so a half-open stream is noticed and proxies keep the
+        // connection; it is marked as liveness, and clients do not read the board for it.
         const events = withHeartbeats(context, (signal) =>
           deps.boardEvents.follow(spaceId, signal),
         );
         for await (const next of events) {
-          yield next === HEARTBEAT ? { spaceId, createdAt: new Date().toISOString() } : next;
+          yield next === HEARTBEAT
+            ? { spaceId, createdAt: new Date().toISOString(), heartbeat: true }
+            : next;
         }
       }),
     },

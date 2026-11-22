@@ -106,7 +106,10 @@ beforeEach(() => {
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 });
 
-async function renderBoard(stream?: AsyncIterable<{ ticketId?: string }>, refusal?: unknown) {
+async function renderBoard(
+  stream?: AsyncIterable<{ ticketId?: string; heartbeat?: boolean }>,
+  refusal?: unknown,
+) {
   api.boards.subscribe.mockReset();
   api.boards.subscribe.mockResolvedValue(
     stream ?? {
@@ -275,7 +278,7 @@ it("creates a ticket without a status picker", async () => {
 });
 
 function liveStream() {
-  let pending: Deferred<IteratorResult<{ ticketId?: string }>> | undefined;
+  let pending: Deferred<IteratorResult<{ ticketId?: string; heartbeat?: boolean }>> | undefined;
   return {
     stream: {
       [Symbol.asyncIterator]: () => ({
@@ -286,6 +289,7 @@ function liveStream() {
       }),
     },
     event: (ticketId: string) => pending?.resolve({ done: false, value: { ticketId } }),
+    heartbeat: () => pending?.resolve({ done: false, value: { heartbeat: true } }),
     end: () => pending?.resolve({ done: true, value: undefined }),
     error: () => pending?.reject(new Error("Disconnected")),
   };
@@ -338,6 +342,25 @@ it("saves only edits and refreshes comments for the open ticket", async () => {
         .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })),
     );
     expect(api.tickets.update).toHaveBeenCalledWith({ id: "ticket-1", title: "Ship today" });
+  } finally {
+    await page.cleanup();
+  }
+});
+
+it("does not read the board for the stream's liveness frame", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  api.bots.list.mockResolvedValue([bot("bot-1", "Helper")]);
+  api.tickets.list.mockReset().mockResolvedValue({ tickets: [] });
+  const live = liveStream();
+  const page = await renderBoard(live.stream);
+  try {
+    const calls = api.tickets.list.mock.calls.length;
+    await act(async () => live.heartbeat());
+    await settle();
+    expect(api.tickets.list).toHaveBeenCalledTimes(calls);
+    await act(async () => live.event("ticket-1"));
+    await settle();
+    expect(api.tickets.list).toHaveBeenCalledTimes(calls + 1);
   } finally {
     await page.cleanup();
   }

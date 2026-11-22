@@ -17,8 +17,9 @@ export async function notifyCommittedEvent(
   threadId: string,
   seq: number,
   firstResponseRunId?: string,
+  type?: string,
 ): Promise<void> {
-  await notifyRealtime(realtime, threadId, seq);
+  await notifyRealtime(realtime, threadId, seq, type);
   if (!firstResponseRunId) return;
   getLogger().info("run.first_response", {
     "run.id": firstResponseRunId,
@@ -26,12 +27,20 @@ export async function notifyCommittedEvent(
   });
 }
 
+/**
+ * Tells this thread's followers that its events moved. `type` lets a follower that watches many
+ * threads, such as the roster, wake only for the events it shows; a publisher that names none
+ * wakes every follower.
+ */
 export async function notifyRealtime(
   realtime: RealtimeFanout | undefined,
   threadId: string,
   cursor: number,
+  type?: string,
 ): Promise<void> {
-  await realtime?.publish(threadTopic(threadId), JSON.stringify({ cursor })).catch(() => undefined);
+  await realtime
+    ?.publish(threadTopic(threadId), JSON.stringify({ cursor, ...(type ? { type } : {}) }))
+    .catch(() => undefined);
 }
 
 export async function eventsAfter(

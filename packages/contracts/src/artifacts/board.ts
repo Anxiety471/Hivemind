@@ -279,5 +279,7 @@ export const BoardEventSchema = z.object({
   boardId: Id.optional(),
   ticketId: Id.optional(),
   createdAt: z.string(),
+  /** Liveness only: the stream's periodic frame on a quiet board, which changes nothing. */
+  heartbeat: z.boolean().optional(),
 });
 export type BoardEvent = z.infer<typeof BoardEventSchema>;

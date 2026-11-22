@@ -124,15 +124,27 @@ describe("the chat a space reopens with", () => {
 });
 
 describe("the shared query client", () => {
-  it("refreshes a screen every time it opens, even right after a read", async () => {
-    const queryFn = vi.fn(async () => "value");
-    const options = { queryKey: ["screen-open-test"], queryFn };
-    for (const _open of [1, 2]) {
-      const observer = new QueryObserver(queryClient, options);
-      const unsubscribe = observer.subscribe(() => undefined);
-      await vi.waitFor(() => expect(observer.getCurrentResult().isFetching).toBe(false));
-      unsubscribe();
+  it("reopens a screen from data it read recently, and reads once that is stale", async () => {
+    vi.useFakeTimers();
+    try {
+      const queryFn = vi.fn(async () => "value");
+      const options = { queryKey: ["screen-open-test"], queryFn };
+      const open = async () => {
+        const observer = new QueryObserver(queryClient, options);
+        const unsubscribe = observer.subscribe(() => undefined);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(observer.getCurrentResult().isFetching).toBe(false);
+        unsubscribe();
+      };
+      await open();
+      // Opening the same screen again within the freshness window paints the cached data.
+      await open();
+      expect(queryFn).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(31_000);
+      await open();
+      expect(queryFn).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
     }
-    expect(queryFn).toHaveBeenCalledTimes(2);
   });
 });

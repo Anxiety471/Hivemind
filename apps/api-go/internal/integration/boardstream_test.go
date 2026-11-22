@@ -131,9 +131,9 @@ func TestBoardStreamDeliversSignalsHeartbeatsAndEndsWhenTheSessionDoes(t *testin
 		break
 	}
 
-	// After a quiet spell the stream sends a frame of its own.
+	// After a quiet spell the stream sends a frame of its own, marked so clients read nothing.
 	beat := nextMessage(t, frames)
-	if beat["spaceId"] != s.Space1 || beat["ticketId"] != nil {
+	if beat["spaceId"] != s.Space1 || beat["ticketId"] != nil || beat["heartbeat"] != true {
 		t.Fatalf("heartbeat = %v", beat)
 	}
 

@@ -1,5 +1,11 @@
+/** A read that event-driven callers share; the promise it returns covers the read they joined. */
+export interface RefreshCoalescer {
+  invalidate(): Promise<void>;
+  dispose(): void;
+}
+
 /** Share event-driven reads while retaining invalidations that arrive during a read. */
-export function createRefreshCoalescer(refresh: () => Promise<unknown>) {
+export function createRefreshCoalescer(refresh: () => Promise<unknown>): RefreshCoalescer {
   let pending: Promise<void> | null = null;
   let dirty = false;
   let disposed = false;

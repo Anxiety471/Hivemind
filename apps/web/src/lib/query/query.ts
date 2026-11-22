@@ -18,9 +18,9 @@ export const queryClient = new QueryClient({
     queries: {
       staleTime: 30_000,
       gcTime: 30 * 60_000,
-      // Screens refresh every time they open, even over a recent read; live updates and
-      // polling keep open ones current.
-      refetchOnMount: "always",
+      // A screen paints what it last saw and reads again only once that is stale; a re-read on
+      // every open would undo the freshness window for a user moving between chats.
+      refetchOnMount: true,
       refetchOnWindowFocus: false,
       retry: (failures, error) => failures < 1 && isRetryableError(error),
       retryDelay: (_failures, error) => retryDelayMs(error, 1_000),

@@ -1,5 +1,14 @@
 import type { RealtimeFanout } from "@rakazo/adapter-kit";
 import type { BoardEvent } from "@rakazo/contracts";
+import { bestEffort } from "@rakazo/logging";
+import { retryWhileDatabaseUnavailable } from "../database/database-outage.js";
+
+/**
+ * A board signal is the only thing that makes an open board or rail read its tickets, so a
+ * publish rides out a short database outage in the background, without holding up the change.
+ * Past that it gives up; apps catch up when their stream reopens.
+ */
+const PUBLISH_RETRY_MS = 15_000;
 
 /** A transient "this board changed" signal. Clients refetch the list on any frame. */
 export interface BoardEvents {
@@ -14,16 +23,24 @@ export function boardEventTopic(spaceId: string): string {
 /** Without a realtime fanout the notifier does nothing and the stream stays open and empty. */
 export function createBoardEvents(realtime?: RealtimeFanout): BoardEvents {
   return {
-    async notify(spaceId, change) {
+    notify(spaceId, change) {
+      if (!realtime) return Promise.resolve();
       const payload: BoardEvent = {
         spaceId,
         ...(change?.boardId ? { boardId: change.boardId } : {}),
         ...(change?.ticketId ? { ticketId: change.ticketId } : {}),
         createdAt: new Date().toISOString(),
       };
-      await realtime
-        ?.publish(boardEventTopic(spaceId), JSON.stringify(payload))
-        .catch(() => undefined);
+      const topic = boardEventTopic(spaceId);
+      const body = JSON.stringify(payload);
+      void bestEffort(
+        "publish the board signal",
+        retryWhileDatabaseUnavailable(() => realtime.publish(topic, body), {
+          source: "board signal",
+          waitMs: PUBLISH_RETRY_MS,
+        }),
+      );
+      return Promise.resolve();
     },
     async *follow(spaceId, signal) {
       const queue: BoardEvent[] = [];

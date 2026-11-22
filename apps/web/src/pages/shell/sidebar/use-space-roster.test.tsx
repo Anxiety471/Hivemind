@@ -69,6 +69,8 @@ let shell: {
 let spaceLoads: Array<{ finish: () => void; fail: () => void }>;
 /** While set, roster re-reads wait for it before answering. */
 let rosterHeld: Promise<void> | undefined;
+/** How many roster reads the server saw. */
+let rosterReads = 0;
 /** The page other than the shell that is on screen. */
 let pageShown: string | undefined;
 
@@ -96,6 +98,7 @@ function rpcOf(spaceId: string) {
   return {
     spaces: {
       list: async () => {
+        rosterReads += 1;
         if (rosterHeld) await rosterHeld;
         const { bots, groups, botSections } = bootstrapOf(spaceId);
         return { current: { bots, groups, botSections }, spaces: [] };
@@ -303,6 +306,7 @@ beforeEach(() => {
   };
   spaceLoads = [];
   rosterHeld = undefined;
+  rosterReads = 0;
   pageShown = undefined;
   state.take.mockImplementation(async (botId?: string, groupId?: string) =>
     bootstrapOf(state.space, botId, groupId),
@@ -446,6 +450,21 @@ describe("a roster re-read while the shell opens a chat in another space", () =>
     await finishLoadingSpace(1);
     expect(state.space).toBe("club");
     expect(window.location.pathname).toBe("/app/chess");
+  });
+});
+
+describe("a burst of roster triggers", () => {
+  it("shares one read and reads once more for what arrived during it", async () => {
+    await open("/app/home");
+    const before = rosterReads;
+    const answerRoster = holdRoster();
+    for (const _ of [1, 2, 3, 4]) await rosterSignal();
+    expect(rosterReads - before).toBe(1);
+    await act(async () => {
+      answerRoster();
+      await vi.advanceTimersByTimeAsync(50);
+    });
+    expect(rosterReads - before).toBe(2);
   });
 });
 

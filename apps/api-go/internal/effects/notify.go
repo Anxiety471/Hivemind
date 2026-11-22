@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
+
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
 )
 
@@ -24,7 +26,9 @@ type Notifier struct {
 	db     *db.DB
 	logger *slog.Logger
 	sleep  func(time.Duration)
-	wait   sync.WaitGroup
+	// execute runs the one statement a signal is published with; tests replace it to fail.
+	execute func(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	wait    sync.WaitGroup
 }
 
 // NewNotifier returns a notifier publishing through database.
@@ -32,7 +36,7 @@ func NewNotifier(database *db.DB, logger *slog.Logger) *Notifier {
 	if logger == nil {
 		logger = slog.New(slog.NewJSONHandler(discard{}, nil))
 	}
-	return &Notifier{db: database, logger: logger, sleep: time.Sleep}
+	return &Notifier{db: database, logger: logger, sleep: time.Sleep, execute: database.Pool.Exec}
 }
 
 // Wait blocks until every signal started so far has been delivered or dropped.
@@ -89,10 +93,14 @@ type BoardEvent struct {
 	BoardID   string `json:"boardId,omitempty"`
 	TicketID  string `json:"ticketId,omitempty"`
 	CreatedAt string `json:"createdAt"`
+	// Heartbeat marks the stream's quiet-spell frame: liveness only, so no client reads for it.
+	Heartbeat bool `json:"heartbeat,omitempty"`
 }
 
-// PublishBoard is BoardEvents.notify (packages/db/src/board-live.ts:19-31): one frame per
-// change, sent once (createBoardEvents swallows the publish failure), never retried.
+// PublishBoard is BoardEvents.notify (packages/db/src/artifacts/board-live.ts): one frame per
+// change. A board signal is the only thing that makes an open board read its tickets, so like
+// the roster and Space signals it rides out a short database outage (15s) and is logged and
+// dropped past that; apps catch up when their stream reopens.
 func (n *Notifier) PublishBoard(spaceID, boardID, ticketID string) {
 	event := BoardEvent{
 		SpaceID: spaceID, BoardID: boardID, TicketID: ticketID,
@@ -102,20 +110,7 @@ func (n *Notifier) PublishBoard(spaceID, boardID, ticketID string) {
 	if err != nil {
 		return
 	}
-	body, err := Envelope("board:"+spaceID, string(payload))
-	if err != nil {
-		n.logger.Warn("realtime signal not published", "topic", "board:"+spaceID, "error", err)
-		return
-	}
-	n.wait.Add(1)
-	go func() {
-		defer n.wait.Done()
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if _, err := n.db.Pool.Exec(ctx, "SELECT pg_notify($1, $2)", realtimeChannel, string(body)); err != nil {
-			n.logger.Warn("board signal not published", "topic", "board:"+spaceID, "error", err)
-		}
-	}()
+	n.publish("board:"+spaceID, string(payload))
 }
 
 // PublishOrganization is publishOrganizationChange (packages/db/src/organization-changes.ts:20-45):
@@ -193,7 +188,7 @@ func (n *Notifier) send(ctx context.Context, topic, payload string, retry bool) 
 	deadline := time.Now().Add(publishRetryAfter)
 	for attempt := 0; ; attempt++ {
 		runCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		_, err := n.db.Pool.Exec(runCtx, "SELECT pg_notify($1, $2)", realtimeChannel, string(body))
+		_, err := n.execute(runCtx, "SELECT pg_notify($1, $2)", realtimeChannel, string(body))
 		cancel()
 		if err == nil {
 			return
