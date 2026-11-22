@@ -43,7 +43,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -z "$MOBILE_API_URL" ]]; then
-            echo "::notice title=Self-built Android APK skipped::Set the MOBILE_API_URL repository variable to your server's HTTPS URL to build and publish an APK."
+            echo "::notice title=Self-built Android APK skipped::Set the MOBILE_API_URL repository variable to your server's HTTPS URL to build and deliver an APK."
             echo "build=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -63,8 +63,6 @@ jobs:
     if: needs.configure.outputs.build == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
-    permissions:
-      contents: write
     env:
       CI: "1"
       EXPO_PUBLIC_API_URL: ${{ vars.MOBILE_API_URL }}
