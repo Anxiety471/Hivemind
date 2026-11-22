@@ -175,6 +175,10 @@ func Create(ctx context.Context, tx Execer, input CreateInput) (Created, error) 
 		taskStatus = StatusQueued
 	}
 	at := now(input.Now)
+	var wakeAt any
+	if input.WakeAt != nil {
+		wakeAt = now(*input.WakeAt)
+	}
 	taskID, runID := effects.NewID(), effects.NewID()
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO tasks (id, "spaceId", "botId", "threadId", "userId", prompt, status, "createdAt", "updatedAt")
@@ -200,7 +204,7 @@ func Create(ctx context.Context, tx Execer, input CreateInput) (Created, error) 
 		runID, input.SpaceID, input.BotID, input.ThreadID, taskID, input.UserID, status,
 		input.Trigger, provider, model, thinking, pinned, input.GroupReplyOptional,
 		input.ClientNonce, input.SourceMessageID, input.RoutineID, input.DelegatedFromRunID,
-		input.RetryOfRunID, input.WakeAt, at); err != nil {
+		input.RetryOfRunID, wakeAt, at); err != nil {
 		return Created{}, fmt.Errorf("insert run: %w", err)
 	}
 	return Created{TaskID: taskID, RunID: runID}, nil
