@@ -8381,7 +8381,12 @@ async function databaseState(seeded: ReturnType<typeof ids>, procedure?: string)
 await system.spaceInvite.deleteMany({});
 
 let failures = 0;
+let caseIndex = 0;
 for (const testCase of cases) {
+  const position = caseIndex++;
+  // CASE_FROM=<n> resumes a run at a case index after a timeout; cases keep their order.
+  // biome-ignore lint/suspicious/noUndeclaredEnvVars: manual harness, not a turbo task
+  if (process.env.CASE_FROM && position < Number(process.env.CASE_FROM)) continue;
   // CASE_FILTER=<regexp> reruns only the matching cases.
   // biome-ignore lint/suspicious/noUndeclaredEnvVars: manual harness, not a turbo task
   if (process.env.CASE_FILTER && !new RegExp(process.env.CASE_FILTER).test(testCase.name)) continue;

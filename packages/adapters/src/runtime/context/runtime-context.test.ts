@@ -1101,4 +1101,204 @@ describe("runtime context policy", () => {
     expect(seventh.prepared.messages).toHaveLength(11);
     expect(String(seventh.prepared.messages[0]!.content)).toContain("Turn message 26:");
   });
+
+  it("preserves a 10-20 chunked prefix for retrieval models without cache retention, unless caching is disabled", () => {
+    const tracker = new ContextCacheTracker(() => 1000);
+    const makeTurn = (threadId: string, count: number, prompt: string, retentionMode?: "none") => {
+      const built = fixture(count);
+      built.request.threadId = threadId;
+      built.request.prompt = prompt;
+      if (retentionMode)
+        built.request.model.cacheCapabilities = { scope: "connection", retentionMode };
+      enableHistoryRetrieval(built.request);
+      for (let index = 0; index < count; index++) {
+        const text = `Retrieval message ${index}`;
+        built.request.history[index]!.content = text;
+        (built.context.messages[index] as { content: string }).content = text;
+      }
+      built.context.messages[count] = { role: "user", content: prompt, timestamp: 100 + count };
+      return built;
+    };
+    const runTurn = (threadId: string, count: number, prompt: string, retentionMode?: "none") => {
+      const { request, context } = makeTurn(threadId, count, prompt, retentionMode);
+      const policy = createRuntimeContextPolicy(request, undefined, { cacheTracker: tracker });
+      const prepared = policy.prepareContext(context, model);
+      policy.onUsage({ inputTokens: 800, outputTokens: 20, cacheReadTokens: 0 });
+      return { prepared, decision: policy.getDecision()! };
+    };
+
+    const threadId = "retrieval-chunked-window-thread";
+    const first = runTurn(threadId, 25, "Prompt 25");
+    expect(first.decision.strategy).toBe("retrieval");
+    expect(first.prepared.messages.slice(0, -1).map((m) => m.content)).toEqual(
+      Array.from({ length: 10 }, (_, index) => `Retrieval message ${15 + index}`),
+    );
+
+    const second = runTurn(threadId, 27, "Prompt 27");
+    expect(second.decision.predictedCache).toBe("unknown");
+    expect(second.prepared.messages.slice(0, -1).map((m) => m.content)).toEqual(
+      Array.from({ length: 12 }, (_, index) => `Retrieval message ${15 + index}`),
+    );
+
+    const third = runTurn(threadId, 35, "Prompt 35");
+    expect(third.decision.predictedCache).toBe("unknown");
+    expect(third.prepared.messages.slice(0, -1).map((m) => m.content)).toEqual(
+      Array.from({ length: 20 }, (_, index) => `Retrieval message ${15 + index}`),
+    );
+
+    const fourth = runTurn(threadId, 36, "Prompt 36");
+    expect(fourth.prepared.messages.slice(0, -1).map((m) => m.content)).toEqual(
+      Array.from({ length: 10 }, (_, index) => `Retrieval message ${26 + index}`),
+    );
+
+    // Explicitly disabled caching does not hold onto an older chunk prefix.
+    const uncachedThread = "retrieval-nocache-thread";
+    runTurn(uncachedThread, 25, "Prompt 25", "none");
+    const uncachedNext = runTurn(uncachedThread, 27, "Prompt 27", "none");
+    expect(uncachedNext.prepared.messages.slice(0, -1).map((m) => m.content)).toEqual(
+      Array.from({ length: 10 }, (_, index) => `Retrieval message ${17 + index}`),
+    );
+  });
+
+  it("keeps growing the 10-20 cache-aware projection after a thread crosses 20 messages within retention", () => {
+    let now = 1000;
+    const tracker = new ContextCacheTracker(() => now);
+    const threadId = "organic-cross-20-cache-thread";
+    const runTurn = (count: number, prompt: string) => {
+      const built = fixture(count);
+      built.request.threadId = threadId;
+      built.request.prompt = prompt;
+      built.request.model.cacheCapabilities = {
+        scope: "connection",
+        retentionMs: 300_000,
+        minimumTokens: 1,
+      };
+      enableHistoryRetrieval(built.request);
+      for (let index = 0; index < count; index++) {
+        const text = `Organic ${index}: ${"context ".repeat(20)}`;
+        built.request.history[index]!.content = text;
+        (built.context.messages[index] as { content: string }).content = text;
+      }
+      built.context.messages[count] = { role: "user", content: prompt, timestamp: 100 + count };
+      const policy = createRuntimeContextPolicy(built.request, undefined, {
+        cacheTracker: tracker,
+      });
+      const prepared = policy.prepareContext(built.context, model);
+      policy.onUsage({ inputTokens: 1000, outputTokens: 20, cacheReadTokens: 500 });
+      return { prepared, decision: policy.getDecision()! };
+    };
+
+    // Under 20 messages: full prefix [0..18] becomes warm in the cache tracker.
+    const under20 = runTurn(19, "Prompt 19");
+    expect(under20.prepared.messages).toHaveLength(20);
+
+    // Crossing 20 rolls to 10 stored messages [11..20].
+    now += 1000;
+    const crossed = runTurn(21, "Prompt 21");
+    expect(crossed.prepared.messages).toHaveLength(11);
+    expect(String(crossed.prepared.messages[0]!.content)).toContain("Organic 11:");
+
+    // Even while [0..18] is still warm inside retentionMs, the next turn preserves [11..22].
+    now += 1000;
+    const continued = runTurn(23, "Prompt 23");
+    expect(continued.decision.predictedCache).toBe("likely-warm");
+    expect(continued.prepared.messages).toHaveLength(13);
+    expect(String(continued.prepared.messages[0]!.content)).toContain("Organic 11:");
+
+    // After retention expires, it resets cleanly to the latest 10 [15..24].
+    now += 350_000;
+    const expired = runTurn(25, "Prompt 25");
+    expect(expired.decision.predictedCache).toBe("likely-cold");
+    expect(expired.prepared.messages).toHaveLength(11);
+    expect(String(expired.prepared.messages[0]!.content)).toContain("Organic 15:");
+  });
+
+  it("preserves cross-turn 10-20 projection after a turn that makes tool calls", () => {
+    const tracker = new ContextCacheTracker(() => 1000);
+    const threadId = "multi-tool-turn-projection-thread";
+    const firstTurn = fixture(25);
+    firstTurn.request.threadId = threadId;
+    enableHistoryRetrieval(firstTurn.request);
+    firstTurn.request.history.forEach((item, index) => {
+      item.content = `Turn message ${index}`;
+      (firstTurn.context.messages[index] as { content: string }).content = item.content;
+    });
+    const policy1 = createRuntimeContextPolicy(firstTurn.request, undefined, {
+      cacheTracker: tracker,
+    });
+    const call1 = policy1.prepareContext(firstTurn.context, model);
+    expect(call1.messages).toHaveLength(11);
+    policy1.onUsage({ inputTokens: 800, outputTokens: 20, cacheReadTokens: 0 });
+
+    firstTurn.context.messages.push(
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "tool-1", name: "list_history", arguments: {} }],
+        timestamp: 101,
+      } as unknown as Message,
+      {
+        role: "toolResult",
+        toolCallId: "tool-1",
+        toolName: "list_history",
+        content: [{ type: "text", text: '{"untrusted":true,"messages":[]}' }],
+        isError: false,
+        timestamp: 102,
+      } as Message,
+    );
+    const call2 = policy1.prepareContext(firstTurn.context, model);
+    expect(call2.messages).toHaveLength(13);
+    policy1.onUsage({ inputTokens: 900, outputTokens: 20, cacheReadTokens: 700 });
+
+    const secondTurn = fixture(27);
+    secondTurn.request.threadId = threadId;
+    enableHistoryRetrieval(secondTurn.request);
+    secondTurn.request.history.forEach((item, index) => {
+      item.content = `Turn message ${index}`;
+      (secondTurn.context.messages[index] as { content: string }).content = item.content;
+    });
+    const policy2 = createRuntimeContextPolicy(secondTurn.request, undefined, {
+      cacheTracker: tracker,
+    });
+    const nextCall = policy2.prepareContext(secondTurn.context, model);
+    expect(nextCall.messages).toHaveLength(13);
+    expect(nextCall.messages.slice(0, -1).map((m) => m.content)).toEqual(
+      Array.from({ length: 12 }, (_, index) => `Turn message ${15 + index}`),
+    );
+  });
+
+  it("matches projected window messages by rakazoMessageId and position when content duplicates exist", () => {
+    const tracker = new ContextCacheTracker(() => 1000);
+    const threadId = "duplicate-content-projection-thread";
+    const buildWithDuplicates = (count: number) => {
+      const built = fixture(count);
+      built.request.threadId = threadId;
+      enableHistoryRetrieval(built.request);
+      for (let index = 0; index < count; index++) {
+        const text = index === 5 || index === 15 || index === 24 ? "ok" : `Unique message ${index}`;
+        built.request.history[index]!.content = text;
+        (built.context.messages[index] as { content: string }).content = text;
+      }
+      return built;
+    };
+
+    const first = buildWithDuplicates(25);
+    const policy1 = createRuntimeContextPolicy(first.request, undefined, {
+      cacheTracker: tracker,
+    });
+    const call1 = policy1.prepareContext(first.context, model);
+    expect(call1.messages).toHaveLength(11);
+    policy1.onUsage({ inputTokens: 800, outputTokens: 20, cacheReadTokens: 0 });
+
+    const second = buildWithDuplicates(27);
+    const policy2 = createRuntimeContextPolicy(second.request, undefined, {
+      cacheTracker: tracker,
+    });
+    const call2 = policy2.prepareContext(second.context, model);
+    expect(call2.messages).toHaveLength(13);
+    expect(
+      call2.messages
+        .slice(0, -1)
+        .map((message) => (message as Message & { rakazoMessageId?: string }).rakazoMessageId),
+    ).toEqual(Array.from({ length: 12 }, (_, index) => `message-${15 + index}`));
+  });
 });

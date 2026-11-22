@@ -598,4 +598,28 @@ describe("history search index", () => {
       "my_chats is available only in direct human app runs",
     );
   });
+
+  it("does not apply current-thread searchBeforeSeq when listing a different thread", async () => {
+    const { mock, prisma } = db();
+    mock.$queryRaw.mockResolvedValue([row(30, "Other chat reply")]);
+    const searchAt = new Date("2026-01-02T00:00:00Z");
+    await listHistory(
+      prisma,
+      { ...scope, allowMyChats: true, searchBeforeSeq: 5, searchAt },
+      { threadId: "other-thread", limit: 2 },
+    );
+    expect(sql(mock).sql).not.toContain("AND m.seq <");
+    expect(sql(mock).values).not.toContain(5);
+    expect(sql(mock).values).toContain("other-thread");
+    expect(sql(mock).values).toContain(searchAt);
+
+    mock.$queryRaw.mockResolvedValue([row(30, "Other chat reply")]);
+    await listHistory(
+      prisma,
+      { ...scope, allowMyChats: true, searchBeforeSeq: 5, searchAt },
+      { threadId: "other-thread", beforeSeq: 40, limit: 2 },
+    );
+    expect(sql(mock, 1).values).toContain(40);
+    expect(sql(mock, 1).values).not.toContain(5);
+  });
 });
