@@ -108,6 +108,17 @@ type ModelPin struct {
 	Pinned   bool
 }
 
+// RoutinePin is routineRunModelPin (packages/adapters/src/models/model-selection.ts:1054):
+// the pin a routine's run starts with. {} when the routine follows the bot, so
+// nil here; otherwise modelPinned is always true, even when the thinking level
+// is NULL. An empty provider or model is absent, as the falsy TS check treats it.
+func RoutinePin(provider, model, thinking *string) *ModelPin {
+	if provider == nil || model == nil || *provider == "" || *model == "" {
+		return nil
+	}
+	return &ModelPin{Provider: *provider, Model: *model, Thinking: thinking, Pinned: true}
+}
+
 // CreateInput is one task + run pair as a procedure commits it. Fields with no
 // value are NULL/default exactly as the Prisma create omits them.
 type CreateInput struct {

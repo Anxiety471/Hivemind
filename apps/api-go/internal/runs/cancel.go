@@ -344,14 +344,22 @@ func (c Canceller) cancelConversationLocked(
 	if len(notes) > 0 && target.WriteNote == nil {
 		return ConversationCancel{}, ErrNotesNotWritten
 	}
+	lastSeq := int32(0)
+	if result.EventSeq != nil {
+		lastSeq = *result.EventSeq
+	}
 	for _, note := range notes {
 		seq, err := target.WriteNote(ctx, tx, note)
 		if err != nil {
 			return ConversationCancel{}, err
 		}
-		if seq <= 0 {
-			return ConversationCancel{}, fmt.Errorf("runs: WriteNote returned no event seq for %q", note.Text)
+		// The cursor is the last committed event: a note appended below the
+		// run.cancelled events would move subscribers' cursor backwards.
+		if seq <= lastSeq {
+			return ConversationCancel{}, fmt.Errorf(
+				"runs: WriteNote returned seq %d at or below the last event %d", seq, lastSeq)
 		}
+		lastSeq = seq
 		value := seq
 		result.EventSeq = &value
 	}
@@ -640,15 +648,22 @@ type ConversationTarget struct {
 	BotIDs          []string
 	HelperMessageID *string
 	// Note is the stop-by-message note: added once when a cancelled run is not a
-	// named routine (thread-stop.ts:145-152). Only its BotID is read: the text
-	// is StoppedByMessageNote, as TypeScript's caller only supplies the bot.
-	Note *Note
+	// named routine (thread-stop.ts:145-152). Only its bot is read: the text is
+	// StoppedByMessageNote, as TypeScript's caller only supplies the bot.
+	Note *StopNote
 	// WriteNote creates each note as a system message in this same transaction
 	// (the thread message counter and a thread.message.created event, as
 	// createThreadMessageInTransaction + appendEventInTransaction do) and returns
 	// that event's seq. It is required whenever a note is due: the cancel writes
 	// the notes itself, in TS order, so EventSeq can only end at their last event.
 	WriteNote func(ctx context.Context, tx pgx.Tx, note Note) (int32, error)
+}
+
+// StopNote is the caller's share of the stop-by-message note: the bot the note
+// speaks for. The text is StoppedByMessageNote, as in TypeScript, where the
+// caller's note object contributes only its botId (thread-stop.ts:149-152).
+type StopNote struct {
+	BotID string
 }
 
 // Note is one system message the cancel creates in this transaction: a routine
@@ -693,7 +708,7 @@ type Computer struct {
 }
 
 // conversationNotes is the routine/stop note list in thread-stop order.
-func conversationNotes(cancelled []Cancelled, note *Note) []Note {
+func conversationNotes(cancelled []Cancelled, note *StopNote) []Note {
 	var notes []Note
 	seen := map[string]bool{}
 	unnamed := false

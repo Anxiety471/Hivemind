@@ -262,7 +262,7 @@ func handle(ctx context.Context, database *db.DB, ring *contentcrypto.KeyRing, n
 			if in.NoteBotID != "" {
 				// TS appends the same stop note whenever a non-routine was cancelled
 				// (thread-stop.ts:30,151-152); only its bot varies.
-				target.Note = &runs.Note{BotID: in.NoteBotID, Text: runs.StoppedByMessageNote}
+				target.Note = &runs.StopNote{BotID: in.NoteBotID}
 			}
 			spaceID := in.SpaceID
 			if spaceID == "" {

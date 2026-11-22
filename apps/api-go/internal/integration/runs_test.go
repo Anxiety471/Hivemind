@@ -597,7 +597,7 @@ func TestCancelConversationWritesItsNotesOrRefuses(t *testing.T) {
 		SpaceID:  fixture.spaceID,
 		ThreadID: fixture.threadID,
 		BotIDs:   []string{fixture.botID},
-		Note:     &runs.Note{BotID: fixture.botID, Text: runs.StoppedByMessageNote},
+		Note:     &runs.StopNote{BotID: fixture.botID},
 	}
 
 	// A note is due and there is no writer: the cancel refuses rather than hand

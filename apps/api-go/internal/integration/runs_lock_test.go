@@ -52,7 +52,7 @@ func TestCancelConversationLockTimeoutIsAGeneric500(t *testing.T) {
 		SpaceID:  fixture.spaceID,
 		ThreadID: fixture.threadID,
 		BotIDs:   []string{fixture.botID},
-		Note:     &runs.Note{BotID: fixture.botID, Text: runs.StoppedByMessageNote},
+		Note:     &runs.StopNote{BotID: fixture.botID},
 		WriteNote: func(ctx context.Context, tx pgx.Tx, note runs.Note) (int32, error) {
 			t.Error("a cancel that never got the lock must not write a note")
 			return 0, nil
