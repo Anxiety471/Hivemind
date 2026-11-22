@@ -24,9 +24,11 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/externalconversations"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/groups"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/mcpassignments"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/mcpservers"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/memory"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/memorycfg"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/messaging"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/modelcredentials"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/models"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/onboarding"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/pages"
@@ -41,6 +43,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/trustedlinksites"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/usage"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/vaultactivity"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/vaultitems"
 )
 
 // All returns every locally served procedure.
@@ -320,6 +323,13 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 			},
 		},
 		{
+			Name:     "mcp.servers.list",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return mcpservers.List(ctx, database, deployment, actor, input)
+			},
+		},
+		{
 			Name:     "mcp.assignments.list",
 			ReadOnly: true,
 			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
@@ -331,6 +341,13 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 			ReadOnly: true,
 			Serve: func(ctx context.Context, actor db.Actor, _ orpc.Input) (any, *orpc.Error) {
 				return models.Backups(ctx, database, actor)
+			},
+		},
+		{
+			Name:     "models.credentials",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return modelcredentials.List(ctx, database, deployment, actor, input)
 			},
 		},
 		{
@@ -673,6 +690,40 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 			},
 		},
 		{
+			Name:     "vault.list",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return vaultitems.List(ctx, database, deployment, actor, input)
+			},
+		},
+		{
+			Name:     "botSecrets.list",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return vaultitems.ListBotSecrets(ctx, database, deployment, actor, input)
+			},
+		},
+		{
+			Name: "bots.rotateWebhookSecret",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return bots.RotateWebhookSecret(ctx, database, deployment, actor, input)
+			},
+		},
+		{
+			Name:        "bots.revealWebhookSecret",
+			ReadOnly:    true,
+			SelfAudited: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return bots.RevealWebhookSecret(ctx, database, deployment, actor, input)
+			},
+		},
+		{
+			Name: "pages.remove",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return pages.Remove(ctx, database, deployment, actor, input)
+			},
+		},
+		{
 			Name: "computer.dismissUpdate",
 			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
 				return computer.DismissUpdate(ctx, database, deployment, actor, input)
@@ -708,4 +759,20 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 		audit = effects.NewRecorder(database, slog.Default())
 	}
 	return append(procedures, membership(database, deployment, audit)...)
+}
+
+// VaultProcedures are the procedures that need the credential store. The gateway reads
+// ENCRYPTION_KEY at startup only when one of them is routed to shadow or go, so a proxy-only
+// table still starts without it (Lane F), and a vault route fails loudly rather than sealing
+// under a key TypeScript would not read.
+func VaultProcedures() []string {
+	return []string{
+		"bots.rotateWebhookSecret",
+		"bots.revealWebhookSecret",
+		"pages.remove",
+		"vault.list",
+		"botSecrets.list",
+		"mcp.servers.list",
+		"models.credentials",
+	}
 }

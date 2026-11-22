@@ -50,13 +50,13 @@ var reservedNames = map[string]bool{
 // reservedPrefixes is RESERVED_COMMAND_VARIABLE_PREFIXES.
 var reservedPrefixes = []string{"LD_", "DYLD_", "RAKAZO_", "GIT_CONFIG_", "NPM_CONFIG_"}
 
-// commandVariableName is commandVariableName: `netbird-setup-key` → `NETBIRD_SETUP_KEY`.
-func commandVariableName(credentialName string) string {
+// CommandVariableName is commandVariableName: `netbird-setup-key` → `NETBIRD_SETUP_KEY`.
+func CommandVariableName(credentialName string) string {
 	return strings.ReplaceAll(upper.String(credentialName), "-", "_")
 }
 
-// commandVariableProblem is commandVariableProblem: why a variable cannot be exported.
-func commandVariableProblem(variable string) string {
+// CommandVariableProblem is commandVariableProblem: why a variable cannot be exported.
+func CommandVariableProblem(variable string) string {
 	if !namePattern.MatchString(variable) {
 		return "invalid"
 	}
@@ -125,8 +125,8 @@ func List(ctx context.Context, database *db.DB, actor db.Actor) (any, *orpc.Erro
 			if authType(auth) != "command" {
 				continue
 			}
-			variable := commandVariableName(name)
-			if commandVariableProblem(variable) != "" {
+			variable := CommandVariableName(name)
+			if CommandVariableProblem(variable) != "" {
 				continue
 			}
 			secrets = append(secrets, Secret{

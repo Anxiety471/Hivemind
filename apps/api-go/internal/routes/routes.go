@@ -137,6 +137,16 @@ func (s *Store) ModeFor(path string) Mode {
 	return mode
 }
 
+// ProcedureMode answers the mode of a dotted procedure name ("vault.remove"),
+// for startup decisions that run before any request path exists.
+func (s *Store) ProcedureMode(name string) Mode {
+	config := s.current.Load()
+	if route, ok := config.Routes[name]; ok {
+		return route.Mode
+	}
+	return config.Default
+}
+
 // Lookup answers the mode and whether the procedure is declared read-only.
 func (s *Store) Lookup(path string) (Mode, bool) {
 	config := s.current.Load()

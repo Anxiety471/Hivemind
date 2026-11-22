@@ -73,6 +73,7 @@ var auditedProcedures = map[string]audited{
 	// approvalRules.remove is not served: it records the caller's own `id`, free text.
 	"approvalRules.set":         {Type: "approval.policy.changed", Fields: []string{"effect", "matchKind"}},
 	"spaceSettings.setOverride": {Type: "approval.policy.changed", Fields: []string{"setting", "enabled"}},
+	"bots.rotateWebhookSecret":  {Type: "credential.changed", Kind: "webhook", Fields: []string{"botId"}},
 }
 
 // SecurityEventFor is procedureSecurityEvent: the event for a procedure that just

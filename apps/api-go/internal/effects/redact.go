@@ -27,7 +27,13 @@ var redactorWords = []string{
 // knownSafe are exact values the gate's word list would refuse that the TypeScript
 // redactor was run on and leaves unchanged: a space setting's name, which an enum
 // bounds. A contract case records each, so a redactor change shows as a mismatch.
-var knownSafe = map[string]bool{"credentials": true}
+var knownSafe = map[string]bool{
+	"credentials": true,
+	// The two webhook procedures' own names contain "Secret"; the TypeScript redactor leaves a
+	// procedure name alone, and both contract cases record the value.
+	"bots.rotateWebhookSecret": true,
+	"bots.revealWebhookSecret": true,
+}
 
 // redactText is redactSensitiveText for the plain identifiers Go records: names,
 // kinds and ids made of letters, digits, dot, underscore and hyphen. Such text has

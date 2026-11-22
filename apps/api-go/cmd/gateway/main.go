@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -26,6 +27,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/routes"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/secretstore"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/taskdetect"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/taskqueue"
 )
@@ -57,6 +59,15 @@ func main() {
 	}
 
 	wantsLocal := store.HasLocal()
+	// A vault procedure may be routed even when no other local procedure is; its store key is
+	// read only for that, so a proxy-only table still starts without ENCRYPTION_KEY.
+	wantsVault := false
+	for _, name := range procedures.VaultProcedures() {
+		if mode := store.ProcedureMode(name); mode == routes.Shadow || mode == routes.Go {
+			wantsVault = true
+			break
+		}
+	}
 	secretsReady := os.Getenv("DATABASE_URL") != "" && os.Getenv("BETTER_AUTH_SECRET") != ""
 	bgCtx, cancelBg := context.WithCancel(context.Background())
 	defer cancelBg()
@@ -64,7 +75,7 @@ func main() {
 	var taskDetector *taskdetect.Service
 	var taskQueue *taskqueue.Service
 	if secretsReady {
-		server, detector, queueSvc, closeDatabase, err := setupLocal(*buildIDFile, logger)
+		server, detector, queueSvc, closeDatabase, err := setupLocal(*buildIDFile, wantsVault, logger)
 		if err != nil {
 			if wantsLocal {
 				logger.Error("cannot serve local procedures", "error", err)
@@ -170,7 +181,7 @@ func readBuildID(path string) string {
 // setupLocal opens the database and builds the local procedure server. It is
 // called whenever the deployment's secrets are present, even if every route is
 // still proxy, so a SIGHUP cutover can use it without a restart.
-func setupLocal(buildIDFile string, logger *slog.Logger) (*local.Server, *taskdetect.Service, *taskqueue.Service, func(), error) {
+func setupLocal(buildIDFile string, wantsVault bool, logger *slog.Logger) (*local.Server, *taskdetect.Service, *taskqueue.Service, func(), error) {
 	deployment, err := config.Load()
 	if err != nil {
 		return nil, nil, nil, nil, err
@@ -195,6 +206,36 @@ func setupLocal(buildIDFile string, logger *slog.Logger) (*local.Server, *taskde
 	if err != nil {
 		database.Close()
 		return nil, nil, nil, nil, err
+	}
+	// The credential store is built only when a vault procedure is routed: reading its key is a
+	// startup failure otherwise, and a proxy-only table must start without it (Lane F).
+	var vault *shared.SecretVault
+	if wantsVault {
+		provider := strings.TrimSpace(os.Getenv("SECRET_STORE"))
+		if provider != "" && provider != "encrypted" {
+			closeRing()
+			database.Close()
+			return nil, nil, nil, nil, fmt.Errorf(
+				"SECRET_STORE %q is not supported by the Go credential store: only \"encrypted\"", provider)
+		}
+		key, err := secretstore.ResolveEncryptionKey(os.Getenv)
+		if err != nil {
+			closeRing()
+			database.Close()
+			return nil, nil, nil, nil, err
+		}
+		store, err := secretstore.NewStore(key)
+		if err != nil {
+			closeRing()
+			database.Close()
+			return nil, nil, nil, nil, err
+		}
+		writer := secretstore.NewWriter(store, secretstore.NewNotifier(
+			&secretstore.PGPublisher{DB: database, Logger: logger}))
+		vault = &shared.SecretVault{
+			Writer:      writer,
+			Persistence: secretstore.NewPersistence(database, writer),
+		}
 	}
 	// One runner per process: the middleware publishes its own roster/Space signals through
 	// it, and the procedures publish thread cursors, organization and board changes through
@@ -241,6 +282,7 @@ func setupLocal(buildIDFile string, logger *slog.Logger) (*local.Server, *taskde
 		PhoneCallRingSeconds: deployment.PhoneCallRingSeconds,
 		Audit:                effectsRunner.Recorder(),
 		Waker:                queueSvc,
+		Vault:                vault,
 	}), local.Config{
 		BuildID:        readBuildID(buildIDFile),
 		Minimums:       deployment.Minimums,

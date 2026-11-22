@@ -136,6 +136,11 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				// A comparison waits for the whole body, and a stream has none.
 				g.logger.Error("refusing to shadow a stream procedure", "procedure", procedure)
 				g.proxy.ServeHTTP(status, r)
+			} else if g.local.SelfAudited(procedure) {
+				// The Go handler records its own security event; the shadow would record it a
+				// second time while the TypeScript answer is served, so answer from TypeScript.
+				g.logger.Error("refusing to shadow a self-audited procedure", "procedure", procedure)
+				g.proxy.ServeHTTP(status, r)
 			} else if !readOnly {
 				// Shadowing a write would duplicate it.
 				g.logger.Error("refusing to shadow a write procedure", "procedure", procedure)
