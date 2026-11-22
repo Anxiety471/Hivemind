@@ -31,7 +31,7 @@ function random() {
   state >>>= 0;
   return state / 0x100000000;
 }
-const pick = <T>(items: readonly T[]) => items[Math.floor(random() * items.length)] as T;
+const pick = <T,>(items: readonly T[]) => items[Math.floor(random() * items.length)] as T;
 const between = (low: number, high: number) => low + Math.floor(random() * (high - low + 1));
 
 const LETTERS = [..."abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"];
@@ -39,8 +39,33 @@ const UNICODE_LETTERS = [..."éüñßøåçÅÉÜΩλжюя日本語한국어"];
 const DIGITS = [..."0123456789"];
 const ALLOWED_PUNCT = [..."  ,.?'\";%$@/-^={}"];
 const ALL_ASCII = Array.from({ length: 95 }, (_, index) => String.fromCharCode(32 + index));
-const ODD = ["\n", "\r\n", "\t", "\u00a0", "\u2028", "😀", "\u0301", "\u200b", "  ", "\\", "&amp;", "&#35;"];
-const WORDS = ["Sure", "the", "report", "is", "ready", "3.5", "www.example.com", "a@b.co", "v2", "OK", "2024-01-05"];
+const ODD = [
+  "\n",
+  "\r\n",
+  "\t",
+  "\u00a0",
+  "\u2028",
+  "😀",
+  "\u0301",
+  "\u200b",
+  "  ",
+  "\\",
+  "&amp;",
+  "&#35;",
+];
+const WORDS = [
+  "Sure",
+  "the",
+  "report",
+  "is",
+  "ready",
+  "3.5",
+  "www.example.com",
+  "a@b.co",
+  "v2",
+  "OK",
+  "2024-01-05",
+];
 
 const allowedChar = () => {
   const roll = random();

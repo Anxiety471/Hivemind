@@ -11,9 +11,9 @@
 import assert from "node:assert/strict";
 import type { ChildProcess } from "node:child_process";
 import { spawn } from "node:child_process";
-import { createServer } from "node:http";
 import { createHmac } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -21,15 +21,15 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { spendingPeriodStart } from "../../../packages/core/src/billing/spending.js";
 import { asSystem, contentEncryptionOf } from "../../../packages/db/src/index.js";
 import { createApp } from "../../api/src/app.js";
+import { CONTRACT_ENCRYPTION_KEY } from "./contract-key.mts";
 import { laneDCases } from "./contract-lane-d.mts";
 import { laneHCases, laneHState } from "./contract-lane-h.mts";
 import { laneICases } from "./contract-lane-i.mts";
 import { laneJCases, laneJState } from "./contract-lane-j.mts";
-import { threadGetCases } from "./contract-threads-get.mts";
-import { CONTRACT_ENCRYPTION_KEY } from "./contract-key.mts";
 import { membershipCases, membershipReset, membershipState } from "./contract-membership.mts";
 import { routineResumeCases } from "./contract-routine-resume.mts";
 import { routineCases } from "./contract-routines.mts";
+import { threadGetCases } from "./contract-threads-get.mts";
 
 const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) throw new Error("DATABASE_URL is required");
@@ -176,7 +176,9 @@ const upstreamServer = createServer(async (incoming, outgoing) => {
   outgoing.writeHead(response.status, answer);
   outgoing.end(Buffer.from(await response.arrayBuffer()));
 });
-await new Promise<void>((resolve) => upstreamServer.listen(Number(UPSTREAM_PORT), "127.0.0.1", resolve));
+await new Promise<void>((resolve) =>
+  upstreamServer.listen(Number(UPSTREAM_PORT), "127.0.0.1", resolve),
+);
 
 let go: ChildProcess | undefined;
 const routesFile = join(dataDir, "routes.json");

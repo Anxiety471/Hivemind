@@ -148,6 +148,8 @@ func (s snapshotReader) bot(actor db.Actor, botID string) (map[string]any, error
 		return nil, err
 	}
 	current := pickPrimaryPrivateActiveRun(activeRuns)
+	// Active runs carry their routine's name; the busy-or-failed fallback row does not.
+	withRoutine := current != nil
 	if current == nil && len(busyOrFailed) > 0 {
 		current = &busyOrFailed[0]
 	}
@@ -172,7 +174,7 @@ func (s snapshotReader) bot(actor db.Actor, botID string) (map[string]any, error
 	if err != nil {
 		return nil, err
 	}
-	run, err := optionalRun(current, false)
+	run, err := optionalRun(current, withRoutine)
 	if err != nil {
 		return nil, err
 	}
