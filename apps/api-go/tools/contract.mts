@@ -138,6 +138,15 @@ export type Case = {
    * bridge sees it), false when Go must answer it itself. Unset skips the check.
    */
   declines?: boolean;
+  /** Run this many identical calls concurrently; results are compared as a sorted list of status/body. */
+  concurrent?: number;
+  /** Extra evidence checked immediately after each side's request, before the next seed resets rows. */
+  check?: (context: {
+    seeded: Seeded;
+    result: { status: number; headers: unknown; body: any; notifications?: unknown[] };
+    side: "ts" | "go";
+    gatewayLog: string;
+  }) => void | Promise<void>;
 };
 
 function cookieFor(token: string) {
@@ -193,6 +202,9 @@ await new Promise<void>((resolve) =>
 );
 
 let go: ChildProcess | undefined;
+// The Go side's stderr/stdout for the current request window. URL cases use this to prove a share
+// token is never logged, while still passing the lines through to the harness output.
+let gatewayLog = "";
 const routesFile = join(dataDir, "routes.json");
 await writeFile(
   routesFile,
@@ -372,9 +384,15 @@ go = spawn(
       PHONE_CALLS_ENABLED: "true",
       PHONE_CALL_RING_SECONDS: "45",
     },
-    stdio: ["ignore", "inherit", "inherit"],
+    stdio: ["ignore", "pipe", "pipe"],
   },
 );
+const captureGateway = (chunk: Buffer) => {
+  gatewayLog += chunk.toString();
+  process.stdout.write(chunk);
+};
+go.stdout?.on("data", captureGateway);
+go.stderr?.on("data", captureGateway);
 for (let attempt = 0; attempt < 100; attempt += 1) {
   try {
     const response = await fetch(`${GO_URL}/healthz`);
@@ -2173,6 +2191,21 @@ async function run(
   input: unknown,
   seeded: Seeded,
 ) {
+  if (testCase.concurrent) {
+    const results = await Promise.all(
+      Array.from({ length: testCase.concurrent }, () =>
+        call(testCase.procedure, input, called(seeded, testCase)),
+      ),
+    );
+    const combined = results
+      .map((result) => ({ status: result.status, json: result.body?.json }))
+      .sort((left, right) => (JSON.stringify(left) < JSON.stringify(right) ? -1 : 1));
+    return {
+      status: results[0]!.status,
+      headers: results[0]!.headers,
+      body: { json: combined },
+    };
+  }
   if (!testCase.paginate) {
     const raw = await call(testCase.procedure, input, called(seeded, testCase));
     const result = testCase.unordered ? sortedById(raw) : raw;
@@ -8542,6 +8575,12 @@ for (const testCase of cases) {
     seeded,
     testCase.procedure,
   );
+  let tsCheckError: unknown;
+  try {
+    await testCase.check?.({ seeded, result: tsResult, side: "ts", gatewayLog });
+  } catch (error) {
+    tsCheckError = error;
+  }
   const tsState = normalize(await databaseState(caseIds, testCase.procedure));
 
   // A TypeScript background job (a restored routine's first run, say) publishes its Space changes
@@ -8558,15 +8597,24 @@ for (const testCase of cases) {
       data: { email: CONTRACT_ADMIN_EMAIL, emailVerified: true },
     });
   const hitsBefore = upstreamHits;
+  gatewayLog = "";
   const goResult = await observed(
     settle,
     () => run(testCase, goCall, input, seeded),
     seeded,
     testCase.procedure,
   );
+  let goCheckError: unknown;
+  try {
+    await testCase.check?.({ seeded, result: goResult, side: "go", gatewayLog });
+  } catch (error) {
+    goCheckError = error;
+  }
   const goState = normalize(await databaseState(caseIds, testCase.procedure));
 
   try {
+    if (tsCheckError) throw tsCheckError;
+    if (goCheckError) throw goCheckError;
     if (testCase.declines !== undefined)
       assert.equal(
         upstreamHits - hitsBefore,
