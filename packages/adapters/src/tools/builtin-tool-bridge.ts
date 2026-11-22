@@ -51,6 +51,7 @@ export const CORE_BUILTIN_TOOL_NAMES: ReadonlySet<string> = new Set([
   "schedule_list",
   "search_history",
   "read_history",
+  "list_history",
   "read_email",
   "send_email",
   "end_call",

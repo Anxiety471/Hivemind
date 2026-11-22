@@ -34,6 +34,7 @@ describe("built-in tool bridge", () => {
       "connect_app",
       "find_tool",
       "list_files",
+      "list_history",
       "message_user",
       "read_file",
       "read_history",
@@ -54,20 +55,14 @@ describe("built-in tool bridge", () => {
       "write_file",
     ]);
     // request_secret carries the card and contact kinds; update_bot carries instructions paging;
-    // the history tools point at files from earlier messages; a watch says it takes no other timing;
-    // read_file takes a line range; ask_user carries the content being decided about;
-    // search_history lists earlier tool work by kind without a keyword; schedule_create says
-    // whether a routine runs in its chat, and takes the events (webhook, Git, chat, email) a
-    // routine can start on.
-    expect(definitionBytes(listed)).toBeLessThanOrEqual(34_700);
+    // the history tools point at files from earlier messages, and list_history is listed directly
+    // with its schema; a watch says it takes no other timing; read_file takes a line range;
+    // ask_user carries the content being decided about; search_history lists earlier tool work by
+    // kind without a keyword; schedule_create says whether a routine runs in its chat, and takes
+    // the events (webhook, Git, chat, email) a routine can start on.
+    expect(definitionBytes(listed)).toBeLessThanOrEqual(36_500);
     expect(deferred.map((tool) => tool.name)).toEqual(
-      expect.arrayContaining([
-        "render_plot",
-        "create_space",
-        "generate_secret",
-        "scratchpad_add",
-        "list_history",
-      ]),
+      expect.arrayContaining(["render_plot", "create_space", "generate_secret", "scratchpad_add"]),
     );
   });
 
