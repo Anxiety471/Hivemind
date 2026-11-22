@@ -43,6 +43,12 @@ func OutputInvalid() *orpc.Error {
 	return orpc.New("INTERNAL_SERVER_ERROR", 500, "Output validation failed")
 }
 
+// ModelSelection is one provider/model pair the deployment itself can run.
+type ModelSelection struct {
+	Provider string
+	ModelID  string
+}
+
 // Deployment is the process configuration some procedures read: where links to the web
 // app point, whether the server sends email (which decides whether an invitee must have
 // verified theirs before accepting), and the content key ring the encrypted procedures use.
@@ -83,6 +89,13 @@ type Deployment struct {
 	// was started without a vault route or without ENCRYPTION_KEY; a procedure that needs it
 	// then fails rather than writing a value the TypeScript API could not read.
 	Vault *SecretVault
+	// DefaultModel is the deployment's main model when a member chose none, nil when the
+	// deployment has no usable key or host credentials (PI_DEFAULT_*).
+	DefaultModel *ModelSelection
+	// ApprovalModel is the environment's Auto Review checker (resolveAutoReviewChecker), and
+	// ApprovalModelConfigured is isAutoReviewCheckerConfigured({}).
+	ApprovalModel           *ModelSelection
+	ApprovalModelConfigured bool
 	// Waker wakes a ticket's worker bots through the task queue (retries, backoff, coalescing).
 	// nil in tests that never wake one.
 	Waker TicketWaker

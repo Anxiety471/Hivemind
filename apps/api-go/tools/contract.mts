@@ -24,6 +24,7 @@ import { laneDCases } from "./contract-lane-d.mts";
 import { laneHCases, laneHState } from "./contract-lane-h.mts";
 import { laneICases } from "./contract-lane-i.mts";
 import { laneJCases, laneJState } from "./contract-lane-j.mts";
+import { modelsCases } from "./contract-models.mts";
 import { CONTRACT_ENCRYPTION_KEY } from "./contract-key.mts";
 import { membershipCases, membershipReset, membershipState } from "./contract-membership.mts";
 import { routineResumeCases } from "./contract-routine-resume.mts";
@@ -191,6 +192,8 @@ await writeFile(
       "mcp.assignments.all": { mode: "go", readOnly: true },
       "mcp.assignments.list": { mode: "go", readOnly: true },
       "models.backups": { mode: "go", readOnly: true },
+      "models.role": { mode: "go", readOnly: true },
+      "models.setRole": { mode: "go" },
       "spaces.rename": { mode: "go" },
       "spaces.members.list": { mode: "go", readOnly: true },
       "spaces.members.add": { mode: "go" },
@@ -547,6 +550,7 @@ const cases: Case[] = [
   ...laneHCases(system),
   ...laneICases(system),
   ...laneJCases(system),
+  ...modelsCases(system),
 ];
 
 const SITES = ["zeta.example", "alpha.example", "Beta.example", "_under.example", "10.0.0.1"];
@@ -7585,6 +7589,7 @@ const WRITE_PROCEDURES = new Set([
   "pages.rename",
   "pages.pin",
   "models.rename",
+  "models.setRole",
   "bots.reorder",
   "bots.restore",
   "bots.claimEmailAddress",
@@ -7962,6 +7967,10 @@ async function databaseState(seeded: ReturnType<typeof ids>, procedure?: string)
     where: { spaceId: { in: seeded.spaces } },
     orderBy: [{ spaceId: "asc" }, { userId: "asc" }, { role: "asc" }, { position: "asc" }],
   });
+  const userModelChoices = await system.userModelRoleChoice.findMany({
+    where: { userId: owners },
+    orderBy: [{ userId: "asc" }, { role: "asc" }, { position: "asc" }],
+  });
   const spaceVoicePreferences = await system.spaceVoicePreference.findMany({
     where: { spaceId: { in: seeded.spaces } },
     orderBy: [{ spaceId: "asc" }, { userId: "asc" }, { credentialId: "asc" }],
@@ -8338,6 +8347,7 @@ async function databaseState(seeded: ReturnType<typeof ids>, procedure?: string)
     approvalRulesSpace,
     spaceSettingOverrides,
     spaceModelChoices,
+    userModelChoices,
     spaceVoicePreferences,
     autoReviewPreferences,
     vaultCredentials,

@@ -65,6 +65,16 @@ type Config struct {
 	TaskBumpCooldown time.Duration
 	// TaskQueueMaxAttempts caps delivery retries before a dispatch job moves to the dead-letter list.
 	TaskQueueMaxAttempts int
+	// DefaultModel is the deployment's main model (resolveDeploymentModel): what runs when a
+	// member chose none, and whether its key or host credentials are present.
+	DefaultModelProvider   string
+	DefaultModel           string
+	DefaultModelConfigured bool
+	// ApprovalModel is the environment's Auto Review checker (resolveAutoReviewChecker), and
+	// ApprovalModelConfigured is isAutoReviewCheckerConfigured({}).
+	ApprovalModelProvider   string
+	ApprovalModel           string
+	ApprovalModelConfigured bool
 }
 
 // Load reads the environment. Only a build that serves procedures needs the
@@ -125,6 +135,13 @@ func Load() (Config, error) {
 	config.TaskBumpIdle = durationSeconds(os.Getenv("TASK_BUMP_IDLE_SEC"), 300)
 	config.TaskBumpCooldown = durationSeconds(os.Getenv("TASK_BUMP_COOLDOWN_SEC"), 900)
 	config.TaskQueueMaxAttempts = positiveInt(os.Getenv("TASK_QUEUE_MAX_ATTEMPTS"), 5)
+	defaults := resolveModelDefaults(os.Getenv)
+	config.DefaultModelProvider = defaults.provider
+	config.DefaultModel = defaults.model
+	config.DefaultModelConfigured = defaults.configured
+	config.ApprovalModelProvider = defaults.approvalProvider
+	config.ApprovalModel = defaults.approvalModel
+	config.ApprovalModelConfigured = defaults.approvalConfigured
 
 	minimums, err := local.ParseMinimums(os.Getenv("RAKAZO_MIN_CLIENT_BUILD"))
 	if err != nil {

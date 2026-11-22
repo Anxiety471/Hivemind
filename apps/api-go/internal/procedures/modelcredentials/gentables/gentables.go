@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"go/format"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -21,7 +22,18 @@ var thinkingOrders = []string{"off", "minimal", "low", "medium", "high", "xhigh"
 type anthropicModel struct {
 	ID             string             `json:"id"`
 	API            string             `json:"api"`
+	Provider       string             `json:"provider"`
+	Reasoning      bool               `json:"reasoning"`
+	Input          []string           `json:"input"`
 	ThinkingLevels map[string]*string `json:"thinkingLevelMap"`
+}
+
+// catalogModelGen is one model the pinned pi-ai provider data describes.
+type catalogModelGen struct {
+	Provider string
+	ID       string
+	Images   bool
+	Levels   []string
 }
 
 // Generate returns the Go source for the generated tables file.
@@ -31,6 +43,10 @@ func Generate(piPath, presetPath string) ([]byte, error) {
 		return nil, err
 	}
 	presets, err := endpointPresets(presetPath)
+	if err != nil {
+		return nil, err
+	}
+	catalog, err := catalogModels(filepath.Dir(piPath))
 	if err != nil {
 		return nil, err
 	}
@@ -56,6 +72,14 @@ func Generate(piPath, presetPath string) ([]byte, error) {
 	for _, preset := range presets {
 		buffer.WriteString(fmt.Sprintf("\t{Name: %s, BaseURL: %s},\n", quote(preset[0]), quote(preset[1])))
 	}
+	buffer.WriteString("}\n\n")
+	buffer.WriteString("// catalogModels is listPiCatalog's model metadata from the pinned pi-ai provider data:\n")
+	buffer.WriteString("// whether the model reads images, and the thinking levels it accepts (empty means off only).\n")
+	buffer.WriteString("var catalogModels = []catalogModel{\n")
+	for _, model := range catalog {
+		buffer.WriteString(fmt.Sprintf("\t{%s, %s, %t, %s},\n",
+			quote(model.Provider), quote(model.ID), model.Images, quote(strings.Join(model.Levels, ","))))
+	}
 	buffer.WriteString("}\n")
 
 	formatted, err := format.Source(buffer.Bytes())
@@ -63,6 +87,93 @@ func Generate(piPath, presetPath string) ([]byte, error) {
 		return nil, fmt.Errorf("format generated tables: %w", err)
 	}
 	return formatted, nil
+}
+
+// catalogModels reads every provider data file next to anthropic.json. Models are sorted by
+// provider and id; a duplicate (provider, id) keeps the first file's row.
+func catalogModels(directory string) ([]catalogModelGen, error) {
+	paths, err := filepath.Glob(filepath.Join(directory, "*.json"))
+	if err != nil {
+		return nil, err
+	}
+	byKey := map[string]catalogModelGen{}
+	for _, path := range paths {
+		if strings.HasPrefix(filepath.Base(path), ".") {
+			continue
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		var data map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &data); err != nil {
+			return nil, fmt.Errorf("parse %s: %w", path, err)
+		}
+		for _, rawProvider := range data {
+			entries, err := modelEntries(rawProvider)
+			if err != nil {
+				return nil, fmt.Errorf("parse %s: %w", path, err)
+			}
+			for _, entry := range entries {
+				var model anthropicModel
+				if err := json.Unmarshal(entry, &model); err != nil {
+					return nil, fmt.Errorf("parse a model in %s: %w", path, err)
+				}
+				if model.ID == "" || model.Provider == "" {
+					continue
+				}
+				key := model.Provider + "\x00" + model.ID
+				levels := []string{"off"}
+				if model.Reasoning {
+					levels = supportedLevels(model.ThinkingLevels)
+				}
+				images := false
+				for _, input := range model.Input {
+					if input == "image" {
+						images = true
+					}
+				}
+				candidate := catalogModelGen{
+					Provider: model.Provider, ID: model.ID, Images: images, Levels: levels,
+				}
+				// The same provider/model can appear under two APIs. Keep the richer entry,
+				// whatever order the files are read in: the one that reasons, then the one
+				// with more thinking levels.
+				current, present := byKey[key]
+				if !present || (len(candidate.Levels) > len(current.Levels)) {
+					byKey[key] = candidate
+				}
+			}
+		}
+	}
+	models := make([]catalogModelGen, 0, len(byKey))
+	for _, model := range byKey {
+		models = append(models, model)
+	}
+	sort.Slice(models, func(left, right int) bool {
+		if models[left].Provider != models[right].Provider {
+			return models[left].Provider < models[right].Provider
+		}
+		return models[left].ID < models[right].ID
+	})
+	return models, nil
+}
+
+// modelEntries reads a provider's data: a map keyed by "chat:<id>" (or a list in older
+// versions).
+func modelEntries(raw json.RawMessage) ([]json.RawMessage, error) {
+	var byKey map[string]json.RawMessage
+	var list []json.RawMessage
+	if err := json.Unmarshal(raw, &byKey); err == nil && byKey != nil {
+		for _, entry := range byKey {
+			list = append(list, entry)
+		}
+		return list, nil
+	}
+	if err := json.Unmarshal(raw, &list); err != nil {
+		return nil, err
+	}
+	return list, nil
 }
 
 func anthropicLevels(path string) (map[string][]string, error) {

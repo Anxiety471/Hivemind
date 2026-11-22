@@ -283,6 +283,13 @@ func setupLocal(buildIDFile string, wantsVault bool, logger *slog.Logger) (*loca
 		Audit:                effectsRunner.Recorder(),
 		Waker:                queueSvc,
 		Vault:                vault,
+		DefaultModel: deploymentModel(deployment.DefaultModelProvider, deployment.DefaultModel,
+			deployment.DefaultModelConfigured),
+		ApprovalModel: &shared.ModelSelection{
+			Provider: deployment.ApprovalModelProvider,
+			ModelID:  deployment.ApprovalModel,
+		},
+		ApprovalModelConfigured: deployment.ApprovalModelConfigured,
 	}), local.Config{
 		BuildID:        readBuildID(buildIDFile),
 		Minimums:       deployment.Minimums,
@@ -330,4 +337,14 @@ func contentRing(ctx context.Context, database *db.DB, deployment config.Config,
 		logger.Error("stored space keys need master keys that are not configured", "masterKeyIds", unreadable)
 	}
 	return ring, store.Close, nil
+}
+
+// deploymentModel is the deployment's own main model when it has a usable key or host
+// credentials; nil means resolveDeploymentModel reports it unconfigured, and the deploy
+// default then names nothing.
+func deploymentModel(provider, model string, configured bool) *shared.ModelSelection {
+	if !configured {
+		return nil
+	}
+	return &shared.ModelSelection{Provider: provider, ModelID: model}
 }

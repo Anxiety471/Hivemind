@@ -344,6 +344,19 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 			},
 		},
 		{
+			Name:     "models.role",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return models.Role(ctx, database, &deployment, actor, input)
+			},
+		},
+		{
+			Name: "models.setRole",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return models.SetRole(ctx, database, &deployment, actor, input)
+			},
+		},
+		{
 			Name:     "models.credentials",
 			ReadOnly: true,
 			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
