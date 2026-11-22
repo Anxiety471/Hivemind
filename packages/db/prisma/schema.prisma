@@ -96,6 +96,7 @@ model User {
   voicePreferences            UserVoicePreference[]
   approvalRules               UserActionApprovalRule[]
   autoReviewPreference        UserActionAutoReviewPreference?
+  memoryRoamerSettings        MemoryRoamerSettings?
   createdSpaces               Space[]                      @relation("SpaceCreator")
   spaceInvites                SpaceInvite[]                @relation("SpaceInviteCreator")
   botSecrets BotSecret[]
@@ -2881,6 +2882,21 @@ model UserActionAutoReviewPreference {
   updatedAt     DateTime @updatedAt
 
   @@map("user_action_auto_review_preferences")
+}
+
+model MemoryRoamerSettings {
+  userId          String    @id
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  enabled         Boolean   @default(false)
+  intervalMinutes Int       @default(360)
+  lastRunAt       DateTime?
+  lastError       String?
+  lastChanges     Int       @default(0)
+  lastModel       String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@map("memory_roamer_settings")
 }
 
 model MessagingInstallation {

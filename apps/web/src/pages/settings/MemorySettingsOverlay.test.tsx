@@ -18,6 +18,8 @@ const memory = vi.hoisted(() => ({
   updateProvider: vi.fn(),
   setDefaultScope: vi.fn(),
   disconnectProvider: vi.fn(),
+  roamer: vi.fn(),
+  setRoamer: vi.fn(),
 }));
 vi.mock("../../lib/query/rpc", () => {
   const client = { memory };
@@ -68,6 +70,14 @@ beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   for (const call of Object.values(memory)) call.mockReset();
   memory.providers.mockResolvedValue(providers);
+  memory.roamer.mockResolvedValue({
+    enabled: false,
+    intervalMinutes: 360,
+    lastRunAt: null,
+    lastError: null,
+    lastChanges: 0,
+    lastModel: null,
+  });
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -143,7 +153,9 @@ it("connects the provider picked from the ones the server describes", async () =
   memory.connectProvider.mockResolvedValue(saved);
   const { onConfigChange, onBusyChange } = await render(null);
   await click(button("Connect memory provider"));
-  const select = host.querySelector<HTMLElement>('[role="combobox"]')!;
+  const select = [...host.querySelectorAll<HTMLElement>('[role="combobox"]')].find(
+    (candidate) => !candidate.hasAttribute("aria-label"),
+  )!;
   expect(select.textContent).toBe("Notes");
   expect(input("API key")).toBeDefined();
 

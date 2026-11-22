@@ -47,6 +47,20 @@ export const MemoryPromptBudgetSchema = z.object({
 });
 export type MemoryPromptBudget = z.infer<typeof MemoryPromptBudgetSchema>;
 
+/** The memory roamer's default interval, in minutes. */
+export const MEMORY_ROAMER_DEFAULT_INTERVAL = 360;
+
+/** What the background roamer is doing, and how its last pass went. */
+export const MemoryRoamerSettingsSchema = z.object({
+  enabled: z.boolean(),
+  intervalMinutes: z.number().int().min(15).max(10_080),
+  lastRunAt: z.string().nullable(),
+  lastError: z.string().nullable(),
+  lastChanges: z.number().int().nonnegative(),
+  lastModel: z.string().nullable(),
+});
+export type MemoryRoamerSettings = z.infer<typeof MemoryRoamerSettingsSchema>;
+
 /** Every bot and Space keeps its MEMORY.md index; other memory documents can be deleted. */
 export const MEMORY_INDEX_PATH = "MEMORY.md";
 /** What a bot may write to its memory. People can still write more by hand. */

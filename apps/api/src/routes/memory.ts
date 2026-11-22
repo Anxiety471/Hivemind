@@ -8,7 +8,8 @@ import {
   memoryProviderDescriptors,
   readAgentMemory,
 } from "@rakazo/adapters";
-import { isDeletableMemoryDocument } from "@rakazo/contracts";
+import type { MemoryRoamerSettings } from "@rakazo/contracts";
+import { isDeletableMemoryDocument, MEMORY_ROAMER_DEFAULT_INTERVAL } from "@rakazo/contracts";
 import { ClientError } from "@rakazo/core";
 import { findSpaceMemoryConfig, IsolationError } from "@rakazo/db";
 import {
@@ -19,6 +20,26 @@ import {
   updateMemoryProviderDefaultScope,
 } from "../integrations/memory-provider-config.js";
 import type { RouterContext } from "./context.js";
+
+function memoryRoamerDto(
+  row: {
+    enabled: boolean;
+    intervalMinutes: number;
+    lastRunAt: Date | null;
+    lastError: string | null;
+    lastChanges: number;
+    lastModel: string | null;
+  } | null,
+): MemoryRoamerSettings {
+  return {
+    enabled: row?.enabled ?? false,
+    intervalMinutes: row?.intervalMinutes ?? MEMORY_ROAMER_DEFAULT_INTERVAL,
+    lastRunAt: row?.lastRunAt?.toISOString() ?? null,
+    lastError: row?.lastError ?? null,
+    lastChanges: row?.lastChanges ?? 0,
+    lastModel: row?.lastModel ?? null,
+  };
+}
 
 export function memoryRoutes(ctx: RouterContext) {
   const { deps, repos, taughtSkills, agentSkills, authed } = ctx;
@@ -152,6 +173,28 @@ export function memoryRoutes(ctx: RouterContext) {
       disconnectProvider: authed.memory.disconnectProvider.handler(async ({ context }) =>
         disconnectMemoryProvider(deps, context.actor),
       ),
+      roamer: authed.memory.roamer.handler(async ({ context }) => {
+        const row = await deps.prisma.memoryRoamerSettings.findUnique({
+          where: { userId: context.actor.userId },
+        });
+        return memoryRoamerDto(row);
+      }),
+      setRoamer: authed.memory.setRoamer.handler(async ({ context, input }) => {
+        const intervalMinutes = input.intervalMinutes ?? MEMORY_ROAMER_DEFAULT_INTERVAL;
+        const row = await deps.prisma.memoryRoamerSettings.upsert({
+          where: { userId: context.actor.userId },
+          create: {
+            userId: context.actor.userId,
+            enabled: input.enabled,
+            intervalMinutes,
+          },
+          update: {
+            enabled: input.enabled,
+            intervalMinutes,
+          },
+        });
+        return memoryRoamerDto(row);
+      }),
     },
     scratchpad: {
       list: authed.scratchpad.list.handler(async ({ context, input }) => {

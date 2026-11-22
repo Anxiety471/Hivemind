@@ -8,9 +8,11 @@ import {
   DialogTitle,
   Field,
   FieldLabel,
+  Input,
   OptionSelect,
   SectionHeading,
   Spinner,
+  Switch,
   Toggle,
 } from "@rakazo/ui-web";
 import { useQuery } from "@tanstack/react-query";
@@ -119,7 +121,42 @@ export function MemorySettingsOverlay({
       onConfigChange(next);
     },
   });
-  const busy = change.pending;
+  const roamerQuery = useQuery(queries.memory.roamer.queryOptions());
+  const roamer = roamerQuery.data;
+  const roamerChange = useSave({
+    save: async (input: { enabled: boolean; intervalMinutes?: number }, rpc) =>
+      rpc.memory.setRoamer(input),
+    stale: [queries.memory.roamer.queryKey()],
+  });
+  const intervalInputId = useId();
+  const [intervalDraft, setIntervalDraft] = useState("360");
+  const [intervalError, setIntervalError] = useState<string | null>(null);
+  useEffect(() => {
+    if (roamer) setIntervalDraft(String(roamer.intervalMinutes));
+  }, [roamer?.intervalMinutes]);
+  const saveInterval = () => {
+    const minutes = Number(intervalDraft);
+    if (!Number.isInteger(minutes) || minutes < 15 || minutes > 10_080) {
+      setIntervalError(t`Enter 15 to 10,080 minutes.`);
+      return;
+    }
+    setIntervalError(null);
+    if (minutes === roamer?.intervalMinutes) return;
+    roamerChange.run({ enabled: roamer?.enabled ?? false, intervalMinutes: minutes });
+  };
+  const intervalSummary =
+    Number(intervalDraft) >= 15 && Number(intervalDraft) <= 10_080
+      ? Number(intervalDraft) % 1_440 === 0
+        ? Number(intervalDraft) === 1_440
+          ? t`every day`
+          : t`every ${Number(intervalDraft) / 1_440} days`
+        : Number(intervalDraft) % 60 === 0
+          ? Number(intervalDraft) === 60
+            ? t`every hour`
+            : t`every ${Number(intervalDraft) / 60} hours`
+          : t`every ${Number(intervalDraft)} minutes`
+      : null;
+  const busy = change.pending || roamerChange.pending;
 
   useEffect(() => {
     if (!config) return;
@@ -172,6 +209,83 @@ export function MemorySettingsOverlay({
           {error ? <p className="text-body-sm text-destructive">{error}</p> : null}
 
           <SpaceMemorySection />
+
+          <section className="rounded-xl border border-border px-4 py-4">
+            <div className="flex items-center justify-between gap-3">
+              <SectionHeading variant="heading">
+                <Trans>Background roamer</Trans>
+              </SectionHeading>
+              <Switch
+                checked={roamer?.enabled ?? false}
+                disabled={!roamer || roamerChange.pending}
+                aria-label={t`Run memory maintenance in the background`}
+                onCheckedChange={(enabled) => {
+                  const minutes = Number(intervalDraft);
+                  roamerChange.run({
+                    enabled,
+                    intervalMinutes:
+                      Number.isInteger(minutes) && minutes >= 15 && minutes <= 10_080
+                        ? minutes
+                        : roamer?.intervalMinutes,
+                  });
+                }}
+              />
+            </div>
+            <p className="mt-1 text-body-sm text-muted-foreground">
+              <Trans>
+                Uses your main model connection. Tidies only MEMORY.md, USER.md, Instructions, and
+                shared memory. Other notes stay read-only.
+              </Trans>
+            </p>
+            <Field className="mt-3">
+              <FieldLabel htmlFor={intervalInputId}>
+                <Trans>Check every (minutes)</Trans>
+              </FieldLabel>
+              <div className="flex items-center gap-2">
+                <Input
+                  id={intervalInputId}
+                  type="number"
+                  inputMode="numeric"
+                  min={15}
+                  max={10_080}
+                  step={15}
+                  value={intervalDraft}
+                  disabled={!roamer || roamerChange.pending}
+                  onChange={(event) => setIntervalDraft(event.target.value)}
+                  onBlur={saveInterval}
+                />
+                {intervalSummary ? (
+                  <span className="text-body-sm text-muted-foreground">{intervalSummary}</span>
+                ) : null}
+              </div>
+            </Field>
+            {intervalError ? (
+              <p role="alert" className="mt-2 text-body-sm text-destructive">
+                {intervalError}
+              </p>
+            ) : null}
+            <p className="mt-3 text-body-sm text-muted-foreground">
+              {roamer === undefined
+                ? t`Loading…`
+                : roamer.lastError
+                  ? t`Last run failed: ${roamer.lastError}`
+                  : roamer.lastRunAt
+                    ? t`Last run ${new Date(roamer.lastRunAt).toLocaleString()}`
+                    : roamer.enabled
+                      ? t`Waiting for the first run`
+                      : t`Off`}
+            </p>
+            {roamer?.lastRunAt && !roamer.lastError ? (
+              <p className="mt-1 text-body-sm text-muted-foreground">
+                {roamer.lastChanges === 1 ? t`1 change` : t`${roamer.lastChanges} changes`}
+              </p>
+            ) : null}
+            {roamerChange.error ? (
+              <p role="alert" className="mt-2 text-body-sm text-destructive">
+                {errorText(roamerChange.error, t`Could not save the memory roamer`)}
+              </p>
+            ) : null}
+          </section>
 
           {providers === undefined && providersQuery.isError ? (
             <div role="alert" className="text-body-sm text-destructive">

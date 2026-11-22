@@ -40,6 +40,20 @@ vi.mock("../../components/settings/settings-group", () => ({
       {title}
     </button>
   ),
+  SettingsSwitch: ({
+    label,
+    value,
+    onChange,
+  }: {
+    label: string;
+    value: boolean;
+    onChange: (value: boolean) => void;
+  }) => (
+    <button type="button" aria-label={label} aria-pressed={value} onClick={() => onChange(!value)}>
+      {label}
+    </button>
+  ),
+  SettingsFooter: ({ children }: { children?: ReactNode }) => <p>{children}</p>,
 }));
 vi.mock("../../components/native/native-action-button", () => ({
   NativeActionButton: ({ label, onPress }: { label: string; onPress: () => void }) => (
@@ -68,6 +82,7 @@ vi.mock("react-native", () => {
       <button type="button" aria-label="Refresh" onClick={onRefresh} />
     ),
     Text: ({ children }: { children?: ReactNode }) => <p>{children}</p>,
+    TextInput: () => <input />,
     ActivityIndicator: () => <span role="status" />,
     StyleSheet: { create: (styles: unknown) => styles },
   };
@@ -97,11 +112,28 @@ async function render() {
   await settle();
 }
 
+const roamerSettings = {
+  enabled: false,
+  intervalMinutes: 360,
+  lastRunAt: null,
+  lastError: null,
+  lastChanges: 0,
+  lastModel: null,
+};
+
+function mockRpc(list: () => Promise<unknown>) {
+  mocks.rpc.mockImplementation((method: string) =>
+    method === "memory/roamer" ? Promise.resolve(roamerSettings) : list(),
+  );
+}
+
 it("lists the space's shared notes and opens one in the editor", async () => {
-  mocks.rpc.mockResolvedValue([
-    { id: "index-1", scope: "user", botId: null, path: "MEMORY.md", content: "", revision: 1 },
-    { id: "team-1", scope: "user", botId: null, path: "team.md", content: "x", revision: 2 },
-  ]);
+  mockRpc(() =>
+    Promise.resolve([
+      { id: "index-1", scope: "user", botId: null, path: "MEMORY.md", content: "", revision: 1 },
+      { id: "team-1", scope: "user", botId: null, path: "team.md", content: "x", revision: 2 },
+    ]),
+  );
   await render();
   expect(mocks.rpc).toHaveBeenCalledWith("memory/list", { scope: "user" });
   expect(container.textContent).toContain("MEMORY.md");
@@ -112,7 +144,8 @@ it("lists the space's shared notes and opens one in the editor", async () => {
 });
 
 it("says when nothing is remembered, and retries a failed load", async () => {
-  mocks.rpc.mockRejectedValueOnce(new Error("offline")).mockResolvedValueOnce([]);
+  let calls = 0;
+  mockRpc(() => (calls++ === 0 ? Promise.reject(new Error("offline")) : Promise.resolve([])));
   await render();
   expect(container.textContent).toContain("offline");
   const retry = [...container.querySelectorAll("button")].find((b) => b.textContent === "Retry");
@@ -124,10 +157,13 @@ it("says when nothing is remembered, and retries a failed load", async () => {
 
 it("keeps the newest list when an earlier load finishes last", async () => {
   const finishFirst = deferred<unknown[]>();
-  mocks.rpc
-    .mockResolvedValueOnce([{ id: "old", path: "deleted.md" }])
-    .mockReturnValueOnce(finishFirst.promise)
-    .mockResolvedValueOnce([]);
+  let calls = 0;
+  mockRpc(() => {
+    const call = calls++;
+    if (call === 0) return Promise.resolve([{ id: "old", path: "deleted.md" }]);
+    if (call === 1) return finishFirst.promise;
+    return Promise.resolve([]);
+  });
   await render();
   const refresh = () =>
     container.querySelector<HTMLButtonElement>('[aria-label="Refresh"]')?.click();
