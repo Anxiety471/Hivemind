@@ -156,9 +156,6 @@ func (c Canceller) CancelConversation(
 	at time.Time,
 	state *secretstore.State,
 ) (ConversationCancel, error) {
-	if err := c.requireRing(); err != nil {
-		return ConversationCancel{}, err
-	}
 	// Thread row first, then run rows: the order clearThread/finalizeRun use, so
 	// a concurrent clear cannot deadlock here (thread-stop.ts:78).
 	if err := LockThread(ctx, tx, target.ThreadID); err != nil {
@@ -202,6 +199,9 @@ func (c Canceller) cancelConversationLocked(
 	at time.Time,
 	state *secretstore.State,
 ) (ConversationCancel, error) {
+	if err := c.requireRing(); err != nil {
+		return ConversationCancel{}, err
+	}
 	at = now(at)
 	var helper any
 	if target.HelperMessageID != nil {

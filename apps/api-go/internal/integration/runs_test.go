@@ -696,6 +696,13 @@ func TestCancelsRequireTheRing(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "content key ring") {
 		t.Fatalf("nil-ring SupersedeQueued = %v", err)
 	}
+	_, err = runs.Canceller{}.CancelConversationFor(ctx, database,
+		db.Actor{UserID: fixture.userID, SpaceID: fixture.spaceID}, runs.ConversationTarget{
+			SpaceID: fixture.spaceID, ThreadID: fixture.threadID, BotIDs: []string{fixture.botID},
+		}, time.Now(), nil)
+	if err == nil || !strings.Contains(err.Error(), "content key ring") {
+		t.Fatalf("nil-ring CancelConversationFor = %v", err)
+	}
 	if got := runRow(t, database, created.RunID)["status"]; got != "queued" {
 		t.Fatalf("a refused cancel wrote status = %v", got)
 	}
