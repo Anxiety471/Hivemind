@@ -4,7 +4,8 @@
 // The TypeScript API uses `new URL(...)` and reads `.href`, `.origin`,
 // `.protocol`, `.hostname`, `.host`, `.pathname`, `.search`, `.hash`,
 // `.username`, `.password`, `.port`, `.searchParams`, and assigns `.hostname`,
-// `.pathname` and `.hash` (see docs/infra-d-design.md for the site list). Go's
+// `.pathname` and `.hash` (the site list is go-port/infra-d-design.md in the host's
+// port notes, not this repository). Go's
 // net/url is not WHATWG: it does not lowercase and punycode hosts through
 // UTS 46, rewrite IPv4 shorthands (0x7f.1, 127.1, 2130706433), strip ASCII tab
 // and newline, treat `\` as a path separator, drop default ports or serialize

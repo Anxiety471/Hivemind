@@ -10,7 +10,7 @@
  *     userinfo; path dot segments and percent-encoding; queries and fragments;
  *     relative references; C0 controls, whitespace and backslashes; and every
  *     shape the URL-blocked procedures hand to `new URL` (see
- *     docs/infra-d-design.md §2);
+ *     go-port/infra-d-design.md §2, outside this repository);
  *   - setter cases for hostname, pathname, hash, search, host, port, protocol,
  *     username and password;
  *   - zod 4.6.7 `z.string().url()` acceptance and stored value for every parse
