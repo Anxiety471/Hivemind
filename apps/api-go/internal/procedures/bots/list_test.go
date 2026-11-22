@@ -59,7 +59,8 @@ func TestPrimaryRunStatus(t *testing.T) {
 		{[]string{"queued", "leased"}, "leased"},
 		{[]string{"queued", "waiting_input"}, "waiting_input"},
 		{[]string{"running", "waiting_takeover"}, "waiting_takeover"},
-		{[]string{"queued", "running", "waiting_input", "waiting_takeover"}, "waiting_takeover"},
+		{[]string{"queued", "running", "waiting_input", "waiting_takeover"}, "waiting_input"},
+		{[]string{"queued", "waiting_takeover", "waiting_input"}, "waiting_takeover"},
 	}
 	for _, item := range cases {
 		if got := primaryRunStatus(item.statuses); got != item.want {

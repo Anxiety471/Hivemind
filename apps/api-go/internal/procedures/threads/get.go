@@ -454,14 +454,17 @@ func (s snapshotReader) botRunStatuses(botIDs []string) (map[string]string, erro
 	return statuses, nil
 }
 
-// primaryStatus is primaryActiveRun's status: waiting, then running, then leased, then the newest;
-// idle without a run.
+// primaryStatus is primaryActiveRun's status over statuses newest first: the newest waiting run,
+// then running, then leased, then the newest; idle without a run.
 func primaryStatus(statuses []string) string {
-	for _, wanted := range [][]string{{"waiting_takeover", "waiting_input"}, {"running"}, {"leased"}} {
-		for _, status := range statuses {
-			if slices.Contains(wanted, status) {
-				return status
-			}
+	for _, status := range statuses {
+		if status == "waiting_takeover" || status == "waiting_input" {
+			return status
+		}
+	}
+	for _, status := range statuses {
+		if status == "running" || status == "leased" {
+			return status
 		}
 	}
 	if len(statuses) > 0 {

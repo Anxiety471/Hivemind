@@ -418,14 +418,13 @@ func groupMembers(ctx context.Context, tx pgx.Tx, groupIDs []string, archived bo
 	return members, activeCount, nil
 }
 
-// primaryActiveRun is primaryActiveRun (thread-listing.ts:30): waiting, running, then leased
-// work wins over queued work, regardless of creation order.
+// primaryActiveRun is primaryActiveRun (thread-listing.ts:30): the newest waiting run wins, then
+// running, then leased, regardless of creation order. `statuses` is newest first, so the first
+// waiting status is the one that shows.
 func primaryActiveRun(statuses []string) string {
-	for _, wanted := range []string{"waiting_takeover", "waiting_input"} {
-		for _, status := range statuses {
-			if status == wanted {
-				return status
-			}
+	for _, status := range statuses {
+		if status == "waiting_takeover" || status == "waiting_input" {
+			return status
 		}
 	}
 	for _, wanted := range []string{"running", "leased"} {

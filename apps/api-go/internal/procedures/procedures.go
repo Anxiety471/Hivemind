@@ -217,6 +217,14 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 			},
 		},
 		{
+			Name:       "threads.messages",
+			ReadOnly:   true,
+			MayDecline: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return threads.Messages(ctx, database, deployment, actor, input)
+			},
+		},
+		{
 			Name: "threads.markRead",
 			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
 				return threads.MarkRead(ctx, database, actor, input)
@@ -507,6 +515,14 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 			ReadOnly: true,
 			Serve: func(ctx context.Context, actor db.Actor, _ orpc.Input) (any, *orpc.Error) {
 				return groups.List(ctx, database, deployment, actor)
+			},
+		},
+		{
+			Name:       "groups.get",
+			ReadOnly:   true,
+			MayDecline: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return groups.Get(ctx, database, deployment, actor, input)
 			},
 		},
 		{
