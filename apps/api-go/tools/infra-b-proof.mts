@@ -1077,6 +1077,31 @@ async function cancelConversation(side: Side, options: CancelConversationOptions
   };
 }
 
+// cancelWithCredentialOrigin seeds an active run with one open ask, appends a
+// bearer credential card carrying the given origin, cancels, and asserts how
+// the open effect ends. TS and Go must agree on validity before the cancel.
+async function cancelWithCredentialOrigin(
+  side: Side,
+  label: string,
+  origin: string,
+  effectStatus: "denied" | "intended",
+): Promise<void> {
+  const runId = await seedActiveRun(side, label);
+  const message = await system.message.findFirstOrThrow({ where: { runId }, orderBy: { seq: "desc" } });
+  await system.message.update({
+    where: { id: message.id },
+    data: {
+      blocks: [
+        ...(message.blocks as any[]),
+        { kind: "ask", text: `Use ${origin}`, credential: { name: "site_key", origin, auth: { type: "bearer" } } },
+      ],
+    },
+  });
+  await cancelActive(side, [runId], new Date("2026-11-22T08:10:00.000Z"));
+  const effect = await system.externalEffect.findFirstOrThrow({ where: { runId, kind: "web_fetch" } });
+  assert.equal(effect.status, effectStatus, `${side.kind}: origin ${JSON.stringify(origin)}`);
+}
+
 if (picked("cancel-active")) {
   await scenario("cancel-active", async (side) => {
     const runId = await seedActiveRun(side, "a");
@@ -1190,6 +1215,26 @@ if (picked("cancel-malformed-nested-credential")) {
     const effect = await system.externalEffect.findFirstOrThrow({ where: { runId, kind: "web_fetch" } });
     assert.equal(effect.status, "intended", `${side.kind}: a malformed nested credential drops the whole list`);
   });
+}
+
+if (picked("cancel-origin-empty-userinfo")) {
+  await scenario("cancel-origin-empty-userinfo", (side) =>
+    cancelWithCredentialOrigin(side, "origin-empty-userinfo", "https://@example.com", "denied"));
+}
+
+if (picked("cancel-origin-percent-host")) {
+  await scenario("cancel-origin-percent-host", (side) =>
+    cancelWithCredentialOrigin(side, "origin-percent-host", "https://exa%6dple.com", "denied"));
+}
+
+if (picked("cancel-origin-unicode-space")) {
+  await scenario("cancel-origin-unicode-space", (side) =>
+    cancelWithCredentialOrigin(side, "origin-unicode-space", "https://example.com\u00a0", "intended"));
+}
+
+if (picked("cancel-origin-fullwidth-dot")) {
+  await scenario("cancel-origin-fullwidth-dot", (side) =>
+    cancelWithCredentialOrigin(side, "origin-fullwidth-dot", "https://metadata.google.internal\u3002", "intended"));
 }
 
 if (picked("cancel-finished")) {
