@@ -47,6 +47,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/usage"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/vaultactivity"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/vaultitems"
+	runslib "github.com/Anxiety471/Hivemind/apps/api-go/internal/runs"
 )
 
 // All returns every locally served procedure.
@@ -580,6 +581,12 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 			},
 		},
 		{
+			Name: "routines.testRun",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return routines.TestRun(ctx, database, deployment, actor, input)
+			},
+		},
+		{
 			Name:     "memory.list",
 			ReadOnly: true,
 			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
@@ -702,6 +709,16 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 			Name: "skills.save",
 			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
 				return skills.Save(ctx, database, deployment, actor, input)
+			},
+		},
+		{
+			Name: "skills.testRun",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				var publisher runslib.Publisher
+				if deployment.Signals != nil {
+					publisher = deployment.Signals
+				}
+				return skills.TestRun(ctx, database, deployment, publisher, actor, input)
 			},
 		},
 		{
