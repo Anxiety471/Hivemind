@@ -445,7 +445,7 @@ func commitDocument(ctx context.Context, database *db.DB, actor db.Actor, ring *
 				return err
 			}
 			if err := tx.QueryRow(ctx, `UPDATE memory_documents SET content = $1, revision = revision + 1, "updatedAt" = $2
-				WHERE id = $3 RETURNING revision`, sealed, at, existing.ID).Scan(&revision); err != nil {
+				WHERE id = $3 RETURNING revision`, append(db.Data(sealed, at), existing.ID)...).Scan(&revision); err != nil {
 				return err
 			}
 			id = existing.ID
@@ -458,7 +458,7 @@ func commitDocument(ctx context.Context, database *db.DB, actor db.Actor, ring *
 			if err := tx.QueryRow(ctx, `INSERT INTO memory_documents
 				(id, "spaceId", "userId", "botId", scope, path, content, revision, "createdAt", "updatedAt")
 				VALUES ($1, $2, $3, $4, $5, $6, $7, 1, $8, $8) RETURNING revision`,
-				id, actor.SpaceID, actor.UserID, botID, scope, path, sealed, at).Scan(&revision); err != nil {
+				db.Data(id, actor.SpaceID, actor.UserID, botID, scope, path, sealed, at)...).Scan(&revision); err != nil {
 				return err
 			}
 		}
@@ -469,7 +469,7 @@ func commitDocument(ctx context.Context, database *db.DB, actor db.Actor, ring *
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO memory_revisions
 			(id, "documentId", revision, content, "sourceRunId", "sourceThreadId", "createdAt")
-			VALUES ($1, $2, $3, $4, NULL, NULL, $5)`, revisionID, id, revision, sealedRevision, at); err != nil {
+			VALUES ($1, $2, $3, $4, NULL, NULL, $5)`, db.Data(revisionID, id, revision, sealedRevision, at)...); err != nil {
 			return err
 		}
 		result = Document{

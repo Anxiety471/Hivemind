@@ -5,6 +5,8 @@ import (
 	"math"
 	"strconv"
 	"strings"
+
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 )
 
 // DecodeAny reads one JSON value the way JSON.parse does for this package's
@@ -79,31 +81,5 @@ func jsNumber(text string) string {
 // writeString is JSON.stringify of a string: quotes, backslashes and control
 // characters escaped, everything else (including U+2028/2029 and DEL) as is.
 func writeString(out *strings.Builder, text string) {
-	const hex = "0123456789abcdef"
-	out.WriteByte('"')
-	for _, character := range text {
-		switch {
-		case character == '"':
-			out.WriteString(`\"`)
-		case character == '\\':
-			out.WriteString(`\\`)
-		case character == '\b':
-			out.WriteString(`\b`)
-		case character == '\f':
-			out.WriteString(`\f`)
-		case character == '\n':
-			out.WriteString(`\n`)
-		case character == '\r':
-			out.WriteString(`\r`)
-		case character == '\t':
-			out.WriteString(`\t`)
-		case character < 0x20:
-			out.WriteString(`\u00`)
-			out.WriteByte(hex[character>>4])
-			out.WriteByte(hex[character&0xf])
-		default:
-			out.WriteRune(character)
-		}
-	}
-	out.WriteByte('"')
+	wtf8.AppendQuoted(out, text)
 }

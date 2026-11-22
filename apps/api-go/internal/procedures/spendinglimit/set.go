@@ -85,7 +85,7 @@ func Set(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input, l
 			ON CONFLICT ("userId") DO UPDATE SET amount = EXCLUDED.amount, currency = EXCLUDED.currency,
 				period = EXCLUDED.period, "updatedAt" = EXCLUDED."updatedAt",
 				"startsAt" = CASE WHEN $6 THEN EXCLUDED."startsAt" ELSE spending_limits."startsAt" END`,
-			actor.UserID, limit.Amount, limit.Currency, limit.Period, at, restart)
+			db.Data(actor.UserID, limit.Amount, limit.Currency, limit.Period, at, restart)...)
 		return err
 	})
 	if err != nil {

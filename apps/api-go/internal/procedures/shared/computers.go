@@ -64,7 +64,7 @@ func RestoreBotUnderComputerQuota(ctx context.Context, database *db.DB, tx pgx.T
 			}
 		}
 	}
-	tag, err := tx.Exec(ctx, `UPDATE bots SET "archivedAt" = NULL, "updatedAt" = $1 WHERE id = $2`, at, botID)
+	tag, err := tx.Exec(ctx, `UPDATE bots SET "archivedAt" = NULL, "updatedAt" = $1 WHERE id = $2`, append(db.Data(at), botID)...)
 	if err != nil {
 		return err
 	}

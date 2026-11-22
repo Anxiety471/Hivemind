@@ -69,6 +69,3 @@ func quoteUnits(units []uint16) []byte {
 
 // quoteText is quoteUnits for a string read as runes.
 func quoteText(text string) []byte { return quoteUnits(unitsOf(text)) }
-
-// runeCount is zod's string length check, which counts code points.
-func runeCount(text string) int { return wtf8.Length(text) }

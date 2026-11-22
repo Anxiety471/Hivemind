@@ -154,3 +154,68 @@ func TestMarshalOutputIsValidJSON(t *testing.T) {
 		t.Fatalf("stdlib parse = %q", parsed["a"])
 	}
 }
+
+func TestLiteralMarkerRunesRoundTripBesideASurrogate(t *testing.T) {
+	// A literal marker sequence must survive even when another field turns on
+	// the marker encoding, so the restore pass cannot corrupt it.
+	type value struct {
+		Literal string `json:"literal"`
+		Lone    string `json:"lone"`
+	}
+	input := value{
+		Literal: "\uFC00\uFC01\uE000\uE7FF\uE800\uF8FF",
+		Lone:    "x" + string(surrogateBytes(0xD800)) + "y",
+	}
+	body, err := Marshal(input)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var decoded value
+	if err := Unmarshal(body, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded.Literal != input.Literal {
+		t.Fatalf("literal = %q, want %q", decoded.Literal, input.Literal)
+	}
+	if decoded.Lone != input.Lone {
+		t.Fatalf("lone = %q", decoded.Lone)
+	}
+}
+
+func TestTheProcessMarkersAreOutsideTheUnitRange(t *testing.T) {
+	if marker < 0xE800 || marker > 0xF8FF || markerEscape < 0xE800 || markerEscape > 0xF8FF {
+		t.Fatalf("marker = %U escape = %U", marker, markerEscape)
+	}
+	if marker == markerEscape || (marker >= unitMarkerLow && marker <= unitMarkerHigh) {
+		t.Fatalf("marker collides: %U", marker)
+	}
+}
+
+func TestUnmarshalRejectsRawControlCharacters(t *testing.T) {
+	for code := 0; code < 0x20; code++ {
+		raw := []byte(`"a` + string([]byte{byte(code)}) + `b"`)
+		if err := Unmarshal(raw, new(any)); err == nil {
+			t.Errorf("raw %#x accepted", code)
+		}
+	}
+	if err := Unmarshal([]byte(`"a\u0000b"`), new(any)); err != nil {
+		t.Errorf("escaped control rejected: %v", err)
+	}
+}
+
+func TestAppendQuotedMatchesJSONStringify(t *testing.T) {
+	lone := "x" + string(surrogateBytes(0xD800)) + "y"
+	for input, want := range map[string]string{
+		lone:               `"x\ud800y"`,
+		"quote\"back\\":    `"quote\"back\\"`,
+		"tab\tnew\nbell\a": `"tab\tnew\nbell\u0007"`,
+		"emoji😀":           `"emoji😀"`,
+		"<&>":              `"<&>"`,
+	} {
+		var out strings.Builder
+		AppendQuoted(&out, input)
+		if out.String() != want {
+			t.Errorf("AppendQuoted(%q) = %s, want %s", input, out.String(), want)
+		}
+	}
+}

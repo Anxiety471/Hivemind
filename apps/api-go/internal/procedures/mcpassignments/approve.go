@@ -13,9 +13,9 @@ package mcpassignments
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 	"log/slog"
 	"slices"
 	"time"
@@ -369,17 +369,18 @@ func writeBlocks(ctx context.Context, tx pgx.Tx, ring *contentcrypto.KeyRing, me
 	if err != nil {
 		return err
 	}
-	body, err := json.Marshal(sealed["blocks"])
+	body, err := wtf8.Marshal(sealed["blocks"])
 	if err != nil {
 		return fmt.Errorf("store message blocks: %w", err)
 	}
 	if ring.EncryptWrites {
-		_, err = tx.Exec(ctx, `UPDATE messages SET blocks = $1::jsonb, "searchTokens" = $3 WHERE id = $2`,
-			string(body), messageID, sealed["searchTokens"])
+		args := append(db.Data(db.JSONText(string(body))), messageID)
+		args = append(args, sealed["searchTokens"])
+		_, err = tx.Exec(ctx, `UPDATE messages SET blocks = $1::jsonb, "searchTokens" = $3 WHERE id = $2`, args...)
 		return err
 	}
 	_, err = tx.Exec(ctx, `UPDATE messages SET blocks = $1::jsonb, "searchTokens" = '{}' WHERE id = $2`,
-		string(body), messageID)
+		append(db.Data(db.JSONText(string(body))), messageID)...)
 	return err
 }
 
@@ -493,7 +494,7 @@ func connect(ctx context.Context, tx pgx.Tx, actor db.Actor, input approveInput,
 		(id, "spaceId", "userId", "botId", "serverId", "allowAllTools", "allowedTools", "createdAt", "updatedAt")
 		VALUES ($1, $2, $3, $4, $5, true, '[]'::jsonb, $6, $6)
 		ON CONFLICT ("botId", "serverId") DO NOTHING`,
-		effects.NewID(), actor.SpaceID, actor.UserID, botID, serverID, at); err != nil {
+		db.Data(effects.NewID(), actor.SpaceID, actor.UserID, botID, serverID, at)...); err != nil {
 		return Assignment{}, "", err
 	}
 	rows, err := tx.Query(ctx, `SELECT `+columns+` FROM bot_mcp_servers a

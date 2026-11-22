@@ -76,11 +76,13 @@ func str(value any) (any, bool) {
 	return text, ok
 }
 
-// strMax is z.string().max(n): zod counts code points.
+// strMax is z.string().max(n): zod 4.6.7 rejects when the UTF-16 unit count
+// exceeds n, except it retries with the code-point count when that is smaller
+// (see wtf8.ZodMaxPass), so an emoji or a WTF-8 surrogate has JS's limit.
 func strMax(limit int) parser {
 	return func(value any) (any, bool) {
 		text, ok := value.(string)
-		return text, ok && wtf8.Length(text) <= limit
+		return text, ok && wtf8.ZodMaxPass(text, limit)
 	}
 }
 

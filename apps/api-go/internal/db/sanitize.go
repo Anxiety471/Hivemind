@@ -2,7 +2,6 @@ package db
 
 import (
 	"context"
-	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -10,59 +9,46 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 )
 
-// sanitizingTx is the transaction every caller runs in: a string parameter is
-// written the way Prisma's text sanitization writes it (sanitizeWriteArgs in
-// packages/db/src/database/text-sanitization.ts), so a JavaScript string with
-// an unpaired surrogate reaches Postgres as U+FFFD, not as the WTF-8 bytes the
-// JSON boundary keeps in memory.
-type sanitizingTx struct{ pgx.Tx }
+// wireTx is the transaction every caller runs in. It reproduces what
+// node-postgres does when it encodes a JavaScript string to UTF-8: an unpaired
+// UTF-16 surrogate becomes U+FFFD on the wire, while NUL is rejected by
+// PostgreSQL (22021). Prisma's sanitizeWriteArgs only rewrites write values;
+// filters are left to this wire rule, which is why a NUL in a WHERE still makes
+// PostgreSQL fail in TypeScript.
+//
+// A write value is already a Text value (see Data/Text) and is not touched
+// again; every other string is a filter and gets the wire replacement.
+type wireTx struct{ pgx.Tx }
 
-func (tx sanitizingTx) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
-	return tx.Tx.Exec(ctx, sql, sanitizeArgs(sql, args)...)
+func (tx wireTx) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	return tx.Tx.Exec(ctx, sql, wireArgs(args)...)
 }
 
-func (tx sanitizingTx) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
-	return tx.Tx.Query(ctx, sql, sanitizeArgs(sql, args)...)
+func (tx wireTx) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	return tx.Tx.Query(ctx, sql, wireArgs(args)...)
 }
 
-func (tx sanitizingTx) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
-	return tx.Tx.QueryRow(ctx, sql, sanitizeArgs(sql, args)...)
+func (tx wireTx) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	return tx.Tx.QueryRow(ctx, sql, wireArgs(args)...)
 }
 
-// writeStatement reports whether sql is one of the statements Prisma sanitizes:
-// a create, update or delete. A SELECT keeps NUL (PostgreSQL rejects it, which
-// is what the TypeScript client sees too) but replaces unpaired surrogates,
-// which Node's UTF-8 encoder writes as U+FFFD on the wire.
-func writeStatement(sql string) bool {
-	keyword := strings.ToUpper(strings.TrimLeft(sql, " \t\r\n("))
-	for _, write := range []string{"INSERT", "UPDATE", "DELETE"} {
-		if strings.HasPrefix(keyword, write) {
-			return true
-		}
-	}
-	return false
-}
-
-// sanitizeArgs applies the write rule to every string parameter. Filters see
-// the same replacement: the TypeScript driver encodes a lone surrogate as
-// U+FFFD on the wire too, so a lookup behaves identically.
-func sanitizeArgs(sql string, args []any) []any {
-	clean := wtf8.ReplaceSurrogates
-	if writeStatement(sql) {
-		clean = wtf8.SanitizeText
-	}
+// wireArgs applies the UTF-8 wire encoding to filter arguments. Text, JSON and
+// JSONText output are already in their final form.
+func wireArgs(args []any) []any {
 	changed := false
 	out := make([]any, len(args))
 	for index, arg := range args {
 		switch value := arg.(type) {
+		case Text:
+			out[index] = arg
 		case string:
-			safe := clean(value)
+			safe := wtf8.ReplaceSurrogates(value)
 			changed = changed || safe != value
 			out[index] = safe
 		case []string:
 			safe := make([]string, len(value))
 			for item, text := range value {
-				safe[item] = clean(text)
+				safe[item] = wtf8.ReplaceSurrogates(text)
 				changed = changed || safe[item] != text
 			}
 			out[index] = safe

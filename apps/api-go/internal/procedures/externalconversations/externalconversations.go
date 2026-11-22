@@ -194,7 +194,7 @@ func parseSenderPolicy(path validate.Path, raw any) (senderPolicy, []validate.Is
 
 // echoJSON writes a string the response echoes: an unpaired surrogate keeps its
 // JavaScript code unit (a \udXXX escape), as JSON.stringify writes it. The write
-// path keeps stringJSON, whose U+FFFD is what Prisma's sanitizer stores.
+// path sanitizes with wtf8.SanitizeText first, then writes stringJSON.
 func echoJSON(value string) string {
 	body, _ := wtf8.Marshal(value)
 	return string(body)
@@ -210,7 +210,8 @@ func stringJSON(value string) string {
 
 // policiesJSON is JSON.stringify of the parsed policies, in JavaScript key order
 // (whole-number keys first, ascending). sanitize applies the write-time clean-up:
-// NUL becomes U+FFFD in keys and text, and keys that collide afterwards are told apart.
+// NUL and an unpaired surrogate become U+FFFD in keys and text, and keys that
+// collide afterwards are told apart.
 func policiesJSON(entries []policyEntry, sanitize bool) string {
 	ordered := make([]policyEntry, 0, len(entries))
 	var indexed, named []policyEntry
@@ -234,7 +235,7 @@ func policiesJSON(entries []policyEntry, sanitize bool) string {
 	ordered = append(append(ordered, indexed...), named...)
 	clean := func(text string) string {
 		if sanitize {
-			return strings.ReplaceAll(text, "\x00", "\uFFFD")
+			return wtf8.SanitizeText(text)
 		}
 		return text
 	}
@@ -294,18 +295,20 @@ func UpdatePolicy(ctx context.Context, database *db.DB, actor db.Actor, raw orpc
 	}
 	var rules any
 	if parsed.Rules != nil {
-		rules = strings.ReplaceAll(*parsed.Rules, "\x00", "\uFFFD")
+		rules = wtf8.SanitizeText(*parsed.Rules)
 	}
 	var ambient any
 	if parsed.Ambient != nil {
 		ambient = *parsed.Ambient
 	}
 	err := database.Tenant(ctx, actor, func(tx pgx.Tx) error {
+		arguments := append(db.Data(ambient, rules, db.JSONText(policiesJSON(parsed.Policies, true)),
+			time.Now().UTC().Truncate(time.Millisecond)),
+			conversationID, actor.SpaceID, actor.UserID)
 		tag, err := tx.Exec(ctx, `UPDATE external_conversations
 			SET "teamChatAmbientEnabled" = $1, "teamChatRules" = $2, "automatedSenderPolicies" = $3::jsonb, "updatedAt" = $4
 			WHERE id = $5 AND "spaceId" = $6 AND "userId" = $7`,
-			ambient, rules, policiesJSON(parsed.Policies, true), time.Now().UTC().Truncate(time.Millisecond),
-			conversationID, actor.SpaceID, actor.UserID)
+			arguments...)
 		if err != nil {
 			return err
 		}

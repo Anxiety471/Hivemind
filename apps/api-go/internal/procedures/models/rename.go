@@ -46,7 +46,7 @@ func Rename(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input
 	}
 	err := database.Tenant(ctx, actor, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `UPDATE user_model_credentials SET label = $1, "updatedAt" = $2 WHERE id = $3 AND "userId" = $4`,
-			strings.ReplaceAll(label, "\x00", "\uFFFD"), time.Now().UTC().Truncate(time.Millisecond), id, actor.UserID)
+			append(db.Data(strings.ReplaceAll(label, "\x00", "\uFFFD"), time.Now().UTC().Truncate(time.Millisecond)), id, actor.UserID)...)
 		if err != nil {
 			return err
 		}

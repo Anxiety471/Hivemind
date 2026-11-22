@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 	"log/slog"
 	"time"
 
@@ -290,14 +291,14 @@ func createMessage(ctx context.Context, tx pgx.Tx, ring *contentcrypto.KeyRing, 
 	if err != nil {
 		return "", err
 	}
-	body, err := json.Marshal(sealed["blocks"])
+	body, err := wtf8.Marshal(sealed["blocks"])
 	if err != nil {
 		return "", fmt.Errorf("store message blocks: %w", err)
 	}
 	_, err = tx.Exec(ctx, `INSERT INTO messages
 		(id, "threadId", seq, role, blocks, "searchTokens", "createdAt")
 		VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)`,
-		id, threadID, nextSeq-1, role, string(body), sealed["searchTokens"], now())
+		db.Data(id, threadID, nextSeq-1, role, db.JSONText(string(body)), sealed["searchTokens"], now())...)
 	return id, err
 }
 
@@ -461,12 +462,12 @@ func DismissFocus(ctx context.Context, database *db.DB, deployment shared.Deploy
 			if err != nil {
 				return err
 			}
-			body, err := json.Marshal(sealed["blocks"])
+			body, err := wtf8.Marshal(sealed["blocks"])
 			if err != nil {
 				return fmt.Errorf("store message blocks: %w", err)
 			}
 			setTokens := ""
-			args := []any{string(body), message.ID}
+			args := []any{db.JSONText(string(body)), message.ID}
 			if ring.EncryptWrites {
 				// The extension seals the write and recomputes the blind index over what it wrote.
 				setTokens = `, "searchTokens" = $3`

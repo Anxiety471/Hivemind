@@ -148,7 +148,7 @@ func LinkStart(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.In
 			return err
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO messaging_link_codes (id, code, "userId", "spaceId", "botId", "expiresAt", "createdAt")
-			VALUES ($1, $2, $3, $4, $5, $6, $7)`, effects.NewID(), code, actor.UserID, spaceID, botID, expiresAt, now()); err != nil {
+			VALUES ($1, $2, $3, $4, $5, $6, $7)`, db.Data(effects.NewID(), code, actor.UserID, spaceID, botID, expiresAt, now())...); err != nil {
 			return err
 		}
 		var members int
@@ -232,7 +232,8 @@ func SetBot(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input
 				return err
 			}
 			err = inner.QueryRow(ctx, `UPDATE messaging_identities SET "botId" = $1, "spaceId" = $2, "updatedAt" = $3 WHERE id = $4
-				RETURNING id, provider, address, "botId"`, botID, actor.SpaceID, now(), values["identityId"]).
+				RETURNING id, provider, address, "botId"`,
+				append(db.Data(botID, actor.SpaceID, now()), values["identityId"])...).
 				Scan(&result.ID, &result.Provider, &result.Address, &result.BotID)
 			if err != nil {
 				_ = inner.Rollback(ctx)
@@ -381,7 +382,8 @@ func ChannelsRespond(ctx context.Context, database *db.DB, actor db.Actor, raw o
 		if accept {
 			status = "approved"
 		}
-		tag, err := tx.Exec(ctx, `UPDATE messaging_channel_members SET status = $1, "updatedAt" = $2 WHERE id = $3 AND status = 'invited'`, status, now(), membership.ID)
+		tag, err := tx.Exec(ctx, `UPDATE messaging_channel_members SET status = $1, "updatedAt" = $2 WHERE id = $3 AND status = 'invited'`,
+			append(db.Data(status, now()), membership.ID)...)
 		if err != nil {
 			return err
 		}
@@ -421,7 +423,8 @@ func ChannelsLeave(ctx context.Context, database *db.DB, actor db.Actor, raw orp
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec(ctx, `UPDATE messaging_channel_members SET status = 'left', "updatedAt" = $1 WHERE id = $2`, now(), id)
+		_, err = tx.Exec(ctx, `UPDATE messaging_channel_members SET status = 'left', "updatedAt" = $1 WHERE id = $2`,
+			append(db.Data(now()), id)...)
 		return err
 	})
 	if err != nil {
@@ -561,7 +564,7 @@ func ConnectionsRevoke(ctx context.Context, database *db.DB, actor db.Actor, raw
 		// reconnect waits until both the revoke and the invite delete finish.
 		return inSystem(ctx, database, tx, func() error {
 			tag, err := tx.Exec(ctx, `UPDATE agent_connections SET status = 'revoked', "updatedAt" = $1 WHERE id = $2 AND status = $3`,
-				now(), values["connectionId"], status)
+				append(db.Data(now()), values["connectionId"], status)...)
 			if err != nil {
 				return err
 			}

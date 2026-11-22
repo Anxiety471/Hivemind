@@ -7,7 +7,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf16"
 
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
@@ -434,8 +433,6 @@ func subagentBlock(payload map[string]any) map[string]any {
 
 func units(text string) []uint16 { return wtf8.Units(text) }
 
-func fromUnits(value []uint16) string { return string(utf16.Decode(value)) }
-
 var (
 	jsUpper = cases.Upper(language.Und)
 	// \s as JavaScript reads it: the white space and line terminator characters.
@@ -629,7 +626,7 @@ func reduceLive(current []map[string]any, update liveUpdate) []map[string]any {
 	case update.kind == "progress":
 		full := units(progressText(update.payload, prior))
 		if flushed < len(full) {
-			tailText = fromUnits(full[flushed:])
+			tailText = wtf8.FromUnits(full[flushed:])
 		}
 	case tailIsProgress:
 		tailText = tail["text"].(string)

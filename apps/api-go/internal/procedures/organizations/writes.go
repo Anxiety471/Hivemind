@@ -116,7 +116,7 @@ func SetRole(ctx context.Context, database *db.DB, deployment shared.Deployment,
 			return errOwnerUnchangeable
 		}
 		if _, err := tx.Exec(ctx, `UPDATE member SET role = $3 WHERE "organizationId" = $1 AND "userId" = $2`,
-			input.OrganizationID, input.UserID, input.Role); err != nil {
+			append([]any{input.OrganizationID, input.UserID}, db.Data(input.Role)...)...); err != nil {
 			return err
 		}
 		if input.Role == "member" {

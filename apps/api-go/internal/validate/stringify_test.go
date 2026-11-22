@@ -21,3 +21,13 @@ func TestStringifyMatchesJavaScript(t *testing.T) {
 		}
 	}
 }
+
+func TestStringifyKeepsALoneSurrogateAsAnEscape(t *testing.T) {
+	value, err := DecodeAny([]byte(`{"s":"a\ud800b"}`))
+	if err != nil {
+		t.Fatalf("DecodeAny: %v", err)
+	}
+	if got := Stringify(value); got != `{"s":"a\ud800b"}` {
+		t.Fatalf("Stringify = %s", got)
+	}
+}

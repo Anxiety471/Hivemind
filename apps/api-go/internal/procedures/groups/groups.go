@@ -122,7 +122,7 @@ func restore(ctx context.Context, database *db.DB, tx pgx.Tx, actor db.Actor, de
 			}
 			continue
 		}
-		tag, err := tx.Exec(ctx, `UPDATE bots SET "archivedAt" = NULL, "updatedAt" = $1 WHERE id = $2`, at, member.BotID)
+		tag, err := tx.Exec(ctx, `UPDATE bots SET "archivedAt" = NULL, "updatedAt" = $1 WHERE id = $2`, append(db.Data(at), member.BotID)...)
 		if err != nil {
 			return err
 		}
@@ -131,7 +131,7 @@ func restore(ctx context.Context, database *db.DB, tx pgx.Tx, actor db.Actor, de
 		}
 	}
 	tag, err := tx.Exec(ctx, `UPDATE chat_groups SET "archivedAt" = NULL, "updatedAt" = $1 WHERE id = $2 AND "spaceId" = $3`,
-		at, groupID, actor.SpaceID)
+		append(db.Data(at), groupID, actor.SpaceID)...)
 	if err != nil {
 		return err
 	}

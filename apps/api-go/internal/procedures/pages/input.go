@@ -303,8 +303,10 @@ func numberIssues(field string, raw any) (int, []map[string]any) {
 // keys first, ascending; then insertion order, last duplicate winning). values
 // is nil when the document is not an object.
 func decodeObject(raw []byte) (keys []string, values map[string]any, err error) {
-	if transformed, transformErr := wtf8.Transform(raw); transformErr == nil {
-		raw = transformed
+	if wtf8.NeedsTransform(raw) {
+		if transformed, transformErr := wtf8.Transform(raw); transformErr == nil {
+			raw = transformed
+		}
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()

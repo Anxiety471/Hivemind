@@ -19,6 +19,8 @@ package wtf8
 
 import (
 	"bytes"
+	"crypto/rand"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -28,20 +30,108 @@ import (
 	"unicode/utf8"
 )
 
-const (
-	// marker prefixes an unpaired unit: marker + unitMarker carries the unit,
-	// marker + markerEscape is a literal marker.
-	marker       = '\uFC00'
-	markerEscape = '\uFC01'
-	// unitMarker carries unit 0xD800 + (unitMarker - 0xE000).
-	unitMarkerLow  = 0xE000
-	unitMarkerHigh = 0xE7FF
+// The decoder marks an unpaired unit as marker + unitMarker. Both marker runes
+// are chosen at process start from the BMP private-use area, so a request cannot
+// contain them: a value that did could only use the marker pair by guessing a
+// random 14-bit pair (2^-28 with two draws), and neither rune is ever written in
+// a response. That is what lets the encoder restore marker pairs in the whole
+// marshaled body without corrupting a literal marker sequence from a custom
+// json.Marshaler or a json.RawMessage.
+var (
+	marker       rune
+	markerEscape rune
+	markerBytes  []byte
+	escapeBytes  []byte
+	markerText   string
+	escapeText   string
+	// unitMarker carries unit 0xD800 + (unitMarker - unitMarkerLow).
+	unitMarkerLow  rune = 0xE000
+	unitMarkerHigh rune = 0xE7FF
 )
 
-var (
-	markerBytes = []byte("\uFC00")
-	escapeBytes = []byte("\uFC01")
-)
+func init() {
+	const first, span = 0xE800, 0x10FF // BMP private use, outside the unit markers
+	seed := make([]byte, 8)
+	if _, err := rand.Read(seed); err != nil {
+		marker, markerEscape = 0xFC00, 0xFC01
+	} else {
+		pick := binary.BigEndian.Uint32(seed[:4])
+		marker = first + rune(pick%span)
+		second := binary.BigEndian.Uint32(seed[4:])
+		markerEscape = first + rune(second%span)
+		if markerEscape == marker {
+			markerEscape = first + (markerEscape-first+1)%span
+		}
+	}
+	markerText = string(marker)
+	escapeText = string(markerEscape)
+	markerBytes = []byte(markerText)
+	escapeBytes = []byte(escapeText)
+}
+
+// NeedsTransform reports whether raw contains an unpaired surrogate escape.
+// Documents without one take the standard decoder path unchanged, which is the
+// common case and keeps the boundary at encoding/json's cost.
+func NeedsTransform(raw []byte) bool {
+	for index := 0; index+1 < len(raw); index++ {
+		if raw[index] != '\\' {
+			continue
+		}
+		if raw[index+1] != 'u' {
+			index++
+			continue
+		}
+		if index+6 > len(raw) {
+			return true
+		}
+		unit, ok := hexUnit(raw[index+2 : index+6])
+		if !ok {
+			return true
+		}
+		index += 5
+		switch {
+		case unit >= 0xDC00 && unit <= 0xDFFF:
+			return true
+		case unit >= 0xD800 && unit <= 0xDBFF:
+			if index+7 <= len(raw) && raw[index+1] == '\\' && raw[index+2] == 'u' {
+				second, ok := hexUnit(raw[index+3 : index+7])
+				if ok && second >= 0xDC00 && second <= 0xDFFF {
+					index += 6
+					continue
+				}
+			}
+			return true
+		}
+	}
+	return false
+}
+
+func hexUnit(raw []byte) (uint16, bool) {
+	if len(raw) < 4 {
+		return 0, false
+	}
+	var unit uint16
+	for _, c := range raw[:4] {
+		digit, ok := hexDigit(c)
+		if !ok {
+			return 0, false
+		}
+		unit = unit<<4 | digit
+	}
+	return unit, true
+}
+
+func hexDigit(c byte) (uint16, bool) {
+	switch {
+	case c >= '0' && c <= '9':
+		return uint16(c - '0'), true
+	case c >= 'a' && c <= 'f':
+		return uint16(c-'a') + 10, true
+	case c >= 'A' && c <= 'F':
+		return uint16(c-'A') + 10, true
+	}
+	return 0, false
+}
 
 // Transform rewrites every string literal of raw so encoding/json decodes an
 // unpaired surrogate as a marker pair instead of U+FFFD. Bytes outside string
@@ -94,6 +184,11 @@ func rewriteString(body []byte) ([]byte, error) {
 				out = append(out, body[index])
 				index++
 				continue
+			}
+			if r < 0x20 {
+				// An unescaped control character is not JSON; let the standard
+				// decoder report the syntax error.
+				return nil, fmt.Errorf("wtf8: unescaped control character in string")
 			}
 			out = appendEscaped(out, r)
 			index += size
@@ -195,13 +290,13 @@ func hex(value uint16) byte {
 	return byte('a' + value - 10)
 }
 
-func unitMarker(unit uint16) rune { return rune(unitMarkerLow + int(unit-0xD800)) }
+func unitMarker(unit uint16) rune { return unitMarkerLow + rune(unit-0xD800) }
 
 // RestoreString turns the marker pairs of a decoded string back into the
 // JavaScript code units: an unpaired surrogate becomes its WTF-8 bytes, and an
 // escaped literal marker becomes the marker itself.
 func RestoreString(value string) string {
-	if !strings.Contains(value, string(marker)) {
+	if !strings.Contains(value, markerText) {
 		return value
 	}
 	var out []byte
@@ -219,7 +314,7 @@ func RestoreString(value string) string {
 			out = append(out, value[index:index+size]...)
 			index = after + size2
 		case second >= unitMarkerLow && second <= unitMarkerHigh:
-			unit := uint16(0xD800 + (second - unitMarkerLow))
+			unit := uint16(0xD800 + int(second-unitMarkerLow))
 			out = append(out, surrogateBytes(unit)...)
 			index = after + size2
 		default:
@@ -254,6 +349,9 @@ func isSurrogate(value string) int {
 // Unmarshal is json.Unmarshal with unpaired surrogates preserved as WTF-8 in
 // string fields, map keys slices and interfaces.
 func Unmarshal(raw []byte, target any) error {
+	if !NeedsTransform(raw) {
+		return json.Unmarshal(raw, target)
+	}
 	transformed, err := Transform(raw)
 	if err != nil {
 		// The standard decoder produces the canonical syntax error.
@@ -302,7 +400,7 @@ func restoreInto(value reflect.Value) {
 func restoreValue(value reflect.Value) reflect.Value {
 	switch value.Kind() {
 	case reflect.String:
-		if !strings.Contains(value.String(), string(marker)) {
+		if !strings.Contains(value.String(), markerText) {
 			return value
 		}
 		out := reflect.New(value.Type()).Elem()
@@ -385,120 +483,323 @@ func restoreValue(value reflect.Value) reflect.Value {
 }
 
 // Marshal writes JSON like JSON.stringify, with a WTF-8 surrogate in a string
-// written as its lower-case \udXXX escape.
+// written as its lower-case \udXXX escape. A value without a surrogate or a
+// marker is marshaled by encoding/json directly, at its own cost.
 func Marshal(value any) ([]byte, error) {
-	if value != nil {
-		root := encodeValue(reflect.ValueOf(value))
-		if root.IsValid() {
-			value = root.Interface()
-		}
-	}
-	var buffer bytes.Buffer
-	encoder := json.NewEncoder(&buffer)
-	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(value); err != nil {
+	body, err := json.Marshal(value)
+	if err != nil {
 		return nil, err
 	}
-	return restoreEscapes(bytes.TrimSuffix(buffer.Bytes(), []byte("\n"))), nil
+	body = unescapeHTML(body)
+	// encoding/json writes U+FFFD for every invalid UTF-8 byte, and WTF-8
+	// surrogate bytes are the only invalid bytes a decoded JS string can carry.
+	// Without U+FFFD in the output the document has no surrogates (a legitimate
+	// U+FFFD only makes this walk run), so standard JSON is already exact and the
+	// reflection walk is skipped entirely.
+	if !bytes.Contains(body, []byte(string(utf8.RuneError))) || !needsEncodingAny(value) {
+		return body, nil
+	}
+	root, changed := encodeValue(reflect.ValueOf(value))
+	if !changed {
+		return body, nil
+	}
+	body, err = json.Marshal(root.Interface())
+	if err != nil {
+		return nil, err
+	}
+	return restoreEscapes(unescapeHTML(body)), nil
 }
 
-// encodeValue copies value with WTF-8 surrogate bytes replaced by marker pairs
-// for encoding/json to write. A type that marshals itself is left alone: its
-// own output never carries a Go string's invalid bytes.
-func encodeValue(value reflect.Value) reflect.Value {
+// unescapeHTML turns the escapes json.Marshal writes for <, > and & back into
+// the characters, which is what JSON.stringify writes. Only an escape that
+// starts a token is replaced: one after an odd run of backslashes is text.
+func unescapeHTML(body []byte) []byte {
+	if !bytes.Contains(body, []byte(`\u00`)) {
+		return body
+	}
+	var out bytes.Buffer
+	out.Grow(len(body))
+	for index := 0; index < len(body); index++ {
+		if body[index] == '\\' {
+			if index+1 < len(body) && body[index+1] == '\\' {
+				out.WriteString(`\\`)
+				index++
+				continue
+			}
+			if index+5 < len(body) && body[index+1] == 'u' && body[index+2] == '0' && body[index+3] == '0' {
+				switch body[index+4] {
+				case '3':
+					switch body[index+5] {
+					case 'c':
+						out.WriteByte('<')
+						index += 5
+						continue
+					case 'e':
+						out.WriteByte('>')
+						index += 5
+						continue
+					}
+				case '2':
+					if body[index+5] == '6' {
+						out.WriteByte('&')
+						index += 5
+						continue
+					}
+				}
+			}
+		}
+		out.WriteByte(body[index])
+	}
+	return out.Bytes()
+}
+
+// needsEncodingAny is needsEncodingValue with type switches for the shapes HTTP
+// bodies use, so a surrogate-free response pays no reflection allocation.
+func needsEncodingAny(value any) bool {
+	switch typed := value.(type) {
+	case nil:
+		return false
+	case string:
+		return hasWTF8(typed)
+	case []byte:
+		return false
+	case json.RawMessage:
+		return false
+	case []any:
+		for _, item := range typed {
+			if needsEncodingAny(item) {
+				return true
+			}
+		}
+		return false
+	case map[string]any:
+		for key, item := range typed {
+			if hasWTF8(key) || needsEncodingAny(item) {
+				return true
+			}
+		}
+		return false
+	case map[string]string:
+		for key, item := range typed {
+			if hasWTF8(key) || hasWTF8(item) {
+				return true
+			}
+		}
+		return false
+	}
+	return needsEncodingValue(reflect.ValueOf(value))
+}
+
+// needsEncodingValue reports whether any string in the value needs the marker
+// form, without allocating or copying: the common surrogate-free body goes
+// straight to encoding/json.
+func needsEncodingValue(value reflect.Value) bool {
 	if !value.IsValid() {
-		return value
+		return false
+	}
+	if value.Kind() == reflect.Interface {
+		return !value.IsNil() && needsEncodingValue(value.Elem())
+	}
+	if value.CanAddr() && value.Addr().Type().Implements(marshalerType) {
+		return false
+	}
+	if value.Type().Implements(marshalerType) {
+		return false
+	}
+	switch value.Kind() {
+	case reflect.String:
+		return hasWTF8(value.String())
+	case reflect.Ptr:
+		return !value.IsNil() && needsEncodingValue(value.Elem())
+	case reflect.Struct:
+		for index := 0; index < value.NumField(); index++ {
+			if value.Type().Field(index).PkgPath != "" {
+				continue
+			}
+			if needsEncodingValue(value.Field(index)) {
+				return true
+			}
+		}
+	case reflect.Slice, reflect.Array:
+		if value.Type().Elem().Kind() == reflect.Uint8 {
+			return false
+		}
+		for index := 0; index < value.Len(); index++ {
+			if needsEncodingValue(value.Index(index)) {
+				return true
+			}
+		}
+	case reflect.Map:
+		if value.IsNil() {
+			return false
+		}
+		iterator := value.MapRange()
+		for iterator.Next() {
+			key := iterator.Key()
+			if key.Kind() == reflect.String && hasWTF8(key.String()) {
+				return true
+			}
+			if needsEncodingValue(iterator.Value()) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// encodeValue copies a value only where a string needs the marker form: the
+// returned bool says whether anything changed.
+func encodeValue(value reflect.Value) (reflect.Value, bool) {
+	if !value.IsValid() {
+		return value, false
 	}
 	if value.Kind() == reflect.Interface {
 		if value.IsNil() {
-			return value
+			return value, false
 		}
-		inner := encodeValue(value.Elem())
+		inner, changed := encodeValue(value.Elem())
+		if !changed {
+			return value, false
+		}
 		out := reflect.New(value.Type()).Elem()
 		if inner.IsValid() && inner.Type().AssignableTo(out.Type()) {
 			out.Set(inner)
-			return out
+			return out, true
 		}
 		if inner.IsValid() && inner.Type().Implements(out.Type()) {
 			out.Set(inner)
-			return out
+			return out, true
 		}
-		return value
+		return value, false
 	}
 	if value.CanAddr() && value.Addr().Type().Implements(marshalerType) {
-		return value
+		return value, false
 	}
 	if value.Type().Implements(marshalerType) {
-		return value
+		return value, false
 	}
 	switch value.Kind() {
 	case reflect.String:
 		text := encodeText(value.String())
 		if text == value.String() {
-			return value
+			return value, false
 		}
 		out := reflect.New(value.Type()).Elem()
 		out.SetString(text)
-		return out
+		return out, true
 	case reflect.Ptr:
 		if value.IsNil() {
-			return value
+			return value, false
+		}
+		inner, changed := encodeValue(value.Elem())
+		if !changed {
+			return value, false
 		}
 		out := reflect.New(value.Type().Elem())
-		out.Elem().Set(encodeValue(value.Elem()))
-		return out
+		out.Elem().Set(inner)
+		return out, true
 	case reflect.Struct:
-		out := reflect.New(value.Type()).Elem()
-		out.Set(value)
+		var out reflect.Value
 		for index := 0; index < value.NumField(); index++ {
 			if value.Type().Field(index).PkgPath != "" {
 				continue
 			}
-			field := out.Field(index)
-			if !field.CanSet() {
+			field := value.Field(index)
+			if !field.CanSet() && !value.CanInterface() {
 				continue
 			}
-			encoded := encodeValue(field)
-			if encoded.IsValid() && encoded.Type() == field.Type() {
-				field.Set(encoded)
+			encoded, changed := encodeValue(field)
+			if !changed {
+				continue
+			}
+			if !out.IsValid() {
+				out = reflect.New(value.Type()).Elem()
+				out.Set(value)
+			}
+			target := out.Field(index)
+			if target.CanSet() {
+				target.Set(encoded)
 			}
 		}
-		return out
+		if out.IsValid() {
+			return out, true
+		}
+		return value, false
 	case reflect.Slice:
 		if value.IsNil() || value.Type().Elem().Kind() == reflect.Uint8 {
-			return value
+			return value, false
 		}
-		out := reflect.MakeSlice(value.Type(), value.Len(), value.Len())
+		var out reflect.Value
 		for index := 0; index < value.Len(); index++ {
-			out.Index(index).Set(encodeValue(value.Index(index)))
+			item, changed := encodeValue(value.Index(index))
+			if !changed {
+				continue
+			}
+			if !out.IsValid() {
+				out = reflect.MakeSlice(value.Type(), value.Len(), value.Len())
+				reflect.Copy(out, value)
+			}
+			out.Index(index).Set(item)
 		}
-		return out
+		if out.IsValid() {
+			return out, true
+		}
+		return value, false
 	case reflect.Array:
 		if value.Type().Elem().Kind() == reflect.Uint8 {
-			return value
+			return value, false
 		}
-		out := reflect.New(value.Type()).Elem()
-		out.Set(value)
+		var out reflect.Value
 		for index := 0; index < value.Len(); index++ {
-			out.Index(index).Set(encodeValue(value.Index(index)))
+			item, changed := encodeValue(value.Index(index))
+			if !changed {
+				continue
+			}
+			if !out.IsValid() {
+				out = reflect.New(value.Type()).Elem()
+				out.Set(value)
+			}
+			out.Index(index).Set(item)
 		}
-		return out
+		if out.IsValid() {
+			return out, true
+		}
+		return value, false
 	case reflect.Map:
 		if value.IsNil() {
-			return value
+			return value, false
 		}
-		out := reflect.MakeMapWithSize(value.Type(), value.Len())
+		type entry struct {
+			key, encodedKey     reflect.Value
+			value, encodedValue reflect.Value
+			changed             bool
+		}
+		entries := make([]entry, 0, value.Len())
+		anyChanged := false
 		iterator := value.MapRange()
 		for iterator.Next() {
-			key := iterator.Key()
-			if key.Kind() == reflect.String {
-				key = encodeValue(key)
+			item := entry{key: iterator.Key(), value: iterator.Value()}
+			if item.key.Kind() == reflect.String {
+				item.encodedKey, item.changed = encodeValue(item.key)
+			} else {
+				item.encodedKey = item.key
 			}
-			out.SetMapIndex(key, encodeValue(iterator.Value()))
+			encoded, valueChanged := encodeValue(item.value)
+			item.encodedValue = encoded
+			item.changed = item.changed || valueChanged
+			anyChanged = anyChanged || item.changed
+			entries = append(entries, item)
 		}
-		return out
+		if !anyChanged {
+			return value, false
+		}
+		out := reflect.MakeMapWithSize(value.Type(), value.Len())
+		for _, item := range entries {
+			out.SetMapIndex(item.encodedKey, item.encodedValue)
+		}
+		return out, true
 	}
-	return value
+	return value, false
 }
 
 var marshalerType = reflect.TypeOf((*json.Marshaler)(nil)).Elem()
@@ -507,6 +808,9 @@ var marshalerType = reflect.TypeOf((*json.Marshaler)(nil)).Elem()
 // encoding/json, escaping a literal marker so the output pass can tell them
 // apart.
 func encodeText(value string) string {
+	if !needsEncoding(value) {
+		return value
+	}
 	var out []byte
 	for index := 0; index < len(value); {
 		if size := isSurrogate(value[index:]); size > 0 {
@@ -526,6 +830,30 @@ func encodeText(value string) string {
 		index++
 	}
 	return string(out)
+}
+
+// needsEncoding reports whether value carries a WTF-8 surrogate or a marker that
+// restoreEscapes could misread.
+func needsEncoding(value string) bool {
+	return strings.Contains(value, markerText) || hasWTF8(value)
+}
+
+// hasWTF8 reports whether value contains an encoded unpaired UTF-16 surrogate
+// (0xED A0..BF 80..BF). Detection only needs this: without a surrogate the
+// output is standard JSON and restoreEscapes never runs, so a literal marker
+// needs no escaping.
+func hasWTF8(value string) bool {
+	for index := 0; index < len(value); {
+		at := strings.IndexByte(value[index:], 0xED)
+		if at < 0 {
+			return false
+		}
+		if size := isSurrogate(value[index+at:]); size > 0 {
+			return true
+		}
+		index += at + 1
+	}
+	return false
 }
 
 // restoreEscapes rewrites marker pairs in marshaled JSON to the escapes
@@ -548,7 +876,7 @@ func restoreEscapes(body []byte) []byte {
 			out = append(out, markerBytes...)
 			index = after + size
 		case r >= unitMarkerLow && r <= unitMarkerHigh:
-			unit := uint16(0xD800 + (r - unitMarkerLow))
+			unit := uint16(0xD800 + int(r-unitMarkerLow))
 			out = append(out, '\\', 'u')
 			out = append(out, hex4(unit)...)
 			index = after + size
@@ -673,6 +1001,51 @@ func ReplaceSurrogates(value string) string {
 		index += size
 	}
 	return out.String()
+}
+
+// AppendQuoted appends JSON.stringify's spelling of one string: WTF-8 surrogate
+// bytes become lower-case \udXXX escapes, and every other character is written
+// as UTF-8 (JSON.stringify does not HTML-escape).
+func AppendQuoted(out *strings.Builder, text string) {
+	out.WriteByte('"')
+	for index := 0; index < len(text); {
+		if size := isSurrogate(text[index:]); size > 0 {
+			unit := uint16(text[index]&0x0F)<<12 | uint16(text[index+1]&0x3F)<<6 | uint16(text[index+2]&0x3F)
+			out.WriteString(`\u`)
+			out.WriteString(string(hex4(unit)))
+			index += size
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(text[index:])
+		if r == utf8.RuneError && size == 1 {
+			out.WriteRune(utf8.RuneError)
+			index++
+			continue
+		}
+		switch {
+		case r == '"':
+			out.WriteString(`\"`)
+		case r == '\\':
+			out.WriteString(`\\`)
+		case r == '\b':
+			out.WriteString(`\b`)
+		case r == '\f':
+			out.WriteString(`\f`)
+		case r == '\n':
+			out.WriteString(`\n`)
+		case r == '\r':
+			out.WriteString(`\r`)
+		case r == '\t':
+			out.WriteString(`\t`)
+		case r < 0x20:
+			out.WriteString(`\u00`)
+			out.WriteString(string([]byte{hex(uint16(r) >> 4), hex(uint16(r) & 0xF)}))
+		default:
+			out.WriteString(text[index : index+size])
+		}
+		index += size
+	}
+	out.WriteByte('"')
 }
 
 // SanitizeText is sanitizeUtf16ForJson (packages/core/src/messages/events.ts:

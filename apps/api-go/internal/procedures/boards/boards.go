@@ -193,11 +193,13 @@ func Rename(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 	var updated tickets.Board
 	err = database.Tenant(ctx, actor, func(tx pgx.Tx) error {
 		args = append(args, time.Now().UTC().Truncate(time.Millisecond))
+		dataCount := len(args)
 		updates := append(append([]string{}, assignments...), `"updatedAt" = $`+itoa(len(args)))
 		if !changesPrefix {
 			args = append(args, board.ID)
+			arguments := append(db.Data(args[:dataCount]...), args[dataCount:]...)
 			row, err := tickets.ScanBoard(tx.QueryRow(ctx, `UPDATE boards SET `+strings.Join(updates, ", ")+`
-				WHERE id = $`+itoa(len(args))+` RETURNING `+tickets.BoardColumns, args...))
+				WHERE id = $`+itoa(len(args))+` RETURNING `+tickets.BoardColumns, arguments...))
 			updated = row
 			return err
 		}
@@ -210,11 +212,12 @@ func Rename(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 			return errPrefix
 		}
 		args = append(args, board.ID, actor.SpaceID, board.NextNumber)
+		arguments := append(db.Data(args[:dataCount]...), args[dataCount:]...)
 		row, err := tickets.ScanBoard(tx.QueryRow(ctx, `UPDATE boards SET `+strings.Join(updates, ", ")+`
 			WHERE id = $`+itoa(len(args)-2)+` AND "spaceId" = $`+itoa(len(args)-1)+`
 				AND "nextNumber" = $`+itoa(len(args))+`
 				AND NOT EXISTS (SELECT 1 FROM tickets WHERE "boardId" = boards.id)
-			RETURNING `+tickets.BoardColumns, args...))
+			RETURNING `+tickets.BoardColumns, arguments...))
 		if errors.Is(err, pgx.ErrNoRows) {
 			return errPrefix
 		}

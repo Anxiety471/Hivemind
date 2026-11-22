@@ -66,7 +66,9 @@ func Wake(ctx context.Context, exec Execer, publisher Publisher, runID string, o
 	if options.KeepExisting {
 		query += ` AND "wakeAt" IS NULL`
 	}
-	tag, err := exec.Exec(ctx, query, runID, at, updated, ResumableStatuses)
+	args := append([]any{runID}, db.Data(at, updated)...)
+	args = append(args, ResumableStatuses)
+	tag, err := exec.Exec(ctx, query, args...)
 	if err != nil {
 		return false, fmt.Errorf("wake run %s: %w", runID, err)
 	}
@@ -154,10 +156,11 @@ func WakeMany(ctx context.Context, database *db.DB, actor db.Actor, threadID str
 	at := now(time.Time{})
 	woken := make(map[string]bool, len(runIDs))
 	err := database.Tenant(ctx, actor, func(tx pgx.Tx) error {
+		args := append(append([]any{runIDs}, db.Data(at)...), ContinueStatuses, threadID)
 		rows, err := tx.Query(ctx, `
 			UPDATE runs SET "wakeAt" = $2, "updatedAt" = $2
 			WHERE "threadId" = $4 AND id = ANY($1::text[]) AND status = ANY($3::text[])
-			RETURNING id`, runIDs, at, ContinueStatuses, threadID)
+			RETURNING id`, args...)
 		if err != nil {
 			return err
 		}

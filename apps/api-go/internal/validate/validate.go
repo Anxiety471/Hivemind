@@ -128,12 +128,15 @@ func (o *Object) Unrecognized(path Path, allowed ...string) []Issue {
 }
 
 func decodeValue(raw []byte) (any, error) {
-	transformed, err := wtf8.Transform(raw)
-	if err != nil {
-		// The standard decoder reports the canonical syntax error.
-		transformed = raw
+	if wtf8.NeedsTransform(raw) {
+		transformed, err := wtf8.Transform(raw)
+		if err != nil {
+			// The standard decoder reports the canonical syntax error.
+			transformed = raw
+		}
+		raw = transformed
 	}
-	dec := json.NewDecoder(bytes.NewReader(transformed))
+	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
 	value, err := readValue(dec)
 	if err != nil {

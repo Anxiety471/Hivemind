@@ -674,9 +674,9 @@ func (s *Service) UploadStream(ctx context.Context, actor db.Actor, params Uploa
 			)
 			RETURNING "createdAt", "updatedAt", "trashedAt"
 		`,
-			newID, actor.SpaceID, botID, groupID, effectiveFolderID, actor.UserID, runID,
-			source, name, slug, desc, mimeType, int(blob.SizeBytes), blob.Hash, blob.ID,
-			rootID, nextVersion, clientNonce,
+			db.Data(newID, actor.SpaceID, botID, groupID, effectiveFolderID, actor.UserID, runID,
+				source, name, slug, desc, mimeType, int(blob.SizeBytes), blob.Hash, blob.ID,
+				rootID, nextVersion, clientNonce)...,
 		).Scan(&createdAt, &updatedAt, &trashedAt)
 		if err != nil {
 			if pgErr := mapPgErr(err, "Upload conflict"); pgErr != nil {
@@ -1479,7 +1479,7 @@ func (s *Service) CreateFolder(ctx context.Context, actor db.Actor, parentID *st
 			INSERT INTO "file_folders" (id, "spaceId", "parentId", "createdByUserId", name, "createdAt", "updatedAt")
 			VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
 			RETURNING "trashedAt", "createdAt", "updatedAt"
-		`, newID, actor.SpaceID, pID, actor.UserID, name).Scan(&trashedAt, &createdAt, &updatedAt)
+		`, db.Data(newID, actor.SpaceID, pID, actor.UserID, name)...).Scan(&trashedAt, &createdAt, &updatedAt)
 		if err != nil {
 			if pgErr := mapPgErr(err, "A folder with that name already exists here"); pgErr != nil {
 				logicErr = pgErr
@@ -1527,7 +1527,7 @@ func (s *Service) RenameFolder(ctx context.Context, actor db.Actor, folderID, ra
 			SET name = $3, "updatedAt" = NOW()
 			WHERE id = $1 AND "spaceId" = $2 AND "trashedAt" IS NULL
 			RETURNING id, "parentId", "botId", name, "trashedAt", "createdAt", "updatedAt"
-		`, folderID, actor.SpaceID, name).Scan(&out.ID, &out.ParentID, &out.BotID, &out.Name, &trashedAt, &createdAt, &updatedAt)
+		`, append([]any{folderID, actor.SpaceID}, db.Data(name)...)...).Scan(&out.ID, &out.ParentID, &out.BotID, &out.Name, &trashedAt, &createdAt, &updatedAt)
 		if errors.Is(err, pgx.ErrNoRows) {
 			logicErr = orpc.NotFound("Folder not found")
 			return nil
@@ -1628,7 +1628,7 @@ func (s *Service) MoveFolder(ctx context.Context, actor db.Actor, folderID strin
 			SET "parentId" = $3, "updatedAt" = NOW()
 			WHERE id = $1 AND "spaceId" = $2
 			RETURNING id, "parentId", "botId", name, "trashedAt", "createdAt", "updatedAt"
-		`, folderID, actor.SpaceID, pID).Scan(&out.ID, &out.ParentID, &out.BotID, &out.Name, &trashedAt, &createdAt, &updatedAt)
+		`, append([]any{folderID, actor.SpaceID}, db.Data(pID)...)...).Scan(&out.ID, &out.ParentID, &out.BotID, &out.Name, &trashedAt, &createdAt, &updatedAt)
 		if err != nil {
 			if pgErr := mapPgErr(err, "A folder with that name already exists here"); pgErr != nil {
 				logicErr = pgErr
@@ -1732,7 +1732,7 @@ func (s *Service) RestoreFolder(ctx context.Context, actor db.Actor, folderID st
 			SET "trashedAt" = NULL, "parentId" = $3, "updatedAt" = NOW()
 			WHERE id = $1 AND "spaceId" = $2
 			RETURNING id, "parentId", "botId", name, "trashedAt", "createdAt", "updatedAt"
-		`, folderID, actor.SpaceID, nextParent).Scan(&out.ID, &out.ParentID, &out.BotID, &out.Name, &trashedAt, &createdAt, &updatedAt)
+		`, append([]any{folderID, actor.SpaceID}, db.Data(nextParent)...)...).Scan(&out.ID, &out.ParentID, &out.BotID, &out.Name, &trashedAt, &createdAt, &updatedAt)
 		if err != nil {
 			if pgErr := mapPgErr(err, "A folder with that name already exists in the destination"); pgErr != nil {
 				logicErr = pgErr
@@ -1862,7 +1862,7 @@ func (s *Service) RenameFile(ctx context.Context, actor db.Actor, fileID, rawNam
 		if _, err := tx.Exec(ctx, `
 			UPDATE "artifacts" SET name = $3, "updatedAt" = NOW()
 			WHERE "spaceId" = $1 AND (id = $2 OR "rootArtifactId" = $2)
-		`, actor.SpaceID, familyID, name); err != nil {
+		`, append([]any{actor.SpaceID, familyID}, db.Data(name)...)...); err != nil {
 			return err
 		}
 		row := tx.QueryRow(ctx, `
@@ -2045,7 +2045,7 @@ func (s *Service) MoveFile(ctx context.Context, actor db.Actor, fileID string, f
 		if _, err := tx.Exec(ctx, `
 			UPDATE "artifacts" SET "folderId" = $3, "updatedAt" = NOW()
 			WHERE "spaceId" = $1 AND (id = $2 OR "rootArtifactId" = $2)
-		`, actor.SpaceID, familyID, fID); err != nil {
+		`, append([]any{actor.SpaceID, familyID}, db.Data(fID)...)...); err != nil {
 			return err
 		}
 		row := tx.QueryRow(ctx, `
@@ -2150,7 +2150,7 @@ func (s *Service) RestoreFile(ctx context.Context, actor db.Actor, fileID string
 			UPDATE "artifacts"
 			SET "trashedAt" = NULL, "folderId" = $3, "updatedAt" = NOW()
 			WHERE "spaceId" = $1 AND (id = $2 OR "rootArtifactId" = $2)
-		`, actor.SpaceID, familyID, folderID); err != nil {
+		`, append([]any{actor.SpaceID, familyID}, db.Data(folderID)...)...); err != nil {
 			return err
 		}
 		row := tx.QueryRow(ctx, `

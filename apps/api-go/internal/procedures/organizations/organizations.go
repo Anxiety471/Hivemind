@@ -263,7 +263,7 @@ func Rename(ctx context.Context, database *db.DB, audit *effects.Recorder, actor
 	err := database.System(ctx, "rename an organization for its owner", func(tx pgx.Tx) error {
 		renamed, err := tx.Exec(ctx, `UPDATE organization SET name = $1
 			WHERE id = $2 AND EXISTS (SELECT 1 FROM member m WHERE m."organizationId" = organization.id AND m."userId" = $3 AND m.role LIKE '%owner%')
-				AND `+live("organization.id"), shared.StoredText(trimmed), organizationID, actor.UserID)
+				AND `+live("organization.id"), append(db.Data(shared.StoredText(trimmed)), organizationID, actor.UserID)...)
 		if err != nil {
 			return err
 		}

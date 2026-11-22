@@ -88,11 +88,13 @@ func (c Canceller) CancelActive(
 		return nil, err
 	}
 	at = now(at)
+	args := append([]any{ids}, db.Data(at)...)
+	args = append(args, ActiveStatuses)
 	rows, err := tx.Query(ctx, `
 		UPDATE runs SET status = 'cancelled', "completedAt" = $2,
 			"leaseOwner" = NULL, "leaseExpiresAt" = NULL, "updatedAt" = now()
 		WHERE id = ANY($1::text[]) AND status = ANY($3::text[])
-		RETURNING `+cancelColumns, ids, at, ActiveStatuses)
+		RETURNING `+cancelColumns, args...)
 	if err != nil {
 		return nil, fmt.Errorf("cancel runs: %w", err)
 	}
@@ -129,7 +131,7 @@ func (c Canceller) CancelActive(
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE attempts SET status = 'cancelled', "finishedAt" = $2
-		WHERE "runId" = ANY($1::text[]) AND status = 'running'`, cancelledIDs, at); err != nil {
+		WHERE "runId" = ANY($1::text[]) AND status = 'running'`, append([]any{cancelledIDs}, db.Data(at)...)...); err != nil {
 		return nil, fmt.Errorf("cancel attempts: %w", err)
 	}
 	taskIDs := taskIDsOf(cancelled)
@@ -292,7 +294,7 @@ func (c Canceller) cancelConversationLocked(
 		)
 		UPDATE runs SET status = 'cancelled', "completedAt" = $4, "updatedAt" = now()
 		WHERE id IN (SELECT id FROM scoped)
-		RETURNING `+cancelColumns, target.ThreadID, ActiveStatuses, helper, at)
+		RETURNING `+cancelColumns, append([]any{target.ThreadID, ActiveStatuses, helper}, db.Data(at)...)...)
 	if err != nil {
 		return ConversationCancel{}, fmt.Errorf("cancel conversation runs: %w", err)
 	}
@@ -495,7 +497,7 @@ func (c Canceller) SupersedeQueued(
 	updated, err := tx.Query(ctx, `
 		UPDATE runs SET status = 'cancelled', "completedAt" = $2, "updatedAt" = now()
 		WHERE id = ANY($1::text[])
-		RETURNING `+cancelColumns, ids, at)
+		RETURNING `+cancelColumns, append([]any{ids}, db.Data(at)...)...)
 	if err != nil {
 		return nil, fmt.Errorf("supersede queued runs: %w", err)
 	}

@@ -178,7 +178,7 @@ func rename(ctx context.Context, tx pgx.Tx, actor db.Actor, spaceID, name string
 	if deletingAt != nil {
 		return errDeletionInProgress
 	}
-	_, err = tx.Exec(ctx, `UPDATE spaces SET name = $1 WHERE id = $2`, shared.StoredText(name), spaceID)
+	_, err = tx.Exec(ctx, `UPDATE spaces SET name = $1 WHERE id = $2`, append(db.Data(shared.StoredText(name)), spaceID)...)
 	return err
 }
 
@@ -402,7 +402,7 @@ func addMember(ctx context.Context, tx pgx.Tx, spaceID, userID, memberUserID str
 	}
 	_, err = tx.Exec(ctx, `INSERT INTO space_members (id, "spaceId", "organizationId", "userId", role, "createdAt")
 		VALUES ($1, $2, $3, $4, 'member', $5) ON CONFLICT ("spaceId", "userId") DO NOTHING`,
-		effects.NewUUID(), spaceID, organization, memberUserID, now())
+		db.Data(effects.NewUUID(), spaceID, organization, memberUserID, now())...)
 	return err == nil, err
 }
 
@@ -554,7 +554,7 @@ func acceptInvite(ctx context.Context, tx pgx.Tx, token, userID string) (string,
 	}
 	at := now()
 	claimed, err := tx.Exec(ctx, `UPDATE space_invites SET "acceptedAt" = $1, "acceptedByUserId" = $2
-		WHERE id = $3 AND "acceptedAt" IS NULL AND "expiresAt" > $1`, at, userID, found.ID)
+		WHERE id = $3 AND "acceptedAt" IS NULL AND "expiresAt" > $1`, append(db.Data(at, userID), found.ID)...)
 	if err != nil {
 		return "", false, err
 	}
@@ -572,7 +572,7 @@ func acceptInvite(ctx context.Context, tx pgx.Tx, token, userID string) (string,
 	if errors.Is(err, pgx.ErrNoRows) {
 		memberID = effects.NewUUID()
 		if _, err := tx.Exec(ctx, `INSERT INTO member (id, "organizationId", "userId", role, "createdAt") VALUES ($1, $2, $3, $4, $5)`,
-			memberID, found.OrganizationID, userID, shared.GuestRole, at); err != nil {
+			db.Data(memberID, found.OrganizationID, userID, shared.GuestRole, at)...); err != nil {
 			return "", false, err
 		}
 		// A database trigger adds every new organization member to its default Space. An
@@ -589,7 +589,7 @@ func acceptInvite(ctx context.Context, tx pgx.Tx, token, userID string) (string,
 	if _, err := tx.Exec(ctx, `INSERT INTO space_members (id, "spaceId", "organizationId", "userId", role, "createdAt")
 		VALUES ($1, $2, $3, $4, 'member', $5)
 		ON CONFLICT ("spaceId", "userId") DO UPDATE SET role = 'member'`,
-		effects.NewUUID(), found.SpaceID, found.OrganizationID, userID, at); err != nil {
+		db.Data(effects.NewUUID(), found.SpaceID, found.OrganizationID, userID, at)...); err != nil {
 		return "", false, err
 	}
 	return found.SpaceID, true, nil

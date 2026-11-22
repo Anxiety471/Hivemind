@@ -567,17 +567,19 @@ func findAndRewriteCard(ctx context.Context, tx pgx.Tx, ring *contentcrypto.KeyR
 		if err != nil {
 			return cardUpdate{}, err
 		}
-		body, err := json.Marshal(sealed["blocks"])
+		body, err := wtf8.Marshal(sealed["blocks"])
 		if err != nil {
 			return cardUpdate{}, fmt.Errorf("store message blocks: %w", err)
 		}
 		if ring.EncryptWrites {
+			arguments := append(db.Data(db.JSONText(string(body))), message.ID)
+			arguments = append(arguments, db.Data(sealed["searchTokens"])...)
 			if _, err := tx.Exec(ctx, `UPDATE messages SET blocks = $1::jsonb, "searchTokens" = $3 WHERE id = $2`,
-				string(body), message.ID, sealed["searchTokens"]); err != nil {
+				arguments...); err != nil {
 				return cardUpdate{}, err
 			}
 		} else if _, err := tx.Exec(ctx, `UPDATE messages SET blocks = $1::jsonb, "searchTokens" = '{}' WHERE id = $2`,
-			string(body), message.ID); err != nil {
+			append(db.Data(db.JSONText(string(body))), message.ID)...); err != nil {
 			return cardUpdate{}, err
 		}
 		return cardUpdate{written: true, ThreadID: threadID, BotID: bot.BotID, MessageID: message.ID,
@@ -737,19 +739,23 @@ func UpdateDraft(ctx context.Context, database *db.DB, deployment shared.Deploym
 // and `recording` is nil when the caller owns the session, so the stored recording stays.
 func updateSkill(ctx context.Context, tx pgx.Tx, id, userID, name string, playbook map[string]any, status string, recording any) (row, error) {
 	if recording == nil {
+		arguments := append([]any{id}, db.Data(userID, shared.StoredText(name), db.JSONText(mustJSON(playbook)),
+			status, now())...)
 		value, err := scan(tx.QueryRow(ctx, `UPDATE taught_skills SET "userId" = $2, name = $3, playbook = $4::jsonb,
 			status = $5, "updatedAt" = $6 WHERE id = $1 RETURNING `+columns,
-			id, userID, shared.StoredText(name), mustJSON(playbook), status, now()))
+			arguments...))
 		return value, err
 	}
+	arguments := append([]any{id}, db.Data(userID, shared.StoredText(name), db.JSONText(mustJSON(playbook)),
+		status, db.JSONText(mustJSON(recording)), now())...)
 	value, err := scan(tx.QueryRow(ctx, `UPDATE taught_skills SET "userId" = $2, name = $3, playbook = $4::jsonb,
 		status = $5, recording = $6::jsonb, "updatedAt" = $7 WHERE id = $1 RETURNING `+columns,
-		id, userID, shared.StoredText(name), mustJSON(playbook), status, mustJSON(recording), now()))
+		arguments...))
 	return value, err
 }
 
 func mustJSON(value any) string {
-	body, err := json.Marshal(value)
+	body, err := wtf8.Marshal(value)
 	if err != nil {
 		return "{}"
 	}
@@ -866,14 +872,17 @@ func Save(ctx context.Context, database *db.DB, deployment shared.Deployment, ac
 // over, status and name only: the stored playbook is left as written (taught-skills.ts:475-482).
 func saveSkill(ctx context.Context, tx pgx.Tx, id, userID, name, status string, recording any) (row, error) {
 	if recording == nil {
+		arguments := append([]any{id}, db.Data(userID, shared.StoredText(name), status, now())...)
 		value, err := scan(tx.QueryRow(ctx, `UPDATE taught_skills SET "userId" = $2, name = $3,
 			status = $4, "updatedAt" = $5 WHERE id = $1 RETURNING `+columns,
-			id, userID, shared.StoredText(name), status, now()))
+			arguments...))
 		return value, err
 	}
+	arguments := append([]any{id}, db.Data(userID, shared.StoredText(name), status,
+		db.JSONText(mustJSON(recording)), now())...)
 	value, err := scan(tx.QueryRow(ctx, `UPDATE taught_skills SET "userId" = $2, name = $3,
 		status = $4, recording = $5::jsonb, "updatedAt" = $6 WHERE id = $1 RETURNING `+columns,
-		id, userID, shared.StoredText(name), status, mustJSON(recording), now()))
+		arguments...))
 	return value, err
 }
 

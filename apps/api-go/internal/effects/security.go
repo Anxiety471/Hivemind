@@ -2,7 +2,6 @@ package effects
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"math"
@@ -98,15 +97,16 @@ func (r *Recorder) Record(ctx context.Context, input SecurityEvent) error {
 		"security.event.type", event.Type, "user.id", event.UserID, "space.id", event.SpaceID,
 		"client.ip", event.IP, "user_agent.original", event.UserAgent, "security.event.metadata", metadata)
 
-	body, err := json.Marshal(metadata)
+	body, err := wtf8.Marshal(metadata)
 	if err != nil {
 		return err
 	}
 	if err := r.db.System(ctx, "append a security event", func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `INSERT INTO security_events (id, type, "userId", "spaceId", ip, "userAgent", metadata, "createdAt")
 			VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)`,
-			NewID(), event.Type, nullable(event.UserID), nullable(event.SpaceID), nullable(event.IP), nullable(event.UserAgent),
-			string(body), time.Now().UTC().Truncate(time.Millisecond))
+			db.Data(NewID(), event.Type, nullable(event.UserID), nullable(event.SpaceID), nullable(event.IP),
+				nullable(event.UserAgent), db.JSONText(string(body)),
+				time.Now().UTC().Truncate(time.Millisecond))...)
 		return err
 	}); err != nil {
 		r.logger.Error("security.event.write_failed", "error", err)

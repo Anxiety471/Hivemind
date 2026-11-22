@@ -548,12 +548,12 @@ func insertRoleRow(ctx context.Context, tx pgx.Tx, actor db.Actor, target, role 
 	if target == "space" {
 		_, err := tx.Exec(ctx, `INSERT INTO space_model_role_choices ("userId", "spaceId", role, "position", provider, "modelId", "thinkingLevel", "credentialId")
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-			actor.UserID, actor.SpaceID, role, position, choice.Provider, choice.ModelID, choice.ThinkingLevel, choice.CredentialID)
+			db.Data(actor.UserID, actor.SpaceID, role, position, choice.Provider, choice.ModelID, choice.ThinkingLevel, choice.CredentialID)...)
 		return err
 	}
 	_, err := tx.Exec(ctx, `INSERT INTO user_model_role_choices ("userId", role, "position", provider, "modelId", "thinkingLevel", "credentialId")
 		VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		actor.UserID, role, position, choice.Provider, choice.ModelID, choice.ThinkingLevel, choice.CredentialID)
+		db.Data(actor.UserID, role, position, choice.Provider, choice.ModelID, choice.ThinkingLevel, choice.CredentialID)...)
 	return err
 }
 

@@ -102,7 +102,7 @@ func Rename(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input
 		// A page deleted since the read above reads as gone, like any other missing page.
 		var err error
 		renamed, err = scanRow(tx.QueryRow(ctx, `UPDATE pages SET title = $1, "updatedAt" = $2 WHERE id = $3 RETURNING `+summaryColumns,
-			title, now(), id))
+			append(db.Data(title, now()), id)...))
 		if errors.Is(err, pgx.ErrNoRows) {
 			return shared.NotFound
 		}
@@ -159,7 +159,7 @@ func Pin(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input) (
 			at := now()
 			pinnedAt = &at
 		}
-		result, err = scanRow(tx.QueryRow(ctx, `UPDATE pages SET "pinnedAt" = $1 WHERE id = $2 RETURNING `+summaryColumns, pinnedAt, id))
+		result, err = scanRow(tx.QueryRow(ctx, `UPDATE pages SET "pinnedAt" = $1 WHERE id = $2 RETURNING `+summaryColumns, append(db.Data(pinnedAt), id)...))
 		if errors.Is(err, pgx.ErrNoRows) {
 			return shared.NotFound
 		}

@@ -263,6 +263,12 @@ func recordRun(ctx context.Context, database *db.DB, userID string, changes int,
 		}
 		reportJSON = string(raw)
 	}
+	if failuresJSON != nil {
+		failuresJSON = db.JSONText(failuresJSON.(string))
+	}
+	if reportJSON != nil {
+		reportJSON = db.JSONText(reportJSON.(string))
+	}
 	return database.System(ctx, "memory roamer records its pass", func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `UPDATE memory_roamer_settings SET
 			"lastRunAt" = now(),
@@ -274,8 +280,8 @@ func recordRun(ctx context.Context, database *db.DB, userID string, changes int,
 			"retryAt" = $7,
 			"retryAttempt" = $8,
 			"updatedAt" = now()
-			WHERE "userId" = $1`, userID, failureSummary(failures), changes, model,
-			failuresJSON, reportJSON, retryAt, retryAttempt)
+			WHERE "userId" = $1`, append([]any{userID}, db.Data(failureSummary(failures), changes, model,
+			failuresJSON, reportJSON, retryAt, retryAttempt)...)...)
 		return err
 	})
 }
