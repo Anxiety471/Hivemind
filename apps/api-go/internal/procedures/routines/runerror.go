@@ -29,6 +29,11 @@ func runFailureError(status string, message *string) *json.RawMessage {
 	return rawMessage(quoteUnits(clampUnits(text)))
 }
 
+// RunFailureError is runFailureError for the other procedures that show a run (threads.get).
+func RunFailureError(status string, message *string) *json.RawMessage {
+	return runFailureError(status, message)
+}
+
 // clampUnits is clampRunFailure: the first 300 UTF-16 code units and an ellipsis when the
 // text was longer.
 func clampUnits(text string) []uint16 {

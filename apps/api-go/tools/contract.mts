@@ -171,6 +171,7 @@ await writeFile(
       "messaging.connections.list": { mode: "go", readOnly: true },
       "messaging.connections.revoke": { mode: "go" },
       "threads.head": { mode: "go", readOnly: true },
+      "threads.get": { mode: "go", readOnly: true },
       "threads.markRead": { mode: "go" },
       "threads.markUnread": { mode: "go" },
       "threads.snooze": { mode: "go" },

@@ -27,7 +27,7 @@ func TestRegistryHasTheServedProceduresAndNotTrust(t *testing.T) {
 		"trustedLinkSites.list", "trustedLinkSites.remove",
 		"spendingLimit.payments", "spendingLimit.get", "botSections.list", "pages.list",
 		"spendingLimit.set",
-		"threads.head", "threads.markRead", "threads.markUnread", "threads.snooze", "externalConversations.updatePolicy",
+		"threads.head", "threads.get", "threads.markRead", "threads.markUnread", "threads.snooze", "externalConversations.updatePolicy",
 		"scratchpad.list", "scratchpad.create", "scratchpad.update", "scratchpad.remove",
 		"approvalRules.list", "approvalRules.set", "spaceSettings.overrides",
 		"messaging.link.start", "messaging.identities.setBot", "messaging.identities.unlink", "messaging.channels.list",
