@@ -119,6 +119,9 @@ it("mounts one panel when reasoning and steps wrap the text", () => {
   renderView([thinking("Before."), text("Answer."), steps("Check conflicts")]);
   expect(panels()).toHaveLength(1);
   expect(trigger()).toContain("Check conflicts");
+  act(() =>
+    container.querySelector<HTMLButtonElement>('[data-testid="activity-trigger"]')?.click(),
+  );
   expect(container.querySelector('[data-testid="thinking-row"]')?.textContent).toContain("Before.");
 });
 

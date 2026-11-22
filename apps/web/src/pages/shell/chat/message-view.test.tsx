@@ -463,6 +463,9 @@ it("puts its activity panel above the reply as its own block, never inside the b
   );
   const panel = container.querySelector<HTMLElement>('[data-testid="tool-activity"]');
   const bubble = container.querySelector<HTMLElement>('[data-testid="message-bot-bubble"]');
+  act(() =>
+    container.querySelector<HTMLButtonElement>('[data-testid="activity-trigger"]')?.click(),
+  );
   expect(container.querySelectorAll('[data-testid="tool-activity"]')).toHaveLength(1);
   expect(panel).not.toBeNull();
   expect(bubble).not.toBeNull();

@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import type { MessageBlock } from "@rakazo/contracts";
+import type { ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -65,9 +66,26 @@ function mountPanel() {
   const render = (blocks: MessageBlock[], live: boolean) =>
     flushSync(() => root.render(<ActivityPanel blocks={blocks} live={live} />));
   const trigger = () => container.querySelector<HTMLButtonElement>("button[aria-expanded]");
+  const open = () => flushSync(() => trigger()?.click());
   const byTestId = (id: string) => container.querySelector<HTMLElement>(`[data-testid="${id}"]`);
-  return { container, render, trigger, byTestId, unmount: () => root.unmount() };
+  return { container, render, trigger, open, byTestId, unmount: () => root.unmount() };
 }
+
+/** A folded panel mounts its rows only once opened, so open it the way a reader does. */
+function openedMarkup(node: ReactNode) {
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  flushSync(() => root.render(node));
+  flushSync(() =>
+    container.querySelector<HTMLButtonElement>('[data-testid="activity-trigger"]')?.click(),
+  );
+  const html = container.innerHTML;
+  root.unmount();
+  return html;
+}
+
+const opened = (blocks: MessageBlock[]) =>
+  openedMarkup(<ActivityPanel blocks={blocks} live={false} />);
 
 describe("ActivityPanel", () => {
   it("summarizes a finished run by the actions it took, with its duration", () => {
@@ -77,7 +95,7 @@ describe("ActivityPanel", () => {
     expect(text).toContain("searched the web · 12s");
     expect(html).toContain('data-testid="activity-trigger"');
     // The rows sit inside one hairline-bordered, divided container flush with the trigger.
-    expect(html).toContain(
+    expect(opened([steps(["Web fetch"], 12_000)])).toContain(
       "divide-y divide-border overflow-hidden rounded-lg border border-border",
     );
     expect(html).not.toContain("bg-card/55");
@@ -133,6 +151,14 @@ describe("ActivityPanel", () => {
     expect(folded).not.toMatch(OPEN_TRIGGER);
   });
 
+  it("mounts a finished run's rows only once it is opened", () => {
+    const blocks = [thinking(["Checking.", "Weighing Tuesday."]), steps(["Read file"])];
+    const folded = markup(blocks);
+    expect(folded).not.toContain('data-testid="tool-rows"');
+    expect(folded).not.toContain("Weighing Tuesday.");
+    expect(opened(blocks)).toContain('data-testid="tool-rows"');
+  });
+
   it("keeps a manual collapse while more activity arrives in the same run", () => {
     const panel = mountPanel();
     panel.render([steps(["One", "Two"])], true);
@@ -149,7 +175,7 @@ describe("ActivityPanel", () => {
   });
 
   it("lists reasoning and tool rows flat, in the order they happened", () => {
-    const html = markup([
+    const html = opened([
       thinking(["First thought.", "Second thought."]),
       steps(["Read file"]),
       thinking(["Third thought."], 4_000),
@@ -170,6 +196,7 @@ describe("ActivityPanel", () => {
       [thinking(["Checking the calendar.", "Weighing Tuesday."]), steps(["Read file"])],
       false,
     );
+    panel.open();
     // Done runs open no row beyond its summary, so the full lines wait behind the chevron.
     expect(panel.byTestId("thinking-trigger")?.getAttribute("aria-expanded")).toBe("false");
     expect(panel.byTestId("thinking-row")?.textContent).toContain("Checking the calendar.");
@@ -182,7 +209,7 @@ describe("ActivityPanel", () => {
   });
 
   it("leaves a one-line thought as a plain row with nothing to expand", () => {
-    const html = markup([thinking(["Checking the calendar."]), steps(["Read file"])]);
+    const html = opened([thinking(["Checking the calendar."]), steps(["Read file"])]);
     expect(html.match(/data-testid="thinking-row"/g)).toHaveLength(1);
     expect(html).not.toContain('data-testid="thinking-trigger"');
   });
@@ -213,7 +240,7 @@ describe("ActivityPanel", () => {
   });
 
   it("says what a tool call touched, naming fetched hosts and underlining URLs", () => {
-    const html = markup([
+    const html = opened([
       steps(
         ["Web fetch", "Write file", "Shell"],
         undefined,
@@ -239,6 +266,7 @@ describe("ActivityPanel", () => {
     const panel = mountPanel();
     const longCommand = `pnpm --filter @rakazo/web test ${"--reporter=verbose ".repeat(6)}src/components/messages/ActivityPanel.test.tsx`;
     panel.render([steps(["Shell"], undefined, {}, { 0: longCommand })], false);
+    panel.open();
     flushSync(() => panel.byTestId("activity-row-trigger")?.click());
     expect(panel.byTestId("tool-step-note")?.textContent).toContain(longCommand);
     panel.unmount();
@@ -247,6 +275,7 @@ describe("ActivityPanel", () => {
   it("expands a tool row to the note the bot wrote before the call", () => {
     const panel = mountPanel();
     panel.render([steps(["Web search"], undefined, { 0: "Anna is free all Tuesday." })], false);
+    panel.open();
     flushSync(() => panel.byTestId("activity-row-trigger")?.click());
     expect(panel.byTestId("tool-step-note")?.textContent).toContain("Anna is free all Tuesday.");
     panel.unmount();
@@ -283,14 +312,14 @@ describe("ActivityPanel", () => {
     expect(live).not.toContain("earlier");
     for (const label of labels) expect(live).toContain(`${label}<`);
     const doneLabels = [...labels, "step-last"];
-    const done = markup([steps(doneLabels)], false);
+    const done = opened([steps(doneLabels)]);
     expect(done).not.toContain("earlier");
     for (const label of doneLabels) expect(done).toContain(`${label}<`);
   });
 
   it("exposes the full label as the title of a truncated row", () => {
     const label = "Read apps/web/src/components/ActivityPanel.tsx";
-    const html = markup([steps([label])]);
+    const html = opened([steps([label])]);
     expect(html).toContain(`title="${label}"`);
   });
 
@@ -304,7 +333,7 @@ describe("ActivityPanel", () => {
   });
 
   it("groups reasoning and steps into one slim line", () => {
-    const html = renderToStaticMarkup(
+    const html = openedMarkup(
       <ActivityOnlyNarration
         blocks={[thinking(["Checking the calendar."]), steps(["Open calendar"], 12_000)]}
         live={false}

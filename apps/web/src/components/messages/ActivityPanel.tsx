@@ -128,7 +128,7 @@ function ThinkingRow({
           className="shrink-0 text-muted-foreground/70 transition-transform duration-150 group-data-open/row:rotate-90 motion-reduce:transition-none"
         />
       </CollapsibleTrigger>
-      <CollapsibleContent hiddenUntilFound>
+      <CollapsibleContent>
         <div
           data-testid="thinking-detail"
           className="px-3.5 pb-3 text-body-sm text-muted-foreground"
@@ -245,7 +245,7 @@ function StepRow({ step, current }: { step: ToolStep; current: boolean }) {
         />
         {liveMark}
       </CollapsibleTrigger>
-      <CollapsibleContent hiddenUntilFound>
+      <CollapsibleContent>
         <div
           data-testid="tool-step-note"
           className="space-y-2 px-3.5 pb-3 text-body-sm text-muted-foreground"
@@ -346,7 +346,9 @@ export function ActivityPanel({
           className="-rotate-90 shrink-0 text-muted-foreground/80 transition-transform duration-150 group-data-open:rotate-0 motion-reduce:transition-none"
         />
       </CollapsibleTrigger>
-      <CollapsibleContent hiddenUntilFound>
+      {/* Folded rows stay unmounted: a long thread holds thousands of them, and mounting
+          them hidden (find-in-page) froze the transcript on open. */}
+      <CollapsibleContent>
         <div
           data-testid="tool-rows"
           className="mt-2 divide-y divide-border overflow-hidden rounded-lg border border-border"
