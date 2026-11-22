@@ -347,6 +347,126 @@ async function echoPolicy(space: string, label: string) {
   return equal;
 }
 
+async function exactEcho(
+  procedure: string,
+  input: unknown,
+  space: string,
+  field: string,
+  label: string,
+) {
+  const goResult = await call(GO_URL, procedure, input, space);
+  const response = await handles.app.request(
+    `/rpc/${procedure.replaceAll(".", "/")}`,
+    { method: "POST", headers: headers(space), body: JSON.stringify({ json: input }) },
+    { incoming: { socket: { remoteAddress: "127.0.0.1" } } },
+  );
+  const text = await response.text();
+  const tsResult = { status: response.status, body: text ? JSON.parse(text) : null };
+  const tsValue = tsResult.body?.json?.[field];
+  const goValue = goResult.body?.json?.[field];
+  const equal =
+    tsResult.status === goResult.status && tsValue === goValue && tsValue === (input as any)[field];
+  if (!equal) {
+    failures += 1;
+    console.log(`FAIL  ${procedure} ${label}: ${tsResult.status}/${goResult.status}`);
+    console.log("  ts:", JSON.stringify(tsValue), "\n  go:", JSON.stringify(goValue));
+  } else {
+    console.log(`ok    ${procedure} ${label}: literal code units echoed`);
+  }
+  cases.push({
+    procedure,
+    kind: label,
+    input,
+    field,
+    typescript: tsValue ?? null,
+    go: goValue ?? null,
+    equal,
+    excluded: false,
+  });
+  return equal;
+}
+
+async function rawError(procedure: string, body: string, space: string, label: string) {
+  const goResponse = await fetch(`${GO_URL}/rpc/${procedure.replaceAll(".", "/")}`, {
+    method: "POST",
+    headers: headers(space),
+    body,
+  });
+  const goText = await goResponse.text();
+  const response = await handles.app.request(
+    `/rpc/${procedure.replaceAll(".", "/")}`,
+    { method: "POST", headers: headers(space), body },
+    { incoming: { socket: { remoteAddress: "127.0.0.1" } } },
+  );
+  const text = await response.text();
+  const parse = (value: string) => (value ? JSON.parse(value) : null);
+  const equal = response.status === goResponse.status && isDeepStrictEqual(parse(text), parse(goText));
+  if (!equal) {
+    failures += 1;
+    console.log(`FAIL  ${procedure} ${label}: ${response.status}/${goResponse.status}`);
+    console.log("  ts:", text, "\n  go:", goText);
+  } else {
+    console.log(`ok    ${procedure} ${label}: ${response.status}`);
+  }
+  cases.push({
+    procedure,
+    kind: label,
+    input: "<raw body>",
+    typescript: parse(text),
+    go: parse(goText),
+    equal,
+    excluded: false,
+  });
+  return equal;
+}
+
+async function policyStorage(space: string, label: string) {
+  const input = {
+    externalConversationId: ids.externalId,
+    teamChatAmbientEnabled: true,
+    teamChatRules: "stored\ud800rule",
+    automatedSenderPolicies: {
+      "sender\ud800": { name: "name\ud800", mode: "ignore" },
+      "sender\uFFFD": { name: "second", mode: "user" },
+      "nul\u0000key": { name: "third", mode: "ignore" },
+    },
+  };
+  const response = await handles.app.request(
+    "/rpc/externalConversations/updatePolicy",
+    { method: "POST", headers: headers(space), body: JSON.stringify({ json: input }) },
+    { incoming: { socket: { remoteAddress: "127.0.0.1" } } },
+  );
+  const tsText = await response.text();
+  const tsRow = await system.externalConversation.findUnique({
+    where: { id: ids.externalId },
+    select: { automatedSenderPolicies: true, teamChatRules: true },
+  });
+  const goResult = await call(GO_URL, "externalConversations.updatePolicy", input, space);
+  const goRow = await system.externalConversation.findUnique({
+    where: { id: ids.externalId },
+    select: { automatedSenderPolicies: true, teamChatRules: true },
+  });
+  const equal = response.status === goResult.status && isDeepStrictEqual(tsRow, goRow);
+  if (!equal) {
+    failures += 1;
+    console.log(`FAIL  externalConversations.updatePolicy ${label}: ${response.status}/${goResult.status}`);
+    console.log("  ts row:", JSON.stringify(tsRow), "\n  go row:", JSON.stringify(goRow));
+  } else {
+    console.log(`ok    externalConversations.updatePolicy ${label}: stored leaves match (${response.status})`);
+  }
+  cases.push({
+    procedure: "externalConversations.updatePolicy",
+    kind: label,
+    input: JSON.parse(JSON.stringify(input)),
+    typescript: tsRow,
+    go: goRow,
+    equal,
+    excluded: false,
+  });
+  void tsText;
+  return equal;
+}
+
 async function liveRename(
   procedure: string,
   input: unknown,
@@ -453,6 +573,33 @@ try {
     "unrecognized-nested-key",
   );
   await echoPolicy(ids.space1, "saved-policy-echo");
+  await policyStorage(ids.space1, "reviewer-policy-keys-store");
+  await rawError(
+    "externalConversations.updatePolicy",
+    JSON.stringify({
+      json: {
+        externalConversationId: ids.externalId + "\u0000",
+        teamChatAmbientEnabled: null,
+        teamChatRules: null,
+        automatedSenderPolicies: {},
+      },
+    }),
+    ids.space1,
+    "reviewer-id-nul",
+  );
+  await exactEcho(
+    "spaces.rename",
+    { spaceId: ids.space2, name: "m\uFC00\uFC01\uE000\uE7FF\uE800\uF8FFz" },
+    ids.space1,
+    "name",
+    "literal-marker-code-units",
+  );
+  await rawError(
+    "spaces.rename",
+    `{"json":{"spaceId":${JSON.stringify(ids.space2)},"name":"a\u0001b"}}`,
+    ids.space1,
+    "raw-control-byte",
+  );
 
   // Excluded: computerProvider.update/get is TypeScript-only and echoes the raw
   // code unit; Go's decoder turns the same body into U+FFFD.

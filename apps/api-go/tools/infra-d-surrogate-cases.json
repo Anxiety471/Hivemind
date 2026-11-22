@@ -391,6 +391,124 @@
       "excluded": false
     },
     {
+      "procedure": "externalConversations.updatePolicy",
+      "kind": "reviewer-policy-keys-store",
+      "input": {
+        "externalConversationId": "sd-x-1795390795150-1281146",
+        "teamChatAmbientEnabled": true,
+        "teamChatRules": "stored\ud800rule",
+        "automatedSenderPolicies": {
+          "sender\ud800": {
+            "name": "name\ud800",
+            "mode": "ignore"
+          },
+          "sender�": {
+            "name": "second",
+            "mode": "user"
+          },
+          "nul\u0000key": {
+            "name": "third",
+            "mode": "ignore"
+          }
+        }
+      },
+      "typescript": {
+        "automatedSenderPolicies": {
+          "nul�key": {
+            "mode": "ignore",
+            "name": "third"
+          },
+          "sender�": {
+            "mode": "ignore",
+            "name": "name�"
+          },
+          "sender�#2": {
+            "mode": "user",
+            "name": "second"
+          }
+        },
+        "teamChatRules": "stored�rule"
+      },
+      "go": {
+        "automatedSenderPolicies": {
+          "nul�key": {
+            "mode": "ignore",
+            "name": "third"
+          },
+          "sender�": {
+            "mode": "ignore",
+            "name": "name�"
+          },
+          "sender�#2": {
+            "mode": "user",
+            "name": "second"
+          }
+        },
+        "teamChatRules": "stored�rule"
+      },
+      "equal": true,
+      "excluded": false
+    },
+    {
+      "procedure": "externalConversations.updatePolicy",
+      "kind": "reviewer-id-nul",
+      "input": "<raw body>",
+      "typescript": {
+        "json": {
+          "defined": false,
+          "code": "INTERNAL_SERVER_ERROR",
+          "status": 500,
+          "message": "Internal server error"
+        }
+      },
+      "go": {
+        "json": {
+          "code": "INTERNAL_SERVER_ERROR",
+          "defined": false,
+          "message": "Internal server error",
+          "status": 500
+        }
+      },
+      "equal": true,
+      "excluded": false
+    },
+    {
+      "procedure": "spaces.rename",
+      "kind": "literal-marker-code-units",
+      "input": {
+        "spaceId": "sd-s2-1795390795150-1281146",
+        "name": "mﰀﰁz"
+      },
+      "field": "name",
+      "typescript": "mﰀﰁz",
+      "go": "mﰀﰁz",
+      "equal": true,
+      "excluded": false
+    },
+    {
+      "procedure": "spaces.rename",
+      "kind": "raw-control-byte",
+      "input": "<raw body>",
+      "typescript": {
+        "json": {
+          "defined": false,
+          "code": "BAD_REQUEST",
+          "status": 400,
+          "message": "Malformed request. Ensure the request body is properly formatted and the 'Content-Type' header is set correctly."
+        }
+      },
+      "go": {
+        "json": {
+          "code": "BAD_REQUEST",
+          "defined": false,
+          "message": "Malformed request. Ensure the request body is properly formatted and the 'Content-Type' header is set correctly.",
+          "status": 400
+        }
+      },
+      "equal": true,
+      "excluded": false
+    },
+    {
       "procedure": "computerProvider.update/get",
       "input": {
         "provider": "boat",
