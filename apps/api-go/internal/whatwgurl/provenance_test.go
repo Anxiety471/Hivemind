@@ -30,8 +30,8 @@ func TestNodeVersionProvenance(t *testing.T) {
 	if err := json.Unmarshal(out, &got); err != nil {
 		t.Fatalf("parse process.versions from %s: %v", node, err)
 	}
-	if got.ICU != ICUVersion || got.Unicode != UnicodeVersion {
-		t.Fatalf("node at %s reports ICU %s and Unicode %s; the committed UTS #46 tables are pinned to Node %s, ICU %s and Unicode %s. Regenerate the probe outputs and tables with the pinned runtime (apps/api-go/tools/idna-mapping-cases.mts, idna-bidi-cases.mts, idna-context-cases.mts, then `go generate ./internal/whatwgurl`).", node, got.ICU, got.Unicode, NodeVersion, ICUVersion, UnicodeVersion)
+	if got.Node != NodeVersion || got.ICU != ICUVersion || got.Unicode != UnicodeVersion {
+		t.Fatalf("node at %s reports Node %s, ICU %s and Unicode %s; the committed UTS #46 tables are pinned to Node %s, ICU %s and Unicode %s. To fix: regenerate the IDNA tables (go generate ./internal/whatwgurl) or confirm ICU/Unicode unchanged and bump the pin. If the versions differ, first regenerate the probe outputs (apps/api-go/tools/idna-mapping-cases.mts, idna-bidi-cases.mts, idna-context-cases.mts) with the pinned runtime.", node, got.Node, got.ICU, got.Unicode, NodeVersion, ICUVersion, UnicodeVersion)
 	}
 }
 
