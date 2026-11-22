@@ -103,13 +103,21 @@ func validOrigin(value string, allowPrivateHTTP bool) bool {
 		return false
 	}
 	if port := parsed.Port(); port != "" {
-		number, err := strconv.Atoi(port)
-		if err != nil || number < 0 || number > 65535 {
-			return false
+		for _, digit := range port {
+			if digit < '0' || digit > '9' {
+				return false
+			}
+		}
+		trimmed := strings.TrimLeft(port, "0")
+		if trimmed != "" {
+			number, err := strconv.Atoi(trimmed)
+			if err != nil || number > 65535 {
+				return false
+			}
 		}
 	}
 	host := parsed.Hostname()
-	if host == "" {
+	if host == "" || strings.Contains(host, "%") {
 		return false
 	}
 	if normalized, numeric, ok := jsIPv4Host(host); numeric {
@@ -251,7 +259,7 @@ func isNumericPart(value string) bool {
 }
 
 func jsNumber(value string) (uint64, bool) {
-	base := 10
+	base := uint64(10)
 	digits := value
 	if len(value) > 2 && value[0] == '0' && (value[1] == 'x' || value[1] == 'X') {
 		base, digits = 16, value[2:]
@@ -263,21 +271,21 @@ func jsNumber(value string) (uint64, bool) {
 	}
 	number := uint64(0)
 	for _, digit := range digits {
-		parsed := hexValue(byte(digit))
-		if parsed < 0 {
-			if digit >= '8' && base == 8 {
-				return 0, false
-			}
-			if digit >= '0' && digit <= '9' {
-				parsed = int(digit - '0')
-			} else {
-				return 0, false
-			}
-		}
-		if base == 10 && digit > '9' {
+		var parsed uint64
+		switch {
+		case digit >= '0' && digit <= '9':
+			parsed = uint64(digit - '0')
+		case base == 16 && digit >= 'a' && digit <= 'f':
+			parsed = uint64(digit-'a') + 10
+		case base == 16 && digit >= 'A' && digit <= 'F':
+			parsed = uint64(digit-'A') + 10
+		default:
 			return 0, false
 		}
-		number = number*uint64(base) + uint64(parsed)
+		if parsed >= base {
+			return 0, false
+		}
+		number = number*base + parsed
 		if number > 0xffffffff {
 			return 0, false
 		}
