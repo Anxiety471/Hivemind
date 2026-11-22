@@ -42,7 +42,11 @@ var ErrInvalidURL = errors.New("whatwgurl: invalid URL")
 // control or space are trimmed, then every ASCII tab, LF and CR is removed,
 // before the parser states run.
 func Parse(input string) (*URL, error) {
-	record, err := wurl.Parse(input)
+	prepared, err := prepareAbsolute(input)
+	if err != nil {
+		return nil, ErrInvalidURL
+	}
+	record, err := wurl.Parse(prepared)
 	if err != nil {
 		return nil, ErrInvalidURL
 	}
@@ -54,7 +58,15 @@ func Parse(input string) (*URL, error) {
 // `//host` reference. An invalid base makes every reference invalid, as it does
 // in JavaScript.
 func ParseRef(input, base string) (*URL, error) {
-	record, err := wurl.ParseRef(base, input)
+	preparedBase, err := prepareAbsolute(base)
+	if err != nil {
+		return nil, ErrInvalidURL
+	}
+	preparedRef, err := prepareReference(base, input)
+	if err != nil {
+		return nil, ErrInvalidURL
+	}
+	record, err := wurl.ParseRef(preparedBase, preparedRef)
 	if err != nil {
 		return nil, ErrInvalidURL
 	}
@@ -64,7 +76,7 @@ func ParseRef(input, base string) (*URL, error) {
 // CanParse is `URL.canParse(input)`: whether Parse would succeed without
 // keeping the record.
 func CanParse(input string) bool {
-	_, err := wurl.Parse(input)
+	_, err := Parse(input)
 	return err == nil
 }
 
