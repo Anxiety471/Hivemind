@@ -35,6 +35,10 @@ type WakeOptions struct {
 // commits, never inside one: TypeScript's enqueueIn refuses run.continue
 // ("Runs are not started inside a transaction").
 //
+// Wake takes the id as the caller resolved it: RLS scopes the Space, not the
+// member or thread. A procedure that accepts a run id from a request must
+// resolve it under the actor first, as TypeScript's callers do.
+//
 // A run already due is announced; a future one is not, because TypeScript's
 // RunStarter.start schedules a local timer for a later time and a process that
 // cannot take the run returns without publishing (run-wakeup.ts:104-114). The
@@ -130,6 +134,8 @@ var ContinueStatuses = []string{StatusQueued, StatusWaitingTakeover}
 // from another chat is ignored, because waking it would resume a run the caller
 // never addressed. TS has no equivalent guard because its caller has already
 // loaded the run objects; this one is for the Go procedure that takes ids.
+// The threadID guard is not a member check: callers still resolve the thread
+// and person under the actor before waking its runs.
 //
 // The status re-check at write time is deliberately stricter than TypeScript's
 // snapshot filter: TS filters the statuses the caller read, then wakeRun updates

@@ -70,6 +70,10 @@ const cancelColumns = `id, "taskId", "userId", "spaceId", "threadId", "botId", t
 //
 // Callers cancel under the thread row lock when they touch a conversation, so a
 // concurrent clear sees the same runs (thread-then-run lock order).
+//
+// CancelActive takes ids as the caller resolved them: RLS scopes the Space, not
+// the member or thread. A procedure that accepts ids from a request uses
+// CancelActiveForThread instead.
 func (c Canceller) CancelActive(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -142,7 +146,8 @@ func (c Canceller) CancelActive(
 // actor's scope; raw ids that skip that check could name another member's run in
 // the same Space. Every id must belong to threadID, the thread row is locked
 // first, and the whole body runs inside the 20 s thread-lock budget. An id from
-// another thread or Space is refused before anything is written.
+// another thread or Space is refused before anything is written. This is the
+// procedure entry point for request-supplied run ids.
 func (c Canceller) CancelActiveForThread(
 	ctx context.Context,
 	database *db.DB,
