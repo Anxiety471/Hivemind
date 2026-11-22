@@ -1,12 +1,12 @@
 import { gzipSync, gunzipSync } from "node:zlib";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // Derive the context-dependent UTS #46 data the host parser needs from the
 // Node/ICU build this application actually runs:
 //
-//   - effective ContextJ joining classes (left/D, right/D, or transparent),
+//   - effective ContextJ joining classes (left/D, right/D, or neither),
 //   - effective Virama code points for the ZWJ/ZWNJ context,
 //   - combining marks that ICU's UIDNA normalizer does not treat as marks
 //     (effective canonical combining class 0) even though UnicodeData says
@@ -17,16 +17,27 @@ import { fileURLToPath } from "node:url";
 // joiners are context-dependent and are excluded from the per-code-point
 // probes.
 //
-// Usage: node --experimental-strip-types tools/idna-context-cases.mts <ucdDir> [testdataDir]
+// Usage: node --experimental-strip-types tools/idna-context-cases.mts [ucdDir] [testdataDir]
 // Reads idna-mapping.json.gz and idna-bidi.json.gz; writes idna-context.json.gz.
+// The default ucdDir is testdata/ucd/17.0.0, populated by tools/fetch-ucd.mts.
+// The UCD files are downloaded, not committed.
 
 const here = dirname(fileURLToPath(import.meta.url));
-const ucdDir = process.argv[2] || "/tmp/ucd17";
+const UCD_VERSION = "17.0.0";
+const defaultUcdDir = join(here, "..", "internal", "whatwgurl", "testdata", "ucd", UCD_VERSION);
+const ucdDir = process.argv[2] || defaultUcdDir;
 const dir = process.argv[3] || join(here, "..", "internal", "whatwgurl", "testdata");
 mkdirSync(dir, { recursive: true });
 
 const mapping = JSON.parse(gunzipSync(readFileSync(join(dir, "idna-mapping.json.gz"))));
 const bidi = JSON.parse(gunzipSync(readFileSync(join(dir, "idna-bidi.json.gz"))));
+for (const file of ["UnicodeData.txt", "DerivedCombiningClass.txt"]) {
+  if (!existsSync(join(ucdDir, file))) {
+    console.error(`missing ${join(ucdDir, file)}`);
+    console.error("run: node --experimental-strip-types tools/fetch-ucd.mts");
+    process.exit(1);
+  }
+}
 const unicodeData = readFileSync(join(ucdDir, "UnicodeData.txt"), "utf8");
 const combiningHeader = readFileSync(join(ucdDir, "DerivedCombiningClass.txt"), "utf8").split("\n")[0];
 
@@ -147,7 +158,6 @@ for (let cp = 0; cp <= 0x10ffff; cp++) {
   if (statusOf(cp) === 0) valid.push(cp);
 }
 
-const transparent = new Uint8Array(0x110000);
 const left = new Uint8Array(0x110000);
 const right = new Uint8Array(0x110000);
 const virama = new Uint8Array(0x110000);
@@ -162,7 +172,6 @@ for (const cp of valid) {
   if (isVirama) { virama[cp] = 1; viramaCount++; continue; }
   if (isLeft) { left[cp] = 1; leftCount++; }
   if (isRight) { right[cp] = 1; rightCount++; }
-  if (!isLeft && !isRight) transparent[cp] = 1;
 }
 
 const nfcStarters = new Uint8Array(0x110000);
@@ -240,8 +249,7 @@ const out = {
   joinerLeft: rangesOf(left),
   joinerRight: rangesOf(right),
   viramas: rangesOf(virama),
-  transparent: rangesOf(transparent),
-  counts: { valid: valid.length, nfcStarters: nfcStarterCount, left: leftCount, right: rightCount, viramas: viramaCount, transparent: valid.length - leftCount - rightCount - viramaCount - 2 },
+  counts: { valid: valid.length, nfcStarters: nfcStarterCount, left: leftCount, right: rightCount, viramas: viramaCount },
   anomalies: ANOMALIES,
 };
 writeFileSync(join(dir, "idna-context.json.gz"), gzipSync(Buffer.from(JSON.stringify(out)), { level: 9 }));
