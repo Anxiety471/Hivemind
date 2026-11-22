@@ -115,18 +115,6 @@ func validOrigin(value string, allowPrivateHTTP bool) bool {
 	}
 }
 
-// normalizeSpecialURL is the part of the WHATWG URL parser that decides an origin
-// string: strip tabs/newlines and surrounding C0 controls, then rewrite a special
-// scheme's slash variants (`https:\host`, `https:/host`, `https:///host`) to `//`.
-
-// normalizeURLPath is the URL parser's path state for an origin path: dot segments,
-// including their percent-encoded spellings, collapse; empty segments do not.
-
-// jsIPv4Host is the URL parser's IPv4 host handling: legacy octal/hex/short forms
-// (`127.1`, `0177.0.0.1`, `0x7f.0.0.1`, `2130706433`) become dotted decimal. The
-// boolean reports whether the last label made the host numeric; when it did, a
-// parse failure is an invalid URL rather than a DNS name.
-
 // credentialDestination is botSecretDestinationSchema({allowPrivateHttpOrigin: true})
 // (bot-secrets.ts:191-249).
 func credentialDestination(value any) (any, bool) {
