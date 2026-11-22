@@ -109,6 +109,26 @@ func TestSpendingLimitSetIsAuditedWithTheTypeScriptMetadata(t *testing.T) {
 	}
 }
 
+func TestMcpApproveAuditMatchesSecurityAudit(t *testing.T) {
+	actor := db.Actor{UserID: "u1", SpaceID: "s1"}
+	event, ok := SecurityEventFor("mcp.assignments.approve", map[string]any{
+		"botId": "b1", "serverId": "srv1", "threadId": "t1",
+	}, actor)
+	if !ok || event.Type != "approval.decided" || event.UserID != "u1" || event.SpaceID != "s1" {
+		t.Fatalf("event = %+v", event)
+	}
+	want := []Meta{
+		{"procedure", "mcp.assignments.approve"},
+		{"kind", "mcp"},
+		{"botId", "b1"},
+		{"serverId", "srv1"},
+		{"decision", "allow"},
+	}
+	if !reflect.DeepEqual(event.Metadata, want) {
+		t.Fatalf("metadata = %v", event.Metadata)
+	}
+}
+
 func TestRosterAndSpaceChangeTables(t *testing.T) {
 	actor := db.Actor{UserID: "u1", SpaceID: "s1"}
 	check := func(procedure string, input map[string]any, output any, want RosterChange) {
