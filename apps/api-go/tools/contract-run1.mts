@@ -112,6 +112,7 @@ export function run1Cases(system: System): Case[] {
   const card = (
     seeded: Seeded,
     name: string,
+    botName: string,
     threadName: string,
     serverName: string,
     status: string,
@@ -121,7 +122,7 @@ export function run1Cases(system: System): Case[] {
       data: {
         id: id(seeded, name),
         threadId: id(seeded, threadName),
-        botId: id(seeded, threadName.replace(/^t/, "b")),
+        botId: id(seeded, botName),
         role: "bot",
         seq,
         blocks: [
@@ -184,7 +185,7 @@ export function run1Cases(system: System): Case[] {
     await bot(seeded, "r1b");
     await thread(seeded, "r1t", "r1b");
     await server(seeded, "r1s");
-    await card(seeded, "r1m", "r1t", "r1s", status, 1);
+    await card(seeded, "r1m", "r1b", "r1t", "r1s", status, 1);
   };
 
   const routineRun = (
