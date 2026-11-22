@@ -31,6 +31,7 @@ import { modelsCases } from "./contract-models.mts";
 import { spaceRunCases } from "./contract-spaces-runs.mts";
 import { routineResumeCases } from "./contract-routine-resume.mts";
 import { routineCases } from "./contract-routines.mts";
+import { run1Cases } from "./contract-run1.mts";
 import { threadAdversarialCases } from "./contract-threads-adversarial.mts";
 import { threadGetCases } from "./contract-threads-get.mts";
 import { threadMoreCases } from "./contract-threads-more.mts";
@@ -236,6 +237,7 @@ await writeFile(
       "computer.updates": { mode: "go", readOnly: true },
       "mcp.assignments.all": { mode: "go", readOnly: true },
       "mcp.assignments.list": { mode: "go", readOnly: true },
+      "mcp.assignments.approve": { mode: "go" },
       "models.backups": { mode: "go", readOnly: true },
       "models.role": { mode: "go", readOnly: true },
       "models.setRole": { mode: "go" },
@@ -272,6 +274,7 @@ await writeFile(
       "groups.restore": { mode: "go" },
       "routines.listForMentions": { mode: "go", readOnly: true },
       "routines.list": { mode: "go", readOnly: true },
+      "routines.testRun": { mode: "go" },
       "routines.history": { mode: "go", readOnly: true },
       "agentSkills.list": { mode: "go", readOnly: true },
       "agentSkills.get": { mode: "go", readOnly: true },
@@ -297,6 +300,7 @@ await writeFile(
       "organizations.invitations.cancel": { mode: "go" },
       "bots.templates": { mode: "go", readOnly: true },
       "skills.list": { mode: "go", readOnly: true },
+      "skills.testRun": { mode: "go" },
       "onboarding.start": { mode: "go", readOnly: true },
       "agentSecrets.list": { mode: "go", readOnly: true },
       "audit.events": { mode: "go", readOnly: true },
@@ -590,6 +594,7 @@ const cases: Case[] = [
   ...laneDCases(system),
   ...routineResumeCases(system),
   ...routineCases(system),
+  ...run1Cases(system),
   ...memoryCases(),
   ...laneGCases(),
   ...laneGCases2(),
@@ -5993,6 +5998,9 @@ async function reset(seeded: ReturnType<typeof ids>) {
     await owner.query("TRUNCATE usage_records");
     await owner.query("COMMIT");
   }
+  await system.run.deleteMany({ where: { spaceId: { in: seeded.spaces } } });
+  await system.task.deleteMany({ where: { spaceId: { in: seeded.spaces } } });
+  await system.taughtSkill.deleteMany({ where: { spaceId: { in: seeded.spaces } } });
   await system.botMcpServer.deleteMany({ where: { spaceId: { in: seeded.spaces } } });
   await system.mcpServerSpace.deleteMany({ where: { userId: own } });
   await system.computerUpdate.deleteMany({ where: { computerId: { startsWith: userId } } });
@@ -7624,6 +7632,9 @@ function callHeaders(seeded: Seeded) {
 }
 
 const WRITE_PROCEDURES = new Set([
+  "routines.testRun",
+  "skills.testRun",
+  "mcp.assignments.approve",
   "spendingLimit.set",
   "botSections.create",
   "botSections.update",
@@ -8322,6 +8333,56 @@ async function databaseState(seeded: ReturnType<typeof ids>, procedure?: string)
     },
     orderBy: { id: "asc" },
   });
+  const run1Rows =
+    procedure === "routines.testRun" || procedure === "skills.testRun"
+      ? {
+          run1Tasks: await system.task.findMany({
+            where: { spaceId: { in: seeded.spaces } },
+            select: {
+              id: true,
+              spaceId: true,
+              botId: true,
+              threadId: true,
+              userId: true,
+              prompt: true,
+              status: true,
+              createdAt: true,
+              updatedAt: true,
+            },
+            orderBy: { id: "asc" },
+          }),
+          run1Runs: await system.run.findMany({
+            where: { spaceId: { in: seeded.spaces } },
+            select: {
+              id: true,
+              spaceId: true,
+              botId: true,
+              threadId: true,
+              taskId: true,
+              userId: true,
+              status: true,
+              trigger: true,
+              modelProvider: true,
+              modelId: true,
+              thinkingLevel: true,
+              modelPinned: true,
+              clientNonce: true,
+              routineId: true,
+              wakeAt: true,
+              createdAt: true,
+              updatedAt: true,
+            },
+            orderBy: { id: "asc" },
+          }),
+        }
+      : {};
+  const run1Assignments =
+    procedure === "mcp.assignments.approve"
+      ? await system.botMcpServer.findMany({
+          where: { spaceId: { in: seeded.spaces } },
+          orderBy: { id: "asc" },
+        })
+      : [];
   const botEmailAddresses = await system.botEmailAddress.findMany({
     where: { name: { startsWith: `ct${RUN_TAG}-` } },
     select: { name: true, botId: true, createdAt: true },
@@ -8385,6 +8446,8 @@ async function databaseState(seeded: ReturnType<typeof ids>, procedure?: string)
     spaceMemoryConfigs,
     routines,
     routineNotices,
+    ...run1Rows,
+    run1Assignments,
     messagingIdentities,
     messagingLinkCodes,
     messagingMemberships,
