@@ -568,8 +568,9 @@ func commitInstructions(ctx context.Context, logger *slog.Logger, database *db.D
 	if !applied {
 		return false, nil
 	}
+	// bot-update.ts:102 notifies through the untyped options.notify, so no type is named here.
 	events.NotifyCommitted(ctx, &events.PGPublisher{Pool: database.Pool}, logger, database,
-		bot.ThreadID, seq, "")
+		bot.ThreadID, seq, "", "")
 	return true, nil
 }
 

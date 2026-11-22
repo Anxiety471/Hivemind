@@ -142,3 +142,23 @@ func TestRunTimingFields(t *testing.T) {
 		t.Fatalf("negative wait = %#v", fields["run.pre_run_wait_ms"])
 	}
 }
+
+// notifyRealtime (event-stream.ts:41-43) stringifies { cursor, ...(type ? { type } : {}) }: the
+// cursor first, and no type key at all when the publisher names none.
+func TestThreadEnvelopePinsExactBytes(t *testing.T) {
+	cases := []struct{ name, eventType, want string }{
+		{"without type", "", `{"topic":"thread:thread-1","payload":"{\"cursor\":7}"}`},
+		{"with type", "skill.saved", `{"topic":"thread:thread-1","payload":"{\"cursor\":7,\"type\":\"skill.saved\"}"}`},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			envelope, err := threadEnvelope("thread-1", 7, testCase.eventType)
+			if err != nil {
+				t.Fatalf("envelope: %v", err)
+			}
+			if string(envelope) != testCase.want {
+				t.Fatalf("envelope = %s, want %s", envelope, testCase.want)
+			}
+		})
+	}
+}

@@ -258,13 +258,14 @@ func appendEvent(ctx context.Context, tx pgx.Tx, ring *contentcrypto.KeyRing, in
 	return events.AppendTx(ctx, tx, ring, input)
 }
 
-// notifyEvent is deps.events.notify after the transaction committed.
+// notifyEvent is deps.events.notify after the transaction committed. TypeScript's onboarding
+// notifications name no event type (onboarding.ts:89,201,232,386), so neither does this one.
 func notifyEvent(ctx context.Context, database *db.DB, deployment shared.Deployment, event events.Event) {
 	firstResponse := ""
 	if event.FirstResponse && event.RunID != nil {
 		firstResponse = *event.RunID
 	}
-	events.NotifyCommitted(ctx, deployment.Events, slog.Default(), database, event.ThreadID, event.Seq, firstResponse)
+	events.NotifyCommitted(ctx, deployment.Events, slog.Default(), database, event.ThreadID, event.Seq, firstResponse, "")
 }
 
 // createMessage is createThreadMessageInTransaction (packages/db/src/messages.ts:130-168) for the

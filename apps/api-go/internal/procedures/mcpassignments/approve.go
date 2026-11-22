@@ -153,8 +153,9 @@ func Approve(ctx context.Context, database *db.DB, deployment shared.Deployment,
 		return nil, shared.NotFound
 	}
 	// The cursors are announced only once their events committed, as deps.events.notify is.
+	// That notify names no event type (mcp-approval.ts:217), so neither does this one.
 	for _, event := range seqs {
-		events.NotifyCommitted(ctx, deployment.Events, nil, nil, event.threadID, event.seq, "")
+		events.NotifyCommitted(ctx, deployment.Events, nil, nil, event.threadID, event.seq, "", "")
 	}
 	if runID != "" {
 		// wakeRun logs a failed nudge and drops it: the run row is durable and recovery starts it.
