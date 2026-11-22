@@ -42,22 +42,26 @@ func strMaxJS(limit int) parser {
 	}
 }
 
+// botSecretName is BotSecretName (bot-secrets.ts:10).
 func botSecretName(value any) (any, bool) {
 	text, ok := value.(string)
 	return text, ok && botSecretNamePattern.MatchString(text)
 }
 
+// secretHeaderName is SecretHeaderName and its forbidden-header refine
+// (bot-secrets.ts:16-25).
 func secretHeaderName(value any) (any, bool) {
 	text, ok := value.(string)
 	return text, ok && secretHeaderPattern.MatchString(text) && !forbiddenHeaders.MatchString(text)
 }
 
+// basicUsername is BotSecretAuth's basic variant (bot-secrets.ts:30-37).
 func basicUsername(value any) (any, bool) {
 	text, ok := value.(string)
 	return text, ok && jsLength(text) >= 1 && jsLength(text) <= 200 && basicUsernamePattern.MatchString(text)
 }
 
-// botSecretAuth is BotSecretAuth (bot-secrets.ts:25-53): a discriminated union on `type`.
+// botSecretAuth is BotSecretAuth (bot-secrets.ts:27-49): a discriminated union on `type`.
 func botSecretAuth(value any) (any, bool) {
 	objectValue, ok := value.(map[string]any)
 	if !ok {
@@ -76,7 +80,7 @@ func botSecretAuth(value any) (any, bool) {
 	}
 }
 
-// secretOrigin is botSecretOriginSchema (bot-secrets.ts:170-190).
+// secretOrigin is botSecretOriginSchema (bot-secrets.ts:162-186).
 func secretOrigin(allowPrivateHTTP bool) parser {
 	return func(value any) (any, bool) {
 		text, ok := value.(string)
@@ -90,7 +94,7 @@ func secretOrigin(allowPrivateHTTP bool) parser {
 // validOrigin is botSecretOriginSchema's refine: a URL with no non-empty
 // username/password, query, fragment or non-root path; HTTPS anywhere, HTTP
 // only on the person's own network. It reads the same normalized components
-// `new URL` exposes (bot-secrets.ts:162-190).
+// `new URL` exposes (bot-secrets.ts:168-186).
 func validOrigin(value string, allowPrivateHTTP bool) bool {
 	parsed, err := whatwgurl.Parse(value)
 	if err != nil {
@@ -151,6 +155,7 @@ func credentialDestination(value any) (any, bool) {
 	return destination, true
 }
 
+// isSitelessAuth is isSitelessAuth (bot-secrets.ts:51-54).
 func isSitelessAuth(kind string) bool {
 	return kind == "command" || kind == "card" || kind == "contact"
 }
@@ -181,11 +186,12 @@ var reservedCommandVariables = map[string]bool{
 
 var reservedCommandPrefixes = []string{"LD_", "DYLD_", "RAKAZO_", "GIT_CONFIG_", "NPM_CONFIG_"}
 
+// commandVariableName is commandVariableName (bot-secrets.ts:136-138).
 func commandVariableName(name string) string {
 	return strings.ToUpper(strings.ReplaceAll(name, "-", "_"))
 }
 
-// commandVariableProblem is commandVariableProblem (bot-secrets.ts:147-156).
+// commandVariableProblem is commandVariableProblem (bot-secrets.ts:140-150).
 func commandVariableProblem(variable string) string {
 	if !agentSecretPattern.MatchString(variable) {
 		return "invalid"
@@ -227,6 +233,7 @@ func canonicalHost(hostname string) string {
 	return host
 }
 
+// normalizeHost is normalizeHost (network-host.ts:55-57).
 func normalizeHost(hostname string) string {
 	return strings.TrimSuffix(canonicalHost(hostname), ".")
 }
@@ -401,6 +408,7 @@ func isCloudMetadataAddress(value string) bool {
 	return false
 }
 
+// isCloudMetadataHost is isCloudMetadataHost (network-host.ts:204-207).
 func isCloudMetadataHost(hostname string) bool {
 	host := normalizeHost(hostname)
 	if cloudMetadataNames[host] {
@@ -462,6 +470,7 @@ func isLoopbackHost(hostname string) bool {
 	return false
 }
 
+// isPrivateNetworkHost is isPrivateNetworkHost (network-host.ts:186-190).
 func isPrivateNetworkHost(hostname string) bool {
 	host := canonicalHost(hostname)
 	if isLoopbackHost(host) || strings.HasSuffix(host, ".local") {
