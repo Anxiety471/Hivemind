@@ -29,6 +29,8 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+// The real write sanitizer the procedure stack applies to every Prisma string.
+import { sanitizeUtf16ForJson } from "../../../packages/core/src/messages/events.js";
 // The exact zod build packages/contracts pins (pnpm workspace symlink).
 import { z } from "../../../packages/contracts/node_modules/zod/index.js";
 
@@ -59,8 +61,10 @@ const ProofLine = z.object({
   id: z.string(),
   ok: z.boolean(),
   fields: FieldsSchema.optional(),
+  get: z.string().optional(),
   zok: z.boolean(),
   zvalue: z.string(),
+  zraw: z.string().optional(),
 });
 
 function message(error: unknown): string {
@@ -101,7 +105,13 @@ type Op =
   | "setport"
   | "setprotocol"
   | "setusername"
-  | "setpassword";
+  | "setpassword"
+  | "searchparamset"
+  | "searchparams-object"
+  | "searchparams-multipair"
+  | "searchparams-append"
+  | "searchparams-delete"
+  | "searchparams-get";
 
 type TestCase = {
   id: string;
@@ -111,13 +121,20 @@ type TestCase = {
   set?: string;
   name?: string;
   value?: string;
+  pairs?: [string, string][];
 };
 
 const cases: TestCase[] = [];
 const counts: Record<string, number> = {};
 
-/** String.prototype.toWellFormed: the USVString conversion every URL API input gets. */
-function wellFormed(value: string): string {
+/**
+ * How a raw JavaScript string reaches Go: the corpus and the API are JSON, and
+ * Go's encoding/json decodes an unpaired surrogate escape to U+FFFD. NUL and
+ * every other code point survive. URL parsing applies the same USVString
+ * conversion in JavaScript, so URL fields agree; the zod stored value is
+ * compared on the raw input and on this Go-visible form (see §6 of the design).
+ */
+function goJSONString(value: string): string {
   return value.toWellFormed ? value.toWellFormed() : value.replace(/[\uD800-\uDFFF]/g, "\uFFFD");
 }
 
@@ -126,9 +143,10 @@ function add(tag: string, op: Op, input: string, base?: string, set?: string): v
   cases.push({
     id,
     op,
-    input: wellFormed(input),
-    ...(base !== undefined ? { base: wellFormed(base) } : {}),
-    ...(set !== undefined ? { set: wellFormed(set) } : {}),
+    // Raw, not toWellFormed: zod must see the lone surrogate the wire can carry.
+    input,
+    ...(base !== undefined ? { base } : {}),
+    ...(set !== undefined ? { set } : {}),
   });
   counts[tag] = (counts[tag] ?? 0) + 1;
 }
@@ -987,9 +1005,133 @@ for (const base of setterBases) {
     ["", ""],
   ] as const) {
     const id = `inventory-searchparamset-${cases.length}`;
-    cases.push({ id, op: "searchparamset", input: wellFormed(base), name, value });
+    cases.push({ id, op: "searchparamset", input: base, name, value });
     counts["inventory-searchparamset"] = (counts["inventory-searchparamset"] ?? 0) + 1;
   }
+}
+
+// URLSearchParams construction, as screen-capability.ts:122 and
+// slack-install-provider.ts:49 build their query from an object literal, plus
+// the pair form, Append, Delete and Get.
+const screenBase = "https://screen.example.com/vnc?token=abc";
+const slackBase = "https://slack.com/oauth/v2/authorize";
+const objectParamCases: [string, [string, string][]][] = [
+  [
+    screenBase,
+    [
+      ["autoconnect", "true"],
+      ["resize", "scale"],
+      ["view_only", "false"],
+      ["path", "/novnc/session/control/1700000000.tok/websockify"],
+    ],
+  ],
+  [
+    screenBase,
+    [
+      ["autoconnect", "false"],
+      ["resize", "off"],
+      ["view_only", "true"],
+      ["path", "/novnc/session/view/1.t/websockify?x=1&y=2"],
+    ],
+  ],
+  [
+    slackBase,
+    [
+      ["client_id", "123.456"],
+      ["scope", "channels:history,chat:write,groups:read"],
+      ["redirect_uri", "https://bots.bocchi.trade/messaging/slack/callback"],
+      ["state", "state-中文-😀"],
+    ],
+  ],
+  ["https://example.com/path?old=1#frag", [["a", "1"], ["b", "2 3"], ["c", "日"]]],
+  ["https://example.com/", [["empty", ""], ["space", " "], ["plus", "+"], ["reserved", "#&=?"]]],
+];
+for (const [base, pairs] of objectParamCases) {
+  const id = `inventory-searchparams-object-${cases.length}`;
+  cases.push({ id, op: "searchparams-object", input: base, pairs });
+  counts["inventory-searchparams-object"] = (counts["inventory-searchparams-object"] ?? 0) + 1;
+}
+const multiPairCases: [string, [string, string][]][] = [
+  [
+    "https://example.com/",
+    [
+      ["a", "1"],
+      ["a", "2"],
+      ["b", "3"],
+    ],
+  ],
+  ["https://example.com/?x=0", [["a", "1"], ["empty", ""], ["space", "1 2"], ["unicode", "日"]]],
+  [
+    "https://example.com/",
+    [
+      ["reserved", "#&=+"],
+      ["percent", "%20"],
+      ["dup", "1"],
+      ["dup", "2"],
+    ],
+  ],
+];
+for (const [base, pairs] of multiPairCases) {
+  const id = `inventory-searchparams-multipair-${cases.length}`;
+  cases.push({ id, op: "searchparams-multipair", input: base, pairs });
+  counts["inventory-searchparams-multipair"] =
+    (counts["inventory-searchparams-multipair"] ?? 0) + 1;
+}
+for (const [base, pairs] of [
+  [screenBase, [["view_only", "false"]]],
+  ["https://example.com/?a=1", [["a", "2"], ["a", "3"]]],
+  ["https://example.com/", [["empty", ""], ["space", "1 2"]]],
+] as [string, [string, string][]][]) {
+  const id = `inventory-searchparams-append-${cases.length}`;
+  cases.push({ id, op: "searchparams-append", input: base, pairs });
+  counts["inventory-searchparams-append"] = (counts["inventory-searchparams-append"] ?? 0) + 1;
+}
+for (const [base, name] of [
+  [screenBase, "token"],
+  [screenBase, "view_only"],
+  ["https://example.com/?a=1&a=2&b=3", "a"],
+  ["https://example.com/?x=1", "absent"],
+  ["https://example.com/", ""],
+] as [string, string][]) {
+  const id = `inventory-searchparams-delete-${cases.length}`;
+  cases.push({ id, op: "searchparams-delete", input: base, name });
+  counts["inventory-searchparams-delete"] = (counts["inventory-searchparams-delete"] ?? 0) + 1;
+}
+for (const [base, name] of [
+  [screenBase, "token"],
+  [screenBase, "absent"],
+  ["https://example.com/?a=1&a=2", "a"],
+  ["https://example.com/?a=1+2&b=%E6%97%A5", "a"],
+  ["https://example.com/?a=1+2&b=%E6%97%A5", "b"],
+] as [string, string][]) {
+  const id = `inventory-searchparams-get-${cases.length}`;
+  cases.push({ id, op: "searchparams-get", input: base, name });
+  counts["inventory-searchparams-get"] = (counts["inventory-searchparams-get"] ?? 0) + 1;
+}
+
+// Raw UTF-16 that the JSON wire can carry: unpaired surrogates and NUL reach a
+// TypeScript procedure as-is (JSON.parse) but Go's encoding/json decodes an
+// unpaired surrogate to U+FFFD. URL parsing sees the same USVString on both
+// sides; zod's stored value is checked on the raw input and the Go-visible form.
+for (const raw of [
+  "https://example.com/\ud800",
+  "https://example.com/a\udfff",
+  "https://example.com/\ud800\udfff", // a valid pair, well formed
+  "https://\ud800.example/",
+  "https://example.com/?q=\ud800",
+  "https://example.com/#\ud800",
+  "\ud800https://example.com/",
+  "https://exa\ud800mple.com/",
+  "https://example.com/\u0000",
+  "https://example.com/a\u0000b",
+  "https://example.com/?q=\u0000",
+  "https://example.com/#\u0000",
+  "\u0000https://example.com/",
+  "https://example.com/\u0000\ud800",
+]) {
+  add("generatedUtf16", "parse", raw);
+  add("generatedUtf16", "sethash", raw, undefined, "#\ud800");
+  add("generatedUtf16", "setpathname", raw, undefined, "/\u0000x");
 }
 
 // ---------------------------------------------------------------- expected
@@ -1035,7 +1177,9 @@ function parseCase(test: TestCase): { ok: boolean; fields?: Fields } {
   }
 }
 
-function applySetter(test: TestCase): { ok: boolean; fields?: Fields } {
+type Expected = { ok: boolean; fields?: Fields; get?: string };
+
+function applySetter(test: TestCase): Expected {
   let url: URL;
   try {
     url = new URL(test.input);
@@ -1074,6 +1218,20 @@ function applySetter(test: TestCase): { ok: boolean; fields?: Fields } {
     case "searchparamset":
       url.searchParams.set(test.name ?? "", test.value ?? "");
       break;
+    case "searchparams-object":
+      url.search = new URLSearchParams(Object.fromEntries(test.pairs ?? [])).toString();
+      break;
+    case "searchparams-multipair":
+      url.search = new URLSearchParams(test.pairs ?? []).toString();
+      break;
+    case "searchparams-append":
+      for (const [name, pairValue] of test.pairs ?? []) url.searchParams.append(name, pairValue);
+      break;
+    case "searchparams-delete":
+      url.searchParams.delete(test.name ?? "");
+      break;
+    case "searchparams-get":
+      return { ok: true, fields: snapshot(url), get: url.searchParams.get(test.name ?? "") };
     default:
       throw new Error(`unknown setter ${test.op}`);
   }
@@ -1088,20 +1246,40 @@ const actualPath = join(WORK, "actual.jsonl");
 
 const corpusLines: string[] = [];
 const expectedLines: string[] = [];
+// Counts the cases where zod's in-memory value and the Go-visible value differ
+// (an unpaired surrogate). The sanitized forms must still agree; the wire proof
+// then shows the real Prisma/Postgres stack stores that sanitized form.
+let inMemoryZodDiffs = 0;
 for (const test of cases) {
   const expected = test.op === "parse" ? parseCase(test) : applySetter(test);
-  const zod = zodURL.safeParse(test.input);
+  // Feed zod the raw input. The Go-visible form is what encoding/json yields.
+  const zodRaw = zodURL.safeParse(test.input);
+  const zodGo = zodURL.safeParse(goJSONString(test.input));
+  if (zodRaw.success !== zodGo.success) {
+    throw new Error(`zod verdict differs for raw and Go input: ${test.id}`);
+  }
+  const rawValue = zodRaw.success ? zodRaw.data : "";
+  const goValue = zodGo.success ? zodGo.data : "";
+  if (rawValue !== goValue) {
+    inMemoryZodDiffs++;
+    if (sanitizeUtf16ForJson(rawValue) !== sanitizeUtf16ForJson(goValue)) {
+      throw new Error(`zod stored value differs after DB sanitization: ${test.id}`);
+    }
+  }
   corpusLines.push(JSON.stringify(test));
   expectedLines.push(
     JSON.stringify({
       id: test.id,
       ok: expected.ok,
       fields: expected.fields,
-      zok: zod.success,
-      zvalue: zod.success ? zod.data : "",
+      get: expected.get ?? undefined,
+      zok: zodGo.success,
+      zvalue: goValue,
+      zraw: rawValue,
     }),
   );
 }
+console.log(`zod raw/Go in-memory value differences: ${inMemoryZodDiffs} (DB-sanitized forms equal)`);
 writeFileSync(corpusPath, `${corpusLines.join("\n")}\n`);
 writeFileSync(expectedPath, `${expectedLines.join("\n")}\n`);
 
@@ -1175,6 +1353,11 @@ for (let index = 0; index < total; index++) {
       `zod value ${JSON.stringify(expected.zvalue)} != ${JSON.stringify(actual.zvalue)}`,
     );
   }
+  const expectedGet = expected.get ?? "";
+  const actualGet = actual.get ?? "";
+  if (expectedGet !== actualGet) {
+    problems.push(`searchParams.get ${JSON.stringify(expectedGet)} != ${JSON.stringify(actualGet)}`);
+  }
   if (problems.length > 0) {
     mismatches++;
     const tag = expected.id.replace(/-\d+$/, "");
@@ -1190,8 +1373,12 @@ for (let index = 0; index < total; index++) {
   }
 }
 if (expectedLinesRead.length !== actualLinesRead.length) {
+  // A missing or extra result is a failure, not a note: a truncated Go run would
+  // otherwise pass by comparing only the lines both files happen to have.
+  mismatches += 1;
+  byTag.set("line-count", (byTag.get("line-count") ?? 0) + 1);
   console.log(
-    `line counts differ: expected ${expectedLinesRead.length - 1}, actual ${actualLinesRead.length - 1}`,
+    `MISMATCH line counts differ: expected ${expectedLinesRead.length - 1}, actual ${actualLinesRead.length - 1}`,
   );
 }
 console.log(`\n${cases.length} cases, ${mismatches} mismatches`);

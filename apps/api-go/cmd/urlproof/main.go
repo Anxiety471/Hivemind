@@ -17,13 +17,14 @@ import (
 )
 
 type testCase struct {
-	ID    string  `json:"id"`
-	Op    string  `json:"op"`
-	Input string  `json:"input"`
-	Base  *string `json:"base,omitempty"`
-	Set   string  `json:"set,omitempty"`
-	Name  string  `json:"name,omitempty"`
-	Value string  `json:"value,omitempty"`
+	ID    string      `json:"id"`
+	Op    string      `json:"op"`
+	Input string      `json:"input"`
+	Base  *string     `json:"base,omitempty"`
+	Set   string      `json:"set,omitempty"`
+	Name  string      `json:"name,omitempty"`
+	Value string      `json:"value,omitempty"`
+	Pairs [][2]string `json:"pairs,omitempty"`
 }
 
 type fields struct {
@@ -45,6 +46,7 @@ type result struct {
 	ID     string  `json:"id"`
 	OK     bool    `json:"ok"`
 	Fields *fields `json:"fields,omitempty"`
+	Get    *string `json:"get,omitempty"`
 	ZOK    bool    `json:"zok"`
 	ZValue string  `json:"zvalue"`
 }
@@ -64,6 +66,14 @@ func snapshot(u *whatwgurl.URL) *fields {
 		Hash:     u.Hash(),
 		Params:   u.SearchParams().String(),
 	}
+}
+
+func pairList(pairs [][2]string) []whatwgurl.Pair {
+	out := make([]whatwgurl.Pair, len(pairs))
+	for i := range pairs {
+		out[i] = whatwgurl.Pair{Name: pairs[i][0], Value: pairs[i][1]}
+	}
+	return out
 }
 
 func run(c testCase) result {
@@ -101,6 +111,28 @@ func run(c testCase) result {
 				u.SetPassword(c.Set)
 			case "searchparamset":
 				u.SearchParams().Set(c.Name, c.Value)
+			}
+		}
+	case c.Op == "searchparams-object", c.Op == "searchparams-multipair",
+		c.Op == "searchparams-append", c.Op == "searchparams-delete",
+		c.Op == "searchparams-get":
+		u, err = whatwgurl.Parse(c.Input)
+		if err == nil {
+			params := u.SearchParams()
+			switch c.Op {
+			case "searchparams-object", "searchparams-multipair":
+				// The object corpus uses unique, non-index keys, so its
+				// Object.fromEntries order is the pair order given here.
+				u.SetSearch(whatwgurl.NewSearchParams(pairList(c.Pairs)).String())
+			case "searchparams-append":
+				for _, pair := range c.Pairs {
+					params.Append(pair[0], pair[1])
+				}
+			case "searchparams-delete":
+				params.Delete(c.Name)
+			case "searchparams-get":
+				got := params.Get(c.Name)
+				out.Get = &got
 			}
 		}
 	default:
