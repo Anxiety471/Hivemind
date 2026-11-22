@@ -26,7 +26,10 @@ import {
 import { GraphileJobPublisher } from "../../../packages/adapters/src/runs/wakeups/wakeup.js";
 import { wakeRun } from "../../../packages/adapters/src/runs/wakeups/wake-run.js";
 import { createRoutineTestRun } from "../../api/src/routines/routines.js";
-import { cancelSupersededQueuedRuns } from "../../api/src/threads/thread-target.js";
+import {
+  cancelSupersededQueuedRuns,
+  enqueueRunsNeedingContinue,
+} from "../../api/src/threads/thread-target.js";
 import { cancelThreadRuns } from "../../api/src/threads/thread-stop.js";
 import {
   asSystem,
@@ -316,7 +319,7 @@ async function snapshot(scope: { spaceId: string; threadId: string; routineId: s
   });
   const needles = [scope.spaceId, scope.threadId, scope.routineId, ...runIds];
   const jobRows = await pool.query(
-    `SELECT j.id, t.identifier AS task, j.payload, j.run_at, j.key, j.attempts, j.max_attempts
+    `SELECT j.id, t.identifier AS task, j.payload, j.run_at, j.key, j.attempts, j.max_attempts, j.priority
      FROM graphile_worker._private_jobs j
      JOIN graphile_worker._private_tasks t ON t.id = j.task_id
      WHERE j.key LIKE ANY($1::text[])
@@ -642,6 +645,47 @@ if (picked("create-routine-model-pin")) {
   });
 }
 
+if (picked("create-empty-prompt")) {
+  await scenario("create-empty-prompt", async (side) => {
+    // skills.testRun stores `prompt ?? formatSkillRunPrompt(...)`; an explicit
+    // "" is a valid prompt (packages/contracts/src/skills/skills-rpc.ts:45).
+    await create(side, { trigger: "skill", prompt: "", at: PINNED });
+  });
+}
+
+if (picked("wake-many")) {
+  await scenario("wake-many", async (side) => {
+    const queued = await create(side, { trigger: "user", at: PINNED });
+    const waiting = await create(side, { trigger: "follow_up", at: PINNED });
+    await system.run.update({ where: { id: waiting.runId }, data: { status: "waiting_input" } });
+    if (side.kind === "ts") {
+      const starter = new RunStarter(fanout);
+      const jobs = new RunJobPublisher(system as any, idleBackground, starter);
+      await runAsTenant({ spaceId: side.fixture.spaceId, userId: side.fixture.userId }, () =>
+        enqueueRunsNeedingContinue(jobs, [
+          { id: waiting.runId, status: "waiting_input" },
+          { id: queued.runId, status: "queued" },
+        ]),
+      );
+      await settleFrames();
+      await starter.stop();
+    } else {
+      await go({
+        op: "wakeMany",
+        actor: { spaceId: side.fixture.spaceId, userId: side.fixture.userId },
+        runIds: [waiting.runId, queued.runId],
+      });
+    }
+    // A wake without an explicit `at` writes the wall clock on each side, so
+    // pin the observed value after asserting what the filter did.
+    const queuedRow = await system.run.findUniqueOrThrow({ where: { id: queued.runId }, select: { wakeAt: true } });
+    assert.ok(queuedRow.wakeAt, "the queued run must be woken");
+    const waitingRow = await system.run.findUniqueOrThrow({ where: { id: waiting.runId }, select: { wakeAt: true } });
+    assert.equal(waitingRow.wakeAt, null, "the waiting_input run must not be woken");
+    await system.run.update({ where: { id: queued.runId }, data: { wakeAt: PINNED } });
+  });
+}
+
 if (picked("wake-now")) {
   await scenario("wake-now", async (side) => {
     const created = await create(side, { trigger: "user", at: PINNED });
@@ -652,7 +696,8 @@ if (picked("wake-now")) {
 if (picked("wake-future")) {
   await scenario("wake-future", async (side) => {
     const created = await create(side, { trigger: "user", at: PINNED });
-    await wake(side, created.runId, { at: new Date("2026-11-22T09:00:00.000Z") });
+    // Genuinely ahead of the wall clock at every run.
+    await wake(side, created.runId, { at: new Date("2099-01-01T00:00:00.000Z") });
   });
 }
 
@@ -1047,7 +1092,7 @@ if (picked("jobs")) {
           });
         }
         const rows = await pool.query(
-          `SELECT t.identifier AS task, j.payload, j.run_at, j.key, j.attempts, j.max_attempts
+          `SELECT t.identifier AS task, j.payload, j.run_at, j.key, j.attempts, j.max_attempts, j.priority
            FROM graphile_worker._private_jobs j
            JOIN graphile_worker._private_tasks t ON t.id = j.task_id
            WHERE j.key = $1 OR j.payload::text LIKE $2
@@ -1064,6 +1109,7 @@ if (picked("jobs")) {
           key: replaceIds(row.key, new Map([[fixture.routineId, "<routine>"]])),
           attempts: row.attempts,
           max_attempts: row.max_attempts,
+          priority: row.priority,
         }));
       } finally {
         await system.$executeRaw`SELECT graphile_worker.remove_job(${`routine:${fixture.routineId}`})`.catch(

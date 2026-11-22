@@ -278,6 +278,22 @@ func handle(ctx context.Context, database *db.DB, ring *contentcrypto.KeyRing, n
 			return response{Error: err.Error()}
 		}
 		return response{OK: true}
+	case "wakeMany":
+		runs.WakeMany(ctx, database, actor, notifier, nil, in.RunIDs)
+		notifier.Wait()
+		return response{OK: true}
+	case "byThreadUserNonce":
+		var ref runs.RunRef
+		var ok bool
+		err := database.Tenant(ctx, actor, func(tx pgx.Tx) error {
+			var err error
+			ref, ok, err = runs.ByThreadUserNonce(ctx, tx, in.ThreadID, in.UserID, deref(in.ClientNonce))
+			return err
+		})
+		if err != nil {
+			return response{Error: err.Error()}
+		}
+		return response{OK: true, Found: ok, RunID: ref.ID, TaskID: ref.TaskID, Status: ref.Status}
 	case "byNonce":
 		var ref runs.RunRef
 		var ok bool

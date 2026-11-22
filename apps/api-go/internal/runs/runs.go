@@ -11,6 +11,13 @@
 // Every write is byte-compatible with the Prisma calls it replaces: same
 // columns, same defaults, millisecond timestamps (JS Date precision), and
 // cuid ids from effects.NewID.
+//
+// Callers run inside the transaction budget TypeScript uses for thread work:
+// a 20 second transaction timeout (THREAD_LOCK_TRANSACTION_OPTIONS,
+// packages/db/src/database/transaction-retry.ts:9). The Go gateway has no
+// per-request timeout, so a procedure that takes the thread lock first
+// (CancelConversation, and any create under a thread lock) must apply that
+// deadline itself; otherwise a held lock waits indefinitely.
 package runs
 
 import (
@@ -92,11 +99,12 @@ func contains(values []string, value string) bool {
 }
 
 // ModelPin is a run's pinned model. Pinned is `modelPinned`: sendUserMessage
-// and routineRunModelPin set it, continuationModelPin does not.
+// and routineRunModelPin set it, continuationModelPin does not. Thinking is
+// nullable: routineRunModelPin keeps a routine's NULL thinkingLevel NULL.
 type ModelPin struct {
 	Provider string
 	Model    string
-	Thinking string
+	Thinking *string
 	Pinned   bool
 }
 
@@ -163,8 +171,10 @@ func Create(ctx context.Context, tx Execer, input CreateInput) (Created, error) 
 	if input.SpaceID == "" || input.BotID == "" || input.ThreadID == "" || input.UserID == "" {
 		return Created{}, errors.New("runs: create needs space, bot, thread and user")
 	}
-	if input.Prompt == "" || input.Trigger == "" {
-		return Created{}, errors.New("runs: create needs a prompt and trigger")
+	// An empty prompt is legitimate: skills.testRun stores
+	// `prompt ?? formatSkillRunPrompt(...)`, and an explicit "" is a prompt.
+	if input.Trigger == "" {
+		return Created{}, errors.New("runs: create needs a trigger")
 	}
 	status := input.Status
 	if status == "" {
@@ -189,8 +199,12 @@ func Create(ctx context.Context, tx Execer, input CreateInput) (Created, error) 
 	}
 	var provider, model, thinking any
 	pinned := false
-	if input.Model != nil {
-		provider, model, thinking = input.Model.Provider, input.Model.Model, input.Model.Thinking
+	// routineRunModelPin returns {} unless both provider and model are set.
+	if input.Model != nil && input.Model.Provider != "" && input.Model.Model != "" {
+		provider, model = input.Model.Provider, input.Model.Model
+		if input.Model.Thinking != nil {
+			thinking = *input.Model.Thinking
+		}
 		pinned = input.Model.Pinned
 	}
 	if _, err := tx.Exec(ctx, `
@@ -217,12 +231,25 @@ type RunRef struct {
 	Status string
 }
 
-// ByNonce is the runs_spaceId_clientNonce_key lookup procedures replay a
-// retried submission with (sendUserMessage's replay, routines.testRun).
+// ByNonce is the runs_spaceId_clientNonce_key unique-key lookup. It is NOT the
+// routines.testRun replay predicate: that prechecks
+// {threadId, userId, clientNonce} (apps/api/src/routes/routines.ts:369-380)
+// and must use ByThreadUserNonce.
 func ByNonce(ctx context.Context, q Querier, spaceID, nonce string) (RunRef, bool, error) {
 	return scanRunRef(q.QueryRow(ctx, `
 		SELECT id, "taskId", status FROM runs WHERE "spaceId" = $1 AND "clientNonce" = $2`,
 		spaceID, nonce))
+}
+
+// ByThreadUserNonce is routines.testRun's replay predicate
+// (apps/api/src/routes/routines.ts:373-380): a run already saved in this chat
+// by this person under the nonce. Another thread's or person's run with the
+// same nonce is not a replay.
+func ByThreadUserNonce(ctx context.Context, q Querier, threadID, userID, nonce string) (RunRef, bool, error) {
+	return scanRunRef(q.QueryRow(ctx, `
+		SELECT id, "taskId", status FROM runs
+		WHERE "threadId" = $1 AND "userId" = $2 AND "clientNonce" = $3
+		ORDER BY "createdAt" ASC, id ASC LIMIT 1`, threadID, userID, nonce))
 }
 
 // BySourceMessage is the run a message created, oldest first

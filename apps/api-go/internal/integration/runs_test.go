@@ -128,6 +128,8 @@ func runRow(t *testing.T, database *db.DB, runID string) map[string]any {
 	return row
 }
 
+func strPtr(value string) *string { return &value }
+
 func TestCreateRunWritesTheTypeScriptRow(t *testing.T) {
 	database := openTestDB(t)
 	fixture := seedRunsFixture(t, database)
@@ -136,7 +138,7 @@ func TestCreateRunWritesTheTypeScriptRow(t *testing.T) {
 	created := createRun(t, database, fixture, runs.CreateInput{
 		Trigger:     "user",
 		ClientNonce: &nonce,
-		Model:       &runs.ModelPin{Provider: "openai", Model: "gpt-x", Thinking: "high", Pinned: true},
+		Model:       &runs.ModelPin{Provider: "openai", Model: "gpt-x", Thinking: strPtr("high"), Pinned: true},
 		Now:         at,
 	}, nil)
 
@@ -361,6 +363,80 @@ func TestDuplicateNonceFailsAndResolves(t *testing.T) {
 	})
 	if err != nil || !ok || found.ID != first.RunID || found.TaskID != first.TaskID {
 		t.Fatalf("ByNonce = %+v/%v/%v", found, ok, err)
+	}
+}
+
+func TestEmptyPromptAndRoutineReplayLookups(t *testing.T) {
+	database := openTestDB(t)
+	fixture := seedRunsFixture(t, database)
+	nonce := "routine-run:" + fixture.userID + ":e-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	var created runs.Created
+	if err := database.System(context.Background(), "create an empty-prompt run", func(tx pgx.Tx) error {
+		var err error
+		created, err = runs.Create(context.Background(), tx, runs.CreateInput{
+			SpaceID: fixture.spaceID, BotID: fixture.botID, ThreadID: fixture.threadID,
+			UserID: fixture.userID, Trigger: "routine", ClientNonce: &nonce, Prompt: "",
+		})
+		return err
+	}); err != nil {
+		t.Fatalf("create empty prompt: %v", err)
+	}
+	if got := systemScalar[string](t, database, `SELECT prompt FROM tasks WHERE id = $1`, created.TaskID); got != "" {
+		t.Errorf("task prompt = %q, want empty", got)
+	}
+	var found runs.RunRef
+	var ok bool
+	err := database.System(context.Background(), "resolve the thread/user nonce", func(tx pgx.Tx) error {
+		var err error
+		found, ok, err = runs.ByThreadUserNonce(context.Background(), tx, fixture.threadID, fixture.userID, nonce)
+		return err
+	})
+	if err != nil || !ok || found.ID != created.RunID {
+		t.Fatalf("ByThreadUserNonce = %+v/%v/%v", found, ok, err)
+	}
+	// Another thread's run with the same nonce is not this chat's replay.
+	otherThread := "th-other-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	err = database.System(context.Background(), "look up another thread", func(tx pgx.Tx) error {
+		var err error
+		found, ok, err = runs.ByThreadUserNonce(context.Background(), tx, otherThread, fixture.userID, nonce)
+		return err
+	})
+	if err != nil || ok {
+		t.Fatalf("other-thread lookup = %+v/%v/%v", found, ok, err)
+	}
+}
+
+func TestWakeManyLeavesWaitingInputAlone(t *testing.T) {
+	database := openTestDB(t)
+	fixture := seedRunsFixture(t, database)
+	queued := createRun(t, database, fixture, runs.CreateInput{}, nil)
+	waiting := createRun(t, database, fixture, runs.CreateInput{Trigger: "follow_up"}, nil)
+	exec(t, database, `UPDATE runs SET status = 'waiting_input' WHERE id = $1`, waiting.RunID)
+	notifier := effects.NewNotifier(database, nil)
+	runs.WakeMany(context.Background(), database,
+		db.Actor{SpaceID: fixture.spaceID, UserID: fixture.userID}, notifier, nil,
+		[]string{waiting.RunID, queued.RunID})
+	notifier.Wait()
+	if got := runRow(t, database, waiting.RunID)["wakeAt"]; got != nil {
+		t.Errorf("waiting_input wakeAt = %v, want nil", got)
+	}
+	if got := runRow(t, database, queued.RunID)["wakeAt"]; got == nil {
+		t.Error("queued run was not woken")
+	}
+}
+
+func TestWakeDueDecisionUsesTheWallClock(t *testing.T) {
+	database := openTestDB(t)
+	fixture := seedRunsFixture(t, database)
+	created := createRun(t, database, fixture, runs.CreateInput{}, nil)
+	notifier := effects.NewNotifier(database, nil)
+	// A caller's injected clock 50ms behind real time must not suppress the frame.
+	changed, err := runs.WakeFor(context.Background(), database,
+		db.Actor{SpaceID: fixture.spaceID, UserID: fixture.userID}, notifier, created.RunID,
+		runs.WakeOptions{Now: time.Now().Add(-50 * time.Millisecond)})
+	notifier.Wait()
+	if err != nil || !changed {
+		t.Fatalf("wake = %v/%v", changed, err)
 	}
 }
 

@@ -63,8 +63,11 @@ func Wake(ctx context.Context, exec Execer, publisher Publisher, runID string, o
 	if err != nil {
 		return false, fmt.Errorf("wake run %s: %w", runID, err)
 	}
-	// `delay <= 0` in RunStarter.start: announce only a run that is due now.
-	if publisher != nil && !at.After(updated) {
+	// `delay <= 0` in RunStarter.start compares against the wall clock, not the
+	// caller's injected clock: announce only a run that is due now. Comparing
+	// against Now would drop the frame whenever a caller passes a slightly older
+	// Now (the proof and the reviewer both caught that).
+	if publisher != nil && !at.After(time.Now()) {
 		publisher.PublishRunReady(runID)
 	}
 	return tag.RowsAffected() == 1, nil
@@ -107,10 +110,50 @@ func logWakeError(logger *slog.Logger, runID string, err error) {
 	}
 }
 
-// WakeMany is enqueueRunsNeedingContinue (thread-target.ts:164-171): wake each
-// of these runs, never failing the work that recorded them.
+// ContinueStatuses is RUNS_NEEDING_CONTINUE (apps/api/src/threads/thread-target.ts:78).
+// A waiting_input run is waiting for the user's answer, not for a wake: waking
+// it would resume it before the answer arrives.
+var ContinueStatuses = []string{StatusQueued, StatusWaitingTakeover}
+
+// WakeMany is enqueueRunsNeedingContinue (thread-target.ts:163-170): wake the
+// runs that need a continuation, in the caller's order, and never fail the work
+// that recorded them. Runs in any other status (waiting_input in particular)
+// are left untouched.
 func WakeMany(ctx context.Context, database *db.DB, actor db.Actor, publisher Publisher, logger *slog.Logger, runIDs []string) {
-	for _, runID := range runIDs {
+	if len(runIDs) == 0 {
+		return
+	}
+	var due []string
+	err := database.Tenant(ctx, actor, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT id FROM runs
+			WHERE id = ANY($1::text[]) AND status = ANY($2::text[])`, runIDs, ContinueStatuses)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		found := map[string]bool{}
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				return err
+			}
+			found[id] = true
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		for _, id := range runIDs {
+			if found[id] {
+				due = append(due, id)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		logWakeError(logger, "wake many", err)
+		return
+	}
+	for _, runID := range due {
 		TryWakeFor(ctx, database, actor, publisher, logger, runID, WakeOptions{})
 	}
 }

@@ -28,10 +28,12 @@ type Cancelled struct {
 }
 
 // Canceller performs the run-side cancellation each procedure needs. Ring
-// opens sealed message blocks and appends run.cancelled events; nil means
-// content encryption is off for this deployment. Vault, when set, announces
-// the run-only secrets the cancellation drops, as withSecretPersistence does
-// for a Prisma delete (Infrastructure C).
+// opens sealed message blocks (clearEndedState) and is required by
+// CancelConversation, which appends run.cancelled events; a deployment with
+// content encryption off still builds a ring with EncryptWrites=false.
+// CancelActive and SupersedeQueued accept a nil ring when encryption is off.
+// Vault, when set, announces the run-only secrets the cancellation drops, as
+// withSecretPersistence does for a Prisma delete (Infrastructure C).
 type Canceller struct {
 	Ring  *contentcrypto.KeyRing
 	Vault *secretstore.Persistence
@@ -68,7 +70,7 @@ func (c Canceller) CancelActive(
 	at = now(at)
 	rows, err := tx.Query(ctx, `
 		UPDATE runs SET status = 'cancelled', "completedAt" = $2,
-			"leaseOwner" = NULL, "leaseExpiresAt" = NULL, "updatedAt" = $2
+			"leaseOwner" = NULL, "leaseExpiresAt" = NULL, "updatedAt" = now()
 		WHERE id = ANY($1::text[]) AND status = ANY($3::text[])
 		RETURNING `+cancelColumns, ids, at, ActiveStatuses)
 	if err != nil {
@@ -111,8 +113,8 @@ func (c Canceller) CancelActive(
 	}
 	taskIDs := taskIDsOf(cancelled)
 	if _, err := tx.Exec(ctx, `
-		UPDATE tasks SET status = 'cancelled', "updatedAt" = $2
-		WHERE id = ANY($1::text[])`, taskIDs, at); err != nil {
+		UPDATE tasks SET status = 'cancelled', "updatedAt" = now()
+		WHERE id = ANY($1::text[])`, taskIDs); err != nil {
 		return nil, fmt.Errorf("cancel tasks: %w", err)
 	}
 	return cancelled, nil
@@ -170,7 +172,7 @@ func (c Canceller) CancelConversation(
 					  AND ht.id = sm."threadId"))
 			  )
 		)
-		UPDATE runs SET status = 'cancelled', "completedAt" = $4, "updatedAt" = $4
+		UPDATE runs SET status = 'cancelled', "completedAt" = $4, "updatedAt" = now()
 		WHERE id IN (SELECT id FROM scoped)
 		RETURNING `+cancelColumns, target.ThreadID, ActiveStatuses, helper, at)
 	if err != nil {
@@ -283,6 +285,17 @@ func (c Canceller) CancelConversation(
 		}
 	}
 	result.Notes = conversationNotes(result.Runs, target.Note)
+	if target.WriteNote != nil {
+		for _, note := range result.Notes {
+			seq, err := target.WriteNote(ctx, tx, note)
+			if err != nil {
+				return ConversationCancel{}, err
+			}
+			value := seq
+			result.EventSeq = &value
+		}
+		result.Notes = nil
+	}
 	for _, run := range result.Runs {
 		if run.Trigger == "helper" {
 			result.StoppedHelpers = append(result.StoppedHelpers, run)
@@ -308,7 +321,7 @@ func (c Canceller) SupersedeQueued(
 	}
 	at = now(at)
 	rows, err := tx.Query(ctx, `
-		UPDATE runs r SET status = 'cancelled', "completedAt" = $4, "updatedAt" = $4
+		UPDATE runs r SET status = 'cancelled', "completedAt" = $4, "updatedAt" = now()
 		WHERE r."threadId" = $1 AND r."botId" = ANY($2::text[]) AND r.status = 'queued'
 		  AND r.id <> ALL($3::text[])
 		  AND (r.trigger = 'reaction'
@@ -341,8 +354,8 @@ func (c Canceller) SupersedeQueued(
 		return nil, err
 	}
 	if _, err := tx.Exec(ctx, `
-		UPDATE tasks SET status = 'cancelled', "updatedAt" = $2
-		WHERE id = ANY($1::text[])`, taskIDsOf(cancelled), at); err != nil {
+		UPDATE tasks SET status = 'cancelled', "updatedAt" = now()
+		WHERE id = ANY($1::text[])`, taskIDsOf(cancelled)); err != nil {
 		return nil, fmt.Errorf("cancel superseded tasks: %w", err)
 	}
 	return cancelled, nil
@@ -562,6 +575,14 @@ type ConversationTarget struct {
 	// Note is the stop-by-message note: added once when a cancelled run is not a
 	// named routine (thread-stop.ts:145-152).
 	Note *Note
+	// WriteNote, when set, creates each note as a system message in this same
+	// transaction and returns its event seq. Notes are written after the
+	// run.cancelled events and in TS order; EventSeq then ends at the last note's
+	// seq, which is what finishThreadStop notifies with (thread-stop.ts:199-205).
+	// When nil, the notes are returned for the caller to write, and EventSeq is
+	// only the last run.cancelled seq: the caller must use the seq its own note
+	// write returns for the notify.
+	WriteNote func(ctx context.Context, tx pgx.Tx, note Note) (int32, error)
 }
 
 // Note is one system message the caller creates in the same transaction: a
@@ -571,12 +592,14 @@ type Note struct {
 	Text  string
 }
 
-// ConversationCancel is cancelThreadRuns' result, less the note messages the
-// caller commits.
+// ConversationCancel is cancelThreadRuns' result.
 type ConversationCancel struct {
-	Runs           []Cancelled
-	Leases         []Lease
-	Computers      []Computer
+	Runs      []Cancelled
+	Leases    []Lease
+	Computers []Computer
+	// EventSeq is the last event committed by the cancel. With WriteNote it
+	// includes the notes and is safe to notify with; without it, a non-empty
+	// Notes means EventSeq stops at the last run.cancelled event.
 	EventSeq       *int32
 	StoppedHelpers []Cancelled
 	Notes          []Note
