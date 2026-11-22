@@ -34,7 +34,7 @@ func TestReviewerALabelCorpora(t *testing.T) {
 				if tc.Base == "" {
 					parsed, err = Parse(tc.Input)
 				} else {
-					parsed, err = ParseRef(tc.Base, tc.Input)
+					parsed, err = ParseRef(tc.Input, tc.Base)
 				}
 				if (err != nil) != tc.Throws {
 					t.Errorf("%s[%d]: parse error = %v, Node throws = %v (%q base %q)",
