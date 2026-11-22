@@ -163,7 +163,11 @@ describe("current-turn thread files", () => {
     expect(writeFile).toHaveBeenCalledOnce();
     writeFile.mockClear();
     await expect(
-      materializeCurrentTurnFiles({ ...deps, maxUploadSizeBytes: 2 * 1024 * 1024 }, blocks, input),
+      materializeCurrentTurnFiles(
+        { ...deps, maxFileUploadSizeBytes: 2 * 1024 * 1024 },
+        blocks,
+        input,
+      ),
     ).rejects.toThrow("2 MiB limit");
     expect(writeFile).not.toHaveBeenCalled();
   });
@@ -339,6 +343,7 @@ describe("current-turn thread files", () => {
       );
       expect(files).toEqual([
         {
+          artifactId: "artifact-1",
           name: `../quarterly report${extension}`,
           mimeType,
           size: 4,
@@ -404,7 +409,13 @@ describe("current-turn thread files", () => {
       expect.objectContaining({ botId: "bot-1" }),
     );
     expect(files).toEqual([
-      { name: "photo.png", mimeType: "image/png", size: 4, path: "attachments/image-1.png" },
+      {
+        artifactId: "image-1",
+        name: "photo.png",
+        mimeType: "image/png",
+        size: 4,
+        path: "attachments/image-1.png",
+      },
     ]);
   });
 });

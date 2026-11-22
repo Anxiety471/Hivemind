@@ -33,6 +33,19 @@ describe("bootstrap upload configuration", () => {
       expect(getMaxUploadSizeBytes()).toBe(maxUploadSizeBytes ?? 10 * 1024 * 1024);
     },
   );
+
+  it.each([undefined, 500 * 1024 * 1024])(
+    "tracks the streaming limit %s with a fallback",
+    async (maxFileUploadSizeBytes) => {
+      vi.stubGlobal("window", { location: { pathname: "/sign-in" } });
+      vi.mocked(rpc.bootstrap).mockResolvedValue({
+        me: { maxFileUploadSizeBytes },
+      } as Awaited<ReturnType<typeof rpc.bootstrap>>);
+      const { takeInitialBootstrap, getMaxFileUploadSizeBytes } = await import("./bootstrap");
+      await takeInitialBootstrap();
+      expect(getMaxFileUploadSizeBytes()).toBe(maxFileUploadSizeBytes ?? 250 * 1024 * 1024);
+    },
+  );
 });
 
 describe("the first load of a group link", () => {

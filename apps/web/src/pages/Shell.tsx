@@ -1273,12 +1273,12 @@ function SpaceShell() {
               sending={sending}
               fileInputRef={composer.fileInputRef}
               onAttachmentPick={composer.onAttachmentPick}
+              onDriveFilePick={composer.onDriveFilePick}
               onRemoveAttachment={composer.removeAttachment}
               onSend={composer.sendMessage}
               onStop={stopRun}
               phoneCallsEnabled={bootstrapMe?.phoneCallsEnabled === true}
               dictationTranscribe={voiceStatus ? Boolean(voiceStatus.transcribe) : undefined}
-              artifactTarget={transcriptArtifactTarget}
               replyTarget={composer.replyTarget}
               replyQuote={composer.replyQuote}
               replyTargetName={replyTargetName}

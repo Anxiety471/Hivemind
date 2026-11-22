@@ -1,10 +1,11 @@
+import type { MenuAction } from "@expo/ui/community/menu";
 import { ph } from "@lingui/core/macro";
 import { useLingui } from "@lingui/react/macro";
+import type { DriveFile } from "@rakazo/contracts";
+import { ARTIFACT_NAME_MAX_LENGTH, fileUploadMaxBytes } from "@rakazo/contracts";
 import { artifactTypeLabel } from "@rakazo/core";
-import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
-import type { ReactNode } from "react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { LayoutChangeEvent, ScrollViewInstance } from "react-native";
+import { useIsFocused, useLocalSearchParams, useRouter } from "expo-router";
+import { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -16,362 +17,395 @@ import {
   Text,
   View,
 } from "react-native";
-import { BotAvatar } from "../components/bots/bot-avatar";
-import { NativeSegmentedControl } from "../components/native/native-segmented-control";
+import { useTextEditDialog } from "../components/bots/profile-edit-dialog";
+import { NativeActionButton } from "../components/native/native-action-button";
 import { NativeSymbol } from "../components/native/native-symbol";
-import { rpc } from "../lib/api/api";
-import type { MobileBot } from "../lib/api/mobile-types";
+import { LoadFailure } from "../components/ui/load-failure";
+import { LongPressMenu } from "../components/ui/long-press-menu";
+import { selectedSpaceId } from "../lib/api/api";
+import { useSpaceChanges } from "../lib/api/roster-signals";
 import { errorText } from "../lib/api/user-error";
-import { mobileTokens } from "../lib/appearance/appearance";
-import type { MobileArtifactSummary } from "../lib/artifacts/artifacts";
-import {
-  listSpaceArtifacts,
-  matchesArtifactQuery,
-  removeArtifact,
-} from "../lib/artifacts/artifacts";
+import { downloadMobileArtifact, shareLocalFile } from "../lib/artifacts/artifact-open";
+import { pickDocuments } from "../lib/composer/pick-attachments";
+import { offerDriveFile } from "../lib/files/drive-file-pick";
+import { uploadMobileFile } from "../lib/files/file-upload";
+import type { DriveListItem, DrivePage } from "../lib/files/files";
+import { driveFolderChoices, driveRows, isDriveFolder } from "../lib/files/files";
 import { formatActivityRelativeTime } from "../lib/inbox/activity";
 import { useContentBottomInset } from "../lib/layout/content-bottom-inset";
 import { useSideInsets } from "../lib/layout/side-insets";
-import { native, useThemedStyles } from "../lib/native/native";
+import { native, useResolvedAppearance, useThemedStyles } from "../lib/native/native";
+import { useScreenHeader } from "../lib/navigation/screen-header";
+import { queryClient, rpcQuery, useSave } from "../lib/query/query";
+import { useScreenQuery } from "../lib/query/screen-query";
 
-const PAGE_SIZE = 30;
+const PAGE_SIZE = 50;
+/** A picker selection uploads this many files at once; each becomes its own Drive file. */
+const UPLOAD_MAX_FILES = 20;
 
-export default function ArtifactsScreen() {
-  const sideInsets = useSideInsets();
-  const navigation = useNavigation();
-  const router = useRouter();
+type DriveSaveAction =
+  | { kind: "createFolder"; name: string }
+  | { kind: "rename"; id: string; folder: boolean; name: string }
+  | { kind: "move"; id: string; folder: boolean; parentId: string | null }
+  | { kind: "trash"; id: string; folder: boolean }
+  | { kind: "restore"; id: string; folder: boolean }
+  | { kind: "delete"; id: string; folder: boolean };
+
+function fileSizeLabel(size: number): string {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`;
+  return `${Math.round((size / (1024 * 1024)) * 10) / 10} MB`;
+}
+
+function skippedText(skipped: ReadonlyArray<{ name: string; reason: string }>): string {
+  return skipped.map((item) => `${item.name} (${item.reason})`).join("\n");
+}
+
+/**
+ * The Space's Drive: folders, breadcrumbs and files, with an upload, a new folder and the Trash.
+ * Opened from a chat composer with `pick=1`, it hands the tapped file back to that chat instead
+ * of previewing it.
+ */
+export default function FilesScreen() {
   const { t } = useLingui();
   const styles = useThemedStyles(createStyles);
+  const sideInsets = useSideInsets();
   const contentBottomInset = useContentBottomInset();
+  const router = useRouter();
+  const focused = useIsFocused();
+  const colorScheme = useResolvedAppearance();
+  const { folderId, botId, pick, threadKey } = useLocalSearchParams<{
+    folderId?: string;
+    botId?: string;
+    pick?: string;
+    threadKey?: string;
+  }>();
+  const folder = folderId || null;
+  const picking = pick === "1" && Boolean(threadKey);
+  const [trashed, setTrashed] = useState(false);
+  useScreenHeader({ title: trashed ? t`Trash` : t`Files` });
 
-  const [bots, setBots] = useState<MobileBot[]>([]);
-  const { botId } = useLocalSearchParams<{ botId?: string }>();
-  const [activeBotId, setActiveBotId] = useState<string | null>(botId || null);
-  const [madeByBots, setMadeByBots] = useState(false);
-  const chipsScrollRef = useRef<ScrollViewInstance>(null);
-  const initialChipLayout = useRef({
-    viewportWidth: 0,
-    contentWidth: 0,
-    chip: null as { x: number; width: number } | null,
-    revealed: false,
-  });
+  const me = useScreenQuery(rpcQuery("me"), { onForeground: false }).data;
+  const listInput = {
+    folderId: trashed ? null : folder,
+    ...(trashed ? { trashed: true } : {}),
+    ...(botId ? { botId } : {}),
+    limit: PAGE_SIZE,
+  };
+  const listRead = rpcQuery("files/list", listInput);
+  const listQuery = useScreenQuery(listRead);
+  const page = listQuery.data;
+  const treeRead = rpcQuery("files/folderTree", {});
+  const treeQuery = useScreenQuery(treeRead);
+  const folders = treeQuery.data?.folders ?? [];
 
-  function revealInitialChip() {
-    const layout = initialChipLayout.current;
-    if (layout.revealed || !layout.viewportWidth || !layout.chip) return;
-    const right = layout.chip.x + layout.chip.width;
-    if (layout.contentWidth < right) return;
-    chipsScrollRef.current?.scrollTo({
-      x: Math.max(0, right - layout.viewportWidth),
-      animated: false,
-    });
-    layout.revealed = true;
-  }
-
-  const [items, setItems] = useState<MobileArtifactSummary[] | null>(null);
-  const [next, setNext] = useState<{
-    cursor: string;
-    botId: string | null;
-    madeByBots: boolean;
-  } | null>(null);
-  const nextCursor =
-    next?.botId === activeBotId && next.madeByBots === madeByBots ? next.cursor : null;
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [query, setQuery] = useState("");
-  const [searchPageFailed, setSearchPageFailed] = useState(false);
-  const loadingMoreRef = useRef(false);
-  const generationRef = useRef(0);
-  const loadingPageRef = useRef(false);
-  const [loadingPage, setLoadingPage] = useState(false);
-  const autoFetchedCursorRef = useRef<string | null>(null);
-  const activeBotIdRef = useRef(activeBotId);
-  const madeByBotsRef = useRef(madeByBots);
-  const didFocusRef = useRef(false);
-  activeBotIdRef.current = activeBotId;
-  madeByBotsRef.current = madeByBots;
-
-  useLayoutEffect(() => {
-    navigation.setOptions({
-      headerSearchBarOptions: {
-        placeholder: t`Search artifacts…`,
-        hideWhenScrolling: false,
-        autoCapitalize: "none",
-        onChangeText: (event: { nativeEvent: { text: string } }) =>
-          setQuery(event.nativeEvent.text),
-        onCancelButtonPress: () => setQuery(""),
-        onClose: () => setQuery(""),
-      },
-    });
-  }, [navigation, t]);
-
-  useFocusEffect(
-    useCallback(() => {
-      rpc("bots/list")
-        .then(setBots)
-        .catch(() => undefined);
-    }, []),
-  );
-
-  const load = useCallback(
-    async (botId: string | null, madeByBots: boolean, mode: "replace" | "refresh") => {
-      const generation = ++generationRef.current;
-      loadingPageRef.current = true;
-      setLoadingPage(true);
-      loadingMoreRef.current = false;
-      setLoadingMore(false);
-      autoFetchedCursorRef.current = null;
-      setSearchPageFailed(false);
-      setLoadError(null);
-      if (mode === "replace") {
-        setItems(null);
-        setNext(null);
-      }
-      try {
-        const page = await listSpaceArtifacts({
-          botId: botId ?? undefined,
-          madeByBots,
-          limit: PAGE_SIZE,
-        });
-        if (generation !== generationRef.current) return;
-        setItems(page.items);
-        setNext(page.nextCursor ? { cursor: page.nextCursor, botId, madeByBots } : null);
-      } catch (error) {
-        if (generation !== generationRef.current) return;
-        setLoadError(errorText(error, t`Could not load artifacts.`));
-      } finally {
-        if (generation === generationRef.current) {
-          loadingPageRef.current = false;
-          setLoadingPage(false);
-        }
-      }
+  // A server signal for a changed Drive re-reads the page; there is no timed refresh.
+  useSpaceChanges(
+    "files",
+    () => {
+      void listQuery.refetch();
+      void treeQuery.refetch();
     },
-    [t],
+    focused,
   );
 
-  useFocusEffect(
-    useCallback(() => {
-      if (!didFocusRef.current) {
-        didFocusRef.current = true;
-        return;
-      }
-      void load(activeBotIdRef.current, madeByBotsRef.current, "refresh");
-    }, [load]),
-  );
+  // Extra pages extend the first one; any re-read of the first page starts over so nothing
+  // appears twice after an upload or a change signal.
+  const [extraPages, setExtraPages] = useState<DrivePage[]>([]);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [loadMoreFailed, setLoadMoreFailed] = useState(false);
+  useEffect(() => {
+    setExtraPages([]);
+    setLoadMoreFailed(false);
+  }, [page]);
+  const nextCursor = extraPages.at(-1)?.nextCursor ?? page?.nextCursor ?? null;
+  const rows = useMemo(() => {
+    const folders = [...(page?.folders ?? []), ...extraPages.flatMap((item) => item.folders)];
+    const files = [...(page?.files ?? []), ...extraPages.flatMap((item) => item.files)];
+    return driveRows({ folders, files });
+  }, [page, extraPages]);
 
-  const loadMore = useCallback(async () => {
-    if (!nextCursor || loadingMoreRef.current || loadingPageRef.current) return;
-    const generation = generationRef.current;
-    loadingMoreRef.current = true;
+  async function loadMore() {
+    if (!nextCursor || loadingMore) return;
     setLoadingMore(true);
     try {
-      const page = await listSpaceArtifacts({
-        botId: activeBotId ?? undefined,
-        madeByBots,
-        cursor: nextCursor,
-        limit: PAGE_SIZE,
-      });
-      if (generation !== generationRef.current) return;
-      setItems((current) => (current ?? []).concat(page.items));
-      setNext(page.nextCursor ? { cursor: page.nextCursor, botId: activeBotId, madeByBots } : null);
-      setSearchPageFailed(false);
+      const next = await queryClient.fetchQuery(
+        rpcQuery("files/list", { ...listInput, cursor: nextCursor }),
+      );
+      setExtraPages((current) => [...current, next]);
+      setLoadMoreFailed(false);
     } catch {
-      if (generation === generationRef.current) setSearchPageFailed(true);
+      // The footer offers the retry; a scroll alone does not hammer a failing server.
+      setLoadMoreFailed(true);
     } finally {
-      if (generation === generationRef.current) {
-        loadingMoreRef.current = false;
-        setLoadingMore(false);
+      setLoadingMore(false);
+    }
+  }
+
+  const change = useSave<DriveSaveAction>({
+    save: (action, send) => {
+      switch (action.kind) {
+        case "createFolder":
+          return send("files/createFolder", { parentId: folder, name: action.name });
+        case "rename":
+          return action.folder
+            ? send("files/renameFolder", { folderId: action.id, name: action.name })
+            : send("files/rename", { fileId: action.id, name: action.name });
+        case "move":
+          return action.folder
+            ? send("files/moveFolder", { folderId: action.id, parentId: action.parentId })
+            : send("files/move", { fileId: action.id, folderId: action.parentId });
+        case "trash":
+          return action.folder
+            ? send("files/trashFolder", { folderId: action.id })
+            : send("files/trash", { fileId: action.id });
+        case "restore":
+          return action.folder
+            ? send("files/restoreFolder", { folderId: action.id })
+            : send("files/restore", { fileId: action.id });
+        case "delete":
+          return action.folder
+            ? send("files/deleteFolder", { folderId: action.id })
+            : send("files/deletePermanent", { fileId: action.id });
       }
-    }
-  }, [activeBotId, madeByBots, nextCursor]);
+    },
+    stale: [listRead.queryKey, treeRead.queryKey],
+    onFailed: (cause) => Alert.alert(t`Could not update files`, errorText(cause, t`Try again.`)),
+  });
 
-  async function refresh() {
-    setRefreshing(true);
+  const [uploading, setUploading] = useState(false);
+  const renameDialog = useTextEditDialog(t`Rename`, ARTIFACT_NAME_MAX_LENGTH);
+  const newFolderDialog = useTextEditDialog(t`New folder`, ARTIFACT_NAME_MAX_LENGTH);
+
+  function confirmDelete(row: DriveListItem) {
+    Alert.alert(t`Delete "${ph({ name: row.name })}"?`, t`This can't be undone.`, [
+      { text: t`Cancel`, style: "cancel" },
+      {
+        text: t`Delete`,
+        style: "destructive",
+        onPress: () => change.run({ kind: "delete", id: row.id, folder: isDriveFolder(row) }),
+      },
+    ]);
+  }
+
+  function move(row: DriveListItem, parentId: string | null) {
+    change.run({ kind: "move", id: row.id, folder: isDriveFolder(row), parentId });
+  }
+
+  function menuActions(row: DriveListItem): MenuAction[] {
+    const folderRow = isDriveFolder(row);
+    if (trashed) {
+      return [
+        { id: "restore", title: t`Restore` },
+        { id: "delete", title: t`Delete permanently`, attributes: { destructive: true } },
+      ];
+    }
+    const choices = driveFolderChoices(folders, folderRow ? row.id : null);
+    return [
+      { id: "rename", title: t`Rename` },
+      {
+        id: "move",
+        title: t`Move to`,
+        subactions: [
+          { id: "move-root", title: t`Files` },
+          ...choices.map((choice) => ({ id: `move:${choice.id}`, title: choice.label })),
+        ],
+      },
+      ...(folderRow ? [] : [{ id: "download", title: t`Download` }]),
+      { id: "trash", title: t`Move to Trash`, attributes: { destructive: true } },
+    ];
+  }
+
+  function onMenuAction(row: DriveListItem, action: string) {
+    const folderRow = isDriveFolder(row);
+    if (action === "rename") {
+      renameDialog.ask(row.name, (name) => {
+        if (!name || name === row.name) return;
+        change.run({ kind: "rename", id: row.id, folder: folderRow, name });
+      });
+    } else if (action === "move-root") {
+      move(row, null);
+    } else if (action.startsWith("move:")) {
+      move(row, action.slice("move:".length));
+    } else if (action === "trash") {
+      change.run({ kind: "trash", id: row.id, folder: folderRow });
+    } else if (action === "restore") {
+      change.run({ kind: "restore", id: row.id, folder: folderRow });
+    } else if (action === "delete") {
+      confirmDelete(row);
+    } else if (action === "download" && !folderRow) {
+      void download(row);
+    }
+  }
+
+  async function download(row: DriveFile) {
     try {
-      await load(activeBotId, madeByBots, "refresh");
-    } finally {
-      setRefreshing(false);
+      const file = await downloadMobileArtifact(null, row.id, row.mimeType);
+      await shareLocalFile(file.uri, row.mimeType, row.name);
+    } catch (error) {
+      Alert.alert(t`Could not download this file`, errorText(error, t`Try again.`));
     }
   }
 
-  function confirmDelete(item: MobileArtifactSummary) {
-    Alert.alert(
-      t`Delete "${ph({ name: item.name })}"?`,
-      item.versionCount > 1
-        ? t`This deletes all ${ph({ count: item.versionCount })} versions of this artifact. This can't be undone.`
-        : t`This can't be undone.`,
-      [
-        { text: t`Cancel`, style: "cancel" },
-        {
-          text: t`Delete`,
-          style: "destructive",
-          onPress: () =>
-            void removeArtifact(item.id)
-              .then(() => {
-                setItems((current) => current?.filter((row) => row.id !== item.id) ?? current);
-                void load(activeBotIdRef.current, madeByBotsRef.current, "refresh");
-              })
-              .catch((error: unknown) =>
-                Alert.alert(t`Could not delete this artifact`, errorText(error, t`Try again.`)),
-              ),
-        },
-      ],
-    );
+  function openFolder(id: string | null) {
+    router.setParams({ folderId: id ?? "" });
   }
 
-  const queryActive = query.trim().length > 0;
-  const filtered = useMemo(() => {
-    if (!items) return null;
-    if (!queryActive) return items;
-    return items.filter((item) => matchesArtifactQuery(item, query));
-  }, [items, query, queryActive]);
-  const botsById = useMemo(() => new Map(bots.map((bot) => [bot.id, bot])), [bots]);
-
-  useEffect(() => {
-    autoFetchedCursorRef.current = null;
-    setSearchPageFailed(false);
-  }, [query, activeBotId, madeByBots]);
-
-  useEffect(() => {
-    if (
-      loadingPage ||
-      searchPageFailed ||
-      !queryActive ||
-      !nextCursor ||
-      loadingMore ||
-      items === null
-    )
+  function openRow(row: DriveListItem) {
+    if (isDriveFolder(row)) {
+      openFolder(row.id);
       return;
-    if (filtered && filtered.length > 0) return;
-    if (autoFetchedCursorRef.current === nextCursor) return;
-    autoFetchedCursorRef.current = nextCursor;
-    void loadMore();
-  }, [
-    filtered,
-    items,
-    loadMore,
-    loadingMore,
-    loadingPage,
-    nextCursor,
-    queryActive,
-    searchPageFailed,
-  ]);
+    }
+    if (picking && threadKey) {
+      offerDriveFile(threadKey, row);
+      router.back();
+      return;
+    }
+    router.push({ pathname: "/artifact", params: { artifactId: row.id, exact: "1" } });
+  }
 
-  useEffect(() => {
-    void load(activeBotId, madeByBots, "replace");
-  }, [activeBotId, madeByBots, load]);
+  async function uploadFiles() {
+    if (uploading) return;
+    const result = await pickDocuments(0, fileUploadMaxBytes(me), UPLOAD_MAX_FILES).catch(
+      (error: unknown) => {
+        Alert.alert(t`Could not choose files`, errorText(error, t`Try again.`));
+        return null;
+      },
+    );
+    if (!result) return;
+    if (result.skipped.length) {
+      Alert.alert(t`Some files were skipped`, skippedText(result.skipped));
+    }
+    if (!result.attachments.length) return;
+    setUploading(true);
+    try {
+      for (const file of result.attachments) {
+        if (!file.uri) continue;
+        await uploadMobileFile({
+          uri: file.uri,
+          name: file.name,
+          mimeType: file.mimeType,
+          size: file.size,
+          folderId: trashed ? null : folder,
+          source: "upload",
+          spaceId: selectedSpaceId(),
+        });
+      }
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: listRead.queryKey }),
+        queryClient.invalidateQueries({ queryKey: treeRead.queryKey }),
+      ]);
+    } catch (error) {
+      Alert.alert(t`Could not upload files`, errorText(error, t`Try again.`));
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  function createFolder(name: string) {
+    if (name) change.run({ kind: "createFolder", name });
+  }
+
+  const error = listQuery.error ? errorText(listQuery.error, t`Could not load files.`) : null;
+  const loading = listQuery.isPending && !page;
+  const breadcrumbs = trashed ? [] : (page?.breadcrumbs ?? []);
+  const title = trashed ? t`Trash` : t`Files`;
+
+  const header = (
+    <View>
+      <View style={styles.toolbar}>
+        {trashed ? null : (
+          <>
+            <NativeActionButton
+              busy={uploading}
+              disabled={change.pending}
+              label={t`Upload`}
+              onPress={() => void uploadFiles()}
+              size="compact"
+            />
+            <NativeActionButton
+              disabled={change.pending || uploading}
+              label={t`New folder`}
+              onPress={() => newFolderDialog.ask("", createFolder)}
+              prominence="secondary"
+              size="compact"
+            />
+          </>
+        )}
+        <View style={styles.toolbarSpacer} />
+        <NativeActionButton
+          disabled={change.pending || uploading}
+          label={trashed ? t`Done` : t`Trash`}
+          onPress={() => setTrashed((current) => !current)}
+          prominence="quiet"
+          size="compact"
+        />
+      </View>
+      {trashed ? null : (
+        <ScrollView
+          contentInsetAdjustmentBehavior="never"
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.crumbsScroll}
+          contentContainerStyle={styles.crumbs}
+        >
+          {breadcrumbs.length ? (
+            <Pressable accessibilityRole="button" onPress={() => openFolder(null)}>
+              <Text style={styles.crumb}>{title}</Text>
+            </Pressable>
+          ) : (
+            <Text style={[styles.crumb, styles.crumbCurrent]}>{title}</Text>
+          )}
+          {breadcrumbs.map((crumb, index) => {
+            const current = index === breadcrumbs.length - 1;
+            return (
+              <View key={crumb.id} style={styles.crumbPart}>
+                <NativeSymbol
+                  android="chevron-forward"
+                  color={native.tertiaryLabel}
+                  ios="chevron.right"
+                  size={11}
+                />
+                {current ? (
+                  <Text style={[styles.crumb, styles.crumbCurrent]} numberOfLines={1}>
+                    {crumb.name}
+                  </Text>
+                ) : (
+                  <Pressable accessibilityRole="button" onPress={() => openFolder(crumb.id)}>
+                    <Text style={styles.crumb} numberOfLines={1}>
+                      {crumb.name}
+                    </Text>
+                  </Pressable>
+                )}
+              </View>
+            );
+          })}
+        </ScrollView>
+      )}
+      {error ? (
+        <View style={styles.notice}>
+          <LoadFailure message={error} onRetry={() => void listQuery.refetch()} />
+        </View>
+      ) : null}
+    </View>
+  );
 
   return (
-    <View style={[styles.screen, { paddingBottom: contentBottomInset }]}>
-      <FlatList<MobileArtifactSummary>
-        ListHeaderComponent={
-          <View>
-            <View style={styles.sourceControl}>
-              <NativeSegmentedControl
-                accessibilityLabel={t`Filter by who made it`}
-                value={madeByBots ? "bots" : "all"}
-                onChange={(value) => setMadeByBots(value === "bots")}
-                options={[
-                  { value: "all" as const, label: t`All files` },
-                  { value: "bots" as const, label: t`Made by bots` },
-                ]}
-              />
-            </View>
-            <ScrollView
-              ref={chipsScrollRef}
-              onLayout={(event) => {
-                initialChipLayout.current.viewportWidth = event.nativeEvent.layout.width;
-                revealInitialChip();
-              }}
-              onContentSizeChange={(width) => {
-                initialChipLayout.current.contentWidth = width;
-                revealInitialChip();
-              }}
-              horizontal
-              contentInsetAdjustmentBehavior="never"
-              showsHorizontalScrollIndicator={false}
-              style={styles.chipsScroll}
-              contentContainerStyle={styles.chipsRow}
-            >
-              <Chip
-                label={t`All bots`}
-                active={activeBotId === null}
-                onPress={() => setActiveBotId(null)}
-              />
-              {bots.map((bot) => (
-                <Chip
-                  key={bot.id}
-                  onLayout={
-                    bot.id === botId && activeBotId === botId
-                      ? (event) => {
-                          initialChipLayout.current.chip = event.nativeEvent.layout;
-                          revealInitialChip();
-                        }
-                      : undefined
-                  }
-                  label={bot.name}
-                  active={activeBotId === bot.id}
-                  onPress={() => setActiveBotId(bot.id)}
-                  avatar={
-                    <BotAvatar
-                      color={bot.color}
-                      avatarSet={bot.avatarSet}
-                      identity={bot.id}
-                      size={16}
-                    />
-                  }
-                />
-              ))}
-            </ScrollView>
-          </View>
-        }
-        style={[styles.listView, sideInsets]}
+    <View style={styles.screen}>
+      <FlatList<DriveListItem>
+        contentContainerStyle={[styles.list, { paddingBottom: 32 + contentBottomInset }]}
         contentInsetAdjustmentBehavior="automatic"
-        data={filtered ?? []}
-        keyExtractor={(item) => item.id}
-        contentContainerStyle={styles.list}
+        data={rows}
         indicatorStyle="default"
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={() => void refresh()}
-            tintColor={native.secondaryLabel}
-          />
-        }
-        onEndReachedThreshold={0.4}
-        onEndReached={() => void loadMore()}
+        keyExtractor={(row) => row.id}
         ListEmptyComponent={
-          items === null ? (
-            <View style={styles.centered}>
-              {loadError ? (
-                <Text style={styles.empty}>{loadError}</Text>
-              ) : (
-                <ActivityIndicator color={native.secondaryLabel} />
-              )}
-            </View>
-          ) : queryActive && filtered?.length === 0 && nextCursor && searchPageFailed ? (
-            <Pressable
-              accessibilityRole="button"
-              onPress={() => {
-                autoFetchedCursorRef.current = null;
-                setSearchPageFailed(false);
-              }}
-              style={styles.centered}
-            >
-              <Text style={styles.empty}>{t`Could not load artifacts.`}</Text>
-              <Text style={styles.empty}>{t`Try again.`}</Text>
-            </Pressable>
-          ) : queryActive &&
-            filtered?.length === 0 &&
-            nextCursor &&
-            (loadingMore || autoFetchedCursorRef.current !== nextCursor) ? (
+          loading ? (
             <View style={styles.centered}>
               <ActivityIndicator color={native.secondaryLabel} />
             </View>
-          ) : (
+          ) : error ? undefined : (
             <Text style={styles.empty}>
-              {queryActive || madeByBots ? t`No matching artifacts` : t`No artifacts yet`}
+              {trashed ? t`Trash is empty` : picking ? t`No files to attach yet` : t`No files yet`}
             </Text>
           )
         }
@@ -380,175 +414,142 @@ export default function ArtifactsScreen() {
             <View style={styles.footer}>
               <ActivityIndicator color={native.secondaryLabel} />
             </View>
+          ) : loadMoreFailed ? (
+            <View style={styles.footer}>
+              <NativeActionButton
+                label={t`Try again`}
+                onPress={() => void loadMore()}
+                prominence="secondary"
+                size="compact"
+              />
+            </View>
           ) : undefined
         }
-        renderItem={({ item }) => (
-          <ArtifactRow
-            item={item}
-            bot={activeBotId === null && item.botId ? botsById.get(item.botId) : undefined}
-            onPress={() => router.push({ pathname: "/artifact", params: { artifactId: item.id } })}
-            onLongPress={() => confirmDelete(item)}
+        ListHeaderComponent={header}
+        onEndReached={() => {
+          if (!loadMoreFailed) void loadMore();
+        }}
+        onEndReachedThreshold={0.4}
+        refreshControl={
+          <RefreshControl
+            onRefresh={() => void listQuery.refetch()}
+            refreshing={listQuery.isRefetching && !loadingMore}
+            tintColor={native.secondaryLabel}
           />
-        )}
+        }
+        renderItem={({ item }) => {
+          const folderRow = isDriveFolder(item);
+          return (
+            <LongPressMenu
+              actions={menuActions(item)}
+              colorScheme={colorScheme}
+              key={item.id}
+              onPressAction={({ nativeEvent }) => onMenuAction(item, nativeEvent.event)}
+            >
+              {(onLongPress) => (
+                <Pressable
+                  accessibilityHint={t`Long press for more`}
+                  accessibilityLabel={item.name}
+                  accessibilityRole="button"
+                  onLongPress={onLongPress}
+                  onPress={() => openRow(item)}
+                  style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
+                >
+                  <View style={styles.rowIcon}>
+                    <NativeSymbol
+                      android={folderRow ? "folder-outline" : "document-outline"}
+                      ios={folderRow ? "folder" : "doc.text"}
+                      size={17}
+                    />
+                  </View>
+                  <View style={styles.rowBody}>
+                    <Text numberOfLines={1} style={styles.rowName}>
+                      {item.name}
+                    </Text>
+                    {folderRow ? (
+                      <Text numberOfLines={1} style={styles.rowDetail}>
+                        {t`Folder`}
+                      </Text>
+                    ) : (
+                      <View style={styles.rowDetailRow}>
+                        <Text numberOfLines={1} style={styles.rowDetail}>
+                          {artifactTypeLabel(item.mimeType, item.name)}
+                        </Text>
+                        <Text numberOfLines={1} style={styles.rowDetail}>
+                          {fileSizeLabel(item.size)}
+                        </Text>
+                      </View>
+                    )}
+                  </View>
+                  <Text style={styles.rowMeta}>{formatActivityRelativeTime(item.updatedAt)}</Text>
+                </Pressable>
+              )}
+            </LongPressMenu>
+          );
+        }}
+        style={[styles.listView, sideInsets]}
       />
+      {renameDialog.dialog}
+      {newFolderDialog.dialog}
     </View>
   );
 }
 
-function Chip({
-  label,
-  active,
-  onPress,
-  avatar,
-  onLayout,
-}: {
-  label: string;
-  active: boolean;
-  onPress: () => void;
-  avatar?: ReactNode;
-  onLayout?: (event: LayoutChangeEvent) => void;
-}) {
-  const styles = useThemedStyles(createStyles);
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityState={{ selected: active }}
-      onPress={onPress}
-      onLayout={onLayout}
-      style={[styles.chip, active && styles.chipActive]}
-    >
-      {avatar}
-      <Text style={[styles.chipLabel, active && styles.chipLabelActive]} numberOfLines={1}>
-        {label}
-      </Text>
-    </Pressable>
-  );
-}
-
-function ArtifactRow({
-  item,
-  bot,
-  onPress,
-  onLongPress,
-}: {
-  item: MobileArtifactSummary;
-  bot?: MobileBot;
-  onPress: () => void;
-  onLongPress: () => void;
-}) {
-  const styles = useThemedStyles(createStyles);
-  const { t } = useLingui();
-  const isCode = item.mimeType === "text/html";
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={bot ? `${item.name}, ${bot.name}` : item.name}
-      accessibilityHint={t`Long press to delete`}
-      onPress={onPress}
-      onLongPress={onLongPress}
-      style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
-    >
-      <View style={styles.rowIcon}>
-        <NativeSymbol
-          ios={isCode ? "chevron.left.forwardslash.chevron.right" : "doc.text"}
-          android={isCode ? "code-slash-outline" : "document-text-outline"}
-          size={16}
-        />
-      </View>
-      <View style={styles.rowBody}>
-        <View style={styles.rowTop}>
-          <Text style={styles.rowName} numberOfLines={1}>
-            {item.name}
-          </Text>
-          {item.versionCount > 1 ? <Text style={styles.badge}>{`v${item.version}`}</Text> : null}
-          <Text style={styles.badge}>{artifactTypeLabel(item.mimeType)}</Text>
-        </View>
-        {item.description ? (
-          <Text style={styles.rowDescription} numberOfLines={1}>
-            {item.description}
-          </Text>
-        ) : null}
-        <View style={styles.rowFooter}>
-          {bot ? (
-            <>
-              <BotAvatar color={bot.color} avatarSet={bot.avatarSet} identity={bot.id} size={14} />
-              <Text style={styles.rowBotName} numberOfLines={1}>
-                {bot.name}
-              </Text>
-            </>
-          ) : null}
-          <Text style={styles.rowMeta}>{formatActivityRelativeTime(item.createdAt)}</Text>
-        </View>
-      </View>
-    </Pressable>
-  );
-}
-
 function createStyles() {
-  const tokens = mobileTokens();
   return StyleSheet.create({
     screen: { flex: 1, backgroundColor: native.page },
-    centered: { alignItems: "center", justifyContent: "center", paddingTop: 40 },
-    sourceControl: { paddingHorizontal: 16, paddingTop: 10 },
-    chipsScroll: { flexGrow: 0, flexShrink: 0 },
-    chipsRow: {
-      flexDirection: "row",
+    listView: { flex: 1 },
+    list: { flexGrow: 1 },
+    toolbar: {
       alignItems: "center",
-      flexGrow: 0,
+      flexDirection: "row",
       gap: 8,
       paddingHorizontal: 16,
-      paddingVertical: 10,
+      paddingTop: 8,
+      paddingBottom: 4,
     },
-    chip: {
-      flexDirection: "row",
+    toolbarSpacer: { flex: 1 },
+    crumbsScroll: { flexGrow: 0, flexShrink: 0 },
+    crumbs: {
       alignItems: "center",
-      flexGrow: 0,
-      flexShrink: 0,
+      flexDirection: "row",
       gap: 6,
-      paddingVertical: 6,
-      paddingHorizontal: 12,
-      borderRadius: 999,
-      backgroundColor: native.fill,
+      paddingHorizontal: 16,
+      paddingVertical: 8,
     },
-    chipActive: { backgroundColor: tokens.primary },
-    chipLabel: { color: native.label, fontSize: 13, fontWeight: "600" },
-    chipLabelActive: { color: tokens.primaryForeground },
-    listView: { flex: 1 },
-    list: { paddingBottom: 32 },
+    crumbPart: { alignItems: "center", flexDirection: "row", gap: 6 },
+    crumb: { color: native.secondaryLabel, fontSize: 14 },
+    crumbCurrent: { color: native.label, flexShrink: 1, fontWeight: "600" },
+    notice: { paddingHorizontal: 16, paddingVertical: 12 },
+    centered: { alignItems: "center", justifyContent: "center", paddingTop: 40 },
     empty: {
       color: native.secondaryLabel,
       fontSize: 15,
-      textAlign: "center",
       paddingHorizontal: 24,
-      paddingTop: 8,
+      paddingTop: 40,
+      textAlign: "center",
     },
     footer: { paddingVertical: 20 },
-    row: { flexDirection: "row", gap: 12, paddingHorizontal: 16, paddingVertical: 12 },
+    row: {
+      alignItems: "center",
+      flexDirection: "row",
+      gap: 12,
+      paddingHorizontal: 16,
+      paddingVertical: 10,
+    },
     rowPressed: { opacity: 0.6 },
     rowIcon: {
-      width: 36,
-      height: 36,
-      borderRadius: 10,
-      backgroundColor: native.fill,
       alignItems: "center",
-      justifyContent: "center",
-    },
-    rowBody: { flex: 1, minWidth: 0, gap: 3 },
-    rowTop: { flexDirection: "row", alignItems: "center", gap: 6 },
-    rowName: { flex: 1, minWidth: 0, color: native.label, fontSize: 15, fontWeight: "600" },
-    badge: {
-      color: native.secondaryLabel,
-      fontSize: 10.5,
-      fontWeight: "700",
       backgroundColor: native.fill,
-      borderRadius: 6,
-      paddingHorizontal: 6,
-      paddingVertical: 2,
-      overflow: "hidden",
+      borderRadius: 10,
+      height: 34,
+      justifyContent: "center",
+      width: 34,
     },
-    rowDescription: { color: native.secondaryLabel, fontSize: 12.5 },
-    rowFooter: { flexDirection: "row", alignItems: "center", gap: 6 },
-    rowBotName: { flexShrink: 1, color: native.secondaryLabel, fontSize: 11.5 },
+    rowBody: { flex: 1, gap: 2, minWidth: 0 },
+    rowName: { color: native.label, fontSize: 15, fontWeight: "600" },
+    rowDetail: { color: native.secondaryLabel, fontSize: 12 },
+    rowDetailRow: { alignItems: "center", flexDirection: "row", gap: 6 },
     rowMeta: { color: native.secondaryLabel, fontSize: 11.5 },
   });
 }

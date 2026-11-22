@@ -7,8 +7,6 @@ import {
   ATTACHMENT_MAX_BYTES,
   attachmentMaxCount,
   attachmentSizeLabel,
-  isAttachmentArchiveMimeType,
-  isAttachmentAudioMimeType,
   isStepScreenshotMimeType,
   STEP_SCREENSHOT_MIME_TYPES,
 } from "@rakazo/contracts";
@@ -49,12 +47,10 @@ export async function createOwnedArtifact(
 ) {
   const replayed = await findReplayedArtifact(deps.prisma, actor, input);
   if (replayed) return createdArtifact(replayed);
-  const inferredType = inferAttachmentMimeType(input.name, input.mimeType);
-  const mimeType =
-    inferredType &&
-    (isAttachmentArchiveMimeType(inferredType) || isAttachmentAudioMimeType(inferredType))
-      ? inferredType
-      : input.mimeType;
+  const mimeType = inferAttachmentMimeType(input.name, input.mimeType);
+  if (!mimeType) {
+    throw new AttachmentValidationError(`Unsupported or blocked file type for ${input.name}`);
+  }
   validateAttachmentMimeType(mimeType);
   const bytes = decodeAttachmentBase64(input.contentBase64, deps.maxUploadSizeBytes);
   return storeOwnedArtifact(deps, actor, { ...input, mimeType, bytes });
@@ -232,6 +228,7 @@ export async function getOwnedArtifact(
       botId: input.botId,
       groupId: null,
       spaceId: actor.spaceId,
+      trashedAt: null,
     },
   });
   if (!row) throw new IsolationError();
@@ -251,6 +248,7 @@ export async function getSpaceArtifact(
       id: input.artifactId,
       groupId: input.groupId,
       spaceId: actor.spaceId,
+      trashedAt: null,
     },
   });
   if (!row) throw new IsolationError();
@@ -270,6 +268,7 @@ export async function getSpaceArtifactById(
     where: {
       id: input.artifactId,
       spaceId: actor.spaceId,
+      trashedAt: null,
     },
   });
   if (!row) throw new IsolationError();
@@ -422,6 +421,7 @@ export async function listSpaceArtifacts(
     WITH scoped AS (
       SELECT * FROM "artifacts"
       WHERE "spaceId" = ${actor.spaceId} ${botFilter}
+        AND "trashedAt" IS NULL
         AND "createdAt" <= ${asOf} AND "mimeType" NOT IN (${Prisma.join(HIDDEN_ARTIFACT_MIME_TYPES)})
     ),
     latest AS (
@@ -487,7 +487,12 @@ export async function listArtifactVersions(
 ) {
   const anchor = await deps.prisma.artifact.findFirst({
     // A reply's kept screenshot is the bot's own, not a file a person manages.
-    where: { id: input.familyId, spaceId: actor.spaceId, ...NOT_STEP_SCREENSHOT },
+    where: {
+      id: input.familyId,
+      spaceId: actor.spaceId,
+      trashedAt: null,
+      ...NOT_STEP_SCREENSHOT,
+    },
     select: { id: true, rootArtifactId: true },
   });
   if (!anchor) throw new IsolationError();
@@ -495,6 +500,7 @@ export async function listArtifactVersions(
   const rows = await deps.prisma.artifact.findMany({
     where: {
       spaceId: actor.spaceId,
+      trashedAt: null,
       OR: [{ id: rootId }, { rootArtifactId: rootId }],
     },
     orderBy: { version: "desc" },
@@ -666,9 +672,12 @@ export async function resolveSendAttachments(
   const rows = await deps.prisma.artifact.findMany({
     where: {
       id: { in: ids },
-      botId,
-      groupId: null,
       spaceId: actor.spaceId,
+      trashedAt: null,
+      OR: [
+        { botId, groupId: null },
+        { botId: null, groupId: null },
+      ],
     },
   });
   return toAttachmentResolution(ids, rows);
@@ -688,10 +697,13 @@ export async function resolveGroupSendAttachments(
     where: {
       id: { in: ids },
       spaceId: actor.spaceId,
+      trashedAt: null,
       OR: [
         { groupId },
         // Uploads from before group ownership was stored, still tied to a current member.
         { groupId: null, botId: { in: memberBotIds } },
+        // Space Drive files shared within the Space.
+        { botId: null, groupId: null },
       ],
     },
   });

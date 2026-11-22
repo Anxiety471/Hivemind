@@ -17,21 +17,19 @@ import { Check, Code2, Copy, Download, FileText, Play, X } from "lucide-react";
 import type { RefObject } from "react";
 import { useEffect, useRef, useState } from "react";
 import { useCopyText } from "../../lib/copy-text";
-import type { ArtifactTarget } from "../../lib/pages/artifact-open";
+import { fileContentUrl } from "../../lib/files/file-client";
 import {
   downloadArtifact,
-  downloadArtifactBytes,
   fetchArtifactBytes,
+  TEXT_PREVIEW_MAX_BYTES,
 } from "../../lib/pages/artifact-open";
 import { selectFilePreviewContents } from "../../lib/pages/file-preview-selection";
 import { errorText } from "../../lib/query/user-error";
 import { BuiCard } from "../ai/primitives";
 import { IconTooltip } from "../IconTooltip";
-import { PdfViewer } from "./PdfViewer";
 import { SandboxedHtmlViewer } from "./SandboxedHtmlViewer";
 
 type ArtifactFileCardProps = {
-  target: ArtifactTarget;
   artifactId: string;
   name: string;
   mimeType: string;
@@ -57,87 +55,62 @@ export function ArtifactFileCard(props: ArtifactFileCardProps) {
   const previewButton = useRef<HTMLButtonElement>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
-  const [downloadError, setDownloadError] = useState<string | null>(null);
-
-  async function startDownload() {
-    setDownloadError(null);
-    try {
-      await downloadArtifact(props.target, props.artifactId, props.name, props.mimeType);
-    } catch {
-      setDownloadError(t`Could not download ${props.name}. Try again.`);
-    }
-  }
 
   if (isAttachmentAudioMimeType(props.mimeType)) {
-    return (
-      <BuiCard className="min-w-[280px] p-4 text-foreground">
-        <AudioArtifactPreview
-          key={JSON.stringify([props.target, props.artifactId, props.mimeType])}
-          {...props}
-          onDownload={startDownload}
-        />
-        {downloadError ? <DownloadError message={downloadError} /> : null}
-      </BuiCard>
-    );
+    return <AudioArtifactPreview key={props.artifactId} {...props} />;
   }
 
   if (!previewable) {
     return (
-      <div>
-        <button
-          type="button"
-          onClick={() => void startDownload()}
-          className="rounded-2xl bg-card px-4 py-3 text-start text-body text-foreground hover:bg-accent"
-        >
-          <div className="font-medium">{props.name}</div>
-          <div className="mt-1 flex gap-2 text-muted-foreground">
-            <span>{props.mimeType}</span>
-            <span>{formatSize(props.size)}</span>
-          </div>
-        </button>
-        {downloadError ? <DownloadError message={downloadError} /> : null}
-      </div>
+      <button
+        type="button"
+        onClick={() => downloadArtifact(props.artifactId, props.name)}
+        className="rounded-2xl bg-card px-4 py-3 text-start text-body text-foreground hover:bg-accent"
+      >
+        <div className="font-medium">{props.name}</div>
+        <div className="mt-1 flex gap-2 text-muted-foreground">
+          <span>{props.mimeType}</span>
+          <span>{formatSize(props.size)}</span>
+        </div>
+      </button>
     );
   }
 
   return (
     <>
-      <div>
-        <BuiCard className="flex min-w-[280px] overflow-hidden text-start text-foreground">
+      <BuiCard className="flex min-w-[280px] overflow-hidden text-start text-foreground">
+        <button
+          ref={previewButton}
+          type="button"
+          aria-label={t`Preview ${props.name}`}
+          onClick={() => setPreviewOpen(true)}
+          className="flex min-w-0 flex-1 items-center gap-3 px-4 py-3 text-start hover:bg-accent"
+        >
+          <span className="grid h-10 w-10 shrink-0 place-items-center rounded-md bg-muted text-foreground">
+            {props.mimeType === "text/html" ? (
+              <Code2 size={21} strokeWidth={1.8} />
+            ) : (
+              <FileText size={21} strokeWidth={1.8} />
+            )}
+          </span>
+          <span className="min-w-0">
+            <span className="block truncate text-body font-medium">{props.name}</span>
+            <span className="mt-0.5 block text-body-sm text-muted-foreground">
+              {formatSize(props.size)}
+            </span>
+          </span>
+        </button>
+        <IconTooltip label={t`Download ${props.name}`}>
           <button
-            ref={previewButton}
             type="button"
-            aria-label={t`Preview ${props.name}`}
-            onClick={() => setPreviewOpen(true)}
-            className="flex min-w-0 flex-1 items-center gap-3 px-4 py-3 text-start hover:bg-accent"
+            aria-label={t`Download ${props.name}`}
+            onClick={() => downloadArtifact(props.artifactId, props.name)}
+            className="grid w-14 shrink-0 place-items-center border-l border-border text-muted-foreground hover:bg-accent hover:text-foreground"
           >
-            <span className="grid h-10 w-10 shrink-0 place-items-center rounded-md bg-muted text-foreground">
-              {props.mimeType === "text/html" ? (
-                <Code2 size={21} strokeWidth={1.8} />
-              ) : (
-                <FileText size={21} strokeWidth={1.8} />
-              )}
-            </span>
-            <span className="min-w-0">
-              <span className="block truncate text-body font-medium">{props.name}</span>
-              <span className="mt-0.5 block text-body-sm text-muted-foreground">
-                {formatSize(props.size)}
-              </span>
-            </span>
+            <Download size={19} strokeWidth={1.8} />
           </button>
-          <IconTooltip label={t`Download ${props.name}`}>
-            <button
-              type="button"
-              aria-label={t`Download ${props.name}`}
-              onClick={() => void startDownload()}
-              className="grid w-14 shrink-0 place-items-center border-l border-border text-muted-foreground hover:bg-accent hover:text-foreground"
-            >
-              <Download size={19} strokeWidth={1.8} />
-            </button>
-          </IconTooltip>
-        </BuiCard>
-        {downloadError ? <DownloadError message={downloadError} /> : null}
-      </div>
+        </IconTooltip>
+      </BuiCard>
       <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
         <DialogContent
           onKeyDown={(event) =>
@@ -159,53 +132,47 @@ export function ArtifactFileCard(props: ArtifactFileCardProps) {
 }
 
 function FilePreview({
-  target,
   artifactId,
   name,
   mimeType,
   closeButtonRef,
 }: ArtifactFileCardProps & { closeButtonRef: RefObject<HTMLButtonElement | null> }) {
   const { t } = useLingui();
-  const [downloadError, setDownloadError] = useState<string | null>(null);
   const [state, setState] = useState<
     | { status: "loading" }
-    | { status: "ready"; bytes: Uint8Array; text?: string }
+    | { status: "ready"; text?: string; truncated?: boolean }
     | { status: "error"; message: string }
   >({ status: "loading" });
   const [copied, copy, copyFailed, resetCopy, copyFailedText] = useCopyText();
-  const targetBotId = "botId" in target ? target.botId : undefined;
-  const targetGroupId = "groupId" in target ? target.groupId : undefined;
 
   useEffect(() => {
-    let cancelled = false;
-    const artifactTarget: ArtifactTarget =
-      targetBotId !== undefined ? { botId: targetBotId } : { groupId: targetGroupId! };
-    void fetchArtifactBytes(artifactTarget, artifactId)
+    if (!isTextPreview(mimeType)) {
+      setState({ status: "ready" });
+      return;
+    }
+    const controller = new AbortController();
+    void fetchArtifactBytes(artifactId, {
+      maxBytes: TEXT_PREVIEW_MAX_BYTES,
+      signal: controller.signal,
+    })
       .then((bytes) => {
-        if (cancelled) return;
-        if (!isTextPreview(mimeType)) {
-          setState({ status: "ready", bytes });
-          return;
-        }
-        try {
-          const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-          setState({ status: "ready", bytes, text });
-        } catch {
-          setState({ status: "error", message: t`This file is not valid UTF-8 text.` });
-        }
+        setState({
+          status: "ready",
+          text: new TextDecoder("utf-8").decode(bytes),
+          truncated: bytes.length >= TEXT_PREVIEW_MAX_BYTES,
+        });
       })
       .catch((error) => {
-        if (cancelled) return;
+        if (controller.signal.aborted) return;
         setState({
           status: "error",
           message: errorText(error, t`Could not load this file.`),
         });
       });
-    return () => {
-      cancelled = true;
-    };
-  }, [artifactId, targetBotId, targetGroupId, mimeType, t]);
+    return () => controller.abort();
+  }, [artifactId, mimeType, t]);
   const kind = artifactPreviewKind(mimeType);
+  const src = fileContentUrl(artifactId);
 
   return (
     <>
@@ -240,17 +207,7 @@ function FilePreview({
             size="icon-lg"
             className="rounded-full text-muted-foreground"
             aria-label={t`Download ${name}`}
-            onClick={() =>
-              void (async () => {
-                setDownloadError(null);
-                try {
-                  if (state.status === "ready") downloadArtifactBytes(name, mimeType, state.bytes);
-                  else await downloadArtifact(target, artifactId, name, mimeType);
-                } catch {
-                  setDownloadError(t`Could not download ${name}. Try again.`);
-                }
-              })()
-            }
+            onClick={() => downloadArtifact(artifactId, name)}
           >
             <Download />
           </Button>
@@ -265,11 +222,6 @@ function FilePreview({
           <X />
         </DialogClose>
       </header>
-      {downloadError ? (
-        <div className="shrink-0 px-5 pt-4">
-          <DownloadError message={downloadError} />
-        </div>
-      ) : null}
       <div className="relative min-h-0 flex-1 overflow-y-auto">
         {state.status === "loading" ? (
           <div className="absolute inset-0 grid place-items-center text-muted-foreground">
@@ -282,9 +234,17 @@ function FilePreview({
         ) : kind === "html" && state.text !== undefined ? (
           <SandboxedHtmlViewer html={state.text} title={name} />
         ) : kind === "video" ? (
-          <VideoPreview bytes={state.bytes} name={name} />
+          // biome-ignore lint/a11y/useMediaCaption: Attachment playback has no caption track supplied by the author.
+          <video
+            src={src}
+            controls
+            playsInline
+            preload="metadata"
+            aria-label={name}
+            className="h-full w-full object-contain"
+          />
         ) : kind === "pdf" ? (
-          <PdfViewer bytes={state.bytes} title={name} />
+          <iframe title={name} src={src} className="h-full w-full border-0" />
         ) : state.text !== undefined && kind === "text" ? (
           <pre
             data-file-preview-body
@@ -300,69 +260,29 @@ function FilePreview({
             <ChatMarkdown>{state.text}</ChatMarkdown>
           </article>
         ) : null}
+        {state.status === "ready" && state.truncated ? (
+          <p className="border-t border-border px-8 py-3 text-body-sm text-muted-foreground">
+            {t`Showing the first ${formatSize(TEXT_PREVIEW_MAX_BYTES)}.`}
+          </p>
+        ) : null}
       </div>
     </>
   );
 }
 
-function AudioArtifactPreview({
-  target,
-  artifactId,
-  name,
-  mimeType,
-  onDownload,
-}: ArtifactFileCardProps & { onDownload: () => Promise<void> }) {
+function AudioArtifactPreview({ artifactId, name }: ArtifactFileCardProps) {
   const { t } = useLingui();
-  const [state, setState] = useState<
-    { status: "idle" | "loading" } | { status: "ready"; src: string } | { status: "error" }
-  >({ status: "idle" });
-  const lifetime = useRef<{ cancelled: boolean; started: boolean; url?: string }>(null);
-  const audio = useRef<HTMLAudioElement>(null);
-  useEffect(() => {
-    const current = { cancelled: false, started: false, url: undefined as string | undefined };
-    lifetime.current = current;
-    return () => {
-      current.cancelled = true;
-      if (current.url) URL.revokeObjectURL(current.url);
-    };
-  }, []);
-  useEffect(() => {
-    if (state.status !== "ready") return;
-    const player = audio.current;
-    void player?.play().catch(() => {});
-    return () => player?.pause();
-  }, [state]);
-
-  async function startPlayback() {
-    const current = lifetime.current;
-    if (!current || current.cancelled || current.started) return;
-    current.started = true;
-    setState({ status: "loading" });
-    try {
-      const bytes = await fetchArtifactBytes(target, artifactId);
-      if (current.cancelled) return;
-      if (!isAttachmentAudioMimeType(mimeType)) throw new Error("Unsupported audio type");
-      current.url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: mimeType }));
-      setState({ status: "ready", src: current.url });
-    } catch {
-      if (!current.cancelled) {
-        current.started = false;
-        setState({ status: "error" });
-      }
-    }
-  }
+  const [playing, setPlaying] = useState(false);
 
   return (
-    <>
+    <BuiCard className="min-w-[280px] p-4 text-foreground">
       <div className="flex items-center gap-3">
-        {state.status !== "ready" ? (
+        {!playing ? (
           <Button
             variant="ghost"
             size="icon-lg"
             aria-label={t`Play ${name}`}
-            aria-busy={state.status === "loading"}
-            disabled={state.status === "loading"}
-            onClick={() => void startPlayback()}
+            onClick={() => setPlaying(true)}
           >
             <Play />
           </Button>
@@ -372,30 +292,23 @@ function AudioArtifactPreview({
           variant="ghost"
           size="icon-lg"
           aria-label={t`Download ${name}`}
-          onClick={() => void onDownload()}
+          onClick={() => downloadArtifact(artifactId, name)}
           className="text-muted-foreground"
         >
           <Download strokeWidth={1.8} className="size-[19px]" />
         </Button>
       </div>
-      {state.status === "loading" ? (
-        <span className="text-body text-muted-foreground">
-          <Spinner aria-label={t`Loading preview…`} />
-        </span>
-      ) : state.status === "error" ? (
-        <DownloadError message={t`Could not load this file.`} />
-      ) : state.status === "ready" ? (
+      {playing ? (
         // biome-ignore lint/a11y/useMediaCaption: Attachment playback has no caption track supplied by the author.
         <audio
-          ref={audio}
-          src={state.src}
+          src={fileContentUrl(artifactId)}
           controls
           preload="metadata"
           aria-label={name}
           className="mt-3 w-full"
         />
       ) : null}
-    </>
+    </BuiCard>
   );
 }
 
@@ -416,14 +329,6 @@ export function VideoPreview({ bytes, name }: { bytes: Uint8Array; name: string 
       aria-label={name}
       className="h-full w-full object-contain"
     />
-  );
-}
-
-function DownloadError({ message }: { message: string }) {
-  return (
-    <div role="alert" className="mt-2 text-start text-body-sm text-destructive">
-      {message}
-    </div>
   );
 }
 

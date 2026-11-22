@@ -20,8 +20,10 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/config"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/contentcrypto"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/drive"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/effects"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/events"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/filestore"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/gateway"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/local"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures"
@@ -72,10 +74,11 @@ func main() {
 	bgCtx, cancelBg := context.WithCancel(context.Background())
 	defer cancelBg()
 	var localServer *local.Server
+	var driveHandler http.Handler
 	var taskDetector *taskdetect.Service
 	var taskQueue *taskqueue.Service
 	if secretsReady {
-		server, detector, queueSvc, closeDatabase, err := setupLocal(*buildIDFile, wantsVault, logger)
+		server, dHandler, detector, queueSvc, closeDatabase, err := setupLocal(*buildIDFile, wantsVault, logger)
 		if err != nil {
 			if wantsLocal {
 				logger.Error("cannot serve local procedures", "error", err)
@@ -84,6 +87,7 @@ func main() {
 			logger.Warn("local procedures unavailable; serving proxy routes only", "error", err)
 		} else {
 			localServer = server
+			driveHandler = dHandler
 			taskDetector = detector
 			taskQueue = queueSvc
 			if taskQueue != nil {
@@ -104,6 +108,7 @@ func main() {
 		Local:        localServer,
 		TaskDetector: taskDetector,
 		TaskQueue:    taskQueue,
+		Drive:        driveHandler,
 	})
 	server := &http.Server{
 		Addr:              *listen,
@@ -181,20 +186,20 @@ func readBuildID(path string) string {
 // setupLocal opens the database and builds the local procedure server. It is
 // called whenever the deployment's secrets are present, even if every route is
 // still proxy, so a SIGHUP cutover can use it without a restart.
-func setupLocal(buildIDFile string, wantsVault bool, logger *slog.Logger) (*local.Server, *taskdetect.Service, *taskqueue.Service, func(), error) {
+func setupLocal(buildIDFile string, wantsVault bool, logger *slog.Logger) (*local.Server, http.Handler, *taskdetect.Service, *taskqueue.Service, func(), error) {
 	deployment, err := config.Load()
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, err
 	}
 	startup, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	database, err := db.Open(startup, deployment.DatabaseURL, "rakazo-api-go")
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, err
 	}
 	if err := database.StartupCheck(startup); err != nil {
 		database.Close()
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, err
 	}
 	sessions := auth.New(database, auth.Config{
 		Secret:          deployment.AuthSecret,
@@ -205,7 +210,13 @@ func setupLocal(buildIDFile string, wantsVault bool, logger *slog.Logger) (*loca
 	ring, closeRing, err := contentRing(startup, database, deployment, logger)
 	if err != nil {
 		database.Close()
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, err
+	}
+	blobStore, err := filestore.NewDeploymentStore(deployment, ring)
+	if err != nil {
+		closeRing()
+		database.Close()
+		return nil, nil, nil, nil, nil, err
 	}
 	// The credential store is built only when a vault procedure is routed: reading its key is a
 	// startup failure otherwise, and a proxy-only table must start without it (Lane F).
@@ -215,20 +226,20 @@ func setupLocal(buildIDFile string, wantsVault bool, logger *slog.Logger) (*loca
 		if provider != "" && provider != "encrypted" {
 			closeRing()
 			database.Close()
-			return nil, nil, nil, nil, fmt.Errorf(
+			return nil, nil, nil, nil, nil, fmt.Errorf(
 				"SECRET_STORE %q is not supported by the Go credential store: only \"encrypted\"", provider)
 		}
 		key, err := secretstore.ResolveEncryptionKey(os.Getenv)
 		if err != nil {
 			closeRing()
 			database.Close()
-			return nil, nil, nil, nil, err
+			return nil, nil, nil, nil, nil, err
 		}
 		store, err := secretstore.NewStore(key)
 		if err != nil {
 			closeRing()
 			database.Close()
-			return nil, nil, nil, nil, err
+			return nil, nil, nil, nil, nil, err
 		}
 		writer := secretstore.NewWriter(store, secretstore.NewNotifier(
 			&secretstore.PGPublisher{DB: database, Logger: logger}))
@@ -241,6 +252,21 @@ func setupLocal(buildIDFile string, wantsVault bool, logger *slog.Logger) (*loca
 	// it, and the procedures publish thread cursors, organization and board changes through
 	// the same notifier, so Wait() covers every signal either side started.
 	effectsRunner := effects.NewRunner(database, logger)
+	driveSvc := drive.NewService(
+		database,
+		blobStore,
+		effectsRunner.Signals(),
+		deployment.MaxFileUploadBytes,
+		deployment.MaxUploadBytes,
+		logger,
+	)
+	driveHTTP := drive.NewHTTPHandler(driveSvc, sessions, drive.HTTPConfig{
+		WebOrigin:      deployment.WebOrigin,
+		TrustedOrigins: deployment.TrustedOrigins,
+		ClientIP:       deployment.ClientIP,
+		ClientIPHeader: deployment.ClientIPHeader,
+		Logger:         logger,
+	})
 	// One listener on rakazo_events serves every event stream this process answers.
 	realtime := events.NewFanout(database.Pool.Config().ConnConfig, logger)
 	// The queue is built before the procedures so a ticket move or comment can wake workers on it.
@@ -282,6 +308,7 @@ func setupLocal(buildIDFile string, wantsVault bool, logger *slog.Logger) (*loca
 		PhoneCallRingSeconds: deployment.PhoneCallRingSeconds,
 		Audit:                effectsRunner.Recorder(),
 		Waker:                queueSvc,
+		Drive:                driveSvc,
 		Vault:                vault,
 		DefaultModel: deploymentModel(deployment.DefaultModelProvider, deployment.DefaultModel,
 			deployment.DefaultModelConfigured),
@@ -309,7 +336,7 @@ func setupLocal(buildIDFile string, wantsVault bool, logger *slog.Logger) (*loca
 		Waker:    queueSvc,
 		Logger:   logger,
 	}
-	return server, detector, queueSvc, func() {
+	return server, driveHTTP, detector, queueSvc, func() {
 		_ = queueSvc.Close()
 		realtime.Close()
 		closeRing()

@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
 import { mkdir, open, readdir, rename, rm, stat } from "node:fs/promises";
@@ -7,6 +7,8 @@ import type {
   AdapterContext,
   ArtifactPut,
   ArtifactStore,
+  ArtifactStreamOptions,
+  ArtifactStreamPut,
   NotificationMessage,
   NotificationProvider,
 } from "@rakazo/adapter-kit";
@@ -16,8 +18,10 @@ import {
   ContentDecryptionError,
   isSealedArtifact,
   openArtifact,
+  openArtifactRange,
   sealArtifact,
 } from "@rakazo/db";
+import { bestEffort } from "@rakazo/logging";
 
 const O_NOFOLLOW = constants.O_NOFOLLOW ?? 0;
 const CREATE_FLAGS = constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | O_NOFOLLOW;
@@ -118,6 +122,112 @@ export class LocalArtifactStore implements ArtifactStore {
     } finally {
       await handle.close();
     }
+  }
+
+  async putStream(artifact: ArtifactStreamPut, context: AdapterContext) {
+    const id = randomUUID();
+    const dir = path.join(this.root, "artifacts", context.spaceId);
+    await mkdir(dir, { recursive: true });
+    const key = this.keys?.encryptWrites ? await this.keys.current(context.spaceId) : undefined;
+    const tempPath = path.join(dir, `.${id}.tmp-${randomUUID()}`);
+    const finalPath = path.join(dir, id);
+    const hasher = createHash("sha256");
+    let size = 0;
+
+    async function* metered(source: AsyncIterable<Uint8Array>) {
+      for await (const chunk of source) {
+        context.signal.throwIfAborted();
+        if (chunk.byteLength === 0) continue;
+        size += chunk.byteLength;
+        hasher.update(chunk);
+        yield chunk;
+      }
+    }
+
+    const handle = await open(tempPath, CREATE_FLAGS, 0o600);
+    try {
+      const iterable = metered(artifact.stream);
+      await writeAll(handle, key ? sealArtifact(key, id, iterable) : iterable);
+      await handle.sync();
+      await handle.close();
+      await rename(tempPath, finalPath);
+    } catch (error) {
+      await bestEffort("artifact stream close after failure", handle.close());
+      await bestEffort("artifact temp file cleanup", rm(tempPath, { force: true }));
+      throw error;
+    }
+    return { id, hash: hasher.digest("hex"), size };
+  }
+
+  async getStream(
+    id: string,
+    context: AdapterContext,
+    options?: ArtifactStreamOptions,
+  ): Promise<AsyncIterable<Uint8Array>> {
+    const handle = await open(this.file(context.spaceId, id), constants.O_RDONLY | O_NOFOLLOW);
+    let sealed = false;
+    let head: Buffer = Buffer.alloc(0);
+    try {
+      head = await readHead(handle);
+      sealed = isSealedArtifact(head);
+      if (sealed && !this.keys)
+        throw new Error("Artifact is encrypted but no content keys are configured");
+    } catch (error) {
+      await bestEffort("artifact stream close after header failure", handle.close());
+      throw error;
+    }
+    const range = options?.range;
+    const keyResolver = sealed ? this.keyIn(context.spaceId) : undefined;
+    if (range && !sealed) {
+      // Plaintext files written before sealing (or with encryption off) read a file range.
+      return (async function* () {
+        try {
+          const stream = handle.createReadStream({
+            start: range.start,
+            end: range.endInclusive,
+            autoClose: false,
+          });
+          for await (const chunk of stream) yield chunk as Uint8Array;
+        } finally {
+          await handle.close();
+        }
+      })();
+    }
+    if (range) {
+      // Sealed files seek to the first 64 KiB segment the range needs.
+      const { size } = await handle.stat();
+      return (async function* () {
+        try {
+          yield* openArtifactRange(
+            keyResolver!,
+            id,
+            head,
+            size,
+            range,
+            (start, endInclusive) =>
+              handle.createReadStream({
+                start,
+                end: endInclusive,
+                autoClose: false,
+              }) as AsyncIterable<Uint8Array>,
+          );
+        } finally {
+          await handle.close();
+        }
+      })();
+    }
+    return (async function* () {
+      try {
+        const rawStream = handle.createReadStream({ start: 0, autoClose: false });
+        if (sealed) {
+          yield* openArtifact(keyResolver!, id, rawStream);
+        } else {
+          for await (const chunk of rawStream) yield chunk as Uint8Array;
+        }
+      } finally {
+        await handle.close();
+      }
+    })();
   }
 
   async remove(id: string, context: AdapterContext) {

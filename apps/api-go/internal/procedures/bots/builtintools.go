@@ -5,7 +5,7 @@ package bots
 var builtinToolNames = []string{
 	"computer_observe", "computer_act", "browser_navigate", "browser_snapshot",
 	"browser_act", "list_files", "read_file", "write_file",
-	"attach_file", "shell", "user_computer_list", "user_computer_shell",
+	"attach_file", "drive_list", "drive_read", "drive_save", "shell", "user_computer_list", "user_computer_shell",
 	"user_computer_observe", "user_computer_act", "open_path", "launch_app",
 	"request_takeover", "ask_user", "connect_app", "message_user",
 	"request_secret", "generate_secret", "list_secrets", "secret_request",

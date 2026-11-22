@@ -35,6 +35,9 @@ import {
   useThreadFeedback,
 } from "./thread-feedback";
 
+vi.mock("../../files/file-upload", () => ({
+  uploadMobileFile: vi.fn(async () => ({ id: "artifact-a" })),
+}));
 vi.mock("react-native", () => ({
   View: ({ children }: { children?: ReactNode }) => createElement("div", null, children),
   Text: ({ children }: { children?: ReactNode }) => createElement("span", null, children),

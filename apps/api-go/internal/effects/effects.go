@@ -218,6 +218,11 @@ var spaceChangeProcedures = map[string][]string{
 	"threads.sendWithRoutines": {"runs"}, "threads.react": {"runs"}, "threads.endCall": {"runs"},
 	"threads.followUp": {"runs"}, "skills.testRun": {"runs"},
 	"bots.restore": {"runs", "routines"}, "bots.remove": {"runs", "routines"},
+	"files.createFolder": {"files"}, "files.renameFolder": {"files"}, "files.moveFolder": {"files"},
+	"files.trashFolder": {"files"}, "files.restoreFolder": {"files"}, "files.deleteFolder": {"files"},
+	"files.rename": {"files"}, "files.move": {"files"}, "files.trash": {"files"},
+	"files.restore": {"files"}, "files.deletePermanent": {"files"}, "files.emptyTrash": {"files"},
+	"artifacts.create": {"files"}, "artifacts.remove": {"files"},
 }
 
 // SpaceChangesFor is spaceChangesFor.

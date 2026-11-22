@@ -91,12 +91,40 @@ function fakeBlobService() {
       res.write(Buffer.alloc(10));
       return;
     }
+    if (req.method === "HEAD") {
+      const blob = blobs.get(name);
+      if (!blob)
+        return send(404, "<Error><Code>BlobNotFound</Code></Error>", {
+          "x-ms-error-code": "BlobNotFound",
+        });
+      return send(200, "", {
+        "Content-Length": blob.body.length,
+        "Last-Modified": blob.lastModified.toUTCString(),
+        ETag: '"blob"',
+        "x-ms-blob-type": "BlockBlob",
+      });
+    }
     if (req.method === "GET") {
       const blob = blobs.get(name);
       if (!blob)
         return send(404, "<Error><Code>BlobNotFound</Code></Error>", {
           "x-ms-error-code": "BlobNotFound",
         });
+      const requested = req.headers["x-ms-range"] ?? req.headers.range;
+      const range = /^bytes=(\d+)-(\d+)$/.exec(String(requested ?? ""));
+      if (range) {
+        const start = Number(range[1]);
+        const end = Math.min(Number(range[2]), blob.body.length - 1);
+        const body = blob.body.subarray(start, end + 1);
+        return send(206, body, {
+          "Content-Length": body.length,
+          "Content-Type": "application/octet-stream",
+          "Content-Range": `bytes ${start}-${end}/${blob.body.length}`,
+          ETag: '"blob"',
+          "Last-Modified": blob.lastModified.toUTCString(),
+          "x-ms-blob-type": "BlockBlob",
+        });
+      }
       return send(200, blob.body, {
         "Content-Length": blob.body.length,
         "Content-Type": "application/octet-stream",

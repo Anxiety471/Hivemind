@@ -78,6 +78,29 @@ describe("resolveNextArtifactVersion", () => {
       }),
     );
   });
+
+  it("scopes Space Drive versioning by folderId when botId and groupId are absent", async () => {
+    const findFirst = vi.fn().mockResolvedValue(null);
+    const prisma = { artifact: { findFirst } } as unknown as Pick<PrismaClient, "artifact">;
+
+    await resolveNextArtifactVersion(prisma, {
+      spaceId: "space-1",
+      folderId: "folder-1",
+      name: "demo.mp4",
+    });
+
+    expect(findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          spaceId: "space-1",
+          botId: null,
+          groupId: null,
+          folderId: "folder-1",
+          trashedAt: null,
+        }),
+      }),
+    );
+  });
 });
 
 function versioningClient(findFirst: (...args: unknown[]) => unknown) {

@@ -21,6 +21,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/capabilities"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/computer"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/connections"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/drivefiles"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/externalconversations"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/groups"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/mcpassignments"
@@ -779,6 +780,7 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 	if audit == nil {
 		audit = effects.NewRecorder(database, slog.Default())
 	}
+	procedures = append(procedures, drivefiles.Procedures(deployment.Drive)...)
 	return append(procedures, membership(database, deployment, audit)...)
 }
 

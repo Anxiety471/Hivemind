@@ -47,7 +47,7 @@ type Props = {
   onBoard?: () => void;
   links?: NavLink[];
   onLink?: (link: NavLink) => void;
-  onArtifacts: () => void;
+  onFiles: () => void;
   onSettings: () => void;
   /** How much of the member's allowance is used; the Usage row shows only with one. */
   usage?: string | null;
@@ -81,7 +81,7 @@ export function SidebarFooter({
   onBoard,
   links = [],
   onLink,
-  onArtifacts,
+  onFiles,
   onSettings,
   usage,
   onUsage,
@@ -214,10 +214,10 @@ export function SidebarFooter({
               variant="ghost"
               size="lg"
               className="w-full justify-start gap-2.5 font-normal"
-              onClick={onArtifacts}
+              onClick={onFiles}
             >
               <FolderOpen className="text-muted-foreground" strokeWidth={1.75} />
-              <Trans>Artifacts</Trans>
+              <Trans>Files</Trans>
             </Button>
             {onBoard ? (
               <Button

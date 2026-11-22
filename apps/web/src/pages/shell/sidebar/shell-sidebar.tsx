@@ -418,10 +418,10 @@ function ShellSidebarFooter({
           closeMobileSidebar();
           navigate(`/app/x/${link.id}`);
         }}
-        onArtifacts={() => {
+        onFiles={() => {
           setMenuOpen(false);
           closeMobileSidebar();
-          navigate("/app/artifacts");
+          navigate("/app/files");
         }}
         onSettings={() => {
           setMenuOpen(false);

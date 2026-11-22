@@ -120,10 +120,26 @@ function fakeS3() {
           .join("")}</ListBucketResult>`,
       );
     }
+    if (req.method === "HEAD") {
+      const object = objects.get(key);
+      if (!object)
+        return send(404, "<Error><Code>NoSuchKey</Code><Message>missing</Message></Error>");
+      return send(200, "", { "Content-Length": object.body.length });
+    }
     if (req.method === "GET") {
       const object = objects.get(key);
       if (!object)
         return send(404, "<Error><Code>NoSuchKey</Code><Message>missing</Message></Error>");
+      const range = /^bytes=(\d+)-(\d+)$/.exec(req.headers.range ?? "");
+      if (range) {
+        const start = Number(range[1]);
+        const end = Math.min(Number(range[2]), object.body.length - 1);
+        const body = object.body.subarray(start, end + 1);
+        return send(206, body, {
+          "Content-Length": body.length,
+          "Content-Range": `bytes ${start}-${end}/${object.body.length}`,
+        });
+      }
       return send(200, object.body, { "Content-Length": object.body.length });
     }
     send(400, "<Error><Code>BadRequest</Code></Error>");

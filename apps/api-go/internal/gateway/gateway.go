@@ -37,6 +37,8 @@ type Options struct {
 	TaskDetector TaskDetector
 	// TaskQueue serves the internal Redis-backed ticket wake & bump queue endpoints.
 	TaskQueue TaskQueue
+	// Drive serves /api/v1/files and /api/v1/files/:id/content directly in Go.
+	Drive http.Handler
 }
 
 // Gateway routes /rpc requests either to the configured procedures' Go handlers
@@ -51,6 +53,7 @@ type Gateway struct {
 	local      *local.Server
 	taskDetect TaskDetector
 	taskQueue  TaskQueue
+	drive      http.Handler
 }
 
 // New builds the gateway handler.
@@ -76,6 +79,7 @@ func New(options Options) *Gateway {
 		local:      options.Local,
 		taskDetect: options.TaskDetector,
 		taskQueue:  options.TaskQueue,
+		drive:      options.Drive,
 	}
 	gateway.proxy = &httputil.ReverseProxy{
 		Rewrite: gateway.rewrite,
@@ -114,8 +118,19 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		g.taskQueueRerunAll(status, r)
 	case r.URL.Path == TaskQueueHealthPath:
 		g.taskQueueHealth(status, r)
+	case r.URL.Path == "/api/v1/files" || strings.HasPrefix(r.URL.Path, "/api/v1/files/"):
+		if g.drive != nil {
+			g.drive.ServeHTTP(status, r)
+		} else {
+			g.proxy.ServeHTTP(status, r)
+		}
 	case r.URL.Path == "/rpc" || strings.HasPrefix(r.URL.Path, "/rpc/"):
-		mode, readOnly := g.routes.Lookup(r.URL.Path)
+		mode, readOnly, explicit := g.routes.LookupExplicit(r.URL.Path)
+		// Space Drive files.* run natively in Go by default when initialized unless
+		// routes.json explicitly sets a different mode (e.g. proxy rollback).
+		if mode == routes.Proxy && !explicit && strings.HasPrefix(procedure, "files.") && g.local != nil && g.local.Has(procedure) {
+			mode = routes.Go
+		}
 		switch mode {
 		case routes.Proxy:
 			g.proxy.ServeHTTP(status, r)

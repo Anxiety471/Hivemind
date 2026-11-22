@@ -10,6 +10,7 @@ import (
 
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/contentcrypto"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/drive"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/effects"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/events"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
@@ -99,6 +100,8 @@ type Deployment struct {
 	// Waker wakes a ticket's worker bots through the task queue (retries, backoff, coalescing).
 	// nil in tests that never wake one.
 	Waker TicketWaker
+	// Drive handles Space Drive file operations and streaming storage.
+	Drive *drive.Service
 }
 
 // TicketWaker queues a wake for each bot, with a short note saying what changed on the ticket.

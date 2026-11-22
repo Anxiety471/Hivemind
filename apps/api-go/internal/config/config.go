@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -25,8 +26,11 @@ type Config struct {
 	ExtraOrigins    []string
 	SignupAllowlist []string
 	OIDCBypass      bool
-	MaxUploadBytes  int64
-	Minimums        map[string]string
+	MaxUploadBytes     int64
+	MaxFileUploadBytes int64
+	DataDir            string
+	ObjectStorage      *ObjectStorageConfig
+	Minimums           map[string]string
 	TrustedOrigins  []string
 	ClientIP        *effects.ClientIPResolver
 	ClientIPHeader  string
@@ -107,6 +111,16 @@ func Load() (Config, error) {
 	config.SignupAllowlist = splitList(os.Getenv("SIGNUP_ALLOWLIST"))
 	config.OIDCBypass = os.Getenv("OIDC_ALLOW_SIGNUP_BYPASS") == "true" && strings.TrimSpace(os.Getenv("OIDC_ISSUER")) != ""
 	config.MaxUploadBytes = uploadBytes(os.Getenv("MAX_UPLOAD_SIZE_MB"))
+	config.MaxFileUploadBytes = fileUploadBytes(os.Getenv("MAX_FILE_UPLOAD_SIZE_MB"), config.MaxUploadBytes)
+	config.DataDir = strings.TrimSpace(os.Getenv("DATA_DIR"))
+	if config.DataDir == "" {
+		config.DataDir = "./data"
+	}
+	objectStorage, err := objectStorageFromEnv(os.Getenv)
+	if err != nil {
+		return Config{}, err
+	}
+	config.ObjectStorage = objectStorage
 	config.EmailDelivery = emailDelivery(os.Getenv)
 	config.InboundEmailDomain = strings.ToLower(strings.TrimSpace(os.Getenv("INBOUND_EMAIL_DOMAIN")))
 	config.MaxComputersPerUser = strings.TrimSpace(os.Getenv("SANDBOX_MAX_COMPUTERS_PER_USER"))
@@ -238,11 +252,87 @@ func splitList(raw string) []string {
 	return values
 }
 
+// ObjectStorageConfig holds optional S3-compatible object storage settings.
+type ObjectStorageConfig struct {
+	Protocol        string
+	Bucket          string
+	Endpoint        string
+	Region          string
+	AccessKeyID     string
+	SecretAccessKey string
+	Prefix          string
+	PathStyle       bool
+}
+
 func uploadBytes(raw string) int64 {
 	if value, err := strconv.Atoi(strings.TrimSpace(raw)); err == nil && value > 0 {
 		return int64(value) * 1024 * 1024
 	}
 	return 10 * 1024 * 1024
+}
+
+func fileUploadBytes(raw string, maxUploadBytes int64) int64 {
+	const defaultBytes = 250 * 1024 * 1024
+	const ceilingBytes = 2000 * 1024 * 1024
+	if value, err := strconv.Atoi(strings.TrimSpace(raw)); err == nil && value > 0 {
+		limit := int64(value) * 1024 * 1024
+		if limit > ceilingBytes {
+			return ceilingBytes
+		}
+		return limit
+	}
+	if maxUploadBytes > defaultBytes {
+		if maxUploadBytes > ceilingBytes {
+			return ceilingBytes
+		}
+		return maxUploadBytes
+	}
+	return defaultBytes
+}
+
+func objectStorageFromEnv(getenv func(string) string) (*ObjectStorageConfig, error) {
+	bucket := strings.TrimSpace(getenv("OBJECT_STORAGE_BUCKET"))
+	if bucket == "" {
+		return nil, nil
+	}
+	protocol := strings.ToLower(strings.TrimSpace(getenv("OBJECT_STORAGE_PROTOCOL")))
+	if protocol == "" {
+		protocol = "s3"
+	}
+	if protocol != "s3" {
+		return nil, fmt.Errorf(`OBJECT_STORAGE_PROTOCOL must be "s3"`)
+	}
+	accessKey := strings.TrimSpace(getenv("OBJECT_STORAGE_ACCESS_KEY_ID"))
+	secretKey := strings.TrimSpace(getenv("OBJECT_STORAGE_SECRET_ACCESS_KEY"))
+	if accessKey == "" || secretKey == "" {
+		return nil, fmt.Errorf("OBJECT_STORAGE_ACCESS_KEY_ID and OBJECT_STORAGE_SECRET_ACCESS_KEY are required with OBJECT_STORAGE_BUCKET")
+	}
+	endpoint := strings.TrimSpace(getenv("OBJECT_STORAGE_ENDPOINT"))
+	if endpoint != "" {
+		parsed, err := url.Parse(endpoint)
+		if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+			return nil, fmt.Errorf("OBJECT_STORAGE_ENDPOINT must be an http(s) URL")
+		}
+	}
+	pathStyleRaw := strings.ToLower(strings.TrimSpace(getenv("OBJECT_STORAGE_PATH_STYLE")))
+	if pathStyleRaw != "" && pathStyleRaw != "true" && pathStyleRaw != "false" {
+		return nil, fmt.Errorf(`OBJECT_STORAGE_PATH_STYLE must be "true" or "false"`)
+	}
+	region := strings.TrimSpace(getenv("OBJECT_STORAGE_REGION"))
+	if region == "" {
+		region = "us-east-1"
+	}
+	prefix := strings.Trim(strings.TrimSpace(getenv("OBJECT_STORAGE_PREFIX")), "/")
+	return &ObjectStorageConfig{
+		Protocol:        protocol,
+		Bucket:          bucket,
+		Endpoint:        endpoint,
+		Region:          region,
+		AccessKeyID:     accessKey,
+		SecretAccessKey: secretKey,
+		Prefix:          prefix,
+		PathStyle:       pathStyleRaw == "true",
+	}, nil
 }
 
 func durationSeconds(raw string, fallbackSec int) time.Duration {

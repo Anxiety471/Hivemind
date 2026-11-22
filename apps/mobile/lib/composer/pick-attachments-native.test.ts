@@ -66,13 +66,15 @@ describe("native attachment reads", () => {
     expect(file.base64).toHaveBeenCalledTimes(limit);
   });
 
-  it("reads a file above 10 MiB when the server allows it", async () => {
+  it("streams a file above 10 MiB when the server allows it", async () => {
     const result = await pickDocuments(
       0,
       attachmentMaxBytes({ maxUploadSizeBytes: 12 * 1024 * 1024 }),
     );
     expect(result.attachments).toHaveLength(1);
-    expect(file.base64).toHaveBeenCalledOnce();
+    // Past the RPC's 10 MiB attachment cap the bytes stay on disk and the upload streams them.
+    expect(file.base64).not.toHaveBeenCalled();
+    expect(result.attachments[0]).toMatchObject({ contentBase64: "", size: file.size });
   });
 
   it("skips the read when the file exceeds the server limit or older-server default", async () => {
@@ -108,7 +110,7 @@ describe("native attachment reads", () => {
 
   it("fills remaining slots after rejected documents without changing order", async () => {
     const assets = [
-      document("unknown.unsupported", "application/x-unsupported"),
+      document("dropper.exe", "application/octet-stream"),
       document("large.txt"),
       document("first.txt"),
       document("second.txt"),
@@ -128,7 +130,7 @@ describe("native attachment reads", () => {
     expect(result.attachments.map((item) => item.name)).toEqual(["first.txt", "second.txt"]);
     expect(result.attachments[0]!.id).not.toBe(result.attachments[1]!.id);
     expect(result.skipped).toEqual([
-      { name: "unknown.unsupported", reason: "unsupported type" },
+      { name: "dropper.exe", reason: "unsupported type" },
       { name: "large.txt", reason: "over 2 MiB" },
       { name: "extra.txt", reason: "max 4 attachments" },
     ]);

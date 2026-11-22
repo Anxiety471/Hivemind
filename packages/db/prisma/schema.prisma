@@ -703,6 +703,7 @@ model Space {
   agentHomes                  AgentHome[]
   browserProfiles             BrowserProfile[]
   artifacts                   Artifact[]
+  fileFolders                 FileFolder[]
   pages                       Page[]
   notificationPreferences     NotificationPreference[]
   computers                   Computer[]
@@ -2019,23 +2020,47 @@ model ComputerExecutionLease {
   @@map("computer_execution_leases")
 }
 
+model FileFolder {
+  id              String       @id @default(cuid())
+  spaceId         String
+  space           Space        @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  parentId        String?
+  parent          FileFolder?  @relation("FolderChildren", fields: [parentId], references: [id], onDelete: Cascade)
+  children        FileFolder[] @relation("FolderChildren")
+  createdByUserId String
+  name            String
+  trashedAt       DateTime?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  artifacts       Artifact[]
+
+  @@index([spaceId, parentId])
+  @@index([spaceId, trashedAt])
+  @@map("file_folders")
+}
+
 model Artifact {
-  id         String     @id @default(cuid())
+  id         String      @id @default(cuid())
   spaceId    String
-  space      Space      @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  space      Space       @relation(fields: [spaceId], references: [id], onDelete: Cascade)
   botId      String?
-  bot        Bot?       @relation(fields: [botId], references: [id], onDelete: SetNull)
+  bot        Bot?        @relation(fields: [botId], references: [id], onDelete: SetNull)
   groupId    String?
-  group      ChatGroup? @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  group      ChatGroup?  @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  folderId   String?
+  folder     FileFolder? @relation(fields: [folderId], references: [id], onDelete: SetNull)
   userId     String
   runId      String?
+  source     String      @default("chat")
   name       String
   description String?
   mimeType   String
   size       Int
   hash       String
   storageKey String
-  createdAt  DateTime   @default(now())
+  trashedAt  DateTime?
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @default(now()) @updatedAt
 
   // Null on the first version; that row's id is the family's stable id.
   rootArtifactId String?
@@ -2049,6 +2074,8 @@ model Artifact {
 
   @@unique([spaceId, userId, clientNonce])
   @@index([spaceId, botId])
+  @@index([spaceId, folderId])
+  @@index([spaceId, trashedAt])
   @@index([groupId])
   @@index([rootArtifactId])
   // artifacts_family_version_key is raw SQL: Prisma cannot express COALESCE indexes.

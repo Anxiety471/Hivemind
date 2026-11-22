@@ -2,10 +2,27 @@ import { useLingui } from "@lingui/react/macro";
 import type { AgentSkillCatalogEntry } from "@rakazo/contracts";
 import type { ComposerMention, SLASH_ACTIONS, SlashActionId } from "@rakazo/core";
 import { mentionChipKey, truncateSlashDescription } from "@rakazo/core";
-import { Button } from "@rakazo/ui-web";
-import { ArrowUp, Box, Paperclip, Settings, Square, X } from "lucide-react";
+import {
+  Button,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@rakazo/ui-web";
+import {
+  ArrowUp,
+  Box,
+  FolderOpen,
+  Paperclip,
+  Plus,
+  Settings,
+  Square,
+  Upload,
+  X,
+} from "lucide-react";
 import type { CSSProperties, ReactNode, RefObject } from "react";
 import type { PendingAttachment } from "../chat/chat-shared";
+import { pendingAttachmentName } from "../chat/chat-shared";
 import { MentionOptionIcon, slashActionLabel } from "./composer-mentions";
 import type { useHoldToTalk } from "./hold-to-talk";
 import { HoldToTalkControls } from "./hold-to-talk";
@@ -30,18 +47,18 @@ export function PendingAttachmentChips({
           {attachment.previewUrl ? (
             <img
               src={attachment.previewUrl}
-              alt={attachment.file.name}
+              alt={pendingAttachmentName(attachment)}
               className="h-8 w-8 rounded object-cover"
             />
           ) : (
             <Paperclip size={14} strokeWidth={1.8} />
           )}
           <span className="max-w-[180px] truncate" dir="auto">
-            {attachment.file.name}
+            {pendingAttachmentName(attachment)}
           </span>
           <button
             type="button"
-            aria-label={t`Remove ${attachment.file.name}`}
+            aria-label={t`Remove ${pendingAttachmentName(attachment)}`}
             onClick={() => onRemove(attachment)}
             className="text-muted-foreground hover:text-foreground"
           >
@@ -50,6 +67,53 @@ export function PendingAttachmentChips({
         </div>
       ))}
     </div>
+  );
+}
+
+/** The attach menu: a new upload, or a file already in the Space Drive. */
+export function AttachMenu({
+  buttonRef,
+  disabled,
+  expanded,
+  onUpload,
+  onChooseFromFiles,
+}: {
+  buttonRef: RefObject<HTMLButtonElement | null>;
+  disabled?: boolean;
+  expanded: boolean;
+  onUpload: () => void;
+  onChooseFromFiles: () => void;
+}) {
+  const { t } = useLingui();
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <Button
+            ref={buttonRef}
+            variant="ghost"
+            size="icon"
+            aria-label={t`Attach file`}
+            disabled={disabled}
+            className={`col-start-1 shrink-0 rounded-full border border-border bg-muted text-muted-foreground transition-colors hover:bg-accent hover:text-foreground ${
+              expanded ? "row-start-2" : ""
+            }`}
+          />
+        }
+      >
+        <Plus size={16} strokeWidth={2} />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-52">
+        <DropdownMenuItem onClick={onUpload}>
+          <Upload />
+          {t`Upload files`}
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={onChooseFromFiles}>
+          <FolderOpen />
+          {t`Choose from Files`}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 

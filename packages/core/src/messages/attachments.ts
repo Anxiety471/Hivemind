@@ -1,11 +1,19 @@
-import type { AttachmentMimeType, HistoryToolStep, MessageBlock } from "@rakazo/contracts";
+import type { FileCategory, HistoryToolStep, MessageBlock } from "@rakazo/contracts";
 import {
   ATTACHMENT_COUNT_CEILING,
   ATTACHMENT_MAX_BYTES,
   ATTACHMENT_MAX_COUNT,
   attachmentSizeLabel,
+  FILE_UPLOAD_MAX_BYTES,
+  FILE_UPLOAD_MAX_CEILING_BYTES,
   isAllowedAttachmentMimeType,
+  isAttachmentArchiveMimeType,
+  isAttachmentAudioMimeType,
   isAttachmentImageMimeType,
+  isAttachmentVideoMimeType,
+  isBlockedAttachmentExtension,
+  isBlockedAttachmentMimeType,
+  normalizeMimeType,
 } from "@rakazo/contracts";
 import { isApprovalAskBlock, isSecretAskBlock } from "../runs/action-approval.js";
 
@@ -60,6 +68,22 @@ export function uploadSizeFromEnv(source: { MAX_UPLOAD_SIZE_MB?: string }): numb
   ) {
     throw new Error(
       "MAX_UPLOAD_SIZE_MB must be a positive integer number of MiB within the safe byte range",
+    );
+  }
+  return mb * 1024 * 1024;
+}
+
+export function fileUploadSizeFromEnv(source: {
+  MAX_FILE_UPLOAD_SIZE_MB?: string;
+  MAX_UPLOAD_SIZE_MB?: string;
+}): number {
+  const value = source.MAX_FILE_UPLOAD_SIZE_MB?.trim();
+  if (!value) return Math.max(FILE_UPLOAD_MAX_BYTES, uploadSizeFromEnv(source));
+  const mb = Number(value);
+  const maxMb = Math.floor(FILE_UPLOAD_MAX_CEILING_BYTES / (1024 * 1024));
+  if (!/^\d+$/.test(value) || !Number.isSafeInteger(mb) || mb <= 0 || mb > maxMb) {
+    throw new Error(
+      `MAX_FILE_UPLOAD_SIZE_MB must be a positive integer number of MiB up to ${maxMb}`,
     );
   }
   return mb * 1024 * 1024;
@@ -307,110 +331,371 @@ function blockHistoryText(block: MessageBlock): string {
   return "";
 }
 
-const EXTENSION_MIME_TYPES: Record<string, AttachmentMimeType> = {
+const EXTENSION_MIME_TYPES: Record<string, string> = {
   ".mp3": "audio/mpeg",
   ".wav": "audio/wav",
   ".ogg": "audio/ogg",
+  ".oga": "audio/ogg",
   ".m4a": "audio/mp4",
+  ".flac": "audio/flac",
+  ".aac": "audio/aac",
+  ".weba": "audio/webm",
   ".mp4": "video/mp4",
+  ".m4v": "video/x-m4v",
+  ".mov": "video/quicktime",
+  ".webm": "video/webm",
+  ".mkv": "video/x-matroska",
+  ".ogv": "video/ogg",
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",
   ".png": "image/png",
   ".webp": "image/webp",
   ".gif": "image/gif",
+  ".avif": "image/avif",
+  ".heic": "image/heic",
+  ".heif": "image/heif",
+  ".svg": "image/svg+xml",
+  ".ico": "image/x-icon",
   ".pdf": "application/pdf",
+  ".doc": "application/msword",
+  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ".xls": "application/vnd.ms-excel",
+  ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ".ppt": "application/vnd.ms-powerpoint",
+  ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  ".rtf": "application/rtf",
+  ".odt": "application/vnd.oasis.opendocument.text",
+  ".ods": "application/vnd.oasis.opendocument.spreadsheet",
   ".txt": "text/plain",
+  ".log": "text/plain",
+  ".env": "text/plain",
+  ".ini": "text/plain",
+  ".conf": "text/plain",
+  ".cfg": "text/plain",
   ".md": "text/markdown",
   ".markdown": "text/markdown",
   ".csv": "text/csv",
-  ".xls": "application/vnd.ms-excel",
-  ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ".tsv": "text/tab-separated-values",
   ".html": "text/html",
   ".htm": "text/html",
+  ".css": "text/css",
   ".json": "application/json",
+  ".xml": "application/xml",
+  ".yaml": "application/yaml",
+  ".yml": "application/yaml",
+  ".toml": "application/toml",
+  ".sql": "application/sql",
+  ".sh": "application/x-sh",
+  ".bash": "application/x-sh",
+  ".zsh": "application/x-sh",
+  ".fish": "application/x-sh",
+  ".js": "application/javascript",
+  ".mjs": "application/javascript",
+  ".cjs": "application/javascript",
+  ".jsx": "application/javascript",
+  ".ts": "text/typescript",
+  ".mts": "text/typescript",
+  ".cts": "text/typescript",
+  ".tsx": "text/typescript",
+  ".py": "text/x-python",
+  ".go": "text/x-go",
+  ".rs": "text/x-rust",
+  ".c": "text/x-c",
+  ".h": "text/x-c",
+  ".cpp": "text/x-c++",
+  ".hpp": "text/x-c++",
+  ".cc": "text/x-c++",
+  ".java": "text/x-java",
+  ".rb": "text/x-ruby",
+  ".php": "application/x-httpd-php",
+  ".swift": "text/x-swift",
+  ".kt": "text/x-kotlin",
+  ".diff": "text/x-diff",
+  ".patch": "text/x-diff",
   ".zip": "application/zip",
   ".rar": "application/vnd.rar",
   ".7z": "application/x-7z-compressed",
+  ".gz": "application/gzip",
+  ".tgz": "application/gzip",
+  ".tar.gz": "application/gzip",
+  ".tar": "application/x-tar",
+  ".bz2": "application/x-bzip2",
+  ".tar.bz2": "application/x-bzip2",
+  ".xz": "application/x-xz",
+  ".tar.xz": "application/x-xz",
 };
 
-const MIME_TYPE_EXTENSIONS: Record<AttachmentMimeType, string> = {
+const MIME_TYPE_EXTENSIONS: Record<string, string> = {
   "audio/mpeg": ".mp3",
   "audio/wav": ".wav",
   "audio/ogg": ".ogg",
   "audio/mp4": ".m4a",
+  "audio/webm": ".weba",
+  "audio/flac": ".flac",
+  "audio/aac": ".aac",
   "video/mp4": ".mp4",
+  "video/x-m4v": ".m4v",
+  "video/quicktime": ".mov",
+  "video/webm": ".webm",
+  "video/x-matroska": ".mkv",
+  "video/ogg": ".ogv",
   "image/jpeg": ".jpg",
   "image/png": ".png",
   "image/webp": ".webp",
   "image/gif": ".gif",
+  "image/avif": ".avif",
+  "image/heic": ".heic",
+  "image/heif": ".heif",
+  "image/svg+xml": ".svg",
+  "image/x-icon": ".ico",
   "application/pdf": ".pdf",
+  "application/msword": ".doc",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+  "application/vnd.ms-excel": ".xls",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+  "application/vnd.ms-powerpoint": ".ppt",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+  "application/rtf": ".rtf",
+  "application/vnd.oasis.opendocument.text": ".odt",
+  "application/vnd.oasis.opendocument.spreadsheet": ".ods",
   "text/plain": ".txt",
   "text/markdown": ".md",
   "text/csv": ".csv",
-  "application/vnd.ms-excel": ".xls",
-  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+  "text/tab-separated-values": ".tsv",
   "text/html": ".html",
+  "text/css": ".css",
   "application/json": ".json",
+  "application/xml": ".xml",
+  "application/yaml": ".yaml",
+  "application/toml": ".toml",
+  "application/sql": ".sql",
+  "application/x-sh": ".sh",
+  "application/javascript": ".js",
+  "text/typescript": ".ts",
+  "text/x-python": ".py",
+  "text/x-go": ".go",
+  "text/x-rust": ".rs",
+  "text/x-c": ".c",
+  "text/x-c++": ".cpp",
+  "text/x-java": ".java",
+  "text/x-ruby": ".rb",
+  "application/x-httpd-php": ".php",
+  "text/x-swift": ".swift",
+  "text/x-kotlin": ".kt",
+  "text/x-diff": ".diff",
   "application/zip": ".zip",
   "application/vnd.rar": ".rar",
   "application/x-7z-compressed": ".7z",
+  "application/gzip": ".gz",
+  "application/x-tar": ".tar",
+  "application/x-bzip2": ".bz2",
+  "application/x-xz": ".xz",
 };
 
-/** Short file-type badge, as a file's extension reads ("TXT", "MD", "PDF"). */
-export function artifactTypeLabel(mimeType: string): string {
+const MIME_ALIASES: Record<string, string> = {
+  "application/x-zip-compressed": "application/zip",
+  "application/x-zip": "application/zip",
+  "multipart/x-zip": "application/zip",
+  "application/x-rar-compressed": "application/vnd.rar",
+  "application/x-rar": "application/vnd.rar",
+  "application/rar": "application/vnd.rar",
+  "application/x-7z": "application/x-7z-compressed",
+  "application/x-gzip": "application/gzip",
+  "audio/mp3": "audio/mpeg",
+  "audio/x-wav": "audio/wav",
+  "audio/wave": "audio/wav",
+  "audio/vnd.wave": "audio/wav",
+  "audio/x-m4a": "audio/mp4",
+  "audio/m4a": "audio/mp4",
+  "audio/x-flac": "audio/flac",
+  "text/x-sh": "application/x-sh",
+  "text/x-shellscript": "application/x-sh",
+  "application/x-shellscript": "application/x-sh",
+  "application/x-yaml": "application/yaml",
+  "text/yaml": "application/yaml",
+  "text/x-yaml": "application/yaml",
+  "text/javascript": "application/javascript",
+  "application/x-javascript": "application/javascript",
+  "application/typescript": "text/typescript",
+  "text/x-typescript": "text/typescript",
+  "application/x-python": "text/x-python",
+  "text/x-python-script": "text/x-python",
+  "application/x-sql": "application/sql",
+  "text/x-sql": "application/sql",
+  "text/xml": "application/xml",
+  "video/x-quicktime": "video/quicktime",
+};
+
+const COMPOUND_EXTENSIONS = [".tar.gz", ".tar.bz2", ".tar.xz"] as const;
+const SAFE_EXTENSION_PATTERN = /^\.[a-z0-9]{1,12}(?:\.[a-z0-9]{1,8})?$/;
+
+function ownLookup(record: Record<string, string>, key: string): string | undefined {
+  return Object.hasOwn(record, key) ? record[key] : undefined;
+}
+
+function fileExtensionLower(name: string): string {
+  const lower = name.trim().toLowerCase();
+  for (const compound of COMPOUND_EXTENSIONS) {
+    if (lower.endsWith(compound)) return compound;
+  }
+  const dot = lower.lastIndexOf(".");
+  return dot < 0 ? "" : lower.slice(dot);
+}
+
+/** Short file-type badge, as a file's extension reads ("TXT", "MD", "PDF", "SH"). */
+export function artifactTypeLabel(mimeType: string, name?: string): string {
+  const ext = name ? fileExtensionLower(name) : "";
+  if (ext && normalizeMimeType(mimeType) === "application/octet-stream") {
+    return ext.slice(1).toUpperCase().slice(0, 6);
+  }
   const extension = attachmentExtensionForMimeType(mimeType);
-  if (extension) return extension.slice(1).toUpperCase();
+  if (extension) return extension.slice(1).toUpperCase().slice(0, 6);
   const slash = mimeType.indexOf("/");
   return (slash === -1 ? mimeType : mimeType.slice(slash + 1)).toUpperCase().slice(0, 6);
 }
 
-export function inferAttachmentMimeType(
-  name: string,
-  reportedType?: string,
-): AttachmentMimeType | null {
-  const archiveAliases: Record<string, AttachmentMimeType> = {
-    "application/x-zip-compressed": "application/zip",
-    "application/x-zip": "application/zip",
-    "multipart/x-zip": "application/zip",
-    "application/x-rar-compressed": "application/vnd.rar",
-    "application/x-rar": "application/vnd.rar",
-    "application/rar": "application/vnd.rar",
-    "application/x-7z": "application/x-7z-compressed",
-  };
-  if (reportedType && Object.hasOwn(archiveAliases, reportedType)) {
-    return archiveAliases[reportedType]!;
+const MIME_SYNTAX = /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/;
+
+export function inferAttachmentMimeType(name: string, reportedType?: string): string | null {
+  if (isBlockedAttachmentExtension(name)) return null;
+  const rawReported = reportedType ? normalizeMimeType(reportedType) : "";
+  if (rawReported) {
+    if (!MIME_SYNTAX.test(rawReported)) return null;
+    if (isBlockedAttachmentMimeType(rawReported)) return null;
   }
-  const audioAliases: Record<string, AttachmentMimeType> = {
-    "audio/mp3": "audio/mpeg",
-    "audio/x-wav": "audio/wav",
-    "audio/wave": "audio/wav",
-    "audio/vnd.wave": "audio/wav",
-    "audio/x-m4a": "audio/mp4",
-  };
-  if (reportedType && Object.hasOwn(audioAliases, reportedType)) return audioAliases[reportedType]!;
-  // audio/aac may describe an M4A's codec, not its container. Infer from .m4a;
-  // do not advertise standalone AAC streams as MP4 containers.
-  const dot = name.lastIndexOf(".");
-  const extensionType = dot < 0 ? undefined : EXTENSION_MIME_TYPES[name.slice(dot).toLowerCase()];
-  // Some browsers and native document pickers report Markdown as text/plain.
-  if (extensionType === "text/markdown" && (!reportedType || reportedType === "text/plain")) {
-    return extensionType;
+  const normalizedReported = rawReported
+    ? (ownLookup(MIME_ALIASES, rawReported) ?? rawReported)
+    : "";
+  const ext = fileExtensionLower(name);
+  const extensionType = ext ? ownLookup(EXTENSION_MIME_TYPES, ext) : undefined;
+
+  if (extensionType) {
+    if (!normalizedReported || normalizedReported === "application/octet-stream") {
+      return extensionType;
+    }
+    // Browsers and document pickers often report .md, .sh, .ts, .py, .yaml, .sql, or .csv as text/plain.
+    if (
+      normalizedReported === "text/plain" &&
+      (extensionType.startsWith("text/") ||
+        extensionType === "application/x-sh" ||
+        extensionType === "application/javascript" ||
+        extensionType === "application/yaml" ||
+        extensionType === "application/toml" ||
+        extensionType === "application/sql" ||
+        extensionType === "application/json" ||
+        extensionType === "application/xml" ||
+        extensionType === "application/x-httpd-php")
+    ) {
+      return extensionType;
+    }
+    // Windows reports .csv as an Excel file when Excel is installed.
+    if (extensionType === "text/csv" && normalizedReported === "application/vnd.ms-excel") {
+      return extensionType;
+    }
+    // M4A container reported with its AAC codec MIME.
+    if (extensionType === "audio/mp4" && normalizedReported === "audio/aac") {
+      return extensionType;
+    }
   }
-  // Windows reports .csv as an Excel file when Excel is installed.
-  if (extensionType === "text/csv" && reportedType === "application/vnd.ms-excel") {
-    return extensionType;
+
+  if (normalizedReported && isAllowedAttachmentMimeType(normalizedReported)) {
+    return normalizedReported;
   }
-  if (reportedType && isAllowedAttachmentMimeType(reportedType)) return reportedType;
-  return extensionType ?? null;
+  if (extensionType) return extensionType;
+  if (!normalizedReported || normalizedReported === "application/octet-stream") {
+    return "application/octet-stream";
+  }
+  return "application/octet-stream";
 }
 
 export function attachmentExtensionForMimeType(mimeType: string): string {
-  return isAllowedAttachmentMimeType(mimeType) ? MIME_TYPE_EXTENSIONS[mimeType] : "";
+  const normalized = normalizeMimeType(mimeType);
+  return ownLookup(MIME_TYPE_EXTENSIONS, normalized) ?? "";
 }
 
 /** Where a run copies an attached file in the bot's workspace; history tools report the same path. */
-export function attachmentComputerPath(artifactId: string, mimeType: string): string {
-  return `attachments/${artifactId}${attachmentExtensionForMimeType(mimeType)}`;
+export function attachmentComputerPath(
+  artifactId: string,
+  mimeType: string,
+  name?: string,
+): string {
+  const mapped = attachmentExtensionForMimeType(mimeType);
+  if (mapped) return `attachments/${artifactId}${mapped}`;
+  if (name) {
+    const ext = fileExtensionLower(name);
+    if (ext && SAFE_EXTENSION_PATTERN.test(ext)) {
+      return `attachments/${artifactId}${ext}`;
+    }
+  }
+  return `attachments/${artifactId}`;
+}
+
+export function validateDriveName(name: string): string {
+  const trimmed = name.trim();
+  if (!trimmed || trimmed.length > 255 || trimmed === "." || trimmed === "..") {
+    throw new AttachmentValidationError("Invalid file or folder name");
+  }
+  for (const character of trimmed) {
+    const code = character.codePointAt(0)!;
+    if (code < 0x20 || code === 0x7f || character === "/" || character === "\\") {
+      throw new AttachmentValidationError(
+        "File or folder name cannot contain slashes or control characters",
+      );
+    }
+  }
+  return trimmed;
+}
+
+const CODE_MIME_TYPES = new Set([
+  "application/x-sh",
+  "application/javascript",
+  "application/json",
+  "application/xml",
+  "application/yaml",
+  "application/toml",
+  "application/sql",
+  "application/x-httpd-php",
+  "text/html",
+  "text/css",
+  "text/typescript",
+  "text/x-python",
+  "text/x-go",
+  "text/x-rust",
+  "text/x-c",
+  "text/x-c++",
+  "text/x-java",
+  "text/x-ruby",
+  "text/x-swift",
+  "text/x-kotlin",
+  "text/x-diff",
+]);
+
+const DOCUMENT_MIME_TYPES = new Set([
+  "application/pdf",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.ms-powerpoint",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  "application/rtf",
+  "application/vnd.oasis.opendocument.text",
+  "application/vnd.oasis.opendocument.spreadsheet",
+  "text/plain",
+  "text/markdown",
+  "text/csv",
+  "text/tab-separated-values",
+]);
+
+export function fileCategoryForMimeType(mimeType: string): Exclude<FileCategory, "all"> | "other" {
+  const type = normalizeMimeType(mimeType);
+  if (isAttachmentVideoMimeType(type) || type.startsWith("video/")) return "video";
+  if (isAttachmentImageMimeType(type) || type.startsWith("image/")) return "image";
+  if (isAttachmentAudioMimeType(type) || type.startsWith("audio/")) return "audio";
+  if (isAttachmentArchiveMimeType(type)) return "archive";
+  if (CODE_MIME_TYPES.has(type)) return "code";
+  if (DOCUMENT_MIME_TYPES.has(type) || type.startsWith("text/")) return "document";
+  return "other";
 }
 
 export function attachmentsForThread<T extends { threadKey: string }>(

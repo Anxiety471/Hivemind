@@ -1,7 +1,7 @@
 import { ph, t } from "@lingui/core/macro";
 import { useLingui } from "@lingui/react/macro";
 import { ChatMarkdown } from "@rakazo/chat-ui/native";
-import type { ArtifactVersion, ArtifactWithContent } from "@rakazo/contracts";
+import type { ArtifactVersion, DriveFile } from "@rakazo/contracts";
 import { artifactPreviewKind } from "@rakazo/contracts";
 import type { File } from "expo-file-system";
 import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
@@ -24,13 +24,17 @@ import { VideoPreview } from "../components/media/video-preview";
 import { NativeSymbol } from "../components/native/native-symbol";
 import { errorText } from "../lib/api/user-error";
 import { mobileTokens } from "../lib/appearance/appearance";
-import { shareLocalFile, writeArtifactCacheFile } from "../lib/artifacts/artifact-open";
+import {
+  downloadMobileArtifact,
+  readBoundedText,
+  shareLocalFile,
+} from "../lib/artifacts/artifact-open";
 import {
   artifactThreadTarget,
-  getArtifactById,
   listArtifactVersions,
   removeArtifact,
 } from "../lib/artifacts/artifacts";
+import { getDriveFile } from "../lib/files/files";
 import { formatActivityRelativeTime } from "../lib/inbox/activity";
 import { useFloatingHeaderInset } from "../lib/layout/floating-header";
 import { useSideInsets } from "../lib/layout/side-insets";
@@ -50,7 +54,7 @@ type PreviewContent =
 type ContentState =
   | { status: "loading" }
   | { status: "error"; message: string }
-  | { status: "ready"; artifact: ArtifactWithContent; file: File; preview: PreviewContent };
+  | { status: "ready"; artifact: DriveFile; file: File; preview: PreviewContent };
 
 /** Past this a plain-text view gets slow to lay out; share the file to read the rest. */
 const TEXT_PREVIEW_LIMIT = 100_000;
@@ -61,13 +65,8 @@ async function computePreview(mimeType: string, file: File): Promise<PreviewCont
       return { kind: "html", html: await file.text() };
     case "markdown":
       return { kind: "markdown", text: await file.text() };
-    case "text": {
-      const text = await file.text();
-      return {
-        kind: "text",
-        text: text.length > TEXT_PREVIEW_LIMIT ? `${text.slice(0, TEXT_PREVIEW_LIMIT)}\n…` : text,
-      };
-    }
+    case "text":
+      return { kind: "text", text: await readBoundedText(file, TEXT_PREVIEW_LIMIT) };
     case "pdf":
       return { kind: "pdf", uri: file.uri };
     case "image":
@@ -125,9 +124,13 @@ export default function ArtifactDetailScreen() {
     if (!selectedVersionId) return;
     let cancelled = false;
     setContent({ status: "loading" });
-    void getArtifactById(selectedVersionId)
+    void getDriveFile(selectedVersionId)
       .then(async (artifact) => {
-        const file = writeArtifactCacheFile(artifact.id, artifact.mimeType, artifact.contentBase64);
+        const file = await downloadMobileArtifact(
+          artifactThreadTarget(artifact),
+          artifact.id,
+          artifact.mimeType,
+        );
         const preview = await computePreview(artifact.mimeType, file);
         if (cancelled) return;
         setContent({ status: "ready", artifact, file, preview });

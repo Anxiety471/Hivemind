@@ -1,12 +1,22 @@
-import type { AttachmentMimeType } from "@rakazo/contracts";
-import { ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_COUNT, attachmentSizeLabel } from "@rakazo/contracts";
+import {
+  ATTACHMENT_MAX_COUNT,
+  attachmentSizeLabel,
+  fileUploadMaxBytes,
+  isBlockedAttachmentExtension,
+  isBlockedAttachmentMimeType,
+} from "@rakazo/contracts";
 import { newClientId } from "@rakazo/core";
 
 export type PickedAttachment = {
   id: string;
   name: string;
-  mimeType: AttachmentMimeType;
+  mimeType: string;
   contentBase64: string;
+  /** The picked file, streamed as it is instead of being read into memory. */
+  uri?: string;
+  size?: number;
+  /** A Space Drive file attached as it is, without uploading it again. */
+  artifactId?: string;
   previewUri?: string;
 };
 
@@ -25,17 +35,26 @@ export function attachmentSizeSkipReason(maxBytes: number): string {
  * ask before reading the content, so a rejected file is never loaded.
  */
 export function attachmentSkipReason(
-  candidate: { name: string; size: number; mimeType: string | null },
+  candidate: {
+    name: string;
+    size: number;
+    mimeType: string | null;
+    artifactId?: string;
+  },
   existingCount: number,
   acceptedCount: number,
-  maxBytes = ATTACHMENT_MAX_BYTES,
+  maxBytes = fileUploadMaxBytes(),
   maxCount = ATTACHMENT_MAX_COUNT,
 ): string | null {
   if (existingCount + acceptedCount >= maxCount) {
     return attachmentCountSkipReason(maxCount);
   }
+  // An existing Drive file arrives by reference, so its size never passes through an upload.
+  if (candidate.artifactId) return null;
   if (candidate.size > maxBytes) return attachmentSizeSkipReason(maxBytes);
   if (!candidate.mimeType) return "unsupported type";
+  if (isBlockedAttachmentExtension(candidate.name)) return "unsupported type";
+  if (isBlockedAttachmentMimeType(candidate.mimeType)) return "unsupported type";
   return null;
 }
 
@@ -45,10 +64,12 @@ export function filterPickedAttachments(
     name: string;
     mimeType: string | null;
     size: number;
-    contentBase64: string;
+    contentBase64?: string;
+    uri?: string;
+    artifactId?: string;
     previewUri?: string;
   }>,
-  maxBytes = ATTACHMENT_MAX_BYTES,
+  maxBytes = fileUploadMaxBytes(),
   maxCount = ATTACHMENT_MAX_COUNT,
 ): { attachments: PickedAttachment[]; skipped: PickSkip[] } {
   const attachments: PickedAttachment[] = [];
@@ -76,8 +97,11 @@ export function pickedAttachment(
   return {
     id: newClientId(),
     name: candidate.name,
-    mimeType: candidate.mimeType as AttachmentMimeType,
-    contentBase64: candidate.contentBase64,
+    mimeType: candidate.mimeType ?? "application/octet-stream",
+    contentBase64: candidate.contentBase64 ?? "",
+    uri: candidate.uri,
+    size: candidate.size,
+    artifactId: candidate.artifactId,
     previewUri: candidate.previewUri,
   };
 }

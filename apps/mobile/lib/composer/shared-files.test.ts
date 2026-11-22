@@ -26,7 +26,11 @@ beforeEach(() => {
   vi.clearAllMocks();
   state.base64.mockResolvedValue("YWJj");
   state.read.mockImplementation((uri, _maxBytes, read) =>
-    read({ uri: "file:///cache/copy" }, `${uri.split("/").at(-1)}.png`, "image/png"),
+    read(
+      { uri: "file:///cache/copy", info: () => ({ size: 3 }) },
+      `${uri.split("/").at(-1)}.png`,
+      "image/png",
+    ),
   );
 });
 describe("shared files", () => {

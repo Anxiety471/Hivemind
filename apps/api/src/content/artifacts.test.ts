@@ -275,6 +275,39 @@ describe("listSpaceArtifacts", () => {
   });
 });
 
+describe("listArtifactVersions", () => {
+  it("reads only active versions and refuses a trashed family", async () => {
+    const findFirst = vi.fn(async (_args: { where: Record<string, unknown> }) => ({
+      id: "root",
+      rootArtifactId: null,
+    }));
+    const findMany = vi.fn(async (_args: { where: Record<string, unknown> }) => []);
+    const prisma = { artifact: { findFirst, findMany } } as unknown as PrismaClient;
+    await expect(listArtifactVersions({ prisma }, actor, { familyId: "root" })).resolves.toEqual(
+      [],
+    );
+    expect(findFirst.mock.calls[0]![0].where).toMatchObject({
+      id: "root",
+      spaceId: actor.spaceId,
+      trashedAt: null,
+    });
+    expect(findMany.mock.calls[0]![0].where).toMatchObject({
+      spaceId: actor.spaceId,
+      trashedAt: null,
+    });
+
+    const trashed = {
+      artifact: {
+        findFirst: vi.fn(async () => null),
+        findMany: vi.fn(async () => []),
+      },
+    } as unknown as PrismaClient;
+    await expect(
+      listArtifactVersions({ prisma: trashed }, actor, { familyId: "root" }),
+    ).rejects.toBeInstanceOf(IsolationError);
+  });
+});
+
 describe("deleteArtifactFamily", () => {
   function familyClient(listings: Array<Array<{ id: string; storageKey: string; botId: string }>>) {
     const calls: string[] = [];
@@ -455,6 +488,7 @@ describe("configured artifact upload limit", () => {
       );
       put.mockClear();
     }
+    // FLAC joined the broadened allowlist; an executable MIME stays blocked.
     await expect(
       createOwnedArtifact(deps, actor, {
         botId: "bot-1",
@@ -462,7 +496,20 @@ describe("configured artifact upload limit", () => {
         mimeType: "audio/flac",
         contentBase64: "YXVkaW8=",
       }),
-    ).rejects.toThrow("Unsupported attachment type");
+    ).rejects.toBe(reachedStorage);
+    expect(put).toHaveBeenCalledWith(
+      expect.objectContaining({ mimeType: "audio/flac" }),
+      expect.anything(),
+    );
+    put.mockClear();
+    await expect(
+      createOwnedArtifact(deps, actor, {
+        botId: "bot-1",
+        name: "payload.bin",
+        mimeType: "application/x-msdownload",
+        contentBase64: "YXVkaW8=",
+      }),
+    ).rejects.toThrow("Unsupported or blocked file type");
     expect(put).not.toHaveBeenCalled();
   });
   it("rejects oversized attachments before storage and accepts uploads above the old cap", async () => {

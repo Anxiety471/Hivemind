@@ -4,10 +4,12 @@ import { act } from "react";
 import type { Root } from "react-dom/client";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { rpc } from "../../../lib/query/rpc";
 import { ComposerReplyPreview, ReplyLine, TimeSeparator, UnreadDivider } from "./chat-context";
 
-vi.mock("../../../lib/query/rpc", () => ({ rpc: { artifacts: { get: vi.fn() } } }));
+vi.mock("../../../lib/query/rpc", () => ({
+  rpc: { artifacts: { get: vi.fn() } },
+  selectedSpaceId: () => null,
+}));
 
 vi.mock("@lingui/react/macro", () => ({
   useLingui: () => ({
@@ -144,6 +146,7 @@ it("keeps internal peer receipt replies out of the transcript", () => {
 });
 
 const photo = { kind: "image" as const, artifactId: "photo", mimeType: "image/png", name: "" };
+const photoUrl = "/api/v1/files/photo/content";
 it.each([
   [photo, "", "Photo", true],
   [photo, "Caption", "Caption", true],
@@ -154,58 +157,50 @@ it.each([
     false,
   ],
 ])(
-  "renders attachment labels and authenticated thumbnails in both reply views",
+  "renders attachment labels and streamed thumbnails in both reply views",
   async (attachment, text, label, image) => {
-    vi.mocked(rpc.artifacts.get).mockResolvedValue({
-      contentBase64: "AA==",
-      mimeType: "image/png",
-    } as never);
-    vi.stubGlobal("URL", { createObjectURL: vi.fn(() => "blob:photo"), revokeObjectURL: vi.fn() });
     await act(async () =>
       root.render(
         <ComposerReplyPreview
           author="You"
           text={text}
           attachment={attachment}
-          target={{ groupId: "group" }}
           onDismiss={vi.fn()}
         />,
       ),
     );
     expect(container.textContent).toContain(`You: ${label}`);
     expect(container.querySelector("img")?.getAttribute("src") ?? null).toBe(
-      image ? "blob:photo" : null,
+      image ? photoUrl : null,
     );
     await act(async () =>
       root.render(
         <ReplyLine
           message={{ ...message, replyPreview: { role: "user", text, attachment } }}
           author="You"
-          target={{ botId: "bot" }}
         />,
       ),
     );
     expect(container.textContent).toContain(`You: ${label}`);
     expect(container.querySelector("img")?.getAttribute("src") ?? null).toBe(
-      image ? "blob:photo" : null,
+      image ? photoUrl : null,
     );
-    if (image)
-      expect(rpc.artifacts.get).toHaveBeenCalledWith({ botId: "bot", artifactId: "photo" });
   },
 );
-it("keeps image labels when fetching fails", async () => {
-  vi.mocked(rpc.artifacts.get).mockRejectedValue(new Error("unavailable"));
+it("hides a thumbnail whose streamed image fails to load", async () => {
   await act(async () =>
     root.render(
       <ReplyLine
         message={{ ...message, replyPreview: { role: "user", text: "", attachment: photo } }}
         author="You"
-        target={{ botId: "bot" }}
       />,
     ),
   );
+  const image = container.querySelector("img")!;
+  expect(image.getAttribute("src")).toBe(photoUrl);
+  await act(async () => image.dispatchEvent(new Event("error")));
+  expect(image.hidden).toBe(true);
   expect(container.textContent).toContain("You: Photo");
-  expect(container.querySelector("img")).toBeNull();
 });
 
 it("prefers a selected excerpt over the photo caption in the composer", () => {
@@ -224,13 +219,6 @@ it("prefers a selected excerpt over the photo caption in the composer", () => {
 });
 
 it("defers transcript thumbnails until near the viewport while the composer loads immediately", async () => {
-  vi.mocked(rpc.artifacts.get)
-    .mockClear()
-    .mockResolvedValue({
-      contentBase64: "AA==",
-      mimeType: "image/png",
-    } as never);
-  vi.stubGlobal("URL", { createObjectURL: vi.fn(() => "blob:photo"), revokeObjectURL: vi.fn() });
   let onIntersection!: IntersectionObserverCallback;
   const observe = vi.fn();
   const disconnect = vi.fn();
@@ -249,11 +237,10 @@ it("defers transcript thumbnails until near the viewport while the composer load
       <ReplyLine
         message={{ ...message, replyPreview: { role: "user", text: "", attachment: photo } }}
         author="You"
-        target={{ botId: "bot" }}
       />,
     ),
   );
-  expect(rpc.artifacts.get).not.toHaveBeenCalled();
+  expect(container.querySelector("img")).toBeNull();
   expect(observer).toHaveBeenCalledWith(expect.any(Function), { rootMargin: "320px" });
   expect(observe).toHaveBeenCalledOnce();
   act(() =>
@@ -262,30 +249,22 @@ it("defers transcript thumbnails until near the viewport while the composer load
       {} as IntersectionObserver,
     ),
   );
-  expect(rpc.artifacts.get).not.toHaveBeenCalled();
+  expect(container.querySelector("img")).toBeNull();
   await act(async () =>
     onIntersection(
       [{ isIntersecting: true }] as IntersectionObserverEntry[],
       {} as IntersectionObserver,
     ),
   );
-  expect(rpc.artifacts.get).toHaveBeenCalledOnce();
-  expect(container.querySelector("img")?.getAttribute("src")).toBe("blob:photo");
+  expect(container.querySelector("img")?.getAttribute("src")).toBe(photoUrl);
   expect(disconnect).toHaveBeenCalled();
-  vi.mocked(rpc.artifacts.get).mockClear();
   observer.mockClear();
   await act(async () =>
     root.render(
-      <ComposerReplyPreview
-        author="You"
-        text=""
-        attachment={photo}
-        target={{ groupId: "group" }}
-        onDismiss={vi.fn()}
-      />,
+      <ComposerReplyPreview author="You" text="" attachment={photo} onDismiss={vi.fn()} />,
     ),
   );
-  expect(rpc.artifacts.get).toHaveBeenCalledOnce();
+  expect(container.querySelector("img")?.getAttribute("src")).toBe(photoUrl);
   expect(observer).not.toHaveBeenCalled();
 });
 it("shows no quote on a message sent from an open page, even with its card not loaded", () => {

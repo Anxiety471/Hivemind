@@ -324,6 +324,7 @@ function setup(
       groupId: null,
       clientNonce: input.clientNonce,
       storageKey: `stored-${artifact.id}`,
+      trashedAt: null,
     });
     return artifact;
   };
@@ -592,6 +593,7 @@ describe("TeamChatBridge.receive", () => {
     );
     expect(files).toEqual([
       {
+        artifactId: "document-1",
         name: "report.pdf",
         mimeType: "application/pdf",
         size: 3,

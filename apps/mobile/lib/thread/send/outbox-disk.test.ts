@@ -102,6 +102,12 @@ vi.mock("expo-file-system", () => {
       if (fails("write", this.uri)) throw new Error("No space left on device");
       files.set(this.uri, text);
     }
+    override copySync(destination: File, options?: { overwrite?: boolean }) {
+      if (destination.exists && !options?.overwrite) throw new Error("Destination exists");
+      if (!this.exists) throw new Error("Source missing");
+      if (fails("copy", destination.uri)) throw new Error("Copy failed");
+      files.set(destination.uri, files.get(this.uri)!);
+    }
     // Like the device, overwriting deletes the destination before the move itself, and a move
     // points the source object at the destination.
     moveSync(destination: File, options?: { overwrite?: boolean }) {
@@ -121,6 +127,7 @@ vi.mock("expo-file-system", () => {
   }
   return { Directory, File, Paths: { cache: "cache", document: "document" } };
 });
+vi.mock("../../files/file-upload", () => ({ uploadMobileFile: vi.fn() }));
 const scope = {
   apiBase: "https://api.example.test",
   userId: "user-a",
@@ -455,4 +462,65 @@ it.each([
   expect(files.has("cache/outbox/sends-v4.json")).toBe(true);
   expect(loaded()).toEqual([]);
   expect(stored()).toEqual([]);
+});
+
+function streamedAttempt(nonce = "nonce-a"): SendAttempt {
+  const streamed = attempt(nonce);
+  streamed.artifactIds.clear();
+  streamed.payload.attachments = [
+    {
+      id: "attachment-a",
+      name: "clip.mp4",
+      mimeType: "video/mp4",
+      contentBase64: "",
+      uri: "file:///picker/clip.mp4",
+      size: 4,
+    },
+  ];
+  return streamed;
+}
+
+it("copies a streamed file and restores it to upload from the copy", async () => {
+  files.set("file:///picker/clip.mp4", "clip");
+  const original = streamedAttempt();
+  expect(outboxDisk.admit(original)).toBe(true);
+  outboxDisk.save([original]);
+  expect(files.get("document/outbox/nonce-a/0")).toBe("clip");
+  const [restored] = outboxDisk.load(2, scope);
+  expect(restored?.payload.attachments[0]).toMatchObject({
+    contentBase64: "",
+    uri: "document/outbox/nonce-a/0",
+  });
+  await outboxDisk.hydrate(restored!);
+  expect(restored?.payload.attachments[0]).toMatchObject({
+    contentBase64: "",
+    uri: "document/outbox/nonce-a/0",
+  });
+});
+
+it("keeps an existing Drive file as a reference without copying bytes", async () => {
+  const drive = attempt();
+  drive.artifactIds.clear();
+  drive.payload.attachments = [
+    {
+      id: "attachment-a",
+      name: "report.pdf",
+      mimeType: "application/pdf",
+      contentBase64: "",
+      artifactId: "file-1",
+    },
+  ];
+  expect(outboxDisk.admit(drive)).toBe(true);
+  outboxDisk.save([drive]);
+  expect(files.has("document/outbox/nonce-a/0")).toBe(false);
+  const [restored] = outboxDisk.load(2, scope);
+  expect(restored?.payload.attachments[0]).toMatchObject({
+    artifactId: "file-1",
+    contentBase64: "",
+  });
+  await outboxDisk.hydrate(restored!);
+  expect(restored?.payload.attachments[0]).toMatchObject({
+    artifactId: "file-1",
+    contentBase64: "",
+  });
 });

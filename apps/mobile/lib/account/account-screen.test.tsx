@@ -841,7 +841,7 @@ it.each([false, true])(
       const links = [
         "Integrations",
         "Skills",
-        "Artifacts",
+        "Files",
         "General",
         "Models",
         "Approvals",
@@ -854,12 +854,12 @@ it.each([false, true])(
         "Members",
       ];
       expect(titles).toEqual(["tester@example.test", "Usage", ...links]);
-      const artifacts = view.button("Artifacts")!;
-      expect(artifacts.getAttribute("role")).toBe("button");
-      expect(artifacts.dataset.chevron).toBe("right");
+      const files = view.button("Files")!;
+      expect(files.getAttribute("role")).toBe("button");
+      expect(files.dataset.chevron).toBe("right");
 
-      // Artifacts lives on the root stack, so it closes the settings sheet first.
-      await view.press("Artifacts");
+      // Files lives on the root stack, so it closes the settings sheet first.
+      await view.press("Files");
       expect(events).toEqual(["close", "/artifacts"]);
       for (const [title, href] of [
         ["tester@example.test", "/profile"],
@@ -878,7 +878,7 @@ it.each([false, true])(
       // The links wait while signing out.
       vi.mocked(signOut).mockReturnValueOnce(new Promise(() => undefined));
       await view.press("Sign out");
-      expect(view.button("Artifacts")!.disabled).toBe(true);
+      expect(view.button("Files")!.disabled).toBe(true);
     } finally {
       unregister();
     }

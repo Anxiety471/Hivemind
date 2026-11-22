@@ -19,6 +19,19 @@ export class MemoryObjectStorage implements ObjectStorage {
       yield object.bytes.subarray(offset, offset + 1000);
   }
 
+  async stat(key: string) {
+    const object = this.objects.get(key);
+    return object ? { size: object.bytes.length } : undefined;
+  }
+
+  async *getRange(key: string, start: number, endInclusive: number) {
+    const object = this.objects.get(key);
+    if (!object) throw new Error(`No object ${key}`);
+    const bytes = object.bytes.subarray(start, endInclusive + 1);
+    for (let offset = 0; offset < bytes.length; offset += 1000)
+      yield bytes.subarray(offset, offset + 1000);
+  }
+
   async *list(prefix: string) {
     for (const [key, object] of [...this.objects].sort(([a], [b]) => a.localeCompare(b)))
       if (key.startsWith(prefix)) yield { key, lastModified: object.lastModified };
@@ -36,6 +49,12 @@ async function* chunks(...parts: Buffer[]) {
 async function read(storage: ObjectStorage, key: string) {
   const parts: Buffer[] = [];
   for await (const chunk of storage.get(key)) parts.push(Buffer.from(chunk));
+  return Buffer.concat(parts);
+}
+
+async function readRange(storage: ObjectStorage, key: string, start: number, end: number) {
+  const parts: Buffer[] = [];
+  for await (const chunk of storage.getRange!(key, start, end)) parts.push(Buffer.from(chunk));
   return Buffer.concat(parts);
 }
 
@@ -60,6 +79,16 @@ export function objectStorageConformance(create: () => Promise<ObjectStorage>) {
     await storage.delete(["homes/a/1", "homes/missing"]);
     expect(await keys(storage, "homes/")).toEqual(["homes/a/2"]);
     await expect(read(storage, "homes/a/1")).rejects.toThrow();
+  });
+
+  it("reads inclusive byte ranges and reports object sizes", async () => {
+    const storage = await create();
+    if (!storage.getRange || !storage.stat) return;
+    await storage.put("ranged", chunks(Buffer.from("0123456789")));
+    expect(await storage.stat("ranged")).toEqual({ size: 10 });
+    expect(await storage.stat("missing")).toBeUndefined();
+    expect((await readRange(storage, "ranged", 2, 5)).toString()).toBe("2345");
+    await expect(readRange(storage, "missing", 0, 1)).rejects.toThrow();
   });
 
   it("replaces an object written again under the same key", async () => {

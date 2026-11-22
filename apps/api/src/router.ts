@@ -141,6 +141,7 @@ export interface RouterDeps {
     phoneCallsEnabled?: boolean;
     phoneCallRingSeconds?: number;
     maxUploadSizeBytes?: number;
+    maxFileUploadSizeBytes?: number;
     maxAttachmentsPerMessage?: number;
     agentRuntime: string;
     teamChatJudgeProvider?: string;

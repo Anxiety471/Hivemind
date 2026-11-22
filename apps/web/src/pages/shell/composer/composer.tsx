@@ -1,6 +1,6 @@
 import { useLingui } from "@lingui/react/macro";
 import { useTimeout } from "@rakazo/chat-ui/hooks";
-import type { AgentSkillCatalogEntry, ThreadMessage } from "@rakazo/contracts";
+import type { AgentSkillCatalogEntry, DriveFile, ThreadMessage } from "@rakazo/contracts";
 import type { ComposerMention, ComposerMentionRange, SlashActionId } from "@rakazo/core";
 import {
   composerMentionQuery,
@@ -15,7 +15,7 @@ import {
   updateComposerMentionBindings,
 } from "@rakazo/core";
 import { Button } from "@rakazo/ui-web";
-import { Box, Plus } from "lucide-react";
+import { Box } from "lucide-react";
 import type { ClipboardEvent, ComponentProps, ReactNode, RefObject } from "react";
 import {
   memo,
@@ -27,6 +27,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import { createPortal } from "react-dom";
+import { lazyOverlay } from "../../../components/ErrorBoundary";
 import { useCallSession } from "../../../lib/calls/call-session";
 import { attachmentPickerAccept } from "../../../lib/composer/attachment-picker-accept";
 import {
@@ -45,7 +46,6 @@ import {
   writeComposerRetryNonce,
 } from "../../../lib/composer/composer-draft";
 import { isFilePaste } from "../../../lib/composer/pending-attachments";
-import type { ArtifactTarget } from "../../../lib/pages/artifact-open";
 import { usePageSession } from "../../../lib/pages/pages";
 import { hasOpenDialog } from "../../../lib/platform/has-open-dialog";
 import { useEventListener } from "../../../lib/use-event-listener";
@@ -56,6 +56,7 @@ import { isApplePlatform, isEditableTarget, primaryModifier } from "../shell-sho
 import { ComposerError } from "./composer-error";
 import { ComposerChip, ComposerMentionHighlights } from "./composer-mentions";
 import {
+  AttachMenu,
   ComposerActions,
   MentionPicker,
   PendingAttachmentChips,
@@ -69,10 +70,12 @@ import { useComposerTriggers } from "./use-composer-triggers";
 
 export const LARGE_PASTE_THRESHOLD = 4_000;
 
-const ATTACHMENT_ACCEPT = attachmentPickerAccept(navigator.userAgent);
+const ATTACHMENT_ACCEPT = attachmentPickerAccept();
+const DriveFilePickerDialog = lazyOverlay(() =>
+  import("./DriveFilePickerDialog").then((module) => module.DriveFilePickerDialog),
+);
 const COMPOSER_TEXT = "rk-scroll whitespace-pre-wrap break-words px-0.5 py-0.5 text-body-lg";
 const ComposerBody = memo(function Composer({
-  artifactTarget,
   activeName,
   running,
   disabled,
@@ -91,6 +94,7 @@ const ComposerBody = memo(function Composer({
   sending,
   fileInputRef,
   onAttachmentPick,
+  onDriveFilePick,
   onRemoveAttachment,
   onSend,
   onStop,
@@ -128,6 +132,7 @@ const ComposerBody = memo(function Composer({
   sending: boolean;
   fileInputRef: RefObject<HTMLInputElement | null>;
   onAttachmentPick: (files: FileList | readonly File[] | null) => boolean;
+  onDriveFilePick: (file: DriveFile) => boolean;
   onRemoveAttachment: (attachment: PendingAttachment) => void;
   onSend: (
     text: string,
@@ -139,7 +144,6 @@ const ComposerBody = memo(function Composer({
   phoneCallsEnabled?: boolean;
   /** Hold-to-talk falls back to the voice provider's transcription; undefined while unknown. */
   dictationTranscribe?: boolean;
-  artifactTarget: ArtifactTarget;
   replyTarget?: ThreadMessage | null;
   replyQuote?: string | null;
   replyTargetName?: string;
@@ -168,6 +172,7 @@ const ComposerBody = memo(function Composer({
     start: number;
     end: number;
   } | null>(null);
+  const [drivePickerOpen, setDrivePickerOpen] = useState(false);
   const draft = composition.text;
   const mentionBindings = composition.bindings;
   const compositionRef = useRef(composition);
@@ -656,7 +661,6 @@ const ComposerBody = memo(function Composer({
           text={previewMessageText(replyTarget)}
           quote={replyQuote}
           attachment={replyAttachment(replyTarget.blocks)}
-          target={artifactTarget}
           onDismiss={() => {
             replyAnnouncementKind.current = "cancelled";
             setPendingAnnounce(null);
@@ -740,19 +744,13 @@ const ComposerBody = memo(function Composer({
           className="hidden"
           onChange={(event) => pickAttachments(event.target.files)}
         />
-        <Button
-          ref={attachButtonRef}
-          variant="ghost"
-          size="icon"
-          aria-label={t`Attach file`}
+        <AttachMenu
+          buttonRef={attachButtonRef}
           disabled={disabled}
-          onClick={() => fileInputRef.current?.click()}
-          className={`col-start-1 shrink-0 rounded-full border border-border bg-muted text-muted-foreground transition-colors hover:bg-accent hover:text-foreground ${
-            expanded ? "row-start-2" : ""
-          }`}
-        >
-          <Plus size={16} strokeWidth={2} />
-        </Button>
+          expanded={expanded}
+          onUpload={() => fileInputRef.current?.click()}
+          onChooseFromFiles={() => setDrivePickerOpen(true)}
+        />
         <div
           ref={composerFieldRef}
           data-testid="composer-field"
@@ -932,6 +930,14 @@ const ComposerBody = memo(function Composer({
           onStop={() => void onStop()}
         />
       </div>
+      {drivePickerOpen ? (
+        <DriveFilePickerDialog
+          onClose={() => setDrivePickerOpen(false)}
+          onPick={(file) => {
+            if (onDriveFilePick(file)) markEdited();
+          }}
+        />
+      ) : null}
     </fieldset>
   );
 });

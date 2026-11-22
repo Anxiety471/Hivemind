@@ -5,6 +5,7 @@ import type {
 } from "@orpc/contract";
 import { accountRpc } from "../account/account-rpc.js";
 import { artifactsRpc } from "../artifacts/artifacts-rpc.js";
+import { filesRpc } from "../artifacts/files-rpc.js";
 import { billingRpc } from "../billing/billing-rpc.js";
 import { botsRpc } from "../bots/bots-rpc.js";
 import { serverRpc } from "../clients/server-rpc.js";
@@ -28,6 +29,7 @@ export const appContract = {
   ...threadsRpc,
   ...routinesRpc,
   ...artifactsRpc,
+  ...filesRpc,
   ...skillsRpc,
   ...integrationsRpc,
   ...runsRpc,

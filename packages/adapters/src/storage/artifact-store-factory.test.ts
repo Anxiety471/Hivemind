@@ -15,6 +15,12 @@ import type { ArtifactKeys } from "./artifacts.js";
 import { LocalArtifactStore } from "./artifacts.js";
 import { MemoryObjectStorage } from "./object-storage.test-support.js";
 
+async function collect(source: AsyncIterable<Uint8Array>) {
+  const parts: Buffer[] = [];
+  for await (const part of source) parts.push(Buffer.from(part));
+  return Buffer.concat(parts);
+}
+
 const dirs: string[] = [];
 afterEach(async () => {
   await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
@@ -63,6 +69,28 @@ describe("object artifacts", () => {
     await replica.remove(saved.id, context());
     expect(storage.objects.size).toBe(0);
     await replica.remove(saved.id, context());
+  });
+
+  it("reads a sealed byte range with one ranged object read", async () => {
+    const { store, storage } = setup();
+    const bytes = Buffer.alloc(200_000, 65);
+    const saved = await store.put(artifact(bytes), context());
+    const served: Array<[number, number]> = [];
+    const readRange = storage.getRange.bind(storage);
+    storage.getRange = async function* (key, start, endInclusive) {
+      served.push([start, endInclusive]);
+      yield* readRange(key, start, endInclusive);
+    };
+    const ranged = await collect(
+      await store.getStream(saved.id, context(), {
+        range: { start: 100_000, endInclusive: 100_010 },
+      }),
+    );
+    expect(ranged.equals(bytes.subarray(100_000, 100_011))).toBe(true);
+    // The header peek plus the segment(s) the range touches, never the whole object.
+    expect(served).toHaveLength(2);
+    expect(served[0]![0]).toBe(0);
+    expect(served[1]![0]).toBeGreaterThan(65_000);
   });
 
   it("rejects tampering, truncation and ciphertext copied to another artifact or space", async () => {

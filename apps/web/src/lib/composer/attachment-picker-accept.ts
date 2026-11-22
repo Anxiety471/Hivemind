@@ -1,13 +1,7 @@
-import { ATTACHMENT_ALLOWED_MIME_TYPES } from "@rakazo/contracts";
-
 /**
- * Android's document picker can filter out CSV files when the accept attribute
- * combines many MIME types. Allow the picker to show files on Android; the
- * attachment preparation and API still reject unsupported formats and sizes.
+ * The picker offers every file; the composer rejects blocked executables, unsupported types and
+ * oversized files in JavaScript, so broad formats like video, code and archives need no list.
  */
-export function attachmentPickerAccept(userAgent: string): string {
-  if (/\bAndroid\b/i.test(userAgent)) return "*/*";
-  return [...ATTACHMENT_ALLOWED_MIME_TYPES, ".zip", ".rar", ".7z", ".csv", ".xls", ".xlsx"].join(
-    ",",
-  );
+export function attachmentPickerAccept(): string {
+  return "*/*";
 }

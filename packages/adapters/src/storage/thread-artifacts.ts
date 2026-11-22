@@ -13,8 +13,10 @@ import {
   ATTACHMENT_MAX_BYTES,
   ATTACHMENT_MAX_COUNT,
   attachmentSizeLabel,
+  FILE_UPLOAD_MAX_BYTES,
   HISTORY_ATTACHMENTS_PER_RESPONSE,
   MCP_APP_MIME_TYPE,
+  SANDBOX_AUTO_MATERIALIZE_MAX_BYTES,
   stepScreenshotMimeType,
 } from "@rakazo/contracts";
 import {
@@ -33,10 +35,12 @@ import { getLogger } from "@rakazo/logging";
 import { resolveBotWorkspacePath } from "../computers/screens/computer-support.js";
 
 export type MaterializedThreadFile = {
+  artifactId?: string;
   name: string;
   mimeType: string;
   size: number;
   path: string;
+  deferredToDrive?: boolean;
 };
 
 export async function attachWorkspaceFileToThread(
@@ -44,6 +48,7 @@ export async function attachWorkspaceFileToThread(
     prisma: PrismaClient;
     artifacts: ArtifactStore;
     maxUploadSizeBytes?: number;
+    maxFileUploadSizeBytes?: number;
   },
   input: {
     spaceId: string;
@@ -67,10 +72,9 @@ export async function attachWorkspaceFileToThread(
   }
   const name = (input.name?.trim() || fileName).slice(0, ARTIFACT_NAME_MAX_LENGTH);
   validateAttachmentMimeType(mimeType);
-  if (input.bytes.byteLength > (deps.maxUploadSizeBytes ?? ATTACHMENT_MAX_BYTES)) {
-    throw new Error(
-      `file exceeds the ${attachmentSizeLabel(deps.maxUploadSizeBytes ?? ATTACHMENT_MAX_BYTES)} attachment limit`,
-    );
+  const maxBytes = deps.maxFileUploadSizeBytes ?? deps.maxUploadSizeBytes ?? ATTACHMENT_MAX_BYTES;
+  if (input.bytes.byteLength > maxBytes) {
+    throw new Error(`file exceeds the ${attachmentSizeLabel(maxBytes)} attachment limit`);
   }
 
   const context = {
@@ -102,6 +106,7 @@ export async function attachWorkspaceFileToThread(
             botId: input.botId,
             groupId: input.groupId,
             runId: input.runId,
+            source: "bot",
             name,
             description:
               input.description?.trim().slice(0, ARTIFACT_DESCRIPTION_MAX_LENGTH) || null,
@@ -145,6 +150,7 @@ async function attachedArtifacts(
     where: {
       id: { in: blocks.map((block) => block.artifactId) },
       spaceId: context.spaceId,
+      trashedAt: null,
     },
   });
   return new Map(rows.map((row) => [row.id, row]));
@@ -153,30 +159,33 @@ async function attachedArtifacts(
 function threadFileMetadata(
   row: Pick<Artifact, "id" | "name" | "mimeType" | "size">,
 ): MaterializedThreadFile {
+  const deferredToDrive = row.size > SANDBOX_AUTO_MATERIALIZE_MAX_BYTES;
   return {
+    artifactId: row.id,
     name: row.name,
     mimeType: row.mimeType,
     size: row.size,
-    path: attachmentComputerPath(row.id, row.mimeType),
+    path: attachmentComputerPath(row.id, row.mimeType, row.name),
+    ...(deferredToDrive ? { deferredToDrive: true } : {}),
   };
 }
 
 /** Resolve current attachments without reading their bytes or waking a computer. */
 export async function listCurrentTurnFiles(
-  deps: { prisma: PrismaClient; maxUploadSizeBytes?: number },
+  deps: { prisma: PrismaClient; maxUploadSizeBytes?: number; maxFileUploadSizeBytes?: number },
   blocks: MessageBlock[] | undefined,
   context: AdapterContext,
 ): Promise<MaterializedThreadFile[]> {
   const attached = attachmentBlocks(blocks);
   if (!attached.length) return [];
   const byId = await attachedArtifacts(deps.prisma, attached, context);
+  const limit =
+    deps.maxFileUploadSizeBytes ?? Math.max(deps.maxUploadSizeBytes ?? 0, FILE_UPLOAD_MAX_BYTES);
   return attached.map((block) => {
     const row = byId.get(block.artifactId);
     if (!row) throw new Error(`Attached file is unavailable: ${block.name}`);
-    if (row.size > (deps.maxUploadSizeBytes ?? ATTACHMENT_MAX_BYTES)) {
-      throw new Error(
-        `Attached file exceeds the ${attachmentSizeLabel(deps.maxUploadSizeBytes ?? ATTACHMENT_MAX_BYTES)} limit: ${row.name}`,
-      );
+    if (row.size > limit) {
+      throw new Error(`Attached file exceeds the ${attachmentSizeLabel(limit)} limit: ${row.name}`);
     }
     return threadFileMetadata(row);
   });
@@ -187,6 +196,7 @@ export async function materializeCurrentTurnFiles(
     prisma: PrismaClient;
     artifacts: ArtifactStore;
     maxUploadSizeBytes?: number;
+    maxFileUploadSizeBytes?: number;
     sandbox: SandboxProvider;
   },
   blocks: MessageBlock[] | undefined,
@@ -218,6 +228,10 @@ async function materializeThreadFiles(
     const row = byId.get(block.artifactId);
     if (!row) throw new Error(`Attached file is unavailable: ${block.name}`);
     const metadata = threadFileMetadata(row);
+    if (metadata.deferredToDrive) {
+      materialized.push(metadata);
+      continue;
+    }
     const workspacePath = resolveBotWorkspacePath(
       input.computerMode,
       input.context.botId,
@@ -231,9 +245,12 @@ async function materializeThreadFiles(
       : false;
     if (!exists) {
       const bytes = await deps.artifacts.get(row.storageKey, input.context);
-      if (bytes.byteLength > (deps.maxUploadSizeBytes ?? ATTACHMENT_MAX_BYTES)) {
+      const limit =
+        deps.maxFileUploadSizeBytes ??
+        Math.max(deps.maxUploadSizeBytes ?? 0, FILE_UPLOAD_MAX_BYTES);
+      if (bytes.byteLength > limit) {
         throw new Error(
-          `Attached file exceeds the ${attachmentSizeLabel(deps.maxUploadSizeBytes ?? ATTACHMENT_MAX_BYTES)} limit: ${row.name}`,
+          `Attached file exceeds the ${attachmentSizeLabel(limit)} limit: ${row.name}`,
         );
       }
       input.markWorkspaceDirty?.();
@@ -297,9 +314,9 @@ export function createEarlierFileQueue(limit = EARLIER_FILES_PENDING) {
     },
     /** Record which taken files reached the computer, by the paths the copy returned. */
     copiedTo(taken: ReadonlyArray<FileBlock>, files: ReadonlyArray<MaterializedThreadFile>) {
-      const paths = new Set(files.map((file) => file.path));
+      const paths = new Set(files.filter((file) => !file.deferredToDrive).map((file) => file.path));
       for (const file of taken)
-        if (paths.has(attachmentComputerPath(file.artifactId, file.mimeType)))
+        if (paths.has(attachmentComputerPath(file.artifactId, file.mimeType, file.name)))
           copied.add(file.artifactId);
     },
     /** A newly started computer has none of the earlier copies. */
@@ -340,7 +357,10 @@ export async function materializeEarlierFiles(
  * copies them with materializeRecentThreadFiles once something first uses the computer.
  */
 export async function listRecentThreadFiles(
-  deps: Pick<Parameters<typeof materializeCurrentTurnFiles>[0], "prisma" | "maxUploadSizeBytes">,
+  deps: Pick<
+    Parameters<typeof materializeCurrentTurnFiles>[0],
+    "prisma" | "maxUploadSizeBytes" | "maxFileUploadSizeBytes"
+  >,
   history: ReadonlyArray<{ id?: string; role: string }>,
   messages: ReadonlyArray<{ id: string; blocks: MessageBlock[] }>,
   input: {
@@ -352,7 +372,8 @@ export async function listRecentThreadFiles(
   const blocks = recentAttachmentBlocks(history, messages, input);
   if (!blocks.length) return [];
   const byId = await attachedArtifacts(deps.prisma, blocks, input.context);
-  const limit = deps.maxUploadSizeBytes ?? ATTACHMENT_MAX_BYTES;
+  const limit =
+    deps.maxFileUploadSizeBytes ?? Math.max(deps.maxUploadSizeBytes ?? 0, FILE_UPLOAD_MAX_BYTES);
   return blocks
     .flatMap((block) => {
       const row = byId.get(block.artifactId);

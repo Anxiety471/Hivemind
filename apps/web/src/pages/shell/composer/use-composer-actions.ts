@@ -2,13 +2,14 @@ import { useLingui } from "@lingui/react/macro";
 import type {
   Bot,
   ComputerStatus,
+  DriveFile,
   LoginFieldInput,
   Me,
   MessageReaction,
   ThreadMessage,
   ThreadSnapshot,
 } from "@rakazo/contracts";
-import { attachmentMaxBytes, attachmentMaxCount, attachmentSizeLabel } from "@rakazo/contracts";
+import { attachmentMaxCount, attachmentSizeLabel, fileUploadMaxBytes } from "@rakazo/contracts";
 import type { ComposerMention } from "@rakazo/core";
 import {
   applyThreadSendReceipt,
@@ -24,11 +25,11 @@ import { readSeenRunErrorIds, rememberSeenRunErrorId } from "../../../lib/chat/r
 import { setComposerUnsavedWork } from "../../../lib/composer/composer-draft";
 import { scheduleFocusPrompt } from "../../../lib/composer/focus-prompt";
 import {
-  readFileAsBase64,
   revokePendingAttachmentPreviews,
   usePendingAttachmentPreviewCleanup,
 } from "../../../lib/composer/pending-attachments";
 import { canPrepareImage, prepareImage } from "../../../lib/composer/prepare-image";
+import { uploadSpaceFile } from "../../../lib/files/file-client";
 import type { PageSession } from "../../../lib/pages/pages";
 import { requestBrowserNotificationPermission } from "../../../lib/platform/browser-notifications";
 import type { createSpaceRpc } from "../../../lib/query/rpc";
@@ -279,6 +280,7 @@ export function useComposerActions({
       const threadKey = activeGroupId.current ?? activeBotId.current;
       if (!threadKey || !files?.length) return false;
       const ATTACHMENT_MAX_COUNT = attachmentMaxCount(bootstrapMe);
+      const maxFileBytes = fileUploadMaxBytes(bootstrapMe);
       const existing = attachmentsForThread(pendingAttachments, threadKey);
       const next: PendingAttachment[] = [];
       const skipped: string[] = [];
@@ -288,10 +290,8 @@ export function useComposerActions({
           continue;
         }
         // Raster photos get a chance to shrink before server-side size validation.
-        if (file.size > attachmentMaxBytes(bootstrapMe) && !canPrepareImage(file)) {
-          skipped.push(
-            t`${file.name} (over ${attachmentSizeLabel(attachmentMaxBytes(bootstrapMe))})`,
-          );
+        if (file.size > maxFileBytes && !canPrepareImage(file)) {
+          skipped.push(t`${file.name} (over ${attachmentSizeLabel(maxFileBytes)})`);
           continue;
         }
         const mimeType = inferAttachmentMimeType(file.name, file.type);
@@ -311,6 +311,35 @@ export function useComposerActions({
       setAttachmentNotice(skipped.length ? t`Skipped ${skipped.join(", ")}` : null);
       if (fileInputRef.current) fileInputRef.current.value = "";
       return next.length > 0;
+    },
+    [pendingAttachments, bootstrapMe, t],
+  );
+  /** Attaches a file already in the Space Drive, which is sent by its id instead of uploading. */
+  const onDriveFilePick = useCallback(
+    (file: DriveFile) => {
+      const threadKey = activeGroupId.current ?? activeBotId.current;
+      if (!threadKey) return false;
+      const ATTACHMENT_MAX_COUNT = attachmentMaxCount(bootstrapMe);
+      const existing = attachmentsForThread(pendingAttachments, threadKey);
+      if (existing.length >= ATTACHMENT_MAX_COUNT) {
+        setAttachmentNotice(t`Skipped ${file.name} (max ${ATTACHMENT_MAX_COUNT} attachments)`);
+        return false;
+      }
+      setPendingAttachments((current) => [
+        ...current,
+        {
+          id: newClientId(),
+          threadKey,
+          driveFile: {
+            artifactId: file.id,
+            name: file.name,
+            mimeType: file.mimeType,
+            size: file.size,
+          },
+        },
+      ]);
+      setAttachmentNotice(null);
+      return true;
     },
     [pendingAttachments, bootstrapMe, t],
   );
@@ -419,40 +448,33 @@ export function useComposerActions({
           uploadedSendArtifacts.current.get(clientNonce) ?? new WeakMap<File, string>();
         uploadedSendArtifacts.current.set(clientNonce, uploaded);
         for (const pending of attachments) {
-          const existing = uploaded.get(pending.file);
+          if (pending.driveFile) {
+            artifactIds.push(pending.driveFile.artifactId);
+            continue;
+          }
+          const pendingFile = pending.file!;
+          const existing = uploaded.get(pendingFile);
           if (existing) {
             artifactIds.push(existing);
             continue;
           }
-          const mimeType = inferAttachmentMimeType(pending.file.name, pending.file.type);
+          const mimeType = inferAttachmentMimeType(pendingFile.name, pendingFile.type);
           if (!mimeType) {
-            throw new Error(t`Unsupported file type: ${pending.file.name}`);
+            throw new Error(t`Unsupported file type: ${pendingFile.name}`);
           }
-          const file = await prepareImage(pending.file);
-          const contentBase64 = await readFileAsBase64(file);
+          const file = await prepareImage(pendingFile);
           // Stable per pending attachment, so a retry under a new send nonce
           // (an edited draft) gets back the artifact this upload already made.
           // Scoped to the target: a retry rerouted to a group uploads afresh
           // rather than replaying another chat's artifact.
           const uploadNonce = `attachment:${groupTarget ?? botTarget}:${pending.id}`;
-          const artifact = await rpc.artifacts.create(
-            groupTarget
-              ? {
-                  groupId: groupTarget,
-                  name: pending.file.name,
-                  mimeType,
-                  contentBase64,
-                  clientNonce: uploadNonce,
-                }
-              : {
-                  botId: botTarget!,
-                  name: pending.file.name,
-                  mimeType,
-                  contentBase64,
-                  clientNonce: uploadNonce,
-                },
-          );
-          uploaded.set(pending.file, artifact.id);
+          const artifact = await uploadSpaceFile({
+            file,
+            ...(groupTarget ? { groupId: groupTarget } : { botId: botTarget! }),
+            source: "chat",
+            clientNonce: uploadNonce,
+          });
+          uploaded.set(pendingFile, artifact.id);
           artifactIds.push(artifact.id);
         }
         const payload = {
@@ -612,6 +634,7 @@ export function useComposerActions({
     attachmentNotice,
     fileInputRef,
     onAttachmentPick,
+    onDriveFilePick,
     removeAttachment,
     discardThreadAttachments,
     replyTarget: activeReplyTarget,

@@ -3,13 +3,14 @@ import { useLinkPrompt } from "@rakazo/chat-ui/web";
 import type { MessageBlock } from "@rakazo/contracts";
 import { appConnectedInput, waitForConnection } from "@rakazo/core";
 import { Button, Dialog, DialogClose, DialogContent, DialogTitle } from "@rakazo/ui-web";
-import { X } from "lucide-react";
+import { Download, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { BuiCard, SuccessPop } from "../../../components/ai/primitives";
 import { ErrorNotice } from "../../../components/ErrorNotice";
+import { IconTooltip } from "../../../components/IconTooltip";
 import { OptionRow } from "../../../components/messages/OptionRow";
 import { connectMcpOauth } from "../../../lib/integrations/mcp-connect";
-import type { ArtifactTarget } from "../../../lib/pages/artifact-open";
+import { downloadArtifact } from "../../../lib/pages/artifact-open";
 import { chartViewport } from "../../../lib/pages/chart-viewport";
 import { useArtifactImage } from "../../../lib/pages/use-artifact-image";
 import { importChunk } from "../../../lib/platform/preload-recovery";
@@ -506,20 +507,12 @@ export function ChartBlockView({
   );
 }
 
-export function ArtifactImage({
-  target,
-  artifactId,
-  name,
-}: {
-  target: ArtifactTarget;
-  artifactId: string;
-  name: string;
-}) {
+export function ArtifactImage({ artifactId, name }: { artifactId: string; name: string }) {
   const { t } = useLingui();
   const [open, setOpen] = useState(false);
   const [visible, setVisible] = useState(false);
   const container = useRef<HTMLDivElement>(null);
-  const src = useArtifactImage(target, artifactId, visible);
+  const src = useArtifactImage(artifactId, visible);
 
   useEffect(() => {
     const element = container.current;
@@ -541,12 +534,12 @@ export function ArtifactImage({
   }, []);
 
   return (
-    <div ref={container}>
+    <div ref={container} className="group relative w-fit">
       {src ? (
         <button
           type="button"
           onClick={() => setOpen(true)}
-          className="max-w-[240px] overflow-hidden rounded-2xl"
+          className="block max-w-[240px] overflow-hidden rounded-2xl"
         >
           <img src={src} alt={name} className="max-h-48 w-full object-cover" />
         </button>
@@ -554,18 +547,44 @@ export function ArtifactImage({
         <div className="rounded-2xl bg-muted px-4 py-3 text-body text-muted-foreground">{name}</div>
       )}
       {src ? (
+        <IconTooltip label={t`Download ${name}`}>
+          <Button
+            variant="floating"
+            size="icon-sm"
+            aria-label={t`Download ${name}`}
+            onClick={() => downloadArtifact(artifactId, name)}
+            className="absolute end-2 top-2 rounded-full opacity-0 shadow-sm transition-opacity group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
+          >
+            <Download />
+          </Button>
+        </IconTooltip>
+      ) : null}
+      {src ? (
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogContent
             showCloseButton={false}
             className="w-auto max-w-none bg-transparent p-0 ring-0 sm:max-w-none"
           >
             <DialogTitle className="sr-only">{name}</DialogTitle>
-            <DialogClose
-              aria-label={t`Close image preview`}
-              render={<Button variant="ghost" size="icon-sm" className="absolute end-2 top-2" />}
-            >
-              <X />
-            </DialogClose>
+            <div className="absolute end-3 top-3 flex items-center gap-1">
+              <IconTooltip label={t`Download ${name}`}>
+                <Button
+                  variant="floating"
+                  size="icon-lg"
+                  className="rounded-full"
+                  aria-label={t`Download ${name}`}
+                  onClick={() => downloadArtifact(artifactId, name)}
+                >
+                  <Download />
+                </Button>
+              </IconTooltip>
+              <DialogClose
+                aria-label={t`Close image preview`}
+                render={<Button variant="floating" size="icon-lg" className="rounded-full" />}
+              >
+                <X />
+              </DialogClose>
+            </div>
             <img
               src={src}
               alt={name}

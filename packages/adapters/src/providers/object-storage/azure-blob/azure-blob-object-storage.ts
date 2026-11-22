@@ -40,6 +40,16 @@ export function azureBlobConfigFromEnv(
   };
 }
 
+/** Blob storage reports a missing object as BlobNotFound (404). */
+function missingBlob(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const details: { code?: string; statusCode?: number } = error as Error & {
+    code?: string;
+    statusCode?: number;
+  };
+  return details.code === "BlobNotFound" || details.statusCode === 404;
+}
+
 export class AzureBlobObjectStorage implements ObjectStorage {
   private container?: Promise<{ sdk: typeof AzureSdk; client: AzureSdk.ContainerClient }>;
 
@@ -100,7 +110,11 @@ export class AzureBlobObjectStorage implements ObjectStorage {
     }
   }
 
-  async *get(key: string): AsyncGenerator<Uint8Array> {
+  private async *download(
+    key: string,
+    offset: number,
+    count: number | undefined,
+  ): AsyncGenerator<Uint8Array> {
     const { client } = await this.connect();
     const controller = new AbortController();
     let idle: NodeJS.Timeout | undefined;
@@ -120,7 +134,7 @@ export class AzureBlobObjectStorage implements ObjectStorage {
     try {
       const { readableStreamBody } = await client
         .getBlobClient(this.key(key))
-        .download(0, undefined, { abortSignal: controller.signal });
+        .download(offset, count, { abortSignal: controller.signal });
       if (!readableStreamBody) throw new Error("Object storage returned no body");
       for await (const chunk of readableStreamBody) {
         clearTimeout(idle);
@@ -130,6 +144,25 @@ export class AzureBlobObjectStorage implements ObjectStorage {
     } finally {
       clearTimeout(idle);
     }
+  }
+
+  async *get(key: string): AsyncGenerator<Uint8Array> {
+    yield* this.download(key, 0, undefined);
+  }
+
+  async stat(key: string): Promise<{ size: number } | undefined> {
+    const { client } = await this.connect();
+    try {
+      const properties = await client.getBlobClient(this.key(key)).getProperties();
+      return { size: properties.contentLength ?? 0 };
+    } catch (error) {
+      if (missingBlob(error)) return undefined;
+      throw error;
+    }
+  }
+
+  async *getRange(key: string, start: number, endInclusive: number): AsyncGenerator<Uint8Array> {
+    yield* this.download(key, start, endInclusive - start + 1);
   }
 
   async *list(prefix: string): AsyncGenerator<{ key: string; lastModified: Date }> {

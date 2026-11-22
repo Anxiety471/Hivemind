@@ -3,11 +3,14 @@ import { describe, expect, it } from "vitest";
 import {
   AttachmentValidationError,
   artifactTypeLabel,
+  attachmentComputerPath,
   attachmentExtensionForMimeType,
   attachmentsForBot,
   blocksToAgentHistorySegments,
   blocksToAgentHistoryText,
   decodeAttachmentBase64,
+  fileCategoryForMimeType,
+  fileUploadSizeFromEnv,
   inferAttachmentMimeType,
   isStaticPng,
   normalizeVoiceTranscript,
@@ -16,6 +19,7 @@ import {
   toolStepsHistoryText,
   userTurnMessageForRun,
   validateAttachmentMimeType,
+  validateDriveName,
 } from "./attachments.js";
 
 describe("attachment helpers", () => {
@@ -55,12 +59,26 @@ describe("attachment helpers", () => {
   ])("normalizes %s without needing an extension", (alias, expected) => {
     expect(inferAttachmentMimeType("clip", alias)).toBe(expected);
   });
-  it("uses M4A's container for an AAC codec report but does not allow raw AAC or FLAC", () => {
+  it("uses M4A's container for an AAC codec report and accepts AAC, FLAC, shell scripts, and videos", () => {
     expect(inferAttachmentMimeType("clip.m4a", "audio/aac")).toBe("audio/mp4");
     expect(inferAttachmentMimeType("clip.m4a", "audio/x-m4a")).toBe("audio/mp4");
-    expect(inferAttachmentMimeType("clip.aac", "audio/aac")).toBeNull();
-    expect(inferAttachmentMimeType("clip.flac", "audio/flac")).toBeNull();
-    expect(attachmentExtensionForMimeType("audio/flac")).toBe("");
+    expect(inferAttachmentMimeType("clip.aac", "audio/aac")).toBe("audio/aac");
+    expect(inferAttachmentMimeType("clip.flac", "audio/flac")).toBe("audio/flac");
+    expect(inferAttachmentMimeType("deploy.sh", "")).toBe("application/x-sh");
+    expect(inferAttachmentMimeType("deploy.sh", "text/plain")).toBe("application/x-sh");
+    expect(inferAttachmentMimeType("deploy.sh", "text/x-shellscript")).toBe("application/x-sh");
+    expect(inferAttachmentMimeType("clip.mov", "")).toBe("video/quicktime");
+    expect(inferAttachmentMimeType("clip.webm", "video/webm")).toBe("video/webm");
+    expect(inferAttachmentMimeType("bundle.tar.gz", "")).toBe("application/gzip");
+    expect(inferAttachmentMimeType("weights.gguf", "")).toBe("application/octet-stream");
+    expect(attachmentComputerPath("art_1", "application/x-sh", "deploy.sh")).toBe(
+      "attachments/art_1.sh",
+    );
+    expect(attachmentComputerPath("art_2", "application/octet-stream", "data.gguf")).toBe(
+      "attachments/art_2.gguf",
+    );
+    expect(inferAttachmentMimeType("malware.exe", "")).toBeNull();
+    expect(inferAttachmentMimeType("malware.exe", "application/x-msdownload")).toBeNull();
     for (const reportedType of ["__proto__", "constructor", "toString"]) {
       expect(inferAttachmentMimeType("clip", reportedType)).toBeNull();
     }
@@ -76,11 +94,21 @@ describe("attachment helpers", () => {
     expect(decodeAttachmentBase64(larger, 12 * limit).byteLength).toBe(11 * limit);
     expect(() => decodeAttachmentBase64(larger)).toThrow("10 MiB limit");
   });
-  it("accepts zip archives and rejects unsupported mime types and empty payloads", () => {
+  it("resolves streaming upload sizes, Drive names, and file categories", () => {
+    expect(fileUploadSizeFromEnv({})).toBe(250 * 1024 * 1024);
+    expect(fileUploadSizeFromEnv({ MAX_FILE_UPLOAD_SIZE_MB: "500" })).toBe(500 * 1024 * 1024);
+    expect(validateDriveName("  demo.mp4  ")).toBe("demo.mp4");
+    expect(() => validateDriveName("../evil")).toThrow(AttachmentValidationError);
+    expect(fileCategoryForMimeType("video/mp4")).toBe("video");
+    expect(fileCategoryForMimeType("application/x-sh")).toBe("code");
+    expect(fileCategoryForMimeType("application/pdf")).toBe("document");
+  });
+  it("accepts archives and octet-stream fallback while rejecting blocked executables and empty payloads", () => {
     expect(() => validateAttachmentMimeType("application/zip")).not.toThrow();
     expect(() => validateAttachmentMimeType("application/vnd.rar")).not.toThrow();
     expect(() => validateAttachmentMimeType("application/x-7z-compressed")).not.toThrow();
-    expect(() => validateAttachmentMimeType("application/octet-stream")).toThrow(
+    expect(() => validateAttachmentMimeType("application/octet-stream")).not.toThrow();
+    expect(() => validateAttachmentMimeType("application/x-msdownload")).toThrow(
       AttachmentValidationError,
     );
     expect(() => decodeAttachmentBase64("")).toThrow(AttachmentValidationError);

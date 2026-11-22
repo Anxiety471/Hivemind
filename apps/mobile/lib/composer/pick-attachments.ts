@@ -3,10 +3,16 @@ import {
   ATTACHMENT_IMAGE_QUALITY,
   ATTACHMENT_MAX_BYTES,
   ATTACHMENT_MAX_COUNT,
+  fileUploadMaxBytes,
 } from "@rakazo/contracts";
-import { inferAttachmentMimeType, isStaticPng, PNG_ANIMATION_HEADER_BYTES } from "@rakazo/core";
+import {
+  inferAttachmentMimeType,
+  isStaticPng,
+  newClientId,
+  PNG_ANIMATION_HEADER_BYTES,
+} from "@rakazo/core";
 import * as DocumentPicker from "expo-document-picker";
-import { File, FileMode } from "expo-file-system";
+import { Directory, File, FileMode, Paths } from "expo-file-system";
 import type * as ImageManipulatorModule from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
 import { requireOptionalNativeModule } from "expo-modules-core";
@@ -53,9 +59,13 @@ async function prepareImage(
   const mimeType = inferAttachmentMimeType(name, sourceMimeType ?? undefined);
   // Preserve animation and transparency in GIF and WebP images.
   if (mimeType === "image/gif" || mimeType === "image/webp") return { uri, name, mimeType };
+  // HEIC/HEIF are allowed now, but bots and browsers read a JPEG more reliably.
+  const converts = mimeType === "image/heic" || mimeType === "image/heif";
   const needsResize = width && height && Math.max(width, height) > ATTACHMENT_IMAGE_MAX_EDGE;
+  // A format the app could not convert is not attached as one nothing can preview.
+  const unconverted = converts ? { uri, name, mimeType: null } : { uri, name, mimeType };
   // Unsupported photo formats (such as HEIC) need conversion even when already small.
-  if (!needsResize && mimeType) {
+  if (!needsResize && mimeType && !converts) {
     return { uri, name, mimeType };
   }
   if (mimeType === "image/png") {
@@ -74,7 +84,7 @@ async function prepareImage(
     }
   }
   const manipulator = loadImageManipulator();
-  if (!manipulator) return { uri, name, mimeType };
+  if (!manipulator) return unconverted;
   const format =
     mimeType === "image/png" ? manipulator.SaveFormat.PNG : manipulator.SaveFormat.JPEG;
   try {
@@ -95,7 +105,7 @@ async function prepareImage(
     };
   } catch {
     // An unreadable or unsupported image should not block the whole picker.
-    return { uri, name, mimeType };
+    return unconverted;
   }
 }
 
@@ -105,7 +115,7 @@ async function readUriAsBase64(
 ): Promise<{ contentBase64: string; size: number }> {
   const file = new File(uri);
   const knownSize = file.info().size;
-  if (typeof knownSize === "number" && knownSize > maxBytes) {
+  if (typeof knownSize === "number" && knownSize > Math.min(maxBytes, ATTACHMENT_MAX_BYTES)) {
     return { contentBase64: "", size: knownSize };
   }
   const contentBase64 = await file.base64();
@@ -113,16 +123,34 @@ async function readUriAsBase64(
   return { contentBase64, size };
 }
 
+/**
+ * A copy this attachment owns, for a file whose source is removed when its picker returns.
+ * Small files keep base64 for the base64-only fallback; larger ones stream from the copy.
+ */
+async function retainedPickedFile(
+  uri: string,
+  size: number,
+): Promise<{ uri: string; contentBase64: string }> {
+  const directory = new Directory(Paths.cache, "attachment-uploads");
+  if (!directory.exists) directory.create({ intermediates: true });
+  const copy = new File(directory, newClientId());
+  await new File(uri).copy(copy);
+  return {
+    uri: copy.uri,
+    contentBase64: size <= ATTACHMENT_MAX_BYTES ? await copy.base64() : "",
+  };
+}
+
 export async function pickFromLibrary(
   existingCount = 0,
-  maxBytes = ATTACHMENT_MAX_BYTES,
+  maxBytes = fileUploadMaxBytes(),
   maxCount = ATTACHMENT_MAX_COUNT,
 ): Promise<{
   attachments: PickedAttachment[];
   skipped: PickSkip[];
 }> {
   const result = await ImagePicker.launchImageLibraryAsync({
-    mediaTypes: ["images"],
+    mediaTypes: ["images", "videos"],
     allowsMultipleSelection: true,
     quality: 1,
   });
@@ -130,32 +158,49 @@ export async function pickFromLibrary(
   const attachments: PickedAttachment[] = [];
   const skipped: PickSkip[] = [];
   for (const asset of result.assets) {
-    const originalName = asset.fileName ?? `photo-${asset.assetId ?? Date.now()}.jpg`;
+    const reportedVideo = asset.mimeType?.startsWith("video/") ?? false;
+    const originalName =
+      asset.fileName ?? `${reportedVideo ? "video" : "photo"}-${asset.assetId ?? Date.now()}`;
+    const reportedType = inferAttachmentMimeType(originalName, asset.mimeType ?? undefined);
     // Once full, let the filter report the skip without processing the file.
     let candidate: Parameters<typeof filterPickedAttachments>[1][number] = {
       name: originalName,
-      mimeType: inferAttachmentMimeType(originalName, asset.mimeType ?? undefined),
+      mimeType: reportedType,
       size: 0,
       contentBase64: "",
-      previewUri: asset.uri,
+      previewUri: reportedType?.startsWith("image/") ? asset.uri : undefined,
+      uri: asset.uri,
     };
     if (existingCount + attachments.length < maxCount) {
       try {
-        const prepared = await prepareImage(
-          asset.uri,
-          originalName,
-          asset.mimeType,
-          asset.width,
-          asset.height,
-        );
-        const { contentBase64, size } = await readUriAsBase64(prepared.uri, maxBytes);
-        candidate = {
-          name: prepared.name,
-          mimeType: prepared.mimeType,
-          size,
-          contentBase64,
-          previewUri: prepared.uri,
-        };
+        if (reportedVideo || reportedType?.startsWith("video/")) {
+          // A video is streamed from its own file; reading it into base64 would cost its size.
+          const size = asset.fileSize ?? new File(asset.uri).info().size ?? 0;
+          candidate = {
+            name: originalName,
+            mimeType: reportedType,
+            size,
+            contentBase64: "",
+            uri: asset.uri,
+          };
+        } else {
+          const prepared = await prepareImage(
+            asset.uri,
+            originalName,
+            asset.mimeType,
+            asset.width,
+            asset.height,
+          );
+          const { contentBase64, size } = await readUriAsBase64(prepared.uri, maxBytes);
+          candidate = {
+            name: prepared.name,
+            mimeType: prepared.mimeType,
+            size,
+            contentBase64,
+            previewUri: prepared.uri,
+            uri: prepared.uri,
+          };
+        }
       } catch {
         // One unreadable photo must not discard the rest of the selection.
         skipped.push({ name: originalName, reason: "could not read" });
@@ -176,7 +221,7 @@ export async function pickFromLibrary(
 
 export async function takePhoto(
   existingCount = 0,
-  maxBytes = ATTACHMENT_MAX_BYTES,
+  maxBytes = fileUploadMaxBytes(),
   maxCount = ATTACHMENT_MAX_COUNT,
 ): Promise<{
   attachments: PickedAttachment[];
@@ -209,6 +254,7 @@ export async function takePhoto(
           size,
           contentBase64,
           previewUri: prepared.uri,
+          uri: prepared.uri,
         },
       ],
       maxBytes,
@@ -222,7 +268,7 @@ export async function takePhoto(
 
 export async function pickDocuments(
   existingCount = 0,
-  maxBytes = ATTACHMENT_MAX_BYTES,
+  maxBytes = fileUploadMaxBytes(),
   maxCount = ATTACHMENT_MAX_COUNT,
 ): Promise<{
   attachments: PickedAttachment[];
@@ -253,7 +299,16 @@ export async function pickDocuments(
     }
     const filtered = filterPickedAttachments(
       existingCount + attachments.length,
-      [{ name, mimeType, size, contentBase64 }],
+      [
+        {
+          name,
+          mimeType,
+          size,
+          contentBase64,
+          uri: asset.uri,
+          previewUri: mimeType?.startsWith("image/") ? asset.uri : undefined,
+        },
+      ],
       maxBytes,
       maxCount,
     );
@@ -266,7 +321,7 @@ export async function pickDocuments(
 export async function readDroppedFiles(
   files: DroppedFile[],
   existingCount = 0,
-  maxBytes = ATTACHMENT_MAX_BYTES,
+  maxBytes = fileUploadMaxBytes(),
   notCopied: readonly string[] = [],
   maxCount = ATTACHMENT_MAX_COUNT,
 ): Promise<{
@@ -318,22 +373,46 @@ export async function readDroppedFiles(
         skipped.push({ name, reason: "permission denied" });
         continue;
       }
-      const read = await readUriAsBase64(uri, maxBytes).catch(() => null);
-      if (!read) {
-        // A copy that vanished or cannot be read costs that file only.
-        skipped.push({ name, reason: "permission denied" });
-        continue;
+      let contentBase64 = "";
+      let streamedUri = uri;
+      let measured = size ?? 0;
+      if (measured > ATTACHMENT_MAX_BYTES) {
+        const retained = await retainedPickedFile(uri, measured).catch(() => null);
+        if (!retained) {
+          skipped.push({ name, reason: "permission denied" });
+          continue;
+        }
+        streamedUri = retained.uri;
+        contentBase64 = retained.contentBase64;
+      } else {
+        const read = await readUriAsBase64(uri, maxBytes).catch(() => null);
+        if (!read) {
+          // A copy that vanished or cannot be read costs that file only.
+          skipped.push({ name, reason: "permission denied" });
+          continue;
+        }
+        contentBase64 = read.contentBase64;
+        measured = read.size;
       }
-      const { contentBase64 } = read;
-      size = read.size;
-      if (size > maxBytes) {
+      if (measured > maxBytes) {
         skipped.push({ name, reason: attachmentSizeSkipReason(maxBytes) });
         continue;
       }
       const previewUri = mimeType?.startsWith("image/")
-        ? `data:${mimeType};base64,${contentBase64}`
+        ? contentBase64
+          ? `data:${mimeType};base64,${contentBase64}`
+          : streamedUri
         : undefined;
-      attachments.push(pickedAttachment({ name, mimeType, size, contentBase64, previewUri }));
+      attachments.push(
+        pickedAttachment({
+          name,
+          mimeType,
+          size: measured,
+          contentBase64,
+          uri: streamedUri,
+          previewUri,
+        }),
+      );
     }
   } finally {
     await Promise.allSettled([
@@ -347,7 +426,7 @@ export async function readDroppedFiles(
 export async function readSharedFiles(
   files: Array<{ uri: string; name: string; mimeType: string | null }>,
   existingCount = 0,
-  maxBytes = ATTACHMENT_MAX_BYTES,
+  maxBytes = fileUploadMaxBytes(),
   maxCount = ATTACHMENT_MAX_COUNT,
 ) {
   // Loaded with the first share, so ordinary pickers never pull the share module.
@@ -365,14 +444,27 @@ export async function readSharedFiles(
     try {
       const result = await readIncomingShareFile(file.uri, maxBytes, async (copy, name, type) => {
         const mimeType = inferAttachmentMimeType(name, type || file.mimeType || undefined);
-        const { contentBase64, size } = await readUriAsBase64(copy.uri, maxBytes);
-        // The cache copy is removed after this read; previews must own their bytes.
-        const previewUri = mimeType?.startsWith("image/")
-          ? `data:${mimeType};base64,${contentBase64}`
-          : undefined;
+        const measured = copy.info().size ?? 0;
+        let contentBase64 = "";
+        let previewUri: string | undefined;
+        let uri = copy.uri;
+        let size = measured;
+        if (measured > ATTACHMENT_MAX_BYTES) {
+          const retained = await retainedPickedFile(copy.uri, measured);
+          uri = retained.uri;
+          contentBase64 = retained.contentBase64;
+        } else {
+          const read = await readUriAsBase64(copy.uri, maxBytes);
+          contentBase64 = read.contentBase64;
+          size = read.size;
+        }
+        // The share copy is removed after this read; previews must own their bytes.
+        if (mimeType?.startsWith("image/")) {
+          previewUri = contentBase64 ? `data:${mimeType};base64,${contentBase64}` : uri;
+        }
         return filterPickedAttachments(
           existingCount + attachments.length,
-          [{ name, mimeType, size, contentBase64, previewUri }],
+          [{ name, mimeType, size, contentBase64, uri, previewUri }],
           maxBytes,
           maxCount,
         );

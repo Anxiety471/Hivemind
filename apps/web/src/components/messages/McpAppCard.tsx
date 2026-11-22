@@ -20,8 +20,8 @@ export const MCP_APP_MAX_HEIGHT = 640;
 /** An app that has not started by then is not shown; the bot's reply stands without it. */
 const START_TIMEOUT_MS = 15_000;
 
-async function fetchAppHtml(target: ArtifactTarget, artifactId: string): Promise<string> {
-  return new TextDecoder().decode(await fetchArtifactBytes(target, artifactId));
+async function fetchAppHtml(artifactId: string): Promise<string> {
+  return new TextDecoder().decode(await fetchArtifactBytes(artifactId));
 }
 
 /**
@@ -44,7 +44,7 @@ export function McpAppCard({ block, target }: { block: AppBlock; target: Artifac
   const [failed, setFailed] = useState(false);
   const html = useQuery({
     queryKey: ["mcp-app-html", block.artifactId],
-    queryFn: () => fetchAppHtml(target, block.artifactId),
+    queryFn: () => fetchAppHtml(block.artifactId),
     enabled: near,
     staleTime: Number.POSITIVE_INFINITY,
   });

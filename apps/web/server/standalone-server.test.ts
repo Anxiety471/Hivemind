@@ -218,4 +218,27 @@ describe("standalone web server", () => {
     ).resolves.toBe(404);
     expect(apiRequests).toEqual([]);
   });
+
+  it("forwards /api/v1/files and /rpc to API_RPC_TARGET when configured", async () => {
+    const api = http.createServer((_req, res) => res.end("api"));
+    const rpc = http.createServer((_req, res) => res.end("rpc"));
+    const apiPort = await listen(api);
+    const rpcPort = await listen(rpc);
+    const root = await mkdtemp(path.join(tmpdir(), "rakazo-standalone-rpc-"));
+    cleanup.push(() => rm(root, { recursive: true, force: true }));
+    await mkdir(path.join(root, "dist", "assets"), { recursive: true });
+    await writeFile(path.join(root, "dist", "index.html"), "<!doctype html><title>app</title>");
+    const web = createWebServer(root, {
+      API_PROXY_TARGET: `http://127.0.0.1:${apiPort}`,
+      RAKAZO_RPC_PROXY_TARGET: `http://127.0.0.1:${rpcPort}`,
+      RAKAZO_HOST: "app.example.test",
+      SCREEN_PROXY_SECRET: "test-screen-proxy-secret-0123456789abcdef",
+    });
+    const webPort = await listen(web);
+
+    const headers = { Host: "app.example.test" };
+    expect((await get(webPort, "/api/health", headers)).body).toBe("api");
+    expect((await get(webPort, "/api/v1/files/f1/content", headers)).body).toBe("rpc");
+    expect((await get(webPort, "/rpc/files/list", headers)).body).toBe("rpc");
+  });
 });

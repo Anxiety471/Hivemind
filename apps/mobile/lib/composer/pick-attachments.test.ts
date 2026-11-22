@@ -29,10 +29,11 @@ describe("filterPickedAttachments", () => {
       size: 10 * 1024 * 1024,
       contentBase64: "YXVkaW8=",
     };
-    const result = filterPickedAttachments(0, [
-      candidate,
-      { ...candidate, name: "large.mp3", size: candidate.size + 1 },
-    ]);
+    const result = filterPickedAttachments(
+      0,
+      [candidate, { ...candidate, name: "large.mp3", size: candidate.size + 1 }],
+      attachmentMaxBytes(),
+    );
     expect(result.attachments).toHaveLength(1);
     expect(result.attachments[0]).toMatchObject({ name: "song.mp3", mimeType: "audio/mpeg" });
     expect(result.skipped).toEqual([{ name: "large.mp3", reason: "over 10 MiB" }]);
@@ -63,44 +64,48 @@ describe("filterPickedAttachments", () => {
     ).toBe("over 2 MiB");
   });
   it("skips unsupported mime types and oversize files", () => {
-    const result = filterPickedAttachments(0, [
-      {
-        name: "notes.txt",
-        mimeType: "text/plain",
-        size: 12,
-        contentBase64: "aGVsbG8=",
-      },
-      {
-        name: "bundle.zip",
-        mimeType: inferAttachmentMimeType("bundle.zip", "application/x-zip-compressed"),
-        size: 12,
-        contentBase64: "UEsDBA==",
-      },
-      {
-        name: "bundle.rar",
-        mimeType: inferAttachmentMimeType("bundle.rar", undefined),
-        size: 12,
-        contentBase64: "UmFyIQ==",
-      },
-      {
-        name: "bundle.7z",
-        mimeType: inferAttachmentMimeType("bundle.7z", "application/octet-stream"),
-        size: 12,
-        contentBase64: "N3q8rycc",
-      },
-      {
-        name: "payload.exe",
-        mimeType: null,
-        size: 12,
-        contentBase64: "aGVsbG8=",
-      },
-      {
-        name: "big.zip",
-        mimeType: "application/zip",
-        size: 10 * 1024 * 1024 + 1,
-        contentBase64: "aGVsbG8=",
-      },
-    ]);
+    const result = filterPickedAttachments(
+      0,
+      [
+        {
+          name: "notes.txt",
+          mimeType: "text/plain",
+          size: 12,
+          contentBase64: "aGVsbG8=",
+        },
+        {
+          name: "bundle.zip",
+          mimeType: inferAttachmentMimeType("bundle.zip", "application/x-zip-compressed"),
+          size: 12,
+          contentBase64: "UEsDBA==",
+        },
+        {
+          name: "bundle.rar",
+          mimeType: inferAttachmentMimeType("bundle.rar", undefined),
+          size: 12,
+          contentBase64: "UmFyIQ==",
+        },
+        {
+          name: "bundle.7z",
+          mimeType: inferAttachmentMimeType("bundle.7z", "application/octet-stream"),
+          size: 12,
+          contentBase64: "N3q8rycc",
+        },
+        {
+          name: "payload.exe",
+          mimeType: null,
+          size: 12,
+          contentBase64: "aGVsbG8=",
+        },
+        {
+          name: "big.zip",
+          mimeType: "application/zip",
+          size: 10 * 1024 * 1024 + 1,
+          contentBase64: "aGVsbG8=",
+        },
+      ],
+      attachmentMaxBytes(),
+    );
     expect(result.attachments.map((item) => item.name)).toEqual([
       "notes.txt",
       "bundle.zip",

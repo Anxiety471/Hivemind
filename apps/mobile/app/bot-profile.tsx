@@ -176,7 +176,7 @@ export default function BotProfile() {
           key="artifacts"
           accessibilityRole="button"
           chevron="right"
-          title={t`Artifacts`}
+          title={t`Files`}
           leading={
             <NativeSymbol ios="folder" android="folder-outline" color={tokens.mutedForeground} />
           }

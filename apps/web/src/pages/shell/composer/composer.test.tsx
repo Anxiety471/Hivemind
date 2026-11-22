@@ -76,7 +76,6 @@ function renderComposer(
   document.body.append(container);
   root = createRoot(container);
   composerProps = {
-    artifactTarget: { botId: "bot-1" },
     activeName: "Ada",
     running: false,
     pendingAttachments: [],
@@ -92,6 +91,7 @@ function renderComposer(
     sending: false,
     fileInputRef: createRef(),
     onAttachmentPick: () => true,
+    onDriveFilePick: () => true,
     onRemoveAttachment: () => {},
     onSend,
     onStop: async () => {},

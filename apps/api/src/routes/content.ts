@@ -20,6 +20,24 @@ import {
   listArtifactVersions,
   listSpaceArtifacts,
 } from "../content/artifacts.js";
+import {
+  createDriveFolder,
+  deleteDriveFilePermanent,
+  deleteDriveFolderPermanent,
+  emptyDriveTrash,
+  getDriveFile,
+  getDriveFolderTree,
+  listDriveChanges,
+  listDriveFiles,
+  moveDriveFile,
+  moveDriveFolder,
+  renameDriveFile,
+  renameDriveFolder,
+  restoreDriveFile,
+  restoreDriveFolder,
+  trashDriveFile,
+  trashDriveFolder,
+} from "../content/files/index.js";
 import { querySpaceSearch } from "../content/search.js";
 import { listSpaceRuns } from "../threads/runs.js";
 import { loadAllMessages } from "../threads/thread-message-pages.js";
@@ -38,6 +56,7 @@ export function contentRoutes(ctx: RouterContext) {
             botId: input.botId,
             groupId: null,
             spaceId: context.actor.spaceId,
+            trashedAt: null,
             ...LISTED_ARTIFACT,
           },
         });
@@ -107,6 +126,61 @@ export function contentRoutes(ctx: RouterContext) {
       remove: authed.artifacts.remove.handler(async ({ context, input }) => {
         return deleteArtifactFamily(deps, context.actor, { familyId: input.artifactId });
       }),
+    },
+    files: {
+      list: authed.files.list.handler(async ({ context, input }) =>
+        listDriveFiles(deps, context.actor, input),
+      ),
+      get: authed.files.get.handler(async ({ context, input }) =>
+        getDriveFile(deps, context.actor, input.fileId),
+      ),
+      folderTree: authed.files.folderTree.handler(async ({ context }) => ({
+        folders: await getDriveFolderTree(deps, context.actor),
+      })),
+      changes: authed.files.changes.handler(async ({ context, input }) =>
+        listDriveChanges(deps, context.actor, input),
+      ),
+      createFolder: authed.files.createFolder.handler(async ({ context, input }) =>
+        createDriveFolder(deps, context.actor, input),
+      ),
+      renameFolder: authed.files.renameFolder.handler(async ({ context, input }) =>
+        renameDriveFolder(deps, context.actor, input),
+      ),
+      moveFolder: authed.files.moveFolder.handler(async ({ context, input }) =>
+        moveDriveFolder(deps, context.actor, input),
+      ),
+      trashFolder: authed.files.trashFolder.handler(async ({ context, input }) => {
+        await trashDriveFolder(deps, context.actor, input.folderId);
+        return { ok: true as const };
+      }),
+      restoreFolder: authed.files.restoreFolder.handler(async ({ context, input }) =>
+        restoreDriveFolder(deps, context.actor, input.folderId),
+      ),
+      deleteFolder: authed.files.deleteFolder.handler(async ({ context, input }) => {
+        await deleteDriveFolderPermanent(deps, context.actor, input.folderId);
+        return { ok: true as const };
+      }),
+      rename: authed.files.rename.handler(async ({ context, input }) =>
+        renameDriveFile(deps, context.actor, input),
+      ),
+      move: authed.files.move.handler(async ({ context, input }) =>
+        moveDriveFile(deps, context.actor, input),
+      ),
+      trash: authed.files.trash.handler(async ({ context, input }) => {
+        await trashDriveFile(deps, context.actor, input.fileId);
+        return { ok: true as const };
+      }),
+      restore: authed.files.restore.handler(async ({ context, input }) =>
+        restoreDriveFile(deps, context.actor, input.fileId),
+      ),
+      deletePermanent: authed.files.deletePermanent.handler(async ({ context, input }) => {
+        await deleteDriveFilePermanent(deps, context.actor, input.fileId);
+        return { ok: true as const };
+      }),
+      emptyTrash: authed.files.emptyTrash.handler(async ({ context }) => ({
+        ok: true as const,
+        deletedFiles: await emptyDriveTrash(deps, context.actor),
+      })),
     },
     usage: {
       list: authed.usage.list.handler(async ({ context }) => {

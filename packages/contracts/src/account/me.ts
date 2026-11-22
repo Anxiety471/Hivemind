@@ -12,6 +12,7 @@ import { AvatarStyleSchema } from "./preferences.js";
 
 export const MeSchema = z.object({
   maxUploadSizeBytes: z.number().int().positive().optional(),
+  maxFileUploadSizeBytes: z.number().int().positive().optional(),
   maxAttachmentsPerMessage: z.number().int().positive().optional(),
   /** Labs features this account turned on. Absent from servers that predate Labs. */
   labs: z.array(LabFeatureSchema).default([]),

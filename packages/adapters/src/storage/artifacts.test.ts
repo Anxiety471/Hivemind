@@ -3,12 +3,18 @@ import { copyFile, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { SpaceKeyRecord, SpaceKeyStore } from "@rakazo/db";
-import { ContentKeyRing, LocalKeyProvider } from "@rakazo/db";
+import { ContentKeyRing, LocalKeyProvider, parseArtifactHeader } from "@rakazo/db";
 import { afterEach, describe, expect, it } from "vitest";
 import { LocalArtifactStore } from "./artifacts.js";
 
 const dirs: string[] = [];
 const context = { spaceId: "space-1" } as never;
+
+async function collect(source: AsyncIterable<Uint8Array>) {
+  const parts: Buffer[] = [];
+  for await (const part of source) parts.push(Buffer.from(part));
+  return Buffer.concat(parts);
+}
 
 afterEach(async () => {
   await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
@@ -91,6 +97,10 @@ describe("LocalArtifactStore with encryption off", () => {
     );
     expect(new TextDecoder().decode(await store.get(sealed.id, context))).toBe("sealed while on");
     expect(await store.fileCounts()).toMatchObject({ sealed: 1, plaintext: 1 });
+    const ranged = await collect(
+      await store.getStream(plain.id, context, { range: { start: 6, endInclusive: 10 } }),
+    );
+    expect(ranged.toString()).toBe("while");
 
     // Switching back on seals new files and the migration seals the rest.
     const again = new LocalArtifactStore(root, on);
@@ -119,6 +129,28 @@ describe("LocalArtifactStore with content keys", () => {
     expect(onDisk.includes(Buffer.from(bytes.subarray(0, 64)))).toBe(false);
     expect(stored.hash).toBe(String(bytes.byteLength));
     expect(Buffer.from(await store.get(stored.id, context)).equals(Buffer.from(bytes))).toBe(true);
+  });
+
+  it("seeks to a sealed range instead of decrypting from the start", async () => {
+    const { root, store } = await setup();
+    const bytes = new Uint8Array(randomBytes(150_000));
+    const stored = await store.put(
+      { name: "a.bin", mimeType: "application/octet-stream", bytes },
+      context,
+    );
+    const file = path.join(root, "artifacts", "space-1", stored.id);
+    const onDisk = await readFile(file);
+    const header = parseArtifactHeader(onDisk)!;
+    // Corrupt the first segment: a full read fails, a later range never reads it.
+    onDisk[header.headerLength + 100] = onDisk[header.headerLength + 100]! ^ 0xff;
+    await writeFile(file, onDisk);
+    await expect(store.get(stored.id, context)).rejects.toThrow();
+    const ranged = await collect(
+      await store.getStream(stored.id, context, {
+        range: { start: 100_000, endInclusive: 100_010 },
+      }),
+    );
+    expect(ranged.equals(Buffer.from(bytes.subarray(100_000, 100_011)))).toBe(true);
   });
 
   it("reads legacy plaintext files and rewrites them in place", async () => {

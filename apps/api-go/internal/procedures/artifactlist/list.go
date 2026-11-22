@@ -125,7 +125,7 @@ func List(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input) 
 			return err
 		}
 		rows, err := tx.Query(ctx, `SELECT `+artifactColumns+` FROM artifacts
-			WHERE "botId" = $1 AND "groupId" IS NULL AND "spaceId" = $2 AND "mimeType" <> ALL($3)`,
+			WHERE "botId" = $1 AND "groupId" IS NULL AND "spaceId" = $2 AND "trashedAt" IS NULL AND "mimeType" <> ALL($3)`,
 			botID, actor.SpaceID, hiddenMimeTypes)
 		if err != nil {
 			return err
@@ -334,7 +334,7 @@ func ListSpace(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.In
 			WITH scoped AS (
 				SELECT * FROM "artifacts"
 				WHERE "spaceId" = $1 `+botFilter+`
-					AND "createdAt" <= `+asOf+` AND "mimeType" <> ALL(`+hidden+`)
+					AND "trashedAt" IS NULL AND "createdAt" <= `+asOf+` AND "mimeType" <> ALL(`+hidden+`)
 			),
 			latest AS (
 				SELECT DISTINCT ON (COALESCE("rootArtifactId", id))
@@ -432,7 +432,7 @@ func ListVersions(ctx context.Context, database *db.DB, actor db.Actor, raw orpc
 	err := database.Tenant(ctx, actor, func(tx pgx.Tx) error {
 		var anchorID string
 		var rootID *string
-		err := tx.QueryRow(ctx, `SELECT id, "rootArtifactId" FROM artifacts WHERE id = $1 AND "spaceId" = $2 AND "mimeType" <> ALL($3)`,
+		err := tx.QueryRow(ctx, `SELECT id, "rootArtifactId" FROM artifacts WHERE id = $1 AND "spaceId" = $2 AND "trashedAt" IS NULL AND "mimeType" <> ALL($3)`,
 			familyID, actor.SpaceID, stepScreenshotMimeTypes).Scan(&anchorID, &rootID)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return shared.NotFound

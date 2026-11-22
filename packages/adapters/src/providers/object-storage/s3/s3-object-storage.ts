@@ -79,6 +79,16 @@ export function objectStorageRequestHandler(idleMs = IDLE_SOCKET_TIMEOUT_MS) {
   return { httpAgent: new IdleHttpAgent(options), httpsAgent: new IdleHttpsAgent(options) };
 }
 
+/** S3 reports a missing key as a 404 with one of a few SDK error names. */
+function missingObject(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  if (error.name === "NotFound" || error.name === "NoSuchKey") return true;
+  const metadata: { httpStatusCode?: number } | undefined = (
+    error as Error & { $metadata?: { httpStatusCode?: number } }
+  ).$metadata;
+  return metadata?.httpStatusCode === 404;
+}
+
 export interface S3ObjectStorageConfig extends ObjectStorageConnection {
   region: string;
   /** Address the bucket in the path instead of the host name. */
@@ -198,6 +208,32 @@ export class S3ObjectStorage implements ObjectStorage {
     const { sdk, client } = await this.connect();
     const { Body } = await client.send(
       new sdk.GetObjectCommand({ Bucket: this.config.bucket, Key: this.key(key) }),
+    );
+    if (!Body) throw new Error("Object storage returned no body");
+    yield* Body as Readable;
+  }
+
+  async stat(key: string): Promise<{ size: number } | undefined> {
+    const { sdk, client } = await this.connect();
+    try {
+      const head = await client.send(
+        new sdk.HeadObjectCommand({ Bucket: this.config.bucket, Key: this.key(key) }),
+      );
+      return head.ContentLength === undefined ? undefined : { size: head.ContentLength };
+    } catch (error) {
+      if (missingObject(error)) return undefined;
+      throw error;
+    }
+  }
+
+  async *getRange(key: string, start: number, endInclusive: number): AsyncGenerator<Uint8Array> {
+    const { sdk, client } = await this.connect();
+    const { Body } = await client.send(
+      new sdk.GetObjectCommand({
+        Bucket: this.config.bucket,
+        Key: this.key(key),
+        Range: `bytes=${start}-${endInclusive}`,
+      }),
     );
     if (!Body) throw new Error("Object storage returned no body");
     yield* Body as Readable;

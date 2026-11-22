@@ -23,6 +23,31 @@ vi.mock("../../../lib/composer/prepare-image", () => ({
   canPrepareImage: () => false,
   prepareImage: async (file: File) => file,
 }));
+vi.mock("../../../lib/files/file-client", () => ({
+  uploadSpaceFile: async (input: {
+    file: File;
+    botId?: string;
+    groupId?: string;
+    clientNonce?: string;
+  }) => {
+    const create = rpc.artifacts.create as unknown as (payload: unknown) => Promise<{ id: string }>;
+    return create(
+      input.groupId
+        ? {
+            groupId: input.groupId,
+            name: input.file.name,
+            mimeType: input.file.type || "text/plain",
+            clientNonce: input.clientNonce,
+          }
+        : {
+            botId: input.botId,
+            name: input.file.name,
+            mimeType: input.file.type || "text/plain",
+            clientNonce: input.clientNonce,
+          },
+    );
+  },
+}));
 
 type Rpc = {
   routines: { testRun: ReturnType<typeof vi.fn> };

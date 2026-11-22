@@ -206,14 +206,12 @@ export function PeerMessagesOverlay({
                         block.kind === "image" ? (
                           <ArtifactImage
                             key={index}
-                            target={{ botId }}
                             artifactId={block.artifactId}
                             name={block.name}
                           />
                         ) : block.kind === "file" ? (
                           <ArtifactFileCard
                             key={index}
-                            target={{ botId }}
                             artifactId={block.artifactId}
                             name={block.name}
                             mimeType={block.mimeType}

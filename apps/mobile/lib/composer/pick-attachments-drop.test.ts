@@ -61,7 +61,11 @@ describe("dropped file attachments", () => {
   });
 
   it("rejects an oversized file without reading it", async () => {
-    const result = await readDroppedFiles([dropped("film.mp4", 20 * 1024 * 1024)]);
+    const result = await readDroppedFiles(
+      [dropped("film.mp4", 20 * 1024 * 1024)],
+      0,
+      10 * 1024 * 1024,
+    );
 
     expect(result.attachments).toEqual([]);
     expect(result.skipped).toEqual([{ name: "film.mp4", reason: "over 10 MiB" }]);
@@ -78,10 +82,10 @@ describe("dropped file attachments", () => {
   });
 
   it("rejects an unsupported file without reading it", async () => {
-    const result = await readDroppedFiles([dropped("notes.xyz", 1024)]);
+    const result = await readDroppedFiles([dropped("setup.exe", 1024)]);
 
     expect(result.attachments).toEqual([]);
-    expect(result.skipped).toEqual([{ name: "notes.xyz", reason: "unsupported type" }]);
+    expect(result.skipped).toEqual([{ name: "setup.exe", reason: "unsupported type" }]);
     expect(state.base64).not.toHaveBeenCalled();
   });
 
@@ -120,7 +124,11 @@ describe("dropped file attachments", () => {
 
   it("checks the copied file's actual size before reading", async () => {
     state.info.mockReturnValue({ size: 20 * 1024 * 1024 });
-    const result = await readDroppedFiles([dropped("one.png", 10), dropped("two.png", 10)]);
+    const result = await readDroppedFiles(
+      [dropped("one.png", 10), dropped("two.png", 10)],
+      0,
+      10 * 1024 * 1024,
+    );
     expect(result.attachments).toEqual([]);
     expect(result.skipped).toEqual([
       { name: "one.png", reason: "over 10 MiB" },

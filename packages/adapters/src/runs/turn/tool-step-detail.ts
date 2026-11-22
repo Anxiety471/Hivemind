@@ -101,9 +101,17 @@ function rawDetailForTool(toolName: string, args: Record<string, unknown>): stri
     case "write_file":
     case "attach_file":
     case "list_files":
+    case "drive_list":
+    case "drive_read":
+    case "drive_save":
     case "save_shared_memory":
       return (
-        nonEmptyString(args.path) ?? nonEmptyString(args.file_path) ?? nonEmptyString(args.filePath)
+        nonEmptyString(args.path) ??
+        nonEmptyString(args.file_path) ??
+        nonEmptyString(args.filePath) ??
+        nonEmptyString(args.name) ??
+        nonEmptyString(args.file_id) ??
+        nonEmptyString(args.query)
       );
     case "open_path": {
       const path = nonEmptyString(args.path);

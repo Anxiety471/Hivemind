@@ -238,7 +238,7 @@ export default function Account() {
       icon: { ios: "scroll", android: "document-text-outline" },
     },
     {
-      title: t`Artifacts`,
+      title: t`Files`,
       href: "/artifacts",
       icon: { ios: "folder", android: "folder-outline" },
     },

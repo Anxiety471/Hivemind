@@ -1,29 +1,23 @@
 import { t } from "@lingui/core/macro";
-import { Directory, File, Paths } from "expo-file-system";
+import { Directory, File, FileMode, Paths } from "expo-file-system";
 import * as Sharing from "expo-sharing";
 import { Image } from "react-native";
 import type { ApiRequestContext } from "../api/api";
 import { captureApiRequestContext, currentApiBase, rpc, selectedSpaceId } from "../api/api";
+import { currentSessionGeneration, loadSessionToken } from "../api/session";
+import { fileContentUrl } from "../files/file-upload";
+import type { ImageSize } from "../messages/inline-image";
+import { createKeyedPromiseCache } from "../messages/inline-image";
 import { artifactCacheSession } from "./artifact-cache-session";
 import { artifactCacheFileName, artifactShareFileName } from "./artifact-file";
 import { ARTIFACT_DOWNLOAD_TIMEOUT_MS } from "./artifacts";
-import type { ImageSize } from "../messages/inline-image";
-import { createKeyedPromiseCache } from "../messages/inline-image";
-import { currentSessionGeneration, loadSessionToken } from "../api/session";
+
+/** Text and code previews read at most this much, so a large log cannot freeze the screen. */
+export const TEXT_PREVIEW_MAX_BYTES = 100_000;
 
 export type MobileArtifactTarget = { botId: string } | { groupId: string };
 
-/** Writes an artifact's bytes to its cache file; no network call. */
-export function writeArtifactCacheFile(
-  artifactId: string,
-  mimeType: string,
-  contentBase64: string,
-): File {
-  const file = new File(Paths.cache, artifactCacheFileName(artifactId, mimeType));
-  file.create({ overwrite: true });
-  file.writeSync(contentBase64, { encoding: "base64" });
-  return file;
-}
+type ArtifactTarget = MobileArtifactTarget | null;
 
 type ArtifactScope = {
   context: ApiRequestContext;
@@ -83,17 +77,44 @@ function artifactScope(): Promise<ArtifactScope> {
   return scope;
 }
 
-function requestKey(target: MobileArtifactTarget, artifactId: string, mimeType: string): string {
-  return JSON.stringify([
-    "botId" in target ? "bot" : "group",
-    "botId" in target ? target.botId : target.groupId,
-    artifactId,
-    mimeType,
-  ]);
+function requestKey(target: ArtifactTarget, artifactId: string, mimeType: string): string {
+  const scope = target
+    ? "botId" in target
+      ? `bot:${target.botId}`
+      : `group:${target.groupId}`
+    : "space";
+  return JSON.stringify([scope, artifactId, mimeType]);
+}
+
+/**
+ * A server that predates the streaming content route answers it with a 404. Expo's download
+ * error names the status on both platforms, which is the only signal it gives.
+ */
+function contentEndpointMissing(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : "";
+  return /response has (?:status|n)[:\s]+404\b/i.test(message) || /\bHTTP 404\b/.test(message);
+}
+
+function cachedArtifactFile(scope: ArtifactScope, target: ArtifactTarget, artifactId: string, mimeType: string) {
+  const root = new Directory(
+    Paths.cache,
+    "artifact-previews",
+    scope.namespace,
+    `endpoint-${encodeURIComponent(scope.context.apiBase)}`,
+    `user-${encodeURIComponent(scope.userId)}`,
+    `target-${encodeURIComponent(
+      target ? ("botId" in target ? `bot:${target.botId}` : `group:${target.groupId}`) : "space",
+    )}`,
+    `artifact-${encodeURIComponent(artifactId)}`,
+    `mime-${encodeURIComponent(mimeType)}`,
+  );
+  if (!root.exists) root.create({ intermediates: true });
+  const file = new File(root, artifactCacheFileName(artifactId, mimeType));
+  return { file, metadata: new File(root, `${file.name}.json`) };
 }
 
 async function cacheMobileArtifact(
-  target: MobileArtifactTarget,
+  target: ArtifactTarget,
   artifactId: string,
   mimeType: string,
   cachedScope?: ArtifactScope,
@@ -101,20 +122,7 @@ async function cacheMobileArtifact(
   const scope = cachedScope ?? (await artifactScope());
   assertCurrent(scope);
   const key = requestKey(target, artifactId, mimeType);
-  const root = new Directory(
-    Paths.cache,
-    "artifact-previews",
-    scope.namespace,
-    `endpoint-${encodeURIComponent(scope.context.apiBase)}`,
-    `user-${encodeURIComponent(scope.userId)}`,
-    `target-${encodeURIComponent("botId" in target ? `bot:${target.botId}` : `group:${target.groupId}`)}`,
-    `artifact-${encodeURIComponent(artifactId)}`,
-    `mime-${encodeURIComponent(mimeType)}`,
-  );
-  if (!root.exists) root.create({ intermediates: true });
-  const file = new File(root, artifactCacheFileName(artifactId, mimeType));
-  const metadata = new File(root, `${file.name}.json`);
-  // Legacy unscoped files and incomplete writes are never authorized cache entries.
+  const { file, metadata } = cachedArtifactFile(scope, target, artifactId, mimeType);
   if (file.exists && metadata.exists) {
     try {
       if (JSON.parse(metadata.textSync()).key === key) return file;
@@ -122,33 +130,71 @@ async function cacheMobileArtifact(
       // A corrupt sidecar is a cache miss.
     }
   }
-  const artifact = await rpc(
-    "artifacts/get",
-    { ...target, artifactId },
-    { timeoutMs: ARTIFACT_DOWNLOAD_TIMEOUT_MS, requestContext: scope.context },
-  );
-  assertCurrent(scope);
   // Invalidate first so an interrupted overwrite cannot leave valid metadata for wrong bytes.
   if (metadata.exists) metadata.delete();
-  file.create({ overwrite: true });
-  file.writeSync(artifact.contentBase64, { encoding: "base64" });
+  try {
+    await File.downloadFileAsync(
+      fileContentUrl(artifactId, {
+        apiBase: scope.context.apiBase,
+        spaceId: scope.selectionId,
+      }),
+      file,
+      { idempotent: true, headers: scope.context.headers },
+    );
+  } catch (error) {
+    if (!target || !contentEndpointMissing(error)) throw error;
+    // Older servers still serve artifact bytes through the chat attachment RPC.
+    const artifact = await rpc(
+      "artifacts/get",
+      { ...target, artifactId },
+      { timeoutMs: ARTIFACT_DOWNLOAD_TIMEOUT_MS, requestContext: scope.context },
+    );
+    assertCurrent(scope);
+    file.create({ overwrite: true });
+    file.writeSync(artifact.contentBase64, { encoding: "base64" });
+  }
+  assertCurrent(scope);
   metadata.create({ overwrite: true });
   metadata.writeSync(JSON.stringify({ key }));
   return file;
 }
 
+/** Reads at most `maxBytes` of a text file so a large log cannot reach the view whole. */
+export async function readBoundedText(
+  file: File,
+  maxBytes = TEXT_PREVIEW_MAX_BYTES,
+): Promise<string> {
+  if (file.size <= maxBytes) return file.text();
+  const handle = file.open(FileMode.ReadOnly);
+  try {
+    const bytes = await handle.readBytes(maxBytes);
+    return `${new TextDecoder().decode(bytes)}\n…`;
+  } finally {
+    handle.close();
+  }
+}
+
 /** An artifact's text, read through the same authenticated, session-scoped cache. */
 export async function textMobileArtifact(
-  target: MobileArtifactTarget,
+  target: ArtifactTarget,
   artifactId: string,
   mimeType: string,
 ): Promise<string> {
-  return (await cacheMobileArtifact(target, artifactId, mimeType)).text();
+  return readBoundedText(await cacheMobileArtifact(target, artifactId, mimeType));
+}
+
+/** The artifact's bytes as a local file, downloaded through the streaming content route. */
+export async function downloadMobileArtifact(
+  target: ArtifactTarget,
+  artifactId: string,
+  mimeType: string,
+): Promise<File> {
+  return cacheMobileArtifact(target, artifactId, mimeType);
 }
 
 /** Local playback URI using the same authenticated, session-scoped artifact cache. */
 export async function audioArtifactUri(
-  target: MobileArtifactTarget,
+  target: ArtifactTarget,
   artifactId: string,
   mimeType: string,
 ): Promise<string> {
@@ -156,7 +202,7 @@ export async function audioArtifactUri(
 }
 
 export async function openMobileArtifact(
-  target: MobileArtifactTarget,
+  target: ArtifactTarget,
   artifactId: string,
   name: string,
   mimeType: string,
@@ -178,12 +224,12 @@ const imageArtifactUris = createKeyedPromiseCache<string>(async (key) => {
 });
 const imageArtifactRequests = new Map<
   string,
-  { target: MobileArtifactTarget; artifactId: string; mimeType: string; scope: ArtifactScope }
+  { target: ArtifactTarget; artifactId: string; mimeType: string; scope: ArtifactScope }
 >();
 
 /**
- * Local file URI of an image artifact, downloaded through the authenticated RPC and cached on
- * disk. Concurrent callers (every bubble showing the same image) share one download.
+ * Local file URI of an image artifact, downloaded through the authenticated streaming route and
+ * cached on disk. Concurrent callers (every bubble showing the same image) share one download.
  */
 export async function imageArtifactUri(
   target: MobileArtifactTarget,

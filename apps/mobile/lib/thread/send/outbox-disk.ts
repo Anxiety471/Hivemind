@@ -124,9 +124,14 @@ function storedEntry(attempt: SendAttempt) {
     artifactIds: [...attempt.artifactIds],
     payload: {
       ...attempt.payload,
-      attachments: attempt.payload.attachments.map(
-        ({ contentBase64: _bytes, previewUri: _preview, ...attachment }) => attachment,
-      ),
+      attachments: attempt.payload.attachments.map((attachment) => ({
+        ...attachment,
+        contentBase64: "",
+        previewUri: undefined,
+        uri: undefined,
+        // A file kept in the outbox rather than in memory is read from its copy, never as base64.
+        streamed: Boolean(attachment.uri) && !attachment.contentBase64,
+      })),
     },
   };
 }
@@ -134,10 +139,17 @@ export const outboxDisk: UnsentDisk = {
   admit(attempt) {
     try {
       if (folder(attempt.clientNonce).exists) return false;
-      const bytes = attempt.payload.attachments.reduce(
-        (sum, a) => sum + Math.floor((a.contentBase64.length * 3) / 4),
-        0,
-      );
+      const bytes = attempt.payload.attachments.reduce((sum, attachment) => {
+        if (attachment.artifactId) return sum;
+        if (attachment.contentBase64)
+          return sum + Math.floor((attachment.contentBase64.length * 3) / 4);
+        if (!attachment.uri) return sum;
+        try {
+          return sum + (new File(attachment.uri).size ?? 0);
+        } catch {
+          return sum;
+        }
+      }, 0);
       if (
         diskBytes(root()) +
           bytes +
@@ -148,9 +160,17 @@ export const outboxDisk: UnsentDisk = {
         return false;
       folder(attempt.clientNonce).create({ intermediates: true, idempotent: true });
       attempt.payload.attachments.forEach((attachment, index) => {
+        // A Drive file is a reference: its bytes stay on the server, so the outbox holds none.
+        if (attachment.artifactId) return;
         const target = attachmentFile(attempt.clientNonce, index);
-        target.create();
-        target.writeSync(attachment.contentBase64, { encoding: "base64" });
+        if (attachment.contentBase64) {
+          target.create();
+          target.writeSync(attachment.contentBase64, { encoding: "base64" });
+        } else if (attachment.uri) {
+          new File(attachment.uri).copySync(target, { overwrite: true });
+        } else {
+          throw new Error("ATTACHMENT_UNAVAILABLE");
+        }
         attachment.previewUri = attachment.mimeType.startsWith("image/") ? target.uri : undefined;
       });
       for (const attachment of attempt.payload.attachments) attachment.contentBase64 = "";
@@ -227,13 +247,19 @@ export const outboxDisk: UnsentDisk = {
         )
           return [];
         const attachments = entry.payload.attachments.map(
-          (attachment: SendAttempt["payload"]["attachments"][number], index: number) => ({
-            ...attachment,
-            contentBase64: "",
-            previewUri: attachment.mimeType?.startsWith("image/")
-              ? attachmentFile(entry.clientNonce, index).uri
-              : undefined,
-          }),
+          (attachment: SendAttempt["payload"]["attachments"][number], index: number) => {
+            const file = attachmentFile(entry.clientNonce, index);
+            // The marker is a persisted flag, not part of the attachment contract.
+            const streamed =
+              "streamed" in attachment && attachment.streamed === true && file.exists;
+            return {
+              ...attachment,
+              contentBase64: "",
+              // A streamed file stays on disk and is uploaded from there; bytes never ride in memory.
+              uri: streamed ? file.uri : undefined,
+              previewUri: attachment.mimeType?.startsWith("image/") ? file.uri : undefined,
+            };
+          },
         );
         return [
           {
@@ -254,7 +280,14 @@ export const outboxDisk: UnsentDisk = {
   },
   async hydrate(attempt) {
     for (const [index, attachment] of attempt.payload.attachments.entries()) {
-      if (attachment.contentBase64 || attempt.artifactIds.has(attachment.id)) continue;
+      if (
+        attachment.contentBase64 ||
+        attachment.artifactId ||
+        attempt.artifactIds.has(attachment.id)
+      )
+        continue;
+      // A streamed file is uploaded from the copy the outbox restored.
+      if (attachment.uri && new File(attachment.uri).exists) continue;
       const target = attachmentFile(attempt.clientNonce, index);
       if (!target.exists) throw new Error("ATTACHMENT_UNAVAILABLE");
       attachment.contentBase64 = await target.base64();

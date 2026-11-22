@@ -80,20 +80,39 @@ export async function deliverSend(
   }
   const artifactIds: string[] = [];
   for (const [index, pending] of attachments.entries()) {
-    let id = attempt.artifactIds.get(pending.id);
+    // A Drive file chosen in Files travels by reference; sending it uploads nothing again.
+    let id = attempt.artifactIds.get(pending.id) ?? pending.artifactId;
     if (!id) {
-      const artifact = await request(
-        "artifacts/create",
-        {
+      if (pending.uri) {
+        // A picked video or large document streams from its file instead of being read as base64.
+        // Loaded here so chats that never send one do not carry the upload client.
+        const { uploadMobileFile } = await import("../../files/file-upload");
+        const uploaded = await uploadMobileFile({
           ...target,
+          uri: pending.uri,
           name: pending.name,
           mimeType: pending.mimeType,
-          contentBase64: pending.contentBase64,
+          size: pending.size,
+          contentBase64: pending.contentBase64 || undefined,
+          source: "chat",
           clientNonce: `${attempt.clientNonce}:${index}`,
-        },
-        { timeoutMs: UPLOAD_TIMEOUT_MS },
-      );
-      id = artifact.id;
+          spaceId: attempt.spaceId,
+        });
+        id = uploaded.id;
+      } else {
+        const artifact = await request(
+          "artifacts/create",
+          {
+            ...target,
+            name: pending.name,
+            mimeType: pending.mimeType,
+            contentBase64: pending.contentBase64,
+            clientNonce: `${attempt.clientNonce}:${index}`,
+          },
+          { timeoutMs: UPLOAD_TIMEOUT_MS },
+        );
+        id = artifact.id;
+      }
       attempt.artifactIds.set(pending.id, id);
     }
     artifactIds.push(id);

@@ -1,6 +1,9 @@
 import type { MaterializedThreadFile } from "./thread-artifacts.js";
 
 function fileLine(file: MaterializedThreadFile): string {
+  if (file.deferredToDrive && file.artifactId) {
+    return `- ${JSON.stringify(file.name)} (${file.mimeType}, ${file.size} bytes, fileId: ${JSON.stringify(file.artifactId)}): stored in Space Drive only (over 25 MiB; use drive_list / drive_read to inspect or copy to workspace)`;
+  }
   return `- ${JSON.stringify(file.name)} (${file.mimeType}, ${file.size} bytes): ${JSON.stringify(file.path)}`;
 }
 

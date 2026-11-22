@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/auth"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/local"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
@@ -384,5 +385,90 @@ func TestStatusWriterRecordsFinalStatus(t *testing.T) {
 	writer.WriteHeader(http.StatusUnauthorized)
 	if got := writer.Status(); got != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", got)
+	}
+}
+
+func TestDriveHTTPAndDefaultFilesRPCRouting(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"json":{"from":"upstream","path":"` + r.URL.Path + `"}}`))
+	}))
+	t.Cleanup(upstream.Close)
+	target, _ := url.Parse(upstream.URL)
+
+	dir := t.TempDir()
+	routesFile := filepath.Join(dir, "routes.json")
+	if err := os.WriteFile(routesFile, []byte(`{"default":"proxy","routes":{"files.get":{"mode":"proxy","readOnly":true}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := routes.NewStore(routesFile)
+	if err := store.Load(); err != nil {
+		t.Fatal(err)
+	}
+
+	var goGetCalled bool
+	localServer := local.New(nil, auth.New(nil, auth.Config{Secret: []byte("test-secret")}), []local.Procedure{
+		{
+			Name:     "files.list",
+			ReadOnly: true,
+			Serve: func(context.Context, db.Actor, orpc.Input) (any, *orpc.Error) {
+				return map[string]any{"from": "go"}, nil
+			},
+		},
+		{
+			Name:     "files.get",
+			ReadOnly: true,
+			Serve: func(context.Context, db.Actor, orpc.Input) (any, *orpc.Error) {
+				goGetCalled = true
+				return map[string]any{"from": "go"}, nil
+			},
+		},
+	}, local.Config{Logger: discardLogger()})
+
+	var driveHTTPCalled bool
+	driveHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		driveHTTPCalled = true
+		w.WriteHeader(http.StatusCreated)
+	})
+
+	server := httptest.NewServer(New(Options{
+		Upstream: target,
+		Routes:   store,
+		Logger:   discardLogger(),
+		Local:    localServer,
+		Drive:    driveHandler,
+	}))
+	t.Cleanup(server.Close)
+
+	// 1. /api/v1/files routes directly to Drive HTTP handler.
+	resp, err := http.Post(server.URL+"/api/v1/files", "application/octet-stream", strings.NewReader("abc"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if !driveHTTPCalled || resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected Drive handler on /api/v1/files, status=%d called=%t", resp.StatusCode, driveHTTPCalled)
+	}
+
+	// 2. Unlisted files.list routes to Go local server (returns 401 UNAUTHORIZED without calling TS upstream).
+	rpcResp, err := http.Post(server.URL+"/rpc/files/list", "application/json", strings.NewReader(`{"json":{}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rpcBody, _ := io.ReadAll(rpcResp.Body)
+	_ = rpcResp.Body.Close()
+	if rpcResp.StatusCode != http.StatusUnauthorized || strings.Contains(string(rpcBody), `"from":"upstream"`) {
+		t.Fatalf("expected Go auth 401 on files.list, status=%d body=%s", rpcResp.StatusCode, string(rpcBody))
+	}
+
+	// 3. Explicit files.get: proxy override honors routes.json kill-switch and forwards to TS upstream.
+	getResp, err := http.Post(server.URL+"/rpc/files/get", "application/json", strings.NewReader(`{"json":{"fileId":"1"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	getBody, _ := io.ReadAll(getResp.Body)
+	_ = getResp.Body.Close()
+	if !strings.Contains(string(getBody), `"from":"upstream"`) || goGetCalled {
+		t.Fatalf("expected explicit proxy override on files.get, status=%d body=%s", getResp.StatusCode, string(getBody))
 	}
 }

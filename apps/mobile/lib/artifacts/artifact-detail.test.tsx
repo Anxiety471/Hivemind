@@ -13,9 +13,11 @@ i18n.loadAndActivate({ locale: "en", messages: {} });
 const state = vi.hoisted(() => ({
   id: "a",
   focused: true,
+  mimeType: "text/plain",
   back: vi.fn(),
   alert: vi.fn(),
   remove: vi.fn(),
+  share: vi.fn(),
   options: {} as { headerRight?: () => ReactNode },
 }));
 vi.mock("expo-secure-store", () => ({
@@ -76,8 +78,30 @@ vi.mock("./artifacts", () => ({
   removeArtifact: state.remove,
 }));
 vi.mock("./artifact-open", () => ({
-  writeArtifactCacheFile: () => ({ text: async () => "text", uri: "file:///test" }),
-  shareLocalFile: vi.fn(),
+  downloadMobileArtifact: async () => ({ text: async () => "text", uri: "file:///test" }),
+  readBoundedText: async (file: { text: () => Promise<string> }) => file.text(),
+  shareLocalFile: state.share,
+}));
+vi.mock("../files/files", () => ({
+  getDriveFile: async (id: string) => ({
+    id,
+    botId: null,
+    groupId: null,
+    runId: null,
+    folderId: null,
+    source: "chat",
+    name: id,
+    description: null,
+    mimeType: state.mimeType,
+    size: 4,
+    hash: "hash",
+    version: 1,
+    versionCount: 1,
+    trashedAt: null,
+    createdAt: "2026-11-22T10:00:00.000Z",
+    updatedAt: "2026-11-22T10:00:00.000Z",
+    contentUrl: `/api/v1/files/${id}/content`,
+  }),
 }));
 vi.mock("../layout/floating-header", () => ({ useFloatingHeaderInset: () => 0 }));
 vi.mock("../layout/side-insets", () => ({ useSideInsets: () => ({}) }));
@@ -97,9 +121,11 @@ beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   state.id = "a";
   state.focused = true;
+  state.mimeType = "text/plain";
   state.back.mockReset();
   state.alert.mockReset();
   state.remove.mockReset();
+  state.share.mockReset();
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -133,6 +159,22 @@ async function startDelete() {
   state.alert.mockClear();
   return pending;
 }
+it("shares a video preview from the artifact header", async () => {
+  state.mimeType = "video/mp4";
+  await render();
+  const node = document.createElement("div");
+  const buttons = createRoot(node);
+  try {
+    act(() => buttons.render(state.options.headerRight?.()));
+    await act(async () =>
+      node.querySelector<HTMLElement>('[aria-label="Share"]')?.click(),
+    );
+    expect(state.share).toHaveBeenCalledExactlyOnceWith("file:///test", "video/mp4", "a");
+  } finally {
+    act(() => buttons.unmount());
+  }
+});
+
 it("returns after deleting the focused artifact", async () => {
   const pending = await startDelete();
   await act(async () => pending.resolve());

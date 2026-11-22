@@ -137,6 +137,9 @@ describe("apiProxy", () => {
       headers: { "x-forwarded-for": "203.0.113.9, 127.0.0.1" },
     });
 
+    const files = await fetch(`http://127.0.0.1:${port}/api/v1/files/f1/content`);
+    expect(await files.json()).toMatchObject({ marker: "rpc" });
+
     const api = await fetch(`http://127.0.0.1:${port}/api/devices`);
     expect(await api.json()).toMatchObject({ marker: "api" });
   });

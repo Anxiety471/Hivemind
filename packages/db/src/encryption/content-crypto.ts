@@ -276,6 +276,135 @@ export function artifactKeyId(head: Uint8Array): string | undefined {
   return Buffer.from(head.subarray(start, start + length)).toString("utf8");
 }
 
+export interface ArtifactHeaderInfo {
+  keyId: string;
+  /** Raw header bytes, which every segment's AAD binds. */
+  header: Buffer;
+  noncePrefix: Buffer;
+  headerLength: number;
+}
+
+/** Parses an RKZA v1 header from bytes that contain the whole header (a 512-byte head is enough). */
+export function parseArtifactHeader(head: Uint8Array): ArtifactHeaderInfo | undefined {
+  if (!isSealedArtifact(head) || head.length < ARTIFACT_MAGIC.length + 1) return undefined;
+  const keyLength = head[ARTIFACT_MAGIC.length]!;
+  const headerLength = ARTIFACT_MAGIC.length + 1 + keyLength + NONCE_PREFIX_BYTES;
+  if (keyLength === 0 || head.length < headerLength) return undefined;
+  const header = Buffer.from(head.subarray(0, headerLength));
+  const keyStart = ARTIFACT_MAGIC.length + 1;
+  return {
+    keyId: header.subarray(keyStart, keyStart + keyLength).toString("utf8"),
+    header,
+    noncePrefix: header.subarray(headerLength - NONCE_PREFIX_BYTES),
+    headerLength,
+  };
+}
+
+/** Plaintext length from a sealed blob's total size, or undefined when the framing is invalid. */
+export function sealedArtifactPlainSize(
+  headerLength: number,
+  sealedSize: number,
+): number | undefined {
+  const segment = ARTIFACT_CHUNK + TAG_BYTES;
+  const payload = sealedSize - headerLength;
+  if (payload < TAG_BYTES) return undefined;
+  const fullSegments = Math.floor(payload / segment);
+  const lastSealed = payload % segment;
+  if (lastSealed < TAG_BYTES) return undefined;
+  return fullSegments * ARTIFACT_CHUNK + (lastSealed - TAG_BYTES);
+}
+
+export interface ArtifactByteRange {
+  start: number;
+  endInclusive: number;
+}
+
+/**
+ * Decrypts an inclusive plaintext byte range from a random-access RKZA v1 blob. `readSealed`
+ * streams sealed bytes for the absolute interval it is given, so only the segments the range
+ * touches are read; each segment's nonce counter and final flag come from its real position.
+ */
+export async function* openArtifactRange(
+  keyFor: (keyId: string) => Promise<DataKey>,
+  fileId: string,
+  head: Uint8Array,
+  sealedSize: number,
+  range: ArtifactByteRange,
+  readSealed: (start: number, endInclusive: number) => AsyncIterable<Uint8Array>,
+): AsyncGenerator<Buffer> {
+  const parsed = parseArtifactHeader(head);
+  if (!parsed) throw new ContentDecryptionError("Encrypted artifact header is malformed");
+  const key = await keyFor(parsed.keyId);
+  if (key.id !== parsed.keyId)
+    throw new ContentDecryptionError("Encrypted artifact names another key");
+  const plainSize = sealedArtifactPlainSize(parsed.headerLength, sealedSize);
+  if (plainSize === undefined || plainSize === 0)
+    throw new ContentDecryptionError("Encrypted artifact is truncated");
+  if (range.start < 0 || range.endInclusive < range.start || range.endInclusive >= plainSize)
+    throw new ContentDecryptionError("Encrypted artifact range is out of bounds");
+
+  const segment = ARTIFACT_CHUNK + TAG_BYTES;
+  const payload = sealedSize - parsed.headerLength;
+  const lastSegment = Math.floor(payload / segment);
+  const startSegment = Math.floor(range.start / ARTIFACT_CHUNK);
+  const endSegment = Math.floor(range.endInclusive / ARTIFACT_CHUNK);
+  if (endSegment > lastSegment) throw new ContentDecryptionError("Encrypted artifact is truncated");
+  const sealedStart = parsed.headerLength + startSegment * segment;
+  const sealedEnd =
+    endSegment === lastSegment
+      ? sealedSize - 1
+      : parsed.headerLength + (endSegment + 1) * segment - 1;
+
+  const crypto = segmentCrypto(parsed.header, parsed.noncePrefix, key.spaceId, fileId);
+  let counter = startSegment;
+  let remaining = range.endInclusive - range.start + 1;
+  let firstOffset = range.start % ARTIFACT_CHUNK;
+  let pending = Buffer.alloc(0);
+  const openSegment = (sealed: Buffer, final: boolean): Buffer => {
+    if (sealed.length < TAG_BYTES)
+      throw new ContentDecryptionError("Encrypted artifact is truncated");
+    try {
+      const decipher = createDecipheriv("aes-256-gcm", key.key, crypto.nonce(counter++));
+      decipher.setAAD(crypto.aad(final));
+      decipher.setAuthTag(sealed.subarray(sealed.length - TAG_BYTES));
+      return Buffer.concat([
+        decipher.update(sealed.subarray(0, sealed.length - TAG_BYTES)),
+        decipher.final(),
+      ]);
+    } catch {
+      throw new ContentDecryptionError("Encrypted artifact failed authentication");
+    }
+  };
+  const trim = (plaintext: Buffer): Buffer => {
+    const from = Math.min(firstOffset, plaintext.length);
+    firstOffset = 0;
+    const out = plaintext.subarray(from);
+    if (out.length <= remaining) {
+      remaining -= out.length;
+      return out;
+    }
+    const limited = out.subarray(0, remaining);
+    remaining = 0;
+    return limited;
+  };
+
+  for await (const chunk of readSealed(sealedStart, sealedEnd)) {
+    pending = pending.length ? Buffer.concat([pending, chunk]) : Buffer.from(chunk);
+    while (pending.length >= segment) {
+      const sealed = pending.subarray(0, segment);
+      pending = pending.subarray(segment);
+      const plaintext = trim(openSegment(sealed, false));
+      if (plaintext.length > 0) yield plaintext;
+      if (remaining === 0) return;
+    }
+  }
+  if (pending.length > 0) {
+    const plaintext = trim(openSegment(pending, counter === lastSegment));
+    if (plaintext.length > 0) yield plaintext;
+  }
+  if (remaining > 0) throw new ContentDecryptionError("Encrypted artifact is truncated");
+}
+
 export async function* openArtifact(
   keyFor: (keyId: string) => Promise<DataKey>,
   fileId: string,

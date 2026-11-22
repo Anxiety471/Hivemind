@@ -99,12 +99,27 @@ function apiTarget(api: string) {
   };
 }
 
-function forwardRequests(api: string): Middleware {
-  const target = apiTarget(api);
-  const transport = target.secure ? https : http;
-  const agent = new transport.Agent({ keepAlive: true });
+function forwardRequests(api: string, rpcApi?: string): Middleware {
+  const apiDest = apiTarget(api);
+  const rpcDest = rpcApi ? apiTarget(rpcApi) : undefined;
+  const apiTransport = apiDest.secure ? https : http;
+  const rpcTransport = rpcDest ? (rpcDest.secure ? https : http) : apiTransport;
+  const apiAgent = new apiTransport.Agent({ keepAlive: true });
+  const rpcAgent = rpcDest ? new rpcTransport.Agent({ keepAlive: true }) : apiAgent;
   return (req, res, next) => {
     if (!forwardsToApi(req.url)) return next();
+    const toRpc =
+      rpcDest !== undefined &&
+      req.url !== undefined &&
+      (req.url === "/rpc" ||
+        req.url.startsWith("/rpc/") ||
+        req.url.startsWith("/rpc?") ||
+        req.url === "/api/v1/files" ||
+        req.url.startsWith("/api/v1/files/") ||
+        req.url.startsWith("/api/v1/files?"));
+    const target = toRpc ? rpcDest : apiDest;
+    const transport = toRpc ? rpcTransport : apiTransport;
+    const agent = toRpc ? rpcAgent : apiAgent;
     const upstream = transport.request(
       {
         hostname: target.hostname,
@@ -219,7 +234,7 @@ export function createWebServer(root: string, env: NodeJS.ProcessEnv): http.Serv
     assetsDir: path.join(dist, "assets"),
     assetsUrl: "/assets/",
   });
-  chain.push(forwardRequests(settings.api), staticFiles(dist), spaFallback(dist));
+  chain.push(forwardRequests(settings.api, settings.rpcApi), staticFiles(dist), spaFallback(dist));
   afterFallback();
   chain.push(staticFiles(dist));
   return server;

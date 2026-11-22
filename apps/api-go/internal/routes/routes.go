@@ -149,12 +149,19 @@ func (s *Store) ProcedureMode(name string) Mode {
 
 // Lookup answers the mode and whether the procedure is declared read-only.
 func (s *Store) Lookup(path string) (Mode, bool) {
+	mode, readOnly, _ := s.LookupExplicit(path)
+	return mode, readOnly
+}
+
+// LookupExplicit answers the mode, whether it is declared read-only, and whether
+// the routing table contained an explicit entry for the procedure.
+func (s *Store) LookupExplicit(path string) (Mode, bool, bool) {
 	config := s.current.Load()
 	key := ProcedureKey(path)
 	if route, ok := config.Routes[key]; ok {
-		return route.Mode, route.ReadOnly
+		return route.Mode, route.ReadOnly, true
 	}
-	return config.Default, false
+	return config.Default, false, false
 }
 
 // HasLocal reports whether any entry asks this build to serve a procedure,

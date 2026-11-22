@@ -11,6 +11,7 @@ import {
   jsonKeyIds,
   jsonNeedsSealing,
   openArtifact,
+  openArtifactRange,
   openJson,
   querySearchTokens,
   sealArtifact,
@@ -159,5 +160,116 @@ describe("artifact stream", () => {
 
   it("does not treat plaintext as sealed", () => {
     expect(isSealedArtifact(Buffer.from("%PDF-1.7"))).toBe(false);
+  });
+});
+
+describe("artifact range stream", () => {
+  const size = 64 * 1024 * 3 + 123;
+
+  async function sealedBytes(bytes: Buffer) {
+    return collect(sealArtifact(key, "file-1", from(bytes)));
+  }
+
+  function rangeReader(bytes: Buffer) {
+    const served: Array<{ start: number; end: number }> = [];
+    const read = (start: number, end: number) => {
+      served.push({ start, end });
+      return from(bytes.subarray(start, end + 1));
+    };
+    return { read, served };
+  }
+
+  it("reads only the sealed segments a range touches", async () => {
+    const bytes = randomBytes(size);
+    const sealed = await sealedBytes(bytes);
+    // Corrupt the first segment: a reader that starts at the file head would fail authentication.
+    const corrupted = Buffer.from(sealed);
+    corrupted[600] = corrupted[600]! ^ 0xff;
+    const { read, served } = rangeReader(corrupted);
+    const opened = await collect(
+      openArtifactRange(
+        async () => key,
+        "file-1",
+        corrupted.subarray(0, 512),
+        corrupted.length,
+        { start: 70_000, endInclusive: 70_100 },
+        read,
+      ),
+    );
+    expect(opened.equals(bytes.subarray(70_000, 70_101))).toBe(true);
+    expect(served).toHaveLength(1);
+    expect(served[0]!.start).toBe(19 + 65_552);
+    await expect(collect(openArtifact(async () => key, "file-1", from(corrupted)))).rejects.toThrow(
+      ContentDecryptionError,
+    );
+  });
+
+  it("spans segment boundaries and verifies the final segment", async () => {
+    const bytes = randomBytes(size);
+    const sealed = await sealedBytes(bytes);
+    const read = (start: number, end: number) => from(sealed.subarray(start, end + 1));
+    for (const range of [
+      { start: 0, endInclusive: 0 },
+      { start: 65_535, endInclusive: 65_536 },
+      { start: size - 1, endInclusive: size - 1 },
+      { start: 0, endInclusive: size - 1 },
+    ]) {
+      const opened = await collect(
+        openArtifactRange(
+          async () => key,
+          "file-1",
+          sealed.subarray(0, 512),
+          sealed.length,
+          range,
+          read,
+        ),
+      );
+      expect(opened.equals(bytes.subarray(range.start, range.endInclusive + 1))).toBe(true);
+    }
+
+    const tampered = Buffer.from(sealed);
+    tampered[tampered.length - 1] = tampered[tampered.length - 1]! ^ 0xff;
+    await expect(
+      collect(
+        openArtifactRange(
+          async () => key,
+          "file-1",
+          tampered.subarray(0, 512),
+          tampered.length,
+          { start: size - 4, endInclusive: size - 1 },
+          (start, end) => from(tampered.subarray(start, end + 1)),
+        ),
+      ),
+    ).rejects.toThrow(ContentDecryptionError);
+  });
+
+  it("rejects out-of-bounds ranges and another file's id", async () => {
+    const bytes = randomBytes(size);
+    const sealed = await sealedBytes(bytes);
+    const read = (start: number, end: number) => from(sealed.subarray(start, end + 1));
+    await expect(
+      collect(
+        openArtifactRange(
+          async () => key,
+          "file-1",
+          sealed.subarray(0, 512),
+          sealed.length,
+          { start: size - 2, endInclusive: size },
+          read,
+        ),
+      ),
+    ).rejects.toThrow(ContentDecryptionError);
+    await expect(
+      collect(
+        openArtifactRange(
+          async () => key,
+          "file-2",
+          sealed.subarray(0, 512),
+          sealed.length,
+          { start: 0, endInclusive: 10 },
+          read,
+        ),
+      ),
+    ).rejects.toThrow(ContentDecryptionError);
   });
 });

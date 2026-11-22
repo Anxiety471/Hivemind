@@ -19,6 +19,21 @@ const SPACE_CHANGE_PROCEDURES: Record<string, readonly SpaceChangeKind[]> = {
   // Activity leaves out archived bots.
   "bots.restore": ["runs", "routines"],
   "bots.remove": ["runs", "routines"],
+  // Space Drive mutations.
+  "files.createFolder": ["files"],
+  "files.renameFolder": ["files"],
+  "files.moveFolder": ["files"],
+  "files.trashFolder": ["files"],
+  "files.restoreFolder": ["files"],
+  "files.deleteFolder": ["files"],
+  "files.rename": ["files"],
+  "files.move": ["files"],
+  "files.trash": ["files"],
+  "files.restore": ["files"],
+  "files.deletePermanent": ["files"],
+  "files.emptyTrash": ["files"],
+  "artifacts.create": ["files"],
+  "artifacts.remove": ["files"],
 };
 
 export function spaceChangesFor(path: readonly string[]): readonly SpaceChangeKind[] {

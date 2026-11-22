@@ -79,3 +79,53 @@ func TestUnsupportedMasterKeyProviderStopsStartup(t *testing.T) {
 		}
 	}
 }
+
+func TestFileUploadBytesAndObjectStorageFromEnv(t *testing.T) {
+	if got := fileUploadBytes("", 10*1024*1024); got != 250*1024*1024 {
+		t.Errorf("default fileUploadBytes = %d", got)
+	}
+	if got := fileUploadBytes("", 500*1024*1024); got != 500*1024*1024 {
+		t.Errorf("inherited larger upload bytes = %d", got)
+	}
+	if got := fileUploadBytes("4096", 10*1024*1024); got != 2000*1024*1024 {
+		t.Errorf("capped fileUploadBytes = %d", got)
+	}
+
+	if cfg, err := objectStorageFromEnv(func(string) string { return "" }); err != nil || cfg != nil {
+		t.Errorf("empty bucket should yield nil, nil; got %+v, %v", cfg, err)
+	}
+	if _, err := objectStorageFromEnv(func(k string) string {
+		if k == "OBJECT_STORAGE_BUCKET" {
+			return "b"
+		}
+		return ""
+	}); err == nil {
+		t.Error("expected error when credentials are missing")
+	}
+	if _, err := objectStorageFromEnv(func(k string) string {
+		return map[string]string{
+			"OBJECT_STORAGE_BUCKET":            "b",
+			"OBJECT_STORAGE_ACCESS_KEY_ID":     "ak",
+			"OBJECT_STORAGE_SECRET_ACCESS_KEY": "sk",
+			"OBJECT_STORAGE_ENDPOINT":          "ftp://bad",
+		}[k]
+	}); err == nil {
+		t.Error("expected error for non-http endpoint")
+	}
+	cfg, err := objectStorageFromEnv(func(k string) string {
+		return map[string]string{
+			"OBJECT_STORAGE_BUCKET":            "my-bucket",
+			"OBJECT_STORAGE_ACCESS_KEY_ID":     "ak",
+			"OBJECT_STORAGE_SECRET_ACCESS_KEY": "sk",
+			"OBJECT_STORAGE_ENDPOINT":          "https://s3.internal:9000",
+			"OBJECT_STORAGE_PREFIX":            "/prod/files/",
+			"OBJECT_STORAGE_PATH_STYLE":        "true",
+		}[k]
+	})
+	if err != nil || cfg == nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Prefix != "prod/files" || !cfg.PathStyle || cfg.Region != "us-east-1" {
+		t.Errorf("unexpected parsed config: %+v", cfg)
+	}
+}

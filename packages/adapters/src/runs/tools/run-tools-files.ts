@@ -6,7 +6,7 @@ import {
   messageBlockForArtifact,
 } from "@rakazo/core";
 import type { Artifact, Prisma } from "@rakazo/db";
-import { getLogger } from "@rakazo/logging";
+import { bestEffort, getLogger } from "@rakazo/logging";
 import { resolveBotWorkspacePath } from "../../computers/screens/computer-support.js";
 import { generateMediaFromTool } from "../../media/media-generation-tools.js";
 import { mediaDelivery, scheduleMediaPoll } from "../../media/media-video-poll.js";
@@ -42,7 +42,7 @@ function runWorkspace(ctx: RunContext, call: ToolCall): RunWorkspace {
   };
 }
 
-async function artifactGroupId(ctx: RunContext): Promise<string | undefined> {
+export async function artifactGroupId(ctx: RunContext): Promise<string | undefined> {
   const threadId = ctx.source.conversationThreadId;
   if (!threadId || threadId === ctx.thread.id) return ctx.thread.groupId ?? undefined;
   const conversation = await ctx.deps.prisma.thread.findFirst({
@@ -193,6 +193,10 @@ export const fileTools: ToolHandlers = {
         await deps.events
           .notify(run.threadId, committed.eventSeq, committed.firstResponseRunId)
           .catch((error) => getLogger().error("thread message realtime notification", error));
+      await bestEffort(
+        "attach_file space files change",
+        Promise.resolve(deps.events.publishSpaceChange?.(run.spaceId, "files")),
+      );
       await recordComputerAction(ctx, call, "attach_file", filePath);
       return call.finish({ ok: true, artifactId: saved.artifactId, path: filePath });
     } catch (error) {
@@ -240,7 +244,12 @@ export async function saveWorkspaceFile(
   const { deps, run } = ctx;
   if (!deps.artifacts) throw new Error("artifact storage unavailable");
   return attachWorkspaceFileToThread(
-    { prisma: deps.prisma, artifacts: deps.artifacts, maxUploadSizeBytes: deps.maxUploadSizeBytes },
+    {
+      prisma: deps.prisma,
+      artifacts: deps.artifacts,
+      maxUploadSizeBytes: deps.maxUploadSizeBytes,
+      maxFileUploadSizeBytes: deps.maxFileUploadSizeBytes,
+    },
     {
       spaceId: run.spaceId,
       userId: run.userId,

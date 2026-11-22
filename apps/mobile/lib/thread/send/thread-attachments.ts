@@ -1,8 +1,10 @@
 import type { MenuAction } from "@expo/ui/community/menu";
 import { ph, t } from "@lingui/core/macro";
 import { useLingui } from "@lingui/react/macro";
-import { attachmentMaxBytes, attachmentMaxCount } from "@rakazo/contracts";
+import type { DriveFile } from "@rakazo/contracts";
+import { attachmentMaxBytes, attachmentMaxCount, fileUploadMaxBytes } from "@rakazo/contracts";
 import { attachmentsForThread } from "@rakazo/core";
+import { useRouter } from "expo-router";
 import type { RefObject } from "react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ThreadComposerHandle } from "../../../components/composer/thread-composer";
@@ -23,8 +25,12 @@ import {
   readSharedFiles,
   takePhoto,
 } from "../../composer/pick-attachments";
-import { attachmentCountSkipReason } from "../../composer/pick-attachments-filter";
+import {
+  attachmentCountSkipReason,
+  pickedAttachment,
+} from "../../composer/pick-attachments-filter";
 import { useFileDrop } from "../../composer/use-file-drop";
+import { subscribeDriveFilePick } from "../../files/drive-file-pick";
 
 export type PendingAttachment = PickedAttachment & { threadKey: string };
 
@@ -50,7 +56,10 @@ function releaseShareCopy(uri: string) {
 
 function retainedDraftBytes(list: readonly PendingAttachment[]): number {
   let total = 0;
-  for (const item of list) total += Math.floor((item.contentBase64.length * 3) / 4);
+  for (const item of list)
+    total += item.contentBase64
+      ? Math.floor((item.contentBase64.length * 3) / 4)
+      : (item.size ?? 0);
   return total;
 }
 
@@ -90,11 +99,16 @@ export function useThreadAttachments({
   botId?: string;
   groupId?: string;
   readOnly: boolean;
-  uploadConfig?: { maxUploadSizeBytes?: number; maxAttachmentsPerMessage?: number };
+  uploadConfig?: {
+    maxUploadSizeBytes?: number;
+    maxFileUploadSizeBytes?: number;
+    maxAttachmentsPerMessage?: number;
+  };
   /** The chat's draft key; unsent attachments stay under it between visits to the chat. */
   draftScope?: ComposerDraftScope;
 }) {
   const { t } = useLingui();
+  const router = useRouter();
   const threadKey = groupId ?? botId;
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>(() =>
     draftScope ? (retainedDraftAttachments.get(retainedScopeKey(draftScope)) ?? []) : [],
@@ -149,6 +163,7 @@ export function useThreadAttachments({
     { id: "library", title: t`Photo library`, image: "photo.on.rectangle" },
     { id: "camera", title: t`Camera`, image: "camera" },
     { id: "file", title: t`File`, image: "doc" },
+    { id: "files", title: t`Files`, image: "folder" },
   ];
 
   function attachFrom(source: string) {
@@ -156,7 +171,48 @@ export function useThreadAttachments({
     if (source === "library") void addAttachments(pickFromLibrary);
     else if (source === "camera") void addAttachments(takePhoto);
     else if (source === "file") void addAttachments(pickDocuments);
+    else if (source === "files" && threadKey)
+      router.push({ pathname: "/artifacts", params: { pick: "1", threadKey } });
   }
+
+  /** Attaches a Space Drive file by reference; the message never uploads it again. */
+  function addDriveAttachment(file: DriveFile) {
+    const targetKey = groupId ?? botId;
+    if (!targetKey) return;
+    const room = Math.max(
+      0,
+      attachmentMaxCount(uploadConfig) -
+        attachmentsForThread(pendingAttachmentsRef.current, targetKey).length,
+    );
+    if (room === 0) {
+      setAttachmentNotice(
+        t`Skipped ${ph({ items: formatAttachmentSkip({ name: file.name, reason: attachmentCountSkipReason(attachmentMaxCount(uploadConfig)) }) })}`,
+      );
+      return;
+    }
+    const attachment = {
+      ...pickedAttachment({
+        name: file.name,
+        mimeType: file.mimeType,
+        size: file.size,
+        contentBase64: "",
+        artifactId: file.id,
+      }),
+      threadKey: targetKey,
+    };
+    pendingAttachmentsRef.current = [...pendingAttachmentsRef.current, attachment];
+    setPendingAttachments((current) => [...current, attachment]);
+    setAttachmentNotice(null);
+  }
+  const addDriveAttachmentRef = useRef(addDriveAttachment);
+  addDriveAttachmentRef.current = addDriveAttachment;
+  useEffect(
+    () =>
+      threadKey
+        ? subscribeDriveFilePick(threadKey, (file) => addDriveAttachmentRef.current(file))
+        : undefined,
+    [threadKey],
+  );
 
   async function addAttachments(
     picker: (
@@ -174,7 +230,7 @@ export function useThreadAttachments({
     try {
       result = await picker(
         activePendingAttachments.length,
-        attachmentMaxBytes(uploadConfig),
+        fileUploadMaxBytes(uploadConfig),
         attachmentMaxCount(uploadConfig),
       );
     } catch (error) {
@@ -222,7 +278,7 @@ export function useThreadAttachments({
     },
     {
       enabled: !readOnly && Boolean(groupId ?? botId),
-      maxBytes: attachmentMaxBytes(uploadConfig),
+      maxBytes: fileUploadMaxBytes(uploadConfig),
       maxFiles: attachmentMaxCount(uploadConfig),
     },
   );
@@ -254,7 +310,11 @@ export function useIncomingShareImport({
   composerRef: RefObject<ThreadComposerHandle | null>;
   readOnly: boolean;
   threadKey: string | undefined;
-  uploadConfig?: { maxUploadSizeBytes?: number; maxAttachmentsPerMessage?: number };
+  uploadConfig?: {
+    maxUploadSizeBytes?: number;
+    maxFileUploadSizeBytes?: number;
+    maxAttachmentsPerMessage?: number;
+  };
 }) {
   const {
     importingShare,
@@ -292,7 +352,7 @@ export function useIncomingShareImport({
         const result = await readSharedFiles(
           share.files,
           attachments.activePendingAttachments.length,
-          attachmentMaxBytes(uploadConfig),
+          fileUploadMaxBytes(uploadConfig),
           attachmentMaxCount(uploadConfig),
         );
         if (!active || committedThread.current !== threadKey || !isIncomingShareCurrent(share)) {

@@ -236,7 +236,6 @@ export const MessageView = memo(function MessageView({
         </div>
       ) : null}
       <ReplyLine
-        target={artifactTarget}
         message={message}
         fallbackText={replyParent ? previewMessageText(replyParent) : undefined}
         author={
@@ -561,11 +560,7 @@ export const MessageView = memo(function MessageView({
                 key={i}
                 className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
               >
-                <ArtifactImage
-                  target={artifactTarget}
-                  artifactId={block.artifactId}
-                  name={block.name}
-                />
+                <ArtifactImage artifactId={block.artifactId} name={block.name} />
               </div>
             );
           }
@@ -576,7 +571,6 @@ export const MessageView = memo(function MessageView({
                 className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
               >
                 <ArtifactFileCard
-                  target={artifactTarget}
                   artifactId={block.artifactId}
                   name={block.name}
                   mimeType={block.mimeType}

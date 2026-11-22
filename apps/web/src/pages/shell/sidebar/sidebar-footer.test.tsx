@@ -55,7 +55,7 @@ async function render(
           onIntegrations={onIntegrations}
           onSkills={vi.fn()}
           onBoard={onBoard}
-          onArtifacts={() => {}}
+          onFiles={() => {}}
           onSettings={() => {}}
           onLogOut={() => {}}
           signingOut={false}
@@ -142,7 +142,7 @@ it("opens integrations and keeps the existing account actions and links", async 
   expect([...menu.querySelectorAll("button, a")].map((row) => row.textContent)).toEqual([
     "Settings",
     "Skills",
-    "Artifacts",
+    "Files",
     "Board",
     "Get the mobile app",
     "Docs",
@@ -279,7 +279,7 @@ async function renderOrganizations(
           onOpenChange={() => {}}
           onIntegrations={() => {}}
           onSkills={() => {}}
-          onArtifacts={() => {}}
+          onFiles={() => {}}
           onSettings={() => {}}
           onLogOut={() => {}}
           signingOut={false}

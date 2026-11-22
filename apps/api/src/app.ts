@@ -168,6 +168,7 @@ import {
   requestClientIp,
   withClientIp,
 } from "./http/client-ip.js";
+import { mountFileRoutes } from "./http/files-routes.js";
 import { healthRoutes } from "./http/health.js";
 import { startHourlySweep } from "./http/hourly-sweep.js";
 import { trackInFlightRequests } from "./http/in-flight-requests.js";
@@ -833,6 +834,7 @@ async function buildApp(overrides: CreateAppOverrides): Promise<AppHandles> {
       navLinks: env.navLinks,
       adminEmails: env.adminEmails,
       maxUploadSizeBytes: env.maxUploadSizeBytes,
+      maxFileUploadSizeBytes: env.maxFileUploadSizeBytes,
       maxAttachmentsPerMessage: env.maxAttachmentsPerMessage,
       agentRuntime: env.agentRuntime,
       defaultProvider: env.defaultProvider,
@@ -1033,7 +1035,11 @@ async function buildApp(overrides: CreateAppOverrides): Promise<AppHandles> {
     sandboxProvider: env.sandboxProvider,
     prisma,
   });
-  const requestSession = async (request: Request, disableRefresh = false) => {
+  const requestSession = async (
+    request: Request,
+    disableRefresh = false,
+    requestedSpaceId?: string | null,
+  ) => {
     // The bearer plugin turns a signed `Authorization: Bearer` into the session cookie.
     const session = await readSession(request, disableRefresh);
     if (!session?.user) return null;
@@ -1041,7 +1047,7 @@ async function buildApp(overrides: CreateAppOverrides): Promise<AppHandles> {
       requireMembership(
         prisma,
         session.user,
-        request.headers.get("x-rakazo-space-id"),
+        requestedSpaceId ?? request.headers.get("x-rakazo-space-id"),
         session.session,
       ),
     );
@@ -1111,6 +1117,15 @@ async function buildApp(overrides: CreateAppOverrides): Promise<AppHandles> {
   });
   mountAccountExportRoute(app, { prisma, auth, artifacts, home });
   mountAuditExportRoute(app, { prisma, sessionActor });
+  mountFileRoutes(app, {
+    prisma,
+    artifacts,
+    maxFileUploadSizeBytes: env.maxFileUploadSizeBytes,
+    events,
+    // The content endpoint accepts a Space in the query for <video>/<img> sources.
+    resolveActor: async (request, requestedSpaceId) =>
+      (await requestSession(request, false, requestedSpaceId))?.actor ?? null,
+  });
   mountVoiceHttpRoutes(app, { prisma, secrets, env }, async (c) => {
     const actor = await sessionActor(c.req.raw);
     if (actor) enrichLogContext({ "user.id": actor.userId, "space.id": actor.spaceId });

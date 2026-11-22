@@ -21,6 +21,8 @@ export const READ_ONLY_AGENT_TOOLS = new Set([
   "list_files",
   "list_fleet",
   "read_file",
+  "drive_list",
+  "drive_read",
   "read_history",
   "read_email",
   "search_history",

@@ -1,5 +1,11 @@
 import type { AppBootstrap, LabFeature, Me } from "@rakazo/contracts";
-import { ATTACHMENT_MAX_BYTES, attachmentMaxBytes, parseLabs } from "@rakazo/contracts";
+import {
+  ATTACHMENT_MAX_BYTES,
+  attachmentMaxBytes,
+  FILE_UPLOAD_MAX_BYTES,
+  fileUploadMaxBytes,
+  parseLabs,
+} from "@rakazo/contracts";
 import { displayIdentityResult } from "@rakazo/core";
 import { initialBootstrapTarget } from "./bootstrap-target";
 import { identityLabels } from "./bots/identity-display";
@@ -8,8 +14,13 @@ import { rpc, selectedSpaceId } from "./query/rpc";
 
 let labs: readonly LabFeature[] = [];
 let maxUploadSizeBytes = ATTACHMENT_MAX_BYTES;
+let maxFileUploadSizeBytes = FILE_UPLOAD_MAX_BYTES;
 export function getMaxUploadSizeBytes() {
   return maxUploadSizeBytes;
+}
+/** The streaming Space Drive upload limit, larger than the legacy base64 RPC one. */
+export function getMaxFileUploadSizeBytes() {
+  return maxFileUploadSizeBytes;
 }
 const capabilityListeners = new Set<() => void>();
 export function getLabs() {
@@ -124,5 +135,6 @@ function applyCapabilities(bootstrap: AppBootstrap): AppBootstrap {
 export function applyAccountCapabilities(me: Me) {
   labs = parseLabs(me.labs);
   maxUploadSizeBytes = attachmentMaxBytes(me);
+  maxFileUploadSizeBytes = fileUploadMaxBytes(me);
   for (const listener of capabilityListeners) listener();
 }

@@ -17,6 +17,9 @@ it("marks only the reads a change kind covers as stale", async () => {
     history: key("routines", "history"),
     usage: key("usage", "breakdown"),
     routines: key("routines", "list"),
+    files: key("files", "list"),
+    folderTree: key("files", "folderTree"),
+    artifacts: key("artifacts", "listSpace"),
     bots: key("bots", "list"),
   };
   for (const queryKey of Object.values(keys)) client.setQueryData(queryKey, []);
@@ -29,11 +32,22 @@ it("marks only the reads a change kind covers as stale", async () => {
   expect(invalidated()).toEqual(["runs", "history", "usage"]);
   await spaceChanged("routines", client);
   expect(invalidated()).toEqual(["runs", "history", "usage", "routines"]);
+  await spaceChanged("files", client);
+  expect(invalidated()).toEqual([
+    "runs",
+    "history",
+    "usage",
+    "routines",
+    "files",
+    "folderTree",
+    "artifacts",
+  ]);
 });
 
 it("knows which frames are read changes", () => {
   expect(isReadChangeKind("runs")).toBe(true);
   expect(isReadChangeKind("routines")).toBe(true);
+  expect(isReadChangeKind("files")).toBe(true);
   expect(isReadChangeKind("computerUpdates")).toBe(false);
   expect(isReadChangeKind("toString")).toBe(false);
 });

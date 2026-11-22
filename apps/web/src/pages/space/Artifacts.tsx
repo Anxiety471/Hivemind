@@ -64,9 +64,11 @@ import { useObjectUrl } from "../../lib/pages/use-object-url";
 import { desktopBridge } from "../../lib/platform/desktop";
 import { createStoredPreference } from "../../lib/preferences/stored-preference";
 import { useSave, useSpaceQueries } from "../../lib/query/query";
+import { rpc } from "../../lib/query/rpc";
 import type { ErrorDetails } from "../../lib/query/user-error";
 import { errorDetails, errorText } from "../../lib/query/user-error";
 import { useRedrawAtMidnight } from "../shell/chat/use-redraw-at-midnight";
+import { FilesPage } from "./files/FilesPage";
 
 type ViewMode = "grid" | "list";
 type DateFilter = "all" | "today" | "week" | "month";
@@ -117,7 +119,16 @@ function matchesCalendarDateFilter(
   return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth();
 }
 
+/**
+ * The old artifacts screen stays for servers that predate the Space Drive; its tests mock only
+ * the artifacts RPC. Every current server answers files.* and gets the consolidated page.
+ */
 export function ArtifactsPage() {
+  const files = (rpc as { files?: unknown }).files;
+  return files ? <FilesPage /> : <LegacyArtifactsPage />;
+}
+
+function LegacyArtifactsPage() {
   const { artifactId } = useParams<{ artifactId?: string }>();
   const navigate = useNavigate();
   const today = useRedrawAtMidnight();

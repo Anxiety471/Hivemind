@@ -16,16 +16,20 @@ export async function resolveNextArtifactVersion(
   prisma: Pick<PrismaClient, "artifact">,
   params: {
     spaceId: string;
-    botId: string;
+    botId?: string | null;
     groupId?: string | null;
+    folderId?: string | null;
     name: string;
   },
 ): Promise<{ rootArtifactId: string | null; version: number }> {
+  const driveScope = params.botId == null && params.groupId == null;
   const previous = await prisma.artifact.findFirst({
     where: {
       spaceId: params.spaceId,
-      botId: params.botId,
+      botId: params.botId ?? null,
       groupId: params.groupId ?? null,
+      ...(driveScope ? { folderId: params.folderId ?? null } : {}),
+      trashedAt: null,
       name: { equals: params.name, mode: "insensitive" },
       standalone: false,
       // An MCP app's hidden HTML never starts or joins a file's version history.
@@ -54,8 +58,9 @@ export async function withResolvedArtifactVersion<T>(
   prisma: Pick<PrismaClient, "$transaction">,
   params: {
     spaceId: string;
-    botId: string;
+    botId?: string | null;
     groupId?: string | null;
+    folderId?: string | null;
     name: string;
   },
   attempt: (db: Prisma.TransactionClient, version: ArtifactVersionWrite) => Promise<T>,
@@ -82,11 +87,15 @@ export async function withResolvedArtifactVersion<T>(
 // Same identity as the name lookup, so those publishes share one lock.
 function artifactVersionLockKey(params: {
   spaceId: string;
-  botId: string;
+  botId?: string | null;
   groupId?: string | null;
+  folderId?: string | null;
   name: string;
 }): string {
-  return [params.spaceId, params.botId, params.groupId ?? "", params.name.toLowerCase()].join(
+  if (params.botId == null && params.groupId == null) {
+    return [params.spaceId, "drive", params.folderId ?? "", params.name.toLowerCase()].join("\u001f");
+  }
+  return [params.spaceId, params.botId ?? "", params.groupId ?? "", params.name.toLowerCase()].join(
     "\u001f",
   );
 }

@@ -12,6 +12,7 @@ export const DEVICE_SOCKET = `^${USER_DEVICE_CONNECT_PATH}(?:\\?|$)`;
  * user's own computer keeps its device socket open there, so it is anchored to the exact path.
  */
 export const API_ROUTES: Readonly<Record<string, boolean>> = {
+  "/api/v1/files": false,
   "/api": false,
   [DEVICE_SOCKET]: true,
   "/rpc": false,
@@ -69,7 +70,10 @@ export function apiProxy(
   return Object.fromEntries(
     Object.entries(API_ROUTES).map(([route, upgrades]) => [
       route,
-      options(upgrades, route === "/rpc" && rpcTarget ? rpcTarget : target),
+      options(
+        upgrades,
+        (route === "/rpc" || route === "/api/v1/files") && rpcTarget ? rpcTarget : target,
+      ),
     ]),
   );
 }

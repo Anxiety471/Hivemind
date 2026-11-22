@@ -9,21 +9,18 @@ import {
 import { cn } from "@rakazo/ui-web";
 import { X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import type { ArtifactTarget } from "../../../lib/pages/artifact-open";
 import { useArtifactImage } from "../../../lib/pages/use-artifact-image";
 
 function ReplyThumbnail({
   attachment,
-  target,
   lazy = false,
 }: {
   lazy?: boolean;
   attachment: NonNullable<ReplyPreview["attachment"]>;
-  target: ArtifactTarget;
 }) {
   const [visible, setVisible] = useState(!lazy);
   const container = useRef<HTMLSpanElement>(null);
-  const src = useArtifactImage(target, attachment.artifactId, visible);
+  const src = useArtifactImage(attachment.artifactId, visible);
   useEffect(() => {
     if (!lazy) return;
     const element = container.current;
@@ -98,14 +95,12 @@ export function ComposerReplyPreview({
   text,
   quote,
   attachment,
-  target,
   onDismiss,
 }: {
   author: string;
   text: string;
   quote?: string | null;
   attachment?: ReplyPreview["attachment"];
-  target?: ArtifactTarget;
   onDismiss: () => void;
 }) {
   const { t } = useLingui();
@@ -130,9 +125,7 @@ export function ComposerReplyPreview({
       data-testid="reply-chip"
       className="mb-2 flex items-center gap-2 rounded-xl border border-border bg-muted px-3 py-1.5 text-body-sm"
     >
-      {attachment?.kind === "image" && target ? (
-        <ReplyThumbnail attachment={attachment} target={target} />
-      ) : null}
+      {attachment?.kind === "image" ? <ReplyThumbnail attachment={attachment} /> : null}
       <span className="min-w-0 flex-1 truncate text-muted-foreground" dir="auto">
         <span className="font-medium">{author}</span>:{" "}
         {replyLabel(quote, text, attachment, { photo: t`Photo`, attachment: t`Attachment` })}
@@ -152,13 +145,11 @@ export function ComposerReplyPreview({
 export function ReplyLine({
   message,
   fallbackText,
-  target,
   author,
   onJump,
 }: {
   message: ThreadMessage;
   fallbackText?: string;
-  target?: ArtifactTarget;
   author: string;
   onJump?: (id: string) => void;
 }) {
@@ -199,9 +190,7 @@ export function ReplyLine({
         dir="auto"
       >
         <span aria-hidden="true">↩ </span>
-        {attachment?.kind === "image" && target ? (
-          <ReplyThumbnail attachment={attachment} target={target} lazy />
-        ) : null}
+        {attachment?.kind === "image" ? <ReplyThumbnail attachment={attachment} lazy /> : null}
         <span className="min-w-0 truncate">
           {author}: {text}
         </span>

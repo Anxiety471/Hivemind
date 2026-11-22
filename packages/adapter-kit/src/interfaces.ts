@@ -493,6 +493,10 @@ export interface ObjectStorage {
   list(prefix: string): AsyncIterable<{ key: string; lastModified: Date }>;
   /** Missing keys are not an error. */
   delete(keys: readonly string[]): Promise<void>;
+  /** Object size, or undefined when the object does not exist. */
+  stat?(key: string): Promise<{ size: number } | undefined>;
+  /** Streams the inclusive byte interval [start, endInclusive]; throws when it does not exist. */
+  getRange?(key: string, start: number, endInclusive: number): AsyncIterable<Uint8Array>;
 }
 
 /** Identifies the data key being wrapped; implementations bind it into the wrap. */
@@ -519,11 +523,37 @@ export interface KeyProvider {
   unwrap(wrapped: WrappedDataKey, context: KeyWrapContext): Promise<Uint8Array>;
 }
 
+export interface ArtifactStreamPut {
+  name: string;
+  mimeType: string;
+  stream: AsyncIterable<Uint8Array>;
+}
+
+/** An inclusive plaintext byte interval. */
+export interface ArtifactByteRange {
+  start: number;
+  endInclusive: number;
+}
+
+export interface ArtifactStreamOptions {
+  /** Plaintext bytes to read; omit for the whole file. */
+  range?: ArtifactByteRange;
+}
+
 export interface ArtifactStore {
   describe(): AdapterDescriptor<{ stream: boolean }>;
   put(artifact: ArtifactPut, context: AdapterContext): Promise<{ id: string; hash: string }>;
   get(id: string, context: AdapterContext): Promise<Uint8Array>;
   remove(id: string, context: AdapterContext): Promise<void>;
+  putStream?(
+    artifact: ArtifactStreamPut,
+    context: AdapterContext,
+  ): Promise<{ id: string; hash: string; size: number }>;
+  getStream?(
+    id: string,
+    context: AdapterContext,
+    options?: ArtifactStreamOptions,
+  ): Promise<AsyncIterable<Uint8Array>>;
 }
 
 export interface SecretStore {

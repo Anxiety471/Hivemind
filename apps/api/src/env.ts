@@ -22,7 +22,12 @@ import { socialAuthFromFields } from "@rakazo/auth";
 import type { LabFeature, MinimumClientBuilds, NavLink } from "@rakazo/contracts";
 import { isPrivateNetworkHost, parseMinimumClientBuilds, parseNavLinks } from "@rakazo/contracts";
 import { parseCrispWebsiteId } from "@rakazo/contracts/content-security-policy";
-import { attachmentCountFromEnv, phoneCallSettings, uploadSizeFromEnv } from "@rakazo/core";
+import {
+  attachmentCountFromEnv,
+  fileUploadSizeFromEnv,
+  phoneCallSettings,
+  uploadSizeFromEnv,
+} from "@rakazo/core";
 import {
   resolveAuthSecret,
   resolveContentEncryption,
@@ -87,6 +92,7 @@ export interface AppEnv extends MessagingEnvironmentValues {
   phoneCallRingSeconds: number;
   phoneCallCooldownMinutes: number;
   maxUploadSizeBytes: number;
+  maxFileUploadSizeBytes: number;
   /** What one computer save may copy; the worker reads the same setting. */
   workspaceSaveLimits: WorkspaceExportLimits;
   maxAttachmentsPerMessage: number;
@@ -278,6 +284,7 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
     adminEmails: list(source.RAKAZO_ADMIN_EMAILS).map((email) => email.toLowerCase()),
     ...phoneCallSettings(source),
     maxUploadSizeBytes: uploadSizeFromEnv(source),
+    maxFileUploadSizeBytes: fileUploadSizeFromEnv(source),
     workspaceSaveLimits: workspaceSaveLimits(source),
     maxAttachmentsPerMessage: attachmentCountFromEnv(source),
     voiceSummaryMinChars: voiceSummaryMinCharsFromEnv(source.VOICE_SUMMARY_MIN_CHARS),

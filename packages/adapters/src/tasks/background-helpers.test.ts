@@ -469,11 +469,12 @@ describe("helpers that start helpers", () => {
       },
       run: { findFirst: vi.fn(async () => ({ sourceMessage: { threadId: "chat" } })) },
     });
+    // The harness declares a no-argument mock; the helper lookup passes a where clause.
     h.tx.run.findFirst = vi.fn(async (args: unknown) =>
       (args as { where: { clientNonce?: string } }).where.clientNonce
         ? null
         : ({ id: "outer-run" } as never),
-    );
+    ) as unknown as typeof h.tx.run.findFirst;
     h.tx.run.count.mockResolvedValue(cap);
     return h;
   }
