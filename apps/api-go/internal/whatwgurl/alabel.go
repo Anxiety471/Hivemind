@@ -11,20 +11,23 @@ import (
 )
 
 // ErrInvalidALabel is returned when a special-scheme host contains an `xn--`
-// label that is still not all-ASCII after UTS #46 mapping. Node/ICU rejects
-// that form; the upstream parser's x/net/idna fallback instead punycode-decodes
-// the non-ASCII bytes as "basic" code points and re-encodes the label, so it
-// accepts a host TypeScript's `new URL` throws on.
+// label that Node/ICU rejects under UTS #46 section 4. Two upstream gaps make
+// the check necessary:
 //
-// UTS #46 section 4 processing step 4.1 says a label starting with "xn--" must
-// contain no non-ASCII code point; step 4.2-4.4 then decode the rest and apply
-// the section 4.1 validity criteria (with CheckHyphens=false, VerifyDNSLength=
-// false and UseSTD3ASCIIRules=false, as the URL Standard's domain-to-ASCII
-// passes them). The upstream non-strict profile already performs those decode
-// and validity steps for a domain that contains non-ASCII, and its ASCII fast
-// path matches Node's pass-through for an all-ASCII host (Node does not
-// validate all-ASCII A-labels: `xn--a!` is accepted by both). Only the
-// all-ASCII precondition is missing, so this file supplies exactly that.
+//   - x/net/idna's fallback punycode-decodes the non-ASCII bytes before the
+//     last hyphen as "basic" code points and re-encodes the label, so it
+//     accepts `xn--bcüer-kva`; Node rejects any `xn--` label that is not
+//     all-ASCII after mapping (step 4.1).
+//   - its decoder rejects a delimiter at index zero (`xn---tda`), which ICU
+//     accepts and decodes to "ü". That class is decoded and validated here and
+//     the host is rewritten to its mapped ASCII form so the upstream ASCII
+//     fast path accepts it.
+//
+// Steps 4.2-4.4 decode the rest and apply the section 4.1 validity criteria
+// with CheckHyphens=false, VerifyDNSLength=false and UseSTD3ASCIIRules=false,
+// as the URL Standard's domain-to-ASCII passes them. An all-ASCII host skips
+// the gate because Node's fast path does not validate A-labels (`xn--a!` is
+// accepted by both).
 var ErrInvalidALabel = errors.New("whatwgurl: invalid A-label")
 
 // errInvalidHost is returned when mapping an A-label host produces a domain
@@ -32,10 +35,11 @@ var ErrInvalidALabel = errors.New("whatwgurl: invalid A-label")
 // domain-to-ASCII for the same reason.
 var errInvalidHost = errors.New("whatwgurl: invalid host")
 
-// alabelMapper is the WHATWG non-strict UTS #46 profile, used only to map one
-// non-ASCII code point at a time (a single code point can never itself be an
-// `xn--` label, so this never triggers A-label decoding) and to validate or
-// encode a label that is not an A-label.
+// alabelMapper is the WHATWG non-strict UTS #46 profile. It maps one non-ASCII
+// code point at a time (a single code point can never itself be an `xn--`
+// label, so that use never triggers A-label decoding), validates and encodes
+// labels that are not A-labels, and applies the section 4.1 validity checks to
+// a decoded A-label.
 var alabelMapper = idna.New(
 	idna.MapForLookup(),
 	idna.VerifyDNSLength(false),
