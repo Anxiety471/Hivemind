@@ -747,3 +747,29 @@ func TestCreateWritesTheNullableModelPin(t *testing.T) {
 		t.Fatalf("bare run pin = %v/%v", row["modelPinned"], row["modelProvider"])
 	}
 }
+
+func TestRoutineModelPinKeepsANullThinkingLevel(t *testing.T) {
+	database := openTestDB(t)
+	fixture := seedRunsFixture(t, database)
+	created := createRun(t, database, fixture, runs.CreateInput{
+		Trigger: "routine",
+		Model:   &runs.ModelPin{Provider: "openai", Model: "gpt-x", Thinking: nil, Pinned: true},
+	}, nil)
+	row := runRow(t, database, created.RunID)
+	if row["thinkingLevel"] != nil {
+		t.Errorf("thinkingLevel = %v, want NULL", row["thinkingLevel"])
+	}
+	if row["modelProvider"] != "openai" || row["modelId"] != "gpt-x" || row["modelPinned"] != true {
+		t.Errorf("pin = %v/%v/%v", row["modelProvider"], row["modelId"], row["modelPinned"])
+	}
+	// routineRunModelPin returns {} without a provider and model: the caller
+	// passes nil then; an empty pin object is the no-pin shape.
+	empty := createRun(t, database, fixture, runs.CreateInput{
+		Trigger: "routine",
+		Model:   &runs.ModelPin{},
+	}, nil)
+	emptyRow := runRow(t, database, empty.RunID)
+	if emptyRow["modelProvider"] != nil || emptyRow["modelId"] != nil || emptyRow["modelPinned"] != false {
+		t.Errorf("empty pin = %v/%v/%v", emptyRow["modelProvider"], emptyRow["modelId"], emptyRow["modelPinned"])
+	}
+}
