@@ -640,7 +640,8 @@ type ConversationTarget struct {
 	BotIDs          []string
 	HelperMessageID *string
 	// Note is the stop-by-message note: added once when a cancelled run is not a
-	// named routine (thread-stop.ts:145-152).
+	// named routine (thread-stop.ts:145-152). Only its BotID is read: the text
+	// is StoppedByMessageNote, as TypeScript's caller only supplies the bot.
 	Note *Note
 	// WriteNote creates each note as a system message in this same transaction
 	// (the thread message counter and a thread.message.created event, as
@@ -708,9 +709,10 @@ func conversationNotes(cancelled []Cancelled, note *Note) []Note {
 		unnamed = true
 	}
 	// The stop-by-message note is added when anything but a named routine was
-	// stopped, alongside the routine notes (thread-stop.ts:145-152).
+	// stopped, alongside the routine notes (thread-stop.ts:145-152). Its text is
+	// the fixed constant: TypeScript reads only the caller's bot there.
 	if note != nil && unnamed {
-		notes = append(notes, *note)
+		notes = append(notes, Note{BotID: note.BotID, Text: StoppedByMessageNote})
 	}
 	return notes
 }

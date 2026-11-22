@@ -62,6 +62,12 @@ func TestConversationNotesMatchThreadStop(t *testing.T) {
 	if notes[1].Text != StoppedByMessageNote || notes[1].BotID != "bot-2" {
 		t.Errorf("stop note = %+v", notes[1])
 	}
+	// The caller supplies only the bot: thread-stop.ts writes its own constant.
+	custom := conversationNotes([]Cancelled{{ID: "b", Trigger: "user", BotID: "bot-3"}},
+		&Note{BotID: "bot-3", Text: "something else"})
+	if len(custom) != 1 || custom[0].Text != StoppedByMessageNote {
+		t.Errorf("custom stop text leaked: %+v", custom)
+	}
 	// Only routines: the stop-by-message note is not added alongside them.
 	only := conversationNotes([]Cancelled{
 		{ID: "a", Trigger: "routine", RoutineID: &routineID, RoutineName: &name, BotID: "bot-1"},
