@@ -123,13 +123,16 @@ func (c Canceller) CancelActive(
 // CancelConversation is cancelThreadRuns (apps/api/src/threads/thread-stop.ts:63):
 // under the thread row lock, cancel the conversation's active runs and the
 // background helpers it started (or only the helper behind helperMessageID),
-// drop their resumable state, clear pending steering and append one
-// run.cancelled event per run in this thread.
+// drop their resumable state, clear pending steering, append one run.cancelled
+// event per run in this thread, and create the stop notes through WriteNote.
 //
-// It stops before the note messages and sandbox teardown: Notes returns, in
-// TypeScript order, the system notes the caller must create in this same
-// transaction (before it commits), and Leases/Computers are the teardown
-// coordinates a procedure snapshots before commit (finishThreadStop).
+// It stops before sandbox teardown: Leases/Computers are the teardown
+// coordinates a procedure snapshots before commit (finishThreadStop). EventSeq
+// is the cursor to notify with after commit.
+//
+// The caller owns the transaction and its budget: run it through
+// CancelConversationFor (or ThreadLockTransaction) so the thread-lock wait is
+// bounded as in TypeScript.
 func (c Canceller) CancelConversation(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -279,22 +282,31 @@ func (c Canceller) CancelConversation(
 		seq := event.Seq
 		result.EventSeq = &seq
 	}
+	// The notes come after the run.cancelled events and before the transient
+	// purge, exactly as thread-stop.ts:145-172 orders them. Each note's event seq
+	// becomes the cursor, so EventSeq ends at the last note, which is what
+	// finishThreadStop notifies with (thread-stop.ts:199-205). A cancel that owes
+	// a note and has no writer fails instead of returning text its caller could
+	// write after the notify: that is the R1 cursor trap.
+	notes := conversationNotes(result.Runs, target.Note)
+	if len(notes) > 0 && target.WriteNote == nil {
+		return ConversationCancel{}, ErrNotesNotWritten
+	}
+	for _, note := range notes {
+		seq, err := target.WriteNote(ctx, tx, note)
+		if err != nil {
+			return ConversationCancel{}, err
+		}
+		if seq <= 0 {
+			return ConversationCancel{}, fmt.Errorf("runs: WriteNote returned no event seq for %q", note.Text)
+		}
+		value := seq
+		result.EventSeq = &value
+	}
 	if len(ids) > 0 {
 		if err := deleteTransientRunEvents(ctx, tx, ids); err != nil {
 			return ConversationCancel{}, err
 		}
-	}
-	result.Notes = conversationNotes(result.Runs, target.Note)
-	if target.WriteNote != nil {
-		for _, note := range result.Notes {
-			seq, err := target.WriteNote(ctx, tx, note)
-			if err != nil {
-				return ConversationCancel{}, err
-			}
-			value := seq
-			result.EventSeq = &value
-		}
-		result.Notes = nil
 	}
 	for _, run := range result.Runs {
 		if run.Trigger == "helper" {
@@ -575,34 +587,36 @@ type ConversationTarget struct {
 	// Note is the stop-by-message note: added once when a cancelled run is not a
 	// named routine (thread-stop.ts:145-152).
 	Note *Note
-	// WriteNote, when set, creates each note as a system message in this same
-	// transaction and returns its event seq. Notes are written after the
-	// run.cancelled events and in TS order; EventSeq then ends at the last note's
-	// seq, which is what finishThreadStop notifies with (thread-stop.ts:199-205).
-	// When nil, the notes are returned for the caller to write, and EventSeq is
-	// only the last run.cancelled seq: the caller must use the seq its own note
-	// write returns for the notify.
+	// WriteNote creates each note as a system message in this same transaction
+	// (the thread message counter and a thread.message.created event, as
+	// createThreadMessageInTransaction + appendEventInTransaction do) and returns
+	// that event's seq. It is required whenever a note is due: the cancel writes
+	// the notes itself, in TS order, so EventSeq can only end at their last event.
 	WriteNote func(ctx context.Context, tx pgx.Tx, note Note) (int32, error)
 }
 
-// Note is one system message the caller creates in the same transaction: a
-// routine name that was stopped, or the stop-by-message note.
+// Note is one system message the cancel creates in this transaction: a routine
+// name that was stopped, or the stop-by-message note.
 type Note struct {
 	BotID string
 	Text  string
 }
+
+// ErrNotesNotWritten is the cancel refusing to hand back note text it did not
+// write: without WriteNote a caller could notify below the notes' cursor or
+// write them after the run.cancelled events were visible.
+var ErrNotesNotWritten = errors.New("runs: cancel conversation owes stop notes but has no WriteNote")
 
 // ConversationCancel is cancelThreadRuns' result.
 type ConversationCancel struct {
 	Runs      []Cancelled
 	Leases    []Lease
 	Computers []Computer
-	// EventSeq is the last event committed by the cancel. With WriteNote it
-	// includes the notes and is safe to notify with; without it, a non-empty
-	// Notes means EventSeq stops at the last run.cancelled event.
+	// EventSeq is the last event this cancel committed: the last note's seq when
+	// notes were due, else the last run.cancelled seq. finishThreadStop notifies
+	// with exactly this cursor. Nil when nothing was appended.
 	EventSeq       *int32
 	StoppedHelpers []Cancelled
-	Notes          []Note
 }
 
 // Lease is one computer_execution_leases row (expired ones still name the

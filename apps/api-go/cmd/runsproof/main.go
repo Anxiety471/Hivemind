@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/contentcrypto"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/effects"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/events"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/jobs"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/runs"
 )
@@ -50,6 +52,7 @@ type request struct {
 	At              string         `json:"at"`
 	KeepExisting    bool           `json:"keepExisting"`
 	Space2          string         `json:"space2Id"`
+	WriteNotes      bool           `json:"writeNotes"`
 }
 
 type cancelledOut struct {
@@ -74,7 +77,7 @@ type response struct {
 	Changed      bool            `json:"changed,omitempty"`
 	Cancelled    []cancelledOut  `json:"cancelled,omitempty"`
 	EventSeq     *int32          `json:"eventSeq,omitempty"`
-	Notes        []noteOut       `json:"notes,omitempty"`
+	NotesWritten int             `json:"notesWritten,omitempty"`
 	Leases       []leaseOut      `json:"leases,omitempty"`
 	Found        bool            `json:"found,omitempty"`
 	Run          *cancelledOut   `json:"run,omitempty"`
@@ -83,11 +86,6 @@ type response struct {
 	StoppedCount int             `json:"stoppedHelpers,omitempty"`
 	Computers    []computerOut   `json:"computers,omitempty"`
 	Raw          json.RawMessage `json:"raw,omitempty"`
-}
-
-type noteOut struct {
-	BotID string `json:"botId"`
-	Text  string `json:"text"`
 }
 
 type leaseOut struct {
@@ -239,6 +237,7 @@ func handle(ctx context.Context, database *db.DB, ring *contentcrypto.KeyRing, n
 		return response{OK: true, Cancelled: cancelledOuts(cancelled)}
 	case "cancelConversation":
 		var result runs.ConversationCancel
+		var notesWritten int
 		err := database.Tenant(ctx, actor, func(tx pgx.Tx) error {
 			target := runs.ConversationTarget{
 				SpaceID: in.SpaceID, ThreadID: in.ThreadID, BotIDs: in.BotIDs,
@@ -247,6 +246,19 @@ func handle(ctx context.Context, database *db.DB, ring *contentcrypto.KeyRing, n
 			if in.NoteText != "" {
 				target.Note = &runs.Note{BotID: in.NoteBotID, Text: in.NoteText}
 			}
+			spaceID := in.SpaceID
+			if spaceID == "" {
+				spaceID = actor.SpaceID
+			}
+			if in.WriteNotes {
+				if ring == nil {
+					return errors.New("writeNotes needs the content key ring")
+				}
+				target.WriteNote = func(ctx context.Context, tx pgx.Tx, note runs.Note) (int32, error) {
+					notesWritten += 1
+					return writeNote(ctx, tx, ring, spaceID, in.ThreadID, note)
+				}
+			}
 			var err error
 			result, err = canceller.CancelConversation(ctx, tx, target, now, nil)
 			return err
@@ -254,10 +266,7 @@ func handle(ctx context.Context, database *db.DB, ring *contentcrypto.KeyRing, n
 		if err != nil {
 			return response{Error: err.Error()}
 		}
-		out := response{OK: true, Cancelled: cancelledOuts(result.Runs), EventSeq: result.EventSeq}
-		for _, note := range result.Notes {
-			out.Notes = append(out.Notes, noteOut{note.BotID, note.Text})
-		}
+		out := response{OK: true, Cancelled: cancelledOuts(result.Runs), EventSeq: result.EventSeq, NotesWritten: notesWritten}
 		for _, lease := range result.Leases {
 			out.Leases = append(out.Leases, leaseOut{lease.ComputerID, lease.BotID, lease.RunID, lease.Fence})
 		}
@@ -329,4 +338,51 @@ func deref(value *string) string {
 		return ""
 	}
 	return *value
+}
+
+// writeNote is the driver's ConversationTarget.WriteNote: the same two writes
+// createThreadMessageInTransaction + appendEventInTransaction make for a system
+// note (thread counter, sealed blocks, thread.message.created), returning the
+// event seq the cancel uses as its notify cursor. A real stop procedure supplies
+// its message helper instead.
+func writeNote(
+	ctx context.Context,
+	tx pgx.Tx,
+	ring *contentcrypto.KeyRing,
+	spaceID, threadID string,
+	note runs.Note,
+) (int32, error) {
+	var seq int32
+	if err := tx.QueryRow(ctx, `UPDATE threads SET "nextMessageSeq" = "nextMessageSeq" + 1
+		WHERE id = $1 RETURNING "nextMessageSeq" - 1`, threadID).Scan(&seq); err != nil {
+		return 0, err
+	}
+	messageID := effects.NewID()
+	blocks := []any{map[string]any{"kind": "meta", "text": note.Text}}
+	sealed, err := ring.SealRow(ctx, "Message", map[string]any{
+		"id": messageID, "threadId": threadID, "blocks": blocks,
+	})
+	if err != nil {
+		return 0, err
+	}
+	blocksJSON, err := json.Marshal(sealed["blocks"])
+	if err != nil {
+		return 0, err
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO messages (id, "threadId", seq, role, blocks, "botId")
+		VALUES ($1, $2, $3, 'system', $4::jsonb, $5)`,
+		messageID, threadID, seq, string(blocksJSON), note.BotID); err != nil {
+		return 0, err
+	}
+	event, err := events.Append(ctx, tx, ring, events.Input{
+		SpaceID:  spaceID,
+		ThreadID: threadID,
+		BotID:    note.BotID,
+		Type:     "thread.message.created",
+		Payload:  map[string]any{"messageId": messageID, "role": "system", "blocks": blocks},
+	})
+	if err != nil {
+		return 0, err
+	}
+	return event.Seq, nil
 }

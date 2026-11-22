@@ -10,6 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/contentcrypto"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/effects"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/runs"
@@ -559,4 +560,78 @@ func mustEnv(t *testing.T, name string) string {
 		t.Fatalf("%s is required", name)
 	}
 	return value
+}
+
+func TestCancelConversationWritesItsNotesOrRefuses(t *testing.T) {
+	database := openTestDB(t)
+	fixture := seedRunsFixture(t, database)
+	// A deployment with content encryption off builds a pass-through ring; there
+	// is no nil-ring mode (a nil ring would silently skip sealed blocks).
+	ring := contentcrypto.NewKeyRing(nil, nil, contentcrypto.KeyRingOptions{})
+	ctx := context.Background()
+	created := createRun(t, database, fixture, runs.CreateInput{}, nil)
+	target := runs.ConversationTarget{
+		SpaceID:  fixture.spaceID,
+		ThreadID: fixture.threadID,
+		BotIDs:   []string{fixture.botID},
+		Note:     &runs.Note{BotID: fixture.botID, Text: runs.StoppedByMessageNote},
+	}
+
+	// A note is due and there is no writer: the cancel refuses rather than hand
+	// back text its caller could write after the notify, and writes nothing.
+	err := database.System(ctx, "cancel with an unwritten note", func(tx pgx.Tx) error {
+		_, err := runs.Canceller{Ring: ring}.CancelConversation(ctx, tx, target, time.Now(), nil)
+		return err
+	})
+	if !errors.Is(err, runs.ErrNotesNotWritten) {
+		t.Fatalf("cancel without a note writer = %v, want ErrNotesNotWritten", err)
+	}
+	if got := runRow(t, database, created.RunID)["status"]; got != "queued" {
+		t.Fatalf("refused cancel wrote status = %v", got)
+	}
+
+	// With one, the callback writes each note in order and EventSeq is the last
+	// note's event seq, the cursor finishThreadStop notifies with.
+	var written []runs.Note
+	next := int32(10)
+	var result runs.ConversationCancel
+	target.WriteNote = func(ctx context.Context, tx pgx.Tx, note runs.Note) (int32, error) {
+		written = append(written, note)
+		next += 1
+		return next, nil
+	}
+	err = database.System(ctx, "cancel with notes", func(tx pgx.Tx) error {
+		var err error
+		result, err = runs.Canceller{Ring: ring}.CancelConversation(ctx, tx, target, time.Now(), nil)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("cancel with notes: %v", err)
+	}
+	if len(written) != 1 || written[0].Text != runs.StoppedByMessageNote || written[0].BotID != fixture.botID {
+		t.Fatalf("notes = %+v", written)
+	}
+	if result.EventSeq == nil || *result.EventSeq != next {
+		t.Fatalf("eventSeq = %v, want the last note's %d", result.EventSeq, next)
+	}
+	if len(result.Runs) != 1 || result.Runs[0].ID != created.RunID {
+		t.Fatalf("runs = %+v", result.Runs)
+	}
+
+	// A writer that returns no seq would make the cursor unusable: refuse it.
+	other := createRun(t, database, fixture, runs.CreateInput{}, nil)
+	target.HelperMessageID = nil
+	target.WriteNote = func(ctx context.Context, tx pgx.Tx, note runs.Note) (int32, error) {
+		return 0, nil
+	}
+	err = database.System(ctx, "cancel with a seq-less writer", func(tx pgx.Tx) error {
+		_, err := runs.Canceller{Ring: ring}.CancelConversation(ctx, tx, target, time.Now(), nil)
+		return err
+	})
+	if err == nil || errors.Is(err, runs.ErrNotesNotWritten) {
+		t.Fatalf("seq-less writer = %v, want a refusal", err)
+	}
+	if got := runRow(t, database, other.RunID)["status"]; got != "queued" {
+		t.Fatalf("refused cancel wrote status = %v", got)
+	}
 }
