@@ -11,6 +11,7 @@
 import assert from "node:assert/strict";
 import type { ChildProcess } from "node:child_process";
 import { spawn } from "node:child_process";
+import { createServer } from "node:http";
 import { createHmac } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -24,6 +25,7 @@ import { laneDCases } from "./contract-lane-d.mts";
 import { laneHCases, laneHState } from "./contract-lane-h.mts";
 import { laneICases } from "./contract-lane-i.mts";
 import { laneJCases, laneJState } from "./contract-lane-j.mts";
+import { threadGetCases } from "./contract-threads-get.mts";
 import { CONTRACT_ENCRYPTION_KEY } from "./contract-key.mts";
 import { membershipCases, membershipReset, membershipState } from "./contract-membership.mts";
 import { routineResumeCases } from "./contract-routine-resume.mts";
@@ -44,6 +46,11 @@ const RUN_TAG = process.env.RUN_TAG ? `-${process.env.RUN_TAG}` : "";
 // biome-ignore lint/suspicious/noUndeclaredEnvVars: manual harness, not a turbo task
 const GO_PORT = process.env.GO_PORT ?? "3201";
 const GO_URL = `http://127.0.0.1:${GO_PORT}`;
+// The gateway's upstream: a bridge to the in-process TypeScript app, so a request Go declines is
+// answered the way production's proxy answers it. UPSTREAM_PORT separates runs on one host.
+// biome-ignore lint/suspicious/noUndeclaredEnvVars: manual harness, not a turbo task
+const UPSTREAM_PORT = process.env.UPSTREAM_PORT ?? "3999";
+let upstreamHits = 0;
 // CONTRACT_EMAIL=1 runs the cases flagged `email` (the server sends email) and skips the others: the two
 // sides must agree on whether email delivery is configured, which changes who may accept an invitation.
 // biome-ignore lint/suspicious/noUndeclaredEnvVars: manual harness, not a turbo task
@@ -115,6 +122,11 @@ export type Case = {
    * the two sides, while the response body is comparable through normalize().
    */
   ignoreSignals?: boolean;
+  /**
+   * For a procedure that may decline: true when Go must hand the request to TypeScript (the upstream
+   * bridge sees it), false when Go must answer it itself. Unset skips the check.
+   */
+  declines?: boolean;
 };
 
 function cookieFor(token: string) {
@@ -141,6 +153,30 @@ const handles = await createApp({
   ...(EMAIL_ON ? { email: CONTRACT_EMAIL } : {}),
 } as never);
 const system = asSystem(handles.prisma);
+
+const upstreamServer = createServer(async (incoming, outgoing) => {
+  upstreamHits += 1;
+  const chunks: Buffer[] = [];
+  for await (const chunk of incoming) chunks.push(chunk as Buffer);
+  const headers = new Headers();
+  for (const [name, value] of Object.entries(incoming.headers)) {
+    if (value !== undefined && name !== "host" && name !== "content-length")
+      headers.set(name, Array.isArray(value) ? value.join(", ") : value);
+  }
+  const body = Buffer.concat(chunks);
+  const response = await handles.app.request(
+    incoming.url ?? "/",
+    { method: incoming.method, headers, body: body.length > 0 ? body : undefined },
+    { incoming: { socket: { remoteAddress: "127.0.0.1" } } },
+  );
+  const answer: Record<string, string> = {};
+  response.headers.forEach((value, name) => {
+    answer[name] = value;
+  });
+  outgoing.writeHead(response.status, answer);
+  outgoing.end(Buffer.from(await response.arrayBuffer()));
+});
+await new Promise<void>((resolve) => upstreamServer.listen(Number(UPSTREAM_PORT), "127.0.0.1", resolve));
 
 let go: ChildProcess | undefined;
 const routesFile = join(dataDir, "routes.json");
@@ -284,7 +320,7 @@ go = spawn(
     "-listen",
     `127.0.0.1:${GO_PORT}`,
     "-upstream",
-    "http://127.0.0.1:3999",
+    `http://127.0.0.1:${UPSTREAM_PORT}`,
     "-routes",
     routesFile,
     "-build-id-file",
@@ -548,6 +584,7 @@ const cases: Case[] = [
   ...laneHCases(system),
   ...laneICases(system),
   ...laneJCases(system),
+  ...threadGetCases(system),
 ];
 
 const SITES = ["zeta.example", "alpha.example", "Beta.example", "_under.example", "10.0.0.1"];
@@ -8404,6 +8441,7 @@ for (const testCase of cases) {
 
   seeded = await seed(caseIds);
   if (testCase.seed) await testCase.seed(seeded);
+  const hitsBefore = upstreamHits;
   const goResult = await observed(
     settle,
     () => run(testCase, goCall, input, seeded),
@@ -8413,6 +8451,12 @@ for (const testCase of cases) {
   const goState = normalize(await databaseState(caseIds, testCase.procedure));
 
   try {
+    if (testCase.declines !== undefined)
+      assert.equal(
+        upstreamHits - hitsBefore,
+        testCase.declines ? 1 : 0,
+        `${testCase.name}: ${testCase.declines ? "Go should decline" : "Go should answer"}`,
+      );
     assert.equal(goResult.status, tsResult.status, `${testCase.name}: status`);
     assert.deepEqual(goResult.headers, tsResult.headers, `${testCase.name}: headers`);
     assert.deepEqual(normalize(goResult.body), normalize(tsResult.body), `${testCase.name}: body`);
@@ -8438,6 +8482,7 @@ await realtime.end();
 await owner?.end();
 
 go?.kill("SIGTERM");
+upstreamServer.close();
 await handles.stop();
 await rm(dataDir, { recursive: true, force: true });
 if (failures > 0) {

@@ -40,7 +40,9 @@ type field struct {
 }
 
 func required(name string, parse parser) field { return field{name: name, parse: parse} }
-func optional(name string, parse parser) field { return field{name: name, parse: parse, optional: true} }
+func optional(name string, parse parser) field {
+	return field{name: name, parse: parse, optional: true}
+}
 
 func object(fields ...field) parser {
 	return func(value any) (any, bool) {

@@ -3,6 +3,7 @@ package threads
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"slices"
 	"time"
 
@@ -64,6 +65,10 @@ func Get(ctx context.Context, database *db.DB, deployment shared.Deployment, act
 		return err
 	})
 	if err != nil {
+		var failure *orpc.Error
+		if !errors.As(err, &failure) {
+			slog.Default().Error("threads.get failed", "error", err)
+		}
 		return nil, asFailure(err)
 	}
 	return result, nil
