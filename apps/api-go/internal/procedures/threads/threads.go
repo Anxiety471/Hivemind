@@ -101,12 +101,22 @@ func parseWith(raw orpc.Input, right func(*validate.Object) []validate.Issue) (T
 // resolve is resolveThreadTarget: the bot's or group's thread in the actor's Space.
 // Anything missing, archived or in another Space is NOT_FOUND "Resource not found".
 func resolve(ctx context.Context, tx pgx.Tx, actor db.Actor, in Target) (target, error) {
+	return resolveWith(ctx, tx, actor, in, false)
+}
+
+// resolveWith is resolveThreadTarget with its includeArchived option: a bot resolves archived or
+// not as asked, while a group always needs its active members (getGroupTarget, thread-target.ts:389).
+func resolveWith(ctx context.Context, tx pgx.Tx, actor db.Actor, in Target, includeArchived bool) (target, error) {
 	var threadID *string
 	switch {
 	case in.BotID != "":
+		archived := `AND b."archivedAt" IS NULL`
+		if includeArchived {
+			archived = ""
+		}
 		var botID string
 		err := tx.QueryRow(ctx, `SELECT b.id, t.id FROM bots b LEFT JOIN threads t ON t."botId" = b.id
-			WHERE b.id = $1 AND b."spaceId" = $2 AND b."archivedAt" IS NULL`, in.BotID, actor.SpaceID).Scan(&botID, &threadID)
+			WHERE b.id = $1 AND b."spaceId" = $2 `+archived, in.BotID, actor.SpaceID).Scan(&botID, &threadID)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return target{}, errIsolation
 		}

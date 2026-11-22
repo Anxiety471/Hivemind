@@ -31,6 +31,7 @@ import { modelsCases } from "./contract-models.mts";
 import { routineResumeCases } from "./contract-routine-resume.mts";
 import { routineCases } from "./contract-routines.mts";
 import { threadGetCases } from "./contract-threads-get.mts";
+import { threadMoreCases } from "./contract-threads-more.mts";
 
 const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) throw new Error("DATABASE_URL is required");
@@ -211,6 +212,7 @@ await writeFile(
       "messaging.connections.revoke": { mode: "go" },
       "threads.head": { mode: "go", readOnly: true },
       "threads.get": { mode: "go", readOnly: true },
+      "threads.messages": { mode: "go", readOnly: true },
       "threads.markRead": { mode: "go" },
       "threads.markUnread": { mode: "go" },
       "threads.snooze": { mode: "go" },
@@ -253,6 +255,7 @@ await writeFile(
       "bots.listArchived": { mode: "go", readOnly: true },
       "bots.get": { mode: "go", readOnly: true },
       "groups.list": { mode: "go", readOnly: true },
+      "groups.get": { mode: "go", readOnly: true },
       "groups.listArchived": { mode: "go", readOnly: true },
       "bots.reorder": { mode: "go" },
       "bots.restore": { mode: "go" },
@@ -591,6 +594,7 @@ const cases: Case[] = [
   ...laneJCases(system),
   ...modelsCases(system),
   ...threadGetCases(system),
+  ...threadMoreCases(system),
 ];
 
 const SITES = ["zeta.example", "alpha.example", "Beta.example", "_under.example", "10.0.0.1"];

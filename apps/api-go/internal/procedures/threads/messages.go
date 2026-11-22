@@ -1,9 +1,13 @@
 package threads
 
 import (
+	"errors"
+	"math"
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/local"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
@@ -36,21 +40,110 @@ type messageRow struct {
 type messagePage struct {
 	messages    []map[string]any
 	olderCursor any
+	// coveredThroughSeq is set by the around page: the newest seq the page covers, absent on a
+	// before page (loadMessagePage, thread-message-pages.ts:24).
+	coveredThroughSeq *int32
 }
 
-// messagePage is loadMessagePage for the newest page: peer and background chatter stays off it, and
-// a page that holds only peer receipts keeps scanning back until a real message turns up.
+// errSeqOutOfRange is a paging bound Prisma answers with a request error: anything past int4.
+var errSeqOutOfRange = errors.New("message seq outside the int4 range")
+
+// aroundTarget is loadMessagePage's `around`: one message by id or a seq. The seq keeps zod's
+// safe-int width; the int4 range check happens when the page is read, as Prisma does.
+type aroundTarget struct {
+	MessageID string
+	Seq       *int64
+}
+
+// pageQuery is loadMessagePage's arguments after the thread id.
+type pageQuery struct {
+	Before              *int64
+	Around              *aroundTarget
+	IncludePeerRuns     bool
+	IncludePeerReceipts bool
+}
+
+// messagePage is loadMessagePage for the newest page: peer and background chatter stays off it,
+// and a page that holds only peer receipts keeps scanning back until a real message turns up.
 func (s snapshotReader) messagePage(threadID string) (messagePage, error) {
-	var before *int32
+	return s.loadMessagePage(threadID, pageQuery{})
+}
+
+// loadMessagePage is loadMessagePage (apps/api/src/threads/thread-message-pages.ts:24).
+func (s snapshotReader) loadMessagePage(threadID string, query pageQuery) (messagePage, error) {
+	if query.Before != nil && *query.Before > math.MaxInt32 {
+		// Prisma sends Int filter values as int4: a larger `before` fails the request.
+		return messagePage{}, errSeqOutOfRange
+	}
+	if query.Around != nil {
+		targetSeq := query.Around.Seq
+		if targetSeq == nil && query.Around.MessageID != "" {
+			var seq int64
+			err := s.tx.QueryRow(s.ctx, `SELECT seq FROM messages WHERE id = $1 AND "threadId" = $2`,
+				query.Around.MessageID, threadID).Scan(&seq)
+			if err == nil {
+				targetSeq = &seq
+			} else if !errors.Is(err, pgx.ErrNoRows) {
+				return messagePage{}, err
+			}
+		}
+		if targetSeq != nil {
+			half := int64(messagePageSize / 2)
+			minSeq := max(0, *targetSeq-half)
+			maxSeq := *targetSeq + half
+			if maxSeq > math.MaxInt32 {
+				// The window's upper bound is an int4 filter too (lte maxSeq).
+				return messagePage{}, errSeqOutOfRange
+			}
+			rows, err := s.fetchRange(threadID, minSeq, maxSeq)
+			if err != nil {
+				return messagePage{}, err
+			}
+			truncated := len(rows) >= messagePageSize
+			covered := int32(maxSeq)
+			if truncated {
+				covered = rows[len(rows)-1].Seq
+			}
+			hasOlder := false
+			if len(rows) > 0 {
+				var count int
+				if err := s.tx.QueryRow(s.ctx, `SELECT count(*) FROM messages WHERE "threadId" = $1 AND seq < $2`,
+					threadID, rows[0].Seq).Scan(&count); err != nil {
+					return messagePage{}, err
+				}
+				hasOlder = count > 0
+			}
+			visible := rows
+			if !query.IncludePeerRuns {
+				if visible, err = s.withoutPeerRunMessages(rows); err != nil {
+					return messagePage{}, err
+				}
+			}
+			messages, err := s.toMessages(visible)
+			if err != nil {
+				return messagePage{}, err
+			}
+			page := messagePage{messages: messages, coveredThroughSeq: &covered}
+			if hasOlder && len(rows) > 0 {
+				page.olderCursor = rows[0].Seq
+			}
+			return page, nil
+		}
+	}
+	cursor := query.Before
 	for {
-		rows, hasOlder, err := s.fetchRows(threadID, before)
+		rows, hasOlder, err := s.fetchRows(threadID, cursor)
 		if err != nil {
 			return messagePage{}, err
 		}
-		visible, err := s.withoutPeerRunMessages(rows)
-		if err != nil {
-			return messagePage{}, err
+		visible := rows
+		if !query.IncludePeerRuns {
+			if visible, err = s.withoutPeerRunMessages(rows); err != nil {
+				return messagePage{}, err
+			}
 		}
+		// Web hides receipts client-side, so its receipt-only pages keep scanning. Mobile
+		// explicitly retains them and must receive each page for pagination.
 		substantive := false
 		for _, row := range visible {
 			if !isPeerReceipt(storedBlocks(row.Blocks)) {
@@ -58,32 +151,52 @@ func (s snapshotReader) messagePage(threadID string) (messagePage, error) {
 				break
 			}
 		}
-		if substantive || !hasOlder {
-			views, err := s.toMessages(visible)
+		if substantive || query.IncludePeerReceipts || !hasOlder || query.IncludePeerRuns {
+			messages, err := s.toMessages(visible)
 			if err != nil {
 				return messagePage{}, err
 			}
-			page := messagePage{messages: views}
+			page := messagePage{messages: messages}
 			if hasOlder && len(rows) > 0 {
 				page.olderCursor = rows[0].Seq
 			}
 			return page, nil
 		}
-		cursor := rows[0].Seq
-		before = &cursor
+		next := int64(rows[0].Seq)
+		cursor = &next
 	}
 }
 
 // fetchRows reads one page ascending; hasOlder says a row beyond it exists.
-func (s snapshotReader) fetchRows(threadID string, before *int32) ([]messageRow, bool, error) {
-	limit := messagePageSize + 1
+func (s snapshotReader) fetchRows(threadID string, before *int64) ([]messageRow, bool, error) {
+	found, err := s.queryMessages(`WHERE m."threadId" = $1 AND ($2::bigint IS NULL OR m.seq < $2)
+		ORDER BY m.seq DESC LIMIT $3`, threadID, before, messagePageSize+1)
+	if err != nil {
+		return nil, false, err
+	}
+	hasOlder := len(found) > messagePageSize
+	if hasOlder {
+		found = found[:messagePageSize]
+	}
+	slices.Reverse(found)
+	return found, hasOlder, nil
+}
+
+// fetchRange reads the around page ascending (findMany orderBy seq asc take pageSize).
+func (s snapshotReader) fetchRange(threadID string, minSeq, maxSeq int64) ([]messageRow, error) {
+	return s.queryMessages(`WHERE m."threadId" = $1 AND m.seq >= $2 AND m.seq <= $3
+		ORDER BY m.seq ASC LIMIT $4`, threadID, minSeq, maxSeq, messagePageSize)
+}
+
+// queryMessages reads message rows with their reply parent, opens the sealed blocks of the page
+// and of each reply parent in its own thread, and returns them in the query's order.
+func (s snapshotReader) queryMessages(tail string, args ...any) ([]messageRow, error) {
 	rows, err := s.tx.Query(s.ctx, `SELECT m.id, m."threadId", m.seq, m.role, m.blocks, m."botId", m."authorUserId",
 			m."replyToMessageId", m."replyQuote", m."runId", m."clientNonce", m."createdAt",
 			p.id, p."threadId", p.role, p."botId", p."authorUserId", p.blocks
-		FROM messages m LEFT JOIN messages p ON p.id = m."replyToMessageId"
-		WHERE m."threadId" = $1 AND ($2::int IS NULL OR m.seq < $2) ORDER BY m.seq DESC LIMIT $3`, threadID, before, limit)
+		FROM messages m LEFT JOIN messages p ON p.id = m."replyToMessageId" `+tail, args...)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	var found []messageRow
 	parentIDs := map[string]string{}
@@ -96,17 +209,17 @@ func (s snapshotReader) fetchRows(threadID string, before *int32) ([]messageRow,
 			&row.ReplyToMessageID, &row.ReplyQuote, &row.RunID, &row.ClientNonce, &row.CreatedAt,
 			&parentID, &parentThread, &parentRole, &parent.BotID, &parent.AuthorUserID, &parentBlocks); err != nil {
 			rows.Close()
-			return nil, false, err
+			return nil, err
 		}
 		if row.Blocks, err = decodeJSON(blocks); err != nil {
 			rows.Close()
-			return nil, false, err
+			return nil, err
 		}
 		if parentID != nil {
 			parent.ThreadID, parent.Role = *parentThread, *parentRole
 			if parent.Blocks, err = decodeJSON(parentBlocks); err != nil {
 				rows.Close()
-				return nil, false, err
+				return nil, err
 			}
 			row.Parent = &parent
 			parentIDs[row.ID] = *parentID
@@ -115,11 +228,7 @@ func (s snapshotReader) fetchRows(threadID string, before *int32) ([]messageRow,
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return nil, false, err
-	}
-	hasOlder := len(found) > messagePageSize
-	if hasOlder {
-		found = found[:messagePageSize]
+		return nil, err
 	}
 	// Open the sealed blocks of the rows the page keeps, and of each reply parent in this thread.
 	var open []map[string]any
@@ -134,13 +243,12 @@ func (s snapshotReader) fetchRows(threadID string, before *int32) ([]messageRow,
 		}
 	}
 	if err := s.open("Message", open); err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	for index, target := range targets {
 		target(open[index]["blocks"])
 	}
-	slices.Reverse(found)
-	return found, hasOlder, nil
+	return found, nil
 }
 
 func isPeerReceipt(blocks []any) bool {
