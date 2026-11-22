@@ -30,7 +30,11 @@ import {
   cancelSupersededQueuedRuns,
   enqueueRunsNeedingContinue,
 } from "../../api/src/threads/thread-target.js";
-import { cancelThreadRuns } from "../../api/src/threads/thread-stop.js";
+import {
+  cancelThreadRuns,
+  STOPPED_BY_MESSAGE_NOTE,
+  stoppedRoutineNote,
+} from "../../api/src/threads/thread-stop.js";
 import {
   asSystem,
   cancelRunsInTransaction,
@@ -100,9 +104,21 @@ listener.on("notification", (notification: any) => {
 });
 await listener.query("LISTEN rakazo_events");
 async function settleFrames(): Promise<void> {
-  // NOTIFY is delivered asynchronously; a quiet period makes the capture
-  // comparable (the infra-a proof's R2 residual has the same shape).
-  await new Promise((resolve) => setTimeout(resolve, 300));
+  // NOTIFY is delivered asynchronously: wait until the capture has been quiet
+  // for a moment, so a frame that arrives a little late is neither missed by a
+  // scenario's own counts nor missing from the state comparison.
+  let seen = frames.length;
+  let quietSince = Date.now();
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    if (frames.length !== seen) {
+      seen = frames.length;
+      quietSince = Date.now();
+      continue;
+    }
+    if (Date.now() - quietSince >= 250) return;
+  }
 }
 
 // ---------------------------------------------------------------- fixtures
@@ -113,6 +129,7 @@ interface Fixture {
   botId: string;
   threadId: string;
   routineId: string;
+  computerId: string;
 }
 
 async function makeFixture(label: string): Promise<Fixture> {
@@ -123,6 +140,7 @@ async function makeFixture(label: string): Promise<Fixture> {
     botId: id(`bot-${label}`),
     threadId: id(`thread-${label}`),
     routineId: id(`routine-${label}`),
+    computerId: id(`computer-${label}`),
   };
   await system.user.create({
     data: { id: fixture.userId, name: `Run ${label}`, email: `${fixture.userId}@example.test`, emailVerified: true },
@@ -152,7 +170,7 @@ async function makeFixture(label: string): Promise<Fixture> {
       createdAt: new Date(),
     },
   });
-  const computerId = id(`computer-${label}`);
+  const computerId = fixture.computerId;
   await system.computer.create({
     data: {
       id: computerId,
@@ -357,6 +375,7 @@ function baseLabels(fixture: Fixture): Map<string, string> {
     [fixture.botId, "<bot>"],
     [fixture.threadId, "<thread>"],
     [fixture.routineId, "<routine>"],
+    [fixture.computerId, "<computer>"],
   ]);
 }
 
@@ -412,17 +431,36 @@ function normalizedFrames(side: Side): any[] {
 }
 
 // ---------------------------------------------------------------- TS operations
+interface CreateShape {
+  trigger: string;
+  nonce?: string;
+  model?: { provider: string; model: string; thinking: string | null };
+  /** `{modelPinned: true}` with no model columns: sendUserMessage's pin object. */
+  modelPinPresent?: boolean;
+  prompt?: string;
+  at?: Date;
+  wakeAt?: Date;
+  groupReplyOptional?: boolean;
+  sourceMessageId?: string;
+  delegatedFromRunId?: string;
+  retryOfRunId?: string;
+  routineId?: string;
+  /** The run's thread, when it is not the fixture's chat (a helper's own thread). */
+  threadId?: string;
+}
+
 async function tsCreate(
   side: Side,
-  input: { trigger: string; nonce?: string; model?: { provider: string; model: string; thinking: string }; prompt?: string; at?: Date },
+  input: CreateShape,
 ): Promise<{ taskId: string; runId: string }> {
   const fixture = side.fixture;
+  const threadId = input.threadId ?? fixture.threadId;
   return system.$transaction(async (tx) => {
     const task = await tx.task.create({
       data: {
         spaceId: fixture.spaceId,
         botId: fixture.botId,
-        threadId: fixture.threadId,
+        threadId,
         userId: fixture.userId,
         prompt: input.prompt ?? "say hello",
         status: "queued",
@@ -438,6 +476,7 @@ async function tsCreate(
         userId: fixture.userId,
         status: "queued",
         trigger: input.trigger,
+        ...(input.threadId ? { threadId: input.threadId } : {}),
         ...(input.nonce ? { clientNonce: input.nonce } : {}),
         ...(input.model
           ? {
@@ -447,6 +486,13 @@ async function tsCreate(
               modelPinned: true,
             }
           : {}),
+        ...(input.modelPinPresent ? { modelPinned: true } : {}),
+        ...(input.wakeAt ? { wakeAt: input.wakeAt } : {}),
+        ...(input.groupReplyOptional ? { groupReplyOptional: true } : {}),
+        ...(input.sourceMessageId ? { sourceMessageId: input.sourceMessageId } : {}),
+        ...(input.delegatedFromRunId ? { delegatedFromRunId: input.delegatedFromRunId } : {}),
+        ...(input.retryOfRunId ? { retryOfRunId: input.retryOfRunId } : {}),
+        ...(input.routineId ? { routineId: input.routineId } : {}),
         ...(input.at ? { createdAt: input.at, updatedAt: input.at } : {}),
       },
     });
@@ -459,7 +505,10 @@ interface CreatedRun {
   runId: string;
 }
 
-async function create(side: Side, input: { trigger: string; nonce?: string; prompt?: string; at?: Date; routineRun?: boolean }): Promise<CreatedRun> {
+async function create(
+  side: Side,
+  input: CreateShape & { routineRun?: boolean; label?: string },
+): Promise<CreatedRun> {
   const fixture = side.fixture;
   let created: CreatedRun;
   if (side.kind === "ts") {
@@ -487,25 +536,59 @@ async function create(side: Side, input: { trigger: string; nonce?: string; prom
       created = await tsCreate(side, input);
     }
   } else {
+    // routineRunModelPin: {} unless the routine names both a provider and a
+    // model, and the caller spreads it (so no pin at all for {}).
+    const routine = input.routineRun
+      ? await system.routine.findUniqueOrThrow({
+          where: { id: fixture.routineId },
+          select: { modelProvider: true, modelId: true, thinkingLevel: true },
+        })
+      : undefined;
+    const routinePin = routine?.modelProvider && routine.modelId
+      ? { provider: routine.modelProvider, model: routine.modelId, thinking: routine.thinkingLevel }
+      : undefined;
     const response = await go({
       op: "create",
       actor: { spaceId: fixture.spaceId, userId: fixture.userId },
       spaceId: fixture.spaceId,
       botId: fixture.botId,
-      threadId: fixture.threadId,
+      threadId: input.threadId ?? fixture.threadId,
       userId: fixture.userId,
       prompt: input.prompt ?? (input.routineRun ? "test the routine" : "say hello"),
       trigger: input.trigger,
       ...(input.nonce ? { clientNonce: input.nonce } : {}),
       ...(input.routineRun ? { routineId: fixture.routineId } : {}),
-      ...(input.routineRun
-        ? { model: { Provider: "openai", Model: "gpt-x", Thinking: "high", Pinned: true } }
-        : {}),
+      ...(input.routineId ? { routineId: input.routineId } : {}),
+      ...(input.model
+        ? {
+            model: {
+              Provider: input.model.provider,
+              Model: input.model.model,
+              Thinking: input.model.thinking,
+              Pinned: true,
+            },
+          }
+        : routinePin
+          ? {
+              model: {
+                Provider: routinePin.provider,
+                Model: routinePin.model,
+                Thinking: routinePin.thinking,
+                Pinned: true,
+              },
+            }
+          : {}),
+      ...(input.modelPinPresent ? { model: { Pinned: true } } : {}),
+      ...(input.wakeAt ? { wakeAt: input.wakeAt.toISOString() } : {}),
+      ...(input.groupReplyOptional ? { groupReplyOptional: true } : {}),
+      ...(input.sourceMessageId ? { sourceMessageId: input.sourceMessageId } : {}),
+      ...(input.delegatedFromRunId ? { delegatedFromRunId: input.delegatedFromRunId } : {}),
+      ...(input.retryOfRunId ? { retryOfRunId: input.retryOfRunId } : {}),
       now: (input.at ?? new Date()).toISOString(),
     });
     created = { taskId: response.taskId, runId: response.runId };
   }
-  side.remember(created.runId, "<run:created>");
+  side.remember(created.runId, input.label ?? "<run:created>");
   // The task is labeled structurally from its run, identically on both sides.
   return created;
 }
@@ -519,13 +602,17 @@ const idleBackground = {
   close: async () => undefined,
 } as any;
 
-async function wake(side: Side, runId: string, options: { at?: Date; keepExisting?: boolean } = {}): Promise<void> {
+async function wake(
+  side: Side,
+  runId: string,
+  options: { at?: Date; keepExisting?: boolean; now?: Date } = {},
+): Promise<void> {
   const fixture = side.fixture;
   if (side.kind === "ts") {
     const starter = new RunStarter(fanout);
     const jobs = new RunJobPublisher(system as any, idleBackground, starter);
     await runAsTenant({ spaceId: fixture.spaceId, userId: fixture.userId }, () =>
-      wakeRun(jobs, runId, options),
+      wakeRun(jobs, runId, { at: options.at, keepExisting: options.keepExisting }),
     );
     await settleFrames();
     await starter.stop();
@@ -535,10 +622,30 @@ async function wake(side: Side, runId: string, options: { at?: Date; keepExistin
       actor: { spaceId: fixture.spaceId, userId: fixture.userId },
       runId,
       at: options.at?.toISOString(),
-      now: new Date().toISOString(),
+      // Only the timestamp the caller injects: the due decision must not use it.
+      now: (options.now ?? new Date()).toISOString(),
       keepExisting: options.keepExisting ?? false,
     });
   }
+}
+
+/** The frames this side published during its scenario, after the settle wait. */
+function frameCount(): number {
+  return frames.length;
+}
+
+/** Waits (bounded) for the expected frames: a NOTIFY can land just after a settle. */
+async function expectFrames(count: number, label: string): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (frames.length < count && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  if (frames.length !== count && count === 0) {
+    // A negative expectation gets the settle's quiet window only.
+    assert.equal(frames.length, 0, label);
+    return;
+  }
+  assert.equal(frames.length, count, label);
 }
 
 async function cancelActive(side: Side, runIds: string[], at: Date): Promise<void> {
@@ -595,7 +702,16 @@ async function check(name: string, body: () => Promise<void>): Promise<void> {
   }
 }
 
-async function scenario(name: string, body: (side: Side) => Promise<void>): Promise<void> {
+interface ScenarioObservation {
+  /** Label-free facts to compare between the sides (ids already replaced). */
+  extra?: unknown;
+}
+
+async function scenario(
+  name: string,
+  body: (side: Side) => Promise<ScenarioObservation | void>,
+  options: { unorderedFrames?: boolean } = {},
+): Promise<void> {
   await check(`${name}: TypeScript and Go match`, async () => {
     const results: Record<string, any> = {};
     for (const kind of ["ts", "go"] as const) {
@@ -610,16 +726,23 @@ async function scenario(name: string, body: (side: Side) => Promise<void>): Prom
       };
       frames = [];
       try {
-        await body(side);
+        const observation = await body(side);
         await settleFrames();
         results[kind] = await sideState(side);
-        results[`${kind}Frames`] = normalizedFrames(side);
+        const sideFrames = normalizedFrames(side);
+        results[`${kind}Frames`] = options.unorderedFrames
+          ? [...sideFrames].sort((left, right) =>
+              JSON.stringify(left).localeCompare(JSON.stringify(right)),
+            )
+          : sideFrames;
+        results[`${kind}Extra`] = observation?.extra ?? null;
       } finally {
         await dropFixture(fixture);
       }
     }
     assert.deepEqual(results.go, results.ts, "state");
     assert.deepEqual(results.goFrames, results.tsFrames, "frames");
+    assert.deepEqual(results.goExtra, results.tsExtra, "extra");
   });
 }
 
@@ -641,7 +764,12 @@ if (picked("create-routine-model-pin")) {
       where: { id: side.fixture.routineId },
       data: { modelProvider: "openai", modelId: "gpt-x", thinkingLevel: "high" },
     });
-    await create(side, { trigger: "routine", nonce: "routine-run:proof:abc", routineRun: true, at: PINNED });
+    await create(side, {
+      trigger: "routine",
+      nonce: "routine-run:proof:abc",
+      routineRun: true,
+      at: PINNED,
+    });
   });
 }
 
@@ -655,17 +783,39 @@ if (picked("create-empty-prompt")) {
 
 if (picked("wake-many")) {
   await scenario("wake-many", async (side) => {
-    const queued = await create(side, { trigger: "user", at: PINNED });
-    const waiting = await create(side, { trigger: "follow_up", at: PINNED });
+    const queued = await create(side, { trigger: "user", at: PINNED, label: "<run:queued>" });
+    const takeover = await create(side, {
+      trigger: "follow_up",
+      at: new Date(PINNED.getTime() + 1),
+      label: "<run:takeover>",
+    });
+    await system.run.update({ where: { id: takeover.runId }, data: { status: "waiting_takeover" } });
+    const waiting = await create(side, {
+      trigger: "follow_up",
+      at: new Date(PINNED.getTime() + 2),
+      label: "<run:waiting>",
+    });
     await system.run.update({ where: { id: waiting.runId }, data: { status: "waiting_input" } });
+    const finished = await create(side, {
+      trigger: "user",
+      at: new Date(PINNED.getTime() + 3),
+      label: "<run:finished>",
+    });
+    await system.run.update({
+      where: { id: finished.runId },
+      data: { status: "completed", completedAt: new Date("2026-11-22T08:09:00.000Z") },
+    });
+    const candidates = [
+      { id: waiting.runId, status: "waiting_input" },
+      { id: queued.runId, status: "queued" },
+      { id: takeover.runId, status: "waiting_takeover" },
+      { id: finished.runId, status: "completed" },
+    ];
     if (side.kind === "ts") {
       const starter = new RunStarter(fanout);
       const jobs = new RunJobPublisher(system as any, idleBackground, starter);
       await runAsTenant({ spaceId: side.fixture.spaceId, userId: side.fixture.userId }, () =>
-        enqueueRunsNeedingContinue(jobs, [
-          { id: waiting.runId, status: "waiting_input" },
-          { id: queued.runId, status: "queued" },
-        ]),
+        enqueueRunsNeedingContinue(jobs, candidates),
       );
       await settleFrames();
       await starter.stop();
@@ -673,17 +823,25 @@ if (picked("wake-many")) {
       await go({
         op: "wakeMany",
         actor: { spaceId: side.fixture.spaceId, userId: side.fixture.userId },
-        runIds: [waiting.runId, queued.runId],
+        runIds: candidates.map((candidate) => candidate.id),
       });
     }
     // A wake without an explicit `at` writes the wall clock on each side, so
-    // pin the observed value after asserting what the filter did.
-    const queuedRow = await system.run.findUniqueOrThrow({ where: { id: queued.runId }, select: { wakeAt: true } });
-    assert.ok(queuedRow.wakeAt, "the queued run must be woken");
-    const waitingRow = await system.run.findUniqueOrThrow({ where: { id: waiting.runId }, select: { wakeAt: true } });
-    assert.equal(waitingRow.wakeAt, null, "the waiting_input run must not be woken");
-    await system.run.update({ where: { id: queued.runId }, data: { wakeAt: PINNED } });
-  });
+    // pin the observed values after asserting what the filter did.
+    for (const candidate of [
+      { name: "queued", id: queued.runId, woke: true },
+      { name: "waiting_takeover", id: takeover.runId, woke: true },
+      { name: "waiting_input", id: waiting.runId, woke: false },
+      { name: "completed", id: finished.runId, woke: false },
+    ]) {
+      const row = await system.run.findUniqueOrThrow({ where: { id: candidate.id }, select: { wakeAt: true } });
+      assert.equal(Boolean(row.wakeAt), candidate.woke, `${candidate.name} wakeAt`);
+      if (row.wakeAt) {
+        await system.run.update({ where: { id: candidate.id }, data: { wakeAt: PINNED } });
+      }
+    }
+    await expectFrames(2, "exactly the two continuation runs are announced");
+  }, { unorderedFrames: true });
 }
 
 if (picked("wake-now")) {
@@ -828,12 +986,105 @@ async function seedActiveRun(side: Side, label: string): Promise<string> {
   return run.id;
 }
 
+/** A user message in the fixture thread, so a run can name a source message. */
+async function seedMessage(side: Side, seq: number, text: string): Promise<string> {
+  const fixture = side.fixture;
+  const messageId = id(`message-${seq}-${side.kind}`);
+  await system.message.create({
+    data: {
+      id: messageId,
+      threadId: fixture.threadId,
+      seq,
+      role: "user",
+      blocks: [{ kind: "text", text }],
+      authorUserId: fixture.userId,
+      createdAt: PINNED,
+    },
+  });
+  await system.thread.update({ where: { id: fixture.threadId }, data: { nextMessageSeq: seq + 1 } });
+  return messageId;
+}
+
+/** A created run put into `running` with a live lease, as a worker claims it. */
+async function claimRun(side: Side, runId: string): Promise<void> {
+  await system.run.update({
+    where: { id: runId },
+    data: { status: "running", leaseOwner: "worker-a", leaseFence: 1, startedAt: PINNED },
+  });
+}
+
+/** One run's cancel timestamps: `updatedAt` is statement time, never the caller's clock. */
+async function assertStatementTime(runId: string, label: string, completedAt?: Date | null): Promise<void> {
+  const row = await system.run.findUniqueOrThrow({
+    where: { id: runId },
+    select: { updatedAt: true, completedAt: true },
+  });
+  const drift = Math.abs(Date.now() - row.updatedAt.getTime());
+  assert.ok(drift < 120_000, `${label} updatedAt must be statement time, drifted ${drift}ms`);
+  if (completedAt === null) {
+    const completedDrift = Math.abs(Date.now() - (row.completedAt?.getTime() ?? 0));
+    assert.ok(
+      row.completedAt && completedDrift < 120_000,
+      `${label} completedAt must be its own now, drifted ${completedDrift}ms`,
+    );
+  } else if (completedAt) {
+    assert.equal(row.completedAt?.getTime(), completedAt.getTime(), `${label} completedAt must be pinned`);
+  }
+}
+
+interface CancelConversationOptions {
+  note?: { botId: string };
+  helperMessageId?: string;
+  writeNotes?: boolean;
+}
+
+/** cancelThreadRuns' comparable result: no ids, only counts and the notify cursor. */
+async function cancelConversation(side: Side, options: CancelConversationOptions = {}) {
+  const fixture = side.fixture;
+  const target = { kind: "bot" as const, botId: fixture.botId, threadId: fixture.threadId };
+  if (side.kind === "ts") {
+    const result = await runAsTenant({ spaceId: fixture.spaceId, userId: fixture.userId }, () =>
+      prisma.$transaction(
+        cancelThreadRuns({ spaceId: fixture.spaceId }, target, options.note, options.helperMessageId),
+        { timeout: 20_000 },
+      ),
+    );
+    return {
+      eventSeq: result.eventSeq,
+      cancelled: result.runIds.length,
+      stoppedHelpers: result.stoppedHelpers.length,
+      leases: result.leases.length,
+      computers: result.computers.length,
+    };
+  }
+  const response = await go({
+    op: "cancelConversation",
+    actor: { spaceId: fixture.spaceId, userId: fixture.userId },
+    spaceId: fixture.spaceId,
+    threadId: fixture.threadId,
+    botIds: [fixture.botId],
+    ...(options.note ? { noteBotId: options.note.botId } : {}),
+    ...(options.helperMessageId ? { helperMessageId: options.helperMessageId } : {}),
+    writeNotes: options.writeNotes ?? false,
+  });
+  return {
+    eventSeq: response.eventSeq ?? null,
+    cancelled: response.cancelled?.length ?? 0,
+    stoppedHelpers: response.stoppedHelpers ?? 0,
+    leases: response.leases?.length ?? 0,
+    computers: response.computers?.length ?? 0,
+  };
+}
+
 if (picked("cancel-active")) {
   await scenario("cancel-active", async (side) => {
     const runId = await seedActiveRun(side, "a");
     const at = new Date("2026-11-22T08:10:00.000Z");
     await cancelActive(side, [runId], at);
+    // completedAt is the caller's instant; updatedAt is Prisma's @updatedAt (the
+    // statement's own now), never the pinned clock.
     assertPinnedCompletion(runId, at);
+    await assertStatementTime(runId, "active cancel", at);
   });
 }
 
@@ -973,27 +1224,13 @@ if (picked("cancel-conversation")) {
       },
     });
     await system.thread.update({ where: { id: fixture.threadId }, data: { nextEventSeq: 2 } });
-    const at = new Date("2026-11-22T08:10:00.000Z");
-    if (side.kind === "ts") {
-      await runAsTenant({ spaceId: fixture.spaceId, userId: fixture.userId }, () =>
-        prisma.$transaction(
-          cancelThreadRuns(
-            { spaceId: fixture.spaceId },
-            { kind: "bot", botId: fixture.botId, threadId: fixture.threadId },
-          ),
-          { timeout: 20_000 },
-        ),
-      );
-    } else {
-      await go({
-        op: "cancelConversation",
-        actor: { spaceId: fixture.spaceId, userId: fixture.userId },
-        spaceId: fixture.spaceId,
-        threadId: fixture.threadId,
-        botIds: [fixture.botId],
-        now: at.toISOString(),
-      });
-    }
+    const result = await cancelConversation(side);
+    // cancelThreadRuns stamps its own now (thread-stop.ts:88): completedAt is not
+    // a caller clock and updatedAt is statement time.
+    assert.equal(result.eventSeq, 2, "the progress row is gone, the run.cancelled is seq 2");
+    assert.equal(result.cancelled, 1);
+    await assertStatementTime(runA, "conversation cancel", null);
+    return { extra: result };
   });
 }
 
@@ -1046,7 +1283,6 @@ if (picked("supersede-queued")) {
         sourceMessageId: source.id, createdAt: PINNED, updatedAt: PINNED,
       },
     });
-    const at = new Date("2026-11-22T08:10:00.000Z");
     if (side.kind === "ts") {
       await system.$transaction((tx) =>
         cancelSupersededQueuedRuns(tx as any, {
@@ -1062,9 +1298,496 @@ if (picked("supersede-queued")) {
         threadId: fixture.threadId,
         botIds: [fixture.botId],
         keepRunIds: [freshRunId],
-        now: at.toISOString(),
       });
     }
+    // cancelSupersededQueuedRuns stamps its own now (thread-target.ts:266-271).
+    if ((await system.run.findUniqueOrThrow({ where: { id: staleRunId }, select: { status: true } })).status !== "cancelled") {
+      throw new Error("the superseded run must be cancelled");
+    }
+    await assertStatementTime(staleRunId, "supersede", null);
+  });
+}
+
+// ---------------------------------------------------------------- review repros
+if (picked("create-routine-null-thinking")) {
+  await scenario("create-routine-null-thinking", async (side) => {
+    // routineRunModelPin keeps a routine's NULL thinkingLevel NULL
+    // (model-selection.ts:1054-1067).
+    await system.routine.update({
+      where: { id: side.fixture.routineId },
+      data: { modelProvider: "openai", modelId: "gpt-x", thinkingLevel: null },
+    });
+    await create(side, {
+      trigger: "routine",
+      nonce: "routine-run:proof:null-thinking",
+      routineRun: true,
+      at: PINNED,
+    });
+  });
+}
+
+if (picked("create-routine-no-pin")) {
+  await scenario("create-routine-no-pin", async (side) => {
+    // routineRunModelPin returns {} and its spread writes no pin column, so the
+    // Go caller passes no Model at all.
+    await system.routine.update({
+      where: { id: side.fixture.routineId },
+      data: { modelProvider: null, modelId: null, thinkingLevel: null },
+    });
+    await create(side, {
+      trigger: "routine",
+      nonce: "routine-run:proof:no-pin",
+      routineRun: true,
+      at: PINNED,
+    });
+  });
+}
+
+if (picked("create-pin-presence")) {
+  await scenario("create-pin-presence", async (side) => {
+    // sendUserMessage writes modelPinned: true for any pin object; the model
+    // columns stay NULL when it names none (events.ts:559-566).
+    await create(side, { trigger: "webhook", modelPinPresent: true, at: PINNED });
+  });
+}
+
+if (picked("create-wake-at")) {
+  await scenario("create-wake-at", async (side) => {
+    // A ticket wake stores its due time in the creating transaction.
+    await create(side, {
+      trigger: "tickets",
+      wakeAt: new Date("2026-11-22T08:15:00.000Z"),
+      at: PINNED,
+    });
+  });
+}
+
+if (picked("create-group-reply")) {
+  await scenario("create-group-reply", async (side) => {
+    const messageId = await seedMessage(side, 1, "hello group");
+    await create(side, {
+      trigger: "user",
+      nonce: "send:group-1",
+      groupReplyOptional: true,
+      sourceMessageId: messageId,
+      at: PINNED,
+    });
+  });
+}
+
+if (picked("create-delegated")) {
+  await scenario("create-delegated", async (side) => {
+    const parent = await create(side, { trigger: "user", at: PINNED, label: "<run:parent>" });
+    await create(side, {
+      trigger: "helper",
+      delegatedFromRunId: parent.runId,
+      at: new Date(PINNED.getTime() + 1_000),
+      label: "<run:helper>",
+    });
+  });
+}
+
+if (picked("create-retry")) {
+  await scenario("create-retry", async (side) => {
+    const first = await create(side, {
+      trigger: "routine",
+      routineId: side.fixture.routineId,
+      at: PINNED,
+      label: "<run:first>",
+    });
+    await create(side, {
+      trigger: "routine",
+      routineId: side.fixture.routineId,
+      retryOfRunId: first.runId,
+      at: new Date(PINNED.getTime() + 1_000),
+      label: "<run:retry>",
+    });
+  });
+}
+
+if (picked("wake-running")) {
+  await scenario("wake-running", async (side) => {
+    const runId = await seedActiveRun(side, "a");
+    await wake(side, runId, {});
+    // TS's enqueue calls starter.start without reading the update count, so a due
+    // wake is announced even when the row is not resumable; nothing is written.
+    await expectFrames(1, "a due wake is announced even for a running run");
+  });
+}
+
+if (picked("wake-finished")) {
+  await scenario("wake-finished", async (side) => {
+    const runId = await seedActiveRun(side, "a");
+    await system.run.update({
+      where: { id: runId },
+      data: { status: "completed", completedAt: new Date("2026-11-22T08:09:00.000Z") },
+    });
+    await wake(side, runId, {});
+    await expectFrames(1, "a due wake is announced even for a finished run");
+  });
+}
+
+if (picked("wake-keep-existing-fill")) {
+  await scenario("wake-keep-existing-fill", async (side) => {
+    const created = await create(side, { trigger: "user", at: PINNED });
+    await wake(side, created.runId, { keepExisting: true });
+    const row = await system.run.findUniqueOrThrow({ where: { id: created.runId }, select: { wakeAt: true } });
+    assert.ok(row.wakeAt, "keepExisting must fill an empty wake time");
+    // The written instant is each side's wall clock: pin it for the comparison.
+    await system.run.update({ where: { id: created.runId }, data: { wakeAt: PINNED } });
+  });
+}
+
+if (picked("wake-clock")) {
+  await scenario("wake-clock", async (side) => {
+    const created = await create(side, { trigger: "user", at: PINNED });
+    // A caller-supplied Now 50 ms behind the wall clock must not suppress the
+    // frame: the due decision is Date.now(), Now only stamps updatedAt
+    // (run-wakeup.ts:88-93).
+    await wake(side, created.runId, { now: new Date(Date.now() - 50) });
+    await expectFrames(1, "the caller's older clock must not suppress the frame");
+    const row = await system.run.findUniqueOrThrow({ where: { id: created.runId }, select: { wakeAt: true } });
+    assert.ok(row.wakeAt, "the wake must be written");
+    await system.run.update({ where: { id: created.runId }, data: { wakeAt: PINNED } });
+  });
+}
+
+if (picked("by-thread-user-nonce")) {
+  await check("by-thread-user-nonce: the replay predicate is {threadId, userId, clientNonce}", async () => {
+    const results: Record<string, any> = {};
+    const nonce = "routine-run:proof:lookup";
+    for (const kind of ["ts", "go"] as const) {
+      const fixture = await makeFixture(`lookup-${kind}`);
+      const side: Side = {
+        kind,
+        fixture,
+        labels: baseLabels(fixture),
+        remember(actual, label) {
+          this.labels.set(actual, label);
+        },
+      };
+      try {
+        const created = await create(side, { trigger: "routine", nonce, at: PINNED });
+        const otherThread = id(`other-thread-${kind}`);
+        // A thread needs exactly one owner (threads_owner_chk): give it a bot.
+        const otherBot = id(`other-bot-${kind}`);
+        await system.bot.create({
+          data: { id: otherBot, spaceId: fixture.spaceId, userId: fixture.userId, name: "Other bot", color: "green" },
+        });
+        await system.thread.create({
+          data: {
+            id: otherThread,
+            spaceId: fixture.spaceId,
+            userId: fixture.userId,
+            botId: otherBot,
+            nextMessageSeq: 1,
+            nextEventSeq: 1,
+          },
+        });
+        const otherUser = id(`other-user-${kind}`);
+        await system.user.create({
+          data: {
+            id: otherUser,
+            name: "Other User",
+            email: `${otherUser}@example.test`,
+            emailVerified: true,
+          },
+        });
+        if (kind === "ts") {
+          // routes/routines.ts:369-380: the outer precheck names the person too.
+          const same = await system.run.findFirst({
+            where: { threadId: fixture.threadId, userId: fixture.userId, clientNonce: nonce },
+            select: { id: true },
+          });
+          const elsewhere = await system.run.findFirst({
+            where: { threadId: otherThread, userId: fixture.userId, clientNonce: nonce },
+            select: { id: true },
+          });
+          const another = await system.run.findFirst({
+            where: { threadId: fixture.threadId, userId: otherUser, clientNonce: nonce },
+            select: { id: true },
+          });
+          results[kind] = {
+            same: same?.id === created.runId,
+            elsewhere: Boolean(elsewhere),
+            another: Boolean(another),
+          };
+        } else {
+          const actor = { spaceId: fixture.spaceId, userId: fixture.userId };
+          const same = await go({
+            op: "byThreadUserNonce",
+            actor,
+            threadId: fixture.threadId,
+            userId: fixture.userId,
+            clientNonce: nonce,
+          });
+          const elsewhere = await go({
+            op: "byThreadUserNonce",
+            actor,
+            threadId: otherThread,
+            userId: fixture.userId,
+            clientNonce: nonce,
+          });
+          const another = await go({
+            op: "byThreadUserNonce",
+            actor,
+            threadId: fixture.threadId,
+            userId: otherUser,
+            clientNonce: nonce,
+          });
+          results[kind] = {
+            same: same.found && same.runId === created.runId,
+            elsewhere: Boolean(elsewhere.found),
+            another: Boolean(another.found),
+          };
+        }
+      } finally {
+        await dropFixture(fixture);
+      }
+    }
+    assert.deepEqual(results.go, results.ts, "lookups");
+    assert.equal(results.ts.same, true, "the same chat and person must replay");
+    assert.equal(results.ts.elsewhere, false, "another chat's run is not a replay");
+    assert.equal(results.ts.another, false, "another person's run is not a replay");
+  });
+}
+
+if (picked("concurrent-create")) {
+  await check("concurrent-create: one submission wins the unique key", async () => {
+    const results: Record<string, any> = {};
+    const nonce = "send:concurrent";
+    for (const kind of ["ts", "go"] as const) {
+      const fixture = await makeFixture(`concurrent-${kind}`);
+      try {
+        let created = 0;
+        let conflicts = 0;
+        if (kind === "ts") {
+          const attempt = () =>
+            system.$transaction(async (tx) => {
+              const task = await tx.task.create({
+                data: {
+                  spaceId: fixture.spaceId,
+                  botId: fixture.botId,
+                  threadId: fixture.threadId,
+                  userId: fixture.userId,
+                  prompt: "race",
+                  status: "queued",
+                  createdAt: PINNED,
+                  updatedAt: PINNED,
+                },
+              });
+              return tx.run.create({
+                data: {
+                  spaceId: fixture.spaceId,
+                  botId: fixture.botId,
+                  threadId: fixture.threadId,
+                  taskId: task.id,
+                  userId: fixture.userId,
+                  status: "queued",
+                  trigger: "user",
+                  clientNonce: nonce,
+                  createdAt: PINNED,
+                  updatedAt: PINNED,
+                },
+              });
+            });
+          const settled = await Promise.allSettled([attempt(), attempt()]);
+          for (const outcome of settled) {
+            if (outcome.status === "fulfilled") created += 1;
+            else if ((outcome.reason as any)?.code === "P2002") conflicts += 1;
+            else throw outcome.reason;
+          }
+        } else {
+          const response = await go({
+            op: "raceCreate",
+            actor: { spaceId: fixture.spaceId, userId: fixture.userId },
+            spaceId: fixture.spaceId,
+            botId: fixture.botId,
+            threadId: fixture.threadId,
+            userId: fixture.userId,
+            clientNonce: nonce,
+          });
+          created = response.created ?? 0;
+          conflicts = response.conflicts ?? 0;
+        }
+        const runs = await system.run.findMany({ where: { spaceId: fixture.spaceId } });
+        const tasks = await system.task.findMany({ where: { spaceId: fixture.spaceId } });
+        results[kind] = { created, conflicts, runs: runs.length, tasks: tasks.length };
+      } finally {
+        await dropFixture(fixture);
+      }
+    }
+    assert.deepEqual(results.go, results.ts, "race outcome");
+    assert.deepEqual(results.ts, { created: 1, conflicts: 1, runs: 1, tasks: 1 });
+  });
+}
+
+if (picked("cancel-conversation-note")) {
+  await scenario("cancel-conversation-note", async (side) => {
+    const created = await create(side, { trigger: "user", at: PINNED, label: "<run:stopped>" });
+    await claimRun(side, created.runId);
+    const result = await cancelConversation(side, {
+      note: { botId: side.fixture.botId },
+      writeNotes: true,
+    });
+    // run.cancelled (1), then the stop note's thread.message.created (2): the
+    // returned cursor is the note, not the run event (thread-stop.ts:145-205).
+    assert.equal(result.eventSeq, 2, "the cursor must be the last note event");
+    assert.equal(result.cancelled, 1);
+    await assertStatementTime(created.runId, "conversation cancel", null);
+    return { extra: result };
+  });
+}
+
+if (picked("cancel-conversation-routine-note")) {
+  await scenario("cancel-conversation-routine-note", async (side) => {
+    // A fixed name: the note text carries it, and fixtures are side-specific.
+    await system.routine.update({ where: { id: side.fixture.routineId }, data: { name: "Release bot" } });
+    const created = await create(side, {
+      trigger: "routine",
+      routineId: side.fixture.routineId,
+      at: PINNED,
+      label: "<run:routine>",
+    });
+    await claimRun(side, created.runId);
+    const result = await cancelConversation(side, { writeNotes: true });
+    assert.equal(result.eventSeq, 2, "the routine note's event is the cursor");
+    assert.equal(result.cancelled, 1);
+    const note = await system.message.findFirstOrThrow({
+      where: { threadId: side.fixture.threadId, role: "system" },
+    });
+    assert.deepEqual(note.blocks, [{ kind: "meta", text: stoppedRoutineNote("Release bot") }]);
+    await assertStatementTime(created.runId, "routine cancel", null);
+    return { extra: result };
+  });
+}
+
+if (picked("cancel-conversation-teardown")) {
+  await scenario("cancel-conversation-teardown", async (side) => {
+    const fixture = side.fixture;
+    const runId = await seedActiveRun(side, "a");
+    // The stop must snapshot the run's lease and the computer it names before
+    // commit (thread-stop.ts:100-112).
+    const computer = await system.computer.findFirstOrThrow({ where: { spaceId: fixture.spaceId } });
+    await system.computerExecutionLease.create({
+      data: {
+        id: id("lease"),
+        computerId: computer.id,
+        botId: fixture.botId,
+        runId,
+        fence: 1,
+        expiresAt: new Date("2026-11-22T09:00:00.000Z"),
+      },
+    });
+    const result = await cancelConversation(side);
+    assert.equal(result.leases, 1, "the run's lease must be snapshotted");
+    assert.equal(result.computers, 1, "the lease's computer must be resolved");
+    assert.equal(result.stoppedHelpers, 0);
+    assert.equal(result.eventSeq, 1, "one run.cancelled event");
+    return { extra: result };
+  });
+}
+
+if (picked("cancel-helper-scoped")) {
+  await scenario("cancel-helper-scoped", async (side) => {
+    const fixture = side.fixture;
+    const cardId = await seedMessage(side, 1, "delegate this");
+    // A helper works in a thread of its own; its card is the chat's message.
+    const helperThreadId = id(`helper-thread-${side.kind}`);
+    side.remember(helperThreadId, "<helper-thread>");
+    await system.thread.create({
+      data: {
+        id: helperThreadId,
+        spaceId: fixture.spaceId,
+        userId: fixture.userId,
+        helperBotId: fixture.botId,
+        nextMessageSeq: 1,
+        nextEventSeq: 1,
+      },
+    });
+    const helper = await create(side, {
+      trigger: "helper",
+      sourceMessageId: cardId,
+      threadId: helperThreadId,
+      at: PINNED,
+      label: "<run:helper>",
+    });
+    await claimRun(side, helper.runId);
+    const unrelated = await create(side, { trigger: "user", at: new Date(PINNED.getTime() + 1), label: "<run:unrelated>" });
+    const result = await cancelConversation(side, { helperMessageId: cardId });
+    assert.equal(result.cancelled, 1, "only the helper behind the card is stopped");
+    assert.deepEqual(
+      (await system.run.findUniqueOrThrow({ where: { id: unrelated.runId }, select: { status: true } })).status,
+      "queued",
+      "the chat's own run survives a card-scoped stop",
+    );
+    // A helper in a thread of its own gets no run.cancelled event in the chat.
+    assert.equal(result.eventSeq, null, "a helper's own thread gets no chat event");
+    assert.equal(result.stoppedHelpers, 1);
+    return { extra: result };
+  });
+}
+
+if (picked("cancel-two-notes")) {
+  await check("cancel-two-notes: notes come in TS order and the cursor ends at the last", async () => {
+    const observations: Record<string, any> = {};
+    for (const kind of ["ts", "go"] as const) {
+      const fixture = await makeFixture(`two-notes-${kind}`);
+      const side: Side = {
+        kind,
+        fixture,
+        labels: baseLabels(fixture),
+        remember(actual, label) {
+          this.labels.set(actual, label);
+        },
+      };
+      try {
+        await system.routine.update({
+          where: { id: fixture.routineId },
+          data: { name: "Release bot" },
+        });
+        const routine = await create(side, {
+          trigger: "routine",
+          routineId: fixture.routineId,
+          at: PINNED,
+          label: "<run:routine>",
+        });
+        const user = await create(side, {
+          trigger: "user",
+          at: new Date(PINNED.getTime() + 1),
+          label: "<run:user>",
+        });
+        await claimRun(side, routine.runId);
+        await claimRun(side, user.runId);
+        const result = await cancelConversation(side, {
+          note: { botId: fixture.botId },
+          writeNotes: true,
+        });
+        const messages = await system.message.findMany({
+          where: { threadId: fixture.threadId, role: "system" },
+          orderBy: { seq: "asc" },
+        });
+        observations[kind] = {
+          eventSeq: result.eventSeq,
+          cancelled: result.cancelled,
+          texts: messages.map((message) =>
+            (message.blocks as Array<{ text?: string; kind?: string }>)
+              .map((block) => block.text ?? block.kind)
+              .join("|"),
+          ),
+        };
+      } finally {
+        await dropFixture(fixture);
+      }
+    }
+    assert.deepEqual(observations.go, observations.ts, "notes and cursor");
+    assert.equal(observations.ts.cancelled, 2);
+    // Two run.cancelled events (DB order is either run's) then the two notes.
+    assert.equal(observations.ts.eventSeq, 4);
+    assert.deepEqual(observations.ts.texts, [
+      stoppedRoutineNote("Release bot"),
+      STOPPED_BY_MESSAGE_NOTE,
+    ]);
   });
 }
 

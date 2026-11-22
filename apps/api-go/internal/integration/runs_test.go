@@ -441,18 +441,26 @@ func TestWakeManyWakesOnlyContinuations(t *testing.T) {
 	}
 }
 
+type countingPublisher struct{ ids []string }
+
+func (p *countingPublisher) PublishRunReady(runID string) { p.ids = append(p.ids, runID) }
+
 func TestWakeDueDecisionUsesTheWallClock(t *testing.T) {
 	database := openTestDB(t)
 	fixture := seedRunsFixture(t, database)
 	created := createRun(t, database, fixture, runs.CreateInput{}, nil)
-	notifier := effects.NewNotifier(database, nil)
-	// A caller's injected clock 50ms behind real time must not suppress the frame.
+	publisher := &countingPublisher{}
+	// A caller's injected clock 50 ms behind real time must not suppress the
+	// frame: the due decision is the wall clock, as RunStarter.start's is
+	// (run-wakeup.ts:88-93).
 	changed, err := runs.WakeFor(context.Background(), database,
-		db.Actor{SpaceID: fixture.spaceID, UserID: fixture.userID}, notifier, created.RunID,
+		db.Actor{SpaceID: fixture.spaceID, UserID: fixture.userID}, publisher, created.RunID,
 		runs.WakeOptions{Now: time.Now().Add(-50 * time.Millisecond)})
-	notifier.Wait()
 	if err != nil || !changed {
 		t.Fatalf("wake = %v/%v", changed, err)
+	}
+	if len(publisher.ids) != 1 || publisher.ids[0] != created.RunID {
+		t.Fatalf("frames = %v, want exactly [%s]", publisher.ids, created.RunID)
 	}
 }
 

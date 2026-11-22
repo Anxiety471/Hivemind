@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -48,11 +49,14 @@ type request struct {
 	KeepRunIDs      []string       `json:"keepRunIds"`
 	HelperMessageID *string        `json:"helperMessageId"`
 	NoteBotID       string         `json:"noteBotId"`
-	NoteText        string         `json:"noteText"`
 	At              string         `json:"at"`
 	KeepExisting    bool           `json:"keepExisting"`
 	Space2          string         `json:"space2Id"`
 	WriteNotes      bool           `json:"writeNotes"`
+	GroupReply      bool           `json:"groupReplyOptional"`
+	DelegatedFrom   *string        `json:"delegatedFromRunId"`
+	RetryOf         *string        `json:"retryOfRunId"`
+	WakeAt          string         `json:"wakeAt"`
 }
 
 type cancelledOut struct {
@@ -80,6 +84,8 @@ type response struct {
 	NotesWritten int             `json:"notesWritten,omitempty"`
 	Leases       []leaseOut      `json:"leases,omitempty"`
 	Found        bool            `json:"found,omitempty"`
+	Created      int             `json:"created,omitempty"`
+	Conflicts    int             `json:"conflicts,omitempty"`
 	Run          *cancelledOut   `json:"run,omitempty"`
 	Status       string          `json:"status,omitempty"`
 	RoutineIDs   []string        `json:"-"`
@@ -184,15 +190,25 @@ func handle(ctx context.Context, database *db.DB, ring *contentcrypto.KeyRing, n
 	canceller := runs.Canceller{Ring: ring}
 	switch in.Op {
 	case "create":
+		wakeAt, err := at(in.WakeAt)
+		if err != nil {
+			return response{Error: err.Error()}
+		}
 		var created runs.Created
-		err := database.Tenant(ctx, actor, func(tx pgx.Tx) error {
-			var err error
-			created, err = runs.Create(ctx, tx, runs.CreateInput{
+		err = database.Tenant(ctx, actor, func(tx pgx.Tx) error {
+			input := runs.CreateInput{
 				SpaceID: in.SpaceID, BotID: in.BotID, ThreadID: in.ThreadID, UserID: in.UserID,
 				Prompt: in.Prompt, Trigger: in.Trigger, Status: in.Status,
 				ClientNonce: in.ClientNonce, SourceMessageID: in.SourceMessageID,
 				RoutineID: in.RoutineID, Model: in.Model, Now: now,
-			})
+				GroupReplyOptional: in.GroupReply, DelegatedFromRunID: in.DelegatedFrom,
+				RetryOfRunID: in.RetryOf,
+			}
+			if !wakeAt.IsZero() {
+				input.WakeAt = &wakeAt
+			}
+			var err error
+			created, err = runs.Create(ctx, tx, input)
 			return err
 		})
 		if err != nil {
@@ -243,8 +259,10 @@ func handle(ctx context.Context, database *db.DB, ring *contentcrypto.KeyRing, n
 				SpaceID: in.SpaceID, ThreadID: in.ThreadID, BotIDs: in.BotIDs,
 				HelperMessageID: in.HelperMessageID,
 			}
-			if in.NoteText != "" {
-				target.Note = &runs.Note{BotID: in.NoteBotID, Text: in.NoteText}
+			if in.NoteBotID != "" {
+				// TS appends the same stop note whenever a non-routine was cancelled
+				// (thread-stop.ts:30,151-152); only its bot varies.
+				target.Note = &runs.Note{BotID: in.NoteBotID, Text: runs.StoppedByMessageNote}
 			}
 			spaceID := in.SpaceID
 			if spaceID == "" {
@@ -287,6 +305,38 @@ func handle(ctx context.Context, database *db.DB, ring *contentcrypto.KeyRing, n
 			return response{Error: err.Error()}
 		}
 		return response{OK: true}
+	case "raceCreate":
+		// Two submissions of one nonce at once, as a double-clicked send is. The
+		// driver handles one line at a time, so the race happens here.
+		errs := make([]error, 2)
+		var group sync.WaitGroup
+		for index := range errs {
+			group.Add(1)
+			go func(index int) {
+				defer group.Done()
+				errs[index] = database.Tenant(ctx, actor, func(tx pgx.Tx) error {
+					_, err := runs.Create(ctx, tx, runs.CreateInput{
+						SpaceID: in.SpaceID, BotID: in.BotID, ThreadID: in.ThreadID,
+						UserID: in.UserID, Prompt: "race", Trigger: "user",
+						ClientNonce: in.ClientNonce, Now: now,
+					})
+					return err
+				})
+			}(index)
+		}
+		group.Wait()
+		out := response{OK: true}
+		for _, err := range errs {
+			switch {
+			case err == nil:
+				out.Created++
+			case runs.IsUniqueViolation(err):
+				out.Conflicts++
+			default:
+				return response{Error: err.Error()}
+			}
+		}
+		return out
 	case "wakeMany":
 		runs.WakeMany(ctx, database, actor, notifier, nil, in.RunIDs)
 		notifier.Wait()
