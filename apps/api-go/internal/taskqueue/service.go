@@ -14,6 +14,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/effects"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/tickets"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/runs"
 )
 
 // WakeResult describes the outcome of executing one ticket wake or bump job.
@@ -604,23 +605,21 @@ func (s *Service) wakeBotForTicket(ctx context.Context, job Job) (WakeResult, er
 		}
 
 		at := s.now()
-		taskID := effects.NewID()
-		runID := effects.NewID()
-
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO tasks (id, "spaceId", "botId", "threadId", "userId", prompt, status, "createdAt", "updatedAt")
-			VALUES ($1, $2, $3, $4, $5, $6, 'queued', $7, $7)
-		`, taskID, job.SpaceID, job.BotID, threadID, botUserID, prompt, at); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO runs (id, "spaceId", "botId", "threadId", "userId", "taskId", trigger, status, "wakeAt", "createdAt", "updatedAt")
-			VALUES ($1, $2, $3, $4, $5, $6, 'tickets', 'queued', $7, $7, $7)
-		`, runID, job.SpaceID, job.BotID, threadID, botUserID, taskID, at); err != nil {
+		created, err := runs.Create(ctx, tx, runs.CreateInput{
+			SpaceID:  job.SpaceID,
+			BotID:    job.BotID,
+			ThreadID: threadID,
+			UserID:   botUserID,
+			Prompt:   prompt,
+			Trigger:  "tickets",
+			WakeAt:   &at,
+			Now:      at,
+		})
+		if err != nil {
 			return err
 		}
 
-		result = WakeResult{RunID: runID}
+		result = WakeResult{RunID: created.RunID}
 		return nil
 	})
 	if err != nil {
