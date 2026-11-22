@@ -1237,6 +1237,20 @@ if (picked("cancel-origin-fullwidth-dot")) {
     cancelWithCredentialOrigin(side, "origin-fullwidth-dot", "https://metadata.google.internal\u3002", "intended"));
 }
 
+if (picked("cancel-origin-alabel-control")) {
+  await scenario("cancel-origin-alabel-control", (side) =>
+    cancelWithCredentialOrigin(side, "origin-alabel-control", "https://xn--bcher-kva.example/", "denied"));
+}
+
+// A mixed A-label label: Node/ICU throws on the non-ASCII `xn--` label, so the
+// ask list is unparseable and the open effect is never denied. Before the
+// UTS #46 A-label gate, Go punycode-decoded the non-ASCII bytes and accepted
+// the origin, flipping this effect to denied.
+if (picked("cancel-origin-mixed-alabel")) {
+  await scenario("cancel-origin-mixed-alabel", (side) =>
+    cancelWithCredentialOrigin(side, "origin-mixed-alabel", "https://xn--bcüer-kva.example/", "intended"));
+}
+
 if (picked("cancel-finished")) {
   await scenario("cancel-finished", async (side) => {
     const runId = await seedActiveRun(side, "a");
