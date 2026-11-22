@@ -107,6 +107,60 @@ through the over-the-air updates below without a new APK. A Google Play install
 is signed with Play's key, so switching from the APK to Play means uninstalling
 the APK first.
 
+### Building your own APK without Expo
+
+A fork without an Expo account can build the APK entirely on a GitHub-hosted
+runner. The `release-android-apk-selfbuilt` workflow needs no `EXPO_TOKEN` or
+EAS project: it runs `expo prebuild` for Android, builds the release APK with
+Gradle, and publishes it to the same rolling `android` release. It runs on
+pushes that touch the mobile app or the packages it bundles, and on demand from
+the Actions tab.
+
+Set this repository variable:
+
+- `MOBILE_API_URL`: the HTTPS URL of your Rakazo server. The workflow skips
+  with a notice when it is unset. The URL is compiled into the app at build
+  time.
+
+Optional repository variables and secrets:
+
+- `MOBILE_ANDROID_PACKAGE`: the Android application ID, for example
+  `com.example.rakazo`. Use it to install the APK beside a Play build; the
+  committed default is `com.rakazo.app`.
+- `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`,
+  `ANDROID_KEY_PASSWORD`: a release signing key, with the keystore file
+  base64-encoded. Set all four or none. Without them the APK is signed with the
+  template's debug keystore and the workflow prints a warning; it can then
+  update only another debug-signed install.
+
+The build disables Expo Updates in the runner's copy of `apps/mobile/app.json`,
+so the APK does not receive over-the-air updates from the upstream Expo
+project. Install a newer APK to update it. Every successful run replaces the
+rolling `android` release, so the download link stays the same:
+
+```text
+https://github.com/<owner>/<repo>/releases/download/android/app.apk
+```
+
+## Offer the build in the app
+
+Settings and the account menu link to the mobile app. Point them at a
+deployment's own builds with https URLs:
+
+```sh
+MOBILE_APP_ANDROID_URL=https://example.com/rakazo.apk
+MOBILE_APP_IOS_URL=https://example.com/app-store-listing
+```
+
+Set them in the deployment's environment beside the other server variables.
+Either may be left out, and a platform without one opens the app's store page
+instead. Only https URLs are accepted; a malformed value fails at startup rather
+than hiding the link.
+
+The default Android link is the Google Play listing and the default iOS link is
+the App Store listing, so a self-hosted install needs no mobile configuration:
+the Rakazo client can select a compatible server from its sign-in screen.
+
 ## Android push
 
 For Android push notifications, create a Firebase project and register the app's

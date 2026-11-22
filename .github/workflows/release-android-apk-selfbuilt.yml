@@ -1,0 +1,284 @@
+name: release-android-apk-selfbuilt
+
+# Builds a release APK from the checked-in Expo project on a GitHub-hosted runner, without an Expo
+# account, EAS CLI, or EXPO_TOKEN. release-android-apk.yml remains the EAS path for projects that
+# have an Expo account; this workflow exists so a fork can publish an installable APK anyway.
+on:
+  push:
+    branches:
+      - main
+      # A fork whose live trunk has another name changes or duplicates this line.
+      - hivemind-main
+    paths:
+      - "apps/mobile/**"
+      - "packages/chat-ui/**"
+      - "packages/i18n/**"
+      - "packages/ui-tokens/**"
+      - "packages/contracts/**"
+      - "packages/core/**"
+      - "packages/logging/**"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/release-android-apk-selfbuilt.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # The rolling `android` release and its tag are shared with release-android-apk.yml, so the two
+  # workflows must never publish over each other.
+  group: release-android
+  cancel-in-progress: false
+
+jobs:
+  configure:
+    name: Check configuration
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require the server URL
+        id: check
+        env:
+          MOBILE_API_URL: ${{ vars.MOBILE_API_URL }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$MOBILE_API_URL" ]]; then
+            echo "::notice title=Self-built Android APK skipped::Set the MOBILE_API_URL repository variable to your server's HTTPS URL to build and publish an APK."
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # app.config.ts only enforces this when EAS_BUILD_PROFILE is set, and a local prebuild
+          # has no build profile, so the workflow validates the URL itself.
+          if [[ ! "$MOBILE_API_URL" =~ ^https://[^[:space:]]+$ ]]; then
+            echo "::error title=MOBILE_API_URL must be HTTPS::The URL is compiled into the app. Set MOBILE_API_URL to an https:// URL, for example https://app.example.com."
+            exit 1
+          fi
+          echo "build=true" >> "$GITHUB_OUTPUT"
+    outputs:
+      build: ${{ steps.check.outputs.build }}
+
+  build:
+    name: Build and publish the APK
+    needs: configure
+    if: needs.configure.outputs.build == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: write
+    env:
+      CI: "1"
+      EXPO_PUBLIC_API_URL: ${{ vars.MOBILE_API_URL }}
+      RELEASE_TAG: android
+      ASSET: app.apk
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@48b5f213c81028ace310571dc5ec0fbbca0b2947 # v4.4.3
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The committed app.json points expo-updates at the upstream Expo project. Leaving that URL in
+      # would let that project serve JavaScript to this binary, so the runner's copy disables
+      # updates and drops the project link. The committed file is not changed.
+      - name: Disable Expo Updates and apply the package override
+        env:
+          MOBILE_ANDROID_PACKAGE: ${{ vars.MOBILE_ANDROID_PACKAGE }}
+        working-directory: apps/mobile
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const fs = require("node:fs");
+
+          const file = "app.json";
+          const app = JSON.parse(fs.readFileSync(file, "utf8"));
+          const expo = app.expo;
+
+          expo.updates = { ...(expo.updates ?? {}), enabled: false };
+          delete expo.updates.url;
+          if (expo.extra) delete expo.extra.eas;
+
+          const pkg = process.env.MOBILE_ANDROID_PACKAGE?.trim();
+          if (pkg) {
+            if (!/^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$/.test(pkg)) {
+              throw new Error(`MOBILE_ANDROID_PACKAGE is not a valid Android application id: ${pkg}`);
+            }
+            expo.android = { ...expo.android, package: pkg };
+          }
+
+          fs.writeFileSync(file, `${JSON.stringify(app, null, 2)}\n`);
+          NODE
+
+      - name: Generate the Android project
+        env:
+          EXPO_NO_GIT_STATUS: "1"
+        run: pnpm --filter @rakazo/mobile exec expo prebuild --platform android --no-install
+
+      - name: Raise Gradle metaspace
+        run: |
+          set -euo pipefail
+          sed -i 's/MaxMetaspaceSize=512m/MaxMetaspaceSize=1g/' apps/mobile/android/gradle.properties
+          grep -q 'MaxMetaspaceSize=1g' apps/mobile/android/gradle.properties
+
+      - name: Configure APK signing
+        id: signing
+        working-directory: apps/mobile/android
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$ANDROID_KEYSTORE_BASE64$ANDROID_KEYSTORE_PASSWORD$ANDROID_KEY_ALIAS$ANDROID_KEY_PASSWORD" ]]; then
+            echo "::warning title=Debug-signed APK::No Android signing secrets are set. The APK uses the template debug keystore and cannot replace an install signed with another key."
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          missing=()
+          for name in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            [[ -n "${!name}" ]] || missing+=("$name")
+          done
+          if (( ${#missing[@]} )); then
+            echo "::error title=Incomplete Android signing secrets::Set all four signing secrets, or none to build with the debug keystore. Missing: ${missing[*]}"
+            exit 1
+          fi
+
+          keystore="$RUNNER_TEMP/release.keystore"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | tr -d '[:space:]' | base64 --decode > "$keystore"
+          keytool -list -keystore "$keystore" -storepass:env ANDROID_KEYSTORE_PASSWORD -alias "$ANDROID_KEY_ALIAS" > /dev/null
+          echo "ANDROID_KEYSTORE_PATH=$keystore" >> "$GITHUB_ENV"
+
+          # Point the generated release buildType at the supplied keystore. Passwords stay in the
+          # environment, never in gradle.properties or the build file.
+          node - <<'NODE'
+          const fs = require("node:fs");
+
+          const file = "app/build.gradle";
+          let gradle = fs.readFileSync(file, "utf8");
+
+          const signingAnchor = "    signingConfigs {\n        debug {";
+          if (!gradle.includes(signingAnchor)) {
+            throw new Error("Could not find the generated signingConfigs block in app/build.gradle");
+          }
+          const releaseConfig = [
+            "        release {",
+            '            storeFile file(System.getenv("ANDROID_KEYSTORE_PATH"))',
+            '            storePassword System.getenv("ANDROID_KEYSTORE_PASSWORD")',
+            '            keyAlias System.getenv("ANDROID_KEY_ALIAS")',
+            '            keyPassword System.getenv("ANDROID_KEY_PASSWORD")',
+            "        }",
+            "",
+          ].join("\n");
+          gradle = gradle.replace(
+            signingAnchor,
+            `    signingConfigs {\n${releaseConfig}        debug {`,
+          );
+
+          const releaseAnchor =
+            "        release {\n" +
+            "            // Caution! In production, you need to generate your own keystore file.\n" +
+            "            // see https://reactnative.dev/docs/signed-apk-android.\n" +
+            "            signingConfig signingConfigs.debug";
+          if (!gradle.includes(releaseAnchor)) {
+            throw new Error("Could not find the generated release buildType in app/build.gradle");
+          }
+          gradle = gradle.replace(
+            releaseAnchor,
+            releaseAnchor.replace("signingConfigs.debug", "signingConfigs.release"),
+          );
+
+          fs.writeFileSync(file, gradle);
+          NODE
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Build the release APK
+        working-directory: apps/mobile/android
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: ./gradlew app:packageRelease --no-daemon
+
+      - name: Stage the APK
+        run: |
+          set -euo pipefail
+          apk="apps/mobile/android/app/build/outputs/apk/release/app-release.apk"
+          test -f "$apk"
+          if [[ "$(head -c 2 "$apk")" != "PK" ]]; then
+            echo "The build output is not an APK." >&2
+            exit 1
+          fi
+          cp "$apk" "$RUNNER_TEMP/$ASSET"
+          ls -lh "$RUNNER_TEMP/$ASSET"
+
+      # One rolling release keeps a stable download URL:
+      # https://github.com/<owner>/<repo>/releases/download/android/app.apk
+      # It never becomes GitHub's "latest" release, which the desktop updater reads. An existing
+      # release is updated in place: the new APK is uploaded under a temporary name before the old
+      # one is removed, so a failed run leaves the previous download working.
+      - name: Publish the rolling release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SIGNED: ${{ steps.signing.outputs.signed }}
+        run: |
+          set -euo pipefail
+          version="$(jq -r '.expo.version' apps/mobile/app.json)"
+          version_code="$(jq -r '.expo.android.versionCode // empty' apps/mobile/app.json)"
+          [[ -n "$version_code" ]] || version_code="$GITHUB_RUN_NUMBER"
+          title="Rakazo for Android $version ($version_code)"
+          notes="Install $ASSET on your Android phone. This APK is built from source by GitHub Actions and does not use Expo over-the-air updates."
+          if [[ "$SIGNED" != "true" ]]; then
+            notes="$notes It is signed with the Android debug keystore, so treat it as a test build."
+          fi
+
+          if ! gh release view "$RELEASE_TAG" --json tagName > /dev/null 2> "$RUNNER_TEMP/view.err"; then
+            if ! grep -q "release not found" "$RUNNER_TEMP/view.err"; then
+              cat "$RUNNER_TEMP/view.err" >&2
+              exit 1
+            fi
+            gh release create "$RELEASE_TAG" "$RUNNER_TEMP/$ASSET" \
+              --target "$GITHUB_SHA" \
+              --title "$title" \
+              --notes "$notes" \
+              --latest=false
+            exit 0
+          fi
+
+          staged="app-$GITHUB_RUN_ID.apk"
+          cp "$RUNNER_TEMP/$ASSET" "$RUNNER_TEMP/$staged"
+          gh release upload "$RELEASE_TAG" "$RUNNER_TEMP/$staged" --clobber
+          assets="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" --jq '.assets')"
+          staged_id="$(jq -r --arg name "$staged" '.[] | select(.name == $name) | .id' <<< "$assets")"
+          old_id="$(jq -r --arg name "$ASSET" '.[] | select(.name == $name) | .id' <<< "$assets")"
+          if [[ -z "$staged_id" ]]; then
+            echo "The uploaded $staged is missing from the release; leaving the previous APK in place." >&2
+            exit 1
+          fi
+          if [[ -n "$old_id" ]]; then
+            gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$old_id"
+          fi
+          for attempt in 1 2 3; do
+            if gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/assets/$staged_id" -f name="$ASSET" > /dev/null; then
+              break
+            fi
+            if [[ "$attempt" == 3 ]]; then
+              echo "Could not rename $staged to $ASSET; rename it on the release page." >&2
+              exit 1
+            fi
+            sleep 5
+          done
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$RELEASE_TAG" -f sha="$GITHUB_SHA" -F force=true > /dev/null
+          gh release edit "$RELEASE_TAG" --title "$title" --notes "$notes" --latest=false
