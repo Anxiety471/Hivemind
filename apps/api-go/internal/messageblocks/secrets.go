@@ -2,11 +2,11 @@ package messageblocks
 
 import (
 	"fmt"
-	"net/url"
 	"regexp"
-	"strconv"
 	"strings"
 	"unicode/utf16"
+
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/whatwgurl"
 )
 
 // This file ports the nested schemas MessageBlock leaves to TypeScript:
@@ -87,53 +87,29 @@ func secretOrigin(allowPrivateHTTP bool) parser {
 	}
 }
 
-// validOrigin is botSecretOriginSchema's refine: a URL with no credentials, query,
-// fragment or non-root path; HTTPS anywhere, HTTP only on the person's own network.
-// It first applies the normalizations `new URL` performs (trim, tab/newline removal,
-// backslashes as slashes for special schemes, dot segments, legacy IPv4 spellings).
+// validOrigin is botSecretOriginSchema's refine: a URL with no non-empty
+// username/password, query, fragment or non-root path; HTTPS anywhere, HTTP
+// only on the person's own network. It reads the same normalized components
+// `new URL` exposes (bot-secrets.ts:162-190).
 func validOrigin(value string, allowPrivateHTTP bool) bool {
-	parsed, err := url.Parse(normalizeSpecialURL(value))
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" || parsed.Opaque != "" {
+	parsed, err := whatwgurl.Parse(value)
+	if err != nil {
 		return false
 	}
-	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+	if parsed.Username() != "" || parsed.Password() != "" || parsed.Search() != "" || parsed.Hash() != "" {
 		return false
 	}
-	if parsed.Path != "" && normalizeURLPath(parsed.EscapedPath()) != "/" {
+	if parsed.Pathname() != "/" {
 		return false
 	}
-	if port := parsed.Port(); port != "" {
-		for _, digit := range port {
-			if digit < '0' || digit > '9' {
-				return false
-			}
-		}
-		trimmed := strings.TrimLeft(port, "0")
-		if trimmed != "" {
-			number, err := strconv.Atoi(trimmed)
-			if err != nil || number > 65535 {
-				return false
-			}
-		}
-	}
-	host := parsed.Hostname()
-	if host == "" || strings.Contains(host, "%") {
+	if isCloudMetadataHost(parsed.Hostname()) {
 		return false
 	}
-	if normalized, numeric, ok := jsIPv4Host(host); numeric {
-		if !ok {
-			return false
-		}
-		host = normalized
-	}
-	if isCloudMetadataHost(host) {
-		return false
-	}
-	switch strings.ToLower(parsed.Scheme) {
-	case "https":
+	switch parsed.Protocol() {
+	case "https:":
 		return true
-	case "http":
-		return allowPrivateHTTP && isPrivateNetworkHost(host)
+	case "http:":
+		return allowPrivateHTTP && isPrivateNetworkHost(parsed.Hostname())
 	default:
 		return false
 	}
@@ -142,156 +118,14 @@ func validOrigin(value string, allowPrivateHTTP bool) bool {
 // normalizeSpecialURL is the part of the WHATWG URL parser that decides an origin
 // string: strip tabs/newlines and surrounding C0 controls, then rewrite a special
 // scheme's slash variants (`https:\host`, `https:/host`, `https:///host`) to `//`.
-func normalizeSpecialURL(value string) string {
-	value = strings.Map(func(r rune) rune {
-		if r == '\t' || r == '\n' || r == '\r' {
-			return -1
-		}
-		return r
-	}, value)
-	value = strings.TrimFunc(value, func(r rune) bool { return r <= 0x20 })
-	lower := strings.ToLower(value)
-	for _, scheme := range []string{"https", "http"} {
-		if !strings.HasPrefix(lower, scheme+":") {
-			continue
-		}
-		rest := strings.ReplaceAll(value[len(scheme)+1:], "\\", "/")
-		return scheme + "://" + strings.TrimLeft(rest, "/")
-	}
-	return value
-}
 
 // normalizeURLPath is the URL parser's path state for an origin path: dot segments,
 // including their percent-encoded spellings, collapse; empty segments do not.
-func normalizeURLPath(value string) string {
-	if value == "" {
-		return "/"
-	}
-	segments := strings.Split(value, "/")
-	out := make([]string, 0, len(segments))
-	for _, segment := range segments {
-		switch strings.ToLower(segment) {
-		case ".", "%2e":
-			continue
-		case "..", ".%2e", "%2e.", "%2e%2e":
-			if len(out) > 1 {
-				out = out[:len(out)-1]
-			}
-			continue
-		}
-		out = append(out, segment)
-	}
-	normalized := strings.Join(out, "/")
-	if normalized == "" {
-		return "/"
-	}
-	return normalized
-}
 
 // jsIPv4Host is the URL parser's IPv4 host handling: legacy octal/hex/short forms
 // (`127.1`, `0177.0.0.1`, `0x7f.0.0.1`, `2130706433`) become dotted decimal. The
 // boolean reports whether the last label made the host numeric; when it did, a
 // parse failure is an invalid URL rather than a DNS name.
-func jsIPv4Host(host string) (string, bool, bool) {
-	if strings.Contains(host, ":") {
-		return host, false, false
-	}
-	parts := strings.Split(host, ".")
-	if len(parts) > 1 && parts[len(parts)-1] == "" {
-		parts = parts[:len(parts)-1]
-	}
-	numeric := len(parts) > 0 && isNumericPart(parts[len(parts)-1])
-	if !numeric {
-		return host, false, false
-	}
-	if len(parts) == 0 || len(parts) > 4 {
-		return "", true, false
-	}
-	values := make([]uint64, len(parts))
-	for index, part := range parts {
-		parsed, ok := jsNumber(part)
-		if !ok {
-			return "", true, false
-		}
-		values[index] = parsed
-	}
-	for _, part := range values[:len(values)-1] {
-		if part > 255 {
-			return "", true, false
-		}
-	}
-	limit := uint64(1) << (8 * (5 - len(values)))
-	if values[len(values)-1] >= limit {
-		return "", true, false
-	}
-	result := uint64(0)
-	for index, part := range values {
-		if index == len(values)-1 {
-			result += part
-			continue
-		}
-		result += part << (8 * (3 - index))
-	}
-	if result > 0xffffffff {
-		return "", true, false
-	}
-	return fmt.Sprintf("%d.%d.%d.%d", byte(result>>24), byte(result>>16), byte(result>>8), byte(result)), true, true
-}
-
-func isNumericPart(value string) bool {
-	if len(value) > 2 && value[0] == '0' && (value[1] == 'x' || value[1] == 'X') {
-		for _, digit := range value[2:] {
-			if !strings.ContainsRune("0123456789abcdefABCDEF", digit) {
-				return false
-			}
-		}
-		return len(value) > 2
-	}
-	if value == "" {
-		return false
-	}
-	for _, digit := range value {
-		if digit < '0' || digit > '9' {
-			return false
-		}
-	}
-	return true
-}
-
-func jsNumber(value string) (uint64, bool) {
-	base := uint64(10)
-	digits := value
-	if len(value) > 2 && value[0] == '0' && (value[1] == 'x' || value[1] == 'X') {
-		base, digits = 16, value[2:]
-	} else if len(value) > 1 && value[0] == '0' {
-		base, digits = 8, value[1:]
-	}
-	if digits == "" {
-		return 0, false
-	}
-	number := uint64(0)
-	for _, digit := range digits {
-		var parsed uint64
-		switch {
-		case digit >= '0' && digit <= '9':
-			parsed = uint64(digit - '0')
-		case base == 16 && digit >= 'a' && digit <= 'f':
-			parsed = uint64(digit-'a') + 10
-		case base == 16 && digit >= 'A' && digit <= 'F':
-			parsed = uint64(digit-'A') + 10
-		default:
-			return 0, false
-		}
-		if parsed >= base {
-			return 0, false
-		}
-		number = number*base + parsed
-		if number > 0xffffffff {
-			return 0, false
-		}
-	}
-	return number, true
-}
 
 // credentialDestination is botSecretDestinationSchema({allowPrivateHttpOrigin: true})
 // (bot-secrets.ts:191-249).
@@ -321,8 +155,8 @@ func credentialDestination(value any) (any, bool) {
 		return nil, false
 	}
 	if authType == "login" {
-		parsed, err := url.Parse(normalizeSpecialURL(origin))
-		if err != nil || !strings.EqualFold(parsed.Scheme, "https") {
+		parsed, err := whatwgurl.Parse(origin)
+		if err != nil || parsed.Protocol() != "https:" {
 			return nil, false
 		}
 	}

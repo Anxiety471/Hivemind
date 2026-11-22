@@ -137,6 +137,39 @@ func TestOriginsMatchZod(t *testing.T) {
 	}
 }
 
+func TestReviewerOriginsMatchZod(t *testing.T) {
+	raw, err := os.ReadFile("testdata/reviewer-origins.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cases []struct {
+		ID     string `json:"id"`
+		Kind   string `json:"kind"`
+		Origin string `json:"origin"`
+		Valid  bool   `json:"valid"`
+	}
+	if err := json.Unmarshal(raw, &cases); err != nil {
+		t.Fatal(err)
+	}
+	if len(cases) != 17842 {
+		t.Fatalf("reviewer table has %d cases, want 17842", len(cases))
+	}
+	for _, tc := range cases {
+		block := map[string]any{"kind": "ask", "text": "x"}
+		if tc.Kind == "credential" {
+			block["credential"] = map[string]any{
+				"name": "k", "origin": tc.Origin, "auth": map[string]any{"type": "bearer"},
+			}
+		} else {
+			block["oneTimeCode"] = map[string]any{"origin": tc.Origin}
+		}
+		_, valid := ParseBlocks([]any{block})
+		if valid != tc.Valid {
+			t.Errorf("%s (%s %q): valid = %v, zod = %v", tc.ID, tc.Kind, tc.Origin, valid, tc.Valid)
+		}
+	}
+}
+
 func TestParseBlocksDropsTheWholeListOnOneInvalidEntry(t *testing.T) {
 	malformed := []any{
 		map[string]any{"kind": "text", "text": "hi"},
