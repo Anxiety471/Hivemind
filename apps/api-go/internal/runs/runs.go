@@ -199,9 +199,20 @@ func Create(ctx context.Context, tx Execer, input CreateInput) (Created, error) 
 	}
 	var provider, model, thinking any
 	pinned := false
-	// routineRunModelPin returns {} unless both provider and model are set.
-	if input.Model != nil && input.Model.Provider != "" && input.Model.Model != "" {
-		provider, model = input.Model.Provider, input.Model.Model
+	// A Model is the pin object the caller spreads. routineRunModelPin returns
+	// {} when the routine has no provider/model, and a spread of {} writes no pin
+	// column at all, so that caller passes nil here. sendUserMessage instead
+	// spreads `{...modelPinned: true}` whenever it has a pin object
+	// (events.ts:559-566), which is Model{Pinned: true} with no provider or
+	// model: the columns stay NULL and only the flag is set. Empty strings are
+	// absent, as `modelProvider: undefined` is.
+	if input.Model != nil {
+		if input.Model.Provider != "" {
+			provider = input.Model.Provider
+		}
+		if input.Model.Model != "" {
+			model = input.Model.Model
+		}
 		if input.Model.Thinking != nil {
 			thinking = *input.Model.Thinking
 		}

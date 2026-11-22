@@ -678,3 +678,43 @@ func TestCancelsRequireTheRing(t *testing.T) {
 		t.Fatalf("a refused cancel wrote status = %v", got)
 	}
 }
+
+func TestCreateWritesTheNullableModelPin(t *testing.T) {
+	database := openTestDB(t)
+	fixture := seedRunsFixture(t, database)
+	// routineRunModelPin with provider/model and a NULL thinkingLevel keeps the
+	// NULL (model-selection.ts:1054-1067).
+	thinkingNull := createRun(t, database, fixture, runs.CreateInput{
+		Trigger: "routine",
+		Model:   &runs.ModelPin{Provider: "openai", Model: "gpt-x", Pinned: true},
+	}, nil)
+	row := runRow(t, database, thinkingNull.RunID)
+	if row["modelProvider"] != "openai" || row["modelId"] != "gpt-x" {
+		t.Fatalf("pin = %v/%v", row["modelProvider"], row["modelId"])
+	}
+	if row["thinkingLevel"] != nil {
+		t.Fatalf("thinkingLevel = %v, want NULL", row["thinkingLevel"])
+	}
+	if row["modelPinned"] != true {
+		t.Fatalf("modelPinned = %v", row["modelPinned"])
+	}
+	// sendUserMessage sets modelPinned for any pin object; the model columns stay
+	// NULL when the object names none.
+	presence := createRun(t, database, fixture, runs.CreateInput{
+		Trigger: "webhook",
+		Model:   &runs.ModelPin{Pinned: true},
+	}, nil)
+	row = runRow(t, database, presence.RunID)
+	if row["modelProvider"] != nil || row["modelId"] != nil || row["thinkingLevel"] != nil {
+		t.Fatalf("presence pin wrote columns: %v/%v/%v", row["modelProvider"], row["modelId"], row["thinkingLevel"])
+	}
+	if row["modelPinned"] != true {
+		t.Fatalf("presence pin modelPinned = %v", row["modelPinned"])
+	}
+	// No pin object at all writes nothing, as a spread of routineRunModelPin's {}.
+	bare := createRun(t, database, fixture, runs.CreateInput{Trigger: "routine"}, nil)
+	row = runRow(t, database, bare.RunID)
+	if row["modelPinned"] != false || row["modelProvider"] != nil {
+		t.Fatalf("bare run pin = %v/%v", row["modelPinned"], row["modelProvider"])
+	}
+}
