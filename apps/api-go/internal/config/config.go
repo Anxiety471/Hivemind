@@ -75,6 +75,14 @@ type Config struct {
 	ApprovalModelProvider   string
 	ApprovalModel           string
 	ApprovalModelConfigured bool
+	// DeploymentModelHostCredentials is resolveDeploymentModel's hostCredentials, and
+	// DeploymentModelHostCredentialsUnknown is set when the TypeScript answer depends on
+	// pi-ai's own environment table: `me` declines rather than guess.
+	DeploymentModelHostCredentials        bool
+	DeploymentModelHostCredentialsUnknown bool
+	// MeEnv holds what `me` answers from beyond the model defaults: labs, menu links,
+	// computer settings, admin emails, billing and upload limits (loadMeEnv).
+	MeEnv meEnv
 }
 
 // Load reads the environment. Only a build that serves procedures needs the
@@ -139,9 +147,12 @@ func Load() (Config, error) {
 	config.DefaultModelProvider = defaults.provider
 	config.DefaultModel = defaults.model
 	config.DefaultModelConfigured = defaults.configured
+	config.DeploymentModelHostCredentials = defaults.hostCredentials
+	config.DeploymentModelHostCredentialsUnknown = defaults.hostCredentialsUnknown
 	config.ApprovalModelProvider = defaults.approvalProvider
 	config.ApprovalModel = defaults.approvalModel
 	config.ApprovalModelConfigured = defaults.approvalConfigured
+	config.MeEnv = loadMeEnv(os.LookupEnv)
 
 	minimums, err := local.ParseMinimums(os.Getenv("RAKAZO_MIN_CLIENT_BUILD"))
 	if err != nil {

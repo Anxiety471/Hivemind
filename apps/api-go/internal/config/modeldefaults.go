@@ -27,6 +27,12 @@ type modelDefaults struct {
 	provider   string
 	model      string
 	configured bool
+	// hostCredentials is resolveDeploymentModel's hostCredentials: keyless host
+	// authentication the deployment declares. hostCredentialsUnknown is true when the
+	// TypeScript answer depends on pi-ai's own environment table, which this port does not
+	// carry: `me` declines then instead of guessing.
+	hostCredentials        bool
+	hostCredentialsUnknown bool
 
 	approvalProvider   string
 	approvalModel      string
@@ -52,31 +58,30 @@ func resolveModelDefaults(getenv func(string) string) modelDefaults {
 		model = openRouterDefaultModel
 	}
 	hostCredentials := false
+	hostCredentialsUnknown := false
 	if key == "" && explicitModel != "" && strings.TrimSpace(getenv("PI_DEFAULT_CREDENTIALS")) == "host" {
-		hostCredentials = hostCredentialsResolve(provider, explicitModel, getenv)
+		switch provider {
+		case "local":
+			// A local server's declared model.
+			hostCredentials = containsValue(splitList(getenv("RAKAZO_LOCAL_MODELS")), explicitModel)
+		case "amazon-bedrock", "claude-code":
+			// These providers resolve their credential chain at request time.
+			hostCredentials = true
+		default:
+			// getEnvApiKey(provider) === "<authenticated>" is pi-ai's own table.
+			hostCredentialsUnknown = true
+		}
 	}
 	defaults := modelDefaults{
-		provider:   provider,
-		model:      model,
-		configured: key != "" || hostCredentials,
+		provider:               provider,
+		model:                  model,
+		configured:             key != "" || hostCredentials,
+		hostCredentials:        hostCredentials,
+		hostCredentialsUnknown: hostCredentialsUnknown,
 	}
 	defaults.approvalProvider, defaults.approvalModel = resolveAutoReviewChecker(getenv)
 	defaults.approvalConfigured = autoReviewCheckerConfigured(defaults, getenv)
 	return defaults
-}
-
-// hostCredentialsResolve is the host-credentials branch of resolveDeploymentModel: a local
-// server's declared model, a provider that resolves credentials per request, or one whose
-// environment reports host credentials.
-func hostCredentialsResolve(provider, model string, getenv func(string) string) bool {
-	if provider == "local" {
-		return containsValue(splitList(getenv("RAKAZO_LOCAL_MODELS")), model)
-	}
-	switch provider {
-	case "amazon-bedrock", "claude-code":
-		return true
-	}
-	return false
 }
 
 // resolveAutoReviewChecker is resolveAutoReviewChecker (auto-review.ts:96-124).

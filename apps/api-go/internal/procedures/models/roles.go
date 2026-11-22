@@ -557,6 +557,21 @@ func insertRoleRow(ctx context.Context, tx pgx.Tx, actor db.Actor, target, role 
 	return err
 }
 
+// AppliedPrimary is appliedModelRole(...).primary: the member's own choice for a purpose as
+// it applies in the Space — the Space's copy when it overrides the setting, else the
+// account's. `me` resolves the main model from it.
+func AppliedPrimary(ctx context.Context, tx pgx.Tx, actor db.Actor, role string) (*RoleChoice, error) {
+	target, err := spacesettings.Target(ctx, tx, actor, "models", "")
+	if err != nil {
+		return nil, err
+	}
+	view, err := readRole(ctx, tx, actor, target, role)
+	if err != nil {
+		return nil, err
+	}
+	return view.Primary, nil
+}
+
 // deploymentPrimary is deploymentModelRole over the deployment's settings and environment:
 // the model shown where the member chose none.
 func deploymentPrimary(

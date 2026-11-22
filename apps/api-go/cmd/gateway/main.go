@@ -290,6 +290,27 @@ func setupLocal(buildIDFile string, wantsVault bool, logger *slog.Logger) (*loca
 			ModelID:  deployment.ApprovalModel,
 		},
 		ApprovalModelConfigured: deployment.ApprovalModelConfigured,
+		Me: shared.MeConfig{
+			DeploymentProvider:                    deployment.DefaultModelProvider,
+			DeploymentModel:                       deployment.DefaultModel,
+			DeploymentModelConfigured:             deployment.DefaultModelConfigured,
+			DeploymentModelHostCredentials:        deployment.DeploymentModelHostCredentials,
+			DeploymentModelHostCredentialsUnknown: deployment.DeploymentModelHostCredentialsUnknown,
+			DeploymentLabs:                        deploymentLabs(deployment.BoardLab),
+			NavLinks:                              navLinks(deployment.MeEnv.NavLinks),
+			NavLinksUnknown:                       deployment.MeEnv.NavLinksUnknown,
+			ComputerSettingsEnabled:               deployment.MeEnv.ComputerSettingsEnabled,
+			DesktopHostChoiceEnabled:              deployment.MeEnv.DesktopHostChoiceEnabled,
+			SandboxProvider:                       deployment.MeEnv.SandboxProvider,
+			AgentRuntime:                          deployment.MeEnv.AgentRuntime,
+			McpStdioEnabled:                       deployment.MeEnv.McpStdioEnabled && len(deployment.MeEnv.McpStdioAllowedCommands) > 0,
+			AdminEmails:                           deployment.MeEnv.AdminEmails,
+			MaxUploadBytes:                        deployment.MaxUploadBytes,
+			MaxAttachmentsPerMessage:              deployment.MeEnv.MaxAttachmentsPerMessage,
+			AttachmentsUnknown:                    deployment.MeEnv.AttachmentsUnknown,
+			BillingConfigured:                     deployment.MeEnv.BillingConfigured,
+			PaymentWalletProvider:                 deployment.MeEnv.PaymentWalletProvider,
+		},
 	}), local.Config{
 		BuildID:        readBuildID(buildIDFile),
 		Minimums:       deployment.Minimums,
@@ -347,4 +368,24 @@ func deploymentModel(provider, model string, configured bool) *shared.ModelSelec
 		return nil
 	}
 	return &shared.ModelSelection{Provider: provider, ModelID: model}
+}
+
+// deploymentLabs is deploymentLabsFromEnv: LAB_FEATURES this deployment turns on for every
+// account. Only "board" exists (packages/contracts/src/labs.ts:4).
+func deploymentLabs(board bool) []string {
+	if board {
+		return []string{"board"}
+	}
+	return []string{}
+}
+
+// navLinks converts the parsed RAKAZO_NAV_LINKS to the wire shape `me` returns.
+func navLinks(links []config.NavLink) []shared.NavLink {
+	converted := make([]shared.NavLink, len(links))
+	for index, link := range links {
+		converted[index] = shared.NavLink{
+			ID: link.ID, Label: link.Label, Path: link.Path, Trusted: link.Trusted,
+		}
+	}
+	return converted
 }

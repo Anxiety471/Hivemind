@@ -230,6 +230,24 @@ func ReadyModelCredential(
 	return true, nil
 }
 
+// ConnectedModelCredential is findConnectedModelCredential's presence answer, which is all
+// `me` asks: whether a connection would serve the model. TypeScript keeps the row even when
+// its secret cannot be read (only its selection can fail), so no secret is loaded here.
+func ConnectedModelCredential(
+	ctx context.Context,
+	tx pgx.Tx,
+	vault *shared.SecretVault,
+	actor db.Actor,
+	provider, modelID string,
+	credentialID *string,
+) (bool, error) {
+	credential, _, err := connectedCredentialWithPreference(ctx, tx, vault, actor, provider, modelID, credentialID)
+	if err != nil || credential == nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // connectedCredentialWithPreference is findConnectedModelCredential: the connection that
 // would run the model, and the model its preference selects.
 func connectedCredentialWithPreference(
