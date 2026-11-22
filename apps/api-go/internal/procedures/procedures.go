@@ -33,9 +33,11 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/onboarding"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/pages"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/routines"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/runs"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/scratchpad"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/skills"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/spaces"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/spacesettings"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/spendinglimit"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/threads"
@@ -314,6 +316,22 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 			ReadOnly: true,
 			Serve: func(ctx context.Context, actor db.Actor, _ orpc.Input) (any, *orpc.Error) {
 				return usage.SummaryOf(ctx, database, actor)
+			},
+		},
+		{
+			Name:       "spaces.list",
+			ReadOnly:   true,
+			MayDecline: true,
+			Serve: func(ctx context.Context, actor db.Actor, _ orpc.Input) (any, *orpc.Error) {
+				return spaces.List(ctx, database, &deployment, actor)
+			},
+		},
+		{
+			Name:       "runs.list",
+			ReadOnly:   true,
+			MayDecline: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return runs.List(ctx, database, &deployment, actor, input)
 			},
 		},
 		{

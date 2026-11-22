@@ -177,11 +177,49 @@ type listedBotRow struct {
 func listBots(ctx context.Context, database *db.DB, deployment shared.Deployment, actor db.Actor, archived bool) ([]Bot, *orpc.Error) {
 	bots := []Bot{}
 	err := database.Tenant(ctx, actor, func(tx pgx.Tx) error {
-		archivedFilter := `AND b."archivedAt" IS NULL`
-		if archived {
-			archivedFilter = `AND b."archivedAt" IS NOT NULL`
-		}
-		rows, err := tx.Query(ctx, `SELECT b.id, b."spaceId", b.name, b.description, b.instructions,
+		loaded, err := listBotRows(ctx, tx, deployment, []string{actor.SpaceID}, actor.UserID, archived)
+		bots = loaded
+		return err
+	})
+	if err != nil {
+		return nil, shared.Failure(err)
+	}
+	return bots, nil
+}
+
+// BotRows is repos.listBots (bot-repository.ts:356) for the given Spaces, read in the
+// caller's transaction: `spaces.list` runs it as system over every Space the member
+// belongs to, and limits the ids itself. Bots come in pinned-first order.
+func BotRows(
+	ctx context.Context,
+	tx pgx.Tx,
+	deployment shared.Deployment,
+	spaceIDs []string,
+	userID string,
+) ([]Bot, error) {
+	return listBotRows(ctx, tx, deployment, spaceIDs, userID, false)
+}
+
+// listBotRows is the body of repos.listBots over `spaceIDs`: every bot row (archived or
+// not), the caller's read state, active runs, the newest visible run per thread, the
+// sidebar preview, incoming calls and the roster's derived status fields.
+func listBotRows(
+	ctx context.Context,
+	tx pgx.Tx,
+	deployment shared.Deployment,
+	spaceIDs []string,
+	userID string,
+	archived bool,
+) ([]Bot, error) {
+	bots := []Bot{}
+	if len(spaceIDs) == 0 {
+		return bots, nil
+	}
+	archivedFilter := `AND b."archivedAt" IS NULL`
+	if archived {
+		archivedFilter = `AND b."archivedAt" IS NOT NULL`
+	}
+	rows, err := tx.Query(ctx, `SELECT b.id, b."spaceId", b.name, b.description, b.instructions,
 				b."instructionHistory", b.color, b."avatarSet", b."notifyOnFinish", b.pinned,
 				b."sectionId", b."archivedAt", b."parentBotId", b."memoryScope", b."createdAt",
 				b."updatedAt", b."voiceId", b."autoSpeak", b."modelProvider", b."modelId",
@@ -193,194 +231,189 @@ func listBots(ctx context.Context, database *db.DB, deployment shared.Deployment
 			LEFT JOIN threads t ON t."botId" = b.id
 			LEFT JOIN computers c ON c.id = b."computerId"
 			LEFT JOIN thread_reads r ON r."threadId" = t.id AND r."userId" = $2
-			WHERE b."spaceId" = $1 `+archivedFilter+`
-			ORDER BY b.pinned DESC, b.position ASC, b."createdAt" ASC`, actor.SpaceID, actor.UserID)
-		if err != nil {
-			return err
+			WHERE b."spaceId" = ANY($1) `+archivedFilter+`
+			ORDER BY b.pinned DESC, b.position ASC, b."createdAt" ASC`, spaceIDs, userID)
+	if err != nil {
+		return nil, err
+	}
+	loaded := []listedBotRow{}
+	for rows.Next() {
+		var row listedBotRow
+		if err := rows.Scan(&row.ID, &row.SpaceID, &row.Name, &row.Description,
+			&row.Instructions, &row.InstructionHistory, &row.Color, &row.AvatarSet,
+			&row.NotifyOnFinish, &row.Pinned, &row.SectionID, &row.ArchivedAt,
+			&row.ParentBotID, &row.MemoryScope, &row.CreatedAt, &row.UpdatedAt,
+			&row.VoiceID, &row.AutoSpeak, &row.ModelProvider, &row.ModelID,
+			&row.ThinkingLevel, &row.TeamChatAmbientEnabled, &row.TeamChatRules,
+			&row.CrossSpaceCommunication, &row.DailyCheckIns, &row.FleetManagement,
+			&row.ReplyMode, &row.DisabledBuiltinTools, &row.WebhookSecretID, &row.SpawnKey,
+			&row.ThreadID, &row.ComputerScope, &row.Unread, &row.SnoozedUntil); err != nil {
+			rows.Close()
+			return nil, err
 		}
-		loaded := []listedBotRow{}
-		for rows.Next() {
-			var row listedBotRow
-			if err := rows.Scan(&row.ID, &row.SpaceID, &row.Name, &row.Description,
-				&row.Instructions, &row.InstructionHistory, &row.Color, &row.AvatarSet,
-				&row.NotifyOnFinish, &row.Pinned, &row.SectionID, &row.ArchivedAt,
-				&row.ParentBotID, &row.MemoryScope, &row.CreatedAt, &row.UpdatedAt,
-				&row.VoiceID, &row.AutoSpeak, &row.ModelProvider, &row.ModelID,
-				&row.ThinkingLevel, &row.TeamChatAmbientEnabled, &row.TeamChatRules,
-				&row.CrossSpaceCommunication, &row.DailyCheckIns, &row.FleetManagement,
-				&row.ReplyMode, &row.DisabledBuiltinTools, &row.WebhookSecretID, &row.SpawnKey,
-				&row.ThreadID, &row.ComputerScope, &row.Unread, &row.SnoozedUntil); err != nil {
-				rows.Close()
-				return err
-			}
-			loaded = append(loaded, row)
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			return err
-		}
-		if len(loaded) == 0 {
-			return nil
-		}
+		loaded = append(loaded, row)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(loaded) == 0 {
+		return bots, nil
+	}
 
-		threadIDs := make([]string, 0, len(loaded))
-		botIDs := make([]string, 0, len(loaded))
-		for _, row := range loaded {
-			botIDs = append(botIDs, row.ID)
-			if row.ThreadID != nil {
-				threadIDs = append(threadIDs, *row.ThreadID)
-			}
+	threadIDs := make([]string, 0, len(loaded))
+	botIDs := make([]string, 0, len(loaded))
+	for _, row := range loaded {
+		botIDs = append(botIDs, row.ID)
+		if row.ThreadID != nil {
+			threadIDs = append(threadIDs, *row.ThreadID)
 		}
+	}
 
-		// runs: activeRunSelection (thread-listing.ts:20) — status and threadId only, newest
-		// first, with background ticket runs and background helpers left out
-		// (statusHiddenRunTriggers, thread-listing.ts:13).
-		runsByBot := map[string][]activeRun{}
-		type runRow struct {
-			BotID    string
-			ThreadID string
-			Status   string
-		}
-		runRows, err := tx.Query(ctx, `SELECT "botId", "threadId", status FROM runs
+	// runs: activeRunSelection (thread-listing.ts:20) — status and threadId only, newest
+	// first, with background ticket runs and background helpers left out
+	// (statusHiddenRunTriggers, thread-listing.ts:13).
+	runsByBot := map[string][]activeRun{}
+	type runRow struct {
+		BotID    string
+		ThreadID string
+		Status   string
+	}
+	runRows, err := tx.Query(ctx, `SELECT "botId", "threadId", status FROM runs
 			WHERE "botId" = ANY($1) AND status = ANY($2) AND trigger NOT IN ('tickets', 'helper')
 			ORDER BY "createdAt" DESC`, botIDs, activeRunStatuses)
-		if err != nil {
-			return err
+	if err != nil {
+		return nil, err
+	}
+	for runRows.Next() {
+		var row runRow
+		if err := runRows.Scan(&row.BotID, &row.ThreadID, &row.Status); err != nil {
+			runRows.Close()
+			return nil, err
 		}
-		for runRows.Next() {
-			var row runRow
-			if err := runRows.Scan(&row.BotID, &row.ThreadID, &row.Status); err != nil {
-				runRows.Close()
-				return err
-			}
-			runsByBot[row.BotID] = append(runsByBot[row.BotID], activeRun{ThreadID: row.ThreadID, Status: row.Status})
-		}
-		runRows.Close()
-		if err := runRows.Err(); err != nil {
-			return err
-		}
+		runsByBot[row.BotID] = append(runsByBot[row.BotID], activeRun{ThreadID: row.ThreadID, Status: row.Status})
+	}
+	runRows.Close()
+	if err := runRows.Err(); err != nil {
+		return nil, err
+	}
 
-		// withLatestBotRuns (thread-listing.ts:65): the latest user-visible run per thread,
-		// skipping the triggers userVisibleBotRunTriggers names (thread-listing.ts:12).
-		latestRuns := map[string]threadRun{}
-		if len(threadIDs) > 0 {
-			latestRows, err := tx.Query(ctx, `SELECT r.id, r."threadId", r.status
+	// withLatestBotRuns (thread-listing.ts:65): the latest user-visible run per thread,
+	// skipping the triggers userVisibleBotRunTriggers names (thread-listing.ts:12).
+	latestRuns := map[string]threadRun{}
+	if len(threadIDs) > 0 {
+		latestRows, err := tx.Query(ctx, `SELECT r.id, r."threadId", r.status
 				FROM unnest($1::text[]) AS t(id)
 				CROSS JOIN LATERAL (
 					SELECT id, "threadId", status FROM runs
 					WHERE "threadId" = t.id AND trigger NOT IN ('bot_message', 'tickets')
 					ORDER BY "createdAt" DESC, id DESC LIMIT 1
 				) r`, threadIDs)
-			if err != nil {
-				return err
-			}
-			for latestRows.Next() {
-				var id, threadID, status string
-				if err := latestRows.Scan(&id, &threadID, &status); err != nil {
-					latestRows.Close()
-					return err
-				}
-				latestRuns[threadID] = threadRun{ID: id, Status: status}
-			}
-			latestRows.Close()
-			if err := latestRows.Err(); err != nil {
-				return err
-			}
-		}
-
-		previews, newestAt, err := botThreadPreviews(ctx, tx, deployment.Content, threadIDs)
 		if err != nil {
-			return err
+			return nil, err
 		}
+		for latestRows.Next() {
+			var id, threadID, status string
+			if err := latestRows.Scan(&id, &threadID, &status); err != nil {
+				latestRows.Close()
+				return nil, err
+			}
+			latestRuns[threadID] = threadRun{ID: id, Status: status}
+		}
+		latestRows.Close()
+		if err := latestRows.Err(); err != nil {
+			return nil, err
+		}
+	}
 
-		calls, err := ringingCalls(ctx, tx, deployment, threadIDs)
-		if err != nil {
-			return err
-		}
-
-		for _, row := range loaded {
-			if row.ThreadID == nil {
-				return errBotMissingThread
-			}
-			history, failure := parseInstructionHistory(row.InstructionHistory)
-			if failure != nil {
-				return failure
-			}
-			statuses := make([]string, len(runsByBot[row.ID]))
-			for index, run := range runsByBot[row.ID] {
-				statuses[index] = run.Status
-			}
-			active := primaryRunStatus(statuses)
-			statusesInThread := []string{}
-			for _, run := range runsByBot[row.ID] {
-				if run.ThreadID == *row.ThreadID {
-					statusesInThread = append(statusesInThread, run.Status)
-				}
-			}
-			var latest *threadRun
-			if run, ok := latestRuns[*row.ThreadID]; ok {
-				latest = &run
-			}
-			computerMode := "team"
-			if row.ComputerScope != nil {
-				if *row.ComputerScope != "team" && *row.ComputerScope != "dedicated" {
-					// parseComputerMode throws on an unknown scope, which the router answers as
-					// an opaque 500.
-					return orpc.Internal()
-				}
-				computerMode = *row.ComputerScope
-			}
-			bot := Bot{
-				ID:                      row.ID,
-				SpaceID:                 row.SpaceID,
-				Name:                    row.Name,
-				Title:                   "",
-				Description:             row.Description,
-				Instructions:            row.Instructions,
-				InstructionHistory:      history,
-				Color:                   row.Color,
-				AvatarSet:               resolveAvatarSet(row.AvatarSet),
-				NotifyOnFinish:          row.NotifyOnFinish,
-				Pinned:                  row.Pinned,
-				SectionID:               row.SectionID,
-				Unread:                  row.Unread != nil && *row.Unread,
-				SnoozedUntil:            shared.ISOOrNil(row.SnoozedUntil),
-				ParentBotID:             row.ParentBotID,
-				MemoryScope:             row.MemoryScope,
-				ThreadID:                *row.ThreadID,
-				Preview:                 previews[*row.ThreadID],
-				Status:                  active,
-				ThreadStatus:            primaryRunStatus(statusesInThread),
-				RunErrorID:              rosterRunErrorID(latest, active),
-				ComputerMode:            computerMode,
-				CreatedAt:               shared.ISO(row.CreatedAt),
-				UpdatedAt:               shared.ISO(rosterUpdatedAt(newestAt[*row.ThreadID], row.UpdatedAt)),
-				VoiceID:                 row.VoiceID,
-				AutoSpeak:               row.AutoSpeak,
-				ModelProvider:           canonicalProviderID(row.ModelProvider),
-				ModelID:                 row.ModelID,
-				ThinkingLevel:           row.ThinkingLevel,
-				TeamChatAmbientEnabled:  row.TeamChatAmbientEnabled,
-				TeamChatRules:           row.TeamChatRules,
-				CrossSpaceCommunication: row.CrossSpaceCommunication,
-				DailyCheckIns:           row.DailyCheckIns,
-				FleetManagement:         row.FleetManagement,
-				ReplyMode:               replyMode(row.ReplyMode),
-				DisabledBuiltinTools:    disabledBuiltinToolSet(row.DisabledBuiltinTools),
-				WebhookConfigured:       row.WebhookSecretID != nil && *row.WebhookSecretID != "",
-				SpawnKey:                row.SpawnKey,
-				IncomingCall:            calls[*row.ThreadID],
-			}
-			if row.ArchivedAt != nil {
-				archivedAt := shared.ISO(*row.ArchivedAt)
-				bot.ArchivedAt = &archivedAt
-			}
-			bots = append(bots, bot)
-		}
-		return nil
-	})
+	previews, newestAt, err := botThreadPreviews(ctx, tx, deployment.Content, threadIDs)
 	if err != nil {
-		return nil, shared.Failure(err)
+		return nil, err
+	}
+
+	calls, err := ringingCalls(ctx, tx, deployment, threadIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, row := range loaded {
+		if row.ThreadID == nil {
+			return nil, errBotMissingThread
+		}
+		history, failure := parseInstructionHistory(row.InstructionHistory)
+		if failure != nil {
+			return nil, failure
+		}
+		statuses := make([]string, len(runsByBot[row.ID]))
+		for index, run := range runsByBot[row.ID] {
+			statuses[index] = run.Status
+		}
+		active := primaryRunStatus(statuses)
+		statusesInThread := []string{}
+		for _, run := range runsByBot[row.ID] {
+			if run.ThreadID == *row.ThreadID {
+				statusesInThread = append(statusesInThread, run.Status)
+			}
+		}
+		var latest *threadRun
+		if run, ok := latestRuns[*row.ThreadID]; ok {
+			latest = &run
+		}
+		computerMode := "team"
+		if row.ComputerScope != nil {
+			if *row.ComputerScope != "team" && *row.ComputerScope != "dedicated" {
+				// parseComputerMode throws on an unknown scope, which the router answers as
+				// an opaque 500.
+				return nil, orpc.Internal()
+			}
+			computerMode = *row.ComputerScope
+		}
+		bot := Bot{
+			ID:                      row.ID,
+			SpaceID:                 row.SpaceID,
+			Name:                    row.Name,
+			Title:                   "",
+			Description:             row.Description,
+			Instructions:            row.Instructions,
+			InstructionHistory:      history,
+			Color:                   row.Color,
+			AvatarSet:               resolveAvatarSet(row.AvatarSet),
+			NotifyOnFinish:          row.NotifyOnFinish,
+			Pinned:                  row.Pinned,
+			SectionID:               row.SectionID,
+			Unread:                  row.Unread != nil && *row.Unread,
+			SnoozedUntil:            shared.ISOOrNil(row.SnoozedUntil),
+			ParentBotID:             row.ParentBotID,
+			MemoryScope:             row.MemoryScope,
+			ThreadID:                *row.ThreadID,
+			Preview:                 previews[*row.ThreadID],
+			Status:                  active,
+			ThreadStatus:            primaryRunStatus(statusesInThread),
+			RunErrorID:              rosterRunErrorID(latest, active),
+			ComputerMode:            computerMode,
+			CreatedAt:               shared.ISO(row.CreatedAt),
+			UpdatedAt:               shared.ISO(rosterUpdatedAt(newestAt[*row.ThreadID], row.UpdatedAt)),
+			VoiceID:                 row.VoiceID,
+			AutoSpeak:               row.AutoSpeak,
+			ModelProvider:           canonicalProviderID(row.ModelProvider),
+			ModelID:                 row.ModelID,
+			ThinkingLevel:           row.ThinkingLevel,
+			TeamChatAmbientEnabled:  row.TeamChatAmbientEnabled,
+			TeamChatRules:           row.TeamChatRules,
+			CrossSpaceCommunication: row.CrossSpaceCommunication,
+			DailyCheckIns:           row.DailyCheckIns,
+			FleetManagement:         row.FleetManagement,
+			ReplyMode:               replyMode(row.ReplyMode),
+			DisabledBuiltinTools:    disabledBuiltinToolSet(row.DisabledBuiltinTools),
+			WebhookConfigured:       row.WebhookSecretID != nil && *row.WebhookSecretID != "",
+			SpawnKey:                row.SpawnKey,
+			IncomingCall:            calls[*row.ThreadID],
+		}
+		if row.ArchivedAt != nil {
+			archivedAt := shared.ISO(*row.ArchivedAt)
+			bot.ArchivedAt = &archivedAt
+		}
+		bots = append(bots, bot)
 	}
 	return bots, nil
 }
@@ -606,12 +639,21 @@ func parseInstructionHistory(value any) ([]InstructionVersion, *orpc.Error) {
 
 // validatedBots is BotSchema.array().parse of a list result.
 func validatedBots(bots []Bot) (any, *orpc.Error) {
-	for _, bot := range bots {
-		if failure := validateBot(bot); failure != nil {
-			return nil, failure
-		}
+	if failure := ValidateRows(bots); failure != nil {
+		return nil, failure
 	}
 	return bots, nil
+}
+
+// ValidateRows is the router's BotSchema parse over a list: SpaceNavigation's current bots
+// go through it just as bots.list's do.
+func ValidateRows(bots []Bot) *orpc.Error {
+	for _, bot := range bots {
+		if failure := validateBot(bot); failure != nil {
+			return failure
+		}
+	}
+	return nil
 }
 
 // validateBot is BotSchema's parse of the mapped row.
