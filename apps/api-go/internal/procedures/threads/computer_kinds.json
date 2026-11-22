@@ -1,0 +1,21 @@
+{
+  "undeclared": { "terminal": false, "inPlaceUpdate": true, "runsOnUserMachine": false, "width": 1280, "height": 800 },
+  "kinds": {
+    "none": { "terminal": false, "inPlaceUpdate": false, "runsOnUserMachine": false, "width": 1280, "height": 800 },
+    "docker": { "terminal": true, "inPlaceUpdate": true, "runsOnUserMachine": false, "width": 1280, "height": 800 },
+    "wuying": { "terminal": false, "inPlaceUpdate": false, "runsOnUserMachine": false, "width": 1280, "height": 800 },
+    "e2b": { "terminal": true, "inPlaceUpdate": true, "runsOnUserMachine": false, "width": 1280, "height": 800 },
+    "novita": { "terminal": true, "inPlaceUpdate": true, "runsOnUserMachine": false, "width": 1280, "height": 800 },
+    "daytona": { "terminal": true, "inPlaceUpdate": true, "runsOnUserMachine": false, "width": 1280, "height": 800 },
+    "createos": { "terminal": false, "inPlaceUpdate": true, "runsOnUserMachine": false, "width": 1280, "height": 800 },
+    "boat": { "terminal": true, "inPlaceUpdate": true, "runsOnUserMachine": false, "width": 1920, "height": 1080 },
+    "boxd": { "terminal": true, "inPlaceUpdate": true, "runsOnUserMachine": false, "width": 1280, "height": 800 },
+    "instabox": { "terminal": true, "inPlaceUpdate": true, "runsOnUserMachine": false, "width": 1280, "height": 800 },
+    "railway": { "terminal": true, "inPlaceUpdate": true, "runsOnUserMachine": false, "width": 1280, "height": 800 },
+    "kubernetes": { "terminal": true, "inPlaceUpdate": true, "runsOnUserMachine": false, "width": 1280, "height": 800 },
+    "incus": { "terminal": true, "inPlaceUpdate": true, "runsOnUserMachine": false, "width": 1280, "height": 800 },
+    "local-vm": { "terminal": true, "inPlaceUpdate": true, "runsOnUserMachine": false, "width": 1280, "height": 800 },
+    "desktop": { "terminal": false, "inPlaceUpdate": false, "runsOnUserMachine": true, "width": 1280, "height": 800 },
+    "fake": { "terminal": true, "inPlaceUpdate": true, "runsOnUserMachine": false, "width": 1280, "height": 800 }
+  }
+}

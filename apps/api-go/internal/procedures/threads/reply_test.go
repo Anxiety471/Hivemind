@@ -1,0 +1,71 @@
+package threads
+
+import (
+	"bufio"
+	"encoding/json"
+	"os"
+	"testing"
+)
+
+// TestPlainMarkdownTextMatchesTypeScript replays testdata/reply-excerpt-fuzz.jsonl, written by
+// apps/api-go/tools/reply-excerpt-fuzz.mts from the real messageReplyPreview. Every string
+// plainMarkdownText accepts must produce the preview text TypeScript produced; the rest are
+// declined in production, so only their share is reported.
+func TestPlainMarkdownTextMatchesTypeScript(t *testing.T) {
+	file, err := os.Open("testdata/reply-excerpt-fuzz.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 1<<20), 1<<20)
+	total, accepted, nonEmpty := 0, 0, 0
+	for scanner.Scan() {
+		var line struct {
+			Text    string `json:"text"`
+			Preview string `json:"preview"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &line); err != nil {
+			t.Fatal(err)
+		}
+		total++
+		if !plainMarkdownText(line.Text) {
+			continue
+		}
+		accepted++
+		blocks := []any{map[string]any{"kind": "text", "text": line.Text}}
+		preview, plain := replyPreview(blocks, "bot", nil, nil)
+		if !plain {
+			t.Fatalf("%q: plain text declined", line.Text)
+		}
+		if line.Text != "" {
+			nonEmpty++
+		}
+		if preview["text"] != line.Preview {
+			t.Errorf("%q: Go preview %q, TypeScript %q", line.Text, preview["text"], line.Preview)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("corpus %d strings: %d accepted as plain (%d non-empty), %d left to TypeScript", total, accepted, nonEmpty, total-accepted)
+	if total < 5000 || nonEmpty < 1500 {
+		t.Fatalf("corpus too small to mean anything: %d strings, %d plain", total, nonEmpty)
+	}
+}
+
+func TestPlainMarkdownTextRefusesMarkers(t *testing.T) {
+	for _, text := range []string{
+		"a*b", "a_b", "`a`", "[a]", "a(b)", "a<b", "a>b", "# a", "a~b", "a|b", "a!b", "a&b", "a:b",
+		"a\nb", "a\tb", "a  b", " a", "a ", "- a", "+ a", "1. a", "a\\b", "😀", ".a",
+	} {
+		if plainMarkdownText(text) {
+			t.Errorf("%q accepted as plain", text)
+		}
+	}
+	for _, text := range []string{"", "hello world", "x 3.5 apples", "a-b", "x = y", "日本語"} {
+		if !plainMarkdownText(text) {
+			t.Errorf("%q refused", text)
+		}
+	}
+}

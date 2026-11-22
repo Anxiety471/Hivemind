@@ -35,6 +35,9 @@ type Procedure struct {
 	// TypeScript answer is served. The audited middleware's own events are not affected.
 	SelfAudited bool
 	Serve       func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error)
+	// MayDecline lets Serve return ErrDecline for a request it cannot answer exactly. The
+	// gateway buffers such a procedure's answer so a declined request can still go to TypeScript.
+	MayDecline bool
 	// Stream, when set, replaces Serve: the procedure answers with an event stream. It is never
 	// shadowed (a comparison would wait for a stream that does not end).
 	Stream *Stream
@@ -189,8 +192,31 @@ func (s *Server) Count() int { return len(s.procs) }
 // MaxBody is the largest request shadow mode can copy.
 func (s *Server) MaxBody() int64 { return s.maxBody }
 
+// ErrDecline is what a procedure returns for a request it cannot answer exactly (the
+// TypeScript answer depends on a library with no Go equivalent): the gateway then proxies
+// that one request to the TypeScript API as it would in proxy mode. It writes nothing and
+// records no effect. Only a procedure with MayDecline set may return it.
+var ErrDecline = orpc.New("DECLINED", 0, "Declined")
+
 // ServeHTTP runs the middleware chain and the procedure.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request, procedure string) {
+	s.serve(w, r, procedure)
+}
+
+// MayDecline reports whether the procedure may hand a request back.
+func (s *Server) MayDecline(name string) bool {
+	procedure, ok := s.procs[name]
+	return ok && procedure.MayDecline
+}
+
+// ServeOrDecline is ServeHTTP for a MayDecline procedure: it reports true when the procedure
+// declined and nothing was written, so the caller answers the request another way. The
+// headers and cookies it set on w are not wanted then, so pass a recorder.
+func (s *Server) ServeOrDecline(w http.ResponseWriter, r *http.Request, procedure string) bool {
+	return s.serve(w, r, procedure)
+}
+
+func (s *Server) serve(w http.ResponseWriter, r *http.Request, procedure string) (declined bool) {
 	started := time.Now()
 	status := &statusWriter{ResponseWriter: w}
 	s.cors(status, r)
@@ -264,6 +290,16 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request, procedure str
 		return
 	}
 	output, failure := handler.Serve(ctx, actor, input)
+	if failure == ErrDecline {
+		// Only a procedure marked MayDecline is run through a recorder the gateway can discard;
+		// anything else answering this is a bug, never a silent success.
+		if !handler.MayDecline {
+			orpc.WriteError(status, orpc.Internal())
+			s.log(r, procedure, status.Status(), started)
+			return false
+		}
+		return true
+	}
 	if failure != nil {
 		orpc.WriteError(status, failure)
 		s.log(r, procedure, status.Status(), started)
@@ -274,13 +310,17 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request, procedure str
 	s.effects.After(context.WithoutCancel(ctx), procedure, actor, input.Raw, output)
 	orpc.WriteJSON(status, http.StatusOK, output)
 	s.log(r, procedure, status.Status(), started)
+	return
 }
 
-// Snapshot runs the same pipeline into a recorder, for shadow comparison.
+// Snapshot runs the same pipeline into a recorder, for shadow comparison. A request the
+// procedure declined comes back with Declined set and nothing else.
 func (s *Server) Snapshot(ctx context.Context, r *http.Request, procedure string) Snapshot {
 	recorder := httptest.NewRecorder()
 	clone := r.Clone(ctx)
-	s.ServeHTTP(recorder, clone, procedure)
+	if s.serve(recorder, clone, procedure) {
+		return Snapshot{Declined: true}
+	}
 	result := recorder.Result()
 	defer result.Body.Close()
 	body, _ := io.ReadAll(result.Body)
@@ -292,6 +332,8 @@ type Snapshot struct {
 	Status int
 	Header http.Header
 	Body   []byte
+	// Declined means the procedure handed the request back (ErrDecline): no response was made.
+	Declined bool
 }
 
 func (s *Server) cors(w http.ResponseWriter, r *http.Request) {

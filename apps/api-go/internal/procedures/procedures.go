@@ -206,6 +206,14 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 			},
 		},
 		{
+			Name:       "threads.get",
+			ReadOnly:   true,
+			MayDecline: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return threads.Get(ctx, database, deployment, actor, input)
+			},
+		},
+		{
 			Name: "threads.markRead",
 			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
 				return threads.MarkRead(ctx, database, actor, input)

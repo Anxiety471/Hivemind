@@ -168,7 +168,8 @@ export async function botsRunOwnModels(deps: RouterDeps, actor: Actor, botIds: s
   return credentials.every(Boolean);
 }
 
-export const THREAD_MESSAGE_PAGE_SIZE = 100;
+/** Messages per transcript page; older ones load a page at a time through `olderCursor`. */
+export const THREAD_MESSAGE_PAGE_SIZE = 30;
 
 /** Silence longer than this on a thread stream is indistinguishable from a dead socket. */
 export const HEARTBEAT_MS = 20_000;
