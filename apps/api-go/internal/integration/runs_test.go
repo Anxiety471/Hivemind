@@ -693,6 +693,14 @@ func TestCancelsRequireTheRing(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "content key ring") {
 		t.Fatalf("nil-ring CancelConversation = %v", err)
 	}
+	_, err = runs.Canceller{}.CancelConversationFor(ctx, database,
+		db.Actor{SpaceID: fixture.spaceID, UserID: fixture.userID},
+		runs.ConversationTarget{
+			SpaceID: fixture.spaceID, ThreadID: fixture.threadID, BotIDs: []string{fixture.botID},
+		}, time.Now(), nil)
+	if err == nil || !strings.Contains(err.Error(), "content key ring") {
+		t.Fatalf("nil-ring CancelConversationFor = %v", err)
+	}
 	err = database.System(ctx, "supersede without a ring", func(tx pgx.Tx) error {
 		_, err := runs.Canceller{}.SupersedeQueued(ctx, tx, fixture.threadID, []string{fixture.botID}, nil, time.Now(), nil)
 		return err

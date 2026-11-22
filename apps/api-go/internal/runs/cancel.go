@@ -234,9 +234,6 @@ func (c Canceller) CancelConversationFor(
 	at time.Time,
 	state *secretstore.State,
 ) (ConversationCancel, error) {
-	if err := c.requireRing(); err != nil {
-		return ConversationCancel{}, err
-	}
 	var result ConversationCancel
 	err := ThreadLockTransaction(ctx, database, actor, target.ThreadID,
 		func(ctx context.Context, tx pgx.Tx) error {
