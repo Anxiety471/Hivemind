@@ -20,6 +20,7 @@ const BUILT_IN_PUBLIC_MODEL_HOSTS = new Set(["ollama.com"]);
 export const COMPATIBLE_ENDPOINT_PRESETS: CompatibleEndpointPreset[] = [
   { name: "Ollama Cloud", baseUrl: "https://ollama.com/v1" },
   { name: "LongCat", baseUrl: "https://api.longcat.chat/openai" },
+  { name: "OpenDesign", baseUrl: "https://amr-link.open-design.ai/v1" },
   {
     name: "Alibaba Cloud Token Plan (Singapore)",
     baseUrl: "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",

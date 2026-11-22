@@ -29,6 +29,7 @@ var anthropicThinkingLevels = map[string][]string{
 var compatibleEndpointPresets = []compatibleEndpointPreset{
 	{Name: "Ollama Cloud", BaseURL: "https://ollama.com/v1"},
 	{Name: "LongCat", BaseURL: "https://api.longcat.chat/openai"},
+	{Name: "OpenDesign", BaseURL: "https://amr-link.open-design.ai/v1"},
 	{Name: "Alibaba Cloud Token Plan (Singapore)", BaseURL: "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1"},
 	{Name: "Alibaba Cloud (Qwen, Singapore)", BaseURL: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"},
 }
