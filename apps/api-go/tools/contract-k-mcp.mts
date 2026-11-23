@@ -805,7 +805,7 @@ export function laneKCases(system: System): Case[] {
 
     // mcp.oauth.disconnect: the stored grant goes, its generation rises, the revision bumps and
     // the old health verdict resets. The material JSON must match JSON.stringify byte for byte.
-    disconnect("no-secret", { serverId: "__s-ks1__" }, async (seeded) => {
+    disconnect("plain", { serverId: "__s-ks1__" }, async (seeded) => {
       await server(seeded, "ks1");
     }),
     disconnect(
