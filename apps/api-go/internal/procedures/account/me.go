@@ -118,7 +118,7 @@ func Me(
 			return err
 		}
 		settings = loaded
-		admin = isAdmin(config.AdminEmails, row.email, row.emailVerified)
+		admin = shared.IsAdmin(config.AdminEmails, row.email, row.emailVerified)
 		primary, err := models.AppliedPrimary(ctx, tx, actor, "main")
 		if err != nil {
 			return err
@@ -218,21 +218,6 @@ func readDeploymentSettings(ctx context.Context, tx pgx.Tx) (*deploymentRow, err
 		return nil, err
 	}
 	return &row, nil
-}
-
-// isAdmin is isAdmin (apps/api/src/auth/admins.ts:7): listed in RAKAZO_ADMIN_EMAILS with a
-// verified address.
-func isAdmin(admins []string, email string, verified bool) bool {
-	if len(admins) == 0 || !verified {
-		return false
-	}
-	lowered := strings.ToLower(email)
-	for _, admin := range admins {
-		if admin == lowered {
-			return true
-		}
-	}
-	return false
 }
 
 // defaultModel is meDto's defaultProvider/defaultModel: the member's connected main model,

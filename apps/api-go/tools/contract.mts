@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import type { ChildProcess } from "node:child_process";
 import { spawn } from "node:child_process";
 import { createHmac } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -31,9 +31,11 @@ import { modelsCases } from "./contract-models.mts";
 import { spaceRunCases } from "./contract-spaces-runs.mts";
 import { routineResumeCases } from "./contract-routine-resume.mts";
 import { routineCases } from "./contract-routines.mts";
+import { run1Cases } from "./contract-run1.mts";
 import { threadAdversarialCases } from "./contract-threads-adversarial.mts";
 import { threadGetCases } from "./contract-threads-get.mts";
 import { threadMoreCases } from "./contract-threads-more.mts";
+import { url1Cases } from "./contract-url1.mts";
 
 const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) throw new Error("DATABASE_URL is required");
@@ -50,6 +52,11 @@ const RUN_TAG = process.env.RUN_TAG ? `-${process.env.RUN_TAG}` : "";
 // biome-ignore lint/suspicious/noUndeclaredEnvVars: manual harness, not a turbo task
 const GO_PORT = process.env.GO_PORT ?? "3201";
 const GO_URL = `http://127.0.0.1:${GO_PORT}`;
+// Fault-injection only: a second gateway whose table is entirely proxy. One concurrent call in
+// CONTRACT_PROXY_ONE_CONCURRENT proves the served_by count rejects a partial proxy window.
+// biome-ignore lint/suspicious/noUndeclaredEnvVars: manual harness, not a turbo task
+const PROXY_PORT = process.env.GO_PROXY_PORT ?? String(Number(GO_PORT) + 2);
+const PROXY_URL = `http://127.0.0.1:${PROXY_PORT}`;
 // The gateway's upstream: a bridge to the in-process TypeScript app, so a request Go declines is
 // answered the way production's proxy answers it. UPSTREAM_PORT separates runs on one host.
 // biome-ignore lint/suspicious/noUndeclaredEnvVars: manual harness, not a turbo task
@@ -69,6 +76,9 @@ const CONTRACT_EMAIL = {
 // computer quota the restore cases exercise. Test values only; each side sees the same ones.
 const INBOUND_EMAIL_DOMAIN = "bots.contract.test";
 const INBOUND_EMAIL_SECRET = "contract-inbound-email-secret-0123456789";
+// The address a case marked `admin` signs in with; only those cases replace the seeded user's
+// email, so me.isAdmin and every other admin gate stay false elsewhere.
+const CONTRACT_ADMIN_EMAIL = "contract-admin@example.test";
 const MAX_COMPUTERS_PER_USER = "2";
 // resolveMaxComputersPerUser reads process.env at call time on the TypeScript side.
 process.env.SANDBOX_MAX_COMPUTERS_PER_USER = MAX_COMPUTERS_PER_USER;
@@ -114,6 +124,8 @@ export type Case = {
   unorderedSections?: boolean;
   /** Runs only with CONTRACT_EMAIL=1 (email delivery configured on both sides); otherwise only without it. */
   email?: boolean;
+  /** Signs the seeded user in as CONTRACT_ADMIN_EMAIL, for admin-only procedures. */
+  admin?: boolean;
   /**
    * Pause between the two sides' windows so a TypeScript background job's Space changes (the
    * in-process wakeup queue may finish a restored routine seconds after the response; the Go
@@ -131,6 +143,15 @@ export type Case = {
    * bridge sees it), false when Go must answer it itself. Unset skips the check.
    */
   declines?: boolean;
+  /** Run this many identical calls concurrently; results are compared as a sorted list of status/body. */
+  concurrent?: number;
+  /** Extra evidence checked immediately after each side's request, before the next seed resets rows. */
+  check?: (context: {
+    seeded: Seeded;
+    result: { status: number; headers: unknown; body: any; notifications?: unknown[] };
+    side: "ts" | "go";
+    gatewayLog: string;
+  }) => void | Promise<void>;
 };
 
 function cookieFor(token: string) {
@@ -150,6 +171,7 @@ const handles = await createApp({
   nodeEnv: "test",
   signupsEnabled: "true",
   agentRuntime: "scripted",
+  adminEmails: [CONTRACT_ADMIN_EMAIL],
   // The same inbound-email configuration the Go child gets through the environment.
   inboundEmail: { domain: INBOUND_EMAIL_DOMAIN, secret: INBOUND_EMAIL_SECRET },
   sandboxProvider: "fake",
@@ -185,6 +207,10 @@ await new Promise<void>((resolve) =>
 );
 
 let go: ChildProcess | undefined;
+let proxyGo: ChildProcess | undefined;
+// The Go side's stderr/stdout for the current request window. URL cases use this to prove a share
+// token is never logged, while still passing the lines through to the harness output.
+let gatewayLog = "";
 const routesFile = join(dataDir, "routes.json");
 await writeFile(
   routesFile,
@@ -236,6 +262,7 @@ await writeFile(
       "computer.updates": { mode: "go", readOnly: true },
       "mcp.assignments.all": { mode: "go", readOnly: true },
       "mcp.assignments.list": { mode: "go", readOnly: true },
+      "mcp.assignments.approve": { mode: "go" },
       "models.backups": { mode: "go", readOnly: true },
       "models.role": { mode: "go", readOnly: true },
       "models.setRole": { mode: "go" },
@@ -272,6 +299,7 @@ await writeFile(
       "groups.restore": { mode: "go" },
       "routines.listForMentions": { mode: "go", readOnly: true },
       "routines.list": { mode: "go", readOnly: true },
+      "routines.testRun": { mode: "go" },
       "routines.history": { mode: "go", readOnly: true },
       "agentSkills.list": { mode: "go", readOnly: true },
       "agentSkills.get": { mode: "go", readOnly: true },
@@ -297,6 +325,7 @@ await writeFile(
       "organizations.invitations.cancel": { mode: "go" },
       "bots.templates": { mode: "go", readOnly: true },
       "skills.list": { mode: "go", readOnly: true },
+      "skills.testRun": { mode: "go" },
       "onboarding.start": { mode: "go", readOnly: true },
       "agentSecrets.list": { mode: "go", readOnly: true },
       "audit.events": { mode: "go", readOnly: true },
@@ -313,19 +342,75 @@ await writeFile(
       "boards.list": { mode: "go" },
       "boards.get": { mode: "go" },
       "boards.rename": { mode: "go" },
+      "integrationSetup.get": { mode: "go", readOnly: true },
+      "marketplace.submissions": { mode: "go", readOnly: true },
+      "pages.setVisibility": { mode: "go" },
     },
   }),
 );
+type RouteConfig = { default?: string; routes?: Record<string, { mode?: string }> };
+const routeConfig = JSON.parse(await readFile(routesFile, "utf8")) as RouteConfig;
+const routeMode = (procedure: string) =>
+  routeConfig.routes?.[procedure]?.mode ?? routeConfig.default ?? "proxy";
+
+/** Count this procedure's local answers in the captured gateway log. */
+function servedByGoCount(log: string, procedure: string) {
+  const procedureField = `"procedure":${JSON.stringify(procedure)}`;
+  return log
+    .split("\n")
+    .filter((line) => line.includes('"served_by":"go"') && line.includes(procedureField)).length;
+}
+
+/**
+ * Option 2: local.Server.log's completion lines carry no request id (only method, path, status,
+ * duration, procedure and served_by), so there is no id to correlate. Wait for a quiet gateway
+ * log before clearing the window; exact counts plus this boundary barrier keep a late same-
+ * procedure line from the previous case out of the next case's window.
+ */
+async function drainGatewayLog() {
+  let previous = gatewayLog.length;
+  for (let waited = 0; waited < 4000; waited += 200) {
+    await sleep(200);
+    const current = gatewayLog.length;
+    if (current === previous) return;
+    previous = current;
+  }
+  throw new Error("gateway log did not go quiet");
+}
 process.on("uncaughtException", (error) => {
   go?.kill("SIGKILL");
+  proxyGo?.kill("SIGKILL");
   console.error(error);
   process.exit(1);
 });
 process.on("unhandledRejection", (error) => {
   go?.kill("SIGKILL");
+  proxyGo?.kill("SIGKILL");
   console.error(error);
   process.exit(1);
 });
+const gatewayEnv = {
+  ...process.env,
+  DATABASE_URL,
+  BETTER_AUTH_SECRET: SECRET,
+  BETTER_AUTH_URL: WEB_ORIGIN,
+  WEB_ORIGIN,
+  // The credential store both sides seal with. The same test key the TypeScript app uses.
+  ENCRYPTION_KEY: CONTRACT_ENCRYPTION_KEY,
+  CONTENT_ENCRYPTION: "on",
+  MAX_UPLOAD_SIZE_MB: "10",
+  // Email delivery is configured when SMTP_URL is: the same variables TypeScript reads.
+  SMTP_URL: EMAIL_ON ? "smtp://127.0.0.1:2525" : "",
+  EMAIL_PROVIDER: "",
+  EMAIL_EMULATOR: "",
+  // The inbound domain bots.emailAddress* read, and the restore quota, as on the TypeScript side.
+  INBOUND_EMAIL_DOMAIN,
+  INBOUND_EMAIL_SECRET,
+  RAKAZO_ADMIN_EMAILS: CONTRACT_ADMIN_EMAIL,
+  SANDBOX_MAX_COMPUTERS_PER_USER: MAX_COMPUTERS_PER_USER,
+  PHONE_CALLS_ENABLED: "true",
+  PHONE_CALL_RING_SECONDS: "45",
+};
 go = spawn(
   GO_BINARY,
   [
@@ -338,31 +423,14 @@ go = spawn(
     "-build-id-file",
     BUILD_ID_FILE,
   ],
-  {
-    env: {
-      ...process.env,
-      DATABASE_URL,
-      BETTER_AUTH_SECRET: SECRET,
-      BETTER_AUTH_URL: WEB_ORIGIN,
-      WEB_ORIGIN,
-      // The credential store both sides seal with. The same test key the TypeScript app uses.
-      ENCRYPTION_KEY: CONTRACT_ENCRYPTION_KEY,
-      CONTENT_ENCRYPTION: "on",
-      MAX_UPLOAD_SIZE_MB: "10",
-      // Email delivery is configured when SMTP_URL is: the same variables TypeScript reads.
-      SMTP_URL: EMAIL_ON ? "smtp://127.0.0.1:2525" : "",
-      EMAIL_PROVIDER: "",
-      EMAIL_EMULATOR: "",
-      // The inbound domain bots.emailAddress* read, and the restore quota, as on the TypeScript side.
-      INBOUND_EMAIL_DOMAIN,
-      INBOUND_EMAIL_SECRET,
-      SANDBOX_MAX_COMPUTERS_PER_USER: MAX_COMPUTERS_PER_USER,
-      PHONE_CALLS_ENABLED: "true",
-      PHONE_CALL_RING_SECONDS: "45",
-    },
-    stdio: ["ignore", "inherit", "inherit"],
-  },
+  { env: gatewayEnv, stdio: ["ignore", "pipe", "pipe"] },
 );
+const captureGateway = (chunk: Buffer) => {
+  gatewayLog += chunk.toString();
+  process.stdout.write(chunk);
+};
+go.stdout?.on("data", captureGateway);
+go.stderr?.on("data", captureGateway);
 for (let attempt = 0; attempt < 100; attempt += 1) {
   try {
     const response = await fetch(`${GO_URL}/healthz`);
@@ -372,6 +440,42 @@ for (let attempt = 0; attempt < 100; attempt += 1) {
   }
   if (attempt === 99) throw new Error("go gateway did not start");
   await sleep(50);
+}
+
+// Fault-injection only. A second gateway with an empty route table answers entirely through the
+// TypeScript upstream; CONTRACT_PROXY_ONE_CONCURRENT sends one of a concurrent case's Go calls
+// here, so the served_by:go count must reject the partially proxied window.
+// biome-ignore lint/suspicious/noUndeclaredEnvVars: manual harness, not a turbo task
+if (process.env.CONTRACT_PROXY_ONE_CONCURRENT === "1") {
+  const proxyRoutesFile = join(dataDir, "routes-proxy.json");
+  await writeFile(proxyRoutesFile, JSON.stringify({ default: "proxy", routes: {} }));
+  proxyGo = spawn(
+    GO_BINARY,
+    [
+      "-listen",
+      `127.0.0.1:${PROXY_PORT}`,
+      "-upstream",
+      `http://127.0.0.1:${UPSTREAM_PORT}`,
+      "-routes",
+      proxyRoutesFile,
+      "-build-id-file",
+      BUILD_ID_FILE,
+    ],
+    { env: gatewayEnv, stdio: ["ignore", "pipe", "pipe"] },
+  );
+  const captureProxyGateway = (chunk: Buffer) => process.stderr.write(chunk);
+  proxyGo.stdout?.on("data", captureProxyGateway);
+  proxyGo.stderr?.on("data", captureProxyGateway);
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    try {
+      const response = await fetch(`${PROXY_URL}/healthz`);
+      if (response.ok) break;
+    } catch {
+      // still starting
+    }
+    if (attempt === 99) throw new Error("fault proxy gateway did not start");
+    await sleep(50);
+  }
 }
 
 // A listener on the realtime channel: TypeScript and Go must publish identical signals.
@@ -585,11 +689,13 @@ const cases: Case[] = [
   ...modelBackupCases(),
   ...membershipCases(system),
   ...pageWriteCases(),
+  ...url1Cases(system),
   ...modelRenameCases(),
   ...artifactCases(),
   ...laneDCases(system),
   ...routineResumeCases(system),
   ...routineCases(system),
+  ...run1Cases(system),
   ...memoryCases(),
   ...laneGCases(),
   ...laneGCases2(),
@@ -602,6 +708,27 @@ const cases: Case[] = [
   ...threadAdversarialCases(system),
   ...threadMoreCases(system),
 ];
+
+// biome-ignore lint/suspicious/noUndeclaredEnvVars: manual harness, not a turbo task
+if (process.env.CONTRACT_ROUTE_AUDIT === "1") {
+  const silentlyProxied = cases.filter((testCase) => {
+    const mode = routeMode(testCase.procedure);
+    return mode !== "go" && mode !== "shadow";
+  });
+  console.log(
+    `route audit: ${cases.length} cases; ${silentlyProxied.length} not routed go/shadow`,
+  );
+  for (const testCase of silentlyProxied)
+    console.log(
+      `route audit: ${testCase.name} (${testCase.procedure}) -> ${routeMode(testCase.procedure)}`,
+    );
+  go?.kill("SIGKILL");
+  proxyGo?.kill("SIGKILL");
+  upstreamServer.close();
+  await handles.stop();
+  await rm(dataDir, { recursive: true, force: true });
+  process.exit(silentlyProxied.length > 0 ? 1 : 0);
+}
 
 const SITES = ["zeta.example", "alpha.example", "Beta.example", "_under.example", "10.0.0.1"];
 
@@ -2159,11 +2286,30 @@ async function run(
   input: unknown,
   seeded: Seeded,
 ) {
+  if (testCase.concurrent) {
+    const results = await Promise.all(
+      Array.from({ length: testCase.concurrent }, () =>
+        call(testCase.procedure, input, called(seeded, testCase)),
+      ),
+    );
+    const combined = results
+      .map((result) => ({ status: result.status, json: result.body?.json }))
+      .sort((left, right) => (JSON.stringify(left) < JSON.stringify(right) ? -1 : 1));
+    return {
+      status: results[0]!.status,
+      headers: results[0]!.headers,
+      body: { json: combined },
+      calls: testCase.concurrent,
+    };
+  }
   if (!testCase.paginate) {
     const raw = await call(testCase.procedure, input, called(seeded, testCase));
     const result = testCase.unordered ? sortedById(raw) : raw;
     const settled = testCase.unorderedSections ? sortedSections(result) : result;
-    return testCase.after ? { ...settled, followUps: await followUps(testCase, seeded) } : settled;
+    return {
+      ...(testCase.after ? { ...settled, followUps: await followUps(testCase, seeded) } : settled),
+      calls: 1,
+    };
   }
   const pages: Awaited<ReturnType<typeof call>>[] = [];
   let cursor: string | undefined;
@@ -2181,6 +2327,7 @@ async function run(
     status: pages[0]!.status,
     headers: pages[0]!.headers,
     body: pages.map((page) => page.body),
+    calls: pages.length,
   };
 }
 
@@ -5993,6 +6140,9 @@ async function reset(seeded: ReturnType<typeof ids>) {
     await owner.query("TRUNCATE usage_records");
     await owner.query("COMMIT");
   }
+  await system.run.deleteMany({ where: { spaceId: { in: seeded.spaces } } });
+  await system.task.deleteMany({ where: { spaceId: { in: seeded.spaces } } });
+  await system.taughtSkill.deleteMany({ where: { spaceId: { in: seeded.spaces } } });
   await system.botMcpServer.deleteMany({ where: { spaceId: { in: seeded.spaces } } });
   await system.mcpServerSpace.deleteMany({ where: { userId: own } });
   await system.computerUpdate.deleteMany({ where: { computerId: { startsWith: userId } } });
@@ -6014,6 +6164,7 @@ async function reset(seeded: ReturnType<typeof ids>) {
     where: { OR: [{ organizationId: orgId }, { actorId: userId }] },
   });
   await system.page.deleteMany({ where: { userId: { in: [userId, `${userId}-other`] } } });
+  await system.pluginSubmission.deleteMany({ where: { id: { startsWith: `${userId}-` } } });
   await system.chatGroup.deleteMany({ where: { userId: { in: [userId, `${userId}-other`] } } });
   await system.trustedLinkSite.deleteMany({
     where: { userId: { in: [userId, `${userId}-other`] } },
@@ -7598,7 +7749,21 @@ async function tsCall(procedure: string, input: unknown, seeded: Seeded) {
 }
 
 async function goCall(procedure: string, input: unknown, seeded: Seeded) {
-  const response = await fetch(`${GO_URL}/rpc/${procedure.replaceAll(".", "/")}`, {
+  return gatewayCall(GO_URL, procedure, input, seeded);
+}
+
+/** Fault-injection path: one request through the all-proxy gateway. */
+async function proxyCall(procedure: string, input: unknown, seeded: Seeded) {
+  return gatewayCall(PROXY_URL, procedure, input, seeded);
+}
+
+async function gatewayCall(
+  base: string,
+  procedure: string,
+  input: unknown,
+  seeded: Seeded,
+) {
+  const response = await fetch(`${base}/rpc/${procedure.replaceAll(".", "/")}`, {
     method: "POST",
     headers: callHeaders(seeded),
     body: input === undefined ? undefined : JSON.stringify({ json: input }),
@@ -7624,6 +7789,9 @@ function callHeaders(seeded: Seeded) {
 }
 
 const WRITE_PROCEDURES = new Set([
+  "routines.testRun",
+  "skills.testRun",
+  "mcp.assignments.approve",
   "spendingLimit.set",
   "botSections.create",
   "botSections.update",
@@ -7666,6 +7834,7 @@ const WRITE_PROCEDURES = new Set([
   "boards.rename",
   "bots.rotateWebhookSecret",
   "pages.remove",
+  "pages.setVisibility",
 ]);
 
 const CUID = /^c[0-9a-z]{24}$/;
@@ -7673,6 +7842,8 @@ const CUID = /^c[0-9a-z]{24}$/;
 // bytes as unpadded base64url. Both sides generate their own, so only the shape is compared.
 const SECRET_ID = /^[0-9a-f]{24}$/;
 const WEBHOOK_SECRET = /^[A-Za-z0-9_-]{43}$/;
+const PAGE_SHARE_HASH = /^[0-9a-f]{64}$/;
+const PAGE_SHARE_URL = /^(.*\/p\/[^/?#]*?)([A-Za-z0-9_-]{43})$/;
 const LINK_CODE = /^(?:[A-HJKMNP-TV-Z2-9]{4}-[A-HJKMNP-TV-Z2-9]{4}|[A-HJKMNP-TV-Z2-9]{8})$/;
 const ISO_TIME = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/;
 const HARNESS_START = Date.now() - 3_600_000;
@@ -7688,6 +7859,9 @@ function normalize<T>(value: T): T {
     if (typeof node === "string") {
       const cursor = artifactCursor(node);
       if (cursor) return cursor;
+      const share = PAGE_SHARE_URL.exec(node);
+      if (share) return `${share[1]}<share-token>`;
+      if (PAGE_SHARE_HASH.test(node)) return "<share-token-hash>";
       if (CUID.test(node)) return "<cuid>";
       if (SECRET_ID.test(node)) return "<secret-id>";
       if (WEBHOOK_SECRET.test(node)) return "<webhook-secret>";
@@ -8322,6 +8496,56 @@ async function databaseState(seeded: ReturnType<typeof ids>, procedure?: string)
     },
     orderBy: { id: "asc" },
   });
+  const run1Rows =
+    procedure === "routines.testRun" || procedure === "skills.testRun"
+      ? {
+          run1Tasks: await system.task.findMany({
+            where: { spaceId: { in: seeded.spaces } },
+            select: {
+              id: true,
+              spaceId: true,
+              botId: true,
+              threadId: true,
+              userId: true,
+              prompt: true,
+              status: true,
+              createdAt: true,
+              updatedAt: true,
+            },
+            orderBy: { id: "asc" },
+          }),
+          run1Runs: await system.run.findMany({
+            where: { spaceId: { in: seeded.spaces } },
+            select: {
+              id: true,
+              spaceId: true,
+              botId: true,
+              threadId: true,
+              taskId: true,
+              userId: true,
+              status: true,
+              trigger: true,
+              modelProvider: true,
+              modelId: true,
+              thinkingLevel: true,
+              modelPinned: true,
+              clientNonce: true,
+              routineId: true,
+              wakeAt: true,
+              createdAt: true,
+              updatedAt: true,
+            },
+            orderBy: { id: "asc" },
+          }),
+        }
+      : {};
+  const run1Assignments =
+    procedure === "mcp.assignments.approve"
+      ? await system.botMcpServer.findMany({
+          where: { spaceId: { in: seeded.spaces } },
+          orderBy: { id: "asc" },
+        })
+      : [];
   const botEmailAddresses = await system.botEmailAddress.findMany({
     where: { name: { startsWith: `ct${RUN_TAG}-` } },
     select: { name: true, botId: true, createdAt: true },
@@ -8385,6 +8609,8 @@ async function databaseState(seeded: ReturnType<typeof ids>, procedure?: string)
     spaceMemoryConfigs,
     routines,
     routineNotices,
+    ...run1Rows,
+    run1Assignments,
     messagingIdentities,
     messagingLinkCodes,
     messagingMemberships,
@@ -8441,6 +8667,14 @@ for (const testCase of cases) {
   // biome-ignore lint/suspicious/noUndeclaredEnvVars: manual harness, not a turbo task
   if (process.env.CASE_FILTER && !new RegExp(process.env.CASE_FILTER).test(testCase.name)) continue;
   if (Boolean(testCase.email) !== EMAIL_ON) continue;
+  const mode = routeMode(testCase.procedure);
+  if (mode !== "go" && mode !== "shadow") {
+    failures += 1;
+    console.error(
+      `FAIL ${testCase.name}: ${testCase.procedure} is routed ${mode}, not go/shadow`,
+    );
+    continue;
+  }
   const caseIds = ids(testCase.name);
   COMPUTER_UPDATE_BASE = Date.now() - 30_000;
   const input = withIds(testCase.input, caseIds);
@@ -8452,12 +8686,23 @@ for (const testCase of cases) {
 
   let seeded = await seed(caseIds);
   if (testCase.seed) await testCase.seed(seeded);
+  if (testCase.admin)
+    await system.user.update({
+      where: { id: seeded.userId },
+      data: { email: CONTRACT_ADMIN_EMAIL, emailVerified: true },
+    });
   const tsResult = await observed(
     settle,
     () => run(testCase, tsCall, input, seeded),
     seeded,
     testCase.procedure,
   );
+  let tsCheckError: unknown;
+  try {
+    await testCase.check?.({ seeded, result: tsResult, side: "ts", gatewayLog });
+  } catch (error) {
+    tsCheckError = error;
+  }
   const tsState = normalize(await databaseState(caseIds, testCase.procedure));
 
   // A TypeScript background job (a restored routine's first run, say) publishes its Space changes
@@ -8468,22 +8713,66 @@ for (const testCase of cases) {
 
   seeded = await seed(caseIds);
   if (testCase.seed) await testCase.seed(seeded);
+  if (testCase.admin)
+    await system.user.update({
+      where: { id: seeded.userId },
+      data: { email: CONTRACT_ADMIN_EMAIL, emailVerified: true },
+    });
   const hitsBefore = upstreamHits;
+  await drainGatewayLog();
+  gatewayLog = "";
+  let goCallForCase = goCall;
+  // biome-ignore lint/suspicious/noUndeclaredEnvVars: manual harness, not a turbo task
+  if (process.env.CONTRACT_PROXY_ONE_CONCURRENT === "1" && testCase.concurrent) {
+    let dispatched = 0;
+    goCallForCase = (procedure, caseInput, caseSeeded) => {
+      dispatched += 1;
+      return dispatched === 1
+        ? proxyCall(procedure, caseInput, caseSeeded)
+        : goCall(procedure, caseInput, caseSeeded);
+    };
+  }
   const goResult = await observed(
     settle,
-    () => run(testCase, goCall, input, seeded),
+    () => run(testCase, goCallForCase, input, seeded),
     seeded,
     testCase.procedure,
   );
+  await drainGatewayLog();
+  let goCheckError: unknown;
+  try {
+    await testCase.check?.({ seeded, result: goResult, side: "go", gatewayLog });
+  } catch (error) {
+    goCheckError = error;
+  }
   const goState = normalize(await databaseState(caseIds, testCase.procedure));
 
   try {
+    if (tsCheckError) throw tsCheckError;
+    if (goCheckError) throw goCheckError;
     if (testCase.declines !== undefined)
       assert.equal(
         upstreamHits - hitsBefore,
         testCase.declines ? 1 : 0,
         `${testCase.name}: ${testCase.declines ? "Go should decline" : "Go should answer"}`,
       );
+    // Every request in the Go window must be a local answer, not a proxy fallback. The gateway
+    // completion line has no request id, so this is exact rather than per-id: the window is
+    // drained before it is cleared and again after the request, and the count is ===.
+    // Shadow comparisons call the same local server and log the same marker; they run after the
+    // TypeScript response, inside the observed settle window. `after` reloads are TypeScript-only
+    // and never appear in the gateway log, so they cannot inflate this count.
+    if (mode === "go" || mode === "shadow") {
+      if (testCase.declines !== true) {
+        const expectedCalls = goResult.calls ?? 1;
+        const served = servedByGoCount(gatewayLog, testCase.procedure);
+        assert.equal(
+          served,
+          expectedCalls,
+          `${testCase.name}: ${served} served_by:go entries for ${expectedCalls} expected calls`,
+        );
+      }
+    }
     assert.equal(goResult.status, tsResult.status, `${testCase.name}: status`);
     assert.deepEqual(goResult.headers, tsResult.headers, `${testCase.name}: headers`);
     assert.deepEqual(normalize(goResult.body), normalize(tsResult.body), `${testCase.name}: body`);
@@ -8509,6 +8798,7 @@ await realtime.end();
 await owner?.end();
 
 go?.kill("SIGTERM");
+proxyGo?.kill("SIGTERM");
 upstreamServer.close();
 await handles.stop();
 await rm(dataDir, { recursive: true, force: true });

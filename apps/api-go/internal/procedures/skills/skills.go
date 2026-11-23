@@ -602,13 +602,14 @@ func stringsToAny(values []string) []any {
 	return list
 }
 
-// notify is deps.events.notify after the append committed.
+// notify is deps.events.append's notification: the append names the event's type
+// (packages/db/src/threads/events.ts:655-661), so the signal does too.
 func notify(ctx context.Context, deployment shared.Deployment, event events.Event) {
 	firstResponse := ""
 	if event.FirstResponse && event.RunID != nil {
 		firstResponse = *event.RunID
 	}
-	events.NotifyCommitted(ctx, deployment.Events, nil, nil, event.ThreadID, event.Seq, firstResponse)
+	events.NotifyCommitted(ctx, deployment.Events, nil, nil, event.ThreadID, event.Seq, firstResponse, event.Type)
 }
 
 type draftInput struct {

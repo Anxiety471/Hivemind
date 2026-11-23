@@ -319,7 +319,8 @@ func appendMany(ctx context.Context, database *db.DB, ring *contentcrypto.KeyRin
 				return
 			}
 			if in.Notify {
-				events.NotifyCommitted(ctx, publisher, nil, database, in.ThreadID, event.Seq, "")
+				// AppendEvent's notification names the appended event's type (events.ts:655-661).
+				events.NotifyCommitted(ctx, publisher, nil, database, in.ThreadID, event.Seq, "", event.Type)
 			}
 			out[index] = eventOut{
 				ID: event.ID, Seq: event.Seq, Type: event.Type, Payload: event.Payload,

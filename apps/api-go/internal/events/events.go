@@ -387,13 +387,14 @@ func nullableString(value string) any {
 }
 
 // NotifyCommitted is notifyCommittedEvent (event-stream.ts:14-26): a committed
-// event tells thread subscribers the new cursor, then a run's first response
-// is logged once with its timing. A notification failure is swallowed: the
-// event is durable and subscribers recover it from their persisted cursor.
+// event tells thread subscribers the new cursor and, when the caller names it,
+// its type, then a run's first response is logged once with its timing. A
+// notification failure is swallowed: the event is durable and subscribers
+// recover it from their persisted cursor.
 func NotifyCommitted(ctx context.Context, publisher Publisher, logger *slog.Logger,
-	database *db.DB, threadID string, seq int32, firstResponseRunID string) {
+	database *db.DB, threadID string, seq int32, firstResponseRunID, eventType string) {
 	if publisher != nil {
-		_ = publisher.PublishThread(ctx, threadID, seq)
+		_ = publisher.PublishThread(ctx, threadID, seq, eventType)
 	}
 	if firstResponseRunID == "" || database == nil {
 		return
