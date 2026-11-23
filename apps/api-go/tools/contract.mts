@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import type { ChildProcess } from "node:child_process";
 import { spawn } from "node:child_process";
 import { createHmac } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -336,9 +336,16 @@ await writeFile(
       "boards.list": { mode: "go" },
       "boards.get": { mode: "go" },
       "boards.rename": { mode: "go" },
+      "integrationSetup.get": { mode: "go", readOnly: true },
+      "marketplace.submissions": { mode: "go", readOnly: true },
+      "pages.setVisibility": { mode: "go" },
     },
   }),
 );
+type RouteConfig = { default?: string; routes?: Record<string, { mode?: string }> };
+const routeConfig = JSON.parse(await readFile(routesFile, "utf8")) as RouteConfig;
+const routeMode = (procedure: string) =>
+  routeConfig.routes?.[procedure]?.mode ?? routeConfig.default ?? "proxy";
 process.on("uncaughtException", (error) => {
   go?.kill("SIGKILL");
   console.error(error);
@@ -634,6 +641,26 @@ const cases: Case[] = [
   ...threadAdversarialCases(system),
   ...threadMoreCases(system),
 ];
+
+// biome-ignore lint/suspicious/noUndeclaredEnvVars: manual harness, not a turbo task
+if (process.env.CONTRACT_ROUTE_AUDIT === "1") {
+  const silentlyProxied = cases.filter((testCase) => {
+    const mode = routeMode(testCase.procedure);
+    return mode !== "go" && mode !== "shadow";
+  });
+  console.log(
+    `route audit: ${cases.length} cases; ${silentlyProxied.length} not routed go/shadow`,
+  );
+  for (const testCase of silentlyProxied)
+    console.log(
+      `route audit: ${testCase.name} (${testCase.procedure}) -> ${routeMode(testCase.procedure)}`,
+    );
+  go?.kill("SIGKILL");
+  upstreamServer.close();
+  await handles.stop();
+  await rm(dataDir, { recursive: true, force: true });
+  process.exit(silentlyProxied.length > 0 ? 1 : 0);
+}
 
 const SITES = ["zeta.example", "alpha.example", "Beta.example", "_under.example", "10.0.0.1"];
 
@@ -8553,6 +8580,14 @@ for (const testCase of cases) {
   // biome-ignore lint/suspicious/noUndeclaredEnvVars: manual harness, not a turbo task
   if (process.env.CASE_FILTER && !new RegExp(process.env.CASE_FILTER).test(testCase.name)) continue;
   if (Boolean(testCase.email) !== EMAIL_ON) continue;
+  const mode = routeMode(testCase.procedure);
+  if (mode !== "go" && mode !== "shadow") {
+    failures += 1;
+    console.error(
+      `FAIL ${testCase.name}: ${testCase.procedure} is routed ${mode}, not go/shadow`,
+    );
+    continue;
+  }
   const caseIds = ids(testCase.name);
   COMPUTER_UPDATE_BASE = Date.now() - 30_000;
   const input = withIds(testCase.input, caseIds);
@@ -8620,6 +8655,12 @@ for (const testCase of cases) {
         upstreamHits - hitsBefore,
         testCase.declines ? 1 : 0,
         `${testCase.name}: ${testCase.declines ? "Go should decline" : "Go should answer"}`,
+      );
+    if (mode === "go" && testCase.declines !== true)
+      assert.match(
+        gatewayLog,
+        /"served_by":"go"/,
+        `${testCase.name}: Go did not serve the request (no served_by:go)`,
       );
     assert.equal(goResult.status, tsResult.status, `${testCase.name}: status`);
     assert.deepEqual(goResult.headers, tsResult.headers, `${testCase.name}: headers`);

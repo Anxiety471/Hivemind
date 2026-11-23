@@ -17,6 +17,7 @@ type System = any;
 type CheckContext = Parameters<NonNullable<Case["check"]>>[0];
 
 const at = (minute: number) => new Date(Date.UTC(2026, 0, 1, 0, 0, minute));
+const READABLE_SHARE_TOKEN = "A".repeat(43);
 const tokenHash = (token: string) => createHash("sha256").update(token).digest("hex");
 const eventEvidence = new Map<string, { security: unknown[]; audit: unknown[] }>();
 const byJson = (left: unknown, right: unknown) =>
@@ -76,6 +77,12 @@ function shareURLs(result: CheckContext["result"]): string[] {
   );
 }
 
+function shareToken(url: string, name: string): string {
+  const token = /[A-Za-z0-9_-]{43}$/.exec(url)?.[0];
+  assert.ok(token, `${name}: share URL does not end in a token: ${url}`);
+  return token;
+}
+
 async function pageEvidence(system: System, seeded: Seeded, pageKey: string) {
   const id = `${seeded.userId}-urlpage-${pageKey}`;
   const page = await system.page.findUnique({
@@ -90,7 +97,7 @@ function pageCheck(
   system: System,
   name: string,
   pageKey: string,
-  expected: { link: boolean; status?: number; concurrent?: number },
+  expected: { link: boolean; status?: number; concurrent?: number; token?: string },
 ): NonNullable<Case["check"]> {
   return withEvents(system, name, async ({ seeded, result, gatewayLog }) => {
     if (expected.status !== undefined)
@@ -134,9 +141,21 @@ function pageCheck(
       assert.equal(page.visibility, "link", `${name}: page visibility`);
       assert.ok(page.shareSecretId, `${name}: page has no share secret`);
       assert.ok(page.shareTokenHash, `${name}: page has no shareTokenHash`);
+      if (expected.token) {
+        assert.equal(urls.length, 1, `${name}: existing link returned more than one URL`);
+        assert.equal(
+          shareToken(urls[0]!, name),
+          expected.token,
+          `${name}: existing link token changed`,
+        );
+        assert.equal(
+          page.shareTokenHash,
+          tokenHash(expected.token),
+          `${name}: stored shareTokenHash != seeded hash`,
+        );
+      }
       for (const url of urls) {
-        const token = /[A-Za-z0-9_-]{43}$/.exec(url)?.[0];
-        assert.ok(token, `${name}: share URL does not end in a token: ${url}`);
+        const token = shareToken(url, name);
         assert.equal(
           tokenHash(token),
           page.shareTokenHash,
@@ -246,7 +265,7 @@ async function addUnreadableShare(system: System, seeded: Seeded, pageKey: strin
 }
 
 async function addReadableShare(system: System, seeded: Seeded, pageKey: string) {
-  const token = "A".repeat(43);
+  const token = READABLE_SHARE_TOKEN;
   const store = createSecretStore(CONTRACT_ENCRYPTION_KEY, process.env);
   const record = await store.put(token, { signal: new AbortController().signal });
   await system.secret.create({
@@ -493,6 +512,7 @@ export function url1Cases(system: System): Case[] {
       check: pageCheck(system, "url1-visibility-existing-link", "existing", {
         link: true,
         status: 200,
+        token: READABLE_SHARE_TOKEN,
       }),
     },
     {
