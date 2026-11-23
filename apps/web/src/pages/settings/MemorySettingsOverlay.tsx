@@ -660,8 +660,8 @@ export function MemorySettingsOverlay({
                 className="border-t border-border py-3"
                 summary={
                   unchangedTargets.length === 1
-                    ? t`1 bot with no changes`
-                    : t`${unchangedTargets.length} bots with no changes`
+                    ? t`1 with no changes`
+                    : t`${unchangedTargets.length} with no changes`
                 }
                 summaryClassName="text-body-sm text-muted-foreground"
               >

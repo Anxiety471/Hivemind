@@ -241,7 +241,7 @@ it("shows every bot's outcome and changes", async () => {
   expect(document.body.textContent).toContain("Crumb");
   expect(document.body.textContent).toContain("MEMORY.md: 100 → 90 bytes");
   expect(document.body.textContent).toContain("Hatcha");
-  expect(document.body.textContent).toContain("1 bot with no changes");
+  expect(document.body.textContent).toContain("1 with no changes");
   expect(document.body.textContent).toContain("Shared memory (Team)");
   expect(document.body.textContent).toContain("model HTTP 429");
   await act(async () => {
