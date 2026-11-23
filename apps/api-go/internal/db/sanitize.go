@@ -52,6 +52,18 @@ func wireArgs(args []any) []any {
 				changed = changed || safe[item] != text
 			}
 			out[index] = safe
+		case *string:
+			if value == nil {
+				out[index] = arg
+				continue
+			}
+			safe := wtf8.ReplaceSurrogates(*value)
+			if safe == *value {
+				out[index] = arg
+				continue
+			}
+			changed = true
+			out[index] = &safe
 		default:
 			out[index] = arg
 		}

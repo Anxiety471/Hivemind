@@ -80,3 +80,15 @@ func TestDataSanitizesNullableStrings(t *testing.T) {
 		t.Fatalf("nullable strings = %#v", args)
 	}
 }
+
+func TestWireArgsReplacesSurrogatesInNullableFilters(t *testing.T) {
+	surrogate := "a" + string([]byte{0xED, 0xA0, 0x80}) + "b"
+	value := &surrogate
+	args := wireArgs([]any{value, (*string)(nil)})
+	if got := args[0].(*string); *got != "a\uFFFDb" {
+		t.Fatalf("pointer = %q", *got)
+	}
+	if args[1] != (*string)(nil) {
+		t.Fatalf("nil pointer = %#v", args[1])
+	}
+}
