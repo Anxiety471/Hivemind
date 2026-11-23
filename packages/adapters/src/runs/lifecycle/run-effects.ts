@@ -138,6 +138,17 @@ export function legacyPiToolCallId(executionId: string): string | undefined {
   return piToolExecution(executionId)?.callId;
 }
 
+/**
+ * A tool call a code_mode script made: same agent namespace, and an ordinal the script's own
+ * execution order fixes, so the same script replays its calls under the same ids.
+ */
+export function codeModeToolExecutionId(executionId: string, ordinal: number): string {
+  const call = piToolExecution(executionId);
+  return call
+    ? JSON.stringify(["pi-tool", call.agent, `${call.callId}:code:${ordinal}`])
+    : `${executionId}:code:${ordinal}`;
+}
+
 /** A call a helper made: Pi namespaces helper calls by the run_subagent call that started them. */
 export function isSubagentToolExecution(executionId: string): boolean {
   const agent = piToolExecution(executionId)?.agent;

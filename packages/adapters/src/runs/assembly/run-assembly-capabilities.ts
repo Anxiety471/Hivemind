@@ -53,12 +53,15 @@ import {
 import { backgroundHelpersAllowed } from "../../tasks/background-helpers.js";
 import { TASK_CATALOG_GUIDANCE } from "../../tasks/task-catalog.prompt.js";
 import { agentConnectionTools, builtinAgentTools } from "../../tools/builtin.tool-definition.js";
+import { CODE_MODE, codeModeToolDefinition } from "../../tools/code-mode.tool-definition.js";
+import { codeModeToolIndex } from "../../tools/code-mode-api.js";
 import type { ExecutorDeps } from "../executor/executor-deps.js";
 import type { RunExecutorServices, RunHold } from "../lifecycle/run-attempt.js";
 import { APPROVED_EFFECT_REPLAY_ORDER } from "../lifecycle/run-effects.js";
 import { createRunWorkspaceCheckpoint, failRunBeforeTurn } from "../lifecycle/run-lifecycle.js";
 import {
   BUILTIN_AGENT_TOOL_NAMES,
+  codeModeCallableTools,
   offersAgentConnectionTools,
   selectBuiltinToolsForRun,
 } from "../tools/run-tool-selection.js";
@@ -640,6 +643,7 @@ export async function selectRunTools(
     task,
     conversationThread,
     ticketBoardEnabled,
+    codeModeEnabled,
     helperDepth,
     unknownChannelSourceId,
   } = parts.records;
@@ -676,6 +680,7 @@ export async function selectRunTools(
   const builtins = [
     ...selectBuiltinToolsForRun({
       ticketBoardEnabled,
+      codeModeEnabled,
       // A call rings the bot's own person, whose chat it is; other members of a shared
       // Space reach it by message for now.
       phoneCallsEnabled: deps.phoneCallsEnabled && run.userId === bot.userId,
@@ -724,10 +729,6 @@ export async function selectRunTools(
       ? agentConnectionTools.filter((tool) => !disabledBuiltinTools.has(tool.name))
       : []),
   ];
-  const strategicBuiltins = filterStrategicInitiativeTools(builtins, {
-    trigger: run.trigger,
-    clientNonce: run.clientNonce,
-  });
   const exposedConnectorTools = discovered.filter(
     (tool) => !builtinAgentTools.some((builtin) => builtin.name === tool.name),
   );
@@ -735,6 +736,15 @@ export async function selectRunTools(
     trigger: run.trigger,
     clientNonce: run.clientNonce,
   });
+  // The code_mode description carries the call signatures of this run's read-only tools, so it
+  // is built once the whole offered set is known.
+  const codeModeIndex = builtins.some((tool) => tool.name === CODE_MODE)
+    ? codeModeToolIndex(codeModeCallableTools([...builtins, ...strategicConnectorTools]))
+    : "";
+  const strategicBuiltins = filterStrategicInitiativeTools(builtins, {
+    trigger: run.trigger,
+    clientNonce: run.clientNonce,
+  }).map((tool) => (tool.name === CODE_MODE ? codeModeToolDefinition(codeModeIndex) : tool));
   const connectorTools = new Map(strategicConnectorTools.map((tool) => [tool.name, tool] as const));
   const trustLoaders = createRunTrustLoaders(deps, {
     run,

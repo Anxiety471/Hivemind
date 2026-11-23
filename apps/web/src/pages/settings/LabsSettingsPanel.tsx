@@ -22,6 +22,10 @@ export function LabsSettingsPanel({
   const save = useSave({ save: (next: LabFeature[], client) => onLabsChange(next, client) });
   const copy: Record<LabFeature, { title: string; description: string }> = {
     board: { title: t`Board`, description: t`A kanban board of tickets your bots can work on` },
+    code: {
+      title: t`Code mode`,
+      description: t`Let bots run several read-only tool calls in one short script`,
+    },
   };
 
   return (

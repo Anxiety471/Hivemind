@@ -1,3 +1,4 @@
+import type { ConnectorTool } from "@rakazo/adapter-kit";
 import {
   disabledBuiltinToolSet,
   FLEET_TOOL_NAMES,
@@ -6,8 +7,12 @@ import {
 import { BACKGROUND_HELPER_TRIGGER, isBackgroundRunTrigger, isOwnerStartedRun } from "@rakazo/core";
 import { selectCloudAgentTools } from "../../cloud-agents/cloud-agent-tools-select.js";
 import { selectMemoryTools } from "../../memory/memory-tools.js";
-import { filterImageReturningComputerTools } from "../../models/model-vision.js";
+import {
+  filterImageReturningComputerTools,
+  IMAGE_RETURNING_COMPUTER_TOOLS,
+} from "../../models/model-vision.js";
 import { builtinAgentTools } from "../../tools/builtin.tool-definition.js";
+import { CODE_MODE } from "../../tools/code-mode.tool-definition.js";
 import {
   filterBuiltinToolsForRun,
   filterBuiltinToolsForThread,
@@ -116,6 +121,8 @@ export function selectBuiltinToolsForRun(options: {
   mediaVideoEnabled?: boolean;
   /** The deployment configured paid data services. */
   paidServicesEnabled?: boolean;
+  /** The owner turned on the code lab: one script may call several read-only tools. */
+  codeModeEnabled?: boolean;
   messagingChannelRun: boolean;
   /** Hanging up is only offered to a turn the caller spoke on a live call. */
   voiceCall?: boolean;
@@ -177,6 +184,7 @@ export function selectBuiltinToolsForRun(options: {
       (options.mediaImagesEnabled || tool.name !== "generate_image") &&
       (options.mediaVideoEnabled || tool.name !== "generate_video") &&
       (options.paidServicesEnabled || !PAID_SERVICE_TOOL_NAMES.has(tool.name)) &&
+      (options.codeModeEnabled || tool.name !== CODE_MODE) &&
       (options.hasGroups === true || tool.name !== "post_to_group") &&
       (options.ticketBoardEnabled ||
         (tool.name !== "board_tickets" &&
@@ -224,6 +232,25 @@ export function selectBuiltinToolsForRun(options: {
           ].includes(tool.name) &&
           !tool.name.startsWith("scratchpad_") &&
           !tool.name.startsWith("ticket_"))),
+  );
+}
+
+/**
+ * The tools one code_mode script may call: read-only by declaration, never a tool that returns
+ * an image (a script cannot show one) or starts work of its own (a helper, a takeover).
+ */
+const CODE_MODE_EXCLUDED_TOOLS: Readonly<Record<string, true>> = {
+  [CODE_MODE]: true,
+  run_subagent: true,
+  request_takeover: true,
+};
+
+export function codeModeCallableTools(tools: readonly ConnectorTool[]): ConnectorTool[] {
+  return tools.filter(
+    (tool) =>
+      !Object.hasOwn(CODE_MODE_EXCLUDED_TOOLS, tool.name) &&
+      !IMAGE_RETURNING_COMPUTER_TOOLS.has(tool.name) &&
+      (tool.readOnly === true || READ_ONLY_AGENT_TOOLS.has(tool.name)),
   );
 }
 

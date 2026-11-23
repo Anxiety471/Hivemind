@@ -73,6 +73,40 @@ describe("userTurnInstructions Kanban board clause", () => {
   });
 });
 
+describe("userTurnInstructions code mode clause", () => {
+  const base = {
+    botInstructions: "",
+    groupContext: undefined,
+    messagingContext: undefined,
+    redactedMemoryContext: undefined,
+    redactedScratchpadContext: undefined,
+    hasHistoricalContext: false,
+    computerInstruction: "Computer.",
+    pageBrowserAllowed: false,
+    workspaceInstruction: "",
+    agentEnvironmentInstruction: undefined,
+    botDirectory: undefined,
+    pluginLine: undefined,
+    agentSkillsLine: undefined,
+    taughtSkillsLine: undefined,
+    replyGuidance: "",
+  };
+
+  it("tells the model to batch read-only lookups only when the run offers code_mode", () => {
+    const without = userTurnInstructions({
+      ...base,
+      offeredToolNames: new Set(["read_file", "search_history"]),
+    }).join("\n");
+    expect(without).not.toContain("code_mode");
+
+    const withCode = userTurnInstructions({
+      ...base,
+      offeredToolNames: new Set(["code_mode", "read_file"]),
+    }).join("\n");
+    expect(withCode).toContain("run them in one code_mode script");
+  });
+});
+
 describe("contextToolsInstruction", () => {
   it("names only the memory, history and drive tools the run was offered", () => {
     const text = contextToolsInstruction(

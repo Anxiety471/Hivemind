@@ -32,6 +32,7 @@ import {
 } from "../../../secrets/bot-secrets.js";
 import { FIND_TOOL, USE_TOOL } from "../../../tools/builtin.tool-definition.js";
 import { findTools, partitionTools } from "../../../tools/builtin-tool-bridge.js";
+import { CODE_MODE } from "../../../tools/code-mode.tool-definition.js";
 import {
   lintPlaceholderArguments,
   placeholderRejectionMessage,
@@ -387,7 +388,9 @@ function toAgentTool(
     // so a sibling request cannot start after one pauses for its card and share its answer.
     ...(SCHEDULE_TOOL_NAMES.has(tool.name) ||
     tool.name === "remember" ||
-    tool.name === "request_secret"
+    tool.name === "request_secret" ||
+    // One script can reach any read-only tool, memory and history included.
+    tool.name === CODE_MODE
       ? { executionMode: "sequential" as const }
       : {}),
     parameters: parametersFor(tool),

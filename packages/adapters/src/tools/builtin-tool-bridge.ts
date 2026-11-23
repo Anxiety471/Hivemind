@@ -2,6 +2,7 @@ import type { ConnectorTool } from "@rakazo/adapter-kit";
 import { FLEET_TOOL_NAMES } from "@rakazo/contracts";
 import { BUILTIN_AGENT_TOOL_NAMES } from "../runs/tools/run-tool-selection.js";
 import { bridgeToolDefinitions } from "./builtin.tool-definition.js";
+import { CODE_MODE } from "./code-mode.tool-definition.js";
 import type { CatalogEntry } from "./lazy-tool-catalog.js";
 import {
   catalogEntries,
@@ -18,6 +19,7 @@ const FIND_TOOL_LIMIT = 3;
  * use_tool, so the listed tools stay small and never change mid-run.
  */
 export const CORE_BUILTIN_TOOL_NAMES: ReadonlySet<string> = new Set([
+  CODE_MODE,
   "shell",
   "user_computer_list",
   "user_computer_shell",
@@ -99,6 +101,9 @@ export function partitionTools(tools: readonly ConnectorTool[]): {
 } {
   const deferred = tools.filter((tool) => isDeferredTool(tool.name));
   const listed = tools.filter((tool) => !isDeferredTool(tool.name));
+  // code_mode reaches every deferred tool by name in one script, so it replaces the
+  // find_tool/use_tool pair rather than sitting beside it.
+  if (listed.some((tool) => tool.name === CODE_MODE)) return { listed, deferred: [] };
   return { listed: deferred.length ? [...listed, ...bridgeTools(deferred)] : listed, deferred };
 }
 

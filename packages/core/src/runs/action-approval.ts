@@ -46,6 +46,8 @@ const APPROVAL_EXEMPT_TOOLS = new Set([
  * run. Anything else, new tools included, is gated there (see outsideRunToolRequiresApproval).
  */
 const OUTSIDE_RUN_SAFE_BUILTIN_TOOLS = new Set([
+  // Every call it makes is gated on its own, so the script itself changes nothing.
+  "code_mode",
   "ask_user",
   "attach_file",
   "browser_snapshot",
