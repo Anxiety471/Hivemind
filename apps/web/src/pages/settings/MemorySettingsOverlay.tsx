@@ -6,6 +6,7 @@ import {
   DialogClose,
   DialogContent,
   DialogTitle,
+  Disclosure,
   Field,
   FieldContent,
   FieldDescription,
@@ -137,6 +138,8 @@ export function MemorySettingsOverlay({
   const roamer = roamerQuery.data;
   const failedTargets = roamer?.lastReport?.filter((target) => target.status === "failed") ?? [];
   const okTargets = roamer?.lastReport?.filter((target) => target.status === "ok") ?? [];
+  const changedTargets = okTargets.filter((target) => target.changes.length > 0);
+  const unchangedTargets = okTargets.filter((target) => target.changes.length === 0);
   const targetName = (target: Pick<MemoryRoamerTarget, "kind" | "name">) =>
     target.kind === "shared" ? t`Shared memory (${target.name})` : target.name;
   const failureCount = failedTargets.length || roamer?.lastFailures?.length || 0;
@@ -164,6 +167,17 @@ export function MemorySettingsOverlay({
   const [intervalDraft, setIntervalDraft] = useState("360");
   const [intervalError, setIntervalError] = useState<string | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
+  useEffect(() => {
+    if (!detailsOpen) return;
+    const closeOnOutsidePress = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      const popup = document.querySelector("[data-run-results]");
+      if (popup && !popup.contains(target)) setDetailsOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePress, true);
+    return () => document.removeEventListener("pointerdown", closeOnOutsidePress, true);
+  }, [detailsOpen]);
   useEffect(() => {
     if (roamer) setIntervalDraft(String(roamer.intervalMinutes));
   }, [roamer?.intervalMinutes]);
@@ -549,8 +563,8 @@ export function MemorySettingsOverlay({
       </div>
 
       <Dialog open={detailsOpen} onOpenChange={setDetailsOpen}>
-        <DialogContent size="md" showCloseButton={false} className="bg-card">
-          <div className="flex items-start justify-between gap-4 px-5 pt-5">
+        <DialogContent size="md" showCloseButton={false} data-run-results className="bg-card">
+          <div className="flex items-start justify-between gap-4 px-5 pt-4">
             <div>
               <DialogTitle className="text-heading2 font-medium text-foreground">
                 <Trans>Run results</Trans>
@@ -576,16 +590,16 @@ export function MemorySettingsOverlay({
               <XIcon />
             </DialogClose>
           </div>
-          <div className="mt-4 min-h-0 flex-1 overflow-y-auto border-t border-border px-5 pb-5">
+          <div className="mt-3 min-h-0 flex-1 overflow-y-auto border-t border-border px-5 pb-4">
             {failureCount ? (
-              <section className="py-4">
+              <section className="py-3">
                 <h3 className="text-body-sm font-medium text-muted-foreground">
                   <Trans>Failed</Trans>
                 </h3>
                 <ul className="mt-1 divide-y divide-border">
                   {failedTargets.length
                     ? failedTargets.map((target) => (
-                        <li key={`${target.kind}:${target.id}`} className="flex gap-3 py-3">
+                        <li key={`${target.kind}:${target.id}`} className="flex gap-3 py-2.5">
                           <span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-destructive" />
                           <div className="min-w-0 flex-1">
                             <p className="text-body-sm font-medium text-foreground">
@@ -603,7 +617,7 @@ export function MemorySettingsOverlay({
                         </li>
                       ))
                     : roamer?.lastFailures?.map((failure) => (
-                        <li key={`${failure.kind}:${failure.id}`} className="flex gap-3 py-3">
+                        <li key={`${failure.kind}:${failure.id}`} className="flex gap-3 py-2.5">
                           <span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-destructive" />
                           <div className="min-w-0 flex-1">
                             <p className="text-body-sm font-medium text-foreground">
@@ -616,20 +630,23 @@ export function MemorySettingsOverlay({
                 </ul>
               </section>
             ) : null}
-            {okTargets.length ? (
-              <section className="py-4">
+            {changedTargets.length ? (
+              <section className="py-3">
                 <h3 className="text-body-sm font-medium text-muted-foreground">
-                  <Trans>Completed</Trans>
+                  <Trans>Changed</Trans>
                 </h3>
                 <ul className="mt-1 divide-y divide-border">
-                  {okTargets.map((target) => (
-                    <li key={`${target.kind}:${target.id}`} className="flex items-start gap-3 py-3">
+                  {changedTargets.map((target) => (
+                    <li
+                      key={`${target.kind}:${target.id}`}
+                      className="flex items-start gap-3 py-2.5"
+                    >
                       <span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-success" />
-                      <div className="flex min-w-0 flex-1 items-start justify-between gap-4">
+                      <div className="min-w-0 flex-1">
                         <p className="text-body-sm font-medium text-foreground">
                           {targetName(target)}
                         </p>
-                        <p className="text-end text-body-sm text-muted-foreground">
+                        <p className="mt-0.5 text-body-sm text-muted-foreground">
                           {changeSummary(target)}
                         </p>
                       </div>
@@ -637,6 +654,29 @@ export function MemorySettingsOverlay({
                   ))}
                 </ul>
               </section>
+            ) : null}
+            {unchangedTargets.length ? (
+              <Disclosure
+                className="border-t border-border py-3"
+                summary={
+                  unchangedTargets.length === 1
+                    ? t`1 bot with no changes`
+                    : t`${unchangedTargets.length} bots with no changes`
+                }
+                summaryClassName="text-body-sm text-muted-foreground"
+              >
+                <ul className="mt-2 grid grid-cols-1 gap-x-4 gap-y-1.5 sm:grid-cols-2">
+                  {unchangedTargets.map((target) => (
+                    <li
+                      key={`${target.kind}:${target.id}`}
+                      className="flex items-center gap-2 text-body-sm text-foreground"
+                    >
+                      <span className="size-1.5 shrink-0 rounded-full bg-success" />
+                      <span className="min-w-0">{targetName(target)}</span>
+                    </li>
+                  ))}
+                </ul>
+              </Disclosure>
             ) : null}
           </div>
         </DialogContent>
