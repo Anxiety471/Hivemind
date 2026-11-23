@@ -388,6 +388,8 @@ var blockSchemas = map[string]parser{
 		required("fromLabel", str), required("text", str), optional("hop", nonNegative)),
 	"bot_message_sent": object(required("kind", literal("bot_message_sent")), required("toBotId", id),
 		required("toBotName", str), required("text", str), optional("intent", enum(intents...))),
+	"agent_message_received": object(required("kind", literal("agent_message_received")),
+		required("agentName", strMax(80)), required("text", str)),
 	"bot_message_received": object(required("kind", literal("bot_message_received")), required("fromBotId", id),
 		required("fromBotName", str), required("text", str), optional("intent", enum(intents...)),
 		optional("returnToMessageId", id), optional("hop", nonNegative)),

@@ -160,6 +160,7 @@ function replyBlockText(block: MessageBlock): string {
     case "handoff":
     case "bot_message_sent":
     case "bot_message_received":
+    case "agent_message_received":
       return block.text;
     case "choice":
       return block.question;

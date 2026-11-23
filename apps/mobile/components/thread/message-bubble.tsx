@@ -371,6 +371,23 @@ const MessageBubbleContent = memo(function MessageBubbleContent({
       />
     );
   }
+  const agentMessage = message.blocks.find(
+    (block): block is Extract<MessageBlock, { kind: "agent_message_received" }> =>
+      block.kind === "agent_message_received",
+  );
+  if (agentMessage) {
+    const agent = agentMessage.agentName;
+    return (
+      <Pressable
+        {...actionProps}
+        style={{ width: "100%", paddingVertical: 4, alignItems: "center" }}
+      >
+        <Text style={{ color: tokens.mutedForeground, fontSize: 13, textAlign: "center" }}>
+          {t`Message from ${agent}`}
+        </Text>
+      </Pressable>
+    );
+  }
   const channelMessage = message.blocks.find(
     (block): block is Extract<MessageBlock, { kind: "channel_message" }> =>
       block.kind === "channel_message",

@@ -406,6 +406,15 @@ export const MessageBlock = z.discriminatedUnion("kind", [
     intent: BotMessageIntent.optional(),
   }),
   z.object({
+    /**
+     * A message from an agent outside the Space (a coding agent, a script) that reached this bot
+     * over its webhook: shown as a chip naming that agent, never as one of the Space's bots.
+     */
+    kind: z.literal("agent_message_received"),
+    agentName: z.string().max(80),
+    text: z.string(),
+  }),
+  z.object({
     /** Delivered into the receiving bot's own chat as the prompt that woke it. */
     kind: z.literal("bot_message_received"),
     fromBotId: Id,

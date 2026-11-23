@@ -9,32 +9,73 @@ import {
 import { bestEffort } from "@rakazo/logging";
 import type { InboundTarget, WebhookDeps } from "./webhook-inbound.js";
 
+export type WakeSender =
+  | { kind: "bot"; botId: string; text: string }
+  | { kind: "agent"; name: string; text: string };
+
 /**
- * A `wake` message names the bot that sent it. Both chats then show it the way a message between
- * two bots does: "Message from X" in the receiver's chat, "Messaged X" in the sender's. The
+ * A `wake` message names who sent it. A bot of the receiver's Space shows as a message between two
+ * bots ("Message from X" in the receiver's chat, "Messaged X" in the sender's); any other agent
+ * (a coding agent, a script) shows under its own name and is never made to look like a bot. The
  * sender is a label the caller claims, never proof: the receiver's own webhook key already lets
- * the caller put any prompt in front of it, so this only adds the chips, and only for a bot in
- * the receiver's Space.
+ * the caller put any prompt in front of it, so this only adds the chips.
  */
-export function wakeSender(
-  payload: Record<string, unknown>,
-): { botId: string; text: string } | null {
-  const botId = typeof payload.fromBotId === "string" ? payload.fromBotId.trim() : "";
-  if (!botId) return null;
+export function wakeSender(payload: Record<string, unknown>): WakeSender | null {
   const message = [payload.message, payload.detail].find(
     (value): value is string => typeof value === "string" && value.trim() !== "",
   );
-  return { botId, text: clampBotMessage(message ?? "") };
+  const text = clampBotMessage(message ?? "");
+  const botId = typeof payload.fromBotId === "string" ? payload.fromBotId.trim() : "";
+  if (botId) return { kind: "bot", botId, text };
+  const name = typeof payload.fromAgent === "string" ? payload.fromAgent.trim().slice(0, 80) : "";
+  return name ? { kind: "agent", name, text } : null;
 }
 
 /** The chips for one delivered wake; the delivery's own message id keeps a retry from doubling them. */
 export async function recordWakeReceipts(
   deps: Pick<WebhookDeps, "prisma" | "events">,
   target: InboundTarget,
-  sender: { botId: string; text: string },
+  sender: WakeSender,
   deliveryMessageId: string,
 ): Promise<void> {
-  if (!sender.text || sender.botId === target.bot.id) return;
+  if (!sender.text) return;
+  const clientNonce = `wake-receipt:${deliveryMessageId}`;
+  if (sender.kind === "agent") {
+    const received: MessageBlock = {
+      kind: "agent_message_received",
+      agentName: sender.name,
+      text: sender.text,
+    };
+    const committed = await withTransactionRetry(() =>
+      deps.prisma.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT id FROM threads WHERE id = ${target.threadId} FOR UPDATE`;
+        const already = await tx.message.findUnique({
+          where: { threadId_clientNonce: { threadId: target.threadId, clientNonce } },
+          select: { id: true },
+        });
+        if (already) return null;
+        const inbound = await createThreadMessageInTransaction(tx, {
+          threadId: target.threadId,
+          role: "user",
+          blocks: [received],
+          clientNonce,
+        });
+        const event = await appendEventInTransaction(tx, {
+          spaceId: target.bot.spaceId,
+          threadId: target.threadId,
+          botId: target.bot.id,
+          type: "thread.message.created",
+          payload: { messageId: inbound.id, role: "user", blocks: [received] },
+        });
+        return [{ threadId: target.threadId, seq: event.seq }];
+      }, THREAD_LOCK_TRANSACTION_OPTIONS),
+    );
+    for (const { threadId, seq } of committed ?? []) {
+      await bestEffort("wake receipt realtime notification", deps.events.notify(threadId, seq));
+    }
+    return;
+  }
+  if (sender.botId === target.bot.id) return;
   const [from, to] = await Promise.all([
     deps.prisma.bot.findFirst({
       where: { id: sender.botId, spaceId: target.bot.spaceId, archivedAt: null },
@@ -47,7 +88,6 @@ export async function recordWakeReceipts(
   ]);
   if (!from?.thread || !to) return;
   const fromThreadId = from.thread.id;
-  const clientNonce = `wake-receipt:${deliveryMessageId}`;
 
   const received: MessageBlock = {
     kind: "bot_message_received",

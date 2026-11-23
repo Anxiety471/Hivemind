@@ -19,7 +19,10 @@ import {
 import { BotAvatar, Button, cn, resolvePersonaColorDef } from "@rakazo/ui-web";
 import { UserRound } from "lucide-react";
 import { memo, useCallback, useMemo } from "react";
-import { CollaborationMarker } from "../../../components/ai/CollaborationMarker";
+import {
+  AgentMessageMarker,
+  CollaborationMarker,
+} from "../../../components/ai/CollaborationMarker";
 import { ComputerCard } from "../../../components/computers/ComputerCard";
 import type {
   ActivityRunMeta,
@@ -464,6 +467,12 @@ export const MessageView = memo(function MessageView({
                 </span>
                 <span>{block.text}</span>
               </div>
+            );
+          }
+          if (block.kind === "agent_message_received") {
+            const agent = block.agentName;
+            return (
+              <AgentMessageMarker key={i} agentName={agent} label={t`Message from ${agent}`} />
             );
           }
           if (block.kind === "bot_message_sent" || block.kind === "bot_message_received") {
