@@ -1,6 +1,7 @@
 package wtf8
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -216,6 +217,82 @@ func TestAppendQuotedMatchesJSONStringify(t *testing.T) {
 		AppendQuoted(&out, input)
 		if out.String() != want {
 			t.Errorf("AppendQuoted(%q) = %s, want %s", input, out.String(), want)
+		}
+	}
+}
+
+// literalJSONMarshaler is raw json.Marshaler output, the bytes encoding/json
+// copies without inspecting.
+type literalJSONMarshaler struct{ body string }
+
+func (m literalJSONMarshaler) MarshalJSON() ([]byte, error) { return []byte(m.body), nil }
+
+// literalMarkerKeys are strings a marker-based restore pass could mistake for
+// its own encoding: the process marker pair, and the fixed pair from the review.
+func literalMarkerKeys() []string {
+	return []string{
+		"a" + markerText + string(unitMarker(0xD800)),
+		"a\uFC00\uE000",
+	}
+}
+
+func TestMarshalNeverRestoresInsideRawMarshalerOutput(t *testing.T) {
+	lone := "x" + string(surrogateBytes(0xD800)) + "y"
+	for _, literal := range literalMarkerKeys() {
+		value := map[string]any{
+			"raw":  literalJSONMarshaler{body: `{"key":"` + literal + `"}`},
+			"lone": lone,
+		}
+		body, err := Marshal(value)
+		if err != nil {
+			t.Fatalf("Marshal: %v", err)
+		}
+		if !bytes.Contains(body, []byte(literal)) {
+			t.Fatalf("raw marshaler literal was rewritten: %s", body)
+		}
+		if !bytes.Contains(body, []byte(`\ud800`)) {
+			t.Fatalf("lone surrogate missing: %s", body)
+		}
+		var decoded struct {
+			Raw struct {
+				Key string `json:"key"`
+			} `json:"raw"`
+			Lone string `json:"lone"`
+		}
+		if err := json.Unmarshal(body, &decoded); err != nil {
+			t.Fatalf("output is not JSON: %v (%s)", err, body)
+		}
+		if decoded.Raw.Key != literal {
+			t.Fatalf("raw key = %q, want %q", decoded.Raw.Key, literal)
+		}
+	}
+}
+
+func TestMarshalKeepsLiteralMarkerRunesInMapKeysAndRawMessages(t *testing.T) {
+	lone := "x" + string(surrogateBytes(0xD800)) + "y"
+	for _, literal := range literalMarkerKeys() {
+		value := map[string]any{
+			literal: "key",
+			"raw":   json.RawMessage(`{"key":"` + literal + `"}`),
+			"lone":  lone,
+		}
+		body, err := Marshal(value)
+		if err != nil {
+			t.Fatalf("Marshal: %v", err)
+		}
+		if got := bytes.Count(body, []byte(literal)); got != 2 {
+			t.Fatalf("literal appears %d times, want 2: %s", got, body)
+		}
+		var decoded map[string]any
+		if err := json.Unmarshal(body, &decoded); err != nil {
+			t.Fatalf("output is not JSON: %v (%s)", err, body)
+		}
+		if decoded[literal] != "key" {
+			t.Fatalf("map key %q lost", literal)
+		}
+		raw, ok := decoded["raw"].(map[string]any)
+		if !ok || raw["key"] != literal {
+			t.Fatalf("raw message key = %v", decoded["raw"])
 		}
 	}
 }

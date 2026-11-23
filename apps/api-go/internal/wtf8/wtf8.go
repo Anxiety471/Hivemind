@@ -12,9 +12,10 @@
 // them: an unpaired surrogate unit becomes a private marker rune followed by
 // a private-use rune carrying the unit, so the standard decoder (and every
 // struct type, tag and error message it implements) keeps working. Restore
-// turns the marker pairs back into the WTF-8 bytes. The encoder does the
-// reverse: it copies the value with WTF-8 bytes replaced by the same markers,
-// lets encoding/json write it, and turns the marker pairs back into escapes.
+// turns the marker pairs back into the WTF-8 bytes. The encoder replaces a
+// string that carries WTF-8 with a random placeholder string, marshals the
+// copy, and splices each placeholder with the escape JSON.stringify writes, so
+// raw json.Marshaler output is never scanned or rewritten.
 package wtf8
 
 import (
@@ -34,9 +35,9 @@ import (
 // are chosen at process start from the BMP private-use area, so a request cannot
 // contain them: a value that did could only use the marker pair by guessing a
 // random 14-bit pair (2^-28 with two draws), and neither rune is ever written in
-// a response. That is what lets the encoder restore marker pairs in the whole
-// marshaled body without corrupting a literal marker sequence from a custom
-// json.Marshaler or a json.RawMessage.
+// a response. The marker pair exists only between Transform and RestoreString;
+// the output path uses random placeholders instead and never scans raw
+// json.Marshaler output.
 var (
 	marker       rune
 	markerEscape rune
@@ -71,14 +72,24 @@ func init() {
 
 // NeedsTransform reports whether raw contains an unpaired surrogate escape.
 // Documents without one take the standard decoder path unchanged, which is the
-// common case and keeps the boundary at encoding/json's cost.
+// common case and keeps the boundary at encoding/json's cost. The scan is a
+// bytes.IndexByte walk: the common body has few backslashes and no `\u` escape at
+// all, so the check stays a pair of vectorized searches.
 func NeedsTransform(raw []byte) bool {
-	for index := 0; index+1 < len(raw); index++ {
-		if raw[index] != '\\' {
-			continue
+	if !bytes.Contains(raw, []byte(`\u`)) {
+		return false
+	}
+	for index := 0; index < len(raw); {
+		at := bytes.IndexByte(raw[index:], '\\')
+		if at < 0 {
+			return false
+		}
+		index += at
+		if index+1 >= len(raw) {
+			return true
 		}
 		if raw[index+1] != 'u' {
-			index++
+			index += 2
 			continue
 		}
 		if index+6 > len(raw) {
@@ -88,13 +99,13 @@ func NeedsTransform(raw []byte) bool {
 		if !ok {
 			return true
 		}
-		index += 5
+		index += 6
 		switch {
 		case unit >= 0xDC00 && unit <= 0xDFFF:
 			return true
 		case unit >= 0xD800 && unit <= 0xDBFF:
-			if index+7 <= len(raw) && raw[index+1] == '\\' && raw[index+2] == 'u' {
-				second, ok := hexUnit(raw[index+3 : index+7])
+			if index+6 <= len(raw) && raw[index] == '\\' && raw[index+1] == 'u' {
+				second, ok := hexUnit(raw[index+2 : index+6])
 				if ok && second >= 0xDC00 && second <= 0xDFFF {
 					index += 6
 					continue
@@ -483,8 +494,14 @@ func restoreValue(value reflect.Value) reflect.Value {
 }
 
 // Marshal writes JSON like JSON.stringify, with a WTF-8 surrogate in a string
-// written as its lower-case \udXXX escape. A value without a surrogate or a
-// marker is marshaled by encoding/json directly, at its own cost.
+// written as its lower-case \udXXX escape. A value without a surrogate is
+// marshaled by encoding/json directly, at its own cost.
+//
+// The general path replaces every string that carries a WTF-8 surrogate with a
+// placeholder string, marshals the copy, and splices each placeholder token with
+// JSON.stringify's spelling of the original. Raw json.Marshaler output is copied
+// byte for byte and never passes through a restore scan, so a literal
+// private-use sequence it writes survives unchanged.
 func Marshal(value any) ([]byte, error) {
 	body, err := json.Marshal(value)
 	if err != nil {
@@ -494,20 +511,30 @@ func Marshal(value any) ([]byte, error) {
 	// encoding/json writes U+FFFD for every invalid UTF-8 byte, and WTF-8
 	// surrogate bytes are the only invalid bytes a decoded JS string can carry.
 	// Without U+FFFD in the output the document has no surrogates (a legitimate
-	// U+FFFD only makes this walk run), so standard JSON is already exact and the
+	// U+FFFD only makes the walk run), so standard JSON is already exact and the
 	// reflection walk is skipped entirely.
 	if !bytes.Contains(body, []byte(string(utf8.RuneError))) || !needsEncodingAny(value) {
 		return body, nil
 	}
-	root, changed := encodeValue(reflect.ValueOf(value))
-	if !changed {
-		return body, nil
+	for range 8 {
+		nonce, err := newNonce()
+		if err != nil {
+			return nil, err
+		}
+		var placeholders []placeholder
+		root, replaced := substituteStrings(reflect.ValueOf(value), nonce, &placeholders)
+		if !replaced {
+			return body, nil
+		}
+		encoded, err := json.Marshal(root.Interface())
+		if err != nil {
+			return nil, err
+		}
+		if spliced, ok := splicePlaceholders(unescapeHTML(encoded), nonce, placeholders); ok {
+			return spliced, nil
+		}
 	}
-	body, err = json.Marshal(root.Interface())
-	if err != nil {
-		return nil, err
-	}
-	return restoreEscapes(unescapeHTML(body)), nil
+	return nil, fmt.Errorf("wtf8: placeholder collision")
 }
 
 // unescapeHTML turns the escapes json.Marshal writes for <, > and & back into
@@ -647,9 +674,85 @@ func needsEncodingValue(value reflect.Value) bool {
 	return false
 }
 
-// encodeValue copies a value only where a string needs the marker form: the
-// returned bool says whether anything changed.
-func encodeValue(value reflect.Value) (reflect.Value, bool) {
+// placeholder is one string that carried a WTF-8 surrogate: token is the JSON
+// spelling of its stand-in in the marshaled copy, final is JSON.stringify's
+// spelling of the original.
+type placeholder struct {
+	token string
+	final []byte
+}
+
+// placeholderPrefix starts every placeholder token. The control character is
+// escaped by encoding/json wherever the string sits, so the token is ASCII and a
+// second occurrence (raw json.Marshaler output or a user string) is detectable.
+const placeholderPrefix = `"\u0001WTF8\u0001`
+
+func newNonce() (string, error) {
+	var raw [12]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", raw[:]), nil
+}
+
+func placeholderText(nonce string, index int) string {
+	return "\x01WTF8\x01" + nonce + "\x01" + strconv.Itoa(index) + "\x01"
+}
+
+func placeholderToken(text string) string {
+	token, err := json.Marshal(text)
+	if err != nil {
+		return ""
+	}
+	return string(token)
+}
+
+// splicePlaceholders replaces each placeholder token with the final spelling and
+// reports false when a token is missing, duplicated or still present afterwards,
+// which makes Marshal retry with a fresh nonce.
+func splicePlaceholders(body []byte, nonce string, placeholders []placeholder) ([]byte, bool) {
+	if len(placeholders) == 0 {
+		return body, true
+	}
+	byToken := make(map[string][]byte, len(placeholders))
+	for _, item := range placeholders {
+		if bytes.Count(body, []byte(item.token)) != 1 {
+			return nil, false
+		}
+		byToken[item.token] = item.final
+	}
+	prefix := []byte(placeholderPrefix)
+	out := make([]byte, 0, len(body)+32*len(placeholders))
+	found := 0
+	for index := 0; index < len(body); {
+		if body[index] == '"' && bytes.HasPrefix(body[index:], prefix) {
+			rest := body[index+len(prefix):]
+			if end := bytes.IndexByte(rest, '"'); end >= 0 {
+				token := string(body[index : index+len(prefix)+end+1])
+				if final, ok := byToken[token]; ok {
+					out = append(out, final...)
+					index += len(token)
+					found++
+					continue
+				}
+			}
+		}
+		out = append(out, body[index])
+		index++
+	}
+	// Every token is gone; a surviving nonce-prefixed sequence means a
+	// substitution produced a token-shaped string, so retry with a new nonce.
+	if found != len(byToken) || bytes.Contains(out, []byte(placeholderPrefix+nonce)) {
+		return nil, false
+	}
+	return out, true
+}
+
+// substituteStrings copies a value only where a string carries a WTF-8
+// surrogate, replacing it with a placeholder string of the same type. The
+// returned bool says whether anything changed. A type that implements
+// json.Marshaler is left alone: its output is copied byte for byte.
+func substituteStrings(value reflect.Value, nonce string, out *[]placeholder) (reflect.Value, bool) {
 	if !value.IsValid() {
 		return value, false
 	}
@@ -657,18 +760,14 @@ func encodeValue(value reflect.Value) (reflect.Value, bool) {
 		if value.IsNil() {
 			return value, false
 		}
-		inner, changed := encodeValue(value.Elem())
+		inner, changed := substituteStrings(value.Elem(), nonce, out)
 		if !changed {
 			return value, false
 		}
-		out := reflect.New(value.Type()).Elem()
-		if inner.IsValid() && inner.Type().AssignableTo(out.Type()) {
-			out.Set(inner)
-			return out, true
-		}
-		if inner.IsValid() && inner.Type().Implements(out.Type()) {
-			out.Set(inner)
-			return out, true
+		copied := reflect.New(value.Type()).Elem()
+		if inner.IsValid() && inner.Type().AssignableTo(value.Type()) {
+			copied.Set(inner)
+			return copied, true
 		}
 		return value, false
 	}
@@ -680,168 +779,131 @@ func encodeValue(value reflect.Value) (reflect.Value, bool) {
 	}
 	switch value.Kind() {
 	case reflect.String:
-		text := encodeText(value.String())
-		if text == value.String() {
+		text := value.String()
+		if !hasWTF8(text) {
 			return value, false
 		}
-		out := reflect.New(value.Type()).Elem()
-		out.SetString(text)
-		return out, true
+		stand := placeholderText(nonce, len(*out))
+		var final strings.Builder
+		AppendQuoted(&final, text)
+		*out = append(*out, placeholder{token: placeholderToken(stand), final: []byte(final.String())})
+		copied := reflect.New(value.Type()).Elem()
+		copied.SetString(stand)
+		return copied, true
 	case reflect.Ptr:
 		if value.IsNil() {
 			return value, false
 		}
-		inner, changed := encodeValue(value.Elem())
+		inner, changed := substituteStrings(value.Elem(), nonce, out)
 		if !changed {
 			return value, false
 		}
-		out := reflect.New(value.Type().Elem())
-		out.Elem().Set(inner)
-		return out, true
+		copied := reflect.New(value.Type().Elem())
+		copied.Elem().Set(inner)
+		return copied, true
 	case reflect.Struct:
-		var out reflect.Value
+		var copied reflect.Value
 		for index := 0; index < value.NumField(); index++ {
 			if value.Type().Field(index).PkgPath != "" {
 				continue
 			}
 			field := value.Field(index)
-			if !field.CanSet() && !value.CanInterface() {
-				continue
-			}
-			encoded, changed := encodeValue(field)
+			encoded, changed := substituteStrings(field, nonce, out)
 			if !changed {
 				continue
 			}
-			if !out.IsValid() {
-				out = reflect.New(value.Type()).Elem()
-				out.Set(value)
+			if !copied.IsValid() {
+				copied = reflect.New(value.Type()).Elem()
+				copied.Set(value)
 			}
-			target := out.Field(index)
-			if target.CanSet() {
+			if target := copied.Field(index); target.CanSet() {
 				target.Set(encoded)
 			}
 		}
-		if out.IsValid() {
-			return out, true
+		if copied.IsValid() {
+			return copied, true
 		}
 		return value, false
 	case reflect.Slice:
 		if value.IsNil() || value.Type().Elem().Kind() == reflect.Uint8 {
 			return value, false
 		}
-		var out reflect.Value
+		var copied reflect.Value
 		for index := 0; index < value.Len(); index++ {
-			item, changed := encodeValue(value.Index(index))
+			item, changed := substituteStrings(value.Index(index), nonce, out)
 			if !changed {
 				continue
 			}
-			if !out.IsValid() {
-				out = reflect.MakeSlice(value.Type(), value.Len(), value.Len())
-				reflect.Copy(out, value)
+			if !copied.IsValid() {
+				copied = reflect.MakeSlice(value.Type(), value.Len(), value.Len())
+				reflect.Copy(copied, value)
 			}
-			out.Index(index).Set(item)
+			copied.Index(index).Set(item)
 		}
-		if out.IsValid() {
-			return out, true
+		if copied.IsValid() {
+			return copied, true
 		}
 		return value, false
 	case reflect.Array:
 		if value.Type().Elem().Kind() == reflect.Uint8 {
 			return value, false
 		}
-		var out reflect.Value
+		var copied reflect.Value
 		for index := 0; index < value.Len(); index++ {
-			item, changed := encodeValue(value.Index(index))
+			item, changed := substituteStrings(value.Index(index), nonce, out)
 			if !changed {
 				continue
 			}
-			if !out.IsValid() {
-				out = reflect.New(value.Type()).Elem()
-				out.Set(value)
+			if !copied.IsValid() {
+				copied = reflect.New(value.Type()).Elem()
+				copied.Set(value)
 			}
-			out.Index(index).Set(item)
+			copied.Index(index).Set(item)
 		}
-		if out.IsValid() {
-			return out, true
+		if copied.IsValid() {
+			return copied, true
 		}
 		return value, false
 	case reflect.Map:
 		if value.IsNil() {
 			return value, false
 		}
-		type entry struct {
-			key, encodedKey     reflect.Value
-			value, encodedValue reflect.Value
-			changed             bool
-		}
-		entries := make([]entry, 0, value.Len())
-		anyChanged := false
+		entries := make([]struct{ key, value reflect.Value }, 0, value.Len())
+		changed := false
 		iterator := value.MapRange()
 		for iterator.Next() {
-			item := entry{key: iterator.Key(), value: iterator.Value()}
-			if item.key.Kind() == reflect.String {
-				item.encodedKey, item.changed = encodeValue(item.key)
-			} else {
-				item.encodedKey = item.key
+			key := iterator.Key()
+			if key.Kind() == reflect.String {
+				encodedKey, keyChanged := substituteStrings(key, nonce, out)
+				if keyChanged {
+					key = encodedKey
+					changed = true
+				}
 			}
-			encoded, valueChanged := encodeValue(item.value)
-			item.encodedValue = encoded
-			item.changed = item.changed || valueChanged
-			anyChanged = anyChanged || item.changed
-			entries = append(entries, item)
+			item, valueChanged := substituteStrings(iterator.Value(), nonce, out)
+			if valueChanged {
+				changed = true
+			} else {
+				item = iterator.Value()
+			}
+			entries = append(entries, struct{ key, value reflect.Value }{key: key, value: item})
 		}
-		if !anyChanged {
+		if !changed {
 			return value, false
 		}
-		out := reflect.MakeMapWithSize(value.Type(), value.Len())
-		for _, item := range entries {
-			out.SetMapIndex(item.encodedKey, item.encodedValue)
+		copied := reflect.MakeMapWithSize(value.Type(), value.Len())
+		for _, entry := range entries {
+			copied.SetMapIndex(entry.key, entry.value)
 		}
-		return out, true
+		return copied, true
 	}
 	return value, false
 }
 
 var marshalerType = reflect.TypeOf((*json.Marshaler)(nil)).Elem()
 
-// encodeText replaces WTF-8 surrogate code units with marker pairs for
-// encoding/json, escaping a literal marker so the output pass can tell them
-// apart.
-func encodeText(value string) string {
-	if !needsEncoding(value) {
-		return value
-	}
-	var out []byte
-	for index := 0; index < len(value); {
-		if size := isSurrogate(value[index:]); size > 0 {
-			unit := uint16(value[index]&0x0F)<<12 | uint16(value[index+1]&0x3F)<<6 | uint16(value[index+2]&0x3F)
-			out = append(out, markerBytes...)
-			out = appendRune(out, unitMarker(unit))
-			index += size
-			continue
-		}
-		if bytes.HasPrefix([]byte(value[index:]), markerBytes) {
-			out = append(out, markerBytes...)
-			out = append(out, escapeBytes...)
-			index += len(markerBytes)
-			continue
-		}
-		out = append(out, value[index])
-		index++
-	}
-	return string(out)
-}
-
-// needsEncoding reports whether value carries a WTF-8 surrogate or a marker that
-// restoreEscapes could misread.
-func needsEncoding(value string) bool {
-	return strings.Contains(value, markerText) || hasWTF8(value)
-}
-
 // hasWTF8 reports whether value contains an encoded unpaired UTF-16 surrogate
-// (0xED A0..BF 80..BF). Detection only needs this: without a surrogate the
-// output is standard JSON and restoreEscapes never runs, so a literal marker
-// needs no escaping.
+// (0xED A0..BF 80..BF), the only string shape the output boundary must rewrite.
 func hasWTF8(value string) bool {
 	for index := 0; index < len(value); {
 		at := strings.IndexByte(value[index:], 0xED)
@@ -854,38 +916,6 @@ func hasWTF8(value string) bool {
 		index += at + 1
 	}
 	return false
-}
-
-// restoreEscapes rewrites marker pairs in marshaled JSON to the escapes
-// JSON.stringify writes for unpaired surrogates.
-func restoreEscapes(body []byte) []byte {
-	if !bytes.Contains(body, markerBytes) {
-		return body
-	}
-	out := make([]byte, 0, len(body))
-	for index := 0; index < len(body); {
-		if !bytes.HasPrefix(body[index:], markerBytes) {
-			out = append(out, body[index])
-			index++
-			continue
-		}
-		after := index + len(markerBytes)
-		r, size := utf8.DecodeRune(body[after:])
-		switch {
-		case r == markerEscape:
-			out = append(out, markerBytes...)
-			index = after + size
-		case r >= unitMarkerLow && r <= unitMarkerHigh:
-			unit := uint16(0xD800 + int(r-unitMarkerLow))
-			out = append(out, '\\', 'u')
-			out = append(out, hex4(unit)...)
-			index = after + size
-		default:
-			out = append(out, markerBytes...)
-			index = after
-		}
-	}
-	return out
 }
 
 func hex4(value uint16) []byte {
