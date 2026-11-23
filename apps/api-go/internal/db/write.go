@@ -3,10 +3,9 @@ package db
 import (
 	"database/sql/driver"
 	"encoding/json"
-	"reflect"
-	"sort"
 	"strconv"
 
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/validate"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 )
 
@@ -68,30 +67,29 @@ func dataValue(value any) any {
 
 // JSON is a Go value stored in a json/jsonb column. Prisma sanitizes a JSON
 // write argument recursively: every string leaf and key becomes U+FFFD for NUL
-// or an unpaired surrogate, and keys that collide after that get a deterministic
-// "#n" suffix (sanitizeJsonValue, packages/core/src/messages/events.ts:648-671).
-// The returned compact JSON text is bound like any other string.
+// or an unpaired surrogate, and keys that collide after that get the
+// deterministic "#n" suffix in the object's own key order
+// (sanitizeJsonValue, packages/core/src/messages/events.ts:648-671).
 func JSON(value any) string {
-	body, err := json.Marshal(sanitizeJSONValue(value))
+	body, err := wtf8.Marshal(value)
 	if err != nil {
-		// A value encoding/json cannot write never reaches SQL; keep the
-		// original so the driver reports it.
 		fallback, _ := json.Marshal(value)
 		return string(fallback)
 	}
-	return string(body)
+	return JSONText(string(body))
 }
 
-// JSONText is a JSON document that already exists as text (json.Marshal output,
-// a policies payload). It is parsed with the WTF-8 boundary, sanitized per leaf
-// and written back compactly, so a WTF-8 surrogate inside the text becomes one
-// U+FFFD rather than the three the standard encoder writes for its bytes.
+// JSONText is a JSON document that already exists as text (wtf8.Marshal output,
+// a policies payload). It is parsed with the WTF-8 boundary and JSON.stringify's
+// number rules (validate.DecodeAny), sanitized per leaf in the document's key
+// order, and written back compactly, so a WTF-8 surrogate becomes one U+FFFD
+// rather than the three the standard encoder writes for its bytes.
 func JSONText(text string) string {
-	var value any
-	if err := wtf8.Unmarshal([]byte(text), &value); err != nil {
+	value, err := validate.DecodeAny([]byte(text))
+	if err != nil {
 		return text
 	}
-	return JSON(value)
+	return validate.Stringify(sanitizeJSONValue(value))
 }
 
 // sanitizeJSONValue is sanitizeJsonValue with the write hook applied: strings
@@ -108,36 +106,20 @@ func sanitizeJSONValue(value any) any {
 			out[index] = sanitizeJSONValue(item)
 		}
 		return out
-	case map[string]any:
-		keys := make([]string, 0, len(typed))
-		for key := range typed {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		out := make(map[string]any, len(typed))
-		used := make(map[string]int, len(keys))
-		for _, key := range keys {
+	case *validate.Object:
+		out := &validate.Object{Keys: make([]string, 0, len(typed.Keys)), Values: map[string]any{}}
+		used := make(map[string]int, len(typed.Keys))
+		for _, key := range typed.Keys {
 			safe := wtf8.SanitizeText(key)
 			seen := used[safe]
 			used[safe] = seen + 1
 			if seen > 0 {
 				safe += "#" + strconv.Itoa(seen+1)
 			}
-			out[safe] = sanitizeJSONValue(typed[key])
+			out.Keys = append(out.Keys, safe)
+			out.Values[safe] = sanitizeJSONValue(typed.Values[key])
 		}
 		return out
-	}
-	// Structs and other typed values reach this through reflection below.
-	reflected := reflect.ValueOf(value)
-	if reflected.IsValid() && (reflected.Kind() == reflect.Struct || reflected.Kind() == reflect.Ptr ||
-		reflected.Kind() == reflect.Slice || reflected.Kind() == reflect.Map) {
-		encoded, err := wtf8.Marshal(value)
-		if err == nil {
-			var generic any
-			if err := wtf8.Unmarshal(encoded, &generic); err == nil {
-				return sanitizeJSONValue(generic)
-			}
-		}
 	}
 	return value
 }

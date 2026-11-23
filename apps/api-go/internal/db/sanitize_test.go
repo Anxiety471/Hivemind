@@ -2,6 +2,7 @@ package db
 
 import (
 	"testing"
+	"unicode/utf8"
 
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 )
@@ -90,5 +91,17 @@ func TestWireArgsReplacesSurrogatesInNullableFilters(t *testing.T) {
 	}
 	if args[1] != (*string)(nil) {
 		t.Fatalf("nil pointer = %#v", args[1])
+	}
+}
+
+func TestJSONTextKeepsKeyOrderForCollisions(t *testing.T) {
+	replacement := string(utf8.RuneError)
+	for input, want := range map[string]string{
+		`{"a\ud800":"first","a\uFFFD":"second"}`: `{"a` + replacement + `":"first","a` + replacement + `#2":"second"}`,
+		`{"a\uFFFD":"first","a\ud800":"second"}`: `{"a` + replacement + `":"first","a` + replacement + `#2":"second"}`,
+	} {
+		if got := JSONText(input); got != want {
+			t.Errorf("JSONText(%s) = %s, want %s", input, got, want)
+		}
 	}
 }
