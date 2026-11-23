@@ -112,9 +112,12 @@ func SecurityEventFor(procedure string, input map[string]any, actor db.Actor) (S
 			}
 		}
 	}
-	// auth-audit.ts pins the decision the procedure made (security-audit.ts:161).
+	// auth-audit.ts pins the decision the procedure made (security-audit.ts:161-162).
 	if procedure == "mcp.assignments.approve" {
 		metadata = append(metadata, Meta{Key: "decision", Value: "allow"})
+	}
+	if procedure == "mcp.assignments.dismiss" {
+		metadata = append(metadata, Meta{Key: "decision", Value: "deny"})
 	}
 	return SecurityEvent{Type: entry.Type, UserID: actor.UserID, SpaceID: actor.SpaceID, Metadata: metadata}, true
 }

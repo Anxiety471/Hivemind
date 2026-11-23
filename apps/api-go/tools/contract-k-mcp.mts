@@ -374,8 +374,9 @@ export function laneKCases(system: System): Case[] {
       { botId: "__s-kb1__", serverId: "__s-ks1__", threadId: "__s-kt2__" },
       async (seeded) => {
         await bot(seeded, "kb1");
+        await bot(seeded, "kb2", 1);
         await thread(seeded, "kt1", "kb1");
-        await thread(seeded, "kt2", "kb1", 1);
+        await thread(seeded, "kt2", "kb2", 1);
         await server(seeded, "ks1");
         await msg(seeded, "km1", "kt2", "ks1", "pending", 1);
       },
@@ -744,8 +745,9 @@ export function laneKCases(system: System): Case[] {
       { id: "__s-ks1__" },
       async (seeded) => {
         await bot(seeded, "kb1");
+        await bot(seeded, "kb2");
         await thread(seeded, "kt1", "kb1");
-        await thread(seeded, "kt2", "kb1");
+        await thread(seeded, "kt2", "kb2");
         await server(seeded, "ks1");
         await msg(seeded, "km1", "kt1", "ks1", "pending", 1);
         await msg(seeded, "km2", "kt1", "ks1", "connected", 2);
