@@ -375,7 +375,8 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 			},
 		},
 		{
-			Name: "mcp.assignments.approve",
+			Name:       "mcp.assignments.approve",
+			MayDecline: true,
 			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
 				var publisher runslib.Publisher
 				if deployment.Signals != nil {
@@ -392,7 +393,8 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 			},
 		},
 		{
-			Name: "mcp.assignments.dismiss",
+			Name:       "mcp.assignments.dismiss",
+			MayDecline: true,
 			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
 				return mcpassignments.Dismiss(ctx, database, deployment, actor, input)
 			},
@@ -410,13 +412,15 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 			},
 		},
 		{
-			Name: "mcp.servers.remove",
+			Name:       "mcp.servers.remove",
+			MayDecline: true,
 			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
 				return mcpservers.Remove(ctx, database, deployment, actor, input)
 			},
 		},
 		{
-			Name: "mcp.oauth.disconnect",
+			Name:       "mcp.oauth.disconnect",
+			MayDecline: true,
 			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
 				return mcpservers.Disconnect(ctx, database, deployment, actor, input)
 			},

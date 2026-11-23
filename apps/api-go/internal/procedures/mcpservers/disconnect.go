@@ -19,6 +19,8 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/effects"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/local"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/secretstore"
@@ -50,6 +52,12 @@ func Disconnect(
 	values, failure := shared.IDFields(raw, "serverId")
 	if failure != nil {
 		return nil, failure
+	}
+	// The security event carries this id, and the server does not have to exist; a value the
+	// TypeScript redactor could rewrite goes to TypeScript (gateway decline) rather than being
+	// recorded differently or dropped.
+	if !effects.AuditedMetadataServable(values["serverId"]) {
+		return nil, local.ErrDecline
 	}
 	vault, err := shared.VaultDeps(deployment.Vault)
 	if err != nil {

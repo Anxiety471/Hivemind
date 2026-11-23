@@ -13,7 +13,9 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/effects"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/events"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/local"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/mcpassignments"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
@@ -31,6 +33,11 @@ func Remove(
 	values, failure := shared.IDFields(raw, "id")
 	if failure != nil {
 		return nil, failure
+	}
+	// The security event carries this id; a value the TypeScript redactor could rewrite goes
+	// to TypeScript (gateway decline) instead of being recorded differently or dropped.
+	if !effects.AuditedMetadataServable(values["id"]) {
+		return nil, local.ErrDecline
 	}
 	vault, err := shared.VaultDeps(deployment.Vault)
 	if err != nil {
