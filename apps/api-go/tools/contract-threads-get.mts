@@ -1278,12 +1278,14 @@ export function threadGetCases(system: System): Case[] {
           controlHolder: "user",
           controlBotId: id(seeded, "b1"),
           controlLeaseId: "lease-1",
+          controlLeaseExpiresAt: new Date(Date.now() + 600_000),
           controlUserId: id(seeded, "other"),
         });
         await bot(seeded, "b1", { computer: "c1" });
       },
-      // The read enqueues computer.control-expire, which writes its event about a second
-      // later; wait for it on both sides instead of racing the Go capture.
+      // A live lease: a missing/expired one enqueues computer.control-expire, whose job
+      // writes an event and a thread cursor on whichever side's window it lands in. The
+      // settle only covers late publishes; the case itself stays a pure read.
       { declines: false, settleMs: 5000 },
     ),
     get(
