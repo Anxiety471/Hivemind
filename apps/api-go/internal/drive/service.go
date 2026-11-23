@@ -379,7 +379,7 @@ func ensureBotFolderTx(ctx context.Context, tx pgx.Tx, spaceID, userID, botID st
 			UPDATE "file_folders"
 			SET "botId" = $2, "updatedAt" = NOW()
 			WHERE id = $1 AND "botId" IS NULL AND "trashedAt" IS NULL
-		`, adoptID, botID)
+		`, append([]any{adoptID}, db.Data(botID)...)...)
 		if updErr == nil {
 			if _, relErr := tx.Exec(ctx, `RELEASE SAVEPOINT sp_bot_adopt`); relErr != nil {
 				return "", relErr
@@ -426,7 +426,7 @@ func ensureBotFolderTx(ctx context.Context, tx pgx.Tx, spaceID, userID, botID st
 		_, insErr := tx.Exec(ctx, `
 			INSERT INTO "file_folders" (id, "spaceId", "parentId", "botId", "createdByUserId", name, "createdAt", "updatedAt")
 			VALUES ($1, $2, NULL, $3, $4, $5, NOW(), NOW())
-		`, newID, spaceID, botID, userID, candidate)
+		`, db.Data(newID, spaceID, botID, userID, candidate)...)
 		if insErr == nil {
 			if _, relErr := tx.Exec(ctx, `RELEASE SAVEPOINT sp_bot_folder`); relErr != nil {
 				return "", relErr
@@ -1957,19 +1957,20 @@ func (s *Service) UpdateFile(ctx context.Context, actor db.Actor, input UpdateFi
 		setClauses := make([]string, 0, 4)
 		args := []any{actor.SpaceID, familyID}
 		if nextName != nil {
-			args = append(args, *nextName)
+			args = append(args, db.Data(*nextName)...)
 			setClauses = append(setClauses, fmt.Sprintf("name = $%d", len(args)))
 		}
 		if input.HasDescription {
-			args = append(args, nextDesc)
+			args = append(args, db.Data(nextDesc)...)
 			setClauses = append(setClauses, fmt.Sprintf("description = $%d", len(args)))
 		}
 		if input.HasSlug {
-			args = append(args, nextSlug)
+			args = append(args, db.Data(nextSlug)...)
 			setClauses = append(setClauses, fmt.Sprintf("slug = $%d", len(args)))
 		}
 		if len(setClauses) > 0 {
 			setClauses = append(setClauses, `"updatedAt" = NOW()`)
+			// writeaudit:dynamic build: fixed SET clauses carry db.Data payloads
 			if _, err := tx.Exec(ctx, fmt.Sprintf(`
 				UPDATE "artifacts" SET %s
 				WHERE "spaceId" = $1 AND (id = $2 OR "rootArtifactId" = $2)

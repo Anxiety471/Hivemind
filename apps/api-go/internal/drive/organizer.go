@@ -454,7 +454,7 @@ func (o *Organizer) applyPlan(
 					_, insErr := tx.Exec(ctx, `
 						INSERT INTO "file_folders" (id, "spaceId", "parentId", "createdByUserId", name, "createdAt", "updatedAt")
 						VALUES ($1, $2, NULL, $3, $4, NOW(), NOW())
-					`, newID, actor.SpaceID, actor.UserID, *createFolderName)
+					`, db.Data(newID, actor.SpaceID, actor.UserID, *createFolderName)...)
 					if insErr == nil {
 						if _, relErr := tx.Exec(ctx, `RELEASE SAVEPOINT sp_org_folder`); relErr != nil {
 							return relErr
@@ -494,7 +494,8 @@ func (o *Organizer) applyPlan(
 				slug = COALESCE($6, slug),
 				"updatedAt" = NOW()
 			WHERE "spaceId" = $1 AND (id = $2 OR "rootArtifactId" = $2) AND "trashedAt" IS NULL
-		`, actor.SpaceID, familyID, resolvedFolderID, nextName, nextDesc, nextSlug)
+		`, append([]any{actor.SpaceID, familyID},
+			db.Data(resolvedFolderID, nextName, nextDesc, nextSlug)...)...)
 		if err != nil {
 			return err
 		}
