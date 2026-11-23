@@ -166,6 +166,9 @@ export function routineResumeCases(system: System): Case[] {
       unordered: true,
       // The resumed routines' first runs execute in this process seconds later.
       gapMs: 5000,
+      // The restore publishes its roster and Space changes after the response on both sides;
+      // give those publishes time to land in each side's own window before the next capture.
+      settleMs: 5000,
     },
   ];
 }

@@ -133,6 +133,13 @@ export type Case = {
    */
   gapMs?: number;
   /**
+   * Wait this long after each side's response before the quiet-loop snapshot, for a case whose
+   * asynchronous effects legitimately publish late on both sides (the routine-resume restore
+   * cases). Gives each side's roster/Space publishes time to land in its own window instead of
+   * racing the next side's capture.
+   */
+  settleMs?: number;
+  /**
    * Skip the realtime-signal comparison: a procedure that creates a board or ticket with a
    * database-generated id publishes a frame whose payload necessarily names different ids on
    * the two sides, while the response body is comparable through normalize().
@@ -8680,9 +8687,10 @@ for (const testCase of cases) {
   const input = withIds(testCase.input, caseIds);
   // A write has realtime signals to wait for; a read only needs to show it sent none.
   const settle =
-    WRITE_PROCEDURES.has(testCase.procedure) || testCase.procedure.startsWith("messaging.")
+    testCase.settleMs ??
+    (WRITE_PROCEDURES.has(testCase.procedure) || testCase.procedure.startsWith("messaging.")
       ? 400
-      : 40;
+      : 40);
 
   let seeded = await seed(caseIds);
   if (testCase.seed) await testCase.seed(seeded);
