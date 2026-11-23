@@ -99,9 +99,12 @@ export function routineResumeCases(system: System): Case[] {
     await addBot(seeded, "rrgrouparch", true);
     await addBot(seeded, "rrgrouplive", false);
     // The archived member's routine resumes with the group; the live member's
-    // finishes a restore that stopped before its routines.
-    await addRoutine(seeded, "rrgrouparchcron", "rrgrouparch");
-    await addRoutine(seeded, "rrgrouplivecron", "rrgrouplive");
+    // finishes a restore that stopped before its routines. The schedules stay
+    // far from now (the same daily form the other restore fixtures use) so the
+    // in-process runner does not start them inside this case's capture windows
+    // (Go only enqueues; it has no worker here).
+    await addRoutine(seeded, "rrgrouparchcron", "rrgrouparch", { crons: ["0 9 * * *"] });
+    await addRoutine(seeded, "rrgrouplivecron", "rrgrouplive", { crons: ["0 21 * * *"] });
     // Another member's marked routine stays off.
     await addRoutine(seeded, "rrgrouptheirs", "rrgrouplive", {
       userId: `${seeded.userId}-other`,
@@ -164,7 +167,8 @@ export function routineResumeCases(system: System): Case[] {
       ],
       // routines.list has no orderBy: compare it by id, as the other unordered reads are.
       unordered: true,
-      // The resumed routines' first runs execute in this process seconds later.
+      // The resumed routines' schedules are far from now; the gap only lets any
+      // late background publish leave the TypeScript window.
       gapMs: 5000,
       // The restore publishes its roster and Space changes after the response on both sides;
       // give those publishes time to land in each side's own window before the next capture.
