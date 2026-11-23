@@ -283,7 +283,7 @@ export function MemorySettingsOverlay({
               </p>
             ) : null}
             {roamer?.lastReport?.length ? (
-              <details className="mt-2 text-body-sm">
+              <details className="mt-2 text-body-sm" open={Boolean(roamer.lastError)}>
                 <summary className="cursor-pointer text-muted-foreground">
                   <Trans>Details</Trans>
                 </summary>
