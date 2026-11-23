@@ -52,6 +52,11 @@ const RUN_TAG = process.env.RUN_TAG ? `-${process.env.RUN_TAG}` : "";
 // biome-ignore lint/suspicious/noUndeclaredEnvVars: manual harness, not a turbo task
 const GO_PORT = process.env.GO_PORT ?? "3201";
 const GO_URL = `http://127.0.0.1:${GO_PORT}`;
+// Fault-injection only: a second gateway whose table is entirely proxy. One concurrent call in
+// CONTRACT_PROXY_ONE_CONCURRENT proves the served_by count rejects a partial proxy window.
+// biome-ignore lint/suspicious/noUndeclaredEnvVars: manual harness, not a turbo task
+const PROXY_PORT = process.env.GO_PROXY_PORT ?? String(Number(GO_PORT) + 2);
+const PROXY_URL = `http://127.0.0.1:${PROXY_PORT}`;
 // The gateway's upstream: a bridge to the in-process TypeScript app, so a request Go declines is
 // answered the way production's proxy answers it. UPSTREAM_PORT separates runs on one host.
 // biome-ignore lint/suspicious/noUndeclaredEnvVars: manual harness, not a turbo task
@@ -202,6 +207,7 @@ await new Promise<void>((resolve) =>
 );
 
 let go: ChildProcess | undefined;
+let proxyGo: ChildProcess | undefined;
 // The Go side's stderr/stdout for the current request window. URL cases use this to prove a share
 // token is never logged, while still passing the lines through to the harness output.
 let gatewayLog = "";
@@ -346,16 +352,48 @@ type RouteConfig = { default?: string; routes?: Record<string, { mode?: string }
 const routeConfig = JSON.parse(await readFile(routesFile, "utf8")) as RouteConfig;
 const routeMode = (procedure: string) =>
   routeConfig.routes?.[procedure]?.mode ?? routeConfig.default ?? "proxy";
+
+/** Count this procedure's local answers in the captured gateway log. */
+function servedByGoCount(log: string, procedure: string) {
+  const procedureField = `"procedure":${JSON.stringify(procedure)}`;
+  return log
+    .split("\n")
+    .filter((line) => line.includes('"served_by":"go"') && line.includes(procedureField)).length;
+}
 process.on("uncaughtException", (error) => {
   go?.kill("SIGKILL");
+  proxyGo?.kill("SIGKILL");
   console.error(error);
   process.exit(1);
 });
 process.on("unhandledRejection", (error) => {
   go?.kill("SIGKILL");
+  proxyGo?.kill("SIGKILL");
   console.error(error);
   process.exit(1);
 });
+const gatewayEnv = {
+  ...process.env,
+  DATABASE_URL,
+  BETTER_AUTH_SECRET: SECRET,
+  BETTER_AUTH_URL: WEB_ORIGIN,
+  WEB_ORIGIN,
+  // The credential store both sides seal with. The same test key the TypeScript app uses.
+  ENCRYPTION_KEY: CONTRACT_ENCRYPTION_KEY,
+  CONTENT_ENCRYPTION: "on",
+  MAX_UPLOAD_SIZE_MB: "10",
+  // Email delivery is configured when SMTP_URL is: the same variables TypeScript reads.
+  SMTP_URL: EMAIL_ON ? "smtp://127.0.0.1:2525" : "",
+  EMAIL_PROVIDER: "",
+  EMAIL_EMULATOR: "",
+  // The inbound domain bots.emailAddress* read, and the restore quota, as on the TypeScript side.
+  INBOUND_EMAIL_DOMAIN,
+  INBOUND_EMAIL_SECRET,
+  RAKAZO_ADMIN_EMAILS: CONTRACT_ADMIN_EMAIL,
+  SANDBOX_MAX_COMPUTERS_PER_USER: MAX_COMPUTERS_PER_USER,
+  PHONE_CALLS_ENABLED: "true",
+  PHONE_CALL_RING_SECONDS: "45",
+};
 go = spawn(
   GO_BINARY,
   [
@@ -368,31 +406,7 @@ go = spawn(
     "-build-id-file",
     BUILD_ID_FILE,
   ],
-  {
-    env: {
-      ...process.env,
-      DATABASE_URL,
-      BETTER_AUTH_SECRET: SECRET,
-      BETTER_AUTH_URL: WEB_ORIGIN,
-      WEB_ORIGIN,
-      // The credential store both sides seal with. The same test key the TypeScript app uses.
-      ENCRYPTION_KEY: CONTRACT_ENCRYPTION_KEY,
-      CONTENT_ENCRYPTION: "on",
-      MAX_UPLOAD_SIZE_MB: "10",
-      // Email delivery is configured when SMTP_URL is: the same variables TypeScript reads.
-      SMTP_URL: EMAIL_ON ? "smtp://127.0.0.1:2525" : "",
-      EMAIL_PROVIDER: "",
-      EMAIL_EMULATOR: "",
-      // The inbound domain bots.emailAddress* read, and the restore quota, as on the TypeScript side.
-      INBOUND_EMAIL_DOMAIN,
-      INBOUND_EMAIL_SECRET,
-      RAKAZO_ADMIN_EMAILS: CONTRACT_ADMIN_EMAIL,
-      SANDBOX_MAX_COMPUTERS_PER_USER: MAX_COMPUTERS_PER_USER,
-      PHONE_CALLS_ENABLED: "true",
-      PHONE_CALL_RING_SECONDS: "45",
-    },
-    stdio: ["ignore", "pipe", "pipe"],
-  },
+  { env: gatewayEnv, stdio: ["ignore", "pipe", "pipe"] },
 );
 const captureGateway = (chunk: Buffer) => {
   gatewayLog += chunk.toString();
@@ -409,6 +423,42 @@ for (let attempt = 0; attempt < 100; attempt += 1) {
   }
   if (attempt === 99) throw new Error("go gateway did not start");
   await sleep(50);
+}
+
+// Fault-injection only. A second gateway with an empty route table answers entirely through the
+// TypeScript upstream; CONTRACT_PROXY_ONE_CONCURRENT sends one of a concurrent case's Go calls
+// here, so the served_by:go count must reject the partially proxied window.
+// biome-ignore lint/suspicious/noUndeclaredEnvVars: manual harness, not a turbo task
+if (process.env.CONTRACT_PROXY_ONE_CONCURRENT === "1") {
+  const proxyRoutesFile = join(dataDir, "routes-proxy.json");
+  await writeFile(proxyRoutesFile, JSON.stringify({ default: "proxy", routes: {} }));
+  proxyGo = spawn(
+    GO_BINARY,
+    [
+      "-listen",
+      `127.0.0.1:${PROXY_PORT}`,
+      "-upstream",
+      `http://127.0.0.1:${UPSTREAM_PORT}`,
+      "-routes",
+      proxyRoutesFile,
+      "-build-id-file",
+      BUILD_ID_FILE,
+    ],
+    { env: gatewayEnv, stdio: ["ignore", "pipe", "pipe"] },
+  );
+  const captureProxyGateway = (chunk: Buffer) => process.stderr.write(chunk);
+  proxyGo.stdout?.on("data", captureProxyGateway);
+  proxyGo.stderr?.on("data", captureProxyGateway);
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    try {
+      const response = await fetch(`${PROXY_URL}/healthz`);
+      if (response.ok) break;
+    } catch {
+      // still starting
+    }
+    if (attempt === 99) throw new Error("fault proxy gateway did not start");
+    await sleep(50);
+  }
 }
 
 // A listener on the realtime channel: TypeScript and Go must publish identical signals.
@@ -656,6 +706,7 @@ if (process.env.CONTRACT_ROUTE_AUDIT === "1") {
       `route audit: ${testCase.name} (${testCase.procedure}) -> ${routeMode(testCase.procedure)}`,
     );
   go?.kill("SIGKILL");
+  proxyGo?.kill("SIGKILL");
   upstreamServer.close();
   await handles.stop();
   await rm(dataDir, { recursive: true, force: true });
@@ -2231,13 +2282,17 @@ async function run(
       status: results[0]!.status,
       headers: results[0]!.headers,
       body: { json: combined },
+      calls: testCase.concurrent,
     };
   }
   if (!testCase.paginate) {
     const raw = await call(testCase.procedure, input, called(seeded, testCase));
     const result = testCase.unordered ? sortedById(raw) : raw;
     const settled = testCase.unorderedSections ? sortedSections(result) : result;
-    return testCase.after ? { ...settled, followUps: await followUps(testCase, seeded) } : settled;
+    return {
+      ...(testCase.after ? { ...settled, followUps: await followUps(testCase, seeded) } : settled),
+      calls: 1,
+    };
   }
   const pages: Awaited<ReturnType<typeof call>>[] = [];
   let cursor: string | undefined;
@@ -2255,6 +2310,7 @@ async function run(
     status: pages[0]!.status,
     headers: pages[0]!.headers,
     body: pages.map((page) => page.body),
+    calls: pages.length,
   };
 }
 
@@ -7676,7 +7732,21 @@ async function tsCall(procedure: string, input: unknown, seeded: Seeded) {
 }
 
 async function goCall(procedure: string, input: unknown, seeded: Seeded) {
-  const response = await fetch(`${GO_URL}/rpc/${procedure.replaceAll(".", "/")}`, {
+  return gatewayCall(GO_URL, procedure, input, seeded);
+}
+
+/** Fault-injection path: one request through the all-proxy gateway. */
+async function proxyCall(procedure: string, input: unknown, seeded: Seeded) {
+  return gatewayCall(PROXY_URL, procedure, input, seeded);
+}
+
+async function gatewayCall(
+  base: string,
+  procedure: string,
+  input: unknown,
+  seeded: Seeded,
+) {
+  const response = await fetch(`${base}/rpc/${procedure.replaceAll(".", "/")}`, {
     method: "POST",
     headers: callHeaders(seeded),
     body: input === undefined ? undefined : JSON.stringify({ json: input }),
@@ -8633,9 +8703,20 @@ for (const testCase of cases) {
     });
   const hitsBefore = upstreamHits;
   gatewayLog = "";
+  let goCallForCase = goCall;
+  // biome-ignore lint/suspicious/noUndeclaredEnvVars: manual harness, not a turbo task
+  if (process.env.CONTRACT_PROXY_ONE_CONCURRENT === "1" && testCase.concurrent) {
+    let dispatched = 0;
+    goCallForCase = (procedure, caseInput, caseSeeded) => {
+      dispatched += 1;
+      return dispatched === 1
+        ? proxyCall(procedure, caseInput, caseSeeded)
+        : goCall(procedure, caseInput, caseSeeded);
+    };
+  }
   const goResult = await observed(
     settle,
-    () => run(testCase, goCall, input, seeded),
+    () => run(testCase, goCallForCase, input, seeded),
     seeded,
     testCase.procedure,
   );
@@ -8656,12 +8737,20 @@ for (const testCase of cases) {
         testCase.declines ? 1 : 0,
         `${testCase.name}: ${testCase.declines ? "Go should decline" : "Go should answer"}`,
       );
-    if (mode === "go" && testCase.declines !== true)
-      assert.match(
-        gatewayLog,
-        /"served_by":"go"/,
-        `${testCase.name}: Go did not serve the request (no served_by:go)`,
-      );
+    // Every request in the Go window must be a local answer, not a proxy fallback. Shadow
+    // comparisons call the same local server and log the same marker; they run after the TS
+    // response, inside the observed settle window. `after` reloads are TypeScript-only and
+    // never appear in the gateway log, so they cannot inflate this count.
+    if (mode === "go" || mode === "shadow") {
+      if (testCase.declines !== true) {
+        const expectedCalls = goResult.calls ?? 1;
+        const served = servedByGoCount(gatewayLog, testCase.procedure);
+        assert.ok(
+          served >= expectedCalls,
+          `${testCase.name}: ${served} served_by:go entries for ${expectedCalls} expected calls`,
+        );
+      }
+    }
     assert.equal(goResult.status, tsResult.status, `${testCase.name}: status`);
     assert.deepEqual(goResult.headers, tsResult.headers, `${testCase.name}: headers`);
     assert.deepEqual(normalize(goResult.body), normalize(tsResult.body), `${testCase.name}: body`);
@@ -8687,6 +8776,7 @@ await realtime.end();
 await owner?.end();
 
 go?.kill("SIGTERM");
+proxyGo?.kill("SIGTERM");
 upstreamServer.close();
 await handles.stop();
 await rm(dataDir, { recursive: true, force: true });
