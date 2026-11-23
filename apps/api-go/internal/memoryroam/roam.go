@@ -158,7 +158,7 @@ func Run(ctx context.Context, logger *slog.Logger, database *db.DB, ring *conten
 	if err != nil {
 		return report, err
 	}
-	now := time.Now()
+	now := time.Now().UTC()
 
 	for _, owner := range owners {
 		if err := ctx.Err(); err != nil {
