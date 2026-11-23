@@ -74,6 +74,11 @@ func TestSummarizeCredential(t *testing.T) {
 		{`{"oauthClient":{}}`, true},
 		{`{"oauth":{}}`, true},
 		{`{"oauthGeneration":3}`, false},
+		{`{"args":{"length":"x"}}`, true},
+		{`{"args":{"length":-1}}`, true},
+		{`{"args":{"length":0}}`, false},
+		{`{"args":{"length":null}}`, false},
+		{`{"args":{"length":""}}`, false},
 	} {
 		summary, failure := Summarize(decode(t, testCase.text))
 		if failure != nil {
@@ -114,17 +119,34 @@ func TestServerDTOShapeAndChecks(t *testing.T) {
 		t.Fatalf("dto = %s\nwant  %s", body, want)
 	}
 	for name, mutate := range map[string]func(*Record){
-		"transport":  func(value *Record) { value.transport = "weird" },
-		"revision":   func(value *Record) { value.revision = 0 },
-		"endpoint":   func(value *Record) { value.endpoint = ptr("not a url") },
-		"tool-count": func(value *Record) { count := int32(-1); value.healthToolCount = &count },
-		"install-id": func(value *Record) { value.installID = ptr("") },
+		"transport":     func(value *Record) { value.transport = "weird" },
+		"revision":      func(value *Record) { value.revision = 0 },
+		"endpoint":      func(value *Record) { value.endpoint = ptr("not a url") },
+		"tool-count":    func(value *Record) { count := int32(-1); value.healthToolCount = &count },
+		"install-id":    func(value *Record) { value.installID = ptr("") },
+		"id":            func(value *Record) { value.id = "" },
+		"space-id":      func(value *Record) { value.spaceID = "" },
+		"endpoint-port": func(value *Record) { value.endpoint = ptr("http://x:99999/") },
 	} {
 		copied := record
 		mutate(&copied)
 		if _, failure := ServerDTO(copied, []string{"sp1"}, summary); failure == nil ||
 			failure.Message != "Output validation failed" {
 			t.Errorf("%s: failure = %+v, want Output validation failed", name, failure)
+		}
+	}
+	// z.string().url() accepts scheme-only values and stores the trimmed input.
+	for _, testCase := range []struct{ stored, want string }{
+		{"urn:foo:bar", "urn:foo:bar"},
+		{"mailto:x@y", "mailto:x@y"},
+		{"file:///tmp/a", "file:///tmp/a"},
+		{" http://example.test ", "http://example.test"},
+	} {
+		copied := record
+		copied.endpoint = &testCase.stored
+		server, failure := ServerDTO(copied, []string{"sp1"}, summary)
+		if failure != nil || server.Endpoint == nil || *server.Endpoint != testCase.want {
+			t.Errorf("endpoint %q: %+v %v", testCase.stored, server.Endpoint, failure)
 		}
 	}
 }

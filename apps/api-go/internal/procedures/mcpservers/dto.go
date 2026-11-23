@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -20,6 +19,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/secretstore"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/validate"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/whatwgurl"
 )
 
 // Record is one mcp_servers row as the DTO reads it.
@@ -59,11 +59,18 @@ func ServerDTO(record Record, spaceIDs []string, summary OAuthSummary) (Server, 
 	if record.revision <= 0 {
 		return Server{}, shared.OutputInvalid()
 	}
-	if record.endpoint != nil {
-		parsed, err := url.Parse(*record.endpoint)
-		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+	if record.id == "" || record.spaceID == "" {
+		return Server{}, shared.OutputInvalid()
+	}
+	// endpoint is z.string().url() (contracts/integrations/mcp.ts:283): the WHATWG/zod matcher,
+	// which accepts scheme-only URLs, refuses out-of-range ports and stores the trimmed value.
+	endpoint := record.endpoint
+	if endpoint != nil {
+		value, ok := whatwgurl.ZodURLValue(*endpoint)
+		if !ok {
 			return Server{}, shared.OutputInvalid()
 		}
+		endpoint = &value
 	}
 	if record.healthToolCount != nil && *record.healthToolCount < 0 {
 		return Server{}, shared.OutputInvalid()
@@ -80,7 +87,7 @@ func ServerDTO(record Record, spaceIDs []string, summary OAuthSummary) (Server, 
 		Name:            record.name,
 		Description:     record.description,
 		Transport:       record.transport,
-		Endpoint:        record.endpoint,
+		Endpoint:        endpoint,
 		Command:         record.command,
 		HasArgs:         record.hasArgs || len(legacyArgs(record.args)) > 0,
 		EnvKeys:         objectKeys(record.env),
@@ -180,7 +187,7 @@ func hasCredential(material any) bool {
 	if jsTruthy(object.Values["secret"]) {
 		return true
 	}
-	if length, has := jsLength(object.Values["args"]); has && length > 0 {
+	if jsLengthTruthy(object.Values["args"]) {
 		return true
 	}
 	for _, key := range []string{"env", "files", "headers"} {
@@ -213,37 +220,20 @@ func jsTruthy(value any) bool {
 	return false
 }
 
-// jsLength is `value?.length` read as a number: a string's UTF-16 length, an array's length, or
-// an object's own `length` field. has is false when the value has no length.
-func jsLength(value any) (float64, bool) {
+// jsLengthTruthy is Boolean(value?.length) (mcp-oauth.ts:1208): a string's UTF-16 length, an
+// array's length, or an object's own `length` value under JavaScript truthiness. `{"length":"x"}`
+// and `{"length":-1}` count as a credential; 0, "", null and a missing length do not.
+func jsLengthTruthy(value any) bool {
 	switch typed := value.(type) {
 	case string:
-		return float64(len(utf16.Encode([]rune(typed)))), true
+		return len(utf16.Encode([]rune(typed))) > 0
 	case []any:
-		return float64(len(typed)), true
+		return len(typed) > 0
 	case *validate.Object:
 		length, present := typed.Values["length"]
-		if !present {
-			return 0, false
-		}
-		switch number := length.(type) {
-		case json.Number:
-			parsed, err := number.Float64()
-			if err != nil {
-				return math.NaN(), true
-			}
-			return parsed, true
-		case nil:
-			return 0, true
-		case bool:
-			if number {
-				return 1, true
-			}
-			return 0, true
-		}
-		return math.NaN(), true
+		return present && jsTruthy(length)
 	}
-	return 0, false
+	return false
 }
 
 // jsKeys is Object.keys(value): array-index keys ascending first (a string's code units, an
