@@ -12,19 +12,25 @@ func doc(id, path, content string, revision int32) memory.Document {
 	return memory.Document{ID: id, Path: path, Content: content, Revision: revision}
 }
 
+func write(path, content string) command {
+	return command{Name: CmdMemoryWrite, Path: path, Content: content}
+}
+
+func setInstructions(content string) command {
+	return command{Name: CmdInstructionsSet, Content: content}
+}
+
 func TestValidateChangesAppliesWritableUpdates(t *testing.T) {
 	documents := []memory.Document{
 		doc("1", memory.MemoryIndexPath, "# Bot\n\n- tea\n", 2),
 		doc("2", UserMemoryPath, "- metric\n", 1),
 		doc("3", "evidence-archive.md", "private evidence\n", 1),
 	}
-	validated, err := validateChanges(answer{
-		Documents: []answerDocument{
-			{Path: memory.MemoryIndexPath, Content: "# Bot\n\n- tea\n- coffee\n"},
-			{Path: UserMemoryPath, Content: "- metric\n- brief replies\n"},
-		},
-		Delete: []string{"evidence-archive.md"},
-	}, documents, nil, false, "")
+	validated, err := validateChanges(answer{Commands: []command{
+		write(memory.MemoryIndexPath, "# Bot\n\n- tea\n- coffee\n"),
+		write(UserMemoryPath, "- metric\n- brief replies\n"),
+		{Name: "memory.delete", Path: "evidence-archive.md"},
+	}}, documents, nil, false, "")
 	if err != nil {
 		t.Fatalf("validateChanges: %v", err)
 	}
@@ -32,18 +38,16 @@ func TestValidateChangesAppliesWritableUpdates(t *testing.T) {
 		validated.Updates[1].Path != UserMemoryPath {
 		t.Fatalf("updates = %+v", validated.Updates)
 	}
-	if len(validated.Ignored) != 1 || validated.Ignored[0] != "evidence-archive.md" {
+	if len(validated.Ignored) != 1 || validated.Ignored[0] != "memory.delete" {
 		t.Fatalf("ignored = %v", validated.Ignored)
 	}
 }
 
 func TestValidateChangesCreatesOnlyTheUserProfile(t *testing.T) {
-	validated, err := validateChanges(answer{
-		Documents: []answerDocument{
-			{Path: UserMemoryPath, Content: "Name: Sam\n"},
-			{Path: "new.md", Content: "a new fact\n"},
-		},
-	}, nil, nil, false, "")
+	validated, err := validateChanges(answer{Commands: []command{
+		write(UserMemoryPath, "Name: Sam\n"),
+		write("new.md", "a new fact\n"),
+	}}, nil, nil, false, "")
 	if err != nil {
 		t.Fatalf("validateChanges: %v", err)
 	}
@@ -51,7 +55,7 @@ func TestValidateChangesCreatesOnlyTheUserProfile(t *testing.T) {
 		validated.Updates[0].Path != UserMemoryPath {
 		t.Fatalf("updates = %+v", validated.Updates)
 	}
-	if len(validated.Ignored) != 1 || validated.Ignored[0] != "new.md" {
+	if len(validated.Ignored) != 1 || validated.Ignored[0] != CmdMemoryWrite+" new.md" {
 		t.Fatalf("ignored = %v", validated.Ignored)
 	}
 }
@@ -61,14 +65,14 @@ func TestValidateChangesRejectsUnsafeAnswers(t *testing.T) {
 		doc("1", memory.MemoryIndexPath, "# Bot\n", 1),
 		doc("2", "old.md", "x\n", 1),
 	}
-	cases := map[string]answer{
-		"blank content": {Documents: []answerDocument{{Path: memory.MemoryIndexPath, Content: " "}}},
-		"traversal":     {Documents: []answerDocument{{Path: "../x.md", Content: "x\n"}}},
-		"non-markdown":  {Documents: []answerDocument{{Path: "notes.txt", Content: "x\n"}}},
+	cases := map[string]command{
+		"blank content": write(memory.MemoryIndexPath, " "),
+		"traversal":     write("../x.md", "x\n"),
+		"non-markdown":  write("notes.txt", "x\n"),
 	}
-	for name, parsed := range cases {
+	for name, item := range cases {
 		t.Run(name, func(t *testing.T) {
-			if _, err := validateChanges(parsed, documents, nil, false, ""); err == nil {
+			if _, err := validateChanges(answer{Commands: []command{item}}, documents, nil, false, ""); err == nil {
 				t.Fatal("expected an error")
 			}
 		})
@@ -77,9 +81,9 @@ func TestValidateChangesRejectsUnsafeAnswers(t *testing.T) {
 
 func TestValidateChangesKeepsTheExistingIndexHeading(t *testing.T) {
 	documents := []memory.Document{doc("1", memory.MemoryIndexPath, "# Original\n\n- tea\n", 1)}
-	validated, err := validateChanges(answer{
-		Documents: []answerDocument{{Path: memory.MemoryIndexPath, Content: "# Renamed\n\n- tea\n- coffee\n"}},
-	}, documents, nil, false, "")
+	validated, err := validateChanges(answer{Commands: []command{
+		write(memory.MemoryIndexPath, "# Renamed\n\n- tea\n- coffee\n"),
+	}}, documents, nil, false, "")
 	if err != nil {
 		t.Fatalf("validateChanges: %v", err)
 	}
@@ -90,9 +94,9 @@ func TestValidateChangesKeepsTheExistingIndexHeading(t *testing.T) {
 
 func TestValidateChangesRestoresAMissingIndexHeading(t *testing.T) {
 	documents := []memory.Document{doc("1", memory.MemoryIndexPath, "# Original\n\n- tea\n", 1)}
-	validated, err := validateChanges(answer{
-		Documents: []answerDocument{{Path: memory.MemoryIndexPath, Content: "- tea\n- coffee\n"}},
-	}, documents, nil, false, "")
+	validated, err := validateChanges(answer{Commands: []command{
+		write(memory.MemoryIndexPath, "- tea\n- coffee\n"),
+	}}, documents, nil, false, "")
 	if err != nil {
 		t.Fatalf("validateChanges: %v", err)
 	}
@@ -106,18 +110,18 @@ func TestValidateChangesRefusesOmittedDocuments(t *testing.T) {
 		doc("1", memory.MemoryIndexPath, "# Bot\n", 1),
 		doc("2", UserMemoryPath, "x\n", 1),
 	}
-	if _, err := validateChanges(answer{
-		Documents: []answerDocument{{Path: UserMemoryPath, Content: "y\n"}},
-	}, documents, []string{UserMemoryPath}, false, ""); err == nil {
+	if _, err := validateChanges(answer{Commands: []command{
+		write(UserMemoryPath, "y\n"),
+	}}, documents, []string{UserMemoryPath}, false, ""); err == nil {
 		t.Fatal("expected an omitted-document error")
 	}
 }
 
 func TestValidateChangesKeepsIdenticalContent(t *testing.T) {
 	documents := []memory.Document{doc("1", memory.MemoryIndexPath, "# Bot\n\n- tea\n", 1)}
-	validated, err := validateChanges(answer{
-		Documents: []answerDocument{{Path: memory.MemoryIndexPath, Content: "# Bot\n\n- tea\n"}},
-	}, documents, nil, false, "")
+	validated, err := validateChanges(answer{Commands: []command{
+		write(memory.MemoryIndexPath, "# Bot\n\n- tea\n"),
+	}}, documents, nil, false, "")
 	if err != nil || len(validated.Updates) != 0 || len(validated.Ignored) != 0 {
 		t.Fatalf("validated=%+v err=%v", validated, err)
 	}
@@ -126,29 +130,29 @@ func TestValidateChangesKeepsIdenticalContent(t *testing.T) {
 func TestValidateChangesEnforcesIndexCap(t *testing.T) {
 	documents := []memory.Document{doc("1", memory.MemoryIndexPath, "# Bot\n", 1)}
 	tooBig := "# Bot\n\n" + strings.Repeat("x", BotMemoryMaxBytes)
-	if _, err := validateChanges(answer{
-		Documents: []answerDocument{{Path: memory.MemoryIndexPath, Content: tooBig}},
-	}, documents, nil, false, ""); err == nil {
+	if _, err := validateChanges(answer{Commands: []command{
+		write(memory.MemoryIndexPath, tooBig),
+	}}, documents, nil, false, ""); err == nil {
 		t.Fatal("expected a size error")
 	}
 }
 
-func TestValidateChangesNeverDeletesWritableDocuments(t *testing.T) {
+func TestValidateChangesHasNoDeleteOrShellCommand(t *testing.T) {
 	documents := []memory.Document{
 		doc("1", memory.MemoryIndexPath, "# Bot\n", 1),
 		doc("2", UserMemoryPath, "Name: Sam\n", 1),
 	}
-	validated, err := validateChanges(answer{
-		Delete: []string{memory.MemoryIndexPath, UserMemoryPath},
-	}, documents, nil, false, "")
+	validated, err := validateChanges(answer{Commands: []command{
+		{Name: "memory.delete", Path: memory.MemoryIndexPath},
+		{Name: "shell", Content: "rm -rf /"},
+	}}, documents, nil, false, "")
 	if err != nil {
 		t.Fatalf("validateChanges: %v", err)
 	}
-	if len(validated.Updates) != 0 {
-		t.Fatalf("updates = %+v", validated.Updates)
+	if len(validated.Updates) != 0 || validated.Instructions != nil {
+		t.Fatalf("validated = %+v", validated)
 	}
-	if len(validated.Ignored) != 2 || validated.Ignored[0] != memory.MemoryIndexPath ||
-		validated.Ignored[1] != UserMemoryPath {
+	if len(validated.Ignored) != 2 || validated.Ignored[0] != "memory.delete" || validated.Ignored[1] != "shell" {
 		t.Fatalf("ignored = %v", validated.Ignored)
 	}
 }
@@ -158,18 +162,14 @@ func TestValidateChangesLeavesReadOnlyNotesAlone(t *testing.T) {
 		doc("1", memory.MemoryIndexPath, "# Bot\n", 1),
 		doc("2", "evidence-archive.md", "private evidence\n", 1),
 	}
-	validated, err := validateChanges(answer{
-		Documents: []answerDocument{{Path: "evidence-archive.md", Content: "rewritten\n"}},
-		Delete:    []string{"evidence-archive.md"},
-	}, documents, nil, false, "")
+	validated, err := validateChanges(answer{Commands: []command{
+		write("evidence-archive.md", "rewritten\n"),
+	}}, documents, nil, false, "")
 	if err != nil {
 		t.Fatalf("validateChanges: %v", err)
 	}
-	if len(validated.Updates) != 0 {
-		t.Fatalf("updates = %+v", validated.Updates)
-	}
-	if len(validated.Ignored) != 2 {
-		t.Fatalf("ignored = %v", validated.Ignored)
+	if len(validated.Updates) != 0 || len(validated.Ignored) != 1 {
+		t.Fatalf("validated = %+v", validated)
 	}
 }
 
@@ -178,13 +178,12 @@ func TestValidateChangesLimitsSharedMemoryToTheIndex(t *testing.T) {
 		doc("1", memory.MemoryIndexPath, "# Shared\n", 1),
 		doc("2", UserMemoryPath, "bot profile\n", 1),
 	}
-	validated, err := validateChanges(answer{
-		Documents: []answerDocument{
-			{Path: UserMemoryPath, Content: "changed\n"},
-			{Path: memory.MemoryIndexPath, Content: "# Shared\n\n- convention\n"},
-		},
-		Instructions: new("shared pass cannot change instructions\n"),
-	}, documents, nil, true, "original instructions\n")
+	validated, err := validateChanges(answer{Commands: []command{
+		write(UserMemoryPath, "changed\n"),
+		write(memory.MemoryIndexPath, "# Shared\n\n- convention\n"),
+		setInstructions("shared pass cannot change instructions\n"),
+		{Name: CmdSkillCreate, Skill: "Nope", Description: "x", Body: "y"},
+	}}, documents, nil, true, "original instructions\n")
 	if err != nil {
 		t.Fatalf("validateChanges: %v", err)
 	}
@@ -194,16 +193,16 @@ func TestValidateChangesLimitsSharedMemoryToTheIndex(t *testing.T) {
 	if len(validated.Updates) != 1 || validated.Updates[0].Path != memory.MemoryIndexPath {
 		t.Fatalf("updates = %+v", validated.Updates)
 	}
-	if len(validated.Ignored) != 2 || validated.Ignored[0] != UserMemoryPath ||
-		validated.Ignored[1] != "Instructions" {
+	if len(validated.Ignored) != 3 || validated.Ignored[0] != CmdMemoryWrite+" "+UserMemoryPath ||
+		validated.Ignored[1] != CmdInstructionsSet || validated.Ignored[2] != CmdSkillCreate {
 		t.Fatalf("ignored = %v", validated.Ignored)
 	}
 }
 
 func TestValidateChangesUpdatesInstructions(t *testing.T) {
-	validated, err := validateChanges(answer{
-		Instructions: new("# Role\n\nNew rule.\n"),
-	}, nil, nil, false, "# Role\n\nOld rule.\n")
+	validated, err := validateChanges(answer{Commands: []command{
+		setInstructions("# Role\n\nNew rule.\n"),
+	}}, nil, nil, false, "# Role\n\nOld rule.\n")
 	if err != nil {
 		t.Fatalf("validateChanges: %v", err)
 	}
@@ -213,25 +212,25 @@ func TestValidateChangesUpdatesInstructions(t *testing.T) {
 }
 
 func TestValidateChangesRejectsBlankInstructions(t *testing.T) {
-	if _, err := validateChanges(answer{
-		Instructions: new("  \n"),
-	}, nil, nil, false, "# Role\n"); err == nil {
+	if _, err := validateChanges(answer{Commands: []command{
+		setInstructions("  \n"),
+	}}, nil, nil, false, "# Role\n"); err == nil {
 		t.Fatal("expected a blank-instructions error")
 	}
 }
 
 func TestValidateChangesRejectsLongInstructions(t *testing.T) {
-	if _, err := validateChanges(answer{
-		Instructions: new(strings.Repeat("x", MaxInstructionsLength+1)),
-	}, nil, nil, false, ""); err == nil {
+	if _, err := validateChanges(answer{Commands: []command{
+		setInstructions(strings.Repeat("x", MaxInstructionsLength+1)),
+	}}, nil, nil, false, ""); err == nil {
 		t.Fatal("expected an instructions-cap error")
 	}
 }
 
 func TestValidateChangesKeepsIdenticalInstructions(t *testing.T) {
-	validated, err := validateChanges(answer{
-		Instructions: new("same instructions\n"),
-	}, nil, nil, false, "same instructions\n")
+	validated, err := validateChanges(answer{Commands: []command{
+		setInstructions("same instructions\n"),
+	}}, nil, nil, false, "same instructions\n")
 	if err != nil {
 		t.Fatalf("validateChanges: %v", err)
 	}
@@ -332,13 +331,13 @@ func TestPromptForMarksReadOnlyDocuments(t *testing.T) {
 }
 
 func TestSystemPromptNamesTheScope(t *testing.T) {
-	bot := systemPrompt(false)
+	bot := systemPrompt(passBot)
 	if !strings.Contains(bot, "Only four surfaces are in scope") ||
 		!strings.Contains(bot, UserMemoryPath) ||
 		!strings.Contains(bot, "Instructions are high authority") {
 		t.Fatalf("bot prompt is not scoped: %s", bot)
 	}
-	shared := systemPrompt(true)
+	shared := systemPrompt(passShared)
 	if !strings.Contains(shared, "Only ONE document is writable") ||
 		!strings.Contains(shared, memory.MemoryIndexPath) ||
 		strings.Contains(shared, "Only four") {
@@ -346,12 +345,34 @@ func TestSystemPromptNamesTheScope(t *testing.T) {
 	}
 }
 
+func TestEveryPassOffersOnlyTheCommandsItMayRun(t *testing.T) {
+	cases := map[passKind]struct{ offered, withheld []string }{
+		passBot:    {[]string{CmdMemoryWrite, CmdInstructionsSet}, []string{CmdSkillCreate, CmdSkillUpdate}},
+		passShared: {[]string{CmdMemoryWrite}, []string{CmdInstructionsSet, CmdSkillCreate, CmdSkillUpdate}},
+		passSkills: {[]string{CmdSkillCreate, CmdSkillUpdate}, []string{CmdMemoryWrite, CmdInstructionsSet}},
+	}
+	for pass, want := range cases {
+		prompt := systemPrompt(pass)
+		for _, name := range want.offered {
+			if !strings.Contains(prompt, `{"name":"`+name+`"`) {
+				t.Errorf("pass %d does not offer %s", pass, name)
+			}
+		}
+		for _, name := range want.withheld {
+			if strings.Contains(prompt, `{"name":"`+name+`"`) {
+				t.Errorf("pass %d offers %s", pass, name)
+			}
+		}
+	}
+}
+
 func TestParseAnswerAcceptsFences(t *testing.T) {
-	parsed, err := parseAnswer("```json\n{\"documents\":[{\"path\":\"MEMORY.md\",\"content\":\"# Bot\\n\"}]}\n```")
+	parsed, err := parseAnswer("```json\n{\"commands\":[{\"name\":\"memory.write\",\"path\":\"MEMORY.md\",\"content\":\"# Bot\\n\"}]}\n```")
 	if err != nil {
 		t.Fatalf("parseAnswer: %v", err)
 	}
-	if len(parsed.Documents) != 1 || parsed.Documents[0].Path != memory.MemoryIndexPath {
+	if len(parsed.Commands) != 1 || parsed.Commands[0].Name != CmdMemoryWrite ||
+		parsed.Commands[0].Path != memory.MemoryIndexPath {
 		t.Fatalf("parsed = %+v", parsed)
 	}
 }

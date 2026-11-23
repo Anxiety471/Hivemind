@@ -1740,6 +1740,7 @@ model AgentSkill {
   /// Available in every space of its owner, including later ones; otherwise in spaceId and availableIn.
   allSpaces   Boolean  @default(false)
   availableIn AgentSkillSpace[]
+  revisions   AgentSkillRevision[]
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -1747,6 +1748,22 @@ model AgentSkill {
   @@index([installId])
   // Case-insensitive unique index agent_skills_spaceId_userId_name_lower_key is created in SQL.
   @@map("agent_skills")
+}
+
+/// What a skill said before the memory roamer upgraded it, newest first, bounded per skill.
+model AgentSkillRevision {
+  id          String     @id @default(cuid())
+  skillId     String
+  skill       AgentSkill @relation(fields: [skillId], references: [id], onDelete: Cascade)
+  userId      String
+  name        String
+  description String
+  content     String
+  reason      String
+  createdAt   DateTime   @default(now())
+
+  @@index([skillId, createdAt])
+  @@map("agent_skill_revisions")
 }
 
 model Connection {

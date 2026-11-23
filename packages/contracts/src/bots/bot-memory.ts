@@ -52,7 +52,7 @@ export const MEMORY_ROAMER_DEFAULT_INTERVAL = 360;
 
 /** One bot or Space that did not finish the last roamer pass. */
 export const MemoryRoamerFailureSchema = z.object({
-  kind: z.enum(["bot", "shared"]),
+  kind: z.enum(["bot", "shared", "skills"]),
   id: z.string(),
   name: z.string(),
   error: z.string(),
@@ -63,7 +63,9 @@ export const MemoryRoamerFailuresSchema = z.array(MemoryRoamerFailureSchema).max
 
 /** One document change in a roamer run. */
 export const MemoryRoamerChangeSchema = z.object({
-  scope: z.enum(["bot", "user"]),
+  /** The named command that made the change, such as memory.write or skill.update. */
+  command: z.string().optional(),
+  scope: z.enum(["bot", "user", "skill"]),
   path: z.string(),
   action: z.string(),
   beforeBytes: z.number().int().nonnegative(),
@@ -73,7 +75,7 @@ export const MemoryRoamerChangeSchema = z.object({
 
 /** One bot or Space's result in the latest roamer run. */
 export const MemoryRoamerTargetSchema = z.object({
-  kind: z.enum(["bot", "shared"]),
+  kind: z.enum(["bot", "shared", "skills"]),
   id: z.string(),
   name: z.string(),
   status: z.enum(["ok", "failed"]),

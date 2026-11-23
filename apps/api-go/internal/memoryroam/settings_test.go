@@ -67,10 +67,11 @@ func TestModeRetriesOnlyWhileTheFullPassIsNotDue(t *testing.T) {
 	}
 }
 
-func TestRetryTargetsKeepBotsAndSpacesApart(t *testing.T) {
-	bots, spaces := retryTargets([]Failure{
+func TestRetryTargetsKeepBotsSpacesAndSkillsApart(t *testing.T) {
+	bots, spaces, skills := retryTargets([]Failure{
 		{Kind: "bot", ID: "b1"},
 		{Kind: "shared", ID: "s1"},
+		{Kind: "skills", ID: "s2"},
 		{Kind: "bot", ID: "b2"},
 	})
 	if !bots["b1"] || !bots["b2"] || len(bots) != 2 {
@@ -78,6 +79,9 @@ func TestRetryTargetsKeepBotsAndSpacesApart(t *testing.T) {
 	}
 	if !spaces["s1"] || len(spaces) != 1 {
 		t.Fatalf("spaces = %v", spaces)
+	}
+	if !skills["s2"] || len(skills) != 1 {
+		t.Fatalf("skills = %v", skills)
 	}
 }
 
@@ -90,7 +94,7 @@ func TestRetryDelayIsBounded(t *testing.T) {
 	}
 }
 
-func TestFailureSummaryNamesBotsAndSharedMemory(t *testing.T) {
+func TestFailureSummaryNamesBotsSharedMemoryAndSkills(t *testing.T) {
 	if got := failureSummary([]Failure{{Kind: "bot"}, {Kind: "bot"}, {Kind: "shared"}}); got != "2 bots and shared memory failed" {
 		t.Fatalf("summary = %q", got)
 	}
@@ -98,6 +102,12 @@ func TestFailureSummaryNamesBotsAndSharedMemory(t *testing.T) {
 		t.Fatalf("summary = %q", got)
 	}
 	if got := failureSummary([]Failure{{Kind: "shared"}}); got != "Shared memory failed" {
+		t.Fatalf("summary = %q", got)
+	}
+	if got := failureSummary([]Failure{{Kind: "skills"}}); got != "Skills failed" {
+		t.Fatalf("summary = %q", got)
+	}
+	if got := failureSummary([]Failure{{Kind: "bot"}, {Kind: "shared"}, {Kind: "skills"}}); got != "1 bot, shared memory and skills failed" {
 		t.Fatalf("summary = %q", got)
 	}
 }

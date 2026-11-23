@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 
@@ -175,41 +177,58 @@ func retryDelay(attempt int) time.Duration {
 	return retryDelays[attempt-1]
 }
 
-func retryTargets(failures []Failure) (map[string]bool, map[string]bool) {
+func retryTargets(failures []Failure) (map[string]bool, map[string]bool, map[string]bool) {
 	bots := map[string]bool{}
 	spaces := map[string]bool{}
+	skills := map[string]bool{}
 	for _, failure := range failures {
 		switch failure.Kind {
 		case "bot":
 			bots[failure.ID] = true
 		case "shared":
 			spaces[failure.ID] = true
+		case "skills":
+			skills[failure.ID] = true
 		}
 	}
-	return bots, spaces
+	return bots, spaces, skills
 }
 
 func failureSummary(failures []Failure) string {
-	bots := 0
-	shared := 0
+	bots, shared, skills := 0, 0, 0
 	for _, failure := range failures {
 		switch failure.Kind {
 		case "bot":
 			bots++
 		case "shared":
 			shared++
+		case "skills":
+			skills++
 		}
 	}
-	switch {
-	case bots > 0 && shared > 0:
-		return fmt.Sprintf("%s and shared memory failed", countLabel(bots, "bot", "bots"))
-	case shared > 0:
-		return "Shared memory failed"
-	case bots > 0:
-		return fmt.Sprintf("%s failed", countLabel(bots, "bot", "bots"))
-	default:
+	var parts []string
+	if bots > 0 {
+		parts = append(parts, countLabel(bots, "bot", "bots"))
+	}
+	if shared > 0 {
+		parts = append(parts, "shared memory")
+	}
+	if skills > 0 {
+		parts = append(parts, "skills")
+	}
+	if len(parts) == 0 {
 		return ""
 	}
+	text := parts[0]
+	for index, part := range parts[1:] {
+		if index < len(parts)-2 {
+			text += ", " + part
+		} else {
+			text += " and " + part
+		}
+	}
+	first, size := utf8.DecodeRuneInString(text)
+	return string(unicode.ToUpper(first)) + text[size:] + " failed"
 }
 
 func countLabel(count int, singular, plural string) string {

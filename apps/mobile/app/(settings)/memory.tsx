@@ -48,6 +48,12 @@ export default function MemoryScreen() {
   const { data: roamer, error: roamerFailure } = useQuery(roamerRead, queryClient);
   const failedTargets = roamer?.lastReport?.filter((target) => target.status === "failed") ?? [];
   const okTargets = roamer?.lastReport?.filter((target) => target.status === "ok") ?? [];
+  const roamerTargetTitle = (target: { kind: "bot" | "shared" | "skills"; name: string }) =>
+    target.kind === "shared"
+      ? t`Shared memory (${target.name})`
+      : target.kind === "skills"
+        ? t`Skills (${target.name})`
+        : target.name;
   const roamerChange = useSave({
     save: async (input: { enabled: boolean; intervalMinutes?: number }, send) =>
       send("memory/setRoamer", input),
@@ -129,7 +135,7 @@ export default function MemoryScreen() {
         <SettingsGroup footer={roamerStatus}>
           <SettingsSwitch
             label={t`Background memory roamer`}
-            detail={t`Uses your main model, and tidies only MEMORY.md, USER.md, Instructions, and shared memory.`}
+            detail={t`Uses your main model, and tidies only MEMORY.md, USER.md, Instructions, shared memory, and Space skills.`}
             value={roamer?.enabled ?? false}
             disabled={!roamer || roamerChange.pending}
             onChange={(enabled) =>
@@ -161,7 +167,7 @@ export default function MemoryScreen() {
             {failedTargets.map((target) => (
               <SettingsRow
                 key={`${target.kind}:${target.id}`}
-                title={target.kind === "shared" ? t`Shared memory (${target.name})` : target.name}
+                title={roamerTargetTitle(target)}
                 detail={target.error ?? t`Failed`}
               />
             ))}
@@ -172,10 +178,14 @@ export default function MemoryScreen() {
             {okTargets.map((target) => (
               <SettingsRow
                 key={`${target.kind}:${target.id}`}
-                title={target.kind === "shared" ? t`Shared memory (${target.name})` : target.name}
+                title={roamerTargetTitle(target)}
                 detail={
                   target.changes.length
-                    ? target.changes.map((change) => change.path).join(", ")
+                    ? target.changes
+                        .map((change) =>
+                          change.command ? `${change.command} ${change.path}` : change.path,
+                        )
+                        .join(", ")
                     : t`No changes`
                 }
               />
@@ -186,9 +196,7 @@ export default function MemoryScreen() {
             {roamer.lastFailures.map((failure) => (
               <SettingsRow
                 key={`${failure.kind}:${failure.id}`}
-                title={
-                  failure.kind === "shared" ? t`Shared memory (${failure.name})` : failure.name
-                }
+                title={roamerTargetTitle(failure)}
                 detail={failure.error}
               />
             ))}

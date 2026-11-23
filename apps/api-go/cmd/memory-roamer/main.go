@@ -27,22 +27,28 @@ import (
 
 func main() {
 	var (
-		dryRun = flag.Bool("dry-run", false, "ask the model and report changes without writing memory")
-		shared = flag.Bool("shared", true, "roam each Space's shared memory once (default true; pass --shared=false to skip)")
-		bots   = flag.String("bots", "", "comma-separated bot ids; empty visits every non-archived bot")
-		force  = flag.Bool("force", false, "ignore the owner's switch and interval for this run")
+		dryRun   = flag.Bool("dry-run", false, "ask the model and report changes without writing memory")
+		shared   = flag.Bool("shared", true, "roam each Space's shared memory once (default true; pass --shared=false to skip)")
+		skills   = flag.Bool("skills", true, "create and upgrade each Space's skills once (default true; pass --skills=false to skip)")
+		bots     = flag.String("bots", "", "comma-separated bot ids; empty visits every non-archived bot")
+		force    = flag.Bool("force", false, "ignore the owner's switch and interval for this run")
+		commands = flag.Bool("commands", false, "print the named commands a pass may run, then exit")
 	)
 	flag.Parse()
+	if *commands {
+		fmt.Println(memoryroam.CommandList())
+		return
+	}
 
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
-	if err := run(logger, *dryRun, *shared, *bots, *force); err != nil {
+	if err := run(logger, *dryRun, *shared, *skills, *bots, *force); err != nil {
 		logger.Error("memory.roamer.failed", "error", err.Error())
 		os.Exit(1)
 	}
 }
 
-func run(logger *slog.Logger, dryRun, includeShared bool, bots string, force bool) error {
+func run(logger *slog.Logger, dryRun, includeShared, includeSkills bool, bots string, force bool) error {
 	deployment, err := config.Load()
 	if err != nil {
 		return err
@@ -145,6 +151,7 @@ func run(logger *slog.Logger, dryRun, includeShared bool, bots string, force boo
 		Delay:         delay,
 		DryRun:        dryRun,
 		IncludeShared: includeShared,
+		IncludeSkills: includeSkills,
 		OnlyBots:      splitBots(bots),
 		Force:         force || bots != "",
 	})

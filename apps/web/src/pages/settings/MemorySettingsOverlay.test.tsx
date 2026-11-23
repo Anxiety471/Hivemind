@@ -251,6 +251,53 @@ it("shows every bot's outcome and changes", async () => {
   expect(document.querySelector("[data-run-results]")).toBeNull();
 });
 
+it("names the command behind each skill change", async () => {
+  memory.roamer.mockResolvedValue({
+    enabled: true,
+    intervalMinutes: 360,
+    lastRunAt: "2026-11-22T23:30:32.920Z",
+    lastError: null,
+    lastChanges: 2,
+    lastModel: "deepseek-v4.1-flash",
+    lastFailures: [],
+    lastReport: [
+      {
+        kind: "skills",
+        id: "space-1",
+        name: "Team",
+        status: "ok",
+        changes: [
+          {
+            command: "skill.update",
+            scope: "skill",
+            path: "Deploy",
+            action: "update",
+            beforeBytes: 400,
+            afterBytes: 520,
+          },
+          {
+            command: "skill.create",
+            scope: "skill",
+            path: "Release notes",
+            action: "create",
+            beforeBytes: 0,
+            afterBytes: 300,
+            created: true,
+          },
+        ],
+        checkedAt: "2026-11-22T23:30:34.920Z",
+      },
+    ],
+    retryAt: null,
+    retryAttempt: 0,
+  });
+  await render(null);
+  await click(button("View results"));
+  expect(document.body.textContent).toContain("Skills (Team)");
+  expect(document.body.textContent).toContain("skill.update Deploy: 400 → 520 bytes");
+  expect(document.body.textContent).toContain("skill.create Release notes: 0 → 300 bytes");
+});
+
 it("shows which targets failed and when the next retry runs", async () => {
   memory.roamer.mockResolvedValue({
     enabled: true,

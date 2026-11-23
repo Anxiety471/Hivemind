@@ -141,7 +141,11 @@ export function MemorySettingsOverlay({
   const changedTargets = okTargets.filter((target) => target.changes.length > 0);
   const unchangedTargets = okTargets.filter((target) => target.changes.length === 0);
   const targetName = (target: Pick<MemoryRoamerTarget, "kind" | "name">) =>
-    target.kind === "shared" ? t`Shared memory (${target.name})` : target.name;
+    target.kind === "shared"
+      ? t`Shared memory (${target.name})`
+      : target.kind === "skills"
+        ? t`Skills (${target.name})`
+        : target.name;
   const failureCount = failedTargets.length || roamer?.lastFailures?.length || 0;
   const totalChecks = failedTargets.length + okTargets.length;
   const firstFailure = failedTargets[0] ?? roamer?.lastFailures?.[0];
@@ -155,7 +159,11 @@ export function MemorySettingsOverlay({
   const changeSummary = (target: MemoryRoamerTarget) =>
     target.changes.length
       ? target.changes
-          .map((change) => t`${change.path}: ${change.beforeBytes} → ${change.afterBytes} bytes`)
+          .map((change) =>
+            change.command
+              ? t`${change.command} ${change.path}: ${change.beforeBytes} → ${change.afterBytes} bytes`
+              : t`${change.path}: ${change.beforeBytes} → ${change.afterBytes} bytes`,
+          )
           .join("; ")
       : t`No changes`;
   const roamerChange = useSave({
@@ -280,8 +288,8 @@ export function MemorySettingsOverlay({
             </div>
             <p className="mt-1 text-body-sm text-muted-foreground">
               <Trans>
-                Tidies MEMORY.md, USER.md, Instructions, and shared memory with your main model;
-                other notes stay read-only.
+                Tidies MEMORY.md, USER.md, Instructions, shared memory, and Space skills with your
+                main model; other notes stay read-only.
               </Trans>
             </p>
             <div className="mt-4">
