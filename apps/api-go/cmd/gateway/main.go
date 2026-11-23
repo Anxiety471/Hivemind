@@ -325,6 +325,7 @@ func setupLocal(buildIDFile string, wantsVault bool, logger *slog.Logger) (*loca
 			NavLinks:                              navLinks(deployment.MeEnv.NavLinks),
 			NavLinksUnknown:                       deployment.MeEnv.NavLinksUnknown,
 			DriveURL:                              deployment.MeEnv.DriveURL,
+			AppURL:                                driveAppURL(deployment.MeEnv.DriveURL, deployment.WebOrigin),
 			ComputerSettingsEnabled:               deployment.MeEnv.ComputerSettingsEnabled,
 			DesktopHostChoiceEnabled:              deployment.MeEnv.DesktopHostChoiceEnabled,
 			SandboxProvider:                       deployment.MeEnv.SandboxProvider,
@@ -443,4 +444,12 @@ func navLinks(links []config.NavLink) []shared.NavLink {
 		}
 	}
 	return converted
+}
+
+// driveAppURL is the web origin the Drive app links back to; it is sent only where a Drive app runs.
+func driveAppURL(driveURL, webOrigin string) string {
+	if driveURL == "" {
+		return ""
+	}
+	return strings.TrimRight(webOrigin, "/")
 }

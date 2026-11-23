@@ -1,5 +1,5 @@
 import { Suspense } from "react";
-import { Navigate, Outlet, Route, Routes, useLocation } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { SubscriptionGate } from "../../components/billing/SubscriptionGate";
 import { PageLoading } from "../../components/PageLoading";
 import { lazyComponent } from "../../lib/platform/preload-recovery";
@@ -8,6 +8,7 @@ const AuthPage = lazyComponent(() => import("../auth/Auth").then((module) => mod
 const PasswordResetPage = lazyComponent(() =>
   import("../auth/Auth").then((module) => module.PasswordResetPage),
 );
+const DriveShell = lazyComponent(() => import("./DriveShell").then((module) => module.DriveShell));
 const FilesPage = lazyComponent(() =>
   import("../space/files/FilesPage").then((module) => module.FilesPage),
 );
@@ -53,16 +54,17 @@ export function DriveRoutes({ signedIn, next }: { signedIn: boolean; next: strin
           element={
             signedIn ? (
               <SubscriptionGate fallback={<PageLoading />}>
-                <Outlet />
+                <DriveShell />
               </SubscriptionGate>
             ) : (
               <Navigate to={`/sign-in?next=${encodeURIComponent(pathname)}`} replace />
             )
           }
         >
-          <Route path={FILES} element={<FilesPage />} />
-          <Route path={`${FILES}/folder/:folderId`} element={<FilesPage />} />
-          <Route path={`${FILES}/:artifactId`} element={<FilesPage />} />
+          <Route path={FILES} element={<FilesPage drive />} />
+          <Route path={`${FILES}/trash`} element={<FilesPage drive trashView />} />
+          <Route path={`${FILES}/folder/:folderId`} element={<FilesPage drive />} />
+          <Route path={`${FILES}/:artifactId`} element={<FilesPage drive />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

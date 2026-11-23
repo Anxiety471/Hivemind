@@ -130,6 +130,8 @@ type MeConfig struct {
 	NavLinksUnknown bool
 	// DriveURL is env.driveUrl: where the Files menu item opens, when a Drive app runs.
 	DriveURL string
+	// AppURL is the web origin, sent only with DriveURL so the Drive app can link back.
+	AppURL string
 	// ComputerSettingsEnabled is COMPUTER_SETTINGS_ENABLED === "true".
 	ComputerSettingsEnabled bool
 	// DesktopHostChoiceEnabled is Boolean(env.desktopStackToken).

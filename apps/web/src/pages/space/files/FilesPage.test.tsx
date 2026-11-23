@@ -171,7 +171,7 @@ beforeEach(() => {
   files.createFolder.mockResolvedValue(folder);
 });
 
-async function renderFiles(entry = "/app/files") {
+async function renderFiles(entry = "/app/files", props: ComponentProps<typeof FilesPage> = {}) {
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
@@ -180,9 +180,10 @@ async function renderFiles(entry = "/app/files") {
       <QueryClientProvider client={queryClient}>
         <MemoryRouter initialEntries={[entry]}>
           <Routes>
-            <Route path="/app/files" element={<FilesPage />} />
-            <Route path="/app/files/folder/:folderId" element={<FilesPage />} />
-            <Route path="/app/files/:artifactId" element={<FilesPage />} />
+            <Route path="/app/files" element={<FilesPage {...props} />} />
+            <Route path="/app/files/trash" element={<FilesPage {...props} />} />
+            <Route path="/app/files/folder/:folderId" element={<FilesPage {...props} />} />
+            <Route path="/app/files/:artifactId" element={<FilesPage {...props} />} />
           </Routes>
         </MemoryRouter>
       </QueryClientProvider>,
@@ -375,6 +376,36 @@ it("shows file description and slug and updates them via Edit details", async ()
         }),
       );
     });
+  } finally {
+    await view.cleanup();
+  }
+});
+
+it("in the Drive app swaps the Back link and Trash toggle for a layout switch that is remembered", async () => {
+  const view = await renderFiles("/app/files", { drive: true });
+  try {
+    expect(view.container.querySelector("a[aria-label='Back']")).toBeNull();
+    expect(view.container.querySelector("button[aria-label='Trash']")).toBeNull();
+    expect(view.container.querySelectorAll("li")).toHaveLength(0);
+    await act(async () =>
+      view.container.querySelector<HTMLButtonElement>("button[aria-label='Grid view']")?.click(),
+    );
+    expect(view.container.querySelectorAll("li")).toHaveLength(2);
+    expect(localStorage.getItem("rakazo.driveView")).toBe("grid");
+  } finally {
+    localStorage.removeItem("rakazo.driveView");
+    await view.cleanup();
+  }
+});
+
+it("in the Drive app the Trash route lists trashed items", async () => {
+  files.list.mockResolvedValue(page);
+  const view = await renderFiles("/app/files/trash", { drive: true, trashView: true });
+  try {
+    expect(files.list).toHaveBeenLastCalledWith(
+      expect.objectContaining({ trashed: true, allFolders: true }),
+      expect.anything(),
+    );
   } finally {
     await view.cleanup();
   }

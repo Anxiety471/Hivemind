@@ -3,7 +3,7 @@ import { flush } from "@rakazo/core/test-async";
 import type { ReactNode } from "react";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { MemoryRouter, useLocation } from "react-router-dom";
+import { MemoryRouter, Outlet, useLocation } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DriveRoutes } from "./DriveRoutes";
 
@@ -14,6 +14,7 @@ vi.mock("../auth/Auth", () => ({
   PasswordResetPage: () => <div>reset</div>,
 }));
 vi.mock("../space/files/FilesPage", () => ({ FilesPage: () => <div>files page</div> }));
+vi.mock("./DriveShell", () => ({ DriveShell: () => <Outlet /> }));
 vi.mock("../../components/billing/SubscriptionGate", () => ({
   SubscriptionGate: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));

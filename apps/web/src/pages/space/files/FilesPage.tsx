@@ -47,6 +47,8 @@ import {
   FolderInput,
   FolderPlus,
   Image as ImageIcon,
+  LayoutGrid,
+  List,
   MoreHorizontal,
   Pencil,
   RotateCcw,
@@ -64,10 +66,11 @@ import { WindowChrome } from "../../../components/WindowChrome";
 import { getMaxFileUploadSizeBytes } from "../../../lib/bootstrap";
 import { attachmentPickerAccept } from "../../../lib/composer/attachment-picker-accept";
 import { isFileDrag } from "../../../lib/composer/pending-attachments";
-import { uploadSpaceFile } from "../../../lib/files/file-client";
+import { fileContentUrl, uploadSpaceFile } from "../../../lib/files/file-client";
 import { formatRelativeTime } from "../../../lib/locale/relative-time";
 import { downloadArtifact } from "../../../lib/pages/artifact-open";
 import { desktopBridge } from "../../../lib/platform/desktop";
+import { driveViewPreference } from "../../../lib/preferences/drive-view-pref";
 import { useSave, useSpaceQueries } from "../../../lib/query/query";
 import { errorDetails, errorText } from "../../../lib/query/user-error";
 import { FilePreviewPane } from "./FilePreviewPane";
@@ -130,8 +133,12 @@ function fileItem(file: DriveFile): DriveItem {
   };
 }
 
-/** The Space Drive: folders, files, trash, and an inline preview. */
-export function FilesPage() {
+/**
+ * The Space Drive: folders, files, trash, and an inline preview. `drive` is the Drive app's
+ * chrome, which has its own sidebar and layout switch; `trashView` then fixes the trash view
+ * from the route instead of the header's toggle.
+ */
+export function FilesPage({ drive = false, trashView }: { drive?: boolean; trashView?: boolean }) {
   const params = useParams<{ folderId?: string; artifactId?: string }>();
   const folderId = params.folderId;
   const artifactId = params.artifactId;
@@ -156,7 +163,8 @@ export function FilesPage() {
   const deferredSearch = useDeferredValue(search.trim());
   const [category, setCategory] = useState<FileCategory>("all");
   const [sort, setSort] = useState<SortValue>("updatedAt:desc");
-  const [trashed, setTrashed] = useState(false);
+  const [trashToggle, setTrashed] = useState(false);
+  const trashed = trashView ?? trashToggle;
   const [dragging, setDragging] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
@@ -317,39 +325,84 @@ export function FilesPage() {
   const loadError =
     listing.error && !listing.data ? errorDetails(listing.error, t`Could not load files.`) : null;
 
+  function itemActions(item: DriveItem): ItemActions {
+    return {
+      trashed,
+      onRename: () => {
+        if (item.kind === "file") {
+          setEditTarget(item);
+          setEditName(item.name);
+          setEditSlug(item.slug ?? "");
+          setEditDescription(item.description ?? "");
+        } else {
+          setRenameTarget(item);
+          setRenameName(item.name);
+        }
+      },
+      onMove: () =>
+        setMoveTarget({
+          kind: item.kind,
+          id: item.id,
+          name: item.name,
+          parentId: item.parentId,
+        }),
+      onDownload: item.kind === "file" ? () => downloadArtifact(item.id, item.name) : undefined,
+      onTrash: () => trash.run(item),
+      onRestore: () => restore.run(item),
+      onDelete: () => setDeleteTarget(item),
+    };
+  }
+
+  const view = driveViewPreference.use();
+  const grid = drive && view === "grid" && !artifactId;
+  const searchInput = (
+    <ListSearchInput
+      query={search}
+      setQuery={setSearch}
+      label={t`Search files`}
+      placeholder={t`Search files…`}
+    />
+  );
+
   return (
     <div className="flex h-full min-w-0 flex-col bg-background text-foreground/90">
       <header className="app-drag flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border px-4 py-3">
         {desktopBridge() ? <WindowChrome /> : null}
-        <div className="flex min-w-fit flex-1 items-center gap-1">
-          <IconTooltip label={t`Back`}>
-            <Link
-              to="/app"
-              aria-label={t`Back`}
-              className={buttonVariants({
-                variant: "ghost",
-                size: "icon",
-                className: "text-muted-foreground",
-              })}
-            >
-              <ChevronLeft />
-            </Link>
-          </IconTooltip>
-          <h1 className="font-medium text-foreground">
-            <Trans>Files</Trans>
-          </h1>
-        </div>
+        {drive ? (
+          <div className="min-w-48 max-w-xl flex-1">{searchInput}</div>
+        ) : (
+          <div className="flex min-w-fit flex-1 items-center gap-1">
+            <IconTooltip label={t`Back`}>
+              <Link
+                to="/app"
+                aria-label={t`Back`}
+                className={buttonVariants({
+                  variant: "ghost",
+                  size: "icon",
+                  className: "text-muted-foreground",
+                })}
+              >
+                <ChevronLeft />
+              </Link>
+            </IconTooltip>
+            <h1 className="font-medium text-foreground">
+              <Trans>Files</Trans>
+            </h1>
+          </div>
+        )}
         <div className="app-no-drag flex items-center gap-1">
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label={t`Trash`}
-            aria-pressed={trashed}
-            className={trashed ? "bg-accent text-foreground" : "text-muted-foreground"}
-            onClick={toggleTrash}
-          >
-            <Trash2 />
-          </Button>
+          {drive ? null : (
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label={t`Trash`}
+              aria-pressed={trashed}
+              className={trashed ? "bg-accent text-foreground" : "text-muted-foreground"}
+              onClick={toggleTrash}
+            >
+              <Trash2 />
+            </Button>
+          )}
           <IconTooltip label={t`New folder`}>
             <Button
               variant="ghost"
@@ -405,10 +458,12 @@ export function FilesPage() {
                 </Button>
               ) : null}
             </>
+          ) : drive && breadcrumbs.length === 0 ? (
+            <span className="font-medium text-foreground">{t`My files`}</span>
           ) : breadcrumbs.length ? (
             <>
               <Link to="/app/files" aria-label={t`All files`} className="hover:text-foreground">
-                <Folder size={14} strokeWidth={1.8} />
+                {drive ? t`My files` : <Folder size={14} strokeWidth={1.8} />}
               </Link>
               {breadcrumbs.map((crumb, index) => {
                 const current = index === breadcrumbs.length - 1;
@@ -437,14 +492,7 @@ export function FilesPage() {
           <div className="hidden sm:block sm:flex-1" />
         ) : null}
         <div className="flex w-full min-w-0 flex-wrap items-center gap-2 sm:w-auto">
-          <div className="w-40 max-w-full sm:w-56">
-            <ListSearchInput
-              query={search}
-              setQuery={setSearch}
-              label={t`Search files`}
-              placeholder={t`Search files…`}
-            />
-          </div>
+          {drive ? null : <div className="w-40 max-w-full sm:w-56">{searchInput}</div>}
           <OptionSelect
             aria-label={t`Filter by type`}
             className="w-fit"
@@ -459,6 +507,25 @@ export function FilesPage() {
             onValueChange={setSort}
             options={sortOptions}
           />
+          {drive && !artifactId ? (
+            <fieldset aria-label={t`Layout`} className="flex rounded-lg border border-border p-0.5">
+              {(["list", "grid"] as const).map((option) => (
+                <Button
+                  key={option}
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label={option === "list" ? t`List view` : t`Grid view`}
+                  aria-pressed={view === option}
+                  className={
+                    view === option ? "bg-accent text-foreground" : "text-muted-foreground"
+                  }
+                  onClick={() => driveViewPreference.set(option)}
+                >
+                  {option === "list" ? <List /> : <LayoutGrid />}
+                </Button>
+              ))}
+            </fieldset>
+          ) : null}
         </div>
       </div>
 
@@ -522,6 +589,33 @@ export function FilesPage() {
                 ) : null}
               </EmptyHeader>
             </Empty>
+          ) : grid ? (
+            <div className="flex flex-col gap-5 p-4">
+              {items.some((item) => item.kind === "folder") ? (
+                <ul
+                  aria-label={t`Folders`}
+                  className="grid grid-cols-[repeat(auto-fill,minmax(13rem,1fr))] gap-2"
+                >
+                  {items
+                    .filter((item) => item.kind === "folder")
+                    .map((item) => (
+                      <ItemTile key={`folder:${item.id}`} item={item} {...itemActions(item)} />
+                    ))}
+                </ul>
+              ) : null}
+              {items.some((item) => item.kind === "file") ? (
+                <ul
+                  aria-label={t`Files`}
+                  className="grid grid-cols-[repeat(auto-fill,minmax(11rem,1fr))] gap-3"
+                >
+                  {items
+                    .filter((item) => item.kind === "file")
+                    .map((item) => (
+                      <ItemTile key={`file:${item.id}`} item={item} {...itemActions(item)} />
+                    ))}
+                </ul>
+              ) : null}
+            </div>
           ) : (
             <div className="flex flex-col divide-y divide-border">
               {items.map((item) => (
@@ -529,32 +623,7 @@ export function FilesPage() {
                   key={`${item.kind}:${item.id}`}
                   item={item}
                   active={item.kind === "file" && item.id === artifactId}
-                  trashed={trashed}
-                  onRename={() => {
-                    if (item.kind === "file") {
-                      setEditTarget(item);
-                      setEditName(item.name);
-                      setEditSlug(item.slug ?? "");
-                      setEditDescription(item.description ?? "");
-                    } else {
-                      setRenameTarget(item);
-                      setRenameName(item.name);
-                    }
-                  }}
-                  onMove={() =>
-                    setMoveTarget({
-                      kind: item.kind,
-                      id: item.id,
-                      name: item.name,
-                      parentId: item.parentId,
-                    })
-                  }
-                  onDownload={
-                    item.kind === "file" ? () => downloadArtifact(item.id, item.name) : undefined
-                  }
-                  onTrash={() => trash.run(item)}
-                  onRestore={() => restore.run(item)}
-                  onDelete={() => setDeleteTarget(item)}
+                  {...itemActions(item)}
                 />
               ))}
             </div>
@@ -693,19 +762,7 @@ export function FilesPage() {
   );
 }
 
-function ItemRow({
-  item,
-  active,
-  trashed,
-  onRename,
-  onMove,
-  onDownload,
-  onTrash,
-  onRestore,
-  onDelete,
-}: {
-  item: DriveItem;
-  active: boolean;
+type ItemActions = {
   trashed: boolean;
   onRename: () => void;
   onMove: () => void;
@@ -713,19 +770,88 @@ function ItemRow({
   onTrash: () => void;
   onRestore: () => void;
   onDelete: () => void;
-}) {
+};
+
+function itemHref(item: DriveItem): string {
+  return item.kind === "folder"
+    ? `/app/files/folder/${encodeURIComponent(item.id)}`
+    : `/app/files/${encodeURIComponent(item.id)}`;
+}
+
+function ItemMenu({
+  item,
+  className,
+  trashed,
+  onRename,
+  onMove,
+  onDownload,
+  onTrash,
+  onRestore,
+  onDelete,
+}: { item: DriveItem; className: string } & ItemActions) {
   const { t } = useLingui();
-  const href =
-    item.kind === "folder"
-      ? `/app/files/folder/${encodeURIComponent(item.id)}`
-      : `/app/files/${encodeURIComponent(item.id)}`;
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label={t`Actions for ${item.name}`}
+            className={`text-muted-foreground opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100 data-popup-open:opacity-100 [@media(hover:none)]:opacity-100 ${className}`}
+          />
+        }
+      >
+        <MoreHorizontal />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-44">
+        {!trashed ? (
+          <>
+            <DropdownMenuItem onClick={onRename}>
+              <Pencil />
+              {item.kind === "file" ? t`Edit details` : t`Rename`}
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={onMove}>
+              <FolderInput />
+              {t`Move`}
+            </DropdownMenuItem>
+            {onDownload ? (
+              <DropdownMenuItem onClick={onDownload}>
+                <Download />
+                {t`Download`}
+              </DropdownMenuItem>
+            ) : null}
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={onTrash}>
+              <Trash2 />
+              {t`Move to Trash`}
+            </DropdownMenuItem>
+          </>
+        ) : (
+          <>
+            <DropdownMenuItem onClick={onRestore}>
+              <RotateCcw />
+              {t`Restore`}
+            </DropdownMenuItem>
+            <DropdownMenuItem variant="destructive" onClick={onDelete}>
+              <Trash2 />
+              {t`Delete permanently`}
+            </DropdownMenuItem>
+          </>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function ItemRow({ item, active, ...actions }: { item: DriveItem; active: boolean } & ItemActions) {
   return (
     <div
       className={`group flex items-center gap-2 pe-2 ${
         active ? "bg-accent/60" : "hover:bg-accent/40"
       }`}
     >
-      <Link to={href} className="flex min-w-0 flex-1 items-center gap-3 px-4 py-2.5">
+      <Link to={itemHref(item)} className="flex min-w-0 flex-1 items-center gap-3 px-4 py-2.5">
         <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground">
           {item.kind === "folder" ? <Folder /> : <MimeIcon mimeType={item.mimeType} />}
         </span>
@@ -745,57 +871,55 @@ function ItemRow({
           </span>
         </span>
       </Link>
-      <DropdownMenu>
-        <DropdownMenuTrigger
-          render={
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label={t`Actions for ${item.name}`}
-              className="text-muted-foreground opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
-            />
-          }
-        >
-          <MoreHorizontal />
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-44">
-          {!trashed ? (
-            <>
-              <DropdownMenuItem onClick={onRename}>
-                <Pencil />
-                {item.kind === "file" ? t`Edit details` : t`Rename`}
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={onMove}>
-                <FolderInput />
-                {t`Move`}
-              </DropdownMenuItem>
-              {onDownload ? (
-                <DropdownMenuItem onClick={onDownload}>
-                  <Download />
-                  {t`Download`}
-                </DropdownMenuItem>
-              ) : null}
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={onTrash}>
-                <Trash2 />
-                {t`Move to Trash`}
-              </DropdownMenuItem>
-            </>
-          ) : (
-            <>
-              <DropdownMenuItem onClick={onRestore}>
-                <RotateCcw />
-                {t`Restore`}
-              </DropdownMenuItem>
-              <DropdownMenuItem variant="destructive" onClick={onDelete}>
-                <Trash2 />
-                {t`Delete permanently`}
-              </DropdownMenuItem>
-            </>
-          )}
-        </DropdownMenuContent>
-      </DropdownMenu>
+      <ItemMenu item={item} className="" {...actions} />
     </div>
+  );
+}
+
+/** One folder or file in the Drive app's grid: a folder is a compact tile, a file a card. */
+function ItemTile({ item, ...actions }: { item: DriveItem } & ItemActions) {
+  const [thumbnailFailed, setThumbnailFailed] = useState(false);
+  if (item.kind === "folder") {
+    return (
+      <li className="group flex items-center rounded-xl border border-border bg-card hover:bg-accent/40">
+        <Link to={itemHref(item)} className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5">
+          <Folder className="size-5 shrink-0 text-muted-foreground" />
+          <span className="min-w-0 flex-1 truncate text-body font-medium">{item.name}</span>
+        </Link>
+        <ItemMenu item={item} className="me-1" {...actions} />
+      </li>
+    );
+  }
+  const thumbnail = item.mimeType.startsWith("image/") && !thumbnailFailed;
+  return (
+    <li className="group relative overflow-hidden rounded-xl border border-border bg-card hover:bg-accent/40">
+      <Link to={itemHref(item)} className="block">
+        <span className="grid aspect-[4/3] place-items-center overflow-hidden bg-muted text-muted-foreground [&_svg]:size-8">
+          {thumbnail ? (
+            <img
+              src={fileContentUrl(item.id)}
+              alt=""
+              loading="lazy"
+              onError={() => setThumbnailFailed(true)}
+              className="size-full object-cover"
+            />
+          ) : (
+            <MimeIcon mimeType={item.mimeType} />
+          )}
+        </span>
+        <span className="block px-3 py-2">
+          <span className="block truncate text-body font-medium">{item.name}</span>
+          <span className="block truncate text-label text-muted-foreground">
+            {formatFileSize(item.size)} · {formatRelativeTime(item.updatedAt)}
+          </span>
+        </span>
+      </Link>
+      <ItemMenu
+        item={item}
+        className="absolute end-1.5 top-1.5 bg-background/85 backdrop-blur"
+        {...actions}
+      />
+    </li>
   );
 }
 

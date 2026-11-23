@@ -16,6 +16,8 @@ export const MeSchema = z.object({
   maxFileUploadSizeBytes: z.number().int().positive().optional(),
   /** Origin of the Drive app, when this deployment runs one; the menu's Files item opens it. */
   driveUrl: z.string().url().optional(),
+  /** Origin of the main app, sent when a Drive app runs so it can link back. */
+  appUrl: z.string().url().optional(),
   maxAttachmentsPerMessage: z.number().int().positive().optional(),
   /** Labs features this account turned on. Absent from servers that predate Labs. */
   labs: z.array(LabFeatureSchema).default([]),

@@ -39,6 +39,7 @@ type MeView struct {
 	PhoneCallsEnabled        bool             `json:"phoneCallsEnabled"`
 	NavLinks                 []shared.NavLink `json:"navLinks"`
 	DriveURL                 string           `json:"driveUrl,omitempty"`
+	AppURL                   string           `json:"appUrl,omitempty"`
 	UserID                   string           `json:"userId"`
 	Email                    string           `json:"email"`
 	Name                     string           `json:"name"`
@@ -173,6 +174,7 @@ func Me(
 		PhoneCallsEnabled:        deployment.PhoneCallsEnabled,
 		NavLinks:                 config.NavLinks,
 		DriveURL:                 config.DriveURL,
+		AppURL:                   config.AppURL,
 		UserID:                   actor.UserID,
 		Email:                    row.email,
 		Name:                     row.name,
