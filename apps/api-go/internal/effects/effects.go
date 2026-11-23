@@ -75,6 +75,7 @@ var auditedProcedures = map[string]audited{
 	"spaceSettings.setOverride": {Type: "approval.policy.changed", Fields: []string{"setting", "enabled"}},
 	"bots.rotateWebhookSecret":  {Type: "credential.changed", Kind: "webhook", Fields: []string{"botId"}},
 	"mcp.assignments.approve":   {Type: "approval.decided", Kind: "mcp", Fields: []string{"botId", "serverId"}},
+	"mcp.assignments.dismiss":   {Type: "approval.decided", Kind: "mcp", Fields: []string{"botId", "serverId"}},
 }
 
 // SecurityEventFor is procedureSecurityEvent: the event for a procedure that just

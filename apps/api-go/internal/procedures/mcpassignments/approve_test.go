@@ -252,7 +252,7 @@ func TestRepaintKeepsTheRowsOwnList(t *testing.T) {
 	other := map[string]any{"kind": "mcp_approval", "serverId": "s2", "status": "pending"}
 	text := map[string]any{"kind": "text", "text": "before"}
 	raw := []any{"not-a-block", text, other, pending, dismissed}
-	stored, shown, changed, ok := messageblocks.Rewrite(raw, repaint("s1", selectableFor(true)))
+	stored, shown, changed, ok := messageblocks.Rewrite(raw, repaint("s1", connectedCard, selectableFor(true)))
 	if !ok || !changed {
 		t.Fatalf("rewrite = ok %v changed %v, want a change", ok, changed)
 	}
@@ -272,15 +272,15 @@ func TestRepaintKeepsTheRowsOwnList(t *testing.T) {
 		t.Errorf("stored card was mutated: %v", pending)
 	}
 	// The settings approval repaints a dismissed card too.
-	_, settings, changed, ok := messageblocks.Rewrite(raw, repaint("s1", selectableFor(false)))
+	_, settings, changed, ok := messageblocks.Rewrite(raw, repaint("s1", connectedCard, selectableFor(false)))
 	if !ok || !changed || settings[3]["status"] != "connected" {
 		t.Errorf("settings rewrite = ok %v changed %v shown %v", ok, changed, settings)
 	}
 	connected := []any{map[string]any{"kind": "mcp_approval", "serverId": "s1", "status": "connected"}}
-	if _, _, changed, ok := messageblocks.Rewrite(connected, repaint("s1", selectableFor(true))); !ok || changed {
+	if _, _, changed, ok := messageblocks.Rewrite(connected, repaint("s1", connectedCard, selectableFor(true))); !ok || changed {
 		t.Errorf("a connected card changed = %v (ok %v), want no change", changed, ok)
 	}
-	if _, _, _, ok := messageblocks.Rewrite("not-a-list", repaint("s1", selectableFor(true))); ok {
+	if _, _, _, ok := messageblocks.Rewrite("not-a-list", repaint("s1", connectedCard, selectableFor(true))); ok {
 		t.Error("a row whose blocks are not a list must not be written")
 	}
 }

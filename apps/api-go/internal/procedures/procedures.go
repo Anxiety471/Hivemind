@@ -392,6 +392,18 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 			},
 		},
 		{
+			Name: "mcp.assignments.dismiss",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return mcpassignments.Dismiss(ctx, database, deployment, actor, input)
+			},
+		},
+		{
+			Name: "mcp.assignments.replace",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return mcpassignments.Replace(ctx, database, deployment, actor, input)
+			},
+		},
+		{
 			Name:     "models.backups",
 			ReadOnly: true,
 			Serve: func(ctx context.Context, actor db.Actor, _ orpc.Input) (any, *orpc.Error) {
