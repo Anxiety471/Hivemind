@@ -239,6 +239,7 @@ describe("standalone web server", () => {
     const headers = { Host: "app.example.test" };
     expect((await get(webPort, "/api/health", headers)).body).toBe("api");
     expect((await get(webPort, "/api/v1/files/f1/content", headers)).body).toBe("rpc");
+    expect((await get(webPort, "/api/drive/open?space=s1", headers)).body).toBe("rpc");
     expect((await get(webPort, "/rpc/files/list", headers)).body).toBe("rpc");
   });
 });

@@ -50,7 +50,7 @@ import type { HelperThreadTarget } from "../lib/chat/helper-thread";
 import { toolActivityPreference } from "../lib/chat/tool-activity-preference";
 import { composerEnterToSendPreference } from "../lib/composer/composer-enter-to-send-pref";
 import { computersAreUnavailable } from "../lib/computers/computer-sandbox";
-import { driveFilesUrl } from "../lib/files/drive-url";
+import { driveOpenPath } from "../lib/files/drive-url";
 import { composerModelPickerPreference } from "../lib/models/composer-model-picker-preference";
 import type { ArtifactTarget } from "../lib/pages/artifact-open";
 import { PagesProvider, usePagesForChat } from "../lib/pages/pages";
@@ -1099,9 +1099,7 @@ function SpaceShell() {
         boardEnabled={hasLab(bootstrapMe?.labs, "board")}
         navLinks={desktopBridge() ? [] : (bootstrapMe?.navLinks ?? [])}
         driveUrl={
-          desktopBridge() || !bootstrapMe?.driveUrl
-            ? undefined
-            : driveFilesUrl(bootstrapMe.driveUrl, bootstrapMe.spaceId)
+          desktopBridge() || !bootstrapMe?.driveUrl ? undefined : driveOpenPath(bootstrapMe.spaceId)
         }
         mobileApp={bootstrapMe?.mobileApp}
         openSettings={openSettings}

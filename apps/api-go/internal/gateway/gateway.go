@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/auth"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/local"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/routes"
 )
@@ -124,6 +125,8 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		} else {
 			g.proxy.ServeHTTP(status, r)
 		}
+	case r.URL.Path == auth.DriveOpenPath && g.drive != nil:
+		g.drive.ServeHTTP(status, r)
 	case r.URL.Path == "/rpc" || strings.HasPrefix(r.URL.Path, "/rpc/"):
 		mode, readOnly, explicit := g.routes.LookupExplicit(r.URL.Path)
 		// Space Drive files.* run natively in Go by default when initialized unless

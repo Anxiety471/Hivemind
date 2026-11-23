@@ -1,11 +1,9 @@
-/** Query parameter that carries the Space the Files item was opened from to the Drive app. */
-export const DRIVE_SPACE_PARAM = "space";
+import { DRIVE_OPEN_PATH, DRIVE_SPACE_PARAM } from "@rakazo/contracts";
 
-/** The Drive app's Files page for a Space, which the menu opens in a new tab. */
-export function driveFilesUrl(driveUrl: string, spaceId: string): string {
-  const url = new URL("/app/files", driveUrl);
-  url.searchParams.set(DRIVE_SPACE_PARAM, spaceId);
-  return url.toString();
+/** The server hop that hands the session to the Drive app and redirects to its Files page. */
+export function driveOpenPath(spaceId: string): string {
+  const params = new URLSearchParams({ [DRIVE_SPACE_PARAM]: spaceId });
+  return `${DRIVE_OPEN_PATH}?${params}`;
 }
 
 /**

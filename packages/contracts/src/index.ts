@@ -30,6 +30,7 @@ export * from "./bots/builtin-tools.js";
 export * from "./bots/scratchpad.js";
 export * from "./clients/client-build.js";
 export * from "./clients/desktop.js";
+export * from "./clients/drive-open.js";
 export * from "./clients/local-settings.js";
 export * from "./clients/mobile-app.js";
 export * from "./clients/nav-links.js";

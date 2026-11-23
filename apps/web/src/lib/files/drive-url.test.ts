@@ -1,11 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { applyDriveSpaceLink, driveFilesUrl } from "./drive-url";
+import { applyDriveSpaceLink, driveOpenPath } from "./drive-url";
 
-describe("driveFilesUrl", () => {
-  it("opens the Files page of the Drive app for a Space", () => {
-    expect(driveFilesUrl("https://drive.example.com", "space 1")).toBe(
-      "https://drive.example.com/app/files?space=space+1",
-    );
+describe("driveOpenPath", () => {
+  it("points at the session hand-over with the Space", () => {
+    expect(driveOpenPath("space 1")).toBe("/api/drive/open?space=space+1");
   });
 });
 

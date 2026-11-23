@@ -356,7 +356,13 @@ func setupLocal(buildIDFile string, wantsVault bool, logger *slog.Logger) (*loca
 		Waker:    queueSvc,
 		Logger:   logger,
 	}
-	return server, driveHTTP, detector, queueSvc, func() {
+	driveRoutes := http.NewServeMux()
+	driveRoutes.Handle("/api/v1/files", driveHTTP)
+	driveRoutes.Handle("/api/v1/files/", driveHTTP)
+	if deployment.MeEnv.DriveURL != "" {
+		driveRoutes.Handle(auth.DriveOpenPath, sessions.DriveOpen(deployment.MeEnv.DriveURL))
+	}
+	return server, driveRoutes, detector, queueSvc, func() {
 		driveSvc.Wait()
 		_ = queueSvc.Close()
 		realtime.Close()

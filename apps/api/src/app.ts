@@ -94,6 +94,8 @@ import {
 } from "@rakazo/auth";
 import type { Actor, AuthCapabilities, ModelCredential } from "@rakazo/contracts";
 import {
+  DRIVE_OPEN_PATH,
+  DRIVE_SPACE_PARAM,
   isLocalhostOrLoopbackIp,
   PLUGIN_SUBMISSIONS_PATH,
   SERVER_BUILD_HEADER,
@@ -144,7 +146,7 @@ import { settleDirectoryChange } from "./account/account-status.js";
 import { mountAuditExportRoute } from "./account/audit-export.js";
 import { mountMobileAppDownloadRoute } from "./account/mobile-app-download.js";
 import { createAuthResponseAudit } from "./auth/security-audit.js";
-import { withHostOnlyCookiesExpired } from "./auth/session-cookie-domain.js";
+import { shareSessionCookies, withHostOnlyCookiesExpired } from "./auth/session-cookie-domain.js";
 import { endUserDeviceSession, mountUserDeviceRoutes } from "./auth/user-devices.js";
 import { createBillingService } from "./billing/billing.js";
 import { mountBillingRoutes } from "./billing/billing-webhook.js";
@@ -1059,6 +1061,33 @@ async function buildApp(overrides: CreateAppOverrides): Promise<AppHandles> {
     return actor && { actor, sessionId: session.session.id };
   };
   const sessionActor = async (request: Request) => (await requestSession(request))?.actor ?? null;
+  if (env.driveUrl) {
+    const driveUrl = env.driveUrl;
+    // The Files menu item lands here first: the signed-in browser's session cookies are moved
+    // to the cookie domain so the Drive host receives them, then it follows to the Drive app.
+    app.get(DRIVE_OPEN_PATH, async (c) => {
+      const target = new URL("/app/files", driveUrl);
+      const spaceId = c.req.query(DRIVE_SPACE_PARAM);
+      if (spaceId) target.searchParams.set(DRIVE_SPACE_PARAM, spaceId);
+      const session = env.cookieDomain ? await readSession(c.req.raw, true) : null;
+      if (env.cookieDomain && session?.session) {
+        const maxAge = Math.floor(
+          (new Date(session.session.expiresAt).getTime() - Date.now()) / 1000,
+        );
+        if (maxAge > 0) {
+          for (const cookie of shareSessionCookies(
+            c.req.header("cookie") ?? null,
+            env.cookieDomain,
+            maxAge,
+          )) {
+            c.header("set-cookie", cookie, { append: true });
+          }
+        }
+      }
+      c.header("cache-control", "no-store");
+      return c.redirect(target.toString());
+    });
+  }
   if (userDeviceHub && userDevices) {
     mountUserDeviceRoutes(app, {
       prisma,

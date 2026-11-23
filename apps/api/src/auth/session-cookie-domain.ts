@@ -25,3 +25,34 @@ export function withHostOnlyCookiesExpired(response: Response, cookieDomain: str
     headers,
   });
 }
+
+const SESSION_COOKIE = /^(__Secure-)?better-auth\.session_(token|data)$/;
+
+/**
+ * `Set-Cookie` lines that move the caller's current session cookies to the whole cookie domain,
+ * each after an expiry of its host-only copy. A browser that signed in before COOKIE_DOMAIN was
+ * set holds host-only cookies the Drive host never receives; this hands the same session over
+ * without a second sign-in.
+ */
+export function shareSessionCookies(
+  cookieHeader: string | null,
+  cookieDomain: string,
+  maxAgeSeconds: number,
+): string[] {
+  const seen = new Set<string>();
+  const lines: string[] = [];
+  for (const part of (cookieHeader ?? "").split(";")) {
+    const separator = part.indexOf("=");
+    if (separator < 0) continue;
+    const name = part.slice(0, separator).trim();
+    const value = part.slice(separator + 1).trim();
+    if (!SESSION_COOKIE.test(name) || seen.has(name) || value === "") continue;
+    seen.add(name);
+    const secure = name.startsWith("__Secure-") ? "; Secure" : "";
+    lines.push(`${name}=; Path=/; Max-Age=0; HttpOnly${secure}`);
+    lines.push(
+      `${name}=${value}; Max-Age=${maxAgeSeconds}; Domain=${cookieDomain}; Path=/; HttpOnly${secure}; SameSite=Lax`,
+    );
+  }
+  return lines;
+}
