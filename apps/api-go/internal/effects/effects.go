@@ -225,7 +225,7 @@ var spaceChangeProcedures = map[string][]string{
 	"bots.restore": {"runs", "routines"}, "bots.remove": {"runs", "routines"},
 	"files.createFolder": {"files"}, "files.renameFolder": {"files"}, "files.moveFolder": {"files"},
 	"files.trashFolder": {"files"}, "files.restoreFolder": {"files"}, "files.deleteFolder": {"files"},
-	"files.rename": {"files"}, "files.move": {"files"}, "files.trash": {"files"},
+	"files.rename": {"files"}, "files.update": {"files"}, "files.move": {"files"}, "files.trash": {"files"},
 	"files.restore": {"files"}, "files.deletePermanent": {"files"}, "files.emptyTrash": {"files"},
 	"artifacts.create": {"files"}, "artifacts.remove": {"files"},
 }

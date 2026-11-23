@@ -150,6 +150,7 @@ func (h *HTTPHandler) handleUpload(ctx context.Context, w http.ResponseWriter, r
 		RunID:       optQueryOrHeader(r, "runId", "X-File-Run-Id"),
 		Source:      firstNonEmpty(r.URL.Query().Get("source"), r.Header.Get("X-File-Source"), "upload"),
 		Name:        firstNonEmpty(r.Header.Get("X-File-Name"), r.URL.Query().Get("name")),
+		Slug:        optQueryOrHeader(r, "slug", "X-File-Slug"),
 		Description: optQueryOrHeader(r, "description", "X-File-Description"),
 		MimeType:    firstNonEmpty(r.Header.Get("X-File-Mime-Type"), r.URL.Query().Get("mimeType")),
 		ClientNonce: optQueryOrHeader(r, "clientNonce", "X-File-Nonce"),
@@ -215,6 +216,8 @@ func (h *HTTPHandler) handleUpload(ctx context.Context, w http.ResponseWriter, r
 				if val != "" {
 					params.Name = val
 				}
+			case "slug":
+				params.Slug = strPtrIfNonEmpty(val)
 			case "description":
 				params.Description = strPtrIfNonEmpty(val)
 			case "mimeType":
@@ -411,7 +414,7 @@ func (h *HTTPHandler) applyCORS(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Access-Control-Allow-Credentials", "true")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, POST, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Rakazo-Space-Id, Range, X-File-Name, X-File-Folder-Id, X-File-Bot-Id, X-File-Group-Id, X-File-Source, X-File-Description, X-File-Mime-Type, X-File-Nonce")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Rakazo-Space-Id, Range, X-File-Name, X-File-Slug, X-File-Folder-Id, X-File-Bot-Id, X-File-Group-Id, X-File-Source, X-File-Description, X-File-Mime-Type, X-File-Nonce")
 	w.Header().Set("Access-Control-Expose-Headers", "Content-Range, Accept-Ranges, Content-Length, ETag, Content-Disposition")
 }
 

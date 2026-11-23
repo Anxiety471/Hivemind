@@ -84,6 +84,7 @@ type DriveItem =
       id: string;
       name: string;
       parentId: string | null;
+      botId: string | null;
       trashedAt: string | null;
       updatedAt: string;
     }
@@ -91,6 +92,9 @@ type DriveItem =
       kind: "file";
       id: string;
       name: string;
+      slug: string | null;
+      description: string | null;
+      botId: string | null;
       mimeType: string;
       size: number;
       parentId: string | null;
@@ -104,6 +108,7 @@ function folderItem(folder: FileFolder): DriveItem {
     id: folder.id,
     name: folder.name,
     parentId: folder.parentId,
+    botId: folder.botId,
     trashedAt: folder.trashedAt,
     updatedAt: folder.updatedAt,
   };
@@ -114,6 +119,9 @@ function fileItem(file: DriveFile): DriveItem {
     kind: "file",
     id: file.id,
     name: file.name,
+    slug: file.slug,
+    description: file.description,
+    botId: file.botId,
     mimeType: file.mimeType,
     size: file.size,
     parentId: file.folderId,
@@ -156,6 +164,10 @@ export function FilesPage() {
   const [newFolderName, setNewFolderName] = useState("");
   const [renameTarget, setRenameTarget] = useState<DriveItem | null>(null);
   const [renameName, setRenameName] = useState("");
+  const [editTarget, setEditTarget] = useState<Extract<DriveItem, { kind: "file" }> | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editSlug, setEditSlug] = useState("");
+  const [editDescription, setEditDescription] = useState("");
   const [moveTarget, setMoveTarget] = useState<MoveTarget | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<DriveItem | null>(null);
   const [emptyTrashOpen, setEmptyTrashOpen] = useState(false);
@@ -228,6 +240,16 @@ export function FilesPage() {
       setRenameName("");
     },
   });
+  const updateFile = useSave({
+    save: (
+      input: { fileId: string; name: string; slug: string | null; description: string | null },
+      rpc,
+    ) => rpc.files.update(input),
+    stale,
+    onSaved: () => {
+      setEditTarget(null);
+    },
+  });
   const trash = useSave({
     save: async (target: DriveItem, rpc) => {
       if (target.kind === "folder") await rpc.files.trashFolder({ folderId: target.id });
@@ -286,6 +308,7 @@ export function FilesPage() {
     upload.error ??
     createFolder.error ??
     rename.error ??
+    updateFile.error ??
     trash.error ??
     restore.error ??
     remove.error ??
@@ -508,8 +531,15 @@ export function FilesPage() {
                   active={item.kind === "file" && item.id === artifactId}
                   trashed={trashed}
                   onRename={() => {
-                    setRenameTarget(item);
-                    setRenameName(item.name);
+                    if (item.kind === "file") {
+                      setEditTarget(item);
+                      setEditName(item.name);
+                      setEditSlug(item.slug ?? "");
+                      setEditDescription(item.description ?? "");
+                    } else {
+                      setRenameTarget(item);
+                      setRenameName(item.name);
+                    }
                   }}
                   onMove={() =>
                     setMoveTarget({
@@ -585,6 +615,35 @@ export function FilesPage() {
         onConfirm={() => {
           if (renameTarget && renameName.trim())
             rename.run({ target: renameTarget, name: renameName.trim() });
+        }}
+      />
+      <EditFileDialog
+        open={editTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setEditTarget(null);
+            updateFile.reset();
+          }
+        }}
+        name={editName}
+        onNameChange={setEditName}
+        slug={editSlug}
+        onSlugChange={setEditSlug}
+        description={editDescription}
+        onDescriptionChange={setEditDescription}
+        pending={updateFile.pending}
+        error={
+          updateFile.error ? errorText(updateFile.error, t`Could not update file details.`) : null
+        }
+        onConfirm={() => {
+          if (editTarget && editName.trim()) {
+            updateFile.run({
+              fileId: editTarget.id,
+              name: editName.trim(),
+              slug: editSlug.trim() || null,
+              description: editDescription.trim() || null,
+            });
+          }
         }}
       />
       <MoveDialog
@@ -672,9 +731,17 @@ function ItemRow({
         </span>
         <span className="min-w-0 flex-1">
           <span className="block truncate text-body font-medium">{item.name}</span>
-          <span className="flex gap-1.5 text-label text-muted-foreground">
+          {item.kind === "file" && item.description ? (
+            <span className="block truncate text-body-sm text-muted-foreground">
+              {item.description}
+            </span>
+          ) : null}
+          <span className="flex flex-wrap gap-x-2 gap-y-0.5 text-label text-muted-foreground">
             {item.kind === "file" ? <span>{formatFileSize(item.size)}</span> : null}
             <span>{formatRelativeTime(item.updatedAt)}</span>
+            {item.kind === "file" && item.slug ? (
+              <span className="truncate font-mono">{item.slug}</span>
+            ) : null}
           </span>
         </span>
       </Link>
@@ -696,7 +763,7 @@ function ItemRow({
             <>
               <DropdownMenuItem onClick={onRename}>
                 <Pencil />
-                {t`Rename`}
+                {item.kind === "file" ? t`Edit details` : t`Rename`}
               </DropdownMenuItem>
               <DropdownMenuItem onClick={onMove}>
                 <FolderInput />
@@ -815,6 +882,100 @@ function NameDialog({
             </Button>
             <Button type="submit" disabled={pending || !value.trim()}>
               {pending ? t`Saving…` : confirmLabel}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function EditFileDialog({
+  open,
+  onOpenChange,
+  name,
+  onNameChange,
+  slug,
+  onSlugChange,
+  description,
+  onDescriptionChange,
+  pending,
+  error,
+  onConfirm,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  name: string;
+  onNameChange: (value: string) => void;
+  slug: string;
+  onSlugChange: (value: string) => void;
+  description: string;
+  onDescriptionChange: (value: string) => void;
+  pending: boolean;
+  error: string | null;
+  onConfirm: () => void;
+}) {
+  const { t } = useLingui();
+  return (
+    <Dialog open={open} onOpenChange={(next) => !pending && onOpenChange(next)}>
+      <DialogContent className="w-[min(440px,94vw)] sm:max-w-none">
+        <DialogHeader>
+          <DialogTitle>{t`Edit file details`}</DialogTitle>
+        </DialogHeader>
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!pending && name.trim()) onConfirm();
+          }}
+        >
+          <FieldGroup>
+            <Field>
+              <FieldLabel htmlFor="drive-edit-name">{t`Name`}</FieldLabel>
+              <Input
+                id="drive-edit-name"
+                value={name}
+                autoFocus
+                disabled={pending}
+                onChange={(event) => onNameChange(event.target.value)}
+              />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="drive-edit-slug">{t`Slug`}</FieldLabel>
+              <Input
+                id="drive-edit-slug"
+                value={slug}
+                placeholder="example-search-slug"
+                disabled={pending}
+                onChange={(event) => onSlugChange(event.target.value)}
+              />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="drive-edit-description">{t`Description`}</FieldLabel>
+              <Input
+                id="drive-edit-description"
+                value={description}
+                maxLength={280}
+                disabled={pending}
+                onChange={(event) => onDescriptionChange(event.target.value)}
+              />
+            </Field>
+          </FieldGroup>
+          {error ? (
+            <p role="alert" className="mt-2 text-body-sm text-destructive">
+              {error}
+            </p>
+          ) : null}
+          <DialogFooter className="mt-4">
+            <Button
+              type="button"
+              variant="ghost"
+              disabled={pending}
+              onClick={() => onOpenChange(false)}
+            >
+              {t`Cancel`}
+            </Button>
+            <Button type="submit" disabled={pending || !name.trim()}>
+              {pending ? t`Saving…` : t`Save`}
             </Button>
           </DialogFooter>
         </form>

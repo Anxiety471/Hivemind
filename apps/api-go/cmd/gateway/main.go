@@ -222,30 +222,20 @@ func setupLocal(buildIDFile string, wantsVault bool, logger *slog.Logger) (*loca
 	// startup failure otherwise, and a proxy-only table must start without it (Lane F).
 	var vault *shared.SecretVault
 	if wantsVault {
-		provider := strings.TrimSpace(os.Getenv("SECRET_STORE"))
-		if provider != "" && provider != "encrypted" {
-			closeRing()
-			database.Close()
-			return nil, nil, nil, nil, nil, fmt.Errorf(
-				"SECRET_STORE %q is not supported by the Go credential store: only \"encrypted\"", provider)
-		}
-		key, err := secretstore.ResolveEncryptionKey(os.Getenv)
+		builtVault, err := buildSecretVault(database, logger)
 		if err != nil {
 			closeRing()
 			database.Close()
 			return nil, nil, nil, nil, nil, err
 		}
-		store, err := secretstore.NewStore(key)
-		if err != nil {
-			closeRing()
-			database.Close()
-			return nil, nil, nil, nil, nil, err
-		}
-		writer := secretstore.NewWriter(store, secretstore.NewNotifier(
-			&secretstore.PGPublisher{DB: database, Logger: logger}))
-		vault = &shared.SecretVault{
-			Writer:      writer,
-			Persistence: secretstore.NewPersistence(database, writer),
+		vault = builtVault
+	}
+	organizerVault := vault
+	if organizerVault == nil {
+		if optionalVault, optErr := buildSecretVault(database, logger); optErr != nil {
+			logger.Debug("drive upload organizer vault unavailable", "error", optErr)
+		} else {
+			organizerVault = optionalVault
 		}
 	}
 	// One runner per process: the middleware publishes its own roster/Space signals through
@@ -260,6 +250,13 @@ func setupLocal(buildIDFile string, wantsVault bool, logger *slog.Logger) (*loca
 		deployment.MaxUploadBytes,
 		logger,
 	)
+	driveSvc.SetOrganizer(drive.NewOrganizer(
+		driveSvc,
+		database,
+		blobStore,
+		newMainModelResolver(database, shared.Deployment{Vault: organizerVault}),
+		logger,
+	))
 	driveHTTP := drive.NewHTTPHandler(driveSvc, sessions, drive.HTTPConfig{
 		WebOrigin:      deployment.WebOrigin,
 		TrustedOrigins: deployment.TrustedOrigins,
@@ -358,10 +355,33 @@ func setupLocal(buildIDFile string, wantsVault bool, logger *slog.Logger) (*loca
 		Logger:   logger,
 	}
 	return server, driveHTTP, detector, queueSvc, func() {
+		driveSvc.Wait()
 		_ = queueSvc.Close()
 		realtime.Close()
 		closeRing()
 		database.Close()
+	}, nil
+}
+
+func buildSecretVault(database *db.DB, logger *slog.Logger) (*shared.SecretVault, error) {
+	provider := strings.TrimSpace(os.Getenv("SECRET_STORE"))
+	if provider != "" && provider != "encrypted" {
+		return nil, fmt.Errorf(
+			"SECRET_STORE %q is not supported by the Go credential store: only \"encrypted\"", provider)
+	}
+	key, err := secretstore.ResolveEncryptionKey(os.Getenv)
+	if err != nil {
+		return nil, err
+	}
+	store, err := secretstore.NewStore(key)
+	if err != nil {
+		return nil, err
+	}
+	writer := secretstore.NewWriter(store, secretstore.NewNotifier(
+		&secretstore.PGPublisher{DB: database, Logger: logger}))
+	return &shared.SecretVault{
+		Writer:      writer,
+		Persistence: secretstore.NewPersistence(database, writer),
 	}, nil
 }
 

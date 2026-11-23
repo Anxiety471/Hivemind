@@ -71,6 +71,7 @@ function artifactAsDriveFile(artifact: Artifact): DriveFile {
     folderId: null,
     source: artifact.botId || artifact.groupId ? "chat" : "upload",
     name: artifact.name,
+    slug: null,
     description: artifact.description,
     mimeType: artifact.mimeType,
     size: artifact.size,

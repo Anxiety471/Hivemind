@@ -1,6 +1,7 @@
 import { oc } from "@orpc/contract";
 import * as z from "zod";
 import { Id } from "../ids.js";
+import { ARTIFACT_DESCRIPTION_MAX_LENGTH } from "../threads/attachments.js";
 import {
   DriveChangeItemSchema,
   DriveFileSchema,
@@ -9,6 +10,7 @@ import {
   FileFolderNameSchema,
   FileFolderSchema,
   FileNameSchema,
+  FileSlugSchema,
   FileSortBySchema,
   FileSortDirSchema,
   FolderBreadcrumbSchema,
@@ -71,6 +73,16 @@ export const filesRpc = {
     restoreFolder: oc.input(z.object({ folderId: Id })).output(FileFolderSchema),
     deleteFolder: oc.input(z.object({ folderId: Id })).output(z.object({ ok: z.literal(true) })),
     rename: oc.input(z.object({ fileId: Id, name: FileNameSchema })).output(DriveFileSchema),
+    update: oc
+      .input(
+        z.object({
+          fileId: Id,
+          name: FileNameSchema.optional(),
+          description: z.string().trim().max(ARTIFACT_DESCRIPTION_MAX_LENGTH).nullable().optional(),
+          slug: FileSlugSchema.nullable().optional(),
+        }),
+      )
+      .output(DriveFileSchema),
     move: oc.input(z.object({ fileId: Id, folderId: Id.nullable() })).output(DriveFileSchema),
     trash: oc.input(z.object({ fileId: Id })).output(z.object({ ok: z.literal(true) })),
     restore: oc.input(z.object({ fileId: Id })).output(DriveFileSchema),

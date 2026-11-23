@@ -38,12 +38,12 @@ var blockedExtensions = map[string]bool{
 }
 
 var blockedMIMETypes = map[string]bool{
-	"application/x-msdownload":                   true,
-	"application/x-ms-installer":                 true,
-	"application/x-msi":                          true,
+	"application/x-msdownload":                      true,
+	"application/x-ms-installer":                    true,
+	"application/x-msi":                             true,
 	"application/vnd.microsoft.portable-executable": true,
-	"application/x-dosexec":                      true,
-	"application/x-executable":                   true,
+	"application/x-dosexec":                         true,
+	"application/x-executable":                      true,
 }
 
 var compoundExtensions = []string{".tar.gz", ".tar.bz2", ".tar.xz"}
@@ -60,8 +60,8 @@ var extensionMIMETypes = map[string]string{
 	".gif": "image/gif", ".avif": "image/avif", ".heic": "image/heic", ".heif": "image/heif",
 	".svg": "image/svg+xml", ".ico": "image/x-icon",
 	// Documents
-	".pdf": "application/pdf",
-	".doc": "application/msword",
+	".pdf":  "application/pdf",
+	".doc":  "application/msword",
 	".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 	".xls":  "application/vnd.ms-excel",
 	".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -147,8 +147,8 @@ var explicitAllowedMIMEs = map[string]bool{
 	"application/pdf": true, "application/msword": true,
 	"application/vnd.openxmlformats-officedocument.wordprocessingml.document": true,
 	"application/vnd.ms-excel": true,
-	"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": true,
-	"application/vnd.ms-powerpoint": true,
+	"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":         true,
+	"application/vnd.ms-powerpoint":                                             true,
 	"application/vnd.openxmlformats-officedocument.presentationml.presentation": true,
 	"application/rtf": true, "application/vnd.oasis.opendocument.text": true, "application/vnd.oasis.opendocument.spreadsheet": true,
 	"text/plain": true, "text/markdown": true, "text/csv": true, "text/tab-separated-values": true,
@@ -167,8 +167,8 @@ var documentMIMETypes = map[string]bool{
 	"application/pdf": true, "application/msword": true,
 	"application/vnd.openxmlformats-officedocument.wordprocessingml.document": true,
 	"application/vnd.ms-excel": true,
-	"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": true,
-	"application/vnd.ms-powerpoint": true,
+	"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":         true,
+	"application/vnd.ms-powerpoint":                                             true,
 	"application/vnd.openxmlformats-officedocument.presentationml.presentation": true,
 	"application/rtf": true, "application/vnd.oasis.opendocument.text": true, "application/vnd.oasis.opendocument.spreadsheet": true,
 	"text/plain": true, "text/markdown": true, "text/csv": true, "text/tab-separated-values": true,
@@ -328,6 +328,82 @@ func ValidateDriveName(name string) (string, error) {
 		}
 	}
 	return trimmed, nil
+}
+
+const maxSlugLength = 120
+
+func normalizeSlugRun(raw string) string {
+	var b strings.Builder
+	prevDash := false
+	for i := 0; i < len(raw); i++ {
+		c := raw[i]
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') {
+			b.WriteByte(c)
+			prevDash = false
+		} else if b.Len() > 0 && !prevDash {
+			b.WriteByte('-')
+			prevDash = true
+		}
+		if b.Len() >= maxSlugLength {
+			break
+		}
+	}
+	return strings.Trim(b.String(), "-")
+}
+
+// NormalizeSlug validates and normalizes a lowercase kebab-case search slug.
+func NormalizeSlug(raw string) (string, error) {
+	slug := normalizeSlugRun(strings.TrimSpace(raw))
+	if slug == "" {
+		return "", &ValidationError{Message: "File slug must contain letters or digits"}
+	}
+	return slug, nil
+}
+
+// SlugifyFilename derives a lowercase kebab-case search slug from a filename.
+func SlugifyFilename(name string) string {
+	trimmed := strings.TrimSpace(name)
+	dot := strings.LastIndexByte(trimmed, '.')
+	candidate := trimmed
+	if dot > 0 && dot < len(trimmed)-1 {
+		candidate = trimmed[:dot]
+	}
+	if slug := normalizeSlugRun(candidate); slug != "" {
+		return slug
+	}
+	return "file"
+}
+
+// SanitizeFolderName turns an arbitrary label (such as a bot name) into a valid Drive folder name.
+func SanitizeFolderName(raw, fallback string) string {
+	if fallback == "" {
+		fallback = "Bot"
+	}
+	var b strings.Builder
+	prevSpace := false
+	for _, r := range raw {
+		if r == '/' || r == '\\' || r < 0x20 || r == 0x7f || r == ' ' || r == '\t' || r == '\n' || r == '\r' {
+			if b.Len() > 0 && !prevSpace {
+				b.WriteByte(' ')
+				prevSpace = true
+			}
+			continue
+		}
+		b.WriteRune(r)
+		prevSpace = false
+	}
+	cleaned := strings.TrimSpace(b.String())
+	if utf8.RuneCountInString(cleaned) > 255 {
+		runes := []rune(cleaned)
+		cleaned = strings.TrimSpace(string(runes[:255]))
+	}
+	if cleaned == "" || cleaned == "." || cleaned == ".." {
+		return fallback
+	}
+	return cleaned
 }
 
 // CategoryForMIME classifies a MIME type into one of the Space Drive category facets.

@@ -22,7 +22,7 @@ export async function resolveNextArtifactVersion(
     name: string;
   },
 ): Promise<{ rootArtifactId: string | null; version: number }> {
-  const driveScope = params.botId == null && params.groupId == null;
+  const driveScope = (params.botId == null && params.groupId == null) || params.folderId != null;
   const previous = await prisma.artifact.findFirst({
     where: {
       spaceId: params.spaceId,
@@ -94,6 +94,15 @@ function artifactVersionLockKey(params: {
 }): string {
   if (params.botId == null && params.groupId == null) {
     return [params.spaceId, "drive", params.folderId ?? "", params.name.toLowerCase()].join("\u001f");
+  }
+  if (params.folderId != null) {
+    return [
+      params.spaceId,
+      params.botId ?? "",
+      params.groupId ?? "",
+      params.folderId,
+      params.name.toLowerCase(),
+    ].join("\u001f");
   }
   return [params.spaceId, params.botId ?? "", params.groupId ?? "", params.name.toLowerCase()].join(
     "\u001f",

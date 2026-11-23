@@ -369,6 +369,11 @@ function toolUsageLine(parts: {
     builtinOffered(disabled, "request_takeover")
       ? "When the user only needs to see something on the computer screen, such as a QR code, take a screenshot and use attach_file to send it into the chat. Use request_takeover when the user must provide protected input or human judgment, or operate the screen."
       : undefined,
+    builtinOffered(disabled, "drive_list") ||
+    builtinOffered(disabled, "drive_update") ||
+    builtinOffered(disabled, "drive_move")
+      ? "Space Drive is shared across all bots and members in this Space; use drive_list, drive_read, drive_save, drive_create_folder, drive_move, and drive_update to find, organize, rename, describe, and slug files."
+      : undefined,
     "Use destination_write only for connected destination records.",
   ].filter((clause): clause is string => Boolean(clause));
   return `${parts.computerInstruction} ${clauses.join(" ")}`;

@@ -173,7 +173,7 @@ export const computerTools: ConnectorTool[] = [
   {
     name: "list_files",
     description:
-      "List files and directories in this bot's home. On a Team Computer, relative paths use the bot folder; use shared/... for shared work or bots/... to inspect the Team root.",
+      "List files and directories in the workspace. On a Team Computer, paths start at the shared Space workspace root.",
     inputSchema: {
       type: "object",
       properties: { path: { type: "string" } },
@@ -181,7 +181,7 @@ export const computerTools: ConnectorTool[] = [
   },
   {
     name: "read_file",
-    description: `Read a UTF-8 text file from this bot's home. On a Team Computer, relative paths use the bot folder and shared/... accesses shared work. Open visual or binary files with open_path instead. Long files come back in line ranges; follow nextOffset. Over ${READ_FILE_MAX_KB} KB, use shell.`,
+    description: `Read a UTF-8 text file from the workspace. On a Team Computer, paths start at the shared Space workspace root. Open visual or binary files with open_path instead. Long files come back in line ranges; follow nextOffset. Over ${READ_FILE_MAX_KB} KB, use shell.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -195,7 +195,7 @@ export const computerTools: ConnectorTool[] = [
   {
     name: "write_file",
     description:
-      "Write a UTF-8 file into this bot's home. On a Team Computer, relative paths use the bot folder; use shared/... only for work other bots should share.",
+      "Write a UTF-8 file into the workspace. On a Team Computer, files are placed in the shared Space workspace accessible to every bot.",
     inputSchema: {
       type: "object",
       properties: {

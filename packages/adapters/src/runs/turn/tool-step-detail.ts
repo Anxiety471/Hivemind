@@ -104,6 +104,9 @@ function rawDetailForTool(toolName: string, args: Record<string, unknown>): stri
     case "drive_list":
     case "drive_read":
     case "drive_save":
+    case "drive_create_folder":
+    case "drive_move":
+    case "drive_update":
     case "save_shared_memory":
       return (
         nonEmptyString(args.path) ??
@@ -111,6 +114,7 @@ function rawDetailForTool(toolName: string, args: Record<string, unknown>): stri
         nonEmptyString(args.filePath) ??
         nonEmptyString(args.name) ??
         nonEmptyString(args.file_id) ??
+        nonEmptyString(args.folder_id) ??
         nonEmptyString(args.query)
       );
     case "open_path": {

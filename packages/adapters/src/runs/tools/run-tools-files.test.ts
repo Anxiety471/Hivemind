@@ -41,7 +41,7 @@ describe("read_file with a suspended computer", () => {
     expect(JSON.stringify(result)).not.toContain("SECRET");
     expect(readStoppedFile).toHaveBeenCalledWith(
       expect.objectContaining({ providerRef: stored.providerRef }),
-      "bots/bot-1/notes.txt",
+      "notes.txt",
       expect.anything(),
       expect.objectContaining({ savedAt: stored.homeRevisionAt }),
     );

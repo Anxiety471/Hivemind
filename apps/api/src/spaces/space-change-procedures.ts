@@ -27,6 +27,7 @@ const SPACE_CHANGE_PROCEDURES: Record<string, readonly SpaceChangeKind[]> = {
   "files.restoreFolder": ["files"],
   "files.deleteFolder": ["files"],
   "files.rename": ["files"],
+  "files.update": ["files"],
   "files.move": ["files"],
   "files.trash": ["files"],
   "files.restore": ["files"],

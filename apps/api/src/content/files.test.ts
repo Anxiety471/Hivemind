@@ -27,6 +27,7 @@ import {
   statSpaceFileContent,
   trashDriveFile,
   trashDriveFolder,
+  updateDriveFile,
   uploadSpaceFileStream,
 } from "./files/index.js";
 
@@ -47,6 +48,7 @@ type ArtifactRow = {
   runId: string | null;
   source: string;
   name: string;
+  slug: string | null;
   description: string | null;
   mimeType: string;
   size: number;
@@ -65,6 +67,7 @@ type FolderRow = {
   id: string;
   spaceId: string;
   parentId: string | null;
+  botId: string | null;
   createdByUserId: string;
   name: string;
   trashedAt: Date | null;
@@ -211,6 +214,7 @@ function artifactRow(overrides: Partial<ArtifactRow> = {}): ArtifactRow {
     runId: null,
     source: "upload",
     name: "file.txt",
+    slug: null,
     description: null,
     mimeType: "text/plain",
     size: 10,
@@ -233,6 +237,7 @@ function folderRow(overrides: Partial<FolderRow> = {}): FolderRow {
     id,
     spaceId: "space-1",
     parentId: null,
+    botId: null,
     createdByUserId: "user-1",
     name: "folder",
     trashedAt: null,
@@ -256,6 +261,7 @@ function fakeDrive(
     artifacts?: ArtifactRow[];
     folders?: FolderRow[];
     bots?: string[];
+    botName?: string;
     groups?: string[];
     failCreate?: boolean;
     /** Rows returned by successive list queries, as the database would page them. */
@@ -393,14 +399,27 @@ function fakeDrive(
     fileFolder,
     bot: {
       findFirst: async ({ where }: { where: Where }) =>
-        (seed.bots ?? []).includes(String(where.id)) ? { id: where.id } : null,
+        (seed.bots ?? []).includes(String(where.id))
+          ? { id: where.id, name: seed.botName ?? "Bot", userId: "user-1" }
+          : null,
     },
     chatGroup: {
       findFirst: async ({ where }: { where: Where }) =>
         (seed.groups ?? []).includes(String(where.id)) ? { id: where.id } : null,
     },
     $queryRaw,
-    $transaction: async (work: (tx: unknown) => Promise<unknown>) => work({ artifact, $queryRaw }),
+    $transaction: async (work: (tx: unknown) => Promise<unknown>) =>
+      work({
+        artifact,
+        fileFolder,
+        bot: {
+          findFirst: async ({ where }: { where: Where }) =>
+            (seed.bots ?? []).includes(String(where.id))
+              ? { id: where.id, name: seed.botName ?? "Bot", userId: "user-1" }
+              : null,
+        },
+        $queryRaw,
+      }),
   };
   return {
     prisma: prisma as unknown as PrismaClient,
@@ -987,6 +1006,62 @@ describe("file operations", () => {
     expect(fake.artifacts.map((row) => row.id)).toEqual(["b"]);
     expect(fake.folders).toEqual([]);
     expect(memory.removed).toEqual(["blob-a"]);
+  });
+
+  it("updates file name, slug, and description across every version in a family", async () => {
+    const fake = fakeDrive({
+      artifacts: [
+        artifactRow({ id: "root", name: "draft.md", slug: "draft" }),
+        artifactRow({
+          id: "v2",
+          name: "draft.md",
+          slug: "draft",
+          version: 2,
+          rootArtifactId: "root",
+        }),
+      ],
+    });
+    const { deps } = depsFor(fake);
+    const updated = await updateDriveFile(deps, actor, {
+      fileId: "v2",
+      name: "final-spec.md",
+      slug: "Final Spec v2",
+      description: "Finalized architecture specification",
+    });
+    expect(updated).toMatchObject({
+      id: "v2",
+      name: "final-spec.md",
+      slug: "final-spec-v2",
+      description: "Finalized architecture specification",
+      versionCount: 2,
+    });
+    expect(
+      fake.artifacts.every((row) => row.slug === "final-spec-v2" && row.name === "final-spec.md"),
+    ).toBe(true);
+  });
+
+  it("auto-organizes bot-created uploads into a bot-linked folder with a default slug", async () => {
+    const fake = fakeDrive({ bots: ["bot-1"], botName: "Research Bot" });
+    const { deps } = depsFor(fake);
+
+    const created = await uploadSpaceFileStream(
+      deps,
+      actor,
+      {
+        botId: "bot-1",
+        source: "bot",
+        name: "Q4 Market Report.txt",
+        mimeType: "text/plain",
+      },
+      new Blob(["market summary"]).stream(),
+    );
+    expect(created.slug).toBe("q4-market-report");
+    expect(created.folderId).toBeTruthy();
+    expect(fake.folders[0]).toMatchObject({
+      id: created.folderId,
+      botId: "bot-1",
+      name: "Research Bot",
+    });
   });
 });
 

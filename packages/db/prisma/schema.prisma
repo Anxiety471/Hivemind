@@ -1056,6 +1056,7 @@ model Bot {
   agentHome         AgentHome?
   browserProfile    BrowserProfile?
   artifacts         Artifact[]
+  fileFolders       FileFolder[]
   pages             Page[]
   tasks             Task[]
   runs              Run[]
@@ -2028,6 +2029,8 @@ model FileFolder {
   parentId        String?
   parent          FileFolder?  @relation("FolderChildren", fields: [parentId], references: [id], onDelete: Cascade)
   children        FileFolder[] @relation("FolderChildren")
+  botId           String?
+  bot             Bot?         @relation(fields: [botId], references: [id], onDelete: SetNull)
   createdByUserId String
   name            String
   trashedAt       DateTime?
@@ -2036,6 +2039,7 @@ model FileFolder {
   artifacts       Artifact[]
 
   @@index([spaceId, parentId])
+  @@index([spaceId, botId])
   @@index([spaceId, trashedAt])
   @@map("file_folders")
 }
@@ -2054,6 +2058,7 @@ model Artifact {
   runId      String?
   source     String      @default("chat")
   name       String
+  slug       String?
   description String?
   mimeType   String
   size       Int
@@ -2076,6 +2081,7 @@ model Artifact {
   @@unique([spaceId, userId, clientNonce])
   @@index([spaceId, botId])
   @@index([spaceId, folderId])
+  @@index([spaceId, slug])
   @@index([spaceId, trashedAt])
   @@index([groupId])
   @@index([rootArtifactId])

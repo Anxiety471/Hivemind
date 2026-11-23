@@ -859,3 +859,48 @@ describe("a reply's kept screenshot", () => {
       });
   });
 });
+
+describe("cross-bot Space artifact sharing", () => {
+  it("allows another bot in the same Space to read and attach active artifacts while blocking step screenshots and other Spaces", async () => {
+    const sharedArtifact = {
+      id: "art-bot-1",
+      spaceId: actor.spaceId,
+      botId: "bot-1",
+      groupId: null,
+      runId: "run-1",
+      name: "shared-report.pdf",
+      description: "Bot 1 output",
+      mimeType: "application/pdf",
+      size: 4,
+      version: 1,
+      createdAt: new Date(0),
+      storageKey: "stored-shared",
+    };
+    const findFirst = vi.fn(async ({ where }: { where: Record<string, unknown> }) =>
+      where.id === "art-bot-1" && where.spaceId === actor.spaceId ? sharedArtifact : null,
+    );
+    const findMany = vi.fn(async ({ where }: { where: Record<string, unknown> }) =>
+      where.spaceId === actor.spaceId ? [sharedArtifact] : [],
+    );
+    const get = vi.fn(async () => new Uint8Array([1, 2, 3, 4]));
+    const deps = {
+      prisma: { artifact: { findFirst, findMany } } as unknown as PrismaClient,
+      artifacts: { get } as unknown as ArtifactStore,
+    };
+
+    const owned = await getOwnedArtifact(deps, actor, { artifactId: "art-bot-1", botId: "bot-2" });
+    expect(owned).toMatchObject({ id: "art-bot-1", name: "shared-report.pdf" });
+    expect(findFirst.mock.calls[0]![0].where).not.toHaveProperty("botId");
+
+    const attached = await resolveSendAttachments(deps, actor, "bot-2", ["art-bot-1"]);
+    expect(attached.blocks).toMatchObject([{ artifactId: "art-bot-1", name: "shared-report.pdf" }]);
+
+    await expect(
+      getOwnedArtifact(
+        deps,
+        { ...actor, spaceId: "other-space" },
+        { artifactId: "art-bot-1", botId: "bot-1" },
+      ),
+    ).rejects.toBeInstanceOf(IsolationError);
+  });
+});

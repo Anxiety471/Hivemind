@@ -114,15 +114,13 @@ export function teamBotWorkspaceDirectory(botId: string): string {
 
 export function resolveBotWorkspacePath(
   scope: ComputerMode,
-  botId: string,
+  _botId: string,
   rawPath: string,
 ): string {
   const requestedPath = expandHomePrefix(rawPath);
   if (scope !== "team") return requestedPath;
   const explicitRootPath = stripVirtualWorkspaceRoot(requestedPath);
-  const normalized = normalizeWorkspacePath(explicitRootPath ?? requestedPath);
-  if (explicitRootPath !== null || isTeamRootPath(normalized)) return normalized;
-  return path.posix.join(teamBotWorkspaceDirectory(botId), normalized);
+  return normalizeWorkspacePath(explicitRootPath ?? requestedPath);
 }
 
 export function resolveBotWorkspaceCwd(
@@ -136,60 +134,32 @@ export function resolveBotWorkspaceCwd(
     if (expanded === requestedCwd) return requestedCwd;
     return stripVirtualWorkspaceRoot(expanded) || undefined;
   }
-  if (!requestedCwd || requestedCwd === ".") return teamBotWorkspaceDirectory(botId);
+  if (!requestedCwd || requestedCwd === ".") return undefined;
+  const expanded = expandHomePrefix(requestedCwd);
+  if (expanded !== requestedCwd) return stripVirtualWorkspaceRoot(expanded) || undefined;
   if (path.posix.isAbsolute(requestedCwd) || path.win32.isAbsolute(requestedCwd))
     return requestedCwd;
-  return resolveBotWorkspacePath(scope, botId, requestedCwd);
+  return resolveBotWorkspacePath(scope, botId, requestedCwd) || undefined;
 }
 
-/** Paths a user may write while controlling this bot: its home, or shared/. */
+/** Paths a user may write while controlling a computer: any non-escaping path in the workspace. */
 export function resolveBotUploadPath(
   scope: ComputerMode,
   botId: string,
   requestedPath: string,
 ): string {
   const stored = resolveBotWorkspacePath(scope, botId, requestedPath);
-  if (scope !== "team") return normalizeWorkspacePath(stored);
-  const normalized = normalizeWorkspacePath(stored);
-  const botDirectory = teamBotWorkspaceDirectory(botId);
-  if (
-    normalized === botDirectory ||
-    normalized.startsWith(`${botDirectory}/`) ||
-    normalized === "shared" ||
-    normalized.startsWith("shared/")
-  ) {
-    return normalized;
-  }
-  throw new WorkspacePathError("Path escapes the bot workspace");
+  return normalizeWorkspacePath(stored);
 }
 
 export function displayBotWorkspacePath(
   scope: ComputerMode,
-  botId: string,
-  requestedPath: string,
+  _botId: string,
+  _requestedPath: string,
   storedPath: string,
 ): string {
-  if (scope !== "team" || !isBotRelativeRequest(requestedPath)) return storedPath;
-  const normalized = normalizeWorkspacePath(storedPath);
-  const botDirectory = teamBotWorkspaceDirectory(botId);
-  if (normalized === botDirectory) return "";
-  return normalized.startsWith(`${botDirectory}/`)
-    ? normalized.slice(botDirectory.length + 1)
-    : normalized;
-}
-
-function isBotRelativeRequest(value: string): boolean {
-  if (stripVirtualWorkspaceRoot(expandHomePrefix(value)) !== null) return false;
-  return !isTeamRootPath(normalizeWorkspacePath(value));
-}
-
-function isTeamRootPath(value: string): boolean {
-  return (
-    value === "shared" ||
-    value.startsWith("shared/") ||
-    value === "bots" ||
-    value.startsWith("bots/")
-  );
+  if (scope !== "team") return storedPath;
+  return normalizeWorkspacePath(storedPath);
 }
 
 // A leading ~ or /home/rakazo means the workspace root, the same as a leading /.

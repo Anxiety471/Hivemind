@@ -91,6 +91,7 @@ vi.mock("../files/files", () => ({
     folderId: null,
     source: "chat",
     name: id,
+    slug: null,
     description: null,
     mimeType: state.mimeType,
     size: 4,

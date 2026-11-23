@@ -276,23 +276,41 @@ export default function ArtifactDetailScreen() {
     });
   }, [confirmDelete, content, navigation, share, styles, t]);
 
+  const fileSlug =
+    content.status === "ready" && "slug" in content.artifact ? content.artifact.slug : null;
+  const fileDescription = content.status === "ready" ? content.artifact.description : null;
+  const hasVersions = content.status === "ready" && Boolean(versions && versions.length > 1);
   const scrolling =
     content.status === "ready" &&
     (content.preview.kind === "markdown" || content.preview.kind === "text");
   const versionPicker =
-    content.status === "ready" && versions && versions.length > 1 ? (
-      <View style={styles.pillRow}>
-        <Pressable accessibilityRole="button" onPress={pickVersion} style={styles.pill}>
-          <Text style={styles.pillText}>
-            {`v${content.artifact.version} (${formatActivityRelativeTime(content.artifact.createdAt)})`}
+    hasVersions || fileSlug || fileDescription ? (
+      <View style={styles.metaBlock}>
+        {hasVersions && content.status === "ready" ? (
+          <View style={styles.pillRow}>
+            <Pressable accessibilityRole="button" onPress={pickVersion} style={styles.pill}>
+              <Text style={styles.pillText}>
+                {`v${content.artifact.version} (${formatActivityRelativeTime(content.artifact.createdAt)})`}
+              </Text>
+              <NativeSymbol
+                ios="chevron.down"
+                android="chevron-down"
+                size={12}
+                color={native.secondaryLabel}
+              />
+            </Pressable>
+          </View>
+        ) : null}
+        {fileDescription ? (
+          <Text selectable style={styles.metaDescription}>
+            {fileDescription}
           </Text>
-          <NativeSymbol
-            ios="chevron.down"
-            android="chevron-down"
-            size={12}
-            color={native.secondaryLabel}
-          />
-        </Pressable>
+        ) : null}
+        {fileSlug ? (
+          <Text selectable style={styles.metaSlug}>
+            {fileSlug}
+          </Text>
+        ) : null}
       </View>
     ) : null;
 
@@ -410,7 +428,14 @@ function createStyles() {
     screen: { flex: 1, backgroundColor: native.page },
     headerActions: { flexDirection: "row", alignItems: "center", gap: 4 },
     headerButton: { padding: 8 },
-    pillRow: { paddingHorizontal: 16, paddingTop: 8, paddingBottom: 4 },
+    pillRow: { paddingBottom: 4 },
+    metaBlock: { gap: 4, paddingHorizontal: 16, paddingTop: 8, paddingBottom: 4 },
+    metaDescription: { color: native.secondaryLabel, fontSize: 13, lineHeight: 18 },
+    metaSlug: {
+      color: native.tertiaryLabel,
+      fontFamily: Platform.select({ ios: "Menlo", default: "monospace" }),
+      fontSize: 12,
+    },
     pill: {
       alignSelf: "flex-start",
       flexDirection: "row",

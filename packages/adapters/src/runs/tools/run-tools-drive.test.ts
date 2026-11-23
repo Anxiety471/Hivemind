@@ -170,4 +170,150 @@ describe("driveTools", () => {
     });
     expect(publishSpaceChange).toHaveBeenCalledWith("space-1", "files");
   });
+
+  it("auto-places drive_save in the bot folder with a slug and supports drive_create_folder, drive_move, and drive_update", async () => {
+    const publishSpaceChange = vi.fn();
+    const put = vi.fn().mockResolvedValue({ id: "blob-2", hash: "hash-2" });
+    const createFolder = vi
+      .fn()
+      .mockResolvedValueOnce({ id: "bot-folder-1", name: "Ops Bot" })
+      .mockResolvedValueOnce({
+        id: "folder-dest",
+        name: "Specs",
+        parentId: null,
+      });
+    const createArtifact = vi.fn().mockResolvedValue({
+      id: "file-2",
+      name: "deploy-notes.md",
+      slug: "deploy-notes",
+      description: "Deploy checklist",
+      folderId: "bot-folder-1",
+      mimeType: "text/markdown",
+      size: 12,
+      version: 1,
+      updatedAt: new Date("2026-11-23T00:00:00.000Z"),
+    });
+    const updateManyArtifact = vi.fn().mockResolvedValue({ count: 1 });
+    const fileFolder = {
+      findMany: vi.fn().mockResolvedValue([]),
+      findFirst: vi
+        .fn()
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ id: "folder-dest", trashedAt: null }),
+      updateMany: vi.fn(),
+      create: createFolder,
+    };
+    const botModel = {
+      findFirst: vi.fn().mockResolvedValue({ name: "Ops Bot", userId: "user-1" }),
+    };
+    const tx = {
+      $queryRaw: vi.fn().mockResolvedValue([]),
+      artifact: {
+        findFirst: vi
+          .fn()
+          .mockResolvedValueOnce(null)
+          .mockResolvedValueOnce({ id: "file-2", rootArtifactId: null, trashedAt: null })
+          .mockResolvedValueOnce({
+            id: "file-2",
+            name: "deploy-renamed.md",
+            slug: "deploy-v2",
+            description: "Updated checklist",
+            folderId: "folder-dest",
+            version: 1,
+          }),
+        updateMany: updateManyArtifact,
+        create: createArtifact,
+      },
+      fileFolder,
+      bot: botModel,
+    };
+    const findMany = vi.fn().mockResolvedValue([]);
+    const prisma = {
+      artifact: {
+        findMany,
+        findFirst: tx.artifact.findFirst,
+        updateMany: updateManyArtifact,
+      },
+      fileFolder,
+      bot: botModel,
+      $transaction: vi.fn().mockImplementation(async (fn) => fn(tx)),
+    };
+    const ctx = {
+      bot: { id: "bot-1" },
+      thread: { id: "thread-1", groupId: null },
+      source: {},
+      run: { spaceId: "space-1", userId: "user-1", id: "run-1" },
+      secrets: [],
+      context: { signal: new AbortController().signal },
+      deps: {
+        prisma,
+        artifacts: { put, remove: vi.fn() },
+        events: { publishSpaceChange },
+      },
+    } as unknown as RunContext;
+
+    const saved = (await driveTools.drive_save!(
+      ctx,
+      makeCall("drive_save", {
+        name: "deploy-notes.md",
+        description: "Deploy checklist",
+        content: "# Checklist",
+      }),
+    )) as { folderId: string | null; slug: string | null };
+    expect(saved).toMatchObject({ folderId: "bot-folder-1", slug: "deploy-notes" });
+    expect(createFolder).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ botId: "bot-1", name: "Ops Bot" }),
+      }),
+    );
+
+    const createdFolder = (await driveTools.drive_create_folder!(
+      ctx,
+      makeCall("drive_create_folder", { name: "Specs" }),
+    )) as { ok: boolean; created: boolean; folder: { id: string; name: string } };
+    expect(createdFolder).toMatchObject({
+      ok: true,
+      created: true,
+      folder: { id: "folder-dest", name: "Specs" },
+    });
+
+    const moved = (await driveTools.drive_move!(
+      ctx,
+      makeCall("drive_move", { file_id: "file-2", destination_folder_id: "folder-dest" }),
+    )) as { ok: boolean; fileId: string; folderId: string | null };
+    expect(moved).toMatchObject({ ok: true, fileId: "file-2", folderId: "folder-dest" });
+
+    const updated = (await driveTools.drive_update!(
+      ctx,
+      makeCall("drive_update", {
+        file_id: "file-2",
+        name: "deploy-renamed.md",
+        slug: "Deploy v2",
+        description: "Updated checklist",
+      }),
+    )) as { ok: boolean; name: string; slug: string | null; description: string | null };
+    expect(updated).toMatchObject({
+      ok: true,
+      name: "deploy-renamed.md",
+      slug: "deploy-v2",
+      description: "Updated checklist",
+    });
+
+    await driveTools.drive_list!(
+      ctx,
+      makeCall("drive_list", { query: "deploy-v2", bot_id: "bot-2" }),
+    );
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          botId: "bot-2",
+          OR: expect.arrayContaining([
+            expect.objectContaining({ slug: { contains: "deploy-v2", mode: "insensitive" } }),
+          ]),
+        }),
+      }),
+    );
+  });
 });

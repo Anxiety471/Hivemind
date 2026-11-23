@@ -33,6 +33,10 @@ const APPROVAL_EXEMPT_TOOLS = new Set([
   "schedule_cancel",
   "list_fleet",
   "organize_bot",
+  "drive_save",
+  "drive_create_folder",
+  "drive_move",
+  "drive_update",
   // The wallet owner approves every purchase in the wallet itself; a card here would ask twice.
   "request_purchase",
 ]);

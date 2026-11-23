@@ -32,10 +32,7 @@ import { scheduleComputerSleep } from "../computers/computer-idle.js";
 import { ComputerBusyError, provisionComputer } from "../computers/computer-lifecycle.js";
 import { nativeShellCommandArgv } from "../computers/host/native-shell.js";
 import { sandboxKindCapabilities } from "../computers/sandbox/sandbox-kind-capabilities.js";
-import {
-  resolveBotWorkspaceCwd,
-  teamBotWorkspaceDirectory,
-} from "../computers/screens/computer-support.js";
+import { resolveBotWorkspaceCwd } from "../computers/screens/computer-support.js";
 import { connectedContext, selectRunConnections } from "../integrations/connection-context.js";
 import { isEgressRefused } from "../network/network-address.js";
 import { loadPurchaseRedactions } from "../payments/purchase-service.js";
@@ -501,20 +498,19 @@ for p in "$@"; do
 done
 exit "$status"`;
 
-/** Team file checks stay in this bot's folder, including absolute paths. */
+/** Team file checks stay in the shared workspace, including absolute paths. */
 export function resolveWatchPath(mode: ComputerMode, botId: string, path: string): string {
   const folder = watchFolder(mode, botId);
   const resolved = posix.resolve(folder, path);
   if (mode === "team" && resolved !== folder && !resolved.startsWith(`${folder}/`)) {
-    throw new RoutineWatchError("The watched path must stay inside the bot's folder.");
+    throw new RoutineWatchError("The watched path must stay inside the shared workspace.");
   }
   return resolved;
 }
 
-/** Where a bot's relative paths and commands start. */
-export function watchFolder(mode: ComputerMode, botId: string): string {
-  // Not resolveBotWorkspacePath(mode, botId, "."): a team computer refuses "." as escaping.
-  return mode === "team" ? `${WORKSPACE}/${teamBotWorkspaceDirectory(botId)}` : WORKSPACE;
+/** Where relative paths and commands start. */
+export function watchFolder(_mode: ComputerMode, _botId: string): string {
+  return WORKSPACE;
 }
 
 async function readComputer(

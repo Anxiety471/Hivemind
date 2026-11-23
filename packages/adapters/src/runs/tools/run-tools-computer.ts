@@ -30,7 +30,6 @@ import {
   resolveBotUploadPath,
   resolveBotWorkspaceCwd,
   resolveBotWorkspacePath,
-  teamBotWorkspaceDirectory,
 } from "../../computers/screens/computer-support.js";
 import {
   advanceUnchangedVisualGuard,
@@ -285,12 +284,7 @@ export async function pageBrowserTool(ctx: RunContext, call: ToolCall) {
             approvedPurchase: paying,
             countPurchase: () => countPayment(ctx, call),
             releasePurchase: () => releaseUnpressedPayment(ctx, call),
-            // Team bots may send only their own folder or shared/ off the computer; a
-            // private computer's helper already confines uploads to its home folder.
-            uploadRoots:
-              ctx.computer.mode === "team"
-                ? [teamBotWorkspaceDirectory(bot.id), "shared"]
-                : undefined,
+            uploadRoots: undefined,
             resolveUploadPath: (path) =>
               ctx.computer.mode === "team"
                 ? resolveBotUploadPath(ctx.computer.mode, bot.id, path)

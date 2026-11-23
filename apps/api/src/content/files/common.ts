@@ -18,6 +18,7 @@ import {
   AttachmentValidationError,
   ClientError,
   inferAttachmentMimeType,
+  normalizeFileSlug,
   validateDriveName,
 } from "@rakazo/core";
 import type { PrismaClient } from "@rakazo/db";
@@ -91,6 +92,7 @@ export const FILE_SELECT = {
   folderId: true,
   source: true,
   name: true,
+  slug: true,
   description: true,
   mimeType: true,
   size: true,
@@ -105,6 +107,7 @@ export const FILE_SELECT = {
 export const FOLDER_SELECT = {
   id: true,
   parentId: true,
+  botId: true,
   name: true,
   trashedAt: true,
   createdAt: true,
@@ -125,6 +128,7 @@ export interface DriveUploadParams {
   runId?: string | null;
   source?: string | null;
   name?: string | null;
+  slug?: string | null;
   description?: string | null;
   mimeType?: string | null;
   clientNonce?: string | null;
@@ -202,6 +206,7 @@ export type DriveArtifactRow = {
   folderId: string | null;
   source: string;
   name: string;
+  slug: string | null;
   description: string | null;
   mimeType: string;
   size: number;
@@ -216,6 +221,7 @@ export type DriveArtifactRow = {
 export type DriveFolderRow = {
   id: string;
   parentId: string | null;
+  botId?: string | null;
   name: string;
   trashedAt: Date | null;
   createdAt: Date;
@@ -243,6 +249,16 @@ export function trimOptional(value: string | null | undefined): string | null {
 export function driveName(raw: string): string {
   try {
     return validateDriveName(raw);
+  } catch (error) {
+    if (error instanceof AttachmentValidationError) throw new DriveValidationError(error.message);
+    throw error;
+  }
+}
+
+/** Core's normalizeFileSlug throws AttachmentValidationError; the route layer speaks ClientError. */
+export function driveSlug(raw: string): string {
+  try {
+    return normalizeFileSlug(raw);
   } catch (error) {
     if (error instanceof AttachmentValidationError) throw new DriveValidationError(error.message);
     throw error;
@@ -503,6 +519,7 @@ export function toDriveFile(row: DriveArtifactRow, versionCount: number): DriveF
     // The column holds a validated source; old rows default to "chat".
     source: row.source as FileSource,
     name: row.name,
+    slug: row.slug ?? null,
     description: row.description,
     mimeType: row.mimeType,
     size: row.size,
@@ -626,6 +643,7 @@ export function toFolderDto(row: DriveFolderRow): FileFolder {
   return {
     id: row.id,
     parentId: row.parentId,
+    botId: row.botId ?? null,
     name: row.name,
     trashedAt: formatOptionalTime(row.trashedAt),
     createdAt: formatTime(row.createdAt),

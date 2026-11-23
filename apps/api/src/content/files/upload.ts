@@ -2,8 +2,9 @@ import { createHash } from "node:crypto";
 import { createAdapterContext } from "@rakazo/adapter-kit";
 import type { Actor, DriveFile } from "@rakazo/contracts";
 import { ARTIFACT_DESCRIPTION_MAX_LENGTH, FILE_UPLOAD_MAX_BYTES } from "@rakazo/contracts";
+import { slugifyFileName } from "@rakazo/core";
 import type { PrismaClient } from "@rakazo/db";
-import { isUniqueViolation, withResolvedArtifactVersion } from "@rakazo/db";
+import { ensureBotDriveFolder, isUniqueViolation, withResolvedArtifactVersion } from "@rakazo/db";
 import { bestEffort } from "@rakazo/logging";
 import type { DriveArtifactRow, DriveDeps, DriveUploadParams } from "./common.js";
 import {
@@ -13,6 +14,7 @@ import {
   DriveValidationError,
   driveFileFor,
   driveName,
+  driveSlug,
   FILE_SELECT,
   FILE_SOURCES,
   normalizeUploadFilename,
@@ -109,11 +111,13 @@ export async function uploadSpaceFileStream(
       `Description exceeds ${ARTIFACT_DESCRIPTION_MAX_LENGTH} characters`,
     );
   }
-  const folderId = trimOptional(params.folderId);
+  const folderIdArg = trimOptional(params.folderId);
   const botId = trimOptional(params.botId);
   const groupId = trimOptional(params.groupId);
   const runId = trimOptional(params.runId);
   const clientNonce = trimOptional(params.clientNonce);
+  const rawSlug = trimOptional(params.slug);
+  const slug = rawSlug ? driveSlug(rawSlug) : slugifyFileName(name);
   const maxBytes = deps.maxFileUploadSizeBytes ?? FILE_UPLOAD_MAX_BYTES;
 
   const { prefix, rest } = await takePrefix(source, SNIFF_BYTES);
@@ -123,9 +127,9 @@ export async function uploadSpaceFileStream(
     const existing = await findByClientNonce(deps.prisma, actor, clientNonce);
     if (existing) return driveFileFor(deps.prisma, actor.spaceId, existing);
   }
-  if (folderId) {
+  if (folderIdArg) {
     const folder = await deps.prisma.fileFolder.findFirst({
-      where: { id: folderId, spaceId: actor.spaceId },
+      where: { id: folderIdArg, spaceId: actor.spaceId },
       select: { id: true, trashedAt: true },
     });
     if (!folder) throw new DriveNotFoundError("Folder not found");
@@ -145,6 +149,15 @@ export async function uploadSpaceFileStream(
     });
     if (!group) throw new DriveNotFoundError("Group not found");
   }
+  const folderId =
+    folderIdArg ??
+    (sourceValue === "bot" && botId && "fileFolder" in deps.prisma && deps.prisma.fileFolder
+      ? await ensureBotDriveFolder(deps.prisma, {
+          spaceId: actor.spaceId,
+          userId: actor.userId,
+          botId,
+        })
+      : null);
 
   const context = createAdapterContext(
     actor,
@@ -198,6 +211,7 @@ export async function uploadSpaceFileStream(
             runId,
             source: sourceValue,
             name,
+            slug,
             description,
             mimeType,
             size: stored.size,

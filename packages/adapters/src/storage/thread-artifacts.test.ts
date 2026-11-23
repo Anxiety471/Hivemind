@@ -266,6 +266,68 @@ describe("current-turn thread files", () => {
     );
   });
 
+  it("auto-organizes bot-created attachments into a bot-linked folder with a default slug", async () => {
+    const createArtifact = vi.fn().mockResolvedValue({
+      id: "artifact-organized",
+      name: "Q4_Summary Draft.pdf",
+      slug: "q4-summary-draft",
+      mimeType: "application/pdf",
+      size: 4,
+      storageKey: "stored-1",
+    });
+    const findFolder = vi.fn().mockResolvedValue(null);
+    const createFolder = vi.fn().mockResolvedValue({ id: "folder-bot-1" });
+    const tx = {
+      artifact: { findFirst: vi.fn().mockResolvedValue(null), create: createArtifact },
+      fileFolder: { findFirst: findFolder, updateMany: vi.fn(), create: createFolder },
+      bot: { findFirst: vi.fn().mockResolvedValue({ name: "Analyst", userId: "user-1" }) },
+      $queryRaw: vi.fn().mockResolvedValue([{ lock: "1" }]),
+    };
+
+    await attachWorkspaceFileToThread(
+      {
+        prisma: {
+          artifact: tx.artifact,
+          fileFolder: tx.fileFolder,
+          bot: tx.bot,
+          $transaction: async (run: (client: typeof tx) => Promise<unknown>) => run(tx),
+        } as unknown as PrismaClient,
+        artifacts: {
+          put: vi.fn().mockResolvedValue({ id: "stored-1", hash: "hash-1" }),
+          remove: vi.fn(),
+        } as unknown as ArtifactStore,
+      },
+      {
+        spaceId: "space-1",
+        userId: "user-1",
+        botId: "bot-1",
+        runId: "run-1",
+        filePath: "reports/Q4_Summary Draft.pdf",
+        bytes: new Uint8Array([1, 2, 3, 4]),
+        operationId: "op-1",
+      },
+    );
+
+    expect(createFolder).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          spaceId: "space-1",
+          parentId: null,
+          botId: "bot-1",
+          name: "Analyst",
+        }),
+      }),
+    );
+    expect(createArtifact).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          folderId: "folder-bot-1",
+          slug: "q4-summary-draft",
+        }),
+      }),
+    );
+  });
+
   it.each([
     ["video/mp4", ".mp4"],
     ["audio/mpeg", ".mp3"],
@@ -332,7 +394,7 @@ describe("current-turn thread files", () => {
       expect(writeFile).toHaveBeenCalledWith(
         computer,
         {
-          path: `bots/bot-1/attachments/artifact-1${extension}`,
+          path: `attachments/artifact-1${extension}`,
           content: new Uint8Array([1, 2, 3, 4]),
         },
         context,
@@ -405,7 +467,7 @@ describe("current-turn thread files", () => {
     expect(get).toHaveBeenCalledWith("stored-image-1", expect.objectContaining({ botId: "bot-1" }));
     expect(writeFile).toHaveBeenCalledWith(
       expect.objectContaining({ id: "computer-1" }),
-      { path: "bots/bot-1/attachments/image-1.png", content: new Uint8Array([1, 2, 3, 4]) },
+      { path: "attachments/image-1.png", content: new Uint8Array([1, 2, 3, 4]) },
       expect.objectContaining({ botId: "bot-1" }),
     );
     expect(files).toEqual([
@@ -467,7 +529,7 @@ describe("recent thread files", () => {
       );
       expect(readFile).toHaveBeenCalledWith(
         expect.anything(),
-        computerMode === "team" ? "bots/bot/attachments/notes.txt" : "attachments/notes.txt",
+        "attachments/notes.txt",
         expect.anything(),
       );
       expect(get).not.toHaveBeenCalled();
@@ -683,7 +745,7 @@ describe("recent thread files", () => {
     expect(writeFile).toHaveBeenCalledOnce();
     expect(writeFile).toHaveBeenCalledWith(
       expect.objectContaining({ id: "computer-1" }),
-      { path: "bots/bot-1/attachments/image-1.png", content: new Uint8Array([1, 2, 3]) },
+      { path: "attachments/image-1.png", content: new Uint8Array([1, 2, 3]) },
       context,
     );
     expect(recentThreadFilesInstruction(files)).toBe(

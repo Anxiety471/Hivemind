@@ -138,7 +138,7 @@ describe("provider-neutral computer workspace", () => {
     expect(files).toEqual(["packages/core/keep.txt"]);
   });
 
-  it("prepares shared and bot folders for a Team Computer", async () => {
+  it("does not isolate a Team Computer into per-bot or shared subdirectories", async () => {
     const provider = new FakeSandboxProvider();
     const computer = await provider.provision(
       { botId: "team-workspace", homePath: "/ignored" },
@@ -148,11 +148,7 @@ describe("provider-neutral computer workspace", () => {
 
     await ensureComputerWorkspaceLayout(provider, computer, "team", "bot-1", context);
 
-    expect(execute).toHaveBeenCalledWith(
-      computer,
-      { argv: ["mkdir", "-p", "shared", "bots/bot-1"] },
-      context,
-    );
+    expect(execute).not.toHaveBeenCalled();
   });
 
   it("leaves deleted bots' folders and browser profiles out of a Team Computer checkpoint", async () => {

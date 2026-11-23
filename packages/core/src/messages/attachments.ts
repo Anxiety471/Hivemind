@@ -646,6 +646,51 @@ export function validateDriveName(name: string): string {
   return trimmed;
 }
 
+const SLUG_MAX_LENGTH = 120;
+
+export function normalizeFileSlug(raw: string): string {
+  const slug = raw
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, SLUG_MAX_LENGTH)
+    .replace(/-+$/g, "");
+  if (!slug) {
+    throw new AttachmentValidationError("File slug must contain letters or digits");
+  }
+  return slug;
+}
+
+/** Derives a lowercase kebab-case search slug from a filename, keeping a non-empty fallback. */
+export function slugifyFileName(name: string): string {
+  const trimmed = name.trim();
+  const dot = trimmed.lastIndexOf(".");
+  const stem = dot > 0 && dot < trimmed.length - 1 ? trimmed.slice(0, dot) : trimmed;
+  const candidate = (stem || trimmed)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, SLUG_MAX_LENGTH)
+    .replace(/-+$/g, "");
+  return candidate || "file";
+}
+
+export function sanitizeDriveFolderName(raw: string, fallback = "Bot"): string {
+  const cleaned = [...raw]
+    .map((ch) => {
+      const code = ch.charCodeAt(0);
+      return code < 0x20 || code === 0x7f || ch === "/" || ch === "\\" ? " " : ch;
+    })
+    .join("")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 255)
+    .trim();
+  if (!cleaned || cleaned === "." || cleaned === "..") return fallback;
+  return cleaned;
+}
+
 const CODE_MIME_TYPES = new Set([
   "application/x-sh",
   "application/javascript",

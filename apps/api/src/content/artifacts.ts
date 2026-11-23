@@ -16,11 +16,14 @@ import {
   decodeAttachmentBase64,
   inferAttachmentMimeType,
   messageBlockForArtifact,
+  normalizeFileSlug,
   promptTextForAttachments,
+  slugifyFileName,
   validateAttachmentMimeType,
 } from "@rakazo/core";
 import type { PrismaClient } from "@rakazo/db";
 import {
+  ensureBotDriveFolder,
   HIDDEN_ARTIFACT_MIME_TYPES,
   IsolationError,
   isRecordNotFound,
@@ -128,7 +131,10 @@ async function storeOwnedArtifact(
   input: {
     botId: string;
     groupId?: string;
+    folderId?: string | null;
+    source?: string;
     name: string;
+    slug?: string | null;
     description?: string;
     mimeType: string;
     bytes: Uint8Array;
@@ -137,15 +143,27 @@ async function storeOwnedArtifact(
   },
 ) {
   const { mimeType, bytes } = input;
+  const slug = input.slug?.trim() ? normalizeFileSlug(input.slug) : slugifyFileName(input.name);
   const context = createAdapterContext(actor, input.botId, `artifact-create:${input.botId}`);
   const stored = await deps.artifacts.put({ name: input.name, mimeType, bytes }, context);
   const hash = createHash("sha256").update(bytes).digest("hex");
+  const folderId =
+    input.folderId !== undefined
+      ? input.folderId
+      : input.source === "bot" && "fileFolder" in deps.prisma && deps.prisma.fileFolder
+        ? await ensureBotDriveFolder(deps.prisma, {
+            spaceId: actor.spaceId,
+            userId: actor.userId,
+            botId: input.botId,
+          })
+        : null;
   const { row, replay } = await withResolvedArtifactVersion(
     deps.prisma,
     {
       spaceId: actor.spaceId,
       botId: input.botId,
       groupId: input.groupId,
+      folderId,
       name: input.name,
     },
     async (tx, { rootArtifactId, version }) => {
@@ -158,7 +176,10 @@ async function storeOwnedArtifact(
           userId: actor.userId,
           botId: input.botId,
           groupId: input.groupId,
+          folderId,
+          ...(input.source ? { source: input.source } : {}),
           name: input.name,
+          slug,
           description: input.description?.trim() || null,
           mimeType,
           size: bytes.byteLength,
@@ -225,14 +246,12 @@ export async function getOwnedArtifact(
   const row = await deps.prisma.artifact.findFirst({
     where: {
       id: input.artifactId,
-      botId: input.botId,
-      groupId: null,
       spaceId: actor.spaceId,
       trashedAt: null,
     },
   });
   if (!row) throw new IsolationError();
-  return readArtifact(deps.artifacts, actor, row, input.botId);
+  return readArtifact(deps.artifacts, actor, row, row.botId ?? input.botId);
 }
 
 export async function getSpaceArtifact(
@@ -246,13 +265,12 @@ export async function getSpaceArtifact(
   const row = await deps.prisma.artifact.findFirst({
     where: {
       id: input.artifactId,
-      groupId: input.groupId,
       spaceId: actor.spaceId,
       trashedAt: null,
     },
   });
   if (!row) throw new IsolationError();
-  return readArtifact(deps.artifacts, actor, row, input.contextBotId);
+  return readArtifact(deps.artifacts, actor, row, row.botId ?? input.contextBotId);
 }
 
 // Trace with the row's own bot; space and user authorize the read.
@@ -663,7 +681,7 @@ function toAttachmentResolution<T extends SendAttachmentRow>(ids: string[], rows
 export async function resolveSendAttachments(
   deps: { prisma: Pick<PrismaClient, "artifact">; maxAttachmentsPerMessage?: number },
   actor: Actor,
-  botId: string,
+  _botId: string,
   artifactIds: string[] | undefined,
 ) {
   const ids = normalizeAttachmentIds(artifactIds, attachmentMaxCount(deps));
@@ -674,10 +692,6 @@ export async function resolveSendAttachments(
       id: { in: ids },
       spaceId: actor.spaceId,
       trashedAt: null,
-      OR: [
-        { botId, groupId: null },
-        { botId: null, groupId: null },
-      ],
     },
   });
   return toAttachmentResolution(ids, rows);
@@ -686,8 +700,8 @@ export async function resolveSendAttachments(
 export async function resolveGroupSendAttachments(
   deps: { prisma: Pick<PrismaClient, "artifact">; maxAttachmentsPerMessage?: number },
   actor: Actor,
-  groupId: string,
-  memberBotIds: string[],
+  _groupId: string,
+  _memberBotIds: string[],
   artifactIds: string[] | undefined,
 ) {
   const ids = normalizeAttachmentIds(artifactIds, attachmentMaxCount(deps));
@@ -698,13 +712,6 @@ export async function resolveGroupSendAttachments(
       id: { in: ids },
       spaceId: actor.spaceId,
       trashedAt: null,
-      OR: [
-        { groupId },
-        // Uploads from before group ownership was stored, still tied to a current member.
-        { groupId: null, botId: { in: memberBotIds } },
-        // Space Drive files shared within the Space.
-        { botId: null, groupId: null },
-      ],
     },
   });
   return toAttachmentResolution(ids, rows);

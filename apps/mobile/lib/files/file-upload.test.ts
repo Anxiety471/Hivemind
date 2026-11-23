@@ -65,6 +65,7 @@ const driveFile: DriveFile = {
   folderId: null,
   source: "chat",
   name: "notes.txt",
+  slug: null,
   description: null,
   mimeType: "text/plain",
   size: 4,

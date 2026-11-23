@@ -37,6 +37,7 @@ import {
   restoreDriveFolder,
   trashDriveFile,
   trashDriveFolder,
+  updateDriveFile,
 } from "../content/files/index.js";
 import { querySpaceSearch } from "../content/search.js";
 import { listSpaceRuns } from "../threads/runs.js";
@@ -162,6 +163,9 @@ export function contentRoutes(ctx: RouterContext) {
       }),
       rename: authed.files.rename.handler(async ({ context, input }) =>
         renameDriveFile(deps, context.actor, input),
+      ),
+      update: authed.files.update.handler(async ({ context, input }) =>
+        updateDriveFile(deps, context.actor, input),
       ),
       move: authed.files.move.handler(async ({ context, input }) =>
         moveDriveFile(deps, context.actor, input),

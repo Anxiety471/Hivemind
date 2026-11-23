@@ -18,6 +18,7 @@ const files = vi.hoisted(() => ({
   restoreFolder: vi.fn(),
   deleteFolder: vi.fn(),
   rename: vi.fn(),
+  update: vi.fn(),
   move: vi.fn(),
   trash: vi.fn(),
   restore: vi.fn(),
@@ -68,8 +69,12 @@ vi.mock("@rakazo/ui-web", () => {
     DialogHeader: Container,
     DialogTitle: Container,
     DropdownMenu: Container,
-    DropdownMenuContent: () => null,
-    DropdownMenuItem: () => null,
+    DropdownMenuContent: Container,
+    DropdownMenuItem: ({ children, onClick }: { children?: ReactNode; onClick?: () => void }) => (
+      <button type="button" onClick={onClick}>
+        {children}
+      </button>
+    ),
     DropdownMenuSeparator: () => null,
     DropdownMenuTrigger: ({ render, children }: { render: ReactNode; children?: ReactNode }) =>
       cloneElement(render as ReactElement, {}, children),
@@ -128,6 +133,7 @@ const now = new Date().toISOString();
 const folder = {
   id: "folder-1",
   parentId: null,
+  botId: null,
   name: "Reports",
   trashedAt: null,
   createdAt: now,
@@ -141,6 +147,7 @@ const file = {
   folderId: null,
   source: "upload",
   name: "notes.txt",
+  slug: null,
   description: null,
   mimeType: "text/plain",
   size: 128,
@@ -311,6 +318,63 @@ it("creates a folder in the current view", async () => {
     )!;
     await act(async () => create.click());
     expect(files.createFolder).toHaveBeenCalledWith({ parentId: null, name: "Ideas" });
+  } finally {
+    await view.cleanup();
+  }
+});
+
+it("shows file description and slug and updates them via Edit details", async () => {
+  const richFile = {
+    ...file,
+    name: "Q4 Notes.txt",
+    slug: "q4-notes",
+    description: "Quarterly launch notes",
+  };
+  files.list.mockResolvedValue({ ...page, folders: [], files: [richFile] });
+  files.update.mockResolvedValue({
+    ...richFile,
+    name: "Q4 Final Notes.txt",
+    slug: "q4-final-notes",
+    description: "Final launch notes",
+  });
+  const view = await renderFiles();
+  try {
+    expect(view.container.textContent).toContain("Quarterly launch notes");
+    expect(view.container.textContent).toContain("q4-notes");
+
+    const editButton = [...view.container.querySelectorAll("button")].find((button) =>
+      button.textContent?.includes("Edit details"),
+    )!;
+    await act(async () => editButton.click());
+
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+    const nameInput = view.container.querySelector<HTMLInputElement>("input#drive-edit-name")!;
+    const slugInput = view.container.querySelector<HTMLInputElement>("input#drive-edit-slug")!;
+    const descInput = view.container.querySelector<HTMLInputElement>(
+      "input#drive-edit-description",
+    )!;
+    await act(async () => {
+      setter?.call(nameInput, "Q4 Final Notes.txt");
+      nameInput.dispatchEvent(new Event("input", { bubbles: true }));
+      setter?.call(slugInput, "q4-final-notes");
+      slugInput.dispatchEvent(new Event("input", { bubbles: true }));
+      setter?.call(descInput, "Final launch notes");
+      descInput.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const saveButton = [...view.container.querySelectorAll("button")].find(
+      (button) => button.textContent === "Save",
+    )!;
+    await act(async () => saveButton.click());
+    await act(async () => {
+      await vi.waitFor(() =>
+        expect(files.update).toHaveBeenCalledWith({
+          fileId: "file-1",
+          name: "Q4 Final Notes.txt",
+          slug: "q4-final-notes",
+          description: "Final launch notes",
+        }),
+      );
+    });
   } finally {
     await view.cleanup();
   }

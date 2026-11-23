@@ -1,5 +1,6 @@
 import { createAdapterContext } from "@rakazo/adapter-kit";
 import type { Actor, DriveFile } from "@rakazo/contracts";
+import { ARTIFACT_DESCRIPTION_MAX_LENGTH } from "@rakazo/contracts";
 import { Prisma } from "@rakazo/db";
 import { bestEffort } from "@rakazo/logging";
 import type { DriveArtifactRow, DriveDeps } from "./common.js";
@@ -8,6 +9,7 @@ import {
   DriveValidationError,
   driveFileFor,
   driveName,
+  driveSlug,
   FILE_SELECT,
   loadDriveFile,
   trimOptional,
@@ -51,6 +53,58 @@ export async function renameDriveFile(
       OR: [{ id: root }, { rootArtifactId: root }],
     },
     data: { name, updatedAt: new Date() },
+  });
+  return loadDriveFile(deps.prisma, actor.spaceId, input.fileId);
+}
+
+export async function updateDriveFile(
+  deps: Pick<DriveDeps, "prisma">,
+  actor: Actor,
+  input: {
+    fileId: string;
+    name?: string;
+    description?: string | null;
+    slug?: string | null;
+  },
+): Promise<DriveFile> {
+  const data: Prisma.ArtifactUpdateManyMutationInput = { updatedAt: new Date() };
+  if (input.name !== undefined) {
+    data.name = driveName(input.name);
+  }
+  if (input.description !== undefined) {
+    if (input.description === null) {
+      data.description = null;
+    } else {
+      const trimmed = input.description.trim();
+      if ([...trimmed].length > ARTIFACT_DESCRIPTION_MAX_LENGTH) {
+        throw new DriveValidationError(
+          `Description exceeds ${ARTIFACT_DESCRIPTION_MAX_LENGTH} characters`,
+        );
+      }
+      data.description = trimmed || null;
+    }
+  }
+  if (input.slug !== undefined) {
+    if (input.slug === null) {
+      data.slug = null;
+    } else {
+      const trimmed = input.slug.trim();
+      data.slug = trimmed ? driveSlug(trimmed) : null;
+    }
+  }
+
+  const row = await deps.prisma.artifact.findFirst({
+    where: { id: input.fileId, spaceId: actor.spaceId, trashedAt: null },
+    select: { id: true, rootArtifactId: true },
+  });
+  if (!row) throw new DriveNotFoundError("File not found");
+  const root = await familyRoot(row);
+  await deps.prisma.artifact.updateMany({
+    where: {
+      spaceId: actor.spaceId,
+      OR: [{ id: root }, { rootArtifactId: root }],
+    },
+    data,
   });
   return loadDriveFile(deps.prisma, actor.spaceId, input.fileId);
 }

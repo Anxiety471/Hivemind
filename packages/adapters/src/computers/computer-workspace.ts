@@ -24,7 +24,7 @@ import {
 } from "../storage/workspace-save-policy.js";
 import { isSandboxDamagedError } from "./sandbox/sandbox-errors.js";
 import { sandboxKindCapabilities } from "./sandbox/sandbox-kind-capabilities.js";
-import { normalizeWorkspacePath, teamBotWorkspaceDirectory } from "./screens/computer-support.js";
+import { normalizeWorkspacePath } from "./screens/computer-support.js";
 
 export {
   shouldSkipPortableWorkspaceFile,
@@ -105,19 +105,13 @@ export async function restoreComputerWorkspace(
 }
 
 export async function ensureComputerWorkspaceLayout(
-  sandbox: SandboxProvider,
-  computer: ComputerRef,
-  scope: ComputerMode,
-  botId: string | undefined,
-  context: AdapterContext,
+  _sandbox: SandboxProvider,
+  _computer: ComputerRef,
+  _scope: ComputerMode,
+  _botId: string | undefined,
+  _context: AdapterContext,
 ): Promise<void> {
-  if (scope !== "team" || !botId) return;
-  await manageComputerWorkspaceDirectories(
-    sandbox,
-    computer,
-    { action: "ensure", paths: ["shared", teamBotWorkspaceDirectory(botId)] },
-    context,
-  );
+  // Team Computers share one workspace root directly without per-bot subdirectories.
 }
 
 const TEAM_BOT_FOLDER_NAME = /^[A-Za-z0-9_-]+$/;
