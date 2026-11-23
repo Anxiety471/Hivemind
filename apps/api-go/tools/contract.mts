@@ -27,6 +27,7 @@ import { laneHCases, laneHState } from "./contract-lane-h.mts";
 import { laneICases } from "./contract-lane-i.mts";
 import { laneJCases, laneJState } from "./contract-lane-j.mts";
 import { laneKCases, laneKState } from "./contract-k-mcp.mts";
+import { laneKReviewCases } from "./contract-k-review.mts";
 import { membershipCases, membershipReset, membershipState } from "./contract-membership.mts";
 import { modelsCases } from "./contract-models.mts";
 import { spaceRunCases } from "./contract-spaces-runs.mts";
@@ -716,6 +717,7 @@ const cases: Case[] = [
   ...laneICases(system),
   ...laneJCases(system),
   ...laneKCases(system),
+  ...laneKReviewCases(system),
   ...modelsCases(system),
   ...threadGetCases(system),
   ...spaceRunCases(system),
