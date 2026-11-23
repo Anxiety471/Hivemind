@@ -76,6 +76,7 @@ type Config struct {
 type Bot struct {
 	ID           string
 	SpaceID      string
+	SpaceName    string
 	UserID       string
 	Name         string
 	Description  string
@@ -133,8 +134,10 @@ type instructionVersion struct {
 }
 
 // Run visits every selected bot whose owner enabled the roamer and whose interval
-// elapsed, then optionally each Space's shared memory. One bot's failure is
-// logged and does not stop the pass.
+// elapsed, then optionally each Space's shared memory. A failed pass records its
+// targets and retries only those on the next check, with a bounded backoff; a
+// successful retry clears the failure. One bot's failure is logged and does not
+// stop the pass.
 func Run(ctx context.Context, logger *slog.Logger, database *db.DB, ring *contentcrypto.KeyRing, config Config) (Report, error) {
 	report := Report{Changes: []Change{}}
 	bots, err := listBots(ctx, database, config.OnlyBots)
@@ -162,22 +165,39 @@ func Run(ctx context.Context, logger *slog.Logger, database *db.DB, ring *conten
 			return report, err
 		}
 		setting, found := settings[owner]
-		if !config.Force && (!found || !due(setting, now)) {
+		run := mode(setting, now, config.Force)
+		if !config.Force && (!found || run == modeSkip) {
 			report.Skipped += len(byOwner[owner])
 			logger.Debug("memory.roamer.skip", "userId", owner, "reason", skipReason(found, setting, now))
 			continue
 		}
+
+		selected := byOwner[owner]
+		sharedSpaces := map[string]bool{}
+		retryAttempt := 1
+		if run == modeRetry {
+			failedBots, failedSpaces := retryTargets(setting.LastFailures)
+			selected = selectFailedBots(byOwner[owner], failedBots)
+			sharedSpaces = failedSpaces
+			retryAttempt = setting.RetryAttempt + 1
+			logger.Info("memory.roamer.retry", "userId", owner, "attempt", retryAttempt,
+				"bots", len(selected), "shared", len(sharedSpaces))
+		} else {
+			for _, bot := range byOwner[owner] {
+				sharedSpaces[bot.SpaceID] = true
+			}
+		}
+
 		ownerChanges := 0
-		ownerFailures := 0
 		ownerModel := ""
-		ownerSpaces := map[string]Bot{}
-		for _, bot := range byOwner[owner] {
+		failures := []Failure{}
+		for _, bot := range selected {
 			if err := ctx.Err(); err != nil {
 				return report, err
 			}
 			clients, err := config.ClientsFor(ctx, bot)
 			if err != nil {
-				ownerFailures++
+				failures = append(failures, botFailure(bot, err))
 				report.Failures++
 				logger.Error("memory.roamer.model_unavailable", "botId", bot.ID, "error", err.Error())
 				continue
@@ -190,15 +210,12 @@ func Run(ctx context.Context, logger *slog.Logger, database *db.DB, ring *conten
 				ownerModel = model
 			}
 			if err != nil {
-				ownerFailures++
+				failures = append(failures, botFailure(bot, err))
 				report.Failures++
 				logger.Error("memory.roamer.bot_failed", "botId", bot.ID, "error", err.Error())
 			} else {
 				ownerChanges += len(changes)
 				report.Changes = append(report.Changes, changes...)
-			}
-			if _, seen := ownerSpaces[bot.SpaceID]; !seen {
-				ownerSpaces[bot.SpaceID] = bot
 			}
 			if err := wait(ctx, config.Delay); err != nil {
 				return report, err
@@ -206,13 +223,18 @@ func Run(ctx context.Context, logger *slog.Logger, database *db.DB, ring *conten
 		}
 
 		if config.IncludeShared {
-			for _, bot := range ownerSpaces {
+			visited := map[string]bool{}
+			for _, bot := range byOwner[owner] {
+				if !sharedSpaces[bot.SpaceID] || visited[bot.SpaceID] {
+					continue
+				}
+				visited[bot.SpaceID] = true
 				if err := ctx.Err(); err != nil {
 					return report, err
 				}
 				clients, err := config.ClientsFor(ctx, bot)
 				if err != nil {
-					ownerFailures++
+					failures = append(failures, sharedFailure(bot, err))
 					report.Failures++
 					logger.Error("memory.roamer.model_unavailable", "spaceId", bot.SpaceID, "error", err.Error())
 					continue
@@ -225,7 +247,7 @@ func Run(ctx context.Context, logger *slog.Logger, database *db.DB, ring *conten
 					ownerModel = model
 				}
 				if err != nil {
-					ownerFailures++
+					failures = append(failures, sharedFailure(bot, err))
 					report.Failures++
 					logger.Error("memory.roamer.shared_failed", "spaceId", bot.SpaceID, "error", err.Error())
 				} else {
@@ -238,12 +260,18 @@ func Run(ctx context.Context, logger *slog.Logger, database *db.DB, ring *conten
 			}
 		}
 
-		if !config.DryRun {
-			failure := ""
-			if ownerFailures > 0 {
-				failure = fmt.Sprintf("%d bot(s) failed", ownerFailures)
+		var retryAt *time.Time
+		attempt := 0
+		if len(failures) > 0 {
+			attempt = retryAttempt
+			if attempt <= maxRetryAttempts {
+				next := now.Add(retryDelay(attempt))
+				retryAt = &next
 			}
-			if err := recordRun(ctx, database, owner, ownerChanges, ownerModel, failure); err != nil {
+		}
+		if !config.DryRun {
+			if err := recordRun(ctx, database, owner, ownerChanges, ownerModel,
+				failures, retryAt, attempt); err != nil {
 				return report, err
 			}
 		}
@@ -252,21 +280,39 @@ func Run(ctx context.Context, logger *slog.Logger, database *db.DB, ring *conten
 	return report, nil
 }
 
-func skipReason(found bool, setting Settings, now time.Time) string {
-	if !found || !setting.Enabled {
-		return "disabled"
+func selectFailedBots(bots []Bot, failed map[string]bool) []Bot {
+	selected := make([]Bot, 0, len(failed))
+	for _, bot := range bots {
+		if failed[bot.ID] {
+			selected = append(selected, bot)
+		}
 	}
-	if setting.LastRunAt == nil {
-		return "due"
+	return selected
+}
+
+func botFailure(bot Bot, err error) Failure {
+	return Failure{Kind: "bot", ID: bot.ID, Name: bot.Name, Error: failureText(err)}
+}
+
+func sharedFailure(bot Bot, err error) Failure {
+	name := bot.SpaceName
+	if name == "" {
+		name = "Shared memory"
 	}
-	interval := time.Duration(setting.IntervalMinutes) * time.Minute
-	if interval <= 0 {
-		interval = 6 * time.Hour
+	return Failure{Kind: "shared", ID: bot.SpaceID, Name: name, Error: failureText(err)}
+}
+
+func failureText(err error) string {
+	text := strings.TrimSpace(err.Error())
+	if text == "" {
+		return "Unknown error"
 	}
-	if now.Sub(*setting.LastRunAt) < interval {
-		return "not-due"
+	const limit = 300
+	runes := []rune(text)
+	if len(runes) > limit {
+		return string(runes[:limit])
 	}
-	return "due"
+	return text
 }
 
 func wait(ctx context.Context, delay time.Duration) error {
@@ -290,9 +336,11 @@ func listBots(ctx context.Context, database *db.DB, only []string) ([]Bot, error
 	}
 	var bots []Bot
 	err := database.System(ctx, "memory roamer lists bots", func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT b.id, b."spaceId", b."userId", b.name, b.description,
-				b.instructions, COALESCE(t.id, '')
-			FROM bots b LEFT JOIN threads t ON t."botId" = b.id
+		rows, err := tx.Query(ctx, `SELECT b.id, b."spaceId", COALESCE(s.name, ''), b."userId",
+				b.name, b.description, b.instructions, COALESCE(t.id, '')
+			FROM bots b
+			LEFT JOIN threads t ON t."botId" = b.id
+			LEFT JOIN spaces s ON s.id = b."spaceId"
 			WHERE b."archivedAt" IS NULL ORDER BY b."createdAt"`)
 		if err != nil {
 			return err
@@ -300,8 +348,8 @@ func listBots(ctx context.Context, database *db.DB, only []string) ([]Bot, error
 		defer rows.Close()
 		for rows.Next() {
 			var bot Bot
-			if err := rows.Scan(&bot.ID, &bot.SpaceID, &bot.UserID, &bot.Name, &bot.Description,
-				&bot.Instructions, &bot.ThreadID); err != nil {
+			if err := rows.Scan(&bot.ID, &bot.SpaceID, &bot.SpaceName, &bot.UserID, &bot.Name,
+				&bot.Description, &bot.Instructions, &bot.ThreadID); err != nil {
 				return err
 			}
 			if len(selected) == 0 || selected[bot.ID] {

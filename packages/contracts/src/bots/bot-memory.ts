@@ -50,6 +50,17 @@ export type MemoryPromptBudget = z.infer<typeof MemoryPromptBudgetSchema>;
 /** The memory roamer's default interval, in minutes. */
 export const MEMORY_ROAMER_DEFAULT_INTERVAL = 360;
 
+/** One bot or Space that did not finish the last roamer pass. */
+export const MemoryRoamerFailureSchema = z.object({
+  kind: z.enum(["bot", "shared"]),
+  id: z.string(),
+  name: z.string(),
+  error: z.string(),
+});
+export type MemoryRoamerFailure = z.infer<typeof MemoryRoamerFailureSchema>;
+
+export const MemoryRoamerFailuresSchema = z.array(MemoryRoamerFailureSchema).max(50);
+
 /** What the background roamer is doing, and how its last pass went. */
 export const MemoryRoamerSettingsSchema = z.object({
   enabled: z.boolean(),
@@ -58,6 +69,9 @@ export const MemoryRoamerSettingsSchema = z.object({
   lastError: z.string().nullable(),
   lastChanges: z.number().int().nonnegative(),
   lastModel: z.string().nullable(),
+  lastFailures: MemoryRoamerFailuresSchema,
+  retryAt: z.string().nullable(),
+  retryAttempt: z.number().int().nonnegative(),
 });
 export type MemoryRoamerSettings = z.infer<typeof MemoryRoamerSettingsSchema>;
 

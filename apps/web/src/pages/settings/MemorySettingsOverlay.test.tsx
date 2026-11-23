@@ -77,6 +77,9 @@ beforeEach(() => {
     lastError: null,
     lastChanges: 0,
     lastModel: null,
+    lastFailures: [],
+    retryAt: null,
+    retryAttempt: 0,
   });
   host = document.createElement("div");
   document.body.append(host);
@@ -178,6 +181,26 @@ it("connects the provider picked from the ones the server describes", async () =
   expect(onConfigChange).toHaveBeenCalledWith(saved);
   expect(onBusyChange.mock.calls.map(([busy]) => busy)).toContain(true);
   expect(onBusyChange).toHaveBeenLastCalledWith(false);
+});
+
+it("shows which targets failed and when the next retry runs", async () => {
+  memory.roamer.mockResolvedValue({
+    enabled: true,
+    intervalMinutes: 360,
+    lastRunAt: "2026-11-22T23:30:32.920Z",
+    lastError: "1 bot failed",
+    lastChanges: 0,
+    lastModel: null,
+    lastFailures: [{ kind: "bot", id: "bot-1", name: "Crumb", error: "model HTTP 429" }],
+    retryAt: "2026-11-22T23:45:32.920Z",
+    retryAttempt: 1,
+  });
+  await render(null);
+  expect(host.textContent).toContain("Last run failed: 1 bot failed");
+  expect(host.textContent).toContain("Details");
+  expect(host.textContent).toContain("Crumb");
+  expect(host.textContent).toContain("model HTTP 429");
+  expect(host.textContent).toContain("attempt 1");
 });
 
 it("shows why a connection failed, and keeps the form", async () => {

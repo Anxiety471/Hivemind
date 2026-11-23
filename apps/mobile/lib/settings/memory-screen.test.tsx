@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import type { MemoryRoamerSettings } from "@rakazo/contracts";
 import { deferred, flush } from "@rakazo/core/test-async";
 import type { ReactNode } from "react";
 import { act, useEffect } from "react";
@@ -34,7 +35,21 @@ vi.mock("react-native-safe-area-context", () => ({
   SafeAreaView: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
 }));
 vi.mock("../../components/settings/settings-group", () => ({
-  SettingsGroup: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+  SettingsGroup: ({
+    label,
+    children,
+    footer,
+  }: {
+    label?: string;
+    children?: ReactNode;
+    footer?: string;
+  }) => (
+    <div>
+      {label}
+      {children}
+      {footer}
+    </div>
+  ),
   SettingsRow: ({ title, onPress }: { title: string; onPress?: () => void }) => (
     <button type="button" aria-label={title} onClick={onPress}>
       {title}
@@ -112,18 +127,21 @@ async function render() {
   await settle();
 }
 
-const roamerSettings = {
+const roamerSettings: MemoryRoamerSettings = {
   enabled: false,
   intervalMinutes: 360,
   lastRunAt: null,
   lastError: null,
   lastChanges: 0,
   lastModel: null,
+  lastFailures: [],
+  retryAt: null,
+  retryAttempt: 0,
 };
 
-function mockRpc(list: () => Promise<unknown>) {
+function mockRpc(list: () => Promise<unknown>, roamer = roamerSettings) {
   mocks.rpc.mockImplementation((method: string) =>
-    method === "memory/roamer" ? Promise.resolve(roamerSettings) : list(),
+    method === "memory/roamer" ? Promise.resolve(roamer) : list(),
   );
 }
 
@@ -141,6 +159,23 @@ it("lists the space's shared notes and opens one in the editor", async () => {
     container.querySelector<HTMLButtonElement>('[aria-label="team.md"]')?.click(),
   );
   expect(mocks.push).toHaveBeenCalledWith({ pathname: "/memory-note", params: { id: "team-1" } });
+});
+
+it("shows which targets failed and when the next retry runs", async () => {
+  mockRpc(() => Promise.resolve([]), {
+    ...roamerSettings,
+    enabled: true,
+    lastRunAt: "2026-11-22T23:30:32.920Z",
+    lastError: "1 bot failed",
+    lastFailures: [{ kind: "bot" as const, id: "bot-1", name: "Crumb", error: "model HTTP 429" }],
+    retryAt: "2026-11-22T23:45:32.920Z",
+    retryAttempt: 1,
+  });
+  await render();
+  expect(container.textContent).toContain("Last run failed: 1 bot failed");
+  expect(container.textContent).toContain("Last run failures");
+  expect(container.textContent).toContain("Crumb");
+  expect(container.textContent).toContain("attempt 1");
 });
 
 it("says when nothing is remembered, and retries a failed load", async () => {

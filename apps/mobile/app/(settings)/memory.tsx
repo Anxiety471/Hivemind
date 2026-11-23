@@ -144,6 +144,24 @@ export default function MemoryScreen() {
             {roamer.lastChanges === 1 ? t`1 change` : t`${roamer.lastChanges} changes`}
           </SettingsFooter>
         ) : null}
+        {roamer?.lastFailures?.length ? (
+          <SettingsGroup label={t`Last run failures`}>
+            {roamer?.lastFailures?.map((failure) => (
+              <SettingsRow
+                key={`${failure.kind}:${failure.id}`}
+                title={
+                  failure.kind === "shared" ? t`Shared memory (${failure.name})` : failure.name
+                }
+                detail={failure.error}
+              />
+            ))}
+          </SettingsGroup>
+        ) : null}
+        {roamer?.retryAt ? (
+          <SettingsFooter>
+            {t`Retrying ${new Date(roamer.retryAt).toLocaleString()} (attempt ${roamer.retryAttempt})`}
+          </SettingsFooter>
+        ) : null}
         <SettingsFooter>{t`Minutes, 15 to 10,080.`}</SettingsFooter>
         {roamerChange.error ? (
           <SettingsFooter>

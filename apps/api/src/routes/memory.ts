@@ -9,9 +9,13 @@ import {
   readAgentMemory,
 } from "@rakazo/adapters";
 import type { MemoryRoamerSettings } from "@rakazo/contracts";
-import { isDeletableMemoryDocument, MEMORY_ROAMER_DEFAULT_INTERVAL } from "@rakazo/contracts";
+import {
+  isDeletableMemoryDocument,
+  MEMORY_ROAMER_DEFAULT_INTERVAL,
+  MemoryRoamerFailuresSchema,
+} from "@rakazo/contracts";
 import { ClientError } from "@rakazo/core";
-import { findSpaceMemoryConfig, IsolationError } from "@rakazo/db";
+import { findSpaceMemoryConfig, IsolationError, readJsonColumn } from "@rakazo/db";
 import {
   disconnectMemoryProvider,
   persistMemoryProviderConfig,
@@ -23,12 +27,16 @@ import type { RouterContext } from "./context.js";
 
 function memoryRoamerDto(
   row: {
+    userId: string;
     enabled: boolean;
     intervalMinutes: number;
     lastRunAt: Date | null;
     lastError: string | null;
     lastChanges: number;
     lastModel: string | null;
+    lastFailures: unknown;
+    retryAt: Date | null;
+    retryAttempt: number;
   } | null,
 ): MemoryRoamerSettings {
   return {
@@ -38,6 +46,16 @@ function memoryRoamerDto(
     lastError: row?.lastError ?? null,
     lastChanges: row?.lastChanges ?? 0,
     lastModel: row?.lastModel ?? null,
+    lastFailures: row?.lastFailures
+      ? readJsonColumn(
+          MemoryRoamerFailuresSchema,
+          row.lastFailures,
+          { table: "memory_roamer_settings", column: "lastFailures", id: row.userId },
+          { fallback: [] },
+        )
+      : [],
+    retryAt: row?.retryAt?.toISOString() ?? null,
+    retryAttempt: row?.retryAttempt ?? 0,
   };
 }
 

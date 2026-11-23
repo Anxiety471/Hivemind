@@ -264,7 +264,9 @@ export function MemorySettingsOverlay({
                 {intervalError}
               </p>
             ) : null}
-            <p className="mt-3 text-body-sm text-muted-foreground">
+            <p
+              className={`mt-3 text-body-sm ${roamer?.lastError ? "text-destructive" : "text-muted-foreground"}`}
+            >
               {roamer === undefined
                 ? t`Loading…`
                 : roamer.lastError
@@ -278,6 +280,30 @@ export function MemorySettingsOverlay({
             {roamer?.lastRunAt && !roamer.lastError ? (
               <p className="mt-1 text-body-sm text-muted-foreground">
                 {roamer.lastChanges === 1 ? t`1 change` : t`${roamer.lastChanges} changes`}
+              </p>
+            ) : null}
+            {roamer?.lastFailures?.length ? (
+              <details className="mt-2 text-body-sm">
+                <summary className="cursor-pointer text-muted-foreground">
+                  <Trans>Details</Trans>
+                </summary>
+                <ul className="mt-2 max-h-52 space-y-1.5 overflow-y-auto">
+                  {roamer?.lastFailures?.map((failure) => (
+                    <li key={`${failure.kind}:${failure.id}`}>
+                      <span className="font-medium text-foreground">
+                        {failure.kind === "shared"
+                          ? t`Shared memory (${failure.name})`
+                          : failure.name}
+                      </span>
+                      <span className="text-muted-foreground">: {failure.error}</span>
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            ) : null}
+            {roamer?.retryAt ? (
+              <p className="mt-2 text-body-sm text-muted-foreground">
+                {t`Retrying ${new Date(roamer.retryAt).toLocaleString()} (attempt ${roamer.retryAttempt})`}
               </p>
             ) : null}
             {roamerChange.error ? (
