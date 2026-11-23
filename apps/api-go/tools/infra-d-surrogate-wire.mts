@@ -376,7 +376,7 @@ async function exactEcho(
   cases.push({
     procedure,
     kind: label,
-    input,
+    input: portable(input),
     field,
     typescript: tsValue ?? null,
     go: goValue ?? null,
@@ -457,7 +457,7 @@ async function policyStorage(space: string, label: string) {
   cases.push({
     procedure: "externalConversations.updatePolicy",
     kind: label,
-    input: JSON.parse(JSON.stringify(input)),
+    input: portable(input),
     typescript: tsRow,
     go: goRow,
     equal,
@@ -465,6 +465,17 @@ async function policyStorage(space: string, label: string) {
   });
   void tsText;
   return equal;
+}
+
+function portable(value: unknown): unknown {
+  return JSON.parse(
+    JSON.stringify(value)
+      .replaceAll(ids.space2, "__space2__")
+      .replaceAll(ids.orgId, "__org__")
+      .replaceAll(ids.pageId, "__page__")
+      .replaceAll(ids.botId, "__bot__")
+      .replaceAll(ids.externalId, "__external__"),
+  );
 }
 
 async function liveRename(

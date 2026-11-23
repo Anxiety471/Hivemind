@@ -394,7 +394,7 @@
       "procedure": "externalConversations.updatePolicy",
       "kind": "reviewer-policy-keys-store",
       "input": {
-        "externalConversationId": "sd-x-1795390795150-1281146",
+        "externalConversationId": "__external__",
         "teamChatAmbientEnabled": true,
         "teamChatRules": "stored\ud800rule",
         "automatedSenderPolicies": {
@@ -476,7 +476,7 @@
       "procedure": "spaces.rename",
       "kind": "literal-marker-code-units",
       "input": {
-        "spaceId": "sd-s2-1795390795150-1281146",
+        "spaceId": "__space2__",
         "name": "mﰀﰁz"
       },
       "field": "name",
