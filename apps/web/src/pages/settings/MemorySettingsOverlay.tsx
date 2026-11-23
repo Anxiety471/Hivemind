@@ -1,11 +1,12 @@
 import { Trans, useLingui } from "@lingui/react/macro";
-import type { SpaceMemoryConfig } from "@rakazo/contracts";
+import type { MemoryRoamerTarget, SpaceMemoryConfig } from "@rakazo/contracts";
 import {
   Button,
   Dialog,
   DialogClose,
   DialogContent,
   DialogTitle,
+  Disclosure,
   Field,
   FieldLabel,
   Input,
@@ -26,6 +27,16 @@ import { errorCode, errorText } from "../../lib/query/user-error";
 import { SpaceMemorySection } from "../space/KnowledgeSection";
 
 type MemoryScope = "isolated" | "shared";
+
+function shortWhen(value: string): string {
+  const date = new Date(value);
+  const time: Intl.DateTimeFormatOptions = { hour: "numeric", minute: "2-digit" };
+  const sameDay = date.toDateString() === new Date().toDateString();
+  return date.toLocaleString(
+    undefined,
+    sameDay ? time : { month: "short", day: "numeric", ...time },
+  );
+}
 
 type Change =
   | { kind: "connect"; provider: string; draft: ProviderSettingsDraft; scope: MemoryScope }
@@ -123,6 +134,10 @@ export function MemorySettingsOverlay({
   });
   const roamerQuery = useQuery(queries.memory.roamer.queryOptions());
   const roamer = roamerQuery.data;
+  const failedTargets = roamer?.lastReport?.filter((target) => target.status === "failed") ?? [];
+  const okTargets = roamer?.lastReport?.filter((target) => target.status === "ok") ?? [];
+  const targetName = (target: MemoryRoamerTarget) =>
+    target.kind === "shared" ? t`Shared memory (${target.name})` : target.name;
   const roamerChange = useSave({
     save: async (input: { enabled: boolean; intervalMinutes?: number }, rpc) =>
       rpc.memory.setRoamer(input),
@@ -264,67 +279,36 @@ export function MemorySettingsOverlay({
                 {intervalError}
               </p>
             ) : null}
-            <p
-              className={`mt-3 text-body-sm ${roamer?.lastError ? "text-destructive" : "text-muted-foreground"}`}
-            >
-              {roamer === undefined
-                ? t`Loading…`
-                : roamer.lastError
-                  ? t`Last run failed: ${roamer.lastError}`
-                  : roamer.lastRunAt
-                    ? t`Last run ${new Date(roamer.lastRunAt).toLocaleString()}`
-                    : roamer.enabled
-                      ? t`Waiting for the first run`
-                      : t`Off`}
-            </p>
-            {roamer?.lastRunAt && !roamer.lastError ? (
-              <p className="mt-1 text-body-sm text-muted-foreground">
-                {roamer.lastChanges === 1 ? t`1 change` : t`${roamer.lastChanges} changes`}
+            <div className="mt-4 border-t border-border pt-3">
+              <p
+                className={`text-body-sm ${roamer?.lastError ? "text-destructive" : "text-muted-foreground"}`}
+              >
+                {roamer === undefined
+                  ? t`Loading…`
+                  : roamer.lastError
+                    ? t`Last run failed`
+                    : roamer.lastRunAt
+                      ? t`Last run checked ${shortWhen(roamer.lastRunAt)}`
+                      : roamer.enabled
+                        ? t`Waiting for the first run`
+                        : t`Off`}
               </p>
-            ) : null}
-            {roamer?.lastReport?.length ? (
-              <details className="mt-2 text-body-sm" open={Boolean(roamer.lastError)}>
-                <summary className="cursor-pointer text-muted-foreground">
-                  <Trans>Details</Trans>
-                </summary>
-                <ul className="mt-2 max-h-72 space-y-2 overflow-y-auto">
-                  {roamer.lastReport.map((target) => (
+              {roamer?.lastRunAt && !roamer.lastError && roamer.lastChanges > 0 ? (
+                <p className="mt-1 text-body-sm text-muted-foreground">
+                  {roamer.lastChanges === 1 ? t`1 change` : t`${roamer.lastChanges} changes`}
+                </p>
+              ) : null}
+              {failedTargets.length ? (
+                <ul className="mt-2 space-y-1.5 text-body-sm">
+                  {failedTargets.map((target) => (
                     <li key={`${target.kind}:${target.id}`}>
-                      <div className="flex items-baseline justify-between gap-3">
-                        <span className="font-medium text-foreground">
-                          {target.kind === "shared"
-                            ? t`Shared memory (${target.name})`
-                            : target.name}
-                        </span>
-                        <span className="shrink-0 text-caption text-muted-foreground">
-                          {new Date(target.checkedAt).toLocaleTimeString()}
-                        </span>
-                      </div>
-                      {target.status === "failed" ? (
-                        <p className="text-destructive">{target.error}</p>
-                      ) : target.changes.length === 0 ? (
-                        <p className="text-muted-foreground">
-                          <Trans>No changes</Trans>
-                        </p>
-                      ) : (
-                        <ul className="mt-0.5 text-muted-foreground">
-                          {target.changes.map((change) => (
-                            <li key={`${change.scope}:${change.path}`}>
-                              {change.path}: {change.beforeBytes} → {change.afterBytes} bytes
-                            </li>
-                          ))}
-                        </ul>
-                      )}
+                      <span className="font-medium text-foreground">{targetName(target)}</span>
+                      <span className="text-destructive">: {target.error ?? t`Failed`}</span>
                     </li>
                   ))}
                 </ul>
-              </details>
-            ) : roamer?.lastFailures?.length ? (
-              <details className="mt-2 text-body-sm">
-                <summary className="cursor-pointer text-muted-foreground">
-                  <Trans>Details</Trans>
-                </summary>
-                <ul className="mt-2 max-h-52 space-y-1.5 overflow-y-auto">
+              ) : !roamer?.lastReport?.length && roamer?.lastFailures?.length ? (
+                <ul className="mt-2 space-y-1.5 text-body-sm">
                   {roamer.lastFailures.map((failure) => (
                     <li key={`${failure.kind}:${failure.id}`}>
                       <span className="font-medium text-foreground">
@@ -332,17 +316,49 @@ export function MemorySettingsOverlay({
                           ? t`Shared memory (${failure.name})`
                           : failure.name}
                       </span>
-                      <span className="text-muted-foreground">: {failure.error}</span>
+                      <span className="text-destructive">: {failure.error}</span>
                     </li>
                   ))}
                 </ul>
-              </details>
-            ) : null}
-            {roamer?.retryAt ? (
-              <p className="mt-2 text-body-sm text-muted-foreground">
-                {t`Retrying ${new Date(roamer.retryAt).toLocaleString()} (attempt ${roamer.retryAttempt})`}
-              </p>
-            ) : null}
+              ) : null}
+              {roamer?.retryAt ? (
+                <p className="mt-2 text-body-sm text-muted-foreground">
+                  {t`Retrying at ${shortWhen(roamer.retryAt)} (attempt ${roamer.retryAttempt})`}
+                </p>
+              ) : null}
+              {okTargets.length ? (
+                <Disclosure
+                  className="mt-3"
+                  summary={
+                    failedTargets.length
+                      ? t`Show ${okTargets.length} successful results`
+                      : t`Show all ${okTargets.length} results`
+                  }
+                  summaryClassName="text-body-sm text-muted-foreground"
+                >
+                  <ul className="mt-2 divide-y divide-border rounded-lg border border-border">
+                    {okTargets.map((target) => (
+                      <li
+                        key={`${target.kind}:${target.id}`}
+                        className="flex items-start justify-between gap-4 px-3 py-2"
+                      >
+                        <span className="text-body-sm text-foreground">{targetName(target)}</span>
+                        <span className="max-w-[55%] text-end text-body-sm text-muted-foreground">
+                          {target.changes.length
+                            ? target.changes
+                                .map(
+                                  (change) =>
+                                    t`${change.path}: ${change.beforeBytes} → ${change.afterBytes} bytes`,
+                                )
+                                .join("; ")
+                            : t`No changes`}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </Disclosure>
+              ) : null}
+            </div>
             {roamerChange.error ? (
               <p role="alert" className="mt-2 text-body-sm text-destructive">
                 {errorText(roamerChange.error, t`Could not save the memory roamer`)}

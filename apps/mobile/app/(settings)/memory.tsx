@@ -24,6 +24,16 @@ import { useSideInsets } from "../../lib/layout/side-insets";
 import { native, useThemedStyles } from "../../lib/native/native";
 import { queryClient, rpcQuery, useSave } from "../../lib/query/query";
 
+function shortWhen(value: string): string {
+  const date = new Date(value);
+  const time: Intl.DateTimeFormatOptions = { hour: "numeric", minute: "2-digit" };
+  const sameDay = date.toDateString() === new Date().toDateString();
+  return date.toLocaleString(
+    undefined,
+    sameDay ? time : { month: "short", day: "numeric", ...time },
+  );
+}
+
 /** The notes every bot in this space shares. A bot's own notes live in its chat settings. */
 export default function MemoryScreen() {
   const router = useRouter();
@@ -36,6 +46,8 @@ export default function MemoryScreen() {
   const error = failure ? errorText(failure, t`Could not load memory`) : null;
   const roamerRead = rpcQuery("memory/roamer");
   const { data: roamer, error: roamerFailure } = useQuery(roamerRead, queryClient);
+  const failedTargets = roamer?.lastReport?.filter((target) => target.status === "failed") ?? [];
+  const okTargets = roamer?.lastReport?.filter((target) => target.status === "ok") ?? [];
   const roamerChange = useSave({
     save: async (input: { enabled: boolean; intervalMinutes?: number }, send) =>
       send("memory/setRoamer", input),
@@ -66,9 +78,9 @@ export default function MemoryScreen() {
       ? errorText(roamerFailure, t`Could not load the memory roamer`)
       : t`Loading…`
     : roamer.lastError
-      ? t`Last run failed: ${roamer.lastError}`
+      ? t`Last run failed`
       : roamer.lastRunAt
-        ? t`Last run ${new Date(roamer.lastRunAt).toLocaleString()}`
+        ? t`Last run checked ${shortWhen(roamer.lastRunAt)}`
         : roamer.enabled
           ? t`Waiting for the first run`
           : t`Off`;
@@ -144,27 +156,32 @@ export default function MemoryScreen() {
             {roamer.lastChanges === 1 ? t`1 change` : t`${roamer.lastChanges} changes`}
           </SettingsFooter>
         ) : null}
-        {roamer?.lastReport?.length ? (
-          <SettingsGroup label={t`Last run details`}>
-            {roamer.lastReport.map((target) => (
+        {failedTargets.length ? (
+          <SettingsGroup label={t`Failed`}>
+            {failedTargets.map((target) => (
               <SettingsRow
                 key={`${target.kind}:${target.id}`}
-                title={
-                  target.kind === "shared"
-                    ? t`Shared memory (${target.name})`
-                    : target.name
-                }
+                title={target.kind === "shared" ? t`Shared memory (${target.name})` : target.name}
+                detail={target.error ?? t`Failed`}
+              />
+            ))}
+          </SettingsGroup>
+        ) : null}
+        {okTargets.length ? (
+          <SettingsGroup label={t`Completed`}>
+            {okTargets.map((target) => (
+              <SettingsRow
+                key={`${target.kind}:${target.id}`}
+                title={target.kind === "shared" ? t`Shared memory (${target.name})` : target.name}
                 detail={
-                  target.status === "failed"
-                    ? (target.error ?? t`Failed`)
-                    : target.changes.length
-                      ? target.changes.map((change) => change.path).join(", ")
-                      : t`No changes`
+                  target.changes.length
+                    ? target.changes.map((change) => change.path).join(", ")
+                    : t`No changes`
                 }
               />
             ))}
           </SettingsGroup>
-        ) : roamer?.lastFailures?.length ? (
+        ) : !roamer?.lastReport?.length && roamer?.lastFailures?.length ? (
           <SettingsGroup label={t`Last run failures`}>
             {roamer.lastFailures.map((failure) => (
               <SettingsRow

@@ -206,7 +206,7 @@ it("shows every bot's outcome and changes", async () => {
     ],
   });
   await render();
-  expect(container.textContent).toContain("Last run details");
+  expect(container.textContent).toContain("Completed");
   expect(container.textContent).toContain("Crumb");
   expect(container.textContent).toContain("MEMORY.md");
   expect(container.textContent).toContain("Hatcha");
@@ -224,7 +224,7 @@ it("shows which targets failed and when the next retry runs", async () => {
     retryAttempt: 1,
   });
   await render();
-  expect(container.textContent).toContain("Last run failed: 1 bot failed");
+  expect(container.textContent).toContain("Last run failed");
   expect(container.textContent).toContain("Last run failures");
   expect(container.textContent).toContain("Crumb");
   expect(container.textContent).toContain("attempt 1");

@@ -184,12 +184,12 @@ it("connects the provider picked from the ones the server describes", async () =
   expect(onBusyChange).toHaveBeenLastCalledWith(false);
 });
 
-it("shows every bot's outcome, changes, and check time", async () => {
+it("shows every bot's outcome and changes", async () => {
   memory.roamer.mockResolvedValue({
     enabled: true,
     intervalMinutes: 360,
     lastRunAt: "2026-11-22T23:30:32.920Z",
-    lastError: null,
+    lastError: "1 bot failed",
     lastChanges: 1,
     lastModel: "deepseek-v4.1-flash",
     lastFailures: [],
@@ -234,6 +234,8 @@ it("shows every bot's outcome, changes, and check time", async () => {
     retryAttempt: 0,
   });
   await render(null);
+  expect(host.textContent).toContain("Last run failed");
+  expect(host.textContent).toContain("Show 2 successful results");
   expect(host.textContent).toContain("Crumb");
   expect(host.textContent).toContain("MEMORY.md: 100 → 90 bytes");
   expect(host.textContent).toContain("Hatcha");
@@ -255,8 +257,7 @@ it("shows which targets failed and when the next retry runs", async () => {
     retryAttempt: 1,
   });
   await render(null);
-  expect(host.textContent).toContain("Last run failed: 1 bot failed");
-  expect(host.textContent).toContain("Details");
+  expect(host.textContent).toContain("Last run failed");
   expect(host.textContent).toContain("Crumb");
   expect(host.textContent).toContain("model HTTP 429");
   expect(host.textContent).toContain("attempt 1");
