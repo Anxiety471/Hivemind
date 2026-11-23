@@ -108,8 +108,9 @@ export function workspaceCwd(
   return workspacePath(root, cwd);
 }
 
-export function teamBotWorkspaceDirectory(botId: string): string {
-  return path.posix.join("bots", normalizeWorkspacePath(botId));
+/** True when a normalized workspace path targets the retired per-bot `bots/<id>` subtree. */
+export function isLegacyBotSubtreePath(normalizedPath: string): boolean {
+  return normalizedPath === "bots" || normalizedPath.startsWith("bots/");
 }
 
 export function resolveBotWorkspacePath(

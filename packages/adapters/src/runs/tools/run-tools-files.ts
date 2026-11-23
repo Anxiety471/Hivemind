@@ -7,7 +7,10 @@ import {
 } from "@rakazo/core";
 import type { Artifact, Prisma } from "@rakazo/db";
 import { bestEffort, getLogger } from "@rakazo/logging";
-import { resolveBotWorkspacePath } from "../../computers/screens/computer-support.js";
+import {
+  isLegacyBotSubtreePath,
+  resolveBotWorkspacePath,
+} from "../../computers/screens/computer-support.js";
 import { generateMediaFromTool } from "../../media/media-generation-tools.js";
 import { mediaDelivery, scheduleMediaPoll } from "../../media/media-video-poll.js";
 import {
@@ -122,12 +125,20 @@ export const fileTools: ToolHandlers = {
         return call.finish({ error: desktopProtectionGuardMessage(activateRefusal, filePath) });
       }
     }
+    const storedPath = resolveBotWorkspacePath(ctx.computer.mode, bot.id, filePath);
+    if (ctx.computer.mode === "team" && isLegacyBotSubtreePath(storedPath)) {
+      return call.finish({
+        error:
+          "Per-bot bots/<id>/ directories are retired on the Team Computer. Default to Space Drive (drive_save or attach_file) for deliverables and artifacts, or write shared workspace files directly under the shared root.",
+        path: filePath,
+      });
+    }
     const content = new TextEncoder().encode(textContentArg(args.content, ""));
     ctx.computer.checkpoint.markDirty();
     try {
       await deps.sandbox.writeFile(
         await ctx.computer.get("tool", name),
-        { path: resolveBotWorkspacePath(ctx.computer.mode, bot.id, filePath), content },
+        { path: storedPath, content },
         context,
       );
     } catch (error) {
@@ -171,6 +182,7 @@ export const fileTools: ToolHandlers = {
           name: typeof call.args.name === "string" ? call.args.name : undefined,
           description:
             typeof call.args.description === "string" ? call.args.description : undefined,
+          slug: typeof call.args.slug === "string" ? call.args.slug : undefined,
         },
         // The message commits with the artifact row, so a post that fails leaves no artifact
         // the user was never shown.
@@ -238,7 +250,7 @@ export async function saveWorkspaceFile(
   filePath: string,
   bytes: Uint8Array,
   owner: { botId: string; groupId?: string },
-  meta: { name?: string; description?: string } = {},
+  meta: { name?: string; description?: string; slug?: string } = {},
   onAttached?: (tx: Prisma.TransactionClient, artifact: Artifact) => Promise<void>,
 ): Promise<{ artifactId: string; block: AttachmentBlock }> {
   const { deps, run } = ctx;
@@ -261,6 +273,7 @@ export async function saveWorkspaceFile(
       operationId: call.executionId,
       name: meta.name,
       description: meta.description,
+      slug: meta.slug,
       onAttached,
     },
   );

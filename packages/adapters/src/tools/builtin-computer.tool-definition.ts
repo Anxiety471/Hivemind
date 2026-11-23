@@ -1,5 +1,5 @@
 import type { ConnectorTool } from "@rakazo/adapter-kit";
-import { PURCHASE_CARD_FIELDS } from "@rakazo/contracts";
+import { ARTIFACT_SLUG_MAX_LENGTH, PURCHASE_CARD_FIELDS } from "@rakazo/contracts";
 import { BROWSER_ACT_KINDS } from "../browser/browser-tools.js";
 
 export const READ_FILE_MAX_BYTES = 250_000;
@@ -195,7 +195,7 @@ export const computerTools: ConnectorTool[] = [
   {
     name: "write_file",
     description:
-      "Write a UTF-8 file into the workspace. On a Team Computer, files are placed in the shared Space workspace accessible to every bot.",
+      "Write a UTF-8 file into the workspace (for code, scripts, or temporary working files). On a Team Computer, paths start at the shared Space workspace root and per-bot bots/<id>/ subtrees are disallowed. Default to Space Drive via drive_save or attach_file for durable documents, reports, media, and handoffs.",
     inputSchema: {
       type: "object",
       properties: {
@@ -208,13 +208,19 @@ export const computerTools: ConnectorTool[] = [
   {
     name: "attach_file",
     description:
-      "Attach a workspace file from this bot's home to the chat thread as an image or common file. The user sees it; you do not. The file stays in place; users can open it from the message and from the Artifacts tab. For a self-contained HTML page, document, or anything else meant to be viewed on its own — give it name and description: a title and a one-line summary. Skip them for an ordinary attachment like a log file or export. To UPDATE something you already made, call this again with the exact same name — it becomes a new version of that same artifact instead of a separate one; a different name always starts a new artifact.",
+      "Attach a workspace file to the chat thread and automatically save it into Space Drive (auto-organized into your bot's folder with a searchable slug and description). The user sees it; you do not. The file stays in place; users and every bot can open and search it in Space Drive (Files). For a self-contained HTML page, document, report, or anything meant to be viewed or reused — give it name, description, and optional lowercase kebab-case slug. To UPDATE something you already made, call this again with the exact same name — it becomes a new version of that same artifact instead of a separate one; a different name always starts a new artifact.",
     inputSchema: {
       type: "object",
       properties: {
         path: { type: "string" },
         name: { type: "string" },
         description: { type: "string" },
+        slug: {
+          type: "string",
+          maxLength: ARTIFACT_SLUG_MAX_LENGTH,
+          description:
+            "Optional lowercase kebab-case search slug; auto-generated from name when omitted.",
+        },
       },
       required: ["path"],
     },
@@ -222,7 +228,7 @@ export const computerTools: ConnectorTool[] = [
   {
     name: "shell",
     description:
-      "Run a command inside this bot's computer. cwd defaults to the bot's folder on a Team Computer and the workspace root on a Private Computer. Output can arrive while the command is still running; tell the user any one-time code or sign-in URL in that output. A command is stopped after a few minutes, so on Linux or macOS start longer work, such as a coding agent CLI, as its own statement `nohup <command> < /dev/null > <log> 2>&1 &`, never after `&&`, and read the log to follow it.",
+      "Run a command inside this bot's computer. cwd defaults to the shared Space workspace root on a Team Computer and the workspace root on a Private Computer. Never create or use per-bot bots/<id>/ subdirectories. Output can arrive while the command is still running; tell the user any one-time code or sign-in URL in that output. A command is stopped after a few minutes, so on Linux or macOS start longer work, such as a coding agent CLI, as its own statement `nohup <command> < /dev/null > <log> 2>&1 &`, never after `&&`, and read the log to follow it.",
     inputSchema: {
       type: "object",
       properties: {

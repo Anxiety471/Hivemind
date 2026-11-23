@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	driveOrganizerMaxTokens = 512
+	driveOrganizerMaxTokens = 2048
 	driveOrganizerTimeout   = 45 * time.Second
 )
 

@@ -104,3 +104,159 @@ describe("read_file with a suspended computer", () => {
     expect(get).toHaveBeenCalledOnce();
   });
 });
+
+describe("write_file and attach_file Space Drive defaults", () => {
+  it("rejects writing under per-bot bots/<id>/ subtrees on a team computer", async () => {
+    const writeFile = vi.fn();
+    const markDirty = vi.fn();
+    const get = vi.fn().mockResolvedValue({ id: "computer-1", kind: "docker" });
+    const finish = vi.fn((result: unknown) => result);
+    const ctx = {
+      bot: { id: "bot-1" },
+      run: { id: "run-1", spaceId: "space-1", userId: "user-1", trigger: "user" },
+      computer: {
+        mode: "team",
+        kind: "docker",
+        held: false,
+        lazy: {},
+        get,
+        checkpoint: { markDirty },
+      },
+      context: { signal: new AbortController().signal },
+      deps: { sandbox: { writeFile } },
+    } as unknown as RunContext;
+
+    for (const badPath of ["bots/bot-1/note.txt", "~/bots/bot-1/note.txt"]) {
+      const result = await fileTools.write_file!(ctx, {
+        name: "write_file",
+        args: { path: badPath, content: "hello" },
+        finish,
+      } as unknown as ToolCall);
+      expect(result).toMatchObject({
+        error: expect.stringContaining("Space Drive"),
+        path: badPath,
+      });
+    }
+    expect(markDirty).not.toHaveBeenCalled();
+    expect(get).not.toHaveBeenCalled();
+    expect(writeFile).not.toHaveBeenCalled();
+  });
+
+  it("allows writing under bots/ on a dedicated private computer", async () => {
+    const writeFile = vi.fn().mockResolvedValue(undefined);
+    const append = vi.fn().mockResolvedValue(undefined);
+    const markDirty = vi.fn();
+    const get = vi.fn().mockResolvedValue({ id: "computer-priv", kind: "docker" });
+    const finish = vi.fn((result: unknown) => result);
+    const ctx = {
+      bot: { id: "bot-x" },
+      runId: "run-1",
+      run: { id: "run-1", spaceId: "space-1", userId: "user-1", trigger: "user" },
+      thread: { id: "t-1", groupId: null },
+      computer: {
+        mode: "dedicated",
+        kind: "docker",
+        held: false,
+        lazy: {},
+        get,
+        checkpoint: { markDirty },
+      },
+      source: {},
+      secrets: [],
+      context: { signal: new AbortController().signal },
+      deps: { sandbox: { writeFile }, events: { append } },
+    } as unknown as RunContext;
+
+    const result = await fileTools.write_file!(ctx, {
+      name: "write_file",
+      executionId: "exec-priv",
+      args: { path: "bots/x-scout/out/test.json", content: "{}" },
+      finish,
+    } as unknown as ToolCall);
+    expect(result).toEqual({ ok: true, path: "bots/x-scout/out/test.json" });
+    expect(markDirty).toHaveBeenCalledOnce();
+    expect(writeFile).toHaveBeenCalledOnce();
+    expect(append).toHaveBeenCalledOnce();
+  });
+
+  it("forwards custom slug from attach_file into Space Drive", async () => {
+    const artifact = {
+      findFirst: vi.fn().mockResolvedValue(null),
+      create: vi.fn(async ({ data }) => ({
+        id: "art-1",
+        ...data,
+      })),
+    };
+    const fileFolder = { findFirst: vi.fn().mockResolvedValue({ id: "folder-bot-1" }) };
+    const messageCreate = vi.fn(async () => ({ eventSeq: 1 }));
+    const tx = {
+      artifact,
+      fileFolder,
+      message: { create: messageCreate },
+      $queryRaw: vi.fn().mockResolvedValue([]),
+    };
+    const ctx = {
+      bot: { id: "bot-1" },
+      runId: "run-1",
+      run: {
+        id: "run-1",
+        spaceId: "space-1",
+        userId: "user-1",
+        threadId: "t-1",
+        trigger: "tickets",
+      },
+      thread: { id: "t-1", groupId: null },
+      source: { conversationThreadId: "t-1" },
+      secrets: [],
+      computer: {
+        mode: "team",
+        kind: "docker",
+        held: false,
+        lazy: {},
+        get: vi.fn().mockResolvedValue({ id: "computer-1", kind: "docker" }),
+      },
+      context: { signal: new AbortController().signal },
+      deps: {
+        prisma: {
+          artifact,
+          fileFolder,
+          $transaction: async (work: (client: typeof tx) => Promise<unknown>) => work(tx),
+        },
+        artifacts: {
+          put: vi.fn().mockResolvedValue({ id: "blob-1" }),
+          remove: vi.fn().mockResolvedValue(undefined),
+        },
+        sandbox: { readFile: vi.fn().mockResolvedValue(new TextEncoder().encode("report body")) },
+        events: {
+          append: vi.fn().mockResolvedValue(undefined),
+          notify: vi.fn().mockResolvedValue(undefined),
+          publishSpaceChange: vi.fn(),
+        },
+      },
+    } as unknown as RunContext;
+
+    const finish = vi.fn((result: unknown) => result);
+    const result = await fileTools.attach_file!(ctx, {
+      name: "attach_file",
+      executionId: "exec-1",
+      args: {
+        path: "reports/q4.md",
+        name: "Q4 Report.md",
+        description: "Quarterly summary",
+        slug: "q4-custom-slug",
+      },
+      finish,
+    } as unknown as ToolCall);
+
+    expect(result).toMatchObject({ ok: true, artifactId: "art-1", path: "reports/q4.md" });
+    expect(artifact.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          slug: "q4-custom-slug",
+          folderId: "folder-bot-1",
+          description: "Quarterly summary",
+        }),
+      }),
+    );
+  });
+});

@@ -203,7 +203,7 @@ export const conversationTools: ConnectorTool[] = [
         },
         path: {
           type: "string",
-          description: "Output PNG path in this bot's home. Default charts/plot-<n>.png.",
+          description: "Output PNG path in the workspace. Default charts/plot-<n>.png.",
         },
         attach: {
           type: "boolean",

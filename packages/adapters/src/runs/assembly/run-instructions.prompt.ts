@@ -23,7 +23,7 @@ export const COMPUTER_USE_INSTRUCTION =
   "Use the computer only when the task needs files, commands, a browser, or an installed application. Answer directly from the conversation when sufficient; use connected tools for app data. A website with no connected app is still yours to use in the computer's browser, now and in scheduled routines, so a missing connection alone is never a reason to decline. Do not inspect the computer just to prepare for an unrelated task. If what you are about to buy, send or submit differs from what the user confirmed, such as a changed item or total, show the difference and confirm again first.";
 
 export const PRIVATE_WORKSPACE_INSTRUCTION =
-  "This entire computer workspace is your private home. Relative file paths and shell working directories start at its root.";
+  "This entire computer workspace is your private home. Relative file paths and shell working directories start at its root. Space Drive is still shared across the Space — default to Space Drive (drive_save or attach_file) for deliverables, documents, media, and handoffs.";
 
 /** Where commands run when the computer is a host with its own shell rather than a sandbox. */
 export function hostComputerInstruction(
@@ -372,7 +372,7 @@ function toolUsageLine(parts: {
     builtinOffered(disabled, "drive_list") ||
     builtinOffered(disabled, "drive_update") ||
     builtinOffered(disabled, "drive_move")
-      ? "Space Drive is shared across all bots and members in this Space; use drive_list, drive_read, drive_save, drive_create_folder, drive_move, and drive_update to find, organize, rename, describe, and slug files."
+      ? "Default to Space Drive for storing, sharing, and organizing artifacts, documents, media, and handoffs (auto-organized into folders with searchable descriptions and slugs) instead of per-bot workspace subtrees. Space Drive is shared across all bots and members in this Space; use drive_list, drive_read, drive_save, drive_create_folder, drive_move, and drive_update to find, save, organize, rename, describe, and slug files."
       : undefined,
     "Use destination_write only for connected destination records.",
   ].filter((clause): clause is string => Boolean(clause));

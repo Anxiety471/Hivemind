@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   displayBotWorkspacePath,
+  isLegacyBotSubtreePath,
   resolveBotUploadPath,
   resolveBotWorkspaceCwd,
   resolveBotWorkspacePath,
-  teamBotWorkspaceDirectory,
   workspaceCwd,
 } from "./computer-support.js";
 import { teamWorkspaceInstruction } from "./computer-support.prompt.js";
@@ -44,7 +44,12 @@ describe("workspaceCwd", () => {
 
 describe("Team Computer shared workspace", () => {
   it("resolves relative paths and cwd at the shared Team workspace root", () => {
-    expect(teamBotWorkspaceDirectory("bot-1")).toBe("bots/bot-1");
+    expect(isLegacyBotSubtreePath("bots")).toBe(true);
+    expect(isLegacyBotSubtreePath("bots/abc")).toBe(true);
+    expect(isLegacyBotSubtreePath("bots/abc/file.txt")).toBe(true);
+    expect(isLegacyBotSubtreePath("shared/bots/a")).toBe(false);
+    expect(isLegacyBotSubtreePath("robots/a")).toBe(false);
+    expect(isLegacyBotSubtreePath("notes/a")).toBe(false);
     expect(resolveBotWorkspacePath("team", "bot-1", "notes/result.txt")).toBe("notes/result.txt");
     expect(resolveBotWorkspacePath("team", "bot-1", "")).toBe("");
     expect(resolveBotWorkspaceCwd("team", "bot-1", undefined)).toBeUndefined();
@@ -77,6 +82,7 @@ describe("Team Computer shared workspace", () => {
     expect(shellDefaultCwd).toBeUndefined();
     expect(sharedForFileTools).toBe("shared/report.xlsx");
     expect(instruction).toContain("shared root");
+    expect(instruction).toContain("Space Drive");
     expect(resolveBotWorkspaceCwd("team", "bot-1", "shared")).toBe("shared");
   });
 
