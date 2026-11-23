@@ -235,13 +235,15 @@ it("shows every bot's outcome and changes", async () => {
   });
   await render(null);
   expect(host.textContent).toContain("Last run failed");
-  expect(host.textContent).toContain("Show 2 successful results");
-  expect(host.textContent).toContain("Crumb");
-  expect(host.textContent).toContain("MEMORY.md: 100 → 90 bytes");
-  expect(host.textContent).toContain("Hatcha");
-  expect(host.textContent).toContain("No changes");
+  expect(host.textContent).toContain("1 of 3 checks failed");
   expect(host.textContent).toContain("Shared memory (Team)");
-  expect(host.textContent).toContain("model HTTP 429");
+  await click(button("View results"));
+  expect(document.body.textContent).toContain("Crumb");
+  expect(document.body.textContent).toContain("MEMORY.md: 100 → 90 bytes");
+  expect(document.body.textContent).toContain("Hatcha");
+  expect(document.body.textContent).toContain("No changes");
+  expect(document.body.textContent).toContain("Shared memory (Team)");
+  expect(document.body.textContent).toContain("model HTTP 429");
 });
 
 it("shows which targets failed and when the next retry runs", async () => {
@@ -258,9 +260,11 @@ it("shows which targets failed and when the next retry runs", async () => {
   });
   await render(null);
   expect(host.textContent).toContain("Last run failed");
+  expect(host.textContent).toContain("1 bot failed");
   expect(host.textContent).toContain("Crumb");
-  expect(host.textContent).toContain("model HTTP 429");
-  expect(host.textContent).toContain("attempt 1");
+  expect(host.textContent).toContain("Retry at 7:45 AM · attempt 1");
+  await click(button("View results"));
+  expect(document.body.textContent).toContain("model HTTP 429");
 });
 
 it("shows why a connection failed, and keeps the form", async () => {

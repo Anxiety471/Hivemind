@@ -6,8 +6,9 @@ import {
   DialogClose,
   DialogContent,
   DialogTitle,
-  Disclosure,
   Field,
+  FieldContent,
+  FieldDescription,
   FieldLabel,
   Input,
   OptionSelect,
@@ -17,7 +18,7 @@ import {
   Toggle,
 } from "@rakazo/ui-web";
 import { useQuery } from "@tanstack/react-query";
-import { XIcon } from "lucide-react";
+import { CircleAlert, CircleCheck, Clock3, XIcon } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 import type { ProviderSettingsDraft } from "../../components/models/ProviderSettingsForm";
 import { ProviderSettingsForm } from "../../components/models/ProviderSettingsForm";
@@ -136,8 +137,24 @@ export function MemorySettingsOverlay({
   const roamer = roamerQuery.data;
   const failedTargets = roamer?.lastReport?.filter((target) => target.status === "failed") ?? [];
   const okTargets = roamer?.lastReport?.filter((target) => target.status === "ok") ?? [];
-  const targetName = (target: MemoryRoamerTarget) =>
+  const targetName = (target: Pick<MemoryRoamerTarget, "kind" | "name">) =>
     target.kind === "shared" ? t`Shared memory (${target.name})` : target.name;
+  const failureCount = failedTargets.length || roamer?.lastFailures?.length || 0;
+  const totalChecks = failedTargets.length + okTargets.length;
+  const firstFailure = failedTargets[0] ?? roamer?.lastFailures?.[0];
+  const failureSummary = firstFailure
+    ? failureCount > 1
+      ? t`${targetName(firstFailure)} and ${failureCount - 1} more`
+      : targetName(firstFailure)
+    : null;
+  const runFailed = Boolean(roamer?.lastError || failureCount);
+  const hasResults = failureCount > 0 || okTargets.length > 0;
+  const changeSummary = (target: MemoryRoamerTarget) =>
+    target.changes.length
+      ? target.changes
+          .map((change) => t`${change.path}: ${change.beforeBytes} → ${change.afterBytes} bytes`)
+          .join("; ")
+      : t`No changes`;
   const roamerChange = useSave({
     save: async (input: { enabled: boolean; intervalMinutes?: number }, rpc) =>
       rpc.memory.setRoamer(input),
@@ -146,6 +163,7 @@ export function MemorySettingsOverlay({
   const intervalInputId = useId();
   const [intervalDraft, setIntervalDraft] = useState("360");
   const [intervalError, setIntervalError] = useState<string | null>(null);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   useEffect(() => {
     if (roamer) setIntervalDraft(String(roamer.intervalMinutes));
   }, [roamer?.intervalMinutes]);
@@ -248,17 +266,118 @@ export function MemorySettingsOverlay({
             </div>
             <p className="mt-1 text-body-sm text-muted-foreground">
               <Trans>
-                Uses your main model connection. Tidies only MEMORY.md, USER.md, Instructions, and
-                shared memory. Other notes stay read-only.
+                Tidies MEMORY.md, USER.md, Instructions, and shared memory with your main model;
+                other notes stay read-only.
               </Trans>
             </p>
-            <Field className="mt-3">
-              <FieldLabel htmlFor={intervalInputId}>
-                <Trans>Check every (minutes)</Trans>
-              </FieldLabel>
+            <div className="mt-4">
+              {roamer === undefined ? (
+                <p className="text-body-sm text-muted-foreground">
+                  <Trans>Loading…</Trans>
+                </p>
+              ) : roamer.lastRunAt || runFailed ? (
+                <div
+                  className={`rounded-xl border px-3 py-3 ${
+                    runFailed
+                      ? "border-destructive/25 bg-destructive/5"
+                      : "border-border bg-muted/30"
+                  }`}
+                >
+                  <div className="flex items-start gap-3">
+                    <span
+                      className={`flex size-8 shrink-0 items-center justify-center rounded-full ${
+                        runFailed
+                          ? "bg-destructive/10 text-destructive"
+                          : "bg-success/10 text-success"
+                      }`}
+                    >
+                      {runFailed ? (
+                        <CircleAlert className="size-4" />
+                      ) : (
+                        <CircleCheck className="size-4" />
+                      )}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-baseline justify-between gap-3">
+                        <p
+                          className={`text-body font-medium ${
+                            runFailed ? "text-destructive" : "text-foreground"
+                          }`}
+                        >
+                          {runFailed ? t`Last run failed` : t`Last run completed`}
+                        </p>
+                        {roamer.lastRunAt ? (
+                          <span className="shrink-0 text-caption text-muted-foreground">
+                            {shortWhen(roamer.lastRunAt)}
+                          </span>
+                        ) : null}
+                      </div>
+                      <p className="mt-0.5 text-body-sm text-muted-foreground">
+                        {runFailed
+                          ? totalChecks
+                            ? t`${failureCount} of ${totalChecks} checks failed`
+                            : (roamer.lastError ?? t`Failed`)
+                          : totalChecks
+                            ? t`${totalChecks} checks completed`
+                            : t`Completed`}
+                      </p>
+                      {failureSummary ? (
+                        <p className="mt-2 text-body-sm font-medium text-foreground">
+                          {failureSummary}
+                        </p>
+                      ) : null}
+                      <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1">
+                        {hasResults ? (
+                          <Button variant="outline" size="sm" onClick={() => setDetailsOpen(true)}>
+                            {t`View results`}
+                          </Button>
+                        ) : null}
+                        {roamer.retryAt ? (
+                          <span className="text-caption text-muted-foreground">
+                            {t`Retry at ${shortWhen(roamer.retryAt)} · attempt ${roamer.retryAttempt}`}
+                          </span>
+                        ) : !runFailed && roamer.lastChanges > 0 ? (
+                          <span className="text-caption text-muted-foreground">
+                            {roamer.lastChanges === 1
+                              ? t`1 change`
+                              : t`${roamer.lastChanges} changes`}
+                          </span>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center gap-3 rounded-xl border border-dashed border-border px-3 py-3">
+                  <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
+                    <Clock3 className="size-4" />
+                  </span>
+                  <div>
+                    <p className="text-body font-medium text-foreground">
+                      {roamer.enabled ? t`Waiting for the first run` : t`Off`}
+                    </p>
+                    <p className="mt-0.5 text-body-sm text-muted-foreground">
+                      {roamer.enabled
+                        ? t`It runs within the next 15 minutes.`
+                        : t`Turn it on to consolidate memory in the background.`}
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+            <Field orientation="horizontal" className="mt-4 border-t border-border pt-4">
+              <FieldContent>
+                <FieldLabel htmlFor={intervalInputId}>
+                  <Trans>Check every</Trans>
+                </FieldLabel>
+                <FieldDescription className="text-body-sm">
+                  {intervalSummary ?? t`15 to 10,080 minutes`}
+                </FieldDescription>
+              </FieldContent>
               <div className="flex items-center gap-2">
                 <Input
                   id={intervalInputId}
+                  className="w-24"
                   type="number"
                   inputMode="numeric"
                   min={15}
@@ -269,9 +388,9 @@ export function MemorySettingsOverlay({
                   onChange={(event) => setIntervalDraft(event.target.value)}
                   onBlur={saveInterval}
                 />
-                {intervalSummary ? (
-                  <span className="text-body-sm text-muted-foreground">{intervalSummary}</span>
-                ) : null}
+                <span className="text-body-sm text-muted-foreground">
+                  <Trans>min</Trans>
+                </span>
               </div>
             </Field>
             {intervalError ? (
@@ -279,86 +398,6 @@ export function MemorySettingsOverlay({
                 {intervalError}
               </p>
             ) : null}
-            <div className="mt-4 border-t border-border pt-3">
-              <p
-                className={`text-body-sm ${roamer?.lastError ? "text-destructive" : "text-muted-foreground"}`}
-              >
-                {roamer === undefined
-                  ? t`Loading…`
-                  : roamer.lastError
-                    ? t`Last run failed`
-                    : roamer.lastRunAt
-                      ? t`Last run checked ${shortWhen(roamer.lastRunAt)}`
-                      : roamer.enabled
-                        ? t`Waiting for the first run`
-                        : t`Off`}
-              </p>
-              {roamer?.lastRunAt && !roamer.lastError && roamer.lastChanges > 0 ? (
-                <p className="mt-1 text-body-sm text-muted-foreground">
-                  {roamer.lastChanges === 1 ? t`1 change` : t`${roamer.lastChanges} changes`}
-                </p>
-              ) : null}
-              {failedTargets.length ? (
-                <ul className="mt-2 space-y-1.5 text-body-sm">
-                  {failedTargets.map((target) => (
-                    <li key={`${target.kind}:${target.id}`}>
-                      <span className="font-medium text-foreground">{targetName(target)}</span>
-                      <span className="text-destructive">: {target.error ?? t`Failed`}</span>
-                    </li>
-                  ))}
-                </ul>
-              ) : !roamer?.lastReport?.length && roamer?.lastFailures?.length ? (
-                <ul className="mt-2 space-y-1.5 text-body-sm">
-                  {roamer.lastFailures.map((failure) => (
-                    <li key={`${failure.kind}:${failure.id}`}>
-                      <span className="font-medium text-foreground">
-                        {failure.kind === "shared"
-                          ? t`Shared memory (${failure.name})`
-                          : failure.name}
-                      </span>
-                      <span className="text-destructive">: {failure.error}</span>
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
-              {roamer?.retryAt ? (
-                <p className="mt-2 text-body-sm text-muted-foreground">
-                  {t`Retrying at ${shortWhen(roamer.retryAt)} (attempt ${roamer.retryAttempt})`}
-                </p>
-              ) : null}
-              {okTargets.length ? (
-                <Disclosure
-                  className="mt-3"
-                  summary={
-                    failedTargets.length
-                      ? t`Show ${okTargets.length} successful results`
-                      : t`Show all ${okTargets.length} results`
-                  }
-                  summaryClassName="text-body-sm text-muted-foreground"
-                >
-                  <ul className="mt-2 divide-y divide-border rounded-lg border border-border">
-                    {okTargets.map((target) => (
-                      <li
-                        key={`${target.kind}:${target.id}`}
-                        className="flex items-start justify-between gap-4 px-3 py-2"
-                      >
-                        <span className="text-body-sm text-foreground">{targetName(target)}</span>
-                        <span className="max-w-[55%] text-end text-body-sm text-muted-foreground">
-                          {target.changes.length
-                            ? target.changes
-                                .map(
-                                  (change) =>
-                                    t`${change.path}: ${change.beforeBytes} → ${change.afterBytes} bytes`,
-                                )
-                                .join("; ")
-                            : t`No changes`}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                </Disclosure>
-              ) : null}
-            </div>
             {roamerChange.error ? (
               <p role="alert" className="mt-2 text-body-sm text-destructive">
                 {errorText(roamerChange.error, t`Could not save the memory roamer`)}
@@ -508,6 +547,100 @@ export function MemorySettingsOverlay({
           )}
         </div>
       </div>
+
+      <Dialog open={detailsOpen} onOpenChange={setDetailsOpen}>
+        <DialogContent size="md" showCloseButton={false} className="bg-card">
+          <div className="flex items-start justify-between gap-4 px-5 pt-5">
+            <div>
+              <DialogTitle className="text-heading2 font-medium text-foreground">
+                <Trans>Run results</Trans>
+              </DialogTitle>
+              <p className="mt-1 text-body-sm text-muted-foreground">
+                {[
+                  failureCount
+                    ? failureCount === 1
+                      ? t`1 failed`
+                      : t`${failureCount} failed`
+                    : null,
+                  okTargets.length ? t`${okTargets.length} completed` : null,
+                  roamer?.lastRunAt ? shortWhen(roamer.lastRunAt) : null,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </p>
+            </div>
+            <DialogClose
+              aria-label={t`Close run results`}
+              render={<Button variant="ghost" size="icon-sm" />}
+            >
+              <XIcon />
+            </DialogClose>
+          </div>
+          <div className="mt-4 min-h-0 flex-1 overflow-y-auto border-t border-border px-5 pb-5">
+            {failureCount ? (
+              <section className="py-4">
+                <h3 className="text-body-sm font-medium text-muted-foreground">
+                  <Trans>Failed</Trans>
+                </h3>
+                <ul className="mt-1 divide-y divide-border">
+                  {failedTargets.length
+                    ? failedTargets.map((target) => (
+                        <li key={`${target.kind}:${target.id}`} className="flex gap-3 py-3">
+                          <span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-destructive" />
+                          <div className="min-w-0 flex-1">
+                            <p className="text-body-sm font-medium text-foreground">
+                              {targetName(target)}
+                            </p>
+                            <p className="mt-0.5 text-body-sm text-destructive">
+                              {target.error ?? t`Failed`}
+                            </p>
+                            {target.changes.length ? (
+                              <p className="mt-1 text-body-sm text-muted-foreground">
+                                {changeSummary(target)}
+                              </p>
+                            ) : null}
+                          </div>
+                        </li>
+                      ))
+                    : roamer?.lastFailures?.map((failure) => (
+                        <li key={`${failure.kind}:${failure.id}`} className="flex gap-3 py-3">
+                          <span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-destructive" />
+                          <div className="min-w-0 flex-1">
+                            <p className="text-body-sm font-medium text-foreground">
+                              {targetName(failure)}
+                            </p>
+                            <p className="mt-0.5 text-body-sm text-destructive">{failure.error}</p>
+                          </div>
+                        </li>
+                      ))}
+                </ul>
+              </section>
+            ) : null}
+            {okTargets.length ? (
+              <section className="py-4">
+                <h3 className="text-body-sm font-medium text-muted-foreground">
+                  <Trans>Completed</Trans>
+                </h3>
+                <ul className="mt-1 divide-y divide-border">
+                  {okTargets.map((target) => (
+                    <li key={`${target.kind}:${target.id}`} className="flex items-start gap-3 py-3">
+                      <span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-success" />
+                      <div className="flex min-w-0 flex-1 items-start justify-between gap-4">
+                        <p className="text-body-sm font-medium text-foreground">
+                          {targetName(target)}
+                        </p>
+                        <p className="text-end text-body-sm text-muted-foreground">
+                          {changeSummary(target)}
+                        </p>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ) : null}
+          </div>
+        </DialogContent>
+      </Dialog>
     </>
   );
 
