@@ -918,6 +918,7 @@ func (s *Service) List(ctx context.Context, actor db.Actor, input ListInput) (Li
 		}
 	}
 	folderID := trimOpt(input.FolderID)
+	// writeaudit:dynamic input.Query is a request field, not a pgx method value
 	queryStr := strings.TrimSpace(input.Query)
 	category := strings.TrimSpace(input.Category)
 	if category == "" {

@@ -169,6 +169,7 @@ func save(ctx context.Context, tx pgx.Tx, actor db.Actor, input setInput) (Rule,
 	}
 	value := jsLower(input.MatchValue)
 	var lock string
+	// writeaudit:dynamic transaction-scoped advisory lock; no row payload
 	if err := tx.QueryRow(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))::text AS "lock"`,
 		"approval-rule:"+owner+":"+input.MatchKind+":"+value).Scan(&lock); err != nil {
 		return Rule{}, err

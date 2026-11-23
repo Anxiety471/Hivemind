@@ -112,6 +112,7 @@ func ParseRemove(raw orpc.Input) (string, *orpc.Error) {
 // lockSpace is lockSpaceForContentCreation: serialize with the empty-Space
 // deletion claim, and require the actor to be a member of a live Space.
 func lockSpace(ctx context.Context, tx pgx.Tx, actor db.Actor) error {
+	// writeaudit:dynamic transaction-scoped advisory lock; no row payload
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, actor.SpaceID); err != nil {
 		return err
 	}

@@ -88,8 +88,7 @@ func (c Canceller) CancelActive(
 		return nil, err
 	}
 	at = now(at)
-	args := append([]any{ids}, db.Data(at)...)
-	args = append(args, ActiveStatuses)
+	args := append(append([]any{ids}, db.Data(at)...), ActiveStatuses)
 	rows, err := tx.Query(ctx, `
 		UPDATE runs SET status = 'cancelled', "completedAt" = $2,
 			"leaseOwner" = NULL, "leaseExpiresAt" = NULL, "updatedAt" = now()

@@ -66,8 +66,7 @@ func Wake(ctx context.Context, exec Execer, publisher Publisher, runID string, o
 	if options.KeepExisting {
 		query += ` AND "wakeAt" IS NULL`
 	}
-	args := append([]any{runID}, db.Data(at, updated)...)
-	args = append(args, ResumableStatuses)
+	args := append(append([]any{runID}, db.Data(at, updated)...), ResumableStatuses)
 	tag, err := exec.Exec(ctx, query, args...)
 	if err != nil {
 		return false, fmt.Errorf("wake run %s: %w", runID, err)

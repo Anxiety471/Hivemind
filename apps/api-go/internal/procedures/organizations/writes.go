@@ -30,6 +30,7 @@ var (
 
 // lockMembers is lockOrganizationMembers: one transaction-scoped advisory lock per organization.
 func lockMembers(ctx context.Context, tx pgx.Tx, organizationID string) error {
+	// writeaudit:dynamic transaction-scoped advisory lock; no row payload
 	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "organization-members:"+organizationID)
 	return err
 }

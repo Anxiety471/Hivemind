@@ -64,6 +64,7 @@ func Set(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input, l
 		return Status{}, failure
 	}
 	err := database.Tenant(ctx, actor, func(tx pgx.Tx) error {
+		// writeaudit:dynamic transaction-scoped advisory lock; no row payload
 		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "spending:"+actor.UserID); err != nil {
 			return err
 		}

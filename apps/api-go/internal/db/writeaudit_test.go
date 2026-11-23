@@ -31,124 +31,29 @@ import (
 // a violation because it would sanitize a filter.
 func TestWriteStatementsUseTheDataBoundary(t *testing.T) {
 	root := filepath.Join("..", "..")
-	var violations []string
-	var exemptions []string
+	var files []string
 	for _, directory := range []string{"internal", "cmd"} {
 		err := filepath.Walk(filepath.Join(root, directory), func(path string, info os.FileInfo, walkErr error) error {
 			if walkErr != nil {
 				return walkErr
 			}
-			if info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			if info.IsDir() {
+				if info.Name() == "testdata" {
+					return filepath.SkipDir
+				}
 				return nil
 			}
-			relative, err := filepath.Rel(root, path)
-			if err != nil {
-				return err
+			if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+				return nil
 			}
-			fset := token.NewFileSet()
-			file, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
-			if err != nil {
-				t.Fatalf("parse %s: %v", relative, err)
-			}
-			analysis := newFileAnalysis(file)
-			ast.Inspect(file, func(node ast.Node) bool {
-				call, ok := node.(*ast.CallExpr)
-				if !ok {
-					return true
-				}
-				selector, ok := call.Fun.(*ast.SelectorExpr)
-				if !ok || (selector.Sel.Name != "Exec" && selector.Sel.Name != "Query" && selector.Sel.Name != "QueryRow") {
-					return true
-				}
-				// A statement with no bound values cannot bypass the boundary.
-				if len(call.Args) < 3 {
-					return true
-				}
-				position := fset.Position(call.Pos())
-				where := relative + ":" + strconv.Itoa(position.Line)
-				locals := analysis.localsAt(call.Pos())
-				variants := analysis.sqlVariants(call.Args[1], locals)
-				if len(variants) == 0 {
-					if analysis.provablyRead(call.Args[1], locals) {
-						return true
-					}
-					if reason, ok := exemption(file, fset, call); ok {
-						exemptions = append(exemptions, where+" "+reason)
-					} else {
-						violations = append(violations, where+" SQL is not statically resolvable; add //writeaudit:dynamic <reason>")
-					}
-					return true
-				}
-				for _, sql := range variants {
-					kind, placeholders, problem := classifyStatement(sql)
-					if problem != "" {
-						if reason, ok := exemption(file, fset, call); ok {
-							exemptions = append(exemptions, where+" "+reason)
-							return true
-						}
-						violations = append(violations, where+" "+problem)
-						return true
-					}
-					if kind == "read" {
-						continue
-					}
-					if kind == "delete" {
-						slots, resolved := analysis.argumentSlots(call)
-						if !resolved {
-							if reason, ok := exemption(file, fset, call); ok {
-								exemptions = append(exemptions, where+" "+reason)
-							} else {
-								violations = append(violations, where+" DELETE argument list is not statically auditable; add //writeaudit:dynamic <reason>")
-							}
-							continue
-						}
-						for index, slot := range slots[1:] {
-							if slot.wrapped {
-								violations = append(violations, where+" DELETE $"+strconv.Itoa(index)+" is wrapped; filters must stay unwrapped")
-								return true
-							}
-						}
-						continue
-					}
-					slots, resolved := analysis.argumentSlots(call)
-					if !resolved {
-						if reason, ok := exemption(file, fset, call); ok {
-							exemptions = append(exemptions, where+" "+reason)
-							return true
-						}
-						violations = append(violations, where+" argument list is not statically auditable; add //writeaudit:dynamic <reason>")
-						return true
-					}
-					if len(slots) != len(placeholders)+1 {
-						violations = append(violations, where+" binds "+strconv.Itoa(len(slots)-1)+" arguments for "+strconv.Itoa(len(placeholders))+" placeholders")
-						return true
-					}
-					for index := 1; index <= len(placeholders); index++ {
-						slot := slots[index]
-						data := placeholders[index].data
-						filter := placeholders[index].filter
-						if data && !slot.wrapped {
-							violations = append(violations, where+" $"+strconv.Itoa(index)+" is a payload but is not wrapped in db.Data/db.Text/db.JSON/db.JSONText")
-							return true
-						}
-						if filter && slot.wrapped {
-							violations = append(violations, where+" $"+strconv.Itoa(index)+" is a filter but is wrapped")
-							return true
-						}
-						if data && filter {
-							violations = append(violations, where+" $"+strconv.Itoa(index)+" is used as both payload and filter")
-							return true
-						}
-					}
-				}
-				return true
-			})
+			files = append(files, path)
 			return nil
 		})
 		if err != nil {
 			t.Fatalf("walk %s: %v", directory, err)
 		}
 	}
+	violations, exemptions := auditWriteFiles(t, files)
 	for _, exemption := range exemptions {
 		t.Logf("writeaudit exemption: %s", exemption)
 	}
@@ -157,13 +62,216 @@ func TestWriteStatementsUseTheDataBoundary(t *testing.T) {
 	}
 }
 
+// TestWriteAuditRejectsBypasses runs the guard over the reviewer's bypass
+// fixtures, so each fail-closed rule is proven rather than assumed. The
+// fixtures live under testdata and are parsed only, never compiled.
+func TestWriteAuditRejectsBypasses(t *testing.T) {
+	for _, test := range []struct {
+		file string
+		want []string
+	}{
+		{"bypass_mutated_args.go", []string{"argument slice args is mutated after it is built"}},
+		{"bypass_copyfrom.go", []string{"CopyFrom bypasses the placeholder audit"}},
+		{"bypass_sendbatch.go", []string{"SendBatch bypasses the placeholder audit", "Queue bypasses the placeholder audit"}},
+		{"bypass_method_value.go", []string{"Exec is used as a method value"}},
+		{"bypass_select_function.go", []string{"SELECT calls unpure function ADD_JOB"}},
+		{"allow_pure_select.go", nil},
+	} {
+		path := filepath.Join("testdata", "writeaudit", test.file)
+		violations, _ := auditWriteFiles(t, []string{path})
+		joined := strings.Join(violations, "\n")
+		if len(test.want) == 0 {
+			if len(violations) != 0 {
+				t.Errorf("%s should pass the audit; got %v", test.file, violations)
+			}
+			continue
+		}
+		if len(violations) == 0 {
+			t.Fatalf("%s passed the audit; want %v", test.file, test.want)
+		}
+		for _, want := range test.want {
+			if !strings.Contains(joined, want) {
+				t.Errorf("%s: violations %q do not contain %q", test.file, violations, want)
+			}
+		}
+	}
+}
+
+// auditWriteFiles audits the given Go files and returns the violations and the
+// accepted exemptions, labelled with the path as given.
+func auditWriteFiles(t *testing.T, paths []string) ([]string, []string) {
+	t.Helper()
+	var violations []string
+	var exemptions []string
+	report := func(where, message string) {
+		violations = append(violations, where+" "+message)
+	}
+	for _, path := range paths {
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
+		if err != nil {
+			t.Fatalf("parse %s: %v", path, err)
+		}
+		analysis := newFileAnalysis(file)
+		at := func(node ast.Node) string {
+			position := fset.Position(node.Pos())
+			return path + ":" + strconv.Itoa(position.Line)
+		}
+		exemptOr := func(where string, node ast.Node, message string) {
+			if reason, ok := exemptionAt(file, fset, node.Pos()); ok {
+				exemptions = append(exemptions, where+" "+reason)
+				return
+			}
+			report(where, message+"; add //writeaudit:dynamic <reason>")
+		}
+		// A write API that does not take a $n argument list defeats placeholder
+		// mapping, and a method value takes Exec/Query/QueryRow out of reach.
+		calledSelectors := map[*ast.SelectorExpr]bool{}
+		assignedSelectors := map[*ast.SelectorExpr]bool{}
+		ast.Inspect(file, func(node ast.Node) bool {
+			switch typed := node.(type) {
+			case *ast.CallExpr:
+				if selector, ok := typed.Fun.(*ast.SelectorExpr); ok {
+					calledSelectors[selector] = true
+				}
+			case *ast.AssignStmt:
+				for _, left := range typed.Lhs {
+					if selector, ok := left.(*ast.SelectorExpr); ok {
+						assignedSelectors[selector] = true
+					}
+				}
+			}
+			return true
+		})
+		ast.Inspect(file, func(node ast.Node) bool {
+			selector, ok := node.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			switch selector.Sel.Name {
+			case "CopyFrom", "SendBatch", "Queue", "Exec", "Query", "QueryRow":
+			default:
+				return true
+			}
+			if !calledSelectors[selector] && !assignedSelectors[selector] {
+				exemptOr(at(selector), selector, selector.Sel.Name+" is used as a method value; the audit cannot follow it")
+			}
+			return true
+		})
+		ast.Inspect(file, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			selector, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			where := at(call)
+			switch selector.Sel.Name {
+			case "CopyFrom":
+				exemptOr(where, call, "CopyFrom bypasses the placeholder audit")
+				return true
+			case "SendBatch":
+				exemptOr(where, call, "SendBatch bypasses the placeholder audit")
+				return true
+			case "Queue":
+				exemptOr(where, call, "Queue bypasses the placeholder audit")
+				return true
+			case "Exec", "Query", "QueryRow":
+			default:
+				return true
+			}
+			// A statement with no bound values cannot bypass the boundary.
+			if len(call.Args) < 3 {
+				return true
+			}
+			locals := analysis.localsAt(call.Pos())
+			variants := analysis.sqlVariants(call.Args[1], locals)
+			if len(variants) == 0 {
+				if analysis.provablyRead(call.Args[1], locals) {
+					return true
+				}
+				exemptOr(where, call, "SQL is not statically resolvable")
+				return true
+			}
+			for _, sql := range variants {
+				kind, placeholders, problem := classifyStatement(sql)
+				if problem != "" {
+					exemptOr(where, call, problem)
+					return true
+				}
+				if kind == "read" {
+					if calls := unpureSelectCalls(sql); len(calls) > 0 {
+						exemptOr(where, call, "SELECT calls unpure function "+strings.Join(calls, ", "))
+					}
+					continue
+				}
+				if kind == "delete" {
+					slots, resolved := analysis.argumentSlots(call)
+					if !resolved {
+						exemptOr(where, call, "DELETE argument list is not statically auditable")
+						continue
+					}
+					for index, slot := range slots[1:] {
+						if slot.wrapped {
+							report(where, "DELETE $"+strconv.Itoa(index)+" is wrapped; filters must stay unwrapped")
+							return true
+						}
+					}
+					continue
+				}
+				if name, mutated := analysis.mutatedArgumentSlice(call); mutated {
+					exemptOr(where, call, "argument slice "+name+" is mutated after it is built")
+					return true
+				}
+				slots, resolved := analysis.argumentSlots(call)
+				if !resolved {
+					exemptOr(where, call, "argument list is not statically auditable")
+					return true
+				}
+				if len(slots) != len(placeholders)+1 {
+					report(where, "binds "+strconv.Itoa(len(slots)-1)+" arguments for "+strconv.Itoa(len(placeholders))+" placeholders")
+					return true
+				}
+				for index := 1; index <= len(placeholders); index++ {
+					slot := slots[index]
+					data := placeholders[index].data
+					filter := placeholders[index].filter
+					if data && !slot.wrapped {
+						report(where, " $"+strconv.Itoa(index)+" is a payload but is not wrapped in db.Data/db.Text/db.JSON/db.JSONText")
+						return true
+					}
+					if filter && slot.wrapped {
+						report(where, " $"+strconv.Itoa(index)+" is a filter but is wrapped")
+						return true
+					}
+					if data && filter {
+						report(where, " $"+strconv.Itoa(index)+" is used as both payload and filter")
+						return true
+					}
+				}
+			}
+			return true
+		})
+	}
+	return violations, exemptions
+}
+
 // exemption reports the reason on a //writeaudit:dynamic comment attached to the
 // call's statement, or to the call line itself.
 func exemption(file *ast.File, fset *token.FileSet, call *ast.CallExpr) (string, bool) {
-	line := fset.Position(call.Pos()).Line
+	return exemptionAt(file, fset, call.Pos())
+}
+
+// exemptionAt is exemption for any node position, so a method value can be
+// exempted on its own line.
+func exemptionAt(file *ast.File, fset *token.FileSet, position token.Pos) (string, bool) {
+	line := fset.Position(position).Line
 	for _, group := range file.Comments {
 		start := fset.Position(group.Pos()).Line
-		if start < line-1 || start > line {
+		end := fset.Position(group.End()).Line
+		if start > line || end < line-1 {
 			continue
 		}
 		for _, comment := range group.List {
@@ -521,6 +629,8 @@ func classifyStatement(sql string) (string, map[int]placeholderKind, string) {
 type sqlWord struct {
 	text        string
 	placeholder int
+	start       int
+	end         int
 }
 
 // sqlWords scans outside quoted strings and identifiers, yielding keywords and
@@ -570,7 +680,7 @@ func sqlWords(sql string) []sqlWord {
 					end++
 				}
 				number, _ := strconv.Atoi(sql[index+1 : end])
-				words = append(words, sqlWord{placeholder: number})
+				words = append(words, sqlWord{placeholder: number, start: index, end: end})
 				index = end
 			} else {
 				// A dollar-quoted string body; skip it when it has a closing tag.
@@ -584,10 +694,10 @@ func sqlWords(sql string) []sqlWord {
 				index++
 			}
 		case '(':
-			words = append(words, sqlWord{text: "("})
+			words = append(words, sqlWord{text: "(", start: index, end: index + 1})
 			index++
 		case ')':
-			words = append(words, sqlWord{text: ")"})
+			words = append(words, sqlWord{text: ")", start: index, end: index + 1})
 			index++
 		default:
 			if isLetter(sql[index]) {
@@ -595,7 +705,7 @@ func sqlWords(sql string) []sqlWord {
 				for end < len(sql) && (isLetter(sql[end]) || sql[end] == '_') {
 					end++
 				}
-				words = append(words, sqlWord{text: strings.ToUpper(sql[index:end])})
+				words = append(words, sqlWord{text: strings.ToUpper(sql[index:end]), start: index, end: end})
 				index = end
 			} else {
 				index++
@@ -635,6 +745,161 @@ func (analysis *fileAnalysis) argumentSlots(call *ast.CallExpr) ([]argumentSlot,
 		slots = append(slots, groups...)
 	}
 	return slots, true
+}
+
+// mutatedArgumentSlice reports whether the spread argument of call names a
+// slice that is index-assigned or appended to between its construction and the
+// call. A static slot map cannot survive a later write, so the call fails
+// closed.
+func (analysis *fileAnalysis) mutatedArgumentSlice(call *ast.CallExpr) (string, bool) {
+	if !call.Ellipsis.IsValid() || len(call.Args) == 0 {
+		return "", false
+	}
+	identifier, ok := call.Args[len(call.Args)-1].(*ast.Ident)
+	if !ok {
+		if sliced, sliceOK := call.Args[len(call.Args)-1].(*ast.SliceExpr); sliceOK {
+			identifier, ok = sliced.X.(*ast.Ident)
+		}
+	}
+	if !ok {
+		return "", false
+	}
+	name := identifier.Name
+	scope := analysis.chainScope(name, call.Pos())
+	if scope == nil {
+		return "", false
+	}
+	mutated := false
+	ast.Inspect(scope, func(node ast.Node) bool {
+		assignment, ok := node.(*ast.AssignStmt)
+		if !ok || assignment.Pos() >= call.Pos() {
+			return true
+		}
+		for index, left := range assignment.Lhs {
+			switch target := left.(type) {
+			case *ast.IndexExpr:
+				if inner, ok := target.X.(*ast.Ident); ok && inner.Name == name {
+					mutated = true
+				}
+			case *ast.Ident:
+				if target.Name != name || index >= len(assignment.Rhs) {
+					continue
+				}
+				appended, ok := assignment.Rhs[index].(*ast.CallExpr)
+				if !ok {
+					continue
+				}
+				if called, named := callName(appended); !named || called != "append" || len(appended.Args) == 0 {
+					continue
+				}
+				if first, ok := appended.Args[0].(*ast.Ident); ok && first.Name == name {
+					mutated = true
+				}
+			}
+		}
+		return true
+	})
+	return name, mutated
+}
+
+// pureFunctions are the SQL function calls a read may contain: standard
+// aggregate, string, JSON, array, date and math functions that cannot write.
+// nextval/setval, set_config, pg_* side-effect APIs and graphile's add_job and
+// remove_job are deliberately absent; those need a writeaudit exemption.
+var pureFunctions = map[string]bool{
+	"abs": true, "array_agg": true, "array_length": true, "array_position": true,
+	"ascii": true, "avg": true, "btrim": true, "bool_and": true, "bool_or": true,
+	"cardinality": true, "ceil": true, "ceiling": true, "char_length": true,
+	"chr": true, "coalesce": true, "concat": true, "concat_ws": true, "count": true,
+	"date_part": true, "date_trunc": true, "decode": true, "dense_rank": true,
+	"encode": true, "every": true, "extract": true, "first_value": true,
+	"floor": true, "format": true, "generate_series": true, "gen_random_uuid": true,
+	"greatest": true, "initcap": true, "json_agg": true, "json_build_array": true,
+	"json_build_object": true, "json_object_agg": true, "json_populate_record": true,
+	"json_populate_recordset": true, "json_to_record": true, "json_to_recordset": true,
+	"jsonb_agg": true, "jsonb_array_elements": true, "jsonb_array_elements_text": true,
+	"jsonb_array_length": true, "jsonb_build_array": true, "jsonb_build_object": true,
+	"jsonb_extract_path": true, "jsonb_extract_path_text": true, "jsonb_insert": true,
+	"jsonb_object_agg": true, "jsonb_object_keys": true, "jsonb_path_exists": true,
+	"jsonb_path_match": true, "jsonb_path_query": true, "jsonb_path_query_array": true,
+	"jsonb_path_query_first": true, "jsonb_populate_record": true,
+	"jsonb_populate_recordset": true, "jsonb_set": true, "jsonb_strip_nulls": true,
+	"jsonb_to_record": true, "jsonb_to_recordset": true, "jsonb_typeof": true,
+	"lag": true, "last_value": true, "lead": true, "least": true, "left": true,
+	"length": true, "lower": true, "lpad": true, "ltrim": true, "make_interval": true,
+	"max": true, "md5": true, "min": true, "mod": true, "now": true, "ntile": true,
+	"nullif": true, "octet_length": true, "percent_rank": true, "position": true,
+	"power": true, "quote_ident": true, "quote_literal": true, "random": true,
+	"rank": true, "regexp_count": true, "regexp_instr": true, "regexp_match": true,
+	"regexp_matches": true, "regexp_replace": true, "regexp_split_to_array": true,
+	"regexp_substr": true, "repeat": true, "replace": true, "reverse": true,
+	"right": true, "round": true, "row_number": true, "row_to_json": true,
+	"rpad": true, "rtrim": true, "sha256": true, "sign": true, "split_part": true,
+	"sqrt": true, "starts_with": true, "statement_timestamp": true, "stddev": true,
+	"string_agg": true, "strpos": true, "substr": true, "substring": true, "sum": true,
+	"to_char": true, "to_date": true, "to_hex": true, "to_json": true, "to_jsonb": true,
+	"to_timestamp": true, "translate": true, "trim": true, "trunc": true,
+	"unnest": true, "upper": true, "uuid_generate_v4": true, "variance": true,
+	"width_bucket": true,
+}
+
+// sqlCallKeywords can precede "(" without being a function call.
+var sqlCallKeywords = map[string]bool{
+	"ALL": true, "AND": true, "ANY": true, "ARRAY": true, "AS": true,
+	"BIT": true, "BY": true, "CASE": true, "CAST": true, "CHAR": true,
+	"CHARACTER": true, "CONFLICT": true, "CROSS": true, "DECIMAL": true,
+	"DISTINCT": true, "DO": true, "ELSE": true, "END": true, "EXCEPT": true,
+	"EXISTS": true, "FILTER": true, "FROM": true, "GROUP": true, "HAVING": true,
+	"IN": true, "INNER": true, "INTERSECT": true, "INTERVAL": true, "JOIN": true,
+	"LATERAL": true, "LEFT": true, "LIMIT": true, "NOT": true, "NUMERIC": true,
+	"OFFSET": true, "ON": true, "OR": true, "ORDER": true, "OUTER": true,
+	"OVER": true, "RETURNING": true, "RIGHT": true, "SELECT": true, "SET": true,
+	"SOME": true, "THEN": true, "TIME": true, "TIMESTAMP": true, "UNION": true,
+	"USING": true, "VALUES": true, "VARCHAR": true, "WHEN": true, "WHERE": true,
+	"WITH": true,
+}
+
+// unpureSelectCalls lists function calls in a SELECT-shaped statement that are
+// not on the known-pure allowlist. Reads are otherwise skipped, so a
+// data-modifying function in a projection would never be audited.
+func unpureSelectCalls(sql string) []string {
+	words := sqlWords(sql)
+	var calls []string
+	seen := map[string]bool{}
+	for index, word := range words {
+		if index+1 >= len(words) || words[index+1].text != "(" {
+			continue
+		}
+		// Only an identifier directly followed by "(" is a call; a comma, an
+		// alias column list (AS t(id)), a cast (::numeric(10,2)) and the like
+		// are not.
+		if strings.TrimSpace(sql[word.end:words[index+1].start]) != "" {
+			continue
+		}
+		if index > 0 && (words[index-1].text == "AS" || words[index-1].text == "WITH") {
+			continue
+		}
+		if strings.HasSuffix(strings.TrimRight(sql[:word.start], " \t\r\n"), "::") {
+			continue
+		}
+		name := word.text
+		if name == "" || name == "(" || name == ")" || !isLetter(name[0]) {
+			continue
+		}
+		identifier := true
+		for offset := 1; offset < len(name); offset++ {
+			if !isLetter(name[offset]) && name[offset] != '_' {
+				identifier = false
+				break
+			}
+		}
+		if !identifier || sqlCallKeywords[name] || pureFunctions[strings.ToLower(name)] || seen[name] {
+			continue
+		}
+		seen[name] = true
+		calls = append(calls, name)
+	}
+	return calls
 }
 
 // spreadSlots expands an expression that evaluates to []any: a boundary call,

@@ -572,8 +572,7 @@ func findAndRewriteCard(ctx context.Context, tx pgx.Tx, ring *contentcrypto.KeyR
 			return cardUpdate{}, fmt.Errorf("store message blocks: %w", err)
 		}
 		if ring.EncryptWrites {
-			arguments := append(db.Data(db.JSONText(string(body))), message.ID)
-			arguments = append(arguments, db.Data(sealed["searchTokens"])...)
+			arguments := append(append(db.Data(db.JSONText(string(body))), message.ID), db.Data(sealed["searchTokens"])...)
 			if _, err := tx.Exec(ctx, `UPDATE messages SET blocks = $1::jsonb, "searchTokens" = $3 WHERE id = $2`,
 				arguments...); err != nil {
 				return cardUpdate{}, err

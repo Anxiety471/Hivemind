@@ -77,6 +77,7 @@ func List(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input) 
 		conditions = append(conditions, afterCursor(after, arg))
 	}
 	if input.HasQuery {
+		// writeaudit:dynamic input.Query is a request field, not a pgx method value
 		conditions = append(conditions, `title ILIKE '%' || `+arg(escapeSearchWildcards(input.Query))+` || '%'`)
 	}
 	query := fmt.Sprintf(`SELECT `+summaryColumns+`

@@ -28,8 +28,7 @@ func DismissUpdate(ctx context.Context, database *db.DB, deployment shared.Deplo
 	var dismissed bool
 	err := database.Tenant(ctx, actor, func(tx pgx.Tx) error {
 		at := time.Now().UTC().Truncate(time.Millisecond)
-		arguments := append([]any{id}, db.Data(at)...)
-		arguments = append(arguments, actor.SpaceID)
+		arguments := append(append([]any{id}, db.Data(at)...), actor.SpaceID)
 		tag, err := tx.Exec(ctx, `UPDATE computer_updates u SET status = 'dismissed', "updatedAt" = $2
 			FROM computers c
 			WHERE u.id = $1 AND u.status = 'failed' AND c.id = u."computerId" AND c."spaceId" = $3

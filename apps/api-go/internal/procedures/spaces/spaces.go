@@ -46,6 +46,7 @@ func now() time.Time { return time.Now().UTC().Truncate(time.Millisecond) }
 
 // lockSpace is lockSpaceDeletion: a transaction-scoped lock a deletion and a handover also take.
 func lockSpace(ctx context.Context, tx pgx.Tx, spaceID string) error {
+	// writeaudit:dynamic transaction-scoped advisory lock; no row payload
 	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, spaceID)
 	return err
 }

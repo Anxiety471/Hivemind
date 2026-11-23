@@ -141,6 +141,7 @@ func LinkStart(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.In
 		}
 		expiresAt := now().Add(linkCodeTTL)
 		// One active code per user: a fresh request supersedes the previous one.
+		// writeaudit:dynamic transaction-scoped advisory lock; no row payload
 		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "messaging-link-code:"+actor.UserID); err != nil {
 			return err
 		}
