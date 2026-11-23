@@ -441,12 +441,12 @@ func applyServer(ctx context.Context, tx pgx.Tx, userID, id, home string, availa
 }
 
 func replaceSpaces(ctx context.Context, tx pgx.Tx, table, column, id, userID, home string, availability SpaceAvailability) error {
-	// writeaudit:dynamic table/column come from the two fixed content tables; the delete binds a filter
+	// writeaudit:dynamic table/column come from the three fixed content tables; the delete binds a filter
 	if _, err := tx.Exec(ctx, fmt.Sprintf(`DELETE FROM %s WHERE %s = $1`, table, quote(column)), id); err != nil {
 		return err
 	}
 	for _, spaceID := range without(availability.SpaceIDs, home) {
-		// writeaudit:dynamic table/column come from the two fixed content tables; payloads are db.Data
+		// writeaudit:dynamic table/column come from the three fixed content tables; payloads are db.Data
 		if _, err := tx.Exec(ctx, fmt.Sprintf(`INSERT INTO %s (%s, "spaceId", "userId") VALUES ($1, $2, $3)`, table, quote(column)), db.Data(id, spaceID, userID)...); err != nil {
 			return err
 		}
