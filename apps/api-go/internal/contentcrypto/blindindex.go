@@ -70,7 +70,9 @@ func SearchTerms(text string) []string {
 // the first four bytes read as a signed big-endian int32.
 func token(hmacKey []byte, domain SearchTokenDomain, term string) int32 {
 	mac := hmac.New(sha256.New, hmacKey)
-	mac.Write([]byte(string(domain) + "\x00" + term))
+	// Node's createHmac().update(string) encodes the JS string as UTF-8, so an
+	// unpaired surrogate is U+FFFD in the MAC input too.
+	mac.Write([]byte(string(domain) + "\x00" + wtf8.ToUTF8(term)))
 	sum := mac.Sum(nil)
 	return int32(binary.BigEndian.Uint32(sum[:4]))
 }

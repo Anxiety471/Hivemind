@@ -119,6 +119,20 @@ func TestReplaceSurrogatesKeepsNUL(t *testing.T) {
 	}
 }
 
+func TestToUTF8ReplacesOnlySurrogates(t *testing.T) {
+	lone := string(surrogateBytes(0xD800))
+	if got := ToUTF8("a" + lone + "\x00b"); got != "a\uFFFD\x00b" {
+		t.Fatalf("ToUTF8 surrogate = %q", got)
+	}
+	if got := ToUTF8("plain \u00e9 text"); got != "plain \u00e9 text" {
+		t.Fatalf("ToUTF8 identity = %q", got)
+	}
+	invalid := string([]byte{'a', 0xff, 'b'})
+	if got := ToUTF8(invalid); got != invalid {
+		t.Fatalf("ToUTF8 must leave invalid bytes for the caller, got %q", got)
+	}
+}
+
 func TestSanitizeTextIsThePrismaWriteRule(t *testing.T) {
 	surrogate := string(surrogateBytes(0xD800))
 	cases := []struct{ in, want string }{

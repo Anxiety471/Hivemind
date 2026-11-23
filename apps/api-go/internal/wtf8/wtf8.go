@@ -1010,6 +1010,36 @@ func Fits(value string, minimum, maximum int) bool {
 	return ZodMinPass(value, minimum) && ZodMaxPass(value, maximum)
 }
 
+// ToUTF8 replaces each WTF-8 unpaired surrogate with U+FFFD, which is what
+// Node's UTF-8 encoder writes for one (Buffer.from(text, "utf8")); NUL and
+// other code points are untouched, and genuinely invalid bytes are left for
+// the caller to reject.
+func ToUTF8(value string) string {
+	clean := true
+	for index := 0; index < len(value); {
+		if isSurrogate(value[index:]) > 0 {
+			clean = false
+			break
+		}
+		index++
+	}
+	if clean {
+		return value
+	}
+	var out strings.Builder
+	out.Grow(len(value))
+	for index := 0; index < len(value); {
+		if size := isSurrogate(value[index:]); size > 0 {
+			out.WriteRune(utf8.RuneError)
+			index += size
+			continue
+		}
+		out.WriteByte(value[index])
+		index++
+	}
+	return out.String()
+}
+
 // ReplaceSurrogates is the read-side rule: what Node's UTF-8 encoder sends for
 // an unpaired surrogate (U+FFFD), applied without touching NUL.
 func ReplaceSurrogates(value string) string {

@@ -23,6 +23,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/validate"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 )
 
 // MemoryIndexPath is MEMORY_INDEX_PATH (packages/contracts/src/domain.ts:885): the index
@@ -114,6 +115,9 @@ func openDocuments(ctx context.Context, ring *contentcrypto.KeyRing, rows []*sto
 // looks like ciphertext gains a leading zero-width space so it is never read as a value under a
 // missing key (content-encryption.ts:458-485).
 func written(ring *contentcrypto.KeyRing, content string) string {
+	// The store returns the document content after the write; Node's UTF-8
+	// encoder turned every unpaired surrogate into U+FFFD on the way to the row.
+	content = wtf8.ToUTF8(content)
 	if ring == nil || ring.EncryptWrites {
 		return content
 	}
