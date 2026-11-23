@@ -2,6 +2,7 @@ package runs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -34,6 +35,10 @@ type WakeOptions struct {
 // commits, never inside one: TypeScript's enqueueIn refuses run.continue
 // ("Runs are not started inside a transaction").
 //
+// Wake takes the id as the caller resolved it: RLS scopes the Space, not the
+// member or thread. A procedure that accepts a run id from a request must
+// resolve it under the actor first, as TypeScript's callers do.
+//
 // A run already due is announced; a future one is not, because TypeScript's
 // RunStarter.start schedules a local timer for a later time and a process that
 // cannot take the run returns without publishing (run-wakeup.ts:104-114). The
@@ -50,7 +55,9 @@ type WakeOptions struct {
 // or already had a wake time under KeepExisting; the run is untouched then.
 func Wake(ctx context.Context, exec Execer, publisher Publisher, runID string, options WakeOptions) (bool, error) {
 	if runID == "" {
-		return false, nil
+		// A wake of "" would publish runs:ready with an empty payload, which the
+		// TypeScript RunWorkerHost treats as a full scan. Callers never mean that.
+		return false, errors.New("runs: wake needs a run id")
 	}
 	at := now(options.At)
 	updated := now(options.Now)
@@ -122,8 +129,26 @@ var ContinueStatuses = []string{StatusQueued, StatusWaitingTakeover}
 // run waiting for the user's answer, a finished one) is never touched or
 // announced, even if it changed after the caller read it. Only the rows this
 // statement woke are published, all due now as wakeRun's absent `at` is.
-func WakeMany(ctx context.Context, database *db.DB, actor db.Actor, publisher Publisher, logger *slog.Logger, runIDs []string) {
+//
+// threadID is the chat the caller read those ids from: a request-supplied id
+// from another chat is ignored, because waking it would resume a run the caller
+// never addressed. TS has no equivalent guard because its caller has already
+// loaded the run objects; this one is for the Go procedure that takes ids.
+// The threadID guard is not a member check: callers still resolve the thread
+// and person under the actor before waking its runs.
+//
+// The status re-check at write time is deliberately stricter than TypeScript's
+// snapshot filter: TS filters the statuses the caller read, then wakeRun updates
+// anything still RESUMABLE (which includes waiting_input); a run that became
+// waiting_input between the read and the wake would be woken there. Go
+// re-evaluates the filter in the statement and leaves it alone. That is the safe
+// direction and is recorded as a deliberate divergence (design §12 R9).
+func WakeMany(ctx context.Context, database *db.DB, actor db.Actor, threadID string, publisher Publisher, logger *slog.Logger, runIDs []string) {
 	if len(runIDs) == 0 {
+		return
+	}
+	if threadID == "" {
+		logWakeError(logger, "wake many", errors.New("runs: wake many needs a thread id"))
 		return
 	}
 	at := now(time.Time{})
@@ -131,8 +156,8 @@ func WakeMany(ctx context.Context, database *db.DB, actor db.Actor, publisher Pu
 	err := database.Tenant(ctx, actor, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `
 			UPDATE runs SET "wakeAt" = $2, "updatedAt" = $2
-			WHERE id = ANY($1::text[]) AND status = ANY($3::text[])
-			RETURNING id`, runIDs, at, ContinueStatuses)
+			WHERE "threadId" = $4 AND id = ANY($1::text[]) AND status = ANY($3::text[])
+			RETURNING id`, runIDs, at, ContinueStatuses, threadID)
 		if err != nil {
 			return err
 		}
@@ -156,7 +181,6 @@ func WakeMany(ctx context.Context, database *db.DB, actor db.Actor, publisher Pu
 	for _, runID := range runIDs {
 		if woken[runID] {
 			publisher.PublishRunReady(runID)
-			delete(woken, runID)
 		}
 	}
 }

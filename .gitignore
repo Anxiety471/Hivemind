@@ -51,6 +51,8 @@ packages/i18n/locales/messages.pot
 apps/web/scripts/msgids.json
 playwright-report-www
 
+# Downloaded Unicode Character Database files for UTS #46 table regeneration
+apps/api-go/internal/whatwgurl/testdata/ucd/
 # Downloaded embedded computer screen SDK files
 apps/web/public/computer-screen/*.js
 apps/web/public/computer-screen/sdk/

@@ -12,6 +12,7 @@ import (
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/messageblocks"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/validate"
 )
@@ -451,7 +452,7 @@ func humanizeToolName(name string) string {
 	if spaced == "" {
 		return name
 	}
-	lower := []rune(jsLower.String(spaced))
+	lower := []rune(messageblocks.JSLower.String(spaced))
 	return jsUpper.String(string(lower[:1])) + string(lower[1:])
 }
 

@@ -824,6 +824,7 @@ if (picked("wake-many")) {
       await go({
         op: "wakeMany",
         actor: { spaceId: side.fixture.spaceId, userId: side.fixture.userId },
+        threadId: side.fixture.threadId,
         runIds: candidates.map((candidate) => candidate.id),
       });
     }
@@ -1077,6 +1078,31 @@ async function cancelConversation(side: Side, options: CancelConversationOptions
   };
 }
 
+// cancelWithCredentialOrigin seeds an active run with one open ask, appends a
+// bearer credential card carrying the given origin, cancels, and asserts how
+// the open effect ends. TS and Go must agree on validity before the cancel.
+async function cancelWithCredentialOrigin(
+  side: Side,
+  label: string,
+  origin: string,
+  effectStatus: "denied" | "intended",
+): Promise<void> {
+  const runId = await seedActiveRun(side, label);
+  const message = await system.message.findFirstOrThrow({ where: { runId }, orderBy: { seq: "desc" } });
+  await system.message.update({
+    where: { id: message.id },
+    data: {
+      blocks: [
+        ...(message.blocks as any[]),
+        { kind: "ask", text: `Use ${origin}`, credential: { name: "site_key", origin, auth: { type: "bearer" } } },
+      ],
+    },
+  });
+  await cancelActive(side, [runId], new Date("2026-11-22T08:10:00.000Z"));
+  const effect = await system.externalEffect.findFirstOrThrow({ where: { runId, kind: "web_fetch" } });
+  assert.equal(effect.status, effectStatus, `${side.kind}: origin ${JSON.stringify(origin)}`);
+}
+
 if (picked("cancel-active")) {
   await scenario("cancel-active", async (side) => {
     const runId = await seedActiveRun(side, "a");
@@ -1087,6 +1113,158 @@ if (picked("cancel-active")) {
     assertPinnedCompletion(runId, at);
     await assertStatementTime(runId, "active cancel", at);
   });
+}
+
+if (picked("cancel-malformed-ask")) {
+  await scenario("cancel-malformed-ask", async (side) => {
+    const runId = await seedActiveRun(side, "malformed-ask");
+    const message = await system.message.findFirstOrThrow({
+      where: { runId },
+      orderBy: { seq: "desc" },
+    });
+    // One invalid card after a valid open ask: MessageBlockSchema.array() fails
+    // the whole list, so neither side may deny the ask's effect.
+    await system.message.update({
+      where: { id: message.id },
+      data: { blocks: [...(message.blocks as any[]), { kind: "card", lines: [{ k: "missing-v" }] }] },
+    });
+    await cancelActive(side, [runId], new Date("2026-11-22T08:10:00.000Z"));
+    const effect = await system.externalEffect.findFirstOrThrow({
+      where: { runId, kind: "web_fetch" },
+    });
+    assert.equal(effect.status, "intended", `${side.kind}: a malformed block makes the whole ask list unparseable`);
+  });
+}
+
+if (picked("cancel-nested-credential")) {
+  await scenario("cancel-nested-credential", async (side) => {
+    const runId = await seedActiveRun(side, "nested-credential");
+    const message = await system.message.findFirstOrThrow({ where: { runId }, orderBy: { seq: "desc" } });
+    await system.message.update({
+      where: { id: message.id },
+      data: {
+        blocks: [
+          ...(message.blocks as any[]),
+          {
+            kind: "ask", text: "Sign in",
+            credential: { name: "site_login", origin: "https://www.example.test", auth: { type: "login" } },
+          },
+        ],
+      },
+    });
+    await cancelActive(side, [runId], new Date("2026-11-22T08:10:00.000Z"));
+    const effect = await system.externalEffect.findFirstOrThrow({ where: { runId, kind: "web_fetch" } });
+    assert.equal(effect.status, "denied", `${side.kind}: a valid credential ask must not abort the cancel`);
+  });
+}
+
+if (picked("cancel-nested-onetimecode")) {
+  await scenario("cancel-nested-onetimecode", async (side) => {
+    const runId = await seedActiveRun(side, "nested-onetimecode");
+    const message = await system.message.findFirstOrThrow({ where: { runId }, orderBy: { seq: "desc" } });
+    await system.message.update({
+      where: { id: message.id },
+      data: {
+        blocks: [
+          ...(message.blocks as any[]),
+          { kind: "ask", text: "Enter the code", oneTimeCode: { origin: "https://www.example.test" } },
+        ],
+      },
+    });
+    await cancelActive(side, [runId], new Date("2026-11-22T08:10:00.000Z"));
+    const effect = await system.externalEffect.findFirstOrThrow({ where: { runId, kind: "web_fetch" } });
+    assert.equal(effect.status, "denied", `${side.kind}: a valid oneTimeCode ask must not abort the cancel`);
+  });
+}
+
+if (picked("cancel-run-import-setup")) {
+  await scenario("cancel-run-import-setup", async (side) => {
+    const runId = await seedActiveRun(side, "run-import-setup");
+    const message = await system.message.findFirstOrThrow({ where: { runId }, orderBy: { seq: "desc" } });
+    await system.message.update({
+      where: { id: message.id },
+      data: {
+        blocks: [
+          ...(message.blocks as any[]),
+          { kind: "import_setup", items: [{ kind: "model", title: "M", provider: "p", providerName: "P" }] },
+        ],
+      },
+    });
+    await cancelActive(side, [runId], new Date("2026-11-22T08:10:00.000Z"));
+    const effect = await system.externalEffect.findFirstOrThrow({ where: { runId, kind: "web_fetch" } });
+    assert.equal(effect.status, "denied", `${side.kind}: a run-linked import_setup must not abort the cancel`);
+  });
+}
+
+if (picked("cancel-malformed-nested-credential")) {
+  await scenario("cancel-malformed-nested-credential", async (side) => {
+    const runId = await seedActiveRun(side, "malformed-nested-credential");
+    const message = await system.message.findFirstOrThrow({ where: { runId }, orderBy: { seq: "desc" } });
+    await system.message.update({
+      where: { id: message.id },
+      data: {
+        blocks: [
+          ...(message.blocks as any[]),
+          {
+            kind: "ask", text: "Sign in",
+            credential: { name: "k", origin: "https://www.example.test", auth: { type: "header", name: "Host" } },
+          },
+        ],
+      },
+    });
+    await cancelActive(side, [runId], new Date("2026-11-22T08:10:00.000Z"));
+    const effect = await system.externalEffect.findFirstOrThrow({ where: { runId, kind: "web_fetch" } });
+    assert.equal(effect.status, "intended", `${side.kind}: a malformed nested credential drops the whole list`);
+  });
+}
+
+if (picked("cancel-origin-empty-userinfo")) {
+  await scenario("cancel-origin-empty-userinfo", (side) =>
+    cancelWithCredentialOrigin(side, "origin-empty-userinfo", "https://@example.com", "denied"));
+}
+
+if (picked("cancel-origin-percent-host")) {
+  await scenario("cancel-origin-percent-host", (side) =>
+    cancelWithCredentialOrigin(side, "origin-percent-host", "https://exa%6dple.com", "denied"));
+}
+
+if (picked("cancel-origin-unicode-space")) {
+  await scenario("cancel-origin-unicode-space", (side) =>
+    cancelWithCredentialOrigin(side, "origin-unicode-space", "https://example.com\u00a0", "intended"));
+}
+
+if (picked("cancel-origin-fullwidth-dot")) {
+  await scenario("cancel-origin-fullwidth-dot", (side) =>
+    cancelWithCredentialOrigin(side, "origin-fullwidth-dot", "https://metadata.google.internal\u3002", "intended"));
+}
+
+if (picked("cancel-origin-alabel-control")) {
+  await scenario("cancel-origin-alabel-control", (side) =>
+    cancelWithCredentialOrigin(side, "origin-alabel-control", "https://xn--bcher-kva.example/", "denied"));
+}
+
+// A mixed A-label label: Node/ICU throws on the non-ASCII `xn--` label, so the
+// ask list is unparseable and the open effect is never denied. Before the
+// UTS #46 A-label gate, Go punycode-decoded the non-ASCII bytes and accepted
+// the origin, flipping this effect to denied.
+if (picked("cancel-origin-mixed-alabel")) {
+  await scenario("cancel-origin-mixed-alabel", (side) =>
+    cancelWithCredentialOrigin(side, "origin-mixed-alabel", "https://xn--bcüer-kva.example/", "intended"));
+}
+
+// A valid A-label whose decoded label contains a code point ICU's UTS #46
+// tables accept but an older UCD-derived ContextJ/Bidi table rejected. Node
+// accepts the origin, so the open effect must be denied on both sides.
+if (picked("cancel-origin-icu-alabel")) {
+  await scenario("cancel-origin-icu-alabel", (side) =>
+    cancelWithCredentialOrigin(side, "origin-icu-alabel", "https://xn--csfe.ü/", "denied"));
+}
+
+// The reverse direction: Node/ICU rejects this A-label once the domain becomes
+// non-ASCII, so the ask list is unparseable and the effect stays intended.
+if (picked("cancel-origin-alabel-reverse")) {
+  await scenario("cancel-origin-alabel-reverse", (side) =>
+    cancelWithCredentialOrigin(side, "origin-alabel-reverse", "https://xn--nybvznylx.i.ü/", "intended"));
 }
 
 if (picked("cancel-finished")) {

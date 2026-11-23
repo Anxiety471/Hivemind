@@ -1,6 +1,9 @@
 package runs
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 // TestTransitionTableMatchesRunState pins `allowed`
 // (packages/core/src/runs/run-state.ts:53-63).
@@ -74,5 +77,20 @@ func TestConversationNotesMatchThreadStop(t *testing.T) {
 	}, &StopNote{BotID: "bot-2"})
 	if len(only) != 1 {
 		t.Fatalf("routine-only notes = %+v", only)
+	}
+	// An empty routine name is falsy in thread-stop's `name ? ... : []`, so TS
+	// emits the stop note instead of a routine note; Go must do the same.
+	empty := ""
+	unnamed := conversationNotes([]Cancelled{
+		{ID: "a", Trigger: "routine", RoutineID: &routineID, RoutineName: &empty, BotID: "bot-1"},
+	}, &StopNote{BotID: "bot-1"})
+	if len(unnamed) != 1 || unnamed[0].Text != StoppedByMessageNote {
+		t.Fatalf("empty routine name notes = %+v", unnamed)
+	}
+}
+
+func TestWakeRejectsAnEmptyRunID(t *testing.T) {
+	if _, err := Wake(context.Background(), nil, nil, "", WakeOptions{}); err == nil {
+		t.Fatal(`Wake("") returned no error`)
 	}
 }

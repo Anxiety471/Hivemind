@@ -19,6 +19,11 @@
 // 24.22.3 over the bundled web-platform-tests urltestdata.json and
 // setters_tests.json, the IDNA conformance data, and a generated corpus of the
 // inputs these procedures see.
+//
+// Host IDNA is project-owned for non-ASCII special-scheme hosts: they are
+// rewritten with UTS #46 tables probed from the Node/ICU host parser (see
+// uts46.go) before this parser sees them. All-ASCII hosts and opaque schemes
+// stay on the parser path, matching Node's fast paths.
 package whatwgurl
 
 import (
@@ -42,11 +47,17 @@ var ErrInvalidURL = errors.New("whatwgurl: invalid URL")
 // control or space are trimmed, then every ASCII tab, LF and CR is removed,
 // before the parser states run.
 func Parse(input string) (*URL, error) {
-	record, err := wurl.Parse(input)
+	prepared, err := prepareAbsolute(input)
 	if err != nil {
 		return nil, ErrInvalidURL
 	}
-	return &URL{record: record}, nil
+	record, err := wurl.Parse(prepared)
+	if err != nil {
+		return nil, ErrInvalidURL
+	}
+	u := &URL{record: record}
+	normalizeDefaultPort(u)
+	return u, nil
 }
 
 // ParseRef is `new URL(input, base)`. A relative input resolves against base,
@@ -54,17 +65,51 @@ func Parse(input string) (*URL, error) {
 // `//host` reference. An invalid base makes every reference invalid, as it does
 // in JavaScript.
 func ParseRef(input, base string) (*URL, error) {
-	record, err := wurl.ParseRef(base, input)
+	preparedBase, err := prepareAbsolute(base)
 	if err != nil {
 		return nil, ErrInvalidURL
 	}
-	return &URL{record: record}, nil
+	preparedRef, err := prepareReference(base, input)
+	if err != nil {
+		return nil, ErrInvalidURL
+	}
+	record, err := wurl.ParseRef(preparedBase, preparedRef)
+	if err != nil {
+		return nil, ErrInvalidURL
+	}
+	u := &URL{record: record}
+	normalizeDefaultPort(u)
+	return u, nil
+}
+
+// normalizeDefaultPort applies the WHATWG special-scheme default-port elision
+// that the pinned parser misses for e.g. a network-path reference
+// `//example.com:443` resolved against an https base. SetPort("") keeps the
+// rest of the record intact and re-serializes the host correctly.
+func normalizeDefaultPort(u *URL) {
+	if u.Port() == "" {
+		return
+	}
+	var defaultPort string
+	switch u.Protocol() {
+	case "http:", "ws:":
+		defaultPort = "80"
+	case "https:", "wss:":
+		defaultPort = "443"
+	case "ftp:":
+		defaultPort = "21"
+	default:
+		return
+	}
+	if u.Port() == defaultPort {
+		u.SetPort("")
+	}
 }
 
 // CanParse is `URL.canParse(input)`: whether Parse would succeed without
 // keeping the record.
 func CanParse(input string) bool {
-	_, err := wurl.Parse(input)
+	_, err := Parse(input)
 	return err == nil
 }
 

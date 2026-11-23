@@ -9,6 +9,7 @@ import (
 
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/contentcrypto"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/messageblocks"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/validate"
@@ -219,7 +220,7 @@ func NewestMessagePreview(ctx context.Context, tx pgx.Tx, ring *contentcrypto.Ke
 	if err != nil {
 		return "", err
 	}
-	value, err := decodeJSON(blocks)
+	value, err := messageblocks.DecodeJSON(blocks)
 	if err != nil {
 		return "", err
 	}

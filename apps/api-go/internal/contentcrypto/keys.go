@@ -395,6 +395,20 @@ type KeyRing struct {
 	inflight map[string]*flight[any]
 }
 
+// ErrNoKeyStore is a read of ciphertext through a ring built without a store,
+// which is only NoEncryptionKeyRing: the deployment says its rows are plaintext,
+// so a ciphertext there is a misconfiguration, not a value to ignore.
+var ErrNoKeyStore = errors.New("content crypto: no key store (content encryption is off)")
+
+// NoEncryptionKeyRing is the ring a deployment with content encryption off
+// builds. The library's cancels require a ring because they open sealed message
+// blocks; this one passes plaintext rows through, writes no ciphertext, and
+// reports a ciphertext as ErrNoKeyStore rather than silently skipping it. It is
+// safe for concurrent use and has no provider or key store.
+func NoEncryptionKeyRing() *KeyRing {
+	return NewKeyRing(nil, nil, KeyRingOptions{EncryptWrites: false})
+}
+
 // NewKeyRing returns a ring over provider and store.
 func NewKeyRing(provider KeyProvider, store SpaceKeyStore, options KeyRingOptions) *KeyRing {
 	ttl := options.TTL
@@ -431,6 +445,9 @@ func (r *KeyRing) unwrap(ctx context.Context, record SpaceKeyRecord) (DataKey, e
 // All returns every key version of a Space, oldest first. Empty when the Space
 // has none yet (content-keys.ts:394-407).
 func (r *KeyRing) All(ctx context.Context, spaceID string) ([]DataKey, error) {
+	if r.store == nil {
+		return nil, ErrNoKeyStore
+	}
 	if cached, ok := r.versions.get(spaceID); ok {
 		return cached, nil
 	}
@@ -528,6 +545,9 @@ func (r *KeyRing) create(ctx context.Context, spaceID string, version int) (Data
 
 // ByID resolves the key version a ciphertext names (content-keys.ts:386-396).
 func (r *KeyRing) ByID(ctx context.Context, id string) (DataKey, error) {
+	if r.store == nil {
+		return DataKey{}, ErrNoKeyStore
+	}
 	if cached, ok := r.keys.get(id); ok {
 		return cached, nil
 	}
@@ -556,6 +576,9 @@ func (r *KeyRing) Remember(source SpaceSource, id string, context RowContext) {
 // RowContext is a row's Space and owner, from rows this process has seen or
 // from the database (content-keys.ts:443-453).
 func (r *KeyRing) RowContext(ctx context.Context, source SpaceSource, id string) (RowContext, error) {
+	if r.store == nil {
+		return RowContext{}, ErrNoKeyStore
+	}
 	cacheKey := fmt.Sprintf("%s:%s", source, id)
 	if cached, ok := r.rows.get(cacheKey); ok {
 		return cached, nil

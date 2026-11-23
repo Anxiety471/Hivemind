@@ -173,8 +173,12 @@ func TestCreateRunWritesTheTypeScriptRow(t *testing.T) {
 			t.Errorf("runs.%s = %v, want %v", column, got, want)
 		}
 	}
-	if !row["createdAt"].(time.Time).Equal(at) || !row["updatedAt"].(time.Time).Equal(at) {
-		t.Errorf("timestamps = %v/%v, want %v", row["createdAt"], row["updatedAt"], at)
+	// createdAt is the database default now(); updatedAt is the sent clock.
+	if row["updatedAt"].(time.Time).Equal(at) == false {
+		t.Errorf("updatedAt = %v, want %v", row["updatedAt"], at)
+	}
+	if drift := time.Since(row["createdAt"].(time.Time)); drift < 0 || drift > 2*time.Minute {
+		t.Errorf("createdAt = %v, want the database default (drift %v)", row["createdAt"], drift)
 	}
 	task := systemScalar[string](t, database, `SELECT status || '|' || prompt FROM tasks WHERE id = $1`, created.TaskID)
 	if task != "queued|say hello" {
@@ -420,7 +424,7 @@ func TestWakeManyWakesOnlyContinuations(t *testing.T) {
 	exec(t, database, `UPDATE runs SET status = 'completed', "completedAt" = now() WHERE id = $1`, finished.RunID)
 	notifier := effects.NewNotifier(database, nil)
 	runs.WakeMany(context.Background(), database,
-		db.Actor{SpaceID: fixture.spaceID, UserID: fixture.userID}, notifier, nil,
+		db.Actor{SpaceID: fixture.spaceID, UserID: fixture.userID}, fixture.threadID, notifier, nil,
 		[]string{waiting.RunID, queued.RunID, takeover.RunID, finished.RunID})
 	notifier.Wait()
 	// RUNS_NEEDING_CONTINUE = {queued, waiting_takeover} (thread-target.ts:78).
@@ -689,6 +693,14 @@ func TestCancelsRequireTheRing(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "content key ring") {
 		t.Fatalf("nil-ring CancelConversation = %v", err)
 	}
+	_, err = runs.Canceller{}.CancelConversationFor(ctx, database,
+		db.Actor{SpaceID: fixture.spaceID, UserID: fixture.userID},
+		runs.ConversationTarget{
+			SpaceID: fixture.spaceID, ThreadID: fixture.threadID, BotIDs: []string{fixture.botID},
+		}, time.Now(), nil)
+	if err == nil || !strings.Contains(err.Error(), "content key ring") {
+		t.Fatalf("nil-ring CancelConversationFor = %v", err)
+	}
 	err = database.System(ctx, "supersede without a ring", func(tx pgx.Tx) error {
 		_, err := runs.Canceller{}.SupersedeQueued(ctx, tx, fixture.threadID, []string{fixture.botID}, nil, time.Now(), nil)
 		return err
@@ -745,5 +757,31 @@ func TestCreateWritesTheNullableModelPin(t *testing.T) {
 	row = runRow(t, database, bare.RunID)
 	if row["modelPinned"] != false || row["modelProvider"] != nil {
 		t.Fatalf("bare run pin = %v/%v", row["modelPinned"], row["modelProvider"])
+	}
+}
+
+func TestRoutineModelPinKeepsANullThinkingLevel(t *testing.T) {
+	database := openTestDB(t)
+	fixture := seedRunsFixture(t, database)
+	created := createRun(t, database, fixture, runs.CreateInput{
+		Trigger: "routine",
+		Model:   &runs.ModelPin{Provider: "openai", Model: "gpt-x", Thinking: nil, Pinned: true},
+	}, nil)
+	row := runRow(t, database, created.RunID)
+	if row["thinkingLevel"] != nil {
+		t.Errorf("thinkingLevel = %v, want NULL", row["thinkingLevel"])
+	}
+	if row["modelProvider"] != "openai" || row["modelId"] != "gpt-x" || row["modelPinned"] != true {
+		t.Errorf("pin = %v/%v/%v", row["modelProvider"], row["modelId"], row["modelPinned"])
+	}
+	// routineRunModelPin returns {} without a provider and model: the caller
+	// passes nil then; an empty pin object is the no-pin shape.
+	empty := createRun(t, database, fixture, runs.CreateInput{
+		Trigger: "routine",
+		Model:   &runs.ModelPin{},
+	}, nil)
+	emptyRow := runRow(t, database, empty.RunID)
+	if emptyRow["modelProvider"] != nil || emptyRow["modelId"] != nil || emptyRow["modelPinned"] != false {
+		t.Errorf("empty pin = %v/%v/%v", emptyRow["modelProvider"], emptyRow["modelId"], emptyRow["modelPinned"])
 	}
 }

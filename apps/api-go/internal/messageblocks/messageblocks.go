@@ -1,9 +1,8 @@
-package threads
+package messageblocks
 
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"math"
 	"slices"
 	"strconv"
@@ -20,14 +19,11 @@ import (
 // its schema names (z.object strips the rest), a missing key with a default gets it, and any value
 // outside the schema fails the whole call ("Output validation failed").
 //
-// Three nested schemas stay with TypeScript because they run URL parsing and host classification
-// (botSecretDestinationSchema, OneTimeCodeTarget) or are retired checklists (import_setup): a block
-// carrying one makes parseBlocks panic with errUndecidable, which the handler turns into a decline.
+// Every MessageBlock variant, including the nested credential, oneTimeCode and
+// import_setup schemas, is decided here (see secrets.go and importsetup.go).
 
-// jsLower is String.prototype.toLowerCase (the Unicode default mapping, not strings.ToLower).
-var jsLower = cases.Lower(language.Und)
-
-var errUndecidable = errors.New("block schema not reproduced in Go")
+// JSLower is String.prototype.toLowerCase (the Unicode default mapping, not strings.ToLower).
+var JSLower = cases.Lower(language.Und)
 
 // parser is one zod schema: the cleaned value and whether the input satisfied it.
 type parser func(any) (any, bool)
@@ -223,7 +219,7 @@ func loginFieldLabels(value any) (any, bool) {
 	}
 	seen := map[string]bool{}
 	for _, label := range labels {
-		key := jsLower.String(label.(string))
+		key := JSLower.String(label.(string))
 		if seen[key] {
 			return nil, false
 		}
@@ -233,17 +229,11 @@ func loginFieldLabels(value any) (any, bool) {
 }
 
 func askBlock(value any) (any, bool) {
-	if input, ok := value.(map[string]any); ok {
-		if _, has := input["credential"]; has {
-			panic(errUndecidable)
-		}
-		if _, has := input["oneTimeCode"]; has {
-			panic(errUndecidable)
-		}
-	}
 	return object(
 		required("text", str),
 		optional("approvalEffectId", id),
+		optional("credential", credentialDestination),
+		optional("oneTimeCode", oneTimeCodeTarget),
 		optional("instructionUpdate", object(
 			required("botId", id), required("before", str), required("after", str), required("reason", str),
 			optional("undoVersionId", id),
@@ -305,8 +295,6 @@ func chartBlock(value any) (any, bool) {
 	}
 	return block, rows <= maxChartDataRows
 }
-
-func undecidable(any) (any, bool) { panic(errUndecidable) }
 
 var intents = []string{"request", "result", "question", "status", "fyi"}
 
@@ -382,7 +370,7 @@ var blockSchemas = map[string]parser{
 		required("serverId", id), required("transport", enum("streamable_http", "sse", "stdio")),
 		required("endpoint", nullable(str)), required("needsOAuth", boolean),
 		field{name: "status", parse: enum("pending", "connected", "dismissed"), def: "pending", hasDef: true})),
-	"import_setup": undecidable,
+	"import_setup": importSetup,
 	"image": object(required("kind", literal("image")), optional("imageHandling", literal("confirm")),
 		required("artifactId", id), required("mimeType", str), required("name", str)),
 	"file": object(required("kind", literal("file")), required("artifactId", id), required("mimeType", str),
@@ -435,31 +423,23 @@ func parseBlock(value any) (any, bool) {
 	return schema(input)
 }
 
-// parseBlocks is MessageBlock.array().parse: every entry must be a valid block. It reports
-// undecidable when a block carries a schema this package leaves to TypeScript.
-func parseBlocks(entries []any) (blocks []any, valid bool, decidable bool) {
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			if recovered != errUndecidable {
-				panic(recovered)
-			}
-			blocks, valid, decidable = nil, false, false
-		}
-	}()
+// ParseBlocks is MessageBlock.array().parse: every entry must be a valid block. The
+// caller decides what an invalid list means (the cancel path drops the whole list).
+func ParseBlocks(entries []any) (blocks []any, valid bool) {
 	out := make([]any, len(entries))
 	for index, entry := range entries {
 		cleaned, ok := parseBlock(entry)
 		if !ok {
-			return nil, false, true
+			return nil, false
 		}
 		out[index] = cleaned
 	}
-	return out, true, true
+	return out, true
 }
 
-// storedBlocks is storedMessageBlocks: the entries of a stored list that are objects naming
+// StoredBlocks is storedMessageBlocks: the entries of a stored list that are objects naming
 // their kind, in order. A value that is not a list reads as no blocks.
-func storedBlocks(value any) []any {
+func StoredBlocks(value any) []any {
 	items, ok := value.([]any)
 	if !ok {
 		return []any{}
@@ -475,9 +455,9 @@ func storedBlocks(value any) []any {
 	return kept
 }
 
-// decodeJSON reads a jsonb value with numbers kept as json.Number, the form the content
+// DecodeJSON reads a jsonb value with numbers kept as json.Number, the form the content
 // decryption and validate.Integer expect.
-func decodeJSON(raw []byte) (any, error) {
+func DecodeJSON(raw []byte) (any, error) {
 	if len(raw) == 0 {
 		return nil, nil
 	}
