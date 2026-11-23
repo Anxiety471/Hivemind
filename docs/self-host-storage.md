@@ -105,6 +105,14 @@ OBJECT_STORAGE_PREFIX=
 OBJECT_STORAGE_PATH_STYLE=false
 ```
 
+**Built-in object store.** Without an outside service, run `rakazo-objectstore` (built from
+`apps/api-go/cmd/objectstore`): a private S3-compatible bucket kept in one directory. It reads
+the same `OBJECT_STORAGE_*` settings as the API, gateway and worker, so one env file configures
+both ends; set `OBJECT_STORAGE_ENDPOINT` to its address (`127.0.0.1:3300` by default) and
+`OBJECT_STORAGE_PATH_STYLE=true`, and start it with `-dir` pointing at a persistent directory.
+It supports single and multipart uploads, ranged reads, deletes and listing, with one access
+key. Keep it on loopback or a private network and back up its directory with the database.
+
 **Azure Blob Storage.** Azure Blob is not S3-compatible, so it has its own backend. Set
 `OBJECT_STORAGE_PROTOCOL=azure-blob` and reuse the same settings: the bucket is the container name,
 the access key ID is the storage account name and the secret access key is one of the account's
