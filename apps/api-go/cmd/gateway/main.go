@@ -324,6 +324,7 @@ func setupLocal(buildIDFile string, wantsVault bool, logger *slog.Logger) (*loca
 			DeploymentLabs:                        deploymentLabs(deployment.BoardLab),
 			NavLinks:                              navLinks(deployment.MeEnv.NavLinks),
 			NavLinksUnknown:                       deployment.MeEnv.NavLinksUnknown,
+			DriveURL:                              deployment.MeEnv.DriveURL,
 			ComputerSettingsEnabled:               deployment.MeEnv.ComputerSettingsEnabled,
 			DesktopHostChoiceEnabled:              deployment.MeEnv.DesktopHostChoiceEnabled,
 			SandboxProvider:                       deployment.MeEnv.SandboxProvider,

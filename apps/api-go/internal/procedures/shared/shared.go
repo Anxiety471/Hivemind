@@ -128,6 +128,8 @@ type MeConfig struct {
 	// cannot confirm, so `me` declines.
 	NavLinks        []NavLink
 	NavLinksUnknown bool
+	// DriveURL is env.driveUrl: where the Files menu item opens, when a Drive app runs.
+	DriveURL string
 	// ComputerSettingsEnabled is COMPUTER_SETTINGS_ENABLED === "true".
 	ComputerSettingsEnabled bool
 	// DesktopHostChoiceEnabled is Boolean(env.desktopStackToken).
