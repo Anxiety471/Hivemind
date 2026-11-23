@@ -398,3 +398,15 @@ func notDismissed(block map[string]any) bool {
 	status, _ := block["status"].(string)
 	return status != dismissedCard
 }
+
+// ListServer is mcp.servers.agents' final read: this bot's assignments of this server, oldest
+// first. The server is already known to be the caller's, so no availability filter applies.
+func ListServer(ctx context.Context, tx pgx.Tx, actor db.Actor, botID, serverID string) ([]Assignment, error) {
+	rows, err := tx.Query(ctx, `SELECT `+columns+` FROM bot_mcp_servers a
+		WHERE a."botId" = $1 AND a."spaceId" = $2 AND a."userId" = $3 AND a."serverId" = $4
+		ORDER BY a."createdAt" ASC`, botID, actor.SpaceID, actor.UserID, serverID)
+	if err != nil {
+		return nil, err
+	}
+	return collect(rows)
+}

@@ -404,6 +404,24 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 			},
 		},
 		{
+			Name: "mcp.servers.agents",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return mcpservers.Agents(ctx, database, deployment, actor, input)
+			},
+		},
+		{
+			Name: "mcp.servers.remove",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return mcpservers.Remove(ctx, database, deployment, actor, input)
+			},
+		},
+		{
+			Name: "mcp.oauth.disconnect",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return mcpservers.Disconnect(ctx, database, deployment, actor, input)
+			},
+		},
+		{
 			Name:     "models.backups",
 			ReadOnly: true,
 			Serve: func(ctx context.Context, actor db.Actor, _ orpc.Input) (any, *orpc.Error) {
@@ -893,6 +911,9 @@ func VaultProcedures() []string {
 		"vault.list",
 		"botSecrets.list",
 		"mcp.servers.list",
+		"mcp.servers.agents",
+		"mcp.servers.remove",
+		"mcp.oauth.disconnect",
 		"models.credentials",
 	}
 }

@@ -26,6 +26,7 @@ import { laneDCases } from "./contract-lane-d.mts";
 import { laneHCases, laneHState } from "./contract-lane-h.mts";
 import { laneICases } from "./contract-lane-i.mts";
 import { laneJCases, laneJState } from "./contract-lane-j.mts";
+import { laneKCases, laneKState } from "./contract-k-mcp.mts";
 import { membershipCases, membershipReset, membershipState } from "./contract-membership.mts";
 import { modelsCases } from "./contract-models.mts";
 import { spaceRunCases } from "./contract-spaces-runs.mts";
@@ -270,6 +271,11 @@ await writeFile(
       "mcp.assignments.all": { mode: "go", readOnly: true },
       "mcp.assignments.list": { mode: "go", readOnly: true },
       "mcp.assignments.approve": { mode: "go" },
+      "mcp.assignments.dismiss": { mode: "go" },
+      "mcp.assignments.replace": { mode: "go" },
+      "mcp.servers.agents": { mode: "go" },
+      "mcp.servers.remove": { mode: "go" },
+      "mcp.oauth.disconnect": { mode: "go" },
       "models.backups": { mode: "go", readOnly: true },
       "models.role": { mode: "go", readOnly: true },
       "models.setRole": { mode: "go" },
@@ -709,6 +715,7 @@ const cases: Case[] = [
   ...laneHCases(system),
   ...laneICases(system),
   ...laneJCases(system),
+  ...laneKCases(system),
   ...modelsCases(system),
   ...threadGetCases(system),
   ...spaceRunCases(system),
@@ -7799,6 +7806,11 @@ const WRITE_PROCEDURES = new Set([
   "routines.testRun",
   "skills.testRun",
   "mcp.assignments.approve",
+  "mcp.assignments.dismiss",
+  "mcp.assignments.replace",
+  "mcp.servers.agents",
+  "mcp.servers.remove",
+  "mcp.oauth.disconnect",
   "spendingLimit.set",
   "botSections.create",
   "botSections.update",
@@ -8651,6 +8663,7 @@ async function databaseState(seeded: ReturnType<typeof ids>, procedure?: string)
     invitations,
     ...(await laneHState(system, seeded)),
     ...(await laneJState(system, seeded, procedure)),
+    ...(await laneKState(system, seeded, procedure)),
     // computer.updates is a read; the API's in-process reconciler can drain the seeded
     // ComputerUpdate rows between the two sides' captures, so those volatile rows are not
     // compared for it (the response body and the other tables still are).
