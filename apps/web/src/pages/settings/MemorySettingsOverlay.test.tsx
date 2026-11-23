@@ -78,6 +78,7 @@ beforeEach(() => {
     lastChanges: 0,
     lastModel: null,
     lastFailures: [],
+    lastReport: [],
     retryAt: null,
     retryAttempt: 0,
   });
@@ -181,6 +182,64 @@ it("connects the provider picked from the ones the server describes", async () =
   expect(onConfigChange).toHaveBeenCalledWith(saved);
   expect(onBusyChange.mock.calls.map(([busy]) => busy)).toContain(true);
   expect(onBusyChange).toHaveBeenLastCalledWith(false);
+});
+
+it("shows every bot's outcome, changes, and check time", async () => {
+  memory.roamer.mockResolvedValue({
+    enabled: true,
+    intervalMinutes: 360,
+    lastRunAt: "2026-11-22T23:30:32.920Z",
+    lastError: null,
+    lastChanges: 1,
+    lastModel: "deepseek-v4.1-flash",
+    lastFailures: [],
+    lastReport: [
+      {
+        kind: "bot",
+        id: "bot-1",
+        name: "Crumb",
+        status: "ok",
+        model: "deepseek-v4.1-flash",
+        changes: [
+          {
+            scope: "bot",
+            path: "MEMORY.md",
+            action: "update",
+            beforeBytes: 100,
+            afterBytes: 90,
+          },
+        ],
+        checkedAt: "2026-11-22T23:30:32.920Z",
+      },
+      {
+        kind: "bot",
+        id: "bot-2",
+        name: "Hatcha",
+        status: "ok",
+        model: "deepseek-v4.1-flash",
+        changes: [],
+        checkedAt: "2026-11-22T23:30:33.920Z",
+      },
+      {
+        kind: "shared",
+        id: "space-1",
+        name: "Team",
+        status: "failed",
+        error: "model HTTP 429",
+        changes: [],
+        checkedAt: "2026-11-22T23:30:34.920Z",
+      },
+    ],
+    retryAt: null,
+    retryAttempt: 0,
+  });
+  await render(null);
+  expect(host.textContent).toContain("Crumb");
+  expect(host.textContent).toContain("MEMORY.md: 100 → 90 bytes");
+  expect(host.textContent).toContain("Hatcha");
+  expect(host.textContent).toContain("No changes");
+  expect(host.textContent).toContain("Shared memory (Team)");
+  expect(host.textContent).toContain("model HTTP 429");
 });
 
 it("shows which targets failed and when the next retry runs", async () => {

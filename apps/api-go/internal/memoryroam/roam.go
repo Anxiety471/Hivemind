@@ -94,6 +94,19 @@ type Change struct {
 	Created     bool   `json:"created,omitempty"`
 }
 
+// Target is one bot or Space's result in the latest run. The report keeps every
+// visited target, not only failures, so Settings can show what happened to each.
+type Target struct {
+	Kind      string    `json:"kind"`
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	Status    string    `json:"status"`
+	Error     string    `json:"error,omitempty"`
+	Model     string    `json:"model,omitempty"`
+	Changes   []Change  `json:"changes"`
+	CheckedAt time.Time `json:"checkedAt"`
+}
+
 // Report is what one pass did.
 type Report struct {
 	Bots       int      `json:"bots"`
@@ -191,6 +204,12 @@ func Run(ctx context.Context, logger *slog.Logger, database *db.DB, ring *conten
 		ownerChanges := 0
 		ownerModel := ""
 		failures := []Failure{}
+		targets := []Target{}
+		// A retry or a single-bot manual run updates the bots it touched and keeps
+		// the other bots' last results. A full pass replaces the whole report.
+		if run == modeRetry || len(config.OnlyBots) > 0 {
+			targets = append(targets, setting.LastReport...)
+		}
 		for _, bot := range selected {
 			if err := ctx.Err(); err != nil {
 				return report, err
@@ -199,6 +218,7 @@ func Run(ctx context.Context, logger *slog.Logger, database *db.DB, ring *conten
 			if err != nil {
 				failures = append(failures, botFailure(bot, err))
 				report.Failures++
+				targets = upsertTarget(targets, targetFor("bot", bot.ID, bot.Name, nil, "", err))
 				logger.Error("memory.roamer.model_unavailable", "botId", bot.ID, "error", err.Error())
 				continue
 			}
@@ -209,6 +229,7 @@ func Run(ctx context.Context, logger *slog.Logger, database *db.DB, ring *conten
 			if model != "" && ownerModel == "" {
 				ownerModel = model
 			}
+			targets = upsertTarget(targets, targetFor("bot", bot.ID, bot.Name, changes, model, err))
 			if err != nil {
 				failures = append(failures, botFailure(bot, err))
 				report.Failures++
@@ -236,6 +257,7 @@ func Run(ctx context.Context, logger *slog.Logger, database *db.DB, ring *conten
 				if err != nil {
 					failures = append(failures, sharedFailure(bot, err))
 					report.Failures++
+					targets = upsertTarget(targets, targetFor("shared", bot.SpaceID, sharedTargetName(bot), nil, "", err))
 					logger.Error("memory.roamer.model_unavailable", "spaceId", bot.SpaceID, "error", err.Error())
 					continue
 				}
@@ -246,6 +268,7 @@ func Run(ctx context.Context, logger *slog.Logger, database *db.DB, ring *conten
 				if model != "" && ownerModel == "" {
 					ownerModel = model
 				}
+				targets = upsertTarget(targets, targetFor("shared", bot.SpaceID, sharedTargetName(bot), changes, model, err))
 				if err != nil {
 					failures = append(failures, sharedFailure(bot, err))
 					report.Failures++
@@ -271,7 +294,7 @@ func Run(ctx context.Context, logger *slog.Logger, database *db.DB, ring *conten
 		}
 		if !config.DryRun {
 			if err := recordRun(ctx, database, owner, ownerChanges, ownerModel,
-				failures, retryAt, attempt); err != nil {
+				failures, targets, retryAt, attempt); err != nil {
 				return report, err
 			}
 		}
@@ -290,16 +313,44 @@ func selectFailedBots(bots []Bot, failed map[string]bool) []Bot {
 	return selected
 }
 
+func targetFor(kind, id, name string, changes []Change, model string, err error) Target {
+	target := Target{
+		Kind: kind, ID: id, Name: name, Status: "ok", Model: model,
+		Changes: append([]Change{}, changes...), CheckedAt: time.Now().UTC(),
+	}
+	if target.Changes == nil {
+		target.Changes = []Change{}
+	}
+	if err != nil {
+		target.Status = "failed"
+		target.Error = failureText(err)
+	}
+	return target
+}
+
+func sharedTargetName(bot Bot) string {
+	if bot.SpaceName != "" {
+		return bot.SpaceName
+	}
+	return "Shared memory"
+}
+
+func upsertTarget(targets []Target, target Target) []Target {
+	for index := range targets {
+		if targets[index].Kind == target.Kind && targets[index].ID == target.ID {
+			targets[index] = target
+			return targets
+		}
+	}
+	return append(targets, target)
+}
+
 func botFailure(bot Bot, err error) Failure {
 	return Failure{Kind: "bot", ID: bot.ID, Name: bot.Name, Error: failureText(err)}
 }
 
 func sharedFailure(bot Bot, err error) Failure {
-	name := bot.SpaceName
-	if name == "" {
-		name = "Shared memory"
-	}
-	return Failure{Kind: "shared", ID: bot.SpaceID, Name: name, Error: failureText(err)}
+	return Failure{Kind: "shared", ID: bot.SpaceID, Name: sharedTargetName(bot), Error: failureText(err)}
 }
 
 func failureText(err error) string {

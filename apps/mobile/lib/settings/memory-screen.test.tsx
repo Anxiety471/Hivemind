@@ -50,9 +50,18 @@ vi.mock("../../components/settings/settings-group", () => ({
       {footer}
     </div>
   ),
-  SettingsRow: ({ title, onPress }: { title: string; onPress?: () => void }) => (
+  SettingsRow: ({
+    title,
+    detail,
+    onPress,
+  }: {
+    title: string;
+    detail?: string;
+    onPress?: () => void;
+  }) => (
     <button type="button" aria-label={title} onClick={onPress}>
       {title}
+      {detail}
     </button>
   ),
   SettingsSwitch: ({
@@ -135,6 +144,7 @@ const roamerSettings: MemoryRoamerSettings = {
   lastChanges: 0,
   lastModel: null,
   lastFailures: [],
+  lastReport: [],
   retryAt: null,
   retryAttempt: 0,
 };
@@ -159,6 +169,48 @@ it("lists the space's shared notes and opens one in the editor", async () => {
     container.querySelector<HTMLButtonElement>('[aria-label="team.md"]')?.click(),
   );
   expect(mocks.push).toHaveBeenCalledWith({ pathname: "/memory-note", params: { id: "team-1" } });
+});
+
+it("shows every bot's outcome and changes", async () => {
+  mockRpc(() => Promise.resolve([]), {
+    ...roamerSettings,
+    enabled: true,
+    lastRunAt: "2026-11-22T23:30:32.920Z",
+    lastChanges: 1,
+    lastReport: [
+      {
+        kind: "bot",
+        id: "bot-1",
+        name: "Crumb",
+        status: "ok",
+        model: "deepseek-v4.1-flash",
+        changes: [
+          {
+            scope: "bot",
+            path: "MEMORY.md",
+            action: "update",
+            beforeBytes: 100,
+            afterBytes: 90,
+          },
+        ],
+        checkedAt: "2026-11-22T23:30:32.920Z",
+      },
+      {
+        kind: "bot",
+        id: "bot-2",
+        name: "Hatcha",
+        status: "ok",
+        changes: [],
+        checkedAt: "2026-11-22T23:30:33.920Z",
+      },
+    ],
+  });
+  await render();
+  expect(container.textContent).toContain("Last run details");
+  expect(container.textContent).toContain("Crumb");
+  expect(container.textContent).toContain("MEMORY.md");
+  expect(container.textContent).toContain("Hatcha");
+  expect(container.textContent).toContain("No changes");
 });
 
 it("shows which targets failed and when the next retry runs", async () => {

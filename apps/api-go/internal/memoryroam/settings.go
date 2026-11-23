@@ -18,6 +18,8 @@ const (
 	maxRetryAttempts = 5
 	// maxStoredFailures keeps one pass's detail list bounded even for a large account.
 	maxStoredFailures = 50
+	// maxStoredTargets bounds the per-bot report stored on the settings row.
+	maxStoredTargets = 200
 )
 
 var retryDelays = [...]time.Duration{
@@ -45,6 +47,7 @@ type Settings struct {
 	IntervalMinutes int
 	LastRunAt       *time.Time
 	LastFailures    []Failure
+	LastReport      []Target
 	RetryAt         *time.Time
 	RetryAttempt    int
 }
@@ -65,7 +68,7 @@ func loadSettings(ctx context.Context, database *db.DB, userIDs []string) (map[s
 	}
 	err := database.System(ctx, "memory roamer reads its settings", func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT "userId", enabled, "intervalMinutes", "lastRunAt",
-				"lastFailures", "retryAt", "retryAttempt"
+				"lastFailures", "lastReport", "retryAt", "retryAttempt"
 			FROM memory_roamer_settings WHERE "userId" = ANY($1)`, userIDs)
 		if err != nil {
 			return err
@@ -73,17 +76,32 @@ func loadSettings(ctx context.Context, database *db.DB, userIDs []string) (map[s
 		defer rows.Close()
 		for rows.Next() {
 			var value Settings
-			var failures []byte
+			var failures, report []byte
 			if err := rows.Scan(&value.UserID, &value.Enabled, &value.IntervalMinutes, &value.LastRunAt,
-				&failures, &value.RetryAt, &value.RetryAttempt); err != nil {
+				&failures, &report, &value.RetryAt, &value.RetryAttempt); err != nil {
 				return err
 			}
 			value.LastFailures = decodeFailures(failures)
+			value.LastReport = decodeReport(report)
 			settings[value.UserID] = value
 		}
 		return rows.Err()
 	})
 	return settings, err
+}
+
+func decodeReport(raw []byte) []Target {
+	if len(raw) == 0 {
+		return nil
+	}
+	var targets []Target
+	if err := json.Unmarshal(raw, &targets); err != nil {
+		return nil
+	}
+	if len(targets) > maxStoredTargets {
+		targets = targets[:maxStoredTargets]
+	}
+	return targets
 }
 
 func decodeFailures(raw []byte) []Failure {
@@ -204,17 +222,27 @@ func countLabel(count int, singular, plural string) string {
 // recordRun records the end of a pass. It never creates a row: a disabled owner
 // has no status to update. A nil retryAt clears any pending retry.
 func recordRun(ctx context.Context, database *db.DB, userID string, changes int, model string,
-	failures []Failure, retryAt *time.Time, retryAttempt int) error {
+	failures []Failure, report []Target, retryAt *time.Time, retryAttempt int) error {
 	if len(failures) > maxStoredFailures {
 		failures = failures[:maxStoredFailures]
 	}
-	var failuresJSON any
+	if len(report) > maxStoredTargets {
+		report = report[:maxStoredTargets]
+	}
+	var failuresJSON, reportJSON any
 	if len(failures) > 0 {
 		raw, err := json.Marshal(failures)
 		if err != nil {
 			return err
 		}
 		failuresJSON = string(raw)
+	}
+	if len(report) > 0 {
+		raw, err := json.Marshal(report)
+		if err != nil {
+			return err
+		}
+		reportJSON = string(raw)
 	}
 	return database.System(ctx, "memory roamer records its pass", func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `UPDATE memory_roamer_settings SET
@@ -223,11 +251,12 @@ func recordRun(ctx context.Context, database *db.DB, userID string, changes int,
 			"lastChanges" = $3,
 			"lastModel" = NULLIF($4, ''),
 			"lastFailures" = $5::jsonb,
-			"retryAt" = $6,
-			"retryAttempt" = $7,
+			"lastReport" = $6::jsonb,
+			"retryAt" = $7,
+			"retryAttempt" = $8,
 			"updatedAt" = now()
 			WHERE "userId" = $1`, userID, failureSummary(failures), changes, model,
-			failuresJSON, retryAt, retryAttempt)
+			failuresJSON, reportJSON, retryAt, retryAttempt)
 		return err
 	})
 }

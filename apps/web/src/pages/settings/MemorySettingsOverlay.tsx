@@ -282,13 +282,50 @@ export function MemorySettingsOverlay({
                 {roamer.lastChanges === 1 ? t`1 change` : t`${roamer.lastChanges} changes`}
               </p>
             ) : null}
-            {roamer?.lastFailures?.length ? (
+            {roamer?.lastReport?.length ? (
+              <details className="mt-2 text-body-sm">
+                <summary className="cursor-pointer text-muted-foreground">
+                  <Trans>Details</Trans>
+                </summary>
+                <ul className="mt-2 max-h-72 space-y-2 overflow-y-auto">
+                  {roamer.lastReport.map((target) => (
+                    <li key={`${target.kind}:${target.id}`}>
+                      <div className="flex items-baseline justify-between gap-3">
+                        <span className="font-medium text-foreground">
+                          {target.kind === "shared"
+                            ? t`Shared memory (${target.name})`
+                            : target.name}
+                        </span>
+                        <span className="shrink-0 text-caption text-muted-foreground">
+                          {new Date(target.checkedAt).toLocaleTimeString()}
+                        </span>
+                      </div>
+                      {target.status === "failed" ? (
+                        <p className="text-destructive">{target.error}</p>
+                      ) : target.changes.length === 0 ? (
+                        <p className="text-muted-foreground">
+                          <Trans>No changes</Trans>
+                        </p>
+                      ) : (
+                        <ul className="mt-0.5 text-muted-foreground">
+                          {target.changes.map((change) => (
+                            <li key={`${change.scope}:${change.path}`}>
+                              {change.path}: {change.beforeBytes} → {change.afterBytes} bytes
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            ) : roamer?.lastFailures?.length ? (
               <details className="mt-2 text-body-sm">
                 <summary className="cursor-pointer text-muted-foreground">
                   <Trans>Details</Trans>
                 </summary>
                 <ul className="mt-2 max-h-52 space-y-1.5 overflow-y-auto">
-                  {roamer?.lastFailures?.map((failure) => (
+                  {roamer.lastFailures.map((failure) => (
                     <li key={`${failure.kind}:${failure.id}`}>
                       <span className="font-medium text-foreground">
                         {failure.kind === "shared"

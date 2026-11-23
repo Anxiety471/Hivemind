@@ -111,3 +111,42 @@ func TestSelectFailedBotsKeepsTheOriginalOrder(t *testing.T) {
 }
 
 func timePtr(value time.Time) *time.Time { return &value }
+
+func TestTargetForKeepsSuccessfulChanges(t *testing.T) {
+	target := targetFor("bot", "b1", "Crumb", []Change{{Path: "MEMORY.md"}}, "model", nil)
+	if target.Status != "ok" || target.Error != "" || len(target.Changes) != 1 || target.Model != "model" {
+		t.Fatalf("target = %+v", target)
+	}
+	failed := targetFor("shared", "s1", "Team", nil, "", errTest)
+	if failed.Status != "failed" || failed.Error != "boom" || len(failed.Changes) != 0 {
+		t.Fatalf("failed target = %+v", failed)
+	}
+}
+
+func TestUpsertTargetReplacesTheSameTargetInPlace(t *testing.T) {
+	targets := []Target{
+		{Kind: "bot", ID: "b1", Status: "failed"},
+		{Kind: "bot", ID: "b2", Status: "ok"},
+	}
+	updated := upsertTarget(targets, Target{Kind: "bot", ID: "b1", Status: "ok"})
+	if len(updated) != 2 || updated[0].Status != "ok" || updated[1].ID != "b2" {
+		t.Fatalf("targets = %+v", updated)
+	}
+}
+
+func TestDecodeReportKeepsTheLastRun(t *testing.T) {
+	raw := []byte(`[{"kind":"bot","id":"b1","name":"Crumb","status":"ok","changes":[],"checkedAt":"2026-11-23T05:15:31Z"}]`)
+	targets := decodeReport(raw)
+	if len(targets) != 1 || targets[0].Name != "Crumb" || targets[0].Status != "ok" {
+		t.Fatalf("targets = %+v", targets)
+	}
+	if decodeReport([]byte(`not json`)) != nil {
+		t.Fatal("malformed report should be ignored")
+	}
+}
+
+var errTest = testError("boom")
+
+type testError string
+
+func (err testError) Error() string { return string(err) }

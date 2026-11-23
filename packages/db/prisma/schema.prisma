@@ -2900,6 +2900,7 @@ model MemoryRoamerSettings {
   lastChanges     Int       @default(0)
   lastModel       String?
   lastFailures    Json?
+  lastReport      Json?
   retryAt         DateTime?
   retryAttempt    Int       @default(0)
   createdAt       DateTime  @default(now())

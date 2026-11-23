@@ -61,6 +61,31 @@ export type MemoryRoamerFailure = z.infer<typeof MemoryRoamerFailureSchema>;
 
 export const MemoryRoamerFailuresSchema = z.array(MemoryRoamerFailureSchema).max(50);
 
+/** One document change in a roamer run. */
+export const MemoryRoamerChangeSchema = z.object({
+  scope: z.enum(["bot", "user"]),
+  path: z.string(),
+  action: z.string(),
+  beforeBytes: z.number().int().nonnegative(),
+  afterBytes: z.number().int().nonnegative(),
+  created: z.boolean().optional(),
+});
+
+/** One bot or Space's result in the latest roamer run. */
+export const MemoryRoamerTargetSchema = z.object({
+  kind: z.enum(["bot", "shared"]),
+  id: z.string(),
+  name: z.string(),
+  status: z.enum(["ok", "failed"]),
+  error: z.string().optional(),
+  model: z.string().optional(),
+  changes: z.array(MemoryRoamerChangeSchema),
+  checkedAt: z.string(),
+});
+export type MemoryRoamerTarget = z.infer<typeof MemoryRoamerTargetSchema>;
+
+export const MemoryRoamerReportSchema = z.array(MemoryRoamerTargetSchema).max(200);
+
 /** What the background roamer is doing, and how its last pass went. */
 export const MemoryRoamerSettingsSchema = z.object({
   enabled: z.boolean(),
@@ -70,6 +95,7 @@ export const MemoryRoamerSettingsSchema = z.object({
   lastChanges: z.number().int().nonnegative(),
   lastModel: z.string().nullable(),
   lastFailures: MemoryRoamerFailuresSchema,
+  lastReport: MemoryRoamerReportSchema,
   retryAt: z.string().nullable(),
   retryAttempt: z.number().int().nonnegative(),
 });

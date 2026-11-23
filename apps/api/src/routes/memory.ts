@@ -13,6 +13,7 @@ import {
   isDeletableMemoryDocument,
   MEMORY_ROAMER_DEFAULT_INTERVAL,
   MemoryRoamerFailuresSchema,
+  MemoryRoamerReportSchema,
 } from "@rakazo/contracts";
 import { ClientError } from "@rakazo/core";
 import { findSpaceMemoryConfig, IsolationError, readJsonColumn } from "@rakazo/db";
@@ -35,6 +36,7 @@ function memoryRoamerDto(
     lastChanges: number;
     lastModel: string | null;
     lastFailures: unknown;
+    lastReport: unknown;
     retryAt: Date | null;
     retryAttempt: number;
   } | null,
@@ -51,6 +53,14 @@ function memoryRoamerDto(
           MemoryRoamerFailuresSchema,
           row.lastFailures,
           { table: "memory_roamer_settings", column: "lastFailures", id: row.userId },
+          { fallback: [] },
+        )
+      : [],
+    lastReport: row?.lastReport
+      ? readJsonColumn(
+          MemoryRoamerReportSchema,
+          row.lastReport,
+          { table: "memory_roamer_settings", column: "lastReport", id: row.userId },
           { fallback: [] },
         )
       : [],

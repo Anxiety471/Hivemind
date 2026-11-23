@@ -144,9 +144,29 @@ export default function MemoryScreen() {
             {roamer.lastChanges === 1 ? t`1 change` : t`${roamer.lastChanges} changes`}
           </SettingsFooter>
         ) : null}
-        {roamer?.lastFailures?.length ? (
+        {roamer?.lastReport?.length ? (
+          <SettingsGroup label={t`Last run details`}>
+            {roamer.lastReport.map((target) => (
+              <SettingsRow
+                key={`${target.kind}:${target.id}`}
+                title={
+                  target.kind === "shared"
+                    ? t`Shared memory (${target.name})`
+                    : target.name
+                }
+                detail={
+                  target.status === "failed"
+                    ? (target.error ?? t`Failed`)
+                    : target.changes.length
+                      ? target.changes.map((change) => change.path).join(", ")
+                      : t`No changes`
+                }
+              />
+            ))}
+          </SettingsGroup>
+        ) : roamer?.lastFailures?.length ? (
           <SettingsGroup label={t`Last run failures`}>
-            {roamer?.lastFailures?.map((failure) => (
+            {roamer.lastFailures.map((failure) => (
               <SettingsRow
                 key={`${failure.kind}:${failure.id}`}
                 title={
