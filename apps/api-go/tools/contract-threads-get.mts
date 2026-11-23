@@ -1282,7 +1282,9 @@ export function threadGetCases(system: System): Case[] {
         });
         await bot(seeded, "b1", { computer: "c1" });
       },
-      { declines: false },
+      // The read enqueues computer.control-expire, which writes its event about a second
+      // later; wait for it on both sides instead of racing the Go capture.
+      { declines: false, settleMs: 5000 },
     ),
     get(
       "computer-states",
