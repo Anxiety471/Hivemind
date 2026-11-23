@@ -15,6 +15,8 @@ import {
   resolveBotAvatarSet,
 } from "@rakazo/contracts";
 import { displayName, phoneCallSettings, ringingCall } from "@rakazo/core";
+import { bestEffort } from "@rakazo/logging";
+import { ensureBotDriveFolder } from "../artifacts/bot-folder.js";
 import type { ComputerMode } from "../computers/computers.js";
 import {
   ensureComputerRecord,
@@ -642,6 +644,15 @@ export function createRepos(
           }
         }
       }
+      await bestEffort(
+        "create the bot's Space Drive folder",
+        ensureBotDriveFolder(prisma, {
+          spaceId: actor.spaceId,
+          userId: actor.userId,
+          botId: bot.id,
+          botName: bot.name,
+        }),
+      );
       return mapBot(bot);
     },
 
