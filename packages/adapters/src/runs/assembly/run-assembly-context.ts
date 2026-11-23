@@ -26,6 +26,7 @@ import { historyMyChatsAllowed } from "../tools/run-tools-memory.js";
 import { withLatestStepScreenshot, withRecentTurnImages } from "../turn/run-turn-images.js";
 import { missingTurnImagesInstruction } from "../turn/run-turn-images.prompt.js";
 import { formatCurrentTimeInstruction } from "./current-time.prompt.js";
+import { operatorInstruction } from "./operator-instructions.js";
 import { loadReplyContext } from "./reply-context.js";
 import type {
   ComputerInstructions,
@@ -455,6 +456,7 @@ export async function buildTurnPrompt(
   const botDirectory =
     [renderBotDirectory(teammates), groupDirectory].filter(Boolean).join("\n\n") || undefined;
   return {
+    operatorInstruction: await operatorInstruction(),
     pluginLine,
     taughtSkillsLine,
     agentSkillsLine,

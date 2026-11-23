@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   connectedPluginsInstruction,
   contextToolsInstruction,
+  dedupeInstructions,
   taughtSkillsInstruction,
   userTurnInstructions,
 } from "./run-instructions.prompt.js";
@@ -118,5 +119,50 @@ describe("contextToolsInstruction", () => {
     });
     expect(instructions[0]).toMatch(/^You have history tools/);
     expect(instructions.indexOf("Be brief.")).toBeGreaterThan(0);
+  });
+});
+
+describe("operator instruction and duplicates", () => {
+  const base = {
+    botInstructions: "Be brief.",
+    groupContext: undefined,
+    messagingContext: undefined,
+    redactedMemoryContext: undefined,
+    redactedScratchpadContext: undefined,
+    hasHistoricalContext: false,
+    offeredToolNames: new Set(["search_history"]),
+    computerInstruction: "Computer.",
+    pageBrowserAllowed: false,
+    workspaceInstruction: "",
+    agentEnvironmentInstruction: undefined,
+    botDirectory: undefined,
+    pluginLine: undefined,
+    agentSkillsLine: undefined,
+    taughtSkillsLine: undefined,
+    replyGuidance: "",
+  };
+
+  it("places the operator text right after the built-in tools block", () => {
+    const instructions = userTurnInstructions({ ...base, operatorInstruction: "Use wake." });
+    expect(instructions[0]).toMatch(/^You have history tools/);
+    expect(instructions[1]).toBe("Use wake.");
+  });
+
+  it("leaves the operator text out when the bot's instructions already carry it", () => {
+    const instructions = userTurnInstructions({
+      ...base,
+      botInstructions: "Be brief. Use wake.",
+      operatorInstruction: " Use wake. ",
+    });
+    expect(instructions.filter((block) => block.includes("Use wake."))).toEqual([
+      "Be brief. Use wake.",
+    ]);
+  });
+
+  it("collapses identical blocks and empties, but never a block that merely contains another", () => {
+    expect(dedupeInstructions(["A.", undefined, "", "A.", " A. ", "A. B."])).toEqual([
+      "A.",
+      "A. B.",
+    ]);
   });
 });

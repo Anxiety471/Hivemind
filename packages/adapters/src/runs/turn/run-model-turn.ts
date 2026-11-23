@@ -165,6 +165,7 @@ function modelTurnRequest(
   const { strategicBuiltins, taskCatalogInstruction, tools } = turn.tools;
   const { computerInstruction, workspaceInstruction } = turn.computerInstructions;
   const {
+    operatorInstruction,
     agentSkillsLine,
     botDirectory,
     historicalContext,
@@ -260,6 +261,7 @@ function modelTurnRequest(
             )
           : disabledBuiltinTools,
       offeredFleetTools: offeredFleetTools(strategicBuiltins),
+      operatorInstruction,
       offeredToolNames: new Set(tools.map((tool) => tool.name)),
       followUpsOffered: followUpsOffered(strategicBuiltins, ownerStartedRun),
       backgroundHelpersAllowed: backgroundHelpersAllowed({
