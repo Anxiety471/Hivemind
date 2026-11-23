@@ -239,24 +239,37 @@ func policiesJSON(entries []policyEntry, sanitize bool) string {
 		}
 		return text
 	}
-	var out strings.Builder
-	out.WriteByte('{')
 	used := map[string]int{}
-	for index, entry := range ordered {
+	positions := map[string]int{}
+	written := make([]policyEntry, 0, len(ordered))
+	for _, entry := range ordered {
 		key := clean(entry.Key)
 		seen := used[key]
 		used[key] = seen + 1
 		if sanitize && seen > 0 {
 			key = key + "#" + strconv.Itoa(seen+1)
 		}
+		// JSON.stringify of the object sanitizeJsonValue builds: a key that collides
+		// with one already written, existing or generated, keeps the first position
+		// and takes the last value instead of becoming a duplicate key.
+		if position, exists := positions[key]; exists {
+			written[position].Policy = entry.Policy
+			continue
+		}
+		positions[key] = len(written)
+		written = append(written, policyEntry{Key: key, Policy: entry.Policy})
+	}
+	encode := stringJSON
+	if !sanitize {
+		encode = echoJSON
+	}
+	var out strings.Builder
+	out.WriteByte('{')
+	for index, entry := range written {
 		if index > 0 {
 			out.WriteByte(',')
 		}
-		encode := stringJSON
-		if !sanitize {
-			encode = echoJSON
-		}
-		out.WriteString(encode(key))
+		out.WriteString(encode(entry.Key))
 		out.WriteString(`:{"name":`)
 		out.WriteString(encode(clean(entry.Policy.Name)))
 		out.WriteString(`,"mode":`)

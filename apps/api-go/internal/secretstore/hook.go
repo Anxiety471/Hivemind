@@ -259,6 +259,7 @@ func dedupeCleanups(candidates []Cleanup) []Cleanup {
 }
 
 func selectIDs(ctx context.Context, tx pgx.Tx, query string, args ...any) ([]string, error) {
+	//writeaudit:dynamic callers pass SELECT statements; every argument is a filter
 	rows, err := tx.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -496,6 +497,7 @@ func SecretIsHeld(ctx context.Context, database *db.DB, cleanup Cleanup) (bool, 
 		func(tx pgx.Tx) error {
 			scan := func(query string, args ...any) error {
 				held = nil
+				//writeaudit:dynamic the scan closure runs SELECT statements; every argument is a filter
 				return tx.QueryRow(ctx, query, args...).Scan(&held)
 			}
 			var err error

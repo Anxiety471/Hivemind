@@ -375,7 +375,7 @@ func writeBlocks(ctx context.Context, tx pgx.Tx, ring *contentcrypto.KeyRing, me
 	}
 	if ring.EncryptWrites {
 		args := append(db.Data(db.JSONText(string(body))), messageID)
-		args = append(args, sealed["searchTokens"])
+		args = append(args, db.Data(sealed["searchTokens"])...)
 		_, err = tx.Exec(ctx, `UPDATE messages SET blocks = $1::jsonb, "searchTokens" = $3 WHERE id = $2`, args...)
 		return err
 	}

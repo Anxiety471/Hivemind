@@ -99,6 +99,10 @@ func TestJSONTextKeepsKeyOrderForCollisions(t *testing.T) {
 	for input, want := range map[string]string{
 		`{"a\ud800":"first","a\uFFFD":"second"}`: `{"a` + replacement + `":"first","a` + replacement + `#2":"second"}`,
 		`{"a\uFFFD":"first","a\ud800":"second"}`: `{"a` + replacement + `":"first","a` + replacement + `#2":"second"}`,
+		// sanitizeJsonValue assigns each safe key as an own property, so a later raw key
+		// that equals a generated suffix replaces that entry at its original position
+		// (Node output for the reviewer's vector).
+		`{"a\u0000":{"name":"one"},"a\uFFFD":{"name":"two"},"a\uFFFD#2":{"name":"three"}}`: `{"a` + replacement + `":{"name":"one"},"a` + replacement + `#2":{"name":"three"}}`,
 	} {
 		if got := JSONText(input); got != want {
 			t.Errorf("JSONText(%s) = %s, want %s", input, got, want)

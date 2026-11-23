@@ -210,6 +210,7 @@ func ownItems(ctx context.Context, database *db.DB, tx pgx.Tx, actor db.Actor) (
 }
 
 func queryItems(ctx context.Context, tx pgx.Tx, query, userID, kind string) ([]OwnedItem, error) {
+	//writeaudit:dynamic callers pass SELECT statements; the only argument is a filter
 	rows, err := tx.Query(ctx, query, userID)
 	if err != nil {
 		return nil, err

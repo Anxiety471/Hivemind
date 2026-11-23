@@ -554,7 +554,7 @@ func acceptInvite(ctx context.Context, tx pgx.Tx, token, userID string) (string,
 	}
 	at := now()
 	claimed, err := tx.Exec(ctx, `UPDATE space_invites SET "acceptedAt" = $1, "acceptedByUserId" = $2
-		WHERE id = $3 AND "acceptedAt" IS NULL AND "expiresAt" > $1`, append(db.Data(at, userID), found.ID)...)
+		WHERE id = $3 AND "acceptedAt" IS NULL AND "expiresAt" > $4`, append(db.Data(at, userID), found.ID, at)...)
 	if err != nil {
 		return "", false, err
 	}

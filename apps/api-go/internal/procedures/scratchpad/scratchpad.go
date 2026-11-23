@@ -291,6 +291,7 @@ func Update(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input
 			dataCount := len(args)
 			args = append(args, input.ItemID, actor.SpaceID)
 			arguments := append(db.Data(args[:dataCount]...), args[dataCount:]...)
+			//writeaudit:dynamic the SET list is built from optional fields; args[:dataCount] is wrapped with db.Data and the suffix holds only filters
 			item, err = scanItem(tx.QueryRow(ctx, `UPDATE scratchpad_items SET `+strings.Join(sets, ", ")+
 				` WHERE id = $`+strconv.Itoa(len(args)-1)+` AND "spaceId" = $`+strconv.Itoa(len(args))+` RETURNING `+columns, arguments...))
 		}

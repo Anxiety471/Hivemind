@@ -186,6 +186,7 @@ func Append(ctx context.Context, tx pgx.Tx, ring *contentcrypto.KeyRing, input I
 		FROM inserted`
 	var event Event
 	var runID *string
+	//writeaudit:dynamic the CTE is built in branches; placeData wraps every payload, place only filters
 	err = tx.QueryRow(ctx, query, args...).Scan(&event.ID, &event.Seq, &event.CreatedAt,
 		&runID, &event.FirstResponse)
 	if errors.Is(err, pgx.ErrNoRows) {

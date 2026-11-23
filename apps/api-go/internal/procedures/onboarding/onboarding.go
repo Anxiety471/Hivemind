@@ -466,19 +466,20 @@ func DismissFocus(ctx context.Context, database *db.DB, deployment shared.Deploy
 			if err != nil {
 				return fmt.Errorf("store message blocks: %w", err)
 			}
-			setTokens := ""
-			args := []any{db.JSONText(string(body)), message.ID}
 			if ring.EncryptWrites {
 				// The extension seals the write and recomputes the blind index over what it wrote.
-				setTokens = `, "searchTokens" = $3`
-				args = append(args, sealed["searchTokens"])
+				if _, err := tx.Exec(ctx, `UPDATE messages SET blocks = $1::jsonb, "searchTokens" = $3 WHERE id = $2`,
+					append(append(db.Data(db.JSONText(string(body))), message.ID),
+						db.Data(sealed["searchTokens"])...)...); err != nil {
+					return err
+				}
 			} else {
 				// Encryption off, a rewritten message clears its tokens so search reads its text
 				// (content-encryption.ts:458-485).
-				setTokens = `, "searchTokens" = '{}'`
-			}
-			if _, err := tx.Exec(ctx, `UPDATE messages SET blocks = $1::jsonb`+setTokens+` WHERE id = $2`, args...); err != nil {
-				return err
+				if _, err := tx.Exec(ctx, `UPDATE messages SET blocks = $1::jsonb, "searchTokens" = '{}' WHERE id = $2`,
+					append(db.Data(db.JSONText(string(body))), message.ID)...); err != nil {
+					return err
+				}
 			}
 			event, err := appendEvent(ctx, tx, ring, events.Input{
 				SpaceID: found.SpaceID, ThreadID: found.ThreadID, BotID: found.BotID,

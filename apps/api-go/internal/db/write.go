@@ -109,6 +109,7 @@ func sanitizeJSONValue(value any) any {
 	case *validate.Object:
 		out := &validate.Object{Keys: make([]string, 0, len(typed.Keys)), Values: map[string]any{}}
 		used := make(map[string]int, len(typed.Keys))
+		positions := make(map[string]int, len(typed.Keys))
 		for _, key := range typed.Keys {
 			safe := wtf8.SanitizeText(key)
 			seen := used[safe]
@@ -116,6 +117,14 @@ func sanitizeJSONValue(value any) any {
 			if seen > 0 {
 				safe += "#" + strconv.Itoa(seen+1)
 			}
+			// sanitizeJsonValue assigns the safe key as an own property: a key that
+			// collides with one already emitted (existing or generated) overwrites its
+			// value at the original position instead of adding a duplicate key.
+			if position, exists := positions[safe]; exists {
+				out.Values[out.Keys[position]] = sanitizeJSONValue(typed.Values[key])
+				continue
+			}
+			positions[safe] = len(out.Keys)
 			out.Keys = append(out.Keys, safe)
 			out.Values[safe] = sanitizeJSONValue(typed.Values[key])
 		}

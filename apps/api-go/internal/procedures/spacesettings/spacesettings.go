@@ -248,6 +248,7 @@ func clearSpaceCopy(ctx context.Context, tx pgx.Tx, actor db.Actor, setting stri
 		}
 	}
 	for _, statement := range statements {
+		//writeaudit:dynamic every statement in this list is a DELETE whose arguments are filters
 		if _, err := tx.Exec(ctx, statement, actor.SpaceID, actor.UserID); err != nil {
 			return err
 		}
@@ -264,8 +265,8 @@ func copyAccountIntoSpace(ctx context.Context, tx pgx.Tx, actor db.Actor, settin
 		return nil
 	case "models":
 		_, err := tx.Exec(ctx, `INSERT INTO space_model_role_choices ("spaceId", "userId", role, "position", provider, "modelId", "thinkingLevel", "credentialId")
-			SELECT $1, $2, role, "position", provider, "modelId", "thinkingLevel", "credentialId" FROM user_model_role_choices WHERE "userId" = $2`,
-			db.Data(actor.SpaceID, actor.UserID)...)
+			SELECT $1, $2, role, "position", provider, "modelId", "thinkingLevel", "credentialId" FROM user_model_role_choices WHERE "userId" = $3`,
+			append(db.Data(actor.SpaceID, actor.UserID), actor.UserID)...)
 		return err
 	case "voice":
 		type preference struct {

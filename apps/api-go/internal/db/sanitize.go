@@ -21,14 +21,17 @@ import (
 type wireTx struct{ pgx.Tx }
 
 func (tx wireTx) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	//writeaudit:dynamic the wire boundary forwards SQL and filters; payloads are already db.Text
 	return tx.Tx.Exec(ctx, sql, wireArgs(args)...)
 }
 
 func (tx wireTx) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	//writeaudit:dynamic the wire boundary forwards SQL and filters; payloads are already db.Text
 	return tx.Tx.Query(ctx, sql, wireArgs(args)...)
 }
 
 func (tx wireTx) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	//writeaudit:dynamic the wire boundary forwards SQL and filters; payloads are already db.Text
 	return tx.Tx.QueryRow(ctx, sql, wireArgs(args)...)
 }
 

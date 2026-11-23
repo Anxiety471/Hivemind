@@ -198,6 +198,7 @@ func Rename(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 		if !changesPrefix {
 			args = append(args, board.ID)
 			arguments := append(db.Data(args[:dataCount]...), args[dataCount:]...)
+			//writeaudit:dynamic the SET list is built from optional fields; args[:dataCount] is wrapped with db.Data and the suffix holds only filters
 			row, err := tickets.ScanBoard(tx.QueryRow(ctx, `UPDATE boards SET `+strings.Join(updates, ", ")+`
 				WHERE id = $`+itoa(len(args))+` RETURNING `+tickets.BoardColumns, arguments...))
 			updated = row
@@ -213,6 +214,7 @@ func Rename(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 		}
 		args = append(args, board.ID, actor.SpaceID, board.NextNumber)
 		arguments := append(db.Data(args[:dataCount]...), args[dataCount:]...)
+		//writeaudit:dynamic the SET list is built from optional fields; args[:dataCount] is wrapped with db.Data and the suffix holds only filters
 		row, err := tickets.ScanBoard(tx.QueryRow(ctx, `UPDATE boards SET `+strings.Join(updates, ", ")+`
 			WHERE id = $`+itoa(len(args)-2)+` AND "spaceId" = $`+itoa(len(args)-1)+`
 				AND "nextNumber" = $`+itoa(len(args))+`
