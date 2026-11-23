@@ -190,7 +190,7 @@ func Agents(
 				seqs = append(seqs, seq...)
 			}
 		}
-		assignments, err = mcpassignments.ListServer(ctx, tx, actor, input.id, record.id)
+		assignments, err = mcpassignments.ListServer(ctx, tx, actor, record.id)
 		if err != nil {
 			return err
 		}

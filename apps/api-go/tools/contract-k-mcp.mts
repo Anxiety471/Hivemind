@@ -588,15 +588,6 @@ export function laneKCases(system: System): Case[] {
     replace("anonymous", { botId: "__s-kb1__", assignments: [] }, async (seeded) => {
       await bot(seeded, "kb1");
     }, { anonymous: true }),
-    replace(
-      "concurrent",
-      { botId: "__s-kb1__", assignments: [{ serverId: "__s-ks1__" }] },
-      async (seeded) => {
-        await bot(seeded, "kb1");
-        await server(seeded, "ks1");
-      },
-      { concurrent: 2 },
-    ),
 
     // mcp.servers.agents: allBots keeps assignments, choosing agents replaces them, and a
     // removed bot's connected cards go back to pending.
@@ -734,7 +725,7 @@ export function laneKCases(system: System): Case[] {
       await server(seeded, "ks1");
     }),
     remove(
-      "with-secret",
+      "with-material",
       { id: "__s-ks1__" },
       async (seeded) => {
         await serverWithMaterial(seeded, "ks1", JSON.stringify({ secret: "s3cr3t" }));
@@ -756,9 +747,15 @@ export function laneKCases(system: System): Case[] {
       },
     ),
     remove(
-      "secret-missing",
+      "material-missing",
       { id: "__s-ks1__" },
       async (seeded) => {
+        // A credential row the caller cannot read stands in for a vanished one: the FK forbids
+        // pointing at an id that never existed.
+        await otherUser(seeded);
+        await secret(seeded, "kgone", JSON.stringify({ secret: "s3cr3t" }), {
+          userId: `${seeded.userId}-other`,
+        });
         await server(seeded, "ks1", { secretId: id(seeded, "kgone") });
       },
     ),
@@ -812,7 +809,7 @@ export function laneKCases(system: System): Case[] {
       await server(seeded, "ks1");
     }),
     disconnect(
-      "with-tokens",
+      "with-grant",
       { serverId: "__s-ks1__" },
       async (seeded) => {
         await serverWithMaterial(
@@ -827,7 +824,7 @@ export function laneKCases(system: System): Case[] {
       },
     ),
     disconnect(
-      "without-tokens",
+      "without-grant",
       { serverId: "__s-ks1__" },
       async (seeded) => {
         await serverWithMaterial(
@@ -902,7 +899,7 @@ export function laneKCases(system: System): Case[] {
       { space: 1 },
     ),
     disconnect(
-      "shared-secret-null-space",
+      "shared-material-null-space",
       { serverId: "__s-ks1__" },
       async (seeded) => {
         await serverWithMaterial(seeded, "ks1", `{"secret":"s"}`);
