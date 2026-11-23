@@ -693,6 +693,29 @@ export function laneKCases(system: System): Case[] {
         );
       },
     ),
+    // JSON.parse yields ±Infinity for an overflowing literal; Boolean(Infinity) is true, so
+    // hasSecret must follow TS rather than treating Float64's ErrRange as false.
+    agents(
+      "material-length-overflow",
+      { id: "__s-ks1__", allBots: true },
+      async (seeded) => {
+        await serverWithMaterial(seeded, "ks1", `{"args":{"length":1e999}}`);
+      },
+    ),
+    agents(
+      "material-length-negative-overflow",
+      { id: "__s-ks1__", allBots: true },
+      async (seeded) => {
+        await serverWithMaterial(seeded, "ks1", `{"args":{"length":-1e999}}`);
+      },
+    ),
+    agents(
+      "material-length-zero-overflow",
+      { id: "__s-ks1__", allBots: true },
+      async (seeded) => {
+        await serverWithMaterial(seeded, "ks1", `{"args":{"length":0e999}}`);
+      },
+    ),
     agents(
       "bot-ids-missing",
       { id: "__s-ks1__", allBots: false },

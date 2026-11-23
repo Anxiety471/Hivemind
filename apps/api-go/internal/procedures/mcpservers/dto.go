@@ -212,8 +212,11 @@ func jsTruthy(value any) bool {
 	case string:
 		return typed != ""
 	case json.Number:
-		number, err := typed.Float64()
-		return err == nil && number != 0 && !math.IsNaN(number)
+		// JSON.parse("1e999") is Infinity and Boolean(Infinity) is true; Float64 returns the
+		// ±Inf value together with ErrRange, so the value decides, not the error. "0e999"
+		// parses to 0 (falsy) and "1e-999" underflows to 0 like JS.
+		number, _ := typed.Float64()
+		return number != 0 && !math.IsNaN(number)
 	case []any, *validate.Object:
 		return true
 	}

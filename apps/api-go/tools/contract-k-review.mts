@@ -422,8 +422,10 @@ export function laneKReviewCases(system: System): Case[] {
       });
       await card(seeded, "km1", "kt1", "ks1", "pending", 1, "kb1");
     }),
-    // The audited ids are caller-controlled and the TypeScript redactor rewrites "sk-live";
-    // the Go handler declines such a request so the gateway answers it from TypeScript.
+    // The gate is deliberately over-conservative: TypeScript leaves "sk-live" unchanged (its
+    // sk- rule needs 8+ following characters), but Go refuses any sk-/sk_/ak_/ck_/eyJ value.
+    // The request declines to TypeScript, which serves it and writes the audit rows, so the
+    // stored rows are TS's and nothing is dropped.
     dismiss("unredactable-metadata", { botId: "sk-live", serverId: "authorization" }, async (seeded) => {
       await bot(seeded, "kb1");
       await thread(seeded, "kt1", "kb1");
