@@ -23,6 +23,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/effects"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/events"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/local"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/messageblocks"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
@@ -48,6 +49,12 @@ func Dismiss(
 	input, failure := parseDismiss(raw)
 	if failure != nil {
 		return nil, failure
+	}
+	// security-audit.ts audits dismiss with the caller's botId and serverId; those ids do not
+	// have to exist, so a value the TypeScript redactor could rewrite has to go to TypeScript
+	// (the gateway declines to proxy) rather than be recorded differently or dropped.
+	if !effects.AuditedMetadataServable(input.botID) || !effects.AuditedMetadataServable(input.serverID) {
+		return nil, local.ErrDecline
 	}
 	ring := deployment.Content
 	if ring == nil {
@@ -274,6 +281,9 @@ func Replace(
 		// revertConnectedMcpApprovals' transaction path does not notify: the caller does, after
 		// the transaction committed.
 		events.NotifyCommitted(ctx, deployment.Events, nil, nil, cursor.ThreadID, cursor.Seq, "", "")
+	}
+	if failure := ValidateAssignments(assignments); failure != nil {
+		return nil, failure
 	}
 	return assignments, nil
 }

@@ -204,6 +204,11 @@ func Agents(
 		// deps.events.notify names no event type in mcp-approval.ts.
 		events.NotifyCommitted(ctx, deployment.Events, nil, nil, cursor.ThreadID, cursor.Seq, "", "")
 	}
+	// The router validates the answer after the transaction committed; a broken assignment row
+	// is a 500 that leaves the allBots/assignment writes and card repaints in place, as in TS.
+	if failure := mcpassignments.ValidateAssignments(assignments); failure != nil {
+		return nil, failure
+	}
 	summary, err := summaryFor(ctx, database, vault, actor, record.secretID)
 	if err != nil {
 		return nil, shared.Failure(err)

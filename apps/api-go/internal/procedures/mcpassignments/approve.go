@@ -26,6 +26,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/effects"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/events"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/local"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/messageblocks"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
@@ -116,6 +117,10 @@ func Approve(ctx context.Context, database *db.DB, deployment shared.Deployment,
 	if failure != nil {
 		return nil, failure
 	}
+	// The security event carries both ids; see Dismiss.
+	if !effects.AuditedMetadataServable(input.botID) || !effects.AuditedMetadataServable(input.serverID) {
+		return nil, local.ErrDecline
+	}
 	ring := deployment.Content
 	if ring == nil {
 		return nil, shared.Failure(errors.New("encryption is not configured"))
@@ -161,6 +166,11 @@ func Approve(ctx context.Context, database *db.DB, deployment shared.Deployment,
 	if runID != "" {
 		// wakeRun logs a failed nudge and drops it: the run row is durable and recovery starts it.
 		runs.TryWakeFor(ctx, database, actor, publisher, slog.Default(), runID, runs.WakeOptions{})
+	}
+	// The router validates the handler's answer after the transaction committed, so a broken
+	// stored row is a 500 that leaves the writes in place.
+	if failure := ValidateAssignments([]Assignment{*assignment}); failure != nil {
+		return nil, failure
 	}
 	return *assignment, nil
 }

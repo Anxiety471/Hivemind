@@ -94,14 +94,31 @@ func TestAssignmentDTOEmptyAllowedTools(t *testing.T) {
 }
 
 // TestAssignmentDTOOutputInvalid is the router's output parse: a tool name the schema refuses
-// (1 to 200 characters) fails the whole call instead of being written to the wire.
+// (1 to 200 characters) or an empty id fails the whole call. collect records the break and
+// ValidateAssignments reports it, so the caller can commit first and answer 500 afterwards.
 func TestAssignmentDTOOutputInvalid(t *testing.T) {
 	at := time.Date(2026, 11, 23, 0, 0, 0, 0, time.UTC)
 	for _, tools := range []string{`[""]`, `["` + strings.Repeat("x", 201) + `"]`} {
-		_, err := collect(&fakeRows{rows: [][]any{{"a1", "b1", "s1", true, []byte(tools), at, at}}})
-		failure, ok := err.(*orpc.Error)
-		if !ok || failure.Code != "INTERNAL_SERVER_ERROR" || failure.Message != "Output validation failed" {
-			t.Errorf("allowedTools %s = %v, want the output-validation failure", tools, err)
+		found, err := collect(&fakeRows{rows: [][]any{{"a1", "b1", "s1", true, []byte(tools), at, at}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		failure := ValidateAssignments(found)
+		if failure == nil || failure.Code != "INTERNAL_SERVER_ERROR" || failure.Message != "Output validation failed" {
+			t.Errorf("allowedTools %s = %v, want the output-validation failure", tools, failure)
+		}
+	}
+	for _, row := range [][]any{
+		{"", "b1", "s1", true, []byte(`[]`), at, at},
+		{"a1", "", "s1", true, []byte(`[]`), at, at},
+		{"a1", "b1", "", true, []byte(`[]`), at, at},
+	} {
+		found, err := collect(&fakeRows{rows: [][]any{row}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if failure := ValidateAssignments(found); failure == nil || failure.Message != "Output validation failed" {
+			t.Errorf("row %v = %v, want the output-validation failure", row, failure)
 		}
 	}
 }
