@@ -1113,7 +1113,7 @@ export function threadGetCases(system: System): Case[] {
       { declines: false },
     ),
     get(
-      "block-ask-with-credential-goes-to-typescript",
+      "block-ask-with-credential-served",
       { botId: "__s-b1__" },
       async (seeded) => {
         await bot(seeded, "b1");
@@ -1133,7 +1133,7 @@ export function threadGetCases(system: System): Case[] {
       { declines: false },
     ),
     get(
-      "block-one-time-code-goes-to-typescript",
+      "block-one-time-code-served",
       { botId: "__s-b1__" },
       async (seeded) => {
         await bot(seeded, "b1");
@@ -1144,7 +1144,7 @@ export function threadGetCases(system: System): Case[] {
       { declines: false },
     ),
     get(
-      "block-import-setup-goes-to-typescript",
+      "block-import-setup-served",
       { botId: "__s-b1__" },
       async (seeded) => {
         await bot(seeded, "b1");

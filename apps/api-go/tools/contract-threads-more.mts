@@ -940,7 +940,7 @@ export function threadMoreCases(system: System): Case[] {
       { declines: true },
     ),
     groupGet(
-      "blocks-invalid-credential-declined",
+      "blocks-invalid-credential-dropped",
       { groupId: "__s-g1__" },
       async (seeded) => {
         await bot(seeded, "b1");
