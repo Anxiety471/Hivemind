@@ -144,6 +144,7 @@ import { settleDirectoryChange } from "./account/account-status.js";
 import { mountAuditExportRoute } from "./account/audit-export.js";
 import { mountMobileAppDownloadRoute } from "./account/mobile-app-download.js";
 import { createAuthResponseAudit } from "./auth/security-audit.js";
+import { withHostOnlyCookiesExpired } from "./auth/session-cookie-domain.js";
 import { endUserDeviceSession, mountUserDeviceRoutes } from "./auth/user-devices.js";
 import { createBillingService } from "./billing/billing.js";
 import { mountBillingRoutes } from "./billing/billing-webhook.js";
@@ -569,6 +570,7 @@ async function buildApp(overrides: CreateAppOverrides): Promise<AppHandles> {
             )
         : undefined,
     extraOrigins: [...MOBILE_AUTH_ORIGINS, ...env.extraAuthOrigins],
+    cookieDomain: env.cookieDomain,
     androidAppCertFingerprints: env.passkeyAndroidCertFingerprints,
     beforeDeleteUser: async (userId) => {
       // Billing cancels inside, after the account's spaces are claimed and before anything is
@@ -1030,7 +1032,7 @@ async function buildApp(overrides: CreateAppOverrides): Promise<AppHandles> {
       auth.handler(withClientIp(emptyAuthBodyAsJson(c.req.raw), ip)),
     );
     await auditAuthResponse(path, ip, response);
-    return response;
+    return withHostOnlyCookiesExpired(response, env.cookieDomain);
   });
   mountLocalComputerHost(app, {
     token: env.desktopStackToken,

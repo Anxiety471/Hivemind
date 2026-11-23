@@ -42,6 +42,10 @@ export default defineConfig(({ command, mode }) => {
     build: {
       sourcemap: true,
       rolldownOptions: {
+        input: {
+          main: path.resolve(import.meta.dirname, "index.html"),
+          drive: path.resolve(import.meta.dirname, "drive.html"),
+        },
         output: {
           codeSplitting: {
             // Shared chunks that build schemas run before the entry chunk's body, so the Zod

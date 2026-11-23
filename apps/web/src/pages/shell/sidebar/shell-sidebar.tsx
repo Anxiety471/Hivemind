@@ -82,6 +82,7 @@ export function ShellSidebar({
   user,
   boardEnabled,
   navLinks,
+  driveUrl,
   mobileApp,
   openSettings,
   openIntegrations,
@@ -113,6 +114,8 @@ export function ShellSidebar({
   user: User | undefined;
   boardEnabled: boolean;
   navLinks: NavLink[];
+  /** Where Files opens, in a new tab, when this deployment runs the Drive app. */
+  driveUrl?: string;
   mobileApp?: MobileAppLinks;
   openSettings: (section: SettingsSection) => void;
   openIntegrations: () => void;
@@ -311,6 +314,7 @@ export function ShellSidebar({
           user={user}
           boardEnabled={boardEnabled}
           navLinks={navLinks}
+          driveUrl={driveUrl}
           mobileApp={mobileApp}
           closeMobileSidebar={() => setMobileOpen(false)}
           navigate={navigate}
@@ -330,6 +334,7 @@ function ShellSidebarFooter({
   user,
   boardEnabled,
   navLinks,
+  driveUrl,
   mobileApp,
   closeMobileSidebar,
   navigate,
@@ -343,6 +348,7 @@ function ShellSidebarFooter({
   user: User | undefined;
   boardEnabled: boolean;
   navLinks: NavLink[];
+  driveUrl?: string;
   mobileApp?: MobileAppLinks;
   closeMobileSidebar: () => void;
   navigate: (path: string) => void;
@@ -427,7 +433,8 @@ function ShellSidebarFooter({
         onFiles={() => {
           setMenuOpen(false);
           closeMobileSidebar();
-          navigate("/app/files");
+          if (driveUrl) window.open(driveUrl, "_blank", "noopener");
+          else navigate("/app/files");
         }}
         onSettings={() => {
           setMenuOpen(false);

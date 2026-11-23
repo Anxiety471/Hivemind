@@ -135,6 +135,7 @@ export interface RouterDeps {
     /** Domain of bots' email addresses; unset when this server receives no email. */
     inboundEmailDomain?: string;
     navLinks?: NavLink[];
+    driveUrl?: string;
     /** Builds this deployment publishes itself; a platform left out offers the store page. */
     mobileApp?: MobileAppLinks;
     adminEmails?: string[];

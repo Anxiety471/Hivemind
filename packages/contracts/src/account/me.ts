@@ -14,6 +14,8 @@ import { AvatarStyleSchema } from "./preferences.js";
 export const MeSchema = z.object({
   maxUploadSizeBytes: z.number().int().positive().optional(),
   maxFileUploadSizeBytes: z.number().int().positive().optional(),
+  /** Origin of the Drive app, when this deployment runs one; the menu's Files item opens it. */
+  driveUrl: z.string().url().optional(),
   maxAttachmentsPerMessage: z.number().int().positive().optional(),
   /** Labs features this account turned on. Absent from servers that predate Labs. */
   labs: z.array(LabFeatureSchema).default([]),

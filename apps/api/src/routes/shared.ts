@@ -61,6 +61,7 @@ export async function meDto(deps: RouterDeps, actor: Actor): Promise<Me> {
     mobileApp: deps.env.mobileApp ?? {},
     maxUploadSizeBytes: attachmentMaxBytes(deps.env),
     maxFileUploadSizeBytes: fileUploadMaxBytes(deps.env),
+    driveUrl: deps.env.driveUrl,
     maxAttachmentsPerMessage: attachmentMaxCount(deps.env),
     userId: actor.userId,
     email: user.email,

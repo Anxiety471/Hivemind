@@ -18,22 +18,23 @@ import (
 
 // Config is the process configuration.
 type Config struct {
-	DatabaseURL     string
-	AuthSecret      []byte
-	AuthURL         string
-	WebOrigin       string
-	APIURL          string
-	ExtraOrigins    []string
-	SignupAllowlist []string
-	OIDCBypass      bool
+	DatabaseURL        string
+	AuthSecret         []byte
+	AuthURL            string
+	WebOrigin          string
+	APIURL             string
+	ExtraOrigins       []string
+	SignupAllowlist    []string
+	OIDCBypass         bool
+	CookieDomain       string
 	MaxUploadBytes     int64
 	MaxFileUploadBytes int64
 	DataDir            string
 	ObjectStorage      *ObjectStorageConfig
 	Minimums           map[string]string
-	TrustedOrigins  []string
-	ClientIP        *effects.ClientIPResolver
-	ClientIPHeader  string
+	TrustedOrigins     []string
+	ClientIP           *effects.ClientIPResolver
+	ClientIPHeader     string
 	// EmailDelivery is whether the API sends email, which TypeScript derives from the same
 	// variables (configuredEmailProvider, or the development emulator): an invitee must then
 	// have verified their address.
@@ -117,6 +118,7 @@ func Load() (Config, error) {
 	}
 	config.ExtraOrigins = splitList(os.Getenv("RAKAZO_EXTRA_AUTH_ORIGINS"))
 	config.SignupAllowlist = splitList(os.Getenv("SIGNUP_ALLOWLIST"))
+	config.CookieDomain = strings.TrimPrefix(strings.ToLower(strings.TrimSpace(os.Getenv("COOKIE_DOMAIN"))), ".")
 	config.OIDCBypass = os.Getenv("OIDC_ALLOW_SIGNUP_BYPASS") == "true" && strings.TrimSpace(os.Getenv("OIDC_ISSUER")) != ""
 	config.MaxUploadBytes = uploadBytes(os.Getenv("MAX_UPLOAD_SIZE_MB"))
 	config.MaxFileUploadBytes = fileUploadBytes(os.Getenv("MAX_FILE_UPLOAD_SIZE_MB"), config.MaxUploadBytes)

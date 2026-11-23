@@ -206,6 +206,7 @@ func setupLocal(buildIDFile string, wantsVault bool, logger *slog.Logger) (*loca
 		AuthURL:         deployment.AuthURL,
 		SignupAllowlist: deployment.SignupAllowlist,
 		OIDCBypass:      deployment.OIDCBypass,
+		CookieDomain:    deployment.CookieDomain,
 	})
 	ring, closeRing, err := contentRing(startup, database, deployment, logger)
 	if err != nil {

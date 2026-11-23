@@ -33,6 +33,8 @@ type Config struct {
 	SignupAllowlist []string
 	// OIDCBypass mirrors OIDC_ALLOW_SIGNUP_BYPASS for a configured OIDC issuer.
 	OIDCBypass bool
+	// CookieDomain mirrors COOKIE_DOMAIN: a renewed session cookie keeps the domain it was set for.
+	CookieDomain string
 }
 
 // Service validates sessions against the API's own tables.
@@ -198,6 +200,7 @@ func (s *Service) renew(ctx context.Context, session *Session) (*http.Cookie, er
 		Name:     session.CookieName,
 		Value:    value,
 		Path:     "/",
+		Domain:   s.config.CookieDomain,
 		MaxAge:   int(sessionLifetime.Seconds()),
 		HttpOnly: true,
 		Secure:   strings.HasPrefix(session.CookieName, "__Secure-"),

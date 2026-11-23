@@ -43,9 +43,11 @@ import { desktopBridge } from "./lib/platform/desktop";
 import { identifyMonitoringUser } from "./lib/platform/monitoring";
 import { markAfterPaint, markOnce } from "./lib/platform/performance";
 import { lazyComponent } from "./lib/platform/preload-recovery";
+import { isDriveSurface } from "./lib/platform/surface";
 import { remoteImagesPreference } from "./lib/preferences/remote-images-preference";
 import { QueryUserProvider, setQueryUser } from "./lib/query/query";
 import { rpc } from "./lib/query/rpc";
+import { DriveRoutes } from "./pages/drive/DriveRoutes";
 import { IntegrationCallbackPage } from "./pages/integrations/IntegrationCallback";
 import { IntegrationSetupPage } from "./pages/integrations/IntegrationSetup";
 import { McpOAuthCallbackPage } from "./pages/integrations/McpOAuthCallback";
@@ -186,151 +188,159 @@ function SessionApp() {
     <QueryUserProvider value={user?.id ?? null}>
       <MarkdownLinkPrompt>
         <div className="h-full" data-rakazo-app-state="ready">
-          <Suspense fallback={<PageLoading />}>
-            <Routes>
-              <Route
-                path="/"
-                element={
-                  <Navigate
-                    to={user ? "/app" : hasSignedInBefore() ? "/sign-in" : "/sign-up"}
-                    replace
+          {isDriveSurface() ? (
+            <DriveRoutes signedIn={Boolean(user)} next={next} />
+          ) : (
+            <Suspense fallback={<PageLoading />}>
+              <Routes>
+                <Route
+                  path="/"
+                  element={
+                    <Navigate
+                      to={user ? "/app" : hasSignedInBefore() ? "/sign-in" : "/sign-up"}
+                      replace
+                    />
+                  }
+                />
+                {["/sign-in", "/sign-in/email"].map((path) => (
+                  <Route
+                    key={path}
+                    path={path}
+                    element={
+                      user ? (
+                        <Navigate to={next ?? "/app"} replace />
+                      ) : (
+                        <AuthPage key={path} mode="in" />
+                      )
+                    }
                   />
-                }
-              />
-              {["/sign-in", "/sign-in/email"].map((path) => (
+                ))}
+                {["/sign-up", "/sign-up/email"].map((path) => (
+                  <Route
+                    key={path}
+                    path={path}
+                    element={
+                      user ? (
+                        <Navigate to={newAccountDestination(next)} replace />
+                      ) : (
+                        <AuthPage key={path} mode="up" />
+                      )
+                    }
+                  />
+                ))}
                 <Route
-                  key={path}
-                  path={path}
+                  path="/forgot-password"
+                  element={
+                    user ? <Navigate to="/app" replace /> : <AuthPage key="forgot" mode="forgot" />
+                  }
+                />
+                <Route path="/reset-password" element={<PasswordResetPage />} />
+                <Route path="/p/:slugToken" element={<SharedPagePage />} />
+                <Route
+                  path={MCP_OAUTH_CALLBACK_PATH}
                   element={
                     user ? (
-                      <Navigate to={next ?? "/app"} replace />
+                      <McpOAuthCallbackPage />
                     ) : (
-                      <AuthPage key={path} mode="in" />
+                      <Navigate
+                        to={`/sign-in?next=${encodeURIComponent(pathname + search)}`}
+                        replace
+                      />
                     )
                   }
                 />
-              ))}
-              {["/sign-up", "/sign-up/email"].map((path) => (
                 <Route
-                  key={path}
-                  path={path}
+                  path={SLACK_INSTALL_CALLBACK_PATH}
                   element={
                     user ? (
-                      <Navigate to={newAccountDestination(next)} replace />
+                      <SlackInstallCallbackPage />
                     ) : (
-                      <AuthPage key={path} mode="up" />
+                      <Navigate
+                        to={`/sign-in?next=${encodeURIComponent(pathname + search)}`}
+                        replace
+                      />
                     )
                   }
                 />
-              ))}
-              <Route
-                path="/forgot-password"
-                element={
-                  user ? <Navigate to="/app" replace /> : <AuthPage key="forgot" mode="forgot" />
-                }
-              />
-              <Route path="/reset-password" element={<PasswordResetPage />} />
-              <Route path="/p/:slugToken" element={<SharedPagePage />} />
-              <Route
-                path={MCP_OAUTH_CALLBACK_PATH}
-                element={
-                  user ? (
-                    <McpOAuthCallbackPage />
-                  ) : (
-                    <Navigate
-                      to={`/sign-in?next=${encodeURIComponent(pathname + search)}`}
-                      replace
-                    />
-                  )
-                }
-              />
-              <Route
-                path={SLACK_INSTALL_CALLBACK_PATH}
-                element={
-                  user ? (
-                    <SlackInstallCallbackPage />
-                  ) : (
-                    <Navigate
-                      to={`/sign-in?next=${encodeURIComponent(pathname + search)}`}
-                      replace
-                    />
-                  )
-                }
-              />
-              <Route
-                path="/integrations/setup"
-                element={
-                  user ? (
-                    <IntegrationSetupPage />
-                  ) : (
-                    <Navigate to="/sign-in?next=/integrations/setup" replace />
-                  )
-                }
-              />
-              <Route
-                path="/admin/plugins"
-                element={
-                  user ? (
-                    <AdminPluginsPage />
-                  ) : (
-                    <Navigate to="/sign-in?next=/admin/plugins" replace />
-                  )
-                }
-              />
-              <Route
-                path="/join/:invitationId"
-                element={
-                  user ? (
-                    <JoinOrganizationPage />
-                  ) : (
-                    <Navigate to={`/sign-in?next=${encodeURIComponent(pathname)}`} replace />
-                  )
-                }
-              />
-              <Route
-                path="/invite/:token"
-                element={
-                  user ? (
-                    <InvitePage />
-                  ) : (
-                    <Navigate to={`/sign-in?next=${encodeURIComponent(pathname)}`} replace />
-                  )
-                }
-              />
-              <Route
-                path="/admin/access"
-                element={
-                  user ? <AdminAccessPage /> : <Navigate to="/sign-in?next=/admin/access" replace />
-                }
-              />
-              <Route
-                element={
-                  user ? (
-                    <SubscriptionGate fallback={<PageLoading />}>
-                      <Outlet />
-                    </SubscriptionGate>
-                  ) : (
-                    <Navigate to="/sign-in" replace />
-                  )
-                }
-              >
-                <Route path="/app" element={<ShellPage />} />
-                <Route path="/app/g/:groupId" element={<ShellPage />} />
-                <Route path="/app/:botId" element={<ShellPage />} />
-                <Route element={<CallLayout />}>
-                  <Route path="/onboarding/:step?" element={<OnboardingPage />} />
-                  <Route path="/app/artifacts" element={<ArtifactsPage />} />
-                  <Route path="/app/artifacts/:artifactId" element={<ArtifactsPage />} />
-                  <Route path="/app/files" element={<FilesPage />} />
-                  <Route path="/app/files/folder/:folderId" element={<FilesPage />} />
-                  <Route path="/app/files/:artifactId" element={<FilesPage />} />
-                  {boardEnabled ? <Route path="/app/board" element={<BoardPage />} /> : null}
-                  <Route path="/app/x/:linkId" element={<NavLinkPage />} />
+                <Route
+                  path="/integrations/setup"
+                  element={
+                    user ? (
+                      <IntegrationSetupPage />
+                    ) : (
+                      <Navigate to="/sign-in?next=/integrations/setup" replace />
+                    )
+                  }
+                />
+                <Route
+                  path="/admin/plugins"
+                  element={
+                    user ? (
+                      <AdminPluginsPage />
+                    ) : (
+                      <Navigate to="/sign-in?next=/admin/plugins" replace />
+                    )
+                  }
+                />
+                <Route
+                  path="/join/:invitationId"
+                  element={
+                    user ? (
+                      <JoinOrganizationPage />
+                    ) : (
+                      <Navigate to={`/sign-in?next=${encodeURIComponent(pathname)}`} replace />
+                    )
+                  }
+                />
+                <Route
+                  path="/invite/:token"
+                  element={
+                    user ? (
+                      <InvitePage />
+                    ) : (
+                      <Navigate to={`/sign-in?next=${encodeURIComponent(pathname)}`} replace />
+                    )
+                  }
+                />
+                <Route
+                  path="/admin/access"
+                  element={
+                    user ? (
+                      <AdminAccessPage />
+                    ) : (
+                      <Navigate to="/sign-in?next=/admin/access" replace />
+                    )
+                  }
+                />
+                <Route
+                  element={
+                    user ? (
+                      <SubscriptionGate fallback={<PageLoading />}>
+                        <Outlet />
+                      </SubscriptionGate>
+                    ) : (
+                      <Navigate to="/sign-in" replace />
+                    )
+                  }
+                >
+                  <Route path="/app" element={<ShellPage />} />
+                  <Route path="/app/g/:groupId" element={<ShellPage />} />
+                  <Route path="/app/:botId" element={<ShellPage />} />
+                  <Route element={<CallLayout />}>
+                    <Route path="/onboarding/:step?" element={<OnboardingPage />} />
+                    <Route path="/app/artifacts" element={<ArtifactsPage />} />
+                    <Route path="/app/artifacts/:artifactId" element={<ArtifactsPage />} />
+                    <Route path="/app/files" element={<FilesPage />} />
+                    <Route path="/app/files/folder/:folderId" element={<FilesPage />} />
+                    <Route path="/app/files/:artifactId" element={<FilesPage />} />
+                    {boardEnabled ? <Route path="/app/board" element={<BoardPage />} /> : null}
+                    <Route path="/app/x/:linkId" element={<NavLinkPage />} />
+                  </Route>
                 </Route>
-              </Route>
-              <Route path="*" element={<NotFoundPage />} />
-            </Routes>
-          </Suspense>
+                <Route path="*" element={<NotFoundPage />} />
+              </Routes>
+            </Suspense>
+          )}
         </div>
       </MarkdownLinkPrompt>
     </QueryUserProvider>
