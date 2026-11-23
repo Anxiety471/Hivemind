@@ -1130,7 +1130,7 @@ export function threadGetCases(system: System): Case[] {
           },
         ]);
       },
-      { declines: true },
+      { declines: false },
     ),
     get(
       "block-one-time-code-goes-to-typescript",
@@ -1141,7 +1141,7 @@ export function threadGetCases(system: System): Case[] {
           { kind: "ask", text: "code?", oneTimeCode: { origin: "https://example.com" } },
         ]);
       },
-      { declines: true },
+      { declines: false },
     ),
     get(
       "block-import-setup-goes-to-typescript",
@@ -1152,7 +1152,7 @@ export function threadGetCases(system: System): Case[] {
           { kind: "import_setup", items: [{ kind: "routine", routineId: "r", name: "n" }] },
         ]);
       },
-      { declines: true },
+      { declines: false },
     ),
     get(
       "blocks-not-a-list",

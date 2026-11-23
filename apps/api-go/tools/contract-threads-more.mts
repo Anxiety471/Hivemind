@@ -955,7 +955,7 @@ export function threadMoreCases(system: System): Case[] {
           },
         ]);
       },
-      { declines: true },
+      { declines: false },
     ),
     groupGet("blocks-out-of-schema", { groupId: "__s-g1__" }, async (seeded) => {
       await bot(seeded, "b1");
