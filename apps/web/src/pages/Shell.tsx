@@ -876,6 +876,14 @@ function SpaceShell() {
     },
     [active?.id, groupId, read.markBotUnread, read.markGroupUnreadFrom],
   );
+  // Read through a ref so the chat's memoized rows keep one callback as routines load.
+  const openRoutineLatest = useRef((_name: string) => {});
+  openRoutineLatest.current = (name: string) => {
+    const routine = activeRoutines.find((item) => item.name === name);
+    if (routine) startRoutine(routine);
+    else setPanel("routines");
+  };
+  const openRoutine = useCallback((name: string) => openRoutineLatest.current(name), []);
   const openPeerMessages = useCallback(
     (peer: { peerBotId: string; peerBotName: string }) => {
       setPeerConversation(peer);
@@ -1210,6 +1218,7 @@ function SpaceShell() {
               onReact={composer.reactToMessage}
               onJumpToMessage={jumpToReplyMessage}
               onOpenPeerMessages={openPeerMessages}
+              onOpenRoutine={openRoutine}
               onOpenSubagent={setHelperThread}
               memberName={resolveTranscriptMemberName}
               peerBot={resolveTranscriptBot}

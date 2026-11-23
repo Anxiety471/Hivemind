@@ -33,6 +33,7 @@ export type WebhookEvents = {
       thinkingLevel: string | null;
     };
   }): Promise<{ messageId: string; runId: string | null; seq: number }>;
+  notify(threadId: string, seq: number): Promise<void>;
 };
 
 export type WebhookDeps = {

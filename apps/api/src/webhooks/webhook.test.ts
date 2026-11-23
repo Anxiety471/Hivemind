@@ -111,7 +111,7 @@ function createDeps(
     secrets: {
       load: async (ciphertext: string) => (overrides.load ?? (() => SECRET))(ciphertext),
     } as unknown as WebhookDeps["secrets"],
-    events: { sendUserMessage },
+    events: { sendUserMessage, notify: vi.fn(async () => {}) },
     jobs: { enqueue } as unknown as WebhookDeps["jobs"],
     sendUserMessage,
     enqueue,

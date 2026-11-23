@@ -121,6 +121,7 @@ export const Transcript = memo(function Transcript({
   onReact,
   onJumpToMessage,
   onOpenPeerMessages,
+  onOpenRoutine,
   onOpenSubagent,
   memberName,
   peerBot,
@@ -185,6 +186,8 @@ export const Transcript = memo(function Transcript({
   onReact: (message: ThreadMessage, reaction: MessageReaction) => Promise<void>;
   onJumpToMessage: (messageId: string) => void;
   onOpenPeerMessages: (peer: { peerBotId: string; peerBotName: string }) => void;
+  /** Opens a routine from its chat row. */
+  onOpenRoutine?: (name: string) => void;
   /** Opens a saved helper's read-only thread from its card. */
   onOpenSubagent?: (target: HelperThreadTarget) => void;
   memberName?: (botId: string | undefined) => string | undefined;
@@ -816,6 +819,7 @@ export const Transcript = memo(function Transcript({
                       canDismiss={dismissableAskIds.has(message.id)}
                       onOpenBot={onOpenBot}
                       onOpenPeerMessages={onOpenPeerMessages}
+                      onOpenRoutine={onOpenRoutine}
                       onOpenSubagent={onOpenSubagent}
                       peerExchange={exchanges.lines.get(message.id)}
                       onAnswer={onAnswer}

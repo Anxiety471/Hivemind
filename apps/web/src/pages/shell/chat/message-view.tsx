@@ -76,6 +76,7 @@ export const MessageView = memo(function MessageView({
   onAnswer,
   onOpenBot,
   onOpenPeerMessages,
+  onOpenRoutine,
   onOpenSubagent,
   readOnly = false,
   peerExchange,
@@ -127,6 +128,8 @@ export const MessageView = memo(function MessageView({
   ) => Promise<void>;
   onOpenBot: (botId: string) => void;
   onOpenPeerMessages: (peer: { peerBotId: string; peerBotName: string }) => void;
+  /** Opens a routine from its chat row. */
+  onOpenRoutine?: (name: string) => void;
   /** Opens a saved helper's own read-only thread from its card. */
   onOpenSubagent?: (target: HelperThreadTarget) => void;
   /** A helper's transcript: no reply, react, speak or answer actions of its own. */
@@ -508,7 +511,8 @@ export const MessageView = memo(function MessageView({
               </div>
             );
           }
-          if (block.kind === "routine_event") return <RoutineEventRow key={i} block={block} />;
+          if (block.kind === "routine_event")
+            return <RoutineEventRow key={i} block={block} onOpenRoutine={onOpenRoutine} />;
           if (block.kind === "meta") {
             return (
               <div

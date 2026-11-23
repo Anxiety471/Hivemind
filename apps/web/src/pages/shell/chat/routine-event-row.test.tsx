@@ -41,3 +41,27 @@ it.each([
   );
   expect(container.textContent).toBe(expected);
 });
+
+it("opens the routine from its row, and has nothing to open once it is deleted", () => {
+  const open = vi.fn();
+  act(() =>
+    root.render(
+      <RoutineEventRow
+        block={{ kind: "routine_event", change: "created", name: "Morning joke" }}
+        onOpenRoutine={open}
+      />,
+    ),
+  );
+  act(() => container.querySelector<HTMLButtonElement>("button")?.click());
+  expect(open).toHaveBeenCalledWith("Morning joke");
+
+  act(() =>
+    root.render(
+      <RoutineEventRow
+        block={{ kind: "routine_event", change: "deleted", name: "Morning joke" }}
+        onOpenRoutine={open}
+      />,
+    ),
+  );
+  expect(container.querySelector("button")).toBeNull();
+});
