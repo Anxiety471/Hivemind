@@ -197,10 +197,12 @@ describe("code_mode", () => {
     const result = (await applyTool(
       ctx as never,
       "code_mode",
-      { code: "console.log(typeof codemode.shell);" },
+      {
+        code: "try { await codemode.shell({ command: 'id' }); } catch (e) { console.log(e.code); }",
+      },
       "outer-1",
     )) as { output: string };
-    expect(result.output).toBe("undefined");
+    expect(result.output).toBe("ToolUnavailable");
   });
 
   it("returns the script's failure with the calls it made so far", async () => {

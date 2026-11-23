@@ -43,6 +43,23 @@ describe("runCodeModeScript", () => {
     expect(result.error).toBeUndefined();
   });
 
+  it("refuses a name that is not installed instead of calling it", async () => {
+    const call = vi.fn(async () => ({ ok: true }));
+    const result = await runCodeModeScript({
+      code: `
+        try {
+          await codemode.not_a_tool({});
+        } catch (error) {
+          console.log((error as { code?: string }).code);
+        }
+      `,
+      tools,
+      call,
+    });
+    expect(result.output).toBe("ToolUnavailable");
+    expect(call).not.toHaveBeenCalled();
+  });
+
   it("leaves every other capability undefined", async () => {
     const result = await runCodeModeScript({
       code: `
@@ -96,7 +113,8 @@ describe("runCodeModeScript", () => {
       call: async () => ({ ok: true }),
       maxCalls: 2,
     });
-    expect(result.calls).toHaveLength(5);
+    // Only the calls that ran are listed; the rest were refused at the cap.
+    expect(result.calls).toHaveLength(2);
     expect(result.error?.message).toContain("at most 2 tool calls");
   });
 

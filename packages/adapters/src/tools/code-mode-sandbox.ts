@@ -121,15 +121,10 @@ export async function runCodeModeScript(options: CodeModeRunOptions): Promise<Co
   // serialized bridge keeps their order and the run's own bookkeeping deterministic on replay.
   let queue: Promise<unknown> = Promise.resolve();
   const pending = new Set<QuickJSDeferredPromise>();
+  const allowed = new Set(options.tools);
   const invoke = vm.newFunction("__call", (nameHandle, argsHandle) => {
     const name = vm.getString(nameHandle);
     const raw = vm.getString(argsHandle);
-    if (raw.length > ARGS_MAX_BYTES) {
-      throw new Error(`arguments for ${name} exceed ${ARGS_MAX_BYTES} bytes`);
-    }
-    const args = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
-    callCount += 1;
-    calls.push(name);
     const deferred = vm.newPromise();
     pending.add(deferred);
     const fail = (error: unknown) => {
@@ -141,10 +136,23 @@ export async function runCodeModeScript(options: CodeModeRunOptions): Promise<Co
       handle.dispose();
     };
     queue = queue.then(async () => {
+      if (!allowed.has(name)) {
+        return fail(
+          Object.assign(new Error(`${name} is not a tool this run offers`), {
+            name: "ToolUnavailable",
+          }),
+        );
+      }
+      if (raw.length > ARGS_MAX_BYTES) {
+        return fail(new Error(`arguments for ${name} exceed ${ARGS_MAX_BYTES} bytes`));
+      }
+      callCount += 1;
       if (callCount > maxCalls) {
         limitExceeded = true;
         return fail(new CallLimitReached(maxCalls));
       }
+      calls.push(name);
+      const args = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
       try {
         const value = await options.call(name, args);
         deferred.resolve(vm.newString(serializableResult({ value }, name)));
@@ -162,21 +170,19 @@ export async function runCodeModeScript(options: CodeModeRunOptions): Promise<Co
   vm.setProp(vm.global, "__call", invoke);
   invoke.dispose();
 
-  const api = options.tools
-    .map(
-      (name) =>
-        `codemode[${JSON.stringify(name)}] = async (input) => { const raw = await __call(${JSON.stringify(
-          name,
-        )}, JSON.stringify(input ?? {})); const parsed = JSON.parse(raw); return parsed.value; };`,
-    )
-    .join("\n");
+  // The host checks every name; the isolate only needs one forwarding property so no tool
+  // name is ever pasted into executable source.
   const install = vm.evalCode(
     `globalThis.console = {
        log: (...parts) => __print(parts.map((part) => typeof part === "string" ? part : JSON.stringify(part)).join(" ")),
        error: (...parts) => __print(parts.map((part) => typeof part === "string" ? part : JSON.stringify(part)).join(" ")),
      };
-     globalThis.codemode = Object.create(null);
-     ${api}`,
+     globalThis.codemode = new Proxy(Object.create(null), {
+       get: (_target, name) => async (input) => {
+         const raw = await __call(String(name), JSON.stringify(input ?? {}));
+         return JSON.parse(raw).value;
+       },
+     });`,
     "codemode-api.js",
   );
   if (install.error) {
