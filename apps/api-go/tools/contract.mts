@@ -360,6 +360,23 @@ function servedByGoCount(log: string, procedure: string) {
     .split("\n")
     .filter((line) => line.includes('"served_by":"go"') && line.includes(procedureField)).length;
 }
+
+/**
+ * Option 2: local.Server.log's completion lines carry no request id (only method, path, status,
+ * duration, procedure and served_by), so there is no id to correlate. Wait for a quiet gateway
+ * log before clearing the window; exact counts plus this boundary barrier keep a late same-
+ * procedure line from the previous case out of the next case's window.
+ */
+async function drainGatewayLog() {
+  let previous = gatewayLog.length;
+  for (let waited = 0; waited < 4000; waited += 200) {
+    await sleep(200);
+    const current = gatewayLog.length;
+    if (current === previous) return;
+    previous = current;
+  }
+  throw new Error("gateway log did not go quiet");
+}
 process.on("uncaughtException", (error) => {
   go?.kill("SIGKILL");
   proxyGo?.kill("SIGKILL");
@@ -8702,6 +8719,7 @@ for (const testCase of cases) {
       data: { email: CONTRACT_ADMIN_EMAIL, emailVerified: true },
     });
   const hitsBefore = upstreamHits;
+  await drainGatewayLog();
   gatewayLog = "";
   let goCallForCase = goCall;
   // biome-ignore lint/suspicious/noUndeclaredEnvVars: manual harness, not a turbo task
@@ -8720,6 +8738,7 @@ for (const testCase of cases) {
     seeded,
     testCase.procedure,
   );
+  await drainGatewayLog();
   let goCheckError: unknown;
   try {
     await testCase.check?.({ seeded, result: goResult, side: "go", gatewayLog });
@@ -8737,16 +8756,19 @@ for (const testCase of cases) {
         testCase.declines ? 1 : 0,
         `${testCase.name}: ${testCase.declines ? "Go should decline" : "Go should answer"}`,
       );
-    // Every request in the Go window must be a local answer, not a proxy fallback. Shadow
-    // comparisons call the same local server and log the same marker; they run after the TS
-    // response, inside the observed settle window. `after` reloads are TypeScript-only and
-    // never appear in the gateway log, so they cannot inflate this count.
+    // Every request in the Go window must be a local answer, not a proxy fallback. The gateway
+    // completion line has no request id, so this is exact rather than per-id: the window is
+    // drained before it is cleared and again after the request, and the count is ===.
+    // Shadow comparisons call the same local server and log the same marker; they run after the
+    // TypeScript response, inside the observed settle window. `after` reloads are TypeScript-only
+    // and never appear in the gateway log, so they cannot inflate this count.
     if (mode === "go" || mode === "shadow") {
       if (testCase.declines !== true) {
         const expectedCalls = goResult.calls ?? 1;
         const served = servedByGoCount(gatewayLog, testCase.procedure);
-        assert.ok(
-          served >= expectedCalls,
+        assert.equal(
+          served,
+          expectedCalls,
           `${testCase.name}: ${served} served_by:go entries for ${expectedCalls} expected calls`,
         );
       }
