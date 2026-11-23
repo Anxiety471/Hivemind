@@ -260,6 +260,7 @@ function modelTurnRequest(
             )
           : disabledBuiltinTools,
       offeredFleetTools: offeredFleetTools(strategicBuiltins),
+      offeredToolNames: new Set(tools.map((tool) => tool.name)),
       followUpsOffered: followUpsOffered(strategicBuiltins, ownerStartedRun),
       backgroundHelpersAllowed: backgroundHelpersAllowed({
         trigger: run.trigger,
