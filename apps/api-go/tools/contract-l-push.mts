@@ -79,6 +79,9 @@ export function laneLPushCases(system: System): Case[] {
     sessionId: string,
     presentation: "android_sender" | null = null,
   ) {
+    // A token digest is unique across accounts: a row another suite left behind for
+    // the same token must go first, exactly as a registration would remove it.
+    await system.pushRegistration.deleteMany({ where: { tokenDigest: digest(token) } });
     await system.pushRegistration.create({
       data: {
         userId,
@@ -100,6 +103,17 @@ export function laneLPushCases(system: System): Case[] {
 
   async function addCallDevice(userId: string, sessionId: string, registration: CallRegistration) {
     const id = digest(registration.deviceId);
+    // The device id and both token digests are unique across accounts, and the fixture
+    // can hold rows another suite wrote: clear those identities before seeding.
+    await system.callPushDevice.deleteMany({
+      where: {
+        OR: [
+          { id },
+          ...(registration.expoToken ? [{ expoTokenDigest: digest(registration.expoToken) }] : []),
+          ...(registration.voipToken ? [{ voipTokenDigest: digest(registration.voipToken) }] : []),
+        ],
+      },
+    });
     await system.callPushDevice.create({
       data: {
         id,

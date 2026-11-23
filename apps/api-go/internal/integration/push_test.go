@@ -19,6 +19,25 @@ import (
 
 const pushTestKey = "contract-test-encryption-key-0123456789abcdef"
 
+// cleanupPush removes the token rows a test wrote. The seeded users are unique per
+// run, but their rows are not removed with them here (nothing deletes the users), and
+// the tables carry globally unique digests a later run of another suite would collide
+// with.
+func cleanupPush(t *testing.T, database *db.DB, userIDs ...string) {
+	t.Helper()
+	t.Cleanup(func() {
+		if err := database.System(context.Background(), "test clean push rows", func(tx pgx.Tx) error {
+			if _, err := tx.Exec(context.Background(), `DELETE FROM push_registrations WHERE "userId" = ANY($1)`, userIDs); err != nil {
+				return err
+			}
+			_, err := tx.Exec(context.Background(), `DELETE FROM call_push_devices WHERE "userId" = ANY($1)`, userIDs)
+			return err
+		}); err != nil {
+			t.Errorf("clean push rows: %v", err)
+		}
+	})
+}
+
 func pushDigest(value string) string {
 	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:])
@@ -134,6 +153,7 @@ func addSession(t *testing.T, database *db.DB, id, token, userID, expires string
 func TestPushRegistration(t *testing.T) {
 	database := openTestDB(t)
 	s := seed(t, database)
+	cleanupPush(t, database, s.UserID, s.User2ID)
 	vault := pushVault(t, database)
 	ctx := context.Background()
 	actor := db.Actor{UserID: s.UserID, SpaceID: s.Space1, SessionID: s.SessionID}
@@ -260,6 +280,7 @@ func TestPushRegistration(t *testing.T) {
 func TestCallPushRegistration(t *testing.T) {
 	database := openTestDB(t)
 	s := seed(t, database)
+	cleanupPush(t, database, s.UserID, s.User2ID)
 	vault := pushVault(t, database)
 	ctx := context.Background()
 	actor := db.Actor{UserID: s.UserID, SpaceID: s.Space1, SessionID: s.SessionID}
@@ -357,6 +378,7 @@ func TestCallPushRegistration(t *testing.T) {
 func TestUnregisterPush(t *testing.T) {
 	database := openTestDB(t)
 	s := seed(t, database)
+	cleanupPush(t, database, s.UserID, s.User2ID)
 	vault := pushVault(t, database)
 	ctx := context.Background()
 	actor := db.Actor{UserID: s.UserID, SpaceID: s.Space1, SessionID: s.SessionID}
