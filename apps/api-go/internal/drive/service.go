@@ -1038,6 +1038,7 @@ func (s *Service) listFoldersTx(ctx context.Context, tx pgx.Tx, spaceID string, 
 		ORDER BY LOWER(name) ASC, id ASC
 	`, strings.Join(conds, " AND "))
 
+	// writeaudit:dynamic read: the WHERE clause is built from fixed fragments; args are filters
 	rows, err := tx.Query(ctx, sqlQuery, args...)
 	if err != nil {
 		return nil, err
@@ -1202,6 +1203,7 @@ func (s *Service) listFilesTx(
 		LIMIT $%d
 	`, strings.Join(cteConds, " AND "), outerWhere, orderBy, limitParam)
 
+	// writeaudit:dynamic read: the CTE/WHERE/order fragments are fixed; args are filters
 	rows, err := tx.Query(ctx, sqlQuery, args...)
 	if err != nil {
 		return nil, nil, orpc.Internal()
@@ -1372,6 +1374,7 @@ func (s *Service) Changes(ctx context.Context, actor db.Actor, cursorRaw string,
 		args = append(args, limit+1)
 		limitParam := len(args)
 
+		// writeaudit:dynamic read: cursor/limit fragments are fixed literals; args are filters
 		rows, err := tx.Query(ctx, fmt.Sprintf(`
 			WITH combined AS (
 				SELECT 'folder'::text AS kind, id, "parentId", name, "trashedAt", "updatedAt",

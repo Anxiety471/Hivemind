@@ -408,6 +408,7 @@ func applyRunCosts(runs []runRow, extra *runRow, costs map[string]float64) {
 
 // runs reads runs matching where (which may use alias r and the routine as ro).
 func (s snapshotReader) runs(where string, args ...any) ([]runRow, error) {
+	// writeaudit:dynamic read: callers pass fixed WHERE tails; args are filters
 	rows, err := s.tx.Query(s.ctx, `SELECT r.id, r."userId", r."botId", r."threadId", r."taskId", r.status, r.trigger,
 		r."routineId", ro.name, r."modelProvider", r."modelId", r.error, r."startedAt", r."completedAt", r."createdAt", r."updatedAt"
 		FROM runs r LEFT JOIN routines ro ON ro.id = r."routineId" WHERE `+where, args...)

@@ -438,6 +438,7 @@ func hookParentDelete(
 			`SELECT id FROM "`+parentTableName(model)+`" WHERE id = $1`, in.ParentID); err != nil {
 			return err
 		}
+		// writeaudit:dynamic table comes from the fixed proof model; the id is a filter
 		_, err := tx.Exec(ctx, `DELETE FROM "`+parentTableName(model)+`" WHERE id = $1`, in.ParentID)
 		return err
 	})

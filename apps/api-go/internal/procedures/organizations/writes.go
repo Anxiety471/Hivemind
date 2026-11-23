@@ -38,6 +38,7 @@ func lockMembers(ctx context.Context, tx pgx.Tx, organizationID string) error {
 // memberRole is memberRole: a full member of a live organization, else nothing.
 func memberRole(ctx context.Context, tx pgx.Tx, organizationID, userID string) (string, error) {
 	var storedRole string
+	// writeaudit:dynamic read: live() is a fixed fragment; the arguments are filters
 	err := tx.QueryRow(ctx, `SELECT m.role FROM member m
 		WHERE m."organizationId" = $1 AND m."userId" = $2 AND m.role <> 'guest' AND `+live(`m."organizationId"`)+` LIMIT 1`,
 		organizationID, userID).Scan(&storedRole)

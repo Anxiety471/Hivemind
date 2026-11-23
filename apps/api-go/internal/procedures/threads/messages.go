@@ -193,6 +193,7 @@ func (s snapshotReader) fetchRange(threadID string, minSeq, maxSeq int64) ([]mes
 // queryMessages reads message rows with their reply parent, opens the sealed blocks of the page
 // and of each reply parent in its own thread, and returns them in the query's order.
 func (s snapshotReader) queryMessages(tail string, args ...any) ([]messageRow, error) {
+	// writeaudit:dynamic read: callers pass fixed WHERE tails; args are filters
 	rows, err := s.tx.Query(s.ctx, `SELECT m.id, m."threadId", m.seq, m.role, m.blocks, m."botId", m."authorUserId",
 			m."replyToMessageId", m."replyQuote", m."runId", m."clientNonce", m."createdAt",
 			p.id, p."threadId", p.role, p."botId", p."authorUserId", p.blocks

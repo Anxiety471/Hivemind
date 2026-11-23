@@ -87,6 +87,7 @@ func List(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input) 
 
 	var rows []row
 	err := database.Tenant(ctx, actor, func(tx pgx.Tx) error {
+		// writeaudit:dynamic read: conditions/limit are fixed fragments; args are filters
 		result, err := tx.Query(ctx, query, args...)
 		if err != nil {
 			return err

@@ -221,6 +221,7 @@ func List(ctx context.Context, database *db.DB, actor db.Actor, ring *contentcry
 			args = append(args, *scope)
 			query += fmt.Sprintf(` AND scope = $%d`, len(args))
 		}
+		// writeaudit:dynamic read: botId/scope clauses are fixed fragments; args are filters
 		rows, err := tx.Query(ctx, query, args...)
 		if err != nil {
 			return err
@@ -278,6 +279,7 @@ func ExportMarkdown(ctx context.Context, database *db.DB, actor db.Actor, ring *
 			args = append(args, *botID)
 			query += fmt.Sprintf(` AND "botId" = $%d`, len(args))
 		}
+		// writeaudit:dynamic read: the botId clause is a fixed fragment; args are filters
 		rows, err := tx.Query(ctx, query, args...)
 		if err != nil {
 			return err

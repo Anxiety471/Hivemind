@@ -1126,6 +1126,7 @@ func List(ctx context.Context, database *db.DB, deployment shared.Deployment, ac
 			clauses = append(clauses, fmt.Sprintf(`(title ILIKE %s ESCAPE '\' OR COALESCE(description, '') ILIKE %s ESCAPE '\')`, p, p))
 		}
 		query := `SELECT ` + ticketColumns + ` FROM tickets WHERE ` + strings.Join(clauses, " AND ") + ` ORDER BY "updatedAt" DESC, id DESC`
+		// writeaudit:dynamic read: clauses are fixed fragments; args are filters
 		rows, err := tx.Query(ctx, query, args...)
 		if err != nil {
 			return err

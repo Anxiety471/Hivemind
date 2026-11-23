@@ -61,6 +61,7 @@ func homeOrganizationID(ctx context.Context, tx pgx.Tx, actor db.Actor) (string,
 
 // ownedOrganizationID is ownedOrganizationId: the oldest live organization the user owns.
 func ownedOrganizationID(ctx context.Context, tx pgx.Tx, userID string) (string, error) {
+	// writeaudit:dynamic read: live() is a fixed fragment; the argument is a filter
 	rows, err := tx.Query(ctx, `SELECT m."organizationId", m.role FROM member m
 		WHERE m."userId" = $1 AND `+live(`m."organizationId"`)+` ORDER BY m."createdAt" ASC`, userID)
 	if err != nil {
@@ -117,6 +118,7 @@ func ListMine(ctx context.Context, database *db.DB, actor db.Actor) (any, *orpc.
 			id, name, defaultSpace, role string
 			members                      int
 		}
+		// writeaudit:dynamic read: live() is a fixed fragment; the argument is a filter
 		rows, err := tx.Query(ctx, `SELECT o.id, o.name,
 				(SELECT s.id FROM spaces s WHERE s."organizationId" = o.id AND s."isDefault" LIMIT 1),
 				(SELECT m.role FROM member m WHERE m."organizationId" = o.id AND m."userId" = $1 LIMIT 1),
@@ -261,6 +263,7 @@ func Rename(ctx context.Context, database *db.DB, audit *effects.Recorder, actor
 		return nil, errInvalidName
 	}
 	err := database.System(ctx, "rename an organization for its owner", func(tx pgx.Tx) error {
+		// writeaudit:dynamic live() is a fixed predicate; name is db.Data and the IDs are filters
 		renamed, err := tx.Exec(ctx, `UPDATE organization SET name = $1
 			WHERE id = $2 AND EXISTS (SELECT 1 FROM member m WHERE m."organizationId" = organization.id AND m."userId" = $3 AND m.role LIKE '%owner%')
 				AND `+live("organization.id"), append(db.Data(shared.StoredText(trimmed)), organizationID, actor.UserID)...)
@@ -320,6 +323,7 @@ func MembersList(ctx context.Context, database *db.DB, deployment shared.Deploym
 	err := database.System(ctx, "list an organization's members for one of them", func(tx pgx.Tx) error {
 		// memberRole: a full member of a live organization, else the same answer as a stranger.
 		var storedRole string
+		// writeaudit:dynamic read: live() is a fixed fragment; the arguments are filters
 		err := tx.QueryRow(ctx, `SELECT m.role FROM member m
 			WHERE m."organizationId" = $1 AND m."userId" = $2 AND m.role <> 'guest' AND `+live("m.\"organizationId\"")+` LIMIT 1`,
 			organizationID, actor.UserID).Scan(&storedRole)
@@ -409,6 +413,7 @@ func InvitationsPreview(ctx context.Context, database *db.DB, deployment shared.
 	var result InvitationPreview
 	err := database.System(ctx, "preview an invitation for its invitee", func(tx pgx.Tx) error {
 		var email, organizationName, inviterName string
+		// writeaudit:dynamic read: live() is a fixed fragment; the arguments are filters
 		err := tx.QueryRow(ctx, `SELECT i.email, o.name, u.name FROM invitation i
 			JOIN organization o ON o.id = i."organizationId"
 			JOIN "user" u ON u.id = i."inviterId"

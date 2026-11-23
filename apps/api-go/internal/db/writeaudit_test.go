@@ -75,6 +75,8 @@ func TestWriteAuditRejectsBypasses(t *testing.T) {
 		{"bypass_sendbatch.go", []string{"SendBatch bypasses the placeholder audit", "Queue bypasses the placeholder audit"}},
 		{"bypass_method_value.go", []string{"Exec is used as a method value"}},
 		{"bypass_select_function.go", []string{"SELECT calls unpure function ADD_JOB"}},
+		{"bypass_dynamic_select_function.go", []string{"SQL contains an unresolved fragment"}},
+		{"bypass_dynamic_where.go", []string{"SQL contains an unresolved fragment"}},
 		{"allow_pure_select.go", nil},
 	} {
 		path := filepath.Join("testdata", "writeaudit", test.file)
@@ -182,8 +184,8 @@ func auditWriteFiles(t *testing.T, paths []string) ([]string, []string) {
 			default:
 				return true
 			}
-			// A statement with no bound values cannot bypass the boundary.
-			if len(call.Args) < 3 {
+			// A call without a SQL argument cannot bind a boundary value.
+			if len(call.Args) < 2 {
 				return true
 			}
 			locals := analysis.localsAt(call.Pos())
@@ -193,6 +195,16 @@ func auditWriteFiles(t *testing.T, paths []string) ([]string, []string) {
 					return true
 				}
 				exemptOr(where, call, "SQL is not statically resolvable")
+				return true
+			}
+			for _, sql := range variants {
+				if strings.Contains(sql, unresolvedFragment) {
+					exemptOr(where, call, "SQL contains an unresolved fragment")
+					return true
+				}
+			}
+			// A resolved statement with no bound values cannot cross the boundary.
+			if len(call.Args) < 3 {
 				return true
 			}
 			for _, sql := range variants {
@@ -365,26 +377,42 @@ func (analysis *fileAnalysis) localsFor(scope ast.Node) map[string][]string {
 	}
 	locals := map[string][]string{}
 	ast.Inspect(scope, func(node ast.Node) bool {
-		assignment, ok := node.(*ast.AssignStmt)
-		if !ok {
-			return true
-		}
-		for index, left := range assignment.Lhs {
-			identifier, ok := left.(*ast.Ident)
-			if !ok || index >= len(assignment.Rhs) {
-				continue
-			}
-			switch assignment.Tok {
-			case token.DEFINE, token.ASSIGN:
-				locals[identifier.Name] = analysis.stringVariants(assignment.Rhs[index], []map[string][]string{locals})
-			case token.ADD_ASSIGN:
-				var joined []string
-				for _, prefix := range locals[identifier.Name] {
-					for _, suffix := range analysis.stringVariants(assignment.Rhs[index], []map[string][]string{locals}) {
-						joined = append(joined, prefix+suffix)
-					}
+		switch typed := node.(type) {
+		case *ast.AssignStmt:
+			for index, left := range typed.Lhs {
+				identifier, ok := left.(*ast.Ident)
+				if !ok || index >= len(typed.Rhs) {
+					continue
 				}
-				locals[identifier.Name] = capVariants(joined)
+				switch typed.Tok {
+				case token.DEFINE, token.ASSIGN:
+					locals[identifier.Name] = analysis.stringVariants(typed.Rhs[index], []map[string][]string{locals})
+				case token.ADD_ASSIGN:
+					var joined []string
+					for _, prefix := range locals[identifier.Name] {
+						for _, suffix := range analysis.stringVariants(typed.Rhs[index], []map[string][]string{locals}) {
+							joined = append(joined, prefix+suffix)
+						}
+					}
+					locals[identifier.Name] = capVariants(joined)
+				}
+			}
+		case *ast.DeclStmt:
+			generic, ok := typed.Decl.(*ast.GenDecl)
+			if !ok || (generic.Tok != token.CONST && generic.Tok != token.VAR) {
+				return true
+			}
+			for _, spec := range generic.Specs {
+				value, ok := spec.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+				for index, name := range value.Names {
+					if index >= len(value.Values) {
+						continue
+					}
+					locals[name.Name] = analysis.stringVariants(value.Values[index], []map[string][]string{locals})
+				}
 			}
 		}
 		return true
@@ -411,9 +439,15 @@ func capVariants(values []string) []string {
 	return out
 }
 
+// unresolvedFragment stands in for a string part the audit cannot see. It is
+// not SQL and cannot be produced by a literal, so contains() is a reliable
+// fail-closed signal. (A plain "?" would collide with the jsonb ? operator.)
+const unresolvedFragment = "\x00unresolved\x00"
+
 // stringVariants resolves every statically possible string value of an
-// expression. An unknown fragment becomes "?" so the surrounding keywords and
-// $n placeholders stay visible.
+// expression. An unknown fragment becomes unresolvedFragment so the
+// surrounding keywords and $n placeholders stay visible, and the audit can
+// refuse the statement instead of trusting the visible part.
 func (analysis *fileAnalysis) stringVariants(expression ast.Expr, locals []map[string][]string) []string {
 	switch typed := expression.(type) {
 	case *ast.BasicLit:
@@ -434,18 +468,18 @@ func (analysis *fileAnalysis) stringVariants(expression ast.Expr, locals []map[s
 				return values
 			}
 		}
-		return []string{"?"}
+		return []string{unresolvedFragment}
 	case *ast.BinaryExpr:
 		if typed.Op != token.ADD {
-			return []string{"?"}
+			return []string{unresolvedFragment}
 		}
 		left := analysis.stringVariants(typed.X, locals)
 		if len(left) == 0 {
-			left = []string{"?"}
+			left = []string{unresolvedFragment}
 		}
 		right := analysis.stringVariants(typed.Y, locals)
 		if len(right) == 0 {
-			right = []string{"?"}
+			right = []string{unresolvedFragment}
 		}
 		var joined []string
 		for _, prefix := range left {
@@ -462,7 +496,7 @@ func (analysis *fileAnalysis) stringVariants(expression ast.Expr, locals []map[s
 				return values
 			}
 		}
-		return []string{"?"}
+		return []string{unresolvedFragment}
 	case *ast.CallExpr:
 		// A formatted statement keeps its keyword and clause structure; the
 		// interpolated identifiers cannot hide a placeholder.
@@ -473,7 +507,7 @@ func (analysis *fileAnalysis) stringVariants(expression ast.Expr, locals []map[s
 		if name == "Sprintf" && len(typed.Args) > 0 {
 			var out []string
 			for _, format := range analysis.stringVariants(typed.Args[0], locals) {
-				out = append(out, sprintfVerbs.ReplaceAllString(format, "?"))
+				out = append(out, sprintfVerbs.ReplaceAllString(format, unresolvedFragment))
 			}
 			return capVariants(out)
 		}
@@ -490,7 +524,7 @@ func (analysis *fileAnalysis) sqlVariants(expression ast.Expr, locals []map[stri
 	values := analysis.stringVariants(expression, locals)
 	out := make([]string, 0, len(values))
 	for _, value := range values {
-		if strings.Contains(value, "?") && !strings.Contains(value, "$") && !statementKeyword(value) {
+		if strings.Contains(value, unresolvedFragment) && !strings.Contains(value, "$") && !statementKeyword(value) {
 			continue
 		}
 		out = append(out, value)

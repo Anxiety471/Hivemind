@@ -496,6 +496,7 @@ func connect(ctx context.Context, tx pgx.Tx, actor db.Actor, input approveInput,
 		db.Data(effects.NewID(), actor.SpaceID, actor.UserID, botID, serverID, at)...); err != nil {
 		return Assignment{}, "", err
 	}
+	// writeaudit:dynamic read: the column list is the fixed local const; args are filters
 	rows, err := tx.Query(ctx, `SELECT `+columns+` FROM bot_mcp_servers a
 		WHERE a."botId" = $1 AND a."serverId" = $2`, botID, serverID)
 	if err != nil {

@@ -330,6 +330,7 @@ func ListSpace(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.In
 		if after != nil {
 			cursorFilter = `AND (latest."createdAt", latest.id) < (` + arg(after.CreatedAt) + `, ` + arg(after.ID) + `)`
 		}
+		// writeaudit:dynamic read: cursor/count fragments are fixed clauses; args are filters
 		result, err := tx.Query(ctx, `
 			WITH scoped AS (
 				SELECT * FROM "artifacts"

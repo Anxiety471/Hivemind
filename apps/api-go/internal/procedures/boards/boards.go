@@ -74,6 +74,7 @@ func List(ctx context.Context, database *db.DB, deployment shared.Deployment, ac
 	}
 	list := []Board{}
 	err := database.Tenant(ctx, actor, func(tx pgx.Tx) error {
+		// writeaudit:dynamic read: the column list is the fixed tickets.BoardColumns; the argument is a filter
 		rows, err := tx.Query(ctx, `SELECT `+tickets.BoardColumns+` FROM boards WHERE "spaceId" = $1
 			ORDER BY "createdAt" ASC, id ASC`, actor.SpaceID)
 		if err != nil {
