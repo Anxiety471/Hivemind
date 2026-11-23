@@ -245,7 +245,7 @@ it("shows every bot's outcome and changes", async () => {
   expect(document.body.textContent).toContain("Shared memory (Team)");
   expect(document.body.textContent).toContain("model HTTP 429");
   await act(async () => {
-    document.body.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
+    document.body.dispatchEvent(new MouseEvent("click", { bubbles: true }));
   });
   await settle();
   expect(document.querySelector("[data-run-results]")).toBeNull();

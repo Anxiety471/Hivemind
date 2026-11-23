@@ -169,14 +169,14 @@ export function MemorySettingsOverlay({
   const [detailsOpen, setDetailsOpen] = useState(false);
   useEffect(() => {
     if (!detailsOpen) return;
-    const closeOnOutsidePress = (event: PointerEvent) => {
+    const closeOnOutsideClick = (event: MouseEvent) => {
       const target = event.target;
       if (!(target instanceof Node)) return;
       const popup = document.querySelector("[data-run-results]");
       if (popup && !popup.contains(target)) setDetailsOpen(false);
     };
-    document.addEventListener("pointerdown", closeOnOutsidePress, true);
-    return () => document.removeEventListener("pointerdown", closeOnOutsidePress, true);
+    document.addEventListener("click", closeOnOutsideClick, true);
+    return () => document.removeEventListener("click", closeOnOutsideClick, true);
   }, [detailsOpen]);
   useEffect(() => {
     if (roamer) setIntervalDraft(String(roamer.intervalMinutes));
