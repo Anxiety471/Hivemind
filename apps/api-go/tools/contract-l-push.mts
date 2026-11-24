@@ -15,12 +15,20 @@
  * `mem-export-*`, including `huge-content`, `unicode-content`,
  * `lone-surrogate-content`, `empty-content` and `mem-export-empty`).
  */
+import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { EncryptedSecretStore } from "../../../packages/adapters/src/secrets/secrets.js";
 import type { Case, Seeded } from "./contract.mts";
 import { CONTRACT_ENCRYPTION_KEY } from "./contract-key.mts";
 
 type System = any;
+
+/** A token with an unpaired surrogate: valid to JSON.parse, invalid UTF-16. */
+const LONE_SURROGATE_TOKEN = "a\ud800bcdefgh";
+/** sha256 of Node's UTF-8 encoding of it, which writes U+FFFD for the surrogate. */
+const LONE_SURROGATE_DIGEST = createHash("sha256")
+  .update(LONE_SURROGATE_TOKEN, "utf8")
+  .digest("hex");
 
 const store = new EncryptedSecretStore(CONTRACT_ENCRYPTION_KEY);
 const sealContext = {
@@ -241,7 +249,20 @@ export function laneLPushCases(system: System): Case[] {
     register("register-concurrent", { token: "a-__user__" }, { concurrent: 3 }),
     register("register-token-512", { token: "Z".repeat(512) }),
     register("register-token-unicode", { token: "😀😀😀😀😀😀😀😀" }),
-    register("register-token-lone-surrogate", { token: "a\ud800bcdefgh" }),
+    register("register-token-lone-surrogate", { token: LONE_SURROGATE_TOKEN }, {
+      // The state comparison cannot see a digest: normalize() rewrites every
+      // 64-hex value to "<share-token-hash>". The stored digest must still be
+      // sha256 of Node's UTF-8 encoding, which writes U+FFFD for U+D800 (see
+      // TestDigestAndCredentialRules in internal/procedures/push).
+      check: async ({ seeded }) => {
+        const rows = await system.pushRegistration.findMany({
+          where: { userId: seeded.userId },
+          select: { tokenDigest: true },
+        });
+        assert.equal(rows.length, 1, "one registration for the lone-surrogate token");
+        assert.equal(rows[0].tokenDigest, LONE_SURROGATE_DIGEST, "stored tokenDigest");
+      },
+    }),
     register("register-token-astral-too-short", { token: "😀😀😀😀" }),
     register("register-token-too-short", { token: "abcdefg" }),
     register("register-token-space", { token: "has space" }),
