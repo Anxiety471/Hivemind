@@ -359,7 +359,13 @@ export function run1Cases(system: System): Case[] {
     approve(
       "busy-chat",
       { botId: "__s-r1b__", serverId: "__s-r1s__", threadId: "__s-r1t__" },
-      {},
+      {
+        // The held run is queued with no wakeAt, so the harness's in-memory
+        // wakeup queue (TypeScript only) can process it inside the capture
+        // window and publish space-changes "runs" frames Go does not run; the
+        // same class routineRun/skillRun ignore.
+        ignoreSignals: true,
+      },
       async (seeded: Seeded) => {
         await approveSeed()(seeded);
         await holdingRun(seeded, "r1busy", "r1b", "r1t");

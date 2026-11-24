@@ -15,7 +15,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { WorkspaceTooLargeError } from "@rakazo/adapter-kit";
 import { afterEach, describe, expect, it } from "vitest";
-import { checkHomeArchive, packHome, unpackHome } from "./home-archive.js";
+import { assertHomeFits, checkHomeArchive, packHome, unpackHome } from "./home-archive.js";
+import { WORKSPACE_SAVE_LIMITS } from "./workspace-save-policy.js";
 
 const dirs: string[] = [];
 
@@ -38,6 +39,19 @@ async function collect(source: AsyncIterable<Uint8Array>) {
 async function* once(bytes: Buffer) {
   yield bytes;
 }
+
+/** A sparse file of `size` bytes, as a home too large to save. */
+async function bigFile(directory: string, size: number) {
+  const handle = await open(path.join(directory, "large.bin"), "w");
+  try {
+    await handle.truncate(size);
+  } finally {
+    await handle.close();
+  }
+}
+
+/** A per-file cap no test file reaches, so a test can exercise the total limits alone. */
+const LIFTED = 1024 ** 4;
 
 /** Every file under a directory with its contents, for comparing trees. */
 async function tree(root: string, prefix = ""): Promise<Record<string, string>> {
@@ -140,27 +154,54 @@ describe("home archive", () => {
     });
   });
 
+  it("leaves out a file over the per-file cap but never one inside .git", async () => {
+    const source = await tempDir();
+    await mkdir(path.join(source, "repo/.git/objects/pack"), { recursive: true });
+    await writeFile(path.join(source, "small"), "x");
+    await writeFile(path.join(source, "huge.bin"), "0123456789");
+    await writeFile(path.join(source, "repo/.git/objects/pack/p.pack"), "0123456789");
+    const restored = await tempDir();
+    const save = { ...WORKSPACE_SAVE_LIMITS, maxFileBytes: 4 };
+    await unpackHome(once(await collect(packHome(source, undefined, save))), restored);
+    expect(await tree(restored)).toEqual({
+      small: "x",
+      "repo/": "",
+      "repo/.git/": "",
+      "repo/.git/objects/": "",
+      "repo/.git/objects/pack/": "",
+      "repo/.git/objects/pack/p.pack": "0123456789",
+    });
+  });
+
   it("uses the shared 5 GiB save limit even with larger archive read bounds", async () => {
     const source = await tempDir();
-    const handle = await open(path.join(source, "large.bin"), "w");
-    try {
-      await handle.truncate(5 * 1024 ** 3 + 1);
-    } finally {
-      await handle.close();
-    }
-    await expect(collect(packHome(source))).rejects.toEqual(new WorkspaceTooLargeError("bytes"));
+    await bigFile(source, 5 * 1024 ** 3 + 1);
+    await expect(
+      collect(packHome(source, undefined, { ...WORKSPACE_SAVE_LIMITS, maxFileBytes: LIFTED })),
+    ).rejects.toEqual(new WorkspaceTooLargeError("bytes"));
+  });
+
+  it("refuses an oversized home from file sizes alone, before anything is packed", async () => {
+    const source = await tempDir();
+    await writeFile(path.join(source, "small"), "x");
+    await bigFile(source, 5 * 1024 ** 3 + 1);
+    const save = { ...WORKSPACE_SAVE_LIMITS, maxFileBytes: LIFTED };
+    await expect(assertHomeFits(source, undefined, save)).rejects.toEqual(
+      new WorkspaceTooLargeError("bytes"),
+    );
+    await expect(
+      assertHomeFits(source, undefined, { ...save, maxBytes: 6 * 1024 ** 3 }),
+    ).resolves.toBeUndefined();
+    await expect(
+      assertHomeFits(source, undefined, { ...save, maxBytes: 1024 ** 4, maxFiles: 1 }),
+    ).rejects.toEqual(new WorkspaceTooLargeError("files"));
   });
 
   it("packs a home past 5 GiB when the configured save limit allows it", async () => {
     const source = await tempDir();
-    const handle = await open(path.join(source, "large.bin"), "w");
-    try {
-      await handle.truncate(5 * 1024 ** 3 + 1);
-    } finally {
-      await handle.close();
-    }
+    await bigFile(source, 5 * 1024 ** 3 + 1);
     const limits = { maxBytes: 100 * 1024 ** 3, maxEntries: 10 };
-    const saveLimits = { maxBytes: 20 * 1024 ** 3, maxFiles: 1_000_000 };
+    const saveLimits = { maxBytes: 20 * 1024 ** 3, maxFiles: 1_000_000, maxFileBytes: LIFTED };
     const packed = packHome(source, limits, saveLimits);
     // The size is checked before any content is read, so the first parts show it was accepted.
     const first = await packed.next();

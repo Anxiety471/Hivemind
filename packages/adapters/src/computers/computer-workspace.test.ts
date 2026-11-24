@@ -400,6 +400,24 @@ describe("Team run checkpoints", () => {
     });
   });
 
+  it("leaves the save to the idle sleep for a server-mounted object-backed home", async () => {
+    const updateMany = vi.fn();
+    const deps = {
+      home: { describe: () => ({ id: "object-storage" }) },
+      sandbox: {},
+      prisma: { computer: { updateMany } },
+    };
+    await expect(
+      checkpointRunComputerWorkspace(
+        deps as never,
+        { id: "team", homeKey: "team", scope: "team", spaceId: "space" },
+        { id: "box", providerRef: "box", kind: "docker", botId: "team" },
+        context,
+      ),
+    ).resolves.toBeUndefined();
+    expect(updateMany).not.toHaveBeenCalled();
+  });
+
   it("defers a remote export when another run prevents an exclusive checkpoint", async () => {
     const { checkpointRunComputerWorkspace } = await import("./computer-workspace.js");
     const exportWorkspace = vi.fn();

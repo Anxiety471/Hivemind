@@ -35,6 +35,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/models"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/onboarding"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/pages"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/push"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/routines"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/runs"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/scratchpad"
@@ -893,6 +894,24 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 				return boards.Rename(ctx, database, deployment, actor, input)
 			},
 		},
+		{
+			Name: "notifications.registerPush",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return push.Register(ctx, database, deployment.Vault, actor, input)
+			},
+		},
+		{
+			Name: "notifications.registerCallPush",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return push.RegisterCall(ctx, database, deployment.Vault, actor, input)
+			},
+		},
+		{
+			Name: "notifications.unregisterPush",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return push.Unregister(ctx, database, actor, input)
+			},
+		},
 	}
 	audit := deployment.Audit
 	if audit == nil {
@@ -919,5 +938,7 @@ func VaultProcedures() []string {
 		"mcp.servers.remove",
 		"mcp.oauth.disconnect",
 		"models.credentials",
+		"notifications.registerPush",
+		"notifications.registerCallPush",
 	}
 }

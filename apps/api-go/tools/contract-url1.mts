@@ -12,6 +12,7 @@ import { createHash } from "node:crypto";
 import { createSecretStore } from "../../../packages/adapters/src/index.js";
 import type { Case, Seeded } from "./contract.mts";
 import { CONTRACT_ENCRYPTION_KEY } from "./contract-key.mts";
+import { registerVerified } from "./contract-norm.mts";
 
 type System = any;
 type CheckContext = Parameters<NonNullable<Case["check"]>>[0];
@@ -99,7 +100,7 @@ function pageCheck(
   pageKey: string,
   expected: { link: boolean; status?: number; concurrent?: number; token?: string },
 ): NonNullable<Case["check"]> {
-  return withEvents(system, name, async ({ seeded, result, gatewayLog }) => {
+  return withEvents(system, name, async ({ seeded, result, gatewayLog, side }) => {
     if (expected.status !== undefined)
       assert.equal(result.status, expected.status, `${name}: status`);
     if (expected.concurrent !== undefined) {
@@ -162,7 +163,12 @@ function pageCheck(
           `${name}: SHA-256(returned token) != stored shareTokenHash`,
         );
         assert.ok(!gatewayLog.includes(token), `${name}: gateway log disclosed the share token`);
+        // A freshly generated token is random on each side. The recomputation above proved the
+        // stored hash is SHA-256 of this token, so both may be masked; the token itself also sits
+        // in the page_share secret row, which laneJState opens.
+        if (!expected.token) registerVerified(side, token, "<random-secret>");
       }
+      if (!expected.token) registerVerified(side, page.shareTokenHash!, "<sha256>");
     } else {
       assert.equal(urls.length, 0, `${name}: response unexpectedly contains a share URL`);
       assert.equal(page.visibility, "private", `${name}: page visibility`);

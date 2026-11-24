@@ -55,6 +55,7 @@ func TestRegistryHasTheServedProceduresAndNotTrust(t *testing.T) {
 		"boards.list", "boards.get", "boards.rename",
 		"tickets.get", "tickets.comments", "boards.subscribe",
 		"bots.list", "bots.listArchived", "bots.get", "groups.list", "groups.get", "groups.listArchived",
+		"notifications.registerPush", "notifications.registerCallPush", "notifications.unregisterPush",
 	} {
 		if !seen[name] {
 			t.Errorf("missing %s", name)
