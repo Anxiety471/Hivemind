@@ -29,7 +29,6 @@ import {
   computerMountsMatch,
   computerNetworkNameFor,
   computerNetworkOwnerFor,
-  computerPackageMirrorMatches,
   containerCreateOptions,
   containerNameFor,
   controlPortPublicationMatches,
@@ -45,7 +44,6 @@ import {
   computerComputeGpus,
   computerDns,
   computerMounts,
-  computerPackageMirrorUrl,
   controlViaLoopback,
   dataDir,
   docker,
@@ -267,8 +265,6 @@ app.post("/computers", async (c) => {
           computerLocaleMatches(info.Config.Env, locale) &&
           // And the bot browser's proxy auto-config.
           computerBrowserProxyPacMatches(info.Config.Env, computerBrowserProxyPacUrl) &&
-          // And the package mirror's registry variables.
-          computerPackageMirrorMatches(info.Config.Env, computerPackageMirrorUrl) &&
           controlPublishOk &&
           (!storage.homeVolume || homeVolumeMatches(info.HostConfig.Mounts, storage.homeVolume)) &&
           // A computer that cannot rejoin its network is replaced below instead.
@@ -334,7 +330,6 @@ app.post("/computers", async (c) => {
           mounts: computerMounts,
           computeGpus: computerComputeGpus,
           browserProxyPacUrl: computerBrowserProxyPacUrl,
-          packageMirrorUrl: computerPackageMirrorUrl,
           locale,
         });
         let container: Docker.Container | undefined;

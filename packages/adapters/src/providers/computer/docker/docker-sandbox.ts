@@ -25,6 +25,7 @@ import {
 } from "@rakazo/adapter-kit";
 import { COMPUTER_UNRESPONSIVE_ERROR } from "@rakazo/contracts";
 import { cancelResponseBody, ResponseTooLargeError, requestDeadline } from "@rakazo/core";
+import { computerPackageMirrorEnv } from "@rakazo/core/node/desktop-runtime";
 import { boundedSandboxCommandTimeoutMs } from "@rakazo/core/node/sandbox-command";
 import { resolveSupervisorToken } from "@rakazo/core/node/secrets-guard";
 import { outgoingCorrelationHeaders } from "@rakazo/logging";
@@ -125,11 +126,16 @@ export class DockerSandboxProvider implements SandboxProvider {
   /** One check per computer, shared by every caller that needs it meanwhile. */
   private readonly healthChecks = new Map<string, Promise<void>>();
 
+  /** Registry variables for every command; empty when no package mirror is configured. */
+  private readonly packageMirrorEnv: Record<string, string>;
+
   constructor(
     private readonly supervisorUrl: string,
     supervisorToken?: string,
+    packageMirrorUrl?: string,
   ) {
     this.supervisorToken = supervisorToken ?? resolveSupervisorToken(process.env);
+    this.packageMirrorEnv = computerPackageMirrorEnv(packageMirrorUrl);
   }
 
   describe() {
@@ -292,6 +298,8 @@ export class DockerSandboxProvider implements SandboxProvider {
       headers: { ...this.headers(context, computer.botId), "content-type": "application/json" },
       body: JSON.stringify({
         ...request,
+        // Per command, not per container: replacing a computer costs a walk of its whole home.
+        env: { ...this.packageMirrorEnv, ...request.env },
         argv: sandboxCommandArgv(request),
         cwd: workspaceCwd("/home/rakazo", request.cwd),
         timeoutMs,

@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import { gunzip, gzip } from "node:zlib";
 import type { WorkspaceExportLimits } from "@rakazo/adapter-kit";
 import { WorkspaceTooLargeError } from "@rakazo/adapter-kit";
-import { getLogger } from "@rakazo/logging";
+import { bestEffort, getLogger } from "@rakazo/logging";
 import type { HomeArchiveLimits } from "./home-archive.js";
 import {
   ByteReader,

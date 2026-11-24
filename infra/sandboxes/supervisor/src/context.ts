@@ -3,7 +3,6 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { uploadSizeFromEnv } from "@rakazo/core";
-import { computerPackageMirrorEnv } from "@rakazo/core/node/desktop-runtime";
 import { loadRootEnv } from "@rakazo/core/node/load-root-env";
 import { resolveSupervisorToken } from "@rakazo/core/node/secrets-guard";
 import Docker from "dockerode";
@@ -39,10 +38,6 @@ export const computerEgressSetting = resolveComputerEgressMode();
 export const computerDns = resolveComputerDns();
 export const computerComputeGpus = resolveComputerComputeGpus();
 export const computerBrowserProxyPacUrl = resolveComputerBrowserProxyPacUrl();
-export const computerPackageMirrorUrl =
-  process.env.COMPUTER_PACKAGE_MIRROR_URL?.trim() || undefined;
-// Validate once at startup so a malformed URL fails here, not on the first computer.
-computerPackageMirrorEnv(computerPackageMirrorUrl);
 export const computerMounts = resolveComputerMounts(undefined, [dataDir, dockerSocketPath]);
 // Docker follows symlinks in a bind source, so also check where a locally visible source points.
 assertComputerMountSources(

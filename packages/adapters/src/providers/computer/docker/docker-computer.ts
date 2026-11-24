@@ -21,6 +21,7 @@ export const dockerComputer: ComputerProviderDefinition = {
     return new DockerSandboxProvider(
       opts.supervisorUrl ?? "http://127.0.0.1:7091",
       opts.supervisorToken,
+      opts.packageMirrorUrl,
     );
   },
 };

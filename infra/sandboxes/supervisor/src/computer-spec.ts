@@ -3,7 +3,6 @@ import { isIP } from "node:net";
 import path from "node:path";
 import {
   COMPUTER_CACHE_ENV,
-  computerPackageMirrorEnv,
   MAX_DESKTOP_DISPLAY,
   screenPorts,
 } from "@rakazo/core/node/desktop-runtime";
@@ -297,26 +296,6 @@ export function computerBrowserProxyPacMatches(
   const have = (env ?? []).filter((entry) => entry.startsWith(prefix));
   if (desired === undefined) return have.length === 0;
   return have.length === 1 && have[0] === `${prefix}${desired}`;
-}
-
-const PACKAGE_MIRROR_ENV_KEYS = Object.keys(computerPackageMirrorEnv("http://mirror.invalid"));
-
-/**
- * A computer's registry variables are fixed at creation, so enabling, changing or removing the
- * package mirror replaces it.
- */
-export function computerPackageMirrorMatches(
-  env: string[] | null | undefined,
-  desired?: string,
-): boolean {
-  const expected = computerPackageMirrorEnv(desired);
-  const have = (env ?? []).filter((entry) =>
-    PACKAGE_MIRROR_ENV_KEYS.some((name) => entry.startsWith(`${name}=`)),
-  );
-  return (
-    have.length === Object.keys(expected).length &&
-    Object.entries(expected).every(([name, value]) => have.includes(`${name}=${value}`))
-  );
 }
 
 /**
@@ -688,8 +667,6 @@ export interface ComputerCreateInput {
   computeGpus?: number;
   /** PAC URL for the bot browser (see resolveComputerBrowserProxyPacUrl). */
   browserProxyPacUrl?: string;
-  /** Base URL of the optional read-only package mirror computers fetch registries from. */
-  packageMirrorUrl?: string;
   locale?: ComputerLocale;
 }
 
@@ -716,9 +693,6 @@ export function containerCreateOptions(input: ComputerCreateInput) {
     Tty: true,
     Env: [
       ...Object.entries(COMPUTER_CACHE_ENV).map(([key, value]) => `${key}=${value}`),
-      ...Object.entries(computerPackageMirrorEnv(input.packageMirrorUrl)).map(
-        ([key, value]) => `${key}=${value}`,
-      ),
       "DISPLAY=:1",
       "HOME=/home/rakazo",
       "PATH=/home/rakazo/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",

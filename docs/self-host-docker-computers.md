@@ -242,18 +242,20 @@ test server. They are operator settings only; a request can never choose an upst
 
 ### Pointing computers at the mirror
 
-Set `COMPUTER_PACKAGE_MIRROR_URL` on the API, worker and supervisor processes (every process
-that creates a computer) and restart them. Each computer then receives:
+Set `COMPUTER_PACKAGE_MIRROR_URL` on the API and worker processes and restart them. Every command
+they run in a computer then receives:
 
 - `npm_config_registry` and `NPM_CONFIG_REGISTRY` = `<url>/npm/`
 - `GOPROXY` = `<url>/go,direct`, so a module the mirror lacks falls back to the origin
 - `UV_INDEX_URL`, `UV_DEFAULT_INDEX` and `PIP_INDEX_URL` = `<url>/pypi/simple`
 
+A command's own environment wins over these. Docker computers get them per command rather than at
+creation, so enabling, changing or removing the mirror takes effect at once and replaces no
+computer; other providers set them when they create a machine.
+
 The rebuildable cache paths (`XDG_CACHE_HOME`, `npm_config_cache`, `PIP_CACHE_DIR`, the
 Playwright and uv caches) are unchanged. Leave `COMPUTER_PACKAGE_MIRROR_URL` unset and every
-computer behaves exactly as before. Enabling, changing or removing it replaces each Docker
-computer on its next provision, as a changed DNS or mount setting does; other providers
-create a fresh machine each time.
+computer behaves exactly as before.
 
 ### Restricted egress and the mirror
 
