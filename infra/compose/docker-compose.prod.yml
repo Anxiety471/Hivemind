@@ -47,6 +47,7 @@ x-app-environment: &app-environment # Runtime
   WORKSPACE_SAVE_MAX_GB:
   RAKAZO_UPDATE_RESTART_SUPERVISOR:
   TICKET_BOARD_ENABLED:
+  CODE_MODE_ENABLED:
   # The Go task-detect service; unset falls back to MODEL_RETRY_RULES_URL's origin.
   TASK_DETECT_URL:
   USER_DEVICES_ENABLED:
