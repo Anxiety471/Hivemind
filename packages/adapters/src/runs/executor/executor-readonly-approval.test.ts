@@ -2630,6 +2630,17 @@ describe("code first", () => {
     expect(f.instructions()).toContain("codemode.<name>");
   });
 
+  it("tells the runtime which unlisted tools a script reaches, so older direct calls replay as reachable", async () => {
+    const codeFirst = fixture({ labs: ["code", "codeFirst"], readOnly: false });
+    await codeFirst.run();
+    const request = codeFirst.runtimeRun.mock.calls.at(-1)?.[0];
+    expect(request?.codeModeTools).toEqual(expect.arrayContaining(["remember", "demo_get_item"]));
+    expect(request?.codeModeTools).not.toContain("code_mode");
+    const codeOnly = fixture({ labs: ["code"], readOnly: false });
+    await codeOnly.run();
+    expect(codeOnly.runtimeRun.mock.calls.at(-1)?.[0].codeModeTools).toBeUndefined();
+  });
+
   it("lists every tool when code mode is on without code first, and none of it when code mode is off", async () => {
     const codeOnly = fixture({ labs: ["code"], readOnly: false });
     await codeOnly.run();

@@ -81,6 +81,7 @@ import type { FallbackStreamState } from "./pi-runtime-fallback.js";
 import { fallbackAwareModelStream, MAX_SELF_RECOVERIES_PER_RUN } from "./pi-runtime-fallback.js";
 import {
   isHistoryReply,
+  scriptToolMap,
   speakerText,
   toHistory,
   toPiImages,
@@ -324,6 +325,7 @@ export class PiAgentRuntime implements AgentRuntime {
         const toolsByAgentName = agentToolDefinitions(toolDefs);
         // Replayed calls to tools the model no longer has say so in their results.
         const offeredToolNames = new Set(allTools.map((tool) => tool.name));
+        const scriptToolNames = scriptToolMap(request.codeModeTools);
         let tools = allTools;
         const seenSteeringIds: string[] = [];
         const initialSteering = request.claimSteering ? await request.claimSteering([]) : [];
@@ -347,6 +349,7 @@ export class PiAgentRuntime implements AgentRuntime {
             request.prompt,
             request.sourceMessageId,
             offeredToolNames,
+            scriptToolNames,
           );
         const representedHistoryIds = new Set(
           restored
@@ -1172,7 +1175,13 @@ export class PiAgentRuntime implements AgentRuntime {
               const addedHistory = withoutSteeringMessages(request.history, initialSteering).filter(
                 (message) => message.id && !representedHistoryIds.has(message.id),
               );
-              const replayed = toHistory(addedHistory, "", undefined, offeredToolNames);
+              const replayed = toHistory(
+                addedHistory,
+                "",
+                undefined,
+                offeredToolNames,
+                scriptToolNames,
+              );
               for (const id of runToolCallIds(replayed as Message[]).used) toolCallIds.used.add(id);
               agent.state.messages.push(...replayed);
               for (const message of addedHistory)

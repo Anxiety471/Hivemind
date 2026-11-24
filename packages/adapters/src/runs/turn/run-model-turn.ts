@@ -22,7 +22,11 @@ import type { RunExecutorServices, RunHold } from "../lifecycle/run-attempt.js";
 import { completeRun } from "../lifecycle/run-complete.js";
 import { failRun, handoffEndedTurn, requeueRunAfterDatabaseOutage } from "../lifecycle/run-fail.js";
 import { recordLiveRunUsage } from "../lifecycle/run-progress.js";
-import { followUpsOffered, offeredFleetTools } from "../tools/run-tool-selection.js";
+import {
+  codeModeCallableTools,
+  followUpsOffered,
+  offeredFleetTools,
+} from "../tools/run-tool-selection.js";
 import { applyTool } from "../tools/run-tools.js";
 import { consumeRunEvents } from "./run-turn.js";
 import { claimRunSteering } from "./run-turn-images.js";
@@ -283,6 +287,7 @@ function modelTurnRequest(
         !turnBlocks?.some((block) => block.kind === "image" && block.imageHandling === "confirm"),
     ),
     tools: listedTools,
+    ...(codeFirst ? { codeModeTools: codeModeCallableTools(tools).map((tool) => tool.name) } : {}),
     // The live array: secrets learned later in the run redact too.
     secrets: runSecrets,
     model: mainRunModel,
