@@ -1,6 +1,7 @@
 import { redactSecrets } from "@rakazo/core";
 import { redactToolArgsForReview } from "../../approvals/auto-review.js";
 import { sanitizeSensitiveText } from "../../runtime/pi/pi-runtime-errors.js";
+import { summarizeCodeModeCalls } from "../../tools/code-mode-lint.js";
 
 /** Max characters kept for a step's one-line target summary. */
 export const TOOL_STEP_DETAIL_MAX_CHARS = 160;
@@ -184,6 +185,15 @@ function rawDetailForTool(toolName: string, args: Record<string, unknown>): stri
     }
     case "run_subagent":
       return nonEmptyString(args.name) ?? nonEmptyString(args.task);
+    case "code_mode": {
+      const code = nonEmptyString(args.code);
+      return code ? summarizeCodeModeCalls(code) : undefined;
+    }
+    case "command_save":
+    case "command_delete": {
+      const commandName = nonEmptyString(args.name);
+      return commandName ? `cmd.${commandName}` : undefined;
+    }
     case "find_tool": {
       if (Array.isArray(args.names)) {
         const joined = args.names

@@ -75,4 +75,30 @@ describe("summarizeToolCallDetail", () => {
     expect(detail!.length).toBeLessThanOrEqual(TOOL_STEP_DETAIL_MAX_CHARS);
     expect(detail!.endsWith("…")).toBe(true);
   });
+
+  it("summarizes code_mode tool/command calls and command_save/command_delete names", () => {
+    expect(
+      summarizeToolCallDetail("code_mode", {
+        code: 'await codemode.cmd.weekly_report({ week: "w1" });',
+      }),
+    ).toBe("cmd.weekly_report");
+    expect(
+      summarizeToolCallDetail("code_mode", {
+        code: `
+          await codemode.board_tickets({});
+          await codemode.list_fleet({});
+          await codemode.list_history({});
+          await codemode.drive_list({});
+          await codemode.web_search({ query: "x" });
+        `,
+      }),
+    ).toBe("board_tickets, list_fleet, list_history, drive_list +1 more");
+    expect(summarizeToolCallDetail("code_mode", { code: "console.log(1 + 2);" })).toBeUndefined();
+    expect(summarizeToolCallDetail("command_save", { name: "weekly_report" })).toBe(
+      "cmd.weekly_report",
+    );
+    expect(summarizeToolCallDetail("command_delete", { name: "weekly_report" })).toBe(
+      "cmd.weekly_report",
+    );
+  });
 });

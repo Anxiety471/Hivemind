@@ -420,3 +420,46 @@ export function formatCodeModeLintFindings(findings: readonly CodeModeLintFindin
     .map((finding) => `line ${finding.line} (${finding.rule}): ${finding.message}`)
     .join("\n");
 }
+
+/**
+ * Extracts deduplicated `codemode.<tool>` and `codemode.cmd.<name>` call targets in first-seen
+ * order from a script, ignoring comments, strings, regexes, and template text.
+ */
+export function extractCodeModeCalls(code: string): string[] {
+  const stripped = stripNonCode(code);
+  const seen = new Set<string>();
+  const ordered: string[] = [];
+  const add = (target: string) => {
+    if (!target || seen.has(target)) return;
+    seen.add(target);
+    ordered.push(target);
+  };
+
+  // Match dot or bracket member chains starting from `codemode` up to the call `(`.
+  const callRe =
+    /\bcodemode\s*(?:\.\s*[A-Za-z_$][A-Za-z0-9_$]*|\[\s*\])(?:\s*(?:\.\s*[A-Za-z_$][A-Za-z0-9_$]*|\[\s*\]))*\s*\(/g;
+  for (const match of stripped.matchAll(callRe)) {
+    const rawSlice = code.slice(match.index, match.index + match[0].length);
+    const parts: string[] = [];
+    const segRe = /(?:\.\s*([A-Za-z_$][A-Za-z0-9_$]*)|\[\s*(['"])([^'"\\]+)\2\s*\])/g;
+    for (const seg of rawSlice.matchAll(segRe)) {
+      const name = seg[1] ?? seg[3];
+      if (name) parts.push(name);
+    }
+    if (parts.length === 0) continue;
+    if (parts[0] === "cmd" && parts[1]) {
+      add(`cmd.${parts[1]}`);
+    } else if (parts[0] !== "cmd") {
+      add(parts[0]!);
+    }
+  }
+  return ordered;
+}
+
+/** Summarizes the calls made in a `code_mode` script for step details and live activity. */
+export function summarizeCodeModeCalls(code: string, maxListed = 4): string | undefined {
+  const calls = extractCodeModeCalls(code);
+  if (calls.length === 0) return undefined;
+  if (calls.length <= maxListed) return calls.join(", ");
+  return `${calls.slice(0, maxListed).join(", ")} +${calls.length - maxListed} more`;
+}

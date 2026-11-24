@@ -302,6 +302,10 @@ function ActivityPanelInner({
       ? stepCategory(activeStepNode.step.label, activeStepNode.step.detail)
       : "tool";
 
+  const bannerDetail =
+    pendingApproval?.block.detail ??
+    (live ? activeStepNode?.step.detail?.trim() || undefined : undefined);
+
   const bannerClock = formatClockDuration(elapsedMs);
   const inspectedNode =
     inspectedStepIndex !== null ? (graph.nodes[inspectedStepIndex] ?? null) : null;
@@ -509,9 +513,9 @@ function ActivityPanelInner({
                 {bannerLabel}
               </span>
             )}
-            {pendingApproval?.block.detail ? (
+            {bannerDetail ? (
               <code className="max-w-full shrink truncate rounded border border-border/70 bg-background/90 px-1.5 py-0.5 font-mono text-caption text-foreground @2xl:max-w-xl">
-                {pendingApproval.block.detail}
+                {bannerDetail}
               </code>
             ) : null}
           </div>

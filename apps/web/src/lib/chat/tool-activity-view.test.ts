@@ -59,7 +59,8 @@ describe("activity summary parts", () => {
       steps: [
         { label: "Web search", count: 2 },
         { label: "Web fetch", count: 1 },
-        { label: "Shell", count: 3 },
+        { label: "Shell", count: 2 },
+        { label: "Code mode", count: 1 },
       ],
     };
     expect(activitySummaryParts([blocks])).toEqual([

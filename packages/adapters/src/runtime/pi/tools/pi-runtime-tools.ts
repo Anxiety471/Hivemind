@@ -33,6 +33,7 @@ import {
 import { FIND_TOOL, USE_TOOL } from "../../../tools/builtin.tool-definition.js";
 import { findTools, partitionTools } from "../../../tools/builtin-tool-bridge.js";
 import { CODE_MODE } from "../../../tools/code-mode.tool-definition.js";
+import { summarizeCodeModeCalls } from "../../../tools/code-mode-lint.js";
 import {
   lintPlaceholderArguments,
   placeholderRejectionMessage,
@@ -241,6 +242,12 @@ export function describeToolActivity(
       .trim();
     return clipToolResultText(text, ACTIVITY_DETAIL_LIMIT);
   };
+  if (toolName === CODE_MODE) {
+    const summary = summarizeCodeModeCalls(String(record.code ?? ""), 3);
+    return summary ? `Running ${summary}` : "Running script";
+  }
+  if (toolName === "command_save") return `Saving command: cmd.${detail(record.name)}`;
+  if (toolName === "command_delete") return `Deleting command: cmd.${detail(record.name)}`;
   if (toolName === "shell") return `Running: ${detail(record.command)}`;
   if (toolName === "user_computer_shell")
     return `Running on your computer: ${detail(record.command)}`;

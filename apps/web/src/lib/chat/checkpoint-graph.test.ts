@@ -30,6 +30,8 @@ describe("checkpoint formatting helpers", () => {
 
   it("categorizes humanized step labels cleanly", () => {
     expect(stepCategory("Shell", "pnpm build")).toBe("terminal");
+    expect(stepCategory("Code mode", "cmd.weekly_report")).toBe("terminal");
+    expect(stepCategory("Command save", "cmd.weekly_report")).toBe("terminal");
     expect(stepCategory("Compared commits", "v3.1...main")).toBe("git");
     expect(stepCategory("Drafted the release notes", "Releases / v3.2")).toBe("docs");
     expect(stepCategory("Collected 14 issues")).toBe("search");

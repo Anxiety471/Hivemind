@@ -170,6 +170,18 @@ describe("built-in tool bridge", () => {
     expect(
       describeToolActivity(USE_TOOL, { name: "create_space", arguments: { name: "Finance" } }),
     ).toBe("Creating space: Finance");
+    expect(
+      describeToolActivity("code_mode", {
+        code: "await codemode.cmd.weekly_report({}); await codemode.list_fleet({});",
+      }),
+    ).toBe("Running cmd.weekly_report, list_fleet");
+    expect(describeToolActivity("code_mode", { code: "console.log(1);" })).toBe("Running script");
+    expect(describeToolActivity("command_save", { name: "weekly_report" })).toBe(
+      "Saving command: cmd.weekly_report",
+    );
+    expect(describeToolActivity("command_delete", { name: "weekly_report" })).toBe(
+      "Deleting command: cmd.weekly_report",
+    );
   });
 });
 

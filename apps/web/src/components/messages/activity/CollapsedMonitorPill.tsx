@@ -95,6 +95,11 @@ export function CollapsedMonitorPill({
                   />
                   <TooltipContent>
                     <span>{node.step.label}</span>
+                    {node.step.detail ? (
+                      <span className="max-w-52 truncate font-mono text-background/80">
+                        {node.step.detail}
+                      </span>
+                    ) : null}
                     {duration ? (
                       <span className="font-mono text-background/75 tabular-nums">{duration}</span>
                     ) : null}

@@ -70,7 +70,9 @@ export function stepCategory(label: string, detail?: string): StepCategory {
     return "docs";
   }
   if (
-    /\b(shell|bash|terminal|run command|execute|build|built|compile|test)\b/.test(normalized) ||
+    /\b(shell|bash|terminal|run command|execute|build|built|compile|test|code mode|command save|command delete)\b/.test(
+      normalized,
+    ) ||
     /^(npm|pnpm|yarn|bun|node|python|pytest|cargo|gh|git)\b/.test(normalizedDetail)
   ) {
     if (/\b(commit|commits|release|branch|pull request|diff|repo|tag)\b/.test(normalized)) {

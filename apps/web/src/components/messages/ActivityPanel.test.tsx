@@ -481,4 +481,23 @@ describe("ActivityPanel", () => {
     expect(container.querySelectorAll('[data-testid="tool-activity"]')).toHaveLength(3);
     expect(container.textContent).toContain("Preparing run…");
   });
+
+  it("shows the active step detail in the live status banner for code_mode runs", () => {
+    renderPanel({
+      live: true,
+      blocks: [
+        stepsBlock([
+          step("Code mode", {
+            startedAtMs: 1_000,
+            status: "running",
+            detail: "cmd.weekly_report, list_fleet",
+          }),
+        ]),
+      ],
+      runMeta: { modelId: "claude-opus-5-5", status: "running" },
+    });
+
+    const bannerCode = panelRoot().querySelector("code");
+    expect(bannerCode?.textContent).toBe("cmd.weekly_report, list_fleet");
+  });
 });

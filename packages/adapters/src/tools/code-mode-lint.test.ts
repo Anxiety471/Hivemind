@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { formatCodeModeLintFindings, lintCodeModeScript } from "./code-mode-lint.js";
+import {
+  extractCodeModeCalls,
+  formatCodeModeLintFindings,
+  lintCodeModeScript,
+  summarizeCodeModeCalls,
+} from "./code-mode-lint.js";
 
 describe("lintCodeModeScript", () => {
   it("flags static imports, side-effect imports, and dynamic import()", () => {
@@ -93,5 +98,30 @@ describe("lintCodeModeScript", () => {
     // biome-ignore lint/suspicious/noTemplateCurlyInString: template literal is test input
     const findings = lintCodeModeScript('const out = `${await fetch("https://x.test")}`;');
     expect(findings).toEqual([expect.objectContaining({ rule: "no-fetch", line: 1 })]);
+  });
+});
+
+describe("extractCodeModeCalls & summarizeCodeModeCalls", () => {
+  it("extracts deduplicated tool and saved command calls while ignoring comments/strings", () => {
+    const code = `
+      // codemode.ignored_comment({});
+      const s = "codemode.ignored_string({})";
+      await codemode.cmd.weekly_report({ week: "w1" });
+      await codemode.demo_search({ query: "a" });
+      await codemode.demo_search({ query: "b" });
+      await codemode["create_space"]({ name: "Finance" });
+      await codemode["cmd"]["deploy_bot"]({});
+    `;
+    expect(extractCodeModeCalls(code)).toEqual([
+      "cmd.weekly_report",
+      "demo_search",
+      "create_space",
+      "cmd.deploy_bot",
+    ]);
+    expect(summarizeCodeModeCalls(code)).toBe(
+      "cmd.weekly_report, demo_search, create_space, cmd.deploy_bot",
+    );
+    expect(summarizeCodeModeCalls(code, 2)).toBe("cmd.weekly_report, demo_search +2 more");
+    expect(summarizeCodeModeCalls("console.log(1 + 2);")).toBeUndefined();
   });
 });

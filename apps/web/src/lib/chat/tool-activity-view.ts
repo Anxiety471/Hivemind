@@ -77,7 +77,7 @@ const SUMMARY_ACTIONS: readonly { kind: ActivitySummaryKind; match: RegExp }[] =
   { kind: "search", match: /^(web[ _]search|websearch|search[ _]history)$/ },
   {
     kind: "commands",
-    match: /^(shell|user[ _]computer[ _]shell|bash|terminal|run[ _]command|execute)$/,
+    match: /^(shell|user[ _]computer[ _]shell|bash|terminal|run[ _]command|execute|code[ _]mode)$/,
   },
   { kind: "writes", match: /^(write[ _]file|create[ _]file|save[ _]page)$/ },
   { kind: "edits", match: /^(edit|apply[ _]patch|str[ _]replace|multiedit)$/ },
