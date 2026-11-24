@@ -188,13 +188,15 @@ async function readPreamble(
   limits: HomeArchiveLimits,
   withTable: boolean,
 ): Promise<Header | Manifest> {
-  let magic: Buffer | undefined;
+  let magic: Buffer;
   try {
     magic = await reader.read(MAGIC.length);
-  } catch {
-    // A stream too short to hold the magic is simply not an incremental revision.
+  } catch (error) {
+    // Shorter than the marker: not one of these revisions.
+    if (error instanceof HomeArchiveError) throw new NotIncrementalRevisionError();
+    throw error;
   }
-  if (!magic?.equals(MAGIC)) throw new NotIncrementalRevisionError();
+  if (!magic.equals(MAGIC)) throw new NotIncrementalRevisionError();
   const headerLength = (await reader.read(4)).readUInt32BE(0);
   if (headerLength > MAX_HEADER_BYTES) throw new HomeArchiveError("Home revision header is huge");
   const header = parseHeader((await reader.read(headerLength)).toString("utf8"));
@@ -460,7 +462,7 @@ export async function prepareRevision(input: {
     }
     await pack.close();
   } catch (error) {
-    await bestEffort("close the staging pack after a failed import", pack.close());
+    await bestEffort("close home pack", pack.close());
     await rm(packPath, { force: true });
     throw error;
   }

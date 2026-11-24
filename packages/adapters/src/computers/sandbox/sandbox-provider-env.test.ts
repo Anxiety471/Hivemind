@@ -255,3 +255,20 @@ describe("sandboxProviderOptionsFromEnv", () => {
     ).toBeUndefined();
   });
 });
+
+describe("package mirror environment", () => {
+  it("is unset unless the operator configures it", () => {
+    expect(sandboxProviderOptionsFromEnv({}).packageMirrorUrl).toBeUndefined();
+    expect(
+      sandboxProviderOptionsFromEnv({ COMPUTER_PACKAGE_MIRROR_URL: "  " }).packageMirrorUrl,
+    ).toBeUndefined();
+  });
+
+  it("reads the mirror URL once for every computer provider", () => {
+    expect(
+      sandboxProviderOptionsFromEnv({
+        COMPUTER_PACKAGE_MIRROR_URL: " https://mirror.example ",
+      }).packageMirrorUrl,
+    ).toBe("https://mirror.example");
+  });
+});

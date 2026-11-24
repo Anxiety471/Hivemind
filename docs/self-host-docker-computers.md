@@ -174,6 +174,120 @@ network could not be removed (another user keeps it); IPv4 keeps working, and IP
 once that network is gone — for example after `docker network rm` of the computer's
 `rakazo-computer-*` network while it is stopped.
 
+## Package mirror
+
+`apps/package-mirror` is an optional, read-only pull-through cache for the package registries
+bots install from: the npm registry, the Go module proxy and the PyPI simple index. One
+download serves every computer, so repeated installs do not hit the public registries or
+spend each computer's bandwidth and disk. It is a separate small Node process with its own
+data directory and no database, and it is off until an operator runs it and points computers
+at it.
+
+It listens on `PACKAGE_MIRROR_PORT` (`8099`) and `PACKAGE_MIRROR_HOST` (`127.0.0.1`), and
+serves only `GET` and `HEAD` plus `/health`. Paths are:
+
+| Path                          | Ecosystem                                                          |
+| ----------------------------- | ------------------------------------------------------------------ |
+| `/npm/<package>`              | npm packument, with `dist.tarball` rewritten to this mirror        |
+| `/npm/<package>/-/<file>.tgz` | npm tarball, verified against the packument's integrity or shasum  |
+| `/go/<module>/@v/...`         | Go module proxy (`list`, `.info`, `.mod`, `.zip`, `@latest`)       |
+| `/pypi/simple/<project>/`     | PyPI simple index (PEP 691 JSON or HTML), with file URLs rewritten |
+| `/pypi/files/<sha256>/<name>` | PyPI file, verified against the published sha256                   |
+
+Packuments and indexes are cached for five minutes and served stale when the upstream fails;
+artifacts are cached by content. Each ecosystem has its own allowlist: npm reaches only
+`registry.npmjs.org`; Go reaches `proxy.golang.org` and `storage.googleapis.com` (its zip
+download redirects); PyPI reaches `pypi.org` for indexes and `files.pythonhosted.org` for
+files. It forwards no client headers and sends no credentials, and it refuses a redirect to
+any other host. Cached bytes live under `PACKAGE_MIRROR_DATA_DIR`
+(default `./data/package-mirror`), capped by `PACKAGE_MIRROR_MAX_GB` (default `20`) with
+least-recently-used eviction. An artifact larger than the whole cache is refused rather than
+streamed uncached. The mirror has no authentication: keep it on the Docker host's bridge or
+another address only the computers can reach, never on the public internet.
+
+Run it with the rest of the stack:
+
+```bash
+pnpm --filter @rakazo/package-mirror build
+PACKAGE_MIRROR_PUBLIC_URL=http://172.17.0.1:8099 \
+PACKAGE_MIRROR_DATA_DIR=/var/lib/rakazo-package-mirror \
+PACKAGE_MIRROR_HOST=0.0.0.0 \
+node apps/package-mirror/dist/index.js
+```
+
+`PACKAGE_MIRROR_PUBLIC_URL` is required: it is the URL computers use, and it is what rewritten
+tarball and file links point at, so it must be reachable from inside every computer. A systemd
+unit keeps it running:
+
+```ini
+[Unit]
+Description=Rakazo package mirror
+After=network-online.target
+
+[Service]
+User=rakazo
+Environment=PACKAGE_MIRROR_PUBLIC_URL=http://172.17.0.1:8099
+Environment=PACKAGE_MIRROR_DATA_DIR=/var/lib/rakazo-package-mirror
+Environment=PACKAGE_MIRROR_HOST=0.0.0.0
+ExecStart=/usr/bin/node /opt/rakazo/apps/package-mirror/dist/index.js
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+`PACKAGE_MIRROR_NPM_UPSTREAM`, `PACKAGE_MIRROR_GO_UPSTREAM`, `PACKAGE_MIRROR_PYPI_UPSTREAM` and
+`PACKAGE_MIRROR_PYPI_FILES_UPSTREAM` replace an upstream with a private registry or a local
+test server. They are operator settings only; a request can never choose an upstream.
+
+### Pointing computers at the mirror
+
+Set `COMPUTER_PACKAGE_MIRROR_URL` on the API, worker and supervisor processes (every process
+that creates a computer) and restart them. Each computer then receives:
+
+- `npm_config_registry` and `NPM_CONFIG_REGISTRY` = `<url>/npm/`
+- `GOPROXY` = `<url>/go,direct`, so a module the mirror lacks falls back to the origin
+- `UV_INDEX_URL`, `UV_DEFAULT_INDEX` and `PIP_INDEX_URL` = `<url>/pypi/simple`
+
+The rebuildable cache paths (`XDG_CACHE_HOME`, `npm_config_cache`, `PIP_CACHE_DIR`, the
+Playwright and uv caches) are unchanged. Leave `COMPUTER_PACKAGE_MIRROR_URL` unset and every
+computer behaves exactly as before. Enabling, changing or removing it replaces each Docker
+computer on its next provision, as a changed DNS or mount setting does; other providers
+create a fresh machine each time.
+
+### Restricted egress and the mirror
+
+With `SANDBOX_COMPUTER_EGRESS=restricted`, the host ruleset drops connections from `rakazo-c*`
+bridges to the host itself. A mirror on the Docker host is therefore blocked until the host
+allows its port above that drop:
+
+```bash
+sudo iptables -I INPUT 1 -i 'rakazo-c+' -p tcp --dport 8099 -j ACCEPT
+```
+
+`restrict-computer-egress.sh` inserts its own `INPUT` rules at the head on every `--apply`
+(including at boot), which pushes this rule below the drop, so apply it after the ruleset.
+Persist it with a systemd oneshot ordered after the egress unit, for example:
+
+```ini
+[Unit]
+Description=Allow bot computers to reach the package mirror
+After=rakazo-computer-egress.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/iptables -I INPUT 1 -i rakazo-c+ -p tcp --dport 8099 -j ACCEPT
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Use the address computers route to the host with: the `docker0` gateway (`ip -4 addr show
+docker0`, commonly `172.17.0.1`) or a host name that resolves to it. If IPv6 egress is open,
+add the matching `ip6tables` rule. When the mirror runs on another host, that host must be on
+a public address, because restricted egress drops private destinations.
+
 ## Shared host folders
 
 `SANDBOX_COMPUTER_MOUNTS` mounts host directories into every bot computer (Docker sandboxes

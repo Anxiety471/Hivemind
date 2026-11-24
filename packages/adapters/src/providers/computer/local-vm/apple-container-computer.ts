@@ -25,6 +25,7 @@ export const appleContainerComputer: ComputerProviderDefinition = {
       computerImage: opts.localVmComputerImage,
       cpus: opts.localVmCpus,
       memory: opts.localVmMemory,
+      packageMirrorUrl: opts.packageMirrorUrl,
     });
   },
 };
