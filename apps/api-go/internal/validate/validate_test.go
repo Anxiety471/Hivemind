@@ -101,3 +101,45 @@ func TestEnum(t *testing.T) {
 		}
 	}
 }
+
+// An object's "length" member goes through JS ToNumber before the relational
+// comparison, so a string or array length adds only the issues zod adds.
+func TestStringLengthOfReadsJSToNumber(t *testing.T) {
+	for input, want := range map[string][]string{
+		`{"length":"8"}`:        {"invalid_type"},
+		`{"length":"7"}`:        {"invalid_type", "too_small"},
+		`{"length":"600"}`:      {"invalid_type", "too_big"},
+		`{"length":[]}`:         {"invalid_type", "too_small"},
+		`{"length":[8]}`:        {"invalid_type"},
+		`{"length":[600]}`:      {"invalid_type", "too_big"},
+		`{"length":[[8]]}`:      {"invalid_type"},
+		`{"length":[""]}`:       {"invalid_type", "too_small"},
+		`{"length":[8,9]}`:      {"invalid_type", "too_small", "too_big"},
+		`{"length":{}}`:         {"invalid_type", "too_small", "too_big"},
+		`{"length":" 8 "}`:      {"invalid_type"},
+		`{"length":"0x10"}`:     {"invalid_type"},
+		`{"length":"8.5"}`:      {"invalid_type"},
+		`{"length":"1e3"}`:      {"invalid_type", "too_big"},
+		`{"length":"Infinity"}`: {"invalid_type", "too_big"},
+		`{"length":null}`:       {"invalid_type", "too_small"},
+		`{"length":true}`:       {"invalid_type", "too_small"},
+	} {
+		object, issues := Decode([]byte(input), Path{})
+		if issues != nil {
+			t.Fatalf("%s: %v", input, issues)
+		}
+		_, found := String(Path{"token"}, object, StringRules{Min: 8, Max: 512})
+		var codes []string
+		for _, issue := range found {
+			codes = append(codes, issue["code"].(string))
+		}
+		if len(codes) != len(want) {
+			t.Fatalf("%s: codes %v, want %v", input, codes, want)
+		}
+		for index := range want {
+			if codes[index] != want[index] {
+				t.Fatalf("%s: codes %v, want %v", input, codes, want)
+			}
+		}
+	}
+}
