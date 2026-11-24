@@ -147,6 +147,8 @@ export interface ReplyState {
   toolCalls: { label: string; executionId: string; tool?: string }[];
   /** Elapsed timing per execution id for live monitor and persisted step blocks. */
   toolTimings?: Map<string, { startedAtMs?: number; durationMs?: number }>;
+  /** Runtime target detail per execution id resolved on completion (e.g. `code_mode` calls). */
+  toolDetails?: Map<string, string>;
   /** How each finished call ended, by execution id. */
   toolOutcomes: Map<string, ToolStepOutcome>;
   /** What each call that shows as its own step was called with and returned, by execution id. */

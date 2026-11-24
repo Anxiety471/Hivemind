@@ -1,7 +1,7 @@
 import { redactSecrets } from "@rakazo/core";
 import { redactToolArgsForReview } from "../../approvals/auto-review.js";
 import { sanitizeSensitiveText } from "../../runtime/pi/pi-runtime-errors.js";
-import { summarizeCodeModeCalls } from "../../tools/code-mode-lint.js";
+import { formatCodeModeCallsSummary, summarizeCodeModeCalls } from "../../tools/code-mode-lint.js";
 
 /** Max characters kept for a step's one-line target summary. */
 export const TOOL_STEP_DETAIL_MAX_CHARS = 160;
@@ -233,4 +233,26 @@ export function summarizeToolCallDetail(
   }
   const redacted = redactToolArgsForReview(record, secrets);
   return finalizeDetail(rawDetailForTool(toolName, redacted), secrets);
+}
+
+/**
+ * Extracts a concise summary from a finished `code_mode` call's recorded `calls` array so even
+ * dynamic loops (`codemode[name]()`) or aliases surface what ran on the step card.
+ */
+export function summarizeToolCompletionDetail(
+  completion: { name: string; result?: unknown },
+  secrets: string[] = [],
+): string | undefined {
+  if (completion.name !== "code_mode") return undefined;
+  const result = asRecord(completion.result);
+  if (!result) return undefined;
+  const details = asRecord(result.details);
+  const rawCalls = Array.isArray(result.calls)
+    ? result.calls
+    : Array.isArray(details?.calls)
+      ? details.calls
+      : undefined;
+  if (!rawCalls) return undefined;
+  const calls = rawCalls.filter((item): item is string => typeof item === "string");
+  return finalizeDetail(formatCodeModeCallsSummary(calls), secrets);
 }

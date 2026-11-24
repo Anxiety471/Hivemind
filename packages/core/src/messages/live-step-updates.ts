@@ -18,6 +18,7 @@ export type LiveMessageUpdate =
       name: string;
       durationMs: number;
       outcome?: string;
+      detail?: string;
     }
   | { type: "usage"; costUsd: number }
   | {
@@ -220,6 +221,7 @@ export function withToolStepOutcomes(
     outcome: ToolStepOutcome | undefined;
     tool?: string;
     call?: ToolStepCall;
+    detail?: string;
     durationMs?: number;
     startedAtMs?: number;
   }[],
@@ -282,8 +284,10 @@ export function withToolStepOutcomes(
             ? "stopped"
             : "done"
         : undefined;
+      const resolvedDetail = own.findLast((call) => call.detail?.trim())?.detail?.trim();
       steps.push({
         ...rest,
+        ...(resolvedDetail ? { detail: resolvedDetail } : {}),
         ...(startedAtMs !== undefined ? { startedAtMs } : {}),
         ...(summedDuration !== undefined
           ? { durationMs: summedDuration }
@@ -534,8 +538,16 @@ function completeLiveToolStep(
       : update.outcome === "stopped" || update.outcome === "cancelled"
         ? "stopped"
         : "done";
+  const completedDetail = update.detail?.trim() || undefined;
   const steps = block.steps.map((step, index) =>
-    index === stepIndex ? { ...step, durationMs, status } : step,
+    index === stepIndex
+      ? {
+          ...step,
+          durationMs,
+          status,
+          ...(completedDetail ? { detail: completedDetail } : {}),
+        }
+      : step,
   );
   const next = [...current];
   next[blockIndex] = { ...block, steps };

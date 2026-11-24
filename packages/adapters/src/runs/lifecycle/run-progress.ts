@@ -75,6 +75,7 @@ export async function createReplyState(
     pendingToolTimings: [],
     toolCalls: [],
     toolTimings: new Map(),
+    toolDetails: new Map(),
     toolOutcomes: new Map(),
     toolStepCalls: new Map(),
     costUsd: 0,
@@ -260,11 +261,13 @@ export function withReplyToolOutcomes(
     reply.messageSegments,
     reply.toolCalls.map(({ label, executionId, tool }) => {
       const timing = reply.toolTimings?.get(executionId);
+      const detail = reply.toolDetails?.get(executionId);
       return {
         label,
         outcome: reply.toolOutcomes.get(executionId) ?? unfinished,
         tool,
         call: reply.toolStepCalls.get(executionId),
+        ...(detail ? { detail } : {}),
         ...(timing?.durationMs !== undefined ? { durationMs: timing.durationMs } : {}),
         ...(timing?.startedAtMs !== undefined ? { startedAtMs: timing.startedAtMs } : {}),
       };

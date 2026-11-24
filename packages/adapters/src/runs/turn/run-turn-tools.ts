@@ -43,7 +43,7 @@ import {
   keptToolArguments,
   saveLatestStepScreenshot,
 } from "./tool-step-calls.js";
-import { summarizeToolCallDetail } from "./tool-step-detail.js";
+import { summarizeToolCallDetail, summarizeToolCompletionDetail } from "./tool-step-detail.js";
 
 function showToolStep(
   ctx: RunContext,
@@ -189,6 +189,11 @@ export async function onToolCalled(ctx: RunContext, event: RuntimeEvent<"tool">)
     );
     const outcome = toolCompletionOutcome(completion);
     if (outcome) reply.toolOutcomes.set(event.executionId, outcome);
+    const completedDetail = summarizeToolCompletionDetail(completion, ctx.secrets);
+    if (completedDetail) {
+      reply.toolDetails ??= new Map();
+      reply.toolDetails.set(event.executionId, completedDetail);
+    }
     keepToolStepResult(reply, completion, ctx.secrets);
     await appendToolCompletionAudit(deps, audit, completion, ctx.secrets);
     return isToolPauseResult(result);

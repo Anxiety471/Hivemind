@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { summarizeToolCallDetail, TOOL_STEP_DETAIL_MAX_CHARS } from "./tool-step-detail.js";
+import {
+  summarizeToolCallDetail,
+  summarizeToolCompletionDetail,
+  TOOL_STEP_DETAIL_MAX_CHARS,
+} from "./tool-step-detail.js";
 
 describe("summarizeToolCallDetail", () => {
   it("extracts clean targets for web, file, shell, and browser tools", () => {
@@ -100,5 +104,32 @@ describe("summarizeToolCallDetail", () => {
     expect(summarizeToolCallDetail("command_delete", { name: "weekly_report" })).toBe(
       "cmd.weekly_report",
     );
+  });
+
+  it("extracts runtime calls detail from code_mode completions in both Pi and direct shapes", () => {
+    expect(
+      summarizeToolCompletionDetail({
+        name: "code_mode",
+        result: {
+          kind: "agent_tool_result",
+          content: [{ type: "text", text: "{}" }],
+          details: { output: "ok", calls: ["board_tickets", "cmd.weekly_report", "board_tickets"] },
+        },
+      }),
+    ).toBe("board_tickets, cmd.weekly_report");
+
+    expect(
+      summarizeToolCompletionDetail({
+        name: "code_mode",
+        result: { output: "ok", calls: ["a", "b", "c", "d", "e"] },
+      }),
+    ).toBe("a, b, c, d +1 more");
+
+    expect(
+      summarizeToolCompletionDetail({
+        name: "shell",
+        result: { calls: ["ignored"] },
+      }),
+    ).toBeUndefined();
   });
 });

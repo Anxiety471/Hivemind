@@ -421,6 +421,44 @@ export function formatCodeModeLintFindings(findings: readonly CodeModeLintFindin
     .join("\n");
 }
 
+/** Formats deduplicated `codemode` tool/command names into a concise summary string. */
+export function formatCodeModeCallsSummary(
+  calls: readonly string[],
+  maxListed = 4,
+): string | undefined {
+  const unique: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of calls) {
+    const target = raw.trim();
+    if (!target || seen.has(target)) continue;
+    seen.add(target);
+    unique.push(target);
+  }
+  if (unique.length === 0) return undefined;
+  if (unique.length <= maxListed) return unique.join(", ");
+  return `${unique.slice(0, maxListed).join(", ")} +${unique.length - maxListed} more`;
+}
+
+function collectDestructuredNames(objectBody: string): Array<{ prop: string; local: string }> {
+  const bindings: Array<{ prop: string; local: string }> = [];
+  for (const part of objectBody.split(",")) {
+    const trimmed = part.trim();
+    if (!trimmed || trimmed.startsWith("...")) continue;
+    const renamed = trimmed.match(/^([A-Za-z_$][A-Za-z0-9_$]*)\s*:\s*([A-Za-z_$][A-Za-z0-9_$]*)/);
+    if (renamed) {
+      bindings.push({ prop: renamed[1]!, local: renamed[2]! });
+      continue;
+    }
+    const direct = trimmed.match(/^([A-Za-z_$][A-Za-z0-9_$]*)(?:\s*=|$)/);
+    if (direct) bindings.push({ prop: direct[1]!, local: direct[1]! });
+  }
+  return bindings;
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 /**
  * Extracts deduplicated `codemode.<tool>` and `codemode.cmd.<name>` call targets in first-seen
  * order from a script, ignoring comments, strings, regexes, and template text.
@@ -435,9 +473,37 @@ export function extractCodeModeCalls(code: string): string[] {
     ordered.push(target);
   };
 
-  // Match dot or bracket member chains starting from `codemode` up to the call `(`.
-  const callRe =
-    /\bcodemode\s*(?:\.\s*[A-Za-z_$][A-Za-z0-9_$]*|\[\s*\])(?:\s*(?:\.\s*[A-Za-z_$][A-Za-z0-9_$]*|\[\s*\]))*\s*\(/g;
+  const cmAliases = new Set<string>(["codemode"]);
+  const cmdAliases = new Set<string>();
+
+  for (const match of stripped.matchAll(
+    /\b(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*codemode\b(?!\s*\.)/g,
+  )) {
+    if (match[1]) cmAliases.add(match[1]);
+  }
+  for (const match of stripped.matchAll(
+    /\b(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*codemode\s*\.\s*cmd\b(?!\s*\.)/g,
+  )) {
+    if (match[1]) cmdAliases.add(match[1]);
+  }
+
+  for (const match of stripped.matchAll(
+    /\b(?:const|let|var)\s*\{([^}]*)\}\s*=\s*codemode\b(?:\s*\.\s*(cmd)\b)?/g,
+  )) {
+    const isCmd = match[2] === "cmd";
+    for (const { prop, local } of collectDestructuredNames(match[1] ?? "")) {
+      if (isCmd) add(`cmd.${prop}`);
+      else if (prop === "cmd") cmdAliases.add(local);
+      else add(prop);
+    }
+  }
+
+  const aliasPattern = [...cmAliases].map(escapeRegex).join("|");
+  // Match dot or bracket member chains starting from `codemode` (or an alias) up to the call `(`.
+  const callRe = new RegExp(
+    `\\b(?:${aliasPattern})\\s*(?:\\.\\s*[A-Za-z_$][A-Za-z0-9_$]*|\\[\\s*\\])(?:\\s*(?:\\.\\s*[A-Za-z_$][A-Za-z0-9_$]*|\\[\\s*\\]))*\\s*\\(`,
+    "g",
+  );
   for (const match of stripped.matchAll(callRe)) {
     const rawSlice = code.slice(match.index, match.index + match[0].length);
     const parts: string[] = [];
@@ -453,13 +519,28 @@ export function extractCodeModeCalls(code: string): string[] {
       add(parts[0]!);
     }
   }
+
+  if (cmdAliases.size > 0) {
+    const cmdPattern = [...cmdAliases].map(escapeRegex).join("|");
+    const cmdCallRe = new RegExp(
+      `\\b(?:${cmdPattern})\\s*(?:\\.\\s*([A-Za-z_$][A-Za-z0-9_$]*)|\\[\\s*\\])\\s*\\(`,
+      "g",
+    );
+    for (const match of stripped.matchAll(cmdCallRe)) {
+      if (match[1]) {
+        add(`cmd.${match[1]}`);
+        continue;
+      }
+      const rawSlice = code.slice(match.index, match.index + match[0].length);
+      const bracket = rawSlice.match(/\[\s*(['"])([^'"\\]+)\1\s*\]/);
+      if (bracket?.[2]) add(`cmd.${bracket[2]}`);
+    }
+  }
+
   return ordered;
 }
 
 /** Summarizes the calls made in a `code_mode` script for step details and live activity. */
 export function summarizeCodeModeCalls(code: string, maxListed = 4): string | undefined {
-  const calls = extractCodeModeCalls(code);
-  if (calls.length === 0) return undefined;
-  if (calls.length <= maxListed) return calls.join(", ");
-  return `${calls.slice(0, maxListed).join(", ")} +${calls.length - maxListed} more`;
+  return formatCodeModeCallsSummary(extractCodeModeCalls(code), maxListed);
 }

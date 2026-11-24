@@ -32,6 +32,7 @@ const ReplySnapshotSchema = z.object({
       ]),
     )
     .optional(),
+  toolDetails: z.array(z.tuple([z.string(), z.string()])).optional(),
   toolOutcomes: z.array(z.tuple([z.string(), z.enum(["succeeded", "failed", "stopped"])])),
   toolStepCalls: z.array(z.tuple([z.string(), ToolStepCallSchema])),
   costUsd: z.number().optional(),
@@ -86,6 +87,9 @@ export function snapshotReply(reply: ReplyState): ReplySnapshot {
     toolCalls: reply.toolCalls,
     ...(reply.toolTimings && reply.toolTimings.size > 0
       ? { toolTimings: [...reply.toolTimings] }
+      : {}),
+    ...(reply.toolDetails && reply.toolDetails.size > 0
+      ? { toolDetails: [...reply.toolDetails] }
       : {}),
     toolOutcomes: [...reply.toolOutcomes],
     toolStepCalls: [...reply.toolStepCalls],
@@ -146,6 +150,7 @@ export function restoreReply(reply: ReplyState, saved: unknown, runId: string): 
     pendingToolDetails,
     pendingToolTimings,
     toolTimings,
+    toolDetails,
     version: _,
     ...rest
   } = parsed.data;
@@ -153,6 +158,7 @@ export function restoreReply(reply: ReplyState, saved: unknown, runId: string): 
   reply.pendingToolDetails = pendingToolDetails ?? rest.pendingToolNames.map(() => null);
   reply.pendingToolTimings = pendingToolTimings ?? rest.pendingToolNames.map(() => null);
   reply.toolTimings = new Map(toolTimings ?? []);
+  reply.toolDetails = new Map(toolDetails ?? []);
   reply.toolOutcomes = new Map(toolOutcomes);
   reply.toolStepCalls = new Map(toolStepCalls);
   const mimeType = latestScreenshot && storedImageMimeType(latestScreenshot.mimeType);

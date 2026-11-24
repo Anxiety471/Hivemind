@@ -33,6 +33,7 @@ import { claimRunSteering } from "./run-turn-images.js";
 import { appendToolCompletionAudit, toolCompletionOutcome } from "./tool-completion-audit.js";
 import { toolResultFingerprint } from "./tool-loop.js";
 import { keepToolStepResult } from "./tool-step-calls.js";
+import { summarizeToolCompletionDetail } from "./tool-step-detail.js";
 
 export async function runModelTurn(
   services: RunExecutorServices,
@@ -379,6 +380,11 @@ function modelTurnRequest(
         });
       }
       keepToolStepResult(state.reply, completion, runSecrets);
+      const completedDetail = summarizeToolCompletionDetail(completion, runSecrets);
+      if (completedDetail) {
+        state.reply.toolDetails ??= new Map();
+        state.reply.toolDetails.set(completion.executionId, completedDetail);
+      }
       const audited = appendToolCompletionAudit(
         deps,
         {

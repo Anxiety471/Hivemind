@@ -345,11 +345,16 @@ function reduce(prev: LiveThreadSnapshot, event: ThreadSnapshotEvent): LiveThrea
         ))
     ) {
       const outcome = typeof payload.outcome === "string" ? payload.outcome : undefined;
+      const detail =
+        typeof payload.detail === "string" && payload.detail.trim()
+          ? payload.detail.trim()
+          : undefined;
       const blocks = reduceLiveMessageBlocks(live.blocks, {
         type: "tool_completed",
         name: String(payload.name ?? ""),
         durationMs: durationMs ?? 0,
         ...(outcome ? { outcome } : {}),
+        ...(detail ? { detail } : {}),
       });
       return {
         ...prev,

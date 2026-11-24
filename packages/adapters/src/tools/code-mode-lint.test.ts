@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   extractCodeModeCalls,
+  formatCodeModeCallsSummary,
   formatCodeModeLintFindings,
   lintCodeModeScript,
   summarizeCodeModeCalls,
@@ -123,5 +124,28 @@ describe("extractCodeModeCalls & summarizeCodeModeCalls", () => {
     );
     expect(summarizeCodeModeCalls(code, 2)).toBe("cmd.weekly_report, demo_search +2 more");
     expect(summarizeCodeModeCalls("console.log(1 + 2);")).toBeUndefined();
+  });
+
+  it("extracts destructured and aliased codemode / cmd calls", () => {
+    const code = `
+      const { board_tickets, list_fleet: bots, cmd: commands } = codemode;
+      const { weekly_report, audit: check } = codemode.cmd;
+      const cm = codemode;
+      const cmds = codemode.cmd;
+      await cm.drive_list({});
+      await cmds.cleanup({});
+      await commands.verify({});
+    `;
+    expect(extractCodeModeCalls(code)).toEqual([
+      "board_tickets",
+      "list_fleet",
+      "cmd.weekly_report",
+      "cmd.audit",
+      "drive_list",
+      "cmd.cleanup",
+      "cmd.verify",
+    ]);
+    expect(formatCodeModeCallsSummary(["a", "a", "b"], 4)).toBe("a, b");
+    expect(formatCodeModeCallsSummary([])).toBeUndefined();
   });
 });

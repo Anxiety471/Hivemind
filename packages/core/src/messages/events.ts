@@ -196,11 +196,16 @@ export function projectMessages(
       const durationMs = validNonNegInt(payload.durationMs);
       if (live && (durationMs !== undefined || hasRunningStep(live.blocks))) {
         const outcome = typeof payload.outcome === "string" ? payload.outcome : undefined;
+        const detail =
+          typeof payload.detail === "string" && payload.detail.trim()
+            ? payload.detail.trim()
+            : undefined;
         live.blocks = reduceLiveMessageBlocks(live.blocks, {
           type: "tool_completed",
           name: String(payload.name ?? ""),
           durationMs: durationMs ?? 0,
           ...(outcome ? { outcome } : {}),
+          ...(detail ? { detail } : {}),
         });
         live.meta = {
           ...live.meta,
