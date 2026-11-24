@@ -903,7 +903,7 @@ describe("schedule_create with a watch", () => {
       ...base,
       schedule: { watch: { kind: "files", paths: ["/etc"] } },
     });
-    expect(result).toMatchObject({ error: expect.stringContaining("inside the bot's folder") });
+    expect(result).toMatchObject({ error: expect.stringContaining("inside the shared workspace") });
     expect(create).not.toHaveBeenCalled();
   });
 

@@ -202,7 +202,7 @@ export function TicketDetailView({
             ) : null}
             <span className="text-label font-medium text-muted-foreground">{ticket.ref}</span>
           </div>
-          <DialogTitle className="text-start text-lg leading-snug font-semibold" dir="auto">
+          <DialogTitle className="text-start text-heading3 leading-snug font-semibold" dir="auto">
             {ticket.title}
           </DialogTitle>
         </div>

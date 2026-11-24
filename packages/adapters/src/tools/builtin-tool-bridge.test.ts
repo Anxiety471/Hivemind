@@ -59,8 +59,9 @@ describe("built-in tool bridge", () => {
     // with its schema; a watch says it takes no other timing; read_file takes a line range;
     // ask_user carries the content being decided about; search_history lists earlier tool work by
     // kind without a keyword; schedule_create says whether a routine runs in its chat, and takes
-    // the events (webhook, Git, chat, email) a routine can start on.
-    expect(definitionBytes(listed)).toBeLessThanOrEqual(36_500);
+    // the events (webhook, Git, chat, email) a routine can start on. write_file, attach_file and
+    // shell also carry the Space Drive default, and attach_file takes a slug for search.
+    expect(definitionBytes(listed)).toBeLessThanOrEqual(37_000);
     expect(deferred.map((tool) => tool.name)).toEqual(
       expect.arrayContaining(["render_plot", "create_space", "generate_secret", "scratchpad_add"]),
     );
