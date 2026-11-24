@@ -617,7 +617,7 @@ export const computerTools: ToolHandlers = {
             env:
               Object.keys(commandEnvironment.env).length > 0 ? commandEnvironment.env : undefined,
             unsetEnv: commandEnvironment.unsetEnv,
-            timeoutMs: sandboxCommandTimeoutMs(),
+            timeoutMs: Math.min(call.commandTimeoutMs ?? Infinity, sandboxCommandTimeoutMs()),
           },
           context,
         ),

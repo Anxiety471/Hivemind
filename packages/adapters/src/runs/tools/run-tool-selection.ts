@@ -240,12 +240,16 @@ export function selectBuiltinToolsForRun(options: {
 
 /**
  * The tools one code_mode script may not call: itself, a tool that returns an image (a script
- * cannot show one) and a tool that starts work of its own (a helper, a takeover).
+ * cannot show one), a tool that starts work of its own (a helper, a takeover), and the tools that
+ * act on the person's own computer, which each deserve a visible step of their own.
  */
 const CODE_MODE_EXCLUDED_TOOLS: Readonly<Record<string, true>> = {
   [CODE_MODE]: true,
   run_subagent: true,
   request_takeover: true,
+  user_computer_shell: true,
+  user_computer_observe: true,
+  user_computer_act: true,
 };
 
 /**

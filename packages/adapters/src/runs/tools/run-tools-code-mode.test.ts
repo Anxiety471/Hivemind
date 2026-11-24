@@ -17,6 +17,8 @@ vi.mock("./run-tool-gate.js", async (importOriginal) => ({
     async (
       _ctx: unknown,
       request: { name: string; args: unknown; executionId: string },
+      observer?: unknown,
+      commandTimeoutMs?: number,
     ): Promise<unknown> =>
       pauses.names.has(request.name)
         ? { result: paused() }
@@ -25,7 +27,8 @@ vi.mock("./run-tool-gate.js", async (importOriginal) => ({
               name: request.name,
               args: request.args,
               executionId: request.executionId,
-              observer: undefined,
+              observer,
+              commandTimeoutMs,
               connectorCall: {
                 tool: request.name,
                 args: request.args,
@@ -72,7 +75,7 @@ const codeModeTool = {
 };
 
 function context(
-  execute = vi.fn(async function* () {
+  execute: () => AsyncGenerator<{ type: string; data: unknown }> = vi.fn(async function* () {
     yield { type: "result", data: { rows: [{ id: "r1" }, { id: "r2" }] } };
   }),
 ) {
@@ -336,5 +339,64 @@ describe("code_mode", () => {
     )) as { error: string; calls: string[] };
     expect(result.error).toBe("Error: stop here");
     expect(result.calls).toEqual(["demo_search"]);
+  });
+
+  it("never installs a tool that acts on the person's own computer", async () => {
+    const { ctx } = context();
+    for (const name of ["user_computer_shell", "user_computer_observe", "user_computer_act"]) {
+      ctx.tools.offered.push({ name, description: name, inputSchema: {} } as never);
+    }
+    const result = (await applyTool(
+      ctx as never,
+      "code_mode",
+      {
+        code: `
+          for (const name of ["user_computer_shell", "user_computer_observe", "user_computer_act"]) {
+            try { await codemode[name]({}); console.log("ran " + name); } catch (e) { console.log(e.code); }
+          }
+        `,
+      },
+      "outer-1",
+    )) as { output: string };
+    expect(result.output).toBe("ToolUnavailable\nToolUnavailable\nToolUnavailable");
+  });
+
+  it("gives each call a shell time limit and the turn's observer for a command that keeps running", async () => {
+    const { ctx } = context();
+    const observer = { onShellStillRunning: vi.fn() };
+    await applyTool(
+      ctx as never,
+      "code_mode",
+      { code: 'await codemode.demo_search({ query: "a" });' },
+      "outer-1",
+      undefined,
+      observer as never,
+    );
+    const inner = vi.mocked(gateToolCall).mock.calls[1];
+    expect(inner?.[2]).toBe(observer);
+    expect(inner?.[3]).toBe(30_000);
+  });
+
+  it("ends the script when a command is still running and tells the model not to run it again", async () => {
+    const execute = vi.fn(async function* () {
+      yield { type: "result", data: { stdout: "building", stderr: "", code: null, running: true } };
+    });
+    const { ctx } = context(execute);
+    const result = (await applyTool(
+      ctx as never,
+      "code_mode",
+      {
+        code: `
+          console.log("before");
+          try { await codemode.demo_search({ query: "slow" }); } catch {}
+          await codemode.demo_search({ query: "after" });
+          console.log("after");
+        `,
+      },
+      "outer-1",
+    )) as { output: string; error: string; calls: string[] };
+    expect(result.output).toBe("before");
+    expect(result.error).toMatch(/^ShellStillRunning: .*Do not run it again\.$/);
+    expect(execute).toHaveBeenCalledTimes(1);
   });
 });

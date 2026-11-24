@@ -107,6 +107,8 @@ export interface ToolCall {
   readonly args: Record<string, unknown>;
   readonly executionId: string;
   readonly observer: AgentToolExecutionObserver | undefined;
+  /** A tighter limit on a shell command this call runs, set when a script makes the call. */
+  readonly commandTimeoutMs?: number;
   readonly connectorCall: ConnectorCall;
   /** Idempotency key of this call's effect; also the delivery key of what it sends. */
   readonly effectKey: string;
@@ -159,6 +161,7 @@ export async function gateToolCall(
   ctx: RunContext,
   request: ToolRequest,
   observer: AgentToolExecutionObserver | undefined,
+  commandTimeoutMs?: number,
 ): Promise<GateOutcome> {
   const { deps, run, runId, context } = ctx;
   const { name, executionId, connectorCall, resolvedTool, nextApprovedTool, approvedEffectKey } =
@@ -571,6 +574,7 @@ export async function gateToolCall(
     args,
     executionId,
     observer,
+    commandTimeoutMs,
     connectorCall,
     effectKey,
     applied,
