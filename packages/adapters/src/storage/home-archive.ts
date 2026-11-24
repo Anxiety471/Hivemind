@@ -72,11 +72,8 @@ export async function assertHomeFits(
 ): Promise<void> {
   const resolvedRoot = await realpath(root);
   const counts = { bytes: 0, entries: 0, files: 0, oversized: 0 };
-  const measured = packDirectory(
+  const measured = packEntries(
     resolvedRoot,
-    resolvedRoot,
-    "",
-    new Set([resolvedRoot]),
     counts,
     saveBounds(limits, saveLimits),
     saveLimits.maxFiles,
@@ -85,7 +82,7 @@ export async function assertHomeFits(
   for await (const _none of measured);
 }
 
-function saveBounds(limits: HomeArchiveLimits, saveLimits: WorkspaceExportLimits) {
+export function saveBounds(limits: HomeArchiveLimits, saveLimits: WorkspaceExportLimits) {
   return {
     maxBytes: Math.min(limits.maxBytes, saveLimits.maxBytes),
     maxEntries: limits.maxEntries,
@@ -109,16 +106,7 @@ export async function* packHome(
   const counts = { bytes: 0, entries: 0, files: 0, oversized: 0 };
   async function* entries() {
     yield MAGIC;
-    yield* packDirectory(
-      resolvedRoot,
-      resolvedRoot,
-      "",
-      new Set([resolvedRoot]),
-      counts,
-      limits,
-      saveLimits.maxFiles,
-      false,
-    );
+    yield* packEntries(resolvedRoot, counts, limits, saveLimits.maxFiles, false);
     if (counts.oversized)
       getLogger().warn("home.save_skipped_large_files", {
         files: counts.oversized,
@@ -141,16 +129,34 @@ export async function* packHome(
   if (length) yield Buffer.concat(held);
 }
 
-async function* packDirectory(
+/** What a save keeps of one home entry: files and directories only, in a fixed order. */
+export interface WalkedEntry {
+  kind: "directory" | "file";
+  /** Path relative to the home, with "/" separators. */
+  relative: string;
+  /** The real path, inside the home. */
+  resolved: string;
+  /** Bytes, as listed; 0 for a directory. */
+  size: number;
+  /** Permission bits. */
+  mode: number;
+  /** When the inode last changed (ctime), which no write or copy can hide. */
+  changedMs: number;
+}
+
+/**
+ * The entries a save keeps, the directory before what it holds. Links are followed only when they
+ * resolve inside the home; excluded paths, tagged cache directories and (counted in `skipped`)
+ * files over the cap are left out. This is the one definition of what a save covers.
+ */
+export async function* walkHome(
   root: string,
   directory: string,
   prefix: string,
   visited: Set<string>,
-  counts: { bytes: number; entries: number; files: number; oversized: number },
-  limits: HomeArchiveLimits,
-  maxFiles: number,
-  measureOnly: boolean,
-): AsyncGenerator<Buffer> {
+  maxFileBytes: number | undefined,
+  skipped: { oversized: number },
+): AsyncGenerator<WalkedEntry> {
   const entries = await readdir(directory).catch(skipVanished([] as string[]));
   for (const name of entries.sort()) {
     const relative = prefix ? `${prefix}/${name}` : name;
@@ -161,47 +167,71 @@ async function* packDirectory(
     if (!info || shouldSkipPortableWorkspaceFile(relative, info.isDirectory())) continue;
     if (info.isDirectory()) {
       if (visited.has(resolved) || (await isTaggedCacheDirectory(resolved))) continue;
-      countEntry(counts, 0, limits);
-      if (!measureOnly) yield entryHeader(DIRECTORY, relative);
-      yield* packDirectory(
+      yield { kind: "directory", relative, resolved, size: 0, mode: 0o700, changedMs: 0 };
+      yield* walkHome(
         root,
         resolved,
         relative,
         new Set([...visited, resolved]),
-        counts,
-        limits,
-        maxFiles,
-        measureOnly,
+        maxFileBytes,
+        skipped,
       );
     } else if (info.isFile()) {
       // A repository's pack files stay whole: leaving one out would corrupt the checkout.
-      if (
-        limits.maxFileBytes !== undefined &&
-        info.size > limits.maxFileBytes &&
-        !GIT_DIRECTORY.test(relative)
-      ) {
-        counts.oversized += 1;
+      if (maxFileBytes !== undefined && info.size > maxFileBytes && !GIT_DIRECTORY.test(relative)) {
+        skipped.oversized += 1;
         continue;
       }
-      if (++counts.files > maxFiles) throw new WorkspaceTooLargeError("files");
-      if (measureOnly) {
-        countEntry(counts, info.size, limits);
-        continue;
-      }
-      const handle = await openContained(root, resolved);
-      if (!handle) continue;
-      try {
-        const opened = await handle.stat();
-        countEntry(counts, opened.size, limits);
-        const header = entryHeader(FILE, relative);
-        const meta = Buffer.alloc(10);
-        meta.writeUInt16BE(opened.mode & 0o777, 0);
-        meta.writeBigUInt64BE(BigInt(opened.size), 2);
-        yield Buffer.concat([header, meta]);
-        yield* readExactly(handle, opened.size);
-      } finally {
-        await handle.close();
-      }
+      yield {
+        kind: "file",
+        relative,
+        resolved,
+        size: info.size,
+        mode: info.mode & 0o777,
+        changedMs: info.ctimeMs,
+      };
+    }
+  }
+}
+
+async function* packEntries(
+  root: string,
+  counts: { bytes: number; entries: number; files: number; oversized: number },
+  limits: HomeArchiveLimits,
+  maxFiles: number,
+  measureOnly: boolean,
+): AsyncGenerator<Buffer> {
+  for await (const entry of walkHome(
+    root,
+    root,
+    "",
+    new Set([root]),
+    limits.maxFileBytes,
+    counts,
+  )) {
+    if (entry.kind === "directory") {
+      countEntry(counts, 0, limits);
+      if (!measureOnly) yield entryHeader(DIRECTORY, entry.relative);
+      continue;
+    }
+    if (++counts.files > maxFiles) throw new WorkspaceTooLargeError("files");
+    if (measureOnly) {
+      countEntry(counts, entry.size, limits);
+      continue;
+    }
+    const handle = await openContained(root, entry.resolved);
+    if (!handle) continue;
+    try {
+      const opened = await handle.stat();
+      countEntry(counts, opened.size, limits);
+      const header = entryHeader(FILE, entry.relative);
+      const meta = Buffer.alloc(10);
+      meta.writeUInt16BE(opened.mode & 0o777, 0);
+      meta.writeBigUInt64BE(BigInt(opened.size), 2);
+      yield Buffer.concat([header, meta]);
+      yield* readExactly(handle, opened.size);
+    } finally {
+      await handle.close();
     }
   }
 }
@@ -219,7 +249,7 @@ function skipVanished<T>(fallback: T) {
 }
 
 /** Opens a regular file and checks the opened object, not the name, is inside the home. */
-async function openContained(root: string, file: string): Promise<FileHandle | undefined> {
+export async function openContained(root: string, file: string): Promise<FileHandle | undefined> {
   const handle = await open(
     file,
     constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0),
@@ -237,7 +267,7 @@ async function openContained(root: string, file: string): Promise<FileHandle | u
   }
 }
 
-async function* readExactly(handle: FileHandle, size: number): AsyncGenerator<Buffer> {
+export async function* readExactly(handle: FileHandle, size: number): AsyncGenerator<Buffer> {
   let remaining = size;
   let position = 0;
   while (remaining > 0) {
@@ -258,7 +288,7 @@ function entryHeader(kind: number, relative: string) {
   return Buffer.concat([header, name]);
 }
 
-function countEntry(
+export function countEntry(
   counts: { bytes: number; entries: number },
   bytes: number,
   limits: HomeArchiveLimits,
@@ -270,7 +300,7 @@ function countEntry(
 }
 
 /** A relative path made only of ordinary segments. */
-function isArchivePath(relative: string) {
+export function isArchivePath(relative: string) {
   const bytes = Buffer.byteLength(relative, "utf8");
   if (bytes === 0 || bytes > MAX_PATH_BYTES || relative.includes("\0")) return false;
   return relative
@@ -384,7 +414,7 @@ async function readArchive(
 }
 
 /** Exact-length reads over a chunked stream, without holding more than one chunk. */
-class ByteReader {
+export class ByteReader {
   private readonly iterator: AsyncIterator<Uint8Array>;
   private pending = Buffer.alloc(0);
 
@@ -421,5 +451,16 @@ class ByteReader {
 
   async atEnd(): Promise<boolean> {
     return !(await this.fill());
+  }
+
+  /** Reads and drops `length` bytes. */
+  async skip(length: number): Promise<void> {
+    for await (const _part of this.stream(length));
+  }
+
+  /** Stops reading the source early, releasing whatever it holds. */
+  async close(): Promise<void> {
+    this.pending = Buffer.alloc(0);
+    await this.iterator.return?.(undefined);
   }
 }

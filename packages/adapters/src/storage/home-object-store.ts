@@ -30,9 +30,10 @@ import {
   assertHomeFits,
   checkHomeArchive,
   DEFAULT_HOME_ARCHIVE_LIMITS,
-  packHome,
   unpackHome,
 } from "./home-archive.js";
+import type { PreviousRevision } from "./home-incremental.js";
+import { peekIncremental, prepareRevision, readManifest, restoreHome } from "./home-incremental.js";
 import type { HomeVersion, HomeVersions } from "./home-versions.js";
 import {
   HomeVersionNotFoundError,
@@ -334,9 +335,7 @@ export class ObjectAgentHomeStore extends LocalAgentHomeStore {
         return;
       }
       const revision = stored.revision;
-      await this.replaceHome(botId, (staging) =>
-        unpackHome(this.download(stored, revision), staging, this.limits),
-      );
+      await this.replaceHome(botId, (staging) => this.readStored(stored, revision, staging));
       await this.markDownloaded(botId);
       await super.writeRevision(botId, revision);
     });
@@ -426,19 +425,50 @@ export class ObjectAgentHomeStore extends LocalAgentHomeStore {
     const base = options.base === undefined ? stored.revision : options.base;
     const revision = newRevision();
     const key = objectKey(stored.storageId, revision);
+    const referencesObject = referencesKey(stored.storageId, revision);
     const digest = createHash("sha256");
     const home = options.source ?? this.pathFor(botId);
     await mkdir(home, { recursive: true });
+    // A home too large is refused from its file sizes alone, before any file is read or staged.
     await assertHomeFits(home, this.limits, this.saveLimits);
-    await this.storage.put(
-      key,
-      sealArtifact(
-        stored.key,
-        sealedId(stored.storageId, revision),
-        tap(packHome(home, this.limits, this.saveLimits), digest),
-      ),
-    );
-    const discard = () => this.storage.delete([key]).catch(() => undefined);
+    const previous = await this.previousRevision(stored);
+    const staging = await this.createStaging();
+    try {
+      const prepared = await prepareRevision({
+        root: home,
+        previous,
+        limits: this.limits,
+        saveLimits: this.saveLimits,
+        scratch: staging.path,
+      });
+      await this.storage.put(
+        key,
+        sealArtifact(
+          stored.key,
+          sealedId(stored.storageId, revision),
+          tap(prepared.stream(), digest),
+        ),
+      );
+      // Before the home points at the revision, so no kept revision is ever without its list.
+      // A revision that reads only its own data has none.
+      if (prepared.references.length)
+        await this.storage.put(
+          referencesObject,
+          (async function* () {
+            yield Buffer.from(prepared.references.map((earlier) => `${earlier}\n`).join(""));
+          })(),
+        );
+      getLogger().info("home.saved", {
+        "home.files": prepared.stats.files,
+        "home.files.reused": prepared.stats.reused,
+        "home.bytes.written": prepared.stats.ownBytes,
+        "home.bytes.total": prepared.stats.liveBytes,
+        "home.revisions.read": prepared.references.length,
+      });
+    } finally {
+      await staging.remove();
+    }
+    const discard = () => this.storage.delete([key, referencesObject]).catch(() => undefined);
     if (options.verify)
       await this.verify(stored, revision, digest.digest("hex")).catch(async (error) => {
         await discard();
@@ -446,7 +476,7 @@ export class ObjectAgentHomeStore extends LocalAgentHomeStore {
       });
     // Publish the proposal atomically before the UPDATE. The API and worker share this
     // marker, so either can recover a lost reply without replacing the mounted directory.
-    const previous = !options.source ? await this.localRevision(botId) : undefined;
+    const previousMarker = !options.source ? await this.localRevision(botId) : undefined;
     const proposal = JSON.stringify({ version: 1, storageId: stored.storageId, base, revision });
     if (!options.source) await super.writeRevision(botId, proposal);
     // Only a confirmed refusal discards the upload. An error may hide a committed update, so
@@ -463,9 +493,10 @@ export class ObjectAgentHomeStore extends LocalAgentHomeStore {
         // A confirmed refusal is an ordinary stale cache again. A previous proposal
         // matching the base was confirmed by the pre-save read; otherwise it still
         // represents an uncertain save and must keep protecting the live files.
-        const confirmed = previous?.startsWith("{") && JSON.parse(previous).revision === base;
+        const confirmed =
+          previousMarker?.startsWith("{") && JSON.parse(previousMarker).revision === base;
         if (confirmed) await this.markDownloaded(botId);
-        await super.writeRevision(botId, (confirmed ? base : previous) ?? "");
+        await super.writeRevision(botId, (confirmed ? base : previousMarker) ?? "");
       }
       await discard();
       throw new HomeSaveConflictError();
@@ -474,11 +505,38 @@ export class ObjectAgentHomeStore extends LocalAgentHomeStore {
     return { revision };
   }
 
-  /** The sweep removes any object whose deletion fails here, since no version row keeps it. */
+  /** What the stored revision holds, so a save can leave unchanged files where they are. */
+  private async previousRevision(stored: StoredHome): Promise<PreviousRevision | undefined> {
+    if (!stored.revision) return undefined;
+    try {
+      const manifest = await readManifest(this.download(stored, stored.revision), this.limits);
+      return manifest && { revision: stored.revision, manifest };
+    } catch (error) {
+      // Saving everything again is always correct.
+      getLogger().warn("home.save_previous_unreadable", { error });
+      return undefined;
+    }
+  }
+
+  /**
+   * Deletes the revisions pruning dropped, except those a kept revision still reads from. The
+   * sweep removes any object whose deletion fails here, since no version row keeps it.
+   */
   private async pruneVersions(botId: string, storageId: string) {
     const dropped = await this.records.prune(botId, storageId, new Date());
-    if (dropped.length)
-      await this.storage.delete(dropped.map((revision) => objectKey(storageId, revision)));
+    const kept = dropped.length ? await this.records.versions(botId) : undefined;
+    if (!kept) return;
+    const pinned = await this.pinnedBy(storageId, [
+      ...(kept.current ? [kept.current] : []),
+      ...kept.versions.map((version) => version.revision),
+    ]);
+    const doomed = dropped.filter((revision) => !pinned.has(revision));
+    await this.storage.delete(
+      doomed.flatMap((revision) => [
+        objectKey(storageId, revision),
+        referencesKey(storageId, revision),
+      ]),
+    );
   }
 
   /** Earlier versions of the home that can be restored, newest first. */
@@ -535,9 +593,12 @@ export class ObjectAgentHomeStore extends LocalAgentHomeStore {
    */
   async sweep(now = Date.now()): Promise<number> {
     const found = new Map<string, Array<{ key: string; revision: string; lastModified: Date }>>();
+    const referenceKeys = new Set<string>();
     for await (const object of this.storage.list(HOMES_PREFIX)) {
-      const [storageId, revision, extra] = object.key.slice(HOMES_PREFIX.length).split("/");
-      if (!storageId || !revision || extra !== undefined) continue;
+      const [storageId, revision, extra, more] = object.key.slice(HOMES_PREFIX.length).split("/");
+      if (!storageId || !revision || more !== undefined || (extra && extra !== "references"))
+        continue;
+      if (extra) referenceKeys.add(object.key);
       found.set(storageId, [...(found.get(storageId) ?? []), { ...object, revision }]);
     }
     const kept = await this.records.revisions([...found.keys()]);
@@ -547,12 +608,17 @@ export class ObjectAgentHomeStore extends LocalAgentHomeStore {
       getLogger().warn("home.storage.sweep_skipped", { "home.objects.unknown": found.size });
       return 0;
     }
+    // A revision a kept one reads from stays, however old. A failed read stops the sweep.
+    const pinned = new Map<string, Set<string>>();
+    for (const [storageId, revisions] of kept)
+      if (found.has(storageId))
+        pinned.set(storageId, await this.pinnedBy(storageId, revisions, referenceKeys));
     const doomed = [...found].flatMap(([storageId, objects]) =>
       objects
         .filter(
           (object) =>
             !kept.has(storageId) ||
-            (!kept.get(storageId)?.has(object.revision) &&
+            (!pinned.get(storageId)?.has(object.revision) &&
               now - object.lastModified.getTime() > STALE_REVISION_MS),
         )
         .map((object) => object.key),
@@ -594,11 +660,54 @@ export class ObjectAgentHomeStore extends LocalAgentHomeStore {
     });
   }
 
+  /**
+   * Reads a stored revision into `dest`, or only checks it without one. A revision saved as a
+   * whole archive and one that points at earlier revisions are both read; `digest` sees every
+   * byte of the revision itself.
+   */
+  private async readStored(stored: StoredHome, revision: string, dest?: string, digest?: Hash) {
+    const bytes = this.download(stored, revision);
+    const { incremental, body } = await peekIncremental(digest ? tap(bytes, digest) : bytes);
+    if (incremental)
+      await restoreHome(body, (earlier) => this.download(stored, earlier), dest, this.limits);
+    else if (dest) await unpackHome(body, dest, this.limits);
+    else await checkHomeArchive(body, this.limits);
+  }
+
   private async verify(stored: StoredHome, revision: string, expected: string) {
     const digest = createHash("sha256");
-    await checkHomeArchive(tap(this.download(stored, revision), digest), this.limits);
+    await this.readStored(stored, revision, undefined, digest);
     if (digest.digest("hex") !== expected)
       throw new Error("Stored home does not match what was uploaded");
+  }
+
+  /** The earlier revisions a stored revision reads from; none for one saved as a whole archive. */
+  private async referencesOf(storageId: string, revision: string, present?: ReadonlySet<string>) {
+    const key = referencesKey(storageId, revision);
+    if (present ? !present.has(key) : !(await this.hasObject(key))) return [];
+    const parts: Buffer[] = [];
+    for await (const chunk of this.storage.get(key)) parts.push(Buffer.from(chunk));
+    return Buffer.concat(parts).toString("utf8").split("\n").filter(Boolean);
+  }
+
+  private async hasObject(key: string) {
+    for await (const object of this.storage.list(key)) if (object.key === key) return true;
+    return false;
+  }
+
+  /** The revisions, and every earlier revision their data is read from. */
+  private async pinnedBy(
+    storageId: string,
+    revisions: Iterable<string>,
+    present?: ReadonlySet<string>,
+  ) {
+    const pinned = new Set<string>();
+    for (const revision of revisions) {
+      pinned.add(revision);
+      for (const earlier of await this.referencesOf(storageId, revision, present))
+        pinned.add(earlier);
+    }
+    return pinned;
   }
 }
 
@@ -842,6 +951,11 @@ export function homeStorageSweeper(home: AgentHomeStore): (() => Promise<void>) 
 
 function objectKey(storageId: string, revision: string) {
   return `${HOMES_PREFIX}${storageId}/${revision}`;
+}
+
+/** Lists the earlier revisions a revision reads from, so cleanup keeps them without a key. */
+function referencesKey(storageId: string, revision: string) {
+  return `${objectKey(storageId, revision)}/references`;
 }
 
 /** Bound into every sealed segment, so an object moved to another home or revision fails. */
