@@ -159,11 +159,14 @@ func parseAuth(raw any, path validate.Path) (Auth, []validate.Issue) {
 	case "basic":
 		username, problems := validate.String(path.With("username"), object.Field("username"),
 			validate.StringRules{Min: 1, Max: 200})
-		if problems == nil && !basicUsername.MatchString(username) {
-			problems = []validate.Issue{regexIssue(path.With("username"), basicUsernamePattern, regexMessage(basicUsernamePattern))}
+		// Both checks run for a string the schema accepts as a string: zod reports the length
+		// issue and the regex issue together (an empty username fails min(1) and the pattern). A
+		// missing or non-string username has no pattern check at all.
+		if _, isText := object.Values["username"].(string); isText && !basicUsername.MatchString(username) {
+			problems = append(problems, regexIssue(path.With("username"), basicUsernamePattern,
+				regexMessage(basicUsernamePattern)))
 		}
 		if problems != nil {
-			// Both checks run: zod reports the length issue and the regex issue together.
 			return Auth{}, problems
 		}
 		auth.Username = username

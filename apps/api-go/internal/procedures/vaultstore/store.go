@@ -40,7 +40,7 @@ const (
 	spaceVaultNotInUse = "This Space uses the account vault"
 	vaultChanged       = "Vault changed while saving; retry"
 	vaultFullMessage   = "Credential limit reached"
-	savedLoginUnread   = "The saved login could not be read. Try again"
+	savedLoginUnread   = "The saved login could not be read. Try again."
 	unknownBots        = "Choose from your bots in this Space"
 	tooManyItems       = 100 // VAULT_ITEM_LIMIT
 )
@@ -121,7 +121,13 @@ type writer struct {
 
 // fieldsFor is vaultFields: the account vault (no Space) or this Space's own.
 func (w *writer) fieldsFor(ctx context.Context, tx pgx.Tx) (vaultFields, error) {
-	target, err := spacesettings.Target(ctx, tx, w.actor, "credentials", w.scope)
+	return w.resolveFields(ctx, tx, w.scope)
+}
+
+// resolveFields is vaultFields(prisma, scope): the requested setting wins, and an absent one is
+// the Space's own choice (an override, else the account vault).
+func (w *writer) resolveFields(ctx context.Context, tx pgx.Tx, requested string) (vaultFields, error) {
+	target, err := spacesettings.Target(ctx, tx, w.actor, "credentials", requested)
 	if err != nil {
 		return vaultFields{}, err
 	}
@@ -130,6 +136,17 @@ func (w *writer) fieldsFor(ctx context.Context, tx pgx.Tx) (vaultFields, error) 
 		return vaultFields{userID: w.actor.UserID, spaceID: &id}, nil
 	}
 	return vaultFields{userID: w.actor.UserID}, nil
+}
+
+// sameVault reports whether two field sets name one vault.
+func sameVault(left, right vaultFields) bool {
+	if left.userID != right.userID {
+		return false
+	}
+	if left.spaceID == nil || right.spaceID == nil {
+		return left.spaceID == nil && right.spaceID == nil
+	}
+	return *left.spaceID == *right.spaceID
 }
 
 // readFields runs fieldsFor in its own tenant transaction, as TypeScript's autocommit read
@@ -232,6 +249,8 @@ func policyField(auth Auth, policy *string) error {
 	if policy == nil {
 		return nil
 	}
+	// An auth that no longer parses has no type: BotSecretAuth.safeParse(...).data is undefined,
+	// and only "ask" refuses then (an unreadable type is not a login).
 	if auth.Type == "contact" || (*policy == "ask" && auth.Type != "login") {
 		return badRequest(unsupportedAccess)
 	}
@@ -430,8 +449,12 @@ func (w *writer) prepare(ctx context.Context, destination Destination, plaintext
 	if err := policyField(destination.Auth, changes.policy); err != nil {
 		return nil, err
 	}
-	if _, err := alsoOnField(destination.Auth, destination.Origin, changes.alsoOn, changes.hasAlsoOn); err != nil {
+	if sites, err := alsoOnField(destination.Auth, destination.Origin, changes.alsoOn,
+		changes.hasAlsoOn); err != nil {
 		return nil, err
+	} else if changes.hasAlsoOn {
+		// The row holds the normalized list (trimmed, origin-reduced, deduped, own site dropped).
+		changes.alsoOn = sites
 	}
 	value, err := checkValueKind(destination, plaintext)
 	if err != nil {
@@ -504,14 +527,21 @@ func (w *writer) prepare(ctx context.Context, destination Destination, plaintext
 // it has one, otherwise the SecretStore envelope bound to the row id. The newest-key lookup runs
 // in the caller's tenant transaction, as TypeScript's read runs under the request's tenant.
 func (w *writer) seal(ctx context.Context, id string, fields vaultFields, plaintext string) (string, error) {
+	// The announcement waits for the read transaction to end: publishing from inside it would take a
+	// second pooled connection while this one is held, and four concurrent legacy seals exhaust the
+	// gateway's four-connection pool (secret-store-factory.ts:71-82 documents the same trap).
+	held := w.vault.Writer.Hold()
 	var ciphertext string
 	err := w.database.Tenant(ctx, w.actor, func(tx pgx.Tx) error {
 		var failure error
-		ciphertext, failure = secretstore.SealVaultValue(ctx, tx, w.ring, w.vault.Writer,
+		ciphertext, failure = secretstore.SealVaultValue(ctx, tx, w.ring, held,
 			secretstore.VaultRow{ID: id, UserID: fields.userID, SpaceID: fields.spaceID},
 			wtf8.ToUTF8(plaintext))
 		return failure
 	})
+	if err == nil {
+		held.Flush(ctx)
+	}
 	return ciphertext, err
 }
 
@@ -837,6 +867,15 @@ func (w *writer) saveItemBots(ctx context.Context, tx pgx.Tx, owner vaultFields,
 	}
 	botIDs := uniqueStrings(bots.botIDs)
 	if len(botIDs) > 0 {
+		// A bot is named from the Space's own vault: when this Space keeps its credentials in a
+		// different vault than the item, the choice cannot be honored (bot-secrets.ts:242-246).
+		here, err := w.resolveFields(ctx, tx, "")
+		if err != nil {
+			return err
+		}
+		if !sameVault(here, owner) {
+			return badRequest(unknownBots)
+		}
 		var found int
 		if err := tx.QueryRow(ctx, `SELECT count(*)::int FROM bots
 			WHERE "spaceId" = $1 AND id = ANY($2)`, w.actor.SpaceID, botIDs).Scan(&found); err != nil {

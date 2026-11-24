@@ -237,7 +237,8 @@ func decodeLogin(plaintext string) (loginValue, error) {
 	}
 	otpIssue := false
 	rawOTP, hasOTP := object.Get("otp")
-	if hasOTP && rawOTP != nil {
+	if hasOTP {
+		// `otp: null` is an invalid_type, not "no key": .optional() only admits undefined.
 		text, isText := rawOTP.(string)
 		if !isText {
 			otpIssue = true
@@ -354,7 +355,7 @@ func decodeCard(plaintext string) (cardValue, error) {
 	if !ok {
 		return cardValue{}, badRequest(cardRefusal)
 	}
-	number := strings.NewReplacer(" ", "", "-", "").Replace(numberText)
+	number := stripCardNumber(numberText)
 	if !cardDigits.MatchString(number) || !luhnValid(number) {
 		return cardValue{}, badRequest(cardRefusal)
 	}
@@ -367,7 +368,7 @@ func decodeCard(plaintext string) (cardValue, error) {
 		return cardValue{}, badRequest(cardRefusal)
 	}
 	card := cardValue{Number: number, ExpMonth: expMonth, ExpYear: expYear}
-	if raw, present := object.Get("cvc"); present && raw != nil {
+	if raw, present := object.Get("cvc"); present {
 		text, isText := raw.(string)
 		if !isText {
 			return cardValue{}, badRequest(cardRefusal)
@@ -387,11 +388,12 @@ func decodeCard(plaintext string) (cardValue, error) {
 	if name != "" {
 		card.Name = &name
 	}
-	billing, ok := optionalText(object, "billing", 64)
-	if !ok || (billing != "" && !botSecretName.MatchString(billing)) {
-		return cardValue{}, badRequest(cardRefusal)
-	}
-	if billing != "" {
+	// billing is BotSecretName.optional(): kept exactly as given, and an empty name is refused.
+	if raw, present := object.Get("billing"); present {
+		billing, isText := raw.(string)
+		if !isText || !botSecretName.MatchString(billing) {
+			return cardValue{}, badRequest(cardRefusal)
+		}
 		card.Billing = &billing
 	}
 	return card, nil
@@ -456,7 +458,7 @@ func canonicalContact(plaintext string) (string, error) {
 // optionalText is optionalText (bot-secrets.ts:628-636): trimmed text, or empty when absent.
 func optionalText(object *validate.Object, key string, limit int) (string, bool) {
 	raw, present := object.Get(key)
-	if !present || raw == nil {
+	if !present {
 		return "", true
 	}
 	text, ok := raw.(string)
@@ -468,6 +470,25 @@ func optionalText(object *validate.Object, key string, limit int) (string, bool)
 		return "", false
 	}
 	return text, true
+}
+
+// stripCardNumber is CardNumber's `value.replace(/[\s-]/g, "")`: JavaScript's \s class (which
+// includes NBSP, the Unicode spaces and a BOM) and the dash.
+func stripCardNumber(text string) string {
+	var out strings.Builder
+	out.Grow(len(text))
+	for _, r := range text {
+		switch r {
+		case '-', '\t', '\n', '\v', '\f', '\r', ' ', '\u00a0', '\u1680', '\u2028', '\u2029',
+			'\u202f', '\u205f', '\u3000', '\ufeff':
+			continue
+		}
+		if r >= 0x2000 && r <= 0x200a {
+			continue
+		}
+		out.WriteRune(r)
+	}
+	return out.String()
 }
 
 // jsInteger is z.number().int(): a JSON number with no fractional part.

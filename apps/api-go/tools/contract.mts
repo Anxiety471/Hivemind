@@ -29,6 +29,7 @@ import { laneJCases, laneJState } from "./contract-lane-j.mts";
 import { laneKCases, laneKState } from "./contract-k-mcp.mts";
 import { laneKReviewCases } from "./contract-k-review.mts";
 import { laneLPushCases, laneLPushState } from "./contract-l-push.mts";
+import { laneMReviewCases } from "./contract-m-review.mts";
 import { laneMSecretCases, laneMState } from "./contract-m-secrets.mts";
 import { laneLReviewCases } from "./contract-l-review.mts";
 import { membershipCases, membershipReset, membershipState } from "./contract-membership.mts";
@@ -746,6 +747,7 @@ const cases: Case[] = [
   ...threadMoreCases(system),
   ...laneLPushCases(system),
   ...laneMSecretCases(system),
+  ...laneMReviewCases(system),
   ...laneLReviewCases(system),
 ];
 

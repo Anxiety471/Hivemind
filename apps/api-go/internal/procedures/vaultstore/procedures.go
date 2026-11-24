@@ -159,17 +159,13 @@ func parseBotPut(raw orpc.Input) (botID string, destination Destination, value s
 	botID, found := validate.String(validate.Path{"botId"}, object.Field("botId"),
 		validate.StringRules{Min: 1})
 	issues = append(issues, found...)
-	if !aborts(issues) {
-		var destinationIssues []validate.Issue
-		destination, _, destinationIssues = parseDestinationInput(object.Field("destination"),
-			validate.Path{"destination"}, false)
-		issues = append(issues, destinationIssues...)
-	}
-	if !aborts(issues) {
-		value, found = validate.String(validate.Path{"value"}, object.Field("value"),
-			validate.StringRules{Min: 1, Max: secretValueMax})
-		issues = append(issues, found...)
-	}
+	var destinationIssues []validate.Issue
+	destination, _, destinationIssues = parseDestinationInput(object.Field("destination"),
+		validate.Path{"destination"}, false)
+	issues = append(issues, destinationIssues...)
+	value, found = validate.String(validate.Path{"value"}, object.Field("value"),
+		validate.StringRules{Min: 1, Max: secretValueMax})
+	issues = append(issues, found...)
 	return botID, destination, value, issues
 }
 
@@ -220,13 +216,11 @@ func parseVaultPut(raw orpc.Input) (scope string, hasScope bool, input vaultPutI
 	}
 	scope, hasScope, found := scopeField(object)
 	issues = append(issues, found...)
-	if !aborts(issues) {
-		var destinationIssues []validate.Issue
-		input.destination, input.hasName, destinationIssues = parseDestinationInput(
-			object.Field("destination"), validate.Path{"destination"}, true)
-		issues = append(issues, destinationIssues...)
-	}
-	if !aborts(issues) {
+	var destinationIssues []validate.Issue
+	input.destination, input.hasName, destinationIssues = parseDestinationInput(
+		object.Field("destination"), validate.Path{"destination"}, true)
+	issues = append(issues, destinationIssues...)
+	{
 		if _, present := object.Get("value"); present {
 			input.value, found = validate.String(validate.Path{"value"}, object.Field("value"),
 				validate.StringRules{Min: 1, Max: secretValueMax})
@@ -234,7 +228,7 @@ func parseVaultPut(raw orpc.Input) (scope string, hasScope bool, input vaultPutI
 			issues = append(issues, found...)
 		}
 	}
-	if !aborts(issues) {
+	{
 		if _, present := object.Get("title"); present {
 			title, problems := validate.String(validate.Path{"title"}, object.Field("title"),
 				validate.StringRules{Trim: true, Max: 80})
@@ -703,18 +697,16 @@ func relabel(ctx context.Context, database *db.DB, w *writer, input vaultPutInpu
 		if current == nil {
 			return orpc.NotFound("Credential not found")
 		}
+		// A row whose auth no longer parses keeps its labels and bots: relabelVaultItem only asks
+		// safeParse for the type, and undefined answers for a damaged row (bot-secrets.ts:1428-1440).
 		stored, ok := authFromJSON(current.auth)
 		if !ok {
-			return badRequest("Invalid credential destination — auth.type: Invalid discriminator " +
-				"value. Expected 'bearer' | 'header' | 'basic' | 'login' | 'command' | 'card' | 'contact'")
+			stored = Auth{}
 		}
 		if input.changes.policy != nil {
 			if err := policyField(stored, input.changes.policy); err != nil {
 				return err
 			}
-		}
-		if _, err := alsoOnField(stored, current.origin, input.changes.alsoOn, input.changes.hasAlsoOn); err != nil {
-			return err
 		}
 		sites, err := alsoOnField(stored, current.origin, input.changes.alsoOn, input.changes.hasAlsoOn)
 		if err != nil {

@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
+
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/effects"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/validate"
 )
@@ -236,6 +238,39 @@ func TestRevealedLoginKeepsEmptyOTP(t *testing.T) {
 	}
 }
 
+// TestLoginOTPNullIsUnreadable is readLoginValue's otp-first answer: `otp: null` is an
+// invalid_type, not an absent key, and the whole login is refused with the key message.
+func TestLoginOTPNullIsUnreadable(t *testing.T) {
+	value := `{"fields":[{"label":"User","value":"u","hidden":false}],"otp":null}`
+	_, err := decodeLogin(value)
+	refusal, ok := asRefusal(err)
+	if !ok || refusal.message != unreadableKeyError {
+		t.Fatalf("otp null = %v, want %q", err, unreadableKeyError)
+	}
+	// A stored value written before fields existed still reads as the legacy pair.
+	legacy, err := decodeLogin(`{"username":"u","password":"p"}`)
+	if err != nil || len(legacy.Fields) != 2 || legacy.Fields[1].Hidden != true {
+		t.Fatalf("legacy = %+v, %v", legacy, err)
+	}
+}
+
+// TestParseVaultPutCollectsEveryField is zod's aggregation: one issue per failing top-level key,
+// in schema order, whatever an earlier key did.
+func TestParseVaultPutCollectsEveryField(t *testing.T) {
+	raw := orpc.Input{Raw: []byte(`{"destination":null,"value":"","title":"` +
+		strings.Repeat("t", 81) + `"}`)}
+	_, _, _, issues := parseVaultPut(raw)
+	if len(issues) != 3 {
+		t.Fatalf("issues = %d: %v", len(issues), issues)
+	}
+	for index, want := range []string{"destination", "value", "title"} {
+		path, _ := issues[index]["path"].([]any)
+		if len(path) == 0 || path[0] != want {
+			t.Fatalf("issue %d path = %v, want %s", index, path, want)
+		}
+	}
+}
+
 func TestCanonicalCard(t *testing.T) {
 	destination, err := normalizeDestinationOf(t, `{"name":"card","auth":{"type":"card"}}`)
 	if err != nil {
@@ -246,16 +281,26 @@ func TestCanonicalCard(t *testing.T) {
 		t.Fatalf("canonical: %v", err)
 	}
 	want := `{"number":"4242424242424242","expMonth":4,"expYear":2031,"cvc":"123","name":"Alice"}`
+	// CardNumber strips JavaScript whitespace and the dash, not just spaces.
+	tabbed, err := canonicalValue(destination, "{\"number\":\"4242\\t4242 4242-4242\",\"expMonth\":4,\"expYear\":2031}")
+	if err != nil || tabbed != `{"number":"4242424242424242","expMonth":4,"expYear":2031}` {
+		t.Fatalf("tabbed number = %s, %v", tabbed, err)
+	}
 	if got != want {
 		t.Fatalf("canonical = %s, want %s", got, want)
 	}
 	for name, value := range map[string]string{
-		"luhn":       `{"number":"4242424242424241","expMonth":4,"expYear":2031}`,
-		"month":      `{"number":"4242424242424242","expMonth":13,"expYear":2031}`,
-		"year":       `{"number":"4242424242424242","expMonth":4,"expYear":1999}`,
-		"extra key":  `{"number":"4242424242424242","expMonth":4,"expYear":2031,"cvv":"1"}`,
-		"cvc digits": `{"number":"4242424242424242","expMonth":4,"expYear":2031,"cvc":"12"}`,
-		"not json":   `x`,
+		"luhn":           `{"number":"4242424242424241","expMonth":4,"expYear":2031}`,
+		"month":          `{"number":"4242424242424242","expMonth":13,"expYear":2031}`,
+		"year":           `{"number":"4242424242424242","expMonth":4,"expYear":1999}`,
+		"extra key":      `{"number":"4242424242424242","expMonth":4,"expYear":2031,"cvv":"1"}`,
+		"cvc digits":     `{"number":"4242424242424242","expMonth":4,"expYear":2031,"cvc":"12"}`,
+		"billing empty":  `{"number":"4242424242424242","expMonth":4,"expYear":2031,"billing":""}`,
+		"billing spaces": `{"number":"4242424242424242","expMonth":4,"expYear":2031,"billing":" home "}`,
+		"billing null":   `{"number":"4242424242424242","expMonth":4,"expYear":2031,"billing":null}`,
+		"name null":      `{"number":"4242424242424242","expMonth":4,"expYear":2031,"name":null}`,
+		"cvc null":       `{"number":"4242424242424242","expMonth":4,"expYear":2031,"cvc":null}`,
+		"not json":       `x`,
 	} {
 		if _, err := canonicalValue(destination, value); err == nil {
 			t.Fatalf("%s: accepted %s", name, value)
