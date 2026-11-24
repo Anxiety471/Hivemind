@@ -1,5 +1,6 @@
 import type { ConnectorTool } from "@rakazo/adapter-kit";
 import { FLEET_TOOL_NAMES } from "@rakazo/contracts";
+import { commandTools } from "./builtin-commands.tool-definition.js";
 import { computerTools } from "./builtin-computer.tool-definition.js";
 import { conversationTools } from "./builtin-conversation.tool-definition.js";
 import { driveTools } from "./builtin-drive.tool-definition.js";
@@ -20,13 +21,14 @@ export const DELEGATION_TOOL_NAMES = new Set<string>([
 
 export const builtinAgentTools: ConnectorTool[] = [
   ...computerTools,
-  // Replaced per run with the index of that run's read-only tools when the lab is on.
+  // Replaced per run with the index of the tools a script can call when the lab is on.
   codeModeToolDefinition(""),
   ...driveTools,
   ...conversationTools,
   ...serviceTools,
   ...memoryTools,
   ...workTools,
+  ...commandTools,
   ...fleetTools,
 ];
 

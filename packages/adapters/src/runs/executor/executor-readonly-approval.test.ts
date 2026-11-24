@@ -2597,6 +2597,24 @@ describe("bot management tool gating", () => {
   });
 });
 
+describe("code mode instructions", () => {
+  it("explains how to write a script when code mode is on, with or without code first", async () => {
+    for (const labs of [["code"], ["code", "codeFirst"]] as const) {
+      const f = fixture({ labs: [...labs], readOnly: false });
+      await f.run();
+      expect(f.instructions()).toContain("await codemode.<name>({ ...args })");
+      expect(f.instructions()).toContain("codemode.search");
+      expect(f.instructions()).toContain("codemode.cmd.<name>");
+    }
+  });
+
+  it("says nothing about scripts when code mode is off", async () => {
+    const f = fixture({ readOnly: false });
+    await f.run();
+    expect(f.instructions()).not.toContain("codemode");
+  });
+});
+
 describe("code first", () => {
   const replay = 'await codemode.demo_get_item({ id: "item-1" });';
 

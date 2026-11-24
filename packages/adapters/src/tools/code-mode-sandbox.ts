@@ -20,6 +20,11 @@ export interface CodeModeRunOptions {
   signal?: AbortSignal;
   timeoutMs?: number;
   maxCalls?: number;
+  /**
+   * Ends with a dot, e.g. `cmd.`. Names under it reach `call` unchecked, as `codemode.cmd.<name>`;
+   * `call` decides whether the command exists.
+   */
+  commandPrefix?: string;
 }
 
 export interface CodeModeRunResult {
@@ -126,6 +131,7 @@ export async function runCodeModeScript(options: CodeModeRunOptions): Promise<Co
   let queue: Promise<unknown> = Promise.resolve();
   const pending = new Set<QuickJSDeferredPromise>();
   const allowed = new Set(options.tools);
+  const commandPrefix = options.commandPrefix;
   const invoke = vm.newFunction("__call", (nameHandle, argsHandle) => {
     const name = vm.getString(nameHandle);
     const raw = vm.getString(argsHandle);
@@ -140,7 +146,7 @@ export async function runCodeModeScript(options: CodeModeRunOptions): Promise<Co
       handle.dispose();
     };
     queue = queue.then(async () => {
-      if (!allowed.has(name)) {
+      if (!allowed.has(name) && !(commandPrefix && name.startsWith(commandPrefix))) {
         return fail(
           Object.assign(new Error(`${name} is not a tool this run offers`), {
             name: "ToolUnavailable",
@@ -179,12 +185,18 @@ export async function runCodeModeScript(options: CodeModeRunOptions): Promise<Co
        log: (...parts) => __print(parts.map((part) => typeof part === "string" ? part : JSON.stringify(part)).join(" ")),
        error: (...parts) => __print(parts.map((part) => typeof part === "string" ? part : JSON.stringify(part)).join(" ")),
      };
-     globalThis.codemode = new Proxy(Object.create(null), {
-       get: (_target, name) => async (input) => {
-         const raw = await __call(String(name), JSON.stringify(input ?? {}));
+     (() => {
+       const call = (name) => async (input) => {
+         const raw = await __call(name, JSON.stringify(input ?? {}));
          return JSON.parse(raw).value;
-       },
-     });`,
+       };
+       const commands = new Proxy(Object.create(null), {
+         get: (_target, name) => call(${JSON.stringify(commandPrefix ?? "")} + String(name)),
+       });
+       globalThis.codemode = new Proxy(Object.create(null), {
+         get: (_target, name) => name === ${JSON.stringify(commandPrefix?.slice(0, -1) ?? null)} ? commands : call(String(name)),
+       });
+     })();`,
     "codemode-api.js",
   );
   if (install.error) {

@@ -78,6 +78,7 @@ function context(
   execute: () => AsyncGenerator<{ type: string; data: unknown }> = vi.fn(async function* () {
     yield { type: "result", data: { rows: [{ id: "r1" }, { id: "r2" }] } };
   }),
+  commands: Record<string, { description: string; code: string }> = {},
 ) {
   const ctx = {
     deps: {
@@ -90,6 +91,18 @@ function context(
           }),
         },
         steeringMessage: { findFirst: async () => null },
+        codeCommand: {
+          findMany: async () =>
+            Object.entries(commands).map(([name, row]) => ({
+              name,
+              description: row.description,
+              parameters: null,
+            })),
+          findUnique: async ({ where }: { where: { name: string } }) => {
+            const row = commands[where.name];
+            return row ? { name: where.name, parameters: null, ...row } : null;
+          },
+        },
       },
       connector: { execute },
     },
@@ -398,5 +411,98 @@ describe("code_mode", () => {
     expect(result.output).toBe("before");
     expect(result.error).toMatch(/^ShellStillRunning: .*Do not run it again\.$/);
     expect(execute).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("saved commands", () => {
+  const commands = {
+    count_rows: {
+      description: "Count the demo rows matching a query.",
+      code: `
+        console.log("this prints nothing");
+        const { rows } = await codemode.demo_search({ query: args.query });
+        return { count: rows.length };
+      `,
+    },
+    write_many: {
+      description: "Create several demo records.",
+      code: `
+        for (let i = 0; i < args.n; i++) await codemode.demo_write({ title: String(i) });
+        return "done";
+      `,
+    },
+    calls_another: {
+      description: "Calls a command.",
+      code: `return await codemode.cmd.count_rows({ query: "x" });`,
+    },
+  };
+  const run = (ctx: ReturnType<typeof context>["ctx"], code: string) =>
+    applyTool(ctx as never, "code_mode", { code }, "outer-1") as Promise<{
+      output?: string;
+      error?: string;
+      calls?: string[];
+    }>;
+
+  it("calls a command with arguments and returns what it returns, without its own output", async () => {
+    const { ctx, execute } = context(undefined, commands);
+    const result = await run(
+      ctx,
+      `console.log(JSON.stringify(await codemode.cmd.count_rows({ query: "alpha" })));`,
+    );
+    expect(result.output).toBe('{"count":2}');
+    expect(result.calls).toEqual(["cmd.count_rows"]);
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("counts reading a command's result as reading outside content", async () => {
+    const { ctx } = context(undefined, commands);
+    expect(ctx.state.tainted).toBe(false);
+    await run(ctx, `await codemode.cmd.count_rows({ query: "alpha" });`);
+    expect(ctx.state.tainted).toBe(true);
+  });
+
+  it("reports a command that does not exist, and does not taint the run", async () => {
+    const { ctx } = context(undefined, commands);
+    const result = await run(ctx, `await codemode.cmd.nothing_here({});`);
+    expect(result.error).toMatch(/There is no saved command cmd\.nothing_here/);
+    expect(ctx.state.tainted).toBe(false);
+  });
+
+  it("does not let a command call another command", async () => {
+    const { ctx } = context(undefined, commands);
+    const result = await run(ctx, `await codemode.cmd.calls_another({});`);
+    expect(result.error).toMatch(/cannot call another command/);
+  });
+
+  it("counts the writes a command makes toward the script's limit", async () => {
+    const { ctx, execute } = context(undefined, commands);
+    const result = await run(ctx, `await codemode.cmd.write_many({ n: 9 });`);
+    expect(result.error).toMatch(/at most 8 writes/);
+    expect(execute).toHaveBeenCalledTimes(8);
+  });
+
+  it("stops the whole script when a call inside a command pauses", async () => {
+    const { ctx, execute } = context(undefined, commands);
+    pauses.names.add("demo_write");
+    const result = await run(
+      ctx,
+      `await codemode.cmd.write_many({ n: 2 }); console.log("should not run");`,
+    );
+    expect(result).toMatchObject({ details: { approval: "paused" } });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("finds saved commands with codemode.search, named as they are called", async () => {
+    const { ctx } = context(undefined, commands);
+    const result = await run(
+      ctx,
+      `console.log(JSON.stringify(await codemode.search({ query: "several records" })));`,
+    );
+    expect(JSON.parse(result.output ?? "[]")).toEqual([
+      expect.objectContaining({
+        name: "cmd.write_many",
+        description: "Create several demo records.",
+      }),
+    ]);
   });
 });

@@ -1766,6 +1766,27 @@ model AgentSkillRevision {
   @@map("agent_skill_revisions")
 }
 
+/// A script any bot can find with codemode.search and call as codemode.cmd.<name>. One namespace
+/// for the whole deployment, so it is not row-secured: it is for an install with one team.
+model CodeCommand {
+  id              String   @id @default(cuid())
+  /// Lowercase letters, digits and underscores; the name after `cmd.`.
+  name            String   @unique
+  description     String
+  /// The Lucide icon the command wears in the UI, by its kebab-case name (e.g. "file-text"); null
+  /// for the default. Not checked against the icon set here: the UI falls back for an unknown name.
+  icon            String?
+  /// JSON Schema for `args`, shown in search results; null when the command takes none.
+  parameters      Json?
+  /// The body of an async function with `args` in scope; what it returns is the call's result.
+  code            String
+  updatedByUserId String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("code_commands")
+}
+
 model Connection {
   id          String   @id @default(cuid())
   spaceId     String

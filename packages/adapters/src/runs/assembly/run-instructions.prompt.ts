@@ -344,6 +344,13 @@ function userComputerInstruction(state: UserComputerState): string | undefined {
   return undefined;
 }
 
+const CODE_MODE_GUIDE = [
+  "Pass TypeScript as `code`. Call a tool as `await codemode.<name>({ ...args })`; it resolves with the tool's JSON result and throws its error, so wrap one that may fail in try/catch. Top-level await works; there is no fetch, import, file or network access.",
+  "Only console.log output comes back, so print just what you need, with JSON.stringify for objects. Use a loop for repeated work.",
+  "`await codemode.search({ query })` returns signatures for tools missing from the code_mode index and for saved commands, which you call as `await codemode.cmd.<name>(args)`; save one with command_save.",
+  "Each call is approved exactly like a direct call. A call that asks the person stops the script; once they approve, repeat only that call, then continue.",
+].join(" ");
+
 function toolUsageLine(parts: {
   computerInstruction: string;
   /** The run offers code_mode (see selectRunTools). */
@@ -365,9 +372,12 @@ function toolUsageLine(parts: {
       : undefined,
     builtinOffered(disabled, "remember") ? "Use remember for durable facts." : undefined,
     parts.codeModeOffered
-      ? parts.codeFirst
-        ? "Most tools are called from a code_mode script as codemode.<name>(...), even a single call; these instructions name them by their plain names. Print only the result you need. Each call in the script is approved exactly like a direct call, and a call that asks the person stops the script. shell and the tools that talk to the person are called directly."
-        : "When a task needs several tool calls, such as a search then reads, many records at once, or a change applied to each match, run them in one code_mode script and print only the result you need. Each call in the script is approved exactly like a direct call, and a call that asks the person stops the script."
+      ? [
+          parts.codeFirst
+            ? "Most tools are called from a code_mode script as codemode.<name>(...), even a single call; these instructions name them by their plain names. shell and the tools that talk to the person are called directly."
+            : "When a task needs several tool calls, such as a search then reads, many records at once, or a change applied to each match, run them in one code_mode script.",
+          CODE_MODE_GUIDE,
+        ].join(" ")
       : undefined,
     ticketBoardClause(parts.ticketBoardEnabled, disabled),
     parts.ticketBoardEnabled ? undefined : scratchpadClause(disabled),
