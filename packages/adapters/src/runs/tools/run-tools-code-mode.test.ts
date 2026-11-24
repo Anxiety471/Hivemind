@@ -56,6 +56,14 @@ const demoSearch = {
   route: { connectorId: "demo", resourceId: "records", toolName: "search" },
 };
 
+const demoWrite = {
+  name: "demo_write",
+  description: "Create a demo record.",
+  inputSchema: { type: "object", properties: { title: { type: "string" } } },
+  readOnly: false,
+  route: { connectorId: "demo", resourceId: "records", toolName: "create" },
+};
+
 const codeModeTool = {
   name: "code_mode",
   description: "Run TypeScript.",
@@ -93,11 +101,14 @@ function context(
       receivedOutsideMessage: async () => false,
     },
     tools: {
-      offered: [codeModeTool, demoSearch],
+      offered: [codeModeTool, demoSearch, demoWrite],
       builtins: [codeModeTool],
       disabled: new Set<string>(),
       approvedReplays: createApprovedEffectReplayQueue([]),
-      connector: new Map([["demo_search", demoSearch]]),
+      connector: new Map<string, typeof demoSearch | typeof demoWrite>([
+        ["demo_search", demoSearch],
+        ["demo_write", demoWrite],
+      ]),
       connectedPlugins: [],
     },
     context: { signal: new AbortController().signal },
@@ -192,7 +203,7 @@ describe("code_mode", () => {
     expect(vi.mocked(gateToolCall)).toHaveBeenCalledTimes(2);
   });
 
-  it("does not install tools the run only offers for writing", async () => {
+  it("does not install a tool the run does not offer", async () => {
     const { ctx } = context();
     const result = (await applyTool(
       ctx as never,
@@ -203,6 +214,111 @@ describe("code_mode", () => {
       "outer-1",
     )) as { output: string };
     expect(result.output).toBe("ToolUnavailable");
+  });
+
+  it("runs a write tool through the same gate as a direct call", async () => {
+    const { ctx, execute } = context();
+    const result = (await applyTool(
+      ctx as never,
+      "code_mode",
+      { code: 'await codemode.demo_write({ title: "t" }); console.log("done");' },
+      "outer-1",
+    )) as { output: string; calls: string[] };
+    expect(result.output).toBe("done");
+    expect(result.calls).toEqual(["demo_write"]);
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(gateToolCall).mock.calls.map(([, request]) => request.name)).toEqual([
+      "code_mode",
+      "demo_write",
+    ]);
+  });
+
+  it("ends the turn when a write asks the person, after the reads before it ran", async () => {
+    const { ctx, execute } = context();
+    pauses.names.add("demo_write");
+    const result = await applyTool(
+      ctx as never,
+      "code_mode",
+      {
+        code: `
+          await codemode.demo_search({ query: "a" });
+          await codemode.demo_write({ title: "needs approval" });
+          console.log("should not run");
+        `,
+      },
+      "outer-1",
+    );
+    expect(result).toMatchObject({ details: { approval: "paused" } });
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets a script make at most eight writes", async () => {
+    const { ctx, execute } = context();
+    const result = (await applyTool(
+      ctx as never,
+      "code_mode",
+      {
+        code: `
+          let made = 0;
+          try {
+            for (let i = 0; i < 20; i++) { await codemode.demo_write({ title: String(i) }); made++; }
+          } catch (e) { console.log(e.code, made); }
+        `,
+      },
+      "outer-1",
+    )) as { output: string };
+    expect(result.output).toBe("WriteLimitReached 8");
+    expect(execute).toHaveBeenCalledTimes(8);
+  });
+
+  it("does not count reads against the write limit", async () => {
+    const { ctx, execute } = context();
+    await applyTool(
+      ctx as never,
+      "code_mode",
+      { code: "for (let i = 0; i < 12; i++) await codemode.demo_search({ query: String(i) });" },
+      "outer-1",
+    );
+    expect(execute).toHaveBeenCalledTimes(12);
+  });
+
+  it("treats what an earlier call in the script read as outside content for the next call", async () => {
+    const seen: boolean[] = [];
+    const execute = vi.fn(async function* () {
+      seen.push(ctx.state.tainted);
+      yield { type: "result", data: { rows: [] } };
+    });
+    const { ctx } = context(execute);
+    await applyTool(
+      ctx as never,
+      "code_mode",
+      {
+        code: `
+          await codemode.demo_search({ query: "a" });
+          await codemode.demo_write({ title: "chosen after reading" });
+        `,
+      },
+      "outer-1",
+    );
+    expect(seen).toEqual([false, true]);
+  });
+
+  it("answers codemode.search from the offered tools without running one", async () => {
+    const { ctx, execute } = context();
+    const result = (await applyTool(
+      ctx as never,
+      "code_mode",
+      {
+        code: `
+          const hits = await codemode.search({ query: "record" });
+          console.log(JSON.stringify(hits.map((hit) => [hit.name, hit.writes])));
+        `,
+      },
+      "outer-1",
+    )) as { output: string };
+    expect(result.output).toBe('[["demo_search",false],["demo_write",true]]');
+    expect(execute).not.toHaveBeenCalled();
+    expect(vi.mocked(gateToolCall)).toHaveBeenCalledTimes(1);
   });
 
   it("returns the script's failure with the calls it made so far", async () => {

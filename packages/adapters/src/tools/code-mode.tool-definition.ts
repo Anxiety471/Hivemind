@@ -1,16 +1,19 @@
 import type { ConnectorTool } from "@rakazo/adapter-kit";
 
 export const CODE_MODE = "code_mode";
+/** A script reaches writes through the host, so their count is bounded apart from all calls. */
+export const CODE_MODE_MAX_WRITES = 8;
 
 /**
- * The API index the model writes against: one signature per callable tool. It rides in the
- * tool description because it changes with the run's tool set, like find_tool's name index.
+ * The API index the model writes against: one signature per tool, cut to a size budget with the
+ * rest named. It rides in the tool description because it changes with the run's tool set, like
+ * find_tool's name index.
  */
 export function codeModeToolDefinition(index: string): ConnectorTool {
   return {
     name: CODE_MODE,
     description: [
-      "Run one TypeScript snippet that calls several read-only tools and prints only what you need. Top-level await is available. `console.log` is the only output; print text or JSON. The snippet has no fetch, require, import, files or network — only the API below.",
+      `Run one TypeScript snippet that calls several tools and prints only what you need. Top-level await is available. \`console.log\` is the only output; print text or JSON. The snippet has no fetch, require, import, files or network — only the API below. Tools marked (writes) change data and are approved exactly like a direct call. A call that asks the person stops the script, and it runs again from the top once they answer, so write it to be safe to run twice. A script may make at most ${CODE_MODE_MAX_WRITES} writes.`,
       index,
     ]
       .filter(Boolean)
@@ -27,7 +30,7 @@ export function codeModeToolDefinition(index: string): ConnectorTool {
       required: ["code"],
       additionalProperties: false,
     },
-    // Every call it can make is itself read-only.
+    // Every call it makes is gated on its own, so the script itself changes nothing.
     readOnly: true,
   };
 }

@@ -5,7 +5,8 @@ import { argumentGiven } from "../../bots/update-bot-patch.js";
 import { IMAGE_RETURNING_COMPUTER_TOOLS } from "../../models/model-vision.js";
 import { MODEL_CANNOT_SEE_MESSAGE } from "../../models/model-vision.prompt.js";
 import { strategicInitiativeToolAllowed } from "../../routines/strategic-initiative.js";
-import { CODE_MODE } from "../../tools/code-mode.tool-definition.js";
+import { CODE_MODE, CODE_MODE_MAX_WRITES } from "../../tools/code-mode.tool-definition.js";
+import { CODE_MODE_SEARCH, searchCodeModeTools } from "../../tools/code-mode-api.js";
 import { runCodeModeScript } from "../../tools/code-mode-sandbox.js";
 import type { RunContext } from "../assembly/run-context.js";
 import { markReadOutsideContent } from "../assembly/run-context.js";
@@ -19,6 +20,7 @@ import { prepareToolRequest, resolveToolRequest } from "./run-tool-request.js";
 import {
   BUILTIN_AGENT_TOOL_NAMES,
   codeModeCallableTools,
+  isCodeModeWrite,
   PAGE_BROWSER_TOOL_NAMES,
   SUBAGENT_HIDDEN_TOOLS,
 } from "./run-tool-selection.js";
@@ -247,7 +249,7 @@ function toolResultErrorText(result: unknown): string {
 }
 
 /**
- * Runs one model-authored TypeScript snippet against the read-only tools this run offers.
+ * Runs one model-authored TypeScript snippet against the tools this run offers.
  * Every call goes through applyTool, so approvals, taint, refusals and audit see it exactly as
  * a direct call. A call that pauses (approval, secret) stops the script and becomes this
  * tool's own result, which ends the turn as a direct call would.
@@ -255,22 +257,37 @@ function toolResultErrorText(result: unknown): string {
 async function codeModeTool(ctx: RunContext, call: ToolCall) {
   const code = typeof call.args.code === "string" ? call.args.code : "";
   if (!code.trim()) return call.finish({ error: "code must be the TypeScript to run." });
-  const callable = new Set(codeModeCallableTools(ctx.tools.offered).map((tool) => tool.name));
+  const offered = codeModeCallableTools(ctx.tools.offered);
+  const callable = new Map(offered.map((tool) => [tool.name, tool] as const));
+  // `codemode.search` answers from the offered set without running a tool; a real tool of the
+  // same name wins.
+  const searches = !callable.has(CODE_MODE_SEARCH);
   let ordinal = 0;
+  let writes = 0;
   let paused: unknown;
   // A paused call ends the script: the isolate is interrupted instead of letting a catch
   // swallow the refusal and keep calling tools after the person was asked.
   const stop = new AbortController();
   const outcome = await runCodeModeScript({
     code,
-    tools: [...callable],
+    tools: [...callable.keys(), ...(searches ? [CODE_MODE_SEARCH] : [])],
     signal: AbortSignal.any([ctx.context.signal, stop.signal]),
     call: async (name, args) => {
       if (paused) throw new Error("The script has stopped.");
-      if (!callable.has(name)) {
-        throw Object.assign(new Error(`${name} is not a read-only tool this run offers`), {
+      if (searches && name === CODE_MODE_SEARCH) {
+        return searchCodeModeTools(offered, typeof args.query === "string" ? args.query : "");
+      }
+      const tool = callable.get(name);
+      if (!tool) {
+        throw Object.assign(new Error(`${name} is not a tool this run offers`), {
           name: "ToolUnavailable",
         });
+      }
+      if (isCodeModeWrite(tool) && ++writes > CODE_MODE_MAX_WRITES) {
+        throw Object.assign(
+          new Error(`code_mode allows at most ${CODE_MODE_MAX_WRITES} writes per script`),
+          { name: "WriteLimitReached" },
+        );
       }
       const result = await applyTool(
         ctx,

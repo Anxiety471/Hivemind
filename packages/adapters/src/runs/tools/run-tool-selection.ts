@@ -121,7 +121,7 @@ export function selectBuiltinToolsForRun(options: {
   mediaVideoEnabled?: boolean;
   /** The deployment configured paid data services. */
   paidServicesEnabled?: boolean;
-  /** The owner turned on the code lab: one script may call several read-only tools. */
+  /** The owner turned on the code lab: one script may call several tools. */
   codeModeEnabled?: boolean;
   messagingChannelRun: boolean;
   /** Hanging up is only offered to a turn the caller spoke on a live call. */
@@ -236,8 +236,8 @@ export function selectBuiltinToolsForRun(options: {
 }
 
 /**
- * The tools one code_mode script may call: read-only by declaration, never a tool that returns
- * an image (a script cannot show one) or starts work of its own (a helper, a takeover).
+ * The tools one code_mode script may not call: itself, a tool that returns an image (a script
+ * cannot show one) and a tool that starts work of its own (a helper, a takeover).
  */
 const CODE_MODE_EXCLUDED_TOOLS: Readonly<Record<string, true>> = {
   [CODE_MODE]: true,
@@ -245,13 +245,21 @@ const CODE_MODE_EXCLUDED_TOOLS: Readonly<Record<string, true>> = {
   request_takeover: true,
 };
 
+/**
+ * Every tool one code_mode script may call. A write is callable too: each call goes through the
+ * same approval gate as a direct call, so a script gets no permission the model lacked.
+ */
 export function codeModeCallableTools(tools: readonly ConnectorTool[]): ConnectorTool[] {
   return tools.filter(
     (tool) =>
       !Object.hasOwn(CODE_MODE_EXCLUDED_TOOLS, tool.name) &&
-      !IMAGE_RETURNING_COMPUTER_TOOLS.has(tool.name) &&
-      (tool.readOnly === true || READ_ONLY_AGENT_TOOLS.has(tool.name)),
+      !IMAGE_RETURNING_COMPUTER_TOOLS.has(tool.name),
   );
+}
+
+/** A call that may change something, as opposed to one declared to only read. */
+export function isCodeModeWrite(tool: Pick<ConnectorTool, "name" | "readOnly">): boolean {
+  return tool.readOnly !== true && !READ_ONLY_AGENT_TOOLS.has(tool.name);
 }
 
 export const PAGE_BROWSER_TOOL_NAMES = new Set([
