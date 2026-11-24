@@ -72,6 +72,7 @@ func systemRetry(ctx context.Context, database *db.DB, reason string, fn func(pg
 // key, "joined") takes: hashtextextended('<namespace>:<key>', 0)
 // (advisory-lock.ts:9-22).
 func advisoryLock(ctx context.Context, tx pgx.Tx, key string) error {
+	//writeaudit:dynamic transaction-scoped advisory lock; no row payload
 	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, key)
 	return err
 }

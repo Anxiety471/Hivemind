@@ -81,7 +81,7 @@ func Register(ctx context.Context, database *db.DB, vault *shared.SecretVault, a
 				ciphertext = excluded.ciphertext,
 				presentation = excluded.presentation,
 				"updatedAt" = excluded."updatedAt"`,
-			actor.UserID, digest, actor.SessionID, ciphertext, presentation, now())
+			db.Data(actor.UserID, digest, actor.SessionID, ciphertext, presentation, now())...)
 		return err
 	})
 	if errors.Is(err, errSessionEnded) {
@@ -178,6 +178,7 @@ func RegisterCall(ctx context.Context, database *db.DB, vault *shared.SecretVaul
 			conditions = append(conditions, fmt.Sprintf(`"voipTokenDigest" = $%d`, len(arguments)))
 		}
 		if len(conditions) > 0 {
+			//writeaudit:dynamic the predicate is a fixed fragment built from digest columns; the ids are filters
 			if _, err := tx.Exec(ctx, `DELETE FROM call_push_devices WHERE id <> $1 AND (`+
 				strings.Join(conditions, " OR ")+`)`, arguments...); err != nil {
 				return err
@@ -193,7 +194,7 @@ func RegisterCall(ctx context.Context, database *db.DB, vault *shared.SecretVaul
 				"expoTokenDigest" = excluded."expoTokenDigest",
 				"voipTokenDigest" = excluded."voipTokenDigest",
 				"updatedAt" = excluded."updatedAt"`,
-			id, actor.UserID, actor.SessionID, sealed, expoDigest, voipDigest, now())
+			db.Data(id, actor.UserID, actor.SessionID, sealed, expoDigest, voipDigest, now())...)
 		return err
 	})
 	if errors.Is(err, errSessionEnded) {
