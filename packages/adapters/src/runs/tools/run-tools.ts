@@ -17,7 +17,16 @@ import {
   CODE_MODE_MAX_WRITES,
   CODE_MODE_SHELL_TIMEOUT_MS,
 } from "../../tools/code-mode.tool-definition.js";
-import { CODE_MODE_SEARCH, searchCodeModeTools } from "../../tools/code-mode-api.js";
+import type { CodeModeDescription } from "../../tools/code-mode-api.js";
+import {
+  CODE_MODE_DESCRIBE,
+  CODE_MODE_DESCRIBE_MAX_NAMES,
+  CODE_MODE_SEARCH,
+  describeCodeCommand,
+  describeCodeModeTool,
+  searchCodeModeTools,
+  undescribed,
+} from "../../tools/code-mode-api.js";
 import {
   CODE_MODE_MAX_CALLS,
   CODE_MODE_OUTPUT_MAX_CHARS,
@@ -282,6 +291,7 @@ async function codeModeTool(ctx: RunContext, call: ToolCall) {
   // `codemode.search` answers from the offered set without running a tool; a real tool of the
   // same name wins.
   const searches = !callable.has(CODE_MODE_SEARCH);
+  const describes = !callable.has(CODE_MODE_DESCRIBE);
   let ordinal = 0;
   let writes = 0;
   let paused: unknown;
@@ -289,7 +299,11 @@ async function codeModeTool(ctx: RunContext, call: ToolCall) {
   // A paused call ends the script: the isolate is interrupted instead of letting a catch
   // swallow the refusal and keep calling tools after the person was asked.
   const stop = new AbortController();
-  const toolNames = [...callable.keys(), ...(searches ? [CODE_MODE_SEARCH] : [])];
+  const toolNames = [
+    ...callable.keys(),
+    ...(searches ? [CODE_MODE_SEARCH] : []),
+    ...(describes ? [CODE_MODE_DESCRIBE] : []),
+  ];
   const startedAt = Date.now();
   let commandCalls = 0;
   const callTool = async (
@@ -312,6 +326,37 @@ async function codeModeTool(ctx: RunContext, call: ToolCall) {
         typeof args.query === "string" ? args.query : "",
         await listCodeCommands(ctx.deps.prisma),
       );
+    }
+    if (describes && name === CODE_MODE_DESCRIBE) {
+      const asked = [
+        ...(typeof args.name === "string" ? [args.name] : []),
+        ...(Array.isArray(args.names)
+          ? args.names.filter((value): value is string => typeof value === "string")
+          : []),
+      ].slice(0, CODE_MODE_DESCRIBE_MAX_NAMES);
+      const described: CodeModeDescription[] = [];
+      for (const asking of asked) {
+        if (asking.startsWith(CODE_COMMAND_PREFIX)) {
+          const command = await findCodeCommand(
+            ctx.deps.prisma,
+            asking.slice(CODE_COMMAND_PREFIX.length),
+          );
+          if (command) {
+            // Any bot may have written its code, so reading it is reading outside content.
+            await markReadOutsideContent(ctx);
+            described.push(describeCodeCommand(command));
+            continue;
+          }
+        } else {
+          const tool = callable.get(asking);
+          if (tool) {
+            described.push(describeCodeModeTool(tool));
+            continue;
+          }
+        }
+        described.push(undescribed(asking));
+      }
+      return described;
     }
     const tool = callable.get(name);
     if (!tool) {

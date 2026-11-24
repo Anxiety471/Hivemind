@@ -1,6 +1,6 @@
 import type { ConnectorTool } from "@rakazo/adapter-kit";
 import { isCodeModeWrite } from "../runs/tools/run-tool-selection.js";
-import type { CodeCommandSummary } from "./code-commands.js";
+import type { CodeCommandInput, CodeCommandSummary } from "./code-commands.js";
 import { CODE_COMMAND_PREFIX } from "./code-commands.js";
 
 /** One line per callable tool: enough to write a correct call without a second lookup. */
@@ -14,6 +14,10 @@ const SEARCH_LIMIT = 8;
 const WRITES_MARK = " (writes)";
 /** The name `codemode.search` is installed under, when no real tool already has it. */
 export const CODE_MODE_SEARCH = "search";
+/** The name `codemode.describe` is installed under, when no real tool already has it. */
+export const CODE_MODE_DESCRIBE = "describe";
+/** Names one `describe` call may ask for; a schema is large and every one is read into the run. */
+export const CODE_MODE_DESCRIBE_MAX_NAMES = 5;
 
 function literal(value: unknown): string {
   return JSON.stringify(value) ?? "unknown";
@@ -173,4 +177,41 @@ export function searchCodeModeTools(
       description: firstSentence(candidate.description),
       ...(candidate.writes === undefined ? {} : { writes: candidate.writes }),
     }));
+}
+
+/** What `codemode.describe` returns for one name: the whole definition, not the index line. */
+export interface CodeModeDescription {
+  name: string;
+  description?: string;
+  /** The tool's full JSON Schema, or a command's `args` schema. */
+  inputSchema?: unknown;
+  writes?: boolean;
+  /** A saved command's code, so it can be read before it is run. */
+  code?: string;
+  error?: string;
+}
+
+export function describeCodeModeTool(tool: ConnectorTool): CodeModeDescription {
+  return {
+    name: tool.name,
+    description: String(tool.description ?? ""),
+    inputSchema: tool.inputSchema ?? {},
+    writes: isCodeModeWrite(tool),
+  };
+}
+
+export function describeCodeCommand(command: CodeCommandInput): CodeModeDescription {
+  return {
+    name: `${CODE_COMMAND_PREFIX}${command.name}`,
+    description: command.description,
+    inputSchema: command.parameters ?? {},
+    code: command.code,
+  };
+}
+
+export function undescribed(name: string): CodeModeDescription {
+  return {
+    name,
+    error: `${name} is not a tool this run offers or a saved command. Find one with codemode.search.`,
+  };
 }
