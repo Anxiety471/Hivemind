@@ -21,16 +21,16 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { isDeepStrictEqual } from "node:util";
-import { EncryptedSecretStore } from "../../../packages/adapters/src/secrets/secrets.js";
-import { asSystem } from "../../../packages/db/src/index.js";
-import { createApp } from "../../api/src/app.js";
 import {
   getComputerProviderSettings,
   updateComputerProviderSettings,
 } from "../../api/src/computers/computer-provider-config.js";
+import { createApp } from "../../api/src/app.js";
+import { EncryptedSecretStore } from "../../../packages/adapters/src/secrets/secrets.js";
+import { asSystem } from "../../../packages/db/src/index.js";
 import { CONTRACT_ENCRYPTION_KEY } from "./contract-key.mts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -273,7 +273,8 @@ async function errorEcho(procedure: string, input: unknown, space: string, label
   const text = await response.text();
   const tsResult = { status: response.status, text, body: text ? JSON.parse(text) : null };
   const equal =
-    tsResult.status === goResult.status && isDeepStrictEqual(tsResult.body, goResult.body);
+    tsResult.status === goResult.status &&
+    isDeepStrictEqual(tsResult.body, goResult.body);
   if (!equal) {
     failures += 1;
     console.log(`FAIL  ${procedure} ${label}: ${tsResult.status}/${goResult.status}`);
@@ -318,12 +319,11 @@ async function echoPolicy(space: string, label: string) {
   const text = await response.text();
   const tsResult = { status: response.status, text, body: text ? JSON.parse(text) : null };
   const equal =
-    tsResult.status === goResult.status && isDeepStrictEqual(tsResult.body, goResult.body);
+    tsResult.status === goResult.status &&
+    isDeepStrictEqual(tsResult.body, goResult.body);
   if (!equal) {
     failures += 1;
-    console.log(
-      `FAIL  externalConversations.updatePolicy ${label}: ${tsResult.status}/${goResult.status}`,
-    );
+    console.log(`FAIL  externalConversations.updatePolicy ${label}: ${tsResult.status}/${goResult.status}`);
     console.log("  ts:", tsResult.text, "\n  go:", goResult.text);
   } else {
     console.log(`ok    externalConversations.updatePolicy ${label}: ${tsResult.status}`);
@@ -400,8 +400,7 @@ async function rawError(procedure: string, body: string, space: string, label: s
   );
   const text = await response.text();
   const parse = (value: string) => (value ? JSON.parse(value) : null);
-  const equal =
-    response.status === goResponse.status && isDeepStrictEqual(parse(text), parse(goText));
+  const equal = response.status === goResponse.status && isDeepStrictEqual(parse(text), parse(goText));
   if (!equal) {
     failures += 1;
     console.log(`FAIL  ${procedure} ${label}: ${response.status}/${goResponse.status}`);
@@ -450,14 +449,10 @@ async function policyStorage(space: string, label: string) {
   const equal = response.status === goResult.status && isDeepStrictEqual(tsRow, goRow);
   if (!equal) {
     failures += 1;
-    console.log(
-      `FAIL  externalConversations.updatePolicy ${label}: ${response.status}/${goResult.status}`,
-    );
+    console.log(`FAIL  externalConversations.updatePolicy ${label}: ${response.status}/${goResult.status}`);
     console.log("  ts row:", JSON.stringify(tsRow), "\n  go row:", JSON.stringify(goRow));
   } else {
-    console.log(
-      `ok    externalConversations.updatePolicy ${label}: stored leaves match (${response.status})`,
-    );
+    console.log(`ok    externalConversations.updatePolicy ${label}: stored leaves match (${response.status})`);
   }
   cases.push({
     procedure: "externalConversations.updatePolicy",
@@ -558,7 +553,12 @@ try {
     ids.space1,
     "unrecognized-key",
   );
-  await errorEcho("pages.list", { ["bad\ud800"]: 1 }, ids.space1, "unrecognized-key");
+  await errorEcho(
+    "pages.list",
+    { ["bad\ud800"]: 1 },
+    ids.space1,
+    "unrecognized-key",
+  );
   await errorEcho(
     "pages.pin",
     { pageId: ids.pageId, pinned: true, ["bad\ud800"]: 1 },
@@ -635,14 +635,10 @@ try {
     email: `${ids.userId}@example.test`,
     isDeploymentOwner: true,
   };
-  const updated = await updateComputerProviderSettings(
-    deps as never,
-    actor as never,
-    {
-      provider: "boat",
-      values: { apiKey: "wire-key", apiUrl },
-    } as never,
-  );
+  const updated = await updateComputerProviderSettings(deps as never, actor as never, {
+    provider: "boat",
+    values: { apiKey: "wire-key", apiUrl },
+  } as never);
   const got = await getComputerProviderSettings(deps as never, actor as never);
   const tsEcho = updated.values.apiUrl;
   const tsGetEcho = got.values.apiUrl;

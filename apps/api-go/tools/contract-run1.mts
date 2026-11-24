@@ -175,22 +175,18 @@ export function run1Cases(system: System): Case[] {
       await routine(seeded, "r1r", "r1b", prompt, extra);
     };
 
-  const skillSeed =
-    (extra: Record<string, unknown> = {}) =>
-    async (seeded: Seeded) => {
-      await bot(seeded, "r1b");
-      await thread(seeded, "r1t", "r1b");
-      await skill(seeded, "r1k", "r1b", extra);
-    };
+  const skillSeed = (extra: Record<string, unknown> = {}) => async (seeded: Seeded) => {
+    await bot(seeded, "r1b");
+    await thread(seeded, "r1t", "r1b");
+    await skill(seeded, "r1k", "r1b", extra);
+  };
 
-  const approveSeed =
-    (status = "pending") =>
-    async (seeded: Seeded) => {
-      await bot(seeded, "r1b");
-      await thread(seeded, "r1t", "r1b");
-      await server(seeded, "r1s");
-      await card(seeded, "r1m", "r1b", "r1t", "r1s", status, 1);
-    };
+  const approveSeed = (status = "pending") => async (seeded: Seeded) => {
+    await bot(seeded, "r1b");
+    await thread(seeded, "r1t", "r1b");
+    await server(seeded, "r1s");
+    await card(seeded, "r1m", "r1b", "r1t", "r1s", status, 1);
+  };
 
   const routineRun = (
     name: string,
@@ -208,12 +204,7 @@ export function run1Cases(system: System): Case[] {
     ...extra,
   });
 
-  const skillRun = (
-    name: string,
-    input: unknown,
-    extra: Partial<Case> = {},
-    seed = skillSeed(),
-  ): Case => ({
+  const skillRun = (name: string, input: unknown, extra: Partial<Case> = {}, seed = skillSeed()): Case => ({
     name: `run1-skill-${name}`,
     procedure: "skills.testRun",
     input,
@@ -238,26 +229,16 @@ export function run1Cases(system: System): Case[] {
   return [
     // routines.testRun: the target, the pin, and the replay key.
     routineRun("plain", { routineId: "__s-r1r__" }),
-    routineRun(
-      "pin",
-      { routineId: "__s-r1r__" },
-      {},
-      routineSeed("Do it", {
-        modelProvider: "openrouter",
-        modelId: "acme/model",
-        thinkingLevel: "high",
-      }),
-    ),
-    routineRun(
-      "null-thinking",
-      { routineId: "__s-r1r__" },
-      {},
-      routineSeed("Do it", {
-        modelProvider: "openrouter",
-        modelId: "acme/model",
-        thinkingLevel: null,
-      }),
-    ),
+    routineRun("pin", { routineId: "__s-r1r__" }, {}, routineSeed("Do it", {
+      modelProvider: "openrouter",
+      modelId: "acme/model",
+      thinkingLevel: "high",
+    })),
+    routineRun("null-thinking", { routineId: "__s-r1r__" }, {}, routineSeed("Do it", {
+      modelProvider: "openrouter",
+      modelId: "acme/model",
+      thinkingLevel: null,
+    })),
     routineRun("goal-prompt", { routineId: "__s-r1r__" }, {}, routineSeed("")),
     routineRun(
       "replay",
@@ -301,11 +282,16 @@ export function run1Cases(system: System): Case[] {
       },
     ),
     routineRun("unknown", { routineId: "missing" }, { seed: undefined }),
-    routineRun("other-space", { routineId: "__s-r1r__" }, {}, async (seeded: Seeded) => {
-      await bot(seeded, "r1b", 1);
-      await thread(seeded, "r1t", "r1b", 1);
-      await routine(seeded, "r1r", "r1b", "Do it", {}, 1);
-    }),
+    routineRun(
+      "other-space",
+      { routineId: "__s-r1r__" },
+      {},
+      async (seeded: Seeded) => {
+        await bot(seeded, "r1b", 1);
+        await thread(seeded, "r1t", "r1b", 1);
+        await routine(seeded, "r1r", "r1b", "Do it", {}, 1);
+      },
+    ),
     routineRun("archived-bot", { routineId: "__s-r1r__" }, {}, async (seeded: Seeded) => {
       await bot(seeded, "r1b", 0, { archivedAt: new Date() });
       await routine(seeded, "r1r", "r1b", "Do it");
@@ -335,11 +321,16 @@ export function run1Cases(system: System): Case[] {
       skillSeed({ name: "", goal: "G".repeat(120) }),
     ),
     skillRun("recording", { skillId: "__s-r1k__" }, {}, skillSeed({ status: "recording" })),
-    skillRun("other-space", { skillId: "__s-r1k__" }, {}, async (seeded: Seeded) => {
-      await bot(seeded, "r1b", 1);
-      await thread(seeded, "r1t", "r1b", 1);
-      await skill(seeded, "r1k", "r1b", {}, 1);
-    }),
+    skillRun(
+      "other-space",
+      { skillId: "__s-r1k__" },
+      {},
+      async (seeded: Seeded) => {
+        await bot(seeded, "r1b", 1);
+        await thread(seeded, "r1t", "r1b", 1);
+        await skill(seeded, "r1k", "r1b", {}, 1);
+      },
+    ),
     skillRun("unknown", { skillId: "missing" }, { seed: undefined }),
     skillRun("empty-id", { skillId: "" }, { seed: undefined }),
     skillRun("prompt-null", { skillId: "__s-r1k__", prompt: null }),
@@ -348,16 +339,11 @@ export function run1Cases(system: System): Case[] {
     skillRun("anonymous", { skillId: "__s-r1k__" }, { anonymous: true }),
 
     // mcp.assignments.approve: settings, chat card, the dismissal race, and scope.
-    approve(
-      "settings",
-      { botId: "__s-r1b__", serverId: "__s-r1s__" },
-      {},
-      async (seeded: Seeded) => {
-        await bot(seeded, "r1b");
-        await thread(seeded, "r1t", "r1b");
-        await server(seeded, "r1s");
-      },
-    ),
+    approve("settings", { botId: "__s-r1b__", serverId: "__s-r1s__" }, {}, async (seeded: Seeded) => {
+      await bot(seeded, "r1b");
+      await thread(seeded, "r1t", "r1b");
+      await server(seeded, "r1s");
+    }),
     approve("settings-card", { botId: "__s-r1b__", serverId: "__s-r1s__" }),
     approve(
       "chat",

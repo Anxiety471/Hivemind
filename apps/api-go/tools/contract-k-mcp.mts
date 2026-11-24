@@ -231,12 +231,7 @@ export function laneKCases(system: System): Case[] {
       },
     });
 
-  const dismiss = (
-    name: string,
-    input: unknown,
-    seed: (seeded: Seeded) => Promise<void>,
-    extra: Partial<Case> = {},
-  ): Case => ({
+  const dismiss = (name: string, input: unknown, seed: (seeded: Seeded) => Promise<void>, extra: Partial<Case> = {}): Case => ({
     name: `k-dismiss-${name}`,
     procedure: "mcp.assignments.dismiss",
     input,
@@ -244,12 +239,7 @@ export function laneKCases(system: System): Case[] {
     ...extra,
   });
 
-  const replace = (
-    name: string,
-    input: unknown,
-    seed: (seeded: Seeded) => Promise<void>,
-    extra: Partial<Case> = {},
-  ): Case => ({
+  const replace = (name: string, input: unknown, seed: (seeded: Seeded) => Promise<void>, extra: Partial<Case> = {}): Case => ({
     name: `k-replace-${name}`,
     procedure: "mcp.assignments.replace",
     input,
@@ -257,12 +247,7 @@ export function laneKCases(system: System): Case[] {
     ...extra,
   });
 
-  const agents = (
-    name: string,
-    input: unknown,
-    seed: (seeded: Seeded) => Promise<void>,
-    extra: Partial<Case> = {},
-  ): Case => ({
+  const agents = (name: string, input: unknown, seed: (seeded: Seeded) => Promise<void>, extra: Partial<Case> = {}): Case => ({
     name: `k-agents-${name}`,
     procedure: "mcp.servers.agents",
     input,
@@ -270,12 +255,7 @@ export function laneKCases(system: System): Case[] {
     ...extra,
   });
 
-  const remove = (
-    name: string,
-    input: unknown,
-    seed: (seeded: Seeded) => Promise<void>,
-    extra: Partial<Case> = {},
-  ): Case => ({
+  const remove = (name: string, input: unknown, seed: (seeded: Seeded) => Promise<void>, extra: Partial<Case> = {}): Case => ({
     name: `k-remove-${name}`,
     procedure: "mcp.servers.remove",
     input,
@@ -283,12 +263,7 @@ export function laneKCases(system: System): Case[] {
     ...extra,
   });
 
-  const disconnect = (
-    name: string,
-    input: unknown,
-    seed: (seeded: Seeded) => Promise<void>,
-    extra: Partial<Case> = {},
-  ): Case => ({
+  const disconnect = (name: string, input: unknown, seed: (seeded: Seeded) => Promise<void>, extra: Partial<Case> = {}): Case => ({
     name: `k-disconnect-${name}`,
     procedure: "mcp.oauth.disconnect",
     input,
@@ -302,25 +277,23 @@ export function laneKCases(system: System): Case[] {
     await thread(seeded, "kt1", "kb1");
     await server(seeded, "ks1");
   };
-  const msg = (
-    seeded: Seeded,
-    name: string,
-    threadName: string,
-    serverName: string,
-    status: string,
-    seq: number,
-  ) => card(seeded, name, threadName, serverName, status, seq, "kb1");
+  const msg = (seeded: Seeded, name: string, threadName: string, serverName: string, status: string, seq: number) =>
+    card(seeded, name, threadName, serverName, status, seq, "kb1");
 
   return [
     // mcp.assignments.dismiss: the settings surface resolves every card except a connected one,
     // a chat decision resolves open cards only, and a lost card race is not an assignment.
-    dismiss("settings", { botId: "__s-kb1__", serverId: "__s-ks1__" }, async (seeded) => {
-      await bot(seeded, "kb1");
-      await thread(seeded, "kt1", "kb1");
-      await server(seeded, "ks1");
-      await msg(seeded, "km1", "kt1", "ks1", "pending", 1);
-      await msg(seeded, "km2", "kt1", "ks1", "connected", 2);
-    }),
+    dismiss(
+      "settings",
+      { botId: "__s-kb1__", serverId: "__s-ks1__" },
+      async (seeded) => {
+        await bot(seeded, "kb1");
+        await thread(seeded, "kt1", "kb1");
+        await server(seeded, "ks1");
+        await msg(seeded, "km1", "kt1", "ks1", "pending", 1);
+        await msg(seeded, "km2", "kt1", "ks1", "connected", 2);
+      },
+    ),
     dismiss(
       "chat-open",
       { botId: "__s-kb1__", serverId: "__s-ks1__", threadId: "__s-kt1__" },
@@ -408,14 +381,18 @@ export function laneKCases(system: System): Case[] {
         await msg(seeded, "km1", "kt2", "ks1", "pending", 1);
       },
     ),
-    dismiss("guest-member", { botId: "__s-kb1__", serverId: "__s-ks1__" }, async (seeded) => {
-      await botThreadServer(seeded);
-      await msg(seeded, "km1", "kt1", "ks1", "pending", 1);
-      await system.spaceMember.update({
-        where: { id: `${seeded.spaces[0]}-m` },
-        data: { role: "guest" },
-      });
-    }),
+    dismiss(
+      "guest-member",
+      { botId: "__s-kb1__", serverId: "__s-ks1__" },
+      async (seeded) => {
+        await botThreadServer(seeded);
+        await msg(seeded, "km1", "kt1", "ks1", "pending", 1);
+        await system.spaceMember.update({
+          where: { id: `${seeded.spaces[0]}-m` },
+          data: { role: "guest" },
+        });
+      },
+    ),
     dismiss(
       "concurrent",
       { botId: "__s-kb1__", serverId: "__s-ks1__", threadId: "__s-kt1__" },
@@ -447,21 +424,12 @@ export function laneKCases(system: System): Case[] {
     ),
     dismiss("no-input", undefined, async () => {}),
     dismiss("null-input", null, async () => {}),
-    dismiss(
-      "extra-keys",
-      { botId: "__s-kb1__", serverId: "__s-ks1__", more: 1 },
-      async (seeded) => {
-        await botThreadServer(seeded);
-      },
-    ),
-    dismiss(
-      "anonymous",
-      { botId: "__s-kb1__", serverId: "__s-ks1__" },
-      async (seeded) => {
-        await botThreadServer(seeded);
-      },
-      { anonymous: true },
-    ),
+    dismiss("extra-keys", { botId: "__s-kb1__", serverId: "__s-ks1__", more: 1 }, async (seeded) => {
+      await botThreadServer(seeded);
+    }),
+    dismiss("anonymous", { botId: "__s-kb1__", serverId: "__s-ks1__" }, async (seeded) => {
+      await botThreadServer(seeded);
+    }, { anonymous: true }),
 
     // mcp.assignments.replace: the list becomes exactly the input, removals revert connected
     // cards, and a repeated server is refused before any write.
@@ -556,11 +524,15 @@ export function laneKCases(system: System): Case[] {
         await msg(seeded, "km1", "kt1", "ks1", "connected", 1);
       },
     ),
-    replace("removal-keeps-open-card", { botId: "__s-kb1__", assignments: [] }, async (seeded) => {
-      await botThreadServer(seeded);
-      await assignment(seeded, "ka1", "kb1", "ks1");
-      await msg(seeded, "km1", "kt1", "ks1", "pending", 1);
-    }),
+    replace(
+      "removal-keeps-open-card",
+      { botId: "__s-kb1__", assignments: [] },
+      async (seeded) => {
+        await botThreadServer(seeded);
+        await assignment(seeded, "ka1", "kb1", "ks1");
+        await msg(seeded, "km1", "kt1", "ks1", "pending", 1);
+      },
+    ),
     replace(
       "tool-empty",
       { botId: "__s-kb1__", assignments: [{ serverId: "__s-ks1__", allowedTools: [""] }] },
@@ -591,9 +563,13 @@ export function laneKCases(system: System): Case[] {
     replace("assignments-missing", { botId: "__s-kb1__" }, async (seeded) => {
       await bot(seeded, "kb1");
     }),
-    replace("item-not-object", { botId: "__s-kb1__", assignments: [5] }, async (seeded) => {
-      await bot(seeded, "kb1");
-    }),
+    replace(
+      "item-not-object",
+      { botId: "__s-kb1__", assignments: [5] },
+      async (seeded) => {
+        await bot(seeded, "kb1");
+      },
+    ),
     replace(
       "extra-keys",
       {
@@ -609,22 +585,21 @@ export function laneKCases(system: System): Case[] {
     replace("empty-bot", { botId: "", assignments: [] }, async (seeded) => {
       await bot(seeded, "kb1");
     }),
-    replace(
-      "anonymous",
-      { botId: "__s-kb1__", assignments: [] },
-      async (seeded) => {
-        await bot(seeded, "kb1");
-      },
-      { anonymous: true },
-    ),
+    replace("anonymous", { botId: "__s-kb1__", assignments: [] }, async (seeded) => {
+      await bot(seeded, "kb1");
+    }, { anonymous: true }),
 
     // mcp.servers.agents: allBots keeps assignments, choosing agents replaces them, and a
     // removed bot's connected cards go back to pending.
-    agents("all-bots", { id: "__s-ks1__", allBots: true }, async (seeded) => {
-      await bot(seeded, "kb1");
-      await server(seeded, "ks1");
-      await assignment(seeded, "ka1", "kb1", "ks1");
-    }),
+    agents(
+      "all-bots",
+      { id: "__s-ks1__", allBots: true },
+      async (seeded) => {
+        await bot(seeded, "kb1");
+        await server(seeded, "ks1");
+        await assignment(seeded, "ka1", "kb1", "ks1");
+      },
+    ),
     agents(
       "choose-two",
       { id: "__s-ks1__", allBots: false, botIds: ["__s-kb1__", "__s-kb2__"] },
@@ -642,13 +617,17 @@ export function laneKCases(system: System): Case[] {
         await server(seeded, "ks1");
       },
     ),
-    agents("choose-none", { id: "__s-ks1__", allBots: false, botIds: [] }, async (seeded) => {
-      await bot(seeded, "kb1");
-      await bot(seeded, "kb2");
-      await server(seeded, "ks1");
-      await assignment(seeded, "ka1", "kb1", "ks1");
-      await assignment(seeded, "ka2", "kb2", "ks1");
-    }),
+    agents(
+      "choose-none",
+      { id: "__s-ks1__", allBots: false, botIds: [] },
+      async (seeded) => {
+        await bot(seeded, "kb1");
+        await bot(seeded, "kb2");
+        await server(seeded, "ks1");
+        await assignment(seeded, "ka1", "kb1", "ks1");
+        await assignment(seeded, "ka2", "kb2", "ks1");
+      },
+    ),
     agents(
       "remove-reverts-card",
       { id: "__s-ks1__", allBots: false, botIds: ["__s-kb2__"] },
@@ -687,9 +666,13 @@ export function laneKCases(system: System): Case[] {
     agents("unknown-server", { id: "missing", allBots: true }, async (seeded) => {
       await bot(seeded, "kb1");
     }),
-    agents("other-space-server", { id: "__s-ks2__", allBots: true }, async (seeded) => {
-      await server(seeded, "ks2", {}, 1);
-    }),
+    agents(
+      "other-space-server",
+      { id: "__s-ks2__", allBots: true },
+      async (seeded) => {
+        await server(seeded, "ks2", {}, 1);
+      },
+    ),
     agents(
       "shared-server",
       { id: "__s-ks1__", allBots: false, botIds: ["__s-kb1__"] },
@@ -699,21 +682,26 @@ export function laneKCases(system: System): Case[] {
         await share(seeded, "ks1", 1);
       },
     ),
-    agents("oauth-connected", { id: "__s-ks1__", allBots: true }, async (seeded) => {
-      await serverWithMaterial(
-        seeded,
-        "ks1",
-        JSON.stringify({
-          oauth: { tokens: { access_token: "a" } },
-          oauthClient: { client_id: "c1" },
-        }),
-      );
-    }),
+    agents(
+      "oauth-connected",
+      { id: "__s-ks1__", allBots: true },
+      async (seeded) => {
+        await serverWithMaterial(
+          seeded,
+          "ks1",
+          JSON.stringify({ oauth: { tokens: { access_token: "a" } }, oauthClient: { client_id: "c1" } }),
+        );
+      },
+    ),
     // JSON.parse yields ±Infinity for an overflowing literal; Boolean(Infinity) is true, so
     // hasSecret must follow TS rather than treating Float64's ErrRange as false.
-    agents("material-length-overflow", { id: "__s-ks1__", allBots: true }, async (seeded) => {
-      await serverWithMaterial(seeded, "ks1", `{"args":{"length":1e999}}`);
-    }),
+    agents(
+      "material-length-overflow",
+      { id: "__s-ks1__", allBots: true },
+      async (seeded) => {
+        await serverWithMaterial(seeded, "ks1", `{"args":{"length":1e999}}`);
+      },
+    ),
     agents(
       "material-length-negative-overflow",
       { id: "__s-ks1__", allBots: true },
@@ -721,66 +709,89 @@ export function laneKCases(system: System): Case[] {
         await serverWithMaterial(seeded, "ks1", `{"args":{"length":-1e999}}`);
       },
     ),
-    agents("material-length-zero-overflow", { id: "__s-ks1__", allBots: true }, async (seeded) => {
-      await serverWithMaterial(seeded, "ks1", `{"args":{"length":0e999}}`);
-    }),
-    agents("bot-ids-missing", { id: "__s-ks1__", allBots: false }, async (seeded) => {
-      await bot(seeded, "kb1");
-      await server(seeded, "ks1");
-      await assignment(seeded, "ka1", "kb1", "ks1");
-    }),
-    agents("bot-ids-null", { id: "__s-ks1__", allBots: false, botIds: null }, async (seeded) => {
-      await server(seeded, "ks1");
-    }),
+    agents(
+      "material-length-zero-overflow",
+      { id: "__s-ks1__", allBots: true },
+      async (seeded) => {
+        await serverWithMaterial(seeded, "ks1", `{"args":{"length":0e999}}`);
+      },
+    ),
+    agents(
+      "bot-ids-missing",
+      { id: "__s-ks1__", allBots: false },
+      async (seeded) => {
+        await bot(seeded, "kb1");
+        await server(seeded, "ks1");
+        await assignment(seeded, "ka1", "kb1", "ks1");
+      },
+    ),
+    agents(
+      "bot-ids-null",
+      { id: "__s-ks1__", allBots: false, botIds: null },
+      async (seeded) => {
+        await server(seeded, "ks1");
+      },
+    ),
     agents("all-bots-missing", { id: "__s-ks1__" }, async (seeded) => {
       await server(seeded, "ks1");
     }),
     agents("empty-id", { id: "", allBots: true }, async (seeded) => {
       await server(seeded, "ks1");
     }),
-    agents(
-      "anonymous",
-      { id: "__s-ks1__", allBots: true },
-      async (seeded) => {
-        await server(seeded, "ks1");
-      },
-      { anonymous: true },
-    ),
+    agents("anonymous", { id: "__s-ks1__", allBots: true }, async (seeded) => {
+      await server(seeded, "ks1");
+    }, { anonymous: true }),
 
     // mcp.servers.remove: the row, its assignments, its sessions, its credential and every card
     // that names it go; a card already dismissed is left alone.
     remove("plain", { id: "__s-ks1__" }, async (seeded) => {
       await server(seeded, "ks1");
     }),
-    remove("with-material", { id: "__s-ks1__" }, async (seeded) => {
-      await serverWithMaterial(seeded, "ks1", JSON.stringify({ secret: "s3cr3t" }));
-    }),
-    remove("with-cards", { id: "__s-ks1__" }, async (seeded) => {
-      await bot(seeded, "kb1");
-      await bot(seeded, "kb2");
-      await thread(seeded, "kt1", "kb1");
-      await thread(seeded, "kt2", "kb2");
-      await server(seeded, "ks1");
-      await msg(seeded, "km1", "kt1", "ks1", "pending", 1);
-      await msg(seeded, "km2", "kt1", "ks1", "connected", 2);
-      await msg(seeded, "km3", "kt2", "ks1", "dismissed", 1);
-      await msg(seeded, "km4", "kt2", "ks1", "pending", 2);
-    }),
-    remove("material-missing", { id: "__s-ks1__" }, async (seeded) => {
-      // A credential row the caller cannot read stands in for a vanished one: the FK forbids
-      // pointing at an id that never existed.
-      await otherUser(seeded);
-      await secret(seeded, "kgone", JSON.stringify({ secret: "s3cr3t" }), {
-        userId: `${seeded.userId}-other`,
-      });
-      await server(seeded, "ks1", { secretId: id(seeded, "kgone") });
-    }),
-    remove("sessions-cascade", { id: "__s-ks1__" }, async (seeded) => {
-      await bot(seeded, "kb1");
-      await server(seeded, "ks1");
-      await assignment(seeded, "ka1", "kb1", "ks1");
-      await session(seeded, "kses1", "ks1");
-    }),
+    remove(
+      "with-material",
+      { id: "__s-ks1__" },
+      async (seeded) => {
+        await serverWithMaterial(seeded, "ks1", JSON.stringify({ secret: "s3cr3t" }));
+      },
+    ),
+    remove(
+      "with-cards",
+      { id: "__s-ks1__" },
+      async (seeded) => {
+        await bot(seeded, "kb1");
+        await bot(seeded, "kb2");
+        await thread(seeded, "kt1", "kb1");
+        await thread(seeded, "kt2", "kb2");
+        await server(seeded, "ks1");
+        await msg(seeded, "km1", "kt1", "ks1", "pending", 1);
+        await msg(seeded, "km2", "kt1", "ks1", "connected", 2);
+        await msg(seeded, "km3", "kt2", "ks1", "dismissed", 1);
+        await msg(seeded, "km4", "kt2", "ks1", "pending", 2);
+      },
+    ),
+    remove(
+      "material-missing",
+      { id: "__s-ks1__" },
+      async (seeded) => {
+        // A credential row the caller cannot read stands in for a vanished one: the FK forbids
+        // pointing at an id that never existed.
+        await otherUser(seeded);
+        await secret(seeded, "kgone", JSON.stringify({ secret: "s3cr3t" }), {
+          userId: `${seeded.userId}-other`,
+        });
+        await server(seeded, "ks1", { secretId: id(seeded, "kgone") });
+      },
+    ),
+    remove(
+      "sessions-cascade",
+      { id: "__s-ks1__" },
+      async (seeded) => {
+        await bot(seeded, "kb1");
+        await server(seeded, "ks1");
+        await assignment(seeded, "ka1", "kb1", "ks1");
+        await session(seeded, "kses1", "ks1");
+      },
+    ),
     remove(
       "all-spaces-from-other",
       { id: "__s-ks1__" },
@@ -792,80 +803,116 @@ export function laneKCases(system: System): Case[] {
     remove("unknown", { id: "missing" }, async (seeded) => {
       await server(seeded, "ks1");
     }),
-    remove("other-space-server", { id: "__s-ks2__" }, async (seeded) => {
-      await server(seeded, "ks2", {}, 1);
-    }),
-    remove("other-user-server", { id: "__s-ks2__" }, async (seeded) => {
-      await otherUser(seeded);
-      await server(seeded, "ks2", {}, 0, `${seeded.userId}-other`);
-    }),
+    remove(
+      "other-space-server",
+      { id: "__s-ks2__" },
+      async (seeded) => {
+        await server(seeded, "ks2", {}, 1);
+      },
+    ),
+    remove(
+      "other-user-server",
+      { id: "__s-ks2__" },
+      async (seeded) => {
+        await otherUser(seeded);
+        await server(seeded, "ks2", {}, 0, `${seeded.userId}-other`);
+      },
+    ),
     remove("empty-id", { id: "" }, async (seeded) => {
       await server(seeded, "ks1");
     }),
     remove("null-input", null, async () => {}),
-    remove(
-      "anonymous",
-      { id: "__s-ks1__" },
-      async (seeded) => {
-        await server(seeded, "ks1");
-      },
-      { anonymous: true },
-    ),
+    remove("anonymous", { id: "__s-ks1__" }, async (seeded) => {
+      await server(seeded, "ks1");
+    }, { anonymous: true }),
 
     // mcp.oauth.disconnect: the stored grant goes, its generation rises, the revision bumps and
     // the old health verdict resets. The material JSON must match JSON.stringify byte for byte.
     disconnect("plain", { serverId: "__s-ks1__" }, async (seeded) => {
       await server(seeded, "ks1");
     }),
-    disconnect("with-grant", { serverId: "__s-ks1__" }, async (seeded) => {
-      await serverWithMaterial(
-        seeded,
-        "ks1",
-        JSON.stringify({
-          oauth: { tokens: { access_token: "a", token_type: "Bearer" }, obtainedAt: 5 },
-          oauthGeneration: 2,
-          secret: "abc",
-        }),
-      );
-    }),
-    disconnect("without-grant", { serverId: "__s-ks1__" }, async (seeded) => {
-      await serverWithMaterial(
-        seeded,
-        "ks1",
-        JSON.stringify({
-          oauth: { clientInformation: { client_id: "c" } },
-          oauthClient: { client_id: "c" },
-        }),
-      );
-    }),
-    disconnect("key-order", { serverId: "__s-ks1__" }, async (seeded) => {
-      await serverWithMaterial(
-        seeded,
-        "ks1",
-        `{"oauth":{"tokens":{"access_token":"t"}},"zeta":1,"secret":"s","oauthGeneration":2}`,
-      );
-    }),
-    disconnect("generation-appended", { serverId: "__s-ks1__" }, async (seeded) => {
-      await serverWithMaterial(seeded, "ks1", `{"zeta":1,"secret":"s","oauth":{"tokens":{}}}`);
-    }),
-    disconnect("invalid-material", { serverId: "__s-ks1__" }, async (seeded) => {
-      await serverWithMaterial(seeded, "ks1", "not json");
-    }),
-    disconnect("null-material", { serverId: "__s-ks1__" }, async (seeded) => {
-      await serverWithMaterial(seeded, "ks1", "null");
-    }),
-    disconnect("string-generation", { serverId: "__s-ks1__" }, async (seeded) => {
-      await serverWithMaterial(seeded, "ks1", `{"secret":"s","oauthGeneration":"x"}`);
-    }),
-    disconnect("sessions", { serverId: "__s-ks1__" }, async (seeded) => {
-      await server(seeded, "ks1", { allSpaces: true });
-      await session(seeded, "kses1", "ks1");
-      await session(seeded, "kses2", "ks1", { spaceId: seeded.spaces[1] });
-    }),
-    disconnect("other-space-server-deletes-sessions", { serverId: "__s-ks2__" }, async (seeded) => {
-      await server(seeded, "ks2", {}, 1);
-      await session(seeded, "kses1", "ks2");
-    }),
+    disconnect(
+      "with-grant",
+      { serverId: "__s-ks1__" },
+      async (seeded) => {
+        await serverWithMaterial(
+          seeded,
+          "ks1",
+          JSON.stringify({
+            oauth: { tokens: { access_token: "a", token_type: "Bearer" }, obtainedAt: 5 },
+            oauthGeneration: 2,
+            secret: "abc",
+          }),
+        );
+      },
+    ),
+    disconnect(
+      "without-grant",
+      { serverId: "__s-ks1__" },
+      async (seeded) => {
+        await serverWithMaterial(
+          seeded,
+          "ks1",
+          JSON.stringify({ oauth: { clientInformation: { client_id: "c" } }, oauthClient: { client_id: "c" } }),
+        );
+      },
+    ),
+    disconnect(
+      "key-order",
+      { serverId: "__s-ks1__" },
+      async (seeded) => {
+        await serverWithMaterial(
+          seeded,
+          "ks1",
+          `{"oauth":{"tokens":{"access_token":"t"}},"zeta":1,"secret":"s","oauthGeneration":2}`,
+        );
+      },
+    ),
+    disconnect(
+      "generation-appended",
+      { serverId: "__s-ks1__" },
+      async (seeded) => {
+        await serverWithMaterial(seeded, "ks1", `{"zeta":1,"secret":"s","oauth":{"tokens":{}}}`);
+      },
+    ),
+    disconnect(
+      "invalid-material",
+      { serverId: "__s-ks1__" },
+      async (seeded) => {
+        await serverWithMaterial(seeded, "ks1", "not json");
+      },
+    ),
+    disconnect(
+      "null-material",
+      { serverId: "__s-ks1__" },
+      async (seeded) => {
+        await serverWithMaterial(seeded, "ks1", "null");
+      },
+    ),
+    disconnect(
+      "string-generation",
+      { serverId: "__s-ks1__" },
+      async (seeded) => {
+        await serverWithMaterial(seeded, "ks1", `{"secret":"s","oauthGeneration":"x"}`);
+      },
+    ),
+    disconnect(
+      "sessions",
+      { serverId: "__s-ks1__" },
+      async (seeded) => {
+        await server(seeded, "ks1", { allSpaces: true });
+        await session(seeded, "kses1", "ks1");
+        await session(seeded, "kses2", "ks1", { spaceId: seeded.spaces[1] });
+      },
+    ),
+    disconnect(
+      "other-space-server-deletes-sessions",
+      { serverId: "__s-ks2__" },
+      async (seeded) => {
+        await server(seeded, "ks2", {}, 1);
+        await session(seeded, "kses1", "ks2");
+      },
+    ),
     disconnect(
       "all-spaces-from-other",
       { serverId: "__s-ks1__" },
@@ -874,10 +921,14 @@ export function laneKCases(system: System): Case[] {
       },
       { space: 1 },
     ),
-    disconnect("shared-material-null-space", { serverId: "__s-ks1__" }, async (seeded) => {
-      await serverWithMaterial(seeded, "ks1", `{"secret":"s"}`);
-      await share(seeded, "ks1", 1);
-    }),
+    disconnect(
+      "shared-material-null-space",
+      { serverId: "__s-ks1__" },
+      async (seeded) => {
+        await serverWithMaterial(seeded, "ks1", `{"secret":"s"}`);
+        await share(seeded, "ks1", 1);
+      },
+    ),
     disconnect("unknown-server", { serverId: "missing" }, async (seeded) => {
       await bot(seeded, "kb1");
     }),
@@ -888,14 +939,9 @@ export function laneKCases(system: System): Case[] {
       await server(seeded, "ks1");
     }),
     disconnect("null-input", null, async () => {}),
-    disconnect(
-      "anonymous",
-      { serverId: "__s-ks1__" },
-      async (seeded) => {
-        await server(seeded, "ks1");
-      },
-      { anonymous: true },
-    ),
+    disconnect("anonymous", { serverId: "__s-ks1__" }, async (seeded) => {
+      await server(seeded, "ks1");
+    }, { anonymous: true }),
   ];
 }
 

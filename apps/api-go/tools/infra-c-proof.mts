@@ -18,12 +18,12 @@
  */
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
+import { createDecipheriv, createCipheriv, createHash, randomBytes } from "node:crypto";
 import { createInterface } from "node:readline";
 import { PostgresRealtimeFanout } from "../../../packages/adapters/src/notifications/realtime.js";
+import { EncryptedSecretStore } from "../../../packages/adapters/src/secrets/secrets.js";
 import { withSecretPersistence } from "../../../packages/adapters/src/secrets/secret-persistence.js";
 import { ComposedSecretStore } from "../../../packages/adapters/src/secrets/secret-store-factory.js";
-import { EncryptedSecretStore } from "../../../packages/adapters/src/secrets/secrets.js";
 import {
   openVaultValue,
   sealVaultValue,
@@ -48,10 +48,7 @@ process.env.CONTENT_ENCRYPTION ??= "on";
 const child = spawn(GO_PROOF_BIN, [], { stdio: ["pipe", "pipe", "inherit"] });
 process.on("exit", () => child.kill());
 const lines = createInterface({ input: child.stdout! });
-const pending = new Map<
-  number,
-  { resolve: (value: any) => void; reject: (error: Error) => void }
->();
+const pending = new Map<number, { resolve: (value: any) => void; reject: (error: Error) => void }>();
 let nextRequest = 0;
 lines.on("line", (line) => {
   const message = JSON.parse(line);
@@ -120,12 +117,7 @@ const context = (userId: string, spaceId: string): any => ({
 });
 
 // ---------------------------------------------------------------- seeding
-const user = {
-  id: id("u"),
-  name: "Secret Proof",
-  email: `${id("u")}@example.test`,
-  emailVerified: true,
-};
+const user = { id: id("u"), name: "Secret Proof", email: `${id("u")}@example.test`, emailVerified: true };
 const otherUser = {
   id: id("u2"),
   name: "Secret Proof Two",
@@ -141,13 +133,7 @@ await system.user.create({ data: user });
 await system.user.create({ data: otherUser });
 await system.organization.create({ data: org });
 await system.member.create({
-  data: {
-    id: id("member"),
-    organizationId: org.id,
-    userId: user.id,
-    role: "owner",
-    createdAt: new Date(),
-  },
+  data: { id: id("member"), organizationId: org.id, userId: user.id, role: "owner", createdAt: new Date() },
 });
 for (const [spaceId, name] of [
   [spaceA, "Space A"],
@@ -170,31 +156,14 @@ for (const [spaceId, name] of [
 await system.bot.create({ data: bot });
 
 // A second user with a Space, all cascaded by a parent delete later.
-const cascadeUser = {
-  id: id("u3"),
-  name: "Cascade",
-  email: `${id("u3")}@example.test`,
-  emailVerified: true,
-};
+const cascadeUser = { id: id("u3"), name: "Cascade", email: `${id("u3")}@example.test`, emailVerified: true };
 const cascadeSpace = id("sp-cascade");
 await system.user.create({ data: cascadeUser });
 await system.member.create({
-  data: {
-    id: id("member2"),
-    organizationId: org.id,
-    userId: otherUser.id,
-    role: "member",
-    createdAt: new Date(),
-  },
+  data: { id: id("member2"), organizationId: org.id, userId: otherUser.id, role: "member", createdAt: new Date() },
 });
 await system.member.create({
-  data: {
-    id: id("member3"),
-    organizationId: org.id,
-    userId: cascadeUser.id,
-    role: "owner",
-    createdAt: new Date(),
-  },
+  data: { id: id("member3"), organizationId: org.id, userId: cascadeUser.id, role: "owner", createdAt: new Date() },
 });
 await system.space.create({
   data: { id: cascadeSpace, organizationId: org.id, name: "Cascade Space", isDefault: false },
@@ -226,7 +195,12 @@ async function mark(): Promise<number> {
   await new Promise((resolve) => setTimeout(resolve, 300));
   return events.length;
 }
-async function expectEvents(from: number, expected: string[], label: string, settleMs = 400) {
+async function expectEvents(
+  from: number,
+  expected: string[],
+  label: string,
+  settleMs = 400,
+) {
   await new Promise((resolve) => setTimeout(resolve, settleMs));
   const seen = events.slice(from);
   assert.equal(seen.length, expected.length, `${label}: event count`);
@@ -241,7 +215,7 @@ const values = {
   ascii: "hello world",
   unicode: "İstanbul 😀 中文 é",
   empty: "",
-  markup: '<&> "quoted" \\backslash',
+  markup: "<&> \"quoted\" \\backslash",
   long: "x".repeat(4096),
   nul: "before\u0000after",
 };
@@ -264,9 +238,7 @@ for (const [name, value] of Object.entries(values)) {
 }
 
 await check("lone surrogate becomes U+FFFD on both sides", async () => {
-  const record = await encrypted.put("a\ud800b", context(user.id, spaceA), {
-    recordId: "row-surrogate",
-  });
+  const record = await encrypted.put("a\ud800b", context(user.id, spaceA), { recordId: "row-surrogate" });
   const goOpened = await go({ op: "open", ref: record.ref, recordId: "row-surrogate" });
   const tsOpened = await encrypted.load(record.ref, "row-surrogate");
   assert.equal(tsOpened, "a\ufffdb");
@@ -311,11 +283,7 @@ await check("malformed values fail identically", async () => {
   for (const bad of ["v2:", "v2:AAAA", "v2:AAAA===="]) {
     const goMessage = await goError({ op: "open", ref: bad, recordId: "row" });
     assert.equal(goMessage, "Encrypted secret is malformed", `${bad} on Go`);
-    await assert.rejects(
-      encrypted.load(bad, "row"),
-      /Encrypted secret is malformed/,
-      `${bad} on TS`,
-    );
+    await assert.rejects(encrypted.load(bad, "row"), /Encrypted secret is malformed/, `${bad} on TS`);
   }
 });
 
@@ -333,9 +301,7 @@ await check("a different key fails on both sides", async () => {
 });
 
 await check("node base64 leniency opens padded, junked and alphabet-rewritten bodies", async () => {
-  const record = await encrypted.put("lenient İ 😀", context(user.id, spaceA), {
-    recordId: "row-l",
-  });
+  const record = await encrypted.put("lenient İ 😀", context(user.id, spaceA), { recordId: "row-l" });
   const body = record.ref.slice("v2:".length);
   const variants = [
     `${body}==`,
@@ -370,13 +336,7 @@ const vaultKeySpace = await ring.current(vaultSpaceScope);
 
 await check("ts vault seal (rkz1 under the vault key) / go open", async () => {
   const row = { id: id("vault-user"), userId: user.id, spaceId: null };
-  const sealed = await sealVaultValue(
-    persisted,
-    secrets,
-    row,
-    "login İ 😀",
-    context(user.id, spaceA),
-  );
+  const sealed = await sealVaultValue(persisted, secrets, row, "login İ 😀", context(user.id, spaceA));
   assert.ok(sealed.startsWith("rkz1:"), "must use the vault key once one exists");
   const opened = await go({
     op: "vault-open",
@@ -393,35 +353,19 @@ await check("go vault seal / ts open", async () => {
     plaintext: "space vault value",
     row: { id: rowID, userId: user.id, spaceId: spaceA },
   });
-  assert.ok(
-    sealed.ciphertext.startsWith(`rkz1:${vaultKeySpace.id}:`),
-    "names the newest vault key",
-  );
+  assert.ok(sealed.ciphertext.startsWith(`rkz1:${vaultKeySpace.id}:`), "names the newest vault key");
   const row = { id: rowID, userId: user.id, spaceId: spaceA };
-  assert.equal(
-    await openVaultValue(persisted, secrets, { ...row, ciphertext: sealed.ciphertext }),
-    "space vault value",
-  );
+  assert.equal(await openVaultValue(persisted, secrets, { ...row, ciphertext: sealed.ciphertext }), "space vault value");
   // The same value opened with a row of another owner must fail.
   await assert.rejects(
-    openVaultValue(persisted, secrets, {
-      ...row,
-      id: id("other-row"),
-      ciphertext: sealed.ciphertext,
-    }),
+    openVaultValue(persisted, secrets, { ...row, id: id("other-row"), ciphertext: sealed.ciphertext }),
   );
 });
 
 await check("no vault key falls back to the store format, and both sides open it", async () => {
   const freshUser = id("u-fresh");
   const row = { id: id("vault-fresh"), userId: freshUser, spaceId: null };
-  const sealed = await sealVaultValue(
-    persisted,
-    secrets,
-    row,
-    "before the key",
-    context(user.id, spaceA),
-  );
+  const sealed = await sealVaultValue(persisted, secrets, row, "before the key", context(user.id, spaceA));
   assert.ok(sealed.startsWith("v2:"), "no key yet: the previous format");
   const opened = await go({
     op: "vault-open",
@@ -434,13 +378,7 @@ await check("no vault key falls back to the store format, and both sides open it
 await check("a value under another vault's key is refused", async () => {
   const otherKey = await ring.current(`user:${otherUser.id}`);
   const row = { id: id("vault-cross"), userId: otherUser.id, spaceId: null };
-  const sealed = await sealVaultValue(
-    persisted,
-    secrets,
-    row,
-    "other vault",
-    context(user.id, spaceA),
-  );
+  const sealed = await sealVaultValue(persisted, secrets, row, "other vault", context(user.id, spaceA));
   assert.ok(sealed.startsWith(`rkz1:${otherKey.id}:`), "sealed under the other user's key");
   const goMessage = await goError({
     op: "vault-open",
@@ -457,13 +395,7 @@ await check("a value under another vault's key is refused", async () => {
 await check("a ciphertext naming a missing key is reported identically", async () => {
   const otherKey = await ring.current(`user:${otherUser.id}`);
   const row = { id: id("vault-missing"), userId: otherUser.id, spaceId: null };
-  const sealed = await sealVaultValue(
-    persisted,
-    secrets,
-    row,
-    "key then gone",
-    context(user.id, spaceA),
-  );
+  const sealed = await sealVaultValue(persisted, secrets, row, "key then gone", context(user.id, spaceA));
   assert.ok(sealed.startsWith(`rkz1:${otherKey.id}:`));
   // A key id no space_keys row carries, as a shredded vault leaves behind.
   const missingKey = `c${randomBytes(12).toString("hex")}`;
@@ -485,13 +417,7 @@ await check("bot-secret values use the vault location and cross open", async () 
   // Go must produce and accept exactly that binding.
   const rowID = id("bot-secret");
   const row = { id: rowID, userId: user.id, spaceId: null };
-  const tsSealed = await sealVaultValue(
-    persisted,
-    secrets,
-    row,
-    "bot secret",
-    context(user.id, spaceA),
-  );
+  const tsSealed = await sealVaultValue(persisted, secrets, row, "bot secret", context(user.id, spaceA));
   const goRow = { id: rowID, userId: user.id, spaceId: null };
   const goOpened = await go({ op: "vault-open", value: tsSealed, row: goRow });
   assert.equal(goOpened.plaintext, "bot secret");
@@ -505,13 +431,7 @@ await check("bot-secret values use the vault location and cross open", async () 
 await check("the vault key's newest version seals", async () => {
   const newest = await ring.rotate(vaultSpaceScope);
   const row = { id: id("vault-rotated"), userId: user.id, spaceId: spaceA };
-  const sealed = await sealVaultValue(
-    persisted,
-    secrets,
-    row,
-    "after rotation",
-    context(user.id, spaceA),
-  );
+  const sealed = await sealVaultValue(persisted, secrets, row, "after rotation", context(user.id, spaceA));
   assert.ok(sealed.startsWith(`rkz1:${newest.id}:`), "must name the rotated key");
   const goOpened = await go({
     op: "vault-open",
@@ -525,15 +445,11 @@ await check("the vault key's newest version seals", async () => {
       id: id("old"),
       userId: user.id,
       spaceId: spaceA,
-      ciphertext: await sealUnder(
-        vaultKeySpace,
-        {
-          id: id("old"),
-          userId: user.id,
-          spaceId: spaceA,
-        },
-        "old key value",
-      ),
+      ciphertext: await sealUnder(vaultKeySpace, {
+        id: id("old"),
+        userId: user.id,
+        spaceId: spaceA,
+      }, "old key value"),
     }),
     "old key value",
   );
@@ -549,24 +465,11 @@ async function sealUnder(key: any, row: any, plaintext: string) {
 }
 
 // ------------------------------------------------- 3. hook side effects
-async function tsCreate(
-  itemID: string,
-  kind: string,
-  value: string,
-  actor = { userId: user.id, spaceId: spaceA },
-) {
-  const record = await secrets.put(value, context(actor.userId, actor.spaceId), {
-    recordId: itemID,
-  });
+async function tsCreate(itemID: string, kind: string, value: string, actor = { userId: user.id, spaceId: spaceA }) {
+  const record = await secrets.put(value, context(actor.userId, actor.spaceId), { recordId: itemID });
   await runAsTenant({ userId: actor.userId, spaceId: actor.spaceId } as any, () =>
     persisted.secret.create({
-      data: {
-        id: itemID,
-        userId: actor.userId,
-        spaceId: actor.spaceId,
-        kind,
-        ciphertext: record.ciphertext,
-      },
+      data: { id: itemID, userId: actor.userId, spaceId: actor.spaceId, kind, ciphertext: record.ciphertext },
     }),
   );
   return record;
@@ -605,19 +508,12 @@ await check("delete: one change notification, row gone", async () => {
 
   const goItem = id("h-del-go");
   const goRecord = await go({
-    op: "secret-create",
-    itemId: goItem,
-    plaintext: "delete value",
-    kind: "webhook",
-    userId: user.id,
-    spaceId: spaceA,
+    op: "secret-create", itemId: goItem, plaintext: "delete value", kind: "webhook",
+    userId: user.id, spaceId: spaceA,
   });
   from = await mark();
   const deleted = await go({
-    op: "secret-delete",
-    itemId: goItem,
-    userId: user.id,
-    spaceId: spaceA,
+    op: "secret-delete", itemId: goItem, userId: user.id, spaceId: spaceA,
   });
   await expectEvents(from, [goRecord.ref], "go delete");
   assert.deepEqual(deleted.refs, [goRecord.ref]);
@@ -637,20 +533,12 @@ await check("replace: new value announced first, the dropped ref after commit", 
 
   const goItem = id("h-upd-go");
   const goFirst = await go({
-    op: "secret-create",
-    itemId: goItem,
-    plaintext: "first",
-    kind: "webhook",
-    userId: user.id,
-    spaceId: spaceA,
+    op: "secret-create", itemId: goItem, plaintext: "first", kind: "webhook",
+    userId: user.id, spaceId: spaceA,
   });
   from = await mark();
   const goSecond = await go({
-    op: "secret-update",
-    itemId: goItem,
-    plaintext: "second",
-    userId: user.id,
-    spaceId: spaceA,
+    op: "secret-update", itemId: goItem, plaintext: "second", userId: user.id, spaceId: spaceA,
   });
   await expectEvents(from, [goSecond.ref, goFirst.ref], "go update");
   assert.equal(goSecond.oldRef, goFirst.ref);
@@ -659,20 +547,12 @@ await check("replace: new value announced first, the dropped ref after commit", 
 await check("create rollback announces the written and then the unsaved ref", async () => {
   const tsItem = id("h-rb-ts");
   let from = await mark();
-  const record = await secrets.put("rollback value", context(user.id, spaceA), {
-    recordId: tsItem,
-  });
+  const record = await secrets.put("rollback value", context(user.id, spaceA), { recordId: tsItem });
   await runAsTenant({ userId: user.id, spaceId: spaceA } as any, async () => {
     await assert.rejects(
       persisted.$transaction(async (tx: any) => {
         await tx.secret.create({
-          data: {
-            id: tsItem,
-            userId: user.id,
-            spaceId: spaceA,
-            kind: "webhook",
-            ciphertext: record.ciphertext,
-          },
+          data: { id: tsItem, userId: user.id, spaceId: spaceA, kind: "webhook", ciphertext: record.ciphertext },
         });
         throw new Error("proof rollback");
       }),
@@ -685,12 +565,8 @@ await check("create rollback announces the written and then the unsaved ref", as
   const goItem = id("h-rb-go");
   from = await mark();
   const goRecord = await go({
-    op: "secret-create-rollback",
-    itemId: goItem,
-    plaintext: "rollback value",
-    kind: "webhook",
-    userId: user.id,
-    spaceId: spaceA,
+    op: "secret-create-rollback", itemId: goItem, plaintext: "rollback value", kind: "webhook",
+    userId: user.id, spaceId: spaceA,
   });
   await expectEvents(from, [goRecord.ref, goRecord.ref], "go create rollback");
   const state = await go({ op: "row-state", itemId: goItem });
@@ -708,13 +584,7 @@ await check("a create refused by the row announces its written ref as unsaved", 
     assert.rejects(
       persisted.$transaction(async (tx: any) => {
         await tx.secret.create({
-          data: {
-            id: tsItem,
-            userId: user.id,
-            spaceId: spaceA,
-            kind: "webhook",
-            ciphertext: duplicate.ciphertext,
-          },
+          data: { id: tsItem, userId: user.id, spaceId: spaceA, kind: "webhook", ciphertext: duplicate.ciphertext },
         });
       }),
       /Unique constraint|unique constraint/,
@@ -728,21 +598,13 @@ await check("a create refused by the row announces its written ref as unsaved", 
 
   const goItem = id("h-dup-go");
   await go({
-    op: "secret-create",
-    itemId: goItem,
-    plaintext: "first",
-    kind: "webhook",
-    userId: user.id,
-    spaceId: spaceA,
+    op: "secret-create", itemId: goItem, plaintext: "first", kind: "webhook",
+    userId: user.id, spaceId: spaceA,
   });
   from = await mark();
   const failed = await goError({
-    op: "secret-create",
-    itemId: goItem,
-    plaintext: "second",
-    kind: "webhook",
-    userId: user.id,
-    spaceId: spaceA,
+    op: "secret-create", itemId: goItem, plaintext: "second", kind: "webhook",
+    userId: user.id, spaceId: spaceA,
   });
   assert.match(failed, /duplicate key|unique constraint/i);
   await new Promise((resolve) => setTimeout(resolve, 400));
@@ -769,12 +631,8 @@ await check("delete rollback announces nothing and keeps the row", async () => {
 
   const goItem = id("h-drb-go");
   await go({
-    op: "secret-create",
-    itemId: goItem,
-    plaintext: "kept",
-    kind: "webhook",
-    userId: user.id,
-    spaceId: spaceA,
+    op: "secret-create", itemId: goItem, plaintext: "kept", kind: "webhook",
+    userId: user.id, spaceId: spaceA,
   });
   from = await mark();
   await go({ op: "secret-delete-rollback", itemId: goItem, userId: user.id, spaceId: spaceA });
@@ -783,228 +641,125 @@ await check("delete rollback announces nothing and keeps the row", async () => {
   assert.equal(state.present, true);
 });
 
-await check(
-  "two rows sharing a ref: one delete announces nothing while the other holds it",
-  async () => {
-    const tsItem = id("h-share-ts");
-    const record = await tsCreate(tsItem, "webhook", "shared");
-    // A second row with the same ciphertext, in another table kind.
-    await system.secret.create({
-      data: {
-        id: `${tsItem}-2`,
-        userId: user.id,
-        spaceId: spaceA,
-        kind: "mcp",
-        ciphertext: record.ciphertext,
-      },
-    });
-    let from = await mark();
-    await runAsTenant({ userId: user.id, spaceId: spaceA } as any, () =>
-      persisted.secret.deleteMany({ where: { id: tsItem } }),
-    );
-    await expectEvents(from, [], "ts shared ref held");
-    await runAsTenant({ userId: user.id, spaceId: spaceA } as any, () =>
-      persisted.secret.deleteMany({ where: { id: `${tsItem}-2` } }),
-    );
-    await expectEvents(from, [record.ref], "ts shared ref last holder");
+await check("two rows sharing a ref: one delete announces nothing while the other holds it", async () => {
+  const tsItem = id("h-share-ts");
+  const record = await tsCreate(tsItem, "webhook", "shared");
+  // A second row with the same ciphertext, in another table kind.
+  await system.secret.create({
+    data: { id: `${tsItem}-2`, userId: user.id, spaceId: spaceA, kind: "mcp", ciphertext: record.ciphertext },
+  });
+  let from = await mark();
+  await runAsTenant({ userId: user.id, spaceId: spaceA } as any, () =>
+    persisted.secret.deleteMany({ where: { id: tsItem } }),
+  );
+  await expectEvents(from, [], "ts shared ref held");
+  await runAsTenant({ userId: user.id, spaceId: spaceA } as any, () =>
+    persisted.secret.deleteMany({ where: { id: `${tsItem}-2` } }),
+  );
+  await expectEvents(from, [record.ref], "ts shared ref last holder");
 
-    const goItem = id("h-share-go");
-    const goRecord = await go({
-      op: "secret-create",
-      itemId: goItem,
-      plaintext: "shared",
-      kind: "webhook",
-      userId: user.id,
-      spaceId: spaceA,
-    });
-    await system.secret.create({
-      data: {
-        id: `${goItem}-2`,
-        userId: user.id,
-        spaceId: spaceA,
-        kind: "mcp",
-        ciphertext: goRecord.ref,
-      },
-    });
-    from = await mark();
-    await go({ op: "secret-delete", itemId: goItem, userId: user.id, spaceId: spaceA });
-    await expectEvents(from, [], "go shared ref held");
-    await go({ op: "secret-delete", itemId: `${goItem}-2`, userId: user.id, spaceId: spaceA });
-    await expectEvents(from, [goRecord.ref], "go shared ref last holder");
-  },
-);
+  const goItem = id("h-share-go");
+  const goRecord = await go({
+    op: "secret-create", itemId: goItem, plaintext: "shared", kind: "webhook",
+    userId: user.id, spaceId: spaceA,
+  });
+  await system.secret.create({
+    data: { id: `${goItem}-2`, userId: user.id, spaceId: spaceA, kind: "mcp", ciphertext: goRecord.ref },
+  });
+  from = await mark();
+  await go({ op: "secret-delete", itemId: goItem, userId: user.id, spaceId: spaceA });
+  await expectEvents(from, [], "go shared ref held");
+  await go({ op: "secret-delete", itemId: `${goItem}-2`, userId: user.id, spaceId: spaceA });
+  await expectEvents(from, [goRecord.ref], "go shared ref last holder");
+});
 
 await check("deleting a Space cascades to its secrets, vault items and bot secrets", async () => {
   // TS: seed a Space with three references in different tables, delete it
   // through the hook in a tenant transaction.
   const space = id("h-space");
   const spaceUser = id("u-space");
-  await system.user.create({
-    data: { id: spaceUser, name: "Space User", email: `${spaceUser}@x.test`, emailVerified: true },
-  });
+  await system.user.create({ data: { id: spaceUser, name: "Space User", email: `${spaceUser}@x.test`, emailVerified: true } });
   await system.member.create({
-    data: {
-      id: `${spaceUser}-member`,
-      organizationId: org.id,
-      userId: spaceUser,
-      role: "owner",
-      createdAt: new Date(),
-    },
+    data: { id: `${spaceUser}-member`, organizationId: org.id, userId: spaceUser, role: "owner", createdAt: new Date() },
   });
-  await system.space.create({
-    data: { id: space, organizationId: org.id, name: "Delete me", isDefault: false },
-  });
+  await system.space.create({ data: { id: space, organizationId: org.id, name: "Delete me", isDefault: false } });
   await system.spaceMember.create({
-    data: {
-      id: `${space}-m`,
-      spaceId: space,
-      organizationId: org.id,
-      userId: spaceUser,
-      role: "owner",
-      createdAt: new Date(),
-    },
+    data: { id: `${space}-m`, spaceId: space, organizationId: org.id, userId: spaceUser, role: "owner", createdAt: new Date() },
   });
-  const secretRow = await encrypted.put("space secret", context(spaceUser, space), {
-    recordId: id("sp-secret"),
-  });
+  const secretRow = await encrypted.put("space secret", context(spaceUser, space), { recordId: id("sp-secret") });
   await system.secret.create({
-    data: {
-      id: secretRow.id,
-      userId: spaceUser,
-      spaceId: space,
-      kind: "webhook",
-      ciphertext: secretRow.ciphertext,
-    },
+    data: { id: secretRow.id, userId: spaceUser, spaceId: space, kind: "webhook", ciphertext: secretRow.ciphertext },
   });
-  const vaultRow = await encrypted.put("space vault", context(spaceUser, space), {
-    recordId: id("sp-vault"),
-  });
+  const vaultRow = await encrypted.put("space vault", context(spaceUser, space), { recordId: id("sp-vault") });
   await system.vaultCredential.create({
     data: {
-      id: vaultRow.id,
-      userId: spaceUser,
-      spaceId: space,
-      name: "item",
-      origin: "https://example.test",
-      auth: { type: "value" },
-      ciphertext: vaultRow.ciphertext,
+      id: vaultRow.id, userId: spaceUser, spaceId: space, name: "item", origin: "https://example.test",
+      auth: { type: "value" }, ciphertext: vaultRow.ciphertext,
     },
   });
-  const botRow = await encrypted.put("space bot secret", context(spaceUser, space), {
-    recordId: id("sp-bot"),
-  });
+  const botRow = await encrypted.put("space bot secret", context(spaceUser, space), { recordId: id("sp-bot") });
   await system.bot.create({
-    data: {
-      id: id("sp-bot-row"),
-      spaceId: space,
-      userId: spaceUser,
-      name: "Space Bot",
-      color: "green",
-    },
+    data: { id: id("sp-bot-row"), spaceId: space, userId: spaceUser, name: "Space Bot", color: "green" },
   });
   await system.botSecret.create({
     data: {
-      id: botRow.id,
-      userId: spaceUser,
-      spaceId: space,
-      botId: id("sp-bot-row"),
-      name: "login",
-      origin: "https://example.test",
-      auth: { type: "value" },
-      ciphertext: botRow.ciphertext,
+      id: botRow.id, userId: spaceUser, spaceId: space, botId: id("sp-bot-row"), name: "login",
+      origin: "https://example.test", auth: { type: "value" }, ciphertext: botRow.ciphertext,
     },
   });
   let from = await mark();
   await asSystem(persisted).space.delete({ where: { id: space } });
-  await expectEvents(from, [secretRow.ref, vaultRow.ref, botRow.ref], "ts space cascade", 600);
+  await expectEvents(
+    from,
+    [secretRow.ref, vaultRow.ref, botRow.ref],
+    "ts space cascade",
+    600,
+  );
 
   // Go: same shape, deleted through the hook's parent path.
   const goSpace = id("h-space-go");
   const goUser = id("u-space-go");
-  await system.user.create({
-    data: { id: goUser, name: "Go Space User", email: `${goUser}@x.test`, emailVerified: true },
-  });
+  await system.user.create({ data: { id: goUser, name: "Go Space User", email: `${goUser}@x.test`, emailVerified: true } });
   await system.member.create({
-    data: {
-      id: `${goUser}-member`,
-      organizationId: org.id,
-      userId: goUser,
-      role: "owner",
-      createdAt: new Date(),
-    },
+    data: { id: `${goUser}-member`, organizationId: org.id, userId: goUser, role: "owner", createdAt: new Date() },
   });
-  await system.space.create({
-    data: { id: goSpace, organizationId: org.id, name: "Go delete me", isDefault: false },
-  });
+  await system.space.create({ data: { id: goSpace, organizationId: org.id, name: "Go delete me", isDefault: false } });
   await system.spaceMember.create({
-    data: {
-      id: `${goSpace}-m`,
-      spaceId: goSpace,
-      organizationId: org.id,
-      userId: goUser,
-      role: "owner",
-      createdAt: new Date(),
-    },
+    data: { id: `${goSpace}-m`, spaceId: goSpace, organizationId: org.id, userId: goUser, role: "owner", createdAt: new Date() },
   });
   const goSecret = await go({
-    op: "secret-create",
-    itemId: id("gsp-secret"),
-    plaintext: "space secret",
-    kind: "webhook",
-    userId: goUser,
-    spaceId: goSpace,
+    op: "secret-create", itemId: id("gsp-secret"), plaintext: "space secret", kind: "webhook",
+    userId: goUser, spaceId: goSpace,
   });
   const goVaultRow = id("gsp-vault");
   await go({ op: "key-current", scope: `vault:${goSpace}` });
   const goVault = await go({
-    op: "vault-seal",
-    plaintext: "space vault",
+    op: "vault-seal", plaintext: "space vault",
     row: { id: goVaultRow, userId: goUser, spaceId: goSpace },
   });
   assert.ok(goVault.ciphertext.startsWith("rkz1:"), "the space vault key seals it");
   await system.vaultCredential.create({
     data: {
-      id: goVaultRow,
-      userId: goUser,
-      spaceId: goSpace,
-      name: "item",
-      origin: "https://example.test",
-      auth: { type: "value" },
-      ciphertext: goVault.ciphertext,
+      id: goVaultRow, userId: goUser, spaceId: goSpace, name: "item", origin: "https://example.test",
+      auth: { type: "value" }, ciphertext: goVault.ciphertext,
     },
   });
   const goBot = await go({
-    op: "secret-create",
-    itemId: id("gsp-bot"),
-    plaintext: "space bot secret",
-    kind: "bot",
-    userId: goUser,
-    spaceId: goSpace,
+    op: "secret-create", itemId: id("gsp-bot"), plaintext: "space bot secret", kind: "bot",
+    userId: goUser, spaceId: goSpace,
   });
   // The bot secret's own table: one Bot row and a bot_secrets row sharing the ref.
   const goBotRow = id("gsp-bot-row");
-  await system.bot.create({
-    data: { id: goBotRow, spaceId: goSpace, userId: goUser, name: "Go Bot", color: "green" },
-  });
+  await system.bot.create({ data: { id: goBotRow, spaceId: goSpace, userId: goUser, name: "Go Bot", color: "green" } });
   await system.botSecret.create({
     data: {
-      id: id("gsp-bot-secret"),
-      userId: goUser,
-      spaceId: goSpace,
-      botId: goBotRow,
-      name: "login",
-      origin: "https://example.test",
-      auth: { type: "value" },
-      ciphertext: goBot.ref,
+      id: id("gsp-bot-secret"), userId: goUser, spaceId: goSpace, botId: goBotRow, name: "login",
+      origin: "https://example.test", auth: { type: "value" }, ciphertext: goBot.ref,
     },
   });
   from = await mark();
   const cascade = await go({
-    op: "parent-delete",
-    model: "Space",
-    parentId: goSpace,
-    userId: user.id,
-    spaceId: spaceA,
+    op: "parent-delete", model: "Space", parentId: goSpace, userId: user.id, spaceId: spaceA,
   });
   await expectEvents(from, [goBot.ref, goSecret.ref, goVault.ciphertext], "go space cascade", 600);
   assert.deepEqual(
@@ -1015,20 +770,12 @@ await check("deleting a Space cascades to its secrets, vault items and bot secre
 
 await check("deleting a User cascades across the tenants the cascade cannot see", async () => {
   const cascadeSecret = await go({
-    op: "secret-create",
-    itemId: id("cu-secret"),
-    plaintext: "cascade user secret",
-    kind: "webhook",
-    userId: cascadeUser.id,
-    spaceId: cascadeSpace,
+    op: "secret-create", itemId: id("cu-secret"), plaintext: "cascade user secret", kind: "webhook",
+    userId: cascadeUser.id, spaceId: cascadeSpace,
   });
-  const from = await mark();
+  let from = await mark();
   const cascade = await go({
-    op: "parent-delete",
-    model: "User",
-    parentId: cascadeUser.id,
-    userId: user.id,
-    spaceId: spaceA,
+    op: "parent-delete", model: "User", parentId: cascadeUser.id, userId: user.id, spaceId: spaceA,
   });
   await expectEvents(from, [cascadeSecret.ref], "go user cascade", 600);
   assert.deepEqual(cascade.refs, [cascadeSecret.ref]);
@@ -1047,7 +794,7 @@ await check("the hook holds FOR UPDATE locks from capture to commit", async () =
   const tsItem = id("h-lock-ts");
   const tsRecord = await tsCreate(tsItem, "webhook", "locked");
   let during = "";
-  const from = await mark();
+  let from = await mark();
   await runAsTenant({ userId: user.id, spaceId: spaceA } as any, () =>
     persisted.$transaction(async (tx: any) => {
       await tx.secret.deleteMany({ where: { id: tsItem } });
@@ -1075,19 +822,11 @@ await check("the hook holds FOR UPDATE locks from capture to commit", async () =
 
   const goItem = id("h-lock-go");
   await go({
-    op: "secret-create",
-    itemId: goItem,
-    plaintext: "locked",
-    kind: "webhook",
-    userId: user.id,
-    spaceId: spaceA,
+    op: "secret-create", itemId: goItem, plaintext: "locked", kind: "webhook",
+    userId: user.id, spaceId: spaceA,
   });
   const probe = await go({
-    op: "lock-probe",
-    itemId: goItem,
-    userId: user.id,
-    spaceId: spaceA,
-    pauseMs: 50,
+    op: "lock-probe", itemId: goItem, userId: user.id, spaceId: spaceA, pauseMs: 50,
   });
   assert.equal(probe.during, "blocked", "Go holds the lock during the transaction");
   assert.equal(probe.after, "ok");

@@ -32,130 +32,26 @@ function pick<T>(values: readonly T[]): T {
   return values[rand() % values.length]!;
 }
 
-const prefixes = [
-  "xn--",
-  "XN--",
-  "xN--",
-  "Xn--",
-  "ｘｎ－－",
-  "ＸＮ－－",
-  "x\u00adn--",
-  "xn\u00ad--",
-  "\u00adxn--",
-];
+const prefixes = ["xn--", "XN--", "xN--", "Xn--", "ｘｎ－－", "ＸＮ－－", "x\u00adn--", "xn\u00ad--", "\u00adxn--"];
 const nonASCII = [
-  "ü",
-  "ト",
-  "Ж",
-  "😀",
-  "é",
-  "ß",
-  "中",
-  "😀",
-  "\u200d",
-  "\u00a0",
-  "\u3002",
-  "\uff0e",
-  "\uff61",
-  "\u0301",
-  "\u2003",
-  "\u2028",
-  "\ufffd",
-  "\u0435",
-  "\u0661",
-  "\uff55",
-  "\uff58",
-  "\u00ad",
-  "\u2024",
-  "\u2160",
-  "\u24e7",
-  "\ufb00",
-  "\u1e9e",
-  "\u117c",
-  "\u0081",
+  "ü", "ト", "Ж", "😀", "é", "ß", "中", "😀", "\u200d", "\u00a0", "\u3002", "\uff0e",
+  "\uff61", "\u0301", "\u2003", "\u2028", "\ufffd", "\u0435", "\u0661", "\uff55", "\uff58",
+  "\u00ad", "\u2024", "\u2160", "\u24e7", "\ufb00", "\u1e9e", "\u117c", "\u0081",
 ];
-const asciiParts = [
-  "",
-  "a",
-  "b",
-  "0",
-  "-",
-  "kva",
-  "bcher",
-  "a-b",
-  "x",
-  "ls8h",
-  "u-kva",
-  "abc-",
-  "a!",
-  "a-",
-];
-const suffixes = [
-  "",
-  ".example",
-  ".EXAMPLE",
-  ".example.",
-  ".example。",
-  "..example",
-  ".ü",
-  ".BÜCHER",
-  ".ü.example",
-  "。example",
-  "\uff0eexample",
-];
+const asciiParts = ["", "a", "b", "0", "-", "kva", "bcher", "a-b", "x", "ls8h", "u-kva", "abc-", "a!", "a-"];
+const suffixes = ["", ".example", ".EXAMPLE", ".example.", ".example。", "..example", ".ü", ".BÜCHER", ".ü.example", "。example", "\uff0eexample"];
 const ports = ["", ":443", ":65536", ":0", ":８０", "::80"];
 const paths = ["", "/", "/x", "/?", "/#f", "?q", "#f", "\\x", "/a/../b"];
-const schemes = [
-  "https://",
-  "http://",
-  "HTTPS://",
-  "HtTp://",
-  "file://",
-  "file:///",
-  "file:",
-  "ws://",
-  "wss://",
-  "ftp://",
-  "foo://",
-  "blob:",
-  "",
-];
+const schemes = ["https://", "http://", "HTTPS://", "HtTp://", "file://", "file:///", "file:", "ws://", "wss://", "ftp://", "foo://", "blob:", ""];
 const hosts = [
-  "xn--bcher-kva.example",
-  "XN--BCHER-KVA.EXAMPLE.",
-  "xn--bcher-kva。example",
-  "xn--bcｕer-kva.example",
-  "xn--bcher-kva.ü",
-  "xn--ls8h.ü",
-  "xn--a!.ü",
-  "xn--abc-.ü",
-  "xn--.ü",
-  "xn--a。example",
-  "xn--bcüer-kva.example",
-  "xn---е-.example。",
-  "xn--xト-.EXAMPLE",
-  "xN--xü-",
-  "xn--ｕ.ü",
-  "xn--bcüer.example./",
-  "xn--bcüer..example/",
-  "xn--a%2Db/",
-  "xn--a%FF/",
-  "xn%2D%2Dbc%C3%BCer/",
-  "xn--bc%2eüer.example/",
-  "\u00adxn--bcüer.example/",
-  "xn--bc\u00adüer.example/",
-  "xn--bcｕer.example/",
-  "xn--bcher-kｖa.example/",
-  "ａ--bcüer.example/",
-  "xn＿＿bcüer.example/",
-  "xn--bcher-kva.example:443/",
-  "user:pass@xn--bcüer.example/",
-  "xn--bcüer@example.com/",
-  "example.com@xn--bcüer/",
-  "[::1]",
-  "127.0.0.1",
-  "xn--bcüer.1",
-  "xn--.example",
+  "xn--bcher-kva.example", "XN--BCHER-KVA.EXAMPLE.", "xn--bcher-kva。example", "xn--bcｕer-kva.example",
+  "xn--bcher-kva.ü", "xn--ls8h.ü", "xn--a!.ü", "xn--abc-.ü", "xn--.ü", "xn--a。example",
+  "xn--bcüer-kva.example", "xn---е-.example。", "xn--xト-.EXAMPLE", "xN--xü-", "xn--ｕ.ü",
+  "xn--bcüer.example./", "xn--bcüer..example/", "xn--a%2Db/", "xn--a%FF/", "xn%2D%2Dbc%C3%BCer/",
+  "xn--bc%2eüer.example/", "\u00adxn--bcüer.example/", "xn--bc\u00adüer.example/",
+  "xn--bcｕer.example/", "xn--bcher-kｖa.example/", "ａ--bcüer.example/", "xn＿＿bcüer.example/",
+  "xn--bcher-kva.example:443/", "user:pass@xn--bcüer.example/", "xn--bcüer@example.com/",
+  "example.com@xn--bcüer/", "[::1]", "127.0.0.1", "xn--bcüer.1", "xn--.example",
 ];
 
 const cases: Case[] = [];
@@ -203,24 +99,9 @@ for (const prefix of prefixes) {
 // All-ASCII invalid punycode and decoded-disallowed forms, with and without a
 // non-ASCII sibling that forces UTS #46 processing.
 const allASCIILabels = [
-  "xn--",
-  "xn--a",
-  "xn--a-",
-  "xn--abc-",
-  "xn--a!",
-  "xn--u",
-  "xn--u-kva",
-  "xn--ls8h",
-  "xn--0ca",
-  "xn--a-ecp",
-  "xn--bcher-kva",
-  "xn--bcher-ka",
-  "xn--bcher-Rkva",
-  "xn--bcher-kvaexamgle",
-  "xn--cher1kva",
-  "xn--bcherkva",
-  "xn--xn--a",
-  "xn---",
+  "xn--", "xn--a", "xn--a-", "xn--abc-", "xn--a!", "xn--u", "xn--u-kva", "xn--ls8h",
+  "xn--0ca", "xn--a-ecp", "xn--bcher-kva", "xn--bcher-ka", "xn--bcher-Rkva",
+  "xn--bcher-kvaexamgle", "xn--cher1kva", "xn--bcherkva", "xn--xn--a", "xn---",
 ];
 for (const label of allASCIILabels) {
   for (const suffix of [".example", ".example.", ".ü", "。example", ""]) {
@@ -236,28 +117,11 @@ for (const scheme of schemes) {
 }
 
 // Relative references against special and opaque bases.
-const bases = [
-  "https://base.example/a/",
-  "http://base.example/",
-  "file:///a/b",
-  "foo://base.example/a/",
-  "blob:https://base.example/",
-];
+const bases = ["https://base.example/a/", "http://base.example/", "file:///a/b", "foo://base.example/a/", "blob:https://base.example/"];
 const refs = [
-  "//xn--bcüer.example/",
-  "\\\\xn--bcüer.example/",
-  "/\\xn--bcüer.example/",
-  "///xn--bcüer.example/",
-  "//@xn--bcüer.example/",
-  "//xn--。example/",
-  "//xn--.example/",
-  "xn--bcüer.example",
-  "/xn--bcüer.example",
-  "\\xn--bcüer.example",
-  "?q",
-  "#f",
-  "//",
-  "",
+  "//xn--bcüer.example/", "\\\\xn--bcüer.example/", "/\\xn--bcüer.example/", "///xn--bcüer.example/",
+  "//@xn--bcüer.example/", "//xn--。example/", "//xn--.example/", "xn--bcüer.example", "/xn--bcüer.example",
+  "\\xn--bcüer.example", "?q", "#f", "//", "",
 ];
 for (const base of bases) {
   for (const ref of refs) add(ref, base);

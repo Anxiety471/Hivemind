@@ -15,8 +15,8 @@
  */
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { createHmac, randomBytes } from "node:crypto";
 import { createServer } from "node:http";
+import { createHmac, randomBytes } from "node:crypto";
 import { createInterface } from "node:readline";
 import { routineWakeupJob } from "../../../packages/adapter-kit/src/background-jobs.js";
 import { PostgresRealtimeFanout } from "../../../packages/adapters/src/notifications/realtime.js";
@@ -24,24 +24,24 @@ import {
   RunJobPublisher,
   RunStarter,
 } from "../../../packages/adapters/src/runs/wakeups/run-wakeup.js";
-import { wakeRun } from "../../../packages/adapters/src/runs/wakeups/wake-run.js";
 import { GraphileJobPublisher } from "../../../packages/adapters/src/runs/wakeups/wakeup.js";
-import {
-  asSystem,
-  cancelRunsInTransaction,
-  createDb,
-  runAsTenant,
-} from "../../../packages/db/src/index.js";
+import { wakeRun } from "../../../packages/adapters/src/runs/wakeups/wake-run.js";
 import { createRoutineTestRun } from "../../api/src/routines/routines.js";
+import {
+  cancelSupersededQueuedRuns,
+  enqueueRunsNeedingContinue,
+} from "../../api/src/threads/thread-target.js";
 import {
   cancelThreadRuns,
   STOPPED_BY_MESSAGE_NOTE,
   stoppedRoutineNote,
 } from "../../api/src/threads/thread-stop.js";
 import {
-  cancelSupersededQueuedRuns,
-  enqueueRunsNeedingContinue,
-} from "../../api/src/threads/thread-target.js";
+  asSystem,
+  cancelRunsInTransaction,
+  createDb,
+  runAsTenant,
+} from "../../../packages/db/src/index.js";
 
 const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) throw new Error("DATABASE_URL is required");
@@ -57,10 +57,7 @@ const child = spawn(GO_PROOF_BIN, [], {
 });
 process.on("exit", () => child.kill());
 const lines = createInterface({ input: child.stdout! });
-const pending = new Map<
-  number,
-  { resolve: (value: any) => void; reject: (error: Error) => void }
->();
+const pending = new Map<number, { resolve: (value: any) => void; reject: (error: Error) => void }>();
 let nextRequest = 0;
 lines.on("line", (line) => {
   const message = JSON.parse(line);
@@ -147,12 +144,7 @@ async function makeFixture(label: string): Promise<Fixture> {
     computerId: id(`computer-${label}`),
   };
   await system.user.create({
-    data: {
-      id: fixture.userId,
-      name: `Run ${label}`,
-      email: `${fixture.userId}@example.test`,
-      emailVerified: true,
-    },
+    data: { id: fixture.userId, name: `Run ${label}`, email: `${fixture.userId}@example.test`, emailVerified: true },
   });
   await system.organization.create({
     data: { id: fixture.orgId, name: `Runs ${label}`, slug: fixture.orgId, createdAt: new Date() },
@@ -167,12 +159,7 @@ async function makeFixture(label: string): Promise<Fixture> {
     },
   });
   await system.space.create({
-    data: {
-      id: fixture.spaceId,
-      organizationId: fixture.orgId,
-      name: `Space ${label}`,
-      isDefault: true,
-    },
+    data: { id: fixture.spaceId, organizationId: fixture.orgId, name: `Space ${label}`, isDefault: true },
   });
   await system.spaceMember.create({
     data: {
@@ -282,9 +269,7 @@ const CUID = /c[a-z0-9]{24}/;
 /** Any id left unlabeled would differ between the two sides: fail loudly. */
 function assertNoRawIds(value: unknown, where: string): void {
   if (Array.isArray(value)) {
-    value.forEach((item, index) => {
-      assertNoRawIds(item, `${where}[${index}]`);
-    });
+    value.forEach((item, index) => assertNoRawIds(item, `${where}[${index}]`));
     return;
   }
   if (value && typeof value === "object" && !(value instanceof Date)) {
@@ -314,12 +299,7 @@ function sortNormalized(snapshot: any): any {
   return out;
 }
 
-async function snapshot(scope: {
-  spaceId: string;
-  threadId: string;
-  routineId: string;
-  botId: string;
-}): Promise<any> {
+async function snapshot(scope: { spaceId: string; threadId: string; routineId: string; botId: string }): Promise<any> {
   const runs = await system.run.findMany({
     where: { spaceId: scope.spaceId },
     orderBy: [{ createdAt: "asc" }, { id: "asc" }],
@@ -330,10 +310,7 @@ async function snapshot(scope: {
     orderBy: [{ createdAt: "asc" }, { id: "asc" }],
   });
   const attempts = runIds.length
-    ? await system.attempt.findMany({
-        where: { runId: { in: runIds } },
-        orderBy: [{ fence: "asc" }, { id: "asc" }],
-      })
+    ? await system.attempt.findMany({ where: { runId: { in: runIds } }, orderBy: [{ fence: "asc" }, { id: "asc" }] })
     : [];
   const steering = await system.steeringMessage.findMany({
     where: { bot: { spaceId: scope.spaceId } },
@@ -410,43 +387,28 @@ async function sideState(side: Side): Promise<any> {
   for (const message of raw.messages) labels.set(message.id, `<message:${message.seq}>`);
   for (const run of raw.runs) {
     if (!labels.has(run.id)) {
-      labels.set(
-        run.id,
-        `<run:${replaceIds(run.trigger, labels)}:${run.status}:${replaceIds(run.clientNonce ?? "", labels)}>`,
-      );
+      labels.set(run.id, `<run:${replaceIds(run.trigger, labels)}:${run.status}:${replaceIds(run.clientNonce ?? "", labels)}>`);
     }
     if (!labels.has(run.taskId)) labels.set(run.taskId, `<task-of:${labels.get(run.id)}>`);
   }
   for (const attempt of raw.attempts) {
-    labels.set(
-      attempt.id,
-      `<attempt:${labels.get(attempt.runId) ?? attempt.runId}:${attempt.fence}>`,
-    );
+    labels.set(attempt.id, `<attempt:${labels.get(attempt.runId) ?? attempt.runId}:${attempt.fence}>`);
   }
   for (const steeringRow of raw.steering) {
-    labels.set(
-      steeringRow.id,
-      `<steering:${labels.get(steeringRow.messageId) ?? steeringRow.messageId}>`,
-    );
+    labels.set(steeringRow.id, `<steering:${labels.get(steeringRow.messageId) ?? steeringRow.messageId}>`);
   }
   const secretRows = [...raw.secrets].sort((a, b) =>
     replaceIds(a.kind, labels).localeCompare(replaceIds(b.kind, labels)),
   );
-  secretRows.forEach((secret, index) => {
-    labels.set(secret.id, `<secret:${index + 1}:${secret.kind}>`);
-  });
+  secretRows.forEach((secret, index) => labels.set(secret.id, `<secret:${index + 1}:${secret.kind}>`));
   const effectRows = [...raw.effects].sort((a, b) =>
-    `${replaceIds(a.kind, labels)}:${a.status}`.localeCompare(
-      `${replaceIds(b.kind, labels)}:${b.status}`,
-    ),
+    `${replaceIds(a.kind, labels)}:${a.status}`.localeCompare(`${replaceIds(b.kind, labels)}:${b.status}`),
   );
-  effectRows.forEach((effect, index) => {
-    labels.set(effect.id, `<effect:${index + 1}:${replaceIds(effect.kind, labels)}>`);
-  });
-  for (const lease of raw.leases)
-    labels.set(lease.id, `<lease:${labels.get(lease.runId) ?? lease.runId}>`);
-  for (const job of raw.jobs)
-    labels.set(job.id, `<job:${job.task}:${job.key ? replaceIds(job.key, labels) : ""}>`);
+  effectRows.forEach((effect, index) =>
+    labels.set(effect.id, `<effect:${index + 1}:${replaceIds(effect.kind, labels)}>`),
+  );
+  for (const lease of raw.leases) labels.set(lease.id, `<lease:${labels.get(lease.runId) ?? lease.runId}>`);
+  for (const job of raw.jobs) labels.set(job.id, `<job:${job.task}:${job.key ? replaceIds(job.key, labels) : ""}>`);
   const normalized = deepReplace(raw, labels);
   assertNoRawIds(normalized, "snapshot");
   return sortNormalized(normalized);
@@ -583,14 +545,9 @@ async function create(
           select: { modelProvider: true, modelId: true, thinkingLevel: true },
         })
       : undefined;
-    const routinePin =
-      routine?.modelProvider && routine.modelId
-        ? {
-            provider: routine.modelProvider,
-            model: routine.modelId,
-            thinking: routine.thinkingLevel,
-          }
-        : undefined;
+    const routinePin = routine?.modelProvider && routine.modelId
+      ? { provider: routine.modelProvider, model: routine.modelId, thinking: routine.thinkingLevel }
+      : undefined;
     const response = await go({
       op: "create",
       actor: { spaceId: fixture.spaceId, userId: fixture.userId },
@@ -724,10 +681,7 @@ async function cancelActive(side: Side, runIds: string[], at: Date): Promise<voi
 }
 
 async function assertPinnedCompletion(runId: string, at: Date): Promise<void> {
-  const run = await system.run.findUniqueOrThrow({
-    where: { id: runId },
-    select: { completedAt: true },
-  });
+  const run = await system.run.findUniqueOrThrow({ where: { id: runId }, select: { completedAt: true } });
   assert.equal(
     run.completedAt?.getTime(),
     at.getTime(),
@@ -829,77 +783,67 @@ if (picked("create-empty-prompt")) {
 }
 
 if (picked("wake-many")) {
-  await scenario(
-    "wake-many",
-    async (side) => {
-      const queued = await create(side, { trigger: "user", at: PINNED, label: "<run:queued>" });
-      const takeover = await create(side, {
-        trigger: "follow_up",
-        at: new Date(PINNED.getTime() + 1),
-        label: "<run:takeover>",
+  await scenario("wake-many", async (side) => {
+    const queued = await create(side, { trigger: "user", at: PINNED, label: "<run:queued>" });
+    const takeover = await create(side, {
+      trigger: "follow_up",
+      at: new Date(PINNED.getTime() + 1),
+      label: "<run:takeover>",
+    });
+    await system.run.update({ where: { id: takeover.runId }, data: { status: "waiting_takeover" } });
+    const waiting = await create(side, {
+      trigger: "follow_up",
+      at: new Date(PINNED.getTime() + 2),
+      label: "<run:waiting>",
+    });
+    await system.run.update({ where: { id: waiting.runId }, data: { status: "waiting_input" } });
+    const finished = await create(side, {
+      trigger: "user",
+      at: new Date(PINNED.getTime() + 3),
+      label: "<run:finished>",
+    });
+    await system.run.update({
+      where: { id: finished.runId },
+      data: { status: "completed", completedAt: new Date("2026-11-22T08:09:00.000Z") },
+    });
+    const candidates = [
+      { id: waiting.runId, status: "waiting_input" },
+      { id: queued.runId, status: "queued" },
+      { id: takeover.runId, status: "waiting_takeover" },
+      { id: finished.runId, status: "completed" },
+    ];
+    if (side.kind === "ts") {
+      const starter = new RunStarter(fanout);
+      const jobs = new RunJobPublisher(system as any, idleBackground, starter);
+      await runAsTenant({ spaceId: side.fixture.spaceId, userId: side.fixture.userId }, () =>
+        enqueueRunsNeedingContinue(jobs, candidates),
+      );
+      await settleFrames();
+      await starter.stop();
+    } else {
+      await go({
+        op: "wakeMany",
+        actor: { spaceId: side.fixture.spaceId, userId: side.fixture.userId },
+        threadId: side.fixture.threadId,
+        runIds: candidates.map((candidate) => candidate.id),
       });
-      await system.run.update({
-        where: { id: takeover.runId },
-        data: { status: "waiting_takeover" },
-      });
-      const waiting = await create(side, {
-        trigger: "follow_up",
-        at: new Date(PINNED.getTime() + 2),
-        label: "<run:waiting>",
-      });
-      await system.run.update({ where: { id: waiting.runId }, data: { status: "waiting_input" } });
-      const finished = await create(side, {
-        trigger: "user",
-        at: new Date(PINNED.getTime() + 3),
-        label: "<run:finished>",
-      });
-      await system.run.update({
-        where: { id: finished.runId },
-        data: { status: "completed", completedAt: new Date("2026-11-22T08:09:00.000Z") },
-      });
-      const candidates = [
-        { id: waiting.runId, status: "waiting_input" },
-        { id: queued.runId, status: "queued" },
-        { id: takeover.runId, status: "waiting_takeover" },
-        { id: finished.runId, status: "completed" },
-      ];
-      if (side.kind === "ts") {
-        const starter = new RunStarter(fanout);
-        const jobs = new RunJobPublisher(system as any, idleBackground, starter);
-        await runAsTenant({ spaceId: side.fixture.spaceId, userId: side.fixture.userId }, () =>
-          enqueueRunsNeedingContinue(jobs, candidates),
-        );
-        await settleFrames();
-        await starter.stop();
-      } else {
-        await go({
-          op: "wakeMany",
-          actor: { spaceId: side.fixture.spaceId, userId: side.fixture.userId },
-          threadId: side.fixture.threadId,
-          runIds: candidates.map((candidate) => candidate.id),
-        });
+    }
+    // A wake without an explicit `at` writes the wall clock on each side, so
+    // pin the observed values after asserting what the filter did.
+    for (const candidate of [
+      { name: "queued", id: queued.runId, woke: true },
+      { name: "waiting_takeover", id: takeover.runId, woke: true },
+      { name: "waiting_input", id: waiting.runId, woke: false },
+      { name: "completed", id: finished.runId, woke: false },
+    ]) {
+      const row = await system.run.findUniqueOrThrow({ where: { id: candidate.id }, select: { wakeAt: true } });
+      assert.equal(Boolean(row.wakeAt), candidate.woke, `${candidate.name} wakeAt`);
+      if (row.wakeAt) {
+        await system.run.update({ where: { id: candidate.id }, data: { wakeAt: PINNED } });
       }
-      // A wake without an explicit `at` writes the wall clock on each side, so
-      // pin the observed values after asserting what the filter did.
-      for (const candidate of [
-        { name: "queued", id: queued.runId, woke: true },
-        { name: "waiting_takeover", id: takeover.runId, woke: true },
-        { name: "waiting_input", id: waiting.runId, woke: false },
-        { name: "completed", id: finished.runId, woke: false },
-      ]) {
-        const row = await system.run.findUniqueOrThrow({
-          where: { id: candidate.id },
-          select: { wakeAt: true },
-        });
-        assert.equal(Boolean(row.wakeAt), candidate.woke, `${candidate.name} wakeAt`);
-        if (row.wakeAt) {
-          await system.run.update({ where: { id: candidate.id }, data: { wakeAt: PINNED } });
-        }
-      }
-      await expectFrames(2, "exactly the two continuation runs are announced");
-    },
-    { unorderedFrames: true },
-  );
+    }
+    await expectFrames(2, "exactly the two continuation runs are announced");
+  }, { unorderedFrames: true });
 }
 
 if (picked("wake-now")) {
@@ -1059,10 +1003,7 @@ async function seedMessage(side: Side, seq: number, text: string): Promise<strin
       createdAt: PINNED,
     },
   });
-  await system.thread.update({
-    where: { id: fixture.threadId },
-    data: { nextMessageSeq: seq + 1 },
-  });
+  await system.thread.update({ where: { id: fixture.threadId }, data: { nextMessageSeq: seq + 1 } });
   return messageId;
 }
 
@@ -1075,11 +1016,7 @@ async function claimRun(side: Side, runId: string): Promise<void> {
 }
 
 /** One run's cancel timestamps: `updatedAt` is statement time, never the caller's clock. */
-async function assertStatementTime(
-  runId: string,
-  label: string,
-  completedAt?: Date | null,
-): Promise<void> {
+async function assertStatementTime(runId: string, label: string, completedAt?: Date | null): Promise<void> {
   const row = await system.run.findUniqueOrThrow({
     where: { id: runId },
     select: { updatedAt: true, completedAt: true },
@@ -1093,11 +1030,7 @@ async function assertStatementTime(
       `${label} completedAt must be its own now, drifted ${completedDrift}ms`,
     );
   } else if (completedAt) {
-    assert.equal(
-      row.completedAt?.getTime(),
-      completedAt.getTime(),
-      `${label} completedAt must be pinned`,
-    );
+    assert.equal(row.completedAt?.getTime(), completedAt.getTime(), `${label} completedAt must be pinned`);
   }
 }
 
@@ -1114,12 +1047,7 @@ async function cancelConversation(side: Side, options: CancelConversationOptions
   if (side.kind === "ts") {
     const result = await runAsTenant({ spaceId: fixture.spaceId, userId: fixture.userId }, () =>
       prisma.$transaction(
-        cancelThreadRuns(
-          { spaceId: fixture.spaceId },
-          target,
-          options.note,
-          options.helperMessageId,
-        ),
+        cancelThreadRuns({ spaceId: fixture.spaceId }, target, options.note, options.helperMessageId),
         { timeout: 20_000 },
       ),
     );
@@ -1160,27 +1088,18 @@ async function cancelWithCredentialOrigin(
   effectStatus: "denied" | "intended",
 ): Promise<void> {
   const runId = await seedActiveRun(side, label);
-  const message = await system.message.findFirstOrThrow({
-    where: { runId },
-    orderBy: { seq: "desc" },
-  });
+  const message = await system.message.findFirstOrThrow({ where: { runId }, orderBy: { seq: "desc" } });
   await system.message.update({
     where: { id: message.id },
     data: {
       blocks: [
         ...(message.blocks as any[]),
-        {
-          kind: "ask",
-          text: `Use ${origin}`,
-          credential: { name: "site_key", origin, auth: { type: "bearer" } },
-        },
+        { kind: "ask", text: `Use ${origin}`, credential: { name: "site_key", origin, auth: { type: "bearer" } } },
       ],
     },
   });
   await cancelActive(side, [runId], new Date("2026-11-22T08:10:00.000Z"));
-  const effect = await system.externalEffect.findFirstOrThrow({
-    where: { runId, kind: "web_fetch" },
-  });
+  const effect = await system.externalEffect.findFirstOrThrow({ where: { runId, kind: "web_fetch" } });
   assert.equal(effect.status, effectStatus, `${side.kind}: origin ${JSON.stringify(origin)}`);
 }
 
@@ -1207,200 +1126,121 @@ if (picked("cancel-malformed-ask")) {
     // the whole list, so neither side may deny the ask's effect.
     await system.message.update({
       where: { id: message.id },
-      data: {
-        blocks: [...(message.blocks as any[]), { kind: "card", lines: [{ k: "missing-v" }] }],
-      },
+      data: { blocks: [...(message.blocks as any[]), { kind: "card", lines: [{ k: "missing-v" }] }] },
     });
     await cancelActive(side, [runId], new Date("2026-11-22T08:10:00.000Z"));
     const effect = await system.externalEffect.findFirstOrThrow({
       where: { runId, kind: "web_fetch" },
     });
-    assert.equal(
-      effect.status,
-      "intended",
-      `${side.kind}: a malformed block makes the whole ask list unparseable`,
-    );
+    assert.equal(effect.status, "intended", `${side.kind}: a malformed block makes the whole ask list unparseable`);
   });
 }
 
 if (picked("cancel-nested-credential")) {
   await scenario("cancel-nested-credential", async (side) => {
     const runId = await seedActiveRun(side, "nested-credential");
-    const message = await system.message.findFirstOrThrow({
-      where: { runId },
-      orderBy: { seq: "desc" },
-    });
+    const message = await system.message.findFirstOrThrow({ where: { runId }, orderBy: { seq: "desc" } });
     await system.message.update({
       where: { id: message.id },
       data: {
         blocks: [
           ...(message.blocks as any[]),
           {
-            kind: "ask",
-            text: "Sign in",
-            credential: {
-              name: "site_login",
-              origin: "https://www.example.test",
-              auth: { type: "login" },
-            },
+            kind: "ask", text: "Sign in",
+            credential: { name: "site_login", origin: "https://www.example.test", auth: { type: "login" } },
           },
         ],
       },
     });
     await cancelActive(side, [runId], new Date("2026-11-22T08:10:00.000Z"));
-    const effect = await system.externalEffect.findFirstOrThrow({
-      where: { runId, kind: "web_fetch" },
-    });
-    assert.equal(
-      effect.status,
-      "denied",
-      `${side.kind}: a valid credential ask must not abort the cancel`,
-    );
+    const effect = await system.externalEffect.findFirstOrThrow({ where: { runId, kind: "web_fetch" } });
+    assert.equal(effect.status, "denied", `${side.kind}: a valid credential ask must not abort the cancel`);
   });
 }
 
 if (picked("cancel-nested-onetimecode")) {
   await scenario("cancel-nested-onetimecode", async (side) => {
     const runId = await seedActiveRun(side, "nested-onetimecode");
-    const message = await system.message.findFirstOrThrow({
-      where: { runId },
-      orderBy: { seq: "desc" },
-    });
+    const message = await system.message.findFirstOrThrow({ where: { runId }, orderBy: { seq: "desc" } });
     await system.message.update({
       where: { id: message.id },
       data: {
         blocks: [
           ...(message.blocks as any[]),
-          {
-            kind: "ask",
-            text: "Enter the code",
-            oneTimeCode: { origin: "https://www.example.test" },
-          },
+          { kind: "ask", text: "Enter the code", oneTimeCode: { origin: "https://www.example.test" } },
         ],
       },
     });
     await cancelActive(side, [runId], new Date("2026-11-22T08:10:00.000Z"));
-    const effect = await system.externalEffect.findFirstOrThrow({
-      where: { runId, kind: "web_fetch" },
-    });
-    assert.equal(
-      effect.status,
-      "denied",
-      `${side.kind}: a valid oneTimeCode ask must not abort the cancel`,
-    );
+    const effect = await system.externalEffect.findFirstOrThrow({ where: { runId, kind: "web_fetch" } });
+    assert.equal(effect.status, "denied", `${side.kind}: a valid oneTimeCode ask must not abort the cancel`);
   });
 }
 
 if (picked("cancel-run-import-setup")) {
   await scenario("cancel-run-import-setup", async (side) => {
     const runId = await seedActiveRun(side, "run-import-setup");
-    const message = await system.message.findFirstOrThrow({
-      where: { runId },
-      orderBy: { seq: "desc" },
-    });
+    const message = await system.message.findFirstOrThrow({ where: { runId }, orderBy: { seq: "desc" } });
     await system.message.update({
       where: { id: message.id },
       data: {
         blocks: [
           ...(message.blocks as any[]),
-          {
-            kind: "import_setup",
-            items: [{ kind: "model", title: "M", provider: "p", providerName: "P" }],
-          },
+          { kind: "import_setup", items: [{ kind: "model", title: "M", provider: "p", providerName: "P" }] },
         ],
       },
     });
     await cancelActive(side, [runId], new Date("2026-11-22T08:10:00.000Z"));
-    const effect = await system.externalEffect.findFirstOrThrow({
-      where: { runId, kind: "web_fetch" },
-    });
-    assert.equal(
-      effect.status,
-      "denied",
-      `${side.kind}: a run-linked import_setup must not abort the cancel`,
-    );
+    const effect = await system.externalEffect.findFirstOrThrow({ where: { runId, kind: "web_fetch" } });
+    assert.equal(effect.status, "denied", `${side.kind}: a run-linked import_setup must not abort the cancel`);
   });
 }
 
 if (picked("cancel-malformed-nested-credential")) {
   await scenario("cancel-malformed-nested-credential", async (side) => {
     const runId = await seedActiveRun(side, "malformed-nested-credential");
-    const message = await system.message.findFirstOrThrow({
-      where: { runId },
-      orderBy: { seq: "desc" },
-    });
+    const message = await system.message.findFirstOrThrow({ where: { runId }, orderBy: { seq: "desc" } });
     await system.message.update({
       where: { id: message.id },
       data: {
         blocks: [
           ...(message.blocks as any[]),
           {
-            kind: "ask",
-            text: "Sign in",
-            credential: {
-              name: "k",
-              origin: "https://www.example.test",
-              auth: { type: "header", name: "Host" },
-            },
+            kind: "ask", text: "Sign in",
+            credential: { name: "k", origin: "https://www.example.test", auth: { type: "header", name: "Host" } },
           },
         ],
       },
     });
     await cancelActive(side, [runId], new Date("2026-11-22T08:10:00.000Z"));
-    const effect = await system.externalEffect.findFirstOrThrow({
-      where: { runId, kind: "web_fetch" },
-    });
-    assert.equal(
-      effect.status,
-      "intended",
-      `${side.kind}: a malformed nested credential drops the whole list`,
-    );
+    const effect = await system.externalEffect.findFirstOrThrow({ where: { runId, kind: "web_fetch" } });
+    assert.equal(effect.status, "intended", `${side.kind}: a malformed nested credential drops the whole list`);
   });
 }
 
 if (picked("cancel-origin-empty-userinfo")) {
   await scenario("cancel-origin-empty-userinfo", (side) =>
-    cancelWithCredentialOrigin(side, "origin-empty-userinfo", "https://@example.com", "denied"),
-  );
+    cancelWithCredentialOrigin(side, "origin-empty-userinfo", "https://@example.com", "denied"));
 }
 
 if (picked("cancel-origin-percent-host")) {
   await scenario("cancel-origin-percent-host", (side) =>
-    cancelWithCredentialOrigin(side, "origin-percent-host", "https://exa%6dple.com", "denied"),
-  );
+    cancelWithCredentialOrigin(side, "origin-percent-host", "https://exa%6dple.com", "denied"));
 }
 
 if (picked("cancel-origin-unicode-space")) {
   await scenario("cancel-origin-unicode-space", (side) =>
-    cancelWithCredentialOrigin(
-      side,
-      "origin-unicode-space",
-      "https://example.com\u00a0",
-      "intended",
-    ),
-  );
+    cancelWithCredentialOrigin(side, "origin-unicode-space", "https://example.com\u00a0", "intended"));
 }
 
 if (picked("cancel-origin-fullwidth-dot")) {
   await scenario("cancel-origin-fullwidth-dot", (side) =>
-    cancelWithCredentialOrigin(
-      side,
-      "origin-fullwidth-dot",
-      "https://metadata.google.internal\u3002",
-      "intended",
-    ),
-  );
+    cancelWithCredentialOrigin(side, "origin-fullwidth-dot", "https://metadata.google.internal\u3002", "intended"));
 }
 
 if (picked("cancel-origin-alabel-control")) {
   await scenario("cancel-origin-alabel-control", (side) =>
-    cancelWithCredentialOrigin(
-      side,
-      "origin-alabel-control",
-      "https://xn--bcher-kva.example/",
-      "denied",
-    ),
-  );
+    cancelWithCredentialOrigin(side, "origin-alabel-control", "https://xn--bcher-kva.example/", "denied"));
 }
 
 // A mixed A-label label: Node/ICU throws on the non-ASCII `xn--` label, so the
@@ -1409,13 +1249,7 @@ if (picked("cancel-origin-alabel-control")) {
 // the origin, flipping this effect to denied.
 if (picked("cancel-origin-mixed-alabel")) {
   await scenario("cancel-origin-mixed-alabel", (side) =>
-    cancelWithCredentialOrigin(
-      side,
-      "origin-mixed-alabel",
-      "https://xn--bcüer-kva.example/",
-      "intended",
-    ),
-  );
+    cancelWithCredentialOrigin(side, "origin-mixed-alabel", "https://xn--bcüer-kva.example/", "intended"));
 }
 
 // A valid A-label whose decoded label contains a code point ICU's UTS #46
@@ -1423,21 +1257,14 @@ if (picked("cancel-origin-mixed-alabel")) {
 // accepts the origin, so the open effect must be denied on both sides.
 if (picked("cancel-origin-icu-alabel")) {
   await scenario("cancel-origin-icu-alabel", (side) =>
-    cancelWithCredentialOrigin(side, "origin-icu-alabel", "https://xn--csfe.ü/", "denied"),
-  );
+    cancelWithCredentialOrigin(side, "origin-icu-alabel", "https://xn--csfe.ü/", "denied"));
 }
 
 // The reverse direction: Node/ICU rejects this A-label once the domain becomes
 // non-ASCII, so the ask list is unparseable and the effect stays intended.
 if (picked("cancel-origin-alabel-reverse")) {
   await scenario("cancel-origin-alabel-reverse", (side) =>
-    cancelWithCredentialOrigin(
-      side,
-      "origin-alabel-reverse",
-      "https://xn--nybvznylx.i.ü/",
-      "intended",
-    ),
-  );
+    cancelWithCredentialOrigin(side, "origin-alabel-reverse", "https://xn--nybvznylx.i.ü/", "intended"));
 }
 
 if (picked("cancel-finished")) {
@@ -1463,12 +1290,7 @@ if (picked("cancel-other-space")) {
     const otherSpace = id("other-space");
     side.remember(otherSpace, "<other-space>");
     await system.space.create({
-      data: {
-        id: otherSpace,
-        organizationId: fixture.orgId,
-        name: "Other Space",
-        isDefault: false,
-      },
+      data: { id: otherSpace, organizationId: fixture.orgId, name: "Other Space", isDefault: false },
     });
     await system.spaceMember.create({
       data: {
@@ -1566,12 +1388,7 @@ if (picked("cancel-conversation")) {
     });
     await system.thread.update({ where: { id: fixture.threadId }, data: { nextMessageSeq: 3 } });
     await system.steeringMessage.create({
-      data: {
-        id: id("steering"),
-        messageId: steeringMessage.id,
-        botId: fixture.botId,
-        userId: fixture.userId,
-      },
+      data: { id: id("steering"), messageId: steeringMessage.id, botId: fixture.botId, userId: fixture.userId },
     });
     await system.event.create({
       data: {
@@ -1617,30 +1434,15 @@ if (picked("supersede-queued")) {
     side.remember(staleRunId, "<run:stale>");
     const staleTask = await system.task.create({
       data: {
-        id: staleTaskId,
-        spaceId: fixture.spaceId,
-        botId: fixture.botId,
-        threadId: fixture.threadId,
-        userId: fixture.userId,
-        prompt: "first",
-        status: "queued",
-        createdAt: PINNED,
-        updatedAt: PINNED,
+        id: staleTaskId, spaceId: fixture.spaceId, botId: fixture.botId, threadId: fixture.threadId,
+        userId: fixture.userId, prompt: "first", status: "queued", createdAt: PINNED, updatedAt: PINNED,
       },
     });
     await system.run.create({
       data: {
-        id: staleRunId,
-        spaceId: fixture.spaceId,
-        botId: fixture.botId,
-        threadId: fixture.threadId,
-        taskId: staleTask.id,
-        userId: fixture.userId,
-        status: "queued",
-        trigger: "user",
-        sourceMessageId: source.id,
-        createdAt: PINNED,
-        updatedAt: PINNED,
+        id: staleRunId, spaceId: fixture.spaceId, botId: fixture.botId, threadId: fixture.threadId,
+        taskId: staleTask.id, userId: fixture.userId, status: "queued", trigger: "user",
+        sourceMessageId: source.id, createdAt: PINNED, updatedAt: PINNED,
       },
     });
     const freshTaskId = id("fresh-task");
@@ -1649,30 +1451,15 @@ if (picked("supersede-queued")) {
     side.remember(freshRunId, "<run:fresh>");
     const freshTask = await system.task.create({
       data: {
-        id: freshTaskId,
-        spaceId: fixture.spaceId,
-        botId: fixture.botId,
-        threadId: fixture.threadId,
-        userId: fixture.userId,
-        prompt: "second",
-        status: "queued",
-        createdAt: PINNED,
-        updatedAt: PINNED,
+        id: freshTaskId, spaceId: fixture.spaceId, botId: fixture.botId, threadId: fixture.threadId,
+        userId: fixture.userId, prompt: "second", status: "queued", createdAt: PINNED, updatedAt: PINNED,
       },
     });
     await system.run.create({
       data: {
-        id: freshRunId,
-        spaceId: fixture.spaceId,
-        botId: fixture.botId,
-        threadId: fixture.threadId,
-        taskId: freshTask.id,
-        userId: fixture.userId,
-        status: "queued",
-        trigger: "user",
-        sourceMessageId: source.id,
-        createdAt: PINNED,
-        updatedAt: PINNED,
+        id: freshRunId, spaceId: fixture.spaceId, botId: fixture.botId, threadId: fixture.threadId,
+        taskId: freshTask.id, userId: fixture.userId, status: "queued", trigger: "user",
+        sourceMessageId: source.id, createdAt: PINNED, updatedAt: PINNED,
       },
     });
     if (side.kind === "ts") {
@@ -1693,10 +1480,7 @@ if (picked("supersede-queued")) {
       });
     }
     // cancelSupersededQueuedRuns stamps its own now (thread-target.ts:266-271).
-    if (
-      (await system.run.findUniqueOrThrow({ where: { id: staleRunId }, select: { status: true } }))
-        .status !== "cancelled"
-    ) {
+    if ((await system.run.findUniqueOrThrow({ where: { id: staleRunId }, select: { status: true } })).status !== "cancelled") {
       throw new Error("the superseded run must be cancelled");
     }
     await assertStatementTime(staleRunId, "supersede", null);
@@ -1826,10 +1610,7 @@ if (picked("wake-keep-existing-fill")) {
   await scenario("wake-keep-existing-fill", async (side) => {
     const created = await create(side, { trigger: "user", at: PINNED });
     await wake(side, created.runId, { keepExisting: true });
-    const row = await system.run.findUniqueOrThrow({
-      where: { id: created.runId },
-      select: { wakeAt: true },
-    });
+    const row = await system.run.findUniqueOrThrow({ where: { id: created.runId }, select: { wakeAt: true } });
     assert.ok(row.wakeAt, "keepExisting must fill an empty wake time");
     // The written instant is each side's wall clock: pin it for the comparison.
     await system.run.update({ where: { id: created.runId }, data: { wakeAt: PINNED } });
@@ -1844,122 +1625,110 @@ if (picked("wake-clock")) {
     // (run-wakeup.ts:88-93).
     await wake(side, created.runId, { now: new Date(Date.now() - 50) });
     await expectFrames(1, "the caller's older clock must not suppress the frame");
-    const row = await system.run.findUniqueOrThrow({
-      where: { id: created.runId },
-      select: { wakeAt: true },
-    });
+    const row = await system.run.findUniqueOrThrow({ where: { id: created.runId }, select: { wakeAt: true } });
     assert.ok(row.wakeAt, "the wake must be written");
     await system.run.update({ where: { id: created.runId }, data: { wakeAt: PINNED } });
   });
 }
 
 if (picked("by-thread-user-nonce")) {
-  await check(
-    "by-thread-user-nonce: the replay predicate is {threadId, userId, clientNonce}",
-    async () => {
-      const results: Record<string, any> = {};
-      const nonce = "routine-run:proof:lookup";
-      for (const kind of ["ts", "go"] as const) {
-        const fixture = await makeFixture(`lookup-${kind}`);
-        const side: Side = {
-          kind,
-          fixture,
-          labels: baseLabels(fixture),
-          remember(actual, label) {
-            this.labels.set(actual, label);
+  await check("by-thread-user-nonce: the replay predicate is {threadId, userId, clientNonce}", async () => {
+    const results: Record<string, any> = {};
+    const nonce = "routine-run:proof:lookup";
+    for (const kind of ["ts", "go"] as const) {
+      const fixture = await makeFixture(`lookup-${kind}`);
+      const side: Side = {
+        kind,
+        fixture,
+        labels: baseLabels(fixture),
+        remember(actual, label) {
+          this.labels.set(actual, label);
+        },
+      };
+      try {
+        const created = await create(side, { trigger: "routine", nonce, at: PINNED });
+        const otherThread = id(`other-thread-${kind}`);
+        // A thread needs exactly one owner (threads_owner_chk): give it a bot.
+        const otherBot = id(`other-bot-${kind}`);
+        await system.bot.create({
+          data: { id: otherBot, spaceId: fixture.spaceId, userId: fixture.userId, name: "Other bot", color: "green" },
+        });
+        await system.thread.create({
+          data: {
+            id: otherThread,
+            spaceId: fixture.spaceId,
+            userId: fixture.userId,
+            botId: otherBot,
+            nextMessageSeq: 1,
+            nextEventSeq: 1,
           },
-        };
-        try {
-          const created = await create(side, { trigger: "routine", nonce, at: PINNED });
-          const otherThread = id(`other-thread-${kind}`);
-          // A thread needs exactly one owner (threads_owner_chk): give it a bot.
-          const otherBot = id(`other-bot-${kind}`);
-          await system.bot.create({
-            data: {
-              id: otherBot,
-              spaceId: fixture.spaceId,
-              userId: fixture.userId,
-              name: "Other bot",
-              color: "green",
-            },
+        });
+        const otherUser = id(`other-user-${kind}`);
+        await system.user.create({
+          data: {
+            id: otherUser,
+            name: "Other User",
+            email: `${otherUser}@example.test`,
+            emailVerified: true,
+          },
+        });
+        if (kind === "ts") {
+          // routes/routines.ts:369-380: the outer precheck names the person too.
+          const same = await system.run.findFirst({
+            where: { threadId: fixture.threadId, userId: fixture.userId, clientNonce: nonce },
+            select: { id: true },
           });
-          await system.thread.create({
-            data: {
-              id: otherThread,
-              spaceId: fixture.spaceId,
-              userId: fixture.userId,
-              botId: otherBot,
-              nextMessageSeq: 1,
-              nextEventSeq: 1,
-            },
+          const elsewhere = await system.run.findFirst({
+            where: { threadId: otherThread, userId: fixture.userId, clientNonce: nonce },
+            select: { id: true },
           });
-          const otherUser = id(`other-user-${kind}`);
-          await system.user.create({
-            data: {
-              id: otherUser,
-              name: "Other User",
-              email: `${otherUser}@example.test`,
-              emailVerified: true,
-            },
+          const another = await system.run.findFirst({
+            where: { threadId: fixture.threadId, userId: otherUser, clientNonce: nonce },
+            select: { id: true },
           });
-          if (kind === "ts") {
-            // routes/routines.ts:369-380: the outer precheck names the person too.
-            const same = await system.run.findFirst({
-              where: { threadId: fixture.threadId, userId: fixture.userId, clientNonce: nonce },
-              select: { id: true },
-            });
-            const elsewhere = await system.run.findFirst({
-              where: { threadId: otherThread, userId: fixture.userId, clientNonce: nonce },
-              select: { id: true },
-            });
-            const another = await system.run.findFirst({
-              where: { threadId: fixture.threadId, userId: otherUser, clientNonce: nonce },
-              select: { id: true },
-            });
-            results[kind] = {
-              same: same?.id === created.runId,
-              elsewhere: Boolean(elsewhere),
-              another: Boolean(another),
-            };
-          } else {
-            const actor = { spaceId: fixture.spaceId, userId: fixture.userId };
-            const same = await go({
-              op: "byThreadUserNonce",
-              actor,
-              threadId: fixture.threadId,
-              userId: fixture.userId,
-              clientNonce: nonce,
-            });
-            const elsewhere = await go({
-              op: "byThreadUserNonce",
-              actor,
-              threadId: otherThread,
-              userId: fixture.userId,
-              clientNonce: nonce,
-            });
-            const another = await go({
-              op: "byThreadUserNonce",
-              actor,
-              threadId: fixture.threadId,
-              userId: otherUser,
-              clientNonce: nonce,
-            });
-            results[kind] = {
-              same: same.found && same.runId === created.runId,
-              elsewhere: Boolean(elsewhere.found),
-              another: Boolean(another.found),
-            };
-          }
-        } finally {
-          await dropFixture(fixture);
+          results[kind] = {
+            same: same?.id === created.runId,
+            elsewhere: Boolean(elsewhere),
+            another: Boolean(another),
+          };
+        } else {
+          const actor = { spaceId: fixture.spaceId, userId: fixture.userId };
+          const same = await go({
+            op: "byThreadUserNonce",
+            actor,
+            threadId: fixture.threadId,
+            userId: fixture.userId,
+            clientNonce: nonce,
+          });
+          const elsewhere = await go({
+            op: "byThreadUserNonce",
+            actor,
+            threadId: otherThread,
+            userId: fixture.userId,
+            clientNonce: nonce,
+          });
+          const another = await go({
+            op: "byThreadUserNonce",
+            actor,
+            threadId: fixture.threadId,
+            userId: otherUser,
+            clientNonce: nonce,
+          });
+          results[kind] = {
+            same: same.found && same.runId === created.runId,
+            elsewhere: Boolean(elsewhere.found),
+            another: Boolean(another.found),
+          };
         }
+      } finally {
+        await dropFixture(fixture);
       }
-      assert.deepEqual(results.go, results.ts, "lookups");
-      assert.equal(results.ts.same, true, "the same chat and person must replay");
-      assert.equal(results.ts.elsewhere, false, "another chat's run is not a replay");
-      assert.equal(results.ts.another, false, "another person's run is not a replay");
-    },
-  );
+    }
+    assert.deepEqual(results.go, results.ts, "lookups");
+    assert.equal(results.ts.same, true, "the same chat and person must replay");
+    assert.equal(results.ts.elsewhere, false, "another chat's run is not a replay");
+    assert.equal(results.ts.another, false, "another person's run is not a replay");
+  });
 }
 
 if (picked("concurrent-create")) {
@@ -2052,10 +1821,7 @@ if (picked("cancel-conversation-note")) {
 if (picked("cancel-conversation-routine-note")) {
   await scenario("cancel-conversation-routine-note", async (side) => {
     // A fixed name: the note text carries it, and fixtures are side-specific.
-    await system.routine.update({
-      where: { id: side.fixture.routineId },
-      data: { name: "Release bot" },
-    });
+    await system.routine.update({ where: { id: side.fixture.routineId }, data: { name: "Release bot" } });
     const created = await create(side, {
       trigger: "routine",
       routineId: side.fixture.routineId,
@@ -2081,9 +1847,7 @@ if (picked("cancel-conversation-teardown")) {
     const runId = await seedActiveRun(side, "a");
     // The stop must snapshot the run's lease and the computer it names before
     // commit (thread-stop.ts:100-112).
-    const computer = await system.computer.findFirstOrThrow({
-      where: { spaceId: fixture.spaceId },
-    });
+    const computer = await system.computer.findFirstOrThrow({ where: { spaceId: fixture.spaceId } });
     await system.computerExecutionLease.create({
       data: {
         id: id("lease"),
@@ -2128,20 +1892,11 @@ if (picked("cancel-helper-scoped")) {
       label: "<run:helper>",
     });
     await claimRun(side, helper.runId);
-    const unrelated = await create(side, {
-      trigger: "user",
-      at: new Date(PINNED.getTime() + 1),
-      label: "<run:unrelated>",
-    });
+    const unrelated = await create(side, { trigger: "user", at: new Date(PINNED.getTime() + 1), label: "<run:unrelated>" });
     const result = await cancelConversation(side, { helperMessageId: cardId });
     assert.equal(result.cancelled, 1, "only the helper behind the card is stopped");
     assert.deepEqual(
-      (
-        await system.run.findUniqueOrThrow({
-          where: { id: unrelated.runId },
-          select: { status: true },
-        })
-      ).status,
+      (await system.run.findUniqueOrThrow({ where: { id: unrelated.runId }, select: { status: true } })).status,
       "queued",
       "the chat's own run survives a card-scoped stop",
     );
@@ -2153,69 +1908,66 @@ if (picked("cancel-helper-scoped")) {
 }
 
 if (picked("cancel-two-notes")) {
-  await check(
-    "cancel-two-notes: notes come in TS order and the cursor ends at the last",
-    async () => {
-      const observations: Record<string, any> = {};
-      for (const kind of ["ts", "go"] as const) {
-        const fixture = await makeFixture(`two-notes-${kind}`);
-        const side: Side = {
-          kind,
-          fixture,
-          labels: baseLabels(fixture),
-          remember(actual, label) {
-            this.labels.set(actual, label);
-          },
+  await check("cancel-two-notes: notes come in TS order and the cursor ends at the last", async () => {
+    const observations: Record<string, any> = {};
+    for (const kind of ["ts", "go"] as const) {
+      const fixture = await makeFixture(`two-notes-${kind}`);
+      const side: Side = {
+        kind,
+        fixture,
+        labels: baseLabels(fixture),
+        remember(actual, label) {
+          this.labels.set(actual, label);
+        },
+      };
+      try {
+        await system.routine.update({
+          where: { id: fixture.routineId },
+          data: { name: "Release bot" },
+        });
+        const routine = await create(side, {
+          trigger: "routine",
+          routineId: fixture.routineId,
+          at: PINNED,
+          label: "<run:routine>",
+        });
+        const user = await create(side, {
+          trigger: "user",
+          at: new Date(PINNED.getTime() + 1),
+          label: "<run:user>",
+        });
+        await claimRun(side, routine.runId);
+        await claimRun(side, user.runId);
+        const result = await cancelConversation(side, {
+          note: { botId: fixture.botId },
+          writeNotes: true,
+        });
+        const messages = await system.message.findMany({
+          where: { threadId: fixture.threadId, role: "system" },
+          orderBy: { seq: "asc" },
+        });
+        observations[kind] = {
+          eventSeq: result.eventSeq,
+          cancelled: result.cancelled,
+          texts: messages.map((message) =>
+            (message.blocks as Array<{ text?: string; kind?: string }>)
+              .map((block) => block.text ?? block.kind)
+              .join("|"),
+          ),
         };
-        try {
-          await system.routine.update({
-            where: { id: fixture.routineId },
-            data: { name: "Release bot" },
-          });
-          const routine = await create(side, {
-            trigger: "routine",
-            routineId: fixture.routineId,
-            at: PINNED,
-            label: "<run:routine>",
-          });
-          const user = await create(side, {
-            trigger: "user",
-            at: new Date(PINNED.getTime() + 1),
-            label: "<run:user>",
-          });
-          await claimRun(side, routine.runId);
-          await claimRun(side, user.runId);
-          const result = await cancelConversation(side, {
-            note: { botId: fixture.botId },
-            writeNotes: true,
-          });
-          const messages = await system.message.findMany({
-            where: { threadId: fixture.threadId, role: "system" },
-            orderBy: { seq: "asc" },
-          });
-          observations[kind] = {
-            eventSeq: result.eventSeq,
-            cancelled: result.cancelled,
-            texts: messages.map((message) =>
-              (message.blocks as Array<{ text?: string; kind?: string }>)
-                .map((block) => block.text ?? block.kind)
-                .join("|"),
-            ),
-          };
-        } finally {
-          await dropFixture(fixture);
-        }
+      } finally {
+        await dropFixture(fixture);
       }
-      assert.deepEqual(observations.go, observations.ts, "notes and cursor");
-      assert.equal(observations.ts.cancelled, 2);
-      // Two run.cancelled events (DB order is either run's) then the two notes.
-      assert.equal(observations.ts.eventSeq, 4);
-      assert.deepEqual(observations.ts.texts, [
-        stoppedRoutineNote("Release bot"),
-        STOPPED_BY_MESSAGE_NOTE,
-      ]);
-    },
-  );
+    }
+    assert.deepEqual(observations.go, observations.ts, "notes and cursor");
+    assert.equal(observations.ts.cancelled, 2);
+    // Two run.cancelled events (DB order is either run's) then the two notes.
+    assert.equal(observations.ts.eventSeq, 4);
+    assert.deepEqual(observations.ts.texts, [
+      stoppedRoutineNote("Release bot"),
+      STOPPED_BY_MESSAGE_NOTE,
+    ]);
+  });
 }
 
 // ---------------------------------------------------------------- jobs control
@@ -2227,11 +1979,7 @@ if (picked("jobs")) {
       try {
         if (kind === "ts") {
           const starter = new RunStarter(fanout);
-          const publisher = new RunJobPublisher(
-            system as any,
-            new GraphileJobPublisher(pool),
-            starter,
-          );
+          const publisher = new RunJobPublisher(system as any, new GraphileJobPublisher(pool), starter);
           const due = new Date("2026-11-23T09:00:00.000Z");
           await runAsTenant({ spaceId: fixture.spaceId, userId: fixture.userId }, async () => {
             await publisher.enqueue(routineWakeupJob(fixture.routineId, due));
@@ -2257,10 +2005,7 @@ if (picked("jobs")) {
           task: row.task,
           payload: {
             ...withoutCorrelation(row.payload),
-            routineId: replaceIds(
-              row.payload.routineId,
-              new Map([[fixture.routineId, "<routine>"]]),
-            ),
+            routineId: replaceIds(row.payload.routineId, new Map([[fixture.routineId, "<routine>"]])),
           },
           run_at: row.run_at instanceof Date ? row.run_at.toISOString() : String(row.run_at),
           key: replaceIds(row.key, new Map([[fixture.routineId, "<routine>"]])),
@@ -2287,105 +2032,96 @@ if (picked("jobs")) {
 
 // ---------------------------------------------------------------- real worker
 if (picked("worker")) {
-  await check(
-    "worker: a real TypeScript RunWorkerHost completes a run Go created and woke",
-    async () => {
-      const { createApp } = await import("../../api/src/app.js");
-      const { RunWorkerHost } = await import(
-        "../../../packages/adapters/src/runs/wakeups/run-wakeup.js"
-      );
-      const { mkdtempSync, rmSync } = await import("node:fs");
-      const { tmpdir } = await import("node:os");
-      const path = await import("node:path");
-      const fixture = await makeFixture("worker");
-      const dataDir = mkdtempSync(path.join(tmpdir(), "infra-b-worker-"));
-      process.env.BETTER_AUTH_SECRET ??= "infra-b-proof-secret-0123456789abcdef";
-      process.env.NODE_ENV ??= "test";
-      process.env.AGENT_RUNTIME = "scripted";
-      process.env.SANDBOX_PROVIDER = "fake";
-      process.env.WAKEUP_DRIVER = "postgres";
-      const app = await createApp({
-        databaseUrl: DATABASE_URL,
-        dataDir,
-        sandboxProvider: "fake",
-        agentRuntime: "scripted",
-        wakeupDriver: "postgres",
-        defaultProvider: "scripted",
-        defaultModel: "scripted",
-        realtime: fanout,
-        prisma,
-      } as any);
-      // Establish the fanout's LISTEN connection before the wake, so the frame is
-      // delivered rather than left to the worker's five-second scan.
-      await fanout.subscribe("proof-warmup", () => undefined);
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      const starter = new RunStarter(fanout);
-      let handlerRuns = 0;
-      const host = new RunWorkerHost(prisma, fanout, starter, {});
-      const handlers = {
-        "run.continue": async (payload: { runId: string }, execution?: any) => {
-          handlerRuns += 1;
-          await app.executor.continueRun(payload.runId, "proof-worker", execution?.onRunStarted);
-        },
-      } as any;
-      try {
-        await host.start(handlers);
-        const created = await go({
-          op: "create",
-          actor: { spaceId: fixture.spaceId, userId: fixture.userId },
-          spaceId: fixture.spaceId,
-          botId: fixture.botId,
-          threadId: fixture.threadId,
-          userId: fixture.userId,
-          prompt: "write one sentence",
-          trigger: "user",
-          now: new Date().toISOString(),
-        });
-        await go({
-          op: "wake",
-          actor: { spaceId: fixture.spaceId, userId: fixture.userId },
-          runId: created.runId,
-          now: new Date().toISOString(),
-        });
-        const deadline = Date.now() + 60_000;
-        let run: any;
-        let claimedByProofWorker = false;
-        while (Date.now() < deadline) {
-          run = await system.run.findUnique({ where: { id: created.runId } });
-          if (run?.leaseOwner === "proof-worker") claimedByProofWorker = true;
-          if (run?.status === "completed" || run?.status === "failed") break;
-          await new Promise((resolve) => setTimeout(resolve, 50));
-        }
-        assert.equal(run?.status, "completed", "the worker must complete the run");
-        assert.equal(handlerRuns, 1, "the RunWorkerHost handler must run exactly once");
-        const attempts = await system.attempt.count({ where: { runId: created.runId } });
-        assert.equal(attempts, 1, "exactly one attempt must run the turn");
-        if (!claimedByProofWorker) console.log("note: the run finished between lease polls");
-        const reply = await system.message.findFirst({
-          where: { threadId: fixture.threadId, role: "bot", runId: created.runId },
-          orderBy: { seq: "desc" },
-        });
-        assert.ok(reply, "the worker must write the bot reply");
-      } finally {
-        await host.stop();
-        await app.stop();
-        await dropFixture(fixture);
-        rmSync(dataDir, { recursive: true, force: true });
+  await check("worker: a real TypeScript RunWorkerHost completes a run Go created and woke", async () => {
+    const { createApp } = await import("../../api/src/app.js");
+    const { RunWorkerHost } = await import("../../../packages/adapters/src/runs/wakeups/run-wakeup.js");
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const path = await import("node:path");
+    const fixture = await makeFixture("worker");
+    const dataDir = mkdtempSync(path.join(tmpdir(), "infra-b-worker-"));
+    process.env.BETTER_AUTH_SECRET ??= "infra-b-proof-secret-0123456789abcdef";
+    process.env.NODE_ENV ??= "test";
+    process.env.AGENT_RUNTIME = "scripted";
+    process.env.SANDBOX_PROVIDER = "fake";
+    process.env.WAKEUP_DRIVER = "postgres";
+    const app = await createApp({
+      databaseUrl: DATABASE_URL,
+      dataDir,
+      sandboxProvider: "fake",
+      agentRuntime: "scripted",
+      wakeupDriver: "postgres",
+      defaultProvider: "scripted",
+      defaultModel: "scripted",
+      realtime: fanout,
+      prisma,
+    } as any);
+    // Establish the fanout's LISTEN connection before the wake, so the frame is
+    // delivered rather than left to the worker's five-second scan.
+    await fanout.subscribe("proof-warmup", () => undefined);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const starter = new RunStarter(fanout);
+    let handlerRuns = 0;
+    const host = new RunWorkerHost(prisma, fanout, starter, {});
+    const handlers = {
+      "run.continue": async (payload: { runId: string }, execution?: any) => {
+        handlerRuns += 1;
+        await app.executor.continueRun(payload.runId, "proof-worker", execution?.onRunStarted);
+      },
+    } as any;
+    try {
+      await host.start(handlers);
+      const created = await go({
+        op: "create",
+        actor: { spaceId: fixture.spaceId, userId: fixture.userId },
+        spaceId: fixture.spaceId,
+        botId: fixture.botId,
+        threadId: fixture.threadId,
+        userId: fixture.userId,
+        prompt: "write one sentence",
+        trigger: "user",
+        now: new Date().toISOString(),
+      });
+      await go({
+        op: "wake",
+        actor: { spaceId: fixture.spaceId, userId: fixture.userId },
+        runId: created.runId,
+        now: new Date().toISOString(),
+      });
+      const deadline = Date.now() + 60_000;
+      let run: any = undefined;
+      let claimedByProofWorker = false;
+      while (Date.now() < deadline) {
+        run = await system.run.findUnique({ where: { id: created.runId } });
+        if (run?.leaseOwner === "proof-worker") claimedByProofWorker = true;
+        if (run?.status === "completed" || run?.status === "failed") break;
+        await new Promise((resolve) => setTimeout(resolve, 50));
       }
-    },
-  );
+      assert.equal(run?.status, "completed", "the worker must complete the run");
+      assert.equal(handlerRuns, 1, "the RunWorkerHost handler must run exactly once");
+      const attempts = await system.attempt.count({ where: { runId: created.runId } });
+      assert.equal(attempts, 1, "exactly one attempt must run the turn");
+      if (!claimedByProofWorker) console.log("note: the run finished between lease polls");
+      const reply = await system.message.findFirst({
+        where: { threadId: fixture.threadId, role: "bot", runId: created.runId },
+        orderBy: { seq: "desc" },
+      });
+      assert.ok(reply, "the worker must write the bot reply");
+    } finally {
+      await host.stop();
+      await app.stop();
+      await dropFixture(fixture);
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
 }
 
 // ---------------------------------------------------------------- run1 procedures
 if (picked("run1")) {
   await check("run1: the real worker completes routine, skill and approved-chat runs", async () => {
     const { createApp } = await import("../../api/src/app.js");
-    const { RunWorkerHost } = await import(
-      "../../../packages/adapters/src/runs/wakeups/run-wakeup.js"
-    );
-    const { EncryptedSecretStore } = await import(
-      "../../../packages/adapters/src/secrets/secrets.js"
-    );
+    const { RunWorkerHost } = await import("../../../packages/adapters/src/runs/wakeups/run-wakeup.js");
+    const { EncryptedSecretStore } = await import("../../../packages/adapters/src/secrets/secrets.js");
     const { mkdtempSync, rmSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");
     const path = await import("node:path");
@@ -2425,17 +2161,13 @@ if (picked("run1")) {
     } as any;
     const waitForRun = async (runId: string, label: string) => {
       const deadline = Date.now() + 60_000;
-      let run: any;
+      let run: any = undefined;
       while (Date.now() < deadline) {
         run = await system.run.findUnique({ where: { id: runId } });
         if (run?.status === "completed" || run?.status === "failed") break;
         await new Promise((resolve) => setTimeout(resolve, 50));
       }
-      assert.equal(
-        run?.status,
-        "completed",
-        `${label} must complete (${run?.status}: ${run?.error ?? ""})`,
-      );
+      assert.equal(run?.status, "completed", `${label} must complete (${run?.status}: ${run?.error ?? ""})`);
       return run;
     };
     try {
@@ -2446,21 +2178,11 @@ if (picked("run1")) {
       // this key through EncryptedSecretStore, so seal it the same way.
       const secretId = id("run1-model-secret");
       const secrets = new EncryptedSecretStore(process.env.ENCRYPTION_KEY!);
-      const sealed = await secrets.put(
-        "sk-infra-b-run1-proof",
-        {
-          signal: new AbortController().signal,
-        } as any,
-        { recordId: secretId },
-      );
+      const sealed = await secrets.put("sk-infra-b-run1-proof", {
+        signal: new AbortController().signal,
+      } as any, { recordId: secretId });
       await system.secret.create({
-        data: {
-          id: secretId,
-          userId: fixture.userId,
-          spaceId: null,
-          kind: "model",
-          ciphertext: sealed.ciphertext,
-        },
+        data: { id: secretId, userId: fixture.userId, spaceId: null, kind: "model", ciphertext: sealed.ciphertext },
       });
       const credentialId = id("run1-credential");
       await system.userModelCredential.create({
@@ -2654,339 +2376,290 @@ if (picked("run1")) {
 }
 
 if (picked("run1-signals")) {
-  await check(
-    "run1-signals: a Go-created test run publishes the same frames as TypeScript",
-    async () => {
-      const { createApp } = await import("../../api/src/app.js");
-      const { RunWorkerHost } = await import(
-        "../../../packages/adapters/src/runs/wakeups/run-wakeup.js"
-      );
-      const { mkdtempSync, rmSync, writeFileSync } = await import("node:fs");
-      const { tmpdir } = await import("node:os");
-      const path = await import("node:path");
-      const run1Fanout = new PostgresRealtimeFanout({
-        connectionString: DATABASE_URL,
-        publisher: pool,
-      });
-      // Two independent fixtures: each run's space, thread and bot are its own, so every frame is
-      // attributable and the same normalizer sees the same shape.
-      const fixtureGo = await makeFixture("sig-go");
-      const fixtureTs = await makeFixture("sig-ts");
-      const dataDir = mkdtempSync(path.join(tmpdir(), "infra-b-run1-signals-"));
-      process.env.BETTER_AUTH_SECRET ??= "infra-b-proof-secret-0123456789abcdef";
-      process.env.NODE_ENV ??= "test";
-      process.env.AGENT_RUNTIME = "scripted";
-      process.env.SANDBOX_PROVIDER = "fake";
-      process.env.WAKEUP_DRIVER = "postgres";
-      const app = await createApp({
-        databaseUrl: DATABASE_URL,
-        dataDir,
-        webOrigin: "http://127.0.0.1:5173",
-        authUrl: "http://127.0.0.1:5173",
-        sandboxProvider: "fake",
-        agentRuntime: "scripted",
-        wakeupDriver: "postgres",
-        defaultProvider: "scripted",
-        defaultModel: "scripted",
-        realtime: run1Fanout,
-        prisma,
-      } as any);
-      await run1Fanout.subscribe("proof-warmup-signals", () => undefined);
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      const starter = new RunStarter(run1Fanout);
-      let handlerRuns = 0;
-      let goGateway: any;
-      let upstreamServer: any;
-      const host = new RunWorkerHost(prisma, run1Fanout, starter, {});
-      const handlers = {
-        "run.continue": async (payload: { runId: string }, execution?: any) => {
-          handlerRuns += 1;
-          await app.executor.continueRun(
-            payload.runId,
-            "proof-run1-signals",
-            execution?.onRunStarted,
-          );
+  await check("run1-signals: a Go-created test run publishes the same frames as TypeScript", async () => {
+    const { createApp } = await import("../../api/src/app.js");
+    const { RunWorkerHost } = await import("../../../packages/adapters/src/runs/wakeups/run-wakeup.js");
+    const { mkdtempSync, rmSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const path = await import("node:path");
+    const run1Fanout = new PostgresRealtimeFanout({
+      connectionString: DATABASE_URL,
+      publisher: pool,
+    });
+    // Two independent fixtures: each run's space, thread and bot are its own, so every frame is
+    // attributable and the same normalizer sees the same shape.
+    const fixtureGo = await makeFixture("sig-go");
+    const fixtureTs = await makeFixture("sig-ts");
+    const dataDir = mkdtempSync(path.join(tmpdir(), "infra-b-run1-signals-"));
+    process.env.BETTER_AUTH_SECRET ??= "infra-b-proof-secret-0123456789abcdef";
+    process.env.NODE_ENV ??= "test";
+    process.env.AGENT_RUNTIME = "scripted";
+    process.env.SANDBOX_PROVIDER = "fake";
+    process.env.WAKEUP_DRIVER = "postgres";
+    const app = await createApp({
+      databaseUrl: DATABASE_URL,
+      dataDir,
+      webOrigin: "http://127.0.0.1:5173",
+      authUrl: "http://127.0.0.1:5173",
+      sandboxProvider: "fake",
+      agentRuntime: "scripted",
+      wakeupDriver: "postgres",
+      defaultProvider: "scripted",
+      defaultModel: "scripted",
+      realtime: run1Fanout,
+      prisma,
+    } as any);
+    await run1Fanout.subscribe("proof-warmup-signals", () => undefined);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const starter = new RunStarter(run1Fanout);
+    let handlerRuns = 0;
+    let goGateway: any;
+    let upstreamServer: any;
+    const host = new RunWorkerHost(prisma, run1Fanout, starter, {});
+    const handlers = {
+      "run.continue": async (payload: { runId: string }, execution?: any) => {
+        handlerRuns += 1;
+        await app.executor.continueRun(payload.runId, "proof-run1-signals", execution?.onRunStarted);
+      },
+    } as any;
+    const waitForRun = async (runId: string, label: string) => {
+      const deadline = Date.now() + 60_000;
+      let run: any = undefined;
+      while (Date.now() < deadline) {
+        run = await system.run.findUnique({ where: { id: runId } });
+        if (run?.status === "completed" || run?.status === "failed") break;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      assert.equal(run?.status, "completed", `${label} must complete (${run?.status}: ${run?.error ?? ""})`);
+      return run;
+    };
+    try {
+      await host.start(handlers);
+
+      // The TypeScript twin runs on the worker path too: a TS API without spare capacity hands
+      // the run off with runs:ready instead of starting it locally. The app's RunJobPublisher
+      // calls its starter's start(); replacing that one method with the handoff is exactly the
+      // frame a full TS API process publishes, and the real worker host executes the run.
+      (app as any).jobs.starter = {
+        start: (runId: string) => {
+          void run1Fanout.publish("runs:ready", runId).catch(() => undefined);
         },
-      } as any;
-      const waitForRun = async (runId: string, label: string) => {
-        const deadline = Date.now() + 60_000;
-        let run: any;
-        while (Date.now() < deadline) {
-          run = await system.run.findUnique({ where: { id: runId } });
-          if (run?.status === "completed" || run?.status === "failed") break;
-          await new Promise((resolve) => setTimeout(resolve, 50));
-        }
-        assert.equal(
-          run?.status,
-          "completed",
-          `${label} must complete (${run?.status}: ${run?.error ?? ""})`,
-        );
-        return run;
       };
-      try {
-        await host.start(handlers);
 
-        // The TypeScript twin runs on the worker path too: a TS API without spare capacity hands
-        // the run off with runs:ready instead of starting it locally. The app's RunJobPublisher
-        // calls its starter's start(); replacing that one method with the handoff is exactly the
-        // frame a full TS API process publishes, and the real worker host executes the run.
-        (app as any).jobs.starter = {
-          start: (runId: string) => {
-            void run1Fanout.publish("runs:ready", runId).catch(() => undefined);
-          },
-        };
+      // A real session for the TypeScript fixture's user, so the route runs as that member.
+      const sessionToken = `sigtok-${tag}-${randomBytes(12).toString("hex")}`;
+      await system.session.create({
+        data: {
+          id: `sigsess-${tag}`,
+          expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+          token: sessionToken,
+          userId: fixtureTs.userId,
+        },
+      });
+      const signature = createHmac("sha256", process.env.BETTER_AUTH_SECRET!)
+        .update(sessionToken)
+        .digest("base64");
+      const cookie = `better-auth.session_token=${encodeURIComponent(`${sessionToken}.${signature}`)}`;
+      const headers = {
+        "content-type": "application/json",
+        origin: "http://127.0.0.1:5173",
+        cookie,
+        "x-rakazo-space-id": fixtureTs.spaceId,
+      };
 
-        // A real session for the TypeScript fixture's user, so the route runs as that member.
-        const sessionToken = `sigtok-${tag}-${randomBytes(12).toString("hex")}`;
-        await system.session.create({
-          data: {
-            id: `sigsess-${tag}`,
-            expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-            token: sessionToken,
-            userId: fixtureTs.userId,
-          },
-        });
-        const signature = createHmac("sha256", process.env.BETTER_AUTH_SECRET!)
-          .update(sessionToken)
-          .digest("base64");
-        const cookie = `better-auth.session_token=${encodeURIComponent(`${sessionToken}.${signature}`)}`;
-        const headers = {
+      await settleFrames();
+      frames = [];
+      const beforeTs = frames.length;
+      const response = await app.app.request(
+        "/rpc/routines/testRun",
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ json: { routineId: fixtureTs.routineId } }),
+        },
+        { incoming: { socket: { remoteAddress: "127.0.0.1" } } } as any,
+      );
+      assert.equal(response.status, 200, "the TypeScript route must create the run");
+      const responseBody = (await response.json()) as any;
+      const tsRunId: string = responseBody?.json?.runId ?? responseBody?.runId;
+      assert.ok(tsRunId, `TypeScript route body = ${JSON.stringify(responseBody)}`);
+      const tsRun = await waitForRun(tsRunId, "the TypeScript-created run");
+
+      await settleFrames();
+      const tsFrames = frames
+        .slice(beforeTs)
+        .filter((frame) => frame.topic === "runs:ready"
+          ? frame.payload === tsRunId
+          : frame.topic === `space-changes:${fixtureTs.spaceId}` ||
+            frame.topic === `thread:${fixtureTs.threadId}`);
+
+      // The Go side must run through the real gateway, not the proof driver: the gateway is what
+      // runs the procedure's effects (security events, roster/space-change signals) outside the
+      // procedure body, exactly as the TypeScript route's authed middleware does.
+      const GO_GATEWAY_PORT = 3270;
+      const UPSTREAM_PORT = 3996;
+      const routesFile = path.join(dataDir, "routes-signals.json");
+      const buildIdFile = path.join(dataDir, "build-id-signals");
+      writeFileSync(routesFile, JSON.stringify({ routes: { "routines.testRun": { mode: "go" } } }));
+      writeFileSync(buildIdFile, "proof-signals");
+      upstreamServer = createServer(async (req: any, res: any) => {
+        try {
+          const chunks: Buffer[] = [];
+          for await (const chunk of req) chunks.push(Buffer.from(chunk));
+          const upstreamResponse = await app.app.request(
+            `http://127.0.0.1${req.url ?? "/"}`,
+            {
+              method: req.method,
+              headers: req.headers,
+              body: chunks.length ? Buffer.concat(chunks) : undefined,
+            },
+            { incoming: { socket: { remoteAddress: "127.0.0.1" } } } as any,
+          );
+          res.statusCode = upstreamResponse.status;
+          upstreamResponse.headers.forEach((value: string, key: string) => res.setHeader(key, value));
+          res.end(Buffer.from(await upstreamResponse.arrayBuffer()));
+        } catch (error) {
+          res.statusCode = 500;
+          res.end(String(error));
+        }
+      });
+      await new Promise<void>((resolve) => upstreamServer.listen(UPSTREAM_PORT, "127.0.0.1", resolve));
+      goGateway = spawn(process.env.GO_GATEWAY_BIN ?? "/tmp/infra-b/gateway-run1", [
+        "-listen", `127.0.0.1:${GO_GATEWAY_PORT}`,
+        "-upstream", `http://127.0.0.1:${UPSTREAM_PORT}`,
+        "-routes", routesFile,
+        "-build-id-file", buildIdFile,
+      ], {
+        env: {
+          ...process.env,
+          DATABASE_URL,
+          BETTER_AUTH_SECRET: process.env.BETTER_AUTH_SECRET!,
+          BETTER_AUTH_URL: "http://127.0.0.1:5173",
+          WEB_ORIGIN: "http://127.0.0.1:5173",
+          ENCRYPTION_KEY: process.env.ENCRYPTION_KEY!,
+          CONTENT_ENCRYPTION: "on",
+          MAX_UPLOAD_SIZE_MB: "10",
+          SMTP_URL: "",
+          EMAIL_PROVIDER: "",
+          EMAIL_EMULATOR: "",
+          INBOUND_EMAIL_DOMAIN: "inbound.contract.test",
+          INBOUND_EMAIL_SECRET: "inbound-email-secret-0123456789abcdef",
+          SANDBOX_MAX_COMPUTERS_PER_USER: "5",
+          PHONE_CALLS_ENABLED: "true",
+          PHONE_CALL_RING_SECONDS: "45",
+        },
+        stdio: ["ignore", "ignore", "pipe"],
+      });
+      const gatewayStderr: Buffer[] = [];
+      goGateway.stderr?.on("data", (chunk: Buffer) => gatewayStderr.push(chunk));
+      let gatewayReady = false;
+      for (let attempt = 0; attempt < 120; attempt += 1) {
+        try {
+          const health = await fetch(`http://127.0.0.1:${GO_GATEWAY_PORT}/healthz`);
+          if (health.ok) { gatewayReady = true; break; }
+        } catch { /* not up yet */ }
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      if (!gatewayReady) {
+        throw new Error(`the Go gateway did not become ready: ${Buffer.concat(gatewayStderr).toString()}`);
+      }
+
+      const goSessionToken = `sigtokgo-${tag}-${randomBytes(12).toString("hex")}`;
+      await system.session.create({
+        data: {
+          id: `sigsessgo-${tag}`,
+          expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+          token: goSessionToken,
+          userId: fixtureGo.userId,
+        },
+      });
+      const goSignature = createHmac("sha256", process.env.BETTER_AUTH_SECRET!)
+        .update(goSessionToken)
+        .digest("base64");
+      const goCookie = `better-auth.session_token=${encodeURIComponent(`${goSessionToken}.${goSignature}`)}`;
+
+      await settleFrames();
+      const beforeGo = frames.length;
+      const goResponse = await fetch(`http://127.0.0.1:${GO_GATEWAY_PORT}/rpc/routines/testRun`, {
+        method: "POST",
+        headers: {
           "content-type": "application/json",
           origin: "http://127.0.0.1:5173",
-          cookie,
-          "x-rakazo-space-id": fixtureTs.spaceId,
-        };
-
-        await settleFrames();
-        frames = [];
-        const beforeTs = frames.length;
-        const response = await app.app.request(
-          "/rpc/routines/testRun",
-          {
-            method: "POST",
-            headers,
-            body: JSON.stringify({ json: { routineId: fixtureTs.routineId } }),
-          },
-          { incoming: { socket: { remoteAddress: "127.0.0.1" } } } as any,
-        );
-        assert.equal(response.status, 200, "the TypeScript route must create the run");
-        const responseBody = (await response.json()) as any;
-        const tsRunId: string = responseBody?.json?.runId ?? responseBody?.runId;
-        assert.ok(tsRunId, `TypeScript route body = ${JSON.stringify(responseBody)}`);
-        const tsRun = await waitForRun(tsRunId, "the TypeScript-created run");
-
-        await settleFrames();
-        const tsFrames = frames
-          .slice(beforeTs)
-          .filter((frame) =>
-            frame.topic === "runs:ready"
-              ? frame.payload === tsRunId
-              : frame.topic === `space-changes:${fixtureTs.spaceId}` ||
-                frame.topic === `thread:${fixtureTs.threadId}`,
-          );
-
-        // The Go side must run through the real gateway, not the proof driver: the gateway is what
-        // runs the procedure's effects (security events, roster/space-change signals) outside the
-        // procedure body, exactly as the TypeScript route's authed middleware does.
-        const GO_GATEWAY_PORT = 3270;
-        const UPSTREAM_PORT = 3996;
-        const routesFile = path.join(dataDir, "routes-signals.json");
-        const buildIdFile = path.join(dataDir, "build-id-signals");
-        writeFileSync(
-          routesFile,
-          JSON.stringify({ routes: { "routines.testRun": { mode: "go" } } }),
-        );
-        writeFileSync(buildIdFile, "proof-signals");
-        upstreamServer = createServer(async (req: any, res: any) => {
-          try {
-            const chunks: Buffer[] = [];
-            for await (const chunk of req) chunks.push(Buffer.from(chunk));
-            const upstreamResponse = await app.app.request(
-              `http://127.0.0.1${req.url ?? "/"}`,
-              {
-                method: req.method,
-                headers: req.headers,
-                body: chunks.length ? Buffer.concat(chunks) : undefined,
-              },
-              { incoming: { socket: { remoteAddress: "127.0.0.1" } } } as any,
-            );
-            res.statusCode = upstreamResponse.status;
-            upstreamResponse.headers.forEach((value: string, key: string) => {
-              res.setHeader(key, value);
-            });
-            res.end(Buffer.from(await upstreamResponse.arrayBuffer()));
-          } catch (error) {
-            res.statusCode = 500;
-            res.end(String(error));
-          }
-        });
-        await new Promise<void>((resolve) =>
-          upstreamServer.listen(UPSTREAM_PORT, "127.0.0.1", resolve),
-        );
-        goGateway = spawn(
-          process.env.GO_GATEWAY_BIN ?? "/tmp/infra-b/gateway-run1",
-          [
-            "-listen",
-            `127.0.0.1:${GO_GATEWAY_PORT}`,
-            "-upstream",
-            `http://127.0.0.1:${UPSTREAM_PORT}`,
-            "-routes",
-            routesFile,
-            "-build-id-file",
-            buildIdFile,
-          ],
-          {
-            env: {
-              ...process.env,
-              DATABASE_URL,
-              BETTER_AUTH_SECRET: process.env.BETTER_AUTH_SECRET!,
-              BETTER_AUTH_URL: "http://127.0.0.1:5173",
-              WEB_ORIGIN: "http://127.0.0.1:5173",
-              ENCRYPTION_KEY: process.env.ENCRYPTION_KEY!,
-              CONTENT_ENCRYPTION: "on",
-              MAX_UPLOAD_SIZE_MB: "10",
-              SMTP_URL: "",
-              EMAIL_PROVIDER: "",
-              EMAIL_EMULATOR: "",
-              INBOUND_EMAIL_DOMAIN: "inbound.contract.test",
-              INBOUND_EMAIL_SECRET: "inbound-email-secret-0123456789abcdef",
-              SANDBOX_MAX_COMPUTERS_PER_USER: "5",
-              PHONE_CALLS_ENABLED: "true",
-              PHONE_CALL_RING_SECONDS: "45",
-            },
-            stdio: ["ignore", "ignore", "pipe"],
-          },
-        );
-        const gatewayStderr: Buffer[] = [];
-        goGateway.stderr?.on("data", (chunk: Buffer) => gatewayStderr.push(chunk));
-        let gatewayReady = false;
-        for (let attempt = 0; attempt < 120; attempt += 1) {
-          try {
-            const health = await fetch(`http://127.0.0.1:${GO_GATEWAY_PORT}/healthz`);
-            if (health.ok) {
-              gatewayReady = true;
-              break;
-            }
-          } catch {
-            /* not up yet */
-          }
-          await new Promise((resolve) => setTimeout(resolve, 50));
-        }
-        if (!gatewayReady) {
-          throw new Error(
-            `the Go gateway did not become ready: ${Buffer.concat(gatewayStderr).toString()}`,
-          );
-        }
-
-        const goSessionToken = `sigtokgo-${tag}-${randomBytes(12).toString("hex")}`;
-        await system.session.create({
-          data: {
-            id: `sigsessgo-${tag}`,
-            expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-            token: goSessionToken,
-            userId: fixtureGo.userId,
-          },
-        });
-        const goSignature = createHmac("sha256", process.env.BETTER_AUTH_SECRET!)
-          .update(goSessionToken)
-          .digest("base64");
-        const goCookie = `better-auth.session_token=${encodeURIComponent(`${goSessionToken}.${goSignature}`)}`;
-
-        await settleFrames();
-        const beforeGo = frames.length;
-        const goResponse = await fetch(`http://127.0.0.1:${GO_GATEWAY_PORT}/rpc/routines/testRun`, {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            origin: "http://127.0.0.1:5173",
-            cookie: goCookie,
-            "x-rakazo-space-id": fixtureGo.spaceId,
-          },
-          body: JSON.stringify({ json: { routineId: fixtureGo.routineId } }),
-        });
-        if (goResponse.status !== 200) {
-          throw new Error(
-            `the Go gateway route must create the run (${goResponse.status}: ${await goResponse.text()})`,
-          );
-        }
-        const goBody = (await goResponse.json()) as any;
-        const goRunId: string = goBody?.json?.runId ?? goBody?.runId;
-        assert.ok(goRunId, `Go gateway body = ${JSON.stringify(goBody)}`);
-        const goRun = await waitForRun(goRunId, "the Go-created run");
-        await settleFrames();
-        const goFrames = frames
-          .slice(beforeGo)
-          .filter((frame) =>
-            frame.topic === "runs:ready"
-              ? frame.payload === goRunId
-              : frame.topic === `space-changes:${fixtureGo.spaceId}` ||
-                frame.topic === `thread:${fixtureGo.threadId}`,
-          );
-
-        const normalizeFrames = (
-          list: Array<{ topic: string; payload: string }>,
-          fixture: Fixture,
-          runId: string,
-        ) => {
-          const labels = new Map<string, string>([
-            [fixture.orgId, "<org>"],
-            [fixture.userId, "<user>"],
-            [fixture.spaceId, "<space>"],
-            [fixture.botId, "<bot>"],
-            [fixture.threadId, "<thread>"],
-            [fixture.routineId, "<routine>"],
-            [fixture.computerId, "<computer>"],
-            [runId, "<run>"],
-          ]);
-          const replace = (text: string) => {
-            let out = replaceIds(text, labels);
-            out = out.replace(/c[a-z0-9]{24}/g, "<cuid>");
-            out = out.replace(/\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z/g, "<time>");
-            return out;
-          };
-          return list.map((frame) => ({
-            topic: replace(frame.topic),
-            payload: replace(frame.payload),
-          }));
-        };
-        const tsNormalized = normalizeFrames(tsFrames, fixtureTs, tsRunId);
-        const goNormalized = normalizeFrames(goFrames, fixtureGo, goRunId);
-        console.log("run1-signals typescript:", JSON.stringify(tsNormalized, null, 2));
-        console.log("run1-signals go:        ", JSON.stringify(goNormalized, null, 2));
-        // The two processes announce the same facts on independent channels (the
-        // gateway's effects and the procedure's wake), so delivery order between
-        // topics is not a contract; the set of frames is.
-        const sorted = (list: Array<{ topic: string; payload: string }>) =>
-          [...list].sort((left, right) =>
-            JSON.stringify(left).localeCompare(JSON.stringify(right)),
-          );
-        assert.deepEqual(sorted(goNormalized), sorted(tsNormalized), "worker-path realtime frames");
-
-        const tsTask = await system.task.findUniqueOrThrow({ where: { id: tsRun.taskId } });
-        const goTask = await system.task.findUniqueOrThrow({ where: { id: goRun.taskId } });
-        assert.equal(goTask.prompt, tsTask.prompt, "the test-run task prompt");
-        assert.equal(goRun.trigger, tsRun.trigger, "the test-run trigger");
-        assert.equal(goRun.routineId, fixtureGo.routineId, "the Go run's routine");
-        assert.equal(tsRun.routineId, fixtureTs.routineId, "the TypeScript run's routine");
-        assert.equal(handlerRuns, 2, "the real worker host must claim both runs");
-      } finally {
-        if (goGateway) {
-          goGateway.kill("SIGTERM");
-          await new Promise<void>((resolve) => {
-            if (goGateway.exitCode !== null) resolve();
-            else goGateway.once("exit", () => resolve());
-          });
-        }
-        if (upstreamServer)
-          await new Promise<void>((resolve) => upstreamServer.close(() => resolve()));
-        await host.stop();
-        await app.stop();
-        await dropFixture(fixtureGo);
-        await dropFixture(fixtureTs);
-        rmSync(dataDir, { recursive: true, force: true });
+          cookie: goCookie,
+          "x-rakazo-space-id": fixtureGo.spaceId,
+        },
+        body: JSON.stringify({ json: { routineId: fixtureGo.routineId } }),
+      });
+      if (goResponse.status !== 200) {
+        throw new Error(`the Go gateway route must create the run (${goResponse.status}: ${await goResponse.text()})`);
       }
-    },
-  );
+      const goBody = (await goResponse.json()) as any;
+      const goRunId: string = goBody?.json?.runId ?? goBody?.runId;
+      assert.ok(goRunId, `Go gateway body = ${JSON.stringify(goBody)}`);
+      const goRun = await waitForRun(goRunId, "the Go-created run");
+      await settleFrames();
+      const goFrames = frames
+        .slice(beforeGo)
+        .filter((frame) => frame.topic === "runs:ready"
+          ? frame.payload === goRunId
+          : frame.topic === `space-changes:${fixtureGo.spaceId}` ||
+            frame.topic === `thread:${fixtureGo.threadId}`);
+
+      const normalizeFrames = (list: Array<{ topic: string; payload: string }>, fixture: Fixture, runId: string) => {
+        const labels = new Map<string, string>([
+          [fixture.orgId, "<org>"],
+          [fixture.userId, "<user>"],
+          [fixture.spaceId, "<space>"],
+          [fixture.botId, "<bot>"],
+          [fixture.threadId, "<thread>"],
+          [fixture.routineId, "<routine>"],
+          [fixture.computerId, "<computer>"],
+          [runId, "<run>"],
+        ]);
+        const replace = (text: string) => {
+          let out = replaceIds(text, labels);
+          out = out.replace(/c[a-z0-9]{24}/g, "<cuid>");
+          out = out.replace(/\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z/g, "<time>");
+          return out;
+        };
+        return list.map((frame) => ({ topic: replace(frame.topic), payload: replace(frame.payload) }));
+      };
+      const tsNormalized = normalizeFrames(tsFrames, fixtureTs, tsRunId);
+      const goNormalized = normalizeFrames(goFrames, fixtureGo, goRunId);
+      console.log("run1-signals typescript:", JSON.stringify(tsNormalized, null, 2));
+      console.log("run1-signals go:        ", JSON.stringify(goNormalized, null, 2));
+      // The two processes announce the same facts on independent channels (the
+      // gateway's effects and the procedure's wake), so delivery order between
+      // topics is not a contract; the set of frames is.
+      const sorted = (list: Array<{ topic: string; payload: string }>) =>
+        [...list].sort((left, right) =>
+          JSON.stringify(left).localeCompare(JSON.stringify(right)),
+        );
+      assert.deepEqual(sorted(goNormalized), sorted(tsNormalized), "worker-path realtime frames");
+
+      const tsTask = await system.task.findUniqueOrThrow({ where: { id: tsRun.taskId } });
+      const goTask = await system.task.findUniqueOrThrow({ where: { id: goRun.taskId } });
+      assert.equal(goTask.prompt, tsTask.prompt, "the test-run task prompt");
+      assert.equal(goRun.trigger, tsRun.trigger, "the test-run trigger");
+      assert.equal(goRun.routineId, fixtureGo.routineId, "the Go run's routine");
+      assert.equal(tsRun.routineId, fixtureTs.routineId, "the TypeScript run's routine");
+      assert.equal(handlerRuns, 2, "the real worker host must claim both runs");
+    } finally {
+      if (goGateway) {
+        goGateway.kill("SIGTERM");
+        await new Promise<void>((resolve) => {
+          if (goGateway.exitCode !== null) resolve();
+          else goGateway.once("exit", () => resolve());
+        });
+      }
+      if (upstreamServer) await new Promise<void>((resolve) => upstreamServer.close(() => resolve()));
+      await host.stop();
+      await app.stop();
+      await dropFixture(fixtureGo);
+      await dropFixture(fixtureTs);
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
 }
 
 // ---------------------------------------------------------------- result

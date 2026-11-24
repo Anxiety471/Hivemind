@@ -29,10 +29,10 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-// The exact zod build packages/contracts pins (pnpm workspace symlink).
-import { z } from "../../../packages/contracts/node_modules/zod/index.js";
 // The real write sanitizer the procedure stack applies to every Prisma string.
 import { sanitizeUtf16ForJson } from "../../../packages/core/src/messages/events.js";
+// The exact zod build packages/contracts pins (pnpm workspace symlink).
+import { z } from "../../../packages/contracts/node_modules/zod/index.js";
 
 const zodURL = z.string().url();
 
@@ -1043,23 +1043,8 @@ const objectParamCases: [string, [string, string][]][] = [
       ["state", "state-中文-😀"],
     ],
   ],
-  [
-    "https://example.com/path?old=1#frag",
-    [
-      ["a", "1"],
-      ["b", "2 3"],
-      ["c", "日"],
-    ],
-  ],
-  [
-    "https://example.com/",
-    [
-      ["empty", ""],
-      ["space", " "],
-      ["plus", "+"],
-      ["reserved", "#&=?"],
-    ],
-  ],
+  ["https://example.com/path?old=1#frag", [["a", "1"], ["b", "2 3"], ["c", "日"]]],
+  ["https://example.com/", [["empty", ""], ["space", " "], ["plus", "+"], ["reserved", "#&=?"]]],
 ];
 for (const [base, pairs] of objectParamCases) {
   const id = `inventory-searchparams-object-${cases.length}`;
@@ -1075,15 +1060,7 @@ const multiPairCases: [string, [string, string][]][] = [
       ["b", "3"],
     ],
   ],
-  [
-    "https://example.com/?x=0",
-    [
-      ["a", "1"],
-      ["empty", ""],
-      ["space", "1 2"],
-      ["unicode", "日"],
-    ],
-  ],
+  ["https://example.com/?x=0", [["a", "1"], ["empty", ""], ["space", "1 2"], ["unicode", "日"]]],
   [
     "https://example.com/",
     [
@@ -1102,20 +1079,8 @@ for (const [base, pairs] of multiPairCases) {
 }
 for (const [base, pairs] of [
   [screenBase, [["view_only", "false"]]],
-  [
-    "https://example.com/?a=1",
-    [
-      ["a", "2"],
-      ["a", "3"],
-    ],
-  ],
-  [
-    "https://example.com/",
-    [
-      ["empty", ""],
-      ["space", "1 2"],
-    ],
-  ],
+  ["https://example.com/?a=1", [["a", "2"], ["a", "3"]]],
+  ["https://example.com/", [["empty", ""], ["space", "1 2"]]],
 ] as [string, [string, string][]][]) {
   const id = `inventory-searchparams-append-${cases.length}`;
   cases.push({ id, op: "searchparams-append", input: base, pairs });
@@ -1314,9 +1279,7 @@ for (const test of cases) {
     }),
   );
 }
-console.log(
-  `zod raw/Go in-memory value differences: ${inMemoryZodDiffs} (DB-sanitized forms equal)`,
-);
+console.log(`zod raw/Go in-memory value differences: ${inMemoryZodDiffs} (DB-sanitized forms equal)`);
 writeFileSync(corpusPath, `${corpusLines.join("\n")}\n`);
 writeFileSync(expectedPath, `${expectedLines.join("\n")}\n`);
 
@@ -1393,9 +1356,7 @@ for (let index = 0; index < total; index++) {
   const expectedGet = expected.get ?? "";
   const actualGet = actual.get ?? "";
   if (expectedGet !== actualGet) {
-    problems.push(
-      `searchParams.get ${JSON.stringify(expectedGet)} != ${JSON.stringify(actualGet)}`,
-    );
+    problems.push(`searchParams.get ${JSON.stringify(expectedGet)} != ${JSON.stringify(actualGet)}`);
   }
   if (problems.length > 0) {
     mismatches++;

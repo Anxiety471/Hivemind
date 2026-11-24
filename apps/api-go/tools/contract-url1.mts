@@ -62,8 +62,8 @@ function payloads(result: CheckContext["result"]): any[] {
       (entry) =>
         entry &&
         typeof entry === "object" &&
-        Object.hasOwn(entry, "status") &&
-        Object.hasOwn(entry, "json"),
+        Object.prototype.hasOwnProperty.call(entry, "status") &&
+        Object.prototype.hasOwnProperty.call(entry, "json"),
     )
   ) {
     return json.map((entry) => entry.json);
@@ -117,7 +117,11 @@ function pageCheck(
     const shareSecrets = await system.secret.count({
       where: { userId: seeded.userId, kind: "page_share" },
     });
-    assert.equal(shareSecrets, expected.link ? 1 : 0, `${name}: persisted page_share secret rows`);
+    assert.equal(
+      shareSecrets,
+      expected.link ? 1 : 0,
+      `${name}: persisted page_share secret rows`,
+    );
     let ciphertext: string | null = null;
     if (page.shareSecretId) {
       const secret = await system.secret.findUnique({
@@ -127,10 +131,7 @@ function pageCheck(
       ciphertext = secret?.ciphertext ?? null;
       if (ciphertext) {
         assert.ok(!body.includes(ciphertext), `${name}: response disclosed the share ciphertext`);
-        assert.ok(
-          !gatewayLog.includes(ciphertext),
-          `${name}: gateway log disclosed the ciphertext`,
-        );
+        assert.ok(!gatewayLog.includes(ciphertext), `${name}: gateway log disclosed the ciphertext`);
       }
     }
     if (expected.link) {
@@ -326,15 +327,20 @@ export function url1Cases(system: System): Case[] {
           reviewedAt: at(50),
         });
       },
-      check: submissionCheck(system, "url1-submissions-default-pending", 200, (payload) => {
-        assert.equal(payload.length, 3, "default pending rows");
-        assert.ok(
-          payload.some(
-            (row) => typeof row.source === "string" && row.source.includes("gitlab.com"),
-          ),
-          "GitLab source is not visible in the pending query",
-        );
-      }),
+      check: submissionCheck(
+        system,
+        "url1-submissions-default-pending",
+        200,
+        (payload) => {
+          assert.equal(payload.length, 3, "default pending rows");
+          assert.ok(
+            payload.some(
+              (row) => typeof row.source === "string" && row.source.includes("gitlab.com"),
+            ),
+            "GitLab source is not visible in the pending query",
+          );
+        },
+      ),
     },
     {
       name: "url1-submissions-approved",
@@ -385,9 +391,14 @@ export function url1Cases(system: System): Case[] {
           source: "https://github.com/example/one",
         });
       },
-      check: submissionCheck(system, "url1-submissions-unknown-key-is-stripped", 200, (payload) => {
-        assert.equal(payload.length, 1, "unknown-key pending rows");
-      }),
+      check: submissionCheck(
+        system,
+        "url1-submissions-unknown-key-is-stripped",
+        200,
+        (payload) => {
+          assert.equal(payload.length, 1, "unknown-key pending rows");
+        },
+      ),
     },
     {
       name: "url1-submissions-forbidden",

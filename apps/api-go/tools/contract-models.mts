@@ -82,8 +82,7 @@ function addChoice(
     thinkingLevel: extra.thinkingLevel ?? null,
     credentialId: extra.credentialId ?? null,
   };
-  if (extra.space)
-    return system.spaceModelRoleChoice.create({ data: { ...data, spaceId: extra.space } });
+  if (extra.space) return system.spaceModelRoleChoice.create({ data: { ...data, spaceId: extra.space } });
   return system.userModelRoleChoice.create({ data });
 }
 
@@ -215,13 +214,9 @@ function roleCases(): Case[] {
     role("approval-row", { role: "approval" }, { seed: seedRole }),
     role("computer-row", { role: "computer" }, { seed: seedRole }),
     role("space-copy", { role: "main", scope: "space" }, { seed: seedSpaceRole }),
-    role(
-      "account-copy-behind-space-override",
-      { role: "main", scope: "account" },
-      {
-        seed: seedSpaceRole,
-      },
-    ),
+    role("account-copy-behind-space-override", { role: "main", scope: "account" }, {
+      seed: seedSpaceRole,
+    }),
     role("space-header-uses-the-copy", { role: "main" }, { seed: seedSpaceRole }),
     role("expected-other", { role: "main", expectedUserId: "someone-else" }),
     role("expected-self", { role: "main", expectedUserId: "__user__" }),
@@ -258,22 +253,18 @@ function setRoleCases(): Case[] {
       primary: { provider: "anthropic", modelId: "claude-haiku-5-5" },
       backups: [{ provider: "anthropic", modelId: "claude-haiku-5-5" }],
     }),
-    save(
-      "keeps-saved-thinking",
-      {
-        role: "main",
-        primary: { provider: "anthropic", modelId: "claude-haiku-5-5" },
+    save("keeps-saved-thinking", {
+      role: "main",
+      primary: { provider: "anthropic", modelId: "claude-haiku-5-5" },
+    }, {
+      seed: async (seeded: Seeded) => {
+        await seedSaveCredentials(seeded);
+        await addChoice(seeded, "main", 0, "anthropic", "claude-haiku-5-5", {
+          thinkingLevel: "low",
+          credentialId: `${seeded.userId}-anthropic`,
+        });
       },
-      {
-        seed: async (seeded: Seeded) => {
-          await seedSaveCredentials(seeded);
-          await addChoice(seeded, "main", 0, "anthropic", "claude-haiku-5-5", {
-            thinkingLevel: "low",
-            credentialId: `${seeded.userId}-anthropic`,
-          });
-        },
-      },
-    ),
+    }),
     save("computer-vision", {
       role: "computer",
       primary: { provider: "anthropic", modelId: "claude-haiku-5-5" },
@@ -325,14 +316,10 @@ function setRoleCases(): Case[] {
       expectedUserId: "someone-else",
       primary: { provider: "anthropic", modelId: "claude-haiku-5-5" },
     }),
-    save(
-      "anonymous",
-      {
-        role: "main",
-        primary: { provider: "anthropic", modelId: "claude-haiku-5-5" },
-      },
-      { anonymous: true },
-    ),
+    save("anonymous", {
+      role: "main",
+      primary: { provider: "anthropic", modelId: "claude-haiku-5-5" },
+    }, { anonymous: true }),
   ].map((testCase) => ({
     ...testCase,
     after: [{ procedure: "models.role", input: { role: "main" } }],

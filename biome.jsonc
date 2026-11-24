@@ -20,9 +20,9 @@
       "!**/test-report",
       "!**/verify-report",
       "!**/data",
-      // Fixtures and machine-written tables are compared by content, so they are not formatted.
+      // Fixtures, machine-written tables and the local Go-port proof scripts are not formatted.
       "!**/testdata",
-      "!**/apps/api-go/tools/**/*.json",
+      "!**/apps/api-go/tools",
       "!**/apps/api-go/**/computer_kinds.json",
       "!**/*.astro",
       "!**/apps/www/.astro",
