@@ -92,6 +92,7 @@ func Agents(
 	var seqs []mcpassignments.Seq
 	err = database.Tenant(ctx, actor, func(tx pgx.Tx) error {
 		var visible string
+		//writeaudit:dynamic read: the predicate is the fixed serverAvailable const; the ids are filters
 		err := tx.QueryRow(ctx, `SELECT id FROM mcp_servers WHERE id = $3 AND `+serverAvailable,
 			actor.SpaceID, actor.UserID, input.id).Scan(&visible)
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -101,9 +102,11 @@ func Agents(
 			return err
 		}
 		// tx.mcpServer.update({ where: { id }, data: { allBots } }): @updatedAt moves too.
+		arguments := []any{input.id}
+		arguments = append(arguments, db.Data(input.allBots, time.Now().UTC().Truncate(time.Millisecond))...)
+		//writeaudit:dynamic the dynamic fragment is the fixed RETURNING list; SET payloads are db.Data
 		rows, err := tx.Query(ctx, `UPDATE mcp_servers SET "allBots" = $2, "updatedAt" = $3
-			WHERE id = $1 RETURNING `+serverColumns,
-			input.id, input.allBots, time.Now().UTC().Truncate(time.Millisecond))
+			WHERE id = $1 RETURNING `+serverColumns, arguments...)
 		if err != nil {
 			return err
 		}
@@ -176,7 +179,7 @@ func Agents(
 					(id, "spaceId", "userId", "botId", "serverId", "allowAllTools", "allowedTools", "createdAt", "updatedAt")
 					VALUES ($1, $2, $3, $4, $5, true, '[]'::jsonb, $6, $6)
 					ON CONFLICT ("botId", "serverId") DO NOTHING`,
-					effects.NewID(), actor.SpaceID, actor.UserID, botID, record.id, at); err != nil {
+					db.Data(effects.NewID(), actor.SpaceID, actor.UserID, botID, record.id, at)...); err != nil {
 					return err
 				}
 			}

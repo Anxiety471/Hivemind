@@ -84,6 +84,7 @@ func List(
 	}
 	servers := []Server{}
 	err = database.Tenant(ctx, actor, func(tx pgx.Tx) error {
+		//writeaudit:dynamic read: the column list and predicate are the fixed serverColumns/serverAvailable consts
 		rows, err := tx.Query(ctx, `SELECT `+serverColumns+` FROM mcp_servers
 			WHERE `+serverAvailable+`
 			ORDER BY name ASC, "createdAt" ASC`, actor.SpaceID, actor.UserID)

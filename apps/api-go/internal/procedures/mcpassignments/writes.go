@@ -194,6 +194,7 @@ func Replace(
 		// The servers list collapses duplicate ids, so a repeated server in the input makes the
 		// count differ and this is an isolation failure before any write, as in TypeScript.
 		var visible int
+		//writeaudit:dynamic read: the predicate is the fixed serverVisible const; the ids are filters
 		err = tx.QueryRow(ctx, `SELECT count(*)::int FROM mcp_servers
 			WHERE id = ANY($3) AND `+serverVisible, actor.SpaceID, actor.UserID, serverIDs).Scan(&visible)
 		if err != nil {
@@ -248,8 +249,8 @@ func Replace(
 				if _, err := tx.Exec(ctx, `INSERT INTO bot_mcp_servers
 					(id, "spaceId", "userId", "botId", "serverId", "allowAllTools", "allowedTools", "createdAt", "updatedAt")
 					VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $8)`,
-					effects.NewID(), actor.SpaceID, actor.UserID, botID, assignment.ServerID,
-					assignment.AllowAllTools, string(tools), at); err != nil {
+					db.Data(effects.NewID(), actor.SpaceID, actor.UserID, botID, assignment.ServerID,
+						assignment.AllowAllTools, string(tools), at)...); err != nil {
 					return err
 				}
 			}
@@ -261,6 +262,7 @@ func Replace(
 			}
 			seqs = append(seqs, seq...)
 		}
+		//writeaudit:dynamic read: the column list is the fixed columns const; args are filters
 		assignmentRows, err := tx.Query(ctx, `SELECT `+columns+` FROM bot_mcp_servers a
 			WHERE a."botId" = $1 AND a."spaceId" = $2 AND a."userId" = $3
 			ORDER BY a."createdAt" ASC`, botID, actor.SpaceID, actor.UserID)
@@ -412,6 +414,7 @@ func notDismissed(block map[string]any) bool {
 // ListServer is mcp.servers.agents' final read: every assignment of this server, oldest first.
 // The server is already known to be the caller's, so no availability filter applies.
 func ListServer(ctx context.Context, tx pgx.Tx, actor db.Actor, serverID string) ([]Assignment, error) {
+	//writeaudit:dynamic read: the column list is the fixed columns const; args are filters
 	rows, err := tx.Query(ctx, `SELECT `+columns+` FROM bot_mcp_servers a
 		WHERE a."spaceId" = $1 AND a."userId" = $2 AND a."serverId" = $3
 		ORDER BY a."createdAt" ASC`, actor.SpaceID, actor.UserID, serverID)

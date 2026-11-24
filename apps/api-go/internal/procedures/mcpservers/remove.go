@@ -49,6 +49,7 @@ func Remove(
 	}
 	var serverID, secretID string
 	err = database.Tenant(ctx, actor, func(tx pgx.Tx) error {
+		//writeaudit:dynamic read: the predicate is the fixed serverAvailable const; the ids are filters
 		return tx.QueryRow(ctx, `SELECT id, coalesce("secretId", '') FROM mcp_servers
 			WHERE id = $3 AND `+serverAvailable, actor.SpaceID, actor.UserID, values["id"]).
 			Scan(&serverID, &secretID)

@@ -78,6 +78,7 @@ func Disconnect(
 	var revision *int32
 	err = database.Tenant(ctx, actor, func(tx pgx.Tx) error {
 		var found string
+		//writeaudit:dynamic read: the predicate is the fixed serverAvailable const; the ids are filters
 		err := tx.QueryRow(ctx, `SELECT id FROM mcp_servers WHERE id = $3 AND `+serverAvailable,
 			actor.SpaceID, actor.UserID, serverID).Scan(&found)
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -108,10 +109,10 @@ func Disconnect(
 func recordHealth(ctx context.Context, database *db.DB, actor db.Actor, serverID string, revision int32) {
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	err := database.Tenant(ctx, actor, func(tx pgx.Tx) error {
+		arguments := append(db.Data(oauthPendingMessage, now), serverID, revision)
 		_, err := tx.Exec(ctx, `UPDATE mcp_servers SET "healthStatus" = 'unknown',
-			"healthMessage" = $2, "healthToolCount" = NULL, "healthCheckedAt" = $4,
-			"updatedAt" = $4 WHERE id = $1 AND revision = $3`,
-			serverID, oauthPendingMessage, revision, now)
+			"healthMessage" = $1, "healthToolCount" = NULL, "healthCheckedAt" = $2,
+			"updatedAt" = $2 WHERE id = $3 AND revision = $4`, arguments...)
 		return err
 	})
 	if err != nil {
@@ -153,6 +154,7 @@ func replaceMaterial(
 		committed := false
 		var revision int32
 		txErr := database.Tenant(ctx, actor, func(tx pgx.Tx) error {
+			//writeaudit:dynamic transaction-scoped advisory lock; no row payload
 			if _, err := tx.Exec(ctx,
 				`SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))`,
 				"mcp-oauth-material", serverID); err != nil {
@@ -161,6 +163,7 @@ func replaceMaterial(
 			var current materialSnapshot
 			var spaceID string
 			var allSpaces bool
+			//writeaudit:dynamic read: the predicate is the fixed serverAvailable const; the ids are filters
 			err := tx.QueryRow(ctx, `SELECT endpoint, "secretId", "spaceId", "allSpaces"
 				FROM mcp_servers WHERE id = $3 AND `+serverAvailable,
 				actor.SpaceID, actor.UserID, serverID).Scan(
@@ -213,12 +216,14 @@ func replaceMaterial(
 			}
 			if _, err := tx.Exec(ctx, `INSERT INTO secrets (id, "spaceId", "userId", kind, ciphertext)
 				VALUES ($1, $2, $3, 'mcp', $4)`,
-				record.ID, secretSpace, actor.UserID, record.Ciphertext); err != nil {
+				db.Data(record.ID, secretSpace, actor.UserID, record.Ciphertext)...); err != nil {
 				return err
 			}
-			err = tx.QueryRow(ctx, `UPDATE mcp_servers SET "secretId" = $2,
-				revision = revision + 1, "updatedAt" = $3 WHERE id = $1 RETURNING revision`,
-				serverID, record.ID, time.Now().UTC().Truncate(time.Millisecond)).Scan(&revision)
+			at := time.Now().UTC().Truncate(time.Millisecond)
+			arguments := append(db.Data(record.ID, at), serverID)
+			err = tx.QueryRow(ctx, `UPDATE mcp_servers SET "secretId" = $1,
+				revision = revision + 1, "updatedAt" = $2 WHERE id = $3 RETURNING revision`,
+				arguments...).Scan(&revision)
 			if err != nil {
 				return err
 			}
@@ -256,6 +261,7 @@ func snapshotMaterial(
 ) (materialSnapshot, error) {
 	var snapshot materialSnapshot
 	err := database.Tenant(ctx, actor, func(tx pgx.Tx) error {
+		//writeaudit:dynamic read: the predicate is the fixed serverAvailable const; the ids are filters
 		err := tx.QueryRow(ctx, `SELECT endpoint, "secretId" FROM mcp_servers
 			WHERE id = $3 AND `+serverAvailable, actor.SpaceID, actor.UserID, serverID).
 			Scan(&snapshot.endpoint, &snapshot.secretID)
