@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   BUILTIN_AGENT_TOOL_NAMES,
+  codeModeCallableTools,
   selectBuiltinToolsForRun,
 } from "../runs/tools/run-tool-selection.js";
 import { describeToolActivity } from "../runtime/pi/tools/pi-runtime-tools.js";
 import { FIND_TOOL, USE_TOOL } from "./builtin.tool-definition.js";
 import { CORE_BUILTIN_TOOL_NAMES, findTools, partitionTools } from "./builtin-tool-bridge.js";
+import { CODE_MODE } from "./code-mode.tool-definition.js";
 
 const ownerChat = selectBuiltinToolsForRun({
   graphicalToolsAllowed: false,
@@ -59,10 +61,49 @@ describe("built-in tool bridge", () => {
     // with its schema; a watch says it takes no other timing; read_file takes a line range;
     // ask_user carries the content being decided about; search_history lists earlier tool work by
     // kind without a keyword; schedule_create says whether a routine runs in its chat, and takes
-    // the events (webhook, Git, chat, email) a routine can start on.
-    expect(definitionBytes(listed)).toBeLessThanOrEqual(36_500);
+    // the events (webhook, Git, chat, email) a routine can start on. write_file, attach_file and
+    // shell also carry the Space Drive default, and attach_file takes a slug for search.
+    expect(definitionBytes(listed)).toBeLessThanOrEqual(37_000);
     expect(deferred.map((tool) => tool.name)).toEqual(
       expect.arrayContaining(["render_plot", "create_space", "generate_secret", "scratchpad_add"]),
+    );
+  });
+
+  it("offers code_mode only when the lab is on, and drops the find/use bridge", () => {
+    const withoutLab = selectBuiltinToolsForRun({
+      graphicalToolsAllowed: false,
+      groupId: null,
+      trigger: "user",
+      semanticMemoryEnabled: false,
+      historyRetrievalEnabled: true,
+      messagingChannelRun: false,
+      fleetManagement: true,
+      followUpFromUser: true,
+    });
+    expect(withoutLab.some((tool) => tool.name === CODE_MODE)).toBe(false);
+
+    const withLab = selectBuiltinToolsForRun({
+      graphicalToolsAllowed: false,
+      groupId: null,
+      trigger: "user",
+      semanticMemoryEnabled: false,
+      historyRetrievalEnabled: true,
+      messagingChannelRun: false,
+      fleetManagement: true,
+      followUpFromUser: true,
+      codeModeEnabled: true,
+    });
+    expect(withLab.some((tool) => tool.name === CODE_MODE)).toBe(true);
+    const { listed, deferred } = partitionTools(withLab);
+    expect(listed.map((tool) => tool.name)).toContain(CODE_MODE);
+    expect(listed.some((tool) => tool.name === FIND_TOOL || tool.name === USE_TOOL)).toBe(false);
+    expect(deferred).toEqual([]);
+    // Deferred built-ins are still reachable by name inside a script.
+    expect(codeModeCallableTools(withLab).map((tool) => tool.name)).toEqual(
+      expect.arrayContaining(["read_file", "list_files", "search_history", "task_catalog"]),
+    );
+    expect(codeModeCallableTools(withLab).map((tool) => tool.name)).not.toEqual(
+      expect.arrayContaining(["write_file", "shell", "run_subagent", "computer_observe"]),
     );
   });
 

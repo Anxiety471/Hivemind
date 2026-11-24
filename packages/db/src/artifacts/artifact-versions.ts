@@ -93,7 +93,9 @@ function artifactVersionLockKey(params: {
   name: string;
 }): string {
   if (params.botId == null && params.groupId == null) {
-    return [params.spaceId, "drive", params.folderId ?? "", params.name.toLowerCase()].join("\u001f");
+    return [params.spaceId, "drive", params.folderId ?? "", params.name.toLowerCase()].join(
+      "\u001f",
+    );
   }
   if (params.folderId != null) {
     return [

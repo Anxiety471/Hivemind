@@ -1,20 +1,24 @@
 import type { AgentToolExecutionObserver } from "@rakazo/adapter-kit";
-import { BACKGROUND_HELPER_TRIGGER, toolResultTaintsRun } from "@rakazo/core";
-import { isTerminatingReplyResult } from "../../approvals/approval-effect.js";
+import { BACKGROUND_HELPER_TRIGGER, redactSecrets, toolResultTaintsRun } from "@rakazo/core";
+import { isTerminatingReplyResult, isToolPauseResult } from "../../approvals/approval-effect.js";
 import { argumentGiven } from "../../bots/update-bot-patch.js";
 import { IMAGE_RETURNING_COMPUTER_TOOLS } from "../../models/model-vision.js";
 import { MODEL_CANNOT_SEE_MESSAGE } from "../../models/model-vision.prompt.js";
 import { strategicInitiativeToolAllowed } from "../../routines/strategic-initiative.js";
+import { CODE_MODE } from "../../tools/code-mode.tool-definition.js";
+import { runCodeModeScript } from "../../tools/code-mode-sandbox.js";
 import type { RunContext } from "../assembly/run-context.js";
 import { markReadOutsideContent } from "../assembly/run-context.js";
+import { codeModeToolExecutionId } from "../lifecycle/run-effects.js";
 import { noteComputerTaskStep } from "../lifecycle/run-progress.js";
 import { logToolRefusal } from "../turn/tool-completion-audit.js";
 import { refusal } from "../turn/tool-refusal.js";
-import type { ToolHandler } from "./run-tool-gate.js";
+import type { ToolCall, ToolHandler } from "./run-tool-gate.js";
 import { auditToolCall, gateToolCall } from "./run-tool-gate.js";
 import { prepareToolRequest, resolveToolRequest } from "./run-tool-request.js";
 import {
   BUILTIN_AGENT_TOOL_NAMES,
+  codeModeCallableTools,
   PAGE_BROWSER_TOOL_NAMES,
   SUBAGENT_HIDDEN_TOOLS,
 } from "./run-tool-selection.js";
@@ -57,6 +61,7 @@ const TOOL_HANDLERS = new Map<string, ToolHandler>([
   [USER_COMPUTER_SHELL_TOOL, userComputerShell],
   [USER_COMPUTER_OBSERVE_TOOL, userComputerObserve],
   [USER_COMPUTER_ACT_TOOL, userComputerAct],
+  [CODE_MODE, codeModeTool],
   ...Object.entries(purchaseTools),
   ...Object.entries(preferenceTools),
   ...Object.entries(feedbackTools),
@@ -218,6 +223,86 @@ async function dispatchTool(
       }),
     });
   }
+}
+
+/** A failed tool call becomes the error a script catches, never a silent value. */
+function toolResultErrorText(result: unknown): string {
+  if (typeof result !== "object" || result === null) return "the tool failed";
+  if ("error" in result) return String(result.error);
+  if (!("content" in result) || !Array.isArray(result.content)) return "the tool failed";
+  const text = result.content
+    .flatMap((part) =>
+      part &&
+      typeof part === "object" &&
+      "type" in part &&
+      part.type === "text" &&
+      "text" in part &&
+      typeof part.text === "string"
+        ? [part.text]
+        : [],
+    )
+    .join("\n")
+    .trim();
+  return text || "the tool failed";
+}
+
+/**
+ * Runs one model-authored TypeScript snippet against the read-only tools this run offers.
+ * Every call goes through applyTool, so approvals, taint, refusals and audit see it exactly as
+ * a direct call. A call that pauses (approval, secret) stops the script and becomes this
+ * tool's own result, which ends the turn as a direct call would.
+ */
+async function codeModeTool(ctx: RunContext, call: ToolCall) {
+  const code = typeof call.args.code === "string" ? call.args.code : "";
+  if (!code.trim()) return call.finish({ error: "code must be the TypeScript to run." });
+  const callable = new Set(codeModeCallableTools(ctx.tools.offered).map((tool) => tool.name));
+  let ordinal = 0;
+  let paused: unknown;
+  // A paused call ends the script: the isolate is interrupted instead of letting a catch
+  // swallow the refusal and keep calling tools after the person was asked.
+  const stop = new AbortController();
+  const outcome = await runCodeModeScript({
+    code,
+    tools: [...callable],
+    signal: AbortSignal.any([ctx.context.signal, stop.signal]),
+    call: async (name, args) => {
+      if (paused) throw new Error("The script has stopped.");
+      if (!callable.has(name)) {
+        throw Object.assign(new Error(`${name} is not a read-only tool this run offers`), {
+          name: "ToolUnavailable",
+        });
+      }
+      const result = await applyTool(
+        ctx,
+        name,
+        args,
+        codeModeToolExecutionId(call.executionId, ordinal++),
+      );
+      if (isToolPauseResult(result)) {
+        paused = result;
+        stop.abort();
+        throw new Error("The call is waiting for the person, so the script stopped.");
+      }
+      if (isToolError(result)) {
+        throw Object.assign(new Error(toolResultErrorText(result)), { name: "ToolFailed" });
+      }
+      return result;
+    },
+  });
+  if (paused) return paused;
+  const output = redactSecrets(outcome.output, ctx.secrets);
+  if (outcome.error) {
+    return call.finish({
+      ...(output ? { output } : {}),
+      error: redactSecrets(`${outcome.error.name}: ${outcome.error.message}`, ctx.secrets),
+      ...(outcome.calls.length ? { calls: outcome.calls } : {}),
+    });
+  }
+  return call.finish({
+    output: output || "(the script printed nothing; print what you need with console.log)",
+    ...(outcome.truncated ? { truncated: true } : {}),
+    ...(outcome.calls.length ? { calls: outcome.calls } : {}),
+  });
 }
 
 export function isToolError(result: unknown): boolean {

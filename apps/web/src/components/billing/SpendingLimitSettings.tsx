@@ -31,7 +31,12 @@ export function SpendingLimitSettings() {
   const { t, i18n } = useLingui();
   const queries = useSpaceQueries();
   const queryClient = useQueryClient();
-  const query = useQuery(queries.spendingLimit.get.queryOptions());
+  // Whether a limit applies depends on a card, a wallet, or a payment made in another section, so
+  // an opened Approvals page reads it again instead of showing a decision made since the last read.
+  const query = useQuery({
+    ...queries.spendingLimit.get.queryOptions(),
+    refetchOnMount: "always",
+  });
   const status = query.data;
   const [editing, setEditing] = useState<SpendingLimit | null>(null);
   const [amountText, setAmountText] = useState("");
@@ -46,6 +51,8 @@ export function SpendingLimitSettings() {
   const payments = useQuery({
     ...queries.spendingLimit.payments.queryOptions(),
     enabled: Boolean(status?.shown),
+    // Bots pay while this section is closed; its history is shown as of right now.
+    refetchOnMount: "always",
   }).data;
   if (!status?.shown) return null;
   const { limit, spent } = status;

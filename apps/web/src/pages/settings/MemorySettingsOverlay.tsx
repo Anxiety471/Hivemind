@@ -26,6 +26,7 @@ import { ProviderSettingsForm } from "../../components/models/ProviderSettingsFo
 import { SETTINGS_CONTENT_WIDTH } from "../../components/settings/SettingsRows";
 import { useSave, useSpaceQueries } from "../../lib/query/query";
 import { errorCode, errorText } from "../../lib/query/user-error";
+import { useEventListener } from "../../lib/use-event-listener";
 import { SpaceMemorySection } from "../space/KnowledgeSection";
 
 type MemoryScope = "isolated" | "shared";
@@ -175,17 +176,17 @@ export function MemorySettingsOverlay({
   const [intervalDraft, setIntervalDraft] = useState("360");
   const [intervalError, setIntervalError] = useState<string | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
-  useEffect(() => {
-    if (!detailsOpen) return;
-    const closeOnOutsideClick = (event: MouseEvent) => {
+  useEventListener(
+    detailsOpen ? document : null,
+    "click",
+    (event) => {
       const target = event.target;
       if (!(target instanceof Node)) return;
       const popup = document.querySelector("[data-run-results]");
       if (popup && !popup.contains(target)) setDetailsOpen(false);
-    };
-    document.addEventListener("click", closeOnOutsideClick, true);
-    return () => document.removeEventListener("click", closeOnOutsideClick, true);
-  }, [detailsOpen]);
+    },
+    true,
+  );
   useEffect(() => {
     if (roamer) setIntervalDraft(String(roamer.intervalMinutes));
   }, [roamer?.intervalMinutes]);

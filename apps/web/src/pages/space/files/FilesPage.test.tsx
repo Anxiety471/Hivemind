@@ -163,6 +163,7 @@ const page = { breadcrumbs: [], folders: [], files: [], nextCursor: null };
 
 let queryClient: QueryClient;
 beforeEach(() => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   for (const method of Object.values(files)) method.mockReset();
   files.list.mockResolvedValue({ ...page, folders: [folder], files: [file] });
@@ -189,8 +190,13 @@ async function renderFiles(entry = "/app/files", props: ComponentProps<typeof Fi
       </QueryClientProvider>,
     ),
   );
+  // Every screen here asserts painted rows, so wait for the list calls the page made to answer
+  // and for their result to commit. Waiting on the cache alone races the mount effect: it can
+  // read a settled cache before the request even starts, then assert against a loading skeleton.
   await act(async () => {
     await vi.waitFor(() => expect(files.list).toHaveBeenCalled());
+    await Promise.all(files.list.mock.results.map((result) => result.value));
+    await vi.waitFor(() => expect(queryClient.isFetching()).toBe(0));
   });
   return {
     container,
@@ -205,7 +211,8 @@ async function renderFiles(entry = "/app/files", props: ComponentProps<typeof Fi
 it("lists folders and files, linking each into the Drive", async () => {
   const view = await renderFiles();
   try {
-    expect(view.container.textContent).toContain("Reports");
+    // The listing query resolving and React committing the rows are separate steps.
+    await vi.waitFor(() => expect(view.container.textContent).toContain("Reports"));
     expect(view.container.textContent).toContain("notes.txt");
     expect(view.container.querySelector("a[href='/app/files/folder/folder-1']")).not.toBeNull();
     expect(view.container.querySelector("a[href='/app/files/file-1']")).not.toBeNull();
@@ -340,7 +347,7 @@ it("shows file description and slug and updates them via Edit details", async ()
   });
   const view = await renderFiles();
   try {
-    expect(view.container.textContent).toContain("Quarterly launch notes");
+    await vi.waitFor(() => expect(view.container.textContent).toContain("Quarterly launch notes"));
     expect(view.container.textContent).toContain("q4-notes");
 
     const editButton = [...view.container.querySelectorAll("button")].find((button) =>

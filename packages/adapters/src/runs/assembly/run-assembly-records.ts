@@ -281,6 +281,7 @@ export async function loadRunRecords(
     nonOwnerChat: nonOwnerChatRun,
   });
   const ticketBoardEnabled = hasLab(resolveLabs(ownerLabs, deps.deploymentLabs), "board");
+  const codeModeEnabled = hasLab(resolveLabs(ownerLabs, deps.deploymentLabs), "code");
   const historySearchBeforeSeq =
     contextStrategy !== "current" && conversationRun.sourceMessageId
       ? (messages.find((message) => message.id === conversationRun.sourceMessageId)?.seq ??
@@ -344,6 +345,7 @@ export async function loadRunRecords(
     nonOwnerChatRun,
     replaysToolHistory,
     ticketBoardEnabled,
+    codeModeEnabled,
     helperDepth,
     historySearchBeforeSeq,
     agentEnvironmentInstruction,

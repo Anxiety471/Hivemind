@@ -2,10 +2,13 @@ import { ARTIFACT_NAME_MAX_LENGTH } from "@rakazo/contracts";
 import type { Prisma, PrismaClient } from "../database/client.js";
 import { isUniqueViolation } from "../database/prisma-errors.js";
 
-type BotFolderDb = Pick<PrismaClient, "fileFolder" | "bot"> | Pick<Prisma.TransactionClient, "fileFolder" | "bot">;
+type BotFolderDb =
+  | Pick<PrismaClient, "fileFolder" | "bot">
+  | Pick<Prisma.TransactionClient, "fileFolder" | "bot">;
 
 function sanitizeFolderName(raw: string, fallback = "Bot"): string {
   const cleaned = raw
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: remote file names may carry control characters; they are stripped here on purpose.
     .replace(/[\u0000-\u001f\u007f/\\]+/g, " ")
     .replace(/\s+/g, " ")
     .trim()
@@ -71,8 +74,15 @@ export async function ensureBotDriveFolder(
     if (afterRace) return afterRace.id;
   }
 
-  for (let attempt = 0; attempt < 10; attempt++) {
-    const suffix = attempt === 0 ? "" : attempt < 9 ? ` (${attempt + 1})` : ` (${input.botId.slice(-4)})`;
+  // Each pass tries a different candidate name after a unique collision, not the same call again,
+  // so retry() does not apply: the folder name is what changes.
+  for (let suffixIndex = 0; suffixIndex < 10; suffixIndex++) {
+    const suffix =
+      suffixIndex === 0
+        ? ""
+        : suffixIndex < 9
+          ? ` (${suffixIndex + 1})`
+          : ` (${input.botId.slice(-4)})`;
     const maxBase = Math.max(1, ARTIFACT_NAME_MAX_LENGTH - suffix.length);
     const name = `${baseName.slice(0, maxBase).trim()}${suffix}`;
     try {

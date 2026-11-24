@@ -124,10 +124,11 @@ describe("running Docker computer reuse", () => {
         expect(f.row.screenGeneration).toBe(running === true ? 7 : 8);
         expect(f.provision).toHaveBeenCalledTimes(running === true ? 0 : 1);
         expect(f.prepare).toHaveBeenCalledOnce();
-        expect(f.execute).toHaveBeenCalledWith(
-          expect.objectContaining({ providerRef: "provider" }),
-          expect.objectContaining({ argv: expect.arrayContaining(["mkdir", "shared"]) }),
-          context,
+        // Team Computers share one workspace root, so reuse creates no per-bot folders.
+        expect(f.execute).not.toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({ argv: expect.arrayContaining(["mkdir"]) }),
+          expect.anything(),
         );
         if (running !== "stopped") {
           expect(fetchMock).toHaveBeenCalledWith(

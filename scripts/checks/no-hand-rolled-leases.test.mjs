@@ -28,6 +28,11 @@ const EXISTING = new Set([
   "CloudAgent.leaseExpiresAt",
   "HomeDeletionNotice.claimId",
   "HomeDeletionNotice.claimExpiresAt",
+  // Not long work in one process, so not for `withLease`: a user's scheduled memory pass is a
+  // settings row that the next pass reads again. `retryAt` is when that pass runs next and
+  // `retryAttempt` counts its failed passes; neither holds work a process must keep or hand over.
+  "MemoryRoamerSettings.retryAt",
+  "MemoryRoamerSettings.retryAttempt",
   // The primitive's own table.
   "Lease.fence",
   // Not long work in one process, so not for `withLease`: a person's page holds computer control

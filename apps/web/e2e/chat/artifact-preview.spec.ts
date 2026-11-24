@@ -41,7 +41,7 @@ test("agent-attached files appear as cards with previews and downloads", async (
   const previewReady = new Promise<void>((resolve) => {
     releasePreview = resolve;
   });
-  await page.route("**/rpc/artifacts/get", async (route) => {
+  await page.route("**/api/v1/files/*/content*", async (route) => {
     await previewReady;
     await route.continue();
   });
@@ -96,7 +96,7 @@ test("agent-attached files appear as cards with previews and downloads", async (
   await captureScreenshot(page, testInfo, "html-preview-open");
 });
 
-test("audio attachments can retry a failed preview without leaving the card", async ({
+test("audio attachments stream from the content route without leaving the card", async ({
   page,
 }, testInfo) => {
   await signup(page, `audio-retry-${Date.now()}@rakazo.test`, "password12", "Audio Retry");
@@ -126,18 +126,16 @@ test("audio attachments can retry a failed preview without leaving the card", as
   await composer.press("Enter");
   const play = page.getByRole("button", { name: "Play clip.wav", exact: true });
   await expect(play).toBeVisible({ timeout: 30_000 });
-  await page.route("**/rpc/artifacts/get", (route) => route.abort("failed"));
-  await play.click();
-  await expect(page.getByRole("alert")).toContainText("Could not load this file.");
-  await expect(play).toBeEnabled();
-  await expect(page.getByRole("button", { name: "Download clip.wav", exact: true })).toBeVisible();
-  await captureScreenshot(page, testInfo, "audio-preview-failure-retry");
-  await page.unroute("**/rpc/artifacts/get");
+  // The card plays the file straight from its content route, so a failed load stays inside the
+  // native player and the card keeps its download action.
+  const content = page.waitForRequest("**/api/v1/files/*/content*");
   await play.click();
   const audio = page.locator('audio[aria-label="clip.wav"]');
   await expect(audio).toBeVisible();
   await expect(audio).toHaveAttribute("controls", "");
+  await expect(audio).toHaveAttribute("src", /\/content/);
+  await content;
   await expect(play).toHaveCount(0);
-  await expect(page.getByText("Could not load this file.", { exact: true })).toHaveCount(0);
-  await captureScreenshot(page, testInfo, "audio-preview-recovered");
+  await expect(page.getByRole("button", { name: "Download clip.wav", exact: true })).toBeVisible();
+  await captureScreenshot(page, testInfo, "audio-preview-playing");
 });

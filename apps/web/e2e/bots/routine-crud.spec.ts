@@ -12,6 +12,10 @@ import {
   signup,
 } from "../helpers/helpers";
 
+/** A routine's row lives in the bot panel; the chat transcript has its own pill for the same name. */
+const routineRow = (page: Page, name: RegExp) =>
+  page.getByTestId("bot-settings").getByRole("button", { name });
+
 async function addScheduleTrigger(page: Page, freq: string) {
   await page.getByRole("button", { name: "Add trigger" }).click();
   await page.getByRole("menuitem", { name: "On a schedule" }).hover();
@@ -45,7 +49,7 @@ test("a delayed schedule is visible only while the routine is active", async ({
   await openBotPanel(page);
   // The page's first load lists the routine unrouted, so wait for the routed list to replace it.
   await expect(page.getByRole("switch", { name: "Turn Morning report on or off" })).toBeChecked();
-  await page.getByRole("button", { name: /Morning report/ }).click();
+  await routineRow(page, /Morning report/).click();
   const delay = page.getByRole("status").filter({ hasText: "Schedule delayed" });
   await expect(delay).toBeVisible();
   await captureScreenshot(page, testInfo, "routine-schedule-delayed");
@@ -96,7 +100,7 @@ test("routine editing updates in place, preserves timezone, deletion persists, a
   await page.reload();
   await openBotPanel(page);
 
-  await page.getByRole("button", { name: /Tokyo check-in/ }).click();
+  await routineRow(page, /Tokyo check-in/).click();
   await page.locator("label:has-text('Name') input").fill("Weekday check-in");
   await page.locator("label:has-text('Instruction') textarea").fill("Send the revised update");
   await chooseOption(page.getByLabel("How often"), "Weekdays");
@@ -104,10 +108,10 @@ test("routine editing updates in place, preserves timezone, deletion persists, a
   for (const column of ["modelProvider", "modelId", "thinkingLevel"])
     expect(patch).not.toHaveProperty(column);
 
-  const updatedButton = page.getByRole("button", { name: /Weekday check-in/ });
+  const updatedButton = routineRow(page, /Weekday check-in/);
   await expect(updatedButton).toHaveCount(1);
   await expect(updatedButton).toContainText("Weekdays at 9:00 AM");
-  await expect(page.getByRole("button", { name: /Tokyo check-in/ })).toHaveCount(0);
+  await expect(routineRow(page, /Tokyo check-in/)).toHaveCount(0);
 
   const [updated] = await rpc<Routine[]>(page, "routines/list", { botId });
   expect(updated).toMatchObject({
@@ -171,7 +175,7 @@ test("routine editing updates in place, preserves timezone, deletion persists, a
     thinkingLevel: "low",
     reasoning: true,
   });
-  await page.getByRole("button", { name: /Model check/ }).click();
+  await routineRow(page, /Model check/).click();
   await page.getByRole("button", { name: "Advanced", exact: true }).click();
   await modelSelect.click();
   // The option reads "llama-3.3-70b (<connection name>)".
@@ -182,9 +186,9 @@ test("routine editing updates in place, preserves timezone, deletion persists, a
     modelId: "llama-3.3-70b",
     thinkingLevel: null,
   });
-  await expect(page.getByRole("button", { name: /Model check/ })).toContainText("llama-3.3-70b");
+  await expect(routineRow(page, /Model check/)).toContainText("llama-3.3-70b");
 
-  await page.getByRole("button", { name: /Model check/ }).click();
+  await routineRow(page, /Model check/).click();
   await page.locator("label:has-text('Name') input").fill("Renamed model check");
   const renamePatch = await saveAndReturn(page, "routines/update");
   for (const column of ["modelProvider", "modelId", "thinkingLevel"])
@@ -228,7 +232,7 @@ test("an email trigger claims the bot's address and saves who can start it", asy
   await captureScreenshot(page, testInfo, "routine-email-trigger");
 
   expect(await saveAndReturn(page, "routines/create")).toMatchObject({ emailSenders: "domain" });
-  await expect(page.getByRole("button", { name: /Inbox triage/ })).toContainText("Email");
+  await expect(routineRow(page, /Inbox triage/)).toContainText("Email");
   const [saved] = await rpc<Routine[]>(page, "routines/list", { botId });
   expect(saved).toMatchObject({ name: "Inbox triage", crons: [], emailSenders: "domain" });
   expect(await rpc(page, "bots/emailAddress", { botId })).toEqual({
@@ -311,7 +315,7 @@ test("switching bots while a routine save is pending does not reopen stale state
   await page.reload();
 
   await openBotPanel(page);
-  await page.getByRole("button", { name: /First routine/ }).click();
+  await routineRow(page, /First routine/).click();
   await page.locator("label:has-text('Name') input").fill("First routine updated");
 
   let releaseUpdate!: () => void;
@@ -351,8 +355,8 @@ test("switching bots while a routine save is pending does not reopen stale state
   await expect(page.getByRole("alert")).toHaveCount(0);
 
   await openBotPanel(page);
-  await expect(page.getByRole("button", { name: /Second routine/ })).toHaveCount(1);
-  await expect(page.getByRole("button", { name: /First routine/ })).toHaveCount(0);
+  await expect(routineRow(page, /Second routine/)).toHaveCount(1);
+  await expect(routineRow(page, /First routine/)).toHaveCount(0);
 
   let releaseStaleList!: () => void;
   let sawStaleList!: () => void;
@@ -386,8 +390,8 @@ test("switching bots while a routine save is pending does not reopen stale state
   await staleListResponse;
   await page.unroute("**/rpc/routines/list");
 
-  await expect(page.getByRole("button", { name: /Second routine/ })).toHaveCount(1);
-  await expect(page.getByRole("button", { name: /First routine/ })).toHaveCount(0);
+  await expect(routineRow(page, /Second routine/)).toHaveCount(1);
+  await expect(routineRow(page, /First routine/)).toHaveCount(0);
 });
 
 function localSchedule(iso: string, timezone: string) {
@@ -499,9 +503,7 @@ test("change-trigger screenshot walkthrough", { tag: "@nightly" }, async ({ page
       loud: false,
     },
   });
-  await expect(page.getByRole("button", { name: /Inbox watch/ })).toContainText(
-    "When something changes",
-  );
+  await expect(routineRow(page, /Inbox watch/)).toContainText("When something changes");
   const routines = await rpc<Routine[]>(page, "routines/list", { botId });
   expect(routines.find((routine) => routine.name === "Inbox watch")?.watch).toMatchObject({
     kind: "files",
@@ -558,7 +560,7 @@ test("an HTTPS change trigger saves and reopens", async ({ page }, testInfo) => 
   });
   const [saved] = await rpc<Routine[]>(page, "routines/list", { botId });
   expect(saved?.watch).toMatchObject({ kind: "http", url: "https://example.com/status" });
-  await page.getByRole("button", { name: /Status watch/ }).click();
+  await routineRow(page, /Status watch/).click();
   await expect(card.getByRole("combobox", { name: "What to watch" })).toHaveText(
     "An HTTPS endpoint",
   );

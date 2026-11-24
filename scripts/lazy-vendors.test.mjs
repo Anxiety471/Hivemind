@@ -29,6 +29,10 @@ const LAZY_NON_VENDORS = [
   "postal-mime",
   "mailauth",
   "@prisma/client",
+  // The code-mode sandbox compiles small scripts and runs them in an isolate, both only when a
+  // run turns the lab on.
+  "esbuild",
+  "quickjs-emscripten",
 ];
 // Known static imports still to make lazy. Remove an entry once its SDK loads on demand.
 const PENDING = [

@@ -7,6 +7,7 @@ import { fleetTools } from "./builtin-fleet.tool-definition.js";
 import { memoryTools } from "./builtin-memory.tool-definition.js";
 import { serviceTools } from "./builtin-services.tool-definition.js";
 import { workTools } from "./builtin-work.tool-definition.js";
+import { codeModeToolDefinition } from "./code-mode.tool-definition.js";
 
 export const DELEGATION_TOOL_NAMES = new Set<string>([
   "run_subagent",
@@ -19,6 +20,8 @@ export const DELEGATION_TOOL_NAMES = new Set<string>([
 
 export const builtinAgentTools: ConnectorTool[] = [
   ...computerTools,
+  // Replaced per run with the index of that run's read-only tools when the lab is on.
+  codeModeToolDefinition(""),
   ...driveTools,
   ...conversationTools,
   ...serviceTools,

@@ -87,6 +87,7 @@ async function damagedComputer(damage: "resume_heals" | "persists" = "resume_hea
     maintenanceId: null as string | null,
     homeRevision: "saved",
     homeRevisionAt,
+    restorePending: false,
     autoRecoveredAt: null as Date | null,
     runningSince: new Date(0),
     updatedAt: new Date(),
@@ -155,11 +156,13 @@ describe("a computer whose system is damaged", () => {
     ]);
   });
 
-  it("is recovered when its damage first shows while laying out the workspace", async () => {
+  it("is recovered when its damage first shows while restoring the workspace", async () => {
     const { api, deps, row, first } = await damagedComputer();
-    // Already prepared in this process, so only a team computer's layout runs a command.
+    // Prepared earlier in this process, so the damage first surfaces in the restore that follows.
     vi.spyOn(deps.sandbox, "prepare").mockResolvedValueOnce(undefined);
-    row.scope = "team";
+    vi.spyOn(deps.sandbox, "importWorkspace").mockRejectedValueOnce(new SandboxDamagedError());
+    row.state = "stopped";
+    row.restorePending = true;
 
     const ref = await provisionComputer(deps, row.id, context);
 

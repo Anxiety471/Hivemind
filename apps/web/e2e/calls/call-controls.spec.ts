@@ -17,9 +17,9 @@ test("an ongoing call stays in reach on a page outside the shell", async ({ page
   await expect(call).toBeVisible();
 
   await page.getByTestId("user-menu-trigger").click();
-  await page.getByRole("button", { name: "Artifacts", exact: true }).click();
-  await expect(page).toHaveURL(/\/app\/artifacts$/);
-  await expect(page.getByRole("heading", { name: "Artifacts", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Files", exact: true }).click();
+  await expect(page).toHaveURL(/\/app\/files$/);
+  await expect(page.getByRole("heading", { name: "Files", exact: true })).toBeVisible();
   await expect(call).toBeVisible();
   await captureScreenshot(page, testInfo, "call-card-artifacts");
 

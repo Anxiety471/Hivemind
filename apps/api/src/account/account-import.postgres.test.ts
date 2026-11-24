@@ -512,9 +512,8 @@ describePostgres("account import (PostgreSQL)", () => {
     expect(Buffer.from(stored.get(art2.storageKey)!).toString()).toBe("v2");
 
     const files = new Map<string, string>();
-    for await (const file of home.exportHome(child.computer!.homeKey, context, {
-      directory: `bots/${child.id}`,
-    }))
+    // Team computers put a bot's files at the workspace root; the bot subtree was retired.
+    for await (const file of home.exportHome(child.computer!.homeKey, context))
       files.set(
         file.path,
         `${Buffer.from(file.content).toString("hex")}${file.executable ? " +x" : ""}`,
@@ -618,9 +617,7 @@ describePostgres("account import (PostgreSQL)", () => {
       include: { computer: true },
     });
     const files = new Map<string, Uint8Array>();
-    for await (const file of home.exportHome(child.computer!.homeKey, context, {
-      directory: `bots/${child.id}`,
-    }))
+    for await (const file of home.exportHome(child.computer!.homeKey, context))
       files.set(file.path, file.content);
     expect(Buffer.from(files.get("archive.zip")!)).toEqual(Buffer.from(inner));
   });

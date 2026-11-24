@@ -1348,7 +1348,10 @@ describe("a reply's kept tool calls", () => {
 
 describe("timed live steps, cost, and checkpoint branches", () => {
   it("tracks running steps, completion durations, usage cost, and attempt branches", () => {
-    let blocks = appendToolCallSegment([], "shell", "pnpm test", { startedAtMs: 1_000, attempt: 1 });
+    let blocks = appendToolCallSegment([], "shell", "pnpm test", {
+      startedAtMs: 1_000,
+      attempt: 1,
+    });
     expect(blocks).toEqual([
       {
         kind: "steps",

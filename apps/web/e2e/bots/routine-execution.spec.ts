@@ -73,7 +73,9 @@ test("routine test-run completes and survives reload", async ({ page }, testInfo
   await saved;
   await expect(page.getByRole("button", { name: "Save" })).toBeEnabled();
   await page.getByRole("button", { name: "Back", exact: true }).click();
-  const routine = page.getByRole("button", { name: /Daily verification/ });
+  const routine = page
+    .getByTestId("bot-settings")
+    .getByRole("button", { name: /Daily verification/ });
   await expect(routine).toContainText("Weekdays at 9:00 AM");
   await captureScreenshot(page, testInfo, "33-routine-scheduled");
 
@@ -103,10 +105,13 @@ test("routine test-run completes and survives reload", async ({ page }, testInfo
   await expect(reply).toBeVisible();
   await expect(reply).toContainText(/routine-run-now-ok/i);
   await openBotPanel(page);
-  await expect(page.getByRole("button", { name: /Daily verification/ })).toContainText(
-    "Weekdays at 9:00 AM",
-  );
-  await page.getByRole("button", { name: /Daily verification/ }).click();
+  await expect(
+    page.getByTestId("bot-settings").getByRole("button", { name: /Daily verification/ }),
+  ).toContainText("Weekdays at 9:00 AM");
+  await page
+    .getByTestId("bot-settings")
+    .getByRole("button", { name: /Daily verification/ })
+    .click();
   const history = page.getByTestId("routine-run-history");
   await expect(history.getByTestId("routine-run-row")).toHaveCount(1);
   expect((await runs()).map((run) => run.status)).toEqual(["completed"]);
@@ -168,7 +173,10 @@ test("a routine run that failed to start shows the error in Details", async ({
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.reload();
   await openBotPanel(page);
-  await page.getByRole("button", { name: /Nightly check/ }).click();
+  await page
+    .getByTestId("bot-settings")
+    .getByRole("button", { name: /Nightly check/ })
+    .click();
   const history = page.getByTestId("routine-run-history");
   await history.getByText("Details", { exact: true }).click();
   await expect(history.locator("pre")).toHaveText(error);
@@ -228,7 +236,10 @@ test("run history links runs that replied and marks silent ones", async ({ page 
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.reload();
   await openBotPanel(page);
-  await page.getByRole("button", { name: /Price watch/ }).click();
+  await page
+    .getByTestId("bot-settings")
+    .getByRole("button", { name: /Price watch/ })
+    .click();
   const history = page.getByTestId("routine-run-history");
   await expect(history.getByRole("heading", { name: "Run history" })).toBeVisible();
   const rows = history.getByTestId("routine-run-row");

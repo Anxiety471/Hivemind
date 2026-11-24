@@ -1,5 +1,8 @@
 {
   "apps/api-go/tools/contract-lane-d.mts": 30,
+  "apps/api-go/tools/contract-lane-j.mts": 4,
+  "apps/api-go/tools/contract-threads-get.mts": 2,
+  "apps/api-go/tools/infra-d-surrogate-wire.mts": 3,
   "apps/api/src/billing/billing.ts": 1,
   "apps/desktop/src/main/windows/renderer-assets.ts": 3,
   "apps/web/server/preview-middleware.ts": 3,
