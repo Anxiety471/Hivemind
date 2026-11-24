@@ -157,7 +157,6 @@ export function laneLPushCases(system: System): Case[] {
   };
   const tokenA = (seeded: Seeded) => `a-${seeded.userId}`;
   const tokenB = (seeded: Seeded) => `b-${seeded.userId}`;
-  const tokenC = (seeded: Seeded) => `c-${seeded.userId}`;
 
   return [
     // ---- registerPush: the token store's own state machine -------------------
