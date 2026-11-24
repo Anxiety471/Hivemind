@@ -22,12 +22,6 @@ import { spendingPeriodStart } from "../../../packages/core/src/billing/spending
 import { asSystem, contentEncryptionOf } from "../../../packages/db/src/index.js";
 import { createApp } from "../../api/src/app.js";
 import { CONTRACT_ENCRYPTION_KEY } from "./contract-key.mts";
-import {
-  clearVerified,
-  digestMismatchHint,
-  maskedVerified,
-  registerVerified,
-} from "./contract-norm.mts";
 import { laneDCases } from "./contract-lane-d.mts";
 import { laneHCases, laneHState } from "./contract-lane-h.mts";
 import { laneICases } from "./contract-lane-i.mts";
@@ -38,6 +32,12 @@ import { laneLPushCases, laneLPushState } from "./contract-l-push.mts";
 import { laneLReviewCases } from "./contract-l-review.mts";
 import { membershipCases, membershipReset, membershipState } from "./contract-membership.mts";
 import { modelsCases } from "./contract-models.mts";
+import {
+  clearVerified,
+  digestMismatchHint,
+  maskedVerified,
+  registerVerified,
+} from "./contract-norm.mts";
 import { spaceRunCases } from "./contract-spaces-runs.mts";
 import { routineResumeCases } from "./contract-routine-resume.mts";
 import { routineCases } from "./contract-routines.mts";
@@ -1702,6 +1702,10 @@ type MessagingSeed = {
   oddConnection?: boolean;
 };
 
+// A code the fixture seeds directly, so a procedure that fails to issue a fresh one is caught
+// instead of having the seeded value registered as this side's random code.
+const SEEDED_LINK_CODE = "AAAAAAAA";
+
 function seedMessaging(config: MessagingSeed = {}) {
   return async (seeded: Seeded) => {
     const user = seeded.userId;
@@ -1794,7 +1798,7 @@ function seedMessaging(config: MessagingSeed = {}) {
       await system.messagingLinkCode.create({
         data: {
           id: `${user}-oldcode`,
-          code: "AAAAAAAA",
+          code: SEEDED_LINK_CODE,
           userId: user,
           spaceId: seeded.spaces[0],
           botId: `${user}-mb2`,
@@ -1916,6 +1920,11 @@ function messagingCases(): Case[] {
       select: { code: true, expiresAt: true },
     });
     assert.equal(rows.length, 1, "messaging.link.start: expected one stored code");
+    assert.notEqual(
+      rows[0]!.code,
+      SEEDED_LINK_CODE,
+      "messaging.link.start: kept the seeded code instead of issuing a fresh one",
+    );
     assert.equal(
       payload.code.replace("-", ""),
       rows[0]!.code,

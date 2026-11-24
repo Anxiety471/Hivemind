@@ -168,7 +168,7 @@ function pageCheck(
         // in the page_share secret row, which laneJState opens.
         if (!expected.token) registerVerified(side, token, "<random-secret>");
       }
-      if (!expected.token) registerVerified(side, page.shareTokenHash, "<sha256>");
+      if (!expected.token) registerVerified(side, page.shareTokenHash!, "<sha256>");
     } else {
       assert.equal(urls.length, 0, `${name}: response unexpectedly contains a share URL`);
       assert.equal(page.visibility, "private", `${name}: page visibility`);

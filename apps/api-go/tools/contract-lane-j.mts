@@ -289,9 +289,10 @@ export function laneJCases(system: System): Case[] {
       where: { id: `${seeded.userId}-bot` },
       select: { webhookSecretId: true },
     });
-    assert.ok(bot?.webhookSecretId, "webhook secret: bot holds no secret after the call");
+    const secretID = bot?.webhookSecretId;
+    assert.ok(secretID, "webhook secret: bot holds no secret after the call");
     const row = await system.secret.findUnique({
-      where: { id: bot.webhookSecretId },
+      where: { id: secretID },
       select: { id: true, ciphertext: true },
     });
     assert.ok(row, "webhook secret: the bot points at a missing secret row");
