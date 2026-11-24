@@ -7,8 +7,10 @@ package validate
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"math"
+	"math/big"
 	"regexp"
 	"sort"
 	"strconv"
@@ -347,7 +349,9 @@ func toNumber(value any) float64 {
 		return 0
 	case json.Number:
 		parsed, err := strconv.ParseFloat(typed.String(), 64)
-		if err != nil {
+		// JSON.parse("1e999") is Infinity, not a syntax error; ParseFloat
+		// returns the ±Inf/0 value with ErrRange, so keep it.
+		if err != nil && !errors.Is(err, strconv.ErrRange) {
 			return math.NaN()
 		}
 		return parsed
@@ -415,7 +419,9 @@ func stringToNumber(text string) float64 {
 		return math.NaN()
 	}
 	parsed, err := strconv.ParseFloat(text, 64)
-	if err != nil {
+	// Number("1e999") is Infinity and Number("1e-999") is 0; ParseFloat
+	// returns that value with ErrRange, and NaN only for a syntax error.
+	if err != nil && !errors.Is(err, strconv.ErrRange) {
 		return math.NaN()
 	}
 	return parsed
@@ -425,11 +431,18 @@ func parseBaseNumber(digits string, base int) float64 {
 	if digits == "" {
 		return math.NaN()
 	}
-	parsed, err := strconv.ParseUint(digits, base, 64)
-	if err != nil {
+	if parsed, err := strconv.ParseUint(digits, base, 64); err == nil {
+		return float64(parsed)
+	}
+	// Number("0x" + 17+ hex digits) rounds a big integer to the nearest
+	// float64 instead of failing; big.Float.SetInt is exact and Float64
+	// rounds, so the value (or ±Inf) matches JS.
+	integer, ok := new(big.Int).SetString(digits, base)
+	if !ok {
 		return math.NaN()
 	}
-	return float64(parsed)
+	rounded, _ := new(big.Float).SetInt(integer).Float64()
+	return rounded
 }
 
 // decimalLiteral reports whether text is StrDecimalLiteral: an optional sign,
