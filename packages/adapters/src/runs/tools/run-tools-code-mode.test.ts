@@ -374,7 +374,7 @@ describe("code_mode", () => {
     );
     const inner = vi.mocked(gateToolCall).mock.calls[1];
     expect(inner?.[2]).toBe(observer);
-    expect(inner?.[3]).toBe(30_000);
+    expect(inner?.[3]).toBe(45_000);
   });
 
   it("ends the script when a command is still running and tells the model not to run it again", async () => {

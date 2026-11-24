@@ -84,6 +84,9 @@ function builtinParameters(tool: ConnectorTool) {
     return Type.Object({
       command: Type.String(),
       cwd: Type.Optional(Type.String()),
+      ...(tool.name === "shell"
+        ? { timeout_seconds: Type.Optional(Type.Number({ minimum: 1, maximum: 3600 })) }
+        : {}),
       ...(tool.name === "user_computer_shell"
         ? { computerId: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })) }
         : {}),
