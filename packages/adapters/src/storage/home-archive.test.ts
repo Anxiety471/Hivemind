@@ -15,7 +15,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { WorkspaceTooLargeError } from "@rakazo/adapter-kit";
 import { afterEach, describe, expect, it } from "vitest";
-import { checkHomeArchive, packHome, unpackHome } from "./home-archive.js";
+import { assertHomeFits, checkHomeArchive, packHome, unpackHome } from "./home-archive.js";
 
 const dirs: string[] = [];
 
@@ -149,6 +149,24 @@ describe("home archive", () => {
       await handle.close();
     }
     await expect(collect(packHome(source))).rejects.toEqual(new WorkspaceTooLargeError("bytes"));
+  });
+
+  it("refuses an oversized home from file sizes alone, before anything is packed", async () => {
+    const source = await tempDir();
+    await writeFile(path.join(source, "small"), "x");
+    const handle = await open(path.join(source, "large.bin"), "w");
+    try {
+      await handle.truncate(5 * 1024 ** 3 + 1);
+    } finally {
+      await handle.close();
+    }
+    await expect(assertHomeFits(source)).rejects.toEqual(new WorkspaceTooLargeError("bytes"));
+    await expect(
+      assertHomeFits(source, undefined, { maxBytes: 6 * 1024 ** 3, maxFiles: 1_000_000 }),
+    ).resolves.toBeUndefined();
+    await expect(
+      assertHomeFits(source, undefined, { maxBytes: 1024 ** 4, maxFiles: 1 }),
+    ).rejects.toEqual(new WorkspaceTooLargeError("files"));
   });
 
   it("packs a home past 5 GiB when the configured save limit allows it", async () => {

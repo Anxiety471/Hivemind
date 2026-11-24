@@ -27,6 +27,7 @@ import { createObjectStorage } from "./create-object-storage.js";
 import { LocalAgentHomeStore, newRevision } from "./home.js";
 import type { HomeArchiveLimits } from "./home-archive.js";
 import {
+  assertHomeFits,
   checkHomeArchive,
   DEFAULT_HOME_ARCHIVE_LIMITS,
   packHome,
@@ -428,6 +429,7 @@ export class ObjectAgentHomeStore extends LocalAgentHomeStore {
     const digest = createHash("sha256");
     const home = options.source ?? this.pathFor(botId);
     await mkdir(home, { recursive: true });
+    await assertHomeFits(home, this.limits, this.saveLimits);
     await this.storage.put(
       key,
       sealArtifact(

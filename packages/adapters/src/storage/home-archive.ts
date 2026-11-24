@@ -56,6 +56,37 @@ export class HomeArchiveError extends Error {
 }
 
 /**
+ * Walks the home the way `packHome` does but only looks at sizes, so a home over the save limits
+ * fails in seconds instead of after its first gigabytes have been read, sealed and uploaded.
+ */
+export async function assertHomeFits(
+  root: string,
+  limits: HomeArchiveLimits = DEFAULT_HOME_ARCHIVE_LIMITS,
+  saveLimits: WorkspaceExportLimits = WORKSPACE_SAVE_LIMITS,
+): Promise<void> {
+  const resolvedRoot = await realpath(root);
+  const counts = { bytes: 0, entries: 0, files: 0 };
+  const measured = packDirectory(
+    resolvedRoot,
+    resolvedRoot,
+    "",
+    new Set([resolvedRoot]),
+    counts,
+    saveBounds(limits, saveLimits),
+    saveLimits.maxFiles,
+    true,
+  );
+  for await (const _none of measured);
+}
+
+function saveBounds(limits: HomeArchiveLimits, saveLimits: WorkspaceExportLimits) {
+  return {
+    maxBytes: Math.min(limits.maxBytes, saveLimits.maxBytes),
+    maxEntries: limits.maxEntries,
+  };
+}
+
+/**
  * Streams the directory at `root` as an archive. Links are followed only when they resolve
  * inside the home (as local checkouts copy them); anything else that is not a directory or a
  * regular file is left out. A file that shrinks while it is read fails the whole archive.
@@ -66,10 +97,7 @@ export async function* packHome(
   /** What a save may hold; the read bounds above never raise it. */
   saveLimits: WorkspaceExportLimits = WORKSPACE_SAVE_LIMITS,
 ): AsyncGenerator<Buffer> {
-  limits = {
-    maxBytes: Math.min(limits.maxBytes, saveLimits.maxBytes),
-    maxEntries: limits.maxEntries,
-  };
+  limits = saveBounds(limits, saveLimits);
   const resolvedRoot = await realpath(root);
   const counts = { bytes: 0, entries: 0, files: 0 };
   async function* entries() {
@@ -82,6 +110,7 @@ export async function* packHome(
       counts,
       limits,
       saveLimits.maxFiles,
+      false,
     );
     yield Buffer.from([END]);
   }
@@ -108,6 +137,7 @@ async function* packDirectory(
   counts: { bytes: number; entries: number; files: number },
   limits: HomeArchiveLimits,
   maxFiles: number,
+  measureOnly: boolean,
 ): AsyncGenerator<Buffer> {
   const entries = await readdir(directory).catch(skipVanished([] as string[]));
   for (const name of entries.sort()) {
@@ -120,7 +150,7 @@ async function* packDirectory(
     if (info.isDirectory()) {
       if (visited.has(resolved) || (await isTaggedCacheDirectory(resolved))) continue;
       countEntry(counts, 0, limits);
-      yield entryHeader(DIRECTORY, relative);
+      if (!measureOnly) yield entryHeader(DIRECTORY, relative);
       yield* packDirectory(
         root,
         resolved,
@@ -129,9 +159,14 @@ async function* packDirectory(
         counts,
         limits,
         maxFiles,
+        measureOnly,
       );
     } else if (info.isFile()) {
       if (++counts.files > maxFiles) throw new WorkspaceTooLargeError("files");
+      if (measureOnly) {
+        countEntry(counts, info.size, limits);
+        continue;
+      }
       const handle = await openContained(root, resolved);
       if (!handle) continue;
       try {
