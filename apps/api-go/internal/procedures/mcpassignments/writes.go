@@ -242,15 +242,15 @@ func Replace(
 			// unique violation. The count check above already refuses that list.
 			at := time.Now().UTC().Truncate(time.Millisecond)
 			for _, assignment := range input.Assignments {
-				tools, err := json.Marshal(assignment.AllowedTools)
-				if err != nil {
-					return err
-				}
+				// The column is Json in Prisma: sanitizeJsonValue replaces a lone surrogate in a
+				// tool name with U+FFFD before stringify. encoding/json would instead see the
+				// WTF-8 bytes as three invalid ones, so use the WTF-8 writer db.JSON.
+				allowedTools := db.JSON(assignment.AllowedTools)
 				if _, err := tx.Exec(ctx, `INSERT INTO bot_mcp_servers
 					(id, "spaceId", "userId", "botId", "serverId", "allowAllTools", "allowedTools", "createdAt", "updatedAt")
 					VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $8)`,
 					db.Data(effects.NewID(), actor.SpaceID, actor.UserID, botID, assignment.ServerID,
-						assignment.AllowAllTools, string(tools), at)...); err != nil {
+						assignment.AllowAllTools, allowedTools, at)...); err != nil {
 					return err
 				}
 			}
