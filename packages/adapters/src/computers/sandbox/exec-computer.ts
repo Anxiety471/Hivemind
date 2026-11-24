@@ -177,6 +177,8 @@ export class ExecComputer {
     private readonly exec: RawExec,
     /** Names the provider in error messages. */
     private readonly label: string,
+    /** Registry settings every command inherits, such as a package mirror. */
+    private readonly baseEnv: Record<string, string> = {},
   ) {}
 
   async prepare(computer: ComputerRef, context: AdapterContext): Promise<void> {
@@ -201,7 +203,7 @@ export class ExecComputer {
       return;
     }
     const timeoutMs = boundedSandboxCommandTimeoutMs(request.timeoutMs);
-    const command = commandRequestArgv(request, timeoutMs);
+    const command = commandRequestArgv(request, timeoutMs, this.baseEnv);
     const decoders = {
       stdout: new TextDecoder(),
       stderr: new TextDecoder(),
@@ -500,9 +502,13 @@ export class ExecComputer {
   }
 }
 
-function commandRequestArgv(request: CommandRequest, timeoutMs: number): string[] {
+function commandRequestArgv(
+  request: CommandRequest,
+  timeoutMs: number,
+  baseEnv: Record<string, string> = {},
+): string[] {
   const cwd = workspaceCwd(WORKSPACE, request.cwd);
-  const environment = Object.entries({ ...COMPUTER_CACHE_ENV, ...request.env }).map(
+  const environment = Object.entries({ ...COMPUTER_CACHE_ENV, ...baseEnv, ...request.env }).map(
     ([name, value]) => {
       if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name))
         throw new Error(`invalid environment name ${name}`);

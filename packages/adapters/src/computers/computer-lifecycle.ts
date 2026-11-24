@@ -1081,12 +1081,13 @@ export async function waitForRunComputerLease(
   const reportLongWait = async () => {
     if (Date.now() - lastReported < LEASE_WAIT_REPORT_MS) return;
     lastReported = Date.now();
-    const holder = await prisma.computerExecutionLease
-      .findFirst({
+    const holder = await bestEffort(
+      "lease holder lookup",
+      prisma.computerExecutionLease.findFirst({
         where: { computerId: input.computerId, botId: input.botId, expiresAt: { gt: new Date() } },
         select: { runId: true },
-      })
-      .catch(() => null);
+      }),
+    );
     getLogger().warn("computer.lease_waiting", {
       "computer.id": input.computerId,
       "run.id": input.runId,

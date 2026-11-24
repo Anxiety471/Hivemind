@@ -20,10 +20,14 @@ export function resolveSandboxProvider(source: NodeJS.ProcessEnv = process.env):
 
 export function sandboxProviderOptionsFromEnv(
   source: NodeJS.ProcessEnv = process.env,
-): Pick<SandboxProviderOptions, SandboxSettingOption | "hostComputerUrl" | "hostComputerToken"> {
+): Pick<
+  SandboxProviderOptions,
+  SandboxSettingOption | "hostComputerUrl" | "hostComputerToken" | "packageMirrorUrl"
+> {
   const options: Record<string, unknown> = {
     hostComputerUrl: source.SANDBOX_HOST_URL,
     hostComputerToken: source.SANDBOX_HOST_TOKEN,
+    packageMirrorUrl: optional(source.COMPUTER_PACKAGE_MIRROR_URL),
   };
   for (const provider of Object.values(computerProviders)) {
     for (const [option, binding] of envBindings(provider)) {

@@ -17,7 +17,7 @@ import type {
 } from "@rakazo/adapter-kit";
 import { SandboxFileTooLargeError } from "@rakazo/adapter-kit";
 import { anySignal } from "@rakazo/core";
-import { COMPUTER_CACHE_ENV } from "@rakazo/core/node/desktop-runtime";
+import { COMPUTER_CACHE_ENV, computerPackageMirrorEnv } from "@rakazo/core/node/desktop-runtime";
 import { boundedSandboxCommandTimeoutMs } from "@rakazo/core/node/sandbox-command";
 import type * as Railway from "railway";
 import type { ConnectOptions, Sandbox, SandboxStatus } from "railway";
@@ -70,6 +70,7 @@ export interface RailwaySandboxOptions {
   maxWorkspaceFileBytes?: string;
   region?: string;
   unreferencedMachines?: UnreferencedMachineRecords;
+  packageMirrorUrl?: string;
 }
 
 export class RailwaySandboxProvider implements SandboxProvider {
@@ -109,13 +110,17 @@ export class RailwaySandboxProvider implements SandboxProvider {
 
   private readonly machines: UnreferencedMachineRecords | undefined;
 
+  private readonly packageMirrorEnv: Record<string, string>;
+
   constructor({
     maxWorkspaceFileBytes,
     region,
     unreferencedMachines,
+    packageMirrorUrl,
     ...options
   }: RailwaySandboxOptions) {
     this.machines = unreferencedMachines;
+    this.packageMirrorEnv = computerPackageMirrorEnv(packageMirrorUrl);
     this.maxWorkspaceFileBytes = z.coerce
       .number()
       .int()
@@ -275,7 +280,7 @@ export class RailwaySandboxProvider implements SandboxProvider {
       const sandbox = await this.connect(computer, context);
       const result = await sandbox.exec(sandboxCommandArgv(request).map(shellQuote).join(" "), {
         cwd: workspaceCwd(WORKSPACE, request.cwd),
-        env: { ...COMPUTER_CACHE_ENV, ...request.env },
+        env: { ...COMPUTER_CACHE_ENV, ...this.packageMirrorEnv, ...request.env },
         timeoutSec: boundedSandboxCommandTimeoutMs(request.timeoutMs) / 1_000,
         maxOutputBytes: MAX_RESPONSE_BYTES,
         signal: context.signal,
@@ -578,7 +583,7 @@ export class RailwaySandboxProvider implements SandboxProvider {
   ) {
     const sandbox = await this.connect(computer, context);
     return sandbox.exec(`bash -c ${shellQuote(command)}`, {
-      env: { ...COMPUTER_CACHE_ENV, ...env },
+      env: { ...COMPUTER_CACHE_ENV, ...this.packageMirrorEnv, ...env },
       timeoutSec: timeoutMs / 1_000,
       maxOutputBytes: MAX_RESPONSE_BYTES,
       signal: context.signal,

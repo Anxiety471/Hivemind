@@ -16,6 +16,7 @@ import type {
   ScreenSession,
   TerminalRequest,
 } from "@rakazo/adapter-kit";
+import { computerPackageMirrorEnv } from "@rakazo/core/node/desktop-runtime";
 import { LinuxDesktop, onBotScreen } from "../screens/linux-desktop.js";
 import type { RawExec } from "./exec-computer.js";
 import { ExecComputer, COMPUTER_IMAGE_WORKSPACE as WORKSPACE } from "./exec-computer.js";
@@ -36,13 +37,17 @@ type ProvisionRequest = Parameters<SandboxProvider["provision"]>[0];
 export abstract class ImageComputerSandbox implements SandboxProvider {
   protected readonly shell: ExecComputer;
   protected readonly desktops: LinuxDesktop;
+  /** Registry settings the computer's package managers inherit, empty when no mirror is set. */
+  protected readonly packageMirrorEnv: Record<string, string>;
 
   /** `label` names the provider in error messages. */
   constructor(
     private readonly kind: string,
     label: string,
+    packageMirrorUrl?: string,
   ) {
-    this.shell = new ExecComputer((...exec) => this.execRaw(...exec), label);
+    this.packageMirrorEnv = computerPackageMirrorEnv(packageMirrorUrl);
+    this.shell = new ExecComputer((...exec) => this.execRaw(...exec), label, this.packageMirrorEnv);
     this.desktops = new LinuxDesktop({
       environment: async (computer, context) => ({
         homeDir: WORKSPACE,
