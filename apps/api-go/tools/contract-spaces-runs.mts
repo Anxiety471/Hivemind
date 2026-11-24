@@ -21,7 +21,15 @@ async function seedRoster(seeded: Seeded) {
   const { userId, spaces } = seeded;
   const bot = (id: string, spaceId: string, extra: Record<string, unknown> = {}) =>
     system.bot.create({
-      data: { id: `${userId}-sp-${id}`, spaceId, userId, name: id, color: "blue", updatedAt: OLD, ...extra },
+      data: {
+        id: `${userId}-sp-${id}`,
+        spaceId,
+        userId,
+        name: id,
+        color: "blue",
+        updatedAt: OLD,
+        ...extra,
+      },
     });
   await bot("b1", spaces[0]);
   await bot("b2", spaces[0], { pinned: true });
@@ -29,7 +37,14 @@ async function seedRoster(seeded: Seeded) {
   await bot("bother", spaces[1]);
   const thread = (id: string, spaceId: string, extra: Record<string, unknown>, next = 10) =>
     system.thread.create({
-      data: { id: `${userId}-sp-${id}`, spaceId, userId, nextMessageSeq: next, nextEventSeq: next, ...extra },
+      data: {
+        id: `${userId}-sp-${id}`,
+        spaceId,
+        userId,
+        nextMessageSeq: next,
+        nextEventSeq: next,
+        ...extra,
+      },
     });
   await thread("t-b1", spaces[0], { botId: `${userId}-sp-b1` });
   await thread("t-b2", spaces[0], { botId: `${userId}-sp-b2` });
@@ -37,13 +52,25 @@ async function seedRoster(seeded: Seeded) {
   await thread("t-bother", spaces[1], { botId: `${userId}-sp-bother` });
   const message = (id: string, threadId: string, seq: number, blocks: unknown[]) =>
     system.message.create({
-      data: { id: `${userId}-sp-${id}`, threadId: `${userId}-sp-${threadId}`, seq, role: "user", blocks },
+      data: {
+        id: `${userId}-sp-${id}`,
+        threadId: `${userId}-sp-${threadId}`,
+        seq,
+        role: "user",
+        blocks,
+      },
     });
   await message("m1", "t-b1", 1, [{ kind: "text", text: "Newest in chat one" }]);
   await message("m2", "t-b2", 1, [{ kind: "text", text: "**Pinned** chat" }]);
   await message("m3", "t-bother", 1, [{ kind: "delivery", text: "hidden" }]);
   await system.threadRead.create({
-    data: { threadId: `${userId}-sp-t-b1`, userId, spaceId: spaces[0], unread: true, lastReadSeq: 0 },
+    data: {
+      threadId: `${userId}-sp-t-b1`,
+      userId,
+      spaceId: spaces[0],
+      unread: true,
+      lastReadSeq: 0,
+    },
   });
   await system.botSection.create({
     data: { id: `${userId}-sp-sec1`, spaceId: spaces[0], userId, name: "Section A", position: 0 },
@@ -51,13 +78,20 @@ async function seedRoster(seeded: Seeded) {
   await system.botSection.create({
     data: { id: `${userId}-sp-sec2`, spaceId: spaces[1], userId, name: "Section B", position: 1 },
   });
-  await system.bot.update({ where: { id: `${userId}-sp-b1` }, data: { sectionId: `${userId}-sp-sec1` } });
+  await system.bot.update({
+    where: { id: `${userId}-sp-b1` },
+    data: { sectionId: `${userId}-sp-sec1` },
+  });
   await system.chatGroup.create({
     data: { id: `${userId}-sp-g1`, spaceId: spaces[0], userId, name: "Group one", updatedAt: OLD },
   });
   for (const member of ["b1", "b2"]) {
     await system.chatGroupMember.create({
-      data: { id: `${userId}-sp-gm-${member}`, groupId: `${userId}-sp-g1`, botId: `${userId}-sp-${member}` },
+      data: {
+        id: `${userId}-sp-gm-${member}`,
+        groupId: `${userId}-sp-g1`,
+        botId: `${userId}-sp-${member}`,
+      },
     });
   }
   await thread("t-g1", spaces[0], { groupId: `${userId}-sp-g1` });
@@ -116,7 +150,14 @@ async function seedRoster(seeded: Seeded) {
 async function seedRuns(seeded: Seeded) {
   const { userId, spaces } = seeded;
   await system.bot.create({
-    data: { id: `${userId}-rl-b1`, spaceId: spaces[0], userId, name: "Runner", color: "blue", updatedAt: OLD },
+    data: {
+      id: `${userId}-rl-b1`,
+      spaceId: spaces[0],
+      userId,
+      name: "Runner",
+      color: "blue",
+      updatedAt: OLD,
+    },
   });
   await system.thread.create({
     data: {
@@ -152,7 +193,12 @@ async function seedRuns(seeded: Seeded) {
       },
     });
   await task("task-active", "Review the report\n  now ");
-  await run("active", { taskId: `${userId}-rl-task-active`, status: "running", trigger: "user", updatedAt: new Date() });
+  await run("active", {
+    taskId: `${userId}-rl-task-active`,
+    status: "running",
+    trigger: "user",
+    updatedAt: new Date(),
+  });
   await task("task-ticket", "Ticket work");
   await run("ticket", {
     taskId: `${userId}-rl-task-ticket`,
@@ -216,7 +262,12 @@ async function seedMulti(seeded: Seeded) {
       role: "user",
       blocks: [
         { kind: "text", text: "hello" },
-        { kind: "bot_message_received", fromBotId: `${userId}-rl-other`, fromBotName: "Researcher", text: "Hi" },
+        {
+          kind: "bot_message_received",
+          fromBotId: `${userId}-rl-other`,
+          fromBotName: "Researcher",
+          text: "Hi",
+        },
       ],
     },
   });
@@ -276,7 +327,14 @@ async function seedHomeOrg(seeded: Seeded) {
     await system.spaceMember.upsert({
       where: { spaceId_userId: { spaceId, userId } },
       update: { role, createdAt: new Date(at) },
-      create: { id: `${spaceId}-m`, spaceId, organizationId: orgId, userId, role, createdAt: new Date(at) },
+      create: {
+        id: `${spaceId}-m`,
+        spaceId,
+        organizationId: orgId,
+        userId,
+        role,
+        createdAt: new Date(at),
+      },
     });
     return spaceId;
   };
@@ -291,7 +349,13 @@ async function seedHomeOrg(seeded: Seeded) {
 async function seedBadPolicies(seeded: Seeded) {
   const { userId } = seeded;
   await system.bot.create({
-    data: { id: `${userId}-sp-badpol`, spaceId: seeded.spaces[1], userId, name: "Bad policy bot", color: "blue" },
+    data: {
+      id: `${userId}-sp-badpol`,
+      spaceId: seeded.spaces[1],
+      userId,
+      name: "Bad policy bot",
+      color: "blue",
+    },
   });
   await system.thread.create({
     data: {
@@ -333,22 +397,119 @@ async function seedBadPolicies(seeded: Seeded) {
 
 /** Every bot_message block shape the preview answers: one run each, declined shapes apart. */
 const ANSWERED_SHAPES: Array<[string, unknown[]]> = [
-  ["one-valid", [{ kind: "bot_message_received", fromBotId: "b1", fromBotName: "Researcher", text: "Peek", intent: "request" }]],
-  ["one-update", [{ kind: "bot_message_received", fromBotId: "b1", fromBotName: "Ops", text: "Done", intent: "result" }]],
-  ["one-hop", [{ kind: "bot_message_received", fromBotId: "b1", fromBotName: "Ops", text: "Chained", hop: 2 }]],
-  ["one-blank-text", [{ kind: "bot_message_received", fromBotId: "b1", fromBotName: "Ops", text: "   ", intent: "fyi" }]],
-  ["one-nel-text", [{ kind: "bot_message_received", fromBotId: "b1", fromBotName: "Ops", text: "\u0085" }]],
-  ["one-bom-text", [{ kind: "bot_message_received", fromBotId: "b1", fromBotName: "Ops", text: "\ufeff" }]],
-  ["one-bad-intent", [{ kind: "bot_message_received", fromBotId: "b1", fromBotName: "Ops", text: "x", intent: "shout" }]],
+  [
+    "one-valid",
+    [
+      {
+        kind: "bot_message_received",
+        fromBotId: "b1",
+        fromBotName: "Researcher",
+        text: "Peek",
+        intent: "request",
+      },
+    ],
+  ],
+  [
+    "one-update",
+    [
+      {
+        kind: "bot_message_received",
+        fromBotId: "b1",
+        fromBotName: "Ops",
+        text: "Done",
+        intent: "result",
+      },
+    ],
+  ],
+  [
+    "one-hop",
+    [
+      {
+        kind: "bot_message_received",
+        fromBotId: "b1",
+        fromBotName: "Ops",
+        text: "Chained",
+        hop: 2,
+      },
+    ],
+  ],
+  [
+    "one-blank-text",
+    [
+      {
+        kind: "bot_message_received",
+        fromBotId: "b1",
+        fromBotName: "Ops",
+        text: "   ",
+        intent: "fyi",
+      },
+    ],
+  ],
+  [
+    "one-nel-text",
+    [{ kind: "bot_message_received", fromBotId: "b1", fromBotName: "Ops", text: "\u0085" }],
+  ],
+  [
+    "one-bom-text",
+    [{ kind: "bot_message_received", fromBotId: "b1", fromBotName: "Ops", text: "\ufeff" }],
+  ],
+  [
+    "one-bad-intent",
+    [
+      {
+        kind: "bot_message_received",
+        fromBotId: "b1",
+        fromBotName: "Ops",
+        text: "x",
+        intent: "shout",
+      },
+    ],
+  ],
   ["one-missing-from", [{ kind: "bot_message_received", fromBotName: "Ops", text: "x" }]],
-  ["one-empty-id", [{ kind: "bot_message_received", fromBotId: "", fromBotName: "Ops", text: "x" }]],
-  ["one-empty-return", [{ kind: "bot_message_received", fromBotId: "b1", fromBotName: "Ops", text: "x", returnToMessageId: "" }]],
-  ["one-fractional-hop", [{ kind: "bot_message_received", fromBotId: "b1", fromBotName: "Ops", text: "Half", hop: 1.5 }]],
-  ["one-negative-hop", [{ kind: "bot_message_received", fromBotId: "b1", fromBotName: "Ops", text: "Neg", hop: -1 }]],
+  [
+    "one-empty-id",
+    [{ kind: "bot_message_received", fromBotId: "", fromBotName: "Ops", text: "x" }],
+  ],
+  [
+    "one-empty-return",
+    [
+      {
+        kind: "bot_message_received",
+        fromBotId: "b1",
+        fromBotName: "Ops",
+        text: "x",
+        returnToMessageId: "",
+      },
+    ],
+  ],
+  [
+    "one-fractional-hop",
+    [{ kind: "bot_message_received", fromBotId: "b1", fromBotName: "Ops", text: "Half", hop: 1.5 }],
+  ],
+  [
+    "one-negative-hop",
+    [{ kind: "bot_message_received", fromBotId: "b1", fromBotName: "Ops", text: "Neg", hop: -1 }],
+  ],
   ["empty", []],
-  ["unknown-name", [{ kind: "bot_message_received", fromBotId: "b1", fromBotName: "   ", text: "Anon" }]],
-  ["opaque-name", [{ kind: "bot_message_received", fromBotId: "b1", fromBotName: "c1234567890123456789012345", text: "Anon" }]],
-  ["long-text", [{ kind: "bot_message_received", fromBotId: "b1", fromBotName: "Ops", text: "y".repeat(400) }]],
+  [
+    "unknown-name",
+    [{ kind: "bot_message_received", fromBotId: "b1", fromBotName: "   ", text: "Anon" }],
+  ],
+  [
+    "opaque-name",
+    [
+      {
+        kind: "bot_message_received",
+        fromBotId: "b1",
+        fromBotName: "c1234567890123456789012345",
+        text: "Anon",
+      },
+    ],
+  ],
+  [
+    "long-text",
+    [{ kind: "bot_message_received", fromBotId: "b1", fromBotName: "Ops", text: "y".repeat(400) }],
+  ],
 ];
 
 async function seedPeerBlocks(seeded: Seeded) {
@@ -356,11 +517,12 @@ async function seedPeerBlocks(seeded: Seeded) {
   const { userId } = seeded;
   let seq = 30;
   for (const [name, blocks] of ANSWERED_SHAPES) {
+    seq += 1;
     const source = await system.message.create({
       data: {
         id: `${userId}-rl-src-${name}`,
         threadId: `${userId}-rl-t1`,
-        seq: (seq += 1),
+        seq,
         role: "user",
         blocks: blocks as never,
       },
@@ -404,7 +566,13 @@ async function seedPeerBlocks(seeded: Seeded) {
   await system.$executeRawUnsafe(
     `UPDATE messages SET blocks = $1::jsonb WHERE id = $2`,
     JSON.stringify([
-      { kind: "bot_message_received", fromBotId: "b1", fromBotName: "Legacy", text: "Unsealed", hop: 3 },
+      {
+        kind: "bot_message_received",
+        fromBotId: "b1",
+        fromBotName: "Legacy",
+        text: "Unsealed",
+        hop: 3,
+      },
     ]),
     legacy.id,
   );
@@ -477,11 +645,7 @@ function runCases(): Case[] {
     call("anonymous", { filter: "active" }, { anonymous: true }),
     call("peer-block-answers", { filter: "active" }, { seed: seedRuns, declines: false }),
     call("peer-blocks-answered", { filter: "active" }, { seed: seedPeerBlocks, declines: false }),
-    call(
-      "peer-multi-blocks-declines",
-      { filter: "active" },
-      { seed: seedMulti, declines: true },
-    ),
+    call("peer-multi-blocks-declines", { filter: "active" }, { seed: seedMulti, declines: true }),
     // The recent list is terminal runs only, so the peer runs above do not reach it.
     call("recent-ignores-peer", { filter: "recent" }, { seed: seedRuns, declines: false }),
   ];

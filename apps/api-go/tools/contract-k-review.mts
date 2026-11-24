@@ -235,35 +235,60 @@ export function laneKReviewCases(system: System): Case[] {
       },
     });
 
-  const agents = (name: string, input: unknown, seed: (seeded: Seeded) => Promise<void>, extra: Partial<Case> = {}): Case => ({
+  const agents = (
+    name: string,
+    input: unknown,
+    seed: (seeded: Seeded) => Promise<void>,
+    extra: Partial<Case> = {},
+  ): Case => ({
     name: `krev-agents-${name}`,
     procedure: "mcp.servers.agents",
     input,
     seed,
     ...extra,
   });
-  const replace = (name: string, input: unknown, seed: (seeded: Seeded) => Promise<void>, extra: Partial<Case> = {}): Case => ({
+  const replace = (
+    name: string,
+    input: unknown,
+    seed: (seeded: Seeded) => Promise<void>,
+    extra: Partial<Case> = {},
+  ): Case => ({
     name: `krev-replace-${name}`,
     procedure: "mcp.assignments.replace",
     input,
     seed,
     ...extra,
   });
-  const dismiss = (name: string, input: unknown, seed: (seeded: Seeded) => Promise<void>, extra: Partial<Case> = {}): Case => ({
+  const dismiss = (
+    name: string,
+    input: unknown,
+    seed: (seeded: Seeded) => Promise<void>,
+    extra: Partial<Case> = {},
+  ): Case => ({
     name: `krev-dismiss-${name}`,
     procedure: "mcp.assignments.dismiss",
     input,
     seed,
     ...extra,
   });
-  const remove = (name: string, input: unknown, seed: (seeded: Seeded) => Promise<void>, extra: Partial<Case> = {}): Case => ({
+  const remove = (
+    name: string,
+    input: unknown,
+    seed: (seeded: Seeded) => Promise<void>,
+    extra: Partial<Case> = {},
+  ): Case => ({
     name: `krev-remove-${name}`,
     procedure: "mcp.servers.remove",
     input,
     seed,
     ...extra,
   });
-  const disconnect = (name: string, input: unknown, seed: (seeded: Seeded) => Promise<void>, extra: Partial<Case> = {}): Case => ({
+  const disconnect = (
+    name: string,
+    input: unknown,
+    seed: (seeded: Seeded) => Promise<void>,
+    extra: Partial<Case> = {},
+  ): Case => ({
     name: `krev-disconnect-${name}`,
     procedure: "mcp.oauth.disconnect",
     input,
@@ -290,30 +315,38 @@ export function laneKReviewCases(system: System): Case[] {
     agents("endpoint-bad-port", { id: "__s-ks1__", allBots: true }, async (seeded) => {
       await server(seeded, "ks1", { transport: "sse", endpoint: "http://x:99999/" });
     }),
-    agents("empty-assignment-id", { id: "__s-ks1__", allBots: false, botIds: ["__s-kb1__"] }, async (seeded) => {
-      await bot(seeded, "kb1");
-      await server(seeded, "ks1");
-      await system.botMcpServer.create({
-        data: {
-          id: "",
-          spaceId: seeded.spaces[0],
-          userId: seeded.userId,
-          botId: id(seeded, "kb1"),
-          serverId: id(seeded, "ks1"),
-          createdAt: OLD,
-          updatedAt: OLD,
-        },
-      });
-    }),
+    agents(
+      "empty-assignment-id",
+      { id: "__s-ks1__", allBots: false, botIds: ["__s-kb1__"] },
+      async (seeded) => {
+        await bot(seeded, "kb1");
+        await server(seeded, "ks1");
+        await system.botMcpServer.create({
+          data: {
+            id: "",
+            spaceId: seeded.spaces[0],
+            userId: seeded.userId,
+            botId: id(seeded, "kb1"),
+            serverId: id(seeded, "ks1"),
+            createdAt: OLD,
+            updatedAt: OLD,
+          },
+        });
+      },
+    ),
     agents("tool-200-astral", { id: "__s-ks1__", allBots: true }, async (seeded) => {
       await server(seeded, "ks1");
       await bot(seeded, "kb1");
-      await assignment(seeded, "ka1", "kb1", "ks1", { allowedTools: emptyTools(1, "😀".repeat(200)) });
+      await assignment(seeded, "ka1", "kb1", "ks1", {
+        allowedTools: emptyTools(1, "😀".repeat(200)),
+      });
     }),
     agents("tool-201-astral", { id: "__s-ks1__", allBots: true }, async (seeded) => {
       await server(seeded, "ks1");
       await bot(seeded, "kb1");
-      await assignment(seeded, "ka1", "kb1", "ks1", { allowedTools: emptyTools(1, "😀".repeat(201)) });
+      await assignment(seeded, "ka1", "kb1", "ks1", {
+        allowedTools: emptyTools(1, "😀".repeat(201)),
+      });
     }),
     agents("tool-empty-string", { id: "__s-ks1__", allBots: true }, async (seeded) => {
       await server(seeded, "ks1");
@@ -354,11 +387,15 @@ export function laneKReviewCases(system: System): Case[] {
     }),
 
     // ---- foreign owners and archived bots
-    agents("other-user-bot", { id: "__s-ks1__", allBots: false, botIds: ["__s-kb2__"] }, async (seeded) => {
-      await otherUser(seeded);
-      await bot(seeded, "kb2", 0, { userId: `${seeded.userId}-other` });
-      await server(seeded, "ks1");
-    }),
+    agents(
+      "other-user-bot",
+      { id: "__s-ks1__", allBots: false, botIds: ["__s-kb2__"] },
+      async (seeded) => {
+        await otherUser(seeded);
+        await bot(seeded, "kb2", 0, { userId: `${seeded.userId}-other` });
+        await server(seeded, "ks1");
+      },
+    ),
     agents("shared-other-owner", { id: "__s-ks1__", allBots: true }, async (seeded) => {
       await otherUser(seeded);
       await server(seeded, "ks1", {}, 0, `${seeded.userId}-other`);
@@ -370,43 +407,59 @@ export function laneKReviewCases(system: System): Case[] {
         },
       });
     }),
-    agents("500-duplicate-bots", {
-      id: "__s-ks1__",
-      allBots: false,
-      botIds: Array.from({ length: 500 }, () => "__s-kb1__"),
-    }, async (seeded) => {
-      await bot(seeded, "kb1");
-      await server(seeded, "ks1");
-    }),
-    agents("501-duplicate-bots", {
-      id: "__s-ks1__",
-      allBots: false,
-      botIds: Array.from({ length: 501 }, () => "__s-kb1__"),
-    }, async (seeded) => {
-      await bot(seeded, "kb1");
-      await server(seeded, "ks1");
-    }),
-    agents("foreign-assignment", { id: "__s-ks1__", allBots: false, botIds: ["__s-kb1__"] }, async (seeded) => {
-      await otherUser(seeded);
-      await bot(seeded, "kb1");
-      await server(seeded, "ks1");
-      await system.botMcpServer.create({
-        data: {
-          id: id(seeded, "ka1"),
-          spaceId: seeded.spaces[0],
-          userId: `${seeded.userId}-other`,
-          botId: id(seeded, "kb1"),
-          serverId: id(seeded, "ks1"),
-          createdAt: OLD,
-          updatedAt: OLD,
-        },
-      });
-    }),
-    agents("two-bots-order", { id: "__s-ks1__", allBots: false, botIds: ["__s-kb2__", "__s-kb1__"] }, async (seeded) => {
-      await bot(seeded, "kb1");
-      await bot(seeded, "kb2");
-      await server(seeded, "ks1");
-    }),
+    agents(
+      "500-duplicate-bots",
+      {
+        id: "__s-ks1__",
+        allBots: false,
+        botIds: Array.from({ length: 500 }, () => "__s-kb1__"),
+      },
+      async (seeded) => {
+        await bot(seeded, "kb1");
+        await server(seeded, "ks1");
+      },
+    ),
+    agents(
+      "501-duplicate-bots",
+      {
+        id: "__s-ks1__",
+        allBots: false,
+        botIds: Array.from({ length: 501 }, () => "__s-kb1__"),
+      },
+      async (seeded) => {
+        await bot(seeded, "kb1");
+        await server(seeded, "ks1");
+      },
+    ),
+    agents(
+      "foreign-assignment",
+      { id: "__s-ks1__", allBots: false, botIds: ["__s-kb1__"] },
+      async (seeded) => {
+        await otherUser(seeded);
+        await bot(seeded, "kb1");
+        await server(seeded, "ks1");
+        await system.botMcpServer.create({
+          data: {
+            id: id(seeded, "ka1"),
+            spaceId: seeded.spaces[0],
+            userId: `${seeded.userId}-other`,
+            botId: id(seeded, "kb1"),
+            serverId: id(seeded, "ks1"),
+            createdAt: OLD,
+            updatedAt: OLD,
+          },
+        });
+      },
+    ),
+    agents(
+      "two-bots-order",
+      { id: "__s-ks1__", allBots: false, botIds: ["__s-kb2__", "__s-kb1__"] },
+      async (seeded) => {
+        await bot(seeded, "kb1");
+        await bot(seeded, "kb2");
+        await server(seeded, "ks1");
+      },
+    ),
 
     dismiss("shared-other-owner", { botId: "__s-kb1__", serverId: "__s-ks1__" }, async (seeded) => {
       await otherUser(seeded);
@@ -426,102 +479,166 @@ export function laneKReviewCases(system: System): Case[] {
     // sk- rule needs 8+ following characters), but Go refuses any sk-/sk_/ak_/ck_/eyJ value.
     // The request declines to TypeScript, which serves it and writes the audit rows, so the
     // stored rows are TS's and nothing is dropped.
-    dismiss("unredactable-metadata", { botId: "sk-live", serverId: "authorization" }, async (seeded) => {
-      await bot(seeded, "kb1");
-      await thread(seeded, "kt1", "kb1");
-      await server(seeded, "ks1");
-    }, { declines: true }),
-    dismiss("archived-group-member", { botId: "__s-kb1__", serverId: "__s-ks1__", threadId: "__s-kg1__" }, async (seeded) => {
-      await bot(seeded, "kb1");
-      await thread(seeded, "kt1", "kb1");
-      await server(seeded, "ks1");
-      await group(seeded, "kgrp", ["kb1"], true);
-      await groupThread(seeded, "kg1", "kgrp");
-      await card(seeded, "km1", "kg1", "ks1", "pending", 1, "kb1");
-    }),
-    dismiss("group-bot-not-member", { botId: "__s-kb1__", serverId: "__s-ks1__", threadId: "__s-kg1__" }, async (seeded) => {
-      await bot(seeded, "kb1");
-      await thread(seeded, "kt1", "kb1");
-      await server(seeded, "ks1");
-      await group(seeded, "kgrp", [], true);
-      await groupThread(seeded, "kg1", "kgrp");
-      await card(seeded, "km1", "kg1", "ks1", "pending", 1, "kb1");
-    }),
+    dismiss(
+      "unredactable-metadata",
+      { botId: "sk-live", serverId: "authorization" },
+      async (seeded) => {
+        await bot(seeded, "kb1");
+        await thread(seeded, "kt1", "kb1");
+        await server(seeded, "ks1");
+      },
+      { declines: true },
+    ),
+    dismiss(
+      "archived-group-member",
+      { botId: "__s-kb1__", serverId: "__s-ks1__", threadId: "__s-kg1__" },
+      async (seeded) => {
+        await bot(seeded, "kb1");
+        await thread(seeded, "kt1", "kb1");
+        await server(seeded, "ks1");
+        await group(seeded, "kgrp", ["kb1"], true);
+        await groupThread(seeded, "kg1", "kgrp");
+        await card(seeded, "km1", "kg1", "ks1", "pending", 1, "kb1");
+      },
+    ),
+    dismiss(
+      "group-bot-not-member",
+      { botId: "__s-kb1__", serverId: "__s-ks1__", threadId: "__s-kg1__" },
+      async (seeded) => {
+        await bot(seeded, "kb1");
+        await thread(seeded, "kt1", "kb1");
+        await server(seeded, "ks1");
+        await group(seeded, "kgrp", [], true);
+        await groupThread(seeded, "kg1", "kgrp");
+        await card(seeded, "km1", "kg1", "ks1", "pending", 1, "kb1");
+      },
+    ),
 
-    replace("other-user-bot", { botId: "__s-kb2__", assignments: [{ serverId: "__s-ks1__" }] }, async (seeded) => {
-      await otherUser(seeded);
-      await bot(seeded, "kb2", 0, { userId: `${seeded.userId}-other` });
-      await server(seeded, "ks1");
-    }),
-    replace("shared-from-space2", { botId: "__s-kb1__", assignments: [{ serverId: "__s-ks2__" }] }, async (seeded) => {
-      await bot(seeded, "kb1", 1);
-      await server(seeded, "ks2");
-      await system.mcpServerSpace.create({
-        data: {
-          serverId: id(seeded, "ks2"),
-          spaceId: seeded.spaces[1],
-          userId: seeded.userId,
-        },
-      });
-    }, { space: 1 }),
-    agents("two-shares", { id: "__s-ks1__", allBots: true }, async (seeded) => {
-      await server(seeded, "ks1");
-      await share(seeded, "ks1", 1);
-      await share(seeded, "ks1", 2);
-    }, { space: 1 }),
-    replace("tools-500", { botId: "__s-kb1__", assignments: [{ serverId: "__s-ks1__", allowedTools: emptyTools(500, "t") }] }, async (seeded) => {
-      await bot(seeded, "kb1");
-      await server(seeded, "ks1");
-    }),
-    replace("tools-501", { botId: "__s-kb1__", assignments: [{ serverId: "__s-ks1__", allowedTools: emptyTools(501, "t") }] }, async (seeded) => {
-      await bot(seeded, "kb1");
-      await server(seeded, "ks1");
-    }),
-    replace("tools-nonstring", { botId: "__s-kb1__", assignments: [{ serverId: "__s-ks1__", allowedTools: [1, true, null] }] }, async (seeded) => {
-      await bot(seeded, "kb1");
-      await server(seeded, "ks1");
-    }),
-    replace("lone-surrogate-tool", {
-      botId: "__s-kb1__",
-      assignments: [{ serverId: "__s-ks1__", allowedTools: ["\ud800"] }],
-    }, async (seeded) => {
-      await bot(seeded, "kb1");
-      await server(seeded, "ks1");
-    }),
-    replace("lone-surrogate-server", {
-      botId: "__s-kb1__",
-      assignments: [{ serverId: "\ud800" }],
-    }, async (seeded) => {
-      await bot(seeded, "kb1");
-      await server(seeded, "ks1");
-    }),
-    replace("duplicate-invisible", {
-      botId: "__s-kb1__",
-      assignments: [{ serverId: "__s-ks1__" }, { serverId: "__s-ks2__" }],
-    }, async (seeded) => {
-      await bot(seeded, "kb1");
-      await server(seeded, "ks1");
-      await server(seeded, "ks2", {}, 1);
-      await assignment(seeded, "ka1", "kb1", "ks1");
-    }),
-    replace("foreign-assignment-conflict", { botId: "__s-kb1__", assignments: [{ serverId: "__s-ks1__" }] }, async (seeded) => {
-      await otherUser(seeded);
-      await bot(seeded, "kb1");
-      await server(seeded, "ks1");
-      await server(seeded, "ks2");
-      await assignment(seeded, "ka2", "kb1", "ks2");
-      await system.botMcpServer.create({
-        data: {
-          id: id(seeded, "ka1"),
-          spaceId: seeded.spaces[0],
-          userId: `${seeded.userId}-other`,
-          botId: id(seeded, "kb1"),
-          serverId: id(seeded, "ks1"),
-          createdAt: OLD,
-          updatedAt: OLD,
-        },
-      });
-    }),
+    replace(
+      "other-user-bot",
+      { botId: "__s-kb2__", assignments: [{ serverId: "__s-ks1__" }] },
+      async (seeded) => {
+        await otherUser(seeded);
+        await bot(seeded, "kb2", 0, { userId: `${seeded.userId}-other` });
+        await server(seeded, "ks1");
+      },
+    ),
+    replace(
+      "shared-from-space2",
+      { botId: "__s-kb1__", assignments: [{ serverId: "__s-ks2__" }] },
+      async (seeded) => {
+        await bot(seeded, "kb1", 1);
+        await server(seeded, "ks2");
+        await system.mcpServerSpace.create({
+          data: {
+            serverId: id(seeded, "ks2"),
+            spaceId: seeded.spaces[1],
+            userId: seeded.userId,
+          },
+        });
+      },
+      { space: 1 },
+    ),
+    agents(
+      "two-shares",
+      { id: "__s-ks1__", allBots: true },
+      async (seeded) => {
+        await server(seeded, "ks1");
+        await share(seeded, "ks1", 1);
+        await share(seeded, "ks1", 2);
+      },
+      { space: 1 },
+    ),
+    replace(
+      "tools-500",
+      {
+        botId: "__s-kb1__",
+        assignments: [{ serverId: "__s-ks1__", allowedTools: emptyTools(500, "t") }],
+      },
+      async (seeded) => {
+        await bot(seeded, "kb1");
+        await server(seeded, "ks1");
+      },
+    ),
+    replace(
+      "tools-501",
+      {
+        botId: "__s-kb1__",
+        assignments: [{ serverId: "__s-ks1__", allowedTools: emptyTools(501, "t") }],
+      },
+      async (seeded) => {
+        await bot(seeded, "kb1");
+        await server(seeded, "ks1");
+      },
+    ),
+    replace(
+      "tools-nonstring",
+      {
+        botId: "__s-kb1__",
+        assignments: [{ serverId: "__s-ks1__", allowedTools: [1, true, null] }],
+      },
+      async (seeded) => {
+        await bot(seeded, "kb1");
+        await server(seeded, "ks1");
+      },
+    ),
+    replace(
+      "lone-surrogate-tool",
+      {
+        botId: "__s-kb1__",
+        assignments: [{ serverId: "__s-ks1__", allowedTools: ["\ud800"] }],
+      },
+      async (seeded) => {
+        await bot(seeded, "kb1");
+        await server(seeded, "ks1");
+      },
+    ),
+    replace(
+      "lone-surrogate-server",
+      {
+        botId: "__s-kb1__",
+        assignments: [{ serverId: "\ud800" }],
+      },
+      async (seeded) => {
+        await bot(seeded, "kb1");
+        await server(seeded, "ks1");
+      },
+    ),
+    replace(
+      "duplicate-invisible",
+      {
+        botId: "__s-kb1__",
+        assignments: [{ serverId: "__s-ks1__" }, { serverId: "__s-ks2__" }],
+      },
+      async (seeded) => {
+        await bot(seeded, "kb1");
+        await server(seeded, "ks1");
+        await server(seeded, "ks2", {}, 1);
+        await assignment(seeded, "ka1", "kb1", "ks1");
+      },
+    ),
+    replace(
+      "foreign-assignment-conflict",
+      { botId: "__s-kb1__", assignments: [{ serverId: "__s-ks1__" }] },
+      async (seeded) => {
+        await otherUser(seeded);
+        await bot(seeded, "kb1");
+        await server(seeded, "ks1");
+        await server(seeded, "ks2");
+        await assignment(seeded, "ka2", "kb1", "ks2");
+        await system.botMcpServer.create({
+          data: {
+            id: id(seeded, "ka1"),
+            spaceId: seeded.spaces[0],
+            userId: `${seeded.userId}-other`,
+            botId: id(seeded, "kb1"),
+            serverId: id(seeded, "ks1"),
+            createdAt: OLD,
+            updatedAt: OLD,
+          },
+        });
+      },
+    ),
     replace("dismissed-card", { botId: "__s-kb1__", assignments: [] }, async (seeded) => {
       await bot(seeded, "kb1");
       await thread(seeded, "kt1", "kb1");
@@ -529,14 +646,18 @@ export function laneKReviewCases(system: System): Case[] {
       await assignment(seeded, "ka1", "kb1", "ks1");
       await card(seeded, "km1", "kt1", "ks1", "dismissed", 1, "kb1");
     }),
-    replace("connected-other-bot-message", { botId: "__s-kb1__", assignments: [] }, async (seeded) => {
-      await bot(seeded, "kb1");
-      await bot(seeded, "kb2");
-      await thread(seeded, "kt1", "kb1");
-      await server(seeded, "ks1");
-      await assignment(seeded, "ka1", "kb1", "ks1");
-      await card(seeded, "km1", "kt1", "ks1", "connected", 1, "kb2");
-    }),
+    replace(
+      "connected-other-bot-message",
+      { botId: "__s-kb1__", assignments: [] },
+      async (seeded) => {
+        await bot(seeded, "kb1");
+        await bot(seeded, "kb2");
+        await thread(seeded, "kt1", "kb1");
+        await server(seeded, "ks1");
+        await assignment(seeded, "ka1", "kb1", "ks1");
+        await card(seeded, "km1", "kt1", "ks1", "connected", 1, "kb2");
+      },
+    ),
     replace("connected-user-message", { botId: "__s-kb1__", assignments: [] }, async (seeded) => {
       await bot(seeded, "kb1");
       await thread(seeded, "kt1", "kb1");
@@ -571,76 +692,108 @@ export function laneKReviewCases(system: System): Case[] {
         },
       });
     }),
-    remove("live-run", { id: "__s-ks1__" }, async (seeded) => {
-      await bot(seeded, "kb1");
-      await thread(seeded, "kt1", "kb1");
-      await server(seeded, "ks1");
-      await assignment(seeded, "ka1", "kb1", "ks1");
-      await card(seeded, "km1", "kt1", "ks1", "connected", 1, "kb1");
-      // Fresh, not OLD: the API's in-process sweeper cancels a queued run it finds stuck, and
-      // that write would land on the TypeScript side only (Go runs no sweeper). A live run this
-      // second is what "using the server" means here.
-      const now = new Date();
-      await system.task.create({
-        data: {
-          id: id(seeded, "ktask"),
-          spaceId: seeded.spaces[0],
-          botId: id(seeded, "kb1"),
-          threadId: id(seeded, "kt1"),
-          userId: seeded.userId,
-          prompt: "use the server",
-          status: "queued",
-          createdAt: now,
-          updatedAt: now,
-        },
-      });
-      await system.run.create({
-        data: {
-          id: id(seeded, "krun"),
-          spaceId: seeded.spaces[0],
-          botId: id(seeded, "kb1"),
-          threadId: id(seeded, "kt1"),
-          taskId: id(seeded, "ktask"),
-          userId: seeded.userId,
-          status: "queued",
-          trigger: "user",
-          createdAt: now,
-          updatedAt: now,
-        },
-      });
-    }, {
-      check: async ({ seeded, side }) => {
-        const runs = await system.run.findMany({
-          where: { id: id(seeded, "krun") },
-          select: { id: true, status: true, threadId: true, botId: true, taskId: true, completedAt: true },
+    remove(
+      "live-run",
+      { id: "__s-ks1__" },
+      async (seeded) => {
+        await bot(seeded, "kb1");
+        await thread(seeded, "kt1", "kb1");
+        await server(seeded, "ks1");
+        await assignment(seeded, "ka1", "kb1", "ks1");
+        await card(seeded, "km1", "kt1", "ks1", "connected", 1, "kb1");
+        // Fresh, not OLD: the API's in-process sweeper cancels a queued run it finds stuck, and
+        // that write would land on the TypeScript side only (Go runs no sweeper). A live run this
+        // second is what "using the server" means here.
+        const now = new Date();
+        await system.task.create({
+          data: {
+            id: id(seeded, "ktask"),
+            spaceId: seeded.spaces[0],
+            botId: id(seeded, "kb1"),
+            threadId: id(seeded, "kt1"),
+            userId: seeded.userId,
+            prompt: "use the server",
+            status: "queued",
+            createdAt: now,
+            updatedAt: now,
+          },
         });
-        const tasks = await system.task.findMany({
-          where: { id: id(seeded, "ktask") },
-          select: { id: true, status: true, threadId: true, botId: true },
+        await system.run.create({
+          data: {
+            id: id(seeded, "krun"),
+            spaceId: seeded.spaces[0],
+            botId: id(seeded, "kb1"),
+            threadId: id(seeded, "kt1"),
+            taskId: id(seeded, "ktask"),
+            userId: seeded.userId,
+            status: "queued",
+            trigger: "user",
+            createdAt: now,
+            updatedAt: now,
+          },
         });
-        assert.deepEqual(runs, [{
-          id: id(seeded, "krun"),
-          status: "queued",
-          threadId: id(seeded, "kt1"),
-          botId: id(seeded, "kb1"),
-          taskId: id(seeded, "ktask"),
-          completedAt: null,
-        }], `${side}: a live run changed during mcp.servers.remove`);
-        assert.deepEqual(tasks, [{
-          id: id(seeded, "ktask"),
-          status: "queued",
-          threadId: id(seeded, "kt1"),
-          botId: id(seeded, "kb1"),
-        }], `${side}: the queued task changed during mcp.servers.remove`);
       },
-    }),
+      {
+        check: async ({ seeded, side }) => {
+          const runs = await system.run.findMany({
+            where: { id: id(seeded, "krun") },
+            select: {
+              id: true,
+              status: true,
+              threadId: true,
+              botId: true,
+              taskId: true,
+              completedAt: true,
+            },
+          });
+          const tasks = await system.task.findMany({
+            where: { id: id(seeded, "ktask") },
+            select: { id: true, status: true, threadId: true, botId: true },
+          });
+          assert.deepEqual(
+            runs,
+            [
+              {
+                id: id(seeded, "krun"),
+                status: "queued",
+                threadId: id(seeded, "kt1"),
+                botId: id(seeded, "kb1"),
+                taskId: id(seeded, "ktask"),
+                completedAt: null,
+              },
+            ],
+            `${side}: a live run changed during mcp.servers.remove`,
+          );
+          assert.deepEqual(
+            tasks,
+            [
+              {
+                id: id(seeded, "ktask"),
+                status: "queued",
+                threadId: id(seeded, "kt1"),
+                botId: id(seeded, "kb1"),
+              },
+            ],
+            `${side}: the queued task changed during mcp.servers.remove`,
+          );
+        },
+      },
+    ),
     remove("several-bots", { id: "__s-ks1__" }, async (seeded) => {
       await server(seeded, "ks1");
       for (const name of ["kb1", "kb2", "kb3"]) {
         await bot(seeded, name);
         await thread(seeded, `kt${name.slice(-1)}`, name);
         await assignment(seeded, `ka${name.slice(-1)}`, name, "ks1");
-        await card(seeded, `km${name.slice(-1)}`, `kt${name.slice(-1)}`, "ks1", "connected", 1, name);
+        await card(
+          seeded,
+          `km${name.slice(-1)}`,
+          `kt${name.slice(-1)}`,
+          "ks1",
+          "connected",
+          1,
+          name,
+        );
       }
     }),
     remove("shared-store", { id: "__s-ks1__" }, async (seeded) => {
@@ -670,10 +823,20 @@ export function laneKReviewCases(system: System): Case[] {
 
     // ---- disconnect material and ownership corners
     disconnect("keeps-material", { serverId: "__s-ks1__" }, async (seeded) => {
-      await serverWithMaterial(seeded, "ks1", JSON.stringify({
-        args: ["--x"], env: { A: "1" }, files: { f: "x" }, headers: { H: "v" }, secret: "s",
-        oauth: { tokens: { access_token: "t" } }, oauthClient: { client_id: "c" }, oauthGeneration: 2,
-      }));
+      await serverWithMaterial(
+        seeded,
+        "ks1",
+        JSON.stringify({
+          args: ["--x"],
+          env: { A: "1" },
+          files: { f: "x" },
+          headers: { H: "v" },
+          secret: "s",
+          oauth: { tokens: { access_token: "t" } },
+          oauthClient: { client_id: "c" },
+          oauthGeneration: 2,
+        }),
+      );
     }),
     disconnect("corrupt-material", { serverId: "__s-ks1__" }, async (seeded) => {
       await system.secret.create({
@@ -687,13 +850,29 @@ export function laneKReviewCases(system: System): Case[] {
       });
       await server(seeded, "ks1", { secretId: id(seeded, "ks1cred") });
     }),
-    disconnect("unreadable-space-material", { serverId: "__s-ks1__" }, async (seeded) => {
-      await serverWithMaterial(seeded, "ks1", `{"secret":"s"}`, { allSpaces: true }, { spaceId: seeded.spaces[2] });
-    }, { space: 1 }),
+    disconnect(
+      "unreadable-space-material",
+      { serverId: "__s-ks1__" },
+      async (seeded) => {
+        await serverWithMaterial(
+          seeded,
+          "ks1",
+          `{"secret":"s"}`,
+          { allSpaces: true },
+          { spaceId: seeded.spaces[2] },
+        );
+      },
+      { space: 1 },
+    ),
     // Same decline as dismiss: "sk-live" is not a value the Go gate can prove byte-identical.
-    disconnect("unredactable-metadata", { serverId: "sk-live" }, async (seeded) => {
-      await server(seeded, "ks1");
-    }, { declines: true }),
+    disconnect(
+      "unredactable-metadata",
+      { serverId: "sk-live" },
+      async (seeded) => {
+        await server(seeded, "ks1");
+      },
+      { declines: true },
+    ),
     disconnect("generation-float", { serverId: "__s-ks1__" }, async (seeded) => {
       await serverWithMaterial(seeded, "ks1", `{"secret":"s","oauthGeneration":1.5}`);
     }),

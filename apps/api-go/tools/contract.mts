@@ -21,19 +21,19 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { spendingPeriodStart } from "../../../packages/core/src/billing/spending.js";
 import { asSystem, contentEncryptionOf } from "../../../packages/db/src/index.js";
 import { createApp } from "../../api/src/app.js";
+import { laneKCases, laneKState } from "./contract-k-mcp.mts";
+import { laneKReviewCases } from "./contract-k-review.mts";
 import { CONTRACT_ENCRYPTION_KEY } from "./contract-key.mts";
 import { laneDCases } from "./contract-lane-d.mts";
 import { laneHCases, laneHState } from "./contract-lane-h.mts";
 import { laneICases } from "./contract-lane-i.mts";
 import { laneJCases, laneJState } from "./contract-lane-j.mts";
-import { laneKCases, laneKState } from "./contract-k-mcp.mts";
-import { laneKReviewCases } from "./contract-k-review.mts";
 import { membershipCases, membershipReset, membershipState } from "./contract-membership.mts";
 import { modelsCases } from "./contract-models.mts";
-import { spaceRunCases } from "./contract-spaces-runs.mts";
 import { routineResumeCases } from "./contract-routine-resume.mts";
 import { routineCases } from "./contract-routines.mts";
 import { run1Cases } from "./contract-run1.mts";
+import { spaceRunCases } from "./contract-spaces-runs.mts";
 import { threadAdversarialCases } from "./contract-threads-adversarial.mts";
 import { threadGetCases } from "./contract-threads-get.mts";
 import { threadMoreCases } from "./contract-threads-more.mts";
@@ -731,9 +731,7 @@ if (process.env.CONTRACT_ROUTE_AUDIT === "1") {
     const mode = routeMode(testCase.procedure);
     return mode !== "go" && mode !== "shadow";
   });
-  console.log(
-    `route audit: ${cases.length} cases; ${silentlyProxied.length} not routed go/shadow`,
-  );
+  console.log(`route audit: ${cases.length} cases; ${silentlyProxied.length} not routed go/shadow`);
   for (const testCase of silentlyProxied)
     console.log(
       `route audit: ${testCase.name} (${testCase.procedure}) -> ${routeMode(testCase.procedure)}`,
@@ -7773,12 +7771,7 @@ async function proxyCall(procedure: string, input: unknown, seeded: Seeded) {
   return gatewayCall(PROXY_URL, procedure, input, seeded);
 }
 
-async function gatewayCall(
-  base: string,
-  procedure: string,
-  input: unknown,
-  seeded: Seeded,
-) {
+async function gatewayCall(base: string, procedure: string, input: unknown, seeded: Seeded) {
   const response = await fetch(`${base}/rpc/${procedure.replaceAll(".", "/")}`, {
     method: "POST",
     headers: callHeaders(seeded),
@@ -8692,9 +8685,7 @@ for (const testCase of cases) {
   const mode = routeMode(testCase.procedure);
   if (mode !== "go" && mode !== "shadow") {
     failures += 1;
-    console.error(
-      `FAIL ${testCase.name}: ${testCase.procedure} is routed ${mode}, not go/shadow`,
-    );
+    console.error(`FAIL ${testCase.name}: ${testCase.procedure} is routed ${mode}, not go/shadow`);
     continue;
   }
   const caseIds = ids(testCase.name);

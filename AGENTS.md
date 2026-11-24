@@ -1,10 +1,12 @@
 # AGENTS.md
 
 ## Public repo / secrets
+
 - Everything tracked and every diff is public: never commit secrets, `.env`, private URLs, personal/customer/prod data; use fake placeholders. Check `git status` and the staged diff before committing; never force-add ignored files. If private data shows up, stop and alert the maintainer.
 - Commit messages, PRs, issues, review replies are public too: describe test results in words (no tool output); no business metrics (analytics, traffic, conversion, signups, revenue, stars); nothing identifying a person/machine/account (local paths, usernames, hostnames, signing identities, legal entity names, Apple Team IDs, API key/issuer/tenant IDs, emails, or the accounts/machines/files secrets came from). Naming the secrets a workflow reads is fine; use placeholders for values.
 
 ## Architecture
+
 - One product across web, Electron desktop (hosts the web UI), Expo mobile. Shared behavior/contracts/API logic/reusable UI go in packages; only truly native navigation/storage/permissions/interactions are platform-specific. Core workflows cover every applicable surface or degrade safely for an explicit reason.
 - No hosted vendor required. LLMs, sandboxes, memory, voice, integrations, future services are optional, behind provider-neutral interfaces. Vendor SDKs/config/translation only in adapters and composition roots.
   - Each provider lives in `packages/adapters/src/providers/<family>/<id>/`, never imports another provider's folder; shared code goes outside `providers/` under a non-vendor name (checks: import-boundaries, `no-vendor-files-outside-providers`).
@@ -20,6 +22,7 @@
 - Dependency security audits include build/release dependencies and assert workspace package coverage; scanning only the package-manager YAML is not a pass.
 
 ## Code conventions
+
 - Format with Biome (`pnpm format` or `pnpm exec biome check --write <files>`); never Prettier.
 - Top-level `import type`, never inline type imports. Dynamic `import()` only for necessary deferred loading.
 - Startup size budget enforced after build by `scripts/checks/bundle-size.mjs` (web JS/CSS before first paint; desktop main bundle): lazy-load heavy/rare code.
@@ -41,6 +44,7 @@
 - Client-caused/actionable refusals (bad request, forbidden, not found, conflict, too many requests) are domain errors extending `ClientError` from `@rakazo/core`, carrying kind, message, and a stable code when clients switch on it. Routes let them propagate; `handleRpcError` in `apps/api/src/rpc-errors.ts` translates once; domain packages never import the RPC library. Never build an `ORPCError` in a `catch`: throw/extend the domain error, catch only the specific condition, let everything else propagate as a server error (check: `no-rpc-error-in-catch`).
 
 ## Backend, data, concurrency
+
 - Deploys keep the previous release running after migrations (old API for seconds, old worker until jobs finish), so every migration must work with the previous code. Adding tables/columns is safe. Dropping: remove from schema and code and, in the same PR, add a migration whose first line is `-- deferred` (held back one run, applies next deploy). A dropped column must be nullable or defaulted while waiting (relax it in an ordinary migration in the same PR if needed). Rename = add + backfill new column, switch code, drop old one deferred. Code kept only for the previous release is marked `compat-shim(after vX.Y.Z)` (latest release in `CHANGELOG.md`); `pnpm checks` fails once two newer releases ship, then remove it.
 - Build for many concurrent users across instances. Work starts immediately in the process that has it: never wait on a queue, worker slot, global concurrency cap, or polling loop; agent runs/LLM calls never wait for a free slot. Graphile Worker is only the durable backup: in the transaction recording the work, add a backup job with a job key and run-at = attempt timeout + small margin, then do the work directly after commit; on success delete the job, on clean failure set run-at to now (or provider retry-after); a crash lets it fire by itself. Use queue retries/backoff/scheduling/named queues (per-key ordering) instead of hand-rolled attempt/next-attempt/claim columns or polling loops. Limit only the specific resource that needs it (one bot, conversation, provider rate limit). Coordinate across processes with Postgres transactions, leases, notifications. Periodic sweeps are a ≥30 s safety net, never the main path. Delivery is at-least-once: make side effects idempotent where the provider allows.
 - Clients never poll. Read once, then re-read on a server signal over the one live HTTP stream (`notifications.subscribe`): after the write commits, publish a content-free signal on a narrow topic (user/Space/bot) via the realtime fanout; the client re-reads through its normal authorized RPC. The stream signals on every (re)connect (reconnect = catch-up), plus re-read on window focus/app foreground. No timed backup re-reads or polling fallback while the stream is down; instead make missed signals rare: retry publish through brief DB outages, end the stream when a subscription fails so the client reconnects. Timers only for non-data-reads: clocks, presence heartbeats, short third-party waits (OAuth redirect) while someone watches.
@@ -48,6 +52,7 @@
 - A/B tests (our deployment only): register in `packages/contracts/src/experiments.ts` (first variant = control), read with `experiments.variant(key, subjectId)` on the API, pass `experiments.tags(...)` on the events judged. Runs only when `EXPERIMENTS` lists its key; self-hosters/local see control. No browser SDK or vendor flags; the analytics adapter translates tags.
 
 ## UI / UX
+
 - Keep UI and copy minimal; show advanced capability progressively; no explainer text repeating the interface. Frontends express intent and render state; backend owns orchestration, authorization, validation, retries, recovery, provider translation. Concise accessible names for controls when needed.
 - Every visible word is UI: start by asking what can be removed; prefer progressive disclosure to persistent explanation/status chrome. Review the screenshot with `.agents/skills/ux-declutter/SKILL.md` before calling UI done. A PR adding user-facing copy must quote it, justify it, and say why removing it or showing it only when relevant wouldn't work.
 - Colors: semantic tokens in `@rakazo/ui-tokens` (background, card, muted, border, primary, destructive, …), one TS source generating `tokens.css`; never hardcode a product hex or use `[var(--…)]` arbitrary values.
@@ -58,9 +63,11 @@
 - Marketing pages (`apps/www`, Astro): no new tests or CI screenshots beyond the existing homepage screenshot suite; may name third-party vendors/providers (product vendor-name and UI-test rules don't apply). Check visually and with a build.
 
 ## Testing
+
 - Don't run the desktop Playwright suite (`pnpm --filter @rakazo/desktop test:e2e`) on a maintainer's machine (opens real Electron windows, steals focus on macOS); run only tests covering your change locally; CI's virtual-display job runs e2e. Web e2e (`pnpm test:e2e`) is also left to CI: update specs, push, read the CI run.
 
 ## PRs and review
+
 - One feature or fix per PR (large is fine; bundling unrelated features is not).
 - Don't edit `CHANGELOG.md` in feature PRs; the release skill (`.agents/skills/release/SKILL.md`) writes it from merged PRs, so write `## What`/`## Risk` for that reader.
 - Feature PRs change UI strings in code only: never run `intl:extract` or edit `messages.po`. Untranslated strings show in English; a main-branch workflow keeps one "Update translation catalogs" PR in step; translations go there or in a translation-only PR. Exception: adding a UI language commits its new catalog.

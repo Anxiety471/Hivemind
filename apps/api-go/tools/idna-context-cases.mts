@@ -1,7 +1,7 @@
-import { gzipSync, gunzipSync } from "node:zlib";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { gunzipSync, gzipSync } from "node:zlib";
 
 // Derive the context-dependent UTS #46 data the host parser needs from the
 // Node/ICU build this application actually runs:
@@ -39,10 +39,13 @@ for (const file of ["UnicodeData.txt", "DerivedCombiningClass.txt"]) {
   }
 }
 const unicodeData = readFileSync(join(ucdDir, "UnicodeData.txt"), "utf8");
-const combiningHeader = readFileSync(join(ucdDir, "DerivedCombiningClass.txt"), "utf8").split("\n")[0];
+const combiningHeader = readFileSync(join(ucdDir, "DerivedCombiningClass.txt"), "utf8").split(
+  "\n",
+)[0];
 
 function lookup(ranges, cp) {
-  let lo = 0, hi = ranges.length - 1;
+  let lo = 0,
+    hi = ranges.length - 1;
   while (lo <= hi) {
     const mid = (lo + hi) >> 1;
     const r = ranges[mid];
@@ -95,12 +98,17 @@ function decodePuny(input) {
     if (o >= 0x30 && o <= 0x39) return o - 0x30 + 26;
     return -1;
   };
-  let n = 128, i = 0, bias = 72;
+  let n = 128,
+    i = 0,
+    bias = 72;
   const adapt = (delta, points, first) => {
     delta = first ? Math.floor(delta / 700) : Math.floor(delta / 2);
     delta += Math.floor(delta / points);
     let k = 0;
-    while (delta > Math.floor(((36 - 1) * 26) / 2)) { delta = Math.floor(delta / (36 - 1)); k += 36; }
+    while (delta > Math.floor(((36 - 1) * 26) / 2)) {
+      delta = Math.floor(delta / (36 - 1));
+      k += 36;
+    }
     return k + Math.floor((36 * delta) / (delta + 38));
   };
   while (index < input.length) {
@@ -131,7 +139,7 @@ function decodePuny(input) {
 
 // Decode the first host label of `https://<input>.ü/`, or return null.
 function firstLabel(input) {
-  let host;
+  let host: string;
   try {
     host = new URL(`https://${input}.ü/`).hostname;
   } catch {
@@ -142,7 +150,13 @@ function firstLabel(input) {
   return decodePuny(label.slice(4));
 }
 
-const L = 0, RT = 1, EN = 2, AN = 3, NSM = 4, NEUTRAL = 5, INVALID = 6;
+const L = 0,
+  RT = 1,
+  EN = 2,
+  AN = 3,
+  NSM = 4,
+  NEUTRAL = 5,
+  INVALID = 6;
 const ZWNJ = "\u200C";
 const ZWJ = "\u200D";
 const REF = "\u0334"; // COMBINING TILDE OVERLAY, ccc 1
@@ -161,7 +175,9 @@ for (let cp = 0; cp <= 0x10ffff; cp++) {
 const left = new Uint8Array(0x110000);
 const right = new Uint8Array(0x110000);
 const virama = new Uint8Array(0x110000);
-let leftCount = 0, rightCount = 0, viramaCount = 0;
+let leftCount = 0,
+  rightCount = 0,
+  viramaCount = 0;
 
 for (const cp of valid) {
   if (cp === 0x200c || cp === 0x200d) continue;
@@ -169,9 +185,19 @@ for (const cp of valid) {
   const isLeft = accepts(`${L_SENT}${s}${ZWNJ}${R_JOIN}`);
   const isRight = accepts(`${L_SENT}${D_JOIN}${ZWNJ}${s}`);
   const isVirama = accepts(`${L_SENT}${s}${ZWJ}${L_SENT}`);
-  if (isVirama) { virama[cp] = 1; viramaCount++; continue; }
-  if (isLeft) { left[cp] = 1; leftCount++; }
-  if (isRight) { right[cp] = 1; rightCount++; }
+  if (isVirama) {
+    virama[cp] = 1;
+    viramaCount++;
+    continue;
+  }
+  if (isLeft) {
+    left[cp] = 1;
+    leftCount++;
+  }
+  if (isRight) {
+    right[cp] = 1;
+    rightCount++;
+  }
 }
 
 const nfcStarters = new Uint8Array(0x110000);
@@ -193,7 +219,13 @@ for (const cp of valid) {
   const cpAt = orderLabel.indexOf(s);
   const refAt = orderLabel.indexOf(REF);
   if (cpAt < 0 || refAt < 0) {
-    ANOMALIES.push({ probe: "order", cp, cls, reason: "missing", orderLabel: [...orderLabel].map((c) => c.codePointAt(0)) });
+    ANOMALIES.push({
+      probe: "order",
+      cp,
+      cls,
+      reason: "missing",
+      orderLabel: [...orderLabel].map((c) => c.codePointAt(0)),
+    });
     continue;
   }
   if (refAt < cpAt) continue; // behaves as a mark with ccc > 1
@@ -213,7 +245,12 @@ for (const { cp, cls } of nfcCandidates) {
   }
   if (label.includes(composed)) continue; // mark with effective ccc 1
   if (canonicalDecomposition.has(cp)) {
-    ANOMALIES.push({ probe: "starter", cp, reason: "canonical decomposition", decomposition: canonicalDecomposition.get(cp) });
+    ANOMALIES.push({
+      probe: "starter",
+      cp,
+      reason: "canonical decomposition",
+      decomposition: canonicalDecomposition.get(cp),
+    });
     continue;
   }
   nfcStarters[cp] = 1;
@@ -249,10 +286,19 @@ const out = {
   joinerLeft: rangesOf(left),
   joinerRight: rangesOf(right),
   viramas: rangesOf(virama),
-  counts: { valid: valid.length, nfcStarters: nfcStarterCount, left: leftCount, right: rightCount, viramas: viramaCount },
+  counts: {
+    valid: valid.length,
+    nfcStarters: nfcStarterCount,
+    left: leftCount,
+    right: rightCount,
+    viramas: viramaCount,
+  },
   anomalies: ANOMALIES,
 };
-writeFileSync(join(dir, "idna-context.json.gz"), gzipSync(Buffer.from(JSON.stringify(out)), { level: 9 }));
+writeFileSync(
+  join(dir, "idna-context.json.gz"),
+  gzipSync(Buffer.from(JSON.stringify(out)), { level: 9 }),
+);
 console.error(
   `context: ${valid.length} valid, ${nfcStarterCount} NFC starters, ${leftCount} left, ${rightCount} right, ${viramaCount} viramas, ${ANOMALIES.length} anomalies`,
 );

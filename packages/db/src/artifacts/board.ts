@@ -14,7 +14,6 @@ import {
   TicketStatusSchema,
   ticketRef,
 } from "@rakazo/contracts";
-import { readJsonColumn } from "../database/json-column.js";
 import type {
   Board as BoardRow,
   Prisma,
@@ -22,6 +21,7 @@ import type {
   TicketComment as TicketCommentRow,
   Ticket as TicketRow,
 } from "../database/client.js";
+import { readJsonColumn } from "../database/json-column.js";
 
 /** skipDuplicates tolerates concurrent first opens without aborting their transactions. */
 export async function ensureBoard(prisma: PrismaClient, spaceId: string): Promise<BoardRow> {

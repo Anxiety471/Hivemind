@@ -1,7 +1,7 @@
-import { gzipSync, gunzipSync } from "node:zlib";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { gunzipSync, gzipSync } from "node:zlib";
 
 // Derive the effective coarse Bidi class every valid code point has under the
 // Node/ICU host parser's UTS #46 CheckBidi step. UCD Bidi_Class data can differ
@@ -22,7 +22,8 @@ mkdirSync(dir, { recursive: true });
 const mapping = JSON.parse(gunzipSync(readFileSync(join(dir, "idna-mapping.json.gz"))));
 
 function lookup(cp) {
-  let lo = 0, hi = mapping.ranges.length - 1;
+  let lo = 0,
+    hi = mapping.ranges.length - 1;
   while (lo <= hi) {
     const mid = (lo + hi) >> 1;
     const r = mapping.ranges[mid];
@@ -45,7 +46,13 @@ function accepts(label) {
   }
 }
 
-const L = 0, RT = 1, EN = 2, AN = 3, NSM = 4, NEUTRAL = 5, INVALID = 6;
+const L = 0,
+  RT = 1,
+  EN = 2,
+  AN = 3,
+  NSM = 4,
+  NEUTRAL = 5,
+  INVALID = 6;
 const classNames = ["L", "RT", "EN", "AN", "NSM", "NEUTRAL", "INVALID"];
 const JOINERS = new Set([0x200c, 0x200d]);
 const cls = new Uint8Array(0x110000);
@@ -57,7 +64,10 @@ for (let cp = 0; cp <= 0x10ffff; cp++) {
   if (cp >= 0xd800 && cp <= 0xdfff) continue;
   if (statusOf(cp) !== "valid") continue;
   valid++;
-  if (JOINERS.has(cp)) { cls[cp] = NEUTRAL; continue; }
+  if (JOINERS.has(cp)) {
+    cls[cp] = NEUTRAL;
+    continue;
+  }
   const ch = String.fromCodePoint(cp);
   const F = accepts(`一${ch}一`);
   const E = accepts(`א${ch}א`);
@@ -72,7 +82,8 @@ for (let cp = 0; cp <= 0x10ffff; cp++) {
   else if (!F && E && !D && C) k = H ? RT : AN;
   if (k < 0) anomalies.push({ cp, F, E, D, C, H, I });
   else cls[cp] = k;
-  if (valid % 50000 === 0) console.error(`progress ${valid} ${Math.round((Date.now() - started) / 1000)}s`);
+  if (valid % 50000 === 0)
+    console.error(`progress ${valid} ${Math.round((Date.now() - started) / 1000)}s`);
 }
 
 if (anomalies.length) {
@@ -105,5 +116,11 @@ const out = {
   counts,
   ranges,
 };
-writeFileSync(join(dir, "idna-bidi.json.gz"), gzipSync(Buffer.from(JSON.stringify(out)), { level: 9 }));
-console.error(`wrote ${ranges.length} ranges for ${valid} valid code points in ${Math.round((Date.now() - started) / 1000)}s`, JSON.stringify(counts));
+writeFileSync(
+  join(dir, "idna-bidi.json.gz"),
+  gzipSync(Buffer.from(JSON.stringify(out)), { level: 9 }),
+);
+console.error(
+  `wrote ${ranges.length} ranges for ${valid} valid code points in ${Math.round((Date.now() - started) / 1000)}s`,
+  JSON.stringify(counts),
+);
