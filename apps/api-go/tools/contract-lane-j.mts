@@ -12,11 +12,13 @@
  * (go-port/hook-audit.md's qualification rule; security-audit.ts:62-66 names `approvalRules.remove`
  * for the same reason).
  */
+import assert from "node:assert/strict";
 import { EncryptedSecretStore } from "../../../packages/adapters/src/secrets/secrets.js";
 import { openVaultValue } from "../../../packages/adapters/src/secrets/vault/vault-values.js";
 import { contentEncryptionOf, encryptText } from "../../../packages/db/src/index.js";
 import type { Case, Seeded } from "./contract.mts";
 import { CONTRACT_ENCRYPTION_KEY } from "./contract-key.mts";
+import { hasShape, registerVerified } from "./contract-norm.mts";
 
 type System = any;
 
@@ -276,10 +278,38 @@ export function laneJCases(system: System): Case[] {
       },
     });
 
+  // A rotated webhook secret is 32 random bytes, so it necessarily differs between the two sides.
+  // Proving the response is the plaintext of the row the bot now holds (the same row laneJState
+  // opens) is what allows masking it; a procedure that returned one secret and stored another
+  // fails here. A seeded short plaintext keeps its exact comparison in laneJState.
+  const webhookSecretCheck: NonNullable<Case["check"]> = async ({ seeded, result, side }) => {
+    const payload = result.body?.json as { secret?: unknown } | undefined;
+    if (result.status !== 200 || !payload || typeof payload.secret !== "string") return;
+    const bot = await system.bot.findUnique({
+      where: { id: `${seeded.userId}-bot` },
+      select: { webhookSecretId: true },
+    });
+    assert.ok(bot?.webhookSecretId, "webhook secret: bot holds no secret after the call");
+    const row = await system.secret.findUnique({
+      where: { id: bot.webhookSecretId },
+      select: { id: true, ciphertext: true },
+    });
+    assert.ok(row, "webhook secret: the bot points at a missing secret row");
+    const opened = await store.load(row.ciphertext, row.id);
+    assert.equal(payload.secret, opened, "webhook secret: returned secret != stored secret");
+    if (hasShape(payload.secret, "<random-secret>")) {
+      registerVerified(side, payload.secret, "<random-secret>");
+      registerVerified(side, opened, "<random-secret>");
+    }
+  };
+
   const base = (name: string, procedure: string, input: unknown, extra: Partial<Case> = {}): Case => ({
     name: `j-${name}`,
     procedure,
     input,
+    ...(procedure === "bots.rotateWebhookSecret" || procedure === "bots.revealWebhookSecret"
+      ? { check: webhookSecretCheck }
+      : {}),
     ...extra,
   });
 

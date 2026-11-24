@@ -22,6 +22,12 @@ import { spendingPeriodStart } from "../../../packages/core/src/billing/spending
 import { asSystem, contentEncryptionOf } from "../../../packages/db/src/index.js";
 import { createApp } from "../../api/src/app.js";
 import { CONTRACT_ENCRYPTION_KEY } from "./contract-key.mts";
+import {
+  clearVerified,
+  digestMismatchHint,
+  maskedVerified,
+  registerVerified,
+} from "./contract-norm.mts";
 import { laneDCases } from "./contract-lane-d.mts";
 import { laneHCases, laneHState } from "./contract-lane-h.mts";
 import { laneICases } from "./contract-lane-i.mts";
@@ -1899,7 +1905,35 @@ function messagingCases(): Case[] {
       seed: seedMessaging(),
       ...extra,
     });
-  const link = mk("link.start", "link");
+  // The response carries the code with its display hyphen; the row keeps it without. Proving they
+  // are the same value lets the comparison mask this side's random code; a seeded code is compared
+  // exactly, and a wrong generated code fails here before it can be registered.
+  const linkCodeCheck: NonNullable<Case["check"]> = async ({ seeded, result, side }) => {
+    const payload = result.body?.json as { code?: unknown; expiresAt?: unknown } | undefined;
+    if (result.status !== 200 || !payload || typeof payload.code !== "string") return;
+    const rows = await system.messagingLinkCode.findMany({
+      where: { userId: seeded.userId },
+      select: { code: true, expiresAt: true },
+    });
+    assert.equal(rows.length, 1, "messaging.link.start: expected one stored code");
+    assert.equal(
+      payload.code.replace("-", ""),
+      rows[0]!.code,
+      "messaging.link.start: returned code != stored code",
+    );
+    assert.equal(
+      payload.expiresAt,
+      rows[0]!.expiresAt.toISOString(),
+      "messaging.link.start: returned expiry != stored expiry",
+    );
+    registerVerified(side, payload.code, "<link-code>");
+    registerVerified(side, rows[0]!.code, "<link-code>");
+  };
+  const link = (
+    name: string,
+    input: unknown,
+    extra: Partial<Case> = {},
+  ): Case => mk("link.start", "link")(name, input, { check: linkCodeCheck, ...extra });
   const setBot = mk("identities.setBot", "setbot");
   const unlink = mk("identities.unlink", "unlink");
   const channels = mk("channels.list", "chlist");
@@ -7869,13 +7903,10 @@ const WRITE_PROCEDURES = new Set([
 ]);
 
 const CUID = /^c[0-9a-z]{24}$/;
-// The credential store's record ids are 12 random bytes as hex; a webhook secret is 32 random
-// bytes as unpadded base64url. Both sides generate their own, so only the shape is compared.
+// The credential store's record ids are 12 random bytes as hex. Both sides generate their own, so
+// only the shape is compared. This is an id, not a digest: nothing derives it from content.
 const SECRET_ID = /^[0-9a-f]{24}$/;
-const WEBHOOK_SECRET = /^[A-Za-z0-9_-]{43}$/;
-const PAGE_SHARE_HASH = /^[0-9a-f]{64}$/;
 const PAGE_SHARE_URL = /^(.*\/p\/[^/?#]*?)([A-Za-z0-9_-]{43})$/;
-const LINK_CODE = /^(?:[A-HJKMNP-TV-Z2-9]{4}-[A-HJKMNP-TV-Z2-9]{4}|[A-HJKMNP-TV-Z2-9]{8})$/;
 const ISO_TIME = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/;
 const HARNESS_START = Date.now() - 3_600_000;
 
@@ -7884,19 +7915,22 @@ const HARNESS_START = Date.now() - 3_600_000;
  * since the harness started becomes "<now>", so shape and recency are still compared exactly. An artifact
  * list cursor carries the instant its sequence started (asOf), which each side takes from its own clock: that
  * one field is read like any other time, and the rest of the cursor is compared as is.
+ *
+ * Digest-shaped values (SHA-256, a 32-byte secret, a link code) are NOT masked by shape: a check must
+ * register the value on its side after recomputing it from its random source (contract-norm.mts).
+ * Everything else, deterministic digests included, is compared exactly.
  */
-function normalize<T>(value: T): T {
+function normalize<T>(value: T, side: "ts" | "go"): T {
   const visit = (node: unknown): unknown => {
     if (typeof node === "string") {
       const cursor = artifactCursor(node);
       if (cursor) return cursor;
       const share = PAGE_SHARE_URL.exec(node);
       if (share) return `${share[1]}<share-token>`;
-      if (PAGE_SHARE_HASH.test(node)) return "<share-token-hash>";
+      const verified = maskedVerified(side, node);
+      if (verified) return verified;
       if (CUID.test(node)) return "<cuid>";
       if (SECRET_ID.test(node)) return "<secret-id>";
-      if (WEBHOOK_SECRET.test(node)) return "<webhook-secret>";
-      if (LINK_CODE.test(node)) return "<code>";
       // Times near now (link-code expiry is minutes ahead) vary per run; instants days away are the case's own data.
       if (
         ISO_TIME.test(node) &&
@@ -8709,6 +8743,9 @@ for (const testCase of cases) {
     continue;
   }
   const caseIds = ids(testCase.name);
+  // Random values are registered per side by the case checks; nothing from the previous case may
+  // mask a value here (a seeded literal could otherwise collide with an earlier random one).
+  clearVerified();
   COMPUTER_UPDATE_BASE = Date.now() - 30_000;
   const input = withIds(testCase.input, caseIds);
   // A write has realtime signals to wait for; a read only needs to show it sent none.
@@ -8737,7 +8774,7 @@ for (const testCase of cases) {
   } catch (error) {
     tsCheckError = error;
   }
-  const tsState = normalize(await databaseState(caseIds, testCase.procedure));
+  const tsState = normalize(await databaseState(caseIds, testCase.procedure), "ts");
 
   // A TypeScript background job (a restored routine's first run, say) publishes its Space changes
   // after the request returned; the Go side enqueues the same job but nothing executes it in the
@@ -8779,7 +8816,7 @@ for (const testCase of cases) {
   } catch (error) {
     goCheckError = error;
   }
-  const goState = normalize(await databaseState(caseIds, testCase.procedure));
+  const goState = normalize(await databaseState(caseIds, testCase.procedure), "go");
 
   try {
     if (tsCheckError) throw tsCheckError;
@@ -8809,14 +8846,24 @@ for (const testCase of cases) {
     }
     assert.equal(goResult.status, tsResult.status, `${testCase.name}: status`);
     assert.deepEqual(goResult.headers, tsResult.headers, `${testCase.name}: headers`);
-    assert.deepEqual(normalize(goResult.body), normalize(tsResult.body), `${testCase.name}: body`);
+    const tsBody = normalize(tsResult.body, "ts");
+    const goBody = normalize(goResult.body, "go");
+    assert.deepEqual(
+      goBody,
+      tsBody,
+      `${testCase.name}: body${digestMismatchHint(tsBody, goBody, "body")}`,
+    );
     if (!testCase.ignoreSignals)
       assert.deepEqual(
         goResult.notifications,
         tsResult.notifications,
         `${testCase.name}: realtime signals`,
       );
-    assert.deepEqual(goState, tsState, `${testCase.name}: database state`);
+    assert.deepEqual(
+      goState,
+      tsState,
+      `${testCase.name}: database state${digestMismatchHint(tsState, goState, "database state")}`,
+    );
     console.log(`ok   ${testCase.name} (${tsResult.status})`);
   } catch (error) {
     failures += 1;
