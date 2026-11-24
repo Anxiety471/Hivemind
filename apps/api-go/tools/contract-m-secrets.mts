@@ -1019,6 +1019,10 @@ export async function laneMState(system: System, seeded: Seeded, _procedure?: st
     },
     orderBy: { id: "asc" },
   });
+  // The row ids a case creates are random on each side, so the SQL id order would put the same
+  // rows in different places. Every field in this key is compared, so a difference still shows.
+  const sortKey = (row: { name: string; spaceId: string | null; userId: string }) =>
+    [row.name, row.spaceId ?? "", row.userId].join("\u0000");
   const vault = [];
   for (const row of rows) {
     const opened = await openVaultValue(system, store, row).then(
@@ -1043,11 +1047,14 @@ export async function laneMState(system: System, seeded: Seeded, _procedure?: st
       ...opened,
     });
   }
+  vault.sort((left, right) => sortKey(left).localeCompare(sortKey(right)));
   const bots = await system.vaultCredentialBot.findMany({
     where: { userId: users },
     select: { credentialId: true, botId: true },
     orderBy: [{ credentialId: "asc" }, { botId: "asc" }],
   });
+  bots.sort((left: { botId: string }, right: { botId: string }) =>
+    left.botId.localeCompare(right.botId));
   const limits = await system.vaultCredentialLimit.findMany({
     where: { userId: users },
     select: { credentialId: true },
@@ -1076,5 +1083,24 @@ export async function laneMState(system: System, seeded: Seeded, _procedure?: st
     },
     orderBy: { id: "asc" },
   });
+  // Same reason as the vault rows: audit ids are per side, while the landings and their metadata
+  // are what must match.
+  audit.sort((left: { action: string }, right: { action: string }) =>
+    JSON.stringify([
+      left.action,
+      (left as { actorId?: string }).actorId,
+      (left as { organizationId?: string | null }).organizationId,
+      (left as { spaceId?: string | null }).spaceId,
+      JSON.stringify((left as { metadata?: unknown }).metadata),
+    ]).localeCompare(
+      JSON.stringify([
+        right.action,
+        (right as { actorId?: string }).actorId,
+        (right as { organizationId?: string | null }).organizationId,
+        (right as { spaceId?: string | null }).spaceId,
+        JSON.stringify((right as { metadata?: unknown }).metadata),
+      ]),
+    ),
+  );
   return { laneM: { vault, bots, limits, audit } };
 }
