@@ -20,6 +20,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 )
 
 // CiphertextPrefix starts every sealed value; the space-key id follows it up to
@@ -103,9 +105,12 @@ func CiphertextKeyID(value any) (string, bool) {
 // EncryptText seals plaintext with a fresh IV (content-crypto.ts:63-70).
 func EncryptText(key DataKey, location Location, plaintext string) (string, error) {
 	// TypeScript encrypts a JS string, which is always valid UTF-16 and becomes
-	// valid UTF-8 in Buffer.from(plaintext, "utf8"). Invalid bytes cannot have a
-	// TS equivalent, so refuse them instead of storing something TS would have
-	// sanitized differently.
+	// valid UTF-8 in Buffer.from(plaintext, "utf8"): an unpaired surrogate is
+	// written as U+FFFD. WTF-8 is how such a surrogate reaches this package, so
+	// apply the same replacement before sealing. Other invalid bytes cannot have
+	// a TS equivalent, so still refuse them instead of storing something TS
+	// would have sanitized differently.
+	plaintext = wtf8.ToUTF8(plaintext)
 	if !utf8.ValidString(plaintext) {
 		return "", errors.New("content cipher: plaintext is not valid UTF-8")
 	}

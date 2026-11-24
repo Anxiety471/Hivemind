@@ -171,25 +171,28 @@ func (s *PgSpaceKeyStore) Insert(ctx context.Context, record SpaceKeyRecord) (Sp
 	if match := vaultSpaceIDPattern.FindStringSubmatch(record.SpaceID); match != nil {
 		kind, owner = match[1], match[2]
 	}
-	values := []any{record.ID, record.SpaceID, record.Version, record.MasterKeyID, record.WrappedKey}
-	query := `INSERT INTO space_keys (` + spaceKeyColumns + `) VALUES ($1, $2, $3, $4, $5)
-		ON CONFLICT ("spaceId", version) DO NOTHING RETURNING ` + spaceKeyColumns
-	if owner != "" {
-		table := "spaces"
-		if kind == "user" {
-			table = `"user"`
-		}
-		query = `WITH owner AS (SELECT 1 FROM ` + table + ` WHERE id = $6 FOR KEY SHARE)
-			INSERT INTO space_keys (` + spaceKeyColumns + `)
-			SELECT $1::text, $2::text, $3::int, $4::text, $5::text FROM owner
-			ON CONFLICT ("spaceId", version) DO NOTHING RETURNING ` + spaceKeyColumns
-		values = append(values, owner)
-	}
 	var stored SpaceKeyRecord
 	inserted := false
 	err := s.DB.System(ctx, "create a content key", func(tx pgx.Tx) error {
-		err := tx.QueryRow(ctx, query, values...).Scan(&stored.ID, &stored.SpaceID,
-			&stored.Version, &stored.MasterKeyID, &stored.WrappedKey)
+		var err error
+		if owner != "" {
+			table := "spaces"
+			if kind == "user" {
+				table = `"user"`
+			}
+			err = tx.QueryRow(ctx, `WITH owner AS (SELECT 1 FROM `+table+` WHERE id = $6 FOR KEY SHARE)
+				INSERT INTO space_keys (`+spaceKeyColumns+`)
+				SELECT $1::text, $2::text, $3::int, $4::text, $5::text FROM owner
+				ON CONFLICT ("spaceId", version) DO NOTHING RETURNING `+spaceKeyColumns,
+				append(db.Data(record.ID, record.SpaceID, record.Version, record.MasterKeyID, record.WrappedKey), owner)...).
+				Scan(&stored.ID, &stored.SpaceID, &stored.Version, &stored.MasterKeyID, &stored.WrappedKey)
+		} else {
+			err = tx.QueryRow(ctx, `INSERT INTO space_keys (`+spaceKeyColumns+`)
+				VALUES ($1, $2, $3, $4, $5)
+				ON CONFLICT ("spaceId", version) DO NOTHING RETURNING `+spaceKeyColumns,
+				db.Data(record.ID, record.SpaceID, record.Version, record.MasterKeyID, record.WrappedKey)...).
+				Scan(&stored.ID, &stored.SpaceID, &stored.Version, &stored.MasterKeyID, &stored.WrappedKey)
+		}
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil
 		}

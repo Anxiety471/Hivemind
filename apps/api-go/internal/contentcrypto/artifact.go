@@ -406,20 +406,20 @@ func OpenArtifactRangeReader(
 	}
 
 	return &artifactRangeReader{
-		src:               rc,
-		hdr:               hdr,
-		gcm:               gcm,
-		aadNonFinal:       ArtifactAAD(hdr.Raw, spaceID, fileID, false),
-		aadFinal:          ArtifactAAD(hdr.Raw, spaceID, fileID, true),
-		startSeg:          startSeg,
-		endSeg:            endSeg,
-		lastSeg:           lastSeg,
-		lastSegSealedLen:  int(lastSegSealedLen),
-		curSeg:            startSeg,
-		firstOffset:       int(plainStart % ArtifactChunkSize),
-		remaining:         plainEndInclusive - plainStart + 1,
-		sealedBuf:         make([]byte, ArtifactSealedChunkSize),
-		plainBuf:          make([]byte, 0, ArtifactChunkSize),
+		src:              rc,
+		hdr:              hdr,
+		gcm:              gcm,
+		aadNonFinal:      ArtifactAAD(hdr.Raw, spaceID, fileID, false),
+		aadFinal:         ArtifactAAD(hdr.Raw, spaceID, fileID, true),
+		startSeg:         startSeg,
+		endSeg:           endSeg,
+		lastSeg:          lastSeg,
+		lastSegSealedLen: int(lastSegSealedLen),
+		curSeg:           startSeg,
+		firstOffset:      int(plainStart % ArtifactChunkSize),
+		remaining:        plainEndInclusive - plainStart + 1,
+		sealedBuf:        make([]byte, ArtifactSealedChunkSize),
+		plainBuf:         make([]byte, 0, ArtifactChunkSize),
 	}, nil
 }
 

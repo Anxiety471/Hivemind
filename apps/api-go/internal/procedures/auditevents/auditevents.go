@@ -197,6 +197,7 @@ func List(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input) 
 			where += " AND (\"createdAt\" < $" + itoa(len(args)-1) + ` OR ("createdAt" = $` + itoa(len(args)-1) + ` AND id < $` + itoa(len(args)) + "))"
 		}
 		args = append(args, input.limit+1)
+		// writeaudit:dynamic read: the WHERE clause is built from fixed fragments; args are filters
 		rows, err := tx.Query(ctx, `SELECT id, "spaceId", "spaceName", "actorType", "actorId", "actorLabel",
 			action, "targetType", "targetId", "targetLabel", outcome, "runId", "threadId", ip, "userAgent",
 			metadata, "createdAt" FROM audit_events WHERE `+where+`

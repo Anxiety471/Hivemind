@@ -40,6 +40,7 @@ func NewNotifier(database *db.DB, logger *slog.Logger) *Notifier {
 	}
 	notifier := &Notifier{db: database, logger: logger, sleep: time.Sleep}
 	if database != nil {
+		// writeaudit:dynamic this executor only runs SELECT pg_notify($1,$2)
 		notifier.execute = database.Pool.Exec
 	}
 	return notifier

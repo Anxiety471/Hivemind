@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"time"
-	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 
@@ -15,6 +14,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/validate"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 )
 
 // Assignment is the wire shape of BotMcpServerSchema.
@@ -26,6 +26,10 @@ type Assignment struct {
 	AllowedTools  []string `json:"allowedTools"`
 	CreatedAt     string   `json:"createdAt"`
 	UpdatedAt     string   `json:"updatedAt"`
+
+	// invalid marks a row the output schema rejects; validateAssignments turns it into the
+	// router's 500 after the caller's transaction has committed.
+	invalid bool
 }
 
 // available is availableInSpace on the server of an assignment: the member's own server
@@ -37,6 +41,9 @@ const available = `EXISTS (SELECT 1 FROM mcp_servers s WHERE s.id = a."serverId"
 const columns = `a.id, a."botId", a."serverId", a."allowAllTools", a."allowedTools", a."createdAt", a."updatedAt"`
 
 // mcpAssignmentDto reads allowedTools as a list of strings; anything else in it is dropped.
+// Output-schema breaks are recorded, not returned here: the router validates the handler's
+// answer after the transaction has committed (a 500 must not undo what TypeScript commits), so
+// collect returns every row and the caller checks validateAssignments at the matching point.
 func scan(rows pgx.Rows) (Assignment, error) {
 	var assignment Assignment
 	var tools []byte
@@ -44,14 +51,17 @@ func scan(rows pgx.Rows) (Assignment, error) {
 	if err := rows.Scan(&assignment.ID, &assignment.BotID, &assignment.ServerID, &assignment.AllowAllTools, &tools, &createdAt, &updatedAt); err != nil {
 		return Assignment{}, err
 	}
+	if assignment.ID == "" || assignment.BotID == "" || assignment.ServerID == "" {
+		assignment.invalid = true
+	}
 	assignment.AllowedTools = []string{}
 	if value, err := validate.DecodeAny(tools); err == nil {
 		if items, ok := value.([]any); ok {
 			for _, item := range items {
 				if text, ok := item.(string); ok {
 					// The router validates the output: each tool name is 1..200 characters.
-					if length := utf8.RuneCountInString(text); length < 1 || length > 200 {
-						return Assignment{}, shared.OutputInvalid()
+					if !wtf8.Fits(text, 1, 200) {
+						assignment.invalid = true
 					}
 					assignment.AllowedTools = append(assignment.AllowedTools, text)
 				}
@@ -60,6 +70,16 @@ func scan(rows pgx.Rows) (Assignment, error) {
 	}
 	assignment.CreatedAt, assignment.UpdatedAt = shared.ISO(createdAt), shared.ISO(updatedAt)
 	return assignment, nil
+}
+
+// validateAssignments is the router's BotMcpServerSchema check over a handler's answer.
+func ValidateAssignments(found []Assignment) *orpc.Error {
+	for _, assignment := range found {
+		if assignment.invalid {
+			return shared.OutputInvalid()
+		}
+	}
+	return nil
 }
 
 func collect(rows pgx.Rows) ([]Assignment, error) {
@@ -92,6 +112,9 @@ func All(ctx context.Context, database *db.DB, actor db.Actor) ([]Assignment, *o
 	})
 	if err != nil {
 		return nil, shared.Failure(err)
+	}
+	if failure := ValidateAssignments(found); failure != nil {
+		return nil, failure
 	}
 	return found, nil
 }
@@ -127,6 +150,9 @@ func List(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input) 
 	})
 	if err != nil {
 		return nil, shared.Failure(err)
+	}
+	if failure := ValidateAssignments(found); failure != nil {
+		return nil, failure
 	}
 	return found, nil
 }

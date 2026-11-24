@@ -248,12 +248,13 @@ func MarkRead(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Inp
 			return nil
 		}
 		// Opening a chat that woke from a snooze ends the snooze.
+		arguments := append([]any{resolved.ThreadID, actor.UserID}, db.Data(latest)...)
 		if didWake {
 			_, err = tx.Exec(ctx, `UPDATE thread_reads SET unread = false, "lastReadSeq" = $3, "snoozedUntil" = NULL WHERE "threadId" = $1 AND "userId" = $2`,
-				resolved.ThreadID, actor.UserID, latest)
+				arguments...)
 		} else {
 			_, err = tx.Exec(ctx, `UPDATE thread_reads SET unread = false, "lastReadSeq" = $3 WHERE "threadId" = $1 AND "userId" = $2`,
-				resolved.ThreadID, actor.UserID, latest)
+				arguments...)
 		}
 		if err != nil {
 			return err
@@ -309,7 +310,7 @@ func MarkUnread(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.I
 			}
 			_, err = tx.Exec(ctx, `INSERT INTO thread_reads ("threadId", "userId", "spaceId", unread, "lastReadSeq") VALUES ($1, $2, $3, true, $4)
 				ON CONFLICT ("threadId", "userId") DO UPDATE SET unread = true, "lastReadSeq" = EXCLUDED."lastReadSeq"`,
-				resolved.ThreadID, actor.UserID, actor.SpaceID, seq-1)
+				db.Data(resolved.ThreadID, actor.UserID, actor.SpaceID, seq-1)...)
 			return err
 		}
 		if err != nil || !found {
@@ -318,7 +319,7 @@ func MarkUnread(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.I
 		// Someone with no read state had read it all.
 		_, err = tx.Exec(ctx, `INSERT INTO thread_reads ("threadId", "userId", "spaceId", unread, "lastReadSeq") VALUES ($1, $2, $3, true, $4)
 			ON CONFLICT ("threadId", "userId") DO UPDATE SET unread = true`,
-			resolved.ThreadID, actor.UserID, actor.SpaceID, nextSeq-1)
+			db.Data(resolved.ThreadID, actor.UserID, actor.SpaceID, nextSeq-1)...)
 		return err
 	})
 	if err != nil {
@@ -364,7 +365,7 @@ func Snooze(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input
 		// Someone with no read state had read it all.
 		_, err = tx.Exec(ctx, `INSERT INTO thread_reads ("threadId", "userId", "spaceId", "lastReadSeq", "snoozedUntil") VALUES ($1, $2, $3, $4, $5)
 			ON CONFLICT ("threadId", "userId") DO UPDATE SET "snoozedUntil" = EXCLUDED."snoozedUntil"`,
-			resolved.ThreadID, actor.UserID, actor.SpaceID, nextSeq-1, wake.UTC())
+			db.Data(resolved.ThreadID, actor.UserID, actor.SpaceID, nextSeq-1, wake.UTC())...)
 		return err
 	})
 	if err != nil {

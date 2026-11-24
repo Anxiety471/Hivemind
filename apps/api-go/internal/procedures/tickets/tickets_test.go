@@ -2,6 +2,7 @@ package tickets
 
 import (
 	"encoding/json"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 	"slices"
 	"strings"
 	"testing"
@@ -233,5 +234,28 @@ func TestParseDecideAndNormalizeTicketDecision(t *testing.T) {
 	}
 	if parsed, failure := parseCreate(input(`{"title":"Ship","decision":{"question":"Deploy now?","options":["Canary","Full","Hold"],"recommended":"Canary"}}`)); failure != nil || !parsed.HasDecision || parsed.Decision == nil {
 		t.Fatalf("expected parseCreate to accept valid decision, got %+v failure=%v", parsed, failure)
+	}
+}
+
+func TestDecisionValueSanitizesEachLeafOnce(t *testing.T) {
+	surrogate := "a" + string([]byte{0xED, 0xA0, 0x80}) + "b"
+	decision := TicketDecision{
+		Question: "q\x00 " + surrogate,
+		Options: []TicketDecisionOption{
+			{ID: "1", Label: surrogate},
+			{ID: "2", Label: "ok"},
+			{ID: "3", Label: "ok2"},
+		},
+	}
+	encoded, err := wtf8.Marshal(decision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored := decisionValue(encoded).(string)
+	if strings.Count(stored, "\uFFFD") != 3 {
+		t.Fatalf("stored = %s", stored)
+	}
+	if strings.Contains(stored, "\uFFFD\uFFFD\uFFFD") {
+		t.Fatalf("triple replacement: %s", stored)
 	}
 }

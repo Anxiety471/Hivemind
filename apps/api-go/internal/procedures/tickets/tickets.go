@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 	"regexp"
 	"slices"
 	"strconv"
@@ -122,7 +123,8 @@ func EnsureBoard(ctx context.Context, tx pgx.Tx, spaceID string) (Board, error) 
 	}
 	at := now()
 	if _, err := tx.Exec(ctx, `INSERT INTO boards (id, "spaceId", name, "createdAt", "updatedAt")
-		VALUES ($1, $2, $3, $4, $4) ON CONFLICT ("spaceId") DO NOTHING`, effects.NewID(), spaceID, name, at); err != nil {
+		VALUES ($1, $2, $3, $4, $4) ON CONFLICT ("spaceId") DO NOTHING`,
+		db.Data(effects.NewID(), spaceID, name, at)...); err != nil {
 		return Board{}, err
 	}
 	board, err = ScanBoard(tx.QueryRow(ctx, `SELECT `+BoardColumns+` FROM boards WHERE "spaceId" = $1`, spaceID))
@@ -345,6 +347,24 @@ func readStoredDecision(raw []byte) *TicketDecision {
 	return &d
 }
 
+// decisionValue is a tickets.decision payload for an INSERT or UPDATE: NULL stays
+// NULL, and stored JSON text is sanitized per leaf as Prisma does for a Json column.
+func decisionValue(encoded []byte) any {
+	if encoded == nil {
+		return nil
+	}
+	return db.JSONText(string(encoded))
+}
+
+// nullableText is a nullable string data value: nil stays NULL, and the string is
+// wrapped by db.Data like any other written string.
+func nullableText(value *string) any {
+	if value == nil {
+		return nil
+	}
+	return *value
+}
+
 // dto is toTicketDto over a ticketRow.
 func dto(value ticketRow, prefix string) (Ticket, bool) {
 	workers := value.WorkerBotIDs
@@ -478,7 +498,8 @@ func Move(ctx context.Context, database *db.DB, deployment shared.Deployment, ac
 		value, err := scanTicket(tx.QueryRow(ctx, `UPDATE tickets SET status = $2, "completedAt" = $3, "updatedAt" = $4,
 			"archivedAt" = CASE WHEN $2 IN ('done', 'closed') THEN "archivedAt" END,
 			decision = $5
-			WHERE id = $1 RETURNING `+ticketColumns, current.ID, input.Status, completed, updated, nextDecision))
+			WHERE id = $1 RETURNING `+ticketColumns,
+			append([]any{current.ID}, db.Data(input.Status, completed, updated, decisionValue(nextDecision))...)...))
 		if err != nil {
 			return err
 		}
@@ -589,11 +610,12 @@ func Comment(ctx context.Context, database *db.DB, deployment shared.Deployment,
 		id := effects.NewID()
 		at := now()
 		if _, err := tx.Exec(ctx, `INSERT INTO ticket_comments (id, "ticketId", "spaceId", "authorUserId", body, "createdAt", "updatedAt")
-			VALUES ($1, $2, $3, $4, $5, $6, $6)`, id, ticket.ID, actor.SpaceID, actor.UserID,
-			shared.StoredText(input.Body), at); err != nil {
+			VALUES ($1, $2, $3, $4, $5, $6, $6)`,
+			db.Data(id, ticket.ID, actor.SpaceID, actor.UserID, shared.StoredText(input.Body), at)...); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `UPDATE tickets SET "updatedAt" = $2 WHERE id = $1`, ticket.ID, at); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE tickets SET "updatedAt" = $2 WHERE id = $1`,
+			append([]any{ticket.ID}, db.Data(at)...)...); err != nil {
 			return err
 		}
 		// The comment's DTO joins the author's name; a person's account is never deleted mid-write.
@@ -736,7 +758,7 @@ func Decide(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 			updatedDecision := *existingDecision
 			updatedDecision.Answer = answerText
 			updatedDecision.AnsweredAt = shared.ISO(at)
-			encoded, err := json.Marshal(updatedDecision)
+			encoded, err := wtf8.Marshal(updatedDecision)
 			if err != nil {
 				return err
 			}
@@ -746,11 +768,13 @@ func Decide(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 		if nextStatus == "todo" {
 			value, err = scanTicket(tx.QueryRow(ctx, `UPDATE tickets
 				SET status = 'todo', "completedAt" = NULL, "archivedAt" = NULL, decision = $2, "updatedAt" = $3
-				WHERE id = $1 RETURNING `+ticketColumns, current.ID, nextDecisionBytes, at))
+				WHERE id = $1 RETURNING `+ticketColumns,
+				append([]any{current.ID}, db.Data(decisionValue(nextDecisionBytes), at)...)...))
 		} else {
 			value, err = scanTicket(tx.QueryRow(ctx, `UPDATE tickets
 				SET decision = $2, "updatedAt" = $3
-				WHERE id = $1 RETURNING `+ticketColumns, current.ID, nextDecisionBytes, at))
+				WHERE id = $1 RETURNING `+ticketColumns,
+				append([]any{current.ID}, db.Data(decisionValue(nextDecisionBytes), at)...)...))
 		}
 		if err != nil {
 			return err
@@ -759,7 +783,8 @@ func Decide(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 		commentID := effects.NewID()
 		storedBody := shared.StoredText(commentBody)
 		if _, err := tx.Exec(ctx, `INSERT INTO ticket_comments (id, "ticketId", "spaceId", "authorUserId", body, "createdAt", "updatedAt")
-			VALUES ($1, $2, $3, $4, $5, $6, $6)`, commentID, current.ID, actor.SpaceID, actor.UserID, storedBody, at); err != nil {
+			VALUES ($1, $2, $3, $4, $5, $6, $6)`,
+			db.Data(commentID, current.ID, actor.SpaceID, actor.UserID, storedBody, at)...); err != nil {
 			return err
 		}
 		var authorName *string
@@ -1101,6 +1126,7 @@ func List(ctx context.Context, database *db.DB, deployment shared.Deployment, ac
 			clauses = append(clauses, fmt.Sprintf(`(title ILIKE %s ESCAPE '\' OR COALESCE(description, '') ILIKE %s ESCAPE '\')`, p, p))
 		}
 		query := `SELECT ` + ticketColumns + ` FROM tickets WHERE ` + strings.Join(clauses, " AND ") + ` ORDER BY "updatedAt" DESC, id DESC`
+		// writeaudit:dynamic read: clauses are fixed fragments; args are filters
 		rows, err := tx.Query(ctx, query, args...)
 		if err != nil {
 			return err
@@ -1460,14 +1486,9 @@ func Create(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 			stored := shared.StoredText(*input.Description)
 			desc = &stored
 		}
-		var decisionJSON *string
+		var decisionJSON any
 		if input.Decision != nil {
-			encoded, err := json.Marshal(input.Decision)
-			if err != nil {
-				return err
-			}
-			s := string(encoded)
-			decisionJSON = &s
+			decisionJSON = db.JSON(*input.Decision)
 		}
 		at := now()
 		value, err := scanTicket(tx.QueryRow(ctx, `
@@ -1478,8 +1499,9 @@ func Create(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 			)
 			VALUES ($1, $2, $3, $4, $5, $6, 'todo', $7, $8, $9, $10, $11, NULL, $12, $13, $13, $14)
 			RETURNING `+ticketColumns,
-			effects.NewID(), board.ID, actor.SpaceID, number, shared.StoredText(input.Title), desc,
-			input.Priority, assigneeBotID, ownerUserID, ownerBotID, workerBotIDs, actor.UserID, at, decisionJSON,
+			db.Data(effects.NewID(), board.ID, actor.SpaceID, number, shared.StoredText(input.Title), nullableText(desc),
+				input.Priority, nullableText(assigneeBotID), nullableText(ownerUserID), nullableText(ownerBotID),
+				workerBotIDs, actor.UserID, at, decisionJSON)...,
 		))
 		if err != nil {
 			return err
@@ -1782,7 +1804,7 @@ func Update(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 		nextDecision := current.Decision
 		if input.HasDecision {
 			if input.Decision != nil {
-				encoded, err := json.Marshal(input.Decision)
+				encoded, err := wtf8.Marshal(input.Decision)
 				if err != nil {
 					return err
 				}
@@ -1807,10 +1829,10 @@ func Update(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 			    decision = $12
 			WHERE id = $1
 			RETURNING `+ticketColumns,
-			current.ID, title, description, priority,
-			ownerUserID, ownerBotID,
-			workerBotIDs, assigneeBotID,
-			status, completedAt, updatedAt, nextDecision,
+			append([]any{current.ID}, db.Data(title, nullableText(description), priority,
+				nullableText(ownerUserID), nullableText(ownerBotID),
+				workerBotIDs, nullableText(assigneeBotID),
+				status, completedAt, updatedAt, decisionValue(nextDecision))...)...,
 		))
 		if err != nil {
 			return err

@@ -13,6 +13,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/validate"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 )
 
 func now() time.Time { return time.Now().UTC().Truncate(time.Millisecond) }
@@ -20,6 +21,7 @@ func now() time.Time { return time.Now().UTC().Truncate(time.Millisecond) }
 // requirePage is requirePage in pages.ts: the actor's own page in the active Space, or the
 // isolation error every other page (another Space's, another member's, none) gets.
 func requirePage(ctx context.Context, tx pgx.Tx, actor db.Actor, pageID string) (row, error) {
+	// writeaudit:dynamic read: the column list is the fixed summaryColumns; args are filters
 	item, err := scanRow(tx.QueryRow(ctx, `SELECT `+summaryColumns+` FROM pages WHERE id = $1 AND "spaceId" = $2 AND "userId" = $3`,
 		pageID, actor.SpaceID, actor.UserID))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -33,16 +35,22 @@ func requirePage(ctx context.Context, tx pgx.Tx, actor db.Actor, pageID string) 
 func foldTitle(title string) string {
 	var out strings.Builder
 	folding := false
-	for _, r := range title {
-		if unicode.Is(unicode.Cc, r) || validate.IsJSSpace(r) {
-			folding = true
-			continue
+	for index := 0; index < len(title); {
+		r, size := wtf8.DecodeRuneInString(title[index:])
+		if r < 0xD800 || r > 0xDFFF {
+			if unicode.Is(unicode.Cc, r) || validate.IsJSSpace(r) {
+				folding = true
+				index += size
+				continue
+			}
 		}
 		if folding {
 			out.WriteByte(' ')
 			folding = false
 		}
-		out.WriteRune(r)
+		// A WTF-8 surrogate is not a valid rune: write the original bytes.
+		out.WriteString(title[index : index+size])
+		index += size
 	}
 	if folding {
 		out.WriteByte(' ')
@@ -94,8 +102,9 @@ func Rename(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input
 		}
 		// A page deleted since the read above reads as gone, like any other missing page.
 		var err error
+		// writeaudit:dynamic the dynamic fragment is the fixed RETURNING list; SET payloads are db.Data
 		renamed, err = scanRow(tx.QueryRow(ctx, `UPDATE pages SET title = $1, "updatedAt" = $2 WHERE id = $3 RETURNING `+summaryColumns,
-			title, now(), id))
+			append(db.Data(title, now()), id)...))
 		if errors.Is(err, pgx.ErrNoRows) {
 			return shared.NotFound
 		}
@@ -152,7 +161,8 @@ func Pin(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input) (
 			at := now()
 			pinnedAt = &at
 		}
-		result, err = scanRow(tx.QueryRow(ctx, `UPDATE pages SET "pinnedAt" = $1 WHERE id = $2 RETURNING `+summaryColumns, pinnedAt, id))
+		// writeaudit:dynamic the dynamic fragment is the fixed RETURNING list; SET payloads are db.Data
+		result, err = scanRow(tx.QueryRow(ctx, `UPDATE pages SET "pinnedAt" = $1 WHERE id = $2 RETURNING `+summaryColumns, append(db.Data(pinnedAt), id)...))
 		if errors.Is(err, pgx.ErrNoRows) {
 			return shared.NotFound
 		}

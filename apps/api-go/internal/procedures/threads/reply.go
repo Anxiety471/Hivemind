@@ -1,6 +1,7 @@
 package threads
 
 import (
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 	"strings"
 	"unicode"
 
@@ -71,7 +72,7 @@ func compactReplyExcerpt(text string) string {
 	if length := len(excerpt); length > 0 && excerpt[length-1] >= 0xd800 && excerpt[length-1] <= 0xdbff {
 		excerpt = excerpt[:length-1]
 	}
-	return fromUnits(excerpt)
+	return wtf8.FromUnits(excerpt)
 }
 
 // splitLines is split(/\r?\n/u).
@@ -157,7 +158,7 @@ func replyExcerpt(blocks []map[string]any, role string) (excerpt string, plain b
 			if len(source) > maxQuotableSource {
 				source = source[:maxQuotableSource]
 			}
-			visible := fromUnits(source)
+			visible := wtf8.FromUnits(source)
 			if block["kind"] == "text" && role != "user" && !plainMarkdownText(visible) {
 				return "", false
 			}

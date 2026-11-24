@@ -379,7 +379,7 @@ func ensureBotFolderTx(ctx context.Context, tx pgx.Tx, spaceID, userID, botID st
 			UPDATE "file_folders"
 			SET "botId" = $2, "updatedAt" = NOW()
 			WHERE id = $1 AND "botId" IS NULL AND "trashedAt" IS NULL
-		`, adoptID, botID)
+		`, append([]any{adoptID}, db.Data(botID)...)...)
 		if updErr == nil {
 			if _, relErr := tx.Exec(ctx, `RELEASE SAVEPOINT sp_bot_adopt`); relErr != nil {
 				return "", relErr
@@ -426,7 +426,7 @@ func ensureBotFolderTx(ctx context.Context, tx pgx.Tx, spaceID, userID, botID st
 		_, insErr := tx.Exec(ctx, `
 			INSERT INTO "file_folders" (id, "spaceId", "parentId", "botId", "createdByUserId", name, "createdAt", "updatedAt")
 			VALUES ($1, $2, NULL, $3, $4, $5, NOW(), NOW())
-		`, newID, spaceID, botID, userID, candidate)
+		`, db.Data(newID, spaceID, botID, userID, candidate)...)
 		if insErr == nil {
 			if _, relErr := tx.Exec(ctx, `RELEASE SAVEPOINT sp_bot_folder`); relErr != nil {
 				return "", relErr
@@ -674,9 +674,9 @@ func (s *Service) UploadStream(ctx context.Context, actor db.Actor, params Uploa
 			)
 			RETURNING "createdAt", "updatedAt", "trashedAt"
 		`,
-			newID, actor.SpaceID, botID, groupID, effectiveFolderID, actor.UserID, runID,
-			source, name, slug, desc, mimeType, int(blob.SizeBytes), blob.Hash, blob.ID,
-			rootID, nextVersion, clientNonce,
+			db.Data(newID, actor.SpaceID, botID, groupID, effectiveFolderID, actor.UserID, runID,
+				source, name, slug, desc, mimeType, int(blob.SizeBytes), blob.Hash, blob.ID,
+				rootID, nextVersion, clientNonce)...,
 		).Scan(&createdAt, &updatedAt, &trashedAt)
 		if err != nil {
 			if pgErr := mapPgErr(err, "Upload conflict"); pgErr != nil {
@@ -918,6 +918,7 @@ func (s *Service) List(ctx context.Context, actor db.Actor, input ListInput) (Li
 		}
 	}
 	folderID := trimOpt(input.FolderID)
+	// writeaudit:dynamic input.Query is a request field, not a pgx method value
 	queryStr := strings.TrimSpace(input.Query)
 	category := strings.TrimSpace(input.Category)
 	if category == "" {
@@ -1037,6 +1038,7 @@ func (s *Service) listFoldersTx(ctx context.Context, tx pgx.Tx, spaceID string, 
 		ORDER BY LOWER(name) ASC, id ASC
 	`, strings.Join(conds, " AND "))
 
+	// writeaudit:dynamic read: the WHERE clause is built from fixed fragments; args are filters
 	rows, err := tx.Query(ctx, sqlQuery, args...)
 	if err != nil {
 		return nil, err
@@ -1201,6 +1203,7 @@ func (s *Service) listFilesTx(
 		LIMIT $%d
 	`, strings.Join(cteConds, " AND "), outerWhere, orderBy, limitParam)
 
+	// writeaudit:dynamic read: the CTE/WHERE/order fragments are fixed; args are filters
 	rows, err := tx.Query(ctx, sqlQuery, args...)
 	if err != nil {
 		return nil, nil, orpc.Internal()
@@ -1371,6 +1374,7 @@ func (s *Service) Changes(ctx context.Context, actor db.Actor, cursorRaw string,
 		args = append(args, limit+1)
 		limitParam := len(args)
 
+		// writeaudit:dynamic read: cursor/limit fragments are fixed literals; args are filters
 		rows, err := tx.Query(ctx, fmt.Sprintf(`
 			WITH combined AS (
 				SELECT 'folder'::text AS kind, id, "parentId", name, "trashedAt", "updatedAt",
@@ -1479,7 +1483,7 @@ func (s *Service) CreateFolder(ctx context.Context, actor db.Actor, parentID *st
 			INSERT INTO "file_folders" (id, "spaceId", "parentId", "createdByUserId", name, "createdAt", "updatedAt")
 			VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
 			RETURNING "trashedAt", "createdAt", "updatedAt"
-		`, newID, actor.SpaceID, pID, actor.UserID, name).Scan(&trashedAt, &createdAt, &updatedAt)
+		`, db.Data(newID, actor.SpaceID, pID, actor.UserID, name)...).Scan(&trashedAt, &createdAt, &updatedAt)
 		if err != nil {
 			if pgErr := mapPgErr(err, "A folder with that name already exists here"); pgErr != nil {
 				logicErr = pgErr
@@ -1527,7 +1531,7 @@ func (s *Service) RenameFolder(ctx context.Context, actor db.Actor, folderID, ra
 			SET name = $3, "updatedAt" = NOW()
 			WHERE id = $1 AND "spaceId" = $2 AND "trashedAt" IS NULL
 			RETURNING id, "parentId", "botId", name, "trashedAt", "createdAt", "updatedAt"
-		`, folderID, actor.SpaceID, name).Scan(&out.ID, &out.ParentID, &out.BotID, &out.Name, &trashedAt, &createdAt, &updatedAt)
+		`, append([]any{folderID, actor.SpaceID}, db.Data(name)...)...).Scan(&out.ID, &out.ParentID, &out.BotID, &out.Name, &trashedAt, &createdAt, &updatedAt)
 		if errors.Is(err, pgx.ErrNoRows) {
 			logicErr = orpc.NotFound("Folder not found")
 			return nil
@@ -1628,7 +1632,7 @@ func (s *Service) MoveFolder(ctx context.Context, actor db.Actor, folderID strin
 			SET "parentId" = $3, "updatedAt" = NOW()
 			WHERE id = $1 AND "spaceId" = $2
 			RETURNING id, "parentId", "botId", name, "trashedAt", "createdAt", "updatedAt"
-		`, folderID, actor.SpaceID, pID).Scan(&out.ID, &out.ParentID, &out.BotID, &out.Name, &trashedAt, &createdAt, &updatedAt)
+		`, append([]any{folderID, actor.SpaceID}, db.Data(pID)...)...).Scan(&out.ID, &out.ParentID, &out.BotID, &out.Name, &trashedAt, &createdAt, &updatedAt)
 		if err != nil {
 			if pgErr := mapPgErr(err, "A folder with that name already exists here"); pgErr != nil {
 				logicErr = pgErr
@@ -1732,7 +1736,7 @@ func (s *Service) RestoreFolder(ctx context.Context, actor db.Actor, folderID st
 			SET "trashedAt" = NULL, "parentId" = $3, "updatedAt" = NOW()
 			WHERE id = $1 AND "spaceId" = $2
 			RETURNING id, "parentId", "botId", name, "trashedAt", "createdAt", "updatedAt"
-		`, folderID, actor.SpaceID, nextParent).Scan(&out.ID, &out.ParentID, &out.BotID, &out.Name, &trashedAt, &createdAt, &updatedAt)
+		`, append([]any{folderID, actor.SpaceID}, db.Data(nextParent)...)...).Scan(&out.ID, &out.ParentID, &out.BotID, &out.Name, &trashedAt, &createdAt, &updatedAt)
 		if err != nil {
 			if pgErr := mapPgErr(err, "A folder with that name already exists in the destination"); pgErr != nil {
 				logicErr = pgErr
@@ -1862,7 +1866,7 @@ func (s *Service) RenameFile(ctx context.Context, actor db.Actor, fileID, rawNam
 		if _, err := tx.Exec(ctx, `
 			UPDATE "artifacts" SET name = $3, "updatedAt" = NOW()
 			WHERE "spaceId" = $1 AND (id = $2 OR "rootArtifactId" = $2)
-		`, actor.SpaceID, familyID, name); err != nil {
+		`, append([]any{actor.SpaceID, familyID}, db.Data(name)...)...); err != nil {
 			return err
 		}
 		row := tx.QueryRow(ctx, `
@@ -1953,19 +1957,20 @@ func (s *Service) UpdateFile(ctx context.Context, actor db.Actor, input UpdateFi
 		setClauses := make([]string, 0, 4)
 		args := []any{actor.SpaceID, familyID}
 		if nextName != nil {
-			args = append(args, *nextName)
+			args = append(args, db.Data(*nextName)...)
 			setClauses = append(setClauses, fmt.Sprintf("name = $%d", len(args)))
 		}
 		if input.HasDescription {
-			args = append(args, nextDesc)
+			args = append(args, db.Data(nextDesc)...)
 			setClauses = append(setClauses, fmt.Sprintf("description = $%d", len(args)))
 		}
 		if input.HasSlug {
-			args = append(args, nextSlug)
+			args = append(args, db.Data(nextSlug)...)
 			setClauses = append(setClauses, fmt.Sprintf("slug = $%d", len(args)))
 		}
 		if len(setClauses) > 0 {
 			setClauses = append(setClauses, `"updatedAt" = NOW()`)
+			// writeaudit:dynamic build: fixed SET clauses carry db.Data payloads
 			if _, err := tx.Exec(ctx, fmt.Sprintf(`
 				UPDATE "artifacts" SET %s
 				WHERE "spaceId" = $1 AND (id = $2 OR "rootArtifactId" = $2)
@@ -2045,7 +2050,7 @@ func (s *Service) MoveFile(ctx context.Context, actor db.Actor, fileID string, f
 		if _, err := tx.Exec(ctx, `
 			UPDATE "artifacts" SET "folderId" = $3, "updatedAt" = NOW()
 			WHERE "spaceId" = $1 AND (id = $2 OR "rootArtifactId" = $2)
-		`, actor.SpaceID, familyID, fID); err != nil {
+		`, append([]any{actor.SpaceID, familyID}, db.Data(fID)...)...); err != nil {
 			return err
 		}
 		row := tx.QueryRow(ctx, `
@@ -2150,7 +2155,7 @@ func (s *Service) RestoreFile(ctx context.Context, actor db.Actor, fileID string
 			UPDATE "artifacts"
 			SET "trashedAt" = NULL, "folderId" = $3, "updatedAt" = NOW()
 			WHERE "spaceId" = $1 AND (id = $2 OR "rootArtifactId" = $2)
-		`, actor.SpaceID, familyID, folderID); err != nil {
+		`, append([]any{actor.SpaceID, familyID}, db.Data(folderID)...)...); err != nil {
 			return err
 		}
 		row := tx.QueryRow(ctx, `

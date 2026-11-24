@@ -8,11 +8,11 @@ package modelcredentials
 import (
 	"bytes"
 	"encoding/json"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
-	"unicode/utf16"
 )
 
 const maxModelContextWindow = 2_147_483_647
@@ -463,4 +463,4 @@ func usableModelID(value string) (string, bool) {
 	return trimmed, trimmed != ""
 }
 
-func utf16Len(value string) int { return len(utf16.Encode([]rune(value))) }
+func utf16Len(value string) int { return len(wtf8.Units(value)) }

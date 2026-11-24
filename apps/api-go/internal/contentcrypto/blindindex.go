@@ -8,6 +8,7 @@ import (
 	"sort"
 	"unicode/utf16"
 
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 	"golang.org/x/text/unicode/norm"
@@ -69,7 +70,9 @@ func SearchTerms(text string) []string {
 // the first four bytes read as a signed big-endian int32.
 func token(hmacKey []byte, domain SearchTokenDomain, term string) int32 {
 	mac := hmac.New(sha256.New, hmacKey)
-	mac.Write([]byte(string(domain) + "\x00" + term))
+	// Node's createHmac().update(string) encodes the JS string as UTF-8, so an
+	// unpaired surrogate is U+FFFD in the MAC input too.
+	mac.Write([]byte(string(domain) + "\x00" + wtf8.ToUTF8(term)))
 	sum := mac.Sum(nil)
 	return int32(binary.BigEndian.Uint32(sum[:4]))
 }
@@ -99,7 +102,7 @@ func SearchTokens(key DataKey, words string, strings []string) []int32 {
 		joined += value
 	}
 	for _, term := range SearchTerms(joined) {
-		units := utf16.Encode([]rune(term))
+		units := wtf8.Units(term)
 		limit := len(units)
 		if limit > maxPrefix {
 			limit = maxPrefix
@@ -134,7 +137,7 @@ func QuerySearchTokens(key DataKey, query string, domain SearchTokenDomain) []in
 	}
 	tokens := make([]int32, 0, len(terms))
 	for _, term := range terms {
-		units := utf16.Encode([]rune(term))
+		units := wtf8.Units(term)
 		if len(units) < minPrefix {
 			continue
 		}

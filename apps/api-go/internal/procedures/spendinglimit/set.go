@@ -64,6 +64,7 @@ func Set(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input, l
 		return Status{}, failure
 	}
 	err := database.Tenant(ctx, actor, func(tx pgx.Tx) error {
+		// writeaudit:dynamic transaction-scoped advisory lock; no row payload
 		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "spending:"+actor.UserID); err != nil {
 			return err
 		}
@@ -85,7 +86,7 @@ func Set(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input, l
 			ON CONFLICT ("userId") DO UPDATE SET amount = EXCLUDED.amount, currency = EXCLUDED.currency,
 				period = EXCLUDED.period, "updatedAt" = EXCLUDED."updatedAt",
 				"startsAt" = CASE WHEN $6 THEN EXCLUDED."startsAt" ELSE spending_limits."startsAt" END`,
-			actor.UserID, limit.Amount, limit.Currency, limit.Period, at, restart)
+			db.Data(actor.UserID, limit.Amount, limit.Currency, limit.Period, at, restart)...)
 		return err
 	})
 	if err != nil {

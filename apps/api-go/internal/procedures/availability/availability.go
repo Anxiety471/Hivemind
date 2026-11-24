@@ -210,6 +210,7 @@ func ownItems(ctx context.Context, database *db.DB, tx pgx.Tx, actor db.Actor) (
 }
 
 func queryItems(ctx context.Context, tx pgx.Tx, query, userID, kind string) ([]OwnedItem, error) {
+	//writeaudit:dynamic callers pass SELECT statements; the only argument is a filter
 	rows, err := tx.Query(ctx, query, userID)
 	if err != nil {
 		return nil, err
@@ -344,7 +345,7 @@ func place(ctx context.Context, database *db.DB, tx pgx.Tx, actor db.Actor, kind
 					return err
 				}
 			}
-			if _, err := tx.Exec(ctx, `UPDATE capability_installs SET "spaceId" = $2, "allSpaces" = $3 WHERE id = $1`, item.ID, home, availability.AllSpaces); err != nil {
+			if _, err := tx.Exec(ctx, `UPDATE capability_installs SET "spaceId" = $2, "allSpaces" = $3 WHERE id = $1`, append([]any{item.ID}, db.Data(home, availability.AllSpaces)...)...); err != nil {
 				return err
 			}
 			if err := replaceSpaces(ctx, tx, "capability_install_spaces", "installId", item.ID, actor.UserID, home, availability); err != nil {
@@ -425,7 +426,7 @@ func overlaps(a, b SpaceAvailability) bool {
 
 func applySkill(ctx context.Context, tx pgx.Tx, userID, id, home string, availability SpaceAvailability) error {
 	if _, err := tx.Exec(ctx, `UPDATE agent_skills SET "spaceId" = $2, "allSpaces" = $3, "updatedAt" = now() WHERE id = $1`,
-		id, home, availability.AllSpaces); err != nil {
+		append([]any{id}, db.Data(home, availability.AllSpaces)...)...); err != nil {
 		return err
 	}
 	return replaceSpaces(ctx, tx, "agent_skill_spaces", "skillId", id, userID, home, availability)
@@ -433,18 +434,20 @@ func applySkill(ctx context.Context, tx pgx.Tx, userID, id, home string, availab
 
 func applyServer(ctx context.Context, tx pgx.Tx, userID, id, home string, availability SpaceAvailability) error {
 	if _, err := tx.Exec(ctx, `UPDATE mcp_servers SET "spaceId" = $2, "allSpaces" = $3, "updatedAt" = now() WHERE id = $1`,
-		id, home, availability.AllSpaces); err != nil {
+		append([]any{id}, db.Data(home, availability.AllSpaces)...)...); err != nil {
 		return err
 	}
 	return replaceSpaces(ctx, tx, "mcp_server_spaces", "serverId", id, userID, home, availability)
 }
 
 func replaceSpaces(ctx context.Context, tx pgx.Tx, table, column, id, userID, home string, availability SpaceAvailability) error {
+	// writeaudit:dynamic table/column come from the three fixed content tables; the delete binds a filter
 	if _, err := tx.Exec(ctx, fmt.Sprintf(`DELETE FROM %s WHERE %s = $1`, table, quote(column)), id); err != nil {
 		return err
 	}
 	for _, spaceID := range without(availability.SpaceIDs, home) {
-		if _, err := tx.Exec(ctx, fmt.Sprintf(`INSERT INTO %s (%s, "spaceId", "userId") VALUES ($1, $2, $3)`, table, quote(column)), id, spaceID, userID); err != nil {
+		// writeaudit:dynamic table/column come from the three fixed content tables; payloads are db.Data
+		if _, err := tx.Exec(ctx, fmt.Sprintf(`INSERT INTO %s (%s, "spaceId", "userId") VALUES ($1, $2, $3)`, table, quote(column)), db.Data(id, spaceID, userID)...); err != nil {
 			return err
 		}
 	}
@@ -461,7 +464,7 @@ func settleSecret(ctx context.Context, tx pgx.Tx, userID string, secretID *strin
 	} else {
 		newSpace = &home
 	}
-	_, err := tx.Exec(ctx, `UPDATE secrets SET "spaceId" = $1 WHERE id = $2 AND "userId" = $3`, newSpace, *secretID, userID)
+	_, err := tx.Exec(ctx, `UPDATE secrets SET "spaceId" = $1 WHERE id = $2 AND "userId" = $3`, append(db.Data(newSpace), *secretID, userID)...)
 	return err
 }
 
@@ -498,6 +501,7 @@ func installChildren(ctx context.Context, tx pgx.Tx, userID, installID string) (
 }
 
 func lock(ctx context.Context, tx pgx.Tx, key string) error {
+	// writeaudit:dynamic transaction-scoped advisory lock; no row payload
 	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, key)
 	return err
 }

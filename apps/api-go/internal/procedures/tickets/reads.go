@@ -214,6 +214,7 @@ func Get(ctx context.Context, database *db.DB, deployment shared.Deployment, act
 		var row ticketRow
 		var err error
 		if input.ID != "" {
+			// writeaudit:dynamic read: the column list is the fixed ticketColumns; args are filters
 			row, err = scanTicket(tx.QueryRow(ctx, `SELECT `+ticketColumns+` FROM tickets
 				WHERE id = $1 AND "spaceId" = $2 AND "boardId" = $3`, input.ID, actor.SpaceID, board.ID))
 		} else {
@@ -221,6 +222,7 @@ func Get(ctx context.Context, database *db.DB, deployment shared.Deployment, act
 			if !ok {
 				return errBadRef
 			}
+			// writeaudit:dynamic read: the column list is the fixed ticketColumns; args are filters
 			row, err = scanTicket(tx.QueryRow(ctx, `SELECT `+ticketColumns+` FROM tickets
 				WHERE number = $1 AND "spaceId" = $2 AND "boardId" = $3`, number, actor.SpaceID, board.ID))
 		}

@@ -13,9 +13,9 @@ package mcpassignments
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 	"log/slog"
 	"slices"
 	"time"
@@ -26,6 +26,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/effects"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/events"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/local"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/messageblocks"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
@@ -87,10 +88,10 @@ type approvalThread struct {
 	botID *string
 }
 
-// threadSeq is one committed thread.message.updated cursor.
-type threadSeq struct {
-	threadID string
-	seq      int32
+// Seq is one committed thread.message.updated cursor.
+type Seq struct {
+	ThreadID string
+	Seq      int32
 }
 
 // cardDecision is McpApprovalDecision (mcp-approval.ts:26-32): whether this decision may create
@@ -103,7 +104,7 @@ type cardDecision struct {
 // painted is rewriteCards' answer: the cursors to notify, how many cards this call closed, and
 // whether it saw a card already connected or dismissed.
 type painted struct {
-	seqs      []threadSeq
+	seqs      []Seq
 	flipped   int
 	dismissed bool
 	connected bool
@@ -116,6 +117,10 @@ func Approve(ctx context.Context, database *db.DB, deployment shared.Deployment,
 	if failure != nil {
 		return nil, failure
 	}
+	// The security event carries both ids; see Dismiss.
+	if !effects.AuditedMetadataServable(input.botID) || !effects.AuditedMetadataServable(input.serverID) {
+		return nil, local.ErrDecline
+	}
 	ring := deployment.Content
 	if ring == nil {
 		return nil, shared.Failure(errors.New("encryption is not configured"))
@@ -126,9 +131,10 @@ func Approve(ctx context.Context, database *db.DB, deployment shared.Deployment,
 	}
 	var assignment *Assignment
 	var runID string
-	var seqs []threadSeq
+	var seqs []Seq
 	err = shared.Serializable(ctx, database, actor, func(tx pgx.Tx) error {
-		resolution, err := rewriteCards(ctx, tx, ring, actor, threads, input, selectableFor(input.threadID != nil))
+		resolution, err := rewriteCards(ctx, tx, ring, actor, threads,
+			input.botID, input.serverID, connectedCard, selectableFor(input.threadID != nil))
 		if err != nil {
 			return err
 		}
@@ -155,11 +161,16 @@ func Approve(ctx context.Context, database *db.DB, deployment shared.Deployment,
 	// The cursors are announced only once their events committed, as deps.events.notify is.
 	// That notify names no event type (mcp-approval.ts:217), so neither does this one.
 	for _, event := range seqs {
-		events.NotifyCommitted(ctx, deployment.Events, nil, nil, event.threadID, event.seq, "", "")
+		events.NotifyCommitted(ctx, deployment.Events, nil, nil, event.ThreadID, event.Seq, "", "")
 	}
 	if runID != "" {
 		// wakeRun logs a failed nudge and drops it: the run row is durable and recovery starts it.
 		runs.TryWakeFor(ctx, database, actor, publisher, slog.Default(), runID, runs.WakeOptions{})
+	}
+	// The router validates the handler's answer after the transaction committed, so a broken
+	// stored row is a 500 that leaves the writes in place.
+	if failure := ValidateAssignments([]Assignment{*assignment}); failure != nil {
+		return nil, failure
 	}
 	return *assignment, nil
 }
@@ -276,7 +287,7 @@ func requireBotThread(ctx context.Context, tx pgx.Tx, ring *contentcrypto.KeyRin
 // an approval card for the server has the selectable cards painted connected, its row sealed
 // again, and a thread.message.updated appended in the same transaction.
 func rewriteCards(ctx context.Context, tx pgx.Tx, ring *contentcrypto.KeyRing, actor db.Actor,
-	threads []approvalThread, input approveInput, selectable func(map[string]any) bool) (painted, error) {
+	threads []approvalThread, botID, serverID, status string, selectable func(map[string]any) bool) (painted, error) {
 	var result painted
 	for _, thread := range threads {
 		// tx.message.findMany({ where: { threadId }, orderBy: { createdAt: "desc" }, take: 100 })
@@ -315,13 +326,13 @@ func rewriteCards(ctx context.Context, tx pgx.Tx, ring *contentcrypto.KeyRing, a
 		for index, message := range messages {
 			// A card is only ever the bot's, but a user message may still hold one; the bot's own
 			// and the user's messages are both read, another bot's are not.
-			if message.botID != nil && *message.botID != "" && *message.botID != input.botID {
+			if message.botID != nil && *message.botID != "" && *message.botID != botID {
 				continue
 			}
 			// changeMessageBlocks writes the row's own list back, so entries a read drops survive:
 			// the selection reads the blocks, the rewrite keeps the list.
 			raw := opened[index]["blocks"]
-			cards := readCards(messageblocks.Stored(raw), input.serverID, selectable)
+			cards := readCards(messageblocks.Stored(raw), serverID, selectable)
 			if !cards.present {
 				continue
 			}
@@ -330,7 +341,7 @@ func rewriteCards(ctx context.Context, tx pgx.Tx, ring *contentcrypto.KeyRing, a
 			if !cards.selectable {
 				continue
 			}
-			stored, shown, changed, ok := messageblocks.Rewrite(raw, repaint(input.serverID, selectable))
+			stored, shown, changed, ok := messageblocks.Rewrite(raw, repaint(serverID, status, selectable))
 			if !ok || !changed {
 				continue
 			}
@@ -338,7 +349,7 @@ func rewriteCards(ctx context.Context, tx pgx.Tx, ring *contentcrypto.KeyRing, a
 				return result, err
 			}
 			result.flipped++
-			eventBotID := input.botID
+			eventBotID := botID
 			if message.botID != nil {
 				eventBotID = *message.botID
 			} else if thread.botID != nil {
@@ -354,7 +365,7 @@ func rewriteCards(ctx context.Context, tx pgx.Tx, ring *contentcrypto.KeyRing, a
 			if err != nil {
 				return result, err
 			}
-			result.seqs = append(result.seqs, threadSeq{threadID: thread.id, seq: event.Seq})
+			result.seqs = append(result.seqs, Seq{ThreadID: thread.id, Seq: event.Seq})
 		}
 	}
 	return result, nil
@@ -369,17 +380,17 @@ func writeBlocks(ctx context.Context, tx pgx.Tx, ring *contentcrypto.KeyRing, me
 	if err != nil {
 		return err
 	}
-	body, err := json.Marshal(sealed["blocks"])
+	body, err := wtf8.Marshal(sealed["blocks"])
 	if err != nil {
 		return fmt.Errorf("store message blocks: %w", err)
 	}
 	if ring.EncryptWrites {
-		_, err = tx.Exec(ctx, `UPDATE messages SET blocks = $1::jsonb, "searchTokens" = $3 WHERE id = $2`,
-			string(body), messageID, sealed["searchTokens"])
+		args := append(append(db.Data(db.JSONText(string(body))), messageID), db.Data(sealed["searchTokens"])...)
+		_, err = tx.Exec(ctx, `UPDATE messages SET blocks = $1::jsonb, "searchTokens" = $3 WHERE id = $2`, args...)
 		return err
 	}
 	_, err = tx.Exec(ctx, `UPDATE messages SET blocks = $1::jsonb, "searchTokens" = '{}' WHERE id = $2`,
-		string(body), messageID)
+		append(db.Data(db.JSONText(string(body))), messageID)...)
 	return err
 }
 
@@ -441,9 +452,9 @@ func selectableFor(threadScoped bool) func(map[string]any) bool {
 	}
 }
 
-// repaint is rewriteCards' change function: the selectable cards for this server become connected
-// in a copy of the block, and every other block is returned as it was.
-func repaint(serverID string, selectable func(map[string]any) bool) func(map[string]any) (map[string]any, bool) {
+// repaint is rewriteCards' change function: the selectable cards for this server become status in
+// a copy of the block, and every other block is returned as it was.
+func repaint(serverID, status string, selectable func(map[string]any) bool) func(map[string]any) (map[string]any, bool) {
 	return func(block map[string]any) (map[string]any, bool) {
 		if !approvalServer(block, serverID) || !selectable(block) {
 			return block, false
@@ -452,7 +463,7 @@ func repaint(serverID string, selectable func(map[string]any) bool) func(map[str
 		for key, value := range block {
 			next[key] = value
 		}
-		next["status"] = connectedCard
+		next["status"] = status
 		return next, true
 	}
 }
@@ -493,9 +504,10 @@ func connect(ctx context.Context, tx pgx.Tx, actor db.Actor, input approveInput,
 		(id, "spaceId", "userId", "botId", "serverId", "allowAllTools", "allowedTools", "createdAt", "updatedAt")
 		VALUES ($1, $2, $3, $4, $5, true, '[]'::jsonb, $6, $6)
 		ON CONFLICT ("botId", "serverId") DO NOTHING`,
-		effects.NewID(), actor.SpaceID, actor.UserID, botID, serverID, at); err != nil {
+		db.Data(effects.NewID(), actor.SpaceID, actor.UserID, botID, serverID, at)...); err != nil {
 		return Assignment{}, "", err
 	}
+	// writeaudit:dynamic read: the column list is the fixed local const; args are filters
 	rows, err := tx.Query(ctx, `SELECT `+columns+` FROM bot_mcp_servers a
 		WHERE a."botId" = $1 AND a."serverId" = $2`, botID, serverID)
 	if err != nil {

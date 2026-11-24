@@ -375,7 +375,8 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 			},
 		},
 		{
-			Name: "mcp.assignments.approve",
+			Name:       "mcp.assignments.approve",
+			MayDecline: true,
 			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
 				var publisher runslib.Publisher
 				if deployment.Signals != nil {
@@ -389,6 +390,39 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 			ReadOnly: true,
 			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
 				return mcpassignments.List(ctx, database, actor, input)
+			},
+		},
+		{
+			Name:       "mcp.assignments.dismiss",
+			MayDecline: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return mcpassignments.Dismiss(ctx, database, deployment, actor, input)
+			},
+		},
+		{
+			Name: "mcp.assignments.replace",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return mcpassignments.Replace(ctx, database, deployment, actor, input)
+			},
+		},
+		{
+			Name: "mcp.servers.agents",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return mcpservers.Agents(ctx, database, deployment, actor, input)
+			},
+		},
+		{
+			Name:       "mcp.servers.remove",
+			MayDecline: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return mcpservers.Remove(ctx, database, deployment, actor, input)
+			},
+		},
+		{
+			Name:       "mcp.oauth.disconnect",
+			MayDecline: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return mcpservers.Disconnect(ctx, database, deployment, actor, input)
 			},
 		},
 		{
@@ -881,6 +915,9 @@ func VaultProcedures() []string {
 		"vault.list",
 		"botSecrets.list",
 		"mcp.servers.list",
+		"mcp.servers.agents",
+		"mcp.servers.remove",
+		"mcp.oauth.disconnect",
 		"models.credentials",
 	}
 }

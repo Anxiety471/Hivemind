@@ -191,7 +191,7 @@ func (s *Service) authorized(ctx context.Context, session *Session) *orpc.Error 
 
 func (s *Service) renew(ctx context.Context, session *Session) (*http.Cookie, error) {
 	expires := time.Now().Add(sessionLifetime)
-	if _, err := s.database.Pool.Exec(ctx, `UPDATE session SET "expiresAt" = $2, "updatedAt" = now() WHERE token = $1`, session.Token, expires); err != nil {
+	if _, err := s.database.Pool.Exec(ctx, `UPDATE session SET "expiresAt" = $2, "updatedAt" = now() WHERE token = $1`, append([]any{session.Token}, db.Data(expires)...)...); err != nil {
 		return nil, err
 	}
 	session.ExpiresAt = expires
@@ -253,7 +253,7 @@ func (s *Service) Actor(ctx context.Context, session *Session, requestedSpace st
 		}
 		tag, err := tx.Exec(ctx, `UPDATE session SET "activeOrganizationId" = $2
 			WHERE id = $1 AND "userId" = $3 AND "activeOrganizationId" IS NOT DISTINCT FROM NULLIF($4, '')`,
-			session.ID, chosen, session.UserID, pinned)
+			append(append([]any{session.ID}, db.Data(chosen)...), session.UserID, pinned)...)
 		if err != nil {
 			return err
 		}

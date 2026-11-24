@@ -90,7 +90,7 @@ func Reorder(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Inpu
 		at := now()
 		for position, id := range ids {
 			if _, err := tx.Exec(ctx, `UPDATE bots SET position = $1, "updatedAt" = $2 WHERE id = $3 AND "spaceId" = $4`,
-				position, at, id, actor.SpaceID); err != nil {
+				append(db.Data(position, at), id, actor.SpaceID)...); err != nil {
 				return err
 			}
 		}
