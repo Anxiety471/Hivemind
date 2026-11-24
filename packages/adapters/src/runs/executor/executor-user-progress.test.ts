@@ -712,6 +712,8 @@ describe("notes that can't be posted as messages", () => {
           note: "The meeting is with Anna.",
           // What the call was made with, for a later turn to replay.
           calls: [{ arguments: "{}" }],
+          status: "done",
+          startedAtMs: expect.any(Number),
         },
       ],
     });
@@ -1032,21 +1034,28 @@ describe("messages mode", () => {
   it.each(["routine", "reaction", "bot_message", "tickets"])(
     "leaves %s runs as they are",
     async (trigger) => {
-      const turn = (replyMode: "chat" | "messages") =>
-        runTurn("", true, ["I will check that.", "The draft is posted."], [], "fyi", {
-          trigger,
-          replyMode,
-          startedAt: new Date(Date.now() - 120_000),
-        });
-      const chat = await turn("chat");
-      const messages = await turn("messages");
-      expect(messages.finalizeRun.mock.calls[0]![0].blocks).toEqual(
-        chat.finalizeRun.mock.calls[0]![0].blocks,
-      );
-      expect(sentTexts(messages.messages)).toEqual(sentTexts(chat.messages));
-      expect(messages.runtimeRun.mock.calls[0]![0].instructions).not.toContain(
-        messagesModeReplyGuidance(),
-      );
+      // Both turns must stamp the same step timings for the block comparison.
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+      try {
+        const turn = (replyMode: "chat" | "messages") =>
+          runTurn("", true, ["I will check that.", "The draft is posted."], [], "fyi", {
+            trigger,
+            replyMode,
+            startedAt: new Date(Date.now() - 120_000),
+          });
+        const chat = await turn("chat");
+        const messages = await turn("messages");
+        expect(messages.finalizeRun.mock.calls[0]![0].blocks).toEqual(
+          chat.finalizeRun.mock.calls[0]![0].blocks,
+        );
+        expect(sentTexts(messages.messages)).toEqual(sentTexts(chat.messages));
+        expect(messages.runtimeRun.mock.calls[0]![0].instructions).not.toContain(
+          messagesModeReplyGuidance(),
+        );
+      } finally {
+        vi.useRealTimers();
+      }
     },
   );
 });

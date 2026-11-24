@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PrismaClient } from "../database/client.js";
 import { IsolationError } from "../database/scope.js";
+import { startedHelpersWhere } from "../runs/cancel-runs.js";
 import { createGroupRepos } from "./groups.js";
 
 describe("listSpaceGroupsForSpaces", () => {
@@ -242,10 +243,7 @@ describe("archiveGroup", () => {
     expect(findManyRuns).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
-          OR: [
-            { threadId: "thread-1" },
-            { trigger: "helper", sourceMessage: { threadId: "thread-1" } },
-          ],
+          OR: [{ threadId: "thread-1" }, startedHelpersWhere("thread-1")],
         }),
       }),
     );
@@ -325,10 +323,7 @@ describe("archiveGroup", () => {
     expect(queryRaw).toHaveBeenCalled();
     expect(findManyRuns).toHaveBeenCalledWith({
       where: {
-        OR: [
-          { threadId: "thread-1" },
-          { trigger: "helper", sourceMessage: { threadId: "thread-1" } },
-        ],
+        OR: [{ threadId: "thread-1" }, startedHelpersWhere("thread-1")],
         status: "cancelled",
       },
       select: { id: true },

@@ -785,7 +785,8 @@ describe("boards.tickets.list", () => {
 
   function listDeps() {
     type TextMatch = { contains: string };
-    type Where = { OR?: Array<{ title?: TextMatch; description?: TextMatch }> };
+    type SearchClause = { OR?: Array<{ title?: TextMatch; description?: TextMatch }> };
+    type Where = { OR?: SearchClause["OR"]; AND?: SearchClause[] };
     const findMany = vi.fn(async (_args: { where: Where }) => []);
     const prisma = {
       board: {
@@ -819,8 +820,9 @@ describe("boards.tickets.list", () => {
     );
     expect(response?.status).toBe(200);
     const where = findMany.mock.calls[0]?.[0]?.where;
-    expect(where?.OR?.[0]?.title?.contains).toBe("50\\%\\_off");
-    expect(where?.OR?.[1]?.description?.contains).toBe("50\\%\\_off");
+    const search = where?.AND?.[0];
+    expect(search?.OR?.[0]?.title?.contains).toBe("50\\%\\_off");
+    expect(search?.OR?.[1]?.description?.contains).toBe("50\\%\\_off");
   });
 });
 

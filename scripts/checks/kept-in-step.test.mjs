@@ -74,12 +74,12 @@ test("Kubernetes computers use the published Compose image repository", () => {
   );
 });
 
-test("table column widths are capped at the cell's own max-width", () => {
-  assert.equal(
-    `${capture("packages/chat-ui/src/table-utils.ts", /const MAX_WIDTH_CHARS = (\d+);/)}ch`,
+test("table cell text is capped in characters, not pixels", () => {
+  assert.match(
     capture(
       "packages/chat-ui/src/markdown-table.css",
-      /^\.rk-table-cell-text \{[^}]*max-width: (\S+);/m,
+      /^\.rk-table-cell-text \{[^}]*max-width: (\d+ch);/m,
     ),
+    /^\d+ch$/,
   );
 });

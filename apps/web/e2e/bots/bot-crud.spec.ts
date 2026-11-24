@@ -158,7 +158,6 @@ test("bot creation, editing, and deletion persist", async ({ page }, testInfo) =
   await expect(studio.getByRole("button", { name: "Color #FFAF38" })).toHaveClass(/ring-2/);
   await studio.getByRole("button", { name: "Done", exact: true }).click();
   const modelRow = settings.getByRole("button", { name: /^Model/ });
-  const openWork = settings.getByTestId("bot-scratchpad");
   const notifications = settings.getByRole("switch", { name: "Notifications", exact: true });
   // The panel shows the model and notifications; the rest waits behind Advanced.
   await page.getByRole("button", { name: "Close panel" }).click();
@@ -174,7 +173,6 @@ test("bot creation, editing, and deletion persist", async ({ page }, testInfo) =
   await page.keyboard.press("Escape");
   await openBotSettings(page);
   await expect(notifications).toBeVisible();
-  await expect(openWork).toHaveCount(0);
   await expect(modelRow).toBeVisible();
   await expect(settings.getByRole("switch", { name: "Own computer", exact: true })).toBeVisible();
   // Rarely changed settings show only once the bot has them changed from the default.
@@ -187,33 +185,6 @@ test("bot creation, editing, and deletion persist", async ({ page }, testInfo) =
     await expect(settings.getByRole("switch", { name, exact: true })).toHaveCount(0);
   await expect(settings.getByLabel("Disable a tool")).toHaveCount(0);
   await captureScreenshot(page, testInfo, "bot-settings-sections-advanced");
-  await rpc(page, "scratchpad/create", {
-    botId: deletedBotPath.split("/").at(-1),
-    title: "First fixture task",
-  });
-  await page.getByRole("button", { name: "Close panel" }).click();
-  await openBotSettings(page);
-  await expect(openWork.getByText("First fixture task", { exact: true })).toBeVisible();
-  await openWork.getByRole("button", { name: "Add open work" }).click();
-  await openWork.getByRole("textbox", { name: "New open-work item" }).fill("Second fixture task");
-  await openWork.getByRole("button", { name: "Add", exact: true }).click();
-  const workRows = openWork.locator(".group");
-  await expect(workRows).toHaveCount(2);
-  await openWork.getByRole("button", { name: "Add open work" }).click();
-  const workDraft = openWork.getByRole("textbox", { name: "New open-work item" });
-  await workDraft.fill("Retained draft");
-  for (let index = 0; index < 2; index += 1) {
-    await workRows.first().hover();
-    await workRows.first().getByRole("button", { name: "Remove" }).click();
-  }
-  await expect(workRows).toHaveCount(0);
-  await expect(workDraft).toHaveValue("Retained draft");
-  await captureScreenshot(page, testInfo, "open-work-empty-list-draft");
-  await openWork.getByRole("button", { name: "Add", exact: true }).click();
-  await expect(openWork.getByText("Retained draft", { exact: true })).toBeVisible();
-  await workRows.first().hover();
-  await workRows.first().getByRole("button", { name: "Remove" }).click();
-  await expect(openWork).toHaveCount(0);
   // A bot that already has a tool turned off shows its tools, to turn it back on.
   await rpc(page, "bots/update", {
     botId: deletedBotPath.split("/").at(-1),

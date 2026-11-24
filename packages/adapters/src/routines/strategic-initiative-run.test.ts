@@ -14,7 +14,7 @@ async function context(
   } = {},
 ) {
   const createMany = vi.fn(async () => ({ count: 1 }));
-  const append = vi.fn();
+  const append = vi.fn(async (_event: { type: string }) => ({}));
   const finalizeRun = vi.fn(async () => ({}));
   const enqueue = vi.fn(async () => undefined);
   const updateMany = vi.fn(async (_args: { data?: object }) => ({ count: 1 }));
@@ -114,7 +114,11 @@ describe("daily check-in routine execution", () => {
     expect(finalizeRun).toHaveBeenCalledWith(
       expect.objectContaining({ outcome: "completed", blocks: [], markUnread: false }),
     );
-    expect(append).not.toHaveBeenCalled();
+    // The reply stays silent, but live billing still publishes its usage event.
+    expect(append).toHaveBeenCalledTimes(1);
+    expect(append).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "usage.recorded", runId: "run-1" }),
+    );
   });
 
   it("does not apply scripted files or memory on completion", async () => {

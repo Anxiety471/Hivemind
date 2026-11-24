@@ -299,6 +299,10 @@ it("names the command behind each skill change", async () => {
 });
 
 it("shows which targets failed and when the next retry runs", async () => {
+  // The component prints only the time for a same-day moment and adds the date otherwise, so the
+  // retry is anchored to today: a fixed date would change the label as the clock moves on.
+  const retryAt = new Date();
+  retryAt.setHours(7, 45, 0, 0);
   memory.roamer.mockResolvedValue({
     enabled: true,
     intervalMinutes: 360,
@@ -307,7 +311,7 @@ it("shows which targets failed and when the next retry runs", async () => {
     lastChanges: 0,
     lastModel: null,
     lastFailures: [{ kind: "bot", id: "bot-1", name: "Crumb", error: "model HTTP 429" }],
-    retryAt: "2026-11-22T23:45:32.920Z",
+    retryAt: retryAt.toISOString(),
     retryAttempt: 1,
   });
   await render(null);

@@ -182,7 +182,7 @@ describe("builtin tools", () => {
     for (const name of FLEET_TOOL_NAMES) expect(DELEGATION_TOOL_NAMES.has(name), name).toBe(true);
   });
 
-  it("offers subagents action tools without further delegation or parent configuration", () => {
+  it("offers subagents action tools without bot management or parent configuration", () => {
     const options = {
       graphicalToolsAllowed: true,
       pageBrowserAllowed: true,
@@ -215,13 +215,10 @@ describe("builtin tools", () => {
       expect(owner, name).toContain(name);
       expect(helper, name).toContain(name);
     }
-    for (const name of [
-      "run_subagent",
-      "spawn_bot",
-      "update_bot",
-      "message_user",
-      "request_takeover",
-    ]) {
+    // Helpers may start helpers of their own (two levels deep); only bot management
+    // and messages to the person stay with the parent.
+    expect(helper).toContain("run_subagent");
+    for (const name of ["spawn_bot", "update_bot", "message_user", "request_takeover"]) {
       expect(helper, name).not.toContain(name);
     }
   });

@@ -309,32 +309,15 @@ describe("computer terminal and file transfer", () => {
     return { sandbox, prisma, deps, call };
   }
 
-  it("prepares an unused bot's folders before listing a running Team Computer", async () => {
+  it("lists a running Team Computer's shared workspace root without creating bot folders", async () => {
     const { sandbox, call } = setup();
-    let prepared = false;
-    sandbox.execute.mockImplementation(async function* () {
-      prepared = true;
-      yield { type: "exit" as const, code: 0 };
-    });
-    sandbox.listFiles.mockImplementation(async () => {
-      if (!prepared) throw new Error("workspace folder does not exist");
-      return [];
-    });
 
     await expect(call("files", { path: "" })).resolves.toEqual({
       status: 200,
       body: { json: [] },
     });
-    expect(sandbox.execute).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "sandbox-ref-1" }),
-      { argv: ["mkdir", "-p", "shared", "bots/bot-1"] },
-      expect.anything(),
-    );
-    expect(sandbox.listFiles).toHaveBeenCalledWith(
-      expect.anything(),
-      "bots/bot-1",
-      expect.anything(),
-    );
+    expect(sandbox.listFiles).toHaveBeenCalledWith(expect.anything(), "", expect.anything());
+    expect(sandbox.execute).not.toHaveBeenCalled();
   });
 
   it("tells a second person the computer is busy instead of taking it from the first", async () => {
@@ -484,18 +467,16 @@ describe("computer terminal and file transfer", () => {
     );
   });
 
-  it("prepares the bot's folders when boot reuses an already running Team Computer", async () => {
+  it("does not create bot folders when boot reuses an already running Team Computer", async () => {
     const { sandbox, call } = setup();
     await expect(call("boot", {})).resolves.toMatchObject({ status: 200 });
-    expect(sandbox.execute).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "sandbox-ref-1" }),
-      { argv: ["mkdir", "-p", "shared", "bots/bot-1"] },
-      expect.anything(),
-    );
+    expect(sandbox.execute).not.toHaveBeenCalled();
   });
 
-  it("clears a reclaimed sandbox before boot attempts provisioning again", async () => {
+  it("answers a running Team Computer's status on boot without provisioning again", async () => {
     const { sandbox, prisma, call } = setup();
+    // A shared-root boot runs no workspace command, so a dead provider is cleared by the next
+    // use of the computer rather than by boot.
     sandbox.execute.mockImplementation(async function* () {
       yield await Promise.reject(
         Object.assign(new Error("Sandbox is probably not running anymore"), {
@@ -506,21 +487,20 @@ describe("computer terminal and file transfer", () => {
     const findUniqueOrThrow = vi.fn().mockRejectedValue(new ComputerBusyError());
     prisma.computer.findUniqueOrThrow = findUniqueOrThrow;
 
-    await expect(call("boot", {})).resolves.toMatchObject({ status: 409 });
-    expect(prisma.computer.updateMany).toHaveBeenCalledWith({
-      where: { id: "computer-1", providerRef: "sandbox-ref-1" },
-      data: { state: "stopped", providerRef: null },
-    });
-    expect(findUniqueOrThrow).toHaveBeenCalledWith({ where: { id: "computer-1" } });
+    await expect(call("boot", {})).resolves.toMatchObject({ status: 200 });
+    expect(prisma.computer.updateMany).not.toHaveBeenCalledWith(
+      expect.objectContaining({ data: { state: "stopped", providerRef: null } }),
+    );
+    expect(findUniqueOrThrow).not.toHaveBeenCalled();
   });
 
-  it("does not discard a live sandbox when folder preparation fails", async () => {
+  it("does not discard a live sandbox when its workspace cannot be listed", async () => {
     const { sandbox, prisma, call } = setup();
-    sandbox.execute.mockImplementation(async function* () {
-      yield { type: "exit" as const, code: 1 };
-    });
-    await expect(call("boot", {})).resolves.toMatchObject({ status: 500 });
-    expect(prisma.computer.updateMany).not.toHaveBeenCalled();
+    sandbox.listFiles.mockRejectedValueOnce(new Error("provider transport error"));
+    await expect(call("files", { path: "" })).resolves.toMatchObject({ status: 500 });
+    expect(prisma.computer.updateMany).not.toHaveBeenCalledWith(
+      expect.objectContaining({ data: { state: "stopped", providerRef: null } }),
+    );
   });
 
   it("opens a terminal only for the user holding this bot's control lease", async () => {
@@ -533,7 +513,7 @@ describe("computer terminal and file transfer", () => {
     expect(status).toBe(200);
     expect(sandbox.connectTerminal).toHaveBeenCalledWith(
       expect.objectContaining({ id: "sandbox-ref-1" }),
-      { controlToken: "lease-1", cwd: "bots/bot-1" },
+      { controlToken: "lease-1", cwd: undefined },
       expect.anything(),
     );
     const url = new URL(body.json.url);
@@ -605,7 +585,7 @@ describe("computer terminal and file transfer", () => {
     );
   });
 
-  it("uploads into the bot workspace only under control", async () => {
+  it("uploads into the shared workspace only under control", async () => {
     const contentBase64 = Buffer.from("notes").toString("base64");
     const released = setup();
     await expect(
@@ -619,18 +599,22 @@ describe("computer terminal and file transfer", () => {
     });
     expect(sandbox.writeFile).toHaveBeenCalledWith(
       expect.objectContaining({ id: "sandbox-ref-1" }),
-      { path: "bots/bot-1/notes.txt", content: Buffer.from("notes") },
+      { path: "notes.txt", content: Buffer.from("notes") },
       expect.anything(),
     );
   });
 
-  it("rejects team uploads into another bot workspace", async () => {
+  it("allows team uploads anywhere inside the shared workspace", async () => {
     const contentBase64 = Buffer.from("x").toString("base64");
     const { sandbox, call } = setup(controlled);
     await expect(
       call("uploadFile", { path: "bots/bot-2/secret.txt", contentBase64 }),
-    ).resolves.toMatchObject({ status: 400 });
-    expect(sandbox.writeFile).not.toHaveBeenCalled();
+    ).resolves.toMatchObject({ status: 200 });
+    expect(sandbox.writeFile).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "sandbox-ref-1" }),
+      { path: "bots/bot-2/secret.txt", content: Buffer.from("x") },
+      expect.anything(),
+    );
   });
 
   it("answers 400 when a running computer's file is too large or not text to preview", async () => {
@@ -695,7 +679,7 @@ describe("computer terminal and file transfer", () => {
     });
     expect(sandbox.readFile).toHaveBeenCalledWith(
       expect.anything(),
-      "bots/bot-1/notes.txt",
+      "notes.txt",
       expect.anything(),
       { maxBytes: 10 * 1024 * 1024 },
     );

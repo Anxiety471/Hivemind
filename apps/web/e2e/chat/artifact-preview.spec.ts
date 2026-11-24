@@ -41,7 +41,7 @@ test("agent-attached files appear as cards with previews and downloads", async (
   const previewReady = new Promise<void>((resolve) => {
     releasePreview = resolve;
   });
-  await page.route("**/rpc/artifacts/get", async (route) => {
+  await page.route("**/api/v1/files/*/content*", async (route) => {
     await previewReady;
     await route.continue();
   });
@@ -126,13 +126,13 @@ test("audio attachments can retry a failed preview without leaving the card", as
   await composer.press("Enter");
   const play = page.getByRole("button", { name: "Play clip.wav", exact: true });
   await expect(play).toBeVisible({ timeout: 30_000 });
-  await page.route("**/rpc/artifacts/get", (route) => route.abort("failed"));
+  await page.route("**/api/v1/files/*/content*", (route) => route.abort("failed"));
   await play.click();
   await expect(page.getByRole("alert")).toContainText("Could not load this file.");
   await expect(play).toBeEnabled();
   await expect(page.getByRole("button", { name: "Download clip.wav", exact: true })).toBeVisible();
   await captureScreenshot(page, testInfo, "audio-preview-failure-retry");
-  await page.unroute("**/rpc/artifacts/get");
+  await page.unroute("**/api/v1/files/*/content*");
   await play.click();
   const audio = page.locator('audio[aria-label="clip.wav"]');
   await expect(audio).toBeVisible();

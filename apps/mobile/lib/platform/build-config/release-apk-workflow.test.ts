@@ -27,15 +27,18 @@ describe("Android APK release workflow", () => {
     }
   });
 
-  it("builds a production-channel APK and never takes the desktop updater's latest release", () => {
+  it("builds a production-channel APK and delivers it without a public release", () => {
     expect(easConfig.build["android-apk"]).toEqual({
       extends: "production",
       android: { buildType: "apk" },
       environment: "production",
     });
     expect(workflow).toContain("--profile android-apk");
-    expect(workflow).toContain("--latest=false");
-    expect(workflow).not.toContain("gh release delete");
+    // The desktop updater reads GitHub's latest release, so the APK is delivered straight to the
+    // deployment over SSH instead of being published as a release asset.
+    expect(workflow).not.toContain("gh release");
+    expect(workflow).toContain("Deliver the APK to the deployment");
+    expect(workflow).toContain("MOBILE_APK_SSH_HOST");
     expect(
       readFileSync(path.resolve(import.meta.dirname, "../../../app.config.ts"), "utf8"),
     ).toContain('"android-apk"');

@@ -38,12 +38,17 @@ x-app-environment: &app-environment # Runtime
   OBJECT_STORAGE_PATH_STYLE:
   WAKEUP_DRIVER: graphile
   AGENT_RUNTIME: pi
+  # Optional file of operator text appended to every run's instructions.
+  RAKAZO_RUN_INSTRUCTIONS_FILE:
   API_URL: ${API_URL:-http://127.0.0.1:5173}
   MAX_UPLOAD_SIZE_MB:
+  MAX_FILE_UPLOAD_SIZE_MB:
   MAX_ATTACHMENTS_PER_MESSAGE:
   WORKSPACE_SAVE_MAX_GB:
   RAKAZO_UPDATE_RESTART_SUPERVISOR:
   TICKET_BOARD_ENABLED:
+  # The Go task-detect service; unset falls back to MODEL_RETRY_RULES_URL's origin.
+  TASK_DETECT_URL:
   USER_DEVICES_ENABLED:
   BOT_MESSAGE_MAX_HOPS:
   RAKAZO_MESSAGE_USER_MAX_CHARS:
@@ -476,6 +481,9 @@ services:
       BETTER_AUTH_URL: ${BETTER_AUTH_URL:-http://127.0.0.1:5173}
       WEB_ORIGIN: ${WEB_ORIGIN:-http://127.0.0.1:5173}
       RAKAZO_EXTRA_AUTH_ORIGINS:
+      # The Drive app's origin, and the parent domain its session cookie is shared on.
+      DRIVE_URL:
+      COOKIE_DOMAIN:
       AUTH_PASSWORD_ENABLED: ${AUTH_PASSWORD_ENABLED:-true}
       AUTH_BREACHED_PASSWORD_CHECK_ENABLED: ${AUTH_BREACHED_PASSWORD_CHECK_ENABLED:-false}
       PASSKEY_APPLE_APP_IDS:

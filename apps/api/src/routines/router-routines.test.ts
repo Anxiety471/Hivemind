@@ -617,11 +617,11 @@ describe("routine watch creation boundaries", () => {
       client.routines.create({ botId: "bot-1", name: "Check", prompt: "Check changes", watch }),
     ).rejects.toMatchObject({
       code: "BAD_REQUEST",
-      message: expect.stringContaining("inside the bot's folder"),
+      message: expect.stringContaining("inside the shared workspace"),
     });
     await expect(client.routines.update({ routineId: "routine-1", watch })).rejects.toMatchObject({
       code: "BAD_REQUEST",
-      message: expect.stringContaining("inside the bot's folder"),
+      message: expect.stringContaining("inside the shared workspace"),
     });
     expect(create).not.toHaveBeenCalled();
     expect(update).not.toHaveBeenCalled();
@@ -634,7 +634,7 @@ describe("routine watch creation boundaries", () => {
       expect(status).toBe(400);
       expect(JSON.parse(body).json).toMatchObject({
         code: "BAD_REQUEST",
-        message: "The watched path must stay inside the bot's folder.",
+        message: "The watched path must stay inside the shared workspace.",
       });
     }
     expect(create).not.toHaveBeenCalled();

@@ -559,6 +559,10 @@ export function contentRoutes(ctx: RouterContext) {
             where: { botId: input.botId, spaceId: context.actor.spaceId },
           }),
           (async () => {
+            // A Team Computer's workspace is shared by the Space's bots, so it holds no file
+            // that belongs to this bot; exporting the Space's files here would give another
+            // bot's work the same portable manifest. Dedicated computers stay private.
+            if (computerMode === "team") return [] as ExportManifest["files"];
             const exported: ExportManifest["files"] = [];
             const directory = resolveBotWorkspacePath(computerMode, bot.id, "");
             // Root dotfiles contain computer state rather than portable bot files.
