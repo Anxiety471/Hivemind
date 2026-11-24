@@ -31,6 +31,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/secretstore"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 )
 
 // ok is the procedures' only success output: z.object({ok: z.literal(true)}).
@@ -44,12 +45,13 @@ var errSessionEnded = errors.New("push session ended")
 
 const maxTransactionTries = 3
 
-// credentialDigest is credentialDigest (credential-digest.ts:1-6): sha256 of the
-// value's UTF-8 bytes as lowercase hex. A lone surrogate never reaches here as
-// one: Go's JSON decoding replaces it with U+FFFD, the bytes Node's UTF-8
-// encoder emits for it.
+// credentialDigest is credentialDigest (credential-digest.ts:1-6): sha256 of
+// the value's UTF-8 bytes as lower-case hex. Node hashes the UTF-8 encoding of
+// the JS string, which writes U+FFFD for an unpaired surrogate; the WTF-8 form
+// Go carries is converted first, so the digest and the advisory-lock key match
+// TypeScript's (the call-push digests go through the same conversion).
 func credentialDigest(value string) string {
-	sum := sha256.Sum256([]byte(value))
+	sum := sha256.Sum256([]byte(wtf8.ToUTF8(value)))
 	return hex.EncodeToString(sum[:])
 }
 

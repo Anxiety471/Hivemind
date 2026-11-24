@@ -282,6 +282,15 @@ func TestDigestAndCredentialRules(t *testing.T) {
 	if got := credentialDigest("abcdefgh"); got != "9c56cc51b374c3ba189210d5b6d4bf57790d351c96c47c02190ecf1e430635ab" {
 		t.Fatalf("digest = %s", got)
 	}
+	// Node: createHash("sha256").update("a\ud800bcdefgh").digest("hex"). The Go
+	// string carries the unpaired surrogate as WTF-8; Node's encoder writes U+FFFD.
+	if got := credentialDigest("a\xed\xa0\x80bcdefgh"); got != "f608cd63da53ab3728f938e91f077426828e99e77e5bb341c1007dd5b9f0d110" {
+		t.Fatalf("lone-surrogate digest = %s", got)
+	}
+	// Valid UTF-8 is hashed unchanged.
+	if got := credentialDigest("tökén-😀"); got != "f64d843ae8ccc45541e18d52b074c2397ea5e1a5777fe9e7afcb6181d232964f" {
+		t.Fatalf("unicode digest = %s", got)
+	}
 	for _, testCase := range []struct {
 		name  string
 		value any
