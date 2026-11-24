@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import { gunzip, gzip } from "node:zlib";
 import type { WorkspaceExportLimits } from "@rakazo/adapter-kit";
 import { WorkspaceTooLargeError } from "@rakazo/adapter-kit";
-import { getLogger } from "@rakazo/logging";
+import { bestEffort, getLogger } from "@rakazo/logging";
 import type { HomeArchiveLimits } from "./home-archive.js";
 import {
   ByteReader,
@@ -188,7 +188,12 @@ async function readPreamble(
   limits: HomeArchiveLimits,
   withTable: boolean,
 ): Promise<Header | Manifest> {
-  const magic = await reader.read(MAGIC.length).catch(() => undefined);
+  let magic: Buffer | undefined;
+  try {
+    magic = await reader.read(MAGIC.length);
+  } catch {
+    // A stream too short to hold the magic is simply not an incremental revision.
+  }
   if (!magic?.equals(MAGIC)) throw new NotIncrementalRevisionError();
   const headerLength = (await reader.read(4)).readUInt32BE(0);
   if (headerLength > MAX_HEADER_BYTES) throw new HomeArchiveError("Home revision header is huge");
@@ -455,7 +460,7 @@ export async function prepareRevision(input: {
     }
     await pack.close();
   } catch (error) {
-    await pack.close().catch(() => undefined);
+    await bestEffort("close the staging pack after a failed import", pack.close());
     await rm(packPath, { force: true });
     throw error;
   }

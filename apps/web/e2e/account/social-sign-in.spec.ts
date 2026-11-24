@@ -34,6 +34,16 @@ async function mockSignedOut(page: Page, providers: typeof both | []) {
 
 test("sign-in offers Google and Apple before email", async ({ page }, testInfo) => {
   await mockSignedOut(page, both);
+  // A web visitor with no stored choice gets the warm palette, which is dark whatever the system
+  // shows. Sign-in has no appearance control, so choose the system preference as a returning
+  // visitor would have, and let emulateMedia drive data-theme for the screenshots below.
+  await page.addInitScript(() => {
+    try {
+      localStorage.setItem("rakazo.uiAppearance", "system");
+    } catch {
+      // The first about:blank document has no storage; the app's page does.
+    }
+  });
   await page.goto("/sign-in");
   await expect(page.getByRole("heading", { name: "Welcome back" })).toBeVisible();
   const google = page.getByRole("button", { name: "Continue with Google" });
@@ -55,6 +65,9 @@ test("sign-in offers Google and Apple before email", async ({ page }, testInfo) 
   expect(emailBox && googleBox && Math.abs(emailBox.width - googleBox.width) < 2).toBeTruthy();
   expect(emailBox && googleBox && Math.abs(emailBox.height - googleBox.height) < 2).toBeTruthy();
 
+  // With the system preference, the OS scheme reaches the page in both directions.
+  await page.emulateMedia({ colorScheme: "dark" });
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   await page.emulateMedia({ colorScheme: "light" });
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   await captureScreenshot(page, testInfo, "sign-in-chooser");

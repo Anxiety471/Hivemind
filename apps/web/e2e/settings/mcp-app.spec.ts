@@ -11,25 +11,13 @@ const viewports = [
   { name: "mobile-390x844", width: 390, height: 844 },
 ];
 
-/** The API's answer to the card's artifact read: the app's HTML. */
+/** The API's answer to the card's content read: the app's HTML, byte for byte. */
 async function serveApp(page: Page) {
-  await page.route("**/rpc/artifacts/get", (route) =>
+  await page.route("**/api/v1/files/app-forecast/content*", (route) =>
     route.fulfill({
-      json: {
-        json: {
-          id: "app-forecast",
-          botId: "bot-1",
-          groupId: null,
-          runId: "run-1",
-          name: "Forecast app.html",
-          description: null,
-          mimeType: "text/html;profile=mcp-app",
-          size: appHtml.length,
-          version: 1,
-          createdAt: "2026-11-05T09:00:00.000Z",
-          contentBase64: Buffer.from(appHtml).toString("base64"),
-        },
-      },
+      status: 200,
+      contentType: "text/html;profile=mcp-app",
+      body: appHtml,
     }),
   );
 }

@@ -1492,16 +1492,17 @@ export async function replaceComputer(
         : previousState === "running" && !tornDown
           ? "running"
           : "error";
-    await deps.prisma.computer
-      .updateMany({
+    await bestEffort(
+      "record the failed computer state after a failed provision",
+      deps.prisma.computer.updateMany({
         where: {
           id: computerId,
           updatedAt: claimStamp,
           maintenanceId: existing.maintenanceId ?? null,
         },
         data: { state: failedState },
-      })
-      .catch(() => undefined);
+      }),
+    );
     throw error;
   }
 }

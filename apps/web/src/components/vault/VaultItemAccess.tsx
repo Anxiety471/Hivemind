@@ -18,12 +18,20 @@ import { AgentAccessControl } from "../integrations/agent-access";
 export function useVaultBots(enabled: boolean, chosen: string[] = []) {
   const { t } = useLingui();
   const queries = useSpaceQueries();
-  const { data, isError } = useQuery({ ...queries.bots.list.queryOptions(), enabled });
+  // Bots are created and archived outside this screen, so the picker reads both lists again when
+  // it opens: granting access to a bot made a moment ago must offer that bot, not the roster from
+  // up to the freshness window before.
+  const { data, isError } = useQuery({
+    ...queries.bots.list.queryOptions(),
+    enabled,
+    refetchOnMount: "always",
+  });
   // Archived bots are listed apart; without them, a chosen one can't be shown, so no choice is
   // offered (`vaultAccessControls`) and the choice stays as saved.
   const archived = useQuery({
     ...queries.bots.listArchived.queryOptions(),
     enabled: enabled && chosen.length > 0,
+    refetchOnMount: "always",
   });
   if (isError && !data) return null;
   if (enabled && chosen.length > 0) {

@@ -1496,6 +1496,5 @@ async function entries(dir: string) {
 }
 
 async function stagedFile(root: string, name: string) {
-  const [dir] = await readdir(path.join(root, "staging"));
-  return stat(path.join(root, "staging", dir!, name));
+  return stat(path.join(root, "staging", (await readdir(path.join(root, "staging")))[0]!, name));
 }
