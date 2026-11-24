@@ -325,25 +325,151 @@ func lengthOf(raw any) (length float64, origin string, has bool) {
 		if !ok {
 			return 0, "", false
 		}
-		switch number := field.(type) {
-		case json.Number:
-			parsed, err := strconv.ParseFloat(number.String(), 64)
-			if err != nil {
-				parsed = math.NaN()
-			}
-			return parsed, "unknown", true
-		case nil:
-			return 0, "unknown", true
-		case bool:
-			if number {
-				return 1, "unknown", true
-			}
-			return 0, "unknown", true
-		default:
-			return math.NaN(), "unknown", true
-		}
+		// The comparison coerces the member with ToPrimitive/ToNumber, so a
+		// string, array or NaN-producing object is read exactly as JS reads it.
+		return toNumber(field), "unknown", true
 	}
 	return 0, "", false
+}
+
+// toNumber is JS ToNumber for a decoded JSON value: Number(string) semantics
+// (JS whitespace trim, "" = 0, 0x/0o/0b literals, Infinity, otherwise a full
+// decimal literal), Number(array) through its ","-joined string, null/bool as
+// 0/1, and NaN for an object.
+func toNumber(value any) float64 {
+	switch typed := value.(type) {
+	case nil:
+		return 0
+	case bool:
+		if typed {
+			return 1
+		}
+		return 0
+	case json.Number:
+		parsed, err := strconv.ParseFloat(typed.String(), 64)
+		if err != nil {
+			return math.NaN()
+		}
+		return parsed
+	case string:
+		return stringToNumber(typed)
+	case []any:
+		return stringToNumber(joinElements(typed))
+	}
+	return math.NaN()
+}
+
+// joinElements is Array.prototype.join.call(value, ","): each element's
+// ToString, with null (and undefined) becoming the empty string.
+func joinElements(items []any) string {
+	parts := make([]string, len(items))
+	for index, item := range items {
+		parts[index] = elementText(item)
+	}
+	return strings.Join(parts, ",")
+}
+
+func elementText(value any) string {
+	switch typed := value.(type) {
+	case nil:
+		return ""
+	case bool:
+		return strconv.FormatBool(typed)
+	case string:
+		return typed
+	case json.Number:
+		text := jsNumber(typed.String())
+		if text == "null" {
+			return "NaN"
+		}
+		return text
+	case []any:
+		return joinElements(typed)
+	}
+	return "[object Object]"
+}
+
+// stringToNumber is Number(string) (ECMA-262 StringNumericLiteral).
+func stringToNumber(text string) float64 {
+	text = JSTrim(text)
+	if text == "" {
+		return 0
+	}
+	switch text {
+	case "Infinity", "+Infinity":
+		return math.Inf(1)
+	case "-Infinity":
+		return math.Inf(-1)
+	}
+	if len(text) > 2 && text[0] == '0' {
+		switch text[1] {
+		case 'x', 'X':
+			return parseBaseNumber(text[2:], 16)
+		case 'o', 'O':
+			return parseBaseNumber(text[2:], 8)
+		case 'b', 'B':
+			return parseBaseNumber(text[2:], 2)
+		}
+	}
+	if !decimalLiteral(text) {
+		return math.NaN()
+	}
+	parsed, err := strconv.ParseFloat(text, 64)
+	if err != nil {
+		return math.NaN()
+	}
+	return parsed
+}
+
+func parseBaseNumber(digits string, base int) float64 {
+	if digits == "" {
+		return math.NaN()
+	}
+	parsed, err := strconv.ParseUint(digits, base, 64)
+	if err != nil {
+		return math.NaN()
+	}
+	return float64(parsed)
+}
+
+// decimalLiteral reports whether text is StrDecimalLiteral: an optional sign,
+// then digits with an optional fraction and exponent (at least one digit in
+// the significand).
+func decimalLiteral(text string) bool {
+	index := 0
+	if index < len(text) && (text[index] == '+' || text[index] == '-') {
+		index++
+	}
+	digits := 0
+	for index < len(text) && text[index] >= '0' && text[index] <= '9' {
+		index++
+		digits++
+	}
+	if index < len(text) && text[index] == '.' {
+		index++
+		for index < len(text) && text[index] >= '0' && text[index] <= '9' {
+			index++
+			digits++
+		}
+	}
+	if digits == 0 {
+		return false
+	}
+	if index < len(text) && (text[index] == 'e' || text[index] == 'E') {
+		index++
+		if index < len(text) && (text[index] == '+' || text[index] == '-') {
+			index++
+		}
+		exponent := 0
+		for index < len(text) && text[index] >= '0' && text[index] <= '9' {
+			index++
+			exponent++
+		}
+		if exponent == 0 {
+			return false
+		}
+	}
+	return index == len(text)
 }
 
 // NumberRules are the checks chained onto z.number().int().
