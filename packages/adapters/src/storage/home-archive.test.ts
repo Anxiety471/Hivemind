@@ -16,7 +16,7 @@ import path from "node:path";
 import { WorkspaceTooLargeError } from "@rakazo/adapter-kit";
 import { afterEach, describe, expect, it } from "vitest";
 import { assertHomeFits, checkHomeArchive, packHome, unpackHome } from "./home-archive.js";
-import { MAX_SAVED_FILE_BYTES, WORKSPACE_SAVE_LIMITS } from "./workspace-save-policy.js";
+import { WORKSPACE_SAVE_LIMITS } from "./workspace-save-policy.js";
 
 const dirs: string[] = [];
 
@@ -154,18 +154,23 @@ describe("home archive", () => {
     });
   });
 
-  it("leaves out a file over the per-file cap and keeps the rest", async () => {
+  it("leaves out a file over the per-file cap but never one inside .git", async () => {
     const source = await tempDir();
+    await mkdir(path.join(source, "repo/.git/objects/pack"), { recursive: true });
     await writeFile(path.join(source, "small"), "x");
-    const handle = await open(path.join(source, "huge.bin"), "w");
-    try {
-      await handle.truncate(MAX_SAVED_FILE_BYTES + 1);
-    } finally {
-      await handle.close();
-    }
+    await writeFile(path.join(source, "huge.bin"), "0123456789");
+    await writeFile(path.join(source, "repo/.git/objects/pack/p.pack"), "0123456789");
     const restored = await tempDir();
-    await unpackHome(once(await collect(packHome(source))), restored);
-    expect(await tree(restored)).toEqual({ small: "x" });
+    const save = { ...WORKSPACE_SAVE_LIMITS, maxFileBytes: 4 };
+    await unpackHome(once(await collect(packHome(source, undefined, save))), restored);
+    expect(await tree(restored)).toEqual({
+      small: "x",
+      "repo/": "",
+      "repo/.git/": "",
+      "repo/.git/objects/": "",
+      "repo/.git/objects/pack/": "",
+      "repo/.git/objects/pack/p.pack": "0123456789",
+    });
   });
 
   it("uses the shared 5 GiB save limit even with larger archive read bounds", async () => {

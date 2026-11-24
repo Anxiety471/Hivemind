@@ -36,6 +36,8 @@ const FILE = 2;
 const READ_CHUNK = 1024 * 1024;
 const MAX_PATH_BYTES = 4096;
 const MAX_SEGMENT_BYTES = 255;
+/** Files inside a repository's .git directory, at any depth. */
+const GIT_DIRECTORY = /(^|\/)\.git\//;
 
 export interface HomeArchiveLimits {
   /** Total file bytes in one home. */
@@ -172,7 +174,12 @@ async function* packDirectory(
         measureOnly,
       );
     } else if (info.isFile()) {
-      if (limits.maxFileBytes !== undefined && info.size > limits.maxFileBytes) {
+      // A repository's pack files stay whole: leaving one out would corrupt the checkout.
+      if (
+        limits.maxFileBytes !== undefined &&
+        info.size > limits.maxFileBytes &&
+        !GIT_DIRECTORY.test(relative)
+      ) {
         counts.oversized += 1;
         continue;
       }
