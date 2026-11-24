@@ -98,6 +98,9 @@ const APPROVAL_REQUIRED_BUILTIN_TOOLS = new Set([
   "create_child_routine",
   "feedback",
   "send_email",
+  // Code every bot can then run, so the person sees it first.
+  "command_save",
+  "command_delete",
 ]);
 const EXPLICIT_APPROVAL_BUILTIN_TOOLS = new Set([
   // Permanent: the owner sees the exact address before it is theirs for good.
@@ -253,6 +256,8 @@ export function isOwnerStartedRun(trigger: string, followUpFromUser: boolean): b
  */
 const OWN_STATE_RESULT_TOOLS = new Set([
   "ask_user",
+  // The script itself reads nothing: each call it makes goes through the gate and taints on its own.
+  "code_mode",
   // Only confirms what the bot itself sent.
   "send_email",
   "connect_app",

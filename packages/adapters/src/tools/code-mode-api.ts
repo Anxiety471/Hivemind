@@ -1,5 +1,7 @@
 import type { ConnectorTool } from "@rakazo/adapter-kit";
 import { isCodeModeWrite } from "../runs/tools/run-tool-selection.js";
+import type { CodeCommandSummary } from "./code-commands.js";
+import { CODE_COMMAND_PREFIX } from "./code-commands.js";
 
 /** One line per callable tool: enough to write a correct call without a second lookup. */
 const DESCRIPTION_MAX_CHARS = 90;
@@ -124,33 +126,51 @@ export interface CodeModeSearchHit {
   name: string;
   signature: string;
   description: string;
-  writes: boolean;
+  /** Absent for a saved command: what it writes is decided by the calls it makes. */
+  writes?: boolean;
 }
 
-/** The tools whose name or description matches every word of the query, best match first. */
+/**
+ * The tools and saved commands whose name or description matches every word of the query, best
+ * match first. A command is named as it is called, `cmd.<name>`.
+ */
 export function searchCodeModeTools(
   tools: readonly ConnectorTool[],
   query: string,
+  commands: readonly CodeCommandSummary[] = [],
 ): CodeModeSearchHit[] {
   const words = query
     .toLowerCase()
     .split(/[^a-z0-9_]+/)
     .filter(Boolean);
   if (!words.length) return [];
-  return tools
-    .flatMap((tool) => {
-      const name = tool.name.toLowerCase();
-      const description = String(tool.description ?? "").toLowerCase();
+  return [
+    ...tools.map((tool) => ({
+      name: tool.name,
+      description: String(tool.description ?? ""),
+      schema: tool.inputSchema ?? {},
+      writes: isCodeModeWrite(tool),
+    })),
+    ...commands.map((command) => ({
+      name: `${CODE_COMMAND_PREFIX}${command.name}`,
+      description: command.description,
+      schema: command.parameters ?? {},
+      writes: undefined,
+    })),
+  ]
+    .flatMap((candidate) => {
+      const name = candidate.name.toLowerCase();
+      const description = candidate.description.toLowerCase();
       if (!words.every((word) => name.includes(word) || description.includes(word))) return [];
       const score = words.filter((word) => name.includes(word)).length;
-      return [{ tool, score }];
+      return [{ candidate, score }];
     })
-    .sort((a, b) => b.score - a.score || a.tool.name.localeCompare(b.tool.name))
+    .sort((a, b) => b.score - a.score || a.candidate.name.localeCompare(b.candidate.name))
     .slice(0, SEARCH_LIMIT)
-    .map(({ tool }) => ({
-      name: tool.name,
-      signature: objectType(tool.inputSchema ?? {}, 0),
-      description: firstSentence(tool.description),
-      writes: isCodeModeWrite(tool),
+    .map(({ candidate }) => ({
+      name: candidate.name,
+      signature: objectType(candidate.schema, 0),
+      description: firstSentence(candidate.description),
+      ...(candidate.writes === undefined ? {} : { writes: candidate.writes }),
     }));
 }

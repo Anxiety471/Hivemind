@@ -40,6 +40,7 @@ import {
   vaultCardUseOf,
   vaultLoginUseOf,
 } from "../../secrets/vault/vault-card-use.js";
+import { COMMAND_TOOL_NAMES } from "../../tools/builtin-commands.tool-definition.js";
 import { CODE_MODE } from "../../tools/code-mode.tool-definition.js";
 import { isFleetApprovalTool, modelLabel, prepareFleetRequest } from "../../tools/fleet-tools.js";
 import { assertConnectorToolArgs, CATALOG_EXECUTE } from "../../tools/lazy-tool-catalog.js";
@@ -397,7 +398,7 @@ export async function prepareToolRequest(
   const { name, executionId, nextApprovedTool } = request;
   let { args } = request;
   if (
-    (SCHEDULE_TOOL_NAMES.has(name) || SKILL_TOOL_NAMES.has(name)) &&
+    (SCHEDULE_TOOL_NAMES.has(name) || SKILL_TOOL_NAMES.has(name) || COMMAND_TOOL_NAMES.has(name)) &&
     (ctx.source.messagingChannelRun ||
       (await deps.prisma.steeringMessage.findFirst({
         where: {
