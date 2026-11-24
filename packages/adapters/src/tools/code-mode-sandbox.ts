@@ -1,4 +1,5 @@
-import { setTimeout as tick } from "node:timers/promises";
+import { abortableDelay, deadlineSignal } from "@rakazo/core";
+import { bestEffort } from "@rakazo/logging";
 import type { QuickJSContext, QuickJSDeferredPromise, QuickJSRuntime } from "quickjs-emscripten";
 
 /** The snippet's whole outward channel: console output, capped so one print cannot flood a turn. */
@@ -82,7 +83,10 @@ function serializableResult(value: unknown, name: string): string {
 export async function runCodeModeScript(options: CodeModeRunOptions): Promise<CodeModeRunResult> {
   const timeoutMs = options.timeoutMs ?? CODE_MODE_TIMEOUT_MS;
   const maxCalls = options.maxCalls ?? CODE_MODE_MAX_CALLS;
-  const deadline = Date.now() + timeoutMs;
+  // The signal covers the async pump, and the clock covers the interrupt handler: a script
+  // spinning inside WebAssembly blocks timers, so the handler must read the clock itself.
+  const budgetEndsAt = Date.now() + timeoutMs;
+  const deadline = deadlineSignal(timeoutMs, options.signal);
   const logs: string[] = [];
   const calls: string[] = [];
   let written = 0;
@@ -92,7 +96,7 @@ export async function runCodeModeScript(options: CodeModeRunOptions): Promise<Co
   const stopped = (): { name: string; message: string } | undefined =>
     options.signal?.aborted
       ? { name: "AbortError", message: "the run stopped" }
-      : Date.now() > deadline
+      : deadline.aborted
         ? { name: "TimeoutError", message: `the script ran longer than ${timeoutMs}ms` }
         : undefined;
 
@@ -103,7 +107,7 @@ export async function runCodeModeScript(options: CodeModeRunOptions): Promise<Co
   const runtime: QuickJSRuntime = QuickJS.newRuntime();
   runtime.setMemoryLimit(MEMORY_LIMIT_BYTES);
   runtime.setMaxStackSize(STACK_LIMIT_BYTES);
-  runtime.setInterruptHandler(() => options.signal?.aborted === true || Date.now() > deadline);
+  runtime.setInterruptHandler(() => deadline.aborted || Date.now() > budgetEndsAt);
   const vm: QuickJSContext = runtime.newContext();
 
   const print = vm.newFunction("__print", (lineHandle) => {
@@ -160,11 +164,9 @@ export async function runCodeModeScript(options: CodeModeRunOptions): Promise<Co
         fail(error);
       }
     });
-    queue = queue
-      .catch(() => undefined)
-      .finally(() => {
-        vm.runtime.executePendingJobs();
-      });
+    queue = bestEffort("run the next code-mode bridge call", queue).finally(() => {
+      vm.runtime.executePendingJobs();
+    });
     return deferred.handle;
   });
   vm.setProp(vm.global, "__call", invoke);
@@ -215,9 +217,9 @@ export async function runCodeModeScript(options: CodeModeRunOptions): Promise<Co
         settled = true;
       },
     );
-    while (!settled && !options.signal?.aborted && Date.now() <= deadline) {
+    while (!settled && !deadline.aborted) {
       vm.runtime.executePendingJobs();
-      await tick(0);
+      await abortableDelay(0, deadline);
     }
     const stopReason = stopped();
     // An interrupt rejects the script's promise; let it settle so its handle is released
@@ -226,7 +228,8 @@ export async function runCodeModeScript(options: CodeModeRunOptions): Promise<Co
       const grace = Date.now() + 250;
       while (!settled && Date.now() < grace) {
         vm.runtime.executePendingJobs();
-        await tick(0);
+        // The run's own signal never covers this grace; only the clock does.
+        await abortableDelay(0);
       }
     }
     if (settled) {
