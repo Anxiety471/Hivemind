@@ -1,3 +1,4 @@
+import { deferred } from "@rakazo/core/test-async";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createApprovedEffectReplayQueue } from "../../approvals/approval-effect.js";
 
@@ -92,16 +93,27 @@ function context(
         },
         steeringMessage: { findFirst: async () => null },
         codeCommand: {
-          findMany: async () =>
-            Object.entries(commands).map(([name, row]) => ({
-              name,
-              description: row.description,
-              parameters: null,
-            })),
-          findUnique: async ({ where }: { where: { name: string } }) => {
+          findMany: vi.fn(
+            async (args?: {
+              where?: { name?: { in?: string[] } };
+              select?: { code?: boolean };
+            }) => {
+              const names = args?.where?.name?.in;
+              const entries = names
+                ? Object.entries(commands).filter(([name]) => names.includes(name))
+                : Object.entries(commands);
+              return entries.map(([name, row]) => ({
+                name,
+                description: row.description,
+                parameters: null,
+                ...(args?.select?.code ? { code: row.code } : {}),
+              }));
+            },
+          ),
+          findUnique: vi.fn(async ({ where }: { where: { name: string } }) => {
             const row = commands[where.name];
             return row ? { name: where.name, parameters: null, ...row } : null;
-          },
+          }),
         },
       },
       connector: { execute },
@@ -425,6 +437,75 @@ describe("code_mode", () => {
     expect(result.error).toMatch(/^ShellStillRunning: .*Do not run it again\.$/);
     expect(execute).toHaveBeenCalledTimes(1);
   });
+
+  it("runs read-only connector calls concurrently while keeping writes as barriers", async () => {
+    const d1 = deferred<{ rows: string[] }>();
+    const d2 = deferred<{ rows: string[] }>();
+    const dw = deferred<{ ok: boolean }>();
+    const events: string[] = [];
+    let readIndex = 0;
+    const execute = vi.fn(async function* (call: {
+      tool: string;
+      args: { query?: string; title?: string };
+    }) {
+      if (call.tool === "demo_search") {
+        events.push(`start:read:${call.args.query}`);
+        const data = await [d1, d2][readIndex++]!.promise;
+        events.push(`end:read:${call.args.query}`);
+        yield { type: "result", data };
+      } else {
+        events.push(`start:write:${call.args.title}`);
+        const data = await dw.promise;
+        events.push(`end:write:${call.args.title}`);
+        yield { type: "result", data };
+      }
+    });
+    const { ctx } = context(execute as never);
+    const pending = applyTool(
+      ctx as never,
+      "code_mode",
+      {
+        code: `
+          const p1 = codemode.demo_search({ query: "a" });
+          const p2 = codemode.demo_search({ query: "b" });
+          const p3 = codemode.demo_write({ title: "w" });
+          await Promise.all([p1, p2, p3]);
+          console.log("ok");
+        `,
+      },
+      "outer-1",
+    ) as Promise<{ output: string }>;
+    await vi.waitFor(() => {
+      expect(events).toEqual(["start:read:a", "start:read:b"]);
+    });
+    d2.resolve({ rows: ["2"] });
+    d1.resolve({ rows: ["1"] });
+    await vi.waitFor(() => {
+      expect(events).toContain("start:write:w");
+    });
+    dw.resolve({ ok: true });
+    const result = await pending;
+    expect(result.output).toBe("ok");
+  });
+
+  it("lints forbidden capabilities before running earlier tools in the script", async () => {
+    const { ctx, execute } = context();
+    const result = (await applyTool(
+      ctx as never,
+      "code_mode",
+      {
+        code: `
+          await codemode.demo_write({ title: "should not run" });
+          await fetch("https://example.com");
+        `,
+      },
+      "outer-1",
+    )) as { error?: string; calls?: string[] };
+    expect(result.error).toContain("LintError");
+    expect(result.error).toContain("no-fetch");
+    expect(result.calls).toBeUndefined();
+    expect(execute).not.toHaveBeenCalled();
+  });
 });
 
 describe("saved commands", () => {
@@ -547,5 +628,119 @@ describe("saved commands", () => {
       }),
     ]);
     expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("caches command lookups across searches/calls and batches describe queries", async () => {
+    const { ctx } = context(undefined, commands);
+    await run(
+      ctx,
+      `
+        await codemode.search({ query: "count" });
+        await codemode.search({ query: "write" });
+        await codemode.describe({ names: ["cmd.count_rows", "cmd.write_many"] });
+        await codemode.cmd.count_rows({ query: "a" });
+        await codemode.cmd.count_rows({ query: "b" });
+      `,
+    );
+    expect(vi.mocked(ctx.deps.prisma.codeCommand.findMany)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(ctx.deps.prisma.codeCommand.findUnique)).not.toHaveBeenCalled();
+  });
+
+  it("invalidates cached commands when command_save runs inside a script", async () => {
+    const { ctx } = context(undefined, commands);
+    const saveTool = {
+      name: "command_save",
+      description: "Save command.",
+      inputSchema: { type: "object" },
+    };
+    ctx.tools.offered.push(saveTool as never);
+    (ctx.deps.prisma.codeCommand as Record<string, unknown>).count = vi.fn(async () => 1);
+    (ctx.deps.prisma.codeCommand as Record<string, unknown>).upsert = vi.fn(async ({ create }) => {
+      commands[create.name as keyof typeof commands] = {
+        description: create.description,
+        code: create.code,
+      };
+      return create;
+    });
+    await run(
+      ctx,
+      `
+        await codemode.search({ query: "count" });
+        await codemode.command_save({ name: "fresh_cmd", description: "Fresh one.", code: "return 42;" });
+        const hits = await codemode.search({ query: "fresh_cmd" });
+        console.log(hits.map((h) => h.name).join(","));
+      `,
+    );
+    expect(vi.mocked(ctx.deps.prisma.codeCommand.findMany)).toHaveBeenCalledTimes(2);
+  });
+
+  it("shares the 32-call limit across outer script and nested saved commands", async () => {
+    const { ctx, execute } = context(undefined, {
+      many_reads: {
+        description: "Reads many times.",
+        code: `
+          for (let i = 0; i < args.n; i++) await codemode.demo_search({ query: String(i) });
+          return "ok";
+        `,
+      },
+    });
+    const result = await run(
+      ctx,
+      `
+        await codemode.cmd.many_reads({ n: 20 });
+        for (let i = 0; i < 15; i++) await codemode.demo_search({ query: String(i) });
+      `,
+    );
+    expect(result.error).toMatch(/at most 32 tool calls/);
+    expect(execute).toHaveBeenCalledTimes(32);
+  });
+
+  it("rejects command_save when code fails lint or syntax check without writing", async () => {
+    const { ctx } = context(undefined, commands);
+    const upsert = vi.fn();
+    (ctx.deps.prisma.codeCommand as Record<string, unknown>).upsert = upsert;
+    const saveTool = {
+      name: "command_save",
+      description: "Save command.",
+      inputSchema: { type: "object" },
+    };
+    ctx.tools.offered.push(saveTool as never);
+
+    const lintRejected = (await applyTool(
+      ctx as never,
+      "command_save",
+      {
+        name: "bad_fetch",
+        description: "Tries fetch.",
+        code: 'return await fetch("https://example.com");',
+      },
+      "outer-1",
+    )) as { error?: string };
+    expect(lintRejected.error).toContain("no-fetch");
+
+    const nestedRejected = (await applyTool(
+      ctx as never,
+      "command_save",
+      {
+        name: "bad_nested",
+        description: "Tries nesting.",
+        code: "return await codemode.cmd.count_rows({});",
+      },
+      "outer-2",
+    )) as { error?: string };
+    expect(nestedRejected.error).toContain("cannot call another command");
+
+    const syntaxRejected = (await applyTool(
+      ctx as never,
+      "command_save",
+      {
+        name: "bad_syntax",
+        description: "Broken syntax.",
+        code: "const x = ;",
+      },
+      "outer-3",
+    )) as { error?: string };
+    expect(syntaxRejected.error).toContain("SyntaxError");
+    expect(upsert).not.toHaveBeenCalled();
   });
 });

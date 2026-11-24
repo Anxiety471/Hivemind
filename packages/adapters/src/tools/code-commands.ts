@@ -106,6 +106,20 @@ export async function findCodeCommand(
   return row ? { ...summary(row), code: row.code } : undefined;
 }
 
+/** Fetches multiple saved commands in a single query, keyed by command name. */
+export async function findCodeCommands(
+  prisma: PrismaClient,
+  names: readonly string[],
+): Promise<Map<string, CodeCommandInput>> {
+  const unique = [...new Set(names.filter(Boolean))];
+  if (!unique.length) return new Map();
+  const rows = await prisma.codeCommand.findMany({
+    where: { name: { in: unique } },
+    select: { name: true, description: true, icon: true, parameters: true, code: true },
+  });
+  return new Map(rows.map((row) => [row.name, { ...summary(row), code: row.code }]));
+}
+
 /** Creates the command or replaces the one with that name; there is one text per name. */
 export async function saveCodeCommand(
   prisma: PrismaClient,
@@ -151,5 +165,17 @@ export function codeCommandScript(code: string, args: Record<string, unknown>): 
 const __run = async (args, console) => {
 ${code}
 };
-__log(JSON.stringify((await __run(${JSON.stringify(args)}, { log() {}, error() {} })) ?? null));`;
+__log(JSON.stringify((await __run(${JSON.stringify(args)}, { log() {}, error() {}, warn() {}, info() {} })) ?? null));`;
+}
+
+/**
+ * Reusable saved-command wrapper that reads `__args` from `globalThis` so the TypeScript source
+ * stays identical across invocations and hits the transpilation cache.
+ */
+export function codeCommandBodyScript(code: string): string {
+  return `const __log = console.log;
+const __run = async (args, console) => {
+${code}
+};
+__log(JSON.stringify((await __run(globalThis.__args ?? {}, { log() {}, error() {}, warn() {}, info() {} })) ?? null));`;
 }

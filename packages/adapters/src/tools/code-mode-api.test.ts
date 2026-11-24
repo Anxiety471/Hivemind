@@ -100,6 +100,29 @@ describe("codeModeToolIndex", () => {
       small.split("\n- codemode.").length * 1.5,
     );
   });
+
+  it("renders const, nullable type arrays, and additionalProperties maps", () => {
+    const index = codeModeToolIndex([
+      {
+        name: "typed_tool",
+        description: "Typed tool.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            kind: { const: "item" },
+            note: { type: ["string", "null"] },
+            labels: { type: "object", additionalProperties: { type: "string" } },
+            extra: { type: "object", additionalProperties: true },
+          },
+          required: ["kind"],
+        },
+        readOnly: true,
+      },
+    ]);
+    expect(index).toBe(
+      '- codemode.typed_tool({ kind: "item"; note?: string | null; labels?: Record<string, string>; extra?: Record<string, unknown> }) => JSON — Typed tool.',
+    );
+  });
 });
 
 describe("searchCodeModeTools", () => {
@@ -107,7 +130,10 @@ describe("searchCodeModeTools", () => {
     {
       name: "ticket_create",
       description: "Create a ticket on the board.",
-      inputSchema: { type: "object", properties: { title: { type: "string" } } },
+      inputSchema: {
+        type: "object",
+        properties: { title: { type: "string" }, assignee: { type: "string" } },
+      },
     },
     {
       name: "board_tickets",
@@ -128,10 +154,21 @@ describe("searchCodeModeTools", () => {
       },
       {
         name: "ticket_create",
-        signature: "{ title?: string }",
+        signature: "{ title?: string; assignee?: string }",
         description: "Create a ticket on the board.",
         writes: true,
       },
+    ]);
+  });
+
+  it("matches parameter names, boosts exact names, and falls back to partial multi-word matches", () => {
+    expect(searchCodeModeTools(tools, "assignee").map((hit) => hit.name)).toEqual([
+      "ticket_create",
+    ]);
+    expect(searchCodeModeTools(tools, "read_file").map((hit) => hit.name)).toEqual(["read_file"]);
+    expect(searchCodeModeTools(tools, "ticket nonexistent").map((hit) => hit.name)).toEqual([
+      "board_tickets",
+      "ticket_create",
     ]);
   });
 

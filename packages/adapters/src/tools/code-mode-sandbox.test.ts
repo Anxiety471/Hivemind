@@ -1,3 +1,4 @@
+import { deferred } from "@rakazo/core/test-async";
 import { describe, expect, it, vi } from "vitest";
 import { CODE_MODE_OUTPUT_MAX_CHARS, runCodeModeScript } from "./code-mode-sandbox.js";
 
@@ -146,5 +147,145 @@ describe("runCodeModeScript", () => {
     controller.abort();
     const result = await pending;
     expect(result.error?.name).toBe("AbortError");
+  });
+
+  it("runs concurrent-safe calls in parallel while keeping exclusive calls as FIFO barriers", async () => {
+    const events: string[] = [];
+    const read1 = deferred<string>();
+    const read2 = deferred<string>();
+    const write = deferred<string>();
+    const read3 = deferred<string>();
+    const gates = [read1, read2, write, read3];
+    let index = 0;
+    const pending = runCodeModeScript({
+      code: `
+        const p1 = codemode.demo_read({ id: "1" });
+        const p2 = codemode.demo_read({ id: "2" });
+        const p3 = codemode.demo_write({ id: "3" });
+        const p4 = codemode.demo_read({ id: "4" });
+        console.log(JSON.stringify(await Promise.all([p1, p2, p3, p4])));
+      `,
+      tools: ["demo_read", "demo_write"],
+      canRunConcurrently: (name) => name === "demo_read",
+      call: async (name, args) => {
+        const tag = `${name}:${args.id}`;
+        events.push(`start:${tag}`);
+        const value = await gates[index++]!.promise;
+        events.push(`end:${tag}`);
+        return value;
+      },
+    });
+    await vi.waitFor(() => {
+      expect(events).toEqual(["start:demo_read:1", "start:demo_read:2"]);
+    });
+    read2.resolve("r2");
+    read1.resolve("r1");
+    await vi.waitFor(() => {
+      expect(events).toContain("start:demo_write:3");
+    });
+    expect(events).not.toContain("start:demo_read:4");
+    write.resolve("w3");
+    await vi.waitFor(() => {
+      expect(events).toContain("start:demo_read:4");
+    });
+    read3.resolve("r4");
+    const result = await pending;
+    expect(result.error).toBeUndefined();
+    expect(result.output).toBe('["r1","r2","w3","r4"]');
+    expect(result.calls).toEqual(["demo_read", "demo_read", "demo_write", "demo_read"]);
+  });
+
+  it("handles late host settlement after abort without throwing", async () => {
+    const controller = new AbortController();
+    const slow = deferred<{ ok: boolean }>();
+    const pending = runCodeModeScript({
+      code: "await codemode.demo_read({ id: 'slow' });",
+      tools,
+      signal: controller.signal,
+      timeoutMs: 10_000,
+      call: () => slow.promise,
+    });
+    await vi.waitFor(() => {
+      // wait until the call is in flight
+      controller.abort();
+    });
+    const result = await pending;
+    expect(result.error?.name).toBe("AbortError");
+    slow.resolve({ ok: true });
+    await Promise.resolve();
+  });
+
+  it("returns SyntaxError instead of throwing on invalid TypeScript", async () => {
+    const result = await runCodeModeScript({
+      code: "const x = ;",
+      tools,
+      call: async () => null,
+    });
+    expect(result.error?.name).toBe("SyntaxError");
+    expect(result.calls).toEqual([]);
+  });
+
+  it("fails fast when a script leaves an unresolved promise with no host calls", async () => {
+    const result = await runCodeModeScript({
+      code: "await new Promise(() => {});",
+      tools,
+      timeoutMs: 10_000,
+      call: async () => null,
+    });
+    expect(result.error?.name).toBe("Error");
+    expect(result.error?.message).toContain("unresolved promise");
+  });
+
+  it("supports warn/info, errors, undefined, circular logs and accurate newline truncation", async () => {
+    const exact = await runCodeModeScript({
+      code: `console.log("x".repeat(${CODE_MODE_OUTPUT_MAX_CHARS}));`,
+      tools,
+      call: async () => null,
+    });
+    expect(exact.truncated).toBe(false);
+    expect(exact.output).toHaveLength(CODE_MODE_OUTPUT_MAX_CHARS);
+
+    const multiline = await runCodeModeScript({
+      code: `
+        console.warn("a".repeat(${CODE_MODE_OUTPUT_MAX_CHARS - 2}));
+        console.info("bcdef");
+      `,
+      tools,
+      call: async () => null,
+    });
+    expect(multiline.truncated).toBe(true);
+    expect(multiline.output.length).toBeLessThanOrEqual(CODE_MODE_OUTPUT_MAX_CHARS);
+
+    const formatted = await runCodeModeScript({
+      code: `
+        const circular: Record<string, unknown> = {};
+        circular.self = circular;
+        console.log(undefined, new Error("boom"), circular);
+      `,
+      tools,
+      call: async () => null,
+    });
+    expect(formatted.error).toBeUndefined();
+    expect(formatted.output).toContain("undefined");
+    expect(formatted.output).toContain("Error: boom");
+    expect(formatted.output).toContain("[object Object]");
+  });
+
+  it("injects globals cleanly across repeated executions", async () => {
+    const script = `console.log(JSON.stringify(globalThis.__args));`;
+    const first = await runCodeModeScript({
+      code: script,
+      tools,
+      globals: { __args: { n: 1 } },
+      call: async () => null,
+    });
+    const second = await runCodeModeScript({
+      code: script,
+      tools,
+      globals: { __args: { n: 2 } },
+      call: async () => null,
+    });
+    expect(first.output).toBe('{"n":1}');
+    expect(second.output).toBe('{"n":2}');
   });
 });

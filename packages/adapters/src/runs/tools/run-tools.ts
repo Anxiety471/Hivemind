@@ -6,10 +6,12 @@ import { isRunningShellCommand } from "../../computers/sandbox/shell-command-str
 import { IMAGE_RETURNING_COMPUTER_TOOLS } from "../../models/model-vision.js";
 import { MODEL_CANNOT_SEE_MESSAGE } from "../../models/model-vision.prompt.js";
 import { strategicInitiativeToolAllowed } from "../../routines/strategic-initiative.js";
+import type { CodeCommandInput, CodeCommandSummary } from "../../tools/code-commands.js";
 import {
   CODE_COMMAND_PREFIX,
-  codeCommandScript,
+  codeCommandBodyScript,
   findCodeCommand,
+  findCodeCommands,
   listCodeCommands,
 } from "../../tools/code-commands.js";
 import {
@@ -305,7 +307,34 @@ async function codeModeTool(ctx: RunContext, call: ToolCall) {
     ...(describes ? [CODE_MODE_DESCRIBE] : []),
   ];
   const startedAt = Date.now();
-  let commandCalls = 0;
+  let totalCalls = 0;
+  let callLimitExceeded = false;
+  let cachedCommands: Promise<CodeCommandSummary[]> | undefined;
+  const commandCache = new Map<string, CodeCommandInput | undefined>();
+
+  const loadCommandList = () => {
+    cachedCommands ??= listCodeCommands(ctx.deps.prisma).catch((error) => {
+      cachedCommands = undefined;
+      throw error;
+    });
+    return cachedCommands;
+  };
+
+  const loadCommand = async (commandName: string): Promise<CodeCommandInput | undefined> => {
+    if (commandCache.has(commandName)) return commandCache.get(commandName);
+    const command = await findCodeCommand(ctx.deps.prisma, commandName);
+    commandCache.set(commandName, command);
+    return command;
+  };
+
+  const canRunConcurrently = (name: string): boolean => {
+    if (name.startsWith(CODE_COMMAND_PREFIX)) return false;
+    if (searches && name === CODE_MODE_SEARCH) return true;
+    if (describes && name === CODE_MODE_DESCRIBE) return true;
+    const tool = callable.get(name);
+    return Boolean(tool && !isCodeModeWrite(tool));
+  };
+
   const callTool = async (
     name: string,
     args: Record<string, unknown>,
@@ -320,11 +349,19 @@ async function codeModeTool(ctx: RunContext, call: ToolCall) {
       }
       return savedCommand(name, args);
     }
+    if (totalCalls >= CODE_MODE_MAX_CALLS) {
+      callLimitExceeded = true;
+      throw Object.assign(
+        new Error(`code_mode allows at most ${CODE_MODE_MAX_CALLS} tool calls per script`),
+        { name: "CallLimitReached" },
+      );
+    }
+    totalCalls += 1;
     if (searches && name === CODE_MODE_SEARCH) {
       return searchCodeModeTools(
         offered,
         typeof args.query === "string" ? args.query : "",
-        await listCodeCommands(ctx.deps.prisma),
+        await loadCommandList(),
       );
     }
     if (describes && name === CODE_MODE_DESCRIBE) {
@@ -334,16 +371,23 @@ async function codeModeTool(ctx: RunContext, call: ToolCall) {
           ? args.names.filter((value): value is string => typeof value === "string")
           : []),
       ].slice(0, CODE_MODE_DESCRIBE_MAX_NAMES);
+      const missingCommands = asked
+        .filter((asking) => asking.startsWith(CODE_COMMAND_PREFIX))
+        .map((asking) => asking.slice(CODE_COMMAND_PREFIX.length))
+        .filter((commandName) => !commandCache.has(commandName));
+      if (missingCommands.length > 0) {
+        const fetched = await findCodeCommands(ctx.deps.prisma, missingCommands);
+        for (const commandName of missingCommands) {
+          commandCache.set(commandName, fetched.get(commandName));
+        }
+      }
+      let readCommand = false;
       const described: CodeModeDescription[] = [];
       for (const asking of asked) {
         if (asking.startsWith(CODE_COMMAND_PREFIX)) {
-          const command = await findCodeCommand(
-            ctx.deps.prisma,
-            asking.slice(CODE_COMMAND_PREFIX.length),
-          );
+          const command = commandCache.get(asking.slice(CODE_COMMAND_PREFIX.length));
           if (command) {
-            // Any bot may have written its code, so reading it is reading outside content.
-            await markReadOutsideContent(ctx);
+            readCommand = true;
             described.push(describeCodeCommand(command));
             continue;
           }
@@ -356,6 +400,8 @@ async function codeModeTool(ctx: RunContext, call: ToolCall) {
         }
         described.push(undescribed(asking));
       }
+      // Any bot may have written a command's code, so reading it is reading outside content.
+      if (readCommand) await markReadOutsideContent(ctx);
       return described;
     }
     const tool = callable.get(name);
@@ -394,13 +440,17 @@ async function codeModeTool(ctx: RunContext, call: ToolCall) {
     if (isToolError(result)) {
       throw Object.assign(new Error(toolResultErrorText(result)), { name: "ToolFailed" });
     }
+    if (name === "command_save" || name === "command_delete") {
+      cachedCommands = undefined;
+      commandCache.clear();
+    }
     return result;
   };
   // A saved command is another bot's text, so reading what it returns counts as reading outside
   // content. It runs in its own isolate with this script's tools, call budget and clock, and each
   // call it makes is gated and recorded like any other.
   const savedCommand = async (name: string, args: Record<string, unknown>): Promise<unknown> => {
-    const command = await findCodeCommand(ctx.deps.prisma, name.slice(CODE_COMMAND_PREFIX.length));
+    const command = await loadCommand(name.slice(CODE_COMMAND_PREFIX.length));
     if (!command) {
       throw Object.assign(
         new Error(`There is no saved command ${name}. Find one with codemode.search.`),
@@ -409,15 +459,18 @@ async function codeModeTool(ctx: RunContext, call: ToolCall) {
     }
     await markReadOutsideContent(ctx);
     const nested = await runCodeModeScript({
-      code: codeCommandScript(command.code, args),
+      code: codeCommandBodyScript(command.code),
+      mode: "command",
+      globals: { __args: args },
       tools: toolNames,
       commandPrefix: CODE_COMMAND_PREFIX,
       signal: AbortSignal.any([ctx.context.signal, stop.signal]),
       timeoutMs: Math.max(1, CODE_MODE_TIMEOUT_MS - (Date.now() - startedAt)),
-      maxCalls: Math.max(0, CODE_MODE_MAX_CALLS - commandCalls),
+      maxCalls: Math.max(0, CODE_MODE_MAX_CALLS - totalCalls),
+      canRunConcurrently,
       call: (toolName, toolArgs) => callTool(toolName, toolArgs, true),
     });
-    commandCalls += nested.calls.length;
+    if (nested.error?.name === "CallLimitReached") callLimitExceeded = true;
     if (paused || stillRunning) throw new Error("The script has stopped.");
     if (nested.error) {
       throw Object.assign(new Error(`${nested.error.name}: ${nested.error.message}`), {
@@ -445,8 +498,15 @@ async function codeModeTool(ctx: RunContext, call: ToolCall) {
     tools: toolNames,
     commandPrefix: CODE_COMMAND_PREFIX,
     signal: AbortSignal.any([ctx.context.signal, stop.signal]),
+    canRunConcurrently,
     call: (name, args) => callTool(name, args, false),
   });
+  if (callLimitExceeded) {
+    outcome.error ??= {
+      name: "CallLimitReached",
+      message: `code_mode allows at most ${CODE_MODE_MAX_CALLS} tool calls per script`,
+    };
+  }
   if (paused) return paused;
   if (stillRunning) {
     return call.finish({

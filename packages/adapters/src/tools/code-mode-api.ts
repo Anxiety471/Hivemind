@@ -26,6 +26,9 @@ function literal(value: unknown): string {
 function typeOf(schema: unknown, depth: number): string {
   if (!schema || typeof schema !== "object") return "unknown";
   const value = schema as Record<string, unknown>;
+  if ("const" in value && value.const !== undefined) {
+    return literal(value.const);
+  }
   if (Array.isArray(value.enum)) {
     const literals = value.enum.map(literal).join(" | ");
     return literals || "never";
@@ -33,6 +36,10 @@ function typeOf(schema: unknown, depth: number): string {
   const union = value.anyOf ?? value.oneOf;
   if (Array.isArray(union)) {
     const members = union.map((member) => typeOf(member, depth));
+    return [...new Set(members)].join(" | ") || "unknown";
+  }
+  if (Array.isArray(value.type)) {
+    const members = value.type.map((member) => typeOf({ ...value, type: member }, depth));
     return [...new Set(members)].join(" | ") || "unknown";
   }
   if (value.type === "array" || value.items) {
@@ -48,6 +55,8 @@ function typeOf(schema: unknown, depth: number): string {
       return "boolean";
     case "null":
       return "null";
+    case "object":
+      return objectType(value, depth);
     default:
       return value.properties ? objectType(value, depth) : "unknown";
   }
@@ -60,7 +69,13 @@ function propertyKey(key: string): string {
 function objectType(schema: Record<string, unknown>, depth: number): string {
   const properties = (schema.properties ?? {}) as Record<string, Record<string, unknown>>;
   const entries = Object.entries(properties);
-  if (!entries.length) return "{}";
+  if (!entries.length) {
+    if (schema.additionalProperties === true) return "Record<string, unknown>";
+    if (schema.additionalProperties && typeof schema.additionalProperties === "object") {
+      return `Record<string, ${typeOf(schema.additionalProperties, depth + 1)}>`;
+    }
+    return "{}";
+  }
   if (depth >= MAX_DEPTH) return "{ ... }";
   const required = new Set(Array.isArray(schema.required) ? schema.required.map(String) : []);
   const fields = entries.map(
@@ -98,6 +113,7 @@ export function codeModeToolIndex(
   options: { listedFirst?: (name: string) => boolean; maxChars?: number } = {},
 ): string {
   if (!tools.length) return "No tools are available in this run.";
+  const maxChars = options.maxChars ?? INDEX_MAX_CHARS;
   const first = options.listedFirst;
   const ordered = [...tools].sort(
     (a, b) =>
@@ -108,13 +124,15 @@ export function codeModeToolIndex(
   const named: string[] = [];
   let size = 0;
   for (const tool of ordered) {
-    const line = signatureLine(tool);
-    if (named.length === 0 && size + line.length <= (options.maxChars ?? INDEX_MAX_CHARS)) {
-      lines.push(line);
-      size += line.length + 1;
-    } else {
-      named.push(isCodeModeWrite(tool) ? `${tool.name}${WRITES_MARK}` : tool.name);
+    if (named.length === 0) {
+      const line = signatureLine(tool);
+      if (size + line.length <= maxChars) {
+        lines.push(line);
+        size += line.length + 1;
+        continue;
+      }
     }
+    named.push(isCodeModeWrite(tool) ? `${tool.name}${WRITES_MARK}` : tool.name);
   }
   const rest = named.length
     ? [
@@ -135,41 +153,66 @@ export interface CodeModeSearchHit {
 }
 
 /**
- * The tools and saved commands whose name or description matches every word of the query, best
- * match first. A command is named as it is called, `cmd.<name>`.
+ * The tools and saved commands matching the query, best match first (all-word matches preferred,
+ * falling back to partial word matches when a multi-word query finds nothing). A command is
+ * named as it is called, `cmd.<name>`.
  */
 export function searchCodeModeTools(
   tools: readonly ConnectorTool[],
   query: string,
   commands: readonly CodeCommandSummary[] = [],
 ): CodeModeSearchHit[] {
-  const words = query
-    .toLowerCase()
-    .split(/[^a-z0-9_]+/)
-    .filter(Boolean);
+  const trimmed = query.trim().toLowerCase();
+  const words = trimmed.split(/[^a-z0-9_]+/).filter(Boolean);
   if (!words.length) return [];
-  return [
+  const candidates = [
     ...tools.map((tool) => ({
       name: tool.name,
       description: String(tool.description ?? ""),
       schema: tool.inputSchema ?? {},
-      writes: isCodeModeWrite(tool),
+      writes: isCodeModeWrite(tool) as boolean | undefined,
     })),
     ...commands.map((command) => ({
       name: `${CODE_COMMAND_PREFIX}${command.name}`,
       description: command.description,
       schema: command.parameters ?? {},
-      writes: undefined,
+      writes: undefined as boolean | undefined,
     })),
-  ]
-    .flatMap((candidate) => {
-      const name = candidate.name.toLowerCase();
-      const description = candidate.description.toLowerCase();
-      if (!words.every((word) => name.includes(word) || description.includes(word))) return [];
-      const score = words.filter((word) => name.includes(word)).length;
-      return [{ candidate, score }];
-    })
-    .sort((a, b) => b.score - a.score || a.candidate.name.localeCompare(b.candidate.name))
+  ].map((candidate) => {
+    const name = candidate.name.toLowerCase();
+    const description = candidate.description.toLowerCase();
+    const paramNames = Object.keys(
+      (candidate.schema.properties as Record<string, unknown> | undefined) ?? {},
+    )
+      .join(" ")
+      .toLowerCase();
+    const exactMatch = name === trimmed || name === `${CODE_COMMAND_PREFIX}${trimmed}` ? 1 : 0;
+    let matchedWords = 0;
+    let nameMatches = 0;
+    for (const word of words) {
+      const inName = name.includes(word);
+      if (inName) nameMatches += 1;
+      if (inName || description.includes(word) || paramNames.includes(word)) {
+        matchedWords += 1;
+      }
+    }
+    return { candidate, exactMatch, matchedWords, nameMatches };
+  });
+
+  const strict = candidates.filter((entry) => entry.matchedWords === words.length);
+  const ranked =
+    strict.length > 0 || words.length === 1
+      ? strict
+      : candidates.filter((entry) => entry.matchedWords > 0);
+
+  return ranked
+    .sort(
+      (a, b) =>
+        b.exactMatch - a.exactMatch ||
+        b.matchedWords - a.matchedWords ||
+        b.nameMatches - a.nameMatches ||
+        a.candidate.name.localeCompare(b.candidate.name),
+    )
     .slice(0, SEARCH_LIMIT)
     .map(({ candidate }) => ({
       name: candidate.name,
