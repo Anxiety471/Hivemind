@@ -26,6 +26,10 @@ export function LabsSettingsPanel({
       title: t`Code mode`,
       description: t`Let bots run several tool calls in one short script`,
     },
+    codeFirst: {
+      title: t`Code first`,
+      description: t`With Code mode on, bots reach most tools only through scripts`,
+    },
   };
 
   return (

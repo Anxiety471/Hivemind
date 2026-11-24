@@ -38,6 +38,7 @@ x-app-environment: &app-environment # Runtime
   RAKAZO_UPDATE_RESTART_SUPERVISOR:
   TICKET_BOARD_ENABLED:
   CODE_MODE_ENABLED:
+  CODE_FIRST_ENABLED:
   # The Go task-detect service; unset falls back to MODEL_RETRY_RULES_URL's origin.
   TASK_DETECT_URL:
   USER_DEVICES_ENABLED:

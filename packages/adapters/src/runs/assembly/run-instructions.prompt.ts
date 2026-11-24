@@ -348,6 +348,8 @@ function toolUsageLine(parts: {
   computerInstruction: string;
   /** The run offers code_mode (see selectRunTools). */
   codeModeOffered?: boolean;
+  /** Most tools are called only from a code_mode script. */
+  codeFirst?: boolean;
   pageBrowserAllowed: boolean;
   disabledBuiltinTools?: ReadonlySet<string>;
   followUpsOffered?: boolean;
@@ -363,7 +365,9 @@ function toolUsageLine(parts: {
       : undefined,
     builtinOffered(disabled, "remember") ? "Use remember for durable facts." : undefined,
     parts.codeModeOffered
-      ? "When a task needs several tool calls, such as a search then reads, many records at once, or a change applied to each match, run them in one code_mode script and print only the result you need. Each call in the script is approved exactly like a direct call, and a call that asks the person stops the script."
+      ? parts.codeFirst
+        ? "Most tools are called from a code_mode script as codemode.<name>(...), even a single call; these instructions name them by their plain names. Print only the result you need. Each call in the script is approved exactly like a direct call, and a call that asks the person stops the script. shell and the tools that talk to the person are called directly."
+        : "When a task needs several tool calls, such as a search then reads, many records at once, or a change applied to each match, run them in one code_mode script and print only the result you need. Each call in the script is approved exactly like a direct call, and a call that asks the person stops the script."
       : undefined,
     ticketBoardClause(parts.ticketBoardEnabled, disabled),
     parts.ticketBoardEnabled ? undefined : scratchpadClause(disabled),
@@ -497,6 +501,8 @@ export function userTurnInstructions(parts: {
   historyRetrievalEnabled?: boolean;
   /** Names of the tools the run was offered, so built-in guidance mentions only those. */
   offeredToolNames?: ReadonlySet<string>;
+  /** The model is listed code_mode and a few direct tools; the rest are called from a script. */
+  codeFirst?: boolean;
   /** Text the operator of this deployment adds to every run (see operatorInstruction). */
   operatorInstruction?: string;
   computerInstruction: string;

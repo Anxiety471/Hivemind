@@ -18,6 +18,7 @@ import {
   parseCatalogApprovalTarget,
 } from "../../approvals/approval-effect.js";
 import { USE_TOOL } from "../../tools/builtin.tool-definition.js";
+import { CODE_MODE } from "../../tools/code-mode.tool-definition.js";
 import { uniquifyInstalledToolName } from "../../tools/lazy-tool-catalog.js";
 import { APPROVAL_CONTINUATION_LEAD } from "../assembly/approval-continuation.prompt.js";
 import { runLeaseFor } from "../assembly/run-messages.js";
@@ -41,15 +42,29 @@ export function approvalReplayEffectToolName(
 export function buildApprovalContinuation(
   approvedEffects: readonly { kind: string; request: unknown }[],
   formatRequest: (request: unknown) => string,
-  options?: { exposedToolNames?: ReadonlySet<string> },
+  options?: {
+    /** Tools the model is listed. */
+    exposedToolNames?: ReadonlySet<string>;
+    /** Tools the model cannot call itself but a code_mode script can. */
+    scriptToolNames?: ReadonlySet<string>;
+  },
 ): string | undefined {
   if (approvedEffects.length === 0) return undefined;
+  const listed = options?.exposedToolNames;
+  const scripted = listed?.has(CODE_MODE) ? options?.scriptToolNames : undefined;
+  const exposed = listed && (scripted ? new Set([...listed, ...scripted]) : listed);
+  // An approved call to a tool only a script reaches is replayed from inside one.
+  const render = (name: string, args: unknown) =>
+    scripted?.has(name) && !listed?.has(name)
+      ? `${CODE_MODE}: ${JSON.stringify({
+          code: `await codemode[${JSON.stringify(name)}](${formatRequest(args)});`,
+        })}`
+      : `${name}: ${formatRequest(args)}`;
   return [
     ...APPROVAL_CONTINUATION_LEAD,
     ...approvedEffects.map((effect) => {
       const catalog = catalogApprovalDetails(effect.request, CATALOG_APPROVAL_TOOL);
       if (catalog) {
-        const exposed = options?.exposedToolNames;
         const renamedMcpWrapper = catalogExecuteToolName("mcp");
         const wrapper =
           exposed &&
@@ -59,12 +74,12 @@ export function buildApprovalContinuation(
             ? renamedMcpWrapper
             : catalog.toolName;
         if (!exposed || exposed.has(wrapper)) {
-          return `${wrapper}: ${formatRequest(catalog.args)}`;
+          return render(wrapper, catalog.args);
         }
         // Catalog shrank: wrapper is gone — resume as the matching direct tool.
         const innerArgs = catalogApprovalInnerArgs(catalog) ?? {};
         if (exposed.has(effect.kind)) {
-          return `${effect.kind}: ${formatRequest(innerArgs)}`;
+          return render(effect.kind, innerArgs);
         }
         const target = parseCatalogApprovalTarget(catalog.args);
         const connectorId = catalogApprovalConnectorId(catalog.toolName);
@@ -73,15 +88,14 @@ export function buildApprovalContinuation(
             ? uniquifyInstalledToolName(target.resourceId, target.toolName)
             : undefined;
         if (uniquified && exposed.has(uniquified)) {
-          return `${uniquified}: ${formatRequest(innerArgs)}`;
+          return render(uniquified, innerArgs);
         }
-        return `${effect.kind}: ${formatRequest(innerArgs)}`;
+        return render(effect.kind, innerArgs);
       }
       const bound = boundDirectApprovalDetails(effect.request, CATALOG_APPROVAL_TOOL);
       if (bound) {
-        const exposed = options?.exposedToolNames;
         if (!exposed || exposed.has(effect.kind)) {
-          return `${effect.kind}: ${formatRequest(bound.args)}`;
+          return render(effect.kind, bound.args);
         }
         // Name collision uniquify can rename the direct tool while the catalog is still
         // small — prefer that exposed name over a catalog wrapper that does not exist yet.
@@ -90,21 +104,20 @@ export function buildApprovalContinuation(
             ? uniquifyInstalledToolName(bound.route.resourceId, bound.route.toolName)
             : undefined;
         if (uniquified && exposed.has(uniquified)) {
-          return `${uniquified}: ${formatRequest(bound.args)}`;
+          return render(uniquified, bound.args);
         }
         const wrapper = catalogExecuteToolName(bound.route.connectorId);
         if (exposed.has(wrapper)) {
-          return `${wrapper}: ${formatRequest({
+          return render(wrapper, {
             id: catalogIdForRoute(bound.route),
             arguments: bound.args,
-          })}`;
+          });
         }
-        return `${uniquified ?? effect.kind}: ${formatRequest(bound.args)}`;
+        return render(uniquified ?? effect.kind, bound.args);
       }
-      const exposed = options?.exposedToolNames;
       return exposed && !exposed.has(effect.kind) && exposed.has(USE_TOOL)
         ? `${USE_TOOL}: ${formatRequest({ name: effect.kind, arguments: effect.request })}`
-        : `${effect.kind}: ${formatRequest(effect.request)}`;
+        : render(effect.kind, effect.request);
     }),
   ].join("\n");
 }

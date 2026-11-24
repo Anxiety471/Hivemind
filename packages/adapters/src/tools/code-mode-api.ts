@@ -6,6 +6,8 @@ const DESCRIPTION_MAX_CHARS = 90;
 const MAX_DEPTH = 3;
 /** Signature characters one description carries; tools past it are listed by name only. */
 const INDEX_MAX_CHARS = 6_000;
+/** The budget when the script is the only way to most tools, so the index replaces their schemas. */
+export const CODE_FIRST_INDEX_MAX_CHARS = 12_000;
 const SEARCH_LIMIT = 8;
 const WRITES_MARK = " (writes)";
 /** The name `codemode.search` is installed under, when no real tool already has it. */
@@ -87,7 +89,7 @@ function signatureLine(tool: ConnectorTool): string {
  */
 export function codeModeToolIndex(
   tools: readonly ConnectorTool[],
-  options: { listedFirst?: (name: string) => boolean } = {},
+  options: { listedFirst?: (name: string) => boolean; maxChars?: number } = {},
 ): string {
   if (!tools.length) return "No tools are available in this run.";
   const first = options.listedFirst;
@@ -101,7 +103,7 @@ export function codeModeToolIndex(
   let size = 0;
   for (const tool of ordered) {
     const line = signatureLine(tool);
-    if (named.length === 0 && size + line.length <= INDEX_MAX_CHARS) {
+    if (named.length === 0 && size + line.length <= (options.maxChars ?? INDEX_MAX_CHARS)) {
       lines.push(line);
       size += line.length + 1;
     } else {

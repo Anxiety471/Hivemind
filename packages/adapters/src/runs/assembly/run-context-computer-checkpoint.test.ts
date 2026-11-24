@@ -9,7 +9,7 @@ import { nextMutatingEffectOccurrence, restoreTurnCheckpointEffects } from "./ru
 function fixture(tools: ConnectorTool[] = []) {
   return {
     runId: "run-1",
-    tools: { offered: tools },
+    tools: { offered: tools, listed: tools },
     state: { effects: { occurrences: [], counts: new Map(), restoredPending: undefined } },
   } as unknown as RunContext;
 }

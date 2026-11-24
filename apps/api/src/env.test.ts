@@ -75,6 +75,13 @@ describe("loadEnv", () => {
       expect(loadEnv({ ...base, TICKET_BOARD_ENABLED: value }).deploymentLabs).toEqual([]);
     expect(loadEnv({ ...base, TICKET_BOARD_ENABLED: "true" }).deploymentLabs).toEqual(["board"]);
   });
+
+  it("turns code mode and code first on for every account only when explicitly enabled", () => {
+    expect(
+      loadEnv({ ...base, CODE_MODE_ENABLED: "true", CODE_FIRST_ENABLED: "true" }).deploymentLabs,
+    ).toEqual(["code", "codeFirst"]);
+    expect(loadEnv({ ...base, CODE_FIRST_ENABLED: "1" }).deploymentLabs).toEqual([]);
+  });
   it("loads operator menu links and refuses to start on a bad value", () => {
     expect(loadEnv(base).navLinks).toEqual([]);
     expect(

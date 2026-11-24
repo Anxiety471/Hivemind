@@ -11,11 +11,17 @@ export const CODE_MODE_SHELL_TIMEOUT_MS = 45_000;
  * rest named. It rides in the tool description because it changes with the run's tool set, like
  * find_tool's name index.
  */
-export function codeModeToolDefinition(index: string): ConnectorTool {
+export function codeModeToolDefinition(
+  index: string,
+  options: { codeFirst?: boolean } = {},
+): ConnectorTool {
   return {
     name: CODE_MODE,
     description: [
-      `Run one TypeScript snippet that calls several tools and prints only what you need. Top-level await is available. \`console.log\` is the only output; print text or JSON. The snippet has no fetch, require, import, files or network — only the API below. Tools marked (writes) change data and are approved exactly like a direct call. A call that asks the person stops the script. Once they approve, run that approved call directly, then finish the remaining steps yourself or with a new script for only those steps: running the whole script again would ask for the same write again. A script may make at most ${CODE_MODE_MAX_WRITES} writes. A shell command in a script is stopped after at most ${CODE_MODE_SHELL_TIMEOUT_MS / 1000} seconds (timeout_seconds sets it lower), and one that keeps running ends the script, so run long commands directly.`,
+      options.codeFirst
+        ? "Most tools are reachable only through this one: call them as `codemode.<name>(...)`, even for a single action. Only the tools listed on their own, such as shell and the ones that talk to the person, are called directly."
+        : undefined,
+      `Run one TypeScript snippet that calls several tools and prints only what you need. Top-level await is available. \`console.log\` is the only output; print text or JSON. The snippet has no fetch, require, import, files or network — only the API below. Tools marked (writes) change data and are approved exactly like a direct call. A call that asks the person stops the script. Once they approve, the run tells you which call to repeat first; make only that call, then finish the remaining steps yourself or with a new script for only those steps: running the whole script again would ask for the same write again. A script may make at most ${CODE_MODE_MAX_WRITES} writes. A shell command in a script is stopped after at most ${CODE_MODE_SHELL_TIMEOUT_MS / 1000} seconds (timeout_seconds sets it lower), and one that keeps running ends the script, so run long commands directly.`,
       index,
     ]
       .filter(Boolean)

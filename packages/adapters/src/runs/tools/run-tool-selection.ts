@@ -264,6 +264,30 @@ export function codeModeCallableTools(tools: readonly ConnectorTool[]): Connecto
   );
 }
 
+/**
+ * Callable tools a code-first run still lists on their own: the ones that talk to the person
+ * (their answer ends or pauses the turn) and shell, whose long and streaming work a script's
+ * short clock cannot hold.
+ */
+const CODE_FIRST_DIRECT_TOOLS: ReadonlySet<string> = new Set([
+  "shell",
+  "ask_user",
+  "message_user",
+  "request_secret",
+  "connect_app",
+  "end_call",
+  "call_user",
+]);
+
+/**
+ * What a code-first run lists to the model: code_mode, the tools a script cannot call, and the
+ * direct set above. Every other tool stays callable from a script and is simply not listed.
+ */
+export function codeFirstListedTools(tools: readonly ConnectorTool[]): ConnectorTool[] {
+  const scripted = new Set(codeModeCallableTools(tools).map((tool) => tool.name));
+  return tools.filter((tool) => CODE_FIRST_DIRECT_TOOLS.has(tool.name) || !scripted.has(tool.name));
+}
+
 /** A call that may change something, as opposed to one declared to only read. */
 export function isCodeModeWrite(tool: Pick<ConnectorTool, "name" | "readOnly">): boolean {
   return tool.readOnly !== true && !READ_ONLY_AGENT_TOOLS.has(tool.name);

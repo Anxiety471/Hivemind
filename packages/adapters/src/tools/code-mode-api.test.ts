@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { codeModeToolIndex, searchCodeModeTools } from "./code-mode-api.js";
+import {
+  CODE_FIRST_INDEX_MAX_CHARS,
+  codeModeToolIndex,
+  searchCodeModeTools,
+} from "./code-mode-api.js";
 
 describe("codeModeToolIndex", () => {
   it("renders one signature per tool, sorted, with enums and optional fields", () => {
@@ -81,6 +85,20 @@ describe("codeModeToolIndex", () => {
     expect(index).toContain("More tools, by name only;");
     expect(index).toMatch(/tool_198(,|$)/);
     expect(index).not.toContain("- codemode.tool_198(");
+  });
+
+  it("keeps more signatures when the budget is raised", () => {
+    const many = Array.from({ length: 200 }, (_, i) => ({
+      name: `tool_${String(i).padStart(3, "0")}`,
+      description: "Does a thing for the person.",
+      inputSchema: { type: "object", properties: { query: { type: "string" } } },
+      readOnly: true,
+    }));
+    const small = codeModeToolIndex(many);
+    const large = codeModeToolIndex(many, { maxChars: CODE_FIRST_INDEX_MAX_CHARS });
+    expect(large.split("\n- codemode.").length).toBeGreaterThan(
+      small.split("\n- codemode.").length * 1.5,
+    );
   });
 });
 

@@ -27,6 +27,10 @@ export default function Labs() {
       title: t`Code mode`,
       detail: t`Let bots run several tool calls in one short script`,
     },
+    codeFirst: {
+      title: t`Code first`,
+      detail: t`With Code mode on, bots reach most tools only through scripts`,
+    },
   };
   const meRead = accountRpcQuery("me");
   const me = useScreenQuery(meRead).data;

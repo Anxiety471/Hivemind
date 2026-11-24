@@ -319,7 +319,10 @@ export interface RunSource {
 }
 
 export interface RunTools {
+  /** Every tool of this run, which a script may call. */
   offered: ConnectorTool[];
+  /** What the model is listed: all of `offered`, or fewer when the run is code first. */
+  listed: ConnectorTool[];
   builtins: ConnectorTool[];
   connector: Map<string, ConnectorTool>;
   disabled: Set<string>;
@@ -581,7 +584,7 @@ export function restoreTurnCheckpointEffects(
   try {
     const saved = restoreTurnCheckpoint(turnCheckpoint, model);
     const unresolved = new Set(unresolvedTurnCheckpointCalls(saved.messages));
-    const namedTools = namedAgentTools(partitionTools(ctx.tools.offered).listed);
+    const namedTools = namedAgentTools(partitionTools(ctx.tools.listed).listed);
     const available = new Set(namedTools.map((tool) => tool.name));
     if (computerMode) {
       // Only the authenticated saved role authorizes a runtime transition. Do not

@@ -115,7 +115,10 @@ function fixture({
   browser,
   spendingLimit = null,
   memoryProvider,
+  labs = [],
 }: {
+  /** Labs the deployment turns on for every account. */
+  labs?: Array<"code" | "codeFirst">;
   /** The Space's semantic memory provider; none by default. */
   memoryProvider?: Record<string, unknown>;
   /** A page browser on a graphical computer, so browser_act and computer_act are offered. */
@@ -566,6 +569,7 @@ function fixture({
   const enqueue = vi.fn(async (_job: unknown) => undefined);
   const executor = createRunExecutor({
     deploymentModelKey: "fixture-model-key",
+    deploymentLabs: labs,
     prisma: transactionalPrisma,
     runtime: { describe: () => ({ capabilities: { scripted: false } }), run: runtimeRun },
     connector: {
@@ -2590,6 +2594,61 @@ describe("bot management tool gating", () => {
     await untrusted.run();
     expect(untrusted.results).toEqual([trustRejection]);
     expect(untrusted.offeredTools()).toContain("update_bot");
+  });
+});
+
+describe("code first", () => {
+  const replay = 'await codemode.demo_get_item({ id: "item-1" });';
+
+  it("lists code_mode and the tools a script cannot reach, not the ones a script can", async () => {
+    const f = fixture({ labs: ["code", "codeFirst"], readOnly: false });
+    await f.run();
+    const offered = f.offeredTools();
+    expect(offered).toContain("code_mode");
+    expect(offered).toContain("shell");
+    expect(offered).not.toContain("remember");
+    expect(offered).not.toContain("web_fetch");
+    expect(offered).not.toContain("demo_get_item");
+    expect(f.instructions()).toContain("codemode.<name>");
+  });
+
+  it("lists every tool when code mode is on without code first, and none of it when code mode is off", async () => {
+    const codeOnly = fixture({ labs: ["code"], readOnly: false });
+    await codeOnly.run();
+    expect(codeOnly.offeredTools()).toEqual(expect.arrayContaining(["code_mode", "remember"]));
+    const codeFirstAlone = fixture({ labs: ["codeFirst"], readOnly: false });
+    await codeFirstAlone.run();
+    expect(codeFirstAlone.offeredTools()).toContain("remember");
+    expect(codeFirstAlone.offeredTools()).not.toContain("code_mode");
+  });
+
+  it("reaches an approved tool the model cannot list by repeating it from a script", async () => {
+    const f = fixture({ labs: ["code", "codeFirst"], readOnly: false });
+    f.setCalls([{ name: "code_mode", args: { code: replay }, executionId: "call-1" }]);
+    await f.run();
+    expect(f.pauseRunForInput).toHaveBeenCalledOnce();
+    expect(f.execute).not.toHaveBeenCalled();
+    f.effects.find((effect) => effect.status === "intended")!.status = "approved";
+
+    f.setCalls([{ name: "code_mode", args: { code: replay }, executionId: "call-2" }]);
+    await f.run();
+    expect(f.results.at(-1)).toMatchObject({ calls: ["demo_get_item"] });
+    expect(f.execute).toHaveBeenCalledOnce();
+    expect(f.pauseRunForInput).toHaveBeenCalledOnce();
+  });
+
+  it("tells the model which script repeats the approved call", async () => {
+    const f = fixture({ labs: ["code", "codeFirst"], readOnly: false });
+    f.setCalls([{ name: "code_mode", args: { code: replay }, executionId: "call-1" }]);
+    await f.run();
+    f.effects.find((effect) => effect.status === "intended")!.status = "approved";
+    f.setCalls([]);
+    // The model does not repeat the call here, so the run ends as one that did not.
+    await f.run(true);
+    const prompt = JSON.stringify(f.runtimeRun.mock.calls.at(-1)?.[0].prompt);
+    expect(prompt).toContain("code_mode:");
+    expect(prompt).toContain("codemode[");
+    expect(prompt).toContain("demo_get_item");
   });
 });
 
