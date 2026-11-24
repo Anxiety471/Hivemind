@@ -531,6 +531,10 @@ func (w *writer) seal(ctx context.Context, id string, fields vaultFields, plaint
 	// second pooled connection while this one is held, and four concurrent legacy seals exhaust the
 	// gateway's four-connection pool (secret-store-factory.ts:71-82 documents the same trap).
 	held := w.vault.Writer.Hold()
+	// Flushed on every exit, as holdSecretNotifications flushes in a finally: the seal's read
+	// transaction is over by then, and a failure after the seal still announces the value it
+	// could not keep (a failed seal records no ref, so nothing is announced for it).
+	defer held.Flush(ctx)
 	var ciphertext string
 	err := w.database.Tenant(ctx, w.actor, func(tx pgx.Tx) error {
 		var failure error
@@ -539,9 +543,6 @@ func (w *writer) seal(ctx context.Context, id string, fields vaultFields, plaint
 			wtf8.ToUTF8(plaintext))
 		return failure
 	})
-	if err == nil {
-		held.Flush(ctx)
-	}
 	return ciphertext, err
 }
 

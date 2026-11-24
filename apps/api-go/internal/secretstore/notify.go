@@ -123,6 +123,9 @@ func (w *Writer) Load(ctx context.Context, ref, recordID string) (string, error)
 	return w.Store.Load(ctx, ref, recordID)
 }
 
+// ID is describe().id, forwarded for SealVaultValue's store guard.
+func (w *Writer) ID() string { return w.Store.ID() }
+
 // Delete announces the ref. The value lives in the row that held it, so the
 // local store has nothing else to remove (secrets.ts:217-219).
 func (w *Writer) Delete(ctx context.Context, ref, recordID string) {
@@ -154,6 +157,9 @@ func (h *Held) Put(ctx context.Context, plaintext string, options PutOptions) (R
 	h.refs = append(h.refs, record.Ref)
 	return record, nil
 }
+
+// ID is describe().id, forwarded for SealVaultValue's store guard.
+func (h *Held) ID() string { return h.writer.ID() }
 
 // Delete announces the ref after Flush.
 func (h *Held) Delete(ref string) { h.refs = append(h.refs, ref) }

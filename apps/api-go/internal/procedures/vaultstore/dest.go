@@ -195,26 +195,25 @@ func parseDestinationInput(raw any, path validate.Path, nameOptional bool) (Dest
 		issues = append(issues, problems...)
 		destination.Name = name
 	}
-	if !aborts(issues) {
-		// z.string().max(2048).default(""): absent is the empty string, not an issue.
-		var origin string
-		if _, present := object.Get("origin"); present {
-			var problems []validate.Issue
-			origin, problems = validate.String(path.With("origin"), object.Field("origin"),
-				validate.StringRules{Max: 2048})
-			issues = append(issues, problems...)
-		}
-		destination.Origin = origin
-	}
-	if !aborts(issues) {
-		auth, problems := parseAuth(object.Field("auth"), path.With("auth"))
+	// z.object parses every property whatever an earlier one did: an invalid name does not stop
+	// the origin or the auth from reporting their own issues.
+	// z.string().max(2048).default(""): absent is the empty string, not an issue.
+	var origin string
+	if _, present := object.Get("origin"); present {
+		var problems []validate.Issue
+		origin, problems = validate.String(path.With("origin"), object.Field("origin"),
+			validate.StringRules{Max: 2048})
 		issues = append(issues, problems...)
-		destination.Auth = auth
 	}
+	destination.Origin = origin
+	auth, problems := parseAuth(object.Field("auth"), path.With("auth"))
+	issues = append(issues, problems...)
+	destination.Auth = auth
 	if aborts(issues) {
 		return Destination{}, false, issues
 	}
-	// .superRefine(requireSite): an origin-less destination must have no site.
+	// .superRefine(requireSite) runs only when every property parsed, as zod skips refinements
+	// after a property failed: an origin-less destination must have no site.
 	if destination.Origin == "" && !Siteless(destination.Auth.Type) {
 		issues = append(issues, customIssue(path.With("origin"), "A site is required"))
 	}

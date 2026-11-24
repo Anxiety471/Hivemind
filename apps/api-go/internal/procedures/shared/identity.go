@@ -2,6 +2,7 @@ package shared
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -27,26 +28,30 @@ func IdentityConfirmed(ctx context.Context, database *db.DB, actor db.Actor) (bo
 	}
 	confirmed := false
 	now := time.Now()
+	// findVerificationValue reads one row per identifier (findFirst with no order, as the
+	// identifier has only an index): a second row for the same key is not a second proof.
+	identifiers := []string{
+		"identity-confirmed-" + actor.SessionID,
+		"oidc-reauth-" + actor.SessionID,
+	}
 	err := database.System(ctx, "check a session's recent identity confirmation", func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx,
-			`SELECT value, "expiresAt" FROM verification
-			 WHERE identifier IN ($1, $2)`,
-			"identity-confirmed-"+actor.SessionID, "oidc-reauth-"+actor.SessionID)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-		for rows.Next() {
+		for _, identifier := range identifiers {
 			var value string
 			var expires time.Time
-			if err := rows.Scan(&value, &expires); err != nil {
+			err := tx.QueryRow(ctx,
+				`SELECT value, "expiresAt" FROM verification WHERE identifier = $1 LIMIT 1`,
+				identifier).Scan(&value, &expires)
+			if errors.Is(err, pgx.ErrNoRows) {
+				continue
+			}
+			if err != nil {
 				return err
 			}
 			if value == actor.UserID && expires.After(now) {
 				confirmed = true
 			}
 		}
-		return rows.Err()
+		return nil
 	})
 	return confirmed, err
 }

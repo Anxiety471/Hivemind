@@ -2,12 +2,24 @@
  * Lane M review: adversarial cases written by the independent reviewer. They are not part of the
  * lane; each one probes a parity or security edge the lane's own 151 cases do not cover.
  */
+import { EncryptedSecretStore } from "../../../packages/adapters/src/secrets/secrets.js";
 import { contentEncryptionOf, encryptText } from "../../../packages/db/src/index.js";
 import type { Case, Seeded } from "./contract.mts";
+import { CONTRACT_ENCRYPTION_KEY } from "./contract-key.mts";
 
 type System = any;
 
 const OLD = new Date(Date.UTC(2021, 3, 2));
+const legacyStore = new EncryptedSecretStore(CONTRACT_ENCRYPTION_KEY);
+const sealContext = {
+  operationId: "seed",
+  traceId: "seed",
+  userId: "seed",
+  spaceId: "seed",
+  signal: new AbortController().signal,
+} as never;
+const v2 = async (recordId: string, plaintext: string) =>
+  (await legacyStore.put(plaintext, sealContext, { recordId })).ciphertext;
 
 export function laneMReviewCases(system: System): Case[] {
   const put = (name: string, input: unknown, extra: Partial<Case> = {}): Case => ({
@@ -69,19 +81,25 @@ export function laneMReviewCases(system: System): Case[] {
       title?: string;
       alsoOn?: string[];
       rowId?: string;
+      legacy?: boolean;
     },
   ) => {
     const id = seed.rowId ?? `${seeded.userId}-rv-${seed.name}`;
     const spaceId = seed.space === null || seed.space === undefined ? null : seeded.spaces[seed.space];
     const scope = seed.space === null || seed.space === undefined ? `user:${seeded.userId}` : `vault:${seeded.spaces[seed.space]}`;
-    const ring = contentEncryptionOf(system)!.ring;
-    ring.forget(scope);
-    const key = await ring.current(scope);
-    const ciphertext = encryptText(
-      key,
-      { table: "vault_credentials", column: "ciphertext", rowId: id, owner: seeded.userId },
-      seed.plaintext,
-    );
+    let ciphertext: string;
+    if (seed.legacy) {
+      ciphertext = await v2(id, seed.plaintext);
+    } else {
+      const ring = contentEncryptionOf(system)!.ring;
+      ring.forget(scope);
+      const key = await ring.current(scope);
+      ciphertext = encryptText(
+        key,
+        { table: "vault_credentials", column: "ciphertext", rowId: id, owner: seeded.userId },
+        seed.plaintext,
+      );
+    }
     return system.vaultCredential.create({
       data: {
         id,
@@ -108,6 +126,15 @@ export function laneMReviewCases(system: System): Case[] {
     auth: { type: "bearer" },
     ...extra,
   });
+  const confirm = (seeded: Seeded) =>
+    system.verification.create({
+      data: {
+        id: `${seeded.userId}-confirmation`,
+        identifier: `identity-confirmed-${seeded.userId}-session`,
+        value: seeded.userId,
+        expiresAt: new Date(Date.now() + 5 * 60_000),
+      },
+    });
 
   return [
     // A login's other sites: TypeScript normalizes each to an origin, dedupes, and drops its own
@@ -118,13 +145,14 @@ export function laneMReviewCases(system: System): Case[] {
         origin: "https://login.example.test",
         auth: { type: "login" },
       }),
-      value: login([{ label: "User", value: "u" }]),
+      value: login([{ label: "User", value: "u", hidden: false }]),
       alsoOn: [
         "https://other.example.test",
         "https://other.example.test",
         " HTTPS://Third.Example.Test ",
         "https://login.example.test",
       ],
+      after: [{ procedure: "vault.list", input: {} }],
     }),
     put(
       "mrev-alsoOn-relabel-own-site",
@@ -273,6 +301,91 @@ export function laneMReviewCases(system: System): Case[] {
         },
       },
     ),
+    put(
+      "mrev-limit-full",
+      { destination: destination({ name: "mrev-100" }), value: "value" },
+      {
+        seed: async (seeded) => {
+          for (let index = 0; index < 100; index += 1)
+            await addVault(seeded, {
+              name: `mrev-${String(index).padStart(3, "0")}`,
+              plaintext: "value",
+              rowId: `${seeded.userId}-rv-full-${index}`,
+            });
+        },
+      },
+    ),
+
+    // zod validates every property of a nested object, not only the first bad one.
+    put("mrev-nested-dest-aggregation", {
+      destination: { name: null, origin: 5, auth: null },
+      value: "value",
+    }),
+    put("mrev-dest-auth-aggregation", {
+      destination: { name: "mrev-nested", origin: 5, auth: null },
+      value: "value",
+    }),
+
+    // Optional card/contact fields: null is an invalid_type, not "absent".
+    put("mrev-card-billing-null", {
+      destination: destination({ name: "mrev-card", origin: "", auth: { type: "card" } }),
+      value: JSON.stringify({
+        number: "4242 4242 4242 4242",
+        expMonth: 4,
+        expYear: 2031,
+        billing: null,
+      }),
+    }),
+    put("mrev-contact-null", {
+      destination: destination({ name: "mrev-contact", origin: "", auth: { type: "contact" } }),
+      value: JSON.stringify({ name: null, city: "Paris" }),
+    }),
+    put("mrev-card-number-nbsp", {
+      destination: destination({ name: "mrev-card", origin: "", auth: { type: "card" } }),
+      value: JSON.stringify({
+        number: "4242\u00a04242 4242 4242",
+        expMonth: 4,
+        expYear: 2031,
+      }),
+    }),
+
+    // A login saved with an explicitly empty key keeps the empty key in TypeScript.
+    put(
+      "mrev-login-otp-empty-reveal",
+      {
+        destination: destination({
+          name: "mrev-empty-otp",
+          origin: "https://login.example.test",
+          auth: { type: "login" },
+        }),
+        value: JSON.stringify({
+          fields: [{ label: "User", value: "u", hidden: false }],
+          otp: "",
+        }),
+      },
+      {
+        seed: confirm,
+        after: [{ procedure: "vault.reveal", input: { name: "mrev-empty-otp" } }],
+      },
+    ),
+
+    // A damaged stored auth still answers policy "ask" and non-empty alsoOn as TypeScript does.
+    put(
+      "mrev-relabel-unreadable-policy",
+      {
+        destination: destination({ name: "mrev-legacy", origin: "https://example.test" }),
+        policy: "ask",
+      },
+      {
+        seed: (seeded) =>
+          addVault(seeded, {
+            name: "mrev-legacy",
+            origin: "https://example.test",
+            auth: { type: "header" },
+            plaintext: "value",
+          }),
+      },
+    ),
 
     // Another person's account-vault item is not this caller's.
     reveal(
@@ -369,6 +482,62 @@ export function laneMReviewCases(system: System): Case[] {
       destination: destination({ name: "mrev\ud800name" }),
       value: "value",
     }),
+
+    // Crypto interop: each side opens the other's sealed value, in both envelope forms.
+    reveal(
+      "mrev-v2-go-reveals-ts",
+      { name: "mrev-v2" },
+      {
+        seed: async (seeded) => {
+          await addVault(seeded, { name: "mrev-v2", plaintext: "v2-value", legacy: true });
+          await confirm(seeded);
+        },
+      },
+    ),
+    reveal(
+      "mrev-rkz1-go-reveals-ts",
+      { name: "mrev-rkz1" },
+      {
+        seed: async (seeded) => {
+          await addVault(seeded, { name: "mrev-rkz1", plaintext: "rkz1-value" });
+          await confirm(seeded);
+        },
+      },
+    ),
+    put(
+      "mrev-v2-ts-reveals-go",
+      {
+        destination: destination({
+          name: "mrev-v2-new",
+          origin: "https://login.example.test",
+          auth: { type: "login" },
+        }),
+        value: login([{ label: "User", value: "u", hidden: false }]),
+      },
+      {
+        seed: confirm,
+        after: [{ procedure: "vault.reveal", input: { name: "mrev-v2-new" } }],
+      },
+    ),
+    put(
+      "mrev-rkz1-ts-reveals-go",
+      {
+        destination: destination({
+          name: "mrev-rkz1-new",
+          origin: "https://login.example.test",
+          auth: { type: "login" },
+        }),
+        value: login([{ label: "User", value: "u", hidden: false }]),
+      },
+      {
+        seed: async (seeded) => {
+          // A key for the account vault makes the new item seal under it (rkz1).
+          await addVault(seeded, { name: "mrev-rkz1-key", plaintext: "key-holder" });
+          await confirm(seeded);
+        },
+        after: [{ procedure: "vault.reveal", input: { name: "mrev-rkz1-new" } }],
+      },
+    ),
 
     // Concurrent identical saves: one row, every call answers, no lost lock or retry loop.
     put(
