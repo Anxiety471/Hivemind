@@ -146,12 +146,13 @@ it.each([
   [["board"], ["board"], true],
   [["retired", "board"], ["board"], true],
   [["code"], ["code"], false],
-  [["retired", "code", "board"], ["board", "code"], true],
+  [["codeFirst"], ["codeFirst"], false],
+  [["retired", "codeFirst", "code", "board"], ["board", "code", "codeFirst"], true],
 ])("reports the account's labs in me (%j)", async (stored, labs, ticketBoardEnabled) => {
   const { client } = meDeps(stored);
   await expect(client.me()).resolves.toMatchObject({
     labs,
-    labsAvailable: ["board", "code"],
+    labsAvailable: ["board", "code", "codeFirst"],
     ticketBoardEnabled,
   });
 });
@@ -160,7 +161,7 @@ it("reports a feature the deployment turns on as on and not switchable", async (
   const { client } = meDeps([], ["board"]);
   await expect(client.me()).resolves.toMatchObject({
     labs: ["board"],
-    labsAvailable: ["code"],
+    labsAvailable: ["code", "codeFirst"],
     ticketBoardEnabled: true,
   });
 });
