@@ -143,6 +143,15 @@ func encodeLogin(value loginValue) (string, error) {
 	var out strings.Builder
 	out.WriteString(`{"fields":[`)
 	for index, entry := range value.Fields {
+		// LoginField's transform: a visible value is trimmed, and one left empty is refused
+		// ("Enter a value"). encodeLoginSecret parses every value through it, an older saved
+		// pair included, so a legacy field is trimmed here too.
+		if !entry.Hidden {
+			entry.Value = validate.JSTrim(entry.Value)
+			if entry.Value == "" {
+				return "", badRequest(loginRefusal)
+			}
+		}
 		if index > 0 {
 			out.WriteByte(',')
 		}
@@ -169,7 +178,8 @@ func encodeLogin(value loginValue) (string, error) {
 
 // decodeLogin is decodeLoginSecret (bot-secrets.ts:402-411) with LoginSecretValue's checks: a
 // legacy username/password pair becomes two fields as stored, anything else must be a current
-// login. The refusal is the login message, or the authenticator one when the key is at fault.
+// login. A refusal names the authenticator key when any otp issue was found (readLoginValue,
+// :807-813), because LoginSecretValue.parse reports the fields' and the key's issues together.
 func decodeLogin(plaintext string) (loginValue, error) {
 	value, err := validate.DecodeAny([]byte(plaintext))
 	if err != nil {
@@ -182,44 +192,50 @@ func decodeLogin(plaintext string) (loginValue, error) {
 	if !ok {
 		return loginValue{}, badRequest(loginRefusal)
 	}
-	rawFields, ok := object.Values["fields"].([]any)
-	if !ok || len(rawFields) < 1 || len(rawFields) > loginFieldLimit {
-		return loginValue{}, badRequest(loginRefusal)
+	fields := loginValue{}
+	fieldIssue := false
+	rawFields, isArray := object.Values["fields"].([]any)
+	if !isArray || len(rawFields) < 1 || len(rawFields) > loginFieldLimit {
+		fieldIssue = true
 	}
-	login := loginValue{Fields: make([]loginField, 0, len(rawFields))}
 	labels := make(map[string]bool, len(rawFields))
-	otpIssue := false
 	for _, raw := range rawFields {
 		entry, isObject := raw.(*validate.Object)
 		if !isObject {
-			return loginValue{}, badRequest(loginRefusal)
+			fieldIssue = true
+			continue
 		}
 		labelText, isLabel := entry.Values["label"].(string)
-		if !isLabel {
-			return loginValue{}, badRequest(loginRefusal)
+		label := ""
+		if isLabel {
+			label = validate.JSTrim(labelText)
 		}
-		label := validate.JSTrim(labelText)
-		if !wtf8.Fits(label, 1, loginLabelMax) {
-			return loginValue{}, badRequest(loginRefusal)
+		if !isLabel || !wtf8.Fits(label, 1, loginLabelMax) {
+			fieldIssue = true
+			continue
 		}
 		key := casesLower(label)
 		if labels[key] {
-			return loginValue{}, badRequest(loginRefusal)
+			fieldIssue = true
+			continue
 		}
 		labels[key] = true
 		valueText, isValue := entry.Values["value"].(string)
 		hidden, isHidden := entry.Values["hidden"].(bool)
 		if !isValue || !isHidden || !wtf8.Fits(valueText, 0, loginValueMax) {
-			return loginValue{}, badRequest(loginRefusal)
+			fieldIssue = true
+			continue
 		}
 		if !hidden {
 			valueText = validate.JSTrim(valueText)
-			if valueText == "" {
-				return loginValue{}, badRequest(loginRefusal)
-			}
 		}
-		login.Fields = append(login.Fields, loginField{Label: label, Value: valueText, Hidden: hidden})
+		if valueText == "" {
+			fieldIssue = true
+			continue
+		}
+		fields.Fields = append(fields.Fields, loginField{Label: label, Value: valueText, Hidden: hidden})
 	}
+	otpIssue := false
 	rawOTP, hasOTP := object.Get("otp")
 	if hasOTP && rawOTP != nil {
 		text, isText := rawOTP.(string)
@@ -232,13 +248,24 @@ func decodeLogin(plaintext string) (loginValue, error) {
 			} else if trimmed != "" && !vaultitems.ValidAuthenticatorKey(trimmed) {
 				otpIssue = true
 			}
-			login.OTP = &trimmed
+			fields.OTP = &trimmed
 		}
 	}
-	if otpIssue {
-		return loginValue{}, badRequest(unreadableKeyError)
+	canonical, err := encodeLogin(fields)
+	if err != nil {
+		return loginValue{}, err
 	}
-	return login, nil
+	if wtf8.Length(canonical) > loginJSONMax {
+		// LoginSecretValue's length refine reports at the root, so it is not an otp issue.
+		fieldIssue = true
+	}
+	switch {
+	case otpIssue:
+		return loginValue{}, badRequest(unreadableKeyError)
+	case fieldIssue:
+		return loginValue{}, badRequest(loginRefusal)
+	}
+	return fields, nil
 }
 
 // legacyLogin is LegacyLoginSecretValue (bot-secrets.ts:392-398): an object with a username

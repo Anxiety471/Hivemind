@@ -211,18 +211,28 @@ func auditRows(
 	if owner != "" && ownItem {
 		personal, _ = ownedOrganizationID(ctx, tx, owner)
 	}
-	var organizations []string
-	if event.OrganizationID != "" {
-		organizations = []string{event.OrganizationID}
-	} else if hasSpace {
+	type landing struct {
+		organization string
+		withheld     bool
+		personal     bool
+	}
+	var landings []landing
+	switch {
+	case event.OrganizationID != "":
+		landings = []landing{{organization: event.OrganizationID}}
+	case hasSpace:
 		// Their own action on an account vault item happened in no space, so it is theirs alone.
-		if personal == "" {
-			organizations = append(organizations, spaceOrg)
+		ownTrail := personal != ""
+		if !ownTrail {
+			landings = append(landings, landing{
+				organization: spaceOrg,
+				withheld:     outsider || ownItem,
+			})
 		}
 		if personal != "" {
-			organizations = append(organizations, personal)
+			landings = append(landings, landing{organization: personal, personal: true})
 		}
-	} else if personID != "" {
+	case personID != "":
 		// A guest's own account events are not the business of the organizations that invited them.
 		rows, err := tx.Query(ctx, `SELECT "organizationId" FROM member
 			WHERE "userId" = $1 AND role <> $2`, personID, guestRole)
@@ -235,7 +245,7 @@ func auditRows(
 			if err := rows.Scan(&organization); err != nil {
 				return nil, err
 			}
-			organizations = append(organizations, organization)
+			landings = append(landings, landing{organization: organization})
 		}
 		if err := rows.Err(); err != nil {
 			return nil, err
@@ -267,22 +277,21 @@ func auditRows(
 		}
 		withheldBody = string(withheld)
 	}
-	shared := owner != "" && len(organizations) > 1
+	shared := owner != "" && len(landings) > 1
 	sharedAt := time.Now().UTC().Truncate(time.Millisecond)
-	out := make([]auditRow, 0, len(organizations))
-	for _, organization := range organizations {
+	out := make([]auditRow, 0, len(landings))
+	for _, place := range landings {
 		// The shared space's name is its organization's; the person's own keeps only its id.
 		rowSpace := space
-		if organization == personal {
+		if place.personal {
 			rowSpace = nil
 		}
-		withheld := organization == spaceOrg && (outsider || (ownItem && hasSpace))
-		if withheld {
-			out = append(out, auditRow{organizationID: organization, spaceName: rowSpace,
+		if place.withheld {
+			out = append(out, auditRow{organizationID: place.organization, spaceName: rowSpace,
 				targetLabel: nil, metadata: withheldBody, createdAt: sharedAt, sharedTime: shared})
 			continue
 		}
-		out = append(out, auditRow{organizationID: organization, spaceName: rowSpace,
+		out = append(out, auditRow{organizationID: place.organization, spaceName: rowSpace,
 			targetLabel: label, metadata: body, createdAt: sharedAt, sharedTime: shared})
 	}
 	return out, nil

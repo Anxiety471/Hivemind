@@ -879,15 +879,7 @@ func uniqueStrings(values []string) []string {
 // newVaultItemName is newVaultItemName (bot-secrets.ts:1407-1434): a free handle for a new
 // item, from its title.
 func (w *writer) newVaultItemName(ctx context.Context, base, kind string) (string, error) {
-	slug := casesLower(norm.NFKD.String(base))
-	slug = nonSlugRun.ReplaceAllString(slug, "-")
-	slug = leadingNonLetter.ReplaceAllString(slug, "")
-	slug = trailingDashes.ReplaceAllString(slug, "")
-	// The slug is [a-z0-9-] only after the replacements, so a byte cut is the JS UTF-16 cut.
-	if len(slug) > 56 {
-		slug = slug[:56]
-	}
-	stem := slug
+	stem := newVaultItemNameSlug(base)
 	if stem == "" {
 		stem = kind
 	}
@@ -929,6 +921,20 @@ func (w *writer) newVaultItemName(ctx context.Context, base, kind string) (strin
 			return candidate, nil
 		}
 	}
+}
+
+// newVaultItemNameSlug is newVaultItemName's slug step (bot-secrets.ts:1409-1421): the title
+// folded to ASCII, lowered, and reduced to [a-z0-9-] between a letter and a letter or digit.
+func newVaultItemNameSlug(base string) string {
+	slug := casesLower(norm.NFKD.String(base))
+	slug = nonSlugRun.ReplaceAllString(slug, "-")
+	slug = leadingNonLetter.ReplaceAllString(slug, "")
+	slug = trailingDashes.ReplaceAllString(slug, "")
+	// The slug is [a-z0-9-] only after the replacements, so a byte cut is the JS UTF-16 cut.
+	if len(slug) > 56 {
+		slug = slug[:56]
+	}
+	return slug
 }
 
 var (

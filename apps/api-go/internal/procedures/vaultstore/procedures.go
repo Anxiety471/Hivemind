@@ -76,11 +76,9 @@ func newWriter(ctx context.Context, database *db.DB, deployment shared.Deploymen
 	if err != nil {
 		return nil, shared.Failure(err)
 	}
-	ring := deployment.Content
-	if ring == nil {
-		return nil, shared.Failure(errors.New("encryption is not configured"))
-	}
-	return &writer{database: database, vault: vault, ring: ring, actor: actor, scope: scope}, nil
+	// A nil ring means this build has no content keys: SealVaultValue then writes the legacy
+	// form, as sealVaultValue does when its deployment has none.
+	return &writer{database: database, vault: vault, ring: deployment.Content, actor: actor, scope: scope}, nil
 }
 
 // requireSpaceOwner is requireSpaceOwner (space-members.ts:104-113).
@@ -699,8 +697,11 @@ func relabel(ctx context.Context, database *db.DB, w *writer, input vaultPutInpu
 			return err
 		}
 		current, err := findRow(ctx, tx, fields, input.destination.Name, false)
-		if err != nil || current == nil {
+		if err != nil {
 			return err
+		}
+		if current == nil {
+			return orpc.NotFound("Credential not found")
 		}
 		stored, ok := authFromJSON(current.auth)
 		if !ok {

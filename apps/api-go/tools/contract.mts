@@ -29,6 +29,7 @@ import { laneJCases, laneJState } from "./contract-lane-j.mts";
 import { laneKCases, laneKState } from "./contract-k-mcp.mts";
 import { laneKReviewCases } from "./contract-k-review.mts";
 import { laneLPushCases, laneLPushState } from "./contract-l-push.mts";
+import { laneMSecretCases, laneMState } from "./contract-m-secrets.mts";
 import { laneLReviewCases } from "./contract-l-review.mts";
 import { membershipCases, membershipReset, membershipState } from "./contract-membership.mts";
 import { modelsCases } from "./contract-models.mts";
@@ -160,6 +161,8 @@ export type Case = {
    * bridge sees it), false when Go must answer it itself. Unset skips the check.
    */
   declines?: boolean;
+  /** Compare the secret-store-change announcements each side published during the call. */
+  secretAnnouncements?: boolean;
   /** Run this many identical calls concurrently; results are compared as a sorted list of status/body. */
   concurrent?: number;
   /** Extra evidence checked immediately after each side's request, before the next seed resets rows. */
@@ -355,6 +358,13 @@ await writeFile(
       "bots.rotateWebhookSecret": { mode: "go" },
       "vault.list": { mode: "go", readOnly: true },
       "botSecrets.list": { mode: "go", readOnly: true },
+      "agentSecrets.put": { mode: "go" },
+      "agentSecrets.remove": { mode: "go" },
+      "botSecrets.put": { mode: "go" },
+      "botSecrets.remove": { mode: "go" },
+      "vault.put": { mode: "go" },
+      "vault.remove": { mode: "go" },
+      "vault.reveal": { mode: "go", readOnly: true },
       "mcp.servers.list": { mode: "go", readOnly: true },
       "models.credentials": { mode: "go", readOnly: true },
       "bots.revealWebhookSecret": { mode: "go", readOnly: true },
@@ -735,6 +745,7 @@ const cases: Case[] = [
   ...threadAdversarialCases(system),
   ...threadMoreCases(system),
   ...laneLPushCases(system),
+  ...laneMSecretCases(system),
   ...laneLReviewCases(system),
 ];
 
@@ -7904,6 +7915,12 @@ const WRITE_PROCEDURES = new Set([
   "boards.get",
   "boards.rename",
   "bots.rotateWebhookSecret",
+  "agentSecrets.put",
+  "agentSecrets.remove",
+  "botSecrets.put",
+  "botSecrets.remove",
+  "vault.put",
+  "vault.remove",
   "pages.remove",
   "pages.setVisibility",
   "notifications.registerPush",
@@ -8050,7 +8067,29 @@ async function observed(
     // A board frame carries the instant it was made; each side takes its own clock.
     .map(normalizeSignal)
     .sort();
-  return { ...result, notifications };
+  return { ...result, notifications, secretStore: secretStoreSignals(realtimeSignals) };
+}
+
+/**
+ * The secret-store-change announcements in a window, as shapes: each side seals its own refs and
+ * carries its own process origin, so the kind and the order are what must match. A lane whose
+ * writes publish them opts in with `secretAnnouncements: true`.
+ */
+function secretStoreSignals(payloads: readonly string[]) {
+  const out: string[] = [];
+  for (const payload of payloads) {
+    try {
+      const signal = JSON.parse(payload) as { topic?: unknown; payload?: unknown };
+      if (signal.topic !== "secret-store-change" || typeof signal.payload !== "string") continue;
+      const event = JSON.parse(signal.payload) as { ref?: unknown };
+      const ref = typeof event.ref === "string" ? event.ref : "";
+      const kind = ref.startsWith("rkz1:") ? "<rkz1>" : ref.startsWith("v2:") ? "<v2>" : "<ref>";
+      out.push(JSON.stringify({ ref: kind }));
+    } catch {
+      // Ignore malformed notifications, as the client does.
+    }
+  }
+  return out.sort();
 }
 
 /** Whether a person is one the case added beside its own (a member seeded for an organization case). */
@@ -8720,6 +8759,7 @@ async function databaseState(seeded: ReturnType<typeof ids>, procedure?: string)
     ...(await laneJState(system, seeded, procedure)),
     ...(await laneKState(system, seeded, procedure)),
     ...(await laneLPushState(system, seeded)),
+    ...(await laneMState(system, seeded)),
     // computer.updates is a read; the API's in-process reconciler can drain the seeded
     // ComputerUpdate rows between the two sides' captures, so those volatile rows are not
     // compared for it (the response body and the other tables still are).
@@ -8867,6 +8907,12 @@ for (const testCase of cases) {
         goResult.notifications,
         tsResult.notifications,
         `${testCase.name}: realtime signals`,
+      );
+    if (testCase.secretAnnouncements)
+      assert.deepEqual(
+        goResult.secretStore,
+        tsResult.secretStore,
+        `${testCase.name}: secret-store announcements`,
       );
     assert.deepEqual(
       goState,
