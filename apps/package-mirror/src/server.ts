@@ -3,9 +3,11 @@ import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import { createServer } from "node:http";
 import path from "node:path";
 import { DiskCache } from "./cache.js";
+import { handleComposer } from "./composer.js";
 import type { MirrorConfig } from "./config.js";
 import { mirrorHostAllowlists } from "./config.js";
 import type { MirrorContext } from "./context.js";
+import { handleCrates } from "./crates.js";
 import { readDocument } from "./documents.js";
 import { BadRequestError, IntegrityError, UpstreamError } from "./errors.js";
 import { handleGo } from "./go.js";
@@ -91,6 +93,10 @@ async function route(context: MirrorContext, rawPath: string): Promise<MirrorRes
   if (rawPath.startsWith("/npm/")) return handleNpm(context, rawPath.slice("/npm/".length));
   if (rawPath.startsWith("/go/")) return handleGo(context, rawPath.slice("/go/".length));
   if (rawPath.startsWith("/pypi/")) return handlePyPi(context, rawPath.slice("/pypi/".length));
+  if (rawPath.startsWith("/crates/"))
+    return handleCrates(context, rawPath.slice("/crates/".length));
+  if (rawPath.startsWith("/composer/"))
+    return handleComposer(context, rawPath.slice("/composer/".length));
   throw new UpstreamError("not found", 404);
 }
 

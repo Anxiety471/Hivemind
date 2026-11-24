@@ -42,13 +42,10 @@ export const COMPUTER_CACHE_ENV = {
   PLAYWRIGHT_BROWSERS_PATH: "/tmp/rakazo-cache/ms-playwright",
   UV_CACHE_DIR: "/tmp/rakazo-cache/uv",
 };
-/**
- * Registry settings that point a computer's package managers at the optional read-only package
- * mirror. Unset leaves every tool on its own default registry, exactly as before.
- */
-export function computerPackageMirrorEnv(mirrorUrl: string | undefined): Record<string, string> {
+/** The validated base of COMPUTER_PACKAGE_MIRROR_URL without a trailing slash, or undefined when unset. */
+export function packageMirrorBase(mirrorUrl: string | undefined): string | undefined {
   const base = mirrorUrl?.trim().replace(/\/+$/, "");
-  if (!base) return {};
+  if (!base) return undefined;
   let parsed: URL;
   try {
     parsed = new URL(base);
@@ -61,6 +58,16 @@ export function computerPackageMirrorEnv(mirrorUrl: string | undefined): Record<
     throw new Error(
       "COMPUTER_PACKAGE_MIRROR_URL must not carry credentials, a query or a fragment",
     );
+  return base;
+}
+
+/**
+ * Registry settings that point a computer's package managers at the optional read-only package
+ * mirror. Unset leaves every tool on its own default registry, exactly as before.
+ */
+export function computerPackageMirrorEnv(mirrorUrl: string | undefined): Record<string, string> {
+  const base = packageMirrorBase(mirrorUrl);
+  if (!base) return {};
   return {
     // npm, pnpm, bun and yarn read the lowercase or uppercase name depending on version.
     npm_config_registry: `${base}/npm/`,

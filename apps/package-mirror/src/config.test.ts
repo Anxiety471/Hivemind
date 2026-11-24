@@ -16,6 +16,9 @@ describe("mirror configuration", () => {
     expect(config.goUpstream).toBe("https://proxy.golang.org");
     expect(config.pypiUpstream).toBe("https://pypi.org");
     expect(config.pypiFilesUpstream).toBe("https://files.pythonhosted.org");
+    expect(config.cratesIndexUpstream).toBe("https://index.crates.io");
+    expect(config.cratesDlUpstream).toBe("https://static.crates.io/crates");
+    expect(config.composerUpstream).toBe("https://repo.packagist.org");
     expect(config.maxBytes).toBe(20 * 1024 ** 3);
     expect(config.port).toBe(8099);
     expect(config.host).toBe("127.0.0.1");
@@ -29,12 +32,18 @@ describe("mirror configuration", () => {
       PACKAGE_MIRROR_PORT: "9000",
       PACKAGE_MIRROR_MAX_GB: "1.5",
       PACKAGE_MIRROR_NPM_UPSTREAM: "http://127.0.0.1:5000",
+      PACKAGE_MIRROR_CRATES_INDEX_UPSTREAM: "http://127.0.0.1:5001",
+      PACKAGE_MIRROR_CRATES_DL_UPSTREAM: "http://127.0.0.1:5002/crates",
+      PACKAGE_MIRROR_COMPOSER_UPSTREAM: "http://127.0.0.1:5003",
     });
     expect(config.dataDir).toBe("/srv/package-mirror");
     expect(config.host).toBe("0.0.0.0");
     expect(config.port).toBe(9000);
     expect(config.maxBytes).toBe(Math.floor(1.5 * 1024 ** 3));
     expect(config.npmUpstream).toBe("http://127.0.0.1:5000");
+    expect(config.cratesIndexUpstream).toBe("http://127.0.0.1:5001");
+    expect(config.cratesDlUpstream).toBe("http://127.0.0.1:5002/crates");
+    expect(config.composerUpstream).toBe("http://127.0.0.1:5003");
   });
 
   it("rejects URLs with credentials, a query or a fragment", () => {

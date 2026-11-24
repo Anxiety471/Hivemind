@@ -18,6 +18,12 @@ export interface MirrorConfig {
   goUpstream: string;
   pypiUpstream: string;
   pypiFilesUpstream: string;
+  /** Cargo sparse index, served at `/crates/index/`. */
+  cratesIndexUpstream: string;
+  /** Crate archives, served at `/crates/dl/<crate>/<version>`. */
+  cratesDlUpstream: string;
+  /** Composer repository metadata, served at `/composer/`. */
+  composerUpstream: string;
 }
 
 /** Packuments and indexes change often; five minutes keeps installs current without hammering upstreams. */
@@ -34,6 +40,10 @@ const NPM_UPSTREAM = "https://registry.npmjs.org";
 const GO_UPSTREAM = "https://proxy.golang.org";
 const PYPI_UPSTREAM = "https://pypi.org";
 const PYPI_FILES_UPSTREAM = "https://files.pythonhosted.org";
+const CRATES_INDEX_UPSTREAM = "https://index.crates.io";
+// The sparse index config's `dl` base: cargo appends `/<crate>/<version>`.
+const CRATES_DL_UPSTREAM = "https://static.crates.io/crates";
+const COMPOSER_UPSTREAM = "https://repo.packagist.org";
 
 export function mirrorConfigFromEnv(env: NodeJS.ProcessEnv = process.env): MirrorConfig {
   const publicUrl = baseUrl(env.PACKAGE_MIRROR_PUBLIC_URL, "PACKAGE_MIRROR_PUBLIC_URL");
@@ -62,6 +72,21 @@ export function mirrorConfigFromEnv(env: NodeJS.ProcessEnv = process.env): Mirro
       "PACKAGE_MIRROR_PYPI_FILES_UPSTREAM",
       PYPI_FILES_UPSTREAM,
     ),
+    cratesIndexUpstream: baseUrl(
+      env.PACKAGE_MIRROR_CRATES_INDEX_UPSTREAM,
+      "PACKAGE_MIRROR_CRATES_INDEX_UPSTREAM",
+      CRATES_INDEX_UPSTREAM,
+    ),
+    cratesDlUpstream: baseUrl(
+      env.PACKAGE_MIRROR_CRATES_DL_UPSTREAM,
+      "PACKAGE_MIRROR_CRATES_DL_UPSTREAM",
+      CRATES_DL_UPSTREAM,
+    ),
+    composerUpstream: baseUrl(
+      env.PACKAGE_MIRROR_COMPOSER_UPSTREAM,
+      "PACKAGE_MIRROR_COMPOSER_UPSTREAM",
+      COMPOSER_UPSTREAM,
+    ),
   };
 }
 
@@ -71,6 +96,9 @@ export function mirrorHostAllowlists(config: MirrorConfig): {
   go: ReadonlySet<string>;
   pypi: ReadonlySet<string>;
   pypiFiles: ReadonlySet<string>;
+  cratesIndex: ReadonlySet<string>;
+  cratesDl: ReadonlySet<string>;
+  composer: ReadonlySet<string>;
 } {
   return {
     npm: new Set([new URL(config.npmUpstream).host]),
@@ -78,6 +106,9 @@ export function mirrorHostAllowlists(config: MirrorConfig): {
     go: new Set([new URL(config.goUpstream).host, "storage.googleapis.com"]),
     pypi: new Set([new URL(config.pypiUpstream).host]),
     pypiFiles: new Set([new URL(config.pypiFilesUpstream).host]),
+    cratesIndex: new Set([new URL(config.cratesIndexUpstream).host]),
+    cratesDl: new Set([new URL(config.cratesDlUpstream).host]),
+    composer: new Set([new URL(config.composerUpstream).host]),
   };
 }
 

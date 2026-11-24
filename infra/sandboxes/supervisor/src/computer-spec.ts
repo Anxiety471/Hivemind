@@ -9,6 +9,7 @@ import {
 import type Docker from "dockerode";
 import type { ComputerLocale } from "./computer-locale.js";
 import { computerLocaleEnv } from "./computer-locale.js";
+import { COMPOSER_MIRROR_HOME, PACKAGE_MIRROR_MARKER_ENV } from "./package-mirror-config.js";
 
 /**
  * The computer image. RAKAZO_COMPUTER_IMAGE_TAG is appended the way Compose does, so a
@@ -293,6 +294,20 @@ export function computerBrowserProxyPacMatches(
   desired?: string,
 ): boolean {
   const prefix = `${BROWSER_PROXY_PAC_ENV}=`;
+  const have = (env ?? []).filter((entry) => entry.startsWith(prefix));
+  if (desired === undefined) return have.length === 0;
+  return have.length === 1 && have[0] === `${prefix}${desired}`;
+}
+
+/**
+ * Whether a computer was built for the configured package mirror (none configured: none set).
+ * Its Cargo and Composer config files are written at creation, so a change replaces it.
+ */
+export function computerPackageMirrorMatches(
+  env: string[] | null | undefined,
+  desired?: string,
+): boolean {
+  const prefix = `${PACKAGE_MIRROR_MARKER_ENV}=`;
   const have = (env ?? []).filter((entry) => entry.startsWith(prefix));
   if (desired === undefined) return have.length === 0;
   return have.length === 1 && have[0] === `${prefix}${desired}`;
@@ -667,6 +682,8 @@ export interface ComputerCreateInput {
   computeGpus?: number;
   /** PAC URL for the bot browser (see resolveComputerBrowserProxyPacUrl). */
   browserProxyPacUrl?: string;
+  /** Base URL of the optional read-only package mirror (see packageMirrorBase). */
+  packageMirrorUrl?: string;
   locale?: ComputerLocale;
 }
 
@@ -701,6 +718,12 @@ export function containerCreateOptions(input: ComputerCreateInput) {
       ...(input.controlToken ? [`RAKAZO_COMPUTER_CONTROL_TOKEN=${input.controlToken}`] : []),
       ...computerLocaleEnv(input.locale),
       ...(input.browserProxyPacUrl ? [`${BROWSER_PROXY_PAC_ENV}=${input.browserProxyPacUrl}`] : []),
+      ...(input.packageMirrorUrl
+        ? [
+            `${PACKAGE_MIRROR_MARKER_ENV}=${input.packageMirrorUrl}`,
+            `COMPOSER_HOME=${COMPOSER_MIRROR_HOME}`,
+          ]
+        : []),
     ],
     Labels: {
       "rakazo.managed": "true",

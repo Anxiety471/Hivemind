@@ -87,6 +87,9 @@ export async function startMirror(
     goUpstream: upstreamUrl,
     pypiUpstream: upstreamUrl,
     pypiFilesUpstream: upstreamUrl,
+    cratesIndexUpstream: upstreamUrl,
+    cratesDlUpstream: upstreamUrl,
+    composerUpstream: upstreamUrl,
     ...overrides,
   };
   const server = await createMirrorServer(config);

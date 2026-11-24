@@ -177,28 +177,39 @@ once that network is gone — for example after `docker network rm` of the compu
 ## Package mirror
 
 `apps/package-mirror` is an optional, read-only pull-through cache for the package registries
-bots install from: the npm registry, the Go module proxy and the PyPI simple index. One
-download serves every computer, so repeated installs do not hit the public registries or
-spend each computer's bandwidth and disk. It is a separate small Node process with its own
-data directory and no database, and it is off until an operator runs it and points computers
-at it.
+bots install from: the npm registry, the Go module proxy, the PyPI simple index, the Cargo
+sparse index and crates, and Composer 2 package metadata. One download serves every computer,
+so repeated installs do not hit the public registries or spend each computer's bandwidth and
+disk. It is a separate small Node process with its own data directory and no database, and it
+is off until an operator runs it and points computers at it.
 
 It listens on `PACKAGE_MIRROR_PORT` (`8099`) and `PACKAGE_MIRROR_HOST` (`127.0.0.1`), and
 serves only `GET` and `HEAD` plus `/health`. Paths are:
 
-| Path                          | Ecosystem                                                          |
-| ----------------------------- | ------------------------------------------------------------------ |
-| `/npm/<package>`              | npm packument, with `dist.tarball` rewritten to this mirror        |
-| `/npm/<package>/-/<file>.tgz` | npm tarball, verified against the packument's integrity or shasum  |
-| `/go/<module>/@v/...`         | Go module proxy (`list`, `.info`, `.mod`, `.zip`, `@latest`)       |
-| `/pypi/simple/<project>/`     | PyPI simple index (PEP 691 JSON or HTML), with file URLs rewritten |
-| `/pypi/files/<sha256>/<name>` | PyPI file, verified against the published sha256                   |
+| Path                               | Ecosystem                                                          |
+| ---------------------------------- | ------------------------------------------------------------------ |
+| `/npm/<package>`                   | npm packument, with `dist.tarball` rewritten to this mirror        |
+| `/npm/<package>/-/<file>.tgz`      | npm tarball, verified against the packument's integrity or shasum  |
+| `/go/<module>/@v/...`              | Go module proxy (`list`, `.info`, `.mod`, `.zip`, `@latest`)       |
+| `/pypi/simple/<project>/`          | PyPI simple index (PEP 691 JSON or HTML), with file URLs rewritten |
+| `/pypi/files/<sha256>/<name>`      | PyPI file, verified against the published sha256                   |
+| `/crates/index/config.json`        | Cargo sparse index config, with `dl` rewritten to this mirror      |
+| `/crates/index/<path>`             | Cargo sparse index entry (newline-delimited JSON), served verbatim |
+| `/crates/dl/<crate>/<version>`     | Crate archive, verified against the `cksum` in that crate's index  |
+| `/composer/packages.json`          | Composer 2 repository root, with `metadata-url` rewritten          |
+| `/composer/p2/<vendor>/<pkg>.json` | Composer 2 package metadata (`~dev.json` too), dist URLs untouched |
 
-Packuments and indexes are cached for five minutes and served stale when the upstream fails;
-artifacts are cached by content. Each ecosystem has its own allowlist: npm reaches only
-`registry.npmjs.org`; Go reaches `proxy.golang.org` and `storage.googleapis.com` (its zip
-download redirects); PyPI reaches `pypi.org` for indexes and `files.pythonhosted.org` for
-files. It forwards no client headers and sends no credentials, and it refuses a redirect to
+Packuments, indexes and Composer metadata are cached for five minutes and served stale when
+the upstream fails; artifacts are cached by content. Each ecosystem has its own allowlist: npm
+reaches only `registry.npmjs.org`; Go reaches `proxy.golang.org` and `storage.googleapis.com`
+(its zip download redirects); PyPI reaches `pypi.org` for indexes and
+`files.pythonhosted.org` for files; Cargo reaches `index.crates.io` for the sparse index and
+`static.crates.io` for crates; Composer reaches only `repo.packagist.org`. The Cargo index
+entries are cached byte-for-byte, so their published `cksum` lines (and therefore
+`Cargo.lock`) are unchanged; Composer metadata is cached without rewriting `dist.url`, so
+`composer.lock` keeps the upstream archive URL. Composer then downloads those archives
+directly from the host named in `dist.url` (GitHub, codeload, and so on), not through the
+mirror. It forwards no client headers and sends no credentials, and it refuses a redirect to
 any other host. Cached bytes live under `PACKAGE_MIRROR_DATA_DIR`
 (default `./data/package-mirror`), capped by `PACKAGE_MIRROR_MAX_GB` (default `20`) with
 least-recently-used eviction. An artifact larger than the whole cache is refused rather than
@@ -216,7 +227,8 @@ node apps/package-mirror/dist/index.js
 ```
 
 `PACKAGE_MIRROR_PUBLIC_URL` is required: it is the URL computers use, and it is what rewritten
-tarball and file links point at, so it must be reachable from inside every computer. A systemd
+tarball, file and crate download links point at, so it must be reachable from inside every
+computer. A systemd
 unit keeps it running:
 
 ```ini
@@ -236,9 +248,13 @@ Restart=always
 WantedBy=multi-user.target
 ```
 
-`PACKAGE_MIRROR_NPM_UPSTREAM`, `PACKAGE_MIRROR_GO_UPSTREAM`, `PACKAGE_MIRROR_PYPI_UPSTREAM` and
-`PACKAGE_MIRROR_PYPI_FILES_UPSTREAM` replace an upstream with a private registry or a local
-test server. They are operator settings only; a request can never choose an upstream.
+`PACKAGE_MIRROR_NPM_UPSTREAM`, `PACKAGE_MIRROR_GO_UPSTREAM`, `PACKAGE_MIRROR_PYPI_UPSTREAM`,
+`PACKAGE_MIRROR_PYPI_FILES_UPSTREAM`, `PACKAGE_MIRROR_CRATES_INDEX_UPSTREAM`,
+`PACKAGE_MIRROR_CRATES_DL_UPSTREAM` and `PACKAGE_MIRROR_COMPOSER_UPSTREAM` replace an upstream
+with a private registry or a local test server. `PACKAGE_MIRROR_CRATES_DL_UPSTREAM` is the
+upstream download base; the mirror appends `/<crate>/<crate>-<version>.crate`, so its default is
+`https://static.crates.io/crates`. They are operator settings only; a request can never choose
+an upstream.
 
 ### Pointing computers at the mirror
 
@@ -252,6 +268,39 @@ they run in a computer then receives:
 A command's own environment wins over these. Docker computers get them per command rather than at
 creation, so enabling, changing or removing the mirror takes effect at once and replaces no
 computer; other providers set them when they create a machine.
+
+Cargo and Composer cannot be pointed at a mirror by an environment variable, so these two are
+configured by the supervisor instead: set the same `COMPUTER_PACKAGE_MIRROR_URL` on the
+supervisor and it writes the two files below into each computer's own filesystem (outside the
+saved home) when it creates the computer, and sets `COMPOSER_HOME` to their directory. A
+computer built for a different mirror URL, or none, is replaced the next time it is provisioned,
+so enabling this replaces running computers. Because `COMPOSER_HOME` moves, a global Composer
+config or `auth.json` a bot keeps in its own home is not read. Cargo reads
+`/.cargo/config.toml`, found from any working directory:
+
+```toml
+[source.crates-io]
+replace-with = "rakazo-mirror"
+
+[source.rakazo-mirror]
+registry = "sparse+<url>/crates/index/"
+```
+
+The sparse registry URL must keep its trailing slash; Cargo then fetches `config.json` and
+index entries from `/crates/index/`. `replace-with` is transparent: `Cargo.lock` keeps the
+published package names, versions and checksums. Composer reads `$COMPOSER_HOME/config.json`:
+
+```json
+{
+  "repositories": [{ "packagist.org": false }, { "type": "composer", "url": "<url>/composer" }],
+  "config": { "secure-http": false }
+}
+```
+
+`secure-http: false` is only needed when the mirror itself is served over plain HTTP; drop it
+for an HTTPS mirror. Disabling `packagist.org` prevents Composer from falling back to the
+public repository for metadata, while the dist archives still come from the `dist.url` in the
+mirrored metadata, so committed `composer.lock` files do not contain the mirror URL.
 
 The rebuildable cache paths (`XDG_CACHE_HOME`, `npm_config_cache`, `PIP_CACHE_DIR`, the
 Playwright and uv caches) are unchanged. Leave `COMPUTER_PACKAGE_MIRROR_URL` unset and every

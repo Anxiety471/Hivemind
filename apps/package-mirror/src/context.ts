@@ -13,6 +13,9 @@ export interface MirrorContext {
     go: ReadonlySet<string>;
     pypi: ReadonlySet<string>;
     pypiFiles: ReadonlySet<string>;
+    cratesIndex: ReadonlySet<string>;
+    cratesDl: ReadonlySet<string>;
+    composer: ReadonlySet<string>;
   };
   cache: DiskCache;
   fetcher: UpstreamFetcher;
