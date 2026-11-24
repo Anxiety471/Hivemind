@@ -329,7 +329,7 @@ func setupLocal(buildIDFile string, wantsVault bool, logger *slog.Logger) (*loca
 			DeploymentModelConfigured:             deployment.DefaultModelConfigured,
 			DeploymentModelHostCredentials:        deployment.DeploymentModelHostCredentials,
 			DeploymentModelHostCredentialsUnknown: deployment.DeploymentModelHostCredentialsUnknown,
-			DeploymentLabs:                        deploymentLabs(deployment.BoardLab),
+			DeploymentLabs:                        deploymentLabs(deployment.BoardLab, deployment.CodeModeLab, deployment.CodeFirstLab),
 			NavLinks:                              navLinks(deployment.MeEnv.NavLinks),
 			NavLinksUnknown:                       deployment.MeEnv.NavLinksUnknown,
 			DriveURL:                              deployment.MeEnv.DriveURL,
@@ -435,12 +435,19 @@ func deploymentModel(provider, model string, configured bool) *shared.ModelSelec
 }
 
 // deploymentLabs is deploymentLabsFromEnv: LAB_FEATURES this deployment turns on for every
-// account. Only "board" exists (packages/contracts/src/labs.ts:4).
-func deploymentLabs(board bool) []string {
+// account, in the order of packages/contracts/src/labs.ts.
+func deploymentLabs(board, code, codeFirst bool) []string {
+	labs := []string{}
 	if board {
-		return []string{"board"}
+		labs = append(labs, "board")
 	}
-	return []string{}
+	if code {
+		labs = append(labs, "code")
+	}
+	if codeFirst {
+		labs = append(labs, "codeFirst")
+	}
+	return labs
 }
 
 // navLinks converts the parsed RAKAZO_NAV_LINKS to the wire shape `me` returns.
