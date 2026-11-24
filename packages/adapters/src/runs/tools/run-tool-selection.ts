@@ -22,6 +22,9 @@ import { SKILL_TOOL_NAMES } from "../../tools/skill-tools.js";
 import { USER_COMPUTER_SCREEN_TOOLS } from "./run-tools-user-computer.js";
 
 export const READ_ONLY_AGENT_TOOLS = new Set([
+  // The script itself changes nothing, and it must run again each time it is called: every call
+  // it makes is gated and recorded on its own, so a stored result would only be stale.
+  CODE_MODE,
   "computer_observe",
   "list_files",
   "list_fleet",

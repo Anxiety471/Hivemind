@@ -13,7 +13,7 @@ export function codeModeToolDefinition(index: string): ConnectorTool {
   return {
     name: CODE_MODE,
     description: [
-      `Run one TypeScript snippet that calls several tools and prints only what you need. Top-level await is available. \`console.log\` is the only output; print text or JSON. The snippet has no fetch, require, import, files or network — only the API below. Tools marked (writes) change data and are approved exactly like a direct call. A call that asks the person stops the script, and it runs again from the top once they answer, so write it to be safe to run twice. A script may make at most ${CODE_MODE_MAX_WRITES} writes.`,
+      `Run one TypeScript snippet that calls several tools and prints only what you need. Top-level await is available. \`console.log\` is the only output; print text or JSON. The snippet has no fetch, require, import, files or network — only the API below. Tools marked (writes) change data and are approved exactly like a direct call. A call that asks the person stops the script. Once they approve, run that approved call directly, then finish the remaining steps yourself or with a new script for only those steps: running the whole script again would ask for the same write again. A script may make at most ${CODE_MODE_MAX_WRITES} writes.`,
       index,
     ]
       .filter(Boolean)
