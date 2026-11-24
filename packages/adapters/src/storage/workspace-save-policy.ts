@@ -9,6 +9,12 @@ const GIB = 1024 ** 3;
 /** Saved homes are read back within `DEFAULT_HOME_ARCHIVE_LIMITS`, so a save cannot exceed it. */
 const MAX_SAVE_GIB = 100;
 
+/**
+ * The largest single file a save keeps; bigger ones are left out and logged. Large media and
+ * exports belong in Space Drive, which the run instructions tell bots.
+ */
+export const MAX_SAVED_FILE_BYTES = 100 * 1024 ** 2;
+
 /** The default most one save copies; a larger home keeps running unsaved. */
 export const WORKSPACE_SAVE_LIMITS: WorkspaceExportLimits = {
   maxBytes: 5 * GIB,
@@ -87,11 +93,18 @@ const alternatives = (names: readonly string[]) =>
 const exclusions = [
   {
     pattern:
-      "(.*/)?(\\.cache|\\.npm|\\.pnpm-store|node_modules|\\.venv|__pycache__|\\.next|\\.turbo|\\.yarn/cache)",
+      "(.*/)?(\\.cache|\\.npm|\\.pnpm-store|node_modules|\\.venv|__pycache__|\\.next|\\.turbo|\\.nuxt|\\.svelte-kit|\\.parcel-cache|\\.pytest_cache|\\.mypy_cache|\\.ruff_cache|\\.tox|\\.yarn/cache)",
     kind: "directory",
   },
-  // pnpm's default content-addressed store; a bot's installs fill it with gigabytes it downloads again.
-  { pattern: "\\.local/share/pnpm/store", kind: "directory" },
+  // Installed toolchains and the package stores they fill: each is downloaded or installed again
+  // from its own source, so a save of them only costs gigabytes. Folders under .local/opt are
+  // installed software; scripts kept loose in .local/opt stay. Generic `dist` and `build`
+  // folders are not listed, since they are as often a bot's own work.
+  {
+    pattern:
+      "(\\.local/share/(pnpm/store|uv)|\\.local/opt/[^/]+|\\.bun/install|\\.rustup|\\.cargo/(registry|git)|\\.nvm|\\.pyenv|\\.sdkman|\\.gradle|\\.m2/repository|go/pkg)",
+    kind: "directory",
+  },
   { pattern: "(.*/)?([^/]*\\.log|core|core\\.[0-9]+)", kind: "file" },
   { pattern: `\\.browser-profiles/(.*/)?(${alternatives(browserDirectories)})`, kind: "any" },
   { pattern: `\\.browser-profiles/(.*/)?(${alternatives(browserFiles)})`, kind: "entry" },

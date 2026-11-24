@@ -4,10 +4,12 @@ import { lstat, mkdir, open, readdir, realpath } from "node:fs/promises";
 import path from "node:path";
 import type { WorkspaceExportLimits } from "@rakazo/adapter-kit";
 import { WorkspaceTooLargeError } from "@rakazo/adapter-kit";
+import { getLogger } from "@rakazo/logging";
 import { fileHandlePath } from "./file-handle-path.js";
 import { isContained } from "./home.js";
 import {
   isTaggedCacheDirectory,
+  MAX_SAVED_FILE_BYTES,
   shouldSkipPortableWorkspaceFile,
   WORKSPACE_SAVE_LIMITS,
 } from "./workspace-save-policy.js";
@@ -40,6 +42,8 @@ export interface HomeArchiveLimits {
   maxBytes: number;
   /** Files and directories in one home. */
   maxEntries: number;
+  /** The largest file a save keeps; larger ones are left out. Unset keeps every file. */
+  maxFileBytes?: number;
 }
 
 /** Read bounds retain compatibility with homes saved before the save limit was lowered. */
@@ -65,7 +69,7 @@ export async function assertHomeFits(
   saveLimits: WorkspaceExportLimits = WORKSPACE_SAVE_LIMITS,
 ): Promise<void> {
   const resolvedRoot = await realpath(root);
-  const counts = { bytes: 0, entries: 0, files: 0 };
+  const counts = { bytes: 0, entries: 0, files: 0, oversized: 0 };
   const measured = packDirectory(
     resolvedRoot,
     resolvedRoot,
@@ -83,6 +87,7 @@ function saveBounds(limits: HomeArchiveLimits, saveLimits: WorkspaceExportLimits
   return {
     maxBytes: Math.min(limits.maxBytes, saveLimits.maxBytes),
     maxEntries: limits.maxEntries,
+    maxFileBytes: saveLimits.maxFileBytes ?? MAX_SAVED_FILE_BYTES,
   };
 }
 
@@ -99,7 +104,7 @@ export async function* packHome(
 ): AsyncGenerator<Buffer> {
   limits = saveBounds(limits, saveLimits);
   const resolvedRoot = await realpath(root);
-  const counts = { bytes: 0, entries: 0, files: 0 };
+  const counts = { bytes: 0, entries: 0, files: 0, oversized: 0 };
   async function* entries() {
     yield MAGIC;
     yield* packDirectory(
@@ -112,6 +117,11 @@ export async function* packHome(
       saveLimits.maxFiles,
       false,
     );
+    if (counts.oversized)
+      getLogger().warn("home.save_skipped_large_files", {
+        files: counts.oversized,
+        max_file_bytes: limits.maxFileBytes,
+      });
     yield Buffer.from([END]);
   }
   // Entry headers are tiny; batching keeps a home of many small files to few, large writes.
@@ -134,7 +144,7 @@ async function* packDirectory(
   directory: string,
   prefix: string,
   visited: Set<string>,
-  counts: { bytes: number; entries: number; files: number },
+  counts: { bytes: number; entries: number; files: number; oversized: number },
   limits: HomeArchiveLimits,
   maxFiles: number,
   measureOnly: boolean,
@@ -162,6 +172,10 @@ async function* packDirectory(
         measureOnly,
       );
     } else if (info.isFile()) {
+      if (limits.maxFileBytes !== undefined && info.size > limits.maxFileBytes) {
+        counts.oversized += 1;
+        continue;
+      }
       if (++counts.files > maxFiles) throw new WorkspaceTooLargeError("files");
       if (measureOnly) {
         countEntry(counts, info.size, limits);

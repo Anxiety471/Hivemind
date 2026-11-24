@@ -37,6 +37,25 @@ describe("home save exclusions", () => {
     expect(shouldSkipPortableWorkspaceFile("project/.local/share/pnpm/store", true)).toBe(false);
   });
 
+  it("leaves out installed toolchains and package stores but keeps loose scripts", () => {
+    for (const dir of [
+      ".local/opt/libreoffice25.2",
+      ".local/share/uv",
+      ".bun/install",
+      ".cargo/registry",
+      ".rustup",
+      "go/pkg",
+    ]) {
+      expect(shouldSkipPortableWorkspaceFile(dir, true)).toBe(true);
+      expect(shouldSkipPortableWorkspaceFile(`${dir}/inner/file`)).toBe(true);
+    }
+    expect(shouldSkipPortableWorkspaceFile(".local/opt/backup.py")).toBe(false);
+    expect(shouldSkipPortableWorkspaceFile(".local/opt", true)).toBe(false);
+    expect(shouldSkipPortableWorkspaceFile(".bun/bin/bun")).toBe(false);
+    expect(shouldSkipPortableWorkspaceFile("project/go/pkg", true)).toBe(false);
+    expect(shouldSkipPortableWorkspaceFile("project/dist/app.js")).toBe(false);
+  });
+
   it.each(["core", "core.123", "debug.log", "nested/output.log"])(
     "excludes %s only as a regular file",
     (name) => {

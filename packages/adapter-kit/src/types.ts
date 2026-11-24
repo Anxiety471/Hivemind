@@ -110,6 +110,8 @@ export interface StreamedPortableFile {
 export interface WorkspaceExportLimits {
   maxBytes: number;
   maxFiles: number;
+  /** The largest single file a save keeps; larger ones are left out. Defaults to 100 MiB. */
+  maxFileBytes?: number;
 }
 
 export interface ComputerRef {
