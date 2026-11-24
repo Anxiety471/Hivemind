@@ -9,6 +9,7 @@ package runs
 import (
 	"context"
 	"encoding/json"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 	"math"
 	"strconv"
 	"strings"
@@ -72,7 +73,7 @@ func (m AgentMessage) MarshalJSON() ([]byte, error) {
 	if m.Kind == "unknown" {
 		return []byte(`{"kind":"unknown"}`), nil
 	}
-	return json.Marshal(struct {
+	return wtf8.Marshal(struct {
 		FromBotName string `json:"fromBotName"`
 		Kind        string `json:"kind"`
 		Text        string `json:"text"`

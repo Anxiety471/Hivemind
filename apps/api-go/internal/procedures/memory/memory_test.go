@@ -108,6 +108,12 @@ func TestWrittenIsTheStoredPlaintext(t *testing.T) {
 	if got := written(encrypting, "rkz1:k1:AAAA"); got != "rkz1:k1:AAAA" {
 		t.Errorf("encrypting write that looks like ciphertext = %q", got)
 	}
+	// Node's UTF-8 encoder writes U+FFFD for an unpaired surrogate, and the store returns
+	// the row it wrote, so the response carries the replacement, not WTF-8.
+	lone := string([]byte{0xed, 0xa0, 0x80})
+	if got := written(encrypting, "a"+lone+"b"); got != "a\uFFFDb" {
+		t.Errorf("encrypted write surrogate = %q", got)
+	}
 	// A plaintext write is sanitized afterwards, and ciphertext-looking text stays reachable.
 	ring := &contentcrypto.KeyRing{EncryptWrites: false}
 	if got := written(ring, "a\x00b"); got != "a\uFFFDb" {
@@ -118,5 +124,8 @@ func TestWrittenIsTheStoredPlaintext(t *testing.T) {
 	}
 	if got := written(ring, "rkz1:"); got != "rkz1:" {
 		t.Errorf("rkz1: without a key id must stay as is, got %q", got)
+	}
+	if got := written(ring, "a"+lone+"b"); got != "a\uFFFDb" {
+		t.Errorf("plaintext write surrogate = %q", got)
 	}
 }

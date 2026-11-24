@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 )
 
 // Error is an ORPCError: the web client switches on Code and Status.
@@ -49,13 +51,11 @@ func Internal() *Error {
 // Marshal writes JSON exactly like JSON.stringify: no HTML escaping and no
 // trailing newline.
 func Marshal(value any) ([]byte, error) {
-	var buffer bytes.Buffer
-	encoder := json.NewEncoder(&buffer)
-	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(value); err != nil {
+	body, err := wtf8.Marshal(value)
+	if err != nil {
 		return nil, err
 	}
-	return unescapeLineSeparators(bytes.TrimSuffix(buffer.Bytes(), []byte("\n"))), nil
+	return unescapeLineSeparators(body), nil
 }
 
 // unescapeLineSeparators undoes Go's escaping of U+2028 and U+2029, which
@@ -179,7 +179,7 @@ func (i Input) DecodeInto(target any) *Error {
 	if !i.HasInput() {
 		return BadRequest("Input validation failed: missing input")
 	}
-	if err := json.Unmarshal(i.Raw, target); err != nil {
+	if err := wtf8.Unmarshal(i.Raw, target); err != nil {
 		return BadRequest("Input validation failed: " + strings.SplitN(err.Error(), "\n", 2)[0])
 	}
 	return nil

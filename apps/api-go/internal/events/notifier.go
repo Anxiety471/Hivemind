@@ -61,6 +61,7 @@ func (p *PGPublisher) PublishThread(ctx context.Context, threadID string, cursor
 	if len(envelope) > MaxNotifyBytes {
 		return errors.New("Realtime signal exceeds the PostgreSQL NOTIFY payload limit")
 	}
+	// writeaudit:dynamic notification only; arguments are the channel and payload
 	_, err = p.Pool.Exec(ctx, "SELECT pg_notify($1, $2)", RealtimeChannel, string(envelope))
 	return err
 }

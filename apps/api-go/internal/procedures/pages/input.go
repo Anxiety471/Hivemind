@@ -8,9 +8,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 )
 
 const (
@@ -61,7 +61,7 @@ func parseList(input orpc.Input) (ListInput, *orpc.Error) {
 			continue
 		}
 		text, found := stringValue(raw, field, 1, 0)
-		if found == nil && utf8.RuneCountInString(text) < 1 {
+		if found == nil && !wtf8.ZodMinPass(text, 1) {
 			found = []map[string]any{tooSmallString(field, 1)}
 		}
 		if found != nil {
@@ -76,7 +76,7 @@ func parseList(input orpc.Input) (ListInput, *orpc.Error) {
 	}
 	if raw, ok := values["cursor"]; ok {
 		text, found := stringValue(raw, "cursor", 0, cursorMaxLength)
-		if found == nil && utf8.RuneCountInString(text) > cursorMaxLength {
+		if found == nil && !wtf8.ZodMaxPass(text, cursorMaxLength) {
 			found = []map[string]any{tooBigString("cursor", cursorMaxLength)}
 		}
 		if found != nil {
@@ -98,11 +98,10 @@ func parseList(input orpc.Input) (ListInput, *orpc.Error) {
 		text, found := stringValue(raw, "query", 1, queryMaxLength)
 		if found == nil {
 			text = jsTrim(text)
-			count := utf8.RuneCountInString(text)
 			// min and max both run on the trimmed text; at most one can fail.
-			if count < 1 {
+			if !wtf8.ZodMinPass(text, 1) {
 				found = []map[string]any{tooSmallString("query", 1)}
-			} else if count > queryMaxLength {
+			} else if !wtf8.ZodMaxPass(text, queryMaxLength) {
 				found = []map[string]any{tooBigString("query", queryMaxLength)}
 			}
 		}
@@ -304,6 +303,11 @@ func numberIssues(field string, raw any) (int, []map[string]any) {
 // keys first, ascending; then insertion order, last duplicate winning). values
 // is nil when the document is not an object.
 func decodeObject(raw []byte) (keys []string, values map[string]any, err error) {
+	if wtf8.NeedsTransform(raw) {
+		if transformed, transformErr := wtf8.Transform(raw); transformErr == nil {
+			raw = transformed
+		}
+	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
 	first, err := dec.Token()
@@ -320,11 +324,12 @@ func decodeObject(raw []byte) (keys []string, values map[string]any, err error) 
 		if err != nil {
 			return nil, nil, err
 		}
-		key := keyToken.(string)
+		key := wtf8.RestoreString(keyToken.(string))
 		var value any
 		if err := dec.Decode(&value); err != nil {
 			return nil, nil, err
 		}
+		value = wtf8.RestoreValue(value)
 		if _, seen := values[key]; !seen {
 			order = append(order, key)
 		}

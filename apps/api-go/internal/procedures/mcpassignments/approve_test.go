@@ -94,14 +94,31 @@ func TestAssignmentDTOEmptyAllowedTools(t *testing.T) {
 }
 
 // TestAssignmentDTOOutputInvalid is the router's output parse: a tool name the schema refuses
-// (1 to 200 characters) fails the whole call instead of being written to the wire.
+// (1 to 200 characters) or an empty id fails the whole call. collect records the break and
+// ValidateAssignments reports it, so the caller can commit first and answer 500 afterwards.
 func TestAssignmentDTOOutputInvalid(t *testing.T) {
 	at := time.Date(2026, 11, 23, 0, 0, 0, 0, time.UTC)
 	for _, tools := range []string{`[""]`, `["` + strings.Repeat("x", 201) + `"]`} {
-		_, err := collect(&fakeRows{rows: [][]any{{"a1", "b1", "s1", true, []byte(tools), at, at}}})
-		failure, ok := err.(*orpc.Error)
-		if !ok || failure.Code != "INTERNAL_SERVER_ERROR" || failure.Message != "Output validation failed" {
-			t.Errorf("allowedTools %s = %v, want the output-validation failure", tools, err)
+		found, err := collect(&fakeRows{rows: [][]any{{"a1", "b1", "s1", true, []byte(tools), at, at}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		failure := ValidateAssignments(found)
+		if failure == nil || failure.Code != "INTERNAL_SERVER_ERROR" || failure.Message != "Output validation failed" {
+			t.Errorf("allowedTools %s = %v, want the output-validation failure", tools, failure)
+		}
+	}
+	for _, row := range [][]any{
+		{"", "b1", "s1", true, []byte(`[]`), at, at},
+		{"a1", "", "s1", true, []byte(`[]`), at, at},
+		{"a1", "b1", "", true, []byte(`[]`), at, at},
+	} {
+		found, err := collect(&fakeRows{rows: [][]any{row}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if failure := ValidateAssignments(found); failure == nil || failure.Message != "Output validation failed" {
+			t.Errorf("row %v = %v, want the output-validation failure", row, failure)
 		}
 	}
 }
@@ -252,7 +269,7 @@ func TestRepaintKeepsTheRowsOwnList(t *testing.T) {
 	other := map[string]any{"kind": "mcp_approval", "serverId": "s2", "status": "pending"}
 	text := map[string]any{"kind": "text", "text": "before"}
 	raw := []any{"not-a-block", text, other, pending, dismissed}
-	stored, shown, changed, ok := messageblocks.Rewrite(raw, repaint("s1", selectableFor(true)))
+	stored, shown, changed, ok := messageblocks.Rewrite(raw, repaint("s1", connectedCard, selectableFor(true)))
 	if !ok || !changed {
 		t.Fatalf("rewrite = ok %v changed %v, want a change", ok, changed)
 	}
@@ -272,15 +289,15 @@ func TestRepaintKeepsTheRowsOwnList(t *testing.T) {
 		t.Errorf("stored card was mutated: %v", pending)
 	}
 	// The settings approval repaints a dismissed card too.
-	_, settings, changed, ok := messageblocks.Rewrite(raw, repaint("s1", selectableFor(false)))
+	_, settings, changed, ok := messageblocks.Rewrite(raw, repaint("s1", connectedCard, selectableFor(false)))
 	if !ok || !changed || settings[3]["status"] != "connected" {
 		t.Errorf("settings rewrite = ok %v changed %v shown %v", ok, changed, settings)
 	}
 	connected := []any{map[string]any{"kind": "mcp_approval", "serverId": "s1", "status": "connected"}}
-	if _, _, changed, ok := messageblocks.Rewrite(connected, repaint("s1", selectableFor(true))); !ok || changed {
+	if _, _, changed, ok := messageblocks.Rewrite(connected, repaint("s1", connectedCard, selectableFor(true))); !ok || changed {
 		t.Errorf("a connected card changed = %v (ok %v), want no change", changed, ok)
 	}
-	if _, _, _, ok := messageblocks.Rewrite("not-a-list", repaint("s1", selectableFor(true))); ok {
+	if _, _, _, ok := messageblocks.Rewrite("not-a-list", repaint("s1", connectedCard, selectableFor(true))); ok {
 		t.Error("a row whose blocks are not a list must not be written")
 	}
 }

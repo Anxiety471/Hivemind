@@ -76,9 +76,9 @@
               {
                 "code": "unrecognized_keys",
                 "keys": [
-                  "bad�"
+                  "bad\ud800"
                 ],
-                "message": "Unrecognized key: \"bad�\"",
+                "message": "Unrecognized key: \"bad\ud800\"",
                 "path": []
               }
             ]
@@ -88,9 +88,8 @@
           "status": 400
         }
       },
-      "equal": false,
-      "excluded": true,
-      "reason": "unrecognized key contains an unpaired surrogate; Go decoded it to U+FFFD"
+      "equal": true,
+      "excluded": false
     },
     {
       "procedure": "pages.list",
@@ -126,9 +125,9 @@
               {
                 "code": "unrecognized_keys",
                 "keys": [
-                  "bad�"
+                  "bad\ud800"
                 ],
-                "message": "Unrecognized key: \"bad�\"",
+                "message": "Unrecognized key: \"bad\ud800\"",
                 "path": []
               }
             ]
@@ -138,9 +137,8 @@
           "status": 400
         }
       },
-      "equal": false,
-      "excluded": true,
-      "reason": "unrecognized key contains an unpaired surrogate; Go decoded it to U+FFFD"
+      "equal": true,
+      "excluded": false
     },
     {
       "procedure": "pages.pin",
@@ -178,9 +176,9 @@
               {
                 "code": "unrecognized_keys",
                 "keys": [
-                  "bad�"
+                  "bad\ud800"
                 ],
-                "message": "Unrecognized key: \"bad�\"",
+                "message": "Unrecognized key: \"bad\ud800\"",
                 "path": []
               }
             ]
@@ -190,9 +188,8 @@
           "status": 400
         }
       },
-      "equal": false,
-      "excluded": true,
-      "reason": "unrecognized key contains an unpaired surrogate; Go decoded it to U+FFFD"
+      "equal": true,
+      "excluded": false
     },
     {
       "procedure": "pages.remove",
@@ -229,9 +226,9 @@
               {
                 "code": "unrecognized_keys",
                 "keys": [
-                  "bad�"
+                  "bad\ud800"
                 ],
-                "message": "Unrecognized key: \"bad�\"",
+                "message": "Unrecognized key: \"bad\ud800\"",
                 "path": []
               }
             ]
@@ -241,9 +238,8 @@
           "status": 400
         }
       },
-      "equal": false,
-      "excluded": true,
-      "reason": "unrecognized key contains an unpaired surrogate; Go decoded it to U+FFFD"
+      "equal": true,
+      "excluded": false
     },
     {
       "procedure": "spendingLimit.set",
@@ -280,9 +276,9 @@
               {
                 "code": "unrecognized_keys",
                 "keys": [
-                  "bad�"
+                  "bad\ud800"
                 ],
-                "message": "Unrecognized key: \"bad�\"",
+                "message": "Unrecognized key: \"bad\ud800\"",
                 "path": []
               }
             ]
@@ -292,9 +288,8 @@
           "status": 400
         }
       },
-      "equal": false,
-      "excluded": true,
-      "reason": "unrecognized key contains an unpaired surrogate; Go decoded it to U+FFFD"
+      "equal": true,
+      "excluded": false
     },
     {
       "procedure": "spendingLimit.set",
@@ -337,9 +332,9 @@
               {
                 "code": "unrecognized_keys",
                 "keys": [
-                  "bad�"
+                  "bad\ud800"
                 ],
-                "message": "Unrecognized key: \"bad�\"",
+                "message": "Unrecognized key: \"bad\ud800\"",
                 "path": [
                   "limit"
                 ]
@@ -351,9 +346,8 @@
           "status": 400
         }
       },
-      "equal": false,
-      "excluded": true,
-      "reason": "unrecognized key contains an unpaired surrogate; Go decoded it to U+FFFD"
+      "equal": true,
+      "excluded": false
     },
     {
       "procedure": "externalConversations.updatePolicy",
@@ -384,18 +378,135 @@
       "go": {
         "json": {
           "teamChatAmbientEnabled": null,
-          "teamChatRules": "rule�text",
+          "teamChatRules": "rule\ud800text",
           "automatedSenderPolicies": {
-            "sender�": {
-              "name": "name�",
+            "sender\ud800": {
+              "name": "name\ud800",
               "mode": "ignore"
             }
           }
         }
       },
-      "equal": false,
-      "excluded": true,
-      "reason": "the response echoes the saved policy; Go decoded the lone surrogates to U+FFFD"
+      "equal": true,
+      "excluded": false
+    },
+    {
+      "procedure": "externalConversations.updatePolicy",
+      "kind": "reviewer-policy-keys-store",
+      "input": {
+        "externalConversationId": "__external__",
+        "teamChatAmbientEnabled": true,
+        "teamChatRules": "stored\ud800rule",
+        "automatedSenderPolicies": {
+          "sender\ud800": {
+            "name": "name\ud800",
+            "mode": "ignore"
+          },
+          "sender�": {
+            "name": "second",
+            "mode": "user"
+          },
+          "nul\u0000key": {
+            "name": "third",
+            "mode": "ignore"
+          }
+        }
+      },
+      "typescript": {
+        "automatedSenderPolicies": {
+          "nul�key": {
+            "mode": "ignore",
+            "name": "third"
+          },
+          "sender�": {
+            "mode": "ignore",
+            "name": "name�"
+          },
+          "sender�#2": {
+            "mode": "user",
+            "name": "second"
+          }
+        },
+        "teamChatRules": "stored�rule"
+      },
+      "go": {
+        "automatedSenderPolicies": {
+          "nul�key": {
+            "mode": "ignore",
+            "name": "third"
+          },
+          "sender�": {
+            "mode": "ignore",
+            "name": "name�"
+          },
+          "sender�#2": {
+            "mode": "user",
+            "name": "second"
+          }
+        },
+        "teamChatRules": "stored�rule"
+      },
+      "equal": true,
+      "excluded": false
+    },
+    {
+      "procedure": "externalConversations.updatePolicy",
+      "kind": "reviewer-id-nul",
+      "input": "<raw body>",
+      "typescript": {
+        "json": {
+          "defined": false,
+          "code": "INTERNAL_SERVER_ERROR",
+          "status": 500,
+          "message": "Internal server error"
+        }
+      },
+      "go": {
+        "json": {
+          "code": "INTERNAL_SERVER_ERROR",
+          "defined": false,
+          "message": "Internal server error",
+          "status": 500
+        }
+      },
+      "equal": true,
+      "excluded": false
+    },
+    {
+      "procedure": "spaces.rename",
+      "kind": "literal-marker-code-units",
+      "input": {
+        "spaceId": "__space2__",
+        "name": "mﰀﰁz"
+      },
+      "field": "name",
+      "typescript": "mﰀﰁz",
+      "go": "mﰀﰁz",
+      "equal": true,
+      "excluded": false
+    },
+    {
+      "procedure": "spaces.rename",
+      "kind": "raw-control-byte",
+      "input": "<raw body>",
+      "typescript": {
+        "json": {
+          "defined": false,
+          "code": "BAD_REQUEST",
+          "status": 400,
+          "message": "Malformed request. Ensure the request body is properly formatted and the 'Content-Type' header is set correctly."
+        }
+      },
+      "go": {
+        "json": {
+          "code": "BAD_REQUEST",
+          "defined": false,
+          "message": "Malformed request. Ensure the request body is properly formatted and the 'Content-Type' header is set correctly.",
+          "status": 400
+        }
+      },
+      "equal": true,
+      "excluded": false
     },
     {
       "procedure": "computerProvider.update/get",
@@ -408,9 +519,9 @@
       "field": "values.apiUrl",
       "typescript": "https://example.com/\ud800",
       "typescriptGet": "https://example.com/\ud800",
-      "goDecoded": "https://example.com/�",
-      "excluded": true,
-      "reason": "Go encoding/json decodes an unpaired surrogate to U+FFFD; the procedure echoes the raw code unit and stores JSON text, so no DB sanitizer applies"
+      "goDecoded": "https://example.com/\ud800",
+      "equal": true,
+      "excluded": false
     }
   ]
 }

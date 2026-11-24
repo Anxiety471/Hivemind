@@ -108,6 +108,7 @@ func readScope(ctx context.Context, tx pgx.Tx, ring *contentcrypto.KeyRing, spac
 		query += fmt.Sprintf(` AND "botId" = $%d`, len(args))
 	}
 	query += ` ORDER BY "updatedAt" DESC, path ASC`
+	// writeaudit:dynamic read: the botId clause is a fixed fragment; args are filters
 	rows, err := tx.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err

@@ -75,6 +75,9 @@ var auditedProcedures = map[string]audited{
 	"spaceSettings.setOverride": {Type: "approval.policy.changed", Fields: []string{"setting", "enabled"}},
 	"bots.rotateWebhookSecret":  {Type: "credential.changed", Kind: "webhook", Fields: []string{"botId"}},
 	"mcp.assignments.approve":   {Type: "approval.decided", Kind: "mcp", Fields: []string{"botId", "serverId"}},
+	"mcp.assignments.dismiss":   {Type: "approval.decided", Kind: "mcp", Fields: []string{"botId", "serverId"}},
+	"mcp.servers.remove":        {Type: "credential.deleted", Kind: "mcp", Fields: []string{"id"}},
+	"mcp.oauth.disconnect":      {Type: "credential.deleted", Kind: "mcp_oauth", Fields: []string{"serverId"}},
 }
 
 // SecurityEventFor is procedureSecurityEvent: the event for a procedure that just
@@ -109,9 +112,12 @@ func SecurityEventFor(procedure string, input map[string]any, actor db.Actor) (S
 			}
 		}
 	}
-	// auth-audit.ts pins the decision the procedure made (security-audit.ts:161).
+	// auth-audit.ts pins the decision the procedure made (security-audit.ts:161-162).
 	if procedure == "mcp.assignments.approve" {
 		metadata = append(metadata, Meta{Key: "decision", Value: "allow"})
+	}
+	if procedure == "mcp.assignments.dismiss" {
+		metadata = append(metadata, Meta{Key: "decision", Value: "deny"})
 	}
 	return SecurityEvent{Type: entry.Type, UserID: actor.UserID, SpaceID: actor.SpaceID, Metadata: metadata}, true
 }

@@ -39,6 +39,16 @@ func TestParseOutputTrimsKeysAndNamesAndMergesCollisions(t *testing.T) {
 	if stored != `{"�a":{"name":"n�","mode":"ignore"},"�a#2":{"name":"m","mode":"user"}}` {
 		t.Fatalf("stored = %s", stored)
 	}
+	// A raw key that equals a generated suffix overwrites that entry in place, as
+	// sanitizeJsonValue's own-property assignment does (Node output for this vector).
+	collision := policiesJSON([]policyEntry{
+		{"a\x00", senderPolicy{"one", "ignore", nil}},
+		{"a\uFFFD", senderPolicy{"two", "ignore", nil}},
+		{"a\uFFFD#2", senderPolicy{"three", "ignore", nil}},
+	}, true)
+	if collision != `{"a�":{"name":"one","mode":"ignore"},"a�#2":{"name":"three","mode":"ignore"}}` {
+		t.Fatalf("collision = %s", collision)
+	}
 }
 
 func TestParseReportsTheSameIssuesAsZod(t *testing.T) {

@@ -270,6 +270,13 @@ export function run1Cases(system: System): Case[] {
             trigger: "routine",
             routineId: id(seeded, "r1r"),
             clientNonce: `routine-run:${seeded.userId}:nonce-1`,
+            // The contract harness runs the TypeScript app with the in-memory job driver, whose
+            // run-wakeup scanner claims queued runs with `wakeAt` null or due
+            // (packages/adapters/src/runs/wakeups/run-wakeup.ts:412) and stamps `wakeAt = now`
+            // (:190). A null seed lets that scanner claim this row mid-case on the TypeScript
+            // side only (the Go side runs no executor), which flaked the state comparison. Pin
+            // it far outside the scanner's window; the row stays queued, so replay still holds.
+            wakeAt: new Date("2100-01-01T00:00:00.000Z"),
           },
         });
       },

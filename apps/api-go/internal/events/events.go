@@ -7,9 +7,9 @@ package events
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 	"log/slog"
 	"strings"
 	"time"
@@ -100,7 +100,7 @@ func Append(ctx context.Context, tx pgx.Tx, ring *contentcrypto.KeyRing, input I
 	if err != nil {
 		return Event{}, err
 	}
-	payloadJSON, err := json.Marshal(sealedRow["payload"])
+	payloadJSON, err := wtf8.Marshal(sealedRow["payload"])
 	if err != nil {
 		return Event{}, fmt.Errorf("seal event payload: %w", err)
 	}
@@ -111,6 +111,12 @@ func Append(ctx context.Context, tx pgx.Tx, ring *contentcrypto.KeyRing, input I
 	args := []any{input.ThreadID, nullableString(input.RunID)}
 	place := func(value any) string {
 		args = append(args, value)
+		return fmt.Sprintf("$%d", len(args))
+	}
+	// placeData is a write value: db.Data marks the boundary for every data
+	// argument, never for the filters above.
+	placeData := func(value any) string {
+		args = append(args, db.Data(value)...)
 		return fmt.Sprintf("$%d", len(args))
 	}
 	conditions := []string{}
@@ -133,12 +139,12 @@ func Append(ctx context.Context, tx pgx.Tx, ring *contentcrypto.KeyRing, input I
 			}
 		}
 	}
-	idArg := place(rowID)
-	spaceArg := place(input.SpaceID)
-	threadArg := place(input.ThreadID)
-	botArg := place(input.BotID)
-	typeArg := place(input.Type)
-	payloadArg := place(string(payloadJSON))
+	idArg := placeData(rowID)
+	spaceArg := placeData(input.SpaceID)
+	threadArg := placeData(input.ThreadID)
+	botArg := placeData(input.BotID)
+	typeArg := placeData(input.Type)
+	payloadArg := placeData(db.JSONText(string(payloadJSON)))
 
 	runWhere := ""
 	insertedWhere := "TRUE"
@@ -180,6 +186,7 @@ func Append(ctx context.Context, tx pgx.Tx, ring *contentcrypto.KeyRing, input I
 		FROM inserted`
 	var event Event
 	var runID *string
+	//writeaudit:dynamic the CTE is built in branches; placeData wraps every payload, place only filters
 	err = tx.QueryRow(ctx, query, args...).Scan(&event.ID, &event.Seq, &event.CreatedAt,
 		&runID, &event.FirstResponse)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -278,7 +285,7 @@ func AppendTx(ctx context.Context, tx pgx.Tx, ring *contentcrypto.KeyRing, input
 	if err != nil {
 		return Event{}, err
 	}
-	payloadJSON, err := json.Marshal(sealedRow["payload"])
+	payloadJSON, err := wtf8.Marshal(sealedRow["payload"])
 	if err != nil {
 		return Event{}, fmt.Errorf("seal event payload: %w", err)
 	}
@@ -294,15 +301,15 @@ func AppendTx(ctx context.Context, tx pgx.Tx, ring *contentcrypto.KeyRing, input
 		`INSERT INTO events (id, "spaceId", "threadId", "botId", seq, type, payload, "runId")
 		 VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)
 		 RETURNING id, "createdAt"`,
-		rowID, input.SpaceID, input.ThreadID, input.BotID, event.Seq, input.Type,
-		string(payloadJSON), nullableString(input.RunID)).Scan(&event.ID, &event.CreatedAt)
+		db.Data(rowID, input.SpaceID, input.ThreadID, input.BotID, event.Seq, input.Type,
+			db.JSONText(string(payloadJSON)), nullableString(input.RunID))...).Scan(&event.ID, &event.CreatedAt)
 	if err != nil {
 		return Event{}, err
 	}
 	if input.RunID != "" && firstResponseAt == nil && IsRunResponse(input.Type, input.Payload) {
 		tag, err := tx.Exec(ctx,
 			`UPDATE runs SET "firstResponseAt" = $2 WHERE id = $1 AND "firstResponseAt" IS NULL`,
-			input.RunID, event.CreatedAt)
+			append([]any{input.RunID}, db.Data(event.CreatedAt)...)...)
 		if err != nil {
 			return Event{}, err
 		}

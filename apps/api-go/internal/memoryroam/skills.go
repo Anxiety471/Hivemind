@@ -409,6 +409,7 @@ func roamSkills(ctx context.Context, logger *slog.Logger, database *db.DB, ring 
 func applySkillCreate(ctx context.Context, database *db.DB, bot Bot, create skillCreate) (bool, error) {
 	created := false
 	err := database.System(ctx, "memory roamer creates a skill", func(tx pgx.Tx) error {
+		//writeaudit:dynamic transaction-scoped advisory lock; the skill name is a filter
 		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`,
 			"names:skill:"+bot.UserID); err != nil {
 			return err
@@ -427,7 +428,7 @@ func applySkillCreate(ctx context.Context, database *db.DB, bot Bot, create skil
 		if _, err := tx.Exec(ctx, `INSERT INTO agent_skills
 				(id, "spaceId", "userId", name, description, content, source, "allSpaces", "createdAt", "updatedAt")
 			VALUES ($1, $2, $3, $4, $5, $6, 'user', false, now(), now())`,
-			effects.NewID(), bot.SpaceID, bot.UserID, create.Name, create.Description, create.Content); err != nil {
+			db.Data(effects.NewID(), bot.SpaceID, bot.UserID, create.Name, create.Description, create.Content)...); err != nil {
 			return err
 		}
 		created = true
@@ -459,7 +460,7 @@ func applySkillUpdate(ctx context.Context, database *db.DB, bot Bot, update skil
 		if _, err := tx.Exec(ctx, `INSERT INTO agent_skill_revisions
 				(id, "skillId", "userId", name, description, content, reason, "createdAt")
 			VALUES ($1, $2, $3, $4, $5, $6, $7, now())`,
-			effects.NewID(), update.Current.ID, bot.UserID, name, description, content, skillRevisionReason); err != nil {
+			db.Data(effects.NewID(), update.Current.ID, bot.UserID, name, description, content, skillRevisionReason)...); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, `DELETE FROM agent_skill_revisions WHERE "skillId" = $1 AND id NOT IN (
@@ -468,7 +469,7 @@ func applySkillUpdate(ctx context.Context, database *db.DB, bot Bot, update skil
 			return err
 		}
 		if _, err := tx.Exec(ctx, `UPDATE agent_skills SET content = $2, "updatedAt" = now() WHERE id = $1`,
-			update.Current.ID, update.Content); err != nil {
+			append([]any{update.Current.ID}, db.Data(update.Content)...)...); err != nil {
 			return err
 		}
 		applied = true

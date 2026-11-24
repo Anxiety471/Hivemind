@@ -119,7 +119,7 @@ func Rename(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input
 			return err
 		}
 		renamed, err = scan(tx.QueryRow(ctx, `UPDATE connections SET "displayName" = $1, "updatedAt" = $2 WHERE id = $3 RETURNING `+columns,
-			strings.ReplaceAll(name, "\x00", "\uFFFD"), time.Now().UTC().Truncate(time.Millisecond), existing))
+			append(db.Data(strings.ReplaceAll(name, "\x00", "\uFFFD"), time.Now().UTC().Truncate(time.Millisecond)), existing)...))
 		return err
 	})
 	if err != nil {

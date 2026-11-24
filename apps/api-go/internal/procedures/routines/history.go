@@ -157,6 +157,7 @@ func loadRuns(ctx context.Context, tx pgx.Tx, actor db.Actor, input HistoryInput
 		args = append(args, before, input.Before.ID)
 	}
 	query += ` ORDER BY r."createdAt" DESC, r.id DESC LIMIT ` + strconv.Itoa(input.Limit+1)
+	// writeaudit:dynamic read: the cursor/limit fragments are fixed; args are filters
 	rows, err := tx.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err

@@ -74,6 +74,7 @@ func List(ctx context.Context, database *db.DB, deployment shared.Deployment, ac
 	}
 	list := []Board{}
 	err := database.Tenant(ctx, actor, func(tx pgx.Tx) error {
+		// writeaudit:dynamic read: the column list is the fixed tickets.BoardColumns; the argument is a filter
 		rows, err := tx.Query(ctx, `SELECT `+tickets.BoardColumns+` FROM boards WHERE "spaceId" = $1
 			ORDER BY "createdAt" ASC, id ASC`, actor.SpaceID)
 		if err != nil {
@@ -193,11 +194,14 @@ func Rename(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 	var updated tickets.Board
 	err = database.Tenant(ctx, actor, func(tx pgx.Tx) error {
 		args = append(args, time.Now().UTC().Truncate(time.Millisecond))
+		dataCount := len(args)
 		updates := append(append([]string{}, assignments...), `"updatedAt" = $`+itoa(len(args)))
 		if !changesPrefix {
 			args = append(args, board.ID)
+			arguments := append(db.Data(args[:dataCount]...), args[dataCount:]...)
+			//writeaudit:dynamic the SET list is built from optional fields; args[:dataCount] is wrapped with db.Data and the suffix holds only filters
 			row, err := tickets.ScanBoard(tx.QueryRow(ctx, `UPDATE boards SET `+strings.Join(updates, ", ")+`
-				WHERE id = $`+itoa(len(args))+` RETURNING `+tickets.BoardColumns, args...))
+				WHERE id = $`+itoa(len(args))+` RETURNING `+tickets.BoardColumns, arguments...))
 			updated = row
 			return err
 		}
@@ -210,11 +214,13 @@ func Rename(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 			return errPrefix
 		}
 		args = append(args, board.ID, actor.SpaceID, board.NextNumber)
+		arguments := append(db.Data(args[:dataCount]...), args[dataCount:]...)
+		//writeaudit:dynamic the SET list is built from optional fields; args[:dataCount] is wrapped with db.Data and the suffix holds only filters
 		row, err := tickets.ScanBoard(tx.QueryRow(ctx, `UPDATE boards SET `+strings.Join(updates, ", ")+`
 			WHERE id = $`+itoa(len(args)-2)+` AND "spaceId" = $`+itoa(len(args)-1)+`
 				AND "nextNumber" = $`+itoa(len(args))+`
 				AND NOT EXISTS (SELECT 1 FROM tickets WHERE "boardId" = boards.id)
-			RETURNING `+tickets.BoardColumns, args...))
+			RETURNING `+tickets.BoardColumns, arguments...))
 		if errors.Is(err, pgx.ErrNoRows) {
 			return errPrefix
 		}

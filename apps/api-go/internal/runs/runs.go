@@ -39,6 +39,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/effects"
 )
 
@@ -234,8 +235,8 @@ func Create(ctx context.Context, tx Execer, input CreateInput) (Created, error) 
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO tasks (id, "spaceId", "botId", "threadId", "userId", prompt, status, "updatedAt")
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		taskID, input.SpaceID, input.BotID, input.ThreadID, input.UserID, input.Prompt,
-		taskStatus, at); err != nil {
+		db.Data(taskID, input.SpaceID, input.BotID, input.ThreadID, input.UserID, input.Prompt,
+			taskStatus, at)...); err != nil {
 		return Created{}, fmt.Errorf("insert task: %w", err)
 	}
 	var provider, model, thinking any
@@ -267,10 +268,10 @@ func Create(ctx context.Context, tx Execer, input CreateInput) (Created, error) 
 			"wakeAt", "updatedAt")
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
 			$14, $15, $16, $17, $18, $19, $20)`,
-		runID, input.SpaceID, input.BotID, input.ThreadID, taskID, input.UserID, status,
-		input.Trigger, provider, model, thinking, pinned, input.GroupReplyOptional,
-		input.ClientNonce, input.SourceMessageID, input.RoutineID, input.DelegatedFromRunID,
-		input.RetryOfRunID, wakeAt, at); err != nil {
+		db.Data(runID, input.SpaceID, input.BotID, input.ThreadID, taskID, input.UserID, status,
+			input.Trigger, provider, model, thinking, pinned, input.GroupReplyOptional,
+			input.ClientNonce, input.SourceMessageID, input.RoutineID, input.DelegatedFromRunID,
+			input.RetryOfRunID, wakeAt, at)...); err != nil {
 		return Created{}, fmt.Errorf("insert run: %w", err)
 	}
 	return Created{TaskID: taskID, RunID: runID}, nil

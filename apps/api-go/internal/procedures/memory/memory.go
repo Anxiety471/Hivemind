@@ -23,6 +23,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/validate"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 )
 
 // MemoryIndexPath is MEMORY_INDEX_PATH (packages/contracts/src/domain.ts:885): the index
@@ -114,6 +115,9 @@ func openDocuments(ctx context.Context, ring *contentcrypto.KeyRing, rows []*sto
 // looks like ciphertext gains a leading zero-width space so it is never read as a value under a
 // missing key (content-encryption.ts:458-485).
 func written(ring *contentcrypto.KeyRing, content string) string {
+	// The store returns the document content after the write; Node's UTF-8
+	// encoder turned every unpaired surrogate into U+FFFD on the way to the row.
+	content = wtf8.ToUTF8(content)
 	if ring == nil || ring.EncryptWrites {
 		return content
 	}
@@ -217,6 +221,7 @@ func List(ctx context.Context, database *db.DB, actor db.Actor, ring *contentcry
 			args = append(args, *scope)
 			query += fmt.Sprintf(` AND scope = $%d`, len(args))
 		}
+		// writeaudit:dynamic read: botId/scope clauses are fixed fragments; args are filters
 		rows, err := tx.Query(ctx, query, args...)
 		if err != nil {
 			return err
@@ -274,6 +279,7 @@ func ExportMarkdown(ctx context.Context, database *db.DB, actor db.Actor, ring *
 			args = append(args, *botID)
 			query += fmt.Sprintf(` AND "botId" = $%d`, len(args))
 		}
+		// writeaudit:dynamic read: the botId clause is a fixed fragment; args are filters
 		rows, err := tx.Query(ctx, query, args...)
 		if err != nil {
 			return err
@@ -445,7 +451,7 @@ func commitDocument(ctx context.Context, database *db.DB, actor db.Actor, ring *
 				return err
 			}
 			if err := tx.QueryRow(ctx, `UPDATE memory_documents SET content = $1, revision = revision + 1, "updatedAt" = $2
-				WHERE id = $3 RETURNING revision`, sealed, at, existing.ID).Scan(&revision); err != nil {
+				WHERE id = $3 RETURNING revision`, append(db.Data(sealed, at), existing.ID)...).Scan(&revision); err != nil {
 				return err
 			}
 			id = existing.ID
@@ -458,7 +464,7 @@ func commitDocument(ctx context.Context, database *db.DB, actor db.Actor, ring *
 			if err := tx.QueryRow(ctx, `INSERT INTO memory_documents
 				(id, "spaceId", "userId", "botId", scope, path, content, revision, "createdAt", "updatedAt")
 				VALUES ($1, $2, $3, $4, $5, $6, $7, 1, $8, $8) RETURNING revision`,
-				id, actor.SpaceID, actor.UserID, botID, scope, path, sealed, at).Scan(&revision); err != nil {
+				db.Data(id, actor.SpaceID, actor.UserID, botID, scope, path, sealed, at)...).Scan(&revision); err != nil {
 				return err
 			}
 		}
@@ -469,7 +475,7 @@ func commitDocument(ctx context.Context, database *db.DB, actor db.Actor, ring *
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO memory_revisions
 			(id, "documentId", revision, content, "sourceRunId", "sourceThreadId", "createdAt")
-			VALUES ($1, $2, $3, $4, NULL, NULL, $5)`, revisionID, id, revision, sealedRevision, at); err != nil {
+			VALUES ($1, $2, $3, $4, NULL, NULL, $5)`, db.Data(revisionID, id, revision, sealedRevision, at)...); err != nil {
 			return err
 		}
 		result = Document{

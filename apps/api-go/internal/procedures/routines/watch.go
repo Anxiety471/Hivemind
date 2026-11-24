@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"math"
 	"net/url"
-	"unicode/utf8"
 
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/validate"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 )
 
 // Watch is the wire shape of RoutineWatchSchema (packages/contracts/src/routines/routine-watch.ts:35).
@@ -75,7 +75,7 @@ func parseWatch(raw []byte) *Watch {
 				return nil
 			}
 			text = validate.JSTrim(text)
-			if length := utf8.RuneCountInString(text); length < 1 || length > 500 {
+			if !wtf8.Fits(text, 1, 500) {
 				return nil
 			}
 			watch.Paths = append(watch.Paths, text)
@@ -115,7 +115,7 @@ func parseWatch(raw []byte) *Watch {
 				return nil
 			}
 			text = validate.JSTrim(text)
-			if length := utf8.RuneCountInString(text); length < 1 || length > 100 {
+			if !wtf8.Fits(text, 1, 100) {
 				return nil
 			}
 			watch.Track = append(watch.Track, text)
@@ -192,7 +192,7 @@ func optionalText(object map[string]any, key string, minLength, maxLength int) (
 		return nil, false
 	}
 	raw = validate.JSTrim(raw)
-	if length := utf8.RuneCountInString(raw); length < minLength || length > maxLength {
+	if !wtf8.Fits(raw, minLength, maxLength) {
 		return nil, false
 	}
 	return &raw, true

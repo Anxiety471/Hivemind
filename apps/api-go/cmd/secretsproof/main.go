@@ -287,7 +287,7 @@ func hookSecretCreate(
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO secrets (id, "userId", "spaceId", kind, ciphertext)
 			 VALUES ($1, $2, nullif($3, ''), $4, $5)`,
-			in.ItemID, in.UserID, in.SpaceID, in.Kind, record.Ciphertext); err != nil {
+			db.Data(in.ItemID, in.UserID, in.SpaceID, in.Kind, record.Ciphertext)...); err != nil {
 			return err
 		}
 		return nil
@@ -320,7 +320,8 @@ func hookSecretUpdate(
 		// Track before the UPDATE for the same reason as a create.
 		persistence.TrackWrite(state, secretstore.Secret, in.ItemID, record.Ciphertext)
 		if _, err := tx.Exec(ctx,
-			`UPDATE secrets SET ciphertext = $2 WHERE id = $1`, in.ItemID, record.Ciphertext); err != nil {
+			`UPDATE secrets SET ciphertext = $2 WHERE id = $1`,
+			append([]any{in.ItemID}, db.Data(record.Ciphertext)...)...); err != nil {
 			return err
 		}
 		return nil
@@ -392,7 +393,7 @@ func hookSecretCreateRollback(
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO secrets (id, "userId", "spaceId", kind, ciphertext)
 			 VALUES ($1, $2, nullif($3, ''), $4, $5)`,
-			in.ItemID, in.UserID, in.SpaceID, in.Kind, record.Ciphertext); err != nil {
+			db.Data(in.ItemID, in.UserID, in.SpaceID, in.Kind, record.Ciphertext)...); err != nil {
 			return err
 		}
 		return errors.New("proof rollback")
@@ -437,6 +438,7 @@ func hookParentDelete(
 			`SELECT id FROM "`+parentTableName(model)+`" WHERE id = $1`, in.ParentID); err != nil {
 			return err
 		}
+		// writeaudit:dynamic table comes from the fixed proof model; the id is a filter
 		_, err := tx.Exec(ctx, `DELETE FROM "`+parentTableName(model)+`" WHERE id = $1`, in.ParentID)
 		return err
 	})

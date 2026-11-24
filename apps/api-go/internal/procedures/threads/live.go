@@ -7,7 +7,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf16"
 
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
@@ -15,6 +14,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/messageblocks"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/validate"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 )
 
 // This file is projectMessages (packages/core/src/messages/events.ts) for the events threads.get
@@ -431,9 +431,7 @@ func subagentBlock(payload map[string]any) map[string]any {
 	return block
 }
 
-func units(text string) []uint16 { return utf16.Encode([]rune(text)) }
-
-func fromUnits(value []uint16) string { return string(utf16.Decode(value)) }
+func units(text string) []uint16 { return wtf8.Units(text) }
 
 var (
 	jsUpper = cases.Upper(language.Und)
@@ -628,7 +626,7 @@ func reduceLive(current []map[string]any, update liveUpdate) []map[string]any {
 	case update.kind == "progress":
 		full := units(progressText(update.payload, prior))
 		if flushed < len(full) {
-			tailText = fromUnits(full[flushed:])
+			tailText = wtf8.FromUnits(full[flushed:])
 		}
 	case tailIsProgress:
 		tailText = tail["text"].(string)

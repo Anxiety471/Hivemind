@@ -284,13 +284,14 @@ func swapPageShare(
 				// A create drops no reference, so secret-persistence does not track it; the
 				// row's insert is the only record of the already-announced sealed value.
 				if _, err := tx.Exec(ctx, `INSERT INTO secrets (id, "userId", "spaceId", kind, ciphertext)
-					VALUES ($1, $2, $3, $4, $5)`, next.secret.id, actor.UserID, actor.SpaceID,
-					pageShareSecretKind, next.secret.ciphertext); err != nil {
+					VALUES ($1, $2, $3, $4, $5)`,
+					db.Data(next.secret.id, actor.UserID, actor.SpaceID,
+						pageShareSecretKind, next.secret.ciphertext)...); err != nil {
 					return err
 				}
 				tag, err = tx.Exec(ctx, `UPDATE pages SET visibility = 'link', "shareTokenHash" = $1,
 					"shareSecretId" = $2 WHERE id = $3 AND "shareSecretId" IS NOT DISTINCT FROM NULLIF($4, '')`,
-					next.tokenHash, next.secret.id, pageID, current)
+					append(db.Data(next.tokenHash, next.secret.id), pageID, current)...)
 			} else {
 				tag, err = tx.Exec(ctx, `UPDATE pages SET visibility = 'private', "shareTokenHash" = NULL,
 					"shareSecretId" = NULL WHERE id = $1 AND "shareSecretId" IS NOT DISTINCT FROM NULLIF($2, '')`,

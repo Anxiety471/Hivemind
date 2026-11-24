@@ -474,7 +474,7 @@ func writeNote(
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO messages (id, "threadId", seq, role, blocks, "botId")
 		VALUES ($1, $2, $3, 'system', $4::jsonb, $5)`,
-		messageID, threadID, seq, string(blocksJSON), note.BotID); err != nil {
+		db.Data(messageID, threadID, seq, string(blocksJSON), note.BotID)...); err != nil {
 		return 0, err
 	}
 	event, err := events.Append(ctx, tx, ring, events.Input{

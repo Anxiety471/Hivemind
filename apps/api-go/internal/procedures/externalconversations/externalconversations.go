@@ -16,6 +16,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/validate"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 )
 
 const (
@@ -191,6 +192,14 @@ func parseSenderPolicy(path validate.Path, raw any) (senderPolicy, []validate.Is
 	return result, found
 }
 
+// echoJSON writes a string the response echoes: an unpaired surrogate keeps its
+// JavaScript code unit (a \udXXX escape), as JSON.stringify writes it. The write
+// path sanitizes with wtf8.SanitizeText first, then writes stringJSON.
+func echoJSON(value string) string {
+	body, _ := wtf8.Marshal(value)
+	return string(body)
+}
+
 func stringJSON(value string) string {
 	var buffer bytes.Buffer
 	encoder := json.NewEncoder(&buffer)
@@ -201,7 +210,8 @@ func stringJSON(value string) string {
 
 // policiesJSON is JSON.stringify of the parsed policies, in JavaScript key order
 // (whole-number keys first, ascending). sanitize applies the write-time clean-up:
-// NUL becomes U+FFFD in keys and text, and keys that collide afterwards are told apart.
+// NUL and an unpaired surrogate become U+FFFD in keys and text, and keys that
+// collide afterwards are told apart.
 func policiesJSON(entries []policyEntry, sanitize bool) string {
 	ordered := make([]policyEntry, 0, len(entries))
 	var indexed, named []policyEntry
@@ -225,26 +235,43 @@ func policiesJSON(entries []policyEntry, sanitize bool) string {
 	ordered = append(append(ordered, indexed...), named...)
 	clean := func(text string) string {
 		if sanitize {
-			return strings.ReplaceAll(text, "\x00", "\uFFFD")
+			return wtf8.SanitizeText(text)
 		}
 		return text
 	}
-	var out strings.Builder
-	out.WriteByte('{')
 	used := map[string]int{}
-	for index, entry := range ordered {
+	positions := map[string]int{}
+	written := make([]policyEntry, 0, len(ordered))
+	for _, entry := range ordered {
 		key := clean(entry.Key)
 		seen := used[key]
 		used[key] = seen + 1
 		if sanitize && seen > 0 {
 			key = key + "#" + strconv.Itoa(seen+1)
 		}
+		// JSON.stringify of the object sanitizeJsonValue builds: a key that collides
+		// with one already written, existing or generated, keeps the first position
+		// and takes the last value instead of becoming a duplicate key.
+		if position, exists := positions[key]; exists {
+			written[position].Policy = entry.Policy
+			continue
+		}
+		positions[key] = len(written)
+		written = append(written, policyEntry{Key: key, Policy: entry.Policy})
+	}
+	encode := stringJSON
+	if !sanitize {
+		encode = echoJSON
+	}
+	var out strings.Builder
+	out.WriteByte('{')
+	for index, entry := range written {
 		if index > 0 {
 			out.WriteByte(',')
 		}
-		out.WriteString(stringJSON(key))
+		out.WriteString(encode(entry.Key))
 		out.WriteString(`:{"name":`)
-		out.WriteString(stringJSON(clean(entry.Policy.Name)))
+		out.WriteString(encode(clean(entry.Policy.Name)))
 		out.WriteString(`,"mode":`)
 		out.WriteString(stringJSON(entry.Policy.Mode))
 		if entry.Policy.RollupHours != nil {
@@ -267,7 +294,7 @@ func (o Output) MarshalJSON() ([]byte, error) {
 		ambient = strconv.FormatBool(*o.policy.Ambient)
 	}
 	if o.policy.Rules != nil {
-		rules = stringJSON(*o.policy.Rules)
+		rules = echoJSON(*o.policy.Rules)
 	}
 	return []byte(`{"teamChatAmbientEnabled":` + ambient + `,"teamChatRules":` + rules + `,"automatedSenderPolicies":` + policiesJSON(o.policy.Policies, false) + `}`), nil
 }
@@ -281,18 +308,20 @@ func UpdatePolicy(ctx context.Context, database *db.DB, actor db.Actor, raw orpc
 	}
 	var rules any
 	if parsed.Rules != nil {
-		rules = strings.ReplaceAll(*parsed.Rules, "\x00", "\uFFFD")
+		rules = wtf8.SanitizeText(*parsed.Rules)
 	}
 	var ambient any
 	if parsed.Ambient != nil {
 		ambient = *parsed.Ambient
 	}
 	err := database.Tenant(ctx, actor, func(tx pgx.Tx) error {
+		arguments := append(db.Data(ambient, rules, db.JSONText(policiesJSON(parsed.Policies, true)),
+			time.Now().UTC().Truncate(time.Millisecond)),
+			conversationID, actor.SpaceID, actor.UserID)
 		tag, err := tx.Exec(ctx, `UPDATE external_conversations
 			SET "teamChatAmbientEnabled" = $1, "teamChatRules" = $2, "automatedSenderPolicies" = $3::jsonb, "updatedAt" = $4
 			WHERE id = $5 AND "spaceId" = $6 AND "userId" = $7`,
-			ambient, rules, policiesJSON(parsed.Policies, true), time.Now().UTC().Truncate(time.Millisecond),
-			conversationID, actor.SpaceID, actor.UserID)
+			arguments...)
 		if err != nil {
 			return err
 		}

@@ -30,6 +30,7 @@ var (
 
 // lockMembers is lockOrganizationMembers: one transaction-scoped advisory lock per organization.
 func lockMembers(ctx context.Context, tx pgx.Tx, organizationID string) error {
+	// writeaudit:dynamic transaction-scoped advisory lock; no row payload
 	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "organization-members:"+organizationID)
 	return err
 }
@@ -37,6 +38,7 @@ func lockMembers(ctx context.Context, tx pgx.Tx, organizationID string) error {
 // memberRole is memberRole: a full member of a live organization, else nothing.
 func memberRole(ctx context.Context, tx pgx.Tx, organizationID, userID string) (string, error) {
 	var storedRole string
+	// writeaudit:dynamic read: live() is a fixed fragment; the arguments are filters
 	err := tx.QueryRow(ctx, `SELECT m.role FROM member m
 		WHERE m."organizationId" = $1 AND m."userId" = $2 AND m.role <> 'guest' AND `+live(`m."organizationId"`)+` LIMIT 1`,
 		organizationID, userID).Scan(&storedRole)
@@ -116,7 +118,7 @@ func SetRole(ctx context.Context, database *db.DB, deployment shared.Deployment,
 			return errOwnerUnchangeable
 		}
 		if _, err := tx.Exec(ctx, `UPDATE member SET role = $3 WHERE "organizationId" = $1 AND "userId" = $2`,
-			input.OrganizationID, input.UserID, input.Role); err != nil {
+			append([]any{input.OrganizationID, input.UserID}, db.Data(input.Role)...)...); err != nil {
 			return err
 		}
 		if input.Role == "member" {

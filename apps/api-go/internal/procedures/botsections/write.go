@@ -112,6 +112,7 @@ func ParseRemove(raw orpc.Input) (string, *orpc.Error) {
 // lockSpace is lockSpaceForContentCreation: serialize with the empty-Space
 // deletion claim, and require the actor to be a member of a live Space.
 func lockSpace(ctx context.Context, tx pgx.Tx, actor db.Actor) error {
+	// writeaudit:dynamic transaction-scoped advisory lock; no row payload
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, actor.SpaceID); err != nil {
 		return err
 	}
@@ -198,12 +199,13 @@ func Create(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input
 			at := now()
 			section, err = scanRow(tx.QueryRow(ctx, `INSERT INTO bot_sections (id, "spaceId", "userId", name, position, "createdAt", "updatedAt")
 				VALUES ($1, $2, $3, $4, $5, $6, $6) RETURNING `+sectionColumns,
-				effects.NewID(), actor.SpaceID, actor.UserID, input.Name, next, at))
+				db.Data(effects.NewID(), actor.SpaceID, actor.UserID, input.Name, next, at)...))
 		}
 		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `UPDATE `+table+` SET "sectionId" = $1, "updatedAt" = $2 WHERE id = $3`, section.id, now(), target); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE `+table+` SET "sectionId" = $1, "updatedAt" = $2 WHERE id = $3`,
+			append(db.Data(section.id, now()), target)...); err != nil {
 			return err
 		}
 		created = section.section()
@@ -250,7 +252,7 @@ func Update(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input
 			return err
 		}
 		updated, err := scanRow(tx.QueryRow(ctx, `UPDATE bot_sections SET name = $1, "updatedAt" = $2 WHERE id = $3 RETURNING `+sectionColumns,
-			input.Name, now(), existing.id))
+			append(db.Data(input.Name, now()), existing.id)...))
 		if err != nil {
 			return err
 		}

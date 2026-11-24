@@ -220,7 +220,7 @@ func SetDefaultScope(ctx context.Context, database *db.DB, actor db.Actor, raw o
 		err = tx.QueryRow(ctx, `UPDATE space_memory_configs SET "defaultMemoryScope" = $1, "updatedAt" = $2
 			WHERE id = $3
 			RETURNING provider, settings, "defaultMemoryScope", "updatedAt"`,
-			input.DefaultMemoryScope, now(), id).Scan(&provider, &stored, &scope, &updatedAt)
+			append(db.Data(input.DefaultMemoryScope, now()), id)...).Scan(&provider, &stored, &scope, &updatedAt)
 		if err != nil {
 			return err
 		}

@@ -92,6 +92,7 @@ func (f *Fanout) listen() {
 	for attempt := 0; f.ctx.Err() == nil; {
 		conn, err := pgx.ConnectConfig(f.ctx, f.config)
 		if err == nil {
+			// writeaudit:dynamic LISTEN takes the fixed realtime channel; no bound values
 			_, err = conn.Exec(f.ctx, "LISTEN "+RealtimeChannel)
 			if err != nil {
 				_ = conn.Close(context.WithoutCancel(f.ctx))

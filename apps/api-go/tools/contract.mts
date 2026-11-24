@@ -26,6 +26,8 @@ import { laneDCases } from "./contract-lane-d.mts";
 import { laneHCases, laneHState } from "./contract-lane-h.mts";
 import { laneICases } from "./contract-lane-i.mts";
 import { laneJCases, laneJState } from "./contract-lane-j.mts";
+import { laneKCases, laneKState } from "./contract-k-mcp.mts";
+import { laneKReviewCases } from "./contract-k-review.mts";
 import { membershipCases, membershipReset, membershipState } from "./contract-membership.mts";
 import { modelsCases } from "./contract-models.mts";
 import { spaceRunCases } from "./contract-spaces-runs.mts";
@@ -132,6 +134,13 @@ export type Case = {
    * side only enqueues its job and nothing executes it here) land in neither window.
    */
   gapMs?: number;
+  /**
+   * Wait this long after each side's response before the quiet-loop snapshot, for a case whose
+   * asynchronous effects legitimately publish late on both sides (the routine-resume restore
+   * cases). Gives each side's roster/Space publishes time to land in its own window instead of
+   * racing the next side's capture.
+   */
+  settleMs?: number;
   /**
    * Skip the realtime-signal comparison: a procedure that creates a board or ticket with a
    * database-generated id publishes a frame whose payload necessarily names different ids on
@@ -263,6 +272,11 @@ await writeFile(
       "mcp.assignments.all": { mode: "go", readOnly: true },
       "mcp.assignments.list": { mode: "go", readOnly: true },
       "mcp.assignments.approve": { mode: "go" },
+      "mcp.assignments.dismiss": { mode: "go" },
+      "mcp.assignments.replace": { mode: "go" },
+      "mcp.servers.agents": { mode: "go" },
+      "mcp.servers.remove": { mode: "go" },
+      "mcp.oauth.disconnect": { mode: "go" },
       "models.backups": { mode: "go", readOnly: true },
       "models.role": { mode: "go", readOnly: true },
       "models.setRole": { mode: "go" },
@@ -702,6 +716,8 @@ const cases: Case[] = [
   ...laneHCases(system),
   ...laneICases(system),
   ...laneJCases(system),
+  ...laneKCases(system),
+  ...laneKReviewCases(system),
   ...modelsCases(system),
   ...threadGetCases(system),
   ...spaceRunCases(system),
@@ -7792,6 +7808,11 @@ const WRITE_PROCEDURES = new Set([
   "routines.testRun",
   "skills.testRun",
   "mcp.assignments.approve",
+  "mcp.assignments.dismiss",
+  "mcp.assignments.replace",
+  "mcp.servers.agents",
+  "mcp.servers.remove",
+  "mcp.oauth.disconnect",
   "spendingLimit.set",
   "botSections.create",
   "botSections.update",
@@ -8644,6 +8665,7 @@ async function databaseState(seeded: ReturnType<typeof ids>, procedure?: string)
     invitations,
     ...(await laneHState(system, seeded)),
     ...(await laneJState(system, seeded, procedure)),
+    ...(await laneKState(system, seeded, procedure)),
     // computer.updates is a read; the API's in-process reconciler can drain the seeded
     // ComputerUpdate rows between the two sides' captures, so those volatile rows are not
     // compared for it (the response body and the other tables still are).
@@ -8680,9 +8702,10 @@ for (const testCase of cases) {
   const input = withIds(testCase.input, caseIds);
   // A write has realtime signals to wait for; a read only needs to show it sent none.
   const settle =
-    WRITE_PROCEDURES.has(testCase.procedure) || testCase.procedure.startsWith("messaging.")
+    testCase.settleMs ??
+    (WRITE_PROCEDURES.has(testCase.procedure) || testCase.procedure.startsWith("messaging.")
       ? 400
-      : 40;
+      : 40);
 
   let seeded = await seed(caseIds);
   if (testCase.seed) await testCase.seed(seeded);

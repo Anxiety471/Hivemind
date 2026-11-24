@@ -259,6 +259,7 @@ func dedupeCleanups(candidates []Cleanup) []Cleanup {
 }
 
 func selectIDs(ctx context.Context, tx pgx.Tx, query string, args ...any) ([]string, error) {
+	//writeaudit:dynamic callers pass SELECT statements; every argument is a filter
 	rows, err := tx.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -278,6 +279,7 @@ func selectIDs(ctx context.Context, tx pgx.Tx, query string, args ...any) ([]str
 // lockSecretRows is lockedRows for a secret table (secret-persistence.ts:183-201).
 func lockSecretRows(ctx context.Context, tx pgx.Tx, table string, ids []string) ([]Cleanup, error) {
 	const columns = `id, ciphertext`
+	// writeaudit:dynamic table is a fixed secret-model name; ids are a filter
 	rows, err := tx.Query(ctx,
 		`SELECT `+columns+` FROM "`+table+`" WHERE id = ANY($1) ORDER BY id FOR UPDATE`, ids)
 	if err != nil {
@@ -296,6 +298,7 @@ func lockSecretRows(ctx context.Context, tx pgx.Tx, table string, ids []string) 
 }
 
 func lockParentRows(ctx context.Context, tx pgx.Tx, table string, ids []string) error {
+	// writeaudit:dynamic table is a fixed secret-model name; ids are a filter
 	rows, err := tx.Query(ctx,
 		`SELECT id FROM "`+table+`" WHERE id = ANY($1) ORDER BY id FOR UPDATE`, ids)
 	if err != nil {
@@ -340,6 +343,7 @@ func (p *Persistence) cascadedCleanups(
 		if len(ids) == 0 {
 			return nil
 		}
+		// writeaudit:dynamic table/columns/filter are fixed secret-model names; ids are a filter
 		rows, err := tx.Query(ctx,
 			`SELECT `+columns+` FROM "`+table+`" WHERE `+filter+` = ANY($1) ORDER BY id FOR UPDATE`, ids)
 		if err != nil {
@@ -484,6 +488,7 @@ func anyRecordHolds(ctx context.Context, tx pgx.Tx, ref string) (bool, error) {
 			`EXISTS (SELECT 1 FROM "`+table+`" WHERE "`+column+`" = $1)`)
 	}
 	var held bool
+	// writeaudit:dynamic lookups use fixed holder-table/column names; the reference is a filter
 	err := tx.QueryRow(ctx, `SELECT `+strings.Join(lookups, " OR "), ref).Scan(&held)
 	return held, err
 }
@@ -496,6 +501,7 @@ func SecretIsHeld(ctx context.Context, database *db.DB, cleanup Cleanup) (bool, 
 		func(tx pgx.Tx) error {
 			scan := func(query string, args ...any) error {
 				held = nil
+				//writeaudit:dynamic the scan closure runs SELECT statements; every argument is a filter
 				return tx.QueryRow(ctx, query, args...).Scan(&held)
 			}
 			var err error

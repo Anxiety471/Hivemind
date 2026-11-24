@@ -1113,7 +1113,7 @@ export function threadGetCases(system: System): Case[] {
       { declines: false },
     ),
     get(
-      "block-ask-with-credential-goes-to-typescript",
+      "block-ask-with-credential-served",
       { botId: "__s-b1__" },
       async (seeded) => {
         await bot(seeded, "b1");
@@ -1130,10 +1130,10 @@ export function threadGetCases(system: System): Case[] {
           },
         ]);
       },
-      { declines: true },
+      { declines: false },
     ),
     get(
-      "block-one-time-code-goes-to-typescript",
+      "block-one-time-code-served",
       { botId: "__s-b1__" },
       async (seeded) => {
         await bot(seeded, "b1");
@@ -1141,10 +1141,10 @@ export function threadGetCases(system: System): Case[] {
           { kind: "ask", text: "code?", oneTimeCode: { origin: "https://example.com" } },
         ]);
       },
-      { declines: true },
+      { declines: false },
     ),
     get(
-      "block-import-setup-goes-to-typescript",
+      "block-import-setup-served",
       { botId: "__s-b1__" },
       async (seeded) => {
         await bot(seeded, "b1");
@@ -1152,7 +1152,7 @@ export function threadGetCases(system: System): Case[] {
           { kind: "import_setup", items: [{ kind: "routine", routineId: "r", name: "n" }] },
         ]);
       },
-      { declines: true },
+      { declines: false },
     ),
     get(
       "blocks-not-a-list",
@@ -1278,11 +1278,15 @@ export function threadGetCases(system: System): Case[] {
           controlHolder: "user",
           controlBotId: id(seeded, "b1"),
           controlLeaseId: "lease-1",
+          controlLeaseExpiresAt: new Date(Date.now() + 600_000),
           controlUserId: id(seeded, "other"),
         });
         await bot(seeded, "b1", { computer: "c1" });
       },
-      { declines: false },
+      // A live lease: a missing/expired one enqueues computer.control-expire, whose job
+      // writes an event and a thread cursor on whichever side's window it lands in. The
+      // settle only covers late publishes; the case itself stays a pure read.
+      { declines: false, settleMs: 5000 },
     ),
     get(
       "computer-states",

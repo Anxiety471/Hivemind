@@ -123,7 +123,7 @@ func resumeRoutine(ctx context.Context, database *db.DB, actor db.Actor, botIDs 
 		if active || cron.IsOneShotRoutineCrons(crons) {
 			// Prisma's @updatedAt writes the new time on every update.
 			_, err := tx.Exec(ctx, `UPDATE routines SET "resumeOnRestore" = false, "updatedAt" = $2 WHERE id = $1`,
-				routine.ID, at)
+				append([]any{routine.ID}, db.Data(at)...)...)
 			return err
 		}
 		var nextRunAt *time.Time
@@ -136,7 +136,7 @@ func resumeRoutine(ctx context.Context, database *db.DB, actor db.Actor, botIDs 
 		}
 		tag, err := tx.Exec(ctx, `UPDATE routines SET active = true, "nextRunAt" = $2,
 			"resumeOnRestore" = false, "updatedAt" = $3 WHERE id = $1`,
-			routine.ID, nextRunAt, at)
+			append([]any{routine.ID}, db.Data(nextRunAt, at)...)...)
 		if err != nil {
 			return err
 		}

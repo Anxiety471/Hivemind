@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 )
 
 const (
@@ -318,7 +320,7 @@ func SniffSafeUpload(claimedMIME string, prefix []byte) error {
 // ValidateDriveName validates and normalizes a Space Drive file or folder name.
 func ValidateDriveName(name string) (string, error) {
 	trimmed := strings.TrimSpace(name)
-	if trimmed == "" || utf8.RuneCountInString(trimmed) > 255 || trimmed == "." || trimmed == ".." {
+	if trimmed == "" || wtf8.Length(trimmed) > 255 || trimmed == "." || trimmed == ".." {
 		return "", &ValidationError{Message: "Invalid file or folder name"}
 	}
 	for i := 0; i < len(trimmed); i++ {

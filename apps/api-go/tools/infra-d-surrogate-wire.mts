@@ -4,13 +4,11 @@
  * 1. Live Go paths: spaces.rename and organizations.rename echo `\ud800` through
  *    shared.EchoText; pages.rename stores through Postgres, where TS and Go both
  *    return U+FFFD. The responses are compared for each.
- * 2. Excluded cases: the five live strict inputs (pages.list, pages.pin,
- *    pages.remove, pages.rename, spendingLimit.set at its root and nested limit)
- *    echo an unknown key raw in TypeScript and U+FFFD in Go; the live
- *    externalConversations.updatePolicy response echoes the saved policy raw; and
- *    TypeScript-only computerProvider.update/get echoes a value raw. The observed
- *    differences are written to tools/infra-d-surrogate-cases.json with
- *    `excluded: true`.
+ * 2. The strict inputs (pages.list, pages.pin, pages.remove, pages.rename and
+ *    spendingLimit.set at its root and nested limit) must answer with the same
+ *    escaped key; externalConversations.updatePolicy must echo the saved policy
+ *    with the same code units; and the TypeScript-only computerProvider value
+ *    must survive the Go boundary decoder. Every case must be equal.
  *
  * Requires the disposable fixture database:
  *   set -a; . /home/hitori/go-port/fixture-db/.env.infra-d; set +a
@@ -277,19 +275,13 @@ async function errorEcho(procedure: string, input: unknown, space: string, label
   const equal =
     tsResult.status === goResult.status &&
     isDeepStrictEqual(tsResult.body, goResult.body);
-  // The only allowed difference is the code unit in the echoed key: TS keeps the
-  // escape, Go has U+FFFD. Everything else must already agree.
-  const repaired = (value: unknown) =>
-    JSON.parse(JSON.stringify(value).replaceAll("\\ud800", "\\ufffd"));
-  const sameApart =
-    tsResult.status === goResult.status &&
-    isDeepStrictEqual(repaired(tsResult.body), repaired(goResult.body));
-  const known = !equal && sameApart && text.includes("\\ud800") && !goResult.text.includes("\\ud800");
-  if (!known) failures += 1;
-  console.log(
-    `${known ? "known" : equal ? "ok   " : "FAIL "} ${procedure} ${label}: ${tsResult.status}/${goResult.status}`,
-  );
-  if (!equal) console.log("  ts:", tsResult.text, "\n  go:", goResult.text);
+  if (!equal) {
+    failures += 1;
+    console.log(`FAIL  ${procedure} ${label}: ${tsResult.status}/${goResult.status}`);
+    console.log("  ts:", tsResult.text, "\n  go:", goResult.text);
+  } else {
+    console.log(`ok    ${procedure} ${label}: ${tsResult.status}`);
+  }
   cases.push({
     procedure,
     kind: label,
@@ -304,12 +296,9 @@ async function errorEcho(procedure: string, input: unknown, space: string, label
     typescript: tsResult.body,
     go: goResult.body,
     equal,
-    excluded: known,
-    ...(known
-      ? { reason: "unrecognized key contains an unpaired surrogate; Go decoded it to U+FFFD" }
-      : {}),
+    excluded: false,
   });
-  return known;
+  return equal;
 }
 
 async function echoPolicy(space: string, label: string) {
@@ -332,18 +321,13 @@ async function echoPolicy(space: string, label: string) {
   const equal =
     tsResult.status === goResult.status &&
     isDeepStrictEqual(tsResult.body, goResult.body);
-  const repaired = (value: unknown) =>
-    JSON.parse(JSON.stringify(value).replaceAll("\\ud800", "\\ufffd"));
-  const sameApart =
-    tsResult.status === goResult.status &&
-    isDeepStrictEqual(repaired(tsResult.body), repaired(goResult.body));
-  const known =
-    !equal && sameApart && text.includes("\\ud800") && !goResult.text.includes("\\ud800");
-  if (!known) failures += 1;
-  console.log(
-    `${known ? "known" : equal ? "ok   " : "FAIL "} externalConversations.updatePolicy ${label}: ${tsResult.status}/${goResult.status}`,
-  );
-  if (!equal) console.log("  ts:", tsResult.text, "\n  go:", goResult.text);
+  if (!equal) {
+    failures += 1;
+    console.log(`FAIL  externalConversations.updatePolicy ${label}: ${tsResult.status}/${goResult.status}`);
+    console.log("  ts:", tsResult.text, "\n  go:", goResult.text);
+  } else {
+    console.log(`ok    externalConversations.updatePolicy ${label}: ${tsResult.status}`);
+  }
   cases.push({
     procedure: "externalConversations.updatePolicy",
     kind: label,
@@ -358,12 +342,140 @@ async function echoPolicy(space: string, label: string) {
     typescript: tsResult.body,
     go: goResult.body,
     equal,
-    excluded: known,
-    ...(known
-      ? { reason: "the response echoes the saved policy; Go decoded the lone surrogates to U+FFFD" }
-      : {}),
+    excluded: false,
   });
-  return known;
+  return equal;
+}
+
+async function exactEcho(
+  procedure: string,
+  input: unknown,
+  space: string,
+  field: string,
+  label: string,
+) {
+  const goResult = await call(GO_URL, procedure, input, space);
+  const response = await handles.app.request(
+    `/rpc/${procedure.replaceAll(".", "/")}`,
+    { method: "POST", headers: headers(space), body: JSON.stringify({ json: input }) },
+    { incoming: { socket: { remoteAddress: "127.0.0.1" } } },
+  );
+  const text = await response.text();
+  const tsResult = { status: response.status, body: text ? JSON.parse(text) : null };
+  const tsValue = tsResult.body?.json?.[field];
+  const goValue = goResult.body?.json?.[field];
+  const equal =
+    tsResult.status === goResult.status && tsValue === goValue && tsValue === (input as any)[field];
+  if (!equal) {
+    failures += 1;
+    console.log(`FAIL  ${procedure} ${label}: ${tsResult.status}/${goResult.status}`);
+    console.log("  ts:", JSON.stringify(tsValue), "\n  go:", JSON.stringify(goValue));
+  } else {
+    console.log(`ok    ${procedure} ${label}: literal code units echoed`);
+  }
+  cases.push({
+    procedure,
+    kind: label,
+    input: portable(input),
+    field,
+    typescript: tsValue ?? null,
+    go: goValue ?? null,
+    equal,
+    excluded: false,
+  });
+  return equal;
+}
+
+async function rawError(procedure: string, body: string, space: string, label: string) {
+  const goResponse = await fetch(`${GO_URL}/rpc/${procedure.replaceAll(".", "/")}`, {
+    method: "POST",
+    headers: headers(space),
+    body,
+  });
+  const goText = await goResponse.text();
+  const response = await handles.app.request(
+    `/rpc/${procedure.replaceAll(".", "/")}`,
+    { method: "POST", headers: headers(space), body },
+    { incoming: { socket: { remoteAddress: "127.0.0.1" } } },
+  );
+  const text = await response.text();
+  const parse = (value: string) => (value ? JSON.parse(value) : null);
+  const equal = response.status === goResponse.status && isDeepStrictEqual(parse(text), parse(goText));
+  if (!equal) {
+    failures += 1;
+    console.log(`FAIL  ${procedure} ${label}: ${response.status}/${goResponse.status}`);
+    console.log("  ts:", text, "\n  go:", goText);
+  } else {
+    console.log(`ok    ${procedure} ${label}: ${response.status}`);
+  }
+  cases.push({
+    procedure,
+    kind: label,
+    input: "<raw body>",
+    typescript: parse(text),
+    go: parse(goText),
+    equal,
+    excluded: false,
+  });
+  return equal;
+}
+
+async function policyStorage(space: string, label: string) {
+  const input = {
+    externalConversationId: ids.externalId,
+    teamChatAmbientEnabled: true,
+    teamChatRules: "stored\ud800rule",
+    automatedSenderPolicies: {
+      "sender\ud800": { name: "name\ud800", mode: "ignore" },
+      "sender\uFFFD": { name: "second", mode: "user" },
+      "nul\u0000key": { name: "third", mode: "ignore" },
+    },
+  };
+  const response = await handles.app.request(
+    "/rpc/externalConversations/updatePolicy",
+    { method: "POST", headers: headers(space), body: JSON.stringify({ json: input }) },
+    { incoming: { socket: { remoteAddress: "127.0.0.1" } } },
+  );
+  const tsText = await response.text();
+  const tsRow = await system.externalConversation.findUnique({
+    where: { id: ids.externalId },
+    select: { automatedSenderPolicies: true, teamChatRules: true },
+  });
+  const goResult = await call(GO_URL, "externalConversations.updatePolicy", input, space);
+  const goRow = await system.externalConversation.findUnique({
+    where: { id: ids.externalId },
+    select: { automatedSenderPolicies: true, teamChatRules: true },
+  });
+  const equal = response.status === goResult.status && isDeepStrictEqual(tsRow, goRow);
+  if (!equal) {
+    failures += 1;
+    console.log(`FAIL  externalConversations.updatePolicy ${label}: ${response.status}/${goResult.status}`);
+    console.log("  ts row:", JSON.stringify(tsRow), "\n  go row:", JSON.stringify(goRow));
+  } else {
+    console.log(`ok    externalConversations.updatePolicy ${label}: stored leaves match (${response.status})`);
+  }
+  cases.push({
+    procedure: "externalConversations.updatePolicy",
+    kind: label,
+    input: portable(input),
+    typescript: tsRow,
+    go: goRow,
+    equal,
+    excluded: false,
+  });
+  void tsText;
+  return equal;
+}
+
+function portable(value: unknown): unknown {
+  return JSON.parse(
+    JSON.stringify(value)
+      .replaceAll(ids.space2, "__space2__")
+      .replaceAll(ids.orgId, "__org__")
+      .replaceAll(ids.pageId, "__page__")
+      .replaceAll(ids.botId, "__bot__")
+      .replaceAll(ids.externalId, "__external__"),
+  );
 }
 
 async function liveRename(
@@ -472,6 +584,33 @@ try {
     "unrecognized-nested-key",
   );
   await echoPolicy(ids.space1, "saved-policy-echo");
+  await policyStorage(ids.space1, "reviewer-policy-keys-store");
+  await rawError(
+    "externalConversations.updatePolicy",
+    JSON.stringify({
+      json: {
+        externalConversationId: ids.externalId + "\u0000",
+        teamChatAmbientEnabled: null,
+        teamChatRules: null,
+        automatedSenderPolicies: {},
+      },
+    }),
+    ids.space1,
+    "reviewer-id-nul",
+  );
+  await exactEcho(
+    "spaces.rename",
+    { spaceId: ids.space2, name: "m\uFC00\uFC01\uE000\uE7FF\uE800\uF8FFz" },
+    ids.space1,
+    "name",
+    "literal-marker-code-units",
+  );
+  await rawError(
+    "spaces.rename",
+    `{"json":{"spaceId":${JSON.stringify(ids.space2)},"name":"a\u0001b"}}`,
+    ids.space1,
+    "raw-control-byte",
+  );
 
   // Excluded: computerProvider.update/get is TypeScript-only and echoes the raw
   // code unit; Go's decoder turns the same body into U+FFFD.
@@ -506,37 +645,42 @@ try {
   if (tsEcho !== apiUrl || tsGetEcho !== apiUrl) {
     throw new Error(`TS did not echo the raw surrogate: ${JSON.stringify({ tsEcho, tsGetEcho })}`);
   }
-  // The same JSON string through the Go decoder and URL parser.
-  const urlproof = join(dataDir, "urlproof");
+  // The same JSON string through the Go boundary decoder: the procedure is
+  // TypeScript-only, so this pins the code unit the gateway's decoder keeps.
+  const wtf8proof = join(dataDir, "wtf8proof");
   const corpus = join(dataDir, "surrogate-corpus.jsonl");
   const actual = join(dataDir, "surrogate-actual.jsonl");
-  const buildURL = spawnSync("go", ["build", "-o", urlproof, "./cmd/urlproof"], {
+  const buildProof = spawnSync("go", ["build", "-o", wtf8proof, "./cmd/wtf8proof"], {
     cwd: GO_DIR,
     encoding: "utf8",
     env: process.env,
   });
-  if (buildURL.status !== 0) throw new Error(`urlproof build failed: ${buildURL.stderr}`);
-  await writeFile(corpus, `${JSON.stringify({ id: "computerProvider", op: "parse", input: apiUrl })}\n`);
-  const runURL = spawnSync(urlproof, ["-corpus", corpus, "-out", actual], { encoding: "utf8" });
-  if (runURL.status !== 0) throw new Error(`urlproof failed: ${runURL.stderr}`);
-  const goDecoded = (JSON.parse((await readFile(actual, "utf8")).trim()) as { zvalue: string }).zvalue;
-  const expectedGo = apiUrl.replace(/[\uD800-\uDFFF]/g, "\uFFFD");
-  if (goDecoded !== expectedGo) {
-    throw new Error(`Go decoded ${JSON.stringify(goDecoded)}, expected ${JSON.stringify(expectedGo)}`);
+  if (buildProof.status !== 0) throw new Error(`wtf8proof build failed: ${buildProof.stderr}`);
+  await writeFile(corpus, `${JSON.stringify({ id: "computerProvider", value: apiUrl })}\n`);
+  const runProof = spawnSync(wtf8proof, ["-corpus", corpus, "-out", actual], { encoding: "utf8" });
+  if (runProof.status !== 0) throw new Error(`wtf8proof failed: ${runProof.stderr}`);
+  const answer = JSON.parse((await readFile(actual, "utf8")).trim()) as {
+    ok: boolean;
+    text: string;
+  };
+  const goDecoded = answer.ok ? JSON.parse(answer.text) : undefined;
+  const equal = answer.ok && isDeepStrictEqual(goDecoded, apiUrl);
+  if (!equal) {
+    failures += 1;
+    console.error("FAIL computerProvider decode", { apiUrl, goDecoded });
+  } else {
+    console.log("ok   computerProvider decode: TS and the Go boundary keep the code unit");
   }
-  const excluded = {
+  cases.push({
     procedure: "computerProvider.update/get",
     input: { provider: "boat", values: { apiUrl } },
     field: "values.apiUrl",
     typescript: tsEcho,
     typescriptGet: tsGetEcho,
     goDecoded,
-    excluded: true,
-    reason:
-      "Go encoding/json decodes an unpaired surrogate to U+FFFD; the procedure echoes the raw code unit and stores JSON text, so no DB sanitizer applies",
-  };
-  console.log("known computerProvider difference recorded as excluded");
-  cases.push(excluded);
+    equal,
+    excluded: false,
+  });
 } finally {
   await system.deploymentSettings.deleteMany({ where: { id: "default" } });
   await system.session.deleteMany({ where: { id: `${ids.userId}-session` } });

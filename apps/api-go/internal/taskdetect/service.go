@@ -522,7 +522,7 @@ func insertDetectedTicket(
 		SET "nextNumber" = "nextNumber" + 1, "updatedAt" = $2
 		WHERE id = $1
 		RETURNING "nextNumber" - 1
-	`, board.ID, at).Scan(&nextNumber)
+	`, append([]any{board.ID}, db.Data(at)...)...).Scan(&nextNumber)
 	if err != nil {
 		return AppliedTicket{}, OpenTicket{}, false, err
 	}
@@ -548,10 +548,10 @@ func insertDetectedTicket(
 	var decisionJSON *string
 	if action.Decision != nil {
 		if normalized, ok := tickets.NormalizeTicketDecision(*action.Decision); ok {
-			if encoded, err := json.Marshal(normalized); err == nil {
-				s := string(encoded)
-				decisionJSON = &s
-			}
+			// Prisma sanitizes the decision object as a json write value: NUL and an
+			// unpaired surrogate become U+FFFD in every string leaf and key.
+			encoded := db.JSON(normalized)
+			decisionJSON = &encoded
 		}
 	}
 	title := shared.StoredText(action.Title)
@@ -562,8 +562,8 @@ func insertDetectedTicket(
 			"assigneeBotId", "ownerUserId", "ownerBotId", "workerBotIds",
 			"createdByBotId", "createdByUserId", "createdAt", "updatedAt", "completedAt", decision
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $15, $16, $17)
-	`, id, board.ID, spaceID, nextNumber, title, desc, status, priority,
-		assigneeBotID, ownerUserID, ownerBotID, workerBotIDs, botID, userID, at, completedAt, decisionJSON)
+	`, db.Data(id, board.ID, spaceID, nextNumber, title, desc, status, priority,
+		assigneeBotID, ownerUserID, ownerBotID, workerBotIDs, botID, userID, at, completedAt, decisionJSON)...)
 	if err != nil {
 		return AppliedTicket{}, OpenTicket{}, false, err
 	}
@@ -697,14 +697,13 @@ func applyUpdateToTicket(
 		}
 	}
 
-	nextDecision := currentDecision
+	var nextDecision any = currentDecision
 	decisionChanged := false
 	if action.Decision != nil {
 		if normalized, ok := tickets.NormalizeTicketDecision(*action.Decision); ok {
-			if encoded, err := json.Marshal(normalized); err == nil {
-				nextDecision = encoded
-				decisionChanged = string(currentDecision) != string(encoded)
-			}
+			encoded := db.JSON(normalized)
+			nextDecision = encoded
+			decisionChanged = string(currentDecision) != encoded
 		}
 	}
 
@@ -731,8 +730,8 @@ func applyUpdateToTicket(
 		    "assigneeBotId" = $6, "ownerUserId" = $7, "ownerBotId" = $8, "workerBotIds" = $9,
 		    "completedAt" = $10, "updatedAt" = $11, decision = $12
 		WHERE id = $1
-	`, target.ID, nextTitle, nextDescription, nextStatus, nextPriority,
-		nextAssigneeBotID, nextOwnerUserID, nextOwnerBotID, nextWorkerBotIDs, completedAt, at, nextDecision)
+	`, append([]any{target.ID}, db.Data(nextTitle, nextDescription, nextStatus, nextPriority,
+		nextAssigneeBotID, nextOwnerUserID, nextOwnerBotID, nextWorkerBotIDs, completedAt, at, nextDecision)...)...)
 	if err != nil {
 		return AppliedTicket{}, false, err
 	}

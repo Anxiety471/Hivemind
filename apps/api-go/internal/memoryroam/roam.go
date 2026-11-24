@@ -14,7 +14,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 
@@ -24,6 +23,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/events"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/memory"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 )
 
 const (
@@ -661,7 +661,7 @@ func commitInstructions(ctx context.Context, logger *slog.Logger, database *db.D
 		}
 		if _, err := tx.Exec(ctx, `UPDATE bots SET instructions = $1, "instructionHistory" = $2,
 			"updatedAt" = now() WHERE id = $3 AND "spaceId" = $4`,
-			content, history, bot.ID, bot.SpaceID); err != nil {
+			append(db.Data(content, db.JSONText(string(history))), bot.ID, bot.SpaceID)...); err != nil {
 			return err
 		}
 		event, err := events.AppendTx(ctx, tx, ring, events.Input{
@@ -698,7 +698,7 @@ func prependInstructionVersion(raw []byte, current string) ([]byte, error) {
 			return nil, fmt.Errorf("stored instruction history is invalid: %w", err)
 		}
 	}
-	version, err := json.Marshal(instructionVersion{
+	version, err := wtf8.Marshal(instructionVersion{
 		ID: effects.NewID(), Instructions: current, Reason: "Memory roamer",
 		CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
 	})
@@ -709,7 +709,7 @@ func prependInstructionVersion(raw []byte, current string) ([]byte, error) {
 	if len(history) > 20 {
 		history = history[:20]
 	}
-	return json.Marshal(history)
+	return wtf8.Marshal(history)
 }
 
 func scopeFor(shared bool) string {
@@ -823,7 +823,7 @@ func promptFor(bot Bot, documents []memory.Document, maxBytes int, shared bool) 
 			instructions = "(empty)"
 		}
 		sections = append(sections, fmt.Sprintf("--- Instructions (writable; complete replacement if changed; %d characters) ---\n%s",
-			utf8.RuneCountInString(bot.Instructions), instructions))
+			wtf8.Length(bot.Instructions), instructions))
 		used += len([]byte(bot.Instructions))
 		writable = append(writable, "Instructions")
 	}
@@ -913,7 +913,7 @@ func validateChanges(parsed answer, documents []memory.Document, omitted []strin
 				}
 				continue
 			}
-			if utf8.RuneCountInString(content) > MaxInstructionsLength {
+			if wtf8.Length(content) > MaxInstructionsLength {
 				return validatedChanges{}, fmt.Errorf("model exceeded the instructions cap")
 			}
 			if content != existing {

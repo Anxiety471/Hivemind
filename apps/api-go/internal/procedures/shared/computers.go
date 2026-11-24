@@ -39,6 +39,7 @@ func MaxComputersPerUser(configured string) (int, error) {
 func RestoreBotUnderComputerQuota(ctx context.Context, database *db.DB, tx pgx.Tx, limit int, userID, botID, computerID string, at time.Time) error {
 	if limit > 0 {
 		// Seed 1 keeps this keyspace apart from lockSpaceForContentCreation (seed 0).
+		// writeaudit:dynamic transaction-scoped advisory lock; no row payload
 		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 1))`, userID); err != nil {
 			return err
 		}
@@ -64,7 +65,7 @@ func RestoreBotUnderComputerQuota(ctx context.Context, database *db.DB, tx pgx.T
 			}
 		}
 	}
-	tag, err := tx.Exec(ctx, `UPDATE bots SET "archivedAt" = NULL, "updatedAt" = $1 WHERE id = $2`, at, botID)
+	tag, err := tx.Exec(ctx, `UPDATE bots SET "archivedAt" = NULL, "updatedAt" = $1 WHERE id = $2`, append(db.Data(at), botID)...)
 	if err != nil {
 		return err
 	}

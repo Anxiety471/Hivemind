@@ -147,7 +147,7 @@ func ClaimEmailAddress(ctx context.Context, database *db.DB, actor db.Actor, dep
 			// A concurrent claim for the same name or bot is decided by the unique indexes:
 			// the insert does nothing, and the re-read below reports which one won.
 			tag, err := tx.Exec(ctx, `INSERT INTO bot_email_addresses (name, "botId", "createdAt")
-				VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`, name, bot.ID, now())
+				VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`, db.Data(name, bot.ID, now())...)
 			if err != nil {
 				return err
 			}

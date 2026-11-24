@@ -203,15 +203,27 @@ func TestMetadataKeepsOnlyWhatTypeScriptKeeps(t *testing.T) {
 }
 
 func TestRedactionGateRefusesWhatItCannotProve(t *testing.T) {
-	for _, safe := range []string{"", "usd", "spendingLimit.set", "spending_limit", "week", "ckabc123", "a-b.c_d"} {
+	// Every safe identifier the TypeScript redactor leaves alone: its rules need a separator,
+	// quote, space, "@", "://", "/" or one of the bare-secret prefixes.
+	for _, safe := range []string{"", "usd", "spendingLimit.set", "spending_limit", "week", "ckabc123", "a-b.c_d",
+		"authorization", "secret", "token", "credentials", "my-token", "Password1", "emailish", "SK_abc"} {
 		if got, err := redactText(safe); err != nil || got != safe {
 			t.Errorf("%q should pass: %v", safe, err)
 		}
 	}
-	for _, risky := range []string{"a@b.co", "sk-abcdefghijkl", "SK_abc", "ak_1", "ck_x", "eyJhbGci", "has space", "x:y", "a/b", "my-token", "Password1", "emailish"} {
+	// A bare-secret prefix is refused outright, conservatively: redactBareKey would leave some
+	// of these alone, and a refused request is declined to TypeScript.
+	for _, risky := range []string{"a@b.co", "sk-abcdefghijkl", "sk-live", "sk_livekey", "ak_1", "ck_x", "eyJhbGci", "has space", "x:y", "a/b"} {
 		if _, err := redactText(risky); err == nil {
 			t.Errorf("%q must be refused", risky)
 		}
+	}
+	if !AuditedMetadataServable("authorization") || AuditedMetadataServable("sk-live") {
+		t.Error("the audited-value predicate follows the gate")
+	}
+	// The 200-unit cut happens before redaction, so an unsafe tail cannot decline the request.
+	if !AuditedMetadataServable(strings.Repeat("a", 200) + " sk-live") {
+		t.Error("only the stored 200 units decide servability")
 	}
 }
 
@@ -251,20 +263,15 @@ func TestSettingsProceduresAreAuditedWithTheTypeScriptMetadata(t *testing.T) {
 	if !ok || !reflect.DeepEqual(override.Metadata, want) {
 		t.Fatalf("spaceSettings.setOverride = %+v", override)
 	}
-	// Every value an enum can produce passes the gate; the one its word list would refuse is
-	// listed as known safe, and nothing else containing the word is.
+	// Every value an enum can produce passes the gate, and so does any other safe identifier the
+	// TypeScript redactor leaves alone.
 	kept, err := securityEventMetadata(override.Metadata)
 	if err != nil || kept["setting"] != "credentials" {
 		t.Fatalf("credentials must be recorded as is: %v %v", kept, err)
 	}
-	for _, value := range []string{"models", "voice", "confirmations", "always_allow", "require_approval", "deny", "tool", "connector", "site"} {
+	for _, value := range []string{"models", "voice", "confirmations", "always_allow", "require_approval", "deny", "tool", "connector", "site", "credentials2", "my-credentials", "Credentials"} {
 		if _, err := redactText(value); err != nil {
 			t.Errorf("%s must pass the gate: %v", value, err)
-		}
-	}
-	for _, value := range []string{"credentials2", "my-credentials", "Credentials"} {
-		if _, err := redactText(value); err == nil {
-			t.Errorf("%s must stay refused", value)
 		}
 	}
 	// approvalRules.remove records the caller's own id, which the gate cannot prove safe: not served.

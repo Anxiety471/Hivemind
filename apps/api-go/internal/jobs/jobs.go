@@ -63,6 +63,7 @@ func EnqueueIn(ctx context.Context, tx pgx.Tx, job Job) error {
 	if job.ReplaceKey != "" {
 		key = &job.ReplaceKey
 	}
+	// writeaudit:dynamic graphile add_job stores its own json payload; TS uses $executeRawUnsafe + JSON.stringify without Prisma sanitization
 	_, err = tx.Exec(ctx, `select graphile_worker.add_job($1::text, $2::json, queue_name => $3::text,
 	   run_at => $4::timestamptz, max_attempts => $5::int, job_key => $6::text)`,
 		job.Name, string(payload), nil, runAt, nil, key)
@@ -74,6 +75,7 @@ func EnqueueIn(ctx context.Context, tx pgx.Tx, job Job) error {
 
 // CancelIn is cancelIn: drop the queued job with this key, if any.
 func CancelIn(ctx context.Context, tx pgx.Tx, key string) error {
+	// writeaudit:dynamic graphile remove_job takes a job-key filter; TS uses the same raw call without sanitization
 	if _, err := tx.Exec(ctx, `select graphile_worker.remove_job($1::text)`, key); err != nil {
 		return fmt.Errorf("remove job %s: %w", key, err)
 	}

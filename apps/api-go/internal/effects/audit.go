@@ -2,11 +2,13 @@ package effects
 
 import (
 	"context"
-	"encoding/json"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
 )
 
 // AuditEvent is an account's own action, appended to its organization's audit
@@ -51,7 +53,7 @@ func (r *Recorder) recordAudit(ctx context.Context, event AuditEvent) error {
 	if err != nil {
 		return err
 	}
-	body, err := json.Marshal(metadata)
+	body, err := wtf8.Marshal(metadata)
 	if err != nil {
 		return err
 	}
@@ -114,12 +116,13 @@ func (r *Recorder) recordAudit(ctx context.Context, event AuditEvent) error {
 				(id, "organizationId", "spaceId", "spaceName", "actorType", "actorId", "actorLabel", action,
 				 "targetType", "targetId", "targetLabel", outcome, "runId", "threadId", ip, "userAgent", metadata, "createdAt")
 				VALUES ($1, $2, $3, $4, 'user', $5, $6, $7, $8, $9, $10, 'success', NULL, NULL, $11, $12, $13::jsonb, $14)`,
-				NewID(), organization, nullable(bounded(event.SpaceID, 128)), name,
-				nullable(bounded(event.ActorID, 128)), actorLabel, bounded(event.Action, 128),
-				nullable(bounded(event.TargetType, 64)), nullable(bounded(event.TargetID, 200)),
-				nullable(strings.ReplaceAll(bounded(event.TargetLabel, 200), "\x00", "\uFFFD")),
-				nullable(bounded(caller.IP, 64)), nullable(bounded(caller.UserAgent, 512)),
-				string(body), time.Now().UTC().Truncate(time.Millisecond)); err != nil {
+				db.Data(NewID(), organization, nullable(bounded(event.SpaceID, 128)), name,
+					nullable(bounded(event.ActorID, 128)), actorLabel, bounded(event.Action, 128),
+					nullable(bounded(event.TargetType, 64)), nullable(bounded(event.TargetID, 200)),
+					nullable(strings.ReplaceAll(bounded(event.TargetLabel, 200), "\x00", "\uFFFD")),
+					nullable(bounded(caller.IP, 64)), nullable(bounded(caller.UserAgent, 512)),
+					db.JSONText(string(body)),
+					time.Now().UTC().Truncate(time.Millisecond))...); err != nil {
 				return err
 			}
 		}
