@@ -11,10 +11,11 @@
  *
  * The fixture is disposable, so the seeded rows are left behind.
  */
-import { createHmac } from "node:crypto";
+
 import { spawn } from "node:child_process";
-import { createServer } from "node:http";
+import { createHmac } from "node:crypto";
 import { mkdtemp, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -72,10 +73,22 @@ async function seed() {
   });
   for (const [index, spaceId] of spaces.entries()) {
     await system.space.create({
-      data: { id: spaceId, organizationId: orgId, name: `Space ${index + 1}`, isDefault: index === 0 },
+      data: {
+        id: spaceId,
+        organizationId: orgId,
+        name: `Space ${index + 1}`,
+        isDefault: index === 0,
+      },
     });
     await system.spaceMember.create({
-      data: { id: `${spaceId}-m`, spaceId, organizationId: orgId, userId, role: "owner", createdAt: new Date() },
+      data: {
+        id: `${spaceId}-m`,
+        spaceId,
+        organizationId: orgId,
+        userId,
+        role: "owner",
+        createdAt: new Date(),
+      },
     });
     await system.botSection.create({
       data: { id: `${spaceId}-section`, spaceId, userId, name: "Bench section", position: 0 },
@@ -159,7 +172,13 @@ async function seed() {
     },
   });
   await system.message.create({
-    data: { id: `${ID}-gm1`, threadId: `${ID}-gt1`, seq: 1, role: "user", blocks: [{ kind: "text", text: "Group hi" }] },
+    data: {
+      id: `${ID}-gm1`,
+      threadId: `${ID}-gt1`,
+      seq: 1,
+      role: "user",
+      blocks: [{ kind: "text", text: "Group hi" }],
+    },
   });
 }
 
@@ -196,13 +215,25 @@ const upstream = createServer(async (incoming, outgoing) => {
 await new Promise<void>((resolve) => upstream.listen(Number(UPSTREAM_PORT), "127.0.0.1", resolve));
 
 const routesFile = join(dataDir, "routes.json");
-await writeFile(routesFile, JSON.stringify({ default: "proxy", routes: { "spaces.list": { mode: "go", readOnly: true } } }));
+await writeFile(
+  routesFile,
+  JSON.stringify({ default: "proxy", routes: { "spaces.list": { mode: "go", readOnly: true } } }),
+);
 
 await seed();
 
 const go = spawn(
   GO_BINARY,
-  ["-listen", `127.0.0.1:${GO_PORT}`, "-upstream", `http://127.0.0.1:${UPSTREAM_PORT}`, "-routes", routesFile, "-build-id-file", BUILD_ID_FILE],
+  [
+    "-listen",
+    `127.0.0.1:${GO_PORT}`,
+    "-upstream",
+    `http://127.0.0.1:${UPSTREAM_PORT}`,
+    "-routes",
+    routesFile,
+    "-build-id-file",
+    BUILD_ID_FILE,
+  ],
   {
     env: {
       ...process.env,
@@ -246,7 +277,8 @@ async function goCall() {
     headers,
     body: JSON.stringify({ json: {} }),
   });
-  if (response.status !== 200) throw new Error(`go status ${response.status}: ${await response.text()}`);
+  if (response.status !== 200)
+    throw new Error(`go status ${response.status}: ${await response.text()}`);
   return response.arrayBuffer();
 }
 

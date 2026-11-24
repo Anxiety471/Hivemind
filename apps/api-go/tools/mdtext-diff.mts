@@ -21,7 +21,7 @@
  *     [--cases 100000] [--blocks /tmp/lane-i/blocks.json] [--work /tmp/lane-i/mdtext-diff]
  */
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -81,12 +81,14 @@ const spec = JSON.parse(readFileSync(join(HERE, "mdtext-spec-corpus.json"), "utf
 };
 for (const markdown of spec.commonmark) add("commonmark-spec", markdown, 4096, 64);
 for (const markdown of spec.gfm) add("gfm-spec", markdown, 4096, 64);
-for (const markdown of [...spec.commonmark, ...spec.gfm].slice(0, 200)) add("spec-capped", markdown, 40, 17);
+for (const markdown of [...spec.commonmark, ...spec.gfm].slice(0, 200))
+  add("spec-capped", markdown, 40, 17);
 
 const markdownFiles: string[] = [];
 for (const directory of [REPO, join(REPO, "docs")]) {
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
-    if (entry.isFile() && entry.name.endsWith(".md")) markdownFiles.push(join(directory, entry.name));
+    if (entry.isFile() && entry.name.endsWith(".md"))
+      markdownFiles.push(join(directory, entry.name));
   }
 }
 for (const path of [...new Set(markdownFiles)]) {
@@ -125,28 +127,182 @@ function mulberry32(seed: number): () => number {
 }
 
 const random = mulberry32(SEED);
-const pick = <T>(values: readonly T[]): T => values[Math.floor(random() * values.length)]!;
+const pick = <T,>(values: readonly T[]): T => values[Math.floor(random() * values.length)]!;
 const int = (limit: number): number => Math.floor(random() * limit);
 const chance = (probability: number): boolean => random() < probability;
 
 const TOKENS = [
-  "a", "b", "c", "x", "y", "z", "1", "2", "0", "9", " ", " ", "  ", "\t", "\n", "\n", "\n\n",
-  "\r\n", "\r", "|", "||", "-", "--", "---", "----", "___", "***", "*", "**", "***", "_", "__",
-  "___", "~", "~~", "~~~", "~~~~", "`", "``", "```", "````", "#", "##", "###", "#######", ">",
-  "> ", "- ", "* ", "+ ", "1. ", "1) ", "2. ", "10. ", "[", "]", "(", ")", "![", "](", ")",
-  "<", ">", "<div>", "</div>", "<br/>", "<br />", '<a href="x">', "</a>", "<span class='y'>",
-  "<x@y.z>", "<a@b.c.d>", "<https://a.b/c>", "<ab:>", "<a:>", "<ab://x.y/z?q=1>", "<a b>",
-  "<!--", "-->", "<!-- x -->", "&amp;", "&#x41;", "&nbsp;", "&notanentity;", "\\*", "\\_",
-  "\\`", "\\\\", "\\", '"', "'", "=", "@", ".", "/", "?", ":", "&", "%", "{", "}", "$",
-  "é", "ü", "ß", "中", "文", "ñ", "Ω", "α", "\u0301", "\u200b", "\u200d", "\u2028", "\u2029",
-  "\u00a0", "\u3000", "\ufeff", "\ue000", "\ue0000\ue000", "\ue0012\ue000", "👍", "🧑🏽",
-  "👨‍👩‍👧‍👦", "\ud800", "\udc00", "\ud83d", "\ude00", "\ud83d\ude00", "\ud800\ud800",
-  "| a | b |", "|---|:--:|", "|:--|--:|", "| a |", "a | b", "1) x", "* * *", "- - -",
-  "```js", "```js `x`", "~~~", "~~a~~", "__a__", "_a_", "**a**", "*a*", "**a*", "*a**",
-  "[]()", "[a]()", "[a](b)", "![a](b)", "[a](b(c))", "[a\\]](b)", "<https://x.y/a(b)>",
-  "mailto:a@b.c", "a@b", "a.@b.c", ".a@b.c.", "x\ty", "\t\t|\ta\t|",
+  "a",
+  "b",
+  "c",
+  "x",
+  "y",
+  "z",
+  "1",
+  "2",
+  "0",
+  "9",
+  " ",
+  " ",
+  "  ",
+  "\t",
+  "\n",
+  "\n",
+  "\n\n",
+  "\r\n",
+  "\r",
+  "|",
+  "||",
+  "-",
+  "--",
+  "---",
+  "----",
+  "___",
+  "***",
+  "*",
+  "**",
+  "***",
+  "_",
+  "__",
+  "___",
+  "~",
+  "~~",
+  "~~~",
+  "~~~~",
+  "`",
+  "``",
+  "```",
+  "````",
+  "#",
+  "##",
+  "###",
+  "#######",
+  ">",
+  "> ",
+  "- ",
+  "* ",
+  "+ ",
+  "1. ",
+  "1) ",
+  "2. ",
+  "10. ",
+  "[",
+  "]",
+  "(",
+  ")",
+  "![",
+  "](",
+  ")",
+  "<",
+  ">",
+  "<div>",
+  "</div>",
+  "<br/>",
+  "<br />",
+  '<a href="x">',
+  "</a>",
+  "<span class='y'>",
+  "<x@y.z>",
+  "<a@b.c.d>",
+  "<https://a.b/c>",
+  "<ab:>",
+  "<a:>",
+  "<ab://x.y/z?q=1>",
+  "<a b>",
+  "<!--",
+  "-->",
+  "<!-- x -->",
+  "&amp;",
+  "&#x41;",
+  "&nbsp;",
+  "&notanentity;",
+  "\\*",
+  "\\_",
+  "\\`",
+  "\\\\",
+  "\\",
+  '"',
+  "'",
+  "=",
+  "@",
+  ".",
+  "/",
+  "?",
+  ":",
+  "&",
+  "%",
+  "{",
+  "}",
+  "$",
+  "é",
+  "ü",
+  "ß",
+  "中",
+  "文",
+  "ñ",
+  "Ω",
+  "α",
+  "\u0301",
+  "\u200b",
+  "\u200d",
+  "\u2028",
+  "\u2029",
+  "\u00a0",
+  "\u3000",
+  "\ufeff",
+  "\ue000",
+  "\ue0000\ue000",
+  "\ue0012\ue000",
+  "👍",
+  "🧑🏽",
+  "👨‍👩‍👧‍👦",
+  "\ud800",
+  "\udc00",
+  "\ud83d",
+  "\ude00",
+  "\ud83d\ude00",
+  "\ud800\ud800",
+  "| a | b |",
+  "|---|:--:|",
+  "|:--|--:|",
+  "| a |",
+  "a | b",
+  "1) x",
+  "* * *",
+  "- - -",
+  "```js",
+  "```js `x`",
+  "~~~",
+  "~~a~~",
+  "__a__",
+  "_a_",
+  "**a**",
+  "*a*",
+  "**a*",
+  "*a**",
+  "[]()",
+  "[a]()",
+  "[a](b)",
+  "![a](b)",
+  "[a](b(c))",
+  "[a\\]](b)",
+  "<https://x.y/a(b)>",
+  "mailto:a@b.c",
+  "a@b",
+  "a.@b.c",
+  ".a@b.c.",
+  "x\ty",
+  "\t\t|\ta\t|",
 ];
-const LONG_TOKENS = [...TOKENS, "word ", "lorem ipsum dolor ", "**bold** ", "_under_ ", "`code` ", "|c|"];
+const LONG_TOKENS = [
+  ...TOKENS,
+  "word ",
+  "lorem ipsum dolor ",
+  "**bold** ",
+  "_under_ ",
+  "`code` ",
+  "|c|",
+];
 
 function tokenSoup(limit: number, pool: readonly string[] = TOKENS): string {
   const parts: string[] = [];
@@ -232,7 +388,9 @@ function linkSoup(): string {
         parts.push(`[${pick(["a", "a\\]", "a[b", ""])}]${pick(["(", "[", "x"])}`);
         break;
       case 4:
-        parts.push(pick(["<https://a.b/c?d=e&f#g>", "<mailto:a@b.c>", "<a@b.c>", "<a@b>", "<a:b>"]));
+        parts.push(
+          pick(["<https://a.b/c?d=e&f#g>", "<mailto:a@b.c>", "<a@b.c>", "<a@b>", "<a:b>"]),
+        );
         break;
       case 5:
         parts.push(`[${tokenSoup(2)}\n${tokenSoup(2)}](x)`);
@@ -342,10 +500,24 @@ function surrogateSoup(): string {
   const parts: string[] = [];
   const count = 1 + int(12);
   for (let index = 0; index < count; index++) {
-    parts.push(pick([
-      "\ud800", "\udc00", "\udfff", "\ud83d", "\ude00", "\ud83d\ude00", "\ud800a",
-      "a\udc00", "\ud800\ud800", "\udc00\udc00", "👍", "🧑🏽", "\ud800_\udc00", "_\ud800_",
-    ]));
+    parts.push(
+      pick([
+        "\ud800",
+        "\udc00",
+        "\udfff",
+        "\ud83d",
+        "\ude00",
+        "\ud83d\ude00",
+        "\ud800a",
+        "a\udc00",
+        "\ud800\ud800",
+        "\udc00\udc00",
+        "👍",
+        "🧑🏽",
+        "\ud800_\udc00",
+        "_\ud800_",
+      ]),
+    );
   }
   return parts.join("");
 }
@@ -427,7 +599,9 @@ function generatedCase(): TestCase {
   if (chance(0.4)) value = mutate(value);
   // Negative lengths are not reachable from the API, but truncatePlainText takes them and JS
   // slice(0, -n) keeps a prefix, so the port must match it too.
-  const capChoices = [4096, 4096, 4096, 4096, 0, 1, 2, 3, 5, 16, 64, 100, 4095, 4097, 20000, -1, -3, -8];
+  const capChoices = [
+    4096, 4096, 4096, 4096, 0, 1, 2, 3, 5, 16, 64, 100, 4095, 4097, 20000, -1, -3, -8,
+  ];
   return {
     text: value,
     cap: pick(capChoices),
@@ -514,7 +688,8 @@ function describe(value: string): string {
 
 function windowOf(expected: string, actual: string): [string, string] {
   let index = 0;
-  while (index < expected.length && index < actual.length && expected[index] === actual[index]) index++;
+  while (index < expected.length && index < actual.length && expected[index] === actual[index])
+    index++;
   const from = Math.max(0, index - 60);
   const to = index + 60;
   return [describe(expected.slice(from, to)), describe(actual.slice(from, to))];
@@ -532,7 +707,13 @@ type Mismatch = {
 };
 
 const mismatches: Mismatch[] = [];
-const fields = ["plainText", "truncatedPlainText", "truncatePlainText", "shortenedTextLength", "textBoundary"];
+const fields = [
+  "plainText",
+  "truncatedPlainText",
+  "truncatePlainText",
+  "shortenedTextLength",
+  "textBoundary",
+];
 let resultOffset = 0;
 const readUint32 = (): number => {
   const value = results.readUInt32LE(resultOffset);
@@ -643,7 +824,8 @@ if (GOLDEN !== "") {
   }
   const unitsBase64 = (value: string): string => {
     const buffer = Buffer.allocUnsafe(value.length * 2);
-    for (let index = 0; index < value.length; index++) buffer.writeUInt16LE(value.charCodeAt(index), index * 2);
+    for (let index = 0; index < value.length; index++)
+      buffer.writeUInt16LE(value.charCodeAt(index), index * 2);
     return buffer.toString("base64");
   };
   const golden = selected.map((item) => {
@@ -656,11 +838,14 @@ if (GOLDEN !== "") {
       s: text.shortenedTextLength(plain),
       b: text.textBoundary(plain, item.maxChars),
     };
-    if (item.cap !== 4096) record.t = unitsBase64(text.truncatedPlainText(item.text, item.maxChars));
+    if (item.cap !== 4096)
+      record.t = unitsBase64(text.truncatedPlainText(item.text, item.maxChars));
     return record;
   });
   writeFileSync(GOLDEN, JSON.stringify(golden));
-  console.log(`mdtext-diff: wrote ${golden.length} golden cases (${taken ? JSON.stringify(taken) : ""})`);
+  console.log(
+    `mdtext-diff: wrote ${golden.length} golden cases (${taken ? JSON.stringify(taken) : ""})`,
+  );
 }
 
 const byTag: Record<string, number> = {};
@@ -673,7 +858,9 @@ console.log(`  cases by tag: ${JSON.stringify(byTag)}`);
 if (mismatches.length > 0) {
   console.log(`  mismatches by field: ${JSON.stringify(perField)}`);
   for (const mismatch of mismatches.slice(0, 20)) {
-    console.log(`  #${mismatch.index} ${mismatch.tag} ${mismatch.field} (cap=${mismatch.cap} maxChars=${mismatch.maxChars})`);
+    console.log(
+      `  #${mismatch.index} ${mismatch.tag} ${mismatch.field} (cap=${mismatch.cap} maxChars=${mismatch.maxChars})`,
+    );
     console.log(`    input:    ${mismatch.input}`);
     console.log(`    expected: ${mismatch.expected}`);
     console.log(`    actual:   ${mismatch.actual}`);

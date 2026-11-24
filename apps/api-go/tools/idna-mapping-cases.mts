@@ -1,7 +1,7 @@
-import { gzipSync } from "node:zlib";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { gzipSync } from "node:zlib";
 
 // Authoritative UTS #46 mapping and leading-code-point probe for the URL
 // Standard host parser, using the Node/ICU that this machine actually runs.
@@ -38,7 +38,8 @@ function pct(cp) {
   let v = pctCache.get(cp);
   if (v !== undefined) return v;
   v = "";
-  for (const b of Buffer.from(String.fromCodePoint(cp), "utf8")) v += `%${b.toString(16).padStart(2, "0").toUpperCase()}`;
+  for (const b of Buffer.from(String.fromCodePoint(cp), "utf8"))
+    v += `%${b.toString(16).padStart(2, "0").toUpperCase()}`;
   pctCache.set(cp, v);
   return v;
 }
@@ -66,12 +67,17 @@ function decodePuny(input) {
     if (o >= 0x30 && o <= 0x39) return o - 0x30 + 26;
     return -1;
   };
-  let n = 128, i = 0, bias = 72;
+  let n = 128,
+    i = 0,
+    bias = 72;
   const adapt = (delta, points, first) => {
     delta = first ? Math.floor(delta / 700) : Math.floor(delta / 2);
     delta += Math.floor(delta / points);
     let k = 0;
-    while (delta > Math.floor(((36 - 1) * 26) / 2)) { delta = Math.floor(delta / (36 - 1)); k += 36; }
+    while (delta > Math.floor(((36 - 1) * 26) / 2)) {
+      delta = Math.floor(delta / (36 - 1));
+      k += 36;
+    }
     return k + Math.floor((36 * delta) / (delta + 38));
   };
   while (index < input.length) {
@@ -133,11 +139,16 @@ for (let cp = 0; cp <= 0x10ffff; cp++) {
   const enc = pct(cp);
   const ltr = host(`https://${SENT_L}${enc}${SENT_L}.ü`);
   fixture[cp] = ltr;
-  let status, mapped = "", first;
+  let status: number = STATUS.disallowed;
+  let mapped = "";
+  let first = false;
   if (DOT_LIKE.has(cp)) {
-    status = STATUS.mapped; mapped = "."; first = false;
+    status = STATUS.mapped;
+    mapped = ".";
+    first = false;
   } else if (JOINERS.has(cp)) {
-    status = STATUS.valid; first = false;
+    status = STATUS.valid;
+    first = false;
   } else {
     let m = middle(ltr, SENT_L, SENT_L);
     if (m === null) {
@@ -148,7 +159,8 @@ for (let cp = 0; cp <= 0x10ffff; cp++) {
       }
     }
     if (m === null) {
-      status = STATUS.disallowed; first = false;
+      status = STATUS.disallowed;
+      first = false;
     } else {
       mapped = m;
       status = m === ch ? STATUS.valid : m === "" ? STATUS.ignored : STATUS.mapped;
@@ -174,7 +186,8 @@ for (let cp = 0; cp <= 0x10ffff; cp++) {
     cur = [cp, cp, status, firstBit, mapIdx];
   }
   count++;
-  if (count % 100000 === 0) console.error(`progress ${cp.toString(16)} ${Math.round((Date.now() - started) / 1000)}s`);
+  if (count % 100000 === 0)
+    console.error(`progress ${cp.toString(16)} ${Math.round((Date.now() - started) / 1000)}s`);
 }
 flush();
 
@@ -196,6 +209,14 @@ const meta = {
 };
 const mapping = { meta, mappings, ranges };
 const hostFixture = { meta, hosts: fixture };
-writeFileSync(join(outDir, "idna-mapping.json.gz"), gzipSync(Buffer.from(JSON.stringify(mapping)), { level: 9 }));
-writeFileSync(join(outDir, "single-cp-host.json.gz"), gzipSync(Buffer.from(JSON.stringify(hostFixture)), { level: 9 }));
-console.error(`wrote ${ranges.length} ranges, ${mappings.length} mappings, ${count} code points in ${Math.round((Date.now() - started) / 1000)}s`);
+writeFileSync(
+  join(outDir, "idna-mapping.json.gz"),
+  gzipSync(Buffer.from(JSON.stringify(mapping)), { level: 9 }),
+);
+writeFileSync(
+  join(outDir, "single-cp-host.json.gz"),
+  gzipSync(Buffer.from(JSON.stringify(hostFixture)), { level: 9 }),
+);
+console.error(
+  `wrote ${ranges.length} ranges, ${mappings.length} mappings, ${count} code points in ${Math.round((Date.now() - started) / 1000)}s`,
+);

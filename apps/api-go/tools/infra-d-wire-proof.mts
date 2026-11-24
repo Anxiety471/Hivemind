@@ -20,10 +20,10 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRouterClient } from "../../../apps/api/node_modules/@orpc/server/dist/index.mjs";
+import { createRouter } from "../../../apps/api/src/router.js";
 import { McpRemoteEndpointSchema } from "../../../packages/contracts/src/integrations/mcp.js";
 import { sanitizeUtf16ForJson } from "../../../packages/core/src/messages/events.js";
 import { createDb, runAsSystem, runAsTenant } from "../../../packages/db/src/index.js";
-import { createRouter } from "../../../apps/api/src/router.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const GO_DIR = join(HERE, "..");
@@ -36,7 +36,8 @@ const wireText = String.raw`{"endpoint":"https://example.com/\ud800"}`;
 const wire = JSON.parse(wireText) as { endpoint: string };
 
 const parsed = McpRemoteEndpointSchema.safeParse(wire.endpoint);
-if (!parsed.success) throw new Error(`McpRemoteEndpointSchema rejected the endpoint: ${parsed.error}`);
+if (!parsed.success)
+  throw new Error(`McpRemoteEndpointSchema rejected the endpoint: ${parsed.error}`);
 const zodValue = parsed.data;
 if (zodValue !== wire.endpoint) throw new Error("trim changed the URL; the case is not focused");
 if (!/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(zodValue)) {
@@ -45,7 +46,8 @@ if (!/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.te
 
 const expectedStored = sanitizeUtf16ForJson(zodValue);
 if (expectedStored === zodValue) throw new Error("the write sanitizer did not change the value");
-if (!expectedStored.endsWith("\uFFFD")) throw new Error("the stored value is not U+FFFD-terminated");
+if (!expectedStored.endsWith("\uFFFD"))
+  throw new Error("the stored value is not U+FFFD-terminated");
 
 const db = createDb(databaseUrl, { encryptContent: false });
 const suffix = `${Date.now()}-${process.pid}`;
@@ -60,7 +62,11 @@ const client = createRouterClient(
     prisma: db.prisma,
     // A streamable HTTP endpoint with no headers, env, files or OAuth client
     // needs no secret store; the real store is irrelevant to this path.
-    secrets: { put: async () => { throw new Error("unexpected secret write"); } },
+    secrets: {
+      put: async () => {
+        throw new Error("unexpected secret write");
+      },
+    },
     remoteConnectors: {
       resolveHostname: async () => [{ address: "203.0.113.10", family: 4 }],
     },
@@ -78,7 +84,12 @@ try {
       data: { id: userId, name: "infra-d wire", email: `${userId}@example.test` },
     });
     await db.prisma.organization.create({
-      data: { id: organizationId, name: "infra-d wire", slug: organizationId, createdAt: new Date() },
+      data: {
+        id: organizationId,
+        name: "infra-d wire",
+        slug: organizationId,
+        createdAt: new Date(),
+      },
     });
     await db.prisma.space.create({
       data: { id: spaceId, organizationId, name: "infra-d wire", createdByUserId: userId },
@@ -123,10 +134,7 @@ try {
   const corpus = join(work, "corpus.jsonl");
   const actual = join(work, "actual.jsonl");
   const binary = join(work, "urlproof");
-  writeFileSync(
-    corpus,
-    `${JSON.stringify({ id: "wire", op: "parse", input: wire.endpoint })}\n`,
-  );
+  writeFileSync(corpus, `${JSON.stringify({ id: "wire", op: "parse", input: wire.endpoint })}\n`);
   const build = spawnSync("go", ["build", "-o", binary, "./cmd/urlproof"], {
     cwd: GO_DIR,
     encoding: "utf8",
@@ -138,7 +146,9 @@ try {
   const go = JSON.parse(readFileSync(actual, "utf8")) as { zvalue: string };
   if (go.zvalue !== row.endpoint) {
     failed = true;
-    console.error(`Go zvalue ${JSON.stringify(go.zvalue)} != DB endpoint ${JSON.stringify(row.endpoint)}`);
+    console.error(
+      `Go zvalue ${JSON.stringify(go.zvalue)} != DB endpoint ${JSON.stringify(row.endpoint)}`,
+    );
   } else {
     console.log("Go ZodURLValue equals the Postgres value end to end");
   }

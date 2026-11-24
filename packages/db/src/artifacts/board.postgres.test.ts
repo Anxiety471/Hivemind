@@ -1,13 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { PrismaClient } from "../database/client.js";
+import { createDb } from "../database/client.js";
+import { asSystem, runAsTenant } from "../database/row-security.js";
 import {
   archiveCompletedTickets,
   ensureBoard,
   listTicketComments,
   toTicketCommentDto,
 } from "./board.js";
-import type { PrismaClient } from "../database/client.js";
-import { createDb } from "../database/client.js";
-import { asSystem, runAsTenant } from "../database/row-security.js";
 
 const databaseUrl = process.env.DATABASE_URL;
 const describePostgres = process.env.VERIFY_DATABASE && databaseUrl ? describe : describe.skip;
