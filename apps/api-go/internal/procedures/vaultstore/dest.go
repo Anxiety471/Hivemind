@@ -83,7 +83,7 @@ func allowPrivateHTTPSecretOrigins() bool {
 func regexIssue(path validate.Path, pattern, message string) validate.Issue {
 	return validate.Issue{
 		"origin": "string", "code": "invalid_format", "format": "regex",
-		"pattern": pattern, "path": path.Raw(), "message": message,
+		"pattern": "/" + pattern + "/", "path": path.Raw(), "message": message,
 	}
 }
 

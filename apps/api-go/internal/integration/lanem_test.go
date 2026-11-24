@@ -2,15 +2,19 @@ package integration
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/contentcrypto"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/effects"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/local"
@@ -50,6 +54,134 @@ func sealLaneM(t *testing.T, plaintext, recordID string) string {
 		t.Fatalf("seal: %v", err)
 	}
 	return record.Ciphertext
+}
+
+// changeRecorder captures the refs a write announces on `secret-store-change`.
+type changeRecorder struct {
+	mu   sync.Mutex
+	refs []string
+}
+
+func (r *changeRecorder) Publish(_ context.Context, _ string, payload string) error {
+	var event struct {
+		Ref string `json:"ref"`
+	}
+	if err := json.Unmarshal([]byte(payload), &event); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.refs = append(r.refs, event.Ref)
+	return nil
+}
+
+func (r *changeRecorder) RefKinds() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	kinds := []string{}
+	for _, ref := range r.refs {
+		switch {
+		case strings.HasPrefix(ref, "rkz1:"):
+			kinds = append(kinds, "<rkz1>")
+		case strings.HasPrefix(ref, "v2:"):
+			kinds = append(kinds, "<v2>")
+		default:
+			kinds = append(kinds, "<ref>")
+		}
+	}
+	sort.Strings(kinds)
+	return kinds
+}
+
+func laneMVaultAnnouncing(t *testing.T, database *db.DB, recorder *changeRecorder) shared.Deployment {
+	t.Helper()
+	store, err := secretstore.NewStore(laneMVaultKey)
+	if err != nil {
+		t.Fatalf("secret store: %v", err)
+	}
+	writer := secretstore.NewWriter(store, secretstore.NewNotifier(recorder))
+	master := sha256.Sum256([]byte(laneMVaultKey))
+	provider, err := contentcrypto.NewLocalKeyProvider([]contentcrypto.MasterKey{
+		{ID: contentcrypto.DerivedMasterKeyID, Key: master[:]},
+	})
+	if err != nil {
+		t.Fatalf("key provider: %v", err)
+	}
+	spaceKeys, err := contentcrypto.OpenPgSpaceKeyStore(context.Background(), database)
+	if err != nil {
+		t.Fatalf("space key store: %v", err)
+	}
+	t.Cleanup(spaceKeys.Close)
+	return shared.Deployment{
+		Vault: &shared.SecretVault{
+			Writer:      writer,
+			Persistence: secretstore.NewPersistence(database, writer),
+		},
+		Content: contentcrypto.NewKeyRing(provider, spaceKeys, contentcrypto.KeyRingOptions{EncryptWrites: true}),
+	}
+}
+
+// TestLaneMVaultAnnouncements is the change-notification contract: a value sealed under a vault key
+// announces nothing while it is written (the key holds the value), a refused write announces only
+// the dropped value, and a legacy-envelope write announces the value it replaced.
+func TestLaneMVaultAnnouncements(t *testing.T) {
+	database := openTestDB(t)
+	s := seed(t, database)
+	ctx := context.Background()
+	actor := db.Actor{UserID: s.UserID, SpaceID: s.Space1, SessionID: s.SessionID}
+	recorder := &changeRecorder{}
+	deployment := laneMVaultAnnouncing(t, database, recorder)
+	// A Space gets its key the first time its vault is opened; until then a value takes the
+	// legacy envelope, which the store announces.
+	if _, err := deployment.Content.Current(ctx, "user:"+s.UserID); err != nil {
+		t.Fatalf("space key: %v", err)
+	}
+
+	if _, failure := vaultstore.VaultPut(ctx, database, deployment, actor, laneMInput(t, `{
+		"destination": {"name":"api","origin":"https://example.test","auth":{"type":"bearer"}},
+		"value": "sealed-token"
+	}`)); failure != nil {
+		t.Fatalf("put: %+v", failure)
+	}
+	if kinds := recorder.RefKinds(); len(kinds) != 0 {
+		t.Fatalf("a value under a vault key announced %v", kinds)
+	}
+	// A write refused after the value was sealed announces the value it drops.
+	_, failure := vaultstore.VaultPut(ctx, database, deployment, actor, laneMInput(t, `{
+		"destination": {"name":"api","origin":"https://example.test","auth":{"type":"bearer"}},
+		"value": "token-value",
+		"botIds": ["missing"]
+	}`))
+	if got := laneMFailure(t, failure); got.Code != "BAD_REQUEST" || got.Message != "Choose from your bots in this Space" {
+		t.Fatalf("refused write = %+v", got)
+	}
+	if kinds := recorder.RefKinds(); len(kinds) != 1 || kinds[0] != "<rkz1>" {
+		t.Fatalf("refused write announced %v", kinds)
+	}
+	// A legacy row is replaced: the envelope it dropped is announced, the keyed one is not.
+	id := s.UserID + "-legacy"
+	addLaneMVault(t, database, s.UserID, nil, laneMVaultRow{
+		ID: id, Name: "legacy", Ciphertext: sealLaneM(t, "old", id),
+	})
+	recorder.mu.Lock()
+	recorder.refs = nil
+	recorder.mu.Unlock()
+	if _, failure := vaultstore.VaultPut(ctx, database, deployment, actor, laneMInput(t, `{
+		"destination": {"name":"legacy","origin":"https://example.test","auth":{"type":"bearer"}},
+		"value": "new"
+	}`)); failure != nil {
+		t.Fatalf("legacy put: %+v", failure)
+	}
+	if kinds := recorder.RefKinds(); len(kinds) != 1 || kinds[0] != "<v2>" {
+		t.Fatalf("legacy overwrite announced %v", kinds)
+	}
+	// The legacy value that was dropped no longer opens: the row holds the keyed one now.
+	rows := laneMRows(t, database, s.UserID)
+	for _, row := range rows {
+		if row.Name == "legacy" && !strings.HasPrefix(row.Ciphertext, "rkz1:") {
+			t.Fatalf("legacy overwrite wrote %q", row.Ciphertext[:8])
+		}
+	}
 }
 
 type laneMVaultRow struct {

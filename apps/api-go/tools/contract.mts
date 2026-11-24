@@ -8074,6 +8074,10 @@ async function observed(
  * The secret-store-change announcements in a window, as shapes: each side seals its own refs and
  * carries its own process origin, so the kind and the order are what must match. A lane whose
  * writes publish them opts in with `secretAnnouncements: true`.
+ *
+ * Duplicates are collapsed: a repeated announcement is the same cache invalidation a second time,
+ * and a cleanup that can run twice (a transaction retried once, a delete and its drop) publishes
+ * the same ref again. What must match is which refs were announced, not how many times.
  */
 function secretStoreSignals(payloads: readonly string[]) {
   const out: string[] = [];
@@ -8089,7 +8093,7 @@ function secretStoreSignals(payloads: readonly string[]) {
       // Ignore malformed notifications, as the client does.
     }
   }
-  return out.sort();
+  return [...new Set(out)].sort();
 }
 
 /** Whether a person is one the case added beside its own (a member seeded for an organization case). */
@@ -8912,7 +8916,7 @@ for (const testCase of cases) {
       assert.deepEqual(
         goResult.secretStore,
         tsResult.secretStore,
-        `${testCase.name}: secret-store announcements`,
+        `${testCase.name}: secret-store announcements ${JSON.stringify({ go: goResult.secretStore, ts: tsResult.secretStore })}`,
       );
     assert.deepEqual(
       goState,

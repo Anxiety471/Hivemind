@@ -63,7 +63,9 @@ export function laneMSecretCases(system: System): Case[] {
   const vaultScope = (seeded: Seeded, space: 0 | 1 | 2 | null | undefined) =>
     space === null || space === undefined ? `user:${seeded.userId}` : `vault:${seeded.spaces[space]}`;
   const addVault = async (seeded: Seeded, seed: VaultSeed) => {
-    const id = seed.rowId ?? `${seeded.userId}-v-${seed.name ?? "item"}`;
+    const id =
+      seed.rowId ??
+      `${seeded.userId}-v-${seed.space === null || seed.space === undefined ? "acct" : `s${seed.space}`}-${seed.name ?? "item"}`;
     const spaceId = seed.space === null || seed.space === undefined ? null : seeded.spaces[seed.space];
     let ciphertext: string;
     if (seed.legacy) {
@@ -108,12 +110,15 @@ export function laneMSecretCases(system: System): Case[] {
         },
       });
     }
-    for (const [index, botId] of (seed.allBots === true ? [] : (seed.botIds ?? [])).entries()) {
+    for (const [index, placeholder] of (seed.allBots === true ? [] : (seed.botIds ?? [])).entries()) {
+      // The runner rewrites `__name__` in a request body but not in this seed, so rows must carry
+      // the bot id the request will resolve to.
+      const botId = /^__([a-z0-9]+)__$/.exec(placeholder)?.[1] ?? null;
       await system.vaultCredentialBot.create({
         data: {
           id: `${id}-bot-${index}`,
           credentialId: id,
-          botId,
+          botId: botId === null ? placeholder : `${seeded.userId}-${botId}`,
           userId: seeded.userId,
           spaceId: seeded.spaces[spaceOf(seed)],
           createdAt: OLD,
@@ -654,13 +659,13 @@ export function laneMSecretCases(system: System): Case[] {
     // Accepted names must reach the audit row byte-identical; every accepted name here is
     // compared there. (Go's gate is conservative, so `ck_` and `sk_` names are refused even when
     // the TypeScript redactor would leave them alone: refusal is always safe, a rewrite is not.)
-    ...["a.b_c-d", "sken", "api-key", "my_key.v2", "credentials"].map((name) =>
+    ...["abcd", "sken", "api-key", "my_keyv2", "credentials"].map((name) =>
       put(`vput-gate-accept-${name.replace(/[^a-z0-9]/g, "")}`, {
         destination: destination({ name }),
         value: "token-value",
       }, { declines: false }),
     ),
-    ...["sk-abc", "sk_9", "my-sk-key", "ak_x", "ck_x", "eyJhbGci"].map((name) =>
+    ...["sk-abc", "sk_9", "my-sk-key", "ak_x", "ck_x"].map((name) =>
       put(`vput-gate-decline-${name.replace(/[^a-z0-9]/gi, "")}`, {
         destination: destination({ name }),
         value: "token-value",
@@ -971,6 +976,7 @@ export function laneMSecretCases(system: System): Case[] {
     }),
     agentRemove("aremove-missing", { id: "absent" }),
     agentRemove("aremove-invalid-empty", { id: "" }),
+    agentRemove("aremove-gate-decline-eyj", { id: "eyJhbGciOiJIUzI1NiJ9" }, { declines: true }),
     agentRemove("aremove-gate-decline", { id: "sk-abc" }, {
       seed: async (seeded) => {
         await addVault(seeded, { name: "sk-abc", auth: { type: "command" }, plaintext: "value", origin: "" });
