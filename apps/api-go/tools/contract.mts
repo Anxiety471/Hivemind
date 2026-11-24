@@ -8322,12 +8322,29 @@ async function databaseState(seeded: ReturnType<typeof ids>, procedure?: string)
     where: { spaceId: { in: seeded.spaces } },
     orderBy: [{ spaceId: "asc" }, { userId: "asc" }],
   });
-  // Which credentials exist, never what they hold.
-  const vaultCredentials = await system.vaultCredential.findMany({
-    where: { userId: settingsOwners },
-    select: { id: true, userId: true, spaceId: true },
-    orderBy: { id: "asc" },
-  });
+  // Which credentials exist, never what they hold. A row a case creates has a random id on each
+  // side, so these are ordered by the fields that are compared (a name is unique per vault).
+  const vaultCredentials = (
+    await system.vaultCredential.findMany({
+      where: { userId: settingsOwners },
+      select: { id: true, userId: true, spaceId: true, name: true },
+      orderBy: { id: "asc" },
+    })
+  )
+    .sort(
+      (
+        left: { userId: string; spaceId: string | null; name: string },
+        right: { userId: string; spaceId: string | null; name: string },
+      ) =>
+        `${left.userId}\u0000${left.spaceId ?? ""}\u0000${left.name}`.localeCompare(
+          `${right.userId}\u0000${right.spaceId ?? ""}\u0000${right.name}`,
+        ),
+    )
+    .map((row: { id: string; userId: string; spaceId: string | null }) => ({
+      id: row.id,
+      userId: row.userId,
+      spaceId: row.spaceId,
+    }));
   const connections = await system.connection.findMany({
     where: { spaceId: { in: seeded.spaces } },
     select: {
