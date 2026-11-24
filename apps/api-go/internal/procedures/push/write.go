@@ -14,6 +14,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/validate"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 )
 
 // Register implements notifications.registerPush (account.ts:507-521 over
@@ -35,7 +36,10 @@ func Register(ctx context.Context, database *db.DB, vault *shared.SecretVault, a
 	digest := credentialDigest(parsed.Token)
 	// The TypeScript store seals before it opens its transaction
 	// (push-token-store.ts:197-207), so an ended session still pays for a seal.
-	ciphertext, failure := sealToken(ctx, secrets, "push-token:"+actor.UserID, parsed.Token)
+	// Node's cipher seals the UTF-8 encoding of the token string, which writes
+	// U+FFFD for an unpaired surrogate; the WTF-8 form Go carries is converted
+	// first (the call-push plaintext is JSON.stringify output, already escaped).
+	ciphertext, failure := sealToken(ctx, secrets, "push-token:"+actor.UserID, wtf8.ToUTF8(parsed.Token))
 	if failure != nil {
 		return nil, failure
 	}
