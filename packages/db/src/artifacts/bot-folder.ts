@@ -74,9 +74,15 @@ export async function ensureBotDriveFolder(
     if (afterRace) return afterRace.id;
   }
 
-  for (let attempt = 0; attempt < 10; attempt++) {
+  // Each pass tries a different candidate name after a unique collision, not the same call again,
+  // so retry() does not apply: the folder name is what changes.
+  for (let suffixIndex = 0; suffixIndex < 10; suffixIndex++) {
     const suffix =
-      attempt === 0 ? "" : attempt < 9 ? ` (${attempt + 1})` : ` (${input.botId.slice(-4)})`;
+      suffixIndex === 0
+        ? ""
+        : suffixIndex < 9
+          ? ` (${suffixIndex + 1})`
+          : ` (${input.botId.slice(-4)})`;
     const maxBase = Math.max(1, ARTIFACT_NAME_MAX_LENGTH - suffix.length);
     const name = `${baseName.slice(0, maxBase).trim()}${suffix}`;
     try {
