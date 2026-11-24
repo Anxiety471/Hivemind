@@ -15,6 +15,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/local"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/availability"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/push"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/routes"
 )
@@ -36,7 +37,15 @@ func testServerWithAllowlist(t *testing.T, database *db.DB, config local.Config,
 func testServerDeployed(t *testing.T, database *db.DB, config local.Config, allowlist []string, deployment shared.Deployment) *httptest.Server {
 	t.Helper()
 	secret, authURL := testAuthConfig()
-	sessions := auth.New(database, auth.Config{Secret: secret, AuthURL: authURL, SignupAllowlist: allowlist})
+	sessions := auth.New(database, auth.Config{Secret: secret, AuthURL: authURL, SignupAllowlist: allowlist,
+		// The gateway's afterDeleteSession wiring (cmd/gateway/main.go), so the
+		// expired-session path these tests exercise matches production.
+		AfterDeleteSession: func(ctx context.Context, userID, sessionID string) {
+			if err := push.EndSession(ctx, database, userID, sessionID); err != nil {
+				t.Errorf("push token removal: %v", err)
+			}
+		},
+	})
 	if config.WebOrigin == "" {
 		config.WebOrigin = "https://app.example.test"
 	}

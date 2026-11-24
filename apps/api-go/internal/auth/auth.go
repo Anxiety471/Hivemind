@@ -35,6 +35,11 @@ type Config struct {
 	OIDCBypass bool
 	// CookieDomain mirrors COOKIE_DOMAIN: a renewed session cookie keeps the domain it was set for.
 	CookieDomain string
+	// AfterDeleteSession mirrors env.afterDeleteSession
+	// (apps/api/src/app.ts:616-624, called from packages/auth/src/index.ts:899-912):
+	// better-auth runs it after it deletes a session row, and a cleanup failure
+	// must not fail the request.
+	AfterDeleteSession func(ctx context.Context, userID, sessionID string)
 }
 
 // Service validates sessions against the API's own tables.
@@ -146,7 +151,11 @@ func (s *Service) load(ctx context.Context, token string) (*Session, *orpc.Error
 func (s *Service) authorized(ctx context.Context, session *Session) *orpc.Error {
 	if time.Now().After(session.ExpiresAt) {
 		// better-auth deletes the row on a POST read; a failure here is harmless.
-		_, _ = s.database.Pool.Exec(ctx, `DELETE FROM session WHERE token = $1`, session.Token)
+		if _, err := s.database.Pool.Exec(ctx, `DELETE FROM session WHERE token = $1`, session.Token); err == nil && s.config.AfterDeleteSession != nil {
+			// The session change already happened, so a cleanup failure must not
+			// fail the request (afterDeleteSession's .catch in app.ts:617-619).
+			s.config.AfterDeleteSession(ctx, session.UserID, session.ID)
+		}
 		return orpc.Unauthorized()
 	}
 	if strings.HasSuffix(strings.ToLower(strings.TrimSpace(session.Email)), messagingSuffix) {

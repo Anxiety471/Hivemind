@@ -28,6 +28,8 @@ import { laneICases } from "./contract-lane-i.mts";
 import { laneJCases, laneJState } from "./contract-lane-j.mts";
 import { laneKCases, laneKState } from "./contract-k-mcp.mts";
 import { laneKReviewCases } from "./contract-k-review.mts";
+import { laneLPushCases, laneLPushState } from "./contract-l-push.mts";
+import { laneLReviewCases } from "./contract-l-review.mts";
 import { membershipCases, membershipReset, membershipState } from "./contract-membership.mts";
 import { modelsCases } from "./contract-models.mts";
 import { spaceRunCases } from "./contract-spaces-runs.mts";
@@ -359,6 +361,9 @@ await writeFile(
       "integrationSetup.get": { mode: "go", readOnly: true },
       "marketplace.submissions": { mode: "go", readOnly: true },
       "pages.setVisibility": { mode: "go" },
+      "notifications.registerPush": { mode: "go" },
+      "notifications.registerCallPush": { mode: "go" },
+      "notifications.unregisterPush": { mode: "go" },
     },
   }),
 );
@@ -723,6 +728,8 @@ const cases: Case[] = [
   ...spaceRunCases(system),
   ...threadAdversarialCases(system),
   ...threadMoreCases(system),
+  ...laneLPushCases(system),
+  ...laneLReviewCases(system),
 ];
 
 // biome-ignore lint/suspicious/noUndeclaredEnvVars: manual harness, not a turbo task
@@ -7856,6 +7863,9 @@ const WRITE_PROCEDURES = new Set([
   "bots.rotateWebhookSecret",
   "pages.remove",
   "pages.setVisibility",
+  "notifications.registerPush",
+  "notifications.registerCallPush",
+  "notifications.unregisterPush",
 ]);
 
 const CUID = /^c[0-9a-z]{24}$/;
@@ -8666,6 +8676,7 @@ async function databaseState(seeded: ReturnType<typeof ids>, procedure?: string)
     ...(await laneHState(system, seeded)),
     ...(await laneJState(system, seeded, procedure)),
     ...(await laneKState(system, seeded, procedure)),
+    ...(await laneLPushState(system, seeded)),
     // computer.updates is a read; the API's in-process reconciler can drain the seeded
     // ComputerUpdate rows between the two sides' captures, so those volatile rows are not
     // compared for it (the response body and the other tables still are).

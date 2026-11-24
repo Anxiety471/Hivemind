@@ -833,7 +833,15 @@ export function threadGetCases(system: System): Case[] {
         await run(seeded, "c", "b2", "b2", { status: "queued", trigger: "tickets" });
         await run(seeded, "d", "b2", "b2", { status: "leased", trigger: "helper" });
       },
-      { declines: false },
+      {
+        declines: false,
+        // Four seeded runs with no wakeAt/lease expiry: TypeScript's in-process
+        // run reconciler (a 30 s tick) can pick them up inside the capture window
+        // and publish one space-changes "runs" frame each, while Go only enqueues
+        // the job to a worker the harness does not run. The body comparison keeps
+        // this case's coverage; the frames are a TypeScript-background artefact.
+        ignoreSignals: true,
+      },
     ),
 
     // Replies and their previews.
