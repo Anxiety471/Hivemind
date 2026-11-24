@@ -90,6 +90,8 @@ const exclusions = [
       "(.*/)?(\\.cache|\\.npm|\\.pnpm-store|node_modules|\\.venv|__pycache__|\\.next|\\.turbo|\\.yarn/cache)",
     kind: "directory",
   },
+  // pnpm's default content-addressed store; a bot's installs fill it with gigabytes it downloads again.
+  { pattern: "\\.local/share/pnpm/store", kind: "directory" },
   { pattern: "(.*/)?([^/]*\\.log|core|core\\.[0-9]+)", kind: "file" },
   { pattern: `\\.browser-profiles/(.*/)?(${alternatives(browserDirectories)})`, kind: "any" },
   { pattern: `\\.browser-profiles/(.*/)?(${alternatives(browserFiles)})`, kind: "entry" },
