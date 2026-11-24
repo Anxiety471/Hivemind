@@ -34,6 +34,7 @@ import {
   computerNetworkNameFor,
   computerNetworkNamesForCleanup,
   computerNetworkOwnerFor,
+  computerPackageMirrorMatches,
   containerCreateOptions,
   containerNameFor,
   controlPortPublicationMatches,
@@ -264,6 +265,30 @@ describe("graphical computer spec", () => {
     expect(computerBrowserProxyPacMatches(unset, pac)).toBe(false);
     expect(computerBrowserProxyPacMatches(env, undefined)).toBe(false);
     expect(computerBrowserProxyPacMatches(env, "https://proxy.example.com/other.pac")).toBe(false);
+  });
+
+  it("hands computers the package mirror registries only when configured", () => {
+    const base = {
+      name: "rakazo-bot-x",
+      image: "img",
+      botId: "x",
+      spaceId: "s",
+      homePath: "/data/x",
+    };
+    const unset = containerCreateOptions(base).Env;
+    expect(unset.some((entry) => entry.startsWith("npm_config_registry="))).toBe(false);
+    const env = containerCreateOptions({ ...base, packageMirrorUrl: "https://mirror.example" }).Env;
+    expect(env).toContain("npm_config_registry=https://mirror.example/npm/");
+    expect(env).toContain("GOPROXY=https://mirror.example/go,direct");
+    expect(env).toContain("PIP_INDEX_URL=https://mirror.example/pypi/simple");
+
+    // The environment is fixed at creation, so adding, changing or removing it replaces a computer.
+    expect(computerPackageMirrorMatches(unset, undefined)).toBe(true);
+    expect(computerPackageMirrorMatches(null, undefined)).toBe(true);
+    expect(computerPackageMirrorMatches(env, "https://mirror.example")).toBe(true);
+    expect(computerPackageMirrorMatches(unset, "https://mirror.example")).toBe(false);
+    expect(computerPackageMirrorMatches(env, undefined)).toBe(false);
+    expect(computerPackageMirrorMatches(env, "https://other.example")).toBe(false);
   });
 
   it("gives computers host GPUs only when configured", () => {

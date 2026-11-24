@@ -54,6 +54,7 @@ export interface KubernetesSandboxOptions {
   homeClaim?: string;
   homeColocateNamespace?: string;
   homeColocateLabels?: Record<string, string>;
+  packageMirrorUrl?: string;
 }
 
 export interface KubernetesSandboxSdk {
@@ -76,7 +77,7 @@ export class KubernetesSandboxProvider extends ImageComputerSandbox {
   private clientsValue: KubernetesSandboxSdk | undefined;
 
   constructor(options: KubernetesSandboxOptions = {}, clients?: KubernetesSandboxSdk) {
-    super("kubernetes", "Kubernetes");
+    super("kubernetes", "Kubernetes", options.packageMirrorUrl);
     this.namespace = options.namespace?.trim() || DEFAULT_NAMESPACE;
     this.runtimeClassName = options.runtimeClassName?.trim() || undefined;
     this.computerImage = options.computerImage?.trim() || DEFAULT_COMPUTER_IMAGE;
@@ -267,6 +268,7 @@ export class KubernetesSandboxProvider extends ImageComputerSandbox {
             image: this.computerImage,
             env: [
               ...Object.entries(COMPUTER_CACHE_ENV).map(([name, value]) => ({ name, value })),
+              ...Object.entries(this.packageMirrorEnv).map(([name, value]) => ({ name, value })),
               { name: "VNC_RESOLUTION", value: "1280x800" },
             ],
             ports: [{ name: "screen", containerPort: READY_PORT, protocol: "TCP" }],

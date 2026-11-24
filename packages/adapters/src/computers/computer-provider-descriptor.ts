@@ -68,6 +68,8 @@ export interface SandboxProviderOptions {
   wuyingMcpUrl?: string;
   wuyingMcpToken?: string;
   dataDir?: string;
+  /** Base URL of the optional read-only package mirror computers fetch registries from. */
+  packageMirrorUrl?: string;
 }
 
 /** Options the process wires up itself rather than reading from a provider's settings. */
@@ -79,7 +81,8 @@ type WiredOption =
   | "onUnsafeStop"
   | "referenceInUse"
   | "unreferencedMachines"
-  | "dataDir";
+  | "dataDir"
+  | "packageMirrorUrl";
 
 export type SandboxSettingOption = Exclude<keyof SandboxProviderOptions, WiredOption>;
 

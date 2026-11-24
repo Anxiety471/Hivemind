@@ -15,6 +15,7 @@ const include = [
   "apps/mobile/{lib,components}/**/*.test.{ts,tsx}",
   "apps/mobile/plugins/**/*.test.js",
   "apps/api/src/**/*.test.ts",
+  "apps/package-mirror/src/**/*.test.ts",
   "apps/worker/src/**/*.test.ts",
 ];
 

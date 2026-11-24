@@ -68,6 +68,7 @@ export interface IncusSandboxOptions {
   processLimit?: string;
   readyTimeoutMs?: number;
   unreferencedMachines?: UnreferencedMachineRecords;
+  packageMirrorUrl?: string;
 }
 
 export interface IncusResponse {
@@ -148,7 +149,7 @@ export class IncusSandboxProvider extends ImageComputerSandbox {
   private readonly client: IncusClient;
 
   constructor(options: IncusSandboxOptions, client?: IncusClient) {
-    super("incus", "Incus");
+    super("incus", "Incus", options.packageMirrorUrl);
     this.machines = options.unreferencedMachines;
     this.project = options.project?.trim() || DEFAULT_PROJECT;
     this.computerImage = options.computerImage?.trim() || DEFAULT_COMPUTER_IMAGE;
@@ -278,7 +279,11 @@ export class IncusSandboxProvider extends ImageComputerSandbox {
   }
 
   private instanceSpec(name: string, botId: string) {
-    const environment = { ...COMPUTER_CACHE_ENV, VNC_RESOLUTION: "1280x800" };
+    const environment = {
+      ...COMPUTER_CACHE_ENV,
+      ...this.packageMirrorEnv,
+      VNC_RESOLUTION: "1280x800",
+    };
     return {
       name,
       type: "container",

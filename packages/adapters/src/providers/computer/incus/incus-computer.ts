@@ -37,6 +37,7 @@ export const incusComputer: ComputerProviderDefinition = {
       memoryLimit: opts.incusMemoryLimit,
       processLimit: opts.incusProcessLimit,
       unreferencedMachines: opts.unreferencedMachines,
+      packageMirrorUrl: opts.packageMirrorUrl,
     });
   },
 };
