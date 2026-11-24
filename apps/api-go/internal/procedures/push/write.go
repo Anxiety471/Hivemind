@@ -205,27 +205,42 @@ func RegisterCall(ctx context.Context, database *db.DB, vault *shared.SecretVaul
 // a signed-in session ends its own registrations on both transports, while a
 // caller without one has every message token of the account removed.
 func Unregister(ctx context.Context, database *db.DB, actor db.Actor, _ orpc.Input) (any, *orpc.Error) {
-	err := systemRetry(ctx, database, "revoke or retarget a session's notification registration", func(tx pgx.Tx) error {
-		if err := advisoryLock(ctx, tx, "push-user:"+actor.UserID); err != nil {
-			return err
-		}
-		if actor.SessionID == "" {
-			_, err := tx.Exec(ctx, `DELETE FROM push_registrations WHERE "userId" = $1`, actor.UserID)
-			return err
-		}
-		// Sign-out revokes both transports (push-token-store.ts:325-341).
-		if _, err := tx.Exec(ctx, `DELETE FROM call_push_devices WHERE "userId" = $1 AND "sessionId" = $2`,
-			actor.UserID, actor.SessionID); err != nil {
-			return err
-		}
-		_, err := tx.Exec(ctx, `DELETE FROM push_registrations WHERE "userId" = $1 AND "sessionId" = $2`,
-			actor.UserID, actor.SessionID)
-		return err
-	})
+	err := endSession(ctx, database, actor.UserID, actor.SessionID)
 	if err != nil {
 		return nil, shared.Failure(err)
 	}
 	return ok, nil
+}
+
+// EndSession is PrismaPushTokenStore.endSession without a retarget
+// (push-token-store.ts:316-341): the deletes a deleted session's rows. The
+// auth layer runs it for every session better-auth deletes, exactly like
+// apps/api/src/app.ts:616-624's afterDeleteSession.
+func EndSession(ctx context.Context, database *db.DB, userID, sessionID string) error {
+	return endSession(ctx, database, userID, sessionID)
+}
+
+// endSession deletes a session's rows on both transports under the account's
+// push lock; an empty sessionID deletes every message token of the account
+// (the store's remove branch, unreachable through RPC).
+func endSession(ctx context.Context, database *db.DB, userID, sessionID string) error {
+	return systemRetry(ctx, database, "revoke or retarget a session's notification registration", func(tx pgx.Tx) error {
+		if err := advisoryLock(ctx, tx, "push-user:"+userID); err != nil {
+			return err
+		}
+		if sessionID == "" {
+			_, err := tx.Exec(ctx, `DELETE FROM push_registrations WHERE "userId" = $1`, userID)
+			return err
+		}
+		// Sign-out revokes both transports (push-token-store.ts:325-341).
+		if _, err := tx.Exec(ctx, `DELETE FROM call_push_devices WHERE "userId" = $1 AND "sessionId" = $2`,
+			userID, sessionID); err != nil {
+			return err
+		}
+		_, err := tx.Exec(ctx, `DELETE FROM push_registrations WHERE "userId" = $1 AND "sessionId" = $2`,
+			userID, sessionID)
+		return err
+	})
 }
 
 // registrationDigest is `merged.expoToken ? credentialDigest(merged.expoToken)

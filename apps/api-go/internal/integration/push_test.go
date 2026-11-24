@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"net/http"
 	"strings"
 	"sync"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/local"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/push"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/secretstore"
@@ -424,5 +426,62 @@ func TestUnregisterPush(t *testing.T) {
 	// Unregistering again changes nothing.
 	if _, failure := push.Unregister(ctx, database, actor, raw(``)); failure != nil {
 		t.Fatal(failure)
+	}
+}
+
+// A request on an expired session deletes that session's push rows, exactly as
+// better-auth's delete hook does through PrismaPushTokenStore.endSession
+// (apps/api/src/app.ts:616-624, push-token-store.ts:316-341). The hook runs
+// after the session row is gone, so the answer is still 401 and the rows of
+// another session of the same account survive.
+func TestExpiredSessionDeletesItsPushRows(t *testing.T) {
+	database := openTestDB(t)
+	s := seed(t, database)
+	cleanupPush(t, database, s.UserID, s.User2ID)
+	vault := pushVault(t, database)
+	ctx := context.Background()
+	expired := s.SessionID + "-expired"
+	expiredToken := s.SessionToken + "-expired"
+	addSession(t, database, expired, expiredToken, s.UserID, `now() + interval '7 days'`)
+	expiring := db.Actor{UserID: s.UserID, SpaceID: s.Space1, SessionID: expired}
+	live := db.Actor{UserID: s.UserID, SpaceID: s.Space1, SessionID: s.SessionID}
+	if _, failure := push.Register(ctx, database, vault, expiring, raw(`{"token":"expiring1"}`)); failure != nil {
+		t.Fatalf("register expiring: %v", failure)
+	}
+	if _, failure := push.Register(ctx, database, vault, live, raw(`{"token":"livetoken"}`)); failure != nil {
+		t.Fatalf("register live: %v", failure)
+	}
+	if _, failure := push.RegisterCall(ctx, database, vault, expiring,
+		raw(`{"deviceId":"9f8e7d6c-5b4a-4938-8271-6a5b4c3d2e1f","platform":"android","expoToken":"ExponentPushToken[expiring]"}`)); failure != nil {
+		t.Fatalf("register call expiring: %v", failure)
+	}
+	if err := database.System(ctx, "test age a session", func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE session SET "expiresAt" = now() - interval '60 seconds' WHERE id = $1`, expired)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	server := testServer(t, database, local.Config{})
+	cookie := "better-auth.session_token=" + signedCookie(testSecret, expiredToken)
+	response, body := do(t, http.MethodPost, server.URL+"/rpc/notifications/unregisterPush", cookie, `{"json":{}}`, nil)
+	if response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status = %d body=%s", response.StatusCode, body)
+	}
+
+	rows := pushRows(t, database, s.UserID)
+	if len(rows) != 1 || rows[0].SessionID != s.SessionID || rows[0].Plaintext != "livetoken" {
+		t.Fatalf("push rows after the expired session = %+v", rows)
+	}
+	devices := deviceRows(t, database, s.UserID)
+	if len(devices) != 0 {
+		t.Fatalf("call devices after the expired session = %+v", devices)
+	}
+	var sessions int
+	if err := database.Pool.QueryRow(ctx, `SELECT count(*) FROM session WHERE id = $1`, expired).Scan(&sessions); err != nil {
+		t.Fatal(err)
+	}
+	if sessions != 0 {
+		t.Fatal("the expired session row survived")
 	}
 }
