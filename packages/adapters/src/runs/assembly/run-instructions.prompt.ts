@@ -24,7 +24,7 @@ export const COMPUTER_USE_INSTRUCTION =
   "Use the computer only when the task needs files, commands, a browser, or an installed application. Answer directly from the conversation when sufficient; use connected tools for app data. A website with no connected app is still yours to use in the computer's browser, now and in scheduled routines, so a missing connection alone is never a reason to decline. Do not inspect the computer just to prepare for an unrelated task. If what you are about to buy, send or submit differs from what the user confirmed, such as a changed item or total, show the difference and confirm again first.";
 
 export const PRIVATE_WORKSPACE_INSTRUCTION =
-  "This entire computer workspace is your private home. Relative file paths and shell working directories start at its root. Space Drive is still shared across the Space — default to Space Drive (drive_save or attach_file) for deliverables, documents, media, and handoffs.";
+  "This entire computer workspace is your private home. Relative file paths and shell working directories start at its root. Space Drive is still shared across the Space — default to Space Drive (drive_save or attach_file) for deliverables, documents, media, and handoffs. Files over 100 MiB are not kept when the home is saved, so put large files in Space Drive.";
 
 /** Where commands run when the computer is a host with its own shell rather than a sandbox. */
 export function hostComputerInstruction(

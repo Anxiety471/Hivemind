@@ -27,6 +27,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/gateway"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/local"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/push"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/routes"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/secretstore"
@@ -207,6 +208,13 @@ func setupLocal(buildIDFile string, wantsVault bool, logger *slog.Logger) (*loca
 		SignupAllowlist: deployment.SignupAllowlist,
 		OIDCBypass:      deployment.OIDCBypass,
 		CookieDomain:    deployment.CookieDomain,
+		// afterDeleteSession (apps/api/src/app.ts:616-624): a deleted session takes
+		// its push registrations and call devices with it.
+		AfterDeleteSession: func(ctx context.Context, userID, sessionID string) {
+			if err := push.EndSession(ctx, database, userID, sessionID); err != nil {
+				logger.Error("push token removal failed", "error", err, "userId", userID, "sessionId", sessionID)
+			}
+		},
 	})
 	ring, closeRing, err := contentRing(startup, database, deployment, logger)
 	if err != nil {

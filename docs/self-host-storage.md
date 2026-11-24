@@ -149,10 +149,17 @@ versioning, with a lifecycle rule that expires noncurrent versions after your ba
 a mistaken deletion can be undone. `scripts/backup.sh` does not copy the bucket; versioning, or the
 service's own replication, is its backup.
 
-**What is stored.** Each save uploads the whole home as one object (in parts of up to 16 MiB for
-large homes) and then deletes the previous one, so a home costs about one object however many
-files it has. Homes are saved when a run finishes or fails, before a computer stops, and before
-it sleeps, as before.
+**What is stored.** A save uploads the files that changed since the stored revision, together with
+a list of every file in the home and where its bytes are: in this revision, or in an earlier one
+it names. Files with the same contents are stored once. A save reads only the files whose change
+time or size moved (a computer that saves from exported files reads them all, but uploads only
+what is new), so its cost follows what a bot changed, not how big the home is. A revision stays
+in the bucket while a kept revision reads from it, and a save that would read from too many, or
+from revisions holding mostly replaced data, uploads the whole home again. Revisions saved before
+this change are whole archives and still restore. A home is about one object per kept revision (in
+parts of up to 16 MiB for large ones), plus a small list object beside a revision that reads from
+earlier ones. Homes are saved when a computer stops or sleeps, and when a run finishes on a
+computer that does not keep the server's copy.
 
 **Deleting.** Deleting a bot with its own computer, or a space (including the personal spaces
 removed with an account), deletes each home's key with its computer's row, so the stored objects

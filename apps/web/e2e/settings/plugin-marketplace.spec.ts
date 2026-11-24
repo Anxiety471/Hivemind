@@ -140,6 +140,7 @@ test("shows directly registered MCP servers in Integrations without catalog conn
   await openIntegrationsAdd(page, "Manage MCP servers");
   await expect(page.getByRole("textbox", { name: "Server name", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Close MCP servers", exact: true }).click();
+  await page.waitForURL((url) => !url.searchParams.has("mcp"));
   for (const name of ["Dropbox", "GitHub"])
     await rpc(page, "mcp/servers/create", {
       slug: name.toLowerCase(),
@@ -210,6 +211,9 @@ test("shows directly registered MCP servers in Integrations without catalog conn
     );
     await route.fulfill({ response, json: { ...body, json: [...body.json, ...plugins] } });
   });
+  // The overlay keeps its last lists fresh for 30s, and the servers and installs arrived after
+  // it first read them, so reload instead of painting that stale read.
+  await page.reload();
   await page.getByRole("button", { name: "Connect apps", exact: true }).click();
   // Of six saved servers and three plugins, only Dropbox is connected: Docs has a failing
   // server. The plugin rows show once installs have loaded, so the count is read after that.
@@ -262,14 +266,19 @@ test("shows directly registered MCP servers in Integrations without catalog conn
   // Once both of its servers are connected, Docs counts once.
   phase = "all";
   await page.getByRole("button", { name: "Close MCP servers", exact: true }).click();
+  await page.waitForURL((url) => !url.searchParams.has("mcp"));
   await page.setViewportSize({ width: 1280, height: 720 });
+  // The overlay cached its read of the partial state; a fresh page reads the changed servers.
+  await page.reload();
   await page.getByRole("button", { name: "Connect apps", exact: true }).click();
   await expect(page.getByRole("button", { name: "2 connected", exact: true })).toBeVisible();
   await expect(marks("2 connected")).toHaveText("D");
   await page.getByRole("button", { name: "Close integrations", exact: true }).click();
+  await page.waitForURL((url) => !url.searchParams.has("integrations"));
 
   // With nothing connected, the count still opens the saved apps.
   phase = "down";
+  await page.reload();
   await page.getByRole("button", { name: "Connect apps", exact: true }).click();
   await expect(marks("0 connected")).toHaveText("");
   await page.getByRole("button", { name: "0 connected", exact: true }).click();

@@ -4,10 +4,12 @@ import { lstat, mkdir, open, readdir, realpath } from "node:fs/promises";
 import path from "node:path";
 import type { WorkspaceExportLimits } from "@rakazo/adapter-kit";
 import { WorkspaceTooLargeError } from "@rakazo/adapter-kit";
+import { getLogger } from "@rakazo/logging";
 import { fileHandlePath } from "./file-handle-path.js";
 import { isContained } from "./home.js";
 import {
   isTaggedCacheDirectory,
+  MAX_SAVED_FILE_BYTES,
   shouldSkipPortableWorkspaceFile,
   WORKSPACE_SAVE_LIMITS,
 } from "./workspace-save-policy.js";
@@ -34,12 +36,16 @@ const FILE = 2;
 const READ_CHUNK = 1024 * 1024;
 const MAX_PATH_BYTES = 4096;
 const MAX_SEGMENT_BYTES = 255;
+/** Files inside a repository's .git directory, at any depth. */
+const GIT_DIRECTORY = /(^|\/)\.git\//;
 
 export interface HomeArchiveLimits {
   /** Total file bytes in one home. */
   maxBytes: number;
   /** Files and directories in one home. */
   maxEntries: number;
+  /** The largest file a save keeps; larger ones are left out. Unset keeps every file. */
+  maxFileBytes?: number;
 }
 
 /** Read bounds retain compatibility with homes saved before the save limit was lowered. */
@@ -56,6 +62,35 @@ export class HomeArchiveError extends Error {
 }
 
 /**
+ * Walks the home the way `packHome` does but only looks at sizes, so a home over the save limits
+ * fails in seconds instead of after its first gigabytes have been read, sealed and uploaded.
+ */
+export async function assertHomeFits(
+  root: string,
+  limits: HomeArchiveLimits = DEFAULT_HOME_ARCHIVE_LIMITS,
+  saveLimits: WorkspaceExportLimits = WORKSPACE_SAVE_LIMITS,
+): Promise<void> {
+  const resolvedRoot = await realpath(root);
+  const counts = { bytes: 0, entries: 0, files: 0, oversized: 0 };
+  const measured = packEntries(
+    resolvedRoot,
+    counts,
+    saveBounds(limits, saveLimits),
+    saveLimits.maxFiles,
+    true,
+  );
+  for await (const _none of measured);
+}
+
+export function saveBounds(limits: HomeArchiveLimits, saveLimits: WorkspaceExportLimits) {
+  return {
+    maxBytes: Math.min(limits.maxBytes, saveLimits.maxBytes),
+    maxEntries: limits.maxEntries,
+    maxFileBytes: saveLimits.maxFileBytes ?? MAX_SAVED_FILE_BYTES,
+  };
+}
+
+/**
  * Streams the directory at `root` as an archive. Links are followed only when they resolve
  * inside the home (as local checkouts copy them); anything else that is not a directory or a
  * regular file is left out. A file that shrinks while it is read fails the whole archive.
@@ -66,23 +101,17 @@ export async function* packHome(
   /** What a save may hold; the read bounds above never raise it. */
   saveLimits: WorkspaceExportLimits = WORKSPACE_SAVE_LIMITS,
 ): AsyncGenerator<Buffer> {
-  limits = {
-    maxBytes: Math.min(limits.maxBytes, saveLimits.maxBytes),
-    maxEntries: limits.maxEntries,
-  };
+  limits = saveBounds(limits, saveLimits);
   const resolvedRoot = await realpath(root);
-  const counts = { bytes: 0, entries: 0, files: 0 };
+  const counts = { bytes: 0, entries: 0, files: 0, oversized: 0 };
   async function* entries() {
     yield MAGIC;
-    yield* packDirectory(
-      resolvedRoot,
-      resolvedRoot,
-      "",
-      new Set([resolvedRoot]),
-      counts,
-      limits,
-      saveLimits.maxFiles,
-    );
+    yield* packEntries(resolvedRoot, counts, limits, saveLimits.maxFiles, false);
+    if (counts.oversized)
+      getLogger().warn("home.save_skipped_large_files", {
+        files: counts.oversized,
+        max_file_bytes: limits.maxFileBytes,
+      });
     yield Buffer.from([END]);
   }
   // Entry headers are tiny; batching keeps a home of many small files to few, large writes.
@@ -100,15 +129,34 @@ export async function* packHome(
   if (length) yield Buffer.concat(held);
 }
 
-async function* packDirectory(
+/** What a save keeps of one home entry: files and directories only, in a fixed order. */
+export interface WalkedEntry {
+  kind: "directory" | "file";
+  /** Path relative to the home, with "/" separators. */
+  relative: string;
+  /** The real path, inside the home. */
+  resolved: string;
+  /** Bytes, as listed; 0 for a directory. */
+  size: number;
+  /** Permission bits. */
+  mode: number;
+  /** When the inode last changed (ctime), which no write or copy can hide. */
+  changedMs: number;
+}
+
+/**
+ * The entries a save keeps, the directory before what it holds. Links are followed only when they
+ * resolve inside the home; excluded paths, tagged cache directories and (counted in `skipped`)
+ * files over the cap are left out. This is the one definition of what a save covers.
+ */
+export async function* walkHome(
   root: string,
   directory: string,
   prefix: string,
   visited: Set<string>,
-  counts: { bytes: number; entries: number; files: number },
-  limits: HomeArchiveLimits,
-  maxFiles: number,
-): AsyncGenerator<Buffer> {
+  maxFileBytes: number | undefined,
+  skipped: { oversized: number },
+): AsyncGenerator<WalkedEntry> {
   const entries = await readdir(directory).catch(skipVanished([] as string[]));
   for (const name of entries.sort()) {
     const relative = prefix ? `${prefix}/${name}` : name;
@@ -119,33 +167,71 @@ async function* packDirectory(
     if (!info || shouldSkipPortableWorkspaceFile(relative, info.isDirectory())) continue;
     if (info.isDirectory()) {
       if (visited.has(resolved) || (await isTaggedCacheDirectory(resolved))) continue;
-      countEntry(counts, 0, limits);
-      yield entryHeader(DIRECTORY, relative);
-      yield* packDirectory(
+      yield { kind: "directory", relative, resolved, size: 0, mode: 0o700, changedMs: 0 };
+      yield* walkHome(
         root,
         resolved,
         relative,
         new Set([...visited, resolved]),
-        counts,
-        limits,
-        maxFiles,
+        maxFileBytes,
+        skipped,
       );
     } else if (info.isFile()) {
-      if (++counts.files > maxFiles) throw new WorkspaceTooLargeError("files");
-      const handle = await openContained(root, resolved);
-      if (!handle) continue;
-      try {
-        const opened = await handle.stat();
-        countEntry(counts, opened.size, limits);
-        const header = entryHeader(FILE, relative);
-        const meta = Buffer.alloc(10);
-        meta.writeUInt16BE(opened.mode & 0o777, 0);
-        meta.writeBigUInt64BE(BigInt(opened.size), 2);
-        yield Buffer.concat([header, meta]);
-        yield* readExactly(handle, opened.size);
-      } finally {
-        await handle.close();
+      // A repository's pack files stay whole: leaving one out would corrupt the checkout.
+      if (maxFileBytes !== undefined && info.size > maxFileBytes && !GIT_DIRECTORY.test(relative)) {
+        skipped.oversized += 1;
+        continue;
       }
+      yield {
+        kind: "file",
+        relative,
+        resolved,
+        size: info.size,
+        mode: info.mode & 0o777,
+        changedMs: info.ctimeMs,
+      };
+    }
+  }
+}
+
+async function* packEntries(
+  root: string,
+  counts: { bytes: number; entries: number; files: number; oversized: number },
+  limits: HomeArchiveLimits,
+  maxFiles: number,
+  measureOnly: boolean,
+): AsyncGenerator<Buffer> {
+  for await (const entry of walkHome(
+    root,
+    root,
+    "",
+    new Set([root]),
+    limits.maxFileBytes,
+    counts,
+  )) {
+    if (entry.kind === "directory") {
+      countEntry(counts, 0, limits);
+      if (!measureOnly) yield entryHeader(DIRECTORY, entry.relative);
+      continue;
+    }
+    if (++counts.files > maxFiles) throw new WorkspaceTooLargeError("files");
+    if (measureOnly) {
+      countEntry(counts, entry.size, limits);
+      continue;
+    }
+    const handle = await openContained(root, entry.resolved);
+    if (!handle) continue;
+    try {
+      const opened = await handle.stat();
+      countEntry(counts, opened.size, limits);
+      const header = entryHeader(FILE, entry.relative);
+      const meta = Buffer.alloc(10);
+      meta.writeUInt16BE(opened.mode & 0o777, 0);
+      meta.writeBigUInt64BE(BigInt(opened.size), 2);
+      yield Buffer.concat([header, meta]);
+      yield* readExactly(handle, opened.size);
+    } finally {
+      await handle.close();
     }
   }
 }
@@ -163,7 +249,7 @@ function skipVanished<T>(fallback: T) {
 }
 
 /** Opens a regular file and checks the opened object, not the name, is inside the home. */
-async function openContained(root: string, file: string): Promise<FileHandle | undefined> {
+export async function openContained(root: string, file: string): Promise<FileHandle | undefined> {
   const handle = await open(
     file,
     constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0),
@@ -181,7 +267,7 @@ async function openContained(root: string, file: string): Promise<FileHandle | u
   }
 }
 
-async function* readExactly(handle: FileHandle, size: number): AsyncGenerator<Buffer> {
+export async function* readExactly(handle: FileHandle, size: number): AsyncGenerator<Buffer> {
   let remaining = size;
   let position = 0;
   while (remaining > 0) {
@@ -202,7 +288,7 @@ function entryHeader(kind: number, relative: string) {
   return Buffer.concat([header, name]);
 }
 
-function countEntry(
+export function countEntry(
   counts: { bytes: number; entries: number },
   bytes: number,
   limits: HomeArchiveLimits,
@@ -214,7 +300,7 @@ function countEntry(
 }
 
 /** A relative path made only of ordinary segments. */
-function isArchivePath(relative: string) {
+export function isArchivePath(relative: string) {
   const bytes = Buffer.byteLength(relative, "utf8");
   if (bytes === 0 || bytes > MAX_PATH_BYTES || relative.includes("\0")) return false;
   return relative
@@ -328,7 +414,7 @@ async function readArchive(
 }
 
 /** Exact-length reads over a chunked stream, without holding more than one chunk. */
-class ByteReader {
+export class ByteReader {
   private readonly iterator: AsyncIterator<Uint8Array>;
   private pending = Buffer.alloc(0);
 
@@ -365,5 +451,16 @@ class ByteReader {
 
   async atEnd(): Promise<boolean> {
     return !(await this.fill());
+  }
+
+  /** Reads and drops `length` bytes. */
+  async skip(length: number): Promise<void> {
+    for await (const _part of this.stream(length));
+  }
+
+  /** Stops reading the source early, releasing whatever it holds. */
+  async close(): Promise<void> {
+    this.pending = Buffer.alloc(0);
+    await this.iterator.return?.(undefined);
   }
 }
