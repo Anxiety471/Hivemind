@@ -87,6 +87,7 @@ async function damagedComputer(damage: "resume_heals" | "persists" = "resume_hea
     maintenanceId: null as string | null,
     homeRevision: "saved",
     homeRevisionAt,
+    restorePending: false,
     autoRecoveredAt: null as Date | null,
     runningSince: new Date(0),
     updatedAt: new Date(),
