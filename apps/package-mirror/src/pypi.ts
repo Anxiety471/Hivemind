@@ -9,6 +9,9 @@ import type { MirrorResponse } from "./response.js";
 const PROJECT = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
 const SHA256 = /^[a-f0-9]{64}$/;
 const FILENAME = /^[A-Za-z0-9][A-Za-z0-9._+!~-]*$/;
+const METADATA_ATTRIBUTE =
+  /\s+data-(?:core|dist-info)-metadata\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi;
+const METADATA_KEYS = ["core-metadata", "dist-info-metadata", "data-dist-info-metadata"];
 const HREF = /(href\s*=\s*)(["'])([^"']+)\2/gi;
 const MAX_INDEX_BYTES = 128 * 1024 * 1024;
 const MAX_FILE_BYTES = 2 * 1024 * 1024 * 1024;
@@ -180,16 +183,20 @@ function rewriteIndex(
       : shaFromUrl(value.url);
     const file = files.find((candidate) => candidate.sha256 === hash);
     if (file) value.url = publicFileUrl(context, file);
+    // The mirror serves wheels, not their `.metadata` sidecars, so installers read the wheel.
+    for (const key of METADATA_KEYS) delete value[key];
   }
   return { body: JSON.stringify(data), contentType: "application/vnd.pypi.simple.v1+json" };
 }
 
 function rewriteHtml(context: MirrorContext, body: string, files: PyPiFile[]): string {
-  return body.replace(HREF, (whole, prefix: string, quote: string, url: string) => {
-    const hash = shaFromUrl(url);
-    const file = hash ? files.find((candidate) => candidate.sha256 === hash) : undefined;
-    return file ? `${prefix}${quote}${publicFileUrl(context, file)}${quote}` : whole;
-  });
+  return body
+    .replace(HREF, (whole, prefix: string, quote: string, url: string) => {
+      const hash = shaFromUrl(url);
+      const file = hash ? files.find((candidate) => candidate.sha256 === hash) : undefined;
+      return file ? `${prefix}${quote}${publicFileUrl(context, file)}${quote}` : whole;
+    })
+    .replace(METADATA_ATTRIBUTE, "");
 }
 
 function publicFileUrl(context: MirrorContext, file: PyPiFile): string {

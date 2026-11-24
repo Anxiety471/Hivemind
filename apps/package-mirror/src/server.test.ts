@@ -241,6 +241,8 @@ describe("PyPI simple index", () => {
             filename: "demo-1.0.tar.gz",
             url: `${upstream.url}/packages/aa/demo-1.0.tar.gz#sha256=${hash}`,
             hashes: { sha256: hash },
+            "core-metadata": { sha256: hash },
+            "data-dist-info-metadata": { sha256: hash },
           },
         ],
       }),
@@ -251,6 +253,8 @@ describe("PyPI simple index", () => {
     expect(index.status).toBe(200);
     const data = (await index.json()) as { files: { url: string }[] };
     expect(data.files[0]?.url).toBe(`http://mirror.test/pypi/files/${hash}/demo-1.0.tar.gz`);
+    // No sidecar is advertised, since the mirror does not serve it.
+    expect(Object.keys(data.files[0] ?? {}).filter((key) => key.includes("metadata"))).toEqual([]);
 
     const file = await fetch(`${server.url}/pypi/files/${hash}/demo-1.0.tar.gz`);
     expect(file.status).toBe(200);
@@ -293,12 +297,13 @@ describe("PyPI simple index", () => {
     const hash = sha256(bytes);
     upstream.respond("/simple/demo/", {
       contentType: "text/html",
-      body: `<html><body><a href="${upstream.url}/packages/bb/demo-2.0.tar.gz#sha256=${hash}">demo-2.0.tar.gz</a></body></html>`,
+      body: `<html><body><a href="${upstream.url}/packages/bb/demo-2.0.tar.gz#sha256=${hash}" data-core-metadata="sha256=${hash}">demo-2.0.tar.gz</a></body></html>`,
     });
 
     const response = await fetch(`${server.url}/pypi/simple/demo/`);
     const html = await response.text();
     expect(html).toContain(`http://mirror.test/pypi/files/${hash}/demo-2.0.tar.gz`);
+    expect(html).not.toContain("metadata");
   });
 });
 
