@@ -250,9 +250,8 @@ export function laneLPushCases(system: System): Case[] {
     register("register-token-512", { token: "Z".repeat(512) }),
     register("register-token-unicode", { token: "😀😀😀😀😀😀😀😀" }),
     register("register-token-lone-surrogate", { token: LONE_SURROGATE_TOKEN }, {
-      // The state comparison cannot see a digest: normalize() rewrites every
-      // 64-hex value to "<share-token-hash>". The stored digest must still be
-      // sha256 of Node's UTF-8 encoding, which writes U+FFFD for U+D800 (see
+      // The database state now compares tokenDigest exactly (contract-norm.mts); this assertion
+      // additionally pins sha256 of Node's UTF-8 encoding, which writes U+FFFD for U+D800 (see
       // TestDigestAndCredentialRules in internal/procedures/push).
       check: async ({ seeded }) => {
         const rows = await system.pushRegistration.findMany({
