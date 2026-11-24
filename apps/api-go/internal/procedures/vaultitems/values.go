@@ -114,6 +114,10 @@ func decodeLoginPreview(plaintext string) (username string, hasUsername, otp boo
 	return username, hasUsername, otp, true
 }
 
+// ValidAuthenticatorKey is authenticatorKey(text) !== undefined (bot-secrets.ts:291-344), the
+// check a saved login's opt-in authenticator key must pass. Exported for the write path.
+func ValidAuthenticatorKey(text string) bool { return validAuthenticatorKey(text) }
+
 func validAuthenticatorKey(text string) bool {
 	trimmed := trimJS(text)
 	secret := trimmed

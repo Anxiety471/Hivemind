@@ -63,7 +63,7 @@ func List(
 	if failure != nil {
 		return nil, failure
 	}
-	items, err := list(ctx, database, vault, deployment.Content, actor, scope)
+	items, err := list(ctx, database, vault, deployment.Content, actor, scope, "")
 	if err != nil {
 		return nil, shared.Failure(err)
 	}
@@ -98,7 +98,7 @@ func ListBotSecrets(
 	if err != nil {
 		return nil, shared.Failure(err)
 	}
-	items, err := list(ctx, database, vault, deployment.Content, actor, "")
+	items, err := list(ctx, database, vault, deployment.Content, actor, "", "")
 	if err != nil {
 		return nil, shared.Failure(err)
 	}
@@ -122,6 +122,7 @@ func list(
 	ring *contentcrypto.KeyRing,
 	actor db.Actor,
 	requestedScope string,
+	name string,
 ) ([]Metadata, error) {
 	items := []Metadata{}
 	err := database.Tenant(ctx, actor, func(tx pgx.Tx) error {
@@ -132,7 +133,8 @@ func list(
 		rows, err := tx.Query(ctx, `SELECT id, name, origin, auth, title, note, policy, "alsoOn",
 			ciphertext, "createdAt", "updatedAt" FROM vault_credentials
 			WHERE "userId" = $1 AND "spaceId" IS NOT DISTINCT FROM $2::text
-			ORDER BY name ASC`, actor.UserID, spaceID)
+				AND ($3::text IS NULL OR name = $3)
+			ORDER BY name ASC`, actor.UserID, spaceID, nameArg(name))
 		if err != nil {
 			return err
 		}
@@ -238,6 +240,35 @@ func list(
 		return nil
 	})
 	return items, err
+}
+
+// nameArg passes an absent name as SQL NULL.
+func nameArg(name string) any {
+	if name == "" {
+		return nil
+	}
+	return name
+}
+
+// One is the answer vault.put returns: listVaultItems(scope, name) and its DTO
+// (routes/bots.ts:239-243). found is false when no row of that name exists.
+func One(
+	ctx context.Context,
+	database *db.DB,
+	vault *shared.SecretVault,
+	ring *contentcrypto.KeyRing,
+	actor db.Actor,
+	requestedScope string,
+	name string,
+) (Metadata, bool, error) {
+	items, err := list(ctx, database, vault, ring, actor, requestedScope, name)
+	if err != nil {
+		return Metadata{}, false, err
+	}
+	if len(items) == 0 {
+		return Metadata{}, false, nil
+	}
+	return items[0], true, nil
 }
 
 // sharedVaultRow builds the identity a value is bound to. The vault key scope is the vault's
