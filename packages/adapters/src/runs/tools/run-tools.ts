@@ -2,11 +2,28 @@ import type { AgentToolExecutionObserver } from "@rakazo/adapter-kit";
 import { BACKGROUND_HELPER_TRIGGER, redactSecrets, toolResultTaintsRun } from "@rakazo/core";
 import { isTerminatingReplyResult, isToolPauseResult } from "../../approvals/approval-effect.js";
 import { argumentGiven } from "../../bots/update-bot-patch.js";
+import { isRunningShellCommand } from "../../computers/sandbox/shell-command-stream.js";
 import { IMAGE_RETURNING_COMPUTER_TOOLS } from "../../models/model-vision.js";
 import { MODEL_CANNOT_SEE_MESSAGE } from "../../models/model-vision.prompt.js";
 import { strategicInitiativeToolAllowed } from "../../routines/strategic-initiative.js";
-import { CODE_MODE } from "../../tools/code-mode.tool-definition.js";
-import { runCodeModeScript } from "../../tools/code-mode-sandbox.js";
+import {
+  CODE_COMMAND_PREFIX,
+  codeCommandScript,
+  findCodeCommand,
+  listCodeCommands,
+} from "../../tools/code-commands.js";
+import {
+  CODE_MODE,
+  CODE_MODE_MAX_WRITES,
+  CODE_MODE_SHELL_TIMEOUT_MS,
+} from "../../tools/code-mode.tool-definition.js";
+import { CODE_MODE_SEARCH, searchCodeModeTools } from "../../tools/code-mode-api.js";
+import {
+  CODE_MODE_MAX_CALLS,
+  CODE_MODE_OUTPUT_MAX_CHARS,
+  CODE_MODE_TIMEOUT_MS,
+  runCodeModeScript,
+} from "../../tools/code-mode-sandbox.js";
 import type { RunContext } from "../assembly/run-context.js";
 import { markReadOutsideContent } from "../assembly/run-context.js";
 import { codeModeToolExecutionId } from "../lifecycle/run-effects.js";
@@ -19,9 +36,11 @@ import { prepareToolRequest, resolveToolRequest } from "./run-tool-request.js";
 import {
   BUILTIN_AGENT_TOOL_NAMES,
   codeModeCallableTools,
+  isCodeModeWrite,
   PAGE_BROWSER_TOOL_NAMES,
   SUBAGENT_HIDDEN_TOOLS,
 } from "./run-tool-selection.js";
+import { commandTools } from "./run-tools-commands.js";
 import { computerTools, pageBrowserTool } from "./run-tools-computer.js";
 import { driveTools } from "./run-tools-drive.js";
 import { emailTools } from "./run-tools-email.js";
@@ -54,6 +73,7 @@ const TOOL_HANDLERS = new Map<string, ToolHandler>([
   ...Object.entries(memoryTools),
   ...Object.entries(integrationTools),
   ...Object.entries(taskTools),
+  ...Object.entries(commandTools),
   ...Object.entries(messagingTools),
   ...Object.entries(secretTools),
   ...Object.entries(fleetTools),
@@ -83,6 +103,7 @@ export async function applyTool(
   executionId: string,
   _route?: unknown,
   observer?: AgentToolExecutionObserver,
+  commandTimeoutMs?: number,
 ) {
   // A bot naming itself in bot_id means its own settings. Dropping it here sends the call down
   // the own path everywhere: preparation, the stored approval, the handler and its taint check.
@@ -94,7 +115,7 @@ export async function applyTool(
     const { bot_id: _self, ...own } = args;
     args = own;
   }
-  return dispatchTool(ctx, name, args, executionId, observer);
+  return dispatchTool(ctx, name, args, executionId, observer, commandTimeoutMs);
 }
 
 async function dispatchTool(
@@ -103,6 +124,7 @@ async function dispatchTool(
   args: Record<string, unknown>,
   executionId: string,
   observer: AgentToolExecutionObserver | undefined,
+  commandTimeoutMs?: number,
 ) {
   ctx.context.signal.throwIfAborted();
   // A call turned away before its tool runs is logged by its refusal code. `target` is the
@@ -186,7 +208,7 @@ async function dispatchTool(
   const refused = await prepareToolRequest(ctx, request);
   if (refused) return refuse(refused, request.name);
   noteComputerTaskStep(ctx.state.reply, request.name);
-  const gate = await gateToolCall(ctx, request, observer);
+  const gate = await gateToolCall(ctx, request, observer, commandTimeoutMs);
   if ("result" in gate) {
     const ownProfile = name === "update_bot" && !argumentGiven(args.bot_id);
     if (gate.replayed && toolResultTaintsRun(request.name) && !ownProfile) {
@@ -247,7 +269,7 @@ function toolResultErrorText(result: unknown): string {
 }
 
 /**
- * Runs one model-authored TypeScript snippet against the read-only tools this run offers.
+ * Runs one model-authored TypeScript snippet against the tools this run offers.
  * Every call goes through applyTool, so approvals, taint, refusals and audit see it exactly as
  * a direct call. A call that pauses (approval, secret) stops the script and becomes this
  * tool's own result, which ends the turn as a direct call would.
@@ -255,41 +277,140 @@ function toolResultErrorText(result: unknown): string {
 async function codeModeTool(ctx: RunContext, call: ToolCall) {
   const code = typeof call.args.code === "string" ? call.args.code : "";
   if (!code.trim()) return call.finish({ error: "code must be the TypeScript to run." });
-  const callable = new Set(codeModeCallableTools(ctx.tools.offered).map((tool) => tool.name));
+  const offered = codeModeCallableTools(ctx.tools.offered);
+  const callable = new Map(offered.map((tool) => [tool.name, tool] as const));
+  // `codemode.search` answers from the offered set without running a tool; a real tool of the
+  // same name wins.
+  const searches = !callable.has(CODE_MODE_SEARCH);
   let ordinal = 0;
+  let writes = 0;
   let paused: unknown;
+  let stillRunning = false;
   // A paused call ends the script: the isolate is interrupted instead of letting a catch
   // swallow the refusal and keep calling tools after the person was asked.
   const stop = new AbortController();
-  const outcome = await runCodeModeScript({
-    code,
-    tools: [...callable],
-    signal: AbortSignal.any([ctx.context.signal, stop.signal]),
-    call: async (name, args) => {
-      if (paused) throw new Error("The script has stopped.");
-      if (!callable.has(name)) {
-        throw Object.assign(new Error(`${name} is not a read-only tool this run offers`), {
-          name: "ToolUnavailable",
+  const toolNames = [...callable.keys(), ...(searches ? [CODE_MODE_SEARCH] : [])];
+  const startedAt = Date.now();
+  let commandCalls = 0;
+  const callTool = async (
+    name: string,
+    args: Record<string, unknown>,
+    insideCommand: boolean,
+  ): Promise<unknown> => {
+    if (paused || stillRunning) throw new Error("The script has stopped.");
+    if (name.startsWith(CODE_COMMAND_PREFIX)) {
+      if (insideCommand) {
+        throw Object.assign(new Error("A saved command cannot call another command."), {
+          name: "CommandNesting",
         });
       }
-      const result = await applyTool(
-        ctx,
-        name,
-        args,
-        codeModeToolExecutionId(call.executionId, ordinal++),
+      return savedCommand(name, args);
+    }
+    if (searches && name === CODE_MODE_SEARCH) {
+      return searchCodeModeTools(
+        offered,
+        typeof args.query === "string" ? args.query : "",
+        await listCodeCommands(ctx.deps.prisma),
       );
-      if (isToolPauseResult(result)) {
-        paused = result;
-        stop.abort();
-        throw new Error("The call is waiting for the person, so the script stopped.");
-      }
-      if (isToolError(result)) {
-        throw Object.assign(new Error(toolResultErrorText(result)), { name: "ToolFailed" });
-      }
-      return result;
-    },
+    }
+    const tool = callable.get(name);
+    if (!tool) {
+      throw Object.assign(new Error(`${name} is not a tool this run offers`), {
+        name: "ToolUnavailable",
+      });
+    }
+    if (isCodeModeWrite(tool) && ++writes > CODE_MODE_MAX_WRITES) {
+      throw Object.assign(
+        new Error(`code_mode allows at most ${CODE_MODE_MAX_WRITES} writes per script`),
+        { name: "WriteLimitReached" },
+      );
+    }
+    const result = await applyTool(
+      ctx,
+      name,
+      args,
+      codeModeToolExecutionId(call.executionId, ordinal++),
+      undefined,
+      // A command that outlives its quiet window reports back through the turn's observer, as
+      // it does for a direct call.
+      call.observer,
+      CODE_MODE_SHELL_TIMEOUT_MS,
+    );
+    if (isRunningShellCommand(result)) {
+      stillRunning = true;
+      stop.abort();
+      throw new Error("The command is still running, so the script stopped.");
+    }
+    if (isToolPauseResult(result)) {
+      paused = result;
+      stop.abort();
+      throw new Error("The call is waiting for the person, so the script stopped.");
+    }
+    if (isToolError(result)) {
+      throw Object.assign(new Error(toolResultErrorText(result)), { name: "ToolFailed" });
+    }
+    return result;
+  };
+  // A saved command is another bot's text, so reading what it returns counts as reading outside
+  // content. It runs in its own isolate with this script's tools, call budget and clock, and each
+  // call it makes is gated and recorded like any other.
+  const savedCommand = async (name: string, args: Record<string, unknown>): Promise<unknown> => {
+    const command = await findCodeCommand(ctx.deps.prisma, name.slice(CODE_COMMAND_PREFIX.length));
+    if (!command) {
+      throw Object.assign(
+        new Error(`There is no saved command ${name}. Find one with codemode.search.`),
+        { name: "ToolUnavailable" },
+      );
+    }
+    await markReadOutsideContent(ctx);
+    const nested = await runCodeModeScript({
+      code: codeCommandScript(command.code, args),
+      tools: toolNames,
+      commandPrefix: CODE_COMMAND_PREFIX,
+      signal: AbortSignal.any([ctx.context.signal, stop.signal]),
+      timeoutMs: Math.max(1, CODE_MODE_TIMEOUT_MS - (Date.now() - startedAt)),
+      maxCalls: Math.max(0, CODE_MODE_MAX_CALLS - commandCalls),
+      call: (toolName, toolArgs) => callTool(toolName, toolArgs, true),
+    });
+    commandCalls += nested.calls.length;
+    if (paused || stillRunning) throw new Error("The script has stopped.");
+    if (nested.error) {
+      throw Object.assign(new Error(`${nested.error.name}: ${nested.error.message}`), {
+        name: "CommandFailed",
+      });
+    }
+    if (nested.truncated) {
+      throw Object.assign(
+        new Error(`${name} returned more than ${CODE_MODE_OUTPUT_MAX_CHARS} characters`),
+        {
+          name: "CommandFailed",
+        },
+      );
+    }
+    try {
+      return JSON.parse(nested.output);
+    } catch {
+      throw Object.assign(new Error(`${name} returned something that is not JSON`), {
+        name: "CommandFailed",
+      });
+    }
+  };
+  const outcome = await runCodeModeScript({
+    code,
+    tools: toolNames,
+    commandPrefix: CODE_COMMAND_PREFIX,
+    signal: AbortSignal.any([ctx.context.signal, stop.signal]),
+    call: (name, args) => callTool(name, args, false),
   });
   if (paused) return paused;
+  if (stillRunning) {
+    return call.finish({
+      ...(outcome.output ? { output: redactSecrets(outcome.output, ctx.secrets) } : {}),
+      error:
+        "ShellStillRunning: a command is still running and its final output arrives after this turn. Do not run it again.",
+      calls: outcome.calls,
+    });
+  }
   const output = redactSecrets(outcome.output, ctx.secrets);
   if (outcome.error) {
     return call.finish({

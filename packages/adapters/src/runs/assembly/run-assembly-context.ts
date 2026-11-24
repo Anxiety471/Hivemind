@@ -22,6 +22,7 @@ import { builtinAgentSkillRecords } from "../../tools/skill-tools.js";
 import type { RunExecutorServices, RunHold } from "../lifecycle/run-attempt.js";
 import { buildApprovalContinuation } from "../lifecycle/run-effects.js";
 import { createReplyState } from "../lifecycle/run-progress.js";
+import { codeModeCallableTools } from "../tools/run-tool-selection.js";
 import { historyMyChatsAllowed } from "../tools/run-tools-memory.js";
 import { withLatestStepScreenshot, withRecentTurnImages } from "../turn/run-turn-images.js";
 import { missingTurnImagesInstruction } from "../turn/run-turn-images.prompt.js";
@@ -128,6 +129,7 @@ export async function createRunContext(
     searchResultUrls,
     strategicBuiltins,
     tools,
+    listedTools,
     trustLoaders,
   } = parts.tools;
   const { hostEnvironment } = parts.computerInstructions;
@@ -235,6 +237,7 @@ export async function createRunContext(
     },
     tools: {
       offered: tools,
+      listed: listedTools,
       builtins: strategicBuiltins,
       connector: connectorTools,
       disabled: disabledBuiltinTools,
@@ -293,7 +296,7 @@ export async function buildTurnPrompt(
   const { resolved, runModelId, runModelProvider } = parts.model;
   const { attachedFilesPrompt, modelSeesImages } = parts.computer;
   const { callEndRun, disabledBuiltinTools, ownerStartedRun, voiceCall } = parts.capabilities;
-  const { approvedEffects, tools } = parts.tools;
+  const { approvedEffects, tools, listedTools } = parts.tools;
   const { ctx } = parts;
   const pluginLine = connectedPluginsInstruction(connectedPlugins);
   const runSavedSkills = nonOwnerChatRun ? [] : savedSkills;
@@ -350,7 +353,10 @@ export async function buildTurnPrompt(
     : buildApprovalContinuation(
         approvedEffects,
         (request) => redactSecrets(JSON.stringify(request), runSecrets),
-        { exposedToolNames: new Set(partitionTools(tools).listed.map((tool) => tool.name)) },
+        {
+          exposedToolNames: new Set(partitionTools(listedTools).listed.map((tool) => tool.name)),
+          scriptToolNames: new Set(codeModeCallableTools(tools).map((tool) => tool.name)),
+        },
       );
   const replyContext = await loadReplyContext(deps.prisma, thread.id, run.sourceMessageId);
   let userTimeZone: string | null | undefined;

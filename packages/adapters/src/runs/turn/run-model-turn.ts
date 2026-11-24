@@ -162,7 +162,7 @@ function modelTurnRequest(
     sourceMessage,
     userComputer,
   } = turn.capabilities;
-  const { strategicBuiltins, taskCatalogInstruction, tools } = turn.tools;
+  const { strategicBuiltins, taskCatalogInstruction, tools, listedTools, codeFirst } = turn.tools;
   const { computerInstruction, workspaceInstruction } = turn.computerInstructions;
   const {
     operatorInstruction,
@@ -263,6 +263,7 @@ function modelTurnRequest(
       offeredFleetTools: offeredFleetTools(strategicBuiltins),
       operatorInstruction,
       offeredToolNames: new Set(tools.map((tool) => tool.name)),
+      codeFirst,
       followUpsOffered: followUpsOffered(strategicBuiltins, ownerStartedRun),
       backgroundHelpersAllowed: backgroundHelpersAllowed({
         trigger: run.trigger,
@@ -281,7 +282,7 @@ function modelTurnRequest(
         currentTurnFiles.length &&
         !turnBlocks?.some((block) => block.kind === "image" && block.imageHandling === "confirm"),
     ),
-    tools,
+    tools: listedTools,
     // The live array: secrets learned later in the run redact too.
     secrets: runSecrets,
     model: mainRunModel,

@@ -52,7 +52,7 @@ type ToolCall = {
   executionId: string;
 };
 
-function fixture(runId = "run-1") {
+function fixture(runId = "run-1", options: { codeMode?: boolean } = {}) {
   const effects: Effect[] = [];
   const results: unknown[] = [];
   const media = new FakeMediaGenerationProvider();
@@ -265,6 +265,7 @@ function fixture(runId = "run-1") {
   });
   const executor = createRunExecutor({
     deploymentModelKey: "fixture-model-key",
+    deploymentLabs: options.codeMode ? ["code"] : [],
     prisma: {
       ...prisma,
       $transaction: async (work: (tx: typeof prisma) => Promise<unknown>) => work(prisma),
@@ -858,6 +859,90 @@ describe("mutating tool effect idempotency keys", () => {
     expect(f.memoryCommit).not.toHaveBeenCalled();
     expect(f.effects).toHaveLength(1);
     expect(f.results[0]).toEqual({ ok: true, legacy: true });
+  });
+});
+
+describe("code_mode writes across attempts", () => {
+  // The marker changes the outer call's arguments, so a rerun is a new code_mode call whose
+  // inner writes must still be told apart by their own tool and arguments.
+  const script = (contents: string[], marker = "") =>
+    [
+      ...contents.map(
+        (content) => `await codemode.remember({ path: "MEMORY.md", content: "${content}" });`,
+      ),
+      `console.log("done${marker}");`,
+    ].join("\n");
+  const remembered = (effects: Effect[]) => effects.filter((effect) => effect.kind === "remember");
+
+  it("does not repeat a script's writes when a new attempt runs the script again", async () => {
+    const f = fixture("run-script-replay", { codeMode: true });
+    f.setCalls([
+      { name: "code_mode", args: { code: script(["one", "two", "three"]) }, executionId: "call_0" },
+    ]);
+    await f.run();
+    expect(f.results[0]).toMatchObject({
+      output: "done",
+      calls: ["remember", "remember", "remember"],
+    });
+    expect(f.memoryCommit).toHaveBeenCalledTimes(3);
+    expect(remembered(f.effects)).toHaveLength(3);
+
+    f.setCalls([
+      {
+        name: "code_mode",
+        args: { code: script(["one", "two", "three"], " again") },
+        executionId: "call_after_restart",
+      },
+    ]);
+    await f.run();
+    expect(f.results[1]).toMatchObject({ output: "done again" });
+    expect(f.memoryCommit).toHaveBeenCalledTimes(3);
+    expect(remembered(f.effects)).toHaveLength(3);
+  });
+
+  it("keeps two identical writes in one script as two effects, and reuses both on a rerun", async () => {
+    const f = fixture("run-script-twice", { codeMode: true });
+    f.setCalls([
+      { name: "code_mode", args: { code: script(["same", "same"]) }, executionId: "c0" },
+    ]);
+    await f.run();
+    expect(remembered(f.effects)).toHaveLength(2);
+    const executed = f.memoryCommit.mock.calls.length;
+
+    f.setCalls([
+      { name: "code_mode", args: { code: script(["same", "same"], " again") }, executionId: "c1" },
+    ]);
+    await f.run();
+    expect(remembered(f.effects)).toHaveLength(2);
+    expect(f.memoryCommit.mock.calls.length).toBe(executed);
+  });
+
+  it("treats a write whose arguments changed as a new effect and keeps the ones that did not", async () => {
+    const f = fixture("run-script-changed", { codeMode: true });
+    f.setCalls([{ name: "code_mode", args: { code: script(["one", "two"]) }, executionId: "c0" }]);
+    await f.run();
+    expect(f.memoryCommit).toHaveBeenCalledTimes(2);
+
+    f.setCalls([
+      { name: "code_mode", args: { code: script(["one", "other"]) }, executionId: "c1" },
+    ]);
+    await f.run();
+    expect(f.memoryCommit).toHaveBeenCalledTimes(3);
+    expect(remembered(f.effects)).toHaveLength(3);
+  });
+
+  it("runs the same script again when the model calls it again, instead of returning its old output", async () => {
+    const f = fixture("run-script-again", { codeMode: true });
+    const code =
+      'await codemode.remember({ path: "MEMORY.md", content: "x" });\nconsole.log(Math.random());';
+    f.setCalls([{ name: "code_mode", args: { code }, executionId: "c0" }]);
+    await f.run();
+    f.setCalls([{ name: "code_mode", args: { code }, executionId: "c1" }]);
+    await f.run();
+    const [first, second] = f.results as Array<{ output: string }>;
+    expect(second?.output).not.toBe(first?.output);
+    expect(f.effects.some((effect) => effect.kind === "code_mode")).toBe(false);
+    expect(f.memoryCommit).toHaveBeenCalledOnce();
   });
 });
 

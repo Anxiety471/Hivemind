@@ -82,6 +82,12 @@ describe("tool parameter descriptions reach the wire", () => {
     }
     expect(lost).toEqual([]);
   });
+
+  it("sends shell's timeout_seconds as its definition declares it", () => {
+    const shell = builtinAgentTools.find((tool) => tool.name === "shell")!;
+    const declared = (shell.inputSchema.properties as Record<string, unknown>).timeout_seconds;
+    expect(wire(shell).properties.timeout_seconds).toMatchObject(declared as object);
+  });
 });
 
 describe("string enums keep their allowed values in a plain enum", () => {

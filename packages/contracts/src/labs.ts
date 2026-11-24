@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 /** Finished features each account opts into from Settings, so they stay out of everyone's way. */
-export const LAB_FEATURES = ["board", "code"] as const;
+export const LAB_FEATURES = ["board", "code", "codeFirst"] as const;
 export const LabFeatureSchema = z.enum(LAB_FEATURES);
 export type LabFeature = z.infer<typeof LabFeatureSchema>;
 

@@ -40,6 +40,8 @@ import {
   vaultCardUseOf,
   vaultLoginUseOf,
 } from "../../secrets/vault/vault-card-use.js";
+import { COMMAND_TOOL_NAMES } from "../../tools/builtin-commands.tool-definition.js";
+import { CODE_MODE } from "../../tools/code-mode.tool-definition.js";
 import { isFleetApprovalTool, modelLabel, prepareFleetRequest } from "../../tools/fleet-tools.js";
 import { assertConnectorToolArgs, CATALOG_EXECUTE } from "../../tools/lazy-tool-catalog.js";
 import { SCHEDULE_TOOL_NAMES } from "../../tools/schedule-tools.js";
@@ -225,7 +227,15 @@ export async function resolveToolRequest(
   const sameCatalogTarget = Boolean(
     nextCatalog && catalogApprovalMatchesLiveRoute(nextCatalog, liveRoute),
   );
-  if (nextApprovedTool && nextApprovedTool !== name && !sameBoundResource && !sameCatalogTarget) {
+  // A script only wraps the calls it makes; each of those meets this same rule, so the approved
+  // call may be replayed from inside one (the only way to reach a tool code first does not list).
+  if (
+    nextApprovedTool &&
+    nextApprovedTool !== name &&
+    name !== CODE_MODE &&
+    !sameBoundResource &&
+    !sameCatalogTarget
+  ) {
     return refusal(
       "approved_request_not_replayed",
       `Approved request ${nextApprovedTool} must be replayed before ${name}.`,
@@ -388,7 +398,7 @@ export async function prepareToolRequest(
   const { name, executionId, nextApprovedTool } = request;
   let { args } = request;
   if (
-    (SCHEDULE_TOOL_NAMES.has(name) || SKILL_TOOL_NAMES.has(name)) &&
+    (SCHEDULE_TOOL_NAMES.has(name) || SKILL_TOOL_NAMES.has(name) || COMMAND_TOOL_NAMES.has(name)) &&
     (ctx.source.messagingChannelRun ||
       (await deps.prisma.steeringMessage.findFirst({
         where: {

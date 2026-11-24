@@ -26,7 +26,7 @@ import (
 )
 
 // labFeatures is LAB_FEATURES (packages/contracts/src/labs.ts:4).
-var labFeatures = []string{"board"}
+var labFeatures = []string{"board", "code", "codeFirst"}
 
 // MeView is MeSchema (packages/contracts/src/account/me.ts:14) as meDto fills it. Fields the
 // schema makes optional are always sent, as meDto sends them.

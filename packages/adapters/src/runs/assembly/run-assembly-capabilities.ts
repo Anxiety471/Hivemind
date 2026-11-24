@@ -53,14 +53,16 @@ import {
 import { backgroundHelpersAllowed } from "../../tasks/background-helpers.js";
 import { TASK_CATALOG_GUIDANCE } from "../../tasks/task-catalog.prompt.js";
 import { agentConnectionTools, builtinAgentTools } from "../../tools/builtin.tool-definition.js";
+import { isDeferredTool } from "../../tools/builtin-tool-bridge.js";
 import { CODE_MODE, codeModeToolDefinition } from "../../tools/code-mode.tool-definition.js";
-import { codeModeToolIndex } from "../../tools/code-mode-api.js";
+import { CODE_FIRST_INDEX_MAX_CHARS, codeModeToolIndex } from "../../tools/code-mode-api.js";
 import type { ExecutorDeps } from "../executor/executor-deps.js";
 import type { RunExecutorServices, RunHold } from "../lifecycle/run-attempt.js";
 import { APPROVED_EFFECT_REPLAY_ORDER } from "../lifecycle/run-effects.js";
 import { createRunWorkspaceCheckpoint, failRunBeforeTurn } from "../lifecycle/run-lifecycle.js";
 import {
   BUILTIN_AGENT_TOOL_NAMES,
+  codeFirstListedTools,
   codeModeCallableTools,
   offersAgentConnectionTools,
   selectBuiltinToolsForRun,
@@ -644,6 +646,7 @@ export async function selectRunTools(
     conversationThread,
     ticketBoardEnabled,
     codeModeEnabled,
+    codeFirstEnabled,
     helperDepth,
     unknownChannelSourceId,
   } = parts.records;
@@ -736,15 +739,22 @@ export async function selectRunTools(
     trigger: run.trigger,
     clientNonce: run.clientNonce,
   });
-  // The code_mode description carries the call signatures of this run's read-only tools, so it
-  // is built once the whole offered set is known.
+  // The code_mode description carries the call signatures of this run's tools, so it is built
+  // once the whole offered set is known. Deferred built-ins give way first when it runs long.
   const codeModeIndex = builtins.some((tool) => tool.name === CODE_MODE)
-    ? codeModeToolIndex(codeModeCallableTools([...builtins, ...strategicConnectorTools]))
+    ? codeModeToolIndex(codeModeCallableTools([...builtins, ...strategicConnectorTools]), {
+        listedFirst: (name) => !isDeferredTool(name),
+        ...(codeFirstEnabled ? { maxChars: CODE_FIRST_INDEX_MAX_CHARS } : {}),
+      })
     : "";
   const strategicBuiltins = filterStrategicInitiativeTools(builtins, {
     trigger: run.trigger,
     clientNonce: run.clientNonce,
-  }).map((tool) => (tool.name === CODE_MODE ? codeModeToolDefinition(codeModeIndex) : tool));
+  }).map((tool) =>
+    tool.name === CODE_MODE
+      ? codeModeToolDefinition(codeModeIndex, { codeFirst: codeFirstEnabled })
+      : tool,
+  );
   const connectorTools = new Map(strategicConnectorTools.map((tool) => [tool.name, tool] as const));
   const trustLoaders = createRunTrustLoaders(deps, {
     run,
@@ -776,6 +786,10 @@ export async function selectRunTools(
   const taskCatalogInstruction = tools.some((tool) => tool.name === "task_catalog")
     ? TASK_CATALOG_GUIDANCE
     : undefined;
+  // Code first lists only code_mode and the tools a script cannot reach; the rest are called
+  // from a script, which the model learns of from code_mode's index.
+  const codeFirst = codeFirstEnabled && tools.some((tool) => tool.name === CODE_MODE);
+  const listedTools = codeFirst ? codeFirstListedTools(tools) : tools;
   const approvedEffects = await deps.prisma.externalEffect.findMany({
     where: { runId, status: "approved" },
     orderBy: APPROVED_EFFECT_REPLAY_ORDER,
@@ -789,6 +803,8 @@ export async function selectRunTools(
     searchResultUrls,
     initiallyTainted,
     tools,
+    listedTools,
+    codeFirst,
     taskCatalogInstruction,
     approvedEffects,
     approvedEffectReplays,
