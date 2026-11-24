@@ -363,7 +363,7 @@ function toolUsageLine(parts: {
       : undefined,
     builtinOffered(disabled, "remember") ? "Use remember for durable facts." : undefined,
     parts.codeModeOffered
-      ? "When a task needs several read-only lookups, such as a search and then reads or many records at once, run them in one code_mode script and print only the result you need; it cannot change anything."
+      ? "When a task needs several tool calls, such as a search then reads, many records at once, or a change applied to each match, run them in one code_mode script and print only the result you need. Each call in the script is approved exactly like a direct call, and a call that asks the person stops the script."
       : undefined,
     ticketBoardClause(parts.ticketBoardEnabled, disabled),
     parts.ticketBoardEnabled ? undefined : scratchpadClause(disabled),

@@ -53,6 +53,7 @@ import {
 import { backgroundHelpersAllowed } from "../../tasks/background-helpers.js";
 import { TASK_CATALOG_GUIDANCE } from "../../tasks/task-catalog.prompt.js";
 import { agentConnectionTools, builtinAgentTools } from "../../tools/builtin.tool-definition.js";
+import { isDeferredTool } from "../../tools/builtin-tool-bridge.js";
 import { CODE_MODE, codeModeToolDefinition } from "../../tools/code-mode.tool-definition.js";
 import { codeModeToolIndex } from "../../tools/code-mode-api.js";
 import type { ExecutorDeps } from "../executor/executor-deps.js";
@@ -736,10 +737,12 @@ export async function selectRunTools(
     trigger: run.trigger,
     clientNonce: run.clientNonce,
   });
-  // The code_mode description carries the call signatures of this run's read-only tools, so it
-  // is built once the whole offered set is known.
+  // The code_mode description carries the call signatures of this run's tools, so it is built
+  // once the whole offered set is known. Deferred built-ins give way first when it runs long.
   const codeModeIndex = builtins.some((tool) => tool.name === CODE_MODE)
-    ? codeModeToolIndex(codeModeCallableTools([...builtins, ...strategicConnectorTools]))
+    ? codeModeToolIndex(codeModeCallableTools([...builtins, ...strategicConnectorTools]), {
+        listedFirst: (name) => !isDeferredTool(name),
+      })
     : "";
   const strategicBuiltins = filterStrategicInitiativeTools(builtins, {
     trigger: run.trigger,

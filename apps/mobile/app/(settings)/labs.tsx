@@ -25,7 +25,7 @@ export default function Labs() {
     board: { title: t`Board`, detail: t`A kanban board of tickets your bots can work on` },
     code: {
       title: t`Code mode`,
-      detail: t`Let bots run several read-only tool calls in one short script`,
+      detail: t`Let bots run several tool calls in one short script`,
     },
   };
   const meRead = accountRpcQuery("me");
