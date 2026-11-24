@@ -337,6 +337,19 @@ describe("code_mode", () => {
     expect(vi.mocked(gateToolCall)).toHaveBeenCalledTimes(1);
   });
 
+  it("describes at most five names in one call", async () => {
+    const { ctx } = context();
+    const result = (await applyTool(
+      ctx as never,
+      "code_mode",
+      {
+        code: `console.log((await codemode.describe({ names: ["a", "b", "c", "d", "e", "f", "g"] })).length);`,
+      },
+      "outer-1",
+    )) as { output: string };
+    expect(result.output.trim()).toBe("5");
+  });
+
   it("returns the script's failure with the calls it made so far", async () => {
     const { ctx } = context();
     const result = (await applyTool(
@@ -504,5 +517,35 @@ describe("saved commands", () => {
         description: "Create several demo records.",
       }),
     ]);
+  });
+
+  it("describes a command with its code, a tool with its full schema, and says what it cannot find", async () => {
+    const { ctx, execute } = context(undefined, commands);
+    const result = await run(
+      ctx,
+      `console.log(JSON.stringify(await codemode.describe({ names: ["cmd.write_many", "demo_search", "nothing", "cmd.missing"] })));`,
+    );
+    expect(JSON.parse(result.output ?? "[]")).toEqual([
+      expect.objectContaining({
+        name: "cmd.write_many",
+        description: "Create several demo records.",
+        code: expect.stringContaining("demo_write"),
+      }),
+      {
+        name: "demo_search",
+        description: "Search the demo records.",
+        inputSchema: demoSearch.inputSchema,
+        writes: false,
+      },
+      expect.objectContaining({
+        name: "nothing",
+        error: expect.stringContaining("codemode.search"),
+      }),
+      expect.objectContaining({
+        name: "cmd.missing",
+        error: expect.stringContaining("not a tool"),
+      }),
+    ]);
+    expect(execute).not.toHaveBeenCalled();
   });
 });
