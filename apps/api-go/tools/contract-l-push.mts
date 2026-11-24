@@ -434,6 +434,59 @@ export function laneLPushCases(system: System): Case[] {
     unregister("unregister-with-body", { token: "ignored" }),
     unregister("unregister-anonymous", undefined, { anonymous: true }),
     unregister("unregister-foreign-space", undefined, { space: 2, seed: foreignSpace }),
+    // The expired session's own rows go with it (afterDeleteSession →
+    // push-token-store.endSession), on both transports, and no other session's.
+    unregister("unregister-expired-session-deletes-both-transports", undefined, {
+      seed: async (seeded) => {
+        await clearPush(seeded);
+        await seedSecondSession(seeded);
+        await addPushToken(seeded.userId, tokenA(seeded), `${seeded.userId}-session`);
+        await addCallDevice(seeded.userId, `${seeded.userId}-session`, {
+          deviceId: IOS_DEVICE,
+          platform: "ios",
+          voipToken: VOIP("expired"),
+        });
+        await addPushToken(seeded.userId, tokenB(seeded), `${seeded.userId}-session2`);
+        await addCallDevice(seeded.userId, `${seeded.userId}-session2`, {
+          deviceId: ANDROID_DEVICE,
+          platform: "android",
+          expoToken: EXPO("live"),
+        });
+        await system.session.update({
+          where: { id: `${seeded.userId}-session` },
+          data: { expiresAt: new Date(Date.now() - 60_000) },
+        });
+      },
+    }),
+    unregister("unregister-expired-session-keeps-other-accounts", undefined, {
+      seed: async (seeded) => {
+        await clearPush(seeded);
+        await seedOtherUser(seeded);
+        await addPushToken(seeded.userId, tokenA(seeded), `${seeded.userId}-session`);
+        await addPushToken(`${seeded.userId}-other`, tokenB(seeded), `${seeded.userId}-other-session`);
+        await system.session.update({
+          where: { id: `${seeded.userId}-session` },
+          data: { expiresAt: new Date(Date.now() - 60_000) },
+        });
+      },
+    }),
+    // The cleanup is the auth layer's, so it runs on every procedure: a register
+    // that arrives on an expired session still drops the rows that session left.
+    register("register-expired-session-deletes-old-rows", { token: "newtoken1" }, {
+      seed: async (seeded) => {
+        await clearPush(seeded);
+        await addPushToken(seeded.userId, tokenA(seeded), `${seeded.userId}-session`);
+        await addCallDevice(seeded.userId, `${seeded.userId}-session`, {
+          deviceId: IOS_DEVICE,
+          platform: "ios",
+          voipToken: VOIP("expired-register"),
+        });
+        await system.session.update({
+          where: { id: `${seeded.userId}-session` },
+          data: { expiresAt: new Date(Date.now() - 60_000) },
+        });
+      },
+    }),
   ];
 }
 

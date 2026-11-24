@@ -29,6 +29,7 @@ import { laneJCases, laneJState } from "./contract-lane-j.mts";
 import { laneKCases, laneKState } from "./contract-k-mcp.mts";
 import { laneKReviewCases } from "./contract-k-review.mts";
 import { laneLPushCases, laneLPushState } from "./contract-l-push.mts";
+import { laneLReviewCases } from "./contract-l-review.mts";
 import { membershipCases, membershipReset, membershipState } from "./contract-membership.mts";
 import { modelsCases } from "./contract-models.mts";
 import { spaceRunCases } from "./contract-spaces-runs.mts";
@@ -728,6 +729,7 @@ const cases: Case[] = [
   ...threadAdversarialCases(system),
   ...threadMoreCases(system),
   ...laneLPushCases(system),
+  ...laneLReviewCases(system),
 ];
 
 // biome-ignore lint/suspicious/noUndeclaredEnvVars: manual harness, not a turbo task
