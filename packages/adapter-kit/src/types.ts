@@ -683,6 +683,12 @@ export interface AgentRunRequest {
    */
   promptSpeaker?: string;
   instructions: string;
+  /**
+   * Tools the model does not have listed but reaches from a code_mode script, as
+   * `codemode.<name>`. Earlier direct calls to them replay with that pointer, not as a tool the
+   * model has lost.
+   */
+  codeModeTools?: readonly string[];
   history: Array<{
     id?: string;
     createdAt?: string;

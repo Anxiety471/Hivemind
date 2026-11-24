@@ -12,6 +12,7 @@ import {
   imageNotKeptNote,
   REPLAYED_SCREENSHOT_LEAD,
   toolNotAvailableNote,
+  toolViaCodeModeNote,
 } from "../context/history-replay.prompt.js";
 import { neutralizeSpeakerLabels } from "../context/history-speakers.js";
 import { normalizeAgentToolName } from "./tools/pi-runtime-tools.js";
@@ -163,6 +164,22 @@ function wordsAfterSteps(
   return after;
 }
 
+/** The tools a script reaches, by the name a replayed call to them carries. */
+export function scriptToolMap(names: readonly string[] | undefined): ReadonlyMap<string, string> {
+  return new Map((names ?? []).map((name) => [replayedToolName(name), name] as const));
+}
+
+/** What follows a replayed result when the model no longer has that tool listed. */
+function replayedToolNote(
+  name: string,
+  offered: ReadonlySet<string>,
+  scriptTools: ReadonlyMap<string, string>,
+): string {
+  if (offered.has(name)) return "";
+  const scriptName = scriptTools.get(name);
+  return scriptName ? toolViaCodeModeNote(scriptName) : toolNotAvailableNote(name);
+}
+
 /**
  * An earlier reply that used tools, replayed as the turn it was: the bot's text and its calls,
  * with the arguments they were made with, as assistant messages, each call followed by the start
@@ -174,6 +191,7 @@ function replayedToolReply(
   segments: NonNullable<HistoryEntry["segments"]>,
   common: HistoryCommon,
   offered: ReadonlySet<string>,
+  scriptTools: ReadonlyMap<string, string>,
 ): HistoryMessage[] {
   const idPrefix = `h${createHash("sha256")
     .update(m.id ?? `${m.createdAt ?? ""}:${m.content}`)
@@ -244,7 +262,7 @@ function replayedToolReply(
                 seen
                   ? (stored.result ?? "").replace(IMAGE_NOT_KEPT, REPLAYED_SCREENSHOT_LEAD)
                   : result.text
-              }${offered.has(name) ? "" : toolNotAvailableNote(name)}`,
+              }${replayedToolNote(name, offered, scriptTools)}`,
             },
             ...(seen ? [screenshot] : []),
           ],
@@ -280,6 +298,11 @@ export function toHistory(
    * tool calls only when there are some: some providers reject calls in a request without tools.
    */
   offered: ReadonlySet<string> = new Set(),
+  /**
+   * Tools not in `offered` that the model reaches from a code_mode script, by the name a replayed
+   * call carries, mapped to the name the script calls.
+   */
+  scriptTools: ReadonlyMap<string, string> = new Map(),
 ): HistoryMessage[] {
   let duplicatePromptIndex = -1;
   for (let index = history.length - 1; index >= 0; index -= 1) {
@@ -306,7 +329,7 @@ export function toHistory(
     };
     if (m.role === "assistant" && !m.speaker) {
       if (offered.size > 0 && m.segments && replaysAsToolCalls(m.segments))
-        return replayedToolReply(m, m.segments, common, offered);
+        return replayedToolReply(m, m.segments, common, offered, scriptTools);
       // A reply whose blocks render to nothing has no text to replay.
       if (!m.content.trim()) return [];
       return [

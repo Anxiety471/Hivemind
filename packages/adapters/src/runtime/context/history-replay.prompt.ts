@@ -21,3 +21,8 @@ export const REPLAYED_SCREENSHOT_LEAD = "[the screenshot you took:]";
 export function toolNotAvailableNote(name: string): string {
   return `\n[${name} is not available to you now.]`;
 }
+
+/** For a tool the model now reaches from a code_mode script: the call was made, and still can be. */
+export function toolViaCodeModeNote(name: string): string {
+  return `\n[${name} was called directly then. Call it from a code_mode script as codemode.${name}(...).]`;
+}
