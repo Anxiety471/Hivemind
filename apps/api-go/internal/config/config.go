@@ -55,6 +55,10 @@ type Config struct {
 	// BoardLab is TICKET_BOARD_ENABLED: the Labs board feature turned on for every account
 	// (packages/adapters/src/labs-env.ts:4-11).
 	BoardLab bool
+	// CodeModeLab and CodeFirstLab are CODE_MODE_ENABLED and CODE_FIRST_ENABLED: the code and
+	// codeFirst Labs features turned on for every account (packages/adapters/src/runs/labs-env.ts).
+	CodeModeLab  bool
+	CodeFirstLab bool
 	// PhoneCallsEnabled is PHONE_CALLS_ENABLED (phoneCallSettings, call-request.ts:5).
 	PhoneCallsEnabled bool
 	// PhoneCallRingSeconds is PHONE_CALL_RING_SECONDS: a positive Number(), else 45.
@@ -152,6 +156,8 @@ func Load() (Config, error) {
 	}
 	config.MasterKeys = keys
 	config.BoardLab = os.Getenv("TICKET_BOARD_ENABLED") == "true"
+	config.CodeModeLab = os.Getenv("CODE_MODE_ENABLED") == "true"
+	config.CodeFirstLab = os.Getenv("CODE_FIRST_ENABLED") == "true"
 	config.PhoneCallsEnabled = os.Getenv("PHONE_CALLS_ENABLED") == "true"
 	config.PhoneCallRingSeconds = positiveNumber(os.Getenv("PHONE_CALL_RING_SECONDS"), 45)
 	config.RedisURL = strings.TrimSpace(os.Getenv("REDIS_URL"))
