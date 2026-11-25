@@ -569,6 +569,21 @@ export async function gateToolCall(
   }
 
   const needsApproval = gateDecision === "ask";
+  if (needsApproval && ctx.state.preparing) {
+    // The row only existed to hold this request; a later call by the model asks on its own.
+    if (applied && !applied.duplicate) {
+      await deps.prisma.externalEffect.deleteMany({
+        where: { id: applied.effect.id, status: "intended" },
+      });
+    }
+    await auditToolCall(ctx, name, "denied", { reason: "prepare_unattended" });
+    return {
+      result: refusal(
+        "prepare_needs_approval",
+        `${name} needs approval, and a routine's prepare command cannot ask.`,
+      ),
+    };
+  }
   const call = createToolCall(ctx, {
     name,
     args,

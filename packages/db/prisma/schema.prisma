@@ -1581,6 +1581,8 @@ model Routine {
   watch          Json?
   /// Last check's result (RoutineWatchStateSchema), written by the checker.
   watchState     Json?
+  /// Saved command run before the model (RoutinePrepareSchema); null when the routine has none.
+  prepare        Json?
   lastRunAt      DateTime?
   nextRunAt      DateTime?
   /// Runs in a row the model provider refused for the account; each one spaces out the schedule.

@@ -36,6 +36,7 @@ function routine(index: number): Routine {
     modelId: null,
     thinkingLevel: null,
     watch: null,
+    prepare: null,
     watchState: null,
     lastRunAt: null,
     nextRunAt: null,

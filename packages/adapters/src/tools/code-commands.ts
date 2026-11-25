@@ -1,3 +1,4 @@
+import { CODE_COMMAND_MAX_COUNT, CODE_COMMAND_NAME_PATTERN } from "@rakazo/contracts";
 import type { PrismaClient } from "@rakazo/db";
 import { Prisma } from "@rakazo/db";
 import { z } from "zod";
@@ -6,9 +7,6 @@ import { compileConnectorToolArgsSchema } from "./lazy-tool-catalog.js";
 /** A saved command is called as `codemode.cmd.<name>(args)`; the host sees `cmd.<name>`. */
 export const CODE_COMMAND_PREFIX = "cmd.";
 export const CODE_COMMAND_MAX_CODE_CHARS = 20_000;
-/** Search reads every command's name and description, so the table is bounded, not paged. */
-export const CODE_COMMAND_MAX_COUNT = 500;
-const NAME_PATTERN = /^[a-z][a-z0-9_]{0,47}$/;
 const ICON_PATTERN = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
 const DESCRIPTION_MAX_CHARS = 300;
 const PARAMETERS_MAX_CHARS = 4_000;
@@ -33,7 +31,7 @@ export function parseCodeCommandInput(
   args: Record<string, unknown>,
 ): { command: CodeCommandInput } | { error: string } {
   const name = typeof args.name === "string" ? args.name.trim() : "";
-  if (!NAME_PATTERN.test(name)) {
+  if (!CODE_COMMAND_NAME_PATTERN.test(name)) {
     return {
       error:
         "name must start with a lowercase letter and use only lowercase letters, digits and underscores (at most 48 characters). Call it as codemode.cmd.<name>.",

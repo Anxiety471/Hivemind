@@ -26,6 +26,7 @@ describe("routine dispatch DTO", () => {
       thinkingLevel: null,
       watch: null,
       watchState: null,
+      prepare: null,
       lastRunAt: null,
       nextRunAt: new Date("2026-10-26T08:00:00Z"),
       createdAt: new Date("2026-10-25T00:00:00Z"),

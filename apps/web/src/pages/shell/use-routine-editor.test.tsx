@@ -7,7 +7,7 @@ import { act } from "react";
 import type { Root } from "react-dom/client";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { createSpaceRpc } from "../../lib/query/rpc";
+import type { RpcClient } from "../../lib/query/rpc";
 import { useRoutineEditor } from "./use-routine-editor";
 
 vi.mock("@lingui/react/macro", () => ({
@@ -32,6 +32,7 @@ const routine: Routine = {
   modelId: null,
   thinkingLevel: null,
   watch: null,
+  prepare: null,
   watchState: null,
   lastRunAt: null,
   nextRunAt: null,
@@ -42,15 +43,18 @@ let root: Root;
 let editor: ReturnType<typeof useRoutineEditor>;
 let finishUpdate: Deferred<Routine>;
 const update = vi.fn();
+const setPrepare = vi.fn();
 const rotateWebhookSecret = vi.fn();
+const testRpc = {
+  routines: { update, setPrepare },
+  bots: { rotateWebhookSecret },
+} as unknown as RpcClient;
 let activeBot: Bot;
 const activeBotId = { current: "" };
 
 function Harness() {
   editor = useRoutineEditor({
-    rpc: { routines: { update }, bots: { rotateWebhookSecret } } as unknown as ReturnType<
-      typeof createSpaceRpc
-    >,
+    rpc: testRpc,
     active: activeBot,
     activeBotId,
     timezone: "UTC",
@@ -115,6 +119,43 @@ it("sends on/off only when the save changes it", async () => {
     await editor.editorProps!.onSave();
   });
   expect(update.mock.calls[1]![0]).toMatchObject({ active: false });
+});
+
+it("saves a picked prepare command after the routine itself", async () => {
+  update.mockResolvedValue(routine);
+  setPrepare.mockResolvedValue({
+    ...routine,
+    prepare: { command: "daily_check", args: { window: 2 } },
+  });
+  act(() => editor.editRoutine(routine));
+  act(() =>
+    editor.editorProps!.onChange({
+      ...editor.editorProps!.draft,
+      prepare: { command: "daily_check", args: '{"window": 2}' },
+    }),
+  );
+  await act(async () => {
+    await editor.editorProps!.onSave();
+  });
+  expect(setPrepare).toHaveBeenCalledWith({
+    routineId: "routine-1",
+    prepare: { command: "daily_check", args: { window: 2 } },
+  });
+  expect(editor.editorProps!.draft.prepare).toEqual({
+    command: "daily_check",
+    args: '{"window":2}',
+  });
+
+  // An unchanged prepare is not sent again.
+  update.mockResolvedValue({
+    ...routine,
+    prepare: { command: "daily_check", args: { window: 2 } },
+  });
+  act(() => editor.editorProps!.onChange({ ...editor.editorProps!.draft, name: "Renamed" }));
+  await act(async () => {
+    await editor.editorProps!.onSave();
+  });
+  expect(setPrepare).toHaveBeenCalledTimes(1);
 });
 
 it("shows a revealed webhook secret only for the bot it belongs to", async () => {

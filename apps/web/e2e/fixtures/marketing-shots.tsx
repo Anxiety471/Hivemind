@@ -176,6 +176,7 @@ function RoutineShot() {
     thinkingLevel: "",
     inChat: false,
     watch: null,
+    prepare: null,
   });
   return (
     <main data-ready="true" className="mx-auto max-w-[760px] bg-background p-8 text-foreground">

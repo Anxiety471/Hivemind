@@ -244,6 +244,9 @@ function RoutineView({
         </Text>
       </View>
       <SettingsGroup label={t`When to run`}>
+        {routine.prepare ? (
+          <SettingsRow key="prepare" title={t`Run first`} value={routine.prepare.command} />
+        ) : null}
         {triggers.map((trigger) => (
           <SettingsRow key={trigger} title={trigger} />
         ))}

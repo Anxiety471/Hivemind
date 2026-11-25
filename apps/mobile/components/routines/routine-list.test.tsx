@@ -152,6 +152,7 @@ const routine = (id: string, name: string, partial: Partial<Routine> = {}): Rout
   modelId: null,
   thinkingLevel: null,
   watch: null,
+  prepare: null,
   watchState: null,
   lastRunAt: null,
   nextRunAt: null,

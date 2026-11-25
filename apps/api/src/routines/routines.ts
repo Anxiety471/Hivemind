@@ -1,8 +1,13 @@
 import { ORPCError } from "@orpc/server";
 import { routineWakeupJob } from "@rakazo/adapter-kit";
 import { parseRoutineWatch, parseRoutineWatchState, routineRunModelPin } from "@rakazo/adapters";
-import type { Actor, CreateRoutineInput, Routine } from "@rakazo/contracts";
-import { canonicalPiProviderId, RoutineEmailSendersSchema } from "@rakazo/contracts";
+import type { Actor, CreateRoutineInput, Routine, RoutineCommand } from "@rakazo/contracts";
+import {
+  CODE_COMMAND_MAX_COUNT,
+  canonicalPiProviderId,
+  RoutineEmailSendersSchema,
+  RoutinePrepareSchema,
+} from "@rakazo/contracts";
 import {
   ClientError,
   hasMixedOneShotSchedule,
@@ -11,7 +16,8 @@ import {
   routineScheduleDelayed,
 } from "@rakazo/core";
 import type { Prisma, PrismaClient } from "@rakazo/db";
-import { IsolationError } from "@rakazo/db";
+import { IsolationError, readJsonColumn } from "@rakazo/db";
+import { z } from "zod";
 import type { RouterDeps } from "../router.js";
 import type { RouterContext } from "../routes/context.js";
 
@@ -101,6 +107,7 @@ export function mapRoutine(row: {
   thinkingLevel: string | null;
   watch: unknown;
   watchState: unknown;
+  prepare: unknown;
   lastRunAt: Date | null;
   nextRunAt: Date | null;
   createdAt: Date;
@@ -124,6 +131,12 @@ export function mapRoutine(row: {
     thinkingLevel: (row.thinkingLevel as Routine["thinkingLevel"]) ?? null,
     watch: parseRoutineWatch(row.watch),
     watchState: parseRoutineWatchState(row.watchState),
+    prepare: readJsonColumn(
+      RoutinePrepareSchema.nullable(),
+      row.prepare,
+      { table: "routines", column: "prepare", id: row.id },
+      { fallback: null },
+    ),
     lastRunAt: row.lastRunAt?.toISOString() ?? null,
     nextRunAt: row.nextRunAt?.toISOString() ?? null,
     scheduleDelayed: routineScheduleDelayed({
@@ -140,6 +153,36 @@ export async function listRoutinesDto(deps: RouterDeps, actor: Actor, botId: str
     where: { botId, spaceId: actor.spaceId },
   });
   return rows.map(mapRoutine);
+}
+
+/** A saved command's parameters column is a JSON Schema object, or nothing. */
+const CodeCommandParametersSchema = z.record(z.string(), z.json()).nullable();
+
+/**
+ * The saved commands of the caller's Space, as a routine's prepare step may name one: the same
+ * rows listCodeCommands reads, without the code.
+ */
+export async function listRoutineCommands(
+  deps: RouterDeps,
+  actor: Actor,
+): Promise<RoutineCommand[]> {
+  const rows = await deps.prisma.codeCommand.findMany({
+    where: { spaceId: actor.spaceId },
+    select: { id: true, name: true, description: true, icon: true, parameters: true },
+    orderBy: { name: "asc" },
+    take: CODE_COMMAND_MAX_COUNT,
+  });
+  return rows.map((row) => ({
+    name: row.name,
+    description: row.description,
+    icon: row.icon || null,
+    parameters: readJsonColumn(
+      CodeCommandParametersSchema,
+      row.parameters,
+      { table: "code_commands", column: "parameters", id: row.id },
+      { fallback: null },
+    ),
+  }));
 }
 
 export function createRoutineAnnouncer(deps: RouterDeps) {

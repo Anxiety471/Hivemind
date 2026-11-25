@@ -47,6 +47,8 @@ func TestRegistryHasTheServedProceduresAndNotTrust(t *testing.T) {
 		"files.rename", "files.update", "files.move", "files.trash", "files.restore", "files.deletePermanent", "files.emptyTrash",
 		"bots.rotateWebhookSecret", "bots.revealWebhookSecret",
 		"memory.list", "memory.budget", "memory.update", "memory.remove", "memory.exportMarkdown",
+		"routines.list", "routines.listForMentions", "routines.history", "routines.setPrepare",
+		"routines.commands", "routines.testRun",
 		"onboarding.promptFocus", "onboarding.dismissFocus", "onboarding.start", "computer.commands",
 		"tickets.list", "tickets.create", "tickets.update", "tickets.move", "tickets.comment",
 		"bots.templates", "skills.list", "agentSecrets.list", "audit.events", "vault.activity",

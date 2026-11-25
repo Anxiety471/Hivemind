@@ -277,6 +277,8 @@ export interface RunState {
   pageUrl?: string;
   vaultUses: Set<string>;
   handedOff: boolean;
+  /** A routine's prepare command is running: nobody is there, so a call that would ask is refused. */
+  preparing?: boolean;
   terminalCheckpointComplete: boolean;
 }
 

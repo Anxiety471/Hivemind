@@ -13,6 +13,7 @@ import { RoutineRunHistory } from "./RoutineRunHistory";
 import { RoutineSchedule } from "./RoutineSchedule";
 import { AddTriggerMenu } from "./routine-editor/add-trigger-menu";
 import { RoutineModelSettings } from "./routine-editor/model-settings";
+import { RoutinePrepareField } from "./routine-editor/prepare-field";
 import {
   EmailTriggerCard,
   InboundTriggerCard,
@@ -75,6 +76,7 @@ export function RoutineEditor({
   });
   // Null when this server receives no email or the bot is another member's, which hides the trigger.
   const email = useQuery(queries.bots.emailAddress.queryOptions({ input: { botId: bot.id } })).data;
+  const commands = useQuery(queries.routines.commands.queryOptions({ input: {} })).data ?? [];
   const scheduleDelayed =
     !scheduleStatus.isError &&
     (scheduleStatus.data === undefined
@@ -170,6 +172,13 @@ export function RoutineEditor({
           className="mt-2"
         />
       </label>
+
+      <RoutinePrepareField
+        prepare={draft.prepare}
+        commands={commands}
+        onChange={(prepare) => onChange({ ...draft, prepare })}
+        fieldId={fieldId}
+      />
 
       <div className="mt-5 text-body text-muted-foreground">
         <div className="flex items-center gap-2">

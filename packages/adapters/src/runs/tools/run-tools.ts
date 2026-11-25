@@ -274,7 +274,7 @@ async function dispatchTool(
 }
 
 /** A failed tool call becomes the error a script catches, never a silent value. */
-function toolResultErrorText(result: unknown): string {
+export function toolResultErrorText(result: unknown): string {
   if (typeof result !== "object" || result === null) return "the tool failed";
   if ("error" in result) return String(result.error);
   if (!("content" in result) || !Array.isArray(result.content)) return "the tool failed";

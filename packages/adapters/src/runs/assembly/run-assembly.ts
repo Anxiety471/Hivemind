@@ -13,6 +13,7 @@ import { buildTurnPrompt, createRunContext } from "./run-assembly-context.js";
 import { loadTurnContext, readThreadHistory } from "./run-assembly-history.js";
 import type { ConnectedRun } from "./run-assembly-records.js";
 import { connectRun, loadRunRecords, loadSavedTurn } from "./run-assembly-records.js";
+import { prepareRoutineRun } from "./run-routine-prepare.js";
 
 /** Undefined when setup ended the run or handed it back, so there is no turn to run. */
 export async function assembleRunTurn(services: RunExecutorServices, hold: RunHold) {
@@ -57,6 +58,8 @@ export async function assembleRunTurn(services: RunExecutorServices, hold: RunHo
     tools,
     computerInstructions,
   });
+  // A routine's prepare command runs before the model and may finish the run without it.
+  if (await prepareRoutineRun(ctx, records.task, Boolean(saved.turnCheckpoint))) return;
   const prompt = await buildTurnPrompt(hold, {
     saved,
     records,

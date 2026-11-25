@@ -15,6 +15,7 @@ import {
   RoutineEmailSendersSchema,
   RoutineSchema,
 } from "./routine.js";
+import { RoutineCommandSchema, RoutinePrepareSchema } from "./routine-prepare.js";
 import { RoutineWatchSchema } from "./routine-watch.js";
 
 export const routinesRpc = {
@@ -84,6 +85,12 @@ export const routinesRpc = {
           }),
       )
       .output(RoutineSchema),
+    /** Null removes the routine's prepare command. */
+    setPrepare: oc
+      .input(z.object({ routineId: Id, prepare: RoutinePrepareSchema.nullable() }))
+      .output(RoutineSchema),
+    /** The saved commands of the caller's Space a routine can prepare with. */
+    commands: oc.input(z.object({})).output(z.array(RoutineCommandSchema)),
     remove: oc.input(z.object({ routineId: Id })).output(z.object({ ok: z.literal(true) })),
     testRun: oc
       .input(
