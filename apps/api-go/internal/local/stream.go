@@ -16,14 +16,14 @@ import (
 // before it sends any frame once Recheck has passed, looks the session up again: a signed-out or
 // revoked session, or a person who left the Space, ends the stream with UNAUTHORIZED.
 func (s *Server) serveStream(w http.ResponseWriter, r *http.Request, procedure string, stream *Stream, actor db.Actor, input orpc.Input, ctx context.Context) {
-	signals, stop, failure := stream.Follow(ctx, actor, input)
+	follow, failure := stream.Follow(ctx, actor, input)
 	if failure != nil {
 		// The follow step runs a procedure's own checks (boards.subscribe's Gate, say) before any
 		// frame: a client that went away in that window is a disconnect, not a 5xx.
 		s.fail(w, r, procedure, failure)
 		return
 	}
-	defer stop()
+	defer follow.Stop()
 	timing := s.config.Stream.withDefaults()
 
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -58,7 +58,7 @@ func (s *Server) serveStream(w http.ResponseWriter, r *http.Request, procedure s
 				return
 			}
 			continue
-		case payload = <-signals:
+		case payload = <-follow.Signals:
 		case <-quiet.C:
 			quietFrame = true
 		}
@@ -79,8 +79,8 @@ func (s *Server) serveStream(w http.ResponseWriter, r *http.Request, procedure s
 			authorizedAt = time.Now()
 		}
 		frame := stream.Frame(actor, payload)
-		if quietFrame && stream.HeartbeatFrame != nil {
-			frame = stream.HeartbeatFrame(actor)
+		if quietFrame && follow.Heartbeat != nil {
+			frame = follow.Heartbeat()
 		}
 		body, err := orpc.Marshal(map[string]any{"json": frame})
 		if err != nil {

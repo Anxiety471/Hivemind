@@ -25,6 +25,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/externalconversations"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/groups"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/integrationsetup"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/livestream"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/marketplace"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/mcpassignments"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/mcpservers"
@@ -760,11 +761,10 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 		{
 			Name: "boards.subscribe",
 			Stream: &local.Stream{
-				Follow: func(ctx context.Context, actor db.Actor, input orpc.Input) (<-chan string, func(), *orpc.Error) {
+				Follow: func(ctx context.Context, actor db.Actor, input orpc.Input) (*local.Follow, *orpc.Error) {
 					return tickets.FollowBoard(ctx, database, deployment, actor, input)
 				},
-				Frame:          tickets.BoardFrame,
-				HeartbeatFrame: tickets.BoardHeartbeat,
+				Frame: tickets.BoardFrame,
 			},
 		},
 		{
@@ -959,6 +959,42 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 			Name: "boards.rename",
 			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
 				return boards.Rename(ctx, database, deployment, actor, input)
+			},
+		},
+		{
+			Name: "threads.subscribe",
+			Stream: &local.Stream{
+				Follow: func(ctx context.Context, actor db.Actor, input orpc.Input) (*local.Follow, *orpc.Error) {
+					return threads.Subscribe(ctx, database, deployment, actor, input)
+				},
+				Frame: livestream.Frame,
+			},
+		},
+		{
+			Name: "threads.helperSubscribe",
+			Stream: &local.Stream{
+				Follow: func(ctx context.Context, actor db.Actor, input orpc.Input) (*local.Follow, *orpc.Error) {
+					return threads.HelperSubscribe(ctx, database, deployment, actor, input)
+				},
+				Frame: livestream.Frame,
+			},
+		},
+		{
+			Name: "notifications.subscribe",
+			Stream: &local.Stream{
+				Follow: func(ctx context.Context, actor db.Actor, input orpc.Input) (*local.Follow, *orpc.Error) {
+					return livestream.Subscribe(ctx, database, deployment, actor, input)
+				},
+				Frame: livestream.Frame,
+			},
+		},
+		{
+			Name: "notifications.subscribeCalls",
+			Stream: &local.Stream{
+				Follow: func(ctx context.Context, actor db.Actor, input orpc.Input) (*local.Follow, *orpc.Error) {
+					return livestream.SubscribeCalls(ctx, database, deployment, actor, input)
+				},
+				Frame: livestream.Frame,
 			},
 		},
 		{
