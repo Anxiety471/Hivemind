@@ -10,6 +10,7 @@ import (
 
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/validate"
 )
 
@@ -90,14 +91,7 @@ func Set(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input, l
 		return err
 	})
 	if err != nil {
-		return Status{}, failure2(err)
+		return Status{}, shared.Failure(err)
 	}
 	return Get(ctx, database, actor, logger)
-}
-
-func failure2(err error) *orpc.Error {
-	if db.IsUnavailable(err) {
-		return orpc.Unavailable()
-	}
-	return orpc.Internal()
 }

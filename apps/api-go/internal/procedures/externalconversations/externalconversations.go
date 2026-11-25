@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"strconv"
 	"strings"
 	"time"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/validate"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 )
@@ -331,14 +331,7 @@ func UpdatePolicy(ctx context.Context, database *db.DB, actor db.Actor, raw orpc
 		return nil
 	})
 	if err != nil {
-		var failure *orpc.Error
-		if errors.As(err, &failure) {
-			return nil, failure
-		}
-		if db.IsUnavailable(err) {
-			return nil, orpc.Unavailable()
-		}
-		return nil, orpc.Internal()
+		return nil, shared.Failure(err)
 	}
 	return Output{policy: parsed}, nil
 }

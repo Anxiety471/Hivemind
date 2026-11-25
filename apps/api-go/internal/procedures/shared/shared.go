@@ -27,15 +27,20 @@ var NotFound = orpc.NotFound("Resource not found")
 
 // Failure turns an error out of a database call into the response the API gives:
 // a failure raised on purpose as is, an unreachable database as 503, anything else 500.
+// The error is kept on the failure so the server's log can name what went wrong.
 func Failure(err error) *orpc.Error {
 	var failure *orpc.Error
 	if errors.As(err, &failure) {
 		return failure
 	}
 	if db.IsUnavailable(err) {
-		return orpc.Unavailable()
+		answer := orpc.Unavailable()
+		answer.Cause = err
+		return answer
 	}
-	return orpc.Internal()
+	answer := orpc.Internal()
+	answer.Cause = err
+	return answer
 }
 
 // OutputInvalid is the failure the router answers when a procedure's result breaks its

@@ -20,9 +20,21 @@ type Error struct {
 	Message string
 	// Data is the optional error payload; validation errors carry zod issues.
 	Data any
+	// Cause is the error this failure was mapped from, kept for the server's own log so a
+	// real 500 is never anonymous (rpc-errors.ts logs the cause under "<procedure> failed").
+	// It is never part of the wire envelope: the type says so, not just the call sites.
+	Cause error `json:"-"`
 }
 
 func (e *Error) Error() string { return fmt.Sprintf("%s: %s", e.Code, e.Message) }
+
+// Err is the error to log for this failure: its cause when it has one, else the failure.
+func (e *Error) Err() error {
+	if e.Cause != nil {
+		return e.Cause
+	}
+	return e
+}
 
 // Common constructors, matching @orpc/client's COMMON_ORPC_ERROR_DEFS.
 func New(code string, status int, message string) *Error {

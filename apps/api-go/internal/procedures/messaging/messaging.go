@@ -31,17 +31,6 @@ const (
 
 var errNotFound = orpc.NotFound("Not Found")
 
-func asFailure(err error) *orpc.Error {
-	var failure *orpc.Error
-	if errors.As(err, &failure) {
-		return failure
-	}
-	if db.IsUnavailable(err) {
-		return orpc.Unavailable()
-	}
-	return orpc.Internal()
-}
-
 func now() time.Time { return time.Now().UTC().Truncate(time.Millisecond) }
 
 // inSystem is acrossChatIdentities: chat identities belong to the account and
@@ -164,7 +153,7 @@ func LinkStart(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.In
 		return nil
 	})
 	if err != nil {
-		return nil, asFailure(err)
+		return nil, shared.Failure(err)
 	}
 	return result, nil
 }
@@ -259,7 +248,7 @@ func SetBot(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input
 		})
 	})
 	if err != nil {
-		return nil, asFailure(err)
+		return nil, shared.Failure(err)
 	}
 	return result, nil
 }
@@ -283,7 +272,7 @@ func Unlink(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input
 		})
 	})
 	if err != nil {
-		return nil, asFailure(err)
+		return nil, shared.Failure(err)
 	}
 	return map[string]any{"ok": true}, nil
 }
@@ -344,7 +333,7 @@ func ChannelsList(ctx context.Context, database *db.DB, actor db.Actor, _ orpc.I
 		return rows.Err()
 	})
 	if err != nil {
-		return nil, asFailure(err)
+		return nil, shared.Failure(err)
 	}
 	return memberships, nil
 }
@@ -396,7 +385,7 @@ func ChannelsRespond(ctx context.Context, database *db.DB, actor db.Actor, raw o
 		return err
 	})
 	if err != nil {
-		return nil, asFailure(err)
+		return nil, shared.Failure(err)
 	}
 	return result, nil
 }
@@ -429,7 +418,7 @@ func ChannelsLeave(ctx context.Context, database *db.DB, actor db.Actor, raw orp
 		return err
 	})
 	if err != nil {
-		return nil, asFailure(err)
+		return nil, shared.Failure(err)
 	}
 	return map[string]any{"ok": true}, nil
 }
@@ -486,7 +475,7 @@ func ConnectionsList(ctx context.Context, database *db.DB, actor db.Actor, _ orp
 		return nil
 	})
 	if err != nil {
-		return nil, asFailure(err)
+		return nil, shared.Failure(err)
 	}
 	return connections, nil
 }
@@ -580,7 +569,7 @@ func ConnectionsRevoke(ctx context.Context, database *db.DB, actor db.Actor, raw
 		})
 	})
 	if err != nil {
-		return nil, asFailure(err)
+		return nil, shared.Failure(err)
 	}
 	return map[string]any{"ok": true}, nil
 }

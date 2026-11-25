@@ -16,7 +16,6 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/effects"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
-	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/spacesettings"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/validate"
 )
 
@@ -156,7 +155,7 @@ func List(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input) 
 		return rows.Err()
 	})
 	if err != nil {
-		return nil, spacesettings.Failure(err)
+		return nil, shared.Failure(err)
 	}
 	return items, nil
 }
@@ -222,7 +221,7 @@ func Create(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input
 		return err
 	})
 	if err != nil {
-		return nil, spacesettings.Failure(err)
+		return nil, shared.Failure(err)
 	}
 	return item, nil
 }
@@ -301,7 +300,7 @@ func Update(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input
 		return err
 	})
 	if err != nil {
-		return nil, spacesettings.Failure(err)
+		return nil, shared.Failure(err)
 	}
 	return item, nil
 }
@@ -327,7 +326,7 @@ func Remove(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input
 		return nil
 	})
 	if err != nil {
-		return nil, spacesettings.Failure(err)
+		return nil, shared.Failure(err)
 	}
 	return map[string]any{"ok": true}, nil
 }

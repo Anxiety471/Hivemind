@@ -20,6 +20,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/effects"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/validate"
 )
 
@@ -30,18 +31,6 @@ var Settings = []string{"models", "voice", "confirmations", "credentials"}
 var Scopes = []string{"account", "space"}
 
 const maxTransactionTries = 3
-
-// Failure turns a database error into the response the API gives for it.
-func Failure(err error) *orpc.Error {
-	var failure *orpc.Error
-	if errors.As(err, &failure) {
-		return failure
-	}
-	if db.IsUnavailable(err) {
-		return orpc.Unavailable()
-	}
-	return orpc.Internal()
-}
 
 // ParseScope reads the optional `scope` of settingsScopeInput: "" when omitted.
 func ParseScope(object *validate.Object) (string, []validate.Issue) {
@@ -129,7 +118,7 @@ func Overrides(ctx context.Context, database *db.DB, actor db.Actor) ([]string, 
 		return err
 	})
 	if err != nil {
-		return nil, Failure(err)
+		return nil, shared.Failure(err)
 	}
 	return found, nil
 }
@@ -179,7 +168,7 @@ func SetOverride(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.
 		}
 	}
 	if err != nil {
-		return nil, Failure(err)
+		return nil, shared.Failure(err)
 	}
 	return result, nil
 }

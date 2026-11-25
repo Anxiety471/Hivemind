@@ -11,6 +11,7 @@ import (
 
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 )
 
@@ -37,7 +38,7 @@ func List(ctx context.Context, database *db.DB, actor db.Actor) ([]string, *orpc
 		return rows.Err()
 	})
 	if err != nil {
-		return nil, failure(err)
+		return nil, shared.Failure(err)
 	}
 	return sites, nil
 }
@@ -53,7 +54,7 @@ func Remove(ctx context.Context, database *db.DB, actor db.Actor, input orpc.Inp
 		return err
 	})
 	if err != nil {
-		return nil, failure(err)
+		return nil, shared.Failure(err)
 	}
 	return map[string]any{"ok": true}, nil
 }
@@ -120,11 +121,4 @@ func jsType(value any) string {
 	default:
 		return "number"
 	}
-}
-
-func failure(err error) *orpc.Error {
-	if db.IsUnavailable(err) {
-		return orpc.Unavailable()
-	}
-	return orpc.Internal()
 }

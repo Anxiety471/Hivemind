@@ -12,6 +12,7 @@ import (
 
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 )
 
 // SpaceAvailability is the wire shape.
@@ -84,7 +85,7 @@ func Items(ctx context.Context, database *db.DB, actor db.Actor) ([]AccountItem,
 		return nil
 	})
 	if err != nil {
-		return nil, failure(err)
+		return nil, shared.Failure(err)
 	}
 	return items, nil
 }
@@ -114,10 +115,7 @@ func Set(ctx context.Context, database *db.DB, actor db.Actor, input SetInput) (
 		return err
 	})
 	if err != nil {
-		if failure, ok := err.(*orpc.Error); ok {
-			return SpaceAvailability{}, failure
-		}
-		return SpaceAvailability{}, failure(err)
+		return SpaceAvailability{}, shared.Failure(err)
 	}
 	return result, nil
 }
@@ -164,10 +162,7 @@ func ChooseForSpace(ctx context.Context, database *db.DB, actor db.Actor, input 
 		return nil
 	})
 	if err != nil {
-		if failure, ok := err.(*orpc.Error); ok {
-			return failure
-		}
-		return failure(err)
+		return shared.Failure(err)
 	}
 	return nil
 }
@@ -504,13 +499,6 @@ func lock(ctx context.Context, tx pgx.Tx, key string) error {
 	// writeaudit:dynamic transaction-scoped advisory lock; no row payload
 	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, key)
 	return err
-}
-
-func failure(err error) *orpc.Error {
-	if db.IsUnavailable(err) {
-		return orpc.Unavailable()
-	}
-	return orpc.Internal()
 }
 
 func uniqueStrings(values []string) []string {

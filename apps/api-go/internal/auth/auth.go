@@ -85,7 +85,7 @@ func (s *Service) Authenticate(ctx context.Context, r *http.Request) (*Session, 
 		if cookie, err := s.renew(ctx, session); err == nil {
 			renewal = cookie
 		} else if db.IsUnavailable(err) {
-			return nil, nil, orpc.Unavailable()
+			return nil, nil, sessionFailure(err)
 		}
 	}
 	return session, renewal, nil
@@ -136,10 +136,7 @@ func (s *Service) load(ctx context.Context, token string) (*Session, *orpc.Error
 		return nil, orpc.Unauthorized()
 	}
 	if err != nil {
-		if db.IsUnavailable(err) {
-			return nil, orpc.Unavailable()
-		}
-		return nil, orpc.Internal()
+		return nil, sessionFailure(err)
 	}
 	return &session, nil
 }
@@ -169,10 +166,7 @@ func (s *Service) authorized(ctx context.Context, session *Session) *orpc.Error 
 		return orpc.Unauthorized()
 	}
 	if err != nil {
-		if db.IsUnavailable(err) {
-			return orpc.Unavailable()
-		}
-		return orpc.Internal()
+		return sessionFailure(err)
 	}
 	if deactivated != nil {
 		return orpc.Unauthorized()
@@ -183,10 +177,7 @@ func (s *Service) authorized(ctx context.Context, session *Session) *orpc.Error 
 	if s.config.OIDCBypass {
 		var exists bool
 		if err := s.database.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM account WHERE "userId" = $1 AND "providerId" = 'oidc')`, session.UserID).Scan(&exists); err != nil {
-			if db.IsUnavailable(err) {
-				return orpc.Unavailable()
-			}
-			return orpc.Internal()
+			return sessionFailure(err)
 		}
 		if exists {
 			return nil
@@ -296,10 +287,20 @@ func (s *Service) Actor(ctx context.Context, session *Session, requestedSpace st
 }
 
 func (s *Service) actorFailure(err error) (db.Actor, *orpc.Error) {
+	return db.Actor{}, sessionFailure(err)
+}
+
+// sessionFailure maps an error out of a session lookup: 503 when Postgres is unreachable, 500
+// otherwise, keeping the cause for the server's log (rpc-errors.ts logs it under
+// "<procedure> failed"). It is not shared.Failure because shared imports drive, which
+// imports this package.
+func sessionFailure(err error) *orpc.Error {
+	answer := orpc.Internal()
 	if db.IsUnavailable(err) {
-		return db.Actor{}, orpc.Unavailable()
+		answer = orpc.Unavailable()
 	}
-	return db.Actor{}, orpc.Internal()
+	answer.Cause = err
+	return answer
 }
 
 func firstMembership(ctx context.Context, tx pgx.Tx, userID, organizationID string) (string, error) {

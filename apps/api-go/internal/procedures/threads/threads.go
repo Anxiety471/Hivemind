@@ -16,6 +16,7 @@ import (
 
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/validate"
 )
 
@@ -30,17 +31,6 @@ var (
 	errIsolation = orpc.NotFound("Resource not found")
 	errNotFound  = orpc.NotFound("Not Found")
 )
-
-func asFailure(err error) *orpc.Error {
-	var failure *orpc.Error
-	if errors.As(err, &failure) {
-		return failure
-	}
-	if db.IsUnavailable(err) {
-		return orpc.Unavailable()
-	}
-	return orpc.Internal()
-}
 
 // target is a resolved chat: the thread of a bot or a group in the actor's Space.
 type target struct{ ThreadID string }
@@ -207,7 +197,7 @@ func Head(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input) 
 		return nil
 	})
 	if err != nil {
-		return nil, asFailure(err)
+		return nil, shared.Failure(err)
 	}
 	return result, nil
 }
@@ -266,7 +256,7 @@ func MarkRead(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Inp
 		return nil
 	})
 	if err != nil {
-		return nil, asFailure(err)
+		return nil, shared.Failure(err)
 	}
 	return map[string]any{"ok": true, "unreadAfterSeq": unreadAfter}, nil
 }
@@ -323,7 +313,7 @@ func MarkUnread(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.I
 		return err
 	})
 	if err != nil {
-		return nil, asFailure(err)
+		return nil, shared.Failure(err)
 	}
 	return map[string]any{"ok": true}, nil
 }
@@ -369,7 +359,7 @@ func Snooze(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input
 		return err
 	})
 	if err != nil {
-		return nil, asFailure(err)
+		return nil, shared.Failure(err)
 	}
 	return map[string]any{"ok": true}, nil
 }
