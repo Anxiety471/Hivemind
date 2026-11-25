@@ -3,7 +3,6 @@ package threads
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"math"
 	"slices"
 	"time"
@@ -67,11 +66,9 @@ func Get(ctx context.Context, database *db.DB, deployment shared.Deployment, act
 		return err
 	})
 	if err != nil {
-		var failure *orpc.Error
-		if !errors.As(err, &failure) {
-			slog.Default().Error("threads.get failed", "error", err)
-		}
-		return nil, asFailure(err)
+		// The router logs a 5xx with its cause ("<procedure> failed"), so a raw database error
+		// here is not logged twice.
+		return nil, shared.Failure(err)
 	}
 	return result, nil
 }

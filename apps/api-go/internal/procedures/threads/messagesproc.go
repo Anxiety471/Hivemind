@@ -3,7 +3,6 @@ package threads
 import (
 	"context"
 	"errors"
-	"log/slog"
 
 	"github.com/jackc/pgx/v5"
 
@@ -151,11 +150,8 @@ func Messages(ctx context.Context, database *db.DB, deployment shared.Deployment
 		return nil
 	})
 	if err != nil {
-		var failure *orpc.Error
-		if !errors.As(err, &failure) {
-			slog.Default().Error("threads.messages failed", "error", err)
-		}
-		return nil, asFailure(err)
+		// The router logs a 5xx with its cause ("<procedure> failed"); no second line here.
+		return nil, shared.Failure(err)
 	}
 	return result, nil
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/effects"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/validate"
 )
 
@@ -18,13 +19,6 @@ const nameMaxLength = 60
 var errIsolation = orpc.NotFound("Resource not found")
 
 func conflict(message string) *orpc.Error { return orpc.Conflict(message) }
-
-func unavailableOr(err error) *orpc.Error {
-	if db.IsUnavailable(err) {
-		return orpc.Unavailable()
-	}
-	return orpc.Internal()
-}
 
 // CreateInput is botSections.create's input: exactly one of botId or groupId, and a name.
 type CreateInput struct {
@@ -131,14 +125,6 @@ func lockSpace(ctx context.Context, tx pgx.Tx, actor db.Actor) error {
 	return nil
 }
 
-func asFailure(err error) *orpc.Error {
-	var failure *orpc.Error
-	if errors.As(err, &failure) {
-		return failure
-	}
-	return unavailableOr(err)
-}
-
 type row struct {
 	id, name  string
 	position  int32
@@ -212,7 +198,7 @@ func Create(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input
 		return nil
 	})
 	if err != nil {
-		return Section{}, asFailure(err)
+		return Section{}, shared.Failure(err)
 	}
 	return created, nil
 }
@@ -260,7 +246,7 @@ func Update(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input
 		return nil
 	})
 	if err != nil {
-		return Section{}, asFailure(err)
+		return Section{}, shared.Failure(err)
 	}
 	return result, nil
 }
@@ -300,7 +286,7 @@ func Remove(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input
 		return err
 	})
 	if err != nil {
-		return Removed{}, asFailure(err)
+		return Removed{}, shared.Failure(err)
 	}
 	return result, nil
 }

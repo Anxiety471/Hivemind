@@ -259,7 +259,7 @@ func Role(
 		return nil
 	})
 	if err != nil {
-		return nil, spacesettings.Failure(err)
+		return nil, shared.Failure(err)
 	}
 	return view, nil
 }
@@ -291,11 +291,7 @@ func SetRole(
 		}
 	}
 	if err != nil {
-		var domain *orpc.Error
-		if errors.As(err, &domain) {
-			return nil, domain
-		}
-		return nil, spacesettings.Failure(err)
+		return nil, shared.Failure(err)
 	}
 	recordRoleAudit(ctx, deployment, actor, input)
 	return view, nil

@@ -104,7 +104,7 @@ func List(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input) 
 		return rows.Err()
 	})
 	if err != nil {
-		return nil, spacesettings.Failure(err)
+		return nil, shared.Failure(err)
 	}
 	return rules, nil
 }
@@ -149,7 +149,7 @@ func Set(ctx context.Context, database *db.DB, actor db.Actor, raw orpc.Input) (
 		return err
 	})
 	if err != nil {
-		return nil, spacesettings.Failure(err)
+		return nil, shared.Failure(err)
 	}
 	return saved, nil
 }

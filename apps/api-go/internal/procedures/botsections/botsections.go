@@ -4,7 +4,6 @@ package botsections
 
 import (
 	"context"
-	"errors"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -37,14 +36,7 @@ func List(ctx context.Context, database *db.DB, actor db.Actor) ([]Section, *orp
 		return err
 	})
 	if err != nil {
-		var failure *orpc.Error
-		if errors.As(err, &failure) {
-			return nil, failure
-		}
-		if db.IsUnavailable(err) {
-			return nil, orpc.Unavailable()
-		}
-		return nil, orpc.Internal()
+		return nil, shared.Failure(err)
 	}
 	return sections, nil
 }
