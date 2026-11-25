@@ -26,6 +26,17 @@ it already has routines. To edit a routine, select it from the list.
 Under **Advanced** you can give a routine its own **Model** and **Thinking** level, for example a
 cheaper model for a simple daily check.
 
+## Run a command first
+
+**Run first** (below the Instruction, once your Space has saved commands) picks a saved command
+that runs before the bot each time, with read-only tools only. It suits fetching the same data
+every run, such as unread mail or open pull requests; judging it and web searches stay with the bot.
+What it returns decides the run: `{ skip: true }` ends it without the bot, `{ post: "text" }` posts
+the text as the bot's reply, and anything else is handed to the bot with the instruction. If the
+command takes arguments, an **Arguments** field takes them as JSON. Only the routine's owner can
+change it here; a bot can set it when you ask, and its built-in **Routines** skill explains how.
+Runs started by a webhook, Git event, email or chat message don't run it.
+
 ## Triggers
 
 ### On a schedule
