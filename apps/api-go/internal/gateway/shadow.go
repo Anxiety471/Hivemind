@@ -48,12 +48,24 @@ func (g *Gateway) shadow(w http.ResponseWriter, r *http.Request, procedure strin
 	goRequest := r.Clone(context.Background())
 	goRequest.Body = io.NopCloser(bytes.NewReader(body))
 	go func() {
+		// The client went away while TypeScript was answering: nothing it was sent reaches it,
+		// and the Go answer it would now be compared against is equally unread. A comparison
+		// here would report whatever the cancellation broke as a difference.
+		if r.Context().Err() != nil {
+			g.logger.Debug("go.shadow.skipped", "procedure", procedure, "reason", "client disconnected")
+			return
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		snapshot := g.local.Snapshot(ctx, goRequest, procedure)
 		if snapshot.Declined {
 			// The Go procedure handed this request back, so there is nothing to compare.
 			g.logger.Debug("go.decline", "procedure", procedure)
+			return
+		}
+		if snapshot.Status == local.StatusClientClosedRequest {
+			// The snapshot ran past its own deadline, so there is no Go answer to compare.
+			g.logger.Debug("go.shadow.skipped", "procedure", procedure, "reason", "shadow deadline")
 			return
 		}
 		if equal, reason := local.Compare(typescript, snapshot); !equal {
