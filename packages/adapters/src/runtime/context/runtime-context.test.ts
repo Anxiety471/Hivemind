@@ -354,6 +354,46 @@ describe("runtime context policy", () => {
       expect(explicit.messages.length).toBeLessThan(context.messages.length);
     },
   );
+  it("uses retrieval delta window when history tools are reached through code_mode", () => {
+    const direct = fixture(60);
+    enableHistoryRetrieval(direct.request);
+    const codeFirst = fixture(60);
+    codeFirst.request.tools = [
+      {
+        name: "code_mode",
+        description: "code_mode",
+        inputSchema: { type: "object" },
+      },
+    ];
+    codeFirst.request.codeModeTools = ["read_history", "search_history"];
+    codeFirst.request.executeTool = async () => ({});
+
+    const directPolicy = createRuntimeContextPolicy(direct.request);
+    const codeFirstPolicy = createRuntimeContextPolicy(codeFirst.request);
+
+    expect(codeFirstPolicy.prepareContext(codeFirst.context, model)).toEqual(
+      directPolicy.prepareContext(direct.context, model),
+    );
+    expect(codeFirstPolicy.getDecision()!.strategy).toBe("retrieval");
+  });
+  it.each([
+    ["no code_mode tool", false, ["read_history", "search_history"]],
+    ["missing search_history in codeModeTools", true, ["read_history"]],
+    ["missing read_history in codeModeTools", true, ["search_history"]],
+  ])(
+    "keeps standalone fallback when code-first history retrieval is incomplete (%s)",
+    (_label, includeCodeMode, codeModeTools) => {
+      const { request, context } = fixture(60);
+      request.tools = includeCodeMode
+        ? [{ name: "code_mode", description: "code_mode", inputSchema: { type: "object" } }]
+        : [];
+      request.codeModeTools = codeModeTools;
+      request.executeTool = async () => ({});
+
+      const prepared = createRuntimeContextPolicy(request).prepareContext(context, model);
+      expect(prepared.messages).toEqual(context.messages);
+    },
+  );
   it.each([false, true])("bounds standalone originals with declared cache %s", (declaredCache) => {
     const { request, context } = fixture(100);
     if (declaredCache)

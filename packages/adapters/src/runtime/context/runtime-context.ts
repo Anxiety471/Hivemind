@@ -4,6 +4,7 @@ import type { AdapterContext, AgentRunRequest, AgentUsage } from "@rakazo/adapte
 import { DEFAULT_CONTEXT_STRATEGY } from "@rakazo/adapter-kit";
 import { getLogger } from "@rakazo/logging";
 import { isVerbatimMcpResult, toolCallIdentity } from "../../mcp/verbatim-mcp-result.js";
+import { CODE_MODE } from "../../tools/code-mode.tool-definition.js";
 import { promptCacheDeclaredOff } from "../pi/models/pi-local-provider-id.js";
 import {
   effectiveOutputReserve,
@@ -331,10 +332,13 @@ export function createRuntimeContextPolicy(
     modelWindow = request.model.contextWindow ?? model.contextWindow,
   ): Prepared {
     const ctx = pruned(source);
+    const hasCodeMode = request.tools.some((tool) => tool.name === CODE_MODE);
     const hasHistoryRetrievalTools =
       Boolean(request.executeTool) &&
-      ["read_history", "search_history"].every((name) =>
-        request.tools.some((tool) => tool.name === name),
+      ["read_history", "search_history"].every(
+        (name) =>
+          request.tools.some((tool) => tool.name === name) ||
+          (hasCodeMode && Boolean(request.codeModeTools?.includes(name))),
       );
     const standaloneHistoryFallback =
       request.contextStrategy === undefined && !hasHistoryRetrievalTools;

@@ -1926,6 +1926,32 @@ describe("Pi runtime ordered model fallback", () => {
     expect(sent[1]!.messages).toBeLessThan(sent[0]!.messages);
   });
 
+  it("does not skip a backup packed near its window due to Pi/Rakazo message metadata", async () => {
+    const input = request([{ provider: backupA.provider, id: backupA.id }]);
+    input.resolveFallbackModel = async (provider, id) => ({
+      provider,
+      id,
+      apiKey: "fake-small-window-key",
+    });
+    // Many short turns fill backupA's 8K window (8192 - 2048 = 6144 input budget) under
+    // standalone context selection; raw TranscriptContext metadata + 240 would exceed 6144.
+    input.history = Array.from({ length: 120 }, (_, index) => ({
+      id: `replayed-message-${index}`,
+      createdAt: "2026-01-01T00:00:00Z",
+      role: index % 2 ? ("assistant" as const) : ("user" as const),
+      content: `Turn ${index}: ${"word ".repeat(30)}`,
+    })) as AgentRunRequest["history"];
+    const sentProviders: string[] = [];
+    providerState.stream.mockImplementation((target: Model<"openai-completions">) => {
+      sentProviders.push(target.provider);
+      return target.provider === primary.provider
+        ? stream(target, message(target, [], "error", "429 quota exhausted"))
+        : stream(target, message(target, [{ type: "text", text: "done" }], "stop"));
+    });
+    await run(input);
+    expect(sentProviders).toEqual([primary.provider, backupA.provider]);
+  });
+
   it("still skips a smaller backup when the context strategy keeps the transcript as is", async () => {
     const input = request([{ provider: backupA.provider, id: backupA.id }]);
     input.contextStrategy = "current";
