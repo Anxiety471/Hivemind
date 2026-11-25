@@ -878,4 +878,42 @@ describe("catalog wrapper tool definitions", () => {
       "Search connected MCP tools. Empty query lists sources. Pass group to list names in one source, or query to search.\nSources: a (120), notes (1)\nnotes:\n  add",
     );
   });
+
+  it("matches parameter names, synonyms, and minor typos in catalog search", () => {
+    const entries = catalogEntries([
+      {
+        name: "mcp__cloudflare__list-dns-records",
+        description: "List DNS records in a zone.",
+        inputSchema: {
+          type: "object",
+          properties: { zone_id: { type: "string" }, proxied: { type: "boolean" } },
+        },
+        route: {
+          connectorId: "mcp",
+          resourceId: "cf",
+          toolName: "list-dns-records",
+          catalogGroup: "cloudflare",
+        },
+      },
+      {
+        name: "mcp__cloudflare__delete-dns-record",
+        description: "Remove a DNS record.",
+        inputSchema: { type: "object", properties: { record_id: { type: "string" } } },
+        route: {
+          connectorId: "mcp",
+          resourceId: "cf",
+          toolName: "delete-dns-record",
+          catalogGroup: "cloudflare",
+        },
+      },
+    ]);
+    const paramMatch = searchCatalog(entries, { query: "proxied" });
+    expect("tools" in paramMatch && paramMatch.tools.map((t) => t.name)).toEqual([
+      "mcp__cloudflare__list-dns-records",
+    ]);
+    const synonymTypoMatch = searchCatalog(entries, { query: "cloudfare remove dns" });
+    expect("tools" in synonymTypoMatch && synonymTypoMatch.tools[0]?.name).toBe(
+      "mcp__cloudflare__delete-dns-record",
+    );
+  });
 });

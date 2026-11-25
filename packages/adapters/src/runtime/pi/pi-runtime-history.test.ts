@@ -450,6 +450,39 @@ describe("replaying an earlier reply's tool steps", () => {
     });
   });
 
+  it("uses bracket syntax in replay notes for non-identifier tool names", () => {
+    const hyphenatedReply = {
+      ...toolReply,
+      segments: [
+        {
+          steps: [
+            {
+              label: "List zones",
+              tool: "mcp__cloudflare__list-zones",
+              count: 1,
+              calls: [{ arguments: "{}", result: "{}" }],
+            },
+          ],
+        },
+      ],
+    };
+    const [, result] = toHistory(
+      [hyphenatedReply],
+      "",
+      undefined,
+      new Set(["code_mode"]),
+      scriptToolMap(["mcp__cloudflare__list-zones"]),
+    );
+    expect(result).toMatchObject({
+      content: [
+        {
+          type: "text",
+          text: '{}\n[mcp__cloudflare__list-zones was called directly then. Call it from a code_mode script as codemode["mcp__cloudflare__list-zones"](...).]',
+        },
+      ],
+    });
+  });
+
   it("replays a call under the name its tool is offered as, and marks only its failed calls", () => {
     const reply = {
       ...toolReply,

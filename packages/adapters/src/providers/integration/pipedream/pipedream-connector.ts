@@ -233,6 +233,10 @@ export class PipedreamConnector implements ManagedConnectorProvider {
     );
   }
 
+  async listCatalogTools(context: AdapterContext): Promise<ConnectorTool[]> {
+    return this.allTools(context);
+  }
+
   async resolveCall(
     call: ConnectorCall,
     context: AdapterContext,

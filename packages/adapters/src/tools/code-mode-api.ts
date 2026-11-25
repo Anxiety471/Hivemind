@@ -2,6 +2,8 @@ import type { ConnectorTool } from "@rakazo/adapter-kit";
 import { isCodeModeWrite } from "../runs/tools/run-tool-selection.js";
 import type { CodeCommandInput, CodeCommandSummary } from "./code-commands.js";
 import { CODE_COMMAND_PREFIX } from "./code-commands.js";
+import type { SearchableItem } from "./tool-search.js";
+import { rankSearchItems } from "./tool-search.js";
 
 /** One line per callable tool: enough to write a correct call without a second lookup. */
 const DESCRIPTION_MAX_CHARS = 90;
@@ -62,8 +64,19 @@ function typeOf(schema: unknown, depth: number): string {
   }
 }
 
+const VALID_IDENTIFIER_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+
+export function isValidCodeModeIdentifier(name: string): boolean {
+  return VALID_IDENTIFIER_RE.test(name);
+}
+
+/** Formats a callable tool reference as valid TypeScript (`codemode.foo` or `codemode["foo-bar"]`). */
+export function codeModeCallExpr(name: string): string {
+  return isValidCodeModeIdentifier(name) ? `codemode.${name}` : `codemode[${literal(name)}]`;
+}
+
 function propertyKey(key: string): string {
-  return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key) ? key : literal(key);
+  return isValidCodeModeIdentifier(key) ? key : literal(key);
 }
 
 function objectType(schema: Record<string, unknown>, depth: number): string {
@@ -96,11 +109,15 @@ function firstSentence(description: string | undefined): string {
     : sentence;
 }
 
+/** Compact TypeScript call signature for a tool (`codemode.foo({ ... }) => JSON`). */
+export function formatToolSignature(tool: Pick<ConnectorTool, "name" | "inputSchema">): string {
+  return `${codeModeCallExpr(tool.name)}(${objectType(tool.inputSchema ?? {}, 0)}) => JSON`;
+}
+
 function signatureLine(tool: ConnectorTool): string {
-  const signature = objectType(tool.inputSchema ?? {}, 0);
   const hint = firstSentence(tool.description);
   const writes = isCodeModeWrite(tool) ? WRITES_MARK : "";
-  return `- codemode.${tool.name}(${signature}) => JSON${writes}${hint ? ` — ${hint}` : ""}`;
+  return `- ${formatToolSignature(tool)}${writes}${hint ? ` — ${hint}` : ""}`;
 }
 
 /**
@@ -150,6 +167,27 @@ export interface CodeModeSearchHit {
   description: string;
   /** Absent for a saved command: what it writes is decided by the calls it makes. */
   writes?: boolean;
+  /** Present when `name` is not a valid JS identifier and must be called with bracket syntax. */
+  call?: string;
+}
+
+function schemaParamMetadata(schema: Record<string, unknown>): {
+  params: string[];
+  paramDescriptions: string[];
+} {
+  const properties = (schema.properties ?? {}) as Record<
+    string,
+    Record<string, unknown> | undefined
+  >;
+  const params: string[] = [];
+  const paramDescriptions: string[] = [];
+  for (const [key, prop] of Object.entries(properties)) {
+    params.push(key);
+    if (prop && typeof prop.description === "string" && prop.description.trim()) {
+      paramDescriptions.push(prop.description);
+    }
+  }
+  return { params, paramDescriptions };
 }
 
 /**
@@ -162,64 +200,67 @@ export function searchCodeModeTools(
   query: string,
   commands: readonly CodeCommandSummary[] = [],
 ): CodeModeSearchHit[] {
-  const trimmed = query.trim().toLowerCase();
-  const words = trimmed.split(/[^a-z0-9_]+/).filter(Boolean);
-  if (!words.length) return [];
-  const candidates = [
-    ...tools.map((tool) => ({
-      name: tool.name,
-      description: String(tool.description ?? ""),
-      schema: tool.inputSchema ?? {},
-      writes: isCodeModeWrite(tool) as boolean | undefined,
-    })),
-    ...commands.map((command) => ({
-      name: `${CODE_COMMAND_PREFIX}${command.name}`,
-      description: command.description,
-      schema: command.parameters ?? {},
-      writes: undefined as boolean | undefined,
-    })),
-  ].map((candidate) => {
-    const name = candidate.name.toLowerCase();
-    const description = candidate.description.toLowerCase();
-    const paramNames = Object.keys(
-      (candidate.schema.properties as Record<string, unknown> | undefined) ?? {},
-    )
-      .join(" ")
-      .toLowerCase();
-    const exactMatch = name === trimmed || name === `${CODE_COMMAND_PREFIX}${trimmed}` ? 1 : 0;
-    let matchedWords = 0;
-    let nameMatches = 0;
-    for (const word of words) {
-      const inName = name.includes(word);
-      if (inName) nameMatches += 1;
-      if (inName || description.includes(word) || paramNames.includes(word)) {
-        matchedWords += 1;
-      }
-    }
-    return { candidate, exactMatch, matchedWords, nameMatches };
-  });
+  type Candidate = {
+    name: string;
+    description: string;
+    schema: Record<string, unknown>;
+    writes?: boolean;
+    isCommand: boolean;
+  };
+  const candidates: SearchableItem<Candidate>[] = [
+    ...tools.map((tool) => {
+      const schema = tool.inputSchema ?? {};
+      const { params, paramDescriptions } = schemaParamMetadata(schema);
+      const shortName = tool.route?.toolName?.trim();
+      const item: Candidate = {
+        name: tool.name,
+        description: String(tool.description ?? ""),
+        schema,
+        writes: isCodeModeWrite(tool),
+        isCommand: false,
+      };
+      return {
+        item,
+        name: tool.name,
+        aliases: shortName && shortName !== tool.name ? [shortName] : undefined,
+        group: tool.route?.catalogGroup,
+        params,
+        description: item.description,
+        paramDescriptions,
+      };
+    }),
+    ...commands.map((command) => {
+      const schema = command.parameters ?? {};
+      const { params, paramDescriptions } = schemaParamMetadata(schema);
+      const cmdName = `${CODE_COMMAND_PREFIX}${command.name}`;
+      const item: Candidate = {
+        name: cmdName,
+        description: command.description,
+        schema,
+        isCommand: true,
+      };
+      return {
+        item,
+        name: cmdName,
+        aliases: [command.name],
+        group: "cmd",
+        params,
+        description: command.description,
+        paramDescriptions,
+      };
+    }),
+  ];
 
-  const strict = candidates.filter((entry) => entry.matchedWords === words.length);
-  const ranked =
-    strict.length > 0 || words.length === 1
-      ? strict
-      : candidates.filter((entry) => entry.matchedWords > 0);
-
-  return ranked
-    .sort(
-      (a, b) =>
-        b.exactMatch - a.exactMatch ||
-        b.matchedWords - a.matchedWords ||
-        b.nameMatches - a.nameMatches ||
-        a.candidate.name.localeCompare(b.candidate.name),
-    )
-    .slice(0, SEARCH_LIMIT)
-    .map(({ candidate }) => ({
-      name: candidate.name,
-      signature: objectType(candidate.schema, 0),
-      description: firstSentence(candidate.description),
-      ...(candidate.writes === undefined ? {} : { writes: candidate.writes }),
-    }));
+  const { hits } = rankSearchItems(candidates, query, { limit: SEARCH_LIMIT });
+  return hits.map((candidate) => ({
+    name: candidate.name,
+    signature: objectType(candidate.schema, 0),
+    description: firstSentence(candidate.description),
+    ...(candidate.writes === undefined ? {} : { writes: candidate.writes }),
+    ...(!candidate.isCommand && !isValidCodeModeIdentifier(candidate.name)
+      ? { call: codeModeCallExpr(candidate.name) }
+      : {}),
+  }));
 }
 
 /** What `codemode.describe` returns for one name: the whole definition, not the index line. */

@@ -24,5 +24,8 @@ export function toolNotAvailableNote(name: string): string {
 
 /** For a tool the model now reaches from a code_mode script: the call was made, and still can be. */
 export function toolViaCodeModeNote(name: string): string {
-  return `\n[${name} was called directly then. Call it from a code_mode script as codemode.${name}(...).]`;
+  const callExpr = /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name)
+    ? `codemode.${name}`
+    : `codemode[${JSON.stringify(name)}]`;
+  return `\n[${name} was called directly then. Call it from a code_mode script as ${callExpr}(...).]`;
 }

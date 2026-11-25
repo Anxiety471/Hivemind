@@ -346,7 +346,7 @@ function userComputerInstruction(state: UserComputerState): string | undefined {
 
 const CODE_MODE_GUIDE = [
   "Pass TypeScript as `code`. Call a tool as `await codemode.<name>({ ...args })`; it resolves with the tool's JSON result and throws its error, so wrap one that may fail in try/catch. Top-level await works; there is no fetch, import, file or network access.",
-  "Only console.log output comes back, so print just what you need, with JSON.stringify for objects. Use a loop for repeated work.",
+  "Use `console.log` or a top-level `return` for what you need back, with JSON.stringify for objects when printing. Use a loop for repeated work.",
   "`await codemode.search({ query })` returns signatures for tools missing from the code_mode index and for saved commands, which you call as `await codemode.cmd.<name>(args)`; save one with command_save. `await codemode.describe({ name })` (or `names`, up to five) returns the full description and JSON Schema of a tool or command, and a command's code; read it when a signature is not enough.",
   "Each call is approved exactly like a direct call. A call that asks the person stops the script; once they approve, repeat only that call, then continue.",
 ].join(" ");

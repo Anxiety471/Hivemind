@@ -433,6 +433,10 @@ export class McpConnector implements ConnectorProvider {
     return lazyCatalogTools(catalogToolPrefix("mcp"), "mcp", "MCP", catalogEntries(tools));
   }
 
+  async listCatalogTools(context: AdapterContext): Promise<ConnectorTool[]> {
+    return this.authorizedTools(context);
+  }
+
   async resolveCall(
     call: ConnectorCall,
     context: AdapterContext,

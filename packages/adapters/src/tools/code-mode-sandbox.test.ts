@@ -288,4 +288,44 @@ describe("runCodeModeScript", () => {
     expect(first.output).toBe('{"n":1}');
     expect(second.output).toBe('{"n":2}');
   });
+
+  it("captures top-level return values for scripts without touching command mode", async () => {
+    const obj = await runCodeModeScript({
+      code: "return { ok: true, count: 3 };",
+      tools,
+      call: async () => null,
+    });
+    expect(obj.error).toBeUndefined();
+    expect(obj.output).toBe("");
+    expect(obj.returnValue).toBe('{"ok":true,"count":3}');
+
+    const str = await runCodeModeScript({
+      code: 'console.log("step"); return "done";',
+      tools,
+      call: async () => null,
+    });
+    expect(str.output).toBe("step");
+    expect(str.returnValue).toBe("done");
+
+    const none = await runCodeModeScript({
+      code: 'console.log("only log");',
+      tools,
+      call: async () => null,
+    });
+    expect(none.returnValue).toBeUndefined();
+  });
+
+  it("forwards call args to canRunConcurrently", async () => {
+    const seen: Array<[string, Record<string, unknown>]> = [];
+    await runCodeModeScript({
+      code: 'await codemode.demo_read({ id: "42" });',
+      tools,
+      canRunConcurrently: (name, args) => {
+        seen.push([name, args]);
+        return true;
+      },
+      call: async () => ({ ok: true }),
+    });
+    expect(seen).toEqual([["demo_read", { id: "42" }]]);
+  });
 });

@@ -734,6 +734,7 @@ model Space {
   agentSkillSpaces            AgentSkillSpace[]
   mcpServerSpaces             McpServerSpace[]
   capabilityInstallSpaces     CapabilityInstallSpace[]
+  codeCommands                CodeCommand[]
 
   @@unique([id, organizationId])
   @@index([organizationId, createdAt])
@@ -1766,12 +1767,14 @@ model AgentSkillRevision {
   @@map("agent_skill_revisions")
 }
 
-/// A script any bot can find with codemode.search and call as codemode.cmd.<name>. One namespace
-/// for the whole deployment, so it is not row-secured: it is for an install with one team.
+/// A script bots in a Space can find with codemode.search and call as codemode.cmd.<name>.
+/// Scoped by spaceId (nullable for legacy deployment-wide rows created before space scoping).
 model CodeCommand {
   id              String   @id @default(cuid())
+  spaceId         String?
+  space           Space?   @relation(fields: [spaceId], references: [id], onDelete: Cascade)
   /// Lowercase letters, digits and underscores; the name after `cmd.`.
-  name            String   @unique
+  name            String
   description     String
   /// The Lucide icon the command wears in the UI, by its kebab-case name (e.g. "file-text"); null
   /// for the default. Not checked against the icon set here: the UI falls back for an unknown name.
@@ -1784,6 +1787,8 @@ model CodeCommand {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
+  @@unique([spaceId, name])
+  @@index([spaceId])
   @@map("code_commands")
 }
 

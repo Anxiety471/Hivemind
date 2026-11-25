@@ -3,6 +3,7 @@ import {
   extractCodeModeCalls,
   formatCodeModeCallsSummary,
   formatCodeModeLintFindings,
+  isStaticallyReadOnlyCommand,
   lintCodeModeScript,
   summarizeCodeModeCalls,
 } from "./code-mode-lint.js";
@@ -147,5 +148,32 @@ describe("extractCodeModeCalls & summarizeCodeModeCalls", () => {
     ]);
     expect(formatCodeModeCallsSummary(["a", "a", "b"], 4)).toBe("a, b");
     expect(formatCodeModeCallsSummary([])).toBeUndefined();
+  });
+});
+
+describe("bracket unknown-tool lint & isStaticallyReadOnlyCommand", () => {
+  it("flags unknown bracket calls and suggests valid bracket syntax for hyphenated names", () => {
+    const findings = lintCodeModeScript('await codemode["mcp__cf__list-zone"]({});', {
+      tools: ["mcp__cf__list-zones"],
+      commandPrefix: "cmd.",
+    });
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.rule).toBe("no-unknown-tool");
+    expect(findings[0]?.message).toContain('`codemode["mcp__cf__list-zones"]`');
+  });
+
+  it("identifies statically read-only commands and rejects dynamic or write commands", () => {
+    const readOnly = new Set(["demo_search", "mcp__cf__list-zones"]);
+    const check = (code: string) => isStaticallyReadOnlyCommand(code, (n) => readOnly.has(n));
+
+    expect(
+      check(
+        'const a = await codemode.demo_search({}); return await codemode["mcp__cf__list-zones"](a);',
+      ),
+    ).toBe(true);
+    expect(check("await codemode.demo_write({});")).toBe(false);
+    expect(check("await codemode.cmd.other({});")).toBe(false);
+    expect(check("const x = 'demo_search'; await codemode[x]({});")).toBe(false);
+    expect(check("const cm = codemode; await cm.demo_search({});")).toBe(false);
   });
 });

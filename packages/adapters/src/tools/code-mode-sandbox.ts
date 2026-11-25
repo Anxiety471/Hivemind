@@ -57,7 +57,7 @@ export interface CodeModeRunOptions {
    * When provided, calls for which this returns `true` may run concurrently up to `maxConcurrency`,
    * while calls returning `false` act as a FIFO exclusive barrier. When omitted, all calls serialize.
    */
-  canRunConcurrently?: (name: string) => boolean;
+  canRunConcurrently?: (name: string, args: Record<string, unknown>) => boolean;
   /** Maximum number of concurrent host calls when `canRunConcurrently` allows overlap. */
   maxConcurrency?: number;
   /** Whether the code is a top-level `code_mode` script or a saved `cmd.*` command body. */
@@ -78,6 +78,7 @@ export async function checkCodeModeSyntax(
 
 export interface CodeModeRunResult {
   output: string;
+  returnValue?: string;
   calls: string[];
   truncated: boolean;
   error?: { name: string; message: string };
@@ -175,6 +176,7 @@ export async function runCodeModeScript(options: CodeModeRunOptions): Promise<Co
   const logs: string[] = [];
   const calls: string[] = [];
   let written = 0;
+  let returnValue: string | undefined;
   let truncated = false;
   let callCount = 0;
   let limitExceeded = false;
@@ -186,10 +188,15 @@ export async function runCodeModeScript(options: CodeModeRunOptions): Promise<Co
         ? { name: "TimeoutError", message: `the script ran longer than ${timeoutMs}ms` }
         : undefined;
 
+  const sourceToCompile =
+    options.mode === "command"
+      ? options.code
+      : `const __ret = await (async () => {\n${options.code}\n})();\n__reportReturn(__ret);`;
+
   let javascript: string;
   let QuickJS: Awaited<ReturnType<typeof loadQuickJS>>;
   try {
-    [javascript, QuickJS] = await Promise.all([toJavaScript(options.code), loadQuickJS()]);
+    [javascript, QuickJS] = await Promise.all([toJavaScript(sourceToCompile), loadQuickJS()]);
   } catch (error) {
     return {
       output: "",
@@ -239,6 +246,18 @@ export async function runCodeModeScript(options: CodeModeRunOptions): Promise<Co
     });
     vm.setProp(vm.global, "__print", print);
     print.dispose();
+
+    const setReturn = vm.newFunction("__setReturn", (valueHandle) => {
+      const value = vm.getString(valueHandle);
+      if (value.length > CODE_MODE_OUTPUT_MAX_CHARS) {
+        returnValue = value.slice(0, CODE_MODE_OUTPUT_MAX_CHARS);
+        truncated = true;
+      } else {
+        returnValue = value;
+      }
+    });
+    vm.setProp(vm.global, "__setReturn", setReturn);
+    setReturn.dispose();
 
     const allowed = new Set(options.tools);
     const commandPrefix = options.commandPrefix;
@@ -353,7 +372,7 @@ export async function runCodeModeScript(options: CodeModeRunOptions): Promise<Co
         return deferred.handle;
       }
 
-      const concurrent = Boolean(canRunConcurrently?.(name));
+      const concurrent = Boolean(canRunConcurrently?.(name, args));
       waiting.push({
         concurrent,
         run: () => {
@@ -417,6 +436,22 @@ export async function runCodeModeScript(options: CodeModeRunOptions): Promise<Co
            warn: printLine,
            info: printLine,
          };
+         const formatReturn = (value) => {
+           if (typeof value === "string") return value;
+           if (value instanceof Error) return formatPart(value);
+           try {
+             const json = JSON.stringify(value);
+             return json === undefined ? formatPart(value) : json;
+           } catch {
+             return formatPart(value);
+           }
+         };
+         Object.defineProperty(globalThis, "__reportReturn", {
+           value: (value) => {
+             if (value !== undefined) __setReturn(formatReturn(value));
+           },
+           enumerable: false,
+         });
          const call = (name) => async (input) => {
            const raw = await __call(name, JSON.stringify(input ?? {}));
            return JSON.parse(raw);
@@ -545,6 +580,7 @@ export async function runCodeModeScript(options: CodeModeRunOptions): Promise<Co
         message: `code_mode allows at most ${maxCalls} tool calls per script`,
       };
     }
+    if (returnValue !== undefined) result.returnValue = returnValue;
     return result;
   } finally {
     disposed = true;

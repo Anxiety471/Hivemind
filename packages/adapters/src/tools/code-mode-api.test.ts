@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   CODE_FIRST_INDEX_MAX_CHARS,
+  codeModeCallExpr,
   codeModeToolIndex,
+  formatToolSignature,
   searchCodeModeTools,
 } from "./code-mode-api.js";
 
@@ -175,5 +177,37 @@ describe("searchCodeModeTools", () => {
   it("returns nothing for an empty or unmatched query", () => {
     expect(searchCodeModeTools(tools, "  ")).toEqual([]);
     expect(searchCodeModeTools(tools, "zebra")).toEqual([]);
+  });
+
+  it("formats non-identifier tool names with bracket syntax and returns call expressions in search", () => {
+    const hyphenated = {
+      name: "mcp__cloudflare__list-zones",
+      description: "List Cloudflare DNS zones.",
+      inputSchema: { type: "object", properties: { account: { type: "string" } } },
+      readOnly: true,
+      route: {
+        connectorId: "mcp",
+        resourceId: "cf",
+        toolName: "list-zones",
+        catalogGroup: "cloudflare",
+      },
+    };
+    expect(codeModeCallExpr(hyphenated.name)).toBe('codemode["mcp__cloudflare__list-zones"]');
+    expect(formatToolSignature(hyphenated)).toBe(
+      'codemode["mcp__cloudflare__list-zones"]({ account?: string }) => JSON',
+    );
+    expect(codeModeToolIndex([hyphenated])).toContain(
+      '- codemode["mcp__cloudflare__list-zones"]({ account?: string }) => JSON — List Cloudflare DNS zones.',
+    );
+    const hits = searchCodeModeTools([hyphenated], "cloudfare zone");
+    expect(hits).toEqual([
+      {
+        name: "mcp__cloudflare__list-zones",
+        signature: "{ account?: string }",
+        description: "List Cloudflare DNS zones.",
+        writes: false,
+        call: 'codemode["mcp__cloudflare__list-zones"]',
+      },
+    ]);
   });
 });

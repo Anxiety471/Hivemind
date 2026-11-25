@@ -1,6 +1,7 @@
 import type { PrismaClient } from "@rakazo/db";
 import { Prisma } from "@rakazo/db";
 import { z } from "zod";
+import { compileConnectorToolArgsSchema } from "./lazy-tool-catalog.js";
 
 /** A saved command is called as `codemode.cmd.<name>(args)`; the host sees `cmd.<name>`. */
 export const CODE_COMMAND_PREFIX = "cmd.";
@@ -86,8 +87,23 @@ function summary(row: {
   };
 }
 
-export async function listCodeCommands(prisma: PrismaClient): Promise<CodeCommandSummary[]> {
+export function validateCodeCommandParametersSchema(
+  parameters: Record<string, unknown>,
+): string | undefined {
+  try {
+    compileConnectorToolArgsSchema(parameters);
+    return undefined;
+  } catch (error) {
+    return error instanceof Error ? error.message : "Invalid JSON Schema in parameters.";
+  }
+}
+
+export async function listCodeCommands(
+  prisma: PrismaClient,
+  spaceId: string,
+): Promise<CodeCommandSummary[]> {
   const rows = await prisma.codeCommand.findMany({
+    where: { spaceId },
     select: { name: true, description: true, icon: true, parameters: true },
     orderBy: { name: "asc" },
     take: CODE_COMMAND_MAX_COUNT,
@@ -97,10 +113,11 @@ export async function listCodeCommands(prisma: PrismaClient): Promise<CodeComman
 
 export async function findCodeCommand(
   prisma: PrismaClient,
+  spaceId: string,
   name: string,
 ): Promise<CodeCommandInput | undefined> {
   const row = await prisma.codeCommand.findUnique({
-    where: { name },
+    where: { spaceId_name: { spaceId, name } },
     select: { name: true, description: true, icon: true, parameters: true, code: true },
   });
   return row ? { ...summary(row), code: row.code } : undefined;
@@ -109,28 +126,33 @@ export async function findCodeCommand(
 /** Fetches multiple saved commands in a single query, keyed by command name. */
 export async function findCodeCommands(
   prisma: PrismaClient,
+  spaceId: string,
   names: readonly string[],
 ): Promise<Map<string, CodeCommandInput>> {
   const unique = [...new Set(names.filter(Boolean))];
   if (!unique.length) return new Map();
   const rows = await prisma.codeCommand.findMany({
-    where: { name: { in: unique } },
+    where: { spaceId, name: { in: unique } },
     select: { name: true, description: true, icon: true, parameters: true, code: true },
   });
   return new Map(rows.map((row) => [row.name, { ...summary(row), code: row.code }]));
 }
 
-/** Creates the command or replaces the one with that name; there is one text per name. */
+/** Creates the command or replaces the one with that name in this Space. */
 export async function saveCodeCommand(
   prisma: PrismaClient,
+  spaceId: string,
   command: CodeCommandInput,
   userId: string,
 ): Promise<{ updated: boolean } | { error: string }> {
   const existing = await prisma.codeCommand.findUnique({
-    where: { name: command.name },
+    where: { spaceId_name: { spaceId, name: command.name } },
     select: { id: true },
   });
-  if (!existing && (await prisma.codeCommand.count()) >= CODE_COMMAND_MAX_COUNT) {
+  if (
+    !existing &&
+    (await prisma.codeCommand.count({ where: { spaceId } })) >= CODE_COMMAND_MAX_COUNT
+  ) {
     return {
       error: `There are already ${CODE_COMMAND_MAX_COUNT} saved commands; delete one first.`,
     };
@@ -143,15 +165,19 @@ export async function saveCodeCommand(
     updatedByUserId: userId,
   };
   await prisma.codeCommand.upsert({
-    where: { name: command.name },
-    create: { name: command.name, ...data },
+    where: { spaceId_name: { spaceId, name: command.name } },
+    create: { spaceId, name: command.name, ...data },
     update: { ...data, parameters: command.parameters ?? Prisma.JsonNull },
   });
   return { updated: Boolean(existing) };
 }
 
-export async function deleteCodeCommand(prisma: PrismaClient, name: string): Promise<boolean> {
-  const { count } = await prisma.codeCommand.deleteMany({ where: { name } });
+export async function deleteCodeCommand(
+  prisma: PrismaClient,
+  spaceId: string,
+  name: string,
+): Promise<boolean> {
+  const { count } = await prisma.codeCommand.deleteMany({ where: { spaceId, name } });
   return count > 0;
 }
 

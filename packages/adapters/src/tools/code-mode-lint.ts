@@ -1,3 +1,5 @@
+import { codeModeCallExpr } from "./code-mode-api.js";
+
 export interface CodeModeLintFinding {
   rule: string;
   line: number;
@@ -396,19 +398,27 @@ export function lintCodeModeScript(
     const prefixNs = options.commandPrefix?.endsWith(".")
       ? options.commandPrefix.slice(0, -1)
       : undefined;
-    for (const match of stripped.matchAll(/\bcodemode\s*\.\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*\(/g)) {
-      const idx = match.index;
-      const name = match[1]!;
-      if (allowed.has(name) || name === prefixNs) continue;
-      if (inTryBlock(tryRanges, idx)) continue;
-      const suggestion = closestToolName(name, options.tools);
+    const reportUnknownTool = (idx: number, name: string) => {
+      if (allowed.has(name) || name === prefixNs) return;
+      if (inTryBlock(tryRanges, idx)) return;
+      const suggestion = closestToolName(name, options.tools!);
       findings.push({
         rule: "no-unknown-tool",
         line: lineNumberAt(stripped, idx),
         message: `${name} is not a tool this run offers${
-          suggestion ? `; did you mean \`codemode.${suggestion}\`?` : "."
+          suggestion ? `; did you mean \`${codeModeCallExpr(suggestion)}\`?` : "."
         } Find available tools with \`codemode.search({ query })\`.`,
       });
+    };
+    for (const match of stripped.matchAll(/\bcodemode\s*\.\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*\(/g)) {
+      reportUnknownTool(match.index, match[1]!);
+    }
+    for (const match of stripped.matchAll(/\bcodemode\s*\[\s*\]\s*\(/g)) {
+      const rawSlice = code.slice(match.index, match.index + match[0].length);
+      const literalMatch = rawSlice.match(/\[\s*(['"])([^'"\\]+)\1\s*\]/);
+      if (literalMatch?.[2]) {
+        reportUnknownTool(match.index, literalMatch[2]);
+      }
     }
   }
 
@@ -543,4 +553,36 @@ export function extractCodeModeCalls(code: string): string[] {
 /** Summarizes the calls made in a `code_mode` script for step details and live activity. */
 export function summarizeCodeModeCalls(code: string, maxListed = 4): string | undefined {
   return formatCodeModeCallsSummary(extractCodeModeCalls(code), maxListed);
+}
+
+/**
+ * Returns true only when `code` makes no nested `cmd.*` calls, uses no dynamic `codemode[expr]`
+ * lookups or `codemode` aliases, and every static `codemode` call it makes is read-only.
+ */
+export function isStaticallyReadOnlyCommand(
+  code: string,
+  isToolReadOnly: (name: string) => boolean,
+): boolean {
+  const stripped = stripNonCode(code);
+  for (const match of stripped.matchAll(/\bcodemode\b/g)) {
+    const after = stripped.slice(match.index + "codemode".length);
+    const dotMatch = after.match(/^\s*\.\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*\(/);
+    if (dotMatch) {
+      if (dotMatch[1] === "cmd") return false;
+      continue;
+    }
+    const bracketMatch = after.match(/^\s*\[\s*\]\s*\(/);
+    if (bracketMatch) {
+      const rawSlice = code.slice(
+        match.index,
+        match.index + "codemode".length + bracketMatch[0].length,
+      );
+      if (/^\s*codemode\s*\[\s*(['"])([^'"\\]+)\1\s*\]\s*\(/.test(rawSlice)) {
+        continue;
+      }
+    }
+    return false;
+  }
+  const calls = extractCodeModeCalls(code);
+  return calls.every((name) => !name.startsWith("cmd.") && isToolReadOnly(name));
 }

@@ -1,6 +1,13 @@
 import { deferred } from "@rakazo/core/test-async";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createApprovedEffectReplayQueue } from "../../approvals/approval-effect.js";
+import {
+  catalogIdForRoute,
+  createApprovedEffectReplayQueue,
+  isApprovalPausedResult,
+  isInternalTermination,
+  isToolPauseResult,
+} from "../../approvals/approval-effect.js";
+import { resolveCatalogCall } from "../../tools/lazy-tool-catalog.js";
 
 const pauses = vi.hoisted(() => ({ names: new Set<string>() }));
 const paused = () => ({
@@ -79,7 +86,10 @@ function context(
   execute: () => AsyncGenerator<{ type: string; data: unknown }> = vi.fn(async function* () {
     yield { type: "result", data: { rows: [{ id: "r1" }, { id: "r2" }] } };
   }),
-  commands: Record<string, { description: string; code: string }> = {},
+  commands: Record<
+    string,
+    { description: string; code: string; parameters?: Record<string, unknown> }
+  > = {},
 ) {
   const ctx = {
     deps: {
@@ -95,7 +105,7 @@ function context(
         codeCommand: {
           findMany: vi.fn(
             async (args?: {
-              where?: { name?: { in?: string[] } };
+              where?: { spaceId?: string; name?: { in?: string[] } };
               select?: { code?: boolean };
             }) => {
               const names = args?.where?.name?.in;
@@ -105,20 +115,27 @@ function context(
               return entries.map(([name, row]) => ({
                 name,
                 description: row.description,
-                parameters: null,
+                parameters: row.parameters ?? null,
                 ...(args?.select?.code ? { code: row.code } : {}),
               }));
             },
           ),
-          findUnique: vi.fn(async ({ where }: { where: { name: string } }) => {
-            const row = commands[where.name];
-            return row ? { name: where.name, parameters: null, ...row } : null;
-          }),
+          findUnique: vi.fn(
+            async ({
+              where,
+            }: {
+              where: { name?: string; spaceId_name?: { spaceId: string; name: string } };
+            }) => {
+              const name = where.spaceId_name?.name ?? where.name ?? "";
+              const row = commands[name];
+              return row ? { name, parameters: row.parameters ?? null, ...row } : null;
+            },
+          ),
         },
       },
       connector: { execute },
     },
-    run: { userId: "user-1" },
+    run: { userId: "user-1", spaceId: "space-1" },
     bot: { id: "bot-1" },
     thread: { id: "thread-1" },
     source: { ownerStartedRun: true },
@@ -140,7 +157,7 @@ function context(
       connectedPlugins: [],
     },
     context: { signal: new AbortController().signal },
-    secrets: [],
+    secrets: [] as string[],
   };
   return { ctx, execute };
 }
@@ -742,5 +759,229 @@ describe("saved commands", () => {
     )) as { error?: string };
     expect(syntaxRejected.error).toContain("SyntaxError");
     expect(upsert).not.toHaveBeenCalled();
+  });
+});
+
+describe("code_mode improvements", () => {
+  it("returns top-level return values, redacts secrets, and keeps console.log alongside return", async () => {
+    const { ctx } = context();
+    ctx.secrets = ["top-secret-token"];
+    const returnedOnly = (await applyTool(
+      ctx as never,
+      "code_mode",
+      { code: 'return { ok: true, token: "top-secret-token" };' },
+      "outer-1",
+    )) as { output: string; returnValue?: string };
+    expect(returnedOnly.output).toContain('"ok":true');
+    expect(returnedOnly.output).not.toContain("top-secret-token");
+    expect(returnedOnly.returnValue).toBeUndefined();
+
+    const both = (await applyTool(
+      ctx as never,
+      "code_mode",
+      { code: 'console.log("step 1"); return { done: 1 };' },
+      "outer-2",
+    )) as { output: string; returnValue?: string };
+    expect(both.output).toBe("step 1");
+    expect(both.returnValue).toBe('{"done":1}');
+  });
+
+  it("preserves pre-pause console output and calls while keeping pause provenance", async () => {
+    const { ctx } = context();
+    pauses.names.add("demo_write");
+    const result = (await applyTool(
+      ctx as never,
+      "code_mode",
+      {
+        code: `
+          const found = await codemode.demo_search({ query: "a" });
+          console.log(JSON.stringify(found));
+          await codemode.demo_write({ title: "needs approval" });
+        `,
+      },
+      "outer-1",
+    )) as { content: Array<{ text: string }>; details: Record<string, unknown> };
+    expect(isToolPauseResult(result)).toBe(true);
+    expect(isApprovalPausedResult(result)).toBe(true);
+    expect(isInternalTermination(result)).toBe(true);
+    expect(result.content.some((c) => c.text.includes("Output before pause:"))).toBe(true);
+    expect(result.details.output).toBe('{"rows":[{"id":"r1"},{"id":"r2"}]}');
+    expect(result.details.calls).toEqual(["demo_search", "demo_write"]);
+  });
+
+  it("unifies lazy tool catalogs for search, describe, direct calls, and read-only concurrency", async () => {
+    const cfRead = {
+      name: "mcp__cloudflare__list-zones",
+      description: "List Cloudflare zones.",
+      inputSchema: { type: "object", properties: { account: { type: "string" } } },
+      readOnly: true,
+      route: {
+        connectorId: "mcp",
+        resourceId: "cf",
+        toolName: "list-zones",
+        catalogGroup: "cloudflare",
+      },
+    };
+    const cfRead2 = {
+      name: "mcp__cloudflare__get-zone",
+      description: "Get one Cloudflare zone.",
+      inputSchema: { type: "object", properties: { zone_id: { type: "string" } } },
+      readOnly: true,
+      route: {
+        connectorId: "mcp",
+        resourceId: "cf",
+        toolName: "get-zone",
+        catalogGroup: "cloudflare",
+      },
+    };
+    const catalogTools = [cfRead, cfRead2];
+    const entries = catalogTools.map((tool) => ({
+      id: catalogIdForRoute({ ...tool.route, resourceId: tool.route.resourceId }),
+      tool,
+      group: tool.route.catalogGroup,
+    }));
+    const executeWrapper = {
+      name: "connectors_execute_tool",
+      description: "Run an MCP tool by id.",
+      inputSchema: {
+        type: "object",
+        properties: { id: { type: "string" }, arguments: { type: "object" } },
+      },
+      route: { connectorId: "mcp", toolName: "__catalog_execute" },
+    };
+
+    const events: string[] = [];
+    const d1 = deferred<{ ok: string }>();
+    const d2 = deferred<{ ok: string }>();
+    let idx = 0;
+    const execute = vi.fn(async function* (call: { tool: string }) {
+      events.push(`start:${call.tool}`);
+      const data = await [d1, d2][idx++]!.promise;
+      events.push(`end:${call.tool}`);
+      yield { type: "result", data };
+    });
+
+    const { ctx } = context(execute as never);
+    ctx.tools.offered = [codeModeTool, executeWrapper] as never;
+    ctx.tools.connector = new Map([[executeWrapper.name, executeWrapper]]) as never;
+    (ctx.deps.connector as Record<string, unknown>).listCatalogTools = vi.fn(
+      async () => catalogTools,
+    );
+    (ctx.deps.connector as Record<string, unknown>).resolveCall = vi.fn(async (call) =>
+      resolveCatalogCall(call, entries),
+    );
+
+    // Search + describe find expanded catalog tools; direct call routes via wrapper and runs concurrently.
+    const pending = applyTool(
+      ctx as never,
+      "code_mode",
+      {
+        code: `
+          const hits = await codemode.search({ query: "cloudfare zones" });
+          const desc = await codemode.describe({ name: "mcp__cloudflare__list-zones" });
+          const [a, b] = await Promise.all([
+            codemode["mcp__cloudflare__list-zones"]({ account: "a1" }),
+            codemode.connectors_execute_tool({ id: ${JSON.stringify(entries[1]!.id)}, arguments: { zone_id: "z1" } }),
+          ]);
+          return { hits: hits.map((h) => [h.name, h.call, h.writes]), descWrites: desc[0].writes, a, b };
+        `,
+      },
+      "outer-1",
+    ) as Promise<{ output: string; error?: string }>;
+
+    await vi.waitFor(() => {
+      expect(events).toEqual([
+        "start:mcp__cloudflare__list-zones",
+        "start:mcp__cloudflare__get-zone",
+      ]);
+    });
+    d2.resolve({ ok: "z" });
+    d1.resolve({ ok: "list" });
+
+    const res = await pending;
+    expect(res.error).toBeUndefined();
+    const parsed = JSON.parse(res.output);
+    expect(parsed.hits).toEqual([
+      ["mcp__cloudflare__get-zone", 'codemode["mcp__cloudflare__get-zone"]', false],
+      ["mcp__cloudflare__list-zones", 'codemode["mcp__cloudflare__list-zones"]', false],
+    ]);
+    expect(parsed.descWrites).toBe(false);
+    expect(parsed.a).toEqual({ ok: "list" });
+    expect(parsed.b).toEqual({ ok: "z" });
+  });
+
+  it("validates saved command parameters before running and allows concurrent read-only cached commands", async () => {
+    const commands = {
+      search_rows: {
+        description: "Search rows.",
+        parameters: {
+          type: "object",
+          properties: { query: { type: "string" } },
+          required: ["query"],
+        },
+        code: `return await codemode.demo_search({ query: args.query });`,
+      },
+    };
+    const d1 = deferred<{ rows: string[] }>();
+    const d2 = deferred<{ rows: string[] }>();
+    const events: string[] = [];
+    let idx = 0;
+    const execute = vi.fn(async function* (call: { args: { query: string } }) {
+      events.push(`start:${call.args.query}`);
+      const data = await [d1, d2][idx++]!.promise;
+      events.push(`end:${call.args.query}`);
+      yield { type: "result", data };
+    });
+    const { ctx } = context(execute as never, commands);
+
+    const invalid = (await applyTool(
+      ctx as never,
+      "code_mode",
+      { code: `await codemode.cmd.search_rows({});` },
+      "outer-1",
+    )) as { error?: string };
+    expect(invalid.error).toContain("InvalidArguments");
+    expect(execute).not.toHaveBeenCalled();
+
+    // Prime commandCache via describe, then invoke twice concurrently in Promise.all.
+    const pending = applyTool(
+      ctx as never,
+      "code_mode",
+      {
+        code: `
+          await codemode.describe({ name: "cmd.search_rows" });
+          const res = await Promise.all([
+            codemode.cmd.search_rows({ query: "q1" }),
+            codemode.cmd.search_rows({ query: "q2" }),
+          ]);
+          return res.length;
+        `,
+      },
+      "outer-2",
+    ) as Promise<{ output: string; error?: string }>;
+    await vi.waitFor(() => {
+      expect(events).toHaveLength(2);
+      expect(events).toEqual(expect.arrayContaining(["start:q1", "start:q2"]));
+    });
+    d2.resolve({ rows: ["2"] });
+    d1.resolve({ rows: ["1"] });
+    const res = await pending;
+    expect(res.error).toBeUndefined();
+    expect(res.output).toBe("2");
+  });
+
+  it("appends signature hint on argument-validation errors inside code_mode", async () => {
+    const execute = vi.fn(async function* () {
+      yield { type: "error", message: "Tool arguments are invalid: missing required query" };
+    });
+    const { ctx } = context(execute as never);
+    const result = (await applyTool(
+      ctx as never,
+      "code_mode",
+      { code: `await codemode.demo_search({});` },
+      "outer-1",
+    )) as { error?: string };
+    expect(result.error).toContain("Expected: codemode.demo_search({ query?: string }) => JSON");
+    expect(result.error).toContain('codemode.describe({ name: "demo_search" })');
   });
 });

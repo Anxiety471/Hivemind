@@ -1,6 +1,11 @@
-import type { AgentToolExecutionObserver } from "@rakazo/adapter-kit";
+import type { AgentToolExecutionObserver, ConnectorTool } from "@rakazo/adapter-kit";
 import { BACKGROUND_HELPER_TRIGGER, redactSecrets, toolResultTaintsRun } from "@rakazo/core";
-import { isTerminatingReplyResult, isToolPauseResult } from "../../approvals/approval-effect.js";
+import { bestEffort } from "@rakazo/logging";
+import {
+  internalTerminatingResult,
+  isTerminatingReplyResult,
+  isToolPauseResult,
+} from "../../approvals/approval-effect.js";
 import { argumentGiven } from "../../bots/update-bot-patch.js";
 import { isRunningShellCommand } from "../../computers/sandbox/shell-command-stream.js";
 import { IMAGE_RETURNING_COMPUTER_TOOLS } from "../../models/model-vision.js";
@@ -26,15 +31,25 @@ import {
   CODE_MODE_SEARCH,
   describeCodeCommand,
   describeCodeModeTool,
+  formatToolSignature,
   searchCodeModeTools,
   undescribed,
 } from "../../tools/code-mode-api.js";
+import { isStaticallyReadOnlyCommand } from "../../tools/code-mode-lint.js";
 import {
   CODE_MODE_MAX_CALLS,
   CODE_MODE_OUTPUT_MAX_CHARS,
   CODE_MODE_TIMEOUT_MS,
   runCodeModeScript,
 } from "../../tools/code-mode-sandbox.js";
+import type { CatalogEntry } from "../../tools/lazy-tool-catalog.js";
+import {
+  CATALOG_EXECUTE,
+  catalogEntries,
+  isLazyCatalogControlRoute,
+  loadCatalogEntry,
+  parseConnectorToolArgs,
+} from "../../tools/lazy-tool-catalog.js";
 import type { RunContext } from "../assembly/run-context.js";
 import { markReadOutsideContent } from "../assembly/run-context.js";
 import { codeModeToolExecutionId } from "../lifecycle/run-effects.js";
@@ -290,6 +305,45 @@ async function codeModeTool(ctx: RunContext, call: ToolCall) {
   if (!code.trim()) return call.finish({ error: "code must be the TypeScript to run." });
   const offered = codeModeCallableTools(ctx.tools.offered);
   const callable = new Map(offered.map((tool) => [tool.name, tool] as const));
+
+  // Unify lazy catalogs (>20 MCP, Pipedream, or Installed tools) into code_mode so scripts can
+  // search, describe, and call underlying tools directly while preserving catalog approval routing.
+  const executeWrapperByConnector = new Map<string, string>();
+  for (const tool of offered) {
+    if (
+      isLazyCatalogControlRoute(tool.route) &&
+      tool.route?.toolName === CATALOG_EXECUTE &&
+      tool.route.connectorId
+    ) {
+      executeWrapperByConnector.set(tool.route.connectorId, tool.name);
+    }
+  }
+  const catalogByName = new Map<string, ConnectorTool>();
+  const catalogIdByName = new Map<string, string>();
+  const catalogEntriesByConnector = new Map<string, CatalogEntry[]>();
+  if (executeWrapperByConnector.size > 0 && ctx.deps.connector?.listCatalogTools) {
+    const listed =
+      (await bestEffort(
+        "list catalog tools for code mode",
+        ctx.deps.connector.listCatalogTools(ctx.context),
+      )) ?? [];
+    const expanded = codeModeCallableTools(listed).filter(
+      (tool) => !ctx.tools.disabled.has(tool.name),
+    );
+    for (const entry of catalogEntries(expanded)) {
+      const connectorId = entry.tool.route?.connectorId;
+      if (!connectorId || !executeWrapperByConnector.has(connectorId)) continue;
+      const list = catalogEntriesByConnector.get(connectorId) ?? [];
+      list.push(entry);
+      catalogEntriesByConnector.set(connectorId, list);
+      if (!callable.has(entry.tool.name) && !catalogByName.has(entry.tool.name)) {
+        catalogByName.set(entry.tool.name, entry.tool);
+        catalogIdByName.set(entry.tool.name, entry.id);
+      }
+    }
+  }
+  const searchableTools = [...offered, ...catalogByName.values()];
+
   // `codemode.search` answers from the offered set without running a tool; a real tool of the
   // same name wins.
   const searches = !callable.has(CODE_MODE_SEARCH);
@@ -303,6 +357,7 @@ async function codeModeTool(ctx: RunContext, call: ToolCall) {
   const stop = new AbortController();
   const toolNames = [
     ...callable.keys(),
+    ...catalogByName.keys(),
     ...(searches ? [CODE_MODE_SEARCH] : []),
     ...(describes ? [CODE_MODE_DESCRIBE] : []),
   ];
@@ -313,7 +368,7 @@ async function codeModeTool(ctx: RunContext, call: ToolCall) {
   const commandCache = new Map<string, CodeCommandInput | undefined>();
 
   const loadCommandList = () => {
-    cachedCommands ??= listCodeCommands(ctx.deps.prisma).catch((error) => {
+    cachedCommands ??= listCodeCommands(ctx.deps.prisma, ctx.run.spaceId).catch((error) => {
       cachedCommands = undefined;
       throw error;
     });
@@ -322,17 +377,49 @@ async function codeModeTool(ctx: RunContext, call: ToolCall) {
 
   const loadCommand = async (commandName: string): Promise<CodeCommandInput | undefined> => {
     if (commandCache.has(commandName)) return commandCache.get(commandName);
-    const command = await findCodeCommand(ctx.deps.prisma, commandName);
+    const command = await findCodeCommand(ctx.deps.prisma, ctx.run.spaceId, commandName);
     commandCache.set(commandName, command);
     return command;
   };
 
-  const canRunConcurrently = (name: string): boolean => {
-    if (name.startsWith(CODE_COMMAND_PREFIX)) return false;
+  const resolveTargetTool = (
+    name: string,
+    args: Record<string, unknown>,
+  ): ConnectorTool | undefined => {
+    const direct = callable.get(name);
+    if (
+      direct &&
+      isLazyCatalogControlRoute(direct.route) &&
+      direct.route?.toolName === CATALOG_EXECUTE &&
+      direct.route.connectorId
+    ) {
+      const entries = catalogEntriesByConnector.get(direct.route.connectorId);
+      if (entries && typeof args.id === "string") {
+        try {
+          return loadCatalogEntry(entries, args).tool;
+        } catch {
+          return undefined;
+        }
+      }
+      return undefined;
+    }
+    return direct ?? catalogByName.get(name);
+  };
+
+  const isToolNameReadOnly = (toolName: string): boolean => {
+    const tool = callable.get(toolName) ?? catalogByName.get(toolName);
+    return Boolean(tool && !isCodeModeWrite(tool));
+  };
+
+  const canRunConcurrently = (name: string, args: Record<string, unknown>): boolean => {
+    if (name.startsWith(CODE_COMMAND_PREFIX)) {
+      const cached = commandCache.get(name.slice(CODE_COMMAND_PREFIX.length));
+      return Boolean(cached && isStaticallyReadOnlyCommand(cached.code, isToolNameReadOnly));
+    }
     if (searches && name === CODE_MODE_SEARCH) return true;
     if (describes && name === CODE_MODE_DESCRIBE) return true;
-    const tool = callable.get(name);
-    return Boolean(tool && !isCodeModeWrite(tool));
+    const target = resolveTargetTool(name, args);
+    return Boolean(target && !isCodeModeWrite(target));
   };
 
   const callTool = async (
@@ -359,7 +446,7 @@ async function codeModeTool(ctx: RunContext, call: ToolCall) {
     totalCalls += 1;
     if (searches && name === CODE_MODE_SEARCH) {
       return searchCodeModeTools(
-        offered,
+        searchableTools,
         typeof args.query === "string" ? args.query : "",
         await loadCommandList(),
       );
@@ -376,7 +463,7 @@ async function codeModeTool(ctx: RunContext, call: ToolCall) {
         .map((asking) => asking.slice(CODE_COMMAND_PREFIX.length))
         .filter((commandName) => !commandCache.has(commandName));
       if (missingCommands.length > 0) {
-        const fetched = await findCodeCommands(ctx.deps.prisma, missingCommands);
+        const fetched = await findCodeCommands(ctx.deps.prisma, ctx.run.spaceId, missingCommands);
         for (const commandName of missingCommands) {
           commandCache.set(commandName, fetched.get(commandName));
         }
@@ -392,7 +479,7 @@ async function codeModeTool(ctx: RunContext, call: ToolCall) {
             continue;
           }
         } else {
-          const tool = callable.get(asking);
+          const tool = callable.get(asking) ?? catalogByName.get(asking);
           if (tool) {
             described.push(describeCodeModeTool(tool));
             continue;
@@ -404,22 +491,31 @@ async function codeModeTool(ctx: RunContext, call: ToolCall) {
       if (readCommand) await markReadOutsideContent(ctx);
       return described;
     }
-    const tool = callable.get(name);
-    if (!tool) {
+    const directTool = callable.get(name);
+    const catalogTool = catalogByName.get(name);
+    if (!directTool && !catalogTool) {
       throw Object.assign(new Error(`${name} is not a tool this run offers`), {
         name: "ToolUnavailable",
       });
     }
-    if (isCodeModeWrite(tool) && ++writes > CODE_MODE_MAX_WRITES) {
+    const target = resolveTargetTool(name, args);
+    const countsAsWrite = target ? isCodeModeWrite(target) : true;
+    if (countsAsWrite && ++writes > CODE_MODE_MAX_WRITES) {
       throw Object.assign(
         new Error(`code_mode allows at most ${CODE_MODE_MAX_WRITES} writes per script`),
         { name: "WriteLimitReached" },
       );
     }
+    const dispatchName = catalogTool
+      ? executeWrapperByConnector.get(catalogTool.route?.connectorId ?? "")!
+      : name;
+    const dispatchArgs = catalogTool
+      ? { id: catalogIdByName.get(catalogTool.name) ?? catalogTool.name, arguments: args }
+      : args;
     const result = await applyTool(
       ctx,
-      name,
-      args,
+      dispatchName,
+      dispatchArgs,
       codeModeToolExecutionId(call.executionId, ordinal++),
       undefined,
       // A command that outlives its quiet window reports back through the turn's observer, as
@@ -438,7 +534,12 @@ async function codeModeTool(ctx: RunContext, call: ToolCall) {
       throw new Error("The call is waiting for the person, so the script stopped.");
     }
     if (isToolError(result)) {
-      throw Object.assign(new Error(toolResultErrorText(result)), { name: "ToolFailed" });
+      const message = toolResultErrorText(result);
+      const hint =
+        target && /invalid|required|expected|argument|parameter|schema|must be/i.test(message)
+          ? ` Expected: ${formatToolSignature(target)}. Call codemode.describe({ name: ${JSON.stringify(target.name)} }) for full schema.`
+          : "";
+      throw Object.assign(new Error(`${message}${hint}`), { name: "ToolFailed" });
     }
     if (name === "command_save" || name === "command_delete") {
       cachedCommands = undefined;
@@ -456,6 +557,16 @@ async function codeModeTool(ctx: RunContext, call: ToolCall) {
         new Error(`There is no saved command ${name}. Find one with codemode.search.`),
         { name: "ToolUnavailable" },
       );
+    }
+    if (command.parameters) {
+      try {
+        parseConnectorToolArgs(command.parameters, args);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Invalid arguments";
+        throw Object.assign(new Error(`InvalidArguments (${name}): ${message}`), {
+          name: "InvalidArguments",
+        });
+      }
     }
     await markReadOutsideContent(ctx);
     const nested = await runCodeModeScript({
@@ -507,7 +618,42 @@ async function codeModeTool(ctx: RunContext, call: ToolCall) {
       message: `code_mode allows at most ${CODE_MODE_MAX_CALLS} tool calls per script`,
     };
   }
-  if (paused) return paused;
+  if (paused) {
+    const prePauseOutput = redactSecrets(outcome.output, ctx.secrets);
+    if (
+      (prePauseOutput || outcome.calls.length > 0) &&
+      typeof paused === "object" &&
+      paused !== null &&
+      "content" in paused &&
+      Array.isArray((paused as { content?: unknown }).content)
+    ) {
+      const base = paused as {
+        kind: "agent_tool_result";
+        content: Array<{ type: "text"; text: string }>;
+        details: unknown;
+        terminate: true;
+      };
+      const baseDetails =
+        typeof base.details === "object" && base.details !== null && !Array.isArray(base.details)
+          ? { ...base.details }
+          : {};
+      return internalTerminatingResult({
+        ...base,
+        content: [
+          ...base.content,
+          ...(prePauseOutput
+            ? [{ type: "text" as const, text: `Output before pause:\n${prePauseOutput}` }]
+            : []),
+        ],
+        details: {
+          ...baseDetails,
+          ...(prePauseOutput ? { output: prePauseOutput } : {}),
+          ...(outcome.calls.length ? { calls: outcome.calls } : {}),
+        },
+      });
+    }
+    return paused;
+  }
   if (stillRunning) {
     return call.finish({
       ...(outcome.output ? { output: redactSecrets(outcome.output, ctx.secrets) } : {}),
@@ -517,15 +663,33 @@ async function codeModeTool(ctx: RunContext, call: ToolCall) {
     });
   }
   const output = redactSecrets(outcome.output, ctx.secrets);
+  const returnValue =
+    outcome.returnValue !== undefined ? redactSecrets(outcome.returnValue, ctx.secrets) : undefined;
   if (outcome.error) {
     return call.finish({
       ...(output ? { output } : {}),
+      ...(returnValue !== undefined ? { returnValue } : {}),
       error: redactSecrets(`${outcome.error.name}: ${outcome.error.message}`, ctx.secrets),
       ...(outcome.calls.length ? { calls: outcome.calls } : {}),
     });
   }
+  if (output && returnValue !== undefined) {
+    return call.finish({
+      output,
+      returnValue,
+      ...(outcome.truncated ? { truncated: true } : {}),
+      ...(outcome.calls.length ? { calls: outcome.calls } : {}),
+    });
+  }
+  if (returnValue !== undefined) {
+    return call.finish({
+      output: returnValue,
+      ...(outcome.truncated ? { truncated: true } : {}),
+      ...(outcome.calls.length ? { calls: outcome.calls } : {}),
+    });
+  }
   return call.finish({
-    output: output || "(the script printed nothing; print what you need with console.log)",
+    output: output || "(the script printed nothing; use console.log or return a value)",
     ...(outcome.truncated ? { truncated: true } : {}),
     ...(outcome.calls.length ? { calls: outcome.calls } : {}),
   });
