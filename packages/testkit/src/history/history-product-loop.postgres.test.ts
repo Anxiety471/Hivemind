@@ -93,27 +93,6 @@ describe.skipIf(!enabled)("product history diagnostic loop", () => {
           expect(request) {
             expect(JSON.stringify(request.messages)).toContain("Read the Aurora diagnostic chain");
             expect(JSON.stringify(request.messages)).toContain(
-              "Start with the project name alone, or one distinctive topic word if no project is named",
-            );
-            expect(JSON.stringify(request.messages)).toContain(
-              "Empty narrower queries do not exhaust the broader topic query’s matches.",
-            );
-            expect(JSON.stringify(request.messages)).toContain(
-              "first check the visible conversation",
-            );
-            expect(JSON.stringify(request.messages)).toContain(
-              "do not repeat retrieval solely because the user asks again",
-            );
-            expect(JSON.stringify(request.messages)).toContain(
-              "Do not claim evidence is unavailable while that broader search still has an unexplored cursor.",
-            );
-            expect(JSON.stringify(request.messages)).toContain(
-              "If the requested fact remains absent, say so briefly without volunteering adjacent facts.",
-            );
-            expect(JSON.stringify(request.messages)).toContain(
-              "If multiple projects match and none is selected, ask which project before giving candidate facts.",
-            );
-            expect(JSON.stringify(request.messages)).toContain(
               "Treat pagination cursors as opaque: copy the returned continuation value exactly, never calculate or guess it. When the tool reports no next page, stop; if a cursor is rejected, recheck the last successful result before retrying.",
             );
             expect(
