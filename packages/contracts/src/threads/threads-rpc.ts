@@ -90,6 +90,14 @@ export const threadsRpc = {
           attempt: z.number().int().positive(),
         }),
       ),
+    /** Retry or continue the latest failed run in this thread without adding a new user message. */
+    retry: oc.input(threadTarget.safeExtend({ runId: Id })).output(
+      z.object({
+        ok: z.literal(true),
+        runId: Id,
+        mode: z.enum(["continue", "retry"]),
+      }),
+    ),
     /**
      * A background helper's own thread, found from the card that started it: the card sits in
      * a chat, or in the thread of the helper that started this one. Read-only.

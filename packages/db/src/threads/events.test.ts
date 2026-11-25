@@ -288,6 +288,73 @@ describe("finalizeRun", () => {
     );
   });
 
+  it("preserves the turn checkpoint and emits resumable on failed runs when requested", async () => {
+    const deleteExternalEffect = vi.fn(async () => ({ count: 0 }));
+    const createEvent = vi.fn(async () => ({
+      id: "evt-1",
+      seq: 2,
+      threadId: "thread-1",
+      firstResponse: false,
+    }));
+    const tx = {
+      externalEffect: { deleteMany: deleteExternalEffect },
+      $executeRaw: vi.fn(async () => 0),
+      $queryRaw: vi.fn(async () => []),
+      run: {
+        findUnique: vi.fn(async () => ({ status: "running", startedAt: null, userId: "user-1" })),
+        findUniqueOrThrow: vi.fn(async () => ({ sourceMessage: null })),
+        findFirst: vi.fn(async () => null),
+        updateMany: vi.fn(async () => ({ count: 1 })),
+      },
+      attempt: { updateMany: vi.fn(async () => ({ count: 1 })) },
+      task: { updateMany: vi.fn(async () => ({ count: 1 })) },
+      thread: { update: vi.fn(async () => ({ nextEventSeq: 3 })) },
+      secret: { deleteMany: vi.fn(async () => ({ count: 0 })) },
+      event: { create: createEvent, deleteMany: vi.fn(async () => ({ count: 0 })) },
+      steeringMessage: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        deleteMany: vi.fn(async () => ({ count: 0 })),
+        findMany: vi.fn(async () => []),
+      },
+      message: {
+        create: vi.fn(async () => ({ id: "msg-partial", seq: 5 })),
+        findFirst: vi.fn(async () => null),
+      },
+      bot: { update: vi.fn(async () => ({})) },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    } as unknown as PrismaClient;
+
+    await finalizeRun(prisma, {
+      spaceId: "space-1",
+      threadId: "thread-1",
+      botId: "bot-1",
+      runId: "run-1",
+      taskId: "task-1",
+      attemptId: "attempt-1",
+      leaseOwner: "worker-1",
+      leaseFence: 2,
+      outcome: "failed",
+      error: "503 Service Unavailable",
+      partialReply: [{ kind: "text", text: "Halfway" }],
+      preserveTurnCheckpoint: true,
+    });
+
+    expect(deleteExternalEffect).not.toHaveBeenCalled();
+    expect(tx.message.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        clientNonce: partialReplyClientNonce("run-1", 2),
+      }),
+    });
+    expect(createEvent).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        type: "run.failed",
+        payload: { error: "503 Service Unavailable", resumable: true },
+      }),
+    });
+  });
+
   it("saves no message for a failure without a partial reply", async () => {
     const create = vi.fn();
     const tx = {

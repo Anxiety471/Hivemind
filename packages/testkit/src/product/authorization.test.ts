@@ -355,6 +355,7 @@ describeWithDatabase("API authorization and resource isolation", () => {
       ["threads/helperGet", { messageId: "missing-message" }],
       ["threads/helperSubscribe", { threadId: "missing-thread", cursor: -1 }],
       ["threads/rewind", { botId: "missing-bot", messageId: "missing-message", stepIndex: 0 }],
+      ["threads/retry", { botId: "missing-bot", runId: "missing-run" }],
       ["threads/clear", { botId: "missing-bot" }],
       ["threads/followUp", { botId: "missing-bot", text: "Nope" }],
       [

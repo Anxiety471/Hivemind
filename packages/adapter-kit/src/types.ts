@@ -737,6 +737,11 @@ export interface AgentRunRequest {
   /** Cheap per-call capture; serialize only when persisting that call’s human pause. */
   onCheckpoint?: (capture: () => string, executionId: string) => Promise<void>;
   /**
+   * Called before a runtime/model failure aborts the turn when resumable progress exists
+   * (completed tool steps or streamed text), so Continue can resume without restarting.
+   */
+  onFailureCheckpoint?: (checkpoint: string) => Promise<void>;
+  /**
    * Aborts when the process running the turn begins to stop. A runtime that supports it ends
    * the turn at its next step boundary with a `yielded` event instead of starting another model
    * call; one that does not keeps going until the turn ends or `signal` aborts.

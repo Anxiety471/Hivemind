@@ -68,11 +68,11 @@ export async function runModelTurn(
         }),
       )
       .catch((error: unknown) => getLogger().warn("run.prompt_version_failed", { error }));
-    if ((state.reply.attempt ?? 1) > 1) {
+    if ((state.reply.attempt ?? 1) > 1 || turn.prompt.turnCheckpoint) {
       const checkpointBlock = state.reply.messageSegments.findLast(
         (block): block is Extract<MessageBlock, { kind: "steps" }> => block.kind === "steps",
       );
-      if (checkpointBlock) {
+      if (checkpointBlock && checkpointBlock.steps.length > 0) {
         await bestEffort(
           "append run.checkpointed event",
           deps.events
@@ -84,7 +84,7 @@ export async function runModelTurn(
               type: "run.checkpointed",
               payload: {
                 steps: checkpointBlock.steps,
-                attempts: state.reply.attempt,
+                attempts: state.reply.attempt ?? 1,
                 ...(state.reply.costUsd ? { costUsd: state.reply.costUsd } : {}),
                 ...(checkpointBlock.modelId ? { modelId: checkpointBlock.modelId } : {}),
                 ...(checkpointBlock.modelProvider
@@ -351,6 +351,9 @@ function modelTurnRequest(
     yieldSignal: deps.stoppingSignal,
     onCheckpoint: async (capture, executionId) => {
       effects.pendingTurnCheckpoints.set(executionId, capture);
+    },
+    onFailureCheckpoint: async (checkpoint) => {
+      state.failureCheckpoint = checkpoint;
     },
     resumeToolResult: {
       content: [{ type: "text", text: takeoverResume?.promptNote ?? taskPrompt }],

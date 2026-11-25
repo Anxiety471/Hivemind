@@ -30,7 +30,7 @@ import {
   MODEL_OUTPUT_CUT_ERROR,
   modelFallbackFailure,
 } from "@rakazo/core";
-import { getLogger } from "@rakazo/logging";
+import { bestEffort, getLogger } from "@rakazo/logging";
 import {
   isTerminatingReplyResult,
   terminatingReplyText,
@@ -250,6 +250,7 @@ export class PiAgentRuntime implements AgentRuntime {
           });
         });
       let resumeHost: ToolHost | undefined;
+      let captureFailureCheckpoint: (() => string | undefined) | undefined;
       try {
         const saved = request.turnCheckpoint
           ? restoreTurnCheckpoint(request.turnCheckpoint, request.model)
@@ -351,6 +352,7 @@ export class PiAgentRuntime implements AgentRuntime {
             offeredToolNames,
             scriptToolNames,
           );
+        const initialMessageCount = history.length;
         const representedHistoryIds = new Set(
           restored
             ? (restored.historyMessageIds ??
@@ -844,6 +846,45 @@ export class PiAgentRuntime implements AgentRuntime {
               messages: [...checkpoint.messages, ...siblings],
             });
           }, executionId);
+        };
+        captureFailureCheckpoint = () => {
+          if (signal.aborted || host.pausePending || yielded || host.toolCallBudget.exceeded) {
+            return undefined;
+          }
+          const checkpoint = turnCheckpointAt("");
+          while (checkpoint.messages.at(-1)?.role === "assistant") {
+            const tail = checkpoint.messages.at(-1)!;
+            if (tail.role !== "assistant") break;
+            if (
+              tail.stopReason === "error" ||
+              tail.stopReason === "aborted" ||
+              (tail.stopReason === "length" && messageHasToolCall(tail)) ||
+              (assistantText(tail).trim().length === 0 && !messageHasToolCall(tail))
+            ) {
+              checkpoint.messages.pop();
+              continue;
+            }
+            break;
+          }
+          const progressMessages = restored
+            ? checkpoint.messages
+            : checkpoint.messages.slice(initialMessageCount);
+          const hasToolResults = progressMessages.some((message) => message.role === "toolResult");
+          const hasStreamedText = streamed.trim().length > 0;
+          if (!hasToolResults && !hasStreamedText) return undefined;
+          const last = checkpoint.messages.at(-1);
+          if (last?.role === "assistant" && !messageHasToolCall(last)) {
+            checkpoint.messages[checkpoint.messages.length - 1] = {
+              ...last,
+              stopReason: "stop",
+            };
+            checkpoint.messages.push({
+              role: "user",
+              content: CUT_REPLY_CONTINUATION_PROMPT,
+              timestamp: Date.now(),
+            });
+          }
+          return serializeTurnCheckpoint(checkpoint);
         };
 
         const onAbort = () => {
@@ -1357,6 +1398,13 @@ export class PiAgentRuntime implements AgentRuntime {
         queue.push(streamed.trim() ? { type: "done", text: streamed } : { type: "done" });
       } catch (error) {
         span?.setStatus({ status: "error" });
+        const failureCheckpoint = captureFailureCheckpoint?.();
+        if (failureCheckpoint && request.onFailureCheckpoint) {
+          await bestEffort(
+            "capture failure turn checkpoint",
+            request.onFailureCheckpoint(failureCheckpoint),
+          );
+        }
         const message = sanitizeError(error instanceof Error ? error.message : String(error));
         queue.fail(
           error instanceof TransientModelError

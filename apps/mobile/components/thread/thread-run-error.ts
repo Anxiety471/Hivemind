@@ -1,4 +1,6 @@
+import { t } from "@lingui/core/macro";
 import { computerHoursOut } from "@rakazo/contracts";
+import { canRetryRunError } from "@rakazo/core";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
 import { useEffect, useState } from "react";
@@ -9,14 +11,28 @@ import { queryClient, rpcQuery } from "../../lib/query/query";
 import { useRunError } from "../cards/run-error-sheet";
 
 /** The chat's failed run: its error, the recovery action, and whether its details are open. */
-export function useThreadRunError(run: MobileSnapshot["run"] | undefined, botId?: string) {
+export function useThreadRunError(
+  run: MobileSnapshot["run"] | undefined,
+  botId?: string,
+  options?: {
+    meId?: string;
+    retry?: { onRetry: (runId: string) => void; pending: boolean };
+  },
+) {
   const router = useRouter();
   const [detailsOpen, setDetailsOpen] = useState(false);
   const runError = run?.status === "failed" ? (run.error ?? null) : null;
   const classified = useRunError(runError, false);
   const failedRunId = runError ? run?.id : null;
   useEffect(() => setDetailsOpen(false), [failedRunId]);
-  const needsPlan = classified?.recovery === "plan";
+  const retryable = Boolean(
+    options?.retry &&
+      run?.status === "failed" &&
+      runError &&
+      canRetryRunError(runError) &&
+      (!run.userId || !options.meId || run.userId === options.meId),
+  );
+  const needsPlan = !retryable && classified?.recovery === "plan";
   const asksBilling = needsPlan && Boolean(failedRunId);
   const billingQuery = useQuery(
     { ...rpcQuery("billing/status"), enabled: asksBilling },
@@ -39,18 +55,31 @@ export function useThreadRunError(run: MobileSnapshot["run"] | undefined, botId?
       ? runErrorActionLabel(normalizedRunError)
       : null;
   const runBotId = run?.botId ?? botId;
-  const runErrorAction = label
-    ? {
-        label,
-        onPress: () => {
-          setDetailsOpen(false);
-          if (needsPlan) router.push("/billing");
-          else if (normalizedRunError?.recovery === "model" && runBotId)
-            router.push({ pathname: "/bot-settings", params: { botId: runBotId, focus: "model" } });
-          // Without a bot to change, the model settings pick the default model instead.
-          else openModelSettings();
-        },
-      }
-    : null;
+  const runErrorAction =
+    retryable && run && options?.retry
+      ? {
+          label: run.resumable ? t`Continue` : t`Retry`,
+          disabled: options.retry.pending,
+          onPress: () => {
+            setDetailsOpen(false);
+            options.retry!.onRetry(run.id);
+          },
+        }
+      : label
+        ? {
+            label,
+            onPress: () => {
+              setDetailsOpen(false);
+              if (needsPlan) router.push("/billing");
+              else if (normalizedRunError?.recovery === "model" && runBotId)
+                router.push({
+                  pathname: "/bot-settings",
+                  params: { botId: runBotId, focus: "model" },
+                });
+              // Without a bot to change, the model settings pick the default model instead.
+              else openModelSettings();
+            },
+          }
+        : null;
   return { runError, normalizedRunError, runErrorAction, detailsOpen, setDetailsOpen };
 }

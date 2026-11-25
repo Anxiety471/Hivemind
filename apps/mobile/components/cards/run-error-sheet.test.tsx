@@ -9,8 +9,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { runErrorActionLabel } from "../../lib/cards/run-error-presentation";
 import { liveEndRunError } from "../../lib/thread/thread-window";
 import { ThreadErrorNotice, ThreadFetchErrorNotice } from "../thread/thread-error-notice";
+import { useThreadRunError } from "../thread/thread-run-error";
 import { RunErrorSheet, useRunError } from "./run-error-sheet";
 
+vi.mock("expo-router", () => ({
+  useRouter: () => ({ push: vi.fn() }),
+}));
 vi.mock("../../lib/native/haptics", () => ({
   hapticImpact: vi.fn(),
   hapticSelection: vi.fn(),
@@ -50,7 +54,14 @@ vi.mock("react-native-safe-area-context", () => ({
   useSafeAreaInsets: () => ({ top: 0, bottom: 0 }),
 }));
 vi.mock("expo-clipboard", () => ({ setStringAsync: vi.fn() }));
-vi.mock("../../lib/api/api", () => ({ rpc: vi.fn() }));
+vi.mock("../../lib/api/api-server", () => ({}));
+vi.mock("../../lib/api/api", () => ({
+  rpc: vi.fn(),
+  captureApiRequestContext: async () => ({ headers: {} }),
+  currentApiBase: () => "https://example.test",
+  selectedSpaceId: () => "space-1",
+}));
+vi.mock("../../lib/api/session", () => ({ currentSessionGeneration: () => 1 }));
 vi.mock("../../lib/integrations/integrations-cache", () => ({
   isIntegrationsScopeCurrent: () => true,
 }));
@@ -270,3 +281,47 @@ it("draws the error notice as a filled card without an outline", () => {
   expect(style).not.toHaveProperty("borderWidth");
   expect(style).not.toHaveProperty("borderColor");
 });
+
+it.each([
+  [true, "Continue"],
+  [false, "Retry"],
+] as const)(
+  "offers %s in useThreadRunError when retryable run failed (resumable=%s)",
+  (resumable, expectedLabel) => {
+    const onRetry = vi.fn();
+    function Probe() {
+      const { runErrorAction } = useThreadRunError(
+        {
+          id: "run-1",
+          userId: "user-1",
+          botId: "bot-1",
+          threadId: "thread-1",
+          taskId: "task-1",
+          status: "failed",
+          trigger: "user",
+          routineId: null,
+          modelProvider: "openai",
+          modelId: "gpt-4o",
+          error: "503 Service Unavailable",
+          resumable,
+          startedAt: null,
+          completedAt: null,
+          createdAt: "2026-11-25T10:00:00.000Z",
+        },
+        "bot-1",
+        { meId: "user-1", retry: { onRetry, pending: false } },
+      );
+      return createElement(ThreadErrorNotice, {
+        error: null,
+        summary: "Model provider is overloaded.",
+        action: runErrorAction,
+      });
+    }
+    const node = mount(createElement(Probe));
+    expect(node.textContent).toContain(expectedLabel);
+    act(() => {
+      node.querySelector("button")?.click();
+    });
+    expect(onRetry).toHaveBeenCalledWith("run-1");
+  },
+);

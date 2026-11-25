@@ -13,19 +13,33 @@ import {
 } from "@rakazo/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const provider = vi.hoisted(() => ({ errorMessage: "", rejectRequest: false, status: 400 }));
+const provider = vi.hoisted(() => ({
+  errorMessage: "",
+  rejectRequest: false,
+  status: 400,
+  messages: undefined as unknown[] | undefined,
+}));
 
 vi.mock("@earendil-works/pi-agent-core", () => ({
   Agent: class {
-    state = { errorMessage: provider.errorMessage, messages: [] as unknown[] };
+    state: { errorMessage: string; messages: unknown[] };
     constructor(
       private readonly options: {
+        initialState?: { messages?: unknown[] };
         streamFn: (model: unknown, context: unknown, options: unknown) => AsyncIterable<unknown>;
       },
-    ) {}
+    ) {
+      this.state = {
+        errorMessage: provider.errorMessage,
+        messages: [...(options.initialState?.messages ?? [])],
+      };
+    }
 
     subscribe() {}
     async prompt() {
+      if (provider.messages) {
+        this.state.messages.push(...provider.messages);
+      }
       if (!provider.rejectRequest) return;
       const stream = this.options.streamFn(
         undefined,
@@ -108,7 +122,10 @@ vi.mock("./models/pi-openai-compatible-provider.js", () => ({
 import { rejectedRequestsOf } from "../provider-request-shape.js";
 import { PiAgentRuntime } from "./pi-runtime.js";
 
-function consume(model = { provider: "openai-codex", id: "gpt-test" }) {
+function consume(
+  model = { provider: "openai-codex", id: "gpt-test" },
+  onFailureCheckpoint?: (checkpoint: string) => Promise<void>,
+) {
   const runtime = new PiAgentRuntime();
   return (async () => {
     for await (const _event of runtime.run(
@@ -121,6 +138,7 @@ function consume(model = { provider: "openai-codex", id: "gpt-test" }) {
         history: [],
         tools: [],
         model,
+        ...(onFailureCheckpoint ? { onFailureCheckpoint } : {}),
       },
       {
         operationId: "operation",
@@ -140,6 +158,7 @@ describe("Pi runtime errors", () => {
     provider.errorMessage = "Request was aborted by policy";
     provider.rejectRequest = false;
     provider.status = 400;
+    provider.messages = undefined;
   });
 
   it("attaches the shape of a request a provider rejected for no known reason", async () => {
@@ -442,5 +461,47 @@ describe("Pi runtime errors after every backup failed", () => {
     await expect(failure).rejects.not.toBeInstanceOf(TransientModelError);
     await expect(failure).rejects.not.toBeInstanceOf(ModelAccountError);
     await expect(failure).rejects.not.toBeInstanceOf(ModelOutputError);
+  });
+
+  it("skips onFailureCheckpoint when the first model call fails without progress", async () => {
+    const onFailureCheckpoint = vi.fn(async () => undefined);
+    provider.errorMessage = "503 Service Unavailable";
+    await expect(consume(undefined, onFailureCheckpoint)).rejects.toThrow("503");
+    expect(onFailureCheckpoint).not.toHaveBeenCalled();
+  });
+
+  it("captures a failure checkpoint when tool results exist and strips trailing error reply", async () => {
+    const onFailureCheckpoint = vi.fn(async (_checkpoint: string) => undefined);
+    provider.errorMessage = "503 Service Unavailable";
+    provider.messages = [
+      { role: "user", content: "Check status", timestamp: 1 },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call-1", name: "read_file", arguments: {} }],
+        stopReason: "toolUse",
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call-1",
+        toolName: "read_file",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+        timestamp: 3,
+      },
+      {
+        role: "assistant",
+        content: [],
+        stopReason: "error",
+        errorMessage: "503 Service Unavailable",
+        timestamp: 4,
+      },
+    ];
+    await expect(consume(undefined, onFailureCheckpoint)).rejects.toThrow("503");
+    expect(onFailureCheckpoint).toHaveBeenCalledOnce();
+    const saved = JSON.parse(onFailureCheckpoint.mock.calls[0]![0] as string) as {
+      messages: Array<{ role: string; stopReason?: string }>;
+    };
+    expect(saved.messages.map((m) => m.role)).toEqual(["user", "assistant", "toolResult"]);
   });
 });

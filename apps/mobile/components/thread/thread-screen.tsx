@@ -34,7 +34,7 @@ import { useThemedStyles } from "../../lib/native/native";
 import { NewestPageCards } from "../../lib/pages/page-card";
 import { useChatOnScreen } from "../../lib/pages/page-card-detail";
 import { useAppForeground } from "../../lib/platform/app-foreground";
-import { rpcQuery } from "../../lib/query/query";
+import { rpcQuery, useSave } from "../../lib/query/query";
 import { useScreenQuery } from "../../lib/query/screen-query";
 import { cronLabels } from "../../lib/routines/cron";
 import { useInboxBot } from "../../lib/search/search-inbox";
@@ -435,8 +435,28 @@ export function Thread({ sessionEpoch, userId }: { sessionEpoch: number; userId:
     activeBotId,
   });
 
+  const retrySave = useSave({
+    save: (runId: string, send) =>
+      send("threads/retry", {
+        ...(groupId ? { groupId } : { botId: botId! }),
+        runId,
+      }),
+    onSaved: () => void refresh(),
+  });
   const { runError, normalizedRunError, runErrorAction, detailsOpen, setDetailsOpen } =
-    useThreadRunError(snap?.run, botId);
+    useThreadRunError(
+      snap?.run,
+      botId,
+      readOnly
+        ? undefined
+        : {
+            meId: userId,
+            retry: {
+              onRetry: (runId) => retrySave.run(runId),
+              pending: retrySave.pending,
+            },
+          },
+    );
 
   // Event actions read the latest committed screen state without invalidating settled rows.
   const rowActions = useLatestRowActions({

@@ -278,6 +278,8 @@ export interface RunState {
   vaultUses: Set<string>;
   handedOff: boolean;
   terminalCheckpointComplete: boolean;
+  /** Runtime turn checkpoint captured just before a model/runtime failure abort. */
+  failureCheckpoint?: string;
 }
 
 export interface RunComputerContext {

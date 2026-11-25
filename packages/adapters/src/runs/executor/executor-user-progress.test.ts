@@ -309,6 +309,10 @@ async function runTurn(
         id: `effect-${data.idempotencyKey}`,
         ...data,
       })),
+      upsert: vi.fn(async ({ create }: { create: Record<string, unknown> }) => ({
+        id: `effect-${create.idempotencyKey}`,
+        ...create,
+      })),
       updateMany: vi.fn(async () => ({ count: 1 })),
     },
     userActionApprovalRule: { findMany: vi.fn(async () => []) },
@@ -1889,6 +1893,70 @@ describe("a run that fails partway through its reply", () => {
     });
     expect(finalizeRun).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ outcome: "failed", error: "Internal server error" }),
+    );
+  });
+
+  it("saves failure turn checkpoint with preserveTurnCheckpoint on retryable errors", async () => {
+    const { finalizeRun, prisma } = await runTurn("", false, "", [], "fyi", {
+      runtimeFailure: true,
+      runtime: async function* (request) {
+        yield { type: "text", text: "Part one." };
+        await request.onFailureCheckpoint?.(
+          JSON.stringify({
+            version: 1,
+            provider: "openrouter",
+            model: "fixture-model",
+            systemPrompt: "sys",
+            pendingToolCallId: "",
+            messages: [{ role: "user", content: "Hi", timestamp: 1 }],
+          }),
+        );
+        throw new Error("503 Service Unavailable");
+      },
+    });
+    expect(prisma.externalEffect.upsert).toHaveBeenCalledOnce();
+    const upsertCall = prisma.externalEffect.upsert.mock.calls[0]![0] as {
+      create: { result: string };
+    };
+    const saved = JSON.parse(upsertCall.create.result) as {
+      messages: Array<{ role: string; content: unknown }>;
+      reply?: { assembled: string; currentTextSegment: string; messageSegments: unknown[] };
+    };
+    expect(saved.messages.at(-1)).toMatchObject({ role: "user" });
+    expect(saved.reply?.assembled).toBe("");
+    expect(saved.reply?.currentTextSegment).toBe("");
+    expect(saved.reply?.messageSegments).toEqual([]);
+    expect(finalizeRun).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        outcome: "failed",
+        error: "503 Service Unavailable",
+        preserveTurnCheckpoint: true,
+        partialReply: [{ kind: "text", text: "Part one." }],
+      }),
+    );
+  });
+
+  it("does not save a failure checkpoint for non-retryable auth errors", async () => {
+    const { finalizeRun, prisma } = await runTurn("", false, "", [], "fyi", {
+      runtimeFailure: true,
+      runtime: async function* (request) {
+        yield { type: "text", text: "Part one." };
+        await request.onFailureCheckpoint?.(
+          JSON.stringify({
+            version: 1,
+            provider: "openrouter",
+            model: "fixture-model",
+            systemPrompt: "sys",
+            pendingToolCallId: "",
+            messages: [{ role: "user", content: "Hi", timestamp: 1 }],
+          }),
+        );
+        throw new Error('401: {"message":"Invalid API key"}');
+      },
+    });
+    expect(prisma.externalEffect.upsert).not.toHaveBeenCalled();
+    expect(finalizeRun).toHaveBeenCalledExactlyOnceWith(
+      expect.not.objectContaining({ preserveTurnCheckpoint: true }),
     );
   });
 });

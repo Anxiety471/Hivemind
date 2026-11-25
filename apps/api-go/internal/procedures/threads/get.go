@@ -29,9 +29,10 @@ const messagePageSize = 30
 
 // Background runs (BACKGROUND_RUN_TRIGGERS) and the helper trigger (BACKGROUND_HELPER_TRIGGER).
 const (
-	backgroundTrigger = "tickets"
-	helperTrigger     = "helper"
-	peerTrigger       = "bot_message"
+	backgroundTrigger     = "tickets"
+	helperTrigger         = "helper"
+	peerTrigger           = "bot_message"
+	runTurnCheckpointKind = "runtime_checkpoint"
 )
 
 var (
@@ -180,6 +181,13 @@ func (s snapshotReader) bot(actor db.Actor, botID string) (map[string]any, error
 		return nil, err
 	}
 	applyRunCosts(activeRuns, current, costs)
+	if current != nil && current.Status == "failed" {
+		resumable, err := s.hasTurnCheckpoint(current.ID)
+		if err != nil {
+			return nil, err
+		}
+		current.Resumable = resumable
+	}
 	run, err := optionalRun(current, withRoutine)
 	if err != nil {
 		return nil, err
@@ -289,6 +297,13 @@ func (s snapshotReader) group(actor db.Actor, groupID string) (map[string]any, e
 		return nil, err
 	}
 	applyRunCosts(activeRuns, current, costs)
+	if current != nil && current.Status == "failed" {
+		resumable, err := s.hasTurnCheckpoint(current.ID)
+		if err != nil {
+			return nil, err
+		}
+		current.Resumable = resumable
+	}
 	run, err := optionalRun(current, withRoutine)
 	if err != nil {
 		return nil, err
@@ -349,8 +364,18 @@ type runRow struct {
 	RoutineID, RoutineName                               *string
 	ModelProvider, ModelID, Error                        *string
 	CostUSD                                              *float64
+	Resumable                                            bool
 	StartedAt, CompletedAt                               *time.Time
 	CreatedAt, UpdatedAt                                 time.Time
+}
+
+func (s snapshotReader) hasTurnCheckpoint(runID string) (bool, error) {
+	var exists bool
+	err := s.tx.QueryRow(s.ctx,
+		`SELECT EXISTS(SELECT 1 FROM external_effects WHERE "runId" = $1 AND kind = $2 AND status = $2)`,
+		runID, runTurnCheckpointKind,
+	).Scan(&exists)
+	return exists, err
 }
 
 func collectRunIDs(runs []runRow, extra *runRow) []string {
@@ -581,6 +606,9 @@ func runView(run runRow, withRoutine bool) (map[string]any, bool) {
 	// The same display clamp as live run.failed events, so a huge stored error cannot bypass it.
 	if run.Status == "failed" {
 		view["error"] = routines.RunFailureError(run.Status, run.Error)
+		if run.Resumable {
+			view["resumable"] = true
+		}
 	} else {
 		view["error"] = run.Error
 	}

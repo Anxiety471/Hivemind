@@ -166,6 +166,7 @@ export async function createRunContext(
     vaultUses: new Set(),
     handedOff: false,
     terminalCheckpointComplete: false,
+    failureCheckpoint: undefined,
   };
   /** Fleet tools take every scope from the run, never from arguments. */
   const fleetRun: FleetRun = {

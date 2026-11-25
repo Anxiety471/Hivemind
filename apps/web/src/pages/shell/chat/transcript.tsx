@@ -44,11 +44,6 @@ import { VoiceChatCard } from "../../../components/call/VoiceChatCard";
 import type { ActivityRunMeta } from "../../../components/messages/ActivityPanel";
 import { LiveRunMonitorCard } from "../../../components/messages/ActivityPanel";
 import type { HelperThreadTarget } from "../../../lib/chat/helper-thread";
-import {
-  isDetachedRange,
-  lastSelectedText,
-  quoteDraftForSelection,
-} from "../../../lib/chat/quote-selection";
 import { messageHasVisibleBlocks } from "../../../lib/chat/tool-activity-view";
 import { TRANSCRIPT_CONTENT_PADDING } from "../../../lib/chat/transcript-layout";
 import {
@@ -59,12 +54,11 @@ import {
 import type { ArtifactTarget } from "../../../lib/pages/artifact-open";
 import { projectPageCards } from "../../../lib/pages/page-cards";
 import type { createSpaceRpc } from "../../../lib/query/rpc";
-import { useEventListener } from "../../../lib/use-event-listener";
 import type { ImportSetupTarget } from "../bots/import-setup-card";
-import { isEditableTarget } from "../shell-shortcuts";
 import { TimeSeparator, UnreadDivider } from "./chat-context";
+import { MessageRunError } from "./message-run-error";
 import { MessageView } from "./message-view";
-import { QuoteSelectionButton } from "./quote-selection-button";
+import { QuoteSelectionButton, useTranscriptQuote } from "./quote-selection-button";
 
 /** User bubbles stop at a readable line length; bot replies use the column, leaving room for the hover rail. */
 export function bubbleFrameWidth(role: ThreadMessage["role"]) {
@@ -106,6 +100,9 @@ export const Transcript = memo(function Transcript({
   workingRoutine,
   activeRun,
   threadRuns,
+  failedRun,
+  onRetryRun,
+  retryingRun = false,
   userBubble,
   onStop,
   onRewind,
@@ -157,6 +154,14 @@ export const Transcript = memo(function Transcript({
   workingRoutine?: string;
   activeRun?: TranscriptRunSummary | null;
   threadRuns?: readonly TranscriptRunSummary[];
+  failedRun?: {
+    id: string;
+    botId?: string;
+    error: string;
+    resumable?: boolean;
+  } | null;
+  onRetryRun?: (runId: string) => void | Promise<void>;
+  retryingRun?: boolean;
   /** Your bubbles take the bot's color in its own chat. */
   userBubble?: { background: string; foreground: string };
   onStop?: () => void;
@@ -334,99 +339,35 @@ export const Transcript = memo(function Transcript({
       item.kind === "voiceChat" || messageHasVisibleBlocks(item.message.blocks, showToolActivity),
   );
   const shownItems = showTail ? items.slice(-FIRST_FRAME_ROWS) : items;
+  const failedMessageId = useMemo(() => {
+    if (!failedRun) return undefined;
+    for (let index = shownItems.length - 1; index >= 0; index -= 1) {
+      const item = shownItems[index];
+      if (
+        item &&
+        item.kind !== "voiceChat" &&
+        item.message.role === "bot" &&
+        item.message.runId === failedRun.id
+      ) {
+        return item.message.id;
+      }
+    }
+    return undefined;
+  }, [failedRun, shownItems]);
+  const failedRunSpeaker = useMemo(() => {
+    if (!failedRun?.botId) return undefined;
+    const name = memberName?.(failedRun.botId);
+    if (!name) return undefined;
+    const bot = peerBot(failedRun.botId);
+    return {
+      botId: failedRun.botId,
+      name,
+      color: bot?.color,
+      avatarSet: bot?.avatarSet,
+    };
+  }, [failedRun?.botId, memberName, peerBot]);
   const workingLabel =
     liveActivityLine(messages) ?? (workingRoutine ? t`Running ${workingRoutine}…` : t`Working…`);
-  const [quoteDraft, setQuoteDraft] = useState<{
-    message: ThreadMessage;
-    text: string;
-    range: Range;
-    /** The range's text when armed: a rewrite that removes one endpoint moves it without collapsing. */
-    rangeText: string;
-  } | null>(null);
-  const selectingWithMouse = useRef(false);
-  const applyQuote = useCallback(() => {
-    const selection = window.getSelection();
-    if (
-      !quoteDraft ||
-      !selection ||
-      selection.isCollapsed ||
-      !selection.rangeCount ||
-      isDetachedRange(quoteDraft.range) ||
-      quoteDraft.range.toString() !== quoteDraft.rangeText
-    ) {
-      return false;
-    }
-    const range = selection.getRangeAt(0);
-    if (
-      range.compareBoundaryPoints(Range.START_TO_START, quoteDraft.range) !== 0 ||
-      range.compareBoundaryPoints(Range.END_TO_END, quoteDraft.range) !== 0
-    ) {
-      return false;
-    }
-    onQuote(quoteDraft.message, quoteDraft.text);
-    selection.removeAllRanges();
-    setQuoteDraft(null);
-    return true;
-  }, [onQuote, quoteDraft]);
-  useLayoutEffect(() => {
-    onQuoteShortcutChange?.(
-      quoteDraft ? () => !isEditableTarget(document.activeElement) && applyQuote() : null,
-    );
-    return () => onQuoteShortcutChange?.(null);
-  }, [onQuoteShortcutChange, applyQuote, quoteDraft]);
-
-  // A streaming edit can replace the selected nodes without firing selectionchange: replacing
-  // both endpoints collapses the range, replacing one moves it; the pill must not keep its
-  // stale placement either way.
-  useLayoutEffect(() => {
-    setQuoteDraft((prev) =>
-      prev && (isDetachedRange(prev.range) || prev.range.toString() !== prev.rangeText)
-        ? null
-        : prev,
-    );
-  }, [messages]);
-
-  const evaluateSelection = useCallback(() => {
-    const selection = window.getSelection();
-    if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
-      setQuoteDraft(null);
-      return;
-    }
-    const range = selection.getRangeAt(0);
-    const contentOf = (node: Node) =>
-      (node instanceof Element ? node : node.parentElement)?.closest<HTMLElement>(
-        "[data-quote-message-id]",
-      ) ?? null;
-    const startContent = contentOf(range.startContainer);
-    const endContent = contentOf(lastSelectedText(range));
-    // selection.toString() serializes the whole range (a Ctrl+A transcript is
-    // unbounded), so it only runs once both endpoints sit in one message.
-    const draft = quoteDraftForSelection(
-      {
-        startContent,
-        endContent,
-        text: startContent && startContent === endContent ? selection.toString() : "",
-      },
-      messageById,
-    );
-    setQuoteDraft((prev) => {
-      if (!draft) return null;
-      // Repeat firings for an unchanged selection reuse the draft so the
-      // transcript isn't re-rendered by every unrelated selection event. A
-      // moved selection (e.g. keyboard-selecting a second occurrence of the
-      // same text) must carry its new Range — the pill anchors to it.
-      if (
-        prev &&
-        prev.message === draft.message &&
-        prev.text === draft.text &&
-        prev.range.compareBoundaryPoints(Range.START_TO_START, range) === 0 &&
-        prev.range.compareBoundaryPoints(Range.END_TO_END, range) === 0
-      ) {
-        return prev;
-      }
-      return { ...draft, range, rangeText: range.toString() };
-    });
-  }, [messageById]);
 
   // A click, selection or small nudge that ends near the end leaves the reader at the
   // latest message, so new messages keep following; scrolling away beyond it does not.
@@ -442,40 +383,12 @@ export const Transcript = memo(function Transcript({
     }
   }, [scrollRef]);
 
-  // Keyboard and assistive-tech selections never reach a mouseup, so the pill
-  // lifecycle listens on selectionchange; the mouse flag keeps it hidden while
-  // a drag is still in flight.
-  useEventListener(
-    document,
-    "mousedown",
-    (event) => {
-      selectingWithMouse.current = true;
-      if ((event.target as Element | null)?.closest?.("[data-quote-selection]")) return;
-      setQuoteDraft(null);
-    },
-    true,
-  );
-  useEventListener(
-    document,
-    "mouseup",
-    () => {
-      selectingWithMouse.current = false;
-      // Clicks and selection drags end here even when released over the composer.
-      followIfNearEnd();
-      evaluateSelection();
-    },
-    true,
-  );
-  useEventListener(document, "selectionchange", () => {
-    if (!selectingWithMouse.current) evaluateSelection();
-  });
-  useEventListener(document, "keydown", (event) => {
-    if (event.key === "Escape") setQuoteDraft(null);
-  });
-  // A drag that ends outside the window never fires document mouseup; reset
-  // the flag on blur so keyboard selections keep working afterwards.
-  useEventListener(window, "blur", () => {
-    selectingWithMouse.current = false;
+  const { quoteDraft, applyQuote } = useTranscriptQuote({
+    messages,
+    messageById,
+    onQuote,
+    onQuoteShortcutChange,
+    onMouseUp: followIfNearEnd,
   });
   const snapToEnd = useCallback(() => {
     const element = scrollRef.current;
@@ -592,7 +505,7 @@ export const Transcript = memo(function Transcript({
     else if (element) {
       setAtEnd(transcriptIsNearEnd(element) && !isHeld(element, heldAt.current));
     }
-  }, [messages, running, showTail, scrollRef, snapToEnd]);
+  }, [messages, running, showTail, scrollRef, snapToEnd, failedRun?.id]);
 
   useLayoutEffect(() => {
     const button = jumpButtonRef.current;
@@ -858,6 +771,15 @@ export const Transcript = memo(function Transcript({
                       onMarkUnread={onMarkUnread}
                       onReact={onReact}
                     />
+                    {failedRun && failedMessageId === message.id && onRetryRun ? (
+                      <MessageRunError
+                        attachedToMessage
+                        error={failedRun.error}
+                        resumable={failedRun.resumable}
+                        retrying={retryingRun}
+                        onRetry={() => void onRetryRun(failedRun.id)}
+                      />
+                    ) : null}
                   </div>
                 </div>
                 {!peerReceipt && messageReactions ? (
@@ -883,6 +805,19 @@ export const Transcript = memo(function Transcript({
             </Fragment>
           );
         })}
+        {failedRun && !failedMessageId && onRetryRun ? (
+          <div data-testid="standalone-run-error" className={`relative flex justify-start`}>
+            <div className={`relative w-fit min-w-0 ${bubbleFrameWidth("bot")}`}>
+              <MessageRunError
+                error={failedRun.error}
+                resumable={failedRun.resumable}
+                retrying={retryingRun}
+                onRetry={() => void onRetryRun(failedRun.id)}
+                speaker={failedRunSpeaker}
+              />
+            </div>
+          </div>
+        ) : null}
         {running &&
         !messages.some(
           (message) => message.id.startsWith("progress:") && liveMessageComposing(message.blocks),
@@ -953,9 +888,3 @@ function firstReplyRow(
 function isHeld(element: HTMLElement, heldAt: number | null): boolean {
   return heldAt !== null && Math.abs(element.scrollTop - heldAt) < 1;
 }
-
-/**
- * Floating Quote action anchored to the selection's bounding rect. Measures
- * itself after mount so it can flip below the selection when there is no room
- * above and stay clamped inside the viewport; re-anchors on scroll/resize.
- */
