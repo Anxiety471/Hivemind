@@ -1,4 +1,5 @@
 import { useLingui } from "@lingui/react/macro";
+import { isArchiveMemoryPath } from "@rakazo/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { useFocusEffect, useRouter } from "expo-router";
 import { useCallback, useEffect, useState } from "react";
@@ -43,6 +44,7 @@ export default function MemoryScreen() {
   const read = rpcQuery("memory/list", { scope: "user" });
   // A refetch replaces one still running, so a slow earlier read cannot bring back a deleted note.
   const { data: notes, error: failure, refetch } = useQuery(read, queryClient);
+  const visibleNotes = notes?.filter((note) => !isArchiveMemoryPath(note.path));
   const error = failure ? errorText(failure, t`Could not load memory`) : null;
   const roamerRead = rpcQuery("memory/roamer");
   const { data: roamer, error: roamerFailure } = useQuery(roamerRead, queryClient);
@@ -116,12 +118,12 @@ export default function MemoryScreen() {
         {!notes && !error ? (
           <ActivityIndicator color={native.secondaryLabel} accessibilityLabel={t`Loading…`} />
         ) : null}
-        {notes?.length === 0 ? (
+        {visibleNotes?.length === 0 ? (
           <Text style={styles.secondary}>{t`Nothing remembered yet`}</Text>
         ) : null}
-        {notes?.length ? (
+        {visibleNotes?.length ? (
           <SettingsGroup>
-            {notes.map((note) => (
+            {visibleNotes.map((note) => (
               <SettingsRow
                 key={note.id}
                 accessibilityRole="button"

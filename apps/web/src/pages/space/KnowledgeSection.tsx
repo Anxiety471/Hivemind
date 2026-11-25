@@ -1,7 +1,11 @@
 import { Trans, useLingui } from "@lingui/react/macro";
 import { ORPCError } from "@orpc/client";
 import type { AgentSkill, AgentSkillCatalogEntry, MemoryDocument } from "@rakazo/contracts";
-import { isDeletableMemoryDocument, isEmptyBotMemory } from "@rakazo/contracts";
+import {
+  isArchiveMemoryPath,
+  isDeletableMemoryDocument,
+  isEmptyBotMemory,
+} from "@rakazo/contracts";
 import { fetchFresh, writeSaved } from "@rakazo/core/query";
 import { Badge, Button, SectionHeading, Skeleton, Textarea } from "@rakazo/ui-web";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@rakazo/ui-web/components/ui/tooltip";
@@ -83,7 +87,7 @@ function MemoryDocumentList({
   const list = queries.memory.list.queryOptions({ input });
   // Bots write memory as they run, so every open refreshes behind the cached list.
   const listQuery = useQuery({ ...list, refetchOnMount: "always" });
-  const docs = listQuery.data ?? NO_DOCS;
+  const docs = (listQuery.data ?? NO_DOCS).filter((doc) => !isArchiveMemoryPath(doc.path));
   const loading = listQuery.isPending;
   const budgetInput = input.scope === "bot" && input.botId ? { botId: input.botId } : null;
   const budgetOptions = budgetInput

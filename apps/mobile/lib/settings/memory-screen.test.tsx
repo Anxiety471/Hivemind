@@ -262,3 +262,29 @@ it("keeps the newest list when an earlier load finishes last", async () => {
   await settle();
   expect(container.textContent).not.toContain("deleted.md");
 });
+
+it("hides cold archive documents from space shared memory", async () => {
+  mockRpc(() =>
+    Promise.resolve([
+      {
+        id: "index-1",
+        scope: "user",
+        botId: null,
+        path: "MEMORY.md",
+        content: "# Shared\n",
+        revision: 1,
+      },
+      {
+        id: "arch-1",
+        scope: "user",
+        botId: null,
+        path: "archive/2026-11.md",
+        content: "- old",
+        revision: 1,
+      },
+    ]),
+  );
+  await render();
+  expect(container.textContent).toContain("MEMORY.md");
+  expect(container.textContent).not.toContain("archive/2026-11.md");
+});

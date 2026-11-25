@@ -599,3 +599,27 @@ it("says a document changed elsewhere instead of failing the save, and reads the
     await memory.cleanup();
   }
 });
+
+it("hides cold archive documents from the memory list", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  memoryApi.list.mockResolvedValueOnce([
+    { id: "mem", path: "MEMORY.md", content: "# Bot\n\n- active", revision: 1, updatedAt: "" },
+    {
+      id: "arch",
+      path: "archive/2026-11.md",
+      content: "- [2026-11-25] archived note",
+      revision: 1,
+      updatedAt: "",
+    },
+  ] as never);
+  const host = document.createElement("div");
+  const root = createRoot(host);
+  try {
+    await show(root, <KnowledgeSection botId="fixture" />);
+    expect(host.textContent).toContain("MEMORY.md");
+    expect(host.textContent).not.toContain("archive/2026-11.md");
+  } finally {
+    await act(async () => root.unmount());
+    vi.unstubAllGlobals();
+  }
+});

@@ -260,6 +260,20 @@ describe("bot context cards", () => {
     expect(container.textContent).not.toContain("Request failed");
     expect(container.textContent).toContain("Review draft");
   });
+
+  it("hides cold archive documents from bot memory", async () => {
+    rpc.mockImplementation(async (method: string) =>
+      method === "scratchpad/list"
+        ? []
+        : [
+            { id: "memory-a", path: "MEMORY.md", content: "# Bot\n\n- active" },
+            { id: "archive-a", path: "archive/2026-11.md", content: "- [2026-11-25] old" },
+          ],
+    );
+    await render("bot-a", "memory");
+    expect(container.textContent).toContain("MEMORY.md");
+    expect(container.textContent).not.toContain("archive/2026-11.md");
+  });
 });
 
 it.each(["save", "cancel"])(
