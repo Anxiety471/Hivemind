@@ -521,6 +521,104 @@ func TestWriteEffectsRunAfterClientCancel(t *testing.T) {
 	}
 }
 
+// TestClientCancelOnStreamFollow cancels the client while boards.subscribe's follow step is
+// still running its Gate query: the pre-stream failure is a disconnect (499), not a 500.
+func TestClientCancelOnStreamFollow(t *testing.T) {
+	database := openTestDB(t)
+	seed := seed(t, database)
+	cookie := "better-auth.session_token=" + signedCookie(testSecret, seed.SessionToken)
+	procedures := []local.Procedure{{
+		Name:     "boards.subscribe",
+		ReadOnly: true,
+		Stream: &local.Stream{
+			Follow: func(ctx context.Context, actor db.Actor, input orpc.Input) (<-chan string, func(), *orpc.Error) {
+				// The client goes away, then the follow step's own Gate query runs on the
+				// canceled context, as it would if the abort landed inside FollowBoard.
+				<-ctx.Done()
+				err := tickets.Gate(ctx, database, shared.Deployment{BoardLab: true}, actor)
+				if err != nil {
+					return nil, nil, shared.Failure(err)
+				}
+				return nil, func() {}, nil
+			},
+			Frame: func(db.Actor, string) any { return nil },
+		},
+	}}
+	server := cancelServerWith(t, database, procedures)
+	if err := cancelingRequest(t, http.MethodPost, server.url+"/rpc/boards/subscribe", cookie, `{"json":{}}`, 150*time.Millisecond); err == nil {
+		t.Fatal("client did not go away")
+	}
+	completion := server.log.waitFor(t, "http.request.completed", 10*time.Second)
+	time.Sleep(100 * time.Millisecond)
+	if status, _ := completion["http.status"].(float64); status != 499 {
+		t.Fatalf("recorded status = %v, want 499: %v", completion["http.status"], completion)
+	}
+	if lines := server.log.matching("client disconnected"); len(lines) != 1 {
+		t.Fatalf("client disconnected lines = %d, want 1: %v", len(lines), server.log.all())
+	}
+	if errors := server.log.matching("boards.subscribe failed"); len(errors) != 0 {
+		t.Fatalf("a 500 was logged for the follow step: %v", errors)
+	}
+	if level := server.log.level("ERROR"); level != 0 {
+		t.Fatalf("ERROR lines = %d, want 0: %v", level, server.log.all())
+	}
+}
+
+// TestDeclinedRequestIsNotProxiedAfterCancel: a MayDecline procedure answers a decline under a
+// canceled request, and the gateway must not proxy it — that request's only possible outcome is
+// a WARN "upstream request failed" and a 503 nothing reads.
+func TestDeclinedRequestIsNotProxiedAfterCancel(t *testing.T) {
+	database := openTestDB(t)
+	seed := seed(t, database)
+	cookie := "better-auth.session_token=" + signedCookie(testSecret, seed.SessionToken)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("a canceled declined request reached TypeScript")
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(upstream.Close)
+	sink := &logSink{}
+	logger := slog.New(slog.NewJSONHandler(sink, nil))
+	target, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatalf("upstream url: %v", err)
+	}
+	secret, authURL := testAuthConfig()
+	sessions := auth.New(database, auth.Config{Secret: secret, AuthURL: authURL})
+	localServer := local.New(database, sessions, []local.Procedure{{
+		Name:       "decline.probe",
+		ReadOnly:   true,
+		MayDecline: true,
+		Serve: func(ctx context.Context, _ db.Actor, _ orpc.Input) (any, *orpc.Error) {
+			<-ctx.Done()
+			return nil, local.ErrDecline
+		},
+	}}, local.Config{BuildID: testBuildID, WebOrigin: "https://app.example.test",
+		TrustedOrigins: []string{"https://app.example.test"}, Logger: logger})
+	handler := gateway.New(gateway.Options{
+		Upstream: target,
+		Routes:   routesStore(t, `{"default":"proxy","routes":{"decline.probe":{"mode":"go","readOnly":true}}}`),
+		Logger:   logger,
+		Local:    localServer,
+	})
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+
+	if err := cancelingRequest(t, http.MethodPost, server.URL+"/rpc/decline/probe", cookie, `{"json":{}}`, 100*time.Millisecond); err == nil {
+		t.Fatal("client did not go away")
+	}
+	completion := sink.waitFor(t, "http.request.completed", 10*time.Second)
+	time.Sleep(200 * time.Millisecond)
+	if status, _ := completion["http.status"].(float64); status != 499 {
+		t.Fatalf("gateway recorded %v, want 499: %v", completion["http.status"], completion)
+	}
+	if lines := sink.matching("upstream request failed"); len(lines) != 0 {
+		t.Fatalf("the canceled request was proxied: %v", lines)
+	}
+	if level := sink.level("ERROR"); level != 0 {
+		t.Fatalf("ERROR lines = %d, want 0: %v", level, sink.all())
+	}
+}
+
 // TestShadowSkipsClientCancel shadows a slow TypeScript answer and cancels the client while it
 // runs: the comparison must be skipped, never reported as a wire difference.
 func TestShadowSkipsClientCancel(t *testing.T) {
