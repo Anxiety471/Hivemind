@@ -57,3 +57,15 @@ export function rememberSeenRunErrorId(
     // Keep the current-session error behavior when storage is unavailable.
   }
 }
+
+export function forgetSeenRunErrorId(
+  id: string,
+  storage: RunErrorStorage | null = browserStorage(),
+): void {
+  if (!storage) return;
+  try {
+    storage.removeItem(`${SEEN_RUN_ERROR_STORAGE_KEY_PREFIX}${id}`);
+  } catch {
+    // Keep current-session behavior when storage is unavailable.
+  }
+}

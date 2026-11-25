@@ -280,6 +280,8 @@ export interface RunState {
   /** A routine's prepare command is running: nobody is there, so a call that would ask is refused. */
   preparing?: boolean;
   terminalCheckpointComplete: boolean;
+  /** Runtime turn checkpoint captured just before a model/runtime failure abort. */
+  failureCheckpoint?: string;
 }
 
 export interface RunComputerContext {

@@ -6,7 +6,12 @@ import {
   runFailureError,
 } from "@rakazo/core";
 import type { PrismaClient } from "@rakazo/db";
-import { botRunStatuses, spaceIsShared, startedHelpersWhere } from "@rakazo/db";
+import {
+  botRunStatuses,
+  RUN_TURN_CHECKPOINT_KIND,
+  spaceIsShared,
+  startedHelpersWhere,
+} from "@rakazo/db";
 import { resolveComputerWork, toComputerStatus } from "../computers/computer-status.js";
 import { THREAD_MESSAGE_PAGE_SIZE } from "../routes/shared.js";
 import { loadMessagePage } from "./thread-message-pages.js";
@@ -118,14 +123,20 @@ export async function threadSnapshot(
                 orderBy: { seq: "asc" },
               })
             : [];
-        const costByRunId = await loadRunCostMap(
-          tx,
-          [...activeRuns, ...(currentRun ? [currentRun] : [])].map((item) => item.id),
-        );
+        const [costByRunId, resumableFailed] = await Promise.all([
+          loadRunCostMap(
+            tx,
+            [...activeRuns, ...(currentRun ? [currentRun] : [])].map((item) => item.id),
+          ),
+          currentRun?.status === "failed"
+            ? hasRunTurnCheckpoint(tx, currentRun.id)
+            : Promise.resolve(false),
+        ]);
         return {
           messagePage,
           last,
           run: currentRun,
+          resumableFailed,
           activeRuns,
           liveEvents,
           costByRunId,
@@ -142,7 +153,7 @@ export async function threadSnapshot(
       cursor: core.last?.seq ?? -1,
       messages: messagesWithLiveEvents(core.messagePage.messages, core.liveEvents, core.activeRuns),
       olderCursor: core.messagePage.olderCursor,
-      run: core.run ? mapRun(core.run, core.costByRunId) : null,
+      run: core.run ? mapRun(core.run, core.costByRunId, core.resumableFailed) : null,
       activeRuns: core.activeRuns.map((item) => mapRun(item, core.costByRunId)),
       computer: toComputerStatus(target.botId, core.computer, core.work, core.shared, viewerId),
     };
@@ -216,15 +227,21 @@ export async function threadSnapshot(
             })
           : [];
       const terminalRun = pickLatestTerminalRun(recentTerminals);
-      const costByRunId = await loadRunCostMap(
-        tx,
-        [...activeRuns, ...(terminalRun ? [terminalRun] : [])].map((item) => item.id),
-      );
+      const [costByRunId, resumableFailed] = await Promise.all([
+        loadRunCostMap(
+          tx,
+          [...activeRuns, ...(terminalRun ? [terminalRun] : [])].map((item) => item.id),
+        ),
+        terminalRun?.status === "failed"
+          ? hasRunTurnCheckpoint(tx, terminalRun.id)
+          : Promise.resolve(false),
+      ]);
       return {
         messagePage,
         last,
         activeRuns,
         terminalRun,
+        resumableFailed,
         liveEvents,
         costByRunId,
         memberStatuses,
@@ -248,7 +265,7 @@ export async function threadSnapshot(
     // still active or start late. A newer completed/cancelled terminal clears it.
     run:
       core.terminalRun?.status === "failed"
-        ? mapRun(core.terminalRun, core.costByRunId)
+        ? mapRun(core.terminalRun, core.costByRunId, core.resumableFailed)
         : primaryActiveRun
           ? mapRun(primaryActiveRun, core.costByRunId)
           : null,
@@ -335,6 +352,22 @@ async function loadRunCostMap(
   return costs;
 }
 
+async function hasRunTurnCheckpoint(
+  tx: { externalEffect?: PrismaClient["externalEffect"] },
+  runId: string,
+): Promise<boolean> {
+  if (typeof tx.externalEffect?.findFirst !== "function") return false;
+  const row = await tx.externalEffect.findFirst({
+    where: {
+      runId,
+      kind: RUN_TURN_CHECKPOINT_KIND,
+      status: RUN_TURN_CHECKPOINT_KIND,
+    },
+    select: { id: true },
+  });
+  return Boolean(row);
+}
+
 function mapRun(
   run: {
     id: string;
@@ -354,6 +387,7 @@ function mapRun(
     createdAt: Date;
   },
   costByRunId?: Map<string, number>,
+  resumableFailed = false,
 ) {
   const costUsd = costByRunId?.get(run.id);
   return {
@@ -374,6 +408,7 @@ function mapRun(
       run.status === "failed"
         ? runFailureError({ type: "run.failed", payload: { error: run.error } })
         : run.error,
+    ...(run.status === "failed" && resumableFailed ? { resumable: true } : {}),
     startedAt: run.startedAt?.toISOString() ?? null,
     completedAt: run.completedAt?.toISOString() ?? null,
     createdAt: run.createdAt.toISOString(),

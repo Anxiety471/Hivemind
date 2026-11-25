@@ -2611,6 +2611,51 @@ describe("thread event reduction from sparse live events", () => {
     expect(next?.messages).toEqual([]);
   });
 
+  it("tracks resumable on run.failed and clears it on run.started", () => {
+    const run = {
+      id: "run-1",
+      botId: "bot-1",
+      threadId: "thread-1",
+      taskId: "task-1",
+      status: "running",
+      trigger: "user" as const,
+      routineId: null,
+      modelProvider: null,
+      modelId: null,
+      error: null,
+      startedAt: null,
+      completedAt: null,
+      createdAt: "2026-08-16T00:00:00.000Z",
+    };
+    const initial: LiveSnapshot = { ...liveSnapshot([]), run, activeRuns: [run] };
+    const failed = reduceThreadSnapshot(initial, {
+      type: "run.failed",
+      seq: 5,
+      runId: "run-1",
+      botId: "bot-1",
+      payload: { error: "503 Service Unavailable", resumable: true },
+    });
+    expect(failed?.run).toMatchObject({
+      id: "run-1",
+      status: "failed",
+      error: "503 Service Unavailable",
+      resumable: true,
+    });
+    const restarted = reduceThreadSnapshot(failed ?? null, {
+      type: "run.started",
+      seq: 6,
+      runId: "run-1",
+      botId: "bot-1",
+      payload: { trigger: "user" },
+    });
+    expect(restarted?.run).toMatchObject({
+      id: "run-1",
+      status: "running",
+      error: null,
+      resumable: undefined,
+    });
+  });
+
   it("updates a cloud agent card from thread.cloud_agent", () => {
     const initial = liveSnapshot([
       liveMessage("msg-ca", [

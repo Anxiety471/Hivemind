@@ -285,7 +285,12 @@ function reduce(prev: LiveThreadSnapshot, event: ThreadSnapshotEvent): LiveThrea
       // why it stopped, matching what threads.get returns on the next load.
       run:
         endedRun && failure
-          ? { ...endedRun, status: "failed", error: failure }
+          ? {
+              ...endedRun,
+              status: "failed",
+              error: failure,
+              ...(payload.resumable === true ? { resumable: true } : { resumable: undefined }),
+            }
           : primaryEnded
             ? (activeRuns?.[0] ?? null)
             : prev.run,
@@ -530,6 +535,7 @@ function runFromStartedEvent(
     modelId: previous?.modelId ?? null,
     ...(previous?.costUsd !== undefined ? { costUsd: previous.costUsd } : {}),
     error: null,
+    resumable: undefined,
     startedAt: previous?.startedAt ?? event.createdAt,
     completedAt: null,
     createdAt: previous?.createdAt ?? event.createdAt,

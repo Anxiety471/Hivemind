@@ -10,6 +10,7 @@ import { DEFAULT_NEW_BOT_AVATAR_SET, hasLab } from "@rakazo/contracts";
 import {
   activeThreadRuns,
   answerableAskMessageIds,
+  canRetryRunError,
   channelMessageSender,
   chatSnoozed,
   chatUserBubbleColors,
@@ -994,6 +995,24 @@ function SpaceShell() {
         navigate={navigate}
       />
     ) : null;
+  const snapshotRun = activeSnapshot?.run;
+  const inlineRetryableRun =
+    !recordingSkill &&
+    snapshotRun?.status === "failed" &&
+    snapshotRun.error &&
+    canRetryRunError(snapshotRun.error) &&
+    (!snapshotRun.userId || !userId || snapshotRun.userId === userId)
+      ? {
+          id: snapshotRun.id,
+          botId: snapshotRun.botId,
+          error: snapshotRun.error,
+          resumable: snapshotRun.resumable,
+        }
+      : null;
+  const inlineRetryableRunId = inlineRetryableRun?.id ?? null;
+  useEffect(() => {
+    if (inlineRetryableRunId) composer.handleRunErrorPresented(inlineRetryableRunId);
+  }, [composer.handleRunErrorPresented, inlineRetryableRunId]);
   const chatMenu: ChatMenuState = {
     menu: botMenu,
     setMenu: setBotMenu,
@@ -1200,6 +1219,9 @@ function SpaceShell() {
               workingRoutine={workingRoutineName(workingRuns)}
               activeRun={workingRuns[0] ?? activeSnapshot?.run ?? null}
               threadRuns={currentRuns}
+              failedRun={inlineRetryableRun}
+              onRetryRun={composer.retryRun}
+              retryingRun={composer.retryingRun}
               onStop={stopRun}
               onRewind={composer.rewindRun}
               userBubble={userBubble}
@@ -1284,7 +1306,7 @@ function SpaceShell() {
               }}
               onOpenConnections={() => openSettings("models")}
               onOpenBilling={() => openSettings("billing")}
-              runError={composer.displayedRunError}
+              runError={inlineRetryableRun ? null : composer.displayedRunError}
               runErrorId={composer.displayedRunErrorId}
               onRunErrorPresented={composer.handleRunErrorPresented}
               onDismissError={composer.dismissComposerError}

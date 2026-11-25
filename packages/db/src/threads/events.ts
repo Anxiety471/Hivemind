@@ -199,6 +199,8 @@ export type FinalizeRunInput = FinalizeRunBase &
         error: string;
         /** Reply text the user saw streaming before the failure, kept as a bot message. */
         partialReply?: MessageBlock[];
+        /** Keep the saved turn checkpoint so Continue can resume this run in place. */
+        preserveTurnCheckpoint?: boolean;
       }
   );
 
@@ -365,6 +367,17 @@ export async function clearThread(
       await tx.artifact.deleteMany({ where: { id: { in: screenshots.map((row) => row.id) } } });
     await tx.message.deleteMany({ where: cleared });
     await tx.event.deleteMany({ where: cleared });
+    if (typeof tx.externalEffect?.deleteMany === "function") {
+      await tx.externalEffect.deleteMany({
+        where: {
+          kind: RUN_TURN_CHECKPOINT_KIND,
+          status: RUN_TURN_CHECKPOINT_KIND,
+          run: {
+            OR: [{ threadId: input.threadId }, { threadId: { in: helperThreadIds } }],
+          },
+        },
+      });
+    }
     await tx.thread.updateMany({
       where: { id: { in: helperThreadIds }, historyCompactionSummary: { not: null } },
       data: { historyCompactionSummary: null, historyCompactionGeneration: { increment: 1 } },
@@ -568,6 +581,15 @@ export async function sendUserMessage(
         });
         if (input.linkMessageToRun) {
           await tx.message.update({ where: { id: message.id }, data: { runId: run.id } });
+        }
+        if (typeof tx.externalEffect?.deleteMany === "function") {
+          await tx.externalEffect.deleteMany({
+            where: {
+              kind: RUN_TURN_CHECKPOINT_KIND,
+              status: RUN_TURN_CHECKPOINT_KIND,
+              run: { threadId: input.threadId, botId: input.botId, status: "failed" },
+            },
+          });
         }
       } else if (createRun && busy) {
         const held = !steersRun(busy);
@@ -853,13 +875,15 @@ async function finalizeRunOnce(
       },
     });
     if (terminal.count !== 1) return null;
-    await tx.externalEffect.deleteMany({
-      where: {
-        runId: input.runId,
-        kind: RUN_TURN_CHECKPOINT_KIND,
-        status: RUN_TURN_CHECKPOINT_KIND,
-      },
-    });
+    if (!(input.outcome === "failed" && input.preserveTurnCheckpoint)) {
+      await tx.externalEffect.deleteMany({
+        where: {
+          runId: input.runId,
+          kind: RUN_TURN_CHECKPOINT_KIND,
+          status: RUN_TURN_CHECKPOINT_KIND,
+        },
+      });
+    }
 
     const attempt = await tx.attempt.updateMany({
       where: {
@@ -954,7 +978,7 @@ async function finalizeRunOnce(
         runId: input.runId,
         ...(input.outcome === "completed"
           ? { markUnread: input.markUnread }
-          : { clientNonce: partialReplyClientNonce(input.runId) }),
+          : { clientNonce: partialReplyClientNonce(input.runId, input.leaseFence) }),
       });
       const response = await appendEventInTransaction(tx, {
         spaceId: input.spaceId,
@@ -972,7 +996,13 @@ async function finalizeRunOnce(
       botId: input.botId,
       type: input.outcome === "completed" ? "run.completed" : "run.failed",
       runId: input.runId,
-      payload: input.outcome === "completed" ? {} : { error: input.error },
+      payload:
+        input.outcome === "completed"
+          ? {}
+          : {
+              error: input.error,
+              ...(input.preserveTurnCheckpoint ? { resumable: true } : {}),
+            },
     });
     await tx.event.deleteMany({
       where: { runId: input.runId, ...transientRunEventsWhere() },

@@ -21,7 +21,11 @@ import {
 } from "@rakazo/core";
 import type { RefObject } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { readSeenRunErrorIds, rememberSeenRunErrorId } from "../../../lib/chat/run-error-storage";
+import {
+  forgetSeenRunErrorId,
+  readSeenRunErrorIds,
+  rememberSeenRunErrorId,
+} from "../../../lib/chat/run-error-storage";
 import { setComposerUnsavedWork } from "../../../lib/composer/composer-draft";
 import { scheduleFocusPrompt } from "../../../lib/composer/focus-prompt";
 import {
@@ -120,6 +124,8 @@ export function useComposerActions({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dismissedRunErrorIds, setDismissedRunErrorIds] =
     useState<ReadonlySet<string>>(readSeenRunErrorIds);
+  const [retryingRunId, setRetryingRunId] = useState<string | null>(null);
+  const retryingRunIdRef = useRef<string | null>(null);
   const focusPromptAbortRef = useRef<AbortController | null>(null);
   const focusPromptBotIdRef = useRef<string | null>(null);
 
@@ -153,6 +159,18 @@ export function useComposerActions({
   const handleRunErrorPresented = useCallback((runId: string) => {
     rememberSeenRunErrorId(runId);
   }, []);
+  const activeRunId = activeSnapshot?.run?.id;
+  const activeRunStatus = activeSnapshot?.run?.status;
+  useEffect(() => {
+    if (!activeRunId || !activeRunStatus || activeRunStatus === "failed") return;
+    forgetSeenRunErrorId(activeRunId);
+    setDismissedRunErrorIds((current) => {
+      if (!current.has(activeRunId)) return current;
+      const next = new Set(current);
+      next.delete(activeRunId);
+      return next;
+    });
+  }, [activeRunId, activeRunStatus]);
 
   function cancelFocusPrompt() {
     focusPromptAbortRef.current?.abort();
@@ -655,6 +673,60 @@ export function useComposerActions({
     [t],
   );
 
+  const retryRun = useCallback(
+    async (runId: string) => {
+      if (retryingRunIdRef.current) return;
+      const botTarget = activeBotId.current;
+      const groupTarget = activeGroupId.current;
+      if (!botTarget && !groupTarget) return;
+      retryingRunIdRef.current = runId;
+      setRetryingRunId(runId);
+      setSendError(null);
+      try {
+        await rpc.threads.retry({
+          ...(groupTarget ? { groupId: groupTarget } : { botId: botTarget! }),
+          runId,
+        });
+      } catch (error) {
+        if (activeGroupId.current === groupTarget && activeBotId.current === botTarget) {
+          setSendError(errorText(error, t`Failed to retry`));
+        }
+        return;
+      } finally {
+        retryingRunIdRef.current = null;
+        setRetryingRunId(null);
+      }
+      forgetSeenRunErrorId(runId);
+      setDismissedRunErrorIds((current) => {
+        if (!current.has(runId)) return current;
+        const next = new Set(current);
+        next.delete(runId);
+        return next;
+      });
+      updateSnapshot((prev) => {
+        if (!prev || prev.run?.id !== runId) return prev;
+        const nextRun = {
+          ...prev.run,
+          status: "queued" as const,
+          error: null,
+          resumable: undefined,
+          completedAt: null,
+        };
+        const activeRuns = [
+          ...(prev.activeRuns ?? []).filter((candidate) => candidate.id !== runId),
+          nextRun,
+        ];
+        return { ...prev, run: nextRun, activeRuns };
+      });
+      if (groupTarget) {
+        await refreshGroupThreadRef.current(groupTarget).catch(() => undefined);
+      } else if (botTarget) {
+        await refreshThreadRef.current(botTarget).catch(() => undefined);
+      }
+    },
+    [t],
+  );
+
   function dismissComposerError() {
     // The strip shows one message at a time, so only dismiss the run failure when it is the
     // one on screen; otherwise a live run would be silenced before it has even failed.
@@ -684,6 +756,8 @@ export function useComposerActions({
     sendMessage,
     stopRun,
     rewindRun,
+    retryRun,
+    retryingRun: retryingRunId !== null,
     answerMessage,
     reactToMessage,
     sendError,

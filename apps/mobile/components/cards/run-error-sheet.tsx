@@ -55,7 +55,7 @@ export function RunErrorSheet({
   summary?: string;
   onClose: () => void;
   /** The one action that fixes the failure. */
-  action?: { label: string; onPress: () => void } | null;
+  action?: { label: string; onPress: () => void; disabled?: boolean } | null;
 }) {
   const { t } = useLingui();
   const locale = useUiLocale();
@@ -127,7 +127,13 @@ export function RunErrorSheet({
               {whatHappened}
             </Text>
           ) : null}
-          {action ? <RunErrorAction label={action.label} onPress={action.onPress} /> : null}
+          {action ? (
+            <RunErrorAction
+              label={action.label}
+              onPress={action.onPress}
+              disabled={action.disabled}
+            />
+          ) : null}
           <RunErrorTextAction
             label={t`Technical details`}
             expanded={technical}

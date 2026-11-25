@@ -240,6 +240,45 @@ export function isContentFilterRejection(details: string): boolean {
   return CONTENT_FILTER_CODE.test(details);
 }
 
+const NON_RETRYABLE_RUN_ERRORS = new Set([
+  COMPUTER_DAMAGED_ERROR,
+  COMPUTER_RECOVERY_REQUIRED_ERROR,
+  MODEL_ACCESS_REQUIRED_RUN_ERROR,
+  MODEL_CREDIT_CAP_REACHED_ERROR,
+]);
+
+const NON_RETRYABLE_RUN_ERROR_KINDS = new Set<RunErrorKind>([
+  "auth",
+  "key",
+  "credit",
+  "spending",
+  "access",
+  "model",
+  "context",
+]);
+
+/**
+ * Whether retrying or continuing the failed run can succeed without changing settings, billing,
+ * or prompt size (transient provider/network faults, rate limits, internal errors, or malformed/cut
+ * model output).
+ */
+export function canRetryRunError(details: string | null | undefined): boolean {
+  const trimmed = details?.trim();
+  if (!trimmed) return false;
+  if (NON_RETRYABLE_RUN_ERRORS.has(trimmed)) return false;
+  const normalized = normalizeRunError(trimmed);
+  if (isContentFilterRejection(trimmed) || isContentFilterRejection(normalized.details)) {
+    return false;
+  }
+  if (normalized.recovery === "connection" || normalized.recovery === "plan") {
+    return false;
+  }
+  if (normalized.kind && NON_RETRYABLE_RUN_ERROR_KINDS.has(normalized.kind)) {
+    return false;
+  }
+  return normalized.recovery === undefined || normalized.kind === "output";
+}
+
 /** The provider says the selected model is gone or cannot serve this kind of request. */
 const MODEL_UNAVAILABLE =
   /^(?:unsupported|unknown|unrecognized)[ _-]model\b(?![ :]+(?:parameters?|fields?|options?|settings?)\b)|\bmodel\b(?:(?!\.\s)[\s\S]){0,80}?\b(?:not found|does not exist|unavailable|not available|not supported|isn['\u2019]t supported|(?:is|has been) deprecated|does(?: not|n['\u2019]t) support|requires the use of|requires [\w -]{1,30}\bregions?|is hosted outside\b|is not a chat model|only supports (?:the )?(?:\/|[\w ./-]{1,40}\b(?:endpoint|API)\b))|\bnot supported (?:with|by|for) (?:this|the) model\b|^feature 'tool calls' is not (?:currently )?supported\b|^Invalid inference request\. Check the model's supported parameters\b|\bDEGRADED function cannot be invoked\b/i;
