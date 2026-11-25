@@ -128,6 +128,12 @@ func parseChatAlert(payload, spaceID string) (chatAlert, bool) {
 	return alert, true
 }
 
+// alertFrame is the router's `{type, alert}` in its declared order.
+type alertFrame struct {
+	Type  string    `json:"type"`
+	Alert chatAlert `json:"alert"`
+}
+
 // followChatAlerts is createChatAlerts(realtime).follow (packages/db/src/threads/chat-alerts.ts:23-64).
 // The queue fills from the fanout on its own goroutine so a burst is kept (newest twenty) while a
 // frame is being written, exactly like the TypeScript queue.
@@ -170,7 +176,7 @@ func followChatAlerts(ctx context.Context, r *Runner, realtime fanout, actor db.
 			alert := queue[0]
 			queue = queue[1:]
 			mu.Unlock()
-			frame, ok := Encode(map[string]any{"type": "alert", "alert": alert})
+			frame, ok := Encode(alertFrame{Type: "alert", Alert: alert})
 			if !ok || !r.Send(frame) {
 				return
 			}

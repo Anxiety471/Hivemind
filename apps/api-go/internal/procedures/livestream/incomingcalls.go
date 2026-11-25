@@ -61,9 +61,9 @@ func SubscribeCalls(ctx context.Context, database *db.DB, deployment shared.Depl
 			if err != nil {
 				return false
 			}
-			frame, ok := Encode(map[string]any{
-				"type":    "incoming.calls",
-				"payload": map[string]any{"calls": calls},
+			frame, ok := Encode(callsFrame{
+				Type:    "incoming.calls",
+				Payload: callsPayload{Calls: calls},
 			})
 			return ok && r.Send(frame)
 		}
@@ -96,6 +96,17 @@ func SubscribeCalls(ctx context.Context, database *db.DB, deployment shared.Depl
 	})
 	frames, stop := r.Frames()
 	return &local.Follow{Signals: frames, Stop: stop, Heartbeat: HeartbeatFrame}, nil
+}
+
+// callsFrame is the router's `{type, payload}` frame in its declared order: JSON.stringify writes
+// the schema's keys as written, so a map (sorted) would put payload first and differ byte for byte.
+type callsFrame struct {
+	Type    string       `json:"type"`
+	Payload callsPayload `json:"payload"`
+}
+
+type callsPayload struct {
+	Calls []incomingBotCall `json:"calls"`
 }
 
 // loadUserIncomingCalls is loadUserIncomingCalls (packages/adapters/src/calls/call-request.ts:296-336):

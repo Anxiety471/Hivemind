@@ -343,7 +343,7 @@ async function addMessage(
   threadId: string,
   seq: number,
   blocks: unknown[],
-  createdAt = new Date(Date.UTC(2026, 0, 1) + seq * 1000),
+  options: { createdAt?: Date; clientNonce?: string } = {},
 ) {
   await system.message.create({
     data: {
@@ -352,9 +352,37 @@ async function addMessage(
       seq,
       role: "bot",
       blocks: blocks as never,
-      createdAt,
+      clientNonce: options.clientNonce ?? null,
+      createdAt: options.createdAt ?? new Date(Date.UTC(2026, 0, 1) + seq * 1000),
     },
   });
+}
+
+/**
+ * The ringing request loadUserIncomingCalls looks for: a bot's message whose clientNonce is
+ * `<call:><something>:request` (CALL_CLIENT_NONCE_PREFIX, call-nonce.ts:9) and whose first block
+ * is a live call_request (call-request.ts:296-336).
+ */
+function callRequest(seeded: Seeded, callID: string, expiresAt: string) {
+  return {
+    kind: "call_request",
+    status: "ringing",
+    callId: callID,
+    reason: "checking in",
+    opening: "Hello?",
+    expiresAt,
+  };
+}
+
+function callNonce(callID: string) {
+  return `call:${callID}:request`;
+}
+
+/** The raw `data:` text of every message frame, for a byte-exact comparison. */
+function rawFrames(stream: Stream) {
+  return stream.frames
+    .filter((frame) => frame.event === "message")
+    .map((frame) => frame.raw ?? "");
 }
 
 /** A run of the given trigger, with the task row runs.taskId requires. */
@@ -1036,55 +1064,93 @@ case_("notifications-subscribe-roster", async () => {
 
 case_("subscribe-calls-rings", async () => {
   const seeded = await seed("calls-ring");
-  const expiresAt = new Date(Date.now() + 45_000).toISOString();
-  await addMessage(seeded, seeded.callThreadId, 1, [
-    {
-      kind: "call_request",
-      status: "ringing",
-      callId: `${seeded.userId}-call`,
-      reason: "checking in",
-      opening: "Hello?",
-      expiresAt,
-    },
-  ]);
+  const callID = `${seeded.userId}-call`;
+  await addMessage(seeded, seeded.callThreadId, 1, [callRequest(seeded, callID, new Date(Date.now() + 45_000).toISOString())], {
+    clientNonce: callNonce(callID),
+  });
   const ts = await openTS("notifications.subscribeCalls", {}, seeded);
   const goStream = await openGo("notifications.subscribeCalls", {}, seeded);
-  const ringing = (frames: Frame[]) => frames.length >= 1;
-  await waitFor(ts, ringing, 5000, "ts call");
-  await waitFor(goStream, ringing, 5000, "go call");
-  expectSame(ts, goStream, "ringing call");
+  const ringing = (stream: Stream) =>
+    rawFrames(stream).some((raw) => raw.includes(`"callId":"${callID}"`));
+  await waitFor(ts, (frames) => frames.length >= 1, 5000, "ts call");
+  await waitFor(goStream, (frames) => frames.length >= 1, 5000, "go call");
+  await sleep(200);
+  assert.ok(ringing(ts), `ts did not ring: ${JSON.stringify(rawFrames(ts))}`);
+  assert.ok(ringing(goStream), `go did not ring: ${JSON.stringify(rawFrames(goStream))}`);
+  // Exact bytes: the owner's ringing call frame must be identical on both sides.
+  assert.deepEqual(rawFrames(goStream), rawFrames(ts), "the ringing frames differ");
   await closeWithin(ts);
   await closeWithin(goStream);
 });
 
 case_("subscribe-calls-settles", async () => {
   const seeded = await seed("calls-settled");
-  const expiresAt = new Date(Date.now() - 1000).toISOString();
-  await addMessage(seeded, seeded.callThreadId, 1, [
-    {
-      kind: "call_request",
-      status: "ringing",
-      callId: `${seeded.userId}-old`,
-      reason: "expired",
-      opening: "Hello?",
-      expiresAt,
-    },
-  ]);
+  const callID = `${seeded.userId}-settle`;
+  await addMessage(seeded, seeded.callThreadId, 1, [callRequest(seeded, callID, new Date(Date.now() + 45_000).toISOString())], {
+    clientNonce: callNonce(callID),
+  });
   const ts = await openTS("notifications.subscribeCalls", {}, seeded);
   const goStream = await openGo("notifications.subscribeCalls", {}, seeded);
+  const rang = (stream: Stream) => rawFrames(stream).some((raw) => raw.includes(callID));
+  await waitFor(ts, () => rang(ts), 5000, "ts ring");
+  await waitFor(goStream, () => rang(goStream), 5000, "go ring");
+  const before = { ts: rawFrames(ts).length, go: rawFrames(goStream).length };
+  // Answering (or declining, or expiry) seals the request: the block stops ringing, and the next
+  // read of the owner's calls is empty.
+  await system.message.update({
+    where: { id: `${seeded.callThreadId}-m1` },
+    data: {
+      blocks: [
+        { ...callRequest(seeded, callID, new Date(Date.now() + 45_000).toISOString()), status: "ended" },
+      ] as never,
+    },
+  });
+  await publish(`incoming-calls:${seeded.userId}`, "changed");
+  const settled = (stream: Stream, seen: number) =>
+    rawFrames(stream).length > seen && rawFrames(stream).slice(seen).every((raw) => raw.includes('"calls":[]'));
+  await waitFor(ts, () => settled(ts, before.ts), 8000, "ts settle");
+  await waitFor(goStream, () => settled(goStream, before.go), 8000, "go settle");
+  assert.deepEqual(rawFrames(goStream), rawFrames(ts), "the ringing/settled frames differ");
+  await closeWithin(ts);
+  await closeWithin(goStream);
+});
+
+case_("subscribe-calls-ignore-other-owners", async () => {
+  const seeded = await seed("calls-foreign");
+  const callID = `${seeded.userId}-mine`;
+  await addMessage(seeded, seeded.callThreadId, 1, [callRequest(seeded, callID, new Date(Date.now() + 45_000).toISOString())], {
+    clientNonce: callNonce(callID),
+  });
+  // A second owner, with their own bot and ringing call. The query is scoped to the thread's owner
+  // (`thread.userId`) and to bots that owner owns, so this call must not reach the first user.
+  const otherUser = `${seeded.userId}-other`;
+  const otherBot = `${otherUser}-bot`;
+  const otherThread = `${otherUser}-thread`;
+  const otherCall = `${otherUser}-call`;
+  await system.user.create({
+    data: { id: otherUser, name: "Other", email: `${otherUser}@example.test`, emailVerified: true },
+  });
+  await system.bot.create({
+    data: { id: otherBot, spaceId: seeded.spaceId, userId: otherUser, name: "Other bot", color: "red" },
+  });
+  await system.thread.create({
+    data: { id: otherThread, spaceId: seeded.spaceId, userId: otherUser, botId: otherBot },
+  });
+  await addMessage(seeded, otherThread, 1, [callRequest(seeded, otherCall, new Date(Date.now() + 45_000).toISOString())], {
+    clientNonce: callNonce(otherCall),
+  });
+  const ts = await openTS("notifications.subscribeCalls", {}, seeded);
+  const goStream = await openGo("notifications.subscribeCalls", {}, seeded);
+  await waitFor(ts, (frames) => frames.length >= 1, 5000, "ts calls");
+  await waitFor(goStream, (frames) => frames.length >= 1, 5000, "go calls");
   await sleep(300);
-  await publish(`incoming-calls:${seeded.userId}`, { at: new Date().toISOString() });
-  await sleep(500);
-  expectSame(ts, goStream, "settled calls");
-  const rings = (stream: Stream) =>
-    normalized(stream).flatMap((frame) => {
-      const payload = payloadOf(frame)?.payload;
-      if (typeof payload !== "object" || payload === null) return [];
-      const calls = (payload as Record<string, unknown>).calls;
-      return Array.isArray(calls) ? calls : [];
-    });
-  assert.deepEqual(rings(goStream), [], "an expired call rang");
-  assert.deepEqual(rings(ts), [], "ts: an expired call rang");
+  for (const [side, stream] of [["ts", ts], ["go", goStream]] as Array<[string, Stream]>) {
+    const raw = rawFrames(stream);
+    assert.ok(raw.some((frame) => frame.includes(callID)), `${side}: the owner's own call is missing`);
+    assert.ok(!raw.some((frame) => frame.includes(otherCall)), `${side}: another owner's call appeared`);
+    assert.ok(!raw.some((frame) => frame.includes(otherBot)), `${side}: another owner's bot appeared`);
+  }
+  assert.deepEqual(rawFrames(goStream), rawFrames(ts), "the call frames differ");
   await closeWithin(ts);
   await closeWithin(goStream);
 });
