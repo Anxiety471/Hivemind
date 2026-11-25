@@ -171,6 +171,7 @@ async function runTurn({
       },
       attempt: {
         create: vi.fn(async () => ({ id: "attempt-1" })),
+        findMany: vi.fn(async () => []),
         update: vi.fn(),
         updateMany: vi.fn(async () => ({ count: 1 })),
       },
