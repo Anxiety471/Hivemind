@@ -417,6 +417,8 @@ describeWithDatabase("API authorization and resource isolation", () => {
       ["memory/disconnectProvider"],
       ["memory/roamer"],
       ["memory/setRoamer", { enabled: false }],
+      ["memory/systemPrompt"],
+      ["memory/setSystemPrompt"],
       ["routines/list", { botId: "missing-bot" }],
       ["routines/listForMentions", { botIds: ["missing-bot"] }],
       ["routines/create", routineInput("missing-bot")],
