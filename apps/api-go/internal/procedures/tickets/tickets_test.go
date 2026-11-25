@@ -332,6 +332,27 @@ func TestMergeTicketPullRequestsKeepsRecordedState(t *testing.T) {
 	}
 }
 
+func TestPullRequestMergeFinishesTicketNeedsANewMergeAndNothingOpen(t *testing.T) {
+	merged := TicketPullRequest{URL: "a", State: "merged"}
+	cases := []struct {
+		name          string
+		before, after []TicketPullRequest
+		want          bool
+	}{
+		{"no links", nil, nil, false},
+		{"only closed", nil, []TicketPullRequest{{URL: "a", State: "closed"}}, false},
+		{"another still open", nil, []TicketPullRequest{merged, {URL: "b", State: "open"}}, false},
+		{"new merge, rest closed", nil, []TicketPullRequest{merged, {URL: "b", State: "closed"}}, true},
+		{"open becomes merged", []TicketPullRequest{{URL: "a", State: "open"}}, []TicketPullRequest{merged}, true},
+		{"merge already recorded", []TicketPullRequest{merged, {URL: "b", State: "open"}}, []TicketPullRequest{merged, {URL: "b", State: "closed"}}, false},
+	}
+	for _, tc := range cases {
+		if got := pullRequestMergeFinishesTicket(tc.before, tc.after); got != tc.want {
+			t.Errorf("%s: got %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestReadStoredPullRequestsFallsBackForTheWholeList(t *testing.T) {
 	list, ok := readStoredPullRequests([]byte(`[{"url":"https://github.com/acme/app/pull/1","state":"merged","label":"acme/app#1"},{"state":"open","url":"https://github.com/acme/app/pull/2"}]`))
 	want := []TicketPullRequest{

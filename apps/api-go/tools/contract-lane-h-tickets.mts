@@ -126,6 +126,17 @@ export function laneHTicketCases(system: System): Case[] {
       { ignoreSignals: true },
     ),
     c(
+      "tickets.create",
+      "tkd-create",
+      "with-merged-pull-request",
+      {
+        title: "Record the merged fix",
+        pullRequests: [{ url: "https://github.com/acme/app/pull/242", state: "merged" }],
+      },
+      seedLabOnly,
+      { ignoreSignals: true },
+    ),
+    c(
       "tickets.update",
       "tkd-update",
       "with-decision",
@@ -159,6 +170,27 @@ export function laneHTicketCases(system: System): Case[] {
           { url: "https://github.com/acme/app/pull/241", state: "merged" },
           { url: "https://example.com/o/r/pull/2", state: "open" },
         ],
+      }),
+    ),
+    // Recording a merge that leaves nothing open finishes a blocked ticket and drops its question,
+    // including one sent in the same write.
+    c(
+      "tickets.update",
+      "tkd-update",
+      "pull-requests-merge-finishes",
+      {
+        id: "__s-tkt__",
+        pullRequests: [{ url: "https://github.com/acme/app/pull/241", state: "merged" }],
+        decision: {
+          question: "Close it?",
+          options: ["Close", "Keep open", "Leave blocked"],
+          recommended: "Close",
+        },
+      },
+      seedTicket({
+        status: "blocked",
+        decision: storedDecision,
+        pullRequests: [{ url: "https://github.com/acme/app/pull/241", state: "open" }],
       }),
     ),
     c(

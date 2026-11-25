@@ -420,6 +420,27 @@ func mergeTicketPullRequests(current []TicketPullRequest, input []pullRequestInp
 	return out
 }
 
+// pullRequestMergeFinishesTicket is pullRequestMergeFinishesTicket: the write records a merge the
+// ticket did not have, and no linked pull request is left open.
+func pullRequestMergeFinishesTicket(before, after []TicketPullRequest) bool {
+	merged := make(map[string]bool, len(before))
+	for _, item := range before {
+		if item.State == "merged" {
+			merged[item.URL] = true
+		}
+	}
+	newMerge := false
+	for _, item := range after {
+		if item.State == "open" {
+			return false
+		}
+		if item.State == "merged" && !merged[item.URL] {
+			newMerge = true
+		}
+	}
+	return newMerge
+}
+
 // coerceStatus and coercePriority are toTicketDto's fallbacks for a legacy stored value.
 func coerceStatus(value string) string {
 	for _, known := range ticketStatuses {
@@ -1659,24 +1680,34 @@ func Create(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 			stored := shared.StoredText(*input.Description)
 			desc = &stored
 		}
+		// Create starts from no recorded links; an input list is the whole list (mergeTicketPullRequests).
+		pullRequests := mergeTicketPullRequests(nil, input.PullRequests)
+		// Linking work that already merged records finished work, which waits on no decision.
+		finished := pullRequestMergeFinishesTicket(nil, pullRequests)
 		var decisionJSON any
-		if input.Decision != nil {
+		if input.Decision != nil && !finished {
 			decisionJSON = db.JSON(*input.Decision)
 		}
-		// Create starts from no recorded links; an input list is the whole list (mergeTicketPullRequests).
-		pullRequestsJSON := db.JSON(mergeTicketPullRequests(nil, input.PullRequests))
+		pullRequestsJSON := db.JSON(pullRequests)
 		at := now()
+		status := "todo"
+		var completedAt any
+		if finished {
+			status = "done"
+			completedAt = at
+		}
 		value, err := scanTicket(tx.QueryRow(ctx, `
 			INSERT INTO tickets (
 				id, "boardId", "spaceId", number, title, description, status, priority,
 				"assigneeBotId", "ownerUserId", "ownerBotId", "workerBotIds",
-				"createdByBotId", "createdByUserId", "createdAt", "updatedAt", decision, "pullRequests"
+				"createdByBotId", "createdByUserId", "createdAt", "updatedAt", decision, "pullRequests",
+				"completedAt"
 			)
-			VALUES ($1, $2, $3, $4, $5, $6, 'todo', $7, $8, $9, $10, $11, NULL, $12, $13, $13, $14, $15)
+			VALUES ($1, $2, $3, $4, $5, $6, $16, $7, $8, $9, $10, $11, NULL, $12, $13, $13, $14, $15, $17)
 			RETURNING `+ticketColumns,
 			db.Data(effects.NewID(), board.ID, actor.SpaceID, number, shared.StoredText(input.Title), nullableText(desc),
 				input.Priority, nullableText(assigneeBotID), nullableText(ownerUserID), nullableText(ownerBotID),
-				workerBotIDs, actor.UserID, at, decisionJSON, pullRequestsJSON)...,
+				workerBotIDs, actor.UserID, at, decisionJSON, pullRequestsJSON, status, completedAt)...,
 		))
 		if err != nil {
 			return err
@@ -1964,11 +1995,32 @@ func Update(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 			}
 		}
 
+		// A provided list replaces the recorded one; a stored shape this release cannot read stops
+		// the write (readStoredTicketPullRequests' "reject"), and an absent list leaves the column.
+		var pullRequestsValue any
+		finished := false
+		if input.HasPullRequests {
+			stored, ok := readStoredPullRequests(current.PullRequests)
+			if !ok {
+				return errStoredPullRequests
+			}
+			next := mergeTicketPullRequests(stored, input.PullRequests)
+			pullRequestsValue = db.JSON(next)
+			// Recording a merge that leaves nothing open finishes the ticket, as the webhook does,
+			// unless the same write sets a status itself.
+			finished = !input.HasStatus && !completedStatus(coerceStatus(current.Status)) &&
+				pullRequestMergeFinishesTicket(stored, next)
+		}
+
 		status := current.Status
 		completedAt := current.CompletedAt
-		if input.HasStatus {
-			statusChanged = input.Status != current.Status
-			status = input.Status
+		if input.HasStatus || finished {
+			if input.HasStatus {
+				statusChanged = input.Status != current.Status
+				status = input.Status
+			} else {
+				status = "done"
+			}
 			if completedStatus(status) {
 				if completedAt == nil {
 					at := now()
@@ -1980,7 +2032,7 @@ func Update(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 		}
 
 		nextDecision := current.Decision
-		if input.HasDecision {
+		if input.HasDecision && !finished {
 			if input.Decision != nil {
 				encoded, err := wtf8.Marshal(input.Decision)
 				if err != nil {
@@ -1990,21 +2042,11 @@ func Update(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 			} else {
 				nextDecision = nil
 			}
-		} else if input.HasStatus && status != "blocked" && status != "review" {
+		} else if (input.HasStatus || finished) && status != "blocked" && status != "review" {
+			// A finished ticket waits on nobody, so a question sent with the merge is dropped too.
 			if existing := readStoredDecision(current.Decision); existing != nil && existing.Answer == "" {
 				nextDecision = nil
 			}
-		}
-
-		// A provided list replaces the recorded one; a stored shape this release cannot read stops
-		// the write (readStoredTicketPullRequests' "reject"), and an absent list leaves the column.
-		var pullRequestsValue any
-		if input.HasPullRequests {
-			stored, ok := readStoredPullRequests(current.PullRequests)
-			if !ok {
-				return errStoredPullRequests
-			}
-			pullRequestsValue = db.JSON(mergeTicketPullRequests(stored, input.PullRequests))
 		}
 
 		updatedAt := now()

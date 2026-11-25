@@ -3,7 +3,7 @@ import {
   hasPendingTicketDecision,
   isTicketCompletedStatus,
   normalizePullRequestUrl,
-  pullRequestsFinishTicket,
+  pullRequestMergeFinishesTicket,
 } from "@rakazo/contracts";
 import type { PrismaClient } from "@rakazo/db";
 import {
@@ -53,9 +53,8 @@ export async function recordTicketPullRequestState(
       if (!current.some((item) => item.url === url && item.state !== input.state)) continue;
       const next = current.map((item) => (item.url === url ? { url, state: input.state } : item));
       const finishes =
-        input.state === "merged" &&
         !isTicketCompletedStatus(coerceTicketStatus(row.status)) &&
-        pullRequestsFinishTicket(next);
+        pullRequestMergeFinishesTicket(current, next);
       const pendingDecision = hasPendingTicketDecision({ decision: readTicketDecision(row) });
       updated.push(
         await tx.ticket.update({

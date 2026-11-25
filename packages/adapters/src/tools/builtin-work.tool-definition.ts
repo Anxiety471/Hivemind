@@ -53,7 +53,7 @@ const ticketPullRequestsSpec = {
   type: "array",
   maxItems: TICKET_MAX_PULL_REQUESTS,
   description:
-    "Pull request links the ticket tracks; on update this replaces the list. Omit state to keep the one recorded. When a linked pull request merges, the ticket moves to done by itself if its repository sends pull request events to a bot's Git event webhook.",
+    "Pull request links the ticket tracks; on update this replaces the list. Omit state to keep the one recorded. Recording a merge (state merged) that leaves no linked pull request open moves the ticket to done and drops its pending decision, unless you also set status. A bot's Git event webhook records merges by itself.",
   items: {
     type: "object",
     properties: {
