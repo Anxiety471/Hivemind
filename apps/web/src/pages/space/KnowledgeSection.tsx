@@ -55,7 +55,7 @@ export function SpaceMemorySection() {
       data-testid="space-memory-documents"
     >
       <SectionHeading variant="heading">
-        <Trans>Shared memory</Trans>
+        <Trans>Shared Memory</Trans>
       </SectionHeading>
       <p className="mt-1 text-body-sm text-muted-foreground">
         <Trans>Every bot in this space reads these notes and keeps them up to date.</Trans>

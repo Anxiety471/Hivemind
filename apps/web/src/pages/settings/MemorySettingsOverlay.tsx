@@ -143,7 +143,7 @@ export function MemorySettingsOverlay({
   const unchangedTargets = okTargets.filter((target) => target.changes.length === 0);
   const targetName = (target: Pick<MemoryRoamerTarget, "kind" | "name">) =>
     target.kind === "shared"
-      ? t`Shared memory (${target.name})`
+      ? t`Shared Memory (${target.name})`
       : target.kind === "skills"
         ? t`Skills (${target.name})`
         : target.name;
@@ -247,7 +247,7 @@ export function MemorySettingsOverlay({
         <div className="flex items-start justify-between px-6 pt-6 sm:px-8 sm:pt-7">
           <div>
             <DialogTitle className="text-heading2 font-medium text-foreground">
-              <Trans>Memory</Trans>
+              <Trans>Shared Memory</Trans>
             </DialogTitle>
           </div>
           <DialogClose

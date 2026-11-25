@@ -65,7 +65,7 @@ export function useSettingsNavItems(available: {
       : []),
     {
       id: "memory",
-      label: t`Memory`,
+      label: t`Shared Memory`,
       icon: Brain,
       description: t`What your bots remember between chats.`,
     },

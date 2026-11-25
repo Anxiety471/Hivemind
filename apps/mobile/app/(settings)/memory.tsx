@@ -52,7 +52,7 @@ export default function MemoryScreen() {
   const okTargets = roamer?.lastReport?.filter((target) => target.status === "ok") ?? [];
   const roamerTargetTitle = (target: { kind: "bot" | "shared" | "skills"; name: string }) =>
     target.kind === "shared"
-      ? t`Shared memory (${target.name})`
+      ? t`Shared Memory (${target.name})`
       : target.kind === "skills"
         ? t`Skills (${target.name})`
         : target.name;
@@ -122,7 +122,7 @@ export default function MemoryScreen() {
           <Text style={styles.secondary}>{t`Nothing remembered yet`}</Text>
         ) : null}
         {visibleNotes?.length ? (
-          <SettingsGroup>
+          <SettingsGroup label={t`Shared Memory`}>
             {visibleNotes.map((note) => (
               <SettingsRow
                 key={note.id}

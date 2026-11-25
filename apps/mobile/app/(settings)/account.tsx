@@ -343,7 +343,7 @@ export default function Account() {
           ) : null}
           {[
             {
-              title: t`Memory`,
+              title: t`Shared Memory`,
               href: "/memory",
               icon: { ios: "brain", android: { material: "brain" } },
             } as const,

@@ -167,7 +167,7 @@ export default function SettingsLayout() {
       <Stack.Screen
         name="memory"
         options={{
-          ...glassHeaderOptions(t`Memory`),
+          ...glassHeaderOptions(t`Shared Memory`),
           contentStyle: { backgroundColor: native.groupedPage },
         }}
       />

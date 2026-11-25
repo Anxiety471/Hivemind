@@ -66,7 +66,7 @@ vi.mock("@rakazo/ui-web", () => {
 
 import { downloadArtifactBytes } from "../../lib/pages/artifact-open";
 import { spaceQueries } from "../../lib/query/query";
-import { AgentSkills, KnowledgeSection } from "./KnowledgeSection";
+import { AgentSkills, KnowledgeSection, SpaceMemorySection } from "./KnowledgeSection";
 
 const newClient = () => new QueryClient({ defaultOptions: { queries: { retry: false } } });
 let queryClient = newClient();
@@ -671,6 +671,25 @@ it("hides legacy per-bot USER.md only when Space USER.md exists in budget", asyn
       documents: [],
       omitted: [],
     });
+    await act(async () => root.unmount());
+    vi.unstubAllGlobals();
+  }
+});
+
+it("labels SpaceMemorySection as Shared Memory while keeping bot Memory distinct", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  memoryApi.list.mockResolvedValue([
+    { id: "shared-mem", path: "MEMORY.md", content: "# Shared", revision: 1, updatedAt: "" },
+  ] as never);
+  const host = document.createElement("div");
+  const root = createRoot(host);
+  try {
+    await show(root, <SpaceMemorySection />);
+    expect(host.querySelector("h3")?.textContent).toBe("Shared Memory");
+    await show(root, <KnowledgeSection botId="fixture" />);
+    expect(host.querySelector("h3")?.textContent).toBe("Memory");
+  } finally {
+    memoryApi.list.mockReset().mockResolvedValue([]);
     await act(async () => root.unmount());
     vi.unstubAllGlobals();
   }
