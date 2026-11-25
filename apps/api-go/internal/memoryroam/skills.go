@@ -140,7 +140,7 @@ func skillEvidence(ctx context.Context, database *db.DB, ring *contentcrypto.Key
 		if document := indexOf(documents, memory.MemoryIndexPath); document != nil && hasFacts(document.Content) {
 			evidence = append(evidence, evidenceDocument{Label: bot.Name + " " + memory.MemoryIndexPath, Content: document.Content})
 		}
-		if strings.TrimSpace(bot.Instructions) != "" && (compact || wtf8.Length(bot.Instructions) > InstructionsSoftChars) {
+		if strings.TrimSpace(bot.Instructions) != "" && (compact || wtf8.Length(bot.Instructions) > InstructionsTriggerChars) {
 			evidence = append(evidence, evidenceDocument{
 				Label:   bot.Name + " Instructions (extract repeatable procedures to skills)",
 				Content: bot.Instructions,
@@ -334,37 +334,42 @@ func validateSkillCommands(parsed answer, writable []skillRecord, all []skillRec
 }
 
 // roamSkills runs the skills pass for one Space. bots are the owner's bots in it.
-func roamSkills(ctx context.Context, logger *slog.Logger, database *db.DB, ring *contentcrypto.KeyRing, config Config, bots []Bot, clients []*Client) (bool, []Change, string, error) {
+func roamSkills(ctx context.Context, logger *slog.Logger, database *db.DB, ring *contentcrypto.KeyRing, config Config, bots []Bot, prevHash string, clients []*Client) (bool, bool, []Change, string, string, error) {
 	if len(bots) == 0 {
-		return false, nil, "", nil
+		return false, false, nil, "", "", nil
 	}
 	lead := bots[0]
 	skills, err := loadSkills(ctx, database, lead)
 	if err != nil {
-		return false, nil, "", err
+		return false, false, nil, "", "", err
 	}
 	evidence, err := skillEvidence(ctx, database, ring, bots, config.Compact)
 	if err != nil {
-		return false, nil, "", err
+		return false, false, nil, "", "", err
 	}
 	payload, writable := skillsPrompt(sharedTargetName(lead), skills, evidence, config.MaxInputBytes)
 	if payload == "" {
-		return false, nil, "", nil
+		return false, false, nil, "", "", nil
+	}
+	currentHash := stableInputHash(payload)
+	if !config.Compact && !config.Force && prevHash != "" && prevHash == currentHash {
+		logger.Debug("memory.roamer.unchanged", "spaceId", lead.SpaceID, "skills", true, "inputHash", currentHash)
+		return false, true, nil, "", currentHash, nil
 	}
 	started := time.Now()
-	text, usage, used, err := complete(ctx, clients, systemPrompt(passSkills, config.Compact, false), payload)
+	text, usage, used, err := complete(ctx, logger, clients, systemPrompt(passSkills, config.Compact, false), payload)
 	if err != nil {
-		return true, nil, "", err
+		return true, false, nil, "", "", err
 	}
 	logger.Info("memory.roamer.model", "spaceId", lead.SpaceID, "skills", true, "model", used,
 		"durationMs", time.Since(started).Milliseconds(), "usage", string(usage))
 	parsed, err := parseAnswer(text)
 	if err != nil {
-		return true, nil, used, err
+		return true, false, nil, used, "", err
 	}
 	plan, err := validateSkillCommands(parsed, writable, skills)
 	if err != nil {
-		return true, nil, used, err
+		return true, false, nil, used, "", err
 	}
 	for _, name := range plan.Ignored {
 		logger.Info("memory.roamer.command_skipped", "spaceId", lead.SpaceID, "skills", true, "command", name,
@@ -380,7 +385,7 @@ func roamSkills(ctx context.Context, logger *slog.Logger, database *db.DB, ring 
 		if !config.DryRun {
 			applied, err := applySkillUpdate(ctx, database, lead, update)
 			if err != nil {
-				return true, changes, used, err
+				return true, false, changes, used, "", err
 			}
 			if !applied {
 				logger.Warn("memory.roamer.conflict", "spaceId", lead.SpaceID, "skill", update.Current.Name)
@@ -397,7 +402,7 @@ func roamSkills(ctx context.Context, logger *slog.Logger, database *db.DB, ring 
 		if !config.DryRun {
 			applied, err := applySkillCreate(ctx, database, lead, create)
 			if err != nil {
-				return true, changes, used, err
+				return true, false, changes, used, "", err
 			}
 			if !applied {
 				logger.Warn("memory.roamer.conflict", "spaceId", lead.SpaceID, "skill", create.Name)
@@ -406,7 +411,7 @@ func roamSkills(ctx context.Context, logger *slog.Logger, database *db.DB, ring 
 		}
 		changes = append(changes, change)
 	}
-	return true, changes, used, nil
+	return true, false, changes, used, currentHash, nil
 }
 
 // applySkillCreate adds one user skill that exists only in the bot's Space. The

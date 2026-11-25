@@ -6,6 +6,8 @@ package memoryroam
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,16 +30,21 @@ import (
 
 const (
 	// BotMemoryMaxBytes is BOT_MEMORY_MAX_BYTES (packages/contracts/src/bots/bot-memory.ts).
-	BotMemoryMaxBytes  = 4 * 1024
-	BotMemorySoftBytes = 2560
+	BotMemoryMaxBytes     = 4 * 1024
+	BotMemoryTriggerBytes = 3200
+	BotMemorySoftBytes    = 2560
 	// UserMemoryMaxBytes is USER_MEMORY_MAX_BYTES (packages/contracts/src/bots/bot-memory.ts).
-	UserMemoryMaxBytes  = 2 * 1024
-	UserMemorySoftBytes = 1536
+	UserMemoryMaxBytes     = 2 * 1024
+	UserMemoryTriggerBytes = 1750
+	UserMemorySoftBytes    = 1536
 	// SharedMemoryMaxBytes is SHARED_MEMORY_MAX_BYTES (packages/contracts/src/bots/bot-memory.ts).
-	SharedMemoryMaxBytes  = 6 * 1024
-	SharedMemorySoftBytes = 4 * 1024
-	// InstructionsSoftChars is the compaction target for bot Instructions.
-	InstructionsSoftChars = 3 * 1024
+	SharedMemoryMaxBytes     = 6 * 1024
+	SharedMemoryTriggerBytes = 4800
+	SharedMemorySoftBytes    = 4096
+	// InstructionsTriggerChars and InstructionsSoftChars provide hysteresis so
+	// compacted bots stay idle until they meaningfully bloat again.
+	InstructionsTriggerChars = 5000
+	InstructionsSoftChars    = 4000
 	// MaxOtherBytes is a ceiling for archive documents. The prompt budget for
 	// all of a bot's memory is 32 KB; this is a per-document safety cap, not a budget.
 	MaxOtherBytes = 64 * 1024
@@ -48,7 +55,10 @@ const (
 	MaxInstructionsLength = 20_000
 )
 
-var safePath = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9._/-]{0,198})$`)
+var (
+	safePath       = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9._/-]{0,198})$`)
+	errArchiveFull = errors.New("archive document is full")
+)
 
 // writablePaths are the only documents a roamer pass may replace with memory.write.
 // Space-level USER.md lives in shared memory; bot passes write only bot MEMORY.md.
@@ -118,17 +128,19 @@ type Target struct {
 	Status    string    `json:"status"`
 	Error     string    `json:"error,omitempty"`
 	Model     string    `json:"model,omitempty"`
+	InputHash string    `json:"inputHash,omitempty"`
 	Changes   []Change  `json:"changes"`
 	CheckedAt time.Time `json:"checkedAt"`
 }
 
 // Report is what one pass did.
 type Report struct {
-	Bots       int      `json:"bots"`
-	ModelCalls int      `json:"modelCalls"`
-	Failures   int      `json:"failures"`
-	Skipped    int      `json:"skipped"`
-	Changes    []Change `json:"changes"`
+	Bots             int      `json:"bots"`
+	ModelCalls       int      `json:"modelCalls"`
+	Failures         int      `json:"failures"`
+	Skipped          int      `json:"skipped"`
+	SkippedUnchanged int      `json:"skippedUnchanged,omitempty"`
+	Changes          []Change `json:"changes"`
 }
 
 type update struct {
@@ -245,8 +257,14 @@ func Run(ctx context.Context, logger *slog.Logger, database *db.DB, ring *conten
 		if run == modeRetry || len(config.OnlyBots) > 0 {
 			targets = append(targets, setting.LastReport...)
 		}
+		prevHashes := map[string]string{}
+		for _, prev := range setting.LastReport {
+			if prev.Status == "ok" && prev.InputHash != "" {
+				prevHashes[prev.Kind+"\x00"+prev.ID] = prev.InputHash
+			}
+		}
 
-		visit := func(kind, name string, lead Bot, roam func([]*Client) (bool, []Change, string, error)) error {
+		visit := func(kind, name string, lead Bot, roam func([]*Client) (bool, bool, []Change, string, string, error)) error {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
@@ -258,14 +276,21 @@ func Run(ctx context.Context, logger *slog.Logger, database *db.DB, ring *conten
 				logger.Error("memory.roamer.model_unavailable", "spaceId", lead.SpaceID, "kind", kind, "error", err.Error())
 				return nil
 			}
-			madeCall, changes, model, err := roam(clients)
+			madeCall, skippedUnchanged, changes, model, nextHash, err := roam(clients)
 			if madeCall {
 				report.ModelCalls++
+			}
+			if skippedUnchanged {
+				report.SkippedUnchanged++
 			}
 			if model != "" && ownerModel == "" {
 				ownerModel = model
 			}
-			targets = upsertTarget(targets, targetFor(kind, lead.SpaceID, name, changes, model, err))
+			target := targetFor(kind, lead.SpaceID, name, changes, model, err)
+			if err == nil && len(changes) == 0 && nextHash != "" {
+				target.InputHash = nextHash
+			}
+			targets = upsertTarget(targets, target)
 			if err != nil {
 				failures = append(failures, Failure{Kind: kind, ID: lead.SpaceID, Name: name, Error: failureText(err)})
 				report.Failures++
@@ -273,6 +298,9 @@ func Run(ctx context.Context, logger *slog.Logger, database *db.DB, ring *conten
 			} else {
 				ownerChanges += len(changes)
 				report.Changes = append(report.Changes, changes...)
+			}
+			if !madeCall {
+				return nil
 			}
 			return wait(ctx, config.Delay)
 		}
@@ -296,16 +324,18 @@ func Run(ctx context.Context, logger *slog.Logger, database *db.DB, ring *conten
 			spaceBots := spaceBotsMap[spaceID]
 			lead := spaceBots[0]
 			if config.IncludeShared && sharedSpaces[spaceID] {
-				err := visit("shared", sharedTargetName(lead), lead, func(clients []*Client) (bool, []Change, string, error) {
-					return roamShared(ctx, logger, database, ring, config, spaceBots, clients)
+				prevHash := prevHashes["shared\x00"+spaceID]
+				err := visit("shared", sharedTargetName(lead), lead, func(clients []*Client) (bool, bool, []Change, string, string, error) {
+					return roamShared(ctx, logger, database, ring, config, spaceBots, prevHash, clients)
 				})
 				if err != nil {
 					return report, err
 				}
 			}
 			if config.IncludeSkills && skillSpaces[spaceID] {
-				err := visit("skills", skillsTargetName(lead), lead, func(clients []*Client) (bool, []Change, string, error) {
-					return roamSkills(ctx, logger, database, ring, config, spaceBots, clients)
+				prevHash := prevHashes["skills\x00"+spaceID]
+				err := visit("skills", skillsTargetName(lead), lead, func(clients []*Client) (bool, bool, []Change, string, string, error) {
+					return roamSkills(ctx, logger, database, ring, config, spaceBots, prevHash, clients)
 				})
 				if err != nil {
 					return report, err
@@ -323,14 +353,22 @@ func Run(ctx context.Context, logger *slog.Logger, database *db.DB, ring *conten
 					logger.Error("memory.roamer.model_unavailable", "botId", bot.ID, "error", err.Error())
 					continue
 				}
-				madeCall, changes, model, err := roamBot(ctx, logger, database, ring, config, bot, clients)
+				prevHash := prevHashes["bot\x00"+bot.ID]
+				madeCall, skippedUnchanged, changes, model, nextHash, err := roamBot(ctx, logger, database, ring, config, bot, prevHash, clients)
 				if madeCall {
 					report.ModelCalls++
+				}
+				if skippedUnchanged {
+					report.SkippedUnchanged++
 				}
 				if model != "" && ownerModel == "" {
 					ownerModel = model
 				}
-				targets = upsertTarget(targets, targetFor("bot", bot.ID, bot.Name, changes, model, err))
+				target := targetFor("bot", bot.ID, bot.Name, changes, model, err)
+				if err == nil && len(changes) == 0 && nextHash != "" {
+					target.InputHash = nextHash
+				}
+				targets = upsertTarget(targets, target)
 				if err != nil {
 					failures = append(failures, botFailure(bot, err))
 					report.Failures++
@@ -339,8 +377,10 @@ func Run(ctx context.Context, logger *slog.Logger, database *db.DB, ring *conten
 					ownerChanges += len(changes)
 					report.Changes = append(report.Changes, changes...)
 				}
-				if err := wait(ctx, config.Delay); err != nil {
-					return report, err
+				if madeCall {
+					if err := wait(ctx, config.Delay); err != nil {
+						return report, err
+					}
 				}
 			}
 		}
@@ -552,11 +592,12 @@ func loadOpenWork(ctx context.Context, database *db.DB, bot Bot) ([]openWorkItem
 }
 
 // roamBot seeds a missing index, asks the model for changes, and applies them.
-// The bool reports whether the model was called (for the pass's cost line).
-func roamBot(ctx context.Context, logger *slog.Logger, database *db.DB, ring *contentcrypto.KeyRing, config Config, bot Bot, clients []*Client) (bool, []Change, string, error) {
+// The first bool reports whether the model was called; the second reports
+// whether the target was skipped because its inputs matched the last clean pass.
+func roamBot(ctx context.Context, logger *slog.Logger, database *db.DB, ring *contentcrypto.KeyRing, config Config, bot Bot, prevHash string, clients []*Client) (bool, bool, []Change, string, string, error) {
 	documents, err := listDocuments(ctx, database, ring, bot, false)
 	if err != nil {
-		return false, nil, "", err
+		return false, false, nil, "", "", err
 	}
 	var changes []Change
 	if indexOf(documents, memory.MemoryIndexPath) == nil {
@@ -571,16 +612,16 @@ func roamBot(ctx context.Context, logger *slog.Logger, database *db.DB, ring *co
 				Scope: "bot", BotID: &bot.ID, Path: memory.MemoryIndexPath,
 				Content: content, ExpectedRevision: &zero,
 			}); err != nil {
-				return false, nil, "", err
+				return false, false, nil, "", "", err
 			}
 		}
 		documents, err = listDocuments(ctx, database, ring, bot, false)
 		if err != nil {
-			return false, nil, "", err
+			return false, false, nil, "", "", err
 		}
 	}
-	if len(nonEmpty(documents)) == 0 && wtf8.Length(bot.Instructions) <= InstructionsSoftChars {
-		return false, changes, "", nil
+	if len(nonEmpty(documents)) == 0 && wtf8.Length(bot.Instructions) <= InstructionsTriggerChars {
+		return false, false, changes, "", "", nil
 	}
 	extra := botContext{Now: time.Now().UTC(), Compact: config.Compact}
 	if sharedDocs, err := listDocuments(ctx, database, ring, bot, true); err == nil {
@@ -605,17 +646,17 @@ func roamBot(ctx context.Context, logger *slog.Logger, database *db.DB, ring *co
 	} else {
 		logger.Warn("memory.roamer.skills_context_failed", "botId", bot.ID, "error", err.Error())
 	}
-	return roamDocuments(ctx, logger, database, ring, config, bot, documents, false, extra, changes, clients)
+	return roamDocuments(ctx, logger, database, ring, config, bot, documents, false, extra, prevHash, changes, clients)
 }
 
-func roamShared(ctx context.Context, logger *slog.Logger, database *db.DB, ring *contentcrypto.KeyRing, config Config, spaceBots []Bot, clients []*Client) (bool, []Change, string, error) {
+func roamShared(ctx context.Context, logger *slog.Logger, database *db.DB, ring *contentcrypto.KeyRing, config Config, spaceBots []Bot, prevHash string, clients []*Client) (bool, bool, []Change, string, string, error) {
 	if len(spaceBots) == 0 {
-		return false, nil, "", nil
+		return false, false, nil, "", "", nil
 	}
 	bot := spaceBots[0]
 	documents, err := listDocuments(ctx, database, ring, bot, true)
 	if err != nil {
-		return false, nil, "", err
+		return false, false, nil, "", "", err
 	}
 	var changes []Change
 	if indexOf(documents, memory.MemoryIndexPath) == nil {
@@ -629,12 +670,12 @@ func roamShared(ctx context.Context, logger *slog.Logger, database *db.DB, ring 
 			if _, err := memory.Commit(ctx, database, actorFor(bot), ring, memory.CommitInput{
 				Scope: "user", Path: memory.MemoryIndexPath, Content: content, ExpectedRevision: &zero,
 			}); err != nil {
-				return false, changes, "", err
+				return false, false, changes, "", "", err
 			}
 		}
 		documents, err = listDocuments(ctx, database, ring, bot, true)
 		if err != nil {
-			return false, changes, "", err
+			return false, false, changes, "", "", err
 		}
 	}
 	extra := botContext{Now: time.Now().UTC(), Compact: config.Compact}
@@ -651,34 +692,39 @@ func roamShared(ctx context.Context, logger *slog.Logger, database *db.DB, ring 
 			})
 		}
 	}
-	return roamDocuments(ctx, logger, database, ring, config, bot, documents, true, extra, changes, clients)
+	return roamDocuments(ctx, logger, database, ring, config, bot, documents, true, extra, prevHash, changes, clients)
 }
 
-func roamDocuments(ctx context.Context, logger *slog.Logger, database *db.DB, ring *contentcrypto.KeyRing, config Config, bot Bot, documents []memory.Document, shared bool, extra botContext, changes []Change, clients []*Client) (bool, []Change, string, error) {
+func roamDocuments(ctx context.Context, logger *slog.Logger, database *db.DB, ring *contentcrypto.KeyRing, config Config, bot Bot, documents []memory.Document, shared bool, extra botContext, prevHash string, changes []Change, clients []*Client) (bool, bool, []Change, string, string, error) {
 	payload, omitted := promptFor(bot, documents, config.MaxInputBytes, shared, extra)
 	if payload == "" {
-		return false, changes, "", nil
+		return false, false, changes, "", "", nil
+	}
+	currentHash := stableInputHash(payload)
+	compactMode := isCompactPass(bot, documents, shared, extra)
+	if !config.Compact && !config.Force && prevHash != "" && prevHash == currentHash && !compactMode {
+		logger.Debug("memory.roamer.unchanged", "botId", bot.ID, "shared", shared, "inputHash", currentHash)
+		return false, true, changes, "", currentHash, nil
 	}
 	started := time.Now()
 	pass := passBot
 	if shared {
 		pass = passShared
 	}
-	compactMode := isCompactPass(bot, documents, shared, extra)
-	compactInstructions := !shared && (config.Compact || wtf8.Length(bot.Instructions) > InstructionsSoftChars)
-	text, usage, used, err := complete(ctx, clients, systemPrompt(pass, compactMode, compactInstructions), payload)
+	compactInstructions := !shared && shouldCompactInstructions(bot, documents, config.Compact)
+	text, usage, used, err := complete(ctx, logger, clients, systemPrompt(pass, compactMode, compactInstructions), payload)
 	if err != nil {
-		return true, changes, "", err
+		return true, false, changes, "", "", err
 	}
 	logger.Info("memory.roamer.model", "botId", bot.ID, "shared", shared, "model", used,
 		"durationMs", time.Since(started).Milliseconds(), "usage", string(usage))
 	parsed, err := parseAnswer(text)
 	if err != nil {
-		return true, changes, used, err
+		return true, false, changes, used, "", err
 	}
-	validated, err := validateChanges(parsed, documents, omitted, shared, bot.Instructions)
+	validated, err := validateChanges(parsed, documents, omitted, shared, bot.Instructions, config.Compact)
 	if err != nil {
-		return true, changes, used, err
+		return true, false, changes, used, "", err
 	}
 	for _, name := range validated.Ignored {
 		logger.Info("memory.roamer.command_skipped", "botId", bot.ID, "shared", shared, "command", name,
@@ -710,44 +756,41 @@ func roamDocuments(ctx context.Context, logger *slog.Logger, database *db.DB, ri
 				logger.Warn("memory.roamer.conflict", "botId", bot.ID, "path", change.Path)
 				continue
 			}
-			return true, changes, used, err
+			return true, false, changes, used, "", err
 		}
 	}
 
 	for _, arch := range validated.Archives {
-		existingDoc := indexOf(documents, arch.Path)
-		existingContent := ""
-		before := 0
-		var expected int64
-		if existingDoc != nil {
-			existingContent = existingDoc.Content
-			before = len([]byte(existingDoc.Content))
-			expected = int64(existingDoc.Revision)
-		}
-		merged, changed, err := appendArchive(existingContent, arch.Path, arch.Content)
+		targetPath, merged, existingDoc, changed, err := resolveArchiveTarget(documents, arch.Path, arch.Content)
 		if err != nil {
-			return true, changes, used, err
+			return true, false, changes, used, "", err
 		}
 		if !changed {
 			continue
 		}
+		before := 0
+		var expected int64
+		if existingDoc != nil {
+			before = len([]byte(existingDoc.Content))
+			expected = int64(existingDoc.Revision)
+		}
 		changes = append(changes, Change{
-			Command: CmdMemoryArchive, Scope: scopeFor(shared), Path: arch.Path, Action: "archive",
+			Command: CmdMemoryArchive, Scope: scopeFor(shared), Path: targetPath, Action: "archive",
 			BeforeBytes: before, AfterBytes: len([]byte(merged)), Created: existingDoc == nil,
 		})
 		if config.DryRun {
 			continue
 		}
 		_, err = memory.Commit(ctx, database, actorFor(bot), ring, memory.CommitInput{
-			Scope: scopeFor(shared), BotID: botIDFor(shared, bot.ID), Path: arch.Path,
+			Scope: scopeFor(shared), BotID: botIDFor(shared, bot.ID), Path: targetPath,
 			Content: merged, ExpectedRevision: &expected,
 		})
 		if err != nil {
 			if isConflict(err) {
-				logger.Warn("memory.roamer.conflict", "botId", bot.ID, "path", arch.Path)
+				logger.Warn("memory.roamer.conflict", "botId", bot.ID, "path", targetPath)
 				continue
 			}
-			return true, changes, used, err
+			return true, false, changes, used, "", err
 		}
 	}
 
@@ -760,7 +803,7 @@ func roamDocuments(ctx context.Context, logger *slog.Logger, database *db.DB, ri
 		} else {
 			updated, err := commitInstructions(ctx, logger, database, ring, bot, *validated.Instructions)
 			if err != nil {
-				return true, changes, used, err
+				return true, false, changes, used, "", err
 			}
 			if !updated {
 				logger.Warn("memory.roamer.instructions_changed", "botId", bot.ID)
@@ -773,7 +816,7 @@ func roamDocuments(ctx context.Context, logger *slog.Logger, database *db.DB, ri
 		}
 	}
 
-	return true, changes, used, nil
+	return true, false, changes, used, currentHash, nil
 }
 
 // commitInstructions uses the same row lock, bounded history, and bot.updated
@@ -970,10 +1013,19 @@ Do not invent facts. When unsure about an active item, keep it; when something i
 }
 
 // complete asks the pass's clients in order and returns the first answer.
-func complete(ctx context.Context, clients []*Client, system, payload string) (string, json.RawMessage, string, error) {
+// If a client truncates empty output due to finish_reason=length below 32,768 tokens,
+// it retries once at 32,768 tokens before falling back to the next connection.
+func complete(ctx context.Context, logger *slog.Logger, clients []*Client, system, payload string) (string, json.RawMessage, string, error) {
 	var lastErr error
 	for _, client := range clients {
 		text, usage, err := client.Complete(ctx, system, payload)
+		if err != nil && isLengthTruncated(err) && client.MaxTokens() < 32_768 {
+			if logger != nil {
+				logger.Warn("memory.roamer.retry_max_tokens", "model", client.Model(),
+					"from", client.MaxTokens(), "to", 32_768)
+			}
+			text, usage, err = client.CompleteWithMaxTokens(ctx, system, payload, 32_768)
+		}
 		if err == nil {
 			return text, usage, client.Model(), nil
 		}
@@ -985,6 +1037,19 @@ func complete(ctx context.Context, clients []*Client, system, payload string) (s
 	return "", nil, "", lastErr
 }
 
+func stableInputHash(payload string) string {
+	lines := strings.Split(payload, "\n")
+	kept := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if strings.HasPrefix(line, "Today (UTC): ") {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	sum := sha256.Sum256([]byte(strings.Join(kept, "\n")))
+	return hex.EncodeToString(sum[:8])
+}
+
 func docBytes(documents []memory.Document, path string) int {
 	if doc := indexOf(documents, path); doc != nil {
 		return len([]byte(doc.Content))
@@ -992,16 +1057,29 @@ func docBytes(documents []memory.Document, path string) int {
 	return 0
 }
 
+func isMemoryOverTrigger(documents []memory.Document, shared bool) bool {
+	if shared {
+		return docBytes(documents, memory.MemoryIndexPath) > SharedMemoryTriggerBytes ||
+			docBytes(documents, UserMemoryPath) > UserMemoryTriggerBytes
+	}
+	return docBytes(documents, memory.MemoryIndexPath) > BotMemoryTriggerBytes
+}
+
+func shouldCompactInstructions(bot Bot, documents []memory.Document, compact bool) bool {
+	if compact {
+		return wtf8.Length(bot.Instructions) > InstructionsSoftChars
+	}
+	return wtf8.Length(bot.Instructions) > InstructionsTriggerChars && !isMemoryOverTrigger(documents, false)
+}
+
 func isCompactPass(bot Bot, documents []memory.Document, shared bool, extra botContext) bool {
 	if extra.Compact {
 		return true
 	}
-	if shared {
-		return docBytes(documents, memory.MemoryIndexPath) > SharedMemorySoftBytes ||
-			docBytes(documents, UserMemoryPath) > UserMemorySoftBytes
+	if isMemoryOverTrigger(documents, shared) {
+		return true
 	}
-	return wtf8.Length(bot.Instructions) > InstructionsSoftChars ||
-		docBytes(documents, memory.MemoryIndexPath) > BotMemorySoftBytes
+	return !shared && shouldCompactInstructions(bot, documents, false)
 }
 
 func promptDate(updatedAt string) string {
@@ -1069,7 +1147,7 @@ func promptFor(bot Bot, documents []memory.Document, maxBytes int, shared bool, 
 			instructions = "(empty)"
 		}
 		instrChars := wtf8.Length(bot.Instructions)
-		if extra.Compact || instrChars > InstructionsSoftChars {
+		if shouldCompactInstructions(bot, documents, extra.Compact) {
 			sections = append(sections, fmt.Sprintf("--- Instructions (writable; complete replacement if changed; %d chars — OVER %d-char target; compact toward <=%d chars) ---\n%s",
 				instrChars, InstructionsSoftChars, InstructionsSoftChars, instructions))
 		} else {
@@ -1184,7 +1262,7 @@ func parseAnswer(text string) (answer, error) {
 // not granted to this pass, or aimed at a path the pass cannot write is ignored;
 // a malformed or unsafe command it may run fails the whole answer, so a broken
 // model is not half-applied.
-func validateChanges(parsed answer, documents []memory.Document, omitted []string, shared bool, instructions string) (validatedChanges, error) {
+func validateChanges(parsed answer, documents []memory.Document, omitted []string, shared bool, instructions string, compact bool) (validatedChanges, error) {
 	pass := passBot
 	if shared {
 		pass = passShared
@@ -1234,6 +1312,9 @@ func validateChanges(parsed answer, documents []memory.Document, omitted []strin
 			}
 			if wtf8.Length(existing) > InstructionsSoftChars && wtf8.Length(content) > wtf8.Length(existing) {
 				return validatedChanges{}, fmt.Errorf("model expanded already-oversized instructions")
+			}
+			if !compact && wtf8.Length(existing) >= 500 && wtf8.Length(content)*10 < wtf8.Length(existing)*6 {
+				return validatedChanges{}, fmt.Errorf("model dropped more than 40%% of instructions outside --compact mode")
 			}
 			if content != existing {
 				result.Instructions = &content
@@ -1299,9 +1380,33 @@ func appendArchive(existingContent, path, addition string) (string, bool, error)
 	}
 	merged := base + sep + strings.Join(added, "\n") + "\n"
 	if len([]byte(merged)) > MaxOtherBytes {
-		return "", false, fmt.Errorf("archive %s would exceed %d bytes", path, MaxOtherBytes)
+		return "", false, fmt.Errorf("%w: %s exceeds %d bytes", errArchiveFull, path, MaxOtherBytes)
 	}
 	return merged, true, nil
+}
+
+func resolveArchiveTarget(documents []memory.Document, basePath, addition string) (string, string, *memory.Document, bool, error) {
+	stem := strings.TrimSuffix(basePath, ".md")
+	const maxRollovers = 20
+	for index := 1; index <= maxRollovers; index++ {
+		candidate := basePath
+		if index > 1 {
+			candidate = fmt.Sprintf("%s-%d.md", stem, index)
+		}
+		existingDoc := indexOf(documents, candidate)
+		existingContent := ""
+		if existingDoc != nil {
+			existingContent = existingDoc.Content
+		}
+		merged, changed, err := appendArchive(existingContent, candidate, addition)
+		if err == nil {
+			return candidate, merged, existingDoc, changed, nil
+		}
+		if !errors.Is(err, errArchiveFull) {
+			return "", "", nil, false, err
+		}
+	}
+	return "", "", nil, false, fmt.Errorf("archive %s and rollover files are full", basePath)
 }
 
 func validateMemoryWrite(item command, current map[string]memory.Document, omitted, touched map[string]bool, shared bool, result *validatedChanges) error {

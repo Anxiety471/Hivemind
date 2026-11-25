@@ -183,7 +183,7 @@ func run(logger *slog.Logger, dryRun, includeShared, includeSkills bool, bots st
 	}
 	logger.Log(ctx, level, "memory.roamer.pass", "dryRun", dryRun, "bots", report.Bots,
 		"modelCalls", report.ModelCalls, "failures", report.Failures, "skipped", report.Skipped,
-		"changes", report.Changes)
+		"skippedUnchanged", report.SkippedUnchanged, "changes", report.Changes)
 	if report.Failures > 0 {
 		return fmt.Errorf("%d bot(s) failed", report.Failures)
 	}

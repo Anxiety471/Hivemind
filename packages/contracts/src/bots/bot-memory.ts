@@ -81,6 +81,7 @@ export const MemoryRoamerTargetSchema = z.object({
   status: z.enum(["ok", "failed"]),
   error: z.string().optional(),
   model: z.string().optional(),
+  inputHash: z.string().optional(),
   changes: z.array(MemoryRoamerChangeSchema),
   checkedAt: z.string(),
 });

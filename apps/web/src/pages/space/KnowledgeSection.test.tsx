@@ -623,3 +623,55 @@ it("hides cold archive documents from the memory list", async () => {
     vi.unstubAllGlobals();
   }
 });
+
+it("hides legacy per-bot USER.md only when Space USER.md exists in budget", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const host = document.createElement("div");
+  const root = createRoot(host);
+  try {
+    memoryApi.list.mockResolvedValueOnce([
+      { id: "mem", path: "MEMORY.md", content: "# Bot\n\n- active", revision: 1, updatedAt: "" },
+      { id: "usr", path: "USER.md", content: "- legacy profile", revision: 1, updatedAt: "" },
+    ] as never);
+    memoryApi.budget.mockResolvedValueOnce({
+      limitBytes: 32768,
+      usedBytes: 200,
+      documents: [
+        {
+          scope: "user",
+          path: "USER.md",
+          revision: 1,
+          totalBytes: 100,
+          includedBytes: 100,
+          truncated: false,
+        },
+      ],
+      omitted: [],
+    } as never);
+    await show(root, <KnowledgeSection botId="fixture" />);
+    expect(host.textContent).toContain("MEMORY.md");
+    expect(host.textContent).not.toContain("USER.md");
+
+    memoryApi.list.mockResolvedValueOnce([
+      { id: "mem", path: "MEMORY.md", content: "# Bot\n\n- active", revision: 1, updatedAt: "" },
+      { id: "usr", path: "USER.md", content: "- legacy profile", revision: 1, updatedAt: "" },
+    ] as never);
+    memoryApi.budget.mockResolvedValueOnce({
+      limitBytes: 32768,
+      usedBytes: 100,
+      documents: [],
+      omitted: [],
+    } as never);
+    await show(root, <KnowledgeSection key="no-shared" botId="fixture" />);
+    expect(host.textContent).toContain("USER.md");
+  } finally {
+    memoryApi.budget.mockReset().mockResolvedValue({
+      limitBytes: 32768,
+      usedBytes: 0,
+      documents: [],
+      omitted: [],
+    });
+    await act(async () => root.unmount());
+    vi.unstubAllGlobals();
+  }
+});

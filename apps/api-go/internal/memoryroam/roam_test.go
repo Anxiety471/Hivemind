@@ -1,7 +1,11 @@
 package memoryroam
 
 import (
+	"context"
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -36,7 +40,7 @@ func TestValidateChangesAppliesWritableUpdates(t *testing.T) {
 		write(UserMemoryPath, "- metric\n- brief replies\n"),
 		archiveCmd("archive/2026-11.md", "- [2026-11-25] wrapped up old audit"),
 		{Name: "memory.delete", Path: "evidence-archive.md"},
-	}}, documents, nil, false, "")
+	}}, documents, nil, false, "", false)
 	if err != nil {
 		t.Fatalf("validateChanges: %v", err)
 	}
@@ -57,7 +61,7 @@ func TestValidateChangesCreatesOnlySpaceUserProfileInSharedPass(t *testing.T) {
 	validated, err := validateChanges(answer{Commands: []command{
 		write(UserMemoryPath, "Name: Sam\n"),
 		write("new.md", "a new fact\n"),
-	}}, nil, nil, true, "")
+	}}, nil, nil, true, "", false)
 	if err != nil {
 		t.Fatalf("validateChanges: %v", err)
 	}
@@ -82,7 +86,7 @@ func TestValidateChangesRejectsUnsafeAnswers(t *testing.T) {
 	}
 	for name, item := range cases {
 		t.Run(name, func(t *testing.T) {
-			if _, err := validateChanges(answer{Commands: []command{item}}, documents, nil, false, ""); err == nil {
+			if _, err := validateChanges(answer{Commands: []command{item}}, documents, nil, false, "", false); err == nil {
 				t.Fatal("expected an error")
 			}
 		})
@@ -93,7 +97,7 @@ func TestValidateChangesKeepsTheExistingIndexHeading(t *testing.T) {
 	documents := []memory.Document{doc("1", memory.MemoryIndexPath, "# Original\n\n- tea\n", 1)}
 	validated, err := validateChanges(answer{Commands: []command{
 		write(memory.MemoryIndexPath, "# Renamed\n\n- tea\n- coffee\n"),
-	}}, documents, nil, false, "")
+	}}, documents, nil, false, "", false)
 	if err != nil {
 		t.Fatalf("validateChanges: %v", err)
 	}
@@ -106,7 +110,7 @@ func TestValidateChangesRestoresAMissingIndexHeading(t *testing.T) {
 	documents := []memory.Document{doc("1", memory.MemoryIndexPath, "# Original\n\n- tea\n", 1)}
 	validated, err := validateChanges(answer{Commands: []command{
 		write(memory.MemoryIndexPath, "- tea\n- coffee\n"),
-	}}, documents, nil, false, "")
+	}}, documents, nil, false, "", false)
 	if err != nil {
 		t.Fatalf("validateChanges: %v", err)
 	}
@@ -119,7 +123,7 @@ func TestValidateChangesAcceptsModelHeadingWhenExistingLackedOne(t *testing.T) {
 	documents := []memory.Document{doc("1", memory.MemoryIndexPath, "- legacy fact\n", 1)}
 	validated, err := validateChanges(answer{Commands: []command{
 		write(memory.MemoryIndexPath, "# Bot\n\n- fact\n"),
-	}}, documents, nil, false, "")
+	}}, documents, nil, false, "", false)
 	if err != nil {
 		t.Fatalf("validateChanges: %v", err)
 	}
@@ -135,7 +139,7 @@ func TestValidateChangesRefusesOmittedDocuments(t *testing.T) {
 	}
 	if _, err := validateChanges(answer{Commands: []command{
 		write(UserMemoryPath, "y\n"),
-	}}, documents, []string{UserMemoryPath}, true, ""); err == nil {
+	}}, documents, []string{UserMemoryPath}, true, "", false); err == nil {
 		t.Fatal("expected an omitted-document error")
 	}
 }
@@ -144,7 +148,7 @@ func TestValidateChangesKeepsIdenticalContent(t *testing.T) {
 	documents := []memory.Document{doc("1", memory.MemoryIndexPath, "# Bot\n\n- tea\n", 1)}
 	validated, err := validateChanges(answer{Commands: []command{
 		write(memory.MemoryIndexPath, "# Bot\n\n- tea\n"),
-	}}, documents, nil, false, "")
+	}}, documents, nil, false, "", false)
 	if err != nil || len(validated.Updates) != 0 || len(validated.Ignored) != 0 {
 		t.Fatalf("validated=%+v err=%v", validated, err)
 	}
@@ -155,7 +159,7 @@ func TestValidateChangesEnforcesTightCaps(t *testing.T) {
 	tooBigBot := "# Bot\n\n" + strings.Repeat("x", BotMemoryMaxBytes)
 	if _, err := validateChanges(answer{Commands: []command{
 		write(memory.MemoryIndexPath, tooBigBot),
-	}}, botDocs, nil, false, ""); err == nil {
+	}}, botDocs, nil, false, "", false); err == nil {
 		t.Fatal("expected a bot index size error")
 	}
 
@@ -165,12 +169,12 @@ func TestValidateChangesEnforcesTightCaps(t *testing.T) {
 	}
 	if _, err := validateChanges(answer{Commands: []command{
 		write(memory.MemoryIndexPath, "# Shared\n\n"+strings.Repeat("x", SharedMemoryMaxBytes)),
-	}}, sharedDocs, nil, true, ""); err == nil {
+	}}, sharedDocs, nil, true, "", false); err == nil {
 		t.Fatal("expected a shared index size error")
 	}
 	if _, err := validateChanges(answer{Commands: []command{
 		write(UserMemoryPath, strings.Repeat("u", UserMemoryMaxBytes+1)),
-	}}, sharedDocs, nil, true, ""); err == nil {
+	}}, sharedDocs, nil, true, "", false); err == nil {
 		t.Fatal("expected a user profile size error")
 	}
 }
@@ -183,7 +187,7 @@ func TestValidateChangesHasNoDeleteOrShellCommand(t *testing.T) {
 	validated, err := validateChanges(answer{Commands: []command{
 		{Name: "memory.delete", Path: memory.MemoryIndexPath},
 		{Name: "shell", Content: "rm -rf /"},
-	}}, documents, nil, false, "")
+	}}, documents, nil, false, "", false)
 	if err != nil {
 		t.Fatalf("validateChanges: %v", err)
 	}
@@ -202,7 +206,7 @@ func TestValidateChangesLeavesReadOnlyNotesAlone(t *testing.T) {
 	}
 	validated, err := validateChanges(answer{Commands: []command{
 		write("evidence-archive.md", "rewritten\n"),
-	}}, documents, nil, false, "")
+	}}, documents, nil, false, "", false)
 	if err != nil {
 		t.Fatalf("validateChanges: %v", err)
 	}
@@ -222,7 +226,7 @@ func TestValidateChangesAllowsMemoryWriteAndArchiveInSharedPass(t *testing.T) {
 		archiveCmd("archive/2026-11.md", "- [2026-11-25] archived milestone"),
 		setInstructions("shared pass cannot change instructions\n"),
 		{Name: CmdSkillCreate, Skill: "Nope", Description: "x", Body: "y"},
-	}}, documents, nil, true, "original instructions\n")
+	}}, documents, nil, true, "original instructions\n", false)
 	if err != nil {
 		t.Fatalf("validateChanges: %v", err)
 	}
@@ -249,7 +253,7 @@ func TestValidateMemoryArchiveAndAppend(t *testing.T) {
 	}
 	for name, item := range bad {
 		t.Run(name, func(t *testing.T) {
-			if _, err := validateChanges(answer{Commands: []command{item}}, nil, nil, false, ""); err == nil {
+			if _, err := validateChanges(answer{Commands: []command{item}}, nil, nil, false, "", false); err == nil {
 				t.Fatalf("expected error for %s", name)
 			}
 		})
@@ -257,7 +261,7 @@ func TestValidateMemoryArchiveAndAppend(t *testing.T) {
 	if _, err := validateChanges(answer{Commands: []command{
 		archiveCmd("archive/2026-11.md", "- a"),
 		archiveCmd("archive/2026-11.md", "- b"),
-	}}, nil, nil, false, ""); err == nil {
+	}}, nil, nil, false, "", false); err == nil {
 		t.Fatal("expected duplicate archive path error")
 	}
 
@@ -278,7 +282,7 @@ func TestValidateMemoryArchiveAndAppend(t *testing.T) {
 func TestValidateChangesUpdatesInstructions(t *testing.T) {
 	validated, err := validateChanges(answer{Commands: []command{
 		setInstructions("# Role\n\nNew rule.\n"),
-	}}, nil, nil, false, "# Role\n\nOld rule.\n")
+	}}, nil, nil, false, "# Role\n\nOld rule.\n", false)
 	if err != nil {
 		t.Fatalf("validateChanges: %v", err)
 	}
@@ -290,7 +294,7 @@ func TestValidateChangesUpdatesInstructions(t *testing.T) {
 func TestValidateChangesRejectsBlankInstructions(t *testing.T) {
 	if _, err := validateChanges(answer{Commands: []command{
 		setInstructions("  \n"),
-	}}, nil, nil, false, "# Role\n"); err == nil {
+	}}, nil, nil, false, "# Role\n", false); err == nil {
 		t.Fatal("expected a blank-instructions error")
 	}
 }
@@ -298,7 +302,7 @@ func TestValidateChangesRejectsBlankInstructions(t *testing.T) {
 func TestValidateChangesRejectsLongInstructions(t *testing.T) {
 	if _, err := validateChanges(answer{Commands: []command{
 		setInstructions(strings.Repeat("x", MaxInstructionsLength+1)),
-	}}, nil, nil, false, ""); err == nil {
+	}}, nil, nil, false, "", false); err == nil {
 		t.Fatal("expected an instructions-cap error")
 	}
 }
@@ -307,21 +311,37 @@ func TestValidateChangesRejectsExpandingOversizedInstructions(t *testing.T) {
 	oversized := strings.Repeat("a", InstructionsSoftChars+50)
 	if _, err := validateChanges(answer{Commands: []command{
 		setInstructions(oversized + "more"),
-	}}, nil, nil, false, oversized); err == nil {
+	}}, nil, nil, false, oversized, true); err == nil {
 		t.Fatal("expected error when expanding already-oversized instructions")
 	}
 	validated, err := validateChanges(answer{Commands: []command{
 		setInstructions("# Role\n\nCompact instructions."),
-	}}, nil, nil, false, oversized)
+	}}, nil, nil, false, oversized, true)
 	if err != nil || validated.Instructions == nil {
 		t.Fatalf("expected shrinking oversized instructions to succeed, got %+v err=%v", validated, err)
+	}
+}
+
+func TestValidateChangesGuardsAgainstLargeUnattendedShrink(t *testing.T) {
+	existing := strings.Repeat("a", 1000)
+	tooSmall := strings.Repeat("a", 500)
+	if _, err := validateChanges(answer{Commands: []command{
+		setInstructions(tooSmall),
+	}}, nil, nil, false, existing, false); err == nil {
+		t.Fatal("expected error when unattended run drops >40% of instructions")
+	}
+	validated, err := validateChanges(answer{Commands: []command{
+		setInstructions(tooSmall),
+	}}, nil, nil, false, existing, true)
+	if err != nil || validated.Instructions == nil {
+		t.Fatalf("expected --compact run to allow >40%% shrink, got %+v err=%v", validated, err)
 	}
 }
 
 func TestValidateChangesKeepsIdenticalInstructions(t *testing.T) {
 	validated, err := validateChanges(answer{Commands: []command{
 		setInstructions("same instructions\n"),
-	}}, nil, nil, false, "same instructions\n")
+	}}, nil, nil, false, "same instructions\n", false)
 	if err != nil {
 		t.Fatalf("validateChanges: %v", err)
 	}
@@ -502,5 +522,87 @@ func TestParseAnswerAcceptsFences(t *testing.T) {
 func TestInitialMemoryUsesOneHeadingLine(t *testing.T) {
 	if got := initialMemory("A\nB"); got != "# A B\n\n" {
 		t.Fatalf("initialMemory = %q", got)
+	}
+}
+
+func TestHysteresisThresholdsAndSplitHeavyRewrites(t *testing.T) {
+	mediumInstr := Bot{Name: "B", Instructions: strings.Repeat("a", 4200)}
+	if shouldCompactInstructions(mediumInstr, nil, false) {
+		t.Fatal("4200-char instructions must not trigger background compaction below 5000")
+	}
+	if !shouldCompactInstructions(mediumInstr, nil, true) {
+		t.Fatal("4200-char instructions must trigger compaction under --compact")
+	}
+	largeInstr := Bot{Name: "B", Instructions: strings.Repeat("a", 5100)}
+	if !shouldCompactInstructions(largeInstr, nil, false) {
+		t.Fatal("5100-char instructions must trigger background compaction when memory is under trigger")
+	}
+	bigMem := []memory.Document{doc("1", memory.MemoryIndexPath, "# B\n\n"+strings.Repeat("m", BotMemoryTriggerBytes+10), 1)}
+	if shouldCompactInstructions(largeInstr, bigMem, false) {
+		t.Fatal("unattended pass must defer Instructions compaction when MEMORY.md is also over trigger")
+	}
+}
+
+func TestStableInputHashIgnoresDateLine(t *testing.T) {
+	p1 := "Memory owner: Bot\nToday (UTC): 2026-11-25\nMode: maintain\n\n# Bot\n- fact"
+	p2 := "Memory owner: Bot\nToday (UTC): 2026-11-26\nMode: maintain\n\n# Bot\n- fact"
+	p3 := "Memory owner: Bot\nToday (UTC): 2026-11-26\nMode: maintain\n\n# Bot\n- changed"
+	if stableInputHash(p1) != stableInputHash(p2) {
+		t.Fatalf("expected identical hash across dates: %s vs %s", stableInputHash(p1), stableInputHash(p2))
+	}
+	if stableInputHash(p2) == stableInputHash(p3) {
+		t.Fatal("expected hash to change when content changes")
+	}
+}
+
+func TestCompleteRetriesLengthTruncationAt32K(t *testing.T) {
+	var maxTokensSeen []int
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		raw, _ := io.ReadAll(request.Body)
+		var body openAIChatRequest
+		_ = json.Unmarshal(raw, &body)
+		maxTokensSeen = append(maxTokensSeen, body.MaxTokens)
+		writer.Header().Set("content-type", "application/json")
+		if len(maxTokensSeen) == 1 {
+			_, _ = writer.Write([]byte(`{"choices":[{"finish_reason":"length","message":{"content":""}}],"usage":{"completion_tokens":8192}}`))
+			return
+		}
+		_, _ = writer.Write([]byte(`{"choices":[{"finish_reason":"stop","message":{"content":"{\"commands\":[]}"}}],"usage":{"completion_tokens":20}}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient(ModelConfig{
+		Style: "openai", BaseURL: server.URL, Model: "reasoning-model", APIKey: "k",
+		MaxTokens: 8192, Timeout: 5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	text, _, model, err := complete(context.Background(), nil, []*Client{client}, "sys", "prompt")
+	if err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	if model != "reasoning-model" || text != `{"commands":[]}` {
+		t.Fatalf("unexpected response: model=%s text=%q", model, text)
+	}
+	if len(maxTokensSeen) != 2 || maxTokensSeen[0] != 8192 || maxTokensSeen[1] != 32_768 {
+		t.Fatalf("maxTokensSeen = %v, want [8192 32768]", maxTokensSeen)
+	}
+}
+
+func TestResolveArchiveTargetRollsOverWhenFull(t *testing.T) {
+	fullContent := "# Archive 2026-11\n\n" + strings.Repeat("x", MaxOtherBytes-25)
+	docs := []memory.Document{
+		doc("1", "archive/2026-11.md", fullContent, 4),
+	}
+	path, merged, existing, changed, err := resolveArchiveTarget(docs, "archive/2026-11.md", "- [2026-11-25] rolled over entry")
+	if err != nil {
+		t.Fatalf("resolveArchiveTarget: %v", err)
+	}
+	if path != "archive/2026-11-2.md" || existing != nil || !changed {
+		t.Fatalf("path=%s existing=%v changed=%v", path, existing, changed)
+	}
+	if !strings.Contains(merged, "# Archive 2026-11-2") || !strings.Contains(merged, "rolled over entry") {
+		t.Fatalf("merged = %q", merged)
 	}
 }

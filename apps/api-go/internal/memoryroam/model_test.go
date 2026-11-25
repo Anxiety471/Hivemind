@@ -95,6 +95,15 @@ func TestCompleteReportsFinishReasonOnEmptyText(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "finish_reason=length") || !strings.Contains(err.Error(), "8192") {
 		t.Fatalf("err = %v", err)
 	}
+	if !isLengthTruncated(err) {
+		t.Fatalf("expected isLengthTruncated(err)=true, got false for %v", err)
+	}
+
+	stopClient := testClient(t, "openai", `{"choices":[{"finish_reason":"stop","message":{"content":""}}],"usage":{"completion_tokens":10}}`, 200, nil)
+	_, _, stopErr := stopClient.Complete(context.Background(), "system", "hello")
+	if stopErr == nil || isLengthTruncated(stopErr) {
+		t.Fatalf("expected isLengthTruncated=false on stop, got %v", stopErr)
+	}
 }
 
 func TestNewClientRejectsMissingConfiguration(t *testing.T) {

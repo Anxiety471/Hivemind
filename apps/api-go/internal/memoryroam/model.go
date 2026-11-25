@@ -100,11 +100,23 @@ type anthropicMessage struct {
 }
 
 type anthropicResponse struct {
-	Content []struct {
+	StopReason string `json:"stop_reason"`
+	Content    []struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
 	} `json:"content"`
 	Usage json.RawMessage `json:"usage"`
+}
+
+type lengthTruncatedError struct {
+	msg string
+}
+
+func (e *lengthTruncatedError) Error() string { return e.msg }
+
+func isLengthTruncated(err error) bool {
+	var target *lengthTruncatedError
+	return errors.As(err, &target)
 }
 
 type providerError struct {
@@ -114,6 +126,13 @@ type providerError struct {
 }
 
 func (c *Client) Complete(ctx context.Context, system, prompt string) (string, json.RawMessage, error) {
+	return c.CompleteWithMaxTokens(ctx, system, prompt, c.config.MaxTokens)
+}
+
+func (c *Client) CompleteWithMaxTokens(ctx context.Context, system, prompt string, maxTokens int) (string, json.RawMessage, error) {
+	if maxTokens <= 0 {
+		maxTokens = c.config.MaxTokens
+	}
 	url := c.config.BaseURL + "/chat/completions"
 	headers := make(http.Header, len(c.config.Headers)+2)
 	for name, value := range c.config.Headers {
@@ -125,7 +144,7 @@ func (c *Client) Complete(ctx context.Context, system, prompt string) (string, j
 	}
 	var body any = openAIChatRequest{
 		Model:       c.config.Model,
-		MaxTokens:   c.config.MaxTokens,
+		MaxTokens:   maxTokens,
 		Temperature: 0,
 		Messages: []openAIChatMessage{
 			{Role: "system", Content: system},
@@ -142,7 +161,7 @@ func (c *Client) Complete(ctx context.Context, system, prompt string) (string, j
 		}
 		body = anthropicRequest{
 			Model:       c.config.Model,
-			MaxTokens:   c.config.MaxTokens,
+			MaxTokens:   maxTokens,
 			Temperature: 0,
 			System:      system,
 			Messages:    []anthropicMessage{{Role: "user", Content: prompt}},
@@ -189,6 +208,9 @@ func (c *Client) Complete(ctx context.Context, system, prompt string) (string, j
 			}
 		}
 		if text.Len() == 0 {
+			if parsed.StopReason == "max_tokens" {
+				return "", parsed.Usage, &lengthTruncatedError{msg: fmt.Sprintf("model returned no text (stop_reason=%s, usage=%s)", parsed.StopReason, strings.TrimSpace(string(parsed.Usage)))}
+			}
 			return "", parsed.Usage, errors.New("model returned no text")
 		}
 		return text.String(), parsed.Usage, nil
@@ -205,7 +227,11 @@ func (c *Client) Complete(ctx context.Context, system, prompt string) (string, j
 	var text string
 	if json.Unmarshal(content, &text) == nil {
 		if text == "" {
-			return "", parsed.Usage, fmt.Errorf("model returned empty text (finish_reason=%s, usage=%s)", finishReason, strings.TrimSpace(string(parsed.Usage)))
+			msg := fmt.Sprintf("model returned empty text (finish_reason=%s, usage=%s)", finishReason, strings.TrimSpace(string(parsed.Usage)))
+			if finishReason == "length" {
+				return "", parsed.Usage, &lengthTruncatedError{msg: msg}
+			}
+			return "", parsed.Usage, errors.New(msg)
 		}
 		return text, parsed.Usage, nil
 	}
@@ -221,10 +247,15 @@ func (c *Client) Complete(ctx context.Context, system, prompt string) (string, j
 			return joined.String(), parsed.Usage, nil
 		}
 	}
-	return "", parsed.Usage, fmt.Errorf("model returned no text (finish_reason=%s, usage=%s)", finishReason, strings.TrimSpace(string(parsed.Usage)))
+	msg := fmt.Sprintf("model returned no text (finish_reason=%s, usage=%s)", finishReason, strings.TrimSpace(string(parsed.Usage)))
+	if finishReason == "length" {
+		return "", parsed.Usage, &lengthTruncatedError{msg: msg}
+	}
+	return "", parsed.Usage, errors.New(msg)
 }
 
-func (c *Client) Model() string { return c.config.Model }
+func (c *Client) Model() string  { return c.config.Model }
+func (c *Client) MaxTokens() int { return c.config.MaxTokens }
 
 func suffix(message string) string {
 	if message == "" {
