@@ -267,6 +267,7 @@ async function teamChatRun(input: {
       findMany: vi.fn(async () => [
         {
           id: "taught-1",
+          userId: run.userId,
           name: "Private recipe",
           goal: "PRIVATE_TAUGHT_GOAL",
           playbook: { whenToUse: "PRIVATE_TAUGHT_HINT", steps: [] },
@@ -515,6 +516,7 @@ describe("private skills in shared-channel prompts", () => {
     const result = await teamChatRun({ senders: [{ senderId: "member" }], sharedChannel: true });
     expect(result.context).not.toContain("PRIVATE_SKILL");
     expect(result.context).not.toContain("PRIVATE_TAUGHT");
+    expect(result.context).not.toContain("Taught skills");
     expect(result.context).toContain("Use skill: Rakazo");
     expect(result.context).toContain("Use skill: Interrogate");
   });
@@ -525,7 +527,7 @@ describe("private skills in shared-channel prompts", () => {
       ownerAddress: "T1:U-OWNER",
     });
     expect(result.context).toContain("PRIVATE_SKILL_BODY");
-    expect(result.context).toContain("PRIVATE_TAUGHT_HINT");
+    expect(result.context).toContain("Taught skills (1): Private recipe");
   });
 });
 
