@@ -27,6 +27,7 @@ import {
   assertRoutineSchedule,
   createRoutineTestRun,
   firstWatchCheck,
+  listRoutineCommands,
   listRoutinesDto,
   mapRoutine,
   nextRoutineDate,
@@ -347,6 +348,55 @@ export function routinesRoutes(ctx: RouterContext) {
         }
         return mapRoutine(row);
       }),
+      setPrepare: authed.routines.setPrepare.handler(async ({ context, input }) => {
+        const { actor } = context;
+        // The same lookup update makes: an archived bot's routines take no edits.
+        const existing = await deps.prisma.routine.findFirst({
+          where: { id: input.routineId, spaceId: actor.spaceId, bot: { archivedAt: null } },
+        });
+        if (!existing) throw new ORPCError("NOT_FOUND");
+        // The command runs before the model with the owner's tools and accounts, so only the
+        // routine's owner may name it.
+        if (existing.userId !== actor.userId) {
+          throw new ClientError(
+            "FORBIDDEN",
+            "Only the routine's owner can change what it runs first.",
+          );
+        }
+        if (input.prepare) {
+          const command = await deps.prisma.codeCommand.findUnique({
+            where: { spaceId_name: { spaceId: actor.spaceId, name: input.prepare.command } },
+            select: { name: true },
+          });
+          if (!command) {
+            throw new ClientError(
+              "BAD_REQUEST",
+              `There is no saved command named ${input.prepare.command}.`,
+            );
+          }
+        }
+        const bot = await repos.getBot(actor, existing.botId);
+        const row = await deps.prisma.routine.update({
+          where: { id: existing.id },
+          // SQL NULL clears it; otherwise the column holds exactly `{ command, args }`.
+          data: {
+            prepare: input.prepare ? (input.prepare as Prisma.InputJsonValue) : Prisma.DbNull,
+          },
+        });
+        if (bot.thread) {
+          await deps.events.append({
+            spaceId: actor.spaceId,
+            threadId: bot.thread.id,
+            botId: bot.id,
+            type: "routine.updated",
+            payload: { routineId: row.id, active: row.active },
+          });
+        }
+        return mapRoutine(row);
+      }),
+      commands: authed.routines.commands.handler(async ({ context }) =>
+        listRoutineCommands(deps, context.actor),
+      ),
       remove: authed.routines.remove.handler(async ({ context, input }) => {
         // Any member can change a routine, so any member can delete one.
         const existing = await deps.prisma.routine.findFirst({

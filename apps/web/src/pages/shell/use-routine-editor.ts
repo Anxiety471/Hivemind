@@ -15,6 +15,8 @@ import type { RoutineDraftState } from "../../lib/routines/routine-draft";
 import {
   draftStateFromRoutine,
   emptyRoutineDraftState,
+  prepareDraftChanged,
+  prepareFromDraft,
   routineNeedsOneShotArm,
   watchFromDraft,
 } from "../../lib/routines/routine-draft";
@@ -229,6 +231,18 @@ export function useRoutineEditor({
             return;
           }
           const watch = watchResult?.watch ?? null;
+          const prepareResult = routineDraft.prepare
+            ? prepareFromDraft(routineDraft.prepare)
+            : null;
+          if (prepareResult && "error" in prepareResult) {
+            setRoutineError(prepareResult.error);
+            return;
+          }
+          const prepare = prepareResult?.prepare ?? null;
+          const prepareChanged = prepareDraftChanged(
+            routineDraft.prepare,
+            targetRoutine?.prepare ?? null,
+          );
           const saveRequest = ++routineSaveRequest.current;
           routineSavePending.current = true;
           setSavingRoutine(true);
@@ -310,6 +324,18 @@ export function useRoutineEditor({
                 inChat: routineDraft.inChat,
                 ...routineModel,
               });
+            }
+            // Create and update cannot carry the prepare command, so it is saved separately.
+            if (prepareChanged) {
+              // The routine exists once this save lands, so a failed prepare keeps it as the
+              // editing target and the next attempt updates it instead of creating it again.
+              if (
+                routineSaveRequest.current === saveRequest &&
+                activeBotId.current === targetBotId
+              ) {
+                setEditingRoutine(saved);
+              }
+              saved = await rpc.routines.setPrepare({ routineId: saved.id, prepare });
             }
             if (routineSaveRequest.current === saveRequest && activeBotId.current === targetBotId) {
               setEditingRoutine(saved);

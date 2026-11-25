@@ -1,6 +1,7 @@
 import * as z from "zod";
 import { TimeZoneSchema } from "../account/preferences.js";
 import { Id, ThinkingLevelSchema } from "../ids.js";
+import { RoutinePrepareSchema } from "./routine-prepare.js";
 import { RoutineWatchSchema, RoutineWatchStateSchema } from "./routine-watch.js";
 
 /**
@@ -71,6 +72,8 @@ export const RoutineSchema = z.object({
   /** Null unless the routine starts when something changes. */
   watch: RoutineWatchSchema.nullable(),
   watchState: RoutineWatchStateSchema.nullable(),
+  /** A saved command run before the model; null when the routine has none. Absent on older servers. */
+  prepare: RoutinePrepareSchema.nullable().default(null),
   lastRunAt: z.string().nullable(),
   nextRunAt: z.string().nullable(),
   /** Computed by the server; absent on older servers. Not a worker-health diagnosis. */

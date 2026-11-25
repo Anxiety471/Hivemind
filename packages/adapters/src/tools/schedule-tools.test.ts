@@ -2004,3 +2004,109 @@ describe("schedule tools with events", () => {
     expect(listed.routines[0]).toMatchObject({ on: { git: true, email: "domain" } });
   });
 });
+
+describe("schedule tools: prepare", () => {
+  const routine = {
+    id: "routine-1",
+    spaceId: "ws-1",
+    botId: "bot-1",
+    userId: "user-1",
+    threadId: "thread-1",
+    name: "Inbox",
+    prompt: "Summarize new mail",
+    crons: ["0 9 * * *"],
+    timezone: "UTC",
+    active: true,
+    watch: null,
+    prepare: null as unknown,
+    lastRunAt: null,
+    nextRunAt: new Date("2030-01-01T09:00:00.000Z"),
+  };
+  const digest = {
+    name: "inbox_digest",
+    description: "Unread mail",
+    icon: null,
+    parameters: {
+      type: "object",
+      properties: { hours: { type: "number" } },
+      required: ["hours"],
+    },
+    code: "return [];",
+  };
+
+  function setup(saved: unknown = null) {
+    const updateMany = vi.fn(async (_query: unknown) => ({ count: 1 }));
+    const findUnique = vi.fn(async ({ where }: { where: { spaceId_name: { name: string } } }) =>
+      where.spaceId_name.name === digest.name ? digest : null,
+    );
+    const deps = {
+      prisma: {
+        routine: {
+          findFirst: vi.fn(async () => ({ ...routine, prepare: saved })),
+          updateMany,
+          count: vi.fn(async () => 0),
+        },
+        codeCommand: { findUnique },
+        run: { updateManyAndReturn: vi.fn(async () => []) },
+      },
+      events: { append: vi.fn(async () => undefined) },
+      jobs: { enqueue: vi.fn(async () => undefined), cancel: vi.fn(async () => undefined) },
+    } as unknown as Parameters<typeof updateScheduleFromTool>[0];
+    const update = (prepare: unknown) =>
+      updateScheduleFromTool(deps, {
+        spaceId: "ws-1",
+        botId: "bot-1",
+        userId: "user-1",
+        threadId: "thread-1",
+        routineId: "routine-1",
+        schedule: {},
+        prepare,
+      });
+    return { updateMany, findUnique, update };
+  }
+
+  it("saves a command the Space has and reports the change", async () => {
+    const { updateMany, findUnique, update } = setup();
+    const prepare = { command: "inbox_digest", args: { hours: 24 } };
+    await expect(update(JSON.stringify(prepare))).resolves.toMatchObject({
+      ok: true,
+      changes: { prepare: { before: null, after: prepare } },
+    });
+    expect(findUnique.mock.calls[0]?.[0]).toMatchObject({
+      where: { spaceId_name: { spaceId: "ws-1", name: "inbox_digest" } },
+    });
+    expect(updateMany.mock.calls[0]?.[0]).toMatchObject({ data: { prepare } });
+  });
+
+  it("refuses a missing command or arguments it does not take, saving nothing", async () => {
+    const { updateMany, update } = setup();
+    await expect(update({ command: "nope" })).resolves.toEqual({
+      error: "There is no saved command named nope. Save it with command_save first.",
+    });
+    await expect(update({ command: "inbox_digest", args: {} })).resolves.toEqual({
+      error: expect.stringMatching(/^prepare\.args do not fit inbox_digest/),
+    });
+    expect(updateMany).not.toHaveBeenCalled();
+  });
+
+  it("removes a saved command with {} and leaves it alone when absent", async () => {
+    const saved = { command: "inbox_digest", args: { hours: 24 } };
+    const removing = setup(saved);
+    await expect(removing.update({})).resolves.toMatchObject({
+      changes: { prepare: { before: saved, after: null } },
+    });
+    expect(removing.updateMany.mock.calls[0]?.[0]).toMatchObject({
+      data: { prepare: Prisma.DbNull },
+    });
+    await expect(setup(saved).update(undefined)).resolves.toEqual({ error: "Nothing to update." });
+  });
+
+  it("lists a routine's saved command", async () => {
+    const saved = { command: "inbox_digest", args: { hours: 24 } };
+    const prisma = {
+      routine: { findMany: vi.fn(async () => [{ ...routine, prepare: saved }]) },
+    } as unknown as Parameters<typeof listSchedulesFromTool>[0]["prisma"];
+    const listed = await listSchedulesFromTool({ prisma }, { spaceId: "ws-1", botId: "bot-1" });
+    expect(listed.routines[0]).toMatchObject({ prepare: saved });
+  });
+});

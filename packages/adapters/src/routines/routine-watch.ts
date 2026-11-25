@@ -44,6 +44,7 @@ import {
 import { recordVaultItemUse } from "../secrets/vault/vault-activity.js";
 import type { SafeWebFetchOptions } from "../web/web-ssrf.js";
 import { fetchSafeHttpRequest } from "../web/web-ssrf.js";
+import { ROUTINE_PREPARE_NOTE_START } from "./routine-prepare.prompt.js";
 import { ROUTINE_WATCH_NOTE_START, routineWatchNote } from "./routine-watch.prompt.js";
 import { resolveWatchArgs } from "./routine-watch-args.js";
 
@@ -835,11 +836,14 @@ export type RoutineWatchTick =
 
 /**
  * The owner's part of a routine run's task prompt, as saved when it fired: the routine's
- * instructions without the change note, whose detail comes from what the watch read.
+ * instructions without the change note or the prepare note, whose details come from what the
+ * watch read and what the prepare command returned.
  */
 export function routineTaskInstructions(taskPrompt: string): string {
-  const note = taskPrompt.indexOf(ROUTINE_WATCH_NOTE_START);
-  return note === -1 ? taskPrompt : taskPrompt.slice(0, note);
+  const notes = [ROUTINE_WATCH_NOTE_START, ROUTINE_PREPARE_NOTE_START]
+    .map((start) => taskPrompt.indexOf(start))
+    .filter((index) => index !== -1);
+  return notes.length === 0 ? taskPrompt : taskPrompt.slice(0, Math.min(...notes));
 }
 
 /**

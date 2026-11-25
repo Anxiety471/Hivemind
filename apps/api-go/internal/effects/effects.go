@@ -225,6 +225,7 @@ func RosterChangeFor(procedure string, actor db.Actor, input map[string]any, out
 // spaceChangeProcedures is SPACE_CHANGE_PROCEDURES (space-change-procedures.ts).
 var spaceChangeProcedures = map[string][]string{
 	"routines.create": {"routines"}, "routines.update": {"routines"}, "routines.remove": {"routines"},
+	"routines.setPrepare":      {"routines"},
 	"routines.testRun":         {"runs"},
 	"threads.sendWithRoutines": {"runs"}, "threads.react": {"runs"}, "threads.endCall": {"runs"},
 	"threads.followUp": {"runs"}, "skills.testRun": {"runs"},

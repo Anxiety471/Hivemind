@@ -635,6 +635,19 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 			},
 		},
 		{
+			Name: "routines.setPrepare",
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return routines.SetPrepare(ctx, database, deployment, actor, input)
+			},
+		},
+		{
+			Name:     "routines.commands",
+			ReadOnly: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return routines.Commands(ctx, database, actor, input)
+			},
+		},
+		{
 			Name: "routines.testRun",
 			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
 				return routines.TestRun(ctx, database, deployment, actor, input)

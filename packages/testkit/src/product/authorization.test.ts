@@ -422,6 +422,8 @@ describeWithDatabase("API authorization and resource isolation", () => {
       ["routines/create", routineInput("missing-bot")],
       ["routines/update", { routineId: "missing-routine", name: "Nope" }],
       ["routines/remove", { routineId: "missing-routine" }],
+      ["routines/setPrepare", { routineId: "missing-routine", prepare: null }],
+      ["routines/commands", {}],
       ["routines/testRun", { routineId: "missing-routine" }],
       ["routines/history"],
       ["scratchpad/list", { botId: "missing-bot" }],
