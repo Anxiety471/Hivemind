@@ -303,6 +303,14 @@ func readEvents(ctx context.Context, database *db.DB, deployment shared.Deployme
 // that integer-like keys come first); a map would lose it. Sealed values are decrypted with the
 // event's own key and location and parsed the same way, so a client sees what TypeScript sees.
 func openPayload(ctx context.Context, ring *contentcrypto.KeyRing, event storedEvent, value any) (any, error) {
+	if object, ok := value.(*validate.Object); ok {
+		// A sealed value is {"<plain scalars>…","$sealed":"<ciphertext>"}: openJson keeps only what
+		// the ciphertext holds, whatever the plain keys beside it say (content-crypto.ts:121).
+		if sealed, ok := object.Values[contentcrypto.SealedField].(string); ok && ring != nil &&
+			contentcrypto.IsCiphertext(sealed) {
+			return openSealed(ctx, ring, event, sealed)
+		}
+	}
 	switch typed := value.(type) {
 	case *validate.Object:
 		for _, key := range typed.Keys {
@@ -326,26 +334,32 @@ func openPayload(ctx context.Context, ring *contentcrypto.KeyRing, event storedE
 		if ring == nil || !contentcrypto.IsCiphertext(typed) {
 			return typed, nil
 		}
-		id, ok := contentcrypto.CiphertextKeyID(typed)
-		if !ok {
-			return nil, contentcrypto.ErrDecryption
-		}
-		key, err := ring.ByID(ctx, id)
-		if err != nil {
-			return nil, err
-		}
-		if key.SpaceID != event.spaceID {
-			return nil, contentcrypto.ErrAnotherSpace
-		}
-		plaintext, err := contentcrypto.DecryptText(key, contentcrypto.Location{
-			Table: "events", Column: "payload", RowID: event.id, Owner: event.threadID,
-		}, typed)
-		if err != nil {
-			return nil, err
-		}
-		return validate.DecodeAny([]byte(plaintext))
+		return openSealed(ctx, ring, event, typed)
 	}
 	return value, nil
+}
+
+// openSealed opens one ciphertext bound to this event's payload and parses its plaintext the way
+// JSON.parse reads it, key order and all.
+func openSealed(ctx context.Context, ring *contentcrypto.KeyRing, event storedEvent, ciphertext string) (any, error) {
+	id, ok := contentcrypto.CiphertextKeyID(ciphertext)
+	if !ok {
+		return nil, contentcrypto.ErrDecryption
+	}
+	key, err := ring.ByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if key.SpaceID != event.spaceID {
+		return nil, contentcrypto.ErrAnotherSpace
+	}
+	plaintext, err := contentcrypto.DecryptText(key, contentcrypto.Location{
+		Table: "events", Column: "payload", RowID: event.id, Owner: event.threadID,
+	}, ciphertext)
+	if err != nil {
+		return nil, err
+	}
+	return validate.DecodeAny([]byte(plaintext))
 }
 
 // eventFrame is mapProductEvent followed by the router's output schema: the payload falls back to
@@ -486,8 +500,8 @@ func shouldForwardPeerEvent(event storedEvent) bool {
 	if event.eventType != "thread.message.created" && event.eventType != "thread.message.updated" {
 		return false
 	}
-	return blocksMatch(event.payload, func(block map[string]any) bool {
-		switch block["kind"] {
+	return blocksMatch(event.payload, func(block *validate.Object) bool {
+		switch blockKind(block) {
 		case "bot_message_received", "bot_message_sent", "ask", "text", "chart", "app", "file",
 			"image", "page":
 			return true
@@ -507,17 +521,18 @@ func shouldForwardBackgroundEvent(event storedEvent) bool {
 	if event.eventType != "thread.message.created" && event.eventType != "thread.message.updated" {
 		return false
 	}
-	if !blocksMatch(event.payload, func(map[string]any) bool { return true }) {
+	if !blocksMatch(event.payload, func(*validate.Object) bool { return true }) {
 		return false
 	}
-	payload, _ := event.payload.(map[string]any)
-	if payload["role"] == "user" && !blocksMatch(event.payload, func(block map[string]any) bool {
-		return block["kind"] == "delivery"
+	payload, _ := event.payload.(*validate.Object)
+	role, _ := payload.Values["role"].(string)
+	if role == "user" && !blocksMatch(event.payload, func(block *validate.Object) bool {
+		return blockKind(block) == "delivery"
 	}) {
 		return true
 	}
-	return blocksMatch(event.payload, func(block map[string]any) bool {
-		switch block["kind"] {
+	return blocksMatch(event.payload, func(block *validate.Object) bool {
+		switch blockKind(block) {
 		case "ask", "computer", "mcp_approval", "app_connect":
 			return true
 		}
@@ -527,19 +542,25 @@ func shouldForwardBackgroundEvent(event storedEvent) bool {
 
 // blocksMatch applies a predicate to the event payload's blocks array; a payload without one
 // matches nothing.
-func blocksMatch(payload any, match func(block map[string]any) bool) bool {
-	record, ok := payload.(map[string]any)
+func blocksMatch(payload any, match func(block *validate.Object) bool) bool {
+	record, ok := payload.(*validate.Object)
 	if !ok {
 		return false
 	}
-	blocks, ok := record["blocks"].([]any)
+	blocks, ok := record.Values["blocks"].([]any)
 	if !ok {
 		return false
 	}
 	for _, block := range blocks {
-		if object, ok := block.(map[string]any); ok && match(object) {
+		if object, ok := block.(*validate.Object); ok && match(object) {
 			return true
 		}
 	}
 	return false
+}
+
+// blockKind is a message block's `kind`, absent when it is not a string.
+func blockKind(block *validate.Object) string {
+	kind, _ := block.Values["kind"].(string)
+	return kind
 }

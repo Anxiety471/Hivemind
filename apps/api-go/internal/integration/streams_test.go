@@ -729,15 +729,18 @@ func TestStreamsReleaseGoroutinesAndListeners(t *testing.T) {
 		response.Body.Close()
 	}
 
+	// Goroutines settle with their own close; a realtime connection is closed from the listener
+	// goroutine just before it exits, so under -race the pool can still show one for a moment.
 	deadline := time.Now().Add(20 * time.Second)
-	for {
-		settled := runtime.NumGoroutine()
-		if settled <= baselineGoroutines+2 && realtimeListenerCount(t, database) <= baselineListeners {
-			break
-		}
+	for runtime.NumGoroutine() > baselineGoroutines+2 {
 		if time.Now().After(deadline) {
-			t.Fatalf("leak: goroutines %d (baseline %d), listeners %d (baseline %d)",
-				settled, baselineGoroutines, realtimeListenerCount(t, database), baselineListeners)
+			t.Fatalf("leak: goroutines %d (baseline %d)", runtime.NumGoroutine(), baselineGoroutines)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	for realtimeListenerCount(t, database) > baselineListeners {
+		if time.Now().After(deadline) {
+			t.Fatalf("leak: listeners %d (baseline %d)", realtimeListenerCount(t, database), baselineListeners)
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
