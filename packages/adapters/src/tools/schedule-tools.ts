@@ -1,9 +1,10 @@
 import type { ConnectorProvider, JobPublisher, SecretStore } from "@rakazo/adapter-kit";
 import { routineJobKey, routineWakeupJob } from "@rakazo/adapter-kit";
-import type { RoutineWatch } from "@rakazo/contracts";
+import type { RoutinePrepare, RoutineWatch } from "@rakazo/contracts";
 import {
   ROUTINE_WATCH_MIN_MINUTES,
   RoutineEmailSendersSchema,
+  RoutinePrepareSchema,
   RoutineWatchSchema,
   TimeZoneSchema,
 } from "@rakazo/contracts";
@@ -20,7 +21,7 @@ import {
   zonedDateTime,
 } from "@rakazo/core";
 import type { PrismaClient, ThreadEvents } from "@rakazo/db";
-import { Prisma, runAsSystemInTransaction } from "@rakazo/db";
+import { Prisma, readJsonColumn, runAsSystemInTransaction } from "@rakazo/db";
 import { getLogger } from "@rakazo/logging";
 import { finishRoutineHandover } from "../routines/routine-handover.js";
 import { postRoutineNotice, routineEditChange, routineEdited } from "../routines/routine-notice.js";
@@ -39,6 +40,8 @@ import {
 } from "../routines/routine-triggers.prompt.js";
 import { validateRoutineWatch } from "../routines/routine-watch.js";
 import { localDateTime } from "../runs/assembly/current-time.prompt.js";
+import { findCodeCommand } from "./code-commands.js";
+import { parseConnectorToolArgs } from "./lazy-tool-catalog.js";
 
 export { isOneShotRoutineCron, ONCE_ROUTINE_CRON };
 
@@ -589,6 +592,8 @@ export async function createScheduleFromTool(
     schedule: Record<string, unknown>;
     /** The tool's `on`: events that start the routine besides its timing, or instead of it. */
     on?: unknown;
+    /** The tool's `prepare`: a saved command the routine runs before the model. */
+    prepare?: unknown;
   },
 ) {
   const routineBotId = input.target?.botId ?? input.botId;
@@ -621,8 +626,11 @@ export async function createScheduleFromTool(
   });
   if ("error" in resolvedEvents) return { error: resolvedEvents.error };
   const { events } = resolvedEvents;
+  const resolvedPrepare = await routinePrepareFromTool(deps.prisma, input.spaceId, input.prepare);
+  if ("error" in resolvedPrepare) return { error: resolvedPrepare.error };
+  const prepare = resolvedPrepare.prepare ?? undefined;
   if (input.schedule.watch !== undefined) {
-    return createWatchFromTool(deps, { ...input, name, prompt, events });
+    return createWatchFromTool(deps, { ...input, name, prompt, events, prepare });
   }
   // Only events start it: no timing, so nothing to wake.
   const eventsOnly = hasRoutineEvents(events) && !hasScheduleTiming(input.schedule);
@@ -667,6 +675,7 @@ export async function createScheduleFromTool(
         inChat: input.inChat ?? false,
         active: true,
         ...events,
+        ...(prepare ? { prepare: prepare as Prisma.InputJsonValue } : {}),
         nextRunAt: eventsOnly ? null : resolved.nextRunAt,
       },
     });
@@ -724,7 +733,70 @@ export async function createScheduleFromTool(
     oneShot: isOneShotRoutineCrons(row.crons),
     ...describeRoutineTiming(row),
     ...eventsResult(events),
+    ...(prepare ? { prepare } : {}),
   };
+}
+
+/** Whether a schedule tool's `prepare` names a command, rather than leaving or removing one. */
+export function asksRoutinePrepare(value: unknown): boolean {
+  if (!isScheduleValueProvided(value)) return false;
+  return !(typeof value === "object" && value !== null && !Object.keys(value).length);
+}
+
+/**
+ * A schedule tool's `prepare`: a saved command of this Space, with arguments its parameters
+ * accept. As with `on`, {} is none (schedule_update removes it); absent, null or blank is none
+ * too, and schedule_update leaves it as it is.
+ */
+export async function routinePrepareFromTool(
+  prisma: PrismaClient,
+  spaceId: string,
+  value: unknown,
+): Promise<{ prepare: RoutinePrepare | null } | { error: string }> {
+  if (!isScheduleValueProvided(value)) return { prepare: null };
+  // Some models send the object as JSON text; take it either way.
+  let raw = value;
+  if (typeof raw === "string") {
+    try {
+      raw = JSON.parse(raw);
+    } catch {
+      return { error: 'prepare must be an object like {"command":"inbox_digest","args":{}}.' };
+    }
+  }
+  if (raw && typeof raw === "object" && !Array.isArray(raw) && !Object.keys(raw).length) {
+    return { prepare: null };
+  }
+  const parsed = RoutinePrepareSchema.safeParse(raw);
+  if (!parsed.success) {
+    return { error: parsed.error.issues.map((issue) => issue.message).join("; ") };
+  }
+  const command = await findCodeCommand(prisma, spaceId, parsed.data.command);
+  if (!command) {
+    return {
+      error: `There is no saved command named ${parsed.data.command}. Save it with command_save first.`,
+    };
+  }
+  if (command.parameters) {
+    try {
+      parseConnectorToolArgs(command.parameters, parsed.data.args);
+    } catch (error) {
+      return {
+        error: `prepare.args do not fit ${command.name}: ${error instanceof Error ? error.message : error}`,
+      };
+    }
+  }
+  return { prepare: parsed.data };
+}
+
+/** A routine row's saved prepare, as the schedule tools show it. */
+function prepareView(row: { id: string; prepare: unknown }) {
+  const prepare = readJsonColumn(
+    RoutinePrepareSchema.nullable(),
+    row.prepare,
+    { table: "routines", column: "prepare", id: row.id },
+    { fallback: null },
+  );
+  return prepare ? { prepare } : {};
 }
 
 /** `schedule_create` tool arguments as createScheduleFromTool takes them. */
@@ -736,6 +808,7 @@ export function scheduleCreateFields(args: Record<string, unknown>) {
     timezone: args.timezone ? String(args.timezone) : undefined,
     schedule: compactScheduleInput({ ...scheduleTimingArgs(args), watch: args.watch }),
     on: isScheduleValueProvided(args.on) ? args.on : undefined,
+    prepare: isScheduleValueProvided(args.prepare) ? args.prepare : undefined,
   };
 }
 
@@ -767,6 +840,8 @@ export async function scheduleCreateError(
     oneShot: ONE_SHOT_FIELDS.some((field) => isScheduleValueProvided(input.schedule[field])),
   });
   if ("error" in events) return events.error;
+  const prepare = await routinePrepareFromTool(prisma, input.spaceId, input.prepare);
+  if ("error" in prepare) return prepare.error;
   if (input.schedule.watch !== undefined) {
     const parsed = scheduleWatch(input.schedule);
     return parsed.success ? undefined : parsed.error;
@@ -828,6 +903,7 @@ async function createWatchFromTool(
     timezone?: string;
     schedule: Record<string, unknown>;
     events: RoutineEvents;
+    prepare?: RoutinePrepare;
   },
 ) {
   const parsed = scheduleWatch(input.schedule);
@@ -863,6 +939,7 @@ async function createWatchFromTool(
         active: true,
         watch: parsed.data as Prisma.InputJsonValue,
         ...input.events,
+        ...(input.prepare ? { prepare: input.prepare as Prisma.InputJsonValue } : {}),
         nextRunAt,
       },
     });
@@ -907,6 +984,7 @@ async function createWatchFromTool(
     watch: parsed.data,
     note: `Takes a first reading now, then checks every ${parsed.data.everyMinutes} minutes and runs only when it changes.`,
     ...eventsResult(input.events),
+    ...(input.prepare ? { prepare: input.prepare } : {}),
   };
 }
 
@@ -935,6 +1013,7 @@ export async function listSchedulesFromTool(
       oneShot: isOneShotRoutineCrons(row.crons),
       ...describeRoutineTiming(row),
       ...(row.watch ? { watch: row.watch, lastCheck: row.watchState ?? null } : {}),
+      ...prepareView(row),
       ...(hasRoutineEvents(row) ? { on: routineEventsView(row) } : {}),
       ...(input.groupThreadId ? { inThisChat: row.threadId === input.groupThreadId } : {}),
     })),
@@ -1010,6 +1089,8 @@ export async function updateScheduleFromTool(
     schedule: Record<string, unknown>;
     /** Replaces the routine's events; an empty object removes them. */
     on?: unknown;
+    /** Replaces the saved command the routine runs first; an empty object removes it. */
+    prepare?: unknown;
   },
 ) {
   const routineId = input.routineId.trim();
@@ -1046,6 +1127,14 @@ export async function updateScheduleFromTool(
     }
     timezone = parsed.data;
   }
+  const savedPrepare = prepareView(existing).prepare ?? null;
+  let prepare = savedPrepare;
+  if (input.prepare !== undefined) {
+    const resolved = await routinePrepareFromTool(deps.prisma, input.spaceId, input.prepare);
+    if ("error" in resolved) return { error: resolved.error };
+    prepare = resolved.prepare;
+  }
+  const prepareChanged = JSON.stringify(prepare) !== JSON.stringify(savedPrepare);
   const hasTiming = SCHEDULE_TIMING_FIELDS.some((field) =>
     isScheduleValueProvided(input.schedule[field]),
   );
@@ -1058,7 +1147,8 @@ export async function updateScheduleFromTool(
     prompt === undefined &&
     inChat === undefined &&
     input.active === undefined &&
-    input.on === undefined
+    input.on === undefined &&
+    input.prepare === undefined
   ) {
     return { error: "Nothing to update." };
   }
@@ -1178,6 +1268,9 @@ export async function updateScheduleFromTool(
       ...(inChat === undefined ? {} : { inChat }),
       ...(timingChanged ? { crons, timezone, active, nextRunAt } : {}),
       ...(eventsChanged ? events : {}),
+      ...(prepareChanged
+        ? { prepare: prepare ? (prepare as Prisma.InputJsonValue) : Prisma.DbNull }
+        : {}),
     },
   });
   if (count === 0) {
@@ -1219,6 +1312,7 @@ export async function updateScheduleFromTool(
     ...(inChat === undefined ? {} : { inChat }),
     ...(timingChanged ? { crons, timezone, active, nextRunAt } : {}),
     ...(eventsChanged ? events : {}),
+    ...(prepareChanged ? { prepare } : {}),
   };
   if (routineEdited(existing, saved)) {
     await postRoutineNotice(deps, {
@@ -1250,6 +1344,7 @@ export async function updateScheduleFromTool(
         active: existing.active,
         ...describeRoutineTiming(existing),
         on: routineEventsView(existing),
+        prepare: savedPrepare,
       },
       {
         name: name ?? existing.name,
@@ -1258,6 +1353,7 @@ export async function updateScheduleFromTool(
         active,
         ...timing,
         on: routineEventsView(events),
+        prepare,
       },
     ),
   };
@@ -1272,6 +1368,7 @@ type RoutineView = {
   schedule?: string;
   nextRun: string | null;
   on: ReturnType<typeof routineEventsView>;
+  prepare: RoutinePrepare | null;
 };
 
 /** Before and after for each field an update changed; a field that kept its value is left out. */
@@ -1286,6 +1383,7 @@ function routineChanges(before: RoutineView, after: RoutineView) {
     "schedule",
     "nextRun",
     "on",
+    "prepare",
   ] as const) {
     if (JSON.stringify(before[key]) !== JSON.stringify(after[key])) {
       changes[key] = { before: before[key] ?? null, after: after[key] ?? null };

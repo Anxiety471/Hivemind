@@ -370,6 +370,7 @@ export const taskTools: ToolHandlers = {
         timezone: isScheduleValueProvided(args.timezone) ? String(args.timezone) : undefined,
         schedule: compactScheduleInput(scheduleTimingArgs(args)),
         on: isScheduleValueProvided(args.on) ? args.on : undefined,
+        prepare: isScheduleValueProvided(args.prepare) ? args.prepare : undefined,
       }),
     );
   },

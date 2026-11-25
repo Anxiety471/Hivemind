@@ -64,7 +64,7 @@ import { resolveCompletedSecretLeftover } from "../../secrets/run-secret.js";
 import { scheduleRunSecretsExpiry } from "../../secrets/run-secrets-expiry.js";
 import { RAKAZO_DOCS_URLS } from "../../tools/builtin-skills.prompt.js";
 import { CATALOG_LOAD, CATALOG_SEARCH } from "../../tools/lazy-tool-catalog.js";
-import { watchFromTool } from "../../tools/schedule-tools.js";
+import { asksRoutinePrepare, watchFromTool } from "../../tools/schedule-tools.js";
 import type { RunContext, RunTrust } from "../assembly/run-context.js";
 import {
   isRunTainted,
@@ -273,10 +273,11 @@ export async function gateToolCall(
     (await ctx.trust.routineNamesNewSite(String(args.prompt ?? "")));
   const memoryWriteGated = await memoryWriteNeedsApproval(name, () => isRunTainted(ctx));
   // An event trigger opens a standing way in for outside text (a chat app's every message, mail,
-  // a webhook), so once outside content entered this run, adding one needs a person, as above.
+  // a webhook), and a prepare command runs a saved script with the owner's accounts on every run,
+  // so once outside content entered this run, adding either needs a person, as above.
   const routineAddsEvents =
     (name === "schedule_create" || name === "schedule_update" || name === "create_child_routine") &&
-    asksRoutineEvents(args.on) &&
+    (asksRoutineEvents(args.on) || asksRoutinePrepare(args.prepare)) &&
     (await isRunTainted(ctx));
   const { purchase, cardUse, loginUse } = request;
   // Saved logins that ask first require the owner on every use, like saved cards.

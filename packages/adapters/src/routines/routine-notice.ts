@@ -45,6 +45,7 @@ const EDITABLE_FIELDS = [
   "modelId",
   "thinkingLevel",
   "watch",
+  "prepare",
   "nextRunAt",
 ] as const;
 

@@ -56,8 +56,9 @@ it refuses when someone else started the run or outside content entered it.
 
 A routine's **Run first** setting names a saved command that runs before the bot, with read-only
 tools only. Nobody is there to answer a card, so a call that would ask is refused, and the bot
-hears why. What the command returns counts as outside content for the rest of the run. Only the
-routine's owner can set it.
+hears why. What the command returns counts as outside content for the rest of the run. In the
+editor only the routine's owner can set it; a bot can set it when it creates or edits a routine,
+and asks first once outside content has entered that run, as it does for event triggers.
 
 ## Spending limit
 

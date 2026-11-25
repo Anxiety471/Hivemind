@@ -489,6 +489,15 @@ function fixture({
     actionApprovalRule: { findMany: vi.fn(async () => (confirmationsOverride ? rules : [])) },
     userActionApprovalRule: { findMany: vi.fn(async () => (confirmationsOverride ? [] : rules)) },
     routine: { findMany: vi.fn(async () => routines) },
+    codeCommand: {
+      findUnique: vi.fn(async () => ({
+        name: "inbox_digest",
+        description: "Unread mail",
+        icon: null,
+        parameters: null,
+        code: "return [];",
+      })),
+    },
     actionAutoReviewPreference: {
       findUnique: vi.fn(async () =>
         confirmationsOverride && savedPreference ? { enabled: autoReview, skipApprovals } : null,
@@ -2952,6 +2961,33 @@ describe("routine event approval", () => {
     // The approval is recorded for the same short form the card shows.
     const recorded = f.effects.find((effect) => effect.kind === "schedule_create")?.request;
     expect((recorded as { on?: unknown } | undefined)?.on).toEqual({ webhook: true });
+  });
+
+  it("asks a person before a run that read outside content adds a command to run first", async () => {
+    const f = fixture({
+      builtin: true,
+      sourceRole: "user",
+      autoReview: true,
+      rules: [{ effect: "always_allow", matchKind: "tool", matchValue: "schedule_create" }],
+    });
+    f.setCalls([
+      { name: "web_search", args: { query: "news" }, executionId: "call-1" },
+      {
+        name: "schedule_create",
+        args: {
+          name: "Inbox",
+          prompt: "Summarize new mail",
+          cron: "0 9 * * *",
+          inChat: false,
+          prepare: { command: "inbox_digest" },
+        },
+        executionId: "call-2",
+      },
+    ]);
+    await f.run();
+    expect(isApprovalPausedResult(f.results[1])).toBe(true);
+    expect(reviewMock).not.toHaveBeenCalled();
+    expect(pausedActionIds(f)).toEqual(["allow", "deny"]);
   });
 
   it("refuses a chat app name too long to be one, before any card", async () => {
