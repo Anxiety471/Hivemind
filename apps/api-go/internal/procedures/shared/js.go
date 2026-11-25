@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/tz"
 )
 
 // Base64URL is Buffer.from(value, "base64url"): characters outside both
@@ -142,7 +144,9 @@ func ParseDate(text string) (time.Time, bool) {
 	hasTime := match[4] != ""
 	switch offset := match[8]; {
 	case offset == "" && hasTime:
-		location = time.Local
+		// V8 reads a datetime without an offset in the process zone; its rules
+		// come from the embedded tzdata release, never the host's.
+		location = tz.Local()
 	case offset == "" || offset == "Z" || offset == "z":
 	default:
 		sign := 1
