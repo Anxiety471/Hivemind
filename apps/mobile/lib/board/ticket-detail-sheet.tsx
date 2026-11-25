@@ -1,12 +1,12 @@
 import { useLingui } from "@lingui/react/macro";
 import type { Ticket, TicketStatus } from "@rakazo/contracts";
-import { hasPendingTicketDecision, TICKET_STATUSES } from "@rakazo/contracts";
+import { hasPendingTicketDecision, pullRequestLabel, TICKET_STATUSES } from "@rakazo/contracts";
 import { fontWeight, typeScale } from "@rakazo/ui-tokens";
-import { Modal, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Linking, Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { AskActions } from "../../components/cards/AskActions";
 import { NativeActionButton } from "../../components/native/native-action-button";
 import { native, useMobileTokens, useThemedStyles } from "../native/native";
-import { ticketStatusLabel } from "./board";
+import { ticketPullRequestStateLabel, ticketStatusLabel } from "./board";
 
 /** Modal sheet for reading a ticket and answering a pending 3-choice (+ Other) decision on mobile. */
 export function TicketDetailSheet({
@@ -116,6 +116,43 @@ export function TicketDetailSheet({
             </Text>
           ) : null}
 
+          {ticket.pullRequests.length > 0 ? (
+            <View style={styles.linksSection}>
+              <Text style={[styles.eyebrow, { color: tokens.mutedForeground }]}>
+                {t`Pull requests`}
+              </Text>
+              {ticket.pullRequests.map((pullRequest) => (
+                <Pressable
+                  key={pullRequest.url}
+                  accessibilityRole="link"
+                  onPress={() => void Linking.openURL(pullRequest.url)}
+                  style={styles.linkRow}
+                >
+                  <Text numberOfLines={1} style={[styles.linkLabel, { color: tokens.foreground }]}>
+                    {pullRequestLabel(pullRequest.url)}
+                  </Text>
+                  <View style={[styles.badge, { backgroundColor: tokens.muted }]}>
+                    <Text
+                      style={[
+                        styles.badgeText,
+                        {
+                          color:
+                            pullRequest.state === "merged"
+                              ? tokens.success
+                              : pullRequest.state === "closed"
+                                ? tokens.mutedForeground
+                                : tokens.foreground,
+                        },
+                      ]}
+                    >
+                      {ticketPullRequestStateLabel(pullRequest.state)}
+                    </Text>
+                  </View>
+                </Pressable>
+              ))}
+            </View>
+          ) : null}
+
           <View style={styles.moveSection}>
             <Text style={[styles.eyebrow, { color: tokens.mutedForeground }]}>{t`Move to`}</Text>
             <View style={styles.moveRow}>
@@ -170,6 +207,9 @@ function createStyles() {
     },
     answeredText: { ...typeScale.secondary },
     description: { ...typeScale.body, lineHeight: 22 },
+    linksSection: { gap: 8 },
+    linkRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+    linkLabel: { ...typeScale.secondary, flexShrink: 1, textDecorationLine: "underline" },
     moveSection: { gap: 8, marginTop: 4 },
     moveRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   });

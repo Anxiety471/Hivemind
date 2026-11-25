@@ -1,5 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { SecretStoreUnavailableError } from "@rakazo/adapter-kit";
+import { recordTicketPullRequestState } from "@rakazo/adapters";
+import type { TicketPullRequestState } from "@rakazo/contracts";
 import type { Hono } from "hono";
 import { readBoundedBytes } from "../http/http-body.js";
 import { githubEventMetadataPrompt } from "../messaging/inbound-delivery.prompt.js";
@@ -155,6 +157,22 @@ export function formatGithubEventPrompt(event: string, payload: Record<string, u
   return githubEventMetadataPrompt(event, githubDeliveryMetadata(event, payload));
 }
 
+/** The state a pull request event leaves its pull request in, for tickets that link it. */
+export function githubPullRequestState(
+  event: string,
+  payload: Record<string, unknown>,
+): { url: string; state: TicketPullRequestState } | null {
+  if (event !== "pull_request") return null;
+  const pullRequest = record(payload.pull_request);
+  const url = pullRequest?.html_url;
+  if (typeof url !== "string") return null;
+  if (payload.action === "closed") {
+    return { url, state: pullRequest?.merged === true ? "merged" : "closed" };
+  }
+  if (payload.action === "reopened") return { url, state: "open" };
+  return null;
+}
+
 export function mountGithubWebhookRoute(
   app: Hono,
   deps: WebhookDeps,
@@ -188,6 +206,23 @@ export function mountGithubWebhookRoute(
       return unauthorized();
     }
 
+    const contentType = c.req.header("content-type");
+    // GitHub's default form content type sends the JSON in the `payload` field.
+    const mediaType = contentType?.split(";")[0]?.trim().toLowerCase();
+    const text = new TextDecoder().decode(raw);
+    const body =
+      mediaType === "application/x-www-form-urlencoded"
+        ? (new URLSearchParams(text).get("payload") ?? "")
+        : text;
+    const payload = parseWebhookPayload(body, contentType);
+    const githubEvent = githubEventName(c.req.header("x-github-event"));
+
+    // Tickets in the bot's Space follow the pull requests they link, with or without a routine.
+    const pullRequest = githubPullRequestState(githubEvent, payload);
+    if (pullRequest) {
+      await recordTicketPullRequestState(deps, { spaceId: target.bot.spaceId, ...pullRequest });
+    }
+
     const githubRoutines = await deps.prisma.routine.findMany({
       where: {
         botId: target.bot.id,
@@ -212,16 +247,6 @@ export function mountGithubWebhookRoute(
       return c.json({ ok: true, ignored: true });
     }
 
-    const contentType = c.req.header("content-type");
-    // GitHub's default form content type sends the JSON in the `payload` field.
-    const mediaType = contentType?.split(";")[0]?.trim().toLowerCase();
-    const text = new TextDecoder().decode(raw);
-    const body =
-      mediaType === "application/x-www-form-urlencoded"
-        ? (new URLSearchParams(text).get("payload") ?? "")
-        : text;
-    const payload = parseWebhookPayload(body, contentType);
-    const githubEvent = githubEventName(c.req.header("x-github-event"));
     const eventPrompt = formatGithubEventPrompt(githubEvent, payload);
 
     return webhookDeliveryResponse(

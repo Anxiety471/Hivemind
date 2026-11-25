@@ -2705,6 +2705,8 @@ model Ticket {
   // Set by the periodic sweep once a done or closed ticket is a week old; cleared if it reopens.
   archivedAt      DateTime?
   decision        Json?
+  // Linked pull or merge requests: [{ url, state }], url in normalizePullRequestUrl form.
+  pullRequests    Json      @default("[]")
   comments        TicketComment[]
 
   @@unique([boardId, number])

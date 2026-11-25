@@ -86,6 +86,7 @@ function makeTicket(overrides: Partial<Ticket>): Ticket {
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     completedAt: null,
+    pullRequests: [],
     ...overrides,
   };
 }
@@ -167,6 +168,84 @@ it("opens directly in read-first ticket detail view when targeting a ticket", as
   expect(host.querySelector('[data-testid="kanban-comment-panel"]')).not.toBeNull();
   expect(host.textContent).toContain("RAK-1");
   expect(host.textContent).toContain("Verify deploy");
+});
+
+it("links and unlinks pull requests through the ticket update keeping stored states", async () => {
+  const ticket = makeTicket({
+    id: "t-1",
+    ref: "RAK-1",
+    title: "Ship pull requests",
+    pullRequests: [{ url: "https://example.com/owner/repo/pull/7", state: "merged" }],
+  });
+  api.tickets.list.mockResolvedValue({ tickets: [ticket] });
+  api.tickets.update.mockResolvedValue(ticket);
+
+  await act(async () => {
+    root.render(
+      <QueryClientProvider client={client}>
+        <KanbanModal
+          open
+          target={ticket}
+          botId="bot-1"
+          botName="Scout"
+          bots={bots}
+          onClose={vi.fn()}
+        />
+      </QueryClientProvider>,
+    );
+  });
+  await act(async () => {
+    await flush();
+  });
+
+  const link = host.querySelector<HTMLAnchorElement>(
+    'a[href="https://example.com/owner/repo/pull/7"]',
+  );
+  expect(link?.textContent).toBe("owner/repo#7");
+  expect(link?.getAttribute("target")).toBe("_blank");
+  expect(link?.getAttribute("rel")).toBe("noreferrer");
+  expect(host.querySelector('[data-testid="ticket-pull-requests"]')?.textContent).toContain(
+    "Merged",
+  );
+
+  const addButton = Array.from(host.querySelectorAll("button")).find(
+    (button) => button.textContent === "Add pull request",
+  );
+  await act(async () => addButton?.click());
+  const input = host.querySelector<HTMLInputElement>('[aria-label="Pull request link"]')!;
+  const type = async (value: string) => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+  const submit = async () => {
+    input.closest("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await flush();
+  };
+
+  await act(async () => {
+    await type("not a link");
+    await submit();
+  });
+  expect(host.textContent).toContain("Use a pull request link");
+  expect(api.tickets.update).not.toHaveBeenCalled();
+
+  await act(async () => {
+    await type("https://example.com/owner/repo/pull/8/files");
+    await submit();
+  });
+  expect(api.tickets.update).toHaveBeenCalledWith({
+    id: "t-1",
+    pullRequests: [
+      { url: "https://example.com/owner/repo/pull/7" },
+      { url: "https://example.com/owner/repo/pull/8" },
+    ],
+  });
+
+  await act(async () => {
+    host.querySelector<HTMLElement>('[aria-label="Unlink pull request"]')?.click();
+    await flush();
+  });
+  expect(api.tickets.update).toHaveBeenLastCalledWith({ id: "t-1", pullRequests: [] });
 });
 
 it("defaults new tasks to Owner=Me with the current bot as worker", async () => {

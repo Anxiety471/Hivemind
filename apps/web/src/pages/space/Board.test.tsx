@@ -96,6 +96,7 @@ function ticket(
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     completedAt: null,
+    pullRequests: [],
   };
 }
 

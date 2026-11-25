@@ -283,6 +283,7 @@ export { TASK_CATALOG_GUIDANCE } from "./tasks/task-catalog.prompt.js";
 export * from "./tasks/task-detect.js";
 export * from "./tasks/ticket-archive.js";
 export * from "./tasks/ticket-changes.js";
+export * from "./tasks/ticket-pull-requests.js";
 export * from "./tasks/ticket-tools.js";
 export * from "./tools/builtin.tool-definition.js";
 export * from "./tools/builtin-skills.prompt.js";

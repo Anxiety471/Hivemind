@@ -1,10 +1,16 @@
-import type { TicketDecision, TicketDecisionInput, TicketStatus } from "@rakazo/contracts";
+import type {
+  TicketDecision,
+  TicketDecisionInput,
+  TicketPullRequestInput,
+  TicketStatus,
+} from "@rakazo/contracts";
 import {
   CommentTicketInput,
   CreateTicketInput,
   DecideTicketInput,
   hasPendingTicketDecision,
   isTicketCompletedStatus,
+  mergeTicketPullRequests,
   normalizeTicketDecision,
   TicketDecisionSchema,
   TicketStatusSchema,
@@ -18,6 +24,7 @@ import {
   findTicket,
   listTicketComments,
   Prisma,
+  readStoredTicketPullRequests,
   readTicketDecision,
   toTicketCommentDto,
   toTicketDto,
@@ -514,6 +521,7 @@ export async function createTicket(
     workerBotIds?: string[];
     assigneeBotId?: string | null;
     decision?: TicketDecisionInput | null;
+    pullRequests?: TicketPullRequestInput[];
   },
 ) {
   const parsed = CreateTicketInput.safeParse(input);
@@ -585,6 +593,9 @@ export async function createTicket(
         createdByBotId: input.botId ?? null,
         createdByUserId: input.userId,
         ...(normalizedDecision ? { decision: toDecisionJsonInput(normalizedDecision) } : {}),
+        ...(data.pullRequests
+          ? { pullRequests: mergeTicketPullRequests([], data.pullRequests) }
+          : {}),
       },
     });
   });
@@ -626,6 +637,7 @@ export async function updateTicket(
     workerBotIds?: string[];
     assigneeBotId?: string | null;
     decision?: TicketDecisionInput | null;
+    pullRequests?: TicketPullRequestInput[];
   },
 ) {
   const parsed = UpdateTicketInput.safeParse(input);
@@ -738,6 +750,14 @@ export async function updateTicket(
           : shouldClearPendingDecision
             ? { decision: Prisma.DbNull }
             : {}),
+        ...(data.pullRequests
+          ? {
+              pullRequests: mergeTicketPullRequests(
+                readStoredTicketPullRequests(current),
+                data.pullRequests,
+              ),
+            }
+          : {}),
         ...(data.status !== undefined
           ? {
               status: data.status,

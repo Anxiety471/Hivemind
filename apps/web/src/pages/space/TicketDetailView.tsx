@@ -1,17 +1,27 @@
 import { Trans, useLingui } from "@lingui/react/macro";
 import { ChatMarkdown } from "@rakazo/chat-ui/web";
-import type { Bot, Ticket, TicketPriority, TicketStatus } from "@rakazo/contracts";
+import type {
+  Bot,
+  Ticket,
+  TicketPriority,
+  TicketPullRequestState,
+  TicketStatus,
+} from "@rakazo/contracts";
 import {
   hasPendingTicketDecision,
+  normalizePullRequestUrl,
+  pullRequestLabel,
   TICKET_COMMENT_MAX_LENGTH,
   TICKET_DECISION_ANSWER_MAX_LENGTH,
   TICKET_DESCRIPTION_MAX_LENGTH,
+  TICKET_MAX_PULL_REQUESTS,
   TICKET_PRIORITIES,
   TICKET_STATUSES,
   TICKET_TITLE_MAX_LENGTH,
 } from "@rakazo/contracts";
 import { writeSaved } from "@rakazo/core/query";
 import {
+  Badge,
   Button,
   buttonVariants,
   DialogHeader,
@@ -24,7 +34,7 @@ import {
   Textarea,
 } from "@rakazo/ui-web";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Check, MessageCircle, Pencil, Reply, X } from "lucide-react";
+import { ArrowLeft, Check, MessageCircle, Pencil, Plus, Reply, X } from "lucide-react";
 import { useId, useState } from "react";
 import { Link, useInRouterContext } from "react-router-dom";
 import { IconTooltip } from "../../components/IconTooltip";
@@ -53,6 +63,12 @@ function oneLineExcerpt(text: string, maxChars = 120): string {
   if (cleaned.length <= maxChars) return cleaned;
   return `${cleaned.slice(0, maxChars - 1)}…`;
 }
+
+const PULL_REQUEST_STATE_TONE: Record<TicketPullRequestState, string> = {
+  open: "",
+  merged: "border-success/30 bg-success/10 text-success",
+  closed: "bg-muted text-muted-foreground",
+};
 
 /**
  * Calm, read-first view of a single task: structured 3-choice (+ Other) decision card and
@@ -84,6 +100,9 @@ export function TicketDetailView({
   const [otherOpen, setOtherOpen] = useState(false);
   const [otherText, setOtherText] = useState("");
   const [replyToCommentId, setReplyToCommentId] = useState<string | null>(null);
+  const [linkDraft, setLinkDraft] = useState("");
+  const [linkError, setLinkError] = useState("");
+  const [addingLink, setAddingLink] = useState(false);
 
   const commentsOptions = queries.tickets.comments.queryOptions({
     input: { ticketId: ticket.id },
@@ -142,6 +161,37 @@ export function TicketDetailView({
     stale: [commentsOptions.queryKey, queries.tickets.list.key()],
   });
 
+  const linking = useSave({
+    save: async (urls: string[], rpc) => {
+      await rpc.tickets.update({
+        id: ticket.id,
+        pullRequests: urls.map((url) => ({ url })),
+      });
+    },
+    stale: [queries.tickets.list.key()],
+    onSaved: () => {
+      setLinkDraft("");
+      setLinkError("");
+      setAddingLink(false);
+    },
+  });
+
+  function addPullRequest() {
+    const url = normalizePullRequestUrl(linkDraft);
+    if (!url) {
+      setLinkError(t`Use a pull request link such as https://example.com/owner/repo/pull/12.`);
+      return;
+    }
+    setLinkError("");
+    const urls = ticket.pullRequests.map((item) => item.url);
+    if (urls.includes(url) || urls.length >= TICKET_MAX_PULL_REQUESTS) {
+      setLinkDraft("");
+      setAddingLink(false);
+      return;
+    }
+    linking.run([...urls, url]);
+  }
+
   if (editing) {
     return (
       <TicketEditForm
@@ -172,6 +222,11 @@ export function TicketDetailView({
   const answeredDecision = ticket.decision?.answer ? ticket.decision : undefined;
   const newestComments = [...comments].reverse();
   const busy = moving.pending || deciding.pending || commenting.pending;
+  const pullRequestStates: Record<TicketPullRequestState, string> = {
+    open: t`Open`,
+    merged: t`Merged`,
+    closed: t`Closed`,
+  };
 
   const shownError = moving.error
     ? errorText(moving.error)
@@ -179,9 +234,11 @@ export function TicketDetailView({
       ? errorText(deciding.error)
       : commenting.error
         ? errorText(commenting.error)
-        : commentsQuery.error
-          ? errorText(commentsQuery.error)
-          : "";
+        : linking.error
+          ? errorText(linking.error)
+          : commentsQuery.error
+            ? errorText(commentsQuery.error)
+            : "";
 
   return (
     <div data-testid="kanban-ticket-detail" className="flex min-w-0 flex-col gap-4 overflow-hidden">
@@ -363,6 +420,112 @@ export function TicketDetailView({
               </div>
             </div>
           ) : null}
+
+          <div className="flex min-w-0 flex-col gap-2">
+            {ticket.pullRequests.length > 0 ? (
+              <div
+                data-testid="ticket-pull-requests"
+                className="flex min-w-0 flex-col gap-1.5 rounded-lg border border-border/60 bg-muted/15 p-3.5"
+              >
+                <span className="text-label font-medium text-muted-foreground">
+                  <Trans>Pull requests</Trans>
+                </span>
+                <ul className="flex min-w-0 flex-col gap-1">
+                  {ticket.pullRequests.map((pullRequest) => (
+                    <li key={pullRequest.url} className="flex min-w-0 items-center gap-2">
+                      <a
+                        href={pullRequest.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="min-w-0 flex-1 truncate text-body-sm text-foreground hover:underline"
+                      >
+                        {pullRequestLabel(pullRequest.url)}
+                      </a>
+                      <Badge
+                        variant="outline"
+                        className={PULL_REQUEST_STATE_TONE[pullRequest.state]}
+                      >
+                        {pullRequestStates[pullRequest.state]}
+                      </Badge>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-xs"
+                        aria-label={t`Unlink pull request`}
+                        disabled={linking.pending}
+                        onClick={() =>
+                          linking.run(
+                            ticket.pullRequests
+                              .filter((item) => item.url !== pullRequest.url)
+                              .map((item) => item.url),
+                          )
+                        }
+                      >
+                        <X className="size-3" aria-hidden />
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            {addingLink ? (
+              <form
+                className="flex flex-col gap-1.5"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  addPullRequest();
+                }}
+              >
+                <div className="flex items-center gap-2">
+                  <Input
+                    size="sm"
+                    inputMode="url"
+                    aria-label={t`Pull request link`}
+                    placeholder={t`Paste a pull request link`}
+                    value={linkDraft}
+                    onChange={(event) => {
+                      setLinkDraft(event.target.value);
+                      setLinkError("");
+                    }}
+                    disabled={linking.pending}
+                    autoFocus
+                  />
+                  <Button type="submit" size="sm" disabled={linking.pending || !linkDraft.trim()}>
+                    <Trans>Add</Trans>
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    disabled={linking.pending}
+                    onClick={() => {
+                      setAddingLink(false);
+                      setLinkDraft("");
+                      setLinkError("");
+                    }}
+                  >
+                    <Trans>Cancel</Trans>
+                  </Button>
+                </div>
+                {linkError ? (
+                  <p role="alert" className="text-label text-destructive">
+                    {linkError}
+                  </p>
+                ) : null}
+              </form>
+            ) : ticket.pullRequests.length < TICKET_MAX_PULL_REQUESTS ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="-ms-2 self-start text-muted-foreground"
+                onClick={() => setAddingLink(true)}
+              >
+                <Plus className="size-3.5" aria-hidden />
+                <Trans>Add pull request</Trans>
+              </Button>
+            ) : null}
+          </div>
         </div>
 
         <aside

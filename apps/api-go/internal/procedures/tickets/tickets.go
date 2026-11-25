@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/effects"
@@ -41,6 +43,10 @@ const (
 	decisionQuestionMaxLength = 300
 	decisionOptionMaxLength   = 160
 	decisionAnswerMaxLength   = 2_000
+	// pullRequestMaxCount is TICKET_MAX_PULL_REQUESTS and pullRequestURLMaxLength
+	// TICKET_PULL_REQUEST_URL_MAX_LENGTH (packages/contracts/src/artifacts/board.ts).
+	pullRequestMaxCount     = 10
+	pullRequestURLMaxLength = 500
 )
 
 var (
@@ -50,11 +56,16 @@ var (
 	errTicketMissing = orpc.BadRequest("Ticket not found.")
 	errBotMissing    = orpc.BadRequest("Unknown bot.")
 	errUserMissing   = orpc.BadRequest("Unknown user.")
+	// errStoredPullRequests stops an update that would build on a stored list this release cannot
+	// read (readStoredTicketPullRequests' "reject"), answered as a 500.
+	errStoredPullRequests = errors.New("stored tickets.pullRequests does not match its schema")
 )
 
 var (
 	ticketStatuses   = []string{"todo", "doing", "review", "blocked", "done", "closed"}
 	ticketPriorities = []string{"low", "normal", "high", "urgent"}
+	// pullRequestStates is TICKET_PULL_REQUEST_STATES.
+	pullRequestStates = []string{"open", "merged", "closed"}
 )
 
 // Completed is isTicketCompletedStatus: done and closed stamp the completion time.
@@ -233,26 +244,27 @@ func NormalizeTicketDecision(input TicketDecisionInput) (TicketDecision, bool) {
 
 // Ticket is TicketSchema (packages/contracts/src/artifacts/board.ts).
 type Ticket struct {
-	ID              string          `json:"id"`
-	BoardID         string          `json:"boardId"`
-	SpaceID         string          `json:"spaceId"`
-	Number          int64           `json:"number"`
-	Ref             string          `json:"ref"`
-	Title           string          `json:"title"`
-	Description     *string         `json:"description"`
-	Status          string          `json:"status"`
-	Priority        string          `json:"priority"`
-	AssigneeBotID   *string         `json:"assigneeBotId"`
-	OwnerUserID     *string         `json:"ownerUserId"`
-	OwnerBotID      *string         `json:"ownerBotId"`
-	WorkerBotIDs    []string        `json:"workerBotIds"`
-	CreatedByBotID  *string         `json:"createdByBotId"`
-	CreatedByUserID *string         `json:"createdByUserId"`
-	CreatedAt       string          `json:"createdAt"`
-	UpdatedAt       string          `json:"updatedAt"`
-	CompletedAt     *string         `json:"completedAt"`
-	Decision        *TicketDecision `json:"decision,omitempty"`
-	WaitingOnBotIDs []string        `json:"waitingOnBotIds,omitempty"`
+	ID              string              `json:"id"`
+	BoardID         string              `json:"boardId"`
+	SpaceID         string              `json:"spaceId"`
+	Number          int64               `json:"number"`
+	Ref             string              `json:"ref"`
+	Title           string              `json:"title"`
+	Description     *string             `json:"description"`
+	Status          string              `json:"status"`
+	Priority        string              `json:"priority"`
+	AssigneeBotID   *string             `json:"assigneeBotId"`
+	OwnerUserID     *string             `json:"ownerUserId"`
+	OwnerBotID      *string             `json:"ownerBotId"`
+	WorkerBotIDs    []string            `json:"workerBotIds"`
+	CreatedByBotID  *string             `json:"createdByBotId"`
+	CreatedByUserID *string             `json:"createdByUserId"`
+	CreatedAt       string              `json:"createdAt"`
+	UpdatedAt       string              `json:"updatedAt"`
+	CompletedAt     *string             `json:"completedAt"`
+	Decision        *TicketDecision     `json:"decision,omitempty"`
+	PullRequests    []TicketPullRequest `json:"pullRequests"`
+	WaitingOnBotIDs []string            `json:"waitingOnBotIds,omitempty"`
 }
 
 // TicketComment is TicketCommentSchema (packages/contracts/src/board.ts:75-85).
@@ -287,22 +299,125 @@ type ticketRow struct {
 	UpdatedAt       time.Time
 	CompletedAt     *time.Time
 	Decision        []byte
+	PullRequests    []byte
 }
 
 const ticketColumns = `id, "boardId", "spaceId", number, title, description, status, priority, "assigneeBotId",
-	"ownerUserId", "ownerBotId", "workerBotIds", "createdByBotId", "createdByUserId", "createdAt", "updatedAt", "completedAt", decision`
+	"ownerUserId", "ownerBotId", "workerBotIds", "createdByBotId", "createdByUserId", "createdAt", "updatedAt", "completedAt", decision,
+	"pullRequests"`
 
 func scanTicket(row pgx.Row) (ticketRow, error) {
 	var value ticketRow
 	err := row.Scan(&value.ID, &value.BoardID, &value.SpaceID, &value.Number, &value.Title, &value.Description,
 		&value.Status, &value.Priority, &value.AssigneeBotID, &value.OwnerUserID, &value.OwnerBotID,
 		&value.WorkerBotIDs, &value.CreatedByBotID, &value.CreatedByUserID,
-		&value.CreatedAt, &value.UpdatedAt, &value.CompletedAt, &value.Decision)
+		&value.CreatedAt, &value.UpdatedAt, &value.CompletedAt, &value.Decision, &value.PullRequests)
 	return value, err
 }
 
 func ticketRef(prefix string, number int64) string {
 	return prefix + "-" + strconv.FormatInt(number, 10)
+}
+
+// pullRequestURLPattern is PULL_REQUEST_URL (packages/contracts/src/artifacts/board.ts), kept to
+// the RE2 subset so the Go API normalizes a link exactly as TypeScript does.
+var pullRequestURLPattern = regexp.MustCompile(`^https://([a-z0-9.-]+)((?:/[a-z0-9_.~-]+)+?)/(-/)?(pull|pulls|merge_requests|pull-requests)/([1-9][0-9]{0,9})(?:[/?#].*)?$`)
+
+// pullRequestLower is String.prototype.toLowerCase: the Unicode default full lowercase mapping
+// (cases.Lower), including the SpecialCasing entries strings.ToLower's simple mapping misses.
+var pullRequestLower = cases.Lower(language.Und)
+
+// normalizePullRequestURL is normalizePullRequestUrl: the one form a pull request link is stored
+// and matched in (lowercase, https, ending at the number), or false when the text is not a pull
+// or merge request link.
+func normalizePullRequestURL(value string) (string, bool) {
+	text := pullRequestLower.String(validate.JSTrim(value))
+	if wtf8.Length(text) > pullRequestURLMaxLength {
+		return "", false
+	}
+	match := pullRequestURLPattern.FindStringSubmatch(text)
+	if match == nil {
+		return "", false
+	}
+	return "https://" + match[1] + match[2] + "/" + match[3] + match[4] + "/" + match[5], true
+}
+
+// TicketPullRequest is TicketPullRequestSchema (packages/contracts/src/artifacts/board.ts).
+type TicketPullRequest struct {
+	URL   string `json:"url"`
+	State string `json:"state"`
+}
+
+// readStoredPullRequests is readTicketPullRequests over a tickets.pullRequests value: a shape this
+// release does not know (not an array of objects with a string url and a known state) reads as no
+// links at all, the whole list rather than one item at a time. An item's unknown keys are dropped,
+// as zod's object strips them. The bool reports whether the stored value matched the schema.
+func readStoredPullRequests(raw []byte) ([]TicketPullRequest, bool) {
+	value, err := validate.DecodeAny(raw)
+	if err != nil {
+		return []TicketPullRequest{}, false
+	}
+	items, ok := value.([]any)
+	if !ok {
+		return []TicketPullRequest{}, false
+	}
+	out := make([]TicketPullRequest, 0, len(items))
+	for _, item := range items {
+		object, ok := item.(*validate.Object)
+		if !ok {
+			return []TicketPullRequest{}, false
+		}
+		url, ok := object.Values["url"].(string)
+		if !ok {
+			return []TicketPullRequest{}, false
+		}
+		state, ok := object.Values["state"].(string)
+		if !ok || !slices.Contains(pullRequestStates, state) {
+			return []TicketPullRequest{}, false
+		}
+		out = append(out, TicketPullRequest{URL: url, State: state})
+	}
+	return out, true
+}
+
+// readTicketPullRequests is the DTO's read: a stored value that does not match shows no links.
+func readTicketPullRequests(raw []byte) []TicketPullRequest {
+	list, ok := readStoredPullRequests(raw)
+	if !ok {
+		return []TicketPullRequest{}
+	}
+	return list
+}
+
+// pullRequestInput is one TicketPullRequestInputSchema value after its url was normalized.
+type pullRequestInput struct {
+	URL   string
+	State *string
+}
+
+// mergeTicketPullRequests is mergeTicketPullRequests: the input's order with duplicate links
+// dropped, each keeping the state the input sets, else the one already recorded, else open.
+func mergeTicketPullRequests(current []TicketPullRequest, input []pullRequestInput) []TicketPullRequest {
+	known := make(map[string]string, len(current))
+	for _, item := range current {
+		known[item.URL] = item.State
+	}
+	seen := make(map[string]bool, len(input))
+	out := make([]TicketPullRequest, 0, len(input))
+	for _, item := range input {
+		if seen[item.URL] {
+			continue
+		}
+		seen[item.URL] = true
+		state := "open"
+		if item.State != nil {
+			state = *item.State
+		} else if recorded, ok := known[item.URL]; ok {
+			state = recorded
+		}
+		out = append(out, TicketPullRequest{URL: item.URL, State: state})
+	}
+	return out
 }
 
 // coerceStatus and coercePriority are toTicketDto's fallbacks for a legacy stored value.
@@ -387,7 +502,8 @@ func dto(value ticketRow, prefix string) (Ticket, bool) {
 		WorkerBotIDs: workers, CreatedByBotID: value.CreatedByBotID,
 		CreatedByUserID: value.CreatedByUserID,
 		CreatedAt:       shared.ISO(value.CreatedAt), UpdatedAt: shared.ISO(value.UpdatedAt),
-		Decision: readStoredDecision(value.Decision),
+		Decision:     readStoredDecision(value.Decision),
+		PullRequests: readTicketPullRequests(value.PullRequests),
 	}
 	if value.CompletedAt != nil {
 		at := shared.ISO(*value.CompletedAt)
@@ -1208,6 +1324,8 @@ type createInput struct {
 	AssigneeBotID    *string
 	HasDecision      bool
 	Decision         *TicketDecision
+	HasPullRequests  bool
+	PullRequests     []pullRequestInput
 }
 
 func parseNullableDecision(object *validate.Object, found *[]validate.Issue) (bool, *TicketDecision) {
@@ -1326,6 +1444,60 @@ func parseWorkerBotIDs(object *validate.Object, found *[]validate.Issue) (bool, 
 	return true, ids
 }
 
+// pullRequestURLMessage is the custom issue TicketPullRequestInputSchema's transform raises.
+const pullRequestURLMessage = "Use a pull request link such as https://example.com/owner/repo/pull/12."
+
+// parsePullRequests is `z.array(TicketPullRequestInputSchema).max(TICKET_MAX_PULL_REQUESTS).optional()`:
+// each item's url is normalized, and state stays unset when the input leaves it out. An array past
+// the limit reports only the length, as zod's size cap stops before the items are parsed.
+func parsePullRequests(object *validate.Object, found *[]validate.Issue) (bool, []pullRequestInput) {
+	v := object.Field("pullRequests")
+	if v == validate.Undefined {
+		return false, nil
+	}
+	path := validate.Path{"pullRequests"}
+	items, problems := validate.AsArray(path, v)
+	if problems != nil {
+		*found = append(*found, problems...)
+		return true, nil
+	}
+	if len(items) > pullRequestMaxCount {
+		*found = append(*found, validate.ArrayBounds(path, len(items), 0, pullRequestMaxCount)...)
+		return true, nil
+	}
+	out := make([]pullRequestInput, 0, len(items))
+	for index, item := range items {
+		itemPath := path.With(index)
+		fields, problems := validate.AsObject(item, itemPath)
+		if problems != nil {
+			*found = append(*found, problems...)
+			continue
+		}
+		var url string
+		rawURL, urlProblems := validate.String(itemPath.With("url"), fields.Field("url"),
+			validate.StringRules{Max: pullRequestURLMaxLength})
+		*found = append(*found, urlProblems...)
+		if urlProblems == nil {
+			normalized, ok := normalizePullRequestURL(rawURL)
+			if !ok {
+				*found = append(*found, validate.Issue{
+					"code": "custom", "path": itemPath.With("url").Raw(), "message": pullRequestURLMessage,
+				})
+			} else {
+				url = normalized
+			}
+		}
+		var state *string
+		if rawState := fields.Field("state"); rawState != validate.Undefined {
+			parsed, stateProblems := validate.Enum(itemPath.With("state"), rawState, pullRequestStates...)
+			*found = append(*found, stateProblems...)
+			state = &parsed
+		}
+		out = append(out, pullRequestInput{URL: url, State: state})
+	}
+	return true, out
+}
+
 // parseCreate is CreateTicketInput (packages/contracts/src/artifacts/board.ts:133-147).
 func parseCreate(raw orpc.Input) (createInput, *orpc.Error) {
 	object, issues := validate.Decode(raw.Raw, nil)
@@ -1361,6 +1533,7 @@ func parseCreate(raw orpc.Input) (createInput, *orpc.Error) {
 	out.HasWorkerBotIDs, out.WorkerBotIDs = parseWorkerBotIDs(object, &found)
 	out.HasAssigneeBotID, out.AssigneeBotID = parseNullableOptID(object, "assigneeBotId", &found)
 	out.HasDecision, out.Decision = parseNullableDecision(object, &found)
+	out.HasPullRequests, out.PullRequests = parsePullRequests(object, &found)
 	if found == nil && out.OwnerUserID != nil && out.OwnerBotID != nil {
 		found = append(found, validate.Issue{
 			"code":    "custom",
@@ -1490,18 +1663,20 @@ func Create(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 		if input.Decision != nil {
 			decisionJSON = db.JSON(*input.Decision)
 		}
+		// Create starts from no recorded links; an input list is the whole list (mergeTicketPullRequests).
+		pullRequestsJSON := db.JSON(mergeTicketPullRequests(nil, input.PullRequests))
 		at := now()
 		value, err := scanTicket(tx.QueryRow(ctx, `
 			INSERT INTO tickets (
 				id, "boardId", "spaceId", number, title, description, status, priority,
 				"assigneeBotId", "ownerUserId", "ownerBotId", "workerBotIds",
-				"createdByBotId", "createdByUserId", "createdAt", "updatedAt", decision
+				"createdByBotId", "createdByUserId", "createdAt", "updatedAt", decision, "pullRequests"
 			)
-			VALUES ($1, $2, $3, $4, $5, $6, 'todo', $7, $8, $9, $10, $11, NULL, $12, $13, $13, $14)
+			VALUES ($1, $2, $3, $4, $5, $6, 'todo', $7, $8, $9, $10, $11, NULL, $12, $13, $13, $14, $15)
 			RETURNING `+ticketColumns,
 			db.Data(effects.NewID(), board.ID, actor.SpaceID, number, shared.StoredText(input.Title), nullableText(desc),
 				input.Priority, nullableText(assigneeBotID), nullableText(ownerUserID), nullableText(ownerBotID),
-				workerBotIDs, actor.UserID, at, decisionJSON)...,
+				workerBotIDs, actor.UserID, at, decisionJSON, pullRequestsJSON)...,
 		))
 		if err != nil {
 			return err
@@ -1554,6 +1729,8 @@ type updateInput struct {
 	AssigneeBotID    *string
 	HasDecision      bool
 	Decision         *TicketDecision
+	HasPullRequests  bool
+	PullRequests     []pullRequestInput
 }
 
 // parseUpdate is UpdateTicketInput (packages/contracts/src/artifacts/board.ts:150-165).
@@ -1604,6 +1781,7 @@ func parseUpdate(raw orpc.Input) (updateInput, *orpc.Error) {
 	out.HasWorkerBotIDs, out.WorkerBotIDs = parseWorkerBotIDs(object, &found)
 	out.HasAssigneeBotID, out.AssigneeBotID = parseNullableOptID(object, "assigneeBotId", &found)
 	out.HasDecision, out.Decision = parseNullableDecision(object, &found)
+	out.HasPullRequests, out.PullRequests = parsePullRequests(object, &found)
 	if found == nil && out.OwnerUserID != nil && out.OwnerBotID != nil {
 		found = append(found, validate.Issue{
 			"code":    "custom",
@@ -1818,6 +1996,17 @@ func Update(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 			}
 		}
 
+		// A provided list replaces the recorded one; a stored shape this release cannot read stops
+		// the write (readStoredTicketPullRequests' "reject"), and an absent list leaves the column.
+		var pullRequestsValue any
+		if input.HasPullRequests {
+			stored, ok := readStoredPullRequests(current.PullRequests)
+			if !ok {
+				return errStoredPullRequests
+			}
+			pullRequestsValue = db.JSON(mergeTicketPullRequests(stored, input.PullRequests))
+		}
+
 		updatedAt := now()
 		value, err := scanTicket(tx.QueryRow(ctx, `
 			UPDATE tickets
@@ -1826,13 +2015,13 @@ func Update(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 			    "workerBotIds" = $7, "assigneeBotId" = $8,
 			    status = $9, "completedAt" = $10, "updatedAt" = $11,
 			    "archivedAt" = CASE WHEN $9 IN ('done', 'closed') THEN "archivedAt" END,
-			    decision = $12
+			    decision = $12, "pullRequests" = COALESCE($13, "pullRequests")
 			WHERE id = $1
 			RETURNING `+ticketColumns,
 			append([]any{current.ID}, db.Data(title, nullableText(description), priority,
 				nullableText(ownerUserID), nullableText(ownerBotID),
 				workerBotIDs, nullableText(assigneeBotID),
-				status, completedAt, updatedAt, decisionValue(nextDecision))...)...,
+				status, completedAt, updatedAt, decisionValue(nextDecision), pullRequestsValue)...)...,
 		))
 		if err != nil {
 			return err

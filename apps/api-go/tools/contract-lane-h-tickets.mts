@@ -12,7 +12,15 @@ export function laneHTicketCases(system: System): Case[] {
     await withLab(seeded);
   };
   const seedTicket =
-    (options: { status?: string; title?: string; bot?: boolean; decision?: unknown } = {}) =>
+    (
+      options: {
+        status?: string;
+        title?: string;
+        bot?: boolean;
+        decision?: unknown;
+        pullRequests?: unknown;
+      } = {},
+    ) =>
     async (seeded: Seeded) => {
       await withLab(seeded);
       const spaceId = seeded.spaces[0];
@@ -49,6 +57,7 @@ export function laneHTicketCases(system: System): Case[] {
           status: options.status ?? "todo",
           priority: "normal",
           ...(options.decision !== undefined ? { decision: options.decision } : {}),
+          ...(options.pullRequests !== undefined ? { pullRequests: options.pullRequests } : {}),
           createdByUserId: seeded.userId,
           createdAt: OLD,
           updatedAt: OLD,
@@ -103,6 +112,20 @@ export function laneHTicketCases(system: System): Case[] {
       { ignoreSignals: true },
     ),
     c(
+      "tickets.create",
+      "tkd-create",
+      "with-pull-requests",
+      {
+        title: "Track the rollout PR",
+        pullRequests: [
+          { url: "https://github.com/acme/app/pull/241/files" },
+          { url: "https://gitlab.com/group/project/-/merge_requests/7", state: "merged" },
+        ],
+      },
+      seedLabOnly,
+      { ignoreSignals: true },
+    ),
+    c(
       "tickets.update",
       "tkd-update",
       "with-decision",
@@ -116,6 +139,27 @@ export function laneHTicketCases(system: System): Case[] {
         },
       },
       seedTicket(),
+    ),
+    // The input replaces the list: a link left in keeps its recorded state (the uppercase link
+    // normalizes to the stored one), a new link starts open unless stated, and an omitted link is
+    // unlinked.
+    c(
+      "tickets.update",
+      "tkd-update",
+      "pull-requests-merge",
+      {
+        id: "__s-tkt__",
+        pullRequests: [
+          { url: " HTTPS://GitHub.com/Acme/App/Pull/241/files " },
+          { url: "https://example.com/o/r/pull/9", state: "closed" },
+        ],
+      },
+      seedTicket({
+        pullRequests: [
+          { url: "https://github.com/acme/app/pull/241", state: "merged" },
+          { url: "https://example.com/o/r/pull/2", state: "open" },
+        ],
+      }),
     ),
     c(
       "tickets.update",
