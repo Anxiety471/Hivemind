@@ -14,6 +14,7 @@ import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
 import { infisicalFake } from "../../../../packages/adapters/src/secrets/secret-store-fake.js";
 import { readBoundedBody } from "../http/http-body.js";
+import { githubPullRequestState } from "./github-webhook.js";
 import type { WebhookDeps } from "./webhook.js";
 import {
   formatGithubEventPrompt,
@@ -201,6 +202,24 @@ describe("formatGithubEventPrompt", () => {
     expect(prompt).not.toContain('"number"');
     expect(prompt).not.toContain('"repositoryId"');
     expect(prompt).not.toContain("Sha");
+  });
+});
+
+describe("githubPullRequestState", () => {
+  const url = "https://github.com/acme/app/pull/42";
+  it.each([
+    ["a merge", { action: "closed", pull_request: { html_url: url, merged: true } }, "merged"],
+    ["a close without merging", { action: "closed", pull_request: { html_url: url } }, "closed"],
+    ["a reopen", { action: "reopened", pull_request: { html_url: url } }, "open"],
+  ])("reads %s", (_label, payload, state) => {
+    expect(githubPullRequestState("pull_request", payload)).toEqual({ url, state });
+  });
+
+  it("ignores events that leave the state as it was", () => {
+    const pull_request = { html_url: url, merged: true };
+    expect(githubPullRequestState("pull_request", { action: "edited", pull_request })).toBeNull();
+    expect(githubPullRequestState("issues", { action: "closed", pull_request })).toBeNull();
+    expect(githubPullRequestState("pull_request", { action: "closed" })).toBeNull();
   });
 });
 

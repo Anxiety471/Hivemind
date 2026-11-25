@@ -5,8 +5,12 @@ import {
   GetTicketInput,
   hasPendingTicketDecision,
   isTicketCompletedStatus,
+  mergeTicketPullRequests,
+  normalizePullRequestUrl,
   normalizeTicketDecision,
   parseTicketRef,
+  pullRequestLabel,
+  pullRequestsFinishTicket,
   TICKET_PRIORITIES,
   TICKET_STATUSES,
   TicketDecisionInputSchema,
@@ -46,6 +50,91 @@ describe("parseTicketRef", () => {
   });
 });
 
+describe("pull request links", () => {
+  it.each([
+    ["https://github.com/Acme/App/pull/241", "https://github.com/acme/app/pull/241"],
+    [
+      "  https://github.com/acme/app/pull/241/files?w=1#top ",
+      "https://github.com/acme/app/pull/241",
+    ],
+    [
+      "https://gitlab.example.com/group/sub/proj/-/merge_requests/5/diffs",
+      "https://gitlab.example.com/group/sub/proj/-/merge_requests/5",
+    ],
+    [
+      "https://bitbucket.org/team/repo/pull-requests/3/overview",
+      "https://bitbucket.org/team/repo/pull-requests/3",
+    ],
+  ])("normalizes %s", (value, expected) => {
+    expect(normalizePullRequestUrl(value)).toBe(expected);
+  });
+
+  it.each([
+    ["plain http", "http://github.com/acme/app/pull/1"],
+    ["an issue", "https://github.com/acme/app/issues/1"],
+    ["a repository", "https://github.com/acme/app"],
+    ["a number with a leading zero", "https://github.com/acme/app/pull/01"],
+    ["a user name in the host", "https://user@github.com/acme/app/pull/1"],
+    ["text after the number", "https://github.com/acme/app/pull/1abc"],
+    ["an overlong link", `https://github.com/acme/${"a".repeat(500)}/pull/1`],
+  ])("rejects %s", (_label, value) => {
+    expect(normalizePullRequestUrl(value)).toBeNull();
+  });
+
+  it("labels a link by its repository and number", () => {
+    expect(pullRequestLabel("https://github.com/acme/app/pull/241")).toBe("acme/app#241");
+    expect(pullRequestLabel("https://gitlab.example.com/group/sub/proj/-/merge_requests/5")).toBe(
+      "sub/proj#5",
+    );
+  });
+
+  it("replaces the list in input order, keeping recorded states unless the input sets one", () => {
+    const a = "https://github.com/acme/app/pull/1";
+    const b = "https://github.com/acme/app/pull/2";
+    const c = "https://github.com/acme/app/pull/3";
+    expect(
+      mergeTicketPullRequests(
+        [
+          { url: a, state: "merged" },
+          { url: b, state: "open" },
+        ],
+        [{ url: c }, { url: a }, { url: b, state: "closed" }, { url: c, state: "merged" }],
+      ),
+    ).toEqual([
+      { url: c, state: "open" },
+      { url: a, state: "merged" },
+      { url: b, state: "closed" },
+    ]);
+  });
+
+  it("finishes a ticket only when nothing is open and something merged", () => {
+    const url = "https://github.com/acme/app/pull/1";
+    expect(pullRequestsFinishTicket([])).toBe(false);
+    expect(pullRequestsFinishTicket([{ url, state: "closed" }])).toBe(false);
+    expect(
+      pullRequestsFinishTicket([
+        { url, state: "merged" },
+        { url: `${url}0`, state: "open" },
+      ]),
+    ).toBe(false);
+    expect(
+      pullRequestsFinishTicket([
+        { url, state: "merged" },
+        { url: `${url}0`, state: "closed" },
+      ]),
+    ).toBe(true);
+  });
+
+  it("rejects a ticket update linking something that is not a pull request", () => {
+    const parsed = UpdateTicketInput.safeParse({
+      id: "ticket-1",
+      pullRequests: [{ url: "https://github.com/acme/app/issues/1" }],
+    });
+    expect(parsed.success).toBe(false);
+    expect(parsed.error?.issues[0]?.path).toEqual(["pullRequests", 0, "url"]);
+  });
+});
+
 describe("ticket contracts", () => {
   const ticket = {
     id: "ticket-1",
@@ -66,6 +155,7 @@ describe("ticket contracts", () => {
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
     completedAt: null,
+    pullRequests: [],
   };
 
   it("accepts a ticket document and rejects unknown statuses", () => {

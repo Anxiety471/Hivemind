@@ -1,5 +1,5 @@
 import { t } from "@lingui/core/macro";
-import type { Ticket, TicketStatus } from "@rakazo/contracts";
+import type { Ticket, TicketPullRequestState, TicketStatus } from "@rakazo/contracts";
 import { TICKET_STATUSES } from "@rakazo/contracts";
 
 /** The board's columns, in the order the web board shows them. */
@@ -34,5 +34,17 @@ export function ticketStatusLabel(status: TicketStatus): string {
       return t`Done`;
     case "closed":
       return t`Won't do`;
+  }
+}
+
+/** A linked pull request's state, matching the web ticket's wording. */
+export function ticketPullRequestStateLabel(state: TicketPullRequestState): string {
+  switch (state) {
+    case "open":
+      return t`Open`;
+    case "merged":
+      return t`Merged`;
+    case "closed":
+      return t`Closed`;
   }
 }

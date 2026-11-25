@@ -5,7 +5,9 @@ import {
   TICKET_DECISION_OPTION_MAX_LENGTH,
   TICKET_DECISION_QUESTION_MAX_LENGTH,
   TICKET_DESCRIPTION_MAX_LENGTH,
+  TICKET_MAX_PULL_REQUESTS,
   TICKET_PRIORITIES,
+  TICKET_PULL_REQUEST_STATES,
   TICKET_STATUSES,
   TICKET_TITLE_MAX_LENGTH,
 } from "@rakazo/contracts";
@@ -45,6 +47,21 @@ const ticketDecisionSpec = {
   },
   required: ["question", "options", "recommended"],
   additionalProperties: false,
+};
+
+const ticketPullRequestsSpec = {
+  type: "array",
+  maxItems: TICKET_MAX_PULL_REQUESTS,
+  description:
+    "Pull request links the ticket tracks; on update this replaces the list. Omit state to keep the one recorded. When a linked pull request merges, the ticket moves to done by itself if its repository sends pull request events to a bot's Git event webhook.",
+  items: {
+    type: "object",
+    properties: {
+      url: { type: "string" },
+      state: { type: "string", enum: TICKET_PULL_REQUEST_STATES },
+    },
+    required: ["url"],
+  },
 };
 
 const scheduleCreateProperties = {
@@ -350,6 +367,7 @@ export const workTools: ConnectorTool[] = [
           description: "Bot ids assigned to execute this ticket. Defaults to you.",
         },
         decision: ticketDecisionSpec,
+        pullRequests: ticketPullRequestsSpec,
       },
       required: ["title"],
     },
@@ -385,6 +403,7 @@ export const workTools: ConnectorTool[] = [
           description: "Bot ids assigned to execute this ticket.",
         },
         decision: { anyOf: [ticketDecisionSpec, { type: "null" }] },
+        pullRequests: ticketPullRequestsSpec,
       },
       required: ["id"],
     },

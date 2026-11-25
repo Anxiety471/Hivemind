@@ -4,6 +4,7 @@ import type {
   TicketComment,
   TicketDecision,
   TicketPriority,
+  TicketPullRequest,
   TicketStatus,
 } from "@rakazo/contracts";
 import {
@@ -11,6 +12,7 @@ import {
   TICKET_ARCHIVE_AFTER_DAYS,
   TicketDecisionSchema,
   TicketPrioritySchema,
+  TicketPullRequestSchema,
   TicketStatusSchema,
   ticketRef,
 } from "@rakazo/contracts";
@@ -110,6 +112,32 @@ export function readTicketDecision(row: Pick<TicketRow, "id" | "decision">): Tic
   );
 }
 
+const StoredPullRequestsSchema = TicketPullRequestSchema.array();
+
+/** A shape this release does not know shows no links rather than failing the ticket. */
+export function readTicketPullRequests(
+  row: Pick<TicketRow, "id" | "pullRequests">,
+): TicketPullRequest[] {
+  return readJsonColumn(
+    StoredPullRequestsSchema,
+    row.pullRequests,
+    { table: "tickets", column: "pullRequests", id: row.id },
+    { fallback: [] },
+  );
+}
+
+/** The stored links a write builds on: a shape this release does not know stops the write. */
+export function readStoredTicketPullRequests(
+  row: Pick<TicketRow, "id" | "pullRequests">,
+): TicketPullRequest[] {
+  return readJsonColumn(
+    StoredPullRequestsSchema,
+    row.pullRequests,
+    { table: "tickets", column: "pullRequests", id: row.id },
+    "reject",
+  );
+}
+
 export function toTicketDto(row: TicketRow, ticketPrefix: string): Ticket {
   const rawWorkers = Array.isArray(row.workerBotIds) ? row.workerBotIds : [];
   const workerBotIds =
@@ -135,6 +163,7 @@ export function toTicketDto(row: TicketRow, ticketPrefix: string): Ticket {
     updatedAt: row.updatedAt.toISOString(),
     completedAt: row.completedAt ? row.completedAt.toISOString() : null,
     ...(decision ? { decision } : {}),
+    pullRequests: readTicketPullRequests(row),
   };
 }
 

@@ -2,6 +2,7 @@ package tickets
 
 import (
 	"encoding/json"
+	"fmt"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 	"slices"
 	"strings"
@@ -257,5 +258,229 @@ func TestDecisionValueSanitizesEachLeafOnce(t *testing.T) {
 	}
 	if strings.Contains(stored, "\uFFFD\uFFFD\uFFFD") {
 		t.Fatalf("triple replacement: %s", stored)
+	}
+}
+
+func TestNormalizePullRequestURLMatchesTheContract(t *testing.T) {
+	base := "https://github.com/o/r/pull/1"
+	accepted := map[string]string{
+		"https://github.com/acme/app/pull/241":                          "https://github.com/acme/app/pull/241",
+		"  HTTPS://GitHub.com/Acme/App/Pull/241/files  ":                "https://github.com/acme/app/pull/241",
+		"https://github.com/acme/app/pull/241?diff=split#discussion_r1": "https://github.com/acme/app/pull/241",
+		"https://github.com/acme/app/pull/241/":                         "https://github.com/acme/app/pull/241",
+		"https://gitlab.com/group/project/-/merge_requests/42":          "https://gitlab.com/group/project/-/merge_requests/42",
+		"https://gitlab.com/group/sub/project/-/merge_requests/7/files": "https://gitlab.com/group/sub/project/-/merge_requests/7",
+		"https://example.com/owner/repo/pulls/12":                       "https://example.com/owner/repo/pulls/12",
+		"https://example.com/owner/repo/pull-requests/12":               "https://example.com/owner/repo/pull-requests/12",
+		"https://example.com/owner/repo/pull/1234567890":                "https://example.com/owner/repo/pull/1234567890",
+	}
+	// The limit is 500 UTF-16 code units of the trimmed, lowercased text; anything after the
+	// number is dropped from the stored form.
+	accepted[base+"?"+strings.Repeat("a", pullRequestURLMaxLength-len(base)-1)] = base
+	accepted[base+"?"+strings.Repeat("😀", (pullRequestURLMaxLength-len(base)-1)/2)] = base
+	for text, want := range accepted {
+		got, ok := normalizePullRequestURL(text)
+		if !ok || got != want {
+			t.Errorf("normalizePullRequestURL(%q) = %q, %v; want %q", text, got, ok, want)
+		}
+	}
+	for _, text := range []string{
+		"http://github.com/acme/app/pull/241",
+		"https://github.com/acme/app/issues/241",
+		"https://github.com/acme/app/pull/0",
+		"https://github.com/acme/app/pull/012",
+		"https://github.com/acme/app/pull/12345678901",
+		"https://github.com/acme/app/pull/-1",
+		"https://github.com/acme/app/pull",
+		"https://github.com/acme/app",
+		"https://github.com/pull/1",
+		"https://github.com/acme/app/pull/241 extra",
+		"https://",
+		"mailto:someone@example.com",
+		base + "?" + strings.Repeat("a", pullRequestURLMaxLength-len(base)),
+		base + "?" + strings.Repeat("😀", pullRequestURLMaxLength/2+1),
+	} {
+		if got, ok := normalizePullRequestURL(text); ok {
+			t.Errorf("normalizePullRequestURL(%q) = %q, want rejected", text, got)
+		}
+	}
+}
+
+func TestMergeTicketPullRequestsKeepsRecordedState(t *testing.T) {
+	merged := "merged"
+	current := []TicketPullRequest{{URL: "a", State: "open"}, {URL: "b", State: "merged"}}
+	got := mergeTicketPullRequests(current, []pullRequestInput{
+		{URL: "a"}, {URL: "c", State: &merged}, {URL: "a", State: &merged}, {URL: "b"},
+	})
+	want := []TicketPullRequest{
+		{URL: "a", State: "open"}, {URL: "c", State: "merged"}, {URL: "b", State: "merged"},
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("merge = %+v, want %+v", got, want)
+	}
+	if created := mergeTicketPullRequests(nil, []pullRequestInput{{URL: "x"}}); !slices.Equal(created, []TicketPullRequest{{URL: "x", State: "open"}}) {
+		t.Fatalf("a new link is open: %+v", created)
+	}
+	// Duplicates in the recorded list resolve the way the Map in TypeScript does: the last wins.
+	later := mergeTicketPullRequests([]TicketPullRequest{{URL: "a", State: "merged"}, {URL: "a", State: "closed"}}, []pullRequestInput{{URL: "a"}})
+	if !slices.Equal(later, []TicketPullRequest{{URL: "a", State: "closed"}}) {
+		t.Fatalf("recorded duplicate = %+v", later)
+	}
+	// An empty input empties the list, and the result is never nil.
+	if empty := mergeTicketPullRequests(current, nil); empty == nil || len(empty) != 0 {
+		t.Fatalf("empty merge = %#v", empty)
+	}
+}
+
+func TestReadStoredPullRequestsFallsBackForTheWholeList(t *testing.T) {
+	list, ok := readStoredPullRequests([]byte(`[{"url":"https://github.com/acme/app/pull/1","state":"merged","label":"acme/app#1"},{"state":"open","url":"https://github.com/acme/app/pull/2"}]`))
+	want := []TicketPullRequest{
+		{URL: "https://github.com/acme/app/pull/1", State: "merged"},
+		{URL: "https://github.com/acme/app/pull/2", State: "open"},
+	}
+	if !ok || !slices.Equal(list, want) {
+		t.Fatalf("stored = %+v, ok=%v", list, ok)
+	}
+	empty, ok := readStoredPullRequests([]byte(`[]`))
+	if !ok || empty == nil || len(empty) != 0 {
+		t.Fatalf("empty stored = %#v, ok=%v", empty, ok)
+	}
+	for _, raw := range []string{
+		``,
+		`null`,
+		`{}`,
+		`"https://github.com/acme/app/pull/1"`,
+		`[null]`,
+		`[[]]`,
+		`["https://github.com/acme/app/pull/1"]`,
+		`[{"url":1,"state":"open"}]`,
+		`[{"url":"https://github.com/acme/app/pull/1","state":"opened"}]`,
+		`[{"url":"https://github.com/acme/app/pull/1"}]`,
+		`[{"state":"open"}]`,
+		`[{"url":"https://github.com/acme/app/pull/1","state":"merged"},{"url":"https://github.com/acme/app/pull/2"}]`,
+	} {
+		if got, ok := readStoredPullRequests([]byte(raw)); ok || len(got) != 0 {
+			t.Errorf("readStoredPullRequests(%s) = %+v, %v; want a mismatch", raw, got, ok)
+		}
+		if got := readTicketPullRequests([]byte(raw)); got == nil || len(got) != 0 {
+			t.Errorf("readTicketPullRequests(%s) = %#v; want an empty list", raw, got)
+		}
+	}
+}
+
+func TestTicketDtoAlwaysCarriesPullRequests(t *testing.T) {
+	link := "https://github.com/acme/app/pull/241"
+	mapped, ok := dto(ticketRow{
+		ID: "t1", BoardID: "b1", SpaceID: "s1", Number: 1, Title: "Ship", Status: "todo",
+		PullRequests: []byte(`[{"url":"` + link + `","state":"closed","label":"acme/app#241"}]`),
+	}, "RAK")
+	if !ok || !slices.Equal(mapped.PullRequests, []TicketPullRequest{{URL: link, State: "closed"}}) {
+		t.Fatalf("dto = %+v, ok=%v", mapped, ok)
+	}
+	body, err := json.Marshal(mapped)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), `"pullRequests":[{"url":"`+link+`","state":"closed"}]`) {
+		t.Fatalf("body = %s", body)
+	}
+	broken, ok := dto(ticketRow{
+		ID: "t1", BoardID: "b1", SpaceID: "s1", Number: 1, Title: "Ship", Status: "todo",
+		PullRequests: []byte(`{"url":"` + link + `"}`),
+	}, "RAK")
+	if !ok || broken.PullRequests == nil || len(broken.PullRequests) != 0 {
+		t.Fatalf("a stored shape this release does not know shows no links: %#v", broken.PullRequests)
+	}
+	// TicketSchema's order: decision, then pullRequests, then waitingOnBotIds.
+	decision := &TicketDecision{
+		Question: "Deploy?",
+		Options: []TicketDecisionOption{
+			{ID: "choice-1", Label: "Yes"}, {ID: "choice-2", Label: "No"}, {ID: "choice-3", Label: "Later"},
+		},
+	}
+	ordered, err := json.Marshal(Ticket{
+		ID: "t1", Number: 1, Decision: decision, PullRequests: []TicketPullRequest{},
+		WaitingOnBotIDs: []string{"bot-1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	atDecision := strings.Index(string(ordered), `"decision"`)
+	atPullRequests := strings.Index(string(ordered), `"pullRequests"`)
+	atWaiting := strings.Index(string(ordered), `"waitingOnBotIds"`)
+	if atDecision < 0 || atPullRequests < 0 || atWaiting < 0 || !(atDecision < atPullRequests && atPullRequests < atWaiting) {
+		t.Fatalf("key order = %s", ordered)
+	}
+}
+
+func pullRequestIssues(t *testing.T, failure *orpc.Error) string {
+	t.Helper()
+	if failure == nil {
+		t.Fatal("expected a validation failure")
+	}
+	if failure.Code != "BAD_REQUEST" || failure.Status != 400 || failure.Message != "Input validation failed" {
+		t.Fatalf("failure = %+v", failure)
+	}
+	body, err := orpc.Marshal(failure.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(body)
+}
+
+func sameJSON(left, right string) bool {
+	var a, b any
+	if json.Unmarshal([]byte(left), &a) != nil || json.Unmarshal([]byte(right), &b) != nil {
+		return false
+	}
+	encodedA, _ := json.Marshal(a)
+	encodedB, _ := json.Marshal(b)
+	return string(encodedA) == string(encodedB)
+}
+
+func TestParsePullRequestsIsZodExact(t *testing.T) {
+	parsed, failure := parseCreate(input(`{"title":"Ship","pullRequests":[{"url":" HTTPS://GitHub.com/Acme/App/Pull/241/files ","state":"merged"},{"url":"https://gitlab.com/g/a/b/-/merge_requests/7"}]}`))
+	if failure != nil || !parsed.HasPullRequests || len(parsed.PullRequests) != 2 {
+		t.Fatalf("parsed = %+v failure = %v", parsed, failure)
+	}
+	if parsed.PullRequests[0].URL != "https://github.com/acme/app/pull/241" ||
+		parsed.PullRequests[0].State == nil || *parsed.PullRequests[0].State != "merged" {
+		t.Fatalf("first link = %+v", parsed.PullRequests[0])
+	}
+	if parsed.PullRequests[1].URL != "https://gitlab.com/g/a/b/-/merge_requests/7" || parsed.PullRequests[1].State != nil {
+		t.Fatalf("second link = %+v", parsed.PullRequests[1])
+	}
+	if absent, failure := parseCreate(input(`{"title":"Ship"}`)); failure != nil || absent.HasPullRequests {
+		t.Fatalf("an absent list = %+v failure = %v", absent, failure)
+	}
+	if updated, failure := parseUpdate(input(`{"id":"t1","pullRequests":[]}`)); failure != nil || !updated.HasPullRequests || len(updated.PullRequests) != 0 {
+		t.Fatalf("an empty update list = %+v failure = %v", updated, failure)
+	}
+
+	eleven := make([]string, 0, pullRequestMaxCount+1)
+	for index := 1; index <= pullRequestMaxCount+1; index++ {
+		eleven = append(eleven, fmt.Sprintf(`{"url":"https://example.com/o/r/pull/%d"}`, index))
+	}
+	cases := map[string]string{
+		`{"title":"Ship","pullRequests":[{"url":"https://github.com/acme/app/issues/1"}]}`:                   `{"issues":[{"code":"custom","message":"Use a pull request link such as https://example.com/owner/repo/pull/12.","path":["pullRequests",0,"url"]}]}`,
+		`{"title":"Ship","pullRequests":"x"}`:                                                                `{"issues":[{"code":"invalid_type","expected":"array","message":"Invalid input: expected array, received string","path":["pullRequests"]}]}`,
+		`{"title":"Ship","pullRequests":null}`:                                                               `{"issues":[{"code":"invalid_type","expected":"array","message":"Invalid input: expected array, received null","path":["pullRequests"]}]}`,
+		`{"title":"Ship","pullRequests":[7]}`:                                                                `{"issues":[{"code":"invalid_type","expected":"object","message":"Invalid input: expected object, received number","path":["pullRequests",0]}]}`,
+		`{"title":"Ship","pullRequests":[[]]}`:                                                               `{"issues":[{"code":"invalid_type","expected":"object","message":"Invalid input: expected object, received array","path":["pullRequests",0]}]}`,
+		`{"title":"Ship","pullRequests":[{}]}`:                                                               `{"issues":[{"code":"invalid_type","expected":"string","message":"Invalid input: expected string, received undefined","path":["pullRequests",0,"url"]}]}`,
+		`{"title":"Ship","pullRequests":[{"url":null}]}`:                                                     `{"issues":[{"code":"invalid_type","expected":"string","message":"Invalid input: expected string, received null","path":["pullRequests",0,"url"]}]}`,
+		`{"title":"Ship","pullRequests":[{"url":"https://example.com/o/r/pull/1","state":"done"}]}`:          `{"issues":[{"code":"invalid_value","message":"Invalid option: expected one of \"open\"|\"merged\"|\"closed\"","path":["pullRequests",0,"state"],"values":["open","merged","closed"]}]}`,
+		`{"title":"Ship","pullRequests":[{"url":"https://example.com/o/r/pull/1","state":null}]}`:            `{"issues":[{"code":"invalid_value","message":"Invalid option: expected one of \"open\"|\"merged\"|\"closed\"","path":["pullRequests",0,"state"],"values":["open","merged","closed"]}]}`,
+		`{"title":"Ship","pullRequests":[{"url":"` + strings.Repeat("a", pullRequestURLMaxLength+1) + `"}]}`: `{"issues":[{"code":"too_big","inclusive":true,"maximum":500,"message":"Too big: expected string to have <=500 characters","origin":"string","path":["pullRequests",0,"url"]}]}`,
+		`{"title":"Ship","pullRequests":[` + strings.Join(eleven, ",") + `]}`:                                `{"issues":[{"code":"too_big","inclusive":true,"maximum":10,"message":"Too big: expected array to have <=10 items","origin":"array","path":["pullRequests"]}]}`,
+		// A past-the-limit array reports only the length: zod's size cap stops before the items.
+		`{"title":"Ship","pullRequests":[{"url":"https://example.com/o/r/issues/1"},` + strings.Join(eleven[:len(eleven)-1], ",") + `]}`: `{"issues":[{"code":"too_big","inclusive":true,"maximum":10,"message":"Too big: expected array to have <=10 items","origin":"array","path":["pullRequests"]}]}`,
+	}
+	for raw, want := range cases {
+		_, failure := parseCreate(input(raw))
+		got := pullRequestIssues(t, failure)
+		if !sameJSON(got, want) {
+			t.Errorf("%s:\n got %s\nwant %s", raw, got, want)
+		}
 	}
 }

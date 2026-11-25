@@ -1181,7 +1181,7 @@ async function buildApp(overrides: CreateAppOverrides): Promise<AppHandles> {
     },
     sessionActor,
   );
-  mountWebhookHttpRoutes(app, { prisma, secrets, events, jobs });
+  mountWebhookHttpRoutes(app, { prisma, secrets, events, jobs, onTicketChange: ticketChanges });
   if (env.inboundEmail) {
     mountEmailInboundRoute(app, {
       prisma,

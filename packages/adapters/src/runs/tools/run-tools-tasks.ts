@@ -1,4 +1,4 @@
-import type { TicketDecisionInput } from "@rakazo/contracts";
+import type { TicketDecisionInput, TicketPullRequestInput } from "@rakazo/contracts";
 import { TicketDecisionInputSchema } from "@rakazo/contracts";
 import {
   desktopGuardApplies,
@@ -88,6 +88,18 @@ function parseDecisionArg(raw: unknown): {
     };
   }
   return { value: parsed.data };
+}
+
+/** Links may come as bare URLs or as { url, state }; createTicket/updateTicket validate each. */
+function parsePullRequestsArg(raw: unknown): {
+  value?: TicketPullRequestInput[];
+  error?: string;
+} {
+  if (raw === undefined) return {};
+  if (!Array.isArray(raw)) return { error: "pullRequests: Expected a list of links." };
+  return {
+    value: raw.map((item) => (typeof item === "string" ? { url: item } : item)),
+  };
 }
 
 /** The task catalog, scratchpad, ticket board, schedules and skills. */
@@ -205,6 +217,8 @@ export const taskTools: ToolHandlers = {
       : undefined;
     const parsedDecision = parseDecisionArg(args.decision);
     if (parsedDecision.error) return call.finish({ error: `decision: ${parsedDecision.error}` });
+    const pullRequests = parsePullRequestsArg(args.pullRequests);
+    if (pullRequests.error) return call.finish({ error: pullRequests.error });
     return call.finish(
       await createTicket(deps, {
         spaceId: run.spaceId,
@@ -217,6 +231,7 @@ export const taskTools: ToolHandlers = {
         ownerUserId,
         workerBotIds,
         ...(parsedDecision.value !== undefined ? { decision: parsedDecision.value } : {}),
+        ...(pullRequests.value ? { pullRequests: pullRequests.value } : {}),
       }),
     );
   },
@@ -234,6 +249,8 @@ export const taskTools: ToolHandlers = {
       : undefined;
     const parsedDecision = parseDecisionArg(args.decision);
     if (parsedDecision.error) return call.finish({ error: `decision: ${parsedDecision.error}` });
+    const pullRequests = parsePullRequestsArg(args.pullRequests);
+    if (pullRequests.error) return call.finish({ error: pullRequests.error });
     return call.finish(
       await updateTicket(deps, {
         spaceId: run.spaceId,
@@ -248,6 +265,7 @@ export const taskTools: ToolHandlers = {
         ownerUserId,
         workerBotIds,
         ...(parsedDecision.value !== undefined ? { decision: parsedDecision.value } : {}),
+        ...(pullRequests.value ? { pullRequests: pullRequests.value } : {}),
       }),
     );
   },

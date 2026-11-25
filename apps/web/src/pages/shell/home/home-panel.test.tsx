@@ -111,6 +111,7 @@ it("shows task progress and opens the Kanban modal on click", () => {
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     completedAt: null,
+    pullRequests: [],
   };
   botTickets.current = [ticket];
   const { onOpenKanban } = renderPanel({ boardEnabled: true });
