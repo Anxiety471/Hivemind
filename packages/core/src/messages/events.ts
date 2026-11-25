@@ -11,6 +11,7 @@ import {
   endsSentence,
   hasRunningStep,
   humanizeToolName,
+  mergeSkillNames,
   noteLastToolStep,
   progressMessageText,
   reduceLiveMessageBlocks,
@@ -20,6 +21,7 @@ import {
   validNonNegInt,
   validNonNegNumber,
   validPosInt,
+  validStringList,
   withoutLastToolStepNotes,
   withToolHistory,
   withToolStepOutcomes,
@@ -38,12 +40,14 @@ export {
   appendToolStep,
   endsSentence,
   humanizeToolName,
+  mergeSkillNames,
   noteLastToolStep,
   progressMessageText,
   reduceLiveMessageBlocks,
   splitToolHistory,
   TOOL_STEP_CALLS_KEPT,
   thinkingLiveUpdate,
+  validStringList,
   withoutLastToolStepNotes,
   withToolHistory,
   withToolStepOutcomes,
@@ -172,6 +176,8 @@ export function projectMessages(
         typeof payload.detail === "string" && payload.detail.trim()
           ? payload.detail.trim()
           : undefined;
+      const skills = validStringList(payload.skills);
+      const runSkills = validStringList(payload.runSkills);
       const startedAtMs = validNonNegInt(payload.startedAtMs);
       const attempt = validPosInt(payload.attempt);
       const forkedFromStep = validNonNegInt(payload.forkedFromStep);
@@ -179,6 +185,8 @@ export function projectMessages(
         type: "tool",
         name: String(payload.name ?? ""),
         ...(detail ? { detail } : {}),
+        ...(skills ? { skills } : {}),
+        ...(runSkills ? { runSkills } : {}),
         ...(startedAtMs !== undefined ? { startedAtMs } : {}),
         ...(attempt !== undefined ? { attempt } : {}),
         ...(forkedFromStep !== undefined ? { forkedFromStep } : {}),
@@ -200,12 +208,14 @@ export function projectMessages(
           typeof payload.detail === "string" && payload.detail.trim()
             ? payload.detail.trim()
             : undefined;
+        const skills = validStringList(payload.skills);
         live.blocks = reduceLiveMessageBlocks(live.blocks, {
           type: "tool_completed",
           name: String(payload.name ?? ""),
           durationMs: durationMs ?? 0,
           ...(outcome ? { outcome } : {}),
           ...(detail ? { detail } : {}),
+          ...(skills ? { skills } : {}),
         });
         live.meta = {
           ...live.meta,
@@ -237,6 +247,7 @@ export function projectMessages(
       const modelId = typeof payload.modelId === "string" ? payload.modelId : undefined;
       const modelProvider =
         typeof payload.modelProvider === "string" ? payload.modelProvider : undefined;
+      const skills = validStringList(payload.skills);
       live.blocks = reduceLiveMessageBlocks(live.blocks, {
         type: "checkpoint",
         steps: payload.steps as ToolStep[],
@@ -244,6 +255,7 @@ export function projectMessages(
         ...(costUsd !== undefined ? { costUsd } : {}),
         ...(modelId ? { modelId } : {}),
         ...(modelProvider ? { modelProvider } : {}),
+        ...(skills ? { skills } : {}),
       });
       live.meta = {
         ...live.meta,

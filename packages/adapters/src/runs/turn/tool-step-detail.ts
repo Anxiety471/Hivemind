@@ -1,7 +1,11 @@
-import { redactSecrets } from "@rakazo/core";
+import { mergeSkillNames, redactSecrets } from "@rakazo/core";
 import { redactToolArgsForReview } from "../../approvals/auto-review.js";
 import { sanitizeSensitiveText } from "../../runtime/pi/pi-runtime-errors.js";
-import { formatCodeModeCallsSummary, summarizeCodeModeCalls } from "../../tools/code-mode-lint.js";
+import {
+  extractCodeModeSkills,
+  formatCodeModeCallsSummary,
+  summarizeCodeModeCalls,
+} from "../../tools/code-mode-lint.js";
 
 /** Max characters kept for a step's one-line target summary. */
 export const TOOL_STEP_DETAIL_MAX_CHARS = 160;
@@ -245,10 +249,14 @@ export function summarizeToolCompletionDetail(
   completion: { name: string; result?: unknown },
   secrets: string[] = [],
 ): string | undefined {
-  if (completion.name !== "code_mode") return undefined;
   const result = asRecord(completion.result);
   if (!result) return undefined;
   const details = asRecord(result.details);
+  if (completion.name === "skill_read") {
+    const resolvedName = nonEmptyString(result.name) ?? nonEmptyString(details?.name);
+    return finalizeDetail(resolvedName, secrets);
+  }
+  if (completion.name !== "code_mode") return undefined;
   const rawCalls = Array.isArray(result.calls)
     ? result.calls
     : Array.isArray(details?.calls)
@@ -257,4 +265,71 @@ export function summarizeToolCompletionDetail(
   if (!rawCalls) return undefined;
   const calls = rawCalls.filter((item): item is string => typeof item === "string");
   return finalizeDetail(formatCodeModeCallsSummary(calls), secrets);
+}
+
+function finalizeSkillList(rawSkills: readonly unknown[], secrets: string[]): string[] | undefined {
+  const cleaned = mergeSkillNames(
+    rawSkills.flatMap((item) => {
+      const value = nonEmptyString(item);
+      if (!value) return [];
+      const sanitized = finalizeDetail(value, secrets);
+      return sanitized ? [sanitized] : [];
+    }),
+  );
+  return cleaned.length > 0 ? cleaned : undefined;
+}
+
+/**
+ * Extracts redacted skill names referenced by a `skill_read` or `code_mode` tool call
+ * so the activity card can display active skills as soon as the step starts.
+ */
+export function summarizeToolCallSkills(
+  toolName: string,
+  args: unknown,
+  secrets: string[] = [],
+): string[] | undefined {
+  if (!toolName || SECRET_TOOL_NAME_RE.test(toolName)) return undefined;
+  const record = asRecord(args);
+  if (!record) return undefined;
+  if (toolName === "use_tool") {
+    const innerName = nonEmptyString(record.name);
+    return innerName ? summarizeToolCallSkills(innerName, record.arguments, secrets) : undefined;
+  }
+  const redacted = redactToolArgsForReview(record, secrets);
+  const name = toolName.trim().toLowerCase();
+  if (name === "skill_read") {
+    const skillName = nonEmptyString(redacted.name);
+    return skillName ? finalizeSkillList([skillName], secrets) : undefined;
+  }
+  if (name === "code_mode") {
+    const code = nonEmptyString(redacted.code);
+    return code ? finalizeSkillList(extractCodeModeSkills(code), secrets) : undefined;
+  }
+  return undefined;
+}
+
+/**
+ * Extracts redacted skill names resolved on completion of a `skill_read` or `code_mode` call
+ * (including `skill_read` calls resolved by `skillId` or run inside saved commands).
+ */
+export function summarizeToolCompletionSkills(
+  completion: { name: string; result?: unknown },
+  secrets: string[] = [],
+): string[] | undefined {
+  const result = asRecord(completion.result);
+  if (!result) return undefined;
+  const details = asRecord(result.details);
+  if (completion.name === "skill_read") {
+    const resolvedName = nonEmptyString(result.name) ?? nonEmptyString(details?.name);
+    return resolvedName ? finalizeSkillList([resolvedName], secrets) : undefined;
+  }
+  if (completion.name === "code_mode") {
+    const rawSkills = Array.isArray(result.skills)
+      ? result.skills
+      : Array.isArray(details?.skills)
+        ? details.skills
+        : undefined;
+    return rawSkills ? finalizeSkillList(rawSkills, secrets) : undefined;
+  }
+  return undefined;
 }

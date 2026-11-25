@@ -1,6 +1,7 @@
 package messageblocks
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"testing"
@@ -177,5 +178,37 @@ func TestParseBlocksDropsTheWholeListOnOneInvalidEntry(t *testing.T) {
 	}
 	if _, ok := ParseBlocks(malformed); ok {
 		t.Fatal("a malformed card must make the list unparseable")
+	}
+}
+
+func TestParseBlocksStepsSkills(t *testing.T) {
+	decode := func(raw string) []any {
+		t.Helper()
+		dec := json.NewDecoder(bytes.NewReader([]byte(raw)))
+		dec.UseNumber()
+		var v any
+		if err := dec.Decode(&v); err != nil {
+			t.Fatalf("decode %s: %v", raw, err)
+		}
+		return []any{v}
+	}
+
+	cleaned, ok := ParseBlocks(decode(`{"kind":"steps","skills":["pr-watch"],"steps":[{"label":"Code mode","count":1,"skills":["pr-watch"]}]}`))
+	if !ok {
+		t.Fatal("expected valid steps block with skills to parse")
+	}
+	block := cleaned[0].(map[string]any)
+	blockSkills := block["skills"].([]any)
+	if len(blockSkills) != 1 || blockSkills[0] != "pr-watch" {
+		t.Fatalf("unexpected block skills: %+v", blockSkills)
+	}
+	step := block["steps"].([]any)[0].(map[string]any)
+	stepSkills := step["skills"].([]any)
+	if len(stepSkills) != 1 || stepSkills[0] != "pr-watch" {
+		t.Fatalf("unexpected step skills: %+v", stepSkills)
+	}
+
+	if _, ok := ParseBlocks(decode(`{"kind":"steps","skills":[123],"steps":[{"label":"Code mode","count":1}]}`)); ok {
+		t.Fatal("expected non-string skills entry to be rejected")
 	}
 }

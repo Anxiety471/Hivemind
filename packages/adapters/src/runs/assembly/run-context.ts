@@ -141,6 +141,8 @@ export interface ReplyState {
   pendingToolNames: string[];
   /** Parallel to `pendingToolNames`: each waiting tool call's short redacted target, or null. */
   pendingToolDetails: (string | null)[];
+  /** Parallel to `pendingToolNames`: each waiting tool call's skill names, or null. */
+  pendingToolSkills?: (string[] | null)[];
   /** Parallel to `pendingToolNames`: optional live start time and retry-branch coordinates. */
   pendingToolTimings?: (LiveStepTiming | null)[];
   /** Every step label a call made, in call order, so its outcome can be saved on its step. */
@@ -149,6 +151,10 @@ export interface ReplyState {
   toolTimings?: Map<string, { startedAtMs?: number; durationMs?: number }>;
   /** Runtime target detail per execution id resolved on completion (e.g. `code_mode` calls). */
   toolDetails?: Map<string, string>;
+  /** Skill names read or invoked per execution id. */
+  toolSkills?: Map<string, string[]>;
+  /** Canonical skill names invoked by the turn's prompt (`/Name`, `@Name`, taught skills). */
+  invokedSkills?: string[];
   /** How each finished call ended, by execution id. */
   toolOutcomes: Map<string, ToolStepOutcome>;
   /** What each call that shows as its own step was called with and returned, by execution id. */

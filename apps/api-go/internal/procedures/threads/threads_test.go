@@ -121,3 +121,47 @@ func TestLiveMonitorStepsCostAndCheckpoints(t *testing.T) {
 		t.Fatalf("unexpected first step: %+v", firstStep)
 	}
 }
+
+func TestLiveMonitorSkillsPropagation(t *testing.T) {
+	runID := "run-skills"
+	events := []liveEvent{
+		{
+			ID: "e1", ThreadID: "t1", BotID: "b1", Seq: 1, Type: "agent.tool.called", RunID: &runID,
+			Payload: map[string]any{
+				"name": "code_mode", "detail": "skill_read",
+				"skills": []any{"pr-watch"}, "runSkills": []any{"Weekly report"},
+				"startedAtMs": json.Number("1000"),
+			},
+		},
+		{
+			ID: "e2", ThreadID: "t1", BotID: "b1", Seq: 2, Type: "agent.tool.completed", RunID: &runID,
+			Payload: map[string]any{
+				"name": "code_mode", "durationMs": json.Number("200"), "outcome": "succeeded",
+				"detail": "skill_read, shell", "skills": []any{"PR-Watch", "deploy-check"},
+			},
+		},
+	}
+	projected := projectLive(events, map[string]string{runID: "running"})
+	if len(projected) != 1 {
+		t.Fatalf("expected 1 projected live message, got %d", len(projected))
+	}
+	view, err := liveView(projected[0])
+	if err != nil {
+		t.Fatalf("liveView failed: %v", err)
+	}
+	blocks := view["blocks"].([]any)
+	stepsBlock := blocks[0].(map[string]any)
+	blockSkills := stepsBlock["skills"].([]any)
+	if len(blockSkills) != 3 || blockSkills[0] != "Weekly report" || blockSkills[1] != "pr-watch" || blockSkills[2] != "deploy-check" {
+		t.Fatalf("unexpected block skills: %+v", blockSkills)
+	}
+	stepList := stepsBlock["steps"].([]any)
+	firstStep := stepList[0].(map[string]any)
+	if firstStep["detail"] != "skill_read, shell" {
+		t.Fatalf("unexpected step detail: %v", firstStep["detail"])
+	}
+	stepSkills := firstStep["skills"].([]any)
+	if len(stepSkills) != 2 || stepSkills[0] != "pr-watch" || stepSkills[1] != "deploy-check" {
+		t.Fatalf("unexpected step skills: %+v", stepSkills)
+	}
+}

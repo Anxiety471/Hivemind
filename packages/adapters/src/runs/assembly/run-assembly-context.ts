@@ -1,8 +1,10 @@
 import type { AgentRunRequest } from "@rakazo/adapter-kit";
 import {
   expandSkillReferencesInPrompt,
+  extractExpandedSkillNames,
   formatSkillRunPrompt,
   formatSkillsCatalogInstruction,
+  mergeSkillNames,
   promptInvokesSkill,
   redactSecrets,
   renderBotDirectory,
@@ -339,10 +341,11 @@ export async function buildTurnPrompt(
   );
   const agentSkillsLine = formatSkillsCatalogInstruction(runAgentSkills);
   const missingImagesInstruction = missingTurnImagesInstruction(turnBlocks, currentTurnImages);
-  const taskPrompt = expandSkillReferencesInPrompt(
-    [task.prompt, attachedFilesPrompt, missingImagesInstruction].filter(Boolean).join("\n\n"),
-    runAgentSkills,
-  );
+  const rawTaskPrompt = [task.prompt, attachedFilesPrompt, missingImagesInstruction]
+    .filter(Boolean)
+    .join("\n\n");
+  const invokedPromptSkills = extractExpandedSkillNames(rawTaskPrompt, runAgentSkills);
+  const taskPrompt = expandSkillReferencesInPrompt(rawTaskPrompt, runAgentSkills);
   const invokedSkill = runSavedSkills.find(
     (skill) =>
       // Taught skills are the space's. Only a person's own message may pull in one someone
@@ -350,6 +353,16 @@ export async function buildTurnPrompt(
       (ownerStartedRun || skill.userId === run.userId) &&
       promptInvokesSkill(taskPrompt, skill.name || skill.goal),
   );
+  const invokedRunSkills = mergeSkillNames(
+    invokedPromptSkills,
+    invokedSkill ? [invokedSkill.name || invokedSkill.goal.slice(0, 80)] : undefined,
+  );
+  if (invokedRunSkills.length > 0) {
+    ctx.state.reply.invokedSkills = mergeSkillNames(
+      ctx.state.reply.invokedSkills,
+      invokedRunSkills,
+    );
+  }
   const basePrompt = invokedSkill
     ? `${formatSkillRunPrompt(
         invokedSkill.name || invokedSkill.goal.slice(0, 80),

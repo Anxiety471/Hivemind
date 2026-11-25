@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   activityBlocks,
   activityDurationMs,
+  activitySkills,
   activityStepCount,
   activitySummaryParts,
   isToolOnlyNarration,
@@ -10,6 +11,7 @@ import {
   messageHasVisibleBlocks,
   renderableMessageBlocks,
   STEP_DETAIL_EXPAND_THRESHOLD,
+  stepCalledSkills,
   stepDisplayInfo,
   toolStepCount,
 } from "./tool-activity-view";
@@ -230,5 +232,33 @@ describe("stepDisplayInfo", () => {
     expect(
       stepDisplayInfo({ label: "Shell", detail: "x".repeat(STEP_DETAIL_EXPAND_THRESHOLD + 1) }),
     ).toMatchObject({ expandable: true });
+  });
+});
+
+describe("skill activity extraction", () => {
+  it("categorizes skill_read under skills summary and collects deduplicated skills", () => {
+    const blocks: MessageBlock[] = [
+      {
+        kind: "steps",
+        skills: ["Weekly report"],
+        steps: [
+          { label: "Skill read", count: 1, detail: "pr-watch" },
+          {
+            label: "Code mode",
+            count: 1,
+            detail: "skill_read, shell",
+            skills: ["PR-Watch", "deploy-check"],
+          },
+          { label: "Shell", count: 1, detail: "gh pr view" },
+        ],
+      },
+    ];
+    expect(activitySummaryParts(blocks)).toEqual([
+      { kind: "skills", count: 1 },
+      { kind: "commands", count: 2 },
+    ]);
+    expect(activitySkills(blocks)).toEqual(["Weekly report", "pr-watch", "deploy-check"]);
+    expect(stepCalledSkills({ label: "Skill read", detail: "Tasks" })).toEqual(["Tasks"]);
+    expect(stepCalledSkills({ label: "Shell", detail: "ls" })).toEqual([]);
   });
 });

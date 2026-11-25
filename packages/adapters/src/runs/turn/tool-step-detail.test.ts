@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   summarizeToolCallDetail,
+  summarizeToolCallSkills,
   summarizeToolCompletionDetail,
+  summarizeToolCompletionSkills,
   TOOL_STEP_DETAIL_MAX_CHARS,
 } from "./tool-step-detail.js";
 
@@ -131,5 +133,44 @@ describe("summarizeToolCallDetail", () => {
         result: { calls: ["ignored"] },
       }),
     ).toBeUndefined();
+  });
+
+  it("extracts called skills from skill_read, use_tool, code_mode, and completions", () => {
+    expect(summarizeToolCallSkills("skill_read", { name: "pr-watch" })).toEqual(["pr-watch"]);
+    expect(
+      summarizeToolCallSkills("use_tool", {
+        name: "skill_read",
+        arguments: { name: "Tasks" },
+      }),
+    ).toEqual(["Tasks"]);
+    expect(
+      summarizeToolCallSkills("code_mode", {
+        code: 'await codemode.skill_read({ name: "pr-watch" }); await codemode.shell({ command: "ls" });',
+      }),
+    ).toEqual(["pr-watch"]);
+    expect(summarizeToolCallSkills("shell", { command: "ls" })).toBeUndefined();
+
+    expect(
+      summarizeToolCompletionSkills({
+        name: "skill_read",
+        result: { name: "PR Watch", content: "..." },
+      }),
+    ).toEqual(["PR Watch"]);
+    expect(
+      summarizeToolCompletionSkills({
+        name: "code_mode",
+        result: {
+          kind: "agent_tool_result",
+          content: [{ type: "text", text: "{}" }],
+          details: { output: "ok", skills: ["pr-watch", "PR-Watch", "deploy"] },
+        },
+      }),
+    ).toEqual(["pr-watch", "deploy"]);
+    expect(
+      summarizeToolCompletionDetail({
+        name: "skill_read",
+        result: { name: "PR Watch" },
+      }),
+    ).toBe("PR Watch");
   });
 });

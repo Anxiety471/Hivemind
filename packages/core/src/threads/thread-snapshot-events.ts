@@ -10,6 +10,7 @@ import {
   stopsRunHelpers,
   subagentBlockFromPayload,
   thinkingLiveUpdate,
+  validStringList,
 } from "../messages/events.js";
 import type { ToolStep } from "../messages/live-step-updates.js";
 import { mergeThreadHistory, upsertMessageById } from "../messages/message-pages.js";
@@ -311,6 +312,9 @@ function reduce(prev: LiveThreadSnapshot, event: ThreadSnapshotEvent): LiveThrea
       payload.detail.trim()
         ? payload.detail.trim()
         : undefined;
+    const skills = event.type === "agent.tool.called" ? validStringList(payload.skills) : undefined;
+    const runSkills =
+      event.type === "agent.tool.called" ? validStringList(payload.runSkills) : undefined;
     const startedAtMs =
       event.type === "agent.tool.called" ? validNonNegInt(payload.startedAtMs) : undefined;
     const attempt = event.type === "agent.tool.called" ? validPosInt(payload.attempt) : undefined;
@@ -326,6 +330,8 @@ function reduce(prev: LiveThreadSnapshot, event: ThreadSnapshotEvent): LiveThrea
               type: "tool",
               name: String(payload.name ?? ""),
               ...(detail ? { detail } : {}),
+              ...(skills ? { skills } : {}),
+              ...(runSkills ? { runSkills } : {}),
               ...(startedAtMs !== undefined ? { startedAtMs } : {}),
               ...(attempt !== undefined ? { attempt } : {}),
               ...(forkedFromStep !== undefined ? { forkedFromStep } : {}),
@@ -354,12 +360,14 @@ function reduce(prev: LiveThreadSnapshot, event: ThreadSnapshotEvent): LiveThrea
         typeof payload.detail === "string" && payload.detail.trim()
           ? payload.detail.trim()
           : undefined;
+      const skills = validStringList(payload.skills);
       const blocks = reduceLiveMessageBlocks(live.blocks, {
         type: "tool_completed",
         name: String(payload.name ?? ""),
         durationMs: durationMs ?? 0,
         ...(outcome ? { outcome } : {}),
         ...(detail ? { detail } : {}),
+        ...(skills ? { skills } : {}),
       });
       return {
         ...prev,
@@ -416,6 +424,7 @@ function reduce(prev: LiveThreadSnapshot, event: ThreadSnapshotEvent): LiveThrea
     const modelId = typeof payload.modelId === "string" ? payload.modelId : undefined;
     const modelProvider =
       typeof payload.modelProvider === "string" ? payload.modelProvider : undefined;
+    const skills = validStringList(payload.skills);
     const blocks = reduceLiveMessageBlocks(previous?.blocks ?? [], {
       type: "checkpoint",
       steps: payload.steps as ToolStep[],
@@ -423,6 +432,7 @@ function reduce(prev: LiveThreadSnapshot, event: ThreadSnapshotEvent): LiveThrea
       ...(costUsd !== undefined ? { costUsd } : {}),
       ...(modelId ? { modelId } : {}),
       ...(modelProvider ? { modelProvider } : {}),
+      ...(skills ? { skills } : {}),
     });
     const run =
       costUsd !== undefined &&

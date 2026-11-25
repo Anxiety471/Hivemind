@@ -1,10 +1,10 @@
 import { Trans, useLingui } from "@lingui/react/macro";
 import { cn } from "@rakazo/ui-web";
-import { RotateCcw } from "lucide-react";
+import { RotateCcw, ScrollText } from "lucide-react";
 import { useState } from "react";
 import type { CheckpointGraph, CheckpointNode } from "../../../lib/chat/checkpoint-graph";
 import { formatStepDuration, stepCategory } from "../../../lib/chat/checkpoint-graph";
-import { stepDisplayInfo } from "../../../lib/chat/tool-activity-view";
+import { stepCalledSkills, stepDisplayInfo } from "../../../lib/chat/tool-activity-view";
 import { StepIconPlate } from "./step-icons";
 
 const ROW_HEIGHT_PX = 34;
@@ -209,6 +209,8 @@ export function CheckpointTimeline({
           const info = stepDisplayInfo(node.step);
           const targetText =
             info.target && info.target !== node.step.label ? info.target : undefined;
+          const isDirectSkillStep = /^skill[ _]read$/i.test(node.step.label.trim());
+          const rowSkills = isDirectSkillStep ? [] : stepCalledSkills(node.step);
 
           return (
             <div
@@ -263,6 +265,19 @@ export function CheckpointTimeline({
                     title={targetText}
                   >
                     {targetText}
+                  </span>
+                ) : null}
+                {rowSkills.length > 0 ? (
+                  <span className="flex shrink-0 items-center gap-1">
+                    {rowSkills.map((skill) => (
+                      <span
+                        key={skill.toLowerCase()}
+                        className="inline-flex items-center gap-1 rounded border border-border/70 bg-muted/45 px-1.5 py-0.5 text-caption text-muted-foreground"
+                      >
+                        <ScrollText className="h-2.5 w-2.5 shrink-0" aria-hidden="true" />
+                        <span>{skill}</span>
+                      </span>
+                    ))}
                   </span>
                 ) : null}
                 {node.attemptBadge !== undefined ? (

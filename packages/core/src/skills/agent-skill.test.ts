@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildSkillMd,
   expandSkillReferencesInPrompt,
+  extractExpandedSkillNames,
   extractForcedSkillName,
   extractRoutineSkillMentions,
   findSkillByName,
@@ -746,5 +747,34 @@ describe("renameRoutineSkillMentions", () => {
     expect(
       renameRoutineSkillMentions("Use @garden tools, then @Garden. Email@garden stays.", renames),
     ).toBe("Use @garden tools, then @garden-2. Email@garden stays.");
+  });
+});
+
+describe("extractExpandedSkillNames", () => {
+  const skills = [
+    {
+      name: "Daily standup",
+      description: "standup",
+      source: "user" as const,
+      readOnly: false,
+      content: "Standup body",
+    },
+    {
+      name: "PR Watch",
+      description: "watch prs",
+      source: "user" as const,
+      readOnly: false,
+      content: "PR watch body",
+    },
+  ];
+
+  it("resolves forced /Name and routine @Name mentions to canonical skill names", () => {
+    expect(extractExpandedSkillNames("/daily standup\nfocus on blockers", skills)).toEqual([
+      "Daily standup",
+    ]);
+    expect(
+      extractExpandedSkillNames("Run @pr watch and @Daily standup then @pr watch", skills),
+    ).toEqual(["Daily standup", "PR Watch"]);
+    expect(extractExpandedSkillNames("Plain prompt without skill refs", skills)).toEqual([]);
   });
 });
