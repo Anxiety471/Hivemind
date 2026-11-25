@@ -539,6 +539,56 @@ export function laneMReviewCases(system: System): Case[] {
       },
     ),
 
+    // findVerificationValue reads the newest verification row and then deletes expired ones
+    // (better-auth internal-adapter.mjs:789-804), so a newer expired row hides an older valid
+    // one and an older expired row never hides a newer valid one.
+    reveal(
+      "mrev-confirm-newest-valid",
+      { name: "mrev-newest" },
+      {
+        seed: async (seeded) => {
+          await addVault(seeded, { name: "mrev-newest", plaintext: "newest-value" });
+          await system.verification.create({
+            data: {
+              id: `${seeded.userId}-confirmation-old`,
+              identifier: `identity-confirmed-${seeded.userId}-session`,
+              value: seeded.userId,
+              createdAt: new Date("2021-01-01T00:00:00.000Z"),
+              expiresAt: new Date("2021-01-01T01:00:00.000Z"),
+            },
+          });
+          await confirm(seeded);
+        },
+      },
+    ),
+    reveal(
+      "mrev-confirm-newest-expired",
+      { name: "mrev-newest" },
+      {
+        seed: async (seeded) => {
+          await addVault(seeded, { name: "mrev-newest", plaintext: "newest-value" });
+          await system.verification.create({
+            data: {
+              id: `${seeded.userId}-confirmation-valid`,
+              identifier: `identity-confirmed-${seeded.userId}-session`,
+              value: seeded.userId,
+              createdAt: new Date("2021-01-01T00:00:00.000Z"),
+              expiresAt: new Date("2099-01-01T00:00:00.000Z"),
+            },
+          });
+          await system.verification.create({
+            data: {
+              id: `${seeded.userId}-confirmation-expired`,
+              identifier: `identity-confirmed-${seeded.userId}-session`,
+              value: seeded.userId,
+              createdAt: new Date("2022-01-01T00:00:00.000Z"),
+              expiresAt: new Date("2022-01-01T01:00:00.000Z"),
+            },
+          });
+        },
+      },
+    ),
+
     // Concurrent identical saves: one row, every call answers, no lost lock or retry loop.
     put(
       "mrev-concurrent-put-same-name",

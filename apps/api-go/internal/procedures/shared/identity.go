@@ -27,9 +27,13 @@ func IdentityConfirmed(ctx context.Context, database *db.DB, actor db.Actor) (bo
 		return false, nil
 	}
 	confirmed := false
-	now := time.Now()
-	// findVerificationValue reads one row per identifier (findFirst with no order, as the
-	// identifier has only an index): a second row for the same key is not a second proof.
+	// findVerificationValue (better-auth internal-adapter.mjs:789-804) reads the *newest* row for
+	// the identifier — findMany sorted by createdAt descending, limit 1, and Postgres sorts
+	// descending nulls first, so no NULLS clause — and then deletes every expired verification
+	// row, for any identifier. Both statements run per identifier, in that order:
+	// hasRecentIdentityConfirmation looks up `identity-confirmed:<session>` and
+	// `oidc-reauth:<session>` independently. A newer expired row therefore hides an older valid
+	// one, exactly as it does in TypeScript.
 	identifiers := []string{
 		"identity-confirmed-" + actor.SessionID,
 		"oidc-reauth-" + actor.SessionID,
@@ -39,16 +43,24 @@ func IdentityConfirmed(ctx context.Context, database *db.DB, actor db.Actor) (bo
 			var value string
 			var expires time.Time
 			err := tx.QueryRow(ctx,
-				`SELECT value, "expiresAt" FROM verification WHERE identifier = $1 LIMIT 1`,
+				`SELECT value, "expiresAt" FROM verification
+				 WHERE identifier = $1
+				 ORDER BY "createdAt" DESC
+				 LIMIT 1`,
 				identifier).Scan(&value, &expires)
-			if errors.Is(err, pgx.ErrNoRows) {
-				continue
-			}
-			if err != nil {
+			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 				return err
 			}
-			if value == actor.UserID && expires.After(now) {
+			if err == nil && value == actor.UserID && expires.After(time.Now().UTC()) {
 				confirmed = true
+			}
+			// "expiresAt" is a timestamp without zone and Prisma writes UTC wall clock, so the
+			// instant becomes UTC wall clock before the comparison (a bare time.Time parameter
+			// would be encoded in its own location).
+			if _, cleanup := tx.Exec(ctx,
+				`DELETE FROM verification WHERE "expiresAt" < ($1::timestamptz AT TIME ZONE 'UTC')`,
+				time.Now()); cleanup != nil {
+				return cleanup
 			}
 		}
 		return nil

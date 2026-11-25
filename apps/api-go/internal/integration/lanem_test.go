@@ -574,6 +574,86 @@ func TestLaneMVaultRevealNeedsConfirmation(t *testing.T) {
 	}
 }
 
+// TestLaneMIdentityConfirmationReadsNewestRow is findVerificationValue's row choice and cleanup
+// (better-auth internal-adapter.mjs:789-804): the newest verification row for the identifier is
+// the proof — so a newer expired row hides an older valid one — and every expired verification
+// row is deleted on each lookup.
+func TestLaneMIdentityConfirmationReadsNewestRow(t *testing.T) {
+	database := openTestDB(t)
+	s := seed(t, database)
+	ctx := context.Background()
+	actor := db.Actor{UserID: s.UserID, SpaceID: s.Space1, SessionID: s.SessionID}
+	deployment := laneMVault(t, database)
+	id := s.UserID + "-login"
+	addLaneMVault(t, database, s.UserID, nil, laneMVaultRow{
+		ID: id, Name: "login", Origin: "https://login.example.test",
+		Auth: []byte(`{"type":"login"}`), Ciphertext: sealLaneM(t, `{"fields":[{"label":"Username","value":"u","hidden":false}]}`, id),
+	})
+	input := laneMInput(t, `{"name":"login"}`)
+	identifier := "identity-confirmed-" + s.SessionID
+	rows := func(t *testing.T) []string {
+		t.Helper()
+		var ids []string
+		err := database.System(ctx, "read verification rows", func(tx pgx.Tx) error {
+			result, failure := tx.Query(ctx, `SELECT id FROM verification WHERE identifier = $1 ORDER BY id`, identifier)
+			if failure != nil {
+				return failure
+			}
+			defer result.Close()
+			for result.Next() {
+				var rowID string
+				if err := result.Scan(&rowID); err != nil {
+					return err
+				}
+				ids = append(ids, rowID)
+			}
+			return result.Err()
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ids
+	}
+	insert := func(t *testing.T, rowID, created, expires string) {
+		t.Helper()
+		err := database.System(ctx, "seed a verification row", func(tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, `INSERT INTO verification (id, identifier, value, "expiresAt", "createdAt", "updatedAt")
+				VALUES ($1, $2, $3, `+expires+`, `+created+`, `+created+`)`, rowID, identifier, s.UserID)
+			return err
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Newest wins: an older row that has expired is not the proof, and the lookup then deletes it.
+	insert(t, s.UserID+"-confirmation-old", "now() - interval '2 hours'", "now() - interval '1 hour'")
+	insert(t, s.UserID+"-confirmation-new", "now()", "now() + interval '5 minutes'")
+	if _, failure := vaultstore.VaultReveal(ctx, database, deployment, actor, input); failure != nil {
+		t.Fatalf("newest valid row should confirm: %+v", failure)
+	}
+	if left := rows(t); len(left) != 1 || left[0] != s.UserID+"-confirmation-new" {
+		t.Fatalf("expired row after a valid confirmation = %v", left)
+	}
+
+	// The same rule denies: a newer expired row hides the older valid one TypeScript never reads.
+	insert(t, s.UserID+"-confirmation-valid", "now() - interval '2 hours'", "now() + interval '1 year'")
+	if _, failure := vaultstore.VaultReveal(ctx, database, deployment, actor, input); failure != nil {
+		t.Fatalf("the older valid row still confirms: %+v", failure)
+	}
+	if _, err := database.Pool.Exec(ctx, `UPDATE verification SET "createdAt" = now() + interval '1 hour',
+		"expiresAt" = now() - interval '1 minute' WHERE id = $1`, s.UserID+"-confirmation-new"); err != nil {
+		t.Fatal(err)
+	}
+	_, failure := vaultstore.VaultReveal(ctx, database, deployment, actor, input)
+	if got := laneMFailure(t, failure); got.Code != "IDENTITY_CONFIRMATION_REQUIRED" {
+		t.Fatalf("a newer expired row must deny, not accept an older row: %+v", got)
+	}
+	if left := rows(t); len(left) != 1 || left[0] != s.UserID+"-confirmation-valid" {
+		t.Fatalf("expired rows after the lookup = %v", left)
+	}
+}
+
 // TestLaneMVaultRemoveDropsTheReference is forgetBotSecret: the row goes, the reference it held is
 // cleaned up, and an absent name is a no-op success.
 func TestLaneMVaultRemoveDropsTheReference(t *testing.T) {
