@@ -1,5 +1,10 @@
 import type { MemoryPromptBudget, MemoryPromptDocumentUse } from "@rakazo/contracts";
-import { BOT_MEMORY_MAX_BYTES, MEMORY_INDEX_PATH } from "@rakazo/contracts";
+import {
+  BOT_MEMORY_MAX_BYTES,
+  isArchiveMemoryPath,
+  MEMORY_INDEX_PATH,
+  USER_MEMORY_PATH,
+} from "@rakazo/contracts";
 import { byteLength, truncateUtf8 } from "@rakazo/core";
 
 /** How much durable memory a prompt carries before the rest is left out. */
@@ -32,9 +37,17 @@ export function buildAgentMemoryPrompt(
     documents: [],
     omitted: [],
   };
-  if (input.length === 0) return { plan };
+  const hasSharedUser = input.some(
+    (document) => document.scope === "user" && document.path === USER_MEMORY_PATH,
+  );
+  const hotDocuments = input.filter(
+    (document) =>
+      !isArchiveMemoryPath(document.path) &&
+      !(hasSharedUser && document.scope === "bot" && document.path === USER_MEMORY_PATH),
+  );
+  if (hotDocuments.length === 0) return { plan };
 
-  const documents = [...input].sort(
+  const documents = [...hotDocuments].sort(
     (left, right) =>
       memoryTimestamp(right.updatedAt) - memoryTimestamp(left.updatedAt) ||
       right.revision - left.revision ||

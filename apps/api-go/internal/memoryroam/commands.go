@@ -15,6 +15,7 @@ import (
 // Command names. They are part of the report contract.
 const (
 	CmdMemoryWrite     = "memory.write"
+	CmdMemoryArchive   = "memory.archive"
 	CmdInstructionsSet = "instructions.set"
 	CmdSkillCreate     = "skill.create"
 	CmdSkillUpdate     = "skill.update"
@@ -42,6 +43,12 @@ var commandRegistry = []commandSpec{
 		Name:    CmdMemoryWrite,
 		Usage:   `{"name":"memory.write","path":"MEMORY.md","content":"complete new content"}`,
 		Summary: "Replace one writable memory document with its complete new content.",
+		passes:  []passKind{passBot, passShared},
+	},
+	{
+		Name:    CmdMemoryArchive,
+		Usage:   `{"name":"memory.archive","path":"archive/2026-11.md","content":"- [2026-11-25] concise archived summary"}`,
+		Summary: "Append dated historical summaries to a cold archive file under archive/ (excluded from auto-prompt, searchable on demand).",
 		passes:  []passKind{passBot, passShared},
 	},
 	{

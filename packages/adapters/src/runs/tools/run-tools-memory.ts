@@ -3,8 +3,10 @@ import {
   HistoryListInputSchema,
   HistoryReadInputSchema,
   HistorySearchInputSchema,
+  isArchiveMemoryPath,
   MEMORY_INDEX_PATH,
 } from "@rakazo/contracts";
+import { byteLength } from "@rakazo/core";
 import { listHistory, readHistory, searchHistory } from "@rakazo/db";
 import { redactConnectorPayload } from "../../integrations/connector-safety.js";
 import { editMemory } from "../../memory/memory-tools.js";
@@ -252,4 +254,127 @@ export const memoryTools: ToolHandlers = {
       ),
     );
   },
+  async search_memory_docs(ctx, call) {
+    const { deps, bot, context } = ctx;
+    const { args } = call;
+    const scopeArg =
+      args.scope === "bot" || args.scope === "user" || args.scope === "all" ? args.scope : "all";
+    const archiveOnly = args.archive_only === true;
+    const rawLimit = Number(args.limit);
+    const limit = Number.isInteger(rawLimit) && rawLimit >= 1 ? Math.min(rawLimit, 20) : 10;
+    const query = typeof args.query === "string" ? args.query.trim() : "";
+
+    const snapshots = await Promise.all([
+      scopeArg === "user"
+        ? Promise.resolve({ documents: [] })
+        : deps.memory.read({ scope: "bot", botId: bot.id }, context),
+      scopeArg === "bot"
+        ? Promise.resolve({ documents: [] })
+        : deps.memory.read({ scope: "user" }, context),
+    ]);
+    const combined = [
+      ...snapshots[0].documents.map((doc) => ({ ...doc, scope: "bot" as const })),
+      ...snapshots[1].documents.map((doc) => ({ ...doc, scope: "user" as const })),
+    ]
+      .filter((doc) => !archiveOnly || isArchiveMemoryPath(doc.path))
+      .sort((a, b) => Date.parse(b.updatedAt ?? "") - Date.parse(a.updatedAt ?? ""));
+
+    if (!query) {
+      const documents = combined.slice(0, limit).map((doc) => ({
+        scope: doc.scope,
+        path: doc.path,
+        revision: doc.revision,
+        bytes: byteLength(doc.content),
+        updatedAt: doc.updatedAt,
+        archived: isArchiveMemoryPath(doc.path),
+      }));
+      return call.finish(redactConnectorPayload({ documents }, ctx.secrets));
+    }
+
+    const loweredQuery = query.toLowerCase();
+    const tokens = loweredQuery.split(/\s+/).filter(Boolean);
+    const matches = combined
+      .filter((doc) => {
+        const haystack = `${doc.path}\n${doc.content}`.toLowerCase();
+        return tokens.every((token) => haystack.includes(token)) || haystack.includes(loweredQuery);
+      })
+      .slice(0, limit)
+      .map((doc) => ({
+        scope: doc.scope,
+        path: doc.path,
+        revision: doc.revision,
+        updatedAt: doc.updatedAt,
+        archived: isArchiveMemoryPath(doc.path),
+        snippet: memorySnippet(doc.content, tokens, loweredQuery),
+      }));
+    return call.finish(redactConnectorPayload({ matches }, ctx.secrets));
+  },
+  async read_memory_doc(ctx, call) {
+    const { deps, bot, context } = ctx;
+    const { args } = call;
+    const path = typeof args.path === "string" ? args.path.trim() : "";
+    if (!path || path.startsWith("/") || path.includes("..")) {
+      return call.finish({ error: "Invalid memory document path." });
+    }
+    const rawOffset = Number(args.offset);
+    const offset = Number.isInteger(rawOffset) && rawOffset >= 0 ? rawOffset : 0;
+    const requestedScope = args.scope === "bot" || args.scope === "user" ? args.scope : undefined;
+
+    let scope: "bot" | "user" | undefined = requestedScope;
+    let doc = (
+      await deps.memory.read(
+        requestedScope === "user" ? { scope: "user", path } : { scope: "bot", botId: bot.id, path },
+        context,
+      )
+    ).documents[0];
+    if (!doc && !requestedScope) {
+      doc = (await deps.memory.read({ scope: "user", path }, context)).documents[0];
+      if (doc) scope = "user";
+    } else if (doc && !scope) {
+      scope = "bot";
+    }
+    if (!doc || !scope) {
+      return call.finish({
+        error: "Memory document not found. Call search_memory_docs to list available paths.",
+      });
+    }
+
+    const pageChars = 8_000;
+    const totalLength = doc.content.length;
+    const content = doc.content.slice(offset, offset + pageChars);
+    const nextOffset = offset + content.length < totalLength ? offset + content.length : undefined;
+    return call.finish(
+      redactConnectorPayload(
+        {
+          scope,
+          path: doc.path,
+          revision: doc.revision,
+          updatedAt: doc.updatedAt,
+          content,
+          offset,
+          totalLength,
+          ...(nextOffset === undefined ? {} : { nextOffset }),
+        },
+        ctx.secrets,
+      ),
+    );
+  },
 };
+
+function memorySnippet(content: string, tokens: readonly string[], fullQuery: string): string {
+  const lower = content.toLowerCase();
+  let idx = lower.indexOf(fullQuery);
+  if (idx < 0) {
+    for (const token of tokens) {
+      const hit = lower.indexOf(token);
+      if (hit >= 0) {
+        idx = hit;
+        break;
+      }
+    }
+  }
+  if (idx < 0) return content.slice(0, 240);
+  const start = Math.max(0, idx - 80);
+  const end = Math.min(content.length, start + 240);
+  return content.slice(start, end);
+}

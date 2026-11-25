@@ -19,6 +19,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/effects"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/agentskills"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/memory"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/wtf8"
 )
 
 // The skills pass turns procedures a Space's bots have already worked out into
@@ -120,10 +121,9 @@ func loadSkills(ctx context.Context, database *db.DB, bot Bot) ([]skillRecord, e
 	return skills, err
 }
 
-// skillEvidence is what the bots of one Space wrote down: the shared index and
-// each bot's own MEMORY.md. USER.md holds facts about a person, not procedures,
-// so it is not shown.
-func skillEvidence(ctx context.Context, database *db.DB, ring *contentcrypto.KeyRing, bots []Bot) ([]evidenceDocument, error) {
+// skillEvidence is what the bots of one Space wrote down: the shared index,
+// each bot's own MEMORY.md, and bloated Instructions (for procedure extraction).
+func skillEvidence(ctx context.Context, database *db.DB, ring *contentcrypto.KeyRing, bots []Bot, compact bool) ([]evidenceDocument, error) {
 	var evidence []evidenceDocument
 	shared, err := listDocuments(ctx, database, ring, bots[0], true)
 	if err != nil {
@@ -139,6 +139,12 @@ func skillEvidence(ctx context.Context, database *db.DB, ring *contentcrypto.Key
 		}
 		if document := indexOf(documents, memory.MemoryIndexPath); document != nil && hasFacts(document.Content) {
 			evidence = append(evidence, evidenceDocument{Label: bot.Name + " " + memory.MemoryIndexPath, Content: document.Content})
+		}
+		if strings.TrimSpace(bot.Instructions) != "" && (compact || wtf8.Length(bot.Instructions) > InstructionsSoftChars) {
+			evidence = append(evidence, evidenceDocument{
+				Label:   bot.Name + " Instructions (extract repeatable procedures to skills)",
+				Content: bot.Instructions,
+			})
 		}
 	}
 	return evidence, nil
@@ -337,7 +343,7 @@ func roamSkills(ctx context.Context, logger *slog.Logger, database *db.DB, ring 
 	if err != nil {
 		return false, nil, "", err
 	}
-	evidence, err := skillEvidence(ctx, database, ring, bots)
+	evidence, err := skillEvidence(ctx, database, ring, bots, config.Compact)
 	if err != nil {
 		return false, nil, "", err
 	}
@@ -346,7 +352,7 @@ func roamSkills(ctx context.Context, logger *slog.Logger, database *db.DB, ring 
 		return false, nil, "", nil
 	}
 	started := time.Now()
-	text, usage, used, err := complete(ctx, clients, systemPrompt(passSkills), payload)
+	text, usage, used, err := complete(ctx, clients, systemPrompt(passSkills, config.Compact, false), payload)
 	if err != nil {
 		return true, nil, "", err
 	}

@@ -28,13 +28,21 @@ import (
 
 const (
 	// BotMemoryMaxBytes is BOT_MEMORY_MAX_BYTES (packages/contracts/src/bots/bot-memory.ts).
-	BotMemoryMaxBytes = 4 * 1024
-	// MaxOtherBytes is a ceiling for one non-index document. The prompt budget for
+	BotMemoryMaxBytes  = 4 * 1024
+	BotMemorySoftBytes = 2560
+	// UserMemoryMaxBytes is USER_MEMORY_MAX_BYTES (packages/contracts/src/bots/bot-memory.ts).
+	UserMemoryMaxBytes  = 2 * 1024
+	UserMemorySoftBytes = 1536
+	// SharedMemoryMaxBytes is SHARED_MEMORY_MAX_BYTES (packages/contracts/src/bots/bot-memory.ts).
+	SharedMemoryMaxBytes  = 6 * 1024
+	SharedMemorySoftBytes = 4 * 1024
+	// InstructionsSoftChars is the compaction target for bot Instructions.
+	InstructionsSoftChars = 3 * 1024
+	// MaxOtherBytes is a ceiling for archive documents. The prompt budget for
 	// all of a bot's memory is 32 KB; this is a per-document safety cap, not a budget.
 	MaxOtherBytes = 64 * 1024
-	// UserMemoryPath is the bot's durable profile of its person. It is one of the
-	// two documents the roamer may write.
-	UserMemoryPath = "USER.md"
+	// UserMemoryPath is the Space's consolidated profile of the person.
+	UserMemoryPath = memory.UserMemoryPath
 	// MaxInstructionsLength is BOT_INSTRUCTIONS_MAX_LENGTH
 	// (packages/contracts/src/bots/bot.ts).
 	MaxInstructionsLength = 20_000
@@ -42,20 +50,20 @@ const (
 
 var safePath = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9._/-]{0,198})$`)
 
-// writablePaths are the only documents a roamer pass may change. A bot's
-// instructions are not a memory document and are never in this set.
+// writablePaths are the only documents a roamer pass may replace with memory.write.
+// Space-level USER.md lives in shared memory; bot passes write only bot MEMORY.md.
 func writablePaths(shared bool) []string {
 	if shared {
-		return []string{memory.MemoryIndexPath}
+		return []string{memory.MemoryIndexPath, UserMemoryPath}
 	}
-	return []string{memory.MemoryIndexPath, UserMemoryPath}
+	return []string{memory.MemoryIndexPath}
 }
 
 func isWritablePath(path string, shared bool) bool {
 	if shared {
-		return path == memory.MemoryIndexPath
+		return path == memory.MemoryIndexPath || path == UserMemoryPath
 	}
-	return path == memory.MemoryIndexPath || path == UserMemoryPath
+	return path == memory.MemoryIndexPath
 }
 
 // Config is one roamer pass.
@@ -72,6 +80,9 @@ type Config struct {
 	OnlyBots      []string
 	// Force ignores the owner's switch and interval, for a manual run.
 	Force bool
+	// Compact actively compacts MEMORY.md, USER.md, and Instructions toward soft
+	// targets and archives stale history under archive/.
+	Compact bool
 }
 
 // Bot is one non-archived bot the roamer may visit.
@@ -126,8 +137,36 @@ type update struct {
 	Current *memory.Document
 }
 
+type archiveAppend struct {
+	Path    string
+	Content string
+}
+
+type openWorkItem struct {
+	Title     string
+	Status    string
+	Notes     string
+	UpdatedAt time.Time
+}
+
+type skillSummary struct {
+	Name        string
+	Description string
+}
+
+type botContext struct {
+	Now            time.Time
+	Compact        bool
+	SharedMemory   string
+	SharedUser     string
+	OpenWork       []openWorkItem
+	Skills         []skillSummary
+	LegacyUserDocs []evidenceDocument
+}
+
 type validatedChanges struct {
 	Updates      []update
+	Archives     []archiveAppend
 	Instructions *string
 	Ignored      []string
 }
@@ -206,38 +245,6 @@ func Run(ctx context.Context, logger *slog.Logger, database *db.DB, ring *conten
 		if run == modeRetry || len(config.OnlyBots) > 0 {
 			targets = append(targets, setting.LastReport...)
 		}
-		for _, bot := range selected {
-			if err := ctx.Err(); err != nil {
-				return report, err
-			}
-			clients, err := config.ClientsFor(ctx, bot)
-			if err != nil {
-				failures = append(failures, botFailure(bot, err))
-				report.Failures++
-				targets = upsertTarget(targets, targetFor("bot", bot.ID, bot.Name, nil, "", err))
-				logger.Error("memory.roamer.model_unavailable", "botId", bot.ID, "error", err.Error())
-				continue
-			}
-			madeCall, changes, model, err := roamBot(ctx, logger, database, ring, config, bot, clients)
-			if madeCall {
-				report.ModelCalls++
-			}
-			if model != "" && ownerModel == "" {
-				ownerModel = model
-			}
-			targets = upsertTarget(targets, targetFor("bot", bot.ID, bot.Name, changes, model, err))
-			if err != nil {
-				failures = append(failures, botFailure(bot, err))
-				report.Failures++
-				logger.Error("memory.roamer.bot_failed", "botId", bot.ID, "error", err.Error())
-			} else {
-				ownerChanges += len(changes)
-				report.Changes = append(report.Changes, changes...)
-			}
-			if err := wait(ctx, config.Delay); err != nil {
-				return report, err
-			}
-		}
 
 		visit := func(kind, name string, lead Bot, roam func([]*Client) (bool, []Change, string, error)) error {
 			if err := ctx.Err(); err != nil {
@@ -269,26 +276,70 @@ func Run(ctx context.Context, logger *slog.Logger, database *db.DB, ring *conten
 			}
 			return wait(ctx, config.Delay)
 		}
-		visited := map[string]bool{}
-		for _, lead := range byOwner[owner] {
-			if visited[lead.SpaceID] {
-				continue
+
+		// Group bots by Space so each Space runs Shared -> Skills -> Bots in order:
+		// Space USER.md and Skills settle first, then each bot deduplicates against them.
+		spaceOrder := []string{}
+		spaceBotsMap := map[string][]Bot{}
+		for _, bot := range byOwner[owner] {
+			if _, seen := spaceBotsMap[bot.SpaceID]; !seen {
+				spaceOrder = append(spaceOrder, bot.SpaceID)
 			}
-			visited[lead.SpaceID] = true
-			if config.IncludeShared && sharedSpaces[lead.SpaceID] {
+			spaceBotsMap[bot.SpaceID] = append(spaceBotsMap[bot.SpaceID], bot)
+		}
+		selectedBySpace := map[string][]Bot{}
+		for _, bot := range selected {
+			selectedBySpace[bot.SpaceID] = append(selectedBySpace[bot.SpaceID], bot)
+		}
+
+		for _, spaceID := range spaceOrder {
+			spaceBots := spaceBotsMap[spaceID]
+			lead := spaceBots[0]
+			if config.IncludeShared && sharedSpaces[spaceID] {
 				err := visit("shared", sharedTargetName(lead), lead, func(clients []*Client) (bool, []Change, string, error) {
-					return roamShared(ctx, logger, database, ring, config, lead, clients)
+					return roamShared(ctx, logger, database, ring, config, spaceBots, clients)
 				})
 				if err != nil {
 					return report, err
 				}
 			}
-			if config.IncludeSkills && skillSpaces[lead.SpaceID] {
-				spaceBots := botsInSpace(byOwner[owner], lead.SpaceID)
+			if config.IncludeSkills && skillSpaces[spaceID] {
 				err := visit("skills", skillsTargetName(lead), lead, func(clients []*Client) (bool, []Change, string, error) {
 					return roamSkills(ctx, logger, database, ring, config, spaceBots, clients)
 				})
 				if err != nil {
+					return report, err
+				}
+			}
+			for _, bot := range selectedBySpace[spaceID] {
+				if err := ctx.Err(); err != nil {
+					return report, err
+				}
+				clients, err := config.ClientsFor(ctx, bot)
+				if err != nil {
+					failures = append(failures, botFailure(bot, err))
+					report.Failures++
+					targets = upsertTarget(targets, targetFor("bot", bot.ID, bot.Name, nil, "", err))
+					logger.Error("memory.roamer.model_unavailable", "botId", bot.ID, "error", err.Error())
+					continue
+				}
+				madeCall, changes, model, err := roamBot(ctx, logger, database, ring, config, bot, clients)
+				if madeCall {
+					report.ModelCalls++
+				}
+				if model != "" && ownerModel == "" {
+					ownerModel = model
+				}
+				targets = upsertTarget(targets, targetFor("bot", bot.ID, bot.Name, changes, model, err))
+				if err != nil {
+					failures = append(failures, botFailure(bot, err))
+					report.Failures++
+					logger.Error("memory.roamer.bot_failed", "botId", bot.ID, "error", err.Error())
+				} else {
+					ownerChanges += len(changes)
+					report.Changes = append(report.Changes, changes...)
+				}
+				if err := wait(ctx, config.Delay); err != nil {
 					return report, err
 				}
 			}
@@ -477,6 +528,29 @@ func indexOf(documents []memory.Document, path string) *memory.Document {
 	return nil
 }
 
+func loadOpenWork(ctx context.Context, database *db.DB, bot Bot) ([]openWorkItem, error) {
+	var items []openWorkItem
+	err := database.System(ctx, "memory roamer reads open work", func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT title, status, notes, "updatedAt"
+			FROM scratchpad_items
+			WHERE "spaceId" = $1 AND "botId" = $2 AND status <> 'done'
+			ORDER BY "updatedAt" DESC, id DESC LIMIT 20`, bot.SpaceID, bot.ID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var item openWorkItem
+			if err := rows.Scan(&item.Title, &item.Status, &item.Notes, &item.UpdatedAt); err != nil {
+				return err
+			}
+			items = append(items, item)
+		}
+		return rows.Err()
+	})
+	return items, err
+}
+
 // roamBot seeds a missing index, asks the model for changes, and applies them.
 // The bool reports whether the model was called (for the pass's cost line).
 func roamBot(ctx context.Context, logger *slog.Logger, database *db.DB, ring *contentcrypto.KeyRing, config Config, bot Bot, clients []*Client) (bool, []Change, string, error) {
@@ -505,13 +579,40 @@ func roamBot(ctx context.Context, logger *slog.Logger, database *db.DB, ring *co
 			return false, nil, "", err
 		}
 	}
-	if len(nonEmpty(documents)) == 0 {
+	if len(nonEmpty(documents)) == 0 && wtf8.Length(bot.Instructions) <= InstructionsSoftChars {
 		return false, changes, "", nil
 	}
-	return roamDocuments(ctx, logger, database, ring, config, bot, documents, false, changes, clients)
+	extra := botContext{Now: time.Now().UTC(), Compact: config.Compact}
+	if sharedDocs, err := listDocuments(ctx, database, ring, bot, true); err == nil {
+		if doc := indexOf(sharedDocs, memory.MemoryIndexPath); doc != nil {
+			extra.SharedMemory = doc.Content
+		}
+		if doc := indexOf(sharedDocs, UserMemoryPath); doc != nil {
+			extra.SharedUser = doc.Content
+		}
+	} else {
+		logger.Warn("memory.roamer.shared_context_failed", "botId", bot.ID, "error", err.Error())
+	}
+	if openWork, err := loadOpenWork(ctx, database, bot); err == nil {
+		extra.OpenWork = openWork
+	} else {
+		logger.Warn("memory.roamer.open_work_failed", "botId", bot.ID, "error", err.Error())
+	}
+	if skills, err := loadSkills(ctx, database, bot); err == nil {
+		for _, skill := range skills {
+			extra.Skills = append(extra.Skills, skillSummary{Name: skill.Name, Description: skill.Description})
+		}
+	} else {
+		logger.Warn("memory.roamer.skills_context_failed", "botId", bot.ID, "error", err.Error())
+	}
+	return roamDocuments(ctx, logger, database, ring, config, bot, documents, false, extra, changes, clients)
 }
 
-func roamShared(ctx context.Context, logger *slog.Logger, database *db.DB, ring *contentcrypto.KeyRing, config Config, bot Bot, clients []*Client) (bool, []Change, string, error) {
+func roamShared(ctx context.Context, logger *slog.Logger, database *db.DB, ring *contentcrypto.KeyRing, config Config, spaceBots []Bot, clients []*Client) (bool, []Change, string, error) {
+	if len(spaceBots) == 0 {
+		return false, nil, "", nil
+	}
+	bot := spaceBots[0]
 	documents, err := listDocuments(ctx, database, ring, bot, true)
 	if err != nil {
 		return false, nil, "", err
@@ -520,7 +621,7 @@ func roamShared(ctx context.Context, logger *slog.Logger, database *db.DB, ring 
 	if indexOf(documents, memory.MemoryIndexPath) == nil {
 		content := initialMemory("Shared memory")
 		changes = append(changes, Change{
-			Scope: "user", Path: memory.MemoryIndexPath, Action: "seed-index",
+			Command: CmdMemoryWrite, Scope: "user", Path: memory.MemoryIndexPath, Action: "seed-index",
 			BeforeBytes: 0, AfterBytes: len([]byte(content)),
 		})
 		zero := int64(0)
@@ -536,11 +637,25 @@ func roamShared(ctx context.Context, logger *slog.Logger, database *db.DB, ring 
 			return false, changes, "", err
 		}
 	}
-	return roamDocuments(ctx, logger, database, ring, config, bot, documents, true, changes, clients)
+	extra := botContext{Now: time.Now().UTC(), Compact: config.Compact}
+	for _, member := range spaceBots {
+		memberDocs, err := listDocuments(ctx, database, ring, member, false)
+		if err != nil {
+			logger.Warn("memory.roamer.legacy_user_read_failed", "botId", member.ID, "error", err.Error())
+			continue
+		}
+		if doc := indexOf(memberDocs, UserMemoryPath); doc != nil && strings.TrimSpace(doc.Content) != "" {
+			extra.LegacyUserDocs = append(extra.LegacyUserDocs, evidenceDocument{
+				Label:   member.Name + " " + UserMemoryPath,
+				Content: doc.Content,
+			})
+		}
+	}
+	return roamDocuments(ctx, logger, database, ring, config, bot, documents, true, extra, changes, clients)
 }
 
-func roamDocuments(ctx context.Context, logger *slog.Logger, database *db.DB, ring *contentcrypto.KeyRing, config Config, bot Bot, documents []memory.Document, shared bool, changes []Change, clients []*Client) (bool, []Change, string, error) {
-	payload, omitted := promptFor(bot, documents, config.MaxInputBytes, shared)
+func roamDocuments(ctx context.Context, logger *slog.Logger, database *db.DB, ring *contentcrypto.KeyRing, config Config, bot Bot, documents []memory.Document, shared bool, extra botContext, changes []Change, clients []*Client) (bool, []Change, string, error) {
+	payload, omitted := promptFor(bot, documents, config.MaxInputBytes, shared, extra)
 	if payload == "" {
 		return false, changes, "", nil
 	}
@@ -549,7 +664,9 @@ func roamDocuments(ctx context.Context, logger *slog.Logger, database *db.DB, ri
 	if shared {
 		pass = passShared
 	}
-	text, usage, used, err := complete(ctx, clients, systemPrompt(pass), payload)
+	compactMode := isCompactPass(bot, documents, shared, extra)
+	compactInstructions := !shared && (config.Compact || wtf8.Length(bot.Instructions) > InstructionsSoftChars)
+	text, usage, used, err := complete(ctx, clients, systemPrompt(pass, compactMode, compactInstructions), payload)
 	if err != nil {
 		return true, changes, "", err
 	}
@@ -591,6 +708,43 @@ func roamDocuments(ctx context.Context, logger *slog.Logger, database *db.DB, ri
 		if err != nil {
 			if isConflict(err) {
 				logger.Warn("memory.roamer.conflict", "botId", bot.ID, "path", change.Path)
+				continue
+			}
+			return true, changes, used, err
+		}
+	}
+
+	for _, arch := range validated.Archives {
+		existingDoc := indexOf(documents, arch.Path)
+		existingContent := ""
+		before := 0
+		var expected int64
+		if existingDoc != nil {
+			existingContent = existingDoc.Content
+			before = len([]byte(existingDoc.Content))
+			expected = int64(existingDoc.Revision)
+		}
+		merged, changed, err := appendArchive(existingContent, arch.Path, arch.Content)
+		if err != nil {
+			return true, changes, used, err
+		}
+		if !changed {
+			continue
+		}
+		changes = append(changes, Change{
+			Command: CmdMemoryArchive, Scope: scopeFor(shared), Path: arch.Path, Action: "archive",
+			BeforeBytes: before, AfterBytes: len([]byte(merged)), Created: existingDoc == nil,
+		})
+		if config.DryRun {
+			continue
+		}
+		_, err = memory.Commit(ctx, database, actorFor(bot), ring, memory.CommitInput{
+			Scope: scopeFor(shared), BotID: botIDFor(shared, bot.ID), Path: arch.Path,
+			Content: merged, ExpectedRevision: &expected,
+		})
+		if err != nil {
+			if isConflict(err) {
+				logger.Warn("memory.roamer.conflict", "botId", bot.ID, "path", arch.Path)
 				continue
 			}
 			return true, changes, used, err
@@ -744,38 +898,75 @@ func commandFooter(pass passKind) string {
 Return JSON only: {"commands":[ ...commands in the exact shapes above... ]}. Send a command only when it changes something, with the complete new content. Send {"commands":[]} when nothing should change. A command not listed above, or aimed at a path you cannot write, is ignored. No other keys.`, commandHelp(pass))
 }
 
-func systemPrompt(pass passKind) string {
+func systemPrompt(pass passKind, compactMode, compactInstructions bool) string {
 	switch pass {
 	case passShared:
-		return fmt.Sprintf(`You maintain the shared durable memory that every bot in one Rakazo Space reads. You can read its documents below and return a minimal change set.
+		compactClause := ""
+		if compactMode {
+			compactClause = fmt.Sprintf("\nCOMPACTION ACTIVE: One or more shared surfaces exceed their soft target (%d bytes for %s, %d bytes for %s). Actively shrink bloated files by collapsing verbose logs into crisp 1-line rules, removing stale/completed history into archive/YYYY-MM.md via %s, and eliminating redundancy.",
+				SharedMemorySoftBytes, memory.MemoryIndexPath, UserMemorySoftBytes, UserMemoryPath, CmdMemoryArchive)
+		}
+		return fmt.Sprintf(`You maintain the shared durable memory and consolidated Space user profile that every bot in one Rakazo Space reads. You can read its documents below and return a minimal change set.
 
-Only memory is in scope. Never change a bot's Instructions, settings, tasks, chats, secrets, skills, or any other document.
-Only ONE document is writable: %s. It holds durable facts every bot in the Space needs, such as shared people, conventions, resources, and Space-wide decisions. Bot-specific work stays in each bot's own memory; do not move it here.
+Only shared memory is in scope. Never change a bot's Instructions, settings, tasks, chats, secrets, skills, or any other record.
+Writable surfaces:
+- %s (target <=%d bytes, hard max %d bytes): Space-wide durable facts every bot needs (shared people, conventions, architecture, active Space resources). Bot-specific task state stays out.
+- %s (target <=%d bytes, hard max %d bytes): consolidated profile of the person(s) this Space serves (name, role, timezone, language, stable communication/tool preferences). Never put project logs, task state, or secrets here. Migrate durable person facts from any Legacy bot USER.md shown below into this Space %s.
+- %s: append concise, dated 1-line summaries of completed milestones, resolved incidents, or retired context to archive/YYYY-MM.md so hot files stay lean without losing accuracy.
 Every other shared memory document is read-only context. Never delete a document.
-%s must keep its first "# " heading and must stay at or under %d bytes. Preserve every unique fact, merge duplicates, drop lines that a newer note contradicts, and keep one fact per line.
-Do not invent facts. When unsure, leave the note alone. Prefer the smallest change set.
-%s`, memory.MemoryIndexPath, memory.MemoryIndexPath, MaxOtherBytes, commandFooter(passShared))
+%s must keep its first "# " heading.
+Context-rot policy:
+- Keep hot files structured and scannable (e.g. "## Current State" with [YYYY-MM-DD] tags, "## Conventions & Decisions" for durable rules).
+- Collapse multi-step trial-and-error logs into a single outcome/rule line.
+- Move completed or historical items out of hot files via %s rather than hoarding them.
+- Drop items that are redundant, superseded, or contradicted by newer notes.
+Do not invent facts. When unsure, leave a current fact alone.%s
+%s`, memory.MemoryIndexPath, SharedMemorySoftBytes, SharedMemoryMaxBytes,
+			UserMemoryPath, UserMemorySoftBytes, UserMemoryMaxBytes, UserMemoryPath,
+			CmdMemoryArchive, memory.MemoryIndexPath, CmdMemoryArchive, compactClause, commandFooter(passShared))
 	case passSkills:
 		return skillsSystemPrompt()
 	}
-	return fmt.Sprintf(`You maintain the durable memory and Instructions of one Rakazo bot. You can read its memory documents and Instructions below and return a minimal change set.
 
-Only four surfaces are in scope for this bot: %s, %s, its Instructions, and the Space's shared %s (a separate pass). Never change settings, tasks, chats, secrets, skills, or any other document.
+	instructionsGuidance := fmt.Sprintf("Instructions are high authority. Change them only for a clear, durable correction or consolidation supported by memory. Preserve the existing role, responsibilities, safety rules, tone, and formatting. Do not add capabilities, permissions, autonomy, secrets, or tools; do not weaken a safety rule. Prefer leaving Instructions unchanged. instructions.set takes at most %d characters.", MaxInstructionsLength)
+	if compactInstructions {
+		instructionsGuidance = fmt.Sprintf(`INSTRUCTIONS COMPACTION ACTIVE (target <=%d characters, hard max %d):
+- Strip inline step-by-step runbooks/procedures already covered by an Available Skill and replace them with a 1-line pointer ("Use skill: <name>").
+- Move project state/history out of Instructions into %s (or %s for completed history).
+- Remove facts already covered by Space %s or Space %s.
+- Merge duplicate or overly wordy rules into crisp directives.
+- STRICT INVARIANT: preserve the bot's core role, responsibilities, safety rules, authority boundaries, tone, and output contract. Never add capabilities, permissions, autonomy, secrets, or tools; never weaken a safety rule; never expand Instructions.`,
+			InstructionsSoftChars, MaxInstructionsLength, memory.MemoryIndexPath, CmdMemoryArchive, UserMemoryPath, memory.MemoryIndexPath)
+	}
+	compactClause := ""
+	if compactMode {
+		compactClause = fmt.Sprintf("\nCOMPACTION ACTIVE: Hot memory exceeds its %d-byte soft target. Aggressively archive completed/stale items via %s, collapse logs into 1-line outcomes, and offload skill-covered procedures.",
+			BotMemorySoftBytes, CmdMemoryArchive)
+	}
+	return fmt.Sprintf(`You maintain the durable memory and Instructions of one Rakazo bot. You can read its memory, Space shared context, Open work, Available Skills, and Instructions below and return a minimal change set.
+
+Only three write operations are in scope for this bot: %s (via %s), %s (cold archive), and Instructions (via %s). Never change settings, tasks, chats, secrets, skills, or Space shared documents.
 Writable surfaces:
-- %s: the bot's working memory. It holds facts, decisions, project state, and what worked or failed for this bot, one fact per line.
-- %s: durable facts about the person this bot works with, such as their name, role, language, and stable preferences. Do not put task state or secrets here.
+- %s (target <=%d bytes, hard max %d bytes): the bot's hot working memory. Organize into "## Current State" (prefix active items with [YYYY-MM-DD]), "## Decisions & Lessons" (1-line durable rules/outcomes), and optional "## Pointers" (names of relevant Skills/archives).
+- %s (archive/YYYY-MM.md): cold archive excluded from auto-prompt, searchable on demand. Move completed projects, resolved incidents, and historical logs here as concise dated 1-line entries.
 - Instructions: the bot's stable role, responsibilities, behavioral rules, tone, and working style.
-Route each fact to the surface it belongs in. Move a misplaced fact rather than duplicating it. If %s does not exist, create it only when you have a durable fact about the person.
-Every other memory document is read-only context. Never delete a document.
-%s must keep its first "# <bot name>" heading and must stay at or under %d bytes.
-%s may be up to %d bytes.
-Instructions are high authority. Change them only for a clear, durable correction or consolidation supported by the memory. Preserve the existing role, responsibilities, safety rules, tone, and formatting. Do not add capabilities, permissions, autonomy, secrets, or tools; do not weaken a safety rule. Prefer leaving Instructions unchanged. instructions.set takes at most %d characters.
-Preserve every unique fact, merge duplicates, drop lines that a newer note contradicts, and keep one fact per line.
-Do not invent facts. When unsure, leave the note alone. Prefer the smallest change set.
+Deduplication & routing:
+- Person facts belong in Space %s (read-only here) and Space facts belong in Space %s (read-only here); do not duplicate them in bot %s.
+- Cross-check Open work and Today's date: archive items that are already finished or stale past recent relevance.
+- When an Available Skill already covers a repeatable procedure in %s or Instructions, replace the inline steps with a 1-line skill pointer.
+%s must keep its first "# <bot name>" heading.
+%s
+Do not invent facts. When unsure about an active item, keep it; when something is clearly historical or duplicated in Space memory/Skills, compact or archive it.%s
 %s`,
-		memory.MemoryIndexPath, UserMemoryPath, memory.MemoryIndexPath,
-		memory.MemoryIndexPath, UserMemoryPath, UserMemoryPath, memory.MemoryIndexPath, BotMemoryMaxBytes,
-		UserMemoryPath, MaxOtherBytes, MaxInstructionsLength, commandFooter(passBot))
+		memory.MemoryIndexPath, CmdMemoryWrite, CmdMemoryArchive, CmdInstructionsSet,
+		memory.MemoryIndexPath, BotMemorySoftBytes, BotMemoryMaxBytes,
+		CmdMemoryArchive,
+		UserMemoryPath, memory.MemoryIndexPath, memory.MemoryIndexPath,
+		memory.MemoryIndexPath,
+		memory.MemoryIndexPath,
+		instructionsGuidance,
+		compactClause,
+		commandFooter(passBot))
 }
 
 // complete asks the pass's clients in order and returns the first answer.
@@ -794,8 +985,63 @@ func complete(ctx context.Context, clients []*Client, system, payload string) (s
 	return "", nil, "", lastErr
 }
 
-func promptFor(bot Bot, documents []memory.Document, maxBytes int, shared bool) (string, []string) {
-	ordered := append([]memory.Document(nil), documents...)
+func docBytes(documents []memory.Document, path string) int {
+	if doc := indexOf(documents, path); doc != nil {
+		return len([]byte(doc.Content))
+	}
+	return 0
+}
+
+func isCompactPass(bot Bot, documents []memory.Document, shared bool, extra botContext) bool {
+	if extra.Compact {
+		return true
+	}
+	if shared {
+		return docBytes(documents, memory.MemoryIndexPath) > SharedMemorySoftBytes ||
+			docBytes(documents, UserMemoryPath) > UserMemorySoftBytes
+	}
+	return wtf8.Length(bot.Instructions) > InstructionsSoftChars ||
+		docBytes(documents, memory.MemoryIndexPath) > BotMemorySoftBytes
+}
+
+func promptDate(updatedAt string) string {
+	if len(updatedAt) >= 10 {
+		return ", updated " + updatedAt[:10]
+	}
+	return ""
+}
+
+func docBudgetNote(path string, shared bool) string {
+	if shared {
+		switch path {
+		case memory.MemoryIndexPath:
+			return fmt.Sprintf(", target <=%d, max %d bytes", SharedMemorySoftBytes, SharedMemoryMaxBytes)
+		case UserMemoryPath:
+			return fmt.Sprintf(", target <=%d, max %d bytes", UserMemorySoftBytes, UserMemoryMaxBytes)
+		}
+		return ""
+	}
+	if path == memory.MemoryIndexPath {
+		return fmt.Sprintf(", target <=%d, max %d bytes", BotMemorySoftBytes, BotMemoryMaxBytes)
+	}
+	return ""
+}
+
+func promptFor(bot Bot, documents []memory.Document, maxBytes int, shared bool, extra botContext) (string, []string) {
+	hasSharedUser := strings.TrimSpace(extra.SharedUser) != ""
+	var hot []memory.Document
+	for _, document := range documents {
+		// Cold archive documents live out of hot context and are appended via memory.archive.
+		if memory.IsArchivePath(document.Path) {
+			continue
+		}
+		if !shared && hasSharedUser && document.Path == UserMemoryPath {
+			continue
+		}
+		hot = append(hot, document)
+	}
+
+	ordered := append([]memory.Document(nil), hot...)
 	sort.SliceStable(ordered, func(left, right int) bool {
 		leftIndex := ordered[left].Path == memory.MemoryIndexPath
 		rightIndex := ordered[right].Path == memory.MemoryIndexPath
@@ -822,8 +1068,14 @@ func promptFor(bot Bot, documents []memory.Document, maxBytes int, shared bool) 
 		if strings.TrimSpace(instructions) == "" {
 			instructions = "(empty)"
 		}
-		sections = append(sections, fmt.Sprintf("--- Instructions (writable; complete replacement if changed; %d characters) ---\n%s",
-			wtf8.Length(bot.Instructions), instructions))
+		instrChars := wtf8.Length(bot.Instructions)
+		if extra.Compact || instrChars > InstructionsSoftChars {
+			sections = append(sections, fmt.Sprintf("--- Instructions (writable; complete replacement if changed; %d chars — OVER %d-char target; compact toward <=%d chars) ---\n%s",
+				instrChars, InstructionsSoftChars, InstructionsSoftChars, instructions))
+		} else {
+			sections = append(sections, fmt.Sprintf("--- Instructions (writable; complete replacement if changed; %d characters) ---\n%s",
+				instrChars, instructions))
+		}
 		used += len([]byte(bot.Instructions))
 		writable = append(writable, "Instructions")
 	}
@@ -837,19 +1089,78 @@ func promptFor(bot Bot, documents []memory.Document, maxBytes int, shared bool) 
 		used += size
 	}
 	for _, document := range included {
-		access := ""
+		access := docBudgetNote(document.Path, shared)
 		if !isWritablePath(document.Path, shared) {
 			access = ", read-only"
 		}
-		sections = append(sections, fmt.Sprintf("--- %s (revision %d, %d bytes%s) ---\n%s",
-			document.Path, document.Revision, len([]byte(document.Content)), access, document.Content))
+		sections = append(sections, fmt.Sprintf("--- %s (revision %d, %d bytes%s%s) ---\n%s",
+			document.Path, document.Revision, len([]byte(document.Content)), promptDate(document.UpdatedAt), access, document.Content))
+	}
+
+	appendReadOnly := func(heading, body string) {
+		if strings.TrimSpace(body) == "" {
+			return
+		}
+		block := fmt.Sprintf("--- %s ---\n%s", heading, strings.TrimSpace(body))
+		if used+len([]byte(block)) > maxBytes {
+			return
+		}
+		used += len([]byte(block))
+		sections = append(sections, block)
+	}
+
+	if !shared {
+		appendReadOnly("Space "+UserMemoryPath+" (read-only; do not duplicate in bot memory)", extra.SharedUser)
+		appendReadOnly("Space "+memory.MemoryIndexPath+" (read-only; do not duplicate in bot memory)", extra.SharedMemory)
+		if len(extra.OpenWork) > 0 {
+			var lines []string
+			for _, item := range extra.OpenWork {
+				line := fmt.Sprintf("- [%s] %s (updated %s)", item.Status, item.Title, item.UpdatedAt.UTC().Format("2006-01-02"))
+				if notes := strings.TrimSpace(item.Notes); notes != "" {
+					if len(notes) > 120 {
+						notes = notes[:120] + "..."
+					}
+					line += " — " + strings.ReplaceAll(notes, "\n", " ")
+				}
+				lines = append(lines, line)
+			}
+			appendReadOnly("Open work (read-only; live tasks)", strings.Join(lines, "\n"))
+		}
+		if len(extra.Skills) > 0 {
+			var lines []string
+			for _, skill := range extra.Skills {
+				desc := strings.Join(strings.Fields(skill.Description), " ")
+				if len(desc) > 120 {
+					desc = desc[:117] + "..."
+				}
+				lines = append(lines, fmt.Sprintf("- %s: %s", skill.Name, desc))
+			}
+			appendReadOnly("Available Skills (read-only; replace inline procedures with pointers)", strings.Join(lines, "\n"))
+		}
+	} else {
+		for _, legacy := range extra.LegacyUserDocs {
+			appendReadOnly("Legacy bot "+legacy.Label+" (read-only; migrate durable person facts to Space "+UserMemoryPath+")", legacy.Content)
+		}
+	}
+
+	if len(sections) == 0 {
+		return "", nil
+	}
+	now := extra.Now
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	modeLabel := "maintain"
+	if isCompactPass(bot, documents, shared, extra) {
+		modeLabel = "compact"
 	}
 	label := bot.Name
 	if shared {
 		label = "Shared memory"
 	}
-	payload := fmt.Sprintf("Memory owner: %s\nWritable surfaces: %s\n\n%s",
-		label, strings.Join(writable, ", "), strings.Join(sections, "\n\n"))
+	writableList := append(append([]string{}, writable...), "archive/*.md (append via "+CmdMemoryArchive+")")
+	payload := fmt.Sprintf("Memory owner: %s\nToday (UTC): %s\nMode: %s\nWritable surfaces: %s\n\n%s",
+		label, now.UTC().Format("2006-01-02"), modeLabel, strings.Join(writableList, ", "), strings.Join(sections, "\n\n"))
 	if len(omitted) > 0 {
 		payload += "\n\nOmitted from this request; do not change them: " + strings.Join(omitted, ", ")
 	}
@@ -888,6 +1199,7 @@ func validateChanges(parsed answer, documents []memory.Document, omitted []strin
 		omittedSet[path] = true
 	}
 	touched := map[string]bool{}
+	archived := map[string]bool{}
 	instructionsSet := false
 	for _, item := range parsed.Commands {
 		spec, known := lookupCommand(strings.TrimSpace(item.Name))
@@ -898,6 +1210,10 @@ func validateChanges(parsed answer, documents []memory.Document, omitted []strin
 		switch spec.Name {
 		case CmdMemoryWrite:
 			if err := validateMemoryWrite(item, current, omittedSet, touched, shared, &result); err != nil {
+				return validatedChanges{}, err
+			}
+		case CmdMemoryArchive:
+			if err := validateMemoryArchive(item, archived, &result); err != nil {
 				return validatedChanges{}, err
 			}
 		case CmdInstructionsSet:
@@ -916,12 +1232,76 @@ func validateChanges(parsed answer, documents []memory.Document, omitted []strin
 			if wtf8.Length(content) > MaxInstructionsLength {
 				return validatedChanges{}, fmt.Errorf("model exceeded the instructions cap")
 			}
+			if wtf8.Length(existing) > InstructionsSoftChars && wtf8.Length(content) > wtf8.Length(existing) {
+				return validatedChanges{}, fmt.Errorf("model expanded already-oversized instructions")
+			}
 			if content != existing {
 				result.Instructions = &content
 			}
 		}
 	}
 	return result, nil
+}
+
+func validateMemoryArchive(item command, archived map[string]bool, result *validatedChanges) error {
+	path := strings.TrimSpace(item.Path)
+	if path == "" || !safePath.MatchString(path) || strings.Contains(path, "..") || strings.HasSuffix(path, "/") {
+		return fmt.Errorf("%s path is invalid", CmdMemoryArchive)
+	}
+	if !memory.IsArchivePath(path) || !strings.HasSuffix(path, ".md") {
+		return fmt.Errorf("%s must target an archive/*.md path", CmdMemoryArchive)
+	}
+	content := strings.TrimSpace(strings.ReplaceAll(item.Content, "\r\n", "\n"))
+	if content == "" {
+		return fmt.Errorf("model sent blank %s content", CmdMemoryArchive)
+	}
+	if len([]byte(content)) > MaxOtherBytes {
+		return fmt.Errorf("model exceeded the size cap for %s", path)
+	}
+	if archived[path] {
+		return fmt.Errorf("model archived to %s twice", path)
+	}
+	archived[path] = true
+	result.Archives = append(result.Archives, archiveAppend{Path: path, Content: content})
+	return nil
+}
+
+func appendArchive(existingContent, path, addition string) (string, bool, error) {
+	base := existingContent
+	if strings.TrimSpace(base) == "" {
+		stem := strings.TrimSuffix(strings.TrimPrefix(path, memory.MemoryArchivePrefix), ".md")
+		if stem == "" {
+			stem = "Memory"
+		}
+		base = "# Archive " + stem + "\n\n"
+	}
+	existingLines := map[string]bool{}
+	for _, line := range strings.Split(strings.ReplaceAll(base, "\r\n", "\n"), "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			existingLines[trimmed] = true
+		}
+	}
+	var added []string
+	for _, line := range strings.Split(strings.ReplaceAll(addition, "\r\n", "\n"), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || existingLines[trimmed] {
+			continue
+		}
+		existingLines[trimmed] = true
+		added = append(added, trimmed)
+	}
+	if len(added) == 0 {
+		return existingContent, false, nil
+	}
+	sep := ""
+	if base != "" && !strings.HasSuffix(base, "\n") {
+		sep = "\n"
+	}
+	merged := base + sep + strings.Join(added, "\n") + "\n"
+	if len([]byte(merged)) > MaxOtherBytes {
+		return "", false, fmt.Errorf("archive %s would exceed %d bytes", path, MaxOtherBytes)
+	}
+	return merged, true, nil
 }
 
 func validateMemoryWrite(item command, current map[string]memory.Document, omitted, touched map[string]bool, shared bool, result *validatedChanges) error {
@@ -945,17 +1325,20 @@ func validateMemoryWrite(item command, current map[string]memory.Document, omitt
 	}
 	existing, found := current[path]
 	limit := MaxOtherBytes
+	if shared && path == UserMemoryPath {
+		limit = UserMemoryMaxBytes
+	}
 	if path == memory.MemoryIndexPath {
 		limit = BotMemoryMaxBytes
 		if shared {
-			limit = MaxOtherBytes
+			limit = SharedMemoryMaxBytes
 		}
 		// Keep the index's identity: a model may return a different heading or
 		// drop it, but the document keeps the first line it already had.
 		if found {
 			oldHeading := firstLine(existing.Content)
 			newHeading := firstLine(content)
-			if oldHeading != "" && newHeading != oldHeading {
+			if strings.HasPrefix(oldHeading, "# ") && newHeading != oldHeading {
 				if strings.HasPrefix(content, "# ") {
 					content = oldHeading + content[len(newHeading):]
 				} else {

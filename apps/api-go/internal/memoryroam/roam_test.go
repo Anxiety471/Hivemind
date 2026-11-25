@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/memory"
 )
@@ -14,6 +15,10 @@ func doc(id, path, content string, revision int32) memory.Document {
 
 func write(path, content string) command {
 	return command{Name: CmdMemoryWrite, Path: path, Content: content}
+}
+
+func archiveCmd(path, content string) command {
+	return command{Name: CmdMemoryArchive, Path: path, Content: content}
 }
 
 func setInstructions(content string) command {
@@ -29,25 +34,30 @@ func TestValidateChangesAppliesWritableUpdates(t *testing.T) {
 	validated, err := validateChanges(answer{Commands: []command{
 		write(memory.MemoryIndexPath, "# Bot\n\n- tea\n- coffee\n"),
 		write(UserMemoryPath, "- metric\n- brief replies\n"),
+		archiveCmd("archive/2026-11.md", "- [2026-11-25] wrapped up old audit"),
 		{Name: "memory.delete", Path: "evidence-archive.md"},
 	}}, documents, nil, false, "")
 	if err != nil {
 		t.Fatalf("validateChanges: %v", err)
 	}
-	if len(validated.Updates) != 2 || validated.Updates[0].Path != memory.MemoryIndexPath ||
-		validated.Updates[1].Path != UserMemoryPath {
+	if len(validated.Updates) != 1 || validated.Updates[0].Path != memory.MemoryIndexPath {
 		t.Fatalf("updates = %+v", validated.Updates)
 	}
-	if len(validated.Ignored) != 1 || validated.Ignored[0] != "memory.delete" {
+	if len(validated.Archives) != 1 || validated.Archives[0].Path != "archive/2026-11.md" {
+		t.Fatalf("archives = %+v", validated.Archives)
+	}
+	// Per-bot USER.md is no longer writable in passBot (consolidated into Space USER.md).
+	if len(validated.Ignored) != 2 || validated.Ignored[0] != CmdMemoryWrite+" "+UserMemoryPath ||
+		validated.Ignored[1] != "memory.delete" {
 		t.Fatalf("ignored = %v", validated.Ignored)
 	}
 }
 
-func TestValidateChangesCreatesOnlyTheUserProfile(t *testing.T) {
+func TestValidateChangesCreatesOnlySpaceUserProfileInSharedPass(t *testing.T) {
 	validated, err := validateChanges(answer{Commands: []command{
 		write(UserMemoryPath, "Name: Sam\n"),
 		write("new.md", "a new fact\n"),
-	}}, nil, nil, false, "")
+	}}, nil, nil, true, "")
 	if err != nil {
 		t.Fatalf("validateChanges: %v", err)
 	}
@@ -105,14 +115,27 @@ func TestValidateChangesRestoresAMissingIndexHeading(t *testing.T) {
 	}
 }
 
+func TestValidateChangesAcceptsModelHeadingWhenExistingLackedOne(t *testing.T) {
+	documents := []memory.Document{doc("1", memory.MemoryIndexPath, "- legacy fact\n", 1)}
+	validated, err := validateChanges(answer{Commands: []command{
+		write(memory.MemoryIndexPath, "# Bot\n\n- fact\n"),
+	}}, documents, nil, false, "")
+	if err != nil {
+		t.Fatalf("validateChanges: %v", err)
+	}
+	if len(validated.Updates) != 1 || validated.Updates[0].Content != "# Bot\n\n- fact\n" {
+		t.Fatalf("updates = %+v", validated.Updates)
+	}
+}
+
 func TestValidateChangesRefusesOmittedDocuments(t *testing.T) {
 	documents := []memory.Document{
-		doc("1", memory.MemoryIndexPath, "# Bot\n", 1),
+		doc("1", memory.MemoryIndexPath, "# Shared\n", 1),
 		doc("2", UserMemoryPath, "x\n", 1),
 	}
 	if _, err := validateChanges(answer{Commands: []command{
 		write(UserMemoryPath, "y\n"),
-	}}, documents, []string{UserMemoryPath}, false, ""); err == nil {
+	}}, documents, []string{UserMemoryPath}, true, ""); err == nil {
 		t.Fatal("expected an omitted-document error")
 	}
 }
@@ -127,13 +150,28 @@ func TestValidateChangesKeepsIdenticalContent(t *testing.T) {
 	}
 }
 
-func TestValidateChangesEnforcesIndexCap(t *testing.T) {
-	documents := []memory.Document{doc("1", memory.MemoryIndexPath, "# Bot\n", 1)}
-	tooBig := "# Bot\n\n" + strings.Repeat("x", BotMemoryMaxBytes)
+func TestValidateChangesEnforcesTightCaps(t *testing.T) {
+	botDocs := []memory.Document{doc("1", memory.MemoryIndexPath, "# Bot\n", 1)}
+	tooBigBot := "# Bot\n\n" + strings.Repeat("x", BotMemoryMaxBytes)
 	if _, err := validateChanges(answer{Commands: []command{
-		write(memory.MemoryIndexPath, tooBig),
-	}}, documents, nil, false, ""); err == nil {
-		t.Fatal("expected a size error")
+		write(memory.MemoryIndexPath, tooBigBot),
+	}}, botDocs, nil, false, ""); err == nil {
+		t.Fatal("expected a bot index size error")
+	}
+
+	sharedDocs := []memory.Document{
+		doc("1", memory.MemoryIndexPath, "# Shared\n", 1),
+		doc("2", UserMemoryPath, "Name: Sam\n", 1),
+	}
+	if _, err := validateChanges(answer{Commands: []command{
+		write(memory.MemoryIndexPath, "# Shared\n\n"+strings.Repeat("x", SharedMemoryMaxBytes)),
+	}}, sharedDocs, nil, true, ""); err == nil {
+		t.Fatal("expected a shared index size error")
+	}
+	if _, err := validateChanges(answer{Commands: []command{
+		write(UserMemoryPath, strings.Repeat("u", UserMemoryMaxBytes+1)),
+	}}, sharedDocs, nil, true, ""); err == nil {
+		t.Fatal("expected a user profile size error")
 	}
 }
 
@@ -173,14 +211,15 @@ func TestValidateChangesLeavesReadOnlyNotesAlone(t *testing.T) {
 	}
 }
 
-func TestValidateChangesLimitsSharedMemoryToTheIndex(t *testing.T) {
+func TestValidateChangesAllowsMemoryWriteAndArchiveInSharedPass(t *testing.T) {
 	documents := []memory.Document{
 		doc("1", memory.MemoryIndexPath, "# Shared\n", 1),
-		doc("2", UserMemoryPath, "bot profile\n", 1),
+		doc("2", UserMemoryPath, "Name: Sam\n", 1),
 	}
 	validated, err := validateChanges(answer{Commands: []command{
-		write(UserMemoryPath, "changed\n"),
+		write(UserMemoryPath, "Name: Sam\n- Concise replies\n"),
 		write(memory.MemoryIndexPath, "# Shared\n\n- convention\n"),
+		archiveCmd("archive/2026-11.md", "- [2026-11-25] archived milestone"),
 		setInstructions("shared pass cannot change instructions\n"),
 		{Name: CmdSkillCreate, Skill: "Nope", Description: "x", Body: "y"},
 	}}, documents, nil, true, "original instructions\n")
@@ -190,12 +229,49 @@ func TestValidateChangesLimitsSharedMemoryToTheIndex(t *testing.T) {
 	if validated.Instructions != nil {
 		t.Fatalf("shared pass changed instructions: %+v", validated.Instructions)
 	}
-	if len(validated.Updates) != 1 || validated.Updates[0].Path != memory.MemoryIndexPath {
+	if len(validated.Updates) != 2 || validated.Updates[0].Path != UserMemoryPath || validated.Updates[1].Path != memory.MemoryIndexPath {
 		t.Fatalf("updates = %+v", validated.Updates)
 	}
-	if len(validated.Ignored) != 3 || validated.Ignored[0] != CmdMemoryWrite+" "+UserMemoryPath ||
-		validated.Ignored[1] != CmdInstructionsSet || validated.Ignored[2] != CmdSkillCreate {
+	if len(validated.Archives) != 1 || validated.Archives[0].Path != "archive/2026-11.md" {
+		t.Fatalf("archives = %+v", validated.Archives)
+	}
+	if len(validated.Ignored) != 2 || validated.Ignored[0] != CmdInstructionsSet || validated.Ignored[1] != CmdSkillCreate {
 		t.Fatalf("ignored = %v", validated.Ignored)
+	}
+}
+
+func TestValidateMemoryArchiveAndAppend(t *testing.T) {
+	bad := map[string]command{
+		"non-archive":   archiveCmd("MEMORY.md", "- x"),
+		"traversal":     archiveCmd("archive/../secret.md", "- x"),
+		"non-markdown":  archiveCmd("archive/2026-11.txt", "- x"),
+		"blank content": archiveCmd("archive/2026-11.md", "   "),
+	}
+	for name, item := range bad {
+		t.Run(name, func(t *testing.T) {
+			if _, err := validateChanges(answer{Commands: []command{item}}, nil, nil, false, ""); err == nil {
+				t.Fatalf("expected error for %s", name)
+			}
+		})
+	}
+	if _, err := validateChanges(answer{Commands: []command{
+		archiveCmd("archive/2026-11.md", "- a"),
+		archiveCmd("archive/2026-11.md", "- b"),
+	}}, nil, nil, false, ""); err == nil {
+		t.Fatal("expected duplicate archive path error")
+	}
+
+	created, changed, err := appendArchive("", "archive/2026-11.md", "- [2026-11-25] one\n- [2026-11-25] two")
+	if err != nil || !changed || created != "# Archive 2026-11\n\n- [2026-11-25] one\n- [2026-11-25] two\n" {
+		t.Fatalf("created=%q changed=%v err=%v", created, changed, err)
+	}
+	deduped, changed, err := appendArchive(created, "archive/2026-11.md", "- [2026-11-25] two\n- [2026-11-25] three")
+	if err != nil || !changed || deduped != "# Archive 2026-11\n\n- [2026-11-25] one\n- [2026-11-25] two\n- [2026-11-25] three\n" {
+		t.Fatalf("deduped=%q changed=%v err=%v", deduped, changed, err)
+	}
+	noop, changed, err := appendArchive(deduped, "archive/2026-11.md", "- [2026-11-25] one")
+	if err != nil || changed || noop != deduped {
+		t.Fatalf("noop=%q changed=%v err=%v", noop, changed, err)
 	}
 }
 
@@ -224,6 +300,21 @@ func TestValidateChangesRejectsLongInstructions(t *testing.T) {
 		setInstructions(strings.Repeat("x", MaxInstructionsLength+1)),
 	}}, nil, nil, false, ""); err == nil {
 		t.Fatal("expected an instructions-cap error")
+	}
+}
+
+func TestValidateChangesRejectsExpandingOversizedInstructions(t *testing.T) {
+	oversized := strings.Repeat("a", InstructionsSoftChars+50)
+	if _, err := validateChanges(answer{Commands: []command{
+		setInstructions(oversized + "more"),
+	}}, nil, nil, false, oversized); err == nil {
+		t.Fatal("expected error when expanding already-oversized instructions")
+	}
+	validated, err := validateChanges(answer{Commands: []command{
+		setInstructions("# Role\n\nCompact instructions."),
+	}}, nil, nil, false, oversized)
+	if err != nil || validated.Instructions == nil {
+		t.Fatalf("expected shrinking oversized instructions to succeed, got %+v err=%v", validated, err)
 	}
 }
 
@@ -280,18 +371,25 @@ func TestPrependInstructionVersionRejectsMalformedHistory(t *testing.T) {
 	}
 }
 
-func TestPromptForKeepsWritableDocumentsFirst(t *testing.T) {
+func TestPromptForKeepsWritableDocumentsFirstAndSkipsArchives(t *testing.T) {
 	docs := []memory.Document{
 		doc("1", "evidence-archive.md", strings.Repeat("b", 200), 5),
 		doc("2", UserMemoryPath, strings.Repeat("u", 40), 2),
-		doc("3", memory.MemoryIndexPath, "# Bot\n\n"+strings.Repeat("a", 20), 3),
+		doc("3", memory.MemoryIndexPath, "# Shared\n\n"+strings.Repeat("a", 20), 3),
+		doc("4", "archive/2026-11.md", "- archived note\n", 9),
 	}
-	payload, omitted := promptFor(Bot{Name: "Bot"}, docs, 120, false)
+	payload, omitted := promptFor(Bot{Name: "Bot"}, docs, 140, true, botContext{Now: time.Date(2026, 11, 25, 0, 0, 0, 0, time.UTC)})
 	if !strings.Contains(payload, "Writable surfaces: "+memory.MemoryIndexPath+", "+UserMemoryPath) {
 		t.Fatalf("payload does not name the writable set: %s", payload)
 	}
+	if !strings.Contains(payload, "Today (UTC): 2026-11-25") {
+		t.Fatalf("payload missing date: %s", payload)
+	}
 	if !strings.Contains(payload, memory.MemoryIndexPath) || !strings.Contains(payload, UserMemoryPath) {
 		t.Fatalf("payload does not include both writable documents: %s", payload)
+	}
+	if strings.Contains(payload, "archive/2026-11.md") || strings.Contains(payload, "archived note") {
+		t.Fatalf("archive docs must be omitted from hot prompt: %s", payload)
 	}
 	if len(omitted) != 1 || omitted[0] != "evidence-archive.md" {
 		t.Fatalf("omitted = %v", omitted)
@@ -301,14 +399,33 @@ func TestPromptForKeepsWritableDocumentsFirst(t *testing.T) {
 	}
 }
 
-func TestPromptForIncludesWritableInstructions(t *testing.T) {
-	payload, _ := promptFor(Bot{Name: "Bot", Instructions: "# Role\n\nBe brief.\n"}, nil, 10_000, false)
+func TestPromptForIncludesWritableInstructionsAndGrounding(t *testing.T) {
+	extra := botContext{
+		Now:          time.Date(2026, 11, 25, 0, 0, 0, 0, time.UTC),
+		SharedUser:   "- Name: Sam",
+		SharedMemory: "# Shared\n\n- Space uses Postgres",
+		OpenWork:     []openWorkItem{{Title: "Ship v2", Status: "open", UpdatedAt: time.Date(2026, 11, 24, 0, 0, 0, 0, time.UTC)}},
+		Skills:       []skillSummary{{Name: "Deploy", Description: "Deploy web"}},
+	}
+	docs := []memory.Document{
+		doc("1", memory.MemoryIndexPath, "# Bot\n\n- note\n", 1),
+		doc("2", UserMemoryPath, "- legacy user note\n", 1),
+	}
+	payload, _ := promptFor(Bot{Name: "Bot", Instructions: "# Role\n\nBe brief.\n"}, docs, 10_000, false, extra)
 	if !strings.Contains(payload, "--- Instructions (writable; complete replacement if changed;") ||
 		!strings.Contains(payload, "# Role\n\nBe brief.") {
 		t.Fatalf("instructions are not in the prompt: %s", payload)
 	}
-	if !strings.Contains(payload, "Writable surfaces: "+memory.MemoryIndexPath+", "+UserMemoryPath+", Instructions") {
-		t.Fatalf("instructions are not named as writable: %s", payload)
+	if !strings.Contains(payload, "Writable surfaces: "+memory.MemoryIndexPath+", Instructions") {
+		t.Fatalf("writable surfaces unexpected: %s", payload)
+	}
+	if strings.Contains(payload, "legacy user note") {
+		t.Fatalf("legacy per-bot USER.md should be skipped when Space USER.md exists: %s", payload)
+	}
+	for _, want := range []string{"Space USER.md (read-only", "Space MEMORY.md (read-only", "Open work (read-only", "Ship v2", "Available Skills (read-only", "- Deploy: Deploy web"} {
+		if !strings.Contains(payload, want) {
+			t.Fatalf("missing %q in payload:\n%s", want, payload)
+		}
 	}
 }
 
@@ -318,41 +435,46 @@ func TestPromptForMarksReadOnlyDocuments(t *testing.T) {
 		doc("2", UserMemoryPath, "- metric\n", 1),
 		doc("3", "evidence-archive.md", "private evidence\n", 1),
 	}
-	payload, omitted := promptFor(Bot{Name: "Bot"}, docs, 10_000, false)
+	payload, omitted := promptFor(Bot{Name: "Bot"}, docs, 10_000, false, botContext{})
 	if len(omitted) != 0 {
 		t.Fatalf("omitted = %v", omitted)
 	}
 	if !strings.Contains(payload, "evidence-archive.md (revision 1, 17 bytes, read-only)") {
 		t.Fatalf("read-only document is not marked: %s", payload)
 	}
-	if strings.Contains(payload, "USER.md (revision 1, 9 bytes, read-only)") {
-		t.Fatalf("USER.md must be writable: %s", payload)
+	if !strings.Contains(payload, "USER.md (revision 1, 9 bytes, read-only)") {
+		t.Fatalf("per-bot USER.md must be read-only in bot pass: %s", payload)
 	}
 }
 
 func TestSystemPromptNamesTheScope(t *testing.T) {
-	bot := systemPrompt(passBot)
-	if !strings.Contains(bot, "Only four surfaces are in scope") ||
-		!strings.Contains(bot, UserMemoryPath) ||
+	bot := systemPrompt(passBot, false, false)
+	if !strings.Contains(bot, "Only three write operations are in scope") ||
+		!strings.Contains(bot, CmdMemoryArchive) ||
 		!strings.Contains(bot, "Instructions are high authority") {
 		t.Fatalf("bot prompt is not scoped: %s", bot)
 	}
-	shared := systemPrompt(passShared)
-	if !strings.Contains(shared, "Only ONE document is writable") ||
+	botCompact := systemPrompt(passBot, true, true)
+	if !strings.Contains(botCompact, "INSTRUCTIONS COMPACTION ACTIVE") ||
+		!strings.Contains(botCompact, "COMPACTION ACTIVE") {
+		t.Fatalf("compact bot prompt missing compaction directives: %s", botCompact)
+	}
+	shared := systemPrompt(passShared, false, false)
+	if !strings.Contains(shared, "Only shared memory is in scope") ||
 		!strings.Contains(shared, memory.MemoryIndexPath) ||
-		strings.Contains(shared, "Only four") {
+		!strings.Contains(shared, UserMemoryPath) {
 		t.Fatalf("shared prompt is not scoped: %s", shared)
 	}
 }
 
 func TestEveryPassOffersOnlyTheCommandsItMayRun(t *testing.T) {
 	cases := map[passKind]struct{ offered, withheld []string }{
-		passBot:    {[]string{CmdMemoryWrite, CmdInstructionsSet}, []string{CmdSkillCreate, CmdSkillUpdate}},
-		passShared: {[]string{CmdMemoryWrite}, []string{CmdInstructionsSet, CmdSkillCreate, CmdSkillUpdate}},
-		passSkills: {[]string{CmdSkillCreate, CmdSkillUpdate}, []string{CmdMemoryWrite, CmdInstructionsSet}},
+		passBot:    {[]string{CmdMemoryWrite, CmdMemoryArchive, CmdInstructionsSet}, []string{CmdSkillCreate, CmdSkillUpdate}},
+		passShared: {[]string{CmdMemoryWrite, CmdMemoryArchive}, []string{CmdInstructionsSet, CmdSkillCreate, CmdSkillUpdate}},
+		passSkills: {[]string{CmdSkillCreate, CmdSkillUpdate}, []string{CmdMemoryWrite, CmdMemoryArchive, CmdInstructionsSet}},
 	}
 	for pass, want := range cases {
-		prompt := systemPrompt(pass)
+		prompt := systemPrompt(pass, false, false)
 		for _, name := range want.offered {
 			if !strings.Contains(prompt, `{"name":"`+name+`"`) {
 				t.Errorf("pass %d does not offer %s", pass, name)

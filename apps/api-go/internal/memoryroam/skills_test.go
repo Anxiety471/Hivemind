@@ -159,7 +159,7 @@ func TestHasFactsIgnoresAHeadingOnlyIndex(t *testing.T) {
 
 func TestCommandListNamesEveryCommand(t *testing.T) {
 	list := CommandList()
-	for _, name := range []string{CmdMemoryWrite, CmdInstructionsSet, CmdSkillCreate, CmdSkillUpdate} {
+	for _, name := range []string{CmdMemoryWrite, CmdMemoryArchive, CmdInstructionsSet, CmdSkillCreate, CmdSkillUpdate} {
 		if !strings.Contains(list, name) {
 			t.Errorf("command list is missing %s", name)
 		}

@@ -96,6 +96,7 @@ function rawDetailForTool(toolName: string, args: Record<string, unknown>): stri
     case "web_search":
     case "service_search":
     case "search_history":
+    case "search_memory_docs":
     case "browser_snapshot":
       return nonEmptyString(args.query);
     case "read_file":
@@ -109,6 +110,7 @@ function rawDetailForTool(toolName: string, args: Record<string, unknown>): stri
     case "drive_move":
     case "drive_update":
     case "save_shared_memory":
+    case "read_memory_doc":
       return (
         nonEmptyString(args.path) ??
         nonEmptyString(args.file_path) ??

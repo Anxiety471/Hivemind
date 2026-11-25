@@ -89,6 +89,14 @@ func TestCompleteReportsProviderErrorsWithoutBody(t *testing.T) {
 	}
 }
 
+func TestCompleteReportsFinishReasonOnEmptyText(t *testing.T) {
+	client := testClient(t, "openai", `{"choices":[{"finish_reason":"length","message":{"content":""}}],"usage":{"completion_tokens":8192}}`, 200, nil)
+	_, _, err := client.Complete(context.Background(), "system", "hello")
+	if err == nil || !strings.Contains(err.Error(), "finish_reason=length") || !strings.Contains(err.Error(), "8192") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 func TestNewClientRejectsMissingConfiguration(t *testing.T) {
 	if _, err := NewClient(ModelConfig{Style: "openai", BaseURL: "http://x", Model: "m", MaxTokens: 1, Timeout: time.Second}); err == nil {
 		t.Fatal("expected a missing-key error")

@@ -105,8 +105,19 @@ export type MemoryRoamerSettings = z.infer<typeof MemoryRoamerSettingsSchema>;
 
 /** Every bot and Space keeps its MEMORY.md index; other memory documents can be deleted. */
 export const MEMORY_INDEX_PATH = "MEMORY.md";
+/** Consolidated Space-level user profile path. */
+export const USER_MEMORY_PATH = "USER.md";
+/** Cold archive prefix excluded from automatic prompt injection. */
+export const MEMORY_ARCHIVE_PREFIX = "archive/";
 /** What a bot may write to its memory. People can still write more by hand. */
 export const BOT_MEMORY_MAX_BYTES = 4 * 1024;
+/** Hard cap for Space-level USER.md. */
+export const USER_MEMORY_MAX_BYTES = 2 * 1024;
+/** Hard cap for Space-level MEMORY.md. */
+export const SHARED_MEMORY_MAX_BYTES = 6 * 1024;
+export function isArchiveMemoryPath(path: string): boolean {
+  return path.startsWith(MEMORY_ARCHIVE_PREFIX);
+}
 export function isDeletableMemoryDocument(path: string): boolean {
   return path !== MEMORY_INDEX_PATH;
 }

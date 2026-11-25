@@ -40,6 +40,7 @@ describe("built-in tool bridge", () => {
       "message_user",
       "read_file",
       "read_history",
+      "read_memory_doc",
       "remember",
       "request_secret",
       "request_takeover",
@@ -47,6 +48,7 @@ describe("built-in tool bridge", () => {
       "schedule_create",
       "schedule_list",
       "search_history",
+      "search_memory_docs",
       "shell",
       "skill_read",
       "update_bot",
@@ -63,8 +65,8 @@ describe("built-in tool bridge", () => {
     // kind without a keyword; schedule_create says whether a routine runs in its chat, and takes
     // the events (webhook, Git, chat, email) a routine can start on and the saved command it runs
     // first. write_file, attach_file and shell also carry the Space Drive default, and attach_file
-    // takes a slug for search.
-    expect(definitionBytes(listed)).toBeLessThanOrEqual(37_400);
+    // takes a slug for search. search_memory_docs and read_memory_doc reach cold archive/*.md docs.
+    expect(definitionBytes(listed)).toBeLessThanOrEqual(39_000);
     expect(deferred.map((tool) => tool.name)).toEqual(
       expect.arrayContaining(["render_plot", "create_space", "generate_secret", "scratchpad_add"]),
     );

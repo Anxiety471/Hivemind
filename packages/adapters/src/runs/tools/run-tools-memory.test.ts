@@ -89,3 +89,106 @@ describe("saving shared memory over a newer revision", () => {
     await expect(save(failure)).rejects.toBe(failure);
   });
 });
+
+describe("cold memory document tools", () => {
+  const makeCtx = () => ({
+    bot: { id: "bot-1" },
+    context: {},
+    secrets: ["super-secret-token"],
+    deps: {
+      memory: {
+        read: vi.fn(async ({ scope, path }: { scope: "bot" | "user"; path?: string }) => {
+          const all =
+            scope === "bot"
+              ? [
+                  {
+                    id: "b1",
+                    path: "MEMORY.md",
+                    content: "# Bot\n\n- active task",
+                    revision: 2,
+                    updatedAt: "2026-11-25T10:00:00.000Z",
+                  },
+                  {
+                    id: "b2",
+                    path: "archive/2026-11.md",
+                    content: "- [2026-11-10] Migrated billing using super-secret-token",
+                    revision: 3,
+                    updatedAt: "2026-11-20T10:00:00.000Z",
+                  },
+                ]
+              : [
+                  {
+                    id: "u1",
+                    path: "USER.md",
+                    content: "# User\n\n- Name: Sam",
+                    revision: 1,
+                    updatedAt: "2026-11-24T10:00:00.000Z",
+                  },
+                  {
+                    id: "u2",
+                    path: "archive/2026-10.md",
+                    content: `- [2026-10-01] Old Space event\n${"x".repeat(8_050)}`,
+                    revision: 1,
+                    updatedAt: "2026-10-01T10:00:00.000Z",
+                  },
+                ];
+          return { documents: path ? all.filter((doc) => doc.path === path) : all };
+        }),
+      },
+    },
+  });
+
+  it("lists and searches memory documents with archive filtering and secret redaction", async () => {
+    const finish = vi.fn((result: unknown) => result);
+    const ctx = makeCtx();
+
+    const listed = (await memoryTools.search_memory_docs!(
+      ctx as never,
+      { args: { archive_only: true }, finish } as never,
+    )) as { documents: Array<{ path: string; archived: boolean }> };
+    expect(listed.documents.map((d) => d.path)).toEqual([
+      "archive/2026-11.md",
+      "archive/2026-10.md",
+    ]);
+    expect(listed.documents.every((d) => d.archived)).toBe(true);
+
+    const found = (await memoryTools.search_memory_docs!(
+      ctx as never,
+      { args: { query: "billing migrated" }, finish } as never,
+    )) as { matches: Array<{ path: string; snippet: string }> };
+    expect(found.matches).toHaveLength(1);
+    expect(found.matches[0]?.path).toBe("archive/2026-11.md");
+    expect(found.matches[0]?.snippet).not.toContain("super-secret-token");
+  });
+
+  it("reads memory documents by path with scope fallback and paging", async () => {
+    const finish = vi.fn((result: unknown) => result);
+    const ctx = makeCtx();
+
+    const first = (await memoryTools.read_memory_doc!(
+      ctx as never,
+      { args: { path: "archive/2026-10.md" }, finish } as never,
+    )) as { scope: string; content: string; nextOffset?: number };
+    expect(first.scope).toBe("user");
+    expect(first.content.length).toBe(8_000);
+    expect(first.nextOffset).toBe(8_000);
+
+    const second = (await memoryTools.read_memory_doc!(
+      ctx as never,
+      {
+        args: { path: "archive/2026-10.md", scope: "user", offset: first.nextOffset },
+        finish,
+      } as never,
+    )) as { content: string; nextOffset?: number };
+    expect(second.content.length).toBeGreaterThan(0);
+    expect(second.nextOffset).toBeUndefined();
+
+    const missing = await memoryTools.read_memory_doc!(
+      ctx as never,
+      { args: { path: "archive/missing.md" }, finish } as never,
+    );
+    expect(missing).toEqual({
+      error: "Memory document not found. Call search_memory_docs to list available paths.",
+    });
+  });
+});

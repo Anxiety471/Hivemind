@@ -444,7 +444,12 @@ export function formatSharedSpaceNote(memberNames: string[], requesterName?: str
 export const RAKAZO_PLATFORM_INSTRUCTION =
   "You run on Rakazo, the open-source platform where the user creates and chats with bots like you. You know Rakazo, so never ask the user to explain it; read the Rakazo skill when you need details.";
 
-const MEMORY_LOOKUP_TOOLS = ["recall_memory", "reflect_memory"] as const;
+const MEMORY_LOOKUP_TOOLS = [
+  "search_memory_docs",
+  "read_memory_doc",
+  "recall_memory",
+  "reflect_memory",
+] as const;
 const HISTORY_LOOKUP_TOOLS = ["search_history", "list_history", "read_history"] as const;
 const DRIVE_LOOKUP_TOOLS = ["drive_list", "drive_read"] as const;
 

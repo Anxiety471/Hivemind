@@ -282,6 +282,9 @@ export function describeToolActivity(
   if (toolName === "create_child_routine") return `Scheduling routine: ${detail(record.name)}`;
   if (toolName === "remember") return "Saving a note to memory";
   if (toolName === "save_shared_memory") return `Saving shared memory: ${detail(record.path)}`;
+  if (toolName === "search_memory_docs")
+    return record.query ? `Searching memory: ${detail(record.query)}` : "Listing memory notes";
+  if (toolName === "read_memory_doc") return `Reading memory note: ${detail(record.path)}`;
   if (toolName === "web_search") return `Searching the web: ${detail(record.query)}`;
   if (toolName === "web_fetch") return `Reading page: ${detail(redactActivityUrl(record.url))}`;
   if (toolName === "service_search") return `Finding a service: ${detail(record.query)}`;

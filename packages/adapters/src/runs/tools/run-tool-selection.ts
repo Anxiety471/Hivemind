@@ -40,6 +40,8 @@ export const READ_ONLY_AGENT_TOOLS = new Set([
   "task_catalog",
   "recall_memory",
   "reflect_memory",
+  "search_memory_docs",
+  "read_memory_doc",
   "schedule_list",
   "scratchpad_list",
   "board_tickets",
@@ -225,6 +227,8 @@ export function selectBuiltinToolsForRun(options: {
           ![
             "remember",
             "save_shared_memory",
+            "search_memory_docs",
+            "read_memory_doc",
             "save_memory",
             "recall_memory",
             "forget_memory",

@@ -30,6 +30,18 @@ import (
 // cannot be deleted, only edited.
 const MemoryIndexPath = "MEMORY.md"
 
+// UserMemoryPath is USER_MEMORY_PATH (packages/contracts/src/bots/bot-memory.ts).
+const UserMemoryPath = "USER.md"
+
+// MemoryArchivePrefix is MEMORY_ARCHIVE_PREFIX (packages/contracts/src/bots/bot-memory.ts):
+// cold archive documents under this prefix are excluded from automatic prompt injection.
+const MemoryArchivePrefix = "archive/"
+
+// IsArchivePath reports whether path lives in the cold archive tier.
+func IsArchivePath(path string) bool {
+	return strings.HasPrefix(path, MemoryArchivePrefix)
+}
+
 // conflictMessage is MEMORY_REVISION_CONFLICT_ERROR (packages/adapter-kit/src/types.ts:409).
 const conflictMessage = "Shared memory changed since it was read. Read the latest version and save again."
 

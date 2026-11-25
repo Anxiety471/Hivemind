@@ -271,7 +271,7 @@ export const conversationTools: ConnectorTool[] = [
   },
   {
     name: "remember",
-    description: `Save one short new fact to your memory, one call per fact. To change or drop a fact, pass old_text from its entry with new or empty content. Holds ${BOT_MEMORY_MAX_BYTES / 1024} KB.`,
+    description: `Save one short, outcome-focused fact to your memory, one call per fact. Prefix time-sensitive status with [YYYY-MM-DD]. Never save raw logs or temporary chatter. To change or drop a fact, pass old_text from its entry with new or empty content. Holds ${BOT_MEMORY_MAX_BYTES / 1024} KB.`,
     inputSchema: {
       type: "object",
       properties: {

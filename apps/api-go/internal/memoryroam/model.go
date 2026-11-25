@@ -78,7 +78,8 @@ type openAIChatMessage struct {
 
 type openAIChatResponse struct {
 	Choices []struct {
-		Message struct {
+		FinishReason string `json:"finish_reason"`
+		Message      struct {
 			Content json.RawMessage `json:"content"`
 		} `json:"message"`
 	} `json:"choices"`
@@ -200,10 +201,11 @@ func (c *Client) Complete(ctx context.Context, system, prompt string) (string, j
 		return "", parsed.Usage, errors.New("model returned no choices")
 	}
 	content := parsed.Choices[0].Message.Content
+	finishReason := strings.TrimSpace(parsed.Choices[0].FinishReason)
 	var text string
 	if json.Unmarshal(content, &text) == nil {
 		if text == "" {
-			return "", parsed.Usage, errors.New("model returned empty text")
+			return "", parsed.Usage, fmt.Errorf("model returned empty text (finish_reason=%s, usage=%s)", finishReason, strings.TrimSpace(string(parsed.Usage)))
 		}
 		return text, parsed.Usage, nil
 	}
@@ -219,7 +221,7 @@ func (c *Client) Complete(ctx context.Context, system, prompt string) (string, j
 			return joined.String(), parsed.Usage, nil
 		}
 	}
-	return "", parsed.Usage, errors.New("model returned no text")
+	return "", parsed.Usage, fmt.Errorf("model returned no text (finish_reason=%s, usage=%s)", finishReason, strings.TrimSpace(string(parsed.Usage)))
 }
 
 func (c *Client) Model() string { return c.config.Model }

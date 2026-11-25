@@ -129,3 +129,31 @@ func TestWrittenIsTheStoredPlaintext(t *testing.T) {
 		t.Errorf("plaintext write surrogate = %q", got)
 	}
 }
+
+func TestBuildPlanExcludesArchivesAndPrefersSharedUserMemory(t *testing.T) {
+	plan := buildPlan([]promptDocument{
+		{Scope: "bot", Path: MemoryIndexPath, Revision: 2, UpdatedAt: "2026-08-15T12:00:00.000Z", Content: "# Bot\n- active"},
+		{Scope: "bot", Path: UserMemoryPath, Revision: 5, UpdatedAt: "2026-08-16T12:00:00.000Z", Content: "- legacy bot user"},
+		{Scope: "bot", Path: "archive/2026-11.md", Revision: 6, UpdatedAt: "2026-08-17T12:00:00.000Z", Content: "- cold bot"},
+		{Scope: "user", Path: UserMemoryPath, Revision: 1, UpdatedAt: "2026-08-14T12:00:00.000Z", Content: "- canonical user"},
+		{Scope: "user", Path: "archive/2026-10.md", Revision: 7, UpdatedAt: "2026-08-18T12:00:00.000Z", Content: "- cold user"},
+	}, agentMemoryMaxBytes)
+
+	if len(plan.Omitted) != 0 {
+		t.Fatalf("expected no omitted docs, got %+v", plan.Omitted)
+	}
+	if len(plan.Documents) != 2 {
+		t.Fatalf("expected 2 hot docs, got %+v", plan.Documents)
+	}
+	if plan.Documents[0].Scope != "bot" || plan.Documents[0].Path != MemoryIndexPath ||
+		plan.Documents[1].Scope != "user" || plan.Documents[1].Path != UserMemoryPath {
+		t.Fatalf("unexpected docs: %+v", plan.Documents)
+	}
+
+	legacy := buildPlan([]promptDocument{
+		{Scope: "bot", Path: UserMemoryPath, Revision: 5, UpdatedAt: "2026-08-16T12:00:00.000Z", Content: "- legacy bot user"},
+	}, agentMemoryMaxBytes)
+	if len(legacy.Documents) != 1 || legacy.Documents[0].Scope != "bot" || legacy.Documents[0].Path != UserMemoryPath {
+		t.Fatalf("expected legacy bot USER.md when no shared USER.md exists, got %+v", legacy.Documents)
+	}
+}

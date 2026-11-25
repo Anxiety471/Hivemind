@@ -10,7 +10,7 @@ var builtinToolNames = []string{
 	"request_takeover", "ask_user", "connect_app", "message_user",
 	"request_secret", "generate_secret", "list_secrets", "secret_request",
 	"forget_secret", "render_plot", "save_page", "generate_image",
-	"generate_video", "add_mcp_server", "remember", "save_shared_memory",
+	"generate_video", "add_mcp_server", "remember", "save_shared_memory", "search_memory_docs", "read_memory_doc",
 	"web_search", "web_fetch", "service_search", "service_call",
 	"cloud_agent_launch", "cloud_agent_status", "cloud_agent_reply", "cloud_agent_cancel",
 	"request_purchase", "purchase_status", "paid_request", "search_history",

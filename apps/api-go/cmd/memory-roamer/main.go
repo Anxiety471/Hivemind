@@ -32,6 +32,7 @@ func main() {
 		skills   = flag.Bool("skills", true, "create and upgrade each Space's skills once (default true; pass --skills=false to skip)")
 		bots     = flag.String("bots", "", "comma-separated bot ids; empty visits every non-archived bot")
 		force    = flag.Bool("force", false, "ignore the owner's switch and interval for this run")
+		compact  = flag.Bool("compact", false, "actively compact bloated MEMORY.md, USER.md, and Instructions toward soft targets, archiving stale history")
 		commands = flag.Bool("commands", false, "print the named commands a pass may run, then exit")
 	)
 	flag.Parse()
@@ -42,19 +43,27 @@ func main() {
 
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
-	if err := run(logger, *dryRun, *shared, *skills, *bots, *force); err != nil {
+	if err := run(logger, *dryRun, *shared, *skills, *bots, *force, *compact); err != nil {
 		logger.Error("memory.roamer.failed", "error", err.Error())
 		os.Exit(1)
 	}
 }
 
-func run(logger *slog.Logger, dryRun, includeShared, includeSkills bool, bots string, force bool) error {
+func run(logger *slog.Logger, dryRun, includeShared, includeSkills bool, bots string, force, compact bool) error {
 	deployment, err := config.Load()
 	if err != nil {
 		return err
 	}
-	maxTokens := envInt("MEMORY_ROAMER_MAX_TOKENS", 8192)
-	timeout := time.Duration(envInt("MEMORY_ROAMER_TIMEOUT_MS", 180_000)) * time.Millisecond
+	defaultMaxTokens := 16_384
+	if compact {
+		defaultMaxTokens = 24_576
+	}
+	maxTokens := envInt("MEMORY_ROAMER_MAX_TOKENS", defaultMaxTokens)
+	defaultTimeoutMs := 300_000
+	if compact {
+		defaultTimeoutMs = 360_000
+	}
+	timeout := time.Duration(envInt("MEMORY_ROAMER_TIMEOUT_MS", defaultTimeoutMs)) * time.Millisecond
 	maxInput := envInt("MEMORY_ROAMER_MAX_INPUT_BYTES", 64*1024)
 	delay := time.Duration(envInt("MEMORY_ROAMER_DELAY_MS", 500)) * time.Millisecond
 	source := strings.ToLower(envDefault("MEMORY_ROAMER_MODEL_SOURCE", "main"))
@@ -154,9 +163,19 @@ func run(logger *slog.Logger, dryRun, includeShared, includeSkills bool, bots st
 		IncludeSkills: includeSkills,
 		OnlyBots:      splitBots(bots),
 		Force:         force || bots != "",
+		Compact:       compact,
 	})
 	if err != nil {
 		return err
+	}
+	if dryRun {
+		for _, change := range report.Changes {
+			logger.Info("memory.roamer.dry_run_change",
+				"command", change.Command, "scope", change.Scope, "path", change.Path,
+				"action", change.Action, "beforeBytes", change.BeforeBytes,
+				"afterBytes", change.AfterBytes, "deltaBytes", change.AfterBytes-change.BeforeBytes,
+				"created", change.Created)
+		}
 	}
 	level := slog.LevelDebug
 	if dryRun || force || report.ModelCalls > 0 || report.Failures > 0 {
