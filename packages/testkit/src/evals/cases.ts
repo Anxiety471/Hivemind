@@ -236,7 +236,13 @@ const platformInput = (asks: string[], replies: string[]) =>
     conversation: asks.map((message, index) => ({ message, reply: replies[index] ?? "" })),
   });
 const readRakazoSkill = (e: Evidence) =>
-  e.toolCalls.some((call) => call.name === "skill_read" && /rakazo/i.test(String(call.args.name)));
+  e.toolCalls.some(
+    (call) =>
+      (call.name === "skill_mode" || call.name === "skill_read") &&
+      /rakazo/i.test(
+        `${String(call.args.name ?? "")} ${String(call.args.query ?? "")} ${Array.isArray(call.args.names) ? call.args.names.join(" ") : ""}`,
+      ),
+  );
 const repliedToEach = (e: Evidence, asks: string[]) =>
   check(
     "replied-to-each",

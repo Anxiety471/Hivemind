@@ -122,11 +122,11 @@ describe("contextToolsInstruction", () => {
     expect(text).toContain(
       "Only the latest 10–20 messages stay directly in your conversation window",
     );
-    expect(text).toContain('skill_read("History")');
+    expect(text).toContain('skill_mode({ name: "History" })');
     const memoryOnly = contextToolsInstruction(new Set(["recall_memory"]));
     expect(memoryOnly).not.toContain("conversation window");
     expect(memoryOnly).not.toContain("10–20");
-    expect(memoryOnly).not.toContain('skill_read("History")');
+    expect(memoryOnly).not.toContain('skill_mode({ name: "History" })');
     expect(contextToolsInstruction(new Set(["search_history"]))).toMatch(
       /^You have history tools \(search_history\)\. Only the latest 10–20 messages stay directly in your conversation window/,
     );
@@ -214,9 +214,9 @@ describe("appends, prefix cache order, and duplicates", () => {
   it("renders a read-only base system prompt preview without platform branding or duplicate history block", () => {
     const preview = renderBaseSystemPromptPreview();
     expect(preview).toContain(PROACTIVE_POSTURE_INSTRUCTION);
-    expect(preview).toContain('skill_read("Computer")');
-    expect(preview).toContain('skill_read("Subagents")');
-    expect(preview).toContain('skill_read("Tasks")');
+    expect(preview).toContain('skill_mode({ name: "Computer" })');
+    expect(preview).toContain('skill_mode({ name: "Subagents" })');
+    expect(preview).toContain('skill_mode({ name: "Tasks" })');
     expect(preview).toContain("Kanban board is enabled");
     expect(preview).toContain("ticket_update");
     expect(preview).not.toContain("scratchpad_add");
@@ -225,7 +225,7 @@ describe("appends, prefix cache order, and duplicates", () => {
     expect(preview).toContain(
       "Only the latest 10–20 messages stay directly in your conversation window",
     );
-    expect(preview).toContain('skill_read("History")');
+    expect(preview).toContain('skill_mode({ name: "History" })');
     expect(preview.match(/10–20/g)?.length).toBe(1);
     expect(preview).not.toContain("Only the latest 10–20 messages stay in your window;");
     expect(preview.length).toBeLessThan(4_400);

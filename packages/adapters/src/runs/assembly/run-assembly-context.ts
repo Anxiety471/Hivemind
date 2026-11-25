@@ -2,6 +2,8 @@ import type { AgentRunRequest } from "@rakazo/adapter-kit";
 import {
   expandSkillReferencesInPrompt,
   extractExpandedSkillNames,
+  formatRelevantSkillsHint,
+  formatSkillModeCatalogInstruction,
   formatSkillRunPrompt,
   formatSkillsCatalogInstruction,
   mergeSkillNames,
@@ -17,16 +19,15 @@ import { lateRoutineRunInstruction } from "../../routines/routine-lateness.promp
 import { routineRunInstruction } from "../../routines/routine-run.prompt.js";
 import { formatCompactedSummary } from "../../runtime/context/history-compaction.prompt.js";
 import { inferScript } from "../../runtime/scripted-runtime.js";
-import {
-  BOARD_SKILL_NAME,
-  COMPUTER_SKILL_NAME,
-  HISTORY_SKILL_NAME,
-  ROUTINES_SKILL_NAME,
-  SUBAGENTS_SKILL_NAME,
-} from "../../tools/builtin-skills.prompt.js";
 import { partitionTools } from "../../tools/builtin-tool-bridge.js";
 import type { FleetRun } from "../../tools/fleet-tools.js";
-import { builtinAgentSkillRecords } from "../../tools/skill-tools.js";
+import { SKILL_MODE } from "../../tools/skill-mode.tool-definition.js";
+import { matchRelevantSkillsForPrompt } from "../../tools/skill-search.js";
+import {
+  buildSearchableSkills,
+  filterRunAgentSkills,
+  filterRunTaughtSkills,
+} from "../../tools/skill-tools.js";
 import type { RunExecutorServices, RunHold } from "../lifecycle/run-attempt.js";
 import { buildApprovalContinuation } from "../lifecycle/run-effects.js";
 import { createReplyState } from "../lifecycle/run-progress.js";
@@ -308,38 +309,28 @@ export async function buildTurnPrompt(
   const { approvedEffects, tools, listedTools } = parts.tools;
   const { ctx } = parts;
   const pluginLine = connectedPluginsInstruction(connectedPlugins);
+  const offeredToolNames = new Set(tools.map((tool) => tool.name));
+  const skillModeOffered = offeredToolNames.has(SKILL_MODE);
   const runSavedSkills = nonOwnerChatRun ? [] : savedSkills;
-  // The Tasks, History and Routines skills are only useful where the run offers their tools.
-  const boardOffered = tools.some((tool) => tool.name === "ticket_update");
-  const historyOffered = tools.some((tool) => tool.name === "search_history");
-  const routinesOffered =
-    tools.some((tool) => tool.name === "schedule_create") &&
-    tools.some((tool) => tool.name === "command_save");
-  const computerOffered = tools.some(
-    (tool) =>
-      tool.name === "shell" ||
-      tool.name === "browser_navigate" ||
-      tool.name === "computer_observe" ||
-      tool.name === "read_file",
-  );
-  const subagentsOffered = tools.some((tool) => tool.name === "run_subagent");
-  const runAgentSkills = (nonOwnerChatRun ? builtinAgentSkillRecords() : agentSkills).filter(
-    (skill) =>
-      skill.source !== "builtin" ||
-      ((boardOffered || skill.name !== BOARD_SKILL_NAME) &&
-        (historyOffered || skill.name !== HISTORY_SKILL_NAME) &&
-        (routinesOffered || skill.name !== ROUTINES_SKILL_NAME) &&
-        (computerOffered || skill.name !== COMPUTER_SKILL_NAME) &&
-        (subagentsOffered || skill.name !== SUBAGENTS_SKILL_NAME)),
-  );
+  const runAgentSkills = filterRunAgentSkills(agentSkills, offeredToolNames, nonOwnerChatRun);
+  const scopedTaughtSkills = filterRunTaughtSkills(runSavedSkills, {
+    ownerStartedRun,
+    userId: run.userId,
+    nonOwnerChatRun,
+  });
+  const taughtSkillNames = scopedTaughtSkills.map((skill) => skill.name || skill.goal.slice(0, 80));
   const taughtSkillIndex = runSavedSkills.slice(0, 20);
-  const taughtSkillsLine = taughtSkillsInstruction(
-    taughtSkillIndex.map((skill) => ({
-      name: skill.name || skill.goal.slice(0, 80),
-      whenToUse: parsePlaybook(skill.playbook).whenToUse || skill.goal,
-    })),
-  );
-  const agentSkillsLine = formatSkillsCatalogInstruction(runAgentSkills);
+  const taughtSkillsLine = skillModeOffered
+    ? undefined
+    : taughtSkillsInstruction(
+        taughtSkillIndex.map((skill) => ({
+          name: skill.name || skill.goal.slice(0, 80),
+          whenToUse: parsePlaybook(skill.playbook).whenToUse || skill.goal,
+        })),
+      );
+  const agentSkillsLine = skillModeOffered
+    ? formatSkillModeCatalogInstruction(runAgentSkills, taughtSkillNames)
+    : formatSkillsCatalogInstruction(runAgentSkills);
   const missingImagesInstruction = missingTurnImagesInstruction(turnBlocks, currentTurnImages);
   const rawTaskPrompt = [task.prompt, attachedFilesPrompt, missingImagesInstruction]
     .filter(Boolean)
@@ -430,6 +421,16 @@ export async function buildTurnPrompt(
       select: { systemPromptAppend: true },
     }),
   );
+  const relevantSkillsHint =
+    skillModeOffered && run.trigger !== "created" && !nonOwnerChatRun
+      ? formatRelevantSkillsHint(
+          matchRelevantSkillsForPrompt(
+            rawTaskPrompt,
+            buildSearchableSkills(runAgentSkills, scopedTaughtSkills),
+            { maxHints: 3, excludeNames: invokedRunSkills },
+          ),
+        )
+      : undefined;
   const prompt = [
     replyContext,
     routineNote,
@@ -445,6 +446,7 @@ export async function buildTurnPrompt(
       userTimeZone,
       previousMessageAt(historyMessages, currentTurnMessage?.id),
     )}\n</current_time>`,
+    relevantSkillsHint,
     lateRoutineNote,
     sharedSpaceNote,
   ]

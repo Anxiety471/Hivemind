@@ -102,6 +102,7 @@ export const BUILTIN_TOOL_NAMES = [
   "schedule_cancel",
   "end_call",
   "call_user",
+  "skill_mode",
   "skill_read",
   "skill_create",
   "skill_update",

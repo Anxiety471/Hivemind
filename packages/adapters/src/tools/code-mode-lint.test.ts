@@ -151,17 +151,24 @@ describe("extractCodeModeCalls & summarizeCodeModeCalls", () => {
     expect(formatCodeModeCallsSummary([])).toBeUndefined();
   });
 
-  it("extracts skill_read names from direct, bracket, aliased, and destructured calls", () => {
+  it("extracts skill_read and skill_mode names from direct, bracket, aliased, and destructured calls", () => {
     const code = `
       // codemode.skill_read({ name: "IgnoredComment" });
-      const { skill_read: readSkill } = codemode;
+      const { skill_read: readSkill, skill_mode: skillMode } = codemode;
       const cm = codemode;
       await codemode.skill_read({ name: "pr-watch" });
       await cm["skill_read"]({ name: "deploy-check" });
       await readSkill({ name: "PR-Watch" });
       await readSkill({ name: "Tasks", file: "checklist.md" });
+      await skillMode({ names: ["History", "Computer"] });
     `;
-    expect(extractCodeModeSkills(code)).toEqual(["pr-watch", "deploy-check", "Tasks"]);
+    expect(extractCodeModeSkills(code)).toEqual([
+      "pr-watch",
+      "deploy-check",
+      "Tasks",
+      "History",
+      "Computer",
+    ]);
     expect(extractCodeModeSkills('await codemode.shell({ command: "ls" });')).toEqual([]);
   });
 });

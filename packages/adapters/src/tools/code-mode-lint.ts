@@ -556,8 +556,9 @@ export function summarizeCodeModeCalls(code: string, maxListed = 4): string | un
 }
 
 /**
- * Extracts deduplicated skill names passed as literal `name` arguments to `skill_read` inside
- * a `code_mode` script (supporting `codemode.skill_read`, bracket access, aliases, and destructuring).
+ * Extracts deduplicated skill names passed as literal `name` or `names` arguments to `skill_read`
+ * or `skill_mode` inside a `code_mode` script (supporting `codemode.skill_read`, `codemode.skill_mode`,
+ * bracket access, aliases, and destructuring).
  */
 export function extractCodeModeSkills(code: string): string[] {
   const stripped = stripNonCode(code);
@@ -580,40 +581,46 @@ export function extractCodeModeSkills(code: string): string[] {
   }
   const aliasPattern = [...cmAliases].map(escapeRegex).join("|");
 
-  const skillReadAliases = new Set<string>();
+  const skillFnAliases = new Set<string>();
   for (const match of stripped.matchAll(
     new RegExp(`\\b(?:const|let|var)\\s*\\{([^}]*)\\}\\s*=\\s*(?:${aliasPattern})\\b`, "g"),
   )) {
     for (const { prop, local } of collectDestructuredNames(match[1] ?? "")) {
-      if (prop === "skill_read") skillReadAliases.add(local);
+      if (prop === "skill_read" || prop === "skill_mode") skillFnAliases.add(local);
     }
   }
   for (const match of stripped.matchAll(
     new RegExp(
-      `\\b(?:const|let|var)\\s+([A-Za-z_$][A-Za-z0-9_$]*)\\s*=\\s*(?:${aliasPattern})\\s*(?:\\.\\s*skill_read|\\[\\s*\\])\\b`,
+      `\\b(?:const|let|var)\\s+([A-Za-z_$][A-Za-z0-9_$]*)\\s*=\\s*(?:${aliasPattern})\\s*(?:\\.\\s*(?:skill_read|skill_mode)|\\[\\s*\\])\\b`,
       "g",
     ),
   )) {
     const rawSlice = code.slice(match.index, match.index + match[0].length);
-    if (/\.\s*skill_read\b/.test(rawSlice) || /\[\s*(['"])skill_read\1\s*\]/.test(rawSlice)) {
-      if (match[1]) skillReadAliases.add(match[1]);
+    if (
+      /\.\s*(?:skill_read|skill_mode)\b/.test(rawSlice) ||
+      /\[\s*(['"])(?:skill_read|skill_mode)\1\s*\]/.test(rawSlice)
+    ) {
+      if (match[1]) skillFnAliases.add(match[1]);
     }
   }
 
   const callOpenParenIndices: number[] = [];
-  const dotCallRe = new RegExp(`\\b(?:${aliasPattern})\\s*\\.\\s*skill_read\\s*\\(`, "g");
+  const dotCallRe = new RegExp(
+    `\\b(?:${aliasPattern})\\s*\\.\\s*(?:skill_read|skill_mode)\\s*\\(`,
+    "g",
+  );
   for (const match of stripped.matchAll(dotCallRe)) {
     callOpenParenIndices.push(match.index + match[0].length - 1);
   }
   const bracketCallRe = new RegExp(`\\b(?:${aliasPattern})\\s*\\[\\s*\\]\\s*\\(`, "g");
   for (const match of stripped.matchAll(bracketCallRe)) {
     const rawSlice = code.slice(match.index, match.index + match[0].length);
-    if (/\[\s*(['"])skill_read\1\s*\]/.test(rawSlice)) {
+    if (/\[\s*(['"])(?:skill_read|skill_mode)\1\s*\]/.test(rawSlice)) {
       callOpenParenIndices.push(match.index + match[0].length - 1);
     }
   }
-  if (skillReadAliases.size > 0) {
-    const fnPattern = [...skillReadAliases].map(escapeRegex).join("|");
+  if (skillFnAliases.size > 0) {
+    const fnPattern = [...skillFnAliases].map(escapeRegex).join("|");
     for (const match of stripped.matchAll(new RegExp(`\\b(?:${fnPattern})\\s*\\(`, "g"))) {
       callOpenParenIndices.push(match.index + match[0].length - 1);
     }
@@ -637,6 +644,12 @@ export function extractCodeModeSkills(code: string): string[] {
     const argSource = code.slice(openIdx + 1, closeIdx === -1 ? code.length : closeIdx);
     const nameMatch = argSource.match(/\bname\s*:\s*(['"])([^'"\\\r\n]+)\1/);
     if (nameMatch?.[2]) add(nameMatch[2]);
+    const namesArrayMatch = argSource.match(/\bnames\s*:\s*\[([^\]]*)\]/);
+    if (namesArrayMatch?.[1]) {
+      for (const item of namesArrayMatch[1].matchAll(/(['"])([^'"\\\r\n]+)\1/g)) {
+        if (item[2]) add(item[2]);
+      }
+    }
   }
 
   return ordered;
