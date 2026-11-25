@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sort"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -314,15 +316,56 @@ func eventFrame(event storedEvent) (string, bool) {
 	if !payloadMatchesType(event.eventType, event.runID, payload) {
 		return "", false
 	}
+	// The payload is spliced in as its own JSON: JSON.stringify prints a jsonb number as the
+	// IEEE double TypeScript read from it (1.0 → 1, 1e21 → 1e+21, -0 → 0), and validate.Stringify
+	// is the repo's encoder for exactly that. Object keys come out sorted: a jsonb object has no
+	// order to recover.
+	payloadJSON := json.RawMessage(validate.Stringify(jsValue(payload)))
 	body, err := wtf8.Marshal(productEvent{
 		ID: event.id, SpaceID: event.spaceID, ThreadID: event.threadID, BotID: event.botID,
 		Seq: event.seq, Type: event.eventType, RunID: event.runID,
-		CreatedAt: shared.ISO(event.createdAt), Payload: payload,
+		CreatedAt: shared.ISO(event.createdAt), Payload: payloadJSON,
 	})
 	if err != nil {
 		return "", false
 	}
 	return string(body), true
+}
+
+// jsValue shapes a decoded JSON value the way validate.Stringify prints JSON.stringify:
+// objects become *validate.Object (keys sorted), arrays stay arrays, and numbers keep their
+// json.Number text for jsNumber to read as a double.
+func jsValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		keys := make([]string, 0, len(typed))
+		for key := range typed {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		object := &validate.Object{Keys: keys, Values: make(map[string]any, len(keys))}
+		for _, key := range keys {
+			object.Values[key] = jsValue(typed[key])
+		}
+		return object
+	case []any:
+		items := make([]any, len(typed))
+		for index, item := range typed {
+			items[index] = jsValue(item)
+		}
+		return items
+	case float64:
+		// Not what a stored column decodes to, but Stringify prints only json.Number as a
+		// number: route every Go numeric back through the text jsNumber reads as a double.
+		return json.Number(strconv.FormatFloat(typed, 'g', -1, 64))
+	case int64:
+		return json.Number(strconv.FormatInt(typed, 10))
+	case int32:
+		return json.Number(strconv.FormatInt(int64(typed), 10))
+	case int:
+		return json.Number(strconv.Itoa(typed))
+	}
+	return value
 }
 
 // productEvent is ProductEventSchema's fields, in its order.

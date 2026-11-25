@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/contentcrypto"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/events"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/local"
@@ -845,6 +846,45 @@ func TestStreamsEndWithTheSession(t *testing.T) {
 				t.Fatalf("error frame = %s", raw)
 			}
 			return
+		}
+	}
+}
+
+// TestThreadSubscribePrintsStoredNumbersLikeJSONStringify reads a payload straight out of jsonb:
+// the frame's bytes must be JSON.stringify's, so 1.0 becomes 1, the numeric 1e-7 becomes 1e-7, the
+// 21-digit integer becomes 1e+21, and -0 becomes 0. The payload is stored unsealed (a ring with no
+// encryption), so jsonb keeps the number text the TypeScript API would have parsed.
+func TestThreadSubscribePrintsStoredNumbersLikeJSONStringify(t *testing.T) {
+	database := openTestDB(t)
+	s := seed(t, database)
+	botID, threadID := addStreamChat(t, database, "numbers", s.Space1, s.UserID)
+	exec(t, database, `INSERT INTO events (id, "spaceId", "threadId", "botId", seq, type, payload, "createdAt")
+		VALUES ($1, $2, $3, $4, 1, 'thread.progress', $5::jsonb, now())`,
+		"ev-numbers-"+s.UserID, s.Space1, threadID, botID,
+		`{"n":[1.0,1e21,-0,1e-7,0.30000000000000004],"s":"x"}`)
+	ring := contentcrypto.NewKeyRing(nil, nil, contentcrypto.KeyRingOptions{})
+	server := testServerDeployed(t, database, local.Config{Stream: streamTiming()}, nil,
+		shared.Deployment{Content: ring})
+	cookie := "better-auth.session_token=" + signedCookie(testSecret, s.SessionToken)
+	_, frames := openStreamBody(t, server.URL+"/rpc/threads/subscribe", cookie, s.Space1,
+		streamInput(t, map[string]any{"botId": botID, "cursor": -1}))
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case frame, ok := <-frames:
+			if !ok {
+				t.Fatal("stream ended before a frame")
+			}
+			if frame.event != "message" {
+				continue
+			}
+			want := `"payload":{"n":[1,1e+21,0,1e-7,0.30000000000000004],"s":"x"}`
+			if !strings.Contains(frame.data, want) {
+				t.Fatalf("frame data =\n%s\nmissing\n%s", frame.data, want)
+			}
+			return
+		case <-deadline:
+			t.Fatal("no frame within 5s")
 		}
 	}
 }
