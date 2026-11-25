@@ -120,13 +120,15 @@ describe("contextToolsInstruction", () => {
     );
     expect(text).not.toContain("remember");
     expect(text).toContain(
-      "Only your most recent messages stay directly in your conversation window",
+      "Only the latest 10–20 messages stay directly in your conversation window",
     );
-    expect(contextToolsInstruction(new Set(["recall_memory"]))).not.toContain(
-      "conversation window",
-    );
+    expect(text).toContain('skill_read("History")');
+    const memoryOnly = contextToolsInstruction(new Set(["recall_memory"]));
+    expect(memoryOnly).not.toContain("conversation window");
+    expect(memoryOnly).not.toContain("10–20");
+    expect(memoryOnly).not.toContain('skill_read("History")');
     expect(contextToolsInstruction(new Set(["search_history"]))).toMatch(
-      /^You have history tools \(search_history\)\. Only your most recent/,
+      /^You have history tools \(search_history\)\. Only the latest 10–20 messages stay directly in your conversation window/,
     );
   });
 
@@ -214,13 +216,19 @@ describe("appends, prefix cache order, and duplicates", () => {
     expect(preview).toContain(PROACTIVE_POSTURE_INSTRUCTION);
     expect(preview).toContain('skill_read("Computer")');
     expect(preview).toContain('skill_read("Subagents")');
+    expect(preview).toContain('skill_read("Tasks")');
     expect(preview).toContain("Kanban board is enabled");
     expect(preview).toContain("ticket_update");
     expect(preview).not.toContain("scratchpad_add");
     expect(preview).toContain("Prefer tools over claiming you already did the work.");
     expect(preview).not.toContain("You run on Rakazo");
+    expect(preview).toContain(
+      "Only the latest 10–20 messages stay directly in your conversation window",
+    );
+    expect(preview).toContain('skill_read("History")');
+    expect(preview.match(/10–20/g)?.length).toBe(1);
     expect(preview).not.toContain("Only the latest 10–20 messages stay in your window;");
-    expect(preview.length).toBeLessThan(4_200);
+    expect(preview.length).toBeLessThan(4_400);
 
     const codeFirstPreview = renderBaseSystemPromptPreview({
       ticketBoardEnabled: true,
