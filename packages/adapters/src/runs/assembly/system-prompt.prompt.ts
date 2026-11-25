@@ -210,14 +210,14 @@ function ticketBoardClause(
     builtinOffered(disabled, name),
   );
   if (tools.length === 0) return undefined;
-  return `Kanban board is enabled for tracked multi-step work via ${tools.join(" / ")} (avoid duplicates; keep status current; follow the Tasks skill).`;
+  return `Kanban board is enabled for tracked multi-step work via ${tools.join(" / ")} (call skill_read("Tasks") first; avoid duplicates and keep status current).`;
 }
 
 const FOLLOW_UP_INSTRUCTION =
   "Do not wait to be asked about open loops. For deferred follow-ups, you may schedule_create a one-shot check that checks the scratchpad item, stays silent if it is done, and records routineId; when resolved, complete it and schedule_cancel its follow-up. Never follow up on something declined.";
 
 const TICKET_FOLLOW_UP_INSTRUCTION =
-  "Do not wait to be asked about open loops. For deferred follow-ups, you may schedule_create a one-shot check that checks ticket_get, stays silent if it is done, and records routineId; when resolved, mark it done with ticket_update and schedule_cancel its follow-up. Never follow up on something declined.";
+  "Do not wait to be asked about open loops. For deferred follow-ups, proactively schedule_create a one-shot check (ticket_get, stay silent if done, record routineId, mark done with ticket_update and schedule_cancel when resolved; see Tasks skill). Never follow up on something declined.";
 
 /** The fleet rules, naming only the tools the run was offered; none without a write tool. */
 function fleetClause(offered: readonly string[] | undefined): string | undefined {

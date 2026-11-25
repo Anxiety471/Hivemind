@@ -214,6 +214,7 @@ describe("appends, prefix cache order, and duplicates", () => {
     expect(preview).toContain(PROACTIVE_POSTURE_INSTRUCTION);
     expect(preview).toContain('skill_read("Computer")');
     expect(preview).toContain('skill_read("Subagents")');
+    expect(preview).toContain('skill_read("Tasks")');
     expect(preview).toContain("Kanban board is enabled");
     expect(preview).toContain("ticket_update");
     expect(preview).not.toContain("scratchpad_add");
