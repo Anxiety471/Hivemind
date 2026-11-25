@@ -12,10 +12,12 @@ import {
 } from "@rakazo/adapters";
 import type { MemoryRoamerSettings } from "@rakazo/contracts";
 import {
+  hasLab,
   isDeletableMemoryDocument,
   MEMORY_ROAMER_DEFAULT_INTERVAL,
   MemoryRoamerFailuresSchema,
   MemoryRoamerReportSchema,
+  resolveLabs,
 } from "@rakazo/contracts";
 import { ClientError } from "@rakazo/core";
 import { findSpaceMemoryConfig, IsolationError, readJsonColumn } from "@rakazo/db";
@@ -68,6 +70,27 @@ function memoryRoamerDto(
       : [],
     retryAt: row?.retryAt?.toISOString() ?? null,
     retryAttempt: row?.retryAttempt ?? 0,
+  };
+}
+
+async function spaceSystemPromptView(deps: RouterContext["deps"], userId: string, append: string) {
+  const [user, hostAppend] = await Promise.all([
+    deps.prisma.user.findUnique({
+      where: { id: userId },
+      select: { labs: true },
+    }),
+    operatorInstruction(),
+  ]);
+  const resolved = resolveLabs(user?.labs, deps.env?.deploymentLabs ?? []);
+  const codeModeEnabled = hasLab(resolved, "code");
+  return {
+    basePromptPreview: renderBaseSystemPromptPreview({
+      ticketBoardEnabled: hasLab(resolved, "board"),
+      codeModeEnabled,
+      codeFirst: codeModeEnabled && hasLab(resolved, "codeFirst"),
+    }),
+    append,
+    hasHostAppend: Boolean(hostAppend),
   };
 }
 
@@ -226,34 +249,20 @@ export function memoryRoutes(ctx: RouterContext) {
         return memoryRoamerDto(row);
       }),
       systemPrompt: authed.memory.systemPrompt.handler(async ({ context }) => {
-        const [space, hostAppend] = await Promise.all([
-          deps.prisma.space.findUnique({
-            where: { id: context.actor.spaceId },
-            select: { systemPromptAppend: true },
-          }),
-          operatorInstruction(),
-        ]);
-        return {
-          basePromptPreview: renderBaseSystemPromptPreview(),
-          append: space?.systemPromptAppend ?? "",
-          hasHostAppend: Boolean(hostAppend),
-        };
+        const space = await deps.prisma.space.findUnique({
+          where: { id: context.actor.spaceId },
+          select: { systemPromptAppend: true },
+        });
+        return spaceSystemPromptView(deps, context.actor.userId, space?.systemPromptAppend ?? "");
       }),
       setSystemPrompt: authed.memory.setSystemPrompt.handler(async ({ context, input }) => {
         const trimmed = input.append.trim();
-        const [updated, hostAppend] = await Promise.all([
-          deps.prisma.space.update({
-            where: { id: context.actor.spaceId },
-            data: { systemPromptAppend: trimmed || null },
-            select: { systemPromptAppend: true },
-          }),
-          operatorInstruction(),
-        ]);
-        return {
-          basePromptPreview: renderBaseSystemPromptPreview(),
-          append: updated.systemPromptAppend ?? "",
-          hasHostAppend: Boolean(hostAppend),
-        };
+        const updated = await deps.prisma.space.update({
+          where: { id: context.actor.spaceId },
+          data: { systemPromptAppend: trimmed || null },
+          select: { systemPromptAppend: true },
+        });
+        return spaceSystemPromptView(deps, context.actor.userId, updated.systemPromptAppend ?? "");
       }),
     },
     scratchpad: {

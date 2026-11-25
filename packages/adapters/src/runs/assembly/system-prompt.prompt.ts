@@ -515,7 +515,14 @@ export function userTurnInstructions(parts: {
 }
 
 /** Representative read-only preview of the canonical base system prompt for Settings UI. */
-export function renderBaseSystemPromptPreview(): string {
+export function renderBaseSystemPromptPreview(options?: {
+  ticketBoardEnabled?: boolean;
+  codeModeEnabled?: boolean;
+  codeFirst?: boolean;
+}): string {
+  const ticketBoardEnabled = options?.ticketBoardEnabled ?? true;
+  const codeModeEnabled = options?.codeModeEnabled ?? true;
+  const codeFirst = codeModeEnabled && (options?.codeFirst ?? false);
   const computerInstruction = [
     COMPUTER_USE_INSTRUCTION,
     persistentComputerInstruction({
@@ -527,6 +534,35 @@ export function renderBaseSystemPromptPreview(): string {
   ]
     .filter(Boolean)
     .join(" ");
+  const offeredToolNames = new Set([
+    "search_memory_docs",
+    "read_memory_doc",
+    "search_history",
+    "list_history",
+    "read_history",
+    "drive_list",
+    "drive_read",
+    ...(codeModeEnabled ? ["code_mode"] : []),
+    "remember",
+    ...(ticketBoardEnabled
+      ? ["task_sync", "ticket_create", "ticket_update", "ticket_get"]
+      : ["scratchpad_add", "scratchpad_update", "scratchpad_complete"]),
+    "request_takeover",
+    "web_search",
+    "web_fetch",
+    "browser_navigate",
+    "browser_snapshot",
+    "browser_act",
+    "request_secret",
+    "generate_secret",
+    "list_secrets",
+    "secret_request",
+    "forget_secret",
+    "connect_app",
+    "drive_save",
+    "destination_write",
+    "run_subagent",
+  ]);
   return userTurnInstructions({
     botInstructions: "",
     groupContext: undefined,
@@ -535,35 +571,8 @@ export function renderBaseSystemPromptPreview(): string {
     redactedScratchpadContext: undefined,
     hasHistoricalContext: false,
     historyRetrievalEnabled: true,
-    offeredToolNames: new Set([
-      "search_memory_docs",
-      "read_memory_doc",
-      "search_history",
-      "list_history",
-      "read_history",
-      "drive_list",
-      "drive_read",
-      "code_mode",
-      "remember",
-      "scratchpad_add",
-      "scratchpad_update",
-      "scratchpad_complete",
-      "request_takeover",
-      "web_search",
-      "web_fetch",
-      "browser_navigate",
-      "browser_snapshot",
-      "browser_act",
-      "request_secret",
-      "generate_secret",
-      "list_secrets",
-      "secret_request",
-      "forget_secret",
-      "connect_app",
-      "drive_save",
-      "destination_write",
-      "run_subagent",
-    ]),
+    offeredToolNames,
+    codeFirst,
     computerInstruction,
     pageBrowserAllowed: true,
     workspaceInstruction: PRIVATE_WORKSPACE_INSTRUCTION,
@@ -575,6 +584,7 @@ export function renderBaseSystemPromptPreview(): string {
     replyGuidance: longWorkProgressGuidance(),
     followUpsOffered: true,
     backgroundHelpersAllowed: true,
+    ticketBoardEnabled,
   })
     .filter(Boolean)
     .join("\n\n");

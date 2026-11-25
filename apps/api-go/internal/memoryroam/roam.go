@@ -568,25 +568,44 @@ func indexOf(documents []memory.Document, path string) *memory.Document {
 	return nil
 }
 
+func scanOpenWorkRows(rows pgx.Rows) ([]openWorkItem, error) {
+	defer rows.Close()
+	var items []openWorkItem
+	for rows.Next() {
+		var item openWorkItem
+		if err := rows.Scan(&item.Title, &item.Status, &item.Notes, &item.UpdatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 func loadOpenWork(ctx context.Context, database *db.DB, bot Bot) ([]openWorkItem, error) {
 	var items []openWorkItem
 	err := database.System(ctx, "memory roamer reads open work", func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT title, status, notes, "updatedAt"
+		ticketRows, err := tx.Query(ctx, `SELECT '#' || number::text || ' ' || title, status, COALESCE(description, ''), "updatedAt"
+			FROM tickets
+			WHERE "spaceId" = $1 AND "archivedAt" IS NULL
+				AND status NOT IN ('done', 'closed')
+				AND ("assigneeBotId" = $2 OR "ownerBotId" = $2 OR $2 = ANY("workerBotIds"))
+			ORDER BY "updatedAt" DESC, id DESC LIMIT 20`, bot.SpaceID, bot.ID)
+		if err != nil {
+			return err
+		}
+		items, err = scanOpenWorkRows(ticketRows)
+		if err != nil || len(items) > 0 {
+			return err
+		}
+		padRows, err := tx.Query(ctx, `SELECT title, status, notes, "updatedAt"
 			FROM scratchpad_items
 			WHERE "spaceId" = $1 AND "botId" = $2 AND status <> 'done'
 			ORDER BY "updatedAt" DESC, id DESC LIMIT 20`, bot.SpaceID, bot.ID)
 		if err != nil {
 			return err
 		}
-		defer rows.Close()
-		for rows.Next() {
-			var item openWorkItem
-			if err := rows.Scan(&item.Title, &item.Status, &item.Notes, &item.UpdatedAt); err != nil {
-				return err
-			}
-			items = append(items, item)
-		}
-		return rows.Err()
+		items, err = scanOpenWorkRows(padRows)
+		return err
 	})
 	return items, err
 }

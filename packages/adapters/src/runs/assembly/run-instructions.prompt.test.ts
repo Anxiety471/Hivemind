@@ -214,10 +214,20 @@ describe("appends, prefix cache order, and duplicates", () => {
     expect(preview).toContain(PROACTIVE_POSTURE_INSTRUCTION);
     expect(preview).toContain('skill_read("Computer")');
     expect(preview).toContain('skill_read("Subagents")');
+    expect(preview).toContain("Kanban board is enabled");
+    expect(preview).toContain("ticket_update");
+    expect(preview).not.toContain("scratchpad_add");
     expect(preview).toContain("Prefer tools over claiming you already did the work.");
     expect(preview).not.toContain("You run on Rakazo");
     expect(preview).not.toContain("Only the latest 10–20 messages stay in your window;");
     expect(preview.length).toBeLessThan(4_200);
+
+    const codeFirstPreview = renderBaseSystemPromptPreview({
+      ticketBoardEnabled: true,
+      codeModeEnabled: true,
+      codeFirst: true,
+    });
+    expect(codeFirstPreview).toContain("Call most tools from code_mode");
   });
 
   it("collapses identical blocks and empties, but never a block that merely contains another", () => {
