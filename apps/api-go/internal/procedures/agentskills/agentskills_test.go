@@ -62,7 +62,7 @@ func TestParseGetIssues(t *testing.T) {
 
 func TestBuiltinCatalogAndLookup(t *testing.T) {
 	catalog := builtinCatalog()
-	if len(catalog) != 4 || catalog[0].ID != "builtin:Interrogate" || catalog[1].ID != "builtin:Rakazo" || catalog[2].ID != "builtin:Tasks" || catalog[3].ID != "builtin:History" {
+	if len(catalog) != 5 || catalog[0].ID != "builtin:Interrogate" || catalog[1].ID != "builtin:Rakazo" || catalog[2].ID != "builtin:Tasks" || catalog[3].ID != "builtin:History" || catalog[4].ID != "builtin:Routines" {
 		t.Fatalf("catalog = %#v", catalog)
 	}
 	if catalog[0].Content == "" || catalog[0].CreatedAt != epoch {
@@ -82,7 +82,7 @@ func TestBuiltinCatalogAndLookup(t *testing.T) {
 	}
 	users := []Skill{{ID: "u1", Name: "rakazo"}}
 	merged := mergeBuiltinSkills(catalog, users)
-	if len(merged) != 4 || merged[0].ID != "builtin:Interrogate" || merged[1].ID != "builtin:Tasks" || merged[2].ID != "builtin:History" || merged[3].ID != "u1" {
+	if len(merged) != 5 || merged[0].ID != "builtin:Interrogate" || merged[1].ID != "builtin:Tasks" || merged[2].ID != "builtin:History" || merged[3].ID != "builtin:Routines" || merged[4].ID != "u1" {
 		t.Fatalf("merged = %#v", merged)
 	}
 }
