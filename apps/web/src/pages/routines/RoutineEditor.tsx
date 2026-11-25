@@ -4,8 +4,9 @@ import { cronFromPreset } from "@rakazo/core";
 import { Button, Input, Switch, Textarea } from "@rakazo/ui-web";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronLeft, X } from "lucide-react";
-import { useId } from "react";
+import { Suspense, useId } from "react";
 import { useIdentityConfirmation } from "../../components/account/ConfirmIdentityDialog";
+import { lazyComponent } from "../../lib/platform/preload-recovery";
 import { useSpaceQueries } from "../../lib/query/query";
 import type { RoutineDraftState } from "../../lib/routines/routine-draft";
 import { routineNeedsOneShotArm } from "../../lib/routines/routine-draft";
@@ -13,13 +14,17 @@ import { RoutineRunHistory } from "./RoutineRunHistory";
 import { RoutineSchedule } from "./RoutineSchedule";
 import { AddTriggerMenu } from "./routine-editor/add-trigger-menu";
 import { RoutineModelSettings } from "./routine-editor/model-settings";
-import { RoutinePrepareField } from "./routine-editor/prepare-field";
 import {
   EmailTriggerCard,
   InboundTriggerCard,
   MessageTriggerCard,
   WatchTriggerCard,
 } from "./routine-editor/trigger-cards";
+
+// Only Spaces with saved commands show it, so it stays out of the startup bundle.
+const RoutinePrepareField = lazyComponent(() =>
+  import("./routine-editor/prepare-field").then((module) => module.RoutinePrepareField),
+);
 
 export function RoutineEditor({
   bot,
@@ -173,12 +178,17 @@ export function RoutineEditor({
         />
       </label>
 
-      <RoutinePrepareField
-        prepare={draft.prepare}
-        commands={commands}
-        onChange={(prepare) => onChange({ ...draft, prepare })}
-        fieldId={fieldId}
-      />
+      {/* A prepare whose command was deleted stays visible so it can be cleared. */}
+      {draft.prepare || commands.length ? (
+        <Suspense fallback={null}>
+          <RoutinePrepareField
+            prepare={draft.prepare}
+            commands={commands}
+            onChange={(prepare) => onChange({ ...draft, prepare })}
+            fieldId={fieldId}
+          />
+        </Suspense>
+      ) : null}
 
       <div className="mt-5 text-body text-muted-foreground">
         <div className="flex items-center gap-2">

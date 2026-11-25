@@ -30,9 +30,9 @@ function html(prepare: RoutinePrepareDraft | null, list: RoutineCommand[]): stri
   );
 }
 
-it("offers the picker only when the space has saved commands", () => {
-  expect(html(null, [])).toBe("");
-  expect(html(null, commands)).toContain("Run first");
-  // A prepare whose command was deleted stays visible so it can be cleared.
-  expect(html({ command: "deleted", args: "{}" }, [])).toContain("Run first");
+it("asks for arguments only once a command that takes them is picked", () => {
+  expect(html(null, commands)).not.toContain("Arguments");
+  expect(html({ command: "daily_check", args: "{}" }, commands)).toContain("Arguments");
+  // A deleted command stays selectable so it can be cleared.
+  expect(html({ command: "deleted", args: "{}" }, [])).toContain("deleted");
 });

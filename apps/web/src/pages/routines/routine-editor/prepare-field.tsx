@@ -12,14 +12,13 @@ export function RoutinePrepareField({
   fieldId,
 }: {
   prepare: RoutinePrepareDraft | null;
-  /** The Space's saved commands; empty hides the field unless one is already set. */
+  /** The Space's saved commands; the editor renders this field only when there are some or one is set. */
   commands: RoutineCommand[];
   onChange: (prepare: RoutinePrepareDraft | null) => void;
   fieldId: string;
 }) {
   const { t } = useLingui();
   const id = `${fieldId}-prepare`;
-  if (!prepare && !commands.length) return null;
 
   const selected = prepare ? commands.find((command) => command.name === prepare.command) : null;
   const takesArgs = selected
