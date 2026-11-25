@@ -1,14 +1,14 @@
 import { Trans, useLingui } from "@lingui/react/macro";
 import { ChatMarkdown } from "@rakazo/chat-ui/web";
 import { Button, cn } from "@rakazo/ui-web";
-import { RotateCcw, X } from "lucide-react";
+import { RotateCcw, ScrollText, X } from "lucide-react";
 import type { CheckpointNode } from "../../../lib/chat/checkpoint-graph";
 import {
   formatClockDuration,
   formatStepDuration,
   stepCategory,
 } from "../../../lib/chat/checkpoint-graph";
-import { stepDisplayInfo } from "../../../lib/chat/tool-activity-view";
+import { stepCalledSkills, stepDisplayInfo } from "../../../lib/chat/tool-activity-view";
 import { useEventListener } from "../../../lib/use-event-listener";
 import { StepCategoryName, StepIconPlate } from "./step-icons";
 
@@ -32,6 +32,7 @@ export function StepInspectorPopover({
   });
 
   const info = stepDisplayInfo(node.step);
+  const stepSkills = stepCalledSkills(node.step);
   const category = stepCategory(node.step.label, node.step.detail);
   const startedLabel =
     node.startedOffsetMs !== undefined ? `+${formatClockDuration(node.startedOffsetMs)}` : "—";
@@ -108,6 +109,26 @@ export function StepInspectorPopover({
           </div>
         </div>
       </div>
+
+      {stepSkills.length > 0 ? (
+        <div
+          data-testid="step-inspector-skills"
+          className="mt-2.5 flex flex-wrap items-center gap-1.5"
+        >
+          <span className="inline-flex items-center gap-1 text-caption font-medium text-muted-foreground">
+            <ScrollText className="h-3 w-3 shrink-0" aria-hidden="true" />
+            <Trans>Skills</Trans>
+          </span>
+          {stepSkills.map((skill) => (
+            <span
+              key={skill.toLowerCase()}
+              className="inline-flex items-center rounded-md border border-border/70 bg-background/80 px-1.5 py-0.5 text-caption font-medium text-foreground"
+            >
+              {skill}
+            </span>
+          ))}
+        </div>
+      ) : null}
 
       {info.note ? (
         <div className="mt-2.5 max-h-36 overflow-y-auto text-label leading-relaxed text-muted-foreground [&_p]:my-0">

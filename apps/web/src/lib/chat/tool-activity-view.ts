@@ -1,5 +1,5 @@
 import type { MessageBlock } from "@rakazo/contracts";
-import { isRetiredImportSetup, isToolActivityBlock } from "@rakazo/core";
+import { isRetiredImportSetup, isToolActivityBlock, mergeSkillNames } from "@rakazo/core";
 
 /** Number of tool calls behind a steps block: the sum of each row's count. */
 export function toolStepCount(steps: readonly { count: number }[]): number {
@@ -56,6 +56,7 @@ export function latestActivity(blocks: readonly MessageBlock[]): string | undefi
 export type ActivitySummaryKind =
   | "pages"
   | "files"
+  | "skills"
   | "search"
   | "commands"
   | "writes"
@@ -71,9 +72,9 @@ const SUMMARY_ACTIONS: readonly { kind: ActivitySummaryKind; match: RegExp }[] =
   { kind: "pages", match: /^(web[ _]fetch|fetch|open[ _]url)$/ },
   {
     kind: "files",
-    match:
-      /^(read[ _]file|read[ _]history|skill[ _]read|list[ _]files|attach[ _]file|open[ _]path|view)$/,
+    match: /^(read[ _]file|read[ _]history|list[ _]files|attach[ _]file|open[ _]path|view)$/,
   },
+  { kind: "skills", match: /^skill[ _]read$/ },
   { kind: "search", match: /^(web[ _]search|websearch|search[ _]history)$/ },
   {
     kind: "commands",
@@ -260,6 +261,39 @@ export function isToolOnlyNarration(
     visible.length > 0 &&
     visible.every((block) => block.kind === "steps" || block.kind === "thinking")
   );
+}
+
+/**
+ * Skill names recorded on a single tool step, falling back to `detail` for legacy `Skill read` steps.
+ */
+export function stepCalledSkills(step: {
+  label: string;
+  detail?: string;
+  skills?: readonly string[];
+}): string[] {
+  const recorded = mergeSkillNames(step.skills);
+  if (recorded.length > 0) return recorded;
+  const normalized = step.label.trim().toLowerCase().replace(/\s+/g, " ");
+  if (/^skill[ _]read$/.test(normalized) && step.detail?.trim()) {
+    return mergeSkillNames([step.detail]);
+  }
+  return [];
+}
+
+/**
+ * Deduplicated skill names read or invoked across the activity blocks of a message,
+ * preserving first-seen order (block-level invoked skills, step-level skills, and legacy `Skill read` details).
+ */
+export function activitySkills(blocks: readonly MessageBlock[]): string[] {
+  const lists: Array<readonly string[] | undefined> = [];
+  for (const block of activityBlocks(blocks)) {
+    if (block.kind !== "steps") continue;
+    lists.push(block.skills);
+    for (const step of block.steps) {
+      lists.push(stepCalledSkills(step));
+    }
+  }
+  return mergeSkillNames(...lists);
 }
 
 /** True when a message still has at least one block to show under the preference. */

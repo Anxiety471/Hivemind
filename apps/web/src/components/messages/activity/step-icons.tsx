@@ -8,6 +8,7 @@ import {
   MessageSquare,
   Monitor,
   NotebookPen,
+  ScrollText,
   Search,
   Terminal,
   Wrench,
@@ -30,6 +31,8 @@ export function StepCategoryIcon({
       return <Search className={className} aria-hidden="true" />;
     case "git":
       return <GitBranch className={className} aria-hidden="true" />;
+    case "skill":
+      return <ScrollText className={className} aria-hidden="true" />;
     case "docs":
       return <NotebookPen className={className} aria-hidden="true" />;
     case "web":
@@ -81,6 +84,8 @@ export function StepCategoryName({ category }: { category: StepCategory }) {
       return <Trans>Search</Trans>;
     case "git":
       return <Trans>Source</Trans>;
+    case "skill":
+      return <Trans>Skill</Trans>;
     case "docs":
       return <Trans>Notes</Trans>;
     case "web":

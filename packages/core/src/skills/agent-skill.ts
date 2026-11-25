@@ -431,6 +431,37 @@ export function expandSkillReferencesInPrompt(
 }
 
 /**
+ * Returns canonical skill names that a forced `/Name` prefix or routine `@Name` mention
+ * resolves to in `prompt`, deduplicated case-insensitively in order of appearance.
+ */
+export function extractExpandedSkillNames(
+  prompt: string,
+  skills: readonly SkillRecord[],
+): string[] {
+  const forced = extractForcedSkillName(prompt);
+  if (forced) {
+    const skill = findSkillByName(skills, forced.name);
+    if (skill) return [skill.name];
+  }
+  const mentions = extractRoutineSkillMentions(
+    prompt,
+    skills.map((skill) => skill.name),
+  );
+  if (mentions.length === 0) return [];
+  const names: string[] = [];
+  const seen = new Set<string>();
+  for (const mention of mentions) {
+    const skill = findSkillByName(skills, mention);
+    if (!skill) continue;
+    const key = skill.name.trim().toLowerCase();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    names.push(skill.name);
+  }
+  return names;
+}
+
+/**
  * Points `@old` skill mentions in a routine prompt at their new names, in one pass. Names
  * mapped to themselves are still matched, so a longer name wins over a renamed prefix.
  */

@@ -218,6 +218,7 @@ export const MessageBlock = z.discriminatedUnion("kind", [
     activity: z.literal(true).optional(),
     pendingToolNames: z.array(z.string()).optional(),
     pendingToolDetails: z.array(z.string().nullable()).optional(),
+    pendingToolSkills: z.array(z.array(z.string()).nullable()).optional(),
     pendingToolTimings: z
       .array(
         z
@@ -245,6 +246,8 @@ export const MessageBlock = z.discriminatedUnion("kind", [
         count: z.number().int().positive(),
         /** Short redacted summary of what the call targeted (URL, path, query, command). */
         detail: z.string().optional(),
+        /** Skill names read or invoked by this step. */
+        skills: z.array(z.string()).optional(),
         /** What the bot wrote just before this step, kept out of its reply. */
         note: z.string().optional(),
         /** Elapsed duration of this step in milliseconds. */
@@ -278,6 +281,8 @@ export const MessageBlock = z.discriminatedUnion("kind", [
     attempts: z.number().int().positive().optional(),
     /** Terminal run outcome recorded on the steps block. */
     status: z.enum(["completed", "stopped", "failed"]).optional(),
+    /** Deduplicated skill names read or invoked during this run. */
+    skills: z.array(z.string()).optional(),
   }),
   z.object({
     kind: z.literal("subagent"),

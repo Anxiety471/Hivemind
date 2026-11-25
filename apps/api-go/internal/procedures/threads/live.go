@@ -187,7 +187,10 @@ func projectLive(events []liveEvent, runs map[string]string) []liveMessage {
 				name = jsString(event.Payload["name"])
 			}
 			projection.blocks = reduceLive(projection.blocks, liveUpdate{
-				kind: "tool", name: name, detail: detail, timing: stepTimingFromPayload(event.Payload),
+				kind: "tool", name: name, detail: detail,
+				skills: payloadStringList(event.Payload["skills"]),
+				runSkills: payloadStringList(event.Payload["runSkills"]),
+				timing: stepTimingFromPayload(event.Payload),
 			})
 			touchMeta(projection)
 		case "agent.tool.completed":
@@ -199,7 +202,12 @@ func projectLive(events []liveEvent, runs map[string]string) []liveMessage {
 						name = jsString(event.Payload["name"])
 					}
 					outcome, _ := event.Payload["outcome"].(string)
-					projection.blocks = completeLiveToolStep(projection.blocks, name, durationMs, outcome)
+					detail := ""
+					if text, ok := event.Payload["detail"].(string); ok && validate.JSTrim(text) != "" {
+						detail = validate.JSTrim(text)
+					}
+					skills := payloadStringList(event.Payload["skills"])
+					projection.blocks = completeLiveToolStep(projection.blocks, name, durationMs, outcome, detail, skills)
 					touchMeta(projection)
 				}
 			}
@@ -292,15 +300,62 @@ func (t *stepTiming) toMap() map[string]any {
 }
 
 type liveUpdate struct {
-	kind    string // progress, tool or thinking
-	payload map[string]any
-	name    string
-	detail  string
-	timing  *stepTiming
-	segment int
+	kind      string // progress, tool or thinking
+	payload   map[string]any
+	name      string
+	detail    string
+	skills    []string
+	runSkills []string
+	timing    *stepTiming
+	segment   int
 	// durationMs and lines are a thinking update's.
 	durationMs int
 	lines      []string
+}
+
+func mergeSkillNames(lists ...[]string) []string {
+	var merged []string
+	seen := map[string]bool{}
+	for _, list := range lists {
+		for _, raw := range list {
+			trimmed := validate.JSTrim(raw)
+			if trimmed == "" {
+				continue
+			}
+			key := strings.ToLower(trimmed)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			merged = append(merged, trimmed)
+		}
+	}
+	return merged
+}
+
+func payloadStringList(raw any) []string {
+	switch typed := raw.(type) {
+	case []string:
+		return mergeSkillNames(typed)
+	case []any:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if text, ok := item.(string); ok {
+				out = append(out, text)
+			}
+		}
+		return mergeSkillNames(out)
+	default:
+		return nil
+	}
+}
+
+func anyStringSlice(items []string) []any {
+	out := make([]any, len(items))
+	for index, item := range items {
+		out[index] = item
+	}
+	return out
 }
 
 // thinkingUpdate is thinkingLiveUpdate: tolerant of a partial producer.
@@ -472,9 +527,10 @@ func appendTextSegment(segments []map[string]any, text string) []map[string]any 
 
 // appendToolCallSegment is appendToolCallSegment + appendToolStep: a repeat of the newest step
 // counts up, anything else adds a step.
-func appendToolCallSegment(segments []map[string]any, toolName, detail string, timing *stepTiming) []map[string]any {
+func appendToolCallSegment(segments []map[string]any, toolName, detail string, timing *stepTiming, skills, runSkills []string) []map[string]any {
 	label := humanizeToolName(toolName)
 	normalized := validate.JSTrim(detail)
+	normalizedSkills := mergeSkillNames(skills)
 	timed := timing.isPresent()
 	var prior []any
 	var last map[string]any
@@ -518,6 +574,9 @@ func appendToolCallSegment(segments []map[string]any, toolName, detail string, t
 		if compatible {
 			counted := copyMap(newest)
 			counted["count"] = newest["count"].(int) + 1
+			if merged := mergeSkillNames(payloadStringList(newest["skills"]), normalizedSkills); len(merged) > 0 {
+				counted["skills"] = anyStringSlice(merged)
+			}
 			if timed && timing.startedAtMs != nil {
 				counted["status"] = "running"
 			}
@@ -528,6 +587,9 @@ func appendToolCallSegment(segments []map[string]any, toolName, detail string, t
 		added := map[string]any{"label": label, "count": 1}
 		if normalized != "" {
 			added["detail"] = normalized
+		}
+		if len(normalizedSkills) > 0 {
+			added["skills"] = anyStringSlice(normalizedSkills)
 		}
 		if timed && timing.startedAtMs != nil {
 			added["startedAtMs"] = *timing.startedAtMs
@@ -542,12 +604,17 @@ func appendToolCallSegment(segments []map[string]any, toolName, detail string, t
 		steps = append(append([]any{}, prepared...), added)
 	}
 	var block map[string]any
+	var priorBlockSkills []string
 	if last != nil {
 		block = copyMap(last)
 		block["kind"] = "steps"
 		block["steps"] = steps
+		priorBlockSkills = payloadStringList(last["skills"])
 	} else {
 		block = map[string]any{"kind": "steps", "steps": steps}
+	}
+	if blockSkills := mergeSkillNames(priorBlockSkills, runSkills, normalizedSkills); len(blockSkills) > 0 {
+		block["skills"] = anyStringSlice(blockSkills)
 	}
 	if timed && timing.attempt != nil {
 		prevAttempts, _ := payloadPosInt(block["attempts"])
@@ -591,11 +658,16 @@ func reduceLive(current []map[string]any, update liveUpdate) []map[string]any {
 		if waiting != nil {
 			names, _ := waiting["pendingToolNames"].([]any)
 			details, _ := waiting["pendingToolDetails"].([]any)
+			skillsList, _ := waiting["pendingToolSkills"].([]any)
 			timings, _ := waiting["pendingToolTimings"].([]any)
 			for index, name := range names {
 				detail := ""
 				if index < len(details) {
 					detail, _ = details[index].(string)
+				}
+				var stepSkills []string
+				if index < len(skillsList) {
+					stepSkills = payloadStringList(skillsList[index])
 				}
 				var timing *stepTiming
 				if index < len(timings) {
@@ -603,7 +675,7 @@ func reduceLive(current []map[string]any, update liveUpdate) []map[string]any {
 						timing = stepTimingFromPayload(timingMap)
 					}
 				}
-				blocks = appendToolCallSegment(blocks, name.(string), detail, timing)
+				blocks = appendToolCallSegment(blocks, name.(string), detail, timing, stepSkills, nil)
 			}
 		}
 	}
@@ -633,16 +705,23 @@ func reduceLive(current []map[string]any, update liveUpdate) []map[string]any {
 	}
 	var names []any
 	var details []any
+	var skillsList []any
 	var timings []any
 	if tailIsProgress {
 		names, _ = tail["pendingToolNames"].([]any)
 		stored, _ := tail["pendingToolDetails"].([]any)
+		storedSkills, _ := tail["pendingToolSkills"].([]any)
 		storedTimings, _ := tail["pendingToolTimings"].([]any)
 		for index := range names {
 			if index < len(stored) && stored[index] != nil {
 				details = append(details, stored[index])
 			} else {
 				details = append(details, nil)
+			}
+			if index < len(storedSkills) && storedSkills[index] != nil {
+				skillsList = append(skillsList, storedSkills[index])
+			} else {
+				skillsList = append(skillsList, nil)
 			}
 			if index < len(storedTimings) && storedTimings[index] != nil {
 				timings = append(timings, storedTimings[index])
@@ -658,6 +737,11 @@ func reduceLive(current []map[string]any, update liveUpdate) []map[string]any {
 			details = append(details, trimmed)
 		} else {
 			details = append(details, nil)
+		}
+		if normalizedSkills := mergeSkillNames(update.skills); len(normalizedSkills) > 0 {
+			skillsList = append(skillsList, anyStringSlice(normalizedSkills))
+		} else {
+			skillsList = append(skillsList, nil)
 		}
 		if update.timing.isPresent() {
 			timings = append(timings, update.timing.toMap())
@@ -676,13 +760,21 @@ func reduceLive(current []map[string]any, update liveUpdate) []map[string]any {
 		}
 		for index, name := range names {
 			detail, _ := details[index].(string)
+			var stepSkills []string
+			if index < len(skillsList) {
+				stepSkills = payloadStringList(skillsList[index])
+			}
 			var timing *stepTiming
 			if index < len(timings) {
 				if timingMap, ok := timings[index].(map[string]any); ok {
 					timing = stepTimingFromPayload(timingMap)
 				}
 			}
-			next = appendToolCallSegment(next, name.(string), detail, timing)
+			var runSkills []string
+			if index == 0 {
+				runSkills = update.runSkills
+			}
+			next = appendToolCallSegment(next, name.(string), detail, timing, stepSkills, runSkills)
 		}
 		return next
 	}
@@ -699,6 +791,12 @@ func reduceLive(current []map[string]any, update liveUpdate) []map[string]any {
 	for _, detail := range details {
 		if text, _ := detail.(string); text != "" {
 			progress["pendingToolDetails"] = details
+			break
+		}
+	}
+	for _, entry := range skillsList {
+		if entry != nil {
+			progress["pendingToolSkills"] = skillsList
 			break
 		}
 	}
@@ -886,7 +984,7 @@ func currentLiveCostUSD(blocks []map[string]any) (float64, bool) {
 	return 0, false
 }
 
-func completeLiveToolStep(blocks []map[string]any, name string, durationMs int64, outcome string) []map[string]any {
+func completeLiveToolStep(blocks []map[string]any, name string, durationMs int64, outcome, detail string, skills []string) []map[string]any {
 	blockIndex := -1
 	for index := len(blocks) - 1; index >= 0; index-- {
 		if blocks[index]["kind"] == "steps" {
@@ -938,6 +1036,13 @@ func completeLiveToolStep(blocks []map[string]any, name string, durationMs int64
 		}
 	}
 	target["durationMs"] = nextDuration
+	if detail != "" {
+		target["detail"] = detail
+	}
+	completedSkills := mergeSkillNames(skills)
+	if mergedStepSkills := mergeSkillNames(payloadStringList(target["skills"]), completedSkills); len(mergedStepSkills) > 0 {
+		target["skills"] = anyStringSlice(mergedStepSkills)
+	}
 	switch outcome {
 	case "failed", "error":
 		target["status"] = "failed"
@@ -950,6 +1055,9 @@ func completeLiveToolStep(blocks []map[string]any, name string, durationMs int64
 	updatedSteps[stepIndex] = target
 	updatedBlock := copyMap(block)
 	updatedBlock["steps"] = updatedSteps
+	if mergedBlockSkills := mergeSkillNames(payloadStringList(block["skills"]), completedSkills); len(mergedBlockSkills) > 0 {
+		updatedBlock["skills"] = anyStringSlice(mergedBlockSkills)
+	}
 	out := copyBlocks(blocks)
 	out[blockIndex] = updatedBlock
 	return out
@@ -990,12 +1098,26 @@ func applyLiveCheckpoint(blocks []map[string]any, stepsRaw []any, payload map[st
 	if modelProvider, ok := payload["modelProvider"].(string); ok && modelProvider != "" {
 		checkpointBlock["modelProvider"] = modelProvider
 	}
+	var stepSkills [][]string
+	for _, raw := range stepsRaw {
+		if stepMap, ok := raw.(map[string]any); ok {
+			stepSkills = append(stepSkills, payloadStringList(stepMap["skills"]))
+		}
+	}
 	existingIndex := -1
 	for index := len(blocks) - 1; index >= 0; index-- {
 		if blocks[index]["kind"] == "steps" {
 			existingIndex = index
 			break
 		}
+	}
+	var existingSkills []string
+	if existingIndex != -1 {
+		existingSkills = payloadStringList(blocks[existingIndex]["skills"])
+	}
+	skillLists := append([][]string{existingSkills, payloadStringList(payload["skills"])}, stepSkills...)
+	if mergedSkills := mergeSkillNames(skillLists...); len(mergedSkills) > 0 {
+		checkpointBlock["skills"] = anyStringSlice(mergedSkills)
 	}
 	if existingIndex != -1 {
 		out := copyBlocks(blocks)

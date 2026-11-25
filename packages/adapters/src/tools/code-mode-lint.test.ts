@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   extractCodeModeCalls,
+  extractCodeModeSkills,
   formatCodeModeCallsSummary,
   formatCodeModeLintFindings,
   isStaticallyReadOnlyCommand,
@@ -148,6 +149,20 @@ describe("extractCodeModeCalls & summarizeCodeModeCalls", () => {
     ]);
     expect(formatCodeModeCallsSummary(["a", "a", "b"], 4)).toBe("a, b");
     expect(formatCodeModeCallsSummary([])).toBeUndefined();
+  });
+
+  it("extracts skill_read names from direct, bracket, aliased, and destructured calls", () => {
+    const code = `
+      // codemode.skill_read({ name: "IgnoredComment" });
+      const { skill_read: readSkill } = codemode;
+      const cm = codemode;
+      await codemode.skill_read({ name: "pr-watch" });
+      await cm["skill_read"]({ name: "deploy-check" });
+      await readSkill({ name: "PR-Watch" });
+      await readSkill({ name: "Tasks", file: "checklist.md" });
+    `;
+    expect(extractCodeModeSkills(code)).toEqual(["pr-watch", "deploy-check", "Tasks"]);
+    expect(extractCodeModeSkills('await codemode.shell({ command: "ls" });')).toEqual([]);
   });
 });
 

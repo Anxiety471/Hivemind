@@ -9,7 +9,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@rakazo/ui-web";
-import { RotateCcw } from "lucide-react";
+import { RotateCcw, ScrollText } from "lucide-react";
 import type { CheckpointGraph, CheckpointNode } from "../../../lib/chat/checkpoint-graph";
 import {
   formatClockDuration,
@@ -17,6 +17,7 @@ import {
   formatStepDuration,
   stepCategory,
 } from "../../../lib/chat/checkpoint-graph";
+import { stepCalledSkills } from "../../../lib/chat/tool-activity-view";
 import { OdometerCost } from "./OdometerCost";
 import { StepIconPlate } from "./step-icons";
 
@@ -28,6 +29,7 @@ export interface RunLogSheetProps {
   costUsd?: number | null;
   totalDurationMs?: number;
   graph: CheckpointGraph;
+  skills?: readonly string[];
   thinkingLines: readonly string[];
   onRewind?: (stepIndex: number, node: CheckpointNode) => void;
   rewinding?: boolean;
@@ -41,6 +43,7 @@ export default function RunLogSheet({
   costUsd,
   totalDurationMs,
   graph,
+  skills = [],
   thinkingLines,
   onRewind,
   rewinding = false,
@@ -72,6 +75,28 @@ export default function RunLogSheet({
         </SheetHeader>
 
         <div className="space-y-4 px-4 pb-6">
+          {skills.length > 0 ? (
+            <section className="space-y-1.5">
+              <h3 className="text-caption font-medium tracking-wide text-muted-foreground uppercase">
+                <Trans>Skills</Trans>
+              </h3>
+              <div className="flex flex-wrap gap-1.5">
+                {skills.map((skill) => (
+                  <span
+                    key={skill.toLowerCase()}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-border/70 bg-muted/45 px-2 py-0.5 text-caption font-medium text-foreground"
+                  >
+                    <ScrollText
+                      className="h-3 w-3 shrink-0 text-muted-foreground"
+                      aria-hidden="true"
+                    />
+                    <span>{skill}</span>
+                  </span>
+                ))}
+              </div>
+            </section>
+          ) : null}
+
           {thinkingLines.length > 0 ? (
             <section className="space-y-1.5">
               <h3 className="text-caption font-medium tracking-wide text-muted-foreground uppercase">
@@ -95,6 +120,8 @@ export default function RunLogSheet({
               {graph.nodes.map((node) => {
                 const category = stepCategory(node.step.label, node.step.detail);
                 const duration = formatStepDuration(node.durationMs);
+                const isDirectSkillStep = /^skill[ _]read$/i.test(node.step.label.trim());
+                const stepSkills = isDirectSkillStep ? [] : stepCalledSkills(node.step);
                 const startedOffset =
                   node.startedOffsetMs !== undefined
                     ? `+${formatClockDuration(node.startedOffsetMs)}`
@@ -161,6 +188,20 @@ export default function RunLogSheet({
                     {node.step.detail ? (
                       <div className="mt-2 rounded border border-border/60 bg-muted/40 px-2 py-1 font-mono text-caption text-foreground break-all">
                         {node.step.detail}
+                      </div>
+                    ) : null}
+
+                    {stepSkills.length > 0 ? (
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {stepSkills.map((skill) => (
+                          <span
+                            key={skill.toLowerCase()}
+                            className="inline-flex items-center gap-1 rounded border border-border/70 bg-muted/45 px-1.5 py-0.5 text-caption text-muted-foreground"
+                          >
+                            <ScrollText className="h-2.5 w-2.5 shrink-0" aria-hidden="true" />
+                            <span>{skill}</span>
+                          </span>
+                        ))}
                       </div>
                     ) : null}
 

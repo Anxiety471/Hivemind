@@ -3,7 +3,7 @@ import { Plural, Trans, useLingui } from "@lingui/react/macro";
 import { useNow } from "@rakazo/chat-ui/hooks";
 import type { LoginFieldInput, MessageBlock, ThreadMessage } from "@rakazo/contracts";
 import { BotAvatar, Button, cn, DEFAULT_BOT_AVATAR_COLOR, Kbd } from "@rakazo/ui-web";
-import { ChevronDown, ExternalLink, Minimize2, Square } from "lucide-react";
+import { ChevronDown, ExternalLink, Minimize2, ScrollText, Square } from "lucide-react";
 import { lazy, Suspense, useRef, useState } from "react";
 import type { CheckpointNode } from "../../lib/chat/checkpoint-graph";
 import {
@@ -16,9 +16,11 @@ import type { ActivitySummaryKind } from "../../lib/chat/tool-activity-view";
 import {
   activityBlocks,
   activityDurationMs,
+  activitySkills,
   activityStepCount,
   activitySummaryParts,
   latestActivity,
+  stepCalledSkills,
 } from "../../lib/chat/tool-activity-view";
 import { useEventListener } from "../../lib/use-event-listener";
 import { isEditableTarget } from "../../pages/shell/shell-shortcuts";
@@ -73,6 +75,8 @@ function SummaryClause({ kind, count }: { kind: ActivitySummaryKind; count: numb
       return <Plural value={count} one="read a page" other="read # pages" />;
     case "files":
       return <Plural value={count} one="checked a file" other="checked # files" />;
+    case "skills":
+      return <Plural value={count} one="used a skill" other="used # skills" />;
     case "search":
       return <Plural value={count} one="searched the web" other="searched # times" />;
     case "commands":
@@ -286,6 +290,14 @@ function ActivityPanelInner({
     graph.nodes.at(-1);
   const summaryParts = activitySummaryParts(blocks);
   const totalCalls = activityStepCount(blocks);
+  const calledSkills = activitySkills(blocks);
+  const activeSkills = new Set(
+    live
+      ? graph.nodes
+          .filter((node) => node.state === "running")
+          .flatMap((node) => stepCalledSkills(node.step).map((skill) => skill.toLowerCase()))
+      : [],
+  );
   const latestLine = latestActivity(blocks);
   const bannerLabel = pendingApproval
     ? pendingApproval.block.text
@@ -575,6 +587,35 @@ function ActivityPanelInner({
         </div>
       ) : null}
 
+      {calledSkills.length > 0 ? (
+        <div data-testid="activity-skills" className="mt-2.5 flex flex-wrap items-center gap-1.5">
+          <span className="inline-flex items-center gap-1 text-caption font-medium text-muted-foreground">
+            <ScrollText className="h-3 w-3 shrink-0" aria-hidden="true" />
+            <Trans>Skills</Trans>
+          </span>
+          {calledSkills.map((skill) => {
+            const isActive = activeSkills.has(skill.toLowerCase());
+            return (
+              <span
+                key={skill.toLowerCase()}
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-md border border-border/70 bg-muted/45 px-1.5 py-0.5 text-caption font-medium text-foreground/90",
+                  isActive && "border-status-working/35 bg-status-working/10 text-foreground",
+                )}
+              >
+                {isActive ? (
+                  <span
+                    className="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-status-working"
+                    aria-hidden="true"
+                  />
+                ) : null}
+                <span>{skill}</span>
+              </span>
+            );
+          })}
+        </div>
+      ) : null}
+
       {/* Responsive body: 2-column Timeline + Docked Inspector / Reasoning when wide */}
       {twoColumnBody ? (
         <div className="mt-3 grid grid-cols-1 gap-3 @2xl:grid-cols-[minmax(0,1.5fr)_minmax(280px,1fr)] @2xl:items-start">
@@ -674,6 +715,7 @@ function ActivityPanelInner({
             costUsd={costUsd}
             totalDurationMs={elapsedMs}
             graph={graph}
+            skills={calledSkills}
             thinkingLines={details.thinkingLines}
             onRewind={onRewind ? handleRewind : undefined}
             rewinding={actionInFlight === "rewind"}

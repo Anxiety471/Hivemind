@@ -1,6 +1,6 @@
 import type { AgentRunRequest } from "@rakazo/adapter-kit";
 import type { MessageBlock } from "@rakazo/contracts";
-import { BACKGROUND_HELPER_TRIGGER, redactSecrets } from "@rakazo/core";
+import { BACKGROUND_HELPER_TRIGGER, mergeSkillNames, redactSecrets } from "@rakazo/core";
 import { isDatabaseUnavailable, RunHistoryWriteError, recordUsage } from "@rakazo/db";
 import { bestEffort, getLogger } from "@rakazo/logging";
 import { isStrategicInitiativeRun } from "../../routines/strategic-initiative.js";
@@ -33,7 +33,10 @@ import { claimRunSteering } from "./run-turn-images.js";
 import { appendToolCompletionAudit, toolCompletionOutcome } from "./tool-completion-audit.js";
 import { toolResultFingerprint } from "./tool-loop.js";
 import { keepToolStepResult } from "./tool-step-calls.js";
-import { summarizeToolCompletionDetail } from "./tool-step-detail.js";
+import {
+  summarizeToolCompletionDetail,
+  summarizeToolCompletionSkills,
+} from "./tool-step-detail.js";
 
 export async function runModelTurn(
   services: RunExecutorServices,
@@ -90,6 +93,7 @@ export async function runModelTurn(
                 ...(checkpointBlock.modelProvider
                   ? { modelProvider: checkpointBlock.modelProvider }
                   : {}),
+                ...(checkpointBlock.skills?.length ? { skills: checkpointBlock.skills } : {}),
               },
             })
             .catch((error: unknown) => {
@@ -389,6 +393,14 @@ function modelTurnRequest(
       if (completedDetail) {
         state.reply.toolDetails ??= new Map();
         state.reply.toolDetails.set(completion.executionId, completedDetail);
+      }
+      const completedSkills = summarizeToolCompletionSkills(completion, runSecrets);
+      if (completedSkills?.length) {
+        state.reply.toolSkills ??= new Map();
+        state.reply.toolSkills.set(
+          completion.executionId,
+          mergeSkillNames(state.reply.toolSkills.get(completion.executionId), completedSkills),
+        );
       }
       const audited = appendToolCompletionAudit(
         deps,

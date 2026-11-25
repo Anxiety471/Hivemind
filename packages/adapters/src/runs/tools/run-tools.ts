@@ -352,6 +352,17 @@ async function codeModeTool(ctx: RunContext, call: ToolCall) {
   let writes = 0;
   let paused: unknown;
   let stillRunning = false;
+  const skillsCalled: string[] = [];
+  const seenSkills = new Set<string>();
+  const recordSkill = (raw: unknown) => {
+    if (typeof raw !== "string") return;
+    const trimmed = raw.trim();
+    if (!trimmed) return;
+    const key = trimmed.toLowerCase();
+    if (seenSkills.has(key)) return;
+    seenSkills.add(key);
+    skillsCalled.push(trimmed);
+  };
   // A paused call ends the script: the isolate is interrupted instead of letting a catch
   // swallow the refusal and keep calling tools after the person was asked.
   const stop = new AbortController();
@@ -523,6 +534,25 @@ async function codeModeTool(ctx: RunContext, call: ToolCall) {
       call.observer,
       CODE_MODE_SHELL_TIMEOUT_MS,
     );
+    if (name === "skill_read") {
+      const directName =
+        result && typeof result === "object" && "name" in result && typeof result.name === "string"
+          ? result.name
+          : undefined;
+      const nestedDetails =
+        result &&
+        typeof result === "object" &&
+        "details" in result &&
+        result.details &&
+        typeof result.details === "object"
+          ? result.details
+          : undefined;
+      const detailsName =
+        nestedDetails && "name" in nestedDetails && typeof nestedDetails.name === "string"
+          ? nestedDetails.name
+          : undefined;
+      recordSkill(directName ?? detailsName ?? args.name);
+    }
     if (isRunningShellCommand(result)) {
       stillRunning = true;
       stop.abort();
@@ -658,6 +688,7 @@ async function codeModeTool(ctx: RunContext, call: ToolCall) {
           ...baseDetails,
           ...(prePauseOutput ? { output: prePauseOutput } : {}),
           ...(outcome.calls.length ? { calls: outcome.calls } : {}),
+          ...(skillsCalled.length ? { skills: skillsCalled } : {}),
         },
       });
     }
@@ -669,6 +700,7 @@ async function codeModeTool(ctx: RunContext, call: ToolCall) {
       error:
         "ShellStillRunning: a command is still running and its final output arrives after this turn. Do not run it again.",
       calls: outcome.calls,
+      ...(skillsCalled.length ? { skills: skillsCalled } : {}),
     });
   }
   const output = redactSecrets(outcome.output, ctx.secrets);
@@ -680,6 +712,7 @@ async function codeModeTool(ctx: RunContext, call: ToolCall) {
       ...(returnValue !== undefined ? { returnValue } : {}),
       error: redactSecrets(`${outcome.error.name}: ${outcome.error.message}`, ctx.secrets),
       ...(outcome.calls.length ? { calls: outcome.calls } : {}),
+      ...(skillsCalled.length ? { skills: skillsCalled } : {}),
     });
   }
   if (output && returnValue !== undefined) {
@@ -688,6 +721,7 @@ async function codeModeTool(ctx: RunContext, call: ToolCall) {
       returnValue,
       ...(outcome.truncated ? { truncated: true } : {}),
       ...(outcome.calls.length ? { calls: outcome.calls } : {}),
+      ...(skillsCalled.length ? { skills: skillsCalled } : {}),
     });
   }
   if (returnValue !== undefined) {
@@ -695,12 +729,14 @@ async function codeModeTool(ctx: RunContext, call: ToolCall) {
       output: returnValue,
       ...(outcome.truncated ? { truncated: true } : {}),
       ...(outcome.calls.length ? { calls: outcome.calls } : {}),
+      ...(skillsCalled.length ? { skills: skillsCalled } : {}),
     });
   }
   return call.finish({
     output: output || "(the script printed nothing; use console.log or return a value)",
     ...(outcome.truncated ? { truncated: true } : {}),
     ...(outcome.calls.length ? { calls: outcome.calls } : {}),
+    ...(skillsCalled.length ? { skills: skillsCalled } : {}),
   });
 }
 

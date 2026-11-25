@@ -7,6 +7,7 @@ export type StepCategory =
   | "files"
   | "search"
   | "git"
+  | "skill"
   | "docs"
   | "web"
   | "mail"
@@ -66,7 +67,10 @@ export function stepCategory(label: string, detail?: string): StepCategory {
   if (/\b(computer|screen|desktop|screenshot|observe)\b/.test(normalized)) {
     return "computer";
   }
-  if (/\b(draft|drafted|notes|note|doc|document|markdown|page|summary|skill)\b/.test(normalized)) {
+  if (/\bskill\b/.test(normalized)) {
+    return "skill";
+  }
+  if (/\b(draft|drafted|notes|note|doc|document|markdown|page|summary)\b/.test(normalized)) {
     return "docs";
   }
   if (
