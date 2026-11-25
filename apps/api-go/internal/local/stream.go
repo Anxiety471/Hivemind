@@ -41,6 +41,12 @@ func (s *Server) serveStream(w http.ResponseWriter, r *http.Request, procedure s
 	if !write(": \n\n") {
 		return
 	}
+	if follow.Failure != nil {
+		body, _ := orpc.ErrorBody(follow.Failure)
+		write("event: error\ndata: " + string(body) + "\n\n")
+		s.config.Logger.Info("stream.ended", "procedure", procedure, "code", follow.Failure.Code)
+		return
+	}
 
 	keepalive := time.NewTicker(timing.Keepalive)
 	defer keepalive.Stop()
@@ -58,7 +64,11 @@ func (s *Server) serveStream(w http.ResponseWriter, r *http.Request, procedure s
 				return
 			}
 			continue
-		case payload = <-follow.Signals:
+		case next, ok := <-follow.Signals:
+			if !ok {
+				return
+			}
+			payload = next
 		case <-quiet.C:
 			quietFrame = true
 		}

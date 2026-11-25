@@ -68,6 +68,25 @@ type Follow struct {
 	// from an idle one and proxies keep the connection. Clients tell it apart from a change and
 	// do not read for it.
 	Heartbeat func() any
+	// Failure, when set, is the error the source would raise at its first pull: the stream writes
+	// the opening comment, then that error as an `error` event, and ends.
+	Failure *orpc.Error
+}
+
+// Failed is a stream whose source raises before its first frame. oRPC discovers such a failure at
+// the first pull — after the 200 is on the wire — and answers with one `error` event: a target
+// that is not the caller's reaches a client as 200 then INTERNAL_SERVER_ERROR, not as a 404.
+func Failed(failure *orpc.Error) *Follow {
+	signals := make(chan string)
+	close(signals)
+	return &Follow{Signals: signals, Stop: func() {}, Failure: failure}
+}
+
+// Silent is a stream that ends at once, sending nothing after the opening comment.
+func Silent() *Follow {
+	signals := make(chan string)
+	close(signals)
+	return &Follow{Signals: signals, Stop: func() {}}
 }
 
 // StreamTiming sets how a stream paces itself; zero fields take the defaults the TypeScript

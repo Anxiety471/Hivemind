@@ -39,7 +39,7 @@ type incomingBotCall struct {
 func SubscribeCalls(ctx context.Context, database *db.DB, deployment shared.Deployment, actor db.Actor, _ orpc.Input) (*local.Follow, *orpc.Error) {
 	realtime := deployment.Realtime
 	if !deployment.PhoneCallsEnabled || realtime == nil {
-		return nil, orpc.NotFound("Not Found")
+		return local.Failed(orpc.NotFound("Not Found")), nil
 	}
 	r := New(ctx)
 	r.Go(func(ctx context.Context) {

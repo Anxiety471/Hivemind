@@ -60,7 +60,8 @@ var quietThreadEvents = map[string]bool{
 func Subscribe(ctx context.Context, database *db.DB, deployment shared.Deployment, actor db.Actor, _ orpc.Input) (*local.Follow, *orpc.Error) {
 	realtime := deployment.Realtime
 	if realtime == nil {
-		return nil, orpc.NotFound("Not Found")
+		// The handler throws at its first pull, so the client sees 200 and an error event.
+		return local.Failed(orpc.NotFound("Not Found")), nil
 	}
 	r := New(ctx)
 	r.Go(func(ctx context.Context) { followChatAlerts(ctx, r, realtime, actor) })
@@ -345,8 +346,10 @@ func followRosterChanges(ctx context.Context, r *Runner, realtime fanout, databa
 		for _, spaceID := range scope.spaceIDs {
 			topics["roster-space:"+spaceID] = true
 		}
+		// A thread's own signals change its preview, unread mark or run status, so the roster
+		// watches the thread topic itself rather than a roster-specific one.
 		for _, threadID := range scope.threadIDs {
-			topics["roster-thread:"+threadID] = true
+			topics["thread:"+threadID] = true
 		}
 		for topic, unsubscribe := range subscriptions {
 			if topics[topic] {

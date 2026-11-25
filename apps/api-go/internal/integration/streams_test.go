@@ -82,6 +82,25 @@ func readFrames(response *http.Response, frames chan<- sseFrame) {
 }
 
 // nextMessageWithin is nextMessage with its own deadline.
+// nextFrameWithin is the next frame of any kind, so an error event can be asserted on directly.
+func nextFrameWithin(t *testing.T, frames <-chan sseFrame, wait time.Duration) (sseFrame, bool) {
+	t.Helper()
+	deadline := time.After(wait)
+	for {
+		select {
+		case <-deadline:
+			return sseFrame{}, false
+		case frame, ok := <-frames:
+			if !ok {
+				return sseFrame{}, false
+			}
+			if frame.event != "" {
+				return frame, true
+			}
+		}
+	}
+}
+
 func nextMessageWithin(t *testing.T, frames <-chan sseFrame, wait time.Duration) (map[string]any, bool) {
 	t.Helper()
 	deadline := time.After(wait)
@@ -352,9 +371,6 @@ func TestThreadSubscribeRejectsForeignArchivedAndBadInput(t *testing.T) {
 		status int
 		code   string
 	}{
-		{"foreign", streamInput(t, map[string]any{"botId": foreignBot, "cursor": -1}), 404, "NOT_FOUND"},
-		{"archived", streamInput(t, map[string]any{"botId": archivedBot, "cursor": -1}), 404, "NOT_FOUND"},
-		{"missing-bot", streamInput(t, map[string]any{"botId": "nope", "cursor": -1}), 404, "NOT_FOUND"},
 		{"both-targets", streamInput(t, map[string]any{"botId": foreignBot, "groupId": "g", "cursor": -1}), 400, "BAD_REQUEST"},
 		{"no-target", streamInput(t, map[string]any{"cursor": -1}), 400, "BAD_REQUEST"},
 		{"cursor-missing", streamInput(t, map[string]any{"botId": foreignBot}), 400, "BAD_REQUEST"},
@@ -362,6 +378,28 @@ func TestThreadSubscribeRejectsForeignArchivedAndBadInput(t *testing.T) {
 		{"cursor-float", streamInput(t, map[string]any{"botId": foreignBot, "cursor": 1.5}), 400, "BAD_REQUEST"},
 		{"bot-id-empty", streamInput(t, map[string]any{"botId": "", "cursor": -1}), 400, "BAD_REQUEST"},
 		{"no-input", ``, 400, "BAD_REQUEST"},
+	}
+	// A target that is not the caller's is discovered at the first pull in TypeScript, after the
+	// response has started: the client gets 200 and a stream that ends with no frames, not a 404.
+	for _, testCase := range []struct {
+		name string
+		bot  string
+	}{
+		{"foreign", foreignBot},
+		{"archived", archivedBot},
+		{"missing-bot", "nope"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			response, frames := openStreamBody(t, url, cookie, s.Space1,
+				streamInput(t, map[string]any{"botId": testCase.bot, "cursor": -1}))
+			if response.StatusCode != 200 {
+				t.Fatalf("status = %d, want 200", response.StatusCode)
+			}
+			frame, ok := nextFrameWithin(t, frames, time.Second)
+			if !ok || frame.event != "error" || !strings.Contains(frame.data, `"code":"INTERNAL_SERVER_ERROR"`) {
+				t.Fatalf("refused target frame = %+v", frame)
+			}
+		})
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -405,12 +443,16 @@ func TestHelperSubscribeForwardsEveryEventOfItsThread(t *testing.T) {
 	if !ok || frame["seq"] != float64(event.Seq) || frame["botId"] != helperBot {
 		t.Fatalf("helper frame = %v", frame)
 	}
-	// A chat that is not a helper thread is not found.
+	// A chat that is not a helper thread is refused, but only once the stream has started.
 	_, chatThread := addStreamChat(t, database, "plain", s.Space1, s.UserID)
-	response, body := do(t, http.MethodPost, server.URL+"/rpc/threads/helperSubscribe", cookie,
-		streamInput(t, map[string]any{"threadId": chatThread, "cursor": -1}), nil)
-	if response.StatusCode != 404 {
-		t.Fatalf("helperSubscribe on a chat: %d %s", response.StatusCode, body)
+	response, chatFrames := openStreamBody(t, server.URL+"/rpc/threads/helperSubscribe", cookie,
+		s.Space1, streamInput(t, map[string]any{"threadId": chatThread, "cursor": -1}))
+	if response.StatusCode != 200 {
+		t.Fatalf("helperSubscribe on a chat: %d", response.StatusCode)
+	}
+	refusal, refused := nextFrameWithin(t, chatFrames, time.Second)
+	if !refused || refusal.event != "error" || !strings.Contains(refusal.data, `"code":"INTERNAL_SERVER_ERROR"`) {
+		t.Fatalf("helperSubscribe on a chat: %+v", refusal)
 	}
 }
 
@@ -515,15 +557,21 @@ func TestNotificationsSubscribeSendsInitialSignalsAndLiveFrames(t *testing.T) {
 	}
 }
 
-func TestNotificationsSubscribeWithoutRealtimeIsNotFound(t *testing.T) {
+// TestNotificationsSubscribeWithoutRealtimeIsSilent: the handler throws at its first pull, so the
+// client sees a 200 whose stream ends with no frames.
+func TestNotificationsSubscribeWithoutRealtimeIsSilent(t *testing.T) {
 	database := openTestDB(t)
 	s := seed(t, database)
 	server := testServerDeployed(t, database, local.Config{Stream: streamTiming()}, nil, shared.Deployment{})
 	cookie := "better-auth.session_token=" + signedCookie(testSecret, s.SessionToken)
 	for _, procedure := range []string{"notifications/subscribe", "notifications/subscribeCalls"} {
-		response, body := do(t, http.MethodPost, server.URL+"/rpc/"+procedure, cookie, `{"json":{}}`, nil)
-		if response.StatusCode != 404 {
-			t.Fatalf("%s without a fanout: %d %s", procedure, response.StatusCode, body)
+		response, frames := openStreamBody(t, server.URL+"/rpc/"+procedure, cookie, s.Space1, `{"json":{}}`)
+		if response.StatusCode != 200 {
+			t.Fatalf("%s without a fanout: %d", procedure, response.StatusCode)
+		}
+		frame, ok := nextFrameWithin(t, frames, time.Second)
+		if !ok || frame.event != "error" || !strings.Contains(frame.data, `"code":"NOT_FOUND"`) {
+			t.Fatalf("%s without a fanout sent %+v", procedure, frame)
 		}
 	}
 }

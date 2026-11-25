@@ -133,6 +133,12 @@ func Subscribe(ctx context.Context, database *db.DB, deployment shared.Deploymen
 		return err
 	})
 	if err != nil {
+		// In TypeScript the target lookup runs inside the event generator: a thread that is not
+		// the caller's is discovered at the first pull, after the 200 is on the wire, so the client
+		// sees an empty stream rather than a 404.
+		if errors.Is(err, errIsolation) {
+			return local.Failed(orpc.Internal()), nil
+		}
 		return nil, shared.Failure(err)
 	}
 	// A bot thread's id is not the bot. Groups have no single bot, so the thread id stands in.
@@ -157,7 +163,7 @@ func HelperSubscribe(ctx context.Context, database *db.DB, deployment shared.Dep
 			threadID, actor.SpaceID).Scan(&botID)
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, errIsolation
+		return local.Failed(orpc.Internal()), nil
 	}
 	if err != nil {
 		return nil, shared.Failure(err)
