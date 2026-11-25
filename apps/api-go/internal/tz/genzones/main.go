@@ -50,6 +50,20 @@ const (
 	releaseBase   = "https://data.iana.org/time-zones/releases"
 )
 
+// icuAliases are zone ids production Node's ICU accepts that IANA tzdata
+// 2026e does not carry: the System V ids ICU kept for compatibility, and two
+// links tzdata dropped long ago. genzones asks production node which zone each
+// id is (Intl's resolvedOptions().timeZone), checks that zone's offsets against
+// the id at probe instants, and installs a copy of that zone under the id, so
+// tz.Load, Names() and the corpus cover them with no second authority at
+// runtime. The mapping is derived from the runtime, never hand-written.
+var icuAliases = []string{
+	"ACT", "AET", "AGT", "ART", "AST", "BET", "BST", "CAT", "CNT", "CST",
+	"CTT", "EAT", "ECT", "IET", "IST", "JST", "MIT", "NET", "NST", "PLT",
+	"PNT", "PRT", "PST", "SST", "VST",
+	"US/Pacific-New", "Canada/East-Saskatchewan",
+}
+
 // zicSourceFiles are the tzdata files zic compiles; posixrules and the
 // rearguard variant are not needed. systemv is absent from recent releases.
 var zicSourceFiles = []string{
@@ -82,9 +96,10 @@ func main() {
 	zones := filepath.Join(temp, "zoneinfo")
 	run(zic, append([]string{"-b", "fat", "-d", zones}, dataFiles(temp)...)...)
 
+	aliases := installAliases(temp, zones, node)
 	names, digest := writeZip(zones, filepath.Join(*outDir, "zoneinfo.zip"))
 	versions := nodeVersions(node)
-	writePackage(*outDir, names, digest, versions)
+	writePackage(*outDir, names, digest, versions, len(aliases))
 	fmt.Printf("tz %s: %d zones, zoneinfo.zip %s, node %s icu %s\n",
 		tzdataVersion, len(names), digest, versions.Node, versions.ICU)
 }
@@ -240,6 +255,112 @@ func dataFiles(temp string) []string {
 	return paths
 }
 
+// aliasScript asks the production node which zone each id is, and verifies the
+// id and that zone report the same offset at every probe instant. ICU's legacy
+// ids are aliases in its zone table; if a future ICU instead gives one real
+// rules of its own, the offset check fails rather than pinning a wrong copy.
+const aliasScript = `
+import { readFileSync } from "node:fs";
+const payload = JSON.parse(readFileSync(process.argv[2], "utf8"));
+const build = (zone) => new Intl.DateTimeFormat("en-US", {
+  timeZone: zone, hourCycle: "h23", year: "numeric", month: "2-digit",
+  day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit",
+});
+const offsetAt = (format, at) => {
+  const parts = {};
+  for (const { type, value } of format.formatToParts(at)) parts[type] = value;
+  const local = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day),
+    Number(parts.hour) % 24, Number(parts.minute), Number(parts.second));
+  return (local - at) / 1000;
+};
+const formats = new Map();
+const format = (zone) => {
+  if (!formats.has(zone)) formats.set(zone, build(zone));
+  return formats.get(zone);
+};
+const aliases = {}, rejected = [], mismatches = [];
+for (const name of payload.names) {
+  let canonical;
+  try {
+    canonical = build(name).resolvedOptions().timeZone;
+    if (!canonical) throw new Error("no resolved zone");
+    format(canonical);
+  } catch {
+    rejected.push(name);
+    continue;
+  }
+  for (const at of payload.instants) {
+    if (offsetAt(format(name), at) !== offsetAt(format(canonical), at)) {
+      mismatches.push([name, canonical, at]);
+      break;
+    }
+  }
+  aliases[name] = canonical;
+}
+process.stdout.write(JSON.stringify({ aliases, rejected, mismatches }));
+`
+
+// installAliases copies each ICU-only id's zone under the id inside the
+// compiled tree, after node has resolved and verified it.
+func installAliases(temp, zones, node string) map[string]string {
+	instants := make([]int64, 0, 2400)
+	for year := 1900; year <= 2100; year++ {
+		for month := 0; month < 12; month++ {
+			instants = append(instants, time.Date(year, time.Month(month+1), 15, 12, 0, 0, 0, time.UTC).UnixMilli())
+		}
+	}
+	payload, err := json.Marshal(struct {
+		Names    []string `json:"names"`
+		Instants []int64  `json:"instants"`
+	}{Names: icuAliases, Instants: instants})
+	if err != nil {
+		fatal(err)
+	}
+	scriptPath := filepath.Join(temp, "aliases.mjs")
+	payloadPath := filepath.Join(temp, "aliases.json")
+	if err := os.WriteFile(scriptPath, []byte(aliasScript), 0o644); err != nil {
+		fatal(err)
+	}
+	if err := os.WriteFile(payloadPath, payload, 0o644); err != nil {
+		fatal(err)
+	}
+	out := run(node, scriptPath, payloadPath)
+	var result struct {
+		Aliases    map[string]string `json:"aliases"`
+		Rejected   []string          `json:"rejected"`
+		Mismatches [][3]any          `json:"mismatches"`
+	}
+	if err := json.Unmarshal(out, &result); err != nil {
+		fatalf("parse alias resolution from %s: %v", node, err)
+	}
+	if len(result.Rejected) > 0 {
+		fatalf("%s rejects the pinned ICU alias ids %v: drop them from icuAliases and record the change", node, result.Rejected)
+	}
+	if len(result.Mismatches) > 0 {
+		fatalf("%s gives the ICU alias ids their own rules, not a copy of the canonical zone: %v", node, result.Mismatches[:1])
+	}
+	installed := make(map[string]string, len(result.Aliases))
+	for name, canonical := range result.Aliases {
+		source := filepath.Join(zones, filepath.FromSlash(canonical))
+		body, err := os.ReadFile(source)
+		if err != nil {
+			fatalf("alias %s resolves to %q, which the release does not compile: %v", name, canonical, err)
+		}
+		target := filepath.Join(zones, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			fatal(err)
+		}
+		if err := os.WriteFile(target, body, 0o644); err != nil {
+			fatal(err)
+		}
+		installed[name] = canonical
+	}
+	if len(installed) != len(icuAliases) {
+		fatalf("installed %d of %d ICU aliases", len(installed), len(icuAliases))
+	}
+	return installed
+}
+
 // writeZip packs every compiled zone under its IANA name. Entries are sorted
 // and carry no timestamp so the archive is reproducible; the returned digest
 // is the one tzdata_gen.go pins.
@@ -295,12 +416,13 @@ func writeZip(root, target string) ([]string, string) {
 
 // writePackage emits the generated consts and the zone list the corpus
 // generator reads.
-func writePackage(outDir string, names []string, digest string, versions nodeVersionSet) {
+func writePackage(outDir string, names []string, digest string, versions nodeVersionSet, installedAliases int) {
 	source := fmt.Sprintf(`// Code generated by go run ./genzones; DO NOT EDIT.
 //
 // Zone data: IANA tzdata %[1]s (tzdata%[1]s.tar.gz sha256 %[2]s,
 // tzcode%[1]s.tar.gz sha256 %[3]s), compiled by that release's own zic with
 // -b fat, zipped reproducibly.
+// ICU-only ids installed as copies of their canonical zones: %[8]d.
 // Host runtime: Node %[4]s, ICU %[5]s, tz %[1]s.
 
 package tz
@@ -320,7 +442,7 @@ const (
 	NodeVersion = %[4]q
 	ICUVersion  = %[5]q
 )
-`, tzdataVersion, tzdataSHA256, tzcodeSHA256, versions.Node, versions.ICU, digest, len(names))
+`, tzdataVersion, tzdataSHA256, tzcodeSHA256, versions.Node, versions.ICU, digest, len(names), installedAliases)
 	if err := os.WriteFile(filepath.Join(outDir, "tzdata_gen.go"), []byte(source), 0o644); err != nil {
 		fatal(err)
 	}

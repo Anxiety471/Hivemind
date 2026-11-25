@@ -3,6 +3,7 @@
 // Zone data: IANA tzdata 2026e (tzdata2026e.tar.gz sha256 b26882805f26aac59d5b222978e6580484b834ccdc98be89df2f05a6dc53a652,
 // tzcode2026e.tar.gz sha256 cc3d27ca2a0d8399504551b920970d80af83bfb9c216e8082a15491921935d54), compiled by that release's own zic with
 // -b fat, zipped reproducibly.
+// ICU-only ids installed as copies of their canonical zones: 27.
 // Host runtime: Node 24.22.3, ICU 78.3, tz 2026e.
 
 package tz
@@ -12,9 +13,9 @@ const (
 	Version = "2026e"
 	// ZoneinfoSHA256 is the digest of the embedded zip: TestNodeVersionProvenance
 	// fails if the two ever disagree.
-	ZoneinfoSHA256 = "70e7b81107e45c4a7dbeccd5b378cb73369a4dfd3cab30b281c0aef78f7057ed"
+	ZoneinfoSHA256 = "434706843c9530fee620899f3ceb30153db5895d6b118883182627f584c471ed"
 	// ZoneCount is the number of names in zoneinfo.zip, aliases included.
-	ZoneCount = 598
+	ZoneCount = 625
 	// TarballSHA256 and TzcodeSHA256 pin the official releases.
 	TarballSHA256 = "b26882805f26aac59d5b222978e6580484b834ccdc98be89df2f05a6dc53a652"
 	TzcodeSHA256  = "cc3d27ca2a0d8399504551b920970d80af83bfb9c216e8082a15491921935d54"

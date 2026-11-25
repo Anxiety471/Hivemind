@@ -136,38 +136,196 @@ var (
 	local     *time.Location
 )
 
-// Local is the zone a datetime without an offset is read in, matching the zone
-// V8's Date uses: the TZ environment variable, else the zone /etc/localtime
-// names, else UTC. Only the zone name comes from the process; its rules always
-// come from the embedded database, and a name the release no longer carries
-// reads as UTC.
+// Local is the zone a datetime without an offset is read in, following V8's
+// rules for the default zone: TZ when set (an exact zone id, a TZif path, or a
+// POSIX standard-time offset), else the zone /etc/localtime names or contains,
+// else UTC. Only the zone *name* comes from the process; the rules always come
+// from the embedded release or from the file TZ names. V8's quirks are
+// reproduced deliberately — see the comments on resolveLocal, hostZone and
+// legacyDefaultUTC — because a local datetime parsed by the gateway must be the
+// instant V8's Date would read from the same TZ.
 func Local() *time.Location {
 	localOnce.Do(func() {
-		local = resolveLocal(os.Getenv, os.Readlink)
+		local = resolveLocal(os.LookupEnv, os.Readlink, os.ReadFile)
 	})
 	return local
 }
 
-// resolveLocal is Local with the process sources injected, so the fallback
-// chain is testable without touching the host.
-func resolveLocal(getenv func(string) string, readlink func(string) (string, error)) *time.Location {
-	if name := strings.TrimPrefix(getenv("TZ"), ":"); name != "" {
-		if location, err := Load(name); err == nil {
-			return location
+// legacyDefaultUTC are the System V zone ids ICU still accepts. Intl resolves
+// each one to a canonical zone, so Load and the corpus serve their real rules;
+// but V8's *default zone* path cannot load their data: with TZ=PST,
+// resolvedOptions().timeZone is America/Los_Angeles while
+// getTimezoneOffset() is 0 at every instant measured (2026-07-15, 2026-12-06,
+// 1900-01-01), and TZ=ACT behaves the same. Local therefore reads as UTC for
+// them, as V8 does. The ICU aliases US/Pacific-New and
+// Canada/East-Saskatchewan are not in this set: their default-zone data loads
+// correctly (measured -25200/-28800 and -21600).
+var legacyDefaultUTC = map[string]bool{
+	"ACT": true, "AET": true, "AGT": true, "ART": true, "AST": true,
+	"BET": true, "BST": true, "CAT": true, "CNT": true, "CST": true,
+	"CTT": true, "EAT": true, "ECT": true, "IET": true, "IST": true,
+	"JST": true, "MIT": true, "NET": true, "NST": true, "PLT": true,
+	"PNT": true, "PRT": true, "PST": true, "SST": true, "VST": true,
+}
+
+// resolveLocal is Local with the process sources injected, so the rules are
+// testable without touching the host.
+func resolveLocal(lookup func(string) (string, bool), readlink func(string) (string, error), readFile func(string) ([]byte, error)) *time.Location {
+	value, set := lookup("TZ")
+	if !set {
+		return hostZone(readlink, readFile)
+	}
+	name := strings.TrimPrefix(value, ":")
+	switch {
+	case name == "":
+		// V8 reads TZ="" as UTC (zone Etc/Unknown), not as "unset".
+		return time.UTC
+	case name == "localtime":
+		return hostZone(readlink, readFile)
+	}
+	// V8's default-zone lookup is exact, unlike Intl's timeZone option: with
+	// TZ=asia/tokyo the local zone is UTC even though
+	// Intl.DateTimeFormat({timeZone: "asia/tokyo"}) works.
+	if location, ok := loadExact(name); ok {
+		if legacyDefaultUTC[name] {
+			return time.UTC
+		}
+		return location
+	}
+	if strings.HasPrefix(name, "/") || strings.HasPrefix(name, ".") {
+		// V8 reads a TZif file named by TZ; a missing or malformed file reads as UTC.
+		if data, err := readFile(name); err == nil {
+			if location, err := time.LoadLocationFromTZData(name, data); err == nil {
+				return location
+			}
 		}
 		return time.UTC
 	}
-	target, err := readlink("/etc/localtime")
-	if err != nil {
-		return time.UTC
+	if offset, ok := posixFixedOffset(name); ok {
+		return time.FixedZone(name, offset)
 	}
-	for _, marker := range []string{"/zoneinfo/", "/zoneinfo64/"} {
-		if index := strings.LastIndex(target, marker); index >= 0 {
-			if location, err := Load(target[index+len(marker):]); err == nil {
-				return location
+	if posixNeedsSystemZone(name) {
+		// V8 cannot represent a POSIX zone that carries DST rules (or an
+		// offset with minutes) and falls back to the system zone.
+		return hostZone(readlink, readFile)
+	}
+	return time.UTC
+}
+
+// hostZone is the system default: the zone /etc/localtime names, else the TZif
+// it contains, else UTC. Only the name (or, for a copied file, the bytes the
+// operator installed) comes from the host.
+func hostZone(readlink func(string) (string, error), readFile func(string) ([]byte, error)) *time.Location {
+	if target, err := readlink("/etc/localtime"); err == nil {
+		for _, marker := range []string{"/zoneinfo/", "/zoneinfo64/"} {
+			if index := strings.LastIndex(target, marker); index >= 0 {
+				if location, err := Load(target[index+len(marker):]); err == nil {
+					return location
+				}
 			}
-			return time.UTC
+		}
+	}
+	if data, err := readFile("/etc/localtime"); err == nil {
+		if location, err := time.LoadLocationFromTZData("localtime", data); err == nil {
+			return location
 		}
 	}
 	return time.UTC
+}
+
+// loadExact is Load without the case-insensitive fallback.
+func loadExact(name string) (*time.Location, bool) {
+	if _, ok := open().files[name]; !ok {
+		return nil, false
+	}
+	location, err := Load(name)
+	if err != nil {
+		return nil, false
+	}
+	return location, true
+}
+
+// posixFixedOffset reads the POSIX forms V8 honours as a fixed standard time:
+// three or more letters, an optional sign, and whole hours — "ABC3", "ABC-3",
+// "UTC0", "XXX-3" (POSIX counts hours west of UTC, so the sign flips).
+func posixFixedOffset(text string) (int, bool) {
+	index := 0
+	for index < len(text) && isLetter(text[index]) {
+		index++
+	}
+	if index < 3 {
+		return 0, false
+	}
+	west, next, minutes, ok := posixHours(text[index:])
+	if !ok || minutes || next != len(text)-index {
+		return 0, false
+	}
+	return -west * 3600, true
+}
+
+// posixNeedsSystemZone reports the POSIX strings V8 parses but cannot express
+// as a zone — a DST name or offset, transition rules, an angle-bracketed name,
+// or minutes/seconds in the offset — all of which fall back to the system zone.
+// A name too short, or no offset at all, is not POSIX and reads as UTC.
+func posixNeedsSystemZone(text string) bool {
+	if strings.HasPrefix(text, "<") {
+		return true
+	}
+	index := 0
+	for index < len(text) && isLetter(text[index]) {
+		index++
+	}
+	if index == 0 {
+		return false
+	}
+	_, next, minutes, ok := posixHours(text[index:])
+	if !ok {
+		return false
+	}
+	rest := text[index+next:]
+	if rest == "" && !minutes {
+		return false
+	}
+	// A whole-hour offset on a short name ("A3") reads as UTC; anything after
+	// the offset (DST name, rules, or a :mm part) makes V8 use the system zone.
+	return true
+}
+
+// posixHours reads "[+-]?HH[:MM[:SS]]" and returns the hours west of UTC, the
+// bytes consumed, and whether a minutes or seconds field was present. V8 only
+// honours a whole-hour standard offset; it falls back to the system zone when
+// one carries minutes, so the flag is the caller's signal.
+func posixHours(text string) (west int, consumed int, minutes bool, ok bool) {
+	index, sign := 0, 1
+	if index < len(text) && (text[index] == '+' || text[index] == '-') {
+		if text[index] == '-' {
+			sign = -1
+		}
+		index++
+	}
+	start := index
+	hours := 0
+	for index < len(text) && text[index] >= '0' && text[index] <= '9' {
+		hours = hours*10 + int(text[index]-'0')
+		index++
+	}
+	if index == start || hours > 24 {
+		return 0, 0, false, false
+	}
+	for field := 0; field < 2 && index < len(text) && text[index] == ':'; field++ {
+		index++
+		digits := index
+		for index < len(text) && text[index] >= '0' && text[index] <= '9' {
+			index++
+		}
+		if index == digits {
+			return 0, 0, false, false
+		}
+		minutes = true
+	}
+	return sign * hours, index, minutes, true
+}
+
+func isLetter(c byte) bool {
+	return c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z'
 }

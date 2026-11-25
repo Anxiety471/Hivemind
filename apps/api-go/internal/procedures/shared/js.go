@@ -142,11 +142,12 @@ func ParseDate(text string) (time.Time, bool) {
 	}
 	location := time.UTC
 	hasTime := match[4] != ""
+	localTime := false
 	switch offset := match[8]; {
 	case offset == "" && hasTime:
 		// V8 reads a datetime without an offset in the process zone; its rules
 		// come from the embedded tzdata release, never the host's.
-		location = tz.Local()
+		localTime = true
 	case offset == "" || offset == "Z" || offset == "z":
 	default:
 		sign := 1
@@ -161,6 +162,16 @@ func ParseDate(text string) (time.Time, bool) {
 		location = time.FixedZone("", sign*(hours*3600+minutes*60))
 	}
 	moment := time.Date(year, time.Month(month), day, hour, minute, second, nanos, location)
+	if localTime {
+		// ECMAScript reads a wall time with the zone offset in effect at the
+		// instant whose UTC clock shows the same fields: a time the clocks skip
+		// moves forward by the gap, and one they repeat is its first occurrence.
+		// time.Date's own gap choice is the other one, so parse the fields as
+		// UTC and subtract that offset.
+		wall := time.Date(year, time.Month(month), day, hour, minute, second, nanos, time.UTC)
+		_, seconds := wall.In(tz.Local()).Zone()
+		moment = time.UnixMilli(wall.UnixMilli() - int64(seconds)*1000)
+	}
 	// ECMAScript TimeClip: a Date more than 8.64e15 ms from the epoch is Invalid Date,
 	// so Date.parse rejects it (e.g. +275760-09-13T00:00:00.001Z).
 	if milliseconds := moment.UnixMilli(); milliseconds > maxTimeClip || milliseconds < -maxTimeClip {

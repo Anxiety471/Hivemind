@@ -46,9 +46,10 @@ func readOffsetCorpus(t *testing.T) offsetCorpus {
 	return corpus
 }
 
-// TestOffsetsMatchNodeIntlCorpus replays the recorded differential: all 597
-// zones Intl supports, at the instants around every transition from 2020 to
-// 2030, at yearly samples from 1970 to 2038 and at samples out to 2070.
+// TestOffsetsMatchNodeIntlCorpus replays the recorded differential: every zone
+// the release carries (624 of 625 names; Factory is the one Intl rejects), at
+// the instants around every transition from 2020 to 2030, at yearly samples
+// from 1970 to 2038 and at samples out to 2070.
 func TestOffsetsMatchNodeIntlCorpus(t *testing.T) {
 	corpus := readOffsetCorpus(t)
 	if corpus.TZ != tz.Version || corpus.Node != tz.NodeVersion || corpus.ICU != tz.ICUVersion {
@@ -156,7 +157,9 @@ func TestOffsetsMatchNodeIntlLive(t *testing.T) {
 			index[name] = zone
 			zones = append(zones, name)
 		}
-		for _, transition := range transitions(t, location, time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)) {
+		// Every change from 1970 through 2070, not only the corpus window, so a
+		// transition Go invents outside 2020-2030 is probed against Intl too.
+		for _, transition := range transitions(t, location, time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(2070, 1, 1, 0, 0, 0, 0, time.UTC)) {
 			for _, delta := range []int64{-86_400_000, -3_600_000, -1000, 0, 1000, 3_600_000, 86_400_000} {
 				add(zone, transition+delta)
 			}

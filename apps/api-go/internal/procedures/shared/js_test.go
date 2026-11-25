@@ -1,6 +1,12 @@
 package shared
 
 import (
+	"bytes"
+	"encoding/json"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -101,4 +107,112 @@ func TestISOStringMatchesToISOString(t *testing.T) {
 			t.Errorf("%v = %s, want %s", at, got, want)
 		}
 	}
+}
+
+// parseDateLocalCases pin V8's reading of a datetime without an offset in the
+// process zone, measured with production node (new Date(text).getTime()) under
+// TZ=UTC and TZ=America/Havana. They exercise the tz.Local line through the
+// same inputs a client cursor carries into pages/cursor.go, which base64-decodes
+// a client string and hands updatedAt/pinnedAt to ParseDate exactly as TS hands
+// them to Date.parse.
+var parseDateLocalCases = []struct {
+	text   string
+	utc    int64
+	havana int64
+}{
+	{"2026-11-10", 1794268800000, 1794268800000},
+	{"2026-11-10T07:46:43", 1794296803000, 1794314803000},
+	{"2026-03-08T00:30:00", 1772929800000, 1772947800000}, // the clocks skip this time
+	{"2026-11-01T00:30:00", 1793493000000, 1793507400000}, // the clocks repeat this time
+	{"2026-01-15T00:00:00", 1768435200000, 1768453200000},
+	{"2030-06-01T12:34:56", 1906547696000, 1906562096000},
+}
+
+const parseDateChildOut = "PARSE_DATE_LOCAL_CHILD_OUT"
+
+// TestParseDateLocalZoneChild is the child half of TestParseDateLocalZone: one
+// process per TZ value, because tz.Local resolves once per process.
+func TestParseDateLocalZoneChild(t *testing.T) {
+	out := os.Getenv(parseDateChildOut)
+	if out == "" {
+		t.Skip("helper process for TestParseDateLocalZone")
+	}
+	result := make(map[string]int64, len(parseDateLocalCases))
+	for _, c := range parseDateLocalCases {
+		moment, ok := ParseDate(c.text)
+		if !ok {
+			result[c.text] = -1
+			continue
+		}
+		result[c.text] = moment.UnixMilli()
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(out, encoded, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestParseDateLocalZone(t *testing.T) {
+	for _, zone := range []struct {
+		name  string
+		value string
+		want  func(struct {
+			text   string
+			utc    int64
+			havana int64
+		}) int64
+	}{
+		{"UTC", "UTC", func(c struct {
+			text   string
+			utc    int64
+			havana int64
+		}) int64 {
+			return c.utc
+		}},
+		{"Havana", "America/Havana", func(c struct {
+			text   string
+			utc    int64
+			havana int64
+		}) int64 {
+			return c.havana
+		}},
+	} {
+		t.Run(zone.name, func(t *testing.T) {
+			outFile := filepath.Join(t.TempDir(), "parse.json")
+			command := exec.Command(os.Args[0], "-test.run=^TestParseDateLocalZoneChild$")
+			command.Env = append(environmentWithoutTZ(), "TZ="+zone.value, parseDateChildOut+"="+outFile)
+			var stderr bytes.Buffer
+			command.Stderr = &stderr
+			if out, err := command.Output(); err != nil {
+				t.Fatalf("child: %v: %s%s", err, out, stderr.String())
+			}
+			raw, err := os.ReadFile(outFile)
+			if err != nil {
+				t.Fatalf("child wrote no result: %v", err)
+			}
+			var got map[string]int64
+			if err := json.Unmarshal(raw, &got); err != nil {
+				t.Fatalf("parse child output %q: %v", raw, err)
+			}
+			for _, c := range parseDateLocalCases {
+				if want := zone.want(c); got[c.text] != want {
+					t.Errorf("%q = %d, want %d", c.text, got[c.text], want)
+				}
+			}
+		})
+	}
+}
+
+func environmentWithoutTZ() []string {
+	var environment []string
+	for _, entry := range os.Environ() {
+		if strings.HasPrefix(entry, "TZ=") {
+			continue
+		}
+		environment = append(environment, entry)
+	}
+	return environment
 }

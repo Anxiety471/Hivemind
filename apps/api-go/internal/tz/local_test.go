@@ -36,8 +36,6 @@ func TestLoadIgnoresProcessZoneSources(t *testing.T) {
 	if _, offset := instant.In(location).Zone(); offset != -5*3600 {
 		t.Fatalf("America/Havana offset %+d: the lookup read a process zone source instead of the embedded release", offset)
 	}
-	// The host's zoneinfo 2026f has not ended Cuba's DST at this instant; if
-	// the name reached time.LoadLocation the test would see -4h.
 	if _, offset := instant.In(location).Zone(); offset == -4*3600 {
 		t.Fatal("America/Havana still reads the host's 2026f rule")
 	}
@@ -68,44 +66,80 @@ func zoneBytes(t *testing.T, name string) []byte {
 	return nil
 }
 
-// TestResolveLocalFollowsNodeSelection pins the fallback chain to what V8's
-// Date does: TZ, else the zone /etc/localtime names, else UTC — with the rules
-// always coming from the embedded release.
-func TestResolveLocalFollowsNodeSelection(t *testing.T) {
-	env := func(values map[string]string) func(string) string {
-		return func(key string) string { return values[key] }
+// TestResolveLocalFollowsV8 pins the default-zone rules to production V8's
+// measured behaviour (Node 24.22.3, one process per TZ value): TZ when set is an
+// exact zone id, a TZif path, or a plain POSIX standard-time offset; a DST POSIX
+// string falls back to the system zone; case variants and unknown names read as
+// UTC; unset reads the zone /etc/localtime names; an empty TZ is UTC.
+func TestResolveLocalFollowsV8(t *testing.T) {
+	const (
+		manilaLink = "/usr/share/zoneinfo/Asia/Manila"
+		summer     = "2026-07-15T12:00:00Z"
+		winter     = "2026-12-06T12:00:00Z"
+	)
+	env := func(values map[string]string) func(string) (string, bool) {
+		return func(key string) (string, bool) { value, ok := values[key]; return value, ok }
 	}
 	link := func(target string, err error) func(string) (string, error) {
 		return func(string) (string, error) { return target, err }
 	}
 	none := func(string) (string, error) { return "", os.ErrNotExist }
+	noFile := func(string) ([]byte, error) { return nil, os.ErrNotExist }
+	manual := link(manilaLink, nil)
 
 	for _, c := range []struct {
-		name  string
-		get   func(string) string
-		read  func(string) (string, error)
-		want  string
-		at    string
-		shift int
+		name   string
+		getenv func(string) (string, bool)
+		read   func(string) (string, error)
+		file   func(string) ([]byte, error)
+		want   string
+		summer int
+		winter int
 	}{
-		{"TZ wins", env(map[string]string{"TZ": "America/Havana"}), link("", os.ErrNotExist), "America/Havana", "2026-11-10T07:46:43Z", -5 * 3600},
-		{"TZ may carry a leading colon", env(map[string]string{"TZ": ":Asia/Tokyo"}), none, "Asia/Tokyo", "2026-11-10T07:46:43Z", 9 * 3600},
-		{"unknown TZ reads as UTC, like Intl", env(map[string]string{"TZ": "No/Such_Zone"}), none, "UTC", "2026-11-10T07:46:43Z", 0},
-		{"localtime symlink", env(nil), link("/usr/share/zoneinfo/Asia/Manila", nil), "Asia/Manila", "2026-11-10T07:46:43Z", 8 * 3600},
-		{"no TZ, no symlink", env(nil), none, "UTC", "2026-11-10T07:46:43Z", 0},
-		{"a copied localtime file has no name", env(nil), link("/etc/localtime", nil), "UTC", "2026-11-10T07:46:43Z", 0},
+		{"unset reads the localtime zone", env(nil), manual, noFile, "Asia/Manila", 8 * 3600, 8 * 3600},
+		{"unset with no localtime reads UTC", env(nil), none, noFile, "UTC", 0, 0},
+		{"empty TZ is UTC", env(map[string]string{"TZ": ""}), manual, noFile, "UTC", 0, 0},
+		{"a lone colon is UTC", env(map[string]string{"TZ": ":"}), manual, noFile, "UTC", 0, 0},
+		{"localtime means the system zone", env(map[string]string{"TZ": "localtime"}), manual, noFile, "Asia/Manila", 8 * 3600, 8 * 3600},
+		{"exact id", env(map[string]string{"TZ": "Asia/Tokyo"}), manual, noFile, "Asia/Tokyo", 9 * 3600, 9 * 3600},
+		{"colon-prefixed id", env(map[string]string{"TZ": ":Asia/Tokyo"}), manual, noFile, "Asia/Tokyo", 9 * 3600, 9 * 3600},
+		{"lowercase id is not the default zone", env(map[string]string{"TZ": "asia/tokyo"}), manual, noFile, "UTC", 0, 0},
+		{"an ICU alias resolves", env(map[string]string{"TZ": "US/Pacific-New"}), manual, noFile, "US/Pacific-New", -7 * 3600, -8 * 3600},
+		{"an ICU alias with history resolves", env(map[string]string{"TZ": "Canada/East-Saskatchewan"}), manual, noFile, "Canada/East-Saskatchewan", -6 * 3600, -6 * 3600},
+		{"a System V id reads as UTC in V8's default-zone path", env(map[string]string{"TZ": "PST"}), manual, noFile, "UTC", 0, 0},
+		{"another System V id", env(map[string]string{"TZ": "ACT"}), manual, noFile, "UTC", 0, 0},
+		{"a fixed POSIX zone", env(map[string]string{"TZ": "ABC3"}), manual, noFile, "ABC3", -3 * 3600, -3 * 3600},
+		{"a fixed POSIX zone east", env(map[string]string{"TZ": "XXX-3"}), manual, noFile, "XXX-3", 3 * 3600, 3 * 3600},
+		{"POSIX UTC", env(map[string]string{"TZ": "UTC0"}), manual, noFile, "UTC0", 0, 0},
+		{"a POSIX zone with DST falls back to the system zone", env(map[string]string{"TZ": "ABC3DEF,M3.2.0/2,M11.1.0/2"}), manual, noFile, "Asia/Manila", 8 * 3600, 8 * 3600},
+		{"a POSIX zone with a minute offset falls back", env(map[string]string{"TZ": "ABC3:30"}), manual, noFile, "Asia/Manila", 8 * 3600, 8 * 3600},
+		{"an angle-bracketed POSIX zone falls back", env(map[string]string{"TZ": "<-03>3"}), manual, noFile, "Asia/Manila", 8 * 3600, 8 * 3600},
+		{"a short POSIX name with an offset is UTC", env(map[string]string{"TZ": "A3"}), manual, noFile, "UTC", 0, 0},
+		{"letters without an offset are not POSIX", env(map[string]string{"TZ": "ABC"}), manual, noFile, "UTC", 0, 0},
+		{"an unknown name is UTC", env(map[string]string{"TZ": "No/Such"}), manual, noFile, "UTC", 0, 0},
+		{"a space is not trimmed", env(map[string]string{"TZ": " GMT"}), manual, noFile, "UTC", 0, 0},
+		{"Factory is UTC", env(map[string]string{"TZ": "Factory"}), manual, noFile, "Factory", 0, 0},
+		{"a missing TZif path is UTC", env(map[string]string{"TZ": "/no/such/file"}), manual, noFile, "UTC", 0, 0},
+		{"a relative path is read", env(map[string]string{"TZ": "./tzone"}), manual, func(string) ([]byte, error) {
+			return zoneBytes(t, "Asia/Tokyo"), nil
+		}, "./tzone", 9 * 3600, 9 * 3600},
+		{"an absolute TZif path is read", env(map[string]string{"TZ": "/usr/share/zoneinfo/Asia/Tokyo"}), manual, func(string) ([]byte, error) {
+			return zoneBytes(t, "Asia/Tokyo"), nil
+		}, "/usr/share/zoneinfo/Asia/Tokyo", 9 * 3600, 9 * 3600},
 	} {
-		location := resolveLocal(c.get, c.read)
+		location := resolveLocal(c.getenv, c.read, c.file)
 		if location.String() != c.want {
-			t.Errorf("%s: %q, want %q", c.name, location.String(), c.want)
+			t.Errorf("%s: zone %q, want %q", c.name, location.String(), c.want)
 			continue
 		}
-		instant, err := time.Parse(time.RFC3339, c.at)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, offset := instant.In(location).Zone(); offset != c.shift {
-			t.Errorf("%s: offset %+d at %s, want %+d", c.name, offset, c.at, c.shift)
+		for at, want := range map[string]int{summer: c.summer, winter: c.winter} {
+			instant, err := time.Parse(time.RFC3339, at)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, offset := instant.In(location).Zone(); offset != want {
+				t.Errorf("%s at %s: offset %+d, want %+d", c.name, at, offset, want)
+			}
 		}
 	}
 }
