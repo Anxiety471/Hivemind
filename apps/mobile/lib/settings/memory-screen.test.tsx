@@ -149,9 +149,17 @@ const roamerSettings: MemoryRoamerSettings = {
   retryAttempt: 0,
 };
 
-function mockRpc(list: () => Promise<unknown>, roamer = roamerSettings) {
+function mockRpc(
+  list: () => Promise<unknown>,
+  roamer = roamerSettings,
+  systemPrompt = { basePromptPreview: "Base", append: "", hasHostAppend: false },
+) {
   mocks.rpc.mockImplementation((method: string) =>
-    method === "memory/roamer" ? Promise.resolve(roamer) : list(),
+    method === "memory/roamer"
+      ? Promise.resolve(roamer)
+      : method === "memory/systemPrompt"
+        ? Promise.resolve(systemPrompt)
+        : list(),
   );
 }
 
@@ -287,4 +295,15 @@ it("hides cold archive documents from space shared memory", async () => {
   await render();
   expect(container.textContent).toContain("MEMORY.md");
   expect(container.textContent).not.toContain("archive/2026-11.md");
+});
+
+it("renders the Space system prompt append section", async () => {
+  mockRpc(() => Promise.resolve([]), roamerSettings, {
+    basePromptPreview: "Base",
+    append: "Always cite sources.",
+    hasHostAppend: true,
+  });
+  await render();
+  expect(container.textContent).toContain("System prompt append");
+  expect(container.textContent).toContain("Host append file is also active.");
 });

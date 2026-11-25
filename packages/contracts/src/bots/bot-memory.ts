@@ -104,6 +104,16 @@ export const MemoryRoamerSettingsSchema = z.object({
 });
 export type MemoryRoamerSettings = z.infer<typeof MemoryRoamerSettingsSchema>;
 
+/** Maximum length for Space-level system prompt additions. */
+export const SYSTEM_PROMPT_APPEND_MAX_CHARS = 8_000;
+
+export const SpaceSystemPromptSchema = z.object({
+  basePromptPreview: z.string(),
+  append: z.string(),
+  hasHostAppend: z.boolean(),
+});
+export type SpaceSystemPrompt = z.infer<typeof SpaceSystemPromptSchema>;
+
 /** Every bot and Space keeps its MEMORY.md index; other memory documents can be deleted. */
 export const MEMORY_INDEX_PATH = "MEMORY.md";
 /** Consolidated Space-level user profile path. */

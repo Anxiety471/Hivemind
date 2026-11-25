@@ -3,6 +3,7 @@ import {
   connectedPluginsInstruction,
   contextToolsInstruction,
   dedupeInstructions,
+  renderBaseSystemPromptPreview,
   taughtSkillsInstruction,
   userTurnInstructions,
 } from "./run-instructions.prompt.js";
@@ -103,7 +104,8 @@ describe("userTurnInstructions code mode clause", () => {
       ...base,
       offeredToolNames: new Set(["code_mode", "read_file"]),
     }).join("\n");
-    expect(withCode).toContain("run them in one code_mode script");
+    expect(withCode).toContain("batch");
+    expect(withCode).toContain("code_mode");
   });
 });
 
@@ -132,7 +134,7 @@ describe("contextToolsInstruction", () => {
     expect(contextToolsInstruction(undefined)).toBeUndefined();
   });
 
-  it("is the first block of the turn instructions, ahead of the bot's own", () => {
+  it("is the first block of the turn instructions, ahead of appends and bot instructions", () => {
     const instructions = userTurnInstructions({
       botInstructions: "Be brief.",
       groupContext: undefined,
@@ -153,10 +155,11 @@ describe("contextToolsInstruction", () => {
     });
     expect(instructions[0]).toMatch(/^You have history tools/);
     expect(instructions.indexOf("Be brief.")).toBeGreaterThan(0);
+    expect(instructions.join("\n")).not.toContain("You run on Rakazo");
   });
 });
 
-describe("operator instruction and duplicates", () => {
+describe("appends, prefix cache order, and duplicates", () => {
   const base = {
     botInstructions: "Be brief.",
     groupContext: undefined,
@@ -176,21 +179,40 @@ describe("operator instruction and duplicates", () => {
     replyGuidance: "",
   };
 
-  it("places the operator text right after the built-in tools block", () => {
-    const instructions = userTurnInstructions({ ...base, operatorInstruction: "Use wake." });
-    expect(instructions[0]).toMatch(/^You have history tools/);
-    expect(instructions[1]).toBe("Use wake.");
-  });
-
-  it("leaves the operator text out when the bot's instructions already carry it", () => {
+  it("places operator and Space appends after static base and before botInstructions", () => {
     const instructions = userTurnInstructions({
       ...base,
-      botInstructions: "Be brief. Use wake.",
+      operatorInstruction: "Use wake.",
+      spaceSystemPromptAppend: "Always log dates.",
+    });
+    const opIdx = instructions.indexOf("Use wake.");
+    const spaceIdx = instructions.indexOf("Always log dates.");
+    const botIdx = instructions.indexOf("Be brief.");
+    expect(opIdx).toBeGreaterThan(0);
+    expect(spaceIdx).toBeGreaterThan(opIdx);
+    expect(botIdx).toBeGreaterThan(spaceIdx);
+  });
+
+  it("leaves appends out when the bot's instructions already carry them", () => {
+    const instructions = userTurnInstructions({
+      ...base,
+      botInstructions: "Be brief. Use wake. Always log dates.",
       operatorInstruction: " Use wake. ",
+      spaceSystemPromptAppend: " Always log dates. ",
     });
     expect(instructions.filter((block) => block.includes("Use wake."))).toEqual([
-      "Be brief. Use wake.",
+      "Be brief. Use wake. Always log dates.",
     ]);
+    expect(instructions.filter((block) => block.includes("Always log dates."))).toEqual([
+      "Be brief. Use wake. Always log dates.",
+    ]);
+  });
+
+  it("renders a read-only base system prompt preview without platform branding", () => {
+    const preview = renderBaseSystemPromptPreview();
+    expect(preview).toContain("Use the computer only when");
+    expect(preview).toContain("Prefer tools over claiming you already did the work.");
+    expect(preview).not.toContain("You run on Rakazo");
   });
 
   it("collapses identical blocks and empties, but never a block that merely contains another", () => {

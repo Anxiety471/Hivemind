@@ -20,6 +20,8 @@ const memory = vi.hoisted(() => ({
   disconnectProvider: vi.fn(),
   roamer: vi.fn(),
   setRoamer: vi.fn(),
+  systemPrompt: vi.fn(),
+  setSystemPrompt: vi.fn(),
 }));
 vi.mock("../../lib/query/rpc", () => {
   const client = { memory };
@@ -81,6 +83,11 @@ beforeEach(() => {
     lastReport: [],
     retryAt: null,
     retryAttempt: 0,
+  });
+  memory.systemPrompt.mockResolvedValue({
+    basePromptPreview: "Base prompt preview.",
+    append: "",
+    hasHostAppend: false,
   });
   host = document.createElement("div");
   document.body.append(host);
@@ -414,4 +421,34 @@ it("still shows a connection whose provider the server does not describe", async
   expect(host.textContent).toContain("retired");
   expect(() => button("Edit")).toThrow();
   expect(button("Disconnect")).toBeDefined();
+});
+
+it("shows the base system prompt preview and saves Space system prompt additions", async () => {
+  memory.systemPrompt.mockResolvedValue({
+    basePromptPreview: "Canonical base prompt text.",
+    append: "Initial rule.",
+    hasHostAppend: true,
+  });
+  memory.setSystemPrompt.mockResolvedValue({
+    basePromptPreview: "Canonical base prompt text.",
+    append: "Updated rule.",
+    hasHostAppend: true,
+  });
+  await render(null);
+  expect(host.textContent).toContain("Host append file is also active.");
+  expect(host.textContent).toContain("Canonical base prompt text.");
+  const textarea = host.querySelector("textarea");
+  if (!textarea) throw new Error("Missing system prompt textarea");
+  expect(textarea.value).toBe("Initial rule.");
+  expect(button("Save prompt").disabled).toBe(true);
+
+  const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+  await act(async () => {
+    set?.call(textarea, "Updated rule.");
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await settle();
+  expect(button("Save prompt").disabled).toBe(false);
+  await click(button("Save prompt"));
+  expect(memory.setSystemPrompt).toHaveBeenCalledWith({ append: "Updated rule." });
 });

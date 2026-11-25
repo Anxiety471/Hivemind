@@ -675,6 +675,7 @@ model Space {
   organization                Organization                 @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   name                        String
   isDefault                   Boolean                      @default(false)
+  systemPromptAppend          String?
   createdByUserId             String?
   createdByUser               User?                        @relation("SpaceCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
   createdAt                   DateTime                     @default(now())

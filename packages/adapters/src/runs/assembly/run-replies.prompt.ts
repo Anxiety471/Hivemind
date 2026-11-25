@@ -8,7 +8,7 @@ import { messageUserMaxLength } from "../lifecycle/user-progress.js";
 import { NO_RESPONSE } from "./silent-reply.js";
 
 export function longWorkProgressGuidance(maxLength = messageUserMaxLength()): string {
-  return `Send progress updates only when the work will take minutes — long computer tasks or multi-step jobs — never for quick replies and never to announce that you are starting. The one exception: once you are working in a browser or on a desktop on a task that will take a few minutes, tell the person right away with message_user that it will take a while. Even then send at most a few brief updates (a sentence or two each), not one per tool call, and do not narrate routine steps. Thinking stays private. message_user is capped at ${maxLength} characters and will be silently cut off if you exceed it \u2014 never put your final answer, a report, or any long-form deliverable in it. Always put the complete final answer in your normal reply, never split across message_user calls, and never assume a message_user update already delivered your content.`;
+  return `Send brief 1–2 sentence progress updates with message_user only for multi-minute tasks (right away once starting long browser/desktop work), never for quick replies or routine steps. Thinking stays private. message_user is capped at ${maxLength} characters; always put the complete final answer in your normal reply.`;
 }
 
 export function messagesModeReplyGuidance(maxLength = messageUserMaxLength()): string {

@@ -1,5 +1,5 @@
 import { useLingui } from "@lingui/react/macro";
-import { isArchiveMemoryPath } from "@rakazo/contracts";
+import { isArchiveMemoryPath, SYSTEM_PROMPT_APPEND_MAX_CHARS } from "@rakazo/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { useFocusEffect, useRouter } from "expo-router";
 import { useCallback, useEffect, useState } from "react";
@@ -62,6 +62,19 @@ export default function MemoryScreen() {
     stale: [roamerRead.queryKey],
     onSaved: (saved) => queryClient.setQueryData(roamerRead.queryKey, saved),
   });
+  const systemPromptRead = rpcQuery("memory/systemPrompt");
+  const { data: systemPrompt } = useQuery(systemPromptRead, queryClient);
+  const [promptDraft, setPromptDraft] = useState("");
+  useEffect(() => {
+    if (systemPrompt) setPromptDraft(systemPrompt.append);
+  }, [systemPrompt?.append]);
+  const promptSave = useSave({
+    save: async (append: string, send) => send("memory/setSystemPrompt", { append }),
+    stale: [systemPromptRead.queryKey],
+    onSaved: (saved) => queryClient.setQueryData(systemPromptRead.queryKey, saved),
+  });
+  const promptDirty =
+    systemPrompt !== undefined && promptDraft.trim() !== systemPrompt.append.trim();
   const [intervalDraft, setIntervalDraft] = useState("360");
   useEffect(() => {
     if (roamer) setIntervalDraft(String(roamer.intervalMinutes));
@@ -133,6 +146,35 @@ export default function MemoryScreen() {
               />
             ))}
           </SettingsGroup>
+        ) : null}
+        <SettingsGroup
+          label={t`System prompt append`}
+          footer={systemPrompt?.hasHostAppend ? t`Host append file is also active.` : undefined}
+        >
+          <TextInput
+            accessibilityLabel={t`Append to system prompt`}
+            multiline
+            maxLength={SYSTEM_PROMPT_APPEND_MAX_CHARS}
+            value={promptDraft}
+            editable={Boolean(systemPrompt) && !promptSave.pending}
+            onChangeText={(value) => {
+              setPromptDraft(value);
+              promptSave.reset();
+            }}
+            style={styles.promptInput}
+          />
+          {promptDirty ? (
+            <SettingsRow
+              accessibilityRole="button"
+              onPress={() => promptSave.run(promptDraft)}
+              title={promptSave.pending ? t`Saving…` : t`Save system prompt`}
+            />
+          ) : null}
+        </SettingsGroup>
+        {promptSave.error ? (
+          <SettingsFooter>
+            {errorText(promptSave.error, t`Could not save system prompt additions`)}
+          </SettingsFooter>
         ) : null}
         <SettingsGroup footer={roamerStatus}>
           <SettingsSwitch
@@ -245,6 +287,14 @@ function createStyles() {
       fontSize: 17,
       textAlign: "right",
       paddingVertical: 0,
+    },
+    promptInput: {
+      minHeight: 88,
+      color: native.label,
+      fontSize: 15,
+      paddingHorizontal: 16,
+      paddingVertical: 12,
+      textAlignVertical: "top",
     },
     error: { color: mobileTokens().destructive, fontSize: 13 },
   });

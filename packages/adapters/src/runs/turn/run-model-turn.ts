@@ -171,6 +171,7 @@ function modelTurnRequest(
   const { computerInstruction, workspaceInstruction } = turn.computerInstructions;
   const {
     operatorInstruction,
+    spaceSystemPromptAppend,
     agentSkillsLine,
     botDirectory,
     historicalContext,
@@ -267,6 +268,7 @@ function modelTurnRequest(
           : disabledBuiltinTools,
       offeredFleetTools: offeredFleetTools(strategicBuiltins),
       operatorInstruction,
+      spaceSystemPromptAppend,
       offeredToolNames: new Set(tools.map((tool) => tool.name)),
       codeFirst,
       followUpsOffered: followUpsOffered(strategicBuiltins, ownerStartedRun),

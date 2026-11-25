@@ -192,8 +192,10 @@ export {
   SILENT_TOOL_CONTINUATION_PROMPT,
 } from "./runs/assembly/continuation.prompt.js";
 export * from "./runs/assembly/current-time.prompt.js";
+export { operatorInstruction } from "./runs/assembly/operator-instructions.js";
 export * from "./runs/assembly/run-runtime.js";
 export { createRunTrustLoaders } from "./runs/assembly/run-trust.js";
+export { renderBaseSystemPromptPreview } from "./runs/assembly/system-prompt.prompt.js";
 export * from "./runs/executor/executor.js";
 export * from "./runs/labs-env.js";
 export { notifyMemberMessage } from "./runs/lifecycle/run-notifications.js";

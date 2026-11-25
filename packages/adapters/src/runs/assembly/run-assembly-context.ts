@@ -398,6 +398,13 @@ export async function buildTurnPrompt(
   const sharedSpaceNote = people
     ? await loadSharedSpaceNote(deps.prisma, run.spaceId, run.userId)
     : undefined;
+  const spacePromptRow = await bestEffort(
+    "load space system prompt append",
+    deps.prisma.space.findUnique({
+      where: { id: run.spaceId },
+      select: { systemPromptAppend: true },
+    }),
+  );
   const prompt = [
     replyContext,
     routineNote,
@@ -472,6 +479,7 @@ export async function buildTurnPrompt(
     [renderBotDirectory(teammates), groupDirectory].filter(Boolean).join("\n\n") || undefined;
   return {
     operatorInstruction: await operatorInstruction(),
+    spaceSystemPromptAppend: spacePromptRow?.systemPromptAppend?.trim() || undefined,
     pluginLine,
     taughtSkillsLine,
     agentSkillsLine,

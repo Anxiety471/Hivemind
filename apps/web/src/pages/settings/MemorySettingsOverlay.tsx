@@ -1,5 +1,6 @@
 import { Trans, useLingui } from "@lingui/react/macro";
 import type { MemoryRoamerTarget, SpaceMemoryConfig } from "@rakazo/contracts";
+import { SYSTEM_PROMPT_APPEND_MAX_CHARS } from "@rakazo/contracts";
 import {
   Button,
   Dialog,
@@ -16,6 +17,7 @@ import {
   SectionHeading,
   Spinner,
   Switch,
+  Textarea,
   Toggle,
 } from "@rakazo/ui-web";
 import { useQuery } from "@tanstack/react-query";
@@ -172,6 +174,22 @@ export function MemorySettingsOverlay({
       rpc.memory.setRoamer(input),
     stale: [queries.memory.roamer.queryKey()],
   });
+  const systemPromptQuery = useQuery(queries.memory.systemPrompt.queryOptions());
+  const systemPrompt = systemPromptQuery.data;
+  const promptAppendId = useId();
+  const [promptDraft, setPromptDraft] = useState("");
+  useEffect(() => {
+    if (systemPrompt) setPromptDraft(systemPrompt.append);
+  }, [systemPrompt?.append]);
+  const promptSave = useSave({
+    save: async (append: string, rpc) => rpc.memory.setSystemPrompt({ append }),
+    stale: [queries.memory.systemPrompt.queryKey()],
+    onSaved: (saved) => {
+      setPromptDraft(saved.append);
+    },
+  });
+  const promptDirty =
+    systemPrompt !== undefined && promptDraft.trim() !== systemPrompt.append.trim();
   const intervalInputId = useId();
   const [intervalDraft, setIntervalDraft] = useState("360");
   const [intervalError, setIntervalError] = useState<string | null>(null);
@@ -212,7 +230,7 @@ export function MemorySettingsOverlay({
             : t`every ${Number(intervalDraft) / 60} hours`
           : t`every ${Number(intervalDraft)} minutes`
       : null;
-  const busy = change.pending || roamerChange.pending;
+  const busy = change.pending || roamerChange.pending || promptSave.pending;
 
   useEffect(() => {
     if (!config) return;
@@ -265,6 +283,68 @@ export function MemorySettingsOverlay({
           {error ? <p className="text-body-sm text-destructive">{error}</p> : null}
 
           <SpaceMemorySection />
+
+          <section
+            className="rounded-xl border border-border px-4 py-4"
+            data-testid="space-system-prompt"
+          >
+            <SectionHeading variant="heading">
+              <Trans>System prompt</Trans>
+            </SectionHeading>
+            {systemPrompt?.basePromptPreview ? (
+              <Disclosure
+                summary={
+                  <span className="text-body-sm text-muted-foreground">
+                    <Trans>View base prompt</Trans>
+                  </span>
+                }
+                className="mt-2"
+                contentClassName="mt-2"
+              >
+                <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-lg bg-muted/40 p-3 font-mono text-caption text-muted-foreground">
+                  {systemPrompt.basePromptPreview}
+                </pre>
+              </Disclosure>
+            ) : null}
+            <Field className="mt-3">
+              <FieldLabel htmlFor={promptAppendId}>
+                <Trans>Append to system prompt</Trans>
+              </FieldLabel>
+              <Textarea
+                id={promptAppendId}
+                rows={4}
+                maxLength={SYSTEM_PROMPT_APPEND_MAX_CHARS}
+                value={promptDraft}
+                disabled={!systemPrompt || promptSave.pending}
+                onChange={(event) => {
+                  setPromptDraft(event.target.value);
+                  promptSave.reset();
+                }}
+                className="font-mono text-body-sm"
+              />
+              {systemPrompt?.hasHostAppend ? (
+                <FieldDescription>
+                  <Trans>Host append file is also active.</Trans>
+                </FieldDescription>
+              ) : null}
+            </Field>
+            {promptSave.error ? (
+              <p role="alert" className="mt-2 text-body-sm text-destructive">
+                {errorText(promptSave.error, t`Could not save system prompt additions`)}
+              </p>
+            ) : null}
+            <div className="mt-3 flex justify-end">
+              <Button
+                variant="outline"
+                size="sm"
+                type="button"
+                disabled={!promptDirty || promptSave.pending}
+                onClick={() => promptSave.run(promptDraft)}
+              >
+                {promptSave.pending ? <Trans>Saving…</Trans> : <Trans>Save prompt</Trans>}
+              </Button>
+            </div>
+          </section>
 
           <section className="rounded-xl border border-border px-4 py-4">
             <div className="flex items-center justify-between gap-3">

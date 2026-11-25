@@ -33,6 +33,8 @@ import {
   MemoryPromptBudgetSchema,
   MemoryRoamerSettingsSchema,
   MemoryScopeSchema,
+  SpaceSystemPromptSchema,
+  SYSTEM_PROMPT_APPEND_MAX_CHARS,
 } from "./bot-memory.js";
 import {
   BotSecretMetadata,
@@ -171,6 +173,14 @@ export const botsRpc = {
         }),
       )
       .output(MemoryRoamerSettingsSchema),
+    systemPrompt: oc.output(SpaceSystemPromptSchema),
+    setSystemPrompt: oc
+      .input(
+        z.object({
+          append: z.string().max(SYSTEM_PROMPT_APPEND_MAX_CHARS),
+        }),
+      )
+      .output(SpaceSystemPromptSchema),
   },
   scratchpad: {
     list: oc
