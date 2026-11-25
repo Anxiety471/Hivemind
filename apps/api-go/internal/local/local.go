@@ -224,26 +224,33 @@ func (s *Server) ServeOrDecline(w http.ResponseWriter, r *http.Request, procedur
 // markExpectedFailure stands for: a warn, no 5xx, and no body for a caller that is not there.
 const StatusClientClosedRequest = 499
 
-// fail answers a failed request, or records that nobody is left to answer.
+// fail answers a failed request, or records that nobody is left to answer a 5xx.
 //
-// A request whose own context is done has a client that disconnected. Whatever failed after
-// that (context.Canceled, SQLSTATE 57014, a pool acquire under the canceled context) has no
-// one waiting for it, so it is logged as a disconnect and recorded as 499 — never as a 5xx,
-// which would blame the deployment for a browser navigating away (rpc-errors.ts:147-155).
-// A failure under a live context is unchanged: a 500 is logged with its cause and the error
-// envelope goes out.
+// A request whose own context is done has a client that disconnected. A failure that would
+// otherwise be a 5xx — context.Canceled, SQLSTATE 57014, a pool acquire under the canceled
+// context — has no one waiting for it, so it is logged as a disconnect and recorded as 499,
+// never as a 5xx that would blame the deployment for a browser navigating away
+// (rpc-errors.ts:147-155 suppresses every failure that is not an oRPC error). A 4xx under a
+// canceled request keeps its status and envelope, as TypeScript's own oRPC errors do. A failure
+// under a live context is unchanged.
 func (s *Server) fail(w http.ResponseWriter, r *http.Request, procedure string, failure *orpc.Error) {
-	if r.Context().Err() != nil {
-		s.config.Logger.Warn("client disconnected", "procedure", procedure, "error", failure.Err())
-		// Status only: the body would go to a closed connection, and the completion line (and
-		// the gateway's, through this writer) must not count the request as answered or failed.
-		w.WriteHeader(StatusClientClosedRequest)
-		return
-	}
 	if failure.Status >= 500 {
+		if r.Context().Err() != nil {
+			s.clientDisconnected(w, procedure, failure.Err())
+			return
+		}
 		s.config.Logger.Error(procedure+" failed", "error", failure.Err())
 	}
 	orpc.WriteError(w, failure)
+}
+
+// clientDisconnected records a request whose client went away before its 5xx could be answered:
+// a warn naming the cause, and status 499 with no body. The status is what nginx calls a closed
+// client request; writing it (headers only) is what makes the completion line here — and the
+// gateway's, through the same writer — count 499 instead of a 5xx.
+func (s *Server) clientDisconnected(w http.ResponseWriter, procedure string, cause error) {
+	s.config.Logger.Warn("client disconnected", "procedure", procedure, "error", cause)
+	w.WriteHeader(StatusClientClosedRequest)
 }
 
 func (s *Server) serve(w http.ResponseWriter, r *http.Request, procedure string) (declined bool) {
@@ -260,7 +267,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, procedure string)
 	status.Header().Set("Cache-Control", "no-store")
 
 	if r.Method != http.MethodPost {
-		orpc.WriteError(status, orpc.New("METHOD_NOT_SUPPORTED", http.StatusMethodNotAllowed, "Method Not Supported"))
+		s.fail(status, r, procedure, orpc.New("METHOD_NOT_SUPPORTED", http.StatusMethodNotAllowed, "Method Not Supported"))
 		s.log(r, procedure, status.Status(), started)
 		return
 	}
@@ -268,7 +275,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, procedure string)
 		if s.config.BuildID != "" {
 			status.Header().Set("x-rakazo-build", s.config.BuildID)
 		}
-		orpc.WriteError(status, orpc.New("CLIENT_UPDATE_REQUIRED", 426, "Update required"))
+		s.fail(status, r, procedure, orpc.New("CLIENT_UPDATE_REQUIRED", 426, "Update required"))
 		s.log(r, procedure, status.Status(), started)
 		return
 	}
@@ -324,6 +331,13 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, procedure string)
 		// anything else answering this is a bug, never a silent success.
 		if !handler.MayDecline {
 			s.fail(status, r, procedure, orpc.Internal())
+			s.log(r, procedure, status.Status(), started)
+			return false
+		}
+		if r.Context().Err() != nil {
+			// A request the client abandoned is not handed to the proxy: nothing would read the
+			// answer, and the proxy's failed upstream call would be logged as an outage and a 503.
+			s.clientDisconnected(status, procedure, r.Context().Err())
 			s.log(r, procedure, status.Status(), started)
 			return false
 		}

@@ -132,3 +132,29 @@ func TestFailWithLiveContextIsUnchanged(t *testing.T) {
 		t.Fatalf("503 line = %v", sink.records)
 	}
 }
+
+// TestFailUnderCancelKeepsA4xx: only a failure that would be a 5xx becomes a disconnect. A 4xx
+// keeps its status and envelope, as TypeScript's own oRPC errors do (rpc-errors.ts:147-155).
+func TestFailUnderCancelKeepsA4xx(t *testing.T) {
+	sink := &capturedLog{}
+	server := &Server{config: Config{Logger: slog.New(slog.NewJSONHandler(sink, nil))}}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	request := httptest.NewRequest(http.MethodPost, "/rpc/threads/get", nil).WithContext(ctx)
+	recorder := httptest.NewRecorder()
+
+	server.fail(recorder, request, "threads.get", orpc.NotFound("Not Found"))
+
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want the 4xx kept", recorder.Code)
+	}
+	if !strings.Contains(recorder.Body.String(), `"code":"NOT_FOUND"`) {
+		t.Fatalf("body = %q, want the not-found envelope", recorder.Body.String())
+	}
+	if lines := sink.matching("client disconnected"); len(lines) != 0 {
+		t.Fatalf("a 4xx was recorded as a disconnect: %v", lines)
+	}
+	if level := sink.count("ERROR"); level != 0 {
+		t.Fatalf("ERROR lines = %d, want 0", level)
+	}
+}

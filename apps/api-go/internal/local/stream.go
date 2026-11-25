@@ -18,7 +18,9 @@ import (
 func (s *Server) serveStream(w http.ResponseWriter, r *http.Request, procedure string, stream *Stream, actor db.Actor, input orpc.Input, ctx context.Context) {
 	signals, stop, failure := stream.Follow(ctx, actor, input)
 	if failure != nil {
-		orpc.WriteError(w, failure)
+		// The follow step runs a procedure's own checks (boards.subscribe's Gate, say) before any
+		// frame: a client that went away in that window is a disconnect, not a 5xx.
+		s.fail(w, r, procedure, failure)
 		return
 	}
 	defer stop()

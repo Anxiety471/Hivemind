@@ -22,8 +22,8 @@ type Error struct {
 	Data any
 	// Cause is the error this failure was mapped from, kept for the server's own log so a
 	// real 500 is never anonymous (rpc-errors.ts logs the cause under "<procedure> failed").
-	// It is never part of the wire envelope.
-	Cause error
+	// It is never part of the wire envelope: the type says so, not just the call sites.
+	Cause error `json:"-"`
 }
 
 func (e *Error) Error() string { return fmt.Sprintf("%s: %s", e.Code, e.Message) }
