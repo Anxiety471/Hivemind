@@ -12,6 +12,7 @@ import {
   isTicketCompletedStatus,
   mergeTicketPullRequests,
   normalizeTicketDecision,
+  pullRequestMergeFinishesTicket,
   TicketDecisionSchema,
   TicketStatusSchema,
   UpdateTicketInput,
@@ -20,6 +21,7 @@ import { sliceWellFormed } from "@rakazo/core";
 import type { PrismaClient } from "@rakazo/db";
 import {
   allocateTicketNumber,
+  coerceTicketStatus,
   ensureBoard,
   findTicket,
   listTicketComments,
@@ -576,6 +578,9 @@ export async function createTicket(
     ? await loadSpaceMentionDirectory(deps, input.spaceId, input.userId)
     : { bots: [] };
   const normalizedDecision = data.decision ? normalizeTicketDecision(data.decision) : undefined;
+  const pullRequests = data.pullRequests ? mergeTicketPullRequests([], data.pullRequests) : [];
+  // Linking work that already merged records finished work.
+  const finished = pullRequestMergeFinishesTicket([], pullRequests);
   const row = await deps.prisma.$transaction(async (tx) => {
     const number = await allocateTicketNumber(tx, board.id);
     return tx.ticket.create({
@@ -592,10 +597,11 @@ export async function createTicket(
         workerBotIds,
         createdByBotId: input.botId ?? null,
         createdByUserId: input.userId,
-        ...(normalizedDecision ? { decision: toDecisionJsonInput(normalizedDecision) } : {}),
-        ...(data.pullRequests
-          ? { pullRequests: mergeTicketPullRequests([], data.pullRequests) }
+        ...(normalizedDecision && !finished
+          ? { decision: toDecisionJsonInput(normalizedDecision) }
           : {}),
+        ...(data.pullRequests ? { pullRequests } : {}),
+        ...(finished ? { status: "done", completedAt: new Date() } : {}),
       },
     });
   });
@@ -728,11 +734,23 @@ export async function updateTicket(
           ? [current.assigneeBotId]
           : [],
     );
+    const storedPullRequests = data.pullRequests ? readStoredTicketPullRequests(current) : [];
+    const pullRequests = data.pullRequests
+      ? mergeTicketPullRequests(storedPullRequests, data.pullRequests)
+      : undefined;
+    // Recording a merge that leaves nothing open finishes the ticket, as the webhook does, unless
+    // the same write sets a status itself.
+    const finished =
+      data.status === undefined &&
+      pullRequests !== undefined &&
+      !isTicketCompletedStatus(coerceTicketStatus(current.status)) &&
+      pullRequestMergeFinishesTicket(storedPullRequests, pullRequests);
+    const status: TicketStatus | undefined = finished ? "done" : data.status;
     const shouldClearPendingDecision =
-      normalizedDecision === undefined &&
-      data.status !== undefined &&
-      data.status !== "blocked" &&
-      data.status !== "review" &&
+      (normalizedDecision === undefined || finished) &&
+      status !== undefined &&
+      status !== "blocked" &&
+      status !== "review" &&
       current.decision != null &&
       hasPendingTicketDecision({ decision: readTicketDecision(current) });
     const row = await tx.ticket.update({
@@ -745,27 +763,21 @@ export async function updateTicket(
         ...(nextWorkers !== undefined
           ? { workerBotIds: nextWorkers, assigneeBotId: nextWorkers[0] ?? null }
           : {}),
-        ...(normalizedDecision !== undefined
+        // A finished ticket waits on nobody, so a question sent with the merge is dropped.
+        ...(normalizedDecision !== undefined && !finished
           ? { decision: normalizedDecision }
           : shouldClearPendingDecision
             ? { decision: Prisma.DbNull }
             : {}),
-        ...(data.pullRequests
+        ...(pullRequests ? { pullRequests } : {}),
+        ...(status !== undefined
           ? {
-              pullRequests: mergeTicketPullRequests(
-                readStoredTicketPullRequests(current),
-                data.pullRequests,
-              ),
-            }
-          : {}),
-        ...(data.status !== undefined
-          ? {
-              status: data.status,
-              completedAt: isTicketCompletedStatus(data.status)
+              status,
+              completedAt: isTicketCompletedStatus(status)
                 ? (current.completedAt ?? new Date())
                 : null,
               // Reopening takes a ticket back out of the archive.
-              ...(isTicketCompletedStatus(data.status) ? {} : { archivedAt: null }),
+              ...(isTicketCompletedStatus(status) ? {} : { archivedAt: null }),
             }
           : {}),
       },

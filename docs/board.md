@@ -22,5 +22,6 @@ Done or Won't do returns it to the board.
 A ticket can link the pull requests that deliver it: paste a pull request link on the ticket, or
 let the bot link the ones it opens or tracks. Each link shows whether it is open, merged or
 closed. If the repository sends pull request events to one of your bots (the URL and key of a
-[Git event routine](./routines.md#git-event)), links follow their pull requests on their own, and a
-merge that leaves no linked pull request open moves the ticket to **Done**.
+[Git event routine](./routines.md#git-event)), links follow their pull requests on their own.
+Whenever a merge is recorded, by those events or by a bot, and no linked pull request is left
+open, the ticket moves to **Done**.

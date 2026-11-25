@@ -160,4 +160,52 @@ describe.skipIf(!enabled)("tickets following their linked pull requests (Postgre
       { url: "https://git.example.com/acme/app/pull/9", state: "open" },
     ]);
   });
+
+  it("finishes a blocked ticket when an update records the merge, dropping the question sent with it", async () => {
+    const ticket = await linkedTicket();
+    const updated = await updateTicket(deps(), {
+      spaceId,
+      userId,
+      id: ticket.id,
+      pullRequests: [
+        { url: first, state: "merged" },
+        { url: second, state: "closed" },
+      ],
+      decision: {
+        question: "Close it now that it merged?",
+        options: ["Close", "Keep open", "Leave blocked"],
+        recommended: "Close",
+      },
+    });
+    if ("error" in updated) throw new Error(updated.error);
+    expect(updated.ticket.status).toBe("done");
+    expect(updated.ticket.completedAt).not.toBeNull();
+    const row = await system.ticket.findUniqueOrThrow({ where: { id: ticket.id } });
+    expect(row.decision).toBeNull();
+  });
+
+  it("keeps the status an update sets alongside a merge", async () => {
+    const ticket = await linkedTicket();
+    const updated = await updateTicket(deps(), {
+      spaceId,
+      userId,
+      id: ticket.id,
+      status: "doing",
+      pullRequests: [{ url: first, state: "merged" }],
+    });
+    if ("error" in updated) throw new Error(updated.error);
+    expect(updated.ticket.status).toBe("doing");
+  });
+
+  it("creates a ticket for already merged work as done", async () => {
+    const created = await createTicket(deps(), {
+      spaceId,
+      userId,
+      title: "Ship the import",
+      pullRequests: [{ url: first, state: "merged" }],
+    });
+    if ("error" in created) throw new Error(created.error);
+    expect(created.ticket.status).toBe("done");
+    expect(created.ticket.completedAt).not.toBeNull();
+  });
 });

@@ -10,7 +10,7 @@ import {
   normalizeTicketDecision,
   parseTicketRef,
   pullRequestLabel,
-  pullRequestsFinishTicket,
+  pullRequestMergeFinishesTicket,
   TICKET_PRIORITIES,
   TICKET_STATUSES,
   TicketDecisionInputSchema,
@@ -107,22 +107,24 @@ describe("pull request links", () => {
     ]);
   });
 
-  it("finishes a ticket only when nothing is open and something merged", () => {
+  it("finishes a ticket only on a new merge that leaves nothing open", () => {
     const url = "https://github.com/acme/app/pull/1";
-    expect(pullRequestsFinishTicket([])).toBe(false);
-    expect(pullRequestsFinishTicket([{ url, state: "closed" }])).toBe(false);
+    const other = `${url}0`;
+    const merged = { url, state: "merged" as const };
+    expect(pullRequestMergeFinishesTicket([], [])).toBe(false);
+    expect(pullRequestMergeFinishesTicket([], [{ url, state: "closed" }])).toBe(false);
+    expect(pullRequestMergeFinishesTicket([], [merged, { url: other, state: "open" }])).toBe(false);
+    expect(pullRequestMergeFinishesTicket([], [merged, { url: other, state: "closed" }])).toBe(
+      true,
+    );
+    expect(pullRequestMergeFinishesTicket([{ url, state: "open" }], [merged])).toBe(true);
+    // Closing the last open link after an earlier merge records no new merge.
     expect(
-      pullRequestsFinishTicket([
-        { url, state: "merged" },
-        { url: `${url}0`, state: "open" },
-      ]),
+      pullRequestMergeFinishesTicket(
+        [merged, { url: other, state: "open" }],
+        [merged, { url: other, state: "closed" }],
+      ),
     ).toBe(false);
-    expect(
-      pullRequestsFinishTicket([
-        { url, state: "merged" },
-        { url: `${url}0`, state: "closed" },
-      ]),
-    ).toBe(true);
   });
 
   it("rejects a ticket update linking something that is not a pull request", () => {

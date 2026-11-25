@@ -166,11 +166,18 @@ export function mergeTicketPullRequests(
   return [...next].map(([url, state]) => ({ url, state }));
 }
 
-/** A ticket's work is finished when every link it tracks is settled and at least one merged. */
-export function pullRequestsFinishTicket(pullRequests: readonly TicketPullRequest[]): boolean {
+/**
+ * Whether a write that turns a ticket's links from `before` into `after` finishes its work: it
+ * records a merge the ticket did not have, and no linked pull request is left open.
+ */
+export function pullRequestMergeFinishesTicket(
+  before: readonly TicketPullRequest[],
+  after: readonly TicketPullRequest[],
+): boolean {
+  const merged = new Set(before.filter((item) => item.state === "merged").map((item) => item.url));
   return (
-    pullRequests.some((item) => item.state === "merged") &&
-    pullRequests.every((item) => item.state !== "open")
+    after.some((item) => item.state === "merged" && !merged.has(item.url)) &&
+    after.every((item) => item.state !== "open")
   );
 }
 
