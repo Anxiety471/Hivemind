@@ -1,6 +1,7 @@
 import type {
   TicketDecision,
   TicketDecisionInput,
+  TicketIssueInput,
   TicketPullRequestInput,
   TicketStatus,
 } from "@rakazo/contracts";
@@ -10,7 +11,7 @@ import {
   DecideTicketInput,
   hasPendingTicketDecision,
   isTicketCompletedStatus,
-  mergeTicketPullRequests,
+  mergeTicketLinks,
   normalizeTicketDecision,
   pullRequestMergeFinishesTicket,
   TicketDecisionSchema,
@@ -26,6 +27,7 @@ import {
   findTicket,
   listTicketComments,
   Prisma,
+  readStoredTicketIssues,
   readStoredTicketPullRequests,
   readTicketDecision,
   toTicketCommentDto,
@@ -524,6 +526,8 @@ export async function createTicket(
     assigneeBotId?: string | null;
     decision?: TicketDecisionInput | null;
     pullRequests?: TicketPullRequestInput[];
+    issues?: TicketIssueInput[];
+    repository?: string | null;
   },
 ) {
   const parsed = CreateTicketInput.safeParse(input);
@@ -578,7 +582,7 @@ export async function createTicket(
     ? await loadSpaceMentionDirectory(deps, input.spaceId, input.userId)
     : { bots: [] };
   const normalizedDecision = data.decision ? normalizeTicketDecision(data.decision) : undefined;
-  const pullRequests = data.pullRequests ? mergeTicketPullRequests([], data.pullRequests) : [];
+  const pullRequests = data.pullRequests ? mergeTicketLinks([], data.pullRequests) : [];
   // Linking work that already merged records finished work.
   const finished = pullRequestMergeFinishesTicket([], pullRequests);
   const row = await deps.prisma.$transaction(async (tx) => {
@@ -601,6 +605,8 @@ export async function createTicket(
           ? { decision: toDecisionJsonInput(normalizedDecision) }
           : {}),
         ...(data.pullRequests ? { pullRequests } : {}),
+        ...(data.issues ? { issues: mergeTicketLinks([], data.issues) } : {}),
+        ...(data.repository ? { repository: data.repository } : {}),
         ...(finished ? { status: "done", completedAt: new Date() } : {}),
       },
     });
@@ -644,6 +650,8 @@ export async function updateTicket(
     assigneeBotId?: string | null;
     decision?: TicketDecisionInput | null;
     pullRequests?: TicketPullRequestInput[];
+    issues?: TicketIssueInput[];
+    repository?: string | null;
   },
 ) {
   const parsed = UpdateTicketInput.safeParse(input);
@@ -736,7 +744,7 @@ export async function updateTicket(
     );
     const storedPullRequests = data.pullRequests ? readStoredTicketPullRequests(current) : [];
     const pullRequests = data.pullRequests
-      ? mergeTicketPullRequests(storedPullRequests, data.pullRequests)
+      ? mergeTicketLinks(storedPullRequests, data.pullRequests)
       : undefined;
     // Recording a merge that leaves nothing open finishes the ticket, as the webhook does, unless
     // the same write sets a status itself.
@@ -770,6 +778,10 @@ export async function updateTicket(
             ? { decision: Prisma.DbNull }
             : {}),
         ...(pullRequests ? { pullRequests } : {}),
+        ...(data.issues
+          ? { issues: mergeTicketLinks(readStoredTicketIssues(current), data.issues) }
+          : {}),
+        ...(data.repository !== undefined ? { repository: data.repository } : {}),
         ...(status !== undefined
           ? {
               status,

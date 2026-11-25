@@ -19,6 +19,8 @@ export function laneHTicketCases(system: System): Case[] {
         bot?: boolean;
         decision?: unknown;
         pullRequests?: unknown;
+        issues?: unknown;
+        repository?: unknown;
       } = {},
     ) =>
     async (seeded: Seeded) => {
@@ -58,6 +60,8 @@ export function laneHTicketCases(system: System): Case[] {
           priority: "normal",
           ...(options.decision !== undefined ? { decision: options.decision } : {}),
           ...(options.pullRequests !== undefined ? { pullRequests: options.pullRequests } : {}),
+          ...(options.issues !== undefined ? { issues: options.issues } : {}),
+          ...(options.repository !== undefined ? { repository: options.repository } : {}),
           createdByUserId: seeded.userId,
           createdAt: OLD,
           updatedAt: OLD,
@@ -136,6 +140,23 @@ export function laneHTicketCases(system: System): Case[] {
       seedLabOnly,
       { ignoreSignals: true },
     ),
+    // Issues carry the same normalized link form as pull requests, and the repository link drops
+    // its trailing ".git".
+    c(
+      "tickets.create",
+      "tkd-create",
+      "with-issues-and-repository",
+      {
+        title: "Track the rollout issue",
+        issues: [
+          { url: " HTTPS://GitHub.com/Acme/App/Issues/17/files " },
+          { url: "https://gitlab.com/group/project/-/issues/7", state: "closed" },
+        ],
+        repository: " HTTPS://GitHub.com/Acme/App.GIT ",
+      },
+      seedLabOnly,
+      { ignoreSignals: true },
+    ),
     c(
       "tickets.update",
       "tkd-update",
@@ -201,6 +222,52 @@ export function laneHTicketCases(system: System): Case[] {
         id: "__s-tkt__",
         decision: { question: "Pick?", options: ["One", "Two"], recommended: "One" },
       },
+      seedTicket(),
+    ),
+    // The input list replaces the recorded issues: the uppercase link normalizes to the stored one
+    // and keeps its recorded state, a new link starts open unless stated, and an omitted link is
+    // unlinked. The repository link is set in the same write.
+    c(
+      "tickets.update",
+      "tkd-update",
+      "issues-replace-and-repository",
+      {
+        id: "__s-tkt__",
+        issues: [
+          { url: " HTTPS://GitHub.com/Acme/App/Issues/241/ " },
+          { url: "https://example.com/o/r/issues/9", state: "closed" },
+        ],
+        repository: "https://github.com/acme/app/tree/main",
+      },
+      seedTicket({
+        issues: [
+          { url: "https://github.com/acme/app/issues/241", state: "closed" },
+          { url: "https://example.com/o/r/issues/2", state: "open" },
+        ],
+      }),
+    ),
+    // Null removes a recorded repository link.
+    c(
+      "tickets.update",
+      "tkd-update",
+      "repository-cleared",
+      { id: "__s-tkt__", repository: null },
+      seedTicket({ repository: "https://github.com/acme/app" }),
+    ),
+    // A pull request link is refused as an issue and as a repository.
+    c(
+      "tickets.create",
+      "tkd-create",
+      "issue-refuses-pull-request",
+      { title: "Wrong link", issues: [{ url: "https://github.com/acme/app/pull/241" }] },
+      seedLabOnly,
+      { ignoreSignals: true },
+    ),
+    c(
+      "tickets.update",
+      "tkd-update",
+      "repository-refuses-pull-request",
+      { id: "__s-tkt__", repository: "https://github.com/acme/app/pull/241" },
       seedTicket(),
     ),
     c(

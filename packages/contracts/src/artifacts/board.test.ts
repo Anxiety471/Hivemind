@@ -5,16 +5,18 @@ import {
   GetTicketInput,
   hasPendingTicketDecision,
   isTicketCompletedStatus,
-  mergeTicketPullRequests,
+  mergeTicketLinks,
+  normalizeIssueUrl,
   normalizePullRequestUrl,
+  normalizeRepositoryUrl,
   normalizeTicketDecision,
   parseTicketRef,
-  pullRequestLabel,
   pullRequestMergeFinishesTicket,
   TICKET_PRIORITIES,
   TICKET_STATUSES,
   TicketDecisionInputSchema,
   TicketSchema,
+  ticketLinkLabel,
   UpdateTicketInput,
 } from "./board.js";
 
@@ -82,10 +84,12 @@ describe("pull request links", () => {
   });
 
   it("labels a link by its repository and number", () => {
-    expect(pullRequestLabel("https://github.com/acme/app/pull/241")).toBe("acme/app#241");
-    expect(pullRequestLabel("https://gitlab.example.com/group/sub/proj/-/merge_requests/5")).toBe(
+    expect(ticketLinkLabel("https://github.com/acme/app/pull/241")).toBe("acme/app#241");
+    expect(ticketLinkLabel("https://gitlab.example.com/group/sub/proj/-/merge_requests/5")).toBe(
       "sub/proj#5",
     );
+    expect(ticketLinkLabel("https://github.com/acme/app/issues/9")).toBe("acme/app#9");
+    expect(ticketLinkLabel("https://gitlab.example.com/group/sub/proj")).toBe("group/sub/proj");
   });
 
   it("replaces the list in input order, keeping recorded states unless the input sets one", () => {
@@ -93,7 +97,7 @@ describe("pull request links", () => {
     const b = "https://github.com/acme/app/pull/2";
     const c = "https://github.com/acme/app/pull/3";
     expect(
-      mergeTicketPullRequests(
+      mergeTicketLinks(
         [
           { url: a, state: "merged" },
           { url: b, state: "open" },
@@ -137,6 +141,58 @@ describe("pull request links", () => {
   });
 });
 
+describe("issue and repository links", () => {
+  it.each([
+    ["https://GitHub.com/Acme/App/issues/7#issuecomment-1", "https://github.com/acme/app/issues/7"],
+    [
+      "https://gitlab.example.com/group/proj/-/issues/12/designs",
+      "https://gitlab.example.com/group/proj/-/issues/12",
+    ],
+  ])("normalizes the issue %s", (value, expected) => {
+    expect(normalizeIssueUrl(value)).toBe(expected);
+  });
+
+  it("tells issues and pull requests apart", () => {
+    expect(normalizeIssueUrl("https://github.com/acme/app/pull/7")).toBeNull();
+    expect(normalizePullRequestUrl("https://github.com/acme/app/issues/7")).toBeNull();
+  });
+
+  it.each([
+    ["https://github.com/Acme/App", "https://github.com/acme/app"],
+    ["https://github.com/acme/app.git", "https://github.com/acme/app"],
+    ["https://github.com/acme/app/?tab=readme", "https://github.com/acme/app"],
+    ["https://gitlab.example.com/group/sub/proj", "https://gitlab.example.com/group/sub/proj"],
+  ])("normalizes the repository %s", (value, expected) => {
+    expect(normalizeRepositoryUrl(value)).toBe(expected);
+  });
+
+  it.each([
+    ["a host alone", "https://github.com"],
+    ["an owner alone", "https://github.com/acme"],
+    ["a pull request", "https://github.com/acme/app/pull/7"],
+    ["an issue", "https://github.com/acme/app/issues/7"],
+    ["plain http", "http://github.com/acme/app"],
+  ])("rejects %s as a repository", (_label, value) => {
+    expect(normalizeRepositoryUrl(value)).toBeNull();
+  });
+
+  it("normalizes issue and repository input and removes a repository with null", () => {
+    const parsed = UpdateTicketInput.parse({
+      id: "ticket-1",
+      issues: [{ url: "https://github.com/Acme/App/issues/7" }],
+      repository: null,
+    });
+    expect(parsed).toMatchObject({
+      issues: [{ url: "https://github.com/acme/app/issues/7" }],
+      repository: null,
+    });
+    expect(
+      CreateTicketInput.safeParse({ title: "x", repository: "https://github.com/acme/app/pull/7" })
+        .success,
+    ).toBe(false);
+  });
+});
+
 describe("ticket contracts", () => {
   const ticket = {
     id: "ticket-1",
@@ -158,6 +214,8 @@ describe("ticket contracts", () => {
     updatedAt: "2026-01-01T00:00:00.000Z",
     completedAt: null,
     pullRequests: [],
+    issues: [],
+    repository: null,
   };
 
   it("accepts a ticket document and rejects unknown statuses", () => {
