@@ -18,6 +18,7 @@ import {
   filterBuiltinToolsForThread,
   SCHEDULE_TOOL_NAMES,
 } from "../../tools/schedule-tools.js";
+import { SKILL_MODE } from "../../tools/skill-mode.tool-definition.js";
 import { SKILL_TOOL_NAMES } from "../../tools/skill-tools.js";
 import { USER_COMPUTER_SCREEN_TOOLS } from "./run-tools-user-computer.js";
 
@@ -25,6 +26,7 @@ export const READ_ONLY_AGENT_TOOLS = new Set([
   // The script itself changes nothing, and it must run again each time it is called: every call
   // it makes is gated and recorded on its own, so a stored result would only be stale.
   CODE_MODE,
+  SKILL_MODE,
   "computer_observe",
   "list_files",
   "list_fleet",
@@ -179,6 +181,7 @@ export function selectBuiltinToolsForRun(options: {
     Boolean(options.cloudAgentCleanupEnabled),
   ).filter(
     (tool) =>
+      tool.name !== "skill_read" &&
       !disabled.has(tool.name) &&
       (options.trigger !== "created" || CREATED_RUN_TOOL_NAMES.has(tool.name)) &&
       (options.trigger !== BACKGROUND_HELPER_TRIGGER || !SUBAGENT_HIDDEN_TOOLS.has(tool.name)) &&
@@ -274,6 +277,7 @@ export function codeModeCallableTools(tools: readonly ConnectorTool[]): Connecto
  * short clock cannot hold.
  */
 const CODE_FIRST_DIRECT_TOOLS: ReadonlySet<string> = new Set([
+  SKILL_MODE,
   "shell",
   "ask_user",
   "message_user",

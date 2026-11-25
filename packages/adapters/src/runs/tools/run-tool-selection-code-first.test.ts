@@ -9,14 +9,10 @@ function tool(name: string): ConnectorTool {
 describe("codeFirstListedTools", () => {
   const listed = (names: string[]) => codeFirstListedTools(names.map(tool)).map((t) => t.name);
 
-  it("keeps code_mode, shell and the tools that talk to the person", () => {
-    expect(listed(["code_mode", "shell", "ask_user", "message_user", "request_secret"])).toEqual([
-      "code_mode",
-      "shell",
-      "ask_user",
-      "message_user",
-      "request_secret",
-    ]);
+  it("keeps code_mode, skill_mode, shell and the tools that talk to the person", () => {
+    expect(
+      listed(["code_mode", "skill_mode", "shell", "ask_user", "message_user", "request_secret"]),
+    ).toEqual(["code_mode", "skill_mode", "shell", "ask_user", "message_user", "request_secret"]);
   });
 
   it("keeps a tool a script cannot call, such as one that returns an image", () => {

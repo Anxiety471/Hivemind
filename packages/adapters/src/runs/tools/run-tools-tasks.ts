@@ -39,6 +39,7 @@ import {
 import {
   skillCreateFromTool,
   skillDeleteFromTool,
+  skillModeFromTool,
   skillReadFromTool,
   skillUpdateFromTool,
 } from "../../tools/skill-tools.js";
@@ -411,6 +412,35 @@ export const taskTools: ToolHandlers = {
       name: args.name ? String(args.name) : undefined,
     });
     return call.finish(cancelled);
+  },
+  async skill_mode(ctx, call) {
+    const { deps, run, bot } = ctx;
+    const { args } = call;
+    const names = Array.isArray(args.names)
+      ? args.names.filter((entry): entry is string => typeof entry === "string")
+      : undefined;
+    return call.finish(
+      await skillModeFromTool(
+        deps.prisma,
+        {
+          spaceId: run.spaceId,
+          userId: run.userId,
+          botId: bot.id,
+          ownerStartedRun: ctx.source.ownerStartedRun,
+          nonOwnerChatRun: ctx.source.messagingChannelRun,
+          offeredToolNames: new Set(ctx.tools.offered.map((tool) => tool.name)),
+        },
+        {
+          query: typeof args.query === "string" ? args.query : undefined,
+          name: typeof args.name === "string" ? args.name : undefined,
+          names,
+          file: typeof args.file === "string" ? args.file : undefined,
+          list: typeof args.list === "boolean" ? args.list : undefined,
+          source: typeof args.source === "string" ? args.source : undefined,
+          limit: typeof args.limit === "number" ? args.limit : undefined,
+        },
+      ),
+    );
   },
   async skill_read(ctx, call) {
     const { deps, run } = ctx;

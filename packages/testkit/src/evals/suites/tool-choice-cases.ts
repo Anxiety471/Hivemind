@@ -2,7 +2,13 @@ import type { ToolChoiceCase } from "./tool-choice.js";
 import { toolChoiceEvalCase } from "./tool-choice.js";
 
 /** Synthetic prompts only. Production-derived cases belong in a local --cases-file. */
-const PRODUCT_HELP = { anyOf: [{ tool: "skill_read", args: { name: "~rakazo" } }] };
+const PRODUCT_HELP: ToolChoiceCase["expect"] = {
+  anyOf: [
+    { tool: "skill_mode", args: { name: "~rakazo" } },
+    { tool: "skill_mode", args: { query: "~rakazo" } },
+    { tool: "skill_read", args: { name: "~rakazo" } },
+  ],
+};
 const OPS_GROUP = { name: "Ops", members: { Mira: "Runs infrastructure and on-call checks." } };
 
 export const TOOL_CHOICE_DEFINITIONS: ToolChoiceCase[] = [
@@ -305,7 +311,7 @@ export const TOOL_CHOICE_DEFINITIONS: ToolChoiceCase[] = [
     kind: "control",
     purpose: "General knowledge needs no product docs.",
     prompt: "What's the capital of Australia?",
-    expect: { notCalls: ["skill_read", "update_bot"] },
+    expect: { notCalls: ["skill_mode", "skill_read", "update_bot"] },
   },
   {
     id: "help-llm-concept",
@@ -313,7 +319,7 @@ export const TOOL_CHOICE_DEFINITIONS: ToolChoiceCase[] = [
     kind: "control",
     purpose: "Explaining a general concept needs no product docs.",
     prompt: "In two sentences, what is a large language model?",
-    expect: { notCalls: ["skill_read", "update_bot"] },
+    expect: { notCalls: ["skill_mode", "skill_read", "update_bot"] },
   },
   // Everyday tools.
   {
@@ -431,7 +437,13 @@ export const TOOL_CHOICE_DEFINITIONS: ToolChoiceCase[] = [
     purpose: "Load a built-in skill before using it.",
     prompt:
       "Interrogate this plan: we will cache every API response forever to make the app faster.",
-    expect: { calls: [{ tool: "skill_read", args: { name: "~interrogate" } }] },
+    expect: {
+      anyOf: [
+        { tool: "skill_mode", args: { name: "~interrogate" } },
+        { tool: "skill_mode", args: { query: "~interrogate" } },
+        { tool: "skill_read", args: { name: "~interrogate" } },
+      ],
+    },
   },
   {
     id: "fleet-spawn",
@@ -600,7 +612,7 @@ export const TOOL_CHOICE_DEFINITIONS: ToolChoiceCase[] = [
     kind: "control",
     purpose: "Simple arithmetic does not change settings.",
     prompt: "What's 17 times 23?",
-    expect: { settingsUnchanged: true, notCalls: ["skill_read", "web_search"] },
+    expect: { settingsUnchanged: true, notCalls: ["skill_mode", "skill_read", "web_search"] },
   },
   {
     id: "chat-feedback-tone",

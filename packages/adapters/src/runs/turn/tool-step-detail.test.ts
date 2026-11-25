@@ -135,8 +135,13 @@ describe("summarizeToolCallDetail", () => {
     ).toBeUndefined();
   });
 
-  it("extracts called skills from skill_read, use_tool, code_mode, and completions", () => {
+  it("extracts called skills from skill_read, skill_mode, use_tool, code_mode, and completions", () => {
     expect(summarizeToolCallSkills("skill_read", { name: "pr-watch" })).toEqual(["pr-watch"]);
+    expect(summarizeToolCallSkills("skill_mode", { name: "pr-watch" })).toEqual(["pr-watch"]);
+    expect(
+      summarizeToolCallSkills("skill_mode", { names: ["Tasks", "Computer", "tasks"] }),
+    ).toEqual(["Tasks", "Computer"]);
+    expect(summarizeToolCallSkills("skill_mode", { query: "deploy frontend" })).toBeUndefined();
     expect(
       summarizeToolCallSkills("use_tool", {
         name: "skill_read",
@@ -145,9 +150,9 @@ describe("summarizeToolCallDetail", () => {
     ).toEqual(["Tasks"]);
     expect(
       summarizeToolCallSkills("code_mode", {
-        code: 'await codemode.skill_read({ name: "pr-watch" }); await codemode.shell({ command: "ls" });',
+        code: 'await codemode.skill_read({ name: "pr-watch" }); await codemode.skill_mode({ names: ["Tasks", "History"] }); await codemode.shell({ command: "ls" });',
       }),
-    ).toEqual(["pr-watch"]);
+    ).toEqual(["pr-watch", "Tasks", "History"]);
     expect(summarizeToolCallSkills("shell", { command: "ls" })).toBeUndefined();
 
     expect(
@@ -156,6 +161,18 @@ describe("summarizeToolCallDetail", () => {
         result: { name: "PR Watch", content: "..." },
       }),
     ).toEqual(["PR Watch"]);
+    expect(
+      summarizeToolCompletionSkills({
+        name: "skill_mode",
+        result: { query: "deploy", loaded: ["Deploy Frontend"] },
+      }),
+    ).toEqual(["Deploy Frontend"]);
+    expect(
+      summarizeToolCompletionDetail({
+        name: "skill_mode",
+        result: { loaded: ["Tasks", "Computer"] },
+      }),
+    ).toBe("Tasks, Computer");
     expect(
       summarizeToolCompletionSkills({
         name: "code_mode",

@@ -434,8 +434,8 @@ describe("runtime context policy", () => {
     });
     const shellOutput = "synthetic shell output ".repeat(3000);
     context.messages.push(
-      call("read", "skill_read"),
-      result("read", "skill_read", skill),
+      call("read", "skill_mode"),
+      result("read", "skill_mode", skill),
       call("fleet", "list_fleet"),
       result(
         "fleet",
