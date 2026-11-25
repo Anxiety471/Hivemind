@@ -12,6 +12,7 @@ export {
   formatSharedSpaceNote,
   hostComputerInstruction,
   PRIVATE_WORKSPACE_INSTRUCTION,
+  PROACTIVE_POSTURE_INSTRUCTION,
   persistentComputerInstruction,
   renderBaseSystemPromptPreview,
   runIdentityInstruction,

@@ -3,6 +3,7 @@ import {
   connectedPluginsInstruction,
   contextToolsInstruction,
   dedupeInstructions,
+  PROACTIVE_POSTURE_INSTRUCTION,
   renderBaseSystemPromptPreview,
   taughtSkillsInstruction,
   userTurnInstructions,
@@ -208,11 +209,15 @@ describe("appends, prefix cache order, and duplicates", () => {
     ]);
   });
 
-  it("renders a read-only base system prompt preview without platform branding", () => {
+  it("renders a read-only base system prompt preview without platform branding or duplicate history block", () => {
     const preview = renderBaseSystemPromptPreview();
-    expect(preview).toContain("Use the computer only when");
+    expect(preview).toContain(PROACTIVE_POSTURE_INSTRUCTION);
+    expect(preview).toContain('skill_read("Computer")');
+    expect(preview).toContain('skill_read("Subagents")');
     expect(preview).toContain("Prefer tools over claiming you already did the work.");
     expect(preview).not.toContain("You run on Rakazo");
+    expect(preview).not.toContain("Only the latest 10–20 messages stay in your window;");
+    expect(preview.length).toBeLessThan(4_200);
   });
 
   it("collapses identical blocks and empties, but never a block that merely contains another", () => {

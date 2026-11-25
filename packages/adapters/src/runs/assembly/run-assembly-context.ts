@@ -17,8 +17,10 @@ import { formatCompactedSummary } from "../../runtime/context/history-compaction
 import { inferScript } from "../../runtime/scripted-runtime.js";
 import {
   BOARD_SKILL_NAME,
+  COMPUTER_SKILL_NAME,
   HISTORY_SKILL_NAME,
   ROUTINES_SKILL_NAME,
+  SUBAGENTS_SKILL_NAME,
 } from "../../tools/builtin-skills.prompt.js";
 import { partitionTools } from "../../tools/builtin-tool-bridge.js";
 import type { FleetRun } from "../../tools/fleet-tools.js";
@@ -311,12 +313,22 @@ export async function buildTurnPrompt(
   const routinesOffered =
     tools.some((tool) => tool.name === "schedule_create") &&
     tools.some((tool) => tool.name === "command_save");
+  const computerOffered = tools.some(
+    (tool) =>
+      tool.name === "shell" ||
+      tool.name === "browser_navigate" ||
+      tool.name === "computer_observe" ||
+      tool.name === "read_file",
+  );
+  const subagentsOffered = tools.some((tool) => tool.name === "run_subagent");
   const runAgentSkills = (nonOwnerChatRun ? builtinAgentSkillRecords() : agentSkills).filter(
     (skill) =>
       skill.source !== "builtin" ||
       ((boardOffered || skill.name !== BOARD_SKILL_NAME) &&
         (historyOffered || skill.name !== HISTORY_SKILL_NAME) &&
-        (routinesOffered || skill.name !== ROUTINES_SKILL_NAME)),
+        (routinesOffered || skill.name !== ROUTINES_SKILL_NAME) &&
+        (computerOffered || skill.name !== COMPUTER_SKILL_NAME) &&
+        (subagentsOffered || skill.name !== SUBAGENTS_SKILL_NAME)),
   );
   const taughtSkillIndex = runSavedSkills.slice(0, 20);
   const taughtSkillsLine = taughtSkillsInstruction(
