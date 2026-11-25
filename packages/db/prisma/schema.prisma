@@ -2707,6 +2707,10 @@ model Ticket {
   decision        Json?
   // Linked pull or merge requests: [{ url, state }], url in normalizePullRequestUrl form.
   pullRequests    Json      @default("[]")
+  // Linked issues: [{ url, state }], url in normalizeIssueUrl form.
+  issues          Json      @default("[]")
+  // Repository the work lives in, in normalizeRepositoryUrl form.
+  repository      String?
   comments        TicketComment[]
 
   @@unique([boardId, number])

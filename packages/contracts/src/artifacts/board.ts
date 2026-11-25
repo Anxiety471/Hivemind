@@ -95,34 +95,84 @@ export function hasPendingTicketDecision(ticket: { decision?: TicketDecision | n
 export const TICKET_PULL_REQUEST_STATES = ["open", "merged", "closed"] as const;
 export const TicketPullRequestStateSchema = z.enum(TICKET_PULL_REQUEST_STATES);
 export type TicketPullRequestState = z.infer<typeof TicketPullRequestStateSchema>;
+export const TICKET_ISSUE_STATES = ["open", "closed"] as const;
+export const TicketIssueStateSchema = z.enum(TICKET_ISSUE_STATES);
+export type TicketIssueState = z.infer<typeof TicketIssueStateSchema>;
 export const TICKET_MAX_PULL_REQUESTS = 10;
-const TICKET_PULL_REQUEST_URL_MAX_LENGTH = 500;
+export const TICKET_MAX_ISSUES = 10;
+const TICKET_LINK_URL_MAX_LENGTH = 500;
 
-// Host, repository path, an optional "-/" segment, the pull or merge request kind and its number.
-// Anything after the number (a tab such as /files, a query, a fragment) is dropped. Kept to the
-// RE2 subset so the Go API normalizes the same way (apps/api-go/internal/procedures/tickets).
-const PULL_REQUEST_URL =
-  /^https:\/\/([a-z0-9.-]+)((?:\/[a-z0-9_.~-]+)+?)\/(-\/)?(pull|pulls|merge_requests|pull-requests)\/([1-9][0-9]{0,9})(?:[/?#].*)?$/;
+// Host, repository path, an optional "-/" segment, the item kind and its number. Anything after
+// the number (a tab such as /files, a query, a fragment) is dropped. Kept to the RE2 subset so the
+// Go API normalizes the same way (apps/api-go/internal/procedures/tickets).
+const TICKET_ITEM_URL =
+  /^https:\/\/([a-z0-9.-]+)((?:\/[a-z0-9_.~-]+)+?)\/(-\/)?(pull|pulls|merge_requests|pull-requests|issues)\/([1-9][0-9]{0,9})(?:[/?#].*)?$/;
+// Host and a repository path of 2 to 8 segments, with an optional trailing slash, query or fragment.
+const REPOSITORY_URL = /^https:\/\/([a-z0-9.-]+)((?:\/[a-z0-9_.~-]+){2,8})\/?(?:[?#].*)?$/;
+
+function normalizeItemUrl(value: string, issue: boolean): string | null {
+  const text = value.trim().toLowerCase();
+  if (text.length > TICKET_LINK_URL_MAX_LENGTH) return null;
+  const match = TICKET_ITEM_URL.exec(text);
+  if (!match) return null;
+  const [, host, repoPath, dash, kind, number] = match;
+  if ((kind === "issues") !== issue) return null;
+  return `https://${host}${repoPath}/${dash ?? ""}${kind}/${number}`;
+}
 
 /**
  * The one form a pull request link is stored and matched in: lowercase, https, ending at the
  * number. Null when the text is not a pull or merge request link.
  */
 export function normalizePullRequestUrl(value: string): string | null {
-  const text = value.trim().toLowerCase();
-  if (text.length > TICKET_PULL_REQUEST_URL_MAX_LENGTH) return null;
-  const match = PULL_REQUEST_URL.exec(text);
-  if (!match) return null;
-  const [, host, repoPath, dash, kind, number] = match;
-  return `https://${host}${repoPath}/${dash ?? ""}${kind}/${number}`;
+  return normalizeItemUrl(value, false);
 }
 
-/** Short name for a stored link: the last two repository path segments and the number. */
-export function pullRequestLabel(url: string): string {
-  const match = PULL_REQUEST_URL.exec(url);
-  if (!match) return url;
-  const [, , repoPath = "", , , number] = match;
-  return `${repoPath.split("/").slice(-2).join("/")}#${number}`;
+/** The one form an issue link is stored and matched in, like normalizePullRequestUrl. */
+export function normalizeIssueUrl(value: string): string | null {
+  return normalizeItemUrl(value, true);
+}
+
+/**
+ * The one form a repository link is stored in: lowercase, https, the repository path without a
+ * trailing ".git" or slash. Null when the text is not a repository home page link, including a
+ * pull request or issue link.
+ */
+export function normalizeRepositoryUrl(value: string): string | null {
+  const text = value.trim().toLowerCase();
+  if (text.length > TICKET_LINK_URL_MAX_LENGTH || TICKET_ITEM_URL.test(text)) return null;
+  const match = REPOSITORY_URL.exec(text);
+  if (!match) return null;
+  const [, host, repoPath = ""] = match;
+  const path = repoPath.endsWith(".git") ? repoPath.slice(0, -4) : repoPath;
+  // A last segment of exactly ".git" leaves nothing to name the repository.
+  return path.endsWith("/") ? null : `https://${host}${path}`;
+}
+
+/**
+ * Short name for a stored link: the last two repository path segments and the number for a pull
+ * request or issue, the repository path for a repository.
+ */
+export function ticketLinkLabel(url: string): string {
+  const item = TICKET_ITEM_URL.exec(url);
+  if (item) {
+    const [, , repoPath = "", , , number] = item;
+    return `${repoPath.split("/").slice(-2).join("/")}#${number}`;
+  }
+  const repository = REPOSITORY_URL.exec(url);
+  return repository?.[2] ? repository[2].slice(1) : url;
+}
+
+function linkUrlInput(normalize: (value: string) => string | null, message: string) {
+  return z
+    .string()
+    .max(TICKET_LINK_URL_MAX_LENGTH)
+    .transform((value, ctx) => {
+      const url = normalize(value);
+      if (url) return url;
+      ctx.addIssue({ code: "custom", message });
+      return z.NEVER;
+    });
 }
 
 export const TicketPullRequestSchema = z.object({
@@ -132,33 +182,46 @@ export const TicketPullRequestSchema = z.object({
 export type TicketPullRequest = z.infer<typeof TicketPullRequestSchema>;
 
 export const TicketPullRequestInputSchema = z.object({
-  url: z
-    .string()
-    .max(TICKET_PULL_REQUEST_URL_MAX_LENGTH)
-    .transform((value, ctx) => {
-      const url = normalizePullRequestUrl(value);
-      if (url) return url;
-      ctx.addIssue({
-        code: "custom",
-        message: "Use a pull request link such as https://example.com/owner/repo/pull/12.",
-      });
-      return z.NEVER;
-    }),
+  url: linkUrlInput(
+    normalizePullRequestUrl,
+    "Use a pull request link such as https://example.com/owner/repo/pull/12.",
+  ),
   /** Left out keeps the state already recorded for that link, or open for a new one. */
   state: TicketPullRequestStateSchema.optional(),
 });
 export type TicketPullRequestInput = z.input<typeof TicketPullRequestInputSchema>;
 
+export const TicketIssueSchema = z.object({
+  url: z.string(),
+  state: TicketIssueStateSchema,
+});
+export type TicketIssue = z.infer<typeof TicketIssueSchema>;
+
+export const TicketIssueInputSchema = z.object({
+  url: linkUrlInput(
+    normalizeIssueUrl,
+    "Use an issue link such as https://example.com/owner/repo/issues/12.",
+  ),
+  /** Left out keeps the state already recorded for that link, or open for a new one. */
+  state: TicketIssueStateSchema.optional(),
+});
+export type TicketIssueInput = z.input<typeof TicketIssueInputSchema>;
+
+export const TicketRepositoryInputSchema = linkUrlInput(
+  normalizeRepositoryUrl,
+  "Use a repository link such as https://example.com/owner/repo.",
+);
+
 /**
  * The links a ticket keeps after an input list replaces them: the input's order with duplicates
- * dropped, each keeping its recorded state unless the input sets one.
+ * dropped, each keeping its recorded state unless the input sets one. A new link starts open.
  */
-export function mergeTicketPullRequests(
-  current: readonly TicketPullRequest[],
-  input: ReadonlyArray<{ url: string; state?: TicketPullRequestState | undefined }>,
-): TicketPullRequest[] {
+export function mergeTicketLinks<State extends string>(
+  current: ReadonlyArray<{ url: string; state: State }>,
+  input: ReadonlyArray<{ url: string; state?: State | undefined }>,
+): Array<{ url: string; state: State | "open" }> {
   const known = new Map(current.map((item) => [item.url, item.state]));
-  const next = new Map<string, TicketPullRequestState>();
+  const next = new Map<string, State | "open">();
   for (const item of input) {
     if (next.has(item.url)) continue;
     next.set(item.url, item.state ?? known.get(item.url) ?? "open");
@@ -264,6 +327,10 @@ export const TicketSchema = z.object({
   decision: TicketDecisionSchema.optional(),
   /** Pull or merge requests the ticket tracks, in the order they were linked. */
   pullRequests: z.array(TicketPullRequestSchema),
+  /** Issues the ticket tracks, in the order they were linked. */
+  issues: z.array(TicketIssueSchema),
+  /** Repository the ticket's work lives in. */
+  repository: z.string().nullable(),
   mentionsMe: z.boolean().optional(),
   /**
    * Bots a blocked ticket waits on, from the @mentions in its title, description and latest
@@ -311,6 +378,8 @@ export const CreateTicketInput = z
     assigneeBotId: Id.nullable().optional(),
     decision: TicketDecisionInputSchema.nullable().optional(),
     pullRequests: z.array(TicketPullRequestInputSchema).max(TICKET_MAX_PULL_REQUESTS).optional(),
+    issues: z.array(TicketIssueInputSchema).max(TICKET_MAX_ISSUES).optional(),
+    repository: TicketRepositoryInputSchema.nullable().optional(),
   })
   .refine((value) => !(value.ownerUserId && value.ownerBotId), {
     message: "Specify at most one of ownerUserId or ownerBotId",
@@ -332,6 +401,10 @@ export const UpdateTicketInput = z
     decision: TicketDecisionInputSchema.nullable().optional(),
     /** Replaces the linked pull requests; a link left out is unlinked. */
     pullRequests: z.array(TicketPullRequestInputSchema).max(TICKET_MAX_PULL_REQUESTS).optional(),
+    /** Replaces the linked issues; a link left out is unlinked. */
+    issues: z.array(TicketIssueInputSchema).max(TICKET_MAX_ISSUES).optional(),
+    /** Null removes the repository link. */
+    repository: TicketRepositoryInputSchema.nullable().optional(),
   })
   .refine((value) => !(value.ownerUserId && value.ownerBotId), {
     message: "Specify at most one of ownerUserId or ownerBotId",

@@ -5,6 +5,8 @@ import {
   TICKET_DECISION_OPTION_MAX_LENGTH,
   TICKET_DECISION_QUESTION_MAX_LENGTH,
   TICKET_DESCRIPTION_MAX_LENGTH,
+  TICKET_ISSUE_STATES,
+  TICKET_MAX_ISSUES,
   TICKET_MAX_PULL_REQUESTS,
   TICKET_PRIORITIES,
   TICKET_PULL_REQUEST_STATES,
@@ -62,6 +64,27 @@ const ticketPullRequestsSpec = {
     },
     required: ["url"],
   },
+};
+
+const ticketIssuesSpec = {
+  type: "array",
+  maxItems: TICKET_MAX_ISSUES,
+  description:
+    "Issue links the ticket tracks; on update this replaces the list. Omit state to keep the one recorded. An issue's state never moves the ticket.",
+  items: {
+    type: "object",
+    properties: {
+      url: { type: "string" },
+      state: { type: "string", enum: TICKET_ISSUE_STATES },
+    },
+    required: ["url"],
+  },
+};
+
+const ticketRepositorySpec = {
+  type: "string",
+  description:
+    "Optional home page link of the repository the work lives in; on update an empty string removes it.",
 };
 
 const scheduleCreateProperties = {
@@ -368,6 +391,8 @@ export const workTools: ConnectorTool[] = [
         },
         decision: ticketDecisionSpec,
         pullRequests: ticketPullRequestsSpec,
+        issues: ticketIssuesSpec,
+        repository: ticketRepositorySpec,
       },
       required: ["title"],
     },
@@ -404,6 +429,8 @@ export const workTools: ConnectorTool[] = [
         },
         decision: { anyOf: [ticketDecisionSpec, { type: "null" }] },
         pullRequests: ticketPullRequestsSpec,
+        issues: ticketIssuesSpec,
+        repository: ticketRepositorySpec,
       },
       required: ["id"],
     },

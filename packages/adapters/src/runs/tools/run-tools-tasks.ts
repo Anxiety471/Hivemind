@@ -1,4 +1,8 @@
-import type { TicketDecisionInput, TicketPullRequestInput } from "@rakazo/contracts";
+import type {
+  TicketDecisionInput,
+  TicketIssueInput,
+  TicketPullRequestInput,
+} from "@rakazo/contracts";
 import { TicketDecisionInputSchema } from "@rakazo/contracts";
 import {
   desktopGuardApplies,
@@ -92,15 +96,24 @@ function parseDecisionArg(raw: unknown): {
 }
 
 /** Links may come as bare URLs or as { url, state }; createTicket/updateTicket validate each. */
-function parsePullRequestsArg(raw: unknown): {
-  value?: TicketPullRequestInput[];
+function parseLinksArg<Link>(
+  field: string,
+  raw: unknown,
+): {
+  value?: Link[];
   error?: string;
 } {
   if (raw === undefined) return {};
-  if (!Array.isArray(raw)) return { error: "pullRequests: Expected a list of links." };
+  if (!Array.isArray(raw)) return { error: `${field}: Expected a list of links.` };
   return {
     value: raw.map((item) => (typeof item === "string" ? { url: item } : item)),
   };
+}
+
+/** An empty repository link removes it, like null. */
+function parseRepositoryArg(raw: unknown): string | null | undefined {
+  if (raw === undefined) return undefined;
+  return raw === null || raw === "" ? null : String(raw);
 }
 
 /** The task catalog, scratchpad, ticket board, schedules and skills. */
@@ -218,8 +231,11 @@ export const taskTools: ToolHandlers = {
       : undefined;
     const parsedDecision = parseDecisionArg(args.decision);
     if (parsedDecision.error) return call.finish({ error: `decision: ${parsedDecision.error}` });
-    const pullRequests = parsePullRequestsArg(args.pullRequests);
+    const pullRequests = parseLinksArg<TicketPullRequestInput>("pullRequests", args.pullRequests);
     if (pullRequests.error) return call.finish({ error: pullRequests.error });
+    const issues = parseLinksArg<TicketIssueInput>("issues", args.issues);
+    if (issues.error) return call.finish({ error: issues.error });
+    const repository = parseRepositoryArg(args.repository);
     return call.finish(
       await createTicket(deps, {
         spaceId: run.spaceId,
@@ -233,6 +249,8 @@ export const taskTools: ToolHandlers = {
         workerBotIds,
         ...(parsedDecision.value !== undefined ? { decision: parsedDecision.value } : {}),
         ...(pullRequests.value ? { pullRequests: pullRequests.value } : {}),
+        ...(issues.value ? { issues: issues.value } : {}),
+        ...(repository ? { repository } : {}),
       }),
     );
   },
@@ -250,8 +268,11 @@ export const taskTools: ToolHandlers = {
       : undefined;
     const parsedDecision = parseDecisionArg(args.decision);
     if (parsedDecision.error) return call.finish({ error: `decision: ${parsedDecision.error}` });
-    const pullRequests = parsePullRequestsArg(args.pullRequests);
+    const pullRequests = parseLinksArg<TicketPullRequestInput>("pullRequests", args.pullRequests);
     if (pullRequests.error) return call.finish({ error: pullRequests.error });
+    const issues = parseLinksArg<TicketIssueInput>("issues", args.issues);
+    if (issues.error) return call.finish({ error: issues.error });
+    const repository = parseRepositoryArg(args.repository);
     return call.finish(
       await updateTicket(deps, {
         spaceId: run.spaceId,
@@ -267,6 +288,8 @@ export const taskTools: ToolHandlers = {
         workerBotIds,
         ...(parsedDecision.value !== undefined ? { decision: parsedDecision.value } : {}),
         ...(pullRequests.value ? { pullRequests: pullRequests.value } : {}),
+        ...(issues.value ? { issues: issues.value } : {}),
+        ...(repository !== undefined ? { repository } : {}),
       }),
     );
   },

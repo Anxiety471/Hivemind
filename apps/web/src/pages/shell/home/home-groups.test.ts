@@ -23,6 +23,8 @@ function ticket(id: string, status: Ticket["status"], updatedAt: string): Ticket
     updatedAt,
     completedAt: null,
     pullRequests: [],
+    issues: [],
+    repository: null,
   };
 }
 

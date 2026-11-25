@@ -43,10 +43,11 @@ const (
 	decisionQuestionMaxLength = 300
 	decisionOptionMaxLength   = 160
 	decisionAnswerMaxLength   = 2_000
-	// pullRequestMaxCount is TICKET_MAX_PULL_REQUESTS and pullRequestURLMaxLength
-	// TICKET_PULL_REQUEST_URL_MAX_LENGTH (packages/contracts/src/artifacts/board.ts).
-	pullRequestMaxCount     = 10
-	pullRequestURLMaxLength = 500
+	// pullRequestMaxCount is TICKET_MAX_PULL_REQUESTS, issueMaxCount TICKET_MAX_ISSUES and
+	// linkURLMaxLength TICKET_LINK_URL_MAX_LENGTH (packages/contracts/src/artifacts/board.ts).
+	pullRequestMaxCount = 10
+	issueMaxCount       = 10
+	linkURLMaxLength    = 500
 )
 
 var (
@@ -56,16 +57,19 @@ var (
 	errTicketMissing = orpc.BadRequest("Ticket not found.")
 	errBotMissing    = orpc.BadRequest("Unknown bot.")
 	errUserMissing   = orpc.BadRequest("Unknown user.")
-	// errStoredPullRequests stops an update that would build on a stored list this release cannot
-	// read (readStoredTicketPullRequests' "reject"), answered as a 500.
+	// errStoredPullRequests and errStoredIssues stop an update that would build on a stored list
+	// this release cannot read (readStoredTicketPullRequests' and readStoredTicketIssues' "reject"),
+	// answered as a 500.
 	errStoredPullRequests = errors.New("stored tickets.pullRequests does not match its schema")
+	errStoredIssues       = errors.New("stored tickets.issues does not match its schema")
 )
 
 var (
 	ticketStatuses   = []string{"todo", "doing", "review", "blocked", "done", "closed"}
 	ticketPriorities = []string{"low", "normal", "high", "urgent"}
-	// pullRequestStates is TICKET_PULL_REQUEST_STATES.
+	// pullRequestStates is TICKET_PULL_REQUEST_STATES and issueStates TICKET_ISSUE_STATES.
 	pullRequestStates = []string{"open", "merged", "closed"}
+	issueStates       = []string{"open", "closed"}
 )
 
 // Completed is isTicketCompletedStatus: done and closed stamp the completion time.
@@ -264,6 +268,8 @@ type Ticket struct {
 	CompletedAt     *string             `json:"completedAt"`
 	Decision        *TicketDecision     `json:"decision,omitempty"`
 	PullRequests    []TicketPullRequest `json:"pullRequests"`
+	Issues          []TicketIssue       `json:"issues"`
+	Repository      *string             `json:"repository"`
 	WaitingOnBotIDs []string            `json:"waitingOnBotIds,omitempty"`
 }
 
@@ -300,18 +306,21 @@ type ticketRow struct {
 	CompletedAt     *time.Time
 	Decision        []byte
 	PullRequests    []byte
+	Issues          []byte
+	Repository      *string
 }
 
 const ticketColumns = `id, "boardId", "spaceId", number, title, description, status, priority, "assigneeBotId",
 	"ownerUserId", "ownerBotId", "workerBotIds", "createdByBotId", "createdByUserId", "createdAt", "updatedAt", "completedAt", decision,
-	"pullRequests"`
+	"pullRequests", issues, repository`
 
 func scanTicket(row pgx.Row) (ticketRow, error) {
 	var value ticketRow
 	err := row.Scan(&value.ID, &value.BoardID, &value.SpaceID, &value.Number, &value.Title, &value.Description,
 		&value.Status, &value.Priority, &value.AssigneeBotID, &value.OwnerUserID, &value.OwnerBotID,
 		&value.WorkerBotIDs, &value.CreatedByBotID, &value.CreatedByUserID,
-		&value.CreatedAt, &value.UpdatedAt, &value.CompletedAt, &value.Decision, &value.PullRequests)
+		&value.CreatedAt, &value.UpdatedAt, &value.CompletedAt, &value.Decision, &value.PullRequests,
+		&value.Issues, &value.Repository)
 	return value, err
 }
 
@@ -319,91 +328,156 @@ func ticketRef(prefix string, number int64) string {
 	return prefix + "-" + strconv.FormatInt(number, 10)
 }
 
-// pullRequestURLPattern is PULL_REQUEST_URL (packages/contracts/src/artifacts/board.ts), kept to
-// the RE2 subset so the Go API normalizes a link exactly as TypeScript does.
-var pullRequestURLPattern = regexp.MustCompile(`^https://([a-z0-9.-]+)((?:/[a-z0-9_.~-]+)+?)/(-/)?(pull|pulls|merge_requests|pull-requests)/([1-9][0-9]{0,9})(?:[/?#].*)?$`)
+// ticketItemURLPattern is TICKET_ITEM_URL (packages/contracts/src/artifacts/board.ts), kept to the
+// RE2 subset so the Go API normalizes a link exactly as TypeScript does.
+var ticketItemURLPattern = regexp.MustCompile(`^https://([a-z0-9.-]+)((?:/[a-z0-9_.~-]+)+?)/(-/)?(pull|pulls|merge_requests|pull-requests|issues)/([1-9][0-9]{0,9})(?:[/?#].*)?$`)
 
-// pullRequestLower is String.prototype.toLowerCase: the Unicode default full lowercase mapping
+// repositoryURLPattern is REPOSITORY_URL: a host and a repository path of 2 to 8 segments, with an
+// optional trailing slash, query or fragment.
+var repositoryURLPattern = regexp.MustCompile(`^https://([a-z0-9.-]+)((?:/[a-z0-9_.~-]+){2,8})/?(?:[?#].*)?$`)
+
+// linkLower is String.prototype.toLowerCase: the Unicode default full lowercase mapping
 // (cases.Lower), including the SpecialCasing entries strings.ToLower's simple mapping misses.
-var pullRequestLower = cases.Lower(language.Und)
+var linkLower = cases.Lower(language.Und)
 
-// normalizePullRequestURL is normalizePullRequestUrl: the one form a pull request link is stored
-// and matched in (lowercase, https, ending at the number), or false when the text is not a pull
-// or merge request link.
-func normalizePullRequestURL(value string) (string, bool) {
-	text := pullRequestLower.String(validate.JSTrim(value))
-	if wtf8.Length(text) > pullRequestURLMaxLength {
+// normalizeTicketItemURL is normalizeItemUrl: the one form a link item is stored in (lowercase,
+// https, ending at the number), for an issue link when issue is set and a pull or merge request
+// link otherwise.
+func normalizeTicketItemURL(value string, issue bool) (string, bool) {
+	text := linkLower.String(validate.JSTrim(value))
+	if wtf8.Length(text) > linkURLMaxLength {
 		return "", false
 	}
-	match := pullRequestURLPattern.FindStringSubmatch(text)
-	if match == nil {
+	match := ticketItemURLPattern.FindStringSubmatch(text)
+	if match == nil || (match[4] == "issues") != issue {
 		return "", false
 	}
 	return "https://" + match[1] + match[2] + "/" + match[3] + match[4] + "/" + match[5], true
 }
 
-// TicketPullRequest is TicketPullRequestSchema (packages/contracts/src/artifacts/board.ts).
-type TicketPullRequest struct {
+// normalizePullRequestURL is normalizePullRequestUrl: the one form a pull request link is stored
+// and matched in, or false when the text is not a pull or merge request link.
+func normalizePullRequestURL(value string) (string, bool) {
+	return normalizeTicketItemURL(value, false)
+}
+
+// normalizeIssueURL is normalizeIssueUrl: the one form an issue link is stored and matched in,
+// like normalizePullRequestURL.
+func normalizeIssueURL(value string) (string, bool) {
+	return normalizeTicketItemURL(value, true)
+}
+
+// normalizeRepositoryURL is normalizeRepositoryUrl: the one form a repository link is stored in
+// (lowercase, https, the repository path without a trailing ".git" or slash), or false when the
+// text is not a repository home page link, including a pull request or issue link.
+func normalizeRepositoryURL(value string) (string, bool) {
+	text := linkLower.String(validate.JSTrim(value))
+	if wtf8.Length(text) > linkURLMaxLength || ticketItemURLPattern.MatchString(text) {
+		return "", false
+	}
+	match := repositoryURLPattern.FindStringSubmatch(text)
+	if match == nil {
+		return "", false
+	}
+	path := strings.TrimSuffix(match[2], ".git")
+	// A last segment of exactly ".git" leaves nothing to name the repository.
+	if strings.HasSuffix(path, "/") {
+		return "", false
+	}
+	return "https://" + match[1] + path, true
+}
+
+// TicketLink is one stored link on a ticket: TicketPullRequestSchema or TicketIssueSchema.
+type TicketLink struct {
 	URL   string `json:"url"`
 	State string `json:"state"`
 }
 
-// readStoredPullRequests is readTicketPullRequests over a tickets.pullRequests value: a shape this
-// release does not know (not an array of objects with a string url and a known state) reads as no
-// links at all, the whole list rather than one item at a time. An item's unknown keys are dropped,
-// as zod's object strips them. The bool reports whether the stored value matched the schema.
-func readStoredPullRequests(raw []byte) ([]TicketPullRequest, bool) {
+// TicketPullRequest is TicketPullRequestSchema (packages/contracts/src/artifacts/board.ts).
+type TicketPullRequest = TicketLink
+
+// TicketIssue is TicketIssueSchema (packages/contracts/src/artifacts/board.ts).
+type TicketIssue = TicketLink
+
+// readStoredLinks is readTicketPullRequests and readTicketIssues over a tickets.pullRequests or
+// tickets.issues value: a shape this release does not know (not an array of objects with a string
+// url and a known state) reads as no links at all, the whole list rather than one item at a time.
+// An item's unknown keys are dropped, as zod's object strips them. The bool reports whether the
+// stored value matched the schema.
+func readStoredLinks(raw []byte, states []string) ([]TicketLink, bool) {
 	value, err := validate.DecodeAny(raw)
 	if err != nil {
-		return []TicketPullRequest{}, false
+		return []TicketLink{}, false
 	}
 	items, ok := value.([]any)
 	if !ok {
-		return []TicketPullRequest{}, false
+		return []TicketLink{}, false
 	}
-	out := make([]TicketPullRequest, 0, len(items))
+	out := make([]TicketLink, 0, len(items))
 	for _, item := range items {
 		object, ok := item.(*validate.Object)
 		if !ok {
-			return []TicketPullRequest{}, false
+			return []TicketLink{}, false
 		}
 		url, ok := object.Values["url"].(string)
 		if !ok {
-			return []TicketPullRequest{}, false
+			return []TicketLink{}, false
 		}
 		state, ok := object.Values["state"].(string)
-		if !ok || !slices.Contains(pullRequestStates, state) {
-			return []TicketPullRequest{}, false
+		if !ok || !slices.Contains(states, state) {
+			return []TicketLink{}, false
 		}
-		out = append(out, TicketPullRequest{URL: url, State: state})
+		out = append(out, TicketLink{URL: url, State: state})
 	}
 	return out, true
 }
 
-// readTicketPullRequests is the DTO's read: a stored value that does not match shows no links.
-func readTicketPullRequests(raw []byte) []TicketPullRequest {
-	list, ok := readStoredPullRequests(raw)
+// readStoredPullRequests is readStoredLinks over tickets.pullRequests.
+func readStoredPullRequests(raw []byte) ([]TicketPullRequest, bool) {
+	return readStoredLinks(raw, pullRequestStates)
+}
+
+// readStoredIssues is readStoredLinks over tickets.issues.
+func readStoredIssues(raw []byte) ([]TicketIssue, bool) {
+	return readStoredLinks(raw, issueStates)
+}
+
+// readTicketLinks is the DTO's read: a stored value that does not match shows no links.
+func readTicketLinks(raw []byte, states []string) []TicketLink {
+	list, ok := readStoredLinks(raw, states)
 	if !ok {
-		return []TicketPullRequest{}
+		return []TicketLink{}
 	}
 	return list
 }
 
-// pullRequestInput is one TicketPullRequestInputSchema value after its url was normalized.
-type pullRequestInput struct {
+// readTicketPullRequests is the DTO's read of tickets.pullRequests.
+func readTicketPullRequests(raw []byte) []TicketPullRequest {
+	return readTicketLinks(raw, pullRequestStates)
+}
+
+// readTicketIssues is the DTO's read of tickets.issues.
+func readTicketIssues(raw []byte) []TicketIssue {
+	return readTicketLinks(raw, issueStates)
+}
+
+// ticketLinkInput is one TicketPullRequestInputSchema or TicketIssueInputSchema value after its
+// url was normalized.
+type ticketLinkInput struct {
 	URL   string
 	State *string
 }
 
-// mergeTicketPullRequests is mergeTicketPullRequests: the input's order with duplicate links
-// dropped, each keeping the state the input sets, else the one already recorded, else open.
-func mergeTicketPullRequests(current []TicketPullRequest, input []pullRequestInput) []TicketPullRequest {
+// mergeTicketLinks is mergeTicketLinks (packages/contracts/src/artifacts/board.ts): the input's
+// order with duplicate links dropped, each keeping the state the input sets, else the one already
+// recorded, else open. Pull requests and issues share it.
+func mergeTicketLinks(current []TicketLink, input []ticketLinkInput) []TicketLink {
 	known := make(map[string]string, len(current))
 	for _, item := range current {
 		known[item.URL] = item.State
 	}
 	seen := make(map[string]bool, len(input))
-	out := make([]TicketPullRequest, 0, len(input))
+	out := make([]TicketLink, 0, len(input))
 	for _, item := range input {
 		if seen[item.URL] {
 			continue
@@ -415,7 +489,7 @@ func mergeTicketPullRequests(current []TicketPullRequest, input []pullRequestInp
 		} else if recorded, ok := known[item.URL]; ok {
 			state = recorded
 		}
-		out = append(out, TicketPullRequest{URL: item.URL, State: state})
+		out = append(out, TicketLink{URL: item.URL, State: state})
 	}
 	return out
 }
@@ -525,6 +599,8 @@ func dto(value ticketRow, prefix string) (Ticket, bool) {
 		CreatedAt:       shared.ISO(value.CreatedAt), UpdatedAt: shared.ISO(value.UpdatedAt),
 		Decision:     readStoredDecision(value.Decision),
 		PullRequests: readTicketPullRequests(value.PullRequests),
+		Issues:       readTicketIssues(value.Issues),
+		Repository:   value.Repository,
 	}
 	if value.CompletedAt != nil {
 		at := shared.ISO(*value.CompletedAt)
@@ -1346,7 +1422,11 @@ type createInput struct {
 	HasDecision      bool
 	Decision         *TicketDecision
 	HasPullRequests  bool
-	PullRequests     []pullRequestInput
+	PullRequests     []ticketLinkInput
+	HasIssues        bool
+	Issues           []ticketLinkInput
+	HasRepository    bool
+	Repository       *string
 }
 
 func parseNullableDecision(object *validate.Object, found *[]validate.Issue) (bool, *TicketDecision) {
@@ -1465,28 +1545,36 @@ func parseWorkerBotIDs(object *validate.Object, found *[]validate.Issue) (bool, 
 	return true, ids
 }
 
-// pullRequestURLMessage is the custom issue TicketPullRequestInputSchema's transform raises.
-const pullRequestURLMessage = "Use a pull request link such as https://example.com/owner/repo/pull/12."
+// pullRequestURLMessage is the custom issue TicketPullRequestInputSchema's transform raises,
+// issueURLMessage the one TicketIssueInputSchema's raises, and repositoryURLMessage the one
+// TicketRepositoryInputSchema's raises.
+const (
+	pullRequestURLMessage = "Use a pull request link such as https://example.com/owner/repo/pull/12."
+	issueURLMessage       = "Use an issue link such as https://example.com/owner/repo/issues/12."
+	repositoryURLMessage  = "Use a repository link such as https://example.com/owner/repo."
+)
 
-// parsePullRequests is `z.array(TicketPullRequestInputSchema).max(TICKET_MAX_PULL_REQUESTS).optional()`:
-// each item's url is normalized, and state stays unset when the input leaves it out. An array past
-// the limit reports only the length, as zod's size cap stops before the items are parsed.
-func parsePullRequests(object *validate.Object, found *[]validate.Issue) (bool, []pullRequestInput) {
-	v := object.Field("pullRequests")
+// parseLinks is `z.array(TicketPullRequestInputSchema).max(TICKET_MAX_PULL_REQUESTS).optional()` and
+// `z.array(TicketIssueInputSchema).max(TICKET_MAX_ISSUES).optional()`: each item's url is
+// normalized, and state stays unset when the input leaves it out. An array past the limit reports
+// only the length, as zod's size cap stops before the items are parsed.
+func parseLinks(object *validate.Object, found *[]validate.Issue, key string, maxCount int,
+	normalize func(string) (string, bool), message string, states []string) (bool, []ticketLinkInput) {
+	v := object.Field(key)
 	if v == validate.Undefined {
 		return false, nil
 	}
-	path := validate.Path{"pullRequests"}
+	path := validate.Path{key}
 	items, problems := validate.AsArray(path, v)
 	if problems != nil {
 		*found = append(*found, problems...)
 		return true, nil
 	}
-	if len(items) > pullRequestMaxCount {
-		*found = append(*found, validate.ArrayBounds(path, len(items), 0, pullRequestMaxCount)...)
+	if len(items) > maxCount {
+		*found = append(*found, validate.ArrayBounds(path, len(items), 0, maxCount)...)
 		return true, nil
 	}
-	out := make([]pullRequestInput, 0, len(items))
+	out := make([]ticketLinkInput, 0, len(items))
 	for index, item := range items {
 		itemPath := path.With(index)
 		fields, problems := validate.AsObject(item, itemPath)
@@ -1496,13 +1584,13 @@ func parsePullRequests(object *validate.Object, found *[]validate.Issue) (bool, 
 		}
 		var url string
 		rawURL, urlProblems := validate.String(itemPath.With("url"), fields.Field("url"),
-			validate.StringRules{Max: pullRequestURLMaxLength})
+			validate.StringRules{Max: linkURLMaxLength})
 		*found = append(*found, urlProblems...)
 		if urlProblems == nil {
-			normalized, ok := normalizePullRequestURL(rawURL)
+			normalized, ok := normalize(rawURL)
 			if !ok {
 				*found = append(*found, validate.Issue{
-					"code": "custom", "path": itemPath.With("url").Raw(), "message": pullRequestURLMessage,
+					"code": "custom", "path": itemPath.With("url").Raw(), "message": message,
 				})
 			} else {
 				url = normalized
@@ -1510,13 +1598,49 @@ func parsePullRequests(object *validate.Object, found *[]validate.Issue) (bool, 
 		}
 		var state *string
 		if rawState := fields.Field("state"); rawState != validate.Undefined {
-			parsed, stateProblems := validate.Enum(itemPath.With("state"), rawState, pullRequestStates...)
+			parsed, stateProblems := validate.Enum(itemPath.With("state"), rawState, states...)
 			*found = append(*found, stateProblems...)
 			state = &parsed
 		}
-		out = append(out, pullRequestInput{URL: url, State: state})
+		out = append(out, ticketLinkInput{URL: url, State: state})
 	}
 	return true, out
+}
+
+// parsePullRequests is the `pullRequests` field of CreateTicketInput and UpdateTicketInput.
+func parsePullRequests(object *validate.Object, found *[]validate.Issue) (bool, []ticketLinkInput) {
+	return parseLinks(object, found, "pullRequests", pullRequestMaxCount,
+		normalizePullRequestURL, pullRequestURLMessage, pullRequestStates)
+}
+
+// parseIssues is the `issues` field of CreateTicketInput and UpdateTicketInput.
+func parseIssues(object *validate.Object, found *[]validate.Issue) (bool, []ticketLinkInput) {
+	return parseLinks(object, found, "issues", issueMaxCount, normalizeIssueURL, issueURLMessage, issueStates)
+}
+
+// parseRepository is `TicketRepositoryInputSchema.nullable().optional()`: an absent link leaves
+// the column, null clears it, and a string is normalized after its length is checked.
+func parseRepository(object *validate.Object, found *[]validate.Issue) (bool, *string) {
+	v := object.Field("repository")
+	if v == validate.Undefined {
+		return false, nil
+	}
+	if v == nil {
+		return true, nil
+	}
+	rawURL, problems := validate.String(validate.Path{"repository"}, v, validate.StringRules{Max: linkURLMaxLength})
+	*found = append(*found, problems...)
+	if problems != nil {
+		return true, nil
+	}
+	normalized, ok := normalizeRepositoryURL(rawURL)
+	if !ok {
+		*found = append(*found, validate.Issue{
+			"code": "custom", "path": []any{"repository"}, "message": repositoryURLMessage,
+		})
+		return true, nil
+	}
+	return true, &normalized
 }
 
 // parseCreate is CreateTicketInput (packages/contracts/src/artifacts/board.ts:133-147).
@@ -1555,6 +1679,8 @@ func parseCreate(raw orpc.Input) (createInput, *orpc.Error) {
 	out.HasAssigneeBotID, out.AssigneeBotID = parseNullableOptID(object, "assigneeBotId", &found)
 	out.HasDecision, out.Decision = parseNullableDecision(object, &found)
 	out.HasPullRequests, out.PullRequests = parsePullRequests(object, &found)
+	out.HasIssues, out.Issues = parseIssues(object, &found)
+	out.HasRepository, out.Repository = parseRepository(object, &found)
 	if found == nil && out.OwnerUserID != nil && out.OwnerBotID != nil {
 		found = append(found, validate.Issue{
 			"code":    "custom",
@@ -1680,8 +1806,9 @@ func Create(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 			stored := shared.StoredText(*input.Description)
 			desc = &stored
 		}
-		// Create starts from no recorded links; an input list is the whole list (mergeTicketPullRequests).
-		pullRequests := mergeTicketPullRequests(nil, input.PullRequests)
+		// Create starts from no recorded links; an input list is the whole list (mergeTicketLinks).
+		pullRequests := mergeTicketLinks(nil, input.PullRequests)
+		issues := mergeTicketLinks(nil, input.Issues)
 		// Linking work that already merged records finished work, which waits on no decision.
 		finished := pullRequestMergeFinishesTicket(nil, pullRequests)
 		var decisionJSON any
@@ -1689,6 +1816,7 @@ func Create(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 			decisionJSON = db.JSON(*input.Decision)
 		}
 		pullRequestsJSON := db.JSON(pullRequests)
+		issuesJSON := db.JSON(issues)
 		at := now()
 		status := "todo"
 		var completedAt any
@@ -1701,13 +1829,14 @@ func Create(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 				id, "boardId", "spaceId", number, title, description, status, priority,
 				"assigneeBotId", "ownerUserId", "ownerBotId", "workerBotIds",
 				"createdByBotId", "createdByUserId", "createdAt", "updatedAt", decision, "pullRequests",
-				"completedAt"
+				issues, repository, "completedAt"
 			)
-			VALUES ($1, $2, $3, $4, $5, $6, $16, $7, $8, $9, $10, $11, NULL, $12, $13, $13, $14, $15, $17)
+			VALUES ($1, $2, $3, $4, $5, $6, $16, $7, $8, $9, $10, $11, NULL, $12, $13, $13, $14, $15, $18, $19, $17)
 			RETURNING `+ticketColumns,
 			db.Data(effects.NewID(), board.ID, actor.SpaceID, number, shared.StoredText(input.Title), nullableText(desc),
 				input.Priority, nullableText(assigneeBotID), nullableText(ownerUserID), nullableText(ownerBotID),
-				workerBotIDs, actor.UserID, at, decisionJSON, pullRequestsJSON, status, completedAt)...,
+				workerBotIDs, actor.UserID, at, decisionJSON, pullRequestsJSON, status, completedAt,
+				issuesJSON, nullableText(input.Repository))...,
 		))
 		if err != nil {
 			return err
@@ -1761,7 +1890,11 @@ type updateInput struct {
 	HasDecision      bool
 	Decision         *TicketDecision
 	HasPullRequests  bool
-	PullRequests     []pullRequestInput
+	PullRequests     []ticketLinkInput
+	HasIssues        bool
+	Issues           []ticketLinkInput
+	HasRepository    bool
+	Repository       *string
 }
 
 // parseUpdate is UpdateTicketInput (packages/contracts/src/artifacts/board.ts:150-165).
@@ -1813,6 +1946,8 @@ func parseUpdate(raw orpc.Input) (updateInput, *orpc.Error) {
 	out.HasAssigneeBotID, out.AssigneeBotID = parseNullableOptID(object, "assigneeBotId", &found)
 	out.HasDecision, out.Decision = parseNullableDecision(object, &found)
 	out.HasPullRequests, out.PullRequests = parsePullRequests(object, &found)
+	out.HasIssues, out.Issues = parseIssues(object, &found)
+	out.HasRepository, out.Repository = parseRepository(object, &found)
 	if found == nil && out.OwnerUserID != nil && out.OwnerBotID != nil {
 		found = append(found, validate.Issue{
 			"code":    "custom",
@@ -2004,12 +2139,21 @@ func Update(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 			if !ok {
 				return errStoredPullRequests
 			}
-			next := mergeTicketPullRequests(stored, input.PullRequests)
+			next := mergeTicketLinks(stored, input.PullRequests)
 			pullRequestsValue = db.JSON(next)
 			// Recording a merge that leaves nothing open finishes the ticket, as the webhook does,
 			// unless the same write sets a status itself.
 			finished = !input.HasStatus && !completedStatus(coerceStatus(current.Status)) &&
 				pullRequestMergeFinishesTicket(stored, next)
+		}
+		// The issues list replaces the recorded one the same way; issue states never finish a ticket.
+		var issuesValue any
+		if input.HasIssues {
+			stored, ok := readStoredIssues(current.Issues)
+			if !ok {
+				return errStoredIssues
+			}
+			issuesValue = db.JSON(mergeTicketLinks(stored, input.Issues))
 		}
 
 		status := current.Status
@@ -2057,13 +2201,16 @@ func Update(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 			    "workerBotIds" = $7, "assigneeBotId" = $8,
 			    status = $9, "completedAt" = $10, "updatedAt" = $11,
 			    "archivedAt" = CASE WHEN $9 IN ('done', 'closed') THEN "archivedAt" END,
-			    decision = $12, "pullRequests" = COALESCE($13, "pullRequests")
+			    decision = $12, "pullRequests" = COALESCE($13, "pullRequests"),
+			    issues = COALESCE($14, issues),
+			    repository = CASE WHEN $15::boolean THEN $16 ELSE repository END
 			WHERE id = $1
 			RETURNING `+ticketColumns,
 			append([]any{current.ID}, db.Data(title, nullableText(description), priority,
 				nullableText(ownerUserID), nullableText(ownerBotID),
 				workerBotIDs, nullableText(assigneeBotID),
-				status, completedAt, updatedAt, decisionValue(nextDecision), pullRequestsValue)...)...,
+				status, completedAt, updatedAt, decisionValue(nextDecision), pullRequestsValue,
+				issuesValue, input.HasRepository, nullableText(input.Repository))...)...,
 		))
 		if err != nil {
 			return err

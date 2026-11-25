@@ -97,6 +97,8 @@ function ticket(
     updatedAt: new Date().toISOString(),
     completedAt: null,
     pullRequests: [],
+    issues: [],
+    repository: null,
   };
 }
 

@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { SecretStoreUnavailableError } from "@rakazo/adapter-kit";
-import { recordTicketPullRequestState } from "@rakazo/adapters";
-import type { TicketPullRequestState } from "@rakazo/contracts";
+import { recordTicketIssueState, recordTicketPullRequestState } from "@rakazo/adapters";
+import type { TicketIssueState, TicketPullRequestState } from "@rakazo/contracts";
 import type { Hono } from "hono";
 import { readBoundedBytes } from "../http/http-body.js";
 import { githubEventMetadataPrompt } from "../messaging/inbound-delivery.prompt.js";
@@ -173,6 +173,19 @@ export function githubPullRequestState(
   return null;
 }
 
+/** The state an issues event leaves its issue in, for tickets that link it. */
+export function githubIssueState(
+  event: string,
+  payload: Record<string, unknown>,
+): { url: string; state: TicketIssueState } | null {
+  if (event !== "issues") return null;
+  const url = record(payload.issue)?.html_url;
+  if (typeof url !== "string") return null;
+  if (payload.action === "closed") return { url, state: "closed" };
+  if (payload.action === "reopened") return { url, state: "open" };
+  return null;
+}
+
 export function mountGithubWebhookRoute(
   app: Hono,
   deps: WebhookDeps,
@@ -217,11 +230,14 @@ export function mountGithubWebhookRoute(
     const payload = parseWebhookPayload(body, contentType);
     const githubEvent = githubEventName(c.req.header("x-github-event"));
 
-    // Tickets in the bot's Space follow the pull requests they link, with or without a routine.
+    // Tickets in the bot's Space follow the pull requests and issues they link, with or without a
+    // routine.
     const pullRequest = githubPullRequestState(githubEvent, payload);
     if (pullRequest) {
       await recordTicketPullRequestState(deps, { spaceId: target.bot.spaceId, ...pullRequest });
     }
+    const issue = githubIssueState(githubEvent, payload);
+    if (issue) await recordTicketIssueState(deps, { spaceId: target.bot.spaceId, ...issue });
 
     const githubRoutines = await deps.prisma.routine.findMany({
       where: {

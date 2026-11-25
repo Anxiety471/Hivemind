@@ -3,6 +3,7 @@ import type {
   Ticket,
   TicketComment,
   TicketDecision,
+  TicketIssue,
   TicketPriority,
   TicketPullRequest,
   TicketStatus,
@@ -11,6 +12,7 @@ import {
   parseTicketRef,
   TICKET_ARCHIVE_AFTER_DAYS,
   TicketDecisionSchema,
+  TicketIssueSchema,
   TicketPrioritySchema,
   TicketPullRequestSchema,
   TicketStatusSchema,
@@ -138,6 +140,28 @@ export function readStoredTicketPullRequests(
   );
 }
 
+const StoredIssuesSchema = TicketIssueSchema.array();
+
+/** A shape this release does not know shows no issues rather than failing the ticket. */
+export function readTicketIssues(row: Pick<TicketRow, "id" | "issues">): TicketIssue[] {
+  return readJsonColumn(
+    StoredIssuesSchema,
+    row.issues,
+    { table: "tickets", column: "issues", id: row.id },
+    { fallback: [] },
+  );
+}
+
+/** The stored issues a write builds on: a shape this release does not know stops the write. */
+export function readStoredTicketIssues(row: Pick<TicketRow, "id" | "issues">): TicketIssue[] {
+  return readJsonColumn(
+    StoredIssuesSchema,
+    row.issues,
+    { table: "tickets", column: "issues", id: row.id },
+    "reject",
+  );
+}
+
 export function toTicketDto(row: TicketRow, ticketPrefix: string): Ticket {
   const rawWorkers = Array.isArray(row.workerBotIds) ? row.workerBotIds : [];
   const workerBotIds =
@@ -164,6 +188,8 @@ export function toTicketDto(row: TicketRow, ticketPrefix: string): Ticket {
     completedAt: row.completedAt ? row.completedAt.toISOString() : null,
     ...(decision ? { decision } : {}),
     pullRequests: readTicketPullRequests(row),
+    issues: readTicketIssues(row),
+    repository: row.repository ?? null,
   };
 }
 
