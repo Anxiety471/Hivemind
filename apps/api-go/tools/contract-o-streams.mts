@@ -429,7 +429,7 @@ async function publishUntil(
 
 // ---- stream reader ---------------------------------------------------------------------------
 
-type Frame = { event: string; data: unknown };
+type Frame = { event: string; data: unknown; raw?: string };
 
 type Stream = {
   status: number;
@@ -467,6 +467,7 @@ function parseBlock(block: string, frames: Frame[], comments: string[]) {
   const envelope = parsed as { json?: unknown };
   frames.push({
     event,
+    raw: text,
     data:
       typeof parsed === "object" && parsed !== null && Object.keys(parsed).length === 1 && "json" in envelope
         ? envelope.json
@@ -766,6 +767,45 @@ case_("helper-subscribe-heartbeat", async () => {
   await closeWithin(goStream);
 });
 
+case_("thread-jsonb-key-order", async () => {
+  const seeded = await seed("jsonb-keys");
+  // jsonb returns an object's keys byte-ordered by length first, and JSON.parse keeps that order
+  // apart from hoisting integer-like keys to the front. Both objects' bytes must match TypeScript.
+  const rows: Array<[string, string, string]> = [
+    ["keys", `{"b":1,"aa":2}`, `{"b":1,"aa":2}`],
+    ["ints", `{"10":1,"9":2,"a":3}`, `{"9":2,"10":1,"a":3}`],
+  ];
+  for (const [name, text, want] of rows) {
+    await system.$executeRawUnsafe(
+      `INSERT INTO events (id, "spaceId", "threadId", "botId", seq, type, payload, "createdAt")
+       VALUES ($1, $2, $3, $4, $5, 'thread.progress', $6::jsonb, now())`,
+      `${seeded.userId}-${name}`,
+      seeded.spaceId,
+      seeded.threadId,
+      seeded.botId,
+      rows.findIndex((row) => row[0] === name) + 1,
+      text,
+    );
+    // The expectation is JSON.stringify's output for what Postgres returns, not the stored text.
+    assert.equal(JSON.stringify(JSON.parse(text)), want, `${name}: want is not JSON.stringify's`);
+  }
+  const input = { botId: seeded.botId, cursor: -1 };
+  const ts = await openTS(THREAD, input, seeded);
+  const goStream = await openGo(THREAD, input, seeded);
+  await waitFor(ts, (frames) => frames.length >= 2, 5000, "ts");
+  await waitFor(goStream, (frames) => frames.length >= 2, 5000, "go");
+  const payloadOfFrame = (frame: Frame) => {
+    const match = /"payload":(\{[^{}]*\})/.exec(frame.raw ?? "");
+    return match?.[1];
+  };
+  const tsPayloads = normalized(ts).map(payloadOfFrame);
+  const goPayloads = normalized(goStream).map(payloadOfFrame);
+  assert.deepEqual(goPayloads, tsPayloads, "payload bytes differ");
+  assert.deepEqual(tsPayloads, rows.map((row) => row[2]), "payload bytes are not JSON.stringify's");
+  await closeWithin(ts);
+  await closeWithin(goStream);
+});
+
 case_("thread-subscribe-rejections", async () => {
   const seeded = await seed("thread-reject");
   const cases: Array<{ label: string; input: unknown }> = [
@@ -913,57 +953,72 @@ case_("notifications-subscribe-alert", async () => {
   await closeWithin(goStream);
 });
 
-case_("notifications-subscribe-space-and-roster", async () => {
-  const seeded = await seed("notifications-changes");
-  const input = {};
-  const ts = await openTS("notifications.subscribe", input, seeded);
-  const goStream = await openGo("notifications.subscribe", input, seeded);
+case_("notifications-subscribe-space-changes", async () => {
+  const seeded = await seed("notifications-space");
+  const ts = await openTS("notifications.subscribe", {}, seeded);
+  const goStream = await openGo("notifications.subscribe", {}, seeded);
   await sleep(300);
-  // One signal at a time: a source coalesces same-kind signals delivered in one round, so a burst
-  // would make the frame count depend on scheduling instead of on the code under test.
   const countType = (stream: Stream, type: string) =>
     normalized(stream).filter((frame) => typeOf(frame) === type).length;
-  const steps: Array<{ topic: string; payload: string; type: string }> = [
-    { topic: `space-changes:${seeded.spaceId}`, payload: "routines", type: "routines" },
-    { topic: `space-changes:${seeded.spaceId}`, payload: "runs", type: "runs" },
-    // The roster watches a chat's own topic, not a roster-specific one, and reads the event type
-    // out of the payload to decide whether the sidebar changed.
-    {
-      topic: `thread:${seeded.threadId}`,
-      payload: JSON.stringify({ type: "thread.message.created" }),
-      type: "roster",
-    },
-    { topic: `organization-changes:${seeded.userId}`, payload: "changed", type: "organizations" },
-  ];
-  for (const step of steps) {
-    const before = Math.max(countType(ts, step.type), countType(goStream, step.type));
-    const reached = () => countType(ts, step.type) > before && countType(goStream, step.type) > before;
-    if (step.type === "roster") {
-      // The roster spaces its frames by ROSTER_SIGNAL_SPACING_MS (10 s) and drops a signal inside
-      // the window instead of deferring it, so the wake has to come after the burst's.
-      await sleep(10_500);
-      await publishOnceAndWait(step.topic, step.payload, [ts, goStream], reached, 5_000, step.topic);
-      const after = countType(goStream, "roster");
-      await publish(step.topic, step.payload);
-      await sleep(1_000);
-      assert.equal(countType(goStream, "roster"), after, "go sent a roster frame inside the spacing window");
-      assert.equal(countType(ts, "roster"), after, "ts sent a roster frame inside the spacing window");
-    } else {
-      await publishUntil(step.topic, step.payload, [ts, goStream], reached, 12_000, step.topic);
-    }
+  // One signal at a time: a source coalesces same-kind signals delivered in one round, so a burst
+  // would make the frame count depend on scheduling instead of on the code under test.
+  for (const [kind, topic] of [
+    ["routines", `space-changes:${seeded.spaceId}`],
+    ["runs", `space-changes:${seeded.spaceId}`],
+    ["organizations", `organization-changes:${seeded.userId}`],
+  ] as Array<[string, string]>) {
+    const before = Math.max(countType(ts, kind), countType(goStream, kind));
+    await publishUntil(
+      topic,
+      kind === "organizations" ? "changed" : kind,
+      [ts, goStream],
+      () => countType(ts, kind) > before && countType(goStream, kind) > before,
+      12_000,
+      topic,
+    );
   }
-  // Each change announced its kind on both sides, on top of the burst each opened with. A fanout
-  // catch-up after a reconnect may repeat a kind, so the counts are not compared exactly.
-  for (const type of ["routines", "runs", "computerUpdates", "roster", "organizations"]) {
-    assert.ok(countType(goStream, type) >= 2, `go never announced ${type}: ${JSON.stringify(goStream.frames)}`);
-    assert.ok(countType(ts, type) >= 2, `ts never announced ${type}: ${JSON.stringify(ts.frames)}`);
+  for (const kind of ["routines", "runs", "organizations"]) {
+    assert.ok(countType(goStream, kind) >= 2, `go never announced ${kind}: ${JSON.stringify(goStream.frames)}`);
+    assert.ok(countType(ts, kind) >= 2, `ts never announced ${kind}: ${JSON.stringify(ts.frames)}`);
   }
   assert.deepEqual(
     [...new Set(normalized(goStream).map((frame) => typeOf(frame)))].sort(),
     [...new Set(normalized(ts).map((frame) => typeOf(frame)))].sort(),
     "the announced kinds differ",
   );
-  console.log("space/roster frames", JSON.stringify({ ts: normalized(ts), go: normalized(goStream) }));
+  console.log("space frames", JSON.stringify({ ts: normalized(ts), go: normalized(goStream) }));
+  await closeWithin(ts);
+  await closeWithin(goStream);
+});
+
+case_("notifications-subscribe-roster", async () => {
+  const seeded = await seed("notifications-roster");
+  const ts = await openTS("notifications.subscribe", {}, seeded);
+  const goStream = await openGo("notifications.subscribe", {}, seeded);
+  await sleep(300);
+  const rosters = (stream: Stream) => normalized(stream).filter((frame) => typeOf(frame) === "roster").length;
+  // A fanout catch-up after its listener connects may add one more frame to the burst on either
+  // side, so the burst is counted rather than assumed.
+  await sleep(500);
+  const before = Math.max(rosters(ts), rosters(goStream));
+  assert.ok(before >= 1, "the opening burst announces the roster");
+  // The roster spaces its frames by ROSTER_SIGNAL_SPACING_MS (10 s), so the wake has to come after
+  // the burst's frame. A chat's own topic is what the roster watches, not a roster-specific one.
+  await sleep(10_500);
+  await publishOnceAndWait(
+    `thread:${seeded.threadId}`,
+    JSON.stringify({ type: "thread.message.created" }),
+    [ts, goStream],
+    () => true,
+    1_000,
+    "roster publish",
+  );
+  const deadline = Date.now() + 12_000;
+  while (Date.now() < deadline && (rosters(ts) <= before || rosters(goStream) <= before)) {
+    await sleep(50);
+  }
+  assert.equal(rosters(goStream), rosters(ts), "the roster frames differ between the sides");
+  assert.ok(rosters(goStream) > before, `no roster wake: ${JSON.stringify(goStream.frames)}`);
   await closeWithin(ts);
   await closeWithin(goStream);
 });

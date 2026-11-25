@@ -910,6 +910,15 @@ func TestThreadSubscribePrintsStoredNumbersLikeJSONStringify(t *testing.T) {
 		VALUES ($1, $2, $3, $4, 1, 'thread.progress', $5::jsonb, now())`,
 		"ev-numbers-"+s.UserID, s.Space1, threadID, botID,
 		`{"n":[1.0,1e21,-0,1e-7,0.30000000000000004],"s":"x"}`)
+	// Postgres returns a jsonb object with its keys byte-ordered by length first ("b" before "aa"),
+	// and JSON.parse keeps that order apart from bringing integer-like keys to the front ("9",
+	// "10", then "a"). A sorted object would put "aa" first and "10" before "9".
+	exec(t, database, `INSERT INTO events (id, "spaceId", "threadId", "botId", seq, type, payload, "createdAt")
+		VALUES ($1, $2, $3, $4, 2, 'thread.progress', $5::jsonb, now())`,
+		"ev-keys-"+s.UserID, s.Space1, threadID, botID, `{"b":1,"aa":2}`)
+	exec(t, database, `INSERT INTO events (id, "spaceId", "threadId", "botId", seq, type, payload, "createdAt")
+		VALUES ($1, $2, $3, $4, 3, 'thread.progress', $5::jsonb, now())`,
+		"ev-ints-"+s.UserID, s.Space1, threadID, botID, `{"10":1,"9":2,"a":3}`)
 	ring := contentcrypto.NewKeyRing(nil, nil, contentcrypto.KeyRingOptions{})
 	server := testServerDeployed(t, database, local.Config{Stream: streamTiming()}, nil,
 		shared.Deployment{Content: ring})
@@ -917,22 +926,28 @@ func TestThreadSubscribePrintsStoredNumbersLikeJSONStringify(t *testing.T) {
 	_, frames := openStreamBody(t, server.URL+"/rpc/threads/subscribe", cookie, s.Space1,
 		streamInput(t, map[string]any{"botId": botID, "cursor": -1}))
 	deadline := time.After(5 * time.Second)
-	for {
+	seen := 0
+	for seen < 3 {
 		select {
 		case frame, ok := <-frames:
 			if !ok {
-				t.Fatal("stream ended before a frame")
+				t.Fatal("stream ended before every frame arrived")
 			}
 			if frame.event != "message" {
 				continue
 			}
-			want := `"payload":{"n":[1,1e+21,0,1e-7,0.30000000000000004],"s":"x"}`
-			if !strings.Contains(frame.data, want) {
-				t.Fatalf("frame data =\n%s\nmissing\n%s", frame.data, want)
+			for _, want := range []string{
+				`"payload":{"n":[1,1e+21,0,1e-7,0.30000000000000004],"s":"x"}`,
+				`"payload":{"b":1,"aa":2}`,
+				`"payload":{"9":2,"10":1,"a":3}`,
+			} {
+				if strings.Contains(frame.data, want) {
+					seen += 1
+					break
+				}
 			}
-			return
 		case <-deadline:
-			t.Fatal("no frame within 5s")
+			t.Fatalf("only %d of 3 frames within 5s", seen)
 		}
 	}
 }

@@ -4,15 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"sort"
-	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/contentcrypto"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/local"
-	"github.com/Anxiety471/Hivemind/apps/api-go/internal/messageblocks"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/livestream"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
@@ -285,35 +283,78 @@ func readEvents(ctx context.Context, database *db.DB, deployment shared.Deployme
 	if len(events) == 0 {
 		return nil, nil
 	}
-	open := make([]map[string]any, len(events))
-	for index, event := range events {
-		decoded, err := messageblocks.DecodeJSON(rows[index])
+	for index := range events {
+		value, err := validate.DecodeAny(rows[index])
 		if err != nil {
 			return nil, err
 		}
-		open[index] = map[string]any{
-			"id": event.id, "spaceId": event.spaceID, "threadId": event.threadID,
-			"payload": decoded,
-		}
-	}
-	if deployment.Content != nil {
-		if err := deployment.Content.OpenRows(ctx, "Event", open); err != nil {
+		opened, err := openPayload(ctx, deployment.Content, events[index], value)
+		if err != nil {
 			return nil, err
 		}
-	}
-	for index := range events {
-		events[index].payload = open[index]["payload"]
+		events[index].payload = opened
 	}
 	return events, nil
+}
+
+// openPayload opens one stored payload as JSON.parse would read its text, keeping the key order.
+// Postgres returns a jsonb object with its keys byte-ordered by length first, JSON.parse preserves
+// that order, and validate.DecodeAny is the repository's model of it (including JavaScript's rule
+// that integer-like keys come first); a map would lose it. Sealed values are decrypted with the
+// event's own key and location and parsed the same way, so a client sees what TypeScript sees.
+func openPayload(ctx context.Context, ring *contentcrypto.KeyRing, event storedEvent, value any) (any, error) {
+	switch typed := value.(type) {
+	case *validate.Object:
+		for _, key := range typed.Keys {
+			opened, err := openPayload(ctx, ring, event, typed.Values[key])
+			if err != nil {
+				return nil, err
+			}
+			typed.Values[key] = opened
+		}
+		return typed, nil
+	case []any:
+		for index, item := range typed {
+			opened, err := openPayload(ctx, ring, event, item)
+			if err != nil {
+				return nil, err
+			}
+			typed[index] = opened
+		}
+		return typed, nil
+	case string:
+		if ring == nil || !contentcrypto.IsCiphertext(typed) {
+			return typed, nil
+		}
+		id, ok := contentcrypto.CiphertextKeyID(typed)
+		if !ok {
+			return nil, contentcrypto.ErrDecryption
+		}
+		key, err := ring.ByID(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if key.SpaceID != event.spaceID {
+			return nil, contentcrypto.ErrAnotherSpace
+		}
+		plaintext, err := contentcrypto.DecryptText(key, contentcrypto.Location{
+			Table: "events", Column: "payload", RowID: event.id, Owner: event.threadID,
+		}, typed)
+		if err != nil {
+			return nil, err
+		}
+		return validate.DecodeAny([]byte(plaintext))
+	}
+	return value, nil
 }
 
 // eventFrame is mapProductEvent followed by the router's output schema: the payload falls back to
 // {} when it is not an object (readJsonColumn's fallback), and a frame the schema rejects ends the
 // stream, as a failed output validation does in oRPC (the connection is dropped, no frame).
 func eventFrame(event storedEvent) (string, bool) {
-	payload, ok := event.payload.(map[string]any)
+	payload, ok := event.payload.(*validate.Object)
 	if !ok {
-		payload = map[string]any{}
+		payload = &validate.Object{}
 	}
 	if !productEventTypes[event.eventType] || event.id == "" || event.spaceID == "" ||
 		event.threadID == "" || event.botID == "" || event.seq < 0 {
@@ -322,11 +363,10 @@ func eventFrame(event storedEvent) (string, bool) {
 	if !payloadMatchesType(event.eventType, event.runID, payload) {
 		return "", false
 	}
-	// The payload is spliced in as its own JSON: JSON.stringify prints a jsonb number as the
-	// IEEE double TypeScript read from it (1.0 → 1, 1e21 → 1e+21, -0 → 0), and validate.Stringify
-	// is the repo's encoder for exactly that. Object keys come out sorted: a jsonb object has no
-	// order to recover.
-	payloadJSON := json.RawMessage(validate.Stringify(jsValue(payload)))
+	// The payload is spliced in as its own JSON. validate.Stringify is JSON.stringify: numbers are
+	// printed as the IEEE double TypeScript read from the jsonb text (1.0 → 1, 1e21 → 1e+21,
+	// -0 → 0) and keys keep the order openPayload recovered, integer-like ones first.
+	payloadJSON := json.RawMessage(validate.Stringify(payload))
 	body, err := wtf8.Marshal(productEvent{
 		ID: event.id, SpaceID: event.spaceID, ThreadID: event.threadID, BotID: event.botID,
 		Seq: event.seq, Type: event.eventType, RunID: event.runID,
@@ -336,42 +376,6 @@ func eventFrame(event storedEvent) (string, bool) {
 		return "", false
 	}
 	return string(body), true
-}
-
-// jsValue shapes a decoded JSON value the way validate.Stringify prints JSON.stringify:
-// objects become *validate.Object (keys sorted), arrays stay arrays, and numbers keep their
-// json.Number text for jsNumber to read as a double.
-func jsValue(value any) any {
-	switch typed := value.(type) {
-	case map[string]any:
-		keys := make([]string, 0, len(typed))
-		for key := range typed {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		object := &validate.Object{Keys: keys, Values: make(map[string]any, len(keys))}
-		for _, key := range keys {
-			object.Values[key] = jsValue(typed[key])
-		}
-		return object
-	case []any:
-		items := make([]any, len(typed))
-		for index, item := range typed {
-			items[index] = jsValue(item)
-		}
-		return items
-	case float64:
-		// Not what a stored column decodes to, but Stringify prints only json.Number as a
-		// number: route every Go numeric back through the text jsNumber reads as a double.
-		return json.Number(strconv.FormatFloat(typed, 'g', -1, 64))
-	case int64:
-		return json.Number(strconv.FormatInt(typed, 10))
-	case int32:
-		return json.Number(strconv.FormatInt(int64(typed), 10))
-	case int:
-		return json.Number(strconv.Itoa(typed))
-	}
-	return value
 }
 
 // productEvent is ProductEventSchema's fields, in its order.
@@ -389,18 +393,18 @@ type productEvent struct {
 
 // payloadMatchesType is ProductEventSchema's superRefine: run reasoning and the activity marker
 // are the two payloads a client applies blind, so a malformed one fails the frame.
-func payloadMatchesType(eventType string, runID *string, payload map[string]any) bool {
+func payloadMatchesType(eventType string, runID *string, payload *validate.Object) bool {
 	if eventType == "thread.thinking" {
 		if runID == nil {
 			return false
 		}
-		if len(payload) != 3 {
+		if len(payload.Keys) != 3 {
 			return false
 		}
-		if !nonNegativeInt(payload["segment"]) || !nonNegativeInt(payload["durationMs"]) {
+		if !nonNegativeInt(payload.Values["segment"]) || !nonNegativeInt(payload.Values["durationMs"]) {
 			return false
 		}
-		lines, ok := payload["lines"].([]any)
+		lines, ok := payload.Values["lines"].([]any)
 		if !ok {
 			return false
 		}
@@ -414,15 +418,15 @@ func payloadMatchesType(eventType string, runID *string, payload map[string]any)
 	if eventType != "thread.meta" {
 		return true
 	}
-	activity, ok := payload["activity"].(map[string]any)
+	activity, ok := payload.Values["activity"].(*validate.Object)
 	if !ok {
 		return true
 	}
-	thinking, marked := activity["thinking"]
+	thinking, marked := activity.Values["thinking"]
 	if !marked {
 		return true
 	}
-	if runID == nil || len(payload) != 1 || len(activity) != 1 {
+	if runID == nil || len(payload.Keys) != 1 || len(activity.Keys) != 1 {
 		return false
 	}
 	_, ok = thinking.(bool)
