@@ -219,6 +219,33 @@ func (s *Server) ServeOrDecline(w http.ResponseWriter, r *http.Request, procedur
 	return s.serve(w, r, procedure)
 }
 
+// StatusClientClosedRequest is the status recorded for a request whose client went away before
+// the procedure answered. It is what nginx calls a 499 and what the TypeScript API's
+// markExpectedFailure stands for: a warn, no 5xx, and no body for a caller that is not there.
+const StatusClientClosedRequest = 499
+
+// fail answers a failed request, or records that nobody is left to answer.
+//
+// A request whose own context is done has a client that disconnected. Whatever failed after
+// that (context.Canceled, SQLSTATE 57014, a pool acquire under the canceled context) has no
+// one waiting for it, so it is logged as a disconnect and recorded as 499 — never as a 5xx,
+// which would blame the deployment for a browser navigating away (rpc-errors.ts:147-155).
+// A failure under a live context is unchanged: a 500 is logged with its cause and the error
+// envelope goes out.
+func (s *Server) fail(w http.ResponseWriter, r *http.Request, procedure string, failure *orpc.Error) {
+	if r.Context().Err() != nil {
+		s.config.Logger.Warn("client disconnected", "procedure", procedure, "error", failure.Err())
+		// Status only: the body would go to a closed connection, and the completion line (and
+		// the gateway's, through this writer) must not count the request as answered or failed.
+		w.WriteHeader(StatusClientClosedRequest)
+		return
+	}
+	if failure.Status >= 500 {
+		s.config.Logger.Error(procedure+" failed", "error", failure.Err())
+	}
+	orpc.WriteError(w, failure)
+}
+
 func (s *Server) serve(w http.ResponseWriter, r *http.Request, procedure string) (declined bool) {
 	started := time.Now()
 	status := &statusWriter{ResponseWriter: w}
@@ -251,13 +278,13 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, procedure string)
 
 	session, renewal, failure := s.auth.Authenticate(r.Context(), r)
 	if failure != nil {
-		orpc.WriteError(status, failure)
+		s.fail(status, r, procedure, failure)
 		s.log(r, procedure, status.Status(), started)
 		return
 	}
 	actor, failure := s.auth.Actor(r.Context(), session, r.Header.Get("x-rakazo-space-id"))
 	if failure != nil {
-		orpc.WriteError(status, failure)
+		s.fail(status, r, procedure, failure)
 		s.log(r, procedure, status.Status(), started)
 		return
 	}
@@ -267,17 +294,16 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, procedure string)
 
 	handler, ok := s.procs[procedure]
 	if !ok {
-		orpc.WriteError(status, orpc.New("NOT_IMPLEMENTED", http.StatusNotImplemented, "Not Implemented"))
+		s.fail(status, r, procedure, orpc.New("NOT_IMPLEMENTED", http.StatusNotImplemented, "Not Implemented"))
 		s.log(r, procedure, status.Status(), started)
 		return
 	}
 	input, failure := orpc.DecodeInput(r, s.maxBody)
 	if failure != nil {
 		if failure.Status == 413 {
-			orpc.WriteError(status, orpc.TooLarge(fmt.Sprintf("Request body is too large. Upload limit: %s per file.", s.maxLabel)))
-		} else {
-			orpc.WriteError(status, failure)
+			failure = orpc.TooLarge(fmt.Sprintf("Request body is too large. Upload limit: %s per file.", s.maxLabel))
 		}
+		s.fail(status, r, procedure, failure)
 		s.log(r, procedure, status.Status(), started)
 		return
 	}
@@ -297,14 +323,14 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, procedure string)
 		// Only a procedure marked MayDecline is run through a recorder the gateway can discard;
 		// anything else answering this is a bug, never a silent success.
 		if !handler.MayDecline {
-			orpc.WriteError(status, orpc.Internal())
+			s.fail(status, r, procedure, orpc.Internal())
 			s.log(r, procedure, status.Status(), started)
 			return false
 		}
 		return true
 	}
 	if failure != nil {
-		orpc.WriteError(status, failure)
+		s.fail(status, r, procedure, failure)
 		s.log(r, procedure, status.Status(), started)
 		return
 	}
