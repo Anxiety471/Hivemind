@@ -50,6 +50,7 @@ import {
   loadCatalogEntry,
   parseConnectorToolArgs,
 } from "../../tools/lazy-tool-catalog.js";
+import { SKILL_MODE } from "../../tools/skill-mode.tool-definition.js";
 import type { RunContext } from "../assembly/run-context.js";
 import { markReadOutsideContent } from "../assembly/run-context.js";
 import { codeModeToolExecutionId } from "../lifecycle/run-effects.js";
@@ -534,7 +535,7 @@ async function codeModeTool(ctx: RunContext, call: ToolCall) {
       call.observer,
       CODE_MODE_SHELL_TIMEOUT_MS,
     );
-    if (name === "skill_read") {
+    if (name === "skill_read" || name === SKILL_MODE) {
       const directName =
         result && typeof result === "object" && "name" in result && typeof result.name === "string"
           ? result.name
@@ -551,7 +552,19 @@ async function codeModeTool(ctx: RunContext, call: ToolCall) {
         nestedDetails && "name" in nestedDetails && typeof nestedDetails.name === "string"
           ? nestedDetails.name
           : undefined;
-      recordSkill(directName ?? detailsName ?? args.name);
+      const loadedList =
+        result && typeof result === "object" && "loaded" in result && Array.isArray(result.loaded)
+          ? result.loaded
+          : nestedDetails && "loaded" in nestedDetails && Array.isArray(nestedDetails.loaded)
+            ? nestedDetails.loaded
+            : undefined;
+      if (loadedList?.length) {
+        for (const item of loadedList) recordSkill(item);
+      } else if (directName ?? detailsName ?? args.name) {
+        recordSkill(directName ?? detailsName ?? args.name);
+      } else if (Array.isArray(args.names)) {
+        for (const item of args.names) recordSkill(item);
+      }
     }
     if (isRunningShellCommand(result)) {
       stillRunning = true;

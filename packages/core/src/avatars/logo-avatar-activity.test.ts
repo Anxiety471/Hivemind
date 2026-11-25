@@ -62,7 +62,7 @@ describe("logo avatar activity from public events", () => {
     expect(logoAvatarActivity(state)).toBe("idle");
   });
 
-  it.each(["read_file", "web_fetch", "read_history", "skill_read"])(
+  it.each(["read_file", "web_fetch", "read_history", "skill_mode", "skill_read"])(
     "recognises the exact read operation %s",
     (name) => {
       expect(

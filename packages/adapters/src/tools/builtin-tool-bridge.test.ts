@@ -50,7 +50,7 @@ describe("built-in tool bridge", () => {
       "search_history",
       "search_memory_docs",
       "shell",
-      "skill_read",
+      "skill_mode",
       "update_bot",
       "update_preferences",
       "use_tool",

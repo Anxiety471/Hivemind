@@ -20,7 +20,7 @@ var builtinToolNames = []string{
 	"scratchpad_update", "scratchpad_complete", "scratchpad_remove", "board_tickets",
 	"ticket_get", "ticket_create", "ticket_update", "ticket_comment",
 	"task_sync", "schedule_create", "schedule_list", "schedule_update",
-	"schedule_cancel", "end_call", "call_user", "skill_read",
+	"schedule_cancel", "end_call", "call_user", "skill_mode", "skill_read",
 	"skill_create", "skill_update", "skill_delete", "command_save",
 	"command_delete", "run_subagent",
 	"create_space", "spawn_bot", "update_bot", "list_fleet",

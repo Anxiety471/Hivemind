@@ -151,6 +151,17 @@ function rawDetailForTool(toolName: string, args: Record<string, unknown>): stri
       return (
         nonEmptyString(args.data_path) ?? nonEmptyString(args.path) ?? nonEmptyString(args.charts)
       );
+    case "skill_mode": {
+      if (Array.isArray(args.names)) {
+        const joined = args.names
+          .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+          .join(", ");
+        if (joined) return joined;
+      }
+      return (
+        nonEmptyString(args.name) ?? nonEmptyString(args.query) ?? (args.list ? "list" : undefined)
+      );
+    }
     case "skill_read":
     case "skill_create":
     case "skill_update":
@@ -252,7 +263,18 @@ export function summarizeToolCompletionDetail(
   const result = asRecord(completion.result);
   if (!result) return undefined;
   const details = asRecord(result.details);
-  if (completion.name === "skill_read") {
+  if (completion.name === "skill_read" || completion.name === "skill_mode") {
+    const rawLoaded = Array.isArray(result.loaded)
+      ? result.loaded
+      : Array.isArray(details?.loaded)
+        ? details.loaded
+        : undefined;
+    if (rawLoaded) {
+      const joined = rawLoaded
+        .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+        .join(", ");
+      if (joined) return finalizeDetail(joined, secrets);
+    }
     const resolvedName = nonEmptyString(result.name) ?? nonEmptyString(details?.name);
     return finalizeDetail(resolvedName, secrets);
   }
@@ -297,9 +319,13 @@ export function summarizeToolCallSkills(
   }
   const redacted = redactToolArgsForReview(record, secrets);
   const name = toolName.trim().toLowerCase();
-  if (name === "skill_read") {
-    const skillName = nonEmptyString(redacted.name);
-    return skillName ? finalizeSkillList([skillName], secrets) : undefined;
+  if (name === "skill_read" || name === "skill_mode") {
+    const names = Array.isArray(redacted.names)
+      ? redacted.names.filter((item): item is string => typeof item === "string")
+      : [];
+    const single = nonEmptyString(redacted.name);
+    const list = single ? [single, ...names] : names;
+    return list.length > 0 ? finalizeSkillList(list, secrets) : undefined;
   }
   if (name === "code_mode") {
     const code = nonEmptyString(redacted.code);
@@ -319,7 +345,13 @@ export function summarizeToolCompletionSkills(
   const result = asRecord(completion.result);
   if (!result) return undefined;
   const details = asRecord(result.details);
-  if (completion.name === "skill_read") {
+  if (completion.name === "skill_read" || completion.name === "skill_mode") {
+    const rawLoaded = Array.isArray(result.loaded)
+      ? result.loaded
+      : Array.isArray(details?.loaded)
+        ? details.loaded
+        : undefined;
+    if (rawLoaded) return finalizeSkillList(rawLoaded, secrets);
     const resolvedName = nonEmptyString(result.name) ?? nonEmptyString(details?.name);
     return resolvedName ? finalizeSkillList([resolvedName], secrets) : undefined;
   }

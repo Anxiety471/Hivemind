@@ -94,6 +94,7 @@ describe("private task tools after shared-channel messages", () => {
     "schedule_list",
     "schedule_update",
     "schedule_cancel",
+    "skill_mode",
     "skill_read",
     "skill_create",
     "skill_update",
@@ -126,7 +127,7 @@ describe("private task tools after shared-channel messages", () => {
         runId: "run-1",
         source: { messagingChannelRun: false },
       };
-      for (const name of ["schedule_update", "skill_read"]) {
+      for (const name of ["schedule_update", "skill_mode", "skill_read"]) {
         await expect(
           prepareToolRequest(
             ctx as never,

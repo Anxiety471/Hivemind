@@ -990,7 +990,14 @@ describe("toolResultTaintsRun", () => {
   });
 
   it("does not taint on the bot's own writes and saved state", () => {
-    for (const tool of ["ask_user", "remember", "recall_memory", "skill_read", "write_file"]) {
+    for (const tool of [
+      "ask_user",
+      "remember",
+      "recall_memory",
+      "skill_mode",
+      "skill_read",
+      "write_file",
+    ]) {
       expect(toolResultTaintsRun(tool)).toBe(false);
     }
   });

@@ -289,6 +289,19 @@ export function describeToolActivity(
   if (toolName === "web_fetch") return `Reading page: ${detail(redactActivityUrl(record.url))}`;
   if (toolName === "service_search") return `Finding a service: ${detail(record.query)}`;
   if (toolName === "service_call") return `Using service: ${detail(record.service)}`;
+  if (toolName === "skill_mode") {
+    if (record.query) return `Searching skills: ${detail(record.query)}`;
+    if (record.file && record.name)
+      return `Reading ${detail(record.file)} from ${detail(record.name)}`;
+    if (Array.isArray(record.names) && record.names.length > 0) {
+      const joined = record.names
+        .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+        .join(", ");
+      if (joined) return `Reading skills: ${detail(joined)}`;
+    }
+    if (record.name) return `Reading skill: ${detail(record.name)}`;
+    return "Browsing skills";
+  }
   if (toolName === "skill_read")
     return record.file
       ? `Reading ${detail(record.file)} from ${detail(record.name)}`

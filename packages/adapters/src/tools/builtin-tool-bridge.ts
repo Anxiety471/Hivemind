@@ -10,6 +10,7 @@ import {
   groupedNames,
   rankCatalogEntries,
 } from "./lazy-tool-catalog.js";
+import { SKILL_MODE } from "./skill-mode.tool-definition.js";
 
 const FIND_TOOL_LIMIT = 3;
 
@@ -42,7 +43,7 @@ export const CORE_BUILTIN_TOOL_NAMES: ReadonlySet<string> = new Set([
   "request_secret",
   "connect_app",
   "run_subagent",
-  "skill_read",
+  SKILL_MODE,
   "update_bot",
   "update_preferences",
   "remember",

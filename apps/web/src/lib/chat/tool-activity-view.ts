@@ -74,7 +74,7 @@ const SUMMARY_ACTIONS: readonly { kind: ActivitySummaryKind; match: RegExp }[] =
     kind: "files",
     match: /^(read[ _]file|read[ _]history|list[ _]files|attach[ _]file|open[ _]path|view)$/,
   },
-  { kind: "skills", match: /^skill[ _]read$/ },
+  { kind: "skills", match: /^skill[ _](read|mode)$/ },
   { kind: "search", match: /^(web[ _]search|websearch|search[ _]history)$/ },
   {
     kind: "commands",

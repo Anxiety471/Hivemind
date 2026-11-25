@@ -1021,4 +1021,33 @@ describe("code_mode improvements", () => {
       'Call codemode.describe({ name: "mcp__cloudflare__search" }) for full description and schema.',
     );
   });
+
+  it("records loaded skills when code_mode scripts call skill_mode", async () => {
+    const { ctx } = context();
+    const skillModeDef = {
+      name: "skill_mode",
+      description: "Search or load skills.",
+      inputSchema: { type: "object" },
+      readOnly: true,
+    };
+    ctx.tools.offered.push(skillModeDef as never);
+    ctx.tools.builtins.push(skillModeDef as never);
+    (ctx.deps.prisma as Record<string, unknown>).agentSkill = {
+      findMany: vi.fn(async () => []),
+      findFirst: vi.fn(async () => null),
+    };
+    const result = (await applyTool(
+      ctx as never,
+      "code_mode",
+      {
+        code: `
+          const loaded = await codemode.skill_mode({ names: ["Interrogate", "Rakazo"] });
+          console.log(JSON.stringify(loaded.loaded));
+        `,
+      },
+      "outer-1",
+    )) as { output: string; skills?: string[] };
+    expect(JSON.parse(result.output)).toEqual(["Interrogate", "Rakazo"]);
+    expect(result.skills).toEqual(["Interrogate", "Rakazo"]);
+  });
 });
