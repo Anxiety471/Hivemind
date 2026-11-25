@@ -535,9 +535,18 @@ async function codeModeTool(ctx: RunContext, call: ToolCall) {
     }
     if (isToolError(result)) {
       const message = toolResultErrorText(result);
+      const hasLongDescription =
+        target !== undefined &&
+        String(target.description ?? "")
+          .replace(/\s+/g, " ")
+          .trim().length > 90;
       const hint =
-        target && /invalid|required|expected|argument|parameter|schema|must be/i.test(message)
-          ? ` Expected: ${formatToolSignature(target)}. Call codemode.describe({ name: ${JSON.stringify(target.name)} }) for full schema.`
+        target &&
+        (/invalid|required|expected|argument|parameter|schema|must be|not defined|syntax|unexpected/i.test(
+          message,
+        ) ||
+          hasLongDescription)
+          ? ` Expected: ${formatToolSignature(target)}. Call codemode.describe({ name: ${JSON.stringify(target.name)} }) for full description and schema.`
           : "";
       throw Object.assign(new Error(`${message}${hint}`), { name: "ToolFailed" });
     }
@@ -698,5 +707,6 @@ async function codeModeTool(ctx: RunContext, call: ToolCall) {
 export function isToolError(result: unknown): boolean {
   if (typeof result !== "object" || result === null) return false;
   if ("error" in result) return true;
+  if ("isError" in result && (result as { isError?: unknown }).isError === true) return true;
   return isTerminatingReplyResult(result);
 }

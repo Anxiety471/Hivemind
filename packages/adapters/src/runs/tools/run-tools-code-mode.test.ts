@@ -984,4 +984,41 @@ describe("code_mode improvements", () => {
     expect(result.error).toContain("Expected: codemode.demo_search({ query?: string }) => JSON");
     expect(result.error).toContain('codemode.describe({ name: "demo_search" })');
   });
+
+  it("throws ToolFailed with describe hint when an MCP tool returns isError: true inside code_mode", async () => {
+    const mcpSearch = {
+      name: "mcp__cloudflare__search",
+      description:
+        "Search the Cloudflare OpenAPI spec. Use `spec.paths` inside `async () => { ... }` to inspect endpoints and parameters.",
+      inputSchema: { type: "object", properties: { code: { type: "string" } }, required: ["code"] },
+      readOnly: true,
+      route: { connectorId: "mcp", resourceId: "cf", toolName: "search" },
+    };
+    const execute = vi.fn(async function* () {
+      yield {
+        type: "result",
+        data: {
+          isError: true,
+          content: [{ type: "text", text: "ReferenceError: openapi is not defined" }],
+        },
+      };
+    });
+    const { ctx } = context(execute as never);
+    ctx.tools.offered = [codeModeTool, mcpSearch] as never;
+    ctx.tools.connector = new Map([[mcpSearch.name, mcpSearch]]) as never;
+
+    const result = (await applyTool(
+      ctx as never,
+      "code_mode",
+      { code: `await codemode.mcp__cloudflare__search({ code: "async () => openapi" });` },
+      "outer-1",
+    )) as { error?: string };
+    expect(result.error).toContain("ReferenceError: openapi is not defined");
+    expect(result.error).toContain(
+      "Expected: codemode.mcp__cloudflare__search({ code: string }) => JSON.",
+    );
+    expect(result.error).toContain(
+      'Call codemode.describe({ name: "mcp__cloudflare__search" }) for full description and schema.',
+    );
+  });
 });

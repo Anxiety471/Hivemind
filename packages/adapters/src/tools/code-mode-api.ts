@@ -169,6 +169,8 @@ export interface CodeModeSearchHit {
   writes?: boolean;
   /** Present when `name` is not a valid JS identifier and must be called with bracket syntax. */
   call?: string;
+  /** Present when the full description or parameter descriptions were omitted from the summary. */
+  details?: string;
 }
 
 function schemaParamMetadata(schema: Record<string, unknown>): {
@@ -206,18 +208,23 @@ export function searchCodeModeTools(
     schema: Record<string, unknown>;
     writes?: boolean;
     isCommand: boolean;
+    hasDetails: boolean;
   };
   const candidates: SearchableItem<Candidate>[] = [
     ...tools.map((tool) => {
       const schema = tool.inputSchema ?? {};
       const { params, paramDescriptions } = schemaParamMetadata(schema);
       const shortName = tool.route?.toolName?.trim();
+      const rawDescription = String(tool.description ?? "");
+      const collapsedDescription = rawDescription.replace(/\s+/g, " ").trim();
+      const summary = firstSentence(rawDescription);
       const item: Candidate = {
         name: tool.name,
-        description: String(tool.description ?? ""),
+        description: rawDescription,
         schema,
         writes: isCodeModeWrite(tool),
         isCommand: false,
+        hasDetails: collapsedDescription.length > summary.length || paramDescriptions.length > 0,
       };
       return {
         item,
@@ -233,11 +240,14 @@ export function searchCodeModeTools(
       const schema = command.parameters ?? {};
       const { params, paramDescriptions } = schemaParamMetadata(schema);
       const cmdName = `${CODE_COMMAND_PREFIX}${command.name}`;
+      const collapsedDescription = command.description.replace(/\s+/g, " ").trim();
+      const summary = firstSentence(command.description);
       const item: Candidate = {
         name: cmdName,
         description: command.description,
         schema,
         isCommand: true,
+        hasDetails: collapsedDescription.length > summary.length || paramDescriptions.length > 0,
       };
       return {
         item,
@@ -259,6 +269,9 @@ export function searchCodeModeTools(
     ...(candidate.writes === undefined ? {} : { writes: candidate.writes }),
     ...(!candidate.isCommand && !isValidCodeModeIdentifier(candidate.name)
       ? { call: codeModeCallExpr(candidate.name) }
+      : {}),
+    ...(candidate.hasDetails
+      ? { details: "Call codemode.describe({ name }) for full description and schema." }
       : {}),
   }));
 }

@@ -210,4 +210,28 @@ describe("searchCodeModeTools", () => {
       },
     ]);
   });
+
+  it("signals when full docs or parameter descriptions are omitted from search hits", () => {
+    const rich = {
+      name: "mcp__cloudflare__search",
+      description:
+        "Search the Cloudflare OpenAPI spec. Use `spec.paths` inside `async () => { ... }` to inspect endpoints.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          code: { type: "string", description: "Async arrow function to run against spec." },
+        },
+        required: ["code"],
+      },
+      readOnly: true,
+    };
+    const [hit] = searchCodeModeTools([rich], "cloudflare search");
+    expect(hit).toEqual({
+      name: "mcp__cloudflare__search",
+      signature: "{ code: string }",
+      description: "Search the Cloudflare OpenAPI spec.",
+      writes: false,
+      details: "Call codemode.describe({ name }) for full description and schema.",
+    });
+  });
 });
