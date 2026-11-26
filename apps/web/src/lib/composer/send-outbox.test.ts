@@ -18,6 +18,7 @@ import {
 } from "./outbox-storage";
 import type { WebOutboxAttachment, WebSendAttempt, WebSendPayload } from "./send-outbox";
 import {
+  claimWebEchoMessage,
   clearWebOutbox,
   confirmWebEchoes,
   discardWebSendAttempt,
@@ -31,6 +32,7 @@ import {
   resetWebOutboxForTests,
   retryWebSendAttempt,
   startWebOutbox,
+  webEchoMessageOwner,
 } from "./send-outbox";
 
 const mocks = vi.hoisted(() => ({
@@ -906,5 +908,19 @@ describe("matchesInFlightEcho", () => {
     expect(matchesInFlightEcho(attempt({ state: "failed" }), message(), "user-1")).toBe(false);
     expect(matchesInFlightEcho(attempt({ acceptedSeq: 4 }), message(), "user-1")).toBe(false);
     expect(matchesInFlightEcho(attempt(), message({ role: "bot" }), "user-1")).toBe(false);
+  });
+});
+
+describe("claimed echos", () => {
+  it("remembers which send claimed an echoed message until the queue is cleared", () => {
+    expect(webEchoMessageOwner("m-1")).toBeUndefined();
+    claimWebEchoMessage("m-1", "nonce-1");
+    expect(webEchoMessageOwner("m-1")).toBe("nonce-1");
+    // A second send cannot take it: the map names the one that did.
+    claimWebEchoMessage("m-1", "nonce-2");
+    expect(webEchoMessageOwner("m-1")).toBe("nonce-2");
+
+    clearWebOutbox();
+    expect(webEchoMessageOwner("m-1")).toBeUndefined();
   });
 });

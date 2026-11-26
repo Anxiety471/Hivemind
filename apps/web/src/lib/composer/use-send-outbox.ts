@@ -6,11 +6,11 @@ import {
   claimWebEchoMessage,
   confirmWebEchoes,
   getWebOutboxAttempts,
-  isWebEchoMessageClaimed,
   matchesInFlightEcho,
   registerWebThreadScreen,
   startWebOutbox,
   subscribeWebOutbox,
+  webEchoMessageOwner,
 } from "./send-outbox";
 
 /** The thread rows an in-flight echo can arrive as: what the transcript already holds. */
@@ -77,17 +77,18 @@ export function useWebOutbox({
       // The thread shows the accepted message: the queue's copy of it retires at once.
       if (attempt.acceptedSeq !== undefined && echoSeqs.has(attempt.acceptedSeq)) continue;
       if (attempt.state === "pending" && attempt.acceptedSeq === undefined && activeMessages) {
-        const echo = activeMessages.find(
-          (message) =>
-            !claimedEchoIds.has(message.id) &&
-            !isWebEchoMessageClaimed(message.id) &&
-            matchesInFlightEcho(attempt, message, userId),
-        );
+        const echo = activeMessages.find((message) => {
+          if (claimedEchoIds.has(message.id)) return false;
+          // A message one send claimed keeps hiding that send here, and never becomes another's.
+          const owner = webEchoMessageOwner(message.id);
+          if (owner !== undefined && owner !== attempt.clientNonce) return false;
+          return matchesInFlightEcho(attempt, message, userId);
+        });
         if (echo) {
           claimedEchoIds.add(echo.id);
           // Remembered outside this render: the attempt leaves the queue once its seq arrives,
           // and a later identical send must not claim the same message as its own echo.
-          claimWebEchoMessage(echo.id);
+          claimWebEchoMessage(echo.id, attempt.clientNonce);
           continue;
         }
       }

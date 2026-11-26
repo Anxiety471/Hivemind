@@ -609,6 +609,71 @@ function replyCandidate(id: string): ThreadMessage {
   return { id, role: "user", blocks: [] } as unknown as ThreadMessage;
 }
 
+it("keeps an echoed send hidden when the transcript re-renders before the answer", async () => {
+  const send = deferred<{ runId: string; taskId: string; seq: number }>();
+  rpc.threads.send.mockReturnValue(send.promise);
+
+  expect(await sendWith("hello", "nonce-1")).toBe(true);
+  await vi.waitFor(() =>
+    expect(latest.pendingSends.map((attempt) => attempt.state)).toEqual(["pending"]),
+  );
+
+  const echo = userMessage("m-echo", 7, "hello");
+  activeSnapshot = { messages: [echo] } as ThreadSnapshot;
+  act(() => root.render(<Harness />));
+  expect(latest.pendingSends).toEqual([]);
+
+  // A bot row lands: the transcript hands the hook a new array, still before the answer.
+  activeSnapshot = {
+    messages: [echo, botMessage("m-progress", 8, "working")],
+  } as ThreadSnapshot;
+  act(() => root.render(<Harness />));
+  expect(latest.pendingSends).toEqual([]);
+
+  send.resolve({ runId: "run-1", taskId: "task-1", seq: 7 });
+  await vi.waitFor(() => expect(composerHoldsUnsavedWork()).toBe(false));
+  expect(latest.pendingSends).toEqual([]);
+});
+
+it("never hands a claimed echo to a later identical send", async () => {
+  const first = deferred<{ runId: string; taskId: string; seq: number }>();
+  rpc.threads.send.mockReturnValueOnce(first.promise);
+  const echo = userMessage("m-echo", 7, "hello");
+  activeSnapshot = { messages: [echo] } as ThreadSnapshot;
+  act(() => root.render(<Harness />));
+
+  // The thread already shows this message when the send is enqueued, so the echo is its baseline,
+  // not an echo of it: the bubble stays until the server answers.
+  expect(await sendWith("hello", "nonce-1")).toBe(true);
+  await vi.waitFor(() =>
+    expect(latest.pendingSends.map((attempt) => attempt.state)).toEqual(["pending"]),
+  );
+  expect(latest.pendingSends).toHaveLength(1);
+
+  first.resolve({ runId: "run-1", taskId: "task-1", seq: 7 });
+  await vi.waitFor(() => expect(composerHoldsUnsavedWork()).toBe(false));
+
+  const second = deferred<{ runId: string; taskId: string; seq: number }>();
+  rpc.threads.send.mockReturnValueOnce(second.promise);
+  expect(await sendWith("hello", "nonce-2")).toBe(true);
+  await vi.waitFor(() =>
+    expect(latest.pendingSends.map((attempt) => attempt.state)).toEqual(["pending"]),
+  );
+  expect(latest.pendingSends).toHaveLength(1);
+
+  second.resolve({ runId: "run-2", taskId: "task-2", seq: 9 });
+  await flush();
+});
+
+function botMessage(id: string, seq: number, text: string): ThreadMessage {
+  return {
+    id,
+    seq,
+    role: "bot",
+    blocks: [{ kind: "text", text }],
+  } as unknown as ThreadMessage;
+}
+
 it("keeps a reply picked while an older message send is in flight", async () => {
   act(() => latest.setReplyTarget(replyCandidate("m-1")));
   let finishSend!: () => void;
