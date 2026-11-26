@@ -53,10 +53,12 @@ describe("withoutSupersededJobCards", () => {
     expect(ids(withoutSupersededJobCards([finished, working]))).toEqual(["card-2"]);
   });
 
-  it("falls back to the list's order for a live row with no seq", () => {
-    const live = message("progress:run", undefined, [job("job-1", "working")]);
-    const saved = message("card-2", 2, [job("job-1", "finished")]);
+  it("ranks a live row after every stored row, so a low index cannot look old", () => {
+    const stored = message("card-1", 300, [job("job-1", "working")]);
+    const live = message("progress:run", undefined, [job("job-1", "finished")]);
 
-    expect(ids(withoutSupersededJobCards([live, saved]))).toEqual(["card-2"]);
+    expect(ids(withoutSupersededJobCards([stored, live]))).toEqual(["progress:run"]);
+    // A newest-first list puts that live row first; it is still the newest card.
+    expect(ids(withoutSupersededJobCards([live, stored]))).toEqual(["progress:run"]);
   });
 });

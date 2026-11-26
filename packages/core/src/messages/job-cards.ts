@@ -6,11 +6,6 @@ export type JobCardMessage = {
   blocks: readonly MessageBlock[];
 };
 
-/** Newest first: a live row has no seq, and its place in the list still orders it. */
-function rankOf(message: JobCardMessage, index: number): number {
-  return message.seq ?? index;
-}
-
 /**
  * The thread without job cards a later card for the same job replaced. A job posts a card when it
  * starts and again each time its state is learned, so without this an old card would keep counting
@@ -18,6 +13,10 @@ function rankOf(message: JobCardMessage, index: number): number {
  * no blocks goes with it, and every other message keeps its identity so the chat does not redraw.
  */
 export function withoutSupersededJobCards<T extends JobCardMessage>(messages: T[]): T[] {
+  // A stored row is ordered by its seq, a live row (built from events, so without one) comes after
+  // every stored row in list order: its own index would otherwise rank it older than a stored seq.
+  const latestSeq = messages.reduce((latest, message) => Math.max(latest, message.seq ?? 0), 0);
+  const rankOf = (message: JobCardMessage, index: number) => message.seq ?? latestSeq + 1 + index;
   const newest = new Map<string, number>();
   messages.forEach((message, index) => {
     const rank = rankOf(message, index);
