@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import type { ThreadMessage } from "@rakazo/contracts";
 import type { ComposerMention } from "@rakazo/core";
 import { resolveComposerSendPlan } from "@rakazo/core";
 import { deferred, flush } from "@rakazo/core/test-async";
@@ -15,7 +16,7 @@ import {
   putOutboxAttempt,
   resetOutboxStorageForTests,
 } from "./outbox-storage";
-import type { WebOutboxAttachment, WebSendPayload } from "./send-outbox";
+import type { WebOutboxAttachment, WebSendAttempt, WebSendPayload } from "./send-outbox";
 import {
   clearWebOutbox,
   confirmWebEchoes,
@@ -24,6 +25,7 @@ import {
   getWebOutboxAttempts,
   hasInFlightWebSends,
   hasUnsentWebSends,
+  matchesInFlightEcho,
   OUTBOX_MAX_ENTRIES,
   registerWebThreadScreen,
   resetWebOutboxForTests,
@@ -810,3 +812,99 @@ function installFakeIndexedDb() {
   });
   resetOutboxStorageForTests();
 }
+
+describe("matchesInFlightEcho", () => {
+  function attempt(
+    overrides: Partial<WebSendAttempt> = {},
+    payloadOverrides: Partial<WebSendPayload> = {},
+  ): WebSendAttempt {
+    return {
+      clientNonce: "nonce-1",
+      createdAt: 1,
+      scope,
+      payload: payload(payloadOverrides),
+      artifactIds: new Map(),
+      state: "pending",
+      retryCount: 0,
+      persisted: false,
+      baselineMessageIds: new Set(["before-1"]),
+      ...overrides,
+    };
+  }
+  function message(
+    overrides: Partial<ThreadMessage> = {},
+  ): Pick<ThreadMessage, "id" | "role" | "blocks" | "author"> {
+    return { id: "echo-1", role: "user", blocks: [{ kind: "text", text: "hello" }], ...overrides };
+  }
+
+  it("matches the in-flight send's own words, however their blocks are split", () => {
+    expect(matchesInFlightEcho(attempt(), message(), "user-1")).toBe(true);
+    expect(
+      matchesInFlightEcho(
+        attempt(),
+        message({
+          blocks: [
+            { kind: "text", text: "hel" },
+            { kind: "text", text: "lo" },
+          ],
+        }),
+        "user-1",
+      ),
+    ).toBe(false);
+    expect(
+      matchesInFlightEcho(
+        attempt({}, { trimmed: "hello there" }),
+        message({ blocks: [{ kind: "text", text: "hello there" }] }),
+        "user-1",
+      ),
+    ).toBe(true);
+  });
+
+  it("matches the words the bubble shows, when a page marker leads the sent text", () => {
+    const shown = attempt({}, { trimmed: "and notes", displayText: "[Sales](page:p1)\nand notes" });
+    expect(
+      matchesInFlightEcho(
+        shown,
+        message({ blocks: [{ kind: "text", text: "and notes" }] }),
+        "user-1",
+      ),
+    ).toBe(true);
+  });
+
+  it("never matches a message that was already in the thread, or another writer's", () => {
+    expect(matchesInFlightEcho(attempt(), message({ id: "before-1" }), "user-1")).toBe(false);
+    // A send restored from storage has no baseline, so its chat's older look-alikes must not match.
+    expect(
+      matchesInFlightEcho(attempt({ baselineMessageIds: undefined }), message(), "user-1"),
+    ).toBe(false);
+    expect(
+      matchesInFlightEcho(
+        attempt(),
+        message({ author: { id: "user-2", name: "Other" } }),
+        "user-1",
+      ),
+    ).toBe(false);
+    expect(
+      matchesInFlightEcho(attempt(), message({ author: { id: "user-1", name: "Me" } }), "user-1"),
+    ).toBe(true);
+  });
+
+  it("matches only an image and attachment count that agree", () => {
+    const oneFile = attempt({}, { attachments: [fileAttachment("a")] });
+    const image = message({
+      blocks: [
+        { kind: "text", text: "hello" },
+        { kind: "image", artifactId: "a", mimeType: "image/png", name: "a.png" },
+      ],
+    });
+    expect(matchesInFlightEcho(oneFile, image, "user-1")).toBe(true);
+    expect(matchesInFlightEcho(attempt(), image, "user-1")).toBe(false);
+  });
+
+  it("only ever explains a pending send the server has not answered", () => {
+    expect(matchesInFlightEcho(attempt({ state: "queued" }), message(), "user-1")).toBe(false);
+    expect(matchesInFlightEcho(attempt({ state: "failed" }), message(), "user-1")).toBe(false);
+    expect(matchesInFlightEcho(attempt({ acceptedSeq: 4 }), message(), "user-1")).toBe(false);
+    expect(matchesInFlightEcho(attempt(), message({ role: "bot" }), "user-1")).toBe(false);
+  });
+});

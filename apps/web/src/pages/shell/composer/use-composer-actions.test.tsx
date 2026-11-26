@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import type { Bot, ComputerStatus, Me, ThreadMessage, ThreadSnapshot } from "@rakazo/contracts";
-import { flush as flushTimer } from "@rakazo/core/test-async";
+import { deferred, flush as flushTimer } from "@rakazo/core/test-async";
 import { act } from "react";
 import type { Root } from "react-dom/client";
 import { createRoot } from "react-dom/client";
@@ -533,6 +533,77 @@ it("refuses a send the queue cannot hold and keeps the file in the composer", as
   expect(latest.sendError).toBe("Too many unsent messages");
   expect(latest.activePendingAttachments.map((pending) => pending.file)).toEqual([file]);
 });
+
+it("hides an in-flight send the moment the thread echoes it, before the send answers", async () => {
+  const send = deferred<{ runId: string; taskId: string; seq: number }>();
+  rpc.threads.send.mockReturnValue(send.promise);
+
+  expect(await sendWith("hello", "nonce-1")).toBe(true);
+  await vi.waitFor(() => expect(rpc.threads.send).toHaveBeenCalledTimes(1));
+  expect(latest.pendingSends.map((attempt) => attempt.state)).toEqual(["pending"]);
+
+  // The server commits the message and streams it before the send request answers.
+  activeSnapshot = { messages: [userMessage("m-echo", 7, "hello")] } as ThreadSnapshot;
+  act(() => root.render(<Harness />));
+  expect(latest.pendingSends).toEqual([]);
+
+  // The answer settles the send: the thread already shows its seq, so it never returns.
+  send.resolve({ runId: "run-1", taskId: "task-1", seq: 7 });
+  await vi.waitFor(() => expect(composerHoldsUnsavedWork()).toBe(false));
+  expect(latest.pendingSends).toEqual([]);
+});
+
+it("keeps a new send visible when an older message says the same words", async () => {
+  activeSnapshot = { messages: [userMessage("m-old", 3, "hello")] } as ThreadSnapshot;
+  act(() => root.render(<Harness />));
+  const send = deferred<{ runId: string; taskId: string; seq: number }>();
+  rpc.threads.send.mockReturnValue(send.promise);
+
+  expect(await sendWith("hello", "nonce-1")).toBe(true);
+  await vi.waitFor(() => expect(latest.pendingSends[0]?.state).toBe("pending"));
+  // The look-alike was there before this send, so it cannot be the echo that retires it.
+  expect(latest.pendingSends).toHaveLength(1);
+
+  send.resolve({ runId: "run-1", taskId: "task-1", seq: 4 });
+  await flush();
+});
+
+it("hides one of two identical sends on its echo and keeps the other queued", async () => {
+  noteServerReachable(false);
+  expect(await sendWith("hello", "nonce-1")).toBe(true);
+  expect(await sendWith("hello", "nonce-2")).toBe(true);
+  expect(latest.pendingSends.map((attempt) => attempt.state)).toEqual(["queued", "queued"]);
+
+  const sends: Array<ReturnType<typeof deferred<{ runId: string; taskId: string; seq: number }>>> =
+    [];
+  rpc.threads.send.mockImplementation(() => {
+    const send = deferred<{ runId: string; taskId: string; seq: number }>();
+    sends.push(send);
+    return send.promise;
+  });
+  noteServerReachable(true);
+  await vi.waitFor(() => expect(rpc.threads.send).toHaveBeenCalledTimes(1));
+  await vi.waitFor(() => expect(latest.pendingSends[0]?.state).toBe("pending"));
+  expect(latest.pendingSends.map((attempt) => attempt.state)).toEqual(["pending", "queued"]);
+
+  // Only the pending send can be echoed: a queued one has not been delivered.
+  activeSnapshot = { messages: [userMessage("m-echo", 11, "hello")] } as ThreadSnapshot;
+  act(() => root.render(<Harness />));
+  expect(latest.pendingSends.map((attempt) => attempt.state)).toEqual(["queued"]);
+
+  sends[0]!.resolve({ runId: "run-1", taskId: "task-1", seq: 11 });
+  await vi.waitFor(() => expect(rpc.threads.send).toHaveBeenCalledTimes(2));
+  await vi.waitFor(() =>
+    expect(latest.pendingSends.map((attempt) => attempt.state)).toEqual(["pending"]),
+  );
+
+  sends[1]!.resolve({ runId: "run-2", taskId: "task-2", seq: 12 });
+  await flush();
+});
+
+function userMessage(id: string, seq: number, text: string): ThreadMessage {
+  return { id, seq, role: "user", blocks: [{ kind: "text", text }] } as unknown as ThreadMessage;
+}
 
 function replyCandidate(id: string): ThreadMessage {
   return { id, role: "user", blocks: [] } as unknown as ThreadMessage;
