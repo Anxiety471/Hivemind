@@ -1255,6 +1255,11 @@ function SpaceShell() {
               onReleaseComputer={computerControls.onReleaseComputer}
               onOpenImportSetup={openImportSetup}
               rpc={rpc}
+              // A job card's controls speak in this chat, exactly as the composer would.
+              onJobAction={async (text) => {
+                const accepted = await composer.sendMessage(text, [], newClientId());
+                if (!accepted) throw new Error(t`Could not send the instruction.`);
+              }}
             />
           )}
         </div>

@@ -6,12 +6,13 @@ import (
 )
 
 // responseBlockKinds is RESPONSE_BLOCK_KINDS: blocks that count as reply
-// output (packages/db/src/run-timing.ts:4-24).
+// output (packages/db/src/runs/run-timing.ts:4-25).
 var responseBlockKinds = map[string]bool{
 	"card": true, "chart": true, "app": true, "ask": true, "choice": true,
 	"app_connect": true, "connect": true, "computer": true, "voice_call": true,
 	"call_request": true, "image": true, "file": true, "page": true, "handoff": true,
 	"skill_draft": true, "mcp_approval": true, "child_bot": true, "cloud_agent": true,
+	"job": true,
 }
 
 // IsRunResponse is isRunResponse: only actual reply output counts, working and

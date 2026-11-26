@@ -108,7 +108,7 @@ func replyBlockText(block map[string]any) string {
 			parts[index] = blockString(entry.(map[string]any), "label")
 		}
 		return strings.Join(parts, ", ")
-	case "voice_call", "cloud_agent", "page":
+	case "voice_call", "cloud_agent", "job", "page":
 		return blockString(block, "title")
 	case "call_request":
 		return blockString(block, "reason")

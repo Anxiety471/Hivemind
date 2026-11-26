@@ -321,11 +321,97 @@ var domains = func(value any) (any, bool) {
 	return cleaned, ok && len(cleaned.([]any)) <= 32
 }
 
+// trimmedMax is z.string().trim().max(limit): trimmed, but allowed to be empty.
+func trimmedMax(limit int) parser {
+	return func(value any) (any, bool) {
+		text, issues := validate.String(nil, value, validate.StringRules{Trim: true, Max: limit})
+		if issues != nil {
+			return nil, false
+		}
+		return text, true
+	}
+}
+
+// arrayMax is z.array(inner).max(limit).
+func arrayMax(limit int, inner parser) parser {
+	return func(value any) (any, bool) {
+		cleaned, ok := array(inner)(value)
+		return cleaned, ok && len(cleaned.([]any)) <= limit
+	}
+}
+
+// The job card's caps (packages/contracts/src/integrations/tool-card.ts:9-17).
+const (
+	jobCardReplyMaxChars = 4000
+	jobCardMaxFiles      = 40
+	jobCardMaxSteps      = 30
+	jobCardFileDiffMax   = 4000
+)
+
+// jobCardFile is JobCardFileSchema.
+var jobCardFile = object(
+	required("path", trimmedMinMax(400)),
+	optional("status", enum("added", "modified", "deleted", "renamed")),
+	optional("insertions", nonNegative),
+	optional("deletions", nonNegative),
+	optional("diff", strMax(jobCardFileDiffMax)),
+)
+
+// jobCardStep is JobCardStepSchema.
+var jobCardStep = object(
+	optional("kind", enum("tool", "command", "edit", "note")),
+	required("name", trimmedMinMax(120)),
+	optional("detail", trimmedMax(400)),
+	optional("status", enum("running", "ok", "error")),
+	optional("durationMs", nonNegative),
+)
+
+// jobCardStats is JobCardStatsSchema.
+var jobCardStats = object(
+	optional("filesChanged", nonNegative),
+	optional("insertions", nonNegative),
+	optional("deletions", nonNegative),
+	optional("toolCalls", nonNegative),
+	optional("inputTokens", nonNegative),
+	optional("outputTokens", nonNegative),
+	optional("costUsd", nonNegativeFloat),
+)
+
+// jobBlock is ToolCardSchema: a job a tool started elsewhere, with the coding details it
+// reports. Every detail is optional, so a minimal legacy card still parses.
+var jobBlock = object(
+	required("kind", literal("job")),
+	required("jobId", trimmedMinMax(200)),
+	required("title", trimmedMinMax(200)),
+	optional("agent", trimmedMinMax(80)),
+	optional("branch", trimmedMinMax(240)),
+	required("state", enum("starting", "working", "finished", "needs_input", "exited", "timed_out")),
+	optional("startedAt", nonNegative),
+	optional("url", trimmedMax(2048)),
+	optional("reply", trimmedMax(jobCardReplyMaxChars)),
+	optional("finishedAt", nonNegative),
+	optional("turn", positive),
+	optional("repo", trimmedMinMax(120)),
+	optional("workspacePath", trimmedMinMax(400)),
+	optional("commit", trimmedMinMax(40)),
+	optional("model", trimmedMinMax(120)),
+	optional("effort", trimmedMinMax(40)),
+	optional("summary", trimmedMinMax(400)),
+	optional("currentActivity", trimmedMinMax(240)),
+	optional("error", trimmedMinMax(600)),
+	optional("prUrl", trimmedMax(2048)),
+	optional("prLabel", trimmedMinMax(80)),
+	optional("stats", jobCardStats),
+	optional("files", arrayMax(jobCardMaxFiles, jobCardFile)),
+	optional("steps", arrayMax(jobCardMaxSteps, jobCardStep)),
+)
+
 // blockSchemas is the MessageBlock union by kind. Each object lists `kind` first and the
 // other keys in the schema's order.
 var blockSchemas = map[string]parser{
 	"text": object(required("kind", literal("text")), required("text", str)),
 	"card": object(required("kind", literal("card")), required("lines", array(object(required("k", str), required("v", str))))),
+	"job":  jobBlock,
 	"ask":  withKind("ask", askBlock),
 	"choice": object(required("kind", literal("choice")), required("question", str), optional("subtitle", str),
 		required("options", array(object(required("id", str), required("letter", str), required("label", str)))),

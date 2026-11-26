@@ -109,6 +109,7 @@ export const MessageView = memo(function MessageView({
   onMarkUnread,
   markedUnread = false,
   onReact,
+  onJobAction,
 }: {
   artifactTarget: ArtifactTarget;
   canAnswer: boolean;
@@ -138,6 +139,8 @@ export const MessageView = memo(function MessageView({
   onOpenSubagent?: (target: HelperThreadTarget) => void;
   /** A helper's transcript: no reply, react, speak or answer actions of its own. */
   readOnly?: boolean;
+  /** Sends text into this chat's thread, as if the reader had typed it, from a job card. */
+  onJobAction?: (text: string) => Promise<void>;
   /** The adjacent receipts represented by this peer line. */
   peerExchange?: PeerExchange;
   speakerName?: string;
@@ -788,7 +791,15 @@ export const MessageView = memo(function MessageView({
             );
           }
           if (block.kind === "cloud_agent") return <CloudAgentCard key={i} block={block} />;
-          if (block.kind === "job") return <JobCard key={i} block={block} />;
+          if (block.kind === "job")
+            return (
+              <JobCard
+                key={i}
+                block={block}
+                readOnly={readOnly}
+                onJobAction={readOnly ? undefined : onJobAction}
+              />
+            );
           if (block.kind === "skill_draft") {
             return (
               <div key={i} className="flex justify-start">

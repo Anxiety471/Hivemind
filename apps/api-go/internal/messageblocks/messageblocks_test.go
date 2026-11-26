@@ -3,7 +3,9 @@ package messageblocks
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -210,5 +212,203 @@ func TestParseBlocksStepsSkills(t *testing.T) {
 
 	if _, ok := ParseBlocks(decode(`{"kind":"steps","skills":[123],"steps":[{"label":"Code mode","count":1}]}`)); ok {
 		t.Fatal("expected non-string skills entry to be rejected")
+	}
+}
+
+// decodeOne reads one block the way the router's jsonb value arrives: numbers kept as
+// json.Number, so the integer checks read them exactly as zod reads JSON.
+func decodeOne(t *testing.T, raw string) any {
+	t.Helper()
+	decoder := json.NewDecoder(bytes.NewReader([]byte(raw)))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		t.Fatalf("decode %s: %v", raw, err)
+	}
+	return value
+}
+
+// canonicalJSON is the wire form of a cleaned block: Go sorts object keys, so the two sides of a
+// comparison only differ where the parse itself differs.
+func canonicalJSON(t *testing.T, raw string) string {
+	t.Helper()
+	encoded, err := json.Marshal(decodeOne(t, raw))
+	if err != nil {
+		t.Fatalf("marshal %s: %v", raw, err)
+	}
+	return string(encoded)
+}
+
+// TestJobCardWireParity pins the parsed job card to the original wire: every field zod keeps is
+// kept with the same name and the same JSON value, every other key is dropped, and each string is
+// trimmed exactly as z.string().trim() trims it.
+func TestJobCardWireParity(t *testing.T) {
+	cases := []struct{ name, in, want string }{
+		{
+			name: "minimal legacy card",
+			in:   `{"kind":"job","jobId":"job-1","title":"mcp-job-card","state":"working"}`,
+			want: `{"kind":"job","jobId":"job-1","title":"mcp-job-card","state":"working"}`,
+		},
+		{
+			name: "every field of the original card",
+			in: `{"kind":"job","jobId":"job-1","title":"mcp-job-card","agent":"pi",
+				"branch":"Anxiety471/mcp-job-card","state":"finished","startedAt":1770000000000,
+				"url":"https://code.bocchi.trade","reply":"Ported the job card."}`,
+			want: `{"kind":"job","jobId":"job-1","title":"mcp-job-card","agent":"pi",
+				"branch":"Anxiety471/mcp-job-card","state":"finished","startedAt":1770000000000,
+				"url":"https://code.bocchi.trade","reply":"Ported the job card."}`,
+		},
+		{
+			name: "every coding detail, in the contract's order",
+			in: `{"kind":"job","jobId":"job-1","title":"mcp-job-card","agent":"pi",
+				"branch":"Anxiety471/mcp-job-card","state":"finished","startedAt":1770000000000,
+				"url":"https://code.bocchi.trade","reply":"Ported the job card.","finishedAt":1770000060000,
+				"turn":3,"repo":"Anxiety471/hivemind","workspacePath":"/home/hitori/orca/pr-812",
+				"commit":"6a25fd26e384","model":"gpt-5.5","effort":"high",
+				"summary":"Adds the coding details to the job card.",
+				"currentActivity":"Running the API tests","error":"go test ./... failed",
+				"prUrl":"https://github.com/Anxiety471/hivemind/pull/812","prLabel":"#812",
+				"stats":{"filesChanged":4,"insertions":120,"deletions":9,"toolCalls":37,
+					"inputTokens":20000,"outputTokens":3100,"costUsd":0.42},
+				"files":[{"path":"packages/contracts/src/integrations/tool-card.ts","status":"modified",
+					"insertions":60,"deletions":2,"diff":"@@ -1,3 +1,5 @@\n+export const JOB_CARD_MAX_FILES = 40;"},
+					{"path":"packages/core/src/integrations/tool-card.ts","status":"modified"}],
+				"steps":[{"kind":"tool","name":"grep","status":"ok","durationMs":12},
+					{"kind":"command","name":"pnpm test","detail":"34 passed","status":"running"}]}`,
+			want: `{"kind":"job","jobId":"job-1","title":"mcp-job-card","agent":"pi",
+				"branch":"Anxiety471/mcp-job-card","state":"finished","startedAt":1770000000000,
+				"url":"https://code.bocchi.trade","reply":"Ported the job card.","finishedAt":1770000060000,
+				"turn":3,"repo":"Anxiety471/hivemind","workspacePath":"/home/hitori/orca/pr-812",
+				"commit":"6a25fd26e384","model":"gpt-5.5","effort":"high",
+				"summary":"Adds the coding details to the job card.",
+				"currentActivity":"Running the API tests","error":"go test ./... failed",
+				"prUrl":"https://github.com/Anxiety471/hivemind/pull/812","prLabel":"#812",
+				"stats":{"filesChanged":4,"insertions":120,"deletions":9,"toolCalls":37,
+					"inputTokens":20000,"outputTokens":3100,"costUsd":0.42},
+				"files":[{"path":"packages/contracts/src/integrations/tool-card.ts","status":"modified",
+					"insertions":60,"deletions":2,"diff":"@@ -1,3 +1,5 @@\n+export const JOB_CARD_MAX_FILES = 40;"},
+					{"path":"packages/core/src/integrations/tool-card.ts","status":"modified"}],
+				"steps":[{"kind":"tool","name":"grep","status":"ok","durationMs":12},
+					{"kind":"command","name":"pnpm test","detail":"34 passed","status":"running"}]}`,
+		},
+		{
+			name: "trims like z.string().trim() and drops unnamed keys",
+			in:   `{"kind":"job","jobId":" job-1 ","title":"\tmcp-job-card\n","state":"working","summary":" a note ","surprise":true}`,
+			want: `{"kind":"job","jobId":"job-1","title":"mcp-job-card","state":"working","summary":"a note"}`,
+		},
+		{
+			name: "keeps an empty reply and an empty pull request link, which have no minimum",
+			in:   `{"kind":"job","jobId":"job-1","title":"t","state":"working","reply":"","prUrl":""}`,
+			want: `{"kind":"job","jobId":"job-1","title":"t","state":"working","reply":"","prUrl":""}`,
+		},
+		{
+			name: "keeps zero-valued counts, which nonnegative accepts",
+			in:   `{"kind":"job","jobId":"job-1","title":"t","state":"working","stats":{"filesChanged":0,"costUsd":0},"files":[{"path":"a.ts","insertions":0,"deletions":0}],"steps":[{"name":"grep","durationMs":0}]}`,
+			want: `{"kind":"job","jobId":"job-1","title":"t","state":"working","stats":{"filesChanged":0,"costUsd":0},"files":[{"path":"a.ts","insertions":0,"deletions":0}],"steps":[{"name":"grep","durationMs":0}]}`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			blocks, ok := ParseBlocks([]any{decodeOne(t, tc.in)})
+			if !ok {
+				t.Fatalf("expected a valid job card")
+			}
+			encoded, err := json.Marshal(blocks[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := canonicalJSON(t, tc.want); string(encoded) != want {
+				t.Fatalf("wire mismatch\n got: %s\nwant: %s", encoded, want)
+			}
+		})
+	}
+}
+
+// TestJobCardRejectsOutsideTheSchema covers each bound the contract puts on a job card, so Go
+// refuses exactly what MessageBlockSchema refuses instead of storing a card TS would drop.
+func TestJobCardRejectsOutsideTheSchema(t *testing.T) {
+	repeat := func(count int, value string) string { return strings.Repeat(value, count) }
+	files := func(count int) string {
+		entries := make([]string, count)
+		for index := range entries {
+			entries[index] = fmt.Sprintf(`{"path":"file-%d.ts"}`, index)
+		}
+		return "[" + strings.Join(entries, ",") + "]"
+	}
+	steps := func(count int) string {
+		entries := make([]string, count)
+		for index := range entries {
+			entries[index] = fmt.Sprintf(`{"name":"step-%d"}`, index)
+		}
+		return "[" + strings.Join(entries, ",") + "]"
+	}
+	card := func(extra string) string {
+		return `{"kind":"job","jobId":"job-1","title":"t","state":"working"` + extra + `}`
+	}
+	cases := map[string]string{
+		"missing-job-id":         `{"kind":"job","title":"t","state":"working"}`,
+		"empty-job-id":           `{"kind":"job","jobId":"","title":"t","state":"working"}`,
+		"blank-title":            card(`,"title":"   "`),
+		"missing-state":          `{"kind":"job","jobId":"job-1","title":"t"}`,
+		"unknown-state":          card(`,"state":"paused"`),
+		"null-agent":             card(`,"agent":null`),
+		"agent-too-long":         card(`,"agent":"` + repeat(81, "a") + `"`),
+		"started-at-negative":    card(`,"startedAt":-1`),
+		"finished-at-fraction":   card(`,"finishedAt":1.5`),
+		"turn-zero":              card(`,"turn":0`),
+		"commit-too-long":        card(`,"commit":"` + repeat(41, "c") + `"`),
+		"summary-too-long":       card(`,"summary":"` + repeat(401, "s") + `"`),
+		"activity-too-long":      card(`,"currentActivity":"` + repeat(241, "a") + `"`),
+		"error-too-long":         card(`,"error":"` + repeat(601, "e") + `"`),
+		"url-too-long":           card(`,"url":"https://example.test/` + repeat(2030, "u") + `"`),
+		"prurl-too-long":         card(`,"prUrl":"https://example.test/` + repeat(2030, "p") + `"`),
+		"prlabel-too-long":       card(`,"prLabel":"` + repeat(81, "l") + `"`),
+		"negative-cost":          card(`,"stats":{"costUsd":-0.01}`),
+		"fractional-files":       card(`,"stats":{"filesChanged":1.5}`),
+		"negative-insertions":    card(`,"stats":{"insertions":-1}`),
+		"too-many-files":         card(`,"files":` + files(41)),
+		"file-without-path":      card(`,"files":[{"status":"modified"}]`),
+		"file-path-too-long":     card(`,"files":[{"path":"` + repeat(401, "f") + `"}]`),
+		"unknown-file-status":    card(`,"files":[{"path":"a.ts","status":"copied"}]`),
+		"file-diff-too-long":     card(`,"files":[{"path":"a.ts","diff":"` + repeat(4001, "d") + `"}]`),
+		"file-negative-lines":    card(`,"files":[{"path":"a.ts","deletions":-1}]`),
+		"too-many-steps":         card(`,"steps":` + steps(31)),
+		"step-without-name":      card(`,"steps":[{"kind":"tool"}]`),
+		"step-name-too-long":     card(`,"steps":[{"name":"` + repeat(121, "n") + `"}]`),
+		"unknown-step-kind":      card(`,"steps":[{"name":"grep","kind":"read"}]`),
+		"unknown-step-status":    card(`,"steps":[{"name":"grep","status":"failed"}]`),
+		"step-duration-negative": card(`,"steps":[{"name":"grep","durationMs":-1}]`),
+	}
+	for name, raw := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, ok := ParseBlocks([]any{decodeOne(t, raw)}); ok {
+				t.Fatalf("expected %s to be refused", raw)
+			}
+		})
+	}
+}
+
+// TestJobCardAcceptsTheCapsAsBounds keeps the limits inclusive: a card at exactly the cap is
+// still a card.
+func TestJobCardAcceptsTheCapsAsBounds(t *testing.T) {
+	repeat := func(count int, value string) string { return strings.Repeat(value, count) }
+	entries := make([]string, 40)
+	steps := make([]string, 30)
+	for index := range entries {
+		entries[index] = fmt.Sprintf(`{"path":"file-%d.ts","diff":"%s"}`, index, repeat(4000, "d"))
+	}
+	for index := range steps {
+		steps[index] = fmt.Sprintf(`{"name":"step-%d","detail":"%s"}`, index, repeat(400, "x"))
+	}
+	raw := `{"kind":"job","jobId":"job-1","title":"t","state":"working","reply":"` + repeat(4000, "r") +
+		`","summary":"` + repeat(400, "s") + `","files":[` + strings.Join(entries, ",") +
+		`],"steps":[` + strings.Join(steps, ",") + `]}`
+	blocks, ok := ParseBlocks([]any{decodeOne(t, raw)})
+	if !ok {
+		t.Fatal("expected a card at every cap to parse")
+	}
+	card := blocks[0].(map[string]any)
+	if len(card["files"].([]any)) != 40 || len(card["steps"].([]any)) != 30 {
+		t.Fatalf("unexpected list sizes: %d files, %d steps", len(card["files"].([]any)), len(card["steps"].([]any)))
 	}
 }

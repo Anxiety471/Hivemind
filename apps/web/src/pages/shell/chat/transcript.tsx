@@ -134,6 +134,7 @@ export const Transcript = memo(function Transcript({
   onReleaseComputer,
   onOpenImportSetup,
   rpc,
+  onJobAction,
 }: {
   scrollRef: RefObject<HTMLDivElement | null>;
   scrollRequest: { messageId: string; nonce: number } | null;
@@ -215,6 +216,8 @@ export const Transcript = memo(function Transcript({
   ) => Promise<void>;
   onOpenImportSetup?: (target: ImportSetupTarget) => void;
   rpc: ReturnType<typeof createSpaceRpc>;
+  /** Sends text into this thread from a job card's own controls. */
+  onJobAction?: (text: string) => Promise<void>;
 }) {
   const { t } = useLingui();
   const [atEnd, setAtEnd] = useState(true);
@@ -638,6 +641,8 @@ export const Transcript = memo(function Transcript({
           const message = item.message;
           const peerReceipt = isPeerReceiptBlocks(message.blocks);
           const messageReactions = reactionView.reactions.get(message.id);
+          // A job card is a page of its own work, so it gets the column rather than a bubble's fit.
+          const hasJobCard = message.blocks.some((block) => block.kind === "job");
           const msgRun = message.runId
             ? (threadRuns?.find((candidate) => candidate.id === message.runId) ??
               (activeRun?.id === message.runId ? activeRun : undefined))
@@ -710,6 +715,9 @@ export const Transcript = memo(function Transcript({
                                   // reply, so the column, not the bubble, sets its width.
                                   block.kind === "thinking" ||
                                   block.kind === "steps" ||
+                                  // The job card caps its own width; the frame gives it the column,
+                                  // so it never pushes a narrow chat sideways.
+                                  block.kind === "job" ||
                                   block.kind === "routine_event",
                               ) ||
                               (showToolActivity &&
@@ -718,7 +726,11 @@ export const Transcript = memo(function Transcript({
                               pageView.pages.has(message.id)
                                 ? "w-full"
                                 : "w-fit"
-                            } min-w-0 ${bubbleFrameWidth(message.role)}`
+                            } min-w-0 ${
+                              hasJobCard
+                                ? "max-w-[96%] [@media(hover:none)]:max-w-[96%]"
+                                : bubbleFrameWidth(message.role)
+                            }`
                     }
                   >
                     <MessageView
@@ -772,6 +784,7 @@ export const Transcript = memo(function Transcript({
                       onReply={onReply}
                       onMarkUnread={onMarkUnread}
                       onReact={onReact}
+                      onJobAction={onJobAction}
                     />
                     {failedRun && failedMessageId === message.id && onRetryRun ? (
                       <MessageRunError
