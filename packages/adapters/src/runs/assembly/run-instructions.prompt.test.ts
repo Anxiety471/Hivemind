@@ -3,6 +3,7 @@ import {
   connectedPluginsInstruction,
   contextToolsInstruction,
   dedupeInstructions,
+  PRIVATE_WORKSPACE_INSTRUCTION,
   PROACTIVE_POSTURE_INSTRUCTION,
   renderBaseSystemPromptPreview,
   taughtSkillsInstruction,
@@ -107,6 +108,47 @@ describe("userTurnInstructions code mode clause", () => {
     }).join("\n");
     expect(withCode).toContain("batch");
     expect(withCode).toContain("code_mode");
+  });
+
+  it("names skill_mode as a direct tool only when the run offers it", () => {
+    const withSkillMode = userTurnInstructions({
+      ...base,
+      offeredToolNames: new Set(["code_mode", "skill_mode"]),
+    }).join("\n");
+    expect(withSkillMode).toContain(
+      "skill_mode is a direct tool: call it on its own before code_mode when a listed skill fits the task.",
+    );
+
+    const withoutSkillMode = userTurnInstructions({
+      ...base,
+      offeredToolNames: new Set(["code_mode", "read_file"]),
+    }).join("\n");
+    expect(withoutSkillMode).not.toContain("skill_mode is a direct tool");
+  });
+
+  it("points at the Routines skill for schedules only when the run can load it", () => {
+    const routinesPointer =
+      'Before creating or changing a routine or schedule, call skill_mode({ name: "Routines" }) and follow it.';
+    const withRoutines = userTurnInstructions({
+      ...base,
+      offeredToolNames: new Set(["schedule_create", "command_save"]),
+      followUpsOffered: true,
+    }).join("\n");
+    expect(withRoutines).toContain(routinesPointer);
+
+    const withoutCommandSave = userTurnInstructions({
+      ...base,
+      offeredToolNames: new Set(["schedule_create"]),
+      followUpsOffered: true,
+    }).join("\n");
+    expect(withoutCommandSave).not.toContain('skill_mode({ name: "Routines" })');
+
+    const withoutFollowUps = userTurnInstructions({
+      ...base,
+      offeredToolNames: new Set(["schedule_create", "command_save"]),
+      followUpsOffered: false,
+    }).join("\n");
+    expect(withoutFollowUps).not.toContain('skill_mode({ name: "Routines" })');
   });
 });
 
@@ -228,7 +270,12 @@ describe("appends, prefix cache order, and duplicates", () => {
     expect(preview).toContain('skill_mode({ name: "History" })');
     expect(preview.match(/10–20/g)?.length).toBe(1);
     expect(preview).not.toContain("Only the latest 10–20 messages stay in your window;");
-    expect(preview.length).toBeLessThan(4_400);
+    expect(preview.length).toBeLessThan(6_000);
+    const catalogAt = preview.indexOf("Available skills (7):");
+    expect(catalogAt).toBeGreaterThan(-1);
+    expect(preview).toContain("- Computer: ");
+    expect(catalogAt).toBeLessThan(preview.indexOf(PRIVATE_WORKSPACE_INSTRUCTION));
+    expect(preview).toContain("skill_mode is a direct tool");
 
     const codeFirstPreview = renderBaseSystemPromptPreview({
       ticketBoardEnabled: true,
@@ -236,6 +283,7 @@ describe("appends, prefix cache order, and duplicates", () => {
       codeFirst: true,
     });
     expect(codeFirstPreview).toContain("Call most tools from code_mode");
+    expect(codeFirstPreview).toContain("skill_mode is a direct tool");
   });
 
   it("collapses identical blocks and empties, but never a block that merely contains another", () => {
