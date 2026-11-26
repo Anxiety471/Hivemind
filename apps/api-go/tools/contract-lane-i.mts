@@ -10,6 +10,8 @@ import type { Case, Seeded } from "./contract.mts";
 type System = any;
 
 const OLD = new Date(Date.UTC(2021, 0, 1));
+// A wake time the run-wakeup scanner will never reach, for runs seeded only to be read.
+const NEVER = new Date(Date.UTC(2099, 0, 1));
 const at = (seconds: number) => new Date(OLD.getTime() + seconds * 1000);
 
 type MessageSeed = {
@@ -25,7 +27,18 @@ type MessageSeed = {
   clientNonce?: string;
 };
 
-type RunSeed = { key: string; status: string; trigger: string; created?: number };
+type RunSeed = {
+  key: string;
+  status: string;
+  trigger: string;
+  created?: number;
+  /**
+   * A queued run with no wake time is due at once for the TypeScript run-wakeup scanner, which
+   * then publishes a `runs` space change from its own timer mid-case. These cases only read the
+   * status a queued run shows, so they park the wake time out of reach.
+   */
+  wakeAt?: Date;
+};
 
 type BotSeed = {
   key: string;
@@ -113,6 +126,7 @@ export function laneICases(system: System): Case[] {
         data: {
           id: runId, spaceId, botId: id, threadId, taskId, userId: user,
           status: run.status, trigger: run.trigger, createdAt: at(run.created ?? 0),
+          ...(run.wakeAt ? { wakeAt: run.wakeAt } : {}),
         },
       });
       runIDs.set(run.key, runId);
@@ -375,7 +389,13 @@ export function laneICases(system: System): Case[] {
       {
         seed: seedAll(
           [
-            { key: "gb1", runs: [{ key: "a", status: "queued", trigger: "user", created: 1 }, { key: "b", status: "waiting_input", trigger: "user", created: 2 }] },
+            {
+              key: "gb1",
+              runs: [
+                { key: "a", status: "queued", trigger: "user", created: 1, wakeAt: NEVER },
+                { key: "b", status: "waiting_input", trigger: "user", created: 2 },
+              ],
+            },
             { key: "gb2", runs: [{ key: "a", status: "running", trigger: "user", created: 1 }, { key: "b", status: "leased", trigger: "user", created: 2 }] },
           ],
           [{ key: "g1", members: [{ bot: "gb1" }, { bot: "gb2" }] }],
@@ -620,7 +640,7 @@ export function laneICases(system: System): Case[] {
         seed: seedAll([{
           key: "b1",
           runs: [
-            { key: "a", status: "queued", trigger: "user", created: 1 },
+            { key: "a", status: "queued", trigger: "user", created: 1, wakeAt: NEVER },
             { key: "b", status: "running", trigger: "user", created: 2 },
             { key: "c", status: "running", trigger: "helper", created: 3 },
             { key: "d", status: "running", trigger: "tickets", created: 4 },

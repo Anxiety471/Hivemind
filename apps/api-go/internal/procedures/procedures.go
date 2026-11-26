@@ -50,6 +50,7 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/usage"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/vaultactivity"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/vaultitems"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/vaultstore"
 	runslib "github.com/Anxiety471/Hivemind/apps/api-go/internal/runs"
 )
 
@@ -851,6 +852,59 @@ func All(database *db.DB, deployment shared.Deployment) []local.Procedure {
 				return vaultitems.ListBotSecrets(ctx, database, deployment, actor, input)
 			},
 		},
+		// Lane M: the vault writes. Their audit metadata can carry a user-typed name, which
+		// TypeScript's redactor may rewrite, so every one of them may decline to it.
+		{
+			Name:       "agentSecrets.put",
+			MayDecline: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return vaultstore.AgentPut(ctx, database, deployment, actor, input)
+			},
+		},
+		{
+			Name:       "agentSecrets.remove",
+			MayDecline: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return vaultstore.AgentRemove(ctx, database, deployment, actor, input)
+			},
+		},
+		{
+			Name:       "botSecrets.put",
+			MayDecline: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return vaultstore.BotPut(ctx, database, deployment, actor, input)
+			},
+		},
+		{
+			Name:       "botSecrets.remove",
+			MayDecline: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return vaultstore.BotRemove(ctx, database, deployment, actor, input)
+			},
+		},
+		{
+			Name:       "vault.put",
+			MayDecline: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return vaultstore.VaultPut(ctx, database, deployment, actor, input)
+			},
+		},
+		{
+			Name:       "vault.remove",
+			MayDecline: true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return vaultstore.VaultRemove(ctx, database, deployment, actor, input)
+			},
+		},
+		{
+			Name:        "vault.reveal",
+			ReadOnly:    true,
+			SelfAudited: true,
+			MayDecline:  true,
+			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
+				return vaultstore.VaultReveal(ctx, database, deployment, actor, input)
+			},
+		},
 		{
 			Name: "bots.rotateWebhookSecret",
 			Serve: func(ctx context.Context, actor db.Actor, input orpc.Input) (any, *orpc.Error) {
@@ -945,7 +999,14 @@ func VaultProcedures() []string {
 		"pages.remove",
 		"pages.setVisibility",
 		"vault.list",
+		"vault.put",
+		"vault.remove",
+		"vault.reveal",
 		"botSecrets.list",
+		"botSecrets.put",
+		"botSecrets.remove",
+		"agentSecrets.put",
+		"agentSecrets.remove",
 		"mcp.servers.list",
 		"mcp.servers.agents",
 		"mcp.servers.remove",

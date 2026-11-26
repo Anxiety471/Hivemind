@@ -408,6 +408,14 @@ func isCloudMetadataAddress(value string) bool {
 	return false
 }
 
+// IsCloudMetadataHost exposes the classifier for the credential-destination schema
+// (bot-secrets.ts:174); messageblocks itself only needs the unexported form.
+func IsCloudMetadataHost(hostname string) bool { return isCloudMetadataHost(hostname) }
+
+// IsPrivateNetworkHost exposes isPrivateNetworkHost (network-host.ts:193-197) for the same
+// schema's plain-HTTP-on-a-LAN opt-in.
+func IsPrivateNetworkHost(hostname string) bool { return isPrivateNetworkHost(hostname) }
+
 // isCloudMetadataHost is isCloudMetadataHost (network-host.ts:204-207).
 func isCloudMetadataHost(hostname string) bool {
 	host := normalizeHost(hostname)

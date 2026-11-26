@@ -579,7 +579,9 @@ export function laneKReviewCases(system: System): Case[] {
       await card(seeded, "km1", "kt1", "ks1", "connected", 1, "kb1");
       // Fresh, not OLD: the API's in-process sweeper cancels a queued run it finds stuck, and
       // that write would land on the TypeScript side only (Go runs no sweeper). A live run this
-      // second is what "using the server" means here.
+      // second is what "using the server" means here. The wake time is parked out of reach so
+      // the run-wakeup scanner neither claims it nor publishes its `runs` frame into the window
+      // (a queued run with a null `wakeAt` is due at once, run-wakeup.ts:412).
       const now = new Date();
       await system.task.create({
         data: {
@@ -606,6 +608,7 @@ export function laneKReviewCases(system: System): Case[] {
           trigger: "user",
           createdAt: now,
           updatedAt: now,
+          wakeAt: new Date("2100-01-01T00:00:00.000Z"),
         },
       });
     }, {

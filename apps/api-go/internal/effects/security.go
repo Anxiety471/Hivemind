@@ -123,6 +123,10 @@ func (r *Recorder) Record(ctx context.Context, input SecurityEvent) error {
 		if kind != "" {
 			audit.TargetType = kind
 		}
+		// Every vault item is its person's own; see the vault rule in audit-events.ts.
+		if kind == "vault_credential" {
+			audit.UserID = event.UserID
+		}
 		if err := r.recordAudit(WithCaller(ctx, Caller{IP: event.IP, UserAgent: event.UserAgent}), audit); err != nil {
 			r.logger.Error("audit.event.write_failed", "audit.event.action", audit.Action, "error", err)
 		}
