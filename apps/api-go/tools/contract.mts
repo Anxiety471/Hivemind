@@ -100,6 +100,13 @@ process.env.SANDBOX_MAX_COMPUTERS_PER_USER = MAX_COMPUTERS_PER_USER;
 // sides (phoneCallSettings reads process.env, and the Go child inherits it).
 process.env.PHONE_CALLS_ENABLED = "true";
 process.env.PHONE_CALL_RING_SECONDS = "45";
+// The elected reconciler runs the audit retention pruner hourly
+// (createRetentionPruner "audit.event", via createAuditLogReconciler) and its default keeps
+// 365 days (DEFAULT_AUDIT_EVENT_RETENTION_DAYS, packages/db/src/account/audit-events.ts). Cases
+// seed audit rows dated 2021; the second tick would otherwise delete them mid-pass. Go has no
+// pruner, so nothing on that side reads this.
+process.env.AUDIT_EVENT_RETENTION_DAYS = "10000";
+
 
 export type Seeded = {
   userId: string;
