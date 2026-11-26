@@ -23,6 +23,7 @@ import {
   timeSeparatorIds,
   unreadDividerMessageId,
   voiceChatHoldsMessage,
+  withoutSupersededJobCards,
 } from "@rakazo/core";
 import type { GroupAvatarMember } from "@rakazo/ui-web";
 import { Button, cn, Spinner } from "@rakazo/ui-web";
@@ -243,7 +244,8 @@ export const Transcript = memo(function Transcript({
     );
   }, [scrollRequest, transcript]);
   const messages = useMemo(
-    () => expandPeerReplies(transcript, expandedPeerMarkers),
+    // A job posts a card at every state it learns, so only its newest card stays in the thread.
+    () => withoutSupersededJobCards(expandPeerReplies(transcript, expandedPeerMarkers)),
     [transcript, expandedPeerMarkers],
   );
   useLayoutEffect(() => {

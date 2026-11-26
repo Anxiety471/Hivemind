@@ -1,14 +1,8 @@
 import type { MessageBlock } from "@rakazo/contracts";
+import { httpsUrl } from "../primitives/links.js";
 
-export function cloudAgentHttpsUrl(value: string | null | undefined): string | undefined {
-  if (!value) return undefined;
-  try {
-    const url = new URL(value);
-    return url.protocol === "https:" && !url.username && !url.password ? value : undefined;
-  } catch {
-    return undefined;
-  }
-}
+/** The https link a cloud agent's payload carried, if any. */
+export const cloudAgentHttpsUrl = httpsUrl;
 
 export function cloudAgentBlockFromPayload(
   payload: Record<string, unknown>,

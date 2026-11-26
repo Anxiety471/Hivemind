@@ -9,6 +9,7 @@ import { Id, ThinkingLevelSchema } from "../ids.js";
 import { AgentImportSetupItemSchema } from "../integrations/agent-import-setup.js";
 import { McpTransportSchema } from "../integrations/mcp.js";
 import { McpAppCspSchema } from "../integrations/mcp-app.js";
+import { ToolCardSchema } from "../integrations/tool-card.js";
 
 export const MessageRole = z.enum(["user", "bot", "system"]);
 export const BotMessageIntent = z.enum(["request", "result", "question", "status", "fyi"]);
@@ -299,6 +300,8 @@ export const MessageBlock = z.discriminatedUnion("kind", [
     name: z.string(),
     status: z.enum(["created", "archived", "deleted"]),
   }),
+  /** A job a tool started elsewhere, from the card the tool's own result carried. */
+  ToolCardSchema,
   z.object({
     /** Compact card for a remote cloud coding agent (not the bot computer). */
     kind: z.literal("cloud_agent"),

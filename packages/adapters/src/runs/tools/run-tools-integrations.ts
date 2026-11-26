@@ -1,5 +1,6 @@
 import type { ConnectorApp } from "@rakazo/adapter-kit";
-import { isBackgroundRunTrigger, redactSecrets } from "@rakazo/core";
+import type { ToolCardBlock } from "@rakazo/core";
+import { isBackgroundRunTrigger, redactSecrets, toolCardFromResult } from "@rakazo/core";
 import { normalizedHttpUrl } from "@rakazo/core/egress";
 import { getLogger } from "@rakazo/logging";
 import { executeCloudAgentTool } from "../../cloud-agents/cloud-agent-service.js";
@@ -67,6 +68,8 @@ export async function connectorTool(ctx: RunContext, call: ToolCall) {
             payload: { tool: name, logId },
           });
         }
+        const card = toolCardFromResult(redactConnectorPayload(event.data, ctx.secrets));
+        if (card) await showToolCard(ctx, card);
       }
       if (event.type === "error") {
         result = { error: event.message };
@@ -85,6 +88,19 @@ export async function connectorTool(ctx: RunContext, call: ToolCall) {
     return call.finish(result);
   }
   return call.finish({ error: `unknown tool ${name}` });
+}
+
+/**
+ * Posts the job card a tool result carried above the bot's reply. The card is extra: posting it
+ * failing leaves the call's result, which the bot already has, as it is.
+ */
+async function showToolCard(ctx: RunContext, card: ToolCardBlock): Promise<void> {
+  const { deps, run } = ctx;
+  try {
+    await publishMessage(deps, run, "bot", [card]);
+  } catch (error) {
+    getLogger().warn("tool_card.card_failed", { error: sanitizeConnectorError(error) });
+  }
 }
 
 /**

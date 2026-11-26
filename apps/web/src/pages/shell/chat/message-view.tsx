@@ -36,6 +36,7 @@ import {
 import { ArtifactFileCard } from "../../../components/messages/ArtifactFileCard";
 import { AskCard } from "../../../components/messages/AskCard";
 import { CloudAgentCard } from "../../../components/messages/CloudAgentCard";
+import { JobCard } from "../../../components/messages/JobCard";
 import { McpAppCard } from "../../../components/messages/McpAppCard";
 import { SubagentCard } from "../../../components/messages/SubagentCard";
 import { PageBlockCard } from "../../../components/pages/PageBlockCard";
@@ -787,6 +788,7 @@ export const MessageView = memo(function MessageView({
             );
           }
           if (block.kind === "cloud_agent") return <CloudAgentCard key={i} block={block} />;
+          if (block.kind === "job") return <JobCard key={i} block={block} />;
           if (block.kind === "skill_draft") {
             return (
               <div key={i} className="flex justify-start">
