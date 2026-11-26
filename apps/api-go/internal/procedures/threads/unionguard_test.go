@@ -37,3 +37,24 @@ func TestLiveEventTypesMatchTypeScriptSnapshot(t *testing.T) {
 		}
 	}
 }
+
+// TestMessageRolesMatchTypeScript guards messageRoles, the enum threadMessage checks a row's role
+// against. It is MessageRole in packages/contracts/src/threads/message-blocks.ts:12; a role TS
+// adds there and Go misses fails the whole thread read with "Output validation failed".
+func TestMessageRolesMatchTypeScript(t *testing.T) {
+	root, err := tsunions.Root()
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := tsunions.Open(root, "packages/contracts/src/threads/message-blocks.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	roles, err := file.Strings("MessageRole")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tsunions.SetDiff("threads.messageRoles", messageRoles, roles); err != nil {
+		t.Fatalf("%v\n(MessageRole is packages/contracts/src/threads/message-blocks.ts)", err)
+	}
+}

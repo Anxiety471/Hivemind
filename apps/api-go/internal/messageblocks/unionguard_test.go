@@ -96,3 +96,23 @@ func TestMcpTransportsMatchTypeScript(t *testing.T) {
 		t.Fatalf("%v\n(McpTransportSchema is packages/contracts/src/integrations/mcp.ts)", err)
 	}
 }
+
+// TestIntentsMatchTypeScript guards `intents`, BotMessageIntent (packages/contracts/src/threads/
+// message-blocks.ts:13): an intent added there and missed here fails every message carrying it.
+func TestIntentsMatchTypeScript(t *testing.T) {
+	root, err := tsunions.Root()
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := tsunions.Open(root, "packages/contracts/src/threads/message-blocks.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	intentNames, err := file.Strings("BotMessageIntent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tsunions.SetDiff("messageblocks.intents", intents, intentNames); err != nil {
+		t.Fatalf("%v\n(BotMessageIntent is packages/contracts/src/threads/message-blocks.ts)", err)
+	}
+}
