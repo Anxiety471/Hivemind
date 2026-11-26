@@ -48,30 +48,31 @@ type Availability struct {
 
 // Server is McpServerSchema (mcp.ts:275-305).
 type Server struct {
-	ID              string       `json:"id"`
-	SpaceID         string       `json:"spaceId"`
-	InstallID       *string      `json:"installId"`
-	Slug            string       `json:"slug"`
-	Name            string       `json:"name"`
-	Description     string       `json:"description"`
-	Transport       string       `json:"transport"`
-	Endpoint        *string      `json:"endpoint"`
-	Command         *string      `json:"command"`
-	HasArgs         bool         `json:"hasArgs"`
-	EnvKeys         []string     `json:"envKeys"`
-	FileKeys        []string     `json:"fileKeys"`
-	HeaderKeys      []string     `json:"headerKeys"`
-	HasSecret       bool         `json:"hasSecret"`
-	OAuthStatus     string       `json:"oauthStatus"`
-	OAuthClientID   *string      `json:"oauthClientId"`
-	Health          Health       `json:"health"`
-	Enabled         bool         `json:"enabled"`
-	VerbatimResults bool         `json:"verbatimResults"`
-	Revision        int32        `json:"revision"`
-	Availability    Availability `json:"availability"`
-	AllBots         bool         `json:"allBots"`
-	CreatedAt       string       `json:"createdAt"`
-	UpdatedAt       string       `json:"updatedAt"`
+	ID                 string       `json:"id"`
+	SpaceID            string       `json:"spaceId"`
+	InstallID          *string      `json:"installId"`
+	Slug               string       `json:"slug"`
+	Name               string       `json:"name"`
+	Description        string       `json:"description"`
+	Transport          string       `json:"transport"`
+	Endpoint           *string      `json:"endpoint"`
+	Command            *string      `json:"command"`
+	HasArgs            bool         `json:"hasArgs"`
+	EnvKeys            []string     `json:"envKeys"`
+	FileKeys           []string     `json:"fileKeys"`
+	HeaderKeys         []string     `json:"headerKeys"`
+	HasSecret          bool         `json:"hasSecret"`
+	OAuthStatus        string       `json:"oauthStatus"`
+	OAuthClientID      *string      `json:"oauthClientId"`
+	Health             Health       `json:"health"`
+	Enabled            bool         `json:"enabled"`
+	VerbatimResults    bool         `json:"verbatimResults"`
+	SendCallerIdentity bool         `json:"sendCallerIdentity"`
+	Revision           int32        `json:"revision"`
+	Availability       Availability `json:"availability"`
+	AllBots            bool         `json:"allBots"`
+	CreatedAt          string       `json:"createdAt"`
+	UpdatedAt          string       `json:"updatedAt"`
 }
 
 type row struct {
@@ -82,6 +83,7 @@ type row struct {
 	secretID, installID                             *string
 	allSpaces, allBots, enabled                     bool
 	verbatim                                        bool
+	sendCallerIdentity                              bool
 	revision                                        int32
 	healthStatus                                    string
 	healthMessage                                   *string
@@ -106,8 +108,8 @@ func List(
 	err = database.Tenant(ctx, actor, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT id, "spaceId", slug, name, description, transport,
 			endpoint, command, args, "hasArgs", env, files, headers, "secretId", "installId",
-			"allSpaces", "allBots", enabled, coalesce("verbatimResults", false), revision,
-			"healthStatus", "healthMessage", "healthToolCount", "healthCheckedAt",
+			"allSpaces", "allBots", enabled, coalesce("verbatimResults", false),
+			"sendCallerIdentity", revision, "healthStatus", "healthMessage", "healthToolCount", "healthCheckedAt",
 			"createdAt", "updatedAt"
 			FROM mcp_servers WHERE "userId" = $1 AND ("spaceId" = $2 OR "allSpaces" = true
 				OR EXISTS (SELECT 1 FROM mcp_server_spaces s
@@ -123,8 +125,8 @@ func List(
 				&record.description, &record.transport, &record.endpoint, &record.command,
 				&record.args, &record.hasArgs, &record.env, &record.files, &record.headers,
 				&record.secretID, &record.installID, &record.allSpaces, &record.allBots,
-				&record.enabled, &record.verbatim, &record.revision, &record.healthStatus,
-				&record.healthMessage, &record.healthToolCount, &record.healthCheckedAt,
+				&record.enabled, &record.verbatim, &record.sendCallerIdentity,
+				&record.revision, &record.healthStatus, &record.healthMessage, &record.healthToolCount, &record.healthCheckedAt,
 				&record.createdAt, &record.updatedAt); err != nil {
 				rows.Close()
 				return err
@@ -222,30 +224,31 @@ func List(
 				return shared.OutputInvalid()
 			}
 			server := Server{
-				ID:              record.id,
-				SpaceID:         record.spaceID,
-				InstallID:       record.installID,
-				Slug:            record.slug,
-				Name:            record.name,
-				Description:     record.description,
-				Transport:       record.transport,
-				Endpoint:        record.endpoint,
-				Command:         record.command,
-				HasArgs:         record.hasArgs || len(legacyArgs(record.args)) > 0,
-				EnvKeys:         objectKeys(record.env),
-				FileKeys:        objectKeys(record.files),
-				HeaderKeys:      objectKeys(record.headers),
-				HasSecret:       record.secretID != nil && summary.credential,
-				OAuthStatus:     summary.status,
-				OAuthClientID:   summary.clientID,
-				Health:          healthDTO(record),
-				Enabled:         record.enabled,
-				VerbatimResults: record.verbatim,
-				Revision:        record.revision,
-				Availability:    Availability{AllSpaces: record.allSpaces, SpaceIDs: spaceIDs},
-				AllBots:         record.allBots,
-				CreatedAt:       record.createdAt.UTC().Format(shared.ISOMillis),
-				UpdatedAt:       record.updatedAt.UTC().Format(shared.ISOMillis),
+				ID:                 record.id,
+				SpaceID:            record.spaceID,
+				InstallID:          record.installID,
+				Slug:               record.slug,
+				Name:               record.name,
+				Description:        record.description,
+				Transport:          record.transport,
+				Endpoint:           record.endpoint,
+				Command:            record.command,
+				HasArgs:            record.hasArgs || len(legacyArgs(record.args)) > 0,
+				EnvKeys:            objectKeys(record.env),
+				FileKeys:           objectKeys(record.files),
+				HeaderKeys:         objectKeys(record.headers),
+				HasSecret:          record.secretID != nil && summary.credential,
+				OAuthStatus:        summary.status,
+				OAuthClientID:      summary.clientID,
+				Health:             healthDTO(record),
+				Enabled:            record.enabled,
+				VerbatimResults:    record.verbatim,
+				SendCallerIdentity: record.sendCallerIdentity,
+				Revision:           record.revision,
+				Availability:       Availability{AllSpaces: record.allSpaces, SpaceIDs: spaceIDs},
+				AllBots:            record.allBots,
+				CreatedAt:          record.createdAt.UTC().Format(shared.ISOMillis),
+				UpdatedAt:          record.updatedAt.UTC().Format(shared.ISOMillis),
 			}
 			servers = append(servers, server)
 		}

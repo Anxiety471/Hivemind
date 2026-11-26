@@ -43,6 +43,7 @@ export function mcpServerDto(
     allBots?: boolean;
     enabled: boolean;
     verbatimResults?: boolean;
+    sendCallerIdentity?: boolean;
     revision: number;
     healthStatus: string;
     healthMessage: string | null;
@@ -77,6 +78,7 @@ export function mcpServerDto(
     oauthClientId: oauth.clientId,
     enabled: row.enabled,
     verbatimResults: row.verbatimResults ?? false,
+    sendCallerIdentity: row.sendCallerIdentity ?? false,
     revision: row.revision,
     health: mcpServerHealthDto(row),
     availability: spaceAvailability({ ...row, allSpaces: row.allSpaces ?? false }),
@@ -354,6 +356,7 @@ export function createMcpServers(
         secretId: stored?.id,
         enabled: input.enabled,
         verbatimResults: input.verbatimResults,
+        sendCallerIdentity: input.sendCallerIdentity,
       },
     });
   };

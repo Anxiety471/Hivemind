@@ -2240,6 +2240,8 @@ model McpServer {
   enabled       Boolean           @default(true)
   /// Tool results from this server stay whole. A result that cannot fit fails the turn.
   verbatimResults Boolean         @default(false)
+  /// Remote requests carry the calling bot, run and thread ids so the server can call that bot back.
+  sendCallerIdentity Boolean      @default(false)
   revision      Int               @default(1)
   /// Last launch/discovery outcome: unknown | installing | ok | error.
   healthStatus    String          @default("unknown")

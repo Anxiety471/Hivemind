@@ -44,6 +44,7 @@ export type McpServerDraft = {
   command: string;
   args: string;
   verbatimResults: boolean;
+  sendCallerIdentity: boolean;
   envRows: EnvRow[];
 };
 
@@ -84,6 +85,7 @@ export function emptyMcpServerDraft(transport: McpTransport): McpServerDraft {
     command: "",
     args: "",
     verbatimResults: false,
+    sendCallerIdentity: false,
     envRows: [emptyEnvRow()],
   };
 }
@@ -106,6 +108,7 @@ export function mcpServerDraftFor(
     endpoint: server.endpoint ?? "",
     command: server.command ?? "",
     verbatimResults: server.verbatimResults,
+    sendCallerIdentity: server.sendCallerIdentity,
     headerName: server.headerKeys[0] ?? "Authorization",
     envRows: rows.length > 0 ? rows : draft.envRows,
     advancedOpen: showOAuthClient,
@@ -180,6 +183,7 @@ export function mcpServerConfig(draft: McpServerDraft, editing: McpServer | null
         oauthClient: oauthBase,
         enabled: true,
         verbatimResults: draft.verbatimResults,
+        sendCallerIdentity: draft.sendCallerIdentity,
       };
 }
 
@@ -536,6 +540,18 @@ export function McpServerForm({
                 <Trans>Keep tool results whole</Trans>
               </FieldLabel>
             </Field>
+            {draft.transport === "stdio" ? null : (
+              <Field orientation="horizontal">
+                <Checkbox
+                  id="mcp-send-caller-identity"
+                  checked={draft.sendCallerIdentity}
+                  onCheckedChange={(checked) => update({ sendCallerIdentity: checked === true })}
+                />
+                <FieldLabel htmlFor="mcp-send-caller-identity">
+                  <Trans>Send agent, run and thread IDs</Trans>
+                </FieldLabel>
+              </Field>
+            )}
           </div>
         </Disclosure>
       </FieldGroup>
