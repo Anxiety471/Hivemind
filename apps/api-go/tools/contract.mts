@@ -23,6 +23,7 @@ import { spendingPeriodStart } from "../../../packages/core/src/billing/spending
 import { asSystem, contentEncryptionOf } from "../../../packages/db/src/index.js";
 import { createApp } from "../../api/src/app.js";
 import { jobCases } from "./contract-job.mts";
+import { replyPreviewCases } from "./contract-reply.mts";
 import { CONTRACT_ENCRYPTION_KEY } from "./contract-key.mts";
 import { laneDCases } from "./contract-lane-d.mts";
 import { laneHCases, laneHState } from "./contract-lane-h.mts";
@@ -776,6 +777,7 @@ const cases: Case[] = [
   ...modelsCases(system),
   ...threadGetCases(system),
   ...jobCases(system),
+  ...replyPreviewCases(system),
   ...spaceRunCases(system),
   ...threadAdversarialCases(system),
   ...threadMoreCases(system),

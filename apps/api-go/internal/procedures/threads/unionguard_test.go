@@ -58,3 +58,58 @@ func TestMessageRolesMatchTypeScript(t *testing.T) {
 		t.Fatalf("%v\n(MessageRole is packages/contracts/src/threads/message-blocks.ts)", err)
 	}
 }
+
+// TestReplyTextKindsMatchTypeScript guards replyTexts: the kinds replyBlockText quotes, which feed
+// a reply preview's text. message-quote.ts's switch is the source; image and file are not in it
+// because a preview splits them into an attachment before reading a caption (message-quote.ts:219).
+// A kind TS adds there and Go lacks makes Go answer an empty quote with no error.
+func TestReplyTextKindsMatchTypeScript(t *testing.T) {
+	root, err := tsunions.Root()
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := tsunions.Open(root, "packages/core/src/messages/message-quote.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	quoted, err := file.SwitchCases("replyBlockText")
+	if err != nil {
+		t.Fatal(err)
+	}
+	attachments := map[string]bool{"image": true, "file": true}
+	var expect []string
+	for _, kind := range quoted {
+		if !attachments[kind] {
+			expect = append(expect, kind)
+		}
+	}
+	if len(expect) == 0 {
+		t.Fatal("replyBlockText's switch has no non-attachment kind")
+	}
+	if err := tsunions.SetDiff("threads.replyTexts", tsunions.Keys(replyTexts), expect); err != nil {
+		t.Fatalf("%v\n(replyBlockText is packages/core/src/messages/message-quote.ts)", err)
+	}
+}
+
+// TestRunEnumsMatchTypeScript guards the two enums threads.get validates a run's DTO against: a
+// status or trigger TS adds and Go misses fails the whole read, exactly as a new block kind did.
+func TestRunEnumsMatchTypeScript(t *testing.T) {
+	root, err := tsunions.Root()
+	if err != nil {
+		t.Fatal(err)
+	}
+	statuses, err := tsunions.Values(root, "packages/contracts/src/ids.ts", "RunStatus")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tsunions.SetDiff("threads.runStatuses", runStatuses, statuses); err != nil {
+		t.Fatalf("%v\n(RunStatus is packages/contracts/src/ids.ts)", err)
+	}
+	triggers, err := tsunions.Values(root, "packages/contracts/src/runs/runs.ts", "RUN_TRIGGERS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tsunions.SetDiff("threads.runTriggers", runTriggers, triggers); err != nil {
+		t.Fatalf("%v\n(RUN_TRIGGERS is packages/contracts/src/runs/runs.ts)", err)
+	}
+}

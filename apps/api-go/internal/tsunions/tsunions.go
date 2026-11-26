@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -27,24 +28,32 @@ type File struct {
 	text string
 }
 
-// Root finds the repository root by walking up from the working directory until the contracts
-// package is there. Tests fail rather than skip when it is missing: the guard has no meaning
-// outside the checkout whose TypeScript it mirrors.
+// Root finds the repository root by walking up from the working directory until both packages
+// trees are there. It anchors on the directories, not one file, so moving or renaming a schema
+// fails in Open with that file's path instead of here. Tests fail rather than skip when it is
+// missing: the guard has no meaning outside the checkout whose TypeScript it mirrors.
 func Root() (string, error) {
 	dir, err := os.Getwd()
 	if err != nil {
 		return "", err
 	}
 	for {
-		if _, err := os.Stat(filepath.Join(dir, "packages", "contracts", "src", "threads", "message-blocks.ts")); err == nil {
+		hasContracts := isDir(filepath.Join(dir, "packages", "contracts", "src"))
+		hasGo := isDir(filepath.Join(dir, "apps", "api-go"))
+		if hasContracts && hasGo {
 			return dir, nil
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return "", fmt.Errorf("no repository root above %s: packages/contracts/src/threads/message-blocks.ts not found", dir)
+			return "", fmt.Errorf("no repository root above %s: expected packages/contracts/src and apps/api-go", dir)
 		}
 		dir = parent
 	}
+}
+
+func isDir(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }
 
 // Open reads a file named from the repository root.
@@ -105,6 +114,146 @@ func (f *File) Strings(name string) ([]string, error) {
 	return values, nil
 }
 
+// Values is a const's string literals from a file named from the root: Open + Strings in one step.
+func Values(root, path, name string) ([]string, error) {
+	file, err := Open(root, path)
+	if err != nil {
+		return nil, err
+	}
+	return file.Strings(name)
+}
+
+// SwitchCases is a function's `switch` case labels: the block kinds replyBlockText reads.
+func (f *File) SwitchCases(name string) ([]string, error) {
+	fn := regexp.MustCompile(`\bfunction\s+` + regexp.QuoteMeta(name) + `\s*\(`)
+	at := fn.FindStringIndex(f.text)
+	if at == nil {
+		return nil, fmt.Errorf("%s: no `function %s`", f.Path, name)
+	}
+	rest := f.text[at[1]:]
+	statement := regexp.MustCompile(`\bswitch\s*\(`).FindStringIndex(rest)
+	if statement == nil {
+		return nil, fmt.Errorf("%s: %s has no switch", f.Path, name)
+	}
+	brace := strings.IndexByte(rest[statement[1]:], '{')
+	if brace < 0 {
+		return nil, fmt.Errorf("%s: %s's switch has no body", f.Path, name)
+	}
+	body, _, err := span(rest, statement[1]+brace)
+	if err != nil {
+		return nil, err
+	}
+	pattern := regexp.MustCompile(`\bcase\s+("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')\s*:`)
+	var cases []string
+	for _, match := range pattern.FindAllStringSubmatch(body, -1) {
+		cases = append(cases, unquote(match[1]))
+	}
+	if len(cases) == 0 {
+		return nil, fmt.Errorf("%s: %s's switch has no case labels", f.Path, name)
+	}
+	return cases, nil
+}
+
+// Number is a numeric const's value; `_` separators are allowed (`4_000`).
+func (f *File) Number(name string) (int, error) {
+	body, ok := declarationBody(f.text, name)
+	if !ok {
+		return 0, fmt.Errorf("%s: no `const %s`", f.Path, name)
+	}
+	value, ok := numberValue(body)
+	if !ok {
+		return 0, fmt.Errorf("%s: %s is not a number", f.Path, name)
+	}
+	return value, nil
+}
+
+// FieldCaps is the `.max(...)` of each named field of an object schema, resolving a field that
+// names a numeric const in the same file (ToolCardSchema's reply cap does).
+func (f *File) FieldCaps(name string, fields []string) (map[string]int, error) {
+	definition, ok := declarationBody(f.text, name)
+	if !ok {
+		return nil, fmt.Errorf("%s: no `const %s`", f.Path, name)
+	}
+	body, ok := objectFields(definition)
+	if !ok {
+		return nil, fmt.Errorf("%s: %s is not an object schema", f.Path, name)
+	}
+	caps := make(map[string]int, len(fields))
+	for _, field := range splitTopLevel(body) {
+		field = strings.TrimSpace(field)
+		for _, want := range fields {
+			if !strings.HasPrefix(field, want+":") {
+				continue
+			}
+			value := field[len(want)+1:]
+			match := regexp.MustCompile(`\.\s*max\s*\(\s*([0-9][0-9_]*|[A-Za-z_$][A-Za-z0-9_$]*)\s*\)`).FindStringSubmatch(value)
+			if match == nil {
+				return nil, fmt.Errorf("%s: %s.%s has no max(...)", f.Path, name, want)
+			}
+			limit, isNumber := numberValue(match[1])
+			if !isNumber {
+				var err error
+				if limit, err = f.Number(match[1]); err != nil {
+					return nil, fmt.Errorf("%s.%s: %w", name, want, err)
+				}
+			}
+			caps[want] = limit
+		}
+	}
+	var missing []string
+	for _, want := range fields {
+		if _, ok := caps[want]; !ok {
+			missing = append(missing, want)
+		}
+	}
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("%s: %s has no field %s", f.Path, name, strings.Join(missing, ", "))
+	}
+	return caps, nil
+}
+
+// FieldUnion is an object field's own discriminated union: RunActivityRowSchema's agentMessage,
+// whose variants are inline z.strictObject schemas rather than a named union.
+func (f *File) FieldUnion(object, field, discriminator string) ([]string, error) {
+	definition, ok := declarationBody(f.text, object)
+	if !ok {
+		return nil, fmt.Errorf("%s: no `const %s`", f.Path, object)
+	}
+	body, ok := objectFields(definition)
+	if !ok {
+		return nil, fmt.Errorf("%s: %s is not an object schema", f.Path, object)
+	}
+	prefix := field + ":"
+	for _, entry := range splitTopLevel(body) {
+		entry = strings.TrimSpace(entry)
+		if !strings.HasPrefix(entry, prefix) {
+			continue
+		}
+		kinds, isUnion, err := f.unionKinds(entry[len(prefix):], discriminator)
+		if err != nil {
+			return nil, err
+		}
+		if isUnion {
+			return kinds, nil
+		}
+		return nil, fmt.Errorf("%s: %s.%s is not a discriminatedUnion", f.Path, object, field)
+	}
+	return nil, fmt.Errorf("%s: %s has no field %s", f.Path, object, field)
+}
+
+// numberValue is a numeric literal with `_` separators removed.
+func numberValue(text string) (int, bool) {
+	digits := regexp.MustCompile(`^[0-9][0-9_]*`).FindString(strings.TrimSpace(text))
+	if digits == "" {
+		return 0, false
+	}
+	value, err := strconv.Atoi(strings.ReplaceAll(digits, "_", ""))
+	if err != nil {
+		return 0, false
+	}
+	return value, true
+}
+
 // TypeFilters is every `type: { in: [ ... ] }` array in the file, in source order. It reads the
 // inline event-type filters a query is written with, which no named const holds.
 func (f *File) TypeFilters() ([][]string, error) {
@@ -163,38 +312,120 @@ func (f *File) entryKinds(entry, discriminator string) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		if kinds, ok := literalsFor(definition, discriminator); ok {
+		if kinds, ok := objectLiterals(definition, discriminator); ok {
 			return kinds, nil
 		}
 		// A referenced union holds one kind per variant of its own.
-		if nested := strings.Index(definition, "discriminatedUnion"); nested >= 0 {
-			open := strings.IndexByte(definition[nested:], '[')
-			if open >= 0 {
-				body, _, err := span(definition[nested:], open)
-				if err != nil {
-					return nil, err
-				}
-				var kinds []string
-				for _, inner := range splitTopLevel(body) {
-					found, err := f.entryKinds(strings.TrimSpace(inner), discriminator)
-					if err != nil {
-						return nil, err
-					}
-					kinds = append(kinds, found...)
-				}
-				return kinds, nil
-			}
+		if kinds, ok, err := f.unionKinds(definition, discriminator); err != nil {
+			return nil, err
+		} else if ok {
+			return kinds, nil
 		}
-		return nil, fmt.Errorf("%s (resolved to %s) declares no %q literal", entry, path, discriminator)
+		return nil, fmt.Errorf("%s (resolved to %s) declares no %q field", entry, path, discriminator)
 	}
-	if kinds, ok := literalsFor(entry, discriminator); ok {
+	if kinds, ok := objectLiterals(entry, discriminator); ok {
+		return kinds, nil
+	}
+	if kinds, ok, err := f.unionKinds(entry, discriminator); err != nil {
+		return nil, err
+	} else if ok {
 		return kinds, nil
 	}
 	return nil, fmt.Errorf("not a schema this reader understands")
 }
 
+// unionKinds reads a `z.discriminatedUnion("<discriminator>", [...])` body's variants.
+func (f *File) unionKinds(definition, discriminator string) ([]string, bool, error) {
+	nested := strings.Index(definition, "discriminatedUnion")
+	if nested < 0 {
+		return nil, false, nil
+	}
+	open := strings.IndexByte(definition[nested:], '[')
+	if open < 0 {
+		return nil, false, fmt.Errorf("discriminatedUnion without a variant array")
+	}
+	body, _, err := span(definition[nested:], open)
+	if err != nil {
+		return nil, false, err
+	}
+	var kinds []string
+	for _, inner := range splitTopLevel(body) {
+		found, err := f.entryKinds(strings.TrimSpace(inner), discriminator)
+		if err != nil {
+			return nil, false, err
+		}
+		kinds = append(kinds, found...)
+	}
+	return kinds, true, nil
+}
+
+// objectLiterals is a schema object's own `<discriminator>:` field as kind names: `z.literal("x")`
+// gives x, `z.enum(["x","y"])` gives both. Only the object's top-level fields are read, so a
+// literal nested deeper (a chart spec's own `kind`) is never mistaken for a variant.
+func objectLiterals(definition, discriminator string) ([]string, bool) {
+	fields, ok := objectFields(definition)
+	if !ok {
+		return nil, false
+	}
+	prefix := discriminator + ":"
+	for _, field := range splitTopLevel(fields) {
+		field = strings.TrimSpace(field)
+		if !strings.HasPrefix(field, prefix) {
+			continue
+		}
+		if kinds, ok := literalValue(field[len(prefix):]); ok {
+			return kinds, true
+		}
+	}
+	return nil, false
+}
+
+// objectFields is the body of the first z.object(...) or z.strictObject(...) in a schema value.
+func objectFields(definition string) (string, bool) {
+	start := regexp.MustCompile(`z\s*\.\s*(?:strictObject|object)\s*\(`).FindStringIndex(definition)
+	if start == nil {
+		return "", false
+	}
+	args, _, err := span(definition, start[1]-1)
+	if err != nil {
+		return "", false
+	}
+	brace := strings.IndexByte(args, '{')
+	if brace < 0 {
+		return "", false
+	}
+	fields, _, err := span(args, brace)
+	if err != nil {
+		return "", false
+	}
+	return fields, true
+}
+
+// literalValue is a discriminator field's value: a literal, or an enum's members.
+func literalValue(value string) ([]string, bool) {
+	value = strings.TrimSpace(value)
+	literal := regexp.MustCompile(`^z\s*\.\s*literal\s*\(\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')\s*\)`)
+	if match := literal.FindStringSubmatch(value); match != nil {
+		return []string{unquote(match[1])}, true
+	}
+	enum := regexp.MustCompile(`^z\s*\.\s*enum\s*\(\s*\[`).FindStringIndex(value)
+	if enum == nil {
+		return nil, false
+	}
+	body, _, err := span(value, enum[1]-1)
+	if err != nil {
+		return nil, false
+	}
+	members, err := literals(body)
+	if err != nil || len(members) == 0 {
+		return nil, false
+	}
+	return members, true
+}
+
 // definition finds where a schema name is declared: this file first, then every TypeScript file
-// under packages/contracts/src in sorted order.
+// under packages/contracts/src. A name declared in more than one other file is an error, not the
+// first alphabetically: a silent wrong answer is the one thing this reader must never give.
 func (f *File) definition(name string) (string, string, error) {
 	if definition, ok := declarationBody(f.text, name); ok {
 		return definition, f.Path, nil
@@ -214,17 +445,30 @@ func (f *File) definition(name string) (string, string, error) {
 		return "", "", err
 	}
 	sort.Strings(files)
+	var found []string
 	for _, path := range files {
 		raw, err := os.ReadFile(path)
 		if err != nil {
 			return "", "", err
 		}
-		if definition, ok := declarationBody(stripComments(string(raw)), name); ok {
+		if _, ok := declarationBody(stripComments(string(raw)), name); ok {
 			relative, _ := filepath.Rel(f.root, path)
-			return definition, filepath.ToSlash(relative), nil
+			found = append(found, filepath.ToSlash(relative))
 		}
 	}
-	return "", "", fmt.Errorf("%s is not declared under packages/contracts/src", name)
+	switch len(found) {
+	case 0:
+		return "", "", fmt.Errorf("%s is not declared under packages/contracts/src", name)
+	case 1:
+		raw, err := os.ReadFile(filepath.Join(f.root, filepath.FromSlash(found[0])))
+		if err != nil {
+			return "", "", err
+		}
+		definition, _ := declarationBody(stripComments(string(raw)), name)
+		return definition, found[0], nil
+	default:
+		return "", "", fmt.Errorf("%s is declared in %d files (%s)", name, len(found), strings.Join(found, ", "))
+	}
 }
 
 // declarationBody is a const's schema value: from its `=` through the bracket that closes the
@@ -246,16 +490,6 @@ func declarationBody(text, name string) (string, bool) {
 		return rest, true
 	}
 	return rest[:end+1], true
-}
-
-// literalsFor is every `<discriminator>: z.literal("...")` in a schema body, as written.
-func literalsFor(body, discriminator string) ([]string, bool) {
-	pattern := regexp.MustCompile(`\b` + regexp.QuoteMeta(discriminator) + `\s*:\s*z\s*\.\s*literal\s*\(\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')\s*\)`)
-	var kinds []string
-	for _, match := range pattern.FindAllStringSubmatch(body, -1) {
-		kinds = append(kinds, unquote(match[1]))
-	}
-	return kinds, len(kinds) > 0
 }
 
 // literals is every string literal of an array body, unquoted.
