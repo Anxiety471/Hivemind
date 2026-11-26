@@ -1,4 +1,5 @@
 import { t } from "@lingui/core/macro";
+import type { ThreadMessage } from "@rakazo/contracts";
 import type { resolveComposerSendPlan } from "@rakazo/core";
 import { classifySendFailure, isImageInputConfirmation, nextSendRetryDelayMs } from "@rakazo/core";
 import type { PendingDriveFile } from "../../pages/shell/chat/chat-shared";
@@ -92,6 +93,11 @@ export type WebSendAttempt = {
   retryCount: number;
   nextRetryAt?: number;
   persisted: boolean;
+  /**
+   * The messages this chat already showed when the send was enqueued, in memory only: an in-flight
+   * echo has to be one of the messages that arrived after it, never one of these.
+   */
+  baselineMessageIds?: ReadonlySet<string>;
 };
 
 export type WebOutboxRpcResolver = (spaceId: string | null) => Pick<RpcClient, "threads">;
@@ -131,6 +137,52 @@ let uploadClient: Promise<typeof import("../files/file-client")> | undefined;
 function loadUploadClient(): Promise<typeof import("../files/file-client")> {
   uploadClient ??= import("../files/file-client");
   return uploadClient;
+}
+
+/**
+ * The thread messages that are an in-flight send's echo, by message id. A message explains one
+ * send: once a pending attempt matched it, a second send with the same words must stay visible.
+ * In memory only, and cleared with the queue.
+ */
+const claimedEchoMessageIds = new Set<string>();
+
+/** Whether a thread message already hides some send's duplicate bubble. */
+export function isWebEchoMessageClaimed(messageId: string): boolean {
+  return claimedEchoMessageIds.has(messageId);
+}
+
+/** Records that this message is the echo of the send that matched it. */
+export function claimWebEchoMessage(messageId: string): void {
+  claimedEchoMessageIds.add(messageId);
+}
+
+/**
+ * Whether a user message in the thread is the echo of a send the server has not answered yet.
+ *
+ * The server commits the message and streams it before `threads.send` returns, so for a moment the
+ * thread holds both the echoed bubble and the queued attempt. Matching the two hides the duplicate
+ * at once; the accepted `seq` then retires the attempt for good.
+ */
+export function matchesInFlightEcho(
+  attempt: WebSendAttempt,
+  message: Pick<ThreadMessage, "id" | "role" | "blocks" | "author">,
+  userId: string,
+): boolean {
+  if (attempt.state !== "pending" || attempt.acceptedSeq !== undefined) return false;
+  if (message.role !== "user") return false;
+  // A send restored from storage has no baseline, and every older look-alike would match it.
+  const baseline = attempt.baselineMessageIds;
+  if (!baseline || baseline.has(message.id)) return false;
+  if (message.author?.id && message.author.id !== userId) return false;
+  const text: string[] = [];
+  let attachments = 0;
+  for (const block of message.blocks) {
+    if (block.kind === "text") text.push(block.text);
+    else if (block.kind === "image" || block.kind === "file") attachments += 1;
+  }
+  if (attachments !== attempt.payload.attachments.length) return false;
+  const echoed = text.join("\n").trim();
+  return echoed === attempt.payload.trimmed.trim() || echoed === attempt.payload.displayText.trim();
 }
 
 function emit(): void {
@@ -398,6 +450,7 @@ export function enqueueWebSend(input: {
   scope: WebOutboxScope;
   payload: WebSendPayload;
   imageHandling?: "file";
+  baselineMessageIds?: ReadonlySet<string>;
 }): WebSendAttempt {
   if (waitingAttempts().length >= OUTBOX_MAX_ENTRIES) throw new Error(t`Too many unsent messages`);
   const attempt: WebSendAttempt = {
@@ -410,6 +463,7 @@ export function enqueueWebSend(input: {
     retryCount: 0,
     persisted: false,
     ...(input.imageHandling ? { imageHandling: input.imageHandling } : {}),
+    ...(input.baselineMessageIds ? { baselineMessageIds: input.baselineMessageIds } : {}),
   };
   attempts = [...attempts, attempt];
   void persistAttempt(attempt);
@@ -576,6 +630,7 @@ export function clearWebOutbox(): void {
   attempts = [];
   for (const attempt of cleared) revokePreviews(attempt);
   echoes.clear();
+  claimedEchoMessageIds.clear();
   pendingForce = null;
   restoredForUser = null;
   activeUserId = null;
@@ -664,6 +719,7 @@ export function resetWebOutboxForTests(): void {
   for (const attempt of attempts) revokePreviews(attempt);
   attempts = [];
   echoes.clear();
+  claimedEchoMessageIds.clear();
   mountedThreads.clear();
   deliveredListeners.clear();
   starters.clear();

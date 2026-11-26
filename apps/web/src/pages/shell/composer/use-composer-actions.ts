@@ -20,7 +20,7 @@ import {
   resolveComposerSendPlan,
 } from "@rakazo/core";
 import type { RefObject } from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   forgetSeenRunErrorId,
   readSeenRunErrorIds,
@@ -40,6 +40,7 @@ import {
   enqueueWebSend,
   hasUnsentWebSends,
   retryWebSendAttempt,
+  subscribeWebOutbox,
   subscribeWebOutboxDelivered,
 } from "../../../lib/composer/send-outbox";
 import { useWebOutbox } from "../../../lib/composer/use-send-outbox";
@@ -120,27 +121,28 @@ export function useComposerActions({
   const [stopping, setStopping] = useState(false);
   const stoppingRef = useRef(false);
   const [sentCount, setSentCount] = useState(0);
-  const echoedSeqs = useMemo(() => {
-    const seqs = new Set<number>();
-    for (const message of activeSnapshot?.messages ?? [])
-      if (message.role === "user" && typeof message.seq === "number") seqs.add(message.seq);
-    return seqs;
-  }, [activeSnapshot?.messages]);
   const pendingSends = useWebOutbox({
     threadKey: activeThreadKey,
     userId: outboxUserId,
     spaceId: outboxSpaceId,
-    echoedSeqs,
+    activeMessages: activeSnapshot?.messages,
     rpcForSpace: (targetSpaceId) =>
       targetSpaceId === outboxSpaceId ? rpc : createSpaceRpc(targetSpaceId),
   });
+  // Read from the queue, not from the visible bubbles: a send the thread already echoes is hidden
+  // at once, yet the draft stays unsaved until the server answers it.
+  const unsentSends = useSyncExternalStore(
+    subscribeWebOutbox,
+    hasUnsentWebSends,
+    hasUnsentWebSends,
+  );
   useEffect(() => {
     setComposerUnsavedWork({
-      sending: stopping || hasUnsentWebSends(),
+      sending: stopping || unsentSends,
       attachments: pendingAttachments.length > 0,
     });
     return () => setComposerUnsavedWork({ sending: false, attachments: false });
-  }, [stopping, pendingSends.length, pendingAttachments.length]);
+  }, [stopping, unsentSends, pendingAttachments.length]);
   const [sendFailure, setSendFailure] = useState<{
     message: string;
     imageConfirmation: boolean;
@@ -565,6 +567,9 @@ export function useComposerActions({
             attachments: outboxAttachments,
           },
           imageHandling,
+          baselineMessageIds: new Set(
+            (activeSnapshot?.messages ?? []).map((message) => message.id),
+          ),
         });
       } catch (error) {
         // A refused enqueue sent nothing, so the words, files and reply stay in the composer.
