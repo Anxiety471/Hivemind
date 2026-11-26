@@ -767,6 +767,8 @@ function SpaceShell() {
   const composer = useComposerActions({
     rpc,
     pageSession: pages.session,
+    userId,
+    spaceId: currentSpaceId,
     activeId: active?.id,
     inGroup,
     groupId,
@@ -787,6 +789,17 @@ function SpaceShell() {
     flushPendingBrowserNotifications,
   });
   const { sending, sendError, stopRun } = composer;
+  function openModels() {
+    // A group's failed run belongs to one member; change that bot's model.
+    const failedBotId = inGroup && composer.displayedRunError ? activeSnapshot?.run?.botId : null;
+    if (active && !inGroup) {
+      setPanel("settings");
+      setModelFocusRequest(Date.now());
+    } else if (failedBotId) {
+      openChatSettings("bot", failedBotId);
+      setModelFocusRequest(Date.now());
+    } else openSettings("models");
+  }
   function openChatSettings(kind: "bot" | "group", id: string) {
     const destKey =
       userId && bootstrapMe?.spaceId
@@ -1255,6 +1268,11 @@ function SpaceShell() {
               onReleaseComputer={computerControls.onReleaseComputer}
               onOpenImportSetup={openImportSetup}
               rpc={rpc}
+              pendingSends={composer.pendingSends}
+              onRetryPendingSend={composer.retryPendingSend}
+              onSendPendingAsFile={composer.sendPendingAsFile}
+              onDiscardPendingSend={composer.discardPendingSend}
+              onOpenModels={openModels}
               // A job card's controls speak in this chat, exactly as the composer would.
               onJobAction={async (text) => {
                 const accepted = await composer.sendMessage(text, [], newClientId());
@@ -1297,18 +1315,7 @@ function SpaceShell() {
               sendError={sendError}
               imageConfirmation={composer.imageConfirmation}
               onDraftEdited={composer.clearImageConfirmation}
-              onOpenModels={() => {
-                // A group's failed run belongs to one member; change that bot's model.
-                const failedBotId =
-                  inGroup && composer.displayedRunError ? activeSnapshot?.run?.botId : null;
-                if (active && !inGroup) {
-                  setPanel("settings");
-                  setModelFocusRequest(Date.now());
-                } else if (failedBotId) {
-                  openChatSettings("bot", failedBotId);
-                  setModelFocusRequest(Date.now());
-                } else openSettings("models");
-              }}
+              onOpenModels={openModels}
               onOpenConnections={() => openSettings("models")}
               onOpenBilling={() => openSettings("billing")}
               runError={inlineRetryableRun ? null : composer.displayedRunError}

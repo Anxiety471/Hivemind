@@ -3,13 +3,20 @@ import { RPCLink } from "@orpc/client/fetch";
 import type { ContractRouterClient } from "@orpc/contract";
 import type { AppContract, ProductEvent } from "@rakazo/contracts";
 import { CLIENT_BUILD_HEADER, formatClientBuild } from "@rakazo/contracts";
-import { displayIdentityEvent, displayIdentityResult } from "@rakazo/core";
+import {
+  displayIdentityEvent,
+  displayIdentityResult,
+  isServerUnreachable,
+  isUnreachableStatus,
+  parseRetryAfter,
+} from "@rakazo/core";
 import { clientCorrelationHeaders, responseCorrelation } from "@rakazo/logging/monitoring";
 import { authClient } from "../auth/auth";
 import { identityLabels } from "../bots/identity-display";
 import { i18n } from "../locale/i18n";
 import { CLIENT_BUILD } from "../platform/client-build";
 import { reportClientError } from "../platform/monitoring";
+import { noteServerReachable } from "./connection-state";
 
 const SPACE_STORAGE_KEY = "rakazo:space-id";
 export const ORGANIZATION_SPACES_STORAGE_KEY = "rakazo:org-spaces";
@@ -18,6 +25,8 @@ type RpcClientContext = {
   spaceId?: string | null;
   /** Finish the call even if the page is closing. */
   keepalive?: boolean;
+  /** Filled by the link so a failure keeps the status and Retry-After the server sent. */
+  responseMeta?: { status?: number; retryAfterMs?: number };
 };
 
 export function selectedSpaceId(): string | null {
@@ -100,9 +109,17 @@ const link = new RPCLink<RpcClientContext>({
         signal: options.signal,
       });
     } catch (error) {
+      if (!options.signal?.aborted && isServerUnreachable(error)) noteServerReachable(false);
       if (!options.signal?.aborted)
         reportClientError(error, "rpc.transport", responseCorrelation(new Headers(correlation)));
       throw error;
+    }
+    noteServerReachable(!isUnreachableStatus(response.status));
+    if (options.context.responseMeta) {
+      options.context.responseMeta.status = response.status;
+      options.context.responseMeta.retryAfterMs = parseRetryAfter(
+        response.headers.get("retry-after"),
+      );
     }
     // Server exceptions are reported by the API; do not report every HTTP failure twice.
     recheckSessionOnUnauthorized(response.status);
@@ -158,10 +175,54 @@ export function leaveUnavailableSpace(spaceId: string): Promise<void> {
 
 export type RpcClient = ContractRouterClient<AppContract, RpcClientContext>;
 
+function defineResponseMeta(error: object, key: "status" | "retryAfterMs", value: number): void {
+  try {
+    Object.defineProperty(error, key, { value, writable: true, configurable: true });
+  } catch {
+    // An error that refuses new fields keeps only the ones it already had.
+  }
+}
+
+/**
+ * Keep the HTTP status and Retry-After of a failure oRPC could not decode, such as a proxy's
+ * HTML 502 or 429, so retry and copy decisions still see them.
+ */
+function attachResponseMeta(
+  error: unknown,
+  meta: { status?: number; retryAfterMs?: number },
+): void {
+  if (typeof error !== "object" || error === null) return;
+  const target = error as { status?: unknown; retryAfterMs?: unknown };
+  if (target.status === undefined && meta.status !== undefined)
+    defineResponseMeta(target, "status", meta.status);
+  if (target.retryAfterMs === undefined && meta.retryAfterMs !== undefined)
+    defineResponseMeta(target, "retryAfterMs", meta.retryAfterMs);
+}
+
+async function callWithResponseMeta<T>(
+  call: () => Promise<T>,
+  meta: { status?: number; retryAfterMs?: number },
+): Promise<T> {
+  try {
+    return await call();
+  } catch (error) {
+    attachResponseMeta(error, meta);
+    throw error;
+  }
+}
+
 const displayLink = {
   call: async (...args: Parameters<typeof link.call>) => {
     const [path, input, options] = args;
-    const result = await link.call(path, input, options);
+    const responseMeta: { status?: number; retryAfterMs?: number } = {};
+    const result = await callWithResponseMeta(
+      () =>
+        link.call(path, input, {
+          ...options,
+          context: { ...options.context, responseMeta },
+        }),
+      responseMeta,
+    );
     const procedure = path.join("/");
     if (procedure === "threads/subscribe" || procedure === "threads/helperSubscribe") {
       return (async function* () {

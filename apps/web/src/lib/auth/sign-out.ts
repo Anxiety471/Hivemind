@@ -6,6 +6,7 @@ import {
   sessionChangedUnderPage,
 } from "../calls/call-session";
 import { clearComposerDrafts } from "../composer/composer-draft";
+import { clearWebOutbox } from "../composer/send-outbox";
 import { clearSpaceSelection } from "../query/rpc";
 import { authClient } from "./auth";
 
@@ -31,6 +32,7 @@ export async function signOut(destination: string): Promise<void> {
     forgetSignedInUser();
     clearSpaceSelection();
     clearComposerDrafts();
+    clearWebOutbox();
     window.location.assign(destination);
   } else {
     try {
@@ -53,7 +55,10 @@ export function syncLogOutFailure(signedIn: boolean): void {
   } catch {
     return;
   }
-  if (!signedIn) clearComposerDrafts();
+  if (!signedIn) {
+    clearComposerDrafts();
+    clearWebOutbox();
+  }
   logOutFailed = signedIn;
 }
 

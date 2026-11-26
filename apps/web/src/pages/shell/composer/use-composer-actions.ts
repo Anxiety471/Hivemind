@@ -32,14 +32,24 @@ import {
   revokePendingAttachmentPreviews,
   usePendingAttachmentPreviewCleanup,
 } from "../../../lib/composer/pending-attachments";
-import { canPrepareImage, prepareImage } from "../../../lib/composer/prepare-image";
-import { uploadSpaceFile } from "../../../lib/files/file-client";
+import { canPrepareImage } from "../../../lib/composer/prepare-image";
+import type { WebOutboxAttachment, WebSendAttempt } from "../../../lib/composer/send-outbox";
+import {
+  discardWebSendAttempt,
+  discardWebThreadOutbox,
+  enqueueWebSend,
+  hasUnsentWebSends,
+  retryWebSendAttempt,
+  subscribeWebOutboxDelivered,
+} from "../../../lib/composer/send-outbox";
+import { useWebOutbox } from "../../../lib/composer/use-send-outbox";
 import type { PageSession } from "../../../lib/pages/pages";
 import { requestBrowserNotificationPermission } from "../../../lib/platform/browser-notifications";
-import type { createSpaceRpc } from "../../../lib/query/rpc";
+import { createSpaceRpc, selectedSpaceId } from "../../../lib/query/rpc";
 import { clearActiveThreadRuns, threadRunError } from "../../../lib/query/thread-events";
 import { errorText } from "../../../lib/query/user-error";
 import type { PendingAttachment } from "../chat/chat-shared";
+import { previewMessageText } from "../chat/chat-shared";
 import type { useShellNavigation } from "../use-shell-navigation";
 
 type ThreadRefresh = RefObject<(id: string) => Promise<ThreadSnapshot>>;
@@ -51,6 +61,8 @@ type ThreadRefresh = RefObject<(id: string) => Promise<ThreadSnapshot>>;
 export function useComposerActions({
   rpc,
   pageSession,
+  userId,
+  spaceId,
   activeId,
   inGroup,
   groupId,
@@ -73,6 +85,10 @@ export function useComposerActions({
   rpc: ReturnType<typeof createSpaceRpc>;
   /** The chat's open page, whose card a message sent from it replies to. */
   pageSession: PageSession;
+  /** The signed-in account the outbox belongs to; a worker page without one sends as `local`. */
+  userId?: string;
+  /** The Space the queued sends deliver into; defaults to the selected Space. */
+  spaceId?: string | null;
   activeId: string | undefined;
   inGroup: boolean;
   groupId: string | undefined;
@@ -93,17 +109,38 @@ export function useComposerActions({
   flushPendingBrowserNotifications: () => void;
 }) {
   const { t } = useLingui();
+  const outboxUserId = userId ?? "local";
+  const outboxSpaceId = spaceId === undefined ? selectedSpaceId() : spaceId;
+  const activeThreadKey = inGroup ? groupId : activeId;
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
   usePendingAttachmentPreviewCleanup(pendingAttachments);
   const [replyTarget, setReplyTarget] = useState<ThreadMessage | null>(null);
   const [replyQuote, setReplyQuote] = useState<string | null>(null);
-  const [sending, setSending] = useState(false);
+  // Only stopping a run blocks the composer; sending never does, so messages queue behind.
+  const [stopping, setStopping] = useState(false);
+  const stoppingRef = useRef(false);
   const [sentCount, setSentCount] = useState(0);
+  const echoedSeqs = useMemo(() => {
+    const seqs = new Set<number>();
+    for (const message of activeSnapshot?.messages ?? [])
+      if (message.role === "user" && typeof message.seq === "number") seqs.add(message.seq);
+    return seqs;
+  }, [activeSnapshot?.messages]);
+  const pendingSends = useWebOutbox({
+    threadKey: activeThreadKey,
+    userId: outboxUserId,
+    spaceId: outboxSpaceId,
+    echoedSeqs,
+    rpcForSpace: (targetSpaceId) =>
+      targetSpaceId === outboxSpaceId ? rpc : createSpaceRpc(targetSpaceId),
+  });
   useEffect(() => {
-    setComposerUnsavedWork({ sending, attachments: pendingAttachments.length > 0 });
+    setComposerUnsavedWork({
+      sending: stopping || hasUnsentWebSends(),
+      attachments: pendingAttachments.length > 0,
+    });
     return () => setComposerUnsavedWork({ sending: false, attachments: false });
-  }, [sending, pendingAttachments.length]);
-  const sendingRef = useRef(false);
+  }, [stopping, pendingSends.length, pendingAttachments.length]);
   const [sendFailure, setSendFailure] = useState<{
     message: string;
     imageConfirmation: boolean;
@@ -119,7 +156,6 @@ export function useComposerActions({
   const setSendError = useCallback((message: string | null) => {
     setSendFailure(message === null ? null : { message, imageConfirmation: false });
   }, []);
-  const uploadedSendArtifacts = useRef(new Map<string, WeakMap<File, string>>());
   const [attachmentNotice, setAttachmentNotice] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dismissedRunErrorIds, setDismissedRunErrorIds] =
@@ -200,7 +236,7 @@ export function useComposerActions({
     void scheduleFocusPrompt({
       immediate,
       signal: controller.signal,
-      shouldSkip: () => sendingRef.current,
+      shouldSkip: () => hasUnsentWebSends(botId) || stoppingRef.current,
       prompt: async () => {
         if (focusPromptBotIdRef.current !== botId || activeBotId.current !== botId) return;
         await rpc.onboarding.promptFocus({ botId }).catch(() => undefined);
@@ -361,9 +397,6 @@ export function useComposerActions({
     },
     [pendingAttachments, bootstrapMe, t],
   );
-  useEffect(() => {
-    if (!pendingAttachments.length) uploadedSendArtifacts.current.clear();
-  }, [pendingAttachments]);
   const removeAttachment = useCallback((attachment: PendingAttachment) => {
     revokePendingAttachmentPreviews([attachment]);
     setPendingAttachments((current) => current.filter((item) => item.id !== attachment.id));
@@ -376,7 +409,46 @@ export function useComposerActions({
       revokePendingAttachmentPreviews(discarded);
       return current.filter((attachment) => !discarded.includes(attachment));
     });
+    // Sends still waiting for that chat go with it.
+    discardWebThreadOutbox(threadKey);
   }, []);
+  // The delivery arrives outside React: read everything through refs so the subscription
+  // stays one for the shell's life and still sees the open chat and Space.
+  const deliveredRef = useRef<(attempt: WebSendAttempt) => void>(() => undefined);
+  deliveredRef.current = (attempt) => {
+    if (attempt.scope.userId !== outboxUserId) return;
+    const payload = attempt.payload;
+    if (payload.initialBotTarget && focusPromptBotIdRef.current === payload.initialBotTarget) {
+      cancelFocusPrompt();
+    }
+    // The chat that queued it may be open in another Space: this one does not refresh.
+    if (attempt.scope.spaceId !== outboxSpaceId) return;
+    const acceptedRun = attempt.acceptedRun;
+    if (acceptedRun && payload.botTarget && activeBotId.current === payload.botTarget) {
+      const botId = payload.botTarget;
+      updateSnapshot((current) =>
+        applyThreadSendReceipt(
+          current,
+          { botId, runId: acceptedRun.runId, taskId: acceptedRun.taskId },
+          terminalRunReceipts.current,
+        ),
+      );
+    }
+    // Refresh sidebar status even when a bot→group reroute navigates away below.
+    void refreshBots().catch(() => undefined);
+    if (payload.reroutedToGroup && payload.groupTarget) {
+      navigate(`/app/g/${payload.groupTarget}`);
+      return;
+    }
+    if (payload.groupTarget && activeGroupId.current === payload.groupTarget) {
+      setAttachmentNotice(null);
+      void refreshGroupThreadRef.current(payload.groupTarget).catch(() => undefined);
+    } else if (payload.botTarget && activeBotId.current === payload.botTarget) {
+      setAttachmentNotice(null);
+      void refreshThreadRef.current(payload.botTarget).catch(() => undefined);
+    }
+  };
+  useEffect(() => subscribeWebOutboxDelivered((attempt) => deliveredRef.current(attempt)), []);
   const sendMessage = useCallback(
     async (
       draft: string,
@@ -386,7 +458,7 @@ export function useComposerActions({
     ) => {
       const initialBotTarget = activeBotId.current;
       const initialGroupTarget = activeGroupId.current;
-      if ((!initialBotTarget && !initialGroupTarget) || sending) return false;
+      if (!initialBotTarget && !initialGroupTarget) return false;
       const editsAtSend = draftEdits.current;
       // The reply this send carries, read from the ref so a callback that outlived
       // a re-pick of the same message still carries the armed one; a reply picked
@@ -405,6 +477,24 @@ export function useComposerActions({
       );
       const groupTarget = plan.rerouteGroupId ?? initialGroupTarget;
       const botTarget = reroutedToGroup ? undefined : initialBotTarget;
+      // A group mention with nothing to send only opens that group.
+      if (!plan.shouldSend && !plan.shouldRunRoutines) {
+        if (!reroutedToGroup || !groupTarget) return false;
+        // Only a real engagement answers the bot's focus card.
+        if (initialBotTarget && focusPromptBotIdRef.current === initialBotTarget) {
+          cancelFocusPrompt();
+        }
+        clearSentReply(replyAtSend, replyQuoteAtSend);
+        revokePendingAttachmentPreviews(attachments);
+        setPendingAttachments((current) =>
+          current.filter((attachment) => !attachments.includes(attachment)),
+        );
+        setAttachmentNotice(null);
+        clearReadBoundary();
+        setSentCount((count) => count + 1);
+        navigate(`/app/g/${groupTarget}`);
+        return true;
+      }
       if (
         plan.shouldSend &&
         (groupTarget || botsRef.current.find((bot) => bot.id === botTarget)?.notifyOnFinish)
@@ -419,156 +509,81 @@ export function useComposerActions({
           : { text: plan.trimmed, replyToMessageId: undefined };
       const trimmed = fromPage.text.trim();
       const replyToMessageId = fromPage.replyToMessageId;
-      sendingRef.current = true;
-      setSending(true);
+      const outboxAttachments: WebOutboxAttachment[] = [];
+      for (const pending of attachments) {
+        if (pending.driveFile) {
+          outboxAttachments.push({ kind: "drive", id: pending.id, driveFile: pending.driveFile });
+          continue;
+        }
+        const file = pending.file!;
+        const mimeType = inferAttachmentMimeType(file.name, file.type);
+        if (!mimeType) {
+          setSendError(t`Unsupported file type: ${file.name}`);
+          return false;
+        }
+        outboxAttachments.push({
+          kind: "file",
+          id: pending.id,
+          name: file.name,
+          mimeType,
+          size: file.size,
+          file,
+          // Scoped to the target, so a retry rerouted to a group uploads afresh instead of
+          // replaying another chat's artifact.
+          uploadNonce: `attachment:${groupTarget ?? botTarget}:${pending.id}`,
+          ...(pending.previewUrl ? { previewUrl: pending.previewUrl } : {}),
+        });
+      }
+      const pageCard = replyToMessageId
+        ? activeSnapshot?.messages.find((message) => message.id === replyToMessageId)
+        : undefined;
+      const replyPreview = reroutedToGroup
+        ? null
+        : pageCard
+          ? previewMessageText(pageCard)
+          : (replyQuoteAtSend ?? (replyAtSend ? previewMessageText(replyAtSend) : null));
+      try {
+        // The outbox sends it: offline, a full server or a reload no longer loses the words.
+        enqueueWebSend({
+          clientNonce,
+          scope: { userId: outboxUserId, spaceId: outboxSpaceId },
+          payload: {
+            originThreadKey: originThreadKey!,
+            // The page marker added to the words is not the user's draft.
+            displayText: fromPage.text === plan.trimmed ? draft : fromPage.text,
+            replyPreview,
+            initialBotTarget,
+            botTarget,
+            groupTarget,
+            reroutedToGroup,
+            plan,
+            trimmed,
+            replyToMessageId: reroutedToGroup ? undefined : (replyToMessageId ?? replyAtSend?.id),
+            replyQuote:
+              reroutedToGroup || replyToMessageId ? undefined : (replyQuoteAtSend ?? undefined),
+            fromPage: !reroutedToGroup && replyToMessageId ? true : undefined,
+            attachments: outboxAttachments,
+          },
+          imageHandling,
+        });
+      } catch (error) {
+        // A refused enqueue sent nothing, so the words, files and reply stay in the composer.
+        setSendFailure({
+          message: errorText(error, t`Failed to send message`),
+          imageConfirmation: draftEdits.current === editsAtSend && isImageInputConfirmation(error),
+        });
+        return false;
+      }
       setSendError(null);
+      setAttachmentNotice(null);
       clearReadBoundary();
       setSentCount((count) => count + 1);
-      const dropDelayedSetup = () => {
-        // Only after successful engagement so a failed upload/send keeps the setup card.
-        if (initialBotTarget && focusPromptBotIdRef.current === initialBotTarget) {
-          cancelFocusPrompt();
-        }
-      };
-      // Keep the draft cleared once the submission is confirmed accepted.
-      let accepted = false;
-      try {
-        if (!plan.shouldSend) {
-          if (plan.shouldRunRoutines) {
-            await rpc.threads.sendWithRoutines({
-              ...(groupTarget ? { groupId: groupTarget } : { botId: botTarget! }),
-              clientNonce,
-              routineIds: plan.routineIds,
-            });
-            accepted = true;
-          }
-          dropDelayedSetup();
-          clearSentReply(replyAtSend, replyQuoteAtSend);
-          revokePendingAttachmentPreviews(attachments);
-          setPendingAttachments((current) =>
-            current.filter((attachment) => !attachments.includes(attachment)),
-          );
-          setAttachmentNotice(null);
-          if (reroutedToGroup && groupTarget) {
-            navigate(`/app/g/${groupTarget}`);
-            return true;
-          }
-          // The routine is saved; live events reconcile a failed refresh.
-          if (groupTarget && activeGroupId.current === groupTarget) {
-            void refreshGroupThreadRef.current(groupTarget).catch(() => undefined);
-          } else if (botTarget && activeBotId.current === botTarget) {
-            void refreshThreadRef.current(botTarget).catch(() => undefined);
-          }
-          return true;
-        }
-        const artifactIds: string[] = [];
-        const uploaded =
-          uploadedSendArtifacts.current.get(clientNonce) ?? new WeakMap<File, string>();
-        uploadedSendArtifacts.current.set(clientNonce, uploaded);
-        for (const pending of attachments) {
-          if (pending.driveFile) {
-            artifactIds.push(pending.driveFile.artifactId);
-            continue;
-          }
-          const pendingFile = pending.file!;
-          const existing = uploaded.get(pendingFile);
-          if (existing) {
-            artifactIds.push(existing);
-            continue;
-          }
-          const mimeType = inferAttachmentMimeType(pendingFile.name, pendingFile.type);
-          if (!mimeType) {
-            throw new Error(t`Unsupported file type: ${pendingFile.name}`);
-          }
-          const file = await prepareImage(pendingFile);
-          // Stable per pending attachment, so a retry under a new send nonce
-          // (an edited draft) gets back the artifact this upload already made.
-          // Scoped to the target: a retry rerouted to a group uploads afresh
-          // rather than replaying another chat's artifact.
-          const uploadNonce = `attachment:${groupTarget ?? botTarget}:${pending.id}`;
-          const artifact = await uploadSpaceFile({
-            file,
-            ...(groupTarget ? { groupId: groupTarget } : { botId: botTarget! }),
-            source: "chat",
-            clientNonce: uploadNonce,
-          });
-          uploaded.set(pendingFile, artifact.id);
-          artifactIds.push(artifact.id);
-        }
-        const payload = {
-          ...(groupTarget ? { groupId: groupTarget } : { botId: botTarget! }),
-          clientNonce,
-          imageHandling: imageHandling ?? "confirm",
-          text: trimmed || undefined,
-          mentions: plan.mentionPayload.length ? plan.mentionPayload : undefined,
-          artifactIds: artifactIds.length ? artifactIds : undefined,
-          replyToMessageId: reroutedToGroup ? undefined : (replyToMessageId ?? replyAtSend?.id),
-          replyQuote:
-            reroutedToGroup || replyToMessageId ? undefined : (replyQuoteAtSend ?? undefined),
-          fromPage: !reroutedToGroup && replyToMessageId ? true : undefined,
-        } as const;
-        // The routines run in the same server operation as the message: both or neither.
-        const sent = plan.shouldRunRoutines
-          ? (await rpc.threads.sendWithRoutines({ ...payload, routineIds: plan.routineIds })).send
-          : await rpc.threads.send(payload);
-        accepted = true;
-        if (sent && botTarget && activeBotId.current === botTarget) {
-          updateSnapshot((current) =>
-            applyThreadSendReceipt(
-              current,
-              {
-                botId: botTarget,
-                runId: sent.runId,
-                taskId: sent.taskId,
-              },
-              terminalRunReceipts.current,
-            ),
-          );
-        }
-        uploadedSendArtifacts.current.delete(clientNonce);
-        dropDelayedSetup();
-        clearSentReply(replyAtSend, replyQuoteAtSend);
-        revokePendingAttachmentPreviews(attachments);
-        // Keep files picked while this send was in flight.
-        setPendingAttachments((current) =>
-          current.filter((attachment) => !attachments.includes(attachment)),
-        );
-        // Refresh sidebar status even when a bot→group reroute navigates away below.
-        void refreshBots().catch(() => undefined);
-        if (reroutedToGroup && groupTarget) {
-          navigate(`/app/g/${groupTarget}`);
-          return true;
-        }
-        if (groupTarget && activeGroupId.current === groupTarget) setAttachmentNotice(null);
-        if (botTarget && activeBotId.current === botTarget) setAttachmentNotice(null);
-        if (groupTarget) void refreshGroupThreadRef.current(groupTarget).catch(() => undefined);
-        else if (botTarget) void refreshThreadRef.current(botTarget).catch(() => undefined);
-        return true;
-      } catch (error) {
-        const isConfirmation = isImageInputConfirmation(error);
-        // Offer the file resend only for the unchanged draft this send carried.
-        const confirmation = isConfirmation && draftEdits.current === editsAtSend;
-        const failure = {
-          message: errorText(error, t`Failed to send message`),
-          imageConfirmation: confirmation,
-        };
-        if (
-          reroutedToGroup &&
-          groupTarget &&
-          activeBotId.current === initialBotTarget &&
-          activeGroupId.current === initialGroupTarget
-        ) {
-          setSendFailure(failure);
-        } else if (groupTarget && activeGroupId.current === groupTarget) {
-          setSendFailure(failure);
-        } else if (botTarget && activeBotId.current === botTarget) {
-          setSendFailure(failure);
-        }
-        return isConfirmation ? false : accepted;
-      } finally {
-        sendingRef.current = false;
-        setSending(false);
-      }
+      clearSentReply(replyAtSend, replyQuoteAtSend);
+      // The queue owns these files and their previews now: drop them without releasing them.
+      setPendingAttachments((current) =>
+        current.filter((attachment) => !attachments.includes(attachment)),
+      );
+      return true;
     },
     [
       activeSnapshot?.messages,
@@ -576,15 +591,16 @@ export function useComposerActions({
       clearSentReply,
       flushPendingBrowserNotifications,
       navigate,
+      outboxSpaceId,
+      outboxUserId,
       pendingAttachments,
-      sending,
       t,
     ],
   );
   const stopRun = useCallback(async () => {
-    if (sending) return;
-    sendingRef.current = true;
-    setSending(true);
+    if (stopping) return;
+    stoppingRef.current = true;
+    setStopping(true);
     try {
       const botTarget = activeBotId.current;
       const groupTarget = activeGroupId.current;
@@ -631,10 +647,10 @@ export function useComposerActions({
       }
       await refreshThreadRef.current(botTarget).catch(() => undefined);
     } finally {
-      sendingRef.current = false;
-      setSending(false);
+      stoppingRef.current = false;
+      setStopping(false);
     }
-  }, [sending, t]);
+  }, [stopping, t]);
 
   const rewindRun = useCallback(
     async (input: {
@@ -738,6 +754,16 @@ export function useComposerActions({
     }
   }
 
+  const retryPendingSend = useCallback((clientNonce: string) => {
+    retryWebSendAttempt(clientNonce);
+  }, []);
+  const sendPendingAsFile = useCallback((clientNonce: string) => {
+    retryWebSendAttempt(clientNonce, { imageHandling: "file" });
+  }, []);
+  const discardPendingSend = useCallback((clientNonce: string) => {
+    discardWebSendAttempt(clientNonce);
+  }, []);
+
   return {
     activePendingAttachments,
     attachmentNotice,
@@ -751,9 +777,14 @@ export function useComposerActions({
     setReplyTarget,
     setReplyQuote,
     clearReply,
-    sending,
+    // The composer's Send stays enabled while a message is queued; only Stop waits.
+    sending: stopping,
     sentCount,
     sendMessage,
+    pendingSends,
+    retryPendingSend,
+    sendPendingAsFile,
+    discardPendingSend,
     stopRun,
     rewindRun,
     retryRun,
