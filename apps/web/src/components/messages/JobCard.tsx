@@ -29,7 +29,6 @@ import {
   Loader2,
   Maximize2,
   MessageSquare,
-  Pencil,
   RefreshCw,
   Send,
   Square,
@@ -643,6 +642,11 @@ export function JobCard({
   const tokens = tokenTotal(stats);
   const cost = formatCostUsd(stats?.costUsd);
   const diff = diffStat(block);
+  const canAct = !readOnly && Boolean(onJobAction);
+  const needsInput = block.state === "needs_input";
+  // A paused job only earns Yes/No once it actually said what it is asking about.
+  const promptContext = Boolean(block.currentActivity || block.error || reply);
+  const answered = answer?.jobId === block.jobId ? answer.choice : null;
   const hasDetails = Boolean(
     reply ||
       block.summary ||
@@ -660,13 +664,11 @@ export function JobCard({
       cost,
   );
   const sections: JobTab[] = [];
-  if (reply) sections.push("output");
+  // A paused job's question lives in its prompt box, so it never repeats as a tab body.
+  if (reply && !needsInput) sections.push("output");
   if (files.length > 0) sections.push("files");
   if (steps.length > 0) sections.push("steps");
   const activeTab: JobTab = sections.includes(tab) ? tab : (sections[0] ?? "output");
-  const canAct = !readOnly && Boolean(onJobAction);
-  const needsInput = block.state === "needs_input";
-  const answered = answer?.jobId === block.jobId ? answer.choice : null;
   const actionLabel = live ? t`Steer` : t`Follow up`;
   const copyText = reply ?? block.workspacePath;
 
@@ -683,6 +685,28 @@ export function JobCard({
       });
   };
   const jobRef = `"${block.title}" (${block.jobId})`;
+  const composer =
+    composerOpen && canAct && onJobAction ? (
+      <JobComposer
+        block={block}
+        pending={pending === "send"}
+        onClose={() => setComposerOpen(false)}
+        onSend={async (text) => {
+          setPending("send");
+          setActionError(null);
+          try {
+            await onJobAction(
+              live
+                ? t`Steer Orca job ${jobRef}: ${text}`
+                : t`[Job: ${block.title} (${block.jobId})] ${text}`,
+            );
+            setComposerOpen(false);
+          } finally {
+            setPending((current) => (current === "send" ? null : current));
+          }
+        }}
+      />
+    ) : null;
 
   /** Answer a job that asked a yes/no question, with the answer it settled on once sent. */
   const answerJob = (choice: JobAnswer) => {
@@ -890,14 +914,12 @@ export function JobCard({
           </div>
         ) : null}
 
-        {block.error ? (
+        {block.error && !needsInput ? (
           <div
             data-testid="job-error"
             className={cn(
               "min-w-0 rounded-lg border px-2.5 py-1.5 text-body-sm",
-              block.state === "needs_input"
-                ? "border-warning/30 bg-warning/10 text-warning"
-                : "border-destructive/30 bg-destructive/10 text-destructive",
+              "border-destructive/30 bg-destructive/10 text-destructive",
             )}
           >
             <span className="line-clamp-3 break-words" dir="auto" title={block.error}>
@@ -906,6 +928,152 @@ export function JobCard({
           </div>
         ) : null}
       </div>
+
+      {needsInput ? (
+        <div
+          data-testid="job-answer-prompt"
+          className="mx-4 mb-3 flex min-w-0 flex-col gap-2.5 rounded-xl border border-warning/30 bg-warning/8 p-3"
+        >
+          <div className="flex min-w-0 items-center gap-1.5">
+            <AlertCircle className="size-3.5 shrink-0 text-warning" aria-hidden />
+            <span
+              data-testid="job-prompt-title"
+              className="min-w-0 flex-1 truncate text-label font-medium text-foreground"
+            >
+              {promptContext ? (
+                <Trans>Waiting for confirmation</Trans>
+              ) : (
+                <Trans>Waiting for input</Trans>
+              )}
+            </span>
+          </div>
+          {block.currentActivity ? (
+            <code
+              data-testid="job-prompt-activity"
+              className="block max-w-full truncate rounded-md border border-border/60 bg-background/70 px-2.5 py-1.5 font-mono text-caption text-foreground"
+              dir="auto"
+              title={block.currentActivity}
+            >
+              {block.currentActivity}
+            </code>
+          ) : null}
+          {block.error ? (
+            <p
+              data-testid="job-prompt-error"
+              className="min-w-0 text-body-sm font-medium break-words text-foreground"
+              dir="auto"
+            >
+              {block.error}
+            </p>
+          ) : null}
+          {reply ? (
+            <div data-testid="job-prompt-question" className="min-w-0">
+              <OutputBody reply={reply} foldable />
+            </div>
+          ) : null}
+          {promptContext ? null : (
+            <p
+              data-testid="job-prompt-fallback"
+              className="min-w-0 text-body-sm text-muted-foreground"
+            >
+              <Trans>
+                The agent paused and is waiting for input, but didn't send its question. Open the
+                session or check status to see what it's asking.
+              </Trans>
+            </p>
+          )}
+          {canAct || answered ? (
+            <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+              {answered ? (
+                <span
+                  data-testid="job-answered"
+                  className={cn(
+                    "inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-label font-medium",
+                    answered === "yes"
+                      ? "bg-success/15 text-success"
+                      : "bg-muted text-muted-foreground",
+                  )}
+                >
+                  <Check className="size-3 shrink-0" aria-hidden />
+                  {answered === "yes" ? t`Replied: Yes` : t`Replied: No`}
+                </span>
+              ) : promptContext ? (
+                <>
+                  <Button
+                    type="button"
+                    size="xs"
+                    data-testid="job-answer-yes"
+                    disabled={pending !== null}
+                    onClick={() => answerJob("yes")}
+                    className="border border-success/30 bg-success/15 font-medium text-success hover:bg-success/25"
+                  >
+                    {pending === "yes" ? (
+                      <Loader2 className="animate-spin" aria-hidden />
+                    ) : (
+                      <Check aria-hidden />
+                    )}
+                    <Trans>Yes, proceed</Trans>
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="xs"
+                    data-testid="job-answer-no"
+                    disabled={pending !== null}
+                    onClick={() => answerJob("no")}
+                    className="hover:border-destructive/40 hover:text-destructive"
+                  >
+                    {pending === "no" ? (
+                      <Loader2 className="animate-spin" aria-hidden />
+                    ) : (
+                      <X aria-hidden />
+                    )}
+                    <Trans>No, cancel</Trans>
+                  </Button>
+                </>
+              ) : (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="xs"
+                  data-testid="job-prompt-status"
+                  disabled={pending === "status"}
+                  onClick={() => runAction("status", t`Check status of Orca job ${jobRef}.`)}
+                  className="text-muted-foreground hover:text-foreground"
+                >
+                  {pending === "status" ? (
+                    <Loader2 className="animate-spin" aria-hidden />
+                  ) : (
+                    <RefreshCw aria-hidden />
+                  )}
+                  <Trans>Check status</Trans>
+                </Button>
+              )}
+              {canAct ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="xs"
+                  data-testid="job-answer-reply"
+                  aria-expanded={composerOpen}
+                  disabled={pending !== null}
+                  onClick={() => setComposerOpen((current) => !current)}
+                  className="text-muted-foreground hover:text-foreground"
+                >
+                  <MessageSquare aria-hidden />
+                  {promptContext ? <Trans>Reply…</Trans> : <Trans>Reply</Trans>}
+                </Button>
+              ) : null}
+            </div>
+          ) : null}
+          {composer}
+          {actionError ? (
+            <p data-testid="job-action-error" className="text-caption text-destructive">
+              {actionError}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
 
       {sections.length > 0 ? (
         <div className="min-w-0 border-t border-border/60">
@@ -970,74 +1138,6 @@ export function JobCard({
 
       {canAct || copyText || hasDetails || href ? (
         <div className="flex min-w-0 flex-col gap-2 border-t border-border/60 bg-muted/20 px-3.5 py-2">
-          {canAct && needsInput ? (
-            <div
-              data-testid="job-answer-prompt"
-              className="flex min-w-0 flex-wrap items-center gap-1.5"
-            >
-              {answered ? (
-                <span
-                  data-testid="job-answered"
-                  className={cn(
-                    "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-label font-medium",
-                    answered === "yes"
-                      ? "bg-success/15 text-success"
-                      : "bg-muted text-muted-foreground",
-                  )}
-                >
-                  <Check className="size-3 shrink-0" aria-hidden />
-                  {answered === "yes" ? t`Replied: Yes` : t`Replied: No`}
-                </span>
-              ) : (
-                <>
-                  <Button
-                    type="button"
-                    size="xs"
-                    data-testid="job-answer-yes"
-                    disabled={pending !== null}
-                    onClick={() => answerJob("yes")}
-                    className="border border-success/30 bg-success/15 font-medium text-success hover:bg-success/25"
-                  >
-                    {pending === "yes" ? (
-                      <Loader2 className="animate-spin" aria-hidden />
-                    ) : (
-                      <Check aria-hidden />
-                    )}
-                    <Trans>Yes</Trans>
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="xs"
-                    data-testid="job-answer-no"
-                    disabled={pending !== null}
-                    onClick={() => answerJob("no")}
-                    className="hover:border-destructive/40 hover:text-destructive"
-                  >
-                    {pending === "no" ? (
-                      <Loader2 className="animate-spin" aria-hidden />
-                    ) : (
-                      <X aria-hidden />
-                    )}
-                    <Trans>No</Trans>
-                  </Button>
-                </>
-              )}
-              <Button
-                type="button"
-                variant="ghost"
-                size="xs"
-                data-testid="job-answer-other"
-                aria-expanded={composerOpen}
-                disabled={pending !== null}
-                onClick={() => setComposerOpen((current) => !current)}
-                className="text-muted-foreground hover:text-foreground"
-              >
-                <Pencil aria-hidden />
-                <Trans>Other</Trans>
-              </Button>
-            </div>
-          ) : null}
           <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
             <div className="flex min-w-0 items-center gap-1">
               {canAct && !needsInput ? (
@@ -1122,28 +1222,8 @@ export function JobCard({
               ) : null}
             </div>
           </div>
-          {composerOpen && canAct && onJobAction ? (
-            <JobComposer
-              block={block}
-              pending={pending === "send"}
-              onClose={() => setComposerOpen(false)}
-              onSend={async (text) => {
-                setPending("send");
-                setActionError(null);
-                try {
-                  await onJobAction(
-                    live
-                      ? t`Steer Orca job ${jobRef}: ${text}`
-                      : t`[Job: ${block.title} (${block.jobId})] ${text}`,
-                  );
-                  setComposerOpen(false);
-                } finally {
-                  setPending((current) => (current === "send" ? null : current));
-                }
-              }}
-            />
-          ) : null}
-          {actionError ? (
+          {!needsInput ? composer : null}
+          {actionError && !needsInput ? (
             <p data-testid="job-action-error" className="text-caption text-destructive">
               {actionError}
             </p>

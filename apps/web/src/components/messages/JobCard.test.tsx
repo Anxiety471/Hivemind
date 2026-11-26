@@ -482,16 +482,77 @@ describe("JobCard", () => {
     card.unmount();
   });
 
-  it("asks a needs_input job one-click Yes or No without opening the composer", async () => {
-    const onJobAction = vi.fn(async () => undefined);
-    const card = mountCard({ ...job, state: "needs_input" }, { onJobAction });
-    expect(card.button("job-answer-yes")?.textContent).toBe("Yes");
-    expect(card.button("job-answer-no")?.textContent).toBe("No");
-    expect(card.button("job-answer-other")?.textContent).toBe("Other");
-    // The textbox stays closed until the reader asks for it.
-    expect(card.byTestId("job-composer")).toBeNull();
-    // The generic Reply control is replaced by the dedicated prompt row.
+  it("shows the paused job's command and question above Yes and No in one prompt box", () => {
+    const card = mountCard(
+      {
+        ...job,
+        state: "needs_input",
+        currentActivity: "bash: prisma migrate deploy",
+        reply: "The migration drops three columns. Run it against production now?",
+      },
+      { onJobAction: async () => undefined },
+    );
+    const prompt = card.byTestId("job-answer-prompt");
+    expect(prompt).not.toBeNull();
+    expect(card.byTestId("job-prompt-title")?.textContent).toBe("Waiting for confirmation");
+    const activity = card.byTestId("job-prompt-activity");
+    expect(activity?.textContent).toBe("bash: prisma migrate deploy");
+    expect(activity?.className).toContain("font-mono");
+    const question = card.byTestId("job-prompt-question");
+    expect(question?.textContent).toContain("Run it against production now?");
+    // The question is stated once, inside the prompt box, and nowhere else on the card.
+    expect(card.text().match(/Run it against production now\?/g)).toHaveLength(1);
+    expect(card.byTestId("job-panel-output")).toBeNull();
+    expect(card.byTestId("job-error")).toBeNull();
+    // The context sits directly above the buttons it explains.
+    const order = [
+      ...(prompt?.querySelectorAll(
+        '[data-testid="job-prompt-activity"], [data-testid="job-prompt-question"], [data-testid="job-answer-yes"], [data-testid="job-answer-no"], [data-testid="job-answer-reply"]',
+      ) ?? []),
+    ].map((node) => node.getAttribute("data-testid"));
+    expect(order).toEqual([
+      "job-prompt-activity",
+      "job-prompt-question",
+      "job-answer-yes",
+      "job-answer-no",
+      "job-answer-reply",
+    ]);
+    expect(card.button("job-answer-yes")?.textContent).toBe("Yes, proceed");
+    expect(card.button("job-answer-no")?.textContent).toBe("No, cancel");
+    expect(card.button("job-answer-reply")?.textContent).toBe("Reply…");
+    // One of each control on the card: the footer no longer repeats the prompt.
+    expect(card.container.querySelectorAll('[data-testid="job-answer-yes"]')).toHaveLength(1);
+    expect(card.container.querySelectorAll('[data-testid="job-answer-no"]')).toHaveLength(1);
+    expect(card.button("job-answer-other")).toBeNull();
     expect(card.button("job-steer")).toBeNull();
+    // The footer stays quiet: copy and open only.
+    expect(card.button("job-copy")).not.toBeNull();
+    expect(prompt?.contains(card.button("job-copy"))).toBe(false);
+    card.unmount();
+  });
+
+  it("states the job's error inside the prompt box and draws no second error banner", () => {
+    const card = mountCard(
+      { ...job, state: "needs_input", error: "The migration would drop three columns." },
+      { onJobAction: async () => undefined },
+    );
+    expect(card.byTestId("job-prompt-title")?.textContent).toBe("Waiting for confirmation");
+    expect(card.byTestId("job-prompt-error")?.textContent).toBe(
+      "The migration would drop three columns.",
+    );
+    expect(card.text().match(/The migration would drop three columns\./g)).toHaveLength(1);
+    expect(card.byTestId("job-error")).toBeNull();
+    expect(card.button("job-answer-yes")).not.toBeNull();
+    card.unmount();
+  });
+
+  it("answers a needs_input job with Yes and settles into the note", async () => {
+    const onJobAction = vi.fn(async () => undefined);
+    const card = mountCard(
+      { ...job, state: "needs_input", currentActivity: "bash: pnpm test" },
+      { onJobAction },
+    );
+    expect(card.byTestId("job-composer")).toBeNull();
     await act(async () => {
       card.click("job-answer-yes");
       await Promise.resolve();
@@ -500,16 +561,19 @@ describe("JobCard", () => {
       'Reply to Orca job "mcp-job-card" (job-1): Yes, go ahead.',
     );
     expect(card.byTestId("job-answered")?.textContent).toBe("Replied: Yes");
-    // Yes/No settle into the note, so a second click cannot send again; Other remains.
+    // The answer settles into the note, so a second click cannot send again; Reply stays.
     expect(card.button("job-answer-yes")).toBeNull();
     expect(card.button("job-answer-no")).toBeNull();
-    expect(card.button("job-answer-other")).not.toBeNull();
+    expect(card.button("job-answer-reply")).not.toBeNull();
     card.unmount();
   });
 
   it("answers a needs_input job with No", async () => {
     const onJobAction = vi.fn(async () => undefined);
-    const card = mountCard({ ...job, state: "needs_input" }, { onJobAction });
+    const card = mountCard(
+      { ...job, state: "needs_input", reply: "Deploy to production?" },
+      { onJobAction },
+    );
     await act(async () => {
       card.click("job-answer-no");
       await Promise.resolve();
@@ -521,12 +585,37 @@ describe("JobCard", () => {
     card.unmount();
   });
 
-  it("still sends a custom reply from Other on a needs_input job", async () => {
+  it("offers no blind Yes or No when a paused job sent no context", async () => {
     const onJobAction = vi.fn(async () => undefined);
     const card = mountCard({ ...job, state: "needs_input" }, { onJobAction });
-    card.click("job-answer-other");
+    expect(card.byTestId("job-prompt-title")?.textContent).toBe("Waiting for input");
+    expect(card.byTestId("job-prompt-fallback")?.textContent).toContain(
+      "The agent paused and is waiting for input, but didn't send its question.",
+    );
+    expect(card.button("job-answer-yes")).toBeNull();
+    expect(card.button("job-answer-no")).toBeNull();
+    expect(card.button("job-answer-reply")?.textContent).toBe("Reply");
+    expect(card.button("job-open")?.textContent).toContain("Open");
+    await act(async () => {
+      card.click("job-prompt-status");
+      await Promise.resolve();
+    });
+    expect(onJobAction).toHaveBeenCalledWith('Check status of Orca job "mcp-job-card" (job-1).');
+    card.unmount();
+  });
+
+  it("still sends a custom reply from Reply on a needs_input job", async () => {
+    const onJobAction = vi.fn(async () => undefined);
+    const card = mountCard(
+      { ...job, state: "needs_input", reply: "Deploy to production?" },
+      { onJobAction },
+    );
+    expect(card.byTestId("job-composer")).toBeNull();
+    card.click("job-answer-reply");
     const input = card.byTestId("job-composer-input") as HTMLTextAreaElement;
     expect(input).not.toBeNull();
+    // The composer opens inside the prompt box, right where the question is.
+    expect(card.byTestId("job-answer-prompt")?.contains(input)).toBe(true);
     flushSync(() => {
       const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
       setter?.call(input, "Run it after lunch");
@@ -544,26 +633,41 @@ describe("JobCard", () => {
     const failing = vi.fn(async () => {
       throw new Error("The chat is busy.");
     });
-    const card = mountCard({ ...job, state: "needs_input" }, { onJobAction: failing });
+    const card = mountCard(
+      { ...job, state: "needs_input", error: "Production deploy needs approval." },
+      { onJobAction: failing },
+    );
     await act(async () => {
       card.click("job-answer-yes");
       await Promise.resolve();
     });
     expect(card.byTestId("job-action-error")?.textContent).toBe("The chat is busy.");
+    expect(card.byTestId("job-answer-prompt")?.contains(card.byTestId("job-action-error"))).toBe(
+      true,
+    );
     expect(card.byTestId("job-answered")).toBeNull();
     expect(card.button("job-answer-yes")?.disabled).toBe(false);
     expect(card.button("job-answer-no")?.disabled).toBe(false);
     card.unmount();
   });
 
-  it("hides the Yes and No prompt in a read-only thread", () => {
+  it("hides the paused job's buttons in a read-only thread but keeps its context", () => {
     const card = mountCard(
-      { ...job, state: "needs_input" },
+      {
+        ...job,
+        state: "needs_input",
+        currentActivity: "bash: prisma migrate deploy",
+        reply: "Deploy to production?",
+      },
       { readOnly: true, onJobAction: async () => undefined },
     );
+    expect(card.byTestId("job-prompt-activity")?.textContent).toBe("bash: prisma migrate deploy");
+    expect(card.byTestId("job-prompt-question")?.textContent).toContain("Deploy to production?");
     expect(card.button("job-answer-yes")).toBeNull();
     expect(card.button("job-answer-no")).toBeNull();
-    expect(card.button("job-answer-other")).toBeNull();
+    expect(card.button("job-answer-reply")).toBeNull();
+    expect(card.button("job-prompt-status")).toBeNull();
+    expect(card.button("job-open")).not.toBeNull();
     expect(card.text()).toContain("Needs input");
     card.unmount();
   });
