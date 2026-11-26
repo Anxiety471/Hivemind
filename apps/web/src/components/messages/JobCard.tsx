@@ -51,10 +51,7 @@ const PREVIEW_LINES = 3;
 
 type JobBlock = Extract<MessageBlock, { kind: "job" }>;
 type JobTab = "output" | "files" | "steps";
-type JobAction = "send" | "stop" | "status" | "yes" | "no";
-
-/** A quick answer the reader already sent for a job that asked a yes/no question. */
-type JobAnswer = "yes" | "no";
+type JobAction = "send" | "stop" | "status";
 
 /** A job card is live while the job runs: its elapsed time counts up from when it started. */
 function liveJob(block: JobBlock): boolean {
@@ -492,7 +489,12 @@ function JobComposer({
   const { t } = useLingui();
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const input = useRef<HTMLTextAreaElement>(null);
   const live = liveJob(block);
+  // The reader asked for the composer, so the caret starts in it: Enter sends, Escape closes.
+  useEffect(() => {
+    input.current?.focus();
+  }, []);
   const submit = () => {
     const text = draft.trim();
     if (!text || pending) return;
@@ -505,6 +507,7 @@ function JobComposer({
     <div className="flex min-w-0 flex-col gap-1.5" data-testid="job-composer">
       <div className="flex min-w-0 items-end gap-1.5">
         <textarea
+          ref={input}
           data-testid="job-composer-input"
           aria-label={t`Instruction for ${block.title}`}
           placeholder={live ? t`Steer ${block.title}…` : t`Send instruction to ${block.title}…`}
@@ -628,10 +631,9 @@ export function JobCard({
   const [composerOpen, setComposerOpen] = useState(false);
   const [pending, setPending] = useState<JobAction | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  // Keyed by job so a card reused for another job never shows the previous job's answer.
-  const [answer, setAnswer] = useState<{ jobId: string; choice: JobAnswer } | null>(null);
   const [branchCopied, copyBranch] = useCopied();
   const [pathCopied, copyPath] = useCopied();
+  const [outputCopied, copyOutput] = useCopied();
 
   const reply = block.reply?.trim();
   const href = httpsUrl(block.url);
@@ -644,9 +646,13 @@ export function JobCard({
   const diff = diffStat(block);
   const canAct = !readOnly && Boolean(onJobAction);
   const needsInput = block.state === "needs_input";
-  // A paused job only earns Yes/No once it actually said what it is asking about.
-  const promptContext = Boolean(block.currentActivity || block.error || reply);
-  const answered = answer?.jobId === block.jobId ? answer.choice : null;
+  // While it works, the bar shows what it is doing and how much it has done.
+  const toolCalls = (stats?.toolCalls ?? 0) > 0 ? stats?.toolCalls : undefined;
+  const stepCount = toolCalls ?? (steps.length > 0 ? steps.length : undefined);
+  const stepLabel =
+    toolCalls !== undefined
+      ? plural(toolCalls, { one: "# tool", other: "# tools" })
+      : plural(steps.length, { one: "# step", other: "# steps" });
   const hasDetails = Boolean(
     reply ||
       block.summary ||
@@ -664,12 +670,11 @@ export function JobCard({
       cost,
   );
   const sections: JobTab[] = [];
-  // A paused job's question lives in its prompt box, so it never repeats as a tab body.
-  if (reply && !needsInput) sections.push("output");
+  // A paused job shows its question in the output like any other, with no special case.
+  if (reply) sections.push("output");
   if (files.length > 0) sections.push("files");
   if (steps.length > 0) sections.push("steps");
   const activeTab: JobTab = sections.includes(tab) ? tab : (sections[0] ?? "output");
-  const actionLabel = live ? t`Steer` : t`Follow up`;
   const copyText = reply ?? block.workspacePath;
 
   const runAction = (action: JobAction, text: string) => {
@@ -708,24 +713,8 @@ export function JobCard({
       />
     ) : null;
 
-  /** Answer a job that asked a yes/no question, with the answer it settled on once sent. */
-  const answerJob = (choice: JobAnswer) => {
-    if (!onJobAction || pending) return;
-    setPending(choice);
-    setActionError(null);
-    onJobAction(
-      choice === "yes"
-        ? t`Reply to Orca job ${jobRef}: Yes, go ahead.`
-        : t`Reply to Orca job ${jobRef}: No, do not proceed.`,
-    )
-      .then(() => setAnswer({ jobId: block.jobId, choice }))
-      .catch((failure: unknown) => {
-        setActionError(errorText(failure, t`Could not reach the job.`));
-      })
-      .finally(() => {
-        setPending((current) => (current === choice ? null : current));
-      });
-  };
+  /** Toggle the inline composer that steers, answers or follows up on the job. */
+  const toggleComposer = () => setComposerOpen((current) => !current);
 
   const hasMeta = Boolean(
     block.agent || block.model || block.effort || block.branch || block.commit || prHref,
@@ -888,8 +877,8 @@ export function JobCard({
                 data-testid="job-inspect"
                 aria-label={t`Inspect job details`}
                 title={t`Inspect job details`}
-                // On a narrow card the title needs the room; the footer's Details still opens this.
-                className="hidden size-7 text-muted-foreground @[400px]:inline-flex"
+                // The only way into the full-screen inspector, so it stays on every card width.
+                className="size-7 text-muted-foreground"
                 onClick={() => setInspecting(true)}
               >
                 <Maximize2 className="size-3.5" aria-hidden />
@@ -901,175 +890,86 @@ export function JobCard({
         {hasMeta || tokens > 0 || cost || hasDiffStat(block) ? (
           <div className="flex min-w-0 flex-wrap items-center gap-1.5">{metaChips}</div>
         ) : null}
-
-        {live && block.currentActivity ? (
-          <div
-            data-testid="job-live-activity"
-            className="flex min-w-0 items-center gap-2 rounded-lg border border-status-working/25 bg-status-working/8 px-2.5 py-1.5 text-caption font-mono text-foreground/90"
-          >
-            <Loader2 className="size-3 shrink-0 animate-spin text-status-working" aria-hidden />
-            <span className="min-w-0 truncate" title={block.currentActivity}>
-              {block.currentActivity}
-            </span>
-          </div>
-        ) : null}
-
-        {block.error && !needsInput ? (
-          <div
-            data-testid="job-error"
-            className={cn(
-              "min-w-0 rounded-lg border px-2.5 py-1.5 text-body-sm",
-              "border-destructive/30 bg-destructive/10 text-destructive",
-            )}
-          >
-            <span className="line-clamp-3 break-words" dir="auto" title={block.error}>
-              {block.error}
-            </span>
-          </div>
-        ) : null}
       </div>
 
-      {needsInput ? (
+      {live ? (
         <div
-          data-testid="job-answer-prompt"
-          className="mx-4 mb-3 flex min-w-0 flex-col gap-2.5 rounded-xl border border-warning/30 bg-warning/8 p-3"
+          data-testid="job-live-status"
+          className="mx-4 mb-2.5 flex min-w-0 items-center justify-between gap-2.5 rounded-lg border border-status-working/25 bg-status-working/8 px-3 py-2"
         >
-          <div className="flex min-w-0 items-center gap-1.5">
-            <AlertCircle className="size-3.5 shrink-0 text-warning" aria-hidden />
+          <span className="flex min-w-0 items-center gap-2">
+            <Loader2 className="size-3.5 shrink-0 animate-spin text-status-working" aria-hidden />
+            {block.currentActivity ? (
+              <span
+                className="min-w-0 truncate font-mono text-caption text-foreground/90"
+                dir="auto"
+                title={block.currentActivity}
+              >
+                {block.currentActivity}
+              </span>
+            ) : (
+              <span className="min-w-0 truncate text-caption text-foreground/90">
+                {block.state === "starting" ? (
+                  <Trans>Starting agent…</Trans>
+                ) : (
+                  <Trans>Working on task…</Trans>
+                )}
+              </span>
+            )}
+          </span>
+          {stepCount === undefined ? null : (
             <span
-              data-testid="job-prompt-title"
-              className="min-w-0 flex-1 truncate text-label font-medium text-foreground"
+              data-testid="job-live-steps"
+              className="shrink-0 text-caption text-muted-foreground tabular-nums"
             >
-              {promptContext ? (
-                <Trans>Waiting for confirmation</Trans>
-              ) : (
-                <Trans>Waiting for input</Trans>
-              )}
+              {stepLabel}
             </span>
-          </div>
+          )}
+        </div>
+      ) : needsInput || block.error ? (
+        <div
+          data-testid="job-status-note"
+          className={cn(
+            "mx-4 mb-2.5 flex min-w-0 flex-col gap-1 rounded-lg border px-3 py-2",
+            needsInput
+              ? "border-warning/25 bg-warning/8"
+              : "border-destructive/25 bg-destructive/8",
+          )}
+        >
           {block.currentActivity ? (
-            <code
-              data-testid="job-prompt-activity"
-              className="block max-w-full truncate rounded-md border border-border/60 bg-background/70 px-2.5 py-1.5 font-mono text-caption text-foreground"
-              dir="auto"
-              title={block.currentActivity}
-            >
-              {block.currentActivity}
-            </code>
+            <span className="flex min-w-0 items-center gap-2">
+              {needsInput ? (
+                <AlertCircle className="size-3.5 shrink-0 text-warning" aria-hidden />
+              ) : (
+                <X className="size-3.5 shrink-0 text-destructive" aria-hidden />
+              )}
+              <span
+                data-testid="job-status-activity"
+                className="min-w-0 flex-1 truncate font-mono text-caption text-foreground/90"
+                dir="auto"
+                title={block.currentActivity}
+              >
+                {block.currentActivity}
+              </span>
+            </span>
+          ) : needsInput ? (
+            <span className="flex min-w-0 items-center gap-2">
+              <Clock className="size-3.5 shrink-0 text-warning" aria-hidden />
+              <span className="min-w-0 flex-1 truncate text-caption text-foreground/90">
+                <Trans>Paused, waiting for your reply…</Trans>
+              </span>
+            </span>
           ) : null}
           {block.error ? (
             <p
-              data-testid="job-prompt-error"
-              className="min-w-0 text-body-sm font-medium break-words text-foreground"
+              data-testid="job-error"
+              className={cn(
+                "min-w-0 text-caption break-words",
+                needsInput ? "text-foreground/90" : "text-destructive",
+              )}
               dir="auto"
             >
               {block.error}
-            </p>
-          ) : null}
-          {reply ? (
-            <div data-testid="job-prompt-question" className="min-w-0">
-              <OutputBody reply={reply} foldable />
-            </div>
-          ) : null}
-          {promptContext ? null : (
-            <p
-              data-testid="job-prompt-fallback"
-              className="min-w-0 text-body-sm text-muted-foreground"
-            >
-              <Trans>
-                The agent paused and is waiting for input, but didn't send its question. Open the
-                session or check status to see what it's asking.
-              </Trans>
-            </p>
-          )}
-          {canAct || answered ? (
-            <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-              {answered ? (
-                <span
-                  data-testid="job-answered"
-                  className={cn(
-                    "inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-label font-medium",
-                    answered === "yes"
-                      ? "bg-success/15 text-success"
-                      : "bg-muted text-muted-foreground",
-                  )}
-                >
-                  <Check className="size-3 shrink-0" aria-hidden />
-                  {answered === "yes" ? t`Replied: Yes` : t`Replied: No`}
-                </span>
-              ) : promptContext ? (
-                <>
-                  <Button
-                    type="button"
-                    size="xs"
-                    data-testid="job-answer-yes"
-                    disabled={pending !== null}
-                    onClick={() => answerJob("yes")}
-                    className="border border-success/30 bg-success/15 font-medium text-success hover:bg-success/25"
-                  >
-                    {pending === "yes" ? (
-                      <Loader2 className="animate-spin" aria-hidden />
-                    ) : (
-                      <Check aria-hidden />
-                    )}
-                    <Trans>Yes, proceed</Trans>
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="xs"
-                    data-testid="job-answer-no"
-                    disabled={pending !== null}
-                    onClick={() => answerJob("no")}
-                    className="hover:border-destructive/40 hover:text-destructive"
-                  >
-                    {pending === "no" ? (
-                      <Loader2 className="animate-spin" aria-hidden />
-                    ) : (
-                      <X aria-hidden />
-                    )}
-                    <Trans>No, cancel</Trans>
-                  </Button>
-                </>
-              ) : (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="xs"
-                  data-testid="job-prompt-status"
-                  disabled={pending === "status"}
-                  onClick={() => runAction("status", t`Check status of Orca job ${jobRef}.`)}
-                  className="text-muted-foreground hover:text-foreground"
-                >
-                  {pending === "status" ? (
-                    <Loader2 className="animate-spin" aria-hidden />
-                  ) : (
-                    <RefreshCw aria-hidden />
-                  )}
-                  <Trans>Check status</Trans>
-                </Button>
-              )}
-              {canAct ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="xs"
-                  data-testid="job-answer-reply"
-                  aria-expanded={composerOpen}
-                  disabled={pending !== null}
-                  onClick={() => setComposerOpen((current) => !current)}
-                  className="text-muted-foreground hover:text-foreground"
-                >
-                  <MessageSquare aria-hidden />
-                  {promptContext ? <Trans>Reply…</Trans> : <Trans>Reply</Trans>}
-                </Button>
-              ) : null}
-            </div>
-          ) : null}
-          {composer}
-          {actionError ? (
-            <p data-testid="job-action-error" className="text-caption text-destructive">
-              {actionError}
             </p>
           ) : null}
         </div>
@@ -1140,21 +1040,27 @@ export function JobCard({
         <div className="flex min-w-0 flex-col gap-2 border-t border-border/60 bg-muted/20 px-3.5 py-2">
           <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
             <div className="flex min-w-0 items-center gap-1">
-              {canAct && !needsInput ? (
+              {canAct ? (
                 <Button
                   type="button"
                   variant="ghost"
                   size="xs"
                   data-testid="job-steer"
                   aria-expanded={composerOpen}
-                  onClick={() => setComposerOpen((current) => !current)}
+                  onClick={toggleComposer}
                   className="text-muted-foreground hover:text-foreground"
                 >
                   <MessageSquare aria-hidden />
-                  {actionLabel}
+                  {live ? (
+                    <Trans>Steer</Trans>
+                  ) : needsInput ? (
+                    <Trans>Reply</Trans>
+                  ) : (
+                    <Trans>Follow up</Trans>
+                  )}
                 </Button>
               ) : null}
-              {canAct && live ? (
+              {canAct && (live || needsInput) ? (
                 <Button
                   type="button"
                   variant="ghost"
@@ -1198,14 +1104,14 @@ export function JobCard({
                   variant="ghost"
                   size="icon-xs"
                   data-testid="job-copy"
-                  aria-label={reply ? t`Copy job output` : t`Copy workspace path`}
-                  title={reply ? t`Copy output` : t`Copy workspace path`}
-                  className="text-muted-foreground"
-                  onClick={() => {
-                    void writeClipboard(copyText);
-                  }}
+                  aria-label={
+                    outputCopied ? t`Copied` : reply ? t`Copy job output` : t`Copy workspace path`
+                  }
+                  title={outputCopied ? t`Copied` : reply ? t`Copy output` : t`Copy workspace path`}
+                  className={cn("text-muted-foreground", outputCopied && "text-success")}
+                  onClick={() => copyOutput(copyText)}
                 >
-                  <Copy aria-hidden />
+                  {outputCopied ? <Check aria-hidden /> : <Copy aria-hidden />}
                 </Button>
               ) : null}
               {href ? (
@@ -1217,13 +1123,13 @@ export function JobCard({
                   className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-label text-muted-foreground no-underline transition-colors hover:bg-accent hover:text-foreground focus-ring"
                 >
                   <Trans>Open</Trans>
-                  <ExternalLink className="size-3" aria-hidden />
+                  <ExternalLink className="size-3" aria-label={t`(opens in a new tab)`} />
                 </a>
               ) : null}
             </div>
           </div>
-          {!needsInput ? composer : null}
-          {actionError && !needsInput ? (
+          {composer}
+          {actionError ? (
             <p data-testid="job-action-error" className="text-caption text-destructive">
               {actionError}
             </p>

@@ -158,15 +158,45 @@ describe("JobCard", () => {
     card.unmount();
   });
 
-  it("shows the live activity banner for a working job", () => {
+  it("shows the live status bar with the running command and its step count", () => {
     const card = mountCard({
       ...job,
       startedAt: 1_000_000 - 5_000,
       currentActivity: "pnpm exec vitest run apps/web",
+      stats: { toolCalls: 12 },
     });
-    expect(card.byTestId("job-live-activity")?.textContent).toContain(
-      "pnpm exec vitest run apps/web",
-    );
+    const bar = card.byTestId("job-live-status");
+    expect(bar).not.toBeNull();
+    // The command reads as a command, in monospace, behind a spinner.
+    expect(bar?.querySelector(".font-mono")?.textContent).toBe("pnpm exec vitest run apps/web");
+    expect(bar?.querySelector(".animate-spin")).not.toBeNull();
+    expect(card.byTestId("job-live-steps")?.textContent).toBe("12 tools");
+    card.unmount();
+  });
+
+  it("falls back to a concise phase label while a job starts or works", () => {
+    const starting = mountCard({ ...job, state: "starting", startedAt: 1_000_000 - 2_000 });
+    expect(starting.byTestId("job-live-status")?.textContent).toContain("Starting agent…");
+    expect(starting.byTestId("job-live-steps")).toBeNull();
+    starting.unmount();
+
+    const working = mountCard({ ...job, state: "working", startedAt: 1_000_000 - 2_000 });
+    expect(working.byTestId("job-live-status")?.textContent).toContain("Working on task…");
+    expect(working.byTestId("job-live-steps")).toBeNull();
+    working.unmount();
+  });
+
+  it("counts the listed steps in the live status bar when the job reports no tool total", () => {
+    const card = mountCard({
+      ...job,
+      startedAt: 1_000_000 - 2_000,
+      steps: [
+        { kind: "command", name: "pnpm lint", status: "ok" },
+        { kind: "edit", name: "retry.ts", status: "running" },
+        { kind: "tool", name: "read lodash source", status: "ok" },
+      ],
+    });
+    expect(card.byTestId("job-live-steps")?.textContent).toBe("3 steps");
     card.unmount();
   });
 
@@ -370,6 +400,34 @@ describe("JobCard", () => {
     card.unmount();
   });
 
+  it("opens the composer with the caret in it, sends on Enter and closes on Escape", async () => {
+    const onJobAction = vi.fn(async () => undefined);
+    const card = mountCard({ ...job, state: "finished", reply: "Done" }, { onJobAction });
+    card.click("job-steer");
+    const input = card.byTestId("job-composer-input") as HTMLTextAreaElement;
+    expect(document.activeElement).toBe(input);
+    flushSync(() => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+      setter?.call(input, "Add a changelog entry");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => {
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      await Promise.resolve();
+    });
+    expect(onJobAction).toHaveBeenCalledWith("[Job: mcp-job-card (job-1)] Add a changelog entry");
+
+    // Reopening and pressing Escape closes it without sending anything more.
+    card.click("job-steer");
+    const reopened = card.byTestId("job-composer-input") as HTMLTextAreaElement;
+    flushSync(() => {
+      reopened.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+    expect(card.byTestId("job-composer")).toBeNull();
+    expect(card.button("job-steer")?.getAttribute("aria-expanded")).toBe("false");
+    card.unmount();
+  });
+
   it("stops a live job and checks on a timed-out one", async () => {
     const stop = vi.fn(async () => undefined);
     const live = mountCard({ ...job, startedAt: 1_000_000 - 5_000 }, { onJobAction: stop });
@@ -428,6 +486,23 @@ describe("JobCard", () => {
     card.unmount();
   });
 
+  it("flashes a check when the footer copies the job's output, then settles", () => {
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+    const card = mountCard(richJob);
+    card.click("job-copy");
+    expect(writeText).toHaveBeenCalledWith(richJob.reply?.trim());
+    expect(card.button("job-copy")?.querySelector(".lucide-check")).not.toBeNull();
+    act(() => vi.advanceTimersByTime(1_600));
+    expect(card.button("job-copy")?.querySelector(".lucide-check")).toBeNull();
+    expect(card.button("job-copy")?.querySelector(".lucide-copy")).not.toBeNull();
+    card.unmount();
+    Reflect.deleteProperty(navigator, "clipboard");
+  });
+
   it("hides its actions when nothing can take them", () => {
     const card = mountCard({ ...job, startedAt: 1_000_000 - 5_000 });
     expect(card.button("job-steer")).toBeNull();
@@ -482,7 +557,7 @@ describe("JobCard", () => {
     card.unmount();
   });
 
-  it("shows the paused job's command and question above Yes and No in one prompt box", () => {
+  it("shows a paused job's command and question with no Yes/No gate", () => {
     const card = mountCard(
       {
         ...job,
@@ -492,130 +567,76 @@ describe("JobCard", () => {
       },
       { onJobAction: async () => undefined },
     );
-    const prompt = card.byTestId("job-answer-prompt");
-    expect(prompt).not.toBeNull();
-    expect(card.byTestId("job-prompt-title")?.textContent).toBe("Waiting for confirmation");
-    const activity = card.byTestId("job-prompt-activity");
-    expect(activity?.textContent).toBe("bash: prisma migrate deploy");
-    expect(activity?.className).toContain("font-mono");
-    const question = card.byTestId("job-prompt-question");
-    expect(question?.textContent).toContain("Run it against production now?");
-    // The question is stated once, inside the prompt box, and nowhere else on the card.
+    // Pure automation: no manual approval gate anywhere on the card.
+    expect(card.button("job-answer-yes")).toBeNull();
+    expect(card.button("job-answer-no")).toBeNull();
+    expect(card.button("job-answer-reply")).toBeNull();
+    expect(card.text()).not.toContain("Yes, proceed");
+    expect(card.text()).not.toContain("No, cancel");
+    expect(card.text()).not.toContain("Waiting for confirmation");
+    expect(card.text()).not.toContain("Waiting for input");
+
+    // One quiet strip carries the command, and the question is the card's ordinary output.
+    const note = card.byTestId("job-status-note");
+    expect(note).not.toBeNull();
+    expect(note?.className).toContain("border-warning/25");
+    expect(card.byTestId("job-status-activity")?.textContent).toBe("bash: prisma migrate deploy");
+    expect(note?.textContent).not.toContain("Run it against production now?");
+    expect(card.byTestId("job-panel-output")?.textContent).toContain(
+      "Run it against production now?",
+    );
     expect(card.text().match(/Run it against production now\?/g)).toHaveLength(1);
-    expect(card.byTestId("job-panel-output")).toBeNull();
-    expect(card.byTestId("job-error")).toBeNull();
-    // The context sits directly above the buttons it explains.
-    const order = [
-      ...(prompt?.querySelectorAll(
-        '[data-testid="job-prompt-activity"], [data-testid="job-prompt-question"], [data-testid="job-answer-yes"], [data-testid="job-answer-no"], [data-testid="job-answer-reply"]',
-      ) ?? []),
-    ].map((node) => node.getAttribute("data-testid"));
-    expect(order).toEqual([
-      "job-prompt-activity",
-      "job-prompt-question",
-      "job-answer-yes",
-      "job-answer-no",
-      "job-answer-reply",
-    ]);
-    expect(card.button("job-answer-yes")?.textContent).toBe("Yes, proceed");
-    expect(card.button("job-answer-no")?.textContent).toBe("No, cancel");
-    expect(card.button("job-answer-reply")?.textContent).toBe("Reply…");
-    // One of each control on the card: the footer no longer repeats the prompt.
-    expect(card.container.querySelectorAll('[data-testid="job-answer-yes"]')).toHaveLength(1);
-    expect(card.container.querySelectorAll('[data-testid="job-answer-no"]')).toHaveLength(1);
-    expect(card.button("job-answer-other")).toBeNull();
-    expect(card.button("job-steer")).toBeNull();
-    // The footer stays quiet: copy and open only.
+
+    // The same footer as every other state: reply, stop, copy, open.
+    expect(card.button("job-steer")?.textContent).toBe("Reply");
+    expect(card.button("job-stop")?.textContent).toBe("Stop");
     expect(card.button("job-copy")).not.toBeNull();
-    expect(prompt?.contains(card.button("job-copy"))).toBe(false);
+    expect(card.button("job-open")).not.toBeNull();
     card.unmount();
   });
 
-  it("states the job's error inside the prompt box and draws no second error banner", () => {
+  it("states the job's error inside the quiet status strip, once, with no second banner", () => {
     const card = mountCard(
       { ...job, state: "needs_input", error: "The migration would drop three columns." },
       { onJobAction: async () => undefined },
     );
-    expect(card.byTestId("job-prompt-title")?.textContent).toBe("Waiting for confirmation");
-    expect(card.byTestId("job-prompt-error")?.textContent).toBe(
-      "The migration would drop three columns.",
-    );
+    expect(card.byTestId("job-status-note")).not.toBeNull();
+    expect(card.byTestId("job-error")?.textContent).toBe("The migration would drop three columns.");
     expect(card.text().match(/The migration would drop three columns\./g)).toHaveLength(1);
-    expect(card.byTestId("job-error")).toBeNull();
-    expect(card.button("job-answer-yes")).not.toBeNull();
-    card.unmount();
-  });
-
-  it("answers a needs_input job with Yes and settles into the note", async () => {
-    const onJobAction = vi.fn(async () => undefined);
-    const card = mountCard(
-      { ...job, state: "needs_input", currentActivity: "bash: pnpm test" },
-      { onJobAction },
-    );
-    expect(card.byTestId("job-composer")).toBeNull();
-    await act(async () => {
-      card.click("job-answer-yes");
-      await Promise.resolve();
-    });
-    expect(onJobAction).toHaveBeenCalledWith(
-      'Reply to Orca job "mcp-job-card" (job-1): Yes, go ahead.',
-    );
-    expect(card.byTestId("job-answered")?.textContent).toBe("Replied: Yes");
-    // The answer settles into the note, so a second click cannot send again; Reply stays.
     expect(card.button("job-answer-yes")).toBeNull();
-    expect(card.button("job-answer-no")).toBeNull();
-    expect(card.button("job-answer-reply")).not.toBeNull();
+    expect(card.button("job-steer")?.textContent).toBe("Reply");
     card.unmount();
   });
 
-  it("answers a needs_input job with No", async () => {
-    const onJobAction = vi.fn(async () => undefined);
-    const card = mountCard(
-      { ...job, state: "needs_input", reply: "Deploy to production?" },
-      { onJobAction },
-    );
-    await act(async () => {
-      card.click("job-answer-no");
-      await Promise.resolve();
-    });
-    expect(onJobAction).toHaveBeenCalledWith(
-      'Reply to Orca job "mcp-job-card" (job-1): No, do not proceed.',
-    );
-    expect(card.byTestId("job-answered")?.textContent).toBe("Replied: No");
-    card.unmount();
-  });
-
-  it("offers no blind Yes or No when a paused job sent no context", async () => {
+  it("keeps a bare paused job quiet, and stops it from the footer", async () => {
     const onJobAction = vi.fn(async () => undefined);
     const card = mountCard({ ...job, state: "needs_input" }, { onJobAction });
-    expect(card.byTestId("job-prompt-title")?.textContent).toBe("Waiting for input");
-    expect(card.byTestId("job-prompt-fallback")?.textContent).toContain(
-      "The agent paused and is waiting for input, but didn't send its question.",
+    expect(card.byTestId("job-status-note")?.textContent).toContain(
+      "Paused, waiting for your reply…",
     );
-    expect(card.button("job-answer-yes")).toBeNull();
-    expect(card.button("job-answer-no")).toBeNull();
-    expect(card.button("job-answer-reply")?.textContent).toBe("Reply");
-    expect(card.button("job-open")?.textContent).toContain("Open");
+    expect(card.byTestId("job-panel-output")).toBeNull();
+    expect(card.button("job-steer")?.textContent).toBe("Reply");
+    expect(card.button("job-stop")?.textContent).toBe("Stop");
     await act(async () => {
-      card.click("job-prompt-status");
+      card.click("job-stop");
       await Promise.resolve();
     });
-    expect(onJobAction).toHaveBeenCalledWith('Check status of Orca job "mcp-job-card" (job-1).');
+    expect(onJobAction).toHaveBeenCalledWith('Stop Orca job "mcp-job-card" (job-1).');
     card.unmount();
   });
 
-  it("still sends a custom reply from Reply on a needs_input job", async () => {
+  it("replies to a needs_input job through the footer composer", async () => {
     const onJobAction = vi.fn(async () => undefined);
     const card = mountCard(
       { ...job, state: "needs_input", reply: "Deploy to production?" },
       { onJobAction },
     );
     expect(card.byTestId("job-composer")).toBeNull();
-    card.click("job-answer-reply");
+    card.click("job-steer");
     const input = card.byTestId("job-composer-input") as HTMLTextAreaElement;
     expect(input).not.toBeNull();
-    // The composer opens inside the prompt box, right where the question is.
-    expect(card.byTestId("job-answer-prompt")?.contains(input)).toBe(true);
+    // The composer opens in the footer, right under the controls that opened it.
+    expect(card.byTestId("job-status-note")?.contains(input)).toBe(false);
     flushSync(() => {
       const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
       setter?.call(input, "Run it after lunch");
@@ -626,32 +647,25 @@ describe("JobCard", () => {
       await Promise.resolve();
     });
     expect(onJobAction).toHaveBeenCalledWith("[Job: mcp-job-card (job-1)] Run it after lunch");
+    expect(card.byTestId("job-composer")).toBeNull();
     card.unmount();
   });
 
-  it("shows an inline error and re-enables Yes and No when the reply fails", async () => {
+  it("shows an inline error and re-enables Stop when a paused job's action fails", async () => {
     const failing = vi.fn(async () => {
       throw new Error("The chat is busy.");
     });
-    const card = mountCard(
-      { ...job, state: "needs_input", error: "Production deploy needs approval." },
-      { onJobAction: failing },
-    );
+    const card = mountCard({ ...job, state: "needs_input" }, { onJobAction: failing });
     await act(async () => {
-      card.click("job-answer-yes");
+      card.click("job-stop");
       await Promise.resolve();
     });
     expect(card.byTestId("job-action-error")?.textContent).toBe("The chat is busy.");
-    expect(card.byTestId("job-answer-prompt")?.contains(card.byTestId("job-action-error"))).toBe(
-      true,
-    );
-    expect(card.byTestId("job-answered")).toBeNull();
-    expect(card.button("job-answer-yes")?.disabled).toBe(false);
-    expect(card.button("job-answer-no")?.disabled).toBe(false);
+    expect(card.button("job-stop")?.disabled).toBe(false);
     card.unmount();
   });
 
-  it("hides the paused job's buttons in a read-only thread but keeps its context", () => {
+  it("hides the paused job's controls in a read-only thread but keeps its context", () => {
     const card = mountCard(
       {
         ...job,
@@ -661,12 +675,10 @@ describe("JobCard", () => {
       },
       { readOnly: true, onJobAction: async () => undefined },
     );
-    expect(card.byTestId("job-prompt-activity")?.textContent).toBe("bash: prisma migrate deploy");
-    expect(card.byTestId("job-prompt-question")?.textContent).toContain("Deploy to production?");
-    expect(card.button("job-answer-yes")).toBeNull();
-    expect(card.button("job-answer-no")).toBeNull();
-    expect(card.button("job-answer-reply")).toBeNull();
-    expect(card.button("job-prompt-status")).toBeNull();
+    expect(card.byTestId("job-status-activity")?.textContent).toBe("bash: prisma migrate deploy");
+    expect(card.byTestId("job-panel-output")?.textContent).toContain("Deploy to production?");
+    expect(card.button("job-steer")).toBeNull();
+    expect(card.button("job-stop")).toBeNull();
     expect(card.button("job-open")).not.toBeNull();
     expect(card.text()).toContain("Needs input");
     card.unmount();
