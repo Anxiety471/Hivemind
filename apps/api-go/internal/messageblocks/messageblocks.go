@@ -185,6 +185,21 @@ func trimmedMinMax(limit int) parser {
 	}
 }
 
+// discriminated is a z.discriminatedUnion: the entry's discriminator selects the schema, which
+// then validates the whole object.
+func discriminated(value any, key string, schemas map[string]parser) (any, bool) {
+	input, ok := value.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	name, _ := input[key].(string)
+	schema, known := schemas[name]
+	if !known {
+		return nil, false
+	}
+	return schema(input)
+}
+
 var thinkingLevels = []string{"off", "minimal", "low", "medium", "high", "xhigh", "max"}
 
 // botSettingsValues is BotSettingsValuesSchema.
@@ -300,6 +315,13 @@ func chartBlock(value any) (any, bool) {
 
 var intents = []string{"request", "result", "question", "status", "fyi"}
 
+// jobStates is JobCardStateSchema (packages/contracts/src/integrations/tool-card.ts:4): how a job
+// the card reports is going. The set guard pins it to TypeScript.
+var jobStates = []string{"starting", "working", "finished", "needs_input", "exited", "timed_out"}
+
+// mcpTransports is McpTransportSchema (packages/contracts/src/integrations/mcp.ts:6).
+var mcpTransports = []string{"streamable_http", "sse", "stdio"}
+
 var step = object(
 	required("label", str),
 	required("count", positive),
@@ -385,7 +407,7 @@ var jobBlock = object(
 	required("title", trimmedMinMax(200)),
 	optional("agent", trimmedMinMax(80)),
 	optional("branch", trimmedMinMax(240)),
-	required("state", enum("starting", "working", "finished", "needs_input", "exited", "timed_out")),
+	required("state", enum(jobStates...)),
 	optional("startedAt", nonNegative),
 	optional("url", trimmedMax(2048)),
 	optional("reply", trimmedMax(jobCardReplyMaxChars)),
@@ -458,7 +480,7 @@ var blockSchemas = map[string]parser{
 		required("status", enum("draft", "saved"))),
 	"chart": withKind("chart", chartBlock),
 	"mcp_approval": withDefault(object(required("kind", literal("mcp_approval")), required("name", str),
-		required("serverId", id), required("transport", enum("streamable_http", "sse", "stdio")),
+		required("serverId", id), required("transport", enum(mcpTransports...)),
 		required("endpoint", nullable(str)), required("needsOAuth", boolean),
 		field{name: "status", parse: enum("pending", "connected", "dismissed"), def: "pending", hasDef: true})),
 	"import_setup": importSetup,
@@ -504,16 +526,7 @@ func withDefault(inner parser) parser { return inner }
 
 // parseBlock is MessageBlock.parse of one stored entry.
 func parseBlock(value any) (any, bool) {
-	input, ok := value.(map[string]any)
-	if !ok {
-		return nil, false
-	}
-	kind, _ := input["kind"].(string)
-	schema, known := blockSchemas[kind]
-	if !known {
-		return nil, false
-	}
-	return schema(input)
+	return discriminated(value, "kind", blockSchemas)
 }
 
 // ParseBlocks is MessageBlock.array().parse: every entry must be a valid block. The

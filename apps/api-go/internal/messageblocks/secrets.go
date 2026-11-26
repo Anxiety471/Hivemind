@@ -61,23 +61,20 @@ func basicUsername(value any) (any, bool) {
 	return text, ok && jsLength(text) >= 1 && jsLength(text) <= 200 && basicUsernamePattern.MatchString(text)
 }
 
-// botSecretAuth is BotSecretAuth (bot-secrets.ts:27-49): a discriminated union on `type`.
+// botSecretAuths is BotSecretAuth (bot-secrets.ts:27-49): a discriminated union on `type`.
+var botSecretAuths = map[string]parser{
+	"bearer":  object(required("type", literal("bearer"))),
+	"header":  object(required("type", literal("header")), required("name", secretHeaderName)),
+	"basic":   object(required("type", literal("basic")), required("username", basicUsername)),
+	"login":   object(required("type", literal("login"))),
+	"command": object(required("type", literal("command"))),
+	"card":    object(required("type", literal("card"))),
+	"contact": object(required("type", literal("contact"))),
+}
+
+// botSecretAuth is BotSecretAuth's parse.
 func botSecretAuth(value any) (any, bool) {
-	objectValue, ok := value.(map[string]any)
-	if !ok {
-		return nil, false
-	}
-	kind, _ := objectValue["type"].(string)
-	switch kind {
-	case "bearer", "login", "command", "card", "contact":
-		return object(required("type", literal(kind)))(value)
-	case "header":
-		return object(required("type", literal("header")), required("name", secretHeaderName))(value)
-	case "basic":
-		return object(required("type", literal("basic")), required("username", basicUsername))(value)
-	default:
-		return nil, false
-	}
+	return discriminated(value, "type", botSecretAuths)
 }
 
 // secretOrigin is botSecretOriginSchema (bot-secrets.ts:162-186).
