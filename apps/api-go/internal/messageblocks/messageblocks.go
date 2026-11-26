@@ -319,6 +319,13 @@ var intents = []string{"request", "result", "question", "status", "fyi"}
 // the card reports is going. The set guard pins it to TypeScript.
 var jobStates = []string{"starting", "working", "finished", "needs_input", "exited", "timed_out"}
 
+// jobCaps is ToolCardSchema's string caps by field; `reply` names JOB_CARD_REPLY_MAX_CHARS. A cap
+// TS raises accepts a longer value that Go would otherwise refuse, so the guard pins them.
+var jobCaps = map[string]int{
+	"jobId": 200, "title": 200, "agent": 80, "branch": 240, "url": 2048,
+	"reply": jobCardReplyMaxChars,
+}
+
 // mcpTransports is McpTransportSchema (packages/contracts/src/integrations/mcp.ts:6).
 var mcpTransports = []string{"streamable_http", "sse", "stdio"}
 
@@ -400,17 +407,18 @@ var jobCardStats = object(
 )
 
 // jobBlock is ToolCardSchema: a job a tool started elsewhere, with the coding details it
-// reports. Every detail is optional, so a minimal legacy card still parses.
+// reports. Every detail is optional, so a minimal legacy card still parses. The six string caps
+// come from jobCaps and the states from jobStates, so one TypeScript change updates the card.
 var jobBlock = object(
 	required("kind", literal("job")),
-	required("jobId", trimmedMinMax(200)),
-	required("title", trimmedMinMax(200)),
-	optional("agent", trimmedMinMax(80)),
-	optional("branch", trimmedMinMax(240)),
+	required("jobId", trimmedMinMax(jobCaps["jobId"])),
+	required("title", trimmedMinMax(jobCaps["title"])),
+	optional("agent", trimmedMinMax(jobCaps["agent"])),
+	optional("branch", trimmedMinMax(jobCaps["branch"])),
 	required("state", enum(jobStates...)),
 	optional("startedAt", nonNegative),
-	optional("url", trimmedMax(2048)),
-	optional("reply", trimmedMax(jobCardReplyMaxChars)),
+	optional("url", trimmedMax(jobCaps["url"])),
+	optional("reply", trimmedMax(jobCaps["reply"])),
 	optional("finishedAt", nonNegative),
 	optional("turn", positive),
 	optional("repo", trimmedMinMax(120)),

@@ -116,3 +116,51 @@ func TestIntentsMatchTypeScript(t *testing.T) {
 		t.Fatalf("%v\n(BotMessageIntent is packages/contracts/src/threads/message-blocks.ts)", err)
 	}
 }
+
+// TestJobCardMatchesTypeScript guards the card's own enum and string caps. blockSchemas' keys pin
+// the kind; these pin what a card of that kind must satisfy — a seventh state or a raised reply cap
+// in TS is the same 500 this branch fixes.
+func TestJobCardMatchesTypeScript(t *testing.T) {
+	root, err := tsunions.Root()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const card = "packages/contracts/src/integrations/tool-card.ts"
+	states, err := tsunions.Values(root, card, "JobCardStateSchema")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tsunions.SetDiff("messageblocks.jobStates", jobStates, states); err != nil {
+		t.Fatalf("%v\n(JobCardStateSchema is %s)", err, card)
+	}
+	file, err := tsunions.Open(root, card)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields := tsunions.Keys(jobCaps)
+	caps, err := file.FieldCaps("ToolCardSchema", fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range fields {
+		if caps[field] != jobCaps[field] {
+			t.Errorf("messageblocks.jobCaps[%q] = %d, ToolCardSchema caps it at %d (%s)",
+				field, jobCaps[field], caps[field], card)
+		}
+	}
+}
+
+// TestThinkingLevelsMatchTypeScript guards ThinkingLevelSchema, copied in five packages.
+func TestThinkingLevelsMatchTypeScript(t *testing.T) {
+	root, err := tsunions.Root()
+	if err != nil {
+		t.Fatal(err)
+	}
+	levels, err := tsunions.Values(root, "packages/contracts/src/ids.ts", "ThinkingLevelSchema")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tsunions.SetDiff("messageblocks.thinkingLevels", thinkingLevels, levels); err != nil {
+		t.Fatalf("%v\n(ThinkingLevelSchema is packages/contracts/src/ids.ts)", err)
+	}
+}
