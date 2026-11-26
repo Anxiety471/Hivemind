@@ -132,6 +132,7 @@ export * from "./skills/agent-skill.prompt.js";
 export * from "./skills/teach-playbook.js";
 export * from "./skills/teach-recording.js";
 export * from "./threads/chat-snooze.js";
+export * from "./threads/send-queue-policy.js";
 export * from "./threads/thread-message-updates.js";
 export * from "./threads/thread-scroll.js";
 export * from "./threads/thread-snapshot-events.js";

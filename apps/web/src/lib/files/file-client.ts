@@ -1,7 +1,8 @@
 import type { DriveFile, FileSource } from "@rakazo/contracts";
 import { fileContentPath } from "@rakazo/contracts";
-import { inferAttachmentMimeType } from "@rakazo/core";
+import { inferAttachmentMimeType, isUnreachableStatus, parseRetryAfter } from "@rakazo/core";
 import { getMaxUploadSizeBytes } from "../bootstrap";
+import { noteServerReachable } from "../query/connection-state";
 import { rpc, selectedSpaceId } from "../query/rpc";
 
 export type UploadedDriveFile = Pick<DriveFile, "id" | "name" | "mimeType" | "size">;
@@ -25,12 +26,20 @@ export function fileContentUrl(
 
 function uploadError(xhr: XMLHttpRequest): Error {
   const fallback = xhr.status ? `Upload failed (${xhr.status})` : "Upload failed";
+  const meta: PropertyDescriptorMap = {};
+  if (xhr.status > 0) meta.status = { value: xhr.status, writable: true, configurable: true };
+  const retryAfterMs = parseRetryAfter(xhr.getResponseHeader("retry-after"));
+  if (retryAfterMs !== undefined)
+    meta.retryAfterMs = { value: retryAfterMs, writable: true, configurable: true };
   try {
     const body = JSON.parse(xhr.responseText) as { json?: { message?: unknown } };
     const message = body.json?.message;
-    return new Error(typeof message === "string" && message ? message : fallback);
+    return Object.defineProperties(
+      new Error(typeof message === "string" && message ? message : fallback),
+      meta,
+    );
   } catch {
-    return new Error(fallback);
+    return Object.defineProperties(new Error(fallback), meta);
   }
 }
 
@@ -63,6 +72,7 @@ export function uploadSpaceFile({
   source = "upload",
   description,
   clientNonce,
+  spaceId,
   onProgress,
   signal,
 }: {
@@ -73,11 +83,14 @@ export function uploadSpaceFile({
   source?: FileSource;
   description?: string;
   clientNonce?: string;
+  /** The Space the file belongs to; defaults to the selected one. */
+  spaceId?: string | null;
   onProgress?: (fraction: number) => void;
   signal?: AbortSignal;
 }): Promise<UploadedDriveFile> {
   const mimeType = inferAttachmentMimeType(file.name, file.type);
   if (!mimeType) return Promise.reject(new Error(`Unsupported file type: ${file.name}`));
+  const targetSpaceId = spaceId === undefined ? selectedSpaceId() : spaceId;
   return new Promise<UploadedDriveFile>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     const form = new FormData();
@@ -95,14 +108,23 @@ export function uploadSpaceFile({
     const settle = () => signal?.removeEventListener("abort", abort);
     xhr.open("POST", "/api/v1/files");
     xhr.withCredentials = true;
-    const spaceId = selectedSpaceId();
-    if (spaceId) xhr.setRequestHeader("x-rakazo-space-id", spaceId);
+    xhr.timeout = 60_000;
+    if (targetSpaceId) xhr.setRequestHeader("x-rakazo-space-id", targetSpaceId);
     xhr.upload.onprogress = (event) => {
       if (event.lengthComputable && event.total > 0) onProgress?.(event.loaded / event.total);
     };
     xhr.onerror = () => {
       settle();
-      reject(new Error("Upload failed"));
+      if (!signal?.aborted) noteServerReachable(false);
+      reject(new Error("Upload failed", { cause: new TypeError("Failed to fetch") }));
+    };
+    xhr.ontimeout = () => {
+      settle();
+      if (!signal?.aborted) noteServerReachable(false);
+      // A DOMException counts as an Error only in some realms, so name a plain Error instead.
+      reject(
+        Object.defineProperty(new Error("Upload timed out"), "name", { value: "TimeoutError" }),
+      );
     };
     xhr.onabort = () => {
       settle();
@@ -110,6 +132,7 @@ export function uploadSpaceFile({
     };
     xhr.onload = () => {
       settle();
+      noteServerReachable(!isUnreachableStatus(xhr.status));
       if (xhr.status >= 200 && xhr.status < 300) {
         try {
           resolve(JSON.parse(xhr.responseText) as UploadedDriveFile);
@@ -126,6 +149,7 @@ export function uploadSpaceFile({
               groupId
                 ? { groupId, name: file.name, mimeType, contentBase64, clientNonce }
                 : { botId: botId!, name: file.name, mimeType, contentBase64, clientNonce },
+              { context: { spaceId: targetSpaceId } },
             ),
           )
           .then((artifact) => resolve(artifact))

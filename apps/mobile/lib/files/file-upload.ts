@@ -1,9 +1,17 @@
 import type { Artifact, DriveFile, FileSource } from "@rakazo/contracts";
 import { attachmentMaxBytes, DriveFileSchema, fileContentPath } from "@rakazo/contracts";
+import { isServerUnreachable, isUnreachableStatus, parseRetryAfter } from "@rakazo/core";
 import { Directory, File, Paths } from "expo-file-system";
 import type { ApiRequestContext } from "../api/api";
-import { captureApiRequestContext, currentApiBase, rpc, selectedSpaceId } from "../api/api";
+import {
+  captureApiRequestContext,
+  currentApiBase,
+  noteServerReachable,
+  rpc,
+  selectedSpaceId,
+} from "../api/api";
 import { fetchServer } from "../api/server-headers";
+import { currentSessionGeneration } from "../api/session";
 
 export type MobileFileUpload = {
   uri?: string;
@@ -97,7 +105,10 @@ async function throwUploadFailure(response: Response): Promise<never> {
   } catch {
     // A proxy or an older server may answer with something other than the error envelope.
   }
-  throw Object.assign(new Error(message || "Upload failed"), { status: response.status });
+  throw Object.assign(new Error(message || "Upload failed"), {
+    status: response.status,
+    retryAfterMs: parseRetryAfter(response.headers?.get?.("retry-after")),
+  });
 }
 
 /** Bytes a base64-only server can accept; a file past its limit is refused before it is read. */
@@ -161,6 +172,11 @@ function stageBase64(contentBase64: string, name: string): File {
  */
 export async function uploadMobileFile(input: MobileFileUpload): Promise<DriveFile> {
   const context = input.context ?? (await captureApiRequestContext(input.spaceId));
+  // A late answer for a replaced server or session says nothing about this one's reachability.
+  const matchesCurrent = () =>
+    currentApiBase() === context.apiBase &&
+    (context.sessionGeneration === undefined ||
+      context.sessionGeneration === currentSessionGeneration());
   let staged: File | undefined;
   let uri = input.uri;
   if (!uri && input.contentBase64) {
@@ -176,16 +192,24 @@ export async function uploadMobileFile(input: MobileFileUpload): Promise<DriveFi
     type: input.mimeType,
   } as unknown as Blob);
   try {
-    const response = await fetchServer(
-      `${context.apiBase}/api/v1/files`,
-      {
-        method: "POST",
-        headers: { origin: "rakazo://", ...context.headers },
-        body: form,
-        signal: input.signal,
-      },
-      context.apiBase,
-    );
+    let response: Response;
+    try {
+      response = await fetchServer(
+        `${context.apiBase}/api/v1/files`,
+        {
+          method: "POST",
+          headers: { origin: "rakazo://", ...context.headers },
+          body: form,
+          signal: input.signal,
+        },
+        context.apiBase,
+      );
+    } catch (error) {
+      // An upload that never reached the server proves the connection, not the server, failed.
+      if (matchesCurrent() && isServerUnreachable(error)) noteServerReachable(false);
+      throw error;
+    }
+    if (matchesCurrent()) noteServerReachable(!isUnreachableStatus(response.status));
     if (response.status === 404) {
       return await uploadThroughChatRpc(input, uri, context);
     }
