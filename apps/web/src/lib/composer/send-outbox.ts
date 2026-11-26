@@ -140,20 +140,20 @@ function loadUploadClient(): Promise<typeof import("../files/file-client")> {
 }
 
 /**
- * The thread messages that are an in-flight send's echo, by message id. A message explains one
- * send: once a pending attempt matched it, a second send with the same words must stay visible.
- * In memory only, and cleared with the queue.
+ * Which send each echoed thread message already explains, by message id. A message explains one
+ * send: the send that claimed it keeps hiding behind it on every later render, and a second send
+ * with the same words stays visible. In memory only, and cleared with the queue.
  */
-const claimedEchoMessageIds = new Set<string>();
+const claimedEchoOwnerByMessageId = new Map<string, string>();
 
-/** Whether a thread message already hides some send's duplicate bubble. */
-export function isWebEchoMessageClaimed(messageId: string): boolean {
-  return claimedEchoMessageIds.has(messageId);
+/** The send this thread message is the echo of, if any send claimed it. */
+export function webEchoMessageOwner(messageId: string): string | undefined {
+  return claimedEchoOwnerByMessageId.get(messageId);
 }
 
-/** Records that this message is the echo of the send that matched it. */
-export function claimWebEchoMessage(messageId: string): void {
-  claimedEchoMessageIds.add(messageId);
+/** Records that this message is the echo of one send, which keeps it across re-renders. */
+export function claimWebEchoMessage(messageId: string, clientNonce: string): void {
+  claimedEchoOwnerByMessageId.set(messageId, clientNonce);
 }
 
 /**
@@ -630,7 +630,7 @@ export function clearWebOutbox(): void {
   attempts = [];
   for (const attempt of cleared) revokePreviews(attempt);
   echoes.clear();
-  claimedEchoMessageIds.clear();
+  claimedEchoOwnerByMessageId.clear();
   pendingForce = null;
   restoredForUser = null;
   activeUserId = null;
@@ -719,7 +719,7 @@ export function resetWebOutboxForTests(): void {
   for (const attempt of attempts) revokePreviews(attempt);
   attempts = [];
   echoes.clear();
-  claimedEchoMessageIds.clear();
+  claimedEchoOwnerByMessageId.clear();
   mountedThreads.clear();
   deliveredListeners.clear();
   starters.clear();
