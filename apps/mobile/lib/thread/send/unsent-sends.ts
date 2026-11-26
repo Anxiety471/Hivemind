@@ -131,6 +131,11 @@ configureUnsentSends({
   scope,
   disk: outboxDisk,
   errorText: (error) => errorText(error, t`Failed to send message`),
+  // The wait lives here: this module owns no React effect, so it may hold a timer.
+  scheduleRetry: (delayMs, retry) => {
+    const timer = setTimeout(retry, delayMs);
+    return () => clearTimeout(timer);
+  },
   notDelivered: (attempt) => {
     if (isModelRequiredSendError(attempt.error)) {
       askToAddModel();

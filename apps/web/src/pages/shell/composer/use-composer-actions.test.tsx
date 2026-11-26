@@ -7,8 +7,13 @@ import type { Root } from "react-dom/client";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { composerHoldsUnsavedWork } from "../../../lib/composer/composer-draft";
+import { OUTBOX_MAX_ENTRIES, resetWebOutboxForTests } from "../../../lib/composer/send-outbox";
 import type { PageSession } from "../../../lib/pages/pages";
 import { createPageSession } from "../../../lib/pages/pages";
+import {
+  noteServerReachable,
+  resetServerReachableForTests,
+} from "../../../lib/query/connection-state";
 import type { createSpaceRpc } from "../../../lib/query/rpc";
 import { useComposerActions } from "./use-composer-actions";
 
@@ -124,6 +129,8 @@ async function flush() {
 
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  resetWebOutboxForTests();
+  resetServerReachableForTests(true);
   me = null;
   navigate = vi.fn();
   activeChat = "bot-1";
@@ -146,6 +153,8 @@ beforeEach(() => {
 
 afterEach(() => {
   act(() => root.unmount());
+  resetWebOutboxForTests();
+  resetServerReachableForTests(true);
   localStorage.clear();
 });
 
@@ -297,17 +306,30 @@ async function send(text: string, mentions: (typeof digest)[]) {
   return accepted;
 }
 
-it("sends text and routines as one request and gives the draft back when it fails", async () => {
-  // Before, the routines ran on their own first, so a failed text send could not be retried.
+async function sendWith(text: string, nonce: string) {
+  let accepted!: boolean;
+  await act(async () => {
+    accepted = await latest.sendMessage(text, [], nonce);
+  });
+  return accepted;
+}
+
+it("queues text with its routines while the server is unreachable and sends both together", async () => {
+  // The routines never run on their own first: the words and the routines go out as one send.
   rpc.routines.testRun.mockResolvedValue({ runId: "routine-run" });
-  rpc.threads.send.mockRejectedValue(new Error("offline"));
-  rpc.threads.sendWithRoutines.mockRejectedValue(new Error("offline"));
+  rpc.threads.sendWithRoutines.mockResolvedValue({
+    routineRunIds: ["routine-run"],
+    send: { runId: "run-1", taskId: "task-1", seq: 1 },
+  });
+  noteServerReachable(false);
 
-  expect(await send("@digest @review and the notes", [digest, review])).toBe(false);
-
+  expect(await send("@digest @review and the notes", [digest, review])).toBe(true);
+  expect(latest.pendingSends.map((attempt) => attempt.state)).toEqual(["queued"]);
   expect(rpc.routines.testRun).not.toHaveBeenCalled();
-  expect(rpc.threads.send).not.toHaveBeenCalled();
-  expect(rpc.threads.sendWithRoutines).toHaveBeenCalledTimes(1);
+  expect(rpc.threads.sendWithRoutines).not.toHaveBeenCalled();
+
+  noteServerReachable(true);
+  await vi.waitFor(() => expect(rpc.threads.sendWithRoutines).toHaveBeenCalledTimes(1));
   expect(rpc.threads.sendWithRoutines).toHaveBeenCalledWith(
     expect.objectContaining({
       botId: "bot-1",
@@ -316,6 +338,7 @@ it("sends text and routines as one request and gives the draft back when it fail
       text: expect.stringContaining("and the notes"),
     }),
   );
+  expect(rpc.threads.send).not.toHaveBeenCalled();
 });
 
 it("clears the draft once the send with routines is accepted", async () => {
@@ -328,23 +351,21 @@ it("clears the draft once the send with routines is accepted", async () => {
   expect(rpc.threads.sendWithRoutines).toHaveBeenCalledTimes(1);
 });
 
-it("runs routines without text in one request", async () => {
-  rpc.routines.testRun.mockImplementation(async ({ routineId }: { routineId: string }) => {
-    if (routineId === review.id) throw new Error("offline");
-    return { runId: "routine-run" };
-  });
-  rpc.threads.sendWithRoutines.mockRejectedValueOnce(new Error("offline"));
-
-  expect(await send("@digest @review", [digest, review])).toBe(false);
+it("queues routines picked without text and runs them alone once the server answers", async () => {
+  noteServerReachable(false);
+  expect(await send("@digest @review", [digest, review])).toBe(true);
+  expect(latest.pendingSends[0]?.state).toBe("queued");
   expect(rpc.routines.testRun).not.toHaveBeenCalled();
+  expect(rpc.threads.sendWithRoutines).not.toHaveBeenCalled();
+
+  rpc.threads.sendWithRoutines.mockResolvedValueOnce({ routineRunIds: ["a", "b"] });
+  noteServerReachable(true);
+  await vi.waitFor(() => expect(rpc.threads.sendWithRoutines).toHaveBeenCalledTimes(1));
   expect(rpc.threads.sendWithRoutines).toHaveBeenCalledWith({
     botId: "bot-1",
     clientNonce: "nonce-1",
     routineIds: ["routine-1", "routine-2"],
   });
-
-  rpc.threads.sendWithRoutines.mockResolvedValueOnce({ routineRunIds: ["a", "b"] });
-  expect(await send("@digest @review", [digest, review])).toBe(true);
   expect(rpc.threads.send).not.toHaveBeenCalled();
 });
 
@@ -426,25 +447,91 @@ it("names the open page only on text the chat itself sends", async () => {
   );
 });
 
-it("reuses an attachment's upload nonce across send retries", async () => {
+it("retries a queued attachment send without uploading it twice and keeps its target nonce", async () => {
   const file = new File(["a"], "a.txt", { type: "text/plain" });
   rpc.artifacts.create.mockResolvedValue({ id: "artifact-1" });
-  rpc.threads.send.mockRejectedValueOnce(new Error("offline"));
+  rpc.threads.send.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+  act(() => void latest.onAttachmentPick([file]));
+  const pickedId = latest.activePendingAttachments[0]!.id;
+
+  expect(await sendWith("hello", "nonce-1")).toBe(true);
+  await vi.waitFor(() => expect(rpc.threads.send).toHaveBeenCalledTimes(1));
+  await vi.waitFor(() => expect(latest.pendingSends[0]?.state).toBe("queued"));
+
+  // The connection comes back: the checkpointed upload is reused, not repeated.
+  rpc.threads.send.mockResolvedValue({ runId: "run-1", taskId: "task-1", seq: 1 });
+  noteServerReachable(false);
+  noteServerReachable(true);
+  await vi.waitFor(() => expect(rpc.threads.send).toHaveBeenCalledTimes(2));
+
+  expect(rpc.artifacts.create).toHaveBeenCalledTimes(1);
+  const upload = rpc.artifacts.create.mock.calls[0]![0] as { clientNonce?: string };
+  // Scoped to the target, so a retry rerouted to a group uploads afresh.
+  expect(upload.clientNonce).toBe(`attachment:bot-1:${pickedId}`);
+  expect(rpc.threads.send).toHaveBeenLastCalledWith(
+    expect.objectContaining({ artifactIds: ["artifact-1"], clientNonce: "nonce-1" }),
+  );
+});
+
+it("queues a file while offline, keeps its preview, and delivers it when the connection returns", async () => {
+  const file = new File(["a"], "photo.png", { type: "image/png" });
+  const create = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:preview-a");
+  const revoke = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+  try {
+    rpc.artifacts.create.mockResolvedValue({ id: "artifact-1" });
+    rpc.threads.send.mockResolvedValue({ runId: "run-1", taskId: "task-1", seq: 1 });
+    noteServerReachable(false);
+    act(() => void latest.onAttachmentPick([file]));
+
+    expect(await sendWith("hello", "nonce-1")).toBe(true);
+    // The queue owns the file and its preview now; the composer keeps neither.
+    expect(latest.activePendingAttachments).toEqual([]);
+    expect(latest.pendingSends[0]?.payload.attachments).toHaveLength(1);
+    expect(revoke).not.toHaveBeenCalled();
+
+    noteServerReachable(true);
+    await vi.waitFor(() => expect(rpc.threads.send).toHaveBeenCalledTimes(1));
+    expect(rpc.artifacts.create).toHaveBeenCalledTimes(1);
+    expect(rpc.threads.send).toHaveBeenCalledWith(
+      expect.objectContaining({ artifactIds: ["artifact-1"], text: "hello" }),
+    );
+    expect(revoke).not.toHaveBeenCalled();
+  } finally {
+    create.mockRestore();
+    revoke.mockRestore();
+  }
+});
+
+it("delivers text and files queued while offline in the order they were written", async () => {
+  const file = new File(["a"], "a.txt", { type: "text/plain" });
+  const texts: Array<string | undefined> = [];
+  rpc.artifacts.create.mockResolvedValue({ id: "artifact-1" });
+  rpc.threads.send.mockImplementation(async (input: { text?: string }) => {
+    texts.push(input.text);
+    return { runId: `run-${texts.length}`, taskId: `task-${texts.length}`, seq: texts.length };
+  });
+  noteServerReachable(false);
   act(() => void latest.onAttachmentPick([file]));
 
-  await act(async () => void (await latest.sendMessage("hello", [], "nonce-1")));
-  // The failed send keeps its attachment; an edited draft retries under a new
-  // send nonce and must still reach the artifact the first upload created.
-  expect(await latest.sendMessage("hello again", [], "nonce-2")).toBe(true);
+  expect(await sendWith("first", "nonce-1")).toBe(true);
+  expect(await sendWith("second", "nonce-2")).toBe(true);
+  expect(latest.pendingSends).toHaveLength(2);
+  expect(rpc.threads.send).not.toHaveBeenCalled();
 
-  expect(rpc.artifacts.create).toHaveBeenCalledTimes(2);
-  const firstCall = rpc.artifacts.create.mock.calls[0]![0] as { clientNonce?: string };
-  const retryCall = rpc.artifacts.create.mock.calls[1]![0] as { clientNonce?: string };
-  expect(firstCall.clientNonce).toBe(retryCall.clientNonce);
-  expect(firstCall.clientNonce).toContain("bot-1");
-  expect(rpc.threads.send).toHaveBeenLastCalledWith(
-    expect.objectContaining({ artifactIds: ["artifact-1"] }),
-  );
+  noteServerReachable(true);
+  await vi.waitFor(() => expect(texts).toEqual(["first", "second"]));
+});
+
+it("refuses a send the queue cannot hold and keeps the file in the composer", async () => {
+  noteServerReachable(false);
+  for (let index = 0; index < OUTBOX_MAX_ENTRIES; index += 1)
+    expect(await sendWith(`message ${index}`, `nonce-${index}`)).toBe(true);
+  const file = new File(["a"], "a.txt", { type: "text/plain" });
+  act(() => void latest.onAttachmentPick([file]));
+
+  expect(await sendWith("too many", "nonce-full")).toBe(false);
+  expect(latest.sendError).toBe("Too many unsent messages");
+  expect(latest.activePendingAttachments.map((pending) => pending.file)).toEqual([file]);
 });
 
 function replyCandidate(id: string): ThreadMessage {

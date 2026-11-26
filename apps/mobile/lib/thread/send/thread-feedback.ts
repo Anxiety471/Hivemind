@@ -2,9 +2,10 @@ import { t } from "@lingui/core/macro";
 import type { AgentSkillCatalogEntry, RpcPath } from "@rakazo/contracts";
 import type { ComposerMention, resolveComposerSendPlan } from "@rakazo/core";
 import {
+  classifySendFailure,
   isImageInputConfirmation,
   isModelRequiredSendError,
-  isServerUnreachable,
+  nextSendRetryDelayMs,
 } from "@rakazo/core";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { RpcOptions, rpc } from "../../api/api";
@@ -58,6 +59,8 @@ export type SendAttempt = {
   error?: string;
   imageConfirmation?: boolean;
   imageHandling?: "file";
+  /** Connection retries in memory only: a relaunch waits for the reconnect instead. */
+  retryCount?: number;
 };
 
 const UPLOAD_TIMEOUT_MS = 60_000;
@@ -161,6 +164,8 @@ type Config = {
   disk: UnsentDisk;
   errorText(error: unknown): string;
   notDelivered(attempt: SendAttempt): void;
+  /** Runs `retry` after `delayMs`; the returned function cancels that wait. */
+  scheduleRetry?: (delayMs: number, retry: () => void) => () => void;
 };
 let config: Config | undefined;
 let unsentSends: SendAttempt[] = [];
@@ -179,6 +184,8 @@ function isListed(attempt: SendAttempt) {
 let running: Promise<void> | undefined;
 /** A retry that arrived while a drain was in progress, run once that drain stops. */
 let pendingForce: boolean | null = null;
+/** The scheduled connection retry, cancelled when anything sends or clears the queue first. */
+let cancelScheduledRetry: (() => void) | undefined;
 const watchers = new Set<() => void>();
 const deliveredListeners = new Set<(attempt: SendAttempt) => void>();
 const echoes = new Map<string, Set<number>>();
@@ -186,6 +193,11 @@ const screens = new Map<string, number>();
 /** Removed sends whose files wait for a saved index that no longer lists them. */
 const removed = new Set<SendAttempt>();
 export const OUTBOX_MAX_ENTRIES = 20;
+
+function clearScheduledRetry() {
+  cancelScheduledRetry?.();
+  cancelScheduledRetry = undefined;
+}
 
 function subscribe(watcher: () => void) {
   watchers.add(watcher);
@@ -324,6 +336,8 @@ function remove(attempt: SendAttempt) {
   // A saved index may still list the message, so its files go only after the index drops it.
   removed.add(attempt);
   changed();
+  // Nothing waits behind the removed send; a scheduled retry would only find an empty queue.
+  if (!unsentSends.some((a) => a.state === "queued")) clearScheduledRetry();
 }
 export function configureUnsentSends(next: Config) {
   config = next;
@@ -350,6 +364,7 @@ export function restoreUnsentSends() {
 export function clearUnsentSends() {
   sessionCount += 1;
   restored = false;
+  clearScheduledRetry();
   unsentSends = [];
   removed.clear();
   echoes.clear();
@@ -396,6 +411,8 @@ export function sendWaitingMessages(force = false): Promise<void> {
     pendingForce = pendingForce === true || force;
     return running;
   }
+  // Whoever asked for a drain takes over from a scheduled retry instead of racing it.
+  clearScheduledRetry();
   const task = (async () => {
     let nextForce = force;
     for (;;) {
@@ -422,6 +439,7 @@ export function sendWaitingMessages(force = false): Promise<void> {
             continue;
           }
           attempt.acceptedSeq = seq;
+          attempt.retryCount = 0;
           for (const listener of deliveredListeners) listener(attempt);
           if (
             !screens.has(attempt.payload.originThreadKey) ||
@@ -436,29 +454,31 @@ export function sendWaitingMessages(force = false): Promise<void> {
             requeue(attempt);
             continue;
           }
-          const detail = error as { status?: number; cause?: { status?: number } } | null;
-          const status = detail?.status;
-          const sendStatus = status ?? detail?.cause?.status;
-          // A password change revokes the token before its replacement arrives; the send waits
-          // for the new session. Any other 401 is refused as usual.
-          const offline =
-            isServerUnreachable(error) ||
-            sendStatus === 429 ||
-            (sendStatus === 401 && config.passwordChanging());
-          attempt.state = offline
-            ? "queued"
-            : !isModelRequiredSendError(error) &&
-                status &&
-                status >= 400 &&
-                status < 500 &&
-                // A 409 or 426 clears once teaching stops or the app updates, so it stays retryable.
-                ![408, 409, 425, 426, 429].includes(status)
-              ? "refused"
-              : "failed";
-          attempt.imageConfirmation = isImageInputConfirmation(error);
+          const disposition = classifySendFailure(error, {
+            passwordChanging: config.passwordChanging(),
+          });
           attempt.error = config.errorText(error);
+          if (disposition === "retry_connection") {
+            // The request may never have landed: put it back at once and wait out the backoff,
+            // so the queue's order is kept instead of this send failing and being retried by hand.
+            const retries = (attempt.retryCount ?? 0) + 1;
+            attempt.state = "queued";
+            attempt.retryCount = retries;
+            attempt.imageConfirmation = false;
+            changed();
+            const scheduleRetry = config.scheduleRetry;
+            if (scheduleRetry) {
+              clearScheduledRetry();
+              cancelScheduledRetry = scheduleRetry(nextSendRetryDelayMs(error, retries - 1), () => {
+                cancelScheduledRetry = undefined;
+                void sendWaitingMessages(true);
+              });
+            }
+            break;
+          }
+          attempt.state = disposition;
+          attempt.imageConfirmation = disposition === "failed" && isImageInputConfirmation(error);
           changed();
-          if (offline) break;
           config.notDelivered(attempt);
         } finally {
           if (!memoryOnly.has(attempt))

@@ -6,6 +6,7 @@ import {
   MODEL_REQUIRED_SEND_ERROR,
   reduceThreadSnapshot,
   resolveComposerSendPlan,
+  SEND_RETRY_BASE_MS,
 } from "@rakazo/core";
 import type { Deferred } from "@rakazo/core/test-async";
 import { deferred } from "@rakazo/core/test-async";
@@ -20,6 +21,7 @@ import { FailedSendBubble } from "../../../components/thread/failed-send-bubble"
 import type { rpc } from "../../api/api";
 import type { MobileSnapshot } from "../../api/mobile-types";
 import { filterPickedAttachments } from "../../composer/pick-attachments-filter";
+import { uploadMobileFile } from "../../files/file-upload";
 import { showIOSActionSheet } from "../../native/ios-action-sheet";
 import type { ComposerSnapshot, SendAttempt, SendPayload } from "./thread-feedback";
 import {
@@ -163,10 +165,20 @@ describe("scoped mobile outbox", () => {
     clear: vi.fn(),
   };
   const notDelivered = vi.fn();
+  type ScheduledRetry = { delayMs: number; retry: () => void; cancelled: boolean };
+  let scheduledRetries: ScheduledRetry[] = [];
+  const scheduleRetry = vi.fn((delayMs: number, retry: () => void) => {
+    const entry: ScheduledRetry = { delayMs, retry, cancelled: false };
+    scheduledRetries.push(entry);
+    return () => {
+      entry.cancelled = true;
+    };
+  });
   beforeEach(() => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     clearFailedSends();
     vi.clearAllMocks();
+    scheduledRetries = [];
     reachable = true;
     scope.spaceId = "space-a";
     request.mockImplementation(async (proc) =>
@@ -180,6 +192,7 @@ describe("scoped mobile outbox", () => {
       disk,
       errorText: (error) => (error instanceof Error ? error.message : String(error)),
       notDelivered,
+      scheduleRetry,
     });
     restoreUnsentSends();
     container = document.createElement("div");
@@ -1174,6 +1187,90 @@ describe("scoped mobile outbox", () => {
     expect(second.state).toBe("queued");
     expect(request).toHaveBeenCalledOnce();
     expect(notDelivered).not.toHaveBeenCalled();
+  });
+  it("sends again from the scheduled retry after a rate limit", async () => {
+    const attempt = feedback.sendAttempt(payload());
+    request
+      .mockResolvedValueOnce({ id: "artifact-a" })
+      .mockRejectedValueOnce(
+        Object.assign(new Error("Slow down"), { status: 429, retryAfterMs: 4_000 }),
+      );
+    await act(async () => {
+      await feedback.send(attempt);
+    });
+    expect(attempt).toMatchObject({ state: "queued", retryCount: 1 });
+    expect(scheduledRetries).toHaveLength(1);
+    // The wait the server asked for outlasts the first backoff.
+    expect(scheduledRetries[0]!.delayMs).toBe(4_000);
+    request.mockResolvedValue({ seq: 42 });
+    await act(async () => {
+      scheduledRetries[0]!.retry();
+      await vi.waitFor(() => expect(attempt.acceptedSeq).toBe(42));
+    });
+    expect(attempt.retryCount).toBe(0);
+    // The file uploaded before the rate limit is sent by reference, not uploaded again.
+    expect(request.mock.calls.filter(([proc]) => proc === "artifacts/create")).toHaveLength(1);
+  });
+  it("sends a dropped file upload again from the scheduled retry", async () => {
+    vi.mocked(uploadMobileFile).mockRejectedValueOnce(
+      Object.assign(new Error("Service Unavailable"), { status: 503 }),
+    );
+    const attempt = feedback.sendAttempt({
+      ...payload(),
+      attachments: [
+        {
+          id: "attachment-1",
+          name: "clip.mp4",
+          mimeType: "video/mp4",
+          contentBase64: "",
+          uri: "file:///cache/clip.mp4",
+          size: 4,
+        },
+      ],
+    });
+    await act(async () => {
+      await feedback.send(attempt);
+    });
+    expect(attempt.state).toBe("queued");
+    expect(notDelivered).not.toHaveBeenCalled();
+    expect(scheduledRetries).toHaveLength(1);
+    // A network failure waits out the first backoff, spread below its full length.
+    expect(scheduledRetries[0]!.delayMs).toBeGreaterThanOrEqual(SEND_RETRY_BASE_MS / 2);
+    expect(scheduledRetries[0]!.delayMs).toBeLessThanOrEqual(SEND_RETRY_BASE_MS);
+    request.mockResolvedValue({ seq: 42 });
+    await act(async () => {
+      scheduledRetries[0]!.retry();
+      await vi.waitFor(() => expect(attempt.acceptedSeq).toBe(42));
+    });
+    expect(uploadMobileFile).toHaveBeenCalledTimes(2);
+  });
+  it("cancels the scheduled retry when the queue is cleared", async () => {
+    const attempt = feedback.sendAttempt(payload());
+    request
+      .mockResolvedValueOnce({ id: "artifact-a" })
+      .mockRejectedValueOnce(Object.assign(new Error("Offline"), { status: 503 }));
+    await act(async () => {
+      await feedback.send(attempt);
+    });
+    expect(scheduledRetries).toHaveLength(1);
+    act(() => clearFailedSends());
+    expect(scheduledRetries[0]!.cancelled).toBe(true);
+  });
+  it("cancels the scheduled retry when the message is retried by hand", async () => {
+    const attempt = feedback.sendAttempt(payload());
+    request
+      .mockResolvedValueOnce({ id: "artifact-a" })
+      .mockRejectedValueOnce(Object.assign(new Error("Offline"), { status: 503 }));
+    await act(async () => {
+      await feedback.send(attempt);
+    });
+    expect(scheduledRetries).toHaveLength(1);
+    request.mockResolvedValue({ seq: 42 });
+    await act(async () => {
+      await feedback.send(attempt, true);
+    });
+    expect(scheduledRetries[0]!.cancelled).toBe(true);
+    expect(attempt.acceptedSeq).toBe(42);
   });
   describe("a send in flight while a password change replaces the session", () => {
     let current: typeof scope | null;

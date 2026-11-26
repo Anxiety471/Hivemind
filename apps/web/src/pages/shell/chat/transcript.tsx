@@ -31,7 +31,9 @@ import { ArrowDown } from "lucide-react";
 import type { CSSProperties, RefObject } from "react";
 import {
   Fragment,
+  lazy,
   memo,
+  Suspense,
   startTransition,
   useCallback,
   useEffect,
@@ -52,6 +54,7 @@ import {
   transcriptIsNearEnd,
   transcriptMovedDown,
 } from "../../../lib/chat/transcript-scroll";
+import type { WebSendAttempt } from "../../../lib/composer/send-outbox";
 import type { ArtifactTarget } from "../../../lib/pages/artifact-open";
 import { projectPageCards } from "../../../lib/pages/page-cards";
 import type { createSpaceRpc } from "../../../lib/query/rpc";
@@ -60,6 +63,11 @@ import { TimeSeparator, UnreadDivider } from "./chat-context";
 import { MessageRunError } from "./message-run-error";
 import { MessageView } from "./message-view";
 import { QuoteSelectionButton, useTranscriptQuote } from "./quote-selection-button";
+
+/** A queued message's bubble is only drawn when something is queued, so it loads on demand. */
+const PendingSendBubble = lazy(() =>
+  import("./pending-send-bubble").then((module) => ({ default: module.PendingSendBubble })),
+);
 
 /** User bubbles stop at a readable line length; bot replies use the column, leaving room for the hover rail. */
 export function bubbleFrameWidth(role: ThreadMessage["role"]) {
@@ -134,6 +142,11 @@ export const Transcript = memo(function Transcript({
   onReleaseComputer,
   onOpenImportSetup,
   rpc,
+  pendingSends,
+  onRetryPendingSend,
+  onSendPendingAsFile,
+  onDiscardPendingSend,
+  onOpenModels,
 }: {
   scrollRef: RefObject<HTMLDivElement | null>;
   scrollRequest: { messageId: string; nonce: number } | null;
@@ -215,6 +228,13 @@ export const Transcript = memo(function Transcript({
   ) => Promise<void>;
   onOpenImportSetup?: (target: ImportSetupTarget) => void;
   rpc: ReturnType<typeof createSpaceRpc>;
+  /** Sends the outbox still holds for this chat, oldest first. */
+  pendingSends?: readonly WebSendAttempt[];
+  onRetryPendingSend?: (clientNonce: string) => void;
+  onSendPendingAsFile?: (clientNonce: string) => void;
+  onDiscardPendingSend?: (clientNonce: string) => void;
+  /** Opens the model settings a send needs before it can go. */
+  onOpenModels?: () => void;
 }) {
   const { t } = useLingui();
   const [atEnd, setAtEnd] = useState(true);
@@ -807,6 +827,20 @@ export const Transcript = memo(function Transcript({
             </Fragment>
           );
         })}
+        {pendingSends && pendingSends.length > 0 ? (
+          <Suspense fallback={null}>
+            {pendingSends.map((attempt) => (
+              <PendingSendBubble
+                key={attempt.clientNonce}
+                attempt={attempt}
+                onRetry={(clientNonce) => onRetryPendingSend?.(clientNonce)}
+                onSendAsFile={(clientNonce) => onSendPendingAsFile?.(clientNonce)}
+                onDiscard={(clientNonce) => onDiscardPendingSend?.(clientNonce)}
+                onOpenModels={onOpenModels}
+              />
+            ))}
+          </Suspense>
+        ) : null}
         {failedRun && !failedMessageId && onRetryRun ? (
           <div data-testid="standalone-run-error" className={`relative flex justify-start`}>
             <div className={`relative w-fit min-w-0 ${bubbleFrameWidth("bot")}`}>
