@@ -52,6 +52,7 @@ export * from "./integrations/mcp.js";
 export * from "./integrations/mcp-app.js";
 export * from "./integrations/messaging.js";
 export * from "./integrations/plugins.js";
+export * from "./integrations/tool-card.js";
 export * from "./integrations/vault-import.js";
 export * from "./integrations/vault-items.js";
 export * from "./labs.js";

@@ -285,6 +285,8 @@ function blockHistoryText(block: MessageBlock): string {
   if (block.kind === "steps") return toolStepsHistoryText(block.steps);
   if (block.kind === "chart") return `[chart: ${block.name}]`;
   if (block.kind === "app") return `[app: ${block.server} showed ${block.tool}]`;
+  // What a later turn knows of the job this bot started, and where it got to.
+  if (block.kind === "job") return `[job: ${block.title} (${block.state})]`;
   if (block.kind === "image") return `[image: ${block.name}]`;
   // The id lets a later turn, or another chat, update this page instead of making a new one.
   if (block.kind === "page") {

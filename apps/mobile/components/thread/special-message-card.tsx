@@ -24,6 +24,7 @@ import { useThreadReadOnly } from "../../lib/thread/thread-read-only";
 import { BotMention } from "../messages/bot-mention";
 import { NativeActionButton } from "../native/native-action-button";
 import { NativeSymbol } from "../native/native-symbol";
+import { JobCard } from "./job-card";
 import type { MessageActionProps } from "./message-bubble";
 import type { MessageRowActions } from "./message-row";
 
@@ -33,11 +34,16 @@ const openHelpers = new Set<string>();
 
 export type SpecialMessageBlock = Extract<
   MessageBlock,
-  { kind: "subagent" | "child_bot" | "cloud_agent" }
+  { kind: "subagent" | "child_bot" | "cloud_agent" | "job" }
 >;
 
 export function isSpecialMessageBlock(block: MessageBlock): block is SpecialMessageBlock {
-  return block.kind === "subagent" || block.kind === "child_bot" || block.kind === "cloud_agent";
+  return (
+    block.kind === "subagent" ||
+    block.kind === "child_bot" ||
+    block.kind === "cloud_agent" ||
+    block.kind === "job"
+  );
 }
 
 type SpecialMessageCardProps = {
@@ -262,6 +268,7 @@ export function SpecialMessageCard(props: SpecialMessageCardProps) {
   const tokens = withUserBubble(mobileTokens(), userBubble);
   const { t } = useLingui();
   if (special.kind === "subagent") return <HelperMessageCard {...props} special={special} />;
+  if (special.kind === "job") return <JobCard block={special} />;
   if (special.kind === "cloud_agent") {
     const title = special.title || t`Cloud agent`;
     const statusLabel =

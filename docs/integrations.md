@@ -56,6 +56,34 @@ Apps run sandboxed. An app sees only that tool call and its result, reaches only
 server declares, and can't call tools or see your account. A link in an app asks before it opens,
 and a message an app suggests goes into the message box for you to send.
 
+## Jobs in chat
+
+A tool that starts work somewhere else, such as a coding agent on another machine, can show it
+as a card in the chat. The tool returns `structuredContent.card` in its result and the bot's
+reply shows it; no server or tool is named in the app, so any MCP server can do this.
+
+The card names the job, who is doing it and where, its state, and a link to open it. `state` is
+one of `starting`, `working`, `finished`, `needs_input`, `exited` or `timed_out`. A `working` card
+counts elapsed time from `startedAt` (epoch milliseconds), and `reply` is a folded preview of the
+job's latest words shown once it is no longer running.
+
+```json
+{
+  "structuredContent": {
+    "card": {
+      "kind": "job",
+      "jobId": "job-1",
+      "title": "mcp-job-card",
+      "agent": "pi",
+      "branch": "example/mcp-job-card",
+      "state": "working",
+      "startedAt": 1770000000000,
+      "url": "https://code.example.com/worktrees/mcp-job-card"
+    }
+  }
+}
+```
+
 ## Choose which bots use what
 
 Bots pick the apps they need. To add an MCP server to the bot you're chatting with, open it in
