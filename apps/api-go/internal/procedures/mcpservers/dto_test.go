@@ -117,7 +117,7 @@ func TestServerDTOShapeAndChecks(t *testing.T) {
 		`"envKeys":["B","A"],"fileKeys":[],"headerKeys":[],"hasSecret":false,"oauthStatus":"none",` +
 		`"oauthClientId":null,"health":{"status":"error","message":"` + dynamicRegistrationUnsupported +
 		`","code":"MCP_OAUTH_CLIENT_REQUIRED","toolCount":null,"checkedAt":null},"enabled":true,` +
-		`"verbatimResults":false,"revision":2,"availability":{"allSpaces":false,"spaceIds":["sp1"]},` +
+		`"verbatimResults":false,"sendCallerIdentity":false,"revision":2,"availability":{"allSpaces":false,"spaceIds":["sp1"]},` +
 		`"allBots":false,"createdAt":"2026-11-23T01:02:03.400Z","updatedAt":"2026-11-23T01:02:03.400Z"}`
 	if string(body) != want {
 		t.Fatalf("dto = %s\nwant  %s", body, want)
