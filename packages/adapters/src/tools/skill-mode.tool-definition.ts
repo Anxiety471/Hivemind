@@ -7,7 +7,7 @@ export const SKILL_MODE_DEFAULT_LIMIT = 5;
 export const skillModeToolDefinition: ConnectorTool = {
   name: SKILL_MODE,
   description:
-    "Search, browse, or load skills. Use query, name (+ optional file), names (max 5), or list: true. Clear search winners auto-load.",
+    "Load the skill (recipe) that fits the task. Call this FIRST, before other tools, whenever a listed skill matches what you were asked. Search, browse, or load skills. Use query, name (+ optional file), names (max 5), or list: true. Clear search winners auto-load.",
   inputSchema: {
     type: "object",
     properties: {

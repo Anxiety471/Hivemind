@@ -481,6 +481,8 @@ export function userTurnInstructions(parts: {
       codeModeOffered: parts.offeredToolNames?.has(CODE_MODE),
     }),
     parts.taskCatalogInstruction,
+    parts.agentSkillsLine,
+    parts.taughtSkillsLine,
     parts.workspaceInstruction,
     parts.agentEnvironmentInstruction,
     offeredBuiltinClause(
@@ -501,8 +503,6 @@ export function userTurnInstructions(parts: {
     parts.botInstructions,
     parts.botDirectory,
     parts.pluginLine,
-    parts.agentSkillsLine,
-    parts.taughtSkillsLine,
     parts.groupContext,
     parts.messagingContext,
     parts.redactedMemoryContext,

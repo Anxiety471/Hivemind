@@ -1516,6 +1516,8 @@ describe("userTurnInstructions", () => {
     expect(instructions).toEqual([
       PROACTIVE_POSTURE_INSTRUCTION,
       computerLine,
+      "Agent skills",
+      "Taught skills",
       base.workspaceInstruction,
       "Agent environment",
       ...stableMiddle,
@@ -1523,8 +1525,6 @@ describe("userTurnInstructions", () => {
       "Bot instructions",
       "Bot directory",
       "Connected plugins: none",
-      "Agent skills",
-      "Taught skills",
       "Group context",
       "Messaging context",
       "Memory context",

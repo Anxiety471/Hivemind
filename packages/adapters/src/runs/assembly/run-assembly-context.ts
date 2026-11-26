@@ -1,5 +1,6 @@
 import type { AgentRunRequest } from "@rakazo/adapter-kit";
 import {
+  blocksToAgentHistoryText,
   expandSkillReferencesInPrompt,
   extractExpandedSkillNames,
   formatRelevantSkillsHint,
@@ -302,6 +303,7 @@ export async function buildTurnPrompt(
     historyMessages,
     recalledMemory,
     turnBlocks,
+    ticketContext,
   } = parts.turnContext;
   const { resolved, runModelId, runModelProvider } = parts.model;
   const { attachedFilesPrompt, modelSeesImages } = parts.computer;
@@ -318,8 +320,11 @@ export async function buildTurnPrompt(
     userId: run.userId,
     nonOwnerChatRun,
   });
-  const taughtSkillNames = scopedTaughtSkills.map((skill) => skill.name || skill.goal.slice(0, 80));
   const taughtSkillIndex = runSavedSkills.slice(0, 20);
+  const taughtSkillCatalog = scopedTaughtSkills.map((skill) => ({
+    name: skill.name || skill.goal.slice(0, 80),
+    whenToUse: parsePlaybook(skill.playbook).whenToUse || skill.goal,
+  }));
   const taughtSkillsLine = skillModeOffered
     ? undefined
     : taughtSkillsInstruction(
@@ -329,7 +334,7 @@ export async function buildTurnPrompt(
         })),
       );
   const agentSkillsLine = skillModeOffered
-    ? formatSkillModeCatalogInstruction(runAgentSkills, taughtSkillNames)
+    ? formatSkillModeCatalogInstruction(runAgentSkills, taughtSkillCatalog)
     : formatSkillsCatalogInstruction(runAgentSkills);
   const missingImagesInstruction = missingTurnImagesInstruction(turnBlocks, currentTurnImages);
   const rawTaskPrompt = [task.prompt, attachedFilesPrompt, missingImagesInstruction]
@@ -425,7 +430,10 @@ export async function buildTurnPrompt(
     skillModeOffered && run.trigger !== "created" && !nonOwnerChatRun
       ? formatRelevantSkillsHint(
           matchRelevantSkillsForPrompt(
-            rawTaskPrompt,
+            skillHintText(rawTaskPrompt, {
+              ticket: ticketContext,
+              previousMessages: previousPromptMessages(historyMessages, currentTurnMessage?.id),
+            }),
             buildSearchableSkills(runAgentSkills, scopedTaughtSkills),
             { maxHints: 3, excludeNames: invokedRunSkills },
           ),
@@ -520,6 +528,42 @@ export async function buildTurnPrompt(
 }
 
 export type TurnPrompt = Awaited<ReturnType<typeof buildTurnPrompt>>;
+
+/** Words in a request beyond which its own text is enough to match skills on. */
+const SKILL_HINT_SHORT_PROMPT_WORDS = 12;
+/** How much ticket and earlier-reply text a short request may borrow for skill matching. */
+const SKILL_HINT_CONTEXT_MAX_CHARS = 1_200;
+
+/**
+ * The text a short turn's skill hint matches against: the request, plus the ticket and the replies
+ * already loaded for the prompt, so a follow-up like "Done sending" still finds the skill it needs.
+ * A longer request speaks for itself, so extra context cannot shift its matches.
+ */
+export function skillHintText(
+  rawTaskPrompt: string,
+  context: { ticket?: string; previousMessages?: readonly string[] },
+): string {
+  const prompt = rawTaskPrompt.trim();
+  if (prompt.split(/\s+/).filter(Boolean).length > SKILL_HINT_SHORT_PROMPT_WORDS) return prompt;
+  return [prompt, context.ticket, ...(context.previousMessages ?? [])]
+    .map((part) => part?.trim())
+    .filter((part): part is string => Boolean(part))
+    .join("\n")
+    .slice(0, SKILL_HINT_CONTEXT_MAX_CHARS);
+}
+
+/** Plain text of the last replies before this turn, for skill matching on a short follow-up. */
+export function previousPromptMessages(
+  messages: ReadonlyArray<{ id: string; blocks: Parameters<typeof blocksToAgentHistoryText>[0] }>,
+  currentId: string | undefined,
+  limit = 2,
+): string[] {
+  return messages
+    .filter((message) => message.id !== currentId)
+    .slice(-limit)
+    .map((message) => blocksToAgentHistoryText(message.blocks).trim())
+    .filter(Boolean);
+}
 
 /** When the newest message other than this turn's was sent, read before compaction drops it. */
 export function previousMessageAt(
