@@ -482,6 +482,92 @@ describe("JobCard", () => {
     card.unmount();
   });
 
+  it("asks a needs_input job one-click Yes or No without opening the composer", async () => {
+    const onJobAction = vi.fn(async () => undefined);
+    const card = mountCard({ ...job, state: "needs_input" }, { onJobAction });
+    expect(card.button("job-answer-yes")?.textContent).toBe("Yes");
+    expect(card.button("job-answer-no")?.textContent).toBe("No");
+    expect(card.button("job-answer-other")?.textContent).toBe("Other");
+    // The textbox stays closed until the reader asks for it.
+    expect(card.byTestId("job-composer")).toBeNull();
+    // The generic Reply control is replaced by the dedicated prompt row.
+    expect(card.button("job-steer")).toBeNull();
+    await act(async () => {
+      card.click("job-answer-yes");
+      await Promise.resolve();
+    });
+    expect(onJobAction).toHaveBeenCalledWith(
+      'Reply to Orca job "mcp-job-card" (job-1): Yes, go ahead.',
+    );
+    expect(card.byTestId("job-answered")?.textContent).toBe("Replied: Yes");
+    // Yes/No settle into the note, so a second click cannot send again; Other remains.
+    expect(card.button("job-answer-yes")).toBeNull();
+    expect(card.button("job-answer-no")).toBeNull();
+    expect(card.button("job-answer-other")).not.toBeNull();
+    card.unmount();
+  });
+
+  it("answers a needs_input job with No", async () => {
+    const onJobAction = vi.fn(async () => undefined);
+    const card = mountCard({ ...job, state: "needs_input" }, { onJobAction });
+    await act(async () => {
+      card.click("job-answer-no");
+      await Promise.resolve();
+    });
+    expect(onJobAction).toHaveBeenCalledWith(
+      'Reply to Orca job "mcp-job-card" (job-1): No, do not proceed.',
+    );
+    expect(card.byTestId("job-answered")?.textContent).toBe("Replied: No");
+    card.unmount();
+  });
+
+  it("still sends a custom reply from Other on a needs_input job", async () => {
+    const onJobAction = vi.fn(async () => undefined);
+    const card = mountCard({ ...job, state: "needs_input" }, { onJobAction });
+    card.click("job-answer-other");
+    const input = card.byTestId("job-composer-input") as HTMLTextAreaElement;
+    expect(input).not.toBeNull();
+    flushSync(() => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+      setter?.call(input, "Run it after lunch");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => {
+      card.click("job-composer-send");
+      await Promise.resolve();
+    });
+    expect(onJobAction).toHaveBeenCalledWith("[Job: mcp-job-card (job-1)] Run it after lunch");
+    card.unmount();
+  });
+
+  it("shows an inline error and re-enables Yes and No when the reply fails", async () => {
+    const failing = vi.fn(async () => {
+      throw new Error("The chat is busy.");
+    });
+    const card = mountCard({ ...job, state: "needs_input" }, { onJobAction: failing });
+    await act(async () => {
+      card.click("job-answer-yes");
+      await Promise.resolve();
+    });
+    expect(card.byTestId("job-action-error")?.textContent).toBe("The chat is busy.");
+    expect(card.byTestId("job-answered")).toBeNull();
+    expect(card.button("job-answer-yes")?.disabled).toBe(false);
+    expect(card.button("job-answer-no")?.disabled).toBe(false);
+    card.unmount();
+  });
+
+  it("hides the Yes and No prompt in a read-only thread", () => {
+    const card = mountCard(
+      { ...job, state: "needs_input" },
+      { readOnly: true, onJobAction: async () => undefined },
+    );
+    expect(card.button("job-answer-yes")).toBeNull();
+    expect(card.button("job-answer-no")).toBeNull();
+    expect(card.button("job-answer-other")).toBeNull();
+    expect(card.text()).toContain("Needs input");
+    card.unmount();
+  });
+
   it("renders the summary as the subtitle and never falls back to the job id", () => {
     const rich = mountCard(richJob);
     expect(rich.text()).toContain("Retry failed charges before the invoice closes");

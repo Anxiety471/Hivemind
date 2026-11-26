@@ -29,6 +29,7 @@ import {
   Loader2,
   Maximize2,
   MessageSquare,
+  Pencil,
   RefreshCw,
   Send,
   Square,
@@ -51,7 +52,10 @@ const PREVIEW_LINES = 3;
 
 type JobBlock = Extract<MessageBlock, { kind: "job" }>;
 type JobTab = "output" | "files" | "steps";
-type JobAction = "send" | "stop" | "status";
+type JobAction = "send" | "stop" | "status" | "yes" | "no";
+
+/** A quick answer the reader already sent for a job that asked a yes/no question. */
+type JobAnswer = "yes" | "no";
 
 /** A job card is live while the job runs: its elapsed time counts up from when it started. */
 function liveJob(block: JobBlock): boolean {
@@ -625,6 +629,8 @@ export function JobCard({
   const [composerOpen, setComposerOpen] = useState(false);
   const [pending, setPending] = useState<JobAction | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  // Keyed by job so a card reused for another job never shows the previous job's answer.
+  const [answer, setAnswer] = useState<{ jobId: string; choice: JobAnswer } | null>(null);
   const [branchCopied, copyBranch] = useCopied();
   const [pathCopied, copyPath] = useCopied();
 
@@ -659,7 +665,9 @@ export function JobCard({
   if (steps.length > 0) sections.push("steps");
   const activeTab: JobTab = sections.includes(tab) ? tab : (sections[0] ?? "output");
   const canAct = !readOnly && Boolean(onJobAction);
-  const actionLabel = live ? t`Steer` : block.state === "needs_input" ? t`Reply` : t`Follow up`;
+  const needsInput = block.state === "needs_input";
+  const answered = answer?.jobId === block.jobId ? answer.choice : null;
+  const actionLabel = live ? t`Steer` : t`Follow up`;
   const copyText = reply ?? block.workspacePath;
 
   const runAction = (action: JobAction, text: string) => {
@@ -675,6 +683,25 @@ export function JobCard({
       });
   };
   const jobRef = `"${block.title}" (${block.jobId})`;
+
+  /** Answer a job that asked a yes/no question, with the answer it settled on once sent. */
+  const answerJob = (choice: JobAnswer) => {
+    if (!onJobAction || pending) return;
+    setPending(choice);
+    setActionError(null);
+    onJobAction(
+      choice === "yes"
+        ? t`Reply to Orca job ${jobRef}: Yes, go ahead.`
+        : t`Reply to Orca job ${jobRef}: No, do not proceed.`,
+    )
+      .then(() => setAnswer({ jobId: block.jobId, choice }))
+      .catch((failure: unknown) => {
+        setActionError(errorText(failure, t`Could not reach the job.`));
+      })
+      .finally(() => {
+        setPending((current) => (current === choice ? null : current));
+      });
+  };
 
   const hasMeta = Boolean(
     block.agent || block.model || block.effort || block.branch || block.commit || prHref,
@@ -943,9 +970,77 @@ export function JobCard({
 
       {canAct || copyText || hasDetails || href ? (
         <div className="flex min-w-0 flex-col gap-2 border-t border-border/60 bg-muted/20 px-3.5 py-2">
+          {canAct && needsInput ? (
+            <div
+              data-testid="job-answer-prompt"
+              className="flex min-w-0 flex-wrap items-center gap-1.5"
+            >
+              {answered ? (
+                <span
+                  data-testid="job-answered"
+                  className={cn(
+                    "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-label font-medium",
+                    answered === "yes"
+                      ? "bg-success/15 text-success"
+                      : "bg-muted text-muted-foreground",
+                  )}
+                >
+                  <Check className="size-3 shrink-0" aria-hidden />
+                  {answered === "yes" ? t`Replied: Yes` : t`Replied: No`}
+                </span>
+              ) : (
+                <>
+                  <Button
+                    type="button"
+                    size="xs"
+                    data-testid="job-answer-yes"
+                    disabled={pending !== null}
+                    onClick={() => answerJob("yes")}
+                    className="border border-success/30 bg-success/15 font-medium text-success hover:bg-success/25"
+                  >
+                    {pending === "yes" ? (
+                      <Loader2 className="animate-spin" aria-hidden />
+                    ) : (
+                      <Check aria-hidden />
+                    )}
+                    <Trans>Yes</Trans>
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="xs"
+                    data-testid="job-answer-no"
+                    disabled={pending !== null}
+                    onClick={() => answerJob("no")}
+                    className="hover:border-destructive/40 hover:text-destructive"
+                  >
+                    {pending === "no" ? (
+                      <Loader2 className="animate-spin" aria-hidden />
+                    ) : (
+                      <X aria-hidden />
+                    )}
+                    <Trans>No</Trans>
+                  </Button>
+                </>
+              )}
+              <Button
+                type="button"
+                variant="ghost"
+                size="xs"
+                data-testid="job-answer-other"
+                aria-expanded={composerOpen}
+                disabled={pending !== null}
+                onClick={() => setComposerOpen((current) => !current)}
+                className="text-muted-foreground hover:text-foreground"
+              >
+                <Pencil aria-hidden />
+                <Trans>Other</Trans>
+              </Button>
+            </div>
+          ) : null}
           <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
             <div className="flex min-w-0 items-center gap-1">
-              {canAct ? (
+              {canAct && !needsInput ? (
                 <Button
                   type="button"
                   variant="ghost"
