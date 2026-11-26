@@ -31,6 +31,7 @@ type Record struct {
 	secretID, installID                             *string
 	allSpaces, allBots, enabled                     bool
 	verbatim                                        bool
+	sendCallerIdentity                              bool
 	revision                                        int32
 	healthStatus                                    string
 	healthMessage                                   *string
@@ -80,30 +81,31 @@ func ServerDTO(record Record, spaceIDs []string, summary OAuthSummary) (Server, 
 		return Server{}, shared.OutputInvalid()
 	}
 	return Server{
-		ID:              record.id,
-		SpaceID:         record.spaceID,
-		InstallID:       record.installID,
-		Slug:            record.slug,
-		Name:            record.name,
-		Description:     record.description,
-		Transport:       record.transport,
-		Endpoint:        endpoint,
-		Command:         record.command,
-		HasArgs:         record.hasArgs || len(legacyArgs(record.args)) > 0,
-		EnvKeys:         objectKeys(record.env),
-		FileKeys:        objectKeys(record.files),
-		HeaderKeys:      objectKeys(record.headers),
-		HasSecret:       record.secretID != nil && summary.Credential,
-		OAuthStatus:     summary.Status,
-		OAuthClientID:   summary.ClientID,
-		Health:          healthDTO(record),
-		Enabled:         record.enabled,
-		VerbatimResults: record.verbatim,
-		Revision:        record.revision,
-		Availability:    Availability{AllSpaces: record.allSpaces, SpaceIDs: spaceIDs},
-		AllBots:         record.allBots,
-		CreatedAt:       record.createdAt.UTC().Format(shared.ISOMillis),
-		UpdatedAt:       record.updatedAt.UTC().Format(shared.ISOMillis),
+		ID:                 record.id,
+		SpaceID:            record.spaceID,
+		InstallID:          record.installID,
+		Slug:               record.slug,
+		Name:               record.name,
+		Description:        record.description,
+		Transport:          record.transport,
+		Endpoint:           endpoint,
+		Command:            record.command,
+		HasArgs:            record.hasArgs || len(legacyArgs(record.args)) > 0,
+		EnvKeys:            objectKeys(record.env),
+		FileKeys:           objectKeys(record.files),
+		HeaderKeys:         objectKeys(record.headers),
+		HasSecret:          record.secretID != nil && summary.Credential,
+		OAuthStatus:        summary.Status,
+		OAuthClientID:      summary.ClientID,
+		Health:             healthDTO(record),
+		Enabled:            record.enabled,
+		VerbatimResults:    record.verbatim,
+		SendCallerIdentity: record.sendCallerIdentity,
+		Revision:           record.revision,
+		Availability:       Availability{AllSpaces: record.allSpaces, SpaceIDs: spaceIDs},
+		AllBots:            record.allBots,
+		CreatedAt:          record.createdAt.UTC().Format(shared.ISOMillis),
+		UpdatedAt:          record.updatedAt.UTC().Format(shared.ISOMillis),
 	}, nil
 }
 
@@ -397,7 +399,7 @@ func jsNumber(value float64) string {
 // serverColumns is every mcp_servers column the DTO reads, in scanRecord's order.
 const serverColumns = `id, "spaceId", slug, name, description, transport,
 	endpoint, command, args, "hasArgs", env, files, headers, "secretId", "installId",
-	"allSpaces", "allBots", enabled, coalesce("verbatimResults", false), revision,
+	"allSpaces", "allBots", enabled, coalesce("verbatimResults", false), "sendCallerIdentity", revision,
 	"healthStatus", "healthMessage", "healthToolCount", "healthCheckedAt",
 	"createdAt", "updatedAt"`
 
@@ -415,7 +417,7 @@ func scanRecord(rows pgx.Rows) (Record, error) {
 		&record.description, &record.transport, &record.endpoint, &record.command,
 		&record.args, &record.hasArgs, &record.env, &record.files, &record.headers,
 		&record.secretID, &record.installID, &record.allSpaces, &record.allBots,
-		&record.enabled, &record.verbatim, &record.revision, &record.healthStatus,
+		&record.enabled, &record.verbatim, &record.sendCallerIdentity, &record.revision, &record.healthStatus,
 		&record.healthMessage, &record.healthToolCount, &record.healthCheckedAt,
 		&record.createdAt, &record.updatedAt)
 	return record, err

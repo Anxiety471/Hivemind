@@ -142,6 +142,7 @@ export function mcpRoutes(ctx: RouterContext) {
                     description: existing.description,
                     enabled: existing.enabled,
                     verbatimResults: existing.verbatimResults,
+                    sendCallerIdentity: existing.sendCallerIdentity,
                     transport: existing.transport as "streamable_http" | "sse",
                     endpoint: existing.endpoint!,
                     headers: (existingMaterial.headers ?? {}) as Record<string, string>,
@@ -268,6 +269,7 @@ export function mcpRoutes(ctx: RouterContext) {
                         : {}) as Prisma.InputJsonValue,
                       enabled: config.enabled,
                       verbatimResults: config.verbatimResults,
+                      sendCallerIdentity: config.sendCallerIdentity,
                       revision: { increment: 1 },
                       // The old verdict is about the old config.
                       healthStatus: "unknown",

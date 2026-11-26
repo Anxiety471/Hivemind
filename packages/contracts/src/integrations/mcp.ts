@@ -184,6 +184,8 @@ const McpServerBaseInput = z.object({
   enabled: z.boolean().default(true),
   /** Keep this server's tool results whole instead of cutting them to fit context. Omitted keeps the stored value. */
   verbatimResults: z.boolean().optional(),
+  /** Remote servers only: send the calling bot, run and thread ids as `x-rakazo-*-id` headers. Omitted keeps the stored value. */
+  sendCallerIdentity: z.boolean().optional(),
   /** Update-only: drop the stored static credential (secret/env/headers).
    * OAuth state survives so a connected server stays connected. */
   clearCredential: z.boolean().optional(),
@@ -296,6 +298,8 @@ export const McpServerSchema = z.object({
   enabled: z.boolean(),
   /** Keep this server's tool results whole instead of cutting them to fit context. */
   verbatimResults: z.boolean().default(false),
+  /** Remote requests carry the calling bot, run and thread ids. */
+  sendCallerIdentity: z.boolean().default(false),
   revision: z.number().int().positive(),
   availability: SpaceAvailabilitySchema.optional(),
   /** Every agent can use it; when false, only the agents assigned to it. */

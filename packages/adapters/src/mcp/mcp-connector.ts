@@ -89,8 +89,8 @@ type SessionEntry = {
   accessTokenExpiresAt?: number;
   /** Private directory holding the process's credential files; removed with the session. */
   credentialDir?: string;
-  /** A local process, reaped after {@link McpConnectorOptions.idleMs} without use. */
-  stdio: boolean;
+  /** A local process or a per-run session, reaped after {@link McpConnectorOptions.idleMs} without use. */
+  reapable: boolean;
   lastUsedAt: number;
   /** Resolved credential values the child may echo in errors or tool output. */
   launchSecrets?: string[];
@@ -113,6 +113,15 @@ export const DEFAULT_MCP_STDIO_IDLE_MS = 15 * 60_000;
 /** How long a run waits for one server's tool list before going on without it. */
 export const DEFAULT_MCP_DISCOVERY_TIMEOUT_MS = 20_000;
 /** After a failed discovery, runs skip the server for this long, doubling up to the max. */
+export const MCP_BOT_ID_HEADER = "x-rakazo-bot-id";
+export const MCP_RUN_ID_HEADER = "x-rakazo-run-id";
+export const MCP_THREAD_ID_HEADER = "x-rakazo-thread-id";
+
+/** Remote servers that opted in to being told which bot, run and thread is calling. */
+function sendsCallerIdentity(server: McpServer): boolean {
+  return server.sendCallerIdentity === true && server.transport !== "stdio";
+}
+
 const DISCOVERY_BACKOFF_MS = 30_000;
 const DISCOVERY_BACKOFF_MAX_MS = 5 * 60_000;
 /** A server that needs new credentials or a new address waits longer: retrying rarely
@@ -897,10 +906,29 @@ export class McpConnector implements ConnectorProvider {
     return this.resolvedPackagesRoot;
   }
 
+  private async callerIdentityHeaders(context: AdapterContext): Promise<Record<string, string>> {
+    const run = context.runId
+      ? await this.prisma.run.findUnique({
+          where: { id: context.runId },
+          select: { threadId: true },
+        })
+      : null;
+    return {
+      ...(context.botId ? { [MCP_BOT_ID_HEADER]: context.botId } : {}),
+      ...(context.runId ? { [MCP_RUN_ID_HEADER]: context.runId } : {}),
+      ...(run?.threadId ? { [MCP_THREAD_ID_HEADER]: run.threadId } : {}),
+    };
+  }
+
   private sessionKey(server: McpServer, context: AdapterContext): string {
     // Identity headers are applied once, at connect time, so a session is only
     // valid for the identity it connected as. The key has to carry that identity.
-    return `${server.id} ${context.spaceId} ${context.userId}`;
+    // Stdio gets no caller identity, so one process serves every bot. A remote
+    // session never crosses bots, and one sent the run and thread gets one per run.
+    const key = `${server.id} ${context.spaceId} ${context.userId}`;
+    if (server.transport === "stdio") return key;
+    const bot = `${key} ${context.botId ?? ""}`;
+    return sendsCallerIdentity(server) ? `${bot} ${context.runId ?? ""}` : bot;
   }
 
   /** Stop stdio processes nobody used for `idleMs`. Returns how many were stopped. */
@@ -909,7 +937,7 @@ export class McpConnector implements ConnectorProvider {
     if (idleMs <= 0) return 0;
     const idle = [...this.sessions].filter(
       ([, entry]) =>
-        entry.stdio &&
+        entry.reapable &&
         (this.inFlight.get(entry.session) ?? 0) === 0 &&
         now - entry.lastUsedAt >= idleMs,
     );
@@ -1107,12 +1135,12 @@ export class McpConnector implements ConnectorProvider {
           recordId,
           accessTokenExpiresAt,
           credentialDir,
-          stdio: server.transport === "stdio",
+          reapable: server.transport === "stdio" || sendsCallerIdentity(server),
           lastUsedAt: Date.now(),
           launchSecrets,
         };
         this.sessions.set(sessionKey, connected);
-        if (connected.stdio) this.startReaper();
+        if (connected.reapable) this.startReaper();
         return session;
       },
       (error: unknown) => {
@@ -1335,7 +1363,10 @@ export class McpConnector implements ConnectorProvider {
             ? material.secret
             : `Bearer ${material.secret}`
           : undefined;
+        // Caller ids go first so a header the server is configured with, and its
+        // credential, always win. They are opaque ids, not credentials.
         const headers = {
+          ...(sendsCallerIdentity(server) ? await this.callerIdentityHeaders(context) : {}),
           ...(material.headers ?? {}),
           ...(staticToken ? { Authorization: staticToken } : {}),
         };

@@ -44,30 +44,31 @@ type Availability struct {
 
 // Server is McpServerSchema (mcp.ts:275-305).
 type Server struct {
-	ID              string       `json:"id"`
-	SpaceID         string       `json:"spaceId"`
-	InstallID       *string      `json:"installId"`
-	Slug            string       `json:"slug"`
-	Name            string       `json:"name"`
-	Description     string       `json:"description"`
-	Transport       string       `json:"transport"`
-	Endpoint        *string      `json:"endpoint"`
-	Command         *string      `json:"command"`
-	HasArgs         bool         `json:"hasArgs"`
-	EnvKeys         []string     `json:"envKeys"`
-	FileKeys        []string     `json:"fileKeys"`
-	HeaderKeys      []string     `json:"headerKeys"`
-	HasSecret       bool         `json:"hasSecret"`
-	OAuthStatus     string       `json:"oauthStatus"`
-	OAuthClientID   *string      `json:"oauthClientId"`
-	Health          Health       `json:"health"`
-	Enabled         bool         `json:"enabled"`
-	VerbatimResults bool         `json:"verbatimResults"`
-	Revision        int32        `json:"revision"`
-	Availability    Availability `json:"availability"`
-	AllBots         bool         `json:"allBots"`
-	CreatedAt       string       `json:"createdAt"`
-	UpdatedAt       string       `json:"updatedAt"`
+	ID                 string       `json:"id"`
+	SpaceID            string       `json:"spaceId"`
+	InstallID          *string      `json:"installId"`
+	Slug               string       `json:"slug"`
+	Name               string       `json:"name"`
+	Description        string       `json:"description"`
+	Transport          string       `json:"transport"`
+	Endpoint           *string      `json:"endpoint"`
+	Command            *string      `json:"command"`
+	HasArgs            bool         `json:"hasArgs"`
+	EnvKeys            []string     `json:"envKeys"`
+	FileKeys           []string     `json:"fileKeys"`
+	HeaderKeys         []string     `json:"headerKeys"`
+	HasSecret          bool         `json:"hasSecret"`
+	OAuthStatus        string       `json:"oauthStatus"`
+	OAuthClientID      *string      `json:"oauthClientId"`
+	Health             Health       `json:"health"`
+	Enabled            bool         `json:"enabled"`
+	VerbatimResults    bool         `json:"verbatimResults"`
+	SendCallerIdentity bool         `json:"sendCallerIdentity"`
+	Revision           int32        `json:"revision"`
+	Availability       Availability `json:"availability"`
+	AllBots            bool         `json:"allBots"`
+	CreatedAt          string       `json:"createdAt"`
+	UpdatedAt          string       `json:"updatedAt"`
 }
 
 // List implements mcp.servers.list (routes/mcp.ts:62-88).
