@@ -654,6 +654,76 @@ func TestLaneMIdentityConfirmationReadsNewestRow(t *testing.T) {
 	}
 }
 
+// TestLaneMIdentityConfirmationReadsBothIdentifiersBeforeCleanup is the ordering of the two
+// findVerificationValue calls: hasRecentIdentityConfirmation asks for identity-confirmed and
+// oidc-reauth with Promise.all (identity-confirmation.ts:55-67), so both newest rows are observed
+// before either lookup's global cleanup. An expired newest oidc proof must therefore deny even
+// though an older oidc row is still valid; reading and cleaning one identifier at a time would
+// delete the expired row before the oidc read and accept the older row.
+func TestLaneMIdentityConfirmationReadsBothIdentifiersBeforeCleanup(t *testing.T) {
+	database := openTestDB(t)
+	s := seed(t, database)
+	ctx := context.Background()
+	actor := db.Actor{UserID: s.UserID, SpaceID: s.Space1, SessionID: s.SessionID}
+	deployment := laneMVault(t, database)
+	id := s.UserID + "-login"
+	addLaneMVault(t, database, s.UserID, nil, laneMVaultRow{
+		ID: id, Name: "login", Origin: "https://login.example.test",
+		Auth:       []byte(`{"type":"login"}`),
+		Ciphertext: sealLaneM(t, `{"fields":[{"label":"Username","value":"u","hidden":false}]}`, id),
+	})
+	input := laneMInput(t, `{"name":"login"}`)
+	identifier := "oidc-reauth-" + s.SessionID
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	insert := func(t *testing.T, rowID string, createdAt, expiresAt time.Time) {
+		t.Helper()
+		err := database.System(ctx, "seed a verification row", func(tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, `INSERT INTO verification (id, identifier, value, "expiresAt", "createdAt", "updatedAt")
+				VALUES ($1, $2, $3, $4, $5, $5)`, rowID, identifier, s.UserID, expiresAt, createdAt)
+			return err
+		})
+		if err != nil {
+			t.Fatalf("seed verification row: %v", err)
+		}
+	}
+	rows := func(t *testing.T) []string {
+		t.Helper()
+		var ids []string
+		err := database.System(ctx, "read verification rows", func(tx pgx.Tx) error {
+			result, failure := tx.Query(ctx, `SELECT id FROM verification WHERE identifier = $1 ORDER BY id`, identifier)
+			if failure != nil {
+				return failure
+			}
+			defer result.Close()
+			for result.Next() {
+				var rowID string
+				if err := result.Scan(&rowID); err != nil {
+					return err
+				}
+				ids = append(ids, rowID)
+			}
+			return result.Err()
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ids
+	}
+
+	// The newer oidc row is expired; the older one is still valid. Both newest rows are read
+	// before the cleanup, so the expired row is the proof and the gate denies.
+	insert(t, s.UserID+"-oidc-valid", now.Add(-2*time.Hour), now.Add(time.Hour))
+	insert(t, s.UserID+"-oidc-expired", now.Add(-time.Hour), now.Add(-time.Minute))
+	_, failure := vaultstore.VaultReveal(ctx, database, deployment, actor, input)
+	if got := laneMFailure(t, failure); got.Code != "IDENTITY_CONFIRMATION_REQUIRED" {
+		t.Fatalf("a newer expired oidc row must deny, not accept an older row: %+v", got)
+	}
+	// The lookup's global cleanup still removes the expired row and leaves the older valid one.
+	if left := rows(t); len(left) != 1 || left[0] != s.UserID+"-oidc-valid" {
+		t.Fatalf("verification rows after the lookup = %v", left)
+	}
+}
+
 // TestLaneMVaultRemoveDropsTheReference is forgetBotSecret: the row goes, the reference it held is
 // cleaned up, and an absent name is a no-op success.
 func TestLaneMVaultRemoveDropsTheReference(t *testing.T) {
