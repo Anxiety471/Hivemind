@@ -170,6 +170,80 @@ export function jobCases(system: System): Case[] {
       },
       { declines: false },
     ),
+    // The extended card (5676025cb): every field the grown ToolCardSchema adds, at once. A field
+    // Go's schema does not know is stripped from the body, which shows here as a diff even though
+    // both sides answer 200.
+    get(
+      "get-extended-rich",
+      async (seeded) => {
+        await bot(seeded);
+        await message(seeded, 0, [
+          card({
+            jobId: "job-rich",
+            state: "finished",
+            agent: "claude",
+            branch: "feat/x",
+            startedAt: 1577836800000,
+            url: "https://example.test/job/1",
+            reply: "All green",
+            finishedAt: 1577836900000,
+            turn: 3,
+            repo: "acme/widgets",
+            workspacePath: "/home/agent/widgets",
+            commit: "0123456789abcdef0123456789abcdef01234567",
+            model: "claude-fable-5",
+            effort: "high",
+            summary: "Fixed the flaky test",
+            currentActivity: "Running the suite",
+            error: "boom",
+            prUrl: "https://github.com/acme/widgets/pull/12",
+            prLabel: "#12",
+            stats: {
+              filesChanged: 2,
+              insertions: 10,
+              deletions: 3,
+              toolCalls: 7,
+              inputTokens: 1200,
+              outputTokens: 800,
+              costUsd: 0.0125,
+            },
+            files: [
+              { path: "src/a.ts", status: "modified", insertions: 8, deletions: 2, diff: "@@ -1 +1 @@" },
+              { path: "src/b.ts", status: "added" },
+            ],
+            steps: [
+              { kind: "tool", name: "Read a.ts", detail: "read 40 lines", status: "ok", durationMs: 120 },
+              { kind: "command", name: "pnpm test", status: "running" },
+              { name: "note" },
+            ],
+          }),
+        ]);
+      },
+      { declines: false },
+    ),
+    // z.object strips what it does not name, at the top level and inside each nested object.
+    get(
+      "get-extended-unknown-nested-keys",
+      async (seeded) => {
+        await bot(seeded);
+        await message(seeded, 0, [
+          card({
+            futureField: 1,
+            stats: { filesChanged: 1, mystery: true },
+            files: [{ path: "src/a.ts", extra: "x" }],
+            steps: [{ name: "s", alsoExtra: 2 }],
+          }),
+        ]);
+      },
+      { declines: false },
+    ),
+    // The nested caps: 41 files is over JOB_CARD_MAX_FILES, so both sides refuse the read.
+    get("get-extended-files-over-cap", async (seeded) => {
+      await bot(seeded);
+      await message(seeded, 0, [
+        card({ files: Array.from({ length: 41 }, (_, index) => ({ path: `src/f${index}.ts` })) }),
+      ]);
+    }),
     // Every state, so the enum is compared as a whole rather than one member at a time.
     get(
       "get-every-state",
