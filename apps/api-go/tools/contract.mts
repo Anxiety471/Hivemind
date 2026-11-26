@@ -8,6 +8,7 @@
  *   set -a; . /home/hitori/go-port/fixture-db/.env; set +a
  *   GO_BINARY=/tmp/rakazo-gateway node_modules/.bin/tsx apps/api-go/tools/contract.mts
  */
+import { AssertionError } from "node:assert";
 import assert from "node:assert/strict";
 import type { ChildProcess } from "node:child_process";
 import { spawn } from "node:child_process";
@@ -152,6 +153,14 @@ export type Case = {
    * racing the next side's capture.
    */
   settleMs?: number;
+  /**
+   * Re-run this case (both sides, fresh seeds) when the comparison mismatches, up to this many
+   * extra attempts. Only for a state one side answers nondeterministically; `retryReason` must
+   * name that nondeterminism, and the runner prints every retry as `RETRY <name>`.
+   */
+  retries?: number;
+  /** Why this case may be retried. Required whenever `retries` is set. */
+  retryReason?: string;
   /**
    * Skip the realtime-signal comparison: a procedure that creates a board or ticket with a
    * database-generated id publishes a frame whose payload necessarily names different ids on
@@ -756,6 +765,16 @@ const cases: Case[] = [
   ...laneLReviewCases(system),
   ...oStreamErrorCases(),
 ];
+
+// A retried case must say why: a comparison allowed to be rerun has to name the behaviour that is
+// nondeterministic, so the list cannot grow silently.
+for (const testCase of cases) {
+  if (testCase.retries === undefined) continue;
+  if (!Number.isInteger(testCase.retries) || testCase.retries < 1)
+    throw new Error(`${testCase.name}: retries must be a positive integer`);
+  if (!testCase.retryReason?.trim())
+    throw new Error(`${testCase.name}: retries requires a retryReason`);
+}
 
 // biome-ignore lint/suspicious/noUndeclaredEnvVars: manual harness, not a turbo task
 if (process.env.CONTRACT_ROUTE_AUDIT === "1") {
@@ -8802,9 +8821,11 @@ async function databaseState(seeded: ReturnType<typeof ids>, procedure?: string)
 await system.spaceInvite.deleteMany({});
 
 let failures = 0;
-let caseIndex = 0;
-for (const testCase of cases) {
-  const position = caseIndex++;
+// Retries already used by the case at `position`. Kept across the retry's re-entry into the same
+// position; reset after a match or a final failure.
+let retryAttempts = 0;
+for (let position = 0; position < cases.length; position += 1) {
+  const testCase = cases[position]!;
   // CASE_FROM=<n> resumes a run at a case index after a timeout; cases keep their order.
   // biome-ignore lint/suspicious/noUndeclaredEnvVars: manual harness, not a turbo task
   if (process.env.CASE_FROM && position < Number(process.env.CASE_FROM)) continue;
@@ -8950,12 +8971,27 @@ for (const testCase of cases) {
     );
     console.log(`ok   ${testCase.name} (${tsResult.status})`);
   } catch (error) {
+    // Only a comparison mismatch is retried, and only on a case that names its nondeterminism.
+    // The loop's `position += 1` cancels this decrement, so the same case runs again from the top,
+    // where seed() resets the fixture and re-seeds both sides.
+    if (error instanceof AssertionError && retryAttempts < (testCase.retries ?? 0)) {
+      retryAttempts += 1;
+      console.error(
+        `RETRY ${testCase.name} (attempt ${retryAttempts}/${(testCase.retries ?? 0) + 1} failed): ${testCase.retryReason}`,
+      );
+      console.error(error);
+      console.error("typescript:", JSON.stringify(tsResult));
+      console.error("go:        ", JSON.stringify(goResult));
+      position -= 1;
+      continue;
+    }
     failures += 1;
     console.error(`FAIL ${testCase.name}`);
     console.error(error);
     console.error("typescript:", JSON.stringify(tsResult));
     console.error("go:        ", JSON.stringify(goResult));
   }
+  retryAttempts = 0;
   await reset(caseIds);
 }
 

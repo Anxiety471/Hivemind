@@ -586,6 +586,14 @@ export function laneMReviewCases(system: System): Case[] {
             },
           });
         },
+        // TypeScript's gate races itself on this state (identity-confirmation.ts:55-67): its two
+        // findVerificationValue calls run under Promise.all, and each one deletes every expired
+        // verification row, so one lookup's cleanup can hide the other's newest expired row
+        // between the seed and the read. Go is sequential and answers 403 every time; a retry
+        // re-seeds both sides and reruns.
+        retries: 2,
+        retryReason:
+          "TypeScript's two findVerificationValue calls run under Promise.all (identity-confirmation.ts:55-67) and each deletes every expired verification row, so one lookup's cleanup can hide the other's newest expired row before it is read; Go answers 403 deterministically.",
       },
     ),
 
