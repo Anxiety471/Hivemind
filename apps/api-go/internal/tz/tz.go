@@ -141,9 +141,9 @@ var (
 // POSIX standard-time offset), else the zone /etc/localtime names or contains,
 // else UTC. Only the zone *name* comes from the process; the rules always come
 // from the embedded release or from the file TZ names. V8's quirks are
-// reproduced deliberately — see the comments on resolveLocal, hostZone and
-// legacyDefaultUTC — because a local datetime parsed by the gateway must be the
-// instant V8's Date would read from the same TZ.
+// reproduced deliberately — see the comments on resolveLocal, hostZone,
+// LegacyDefaultUTC and SynthesizedZones — because a local datetime parsed by
+// the gateway must be the instant V8's Date would read from the same TZ.
 func Local() *time.Location {
 	localOnce.Do(func() {
 		local = resolveLocal(os.LookupEnv, os.Readlink, os.ReadFile)
@@ -151,22 +151,34 @@ func Local() *time.Location {
 	return local
 }
 
-// legacyDefaultUTC are the System V zone ids ICU still accepts. Intl resolves
-// each one to a canonical zone, so Load and the corpus serve their real rules;
-// but V8's *default zone* path cannot load their data: with TZ=PST,
-// resolvedOptions().timeZone is America/Los_Angeles while
-// getTimezoneOffset() is 0 at every instant measured (2026-07-15, 2026-12-06,
-// 1900-01-01), and TZ=ACT behaves the same. Local therefore reads as UTC for
-// them, as V8 does. The ICU aliases US/Pacific-New and
-// Canada/East-Saskatchewan are not in this set: their default-zone data loads
-// correctly (measured -25200/-28800 and -21600).
-var legacyDefaultUTC = map[string]bool{
-	"ACT": true, "AET": true, "AGT": true, "ART": true, "AST": true,
-	"BET": true, "BST": true, "CAT": true, "CNT": true, "CST": true,
-	"CTT": true, "EAT": true, "ECT": true, "IET": true, "IST": true,
-	"JST": true, "MIT": true, "NET": true, "NST": true, "PLT": true,
-	"PNT": true, "PRT": true, "PST": true, "SST": true, "VST": true,
+// SynthesizedZone is a zone id production Node's ICU accepts as a zone of its
+// own (resolvedOptions returns the id itself) but IANA tzdata does not ship.
+// genzones samples ICU's offsets, detects every transition, and writes a fat
+// TZif under the id, so Load returns the offsets Intl computes; DST says
+// whether that zone observes DST.
+type SynthesizedZone struct {
+	Name string
+	DST  bool
 }
+
+var (
+	legacyNames = sync.OnceValue(func() map[string]bool {
+		names := make(map[string]bool, len(LegacyDefaultUTC))
+		for _, name := range LegacyDefaultUTC {
+			names[name] = true
+		}
+		return names
+	})
+	synthesizedDST = sync.OnceValue(func() map[string]bool {
+		names := make(map[string]bool, len(SynthesizedZones))
+		for _, zone := range SynthesizedZones {
+			if zone.DST {
+				names[zone.Name] = true
+			}
+		}
+		return names
+	})
+)
 
 // resolveLocal is Local with the process sources injected, so the rules are
 // testable without touching the host.
@@ -187,8 +199,15 @@ func resolveLocal(lookup func(string) (string, bool), readlink func(string) (str
 	// TZ=asia/tokyo the local zone is UTC even though
 	// Intl.DateTimeFormat({timeZone: "asia/tokyo"}) works.
 	if location, ok := loadExact(name); ok {
-		if legacyDefaultUTC[name] {
+		if legacyNames()[name] {
+			// V8 resolves the name to its canonical zone but cannot load that
+			// zone's data for the default lookup, so the local zone reads UTC.
 			return time.UTC
+		}
+		if synthesizedDST()[name] {
+			// V8 parses these ICU-only ids as POSIX strings; a string with DST
+			// rules cannot be built, so it falls back to the system zone.
+			return hostZone(readlink, readFile)
 		}
 		return location
 	}

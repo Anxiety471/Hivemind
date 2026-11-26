@@ -12,9 +12,9 @@ const (
 	Version = "2026e"
 	// ZoneinfoSHA256 is the digest of the embedded zip: TestNodeVersionProvenance
 	// fails if the two ever disagree.
-	ZoneinfoSHA256 = "ae235c7e3b37371afd3827f8c303e8d0c66a97156cfa85de21b3224a9a636a15"
+	ZoneinfoSHA256 = "69f9ad50a8b7d747f4503dddac8ef9fca8984e88281a4dfe76c4efb57f66eca2"
 	// ZoneCount is the number of names in zoneinfo.zip, aliases included.
-	ZoneCount = 629
+	ZoneCount = 638
 	// TarballSHA256 and TzcodeSHA256 pin the official releases.
 	TarballSHA256 = "b26882805f26aac59d5b222978e6580484b834ccdc98be89df2f05a6dc53a652"
 	TzcodeSHA256  = "cc3d27ca2a0d8399504551b920970d80af83bfb9c216e8082a15491921935d54"
@@ -40,13 +40,10 @@ var ICUOnlyAliasZones = map[string]string{
 	"CNT":                      "America/St_Johns",
 	"CST":                      "America/Chicago",
 	"CTT":                      "Asia/Shanghai",
-	"CUBA":                     "America/Havana",
 	"Canada/East-Saskatchewan": "America/Regina",
 	"EAT":                      "Africa/Nairobi",
 	"ECT":                      "Europe/Paris",
-	"EIRE":                     "Europe/Dublin",
 	"IET":                      "America/Indianapolis",
-	"IRAN":                     "Asia/Tehran",
 	"IST":                      "Asia/Calcutta",
 	"JST":                      "Asia/Tokyo",
 	"MIT":                      "Pacific/Apia",
@@ -59,25 +56,65 @@ var ICUOnlyAliasZones = map[string]string{
 	"SST":                      "Pacific/Guadalcanal",
 	"US/Pacific-New":           "America/Los_Angeles",
 	"VST":                      "Asia/Saigon",
-	"ZULU":                     "UTC",
 }
 
-// ICUZonesWithoutIANAFile are ids production Node's ICU accepts as zones of its
-// own (resolvedOptions returns the id itself): ICU implements their POSIX-style
-// rules directly, and tzdata has no file to embed. tz.Load reads them as UTC;
-// they are not IANA names. Recorded so a regeneration makes any change visible.
-var ICUZonesWithoutIANAFile = []string{
-	"SystemV/AST4",
-	"SystemV/AST4ADT",
-	"SystemV/CST6",
-	"SystemV/CST6CDT",
-	"SystemV/EST5",
-	"SystemV/EST5EDT",
-	"SystemV/HST10",
-	"SystemV/MST7",
-	"SystemV/MST7MDT",
-	"SystemV/PST8",
-	"SystemV/PST8PDT",
-	"SystemV/YST9",
-	"SystemV/YST9YDT",
+// SynthesizedZones are ids production Node's ICU accepts as zones of its own
+// (resolvedOptions returns the id itself) but IANA tzdata does not ship.
+// genzones samples ICU's offsets, finds every transition to the second, and
+// writes a fat TZif under the id; the bytes are verified against ICU at every
+// transition through 2102 and at post-footer probes through 2200. DST records
+// whether the zone observes daylight time: V8's default-zone lookup loads a
+// fixed one as itself but falls back to the system zone for a DST one.
+var SynthesizedZones = []SynthesizedZone{
+	{Name: "SystemV/AST4", DST: false},
+	{Name: "SystemV/AST4ADT", DST: true},
+	{Name: "SystemV/CST6", DST: false},
+	{Name: "SystemV/CST6CDT", DST: true},
+	{Name: "SystemV/EST5", DST: false},
+	{Name: "SystemV/EST5EDT", DST: true},
+	{Name: "SystemV/HST10", DST: false},
+	{Name: "SystemV/MST7", DST: false},
+	{Name: "SystemV/MST7MDT", DST: true},
+	{Name: "SystemV/PST8", DST: false},
+	{Name: "SystemV/PST8PDT", DST: true},
+	{Name: "SystemV/YST9", DST: false},
+	{Name: "SystemV/YST9YDT", DST: true},
+}
+
+// LegacyDefaultUTC are the names where V8's default-zone lookup reports the
+// canonical zone but reads UTC at every instant (TZ=Cuba, TZ=PST, ...), while
+// Intl's own data for that zone is not UTC. Measured over every name in the zip
+// by asking one node process per name; tz.Local reads UTC for them.
+var LegacyDefaultUTC = []string{
+	"ACT",
+	"AET",
+	"AGT",
+	"ART",
+	"AST",
+	"BET",
+	"BST",
+	"CAT",
+	"CNT",
+	"CST",
+	"CTT",
+	"Cuba",
+	"EAT",
+	"ECT",
+	"IET",
+	"IST",
+	"Iran",
+	"JST",
+	"MIT",
+	"NET",
+	"NST",
+	"PLT",
+	"PNT",
+	"PRC",
+	"PRT",
+	"PST",
+	"ROC",
+	"ROK",
+	"SST",
+	"VST",
+	"W-SU",
 }

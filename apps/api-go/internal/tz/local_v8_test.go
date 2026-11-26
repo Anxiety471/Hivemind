@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -144,6 +145,29 @@ func TestLocalMatchesV8TZForms(t *testing.T) {
 		{"Indianapolis", new("America/Indiana/Indianapolis"), false},
 		{"Lord Howe", new("Australia/Lord_Howe"), false},
 		{"Apia", new("Pacific/Apia"), false},
+		{"Cuba", new("Cuba"), false},
+		{"Iran", new("Iran"), false},
+		{"PRC", new("PRC"), false},
+		{"ROC", new("ROC"), false},
+		{"ROK", new("ROK"), false},
+		{"W-SU", new("W-SU"), false},
+		{"SystemV/AST4", new("SystemV/AST4"), false},
+		{"SystemV/AST4ADT", new("SystemV/AST4ADT"), false},
+		{"SystemV/CST6", new("SystemV/CST6"), false},
+		{"SystemV/CST6CDT", new("SystemV/CST6CDT"), false},
+		{"SystemV/EST5", new("SystemV/EST5"), false},
+		{"SystemV/EST5EDT", new("SystemV/EST5EDT"), false},
+		{"SystemV/HST10", new("SystemV/HST10"), false},
+		{"SystemV/MST7", new("SystemV/MST7"), false},
+		{"SystemV/MST7MDT", new("SystemV/MST7MDT"), false},
+		{"SystemV/PST8", new("SystemV/PST8"), false},
+		{"SystemV/PST8PDT", new("SystemV/PST8PDT"), false},
+		{"SystemV/YST9", new("SystemV/YST9"), false},
+		{"SystemV/YST9YDT", new("SystemV/YST9YDT"), false},
+		{"CUBA is not a zone", new("CUBA"), false},
+		{"EIRE is not a zone", new("EIRE"), false},
+		{"IRAN is not a zone", new("IRAN"), false},
+		{"ZULU is not a zone", new("ZULU"), false},
 	}
 	for _, form := range forms {
 		t.Run(form.label, func(t *testing.T) {
@@ -241,6 +265,98 @@ func output(command *exec.Cmd, environment []string) ([]byte, error) {
 		return append(out, stderr.Bytes()...), err
 	}
 	return out, nil
+}
+
+// TestLegacyDefaultUTCMatchesV8 re-measures, over every name in the zip, the
+// set where V8's default zone reports the canonical zone but reads UTC: one
+// node process per name, the default format built before any explicit one (the
+// order V8's own startup has), and the canonical zone's offsets taken
+// separately. The generated LegacyDefaultUTC must equal that set, so a new
+// release or ICU cannot change the quirk silently.
+func TestLegacyDefaultUTCMatchesV8(t *testing.T) {
+	node := provenanceNode(t)
+	names := tz.Names()
+	instants := []int64{
+		time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC).UnixMilli(),
+		time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC).UnixMilli(),
+		time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC).UnixMilli(),
+		time.Date(1970, 7, 15, 12, 0, 0, 0, time.UTC).UnixMilli(),
+	}
+	encoded, err := json.Marshal(map[string]any{"names": names, "instants": instants})
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := `import { readFileSync } from "node:fs";` +
+		`import { spawn } from "node:child_process";` +
+		`const payload = JSON.parse(readFileSync(0, "utf8"));` +
+		`const source = ` + "`" + `
+const instants = ${JSON.stringify(payload.instants)};
+const build = (options) => new Intl.DateTimeFormat("en-US", { hourCycle: "h23", year: "numeric",` +
+		` month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", ...options });
+const offsetAt = (format, at) => { const parts = {};` +
+		` for (const { type, value } of format.formatToParts(at)) parts[type] = value;` +
+		` const local = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day),` +
+		` Number(parts.hour) % 24, Number(parts.minute), Number(parts.second));` +
+		` return (local - at) / 1000; };
+const defaultFormat = build({});
+const zone = defaultFormat.resolvedOptions().timeZone ?? null;
+const offsets = instants.map((at) => offsetAt(defaultFormat, at));
+let canonical = null, own = null;
+try {
+  canonical = build({ timeZone: process.env.TZ }).resolvedOptions().timeZone;
+  const named = build({ timeZone: canonical });
+  own = instants.map((at) => offsetAt(named, at));
+} catch {}
+process.stdout.write(JSON.stringify({ zone, offsets, canonical, own }));
+` + "`" + `;` +
+		`const runOne = (name) => new Promise((resolve) => {` +
+		` const child = spawn(process.execPath, ["-e", source], {` +
+		`  env: { ...process.env, TZ: name }, stdio: ["ignore", "pipe", "ignore"] });` +
+		` let out = ""; child.stdout.on("data", (chunk) => { out += chunk; });` +
+		` child.on("close", () => { try { resolve([name, JSON.parse(out)]); } catch { resolve([name, null]); } });` +
+		`});` +
+		`const results = []; let next = 0;` +
+		`await Promise.all(Array.from({ length: 12 }, async () => {` +
+		` while (next < payload.names.length) { const name = payload.names[next++]; results.push(await runOne(name)); }` +
+		`}));` +
+		`const legacy = [], failed = [];` +
+		`for (const [name, data] of results) {` +
+		` if (!data) { failed.push([name, "no output"]); continue; }` +
+		` if (!data.canonical || !data.own) continue;` +
+		` if (data.zone !== data.canonical) continue;` +
+		` if (!data.offsets.every((offset) => offset === 0)) continue;` +
+		` if (!data.own.some((offset) => offset !== 0)) continue;` +
+		` legacy.push(name);` +
+		`}` +
+		`legacy.sort();` +
+		`process.stdout.write(JSON.stringify({ legacy, measured: results.length, failed }));`
+	command := exec.Command(node, "-e", script)
+	command.Env = withoutTZ()
+	command.Stdin = bytes.NewReader(encoded)
+	out, err := command.Output()
+	if err != nil {
+		t.Fatalf("run %s: %v", node, err)
+	}
+	var result struct {
+		Legacy   []string `json:"legacy"`
+		Measured int      `json:"measured"`
+		Failed   [][2]any `json:"failed"`
+	}
+	if err := json.Unmarshal(out, &result); err != nil {
+		t.Fatalf("parse %s output: %v", node, err)
+	}
+	if len(result.Failed) > 0 {
+		t.Fatalf("%s measured no default zone for %d name(s): %v", node, len(result.Failed), result.Failed)
+	}
+	if result.Measured != len(names) {
+		t.Fatalf("%s measured %d names, the zip carries %d", node, result.Measured, len(names))
+	}
+	generated := append([]string(nil), tz.LegacyDefaultUTC...)
+	sort.Strings(generated)
+	if strings.Join(result.Legacy, " ") != strings.Join(generated, " ") {
+		t.Errorf("V8 reads UTC for its default zone on %v; LegacyDefaultUTC is %v: regenerate with go generate ./internal/tz", result.Legacy, generated)
+	}
+	t.Logf("%d of %d zip names read UTC in V8's default zone and resolve in Intl", len(result.Legacy), len(names))
 }
 
 // TestLocalPathFormDropsDST records the one V8 TZ form tz.Local deliberately

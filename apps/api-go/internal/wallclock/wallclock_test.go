@@ -33,6 +33,27 @@ func TestZoneOrUTC(t *testing.T) {
 		{"ACT", 9*3600 + 30*60, 9*3600 + 30*60},
 		{"US/Pacific-New", -7 * 3600, -8 * 3600},
 		{"Canada/East-Saskatchewan", -6 * 3600, -6 * 3600},
+		// The SystemV ids ICU implements itself: synthesized from ICU's
+		// offsets, so the gateway computes the same boundaries as Intl.
+		{"SystemV/AST4", -4 * 3600, -4 * 3600},
+		{"SystemV/AST4ADT", -3 * 3600, -4 * 3600},
+		{"systemv/ast4adt", -3 * 3600, -4 * 3600},
+		{"SystemV/CST6", -6 * 3600, -6 * 3600},
+		{"SystemV/CST6CDT", -5 * 3600, -6 * 3600},
+		{"SystemV/EST5", -5 * 3600, -5 * 3600},
+		{"SystemV/EST5EDT", -4 * 3600, -5 * 3600},
+		{"SystemV/HST10", -10 * 3600, -10 * 3600},
+		{"SystemV/MST7", -7 * 3600, -7 * 3600},
+		{"SystemV/MST7MDT", -6 * 3600, -7 * 3600},
+		{"SystemV/PST8", -8 * 3600, -8 * 3600},
+		{"SystemV/PST8PDT", -7 * 3600, -8 * 3600},
+		{"SystemV/YST9", -9 * 3600, -9 * 3600},
+		{"SystemV/YST9YDT", -8 * 3600, -9 * 3600},
+		// The legacy links Intl resolves normally (only V8's default zone
+		// reads them as UTC).
+		{"Cuba", -4 * 3600, -5 * 3600},
+		{"Iran", 3*3600 + 30*60, 3*3600 + 30*60},
+		{"PRC", 8 * 3600, 8 * 3600},
 		// Intl rejects these, so validTimezoneOrUtc reads them as UTC.
 		{"", 0, 0},
 		{"Local", 0, 0},
