@@ -15,6 +15,10 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 )
 
+// incomingCallPoll is INCOMING_CALL_POLL_MS (event-stream.ts:11): without a fanout each wake
+// re-reads every ringing request, so the stream polls gently instead.
+const incomingCallPoll = 3 * time.Second
+
 // incomingCall is the CallRequestBlock slice ringingCall returns.
 type incomingCall struct {
 	CallID    string `json:"callId"`
@@ -35,30 +39,31 @@ type incomingBotCall struct {
 
 // SubscribeCalls is notifications.subscribeCalls (apps/api/src/routes/account.ts:448-465): the
 // signed-in owner's ringing calls, re-read on every signal and after a quiet spell. Calls are off
-// unless the deployment opted in, and without a fanout the TypeScript handler answers NOT_FOUND.
+// unless the deployment opted in. Without a fanout the stream still works: TypeScript's
+// followIncomingCalls is always defined and falls back to polling every INCOMING_CALL_POLL_MS
+// (event-stream.ts:158-160).
 func SubscribeCalls(ctx context.Context, database *db.DB, deployment shared.Deployment, actor db.Actor, _ orpc.Input) (*local.Follow, *orpc.Error) {
-	realtime := deployment.Realtime
-	if !deployment.PhoneCallsEnabled || realtime == nil {
+	if !deployment.PhoneCallsEnabled {
+		// The handler throws at its first pull: 200, then one NOT_FOUND event.
 		return local.Failed(orpc.NotFound("Not Found")), nil
+	}
+	realtime := deployment.Realtime
+	poll := catchUp
+	if realtime == nil {
+		poll = incomingCallPoll
 	}
 	r := New(ctx)
 	r.Go(func(ctx context.Context) {
 		l := newLatch()
-		signals, unsubscribe := realtime.Subscribe("incoming-calls:" + actor.UserID)
-		defer unsubscribe()
-		r.Go(func(ctx context.Context) {
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-signals:
-					l.notify()
-				}
-			}
-		})
+		if realtime != nil {
+			defer realtime.SubscribeFunc("incoming-calls:"+actor.UserID, func(string) { l.notify() })()
+		}
 		send := func() bool {
 			calls, err := loadUserIncomingCalls(ctx, database, deployment.Content, actor.UserID)
 			if err != nil {
+				// The handler awaits the read inside the generator: a failure ends the stream with
+				// one error event.
+				r.Fail(shared.Failure(err))
 				return false
 			}
 			frame, ok := Encode(callsFrame{
@@ -75,7 +80,7 @@ func SubscribeCalls(ctx context.Context, database *db.DB, deployment shared.Depl
 		for {
 			// A quiet spell re-reads too (PUSH_CATCH_UP_MS), so an expired request disappears
 			// without a publisher.
-			timer := time.NewTimer(catchUp)
+			timer := time.NewTimer(poll)
 			select {
 			case <-ctx.Done():
 				timer.Stop()
@@ -95,7 +100,7 @@ func SubscribeCalls(ctx context.Context, database *db.DB, deployment shared.Depl
 		}
 	})
 	frames, stop := r.Frames()
-	return &local.Follow{Signals: frames, Stop: stop, Heartbeat: HeartbeatFrame}, nil
+	return &local.Follow{Signals: frames, Stop: stop, Heartbeat: HeartbeatFrame, Ending: r.Ending}, nil
 }
 
 // callsFrame is the router's `{type, payload}` frame in its declared order: JSON.stringify writes

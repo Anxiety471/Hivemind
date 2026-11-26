@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -220,6 +221,15 @@ func drainInitial(t *testing.T, frames <-chan sseFrame, count int) []map[string]
 		out = append(out, frame)
 	}
 	return out
+}
+
+// frameTypesInOrder is frameTypes without the sort: the arrival order is part of what is asserted.
+func frameTypesInOrder(frames []map[string]any) []string {
+	types := make([]string, len(frames))
+	for index, frame := range frames {
+		types[index], _ = frame["type"].(string)
+	}
+	return types
 }
 
 func frameTypes(frames []map[string]any) []string {
@@ -497,10 +507,25 @@ func TestNotificationsSubscribeSendsInitialSignalsAndLiveFrames(t *testing.T) {
 	waitForListener(t, database)
 
 	_, frames := openStreamBody(t, url, cookie, s.Space1, `{"json":{}}`)
-	initial := drainInitial(t, frames, 6)
-	want := []string{"computerUpdates", "files", "organizations", "roster", "routines", "runs"}
-	if got := frameTypes(initial); strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Fatalf("initial types = %v, want %v", got, want)
+	initial := frameTypesInOrder(drainInitial(t, frames, 6))
+	// mergeStreams races the four sources, so where the roster and organization frames fall among
+	// the Space kinds is not fixed; each source's own order is. TypeScript's followSpaceChanges
+	// starts with a Set built from SpaceChangeKind.options, so the kinds arrive in that order —
+	// sorting the six would hide a wrong order, and did.
+	spaceKinds := make([]string, 0, 4)
+	for _, kind := range initial {
+		if slices.Contains([]string{"computerUpdates", "runs", "routines", "files"}, kind) {
+			spaceKinds = append(spaceKinds, kind)
+		}
+	}
+	if want := []string{"computerUpdates", "runs", "routines", "files"}; !slices.Equal(spaceKinds, want) {
+		t.Fatalf("space kinds = %v, want %v (all six: %v)", spaceKinds, want, initial)
+	}
+	if slices.Contains(initial, "") {
+		t.Fatalf("a frame without a type: %v", initial)
+	}
+	if !slices.Contains(initial, "roster") || !slices.Contains(initial, "organizations") {
+		t.Fatalf("missing roster/organizations in %v", initial)
 	}
 
 	// A chat alert for this Space arrives; one for another Space does not.
@@ -557,21 +582,33 @@ func TestNotificationsSubscribeSendsInitialSignalsAndLiveFrames(t *testing.T) {
 	}
 }
 
-// TestNotificationsSubscribeWithoutRealtimeIsSilent: the handler throws at its first pull, so the
-// client sees a 200 whose stream ends with no frames.
-func TestNotificationsSubscribeWithoutRealtimeIsSilent(t *testing.T) {
+// TestNotificationsSubscribeWithoutRealtimeStreams: without a fanout the account streams still
+// open and stay quiet with heartbeats — TypeScript's followChatAlerts is always defined
+// (events.ts:269) so the handler's NOT_FOUND is unreachable — and subscribeCalls polls every
+// INCOMING_CALL_POLL_MS instead (event-stream.ts:158-160).
+func TestNotificationsSubscribeWithoutRealtimeStreams(t *testing.T) {
 	database := openTestDB(t)
 	s := seed(t, database)
-	server := testServerDeployed(t, database, local.Config{Stream: streamTiming()}, nil, shared.Deployment{})
+	server := testServerDeployed(t, database, local.Config{Stream: streamTiming()}, nil, shared.Deployment{PhoneCallsEnabled: true})
 	cookie := "better-auth.session_token=" + signedCookie(testSecret, s.SessionToken)
 	for _, procedure := range []string{"notifications/subscribe", "notifications/subscribeCalls"} {
 		response, frames := openStreamBody(t, server.URL+"/rpc/"+procedure, cookie, s.Space1, `{"json":{}}`)
 		if response.StatusCode != 200 {
 			t.Fatalf("%s without a fanout: %d", procedure, response.StatusCode)
 		}
-		frame, ok := nextFrameWithin(t, frames, time.Second)
-		if !ok || frame.event != "error" || !strings.Contains(frame.data, `"code":"NOT_FOUND"`) {
+		// The opening comment, then nothing: no error event, and the stream is still open.
+		if frame, ok := nextFrameWithin(t, frames, 600*time.Millisecond); ok && frame.event == "error" {
 			t.Fatalf("%s without a fanout sent %+v", procedure, frame)
+		}
+		select {
+		case frame, ok := <-frames:
+			if ok && frame.event == "error" {
+				t.Fatalf("%s without a fanout sent %+v", procedure, frame)
+			}
+			if !ok {
+				t.Fatalf("%s without a fanout closed instead of streaming", procedure)
+			}
+		case <-time.After(300 * time.Millisecond):
 		}
 	}
 }

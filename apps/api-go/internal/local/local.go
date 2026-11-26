@@ -71,6 +71,19 @@ type Follow struct {
 	// Failure, when set, is the error the source would raise at its first pull: the stream writes
 	// the opening comment, then that error as an `error` event, and ends.
 	Failure *orpc.Error
+	// Ending reportshow a stream whose Signals channel has closed finishes. Nil is a normal end
+	// (oRPC's controller.close(): the body simply stops); a Failure is one last `error` event
+	// before that close; Abort drops the connection with no terminating chunk, the way
+	// controller.error(err) does when a frame cannot even be written.
+	Ending func() Ending
+}
+
+// Ending is how a closed stream finishes on the wire.
+type Ending struct {
+	// Failure, when set, goes out as one `error` event before the body ends.
+	Failure *orpc.Error
+	// Abort closes the connection without the terminating chunk.
+	Abort bool
 }
 
 // Failed is a stream whose source raises before its first frame. oRPC discovers such a failure at
@@ -80,13 +93,6 @@ func Failed(failure *orpc.Error) *Follow {
 	signals := make(chan string)
 	close(signals)
 	return &Follow{Signals: signals, Stop: func() {}, Failure: failure}
-}
-
-// Silent is a stream that ends at once, sending nothing after the opening comment.
-func Silent() *Follow {
-	signals := make(chan string)
-	close(signals)
-	return &Follow{Signals: signals, Stop: func() {}}
 }
 
 // StreamTiming sets how a stream paces itself; zero fields take the defaults the TypeScript

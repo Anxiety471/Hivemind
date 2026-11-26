@@ -25,6 +25,9 @@ const (
 	maxQueuedAlerts = 20
 	// catchUp is PUSH_CATCH_UP_MS (event-stream.ts): a missed publish is covered by a re-read.
 	catchUp = 30 * time.Second
+	// signalFailureHold is SIGNAL_FAILURE_HOLD_MS (account.ts:80): after a source fails the
+	// stream keeps its other frames briefly, then ends so the app reconnects and re-reads.
+	signalFailureHold = 30 * time.Second
 )
 
 // spaceChangeKinds is SpaceChangeKind.options, in declaration order.
@@ -56,20 +59,24 @@ var quietThreadEvents = map[string]bool{
 
 // Subscribe is notifications.subscribe (apps/api/src/routes/account.ts:383-446): run alerts for
 // the member's chats in this Space, plus roster, Space, organization and heartbeat frames.
-// Without a realtime fanout the TypeScript handler answers NOT_FOUND.
+//
+// A deployment without a realtime fanout still streams: TypeScript's followChatAlerts is always
+// defined (events.ts:269), so the handler's NOT_FOUND is unreachable and the stream opens, stays
+// empty and heartbeats. The roster, Space and organization sources need the fanout and simply
+// take part only when there is one (events.ts:275-280).
 func Subscribe(ctx context.Context, database *db.DB, deployment shared.Deployment, actor db.Actor, _ orpc.Input) (*local.Follow, *orpc.Error) {
 	realtime := deployment.Realtime
-	if realtime == nil {
-		// The handler throws at its first pull, so the client sees 200 and an error event.
-		return local.Failed(orpc.NotFound("Not Found")), nil
-	}
 	r := New(ctx)
-	r.Go(func(ctx context.Context) { followChatAlerts(ctx, r, realtime, actor) })
-	r.Go(func(ctx context.Context) { followRosterChanges(ctx, r, realtime, database, actor.UserID) })
-	r.Go(func(ctx context.Context) { followSpaceChanges(ctx, r, realtime, actor.SpaceID) })
-	r.Go(func(ctx context.Context) { followOrganizationChanges(ctx, r, realtime, actor.UserID) })
+	if realtime == nil {
+		r.Go(func(ctx context.Context) { <-ctx.Done() })
+	} else {
+		r.Go(func(ctx context.Context) { followChatAlerts(ctx, r, realtime, actor) })
+		r.Go(func(ctx context.Context) { followRosterChanges(ctx, r, realtime, database, actor.UserID) })
+		r.Go(func(ctx context.Context) { followSpaceChanges(ctx, r, realtime, actor.SpaceID) })
+		r.Go(func(ctx context.Context) { followOrganizationChanges(ctx, r, realtime, actor.UserID) })
+	}
 	frames, stop := r.Frames()
-	return &local.Follow{Signals: frames, Stop: stop, Heartbeat: HeartbeatFrame}, nil
+	return &local.Follow{Signals: frames, Stop: stop, Heartbeat: HeartbeatFrame, Ending: r.Ending}, nil
 }
 
 func typeFrame(kind string) string { return `{"type":` + strconv.Quote(kind) + `}` }
@@ -138,34 +145,27 @@ type alertFrame struct {
 // The queue fills from the fanout on its own goroutine so a burst is kept (newest twenty) while a
 // frame is being written, exactly like the TypeScript queue.
 func followChatAlerts(ctx context.Context, r *Runner, realtime fanout, actor db.Actor) {
-	signals, unsubscribe := realtime.Subscribe("chat-alerts:" + actor.UserID)
-	defer unsubscribe()
 	queue := make([]chatAlert, 0, maxQueuedAlerts)
 	wake := make(chan struct{}, 1)
 	var mu sync.Mutex
-	r.Go(func(ctx context.Context) {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case payload := <-signals:
-				alert, ok := parseChatAlert(payload, actor.SpaceID)
-				if !ok {
-					continue
-				}
-				mu.Lock()
-				if len(queue) == maxQueuedAlerts {
-					queue = queue[1:]
-				}
-				queue = append(queue, alert)
-				mu.Unlock()
-				select {
-				case wake <- struct{}{}:
-				default:
-				}
-			}
+	// createChatAlerts subscribes with a callback: the queue fills as the signal arrives, so a
+	// burst is kept (newest twenty) while a frame is being written, exactly like TypeScript.
+	defer realtime.SubscribeFunc("chat-alerts:"+actor.UserID, func(payload string) {
+		alert, ok := parseChatAlert(payload, actor.SpaceID)
+		if !ok {
+			return
 		}
-	})
+		mu.Lock()
+		if len(queue) == maxQueuedAlerts {
+			queue = queue[1:]
+		}
+		queue = append(queue, alert)
+		mu.Unlock()
+		select {
+		case wake <- struct{}{}:
+		default:
+		}
+	})()
 	for {
 		for {
 			mu.Lock()
@@ -191,51 +191,64 @@ func followChatAlerts(ctx context.Context, r *Runner, realtime fanout, actor db.
 
 // followSpaceChanges is followSpaceChanges (packages/db/src/spaces/space-changes.ts:41-79): every
 // kind once when following starts, then each kind that may have changed, in arrival order.
+//
+// TypeScript adds each arriving kind to a Set in the subscribe callback, so a mixed burst can
+// never lose one: the fanout's channel would drop the newest when thirty-two signals pile up
+// behind a slow client. The callback appends to the same set-and-order pair under the fanout's
+// own lock, which is the same guarantee.
 func followSpaceChanges(ctx context.Context, r *Runner, realtime fanout, spaceID string) {
-	changes, unsubscribe := realtime.Subscribe("space-changes:" + spaceID)
-	defer unsubscribe()
-	// Workers from the previous release announce computer updates here until they drain.
-	legacy, unsubscribeLegacy := realtime.Subscribe("computer-updates:" + spaceID)
-	defer unsubscribeLegacy()
+	var mu sync.Mutex
 	pending := append([]string{}, spaceChangeKinds...)
 	seen := map[string]bool{}
 	for _, kind := range pending {
 		seen[kind] = true
 	}
+	wake := make(chan struct{}, 1)
 	add := func(kind string) {
-		if seen[kind] {
+		mu.Lock()
+		if !seen[kind] {
+			seen[kind] = true
+			pending = append(pending, kind)
+		}
+		mu.Unlock()
+		select {
+		case wake <- struct{}{}:
+		default:
+		}
+	}
+	unsubscribe := realtime.SubscribeFunc("space-changes:"+spaceID, func(payload string) {
+		// An empty payload is the fanout's catch-up after a reconnect: anything may have changed.
+		if payload == "" {
+			for _, kind := range spaceChangeKinds {
+				add(kind)
+			}
 			return
 		}
-		seen[kind] = true
-		pending = append(pending, kind)
-	}
+		for _, kind := range spaceChangeKinds {
+			if payload == kind {
+				add(kind)
+			}
+		}
+	})
+	defer unsubscribe()
+	// Workers from the previous release announce computer updates here until they drain.
+	defer realtime.SubscribeFunc("computer-updates:"+spaceID, func(string) { add("computerUpdates") })()
 	idle := time.NewTicker(idleWait)
 	defer idle.Stop()
 	for {
-		for _, kind := range pending {
+		mu.Lock()
+		ready := pending
+		pending, seen = nil, map[string]bool{}
+		mu.Unlock()
+		for _, kind := range ready {
 			if !r.Send(typeFrame(kind)) {
 				return
 			}
 		}
-		pending, seen = nil, map[string]bool{}
 		select {
 		case <-ctx.Done():
 			return
-		case payload := <-changes:
-			// An empty payload is the fanout's catch-up after a reconnect: anything may have changed.
-			if payload == "" {
-				for _, kind := range spaceChangeKinds {
-					add(kind)
-				}
-				continue
-			}
-			for _, kind := range spaceChangeKinds {
-				if payload == kind {
-					add(kind)
-				}
-			}
-		case <-legacy:
-			add("computerUpdates")
+		case <-wake:
 		case <-idle.C:
 			// Like the TypeScript idle wait: nothing to send, the loop simply waits again.
 		}
@@ -247,18 +260,7 @@ func followSpaceChanges(ctx context.Context, r *Runner, realtime fanout, spaceID
 // per burst of signals.
 func followOrganizationChanges(ctx context.Context, r *Runner, realtime fanout, userID string) {
 	l := newLatch()
-	signals, unsubscribe := realtime.Subscribe("organization-changes:" + userID)
-	defer unsubscribe()
-	r.Go(func(ctx context.Context) {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-signals:
-				l.notify()
-			}
-		}
-	})
+	defer realtime.SubscribeFunc("organization-changes:"+userID, func(string) { l.notify() })()
 	seen := l.snapshot()
 	if !r.Send(typeFrame("organizations")) {
 		return
@@ -364,36 +366,28 @@ func followRosterChanges(ctx context.Context, r *Runner, realtime fanout, databa
 			delete(subscriptions, topic)
 			unsubscribe()
 		}
+		// One callback per topic and no goroutine of its own: TypeScript registers exactly these
+		// subscriptions, and a member with many chats and several tabs would otherwise pay a
+		// goroutine and a channel for each.
 		for topic := range topics {
 			if _, ok := subscriptions[topic]; ok {
 				continue
 			}
-			signals, unsubscribe := realtime.Subscribe(topic)
-			topicCtx, cancelTopic := context.WithCancel(ctx)
-			subscriptions[topic] = func() {
-				cancelTopic()
-				unsubscribe()
-			}
-			r.Go(func(ctx context.Context) {
-				for {
-					select {
-					case <-topicCtx.Done():
-						return
-					case <-ctx.Done():
-						return
-					case payload := <-signals:
-						if threadEventChangesRoster(signalledType(payload)) {
-							l.notify()
-						}
-					}
+			subscriptions[topic] = realtime.SubscribeFunc(topic, func(payload string) {
+				if threadEventChangesRoster(signalledType(payload)) {
+					l.notify()
 				}
 			})
 		}
 		return nil
 	}
-	// The first scope is read before any frame; a failure ends the stream, as the TypeScript
-	// generator's first `await watch()` does.
-	if watch(ctx) != nil {
+	// The first scope is read before any frame; TypeScript's first `await watch()` throws there
+	// and account.ts holds SIGNAL_FAILURE_HOLD_MS before rethrowing, so the client has a moment
+	// of alerts before the stream ends and reconnects.
+	if err := watch(ctx); err != nil {
+		if sleep(ctx, signalFailureHold) {
+			r.Fail(shared.Failure(err))
+		}
 		return
 	}
 	seen := l.snapshot()
@@ -458,5 +452,6 @@ func sleep(ctx context.Context, d time.Duration) bool {
 
 // fanout is the part of events.Fanout these sources use, so a test can hand in its own.
 type fanout interface {
-	Subscribe(topic string) (<-chan string, func())
+	// SubscribeFunc follows a topic with a callback: every signal, in order, none dropped.
+	SubscribeFunc(topic string, onSignal func(string)) func()
 }

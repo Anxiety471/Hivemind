@@ -13,6 +13,7 @@ import (
 	"sync"
 
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/local"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
 )
 
@@ -39,10 +40,12 @@ func Encode(value any) (string, bool) {
 // how mergeStreams keeps one read in flight per source, so a burst cannot reorder a source's own
 // frames or run ahead of a slow client.
 type Runner struct {
-	ctx    context.Context
-	cancel context.CancelFunc
-	out    chan string
-	wg     sync.WaitGroup
+	ctx     context.Context
+	cancel  context.CancelFunc
+	out     chan string
+	wg      sync.WaitGroup
+	end     local.Ending
+	endOnce sync.Once
 }
 
 // New starts a stream's sources under ctx.
@@ -61,6 +64,23 @@ func (r *Runner) Go(source func(ctx context.Context)) {
 	}()
 }
 
+// Fail ends the stream with one last `error` event: the source raises, and the rest stop with it,
+// as one failing source ends mergeStreams and the account wrappers rethrow after their hold.
+func (r *Runner) Fail(failure *orpc.Error) {
+	r.endOnce.Do(func() { r.end = local.Ending{Failure: failure} })
+	r.cancel()
+}
+
+// Abort ends the stream by dropping the connection: oRPC's controller.error path.
+func (r *Runner) Abort() {
+	r.endOnce.Do(func() { r.end = local.Ending{Abort: true} })
+	r.cancel()
+}
+
+// Ending is what local.Follow reports once the frames channel has closed. It is written before
+// the source returns, so the close that follows every source's return publishes it.
+func (r *Runner) Ending() local.Ending { return r.end }
+
 // Send hands one frame to the stream. False means the stream is over.
 func (r *Runner) Send(frame string) bool {
 	select {
@@ -72,14 +92,22 @@ func (r *Runner) Send(frame string) bool {
 }
 
 // Frames is what local.Stream.Follow returns: the frames every source produces, and the stop
-// that ends them. stop waits for the sources, so their fanout subscriptions are gone before the
-// stream is reported closed (no goroutine or LISTEN subscriber survives a dropped stream).
+// that ends them. The channel closes once every source has returned — the server ends the
+// response then instead of heartbeating a stream whose source is gone — and stop waits for them,
+// so their fanout subscriptions are gone before the stream is reported closed (no goroutine or
+// LISTEN subscriber survives a dropped stream). Go must be called before Frames.
 func (r *Runner) Frames() (<-chan string, func()) {
 	once := sync.Once{}
+	closed := make(chan struct{})
+	go func() {
+		r.wg.Wait()
+		close(r.out)
+		close(closed)
+	}()
 	return r.out, func() {
 		once.Do(func() {
 			r.cancel()
-			r.wg.Wait()
+			<-closed
 		})
 	}
 }

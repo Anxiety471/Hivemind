@@ -104,3 +104,35 @@ func TestEventFrameChecksThinkingAndActivityPayloads(t *testing.T) {
 		t.Fatal("a non-boolean thinking marker was sent")
 	}
 }
+
+// TestPayloadMatchesTypeRejectsAnEmptyRunID: ProductEventSchema's superRefine tests !event.runId,
+// so an empty string fails it like a missing run — a frame Go must not send.
+func TestPayloadMatchesTypeRejectsAnEmptyRunID(t *testing.T) {
+	payload, err := validate.DecodeAny([]byte(`{"segment":0,"durationMs":5,"lines":["x"]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	object, ok := payload.(*validate.Object)
+	if !ok {
+		t.Fatalf("payload = %T", payload)
+	}
+	empty := ""
+	if payloadMatchesType("thread.thinking", &empty, object) {
+		t.Fatal("an empty runId passed the thinking schema")
+	}
+	run := "run-1"
+	if !payloadMatchesType("thread.thinking", &run, object) {
+		t.Fatal("a valid thinking frame was rejected")
+	}
+	activity, err := validate.DecodeAny([]byte(`{"activity":{"thinking":true}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	marked, ok := activity.(*validate.Object)
+	if !ok {
+		t.Fatalf("activity = %T", activity)
+	}
+	if payloadMatchesType("thread.meta", &empty, marked) {
+		t.Fatal("an empty runId passed the activity marker")
+	}
+}

@@ -131,13 +131,18 @@ func Subscribe(ctx context.Context, database *db.DB, deployment shared.Deploymen
 		return err
 	})
 	if err != nil {
-		// In TypeScript the target lookup runs inside the event generator: a thread that is not
-		// the caller's is discovered at the first pull, after the 200 is on the wire, so the client
-		// sees an empty stream rather than a 404.
+		// In TypeScript the target lookup runs inside the event generator, so every failure there
+		// is discovered at the first pull — after the 200 is on the wire — and reaches the client
+		// as one `error` event: a refused target as INTERNAL_SERVER_ERROR, a database outage as
+		// the code the error mapping gives it. Only a client that is already gone is answered
+		// directly.
+		if ctx.Err() != nil {
+			return nil, shared.Failure(err)
+		}
 		if errors.Is(err, errIsolation) {
 			return local.Failed(orpc.Internal()), nil
 		}
-		return nil, shared.Failure(err)
+		return local.Failed(shared.Failure(err)), nil
 	}
 	// A bot thread's id is not the bot. Groups have no single bot, so the thread id stands in.
 	botID := in.BotID
@@ -164,7 +169,10 @@ func HelperSubscribe(ctx context.Context, database *db.DB, deployment shared.Dep
 		return local.Failed(orpc.Internal()), nil
 	}
 	if err != nil {
-		return nil, shared.Failure(err)
+		if ctx.Err() != nil {
+			return nil, shared.Failure(err)
+		}
+		return local.Failed(shared.Failure(err)), nil
 	}
 	return follow(ctx, database, deployment, actor, threadID, cursor, botID, actor.SpaceID, false)
 }
@@ -187,7 +195,9 @@ func follow(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 			for {
 				events, err := readEvents(ctx, database, deployment, actor, threadID, seq)
 				if err != nil {
-					// The TypeScript generator throws out of the stream: nothing more is sent.
+					// A thrown read ends the stream with one error event (measured: a payload no
+					// key can open answers INTERNAL_SERVER_ERROR and the body closes).
+					r.Fail(shared.Failure(err))
 					return
 				}
 				for _, event := range events {
@@ -195,6 +205,7 @@ func follow(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 					if filter {
 						forward, err := forwardEvent(ctx, database, actor, cache, event)
 						if err != nil {
+							r.Fail(orpc.Internal())
 							return
 						}
 						if !forward {
@@ -202,7 +213,13 @@ func follow(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 						}
 					}
 					frame, ok := eventFrame(event)
-					if !ok || !r.Send(frame) {
+					if !ok {
+						// The output schema refused the frame: oRPC answers one
+						// EVENT_ITERATOR_VALIDATION_FAILED event and closes.
+						r.Fail(orpc.EventIteratorValidationFailed())
+						return
+					}
+					if !r.Send(frame) {
 						return
 					}
 				}
@@ -236,7 +253,7 @@ func follow(ctx context.Context, database *db.DB, deployment shared.Deployment, 
 		}
 		return json.RawMessage(frame)
 	}
-	return &local.Follow{Signals: frames, Stop: stop, Heartbeat: heartbeat}, nil
+	return &local.Follow{Signals: frames, Stop: stop, Heartbeat: heartbeat, Ending: r.Ending}, nil
 }
 
 // storedEvent is one events row as the stream reads it.
@@ -303,40 +320,31 @@ func readEvents(ctx context.Context, database *db.DB, deployment shared.Deployme
 // that integer-like keys come first); a map would lose it. Sealed values are decrypted with the
 // event's own key and location and parsed the same way, so a client sees what TypeScript sees.
 func openPayload(ctx context.Context, ring *contentcrypto.KeyRing, event storedEvent, value any) (any, error) {
-	if object, ok := value.(*validate.Object); ok {
-		// A sealed value is {"<plain scalars>…","$sealed":"<ciphertext>"}: openJson keeps only what
-		// the ciphertext holds, whatever the plain keys beside it say (content-crypto.ts:121).
-		if sealed, ok := object.Values[contentcrypto.SealedField].(string); ok && ring != nil &&
-			contentcrypto.IsCiphertext(sealed) {
-			return openSealed(ctx, ring, event, sealed)
+	one := func(item any) (any, error) {
+		// openJson opens a sealed value — {"<plain scalars>…","$sealed":"<ciphertext>"} — and
+		// nothing else: a nested string that looks like a ciphertext, a bare one, or a nested
+		// sealed object is data to the client (content-crypto.ts:121-125).
+		object, ok := item.(*validate.Object)
+		if !ok || ring == nil {
+			return item, nil
 		}
+		sealed, ok := object.Values[contentcrypto.SealedField].(string)
+		if !ok || !contentcrypto.IsCiphertext(sealed) {
+			return item, nil
+		}
+		return openSealed(ctx, ring, event, sealed)
 	}
-	switch typed := value.(type) {
-	case *validate.Object:
-		for _, key := range typed.Keys {
-			opened, err := openPayload(ctx, ring, event, typed.Values[key])
+	if list, ok := value.([]any); ok {
+		for index, item := range list {
+			opened, err := one(item)
 			if err != nil {
 				return nil, err
 			}
-			typed.Values[key] = opened
+			list[index] = opened
 		}
-		return typed, nil
-	case []any:
-		for index, item := range typed {
-			opened, err := openPayload(ctx, ring, event, item)
-			if err != nil {
-				return nil, err
-			}
-			typed[index] = opened
-		}
-		return typed, nil
-	case string:
-		if ring == nil || !contentcrypto.IsCiphertext(typed) {
-			return typed, nil
-		}
-		return openSealed(ctx, ring, event, typed)
+		return list, nil
 	}
-	return value, nil
+	return one(value)
 }
 
 // openSealed opens one ciphertext bound to this event's payload and parses its plaintext the way
@@ -408,8 +416,9 @@ type productEvent struct {
 // payloadMatchesType is ProductEventSchema's superRefine: run reasoning and the activity marker
 // are the two payloads a client applies blind, so a malformed one fails the frame.
 func payloadMatchesType(eventType string, runID *string, payload *validate.Object) bool {
+	// Both refines test `!event.runId`, so an empty string fails them like a missing one.
 	if eventType == "thread.thinking" {
-		if runID == nil {
+		if runID == nil || *runID == "" {
 			return false
 		}
 		if len(payload.Keys) != 3 {
@@ -440,7 +449,7 @@ func payloadMatchesType(eventType string, runID *string, payload *validate.Objec
 	if !marked {
 		return true
 	}
-	if runID == nil || len(payload.Keys) != 1 || len(activity.Keys) != 1 {
+	if runID == nil || *runID == "" || len(payload.Keys) != 1 || len(activity.Keys) != 1 {
 		return false
 	}
 	_, ok = thinking.(bool)

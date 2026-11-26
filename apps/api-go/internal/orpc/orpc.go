@@ -56,6 +56,14 @@ func NotFound(message string) *Error  { return New("NOT_FOUND", 404, message) }
 func Conflict(message string) *Error  { return New("CONFLICT", 409, message) }
 func TooLarge(message string) *Error  { return New("PAYLOAD_TOO_LARGE", 413, message) }
 func Unavailable() *Error             { return New("SERVICE_UNAVAILABLE", 503, "Service Unavailable") }
+
+// EventIteratorValidationFailed is the error oRPC raises when a yielded frame fails the
+// procedure's output schema (@orpc/contract's event iterator validator): the stream writes it as
+// its last `error` event and closes.
+func EventIteratorValidationFailed() *Error {
+	return New("EVENT_ITERATOR_VALIDATION_FAILED", 500, "Event iterator validation failed")
+}
+
 func Internal() *Error {
 	return New("INTERNAL_SERVER_ERROR", 500, "Internal server error")
 }
@@ -118,15 +126,15 @@ func WriteJSON(w http.ResponseWriter, status int, value any) {
 // error event. The client requires exactly these keys and rejects extra ones. A failure that
 // cannot be encoded is answered as an internal error.
 func ErrorBody(failure *Error) ([]byte, *Error) {
-	envelope := map[string]any{
-		"defined": false,
-		"code":    failure.Code,
-		"status":  failure.Status,
-		"message": failure.Message,
-	}
-	if failure.Data != nil {
-		envelope["data"] = failure.Data
-	}
+	// ORPCError.toJSON writes its keys in this order, and everyone's bytes are compared as they
+	// are sent: a map would sort them (code, defined, message, status) and differ.
+	envelope := struct {
+		Defined bool   `json:"defined"`
+		Code    string `json:"code"`
+		Status  int    `json:"status"`
+		Message string `json:"message"`
+		Data    any    `json:"data,omitempty"`
+	}{false, failure.Code, failure.Status, failure.Message, failure.Data}
 	body, err := Marshal(map[string]any{"json": envelope})
 	if err != nil {
 		return []byte(`{"json":{"defined":false,"code":"INTERNAL_SERVER_ERROR","status":500,"message":"Internal server error"}}`), Internal()
