@@ -3,7 +3,6 @@
 // Zone data: IANA tzdata 2026e (tzdata2026e.tar.gz sha256 b26882805f26aac59d5b222978e6580484b834ccdc98be89df2f05a6dc53a652,
 // tzcode2026e.tar.gz sha256 cc3d27ca2a0d8399504551b920970d80af83bfb9c216e8082a15491921935d54), compiled by that release's own zic with
 // -b fat, zipped reproducibly.
-// ICU-only ids installed as copies of their canonical zones: 27.
 // Host runtime: Node 24.22.3, ICU 78.3, tz 2026e.
 
 package tz
@@ -13,9 +12,9 @@ const (
 	Version = "2026e"
 	// ZoneinfoSHA256 is the digest of the embedded zip: TestNodeVersionProvenance
 	// fails if the two ever disagree.
-	ZoneinfoSHA256 = "434706843c9530fee620899f3ceb30153db5895d6b118883182627f584c471ed"
+	ZoneinfoSHA256 = "ae235c7e3b37371afd3827f8c303e8d0c66a97156cfa85de21b3224a9a636a15"
 	// ZoneCount is the number of names in zoneinfo.zip, aliases included.
-	ZoneCount = 625
+	ZoneCount = 629
 	// TarballSHA256 and TzcodeSHA256 pin the official releases.
 	TarballSHA256 = "b26882805f26aac59d5b222978e6580484b834ccdc98be89df2f05a6dc53a652"
 	TzcodeSHA256  = "cc3d27ca2a0d8399504551b920970d80af83bfb9c216e8082a15491921935d54"
@@ -23,3 +22,62 @@ const (
 	NodeVersion = "24.22.3"
 	ICUVersion  = "78.3"
 )
+
+// ICUOnlyAliasZones maps each zone id production Node's ICU accepts that IANA
+// tzdata 2026e does not carry to the zone it resolves to. zoneinfo.zip carries a
+// byte-identical copy of that zone under the id. genzones discovers the ids by
+// probing the release's names, the names of tzdata 2018g, and every two- to
+// four-letter id through the runtime, so this table is data, not a hand pin.
+var ICUOnlyAliasZones = map[string]string{
+	"ACT":                      "Australia/Darwin",
+	"AET":                      "Australia/Sydney",
+	"AGT":                      "America/Buenos_Aires",
+	"ART":                      "Africa/Cairo",
+	"AST":                      "America/Anchorage",
+	"BET":                      "America/Sao_Paulo",
+	"BST":                      "Asia/Dhaka",
+	"CAT":                      "Africa/Maputo",
+	"CNT":                      "America/St_Johns",
+	"CST":                      "America/Chicago",
+	"CTT":                      "Asia/Shanghai",
+	"CUBA":                     "America/Havana",
+	"Canada/East-Saskatchewan": "America/Regina",
+	"EAT":                      "Africa/Nairobi",
+	"ECT":                      "Europe/Paris",
+	"EIRE":                     "Europe/Dublin",
+	"IET":                      "America/Indianapolis",
+	"IRAN":                     "Asia/Tehran",
+	"IST":                      "Asia/Calcutta",
+	"JST":                      "Asia/Tokyo",
+	"MIT":                      "Pacific/Apia",
+	"NET":                      "Asia/Yerevan",
+	"NST":                      "Pacific/Auckland",
+	"PLT":                      "Asia/Karachi",
+	"PNT":                      "America/Phoenix",
+	"PRT":                      "America/Puerto_Rico",
+	"PST":                      "America/Los_Angeles",
+	"SST":                      "Pacific/Guadalcanal",
+	"US/Pacific-New":           "America/Los_Angeles",
+	"VST":                      "Asia/Saigon",
+	"ZULU":                     "UTC",
+}
+
+// ICUZonesWithoutIANAFile are ids production Node's ICU accepts as zones of its
+// own (resolvedOptions returns the id itself): ICU implements their POSIX-style
+// rules directly, and tzdata has no file to embed. tz.Load reads them as UTC;
+// they are not IANA names. Recorded so a regeneration makes any change visible.
+var ICUZonesWithoutIANAFile = []string{
+	"SystemV/AST4",
+	"SystemV/AST4ADT",
+	"SystemV/CST6",
+	"SystemV/CST6CDT",
+	"SystemV/EST5",
+	"SystemV/EST5EDT",
+	"SystemV/HST10",
+	"SystemV/MST7",
+	"SystemV/MST7MDT",
+	"SystemV/PST8",
+	"SystemV/PST8PDT",
+	"SystemV/YST9",
+	"SystemV/YST9YDT",
+}

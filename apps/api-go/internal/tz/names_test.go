@@ -9,21 +9,12 @@ import (
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/tz"
 )
 
-// icuAliases is the reviewer's enumeration of the zone ids production Node's
-// ICU accepts and IANA tzdata 2026e does not carry. genzones derives each one's
-// canonical zone from the runtime and verifies the offsets, then installs a copy
-// under the id; this table pins that result without needing node.
-var icuAliases = map[string]string{
-	"ACT": "Australia/Darwin", "AET": "Australia/Sydney", "AGT": "America/Buenos_Aires",
-	"ART": "Africa/Cairo", "AST": "America/Anchorage", "BET": "America/Sao_Paulo",
-	"BST": "Asia/Dhaka", "CAT": "Africa/Maputo", "CNT": "America/St_Johns",
-	"CST": "America/Chicago", "CTT": "Asia/Shanghai", "EAT": "Africa/Nairobi",
-	"ECT": "Europe/Paris", "IET": "America/Indianapolis", "IST": "Asia/Calcutta",
-	"JST": "Asia/Tokyo", "MIT": "Pacific/Apia", "NET": "Asia/Yerevan",
-	"NST": "Pacific/Auckland", "PLT": "Asia/Karachi", "PNT": "America/Phoenix",
-	"PRT": "America/Puerto_Rico", "PST": "America/Los_Angeles", "SST": "Pacific/Guadalcanal",
-	"VST": "Asia/Saigon", "US/Pacific-New": "America/Los_Angeles",
-	"Canada/East-Saskatchewan": "America/Regina",
+// knownICUOnlyAliases are a few ids the reviews measured, kept as a regression
+// guard: the full set is tz.ICUOnlyAliasZones, which genzones discovers by
+// probing the release's names, tzdata 2018g's names, and every two- to
+// four-letter id through production node.
+var knownICUOnlyAliases = []string{
+	"PST", "ACT", "US/Pacific-New", "Canada/East-Saskatchewan",
 }
 
 // TestICUOnlyAliasesMatchTheirCanonicalZone is the permanent form of P2-1: every
@@ -37,7 +28,15 @@ func TestICUOnlyAliasesMatchTheirCanonicalZone(t *testing.T) {
 		time.Date(2026, 12, 6, 12, 0, 0, 0, time.UTC),
 		time.Date(2030, 1, 15, 12, 0, 0, 0, time.UTC),
 	}
-	for alias, canonical := range icuAliases {
+	if len(tz.ICUOnlyAliasZones) == 0 {
+		t.Fatal("ICUOnlyAliasZones is empty: regenerate the embedded release with go generate ./internal/tz")
+	}
+	for _, alias := range knownICUOnlyAliases {
+		if _, ok := tz.ICUOnlyAliasZones[alias]; !ok {
+			t.Errorf("the discovered ICU-only ids lack %q", alias)
+		}
+	}
+	for alias, canonical := range tz.ICUOnlyAliasZones {
 		if !tz.Has(alias) {
 			t.Errorf("tzdata release lacks ICU alias %q", alias)
 			continue
@@ -102,7 +101,7 @@ func TestZoneNameUniverseMatchesIntl(t *testing.T) {
 			}
 		}
 	}
-	for alias := range icuAliases {
+	for alias := range tz.ICUOnlyAliasZones {
 		if !have[alias] {
 			t.Errorf("Intl accepts the ICU id %q but the zip lacks it", alias)
 		}
@@ -115,6 +114,52 @@ func TestZoneNameUniverseMatchesIntl(t *testing.T) {
 			t.Errorf("zip name %q is not an Intl zone; only Factory is expected", name)
 		}
 	}
-	t.Logf("%d zip names cover %d Intl names plus %d ICU-only ids; %d not an Intl zone",
-		len(names), len(result.Supported), len(icuAliases), len(result.Rejected))
+	t.Logf("%d zip names cover %d Intl names plus %d discovered ICU-only ids; %d not an Intl zone",
+		len(names), len(result.Supported), len(tz.ICUOnlyAliasZones), len(result.Rejected))
+}
+
+// TestICUZonesWithoutIANAFile records the non-alias residue of discovery: ids
+// production Node's ICU accepts as zones of its own (resolvedOptions returns
+// the id itself), with no IANA file to embed. tz.Load reads them as UTC; the
+// list is generated, so a regeneration that changes it shows up in the diff.
+func TestICUZonesWithoutIANAFile(t *testing.T) {
+	if len(tz.ICUZonesWithoutIANAFile) == 0 {
+		t.Skip("the discovered ICU ids are all aliases of IANA zones")
+	}
+	node := provenanceNode(t)
+	encoded, err := json.Marshal(tz.ICUZonesWithoutIANAFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := `const ids = JSON.parse(process.argv[1]);` +
+		`process.stdout.write(JSON.stringify(ids.map((id) => {` +
+		` try { const canonical = new Intl.DateTimeFormat("en-US", { timeZone: id }).resolvedOptions().timeZone; return [id, canonical, canonical === id]; }` +
+		` catch { return [id, null, false]; } })));`
+	out, err := exec.Command(node, "-e", script, string(encoded)).Output()
+	if err != nil {
+		t.Fatalf("run %s: %v", node, err)
+	}
+	var result [][3]any
+	if err := json.Unmarshal(out, &result); err != nil {
+		t.Fatalf("parse %s output: %v", node, err)
+	}
+	for _, row := range result {
+		id, _ := row[0].(string)
+		canonical, _ := row[1].(string)
+		selfNamed, _ := row[2].(bool)
+		if canonical == "" {
+			t.Errorf("ICU no longer accepts %q: regenerate the embedded release with go generate ./internal/tz", id)
+			continue
+		}
+		if !selfNamed {
+			t.Errorf("ICU now resolves %q to %q, so it can be installed as an alias: regenerate with go generate ./internal/tz", id, canonical)
+		}
+		if tz.Has(id) {
+			t.Errorf("%q is in the zip but listed as having no IANA file", id)
+		}
+		if _, err := tz.Load(id); err == nil {
+			t.Errorf("tz.Load(%q) succeeded, but the discovery recorded it as having no IANA file", id)
+		}
+	}
+	t.Logf("%d ICU ids have no IANA file and read as UTC: %v", len(result), tz.ICUZonesWithoutIANAFile)
 }

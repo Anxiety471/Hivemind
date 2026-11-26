@@ -57,13 +57,26 @@ func TestLocalChildWritesSnapshot(t *testing.T) {
 // POSIX strings with and without DST rules.
 func TestLocalMatchesV8TZForms(t *testing.T) {
 	node := provenanceNode(t)
-	script := `process.stdout.write(JSON.stringify(` +
-		`{zone: Intl.DateTimeFormat().resolvedOptions().timeZone ?? null, ` +
-		`offsets: ` + instantsJSON(t) + `.map(t => -new Date(t).getTimezoneOffset()*60)}))`
-	// V8's TZ=<path> and TZ=localtime lose a zone's historical DST: with the
-	// Manila TZif it reads +08:00 at 1990-07-15 where ICU's own Asia/Manila
-	// reads +09:00. Go parses the file faithfully, so those forms are compared
-	// only from 2026 on; production does not set TZ at all.
+	// Offsets come from the wall clock Intl reports, not getTimezoneOffset:
+	// that truncates historical sub-minute offsets, and Go's offsets are whole
+	// seconds.
+	script := `const format = new Intl.DateTimeFormat("en-US", {` +
+		` hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit",` +
+		` hour: "2-digit", minute: "2-digit", second: "2-digit" });` +
+		`const offsetAt = (instant) => { const parts = {};` +
+		` for (const { type, value } of format.formatToParts(instant)) parts[type] = value;` +
+		` const local = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day),` +
+		` Number(parts.hour) % 24, Number(parts.minute), Number(parts.second));` +
+		` return (local - instant) / 1000; };` +
+		`process.stdout.write(JSON.stringify({` +
+		` zone: Intl.DateTimeFormat().resolvedOptions().timeZone ?? null,` +
+		` offsets: ` + instantsJSON(t) + `.map(offsetAt) }))`
+	// V8's TZ=<path> and TZ=localtime modes report the file's standard offset at
+	// every instant: all DST is dropped, historical and modern alike (see
+	// TestLocalPathFormDropsDST). Go parses the TZif faithfully, so only the
+	// forms whose zone has no DST in the compared instants agree here; the
+	// Manila path form and TZ=localtime (this host's Asia/Manila) are compared
+	// from 2026 on, where Manila has no DST. Production does not set TZ.
 	forms := []struct {
 		label      string
 		value      *string
@@ -110,6 +123,27 @@ func TestLocalMatchesV8TZForms(t *testing.T) {
 		{"host localtime path", new("/etc/localtime"), true},
 		{"dot", new("."), false},
 		{"system zone by name", new("Asia/Manila"), false},
+		{"POSIX with a plus hour", new("ABC+3"), false},
+		{"POSIX hour 24", new("ABC24"), false},
+		{"POSIX zero minutes", new("ABC3:00"), false},
+		{"POSIX DST with offset", new("ABC3DEF4"), false},
+		{"two-letter POSIX name", new("AB3"), false},
+		{"letters with no offset", new("ABCDEF"), false},
+		{"GMT with an offset", new("GMT+5"), false},
+		{"UTC with an offset", new("UTC-5"), false},
+		{"UTC plus", new("UTC+5"), false},
+		{"bare offset id", new("+05"), false},
+		{"posix directory", new("posix/UTC"), false},
+		{"right directory", new("right/UTC"), false},
+		{"Zulu", new("Zulu"), false},
+		{"Greenwich", new("Greenwich"), false},
+		{"Universal", new("Universal"), false},
+		{"UCT", new("UCT"), false},
+		{"US/Eastern", new("US/Eastern"), false},
+		{"Calcutta", new("Asia/Calcutta"), false},
+		{"Indianapolis", new("America/Indiana/Indianapolis"), false},
+		{"Lord Howe", new("Australia/Lord_Howe"), false},
+		{"Apia", new("Pacific/Apia"), false},
 	}
 	for _, form := range forms {
 		t.Run(form.label, func(t *testing.T) {
@@ -166,6 +200,7 @@ func TestLocalMatchesV8TZForms(t *testing.T) {
 			}
 		})
 	}
+	t.Logf("%d TZ forms agree with production V8", len(forms))
 }
 
 func instantsJSON(t *testing.T) string {
@@ -206,4 +241,77 @@ func output(command *exec.Cmd, environment []string) ([]byte, error) {
 		return append(out, stderr.Bytes()...), err
 	}
 	return out, nil
+}
+
+// TestLocalPathFormDropsDST records the one V8 TZ form tz.Local deliberately
+// does not reproduce: with TZ=<TZif path>, V8 reports the file's standard
+// offset at every instant — all DST is dropped, at modern instants too — while
+// tz.Local parses the file faithfully. The test fails if V8 starts honouring the
+// transitions, so the divergence documented in design.md cannot go stale.
+func TestLocalPathFormDropsDST(t *testing.T) {
+	node := provenanceNode(t)
+	// localInstants compared here: 0 = 2026-07-15 (northern summer), 1 =
+	// 2026-12-06 (northern winter), 3 = 1990-07-15.
+	const (
+		summerIndex = 0
+		winterIndex = 1
+	)
+	for _, c := range []struct {
+		zone     string
+		summer   int64
+		winter   int64
+		standard int64
+	}{
+		{"America/New_York", -4 * 3600, -5 * 3600, -5 * 3600},
+		{"Europe/London", 3600, 0, 0},
+		{"Australia/Lord_Howe", 10*3600 + 1800, 11 * 3600, 10*3600 + 1800},
+	} {
+		path := filepath.Join("/usr/share/zoneinfo", c.zone)
+		if _, err := os.Stat(path); err != nil {
+			continue
+		}
+		script := `const format = new Intl.DateTimeFormat("en-US", {` +
+			` hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit",` +
+			` hour: "2-digit", minute: "2-digit", second: "2-digit" });` +
+			`const offsetAt = (instant) => { const parts = {};` +
+			` for (const { type, value } of format.formatToParts(instant)) parts[type] = value;` +
+			` const local = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day),` +
+			` Number(parts.hour) % 24, Number(parts.minute), Number(parts.second));` +
+			` return (local - instant) / 1000; };` +
+			`process.stdout.write(JSON.stringify(` + instantsJSON(t) + `.map(offsetAt)))`
+		out, err := output(exec.Command(node, "-e", script), append(withoutTZ(), "TZ="+path))
+		if err != nil {
+			t.Fatalf("node with TZ=%s: %v: %s", path, err, out)
+		}
+		var v8 []int64
+		if err := json.Unmarshal(out, &v8); err != nil {
+			t.Fatalf("parse %s output %q: %v", node, out, err)
+		}
+		for index, offset := range v8 {
+			if offset != c.standard {
+				t.Errorf("V8 with TZ=%s reports %+d at %s, want the standard offset %+d; if V8 now honours the file, design.md's divergence note is stale", path, offset, time.UnixMilli(localInstants[index]).UTC().Format(time.RFC3339), c.standard)
+			}
+		}
+
+		outFile := filepath.Join(t.TempDir(), "local.json")
+		child := exec.Command(os.Args[0], "-test.run=^TestLocalChildWritesSnapshot$")
+		out, err = output(child, append(withoutTZ(), "TZ="+path, localChildOut+"="+outFile))
+		if err != nil {
+			t.Fatalf("go child with TZ=%s: %v: %s", path, err, out)
+		}
+		raw, err := os.ReadFile(outFile)
+		if err != nil {
+			t.Fatalf("go child wrote no snapshot: %v", err)
+		}
+		var got struct {
+			Zone    string  `json:"zone"`
+			Offsets []int64 `json:"offsets"`
+		}
+		if err := json.Unmarshal(raw, &got); err != nil {
+			t.Fatalf("parse go snapshot %q: %v", raw, err)
+		}
+		if got.Offsets[summerIndex] != c.summer || got.Offsets[winterIndex] != c.winter {
+			t.Errorf("tz.Local with TZ=%s reports %+d/%+d in July/December, want %+d/%+d", path, got.Offsets[summerIndex], got.Offsets[winterIndex], c.summer, c.winter)
+		}
+	}
 }

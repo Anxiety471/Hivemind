@@ -50,9 +50,12 @@ func TestNodeVersionProvenance(t *testing.T) {
 	}
 }
 
-// provenanceNode resolves the node the gateway is compared against: an
-// explicit RAKAZO_NODE, else the conventional user-local Node 24 path, else
-// PATH. Only a genuinely absent node may skip.
+// provenanceNode is the node the gateway is compared against: an explicit
+// RAKAZO_NODE, else the user-local Node 24 path production runs. A host without
+// that path skips, because the comparison has nothing to run; a path that
+// exists but cannot be executed fails, because the pin must be enforced where
+// production's runtime is installed. PATH is not a fallback: another node's ICU
+// would fail the pin for an environment reason.
 func provenanceNode(t *testing.T) string {
 	t.Helper()
 	if path := os.Getenv("RAKAZO_NODE"); path != "" {
@@ -61,16 +64,11 @@ func provenanceNode(t *testing.T) string {
 		}
 		return path
 	}
-	if home, err := os.UserHomeDir(); err == nil {
-		path := filepath.Join(home, ".local", "opt", "node24", "bin", "node")
-		if _, err := os.Stat(path); err == nil {
-			return path
-		}
+	pinned := filepath.Join(os.Getenv("HOME"), ".local", "opt", "node24", "bin", "node")
+	if _, err := os.Stat(pinned); err == nil {
+		return pinned
 	}
-	if path, err := exec.LookPath("node"); err == nil {
-		return path
-	}
-	t.Skip("no node available (set RAKAZO_NODE, install ~/.local/opt/node24/bin/node, or put node on PATH)")
+	t.Skip("production Node is not installed at " + pinned + " (set RAKAZO_NODE to compare against another runtime)")
 	return ""
 }
 
