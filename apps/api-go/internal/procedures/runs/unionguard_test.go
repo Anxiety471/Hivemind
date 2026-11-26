@@ -48,3 +48,20 @@ func TestRunTablesMatchTypeScript(t *testing.T) {
 		t.Fatalf("%v\n(RunActivityRowSchema.agentMessage is %s)", err, schema)
 	}
 }
+
+// TestTerminalStatusesMatchTypeScript guards the terminal set runs.ts's own query filter uses:
+// a status TS starts treating as terminal and Go keeps active leaves a finished run on the
+// roster (or the reverse).
+func TestTerminalStatusesMatchTypeScript(t *testing.T) {
+	root, err := tsunions.Root()
+	if err != nil {
+		t.Fatal(err)
+	}
+	terminal, err := tsunions.Values(root, "apps/api/src/threads/runs.ts", "TERMINAL_STATUSES")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tsunions.SetDiff("runs.terminalStatuses", terminalStatuses, terminal); err != nil {
+		t.Fatalf("%v\n(TERMINAL_STATUSES is apps/api/src/threads/runs.ts)", err)
+	}
+}
