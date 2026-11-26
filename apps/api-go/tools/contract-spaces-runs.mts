@@ -98,6 +98,10 @@ async function seedRoster(seeded: Seeded) {
         senderName: name,
         senderIsBot: true,
         content: "x",
+        // Automated senders come back ordered by `createdAt` alone (no tie-breaker on either
+        // side), so implicit now() values that land in the same millisecond order arbitrarily.
+        // One millisecond apart keeps the order stable.
+        createdAt: new Date(Date.UTC(2026, 0, 1, 0, 0, 0, index)),
       },
     });
   }
