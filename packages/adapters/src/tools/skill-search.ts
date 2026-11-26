@@ -50,6 +50,10 @@ const AUTO_EXPAND_MIN_SCORE = 3.2;
 const AUTO_EXPAND_LEAD_RATIO = 1.8;
 const PROMPT_HINT_MIN_SCORE = 3.6;
 const PROMPT_HINT_RELATIVE_FLOOR = 0.55;
+/** Borrowed ticket and earlier-reply text must beat this multiple of the prompt floor. */
+const CONTEXT_HINT_SCORE_MULTIPLIER = 1.5;
+/** A context-only match needs this many informative terms in the skill's name or description. */
+const CONTEXT_HINT_MIN_NAME_DESCRIPTION_TERMS = 2;
 const BM25_K1 = 1.2;
 
 const FIELD_WEIGHTS: Record<SkillMatchField, { weight: number; b: number }> = {
@@ -685,6 +689,7 @@ function scoreSkill(
   exactTriggerPhrase: boolean;
   matchedTerms: number;
   nonBodyMatchedTerms: number;
+  nameDescriptionMatchedTerms: number;
   matchedIn: SkillMatchField[];
   matchedHeading?: string;
   snippet?: string;
@@ -700,11 +705,13 @@ function scoreSkill(
   let rawScore = 0;
   let matchedTerms = 0;
   let nonBodyMatchedTerms = 0;
+  let nameDescriptionMatchedTerms = 0;
   const matchedFields = new Set<SkillMatchField>();
 
   for (const q of queryTokens) {
     let pseudoTf = 0;
     let matchedNonBody = false;
+    let matchedNameOrDescription = false;
     let matchedAny = false;
     for (const field of Object.keys(FIELD_WEIGHTS) as SkillMatchField[]) {
       const tokens = doc.fields[field];
@@ -714,6 +721,7 @@ function scoreSkill(
       matchedAny = true;
       matchedFields.add(field);
       if (field !== "body") matchedNonBody = true;
+      if (field === "name" || field === "description") matchedNameOrDescription = true;
       const { weight, b } = FIELD_WEIGHTS[field];
       const norm = 1 - b + b * (tokens.length / avgdl[field]);
       pseudoTf += (weight * tf) / Math.max(0.25, norm);
@@ -721,6 +729,7 @@ function scoreSkill(
     if (matchedAny) {
       matchedTerms += 1;
       if (matchedNonBody) nonBodyMatchedTerms += 1;
+      if (matchedNameOrDescription) nameDescriptionMatchedTerms += 1;
       rawScore += q.idf * (((BM25_K1 + 1) * pseudoTf) / (BM25_K1 + pseudoTf));
     }
   }
@@ -754,6 +763,7 @@ function scoreSkill(
     exactTriggerPhrase,
     matchedTerms,
     nonBodyMatchedTerms,
+    nameDescriptionMatchedTerms,
     matchedIn: orderedFields,
     matchedHeading,
     snippet,
@@ -843,14 +853,61 @@ export function searchSkills(
   };
 }
 
+/** The fields of a scored skill the hint matcher ranks on. */
+type ScoredSkillEntry = {
+  doc: { skill: SearchableSkill };
+  score: number;
+  exactNameMatch: boolean;
+  exactTriggerPhrase: boolean;
+  matchedTerms: number;
+  nonBodyMatchedTerms: number;
+  nameDescriptionMatchedTerms: number;
+  matchedHeading?: string;
+};
+
+/** The strongest matches, keeping only those near the top match. */
+function skillHintsFor(
+  qualified: readonly ScoredSkillEntry[],
+  maxHints: number,
+): SkillPromptHint[] {
+  const top = qualified[0];
+  if (!top) return [];
+  return qualified
+    .filter(
+      (entry, index) =>
+        index === 0 ||
+        entry.exactNameMatch ||
+        entry.score >= top.score * PROMPT_HINT_RELATIVE_FLOOR,
+    )
+    .slice(0, maxHints)
+    .map((entry) => ({
+      id: entry.doc.skill.id,
+      name: entry.doc.skill.name,
+      source: entry.doc.skill.source,
+      description: entry.doc.skill.description,
+      ...(entry.matchedHeading ? { matchedHeading: entry.matchedHeading } : {}),
+      score: Number(entry.score.toFixed(3)),
+    }));
+}
+
 /**
- * Precision-oriented pre-turn matcher for injecting `<relevant_skills>` hints from a raw
- * user prompt without polluting casual chat or triggering on single weak body mentions.
+ * Precision-oriented pre-turn matcher for injecting `<relevant_skills>` hints without polluting
+ * casual chat or triggering on single weak body mentions.
+ *
+ * The prompt keeps the rules below unchanged. Borrowed context (a ticket or earlier replies on a
+ * short follow-up) is weaker evidence: a skill matched only there qualifies if at least two
+ * informative context terms land in its name or description, and its context score clears the
+ * higher floor. Single loose words such as "email" or "send" never qualify.
  */
 export function matchRelevantSkillsForPrompt(
   prompt: string,
   skills: readonly SearchableSkill[],
-  options: { maxHints?: number; excludeNames?: readonly string[] } = {},
+  options: {
+    maxHints?: number;
+    excludeNames?: readonly string[];
+    /** Ticket or earlier-reply text borrowed for a short follow-up, never the user's own words. */
+    contextText?: string;
+  } = {},
 ): SkillPromptHint[] {
   if (!prompt.trim() || skills.length === 0) return [];
   const excluded = new Set(
@@ -892,23 +949,21 @@ export function matchRelevantSkillsForPrompt(
     return entry.score >= PROMPT_HINT_MIN_SCORE;
   });
 
-  const top = qualified[0];
-  if (!top) return [];
+  const promptHints = skillHintsFor(qualified, maxHints);
+  const contextText = options.contextText?.trim();
+  if (!contextText || promptHints.length >= maxHints) return promptHints;
 
-  return qualified
-    .filter(
-      (entry, index) =>
-        index === 0 ||
-        entry.exactNameMatch ||
-        entry.score >= top.score * PROMPT_HINT_RELATIVE_FLOOR,
-    )
-    .slice(0, maxHints)
-    .map((entry) => ({
-      id: entry.doc.skill.id,
-      name: entry.doc.skill.name,
-      source: entry.doc.skill.source,
-      description: entry.doc.skill.description,
-      ...(entry.matchedHeading ? { matchedHeading: entry.matchedHeading } : {}),
-      score: Number(entry.score.toFixed(3)),
-    }));
+  // Borrowed context never outranks the user's own words; it only fills the remaining slots.
+  const contextQualified = evaluateCorpus(eligible, contextText, true).scored.filter(
+    (entry) =>
+      entry.nameDescriptionMatchedTerms >= CONTEXT_HINT_MIN_NAME_DESCRIPTION_TERMS &&
+      entry.score >= PROMPT_HINT_MIN_SCORE * CONTEXT_HINT_SCORE_MULTIPLIER,
+  );
+  const promptNames = new Set(promptHints.map((hint) => hint.name.trim().toLowerCase()));
+  return [
+    ...promptHints,
+    ...skillHintsFor(contextQualified, maxHints)
+      .filter((hint) => !promptNames.has(hint.name.trim().toLowerCase()))
+      .slice(0, maxHints - promptHints.length),
+  ];
 }

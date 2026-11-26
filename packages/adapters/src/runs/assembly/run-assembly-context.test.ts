@@ -5,7 +5,7 @@ import { matchRelevantSkillsForPrompt } from "../../tools/skill-search.js";
 import {
   previousMessageAt,
   previousPromptMessages,
-  skillHintText,
+  skillHintInput,
 } from "./run-assembly-context.js";
 
 describe("previousMessageAt", () => {
@@ -39,13 +39,15 @@ describe("skill hint context", () => {
       }),
     },
   ];
-  const hintNames = (text: string) =>
-    matchRelevantSkillsForPrompt(text, corpus).map((hint) => hint.name);
+  const hintNames = (input: { prompt: string; contextText?: string }, skills = corpus) =>
+    matchRelevantSkillsForPrompt(input.prompt, skills, {
+      contextText: input.contextText,
+    }).map((hint) => hint.name);
 
   it("lets a short follow-up match through the ticket and its earlier replies", () => {
     expect(
       hintNames(
-        skillHintText("Done sending", {
+        skillHintInput("Done sending", {
           ticket:
             "Ticket: Reply watch\nWatch the email thread for replies and draft the follow-up email.",
           previousMessages: ["I will watch the email draft for replies before sending."],
@@ -55,11 +57,11 @@ describe("skill hint context", () => {
   });
 
   it("keeps casual chat and a long request from borrowing unrelated context", () => {
-    expect(hintNames(skillHintText("hi", {}))).toEqual([]);
-    expect(hintNames(skillHintText("thanks", {}))).toEqual([]);
+    expect(hintNames(skillHintInput("hi", {}))).toEqual([]);
+    expect(hintNames(skillHintInput("thanks", {}))).toEqual([]);
     expect(
       hintNames(
-        skillHintText(
+        skillHintInput(
           "Please write a short calm haiku about rain falling on the roof while everyone sleeps",
           { ticket: "Reply watch email draft" },
         ),

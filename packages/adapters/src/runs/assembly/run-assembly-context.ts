@@ -426,19 +426,22 @@ export async function buildTurnPrompt(
       select: { systemPromptAppend: true },
     }),
   );
-  const relevantSkillsHint =
+  const skillHint =
     skillModeOffered && run.trigger !== "created" && !nonOwnerChatRun
-      ? formatRelevantSkillsHint(
-          matchRelevantSkillsForPrompt(
-            skillHintText(rawTaskPrompt, {
-              ticket: ticketContext,
-              previousMessages: previousPromptMessages(historyMessages, currentTurnMessage?.id),
-            }),
-            buildSearchableSkills(runAgentSkills, scopedTaughtSkills),
-            { maxHints: 3, excludeNames: invokedRunSkills },
-          ),
-        )
+      ? skillHintInput(rawTaskPrompt, {
+          ticket: ticketContext,
+          previousMessages: previousPromptMessages(historyMessages, currentTurnMessage?.id),
+        })
       : undefined;
+  const relevantSkillsHint = skillHint
+    ? formatRelevantSkillsHint(
+        matchRelevantSkillsForPrompt(
+          skillHint.prompt,
+          buildSearchableSkills(runAgentSkills, scopedTaughtSkills),
+          { maxHints: 3, excludeNames: invokedRunSkills, contextText: skillHint.contextText },
+        ),
+      )
+    : undefined;
   const prompt = [
     replyContext,
     routineNote,
@@ -534,22 +537,29 @@ const SKILL_HINT_SHORT_PROMPT_WORDS = 12;
 /** How much ticket and earlier-reply text a short request may borrow for skill matching. */
 const SKILL_HINT_CONTEXT_MAX_CHARS = 1_200;
 
+/** The request, and the borrowed context a short turn may match skills against. */
+export interface SkillHintInput {
+  prompt: string;
+  contextText?: string;
+}
+
 /**
- * The text a short turn's skill hint matches against: the request, plus the ticket and the replies
- * already loaded for the prompt, so a follow-up like "Done sending" still finds the skill it needs.
- * A longer request speaks for itself, so extra context cannot shift its matches.
+ * The request plus the context a short turn may borrow: the ticket and the replies already loaded
+ * for the prompt, so a follow-up like "Done sending" still finds the skill it needs. A longer
+ * request speaks for itself, so it borrows no context and cannot shift its matches.
  */
-export function skillHintText(
+export function skillHintInput(
   rawTaskPrompt: string,
   context: { ticket?: string; previousMessages?: readonly string[] },
-): string {
+): SkillHintInput {
   const prompt = rawTaskPrompt.trim();
-  if (prompt.split(/\s+/).filter(Boolean).length > SKILL_HINT_SHORT_PROMPT_WORDS) return prompt;
-  return [prompt, context.ticket, ...(context.previousMessages ?? [])]
+  if (prompt.split(/\s+/).filter(Boolean).length > SKILL_HINT_SHORT_PROMPT_WORDS) return { prompt };
+  const contextText = [context.ticket, ...(context.previousMessages ?? [])]
     .map((part) => part?.trim())
     .filter((part): part is string => Boolean(part))
     .join("\n")
     .slice(0, SKILL_HINT_CONTEXT_MAX_CHARS);
+  return contextText ? { prompt, contextText } : { prompt };
 }
 
 /** Plain text of the last replies before this turn, for skill matching on a short follow-up. */

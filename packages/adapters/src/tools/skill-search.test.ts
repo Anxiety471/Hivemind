@@ -281,3 +281,62 @@ describe("skill-search BM25F engine", () => {
     });
   });
 });
+
+describe("borrowed context precision", () => {
+  const contextText = [
+    "Gmail reply watch: draft email to the vendor, wait for their reply, then re-arm the reply watch routine",
+    "Draft saved in Gmail, waiting for you to send it",
+  ].join("\n");
+
+  const spaceSkills: SearchableSkill[] = [
+    {
+      id: "pnrs-web-admin",
+      name: "pnrs-web-admin",
+      description:
+        "Use when signing in to the PNRS web app to check, create or edit accounts and facilities, or to email a PNRS user.",
+      source: "user",
+      readOnly: false,
+      content: "Sign in to the PNRS web app, then check or edit accounts and facilities.",
+    },
+    {
+      id: "bot-routing",
+      name: "bot-routing",
+      description: "Route work to the 15-bot Hivemind roster via message_bot.",
+      source: "user",
+      readOnly: false,
+      content: "Route work to the Hivemind roster via message_bot.",
+    },
+  ];
+
+  const replyWatch: SearchableSkill = {
+    id: "reply-watch",
+    name: "reply-watch",
+    description: "Verify a drafted Gmail reply was sent, then re-arm the reply watch routine",
+    source: "user",
+    readOnly: false,
+    content: "Verify a drafted Gmail reply was sent, then re-arm the reply watch routine.",
+  };
+
+  const hintNames = (skills: readonly SearchableSkill[], prompt = "Done sending") =>
+    matchRelevantSkillsForPrompt(prompt, skills, { contextText }).map((hint) => hint.name);
+
+  it("ignores loose single-word overlaps from ticket and earlier-reply context", () => {
+    expect(hintNames(spaceSkills)).toEqual([]);
+  });
+
+  it("hints the skill whose name and description fit the borrowed context, and only it", () => {
+    expect(hintNames([...spaceSkills, replyWatch])).toEqual(["reply-watch"]);
+  });
+
+  it("emits nothing for casual chat beside an ordinary ticket", () => {
+    const ordinaryTicket =
+      "Project kickoff notes: the team met on Monday to review plans and next steps";
+    for (const prompt of ["hi", "thanks"]) {
+      expect(
+        matchRelevantSkillsForPrompt(prompt, [...spaceSkills, replyWatch], {
+          contextText: ordinaryTicket,
+        }),
+      ).toEqual([]);
+    }
+  });
+});
