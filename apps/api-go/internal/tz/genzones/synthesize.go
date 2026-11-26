@@ -5,8 +5,10 @@ package main
 // produce them, and the historical tzdata systemv file disagrees with ICU's
 // rules before 1970, so genzones samples ICU's offsets, finds every transition
 // to the second, and writes a fat TZif whose future is described by a POSIX
-// footer. The bytes are then verified against ICU again: every transition and
-// a set of post-footer probes must agree before the zip is written.
+// footer. The bytes are then verified by asking ICU again, independently of
+// the sampled transition list: at t-1 s, t and t+1 s of every encoded
+// transition, and at every transition and monthly probe after the last one.
+// Any disagreement aborts before the zip is written.
 
 import (
 	"bytes"
@@ -21,9 +23,10 @@ import (
 
 // synthScript samples every requested id daily from 1900 to 2103, refines each
 // offset change to the second, derives the POSIX footer from the last two
-// years' transitions, and measures ICU's offsets at every later transition and
-// at monthly probes through 2200. The Go side encodes the zone and compares
-// every recorded offset with the bytes it produced.
+// years' transitions, and re-queries ICU at t-1 s, t and t+1 s of every
+// transition (transitionProbes) and at every later transition and monthly probe
+// (probes) through 2200. The Go side encodes the zone and compares those
+// independent ICU answers with the bytes it produced.
 const synthScript = `
 import { readFileSync } from "node:fs";
 const payload = JSON.parse(readFileSync(process.argv[2], "utf8"));
@@ -61,6 +64,8 @@ const posixOffset = (seconds) => {
   const sign = seconds > 0 ? "-" : "";
   const total = Math.abs(seconds);
   const hours = Math.floor(total / 3600), minutes = Math.floor((total % 3600) / 60), rest = total % 60;
+  // POSIX/RFC 8536 limit the hours field to 24.
+  if (hours > 24) throw new Error("POSIX offset " + seconds + " seconds exceeds 24 hours");
   return sign + hours + (minutes || rest ? ":" + String(minutes).padStart(2, "0") : "") +
     (rest ? ":" + String(rest).padStart(2, "0") : "");
 };
@@ -102,12 +107,17 @@ for (const id of payload.ids) {
     footer = "STD" + posixOffset(standard) + "DST" + (delta === 3600 ? "" : posixOffset(daylight)) +
       "," + starts[0][1] + "," + ends[0][1];
   }
+  const transitionProbes = [];
+  for (const [at] of early.found) {
+    for (const probe of [at - 1000, at, at + 1000]) transitionProbes.push([probe, offsetAt(format, probe)]);
+  }
   const probes = [];
   for (let at = payload.forwardEnd + 15 * DAY; at <= payload.probeEnd; at += 30 * DAY) probes.push(at);
   for (const [at] of late.found) probes.push(at - 1000, at, at + 1000);
   zones.push({
     name: id, initial, dst: offsets.length === 2, footer,
     transitions: early.found.map(([at, offset]) => [at, offset]),
+    transitionProbes,
     probes: probes.map((at) => [at, offsetAt(format, at)]),
   });
 }
@@ -116,12 +126,13 @@ process.stdout.write(JSON.stringify({ zones }));
 
 // synthesizedZone is one ICU-only zone measured by synthScript.
 type synthesizedZone struct {
-	Name        string     `json:"name"`
-	Initial     int32      `json:"initial"`
-	DST         bool       `json:"dst"`
-	Footer      string     `json:"footer"`
-	Transitions [][2]int64 `json:"transitions"` // ms, offset seconds
-	Probes      [][2]int64 `json:"probes"`      // ms, offset seconds
+	Name             string     `json:"name"`
+	Initial          int32      `json:"initial"`
+	DST              bool       `json:"dst"`
+	Footer           string     `json:"footer"`
+	Transitions      [][2]int64 `json:"transitions"`      // ms, offset seconds
+	TransitionProbes [][2]int64 `json:"transitionProbes"` // ms, offset seconds, re-queried from ICU
+	Probes           [][2]int64 `json:"probes"`           // ms, offset seconds, after the last transition
 }
 
 // synthesizeZones writes a TZif for every id ICU implements itself, then
@@ -170,17 +181,22 @@ func synthesizeZones(temp, zones, node string, ids []string) []synthesizedZone {
 		if err != nil {
 			fatalf("parse the synthesized zone for %s: %v", zone.Name, err)
 		}
-		previous := int64(zone.Initial)
 		for _, transition := range zone.Transitions {
 			if transition[0]%1000 != 0 {
 				fatalf("%s transition %d is not at a whole second", zone.Name, transition[0])
 			}
-			before, at := offsetOf(location, transition[0]-1000), offsetOf(location, transition[0])
-			if before != previous || at != transition[1] {
-				fatalf("%s: grown zone reports %d/%d around %s, ICU measured %d/%d",
-					zone.Name, before, at, time.UnixMilli(transition[0]).UTC().Format(time.RFC3339), previous, transition[1])
+		}
+		// The growers' answers, not the encoded values: every encoded transition
+		// is probed again through ICU at t-1 s, t and t+1 s, so a corrupted
+		// sampled offset cannot survive the check.
+		if len(zone.TransitionProbes) != 3*len(zone.Transitions) {
+			fatalf("%s: %d transition probes for %d transitions", zone.Name, len(zone.TransitionProbes), len(zone.Transitions))
+		}
+		for _, probe := range zone.TransitionProbes {
+			if got := offsetOf(location, probe[0]); got != probe[1] {
+				fatalf("%s: at %s the grown zone reports %d, ICU %d (transition probe)",
+					zone.Name, time.UnixMilli(probe[0]).UTC().Format(time.RFC3339), got, probe[1])
 			}
-			previous = at
 		}
 		for _, probe := range zone.Probes {
 			if got := offsetOf(location, probe[0]); got != probe[1] {

@@ -128,8 +128,8 @@ func TestZoneNameUniverseMatchesIntl(t *testing.T) {
 
 // TestSynthesizedZonesMatchIntl is the permanent form of the System V fix:
 // each id production Node's ICU implements itself has a zone in the zip whose
-// offsets match Intl's at every transition through 2100 and at probes through
-// 2200 (the POSIX footer). It fails if the synthesizer drifts from ICU or a
+// offsets match Intl's at every encoded transition through 2102 and at probes
+// through 2200 (the POSIX footer). It fails if the synthesizer drifts from ICU or a
 // regeneration drops an id.
 func TestSynthesizedZonesMatchIntl(t *testing.T) {
 	node := provenanceNode(t)
@@ -137,7 +137,7 @@ func TestSynthesizedZonesMatchIntl(t *testing.T) {
 		t.Fatal("SynthesizedZones is empty: regenerate with go generate ./internal/tz")
 	}
 	start := time.Date(1900, 1, 1, 0, 0, 0, 0, time.UTC)
-	forwardEnd := time.Date(2101, 1, 1, 0, 0, 0, 0, time.UTC)
+	forwardEnd := time.Date(2103, 1, 1, 0, 0, 0, 0, time.UTC)
 	probeEnd := time.Date(2201, 1, 1, 0, 0, 0, 0, time.UTC)
 
 	instants := map[string][]int64{}
