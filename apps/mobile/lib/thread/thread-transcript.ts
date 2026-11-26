@@ -5,6 +5,7 @@ import {
   projectBotMentions,
   projectMessageReactions,
   shouldShowBotSenderName,
+  withoutSupersededJobCards,
 } from "@rakazo/core";
 import { useMemo, useState } from "react";
 import type { MobileMessage } from "../api/mobile-types";
@@ -79,8 +80,11 @@ export function useThreadTranscript(messages: MobileMessage[] | undefined, inGro
   );
   const visibleMessages = useMemo(
     () =>
-      reactionView.visibleMessages.filter(
-        (message) => !exchanges.lineOf.has(message.id) || exchanges.lines.has(message.id),
+      // A job posts a card at every state it learns, so only its newest card stays in the thread.
+      withoutSupersededJobCards(
+        reactionView.visibleMessages.filter(
+          (message) => !exchanges.lineOf.has(message.id) || exchanges.lines.has(message.id),
+        ),
       ),
     [reactionView, exchanges],
   );

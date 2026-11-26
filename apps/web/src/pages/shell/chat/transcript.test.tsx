@@ -538,3 +538,66 @@ it("holds the new reply, not older history that loads after the send", () => {
   });
   expect(scrollTo).toHaveBeenLastCalledWith({ top: 900, behavior: "auto" });
 });
+
+function jobMessage(
+  id: string,
+  jobId: string,
+  state: "working" | "finished",
+  title = "mcp-job-card",
+): ThreadMessage {
+  seq += 1;
+  return {
+    id,
+    threadId: "thread",
+    seq,
+    role: "bot",
+    createdAt: at(seq),
+    blocks: [
+      {
+        kind: "job",
+        jobId,
+        title,
+        agent: "pi",
+        branch: "example/mcp-job-card",
+        state,
+        startedAt: Date.now() - 250_000,
+        url: "https://code.example.test",
+      },
+    ],
+  };
+}
+
+function jobCards() {
+  return [...container.querySelectorAll<HTMLElement>('[data-testid="job-card"]')];
+}
+
+it("shows only a job's newest card, so its old one stops counting", () => {
+  render(
+    baseProps([
+      jobMessage("card-1", "job-1", "working"),
+      jobMessage("card-2", "job-1", "finished"),
+    ]),
+  );
+
+  const cards = jobCards();
+  expect(cards).toHaveLength(1);
+  expect(cards[0]?.textContent).toContain("Finished");
+  expect(cards[0]?.textContent).not.toContain("Working");
+  // No clock at all: the working card that kept counting is gone with its message.
+  expect(cards[0]?.textContent).not.toMatch(/\d+:\d{2}/);
+  expect(container.querySelector('[data-message-id="card-1"]')).toBeNull();
+});
+
+it("keeps a card for each job", () => {
+  render(
+    baseProps([
+      jobMessage("card-1", "job-1", "working"),
+      jobMessage("card-2", "job-2", "finished", "billing-worker"),
+    ]),
+  );
+
+  expect(jobCards().map((card) => card.textContent)).toEqual([
+    expect.stringContaining("mcp-job-card"),
+    expect.stringContaining("billing-worker"),
+  ]);
+});

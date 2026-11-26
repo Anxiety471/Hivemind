@@ -71,6 +71,7 @@ export * from "./locale/translate.js";
 export * from "./locale/ui-locale.js";
 export * from "./messages/attachments.js";
 export * from "./messages/events.js";
+export * from "./messages/job-cards.js";
 export * from "./messages/markdown-plain.js";
 export * from "./messages/message-pages.js";
 export * from "./messages/message-reactions.js";

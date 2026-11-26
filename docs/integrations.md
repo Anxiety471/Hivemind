@@ -67,6 +67,10 @@ one of `starting`, `working`, `finished`, `needs_input`, `exited` or `timed_out`
 counts elapsed time from `startedAt` (epoch milliseconds), and `reply` is a folded preview of the
 job's latest words shown once it is no longer running.
 
+A tool may post a card whenever it learns the job's state, not only when it starts: the chat keeps
+only the newest card for a `jobId`, so reusing the same `jobId` replaces the earlier card instead
+of leaving an old one counting.
+
 ```json
 {
   "structuredContent": {
