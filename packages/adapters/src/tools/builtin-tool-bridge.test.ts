@@ -66,7 +66,8 @@ describe("built-in tool bridge", () => {
     // the events (webhook, Git, chat, email) a routine can start on and the saved command it runs
     // first. write_file, attach_file and shell also carry the Space Drive default, and attach_file
     // takes a slug for search. search_memory_docs and read_memory_doc reach cold archive/*.md docs.
-    expect(definitionBytes(listed)).toBeLessThanOrEqual(39_000);
+    // ask_user's batch `items` schema (multi-question triage) takes the budget's growth.
+    expect(definitionBytes(listed)).toBeLessThanOrEqual(40_000);
     expect(deferred.map((tool) => tool.name)).toEqual(
       expect.arrayContaining(["render_plot", "create_space", "generate_secret", "scratchpad_add"]),
     );

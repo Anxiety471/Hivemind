@@ -12,7 +12,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import { getLabs, subscribeLabs } from "../../../lib/bootstrap";
-import { useSpaceQueries } from "../../../lib/query/query";
+import { useSave, useSpaceQueries } from "../../../lib/query/query";
 import { useBoardStream } from "../../space/use-board-stream";
 
 const RoutineTicketModal = lazy(() =>
@@ -24,11 +24,14 @@ type ChatReferences = {
   referenceContext?: ChatReferenceContext;
   /** Opens a ticket by reference in the board's detail view. */
   openTicket?: (ticketRef: string) => void;
+  /** Answers a ticket's open decision from its chat hover card. */
+  decideTicket?: (ticketId: string, optionId: string) => void;
 };
 
 const ChatReferencesContext = createContext<ChatReferences>({
   referenceContext: undefined,
   openTicket: undefined,
+  decideTicket: undefined,
 });
 
 /**
@@ -47,6 +50,10 @@ export function ChatReferencesProvider({ children }: { children: ReactNode }) {
   const tickets = useQuery({ ...ticketsOptions, enabled: boardEnabled });
   const bots = useQuery({ ...queries.bots.list.queryOptions(), enabled: boardEnabled });
   useBoardStream(ticketsOptions, undefined, boardEnabled);
+  const decideSave = useSave<{ ticketId: string; optionId: string }>({
+    save: (input, rpc) => rpc.tickets.decide(input),
+    stale: [queries.tickets.list.key(), queries.tickets.get.key(), queries.tickets.comments.key()],
+  });
 
   const boardData = board.data;
   const ticketList = tickets.data?.tickets;
@@ -61,6 +68,7 @@ export function ChatReferencesProvider({ children }: { children: ReactNode }) {
             ticketPrefix: boardData.ticketPrefix,
             repositories: boardData.repositories,
             tickets: (ticketList ?? []).map((ticket) => ({
+              id: ticket.id,
               ref: ticket.ref,
               title: ticket.title,
               status: ticket.status,
@@ -68,6 +76,7 @@ export function ChatReferencesProvider({ children }: { children: ReactNode }) {
               assigneeName: ticket.assigneeBotId ? botNames.get(ticket.assigneeBotId) : undefined,
               repository: ticket.repository,
               pullRequests: ticket.pullRequests,
+              decision: ticket.decision,
             })),
           }
         : undefined,
@@ -77,9 +86,12 @@ export function ChatReferencesProvider({ children }: { children: ReactNode }) {
   const [openTicketRef, setOpenTicketRef] = useState<string | null>(null);
   const openTicket = useCallback((ticketRef: string) => setOpenTicketRef(ticketRef), []);
   const closeTicket = useCallback(() => setOpenTicketRef(null), []);
+  const decideTicket = boardEnabled
+    ? (ticketId: string, optionId: string) => decideSave.run({ ticketId, optionId })
+    : undefined;
   const value = useMemo(
-    () => ({ referenceContext, openTicket: boardEnabled ? openTicket : undefined }),
-    [referenceContext, boardEnabled, openTicket],
+    () => ({ referenceContext, openTicket: boardEnabled ? openTicket : undefined, decideTicket }),
+    [referenceContext, boardEnabled, openTicket, decideTicket],
   );
 
   return (

@@ -446,6 +446,14 @@ function toAgentTool(
           ...(typeof raw.recommended === "string" && raw.recommended.trim()
             ? { recommended: raw.recommended.trim() }
             : {}),
+          // Batch items get the same redaction; a non-array value stays as-is for schema rejection.
+          ...(raw.items === undefined
+            ? {}
+            : {
+                items: Array.isArray(raw.items)
+                  ? raw.items.map((item) => prepareAskItemArguments(item, host.request.secrets))
+                  : raw.items,
+              }),
         };
       }
       if (tool.name === "request_secret") {
@@ -603,6 +611,23 @@ function toAgentTool(
                 };
               }
               if (tool.name === "ask_user") {
+                if (args.items !== undefined) {
+                  if (args.options !== undefined) {
+                    throw new Error("ask_user takes either options or items, not both");
+                  }
+                  host.pausePending = true;
+                  host.queue.push({
+                    type: "ask",
+                    ...(host.request.onCheckpoint ? { executionId } : {}),
+                    text: String(args.question ?? "What should I use?"),
+                    items: batchAskItems(args.items),
+                  });
+                  return {
+                    content: [{ type: "text", text: "Waiting for the user's choice." }],
+                    details: args,
+                    terminate: true,
+                  };
+                }
                 const options = Array.isArray(args.options)
                   ? args.options.map((option) => String(option).trim())
                   : [];
@@ -905,6 +930,105 @@ export function redactedAskUserDetail(
   return `${capped}…`;
 }
 
+/** Batch triage: one to eight independent items, actionable ones carry choices. */
+const MAX_ASK_ITEMS = 8;
+const MAX_ASK_ITEM_QUESTION_LENGTH = 200;
+const MAX_ASK_ITEM_DETAIL_LENGTH = 600;
+const MAX_ASK_ITEM_TICKET_REF_LENGTH = 32;
+
+type AskRuntimeItem = NonNullable<Extract<AgentRuntimeEvent, { type: "ask" }>["items"]>[number];
+
+function prepareAskItemArguments(raw: unknown, secrets: readonly string[] | undefined): unknown {
+  const item = asObject(raw);
+  if (!item) return raw;
+  return {
+    question:
+      typeof item.question === "string"
+        ? redactSecrets(item.question, secrets ?? [])
+        : item.question,
+    ...(typeof item.detail === "string" && item.detail
+      ? { detail: redactedAskUserDetail(item.detail, secrets) }
+      : {}),
+    ...(item.ticketRef === undefined ? {} : { ticketRef: item.ticketRef }),
+    ...(item.options === undefined
+      ? {}
+      : { options: Array.isArray(item.options) ? item.options.map(String) : item.options }),
+    ...(typeof item.recommended === "string" && item.recommended.trim()
+      ? { recommended: item.recommended.trim() }
+      : {}),
+  };
+}
+
+/** Validates ask_user `items` and builds the ask event's items; throws on a bad batch. */
+function batchAskItems(rawItems: unknown): AskRuntimeItem[] {
+  if (!Array.isArray(rawItems) || rawItems.length < 1 || rawItems.length > MAX_ASK_ITEMS) {
+    throw new Error(`ask_user items takes one to ${MAX_ASK_ITEMS} items`);
+  }
+  let actionable = 0;
+  const items = rawItems.map((raw, index): AskRuntimeItem => {
+    const item = asObject(raw) ?? {};
+    const question = typeof item.question === "string" ? item.question.trim() : "";
+    if (!question || question.length > MAX_ASK_ITEM_QUESTION_LENGTH) {
+      throw new Error(
+        `ask_user items need a non-empty question of at most ${MAX_ASK_ITEM_QUESTION_LENGTH} characters`,
+      );
+    }
+    if (typeof item.detail === "string" && item.detail.length > MAX_ASK_ITEM_DETAIL_LENGTH) {
+      throw new Error(`ask_user item detail is at most ${MAX_ASK_ITEM_DETAIL_LENGTH} characters`);
+    }
+    const ticketRef = typeof item.ticketRef === "string" ? item.ticketRef.trim() : "";
+    if (ticketRef.length > MAX_ASK_ITEM_TICKET_REF_LENGTH) {
+      throw new Error(
+        `ask_user item ticketRef is at most ${MAX_ASK_ITEM_TICKET_REF_LENGTH} characters`,
+      );
+    }
+    const id = `item-${index + 1}`;
+    const base = {
+      id,
+      question,
+      ...(typeof item.detail === "string" && item.detail ? { detail: item.detail } : {}),
+      ...(ticketRef ? { ticketRef } : {}),
+    };
+    if (item.options === undefined) {
+      if (item.recommended !== undefined) {
+        throw new Error("ask_user item recommended needs options");
+      }
+      return base;
+    }
+    const options = Array.isArray(item.options)
+      ? item.options.map((option) => String(option).trim())
+      : [];
+    if (
+      options.length < 2 ||
+      options.length > 4 ||
+      options.some((option) => option.length === 0 || option.length > 80) ||
+      new Set(options).size !== options.length
+    ) {
+      throw new Error("ask_user items need two to four unique, non-empty options per item");
+    }
+    const recommendedRaw = typeof item.recommended === "string" ? item.recommended.trim() : "";
+    const recommendedIndex = recommendedRaw
+      ? options.findIndex((option) => option.toLowerCase() === recommendedRaw.toLowerCase())
+      : -1;
+    if (recommendedRaw && recommendedIndex < 0) {
+      throw new Error("ask_user item recommended must match one of its options");
+    }
+    actionable += 1;
+    return {
+      ...base,
+      actions: options.map((label, optionIndex) => ({
+        id: `choice-${optionIndex + 1}`,
+        label,
+        ...(optionIndex === recommendedIndex ? { recommended: true } : {}),
+      })),
+    };
+  });
+  if (actionable === 0) {
+    throw new Error("ask_user items need at least one item with options");
+  }
+  return items;
+}
+
 /** The arguments an ask_user call carries: directly, or nested in a use_tool wrapper
  * (the wrapper's own normalizer unwraps them, but the streamed message records the
  * nested object verbatim). */
@@ -949,6 +1073,10 @@ export function redactAskUserDetailInMessage(
       // A non-string detail never reaches the card (the argument normalizer drops
       // it); drop it here too, so no kept copy holds the raw value.
       delete args.detail;
+    }
+    if (Array.isArray(args.items)) {
+      // Batch items carry their own question and detail; the same scrub applies to each.
+      args.items = args.items.map((item) => prepareAskItemArguments(item, secrets));
     }
   }
 }

@@ -1,6 +1,8 @@
 import { useLingui } from "@lingui/react/macro";
+import type { AskItem } from "@rakazo/contracts";
 import { BOT_INSTRUCTIONS_MAX_LENGTH } from "@rakazo/contracts";
-import { resolveAskChoice } from "@rakazo/core";
+import { formatBatchAskAnswer, resolveAskChoice } from "@rakazo/core";
+import { fontWeight, typeScale } from "@rakazo/ui-tokens";
 import { useState } from "react";
 import type { ViewProps } from "react-native";
 import { Alert, Text, TextInput, View } from "react-native";
@@ -10,6 +12,186 @@ import type { AskAction } from "../../lib/cards/ask-action-label";
 import { askActionLabel } from "../../lib/cards/ask-action-label";
 import { native } from "../../lib/native/native";
 import { NativeActionButton } from "../native/native-action-button";
+
+/**
+ * A batch ask: each item is its own question. Actionable items pick a choice or type their own
+ * answer; FYI items are read-only. One submit sends every answer together.
+ */
+export function AskItemsActions({
+  items,
+  answered,
+  disabled,
+  onAnswer,
+  accessibilityActions,
+  onAccessibilityAction,
+}: {
+  items: AskItem[];
+  /** The ask is decided: items show their recorded answers and take no input. */
+  answered: boolean;
+  disabled?: boolean;
+  onAnswer: (answer: string) => Promise<void>;
+  accessibilityActions?: ViewProps["accessibilityActions"];
+  onAccessibilityAction?: ViewProps["onAccessibilityAction"];
+}) {
+  const { t } = useLingui();
+  const tokens = mobileTokens();
+  const [picked, setPicked] = useState<Record<string, string | undefined>>({});
+  const [otherOpen, setOtherOpen] = useState<Record<string, boolean>>({});
+  const [otherText, setOtherText] = useState<Record<string, string>>({});
+  const [pending, setPending] = useState(false);
+  const [sent, setSent] = useState(false);
+  const decided = answered || sent;
+  const actionable = items.filter((item) => item.actions?.length);
+  const answerFor = (id: string) =>
+    otherOpen[id] ? otherText[id]?.trim() || undefined : picked[id];
+  const answers = Object.fromEntries(
+    actionable.flatMap((item) => {
+      const value = answerFor(item.id);
+      return value ? [[item.id, value]] : [];
+    }),
+  );
+  const answeredCount = Object.keys(answers).length;
+  const ready = answeredCount === actionable.length;
+
+  async function submit() {
+    if (pending || decided || disabled || !ready) return;
+    setPending(true);
+    try {
+      await onAnswer(formatBatchAskAnswer(answers));
+      setSent(true);
+    } catch (error) {
+      Alert.alert(t`Could not submit answer`, errorText(error, t`Please try again.`));
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <View style={{ gap: 14, marginTop: 12 }}>
+      {items.map((item) => {
+        const detail = item.detail ? (
+          <Text style={{ color: tokens.mutedForeground, ...typeScale.secondary }}>
+            {item.detail}
+          </Text>
+        ) : null;
+        if (!item.actions?.length)
+          return (
+            <View key={item.id} style={{ gap: 2 }}>
+              <Text style={{ color: tokens.mutedForeground, ...typeScale.secondary }}>
+                {item.question}
+              </Text>
+              {detail}
+            </View>
+          );
+        const actions = item.actions;
+        const value = decided ? (item.answer ?? answerFor(item.id)) : undefined;
+        if (decided)
+          return (
+            <View key={item.id} style={{ gap: 2 }}>
+              <Text style={{ color: tokens.foreground, ...typeScale.cardTitle }}>
+                {item.question}
+              </Text>
+              {detail}
+              {value ? (
+                <Text
+                  style={{
+                    color: tokens.foreground,
+                    ...typeScale.secondary,
+                    fontWeight: fontWeight.medium,
+                  }}
+                >
+                  {resolveAskChoice(value, actions)?.label ?? value}
+                </Text>
+              ) : null}
+            </View>
+          );
+        return (
+          <View key={item.id} style={{ gap: 6 }}>
+            <Text style={{ color: tokens.foreground, ...typeScale.cardTitle }}>
+              {item.question}
+            </Text>
+            {detail}
+            {actions.map((action) => (
+              <View key={action.id} style={{ gap: 2 }}>
+                <NativeActionButton
+                  accessibilityActions={accessibilityActions}
+                  onAccessibilityAction={onAccessibilityAction}
+                  label={askActionLabel(action, { approval: false })}
+                  prominence="secondary"
+                  fill
+                  align="start"
+                  selected={!otherOpen[item.id] && picked[item.id] === action.id}
+                  disabled={disabled || pending}
+                  onPress={() => {
+                    setPicked((current) => ({ ...current, [item.id]: action.id }));
+                    setOtherOpen((current) => ({ ...current, [item.id]: false }));
+                  }}
+                />
+                {action.description ? (
+                  <Text
+                    style={{
+                      color: tokens.mutedForeground,
+                      ...typeScale.secondary,
+                      paddingHorizontal: 16,
+                    }}
+                  >
+                    {action.description}
+                  </Text>
+                ) : null}
+              </View>
+            ))}
+            <NativeActionButton
+              label={t`Other`}
+              prominence="secondary"
+              size="compact"
+              fill={false}
+              align="start"
+              selected={otherOpen[item.id]}
+              disabled={disabled || pending}
+              onPress={() => {
+                setOtherOpen((current) => ({ ...current, [item.id]: !current[item.id] }));
+                setPicked((current) => ({ ...current, [item.id]: undefined }));
+              }}
+            />
+            {otherOpen[item.id] ? (
+              <TextInput
+                accessibilityLabel={t`Other answer`}
+                placeholder={t`Type your answer…`}
+                placeholderTextColor={tokens.faintForeground}
+                multiline
+                editable={!disabled && !pending}
+                value={otherText[item.id] ?? ""}
+                onChangeText={(text) =>
+                  setOtherText((current) => ({ ...current, [item.id]: text }))
+                }
+                style={{
+                  color: tokens.foreground,
+                  backgroundColor: native.fill,
+                  borderRadius: 10,
+                  padding: 12,
+                }}
+              />
+            ) : null}
+          </View>
+        );
+      })}
+      {decided || disabled || actionable.length === 0 ? null : (
+        <NativeActionButton
+          label={
+            actionable.length > 1
+              ? t`Send answers (${answeredCount}/${actionable.length})`
+              : t`Send answer`
+          }
+          prominence="primary"
+          fill={false}
+          disabled={!ready || pending}
+          busy={pending}
+          onPress={() => void submit()}
+        />
+      )}
+    </View>
+  );
+}
 
 export function AskActions({
   actions,

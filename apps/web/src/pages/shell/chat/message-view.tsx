@@ -207,7 +207,7 @@ export const MessageView = memo(function MessageView({
   const isLive = message.id.startsWith("progress:");
   const quoteMessageId = message.id.includes(":") ? undefined : message.id;
 
-  const { referenceContext } = useChatReferences();
+  const { referenceContext, decideTicket } = useChatReferences();
   const openTicket = useOpenTicket();
   // The board's references plus the commits and PRs of this thread's job cards (and this message's).
   const effectiveReferenceContext = useMemo<ChatReferenceContext | undefined>(() => {
@@ -429,6 +429,7 @@ export const MessageView = memo(function MessageView({
                         renderMention={renderMention}
                         onOpenPage={openPage}
                         onOpenTicket={openTicket}
+                        onDecideTicket={decideTicket}
                         referenceContext={effectiveReferenceContext}
                       >
                         {block.text}
@@ -582,6 +583,7 @@ export const MessageView = memo(function MessageView({
                     renderMention={renderMention}
                     onOpenPage={openPage}
                     onOpenTicket={openTicket}
+                    onDecideTicket={decideTicket}
                     referenceContext={effectiveReferenceContext}
                   >
                     {block.text}
@@ -738,6 +740,7 @@ export const MessageView = memo(function MessageView({
                   <LinkifiedText
                     onOpenPage={openPage}
                     onOpenTicket={openTicket}
+                    onDecideTicket={decideTicket}
                     referenceContext={effectiveReferenceContext}
                   >
                     {block.text}
@@ -763,6 +766,7 @@ export const MessageView = memo(function MessageView({
                       renderMention={renderMention}
                       onOpenPage={openPage}
                       onOpenTicket={openTicket}
+                      onDecideTicket={decideTicket}
                       referenceContext={effectiveReferenceContext}
                     >
                       {block.text}

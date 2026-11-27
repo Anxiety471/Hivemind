@@ -255,6 +255,27 @@ describe("describeChatReference", () => {
     });
   });
 
+  it("passes a ticket's id and its open decision through to the card", () => {
+    const decision = {
+      question: "Ship which scope?",
+      options: [
+        { id: "choice-1", label: "Ship now", recommended: true },
+        { id: "choice-2", label: "Wait" },
+      ],
+    };
+    expect(
+      describeChatReference("rakazo-ticket:TASK-388", {
+        tickets: [{ id: "ticket-388", ref: "TASK-388", decision }],
+      }),
+    ).toEqual({
+      kind: "ticket",
+      ref: "TASK-388",
+      ticketId: "ticket-388",
+      pullRequestCount: 0,
+      decision,
+    });
+  });
+
   it("still describes a ticket the board does not list, so its card shows the ref", () => {
     expect(describeChatReference("rakazo-ticket:TASK-12", board)).toEqual({
       kind: "ticket",

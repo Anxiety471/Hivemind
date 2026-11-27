@@ -43,9 +43,12 @@ export type MarkdownCopy = {
   pullRequestTitle: (number: number) => string;
   pullRequestState: (state: string) => string;
   commitTitle: string;
+  /** A ticket's pending decision: the badge on its recommended option, and the resolved line. */
+  recommended?: string;
+  decided?: (label: string) => string;
 };
 
-export const defaultMarkdownCopy: MarkdownCopy = {
+export const defaultMarkdownCopy: Required<MarkdownCopy> = {
   copied: "Copied",
   copyCode: "Copy code",
   copyDiagramSource: "Copy diagram source",
@@ -90,6 +93,8 @@ export const defaultMarkdownCopy: MarkdownCopy = {
   pullRequestTitle: (number) => `Pull request #${number}`,
   pullRequestState: (state) => state,
   commitTitle: "Commit",
+  recommended: "Recommended",
+  decided: (label) => `Decided: ${label}`,
 };
 
 const MarkdownCopyContext = createContext<MarkdownCopy>(defaultMarkdownCopy);

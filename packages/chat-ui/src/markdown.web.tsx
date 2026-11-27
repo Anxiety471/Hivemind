@@ -521,6 +521,7 @@ function MarkdownAnchor({
     renderMention,
     onOpenPage: openPage,
     onOpenTicket: openTicket,
+    onDecideTicket: decideTicket,
     referenceContext,
   } = useContext(InlineChipsContext);
   const href = typeof props.href === "string" ? props.href : "";
@@ -535,7 +536,12 @@ function MarkdownAnchor({
   const ticketRef = markdownTicketRef(href);
   if (ticketRef) {
     return (
-      <TicketChip ticketRef={ticketRef} openTicket={openTicket} referenceContext={referenceContext}>
+      <TicketChip
+        ticketRef={ticketRef}
+        openTicket={openTicket}
+        decideTicket={decideTicket}
+        referenceContext={referenceContext}
+      >
         {props.children}
       </TicketChip>
     );
@@ -598,33 +604,46 @@ function PageChip({
 function TicketChip({
   ticketRef,
   openTicket,
+  decideTicket,
   referenceContext,
   children,
 }: {
   ticketRef: string;
   openTicket: ((ticketRef: string) => void) | undefined;
+  decideTicket: ChatMarkdownProps["onDecideTicket"];
   referenceContext: ChatReferenceContext | undefined;
   children: ReactNode;
 }) {
+  const preview = describeChatReference(`${TICKET_URL_PREFIX}${ticketRef}`, referenceContext);
+  // A dot marks a ticket whose board decision still waits for an answer.
+  const pending =
+    preview?.kind === "ticket" && Boolean(preview.decision && !preview.decision.answer);
   const chip = openTicket ? (
-    <button type="button" className="rk-chat-ticket-chip" onClick={() => openTicket(ticketRef)}>
+    <button
+      type="button"
+      className={
+        pending ? "rk-chat-ticket-chip rk-chat-ticket-chip-pending" : "rk-chat-ticket-chip"
+      }
+      onClick={() => openTicket(ticketRef)}
+    >
       {children}
     </button>
   ) : (
-    <span>{children}</span>
+    <span className={pending ? "rk-chat-ticket-chip-pending" : undefined}>{children}</span>
   );
   return (
-    <ReferenceHoverCard
-      preview={describeChatReference(`${TICKET_URL_PREFIX}${ticketRef}`, referenceContext)}
-    >
+    <ReferenceHoverCard preview={preview} onDecideTicket={decideTicket}>
       {chip}
     </ReferenceHoverCard>
   );
 }
 
-/** What a chip in the text does: a mention's rendering, and opening a linked page or ticket. */
+/** What a chip in the text does: a mention's rendering, and opening or answering a ticket. */
 const InlineChipsContext = createContext<
-  Pick<ChatMarkdownProps, "renderMention" | "onOpenPage" | "onOpenTicket" | "referenceContext">
+  Pick<
+    ChatMarkdownProps,
+    "renderMention" | "onOpenPage" | "onOpenTicket" | "onDecideTicket" | "referenceContext"
+  >
 >({});
 
 /** The page icon (see `PAGE_ICON`), sized by its container. */
@@ -712,11 +731,13 @@ export function LinkifiedText({
   children,
   onOpenPage,
   onOpenTicket,
+  onDecideTicket,
   referenceContext,
 }: {
   children: string;
   onOpenPage?: (pageId: string) => void;
   onOpenTicket?: (ticketRef: string) => void;
+  onDecideTicket?: ChatMarkdownProps["onDecideTicket"];
   referenceContext?: ChatReferenceContext;
 }) {
   const { request, dialog } = useExternalLinkConfirm();
@@ -734,6 +755,7 @@ export function LinkifiedText({
             key={index}
             ticketRef={part.ticketRef}
             openTicket={onOpenTicket}
+            decideTicket={onDecideTicket}
             referenceContext={referenceContext}
           >
             {part.value}
@@ -876,6 +898,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({
   renderMention,
   onOpenPage,
   onOpenTicket,
+  onDecideTicket,
   referenceContext,
 }: ChatMarkdownProps) {
   const { request, dialog } = useExternalLinkConfirm();
@@ -900,8 +923,8 @@ export const ChatMarkdown = memo(function ChatMarkdown({
   }, [source, split]);
 
   const inlineChips = useMemo(
-    () => ({ renderMention, onOpenPage, onOpenTicket, referenceContext }),
-    [renderMention, onOpenPage, onOpenTicket, referenceContext],
+    () => ({ renderMention, onOpenPage, onOpenTicket, onDecideTicket, referenceContext }),
+    [renderMention, onOpenPage, onOpenTicket, onDecideTicket, referenceContext],
   );
   return (
     <ConfirmLinkContext.Provider value={request}>
@@ -950,6 +973,8 @@ export type {
   ChatReferenceContext,
   ChatReferencePreview,
   ChatRepository,
+  ChatTicketDecision,
+  ChatTicketDecisionOption,
   ChatTicketReference,
 } from "./references";
 export {

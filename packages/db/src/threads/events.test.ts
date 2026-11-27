@@ -5809,3 +5809,198 @@ it("checks cross-space peer permission inside the message transaction before cre
   expect(tx.task.create).not.toHaveBeenCalled();
   expect(tx.run.create).not.toHaveBeenCalled();
 });
+
+describe("answerRunInput batch asks", () => {
+  const batchBlocks = [
+    {
+      kind: "ask",
+      text: "Still open",
+      status: "pending",
+      items: [
+        {
+          id: "item-1",
+          question: "Ship the notes?",
+          ticketRef: "OPS-12",
+          actions: [
+            { id: "choice-1", label: "Ship [redacted]" },
+            { id: "choice-2", label: "Hold", recommended: true },
+          ],
+        },
+        {
+          id: "item-2",
+          question: "Where to meet?",
+          actions: [
+            { id: "choice-1", label: "Office" },
+            { id: "choice-2", label: "Cafe" },
+          ],
+        },
+        { id: "item-3", question: "Nightly build passed" },
+      ],
+    },
+  ];
+
+  const answerBatch = async ({
+    answer,
+    blocks = batchBlocks,
+    checkpoint = null,
+    trigger = "routine",
+  }: {
+    answer: string;
+    blocks?: unknown[];
+    checkpoint?: string | null;
+    trigger?: string;
+  }) => {
+    const tx = {
+      $queryRaw: vi.fn().mockResolvedValue([{ id: "thread-1" }]),
+      message: {
+        findFirst: vi.fn().mockResolvedValue({ id: "message-1", blocks }),
+        update: vi.fn().mockResolvedValue({ id: "message-1" }),
+      },
+      run: {
+        findFirst: vi.fn().mockResolvedValue({
+          botId: "bot-2",
+          userId: "user-1",
+          trigger,
+          checkpoint,
+          task: { prompt: "Triage the open items." },
+        }),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        findUnique: vi.fn().mockResolvedValue({
+          status: "queued",
+          createdAt: new Date("2026-08-16T12:00:00.000Z"),
+          threadId: "thread-1",
+        }),
+      },
+      task: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
+      thread: { update: vi.fn().mockResolvedValue({ nextEventSeq: 10 }) },
+      event: {
+        create: vi.fn(async ({ data }: { data: { seq: number; type: string } }) => ({
+          ...event(data.seq),
+          type: data.type,
+        })),
+        findFirst: vi.fn().mockResolvedValue(null),
+      },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    } as unknown as PrismaClient;
+    const committed = await answerRunInput(prisma, {
+      spaceId: "workspace-1",
+      threadId: "thread-1",
+      runId: "run-1",
+      messageId: "message-1",
+      answeredByUserId: "user-1",
+      answer,
+    });
+    return { committed, tx };
+  };
+
+  it("decides every actionable item from one batch answer and resumes once with all lines", async () => {
+    const checkpoint = JSON.stringify({
+      kind: "batch_ask_v1",
+      items: [
+        {
+          id: "item-1",
+          actions: [
+            { id: "choice-1", label: "Ship the notes" },
+            { id: "choice-2", label: "Hold" },
+          ],
+        },
+        {
+          id: "item-2",
+          actions: [
+            { id: "choice-1", label: "Office" },
+            { id: "choice-2", label: "Cafe" },
+          ],
+        },
+      ],
+    });
+    const { committed, tx } = await answerBatch({
+      answer: JSON.stringify({
+        answers: { "item-1": "choice-1", "item-2": "  Rooftop, if free  " },
+      }),
+      checkpoint,
+    });
+
+    expect(committed).toBe(true);
+    expect(tx.task.updateMany).toHaveBeenCalledTimes(1);
+    expect(tx.task.updateMany).toHaveBeenCalledWith({
+      where: { runs: { some: { id: "run-1" } } },
+      data: {
+        prompt: [
+          "Triage the open items.",
+          [
+            "Still open\nAnswer: - Ship the notes?: Selected choice choice-1: Ship the notes",
+            "- Where to meet?: Rooftop, if free",
+          ].join("\n"),
+        ].join("\n\n"),
+      },
+    });
+    expect(tx.run.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { status: "queued", checkpoint: null } }),
+    );
+    expect(tx.message.update).toHaveBeenCalledWith({
+      where: { id: "message-1" },
+      data: {
+        blocks: [
+          {
+            ...batchBlocks[0],
+            status: "answered",
+            answer:
+              "- Ship the notes?: Selected choice choice-1: Ship the notes\n- Where to meet?: Rooftop, if free",
+            items: [
+              batchBlocks[0]!.items[0],
+              batchBlocks[0]!.items[1],
+              batchBlocks[0]!.items[2],
+            ].map((item, index) =>
+              index === 0
+                ? { ...item, answer: "choice-1" }
+                : index === 1
+                  ? { ...item, answer: "Rooftop, if free" }
+                  : item,
+            ),
+          },
+        ],
+      },
+    });
+  });
+
+  it("resumes a composer reply as plain text when the card is a batch", async () => {
+    const { committed, tx } = await answerBatch({
+      answer: "Sure, just do the first two.",
+      trigger: "user",
+    });
+
+    expect(committed).toBe(true);
+    expect(tx.task.updateMany).toHaveBeenCalledWith({
+      where: { runs: { some: { id: "run-1" } } },
+      data: { prompt: "Sure, just do the first two." },
+    });
+    expect(tx.message.update).toHaveBeenCalledWith({
+      where: { id: "message-1" },
+      data: {
+        blocks: [
+          expect.objectContaining({
+            status: "answered",
+            answer: "Sure, just do the first two.",
+          }),
+        ],
+      },
+    });
+  });
+
+  it.each([
+    ["an unknown item", { answers: { "item-1": "choice-1", "item-2": "Office", "item-9": "x" } }],
+    ["an FYI row", { answers: { "item-1": "choice-1", "item-2": "Office", "item-3": "ok" } }],
+    ["an unanswered item", { answers: { "item-1": "choice-1" } }],
+    ["a blank answer", { answers: { "item-1": "choice-1", "item-2": "   " } }],
+    ["extra keys", { answers: { "item-1": "choice-1", "item-2": "Office" }, extra: true }],
+  ])("refuses a batch answer with %s without resuming", async (_label, payload) => {
+    const { committed, tx } = await answerBatch({ answer: JSON.stringify(payload) });
+
+    expect(committed).toBe(false);
+    expect(tx.run.updateMany).not.toHaveBeenCalled();
+    expect(tx.task.updateMany).not.toHaveBeenCalled();
+    expect(tx.message.update).not.toHaveBeenCalled();
+  });
+});

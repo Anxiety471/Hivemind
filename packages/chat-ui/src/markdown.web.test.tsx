@@ -8,7 +8,7 @@ import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { closeUnterminatedFence } from "./markdown";
-import type { LinkFavicons } from "./markdown.web";
+import type { ChatMarkdownProps, LinkFavicons } from "./markdown.web";
 import {
   ChatMarkdown,
   defaultMarkdownCopy,
@@ -1083,6 +1083,128 @@ describe("web markdown reference hover cards", () => {
     await vi.waitFor(() => {
       expect(document.querySelector('[data-ref-kind="ticket"]')).not.toBeNull();
     });
+    await unmount();
+  });
+});
+
+describe("web markdown ticket decisions", () => {
+  const decision = {
+    question: "Which scope ships first?",
+    options: [
+      { id: "choice-1", label: "Core only", recommended: true },
+      { id: "choice-2", label: "Everything" },
+    ],
+  };
+
+  async function renderTicket(
+    ticket: { decision?: typeof decision & { answer?: string } },
+    props: Pick<ChatMarkdownProps, "onOpenTicket" | "onDecideTicket">,
+  ) {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(
+        <ChatMarkdown
+          {...props}
+          referenceContext={{
+            ticketPrefix: "TASK",
+            tickets: [{ id: "ticket-388", ref: "TASK-388", title: "Pick a scope", ...ticket }],
+          }}
+        >
+          {"Waiting on [TASK-388](rakazo-ticket:TASK-388)"}
+        </ChatMarkdown>,
+      );
+    });
+    return {
+      container,
+      chip: container.querySelector<HTMLButtonElement>("button.rk-chat-ticket-chip"),
+      unmount: async () => {
+        await act(async () => root.unmount());
+        container.remove();
+      },
+    };
+  }
+
+  async function openCard(chip: HTMLElement | null | undefined) {
+    await act(async () => {
+      chip?.focus();
+    });
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-testid="chat-ref-hover-card"]')).not.toBeNull();
+    });
+    return document.querySelector<HTMLElement>('[data-testid="chat-ref-hover-card"]');
+  }
+
+  it("marks a ticket with an unanswered decision and offers its choices on hover", async () => {
+    const onOpenTicket = vi.fn();
+    const { chip, unmount } = await renderTicket(
+      { decision },
+      { onOpenTicket, onDecideTicket: vi.fn() },
+    );
+    expect(chip?.classList.contains("rk-chat-ticket-chip-pending")).toBe(true);
+    const card = await openCard(chip);
+    expect(card?.textContent).toContain("Which scope ships first?");
+    const choices = [...(card?.querySelectorAll("button.rk-chat-ref-card-choice") ?? [])];
+    expect(choices.map((choice) => choice.textContent)).toEqual([
+      "Core onlyRecommended",
+      "Everything",
+    ]);
+    expect(choices[0]?.querySelector(".rk-chat-ref-card-pill")?.textContent).toBe("Recommended");
+    expect(choices[1]?.querySelector(".rk-chat-ref-card-pill")).toBeNull();
+    await unmount();
+  });
+
+  it("answers from the card without opening the ticket", async () => {
+    const onOpenTicket = vi.fn();
+    const onDecideTicket = vi.fn();
+    const { chip, unmount } = await renderTicket({ decision }, { onOpenTicket, onDecideTicket });
+    const card = await openCard(chip);
+    const choice = card?.querySelectorAll<HTMLButtonElement>("button.rk-chat-ref-card-choice")[0];
+    await act(async () => {
+      choice?.click();
+    });
+    expect(onDecideTicket).toHaveBeenCalledTimes(1);
+    expect(onDecideTicket).toHaveBeenCalledWith("ticket-388", "choice-1");
+    expect(onOpenTicket).not.toHaveBeenCalled();
+    await unmount();
+  });
+
+  it("ignores a second click while the first answer is pending", async () => {
+    const gate = deferred<void>();
+    const onDecideTicket = vi.fn(() => gate.promise);
+    const { chip, unmount } = await renderTicket(
+      { decision },
+      { onOpenTicket: vi.fn(), onDecideTicket },
+    );
+    const card = await openCard(chip);
+    const choice = card?.querySelectorAll<HTMLButtonElement>("button.rk-chat-ref-card-choice")[1];
+    await act(async () => {
+      choice?.click();
+      choice?.click();
+    });
+    expect(onDecideTicket).toHaveBeenCalledTimes(1);
+    expect(onDecideTicket).toHaveBeenCalledWith("ticket-388", "choice-2");
+    expect(choice?.getAttribute("data-pending")).not.toBeNull();
+    await act(async () => {
+      gate.resolve();
+    });
+    await vi.waitFor(() => {
+      expect(choice?.hasAttribute("data-pending")).toBe(false);
+    });
+    await unmount();
+  });
+
+  it("shows the answered decision without choices or the pending dot", async () => {
+    const { chip, unmount } = await renderTicket(
+      { decision: { ...decision, answer: "choice-1" } },
+      { onOpenTicket: vi.fn(), onDecideTicket: vi.fn() },
+    );
+    expect(chip?.classList.contains("rk-chat-ticket-chip-pending")).toBe(false);
+    const card = await openCard(chip);
+    expect(card?.querySelector("button.rk-chat-ref-card-choice")).toBeNull();
+    expect(card?.textContent).toContain("Decided: Core only");
     await unmount();
   });
 });

@@ -86,6 +86,8 @@ export function MarkdownChrome({ children }: { children: ReactNode }) {
         }
       },
       commitTitle: t`Commit`,
+      recommended: t`Recommended`,
+      decided: (label) => t`Decided: ${label}`,
     }),
     [t],
   );

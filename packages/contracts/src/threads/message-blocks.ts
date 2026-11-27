@@ -79,6 +79,30 @@ export const AskReceipt = z.object({
 });
 export type AskReceipt = z.infer<typeof AskReceipt>;
 
+/** One choice on an ask; a short line under the label explains what choosing it means. */
+export const AskActionSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  /** A short line under the label, such as what choosing this option means. */
+  description: z.string().optional(),
+  outcome: z.enum(["created", "cancelled"]).optional(),
+  recommended: z.boolean().optional(),
+});
+export type AskAction = z.infer<typeof AskActionSchema>;
+
+/** One independent item of a batch ask. Actionable items carry `actions`; FYI rows omit them. */
+export const AskItemSchema = z.object({
+  id: z.string(),
+  question: z.string(),
+  detail: z.string().optional(),
+  ticketRef: z.string().optional(),
+  /** Present on actionable items; omitted on read-only FYI rows. */
+  actions: z.array(AskActionSchema).optional(),
+  /** Selected choice id or custom Other text once answered. */
+  answer: z.string().optional(),
+});
+export type AskItem = z.infer<typeof AskItemSchema>;
+
 export const MessageBlock = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("text"), text: z.string() }),
   z.object({
@@ -131,18 +155,9 @@ export const MessageBlock = z.discriminatedUnion("kind", [
     dismissed: z.literal(true).optional(),
     /** A login the user used for this run only instead of saving it. */
     remembered: z.literal(false).optional(),
-    actions: z
-      .array(
-        z.object({
-          id: z.string(),
-          label: z.string(),
-          /** A short line under the label, such as what choosing this option means. */
-          description: z.string().optional(),
-          outcome: z.enum(["created", "cancelled"]).optional(),
-          recommended: z.boolean().optional(),
-        }),
-      )
-      .optional(),
+    actions: z.array(AskActionSchema).optional(),
+    /** Batch triage: independent decisions in one ask; answered together with one `threads.answer`. */
+    items: z.array(AskItemSchema).optional(),
   }),
   z.object({
     kind: z.literal("choice"),

@@ -3,6 +3,7 @@
 import { i18n } from "@lingui/core";
 import type { LoginFieldInput } from "@rakazo/contracts";
 import { BLOCKED_ITEM_ANSWER, UNCHOSEN_ITEM_ANSWER } from "@rakazo/contracts";
+import { formatBatchAskAnswer } from "@rakazo/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { act } from "react";
@@ -19,6 +20,8 @@ vi.mock("@lingui/react/macro", () => ({
 const favicon = vi.hoisted(() => ({ icon: null as string | null, asked: [] as string[] }));
 vi.mock("@rakazo/chat-ui/web", () => ({
   ChatMarkdown: ({ children }: { children: ReactNode }) => <span>{children}</span>,
+  LinkifiedText: ({ children }: { children: ReactNode }) => <span>{children}</span>,
+  withChatReferences: (text: string) => text,
   useLinkFavicon: (href: string) => {
     if (href) favicon.asked.push(href);
     return { icon: href ? favicon.icon : null, unusable: () => undefined };
@@ -35,6 +38,10 @@ vi.mock("../../lib/query/rpc", () => ({
   rpcForSpace: () => rpc,
   createSpaceRpc: () => rpc,
   selectedSpaceId: () => null,
+}));
+const references = vi.hoisted(() => ({ value: {} as Record<string, unknown> }));
+vi.mock("../../pages/shell/chat/chat-references", () => ({
+  useChatReferences: () => references.value,
 }));
 // A card's editor lists the vault's saved contacts; these cards need none.
 vi.mock("../vault/use-vault-contacts", () => ({ useVaultContacts: () => [] }));
@@ -83,14 +90,16 @@ async function render(
 ) {
   await act(async () =>
     root.render(
-      <AskCard
-        block={block}
-        answerIsSeparate={answerIsSeparate}
-        canAnswer
-        canDismiss
-        onAnswer={onAnswer}
-        onDismiss={onDismiss}
-      />,
+      <QueryClientProvider client={new QueryClient()}>
+        <AskCard
+          block={block}
+          answerIsSeparate={answerIsSeparate}
+          canAnswer
+          canDismiss
+          onAnswer={onAnswer}
+          onDismiss={onDismiss}
+        />
+      </QueryClientProvider>,
     ),
   );
 }
@@ -1121,4 +1130,89 @@ it("leaves plain questions to the composer and dims the question after answering
     container.querySelector('[data-testid="question-card"]')?.classList.contains("opacity-50"),
   ).toBe(true);
   expect(container.textContent).not.toContain("Paris");
+});
+
+const batchBlock: AskBlock = {
+  kind: "ask",
+  text: "Still open",
+  detail: "Nothing ships until these are settled.",
+  status: "pending",
+  items: [
+    {
+      id: "item-1",
+      question: "Which branch should ship?",
+      actions: [
+        { id: "choice-1", label: "Main", recommended: true },
+        { id: "choice-2", label: "Release", description: "Cut from the release branch" },
+      ],
+    },
+    { id: "item-2", question: "TASK-9 is waiting on review.", detail: "No reviewer yet." },
+    {
+      id: "item-3",
+      question: "How many retries?",
+      actions: [
+        { id: "choice-1", label: "3" },
+        { id: "choice-2", label: "5" },
+      ],
+    },
+  ],
+};
+
+function batchItems() {
+  return [...container.querySelectorAll('[data-testid="batch-ask-card"] li')];
+}
+
+function choiceIn(item: Element, label: string) {
+  return [...item.querySelectorAll("button")].find(
+    (button) =>
+      (button.querySelector(".block") ?? button.querySelector(".flex-1"))?.textContent === label,
+  );
+}
+
+it("answers a batch of questions in one send and leaves FYI rows read-only", async () => {
+  const onAnswer = vi.fn(async () => undefined);
+  await render(batchBlock, undefined, onAnswer);
+  expect(container.textContent).toContain("Still open");
+  expect(container.textContent).toContain("Nothing ships until these are settled.");
+
+  const [, fyi] = batchItems();
+  expect(fyi?.querySelectorAll("button")).toHaveLength(0);
+  expect(fyi?.textContent).toContain("No reviewer yet.");
+
+  const submit = () => button("Send answers (0/2)");
+  expect(submit()?.disabled).toBe(true);
+
+  await act(async () => choiceIn(batchItems()[0]!, "Main")!.click());
+  expect(button("Send answers (1/2)")?.disabled).toBe(true);
+
+  await act(async () => choiceIn(batchItems()[2]!, "Other")!.click());
+  await type("Other answer", "Keep 14");
+  await act(async () => button("Send answers (2/2)")!.click());
+
+  expect(onAnswer).toHaveBeenCalledTimes(1);
+  expect(onAnswer).toHaveBeenCalledWith(
+    formatBatchAskAnswer({ "item-1": "choice-1", "item-3": "Keep 14" }),
+  );
+  // Once sent, the chosen answers stay and the send footer is gone.
+  expect(button("Send answers (2/2)")).toBeUndefined();
+  expect(choiceIn(batchItems()[0]!, "Main")?.getAttribute("aria-pressed")).toBe("true");
+  expect(choiceIn(batchItems()[0]!, "Release")?.getAttribute("aria-pressed")).toBeNull();
+  expect(batchItems()[2]?.querySelector("blockquote")?.textContent).toBe("Keep 14");
+});
+
+it("shows each item's answer on an answered batch card", async () => {
+  await render({
+    ...batchBlock,
+    status: "answered",
+    items: [
+      { ...batchBlock.items![0]!, answer: "choice-2" },
+      batchBlock.items![1]!,
+      { ...batchBlock.items![2]!, answer: "Keep 14" },
+    ],
+  });
+  expect(button("Send answers (0/2)")).toBeUndefined();
+  expect(choiceIn(batchItems()[0]!, "Release")?.getAttribute("aria-pressed")).toBe("true");
+  expect(choiceIn(batchItems()[0]!, "Main")?.getAttribute("aria-pressed")).toBeNull();
+  expect(batchItems()[2]?.querySelector("blockquote")?.textContent).toBe("Keep 14");
+  expect(container.querySelectorAll('input[aria-label="Other answer"]')).toHaveLength(0);
 });

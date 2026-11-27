@@ -871,6 +871,14 @@ export type AgentRuntimeEvent =
       text: string;
       detail?: string;
       actions?: Array<{ id: string; label: string; recommended?: boolean; description?: string }>;
+      /** Batch triage: independent items, each with its own choices (FYI rows omit `actions`). */
+      items?: Array<{
+        id: string;
+        question: string;
+        detail?: string;
+        ticketRef?: string;
+        actions?: Array<{ id: string; label: string; description?: string; recommended?: boolean }>;
+      }>;
     }
   | { type: "takeover"; reason: string; executionId?: string }
   | ({

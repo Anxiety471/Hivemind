@@ -12,9 +12,13 @@ import { MessageView } from "./message-view";
 const references = vi.hoisted(() => ({
   context: undefined as ChatReferenceContext | undefined,
   openTicket: undefined as ((ticketRef: string) => void) | undefined,
+  decideTicket: undefined as ((ticketId: string, optionId: string) => void) | undefined,
 }));
 vi.mock("./chat-references", () => ({
-  useChatReferences: () => ({ referenceContext: references.context }),
+  useChatReferences: () => ({
+    referenceContext: references.context,
+    decideTicket: references.decideTicket,
+  }),
   useOpenTicket: () => references.openTicket,
 }));
 
@@ -658,6 +662,41 @@ describe("chat references", () => {
         expect(document.querySelector(`[data-ref-kind="${kind}"]`)).toBeNull();
       });
     }
+  });
+
+  it("answers a ticket's pending decision from its hover card", async () => {
+    const decideTicket = vi.fn();
+    references.decideTicket = decideTicket;
+    references.context = {
+      ticketPrefix: "TASK",
+      tickets: [
+        {
+          id: "ticket-388",
+          ref: "TASK-388",
+          title: "Pick a cache",
+          status: "doing",
+          decision: {
+            question: "Keep the cache?",
+            options: [
+              { id: "keep", label: "Keep it", recommended: true },
+              { id: "drop", label: "Drop it" },
+            ],
+          },
+        },
+      ],
+    };
+    renderView("bot", [{ kind: "text", text: "Blocked on TASK-388." }]);
+    const chip = container.querySelector<HTMLElement>("button.rk-chat-ticket-chip");
+    act(() => chip?.focus());
+    await vi.waitFor(() => {
+      expect(document.querySelector(".rk-chat-ref-card-choice")).not.toBeNull();
+    });
+    const choice = [
+      ...document.querySelectorAll<HTMLButtonElement>(".rk-chat-ref-card-choice"),
+    ].find((button) => button.textContent?.includes("Drop it"));
+    await act(async () => choice?.click());
+    expect(decideTicket).toHaveBeenCalledTimes(1);
+    expect(decideTicket).toHaveBeenCalledWith("ticket-388", "drop");
   });
 
   it("leaves a pull request number plain when the board names no repository", () => {

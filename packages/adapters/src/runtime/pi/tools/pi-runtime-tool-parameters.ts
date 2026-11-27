@@ -69,12 +69,32 @@ function builtinParameters(tool: ConnectorTool) {
     return Type.Object({
       question: Type.String({ maxLength: 240 }),
       detail: Type.Optional(Type.String({ maxLength: MAX_APPROVAL_DETAIL_LENGTH })),
-      options: Type.Array(Type.String({ minLength: 1, maxLength: 80 }), {
-        minItems: 2,
-        maxItems: 4,
-        uniqueItems: true,
-      }),
+      options: Type.Optional(
+        Type.Array(Type.String({ minLength: 1, maxLength: 80 }), {
+          minItems: 2,
+          maxItems: 4,
+          uniqueItems: true,
+        }),
+      ),
       recommended: Type.Optional(Type.String({ maxLength: 80 })),
+      items: Type.Optional(
+        Type.Array(
+          Type.Object({
+            question: Type.String({ minLength: 1, maxLength: 200 }),
+            detail: Type.Optional(Type.String({ maxLength: 600 })),
+            ticketRef: Type.Optional(Type.String({ maxLength: 32 })),
+            options: Type.Optional(
+              Type.Array(Type.String({ minLength: 1, maxLength: 80 }), {
+                minItems: 2,
+                maxItems: 4,
+                uniqueItems: true,
+              }),
+            ),
+            recommended: Type.Optional(Type.String({ maxLength: 80 })),
+          }),
+          { minItems: 1, maxItems: 8 },
+        ),
+      ),
     });
   }
   if (tool.name === "remember") {

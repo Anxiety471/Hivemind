@@ -10,7 +10,21 @@ export type ChatRepository = {
   isDefault?: boolean;
 };
 
+export type ChatTicketDecisionOption = {
+  id: string;
+  label: string;
+  recommended?: boolean;
+};
+
+/** A question the board asks about a ticket; `answer` is the chosen option's id once decided. */
+export type ChatTicketDecision = {
+  question: string;
+  options: readonly ChatTicketDecisionOption[];
+  answer?: string;
+};
+
 export type ChatTicketReference = {
+  id?: string;
   ref: string;
   title?: string;
   status?: string;
@@ -18,6 +32,7 @@ export type ChatTicketReference = {
   assigneeName?: string | null;
   repository?: string | null;
   pullRequests?: readonly { url: string; state?: string }[];
+  decision?: ChatTicketDecision | null;
 };
 
 export type ChatJobReference = {
@@ -699,12 +714,14 @@ export type ChatReferencePreview =
   | {
       kind: "ticket";
       ref: string;
+      ticketId?: string;
       title?: string;
       status?: string;
       priority?: string;
       assigneeName?: string;
       repoLabel?: string;
       pullRequestCount: number;
+      decision?: ChatTicketDecision;
     }
   | {
       kind: "pull_request";
@@ -760,12 +777,14 @@ export function describeChatReference(
     return {
       kind: "ticket",
       ref: ticketRef,
+      ticketId: ticket?.id,
       title: ticket?.title,
       status: ticket?.status,
       priority: ticket?.priority,
       assigneeName: ticket?.assigneeName ?? undefined,
       repoLabel: repoLabelOf(ticket?.repository),
       pullRequestCount: ticket?.pullRequests?.length ?? 0,
+      decision: ticket?.decision ?? undefined,
     };
   }
   if (!href) return undefined;

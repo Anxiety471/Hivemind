@@ -1,5 +1,6 @@
 import type { RealtimeFanout } from "@rakazo/adapter-kit";
 import type {
+  AskItem,
   BotSecretDestination,
   LoginFieldInput,
   MessageBlock,
@@ -22,6 +23,7 @@ import {
   isConversationalRun,
   isSecretAskBlock,
   messageReaction,
+  parseBatchAskAnswer,
   resolveAskChoice,
   SITE_SENDING_TOOLS,
 } from "@rakazo/core";
@@ -71,6 +73,8 @@ export interface PauseRunForInput {
    * (not in message blocks) so clients still see redacted labels.
    */
   offeredActions?: Array<{ id: string; label: string }>;
+  /** Batch items' unredacted choices, kept the same way for a batch ask's resume. */
+  offeredItems?: Array<{ id: string; actions?: Array<{ id: string; label: string }> }>;
   /** Commits with the pause, as a job that must exist once the run waits. */
   onPaused?: (tx: Prisma.TransactionClient) => Promise<void>;
 }
@@ -81,6 +85,77 @@ function choiceAskCheckpoint(actions: Array<{ id: string; label: string }>): str
   // Only id and label resume the run; the card-only fields stay out of the checkpoint.
   const resume = actions.map(({ id, label }) => ({ id, label }));
   return JSON.stringify({ kind: CHOICE_ASK_CHECKPOINT_KIND, actions: resume });
+}
+
+const BATCH_ASK_CHECKPOINT_KIND = "batch_ask_v1";
+
+function batchAskCheckpoint(items: NonNullable<PauseRunForInput["offeredItems"]>): string {
+  const resume = items.flatMap(({ id, actions }) =>
+    actions?.length
+      ? [{ id, actions: actions.map((action) => ({ id: action.id, label: action.label })) }]
+      : [],
+  );
+  return JSON.stringify({ kind: BATCH_ASK_CHECKPOINT_KIND, items: resume });
+}
+
+/** The unredacted label of one item's choice; the card's redacted label when none was kept. */
+function resumeBatchChoiceLabel(
+  itemId: string,
+  selected: { id: string; label: string },
+  checkpoint: string | null | undefined,
+): string {
+  if (!checkpoint) return selected.label;
+  try {
+    const parsed = JSON.parse(checkpoint) as {
+      kind?: string;
+      items?: Array<{ id?: unknown; actions?: Array<{ id?: unknown; label?: unknown }> }>;
+    };
+    if (parsed.kind !== BATCH_ASK_CHECKPOINT_KIND || !Array.isArray(parsed.items)) {
+      return selected.label;
+    }
+    const item = parsed.items.find((offered) => offered.id === itemId);
+    const offered = item?.actions?.find((action) => action.id === selected.id);
+    return typeof offered?.label === "string" && offered.label.length > 0
+      ? offered.label
+      : selected.label;
+  } catch {
+    return selected.label;
+  }
+}
+
+/**
+ * Resolves a batch answer (one entry per actionable item) against the card. Null when a key is
+ * not an actionable item or an item is left unanswered, so a batch is decided as a whole.
+ */
+function resolveBatchAnswer(
+  items: readonly AskItem[],
+  answers: Record<string, string>,
+  checkpoint: string | null | undefined,
+): { items: AskItem[]; lines: string[] } | null {
+  const actionableIds = new Set(
+    items.filter((item) => item.actions?.length).map((item) => item.id),
+  );
+  if (Object.keys(answers).some((id) => !actionableIds.has(id))) return null;
+  const resolved: AskItem[] = [];
+  const lines: string[] = [];
+  for (const item of items) {
+    if (!item.actions?.length) {
+      resolved.push(item);
+      continue;
+    }
+    const raw = answers[item.id];
+    if (raw === undefined) return null;
+    const choice = resolveAskChoice(raw, item.actions);
+    resolved.push({ ...item, answer: choice ? choice.id : raw });
+    lines.push(
+      `- ${item.question}: ${
+        choice
+          ? `Selected choice ${choice.id}: ${resumeBatchChoiceLabel(item.id, choice, checkpoint)}`
+          : raw
+      }`,
+    );
+  }
+  return { items: resolved, lines };
 }
 
 function resumeChoiceLabel(
@@ -241,6 +316,17 @@ async function commitAnswerRunInput(
   const secretAsk = isSecretAskBlock(pendingAsk);
   const choiceAsk = !approvalAsk && !secretAsk && Boolean(pendingAsk.actions?.length);
   const selectedChoice = choiceAsk ? resolveAskChoice(input.answer, pendingAsk.actions) : undefined;
+  const batchAsk =
+    !approvalAsk && !secretAsk && Boolean(pendingAsk.items?.some((item) => item.actions?.length));
+  // A batch answer decides every actionable item at once. Any other text is a composer reply
+  // that resumes the run as plain text, but a malformed batch payload is refused, not resumed.
+  const batchAnswers = batchAsk ? parseBatchAskAnswer(input.answer) : null;
+  if (batchAsk && !batchAnswers && /^\s*\{\s*"answers"/.test(input.answer)) return null;
+  const batch =
+    batchAnswers && pendingAsk.items
+      ? resolveBatchAnswer(pendingAsk.items, batchAnswers, run.checkpoint)
+      : null;
+  if (batchAnswers && !batch) return null;
   const dismissed = Boolean(input.dismiss);
   // A secret request can be turned down; every other card needs an answer.
   if (dismissed && (!secretAsk || input.answer)) return null;
@@ -337,12 +423,16 @@ async function commitAnswerRunInput(
     data: {
       status: "queued",
       ...(resumedTrigger !== run.trigger ? { trigger: resumedTrigger } : {}),
-      ...(choiceAsk ? { checkpoint: null } : {}),
+      ...(choiceAsk || batchAsk ? { checkpoint: null } : {}),
     },
   });
   if (queued.count !== 1) return null;
 
-  const recordedAnswer = secretAsk ? "" : (selectedChoice?.id ?? approvalAnswer);
+  const recordedAnswer = secretAsk
+    ? ""
+    : batch
+      ? batch.lines.join("\n")
+      : (selectedChoice?.id ?? approvalAnswer);
   const callId = callIdFromClientNonce(input.clientNonce);
   const recordsCallUtterance = Boolean(callId && !secretAsk);
 
@@ -450,6 +540,18 @@ async function commitAnswerRunInput(
         ...(pendingAsk.credential ? { result: { credentialSaved: pendingAsk.credential } } : {}),
       },
     });
+  } else if (batch) {
+    const task = await tx.task.updateMany({
+      where: { runs: { some: { id: input.runId } } },
+      data: {
+        prompt: resumePrompt(
+          { ...run, trigger: resumedTrigger },
+          pendingAsk.text,
+          batch.lines.join("\n"),
+        ),
+      },
+    });
+    if (task.count !== 1) throw new Error("Run task was not available to answer");
   } else {
     const resumeLabel = selectedChoice
       ? resumeChoiceLabel(selectedChoice, run.checkpoint)
@@ -476,6 +578,7 @@ async function commitAnswerRunInput(
           ...(!secretAsk && input.answerMessageId
             ? { answerMessageId: input.answerMessageId }
             : {}),
+          ...(batch ? { items: batch.items } : {}),
           ...(dismissed ? { dismissed: true as const } : {}),
           ...(input.remember === false ? { remembered: false as const } : {}),
           ...(editedInstructions !== undefined && pendingAsk.instructionUpdate
@@ -737,9 +840,11 @@ export async function pauseRunForInput(
         status: "waiting_input",
         leaseOwner: null,
         leaseExpiresAt: null,
-        ...(input.offeredActions?.length
-          ? { checkpoint: choiceAskCheckpoint(input.offeredActions) }
-          : {}),
+        ...(input.offeredItems?.length
+          ? { checkpoint: batchAskCheckpoint(input.offeredItems) }
+          : input.offeredActions?.length
+            ? { checkpoint: choiceAskCheckpoint(input.offeredActions) }
+            : {}),
       },
     });
     if (paused.count !== 1) return null;

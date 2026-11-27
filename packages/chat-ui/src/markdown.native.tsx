@@ -148,6 +148,8 @@ export type {
   ChatReferenceContext,
   ChatReferencePreview,
   ChatRepository,
+  ChatTicketDecision,
+  ChatTicketDecisionOption,
   ChatTicketReference,
 } from "./references";
 export {

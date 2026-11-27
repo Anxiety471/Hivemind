@@ -2,9 +2,10 @@ import type { AgentRuntimeEvent, ConnectorTool } from "@rakazo/adapter-kit";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const fakeAgentState = vi.hoisted(() => ({
-  options: ["Berlin", "Seoul", "Toronto"],
+  options: ["Berlin", "Seoul", "Toronto"] as string[] | undefined,
   recommended: undefined as string | undefined,
   detail: undefined as string | undefined,
+  items: undefined as unknown[] | undefined,
   tools: [] as Array<{
     name: string;
     prepareArguments?: (args: unknown) => Record<string, unknown>;
@@ -35,6 +36,7 @@ vi.mock("@earendil-works/pi-agent-core", () => ({
           ? {}
           : { recommended: fakeAgentState.recommended }),
         ...(fakeAgentState.detail === undefined ? {} : { detail: fakeAgentState.detail }),
+        ...(fakeAgentState.items === undefined ? {} : { items: fakeAgentState.items }),
       };
       const args = askUser.prepareArguments?.(raw) ?? raw;
       await askUser.execute("call-choice-1", args);
@@ -76,8 +78,9 @@ const choiceTool: ConnectorTool = {
     properties: {
       question: { type: "string" },
       options: { type: "array", items: { type: "string" } },
+      items: { type: "array", items: { type: "object" } },
     },
-    required: ["question", "options"],
+    required: ["question"],
   },
 };
 
@@ -106,6 +109,7 @@ describe("Pi choice asks", () => {
     fakeAgentState.options = ["Berlin", "Seoul", "Toronto"];
     fakeAgentState.recommended = undefined;
     fakeAgentState.detail = undefined;
+    fakeAgentState.items = undefined;
   });
 
   it("emits a tappable ask and stops without a finished-work fallback", async () => {
@@ -181,5 +185,94 @@ describe("Pi choice asks", () => {
         // exhaust generator
       }
     }).rejects.toThrow("ask_user recommended option must match one of the provided options");
+  });
+
+  describe("batch triage items", () => {
+    const actionItem = {
+      question: "Ship the release notes?",
+      detail: "Draft is in the thread.",
+      ticketRef: "OPS-12",
+      options: ["Ship", "Hold"],
+      recommended: "hold",
+    };
+    const fyiItem = { question: "Nightly build passed", ticketRef: "CI-4" };
+
+    beforeEach(() => {
+      fakeAgentState.options = undefined;
+    });
+
+    it("emits one ask with actionable and FYI items and a deterministic id per item", async () => {
+      fakeAgentState.items = [actionItem, fyiItem];
+      const runtime = new PiAgentRuntime();
+      const events: AgentRuntimeEvent[] = [];
+
+      for await (const event of runtime.run(runRequest, runContext)) events.push(event);
+
+      expect(events).toContainEqual({
+        type: "ask",
+        text: "Which city should I use?",
+        items: [
+          {
+            id: "item-1",
+            question: "Ship the release notes?",
+            detail: "Draft is in the thread.",
+            ticketRef: "OPS-12",
+            actions: [
+              { id: "choice-1", label: "Ship" },
+              { id: "choice-2", label: "Hold", recommended: true },
+            ],
+          },
+          { id: "item-2", question: "Nightly build passed", ticketRef: "CI-4" },
+        ],
+      });
+    });
+
+    it("rejects options and items together", async () => {
+      fakeAgentState.options = ["Berlin", "Seoul"];
+      fakeAgentState.items = [actionItem];
+      const runtime = new PiAgentRuntime();
+
+      await expect(async () => {
+        for await (const _event of runtime.run(runRequest, runContext)) {
+          // exhaust generator
+        }
+      }).rejects.toThrow("ask_user takes either options or items, not both");
+    });
+
+    it("rejects a batch with no actionable item", async () => {
+      fakeAgentState.items = [fyiItem];
+      const runtime = new PiAgentRuntime();
+      const events: AgentRuntimeEvent[] = [];
+
+      await expect(async () => {
+        for await (const event of runtime.run(runRequest, runContext)) events.push(event);
+      }).rejects.toThrow("ask_user items need at least one item with options");
+      expect(events.some((event) => event.type === "ask")).toBe(false);
+    });
+
+    it("rejects an unknown recommendation on an item", async () => {
+      fakeAgentState.items = [{ ...actionItem, recommended: "Tokyo" }, fyiItem];
+      const runtime = new PiAgentRuntime();
+
+      await expect(async () => {
+        for await (const _event of runtime.run(runRequest, runContext)) {
+          // exhaust generator
+        }
+      }).rejects.toThrow("ask_user item recommended must match one of its options");
+    });
+
+    it("rejects more than eight items", async () => {
+      fakeAgentState.items = Array.from({ length: 9 }, (_, index) => ({
+        question: `Item ${index + 1}`,
+        options: ["Yes", "No"],
+      }));
+      const runtime = new PiAgentRuntime();
+
+      await expect(async () => {
+        for await (const _event of runtime.run(runRequest, runContext)) {
+          // exhaust generator
+        }
+      }).rejects.toThrow("ask_user items takes one to 8 items");
+    });
   });
 });

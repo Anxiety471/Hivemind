@@ -584,6 +584,18 @@ a.rk-chat-link:hover .rk-chat-link-label {
   border-radius: 2px;
 }
 
+/* A calm dot after a ticket whose board decision still waits for an answer. */
+.rk-chat-ticket-chip-pending::after {
+  content: "";
+  display: inline-block;
+  width: 0.3rem;
+  height: 0.3rem;
+  margin-inline-start: 0.2rem;
+  border-radius: 999px;
+  background: var(--foreground);
+  vertical-align: middle;
+}
+
 /* Code inside a link (a commit SHA) reads as the link's own text, not as a second box. */
 .rk-chat-markdown a.rk-chat-link code {
   border: 0;
@@ -663,4 +675,52 @@ a.rk-chat-link:hover .rk-chat-link-label {
 .rk-chat-ref-card-sha {
   margin: 0;
   word-break: break-all;
+}
+
+/* A pending ticket decision: its question, then one button per option. */
+.rk-chat-ref-card-decision {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding-top: 0.45rem;
+  border-top: 1px solid var(--border);
+}
+
+.rk-chat-ref-card-choice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  box-sizing: border-box;
+  width: 100%;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  background: var(--background);
+  color: var(--foreground);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease;
+}
+
+.rk-chat-ref-card-choice:hover:not(:disabled) {
+  background: var(--muted);
+}
+
+.rk-chat-ref-card-choice:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
+.rk-chat-ref-card-choice:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.rk-chat-ref-card-choice[data-pending] {
+  border-color: var(--ring);
+  opacity: 1;
 }
