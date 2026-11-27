@@ -2,6 +2,7 @@ import { expectLinearTime } from "@rakazo/contracts/test-timing";
 import { describe, expect, it } from "vitest";
 import { codeBlockMarkdown } from "./code-blocks";
 import { CODE_BLOCK_SAMPLE, CODE_BLOCK_SAMPLE_CODE } from "./code-blocks.test-support";
+import { mayHaveCodeBlock } from "./scan";
 
 const SAMPLE_BLOCK = `\`\`\`jsx\n${CODE_BLOCK_SAMPLE_CODE}\n\`\`\``;
 
@@ -122,6 +123,59 @@ describe("reading a whole reply stays linear", () => {
     ).join("\n\n");
     expectLinearTime(() => {
       expect(codeBlockMarkdown(message).match(/^```js$/gm)).toHaveLength(2_000);
+    });
+  });
+});
+
+// The reader is loaded with `import()` only when its message may hold code, so the scan that
+// decides has to be a superset of what the reader takes: false means "never look".
+describe("the scan that decides whether to load the reader", () => {
+  it("says maybe for every message the reader rewrites", () => {
+    for (const message of [
+      CODE_BLOCK_SAMPLE,
+      'const data = [{ city: "Rome" }]; const columns = [];',
+      'def greet(name):\n    return f"hi {name}"',
+      "$ pnpm install\n$ pnpm build",
+      "interface TableProps {\n  columns: string[];\n}",
+      '{"city": "Rome", "code": "IT"}',
+      "  const port = 8787;\n  const host = 'localhost';",
+      "const data = [\n  { key: 1 },\n",
+      "Here is where everything runs:\n\nconst a = 1;\n\nAnd then it stops.",
+    ]) {
+      expect(codeBlockMarkdown(message), message).not.toBe(message);
+      expect(mayHaveCodeBlock(message), message).toBe(true);
+    }
+  });
+
+  it("rules out a message that is only prose", () => {
+    for (const message of [
+      "Here is what I found: the build passed, and the tests are green.",
+      "Run `pnpm build` first, then (only then) reload the page.",
+      "- **Write files** and run `commands` (careful with the last one)",
+      "## Capabilities (v2)",
+      "| Name | Status |\n| --- | --- |\n| Alice | done |",
+      "",
+      "short",
+    ]) {
+      expect(mayHaveCodeBlock(message), message).toBe(false);
+    }
+  });
+
+  it("says maybe for code already in a fence, which costs no extra chunk", () => {
+    // The scan does not read fences: a message with one draws a block, and that block loads the
+    // same chunk anyway. Opening a fence that has not closed reads as code too.
+    for (const message of ["```ts\nconst a = 1;\n```", "```ts\nconst a = 1;\n"]) {
+      expect(mayHaveCodeBlock(message), message).toBe(true);
+    }
+  });
+
+  it("scans a long message in linear time, like the reader", () => {
+    const prose = Array.from(
+      { length: 2_000 },
+      (_, index) => `Prose line ${index} that says what happened (and why).`,
+    );
+    expectLinearTime(() => {
+      expect(mayHaveCodeBlock(prose.join("\n\n"))).toBe(false);
     });
   });
 });

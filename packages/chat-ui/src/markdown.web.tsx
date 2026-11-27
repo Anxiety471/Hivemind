@@ -38,8 +38,9 @@ import {
   codeElement,
   codeText,
   fenceLanguage,
+  useDrawing,
 } from "./code-blocks/code-block.web";
-import { codeBlockMarkdown } from "./code-blocks/code-blocks";
+import { mayHaveCodeBlock } from "./code-blocks/scan";
 import { GlobeIcon, ImageIcon } from "./icons";
 import type { ChatMarkdownProps } from "./markdown";
 import {
@@ -808,9 +809,16 @@ export const ChatMarkdown = memo(function ChatMarkdown({
   onOpenPage,
 }: ChatMarkdownProps) {
   const { request, dialog } = useExternalLinkConfirm();
-  // Code a bot wrote without a fence is fenced before Markdown reads it, so it keeps its
-  // shape, its JSX and its highlighting instead of arriving as paragraphs.
-  const source = useMemo(() => codeBlockMarkdown(children), [children]);
+  // Code a bot wrote without a fence is fenced before Markdown reads it, so it keeps its shape,
+  // its JSX and its highlighting instead of arriving as paragraphs. Reading it is a chunk of its
+  // own, fetched as soon as a message may carry code (most carry none, and never fetch it): the
+  // text is drawn as written until that chunk is here, and then one paint draws the block.
+  const mayHaveCode = useMemo(() => mayHaveCodeBlock(children), [children]);
+  const drawing = useDrawing(mayHaveCode);
+  const source = useMemo(
+    () => (drawing ? drawing.codeBlockMarkdown(children) : children),
+    [drawing, children],
+  );
   // A streamed reply stays split once it finishes, so its blocks are not drawn again.
   const [split, setSplit] = useState(streaming);
   if (streaming && !split) setSplit(true);

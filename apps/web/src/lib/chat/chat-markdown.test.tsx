@@ -1,6 +1,10 @@
+// @vitest-environment jsdom
+
 import { ChatMarkdown, RemoteImagesContext } from "@rakazo/chat-ui/web";
+import { act } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 describe("ChatMarkdown", () => {
   it("renders the formatting commonly emitted by assistants", () => {
@@ -14,15 +18,30 @@ describe("ChatMarkdown", () => {
     expect(html).toContain("<code>commands</code>");
   });
 
-  it("does not inject raw HTML or unsafe link protocols", () => {
-    const html = renderToStaticMarkup(
-      <ChatMarkdown>{'<script>alert("xss")</script> [bad](javascript:alert(1))'}</ChatMarkdown>,
-    );
-
+  it("does not inject raw HTML or unsafe link protocols", async () => {
     // The payload is code the bot wrote, so it is shown escaped and inert: no element, no link.
-    expect(html).not.toContain("<script");
-    expect(html).not.toContain('href="javascript:');
-    expect(html).toContain("&lt;script&gt;");
+    // The reader that turns unfenced code into a block is a chunk of its own, so the block
+    // arrives a moment after the message; this draws it the way the app does, and waits.
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(
+        <ChatMarkdown>{'<script>alert("xss")</script> [bad](javascript:alert(1))'}</ChatMarkdown>,
+      );
+    });
+    await vi.waitFor(() => {
+      expect(container.querySelector("pre code")?.textContent).toContain(
+        '<script>alert("xss")</script>',
+      );
+    });
+    expect(container.querySelector("script")).toBeNull();
+    expect(container.querySelector('a[href^="javascript:"]')).toBeNull();
+    await act(async () => {
+      root.unmount();
+    });
+    container.remove();
   });
 
   it("renders unsafe links as plain text instead of a link back into the app", () => {
@@ -161,8 +180,10 @@ describe("ChatMarkdown", () => {
       <ChatMarkdown streaming>{"```ts\nconst live = true;"}</ChatMarkdown>,
     );
 
-    expect(html).toContain("<pre>");
-    expect(html).toContain("const live = true;");
+    // The block's text, however it is drawn: the code in one run, or a token per span.
+    const shown = new DOMParser().parseFromString(html, "text/html").querySelector("pre");
+    expect(shown?.textContent).toBe("const live = true;");
+    expect(shown?.className).toBe("");
     expect(html).toContain("rk-chat-markdown-cursor");
   });
 

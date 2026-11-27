@@ -25,12 +25,20 @@ async function render(markdown: string) {
   };
 }
 
+/** The code of the block once the chunk that reads and draws code has arrived. */
+async function drawnCode(container: HTMLElement) {
+  await vi.waitFor(() => expect(container.querySelector("pre code")).not.toBeNull());
+  return container.querySelector("pre code");
+}
+
 describe("web chat code blocks", () => {
   it("draws a bot's unfenced code as a highlighted block with its language", async () => {
     const { container, cleanup } = await render(CODE_BLOCK_SAMPLE);
+    // Reading a bot's unfenced code is a chunk of its own, fetched once a message may hold some;
+    // the block the reader makes appears with it.
+    const code = await drawnCode(container);
     // The reply's own sentence stays a paragraph; the code became a block.
     expect(container.querySelector("p")?.textContent).toBe("Here is where everything runs:");
-    const code = container.querySelector("pre code");
     expect(code?.className).toBe("language-jsx");
     // The JSX the sanitizer used to eat is code now, kept exactly as written.
     expect(code?.textContent).toContain("render: (v) => <Tag>{v}</Tag>");
@@ -57,6 +65,7 @@ describe("web chat code blocks", () => {
     const writeText = vi.fn(async (_text: string) => undefined);
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
     const { container, cleanup } = await render(CODE_BLOCK_SAMPLE);
+    await drawnCode(container);
     expect(container.querySelector(".rk-chat-markdown-code-language")?.textContent).toBe("jsx");
     const copy = container.querySelector<HTMLButtonElement>('button[aria-label="Copy code"]');
     await act(async () => {
