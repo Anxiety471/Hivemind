@@ -78,6 +78,7 @@ test("adds a stdio MCP server with encrypted environment variables", async ({ pa
       health: { status: "unknown", message: null, toolCount: null, checkedAt: null },
       enabled: true,
       verbatimResults: false,
+      sendCallerIdentity: false,
       revision: 1,
       createdAt: "2026-08-24T00:00:00.000Z",
       updatedAt: "2026-08-24T00:00:00.000Z",
