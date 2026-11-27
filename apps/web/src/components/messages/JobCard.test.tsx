@@ -510,6 +510,52 @@ describe("JobCard", () => {
     card.unmount();
   });
 
+  it("opens a bare job origin at its own job, encoding an id that carries separators", () => {
+    const card = mountCard({ ...job, state: "finished", url: "https://code.example.test" });
+    expect(card.byTestId("job-open")?.getAttribute("href")).toBe(
+      "https://code.example.test/?job=job-1",
+    );
+    card.unmount();
+
+    const composite = mountCard({
+      ...job,
+      jobId: "wt-1:term-2",
+      state: "finished",
+      url: "https://code.example.test/",
+    });
+    expect(composite.byTestId("job-open")?.getAttribute("href")).toBe(
+      "https://code.example.test/?job=wt-1%3Aterm-2",
+    );
+    composite.unmount();
+  });
+
+  it("keeps a stored deep link byte for byte instead of adding a second route", () => {
+    const explicit = mountCard({
+      ...job,
+      state: "finished",
+      url: "https://code.example.test/?worktree=w1&tab=t1",
+    });
+    expect(explicit.byTestId("job-open")?.getAttribute("href")).toBe(
+      "https://code.example.test/?worktree=w1&tab=t1",
+    );
+    explicit.unmount();
+
+    const path = mountCard({ ...job, state: "finished", url: "https://code.example.test/job-1" });
+    expect(path.byTestId("job-open")?.getAttribute("href")).toBe("https://code.example.test/job-1");
+    path.unmount();
+  });
+
+  it("offers no Open link for a job that only reported a plaintext address", () => {
+    const card = mountCard({
+      ...job,
+      jobId: "wt-1:term-2",
+      state: "finished",
+      url: "http://code.example.test",
+    });
+    expect(card.button("job-open")).toBeNull();
+    card.unmount();
+  });
+
   it("links only an https job and pull request", () => {
     const card = mountCard({
       ...job,

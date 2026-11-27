@@ -753,7 +753,7 @@ export const Transcript = memo(function Transcript({
                                 : "w-fit"
                             } min-w-0 ${
                               hasJobCard
-                                ? "max-w-[96%] [@media(hover:none)]:max-w-[96%]"
+                                ? "max-w-[min(96%,calc(100%_-_5rem),60rem)] [@media(hover:none)]:max-w-[96%]"
                                 : bubbleFrameWidth(message.role)
                             }`
                     }

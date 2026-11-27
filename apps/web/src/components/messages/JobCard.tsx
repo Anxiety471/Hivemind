@@ -49,6 +49,19 @@ import { errorText } from "../../lib/query/user-error";
 const PREVIEW_CHARS = 220;
 const PREVIEW_LINES = 3;
 
+/** `Open` leaves the card for the job itself, so it is the one primary action in both footers. */
+const OPEN_LINK =
+  "inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-border/75 bg-background/85 px-2.5 py-1 text-label font-medium text-foreground no-underline shadow-2xs transition-colors hover:border-border hover:bg-accent focus-ring";
+function OpenLink({ href }: { href: string }) {
+  const { t } = useLingui();
+  return (
+    <a href={href} target="_blank" rel="noreferrer" data-testid="job-open" className={OPEN_LINK}>
+      <Trans>Open</Trans>
+      <ExternalLink className="size-3" aria-label={t`(opens in a new tab)`} />
+    </a>
+  );
+}
+
 type JobBlock = Extract<MessageBlock, { kind: "job" }>;
 type JobTab = "output" | "files" | "steps";
 type JobAction = "send" | "stop" | "status";
@@ -269,12 +282,13 @@ function FileRow({ file }: { file: JobCardFile }) {
   const [open, setOpen] = useState(false);
   const [copied, copy] = useCopied();
   const hasDiff = Boolean(file.diff);
+  // The filename keeps its room and the directory gives way, so a long path still reads.
+  const cut = file.path.lastIndexOf("/") + 1;
+  const directory = file.path.slice(0, cut);
+  const name = file.path.slice(cut);
   return (
-    <div
-      data-testid="job-file"
-      className="min-w-0 overflow-hidden rounded-lg border border-border/60 bg-background/40"
-    >
-      <div className="flex min-w-0 items-center gap-2 px-2 py-1.5">
+    <div data-testid="job-file" className="group/file min-w-0 transition-colors hover:bg-muted/35">
+      <div className="flex min-w-0 items-center gap-2 px-2.5 py-1.5">
         <span
           className={cn(
             "grid size-4 shrink-0 place-items-center rounded-[4px] font-mono text-[10px] font-semibold",
@@ -292,8 +306,11 @@ function FileRow({ file }: { file: JobCardFile }) {
           title={file.path}
           className="flex min-w-0 flex-1 items-center gap-2 rounded text-start focus-ring disabled:cursor-default"
         >
-          <span className="min-w-0 flex-1 truncate font-mono text-caption text-foreground/90">
-            {file.path}
+          <span className="flex min-w-0 flex-1 items-baseline font-mono text-caption">
+            {directory ? (
+              <span className="min-w-0 truncate text-muted-foreground">{directory}</span>
+            ) : null}
+            <span className="shrink-0 font-medium text-foreground">{name}</span>
           </span>
           <span className="flex shrink-0 items-center gap-1.5 font-mono text-caption">
             <LineCounts insertions={file.insertions} deletions={file.deletions} />
@@ -312,7 +329,7 @@ function FileRow({ file }: { file: JobCardFile }) {
           type="button"
           aria-label={copied ? t`Copied` : t`Copy path`}
           onClick={() => copy(file.path)}
-          className="shrink-0 rounded p-0.5 text-muted-foreground hover:text-foreground focus-ring"
+          className="shrink-0 rounded p-0.5 text-muted-foreground opacity-45 transition-opacity group-hover/file:opacity-100 hover:text-foreground focus-ring focus-visible:opacity-100"
         >
           {copied ? (
             <Check className="size-3" aria-hidden />
@@ -328,7 +345,7 @@ function FileRow({ file }: { file: JobCardFile }) {
 
 function FileList({ files }: { files: readonly JobCardFile[] }) {
   return (
-    <div className="flex min-w-0 flex-col gap-1">
+    <div className="flex min-w-0 flex-col divide-y divide-border/45 overflow-hidden rounded-xl border border-border/50 bg-background/35">
       {files.map((file, index) => (
         <FileRow key={`${file.path}-${index}`} file={file} />
       ))}
@@ -357,7 +374,7 @@ function StepRow({ step }: { step: JobCardStep }) {
   const detail = step.detail?.trim();
   const duration = formatStepDuration(step.durationMs);
   return (
-    <li data-testid="job-step" className="min-w-0 rounded-md px-1.5 py-1 hover:bg-muted/40">
+    <li data-testid="job-step" className="min-w-0 rounded-md px-2 py-1.5 hover:bg-muted/40">
       <button
         type="button"
         disabled={!detail}
@@ -396,7 +413,7 @@ function StepRow({ step }: { step: JobCardStep }) {
 
 function ActivityList({ steps }: { steps: readonly JobCardStep[] }) {
   return (
-    <ol className="flex min-w-0 flex-col">
+    <ol className="flex min-w-0 flex-col rounded-xl border border-border/45 bg-background/25 p-1">
       {steps.map((step, index) => (
         <StepRow key={`${step.name}-${index}`} step={step} />
       ))}
@@ -554,23 +571,25 @@ function MetaChip({
   onClick,
   testId,
 }: {
-  icon: ReactNode;
+  icon?: ReactNode;
   children: ReactNode;
   title?: string;
   onClick?: () => void;
   testId: string;
 }) {
   const className = cn(
-    "inline-flex min-w-0 max-w-full items-center gap-1 rounded-md border border-border/50 bg-muted/60 px-2 py-0.5 text-caption text-muted-foreground",
+    "inline-flex min-w-0 max-w-full items-center gap-1 rounded-md border border-border/45 bg-muted/45 px-2 py-0.5 text-caption text-muted-foreground",
     onClick
       ? "cursor-pointer transition-colors hover:border-border hover:bg-muted hover:text-foreground focus-ring"
       : undefined,
   );
   const content = (
     <>
-      <span className="shrink-0 [&_svg]:size-3" aria-hidden>
-        {icon}
-      </span>
+      {icon ? (
+        <span className="shrink-0 [&_svg]:size-3" aria-hidden>
+          {icon}
+        </span>
+      ) : null}
       {children}
     </>
   );
@@ -587,6 +606,34 @@ function MetaChip({
   ) : (
     <span className={className} title={title} data-testid={testId}>
       {content}
+    </span>
+  );
+}
+
+/** Opens the job at its own address, adding `?job=<jobId>` only to a legacy bare origin. */
+function jobOpenUrl(rawUrl: string | undefined, jobId: string): string | undefined {
+  const safe = httpsUrl(rawUrl);
+  const trimmedId = jobId.trim();
+  if (!safe || !trimmedId) return safe;
+  // `httpsUrl` parsed this address already, so a stored deep link simply keeps its own route.
+  const parsed = new URL(safe);
+  if (parsed.pathname !== "/" || parsed.search || parsed.hash) return safe;
+  parsed.searchParams.set("job", trimmedId);
+  return parsed.toString();
+}
+
+/** The plate and icon at a card's head, so the card and its inspector read alike. */
+function JobIcon({ block }: { block: JobBlock }) {
+  const Icon = block.files?.length || block.steps?.length ? Code2 : Terminal;
+  return (
+    <span
+      className={cn(
+        "flex size-8 shrink-0 items-center justify-center rounded-lg",
+        iconTone(block.state),
+      )}
+      aria-hidden
+    >
+      <Icon className="size-4" strokeWidth={1.9} />
     </span>
   );
 }
@@ -636,7 +683,7 @@ export function JobCard({
   const [outputCopied, copyOutput] = useCopied();
 
   const reply = block.reply?.trim();
-  const href = httpsUrl(block.url);
+  const href = jobOpenUrl(block.url, block.jobId);
   const prHref = httpsUrl(block.prUrl);
   const files = block.files ?? [];
   const steps = block.steps ?? [];
@@ -653,21 +700,12 @@ export function JobCard({
     toolCalls !== undefined
       ? plural(toolCalls, { one: "# tool", other: "# tools" })
       : plural(steps.length, { one: "# step", other: "# steps" });
+  const hasMeta = Boolean(
+    block.agent || block.model || block.effort || block.branch || block.commit || prHref,
+  );
+  const hasOutput = Boolean(reply || block.summary || block.workspacePath || block.currentActivity);
   const hasDetails = Boolean(
-    reply ||
-      block.summary ||
-      block.model ||
-      block.effort ||
-      block.commit ||
-      block.repo ||
-      block.workspacePath ||
-      prHref ||
-      files.length ||
-      steps.length ||
-      block.currentActivity ||
-      block.error ||
-      tokens > 0 ||
-      cost,
+    hasOutput || hasMeta || files.length || steps.length || block.error || tokens > 0 || cost,
   );
   const sections: JobTab[] = [];
   // A paused job shows its question in the output like any other, with no special case.
@@ -716,42 +754,58 @@ export function JobCard({
   /** Toggle the inline composer that steers, answers or follows up on the job. */
   const toggleComposer = () => setComposerOpen((current) => !current);
 
-  const hasMeta = Boolean(
-    block.agent || block.model || block.effort || block.branch || block.commit || prHref,
-  );
-  const metaChips = (
+  const agentLine = [block.agent, block.model, block.effort].filter(Boolean).join(" · ");
+  const branchOrCommit = block.branch ? (
+    <MetaChip
+      icon={branchCopied ? <Check /> : <GitBranch />}
+      title={branchCopied ? t`Branch copied` : t`Copy branch name`}
+      testId="job-meta-branch"
+      onClick={() => copyBranch(block.branch!)}
+    >
+      <span className="min-w-0 truncate font-mono" dir="auto">
+        {block.branch}
+      </span>
+      {block.commit ? (
+        <span className="shrink-0 font-mono text-caption text-muted-foreground/70">
+          {block.commit.slice(0, 7)}
+        </span>
+      ) : null}
+    </MetaChip>
+  ) : block.commit ? (
+    <MetaChip icon={<GitBranch />} testId="job-meta-commit">
+      <span className="font-mono">{block.commit.slice(0, 7)}</span>
+    </MetaChip>
+  ) : null;
+  const leadingMeta = (
     <>
-      {block.agent || block.model || block.effort ? (
+      {agentLine ? (
         <MetaChip
           icon={block.model || block.effort ? <Cpu /> : <Terminal />}
           testId="job-meta-agent"
         >
           <span className="min-w-0 truncate" dir="auto">
-            {[block.agent, block.model, block.effort].filter(Boolean).join(" · ")}
+            {agentLine}
           </span>
         </MetaChip>
       ) : null}
-      {block.branch ? (
-        <MetaChip
-          icon={branchCopied ? <Check /> : <GitBranch />}
-          title={branchCopied ? t`Branch copied` : t`Copy branch name`}
-          testId="job-meta-branch"
-          onClick={() => copyBranch(block.branch!)}
+      {branchOrCommit}
+      {prHref ? (
+        <a
+          href={prHref}
+          target="_blank"
+          rel="noreferrer"
+          data-testid="job-pr-link"
+          className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-md border border-border/45 bg-muted/45 px-2 py-0.5 text-caption text-muted-foreground no-underline transition-colors hover:border-border hover:bg-muted hover:text-foreground focus-ring"
         >
-          <span className="min-w-0 truncate font-mono" dir="auto">
-            {block.branch}
-          </span>
-          {block.commit ? (
-            <span className="shrink-0 font-mono text-caption text-muted-foreground/70">
-              {block.commit.slice(0, 7)}
-            </span>
-          ) : null}
-        </MetaChip>
-      ) : block.commit ? (
-        <MetaChip icon={<GitBranch />} testId="job-meta-commit">
-          <span className="font-mono">{block.commit.slice(0, 7)}</span>
-        </MetaChip>
+          <GitPullRequest className="size-3 shrink-0" aria-hidden />
+          <span className="truncate">{block.prLabel ?? t`PR`}</span>
+          <ExternalLink className="size-2.5 shrink-0 opacity-70" aria-hidden />
+        </a>
       ) : null}
+    </>
+  );
+  const trailingMeta = (
+    <>
       {hasDiffStat(block) ? (
         <MetaChip
           icon={<FileDiff />}
@@ -767,7 +821,6 @@ export function JobCard({
       ) : null}
       {tokens > 0 || cost ? (
         <MetaChip
-          icon={<Cpu />}
           testId="job-meta-tokens"
           title={[
             stats?.inputTokens === undefined
@@ -787,47 +840,20 @@ export function JobCard({
           </span>
         </MetaChip>
       ) : null}
-      {prHref ? (
-        <a
-          href={prHref}
-          target="_blank"
-          rel="noreferrer"
-          data-testid="job-pr-link"
-          className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-md border border-border/50 bg-muted/60 px-2 py-0.5 text-caption text-muted-foreground no-underline transition-colors hover:border-border hover:bg-muted hover:text-foreground focus-ring"
-        >
-          <GitPullRequest className="size-3 shrink-0" aria-hidden />
-          <span className="truncate">{block.prLabel ?? t`PR`}</span>
-          <ExternalLink className="size-2.5 shrink-0 opacity-70" aria-hidden />
-        </a>
-      ) : null}
     </>
   );
 
-  const summary = block.summary?.trim();
-  const subtitle = summary;
-
+  const subtitle = block.summary?.trim();
   return (
     <div
       data-testid="job-card"
-      className="@container w-[500px] max-w-full overflow-hidden rounded-2xl border border-border bg-card shadow-sm"
+      className="@container w-full overflow-hidden rounded-2xl border border-border bg-card shadow-sm"
     >
       <div data-testid="job-accent" className={cn("h-0.5 w-full", accentTone(block.state))} />
-      <div className="flex flex-col gap-2 px-4 pt-3.5 pb-2.5">
+      <div className="flex flex-col gap-2 px-4 pt-3.5 pb-3">
         <div className="flex min-w-0 items-start justify-between gap-2">
           <div className="flex min-w-0 flex-1 items-center gap-2">
-            <span
-              className={cn(
-                "flex size-8 shrink-0 items-center justify-center rounded-lg",
-                iconTone(block.state),
-              )}
-              aria-hidden
-            >
-              {files.length || steps.length ? (
-                <Code2 className="size-4" strokeWidth={1.9} />
-              ) : (
-                <Terminal className="size-4" strokeWidth={1.9} />
-              )}
-            </span>
+            <JobIcon block={block} />
             <div className="flex min-w-0 flex-1 flex-col">
               <div className="flex min-w-0 items-center gap-1.5">
                 <span
@@ -837,33 +863,29 @@ export function JobCard({
                 >
                   {block.title}
                 </span>
+                {block.repo && block.repo !== block.title ? (
+                  <span
+                    className="hidden max-w-[14rem] shrink-0 truncate rounded-md border border-border/50 bg-muted/40 px-1.5 py-0.5 font-mono text-caption text-muted-foreground @[520px]:inline-block"
+                    dir="auto"
+                    title={block.repo}
+                  >
+                    {block.repo}
+                  </span>
+                ) : null}
                 {block.turn !== undefined ? (
                   <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-caption text-muted-foreground tabular-nums">
                     {t`Turn ${block.turn}`}
                   </span>
                 ) : null}
               </div>
-              {subtitle || (block.repo && block.repo !== block.title) ? (
-                <div className="flex min-w-0 items-center gap-1.5">
-                  {subtitle ? (
-                    <p
-                      className="min-w-0 flex-1 truncate text-body-sm text-muted-foreground"
-                      dir="auto"
-                      title={subtitle}
-                    >
-                      {subtitle}
-                    </p>
-                  ) : null}
-                  {block.repo && block.repo !== block.title ? (
-                    <span
-                      className="max-w-[55%] shrink-0 truncate rounded-md border border-border/50 px-1.5 py-0.5 text-caption text-muted-foreground"
-                      dir="auto"
-                      title={block.repo}
-                    >
-                      {block.repo}
-                    </span>
-                  ) : null}
-                </div>
+              {subtitle ? (
+                <p
+                  className="mt-0.5 truncate text-body-sm text-muted-foreground"
+                  dir="auto"
+                  title={subtitle}
+                >
+                  {subtitle}
+                </p>
               ) : null}
             </div>
           </div>
@@ -873,22 +895,25 @@ export function JobCard({
               <Button
                 type="button"
                 variant="ghost"
-                size="icon-sm"
+                size="icon-xs"
                 data-testid="job-inspect"
                 aria-label={t`Inspect job details`}
                 title={t`Inspect job details`}
                 // The only way into the full-screen inspector, so it stays on every card width.
-                className="size-7 text-muted-foreground"
+                className="text-muted-foreground"
                 onClick={() => setInspecting(true)}
               >
-                <Maximize2 className="size-3.5" aria-hidden />
+                <Maximize2 aria-hidden />
               </Button>
             ) : null}
           </div>
         </div>
 
         {hasMeta || tokens > 0 || cost || hasDiffStat(block) ? (
-          <div className="flex min-w-0 flex-wrap items-center gap-1.5">{metaChips}</div>
+          <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1.5 pt-0.5">
+            <div className="flex min-w-0 flex-wrap items-center gap-1.5">{leadingMeta}</div>
+            <div className="flex shrink-0 flex-wrap items-center gap-1.5">{trailingMeta}</div>
+          </div>
         ) : null}
       </div>
 
@@ -981,7 +1006,7 @@ export function JobCard({
             <div
               role="tablist"
               aria-label={t`Job details`}
-              className="flex min-w-0 items-center gap-1 border-b border-border/60 bg-muted/25 px-3 py-1.5"
+              className="flex min-w-0 items-center gap-1 border-b border-border/60 bg-muted/20 px-4 py-1.5"
             >
               {sections.map((section) => (
                 <button
@@ -994,7 +1019,7 @@ export function JobCard({
                   className={cn(
                     "inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-label transition-colors focus-ring",
                     activeTab === section
-                      ? "bg-background text-foreground shadow-xs"
+                      ? "bg-background text-foreground shadow-2xs ring-1 ring-border/50"
                       : "text-muted-foreground hover:text-foreground",
                   )}
                 >
@@ -1019,16 +1044,16 @@ export function JobCard({
             data-testid={`job-panel-${activeTab}`}
             role="tabpanel"
             aria-label={t`Job details`}
-            className="min-w-0 px-3 py-2.5"
+            className="min-w-0 px-4 py-3"
           >
             {activeTab === "output" && reply ? (
               <OutputBody reply={reply} foldable />
             ) : activeTab === "files" ? (
-              <div className="max-h-64 min-w-0 overflow-y-auto rk-scroll">
+              <div className="max-h-72 min-w-0 overflow-y-auto scroll-py-1 rk-scroll">
                 <FileList files={files} />
               </div>
             ) : activeTab === "steps" ? (
-              <div className="max-h-64 min-w-0 overflow-y-auto rk-scroll">
+              <div className="max-h-72 min-w-0 overflow-y-auto scroll-py-1 rk-scroll">
                 <ActivityList steps={steps} />
               </div>
             ) : null}
@@ -1037,7 +1062,7 @@ export function JobCard({
       ) : null}
 
       {canAct || copyText || hasDetails || href ? (
-        <div className="flex min-w-0 flex-col gap-2 border-t border-border/60 bg-muted/20 px-3.5 py-2">
+        <div className="flex min-w-0 flex-col gap-2 border-t border-border/60 bg-muted/20 px-4 py-2.5">
           <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
             <div className="flex min-w-0 items-center gap-1">
               {canAct ? (
@@ -1114,18 +1139,7 @@ export function JobCard({
                   {outputCopied ? <Check aria-hidden /> : <Copy aria-hidden />}
                 </Button>
               ) : null}
-              {href ? (
-                <a
-                  href={href}
-                  target="_blank"
-                  rel="noreferrer"
-                  data-testid="job-open"
-                  className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-label text-muted-foreground no-underline transition-colors hover:bg-accent hover:text-foreground focus-ring"
-                >
-                  <Trans>Open</Trans>
-                  <ExternalLink className="size-3" aria-label={t`(opens in a new tab)`} />
-                </a>
-              ) : null}
+              {href ? <OpenLink href={href} /> : null}
             </div>
           </div>
           {composer}
@@ -1145,15 +1159,7 @@ export function JobCard({
           >
             <DialogHeader className="flex shrink-0 flex-col gap-2 border-b border-border px-5 py-4 pr-14">
               <div className="flex min-w-0 items-center gap-2">
-                <span
-                  className={cn(
-                    "flex size-8 shrink-0 items-center justify-center rounded-lg",
-                    iconTone(block.state),
-                  )}
-                  aria-hidden
-                >
-                  <Terminal className="size-4" strokeWidth={1.9} />
-                </span>
+                <JobIcon block={block} />
                 <DialogTitle className="min-w-0 flex-1 truncate" dir="auto">
                   {block.title}
                 </DialogTitle>
@@ -1162,14 +1168,17 @@ export function JobCard({
               <DialogDescription className="sr-only">
                 <Trans>Job details</Trans>
               </DialogDescription>
-              <div className="flex min-w-0 flex-wrap items-center gap-1.5">{metaChips}</div>
+              <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                {leadingMeta}
+                {trailingMeta}
+              </div>
               {block.workspacePath ? (
                 <button
                   type="button"
                   data-testid="job-workspace-path"
                   onClick={() => copyPath(block.workspacePath!)}
                   title={t`Copy workspace path`}
-                  className="inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-md border border-border/50 bg-muted/60 px-2 py-0.5 text-caption text-muted-foreground hover:text-foreground focus-ring"
+                  className="inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-md border border-border/45 bg-muted/45 px-2 py-0.5 text-caption text-muted-foreground hover:text-foreground focus-ring"
                 >
                   {pathCopied ? (
                     <Check className="size-3 shrink-0" aria-hidden />
@@ -1183,9 +1192,9 @@ export function JobCard({
               ) : null}
             </DialogHeader>
             <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-5 py-4 rk-scroll">
-              {summary ? (
+              {subtitle ? (
                 <p className="min-w-0 text-body-sm text-muted-foreground wrap-anywhere" dir="auto">
-                  {summary}
+                  {subtitle}
                 </p>
               ) : null}
               {block.error ? (
@@ -1231,17 +1240,7 @@ export function JobCard({
                 {block.repo ? `${block.repo} · ` : null}
                 {block.branch ?? block.jobId}
               </span>
-              {href ? (
-                <a
-                  href={href}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex shrink-0 items-center gap-1 text-label text-muted-foreground no-underline hover:text-foreground"
-                >
-                  <Trans>Open</Trans>
-                  <ExternalLink className="size-3" aria-hidden />
-                </a>
-              ) : null}
+              {href ? <OpenLink href={href} /> : null}
             </div>
           </DialogContent>
         </Dialog>
