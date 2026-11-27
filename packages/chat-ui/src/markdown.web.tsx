@@ -66,11 +66,13 @@ import {
 } from "./markdown";
 import { useMarkdownCopy } from "./markdown-copy";
 import { useMarkdownLinkCopy, useMarkdownLinkTrust } from "./markdown-link-prompt";
+import { LinkPreview, ReferenceHoverCard } from "./markdown-reference-card.web";
 import { MarkdownTable, MarkdownTableSourceContext } from "./markdown-table";
 import { isMermaidFence, mermaidSvgImage } from "./mermaid";
 import { useMermaidSvg } from "./mermaid.web";
 import { PAGE_ICON } from "./page-icon";
 import type { ChatReferenceContext } from "./references";
+import { describeChatReference, TICKET_URL_PREFIX } from "./references";
 
 function preserveSkippedTableText() {
   return (tree: HastNode) => {
@@ -519,6 +521,7 @@ function MarkdownAnchor({
     renderMention,
     onOpenPage: openPage,
     onOpenTicket: openTicket,
+    referenceContext,
   } = useContext(InlineChipsContext);
   const href = typeof props.href === "string" ? props.href : "";
   const pageId = markdownPageId(href);
@@ -532,7 +535,7 @@ function MarkdownAnchor({
   const ticketRef = markdownTicketRef(href);
   if (ticketRef) {
     return (
-      <TicketChip ticketRef={ticketRef} openTicket={openTicket}>
+      <TicketChip ticketRef={ticketRef} openTicket={openTicket} referenceContext={referenceContext}>
         {props.children}
       </TicketChip>
     );
@@ -561,7 +564,13 @@ function MarkdownAnchor({
     );
   return (
     <InsideLinkContext.Provider value={opens ? "open" : "rejected"}>
-      {link}
+      {opens ? (
+        <LinkPreview href={href} referenceContext={referenceContext}>
+          {link}
+        </LinkPreview>
+      ) : (
+        link
+      )}
     </InsideLinkContext.Provider>
   );
 }
@@ -589,24 +598,33 @@ function PageChip({
 function TicketChip({
   ticketRef,
   openTicket,
+  referenceContext,
   children,
 }: {
   ticketRef: string;
   openTicket: ((ticketRef: string) => void) | undefined;
+  referenceContext: ChatReferenceContext | undefined;
   children: ReactNode;
 }) {
-  return openTicket ? (
+  const chip = openTicket ? (
     <button type="button" className="rk-chat-ticket-chip" onClick={() => openTicket(ticketRef)}>
       {children}
     </button>
   ) : (
     <span>{children}</span>
   );
+  return (
+    <ReferenceHoverCard
+      preview={describeChatReference(`${TICKET_URL_PREFIX}${ticketRef}`, referenceContext)}
+    >
+      {chip}
+    </ReferenceHoverCard>
+  );
 }
 
 /** What a chip in the text does: a mention's rendering, and opening a linked page or ticket. */
 const InlineChipsContext = createContext<
-  Pick<ChatMarkdownProps, "renderMention" | "onOpenPage" | "onOpenTicket">
+  Pick<ChatMarkdownProps, "renderMention" | "onOpenPage" | "onOpenTicket" | "referenceContext">
 >({});
 
 /** The page icon (see `PAGE_ICON`), sized by its container. */
@@ -712,17 +730,26 @@ export function LinkifiedText({
             {part.value}
           </PageChip>
         ) : part.type === "ticket" ? (
-          <TicketChip key={index} ticketRef={part.ticketRef} openTicket={onOpenTicket}>
+          <TicketChip
+            key={index}
+            ticketRef={part.ticketRef}
+            openTicket={onOpenTicket}
+            referenceContext={referenceContext}
+          >
             {part.value}
           </TicketChip>
         ) : linkFaviconOrigin(part.href) ? (
-          <WebsiteLink key={index} href={part.href} className="rk-chat-link-in-bubble">
-            {linkLabel(part.value, part.href)}
-          </WebsiteLink>
+          <LinkPreview key={index} href={part.href} referenceContext={referenceContext}>
+            <WebsiteLink href={part.href} className="rk-chat-link-in-bubble">
+              {linkLabel(part.value, part.href)}
+            </WebsiteLink>
+          </LinkPreview>
         ) : (
-          <ConfirmableAnchor key={index} href={part.href} className="underline">
-            {part.value}
-          </ConfirmableAnchor>
+          <LinkPreview key={index} href={part.href} referenceContext={referenceContext}>
+            <ConfirmableAnchor href={part.href} className="underline">
+              {part.value}
+            </ConfirmableAnchor>
+          </LinkPreview>
         ),
       )}
       {dialog}
@@ -849,6 +876,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({
   renderMention,
   onOpenPage,
   onOpenTicket,
+  referenceContext,
 }: ChatMarkdownProps) {
   const { request, dialog } = useExternalLinkConfirm();
   // Code a bot wrote without a fence is fenced before Markdown reads it, so it keeps its shape,
@@ -872,8 +900,8 @@ export const ChatMarkdown = memo(function ChatMarkdown({
   }, [source, split]);
 
   const inlineChips = useMemo(
-    () => ({ renderMention, onOpenPage, onOpenTicket }),
-    [renderMention, onOpenPage, onOpenTicket],
+    () => ({ renderMention, onOpenPage, onOpenTicket, referenceContext }),
+    [renderMention, onOpenPage, onOpenTicket, referenceContext],
   );
   return (
     <ConfirmLinkContext.Provider value={request}>
@@ -920,11 +948,13 @@ export { MarkdownLinkPromptProvider } from "./markdown-link-prompt";
 export type {
   ChatJobReference,
   ChatReferenceContext,
+  ChatReferencePreview,
   ChatRepository,
   ChatTicketReference,
 } from "./references";
 export {
   deriveRepositoryBaseUrl,
+  describeChatReference,
   markdownTicketRef,
   repositoryCommitUrl,
   repositoryPullRequestUrl,

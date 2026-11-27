@@ -12,7 +12,8 @@ import { unified } from "unified";
 import type { ChatReferenceContext } from "./references";
 import { planPlainChatReferences } from "./references";
 
-export { markdownTicketRef } from "./references";
+export type { ChatReferencePreview } from "./references";
+export { describeChatReference, markdownTicketRef } from "./references";
 
 export type ChatMarkdownProps = {
   children: string;
@@ -23,6 +24,8 @@ export type ChatMarkdownProps = {
   onOpenPage?: (pageId: string) => void;
   /** Opens a ticket linked as `[TASK-1](rakazo-ticket:TASK-1)`; without it the ticket stays plain text. */
   onOpenTicket?: (ticketRef: string) => void;
+  /** The board and job cards that a reference's hover card reads (pull requests, commits, tickets). */
+  referenceContext?: ChatReferenceContext;
 };
 
 const PAGE_URL_PATTERN = /^page:([A-Za-z0-9_-]{1,64})$/;

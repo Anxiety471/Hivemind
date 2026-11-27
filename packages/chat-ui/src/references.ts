@@ -12,8 +12,12 @@ export type ChatRepository = {
 
 export type ChatTicketReference = {
   ref: string;
+  title?: string;
+  status?: string;
+  priority?: string;
+  assigneeName?: string | null;
   repository?: string | null;
-  pullRequests?: readonly { url: string }[];
+  pullRequests?: readonly { url: string; state?: string }[];
 };
 
 export type ChatJobReference = {
@@ -21,6 +25,8 @@ export type ChatJobReference = {
   prUrl?: string;
   url?: string;
   commit?: string;
+  title?: string;
+  branch?: string;
 };
 
 export type ChatReferenceContext = {
@@ -686,4 +692,128 @@ export function resolveJobCommitUrl(
   if (!isCommitSha(commit)) return undefined;
   const repo = buildCatalog({ repositories, jobs: [job] }).jobs[0]?.repo;
   return repo ? commitUrl(repo, commit) : undefined;
+}
+
+/** What a hover card shows for a chat reference, from the board and the thread's jobs. */
+export type ChatReferencePreview =
+  | {
+      kind: "ticket";
+      ref: string;
+      title?: string;
+      status?: string;
+      priority?: string;
+      assigneeName?: string;
+      repoLabel?: string;
+      pullRequestCount: number;
+    }
+  | {
+      kind: "pull_request";
+      number: number;
+      repoLabel: string;
+      host: string;
+      state?: string;
+      ticketRef?: string;
+      ticketTitle?: string;
+    }
+  | {
+      kind: "commit";
+      sha: string;
+      shortSha: string;
+      repoLabel: string;
+      host: string;
+      branch?: string;
+      jobTitle?: string;
+    };
+
+/** The last two path segments of a repository URL (or an `owner/repo` string). */
+function repoLabelOf(value: string | null | undefined): string | undefined {
+  if (!value?.trim()) return undefined;
+  let path = value.trim();
+  try {
+    path = new URL(path).pathname;
+  } catch {
+    // Not a URL: an `owner/repo` string is already the path.
+  }
+  const segments = path
+    .replace(/\.git$/, "")
+    .split("/")
+    .filter(Boolean);
+  return segments.length ? segments.slice(-2).join("/") : undefined;
+}
+
+/** A PR's identity without its segment: the repository's URL and number, lowercase. */
+function pullRequestKey(url: string | undefined | null): string | undefined {
+  const location = pullRequestLocation(url);
+  return location ? `${location.base}#${location.number}`.toLowerCase() : undefined;
+}
+
+/** The hover card's preview of a chat reference, or undefined for an ordinary website. */
+export function describeChatReference(
+  href: string | undefined,
+  context: ChatReferenceContext = {},
+): ChatReferencePreview | undefined {
+  const ticketRef = markdownTicketRef(href);
+  if (ticketRef) {
+    const ticket = context.tickets?.find(
+      (candidate) => candidate.ref.toLowerCase() === ticketRef.toLowerCase(),
+    );
+    return {
+      kind: "ticket",
+      ref: ticketRef,
+      title: ticket?.title,
+      status: ticket?.status,
+      priority: ticket?.priority,
+      assigneeName: ticket?.assigneeName ?? undefined,
+      repoLabel: repoLabelOf(ticket?.repository),
+      pullRequestCount: ticket?.pullRequests?.length ?? 0,
+    };
+  }
+  if (!href) return undefined;
+
+  const location = pullRequestLocation(href);
+  if (location) {
+    const url = new URL(location.base);
+    const key = pullRequestKey(href);
+    const linked = (context.tickets ?? [])
+      .flatMap((ticket) =>
+        (ticket.pullRequests ?? []).map((pullRequest) => ({ ticket, pullRequest })),
+      )
+      .find(({ pullRequest }) => pullRequestKey(pullRequest.url) === key);
+    return {
+      kind: "pull_request",
+      number: location.number,
+      repoLabel: repoLabelOf(location.base) ?? url.pathname,
+      host: url.host,
+      state: linked?.pullRequest.state,
+      ticketRef: linked?.ticket.ref,
+      ticketTitle: linked?.ticket.title,
+    };
+  }
+
+  const shaMatch = /\/(?:-\/)?commit\/([^/]+)$/.exec(httpsUrl(href)?.pathname ?? "");
+  const base = deriveRepositoryBaseUrl(href);
+  const sha = shaMatch?.[1];
+  if (!base || !sha || !isCommitSha(sha)) return undefined;
+  const url = new URL(base);
+  const repoLabel = repoLabelOf(base) ?? url.pathname;
+  const lower = sha.toLowerCase();
+  const job = (context.jobs ?? []).find((candidate) => {
+    const commit = candidate.commit?.trim().toLowerCase() ?? "";
+    if (!isCommitSha(commit) || !(commit.startsWith(lower) || lower.startsWith(commit))) {
+      return false;
+    }
+    const jobRepo = candidate.repo ?? repoLabelOf(candidate.prUrl);
+    return !jobRepo || jobRepo.toLowerCase() === repoLabel.toLowerCase();
+  });
+  const jobCommit = job?.commit?.trim() ?? "";
+  const fullSha = jobCommit.length > lower.length ? jobCommit : sha;
+  return {
+    kind: "commit",
+    sha: fullSha,
+    shortSha: fullSha.slice(0, 7),
+    repoLabel,
+    host: url.host,
+    branch: job?.branch,
+    jobTitle: job?.title,
+  };
 }

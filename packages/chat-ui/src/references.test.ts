@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ChatReferenceContext } from "./references";
 import {
   deriveRepositoryBaseUrl,
+  describeChatReference,
   markdownTicketRef,
   planPlainChatReferences,
   repositoryCommitUrl,
@@ -214,5 +215,124 @@ describe("planPlainChatReferences", () => {
       { start: 0, end: 6, kind: "link", href: `${HIVEMIND}/pull/19` },
       { start: 11, end: 19, kind: "ticket", ticketRef: "TASK-397" },
     ]);
+  });
+});
+
+describe("describeChatReference", () => {
+  const board: ChatReferenceContext = {
+    ticketPrefix: "TASK",
+    tickets: [
+      {
+        ref: "TASK-397",
+        title: "Hover cards",
+        status: "doing",
+        priority: "high",
+        assigneeName: "Grok Bot",
+        repository: `${HIVEMIND}.git`,
+        pullRequests: [{ url: `${HIVEMIND}/pull/19`, state: "merged" }],
+      },
+    ],
+    jobs: [
+      {
+        repo: "acme/hivemind",
+        commit: SHA,
+        title: "Hover card work",
+        branch: "feat/hover",
+      },
+    ],
+  };
+
+  it("describes a ticket from the board, with its repository and PR count", () => {
+    expect(describeChatReference("rakazo-ticket:TASK-397", board)).toEqual({
+      kind: "ticket",
+      ref: "TASK-397",
+      title: "Hover cards",
+      status: "doing",
+      priority: "high",
+      assigneeName: "Grok Bot",
+      repoLabel: "acme/hivemind",
+      pullRequestCount: 1,
+    });
+  });
+
+  it("still describes a ticket the board does not list, so its card shows the ref", () => {
+    expect(describeChatReference("rakazo-ticket:TASK-12", board)).toEqual({
+      kind: "ticket",
+      ref: "TASK-12",
+      pullRequestCount: 0,
+    });
+  });
+
+  it("describes a pull request with its state and the ticket it belongs to", () => {
+    expect(describeChatReference(`${HIVEMIND}/pull/19`, board)).toEqual({
+      kind: "pull_request",
+      number: 19,
+      repoLabel: "acme/hivemind",
+      host: "git.example.test",
+      state: "merged",
+      ticketRef: "TASK-397",
+      ticketTitle: "Hover cards",
+    });
+  });
+
+  it("matches a merge request URL against the board's pull request by host, repo and number", () => {
+    const merged: ChatReferenceContext = {
+      tickets: [
+        {
+          ref: "TASK-5",
+          title: "Lab fix",
+          pullRequests: [
+            { url: "https://git.example.test/Acme/Hivemind/-/merge_requests/7", state: "open" },
+          ],
+        },
+      ],
+    };
+    expect(
+      describeChatReference("https://git.example.test/acme/hivemind/-/merge_requests/7", merged),
+    ).toMatchObject({
+      kind: "pull_request",
+      number: 7,
+      state: "open",
+      ticketRef: "TASK-5",
+      ticketTitle: "Lab fix",
+    });
+    expect(
+      describeChatReference("https://git.example.test/acme/hivemind/pull/8", merged),
+    ).toMatchObject({
+      kind: "pull_request",
+      number: 8,
+      state: undefined,
+      ticketRef: undefined,
+    });
+  });
+
+  it("describes a commit with its full SHA, branch and job title from the job card", () => {
+    expect(describeChatReference(`${HIVEMIND}/commit/ffc2c036`, board)).toEqual({
+      kind: "commit",
+      sha: SHA,
+      shortSha: "ffc2c03",
+      repoLabel: "acme/hivemind",
+      host: "git.example.test",
+      branch: "feat/hover",
+      jobTitle: "Hover card work",
+    });
+  });
+
+  it("keeps a commit's own SHA when no job card matches it", () => {
+    const other = "1234567890abcdef1234567890abcdef12345678";
+    expect(describeChatReference(`${HIVEMIND}/-/commit/${other}`, board)).toEqual({
+      kind: "commit",
+      sha: other,
+      shortSha: "1234567",
+      repoLabel: "acme/hivemind",
+      host: "git.example.test",
+      branch: undefined,
+      jobTitle: undefined,
+    });
+  });
+
+  it("leaves an ordinary website without a preview", () => {
+    expect(describeChatReference("https://docs.example.test/guide/setup", board)).toBeUndefined();
+    expect(describeChatReference(undefined, board)).toBeUndefined();
   });
 });

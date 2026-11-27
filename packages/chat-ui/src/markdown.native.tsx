@@ -146,11 +146,13 @@ export { MarkdownLongPressContext } from "./native/sideways-scroll";
 export type {
   ChatJobReference,
   ChatReferenceContext,
+  ChatReferencePreview,
   ChatRepository,
   ChatTicketReference,
 } from "./references";
 export {
   deriveRepositoryBaseUrl,
+  describeChatReference,
   markdownTicketRef,
   repositoryCommitUrl,
   repositoryPullRequestUrl,

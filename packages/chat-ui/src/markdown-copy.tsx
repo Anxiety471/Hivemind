@@ -35,6 +35,14 @@ export type MarkdownCopy = {
   sortedBy: (column: string, direction: TableSortDirection) => string;
   /** The zoom level button: names the reset it performs and the current level. */
   resetZoom: (percent: number) => string;
+  /** Reference hover cards: a ticket's status and priority, its PR count, and PR and commit titles. */
+  openTicket: string;
+  ticketStatus: (status: string) => string;
+  ticketPriority: (priority: string) => string;
+  pullRequestCount: (count: number) => string;
+  pullRequestTitle: (number: number) => string;
+  pullRequestState: (state: string) => string;
+  commitTitle: string;
 };
 
 export const defaultMarkdownCopy: MarkdownCopy = {
@@ -66,6 +74,22 @@ export const defaultMarkdownCopy: MarkdownCopy = {
   sortedBy: (column, direction) =>
     `Sorted by ${column}, ${direction === "asc" ? "ascending" : "descending"}`,
   resetZoom: (percent) => `Reset zoom, ${percent}%`,
+  openTicket: "Open ticket",
+  ticketStatus: (status) =>
+    ({
+      todo: "To do",
+      doing: "In progress",
+      review: "Review",
+      blocked: "Blocked",
+      done: "Done",
+      closed: "Closed",
+    })[status] ?? status,
+  ticketPriority: (priority) =>
+    ({ low: "Low", high: "High", urgent: "Urgent" })[priority] ?? priority,
+  pullRequestCount: (count) => `${count} ${count === 1 ? "PR" : "PRs"}`,
+  pullRequestTitle: (number) => `Pull request #${number}`,
+  pullRequestState: (state) => state,
+  commitTitle: "Commit",
 };
 
 const MarkdownCopyContext = createContext<MarkdownCopy>(defaultMarkdownCopy);

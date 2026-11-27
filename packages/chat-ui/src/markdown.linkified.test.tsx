@@ -50,12 +50,12 @@ describe("web user message ticket chips", () => {
         {"see TASK-397"}
       </LinkifiedText>,
     );
-    expect(chip).toContain('<button type="button" class="rk-chat-ticket-chip">TASK-397</button>');
+    expect(chip).toMatch(/<button [^>]*class="rk-chat-ticket-chip"[^>]*>TASK-397<\/button>/);
 
     const plain = renderToStaticMarkup(
       <LinkifiedText referenceContext={context}>{"see TASK-397"}</LinkifiedText>,
     );
-    expect(plain).toContain("<span>TASK-397</span>");
+    expect(plain).toContain(">TASK-397</span>");
     expect(plain).not.toContain("<button");
   });
 });

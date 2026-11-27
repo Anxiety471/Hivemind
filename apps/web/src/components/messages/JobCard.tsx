@@ -767,6 +767,7 @@ export function JobCard({
         target="_blank"
         rel="noopener noreferrer"
         data-testid="job-commit-link"
+        title={`${block.repo ? `${block.repo}@` : ""}${block.commit}`}
         className="font-mono underline-offset-2 hover:underline"
         onClick={(event) => event.stopPropagation()}
       >

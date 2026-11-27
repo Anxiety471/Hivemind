@@ -429,6 +429,7 @@ export const MessageView = memo(function MessageView({
                         renderMention={renderMention}
                         onOpenPage={openPage}
                         onOpenTicket={openTicket}
+                        referenceContext={effectiveReferenceContext}
                       >
                         {block.text}
                       </ChatMarkdown>
@@ -581,6 +582,7 @@ export const MessageView = memo(function MessageView({
                     renderMention={renderMention}
                     onOpenPage={openPage}
                     onOpenTicket={openTicket}
+                    referenceContext={effectiveReferenceContext}
                   >
                     {block.text}
                   </ChatMarkdown>
@@ -761,6 +763,7 @@ export const MessageView = memo(function MessageView({
                       renderMention={renderMention}
                       onOpenPage={openPage}
                       onOpenTicket={openTicket}
+                      referenceContext={effectiveReferenceContext}
                     >
                       {block.text}
                     </ChatMarkdown>

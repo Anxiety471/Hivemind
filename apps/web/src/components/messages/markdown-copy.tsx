@@ -40,6 +40,52 @@ export function MarkdownChrome({ children }: { children: ReactNode }) {
           ? t`Sorted by ${column}, ascending`
           : t`Sorted by ${column}, descending`,
       resetZoom: (percent) => t`Reset zoom, ${percent}%`,
+      openTicket: t`Open ticket`,
+      ticketStatus: (status) => {
+        switch (status) {
+          case "todo":
+            return t`To do`;
+          case "doing":
+            return t`In progress`;
+          case "review":
+            return t`Review`;
+          case "blocked":
+            return t`Blocked`;
+          case "done":
+            return t`Done`;
+          case "closed":
+            return t`Closed`;
+          default:
+            return status;
+        }
+      },
+      ticketPriority: (priority) => {
+        switch (priority) {
+          case "low":
+            return t`Low`;
+          case "high":
+            return t`High`;
+          case "urgent":
+            return t`Urgent`;
+          default:
+            return priority;
+        }
+      },
+      pullRequestCount: (count) => t`${plural(count, { one: "# PR", other: "# PRs" })}`,
+      pullRequestTitle: (number) => t`Pull request #${number}`,
+      pullRequestState: (state) => {
+        switch (state) {
+          case "open":
+            return t`Open`;
+          case "merged":
+            return t`Merged`;
+          case "closed":
+            return t`Closed`;
+          default:
+            return state;
+        }
+      },
+      commitTitle: t`Commit`,
     }),
     [t],
   );

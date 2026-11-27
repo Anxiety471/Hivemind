@@ -606,6 +606,60 @@ describe("chat references", () => {
     expect(commit?.textContent).toContain("ffc2c036");
   });
 
+  it("shows a preview card when a ticket, pull request or commit link is focused", async () => {
+    const sha = "ffc2c036f5804d114af39ea6b91c8a75b9cbe55b";
+    references.context = {
+      ticketPrefix: "TASK",
+      repositories: [{ url: "https://example.com/owner/repo" }],
+      tickets: [
+        {
+          ref: "TASK-397",
+          title: "Show reference previews",
+          status: "doing",
+          assigneeName: "Grok Bot",
+          repository: "https://example.com/owner/repo",
+          pullRequests: [{ url: "https://example.com/owner/repo/pull/19", state: "open" }],
+        },
+      ],
+    };
+    renderView(
+      "bot",
+      [{ kind: "text", text: "Working on TASK-397, PR #19 is open, fixed in `ffc2c036`." }],
+      {
+        threadJobs: [
+          { repo: "owner/repo", commit: sha, title: "Preview job", branch: "feat/previews" },
+        ],
+      },
+    );
+    const cards: [string, string, string[]][] = [
+      ["ticket", "button.rk-chat-ticket-chip", ["TASK-397", "Show reference previews", "Grok Bot"]],
+      [
+        "pull_request",
+        'a[href="https://example.com/owner/repo/pull/19"]',
+        ["Pull request #19", "open", "owner/repo", "example.com", "TASK-397"],
+      ],
+      [
+        "commit",
+        'a[href="https://example.com/owner/repo/commit/ffc2c036"]',
+        ["Commit", sha, "feat/previews", "Preview job"],
+      ],
+    ];
+    for (const [kind, selector, expected] of cards) {
+      const link = container.querySelector<HTMLElement>(selector);
+      expect(link).not.toBeNull();
+      act(() => link?.focus());
+      await vi.waitFor(() => {
+        expect(document.querySelector(`[data-ref-kind="${kind}"]`)).not.toBeNull();
+      });
+      const card = document.querySelector(`[data-ref-kind="${kind}"]`);
+      for (const text of expected) expect(card?.textContent).toContain(text);
+      act(() => link?.blur());
+      await vi.waitFor(() => {
+        expect(document.querySelector(`[data-ref-kind="${kind}"]`)).toBeNull();
+      });
+    }
+  });
+
   it("leaves a pull request number plain when the board names no repository", () => {
     references.context = undefined;
     renderView("bot", [{ kind: "text", text: "Merged PR #19 today." }]);

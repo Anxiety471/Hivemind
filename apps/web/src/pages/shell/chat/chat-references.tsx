@@ -45,10 +45,15 @@ export function ChatReferencesProvider({ children }: { children: ReactNode }) {
   const ticketsOptions = queries.tickets.list.queryOptions({ input: {} });
   const board = useQuery({ ...queries.boards.get.queryOptions(), enabled: boardEnabled });
   const tickets = useQuery({ ...ticketsOptions, enabled: boardEnabled });
+  const bots = useQuery({ ...queries.bots.list.queryOptions(), enabled: boardEnabled });
   useBoardStream(ticketsOptions, undefined, boardEnabled);
 
   const boardData = board.data;
   const ticketList = tickets.data?.tickets;
+  const botNames = useMemo(
+    () => new Map((bots.data ?? []).map((bot) => [bot.id, bot.name])),
+    [bots.data],
+  );
   const referenceContext = useMemo<ChatReferenceContext | undefined>(
     () =>
       boardData
@@ -57,12 +62,16 @@ export function ChatReferencesProvider({ children }: { children: ReactNode }) {
             repositories: boardData.repositories,
             tickets: (ticketList ?? []).map((ticket) => ({
               ref: ticket.ref,
+              title: ticket.title,
+              status: ticket.status,
+              priority: ticket.priority,
+              assigneeName: ticket.assigneeBotId ? botNames.get(ticket.assigneeBotId) : undefined,
               repository: ticket.repository,
               pullRequests: ticket.pullRequests,
             })),
           }
         : undefined,
-    [boardData, ticketList],
+    [boardData, ticketList, botNames],
   );
 
   const [openTicketRef, setOpenTicketRef] = useState<string | null>(null);

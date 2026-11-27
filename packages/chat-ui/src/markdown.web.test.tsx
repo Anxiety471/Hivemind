@@ -997,7 +997,92 @@ describe("web markdown ticket and commit links", () => {
     const html = renderToStaticMarkup(
       <ChatMarkdown>{"[TASK-397](rakazo-ticket:TASK-397)"}</ChatMarkdown>,
     );
-    expect(html).toContain("<span>TASK-397</span>");
+    expect(html).toContain(">TASK-397</span>");
     expect(html).not.toContain("<button");
+  });
+});
+
+describe("web markdown reference hover cards", () => {
+  const sha = "ffc2c036f5804d114af39ea6b91c8a75b9cbe55b";
+  const referenceContext = {
+    ticketPrefix: "TASK",
+    repositories: [{ url: "https://git.example.test/acme/hivemind" }],
+    tickets: [
+      {
+        ref: "TASK-397",
+        title: "Show reference previews",
+        status: "doing",
+        priority: "high",
+        assigneeName: "Grok Bot",
+        repository: "https://git.example.test/acme/hivemind",
+        pullRequests: [{ url: "https://git.example.test/acme/hivemind/pull/19", state: "open" }],
+      },
+    ],
+    jobs: [{ repo: "acme/hivemind", commit: sha, title: "Preview job", branch: "feat/previews" }],
+  };
+  const markdown = `Ticket [TASK-397](rakazo-ticket:TASK-397), PR [#19](https://git.example.test/acme/hivemind/pull/19), commit [\`ffc2c036\`](<https://git.example.test/acme/hivemind/commit/${sha}>)`;
+
+  async function renderMarkdown() {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(
+        <ChatMarkdown onOpenTicket={() => undefined} referenceContext={referenceContext}>
+          {markdown}
+        </ChatMarkdown>,
+      );
+    });
+    return {
+      container,
+      unmount: async () => {
+        await act(async () => root.unmount());
+        container.remove();
+      },
+    };
+  }
+
+  it.each([
+    [
+      "ticket",
+      "button.rk-chat-ticket-chip",
+      ["TASK-397", "Show reference previews", "Grok Bot", "1 PR"],
+    ],
+    [
+      "pull_request",
+      'a[href$="/pull/19"]',
+      ["Pull request #19", "open", "acme/hivemind", "git.example.test"],
+    ],
+    ["commit", 'a[href*="/commit/"]', ["Commit", "ffc2c03", sha, "feat/previews", "Preview job"]],
+  ])("opens the %s preview card on keyboard focus", async (kind, selector, expected) => {
+    const { container, unmount } = await renderMarkdown();
+    const trigger = container.querySelector<HTMLElement>(selector);
+    expect(trigger).not.toBeNull();
+    await act(async () => {
+      trigger?.focus();
+    });
+    await vi.waitFor(() => {
+      expect(
+        document.querySelector(`[data-testid="chat-ref-hover-card"][data-ref-kind="${kind}"]`),
+      ).not.toBeNull();
+    });
+    const card = document.querySelector('[data-testid="chat-ref-hover-card"]');
+    for (const text of expected) expect(card?.textContent).toContain(text);
+    await unmount();
+  });
+
+  it("opens the ticket preview card on pointer hover", async () => {
+    const { container, unmount } = await renderMarkdown();
+    const chip = container.querySelector<HTMLElement>("button.rk-chat-ticket-chip");
+    await act(async () => {
+      chip?.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, pointerType: "mouse" }));
+      chip?.dispatchEvent(new MouseEvent("mouseenter"));
+      chip?.dispatchEvent(new MouseEvent("mousemove", { bubbles: true }));
+    });
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-ref-kind="ticket"]')).not.toBeNull();
+    });
+    await unmount();
   });
 });
