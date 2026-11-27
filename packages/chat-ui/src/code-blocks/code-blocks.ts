@@ -6,29 +6,21 @@
  * `codeBlockMarkdown` puts each run of lines that reads as code in a fenced block, labelled
  * with the language it looks like, before Markdown parses the message. It reads text only, in
  * one pass, and nothing it is not sure about is touched.
+ *
+ * Reading a message weighs more than it looks, so this module is not part of the app's startup
+ * code: `scan.ts` rules most messages out cheaply, and the rest load it with `import()` from
+ * `drawing.web.ts`, the chunk the highlighter already needs.
  */
+
+import { hasSyntax, lineEnd, MINIMUM_RUN, opensMarkdownBlock, startsCode } from "./scan";
 
 /** A fence language the reader may guess. */
 type Language = "jsx" | "tsx" | "ts" | "js" | "json" | "python" | "bash" | "html";
-
-/** The shortest run worth a block: shorter text is a word, not code. */
-const MINIMUM_RUN = 8;
 
 /** A fenced code block, with up to three spaces of indent before its marker. */
 type Fence = { start: number; end: number; closed: boolean };
 
 type Edit = { from: number; to: number; text: string };
-
-// --- line helpers -----------------------------------------------------------------------
-
-function isSpace(char: string | undefined): boolean {
-  return char === " " || char === "\t" || char === "\n" || char === "\r" || char === "\f";
-}
-
-function lineEnd(text: string, at: number, limit: number): number {
-  const end = text.indexOf("\n", at);
-  return end < 0 || end > limit ? limit : end;
-}
 
 function indentOf(line: string): number {
   let i = 0;
@@ -36,92 +28,8 @@ function indentOf(line: string): number {
   return i;
 }
 
-/** A line that begins a Markdown block: a heading, quote, list item, table row or fence. */
-function opensMarkdownBlock(trimmed: string): boolean {
-  const first = trimmed[0];
-  if (first === "#" || first === ">" || first === "|" || first === "`" || first === "~")
-    return true;
-  if (trimmed.startsWith("---") || trimmed.startsWith("***") || trimmed.startsWith("___"))
-    return true;
-  if (first === "-" || first === "*" || first === "+")
-    return trimmed[1] === " " || trimmed[1] === "\t";
-  return /^\d+[.)]\s/.test(trimmed);
-}
-
-/** Punctuation no sentence carries: enough to tell a statement from a line of prose. */
-function hasSyntax(text: string): boolean {
-  for (const char of text) {
-    if (
-      char === "=" ||
-      char === ";" ||
-      char === "(" ||
-      char === ")" ||
-      char === "{" ||
-      char === "}" ||
-      char === "[" ||
-      char === "]" ||
-      char === "<" ||
-      char === ">" ||
-      char === '"' ||
-      char === "'" ||
-      char === "`" ||
-      char === ":"
-    ) {
-      return true;
-    }
-  }
-  return text.includes("=>");
-}
-
-const STATEMENT_WORDS = [
-  "const ",
-  "let ",
-  "var ",
-  "function ",
-  "async function ",
-  "class ",
-  "interface ",
-  "type ",
-  "import ",
-  "export ",
-  "return ",
-  "await ",
-  "throw ",
-  "if (",
-  "for (",
-  "while (",
-  "switch (",
-  "try {",
-  "} catch",
-  "else ",
-  "def ",
-  "elif ",
-  "print(",
-];
-
-/** A line that can only be the first line of code: a statement, a call, a tag, a literal. */
-function startsCode(trimmed: string): boolean {
-  if (trimmed.length < MINIMUM_RUN) return false;
-  if (opensMarkdownBlock(trimmed)) return false;
-  for (const word of STATEMENT_WORDS) {
-    if (trimmed.startsWith(word) && hasSyntax(trimmed)) return true;
-  }
-  // A dotted call: `ReactDOM.render(…)` or `console.log(…)`.
-  if (/^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+\(/.test(trimmed)) return true;
-  // A JSX or HTML tag, but not an autolinked URL, which starts `<https:`.
-  if (/^<\/?[A-Za-z][\w-]*(?:\s|\/?>)/.test(trimmed)) return true;
-  // A JSON-ish literal, which the run's balance check then has to confirm. An array of
-  // objects starts the same way a Markdown link list does.
-  if (trimmed.startsWith("[")) {
-    if (/^\[[^\]]*\]\(/.test(trimmed)) return false;
-    return hasSyntax(trimmed);
-  }
-  if (trimmed.startsWith("{") && hasSyntax(trimmed)) return true;
-  // A shell line the author marked as one.
-  if (trimmed.startsWith("$ ") || trimmed.startsWith("#!/")) return true;
-  // A comment line belongs to the code below it.
-  if (trimmed.startsWith("//") || trimmed.startsWith("/*")) return true;
-  return false;
+function isSpace(char: string | undefined): boolean {
+  return char === " " || char === "\t" || char === "\n" || char === "\r" || char === "\f";
 }
 
 /** A line that continues the code above it: a close, a chain, or an indented statement. */

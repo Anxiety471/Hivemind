@@ -50,16 +50,27 @@ export function CopyButton({
 
 type Highlighter = ComponentType<{ code: string; language: string }>;
 
-/** What a code block draws with: the highlighter, and the reprinting of long lines. */
-type Drawing = { highlight: Highlighter; pretty: (code: string) => string };
+/**
+ * What a message with code needs beyond plain text: the reader that fences code a bot wrote
+ * without a fence, the highlighter, and the reprinting of long lines.
+ */
+type Drawing = {
+  codeBlockMarkdown: (text: string) => string;
+  highlight: Highlighter;
+  pretty: (code: string) => string;
+};
 
-// Drawing code weighs more than the rest of a message, so it is its own chunk: a chat with no
-// code never loads it.
+// Reading and drawing code weighs more than the rest of a message, so it is its own chunk: a chat
+// with no code never loads it.
+let drawing: Drawing | undefined;
 let drawingLoad: Promise<Drawing> | undefined;
 
 function loadDrawing(): Promise<Drawing> {
-  drawingLoad ??= import("./highlight.web").then(
-    (module) => ({ highlight: module.default, pretty: module.prettyCode }),
+  drawingLoad ??= import("./drawing.web").then(
+    (module) => {
+      drawing = module;
+      return module;
+    },
     (error: unknown) => {
       // A failed chunk load is tried again by the next block rather than failing every one.
       drawingLoad = undefined;
@@ -69,14 +80,23 @@ function loadDrawing(): Promise<Drawing> {
   return drawingLoad;
 }
 
-/** The drawing once its chunk has arrived; plain code until then. */
-function useDrawing(): Drawing | undefined {
-  const [drawing, setDrawing] = useState<Drawing | undefined>(undefined);
+/**
+ * The drawing once its chunk has arrived, or nothing until then. `needed` starts the load; a
+ * message that has no code leaves it alone, so its chunk is never fetched for prose.
+ */
+export function useDrawing(needed = true): Drawing | undefined {
+  // A block that mounts after another loaded the chunk draws itself in its first paint.
+  const [loaded, setLoaded] = useState(drawing);
   useEffect(() => {
+    if (!needed) return;
+    if (drawing) {
+      setLoaded(() => drawing);
+      return;
+    }
     let live = true;
     loadDrawing().then(
-      (loaded) => {
-        if (live) setDrawing(() => loaded);
+      (arrived) => {
+        if (live) setLoaded(() => arrived);
       },
       // Code stays plain when the chunk cannot load; the next block asks again.
       () => undefined,
@@ -84,8 +104,8 @@ function useDrawing(): Drawing | undefined {
     return () => {
       live = false;
     };
-  }, []);
-  return drawing;
+  }, [needed]);
+  return loaded;
 }
 
 /** Lines past which a block folds, so one long paste does not push the reply away. */
