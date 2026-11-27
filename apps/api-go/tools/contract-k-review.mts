@@ -19,6 +19,15 @@ import { CONTRACT_ENCRYPTION_KEY } from "./contract-key.mts";
 type System = any;
 
 const OLD = new Date(Date.UTC(2022, 4, 1));
+// Cards and assignments are listed ordered by createdAt alone; rows that share a timestamp order
+// arbitrarily. One millisecond per seeded row, keyed by the seed object, keeps the order total and
+// identical on both sides (the harness seeds each side with a fresh object).
+const seedTimes = new WeakMap<Seeded, number>();
+const seedTime = (seeded: Seeded) => {
+  const n = seedTimes.get(seeded) ?? 0;
+  seedTimes.set(seeded, n + 1);
+  return new Date(OLD.getTime() + n);
+};
 const store = new EncryptedSecretStore(CONTRACT_ENCRYPTION_KEY);
 const sealContext = {
   operationId: "seed",
@@ -169,7 +178,7 @@ export function laneKReviewCases(system: System): Case[] {
         userId: seeded.userId,
         botId: id(seeded, botName),
         serverId: id(seeded, serverName),
-        createdAt: OLD,
+        createdAt: seedTime(seeded),
         updatedAt: OLD,
         ...extra,
       },
@@ -202,7 +211,7 @@ export function laneKReviewCases(system: System): Case[] {
             status,
           },
         ],
-        createdAt: OLD,
+        createdAt: seedTime(seeded),
       },
     });
 

@@ -12,6 +12,15 @@ type System = any;
 
 const OLD = new Date(Date.UTC(2021, 0, 1));
 const at = (seconds: number) => new Date(OLD.getTime() + seconds * 1000);
+// computer.updates orders by createdAt alone; updates seeded together would otherwise share at(1)
+// and order arbitrarily. One millisecond per seeded update, keyed by the seed object, keeps it
+// total and identical on both sides (each side seeds with a fresh object).
+const updateTimes = new WeakMap<Seeded, number>();
+const updateTime = (seeded: Seeded) => {
+  const n = updateTimes.get(seeded) ?? 0;
+  updateTimes.set(seeded, n + 1);
+  return new Date(OLD.getTime() + n);
+};
 
 export function laneHCases(system: System): Case[] {
   // ---- bots.templates -----------------------------------------------------------------------
@@ -641,7 +650,7 @@ export function laneHCases(system: System): Case[] {
           action: "update",
           status,
           stage: "preparing",
-          createdAt: at(1),
+          createdAt: updateTime(seeded),
           updatedAt: at(1),
         },
       });

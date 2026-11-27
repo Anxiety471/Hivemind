@@ -15,6 +15,16 @@ let system: System;
 
 const OLD = new Date(Date.UTC(2020, 0, 1));
 const FUTURE = new Date(Date.now() + 30 * 86_400_000);
+// threads.get's per-bot run status and runs.list read runs ordered by createdAt; runs seeded with
+// the column default can tie and pick a different newest run. One millisecond per run, keyed by
+// the seed object, keeps that order total and identical on both sides (the harness seeds each side
+// with a fresh object).
+const runTimes = new WeakMap<Seeded, number>();
+const runTime = (seeded: Seeded) => {
+  const n = runTimes.get(seeded) ?? 0;
+  runTimes.set(seeded, n + 1);
+  return new Date(OLD.getTime() + n);
+};
 
 /** A roster across three Spaces: open/archived bots, a section, a group and an external chat. */
 async function seedRoster(seeded: Seeded) {
@@ -152,6 +162,7 @@ async function seedRuns(seeded: Seeded) {
         botId: `${userId}-rl-b1`,
         threadId: `${userId}-rl-t1`,
         userId,
+        createdAt: runTime(seeded),
         ...extra,
       },
     });
@@ -243,6 +254,7 @@ async function seedMulti(seeded: Seeded) {
       threadId: `${userId}-rl-t1`,
       userId,
       taskId: `${userId}-rl-task-multi`,
+      createdAt: runTime(seeded),
       status: "running",
       trigger: "bot_message",
       sourceMessageId: multi.id,
@@ -388,6 +400,7 @@ async function seedPeerBlocks(seeded: Seeded) {
         threadId: `${userId}-rl-t1`,
         userId,
         taskId: `${userId}-rl-task-${name}`,
+        createdAt: runTime(seeded),
         status: "running",
         trigger: "bot_message",
         sourceMessageId: source.id,
@@ -431,6 +444,7 @@ async function seedPeerBlocks(seeded: Seeded) {
       threadId: `${userId}-rl-t1`,
       userId,
       taskId: `${userId}-rl-task-legacy`,
+      createdAt: runTime(seeded),
       status: "running",
       trigger: "bot_message",
       sourceMessageId: legacy.id,

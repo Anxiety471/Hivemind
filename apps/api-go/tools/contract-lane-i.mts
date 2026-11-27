@@ -73,6 +73,16 @@ type GroupSeed = {
 
 export function laneICases(system: System): Case[] {
   const messageID = (threadId: string, seq: number) => `${threadId}-m${seq}`;
+  // Bots order by pinned, position, createdAt and groups by pinned, updatedAt, with no id
+  // tie-breaker; spec defaults would tie rows with equal pinned/position. One millisecond per
+  // seeded row, keyed by the seed object, keeps the order total and identical on both sides
+  // (the harness seeds each side with a fresh object).
+  const seedTimes = new WeakMap<Seeded, number>();
+  const seedTime = (seeded: Seeded) => {
+    const n = seedTimes.get(seeded) ?? 0;
+    seedTimes.set(seeded, n + 1);
+    return new Date(OLD.getTime() + n);
+  };
 
   const seedBot = async (seeded: Seeded, spec: BotSeed) => {
     const user = seeded.userId;
@@ -92,7 +102,8 @@ export function laneICases(system: System): Case[] {
     await system.bot.create({
       data: {
         id, spaceId, userId: user, name: `Bot ${spec.key}`, color: "#3B82F6",
-        createdAt: at(spec.created ?? 0), updatedAt: at(spec.updated ?? 0),
+        createdAt: spec.created === undefined ? seedTime(seeded) : at(spec.created),
+        updatedAt: at(spec.updated ?? 0),
         ...(spec.archived ? { archivedAt: at(1) } : {}),
         ...(spec.pinned === undefined ? {} : { pinned: spec.pinned }),
         ...(spec.positioned === undefined ? {} : { position: spec.positioned }),
@@ -125,7 +136,8 @@ export function laneICases(system: System): Case[] {
       await system.run.create({
         data: {
           id: runId, spaceId, botId: id, threadId, taskId, userId: user,
-          status: run.status, trigger: run.trigger, createdAt: at(run.created ?? 0),
+          status: run.status, trigger: run.trigger,
+          createdAt: run.created === undefined ? seedTime(seeded) : at(run.created),
           ...(run.wakeAt ? { wakeAt: run.wakeAt } : {}),
         },
       });
@@ -154,7 +166,8 @@ export function laneICases(system: System): Case[] {
     await system.chatGroup.create({
       data: {
         id, spaceId, userId: user, name: `Group ${spec.key}`,
-        createdAt: at(spec.created ?? 0), updatedAt: at(spec.updated ?? 0),
+        createdAt: spec.created === undefined ? seedTime(seeded) : at(spec.created),
+        updatedAt: spec.updated === undefined ? seedTime(seeded) : at(spec.updated),
         ...(spec.archived ? { archivedAt: at(1) } : {}),
         ...(spec.pinned === undefined ? {} : { pinned: spec.pinned }),
         ...(spec.fields ?? {}),

@@ -1764,6 +1764,10 @@ function seedMessaging(config: MessagingSeed = {}) {
       },
     });
     const old = new Date(Date.UTC(2020, 0, 1));
+    // messaging.channels.list reads identities ordered by createdAt alone; identities seeded with
+    // the column default would otherwise share a wall-clock millisecond and order arbitrarily. One
+    // millisecond per identity, reset per side with the seed invocation, keeps that order total.
+    let identityOrder = 0;
     const base = Date.UTC(2026, 4, 1, 12, 0, 0, 0);
     const bot = (
       id: string,
@@ -1806,6 +1810,7 @@ function seedMessaging(config: MessagingSeed = {}) {
           userId: owner,
           spaceId,
           botId: `${user}-${botId}`,
+          createdAt: new Date(old.getTime() + identityOrder++),
           updatedAt: old,
           ...extra,
         },
@@ -2503,6 +2508,12 @@ function seedThreads(config: ThreadSeed = {}) {
     });
     // Creating a member also adds them to the organization's default Space (space one).
     const old = new Date(Date.UTC(2020, 0, 1));
+    // Every threads.* case reloads bots.list, groups.list and spaces.list (AFTER), which order
+    // bots by createdAt and groups by updatedAt alone; the seeds below would otherwise share `old`
+    // or a wall-clock millisecond. One millisecond per seeded row, reset per side with the seed
+    // invocation, keeps those orders total.
+    let botOrder = 0;
+    let groupOrder = 0;
     const bot = (id: string, spaceId: string, name: string, extra: Record<string, unknown> = {}) =>
       system.bot.create({
         data: {
@@ -2511,6 +2522,7 @@ function seedThreads(config: ThreadSeed = {}) {
           userId: user,
           name,
           color: "blue",
+          createdAt: new Date(old.getTime() + botOrder++),
           updatedAt: old,
           ...extra,
         },
@@ -2543,17 +2555,21 @@ function seedThreads(config: ThreadSeed = {}) {
     await thread("th-tbfresh", seeded.spaces[0], { botId: `${user}-tbfresh` }, 10);
     await thread("th-tbarch", seeded.spaces[0], { botId: `${user}-tbarch` }, 10);
     await thread("th-tbx", seeded.spaces[1], { botId: `${user}-tbx` }, 10);
-    const group = (id: string, name: string, extra: Record<string, unknown> = {}) =>
-      system.chatGroup.create({
+    const group = (id: string, name: string, extra: Record<string, unknown> = {}) => {
+      const at = new Date(old.getTime() + groupOrder);
+      groupOrder += 1;
+      return system.chatGroup.create({
         data: {
           id: `${user}-${id}`,
           spaceId: seeded.spaces[0],
           userId: user,
           name,
-          updatedAt: old,
+          createdAt: at,
+          updatedAt: at,
           ...extra,
         },
       });
+    };
     await group("tg1", "Group one");
     await group("tg2", "Group two");
     await group("tgone", "Group of one");
@@ -2784,6 +2800,10 @@ function seedConversations() {
     });
     // Creating a member also adds them to the organization's default Space (space one).
     const old = new Date(Date.UTC(2020, 0, 1));
+    // messaging.channels lists conversations ordered by updatedAt alone; the three seeded
+    // conversations would otherwise share `old` and order arbitrarily. One millisecond per row,
+    // reset per side with the seed invocation, keeps that order total.
+    let conversationOrder = 0;
     await system.bot.create({
       data: {
         id: `${user}-tb1`,
@@ -2804,8 +2824,10 @@ function seedConversations() {
         updatedAt: old,
       },
     });
-    const conversation = (id: string, owner: string, spaceId: string, botId: string) =>
-      system.externalConversation.create({
+    const conversation = (id: string, owner: string, spaceId: string, botId: string) => {
+      const at = new Date(old.getTime() + conversationOrder);
+      conversationOrder += 1;
+      return system.externalConversation.create({
         data: {
           id: `${user}-${id}`,
           provider: "telegram",
@@ -2818,9 +2840,11 @@ function seedConversations() {
           teamChatAmbientEnabled: true,
           teamChatRules: "old rules",
           automatedSenderPolicies: { old: { name: "Old", mode: "ignore" } },
-          updatedAt: old,
+          createdAt: at,
+          updatedAt: at,
         },
       });
+    };
     await conversation("ec1", user, seeded.spaces[0], "tb1");
     await conversation("ec2", other, seeded.spaces[0], "tb1");
     await conversation("ec3", user, seeded.spaces[1], "tbx");
@@ -6345,6 +6369,10 @@ async function seed(caseIds: ReturnType<typeof ids>): Promise<Seeded> {
       createdAt: new Date(),
     },
   });
+  // spaces.list orders memberships by createdAt alone; the default Spaces' memberships would
+  // otherwise share a wall-clock millisecond and order arbitrarily. Fixed instants, one
+  // millisecond apart in the order the Spaces are seeded, keep that order total on both sides.
+  const membershipBase = Date.UTC(2026, 0, 1);
   for (const [index, spaceId] of caseIds.spaces.entries()) {
     await system.space.create({
       data: {
@@ -6361,7 +6389,7 @@ async function seed(caseIds: ReturnType<typeof ids>): Promise<Seeded> {
         organizationId: caseIds.orgId,
         userId: caseIds.userId,
         role: "owner",
-        createdAt: new Date(),
+        createdAt: new Date(membershipBase + index),
       },
     });
   }

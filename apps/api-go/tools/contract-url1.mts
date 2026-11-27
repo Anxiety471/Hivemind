@@ -18,6 +18,16 @@ type System = any;
 type CheckContext = Parameters<NonNullable<Case["check"]>>[0];
 
 const at = (minute: number) => new Date(Date.UTC(2026, 0, 1, 0, 0, minute));
+// marketplace.submissions selects ORDER BY createdAt alone; submissions seeded together with the
+// default at(0) would otherwise share a timestamp and order arbitrarily. One millisecond per
+// seeded row, keyed by the seed object, keeps the order total and identical on both sides (the
+// harness seeds each side with a fresh object).
+const submissionTimes = new WeakMap<Seeded, number>();
+const submissionTime = (seeded: Seeded) => {
+  const n = submissionTimes.get(seeded) ?? 0;
+  submissionTimes.set(seeded, n + 1);
+  return new Date(at(0).getTime() + n);
+};
 const READABLE_SHARE_TOKEN = "A".repeat(43);
 const tokenHash = (token: string) => createHash("sha256").update(token).digest("hex");
 const eventEvidence = new Map<string, { security: unknown[]; audit: unknown[] }>();
@@ -228,7 +238,7 @@ function addSubmission(
       testing: data.testing ?? null,
       status: data.status,
       reason: data.reason ?? null,
-      createdAt: data.createdAt ?? at(0),
+      createdAt: data.createdAt ?? submissionTime(seeded),
       reviewedAt: data.reviewedAt ?? null,
     },
   });

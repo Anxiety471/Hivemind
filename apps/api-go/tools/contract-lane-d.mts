@@ -82,13 +82,22 @@ export function laneDCases(system: System): Case[] {
         createdAt,
       },
     });
+  // skills.list orders by updatedAt alone; skills seeded together would otherwise share `old` and
+  // order arbitrarily. One millisecond per skill, keyed by the seed object, keeps it total.
+  const skillTimes = new WeakMap<Seeded, number>();
+  const skillTime = (seeded: Seeded) => {
+    const n = skillTimes.get(seeded) ?? 0;
+    skillTimes.set(seeded, n + 1);
+    return new Date(old.getTime() + n);
+  };
   const addSkill = (
     seeded: Seeded,
     id: string,
     spaceIndex: 0 | 1 | 2,
     extra: Record<string, unknown> = {},
-  ) =>
-    system.agentSkill.create({
+  ) => {
+    const at = skillTime(seeded);
+    return system.agentSkill.create({
       data: {
         id: `${seeded.userId}-${id}`,
         spaceId: seeded.spaces[spaceIndex],
@@ -97,11 +106,12 @@ export function laneDCases(system: System): Case[] {
         description: `${id} description`,
         content: `${id} content`,
         source: "user",
-        createdAt: old,
-        updatedAt: old,
+        createdAt: at,
+        updatedAt: at,
         ...extra,
       },
     });
+  };
   const addSkillSpace = (seeded: Seeded, skillID: string, spaceIndex: 0 | 1 | 2) =>
     system.agentSkillSpace.create({
       data: {
