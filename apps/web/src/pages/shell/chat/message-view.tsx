@@ -18,7 +18,7 @@ import {
 } from "@rakazo/core";
 import { BotAvatar, Button, cn, resolvePersonaColorDef } from "@rakazo/ui-web";
 import { UserRound } from "lucide-react";
-import { memo, useCallback, useMemo } from "react";
+import { lazy, memo, Suspense, useCallback, useMemo } from "react";
 import {
   AgentMessageMarker,
   CollaborationMarker,
@@ -36,7 +36,6 @@ import {
 import { ArtifactFileCard } from "../../../components/messages/ArtifactFileCard";
 import { AskCard } from "../../../components/messages/AskCard";
 import { CloudAgentCard } from "../../../components/messages/CloudAgentCard";
-import { JobCard } from "../../../components/messages/JobCard";
 import { McpAppCard } from "../../../components/messages/McpAppCard";
 import { SubagentCard } from "../../../components/messages/SubagentCard";
 import { PageBlockCard } from "../../../components/pages/PageBlockCard";
@@ -66,6 +65,11 @@ import {
 } from "./message-cards";
 import { MessageHoverActions } from "./message-hover-actions";
 import { RoutineEventRow } from "./routine-event-row";
+
+/** A job card is only drawn for coding jobs, so its code loads on demand, not at startup. */
+const JobCard = lazy(() =>
+  import("../../../components/messages/JobCard").then((module) => ({ default: module.JobCard })),
+);
 
 export const MessageView = memo(function MessageView({
   artifactTarget,
@@ -793,12 +797,13 @@ export const MessageView = memo(function MessageView({
           if (block.kind === "cloud_agent") return <CloudAgentCard key={i} block={block} />;
           if (block.kind === "job")
             return (
-              <JobCard
-                key={i}
-                block={block}
-                readOnly={readOnly}
-                onJobAction={readOnly ? undefined : onJobAction}
-              />
+              <Suspense key={i} fallback={null}>
+                <JobCard
+                  block={block}
+                  readOnly={readOnly}
+                  onJobAction={readOnly ? undefined : onJobAction}
+                />
+              </Suspense>
             );
           if (block.kind === "skill_draft") {
             return (
