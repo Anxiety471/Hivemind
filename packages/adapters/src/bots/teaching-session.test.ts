@@ -61,6 +61,7 @@ function recordingDeps(skill: ReturnType<typeof skillRow>) {
     },
     event: {
       findMany: vi.fn().mockResolvedValue([]),
+      findFirst: vi.fn().mockResolvedValue(null),
       create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({
         id: "event-1",
         seq: 1,
@@ -240,10 +241,51 @@ describe("expireTaughtSkillTeaching", () => {
       thread: { id: "thread-1" },
       computer: null,
     });
-    tx.event.findMany = vi.fn().mockResolvedValue([{ payload: { skillId: "skill-1" } }]);
+    tx.event.findFirst = vi.fn().mockResolvedValue({ id: "event-1" });
     await expireTaughtSkillTeaching(deps as never, "skill-1");
     expect(tx.event.create).not.toHaveBeenCalled();
     expect(deps.events.notify).not.toHaveBeenCalled();
+  });
+
+  it("finds this skill's draft event past other skills' drafts", async () => {
+    const { deps, tx } = recordingDeps(skillRow({ status: "draft" }));
+    deps.prisma.bot.findUnique = vi.fn().mockResolvedValue({
+      id: "bot-1",
+      thread: { id: "thread-1" },
+      computer: null,
+    });
+    const stored = [
+      { id: "event-1", seq: 1, payload: { skillId: "skill-1" } },
+      ...Array.from({ length: 50 }, (_, i) => ({
+        id: `event-${i + 2}`,
+        seq: i + 2,
+        payload: { skillId: `other-${i}` },
+      })),
+    ];
+    tx.event.findFirst = vi.fn(
+      async (args: { where: { payload: { path: string[]; equals: string } } }) => {
+        const { path, equals } = args.where.payload;
+        return (
+          [...stored]
+            .sort((left, right) => right.seq - left.seq)
+            .find((event) => (event.payload as Record<string, unknown>)[path[0]!] === equals) ??
+          null
+        );
+      },
+    );
+    await expireTaughtSkillTeaching(deps as never, "skill-1");
+    expect(tx.event.create).not.toHaveBeenCalled();
+    expect(deps.events.notify).not.toHaveBeenCalled();
+    expect(tx.event.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          threadId: "thread-1",
+          type: "skill.draft.created",
+          payload: { path: ["skillId"], equals: "skill-1" },
+        },
+        orderBy: { seq: "desc" },
+      }),
+    );
   });
 });
 

@@ -331,24 +331,20 @@ async function findSkillDraftMessage(
 }
 
 async function hasSkillDraftCreatedEvent(
-  prisma: { event: { findMany: PrismaClient["event"]["findMany"] } },
+  prisma: { event: { findFirst: PrismaClient["event"]["findFirst"] } },
   threadId: string,
   skillId: string,
 ): Promise<boolean> {
-  const events = await prisma.event.findMany({
-    where: { threadId, type: "skill.draft.created" },
-    select: { payload: true },
-    take: 50,
+  const event = await prisma.event.findFirst({
+    where: {
+      threadId,
+      type: "skill.draft.created",
+      payload: { path: ["skillId"], equals: skillId },
+    },
+    orderBy: { seq: "desc" },
+    select: { id: true },
   });
-  return events.some((event) => {
-    const payload = event.payload;
-    return (
-      payload !== null &&
-      typeof payload === "object" &&
-      "skillId" in payload &&
-      payload.skillId === skillId
-    );
-  });
+  return event !== null;
 }
 
 async function emitSkillDraftMessages(
