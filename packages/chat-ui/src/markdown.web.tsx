@@ -30,10 +30,17 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-  CopyTextFallback,
-  useCopyText,
 } from "@rakazo/ui-web";
-import { CheckIcon, CopyIcon, GlobeIcon, ImageIcon } from "./icons";
+import type { MarkdownHast } from "./code-blocks/code-block.web";
+import {
+  CodeBlock,
+  CopyButton,
+  codeElement,
+  codeText,
+  fenceLanguage,
+} from "./code-blocks/code-block.web";
+import { codeBlockMarkdown } from "./code-blocks/code-blocks";
+import { GlobeIcon, ImageIcon } from "./icons";
 import type { ChatMarkdownProps } from "./markdown";
 import {
   closeUnterminatedFence,
@@ -80,67 +87,8 @@ function preserveSkippedTableText() {
   };
 }
 
-function CopyButton({ read, label }: { read: () => string; label: string }) {
-  const copy = useMarkdownCopy();
-  const [copied, copyText, copyFailed, resetCopy, failedText] = useCopyText();
-
-  return (
-    <>
-      <button
-        type="button"
-        className="rk-chat-markdown-copy"
-        onClick={() => copyText(read())}
-        aria-label={copied ? copy.copied : label}
-      >
-        {copied ? <CheckIcon /> : <CopyIcon />}
-      </button>
-      <CopyTextFallback
-        open={copyFailed}
-        onOpenChange={resetCopy}
-        text={failedText}
-        label={label}
-      />
-    </>
-  );
-}
-
-function CodeBlock({
-  copyable,
-  prose,
-  ...props
-}: React.ComponentPropsWithoutRef<"pre"> & { copyable: boolean; prose: boolean }) {
-  const copy = useMarkdownCopy();
-  const preRef = useRef<HTMLPreElement>(null);
-  // The parser ends a fence's code with a newline the author didn't write.
-  const readCode = useCallback(() => (preRef.current?.textContent ?? "").replace(/\n$/, ""), []);
-
-  return (
-    <div className="rk-chat-markdown-pre-wrap">
-      <pre {...props} className={prose ? "rk-chat-markdown-pre-prose" : undefined} ref={preRef} />
-      {copyable ? <CopyButton read={readCode} label={copy.copyCode} /> : null}
-    </div>
-  );
-}
-
 /** Original markdown while streaming, before any display-only closing fence is appended. */
 const StreamingSourceContext = createContext<string | undefined>(undefined);
-
-function codeElement(node: MarkdownHast | undefined) {
-  return node?.children?.find((child) => child.tagName === "code");
-}
-
-function codeText(code: MarkdownHast | undefined) {
-  return (code?.children ?? []).map((child) => child.value ?? "").join("");
-}
-
-/** The language a fence names, or "" when it names none. */
-function fenceLanguage(node: MarkdownHast | undefined): string {
-  const classNames = codeElement(node)?.properties?.className;
-  const language = Array.isArray(classNames)
-    ? classNames.find((name) => typeof name === "string" && name.startsWith("language-"))
-    : undefined;
-  return typeof language === "string" ? language.slice("language-".length) : "";
-}
 
 /** The source of a ```mermaid fence, or undefined for any other block. */
 function mermaidFenceSource(node: MarkdownHast | undefined): string | undefined {
@@ -182,11 +130,19 @@ function MarkdownPre({
 }: React.ComponentPropsWithoutRef<"pre"> & { node?: MarkdownHast }) {
   const streamingSource = useContext(StreamingSourceContext);
   const diagram = mermaidFenceSource(node);
+  const language = fenceLanguage(node);
   // Prose an author wrote in a fence reads as prose; code keeps the monospaced font.
-  const prose = diagram === undefined && isProseFence(fenceLanguage(node));
-  // An empty fence has nothing to copy.
+  const prose = diagram === undefined && isProseFence(language);
+  const code = codeText(codeElement(node));
   const codeBlock = (
-    <CodeBlock {...props} copyable={/\S/.test(codeText(codeElement(node)))} prose={prose} />
+    // An empty fence has nothing to copy.
+    <CodeBlock
+      {...props}
+      code={code}
+      language={language}
+      copyable={/\S/.test(code)}
+      prose={prose}
+    />
   );
   if (diagram === undefined) return codeBlock;
   // Parser offsets identify the fence inside quotes and lists too. Inspect the original source,
@@ -359,15 +315,6 @@ function ConfirmableAnchor({ href, ...props }: React.ComponentPropsWithoutRef<"a
     />
   );
 }
-
-type MarkdownHast = {
-  type?: string;
-  tagName?: string;
-  value?: string;
-  properties?: Record<string, unknown>;
-  children?: MarkdownHast[];
-  position?: { start?: { offset?: number }; end?: { offset?: number } };
-};
 
 function hastString(value: unknown): string | undefined {
   return typeof value === "string" && value ? value : undefined;
@@ -861,15 +808,18 @@ export const ChatMarkdown = memo(function ChatMarkdown({
   onOpenPage,
 }: ChatMarkdownProps) {
   const { request, dialog } = useExternalLinkConfirm();
+  // Code a bot wrote without a fence is fenced before Markdown reads it, so it keeps its
+  // shape, its JSX and its highlighting instead of arriving as paragraphs.
+  const source = useMemo(() => codeBlockMarkdown(children), [children]);
   // A streamed reply stays split once it finishes, so its blocks are not drawn again.
   const [split, setSplit] = useState(streaming);
   if (streaming && !split) setSplit(true);
   const previousSplit = useRef<SplitSource | undefined>(undefined);
   const blocks = useMemo(() => {
     if (!split) return undefined;
-    previousSplit.current = splitSource(children, previousSplit.current);
+    previousSplit.current = splitSource(source, previousSplit.current);
     return previousSplit.current.blocks;
-  }, [children, split]);
+  }, [source, split]);
 
   const inlineChips = useMemo(() => ({ renderMention, onOpenPage }), [renderMention, onOpenPage]);
   return (
@@ -879,7 +829,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({
           className={streaming ? "rk-chat-markdown rk-chat-markdown-streaming" : "rk-chat-markdown"}
         >
           <LinkFaviconsPausedContext.Provider value={streaming}>
-            <PlainTextOnFailure text={children}>
+            <PlainTextOnFailure text={source}>
               {blocks ? (
                 blocks.map((block, index) => (
                   <Fragment key={block.key}>
@@ -892,7 +842,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({
                   </Fragment>
                 ))
               ) : (
-                <MarkdownBlock source={children} streaming={streaming} />
+                <MarkdownBlock source={source} streaming={streaming} />
               )}
             </PlainTextOnFailure>
           </LinkFaviconsPausedContext.Provider>

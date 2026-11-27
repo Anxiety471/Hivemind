@@ -38,20 +38,14 @@ import { TableCell, TableRow, TableScrollView } from "./table";
 // outside the text flow and collapses the bubble height, overlapping later messages.
 export const renderRules: RenderRules = {
   list_item: listItemRule,
-  fence: (node, _children, _parents, styleMap, _onCopyCode, colorScheme) => {
+  fence: (node, _children, _parents, styleMap, _onCopyCode) => {
     const info = typeof node.sourceInfo === "string" ? node.sourceInfo : "";
     const source = node.content.replace(/\n$/, "");
     const language = info.trim().split(/\s+/)[0] ?? "";
     const codeBlock = isProseFence(language) ? (
       <ProseFence key={node.key} code={source} language={language} styleMap={styleMap} />
     ) : (
-      <CodeFence
-        key={node.key}
-        code={source}
-        language={language}
-        colorScheme={colorScheme === "dark" ? "dark" : "light"}
-        styleMap={styleMap}
-      />
+      <CodeFence key={node.key} code={source} language={language} styleMap={styleMap} />
     );
     if (!isMermaidFence(info)) return codeBlock;
     return <MermaidFence key={node.key} source={source} fallback={codeBlock} />;
