@@ -18,6 +18,15 @@ const THREAD_PAGE_SIZE = 200;
 const CHUNK_SIZE = 500;
 
 /**
+ * Event types kept whatever their age, because something reads them without a time bound:
+ * `thread.cleared` is where history compaction resumes, `group.handoff` is looked up by
+ * messageId when a handoff is retried, and `skill.draft.created` is checked when a teaching
+ * session reopens. The events retention job on the VPS (not part of this repo) keeps the same
+ * three for the same reason.
+ */
+const KEPT_EVENT_TYPES = ["thread.cleared", "group.handoff", "skill.draft.created"] as const;
+
+/**
  * Days to keep chat messages, or null to keep them forever (the default). A value that is set but
  * is not a whole number of days is an error, so a typo never leaves history kept while the
  * operator believes it is pruned.
@@ -90,7 +99,13 @@ async function pruneThreadChunk(
       )._min.createdAt;
       const eventsBefore = oldestKept && oldestKept < cutoff ? oldestKept : cutoff;
       const oldEvents = await tx.event.findMany({
-        where: { threadId, createdAt: { lt: eventsBefore } },
+        // Kept types are filtered out here, not after the read: otherwise a chat with a chunk
+        // full of them would report work forever and never get past that page.
+        where: {
+          threadId,
+          createdAt: { lt: eventsBefore },
+          type: { notIn: [...KEPT_EVENT_TYPES] },
+        },
         orderBy: { seq: "asc" },
         take: CHUNK_SIZE,
         select: { id: true },
@@ -124,7 +139,8 @@ async function pruneThreadChunk(
 /**
  * Deletes chat messages, and the events that carry their content, older than `retentionDays`
  * from chats with no run in progress. Returns the number of rows deleted. Runs, task prompts,
- * stored files and semantic memory are not touched.
+ * stored files and semantic memory are not touched, and neither are events of a type something
+ * reads with no time bound (KEPT_EVENT_TYPES), however old they are.
  */
 export async function pruneChatHistory(
   prisma: PrismaClient,

@@ -162,6 +162,40 @@ describePostgres("chat history retention (PostgreSQL)", () => {
     expect(await seqs()).toEqual([1, 2, 3]);
   });
 
+  it("keeps the event types that something reads with no time bound, however old", async () => {
+    await seed([90, 60, 31, 5, 1], null);
+    // Older than every message, so age alone would take them; each is read without a time bound.
+    const kept = ["thread.cleared", "group.handoff", "skill.draft.created"] as const;
+    await system.event.createMany({
+      data: kept.map((type, offset) => ({
+        spaceId,
+        threadId,
+        botId,
+        seq: 5 + offset,
+        type,
+        payload: {},
+        createdAt: daysAgo(120),
+      })),
+    });
+    await system.thread.update({
+      where: { id: threadId },
+      data: { nextEventSeq: 5 + kept.length },
+    });
+
+    // Three messages and their three old events go; the three kept types stay.
+    expect(await prune()).toBe(6);
+    const events = await system.event.findMany({ where: { threadId }, orderBy: { seq: "asc" } });
+    expect(events.map((event) => [event.seq, event.type])).toEqual([
+      [3, "thread.message.created"],
+      [4, "thread.message.created"],
+      [5, "thread.cleared"],
+      [6, "group.handoff"],
+      [7, "skill.draft.created"],
+    ]);
+    // Pruning again finds nothing left to take, so the kept rows never hold the chat open.
+    expect(await prune()).toBe(0);
+  });
+
   it("does nothing for a chat whose messages are all recent", async () => {
     await seed([5, 1], null);
     expect(await prune()).toBe(0);
