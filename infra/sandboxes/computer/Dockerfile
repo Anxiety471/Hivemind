@@ -87,6 +87,10 @@ RUN apt-get update && apt-get upgrade -y --no-install-recommends && apt-get inst
     xsel \
     poppler-utils \
     pandoc \
+    qpdf \
+    xz-utils \
+    fonts-crosextra-carlito \
+    fonts-crosextra-caladea \
     python3-openpyxl \
     ripgrep \
     fd-find \
@@ -97,6 +101,7 @@ RUN apt-get update && apt-get upgrade -y --no-install-recommends && apt-get inst
   && pdftotext -v \
   && pdfinfo -v \
   && pandoc --version \
+  && qpdf --version \
   && python3 -c 'import openpyxl; print(openpyxl.__version__)' \
   && rg --version \
   && ln -s /usr/bin/fdfind /usr/local/bin/fd \
@@ -175,6 +180,42 @@ RUN set -eux; \
   tar -xzf "$archive" -C /usr/local/bin --strip-components=2 "gh_${GH_VERSION}_linux_${gh_arch}/bin/gh"; \
   rm -f "$archive"; \
   gh --version
+# Typst compiles polished PDFs; pinned and checked by sha256 like uv and gh.
+ARG TYPST_VERSION=0.15.1
+RUN set -eux; \
+  case "$TARGETARCH" in \
+    amd64) typst_arch=x86_64; typst_sha256=a6d077d0a95eed5a2eba715b2dae06be954f624ccbf85758a03f389ded33118c ;; \
+    arm64) typst_arch=aarch64; typst_sha256=5aa8d74a3d906e60ea12a66ac2f37f8eef1b14cbad7182a745e393a10c23dcee ;; \
+    *) echo "unsupported TARGETARCH: $TARGETARCH" >&2; exit 1 ;; \
+  esac; \
+  archive="$(mktemp)"; \
+  curl -fsSL "https://github.com/typst/typst/releases/download/v${TYPST_VERSION}/typst-${typst_arch}-unknown-linux-musl.tar.xz" -o "$archive"; \
+  echo "$typst_sha256  $archive" | sha256sum -c -; \
+  tar -xJf "$archive" -C /usr/local/bin --strip-components=1 "typst-${typst_arch}-unknown-linux-musl/typst"; \
+  rm -f "$archive"; \
+  typst --version
+# Document libraries sit in one pinned virtualenv. A .pth file puts it first on the system python3's
+# path, so scripts and docutil import these pinned copies rather than the distribution's, and
+# markitdown is linked onto the PATH.
+RUN set -eux; \
+  uv venv --python /usr/bin/python3 /opt/doc-tools; \
+  uv pip install --python /opt/doc-tools/bin/python --no-cache \
+    python-docx==1.2.0 \
+    docxtpl==0.20.2 \
+    python-pptx==1.0.2 \
+    xlsxwriter==3.3.4 \
+    pypdf==7.2.0 \
+    pdfplumber==0.11.11 \
+    "markitdown[docx,pptx,xlsx,pdf]==0.1.9" \
+    pillow==13.0.0 \
+    matplotlib==3.11.2 \
+    defusedxml==0.7.1; \
+  site="$(/opt/doc-tools/bin/python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"; \
+  printf '%s\n' "import sys; sys.path.insert(0, '$site')" > /usr/lib/python3/dist-packages/doc-tools.pth; \
+  ln -s /opt/doc-tools/bin/markitdown /usr/local/bin/markitdown; \
+  chmod -R a+rX /opt/doc-tools; \
+  python3 -c 'import docx, docxtpl, pptx, xlsxwriter, pypdf, pdfplumber, markitdown, PIL, matplotlib, defusedxml'; \
+  markitdown --help >/dev/null
 # The page browser drives the visible Chromium through agent-browser, pinned and checked by sha256.
 COPY --chmod=755 install-agent-browser.sh /tmp/install-agent-browser.sh
 RUN /tmp/install-agent-browser.sh /usr/local/bin && rm /tmp/install-agent-browser.sh \
@@ -195,6 +236,8 @@ WORKDIR /home/rakazo
 COPY --chmod=755 start.sh /usr/local/bin/rakazo-computer
 COPY --chmod=644 user-env.sh /usr/local/lib/rakazo-user-env.sh
 COPY --chmod=755 control.py /usr/local/bin/rakazo-computer-control
+# Generic document CLI: html2pdf, render-pages, to-markdown and check for PDF and Office files.
+COPY --chmod=755 docutil.py /usr/local/bin/docutil
 # Tells the supervisor this control service accepts scrolls aimed at a point and sideways
 # scrolls; it sends those to older images through its fallback instead.
 LABEL rakazo.control.aimedScroll="1"
@@ -220,13 +263,14 @@ COPY --chmod=644 mobile-keyboard.js /usr/share/novnc/mobile-keyboard.js
 COPY --chmod=644 rakazo-local-bin.sh /etc/profile.d/rakazo-local-bin.sh
 # Strip CR so shebangs work even if the build context came from a CRLF checkout.
 RUN ldconfig \
-  && sed -i 's/\r$//' /usr/local/bin/rakazo-computer /usr/local/lib/rakazo-user-env.sh /usr/local/bin/rakazo-computer-control /usr/local/bin/rakazo-browser /usr/local/bin/rakazo-focus-or-launch /usr/local/bin/rakazo-page-browser \
+  && sed -i 's/\r$//' /usr/local/bin/rakazo-computer /usr/local/lib/rakazo-user-env.sh /usr/local/bin/rakazo-computer-control /usr/local/bin/docutil /usr/local/bin/rakazo-browser /usr/local/bin/rakazo-focus-or-launch /usr/local/bin/rakazo-page-browser \
     /usr/local/lib/rakazo/page_secrets.py \
     /etc/rakazo/fluxbox/init /etc/rakazo/fluxbox/apps /etc/rakazo/fluxbox/menu \
     /etc/profile.d/rakazo-local-bin.sh
 # Agent-authored scripts often use the unversioned name. Keep it on the installed Python 3.
 RUN ln -s /usr/bin/python3 /usr/local/bin/python \
   && python -c 'import sys; assert sys.version_info.major == 3'
+RUN /usr/local/bin/docutil --help >/dev/null
 RUN /tmp/apt-security.sh --check && rm -f /tmp/apt-security.sh
 EXPOSE 7070 6080 6081 6082 6083 6084 6085 6086 6087 6088 6089 6090 6091 6092 6093 6094 6095
 # Docker exec does not inherit PID 1's exports, so every process gets the same

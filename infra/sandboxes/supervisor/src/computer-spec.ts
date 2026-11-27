@@ -52,6 +52,7 @@ export const COMPUTER_IMAGE_CONTEXT_FILES = [
   "fluxbox.apps",
   "fluxbox.menu",
   "rakazo-local-bin.sh",
+  "docutil.py",
 ] as const;
 
 /**

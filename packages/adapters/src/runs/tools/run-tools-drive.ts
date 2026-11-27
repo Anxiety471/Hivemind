@@ -10,8 +10,10 @@ import {
 } from "@rakazo/contracts";
 import {
   AttachmentValidationError,
+  extractOfficeDocumentText,
   fileCategoryForMimeType,
   inferAttachmentMimeType,
+  isExtractableOfficeMimeType,
   normalizeFileSlug,
   redactSecrets,
   slugifyFileName,
@@ -26,12 +28,98 @@ import {
 } from "@rakazo/db";
 import { bestEffort } from "@rakazo/logging";
 import { resolveBotWorkspacePath } from "../../computers/screens/computer-support.js";
+import { extractPdfText } from "./extract-pdf-text.js";
 import type { ToolHandler } from "./run-tool-gate.js";
 import { artifactGroupId } from "./run-tools-files.js";
 
 const DEFAULT_READ_BYTES = 65_536;
 const MAX_READ_BYTES = 1_048_576;
 const MAX_FOLDER_DEPTH = 20;
+/** Largest Drive document read for text: bigger files are offered as binary, not parsed. */
+const DOCUMENT_TEXT_MAX_BYTES = 10 * 1024 * 1024;
+const BINARY_NOTE =
+  "Binary media or document; pass save_to_workspace to copy it into your computer workspace.";
+const NO_TEXT_NOTE =
+  "No readable text (scanned, image-only, over 10 MiB, or unreadable); pass save_to_workspace to copy it into your computer workspace.";
+
+type ToolContext = Parameters<ToolHandler>[0];
+
+type DocumentPreview = {
+  format: string;
+  text: string;
+  truncated: boolean;
+  metadata: Record<string, number>;
+};
+
+function isDocumentPreviewType(mimeType: string): boolean {
+  return mimeType === "application/pdf" || isExtractableOfficeMimeType(mimeType);
+}
+
+/** The bytes of a Drive file, or null as soon as it is over `limit` (the size is not trusted). */
+async function readDriveBytesUpTo(
+  ctx: ToolContext,
+  storageKey: string,
+  limit: number,
+): Promise<Uint8Array | null> {
+  const artifacts = ctx.deps.artifacts;
+  if (!artifacts) return null;
+  if (!artifacts.getStream) {
+    const all = await artifacts.get(storageKey, ctx.context);
+    return all.byteLength > limit ? null : all;
+  }
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for await (const chunk of await artifacts.getStream(storageKey, ctx.context)) {
+    total += chunk.byteLength;
+    if (total > limit) return null;
+    chunks.push(chunk);
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
+/**
+ * Text of a PDF or Office document for an inline preview, redacted and cut to `maxBytes` of
+ * UTF-8. Null when the file is over the bound, unreadable, or has no text to show.
+ */
+async function documentTextPreview(
+  ctx: ToolContext,
+  row: { storageKey: string; mimeType: string; size: number },
+  maxBytes: number,
+): Promise<DocumentPreview | null> {
+  if (row.size > DOCUMENT_TEXT_MAX_BYTES) return null;
+  const bytes = await readDriveBytesUpTo(ctx, row.storageKey, DOCUMENT_TEXT_MAX_BYTES);
+  if (!bytes) return null;
+  let extracted: DocumentPreview;
+  if (row.mimeType === "application/pdf") {
+    const pdf = await extractPdfText(bytes);
+    if (!pdf) return null;
+    extracted = { format: "pdf", text: pdf.text, truncated: false, metadata: { pages: pdf.pages } };
+  } else {
+    const office = extractOfficeDocumentText(bytes, row.mimeType);
+    if (!office) return null;
+    extracted = {
+      format: office.format,
+      text: office.text,
+      truncated: office.truncated,
+      metadata: office.metadata,
+    };
+  }
+  const text = redactSecrets(extracted.text, ctx.secrets).trim();
+  if (!text) return null;
+  const encoded = new TextEncoder().encode(text);
+  if (encoded.byteLength <= maxBytes) return { ...extracted, text };
+  // Decoding a cut that lands inside a character yields one replacement character at the end.
+  const cut = new TextDecoder("utf-8", { fatal: false })
+    .decode(encoded.subarray(0, maxBytes))
+    .replace(/\uFFFD$/, "");
+  return { ...extracted, text: cut, truncated: true };
+}
 
 function normalizeWorkspaceRelPath(raw: string): string | null {
   const cleaned = raw.trim().replace(/\\/g, "/").replace(/^\/+/, "");
@@ -285,6 +373,23 @@ export const driveTools: Record<string, ToolHandler> = {
       : DEFAULT_READ_BYTES;
 
     try {
+      if (isDocumentPreviewType(row.mimeType)) {
+        const preview = await documentTextPreview(ctx, row, maxBytes);
+        if (preview) {
+          return call.finish({
+            fileId: row.id,
+            name: row.name,
+            slug: row.slug ?? null,
+            description: row.description ?? null,
+            mimeType: row.mimeType,
+            size: row.size,
+            extractedFormat: preview.format,
+            truncated: preview.truncated,
+            content: preview.text,
+            ...preview.metadata,
+          });
+        }
+      }
       const chunks: Buffer[] = [];
       let collected = 0;
       let truncated = false;
@@ -318,7 +423,7 @@ export const driveTools: Record<string, ToolHandler> = {
         category === "video" ||
         category === "audio" ||
         category === "archive" ||
-        row.mimeType === "application/pdf"
+        isDocumentPreviewType(row.mimeType)
       ) {
         return call.finish({
           fileId: row.id,
@@ -328,7 +433,7 @@ export const driveTools: Record<string, ToolHandler> = {
           mimeType: row.mimeType,
           size: row.size,
           binary: true,
-          note: "Binary media or document; pass save_to_workspace to copy it into your computer workspace.",
+          note: isDocumentPreviewType(row.mimeType) ? NO_TEXT_NOTE : BINARY_NOTE,
         });
       }
       const text = redactSecrets(

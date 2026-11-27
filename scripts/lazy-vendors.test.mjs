@@ -33,6 +33,8 @@ const LAZY_NON_VENDORS = [
   // run turns the lab on.
   "esbuild",
   "quickjs-emscripten",
+  // The PDF text reader for drive_read, loaded only when a run opens a PDF.
+  "unpdf",
 ];
 // Known static imports still to make lazy. Remove an entry once its SDK loads on demand.
 const PENDING = [

@@ -47,6 +47,8 @@ export const ROUTINES_SKILL_NAME = "Routines";
 export const COMPUTER_SKILL_NAME = "Computer";
 /** Needs run_subagent, so a run offers it only where subagent delegation is available. */
 export const SUBAGENTS_SKILL_NAME = "Subagents";
+/** Needs a shell and the computer workspace to build and check files, so it follows the computer gate. */
+export const DOCUMENTS_SKILL_NAME = "Documents";
 
 /**
  * Built-in Agent Skills (SKILL.md recipes) available to every user.
@@ -143,6 +145,21 @@ Rakazo is open source; its code is at github.com/elie222/rakazo.`,
 3. Write self-contained briefs: subagents do not see full chat history. Give each subagent a concrete goal, exact paths or inputs, constraints, verification criteria, and expected output format so it finishes in one pass without guessing.
 4. Async lifecycle: run_subagent returns immediately. Continue any independent work or end your turn cleanly if nothing else remains, staying available for new user messages. Wait for needed results before giving your final answer, verify and synthesize their outputs as evidence, and honor newer instructions or cancellations.
 5. Permissions: subagents run under the same approval and security boundaries and can request approval in chat when needed.`,
+  },
+  {
+    name: DOCUMENTS_SKILL_NAME,
+    description: "Create, edit, convert, and visually QA PDF, DOCX, XLSX, and PPTX files",
+    body: `Create, edit, convert, and check PDF, DOCX, XLSX, and PPTX files in your computer workspace, then deliver the finished file.
+
+1. Choose the format by use:
+   - PDF for a polished, non-editable report, memo, or invoice: write Typst source and run typst compile file.typ file.pdf (crisp typography, running headers and footers, page numbers, multi-page tables). For complex CSS layouts or visual cards, write HTML and run docutil html2pdf page.html page.pdf (headless Chromium). Use qpdf or pypdf to merge, split, or inspect PDFs.
+   - DOCX for an editable document: python-docx for a new file; docxtpl to fill an existing .docx template without breaking its styles or letterhead; pandoc for clean Markdown to DOCX conversion.
+   - XLSX for spreadsheets: openpyxl, or xlsxwriter for large styled reports. Write live formulas (=SUM(...), =AVERAGE(...)) instead of hardcoded totals, apply number, currency and date formats, set column widths explicitly, and freeze the header row.
+   - PPTX for presentations: python-pptx with one consistent layout, a clear visual hierarchy, generous margins, and charts embedded as high-DPI images (matplotlib, or render_plot).
+   - Live view: use save_page only when the user wants a filterable page rather than a file.
+2. Read existing documents: use drive_read for a quick text preview of a PDF, DOCX, XLSX, or PPTX in Space Drive. For full tables or edits, copy the file with save_to_workspace, then run docutil to-markdown file (or use pdfplumber, openpyxl, python-docx).
+3. Check before you deliver: run docutil check file. It catches corrupt OOXML or ZIP structure, empty tables, unrendered {{...}} template tags, placeholder text, and spreadsheet formula errors (#REF!, #DIV/0!, #VALUE!, #NAME?, #N/A, #NUM!, #NULL!). For a PDF, run docutil render-pages file.pdf -o /tmp/doc-qa and look at every page image. Fix clipped tables, overflowing text, orphan headings and awkward page breaks, then check again.
+4. Deliver: attach the file with attach_file (clear name, short description, kebab-case slug) or save it with drive_save. Reuse the same name for a revision so Space Drive keeps one file with new versions instead of a duplicate. Leave no placeholder text (TODO, TBD, Lorem ipsum), no stray temp files, and no AI attribution the user did not ask for.`,
   },
 ];
 

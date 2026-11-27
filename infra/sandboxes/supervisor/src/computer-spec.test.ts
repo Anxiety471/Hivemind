@@ -883,6 +883,50 @@ describe("graphical computer spec", () => {
     expect(dockerfile).toMatch(/import openpyxl/);
   });
 
+  it("ships the document toolkit: Typst, qpdf, fonts, python libraries and docutil", () => {
+    const root = path.resolve(import.meta.dirname, "../../computer");
+    const dockerfile = readFileSync(path.join(root, "Dockerfile"), "utf8");
+    for (const name of ["qpdf", "xz-utils", "fonts-crosextra-carlito", "fonts-crosextra-caladea"]) {
+      expect(dockerfile).toContain(`    ${name} \\\n`);
+    }
+    expect(dockerfile).toMatch(/&& qpdf --version \\/);
+    expect(dockerfile).not.toMatch(/libreoffice/i);
+    // Typst is pinned to a release and checked by sha256, the same way uv and gh are.
+    expect(dockerfile).toMatch(/ARG TYPST_VERSION=\d+\.\d+\.\d+/);
+    expect(dockerfile).toMatch(/a6d077d0a95eed5a2eba715b2dae06be954f624ccbf85758a03f389ded33118c/);
+    expect(dockerfile).toMatch(/5aa8d74a3d906e60ea12a66ac2f37f8eef1b14cbad7182a745e393a10c23dcee/);
+    expect(dockerfile).toMatch(/sha256sum -c -/);
+    expect(dockerfile).toMatch(/typst-\$\{typst_arch\}-unknown-linux-musl\/typst/);
+    // The document libraries are pinned in one virtualenv that the system python3 can import.
+    expect(dockerfile).toMatch(/uv venv --python \/usr\/bin\/python3 \/opt\/doc-tools/);
+    for (const pin of [
+      "python-docx==",
+      "docxtpl==",
+      "python-pptx==",
+      "xlsxwriter==",
+      "pypdf==",
+      "pdfplumber==",
+      '"markitdown[docx,pptx,xlsx,pdf]==',
+      "pillow==",
+      "matplotlib==",
+      "defusedxml==",
+    ]) {
+      expect(dockerfile).toContain(pin);
+    }
+    expect(dockerfile).toMatch(/doc-tools\.pth/);
+    expect(dockerfile).toMatch(
+      /import docx, docxtpl, pptx, xlsxwriter, pypdf, pdfplumber, markitdown, PIL, matplotlib, defusedxml/,
+    );
+    expect(dockerfile).toMatch(/chmod -R a\+rX \/opt\/doc-tools/);
+    // docutil is installed beside the other rakazo-computer tools, checked, and given LF endings.
+    expect(dockerfile).toMatch(/COPY --chmod=755 docutil\.py \/usr\/local\/bin\/docutil/);
+    expect(dockerfile).toMatch(/sed -i 's\/\\r\$\/\/' .*\/usr\/local\/bin\/docutil/);
+    expect(dockerfile).toMatch(/RUN \/usr\/local\/bin\/docutil --help/);
+    expect(readFileSync(path.join(root, "docutil.py"), "utf8")).toMatch(
+      /^#!\/usr\/bin\/env python3/,
+    );
+  });
+
   it("ships search and inspection tools agents reach for", () => {
     const root = path.resolve(import.meta.dirname, "../../computer");
     const dockerfile = readFileSync(path.join(root, "Dockerfile"), "utf8");
