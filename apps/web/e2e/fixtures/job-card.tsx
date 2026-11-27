@@ -1,7 +1,9 @@
 import { I18nProvider } from "@lingui/react";
 import type { ProductEvent } from "@rakazo/contracts";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { createRoot } from "react-dom/client";
 import { bootstrapI18n, i18n } from "../../src/lib/locale/i18n";
+import { queryClient } from "../../src/lib/query/query";
 import "../../src/styles.css";
 import { FixtureTranscript, reduceThreadEvents } from "./thread-fixture";
 
@@ -76,11 +78,13 @@ const snapshot = reduceThreadEvents(events);
 void bootstrapI18n("en").then(() => {
   createRoot(document.getElementById("root")!).render(
     <I18nProvider i18n={i18n}>
-      <FixtureTranscript
-        messages={snapshot.messages}
-        running={snapshot.run?.status === "running"}
-        showToolActivity={false}
-      />
+      <QueryClientProvider client={queryClient}>
+        <FixtureTranscript
+          messages={snapshot.messages}
+          running={snapshot.run?.status === "running"}
+          showToolActivity={false}
+        />
+      </QueryClientProvider>
     </I18nProvider>,
   );
 });
