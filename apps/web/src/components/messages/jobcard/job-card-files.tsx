@@ -36,6 +36,7 @@ function UnifiedDiffView({ diff }: { diff: string }) {
   return (
     <div
       data-testid="job-diff"
+      // off-scale: diff lines are dense monospace code.
       className="w-full min-w-0 overflow-x-auto border-t border-border/60 bg-muted/20 py-1 font-mono text-[11px] leading-[1.45]"
     >
       {diff.split("\n").map((line, index) => (
@@ -76,6 +77,7 @@ function FileRow({ file }: { file: JobCardFile }) {
       <div className="flex min-w-0 items-center gap-2 px-2.5 py-1.5">
         <span
           className={cn(
+            // off-scale: the one-letter status badge is a 16px square.
             "grid size-4 shrink-0 place-items-center rounded-[4px] font-mono text-[10px] font-semibold",
             fileStatusTone(file.status),
           )}

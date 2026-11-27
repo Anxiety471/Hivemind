@@ -55,6 +55,7 @@ export function JobComposer({
               onClose();
             }
           }}
+          // off-scale: 16px on small screens, so focusing the field does not zoom the page on iOS.
           className="min-h-8 max-h-28 min-w-0 flex-1 field-sizing-content resize-none rounded-lg border border-input bg-background/80 px-2.5 py-1.5 text-[16px]/5 text-foreground outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40 disabled:opacity-60 md:text-body-sm"
         />
         <Button

@@ -63,6 +63,7 @@ function StepRow({ step }: { step: JobCardStep }) {
         ) : null}
       </button>
       {open && detail ? (
+        // off-scale: command detail is dense monospace code, sized like the diff view.
         <code className="mt-1 block max-h-32 overflow-y-auto rounded bg-muted/50 px-2 py-1 font-mono text-[11px] leading-[1.45] break-words whitespace-pre-wrap text-muted-foreground">
           {detail}
         </code>
