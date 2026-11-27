@@ -4,6 +4,7 @@ import {
   memoryRetainTurnJob,
   taskDetectJob,
 } from "@rakazo/adapter-kit";
+import type { MessageBlock } from "@rakazo/contracts";
 import {
   BACKGROUND_HELPER_TRIGGER,
   containsSecret,
@@ -18,7 +19,7 @@ import {
   answeredSteeringMessageIds,
   retainsConversationTurn,
 } from "../../memory/conversation-memory.js";
-import { returnBotMessageOutcome } from "../../messaging/bot-messages.js";
+import { reportBotMessageWait, returnBotMessageOutcome } from "../../messaging/bot-messages.js";
 import { clearRoutineBackoff } from "../../routines/routine-backoff.js";
 import { isStrategicInitiativeRun } from "../../routines/strategic-initiative.js";
 import {
@@ -26,9 +27,12 @@ import {
   HISTORY_WINDOW_SIZE,
   shouldEnqueueCompaction,
 } from "../../runtime/context/history-compaction.js";
+import { scheduleRunSecretsExpiry } from "../../secrets/run-secrets-expiry.js";
 import { returnHelperOutcome } from "../../tasks/background-helpers.js";
 import { shouldEnqueueTaskDetect } from "../../tasks/task-detect.js";
+import { extractProseChoiceQuestion } from "../assembly/prose-choice-question.js";
 import type { RunContext } from "../assembly/run-context.js";
+import { persistTurnCheckpoint } from "../assembly/run-context.js";
 import { redactBlocks } from "../assembly/run-messages.js";
 import {
   completionMessageSegments,
@@ -172,6 +176,7 @@ export async function completeRun(ctx: RunContext) {
     conversationRetentionMessages(ctx),
     taskDetectMessages(ctx),
   ]);
+  if (await pauseForProseChoice(ctx, blocks, groupSilentEnd)) return;
   const completed = await deps.events.finalizeRun({
     spaceId: run.spaceId,
     threadId: thread.id,
@@ -236,6 +241,76 @@ export async function completeRun(ctx: RunContext) {
   await enqueueConversationRetention(ctx, answeredMessageIds);
   await enqueueTaskDetection(ctx, taskDetectMessageIds);
   await enqueueHistoryCompaction(ctx);
+}
+
+/**
+ * A reply that ends in a short option list the bot wrote out as prose becomes an ask card, so the
+ * user answers with a tap. Returns true when the run paused or lost its lease, so completion stops.
+ */
+async function pauseForProseChoice(
+  ctx: RunContext,
+  blocks: MessageBlock[],
+  groupSilentEnd: boolean,
+): Promise<boolean> {
+  const { deps, run, runId, bot, thread, workerId, fence } = ctx;
+  const last = blocks.at(-1);
+  if (
+    groupSilentEnd ||
+    isBackgroundRunTrigger(run.trigger) ||
+    run.trigger === BACKGROUND_HELPER_TRIGGER ||
+    run.trigger === "routine" ||
+    run.trigger === "bot_message" ||
+    ctx.state.handedOff ||
+    ctx.source.peerMessage ||
+    blocks.some((block) => block.kind === "ask") ||
+    last?.kind !== "text"
+  ) {
+    return false;
+  }
+  const choice = extractProseChoiceQuestion(last.text);
+  if (!choice) return false;
+  const safeQuestion = redactSecrets(choice.question, ctx.secrets);
+  const askBlock: MessageBlock = {
+    kind: "ask",
+    text: safeQuestion,
+    status: "pending",
+    actions: choice.actions,
+  };
+  // The bot's words before the question stay a text block, so markdown and links render as written.
+  const preamble = choice.preamble
+    ? [{ kind: "text" as const, text: redactSecrets(choice.preamble, ctx.secrets) }]
+    : [];
+  const hasRecommended = choice.actions.some((action) => action.recommended === true);
+  getLogger().info("agent.prose_choice_promoted", {
+    runId,
+    optionCount: choice.actions.length,
+    hasRecommended,
+  });
+  await persistTurnCheckpoint(ctx, undefined);
+  const paused = await deps.events.pauseRunForInput({
+    spaceId: run.spaceId,
+    threadId: run.threadId,
+    botId: run.botId,
+    runId,
+    attemptId: ctx.attempt.id,
+    leaseOwner: workerId,
+    leaseFence: fence,
+    onPaused: scheduleRunSecretsExpiry(deps.jobs, runId),
+    blocks: [...blocks.slice(0, -1), ...preamble, askBlock],
+    offeredActions: choice.actions,
+  });
+  if (!paused) return true;
+  await enqueueSteeringContinuation(deps, paused.continuationRunId);
+  await reportBotMessageWait(deps, run, bot, safeQuestion, ctx.attempt.id);
+  await notifyRun(deps, run, {
+    kind: "help",
+    title: `${displayName(bot.name, "Bot")} needs an answer`,
+    body: safeQuestion,
+    botId: bot.id,
+    threadId: thread.id,
+  });
+  ctx.stopHeartbeatAfterCompletion();
+  return true;
 }
 
 /** A scripted runtime's turns carry the files and memory it writes. */

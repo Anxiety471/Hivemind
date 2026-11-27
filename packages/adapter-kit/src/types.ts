@@ -870,7 +870,7 @@ export type AgentRuntimeEvent =
       executionId?: string;
       text: string;
       detail?: string;
-      actions?: Array<{ id: string; label: string }>;
+      actions?: Array<{ id: string; label: string; recommended?: boolean; description?: string }>;
     }
   | { type: "takeover"; reason: string; executionId?: string }
   | ({

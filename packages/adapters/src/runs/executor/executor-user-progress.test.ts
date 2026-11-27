@@ -1,5 +1,6 @@
 import type { AgentRunRequest, AgentRuntimeEvent, BackgroundJob } from "@rakazo/adapter-kit";
 import type { MessageBlock } from "@rakazo/contracts";
+import { BACKGROUND_HELPER_TRIGGER } from "@rakazo/core";
 import { deferred } from "@rakazo/core/test-async";
 import type { AppendEventInput, Prisma } from "@rakazo/db";
 import {
@@ -71,6 +72,8 @@ async function runTurn(
     priorProgressText?: string;
     runtimeEvents?: AgentRuntimeEvent[];
     runtimeFailure?: boolean;
+    /** The reply ends by asking the user, so the run pauses instead of finishing. */
+    expectPause?: boolean;
     runtimeError?: Error;
     runtimeCancel?: boolean;
     failHelperId?: string;
@@ -392,7 +395,7 @@ async function runTurn(
 
   await executor.continueRun(run.id, "worker-1");
   expect(runtimeRun).toHaveBeenCalled();
-  if (!options.runtimeFailure)
+  if (!options.runtimeFailure && !options.expectPause)
     expect(finalizeRun).not.toHaveBeenCalledWith(expect.objectContaining({ outcome: "failed" }));
   return {
     finalizeRun,
@@ -2315,5 +2318,118 @@ describe("completion pushes", () => {
     vi.mocked(notifyRun).mockClear();
     await runTurn("Done.", false, "I will check.", [], "fyi", { trigger: "user" });
     expect(completionPushes()).toHaveLength(1);
+  });
+});
+
+describe("a prose choice question at the end of a reply", () => {
+  const SCREENSHOT_REPLY = [
+    "One account is marked sends-only in USER.md. Connecting it would go against that.",
+    "",
+    "Which do you want?",
+    "",
+    "- **Publish the OAuth app first, then add the three accounts.** This is my recommendation. It stops the 7-day expiry.",
+    "- **Add the three accounts now, in Testing mode.** They expire around 2026-12-04.",
+  ].join("\n");
+
+  it("pauses the run on an ask card with the recommended option instead of finishing", async () => {
+    const { finalizeRun, pauseRunForInput } = await runTurn(
+      SCREENSHOT_REPLY,
+      false,
+      undefined,
+      [],
+      "fyi",
+      {
+        trigger: "user",
+        expectPause: true,
+      },
+    );
+    expect(finalizeRun).not.toHaveBeenCalled();
+    const [[input]] = pauseRunForInput.mock.calls as unknown as [
+      [{ blocks: MessageBlock[]; offeredActions: unknown[] }],
+    ];
+    // Work before the reply (the tool step) stays; the reply splits into its context and the card.
+    expect(input.blocks.map((block) => block.kind)).toEqual(["steps", "text", "ask"]);
+    expect(input.blocks.slice(-2)).toEqual([
+      {
+        kind: "text",
+        text: "One account is marked sends-only in USER.md. Connecting it would go against that.",
+      },
+      {
+        kind: "ask",
+        text: "Which do you want?",
+        status: "pending",
+        actions: [
+          {
+            id: "choice-1",
+            label: "Publish the OAuth app first, then add the three accounts",
+            description: "It stops the 7-day expiry.",
+            recommended: true,
+          },
+          {
+            id: "choice-2",
+            label: "Add the three accounts now, in Testing mode",
+            description: "They expire around 2026-12-04.",
+          },
+        ],
+      },
+    ]);
+    expect(input.offeredActions).toEqual([
+      expect.objectContaining({ id: "choice-1", recommended: true }),
+      expect.objectContaining({ id: "choice-2" }),
+    ]);
+  });
+
+  it("finishes a normal reply and a background run without asking", async () => {
+    const plain = await runTurn("Done. The export is attached.", false, undefined, [], "fyi", {
+      trigger: "user",
+    });
+    expect(plain.pauseRunForInput).not.toHaveBeenCalled();
+    expect(plain.finalizeRun).toHaveBeenCalledTimes(1);
+
+    const background = await runTurn(SCREENSHOT_REPLY, false, undefined, [], "fyi", {
+      trigger: BACKGROUND_HELPER_TRIGGER,
+    });
+    expect(background.pauseRunForInput).not.toHaveBeenCalled();
+  });
+});
+
+describe("an ask_user choice keeps its recommendation and descriptions", () => {
+  it("saves them on the ask card and the run's resume checkpoint", async () => {
+    const { pauseRunForInput } = await runTurn("", false, undefined, [], "fyi", {
+      trigger: "user",
+      expectPause: true,
+      runtimeEvents: [
+        {
+          type: "ask",
+          text: "Which should I use?",
+          actions: [
+            {
+              id: "choice-1",
+              label: "Keep it",
+              description: "Nothing changes.",
+              recommended: true,
+            },
+            { id: "choice-2", label: "Replace it" },
+          ],
+        },
+      ],
+    });
+    const [[input]] = pauseRunForInput.mock.calls as unknown as [
+      [{ blocks: MessageBlock[]; offeredActions: unknown[] }],
+    ];
+    expect(input.blocks.at(-1)).toEqual(
+      expect.objectContaining({
+        kind: "ask",
+        text: "Which should I use?",
+        actions: [
+          { id: "choice-1", label: "Keep it", description: "Nothing changes.", recommended: true },
+          { id: "choice-2", label: "Replace it" },
+        ],
+      }),
+    );
+    expect(input.offeredActions).toEqual([
+      { id: "choice-1", label: "Keep it", description: "Nothing changes.", recommended: true },
+      { id: "choice-2", label: "Replace it" },
+    ]);
   });
 });

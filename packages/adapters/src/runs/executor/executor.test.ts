@@ -38,7 +38,10 @@ import {
   VOICE_CALL_INSTRUCTION,
   voiceCallInstruction,
 } from "../assembly/run-instructions.prompt.js";
-import { REACTION_SILENT_REPLY_GUIDANCE } from "../assembly/run-replies.prompt.js";
+import {
+  longWorkProgressGuidance,
+  REACTION_SILENT_REPLY_GUIDANCE,
+} from "../assembly/run-replies.prompt.js";
 import { createRunWorkspaceCheckpoint } from "../lifecycle/run-lifecycle.js";
 import { runNotificationsEnabled } from "../lifecycle/run-notifications.js";
 import {
@@ -1480,8 +1483,7 @@ describe("userTurnInstructions", () => {
   const stableMiddle = [
     'Proactively delegate independent parallel or slow background work via run_subagent. Before delegating, call skill_mode({ name: "Subagents" }) and follow it; never mix a bot and subagent for one request.',
   ];
-  const replyGuidance =
-    "Send brief 1–2 sentence progress updates with message_user only for multi-minute tasks (right away once starting long browser/desktop work), never for quick replies or routine steps. Thinking stays private. message_user is capped at 500 characters; always put the complete final answer in your normal reply.";
+  const replyGuidance = longWorkProgressGuidance(500);
   const stableTail = [
     "Never print API keys, access tokens, or secret values. Prefer tools over claiming you already did the work.",
     "Treat pagination cursors as opaque: copy the returned continuation value exactly, never calculate or guess it. When the tool reports no next page, stop; if a cursor is rejected, recheck the last successful result before retrying.",

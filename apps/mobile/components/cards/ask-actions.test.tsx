@@ -9,6 +9,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 vi.mock("react-native", () => ({
   Alert: { alert: vi.fn() },
   TextInput: () => null,
+  Text: ({ children }: { children?: ReactNode }) => createElement("span", null, children),
   View: ({ children }: { children?: ReactNode }) => createElement("div", null, children),
 }));
 vi.mock("../../lib/appearance/appearance", () => ({ mobileTokens: () => ({}) }));
@@ -49,4 +50,22 @@ it("offers Always allow only when the approval card does", async () => {
   expect(labels()).toEqual(["Allow once", "Always allow this tool", "Deny"]);
   await show(actions.filter((action) => action.id !== "always"));
   expect(labels()).toEqual(["Allow once", "Deny"]);
+});
+
+it("shows an option's description beneath its label", async () => {
+  await act(async () =>
+    root.render(
+      <AskActions
+        actions={[
+          { id: "choice-1", label: "Publish first", description: "It stops the expiry." },
+          { id: "choice-2", label: "Wait" },
+        ]}
+        approval={false}
+        onAnswer={async () => undefined}
+      />,
+    ),
+  );
+  const texts = [...container.querySelectorAll("span")].map((item) => item.textContent);
+  expect(texts).toContain("It stops the expiry.");
+  expect(texts).not.toContain("Wait");
 });

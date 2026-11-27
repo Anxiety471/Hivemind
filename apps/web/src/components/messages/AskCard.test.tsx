@@ -147,6 +147,34 @@ it("shows a dismissed secret card as Dismissed, not Saved", async () => {
   expect(card.classList.contains("max-w-xl")).toBe(true);
 });
 
+it("shows an option's description under its label beside the Recommended badge", async () => {
+  await render({
+    kind: "ask",
+    text: "Which do you want?",
+    status: "pending",
+    actions: [
+      {
+        id: "choice-1",
+        label: "Publish first",
+        description: "It stops the expiry for all accounts.",
+        recommended: true,
+      },
+      { id: "choice-2", label: "Wait" },
+    ],
+  });
+
+  const first = [...container.querySelectorAll("button")].find((item) =>
+    item.textContent?.includes("Publish first"),
+  )!;
+  expect(first.textContent).toContain("Recommended");
+  expect(first.textContent).toContain("It stops the expiry for all accounts.");
+  expect(first.textContent).toContain("Publish first");
+  const second = [...container.querySelectorAll("button")].find((item) =>
+    item.textContent?.includes("Wait"),
+  )!;
+  expect(second.textContent).not.toContain("Recommended");
+});
+
 it("offers Dismiss only on secret cards", async () => {
   await render({ kind: "ask", text: "Which city?", status: "pending" });
   expect(button("Dismiss")).toBeUndefined();

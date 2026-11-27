@@ -318,7 +318,18 @@ function PromptAskCard({
               }
               onClick={() => void submitAnswer(action.id)}
             >
-              {pendingAction === action.id ? <Trans>Sending…</Trans> : action.label}
+              {pendingAction === action.id ? (
+                <Trans>Sending…</Trans>
+              ) : (
+                <>
+                  <span className="block">{action.label}</span>
+                  {action.description ? (
+                    <span className="block text-body-sm text-muted-foreground">
+                      {action.description}
+                    </span>
+                  ) : null}
+                </>
+              )}
             </OptionRow>
           ))}
           {canAnswer && !answered ? (

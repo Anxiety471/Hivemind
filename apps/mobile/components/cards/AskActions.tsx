@@ -3,7 +3,7 @@ import { BOT_INSTRUCTIONS_MAX_LENGTH } from "@rakazo/contracts";
 import { resolveAskChoice } from "@rakazo/core";
 import { useState } from "react";
 import type { ViewProps } from "react-native";
-import { Alert, TextInput, View } from "react-native";
+import { Alert, Text, TextInput, View } from "react-native";
 import { errorText } from "../../lib/api/user-error";
 import { mobileTokens } from "../../lib/appearance/appearance";
 import type { AskAction } from "../../lib/cards/ask-action-label";
@@ -114,7 +114,7 @@ export function AskActions({
                 }
               />
             );
-          return (
+          const option = (
             <NativeActionButton
               key={action.id}
               accessibilityActions={accessibilityActions}
@@ -132,6 +132,22 @@ export function AskActions({
               busy={pendingAction === action.id}
               onPress={() => void submit(action.id)}
             />
+          );
+          // The native button keeps one label line; a description sits calmly beneath it.
+          if (approval || !action.description) return option;
+          return (
+            <View key={action.id} style={{ gap: 2 }}>
+              {option}
+              <Text
+                style={{
+                  color: tokens.mutedForeground,
+                  fontSize: 14,
+                  paddingHorizontal: 16,
+                }}
+              >
+                {action.description}
+              </Text>
+            </View>
           );
         })}
         {allowOther && !approval && instructions === undefined && !disabled ? (

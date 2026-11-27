@@ -78,7 +78,9 @@ export interface PauseRunForInput {
 const CHOICE_ASK_CHECKPOINT_KIND = "choice_ask_v1";
 
 function choiceAskCheckpoint(actions: Array<{ id: string; label: string }>): string {
-  return JSON.stringify({ kind: CHOICE_ASK_CHECKPOINT_KIND, actions });
+  // Only id and label resume the run; the card-only fields stay out of the checkpoint.
+  const resume = actions.map(({ id, label }) => ({ id, label }));
+  return JSON.stringify({ kind: CHOICE_ASK_CHECKPOINT_KIND, actions: resume });
 }
 
 function resumeChoiceLabel(

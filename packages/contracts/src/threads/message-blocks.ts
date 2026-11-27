@@ -136,6 +136,8 @@ export const MessageBlock = z.discriminatedUnion("kind", [
         z.object({
           id: z.string(),
           label: z.string(),
+          /** A short line under the label, such as what choosing this option means. */
+          description: z.string().optional(),
           outcome: z.enum(["created", "cancelled"]).optional(),
           recommended: z.boolean().optional(),
         }),

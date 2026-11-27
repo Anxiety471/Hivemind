@@ -31,6 +31,8 @@ export async function pauseForAnswer(ctx: RunContext, event: RuntimeEvent<"ask">
   const safeActions = event.actions?.map((action) => ({
     id: action.id,
     label: redactSecrets(action.label, ctx.secrets),
+    ...(action.description ? { description: redactSecrets(action.description, ctx.secrets) } : {}),
+    ...(action.recommended ? { recommended: true } : {}),
   }));
   await ctx.computer.checkpoint.flush();
   await persistTurnCheckpoint(ctx, event.executionId);
