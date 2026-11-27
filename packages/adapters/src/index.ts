@@ -188,6 +188,8 @@ export * from "./routines/strategic-initiative.js";
 export {
   CUT_REPLY_CONTINUATION_PROMPT,
   cutReplyAtLimitPrompt,
+  EMPTY_RESPONSE_OPTIONAL_REMINDER_PROMPT,
+  EMPTY_RESPONSE_REMINDER_PROMPT,
   SILENT_ALLOWED_TOOL_CONTINUATION_PROMPT,
   SILENT_TOOL_CONTINUATION_PROMPT,
 } from "./runs/assembly/continuation.prompt.js";

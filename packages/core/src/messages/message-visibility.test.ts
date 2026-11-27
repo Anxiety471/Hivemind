@@ -2,8 +2,10 @@ import type { ThreadMessage } from "@rakazo/contracts";
 import { describe, expect, it } from "vitest";
 import { projectMessageReactions } from "./message-reactions.js";
 import {
+  EMPTY_RESPONSE_FALLBACK_TEXT,
   expandPeerReplies,
   foldPeerReplies,
+  isNoResponseMessage,
   jumpTargetId,
   userVisibleMessages,
 } from "./message-visibility.js";
@@ -501,5 +503,118 @@ describe("user-visible messages", () => {
     expect(
       userVisibleMessages(background, { backgroundRunIds: ["run-ticket"] }).map((m) => m.id),
     ).toEqual(["user-followup", "ask", "computer", "approval", "connect", "user"]);
+  });
+});
+
+describe("no-response messages", () => {
+  const fallback = { kind: "text", text: EMPTY_RESPONSE_FALLBACK_TEXT } as const;
+  const thinking: ThreadMessage["blocks"][number] = {
+    kind: "thinking",
+    durationMs: 0,
+    lines: ["..."],
+  };
+  const user = (id: string, blocks: ThreadMessage["blocks"]) => ({
+    ...message(id, "run-user", blocks),
+    role: "user" as const,
+  });
+
+  it("hides a persisted fallback text reply", () => {
+    const row = message("empty", "run-1", [fallback]);
+    expect(isNoResponseMessage(row)).toBe(true);
+    expect(foldPeerReplies([row]).messages).toEqual([]);
+    expect(userVisibleMessages([row])).toEqual([]);
+  });
+
+  it("hides thinking followed by the fallback text", () => {
+    const row = message("empty", "run-1", [thinking, fallback]);
+    expect(userVisibleMessages([row])).toEqual([]);
+  });
+
+  it("hides fallback text split across blocks or padded with whitespace", () => {
+    const split = message("split", "run-1", [
+      { kind: "text", text: "No response." },
+      { kind: "text", text: " Try again." },
+    ]);
+    const padded = message("padded", "run-1", [
+      { kind: "text", text: "  No response. Try again.\n " },
+    ]);
+    expect(userVisibleMessages([split, padded])).toEqual([]);
+  });
+
+  it("hides a thinking-only message", () => {
+    const row = message("thinking-only", "run-1", [thinking]);
+    expect(isNoResponseMessage(row)).toBe(true);
+    expect(userVisibleMessages([row])).toEqual([]);
+  });
+
+  it("hides a message with no blocks or only whitespace text", () => {
+    const empty = message("empty", "run-1", []);
+    const blank = message("blank", "run-1", [{ kind: "text", text: "   " }]);
+    expect(userVisibleMessages([empty, blank])).toEqual([]);
+  });
+
+  it("keeps the receipt and drops only the no-response reply after it", () => {
+    const sent = message("sent", "run-1", [
+      { kind: "bot_message_sent", toBotId: "grok", toBotName: "Grok Bot", text: "Hi" },
+    ]);
+    const empty = message("empty", "run-1", [fallback]);
+    expect(
+      foldPeerReplies([sent, empty], { includePeerReceipts: true }).messages.map((m) => m.id),
+    ).toEqual(["sent"]);
+    expect(
+      userVisibleMessages([sent, empty], { includePeerReceipts: true }).map((m) => m.id),
+    ).toEqual(["sent"]);
+  });
+
+  it("keeps a live progress placeholder visible while the bot works", () => {
+    const live = {
+      ...message("progress:run-1", "run-1", [thinking]),
+    };
+    expect(isNoResponseMessage(live)).toBe(false);
+    expect(userVisibleMessages([live]).map((m) => m.id)).toEqual(["progress:run-1"]);
+  });
+
+  it("keeps a user message that repeats the fallback text", () => {
+    const row = user("user-fallback", [fallback]);
+    expect(isNoResponseMessage(row)).toBe(false);
+    expect(userVisibleMessages([row]).map((m) => m.id)).toEqual(["user-fallback"]);
+  });
+
+  it("keeps a bot message that quotes the fallback text in prose", () => {
+    const row = message("quoted", "run-1", [
+      { kind: "text", text: 'The log said "No response. Try again."' },
+    ]);
+    expect(isNoResponseMessage(row)).toBe(false);
+    expect(userVisibleMessages([row]).map((m) => m.id)).toEqual(["quoted"]);
+  });
+
+  it("keeps bot messages with any other visible content", () => {
+    const kept: ThreadMessage["blocks"][] = [
+      [thinking, { kind: "steps", steps: [{ label: "Search", count: 1 }] }],
+      [
+        {
+          kind: "ask",
+          question: "Which?",
+          options: [],
+        } as unknown as ThreadMessage["blocks"][number],
+      ],
+      [{ kind: "file", file: { name: "a.txt" } } as unknown as ThreadMessage["blocks"][number]],
+      [{ kind: "image", image: {} } as unknown as ThreadMessage["blocks"][number]],
+      [{ kind: "chart", chart: {} } as unknown as ThreadMessage["blocks"][number]],
+      [{ kind: "page", page: {} } as unknown as ThreadMessage["blocks"][number]],
+      [{ kind: "subagent" } as unknown as ThreadMessage["blocks"][number]],
+      [{ kind: "child_bot" } as unknown as ThreadMessage["blocks"][number]],
+      [{ kind: "bot_message_sent", toBotId: "b", toBotName: "B", text: "Hi" }],
+      [{ kind: "bot_message_received", fromBotId: "b", fromBotName: "B", text: "Hi" }],
+    ];
+    for (const blocks of kept) {
+      const row = message("kept", "run-1", blocks);
+      expect(isNoResponseMessage(row)).toBe(false);
+    }
+  });
+
+  it("treats a kinds-only outline stand-in as unknown, not empty", () => {
+    const outline = message("outline", "run-1", [{ kind: "text" }] as ThreadMessage["blocks"]);
+    expect(isNoResponseMessage(outline)).toBe(false);
   });
 });

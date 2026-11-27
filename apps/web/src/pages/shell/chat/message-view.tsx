@@ -18,6 +18,7 @@ import type {
 import type { ChildBotBlock, PeerExchange } from "@rakazo/core";
 import {
   isApprovalAskBlock,
+  isNoResponseMessage,
   isPeerReceiptBlocks,
   isToolActivityBlock,
   otherAuthor,
@@ -373,6 +374,7 @@ export const MessageView = memo(function MessageView({
         onReact={onReact}
       />
     );
+  if (isNoResponseMessage(message)) return null;
   if (isNarration) {
     if (visibleNarrationBlocks.length === 0) return null;
     if (isToolOnlyNarration(message.blocks, showToolActivity)) {

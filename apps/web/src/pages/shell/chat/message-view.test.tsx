@@ -531,6 +531,32 @@ it("shows a reasoning-only live message as one slim activity line, not a bubble"
   );
 });
 
+it("renders nothing for a persisted no-response reply", () => {
+  renderView(
+    "bot",
+    [
+      { kind: "thinking", durationMs: 800, lines: ["Checking the calendar."] },
+      { kind: "text", text: "No response. Try again." },
+    ],
+    { showToolActivity: true },
+  );
+  expect(container.textContent).toBe("");
+  expect(container.querySelector('[data-testid="tool-activity"]')).toBeNull();
+  expect(container.querySelector('[data-testid="message-bot-bubble"]')).toBeNull();
+});
+
+it("renders nothing for a persisted thinking-only reply", () => {
+  renderView("bot", [{ kind: "thinking", durationMs: 800, lines: ["Checking the calendar."] }], {
+    showToolActivity: true,
+  });
+  expect(container.textContent).toBe("");
+});
+
+it("keeps a user message that repeats the fallback text", () => {
+  renderView("user", [{ kind: "text", text: "No response. Try again." }]);
+  expect(container.textContent).toContain("No response. Try again.");
+});
+
 it("hides the activity panel when the preference is off", () => {
   renderView(
     "bot",

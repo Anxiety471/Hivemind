@@ -37,6 +37,38 @@ export function isDeliveryMessage(blocks: readonly unknown[]): boolean {
   return blocks.some((block) => (block as { kind?: unknown } | null)?.kind === "delivery");
 }
 
+/** Synthetic fallback emitted by older runtimes when a model produced no usable response. */
+export const EMPTY_RESPONSE_FALLBACK_TEXT = "No response. Try again.";
+
+/**
+ * A persisted bot message with no visible content: empty, thinking only, or the synthetic
+ * fallback text. Live `progress:` placeholders stay visible while the bot works.
+ */
+export function isNoResponseMessage(message: PresentableMessage): boolean {
+  if (message.role !== "bot" || message.id.startsWith("progress:")) return false;
+  if (message.blocks.length === 0) return true;
+  let hasText = false;
+  let hasThinking = false;
+  let textCombined = "";
+  for (const block of message.blocks) {
+    if (block.kind === "thinking") {
+      hasThinking = true;
+      continue;
+    }
+    if (block.kind === "text") {
+      // A kinds-only outline stand-in (no loaded text) may hold real content: not a no-response.
+      if (typeof (block as { text?: unknown }).text !== "string") return false;
+      hasText = true;
+      textCombined += (block as { text: string }).text;
+      continue;
+    }
+    return false;
+  }
+  const trimmed = textCombined.trim();
+  if (!trimmed) return hasText || hasThinking;
+  return trimmed === EMPTY_RESPONSE_FALLBACK_TEXT;
+}
+
 export function isPeerReceiptBlocks(blocks: readonly MessageBlock[]): boolean {
   return blocks.some(
     (block) =>
@@ -152,6 +184,7 @@ export function foldPeerReplies<T extends PresentableMessage>(
     // What woke the bot (a webhook, an email, a chat message) is its prompt, not a message to
     // show; like a scheduled routine, only what the bot does with it appears.
     if (isDeliveryMessage(message.blocks)) return false;
+    if (isNoResponseMessage(message)) return false;
     if (message.runId && backgroundRunIds.has(message.runId)) {
       if (message.role === "user") return true;
       return message.blocks.some(isBackgroundInputBlock);

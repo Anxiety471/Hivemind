@@ -11,6 +11,7 @@ import type { ChildBotBlock, PeerExchange } from "@rakazo/core";
 import {
   canMarkMessageUnread,
   copyableMessageText,
+  isNoResponseMessage,
   isPeerReceiptBlocks,
   liveMessageComposing,
   selectableMessageText,
@@ -389,6 +390,7 @@ export const MessageRow = memo(function MessageRow({
     optimisticLike,
   ]);
   const layout = messageRowLayout(message.blocks, { activityBotId, inGroup, columnWidth });
+  if (isNoResponseMessage(message)) return null;
   return (
     <View
       key={message.id}

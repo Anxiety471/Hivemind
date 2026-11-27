@@ -57,6 +57,8 @@ export async function createReplyState(
     discardedMidTurnNarration: false,
     lastDiscardedMidTurnNarration: "",
     explicitNoResponse: false,
+    emptyResponse: false,
+    emptyResponseReminders: 0,
     assistantTurnText: "",
     midTurnUserTexts: [],
     midTurnProgressCount: 0,

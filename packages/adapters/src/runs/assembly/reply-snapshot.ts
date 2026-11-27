@@ -51,6 +51,8 @@ const ReplySnapshotSchema = z.object({
   discardedMidTurnNarration: z.boolean(),
   lastDiscardedMidTurnNarration: z.string(),
   explicitNoResponse: z.boolean(),
+  emptyResponse: z.boolean().optional(),
+  emptyResponseReminders: z.number().int().nonnegative().optional(),
   publishedTerminalSubagent: z.boolean(),
   computerTaskStarted: z.boolean(),
   assistantTurnBreakPending: z.boolean(),
@@ -120,6 +122,10 @@ export function snapshotReply(reply: ReplyState): ReplySnapshot {
     discardedMidTurnNarration: reply.discardedMidTurnNarration,
     lastDiscardedMidTurnNarration: reply.lastDiscardedMidTurnNarration,
     explicitNoResponse: reply.explicitNoResponse,
+    ...(reply.emptyResponse ? { emptyResponse: true } : {}),
+    ...(reply.emptyResponseReminders
+      ? { emptyResponseReminders: reply.emptyResponseReminders }
+      : {}),
     publishedTerminalSubagent: reply.publishedTerminalSubagent,
     computerTaskStarted: reply.computerTaskStarted,
     assistantTurnBreakPending: reply.assistantTurnBreakPending,

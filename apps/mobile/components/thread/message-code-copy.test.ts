@@ -52,7 +52,7 @@ import { MessageRow } from "./message-row";
 
 type RowProps = ComponentProps<typeof MessageRow>;
 
-function messageMenu(role: "bot" | "user", blocks: string[], markedUnread = false) {
+function renderRow(role: "bot" | "user", blocks: string[], markedUnread = false) {
   const text = blocks.map((code) => `\`\`\`\n${code}\n\`\`\``).join("\n\n");
   mocks.markdownCodeBlocks.mockReturnValue(blocks);
   mocks.actionProps = undefined;
@@ -84,7 +84,11 @@ function messageMenu(role: "bot" | "user", blocks: string[], markedUnread = fals
     index: 0,
   } as unknown as RowProps;
   renderToStaticMarkup(createElement(MessageRow, props));
-  const actionProps = mocks.actionProps as MessageActionProps | undefined;
+  return { text, actionProps: mocks.actionProps as MessageActionProps | undefined };
+}
+
+function messageMenu(role: "bot" | "user", blocks: string[], markedUnread = false) {
+  const { text, actionProps } = renderRow(role, blocks, markedUnread);
   if (!actionProps?.accessibilityActions || !actionProps.onAccessibilityAction) {
     throw new Error("MessageRow did not pass accessibility actions to its bubble");
   }
@@ -116,7 +120,6 @@ describe("MessageRow code copy accessibility action", () => {
 
   it.each([
     ["bot", ["first", "second"]],
-    ["bot", []],
     ["user", ["first"]],
   ] as const)("omits Copy code for %s with %j", (role, blocks) => {
     const menu = messageMenu(role, [...blocks]);
@@ -124,6 +127,10 @@ describe("MessageRow code copy accessibility action", () => {
     menu.run("copyCode");
     expect(mocks.setStringAsync).not.toHaveBeenCalled();
     if (role === "user") expect(mocks.markdownCodeBlocks).not.toHaveBeenCalled();
+  });
+
+  it("renders no bubble for an empty bot reply, so it offers no Copy code", () => {
+    expect(renderRow("bot", []).actionProps).toBeUndefined();
   });
 });
 

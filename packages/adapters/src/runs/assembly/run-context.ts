@@ -111,6 +111,9 @@ export interface ReplyState {
   discardedMidTurnNarration: boolean;
   lastDiscardedMidTurnNarration: string;
   explicitNoResponse: boolean;
+  /** True when the runtime's final turn ended empty without a usable reply. */
+  emptyResponse?: boolean;
+  emptyResponseReminders?: number;
   assistantTurnText: string;
   midTurnUserTexts: string[];
   midTurnProgressCount: number;
