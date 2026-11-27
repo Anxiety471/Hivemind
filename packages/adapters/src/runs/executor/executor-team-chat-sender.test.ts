@@ -527,7 +527,7 @@ describe("private skills in shared-channel prompts", () => {
       ownerAddress: "T1:U-OWNER",
     });
     expect(result.context).toContain("PRIVATE_SKILL_BODY");
-    expect(result.context).toContain("Taught skills (1): Private recipe");
+    expect(result.context).toContain("Taught skills (1):\n- Private recipe: PRIVATE_TAUGHT_HINT");
   });
 });
 

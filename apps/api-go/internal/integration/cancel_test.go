@@ -531,15 +531,15 @@ func TestClientCancelOnStreamFollow(t *testing.T) {
 		Name:     "boards.subscribe",
 		ReadOnly: true,
 		Stream: &local.Stream{
-			Follow: func(ctx context.Context, actor db.Actor, input orpc.Input) (<-chan string, func(), *orpc.Error) {
+			Follow: func(ctx context.Context, actor db.Actor, input orpc.Input) (*local.Follow, *orpc.Error) {
 				// The client goes away, then the follow step's own Gate query runs on the
 				// canceled context, as it would if the abort landed inside FollowBoard.
 				<-ctx.Done()
 				err := tickets.Gate(ctx, database, shared.Deployment{BoardLab: true}, actor)
 				if err != nil {
-					return nil, nil, shared.Failure(err)
+					return nil, shared.Failure(err)
 				}
-				return nil, func() {}, nil
+				return &local.Follow{Signals: make(chan string), Stop: func() {}}, nil
 			},
 			Frame: func(db.Actor, string) any { return nil },
 		},

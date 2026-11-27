@@ -147,7 +147,7 @@ func TestHTTPPagesList(t *testing.T) {
 		t.Fatalf("list = %d %s", response.StatusCode, body)
 	}
 	response, body = do(t, http.MethodPost, server.URL+"/rpc/pages/list", cookie, `{"json":{"cursor":"%%%"}}`, nil)
-	if response.StatusCode != 400 || string(body) != `{"json":{"code":"BAD_REQUEST","defined":false,"message":"Invalid page list cursor","status":400}}` {
+	if response.StatusCode != 400 || string(body) != `{"json":{"defined":false,"code":"BAD_REQUEST","status":400,"message":"Invalid page list cursor"}}` {
 		t.Fatalf("bad cursor = %d %s", response.StatusCode, body)
 	}
 	response, body = do(t, http.MethodPost, server.URL+"/rpc/pages/list", cookie, `{"json":{"limit":0}}`, nil)

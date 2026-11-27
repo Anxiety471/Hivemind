@@ -37,7 +37,28 @@ type Fanout struct {
 	started bool
 }
 
-type subscriber struct{ signals chan string }
+// subscriber is one follower of a topic: a buffered channel a reader drains, or a callback the
+// listener runs as the signal arrives. A callback must return at once and must not publish: the
+// fanout calls it while holding its own lock, which is what keeps a burst from being split across
+// deliveries (a coalescing reader such as the Space kinds needs every payload).
+type subscriber struct {
+	signals  chan string
+	onSignal func(string)
+}
+
+func (s *subscriber) deliver(payload string) {
+	if s.onSignal != nil {
+		s.onSignal(payload)
+		return
+	}
+	// A signal says "something changed, read again", so a slow reader's newest is dropped: one
+	// already waiting asks for the same read. A reader that cannot lose a payload uses
+	// SubscribeFunc and coalesces itself.
+	select {
+	case s.signals <- payload:
+	default:
+	}
+}
 
 // NewFanout returns a fanout that listens with its own connection made from config.
 func NewFanout(config *pgx.ConnConfig, logger *slog.Logger) *Fanout {
@@ -74,7 +95,30 @@ func (f *Fanout) Subscribe(topic string) (<-chan string, func()) {
 		go f.listen()
 	}
 	f.mu.Unlock()
-	return sub.signals, func() {
+	return sub.signals, f.unsubscribe(topic, sub)
+}
+
+// SubscribeFunc follows one topic with a callback: every signal arrives, in order, with none
+// dropped, so a reader that keeps its own coalescing state (a Set of Space kinds) cannot lose one.
+// The callback runs on the listener goroutine while the fanout holds its lock: it must be quick
+// and must not call back into the fanout.
+func (f *Fanout) SubscribeFunc(topic string, onSignal func(string)) func() {
+	sub := &subscriber{onSignal: onSignal}
+	f.mu.Lock()
+	if f.topics[topic] == nil {
+		f.topics[topic] = map[*subscriber]struct{}{}
+	}
+	f.topics[topic][sub] = struct{}{}
+	if !f.started && f.ctx.Err() == nil {
+		f.started = true
+		go f.listen()
+	}
+	f.mu.Unlock()
+	return f.unsubscribe(topic, sub)
+}
+
+func (f *Fanout) unsubscribe(topic string, sub *subscriber) func() {
+	return func() {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		delete(f.topics[topic], sub)
@@ -142,7 +186,7 @@ func (f *Fanout) deliver(topic, payload string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for sub := range f.topics[topic] {
-		sub.offer(payload)
+		sub.deliver(payload)
 	}
 }
 
@@ -151,14 +195,7 @@ func (f *Fanout) deliverToAll(payload string) {
 	defer f.mu.Unlock()
 	for _, subs := range f.topics {
 		for sub := range subs {
-			sub.offer(payload)
+			sub.deliver(payload)
 		}
-	}
-}
-
-func (s *subscriber) offer(payload string) {
-	select {
-	case s.signals <- payload:
-	default:
 	}
 }

@@ -788,6 +788,90 @@ describe("compactHistory", () => {
     expect(harness.thread.historyCompactionSummary).toBe("Summary of 50 messages.");
   });
 
+  it("bootstraps kept legacy coverage whose clear event retention pruned", async () => {
+    const harness = compactionHarness({
+      deploymentModelKey: "openrouter-key",
+      historyCompactedUpToSeq: 99,
+      messages: Array.from({ length: 50 }, (_, i) => ({
+        seq: i + 50,
+        role: "user",
+        blocks: [{ kind: "text", text: `kept message ${i + 50}` }],
+      })),
+      nextMessageSeq: 100,
+    });
+    const sink = installCompactionLogger();
+
+    try {
+      await compactHistory(harness.deps, "thread-1");
+    } finally {
+      silenceLogger();
+    }
+
+    const [request] = harness.runtime.run.mock.calls[0]!;
+    expect(request.prompt).toContain("kept message 50");
+    expect(request.prompt).toContain("kept message 99");
+    expect(harness.thread.historyCompactedUpToSeq).toBe(99);
+    expect(harness.thread.historyCompactionSummary).toBe("Summary of 50 messages.");
+    expect(
+      sink.events.some((event) => event.message === "history.compact failed permanently"),
+    ).toBe(false);
+    expect(sink.events.some((event) => event.message === "legacy_clear_event_missing")).toBe(true);
+  });
+
+  it("fails permanently when kept legacy coverage has a hole", async () => {
+    const messages: HarnessMessage[] = [
+      ...Array.from({ length: 48 }, (_, i) => ({
+        seq: i + 50,
+        role: "user",
+        blocks: [{ kind: "text" as const, text: `message ${i + 50}` }],
+      })),
+      { seq: 99, role: "user", blocks: [{ kind: "text" as const, text: "message 99" }] },
+    ];
+    const harness = compactionHarness({
+      deploymentModelKey: "openrouter-key",
+      historyCompactedUpToSeq: 99,
+      messages,
+      nextMessageSeq: 100,
+    });
+    const sink = installCompactionLogger();
+
+    try {
+      await compactHistory(harness.deps, "thread-1");
+    } finally {
+      silenceLogger();
+    }
+
+    expect(harness.runtime.run).not.toHaveBeenCalled();
+    expect(sink.events.at(-1)).toMatchObject({
+      message: "history.compact failed permanently",
+      "history.compact.reason": "legacy_coverage_gap",
+      "history.compact.retryable": false,
+    });
+  });
+
+  it("fails permanently when kept legacy coverage does not reach the cursor", async () => {
+    const harness = compactionHarness({
+      deploymentModelKey: "openrouter-key",
+      historyCompactedUpToSeq: 99,
+      messages: [{ seq: 98, role: "user", blocks: [{ kind: "text", text: "message 98" }] }],
+      nextMessageSeq: 100,
+    });
+    const sink = installCompactionLogger();
+
+    try {
+      await compactHistory(harness.deps, "thread-1");
+    } finally {
+      silenceLogger();
+    }
+
+    expect(harness.runtime.run).not.toHaveBeenCalled();
+    expect(sink.events.at(-1)).toMatchObject({
+      message: "history.compact failed permanently",
+      "history.compact.reason": "legacy_coverage_gap",
+      "history.compact.retryable": false,
+    });
+  });
+
   it("compacts new messages after a cleared thread without bootstrapping deleted history", async () => {
     const harness = compactionHarness({
       deploymentModelKey: "openrouter-key",

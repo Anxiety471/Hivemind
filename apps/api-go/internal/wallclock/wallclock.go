@@ -1,15 +1,14 @@
 // Package wallclock converts between instants and a zone's wall-clock reading,
-// as packages/core/src/primitives/time.ts does through Intl and CronDate.
+// as packages/core/src/primitives/time.ts does through Intl and CronDate. The
+// zone rules come from internal/tz, the tzdata release production Node carries,
+// so a host tzdata upgrade cannot move a billing boundary.
 package wallclock
 
 import (
-	"io/fs"
-	"os"
-	"path/filepath"
-	"strings"
 	"sync"
 	"time"
-	_ "time/tzdata" // zone data even where the host has none
+
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/tz"
 )
 
 // DayMS is DAY_MS (packages/core/src/primitives/time.ts).
@@ -77,39 +76,13 @@ func ZoneOrUTC(name string) *time.Location {
 }
 
 func loadZone(name string) *time.Location {
-	if name == "" || name == "Local" || strings.HasPrefix(name, "/") || strings.Contains(name, "..") {
-		return time.UTC
-	}
 	if offset, ok := fixedOffset(name); ok {
 		return time.FixedZone(name, offset)
 	}
-	if loc, err := time.LoadLocation(name); err == nil {
-		return loc
-	}
-	root := "/usr/share/zoneinfo"
-	var found string
-	_ = filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil || found != "" {
-			return nil
-		}
-		relative, rerr := filepath.Rel(root, path)
-		if rerr != nil || entry.IsDir() {
-			if entry != nil && entry.IsDir() && (entry.Name() == "posix" || entry.Name() == "right") {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if strings.EqualFold(relative, name) {
-			found = relative
-		}
-		return nil
-	})
-	if found != "" {
-		if _, err := os.Stat(filepath.Join(root, found)); err == nil {
-			if loc, err := time.LoadLocation(found); err == nil {
-				return loc
-			}
-		}
+	// Intl throws on a name it does not know, and validTimezoneOrUtc reads that
+	// as UTC; "" and "Local" are not zones here either.
+	if location, err := tz.Load(name); err == nil {
+		return location
 	}
 	return time.UTC
 }

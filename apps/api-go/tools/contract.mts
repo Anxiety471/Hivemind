@@ -31,6 +31,7 @@ import { laneKReviewCases } from "./contract-k-review.mts";
 import { laneLPushCases, laneLPushState } from "./contract-l-push.mts";
 import { laneMReviewCases } from "./contract-m-review.mts";
 import { laneMSecretCases, laneMState } from "./contract-m-secrets.mts";
+import { oStreamErrorCases } from "./contract-o-wired.mts";
 import { laneLReviewCases } from "./contract-l-review.mts";
 import { membershipCases, membershipReset, membershipState } from "./contract-membership.mts";
 import { modelsCases } from "./contract-models.mts";
@@ -259,6 +260,10 @@ await writeFile(
       "messaging.channels.leave": { mode: "go" },
       "messaging.connections.list": { mode: "go", readOnly: true },
       "messaging.connections.revoke": { mode: "go" },
+      "threads.subscribe": { mode: "go" },
+      "threads.helperSubscribe": { mode: "go" },
+      "notifications.subscribe": { mode: "go" },
+      "notifications.subscribeCalls": { mode: "go" },
       "threads.head": { mode: "go", readOnly: true },
       "threads.get": { mode: "go", readOnly: true },
       "threads.messages": { mode: "go", readOnly: true },
@@ -749,6 +754,7 @@ const cases: Case[] = [
   ...laneMSecretCases(system),
   ...laneMReviewCases(system),
   ...laneLReviewCases(system),
+  ...oStreamErrorCases(),
 ];
 
 // biome-ignore lint/suspicious/noUndeclaredEnvVars: manual harness, not a turbo task

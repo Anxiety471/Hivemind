@@ -48,16 +48,51 @@ type Procedure struct {
 // re-check that the session is still the one that opened the stream.
 type Stream struct {
 	// Follow runs the procedure's own checks and starts listening. A failure is answered as an
-	// ordinary error before any stream starts. Each payload read from signals becomes a Frame;
-	// stop ends the listening.
-	Follow func(ctx context.Context, actor db.Actor, input orpc.Input) (signals <-chan string, stop func(), failure *orpc.Error)
+	// ordinary error before any stream starts.
+	Follow func(ctx context.Context, actor db.Actor, input orpc.Input) (*Follow, *orpc.Error)
 	// Frame is the event a signal's payload stands for. An empty payload is the fanout's
 	// catch-up after its listener reconnects: anything may have changed.
 	Frame func(actor db.Actor, payload string) any
-	// HeartbeatFrame is the frame sent after a quiet spell so a half-open stream is noticed and
-	// proxies keep the connection. Clients tell it apart from a change and do not read for it;
-	// without one, Frame(actor, "") stands in.
-	HeartbeatFrame func(actor db.Actor) any
+}
+
+// Follow is a started stream: what its source produces, how to stop it, and the frame a quiet
+// spell sends. The heartbeat belongs here rather than on Stream because it may name state only
+// the source resolved (a chat's thread and bot, say), which the actor alone cannot supply.
+type Follow struct {
+	// Signals carries each payload Frame turns into an event.
+	Signals <-chan string
+	// Stop ends the listening; the server calls it once when the stream ends. It must be safe to
+	// call while a source is blocked handing over a frame.
+	Stop func()
+	// Heartbeat is the frame sent after a quiet spell, so a half-open stream looks different
+	// from an idle one and proxies keep the connection. Clients tell it apart from a change and
+	// do not read for it.
+	Heartbeat func() any
+	// Failure, when set, is the error the source would raise at its first pull: the stream writes
+	// the opening comment, then that error as an `error` event, and ends.
+	Failure *orpc.Error
+	// Ending reportshow a stream whose Signals channel has closed finishes. Nil is a normal end
+	// (oRPC's controller.close(): the body simply stops); a Failure is one last `error` event
+	// before that close; Abort drops the connection with no terminating chunk, the way
+	// controller.error(err) does when a frame cannot even be written.
+	Ending func() Ending
+}
+
+// Ending is how a closed stream finishes on the wire.
+type Ending struct {
+	// Failure, when set, goes out as one `error` event before the body ends.
+	Failure *orpc.Error
+	// Abort closes the connection without the terminating chunk.
+	Abort bool
+}
+
+// Failed is a stream whose source raises before its first frame. oRPC discovers such a failure at
+// the first pull — after the 200 is on the wire — and answers with one `error` event: a target
+// that is not the caller's reaches a client as 200 then INTERNAL_SERVER_ERROR, not as a 404.
+func Failed(failure *orpc.Error) *Follow {
+	signals := make(chan string)
+	close(signals)
+	return &Follow{Signals: signals, Stop: func() {}, Failure: failure}
 }
 
 // StreamTiming sets how a stream paces itself; zero fields take the defaults the TypeScript

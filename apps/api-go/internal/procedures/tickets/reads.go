@@ -13,6 +13,7 @@ import (
 
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/db"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/effects"
+	"github.com/Anxiety471/Hivemind/apps/api-go/internal/local"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/orpc"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/procedures/shared"
 	"github.com/Anxiety471/Hivemind/apps/api-go/internal/validate"
@@ -48,15 +49,16 @@ func parseTicketRef(value, expectedPrefix string) (int64, bool) {
 // FollowBoard is boards.subscribe's start (apps/api/src/routes/boards.ts:97-106): behind the board
 // lab like the rest, it listens for the Space's board signals. Without a realtime listener the
 // stream stays open and empty.
-func FollowBoard(ctx context.Context, database *db.DB, deployment shared.Deployment, actor db.Actor, _ orpc.Input) (<-chan string, func(), *orpc.Error) {
+func FollowBoard(ctx context.Context, database *db.DB, deployment shared.Deployment, actor db.Actor, _ orpc.Input) (*local.Follow, *orpc.Error) {
 	if err := Gate(ctx, database, deployment, actor); err != nil {
-		return nil, nil, shared.Failure(err)
+		return nil, shared.Failure(err)
 	}
+	heartbeat := func() any { return BoardHeartbeat(actor) }
 	if deployment.Realtime == nil {
-		return nil, func() {}, nil
+		return &local.Follow{Signals: make(chan string), Stop: func() {}, Heartbeat: heartbeat}, nil
 	}
 	signals, stop := deployment.Realtime.Subscribe("board:" + actor.SpaceID)
-	return signals, stop, nil
+	return &local.Follow{Signals: signals, Stop: stop, Heartbeat: heartbeat}, nil
 }
 
 // BoardFrame is the BoardEvent a signal stands for (createBoardEvents.follow,

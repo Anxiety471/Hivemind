@@ -56,6 +56,8 @@ func TestRegistryHasTheServedProceduresAndNotTrust(t *testing.T) {
 		"computer.dismissUpdate", "computer.dismissDiskWarning",
 		"boards.list", "boards.get", "boards.rename",
 		"tickets.get", "tickets.comments", "boards.subscribe",
+		"threads.subscribe", "threads.helperSubscribe",
+		"notifications.subscribe", "notifications.subscribeCalls",
 		"bots.list", "bots.listArchived", "bots.get", "groups.list", "groups.get", "groups.listArchived",
 		"notifications.registerPush", "notifications.registerCallPush", "notifications.unregisterPush",
 	} {
@@ -75,9 +77,9 @@ func TestRegistryHasTheServedProceduresAndNotTrust(t *testing.T) {
 			t.Errorf("%s must not be served locally", name)
 		}
 	}
-	// The rest of threads read or write encrypted messages and events, or start runs; threads.get and
-	// threads.messages are served and may decline to TypeScript.
-	for _, name := range []string{"threads.send", "threads.followUp", "threads.stop", "threads.clear", "threads.subscribe"} {
+	// The rest of threads read or write encrypted messages and events, or start runs; threads.get,
+	// threads.messages, threads.subscribe and threads.helperSubscribe are served.
+	for _, name := range []string{"threads.send", "threads.followUp", "threads.stop", "threads.clear"} {
 		if seen[name] {
 			t.Errorf("%s must not be served locally", name)
 		}
