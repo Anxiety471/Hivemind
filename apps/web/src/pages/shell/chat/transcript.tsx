@@ -46,6 +46,7 @@ import { ActiveBotGlyph } from "../../../components/ai/CollaborationMarker";
 import { VoiceChatCard } from "../../../components/call/VoiceChatCard";
 import type { ActivityRunMeta } from "../../../components/messages/ActivityPanel";
 import { LiveRunMonitorCard } from "../../../components/messages/ActivityPanel";
+import { PaneLoading } from "../../../components/PaneLoading";
 import type { HelperThreadTarget } from "../../../lib/chat/helper-thread";
 import { messageHasVisibleBlocks } from "../../../lib/chat/tool-activity-view";
 import { TRANSCRIPT_CONTENT_PADDING } from "../../../lib/chat/transcript-layout";
@@ -102,6 +103,7 @@ export const Transcript = memo(function Transcript({
   olderCursor,
   unreadAfterSeq,
   loadingOlder,
+  threadLoading,
   answerableAskIds,
   dismissableAskIds,
   running,
@@ -162,6 +164,8 @@ export const Transcript = memo(function Transcript({
   /** The seq read up to when this chat opened; null when nothing was unread. */
   unreadAfterSeq: number | null;
   loadingOlder: boolean;
+  /** The chat's first snapshot is still on its way, so the column has nothing to show yet. */
+  threadLoading: boolean;
   answerableAskIds: Set<string>;
   dismissableAskIds: Set<string>;
   running: boolean;
@@ -620,6 +624,7 @@ export const Transcript = memo(function Transcript({
             : undefined
         }
       >
+        {threadLoading && messages.length === 0 ? <PaneLoading /> : null}
         {olderCursor != null && !showTail ? (
           <Button
             variant="ghost"

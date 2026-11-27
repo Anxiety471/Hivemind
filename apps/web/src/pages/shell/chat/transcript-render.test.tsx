@@ -98,6 +98,7 @@ function Host({
       scrollRequest={null}
       onScrollRequestHandled={reply}
       followRequest={0}
+      threadLoading={false}
       artifactTarget={artifactTarget}
       transcript={{
         messages,

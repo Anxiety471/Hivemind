@@ -54,6 +54,7 @@ import { IconTooltip } from "../../components/IconTooltip";
 import { VideoPreview } from "../../components/messages/ArtifactFileCard";
 import { PdfViewer } from "../../components/messages/PdfViewer";
 import { SandboxedHtmlViewer } from "../../components/messages/SandboxedHtmlViewer";
+import { PaneLoading } from "../../components/PaneLoading";
 import { WindowChrome } from "../../components/WindowChrome";
 import { takeInitialBootstrap } from "../../lib/bootstrap";
 import { useCopyText } from "../../lib/copy-text";
@@ -445,15 +446,14 @@ function BrowsingPane({
   empty: ReactNode;
 }) {
   if (items === null) {
-    return (
-      <div className="grid flex-1 place-items-center p-6 text-body text-muted-foreground/80">
-        {loadError ? (
+    if (loadError) {
+      return (
+        <div className="grid flex-1 place-items-center p-6 text-body text-muted-foreground/80">
           <ErrorNotice error={loadError} onRetry={onRetry} />
-        ) : (
-          <Spinner aria-label={t`Loading…`} />
-        )}
-      </div>
-    );
+        </div>
+      );
+    }
+    return <PaneLoading className="p-6" />;
   }
   if (items.length === 0) return empty;
   return (

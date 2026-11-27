@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 import { deferred, flush } from "@rakazo/core/test-async";
+import { act, createElement } from "react";
+import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const notify = vi.hoisted(() => vi.fn());
@@ -11,6 +13,7 @@ import {
   noteServerReachable,
   resetServerReachableForTests,
   subscribeServerReachable,
+  useServerReachable,
 } from "./connection-state";
 import { followStream } from "./follow-stream";
 import { rpc } from "./rpc";
@@ -153,5 +156,25 @@ describe("rpc response metadata", () => {
     expect(tooMany).toMatchObject({ status: 429 });
     expect(tooMany).not.toHaveProperty("retryAfterMs");
     expect(isServerReachable()).toBe(true);
+  });
+});
+
+describe("useServerReachable", () => {
+  it("re-renders a component as the server stops and starts answering", async () => {
+    function Probe() {
+      return createElement("span", null, String(useServerReachable()));
+    }
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    await act(async () => root.render(createElement(Probe)));
+    expect(container.textContent).toBe("true");
+
+    await act(async () => noteServerReachable(false));
+    expect(container.textContent).toBe("false");
+
+    await act(async () => noteServerReachable(true));
+    expect(container.textContent).toBe("true");
+
+    await act(async () => root.unmount());
   });
 });

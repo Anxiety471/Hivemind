@@ -197,6 +197,9 @@ func TestProxyStreamsEventsImmediately(t *testing.T) {
 	if got := response.Header.Get("Content-Type"); got != "text/event-stream" {
 		t.Fatalf("content-type = %q", got)
 	}
+	if got := response.Header.Get("X-Accel-Buffering"); got != "no" {
+		t.Fatalf("x-accel-buffering = %q, want no", got)
+	}
 
 	lines := make(chan string, 2)
 	go func() {
@@ -217,6 +220,40 @@ func TestProxyStreamsEventsImmediately(t *testing.T) {
 		t.Fatal("first event was buffered until the upstream finished")
 	}
 	releaseNow()
+}
+
+func TestProxyKeepsUpstreamBufferingChoice(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/rpc/boards/subscribe":
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.Header().Set("X-Accel-Buffering", "yes")
+		default:
+			w.Header().Set("Content-Type", "application/json")
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"json":{}}`)
+	}))
+	t.Cleanup(upstream.Close)
+	gatewayURL := testGateway(t, upstream.URL, "").URL
+
+	stream, err := http.Get(gatewayURL + "/rpc/boards/subscribe")
+	if err != nil {
+		t.Fatalf("get stream: %v", err)
+	}
+	defer stream.Body.Close()
+	if got := stream.Header.Get("X-Accel-Buffering"); got != "yes" {
+		t.Errorf("upstream buffering choice was overwritten: %q", got)
+	}
+
+	plain, err := http.Get(gatewayURL + "/rpc/boards/list")
+	if err != nil {
+		t.Fatalf("get json: %v", err)
+	}
+	defer plain.Body.Close()
+	if got := plain.Header.Get("X-Accel-Buffering"); got != "" {
+		t.Errorf("json answer carries x-accel-buffering = %q", got)
+	}
 }
 
 func TestUpstreamFailureIsServiceUnavailable(t *testing.T) {

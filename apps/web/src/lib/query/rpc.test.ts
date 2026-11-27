@@ -1,4 +1,6 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { isRetryableError } from "@rakazo/core";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { isServerReachable, resetServerReachableForTests } from "./connection-state";
 import {
   clearSpaceSelection,
   createSpaceRpc,
@@ -13,9 +15,14 @@ import {
 const notify = vi.hoisted(() => vi.fn());
 vi.mock("../auth/auth", () => ({ authClient: { $store: { notify } } }));
 
+beforeEach(() => {
+  resetServerReachableForTests(true);
+});
+
 afterEach(() => {
   vi.unstubAllGlobals();
   notify.mockClear();
+  resetServerReachableForTests(true);
 });
 
 describe("signed-out responses", () => {
@@ -203,21 +210,32 @@ describe("space selection storage", () => {
 
 describe("shell RPC space isolation", () => {
   it.each([rpc, createSpaceRpc("space-a")])(
-    "passes the caller's cancellation signal directly to fetch",
+    "keeps the caller's cancellation signal attached to fetch",
     async (client) => {
       const controller = new AbortController();
-      const fetch = vi.fn(async (_request: Request, _init: RequestInit) =>
-        Response.json({ json: {} }),
+      const fetch = vi.fn(
+        (_request: Request, init: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            // Reject as fetch does when its signal ends the request.
+            init.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+          }),
       );
       vi.stubGlobal("fetch", fetch);
 
-      await client.me(undefined, { signal: controller.signal });
+      const pending = client.me(undefined, { signal: controller.signal }).catch((error) => error);
+      await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
 
+      // The request's own deadline rides along with the caller's signal, so both end it.
       const signal = fetch.mock.calls[0]?.[1].signal;
-      expect(signal).toBe(controller.signal);
+      expect(signal).toBeInstanceOf(AbortSignal);
+
       controller.abort("thread retired");
+
+      // A caller that gave up is not a timeout and is not reported as a stalled connection.
       expect(signal?.aborted).toBe(true);
       expect(signal?.reason).toBe("thread retired");
+      expect(await pending).not.toHaveProperty("name", "TimeoutError");
+      expect(isServerReachable()).toBe(true);
     },
   );
 
@@ -308,5 +326,64 @@ describe("space-bound clients", () => {
   it("reuses one client per space", () => {
     expect(rpcForSpace("space-a")).toBe(rpcForSpace("space-a"));
     expect(rpcForSpace("space-a")).not.toBe(rpcForSpace("space-b"));
+  });
+});
+
+describe("request deadlines", () => {
+  /** A fetch that only settles when its signal ends it, as a stalled connection would. */
+  function stalledFetch() {
+    return vi.fn(
+      (_request: Request, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+        }),
+    );
+  }
+
+  it("gives up on a unary call that outlives its deadline, as a retryable timeout", async () => {
+    const fetch = stalledFetch();
+    vi.stubGlobal("fetch", fetch);
+
+    const error = await rpc.me(undefined, { context: { timeoutMs: 5 } }).catch((thrown) => thrown);
+
+    expect(error).toMatchObject({ name: "TimeoutError" });
+    expect(isRetryableError(error)).toBe(true);
+    // A slow answer is not a gone server: the retry decides what the connection is doing.
+    expect(isServerReachable()).toBe(true);
+  });
+
+  it("leaves live streams and long-running procedures without a deadline", async () => {
+    const signals: Array<RequestInit["signal"]> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_request: Request, init?: RequestInit) => {
+        signals.push(init?.signal);
+        return Response.json({ json: {} });
+      }),
+    );
+
+    // Streams stay open, and a sandbox boot runs for minutes; a unary read gets the deadline.
+    await rpc.notifications.subscribe().catch(() => undefined);
+    await rpc.computer.boot({ botId: "bot-a" }).catch(() => undefined);
+    await rpc.me().catch(() => undefined);
+
+    expect(signals[0]).toBeUndefined();
+    expect(signals[1]).toBeUndefined();
+    expect(signals[2]).toBeInstanceOf(AbortSignal);
+  });
+
+  it("takes an explicit null deadline as no deadline at all", async () => {
+    const signals: Array<RequestInit["signal"]> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_request: Request, init?: RequestInit) => {
+        signals.push(init?.signal);
+        return Response.json({ json: {} });
+      }),
+    );
+
+    await rpc.me(undefined, { context: { timeoutMs: null } });
+
+    expect(signals[0]).toBeUndefined();
   });
 });

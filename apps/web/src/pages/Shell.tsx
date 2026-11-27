@@ -44,6 +44,7 @@ import { IncomingCall } from "../components/call/IncomingCall";
 import { ComputerUpdateProgress } from "../components/computers/ComputerUpdateProgress";
 import { PageLoading } from "../components/PageLoading";
 import { PageViewHost } from "../components/pages/PageViewHost";
+import { ReconnectingNotice } from "../components/ReconnectingNotice";
 import { authClient } from "../lib/auth/auth";
 import { peekBootstrapSeed } from "../lib/bootstrap";
 import { setCallMinimized, startCall, useCallSession } from "../lib/calls/call-session";
@@ -1053,6 +1054,7 @@ function SpaceShell() {
           if (active) void refreshThread(active.id);
         }}
       />
+      <ReconnectingNotice />
       {bootstrapMe !== undefined ? (
         <HostComputerPrompt initialMe={bootstrapMe ?? undefined} onMeUpdated={setBootstrapMe} />
       ) : null}
@@ -1213,6 +1215,7 @@ function SpaceShell() {
           ) : (
             <Transcript
               key={activeSnapshot?.threadId}
+              threadLoading={Boolean(active || activeGroup) && !activeSnapshot}
               meId={userId}
               scrollRef={thread.messageScroll}
               scrollRequest={scrollRequest}

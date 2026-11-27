@@ -355,6 +355,13 @@
   }
 }
 
+/* Reading comes first: the caret stays lit instead of blinking for reduced motion. */
+@media (prefers-reduced-motion: reduce) {
+  .rk-chat-markdown-cursor {
+    animation: none;
+  }
+}
+
 /* A website link: its site icon, then the label. The icon never ends a line on its own. */
 a.rk-chat-link {
   color: inherit;

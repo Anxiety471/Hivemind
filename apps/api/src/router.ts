@@ -64,7 +64,7 @@ import { threadsRoutes } from "./routes/threads.js";
 export { botIntroPrompt } from "./bots/hidden-turns.prompt.js";
 export { nextConnectionLabel } from "./models/model-credentials.js";
 export { enqueueBotIntroRun } from "./routes/bots.js";
-export { HEARTBEAT_MS, SESSION_RECHECK_MS } from "./routes/shared.js";
+export { HEARTBEAT_MS, INITIAL_HEARTBEAT_MS, SESSION_RECHECK_MS } from "./routes/shared.js";
 export { callMarkerClientNonce } from "./routes/threads.js";
 
 export interface RouterDeps {

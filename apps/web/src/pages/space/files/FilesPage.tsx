@@ -62,6 +62,7 @@ import { Link, useParams } from "react-router-dom";
 import { ConfirmDialog } from "../../../components/ConfirmDialog";
 import { ErrorNotice } from "../../../components/ErrorNotice";
 import { IconTooltip } from "../../../components/IconTooltip";
+import { PaneLoading } from "../../../components/PaneLoading";
 import { WindowChrome } from "../../../components/WindowChrome";
 import { getMaxFileUploadSizeBytes } from "../../../lib/bootstrap";
 import { attachmentPickerAccept } from "../../../lib/composer/attachment-picker-accept";
@@ -564,13 +565,13 @@ export function FilesPage({ drive = false, trashView }: { drive?: boolean; trash
           }}
         >
           {items === null ? (
-            <div className="grid flex-1 place-items-center p-6 text-muted-foreground">
-              {loadError ? (
+            loadError ? (
+              <div className="grid flex-1 place-items-center p-6 text-muted-foreground">
                 <ErrorNotice error={loadError} onRetry={() => listing.refetch()} />
-              ) : (
-                <Spinner aria-label={t`Loading…`} />
-              )}
-            </div>
+              </div>
+            ) : (
+              <PaneLoading className="p-6" />
+            )
           ) : items.length === 0 ? (
             <Empty className="flex-1">
               <EmptyHeader>
@@ -1004,8 +1005,8 @@ function NameDialog({
             >
               {t`Cancel`}
             </Button>
-            <Button type="submit" disabled={pending || !value.trim()}>
-              {pending ? t`Saving…` : confirmLabel}
+            <Button type="submit" loading={pending} disabled={!value.trim()}>
+              {confirmLabel}
             </Button>
           </DialogFooter>
         </form>
@@ -1098,8 +1099,8 @@ function EditFileDialog({
             >
               {t`Cancel`}
             </Button>
-            <Button type="submit" disabled={pending || !name.trim()}>
-              {pending ? t`Saving…` : t`Save`}
+            <Button type="submit" loading={pending} disabled={!name.trim()}>
+              {t`Save`}
             </Button>
           </DialogFooter>
         </form>

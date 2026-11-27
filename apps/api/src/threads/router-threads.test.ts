@@ -10,7 +10,7 @@ import { AnswerTooLongError } from "@rakazo/db";
 import { createLogger, createTestSink, installLogger } from "@rakazo/logging";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RouterDeps } from "../router.js";
-import { HEARTBEAT_MS, SESSION_RECHECK_MS } from "../router.js";
+import { HEARTBEAT_MS, INITIAL_HEARTBEAT_MS, SESSION_RECHECK_MS } from "../router.js";
 import { appHandler, createRouter, handle } from "../router-test-support.js";
 
 describe("thread answer delivery", () => {
@@ -415,6 +415,11 @@ describe("thread stream authorization", () => {
     const stream = await client.threads.subscribe({ botId: "bot-1", cursor: -1 });
 
     stillAuthorized.mockResolvedValue(false);
+    // A slow first read gets its first frame after 2 s; the session is re-checked on later wakes.
+    const first = stream.next();
+    await vi.advanceTimersByTimeAsync(INITIAL_HEARTBEAT_MS);
+    await expect(first).resolves.toMatchObject({ value: { type: "heartbeat" } });
+
     const ended = expect(stream.next()).rejects.toMatchObject({ code: "UNAUTHORIZED" });
     await vi.advanceTimersByTimeAsync(HEARTBEAT_MS);
     await ended;

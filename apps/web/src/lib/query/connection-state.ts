@@ -1,3 +1,5 @@
+import { useSyncExternalStore } from "react";
+
 /** Whether this device reports a network at all; a browser without `navigator` is a server. */
 export function isBrowserOnline(): boolean {
   return typeof navigator === "undefined" ? true : navigator.onLine !== false;
@@ -23,6 +25,11 @@ export function noteServerReachable(reachable: boolean): void {
   if (reachable === serverReachable) return;
   serverReachable = reachable;
   for (const listener of [...listeners]) listener(reachable);
+}
+
+/** Whether the server is answering right now, for a component that must react to it. */
+export function useServerReachable(): boolean {
+  return useSyncExternalStore(subscribeServerReachable, isServerReachable, () => true);
 }
 
 /** Test-only: put the state back to a known value without announcing a transition. */

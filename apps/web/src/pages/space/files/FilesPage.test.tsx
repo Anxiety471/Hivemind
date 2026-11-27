@@ -59,9 +59,13 @@ vi.mock("@rakazo/ui-web", () => {
     Button: ({
       size: _size,
       variant: _variant,
+      loading: _loading,
       ...props
-    }: ComponentProps<"button"> & { size?: string; variant?: string }) => <button {...props} />,
+    }: ComponentProps<"button"> & { size?: string; variant?: string; loading?: boolean }) => (
+      <button {...props} />
+    ),
     buttonVariants: () => "",
+    cn: (...classes: Array<string | false | null | undefined>) => classes.filter(Boolean).join(" "),
     Dialog: ({ open, children }: { open?: boolean; children?: ReactNode }) =>
       open ? <div role="dialog">{children}</div> : null,
     DialogContent: Container,

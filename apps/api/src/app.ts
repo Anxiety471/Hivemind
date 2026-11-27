@@ -190,6 +190,7 @@ import {
   handleHttpError,
   handleRpcError,
   requestHitDatabaseOutage,
+  setRpcResponseHeaders,
 } from "./rpc-errors.js";
 import { afterSpaceDeparture } from "./spaces/space-departure.js";
 import { cspReportRoutes } from "./telemetry/csp-report.js";
@@ -1143,10 +1144,10 @@ async function buildApp(overrides: CreateAppOverrides): Promise<AppHandles> {
     });
     if (!matched) return next();
     const reply = c.newResponse(response.body, response);
-    if (requestHitDatabaseOutage())
-      reply.headers.set("Retry-After", String(DATABASE_RETRY_AFTER_SECONDS));
+    // A temporary failure says when to ask again, and a stream is flushed through proxies.
+    setRpcResponseHeaders(reply);
     // A signed-in request that went through reached the database, so any outage is over.
-    else if (actor && reply.status < 500) databaseOutage.succeeded();
+    if (!requestHitDatabaseOutage() && actor && reply.status < 500) databaseOutage.succeeded();
     return reply;
   });
   mountAccountExportRoute(app, { prisma, auth, artifacts, home });

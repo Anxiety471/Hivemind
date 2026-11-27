@@ -22,7 +22,47 @@ import { clientErrorStatus } from "./client-error-status.js";
 
 /** How long a client waits before asking again while the database fails over. */
 export const DATABASE_RETRY_AFTER_SECONDS = 5;
+/** A provider transaction on the same scope was still running; its turn is a moment away. */
+const PROVIDER_BUSY_RETRY_AFTER_SECONDS = 2;
+/** A provider that could not start or reach the computer is worth another try shortly. */
+const COMPUTER_UNAVAILABLE_RETRY_AFTER_SECONDS = 5;
+const COMPUTER_RATE_LIMITED_RETRY_AFTER_SECONDS = 5;
 const DATABASE_UNAVAILABLE = "db.unavailable";
+const RETRY_AFTER = "rpc.retryAfterSeconds";
+
+/**
+ * Record that this request's answer asks the client to wait `seconds` before trying again. The
+ * response carries it as `Retry-After`, so a retryable refusal is answered once instead of
+ * retried against a server that is already busy.
+ */
+function recordRetryAfter(seconds: number): void {
+  enrichLogContext({ [RETRY_AFTER]: seconds });
+}
+
+/**
+ * Seconds this request's failed answer asks the client to wait, when it is a temporary condition:
+ * a database outage, a busy provider transaction, or a computer provider that is unavailable.
+ */
+export function requestRetryAfterSeconds(): number | undefined {
+  if (requestHitDatabaseOutage()) return DATABASE_RETRY_AFTER_SECONDS;
+  const recorded = getLogContext()[RETRY_AFTER];
+  return typeof recorded === "number" ? recorded : undefined;
+}
+
+/**
+ * Headers an RPC reply carries: `Retry-After` when the failure is temporary, so the client waits
+ * instead of hammering this process, and `X-Accel-Buffering: no` so a proxy in front of the API
+ * forwards a stream's chunks as they are written rather than buffering them until it ends.
+ */
+export function setRpcResponseHeaders(reply: Response): void {
+  const retryAfter = requestRetryAfterSeconds();
+  if (retryAfter !== undefined) reply.headers.set("Retry-After", String(retryAfter));
+  if (
+    reply.headers.get("content-type")?.includes("text/event-stream") &&
+    !reply.headers.has("x-accel-buffering")
+  )
+    reply.headers.set("X-Accel-Buffering", "no");
+}
 
 /**
  * Whether a request failed because the database is unavailable. The outage logs it once for
@@ -112,18 +152,25 @@ export function handleRpcError(
       reason: unavailable.cause instanceof Error ? unavailable.cause.message : undefined,
     });
     markExpectedFailure();
+    recordRetryAfter(COMPUTER_UNAVAILABLE_RETRY_AFTER_SECONDS);
     throw new ORPCError("SERVICE_UNAVAILABLE", { message: unavailable.message, cause: error });
   }
   // A provider kept another transaction busy past the wait; nothing failed, so the caller retries.
   if (error instanceof ProviderTransactionBusyError) {
     getLogger().warn(`rpc ${path.join("/")} provider transaction busy`);
     markExpectedFailure();
+    recordRetryAfter(PROVIDER_BUSY_RETRY_AFTER_SECONDS);
     throw new ORPCError("SERVICE_UNAVAILABLE", { message: error.message, cause: error });
   }
   if (error instanceof SandboxRateLimitError) {
     getLogger().warn(`rpc ${path.join("/")} computer rate limited`, {
       reason: error.cause instanceof Error ? error.cause.message : undefined,
     });
+    recordRetryAfter(
+      error.retryAfterMs === undefined
+        ? COMPUTER_RATE_LIMITED_RETRY_AFTER_SECONDS
+        : Math.max(1, Math.ceil(error.retryAfterMs / 1000)),
+    );
     throw new ORPCError("TOO_MANY_REQUESTS", { message: error.message, cause: error });
   }
   // The organization spent this period's computer allowance; its message says so.
