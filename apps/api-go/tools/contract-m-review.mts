@@ -2,6 +2,7 @@
  * Lane M review: adversarial cases written by the independent reviewer. They are not part of the
  * lane; each one probes a parity or security edge the lane's own 151 cases do not cover.
  */
+import assert from "node:assert/strict";
 import { EncryptedSecretStore } from "../../../packages/adapters/src/secrets/secrets.js";
 import { contentEncryptionOf, encryptText } from "../../../packages/db/src/index.js";
 import type { Case, Seeded } from "./contract.mts";
@@ -20,6 +21,14 @@ const sealContext = {
 } as never;
 const v2 = async (recordId: string, plaintext: string) =>
   (await legacyStore.put(plaintext, sealContext, { recordId })).ciphertext;
+
+// Identity confirmation has one nominal answer: deny. Assert it per side, not only through the
+// Go/TS comparison, because TypeScript's own race can answer 200 on the same attempt a Go-200
+// regression does; the two would then compare equal and pass with no retry. A check failure is
+// an AssertionError, so the declared ts 200 / go 403 retry still covers TypeScript's race while
+// Go 200 fails on the first attempt whatever TypeScript answers.
+const denyIdentityConfirmation: NonNullable<Case["check"]> = ({ result, side }) =>
+  assert.equal(result.status, 403, `${side}: identity confirmation must deny`);
 
 export function laneMReviewCases(system: System): Case[] {
   const put = (name: string, input: unknown, extra: Partial<Case> = {}): Case => ({
@@ -597,6 +606,7 @@ export function laneMReviewCases(system: System): Case[] {
         retryReason:
           "TypeScript's two findVerificationValue calls run under Promise.all (identity-confirmation.ts:55-67) and each deletes every expired verification row, so one lookup's cleanup can hide the other's newest expired row before it is read; a serialized Go request reads both proofs first and answers 403.",
         retryWhen: (_error, ts, go) => ts.status === 200 && go.status === 403,
+        check: denyIdentityConfirmation,
       },
     ),
 
@@ -634,6 +644,7 @@ export function laneMReviewCases(system: System): Case[] {
         retryReason:
           "TypeScript's two findVerificationValue calls run under Promise.all (identity-confirmation.ts:55-67) and each deletes every expired verification row, so the identity-confirmed lookup's cleanup can delete the newer expired oidc-reauth row before the oidc lookup reads it and expose the older valid row; a serialized Go request reads both proofs first and answers 403.",
         retryWhen: (_error, ts, go) => ts.status === 200 && go.status === 403,
+        check: denyIdentityConfirmation,
       },
     ),
     {
@@ -677,6 +688,7 @@ export function laneMReviewCases(system: System): Case[] {
       retryReason:
         "TypeScript's two findVerificationValue calls run under Promise.all (identity-confirmation.ts:55-67) and each deletes every expired verification row, so the identity-confirmed lookup's cleanup can delete the newer expired oidc-reauth row before the oidc lookup reads it and expose the older valid row; a serialized Go request reads both proofs first and answers 403.",
       retryWhen: (_error, ts, go) => ts.status === 200 && go.status === 403,
+      check: denyIdentityConfirmation,
     },
 
     // Concurrent identical saves: one row, every call answers, no lost lock or retry loop.
