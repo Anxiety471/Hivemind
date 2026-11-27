@@ -9,6 +9,7 @@ import {
   TAKEOVER_COMPUTER_PENDING_STATE,
   TAKEOVER_COMPUTER_SKIPPED_STATE,
 } from "@rakazo/core";
+import { createLogger, createTestSink, getLogger, installLogger } from "@rakazo/logging";
 import { describe, expect, it, vi } from "vitest";
 import { installSecurityEventStore } from "../account/security-events.js";
 import { commitBotUpdate } from "../bots/bot-update.js";
@@ -353,6 +354,155 @@ describe("finalizeRun", () => {
         payload: { error: "503 Service Unavailable", resumable: true },
       }),
     });
+  });
+
+  it("ends an empty completed turn without a reply and records it as an empty response", async () => {
+    const create = vi.fn();
+    const createEvent = vi.fn(async ({ data }: { data: { type: string } }) => ({
+      ...data,
+      threadId: "thread-1",
+      seq: 1,
+      createdAt: new Date(),
+    }));
+    const tx = {
+      $executeRaw: vi.fn(async () => 0),
+      externalEffect: { deleteMany: vi.fn(async () => ({ count: 0 })) },
+      $queryRaw: vi.fn(async () => []),
+      run: {
+        findUnique: vi.fn(async () => ({ status: "running", startedAt: null })),
+        findUniqueOrThrow: vi.fn(async () => ({ sourceMessage: null })),
+        findFirst: vi.fn(async () => null),
+        updateMany: vi.fn(async () => ({ count: 1 })),
+      },
+      attempt: { updateMany: vi.fn(async () => ({ count: 1 })) },
+      task: { updateMany: vi.fn(async () => ({ count: 1 })) },
+      thread: { update: vi.fn(async () => ({ nextEventSeq: 2, nextMessageSeq: 1 })) },
+      secret: { deleteMany: vi.fn(async () => ({ count: 0 })) },
+      event: {
+        create: createEvent,
+        deleteMany: vi.fn(async () => ({ count: 0 })),
+        findMany: vi.fn(async () => []),
+      },
+      steeringMessage: {
+        findMany: vi.fn(async () => []),
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        deleteMany: vi.fn(async () => ({ count: 0 })),
+      },
+      message: { findFirst: vi.fn(async () => null), create },
+      bot: { update: vi.fn(async () => ({})) },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    } as unknown as PrismaClient;
+    const sink = createTestSink();
+    const previous = getLogger();
+    installLogger(createLogger({ service: "test", level: "debug", sinks: [sink] }));
+    try {
+      await finalizeRun(prisma, {
+        spaceId: "space-1",
+        threadId: "thread-1",
+        botId: "bot-1",
+        runId: "run-1",
+        taskId: "task-1",
+        attemptId: "attempt-1",
+        leaseOwner: "worker-1",
+        leaseFence: 1,
+        outcome: "completed",
+        blocks: [],
+        markUnread: false,
+        emptyResponse: { reason: "thinking_only", hadThinking: true, thinkingChars: 42 },
+      });
+    } finally {
+      installLogger(previous);
+    }
+
+    expect(create).not.toHaveBeenCalled();
+    expect(createEvent.mock.calls.map(([{ data }]) => data)).toContainEqual(
+      expect.objectContaining({
+        type: "run.completed",
+        payload: { emptyResponse: true, emptyResponseReason: "thinking_only", hadThinking: true },
+      }),
+    );
+    expect(sink.events).toContainEqual(
+      expect.objectContaining({
+        message: "run.finished",
+        "run.empty_response": true,
+        "run.empty_response_reason": "thinking_only",
+      }),
+    );
+  });
+
+  it("records the reminders an empty completed turn was given", async () => {
+    const createEvent = vi.fn(async ({ data }: { data: { type: string } }) => ({
+      ...data,
+      threadId: "thread-1",
+      seq: 1,
+      createdAt: new Date(),
+    }));
+    const tx = {
+      $executeRaw: vi.fn(async () => 0),
+      externalEffect: { deleteMany: vi.fn(async () => ({ count: 0 })) },
+      $queryRaw: vi.fn(async () => []),
+      run: {
+        findUnique: vi.fn(async () => ({ status: "running", startedAt: null })),
+        findUniqueOrThrow: vi.fn(async () => ({ sourceMessage: null })),
+        findFirst: vi.fn(async () => null),
+        updateMany: vi.fn(async () => ({ count: 1 })),
+      },
+      attempt: { updateMany: vi.fn(async () => ({ count: 1 })) },
+      task: { updateMany: vi.fn(async () => ({ count: 1 })) },
+      thread: { update: vi.fn(async () => ({ nextEventSeq: 2, nextMessageSeq: 1 })) },
+      secret: { deleteMany: vi.fn(async () => ({ count: 0 })) },
+      event: {
+        create: createEvent,
+        deleteMany: vi.fn(async () => ({ count: 0 })),
+        findMany: vi.fn(async () => []),
+      },
+      steeringMessage: {
+        findMany: vi.fn(async () => []),
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        deleteMany: vi.fn(async () => ({ count: 0 })),
+      },
+      message: { findFirst: vi.fn(async () => null), create: vi.fn() },
+      bot: { update: vi.fn(async () => ({})) },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    } as unknown as PrismaClient;
+    const sink = createTestSink();
+    const previous = getLogger();
+    installLogger(createLogger({ service: "test", level: "debug", sinks: [sink] }));
+    try {
+      await finalizeRun(prisma, {
+        spaceId: "space-1",
+        threadId: "thread-1",
+        botId: "bot-1",
+        runId: "run-1",
+        taskId: "task-1",
+        attemptId: "attempt-1",
+        leaseOwner: "worker-1",
+        leaseFence: 1,
+        outcome: "completed",
+        blocks: [],
+        markUnread: false,
+        emptyResponse: { reason: "empty", reminders: 1 },
+      });
+    } finally {
+      installLogger(previous);
+    }
+
+    expect(createEvent.mock.calls.map(([{ data }]) => data)).toContainEqual(
+      expect.objectContaining({
+        type: "run.completed",
+        payload: { emptyResponse: true, emptyResponseReason: "empty", emptyResponseReminders: 1 },
+      }),
+    );
+    expect(sink.events).toContainEqual(
+      expect.objectContaining({
+        message: "run.finished",
+        "run.empty_response_reminders": 1,
+      }),
+    );
   });
 
   it("saves no message for a failure without a partial reply", async () => {

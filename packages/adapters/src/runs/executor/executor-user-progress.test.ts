@@ -2229,9 +2229,15 @@ describe("a group member the message named nobody for", () => {
     expect(worked.finalizeRun).toHaveBeenCalledWith(expect.objectContaining({ markUnread: true }));
   });
 
-  it("still posts a placeholder when the message named the member", async () => {
+  it("captures a placeholder when the message named the member instead of posting it", async () => {
     const result = await turn(false, [text("."), done]);
-    expect(result.finalizeRun.mock.calls[0]![0].blocks).toEqual([{ kind: "text", text: "." }]);
+    expect(result.finalizeRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        blocks: [],
+        markUnread: false,
+        emptyResponse: expect.objectContaining({ reason: "placeholder_only" }),
+      }),
+    );
   });
 
   it("ends an empty finish silently instead of posting a fallback", async () => {
@@ -2241,10 +2247,14 @@ describe("a group member the message named nobody for", () => {
     );
   });
 
-  it("keeps the fallback for an empty finish when the message named it", async () => {
+  it("captures an empty finish when the message named the member instead of posting a fallback", async () => {
     const result = await turn(false, [done]);
     expect(result.finalizeRun).toHaveBeenCalledWith(
-      expect.objectContaining({ blocks: [{ kind: "text", text: "done." }], markUnread: true }),
+      expect.objectContaining({
+        blocks: [],
+        markUnread: false,
+        emptyResponse: expect.objectContaining({ reason: "model_empty" }),
+      }),
     );
   });
 

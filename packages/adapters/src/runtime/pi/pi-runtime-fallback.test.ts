@@ -21,6 +21,10 @@ import type { Deferred } from "@rakazo/core/test-async";
 import { deferred, flush } from "@rakazo/core/test-async";
 import { createLogger, createTestSink, installLogger } from "@rakazo/logging";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  EMPTY_RESPONSE_OPTIONAL_REMINDER_PROMPT,
+  EMPTY_RESPONSE_REMINDER_PROMPT,
+} from "../../runs/assembly/continuation.prompt.js";
 
 const providerState = vi.hoisted(() => ({
   models: new Map<string, Record<string, unknown>>(),
@@ -3359,7 +3363,7 @@ describe("Pi runtime empty replies", () => {
     expect(events.at(-1)).toEqual({ type: "done", text: "from backup" });
   });
 
-  it("shows the empty-response text only after every attempt is empty", async () => {
+  it("ends as an empty response only after every attempt is empty", async () => {
     providerState.stream.mockImplementation((target: Model<"openai-completions">) =>
       stream(target, message(target, [], "stop")),
     );
@@ -3375,8 +3379,113 @@ describe("Pi runtime empty replies", () => {
       backupA.provider,
       backupA.provider,
       backupA.provider,
+      backupA.provider,
     ]);
-    expect(events.at(-1)).toEqual({ type: "done", text: "No response. Try again." });
+    expect(events).not.toContainEqual({ type: "text", text: "No response. Try again." });
+    expect(events.at(-1)).toEqual({
+      type: "done",
+      emptyResponse: true,
+      emptyResponseReminders: 1,
+    });
+  });
+
+  it("ends as an empty response when every attempt is thinking-only", async () => {
+    providerState.stream.mockImplementation((target: Model<"openai-completions">) =>
+      stream(target, message(target, thinkingOnly, "stop")),
+    );
+
+    const events = await run(
+      request([{ provider: backupA.provider, id: backupA.id, apiKey: "fake-backup-a" }]),
+    );
+
+    expect(providers()).toHaveLength(7);
+    expect(events.filter((event) => event.type === "text")).toEqual([]);
+    expect(events).not.toContainEqual({ type: "text", text: "No response. Try again." });
+    expect(events.at(-1)).toEqual({
+      type: "done",
+      emptyResponse: true,
+      emptyResponseReminders: 1,
+    });
+  });
+
+  /** The text of the last message the model was sent on its `index`-th call. */
+  const lastMessageText = (index: number): unknown => {
+    const context = providerState.stream.mock.calls[index]![1] as {
+      messages: Array<{ content: unknown }>;
+    };
+    const content = context.messages.at(-1)!.content;
+    return Array.isArray(content) ? content.map((part) => part.text).join("") : content;
+  };
+
+  it("sends one reminder after exhausted empty attempts and takes the recovered reply", async () => {
+    providerState.stream
+      .mockImplementationOnce(() => stream(primary, message(primary, thinkingOnly, "stop")))
+      .mockImplementationOnce(() => stream(primary, message(primary, [], "stop")))
+      .mockImplementationOnce(() => stream(primary, message(primary, thinkingOnly, "stop")))
+      .mockImplementation(() =>
+        stream(primary, message(primary, [{ type: "text", text: "Recovered." }], "stop")),
+      );
+
+    const events = await run(request());
+
+    expect(providerState.stream).toHaveBeenCalledTimes(4);
+    expect(lastMessageText(3)).toBe(EMPTY_RESPONSE_REMINDER_PROMPT);
+    expect(events.filter((event) => event.type === "text")).toEqual([
+      { type: "text", text: "Recovered." },
+    ]);
+    expect(events.at(-1)).toEqual({ type: "done", text: "Recovered." });
+  });
+
+  it("lets a reminded thinking-only turn call a tool and then answer", async () => {
+    let calls = 0;
+    providerState.stream.mockImplementation(() => {
+      calls += 1;
+      if (calls <= 3) return stream(primary, message(primary, thinkingOnly, "stop"));
+      if (calls === 4)
+        return stream(
+          primary,
+          message(
+            primary,
+            [{ type: "toolCall", id: "call", name: "write_effect", arguments: { value: "one" } }],
+            "toolUse",
+          ),
+        );
+      return stream(primary, message(primary, [{ type: "text", text: "Done." }], "stop"));
+    });
+    const input = request();
+
+    const events = await run(input);
+
+    expect(providerState.stream).toHaveBeenCalledTimes(5);
+    expect(lastMessageText(3)).toBe(EMPTY_RESPONSE_REMINDER_PROMPT);
+    expect(input.executeTool).toHaveBeenCalledOnce();
+    expect(events.at(-1)).toEqual({ type: "done", text: "Done." });
+  });
+
+  it("sends the optional-reply reminder on an unaddressed group turn", async () => {
+    providerState.stream
+      .mockImplementationOnce(() => stream(primary, message(primary, [], "stop")))
+      .mockImplementationOnce(() => stream(primary, message(primary, [], "stop")))
+      .mockImplementationOnce(() => stream(primary, message(primary, [], "stop")))
+      .mockImplementation(() =>
+        stream(primary, message(primary, [{ type: "text", text: "NO_RESPONSE" }], "stop")),
+      );
+    const input = { ...request(), optionalReply: true };
+
+    const events = await run(input);
+
+    expect(providerState.stream).toHaveBeenCalledTimes(4);
+    expect(lastMessageText(3)).toBe(EMPTY_RESPONSE_OPTIONAL_REMINDER_PROMPT);
+    expect(events.at(-1)).toEqual({ type: "done", text: "NO_RESPONSE" });
+  });
+
+  it("sends no reminder in a run allowed to stay silent", async () => {
+    providerState.stream.mockImplementation(() => stream(primary, message(primary, [], "stop")));
+
+    const events = await run({ ...request(), allowSilentEmpty: true });
+
+    expect(providerState.stream).toHaveBeenCalledOnce();
+    expect(events.at(-1)).toEqual({ type: "done" });
   });
 
   it("does not repeat an empty reply in a run allowed to stay silent", async () => {

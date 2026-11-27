@@ -1,5 +1,10 @@
 import type { MessageBlock } from "@rakazo/contracts";
-import { BACKGROUND_RUN_TRIGGERS, isBackgroundRunTrigger, userVisibleMessages } from "@rakazo/core";
+import {
+  BACKGROUND_RUN_TRIGGERS,
+  isBackgroundRunTrigger,
+  isNoResponseMessage,
+  userVisibleMessages,
+} from "@rakazo/core";
 import type { PrismaClient } from "../database/client.js";
 import { Prisma } from "../database/client.js";
 import { contentEncryptionOf } from "../encryption/content-encryption.js";
@@ -150,6 +155,7 @@ export async function botThreadPreviews(prisma: PrismaClient, threadIds: string[
             continue;
           }
           if (candidates.length > 0) continue;
+          if (isNoResponseMessage(message)) continue;
           const preview = previewFromBlocks(message.blocks);
           if (preview) {
             previews.set(threadId, preview);

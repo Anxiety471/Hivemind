@@ -44,6 +44,7 @@ vi.mock("../layout/side-insets", () => ({ useSideInsets: () => ({}) }));
 vi.mock("../appearance/appearance", () => ({ mobileTokens: () => ({}) }));
 vi.mock("../native/native", () => ({
   native: {},
+  useMobileTokens: () => ({}),
   useResolvedAppearance: () => "light",
   useThemedStyles: (factory: () => unknown) => factory(),
 }));
@@ -67,6 +68,7 @@ vi.mock("expo-router", () => ({
 }));
 vi.mock("react-native", () => ({
   Alert: { alert: state.alert },
+  AppState: { currentState: "active", addEventListener: () => ({ remove: () => undefined }) },
   ScrollView: element("div"),
   View: element("div"),
   StyleSheet: { create: <T,>(styles: T) => styles },

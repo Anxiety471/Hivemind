@@ -193,6 +193,13 @@ export type FinalizeRunInput = FinalizeRunBase &
         /** Steps may carry their tool and kept calls; they are stored apart from the blocks. */
         blocks: MessageBlock[];
         markUnread?: boolean;
+        /** Metadata captured when a completed turn produced no usable reply. */
+        emptyResponse?: {
+          reason: string;
+          hadThinking?: boolean;
+          thinkingChars?: number;
+          reminders?: number;
+        };
       }
     | {
         outcome: "failed";
@@ -784,6 +791,15 @@ export async function finalizeRun(
   getLogger().info("run.finished", {
     "run.id": input.runId,
     "run.outcome": input.outcome,
+    ...(input.outcome === "completed" && input.emptyResponse
+      ? {
+          "run.empty_response": true,
+          "run.empty_response_reason": input.emptyResponse.reason,
+          ...(input.emptyResponse.reminders
+            ? { "run.empty_response_reminders": input.emptyResponse.reminders }
+            : {}),
+        }
+      : {}),
     ...timing,
     "space.id": input.spaceId,
     "thread.id": input.threadId,
@@ -998,7 +1014,16 @@ async function finalizeRunOnce(
       runId: input.runId,
       payload:
         input.outcome === "completed"
-          ? {}
+          ? input.emptyResponse
+            ? {
+                emptyResponse: true,
+                emptyResponseReason: input.emptyResponse.reason,
+                ...(input.emptyResponse.hadThinking ? { hadThinking: true } : {}),
+                ...(input.emptyResponse.reminders
+                  ? { emptyResponseReminders: input.emptyResponse.reminders }
+                  : {}),
+              }
+            : {}
           : {
               error: input.error,
               ...(input.preserveTurnCheckpoint ? { resumable: true } : {}),

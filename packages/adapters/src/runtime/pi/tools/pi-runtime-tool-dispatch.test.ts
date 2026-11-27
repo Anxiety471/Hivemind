@@ -1892,7 +1892,7 @@ describe("Pi connector tool dispatch", () => {
     expect(events).toEqual([{ type: "done" }]);
   });
 
-  it("still asks the user to retry when a normal empty turn produces nothing", async () => {
+  it("ends a normal empty turn as an empty response instead of placeholder text", async () => {
     fakeAgentState.mode = "empty";
     const runtime = new PiAgentRuntime();
     const events: unknown[] = [];
@@ -1920,14 +1920,11 @@ describe("Pi connector tool dispatch", () => {
       events.push(event);
     }
 
-    expect(events).toContainEqual({
+    expect(events).not.toContainEqual({
       type: "text",
       text: "No response. Try again.",
     });
-    expect(events.at(-1)).toEqual({
-      type: "done",
-      text: "No response. Try again.",
-    });
+    expect(events.at(-1)).toEqual({ type: "done", emptyResponse: true });
   });
 
   it("surfaces a contextual peer fallback when that run produces nothing", async () => {
@@ -1998,10 +1995,11 @@ describe("Pi connector tool dispatch", () => {
       events.push(event);
     }
 
-    expect(events.at(-1)).toEqual({
-      type: "done",
+    expect(events).not.toContainEqual({
+      type: "text",
       text: "No response. Try again.",
     });
+    expect(events.at(-1)).toEqual({ type: "done", emptyResponse: true });
   });
 
   it("allows more than 80 tool calls by default when no fuse is configured", async () => {

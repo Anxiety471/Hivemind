@@ -5,6 +5,15 @@ import { automated } from "../../messaging/automated-messages.prompt.js";
 export const SILENT_TOOL_CONTINUATION_PROMPT = automated(
   "Your last turn ended right after a tool result, without a reply. Continue the original task from the latest tool result. If you need information or a decision from the user, ask them instead of guessing; otherwise use any remaining tools needed, then give the user the final answer.",
 );
+// Sent when a non-silent turn ended with no visible text and no tool calls (empty,
+// whitespace-only, or thinking-only), giving the model one bounded chance to reply.
+export const EMPTY_RESPONSE_REMINDER_PROMPT = automated(
+  "Your last turn ended without a visible response to the user. If you need tools to finish the task, call them now; if you need information or a decision from the user, ask them instead of guessing; otherwise write a concise, direct reply now.",
+);
+// Sent on an unaddressed group turn that ended empty without saying NO_RESPONSE.
+export const EMPTY_RESPONSE_OPTIONAL_REMINDER_PROMPT = automated(
+  "Your last turn ended without a visible response. If this message is for you, use any tools needed and reply concisely; if another member should handle it and you intend to stay silent, reply with exactly NO_RESPONSE.",
+);
 // Sent after a reply was cut off by a dropped connection; the cut text is the previous turn.
 export const CUT_REPLY_CONTINUATION_PROMPT = automated(
   "Your previous reply was cut off by a connection error. Continue exactly where it stopped, mid-word if needed, without repeating anything.",

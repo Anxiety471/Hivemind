@@ -30,6 +30,7 @@ import {
 import { scheduleRunSecretsExpiry } from "../../secrets/run-secrets-expiry.js";
 import { returnHelperOutcome } from "../../tasks/background-helpers.js";
 import { shouldEnqueueTaskDetect } from "../../tasks/task-detect.js";
+import { detectEmptyResponse } from "../assembly/empty-response.js";
 import { extractProseChoiceQuestion } from "../assembly/prose-choice-question.js";
 import type { RunContext } from "../assembly/run-context.js";
 import { persistTurnCheckpoint } from "../assembly/run-context.js";
@@ -161,11 +162,12 @@ export async function completeRun(ctx: RunContext) {
 
   // A provider that ended while still reasoning keeps what it thought before the reply.
   await closeThinkingSegment(ctx);
-  const { blocks, text, groupSilentEnd } = await finalReply(ctx);
+  const { blocks, text, groupSilentEnd, emptyResponse } = await finalReply(ctx);
   if (!(await renewRunLease(deps, runId, ctx.workerId, ctx.fence))) return;
   // The board note is appended as its own block, so a prose choice can place it before its ask card.
   const boardCheck =
     !groupSilentEnd &&
+    !emptyResponse &&
     !isBackgroundRunTrigger(run.trigger) &&
     run.trigger !== BACKGROUND_HELPER_TRIGGER &&
     !ctx.state.handedOff &&
@@ -185,17 +187,15 @@ export async function completeRun(ctx: RunContext) {
     run.trigger === "bot_message"
       ? botMessageOutcomeFromMidTurn(text, reply.midTurnUserTexts)
       : null;
-  const marksUnread = completionMarksUnread(
-    run.trigger,
-    text,
-    ctx.source.peerMessage?.repliesToRequest === true,
-  );
+  const marksUnread = emptyResponse
+    ? false
+    : completionMarksUnread(run.trigger, text, ctx.source.peerMessage?.repliesToRequest === true);
   await ctx.settleRunningHelpers();
   const [answeredMessageIds, taskDetectMessageIds] = await Promise.all([
     conversationRetentionMessages(ctx),
     taskDetectMessages(ctx),
   ]);
-  if (await pauseForProseChoice(ctx, blocks, groupSilentEnd, boardNote)) return;
+  if (!emptyResponse && (await pauseForProseChoice(ctx, blocks, groupSilentEnd, boardNote))) return;
   const completed = await deps.events.finalizeRun({
     spaceId: run.spaceId,
     threadId: thread.id,
@@ -207,7 +207,8 @@ export async function completeRun(ctx: RunContext) {
     leaseFence: ctx.fence,
     outcome: "completed",
     blocks: finalBlocks,
-    markUnread: !groupSilentEnd && marksUnread,
+    markUnread: !groupSilentEnd && !emptyResponse && marksUnread,
+    ...(emptyResponse ? { emptyResponse } : {}),
   });
   if (!completed) return;
   ctx.stopHeartbeatAfterCompletion();
@@ -442,6 +443,38 @@ async function finalReply(ctx: RunContext) {
           !reply.publishedMidTurnUserMessage
         ? peerReplyWithoutSentinel(reply.assembled, reply.messageSegments)
         : stripStrayNoResponse(reply.assembled, reply.messageSegments);
+  const emptyResponse = detectEmptyResponse({
+    assembled: silentReply.assembled,
+    blocks: silentReply.blocks,
+    sourceBlocks: reply.messageSegments,
+    runtimeEmptyResponse: Boolean(reply.emptyResponse),
+    emptyResponseReminders: reply.emptyResponseReminders,
+    emptyResponseText: ctx.emptyResponseText,
+    allowSilentEmpty: ctx.allowSilentEmptyRun,
+    groupSilentEnd,
+    handedOff: ctx.state.handedOff,
+    backgroundRun: isBackgroundRunTrigger(run.trigger),
+    publishedMidTurnUserMessage: reply.publishedMidTurnUserMessage,
+    publishedTerminalSubagent: reply.publishedTerminalSubagent,
+    explicitNoResponse: reply.explicitNoResponse,
+  });
+  if (emptyResponse) {
+    // Metadata only: never the user's or the model's prose, nor its reasoning.
+    getLogger().warn("run.empty_response", {
+      "run.id": ctx.runId,
+      "space.id": run.spaceId,
+      "thread.id": ctx.thread.id,
+      "bot.id": ctx.bot.id,
+      "run.trigger": run.trigger,
+      ...(run.modelProvider ? { "model.provider": run.modelProvider } : {}),
+      ...(run.modelId ? { "model.id": run.modelId } : {}),
+      reason: emptyResponse.reason,
+      hadThinking: emptyResponse.hadThinking,
+      thinkingChars: emptyResponse.thinkingChars,
+      reminders: emptyResponse.reminders,
+    });
+    return { blocks: [], text: "", groupSilentEnd, emptyResponse };
+  }
   let completionBlocks = silentReply.blocks;
   if (!silentReply.assembled || isBackgroundRunTrigger(run.trigger)) {
     // Mid-turn progress already posted durable chat messages; skip the empty
@@ -476,7 +509,7 @@ async function finalReply(ctx: RunContext) {
   ) {
     throw new Error(TOOL_STEPS_WITHOUT_RESPONSE);
   }
-  return { blocks, text, groupSilentEnd };
+  return { blocks, text, groupSilentEnd, emptyResponse: null };
 }
 
 // Last, and never fatal: the run is already finalized, so a failure here must not reach

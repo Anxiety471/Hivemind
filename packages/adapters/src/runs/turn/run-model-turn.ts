@@ -366,6 +366,7 @@ function modelTurnRequest(
     },
     script,
     allowSilentEmpty: allowSilentEmptyRun,
+    optionalReply: groupReplyOptional,
     emptyResponseText,
     executeTool: scripted
       ? undefined

@@ -42,6 +42,8 @@ import { withCloudflareAuth } from "../../models/endpoints/cloudflare-ai-gateway
 import {
   CUT_REPLY_CONTINUATION_PROMPT,
   cutReplyAtLimitPrompt,
+  EMPTY_RESPONSE_OPTIONAL_REMINDER_PROMPT,
+  EMPTY_RESPONSE_REMINDER_PROMPT,
   SILENT_ALLOWED_TOOL_CONTINUATION_PROMPT,
   SILENT_TOOL_CONTINUATION_PROMPT,
 } from "../../runs/assembly/continuation.prompt.js";
@@ -130,6 +132,8 @@ const running = new Map<string, { controller: AbortController; work: Promise<voi
 // instead of taking another assistant turn. A bounded internal follow-up keeps
 // that provider quirk from making a long task look complete after one step.
 const MAX_SILENT_TOOL_CONTINUATIONS = 3;
+// One bounded nudge for a turn that ended with nothing visible, after the stream's own retries.
+const MAX_EMPTY_RESPONSE_REMINDERS = 1;
 
 // Shown as a failed-run error, not an assistant message. Asking the user to
 // continue stores that sentence as the reply, and the next "continue" runs
@@ -471,7 +475,8 @@ export class PiAgentRuntime implements AgentRuntime {
           backupOutcomes: new Map(),
           selfRecoveries: 0,
           cutReplies: new WeakMap(),
-          retriesEmptyReply: wouldEndEmpty,
+          // A reminded turn runs once: the stream's own retries already ran before the reminder.
+          retriesEmptyReply: () => wouldEndEmpty() && emptyResponseReminders === 0,
           stream: (target, ctx, options) => {
             let accepted = false;
             if (hasCurrentImages && !target.model.input.includes("image")) {
@@ -902,6 +907,7 @@ export class PiAgentRuntime implements AgentRuntime {
         let toolCalls = 0;
         let toolActivityShowing = false;
         let silentToolContinuations = 0;
+        let emptyResponseReminders = 0;
         // A reply cut off by a dropped connection continues in the same bubble: no turn break,
         // and a continuation that starts by repeating the end of the cut text loses that repeat.
         let joinCutReply: { tail: string; held: string; requested: boolean } | undefined;
@@ -1045,6 +1051,33 @@ export class PiAgentRuntime implements AgentRuntime {
                   timestamp: Date.now(),
                 });
               }
+            } else if (
+              !hasToolCalls &&
+              !hasToolResults &&
+              !request.allowSilentEmpty &&
+              !host.pausePending &&
+              !signal.aborted &&
+              event.message.role === "assistant" &&
+              event.message.stopReason !== "aborted" &&
+              !providerFailureText(event.message) &&
+              !messageText.trim() &&
+              !streamed.trim() &&
+              emptyResponseReminders < MAX_EMPTY_RESPONSE_REMINDERS
+            ) {
+              emptyResponseReminders += 1;
+              getLogger().info("agent.empty_response_reminder", {
+                runId: request.runId,
+                attempt: emptyResponseReminders,
+                optionalReply: Boolean(request.optionalReply),
+                hadThinking: event.message.content.some((part) => part.type === "thinking"),
+              });
+              agent.followUp({
+                role: "user",
+                content: request.optionalReply
+                  ? EMPTY_RESPONSE_OPTIONAL_REMINDER_PROMPT
+                  : EMPTY_RESPONSE_REMINDER_PROMPT,
+                timestamp: Date.now(),
+              });
             }
           }
           if (event.type === "message_end" && event.message.role === "assistant") {
@@ -1354,6 +1387,7 @@ export class PiAgentRuntime implements AgentRuntime {
             }
           }
         }
+        let emptyResponse = false;
         if (budgetExceeded) {
           const budgetMessage = toolCallBudgetExceededMessage(host.toolCallBudget.limit);
           if (streamed.trim()) {
@@ -1391,11 +1425,26 @@ export class PiAgentRuntime implements AgentRuntime {
           } else if (toolWorkPendingFinal && !request.allowSilentEmpty) {
             throw new ModelOutputError(MISSING_TOOL_FINAL_RESPONSE_ERROR);
           } else if (wouldEndEmpty()) {
-            streamed = request.emptyResponseText?.trim() || "No response. Try again.";
-            queue.push({ type: "text", text: streamed });
+            const contextual = request.emptyResponseText?.trim();
+            if (contextual) {
+              streamed = contextual;
+              queue.push({ type: "text", text: streamed });
+            } else {
+              emptyResponse = true;
+            }
           }
         }
-        queue.push(streamed.trim() ? { type: "done", text: streamed } : { type: "done" });
+        queue.push(
+          streamed.trim()
+            ? { type: "done", text: streamed }
+            : emptyResponse
+              ? {
+                  type: "done",
+                  emptyResponse: true,
+                  ...(emptyResponseReminders > 0 ? { emptyResponseReminders } : {}),
+                }
+              : { type: "done" },
+        );
       } catch (error) {
         span?.setStatus({ status: "error" });
         const failureCheckpoint = captureFailureCheckpoint?.();

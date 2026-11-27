@@ -755,6 +755,8 @@ export interface AgentRunRequest {
    * When set, skip synthetic empty-turn fallbacks (including after tools).
    */
   allowSilentEmpty?: boolean;
+  /** Unaddressed group turn: the model may reply or explicitly end with NO_RESPONSE. */
+  optionalReply?: boolean;
   /** Contextual fallback when a non-silent run produces no written response. */
   emptyResponseText?: string;
   executeTool?: (
@@ -908,7 +910,7 @@ export type AgentRuntimeEvent =
       progress?: string;
       result?: string;
     }
-  | { type: "done"; text?: string };
+  | { type: "done"; text?: string; emptyResponse?: boolean; emptyResponseReminders?: number };
 
 export interface AgentRuntimeCapabilities {
   streaming: boolean;
