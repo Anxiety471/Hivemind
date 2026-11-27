@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 
 import type { MessageBlock } from "@rakazo/contracts";
+import { deferred } from "@rakazo/core/test-async";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { act } from "react";
 import { flushSync } from "react-dom";
@@ -35,7 +37,7 @@ const job: JobBlock = {
   jobId: "job-1",
   title: "mcp-job-card",
   agent: "pi",
-  branch: "Anxiety471/mcp-job-card",
+  branch: "example-org/job-card",
   state: "working",
   startedAt: 0,
   url: "https://code.example.test",
@@ -46,19 +48,19 @@ const richJob: JobBlock = {
   kind: "job",
   jobId: "job-rich",
   title: "Upgrade the billing worker",
-  repo: "rakazo/billing",
+  repo: "example-org/example-repo",
   agent: "pi",
   model: "deepseek-v4.1-flash",
   effort: "max",
   branch: "t/billing-worker",
-  commit: "163daa2f1c9d",
+  commit: "fa4e5a0001",
   state: "finished",
   startedAt: 1_000_000,
   finishedAt: 1_000_000 + 125_000,
   url: "https://code.example.test/job-rich",
-  prUrl: "https://github.com/rakazo/billing/pull/812",
-  prLabel: "#812",
-  workspacePath: "/home/hitori/orca/worktrees/billing-worker",
+  prUrl: "https://github.com/example-org/example-repo/pull/1",
+  prLabel: "#1",
+  workspacePath: "/work/orca/worktrees/billing-worker",
   summary: "Retry failed charges before the invoice closes",
   reply: `## What changed
 
@@ -120,12 +122,14 @@ function mountCard(
   const root = createRoot(container);
   flushSync(() =>
     root.render(
-      <JobCard
-        block={block}
-        readOnly={options.readOnly}
-        onJobAction={options.onJobAction}
-        repositories={options.repositories}
-      />,
+      <QueryClientProvider client={new QueryClient()}>
+        <JobCard
+          block={block}
+          readOnly={options.readOnly}
+          onJobAction={options.onJobAction}
+          repositories={options.repositories}
+        />
+      </QueryClientProvider>,
     ),
   );
   const card = () => container.querySelector<HTMLElement>('[data-testid="job-card"]');
@@ -275,25 +279,27 @@ describe("JobCard", () => {
     const card = mountCard({
       ...job,
       branch: undefined,
-      commit: "163daa2f1c9d0a1b",
-      prUrl: "https://example.com/owner/repo/pull/19",
+      commit: "fa4e5a0001",
+      prUrl: "https://github.com/example-org/example-repo/pull/1",
     });
     const link = card.byTestId("job-commit-link");
     expect(link?.getAttribute("href")).toBe(
-      "https://example.com/owner/repo/commit/163daa2f1c9d0a1b",
+      "https://github.com/example-org/example-repo/commit/fa4e5a0001",
     );
     expect(link?.getAttribute("target")).toBe("_blank");
-    expect(link?.textContent).toBe("163daa2");
+    expect(link?.textContent).toBe("fa4e5a0");
     card.unmount();
   });
 
   it("links the commit through the board repository the job's repo names, beside its branch", () => {
     const card = mountCard(
-      { ...job, repo: "owner/repo", commit: "163daa2f1c9d0a1b" },
-      { repositories: [{ url: "https://example.com/owner/repo", isDefault: false }] },
+      { ...job, repo: "example-org/example-repo", commit: "fa4e5a0001" },
+      {
+        repositories: [{ url: "https://example.test/example-org/example-repo", isDefault: false }],
+      },
     );
     expect(card.byTestId("job-commit-link")?.getAttribute("href")).toBe(
-      "https://example.com/owner/repo/commit/163daa2f1c9d0a1b",
+      "https://example.test/example-org/example-repo/commit/fa4e5a0001",
     );
     // The branch chip stays a button; the commit link is not nested inside it.
     expect(card.byTestId("job-meta-branch")?.querySelector("a")).toBeNull();
@@ -304,29 +310,35 @@ describe("JobCard", () => {
     const card = mountCard({
       ...job,
       branch: undefined,
-      repo: "owner/repo",
-      commit: "163daa2f1c9d",
+      repo: "example-org/example-repo",
+      commit: "fa4e5a0001",
     });
     expect(card.byTestId("job-commit-link")).toBeNull();
-    expect(card.byTestId("job-meta-commit")?.textContent).toBe("163daa2");
+    expect(card.byTestId("job-meta-commit")?.textContent).toBe("fa4e5a0");
     card.unmount();
   });
 
   it("shows the coding metadata: agent, model, effort, branch, commit, diff, tokens and cost", () => {
     const card = mountCard(richJob);
-    expect(card.byTestId("job-meta-agent")?.textContent).toBe("pi · deepseek-v4.1-flash · max");
+    // Each part is its own element, with a dot element between them rather than joined text.
+    const agentParts = card.byTestId("job-meta-agent")?.querySelectorAll("span.truncate");
+    expect(Array.from(agentParts ?? [], (part) => part.textContent)).toEqual([
+      "pi",
+      "deepseek-v4.1-flash",
+      "max",
+    ]);
     const branch = card.byTestId("job-meta-branch");
     expect(branch?.textContent).toContain("t/billing-worker");
-    expect(card.byTestId("job-commit-link")?.textContent).toBe("163daa2");
+    expect(card.byTestId("job-commit-link")?.textContent).toBe("fa4e5a0");
     expect(card.byTestId("job-meta-diff")?.textContent).toContain("3 files");
     expect(card.byTestId("job-meta-diff")?.textContent).toContain("+142");
     expect(card.byTestId("job-meta-diff")?.textContent).toContain("-28");
     expect(card.byTestId("job-meta-tokens")?.textContent).toContain("48.2k tok");
     expect(card.byTestId("job-meta-tokens")?.textContent).toContain("$0.04");
     expect(card.byTestId("job-pr-link")?.getAttribute("href")).toBe(
-      "https://github.com/rakazo/billing/pull/812",
+      "https://github.com/example-org/example-repo/pull/1",
     );
-    expect(card.byTestId("job-pr-link")?.textContent).toContain("#812");
+    expect(card.byTestId("job-pr-link")?.textContent).toContain("#1");
     card.unmount();
   });
 
@@ -394,7 +406,7 @@ describe("JobCard", () => {
     card.click("job-inspect");
     expect(card.dialog("job-dialog-output")?.textContent).toContain("Retried failed charges");
     expect(card.dialog("job-workspace-path")?.textContent).toContain(
-      "/home/hitori/orca/worktrees/billing-worker",
+      "/work/orca/worktrees/billing-worker",
     );
     expect(card.dialog("job-dialog-files")?.textContent).toContain("apps/api/src/billing/retry.ts");
     flushSync(() =>
@@ -516,6 +528,25 @@ describe("JobCard", () => {
     card.unmount();
   });
 
+  it("sends a footer action once while it is pending, however often it is clicked", async () => {
+    const held = deferred();
+    const pending = vi.fn(() => held.promise);
+    const card = mountCard({ ...job, startedAt: 1_000_000 - 5_000 }, { onJobAction: pending });
+    await act(async () => {
+      card.click("job-stop");
+      card.click("job-stop");
+      await Promise.resolve();
+    });
+    expect(pending).toHaveBeenCalledTimes(1);
+    expect(card.button("job-stop")?.disabled).toBe(true);
+    await act(async () => {
+      held.resolve();
+      await Promise.resolve();
+    });
+    expect(card.button("job-stop")?.disabled).toBe(false);
+    card.unmount();
+  });
+
   it("hides its actions in a read-only thread", () => {
     const card = mountCard(richJob, { readOnly: true, onJobAction: async () => undefined });
     expect(card.button("job-steer")).toBeNull();
@@ -614,11 +645,11 @@ describe("JobCard", () => {
       state: "finished",
       reply: "Done",
       url: "https://code.example.test/job-1",
-      prUrl: "https://github.com/rakazo/billing/pull/1",
+      prUrl: "https://github.com/example-org/example-repo/pull/1",
     });
     expect(card.byTestId("job-open")?.getAttribute("href")).toBe("https://code.example.test/job-1");
     expect(card.byTestId("job-pr-link")?.getAttribute("href")).toBe(
-      "https://github.com/rakazo/billing/pull/1",
+      "https://github.com/example-org/example-repo/pull/1",
     );
     card.unmount();
 

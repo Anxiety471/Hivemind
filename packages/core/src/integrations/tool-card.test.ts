@@ -12,10 +12,10 @@ const card = {
   jobId: "job-1",
   title: "mcp-job-card",
   agent: "pi",
-  branch: "Anxiety471/mcp-job-card",
+  branch: "example-org/job-card",
   state: "working",
   startedAt: 1_770_000_000_000,
-  url: "https://code.bocchi.trade",
+  url: "https://orca.example.test",
 };
 
 const rich = {
@@ -24,16 +24,16 @@ const rich = {
   reply: "Ported the job card.",
   finishedAt: 1_770_000_060_000,
   turn: 3,
-  repo: "Anxiety471/hivemind",
-  workspacePath: "/home/hitori/orca/worktrees/pr-812",
-  commit: "6a25fd26e384",
+  repo: "example-org/example-repo",
+  workspacePath: "/work/orca/worktrees/pr-1",
+  commit: "fakesha0000",
   model: "gpt-5.5",
   effort: "high",
   summary: "Adds the coding details to the job card.",
   currentActivity: "Running the API tests",
   error: "go test ./... failed",
-  prUrl: "https://github.com/Anxiety471/hivemind/pull/812",
-  prLabel: "#812",
+  prUrl: "https://github.com/example-org/example-repo/pull/1",
+  prLabel: "#1",
   stats: {
     filesChanged: 4,
     insertions: 120,
@@ -84,7 +84,7 @@ describe("toolCardFromResult", () => {
     expect(
       toolCardFromResult(result({ card: { ...card, url: "https://user:pw@example.test" } })),
     ).toEqual(withoutUrl);
-    expect(toolCardFromResult(result({ card: { ...card, url: "code.bocchi.trade" } }))).toEqual(
+    expect(toolCardFromResult(result({ card: { ...card, url: "orca.example.test" } }))).toEqual(
       withoutUrl,
     );
   });

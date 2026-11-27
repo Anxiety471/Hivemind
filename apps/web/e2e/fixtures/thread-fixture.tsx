@@ -101,6 +101,7 @@ export function FixtureTranscript({
         olderCursor={null}
         unreadAfterSeq={null}
         loadingOlder={false}
+        threadLoading={false}
         answerableAskIds={answerableAskIds}
         dismissableAskIds={answerableAskIds}
         running={running}

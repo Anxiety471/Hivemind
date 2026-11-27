@@ -10,6 +10,7 @@
 import { EncryptedSecretStore } from "../../../packages/adapters/src/secrets/secrets.js";
 import type { Case, Seeded } from "./contract.mts";
 import { CONTRACT_ENCRYPTION_KEY } from "./contract-key.mts";
+import { seedTime } from "./contract-seed-time.mts";
 
 type System = any;
 
@@ -155,7 +156,7 @@ export function laneKCases(system: System): Case[] {
         userId: seeded.userId,
         botId: id(seeded, botName),
         serverId: id(seeded, serverName),
-        createdAt: OLD,
+        createdAt: seedTime(seeded),
         updatedAt: OLD,
         ...extra,
       },
@@ -188,7 +189,7 @@ export function laneKCases(system: System): Case[] {
             status,
           },
         ],
-        createdAt: OLD,
+        createdAt: seedTime(seeded),
       },
     });
 

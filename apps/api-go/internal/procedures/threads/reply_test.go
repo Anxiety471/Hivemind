@@ -86,10 +86,10 @@ func TestReplyPreviewNamesTheJobTitle(t *testing.T) {
 			name: "rich coding card",
 			block: map[string]any{
 				"kind": "job", "jobId": "job-1", "title": "mcp-job-card", "agent": "pi",
-				"branch": "Anxiety471/mcp-job-card", "state": "finished", "startedAt": 1_770_000_000_000,
+				"branch": "example-org/job-card", "state": "finished", "startedAt": 1_770_000_000_000,
 				"reply": "Ported the job card.", "finishedAt": 1_770_000_060_000, "turn": 3,
-				"repo": "Anxiety471/hivemind", "commit": "6a25fd26e384", "model": "gpt-5.5",
-				"summary": "Adds the coding details to the job card.", "prLabel": "#812",
+				"repo": "example-org/example-repo", "commit": "fakesha0000", "model": "gpt-5.5",
+				"summary": "Adds the coding details to the job card.", "prLabel": "#1",
 				"stats": map[string]any{"filesChanged": 4, "costUsd": 0.42},
 				"files": []any{map[string]any{"path": "tool-card.ts", "status": "modified"}},
 				"steps": []any{map[string]any{"kind": "tool", "name": "grep", "status": "ok"}},

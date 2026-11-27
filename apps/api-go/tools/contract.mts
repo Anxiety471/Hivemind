@@ -8,6 +8,7 @@
  *   set -a; . /home/hitori/go-port/fixture-db/.env; set +a
  *   GO_BINARY=/tmp/rakazo-gateway node_modules/.bin/tsx apps/api-go/tools/contract.mts
  */
+import { AssertionError } from "node:assert";
 import assert from "node:assert/strict";
 import type { ChildProcess } from "node:child_process";
 import { spawn } from "node:child_process";
@@ -99,6 +100,13 @@ process.env.SANDBOX_MAX_COMPUTERS_PER_USER = MAX_COMPUTERS_PER_USER;
 // sides (phoneCallSettings reads process.env, and the Go child inherits it).
 process.env.PHONE_CALLS_ENABLED = "true";
 process.env.PHONE_CALL_RING_SECONDS = "45";
+// The elected reconciler runs the audit retention pruner hourly
+// (createRetentionPruner "audit.event", via createAuditLogReconciler) and its default keeps
+// 365 days (DEFAULT_AUDIT_EVENT_RETENTION_DAYS, packages/db/src/account/audit-events.ts). Cases
+// seed audit rows dated 2021; the second tick would otherwise delete them mid-pass. Go has no
+// pruner, so nothing on that side reads this.
+process.env.AUDIT_EVENT_RETENTION_DAYS = "10000";
+
 
 export type Seeded = {
   userId: string;
@@ -113,6 +121,9 @@ export type Seeded = {
   cookie: string;
   activeSpace?: number;
 };
+
+/** The parts of one side's result that a retry predicate may inspect. */
+export type SideOutcome = { status: number; body?: any };
 
 export type Case = {
   name: string;
@@ -152,6 +163,22 @@ export type Case = {
    * racing the next side's capture.
    */
   settleMs?: number;
+  /**
+   * Re-run this case (both sides, fresh seeds) when the comparison mismatches, up to this many
+   * extra attempts. Only for a state one side answers nondeterministically; `retryReason` must
+   * name that nondeterminism, `retryWhen` must name the exact failure signature, and the runner
+   * prints every retry as `RETRY <name>`.
+   */
+  retries?: number;
+  /** Why this case may be retried. Required whenever `retries` is set. */
+  retryReason?: string;
+  /**
+   * The only failure this case may re-run on, called with the failed comparison (always an
+   * AssertionError), the TypeScript result and the Go result. A comparison the predicate rejects,
+   * and any check or transport error, fails on the first attempt — so a deterministic regression
+   * cannot be absorbed by a lucky counterpart that happens to match once.
+   */
+  retryWhen?: (error: AssertionError, ts: SideOutcome, go: SideOutcome) => boolean;
   /**
    * Skip the realtime-signal comparison: a procedure that creates a board or ticket with a
    * database-generated id publishes a frame whose payload necessarily names different ids on
@@ -756,6 +783,23 @@ const cases: Case[] = [
   ...laneLReviewCases(system),
   ...oStreamErrorCases(),
 ];
+
+// A retried case must say why and exactly which failure may be rerun: a comparison allowed to be
+// rerun has to name the behaviour that is nondeterministic and the pair of answers it produces,
+// so the list cannot grow silently and a real regression cannot ride along.
+for (const testCase of cases) {
+  if (testCase.retries === undefined) {
+    if (testCase.retryWhen !== undefined)
+      throw new Error(`${testCase.name}: retryWhen requires retries`);
+    continue;
+  }
+  if (!Number.isInteger(testCase.retries) || testCase.retries < 1)
+    throw new Error(`${testCase.name}: retries must be a positive integer`);
+  if (!testCase.retryReason?.trim())
+    throw new Error(`${testCase.name}: retries requires a retryReason`);
+  if (typeof testCase.retryWhen !== "function")
+    throw new Error(`${testCase.name}: retries requires a retryWhen predicate`);
+}
 
 // biome-ignore lint/suspicious/noUndeclaredEnvVars: manual harness, not a turbo task
 if (process.env.CONTRACT_ROUTE_AUDIT === "1") {
@@ -1738,6 +1782,10 @@ function seedMessaging(config: MessagingSeed = {}) {
       },
     });
     const old = new Date(Date.UTC(2020, 0, 1));
+    // messaging.channels.list reads identities ordered by createdAt alone; identities seeded with
+    // the column default would otherwise share a wall-clock millisecond and order arbitrarily. One
+    // millisecond per identity, reset per side with the seed invocation, keeps that order total.
+    let identityOrder = 0;
     const base = Date.UTC(2026, 4, 1, 12, 0, 0, 0);
     const bot = (
       id: string,
@@ -1780,6 +1828,7 @@ function seedMessaging(config: MessagingSeed = {}) {
           userId: owner,
           spaceId,
           botId: `${user}-${botId}`,
+          createdAt: new Date(old.getTime() + identityOrder++),
           updatedAt: old,
           ...extra,
         },
@@ -2477,6 +2526,12 @@ function seedThreads(config: ThreadSeed = {}) {
     });
     // Creating a member also adds them to the organization's default Space (space one).
     const old = new Date(Date.UTC(2020, 0, 1));
+    // Every threads.* case reloads bots.list, groups.list and spaces.list (AFTER), which order
+    // bots by createdAt and groups by updatedAt alone; the seeds below would otherwise share `old`
+    // or a wall-clock millisecond. One millisecond per seeded row, reset per side with the seed
+    // invocation, keeps those orders total.
+    let botOrder = 0;
+    let groupOrder = 0;
     const bot = (id: string, spaceId: string, name: string, extra: Record<string, unknown> = {}) =>
       system.bot.create({
         data: {
@@ -2485,6 +2540,7 @@ function seedThreads(config: ThreadSeed = {}) {
           userId: user,
           name,
           color: "blue",
+          createdAt: new Date(old.getTime() + botOrder++),
           updatedAt: old,
           ...extra,
         },
@@ -2517,17 +2573,21 @@ function seedThreads(config: ThreadSeed = {}) {
     await thread("th-tbfresh", seeded.spaces[0], { botId: `${user}-tbfresh` }, 10);
     await thread("th-tbarch", seeded.spaces[0], { botId: `${user}-tbarch` }, 10);
     await thread("th-tbx", seeded.spaces[1], { botId: `${user}-tbx` }, 10);
-    const group = (id: string, name: string, extra: Record<string, unknown> = {}) =>
-      system.chatGroup.create({
+    const group = (id: string, name: string, extra: Record<string, unknown> = {}) => {
+      const at = new Date(old.getTime() + groupOrder);
+      groupOrder += 1;
+      return system.chatGroup.create({
         data: {
           id: `${user}-${id}`,
           spaceId: seeded.spaces[0],
           userId: user,
           name,
-          updatedAt: old,
+          createdAt: at,
+          updatedAt: at,
           ...extra,
         },
       });
+    };
     await group("tg1", "Group one");
     await group("tg2", "Group two");
     await group("tgone", "Group of one");
@@ -2758,6 +2818,10 @@ function seedConversations() {
     });
     // Creating a member also adds them to the organization's default Space (space one).
     const old = new Date(Date.UTC(2020, 0, 1));
+    // messaging.channels lists conversations ordered by updatedAt alone; the three seeded
+    // conversations would otherwise share `old` and order arbitrarily. One millisecond per row,
+    // reset per side with the seed invocation, keeps that order total.
+    let conversationOrder = 0;
     await system.bot.create({
       data: {
         id: `${user}-tb1`,
@@ -2778,8 +2842,10 @@ function seedConversations() {
         updatedAt: old,
       },
     });
-    const conversation = (id: string, owner: string, spaceId: string, botId: string) =>
-      system.externalConversation.create({
+    const conversation = (id: string, owner: string, spaceId: string, botId: string) => {
+      const at = new Date(old.getTime() + conversationOrder);
+      conversationOrder += 1;
+      return system.externalConversation.create({
         data: {
           id: `${user}-${id}`,
           provider: "telegram",
@@ -2792,9 +2858,11 @@ function seedConversations() {
           teamChatAmbientEnabled: true,
           teamChatRules: "old rules",
           automatedSenderPolicies: { old: { name: "Old", mode: "ignore" } },
-          updatedAt: old,
+          createdAt: at,
+          updatedAt: at,
         },
       });
+    };
     await conversation("ec1", user, seeded.spaces[0], "tb1");
     await conversation("ec2", other, seeded.spaces[0], "tb1");
     await conversation("ec3", user, seeded.spaces[1], "tbx");
@@ -6319,6 +6387,10 @@ async function seed(caseIds: ReturnType<typeof ids>): Promise<Seeded> {
       createdAt: new Date(),
     },
   });
+  // spaces.list orders memberships by createdAt alone; the default Spaces' memberships would
+  // otherwise share a wall-clock millisecond and order arbitrarily. Fixed instants, one
+  // millisecond apart in the order the Spaces are seeded, keep that order total on both sides.
+  const membershipBase = Date.UTC(2026, 0, 1);
   for (const [index, spaceId] of caseIds.spaces.entries()) {
     await system.space.create({
       data: {
@@ -6335,7 +6407,7 @@ async function seed(caseIds: ReturnType<typeof ids>): Promise<Seeded> {
         organizationId: caseIds.orgId,
         userId: caseIds.userId,
         role: "owner",
-        createdAt: new Date(),
+        createdAt: new Date(membershipBase + index),
       },
     });
   }
@@ -8802,9 +8874,14 @@ async function databaseState(seeded: ReturnType<typeof ids>, procedure?: string)
 await system.spaceInvite.deleteMany({});
 
 let failures = 0;
-let caseIndex = 0;
-for (const testCase of cases) {
-  const position = caseIndex++;
+// Retries already used by the case at `position`. Kept across the retry's re-entry into the same
+// position; reset after a match or a final failure.
+let retryAttempts = 0;
+// The pass-level retry total, printed with the summary so a standalone run reports it too.
+let retryTotal = 0;
+const retriedCases = new Set<string>();
+for (let position = 0; position < cases.length; position += 1) {
+  const testCase = cases[position]!;
   // CASE_FROM=<n> resumes a run at a case index after a timeout; cases keep their order.
   // biome-ignore lint/suspicious/noUndeclaredEnvVars: manual harness, not a turbo task
   if (process.env.CASE_FROM && position < Number(process.env.CASE_FROM)) continue;
@@ -8950,12 +9027,36 @@ for (const testCase of cases) {
     );
     console.log(`ok   ${testCase.name} (${tsResult.status})`);
   } catch (error) {
+    // Only the failure signature the case declares is retried: the comparison itself must have
+    // failed (a check or transport error never is), and the per-case predicate must accept this
+    // exact pair of answers. Anything else fails on the first attempt, so the retry cannot hide a
+    // deterministic difference that merely happens to match once on the flaky side.
+    const retryable =
+      error instanceof AssertionError &&
+      retryAttempts < (testCase.retries ?? 0) &&
+      testCase.retryWhen?.(error, tsResult, goResult) === true;
+    if (retryable) {
+      // The loop's `position += 1` cancels this decrement, so the same case runs again from the
+      // top, where seed() resets the fixture and re-seeds both sides.
+      retryAttempts += 1;
+      retryTotal += 1;
+      retriedCases.add(testCase.name);
+      console.error(
+        `RETRY ${testCase.name} (attempt ${retryAttempts}/${(testCase.retries ?? 0) + 1} failed): ${testCase.retryReason}`,
+      );
+      console.error(error);
+      console.error("typescript:", JSON.stringify(tsResult));
+      console.error("go:        ", JSON.stringify(goResult));
+      position -= 1;
+      continue;
+    }
     failures += 1;
     console.error(`FAIL ${testCase.name}`);
     console.error(error);
     console.error("typescript:", JSON.stringify(tsResult));
     console.error("go:        ", JSON.stringify(goResult));
   }
+  retryAttempts = 0;
   await reset(caseIds);
 }
 
@@ -8972,3 +9073,6 @@ if (failures > 0) {
   process.exit(1);
 }
 console.log(`contract: ${cases.length} cases match`);
+console.log(
+  `retries: ${retryTotal}${retryTotal > 0 ? ` (${[...retriedCases].join(", ")})` : ""}`,
+);

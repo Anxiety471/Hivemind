@@ -102,6 +102,16 @@ export function threadGetCases(system: System): Case[] {
       },
     });
 
+  // Runs of one thread are read newest first by `createdAt` alone; insert them a millisecond
+  // apart per seed so their order cannot depend on two now() defaults landing in the same
+  // millisecond. Keyed by the seed object: the harness seeds each side afresh, and both sides
+  // must write the same instants.
+  const runOrders = new WeakMap<Seeded, number>();
+  const runAt = (seeded: Seeded) => {
+    const next = runOrders.get(seeded) ?? 0;
+    runOrders.set(seeded, next + 1);
+    return new Date(Date.UTC(2020, 0, 1) + next);
+  };
   const run = async (
     seeded: Seeded,
     key: string,
@@ -130,6 +140,7 @@ export function threadGetCases(system: System): Case[] {
         userId: seeded.userId,
         status: "running",
         trigger: "user",
+        createdAt: runAt(seeded),
         ...fields,
       },
     });

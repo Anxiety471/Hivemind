@@ -2,6 +2,7 @@
  * Lane M review: adversarial cases written by the independent reviewer. They are not part of the
  * lane; each one probes a parity or security edge the lane's own 151 cases do not cover.
  */
+import assert from "node:assert/strict";
 import { EncryptedSecretStore } from "../../../packages/adapters/src/secrets/secrets.js";
 import { contentEncryptionOf, encryptText } from "../../../packages/db/src/index.js";
 import type { Case, Seeded } from "./contract.mts";
@@ -20,6 +21,14 @@ const sealContext = {
 } as never;
 const v2 = async (recordId: string, plaintext: string) =>
   (await legacyStore.put(plaintext, sealContext, { recordId })).ciphertext;
+
+// Identity confirmation has one nominal answer: deny. Assert it per side, not only through the
+// Go/TS comparison, because TypeScript's own race can answer 200 on the same attempt a Go-200
+// regression does; the two would then compare equal and pass with no retry. A check failure is
+// an AssertionError, so the declared ts 200 / go 403 retry still covers TypeScript's race while
+// Go 200 fails on the first attempt whatever TypeScript answers.
+const denyIdentityConfirmation: NonNullable<Case["check"]> = ({ result, side }) =>
+  assert.equal(result.status, 403, `${side}: identity confirmation must deny`);
 
 export function laneMReviewCases(system: System): Case[] {
   const put = (name: string, input: unknown, extra: Partial<Case> = {}): Case => ({
@@ -49,7 +58,7 @@ export function laneMReviewCases(system: System): Case[] {
     secretAnnouncements: true,
     ...extra,
   });
-  const addBot = (seeded: Seeded, id: string) =>
+  const addBot = (seeded: Seeded, id: string, extra: Record<string, unknown> = {}) =>
     system.bot.create({
       data: {
         id: `${seeded.userId}-${id}`,
@@ -59,6 +68,7 @@ export function laneMReviewCases(system: System): Case[] {
         color: "blue",
         createdAt: OLD,
         updatedAt: OLD,
+        ...extra,
       },
     });
   const addOverride = (seeded: Seeded, space: 0 | 1 | 2 = 0) =>
@@ -586,8 +596,100 @@ export function laneMReviewCases(system: System): Case[] {
             },
           });
         },
+        // TypeScript's gate races itself on this state (identity-confirmation.ts:55-67): its two
+        // findVerificationValue calls run under Promise.all, and each one deletes every expired
+        // verification row, so one lookup's cleanup can hide the other's newest expired row
+        // between the seed and the read. Go reads both proofs before its single cleanup, so a
+        // serialized Go request answers 403. Only TypeScript's 200 against Go's 403 is retried;
+        // a Go 200 here is the regression the fix removes and fails on the first attempt.
+        retries: 2,
+        retryReason:
+          "TypeScript's two findVerificationValue calls run under Promise.all (identity-confirmation.ts:55-67) and each deletes every expired verification row, so one lookup's cleanup can hide the other's newest expired row before it is read; a serialized Go request reads both proofs first and answers 403.",
+        retryWhen: (_error, ts, go) => ts.status === 200 && go.status === 403,
+        check: denyIdentityConfirmation,
       },
     ),
+
+    // The fixed ordering itself: the newest oidc-reauth proof is expired and an older one is
+    // still valid, with no identity-confirmed row at all. The old Go read and cleaned one
+    // identifier at a time, so the absent first identifier's global cleanup deleted the newer
+    // expired oidc row before the oidc read, exposing the older valid proof (200). Go now reads
+    // both proofs before the single cleanup, so the newest oidc proof is the expired one (403).
+    reveal(
+      "mrev-confirm-oidc-older-valid",
+      { name: "mrev-oidc" },
+      {
+        seed: async (seeded) => {
+          await addVault(seeded, { name: "mrev-oidc", plaintext: "oidc-value" });
+          await system.verification.create({
+            data: {
+              id: `${seeded.userId}-oidc-valid`,
+              identifier: `oidc-reauth-${seeded.userId}-session`,
+              value: seeded.userId,
+              createdAt: new Date("2021-01-01T00:00:00.000Z"),
+              expiresAt: new Date("2099-01-01T00:00:00.000Z"),
+            },
+          });
+          await system.verification.create({
+            data: {
+              id: `${seeded.userId}-oidc-expired`,
+              identifier: `oidc-reauth-${seeded.userId}-session`,
+              value: seeded.userId,
+              createdAt: new Date("2022-01-01T00:00:00.000Z"),
+              expiresAt: new Date("2022-01-01T01:00:00.000Z"),
+            },
+          });
+        },
+        retries: 2,
+        retryReason:
+          "TypeScript's two findVerificationValue calls run under Promise.all (identity-confirmation.ts:55-67) and each deletes every expired verification row, so the identity-confirmed lookup's cleanup can delete the newer expired oidc-reauth row before the oidc lookup reads it and expose the older valid row; a serialized Go request reads both proofs first and answers 403.",
+        retryWhen: (_error, ts, go) => ts.status === 200 && go.status === 403,
+        check: denyIdentityConfirmation,
+      },
+    ),
+    {
+      // The same state on the other guarded entry point: the webhook reveal applies the identity
+      // confirmation before reading the secret, so the fixed ordering must deny there too.
+      name: "mrev-confirm-oidc-older-valid-webhook",
+      procedure: "bots.revealWebhookSecret",
+      input: { botId: "__s-mrevwh__" },
+      seed: async (seeded) => {
+        const secretId = `${seeded.userId}-mrev-wh-secret`;
+        await system.secret.create({
+          data: {
+            id: secretId,
+            userId: seeded.userId,
+            spaceId: seeded.spaces[0],
+            kind: "webhook",
+            ciphertext: await v2(secretId, "oidc-webhook-value"),
+          },
+        });
+        await addBot(seeded, "mrevwh", { webhookSecretId: secretId });
+        await system.verification.create({
+          data: {
+            id: `${seeded.userId}-wh-oidc-valid`,
+            identifier: `oidc-reauth-${seeded.userId}-session`,
+            value: seeded.userId,
+            createdAt: new Date("2021-01-01T00:00:00.000Z"),
+            expiresAt: new Date("2099-01-01T00:00:00.000Z"),
+          },
+        });
+        await system.verification.create({
+          data: {
+            id: `${seeded.userId}-wh-oidc-expired`,
+            identifier: `oidc-reauth-${seeded.userId}-session`,
+            value: seeded.userId,
+            createdAt: new Date("2022-01-01T00:00:00.000Z"),
+            expiresAt: new Date("2022-01-01T01:00:00.000Z"),
+          },
+        });
+      },
+      retries: 2,
+      retryReason:
+        "TypeScript's two findVerificationValue calls run under Promise.all (identity-confirmation.ts:55-67) and each deletes every expired verification row, so the identity-confirmed lookup's cleanup can delete the newer expired oidc-reauth row before the oidc lookup reads it and expose the older valid row; a serialized Go request reads both proofs first and answers 403.",
+      retryWhen: (_error, ts, go) => ts.status === 200 && go.status === 403,
+      check: denyIdentityConfirmation,
+    },
 
     // Concurrent identical saves: one row, every call answers, no lost lock or retry loop.
     put(
