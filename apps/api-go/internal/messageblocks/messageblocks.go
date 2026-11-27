@@ -245,6 +245,29 @@ func loginFieldLabels(value any) (any, bool) {
 	return cleaned, true
 }
 
+// askAction is AskActionSchema: a choice on an ask, with the short line explaining it.
+func askAction(value any) (any, bool) {
+	return object(
+		required("id", str),
+		required("label", str),
+		optional("description", str),
+		optional("outcome", enum("created", "cancelled")),
+		optional("recommended", boolean),
+	)(value)
+}
+
+// askItem is AskItemSchema: one independent decision of a batch ask (207fca777).
+func askItem(value any) (any, bool) {
+	return object(
+		required("id", str),
+		required("question", str),
+		optional("detail", str),
+		optional("ticketRef", str),
+		optional("actions", array(askAction)),
+		optional("answer", str),
+	)(value)
+}
+
 func askBlock(value any) (any, bool) {
 	return object(
 		required("text", str),
@@ -272,11 +295,8 @@ func askBlock(value any) (any, bool) {
 		optional("answerMessageId", str),
 		optional("dismissed", literal(true)),
 		optional("remembered", literal(false)),
-		optional("actions", array(object(
-			required("id", str), required("label", str),
-			optional("outcome", enum("created", "cancelled")),
-			optional("recommended", boolean),
-		))),
+		optional("actions", array(askAction)),
+		optional("items", array(askItem)),
 	)(value)
 }
 
