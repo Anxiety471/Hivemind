@@ -1,11 +1,13 @@
 import type { ColorTokens, ResolvedAppearance } from "@rakazo/ui-tokens";
 import { darkTokens } from "@rakazo/ui-tokens";
 import type { MarkdownStyleMap } from "@ronradtke/react-native-markdown-display";
-import { Highlight, themes } from "prism-react-renderer";
+import { Highlight } from "prism-react-renderer";
 import type { ComponentType, ReactNode } from "react";
-import { createContext, useContext } from "react";
+import { createContext, useContext, useMemo } from "react";
 import type { TextStyle } from "react-native";
 import { Text, View } from "react-native";
+import { codeTheme } from "../code-blocks/code-theme";
+import { prettyCode } from "../code-blocks/pretty";
 import { contraryDirection } from "./direction";
 import { SidewaysScrollView } from "./sideways-scroll";
 import { layout } from "./styles";
@@ -66,20 +68,22 @@ export function MermaidFence({ source, fallback }: { source: string; fallback: R
 export function CodeFence({
   code,
   language,
-  colorScheme,
   styleMap,
 }: {
   code: string;
   language: string;
-  colorScheme: ResolvedAppearance;
   styleMap: MarkdownStyleMap;
 }) {
-  const theme = colorScheme === "dark" ? themes.oneDark : themes.oneLight;
+  // The same ink theme the web block uses, from this surface's palette.
+  const { palette } = useContext(DiagramSurfaceContext);
+  const theme = useMemo(() => codeTheme((token) => palette[token]), [palette]);
+  // A long literal line is reprinted for reading; the copy control still copies the original.
+  const shown = useMemo(() => prettyCode(code), [code]);
   return (
     <View style={styleMap._VIEW_SAFE_fence}>
       <FenceHeader language={language} styleMap={styleMap} />
       <CodeScrollView code={code}>
-        <Highlight theme={theme} code={code} language={language || "text"}>
+        <Highlight theme={theme} code={shown} language={language || "text"}>
           {({ tokens, getTokenProps }) => (
             <View style={styleMap._VIEW_SAFE_fence_code}>
               {tokens.map((line, lineIndex) => {

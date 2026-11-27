@@ -8,6 +8,9 @@ export type MarkdownCopy = {
   copied: string;
   copyCode: string;
   copyDiagramSource: string;
+  /** A long code block folds to a few lines; these are its two states. */
+  expandCode: string;
+  collapseCode: string;
   /** Scrollable regions and the expanded dialog's title. */
   table: string;
   markdownTable: string;
@@ -38,6 +41,8 @@ export const defaultMarkdownCopy: MarkdownCopy = {
   copied: "Copied",
   copyCode: "Copy code",
   copyDiagramSource: "Copy diagram source",
+  expandCode: "Expand code",
+  collapseCode: "Collapse code",
   table: "Table",
   markdownTable: "Markdown table",
   noRows: "No rows",

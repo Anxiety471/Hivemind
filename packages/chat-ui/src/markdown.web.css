@@ -231,6 +231,77 @@
   margin: 0;
 }
 
+/* A block of code is a card: a quiet header carrying the fence's language and its controls,
+   then the code, which keeps the shape the author wrote. */
+.rk-chat-markdown-code {
+  border: 1px solid var(--border);
+  border-radius: 0.75em;
+  background: var(--secondary);
+  overflow: hidden;
+}
+
+.rk-chat-markdown-code-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5em;
+  min-height: 2.1em;
+  padding: 0.15em 0.35em 0.15em 0.85em;
+}
+
+.rk-chat-markdown-code-language {
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 0.72em;
+  letter-spacing: 0.04em;
+  text-overflow: ellipsis;
+  text-transform: lowercase;
+  white-space: nowrap;
+}
+
+.rk-chat-markdown-code-actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 0.15em;
+}
+
+.rk-chat-markdown-code-more {
+  border: 0;
+  border-radius: 0.4em;
+  background: transparent;
+  padding: 0.3em 0.45em;
+  color: var(--muted-foreground);
+  font-size: 0.78em;
+  cursor: pointer;
+}
+
+.rk-chat-markdown-code-more:hover,
+.rk-chat-markdown-code-more:focus-visible {
+  background: var(--accent);
+  color: var(--foreground);
+}
+
+.rk-chat-markdown .rk-chat-markdown-code pre {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0 0.9em 0.8em;
+}
+
+.rk-chat-markdown .rk-chat-markdown-code[data-prose] pre {
+  padding-top: 0.8em;
+}
+
+/* A long block folds, and still scrolls sideways: one paste does not push the reply away. */
+.rk-chat-markdown .rk-chat-markdown-code pre[data-collapsed] {
+  max-height: 24em;
+  overflow-y: hidden;
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 2.5em), transparent);
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 2.5em), transparent);
+}
+
 /* A Mermaid diagram sits on the same card a code block uses. A wide one scrolls sideways. */
 .rk-chat-markdown-diagram {
   margin: 0;
@@ -264,6 +335,16 @@
 
 .rk-chat-markdown-pre-wrap:hover .rk-chat-markdown-copy,
 .rk-chat-markdown-copy:focus-visible {
+  opacity: 1;
+}
+
+/* The copy control inside a code block's header holds its place, out of the code's way. */
+.rk-chat-markdown-copy-inline {
+  position: static;
+  width: 1.6em;
+  height: 1.6em;
+  border-color: transparent;
+  background: transparent;
   opacity: 1;
 }
 

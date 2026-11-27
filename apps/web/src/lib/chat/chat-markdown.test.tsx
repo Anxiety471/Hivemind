@@ -19,8 +19,10 @@ describe("ChatMarkdown", () => {
       <ChatMarkdown>{'<script>alert("xss")</script> [bad](javascript:alert(1))'}</ChatMarkdown>,
     );
 
+    // The payload is code the bot wrote, so it is shown escaped and inert: no element, no link.
     expect(html).not.toContain("<script");
-    expect(html).not.toContain("javascript:");
+    expect(html).not.toContain('href="javascript:');
+    expect(html).toContain("&lt;script&gt;");
   });
 
   it("renders unsafe links as plain text instead of a link back into the app", () => {

@@ -8,6 +8,7 @@ import Markdown, {
 } from "@ronradtke/react-native-markdown-display";
 import { memo, useMemo } from "react";
 import { Text, View } from "react-native";
+import { codeBlockMarkdown } from "./code-blocks/code-blocks";
 import type { ChatMarkdownProps } from "./markdown";
 import { LinkFaviconsPausedContext, linkifyExplicitUrls } from "./markdown";
 import { InlineChipsContext } from "./native/chips";
@@ -82,6 +83,8 @@ export const ChatMarkdown = memo(function ChatMarkdown({
   colorScheme = "dark",
 }: ChatMarkdownProps & { palette?: ColorTokens; colorScheme?: ResolvedAppearance }) {
   const openLink = useNativeLinkConfirm();
+  // Code a bot wrote without a fence is fenced before Markdown reads it, as on the web.
+  const source = useMemo(() => codeBlockMarkdown(children), [children]);
   const styles = useMemo(() => markdownStyles(palette), [palette]);
   const diagramSurface = useMemo(
     () => ({ streaming, palette, colorScheme }),
@@ -110,10 +113,10 @@ export const ChatMarkdown = memo(function ChatMarkdown({
             <DiagramSurfaceContext.Provider value={diagramSurface}>
               {streaming ? (
                 <MarkdownStream {...sharedProps} cursorColor={palette.mutedForeground} streaming>
-                  {children}
+                  {source}
                 </MarkdownStream>
               ) : (
-                <Markdown {...sharedProps}>{children}</Markdown>
+                <Markdown {...sharedProps}>{source}</Markdown>
               )}
             </DiagramSurfaceContext.Provider>
           </LinkFaviconsPausedContext.Provider>
