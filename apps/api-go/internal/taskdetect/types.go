@@ -13,6 +13,10 @@ const MaxActionsPerTurn = 5
 // MaxOpenTicketsInContext bounds how many open assigned tickets are loaded into prompt context.
 const MaxOpenTicketsInContext = 25
 
+// MaxPendingDecisionTicketsInContext bounds how many open Space tickets awaiting a user
+// decision are added to prompt context, beyond the explicitly referenced ones.
+const MaxPendingDecisionTicketsInContext = 10
+
 // DefaultContextMaxBytes bounds rendered ticket context size in bytes.
 const DefaultContextMaxBytes = 4 * 1024
 
@@ -24,12 +28,13 @@ const MaxMessageChars = 4_000
 
 // OpenTicket is a compact view of a bot's existing Kanban ticket.
 type OpenTicket struct {
-	ID          string  `json:"id"`
-	Ref         string  `json:"ref"`
-	Title       string  `json:"title"`
-	Status      string  `json:"status"`
-	Priority    string  `json:"priority"`
-	Description *string `json:"description,omitempty"`
+	ID          string                  `json:"id"`
+	Ref         string                  `json:"ref"`
+	Title       string                  `json:"title"`
+	Status      string                  `json:"status"`
+	Priority    string                  `json:"priority"`
+	Description *string                 `json:"description,omitempty"`
+	Decision    *tickets.TicketDecision `json:"decision,omitempty"`
 }
 
 // ContextRequest asks for a bot's assigned open tickets and any referenced tickets.

@@ -87,6 +87,88 @@ it("does not query tickets for an out-of-range reference in a message", async ()
   expect(findMany).not.toHaveBeenCalled();
 });
 
+const pendingDecision = {
+  question: "CSV or JSON?",
+  options: [
+    { id: "csv", label: "CSV" },
+    { id: "json", label: "JSON" },
+    { id: "xml", label: "XML" },
+  ],
+};
+
+describe("ticket decision rendering", () => {
+  it("renders a pending decision question and an answered option label", () => {
+    const block = renderTicketContext([
+      {
+        ref: "RAK-2",
+        title: "Export",
+        status: "blocked",
+        decision: pendingDecision,
+        assignee: null,
+        lastComment: null,
+      },
+      {
+        ref: "RAK-3",
+        title: "Import",
+        status: "doing",
+        decision: { ...pendingDecision, answer: "json" },
+        assignee: null,
+        lastComment: null,
+      },
+    ]);
+    expect(block).toContain("- RAK-2 [blocked] Export — decision pending: CSV or JSON?");
+    expect(block).toContain("- RAK-3 [doing] Import — decision answered: JSON");
+  });
+
+  it("renders decision state on assigned tickets", () => {
+    const block = renderAssignedTicketsContext([
+      {
+        id: "t-2",
+        ref: "RAK-8",
+        title: "Export",
+        status: "blocked",
+        priority: "normal",
+        decision: pendingDecision,
+        description: null,
+      },
+    ]);
+    expect(block).toContain(
+      "- RAK-8 [blocked/normal] Export — decision pending: CSV or JSON? (id: t-2)",
+    );
+  });
+});
+
+describe("loadAgentTicketContext pending decisions", () => {
+  it("injects Space tickets awaiting a decision even when the text names no ticket", async () => {
+    const pendingRow = {
+      id: "t-9",
+      number: 9,
+      title: "Access model",
+      status: "blocked",
+      assigneeBotId: null,
+      workerBotIds: [],
+      decision: pendingDecision,
+    };
+    const findMany = vi.fn(async (args: { where: Record<string, unknown> }) =>
+      "decision" in args.where ? [pendingRow] : [],
+    );
+    const prisma = {
+      board: { findUnique: vi.fn(async () => ({ id: "board-1", ticketPrefix: "RAK" })) },
+      ticket: { findMany },
+      ticketComment: { findMany: vi.fn(async () => []) },
+      bot: { findMany: vi.fn(async () => []) },
+    } as never;
+
+    const block = await loadAgentTicketContext(
+      { prisma },
+      { spaceId: "space-1", text: "What should we do next?", botId: "bot-1" },
+    );
+    expect(block).toContain("<tickets_referenced>");
+    expect(block).toContain("Live board state (overrides older chat).");
+    expect(block).toContain("- RAK-9 [blocked] Access model — decision pending: CSV or JSON?");
+  });
+});
+
 describe("renderAssignedTicketsContext", () => {
   it("renders open assigned tickets with escaping and status/priority", () => {
     const block = renderAssignedTicketsContext([

@@ -48,6 +48,7 @@ import {
   stripNoResponseReply,
   stripStrayNoResponse,
 } from "../assembly/silent-reply.js";
+import { appendTicketFactCheckIfNeeded } from "../assembly/ticket-fact-check.js";
 import { saveLatestStepScreenshot } from "../turn/tool-step-calls.js";
 import { enqueueSteeringContinuation, renewRunLease } from "./run-lifecycle.js";
 import {
@@ -162,6 +163,24 @@ export async function completeRun(ctx: RunContext) {
   await closeThinkingSegment(ctx);
   const { blocks, text, groupSilentEnd } = await finalReply(ctx);
   if (!(await renewRunLease(deps, runId, ctx.workerId, ctx.fence))) return;
+  // The board note is appended as its own block, so a prose choice can place it before its ask card.
+  const boardCheck =
+    !groupSilentEnd &&
+    !isBackgroundRunTrigger(run.trigger) &&
+    run.trigger !== BACKGROUND_HELPER_TRIGGER &&
+    !ctx.state.handedOff &&
+    !ctx.source.peerMessage
+      ? await appendTicketFactCheckIfNeeded(deps, run.spaceId, blocks)
+      : { blocks, mismatches: [] };
+  if (boardCheck.mismatches.length > 0) {
+    getLogger().warn("agent.ticket_fact_mismatch", {
+      "run.id": runId,
+      count: boardCheck.mismatches.length,
+      refs: boardCheck.mismatches.map((mismatch) => mismatch.ref),
+    });
+  }
+  const boardNote = boardCheck.blocks.slice(blocks.length);
+  const finalBlocks = boardCheck.blocks;
   const botMessageOutcome =
     run.trigger === "bot_message"
       ? botMessageOutcomeFromMidTurn(text, reply.midTurnUserTexts)
@@ -176,7 +195,7 @@ export async function completeRun(ctx: RunContext) {
     conversationRetentionMessages(ctx),
     taskDetectMessages(ctx),
   ]);
-  if (await pauseForProseChoice(ctx, blocks, groupSilentEnd)) return;
+  if (await pauseForProseChoice(ctx, blocks, groupSilentEnd, boardNote)) return;
   const completed = await deps.events.finalizeRun({
     spaceId: run.spaceId,
     threadId: thread.id,
@@ -187,7 +206,7 @@ export async function completeRun(ctx: RunContext) {
     leaseOwner: ctx.workerId,
     leaseFence: ctx.fence,
     outcome: "completed",
-    blocks,
+    blocks: finalBlocks,
     markUnread: !groupSilentEnd && marksUnread,
   });
   if (!completed) return;
@@ -251,6 +270,7 @@ async function pauseForProseChoice(
   ctx: RunContext,
   blocks: MessageBlock[],
   groupSilentEnd: boolean,
+  boardNote: MessageBlock[],
 ): Promise<boolean> {
   const { deps, run, runId, bot, thread, workerId, fence } = ctx;
   const last = blocks.at(-1);
@@ -296,7 +316,7 @@ async function pauseForProseChoice(
     leaseOwner: workerId,
     leaseFence: fence,
     onPaused: scheduleRunSecretsExpiry(deps.jobs, runId),
-    blocks: [...blocks.slice(0, -1), ...preamble, askBlock],
+    blocks: [...blocks.slice(0, -1), ...preamble, ...boardNote, askBlock],
     offeredActions: choice.actions,
   });
   if (!paused) return true;

@@ -226,6 +226,11 @@ export async function loadTurnContext(
           context,
         )
       : Promise.resolve(null);
+  // Every TASK-n discussed recently gets its live board state, not only the latest user turn.
+  const recentTicketText = [task.prompt, ...history.slice(-12).map((entry) => entry.content)]
+    .filter(Boolean)
+    .join("\n")
+    .slice(0, 12_000);
   const [discovered, currentTurnImages, memoryContext, scratchpadContext, ticketContext, recalled] =
     await Promise.all([
       discoveredPromise,
@@ -241,7 +246,7 @@ export async function loadTurnContext(
         ? Promise.resolve(undefined)
         : loadAgentTicketContext(deps, {
             spaceId: run.spaceId,
-            text: task.prompt,
+            text: recentTicketText,
             botId: bot.id,
             userId: run.userId,
           }),

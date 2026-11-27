@@ -196,6 +196,17 @@ type TicketDecision struct {
 	AnsweredAt string                 `json:"answeredAt,omitempty"`
 }
 
+// AnswerLabel resolves the display text of a decision answer: the label of the option
+// whose ID matches the stored answer, or the answer itself (free text, "Other").
+func (d TicketDecision) AnswerLabel() string {
+	for _, opt := range d.Options {
+		if opt.ID == d.Answer {
+			return opt.Label
+		}
+	}
+	return d.Answer
+}
+
 // TicketDecisionInput is TicketDecisionInputSchema (packages/contracts/src/artifacts/board.ts).
 type TicketDecisionInput struct {
 	Question    string   `json:"question"`
@@ -544,6 +555,11 @@ func coercePriority(value *string) string {
 		}
 	}
 	return "normal"
+}
+
+// ReadStoredDecision decodes a stored tickets.decision value; nil when absent or malformed.
+func ReadStoredDecision(raw []byte) *TicketDecision {
+	return readStoredDecision(raw)
 }
 
 func readStoredDecision(raw []byte) *TicketDecision {

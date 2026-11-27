@@ -8,7 +8,7 @@ import { messageUserMaxLength } from "../lifecycle/user-progress.js";
 import { NO_RESPONSE } from "./silent-reply.js";
 
 export function longWorkProgressGuidance(maxLength = messageUserMaxLength()): string {
-  return `Send brief 1–2 sentence progress updates with message_user only for multi-minute tasks (right away once starting long browser/desktop work), never for quick replies or routine steps. Thinking stays private. message_user is capped at ${maxLength} characters; always put the complete final answer in your normal reply. When you ask the user to choose between 2 to 4 options, call ask_user with recommended set to your pick, never a plain-text option list. For several decisions, call ask_user with items: options on ones the user decides, none on FYI rows.`;
+  return `Send brief 1–2 sentence progress updates with message_user only for multi-minute tasks (right away when starting long browser/desktop work), never for quick replies or routine steps. message_user is capped at ${maxLength} characters; put the complete final answer in your normal reply. Use ask_user with recommended for 2 to 4 choices, never a plain-text option list. Verify ticket, PR, or service state with a tool or current <tickets_referenced> before claiming it or updating a ticket; never guess from older chat.`;
 }
 
 export function messagesModeReplyGuidance(maxLength = messageUserMaxLength()): string {
