@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import type { ThreadMessage } from "@rakazo/contracts";
 import { foldPeerReplies } from "@rakazo/core";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ComponentProps, ReactNode, RefObject } from "react";
 import { act } from "react";
 import { flushSync } from "react-dom";
@@ -24,7 +25,7 @@ vi.mock("@lingui/core/macro", () => ({
     (count === 1 ? forms.one : forms.other).replace("#", String(count)),
 }));
 
-vi.mock("../../../lib/query/rpc", () => ({ rpc: {} }));
+vi.mock("../../../lib/query/rpc", () => ({ rpc: {}, selectedSpaceId: () => null }));
 
 let container: HTMLDivElement;
 let root: Root;
@@ -131,8 +132,14 @@ function baseProps(messages: readonly ThreadMessage[]): ComponentProps<typeof Tr
   };
 }
 
+// A job card saves through the query client, so the transcript mounts under one as the app does.
+const queries = new QueryClient();
+function withQueries(ui: ReactNode) {
+  return <QueryClientProvider client={queries}>{ui}</QueryClientProvider>;
+}
+
 function render(props: ComponentProps<typeof Transcript>) {
-  act(() => root.render(<Transcript {...props} />));
+  act(() => root.render(withQueries(<Transcript {...props} />)));
 }
 
 function selectText(element: Element, text: string, notify = true) {
@@ -163,9 +170,9 @@ it("shares the armed quote action with the pill and replaces quotes on new selec
       run: (shortcut) => shortcut.type === "quote-selection" && (armed.current?.() ?? false),
       onTyping: () => {},
     });
-    return <Transcript {...props} onQuoteShortcutChange={register} />;
+    return withQueries(<Transcript {...props} onQuoteShortcutChange={register} />);
   }
-  act(() => root.render(<Harness />));
+  act(() => root.render(withQueries(<Harness />)));
   const press = () => {
     const event = new KeyboardEvent("keydown", {
       key: "L",
@@ -349,7 +356,7 @@ it("drops the quote pill when an edit removes only one end of the selection", as
 /** Renders outside act, so the first commit is visible before the transition mounts the rest. */
 async function renderFirstFrame(props: ComponentProps<typeof Transcript>) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", false);
-  flushSync(() => root.render(<Transcript {...props} />));
+  flushSync(() => root.render(withQueries(<Transcript {...props} />)));
   const first = [...container.querySelectorAll("[data-message-id]")].map((row) =>
     row.getAttribute("data-message-id"),
   );
@@ -386,7 +393,7 @@ it("does not spend the first frame on rows hidden tool activity would leave blan
   });
   const props = { ...baseProps([...shown, ...tools]), running: false };
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", false);
-  flushSync(() => root.render(<Transcript {...props} />));
+  flushSync(() => root.render(withQueries(<Transcript {...props} />)));
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   expect(
     [...container.querySelectorAll("[data-message-id]")].map((row) =>
